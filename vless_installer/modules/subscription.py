@@ -7,12 +7,16 @@ vless_installer/modules/subscription.py
 Пользователь вводит префикс поддомена (например «sub»), после настройки DNS
 все конфиги доступны по адресу:
 
-    https://sub.example.com:8443/<tag>
+    https://sub.example.com:8443/<tag>          → URI-подписка (base64)
+    https://sub.example.com:8443/<tag>/singbox  → sing-box JSON (Karing/NekoBox)
 
 где <tag> — уникальный идентификатор пользователя (латиница, цифры, _ -).
 
-Формат ответа — стандартная base64-подписка (v2rayNG, NekoBox, Happ, Karing):
-несколько proxy-ссылок, разделённых переводом строки, закодированных в base64.
+Форматы ответа:
+  • URI (по умолчанию): base64(vless://...\\nnaive+https://...\\nmierus://...)
+    — v2rayNG, Happ, Shadowrocket
+  • Sing-box JSON (/singbox или ?format=singbox): полный конфиг с outbounds
+    — Karing, NekoBox, sing-box CLI
 
 Схема:
   Клиент (v2rayNG / NekoBox / Happ / Karing)
@@ -41,7 +45,9 @@ vless_installer/modules/subscription.py
 
 Публичное API:
     do_subscription_menu()  → главное меню [14]
-    build_subscription_body(tag) → bytes (для тестов и сервера)
+    build_subscription_body(tag) → bytes (URI base64)
+    build_singbox_body(tag)        → bytes (sing-box JSON)
+    subscription_singbox_url(tag)  → str
 ───────────────────────────────────────────────────────────────────────────────
 """
 from __future__ import annotations
@@ -358,6 +364,169 @@ def build_subscription_lines(user: dict, sub_st: Optional[dict] = None) -> list[
 
     return lines
 
+def _gen_vless_singbox_outbound(uuid_val: str, tag: str, label: str, st: dict) -> dict:
+    """Sing-box outbound для VLESS (REALITY или xHTTP)."""
+    domain     = st.get("domain", "")
+    port       = int(st.get("server_port", 443))
+    proto      = st.get("protocol_mode", "reality")
+    pub_key    = st.get("public_key", "")
+    short_id   = st.get("short_id", "")
+    fp         = st.get("fingerprint", "chrome") or "chrome"
+    xhttp_path = st.get("xhttp_path", "/")
+    install_mode = st.get("install_mode", "A")
+    awg_exit   = st.get("awg_exit_enabled", False) and install_mode == "B"
+    reality_dest = st.get("reality_dest", "")
+    if proto == "reality" and awg_exit and reality_dest:
+        sni = reality_dest.split(":")[0]
+    else:
+        sni = domain
+    if not domain or not uuid_val:
+        return {}
+    outbound_tag = f"vless-{tag}"
+    flow = st.get("xtls_flow", "xtls-rprx-vision") or ""
+    if proto == "xhttp":
+        return {
+            "type": "vless",
+            "tag": outbound_tag,
+            "server": domain,
+            "server_port": port,
+            "uuid": uuid_val,
+            "transport": {"type": "http", "path": xhttp_path},
+            "tls": {
+                "enabled": True,
+                "server_name": domain,
+                "utls": {"enabled": True, "fingerprint": fp},
+            },
+        }
+    ob: dict = {
+        "type": "vless",
+        "tag": outbound_tag,
+        "server": domain,
+        "server_port": port,
+        "uuid": uuid_val,
+        "tls": {
+            "enabled": True,
+            "server_name": sni,
+            "utls": {"enabled": True, "fingerprint": fp},
+            "reality": {
+                "enabled": True,
+                "public_key": pub_key,
+                "short_id": short_id,
+            },
+        },
+    }
+    if flow:
+        ob["flow"] = flow
+    return ob
+
+def _gen_naive_singbox_outbound(username: str, password: str, tag: str, naive_st: dict) -> dict:
+    domain = naive_st.get("domain", "")
+    port   = int(naive_st.get("port", 443))
+    if not domain or not username or not password:
+        return {}
+    return {
+        "type": "naive",
+        "tag": f"naive-{tag}",
+        "server": domain,
+        "server_port": port,
+        "username": username,
+        "password": password,
+        "tls": {
+            "enabled": True,
+            "server_name": domain,
+        },
+    }
+
+def _gen_mieru_singbox_outbound(username: str, password: str, tag: str, mieru_st: dict) -> dict:
+    server_ip  = _get_server_ip()
+    port_start = int(mieru_st.get("port_start", 2012))
+    protocol   = mieru_st.get("protocol", "TCP").upper()
+    if not username or not password or not server_ip:
+        return {}
+    return {
+        "type": "mieru",
+        "tag": f"mieru-{tag}",
+        "server": server_ip,
+        "server_port": port_start,
+        "transport": protocol,
+        "username": username,
+        "password": password,
+        "multiplexing": "MULTIPLEXING_HIGH",
+    }
+
+def build_singbox_config(user: dict, sub_st: Optional[dict] = None) -> dict:
+    """Собирает sing-box JSON с outbounds для всех протоколов пользователя."""
+    sub_st = sub_st or _load_state()
+    if user.get("blocked"):
+        return {}
+    protocols = user.get("protocols") or sub_st.get("protocols", ["vless", "naive", "mieru"])
+    tag = user.get("tag", "user")
+    proxy_tags: list[str] = []
+    outbounds: list[dict] = []
+
+    if "vless" in protocols and user.get("vless_uuid"):
+        ob = _gen_vless_singbox_outbound(
+            user["vless_uuid"], tag, user.get("name", tag), _load_installer_state(),
+        )
+        if ob:
+            outbounds.append(ob)
+            proxy_tags.append(ob["tag"])
+
+    if "naive" in protocols and user.get("naive_username") and user.get("naive_password"):
+        ob = _gen_naive_singbox_outbound(
+            user["naive_username"], user["naive_password"], tag, _load_naive_state(),
+        )
+        if ob:
+            outbounds.append(ob)
+            proxy_tags.append(ob["tag"])
+
+    if "mieru" in protocols and user.get("mieru_username") and user.get("mieru_password"):
+        ob = _gen_mieru_singbox_outbound(
+            user["mieru_username"], user["mieru_password"], tag, _load_mieru_state(),
+        )
+        if ob:
+            outbounds.append(ob)
+            proxy_tags.append(ob["tag"])
+
+    if not outbounds:
+        return {}
+
+    if len(proxy_tags) > 1:
+        outbounds.append({
+            "type": "selector",
+            "tag": "proxy",
+            "outbounds": proxy_tags,
+            "default": proxy_tags[0],
+        })
+        final_tag = "proxy"
+    else:
+        final_tag = proxy_tags[0]
+
+    outbounds.extend([
+        {"type": "direct", "tag": "direct"},
+        {"type": "block", "tag": "block"},
+    ])
+
+    return {
+        "log": {"level": "info"},
+        "outbounds": outbounds,
+        "route": {
+            "rules": [],
+            "auto_detect_interface": True,
+            "final": final_tag,
+        },
+    }
+
+def build_singbox_body(tag: str) -> bytes:
+    """Возвращает sing-box JSON для tag (bytes, UTF-8)."""
+    user = _find_user_by_tag(tag)
+    if not user:
+        return b""
+    cfg = build_singbox_config(user)
+    if not cfg:
+        return b""
+    return json.dumps(cfg, indent=2, ensure_ascii=False).encode("utf-8")
+
 def build_subscription_body(tag: str) -> bytes:
     """
     Возвращает тело HTTP-ответа подписки (base64) для tag.
@@ -381,6 +550,42 @@ def subscription_url(tag: str, sub_st: Optional[dict] = None) -> str:
     if port == 443:
         return f"https://{domain}/{tag}"
     return f"https://{domain}:{port}/{tag}"
+
+def subscription_singbox_url(tag: str, sub_st: Optional[dict] = None) -> str:
+    """URL для импорта sing-box JSON (Karing / NekoBox / sing-box CLI)."""
+    base = subscription_url(tag, sub_st)
+    if not base:
+        return ""
+    return f"{base}/singbox"
+
+def _parse_request_path(raw_path: str) -> tuple[str, str]:
+    """
+    Разбирает путь запроса.
+    Возвращает (tag, format): format = 'uri' | 'singbox'.
+    """
+    path, _, query = raw_path.partition("?")
+    path = path.strip("/")
+    if not path or path == "favicon.ico":
+        return "", ""
+
+    parts = [p for p in path.split("/") if p]
+    tag = parts[0]
+    suffix = parts[1].lower() if len(parts) > 1 else ""
+
+    if tag.lower().endswith(".json"):
+        tag = tag[:-5]
+        suffix = suffix or "json"
+
+    if suffix in ("singbox", "sing-box", "json"):
+        return tag, "singbox"
+    if suffix:
+        return "", ""
+
+    qs = urllib.parse.parse_qs(query)
+    fmt = (qs.get("format") or [""])[0].strip().lower()
+    if fmt in ("singbox", "sing-box", "json"):
+        return tag, "singbox"
+    return tag, "uri"
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  СИНХРОНИЗАЦИЯ ПОЛЬЗОВАТЕЛЕЙ С VLESS / NAIVE / MIERU
@@ -543,19 +748,34 @@ def _generate_server_script() -> str:
     ''')
 
 class _SubscriptionHandler(BaseHTTPRequestHandler):
-    """Обработчик GET /{{tag}} — отдаёт base64-подписку."""
+    """GET /{tag} — URI base64; GET /{tag}/singbox — sing-box JSON."""
 
     def log_message(self, fmt, *args):
         pass
 
     def do_GET(self):
-        path = self.path.split("?", 1)[0].strip("/")
-        if not path or path in ("", "favicon.ico"):
+        tag, fmt = _parse_request_path(self.path)
+        if not tag:
             self.send_response(404)
             self.end_headers()
             self.wfile.write(b"Not found")
             return
-        tag = path.split("/")[0]
+
+        if fmt == "singbox":
+            body = build_singbox_body(tag)
+            if not body:
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"Not found")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Disposition", f'inline; filename="sing-box-{tag}.json"')
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         body = build_subscription_body(tag)
         if not body:
             self.send_response(404)
@@ -819,7 +1039,8 @@ def _setup_wizard() -> None:
     _box_row()
     _box_info(f"Домен: {BOLD}{full_domain}{NC}")
     _box_info(f"Порт:  {BOLD}{https_port}{NC}")
-    _box_info(f"Формат: {BOLD}https://{full_domain}:{https_port}/<tag>{NC}")
+    _box_info(f"Формат URI: {BOLD}https://{full_domain}:{https_port}/<tag>{NC}")
+    _box_info(f"Формат JSON: {BOLD}https://{full_domain}:{https_port}/<tag>/singbox{NC}")
     _box_row()
     _box_warn("Добавьте пользователей в меню [2] и выдайте им ссылку подписки.")
     _box_bottom()
@@ -923,10 +1144,14 @@ def _add_user(state: dict) -> None:
         for e in sync_errors:
             _box_warn(e)
     sub_url = subscription_url(tag, state)
+    sb_url = subscription_singbox_url(tag, state)
     if sub_url:
         _box_row()
-        _box_info(f"Ссылка подписки:")
+        _box_info("URI-подписка (v2rayNG / Happ):")
         print(f"  {GREEN}{sub_url}{NC}")
+    if sb_url:
+        _box_info("Sing-box JSON (Karing / NekoBox):")
+        print(f"  {GREEN}{sb_url}{NC}")
     _box_bottom()
     _pause()
 
@@ -1071,10 +1296,11 @@ def _users_menu() -> None:
         _box_sep()
         _box_item("1", "➕  Добавить пользователя (синхронизация во все протоколы)")
         _box_item("2", "📥  Импорт существующих из VLESS/Naive/Mieru")
-        _box_item("3", "🔗  Показать ссылку подписки")
-        _box_item("4", "📋  Показать содержимое подписки (ссылки)")
-        _box_item("5", "🚫  Блокировать / разблокировать")
-        _box_item("6", f"{RED}🗑️   Удалить пользователя{NC}")
+        _box_item("3", "🔗  Показать ссылки подписки (URI + sing-box)")
+        _box_item("4", "📋  Содержимое URI-подписки (декодированные ссылки)")
+        _box_item("5", "📋  Предпросмотр sing-box JSON")
+        _box_item("6", "🚫  Блокировать / разблокировать")
+        _box_item("7", f"{RED}🗑️   Удалить пользователя{NC}")
         _box_sep()
         _box_item("Q", "← Назад")
         _box_bottom()
@@ -1107,12 +1333,17 @@ def _users_menu() -> None:
                 if raw.isdigit() and 1 <= int(raw) <= len(users):
                     u = users[int(raw) - 1]
                     url = subscription_url(u["tag"], state)
+                    sb_url = subscription_singbox_url(u["tag"], state)
                     os.system("clear")
                     _box_top(f"🔗  ПОДПИСКА  •  {u.get('name', u['tag'])}")
                     _box_row()
+                    _box_info("URI (v2rayNG / Happ / Shadowrocket):")
                     print(f"  {GREEN}{url}{NC}")
                     _box_row()
-                    _box_info("Импортируйте эту ссылку в клиент как Subscription URL.")
+                    _box_info("Sing-box JSON (Karing / NekoBox / sing-box CLI):")
+                    print(f"  {GREEN}{sb_url}{NC}")
+                    _box_row()
+                    _box_info("Альтернатива: добавьте ?format=singbox к URI-ссылке")
                     _box_bottom()
                     _pause()
             except _Cancelled:
@@ -1148,6 +1379,27 @@ def _users_menu() -> None:
                 raw = _ask("  Номер пользователя: ", c=True).strip()
                 if raw.isdigit() and 1 <= int(raw) <= len(users):
                     u = users[int(raw) - 1]
+                    cfg = build_singbox_config(u, state)
+                    os.system("clear")
+                    _box_top(f"📋  SING-BOX JSON  •  {u.get('tag')}")
+                    _box_row()
+                    if cfg:
+                        print(json.dumps(cfg, indent=2, ensure_ascii=False))
+                    else:
+                        _box_warn("Нет outbounds — проверьте установку протоколов.")
+                    _box_bottom()
+                    _pause()
+            except _Cancelled:
+                pass
+        elif ch == "6":
+            if not users:
+                _warn("Нет пользователей")
+                _pause()
+                continue
+            try:
+                raw = _ask("  Номер пользователя: ", c=True).strip()
+                if raw.isdigit() and 1 <= int(raw) <= len(users):
+                    u = users[int(raw) - 1]
                     u["blocked"] = not u.get("blocked", False)
                     state["users"] = users
                     _save_state(state)
@@ -1156,7 +1408,7 @@ def _users_menu() -> None:
                     _pause()
             except _Cancelled:
                 pass
-        elif ch == "6":
+        elif ch == "7":
             if not users:
                 _warn("Нет пользователей")
                 _pause()
@@ -1193,7 +1445,8 @@ def _show_status() -> None:
     _box_info(f"Пользователей: {len(state.get('users', []))}")
     _box_row()
     if state.get("full_domain"):
-        _box_info(f"Пример: {subscription_url('TAG', state).replace('TAG', '<tag>')}")
+        _box_info(f"URI:      {subscription_url('TAG', state).replace('TAG', '<tag>')}")
+        _box_info(f"Sing-box: {subscription_singbox_url('TAG', state).replace('TAG', '<tag>')}")
     _box_bottom()
     _pause()
 
@@ -1247,7 +1500,7 @@ def do_subscription_menu() -> None:
         if configured:
             _box_info(f"Адрес: {BOLD}{state.get('full_domain')}:{state.get('https_port')}{NC}")
             _box_info(f"Пользователей: {len(state.get('users', []))}")
-            _box_desc("Формат: https://sub.domain.com:8443/<tag>")
+            _box_desc("URI: .../<tag>  |  Sing-box: .../<tag>/singbox")
         else:
             _box_desc("Объединяет VLESS + NaiveProxy + Mieru в одну subscription-ссылку.")
 
@@ -1312,10 +1565,14 @@ def do_subscription_menu() -> None:
             _box_info("1. Настройте DNS: A-запись sub → IP VPS")
             _box_info("2. Запустите настройку [1] — certbot + nginx + сервис")
             _box_info("3. Добавьте пользователя [2] — создастся в VLESS/Naive/Mieru")
-            _box_info("4. Выдайте ссылку: https://sub.domain.com:8443/ivan")
+            _box_info("4. Выдайте ссылку клиенту:")
+            _box_info("   URI:      https://sub.domain.com:8443/ivan")
+            _box_info("   Sing-box: https://sub.domain.com:8443/ivan/singbox")
             _box_row()
-            _box_info("Клиенты: v2rayNG, NekoBox, Happ, Karing, Shadowrocket")
-            _box_info("Формат: base64(vless://...\\nnaive+https://...\\nmierus://...)")
+            _box_info("Клиенты URI: v2rayNG, Happ, Shadowrocket")
+            _box_info("Клиенты JSON: Karing, NekoBox, sing-box CLI")
+            _box_info("Формат URI: base64(vless://...\\nnaive+https://...\\nmierus://...)")
+            _box_info("Формат JSON: outbounds vless + naive + mieru + selector")
             _box_row()
             _box_warn("Тег в URL — секретный ключ. Не публикуйте ссылку открыто.")
             _box_bottom()
