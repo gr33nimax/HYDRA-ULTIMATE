@@ -45,6 +45,7 @@ bash bootstrap.sh
 | **Безопасность** | AutoBan, DPI Detector, Honeypot, SSH Hardening                       |
 | **Мониторинг**   | Smart Balancer, Watchdog, Health Reports, Failover A↔B               |
 | **Пользователи** | Добавление/удаление, QR-коды, ссылки, TTL, лимиты трафика            |
+| **Подписка**     | Единые пользователи VLESS + NaiveProxy + Mieru, URI и sing-box JSON  |
 | **Диагностика**  | Health Check, MTU Tracepath, Speed Test, TLS Cert Check              |
 | **Интеграции**   | Telegram-уведомления, Clash Meta / Sing-box конфиги                  |
 | **Обслуживание** | Авторестарт, автообновление xray/geo, миграция конфигов              |
@@ -55,6 +56,7 @@ bash bootstrap.sh
 | **v4.12.8**        | Интерактивный выбор TLS Fingerprint (11 вариантов) при установке и для каждой exit-ноды; единый модуль `fingerprint_manager.py`; FP сохраняется в state.json и применяется во всех режимах (A, B, AWG, WARP) |
 | **v4.12.8** 🛡️ | Telemt MSS-фрагментация против TSPU JA4 DPI: новый модуль `telemt_mss_selector.py`, 10 пресетов (tspu★/2in8/extreme-low/…) с интерактивным выбором при установке Telemt |
 | **v4.12.9 NEW** 📊 | Статистика трафика NaiveProxy и Mieru: новые модули `naiveproxy_stats.py` и `mieru_stats.py`; метрики из iptables, journalctl, ss; гистограммы активности, топ клиентов, NTP-мониторинг; живое обновление каждые 30 сек |
+| **v4.12.10 NEW** 📡 | Подписка (Subscription): меню [14], единые пользователи VLESS + NaiveProxy + Mieru, HTTP-сервер + nginx, URI-подписка и sing-box JSON по ссылке `sub.domain.com/<tag>` |
 
 ## 📋 Требования
 
@@ -105,7 +107,10 @@ VLESS-Ultimate-Installer/
         ├── fragment_log_viewer.py # [v4.12.1] Визуализация фрагментации в логах
         ├── fragment_presets.py  # [v4.12.1] Полный набор пресетов (9 конфигов)
         ├── fragment_link.py     # [v4.12.1] Ссылки+QR для Happ/Incy/Nekoray/v2rayNG
-        └── fragment_guide.py    # [v4.12.1] Интерактивный гайд по тестированию
+        ├── fragment_guide.py    # [v4.12.1] Интерактивный гайд по тестированию
+        ├── naiveproxy.py        # [v4.12.8] NaiveProxy (HTTPS/Chromium fingerprint)
+        ├── mieru.py             # [v4.12.8] Mieru (mTLS + random padding)
+        └── subscription.py      # [v4.12.10] Подписка: единые пользователи, URI + sing-box
 ```
 
 ## 🏗️ Архитектура
@@ -196,6 +201,9 @@ Xray dokodemo-door  (tag: tproxy-telemt)
 
 /var/lib/xray-installer/
 ├── state.json               # Состояние установщика (UUID, ключи, настройки)
+├── subscription.json        # [v4.12.10] Пользователи подписки и настройки sub.domain
+├── naiveproxy.json          # Пользователи NaiveProxy
+├── mieru.json               # Пользователи Mieru
 ├── ingress_geoip.json       # Состояние ingress-блокировки
 └── backups/                 # Резервные копии конфигов
 
@@ -212,6 +220,97 @@ Xray dokodemo-door  (tag: tproxy-telemt)
 systemctl status xray nginx
 systemctl restart xray nginx
 journalctl -u xray -f
+
+# Подписка (после настройки меню [14])
+systemctl status xray-subscription
+systemctl restart xray-subscription
+journalctl -u xray-subscription -f
+```
+
+## 📡 Подписка (Subscription) `[14]`
+
+Модуль объединяет конфигурации **VLESS**, **NaiveProxy** и **Mieru** в одну subscription-ссылку.
+Пользователь вводит префикс поддомена (например `sub`), после настройки DNS конфиги
+доступны по адресу:
+
+```
+https://sub.example.com:8443/<tag>
+```
+
+где `<tag>` — уникальный идентификатор пользователя (латиница, цифры, `_`, `-`).
+
+> Порт **8443** по умолчанию — порт 443 обычно занят Xray REALITY.
+
+### Два формата раздачи
+
+| URL | Формат | Клиенты |
+|-----|--------|---------|
+| `https://sub.domain.com:8443/ivan` | base64 URI-список (`vless://`, `naive+https://`, `mierus://`) | v2rayNG, Happ, Shadowrocket |
+| `https://sub.domain.com:8443/ivan/singbox` | sing-box JSON с outbounds + selector | Karing, NekoBox, sing-box CLI |
+
+Альтернативные пути: `?format=singbox`, `/ivan.json`.
+
+### Архитектура
+
+```
+Клиент (v2rayNG / Karing / NekoBox)
+    │  HTTPS GET https://sub.domain.com:8443/ivan
+    ▼
+Nginx :8443 (TLS, Let's Encrypt)
+    │  proxy_pass
+    ▼
+xray-subscription.service :8765 (localhost)
+    │  читает subscription.json + state.json
+    ▼
+URI:  base64(vless://...\nnaive+https://...\nmierus://...)
+JSON: {"outbounds": [vless, naive, mieru, selector, ...]}
+```
+
+### Единая система пользователей
+
+Модуль использует **оркестратор** поверх существующих хранилищ — не заменяет
+менеджеры [2], [11], [12], а синхронизирует их при работе через меню [14]:
+
+```
+subscription.json (tag = единый ID)
+    ├── VLESS      → /etc/xray/users.json + config.json  (UUID)
+    ├── NaiveProxy → /var/lib/xray-installer/naiveproxy.json  (login/password)
+    └── Mieru      → /var/lib/xray-installer/mieru.json       (login/password)
+```
+
+| Действие | Поведение |
+|----------|-----------|
+| **Добавить** (меню [14] → [2] → [1]) | Создаёт пользователя во всех выбранных протоколах |
+| **Импорт** (меню [14] → [2] → [2]) | Связывает уже существующих из VLESS/Naive/Mieru |
+| **Удалить** (меню [14]) | Удаляет из subscription.json и из всех привязанных модулей |
+| **Блокировка** | Только HTTP 404 на подписку; прокси продолжает работать |
+
+> После добавления VLESS-пользователя через подписку примените список к Xray:
+> **Меню [2] → Управление пользователями → [5] Применить список к Xray**.
+
+### Быстрая настройка
+
+```bash
+sudo python3 /opt/vless-ultimate/main.py
+# → [14] Подписка
+# → [1] Настроить поддомен (DNS A-запись sub → IP VPS)
+# → [2] Пользователи → [1] Добавить
+```
+
+Пример записи в `subscription.json`:
+
+```json
+{
+  "tag": "ivan",
+  "name": "Иван",
+  "protocols": ["vless", "naive", "mieru"],
+  "vless_uuid": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "naive_username": "ivan",
+  "naive_password": "...",
+  "mieru_username": "ivan",
+  "mieru_password": "...",
+  "blocked": false
+}
 ```
 
 ## 🖥️ CLI-флаги
