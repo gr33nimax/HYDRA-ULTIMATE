@@ -74,6 +74,7 @@ from vless_installer.modules.slipgate import do_slipgate_menu
 from vless_installer.modules.wdtt import do_wdtt_menu
 from vless_installer.modules.naiveproxy import do_naiveproxy_menu
 from vless_installer.modules.mieru import do_mieru_menu
+from vless_installer.modules.subscription import do_subscription_menu
 from vless_installer.modules.ripe_file_age   import (
     check_ripe_file_age, ripe_file_age_banner,
 )
@@ -29786,11 +29787,15 @@ def main_menu() -> None:
             _box_row(f"     {DIM}TCP-over-WebRTC — туннель под видеозвонок (Jitsi/Телемост/WB Stream){NC}")
             _box_row()
             _box_sep()
+            _box_row(f"  {CYAN}14{NC} 📡 {TITLE}Подписка (Subscription){NC}")
+            _box_row(f"     {DIM}Единые пользователи: VLESS + NaiveProxy + Mieru по ссылке sub.domain/tag{NC}")
+            _box_row()
+            _box_sep()
             _box_row(f"  {DIM}[{NC}{TITLE}{BOLD}0{NC}{DIM}]{NC}  🚪 Выход")
             _box_bottom()
             _BOX_W = _BOX_W_saved
             print()
-            choice = input(f"{CYAN}Выбор (1–13 / 0):{NC} ").strip()
+            choice = input(f"{CYAN}Выбор (1–14 / 0):{NC} ").strip()
         except KeyboardInterrupt:
             print()
             print(f"{GREEN}До свидания! 👋{NC}")
@@ -29869,6 +29874,13 @@ def main_menu() -> None:
                 do_olcrtc_menu()
             except ImportError as _e:
                 warn(f"Модуль olcRTC не найден: {_e}")
+                time.sleep(2)
+
+        elif choice == "14":
+            try:
+                do_subscription_menu()
+            except ImportError as _e:
+                warn(f"Модуль Подписка не найден: {_e}")
                 time.sleep(2)
 
         elif choice == "0":
