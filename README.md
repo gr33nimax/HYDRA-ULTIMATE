@@ -313,6 +313,63 @@ sudo python3 /opt/vless-ultimate/main.py
 }
 ```
 
+### Установка модуля на уже работающий сервер
+
+Патч **совместим** с оригинальной установкой v4.12.10: он **добавляет** модуль
+и пункт меню `[14]`, не переустанавливает Xray/Naive/Mieru и **не меняет**
+существующие `config.json`, `state.json`, `users.json`.
+
+> Модуль подписки пока в ветке форка — в официальный `inferno1978/main` ещё не влит.
+> Стандартный `bootstrap.sh` с GitHub автора **не содержит** меню [14].
+
+**Способ 1 — скачать файлы патча (рекомендуется):**
+
+```bash
+INSTALL_DIR="/opt/vless-ultimate"   # или ваш путь к установке
+BRANCH="cursor/subscription-module-4b37"
+BASE="https://raw.githubusercontent.com/gr33nimax/VLESS-Ultimate-Installer/${BRANCH}"
+
+# Бэкап перед обновлением
+cp -a "${INSTALL_DIR}/vless_installer/_core.py" \
+      "${INSTALL_DIR}/vless_installer/_core.py.bak.$(date +%Y%m%d)"
+
+# Новый модуль + обновлённый _core.py (импорт и меню [14])
+curl -fsSL -o "${INSTALL_DIR}/vless_installer/modules/subscription.py" \
+  "${BASE}/vless_installer/modules/subscription.py"
+curl -fsSL -o "${INSTALL_DIR}/vless_installer/_core.py" \
+  "${BASE}/vless_installer/_core.py"
+
+# Проверка
+python3 -m py_compile "${INSTALL_DIR}/vless_installer/modules/subscription.py"
+sudo python3 "${INSTALL_DIR}/main.py"
+# → в главном меню должен появиться пункт [14] Подписка
+```
+
+**Способ 2 — через git (если установка клонирована):**
+
+```bash
+cd /opt/vless-ultimate
+git remote add gr33nimax https://github.com/gr33nimax/VLESS-Ultimate-Installer.git 2>/dev/null || true
+git fetch gr33nimax cursor/subscription-module-4b37
+git checkout gr33nimax/cursor/subscription-module-4b37 -- \
+  vless_installer/modules/subscription.py \
+  vless_installer/_core.py
+sudo python3 main.py
+```
+
+**Откат:**
+
+```bash
+cp -a /opt/vless-ultimate/vless_installer/_core.py.bak.* \
+      /opt/vless-ultimate/vless_installer/_core.py
+rm -f /opt/vless-ultimate/vless_installer/modules/subscription.py
+systemctl stop xray-subscription 2>/dev/null; systemctl disable xray-subscription 2>/dev/null
+```
+
+Ссылки патча:
+- Репозиторий: [github.com/gr33nimax/VLESS-Ultimate-Installer](https://github.com/gr33nimax/VLESS-Ultimate-Installer)
+- Ветка: `cursor/subscription-module-4b37`
+
 ## 🖥️ CLI-флаги
 
 ```bash
@@ -370,13 +427,17 @@ tail -100 /var/log/vless-install.log
 
 ```bash
 python3 /opt/vless-ultimate/verify.py
-cd /opt/vless-ultimate && git pull
+cd /opt/vless-ultimate && git pull    # обновляет с origin (обычно inferno1978/main)
 sudo python3 /opt/vless-ultimate/main.py --scheduled-backup
 ```
 
+> `git pull` в `/opt/vless-ultimate` тянет **upstream** (авторский репозиторий).
+> Если вы ставили патч подписки с форка — повторно примените файлы из ветки
+> `cursor/subscription-module-4b37` после обновления, иначе меню [14] пропадёт.
+
 ## ❓ Решение проблем
 
-Смотри [TROUBLESHOOTING.md](https://github.com/inferno1978/VLESS-Ultimate-Installer/blob/main/TROUBLESHOOTING.md).
+Смотри [TROUBLESHOOTING.md](TROUBLESHOOTING.md) · [INSTALL.md](INSTALL.md) · [CHANGELOG.md](CHANGELOG.md)
 
 ## 📌 О проекте и формате общения
 
@@ -404,7 +465,7 @@ sudo python3 /opt/vless-ultimate/main.py --scheduled-backup
 
 ## 📄 Лицензия
 
-MIT — см. [LICENSE](https://github.com/inferno1978/VLESS-Ultimate-Installer/blob/main/LICENSE)
+MIT — см. [LICENSE](LICENSE)
 
 ## ✍️ Автор
 
