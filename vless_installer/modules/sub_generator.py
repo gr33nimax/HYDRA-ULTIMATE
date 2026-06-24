@@ -20,7 +20,9 @@ from __future__ import annotations
 import base64
 import json
 import socket
+import struct
 import subprocess
+import zlib
 import urllib.parse
 from pathlib import Path
 from typing import Optional
@@ -92,6 +94,158 @@ def _find_user_uuid(email: str) -> Optional[str]:
 
 def generate_vless_links(state: dict, uuid_str: str, email: str) -> list[str]:
     return []
+
+
+# ── AmneziaWG: чтение конфига из Docker и генерация sn://awg ─────────────────
+
+def _awg_serialize_string(s: str) -> bytes:
+    """Сериализация строки в формат NekoBox: последний байт с установленным старшим битом."""
+    if not s:
+        return b'\x80'
+    b = s.encode('utf-8')
+    return b[:-1] + bytes([b[-1] | 0x80])
+
+
+def _parse_awg_conf(conf_text: str) -> dict:
+    """Парсинг .conf файла AmneziaWG в словарь."""
+    result = {'interface': {}, 'peer': {}}
+    section = None
+    for line in conf_text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        if line == '[Interface]':
+            section = 'interface'
+        elif line == '[Peer]':
+            section = 'peer'
+        elif '=' in line and section:
+            k, _, v = line.partition('=')
+            result[section][k.strip()] = v.strip()
+    return result
+
+
+def _detect_awg_container() -> str:
+    """Определяет имя Docker-контейнера AmneziaWG."""
+    try:
+        r = subprocess.run(
+            ['docker', 'ps', '-a', '--format', '{{.Names}}'],
+            capture_output=True, text=True, timeout=5
+        )
+        if r.returncode == 0:
+            names = [n.strip() for n in r.stdout.splitlines() if n.strip()]
+            for n in ('amnezia-awg2', 'amnezia-awg', 'amnezia-wg'):
+                if n in names:
+                    return n
+    except Exception:
+        pass
+    return 'amnezia-awg2'
+
+
+def get_awg_client_config(username: str) -> Optional[str]:
+    """
+    Читает клиентский .conf файл из контейнера AmneziaWG.
+    Возвращает текст конфига или None если не найден.
+    """
+    container = _detect_awg_container()
+    conf_path = f'/opt/amnezia/awg/client_{username}.conf'
+    try:
+        r = subprocess.run(
+            ['docker', 'exec', container, 'cat', conf_path],
+            capture_output=True, text=True, timeout=10
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+def generate_awg_sn_link(conf_text: str, profile_name: str = 'AmneziaWG') -> str:
+    """
+    Генерирует sn://awg?<data> ссылку для NekoBox/SFA из текста .conf файла AmneziaWG.
+
+    Формат бинарной структуры (little-endian, zlib+base64url):
+      [u32: 2]                  тип = AmneziaWG
+      [str: server]             хост сервера (endpoint без порта)
+      [u32: port]               UDP-порт
+      [str: client_addr]        IP клиента (e.g. 10.8.1.3/32)
+      [str: private_key]        приватный ключ клиента
+      [str: server_public_key]  публичный ключ сервера (из [Peer])
+      [str: preshared_key]      PSK (пустая строка если нет)
+      [str: client_public_key]  публичный ключ клиента (пустой — не вычислить без awg)
+      [u32: Jc][u32: Jmin][u32: Jmax][u32: S1][u32: S2]
+      [str: H1][str: H2]
+      [u32: S3][u32: S4]
+      [str: H3][str: H4]
+      [bytes: b'\x81\x81\x81\x81']  4 boolean-флага = true
+      [u32: 1]                  PersistentKeepalive enabled
+      [str: profile_name]       имя профиля
+      [bytes: b'\x81\x81']      trailing booleans
+    """
+    cfg = _parse_awg_conf(conf_text)
+    iface = cfg['interface']
+    peer  = cfg['peer']
+
+    # Endpoint: 'host:port'
+    endpoint = peer.get('Endpoint', '127.0.0.1:51820')
+    if ':' in endpoint:
+        server_host, server_port_s = endpoint.rsplit(':', 1)
+        server_port = int(server_port_s)
+    else:
+        server_host = endpoint
+        server_port = 51820
+
+    client_addr    = iface.get('Address', '10.8.0.2/32')
+    private_key    = iface.get('PrivateKey', '')
+    server_pubkey  = peer.get('PublicKey', '')
+    preshared_key  = peer.get('PresharedKey', '')
+
+    # Параметры обфускации AmneziaWG
+    jc   = int(iface.get('Jc',   4))
+    jmin = int(iface.get('Jmin', 40))
+    jmax = int(iface.get('Jmax', 70))
+    s1   = int(iface.get('S1',   0))
+    s2   = int(iface.get('S2',   0))
+    s3   = int(iface.get('S3',   0))
+    s4   = int(iface.get('S4',   0))
+    h1   = iface.get('H1', '0')
+    h2   = iface.get('H2', '0')
+    h3   = iface.get('H3', '0')
+    h4   = iface.get('H4', '0')
+
+    def _u32(v: int) -> bytes:
+        return struct.pack('<I', v)
+
+    data = (
+        _u32(2)                              +  # тип AmneziaWG
+        _awg_serialize_string(server_host)   +
+        _u32(server_port)                    +
+        _awg_serialize_string(client_addr)   +
+        _awg_serialize_string(private_key)   +
+        _awg_serialize_string(server_pubkey) +
+        _awg_serialize_string(preshared_key) +
+        _awg_serialize_string('')            +  # client pubkey (недоступен без awg)
+        _u32(jc)                             +
+        _u32(jmin)                           +
+        _u32(jmax)                           +
+        _u32(s1)                             +
+        _u32(s2)                             +
+        _awg_serialize_string(h1)            +
+        _awg_serialize_string(h2)            +
+        _u32(s3)                             +
+        _u32(s4)                             +
+        _awg_serialize_string(h3)            +
+        _awg_serialize_string(h4)            +
+        b'\x81\x81\x81\x81'                +  # boolean flags
+        _u32(1)                              +  # PersistentKeepalive enabled
+        _awg_serialize_string(profile_name)  +
+        b'\x81\x81'                           # trailing flags
+    )
+
+    compressed = zlib.compress(data, level=7)
+    encoded = base64.urlsafe_b64encode(compressed).rstrip(b'=').decode('ascii')
+    return f'sn://awg?{encoded}'
+
 
 
 # ── Генерация NaiveProxy ─────────────────────────────────────────────────────
@@ -209,6 +363,13 @@ def generate_base64_sub(state: dict, uuid_str: str, email: str) -> str:
     # Mieru
     mieru_links = generate_mieru_link(state, email)
     links.extend(mieru_links)
+
+    # AmneziaWG — ищем конфиг по имени пользователя (email без домена)
+    awg_username = email.split('@')[0] if '@' in email else email
+    awg_conf = get_awg_client_config(awg_username)
+    if awg_conf:
+        awg_link = generate_awg_sn_link(awg_conf, profile_name=f'{awg_username} AWG')
+        links.append(awg_link)
 
     raw = "\n".join(links) + "\n"
     return base64.b64encode(raw.encode("utf-8")).decode("utf-8")
