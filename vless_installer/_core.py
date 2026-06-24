@@ -9586,6 +9586,18 @@ def do_user_add() -> None:
                 sub_tokens = state.setdefault("sub_tokens", {})
                 sub_tokens[new_email] = gen_uuid()
                 STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+                
+                # Автоматически добавляем во все установленные плагины
+                try:
+                    from vless_installer.modules.naiveproxy import add_user_noninteractive as np_add
+                    np_add(new_email)
+                except Exception:
+                    pass
+                try:
+                    from vless_installer.modules.mieru import add_user_noninteractive as mieru_add
+                    mieru_add(new_email)
+                except Exception:
+                    pass
             except Exception as e:
                 warn(f"Не удалось сохранить токен подписки: {e}")
     except Exception as e:
@@ -9651,6 +9663,18 @@ def do_user_delete() -> None:
                 if del_email in sub_tokens:
                     del sub_tokens[del_email]
                     STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+                    
+                # Автоматически удаляем из установленных плагинов
+                try:
+                    from vless_installer.modules.naiveproxy import delete_user_noninteractive as np_del
+                    np_del(del_email)
+                except Exception:
+                    pass
+                try:
+                    from vless_installer.modules.mieru import delete_user_noninteractive as mieru_del
+                    mieru_del(del_email)
+                except Exception:
+                    pass
             except Exception:
                 pass
                 
@@ -9832,6 +9856,23 @@ def _add_subscription_user() -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
     success(f"Пользователь '{new_email}' успешно добавлен в систему подписок.")
     
+    # Автоматически добавляем во все установленные плагины
+    try:
+        from vless_installer.modules.naiveproxy import add_user_noninteractive as np_add
+        res_np = np_add(new_email)
+        if res_np:
+            success(f"Пользователь '{new_email}' автоматически добавлен в NaiveProxy")
+    except Exception as e:
+        warn(f"Не удалось добавить пользователя в NaiveProxy: {e}")
+        
+    try:
+        from vless_installer.modules.mieru import add_user_noninteractive as mieru_add
+        res_mieru = mieru_add(new_email)
+        if res_mieru:
+            success(f"Пользователь '{new_email}' автоматически добавлен в Mieru")
+    except Exception as e:
+        warn(f"Не удалось добавить пользователя в Mieru: {e}")
+        
     # Сразу показываем ссылки
     sub_domain = state.get("sub_domain", "")
     sub_port = state.get("sub_port", 9443)
@@ -9891,6 +9932,21 @@ def _delete_subscription_user() -> None:
         state["sub_tokens"] = sub_tokens
         STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
         success(f"Пользователь '{target}' удален из системы подписок")
+        
+        # Автоматически удаляем из всех установленных плагинов
+        try:
+            from vless_installer.modules.naiveproxy import delete_user_noninteractive as np_del
+            if np_del(target):
+                success(f"Пользователь '{target}' автоматически удален из NaiveProxy")
+        except Exception as e:
+            warn(f"Не удалось удалить пользователя из NaiveProxy: {e}")
+            
+        try:
+            from vless_installer.modules.mieru import delete_user_noninteractive as mieru_del
+            if mieru_del(target):
+                success(f"Пользователь '{target}' автоматически удален из Mieru")
+        except Exception as e:
+            warn(f"Не удалось удалить пользователя из Mieru: {e}")
     else:
         info("Отменено")
     time.sleep(1.5)
