@@ -65,7 +65,7 @@ for py in ["main.py", "verify.py",
            "vless_installer/modules/sub_nginx.py",
            "vless_installer/modules/warp_universal.py"]:
     try:
-        ast.parse(Path(py).read_text())
+        ast.parse(Path(py).read_text(encoding="utf-8"))
         ok(f"{py} — синтаксис OK")
     except SyntaxError as e:
         fail(f"{py} — SyntaxError L{e.lineno}: {e.msg}")
@@ -76,7 +76,7 @@ for py in ["main.py", "verify.py",
 section("3. Целостность _core.py")
 core = Path("vless_installer/_core.py")
 if core.exists():
-    lines = len(core.read_text().splitlines())
+    lines = len(core.read_text(encoding="utf-8").splitlines())
     if lines > 30000:
         ok(f"_core.py: {lines} строк — полный")
     else:

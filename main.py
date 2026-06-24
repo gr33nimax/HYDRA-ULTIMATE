@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VLESS Ultimate Installer v4.12.10 — Entry Point
+VLESS-ULTIMATE X v5.0.0 — Entry Point
 =============================================
 Запуск: sudo python3 main.py
 

@@ -141,7 +141,9 @@ from vless_installer.modules.hysteria2_menu      import do_hysteria2_menu
 from vless_installer.modules.config_backup       import backup_xray_config, do_backup_menu
 from vless_installer.modules.cold_boot_restore   import do_cold_boot_menu
 from vless_installer.modules.node_health_monitor import do_health_monitor_menu
+from vless_installer.modules.amnezia_vpn import do_amnezia_vpn_menu
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 
 def _set_config_owner(path) -> None:
@@ -30187,8 +30189,8 @@ def _menu_security() -> None:
         _box_item("2", f"🛡️  GeoIP Block  {DIM}(allowlist / blocklist / сканеры){NC}")
         _box_item("3", "🗺️  Управление GeoIP / GeoSite файлами")
         _box_item("4", "🔑 Ротация UUID и Fingerprint")
-        _box_item("5", f"📬 Telegram-уведомления  {DIM}(бот + мониторинг){NC}")
-        _box_item("TB", f"🤖 Telegram Config Bot  {DIM}(раздача конфигов пользователям){NC}")
+        _box_item("5", f"📬 Telegram Admin Panel  {DIM}(управление сервером через бот){NC}")
+        _box_item("TB", f"🤖 Telegram User Bot  {DIM}(подписки для пользователей){NC}")
         _box_item("PH", f"⚡ Port Hopping  {DIM}(диапазон портов против блокировки){NC}")
         _box_sep()
         _box_item("6", f"📡 Failover статус exit-нод{_awg_na}")
@@ -30454,7 +30456,7 @@ def main_menu() -> None:
             _BOX_W_saved = _BOX_W
             _BOX_W = 64
             _box_top()
-            _box_row(f"  {BOLD}{TITLE}VLESS Ultimate Installer v4.12.10{NC}  {DIM}│{NC}  {mode_str}")
+            _box_row(f"  {BOLD}{TITLE}VLESS-ULTIMATE X v5.0.0{NC}  {DIM}│{NC}  {mode_str}")
             _box_sep()
             _box_row()
             _box_row(f"  {CYAN}1{NC}  ⚙️  {TITLE}Установка и Система{NC}")
@@ -30513,11 +30515,15 @@ def main_menu() -> None:
             _box_row(f"     {DIM}TCP/SOCKS5 поверх WebDAV-файлов — маскировка под облако{NC}")
             _box_row()
             _box_sep()
+            _box_row(f"  {CYAN}15{NC} 🛡️  {TITLE}AmneziaVPN{NC}")
+            _box_row(f"     {DIM}AWG через Docker — управление контейнером Amnezia{NC}")
+            _box_row()
+            _box_sep()
             _box_row(f"  {DIM}[{NC}{TITLE}{BOLD}0{NC}{DIM}]{NC}  🚪 Выход")
             _box_bottom()
             _BOX_W = _BOX_W_saved
             print()
-            choice = input(f"{CYAN}Выбор (1–14 / 0):{NC} ").strip()
+            choice = input(f"{CYAN}Выбор (1–15 / 0):{NC} ").strip()
         except KeyboardInterrupt:
             print()
             print(f"{GREEN}До свидания! 👋{NC}")
@@ -30603,6 +30609,13 @@ def main_menu() -> None:
                 do_webdav_tunnel_menu()
             except ImportError as _e:
                 warn(f"Модуль WebDAV Tunnel не найден: {_e}")
+                time.sleep(2)
+
+        elif choice == "15":
+            try:
+                do_amnezia_vpn_menu()
+            except Exception as _e:
+                warn(f"Ошибка вызова AmneziaVPN: {_e}")
                 time.sleep(2)
 
         elif choice == "0":
