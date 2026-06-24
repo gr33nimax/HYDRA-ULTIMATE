@@ -106,6 +106,41 @@ def _awg_serialize_string(s: str) -> bytes:
     return b[:-1] + bytes([b[-1] | 0x80])
 
 
+def _awg_serialize_len(length: int) -> bytes:
+    val = length + 1
+    out = bytearray()
+    first = True
+    while True:
+        towrite = val & 0x3f
+        val >>= 6
+        if val > 0:
+            byte_val = 0x40 | towrite
+        else:
+            byte_val = towrite
+        
+        if first:
+            byte_val |= 0x80
+            first = False
+            
+        out.append(byte_val)
+        if val == 0:
+            break
+    return bytes(out)
+
+
+def _awg_serialize_string_len(s: str) -> bytes:
+    b = s.encode('utf-8')
+    return _awg_serialize_len(len(b)) + b
+
+
+def _get_awg_val(d: dict, key: str, default: str = '') -> str:
+    k_lower = key.lower()
+    for k, v in d.items():
+        if k.lower() == k_lower:
+            return v
+    return default
+
+
 def _parse_awg_conf(conf_text: str) -> dict:
     """Парсинг .conf файла AmneziaWG в словарь."""
     result = {'interface': {}, 'peer': {}}
@@ -114,9 +149,9 @@ def _parse_awg_conf(conf_text: str) -> dict:
         line = line.strip()
         if not line or line.startswith('#'):
             continue
-        if line == '[Interface]':
+        if line.lower() == '[interface]':
             section = 'interface'
-        elif line == '[Peer]':
+        elif line.lower() == '[peer]':
             section = 'peer'
         elif '=' in line and section:
             k, _, v = line.partition('=')
@@ -163,31 +198,13 @@ def get_awg_client_config(username: str) -> Optional[str]:
 def generate_awg_sn_link(conf_text: str, profile_name: str = 'AmneziaWG') -> str:
     """
     Генерирует sn://awg?<data> ссылку для NekoBox/SFA из текста .conf файла AmneziaWG.
-
-    Формат бинарной структуры (little-endian, zlib+base64url):
-      [u32: 2]                  тип = AmneziaWG
-      [str: server]             хост сервера (endpoint без порта)
-      [u32: port]               UDP-порт
-      [str: client_addr]        IP клиента (e.g. 10.8.1.3/32)
-      [str: private_key]        приватный ключ клиента
-      [str: server_public_key]  публичный ключ сервера (из [Peer])
-      [str: preshared_key]      PSK (пустая строка если нет)
-      [str: client_public_key]  публичный ключ клиента (пустой — не вычислить без awg)
-      [u32: Jc][u32: Jmin][u32: Jmax][u32: S1][u32: S2]
-      [str: H1][str: H2]
-      [u32: S3][u32: S4]
-      [str: H3][str: H4]
-      [bytes: b'\x81\x81\x81\x81']  4 boolean-флага = true
-      [u32: 1]                  PersistentKeepalive enabled
-      [str: profile_name]       имя профиля
-      [bytes: b'\x81\x81']      trailing booleans
     """
     cfg = _parse_awg_conf(conf_text)
     iface = cfg['interface']
     peer  = cfg['peer']
 
     # Endpoint: 'host:port'
-    endpoint = peer.get('Endpoint', '127.0.0.1:51820')
+    endpoint = _get_awg_val(peer, 'Endpoint', '127.0.0.1:51820')
     if ':' in endpoint:
         server_host, server_port_s = endpoint.rsplit(':', 1)
         server_port = int(server_port_s)
@@ -195,51 +212,68 @@ def generate_awg_sn_link(conf_text: str, profile_name: str = 'AmneziaWG') -> str
         server_host = endpoint
         server_port = 51820
 
-    client_addr    = iface.get('Address', '10.8.0.2/32')
-    private_key    = iface.get('PrivateKey', '')
-    server_pubkey  = peer.get('PublicKey', '')
-    preshared_key  = peer.get('PresharedKey', '')
+    client_addr    = _get_awg_val(iface, 'Address', '10.8.0.2/32')
+    private_key    = _get_awg_val(iface, 'PrivateKey', '')
+    server_pubkey  = _get_awg_val(peer, 'PublicKey', '')
+    preshared_key  = _get_awg_val(peer, 'PresharedKey', '')
+
+    def _parse_int(val_s: str, default: int) -> int:
+        val_s = val_s.strip()
+        if not val_s:
+            return default
+        try:
+            return int(val_s)
+        except ValueError:
+            return default
 
     # Параметры обфускации AmneziaWG
-    jc   = int(iface.get('Jc',   4))
-    jmin = int(iface.get('Jmin', 40))
-    jmax = int(iface.get('Jmax', 70))
-    s1   = int(iface.get('S1',   0))
-    s2   = int(iface.get('S2',   0))
-    s3   = int(iface.get('S3',   0))
-    s4   = int(iface.get('S4',   0))
-    h1   = iface.get('H1', '0')
-    h2   = iface.get('H2', '0')
-    h3   = iface.get('H3', '0')
-    h4   = iface.get('H4', '0')
+    jc   = _parse_int(_get_awg_val(iface, 'Jc',   '4'), 4)
+    jmin = _parse_int(_get_awg_val(iface, 'Jmin', '40'), 40)
+    jmax = _parse_int(_get_awg_val(iface, 'Jmax', '70'), 70)
+    s1   = _parse_int(_get_awg_val(iface, 'S1',   '0'), 0)
+    s2   = _parse_int(_get_awg_val(iface, 'S2',   '0'), 0)
+    s3   = _parse_int(_get_awg_val(iface, 'S3',   '0'), 0)
+    s4   = _parse_int(_get_awg_val(iface, 'S4',   '0'), 0)
+    
+    h1   = _get_awg_val(iface, 'H1', '0')
+    h2   = _get_awg_val(iface, 'H2', '0')
+    h3   = _get_awg_val(iface, 'H3', '0')
+    h4   = _get_awg_val(iface, 'H4', '0')
+    i1   = _get_awg_val(iface, 'I1', '')
+
+    persistent_keepalive = _parse_int(_get_awg_val(peer, 'PersistentKeepalive', '25'), 25)
+    mtu = _parse_int(_get_awg_val(iface, 'MTU', '1280'), 1280)
 
     def _u32(v: int) -> bytes:
         return struct.pack('<I', v)
 
     data = (
-        _u32(2)                              +  # тип AmneziaWG
-        _awg_serialize_string(server_host)   +
-        _u32(server_port)                    +
-        _awg_serialize_string(client_addr)   +
-        _awg_serialize_string(private_key)   +
-        _awg_serialize_string(server_pubkey) +
-        _awg_serialize_string(preshared_key) +
-        _awg_serialize_string('')            +  # client pubkey (недоступен без awg)
-        _u32(jc)                             +
-        _u32(jmin)                           +
-        _u32(jmax)                           +
-        _u32(s1)                             +
-        _u32(s2)                             +
-        _awg_serialize_string(h1)            +
-        _awg_serialize_string(h2)            +
-        _u32(s3)                             +
-        _u32(s4)                             +
-        _awg_serialize_string(h3)            +
-        _awg_serialize_string(h4)            +
-        b'\x81\x81\x81\x81'                +  # boolean flags
-        _u32(1)                              +  # PersistentKeepalive enabled
-        _awg_serialize_string(profile_name)  +
-        b'\x81\x81'                           # trailing flags
+        _u32(2)                                   +  # тип AmneziaWG
+        _awg_serialize_string(server_host)         +
+        _u32(server_port)                          +
+        _awg_serialize_string(client_addr)         +
+        _awg_serialize_string_len(private_key)     +
+        _awg_serialize_string_len(server_pubkey)   +
+        _awg_serialize_string_len(preshared_key)   +
+        _u32(persistent_keepalive)                 +
+        _u32(mtu)                                  +
+        _awg_serialize_string_len('')              +  # client pubkey
+        _u32(jc)                                   +
+        _u32(jmin)                                 +
+        _u32(jmax)                                 +
+        _u32(s1)                                   +
+        _u32(s2)                                   +
+        _awg_serialize_string(h1)                  +
+        _awg_serialize_string(h2)                  +
+        _u32(s3)                                   +
+        _u32(s4)                                   +
+        _awg_serialize_string(h3)                  +
+        _awg_serialize_string(h4)                  +
+        _awg_serialize_string_len(i1)              +
+        b'\x81\x81\x81\x81'                       +  # boolean flags
+        _u32(1)                                    +  # PersistentKeepalive enabled
+        _awg_serialize_string(profile_name)        +
+        b'\x81\x81'                                   # trailing flags
     )
 
     compressed = zlib.compress(data, level=7)

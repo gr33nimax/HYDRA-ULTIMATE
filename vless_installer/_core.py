@@ -124,7 +124,7 @@ from vless_installer.modules.tui        import (
     tui_input, tui_confirm, tui_select, tui_progress, tui_form,
 )
 from vless_installer.modules.port_hopping        import do_port_hopping_menu, ph_status
-from vless_installer.modules.tg_bot              import do_tg_bot_menu, do_manage_telegram
+from vless_installer.modules.tg_bot              import do_tg_bot_menu, do_manage_telegram, _tg_notify_event
 from vless_installer.modules.hysteria2_menu      import do_hysteria2_menu
 from vless_installer.modules.amnezia_vpn import do_amnezia_vpn_menu
 # ─────────────────────────────────────────────────────────────────────────────
