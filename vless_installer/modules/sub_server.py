@@ -121,7 +121,9 @@ def find_user_by_token(token: str) -> Optional[tuple[str, str]]:
     if main_uuid:
         return (main_uuid, email)
 
-    return None
+    # Если UUID нет, возвращаем пустую строку как UUID, но разрешаем авторизацию!
+    _log("INFO", f"User '{email}' authenticated successfully via token, but no UUID found in xray config or state.json. Returning empty UUID.")
+    return ("", email)
 
 
 # ── HTTP Handler ──────────────────────────────────────────────────────────────

@@ -82,6 +82,8 @@ def _find_user_uuid(email: str) -> Optional[str]:
 
 def generate_vless_links(state: dict, uuid_str: str, email: str) -> list[str]:
     """Генерация VLESS URI на основе текущей конфигурации."""
+    if not uuid_str:
+        return []
     links = []
     server_ip = state.get("domain", "") or _get_server_ip()
     port = state.get("server_port", 443)
@@ -217,7 +219,7 @@ def generate_clash_yaml(state: dict, uuid_str: str, email: str) -> str:
     protocol_mode = state.get("protocol_mode", "reality")
 
     # VLESS REALITY
-    if protocol_mode in ("reality", "both", ""):
+    if uuid_str and protocol_mode in ("reality", "both", ""):
         name = f"{email} REALITY"
         proxy_names.append(name)
         pbk = state.get("public_key", "")
@@ -241,7 +243,7 @@ def generate_clash_yaml(state: dict, uuid_str: str, email: str) -> str:
       short-id: {sid}""")
 
     # VLESS xHTTP
-    if protocol_mode in ("xhttp", "both"):
+    if uuid_str and protocol_mode in ("xhttp", "both"):
         domain = state.get("domain", "")
         if domain:
             name = f"{email} xHTTP"
@@ -339,7 +341,7 @@ def generate_singbox_json(state: dict, uuid_str: str, email: str) -> str:
     protocol_mode = state.get("protocol_mode", "reality")
 
     # VLESS REALITY
-    if protocol_mode in ("reality", "both", ""):
+    if uuid_str and protocol_mode in ("reality", "both", ""):
         tag = f"{email}-reality"
         tags.append(tag)
         pbk = state.get("public_key", "")
@@ -367,7 +369,7 @@ def generate_singbox_json(state: dict, uuid_str: str, email: str) -> str:
         })
 
     # VLESS xHTTP
-    if protocol_mode in ("xhttp", "both"):
+    if uuid_str and protocol_mode in ("xhttp", "both"):
         domain = state.get("domain", "")
         if domain:
             tag = f"{email}-xhttp"
