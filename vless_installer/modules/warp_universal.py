@@ -347,6 +347,24 @@ def remove_subnet(subnet: str) -> None:
         sync_routes(state)
 
 
+def clear_domains() -> None:
+    state = _load_state()
+    warp_routing = state.setdefault("warp_routing", {})
+    warp_routing["domains"] = []
+    state["warp_routing"] = warp_routing
+    _save_state(state)
+    sync_routes(state)
+
+
+def clear_subnets() -> None:
+    state = _load_state()
+    warp_routing = state.setdefault("warp_routing", {})
+    warp_routing["subnets"] = []
+    state["warp_routing"] = warp_routing
+    _save_state(state)
+    sync_routes(state)
+
+
 def get_status() -> dict:
     state = _load_state()
     warp_routing = state.get("warp_routing", {})
@@ -468,6 +486,7 @@ def _manage_domains_menu(status: dict) -> None:
         _box_sep()
         _box_item("1", "➕ Добавить домен")
         _box_item("2", "➖ Удалить домен")
+        _box_item("3", "🗑️ Очистить все домены")
         _box_row()
         _box_item_exit("0", "← Назад")
         _box_bottom()
@@ -504,6 +523,16 @@ def _manage_domains_menu(status: dict) -> None:
             except ValueError:
                 _box_warn("Введите число")
             time.sleep(1)
+        elif ch == "3":
+            if not domains:
+                _box_warn("Список пуст")
+                time.sleep(1)
+                continue
+            ans = input(f"{RED}Очистить весь список доменов? [y/N]:{NC} ").strip().lower()
+            if ans == "y":
+                clear_domains()
+                _box_ok("Список доменов полностью очищен")
+                time.sleep(1.5)
 
 
 def _manage_subnets_menu(status: dict) -> None:
@@ -524,6 +553,7 @@ def _manage_subnets_menu(status: dict) -> None:
         _box_sep()
         _box_item("1", "➕ Добавить подсеть")
         _box_item("2", "➖ Удалить подсеть")
+        _box_item("3", "🗑️ Очистить все подсети")
         _box_row()
         _box_item_exit("0", "← Назад")
         _box_bottom()
@@ -567,6 +597,16 @@ def _manage_subnets_menu(status: dict) -> None:
             except ValueError:
                 _box_warn("Введите число")
             time.sleep(1)
+        elif ch == "3":
+            if not subnets:
+                _box_warn("Список пуст")
+                time.sleep(1)
+                continue
+            ans = input(f"{RED}Очистить весь список подсетей? [y/N]:{NC} ").strip().lower()
+            if ans == "y":
+                clear_subnets()
+                _box_ok("Список подсетей полностью очищен")
+                time.sleep(1.5)
 
 
 def _show_lists_menu(status: dict) -> None:
