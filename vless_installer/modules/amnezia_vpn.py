@@ -71,7 +71,7 @@ def _get_container_name() -> str:
 # ── box_renderer ───────────────────────────────────────────────────────────────
 from vless_installer.modules.box_renderer import (
     _box_top, _box_sep, _box_bottom, _box_row, _box_item,
-    _box_back, _box_info, _box_warn, _box_desc,
+    _box_back, _box_info, _box_warn, _box_desc, _box_item_exit,
 )
 
 # ── Логирование ────────────────────────────────────────────────────────────────
@@ -856,6 +856,78 @@ def _bytes_human(n: int) -> str:
     return f"{n:.1f} PiB"
 
 
+def _show_single_client_config(cfg: dict) -> None:
+    sn_link = None
+    try:
+        from vless_installer.modules.sub_generator import generate_awg_sn_link
+        if "хранится на устройстве клиента" not in cfg["config_text"]:
+            sn_link = generate_awg_sn_link(cfg["config_text"], profile_name=cfg["name"].split(" (")[0])
+    except Exception as e:
+        _log("ERROR", f"Error generating sn_link: {e}")
+
+    while True:
+        os.system("clear")
+        print()
+        _box_top(f"🔑 Конфигурация клиента: {cfg['name']}")
+        _box_sep()
+        
+        lines = cfg["config_text"].splitlines()
+        for line in lines:
+            _box_row(f"  {line}")
+            
+        if sn_link:
+            _box_sep()
+            _box_row("🔗 Ссылка sn://awg для Nekobox / SFA:")
+            _box_row(f"  {CYAN}{sn_link}{NC}")
+            
+        _box_sep()
+        _box_item("1", "📱 Показать QR-код для ссылки sn://awg")
+        _box_item("2", "📱 Показать QR-код для конфига (.conf)")
+        _box_row()
+        _box_item_exit("0", "← Назад")
+        _box_bottom()
+        
+        try:
+            choice = input(f"{CYAN}Выбор:{NC} ").strip()
+        except KeyboardInterrupt:
+            break
+            
+        if choice in ("0", "q", "Q", ""):
+            break
+        elif choice == "1":
+            if not sn_link:
+                _err("Ссылка недоступна (приватный ключ хранится на устройстве клиента)")
+                input(f"{BLUE}Нажмите Enter...{NC}")
+                continue
+            os.system("clear")
+            print()
+            _box_top("QR-код для sn://awg")
+            _box_sep()
+            try:
+                subprocess.run(["qrencode", "-t", "ansiutf8"], input=sn_link, text=True)
+            except Exception:
+                _err("Не удалось отобразить QR-код. Убедитесь, что утилита qrencode установлена.")
+            _box_bottom()
+            print()
+            input(f"{BLUE}Нажмите Enter...{NC}")
+        elif choice == "2":
+            if "хранится на устройстве клиента" in cfg["config_text"]:
+                _err("Приватный ключ этого клиента отсутствует на сервере.")
+                input(f"{BLUE}Нажмите Enter...{NC}")
+                continue
+            os.system("clear")
+            print()
+            _box_top("QR-код для конфига (.conf)")
+            _box_sep()
+            try:
+                subprocess.run(["qrencode", "-t", "ansiutf8"], input=cfg["config_text"], text=True)
+            except Exception:
+                _err("Не удалось отобразить QR-код. Убедитесь, что утилита qrencode установлена.")
+            _box_bottom()
+            print()
+            input(f"{BLUE}Нажмите Enter...{NC}")
+
+
 # ── Меню ───────────────────────────────────────────────────────────────────────
 def do_amnezia_vpn_menu() -> None:
     """Главное интерактивное меню модуля AmneziaVPN."""
@@ -1049,21 +1121,37 @@ def do_amnezia_vpn_menu() -> None:
             input(f"{BLUE}Нажмите Enter...{NC}")
             
         elif ch == "7":
-            os.system("clear")
-            print()
-            _box_top("🔑 Клиентские конфигурации AWG")
-            _box_bottom()
-            print()
-            configs = _get_client_configs()
-            if configs:
-                for cfg in configs:
-                    print(f"{GREEN}--- Клиент: {cfg['name']} ---{NC}")
-                    print(cfg["config_text"])
-                    print()
-            else:
-                _warn("Конфигурации клиентов не найдены в контейнере.")
+            while True:
+                os.system("clear")
                 print()
-            input(f"{BLUE}Нажмите Enter...{NC}")
+                _box_top("🔑 Клиентские конфигурации AWG")
+                _box_sep()
+                
+                configs = _get_client_configs()
+                if not configs:
+                    _box_warn("Конфигурации клиентов не найдены в контейнере.")
+                    _box_bottom()
+                    input(f"\n{BLUE}Нажмите Enter...{NC}")
+                    break
+                    
+                _box_row("Доступные клиенты:")
+                for i, cfg in enumerate(configs, 1):
+                    _box_row(f"  [{i}] {cfg['name']}")
+                _box_sep()
+                _box_item_exit("0", "← Назад")
+                _box_bottom()
+                
+                try:
+                    sel = input(f"{CYAN}Выберите номер клиента:{NC} ").strip()
+                except KeyboardInterrupt:
+                    break
+                    
+                if sel in ("0", "q", "Q", ""):
+                    break
+                    
+                if sel.isdigit() and 1 <= int(sel) <= len(configs):
+                    cfg = configs[int(sel)-1]
+                    _show_single_client_config(cfg)
             
         elif ch == "8":
             os.system("clear")
