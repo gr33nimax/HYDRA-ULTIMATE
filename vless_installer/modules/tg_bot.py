@@ -1135,6 +1135,15 @@ def handle_users(chat_id):
         if TTL_F.exists(): ttl = json.loads(TTL_F.read_text())
     except: pass
     
+    sub_domain = st.get("sub_domain", "")
+    sub_port = st.get("sub_port", 9443)
+    domain_to_use = sub_domain or st.get("domain", "")
+    if not domain_to_use:
+        try: domain_to_use = subprocess.check_output(["curl", "-s", "-4", "https://api.ipify.org"], text=True, timeout=5).strip()
+        except: domain_to_use = "IP_СЕРВЕРА"
+            
+    port_suffix = f":{{sub_port}}" if sub_port != 443 else ""
+    
     lines = []
     for tag, token in sorted(sub_tokens.items()):
         user_traffic = 0
@@ -1179,9 +1188,11 @@ def handle_users(chat_id):
         exp = ttl.get(tag, {{}}).get("expires_at", "")
         exp_str = f"до {{exp[:10]}}" if exp else "бессрочно"
         
+        sub_url = f"https://{{domain_to_use}}{{port_suffix}}/sub/{{token}}"
+        
         lines.append(
             f"👤 <b>{{tag}}</b>\\n"
-            f"  Token: <code>{{token}}</code>\\n"
+            f"  Ссылка: <code>{{sub_url}}</code>\\n"
             f"  Трафик: {{_bytes_human(user_traffic)}} / {{limit_str}}\\n"
             f"  TTL: {{exp_str}}"
         )
@@ -1235,9 +1246,7 @@ def handle_sub(chat_id, args):
     sub_url = f"https://{{domain_to_use}}{{port_suffix}}/sub/{{token}}"
     
     text = (f"📋 <b>Подписка для {{tag}}:</b>\\n\\n"
-            f"Base64: <code>{{sub_url}}</code>\\n"
-            f"Clash Meta: <code>{{sub_url}}/clash</code>\\n"
-            f"Sing-box: <code>{{sub_url}}/singbox</code>")
+            f"<code>{{sub_url}}</code>")
     send(chat_id, text)
 
 def handle_delsub(chat_id, args):

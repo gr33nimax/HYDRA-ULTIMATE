@@ -9913,8 +9913,6 @@ def _add_subscription_user() -> None:
     _box_row(f"  {BOLD}Токен:{NC} {token}")
     _box_sep()
     _box_row(f"  {CYAN}Base64:{NC} {base_url}")
-    _box_row(f"  {CYAN}Clash:{NC}  {base_url}/clash")
-    _box_row(f"  {CYAN}Sing-box:{NC} {base_url}/singbox")
     _box_bottom()
     
     input(f"\n{BLUE}Нажмите Enter для продолжения...{NC}")
@@ -10286,20 +10284,12 @@ def _show_user_subscription_links() -> None:
         _box_top(f"ПОДПИСКИ ПОЛЬЗОВАТЕЛЯ {email}")
         _box_row(f"  {BOLD}Токен:{NC} {token}")
         _box_sep()
-        _box_row("  Вставьте одну из этих ссылок в клиент (v2rayNG, Clash, Nekobox):")
+        _box_row("  Вставьте эту ссылку в клиент (v2rayNG, Hiddify, Nekobox):")
         _box_row()
         _box_row(f"  {CYAN}Base64 подписка{NC} (v2rayNG, Shadowrocket, Hiddify):")
         _box_link(base_url)
-        _box_row()
-        _box_row(f"  {CYAN}Clash Meta YAML{NC} (Mihomo, Clash Verge):")
-        _box_link(f"{base_url}/clash")
-        _box_row()
-        _box_row(f"  {CYAN}Sing-box JSON{NC} (sing-box, Nekobox):")
-        _box_link(f"{base_url}/singbox")
         _box_sep()
         _box_item("1", "📱 Показать QR-код для Base64")
-        _box_item("2", "📱 Показать QR-код для Clash Meta")
-        _box_item("3", "📱 Показать QR-код для Sing-box")
         _box_row()
         _box_item_exit("0", "← Назад")
         _box_bottom()
@@ -10312,12 +10302,6 @@ def _show_user_subscription_links() -> None:
             break
         elif choice == "1":
             _show_qr(base_url, f"{email} Base64 Sub", f"/root/sub_base64_qr_{email}.png")
-            input(f"{BLUE}Нажмите Enter...{NC}")
-        elif choice == "2":
-            _show_qr(f"{base_url}/clash", f"{email} Clash Sub", f"/root/sub_clash_qr_{email}.png")
-            input(f"{BLUE}Нажмите Enter...{NC}")
-        elif choice == "3":
-            _show_qr(f"{base_url}/singbox", f"{email} Sing-box Sub", f"/root/sub_singbox_qr_{email}.png")
             input(f"{BLUE}Нажмите Enter...{NC}")
 
 
@@ -30055,7 +30039,13 @@ def main_menu() -> None:
     global XHTTP_SC_MAX_BUFFERED_POSTS
     global CHAIN_EXIT_HOST, CHAIN_EXIT_PORT, CHAIN_EXIT_UUID
     global CHAIN_EXIT_PUBKEY, CHAIN_EXIT_SHORTID, CHAIN_EXIT_SNI, CHAIN_EXIT_FP
-    global CHAIN_NODES
+    # Авто-генерация ботов при запуске
+    try:
+        from vless_installer.modules.tg_bot import _regenerate_bot, _regenerate_admin_bot
+        _regenerate_bot()
+        _regenerate_admin_bot()
+    except Exception:
+        pass
 
     while True:
         try:
