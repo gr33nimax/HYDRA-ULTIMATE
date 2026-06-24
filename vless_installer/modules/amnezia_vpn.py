@@ -25,12 +25,12 @@ def _detect_colors() -> dict:
     if sys.stdout.isatty():
         light = os.environ.get("VLESS_THEME", "").lower() == "light"
         if light:
-            return dict(RED='\\033[0;31m', GREEN='\\033[0;32m', YELLOW='\\033[0;33m',
-                        CYAN='\\033[0;34m', BLUE='\\033[0;35m', BOLD='\\033[1m',
-                        DIM='\\033[2m', WHITE='\\033[0;30m', NC='\\033[0m')
-        return dict(RED='\\033[0;31m', GREEN='\\033[0;32m', YELLOW='\\033[1;33m',
-                    CYAN='\\033[0;36m', BLUE='\\033[0;34m', BOLD='\\033[1m',
-                    DIM='\\033[2m', WHITE='\\033[1;37m', NC='\\033[0m')
+            return dict(RED='\x1b[0;31m', GREEN='\x1b[0;32m', YELLOW='\x1b[0;33m',
+                        CYAN='\x1b[0;34m', BLUE='\x1b[0;35m', BOLD='\x1b[1m',
+                        DIM='\x1b[2m', WHITE='\x1b[0;30m', NC='\x1b[0m')
+        return dict(RED='\x1b[0;31m', GREEN='\x1b[0;32m', YELLOW='\x1b[1;33m',
+                    CYAN='\x1b[0;36m', BLUE='\x1b[0;34m', BOLD='\x1b[1m',
+                    DIM='\x1b[2m', WHITE='\x1b[1;37m', NC='\x1b[0m')
     return {k: '' for k in ('RED','GREEN','YELLOW','CYAN','BLUE','BOLD','DIM','WHITE','NC')}
 
 _C = _detect_colors()
