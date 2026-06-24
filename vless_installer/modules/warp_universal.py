@@ -267,6 +267,38 @@ def disable_warp_routing() -> None:
     sync_routes(state)
 
 
+def add_domains(domains_to_add: list[str]) -> None:
+    state = _load_state()
+    warp_routing = state.setdefault("warp_routing", {})
+    domains = warp_routing.setdefault("domains", [])
+    added = False
+    for d in domains_to_add:
+        if d not in domains:
+            domains.append(d)
+            added = True
+    if added:
+        warp_routing["domains"] = domains
+        state["warp_routing"] = warp_routing
+        _save_state(state)
+        sync_routes(state)
+
+
+def add_subnets(subnets_to_add: list[str]) -> None:
+    state = _load_state()
+    warp_routing = state.setdefault("warp_routing", {})
+    subnets = warp_routing.setdefault("subnets", [])
+    added = False
+    for s in subnets_to_add:
+        if s not in subnets:
+            subnets.append(s)
+            added = True
+    if added:
+        warp_routing["subnets"] = subnets
+        state["warp_routing"] = warp_routing
+        _save_state(state)
+        sync_routes(state)
+
+
 def add_domain(domain: str) -> None:
     state = _load_state()
     warp_routing = state.setdefault("warp_routing", {})
@@ -420,6 +452,7 @@ def do_warp_routing_menu() -> None:
 
 def _manage_domains_menu(status: dict) -> None:
     while True:
+        status = get_status()
         os.system("clear")
         _box_top("УПРАВЛЕНИЕ ДОМЕНАМИ ДЛЯ WARP")
         _box_row("  Список доменов, трафик к которым пойдет через WARP:")
@@ -447,11 +480,13 @@ def _manage_domains_menu(status: dict) -> None:
         if ch in ("0", ""):
             break
         elif ch == "1":
-            domain = input(f"{CYAN}Введите имя домена (например, openai.com):{NC} ").strip().lower()
-            if domain:
-                add_domain(domain)
-                _box_ok(f"Домен {domain} добавлен и синхронизирован")
-                time.sleep(1)
+            raw_input = input(f"{CYAN}Введите имя домена или список через запятую:{NC} ").strip()
+            if raw_input:
+                parts = [p.strip().lower() for p in raw_input.split(",") if p.strip()]
+                if parts:
+                    add_domains(parts)
+                    _box_ok(f"Добавлено доменов ({len(parts)}): {', '.join(parts)}")
+                    time.sleep(1.5)
         elif ch == "2":
             if not domains:
                 _box_warn("Список пуст")
@@ -473,6 +508,7 @@ def _manage_domains_menu(status: dict) -> None:
 
 def _manage_subnets_menu(status: dict) -> None:
     while True:
+        status = get_status()
         os.system("clear")
         _box_top("УПРАВЛЕНИЕ ПОДСЕТЯМИ ДЛЯ WARP")
         _box_row("  Список подсетей (CIDR), трафик к которым пойдет через WARP:")
@@ -500,15 +536,20 @@ def _manage_subnets_menu(status: dict) -> None:
         if ch in ("0", ""):
             break
         elif ch == "1":
-            subnet = input(f"{CYAN}Введите подсеть (например, 104.16.0.0/12):{NC} ").strip()
-            if subnet:
-                if not re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(/\d{1,2})?$', subnet):
-                    _box_warn("Неверный формат подсети")
+            raw_input = input(f"{CYAN}Введите подсеть или список через запятую:{NC} ").strip()
+            if raw_input:
+                parts = [p.strip() for p in raw_input.split(",") if p.strip()]
+                valid_parts = []
+                for subnet in parts:
+                    if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(/\d{1,2})?$', subnet):
+                        valid_parts.append(subnet)
+                    else:
+                        _box_warn(f"Неверный формат подсети: {subnet}")
+                        time.sleep(1.5)
+                if valid_parts:
+                    add_subnets(valid_parts)
+                    _box_ok(f"Добавлено подсетей ({len(valid_parts)}): {', '.join(valid_parts)}")
                     time.sleep(1.5)
-                    continue
-                add_subnet(subnet)
-                _box_ok(f"Подсеть {subnet} добавлена и синхронизирована")
-                time.sleep(1)
         elif ch == "2":
             if not subnets:
                 _box_warn("Список пуст")
