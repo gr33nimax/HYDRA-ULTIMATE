@@ -461,14 +461,17 @@ def handle_config(msg):
         return
         
     sub_url = get_subscription_url(email)
+    sub_url_pc = f"{{sub_url}}/pc"
     
     send(uid, (
         f"👤 <b>Пользователь:</b> {{email}}\\n\\n"
-        f"📋 <b>Ваша подписка:</b>\\n"
+        f"📋 <b>Ваша подписка (Mobile):</b>\\n"
         f"<code>{{sub_url}}</code>\\n\\n"
+        f"📋 <b>Ваша подписка (PC - NekoBox/Throne):</b>\\n"
+        f"<code>{{sub_url_pc}}</code>\\n\\n"
         f"📲 <b>Как подключиться:</b>\\n"
-        f"1. Скопируйте ссылку выше\\n"
-        f"2. Откройте ваш VPN-клиент (v2rayNG, Hiddify, Streisand, NekoBox)\\n"
+        f"1. Скопируйте нужную ссылку выше\\n"
+        f"2. Откройте ваш VPN-клиент (v2rayNG, Hiddify, NekoBox, Throne)\\n"
         f"3. Добавьте подписку → Вставьте ссылку\\n\\n"
         f"🔄 Подписка обновляется автоматически."
     ))
@@ -1119,10 +1122,12 @@ def handle_users(chat_id):
         exp_str = f"до {{exp[:10]}}" if exp else "бессрочно"
         
         sub_url = f"https://{{domain_to_use}}{{port_suffix}}/sub/{{token}}"
+        sub_url_pc = f"{{sub_url}}/pc"
         
         lines.append(
             f"👤 <b>{{tag}}</b>\\n"
-            f"  Ссылка: <code>{{sub_url}}</code>\\n"
+            f"  Mobile: <code>{{sub_url}}</code>\\n"
+            f"  PC (Throne): <code>{{sub_url_pc}}</code>\\n"
             f"  Трафик: {{_bytes_human(user_traffic)}} / {{limit_str}}\\n"
             f"  TTL: {{exp_str}}"
         )
@@ -1174,9 +1179,11 @@ def handle_sub(chat_id, args):
             
     port_suffix = f":{{sub_port}}" if sub_port != 443 else ""
     sub_url = f"https://{{domain_to_use}}{{port_suffix}}/sub/{{token}}"
+    sub_url_pc = f"{{sub_url}}/pc"
     
     text = (f"📋 <b>Подписка для {{tag}}:</b>\\n\\n"
-            f"<code>{{sub_url}}</code>")
+            f"📱 <b>Mobile:</b>\\n<code>{{sub_url}}</code>\\n\\n"
+            f"💻 <b>PC (Throne):</b>\\n<code>{{sub_url_pc}}</code>")
     send(chat_id, text)
 
 def handle_delsub(chat_id, args):
