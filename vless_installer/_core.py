@@ -10335,10 +10335,14 @@ def _show_user_subscription_links() -> None:
         _box_sep()
         _box_row("  Вставьте эту ссылку в клиент (v2rayNG, Hiddify, Nekobox):")
         _box_row()
-        _box_row(f"  {CYAN}Base64 подписка{NC} (v2rayNG, Shadowrocket, Hiddify):")
+        _box_row(f"  {CYAN}Base64 подписка (мобильная){NC} (v2rayNG, Shadowrocket, Hiddify):")
         _box_link(base_url)
+        _box_row()
+        _box_row(f"  {CYAN}PC подписка (для NekoBox PC / NyameBox){NC}:")
+        _box_link(f"{base_url}/pc")
         _box_sep()
-        _box_item("1", "📱 Показать QR-код для Base64")
+        _box_item("1", "📱 Показать QR-код для мобильной подписки")
+        _box_item("2", "💻 Показать QR-код для ПК подписки")
         _box_row()
         _box_item_exit("0", "← Назад")
         _box_bottom()
@@ -10351,6 +10355,9 @@ def _show_user_subscription_links() -> None:
             break
         elif choice == "1":
             _show_qr(base_url, f"{email} Base64 Sub", f"/root/sub_base64_qr_{email}.png")
+            input(f"{BLUE}Нажмите Enter...{NC}")
+        elif choice == "2":
+            _show_qr(f"{base_url}/pc", f"{email} PC Sub", f"/root/sub_pc_qr_{email}.png")
             input(f"{BLUE}Нажмите Enter...{NC}")
 
 

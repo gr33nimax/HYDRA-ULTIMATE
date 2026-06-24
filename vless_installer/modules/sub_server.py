@@ -195,6 +195,24 @@ class SubRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body.encode("utf-8"))
 
+        elif fmt == "pc":
+            # GET /sub/TOKEN/pc → Base64 PC-optimized
+            try:
+                from vless_installer.modules.sub_generator_pc import generate_base64_sub as gen_pc_sub
+            except ImportError:
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+                from vless_installer.modules.sub_generator_pc import generate_base64_sub as gen_pc_sub
+            body = gen_pc_sub(state, uuid_str, email)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Disposition",
+                             f'attachment; filename="{email}_sub_pc.txt"')
+            self.send_header("Subscription-Userinfo", userinfo)
+            self.send_header("Profile-Update-Interval", "6")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body.encode("utf-8"))
+
         elif fmt == "clash":
             body = generate_clash_yaml(state, uuid_str, email)
             self.send_response(200)
