@@ -29677,43 +29677,31 @@ def main_menu() -> None:
             print_banner()
             print()
 
-            current_mode = "—"
-            if STATE_FILE.exists():
-                try:
-                    _st = json.loads(STATE_FILE.read_text())
-                    current_mode = _st.get("install_mode", "A")
-                except Exception:
-                    pass
-
-            mode_color = GREEN if current_mode in ("A", "B") else DIM
-            mode_str   = f"{mode_color}Режим {current_mode}{NC}"
-
-            print()
             # Главное меню фиксируется по ширине баннера (64 символа)
             _BOX_W_saved = _BOX_W
             _BOX_W = 64
             _box_top()
-            _box_row(f"  {BOLD}{TITLE}HYDRA MULTI-PROXY MANAGER v5.0.0{NC}  {DIM}│{NC}  {mode_str}")
+            _box_row(f"  {BOLD}{TITLE}HYDRA MULTI-PROXY MANAGER v0.0.1{NC}")
             _box_sep()
             _box_row()
             _box_row(f"  {CYAN}1{NC}  ⚙️  {TITLE}Установка и Система{NC}")
-            _box_row(f"     {DIM}Установка, Миграция, Оптимизация, Обновление{NC}")
+            _box_row(f"     {DIM}Установка и обновление зависимостей, тюнинг BBR/sysctl{NC}")
             _box_sep()
             _box_row()
             _box_row(f"  {CYAN}2{NC}  👥 {TITLE}Управление пользователями и подписками{NC}")
-            _box_row(f"     {DIM}Подписки, Лимиты трафика, TTL, Конфиги{NC}")
+            _box_row(f"     {DIM}Управление подписками, авторизация, раздача конфигов{NC}")
             _box_sep()
             _box_row()
             _box_row(f"  {CYAN}3{NC}  🌐 {TITLE}Настройки сети{NC}")
-            _box_row(f"     {DIM}Split Tunnel, DNSCrypt, WARP, Домен/Порт, Ноды{NC}")
+            _box_row(f"     {DIM}Настройка Cloudflare WARP, внешняя проверка доменов и IP{NC}")
             _box_sep()
             _box_row()
             _box_row(f"  {CYAN}4{NC}  📊 {TITLE}Диагностика и Мониторинг{NC}")
-            _box_row(f"     {DIM}Трафик, TTFB, Аудит, Логи, Health, Дашборд{NC}")
+            _box_row(f"     {DIM}История трафика, логи, аудит подключений и системный дашборд{NC}")
             _box_sep()
             _box_row()
             _box_row(f"  {CYAN}5{NC}  🛡️  {TITLE}Безопасность и Автоматизация{NC}")
-            _box_row(f"     {DIM}AutoBan, GeoIP, Ротация, Telegram, Watchdog, SSH{NC}")
+            _box_row(f"     {DIM}GeoIP блок, IP-Бан, Fail2ban, SSH Hardening и TG панель{NC}")
             _box_sep()
             _box_row()
             _box_row(f"  {CYAN}6{NC}  📡 {TITLE}Telemt MTProxy{NC}")
@@ -29856,7 +29844,6 @@ def main_menu() -> None:
         else:
             warn(f"Неверный выбор: {choice}")
             time.sleep(1)
-
 
 
 def apply_sysctl_and_limits() -> None:
