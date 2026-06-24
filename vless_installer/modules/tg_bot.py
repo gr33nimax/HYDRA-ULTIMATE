@@ -679,13 +679,13 @@ def process_update(update):
             uname_raw = msg["from"].get("username", "")
             if uname_raw:
                 clean_uname = re.sub(r'[^a-zA-Z0-9._-]', '', uname_raw)
-                tag = f"tg_{clean_uname}" if clean_uname else f"tg_{uid}"
+                tag = f"tg_{{clean_uname}}" if clean_uname else f"tg_{{uid}}"
             else:
-                tag = f"tg_{uid}"
+                tag = f"tg_{{uid}}"
                 
             st = _state()
             sub_tokens = st.setdefault("sub_tokens", {{}})
-            if tag in sub_tokens and tag != f"tg_{uid}":
+            if tag in sub_tokens and tag != f"tg_{{uid}}":
                 tag = f"{{tag}}_{{uid}}"
                 
             # Создаем пользователя
