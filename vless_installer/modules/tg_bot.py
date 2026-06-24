@@ -666,14 +666,21 @@ def handle_sub(msg, args):
         st["sub_tokens"] = sub_tokens
         STATE_F.write_text(json.dumps(st, indent=2, ensure_ascii=False))
         
-    domain = st.get("domain", "")
-    if not domain:
+    sub_domain = st.get("sub_domain", "")
+    sub_port = st.get("sub_port", 9443)
+    sub_public = st.get("sub_public", False)
+    
+    domain_to_use = sub_domain or st.get("domain", "")
+    if not domain_to_use:
         try:
-            domain = subprocess.check_output(["curl", "-s", "-4", "https://api.ipify.org"], text=True).strip()
+            domain_to_use = subprocess.check_output(["curl", "-s", "-4", "https://api.ipify.org"], text=True).strip()
         except Exception:
-            domain = "IP_СЕРВЕРА"
+            domain_to_use = "IP_СЕРВЕРА"
             
-    base_url = f"https://{{domain}}/sub/{{token}}"
+    if sub_public:
+        base_url = f"http://{{domain_to_use}}:{{sub_port}}/sub/{{token}}"
+    else:
+        base_url = f"https://{{domain_to_use}}/sub/{{token}}"
     send(uid, (
         f"📋 <b>Подписки для {{email}}:</b>\\n\\n"
         f"Base64 (v2rayNG, Shadowrocket):\\n<code>{{base_url}}</code>\\n\\n"
@@ -728,14 +735,21 @@ def handle_sub_qr(msg, args):
         st["sub_tokens"] = sub_tokens
         STATE_F.write_text(json.dumps(st, indent=2, ensure_ascii=False))
         
-    domain = st.get("domain", "")
-    if not domain:
+    sub_domain = st.get("sub_domain", "")
+    sub_port = st.get("sub_port", 9443)
+    sub_public = st.get("sub_public", False)
+    
+    domain_to_use = sub_domain or st.get("domain", "")
+    if not domain_to_use:
         try:
-            domain = subprocess.check_output(["curl", "-s", "-4", "https://api.ipify.org"], text=True).strip()
+            domain_to_use = subprocess.check_output(["curl", "-s", "-4", "https://api.ipify.org"], text=True).strip()
         except Exception:
-            domain = "IP_СЕРВЕРА"
+            domain_to_use = "IP_СЕРВЕРА"
             
-    base_url = f"https://{{domain}}/sub/{{token}}"
+    if sub_public:
+        base_url = f"http://{{domain_to_use}}:{{sub_port}}/sub/{{token}}"
+    else:
+        base_url = f"https://{{domain_to_use}}/sub/{{token}}"
     qr_file = f"/tmp/sub_qr_{{token}}.png"
     
     try:

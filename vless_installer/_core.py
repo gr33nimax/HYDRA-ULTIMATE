@@ -9718,6 +9718,12 @@ def do_subscription_menu() -> None:
         except Exception:
             pass
 
+        state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+        sub_domain = state.get("sub_domain", "")
+        sub_port = state.get("sub_port", 9443)
+        sub_public = state.get("sub_public", False)
+        domain = sub_domain or state.get("domain", "") or get_server_ip("4")
+
         try:
             from vless_installer.modules.sub_nginx import check_sub_location
             nginx_ok = check_sub_location()
@@ -9725,21 +9731,29 @@ def do_subscription_menu() -> None:
             nginx_ok = False
 
         svc_status = f"{GREEN}активен{NC}" if sub_svc_active else f"{YELLOW}не активен{NC}"
+        mode_label = f"{CYAN}Прямой доступ (HTTP){NC}" if sub_public else f"{CYAN}Nginx реверс-прокси (HTTPS){NC}"
         nginx_status = f"{GREEN}настроен{NC}" if nginx_ok else f"{YELLOW}не настроен{NC}"
 
-        state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
-        domain = state.get("domain", "") or get_server_ip("4")
-        sub_port = 9443
-
         _box_row(f"  Сервис подписок:  {svc_status}")
-        _box_row(f"  Интеграция Nginx: {nginx_status}")
-        _box_row(f"  Сервер подписок:  http://127.0.0.1:{sub_port}")
-        _box_row(f"  Внешний URL:      https://{domain}/sub/<токен>")
+        if not sub_public:
+            _box_row(f"  Интеграция Nginx: {nginx_status}")
+        _box_row(f"  Режим работы:     {mode_label}")
+        _box_row(f"  Хост прослушивания: {f'0.0.0.0:{sub_port}' if sub_public else f'127.0.0.1:{sub_port}'}")
+        
+        if sub_public:
+            _box_row(f"  Внешний URL:      http://{domain}:{sub_port}/sub/<токен>")
+        else:
+            _box_row(f"  Внешний URL:      https://{domain}/sub/<токен>")
+            
         _box_sep()
 
         _box_item("1", f"{'Выключить' if sub_svc_active else 'Включить'} систему подписок")
         _box_item("2", "🔗 Получить ссылки подписок для пользователя")
         _box_item("3", "🔄 Перегенерировать токен пользователя")
+        _box_sep()
+        _box_item("4", f"🌐 Изменить домен для подписок {DIM}(текущий: {sub_domain or '(по умолчанию)'}){NC}")
+        _box_item("5", f"🔌 Изменить порт сервера подписок {DIM}(текущий: {sub_port}){NC}")
+        _box_item("6", f"🔒 Переключить режим {DIM}(Nginx HTTPS / Прямой HTTP){NC}")
         _box_row()
         _box_item_exit("0", "← Назад")
         _box_bottom()
@@ -9757,9 +9771,10 @@ def do_subscription_menu() -> None:
                 info("Отключение системы подписок...")
                 try:
                     from vless_installer.modules.sub_server import uninstall_sub_service
-                    from vless_installer.modules.sub_nginx import remove_sub_location
                     uninstall_sub_service()
-                    remove_sub_location()
+                    if not sub_public:
+                        from vless_installer.modules.sub_nginx import remove_sub_location
+                        remove_sub_location()
                     success("Система подписок отключена")
                 except Exception as e:
                     warn(f"Ошибка отключения: {e}")
@@ -9767,9 +9782,11 @@ def do_subscription_menu() -> None:
                 info("Включение системы подписок...")
                 try:
                     from vless_installer.modules.sub_server import install_sub_service
-                    from vless_installer.modules.sub_nginx import inject_sub_location
-                    install_sub_service("127.0.0.1", sub_port)
-                    inject_sub_location(port=sub_port)
+                    host = "0.0.0.0" if sub_public else "127.0.0.1"
+                    install_sub_service(host, sub_port)
+                    if not sub_public:
+                        from vless_installer.modules.sub_nginx import inject_sub_location
+                        inject_sub_location(port=sub_port)
                     success("Система подписок включена")
                 except Exception as e:
                     warn(f"Ошибка включения: {e}")
@@ -9780,6 +9797,72 @@ def do_subscription_menu() -> None:
 
         elif ch == "3":
             _regenerate_user_token()
+
+        elif ch == "4":
+            new_domain = input(f"{CYAN}Введите домен для подписок (или пусто для сброса):{NC} ").strip()
+            state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+            if new_domain:
+                state["sub_domain"] = new_domain
+                success(f"Домен подписок установлен: {new_domain}")
+            else:
+                state.pop("sub_domain", None)
+                success("Сброшено на домен по умолчанию")
+            STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+            time.sleep(2)
+
+        elif ch == "5":
+            try:
+                new_port_str = input(f"{CYAN}Введите новый порт сервера подписок (1-65535, по умолчанию 9443):{NC} ").strip()
+                new_port = int(new_port_str) if new_port_str else 9443
+                if not (1 <= new_port <= 65535):
+                    raise ValueError
+                
+                state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+                state["sub_port"] = new_port
+                STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+                success(f"Порт изменен на {new_port}")
+                
+                # Если сервис запущен, переустанавливаем его
+                if sub_svc_active:
+                    info("Перезапуск службы с новым портом...")
+                    from vless_installer.modules.sub_server import install_sub_service
+                    host = "0.0.0.0" if sub_public else "127.0.0.1"
+                    install_sub_service(host, new_port)
+                    if not sub_public:
+                        from vless_installer.modules.sub_nginx import remove_sub_location, inject_sub_location
+                        remove_sub_location()
+                        inject_sub_location(port=new_port)
+            except ValueError:
+                warn("Некорректный порт")
+            except Exception as e:
+                warn(f"Ошибка изменения порта: {e}")
+            time.sleep(2)
+
+        elif ch == "6":
+            state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+            new_public = not sub_public
+            state["sub_public"] = new_public
+            STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+            success(f"Режим изменен на: {'Прямой доступ (HTTP)' if new_public else 'Nginx реверс-прокси (HTTPS)'}")
+            
+            # Если сервис запущен, переконфигурируем на лету
+            if sub_svc_active:
+                info("Перенастройка активного сервиса...")
+                try:
+                    from vless_installer.modules.sub_server import install_sub_service
+                    from vless_installer.modules.sub_nginx import remove_sub_location, inject_sub_location
+                    if new_public:
+                        # С HTTPS (Nginx) -> HTTP (Прямой)
+                        remove_sub_location()
+                        install_sub_service("0.0.0.0", sub_port)
+                    else:
+                        # С HTTP (Прямой) -> HTTPS (Nginx)
+                        install_sub_service("127.0.0.1", sub_port)
+                        inject_sub_location(port=sub_port)
+                    success("Сервис успешно перенастроен")
+                except Exception as e:
+                    warn(f"Ошибка перенастройки: {e}")
+            time.sleep(2)
 
 
 def _get_all_sub_users() -> list[dict]:
@@ -9885,8 +9968,15 @@ def _show_user_subscription_links() -> None:
         state["sub_tokens"] = sub_tokens
         STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
 
-    domain = state.get("domain", "") or get_server_ip("4")
-    base_url = f"https://{domain}/sub/{token}"
+    sub_domain = state.get("sub_domain", "")
+    sub_port = state.get("sub_port", 9443)
+    sub_public = state.get("sub_public", False)
+    domain = sub_domain or state.get("domain", "") or get_server_ip("4")
+
+    if sub_public:
+        base_url = f"http://{domain}:{sub_port}/sub/{token}"
+    else:
+        base_url = f"https://{domain}/sub/{token}"
 
     while True:
         os.system("clear")
