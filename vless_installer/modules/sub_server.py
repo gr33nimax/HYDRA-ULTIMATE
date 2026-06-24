@@ -78,30 +78,35 @@ def _load_state() -> dict:
 
 
 def _load_xray_config() -> dict:
-    if XRAY_CONFIG.exists():
-        try:
-            return json.loads(XRAY_CONFIG.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    for p in (Path("/etc/xray/config.json"), Path("/usr/local/etc/xray/config.json"), Path("/var/lib/xray-installer/config.json")):
+        if p.exists():
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                pass
     return {}
 
 
 def find_user_by_token(token: str) -> Optional[tuple[str, str]]:
-    """Найти пользователя по подписочному токену.
+    """Найти пользователя по подписочному токену with rich debug logs.
     Returns (uuid, email) or None.
     """
     state = _load_state()
+    if not state:
+        _log("WARN", "find_user_by_token: state.json is empty or failed to load")
     sub_tokens = state.get("sub_tokens", {})
+    _log("INFO", f"Comparing requested token: '{token}' against {len(sub_tokens)} stored tokens")
 
-    # sub_tokens: {"email": "token-uuid"} → ищем email по токену
     email = None
     token_lower = token.lower().strip()
     for e, t in sub_tokens.items():
+        _log("INFO", f"Checking stored user '{e}' with token: '{t}'")
         if str(t).lower().strip() == token_lower:
             email = e
             break
 
     if not email:
+        _log("WARN", f"find_user_by_token: No email matched for token '{token}'")
         return None
 
     # Ищем UUID в xray config
@@ -137,12 +142,14 @@ class SubRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(message.encode("utf-8"))
 
     def do_GET(self) -> None:
+        _log("INFO", f"do_GET: raw path = {self.path}")
         # Разбираем путь: /sub/<token>[/format]
         path = self.path
         if "?" in path:
             path = path.split("?")[0]
         path = path.rstrip("/")
         parts = path.split("/")
+        _log("INFO", f"do_GET: split parts = {parts}")
 
         #  /sub/TOKEN → ["", "sub", "TOKEN"]
         if len(parts) < 3 or parts[1] != "sub":
