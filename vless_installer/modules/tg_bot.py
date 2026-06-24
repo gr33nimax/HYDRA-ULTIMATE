@@ -332,6 +332,7 @@ TOKEN    = "{token}"
 ADMIN_ID = "{admin_id}"
 BOT_FILE = Path("{bot_file}")
 STATE_F  = Path("{state_file}")
+CONFIG_F = Path("/etc/xray/config.json")
 LOG_F    = Path("/var/log/vless-install.log")
 LIMITS_F = Path("/var/lib/xray-installer/traffic_limits.json")
 TTL_F    = Path("/var/lib/xray-installer/ttl_users.json")
@@ -391,7 +392,75 @@ def is_admin(uid):
 def is_allowed(uid):
     cfg = _bot_load()
     allowed = cfg.get("allowed_users", [])
-    return str(uid) in [str(x) for x in allowed] or is_admin(uid)
+    user_map = cfg.get("user_map", {{}})
+    return (str(uid) in [str(x) for x in allowed] and str(uid) in user_map) or is_admin(uid)
+
+def add_user_to_all(tag):
+    state = _state()
+    sub_tokens = state.setdefault("sub_tokens", {{}})
+    if tag in sub_tokens:
+        return False, "Пользователь уже существует в подписках"
+        
+    import uuid
+    token = str(uuid.uuid4())
+    sub_tokens[tag] = token
+    state["sub_tokens"] = sub_tokens
+    try:
+        STATE_F.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+    except Exception as e:
+        return False, f"Ошибка сохранения state.json: {{e}}"
+        
+    # Xray client update
+    xray_success = False
+    written = set()
+    for cfg_path in (CONFIG_F, Path("/usr/local/etc/xray/config.json")):
+        if not cfg_path.exists(): continue
+        try: real = str(cfg_path.resolve())
+        except: real = str(cfg_path)
+        if real in written: continue
+        written.add(real)
+        try:
+            cfg = json.loads(cfg_path.read_text())
+            changed = False
+            for inb in cfg.get("inbounds", []):
+                settings = inb.get("settings", {{}})
+                if "clients" not in settings: continue
+                proto = inb.get("protocol", "")
+                st = inb.get("streamSettings", {{}})
+                use_flow = (proto == "vless" and "realitySettings" in st)
+                
+                clients = settings.setdefault("clients", [])
+                if not any(c.get("email") == tag for c in clients):
+                    client = {{"id": str(uuid.uuid4()), "email": tag}}
+                    if use_flow:
+                        xtls_flow = state.get("xtls_flow", "xtls-rprx-vision")
+                        if xtls_flow: client["flow"] = xtls_flow
+                    clients.append(client)
+                    changed = True
+            if changed:
+                cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+                xray_success = True
+        except Exception as e:
+            _log(f"Error patching Xray config {{cfg_path}}: {{e}}")
+            
+    if xray_success:
+        subprocess.run(["systemctl", "restart", "xray"], timeout=15)
+        
+    # NaiveProxy & Mieru non-interactive add
+    sys.path.insert(0, "/opt/vless-ultimate")
+    try:
+        from vless_installer.modules.naiveproxy import add_user_noninteractive as np_add
+        np_add(tag)
+    except Exception as e:
+        _log(f"Error adding to NaiveProxy: {{e}}")
+        
+    try:
+        from vless_installer.modules.mieru import add_user_noninteractive as mieru_add
+        mieru_add(tag)
+    except Exception as e:
+        _log(f"Error adding to Mieru: {{e}}")
+        
+    return True, token
 
 def get_user_uuid(email):
     st = _state()
@@ -443,38 +512,15 @@ def get_subscription_url(email):
 def handle_start(msg, args):
     uid  = msg["from"]["id"]
     uname = msg["from"].get("username", str(uid))
-    cfg = _bot_load()
-
-    if args:
-        token_val = args[0]
-        invites = cfg.get("invite_tokens", {{}})
-        if token_val in invites:
-            email = invites[token_val].get("email", "admin")
-            allowed = cfg.get("allowed_users", [])
-            if uid not in allowed:
-                allowed.append(uid)
-                cfg["allowed_users"] = allowed
-            
-            user_map = cfg.setdefault("user_map", {{}})
-            user_map[str(uid)] = email
-            cfg["user_map"] = user_map
-            
-            del invites[token_val]
-            cfg["invite_tokens"] = invites
-            _bot_save(cfg)
-            send(uid, f"✅ Вы успешно авторизованы как пользователь <b>{{email}}</b>! Используйте /config для получения подписки.")
-            _log(f"User @{{uname}} ({{uid}}) authorized as {{email}} via invite token")
-            return
-
     if is_allowed(uid):
         send(uid, "👋 Привет! Используйте /config для получения вашей подписки или /qr для получения QR-кода.")
     else:
-        send(uid, f"👋 Для доступа запросите у администратора invite-ссылку.\\nВаш ID: <code>{{uid}}</code>")
+        send(uid, "🔐 Для получения подписки, пожалуйста, введите пароль для авторизации:")
 
 def handle_config(msg):
     uid = msg["from"]["id"]
     if not is_allowed(uid):
-        send(uid, "⛔ Нет доступа. Запросите invite-ссылку у администратора.")
+        send(uid, "🔐 Для получения подписки, пожалуйста, введите пароль для авторизации:")
         return
         
     cfg = _bot_load()
@@ -486,7 +532,7 @@ def handle_config(msg):
         email = st.get("email") or "admin"
         
     if not email:
-        send(uid, "⚠️ Ваша учетная запись не привязана к пользователю Xray. Обратитесь к администратору.")
+        send(uid, "⚠️ Ошибка: нет привязанного пользователя подписки. Попробуйте пройти авторизацию заново.")
         return
         
     sub_url = get_subscription_url(email)
@@ -614,9 +660,57 @@ def process_update(update):
     if not msg or "text" not in msg:
         return
     text  = msg["text"].strip()
+    uid   = msg["from"]["id"]
+    uname = msg["from"].get("username", str(uid))
+    
     parts = text.split()
     cmd   = parts[0].split("@")[0].lower() if parts else ""
     args  = parts[1:]
+    
+    # Проверяем авторизацию
+    authorized = is_allowed(uid)
+    
+    if not authorized:
+        cfg = _bot_load()
+        bot_password = cfg.get("bot_password", "")
+        
+        if bot_password and text == bot_password:
+            # Чистим username или используем ID
+            uname_raw = msg["from"].get("username", "")
+            if uname_raw:
+                clean_uname = re.sub(r'[^a-zA-Z0-9._-]', '', uname_raw)
+                tag = f"tg_{clean_uname}" if clean_uname else f"tg_{uid}"
+            else:
+                tag = f"tg_{uid}"
+                
+            st = _state()
+            sub_tokens = st.setdefault("sub_tokens", {{}})
+            if tag in sub_tokens and tag != f"tg_{uid}":
+                tag = f"{{tag}}_{{uid}}"
+                
+            # Создаем пользователя
+            success_add, res_token = add_user_to_all(tag)
+            if success_add:
+                allowed = cfg.setdefault("allowed_users", [])
+                if uid not in allowed:
+                    allowed.append(uid)
+                cfg["allowed_users"] = allowed
+                
+                user_map = cfg.setdefault("user_map", {{}})
+                user_map[str(uid)] = tag
+                cfg["user_map"] = user_map
+                
+                _bot_save(cfg)
+                
+                send(uid, f"✅ Авторизация успешна! Создан пользователь подписки: <b>{{tag}}</b>.\\nИспользуйте /config для получения подписки.")
+                _log(f"User @{{uname}} ({{uid}}) successfully authorized and created subscription user {{tag}}")
+            else:
+                send(uid, f"❌ Ошибка при создании пользователя подписки: {{res_token}}")
+                _log(f"Failed to create subscription user for @{{uname}} ({{uid}}): {{res_token}}")
+        else:
+            send(uid, "🔐 Для получения подписки, пожалуйста, введите пароль для авторизации:")
+        return
+        
     if cmd == "/start":   handle_start(msg, args)
     elif cmd == "/config": handle_config(msg)
     elif cmd == "/traffic": handle_traffic(msg)
@@ -1778,18 +1872,18 @@ def do_tg_bot_menu() -> None:
         notif_cfg = tg_load()
         running   = _bot_running()
 
-        token     = bot_cfg.get("token") or notif_cfg.get("token", "")
-        admin_id  = bot_cfg.get("admin_id") or notif_cfg.get("chat_id", "")
-        allowed   = bot_cfg.get("allowed_users", [])
-        invites   = bot_cfg.get("invite_tokens", {})
+        token        = bot_cfg.get("token") or notif_cfg.get("token", "")
+        admin_id     = bot_cfg.get("admin_id") or notif_cfg.get("chat_id", "")
+        bot_password = bot_cfg.get("bot_password", "")
+        allowed      = bot_cfg.get("allowed_users", [])
 
-        configured = bool(token and admin_id)
+        configured = bool(token and admin_id and bot_password)
 
         print()
         _box_top("🤖  TELEGRAM CONFIG BOT — раздача конфигов пользователям")
         _box_desc(
-            "Пользователь пишет боту /config → получает свою VLESS-ссылку и подписки. "
-            "Администратор управляет доступом через invite-ссылки, привязанные к пользователям Xray."
+            "Пользователь пишет боту /config → бот запрашивает пароль авторизации. "
+            "После ввода пароля автоматически создаётся новый пользователь подписки."
         )
         _box_sep()
         _box_row(f"  Статус бота:      {''+GREEN+'ЗАПУЩЕН'+NC if running else ''+DIM+'ОСТАНОВЛЕН'+NC}")
@@ -1797,12 +1891,11 @@ def do_tg_bot_menu() -> None:
         if configured:
             _box_row(f"  Токен:            {DIM}{token[:10]}...{NC}")
             _box_row(f"  Admin Chat ID:    {CYAN}{admin_id}{NC}")
+            _box_row(f"  Пароль юзеров:    {GREEN}{bot_password}{NC}")
             _box_row(f"  Авторизовано:     {CYAN}{len(allowed)}{NC} пользователей")
-            if invites:
-                _box_row(f"  Активных invite:  {YELLOW}{len(invites)}{NC}")
         _box_sep()
         if not configured:
-            _box_item("1", f"Настроить бота (токен + admin ID)")
+            _box_item("1", f"Настроить бота (токен + admin ID + пароль)")
         else:
             _box_item("1", f"Изменить настройки")
             if running:
@@ -1810,10 +1903,9 @@ def do_tg_bot_menu() -> None:
                 _box_item("3", f"{RED}Остановить бота{NC}")
             else:
                 _box_item("2", f"{GREEN}Запустить бота{NC}")
-            _box_item("4", f"Создать invite-ссылку для пользователя Xray")
-            _box_item("5", f"Список авторизованных пользователей")
-            _box_item("6", f"Удалить пользователя из списка")
-            _box_item("7", f"Проверить статус сервиса")
+            _box_item("4", f"Список авторизованных пользователей")
+            _box_item("5", f"Удалить пользователя из списка")
+            _box_item("6", f"Проверить статус сервиса")
         _box_sep()
         _box_info("Бот работает как systemd-сервис xray-tg-bot")
         _box_info("Токен: @BotFather → /newbot")
@@ -1839,12 +1931,10 @@ def do_tg_bot_menu() -> None:
         elif ch == "3" and configured and running:
             _menu_bot_stop()
         elif ch == "4" and configured:
-            _menu_bot_invite(bot_cfg, token, admin_id)
-        elif ch == "5" and configured:
             _menu_bot_list_users(bot_cfg)
-        elif ch == "6" and configured:
+        elif ch == "5" and configured:
             _menu_bot_remove_user(bot_cfg)
-        elif ch == "7" and configured:
+        elif ch == "6" and configured:
             _menu_bot_svc_status()
         elif ch in ("q", "Q", "0", ""):
             return
@@ -1854,28 +1944,33 @@ def do_tg_bot_menu() -> None:
 
 
 def _menu_bot_configure(bot_cfg: dict, notif_cfg: dict) -> None:
-    """Настройка токена и admin ID."""
+    """Настройка токена, admin ID и общего пароля."""
     os.system("clear")
     print()
     _box_top("🤖  Настройка Telegram Bot")
     _box_desc(
         "Создайте бота через @BotFather (/newbot). "
         "Если токен тот же что для уведомлений — можно использовать один бот. "
-        "Admin Chat ID — ваш личный Telegram ID (узнать: @userinfobot)."
+        "Admin Chat ID — ваш личный Telegram ID (узнать: @userinfobot). "
+        "Пароль для пользователей — общий пароль, который вводится для авторизации."
     )
     _box_sep()
     cur_token    = bot_cfg.get("token") or notif_cfg.get("token", "")
     cur_admin_id = bot_cfg.get("admin_id") or notif_cfg.get("chat_id", "")
+    cur_password = bot_cfg.get("bot_password", "")
     if cur_token:
         _box_row(f"  Текущий токен:    {DIM}{cur_token[:10]}...{NC}")
     if cur_admin_id:
         _box_row(f"  Текущий admin ID: {CYAN}{cur_admin_id}{NC}")
+    if cur_password:
+        _box_row(f"  Текущий пароль:   {CYAN}{cur_password}{NC}")
     _box_bottom()
     print()
 
     try:
         new_token = input(f"  Bot Token [{DIM}Enter = оставить{NC}]: ").strip()
         new_admin = input(f"  Admin Chat ID [{DIM}Enter = оставить{NC}]: ").strip()
+        new_pass  = input(f"  Пароль для пользователей [{DIM}Enter = оставить{NC}]: ").strip()
     except KeyboardInterrupt:
         return
 
@@ -1889,8 +1984,13 @@ def _menu_bot_configure(bot_cfg: dict, notif_cfg: dict) -> None:
     elif cur_admin_id and not bot_cfg.get("admin_id"):
         bot_cfg["admin_id"] = cur_admin_id
 
-    if not bot_cfg.get("token") or not bot_cfg.get("admin_id"):
-        _warn("Токен и Admin ID обязательны")
+    if new_pass:
+        bot_cfg["bot_password"] = new_pass
+    elif cur_password and not bot_cfg.get("bot_password"):
+        bot_cfg["bot_password"] = cur_password
+
+    if not bot_cfg.get("token") or not bot_cfg.get("admin_id") or not bot_cfg.get("bot_password"):
+        _warn("Токен, Admin ID и Пароль обязательны")
         input(f"{BLUE}Нажмите Enter...{NC}")
         return
 
