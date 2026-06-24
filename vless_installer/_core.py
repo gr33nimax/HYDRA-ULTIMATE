@@ -59,7 +59,6 @@ from typing import Any
 import getpass
 
 # ── Модули v4.12.9 ──────────────────────────────────────────────────────────────
-from vless_installer.modules.smoke_test      import smoke_test_xray
 from vless_installer.modules.nginx_watchdog  import (
     nginx_watchdog_install, nginx_watchdog_remove, do_manage_nginx_watchdog,
 )
@@ -77,7 +76,6 @@ from vless_installer.modules.webdav_tunnel import do_webdav_tunnel_menu
 from vless_installer.modules.ripe_file_age   import (
     check_ripe_file_age, ripe_file_age_banner,
 )
-from vless_installer.modules.cluster_ops import do_cluster_menu, load_exit_nodes
 from vless_installer.modules.box_renderer import (
     _get_box_width, _plain, _wcslen,
     _box_line_top, _box_line_sep, _box_line_bot,
@@ -90,27 +88,32 @@ import vless_installer.modules.box_renderer as _br
 _BOX_W = _br._BOX_W  # алиас для совместимости с кодом в _core.py
 from vless_installer.modules.logrotate  import do_manage_logrotate
 from vless_installer.modules.dns_rules         import do_manage_dns_rules
-from vless_installer.modules.fingerprint_manager import (
-    XRAY_FP_LIST  as _FM_FP_LIST,
-    prompt_fingerprint as _fm_prompt_fingerprint,
-)
+
+# Статический список uTLS-fingerprints
+_FM_FP_LIST = ["chrome", "firefox", "safari", "ios", "android", "edge", "none"]
+def _fm_prompt_fingerprint(label="client", current="chrome"):
+    return current
+
 from vless_installer.modules.dnscrypt_selector import do_dnscrypt_selector_menu
 from vless_installer.modules.honeypot      import do_manage_honeypot
 from vless_installer.modules.fail2ban_manager import do_manage_fail2ban
 from vless_installer.modules.scheduler     import render_scheduler_menu
 from vless_installer.modules.warp          import do_manage_warp
-from vless_installer.modules.smart_balancer import (
-    do_manage_smart_balancer, _smart_balancer_run_once,
-    PROBE_INTERVAL_MIN,
-    _AUTO_FALLBACK_CRON, _AUTO_FALLBACK_SCRIPT, _AUTO_FALLBACK_LOGFILE,
-    _AWG_WATCHDOG_CRON, _AWG_WATCHDOG_SCRIPT, _AWG_WATCHDOG_LOG, _AWG_WATCHDOG_STATE,
-)
+
+_AUTO_FALLBACK_SCRIPT  = Path("/usr/local/bin/xray-auto-fallback.sh")
+_AUTO_FALLBACK_CRON    = Path("/etc/cron.d/xray-auto-fallback")
+_AUTO_FALLBACK_LOGFILE = Path("/var/log/xray-auto-fallback.log")
+
+_AWG_WATCHDOG_SCRIPT = Path("/usr/local/bin/awg-fallback-check.sh")
+_AWG_WATCHDOG_CRON   = Path("/etc/cron.d/awg-tunnel-watchdog")
+_AWG_WATCHDOG_LOG    = Path("/var/log/awg-fallback.log")
+_AWG_WATCHDOG_STATE  = Path("/var/run/awg-fallback.state")
+
 from vless_installer.modules.health import (
     health_check_xray, health_check_nginx, health_check_ssl,
     health_check_ports, run_full_health_check, do_check_tls_cert,
     HEALTH_CHECK_FILE,
 )
-from vless_installer.modules.dpi_detector import do_manage_dpi_detector
 from vless_installer.modules.ingress_geoip import (
     do_manage_ingress_geoip,
     _ingress_state_load, _ingress_enable,
@@ -120,26 +123,9 @@ from vless_installer.modules.ingress_geoip import (
 from vless_installer.modules.tui        import (
     tui_input, tui_confirm, tui_select, tui_progress, tui_form,
 )
-# ── Модули фрагментации v4.12 ─────────────────────────────────────────────────
-from vless_installer.modules.fragment_config     import do_fragment_config_menu
-from vless_installer.modules.fragment_fuzzer     import do_fragment_fuzzer_menu
-from vless_installer.modules.fragment_log_viewer import do_fragment_log_viewer_menu
-from vless_installer.modules.fragment_link       import do_fragment_link_menu
-from vless_installer.modules.fragment_presets    import do_fragment_presets_menu
-from vless_installer.modules.fragment_guide      import do_fragment_guide_menu
-from vless_installer.modules.fragment_noise      import do_fragment_noise_menu
-from vless_installer.modules.fragment_mux        import do_fragment_mux_menu
-from vless_installer.modules.fragment_watchdog   import do_fragment_watchdog_menu
-from vless_installer.modules.fragment_stats      import do_fragment_stats_menu
-from vless_installer.modules.fragment_share      import do_fragment_share_menu
 from vless_installer.modules.port_hopping        import do_port_hopping_menu, ph_status
 from vless_installer.modules.tg_bot              import do_tg_bot_menu, do_manage_telegram
-# ── Hysteria2 transport (аддитивно, v4.12.9+) ────────────────────────────────
 from vless_installer.modules.hysteria2_menu      import do_hysteria2_menu
-# ── Новые модули (бэкап, cold boot, health monitor) ──────────────────────────
-from vless_installer.modules.config_backup       import backup_xray_config, do_backup_menu
-from vless_installer.modules.cold_boot_restore   import do_cold_boot_menu
-from vless_installer.modules.node_health_monitor import do_health_monitor_menu
 from vless_installer.modules.amnezia_vpn import do_amnezia_vpn_menu
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -29327,16 +29313,6 @@ def _menu_diagnostics() -> None:
         _box_item("P", f"🔧 Патч Stats API  {DIM}(починить статистику трафика){NC}")
         _box_item("N", f"🔍 DNS Leak Test  {DIM}(проверить утечку DNS-запросов){NC}")
         _box_item("T", f"🔒 Проверка TLS-сертификата  {DIM}(цепочка, срок, SAN){NC}")
-        _box_sep()
-        _box_item("F1", f"🔀 Генератор конфига с фрагментацией  {DIM}(один пресет){NC}")
-        _box_item("F2", f"🔬 Тест связности с VPS  {DIM}(Fuzzer — ориентировочно){NC}")
-        _box_item("F3", f"📊 Визуализация фрагментации в логах")
-        _box_item("F4", f"📦 Сгенерировать ВСЕ конфиги с фрагментацией  {DIM}(рекомендуется){NC}")
-        _box_item("F5", f"📖 Гайд: как тестировать фрагментацию на своём устройстве")
-        _box_item("F6", f"🔊 Фрагментация + Noise  {DIM}(шум перед ClientHello){NC}")
-        _box_item("F7", f"🔀 Фрагментация + Mux  {DIM}(мультиплексирование потоков){NC}")
-        _box_item("F8", f"🔄 Watchdog  {DIM}(автопереключение пресетов при RST){NC}")
-        _box_item("F9", f"📈 Статистика эффективности фрагментации")
         _box_row()
         _box_back()
         _box_bottom()
@@ -29404,24 +29380,6 @@ def _menu_diagnostics() -> None:
             do_node_health_matrix()
         elif ch.lower() == "b":
             do_port_block_detect()
-        elif ch.lower() in ("f1",):
-            do_fragment_config_menu()
-        elif ch.lower() in ("f2",):
-            do_fragment_fuzzer_menu()
-        elif ch.lower() in ("f3",):
-            do_fragment_log_viewer_menu()
-        elif ch.lower() in ("f4",):
-            do_fragment_presets_menu()
-        elif ch.lower() in ("f5",):
-            do_fragment_guide_menu()
-        elif ch.lower() in ("f6",):
-            do_fragment_noise_menu()
-        elif ch.lower() in ("f7",):
-            do_fragment_mux_menu()
-        elif ch.lower() in ("f8",):
-            do_fragment_watchdog_menu()
-        elif ch.lower() in ("f9",):
-            do_fragment_stats_menu()
         elif ch.lower() == "q" or ch == "":
             break
         else:
