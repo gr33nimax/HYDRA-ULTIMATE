@@ -986,7 +986,6 @@ def do_amnezia_vpn_menu() -> None:
                 _box_item("5", f"{GREEN}Запустить контейнер{NC}")
             _box_item("6", "Логи контейнера (последние 50 строк)")
             _box_item("7", "Показать клиентские конфиги")
-            _box_item("8", "Генерировать QR-код для клиента")
             if running:
                 _box_item("10", f"{GREEN}Добавить пользователя (клиента){NC}")
                 _box_item("11", f"{RED}Удалить пользователя (клиента){NC}")
@@ -1152,46 +1151,6 @@ def do_amnezia_vpn_menu() -> None:
                 if sel.isdigit() and 1 <= int(sel) <= len(configs):
                     cfg = configs[int(sel)-1]
                     _show_single_client_config(cfg)
-            
-        elif ch == "8":
-            os.system("clear")
-            print()
-            _box_top("📲  Генерация QR-кода")
-            _box_bottom()
-            print()
-            configs = _get_client_configs()
-            if not configs:
-                _warn("Конфигурации клиентов не найдены.")
-                input(f"{BLUE}Нажмите Enter...{NC}")
-                continue
-                
-            print("Доступные клиенты:")
-            for i, cfg in enumerate(configs, 1):
-                print(f"  {i}. {CYAN}{cfg['name']}{NC}")
-            print()
-            
-            try:
-                sel = input(f"Выберите номер клиента (Enter = отмена): ").strip()
-            except KeyboardInterrupt:
-                continue
-                
-            if sel.isdigit() and 1 <= int(sel) <= len(configs):
-                cfg = configs[int(sel)-1]
-                # Проверим, доступен ли приватный ключ (не ридонли конфиг)
-                if "хранится на устройстве клиента" in cfg["config_text"]:
-                    _err("Невозможно сгенерировать QR-код: приватный ключ этого клиента отсутствует на сервере.")
-                    input(f"{BLUE}Нажмите Enter...{NC}")
-                    continue
-                qr_path = f"/tmp/awg_qr_{cfg['name']}.png"
-                if _generate_client_qr(cfg["config_text"], qr_path):
-                    _ok(f"QR-код успешно сохранен как картинка в: {qr_path}")
-                    try:
-                        subprocess.run(["qrencode", "-t", "ansiutf8"], input=cfg["config_text"], text=True)
-                    except Exception:
-                        pass
-                else:
-                    _err("Не удалось сгенерировать QR-код (убедитесь, что qrencode установлен).")
-            input(f"{BLUE}Нажмите Enter...{NC}")
             
         elif ch == "9":
             try:
