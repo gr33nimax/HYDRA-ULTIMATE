@@ -46,7 +46,6 @@ required = [
     "vless_installer/_core.py",
     "vless_installer/modules/sub_generator.py",
     "vless_installer/modules/sub_server.py",
-    "vless_installer/modules/sub_nginx.py",
     "vless_installer/modules/warp_universal.py",
 ]
 for f in required:
@@ -62,7 +61,6 @@ for py in ["main.py", "verify.py",
            "vless_installer/_core.py",
            "vless_installer/modules/sub_generator.py",
            "vless_installer/modules/sub_server.py",
-           "vless_installer/modules/sub_nginx.py",
            "vless_installer/modules/warp_universal.py"]:
     try:
         ast.parse(Path(py).read_text(encoding="utf-8"))

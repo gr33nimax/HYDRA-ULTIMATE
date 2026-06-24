@@ -250,10 +250,10 @@ def _make_banner(show_ram_warning: bool = True) -> str:
         "  ╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝",
     ]
     _info_lines = [
-        "HYDRA: MULTI-PROTOCOL PROXY MANAGER v5.0.0",
+        "HYDRA: MULTI-PROTOCOL PROXY MANAGER v0.0.1",
         "Mieru | NaiveProxy | SlipGate | WARP | MTProxy",
-        "VPN & DNS Tunnels",
-        "Dynamic Subscriptions | AutoBan | Fail2ban",
+        "AmneziaWG | VPN & DNS Tunnels",
+        "Dynamic Subscriptions | Fail2ban | GeoIP Block",
     ]
     # Строки предупреждения о RAM (красные + жирные через ANSI)
     _BOLD_RED = '\033[1;31m'
@@ -1828,12 +1828,12 @@ def verify_connectivity() -> None:
     else:
         _box_info(f"{BOLD}IPv6: не доступен{NC}")
 
-    for port in (22, 80, SERVER_PORT):
-        r = _run(["ss", "-tlnp"], capture=True, check=False)
-        if f":{port} " in r.stdout:
-            _box_ok(f"Порт {port}: OK")
-        else:
-            _box_warn(f"Порт {port}: не слушает")
+    # Проверяем только SSH-порт (22) — Xray/Nginx проверяются отдельно
+    r = _run(["ss", "-tlnp"], capture=True, check=False)
+    if ":22 " in r.stdout:
+        _box_ok("Порт 22 (SSH): OK")
+    else:
+        _box_warn("Порт 22 (SSH): не слушает")
     _box_row()
 
 # =============================================================================
@@ -29363,16 +29363,7 @@ def do_scheduler_menu() -> None:
             "log":      "/var/log/xray-certbot-monitor.log",
             "configure": do_manage_certbot_monitor,
         },
-        {
-            "id":       "autoban",
-            "emoji":    "🚫",
-            "label":    "AutoBan (защита от брутфорса)",
-            "schedule": "каждые 5 мин",
-            "cron":     "/etc/cron.d/xray-autoban",
-            "unit":     None,
-            "log":      "/var/log/xray-autoban.log",
-            "configure": do_manage_autoban,
-        },
+
         {
             "id":       "fp",
             "emoji":    "🔑",
@@ -29423,16 +29414,7 @@ def do_scheduler_menu() -> None:
             "log":      None,
             "configure": do_traffic_history,
         },
-        {
-            "id":       "fallback",
-            "emoji":    "🔀",
-            "label":    "Авто-фолбэк (Режим B → A)",
-            "schedule": "каждую минуту",
-            "cron":     str(_AUTO_FALLBACK_CRON),
-            "unit":     None,
-            "log":      None,
-            "configure": do_manage_auto_fallback,
-        },
+
         {
             "id":       "ingress",
             "emoji":    "🛡️",
