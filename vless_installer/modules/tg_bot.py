@@ -668,7 +668,6 @@ def handle_sub(msg, args):
         
     sub_domain = st.get("sub_domain", "")
     sub_port = st.get("sub_port", 9443)
-    sub_public = st.get("sub_public", False)
     
     domain_to_use = sub_domain or st.get("domain", "")
     if not domain_to_use:
@@ -677,10 +676,8 @@ def handle_sub(msg, args):
         except Exception:
             domain_to_use = "IP_СЕРВЕРА"
             
-    if sub_public:
-        base_url = f"http://{{domain_to_use}}:{{sub_port}}/sub/{{token}}"
-    else:
-        base_url = f"https://{{domain_to_use}}/sub/{{token}}"
+    port_suffix = f":{{sub_port}}" if sub_port != 443 else ""
+    base_url = f"https://{{domain_to_use}}{{port_suffix}}/sub/{{token}}"
     send(uid, (
         f"📋 <b>Подписки для {{email}}:</b>\\n\\n"
         f"Base64 (v2rayNG, Shadowrocket):\\n<code>{{base_url}}</code>\\n\\n"
@@ -737,7 +734,6 @@ def handle_sub_qr(msg, args):
         
     sub_domain = st.get("sub_domain", "")
     sub_port = st.get("sub_port", 9443)
-    sub_public = st.get("sub_public", False)
     
     domain_to_use = sub_domain or st.get("domain", "")
     if not domain_to_use:
@@ -746,10 +742,8 @@ def handle_sub_qr(msg, args):
         except Exception:
             domain_to_use = "IP_СЕРВЕРА"
             
-    if sub_public:
-        base_url = f"http://{{domain_to_use}}:{{sub_port}}/sub/{{token}}"
-    else:
-        base_url = f"https://{{domain_to_use}}/sub/{{token}}"
+    port_suffix = f":{{sub_port}}" if sub_port != 443 else ""
+    base_url = f"https://{{domain_to_use}}{{port_suffix}}/sub/{{token}}"
     qr_file = f"/tmp/sub_qr_{{token}}.png"
     
     try:
