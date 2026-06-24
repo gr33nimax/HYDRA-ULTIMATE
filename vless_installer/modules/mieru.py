@@ -1528,6 +1528,58 @@ def do_mieru_menu() -> None:
         elif ch in ("q", ""):
             break
 
+
+def add_user_noninteractive(username: str, password: str = None) -> Optional[tuple[str, str]]:
+    """Добавить пользователя без интерактива. Возвращает (username, password) или None."""
+    if not _is_installed():
+        return None
+    state = _load_state()
+    users = state.get("users", [])
+    if any(u["username"] == username for u in users):
+        return None
+        
+    password = password or _gen_password()
+    users.append({"username": username, "password": password})
+    state["users"] = users
+    _save_state(state)
+    
+    cfg = _build_server_config(
+        users,
+        state.get("port_start", _DEFAULT_PORT_START),
+        state.get("port_end",   _DEFAULT_PORT_END),
+        state.get("protocol",   _DEFAULT_PROTOCOL),
+    )
+    err = _apply_server_config(cfg)
+    if not err:
+        _run(["systemctl", "reload-or-restart", _SERVICE_NAME])
+        
+    return (username, password)
+
+
+def delete_user_noninteractive(username: str) -> bool:
+    """Удалить пользователя без интерактива."""
+    if not _is_installed():
+        return False
+    state = _load_state()
+    users = state.get("users", [])
+    before = len(users)
+    users = [u for u in users if u["username"] != username]
+    if len(users) == before:
+        return False
+    state["users"] = users
+    _save_state(state)
+    
+    cfg = _build_server_config(
+        users,
+        state.get("port_start", _DEFAULT_PORT_START),
+        state.get("port_end",   _DEFAULT_PORT_END),
+        state.get("protocol",   _DEFAULT_PROTOCOL),
+    )
+    err = _apply_server_config(cfg)
+    if not err:
+        _run(["systemctl", "reload-or-restart", _SERVICE_NAME])
+    return True
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  АВТОНОМНЫЙ ЗАПУСК
 # ══════════════════════════════════════════════════════════════════════════════

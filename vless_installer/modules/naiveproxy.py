@@ -1443,6 +1443,56 @@ def do_naiveproxy_menu() -> None:
         elif ch in ("q", ""):
             break
 
+
+def add_user_noninteractive(username: str, password: str = None) -> Optional[tuple[str, str]]:
+    """Добавить пользователя без интерактива. Возвращает (username, password) или None."""
+    if not _is_installed():
+        return None
+    state = _load_state()
+    users = state.get("users", [])
+    if any(u["username"] == username for u in users):
+        return None
+    
+    password = password or _gen_password()
+    password_hash = _hash_password(password)
+    users.append({
+        "username": username,
+        "password": password,
+        "password_hash": password_hash,
+    })
+    state["users"] = users
+    _save_state(state)
+    
+    # Применяем конфиг
+    _apply_config(
+        state.get("domain", ""), state.get("port", _DEFAULT_PORT), users,
+        state.get("fake_url", _DEFAULT_FAKE),
+        state.get("probe_secret", ""),
+        state.get("upstream", ""),
+    )
+    return (username, password)
+
+
+def delete_user_noninteractive(username: str) -> bool:
+    """Удалить пользователя без интерактива."""
+    if not _is_installed():
+        return False
+    state = _load_state()
+    users = state.get("users", [])
+    before = len(users)
+    users = [u for u in users if u["username"] != username]
+    if len(users) == before:
+        return False
+    state["users"] = users
+    _save_state(state)
+    _apply_config(
+        state.get("domain", ""), state.get("port", _DEFAULT_PORT), users,
+        state.get("fake_url", _DEFAULT_FAKE),
+        state.get("probe_secret", ""),
+        state.get("upstream", ""),
+    )
+    return True
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  АВТОНОМНЫЙ ЗАПУСК
 # ══════════════════════════════════════════════════════════════════════════════
