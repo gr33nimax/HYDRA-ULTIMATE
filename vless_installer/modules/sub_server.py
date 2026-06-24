@@ -253,7 +253,7 @@ def start_sub_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
 # ── Systemd-сервис ────────────────────────────────────────────────────────────
 
 def generate_systemd_unit(host: str = DEFAULT_HOST,
-                          port: int = DEFAULT_PORT) -> str:
+                           port: int = DEFAULT_PORT) -> str:
     """Генерация содержимого systemd unit-файла."""
     install_dir = "/opt/vless-ultimate"
     # Ищем реальную директорию установки
@@ -272,15 +272,9 @@ def generate_systemd_unit(host: str = DEFAULT_HOST,
 
         [Service]
         Type=simple
-        ExecStart=/usr/bin/python3 -c "\\
-            import sys; sys.path.insert(0, '{install_dir}'); \\
-            from vless_installer.modules.sub_server import start_sub_server; \\
-            s = start_sub_server('{host}', {port}, daemon=False); \\
-            import signal, threading; \\
-            evt = threading.Event(); \\
-            signal.signal(signal.SIGTERM, lambda *a: (s.shutdown(), evt.set())); \\
-            signal.signal(signal.SIGINT,  lambda *a: (s.shutdown(), evt.set())); \\
-            evt.wait()"
+        WorkingDirectory={install_dir}
+        Environment=PYTHONPATH={install_dir}
+        ExecStart=/usr/bin/python3 {install_dir}/vless_installer/modules/sub_server.py --host {host} --port {port}
         Restart=always
         RestartSec=5
         StandardOutput=journal
@@ -351,10 +345,12 @@ if __name__ == "__main__":
     print(f"Starting subscription server on {args.host}:{args.port}")
     server = start_sub_server(args.host, args.port, daemon=True)
     if server:
-        import time
+        import signal, threading
+        evt = threading.Event()
+        signal.signal(signal.SIGTERM, lambda *a: (server.shutdown(), evt.set()))
+        signal.signal(signal.SIGINT,  lambda *a: (server.shutdown(), evt.set()))
         try:
-            while True:
-                time.sleep(1)
+            evt.wait()
         except KeyboardInterrupt:
             server.shutdown()
-            print("\nServer stopped.")
+        print("\nServer stopped.")
