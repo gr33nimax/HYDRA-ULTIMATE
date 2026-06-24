@@ -77,16 +77,6 @@ def _load_state() -> dict:
     return {}
 
 
-def _load_xray_config() -> dict:
-    for p in (Path("/etc/xray/config.json"), Path("/usr/local/etc/xray/config.json"), Path("/var/lib/xray-installer/config.json")):
-        if p.exists():
-            try:
-                return json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-    return {}
-
-
 def find_user_by_token(token: str) -> Optional[tuple[str, str]]:
     """Найти пользователя по подписочному токену with rich debug logs.
     Returns (uuid, email) or None.
@@ -109,20 +99,8 @@ def find_user_by_token(token: str) -> Optional[tuple[str, str]]:
         _log("WARN", f"find_user_by_token: No email matched for token '{token}'")
         return None
 
-    # Ищем UUID в xray config
-    cfg = _load_xray_config()
-    for inb in cfg.get("inbounds", []):
-        for cl in inb.get("settings", {}).get("clients", []):
-            if cl.get("email", "") == email:
-                return (cl.get("id", ""), email)
-
-    # Если не нашли в xray config, используем основной UUID
-    main_uuid = state.get("uuid", "")
-    if main_uuid:
-        return (main_uuid, email)
-
-    # Если UUID нет, возвращаем пустую строку как UUID, но разрешаем авторизацию!
-    _log("INFO", f"User '{email}' authenticated successfully via token, but no UUID found in xray config or state.json. Returning empty UUID.")
+    # VLESS/Xray вырезаны, возвращаем пустой UUID, но разрешаем авторизацию
+    _log("INFO", f"User '{email}' authenticated successfully via token.")
     return ("", email)
 
 

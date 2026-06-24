@@ -59,12 +59,6 @@ def _load_state() -> dict:
 
 
 def _load_xray_config() -> dict:
-    """Загрузить xray config.json."""
-    if XRAY_CONFIG.exists():
-        try:
-            return json.loads(XRAY_CONFIG.read_text(encoding="utf-8"))
-        except Exception:
-            pass
     return {}
 
 
@@ -91,60 +85,13 @@ def _load_mieru_state() -> dict:
 
 
 def _find_user_uuid(email: str) -> Optional[str]:
-    """Найти UUID пользователя по email в xray config."""
-    cfg = _load_xray_config()
-    for inb in cfg.get("inbounds", []):
-        for cl in inb.get("settings", {}).get("clients", []):
-            if cl.get("email", "") == email:
-                return cl.get("id", "")
     return None
 
 
 # ── Генерация VLESS-ссылок ───────────────────────────────────────────────────
 
 def generate_vless_links(state: dict, uuid_str: str, email: str) -> list[str]:
-    """Генерация VLESS URI на основе текущей конфигурации."""
-    if not uuid_str:
-        return []
-    links = []
-    server_ip = state.get("domain", "") or _get_server_ip()
-    port = state.get("server_port", 443)
-    fp = state.get("fingerprint", "chrome")
-    label = urllib.parse.quote(email)
-
-    protocol_mode = state.get("protocol_mode", "reality")
-
-    # REALITY ссылка
-    if protocol_mode in ("reality", "both", ""):
-        pbk = state.get("public_key", "")
-        sid = state.get("short_id", "")
-        sni = state.get("reality_dest", "www.microsoft.com")
-        if ":" in sni:
-            sni = sni.split(":")[0]
-        link = (
-            f"vless://{uuid_str}@{server_ip}:{port}"
-            f"?type=tcp&security=reality&pbk={pbk}"
-            f"&fp={fp}&sni={sni}&sid={sid}"
-            f"&flow=xtls-rprx-vision#{label}%20REALITY"
-        )
-        links.append(link)
-
-    # xHTTP + TLS ссылка
-    if protocol_mode in ("xhttp", "both"):
-        domain = state.get("domain", "")
-        xhttp_path = state.get("xhttp_path", "/")
-        xhttp_mode = state.get("xhttp_mode", "streamup")
-        if domain:
-            path_enc = urllib.parse.quote(xhttp_path, safe="/")
-            link = (
-                f"vless://{uuid_str}@{domain}:{port}"
-                f"?type=xhttp&security=tls&sni={domain}"
-                f"&path={path_enc}&mode={xhttp_mode}"
-                f"&fp={fp}#{label}%20xHTTP"
-            )
-            links.append(link)
-
-    return links
+    return []
 
 
 # ── Генерация NaiveProxy ─────────────────────────────────────────────────────
@@ -289,49 +236,7 @@ def generate_clash_yaml(state: dict, uuid_str: str, email: str) -> str:
     fp = state.get("fingerprint", "chrome")
     protocol_mode = state.get("protocol_mode", "reality")
 
-    # VLESS REALITY
-    if uuid_str and protocol_mode in ("reality", "both", ""):
-        name = f"{email} REALITY"
-        proxy_names.append(name)
-        pbk = state.get("public_key", "")
-        sid = state.get("short_id", "")
-        sni = state.get("reality_dest", "www.microsoft.com")
-        if ":" in sni:
-            sni = sni.split(":")[0]
-        proxies.append(f"""  - name: {_yaml_str(name)}
-    type: vless
-    server: {server_ip}
-    port: {port}
-    uuid: {uuid_str}
-    network: tcp
-    udp: true
-    tls: true
-    flow: xtls-rprx-vision
-    client-fingerprint: {fp}
-    servername: {sni}
-    reality-opts:
-      public-key: {pbk}
-      short-id: {sid}""")
-
-    # VLESS xHTTP
-    if uuid_str and protocol_mode in ("xhttp", "both"):
-        domain = state.get("domain", "")
-        if domain:
-            name = f"{email} xHTTP"
-            proxy_names.append(name)
-            xhttp_path = state.get("xhttp_path", "/")
-            proxies.append(f"""  - name: {_yaml_str(name)}
-    type: vless
-    server: {domain}
-    port: {port}
-    uuid: {uuid_str}
-    network: xhttp
-    udp: true
-    tls: true
-    client-fingerprint: {fp}
-    servername: {domain}
-    xhttp-opts:
-      path: {xhttp_path}""")
+    # VLESS Reality and xHTTP removed
 
     # NaiveProxy
     naive = _load_naiveproxy_state()
@@ -411,57 +316,7 @@ def generate_singbox_json(state: dict, uuid_str: str, email: str) -> str:
     fp = state.get("fingerprint", "chrome")
     protocol_mode = state.get("protocol_mode", "reality")
 
-    # VLESS REALITY
-    if uuid_str and protocol_mode in ("reality", "both", ""):
-        tag = f"{email}-reality"
-        tags.append(tag)
-        pbk = state.get("public_key", "")
-        sid = state.get("short_id", "")
-        sni = state.get("reality_dest", "www.microsoft.com")
-        if ":" in sni:
-            sni = sni.split(":")[0]
-        outbounds.append({
-            "type": "vless",
-            "tag": tag,
-            "server": server_ip,
-            "server_port": port,
-            "uuid": uuid_str,
-            "flow": "xtls-rprx-vision",
-            "tls": {
-                "enabled": True,
-                "server_name": sni,
-                "utls": {"enabled": True, "fingerprint": fp},
-                "reality": {
-                    "enabled": True,
-                    "public_key": pbk,
-                    "short_id": sid,
-                },
-            },
-        })
-
-    # VLESS xHTTP
-    if uuid_str and protocol_mode in ("xhttp", "both"):
-        domain = state.get("domain", "")
-        if domain:
-            tag = f"{email}-xhttp"
-            tags.append(tag)
-            xhttp_path = state.get("xhttp_path", "/")
-            outbounds.append({
-                "type": "vless",
-                "tag": tag,
-                "server": domain,
-                "server_port": port,
-                "uuid": uuid_str,
-                "tls": {
-                    "enabled": True,
-                    "server_name": domain,
-                    "utls": {"enabled": True, "fingerprint": fp},
-                },
-                "transport": {
-                    "type": "httpupgrade",
-                    "path": xhttp_path,
-                },
-            })
+    # VLESS Reality and xHTTP removed
 
     # NaiveProxy → sing-box naive outbound
     naive = _load_naiveproxy_state()
