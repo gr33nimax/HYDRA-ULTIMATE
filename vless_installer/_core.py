@@ -1789,104 +1789,20 @@ def run_unit_tests() -> None:
         r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
         gen_uuid())))
     _test(5, "ShortID генерация", (lambda s: len(s)==16 and bool(re.match(r'^[0-9a-f]+$',s)))(gen_hex(8)))
-    _test(6, "Xray бинарник",    XRAY_BIN.exists() and os.access(XRAY_BIN, os.X_OK))
-    _test(7, f"RAM ({TOTAL_RAM}MB)", TOTAL_RAM >= 256)
-    _test(8, "openssl",          command_exists("openssl"))
+    _test(6, f"RAM ({TOTAL_RAM}MB)", TOTAL_RAM >= 256)
+    _test(7, "openssl",          command_exists("openssl"))
 
-    # --- Расширенные тесты ---
-    # Читаем state один раз для всех тестов
-    _ut_state: dict = {}
-    try:
-        if STATE_FILE.exists():
-            _ut_state = json.loads(STATE_FILE.read_text())
-    except Exception:
-        pass
-    _ut_proto   = _ut_state.get("protocol_mode", PROTOCOL_MODE or "reality")
-    _ut_awg     = _ut_state.get("awg_exit_enabled", False)
-    _ut_mode    = _ut_state.get("install_mode", INSTALL_MODE or "A")
-
-    # Тест 9: nginx -t (валидность конфига nginx)
-    # ИСПРАВЛЕНИЕ: в REALITY-режиме и AWG nginx опционален — помечаем как "(опц.)"
-    # чтобы FAIL не пугал пользователя у которого nginx просто не установлен.
-    _nginx = find_nginx_bin()
-    _nginx_optional = (_ut_proto == "reality") or _ut_awg
-    _nginx_label = "nginx -t (конфиг валиден)" if not _nginx_optional else "nginx -t (опц.)"
-    if _nginx:
-        _r = _run([_nginx, "-t"], capture=True, check=False, quiet=True)
-        _test(9, _nginx_label, _r.returncode == 0)
-    else:
-        if _nginx_optional:
-            # Nginx не установлен, но и не нужен — не считаем FAIL
-            _box_row(f"  {DIM}Тест 9: {_nginx_label} — не установлен (не нужен в REALITY){NC}")
-        else:
-            _test(9, _nginx_label, False)
-
-    # Тест 10: xray --test config.json
-    _cfg_candidates = [CONFIG_DIR / "config.json", Path("/usr/local/etc/xray/config.json")]
-    _cfg_test = next((str(p) for p in _cfg_candidates if p.exists()), None)
-    if _cfg_test and XRAY_BIN.exists():
-        _r = _run([str(XRAY_BIN), "run", "-test", "-config", _cfg_test],
-                  capture=True, check=False, quiet=True)
-        _test(10, "xray -test config.json", _r.returncode == 0)
-    else:
-        _test(10, "xray -test config.json", False)
-
-    # Тест 11: certbot доступен
-    # ИСПРАВЛЕНИЕ: в REALITY-режиме TLS-сертификат не нужен — certbot опционален.
     _certbot = next((p for p in (Path("/snap/bin/certbot"), Path("/usr/bin/certbot"))
                      if p.exists()), None)
-    _certbot_optional = (_ut_proto == "reality")
-    if _certbot_optional:
-        _certbot_label = "certbot (опц., REALITY не нужен)"
-        if _certbot:
-            _box_row(f"  {DIM}Тест 11: {_certbot_label} — найден{NC}")
-        else:
-            _box_row(f"  {DIM}Тест 11: {_certbot_label} — не установлен (норма){NC}")
-    else:
-        _test(11, "certbot", _certbot is not None)
-
-    # Тест 12: Stats API в конфиге Xray
-    # ИСПРАВЛЕНИЕ: Stats API опционален — его отсутствие не ломает VPN,
-    # только отключает статистику. Показываем INFO, не FAIL.
-    _stats_ok = False
-    if _cfg_test:
-        try:
-            _cfg_json = json.loads(Path(_cfg_test).read_text())
-            _stats_ok = "stats" in _cfg_json and "policy" in _cfg_json
-        except Exception:
-            pass
-    if _stats_ok:
-        _test(12, "Xray Stats API в конфиге", True)
-    else:
-        _box_row(f"  {DIM}Тест 12: Xray Stats API — не настроен "
-                 f"(статистика недоступна, VPN работает){NC}")
-
-    # Тест 13: cron-агенты активны (watchdog timer)
-    # ИСПРАВЛЕНИЕ: watchdog опционален — не все его настраивают.
-    _r = _run(["systemctl", "is-active", "xray-watchdog.timer"],
-              capture=True, check=False, quiet=True)
-    _watchdog_ok = _r.returncode == 0 and _r.stdout.strip() == "active"
-    if _watchdog_ok:
-        _test(13, "xray-watchdog.timer активен", True)
-    else:
-        _box_row(f"  {DIM}Тест 13: xray-watchdog.timer — не активен (опц.){NC}")
-
-    # Тест 14: xray сервис активен прямо сейчас
-    _r = _run(["systemctl", "is-active", "xray"],
-              capture=True, check=False, quiet=True)
-    _test(14, "xray.service активен", _r.stdout.strip() == "active")
+    _test(8, "certbot", _certbot is not None)
 
     _box_row()
     col = GREEN if failed == 0 else YELLOW
     _box_row(f"  {BOLD}Результаты:{NC} {GREEN}{passed} пройдено{NC} / {col}{failed} провалено{NC}")
-    if failed == 0:
-        _box_row(f"  {DIM}(опциональные тесты в счётчик не входят){NC}")
     _box_row()
     _box_bottom()
 
-# =============================================================================
-#  ПРОВЕРКА СЕТЕВОЙ ДОСТУПНОСТИ
-# =============================================================================
+
 def verify_connectivity() -> None:
     _box_row()
     ipv4 = get_server_ip("4")
@@ -29589,16 +29505,15 @@ def _menu_security() -> None:
         os.system("clear")
         _load_state_into_globals()
         _box_top("🛡️  БЕЗОПАСНОСТЬ И АВТОМАТИЗАЦИЯ")
-        _box_item("1", f"🚫 AutoBan  {DIM}(защита от перебора / TLS-ошибки){NC}")
-        _box_item("2", f"🛡️  GeoIP Block  {DIM}(allowlist / blocklist / сканеры){NC}")
-        _box_item("3", f"📬 Telegram Admin Panel  {DIM}(управление сервером через бот){NC}")
-        _box_item("4", f"🤖 Telegram User Bot  {DIM}(подписки для пользователей){NC}")
-        _box_item("5", f"🚫 IP-Бан  {DIM}(iptables/ipset: IP / подсеть / ASN){NC}")
-        _box_item("6", f"🛡️  Fail2ban  {DIM}(банит за подбор пароля / лишние запросы){NC}")
-        _box_item("7", f"🔒 Мониторинг certbot renew  {DIM}(алерт при истечении){NC}")
-        _box_item("8", f"🔒 SSH Hardening  {DIM}(порт / ключи / AllowUsers){NC}")
-        _box_item("9", f"🍯 Honeypot-порт  {DIM}(ловушка для сканеров){NC}")
-        _box_item("10", f"🗓️  Планировщик задач  {DIM}(все cron/systemd в одном месте){NC}")
+        _box_item("1", f"🛡️  GeoIP Block  {DIM}(allowlist / blocklist / сканеры){NC}")
+        _box_item("2", f"📬 Telegram Admin Panel  {DIM}(управление сервером через бот){NC}")
+        _box_item("3", f"🤖 Telegram User Bot  {DIM}(подписки для пользователей){NC}")
+        _box_item("4", f"🚫 IP-Бан  {DIM}(iptables/ipset: IP / подсеть / ASN){NC}")
+        _box_item("5", f"🛡️  Fail2ban  {DIM}(банит за подбор пароля / лишние запросы){NC}")
+        _box_item("6", f"🔒 Мониторинг certbot renew  {DIM}(алерт при истечении){NC}")
+        _box_item("7", f"🔒 SSH Hardening  {DIM}(порт / ключи / AllowUsers){NC}")
+        _box_item("8", f"🍯 Honeypot-порт  {DIM}(ловушка для сканеров){NC}")
+        _box_item("9", f"🗓️  Планировщик задач  {DIM}(все cron/systemd в одном месте){NC}")
         # Показываем статус ingress-блокировки прямо в меню
         _ing = _ingress_state_load()
         _ing_on = _ing.get("enabled")
@@ -29606,8 +29521,8 @@ def _menu_security() -> None:
             f"{GREEN}вкл  порт {_ing.get('port','')}  {_ing.get('cidrs_v4',0)} CIDR{NC}"
             if _ing_on else f"{DIM}выкл{NC}"
         )
-        _box_item("11", f"🛡️  Блокировка входящих из РФ  {_ing_str}")
-        _box_item("12", f"🔄 Cold Boot Restore  {DIM}(авто-восстановление после reboot){NC}")
+        _box_item("10", f"🛡️  Блокировка входящих из РФ  {_ing_str}")
+        _box_item("11", f"🔄 Cold Boot Restore  {DIM}(авто-восстановление после reboot){NC}")
         _box_back()
         _box_bottom()
         try:
@@ -29615,29 +29530,27 @@ def _menu_security() -> None:
         except KeyboardInterrupt:
             break
         if ch == "1":
-            do_manage_autoban()
-        elif ch == "2":
             do_manage_geoip_block()
-        elif ch == "3":
+        elif ch == "2":
             do_manage_telegram()
-        elif ch == "4":
+        elif ch == "3":
             do_tg_bot_menu()
-        elif ch == "5":
+        elif ch == "4":
             do_manage_ipban()
-        elif ch == "6":
+        elif ch == "5":
             do_manage_fail2ban()
-        elif ch == "7":
+        elif ch == "6":
             do_manage_certbot_monitor()
-        elif ch == "8":
+        elif ch == "7":
             do_ssh_hardening()
             input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch == "9":
+        elif ch == "8":
             do_manage_honeypot()
-        elif ch == "10":
+        elif ch == "9":
             do_scheduler_menu()
-        elif ch == "11":
+        elif ch == "10":
             do_manage_ingress_geoip()
-        elif ch == "12":
+        elif ch == "11":
             do_cold_boot_menu()
         elif ch.lower() == "q" or ch == "":
             break
@@ -29646,9 +29559,6 @@ def _menu_security() -> None:
             time.sleep(1)
 
 
-# =============================================================================
-#  ВСПОМОГАТЕЛЬНАЯ: загрузка state.json в глобальные переменные
-# =============================================================================
 def _load_state_into_globals() -> None:
     global PARAM_DOMAIN, PARAM_UUID, PARAM_PUBLIC_KEY, PARAM_SHORTID
     global IS_IPV6_AVAILABLE, IPV6_PREFLIGHT, PARAM_USE_DNSCRYPT
