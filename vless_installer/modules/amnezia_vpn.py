@@ -42,6 +42,32 @@ _CONTAINER_NAME = "amnezia-awg"
 _STATE_FILE     = Path("/var/lib/xray-installer/state.json")
 _LOG_FILE       = Path("/var/log/vless-install.log")
 
+def _detect_container_name() -> str:
+    try:
+        r = subprocess.run(["docker", "ps", "-a", "--format", "{{.Names}}"], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            names = [n.strip() for n in r.stdout.splitlines() if n.strip()]
+            for name in ("amnezia-awg", "amnezia-awg2", "amnezia-wg", "amnezia-awg-server"):
+                if name in names:
+                    return name
+            for name in names:
+                if name.startswith("amnezia-") and ("awg" in name or "wg" in name):
+                    return name
+            for name in names:
+                if name.startswith("amnezia-"):
+                    return name
+            for name in names:
+                if "amnezia" in name:
+                    return name
+    except Exception:
+        pass
+    return "amnezia-awg"
+
+def _get_container_name() -> str:
+    global _CONTAINER_NAME
+    _CONTAINER_NAME = _detect_container_name()
+    return _CONTAINER_NAME
+
 # ── box_renderer ───────────────────────────────────────────────────────────────
 from vless_installer.modules.box_renderer import (
     _box_top, _box_sep, _box_bottom, _box_row, _box_item,
@@ -70,20 +96,22 @@ def _docker_available() -> bool:
     return r.returncode == 0
 
 def _container_exists() -> bool:
-    """Проверяет, существует ли контейнер amnezia-awg."""
+    """Проверяет, существует ли контейнер Amnezia."""
+    name = _get_container_name()
     r = subprocess.run([
-        "docker", "ps", "-a", "--filter", f"name={_CONTAINER_NAME}",
+        "docker", "ps", "-a", "--filter", f"name={name}",
         "--format", "{{.Names}}"
     ], capture_output=True, text=True)
-    return _CONTAINER_NAME in r.stdout.splitlines()
+    return name in r.stdout.splitlines()
 
 def _container_running() -> bool:
-    """Проверяет, запущен ли контейнер amnezia-awg."""
+    """Проверяет, запущен ли контейнер Amnezia."""
+    name = _get_container_name()
     r = subprocess.run([
-        "docker", "ps", "--filter", f"name={_CONTAINER_NAME}",
+        "docker", "ps", "--filter", f"name={name}",
         "--filter", "status=running", "--format", "{{.Names}}"
     ], capture_output=True, text=True)
-    return _CONTAINER_NAME in r.stdout.splitlines()
+    return name in r.stdout.splitlines()
 
 def _get_container_info() -> dict:
     """Инспектирует контейнер и возвращает полезную информацию."""
@@ -93,11 +121,12 @@ def _get_container_info() -> dict:
         "created": "—",
         "ports": {},
     }
+    name = _get_container_name()
     if not _container_exists():
         return info
     try:
         r = subprocess.run([
-            "docker", "inspect", _CONTAINER_NAME
+            "docker", "inspect", name
         ], capture_output=True, text=True, timeout=5)
         if r.returncode == 0:
             data = json.loads(r.stdout)
@@ -123,15 +152,16 @@ def _get_awg_interface_stats() -> dict:
     stats = {"interface": {}, "peers": []}
     if not _container_running():
         return stats
+    name = _get_container_name()
     try:
         r = subprocess.run([
-            "docker", "exec", _CONTAINER_NAME,
+            "docker", "exec", name,
             "awg", "show", "awg0"
         ], capture_output=True, text=True, timeout=10)
         if r.returncode != 0:
             # Fallback to wg if awg tool isn't found/configured
             r = subprocess.run([
-                "docker", "exec", _CONTAINER_NAME,
+                "docker", "exec", name,
                 "wg", "show", "awg0"
             ], capture_output=True, text=True, timeout=10)
         
@@ -165,29 +195,34 @@ def _get_awg_interface_stats() -> dict:
     return stats
 
 def _container_start() -> bool:
-    _info("Запускаю контейнер amnezia-awg...")
-    r = subprocess.run(["docker", "start", _CONTAINER_NAME], capture_output=True)
+    name = _get_container_name()
+    _info(f"Запускаю контейнер {name}...")
+    r = subprocess.run(["docker", "start", name], capture_output=True)
     return r.returncode == 0
 
 def _container_stop() -> bool:
-    _info("Останавливаю контейнер amnezia-awg...")
-    r = subprocess.run(["docker", "stop", _CONTAINER_NAME], capture_output=True)
+    name = _get_container_name()
+    _info(f"Останавливаю контейнер {name}...")
+    r = subprocess.run(["docker", "stop", name], capture_output=True)
     return r.returncode == 0
 
 def _container_restart() -> bool:
-    _info("Перезапускаю контейнер amnezia-awg...")
-    r = subprocess.run(["docker", "restart", _CONTAINER_NAME], capture_output=True)
+    name = _get_container_name()
+    _info(f"Перезапускаю контейнер {name}...")
+    r = subprocess.run(["docker", "restart", name], capture_output=True)
     return r.returncode == 0
 
 def _container_remove() -> bool:
-    _info("Удаляю контейнер amnezia-awg...")
-    subprocess.run(["docker", "stop", _CONTAINER_NAME], capture_output=True)
-    r = subprocess.run(["docker", "rm", _CONTAINER_NAME], capture_output=True)
+    name = _get_container_name()
+    _info(f"Удаляю контейнер {name}...")
+    subprocess.run(["docker", "stop", name], capture_output=True)
+    r = subprocess.run(["docker", "rm", name], capture_output=True)
     return r.returncode == 0
 
 def _container_logs(lines: int = 50) -> str:
+    name = _get_container_name()
     r = subprocess.run([
-        "docker", "logs", "--tail", str(lines), _CONTAINER_NAME
+        "docker", "logs", "--tail", str(lines), name
     ], capture_output=True, text=True, errors="replace")
     return r.stdout + r.stderr
 
@@ -196,6 +231,7 @@ def _get_client_configs() -> list[dict]:
     if not _container_exists():
         return []
     
+    name = _get_container_name()
     configs = []
     paths_to_check = [
         "/opt/amnezia/clients/",
@@ -206,14 +242,14 @@ def _get_client_configs() -> list[dict]:
     
     for path in paths_to_check:
         r = subprocess.run([
-            "docker", "exec", _CONTAINER_NAME,
+            "docker", "exec", name,
             "find", path, "-name", "*.conf"
         ], capture_output=True, text=True)
         if r.returncode == 0:
             files = [f.strip() for f in r.stdout.splitlines() if f.strip()]
             for f in files:
                 r_cat = subprocess.run([
-                    "docker", "exec", _CONTAINER_NAME,
+                    "docker", "exec", name,
                     "cat", f
                 ], capture_output=True, text=True)
                 if r_cat.returncode == 0:
@@ -241,6 +277,7 @@ def do_amnezia_vpn_menu() -> None:
     while True:
         os.system("clear")
         
+        name = _get_container_name()
         has_docker = _docker_available()
         exists = _container_exists()
         running = _container_running()
@@ -269,15 +306,15 @@ def do_amnezia_vpn_menu() -> None:
             _box_warn("через официальный клиент Amnezia по SSH.")
         elif not exists:
             _box_row(f"  Docker:       {GREEN}🟢 установлен{NC}")
-            _box_row(f"  Контейнер:    {RED}🔴 amnezia-awg не найден{NC}")
+            _box_row(f"  Контейнер:    {RED}🔴 {name} не найден{NC}")
             _box_sep()
-            _box_warn("Контейнер amnezia-awg не запущен и не настроен.")
+            _box_warn(f"Контейнер {name} не запущен и не настроен.")
             _box_warn("Запустите установку AmneziaWG через официальный")
             _box_warn("клиент AmneziaVPN (подключение по SSH к этому серверу).")
         else:
             _box_row(f"  Docker:       {GREEN}🟢 установлен{NC}")
             c_status_color = GREEN if running else RED
-            _box_row(f"  Контейнер:    {c_status_color}🟢 amnezia-awg ({info['status']}){NC}" if running else f"  Контейнер:    {c_status_color}🔴 amnezia-awg ({info['status']}){NC}")
+            _box_row(f"  Контейнер:    {c_status_color}🟢 {name} ({info['status']}){NC}" if running else f"  Контейнер:    {c_status_color}🔴 {name} ({info['status']}){NC}")
             _box_row(f"  Образ:        {info['image']}")
             _box_row(f"  Порт:         {CYAN}{port_str}{NC}")
             _box_row(f"  Активных пиров:{CYAN}{len(stats['peers'])}{NC}")
@@ -295,7 +332,7 @@ def do_amnezia_vpn_menu() -> None:
             _box_item("6", "Логи контейнера (последние 50 строк)")
             _box_item("7", "Показать клиентские конфиги")
             _box_item("8", "Генерировать QR-код для клиента")
-            _box_item("9", f"{RED}Удалить контейнер amnezia-awg{NC}")
+            _box_item("9", f"{RED}Удалить контейнер {name}{NC}")
             
         _box_back()
         _box_bottom()

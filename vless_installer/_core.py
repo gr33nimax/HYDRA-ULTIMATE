@@ -10038,6 +10038,18 @@ def do_subscription_menu() -> None:
 
     while True:
         os.system("clear")
+        
+        # Считаем TTL-пользователей для бейджа в заголовке меню
+        _ttl_data   = _ttl_load()
+        _ttl_expiring = sum(
+            1 for r in _ttl_data.values()
+            if _ttl_expires_within_hours(r.get("expires_at", ""), 24)
+            and not _ttl_is_expired(r.get("expires_at", ""))
+        )
+        _ttl_badge = (
+            f"  {YELLOW}⚠ {_ttl_expiring} истекают < 24ч{NC}" if _ttl_expiring else ""
+        )
+
         _box_top("📋 УПРАВЛЕНИЕ ПОДПИСКАМИ")
         _box_row(f"  {DIM}Управление системой подписок пользователей{NC}")
         _box_sep()
@@ -10086,6 +10098,12 @@ def do_subscription_menu() -> None:
         _box_item("5", "🔗 Получить ссылки подписок для пользователя")
         _box_item("6", "🔄 Перегенерировать токен пользователя")
         _box_item("7", f"🔌 Изменить порт подписок {DIM}(текущий: {sub_port}){NC}")
+        _box_item("8", "📊 Лимиты трафика на пользователя")
+        _box_item(
+            "9",
+            f"⏱  Временные пользователи (TTL)"
+            f"  {DIM}({len(_ttl_data)} записей){NC}{_ttl_badge}"
+        )
         _box_row()
         _box_item_exit("0", "← Назад")
         _box_bottom()
@@ -10134,6 +10152,12 @@ def do_subscription_menu() -> None:
 
         elif ch == "7":
             _change_subscription_port()
+
+        elif ch == "8":
+            do_manage_traffic_limits()
+
+        elif ch == "9":
+            do_manage_ttl_users()
 
 
 def _get_all_sub_users() -> list[dict]:
@@ -17489,328 +17513,7 @@ def _do_export_users_zip(users: list, install_mode: str) -> None:
     _box_bottom()
 
 
-def do_unified_user_manager() -> None:
-    """
-    Единый менеджер пользователей — работает в обоих режимах A и B.
-    Читает и сохраняет пользователей сразу в xray config.json и users.json.
-    """
-    global _BOX_W
-
-    # Определяем режим установки из state.json
-    install_mode = "A"
-    if STATE_FILE.exists():
-        try:
-            install_mode = json.loads(STATE_FILE.read_text()).get("install_mode", "A")
-        except Exception:
-            pass
-
-    # Колонки таблицы — фиксированные, определяют минимальную ширину бокса
-    # 2+3+2+18+2+10+2+22+2+10+2+3 = 78
-    _C_IDX, _C_LBL, _C_NAME, _C_EMAIL, _C_UUID = 3, 18, 10, 22, 13
-    _DATA_MIN_W = 2 + _C_IDX + 2 + _C_LBL + 2 + _C_NAME + 2 + _C_EMAIL + 2 + _C_UUID
-    # BOX_W не может быть меньше ширины строки данных
-    _saved_BOX_W = _BOX_W
-    _BOX_W = max(_DATA_MIN_W, _get_box_width())
-
-    try:
-        while True:
-            users = _unified_load_users()
-            os.system("clear")
-            mode_hint = f"Режим {'B — каскад' if install_mode == 'B' else 'A — стандарт'}"
-            _box_top(f"Менеджер пользователей ({mode_hint})")
-            if not users:
-                _box_row(f"  {YELLOW}Пользователей нет.{NC}")
-            else:
-                # Анти-ANSI выравнивание для метки с emoji
-                ansi_re_hdr = re.compile(r'\x1b\[[0-9;]*m')
-                def _pad_hdr(text: str, w: int) -> str:
-                    """Выравнивание с учётом реальной ширины emoji/кириллицы через _wcslen."""
-                    return text + ' ' * max(0, w - _wcslen(ansi_re_hdr.sub('', text)))
-                _box_row(f"  {BOLD}{'#':<{_C_IDX}}  {'Метка устройства':<{_C_LBL}}  {'Имя':<{_C_NAME}}  {'Email':<{_C_EMAIL}}  {'UUID' + '.' * (_C_UUID - 4)}{NC}")
-                _box_row(f"  {'─'*_C_IDX}  {'─'*_C_LBL}  {'─'*_C_NAME}  {'─'*_C_EMAIL}  {'─'*_C_UUID}")
-                for i, u in enumerate(users, 1):
-                    uuid_short   = u["uuid"][:8] + "~"
-                    src_tag      = u.get("source", "?")
-                    device_label = u.get("device_label", "")
-                    icon         = _device_icon(device_label)
-                    if device_label:
-                        label_raw = f"{icon} {device_label}"
-                    else:
-                        label_raw = f"{DIM}— нет метки —{NC}"
-                    _name  = u.get('name', '—')[:_C_NAME]
-                    _email = u.get('email', '—')[:_C_EMAIL]
-                    _box_row(f"  {i:<{_C_IDX}}  {_pad_hdr(label_raw, _C_LBL)}  "
-                          f"{_name:<{_C_NAME}}  "
-                          f"{_email:<{_C_EMAIL}}  "
-                          f"{CYAN}{uuid_short}{NC} [{src_tag}]")
-            _box_row()
-            _box_item("1", f"Добавить пользователя")
-            _box_item("2", f"Удалить пользователя")
-            _box_item("3", f"Показать ссылку / QR для пользователя")
-            _box_item("4", f"Статистика трафика (детально)")
-            _box_item("5", f"Применить список к Xray (синхронизировать)")
-            _box_item("6", f"Изменить метку устройства")
-            _box_item("7", f"Отключить / Восстановить пользователя")
-            _box_item("8", f"Редактировать пользователя (имя / email)")
-            _box_item("E", f"Экспорт всех пользователей (ZIP с QR-кодами)")
-            _box_item("Q", f"Назад")
-            _box_bottom()
-            ch = input(f"{CYAN}Выбор:{NC} ").strip().lower()
-
-            if ch == "1":
-                print()
-                name  = input("  Имя пользователя (например, Alice): ").strip() or "user"
-                email = input(f"  Email (для статистики, например alice@vpn): ").strip()
-                if not email:
-                    email = f"{name.lower().replace(' ', '_')}@xray"
-                # Проверка дубликатов
-                if any(u.get("email") == email for u in users):
-                    warn(f"Пользователь с email '{email}' уже существует")
-                    input(f"{BLUE}Нажмите Enter...{NC}")
-                    continue
-                # Метка устройства
-                print()
-                print(f"  {DIM}Метка устройства помогает узнавать устройство в статистике трафика.{NC}")
-                print(f"  {DIM}Примеры: iPhone-Ivan, PC-Work, iPad-Child, MacBook-Anna{NC}")
-                device_label = input(f"  Метка устройства (Enter = пропустить): ").strip()
-                new_uuid = gen_uuid()
-                print(f"  {DIM}UUID сгенерирован: {new_uuid}{NC}")
-                users.append({
-                    "uuid":         new_uuid,
-                    "email":        email,
-                    "name":         name,
-                    "device_label": device_label,
-                    "created":      datetime.now(timezone.utc).isoformat(),
-                    "source":       install_mode,
-                })
-                _unified_save_users(users)
-                _log_change("user_add", f"Добавлен: {name} ({email}), метка: {device_label or '—'}")
-                success(f"Пользователь '{name}' добавлен (UUID: {new_uuid[:16]}...)")
-                if device_label:
-                    success(f"Метка устройства: {device_label}")
-                # Показываем все ссылки сразу (IPv4 / IPv6 / Domain)
-                _unified_show_links({"uuid": new_uuid, "email": email, "name": name},
-                                     print_output=True)
-                warn("Не забудьте применить список [5] чтобы Xray подхватил нового пользователя")
-                input(f"{BLUE}Нажмите Enter...{NC}")
-
-            elif ch == "2":
-                if not users:
-                    warn("Нет пользователей для удаления")
-                    time.sleep(1)
-                    continue
-                raw = input("  Номер пользователя для удаления: ").strip()
-                if raw.isdigit() and 1 <= int(raw) <= len(users):
-                    removed = users.pop(int(raw) - 1)
-                    _unified_save_users(users)
-                    _log_change("user_del", f"Удалён: {removed.get('name','?')} ({removed.get('email','')})")
-                    success(f"Удалён: {removed.get('name')} ({removed['uuid'][:16]}...)")
-                    # Чистим файлы ссылок
-                    for p in (f"/root/vless_link_{removed.get('name','')}.txt",
-                               f"/root/vless_qr_{removed.get('name','')}.png"):
-                        Path(p).unlink(missing_ok=True)
-                    warn("Не забудьте применить список [5]")
-                else:
-                    warn("Неверный номер")
-                input(f"{BLUE}Нажмите Enter...{NC}")
-
-            elif ch == "3":
-                if not users:
-                    warn("Нет пользователей")
-                    time.sleep(1)
-                    continue
-                raw = input("  Номер пользователя: ").strip()
-                if not (raw.isdigit() and 1 <= int(raw) <= len(users)):
-                    warn("Неверный номер")
-                    input(f"{BLUE}Нажмите Enter...{NC}")
-                    continue
-                u = users[int(raw) - 1]
-                links = _unified_show_links(u, print_output=True)
-                if not links:
-                    warn("Не удалось сгенерировать ссылки — проверьте state.json")
-                input(f"{BLUE}Нажмите Enter...{NC}")
-
-            elif ch == "4":
-                _do_user_stats_sorted()
-
-            elif ch == "5":
-                print()
-                info(f"Синхронизация {len(users)} пользователей в xray config.json + users.json...")
-                _unified_save_users(users)
-                # Определяем реальный путь к конфигу (CONFIG_DIR первичен)
-                _cfg_candidates = [
-                    CONFIG_DIR / "config.json",
-                    Path("/usr/local/etc/xray/config.json"),
-                ]
-                _cfg_to_test = next(
-                    (str(p) for p in _cfg_candidates if p.exists()), None
-                )
-                if _cfg_to_test is None:
-                    warn("Конфиг Xray не найден — Xray не перезапущен.")
-                    input(f"{BLUE}Нажмите Enter...{NC}")
-                    continue
-                # Валидация: используем "run -test" (работает во всех версиях Xray)
-                val = _run(
-                    [str(XRAY_BIN), "run", "-test", "-config", _cfg_to_test],
-                    capture=True, check=False, quiet=True
-                )
-                if val.returncode == 0:
-                    _run(["systemctl", "restart", "xray"], check=False, quiet=True)
-                    time.sleep(2)
-                    r = _run(["systemctl", "is-active", "xray"], capture=True, check=False)
-                    if r.stdout.strip() == "active":
-                        success(f"Готово — {len(users)} пользователей применено, Xray перезапущен")
-                    else:
-                        # Xray не стартовал — выводим последние строки journalctl
-                        warn("Xray не запустился после обновления пользователей!")
-                        r_jnl = _run(
-                            ["journalctl", "-u", "xray", "-n", "10", "--no-pager"],
-                            capture=True, check=False, quiet=True
-                        )
-                        if r_jnl.stdout.strip():
-                            print(f"{DIM}{r_jnl.stdout.strip()}{NC}")
-                else:
-                    warn("Конфиг невалиден — Xray не перезапущен.")
-                    err_out = (val.stdout + val.stderr).strip()
-                    if err_out:
-                        print(f"{DIM}{err_out[:400]}{NC}")
-                input(f"{BLUE}Нажмите Enter...{NC}")
-
-            elif ch == "6":
-                if not users:
-                    warn("Нет пользователей")
-                    time.sleep(1)
-                    continue
-                print()
-                _box_top("Выберите пользователя")
-                for i, u in enumerate(users, 1):
-                    icon  = _device_icon(u.get("device_label", ""))
-                    label = u.get("device_label") or f"{DIM}нет метки{NC}"
-                    _box_item(f"{i}", f"{u.get('name','—'):<16} {icon} {label}")
-                _box_bottom()
-                raw = input("  Номер пользователя: ").strip()
-                if not (raw.isdigit() and 1 <= int(raw) <= len(users)):
-                    warn("Неверный номер")
-                    input(f"{BLUE}Нажмите Enter...{NC}")
-                    continue
-                u = users[int(raw) - 1]
-                cur_label = u.get("device_label", "")
-                print()
-                if cur_label:
-                    print(f"  Текущая метка: {_device_icon(cur_label)} {cur_label}")
-                print(f"  {DIM}Примеры: iPhone-Ivan, PC-Work, iPad-Child, Router-Home{NC}")
-                new_label = input("  Новая метка (Enter = очистить): ").strip()
-                users[int(raw) - 1]["device_label"] = new_label
-                _unified_save_users(users)
-                if new_label:
-                    success(f"Метка изменена: {_device_icon(new_label)} {new_label}")
-                else:
-                    success("Метка удалена")
-                input(f"{BLUE}Нажмите Enter...{NC}")
-
-            elif ch == "7":
-                if not users:
-                    warn("Нет пользователей")
-                    time.sleep(1)
-                    continue
-                print()
-                _box_top("Вкл/Выкл пользователя")
-                for i, u in enumerate(users, 1):
-                    disabled = u.get("disabled", False)
-                    status   = f"{RED}[ОТКЛ]{NC}" if disabled else f"{GREEN}[акт]{NC}"
-                    icon     = _device_icon(u.get("device_label", ""))
-                    label    = u.get("device_label") or u.get("name", "—")
-                    _box_item(f"{i}", f"{status} {icon} {label:<20} {DIM}{u.get('email','')}{NC}")
-                _box_bottom()
-                raw = input("  Номер пользователя для переключения: ").strip()
-                if not (raw.isdigit() and 1 <= int(raw) <= len(users)):
-                    warn("Неверный номер")
-                    input(f"{BLUE}Нажмите Enter...{NC}")
-                    continue
-                idx     = int(raw) - 1
-                now_dis = _user_toggle_disabled(users, idx)
-                u       = users[idx]
-                label   = u.get("device_label") or u.get("name", u.get("email",""))
-                if now_dis:
-                    warn(f"Пользователь '{label}' ОТКЛЮЧЁН (UUID сохранён)")
-                else:
-                    success(f"Пользователь '{label}' ВОССТАНОВЛЕН")
-                input(f"{BLUE}Нажмите Enter...{NC}")
-
-            elif ch == "8":
-                # Редактирование имени и email пользователя
-                if not users:
-                    warn("Нет пользователей")
-                    time.sleep(1)
-                    continue
-                print()
-                _box_top("Редактировать пользователя")
-                for i, u in enumerate(users, 1):
-                    icon  = _device_icon(u.get("device_label", ""))
-                    _box_item(f"{i}", f"{u.get('name','—'):<16} {icon}  {DIM}{u.get('email','')}{NC}")
-                _box_bottom()
-                raw = input("  Номер пользователя: ").strip()
-                if not (raw.isdigit() and 1 <= int(raw) <= len(users)):
-                    warn("Неверный номер")
-                    input(f"{BLUE}Нажмите Enter...{NC}")
-                    continue
-                idx = int(raw) - 1
-                u   = users[idx]
-                print()
-                print(f"  {BOLD}Текущие данные:{NC}")
-                print(f"    Имя:   {u.get('name','—')}")
-                print(f"    Email: {u.get('email','—')}")
-                print()
-                print(f"  {DIM}Оставьте поле пустым чтобы не менять его.{NC}")
-                new_name  = input(f"  Новое имя  [{u.get('name','')}]: ").strip()
-                new_email = input(f"  Новый email [{u.get('email','')}]: ").strip()
-
-                if not new_name and not new_email:
-                    warn("Ничего не изменено")
-                    input(f"{BLUE}Нажмите Enter...{NC}")
-                    continue
-
-                # Проверяем уникальность нового email
-                if new_email and new_email != u.get("email"):
-                    if any(uu.get("email") == new_email for j, uu in enumerate(users) if j != idx):
-                        warn(f"Email '{new_email}' уже занят другим пользователем")
-                        input(f"{BLUE}Нажмите Enter...{NC}")
-                        continue
-
-                old_email = u.get("email", "")
-                if new_name:
-                    users[idx]["name"]  = new_name
-                if new_email:
-                    users[idx]["email"] = new_email
-
-                # Синхронно сохраняем в users.json и xray config.json
-                _unified_save_users(users)
-                _log_change("user_edit",
-                    f"Изменён: {u.get('name','?')} → name='{new_name or '(без изм.)'}'"
-                    f" email='{new_email or '(без изм.)'}'")
-                success("Данные пользователя обновлены")
-                if new_email:
-                    info(f"Email изменён: {old_email} → {new_email} (обновлено в xray config + users.json)")
-                warn("Не забудьте применить список [5] чтобы Xray подхватил изменение email")
-                input(f"{BLUE}Нажмите Enter...{NC}")
-
-            elif ch == "e":
-                if not users:
-                    warn("Нет пользователей для экспорта")
-                    input(f"{BLUE}Нажмите Enter...{NC}")
-                    continue
-                _do_export_users_zip(users, install_mode)
-                input(f"{BLUE}Нажмите Enter...{NC}")
-
-            elif ch in ("q", ""):
-                break
-            else:
-                warn("Неверный выбор")
-                time.sleep(1)
-    finally:
-        _BOX_W = _saved_BOX_W
-
-
+# do_unified_user_manager deleted in favor of subscription system
 # ---------------------------------------------------------------------------
 #  5. АВТООБНОВЛЕНИЕ GEOIP/GEOSITE (независимо от split tunnel)
 # ---------------------------------------------------------------------------
@@ -28997,86 +28700,7 @@ def _menu_migration() -> None:
 # =============================================================================
 #  ПОДМЕНЮ: 2 — УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ
 # =============================================================================
-def _menu_users() -> None:
-    while True:
-        os.system("clear")
-        print()
-        # Считаем TTL-пользователей для бейджа в заголовке меню
-        _ttl_data   = _ttl_load()
-        _ttl_expiring = sum(
-            1 for r in _ttl_data.values()
-            if _ttl_expires_within_hours(r.get("expires_at", ""), 24)
-            and not _ttl_is_expired(r.get("expires_at", ""))
-        )
-        _ttl_badge = (
-            f"  {YELLOW}⚠ {_ttl_expiring} истекают < 24ч{NC}" if _ttl_expiring else ""
-        )
-
-        _box_top("👥  УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ")
-        _box_row()
-        _box_item("1", f"👤 Менеджер пользователей  {DIM}(Добавление / Удаление){NC}")
-        _box_item("2", "🔗 Показать ссылки + QR-коды")
-        _box_item("3", f"📲 Разовая ссылка + QR  {DIM}(для передачи конфига){NC}")
-        _box_item("4", "📊 Лимиты трафика на пользователя")
-        _box_item("5", "📋 Генерация Clash Meta / Sing-box конфига")
-        _box_item(
-            "6",
-            f"⏱  Временные пользователи (TTL)"
-            f"  {DIM}({len(_ttl_data)} записей){NC}{_ttl_badge}"
-        )
-        _box_item("7", f"📋 Подписки  {DIM}(Генератор, HTTP-сервер, Nginx){NC}")
-        _box_item("E", f"📤 Экспорт конфига клиента  {DIM}(файл / SFTP / QR){NC}")
-        _box_item("F", f"🔀 Ссылка + конфиг с фрагментацией  {DIM}(обход DPI){NC}")
-        _box_item("G", f"📲 Поделиться конфигом  {DIM}(QR → скачать без scp){NC}")
-        _box_row()
-        _box_back()
-        _box_bottom()
-        try:
-            ch = input(f"{CYAN}Выбор:{NC} ").strip()
-        except KeyboardInterrupt:
-            break
-        if ch == "1":
-            do_unified_user_manager()
-        elif ch == "2":
-            _load_state_into_globals()
-            if not PARAM_DOMAIN:
-                warn("Параметры не найдены. Сначала установите (раздел 1).")
-                time.sleep(2)
-                continue
-            if INSTALL_MODE == "B":
-                generate_chain_summary()
-                # При AWG entry-нода существует — показываем ссылки для клиентов
-                if AWG_EXIT_ENABLED:
-                    print()
-                    generate_client_links()
-            else:
-                generate_client_links()
-            input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch == "3":
-            do_share_config_server()
-            input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch == "4":
-            do_manage_traffic_limits()
-        elif ch == "5":
-            do_generate_client_config()
-            input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch == "6":
-            do_manage_ttl_users()
-        elif ch == "7":
-            do_subscription_menu()
-        elif ch.lower() == "e":
-            do_export_client_config()
-            input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch.lower() == "f":
-            do_fragment_link_menu()
-        elif ch.lower() == "g":
-            do_fragment_share_menu()
-        elif ch.lower() == "q" or ch == "":
-            break
-        else:
-            warn("Неверный выбор.")
-            time.sleep(1)
-
+# _menu_users deleted in favor of subscription system
 
 # =============================================================================
 #  ПОДМЕНЮ: 3 — НАСТРОЙКИ СЕТИ
@@ -30463,8 +30087,8 @@ def main_menu() -> None:
             _box_row(f"     {DIM}Установка, Миграция, Оптимизация, Обновление{NC}")
             _box_sep()
             _box_row()
-            _box_row(f"  {CYAN}2{NC}  👥 {TITLE}Управление пользователями{NC}")
-            _box_row(f"     {DIM}Пользователи, Ссылки/QR, Лимиты, Конфиги{NC}")
+            _box_row(f"  {CYAN}2{NC}  👥 {TITLE}Управление пользователями и подписками{NC}")
+            _box_row(f"     {DIM}Подписки, Лимиты трафика, TTL, Конфиги{NC}")
             _box_sep()
             _box_row()
             _box_row(f"  {CYAN}3{NC}  🌐 {TITLE}Настройки сети{NC}")
@@ -30538,7 +30162,7 @@ def main_menu() -> None:
 
         elif choice == "2":
             _load_state_into_globals()
-            _menu_users()
+            do_subscription_menu()
 
         elif choice == "3":
             _load_state_into_globals()
