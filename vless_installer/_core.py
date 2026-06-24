@@ -9882,6 +9882,115 @@ def _change_subscription_port() -> None:
     time.sleep(2)
 
 
+def do_update_all_user_configs() -> None:
+    """Проверяет пользователей подписок и создает конфигурации в NaiveProxy, Mieru и AmneziaWG."""
+    print()
+    _box_top("СИНХРОНИЗАЦИЯ И ОБНОВЛЕНИЕ КОНФИГУРАЦИЙ")
+    _box_row()
+    
+    state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+    sub_tokens = state.get("sub_tokens", {})
+    if not sub_tokens:
+        _box_warn("Нет зарегистрированных пользователей подписок.")
+        _box_bottom()
+        input(f"\n{BLUE}Нажмите Enter...{NC}")
+        return
+
+    # Проверяем, какие протоколы установлены в принципе
+    np_installed = False
+    try:
+        from vless_installer.modules.naiveproxy import _is_installed as np_is_installed
+        np_installed = np_is_installed()
+    except Exception:
+        pass
+        
+    mieru_installed = False
+    try:
+        from vless_installer.modules.mieru import _is_installed as mieru_is_installed
+        mieru_installed = mieru_is_installed()
+    except Exception:
+        pass
+
+    awg_installed = False
+    try:
+        from vless_installer.modules.amnezia_vpn import _container_exists as awg_exists
+        awg_installed = awg_exists()
+    except Exception:
+        pass
+
+    _box_info("Статус установленных протоколов на сервере:")
+    _box_row(f"  NaiveProxy: {'🟢 установлен' if np_installed else '🔴 не установлен'}")
+    _box_row(f"  Mieru:      {'🟢 установлен' if mieru_installed else '🔴 не установлен'}")
+    _box_row(f"  AmneziaWG:  {'🟢 установлен' if awg_installed else '🔴 не установлен'}")
+    _box_sep()
+
+    changes_made = 0
+    
+    for email in sub_tokens.keys():
+        _box_info(f"Проверка пользователя {email}:")
+        
+        # 1. NaiveProxy
+        if np_installed:
+            try:
+                from vless_installer.modules.naiveproxy import add_user_noninteractive as np_add
+                res = np_add(email)
+                if res:
+                    _box_ok(f"  NaiveProxy: создан новый аккаунт")
+                    changes_made += 1
+                else:
+                    _box_row(f"  NaiveProxy: уже существует")
+            except Exception as e:
+                _box_warn(f"  NaiveProxy: ошибка создания: {e}")
+        else:
+            _box_row("  NaiveProxy: пропущено (протокол не установлен)")
+
+        # 2. Mieru
+        if mieru_installed:
+            try:
+                from vless_installer.modules.mieru import add_user_noninteractive as mieru_add
+                res = mieru_add(email)
+                if res:
+                    _box_ok(f"  Mieru: создан новый аккаунт")
+                    changes_made += 1
+                else:
+                    _box_row(f"  Mieru: уже существует")
+            except Exception as e:
+                _box_warn(f"  Mieru: ошибка создания: {e}")
+        else:
+            _box_row("  Mieru: пропущено (протокол не установлен)")
+
+        # 3. AmneziaWG
+        if awg_installed:
+            try:
+                from vless_installer.modules.amnezia_vpn import ensure_awg_user
+                username_clean = re.sub(r'[^a-zA-Z0-9_-]', '', email)
+                if not username_clean:
+                    _box_warn(f"  AmneziaWG: имя пользователя '{email}' недопустимо для AWG")
+                else:
+                    created, msg = ensure_awg_user(username_clean)
+                    if created:
+                        _box_ok(f"  AmneziaWG: создан новый аккаунт")
+                        changes_made += 1
+                    else:
+                        if "уже существует" in msg:
+                            _box_row(f"  AmneziaWG: уже существует")
+                        else:
+                            _box_warn(f"  AmneziaWG: {msg}")
+            except Exception as e:
+                _box_warn(f"  AmneziaWG: ошибка создания: {e}")
+        else:
+            _box_row("  AmneziaWG: пропущено (протокол не установлен)")
+        _box_sep()
+
+    if changes_made > 0:
+        success("Все отсутствующие конфигурации успешно созданы!")
+    else:
+        info("Все конфигурации пользователей уже актуальны, изменений не требуется.")
+        
+    _box_bottom()
+    input(f"\n{BLUE}Нажмите Enter для продолжения...{NC}")
+
+
 def do_subscription_menu() -> None:
     """Интерактивное меню для управления подписками пользователей."""
     ensure_subscription_tokens()
@@ -9954,6 +10063,7 @@ def do_subscription_menu() -> None:
             f"⏱  Временные пользователи (TTL)"
             f"  {DIM}({len(_ttl_data)} записей){NC}{_ttl_badge}"
         )
+        _box_item("10", "🔄 Синхронизировать и обновить все конфигурации")
         _box_row()
         _box_item_exit("0", "← Назад")
         _box_bottom()
@@ -10008,6 +10118,9 @@ def do_subscription_menu() -> None:
 
         elif ch == "9":
             do_manage_ttl_users()
+
+        elif ch == "10":
+            do_update_all_user_configs()
 
         elif ch in ("a", "A"):
             _ensure_awg_for_user()
