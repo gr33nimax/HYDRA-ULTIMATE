@@ -68,6 +68,28 @@ def _load_xray_config() -> dict:
     return {}
 
 
+def _load_naiveproxy_state() -> dict:
+    """Загрузить naiveproxy.json."""
+    p = Path("/var/lib/xray-installer/naiveproxy.json")
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def _load_mieru_state() -> dict:
+    """Загрузить mieru.json."""
+    p = Path("/var/lib/xray-installer/mieru.json")
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
 def _find_user_uuid(email: str) -> Optional[str]:
     """Найти UUID пользователя по email в xray config."""
     cfg = _load_xray_config()
@@ -129,11 +151,11 @@ def generate_vless_links(state: dict, uuid_str: str, email: str) -> list[str]:
 
 def generate_naive_link(state: dict, email: str) -> Optional[str]:
     """Генерация naive+https:// URI если NaiveProxy установлен."""
-    naive = state.get("naiveproxy", {})
+    naive = _load_naiveproxy_state()
     if not naive.get("installed"):
         return None
 
-    host = state.get("domain", "") or _get_server_ip()
+    host = naive.get("domain", "") or state.get("domain", "") or _get_server_ip()
     port = naive.get("port", 8443)
 
     # Ищем пользователя
@@ -263,13 +285,13 @@ def generate_clash_yaml(state: dict, uuid_str: str, email: str) -> str:
       path: {xhttp_path}""")
 
     # NaiveProxy
-    naive = state.get("naiveproxy", {})
+    naive = _load_naiveproxy_state()
     if naive.get("installed"):
         for u in naive.get("users", []):
             if u.get("username") == email:
                 name = f"{email} Naive"
                 proxy_names.append(name)
-                host = state.get("domain", "") or _get_server_ip()
+                host = naive.get("domain", "") or state.get("domain", "") or _get_server_ip()
                 proxies.append(f"""  - name: {_yaml_str(name)}
     type: http
     server: {host}
@@ -393,13 +415,13 @@ def generate_singbox_json(state: dict, uuid_str: str, email: str) -> str:
             })
 
     # NaiveProxy → sing-box naive outbound
-    naive = state.get("naiveproxy", {})
+    naive = _load_naiveproxy_state()
     if naive.get("installed"):
         for u in naive.get("users", []):
             if u.get("username") == email:
                 tag = f"{email}-naive"
                 tags.append(tag)
-                host = state.get("domain", "") or _get_server_ip()
+                host = naive.get("domain", "") or state.get("domain", "") or _get_server_ip()
                 outbounds.append({
                     "type": "naive",
                     "tag": tag,
@@ -415,8 +437,8 @@ def generate_singbox_json(state: dict, uuid_str: str, email: str) -> str:
                 })
                 break
 
-    # Mieru → sing-box socks5 outbound (mieru слушает socks5)
-    mieru = state.get("mieru", {})
+    # Mieru → sing-box mieru outbound
+    mieru = _load_mieru_state()
     if mieru.get("installed"):
         for u in mieru.get("users", []):
             if u.get("username") == email:
@@ -424,13 +446,14 @@ def generate_singbox_json(state: dict, uuid_str: str, email: str) -> str:
                 tags.append(tag)
                 host = state.get("domain", "") or _get_server_ip()
                 outbounds.append({
-                    "type": "socks",
+                    "type": "mieru",
                     "tag": tag,
                     "server": host,
-                    "server_port": mieru.get("port", 8964),
+                    "server_port": mieru.get("port_start", 8964),
+                    "transport": mieru.get("protocol", "TCP").upper(),
                     "username": u.get("username", ""),
                     "password": u.get("password", ""),
-                    "version": "5",
+                    "multiplexing": "MULTIPLEXING_HIGH",
                 })
                 break
 

@@ -9490,7 +9490,13 @@ def ensure_subscription_tokens() -> None:
                 pass
             
         # NaiveProxy users
-        naive_users = state.get("naiveproxy", {}).get("users", [])
+        naive_users = []
+        np_state_file = Path("/var/lib/xray-installer/naiveproxy.json")
+        if np_state_file.exists():
+            try:
+                naive_users = json.loads(np_state_file.read_text(encoding="utf-8")).get("users", [])
+            except Exception:
+                pass
         for nu in naive_users:
             username = nu.get("username")
             if username and username not in sub_tokens:
@@ -9498,7 +9504,13 @@ def ensure_subscription_tokens() -> None:
                 changed = True
                 
         # Mieru users
-        mieru_users = state.get("mieru", {}).get("users", [])
+        mieru_users = []
+        mieru_state_file = Path("/var/lib/xray-installer/mieru.json")
+        if mieru_state_file.exists():
+            try:
+                mieru_users = json.loads(mieru_state_file.read_text(encoding="utf-8")).get("users", [])
+            except Exception:
+                pass
         for mu in mieru_users:
             username = mu.get("username")
             if username and username not in sub_tokens:
@@ -10050,7 +10062,13 @@ def _get_all_sub_users() -> list[dict]:
             state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
             
             # NaiveProxy users
-            naive_users = state.get("naiveproxy", {}).get("users", [])
+            naive_users = []
+            np_state_file = Path("/var/lib/xray-installer/naiveproxy.json")
+            if np_state_file.exists():
+                try:
+                    naive_users = json.loads(np_state_file.read_text(encoding="utf-8")).get("users", [])
+                except Exception:
+                    pass
             for nu in naive_users:
                 username = nu.get("username")
                 if username and username not in seen:
@@ -10058,7 +10076,13 @@ def _get_all_sub_users() -> list[dict]:
                     seen.add(username)
                     
             # Mieru users
-            mieru_users = state.get("mieru", {}).get("users", [])
+            mieru_users = []
+            mieru_state_file = Path("/var/lib/xray-installer/mieru.json")
+            if mieru_state_file.exists():
+                try:
+                    mieru_users = json.loads(mieru_state_file.read_text(encoding="utf-8")).get("users", [])
+                except Exception:
+                    pass
             for mu in mieru_users:
                 username = mu.get("username")
                 if username and username not in seen:
