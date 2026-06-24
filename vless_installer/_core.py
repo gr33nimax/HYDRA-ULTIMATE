@@ -242,18 +242,18 @@ def _make_banner(show_ram_warning: bool = True) -> str:
     def _irow(t):
         return "║  ║ " + t + " " * (_OW - 8 - len(t)) + " ║  ║"
     _art_lines = [
-        "██╗   ██╗██╗     ███████╗███████╗███████╗",
-        "██║   ██║██║     ██╔════╝██╔════╝██╔════╝",
-        "██║   ██║██║     █████╗  ███████╗███████╗",
-        "╚██╗ ██╔╝██║     ██╔══╝  ╚════██║╚════██║",
-        " ╚████╔╝ ███████╗███████╗███████║███████║",
-        "  ╚═══╝  ╚══════╝╚══════╝╚══════╝╚══════╝",
+        "  ██╗  ██╗██╗   ██╗██████╗ ██████╗  █████╗ ",
+        "  ██║  ██║╚██╗ ██╔╝██╔══██╗██╔══██╗██╔══██╗",
+        "  ███████║ ╚████╔╝ ██║  ██║██████╔╝███████║",
+        "  ██╔══██║  ╚██╔╝  ██║  ██║██╔══██╗██╔══██║",
+        "  ██║  ██║   ██║   ██████╔╝██║  ██║██║  ██║",
+        "  ╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝",
     ]
     _info_lines = [
-        "VLESS REALITY + xHTTP TLS INSTALLER v4.12.10",
-        "IPv6 DualStack | 6 Templates | SHA256 Verify",
-        "Balancer: RoundRobin | LeastPing | LeastLoad",
-        "Dashboard | FP Rotate | GeoCheck | Multi-User",
+        "HYDRA: MULTI-PROTOCOL PROXY MANAGER v5.0.0",
+        "Mieru | NaiveProxy | SlipGate | WARP | MTProxy",
+        "VPN & DNS Tunnels | SOCKS5 & TCP Obfuscator",
+        "Dynamic Subscriptions | AutoBan | Fail2ban",
     ]
     # Строки предупреждения о RAM (красные + жирные через ANSI)
     _BOLD_RED = '\033[1;31m'
@@ -29632,37 +29632,17 @@ def _menu_security() -> None:
     while True:
         os.system("clear")
         _load_state_into_globals()
-        _awg = AWG_EXIT_ENABLED and INSTALL_MODE == "B"
-        _awg_na = f"  {DIM}(AWG: недоступно — нет VLESS-нод){NC}" if _awg else f"  {DIM}(Режим B){NC}"
-        _awg_na7 = f"  {DIM}(AWG: недоступно){NC}" if _awg else f"  {DIM}(при отказе всех нод){NC}"
-        _bal_na  = f"  {DIM}(AWG: недоступно){NC}" if _awg else f"  {DIM}(latency + bandwidth + load){NC}"
         _box_top("🛡️  БЕЗОПАСНОСТЬ И АВТОМАТИЗАЦИЯ")
         _box_item("1", f"🚫 AutoBan  {DIM}(защита от перебора / TLS-ошибки){NC}")
         _box_item("2", f"🛡️  GeoIP Block  {DIM}(allowlist / blocklist / сканеры){NC}")
-        _box_item("3", "🗺️  Управление GeoIP / GeoSite файлами")
-        _box_item("4", "🔑 Ротация UUID и Fingerprint")
-        _box_item("5", f"📬 Telegram Admin Panel  {DIM}(управление сервером через бот){NC}")
-        _box_item("TB", f"🤖 Telegram User Bot  {DIM}(подписки для пользователей){NC}")
-        _box_item("PH", f"⚡ Port Hopping  {DIM}(диапазон портов против блокировки){NC}")
-        _box_sep()
-        _box_item("6", f"📡 Failover статус exit-нод{_awg_na}")
-        _box_item("7", f"🔀 Авто-фолбэк в Режим A{_awg_na7}")
-        _box_item("8",  "🐕 Watchdog авторестарт Xray")
-        _box_item("NW", f"🔁 nginx Watchdog  {DIM}(перезапуск nginx при падении){NC}")
-        _box_item("W",  f"🔌 AWG Tunnel Watchdog  {DIM}(fallback при падении awg0){NC}")
-        _box_item("N",  f"🌐 AWG Multi-Node  {DIM}(ноды, failover, SSH-защита){NC}")
-        _box_item("IP", f"📦 ipset Persist  {DIM}(восстановление ipset при reboot){NC}")
-        _box_item("IB", f"🚫 IP-Бан  {DIM}(iptables/ipset: IP / подсеть / диапазон / ASN){NC}")
-        _box_item("FB", f"🛡️  Fail2ban  {DIM}(банит за подбор пароля / лишние запросы){NC}")
-        _box_item("CL", f"🔗 Кластер Exit Nodes  {DIM}(все Exit Nodes по SSH){NC}")
-        _box_item("9", f"🔒 Мониторинг certbot renew  {DIM}(алерт при истечении){NC}")
-        _box_item("H", f"🔒 SSH Hardening  {DIM}(порт / ключи / AllowUsers){NC}")
-        _box_sep()
-        _box_item("P", f"🍯 Honeypot-порт  {DIM}(ловушка для сканеров){NC}")
-        _box_item("D", f"🔍 DPI-детектор  {DIM}(блокировка зондирования){NC}")
-        _box_item("B", f"⚡ Smart Balancer{_bal_na}")
-        _box_item("S", f"🗓️  Планировщик задач  {DIM}(все cron/systemd в одном месте){NC}")
-        _box_sep()
+        _box_item("3", f"📬 Telegram Admin Panel  {DIM}(управление сервером через бот){NC}")
+        _box_item("4", f"🤖 Telegram User Bot  {DIM}(подписки для пользователей){NC}")
+        _box_item("5", f"🚫 IP-Бан  {DIM}(iptables/ipset: IP / подсеть / ASN){NC}")
+        _box_item("6", f"🛡️  Fail2ban  {DIM}(банит за подбор пароля / лишние запросы){NC}")
+        _box_item("7", f"🔒 Мониторинг certbot renew  {DIM}(алерт при истечении){NC}")
+        _box_item("8", f"🔒 SSH Hardening  {DIM}(порт / ключи / AllowUsers){NC}")
+        _box_item("9", f"🍯 Honeypot-порт  {DIM}(ловушка для сканеров){NC}")
+        _box_item("10", f"🗓️  Планировщик задач  {DIM}(все cron/systemd в одном месте){NC}")
         # Показываем статус ingress-блокировки прямо в меню
         _ing = _ingress_state_load()
         _ing_on = _ing.get("enabled")
@@ -29670,11 +29650,8 @@ def _menu_security() -> None:
             f"{GREEN}вкл  порт {_ing.get('port','')}  {_ing.get('cidrs_v4',0)} CIDR{NC}"
             if _ing_on else f"{DIM}выкл{NC}"
         )
-        _box_item("G", f"🛡️  Блокировка входящих из РФ  {_ing_str}")
-        _box_sep()
-        _box_item("BK", f"💾 Бэкапы конфига Xray  {DIM}(история конфигов, откат){NC}")
-        _box_item("CB", f"🔄 Cold Boot Restore  {DIM}(авто-восстановление после reboot){NC}")
-        _box_item("HM", f"📡 Health Monitor нод  {DIM}(проверка exit-нод по расписанию){NC}")
+        _box_item("11", f"🛡️  Блокировка входящих из РФ  {_ing_str}")
+        _box_item("12", f"🔄 Cold Boot Restore  {DIM}(авто-восстановление после reboot){NC}")
         _box_back()
         _box_bottom()
         try:
@@ -29686,87 +29663,26 @@ def _menu_security() -> None:
         elif ch == "2":
             do_manage_geoip_block()
         elif ch == "3":
-            do_manage_geo_update()
-        elif ch == "4":
-            _menu_rotation()
-        elif ch == "5":
             do_manage_telegram()
-        elif ch.lower() == "tb":
+        elif ch == "4":
             do_tg_bot_menu()
-        elif ch.lower() == "ph":
-            do_port_hopping_menu()
-        elif ch == "6":
-            do_failover_status()
-        elif ch == "7":
-            do_manage_auto_fallback()
-        elif ch == "8":
-            do_manage_watchdog()
-        elif ch.lower() == "nw":
-            do_manage_nginx_watchdog()
-        elif ch.lower() == "w":
-            do_manage_awg_watchdog()
-        elif ch.lower() == "ip":
-            do_manage_ipset_persist()
-        elif ch.lower() == "ib":
+        elif ch == "5":
             do_manage_ipban()
-        elif ch.lower() == "fb":
+        elif ch == "6":
             do_manage_fail2ban()
-        elif ch.lower() == "cl":
-            do_cluster_menu()
-        elif ch.lower() == "n":
-            # === PATCH v2: AWG Multi-Node Management ===
-            do_manage_awg_nodes()
-        elif ch == "9":
+        elif ch == "7":
             do_manage_certbot_monitor()
-        elif ch.lower() == "h":
+        elif ch == "8":
             do_ssh_hardening()
             input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch.lower() == "p":
+        elif ch == "9":
             do_manage_honeypot()
-        elif ch.lower() == "d":
-            do_manage_dpi_detector()
-        elif ch.lower() == "b":
-            do_manage_smart_balancer()
-        elif ch.lower() == "s":
+        elif ch == "10":
             do_scheduler_menu()
-        elif ch.lower() == "g":
+        elif ch == "11":
             do_manage_ingress_geoip()
-        elif ch.lower() == "bk":
-            do_backup_menu()
-        elif ch.lower() == "cb":
+        elif ch == "12":
             do_cold_boot_menu()
-        elif ch.lower() == "hm":
-            do_health_monitor_menu()
-        elif ch.lower() == "q" or ch == "":
-            break
-        else:
-            warn("Неверный выбор.")
-            time.sleep(1)
-
-
-def _menu_rotation() -> None:
-    """Объединённое подменю ротации UUID и Fingerprint."""
-    while True:
-        os.system("clear")
-        print()
-        _box_top("🔑  РОТАЦИЯ UUID И FINGERPRINT")
-        _box_row()
-        _box_item("1", "🔑 Ротация UUID по расписанию")
-        _box_item("2", "🎭 Авто-смена TLS Fingerprint")
-        _box_item("3", "🔐 Ротация REALITY-ключей (x25519 + ShortID)")
-        _box_row()
-        _box_back()
-        _box_bottom()
-        try:
-            ch = input(f"{CYAN}Выбор:{NC} ").strip()
-        except KeyboardInterrupt:
-            break
-        if ch == "1":
-            do_manage_uuid_rotation()
-        elif ch == "2":
-            do_manage_fingerprint()
-        elif ch == "3":
-            do_manage_reality_keys()
         elif ch.lower() == "q" or ch == "":
             break
         else:
@@ -29914,7 +29830,7 @@ def main_menu() -> None:
             _BOX_W_saved = _BOX_W
             _BOX_W = 64
             _box_top()
-            _box_row(f"  {BOLD}{TITLE}VLESS-ULTIMATE X v5.0.0{NC}  {DIM}│{NC}  {mode_str}")
+            _box_row(f"  {BOLD}{TITLE}HYDRA MULTI-PROXY MANAGER v5.0.0{NC}  {DIM}│{NC}  {mode_str}")
             _box_sep()
             _box_row()
             _box_row(f"  {CYAN}1{NC}  ⚙️  {TITLE}Установка и Система{NC}")
@@ -29941,39 +29857,35 @@ def main_menu() -> None:
             _box_row(f"     {DIM}Telegram MTProto-прокси (Rust/Tokio){NC}")
             _box_sep()
             _box_row()
-            _box_row(f"  {CYAN}7{NC}  🚀 {TITLE}Hysteria2 транспорт{NC}")
-            _box_row(f"     {DIM}Exit-нода, Балансировщик, Health, DPI, Cert{NC}")
-            _box_sep()
-            _box_row()
-            _box_row(f"  {CYAN}8{NC}  📲 {TITLE}VK Turn Tunnel{NC}")
+            _box_row(f"  {CYAN}7{NC}  📲 {TITLE}VK Turn Tunnel{NC}")
             _box_row(f"     {DIM}FreeTurn (vk-turn-proxy) · WireTurn (Turnable){NC}")
             _box_row()
             _box_sep()
-            _box_row(f"  {CYAN}9{NC}  🌐 {TITLE}SlipGate / SlipNet{NC}")
+            _box_row(f"  {CYAN}8{NC}  🌐 {TITLE}SlipGate / SlipNet{NC}")
             _box_row(f"     {DIM}DNS-туннели (DNSTT, NoizDNS, Slipstream) — обход полных блокировок{NC}")
             _box_row()
             _box_sep()
-            _box_row(f"  {CYAN}10{NC} 🔒 {TITLE}qWDTT (WireGuard/TURN){NC}")
+            _box_row(f"  {CYAN}9{NC} 🔒 {TITLE}qWDTT (WireGuard/TURN){NC}")
             _box_row(f"     {DIM}WireGuard через TURN ВКонтакте — пароли, TTL, Telegram-бот{NC}")
             _box_row()
             _box_sep()
-            _box_row(f"  {CYAN}11{NC} 🔐 {TITLE}NaiveProxy{NC}")
+            _box_row(f"  {CYAN}10{NC} 🔐 {TITLE}NaiveProxy{NC}")
             _box_row(f"     {DIM}HTTPS/HTTP2 + Chromium fingerprint + probe resistance{NC}")
             _box_row()
             _box_sep()
-            _box_row(f"  {CYAN}12{NC} 🔒 {TITLE}Mieru{NC}")
+            _box_row(f"  {CYAN}11{NC} 🔒 {TITLE}Mieru{NC}")
             _box_row(f"     {DIM}mTLS + random padding — маскировка без домена{NC}")
             _box_row()
             _box_sep()
-            _box_row(f"  {CYAN}13{NC} 📹 {TITLE}olcRTC{NC}  {DIM}(Beta){NC}")
+            _box_row(f"  {CYAN}12{NC} 📹 {TITLE}olcRTC{NC}  {DIM}(Beta){NC}")
             _box_row(f"     {DIM}TCP-over-WebRTC — туннель под видеозвонок (Jitsi/Телемост/WB Stream){NC}")
             _box_row()
             _box_sep()
-            _box_row(f"  {CYAN}14{NC} ☁️  {TITLE}WebDAV Tunnel{NC}")
+            _box_row(f"  {CYAN}13{NC} ☁️  {TITLE}WebDAV Tunnel{NC}")
             _box_row(f"     {DIM}TCP/SOCKS5 поверх WebDAV-файлов — маскировка под облако{NC}")
             _box_row()
             _box_sep()
-            _box_row(f"  {CYAN}15{NC} 🛡️  {TITLE}AmneziaVPN{NC}")
+            _box_row(f"  {CYAN}14{NC} 🛡️  {TITLE}AmneziaVPN{NC}")
             _box_row(f"     {DIM}AWG через Docker — управление контейнером Amnezia{NC}")
             _box_row()
             _box_sep()
@@ -29981,7 +29893,7 @@ def main_menu() -> None:
             _box_bottom()
             _BOX_W = _BOX_W_saved
             print()
-            choice = input(f"{CYAN}Выбор (1–15 / 0):{NC} ").strip()
+            choice = input(f"{CYAN}Выбор (1–14 / 0):{NC} ").strip()
         except KeyboardInterrupt:
             print()
             print(f"{GREEN}До свидания! 👋{NC}")
@@ -30017,44 +29929,41 @@ def main_menu() -> None:
                 time.sleep(2)
 
         elif choice == "7":
-            do_hysteria2_menu()
-
-        elif choice == "8":
             try:
                 do_vkturn_menu()
             except ImportError as _e:
                 warn(f"Модуль VK Turn Tunnel не найден: {_e}")
                 time.sleep(2)
 
-        elif choice == "9":
+        elif choice == "8":
             try:
                 do_slipgate_menu()
             except ImportError as _e:
                 warn(f"Модуль SlipGate не найден: {_e}")
                 time.sleep(2)
 
-        elif choice == "10":
+        elif choice == "9":
             try:
                 do_wdtt_menu()
             except ImportError as _e:
                 warn(f"Модуль qWDTT не найден: {_e}")
                 time.sleep(2)
 
-        elif choice == "11":
+        elif choice == "10":
             try:
                 do_naiveproxy_menu()
             except ImportError as _e:
                 warn(f"Модуль NaiveProxy не найден: {_e}")
                 time.sleep(2)
 
-        elif choice == "12":
+        elif choice == "11":
             try:
                 do_mieru_menu()
             except ImportError as _e:
                 warn(f"Модуль Mieru не найден: {_e}")
                 time.sleep(2)
 
-        elif choice == "13":
+        elif choice == "12":
             try:
                 from vless_installer.modules.olcrtc import do_olcrtc_menu
                 do_olcrtc_menu()
@@ -30062,14 +29971,14 @@ def main_menu() -> None:
                 warn(f"Модуль olcRTC не найден: {_e}")
                 time.sleep(2)
 
-        elif choice == "14":
+        elif choice == "13":
             try:
                 do_webdav_tunnel_menu()
             except ImportError as _e:
                 warn(f"Модуль WebDAV Tunnel не найден: {_e}")
                 time.sleep(2)
 
-        elif choice == "15":
+        elif choice == "14":
             try:
                 do_amnezia_vpn_menu()
             except Exception as _e:
@@ -30086,10 +29995,7 @@ def main_menu() -> None:
             time.sleep(1)
 
 
-# =============================================================================
-#  ЗАГЛУШКА apply_sysctl_and_limits — вызывается из _menu_install_system
-#  (реальная функция может называться иначе — скорректируйте при необходимости)
-# =============================================================================
+
 def apply_sysctl_and_limits() -> None:
     """Применяет настройки sysctl и limits.conf для оптимизации производительности."""
     sysctl_conf = OPTIMIZER_CONF
