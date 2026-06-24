@@ -252,7 +252,7 @@ def _make_banner(show_ram_warning: bool = True) -> str:
     _info_lines = [
         "HYDRA: MULTI-PROTOCOL PROXY MANAGER v5.0.0",
         "Mieru | NaiveProxy | SlipGate | WARP | MTProxy",
-        "VPN & DNS Tunnels | SOCKS5 & TCP Obfuscator",
+        "VPN & DNS Tunnels",
         "Dynamic Subscriptions | AutoBan | Fail2ban",
     ]
     # Строки предупреждения о RAM (красные + жирные через ANSI)
@@ -28812,23 +28812,16 @@ def do_manage_xtls_flow() -> None:
 def _menu_network() -> None:
     while True:
         os.system("clear")
+        _load_state_into_globals()
         print()
         _box_top("🌐  НАСТРОЙКИ СЕТИ")
         _box_row()
-        _box_item("1", f"🔀 Раздельное туннелирование  {DIM}(РФ подсети){NC}")
-        _box_item("2", "🔍 Диагностика split tunneling")
-        _box_item("3", f"🔒 DNSCrypt-proxy  {DIM}(управление и оптимизация){NC}")
-        _box_item("R", f"🔍 DNSCrypt: выбор резолверов  {DIM}(замер latency → server_names){NC}")
-        _box_item("4", f"☁️  Cloudflare WARP  {DIM}(управление туннелем){NC}")
-        _box_item("5", f"🔄 Сменить домен / порт  {DIM}(без переустановки){NC}")
-        _box_item("6", f"🌍 Стратегия исходящих  {DIM}(domainStrategy){NC}")
-        _box_item("7", "🌐 Внешняя проверка домена / порта")
-        _box_item("8", "🌐 Геопроверка выходного IP")
+        _box_item("1", f"☁️  Cloudflare WARP  {DIM}(управление туннелем){NC}")
+        _box_item("2", "🌐 Внешняя проверка домена / порта")
+        _box_item("3", "🌐 Геопроверка выходного IP")
         _box_sep()
         _box_item("D", f"🌐 Кастомные DNS правила  {DIM}(hosts / routing override){NC}")
         _box_item("M", f"📏 MTU/MSS автотюнинг  {DIM}(оптимизация для exit-нод){NC}")
-        _box_sep()
-        _box_item("H", f"🚀 Hysteria2 транспорт  {DIM}(Режим B, Exit-нода, Балансировщик, DPI){NC}")
         _box_row()
         _box_back()
         _box_bottom()
@@ -28837,40 +28830,19 @@ def _menu_network() -> None:
         except KeyboardInterrupt:
             break
         if ch == "1":
-            do_manage_split_tunnel()
-        elif ch == "2":
-            _box_top("Split Tunnel Diagnostics — VLESS Installer")
-            run_split_tunnel_diagnostics()
-            _box_bottom()
-            input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch == "3":
-            info("Применение оптимизированного конфига DNSCrypt-proxy...")
-            apply_dnscrypt_tuning()
-            input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch == "4":
             do_manage_warp()
-        elif ch == "5":
-            do_reconfigure()
-            input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch == "6":
-            do_change_domain_strategy()
-            input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch == "7":
+        elif ch == "2":
             _box_top("Внешняя проверка домена")
             do_check_domain_external()
             _box_bottom()
             input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch == "8":
+        elif ch == "3":
             check_exit_geo(silent=False)
             input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch.lower() == "r":
-            do_dnscrypt_selector_menu()
         elif ch.lower() == "d":
             do_manage_dns_rules()
         elif ch.lower() == "m":
             do_mtu_tuning()
-        elif ch.lower() == "h":
-            do_hysteria2_menu()
         elif ch.lower() == "q" or ch == "":
             break
         else:
@@ -28878,9 +28850,6 @@ def _menu_network() -> None:
             time.sleep(1)
 
 
-# =============================================================================
-#  DNS LEAK TEST
-# =============================================================================
 def do_dns_leak_test() -> None:
     """
     DNS Leak Test — проверяет, через какие DNS-серверы уходят запросы.
@@ -29289,23 +29258,18 @@ def _menu_diagnostics() -> None:
     while True:
         os.system("clear")
         _load_state_into_globals()
-        _awg = AWG_EXIT_ENABLED and INSTALL_MODE == "B"
-        _speed_note = f"  {DIM}(AWG: тест через awg0){NC}" if _awg else ""
-        _matrix_note = f"  {DIM}(AWG: статус туннеля){NC}" if _awg else ""
         print()
         _box_top("📊  ДИАГНОСТИКА И МОНИТОРИНГ")
         _box_row()
         _box_item("1", f"📊 Live Traffic Dashboard  {DIM}(реальное время){NC}")
         _box_item("2", f"📈 История трафика по дням  {DIM}(ASCII-гистограмма){NC}")
         _box_item("3", f"📡 Тест качества соединения  {DIM}(TTFB){NC}")
-        _box_item("4", f"⚡ Тест скорости через exit-ноду{_speed_note}")
-        _box_item("5", f"🔍 Аудит подключений  {DIM}(кто / когда / откуда){NC}")
-        _box_item("6", "📋 Лог изменений конфигурации")
-        _box_item("7", f"🩺 Ежедневный Health-отчёт  {DIM}(cron 08:00){NC}")
-        _box_item("8", "🩺 Полная диагностика одной кнопкой")
-        _box_item("9", f"💻 Системный дашборд  {DIM}(CPU / RAM / Disk){NC}")
+        _box_item("4", f"🔍 Аудит подключений  {DIM}(кто / когда / откуда){NC}")
+        _box_item("5", "📋 Лог изменений конфигурации")
+        _box_item("6", f"🩺 Ежедневный Health-отчёт  {DIM}(cron 08:00){NC}")
+        _box_item("7", "🩺 Полная диагностика одной кнопкой")
+        _box_item("8", f"💻 Системный дашборд  {DIM}(CPU / RAM / Disk){NC}")
         _box_sep()
-        _box_item("M", f"🗺️   Матрица exit-нод / туннель{_matrix_note}")
         _box_item("B", f"🔌 Проверка порта снаружи  {DIM}(заблокирован ли провайдером){NC}")
         _box_sep()
         _box_item("S", "🧪 Проверить статус и сеть")
@@ -29328,18 +29292,15 @@ def _menu_diagnostics() -> None:
         elif ch == "3":
             do_connection_quality_test()
         elif ch == "4":
-            do_speed_test()
-            input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch == "5":
             do_connection_audit()
-        elif ch == "6":
+        elif ch == "5":
             do_view_changes_log()
-        elif ch == "7":
+        elif ch == "6":
             do_manage_health_report()
-        elif ch == "8":
+        elif ch == "7":
             do_full_diagnostic()
             input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch == "9":
+        elif ch == "8":
             do_system_dashboard()
             input(f"{BLUE}Нажмите Enter...{NC}")
         elif ch.lower() == "s":
@@ -29376,8 +29337,6 @@ def _menu_diagnostics() -> None:
         elif ch.lower() == "t":
             do_check_tls_cert()
             input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch.lower() == "m":
-            do_node_health_matrix()
         elif ch.lower() == "b":
             do_port_block_detect()
         elif ch.lower() == "q" or ch == "":
@@ -29387,9 +29346,6 @@ def _menu_diagnostics() -> None:
             time.sleep(1)
 
 
-# =============================================================================
-#  ПОДМЕНЮ: 5 — БЕЗОПАСНОСТЬ И АВТОМАТИЗАЦИЯ
-# logrotate — перенесено в vless_installer/modules/logrotate.py
 def do_scheduler_menu() -> None:
     """
     Единый планировщик задач — все cron/systemd задачи в одном месте.
