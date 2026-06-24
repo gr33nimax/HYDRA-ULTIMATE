@@ -9701,6 +9701,220 @@ def do_user_menu() -> None:
             warn("Введите L, A, D, S или Q")
 
 
+def _setup_subscription_domain_ssl() -> None:
+    print()
+    _box_top("НАСТРОЙКА ДОМЕНА + SSL")
+    _box_row(f"  {YELLOW}Внимание:{NC} Будет выполнен выпуск SSL-сертификата Let's Encrypt.")
+    _box_row("  Для этого порт 80 должен быть свободен. Скрипт автоматически")
+    _box_row("  остановит Caddy / Nginx на время выпуска и запустит обратно.")
+    _box_bottom()
+    
+    new_domain = input(f"{CYAN}Введите домен для подписок (например, sub.yourdomain.com):{NC} ").strip()
+    if not new_domain:
+        warn("Домен не введен. Отмена.")
+        time.sleep(1.5)
+        return
+        
+    certbot_bin = next(
+        (p for p in (Path("/snap/bin/certbot"), Path("/usr/bin/certbot"))
+         if p.exists()), None
+    )
+    if not certbot_bin:
+        warn("certbot не найден. Пожалуйста, установите certbot на сервере.")
+        time.sleep(2)
+        return
+
+    # Останавливаем веб-серверы
+    nginx_was_active = False
+    caddy_was_active = False
+
+    try:
+        r = subprocess.run(["systemctl", "is-active", "nginx"], capture_output=True, text=True)
+        if r.stdout.strip() == "active":
+            info("Временная остановка Nginx...")
+            subprocess.run(["systemctl", "stop", "nginx"], check=False)
+            nginx_was_active = True
+    except Exception:
+        pass
+
+    try:
+        r = subprocess.run(["systemctl", "is-active", "caddy"], capture_output=True, text=True)
+        if r.stdout.strip() == "active":
+            info("Временная остановка Caddy...")
+            subprocess.run(["systemctl", "stop", "caddy"], check=False)
+            caddy_was_active = True
+    except Exception:
+        pass
+
+    info(f"Запуск certbot для домена {new_domain}...")
+    try:
+        r = subprocess.run([
+            str(certbot_bin), "certonly", "--standalone",
+            "-d", new_domain,
+            "--non-interactive", "--agree-tos",
+            "-m", f"admin@{new_domain}",
+            "--keep-until-expiring"
+        ], capture_output=True, text=True)
+        certbot_ok = (r.returncode == 0)
+    except Exception as e:
+        certbot_ok = False
+        warn(f"Ошибка вызова certbot: {e}")
+
+    # Запускаем веб-серверы обратно
+    if nginx_was_active:
+        info("Запуск Nginx...")
+        subprocess.run(["systemctl", "start", "nginx"], check=False)
+    if caddy_was_active:
+        info("Запуск Caddy...")
+        subprocess.run(["systemctl", "start", "caddy"], check=False)
+
+    if certbot_ok:
+        # Проверяем файлы
+        cert_file = Path(f"/etc/letsencrypt/live/{new_domain}/fullchain.pem")
+        key_file = Path(f"/etc/letsencrypt/live/{new_domain}/privkey.pem")
+        if cert_file.exists() and key_file.exists():
+            state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+            state["sub_domain"] = new_domain
+            STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+            success(f"SSL-сертификат успешно получен для домена {new_domain}!")
+            
+            # Переустанавливаем сервис подписок, чтобы обновить домен и порт
+            sub_port = state.get("sub_port", 9443)
+            info("Перезапуск службы подписок с новым SSL-сертификатом...")
+            from vless_installer.modules.sub_server import install_sub_service
+            install_sub_service("0.0.0.0", sub_port)
+        else:
+            warn("Certbot сообщил об успехе, но файлы сертификата не найдены по стандартному пути.")
+    else:
+        err_msg = r.stderr or r.stdout or "Неизвестная ошибка"
+        error(f"Не удалось получить SSL-сертификат:\n{err_msg}")
+
+    time.sleep(3.5)
+
+
+def _add_subscription_user() -> None:
+    print()
+    _box_top("ДОБАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯ ПОДПИСОК")
+    _box_row()
+    _box_bottom()
+    
+    while True:
+        new_email = input(f"{CYAN}Введите имя/email нового пользователя:{NC} ").strip()
+        if not new_email:
+            warn("Имя не может быть пустым")
+            continue
+        if ' ' in new_email:
+            warn("Имя не должно содержать пробелов")
+            continue
+            
+        state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+        sub_tokens = state.setdefault("sub_tokens", {})
+        if new_email in sub_tokens:
+            warn(f"Пользователь '{new_email}' уже зарегистрирован в подписках")
+            continue
+        break
+        
+    token = gen_uuid()
+    sub_tokens[new_email] = token
+    state["sub_tokens"] = sub_tokens
+    STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+    success(f"Пользователь '{new_email}' успешно добавлен в систему подписок.")
+    
+    # Сразу показываем ссылки
+    sub_domain = state.get("sub_domain", "")
+    sub_port = state.get("sub_port", 9443)
+    domain = sub_domain or state.get("domain", "") or get_server_ip("4")
+    port_suffix = f":{sub_port}" if sub_port != 443 else ""
+    base_url = f"https://{domain}{port_suffix}/sub/{token}"
+    
+    print()
+    _box_top(f"ССЫЛКИ ДЛЯ {new_email}")
+    _box_row(f"  {BOLD}Токен:{NC} {token}")
+    _box_sep()
+    _box_row(f"  {CYAN}Base64:{NC} {base_url}")
+    _box_row(f"  {CYAN}Clash:{NC}  {base_url}/clash")
+    _box_row(f"  {CYAN}Sing-box:{NC} {base_url}/singbox")
+    _box_bottom()
+    
+    input(f"\n{BLUE}Нажмите Enter для продолжения...{NC}")
+
+
+def _delete_subscription_user() -> None:
+    state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+    sub_tokens = state.get("sub_tokens", {})
+    if not sub_tokens:
+        warn("Нет зарегистрированных пользователей подписок")
+        time.sleep(1.5)
+        return
+        
+    print()
+    _box_top("УДАЛЕНИЕ ПОЛЬЗОВАТЕЛЯ ПОДПИСОК")
+    users_list = list(sub_tokens.keys())
+    for idx, name in enumerate(users_list, 1):
+        _box_row(f"  [{idx}] {name}")
+    _box_bottom()
+    
+    choice = input(f"{CYAN}Выберите номер или введите email для удаления:{NC} ").strip()
+    if not choice:
+        warn("Отменено")
+        return
+        
+    target = None
+    if choice.isdigit():
+        idx = int(choice) - 1
+        if 0 <= idx < len(users_list):
+            target = users_list[idx]
+    if not target:
+        if choice in sub_tokens:
+            target = choice
+            
+    if not target:
+        warn(f"Пользователь '{choice}' не найден")
+        time.sleep(1.5)
+        return
+        
+    ans = input(f"{YELLOW}Вы уверены, что хотите удалить пользователя {target}? [y/N]:{NC} ").strip().lower()
+    if ans == "y":
+        del sub_tokens[target]
+        state["sub_tokens"] = sub_tokens
+        STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        success(f"Пользователь '{target}' удален из системы подписок")
+    else:
+        info("Отменено")
+    time.sleep(1.5)
+
+
+def _change_subscription_port() -> None:
+    try:
+        new_port_str = input(f"{CYAN}Введите новый порт сервера подписок (1-65535, по умолчанию 9443):{NC} ").strip()
+        new_port = int(new_port_str) if new_port_str else 9443
+        if not (1 <= new_port <= 65535):
+            raise ValueError
+        
+        state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+        state["sub_port"] = new_port
+        STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        success(f"Порт изменен на {new_port}")
+        
+        # Проверяем, активен ли сервис подписок
+        sub_svc_active = False
+        try:
+            r = subprocess.run(["systemctl", "is-active", "vless-sub"], capture_output=True, text=True)
+            sub_svc_active = (r.stdout.strip() == "active")
+        except Exception:
+            pass
+
+        if sub_svc_active:
+            info("Перезапуск службы с новым портом...")
+            from vless_installer.modules.sub_server import install_sub_service
+            install_sub_service("0.0.0.0", new_port)
+    except ValueError:
+        warn("Некорректный порт")
+    except Exception as e:
+        warn(f"Ошибка изменения porta: {e}")
+    time.sleep(2)
+
+
 def do_subscription_menu() -> None:
     """Интерактивное меню для управления подписками пользователей."""
     ensure_subscription_tokens()
@@ -9721,39 +9935,40 @@ def do_subscription_menu() -> None:
         state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
         sub_domain = state.get("sub_domain", "")
         sub_port = state.get("sub_port", 9443)
-        sub_public = state.get("sub_public", False)
         domain = sub_domain or state.get("domain", "") or get_server_ip("4")
 
-        try:
-            from vless_installer.modules.sub_nginx import check_sub_location
-            nginx_ok = check_sub_location()
-        except Exception:
-            nginx_ok = False
+        # Проверка SSL-сертификата
+        ssl_status = f"{YELLOW}не найден{NC}"
+        if sub_domain:
+            cert_file = Path(f"/etc/letsencrypt/live/{sub_domain}/fullchain.pem")
+            key_file = Path(f"/etc/letsencrypt/live/{sub_domain}/privkey.pem")
+            if cert_file.exists() and key_file.exists():
+                ssl_status = f"{GREEN}активен (OK){NC}"
+            else:
+                ssl_status = f"{RED}ошибка (сертификаты не найдены){NC}"
 
         svc_status = f"{GREEN}активен{NC}" if sub_svc_active else f"{YELLOW}не активен{NC}"
-        mode_label = f"{CYAN}Прямой доступ (HTTP){NC}" if sub_public else f"{CYAN}Nginx реверс-прокси (HTTPS){NC}"
-        nginx_status = f"{GREEN}настроен{NC}" if nginx_ok else f"{YELLOW}не настроен{NC}"
+        port_suffix = f":{sub_port}" if sub_port != 443 else ""
 
         _box_row(f"  Сервис подписок:  {svc_status}")
-        if not sub_public:
-            _box_row(f"  Интеграция Nginx: {nginx_status}")
-        _box_row(f"  Режим работы:     {mode_label}")
-        _box_row(f"  Хост прослушивания: {f'0.0.0.0:{sub_port}' if sub_public else f'127.0.0.1:{sub_port}'}")
-        
-        if sub_public:
-            _box_row(f"  Внешний URL:      http://{domain}:{sub_port}/sub/<токен>")
+        _box_row(f"  Домен подписок:   {sub_domain if sub_domain else f'{YELLOW}не настроен{NC}'}")
+        _box_row(f"  Порт подписок:    {sub_port}")
+        _box_row(f"  SSL-сертификат:   {ssl_status}")
+        if sub_domain:
+            _box_row(f"  Внешний URL:      https://{domain}{port_suffix}/sub/<токен>")
         else:
-            _box_row(f"  Внешний URL:      https://{domain}/sub/<токен>")
+            _box_row(f"  Внешний URL:      (необходима настройка домена)")
             
         _box_sep()
 
-        _box_item("1", f"{'Выключить' if sub_svc_active else 'Включить'} систему подписок")
-        _box_item("2", "🔗 Получить ссылки подписок для пользователя")
-        _box_item("3", "🔄 Перегенерировать токен пользователя")
+        _box_item("1", "⚙️ Настроить сервис подписок (Домен + SSL)")
+        _box_item("2", f"{'Выключить' if sub_svc_active else 'Включить'} сервис подписок")
         _box_sep()
-        _box_item("4", f"🌐 Изменить домен для подписок {DIM}(текущий: {sub_domain or '(по умолчанию)'}){NC}")
-        _box_item("5", f"🔌 Изменить порт сервера подписок {DIM}(текущий: {sub_port}){NC}")
-        _box_item("6", f"🔒 Переключить режим {DIM}(Nginx HTTPS / Прямой HTTP){NC}")
+        _box_item("3", "👤 Добавить пользователя подписок")
+        _box_item("4", "❌ Удалить пользователя подписок")
+        _box_item("5", "🔗 Получить ссылки подписок для пользователя")
+        _box_item("6", "🔄 Перегенерировать токен пользователя")
+        _box_item("7", f"🔌 Изменить порт подписок {DIM}(текущий: {sub_port}){NC}")
         _box_row()
         _box_item_exit("0", "← Назад")
         _box_bottom()
@@ -9767,102 +9982,41 @@ def do_subscription_menu() -> None:
             break
 
         elif ch == "1":
+            _setup_subscription_domain_ssl()
+
+        elif ch == "2":
             if sub_svc_active:
-                info("Отключение системы подписок...")
+                info("Отключение службы подписок...")
                 try:
                     from vless_installer.modules.sub_server import uninstall_sub_service
                     uninstall_sub_service()
-                    if not sub_public:
-                        from vless_installer.modules.sub_nginx import remove_sub_location
-                        remove_sub_location()
-                    success("Система подписок отключена")
+                    success("Служба подписок отключена")
                 except Exception as e:
                     warn(f"Ошибка отключения: {e}")
             else:
-                info("Включение системы подписок...")
+                info("Включение службы подписок...")
                 try:
                     from vless_installer.modules.sub_server import install_sub_service
-                    host = "0.0.0.0" if sub_public else "127.0.0.1"
-                    install_sub_service(host, sub_port)
-                    if not sub_public:
-                        from vless_installer.modules.sub_nginx import inject_sub_location
-                        inject_sub_location(port=sub_port)
-                    success("Система подписок включена")
+                    install_sub_service("0.0.0.0", sub_port)
+                    success("Служба подписок включена")
                 except Exception as e:
                     warn(f"Ошибка включения: {e}")
             time.sleep(2)
 
-        elif ch == "2":
-            _show_user_subscription_links()
-
         elif ch == "3":
-            _regenerate_user_token()
+            _add_subscription_user()
 
         elif ch == "4":
-            new_domain = input(f"{CYAN}Введите домен для подписок (или пусто для сброса):{NC} ").strip()
-            state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
-            if new_domain:
-                state["sub_domain"] = new_domain
-                success(f"Домен подписок установлен: {new_domain}")
-            else:
-                state.pop("sub_domain", None)
-                success("Сброшено на домен по умолчанию")
-            STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
-            time.sleep(2)
+            _delete_subscription_user()
 
         elif ch == "5":
-            try:
-                new_port_str = input(f"{CYAN}Введите новый порт сервера подписок (1-65535, по умолчанию 9443):{NC} ").strip()
-                new_port = int(new_port_str) if new_port_str else 9443
-                if not (1 <= new_port <= 65535):
-                    raise ValueError
-                
-                state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
-                state["sub_port"] = new_port
-                STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
-                success(f"Порт изменен на {new_port}")
-                
-                # Если сервис запущен, переустанавливаем его
-                if sub_svc_active:
-                    info("Перезапуск службы с новым портом...")
-                    from vless_installer.modules.sub_server import install_sub_service
-                    host = "0.0.0.0" if sub_public else "127.0.0.1"
-                    install_sub_service(host, new_port)
-                    if not sub_public:
-                        from vless_installer.modules.sub_nginx import remove_sub_location, inject_sub_location
-                        remove_sub_location()
-                        inject_sub_location(port=new_port)
-            except ValueError:
-                warn("Некорректный порт")
-            except Exception as e:
-                warn(f"Ошибка изменения порта: {e}")
-            time.sleep(2)
+            _show_user_subscription_links()
 
         elif ch == "6":
-            state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
-            new_public = not sub_public
-            state["sub_public"] = new_public
-            STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
-            success(f"Режим изменен на: {'Прямой доступ (HTTP)' if new_public else 'Nginx реверс-прокси (HTTPS)'}")
-            
-            # Если сервис запущен, переконфигурируем на лету
-            if sub_svc_active:
-                info("Перенастройка активного сервиса...")
-                try:
-                    from vless_installer.modules.sub_server import install_sub_service
-                    from vless_installer.modules.sub_nginx import remove_sub_location, inject_sub_location
-                    if new_public:
-                        # С HTTPS (Nginx) -> HTTP (Прямой)
-                        remove_sub_location()
-                        install_sub_service("0.0.0.0", sub_port)
-                    else:
-                        # С HTTP (Прямой) -> HTTPS (Nginx)
-                        install_sub_service("127.0.0.1", sub_port)
-                        inject_sub_location(port=sub_port)
-                    success("Сервис успешно перенастроен")
-                except Exception as e:
-                    warn(f"Ошибка перенастройки: {e}")
-            time.sleep(2)
+            _regenerate_user_token()
+
+        elif ch == "7":
+            _change_subscription_port()
 
 
 def _get_all_sub_users() -> list[dict]:
@@ -9970,13 +10124,9 @@ def _show_user_subscription_links() -> None:
 
     sub_domain = state.get("sub_domain", "")
     sub_port = state.get("sub_port", 9443)
-    sub_public = state.get("sub_public", False)
     domain = sub_domain or state.get("domain", "") or get_server_ip("4")
-
-    if sub_public:
-        base_url = f"http://{domain}:{sub_port}/sub/{token}"
-    else:
-        base_url = f"https://{domain}/sub/{token}"
+    port_suffix = f":{sub_port}" if sub_port != 443 else ""
+    base_url = f"https://{domain}{port_suffix}/sub/{token}"
 
     while True:
         os.system("clear")

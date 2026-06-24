@@ -36,7 +36,7 @@ XRAY_CONFIG = Path("/var/lib/xray-installer/config.json")
 LOG_FILE = Path("/var/log/vless-install.log")
 SERVICE_NAME = "vless-sub"
 SERVICE_FILE = Path(f"/etc/systemd/system/{SERVICE_NAME}.service")
-DEFAULT_HOST = "127.0.0.1"
+DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 9443
 
 # ── Цвета ─────────────────────────────────────────────────────────────────────
@@ -219,9 +219,28 @@ class SubRequestHandler(BaseHTTPRequestHandler):
 
 def start_sub_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
                      daemon: bool = True) -> Optional[ThreadingHTTPServer]:
-    """Запустить HTTP-сервер подписок."""
+    """Запустить HTTP-сервер подписок с поддержкой SSL/HTTPS."""
     try:
         server = ThreadingHTTPServer((host, port), SubRequestHandler)
+        
+        # Подключаем SSL если домен настроен и сертификаты найдены
+        state = _load_state()
+        sub_domain = state.get("sub_domain")
+        if sub_domain:
+            cert_file = Path(f"/etc/letsencrypt/live/{sub_domain}/fullchain.pem")
+            key_file = Path(f"/etc/letsencrypt/live/{sub_domain}/privkey.pem")
+            if cert_file.exists() and key_file.exists():
+                try:
+                    import ssl
+                    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                    context.load_cert_chain(certfile=str(cert_file), keyfile=str(key_file))
+                    server.socket = context.wrap_socket(server.socket, server_side=True)
+                    _log("INFO", f"SSL/HTTPS enabled for sub server domain: {sub_domain}")
+                except Exception as ssl_err:
+                    _log("ERR", f"Failed to wrap socket with SSL: {ssl_err}")
+            else:
+                _log("WARN", f"SSL certificate files not found for {sub_domain} at /etc/letsencrypt/live/")
+        
         thread = threading.Thread(target=server.serve_forever, daemon=daemon)
         thread.start()
         _log("INFO", f"Sub server started on {host}:{port}")
@@ -330,9 +349,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     print(f"Starting subscription server on {args.host}:{args.port}")
-    server = ThreadingHTTPServer((args.host, args.port), SubRequestHandler)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        server.shutdown()
-        print("\nServer stopped.")
+    server = start_sub_server(args.host, args.port, daemon=True)
+    if server:
+        import time
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            server.shutdown()
+            print("\nServer stopped.")
