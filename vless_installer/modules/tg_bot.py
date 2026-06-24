@@ -619,6 +619,138 @@ def handle_broadcast(msg, args):
     send(uid, f"✅ Разослано {{ok}} из {{len(allowed)}} пользователей.")
     _log(f"Broadcast by admin {{uid}}: {{text[:50]}}")
 
+def handle_sub(msg, args):
+    uid = msg["from"]["id"]
+    if not is_admin(uid):
+        send(uid, "⛔ Только для администратора.")
+        return
+    if not args:
+        send(uid, "Использование: /sub email_пользователя")
+        return
+    email = args[0].strip()
+    
+    cfg_paths = [
+        Path("/usr/local/etc/xray/config.json"),
+        Path("/etc/xray/config.json"),
+    ]
+    found = False
+    for p in cfg_paths:
+        if p.exists():
+            try:
+                cfg = json.loads(p.read_text())
+                for ib in cfg.get("inbounds", []):
+                    for client in ib.get("settings", {{}}).get("clients", []):
+                        if client.get("email") == email:
+                            found = True
+                            break
+            except Exception:
+                pass
+    
+    if not found:
+        st = _state()
+        if st.get("email") == email or email == "admin":
+            found = True
+            email = st.get("email") or "admin"
+            
+    if not found:
+        send(uid, f"❌ Пользователь '{{email}}' не найден в системе.")
+        return
+        
+    st = _state()
+    sub_tokens = st.setdefault("sub_tokens", {{}})
+    token = sub_tokens.get(email)
+    if not token:
+        import uuid as _uuid
+        token = str(_uuid.uuid4())
+        sub_tokens[email] = token
+        st["sub_tokens"] = sub_tokens
+        STATE_F.write_text(json.dumps(st, indent=2, ensure_ascii=False))
+        
+    domain = st.get("domain", "")
+    if not domain:
+        try:
+            domain = subprocess.check_output(["curl", "-s", "-4", "https://api.ipify.org"], text=True).strip()
+        except Exception:
+            domain = "IP_СЕРВЕРА"
+            
+    base_url = f"https://{{domain}}/sub/{{token}}"
+    send(uid, (
+        f"📋 <b>Подписки для {{email}}:</b>\\n\\n"
+        f"Base64 (v2rayNG, Shadowrocket):\\n<code>{{base_url}}</code>\\n\\n"
+        f"Clash Meta (Clash Verge, Mihomo):\\n<code>{{base_url}}/clash</code>\\n\\n"
+        f"Sing-box (NekoBox):\\n<code>{{base_url}}/singbox</code>"
+    ))
+
+def handle_sub_qr(msg, args):
+    uid = msg["from"]["id"]
+    if not is_admin(uid):
+        send(uid, "⛔ Только для администратора.")
+        return
+    if not args:
+        send(uid, "Использование: /sub_qr email_пользователя")
+        return
+    email = args[0].strip()
+    
+    cfg_paths = [
+        Path("/usr/local/etc/xray/config.json"),
+        Path("/etc/xray/config.json"),
+    ]
+    found = False
+    for p in cfg_paths:
+        if p.exists():
+            try:
+                cfg = json.loads(p.read_text())
+                for ib in cfg.get("inbounds", []):
+                    for client in ib.get("settings", {{}}).get("clients", []):
+                        if client.get("email") == email:
+                            found = True
+                            break
+            except Exception:
+                pass
+                
+    if not found:
+        st = _state()
+        if st.get("email") == email or email == "admin":
+            found = True
+            email = st.get("email") or "admin"
+            
+    if not found:
+        send(uid, f"❌ Пользователь '{{email}}' не найден.")
+        return
+        
+    st = _state()
+    sub_tokens = st.setdefault("sub_tokens", {{}})
+    token = sub_tokens.get(email)
+    if not token:
+        import uuid as _uuid
+        token = str(_uuid.uuid4())
+        sub_tokens[email] = token
+        st["sub_tokens"] = sub_tokens
+        STATE_F.write_text(json.dumps(st, indent=2, ensure_ascii=False))
+        
+    domain = st.get("domain", "")
+    if not domain:
+        try:
+            domain = subprocess.check_output(["curl", "-s", "-4", "https://api.ipify.org"], text=True).strip()
+        except Exception:
+            domain = "IP_СЕРВЕРА"
+            
+    base_url = f"https://{{domain}}/sub/{{token}}"
+    qr_file = f"/tmp/sub_qr_{{token}}.png"
+    
+    try:
+        subprocess.run(["qrencode", "-o", qr_file, "-s", "8", base_url], check=True)
+        subprocess.run([
+            "curl", "-s", "-X", "POST",
+            f"https://api.telegram.org/bot{{TOKEN}}/sendPhoto",
+            "-F", f"chat_id={{uid}}",
+            "-F", f"photo=@{{qr_file}}",
+            "-F", f"caption=QR-код подписки для {{email}}"
+        ], stdout=subprocess.DEVNULL)
+        Path(qr_file).unlink(missing_ok=True)
+    except Exception as e:
+        send(uid, f"❌ Ошибка генерации QR-кода: {{e}}")
+
 def handle_help(msg):
     uid = msg["from"]["id"]
     text = (
@@ -633,7 +765,9 @@ def handle_help(msg):
             "/status    — статус сервера\\n"
             "/users     — список пользователей\\n"
             "/invite    — создать invite-ссылку\\n"
-            "/broadcast — рассылка всем пользователям"
+            "/broadcast — рассылка всем пользователям\\n"
+            "/sub &lt;user&gt; — ссылки подписок\\n"
+            "/sub_qr &lt;user&gt; — QR-код подписки"
         )
     send(uid, text)
 
@@ -651,6 +785,8 @@ def process_update(update):
     elif cmd == "/users":  handle_users(msg)
     elif cmd == "/invite": handle_invite(msg)
     elif cmd == "/broadcast": handle_broadcast(msg, args)
+    elif cmd == "/sub":    handle_sub(msg, args)
+    elif cmd == "/sub_qr": handle_sub_qr(msg, args)
     elif cmd == "/help":   handle_help(msg)
 
 def main():

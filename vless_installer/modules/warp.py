@@ -898,6 +898,7 @@ def do_manage_warp() -> None:
         _box_item("5", "🔍 Верифицировать WARP (curl trace)")
         _box_item("6", "📊 Статус и информация")
         _box_item("7", "🗑️  Отключить и удалить WARP")
+        _box_item("8", "🌐 Универсальный обход (ip route)")
         _box_row()
         _box_item_exit("0", "← Назад")
         _box_bottom()
@@ -1242,6 +1243,10 @@ def do_manage_warp() -> None:
                 _warp_save_state()
                 success("WARP удалён")
             input(f"{BLUE}Нажмите Enter...{NC}")
+
+        elif ch == "8":
+            from vless_installer.modules.warp_universal import do_warp_routing_menu
+            do_warp_routing_menu()
 
         else:
             warn("Неверный выбор")

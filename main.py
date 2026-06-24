@@ -102,6 +102,15 @@ if "--clear-asn-cache" in sys.argv:
         print(f"[ASN кэш] Удалена запись '{key}'")
     sys.exit(0)
 
+# --- Universal WARP: синхронизация маршрутов (из cron каждые 5 мин) ---
+if "--warp-sync-routes" in sys.argv:
+    if os.geteuid() != 0:
+        print("ERROR: требуются права root", file=sys.stderr)
+        sys.exit(1)
+    from vless_installer.modules.warp_universal import sync_routes
+    sync_routes()
+    sys.exit(0)
+
 # --- DPI-детектор (из cron каждые 5 мин) ---
 if "--dpi-check" in sys.argv:
     if os.geteuid() != 0:

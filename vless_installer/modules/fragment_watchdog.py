@@ -159,7 +159,7 @@ def apply_preset(idx: int) -> bool:
         return False
     preset = ESCALATION[idx]
     try:
-        sys.path.insert(0, "/home/inferno1978/VLESS-Ultimate-Installer")
+        sys.path.insert(0, "/home/gr33nimax/VLESS-Ultimate-Installer")
         sys.path.insert(0, "/opt/vless-ultimate")
         from vless_installer.modules.fragment_config import generate_fragment_client_config
         path = generate_fragment_client_config(
