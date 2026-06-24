@@ -969,17 +969,14 @@ def do_amnezia_vpn_menu() -> None:
                 for p in stats["peers"]:
                     pubkey = p.get('public_key', '')
                     friendly_name = key_to_name.get(pubkey, "Неизвестный клиент")
-                    print(f"{BOLD}Пользователь:{NC} {GREEN}{friendly_name}{NC}")
-                    print(f"  Public Key: {CYAN}{pubkey}{NC}")
-                    if p.get("endpoint"):
-                        print(f"  Эндпоинт:   {p['endpoint']}")
-                    if p.get("allowed_ips"):
-                        print(f"  AllowedIP:  {p['allowed_ips']}")
-                    if p.get("latest_handshake"):
-                        print(f"  Handshake:  {p['latest_handshake']}")
-                    if p.get("transfer"):
-                        print(f"  Трафик:     {p['transfer']}")
-                    print()
+                    ip = p.get("allowed_ips", "—")
+                    hs = p.get("latest_handshake", "never")
+                    trf = p.get("transfer", "—").replace("received", "rx").replace("sent", "tx")
+                    endpoint = p.get("endpoint", "—")
+                    short_pk = pubkey[:8] + "..." + pubkey[-8:] if len(pubkey) > 16 else pubkey
+                    
+                    print(f"👤 {BOLD}{friendly_name}{NC} ({CYAN}{ip}{NC})")
+                    print(f"   Handshake: {YELLOW}{hs}{NC} | Трафик: {GREEN}{trf}{NC} | EP: {endpoint} | PK: {short_pk}")
             else:
                 print("  Нет подключенных пиров или статистика пуста.")
                 print()
