@@ -152,20 +152,17 @@ def generate_vless_links(state: dict, uuid_str: str, email: str) -> list[str]:
 def generate_naive_link(state: dict, email: str) -> Optional[str]:
     """Генерация naive+https:// URI если NaiveProxy установлен."""
     naive = _load_naiveproxy_state()
-    if not naive.get("installed"):
+    if not naive.get("installed") or not naive.get("users"):
         return None
 
     host = naive.get("domain", "") or state.get("domain", "") or _get_server_ip()
     port = naive.get("port", 8443)
 
-    # Ищем пользователя
-    for u in naive.get("users", []):
-        if u.get("username", "") == email:
-            user = urllib.parse.quote(u["username"])
-            pwd = urllib.parse.quote(u["password"])
-            return f"naive+https://{user}:{pwd}@{host}:{port}#{email}%20Naive"
-
-    return None
+    # Ищем пользователя, с возможностью fallback на первого
+    user_data = next((u for u in naive["users"] if u.get("username", "") == email), naive["users"][0])
+    user = urllib.parse.quote(user_data["username"])
+    pwd = urllib.parse.quote(user_data["password"])
+    return f"naive+https://{user}:{pwd}@{host}:{port}#{email}%20Naive"
 
 
 # ── Генерация Hysteria2 ──────────────────────────────────────────────────────
@@ -187,28 +184,53 @@ def generate_hysteria2_link(state: dict, email: str) -> Optional[str]:
 
 # ── Генерация Mieru ──────────────────────────────────────────────────────────
 
+def generate_mieru_nekobox_link(host: str, port: int, protocol: str, username: str, password: str, tag: str) -> str:
+    import zlib
+    import base64
+    import struct
+
+    def serialize_string(s: str) -> bytes:
+        b = s.encode('utf-8')
+        return b[:-1] + bytes([b[-1] | 0x80])
+
+    header = b'\x00\x00\x00\x00'
+    s_host = serialize_string(host)
+    s_port = struct.pack('<I', port)
+    s_proto = serialize_string(protocol.upper())
+    s_user = serialize_string(username)
+    s_pass = serialize_string(password)
+    s_val = struct.pack('<I', 1)
+    s_tag = serialize_string(tag)
+    booleans = b'\x81\x81'
+
+    data = header + s_host + s_port + s_proto + s_user + s_pass + s_val + s_tag + booleans
+    compressed = zlib.compress(data, 7)
+    encoded = base64.urlsafe_b64encode(compressed).decode('utf-8').rstrip('=')
+    return f"sn://mieru?{encoded}"
+
+
 def generate_mieru_link(state: dict, email: str) -> list[str]:
-    """Генерация mierus:// линков для Nekobox и Karing."""
+    """Генерация mieru линков для Nekobox и Karing."""
     mieru = _load_mieru_state()
-    if not mieru.get("installed"):
+    if not mieru.get("installed") or not mieru.get("users"):
         return []
 
     host = state.get("domain", "") or _get_server_ip()
     port_start = mieru.get("port_start", 8964)
     protocol = mieru.get("protocol", "TCP")
 
+    # Ищем пользователя, с возможностью fallback на первого
+    user_data = next((u for u in mieru["users"] if u.get("username") == email), mieru["users"][0])
+    uname = user_data["username"]
+    pwd = user_data["password"]
+
     links = []
-    for u in mieru.get("users", []):
-        if u.get("username") == email:
-            uname = urllib.parse.quote(u["username"])
-            pwd = urllib.parse.quote(u["password"])
-            # Nekobox формат
-            neko_link = f"mierus://{uname}:{pwd}@{host}:{port_start}?transport={protocol.lower()}&mtu=1400#{email}%20Mieru%20Neko"
-            links.append(neko_link)
-            # Karing формат
-            karing_link = f"mierus://{uname}:{pwd}@{host}?port={port_start}&protocol={protocol.upper()}&profile=default&mtu=1400&multiplexing=MULTIPLEXING_HIGH#{email}%20Mieru%20Karing"
-            links.append(karing_link)
-            break
+    # Nekobox sn://mieru формат
+    neko_link = generate_mieru_nekobox_link(host, port_start, protocol, uname, pwd, f"{email}_Mieru")
+    links.append(neko_link)
+    # Karing формат
+    karing_link = f"mierus://{urllib.parse.quote(uname)}:{urllib.parse.quote(pwd)}@{host}?port={port_start}&protocol={protocol.upper()}&profile=default&mtu=1400&multiplexing=MULTIPLEXING_HIGH#{email}%20Mieru%20Karing"
+    links.append(karing_link)
 
     return links
 
