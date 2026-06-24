@@ -436,7 +436,7 @@ def generate_singbox_json(state: dict, uuid_str: str, email: str) -> str:
                 })
                 break
 
-    # Mieru → sing-box mieru outbound
+    # Mieru → sing-box socks5 outbound
     mieru = _load_mieru_state()
     if mieru.get("installed"):
         for u in mieru.get("users", []):
@@ -445,14 +445,13 @@ def generate_singbox_json(state: dict, uuid_str: str, email: str) -> str:
                 tags.append(tag)
                 host = state.get("domain", "") or _get_server_ip()
                 outbounds.append({
-                    "type": "mieru",
+                    "type": "socks",
                     "tag": tag,
                     "server": host,
                     "server_port": mieru.get("port_start", 8964),
-                    "transport": mieru.get("protocol", "TCP").upper(),
                     "username": u.get("username", ""),
                     "password": u.get("password", ""),
-                    "multiplexing": "MULTIPLEXING_HIGH",
+                    "version": "5",
                 })
                 break
 
