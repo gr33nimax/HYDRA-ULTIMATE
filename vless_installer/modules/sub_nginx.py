@@ -126,12 +126,28 @@ def find_active_server_brace(content: str) -> int:
     return -1
 
 
+def _cleanup_stale_backups() -> None:
+    """Удаляет старые бэкап-файлы из папок конфигурации nginx, которые могут вызывать дублирование."""
+    for folder in ("/etc/nginx/sites-enabled", "/etc/nginx/conf.d"):
+        p = Path(folder)
+        if p.exists():
+            for f in p.glob("*.sub.bak"):
+                try:
+                    f.unlink()
+                    print(f"\033[1;33m[WARN]\033[0m  Удален конфликтный бэкап: {f}")
+                except Exception:
+                    pass
+
+
 def inject_sub_location(nginx_conf_path: str | Path | None = None,
                         port: int = DEFAULT_SUB_PORT) -> bool:
     """Инжектировать location /sub/ в nginx-конфиг.
 
     Вставляет блок внутрь первого server { } перед последней закрывающей }.
     """
+    # Удаляем старые конфликтующие бэкапы, если они есть
+    _cleanup_stale_backups()
+
     conf = Path(nginx_conf_path) if nginx_conf_path else _find_nginx_conf()
     if not conf:
         print("\033[0;31m[ERR]\033[0m   Не найден nginx-конфиг")
@@ -158,8 +174,8 @@ def inject_sub_location(nginx_conf_path: str | Path | None = None,
 
     new_content = content[:server_brace] + location_block + "\n" + content[server_brace:]
 
-    # Бэкап + запись
-    backup = conf.with_suffix(conf.suffix + ".sub.bak")
+    # Бэкап + запись (бэкапим в /tmp во избежание duplicate default server в nginx)
+    backup = Path(f"/tmp/{conf.name}.sub.bak")
     if backup.exists():
         backup.unlink()
     conf.rename(backup)
@@ -182,6 +198,9 @@ def inject_sub_location(nginx_conf_path: str | Path | None = None,
 
 def remove_sub_location(nginx_conf_path: str | Path | None = None) -> bool:
     """Удалить инжектированный location /sub/ из nginx-конфига."""
+    # Удаляем старые конфликтующие бэкапы, если они есть
+    _cleanup_stale_backups()
+
     conf = Path(nginx_conf_path) if nginx_conf_path else _find_nginx_conf()
     if not conf or not conf.exists():
         print("\033[0;31m[ERR]\033[0m   Не найден nginx-конфиг")
@@ -199,7 +218,8 @@ def remove_sub_location(nginx_conf_path: str | Path | None = None) -> bool:
     )
     new_content = pattern.sub("\n", content)
 
-    backup = conf.with_suffix(conf.suffix + ".sub.bak")
+    # Бэкап + запись (бэкапим в /tmp во избежание duplicate default server в nginx)
+    backup = Path(f"/tmp/{conf.name}.sub.bak")
     if backup.exists():
         backup.unlink()
     conf.rename(backup)
