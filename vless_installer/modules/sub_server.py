@@ -95,8 +95,9 @@ def find_user_by_token(token: str) -> Optional[tuple[str, str]]:
 
     # sub_tokens: {"email": "token-uuid"} → ищем email по токену
     email = None
+    token_lower = token.lower().strip()
     for e, t in sub_tokens.items():
-        if t == token:
+        if str(t).lower().strip() == token_lower:
             email = e
             break
 
@@ -137,10 +138,13 @@ class SubRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         # Разбираем путь: /sub/<token>[/format]
-        path = self.path.rstrip("/")
+        path = self.path
+        if "?" in path:
+            path = path.split("?")[0]
+        path = path.rstrip("/")
         parts = path.split("/")
 
-        # Минимум: /sub/TOKEN → ["", "sub", "TOKEN"]
+        #  /sub/TOKEN → ["", "sub", "TOKEN"]
         if len(parts) < 3 or parts[1] != "sub":
             self._send_error(404, "Not found")
             return
