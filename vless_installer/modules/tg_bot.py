@@ -201,7 +201,7 @@ def tg_notify_event(event: str, detail: str = "") -> None:
 
 
 def _install_monitor_cron() -> None:
-    """Устанавливает cron-скрипт мониторинга Xray (xray_down/up, cert)."""
+    """Устанавливает cron-скрипт мониторинга (cert)."""
     cfg = tg_load()
     token   = cfg.get("token", "")
     chat_id = cfg.get("chat_id", "")
@@ -219,14 +219,6 @@ def _install_monitor_cron() -> None:
         "-d \"chat_id=$CHAT\" -d \"text=$1\" -d \"parse_mode=HTML\" || true; }\n"
         "HOST=$(hostname -s)\n"
         "TS=$(date '+%d.%m.%Y %H:%M')\n"
-        "if ! systemctl is-active --quiet xray 2>/dev/null; then\n"
-        "  STAMP=/tmp/xray-tg-down.stamp\n"
-        "  if [ ! -f \"$STAMP\" ]; then touch \"$STAMP\";\n"
-        "    send \"🔴 <b>[$HOST]</b> Xray не запущен!\\n<i>$TS</i>\"; fi\n"
-        "else\n"
-        "  if [ -f /tmp/xray-tg-down.stamp ]; then rm -f /tmp/xray-tg-down.stamp;\n"
-        "    send \"🟢 <b>[$HOST]</b> Xray восстановился.\\n<i>$TS</i>\"; fi\n"
-        "fi\n"
         "# Проверка срока сертификата (< 30 дней)\n"
         "CERT=$(find /etc/letsencrypt/live -name 'cert.pem' 2>/dev/null | head -1)\n"
         "if [ -n \"$CERT\" ]; then\n"
@@ -242,7 +234,7 @@ def _install_monitor_cron() -> None:
 
     _MONITOR_SVC.parent.mkdir(parents=True, exist_ok=True)
     _MONITOR_SVC.write_text(
-        "# xray-tg-monitor — installed by vless-installer\n"
+        "# tg-monitor — installed by installer\n"
         f"*/5 * * * * root {script} 2>/dev/null\n"
     )
     _ok(f"Cron-мониторинг установлен: {script}")
@@ -284,23 +276,9 @@ def _load_state() -> dict:
 
 
 def _get_xray_emails() -> list[str]:
-    cfg_paths = [
-        Path("/usr/local/etc/xray/config.json"),
-        Path("/etc/xray/config.json"),
-    ]
-    emails = []
-    for p in cfg_paths:
-        if p.exists():
-            try:
-                cfg = json.loads(p.read_text())
-                for ib in cfg.get("inbounds", []):
-                    for client in ib.get("settings", {}).get("clients", []):
-                        email = client.get("email")
-                        if email and email not in emails:
-                            emails.append(email)
-            except Exception:
-                pass
     st = _load_state()
+    sub_tokens = st.get("sub_tokens", {})
+    emails = list(sub_tokens.keys())
     main_email = st.get("email") or "admin"
     if main_email not in emails:
         emails.append(main_email)
@@ -410,42 +388,6 @@ def add_user_to_all(tag):
     except Exception as e:
         return False, f"Ошибка сохранения state.json: {{e}}"
         
-    # Xray client update
-    xray_success = False
-    written = set()
-    for cfg_path in (CONFIG_F, Path("/usr/local/etc/xray/config.json")):
-        if not cfg_path.exists(): continue
-        try: real = str(cfg_path.resolve())
-        except: real = str(cfg_path)
-        if real in written: continue
-        written.add(real)
-        try:
-            cfg = json.loads(cfg_path.read_text())
-            changed = False
-            for inb in cfg.get("inbounds", []):
-                settings = inb.get("settings", {{}})
-                if "clients" not in settings: continue
-                proto = inb.get("protocol", "")
-                st = inb.get("streamSettings", {{}})
-                use_flow = (proto == "vless" and "realitySettings" in st)
-                
-                clients = settings.setdefault("clients", [])
-                if not any(c.get("email") == tag for c in clients):
-                    client = {{"id": str(uuid.uuid4()), "email": tag}}
-                    if use_flow:
-                        xtls_flow = state.get("xtls_flow", "xtls-rprx-vision")
-                        if xtls_flow: client["flow"] = xtls_flow
-                    clients.append(client)
-                    changed = True
-            if changed:
-                cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
-                xray_success = True
-        except Exception as e:
-            _log(f"Error patching Xray config {{cfg_path}}: {{e}}")
-            
-    if xray_success:
-        subprocess.run(["systemctl", "restart", "xray"], timeout=15)
-        
     # NaiveProxy & Mieru non-interactive add
     sys.path.insert(0, "/opt/vless-ultimate")
     try:
@@ -463,23 +405,6 @@ def add_user_to_all(tag):
     return True, token
 
 def get_user_uuid(email):
-    st = _state()
-    if st.get("email") == email or email == "admin":
-        return st.get("uuid", "")
-    cfg_paths = [
-        Path("/usr/local/etc/xray/config.json"),
-        Path("/etc/xray/config.json"),
-    ]
-    for p in cfg_paths:
-        if p.exists():
-            try:
-                cfg = json.loads(p.read_text())
-                for ib in cfg.get("inbounds", []):
-                    for client in ib.get("settings", {{}}).get("clients", []):
-                        if client.get("email") == email:
-                            return client.get("id", "")
-            except Exception:
-                pass
     return ""
 
 def get_subscription_url(email):
@@ -566,19 +491,29 @@ def handle_traffic(msg):
         return
     
     total = 0
-    for direction in ("uplink", "downlink"):
-        try:
-            r = subprocess.run([
-                str(XRAY_BIN), "api", "statsquery",
-                f"--server=127.0.0.1:{{STATS_PORT}}",
-                f"--pattern=user>>>{{email}}>>>{{direction}}",
-            ], capture_output=True, text=True, timeout=5)
-            for line in r.stdout.splitlines():
-                m = re.search(r'"value"\s*:\s*"?(\d+)"?', line)
-                if m:
-                    total += int(m.group(1))
-        except Exception:
-            pass
+    # NaiveProxy traffic stats for this user from access.log
+    try:
+        naive_log = Path("/var/log/caddy-naive/access.log")
+        if naive_log.exists():
+            with naive_log.open("r", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line: continue
+                    try:
+                        entry = json.loads(line)
+                        req = entry.get("request", {{}})
+                        auth_hdrs = req.get("headers", {{}}).get("Authorization", [])
+                        if auth_hdrs:
+                            import base64
+                            auth_val = auth_hdrs[0].strip()
+                            if auth_val.lower().startswith("basic "):
+                                auth_val = auth_val[6:]
+                            decoded = base64.b64decode(auth_val + "==").decode("utf-8", errors="replace")
+                            u_name = decoded.split(":")[0] if ":" in decoded else decoded
+                            if u_name == email:
+                                total += entry.get("size", 0) or 0
+                    except: pass
+    except: pass
     
     limits = {{}}
     try:
@@ -849,9 +784,9 @@ def handle_server(chat_id):
         idle_diff = idle2 - idle
         total_diff = total2 - total
         if total_diff > 0:
-            cpu = f"{{100 * (1 - idle_diff / total_diff):.1f}}%"
+            cpu = f"{100 * (1 - idle_diff / total_diff):.1f}%"
     except Exception as e:
-        _log(f"CPU error: {{e}}")
+        _log(f"CPU error: {e}")
         
     ram = "❓ неизвестно"
     try:
@@ -865,49 +800,40 @@ def handle_server(chat_id):
         avail_kb = meminfo.get("MemAvailable", 0)
         if total_kb > 0:
             used_kb = total_kb - avail_kb
-            ram = f"{{used_kb/1024/1024:.2f}}/{{total_kb/1024/1024:.2f}} GB ({{100*used_kb/total_kb:.1f}}%)"
+            ram = f"{used_kb/1024/1024:.2f}/{total_kb/1024/1024:.2f} GB ({100*used_kb/total_kb:.1f}%)"
     except Exception as e:
-        _log(f"RAM error: {{e}}")
+        _log(f"RAM error: {e}")
         
     disk = "❓ неизвестно"
     try:
         r = subprocess.run(["df", "-h", "/"], capture_output=True, text=True, timeout=5)
-        lines = r.stdout.strip().split("\\n")
+        lines = r.stdout.strip().split("\n")
         if len(lines) >= 2:
             parts = lines[1].split()
             if len(parts) >= 5:
-                disk = f"{{parts[2]}}/{{parts[1]}} ({{parts[4]}} исп.)"
+                disk = f"{parts[2]}/{parts[1]} ({parts[4]} исп.)"
     except Exception as e:
-        _log(f"Disk error: {{e}}")
+        _log(f"Disk error: {e}")
         
     load = "❓ неизвестно"
     try:
         with open("/proc/loadavg") as f:
             load = " ".join(f.read().split()[:3])
     except Exception as e:
-        _log(f"LoadAvg error: {{e}}")
+        _log(f"LoadAvg error: {e}")
         
     uptime = "❓ неизвестно"
     try:
         uptime = subprocess.check_output(["uptime", "-p"], text=True, timeout=5).strip()
     except Exception as e:
-        _log(f"Uptime error: {{e}}")
+        _log(f"Uptime error: {e}")
         
-    xray = "🔴 не активен"
-    try:
-        r = subprocess.run(["systemctl", "is-active", "xray"], capture_output=True, text=True, timeout=5)
-        if r.stdout.strip() == "active":
-            xray = "🟢 активен"
-    except Exception as e:
-        _log(f"Xray status error: {{e}}")
-        
-    text = (f"📊 <b>Информация о сервере</b>\\n\\n"
-            f"💻 CPU: {{cpu}}\\n"
-            f"💾 RAM: {{ram}}\\n"
-            f"💽 Диск: {{disk}}\\n"
-            f"⏱️ Load average: {{load}}\\n"
-            f"⏰ Uptime: {{uptime}}\\n"
-            f"⚙️ Xray: {{xray}}")
+    text = (f"📊 <b>Информация о сервере</b>\n\n"
+            f"💻 CPU: {cpu}\n"
+            f"💾 RAM: {ram}\n"
+            f"💽 Диск: {disk}\n"
+            f"⏱️ Load average: {load}\n"
+            f"⏰ Uptime: {uptime}")
     send(chat_id, text)
 
 def add_user_to_all(tag):
@@ -924,42 +850,6 @@ def add_user_to_all(tag):
         STATE_F.write_text(json.dumps(state, indent=2, ensure_ascii=False))
     except Exception as e:
         return False, f"Ошибка сохранения state.json: {{e}}"
-        
-    # Xray client update
-    xray_success = False
-    written = set()
-    for cfg_path in (CONFIG_F, Path("/usr/local/etc/xray/config.json")):
-        if not cfg_path.exists(): continue
-        try: real = str(cfg_path.resolve())
-        except: real = str(cfg_path)
-        if real in written: continue
-        written.add(real)
-        try:
-            cfg = json.loads(cfg_path.read_text())
-            changed = False
-            for inb in cfg.get("inbounds", []):
-                settings = inb.get("settings", {{}})
-                if "clients" not in settings: continue
-                proto = inb.get("protocol", "")
-                st = inb.get("streamSettings", {{}})
-                use_flow = (proto == "vless" and "realitySettings" in st)
-                
-                clients = settings.setdefault("clients", [])
-                if not any(c.get("email") == tag for c in clients):
-                    client = {{"id": str(uuid.uuid4()), "email": tag}}
-                    if use_flow:
-                        xtls_flow = state.get("xtls_flow", "xtls-rprx-vision")
-                        if xtls_flow: client["flow"] = xtls_flow
-                    clients.append(client)
-                    changed = True
-            if changed:
-                cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
-                xray_success = True
-        except Exception as e:
-            _log(f"Error patching Xray config {{cfg_path}}: {{e}}")
-            
-    if xray_success:
-        subprocess.run(["systemctl", "restart", "xray"], timeout=15)
         
     # NaiveProxy & Mieru non-interactive add
     sys.path.insert(0, "/opt/vless-ultimate")
@@ -990,37 +880,7 @@ def del_user_from_all(tag):
     except Exception as e:
         return False, f"Ошибка сохранения state.json: {{e}}"
         
-    # Xray client delete
-    xray_success = False
-    written = set()
-    for cfg_path in (CONFIG_F, Path("/usr/local/etc/xray/config.json")):
-        if not cfg_path.exists(): continue
-        try: real = str(cfg_path.resolve())
-        except: real = str(cfg_path)
-        if real in written: continue
-        written.add(real)
-        try:
-            cfg = json.loads(cfg_path.read_text())
-            changed = False
-            for inb in cfg.get("inbounds", []):
-                settings = inb.get("settings", {{}})
-                if "clients" not in settings: continue
-                clients = settings.get("clients", [])
-                before = len(clients)
-                clients = [c for c in clients if c.get("email") != tag]
-                if len(clients) < before:
-                    if not clients:
-                        clients.append({{"id": "00000000-0000-0000-0000-000000000000", "email": "disabled@placeholder"}})
-                    settings["clients"] = clients
-                    changed = True
-            if changed:
-                cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
-                xray_success = True
-        except Exception as e:
-            _log(f"Error patching Xray config {{cfg_path}}: {{e}}")
-            
-    if xray_success:
-        subprocess.run(["systemctl", "restart", "xray"], timeout=15)
+
         
     # NaiveProxy & Mieru non-interactive delete
     sys.path.insert(0, "/opt/vless-ultimate")
@@ -1056,27 +916,14 @@ def del_user_from_all(tag):
     return True, "Успешно удален"
 
 def handle_traffic(chat_id):
-    xray_lines = []
-    xray_total = 0
+    users_lines = []
+    users_total = 0
     st_dict = _state()
     sub_tokens = st_dict.get("sub_tokens", {{}})
     tags = sorted(list(sub_tokens.keys()))
             
     for tag in tags:
         user_total = 0
-        for direction in ("uplink", "downlink"):
-            try:
-                r = subprocess.run([
-                    str(XRAY_BIN), "api", "statsquery",
-                    f"--server=127.0.0.1:{{STATS_PORT}}",
-                    f"--pattern=user>>>{{tag}}>>>{{direction}}",
-                ], capture_output=True, text=True, timeout=5)
-                for line in r.stdout.splitlines():
-                    m = re.search(r'"value"\s*:\s*"?(\d+)"?', line)
-                    if m:
-                        user_total += int(m.group(1))
-            except Exception:
-                pass
                 
         # NaiveProxy traffic stats for this user from access.log
         try:
@@ -1102,8 +949,8 @@ def handle_traffic(chat_id):
                         except: pass
         except: pass
 
-        xray_total += user_total
-        xray_lines.append(f"  • {{tag}}: {{_bytes_human(user_total)}}")
+        users_total += user_total
+        users_lines.append(f"  • {{tag}}: {{_bytes_human(user_total)}}")
         
     naive_total = 0
     naive_port = None
@@ -1198,8 +1045,8 @@ def handle_traffic(chat_id):
         _log(f"AWG traffic error: {{e}}")
 
     text = "📊 <b>Потребление трафика</b>\\n\\n"
-    if xray_lines:
-        text += "<b>Xray/Naive (по пользователям):</b>\\n" + "\\n".join(xray_lines) + f"\\nИтого Xray/Naive: {{_bytes_human(xray_total)}}\\n\\n"
+    if users_lines:
+        text += "<b>NaiveProxy (по пользователям):</b>\\n" + "\\n".join(users_lines) + f"\\nИтого пользователей: {{_bytes_human(users_total)}}\\n\\n"
     if naive_port:
         text += f"<b>NaiveProxy (порт {{naive_port}}):</b> {{_bytes_human(naive_total)}}\\n\\n"
     if h2_port:
@@ -1209,7 +1056,7 @@ def handle_traffic(chat_id):
     if awg_lines:
         text += "<b>AmneziaVPN (по пирам):</b>\\n" + "\\n".join(awg_lines) + f"\\nИтого AmneziaVPN: {{_bytes_human(awg_total)}}\\n\\n"
         
-    grand_total = xray_total + naive_total + h2_total + mieru_total + awg_total
+    grand_total = users_total + naive_total + h2_total + mieru_total + awg_total
     text += f"<b>💳 ВСЕГО ПО СЕРВЕРУ:</b> {{_bytes_human(grand_total)}}"
     send(chat_id, text)
 
@@ -1241,17 +1088,6 @@ def handle_users(chat_id):
     lines = []
     for tag, token in sorted(sub_tokens.items()):
         user_traffic = 0
-        for direction in ("uplink", "downlink"):
-            try:
-                r = subprocess.run([
-                    str(XRAY_BIN), "api", "statsquery",
-                    f"--server=127.0.0.1:{{STATS_PORT}}",
-                    f"--pattern=user>>>{{tag}}>>>{{direction}}",
-                ], capture_output=True, text=True, timeout=5)
-                for line in r.stdout.splitlines():
-                    m = re.search(r'"value"\s*:\s*"?(\d+)"?', line)
-                    if m: user_traffic += int(m.group(1))
-            except Exception: pass
             
         # NaiveProxy traffic stats for this user from access.log
         try:
@@ -1445,7 +1281,6 @@ def handle_honeypot(chat_id):
 
 def handle_logs(chat_id, args):
     modules = {{
-        "xray": ("journalctl -u xray -n 20 --no-pager", "Log Xray"),
         "fail2ban": ("journalctl -u fail2ban -n 20 --no-pager", "Log Fail2ban"),
         "honeypot": ("journalctl -u xray-honeypot -n 20 --no-pager", "Log Honeypot"),
         "naive": ("tail -20 /var/log/caddy-naive/access.log", "Log NaiveProxy"),
@@ -1474,7 +1309,7 @@ def handle_logs(chat_id, args):
 
 def handle_notify(chat_id, args):
     if not args or args[0].strip().lower() not in ("on", "off"):
-        send(chat_id, "⚠️ Использование: <code>/notify on</code> или <code>/notify off</code>")
+        send(chat_id, "⚠️ Использование: <code>/notify on</code> or <code>/notify off</code>")
         return
     val = args[0].strip().lower() == "on"
     cfg = {{}}
@@ -1483,7 +1318,7 @@ def handle_notify(chat_id, args):
         try: cfg = json.loads(t_file.read_text())
         except: pass
     events = cfg.get("events", {{}})
-    ev_keys = ["xray_down", "xray_up", "cert_expire", "traffic_limit", "health_report", "node_down", "port_blocked", "autoban"]
+    ev_keys = ["cert_expire", "traffic_limit", "health_report", "node_down", "port_blocked", "autoban"]
     for k in ev_keys: events[k] = val
     cfg["events"] = events
     try:
@@ -1506,7 +1341,7 @@ def handle_logout(chat_id):
 
 def handle_help(chat_id):
     text = (
-        "📖 <b>Панель администратора VLESS-ULTIMATE X</b>\\n\\n"
+        "📖 <b>Панель администратора Multi-Proxy Manager</b>\\n\\n"
         "/server - Статус и метрики сервера\\n"
         "/traffic - Потребление трафика по протоколам\\n"
         "/users - Список пользователей, трафик и TTL\\n"
@@ -1816,10 +1651,10 @@ def do_manage_telegram() -> None:
             input(f"{BLUE}Нажмите Enter...{NC}")
 
         elif ch == "7" and configured:
-            ev_keys = ["xray_down","xray_up","cert_expire","traffic_limit",
+            ev_keys = ["cert_expire","traffic_limit",
                        "health_report","node_down","port_blocked","autoban"]
             ev_labels = [
-                "Xray упал","Xray восстановился","Сертификат истекает",
+                "Сертификат истекает",
                 "Лимит трафика","Daily health-отчёт","Exit-нода недоступна",
                 "Порт заблокирован ТСПУ","AutoBan — IP забанен",
             ]
@@ -1853,7 +1688,7 @@ def do_manage_telegram() -> None:
             else:
                 _info("Отправка тестового сообщения...")
                 ok = tg_send(
-                    "✅ <b>VLESS-ULTIMATE X</b>: тестовое сообщение Admin Panel. Уведомления работают!",
+                    "✅ <b>Multi-Proxy Manager</b>: тестовое сообщение Admin Panel. Уведомления работают!",
                     tok, chat
                 )
                 _ok("Сообщение отправлено!") if ok else _warn("Ошибка — проверьте настройки бота/уведомлений")

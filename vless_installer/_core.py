@@ -60,7 +60,6 @@ import getpass
 
 # ── Модули v4.12.9 ──────────────────────────────────────────────────────────────
 from vless_installer.modules.smoke_test      import smoke_test_xray
-from vless_installer.modules.xray_safe_apply import xray_apply_with_smoke
 from vless_installer.modules.nginx_watchdog  import (
     nginx_watchdog_install, nginx_watchdog_remove, do_manage_nginx_watchdog,
 )
@@ -9858,33 +9857,6 @@ def _add_subscription_user() -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
     success(f"Пользователь '{new_email}' успешно добавлен в систему подписок.")
     
-    # Автоматически добавляем во все установленные плагины
-    xray_installed = False
-    for p in (Path("/etc/xray/config.json"), Path("/usr/local/etc/xray/config.json")):
-        if p.exists():
-            xray_installed = True
-            break
-    if xray_installed:
-        try:
-            cfg_path = _users_get_config()
-            with cfg_path.open() as f:
-                c = json.load(f)
-            clients = c.get("inbounds", [{}])[0].get("settings", {}).get("clients", [])
-            if not any(cl.get("email") == new_email for cl in clients):
-                vless_uuid = gen_uuid()
-                net = (c.get("inbounds", [{}])[0]
-                       .get("streamSettings", {}).get("network", "tcp"))
-                new_client = {"id": vless_uuid, "email": new_email}
-                if net != "xhttp" and XTLS_FLOW:
-                    new_client["flow"] = XTLS_FLOW
-                c["inbounds"][0]["settings"]["clients"].append(new_client)
-                with cfg_path.open('w') as f:
-                    json.dump(c, f, indent=2, ensure_ascii=False)
-                _users_apply_config(cfg_path)
-                success(f"Пользователь '{new_email}' автоматически добавлен в VLESS (Xray)")
-        except Exception as e:
-            warn(f"Не удалось добавить пользователя в VLESS (Xray): {e}")
-
     try:
         from vless_installer.modules.naiveproxy import add_user_noninteractive as np_add
         res_np = np_add(new_email)
@@ -9959,28 +9931,6 @@ def _delete_subscription_user() -> None:
         STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
         success(f"Пользователь '{target}' удален из системы подписок")
         
-        # Автоматически удаляем из всех установленных плагинов
-        xray_installed = False
-        for p in (Path("/etc/xray/config.json"), Path("/usr/local/etc/xray/config.json")):
-            if p.exists():
-                xray_installed = True
-                break
-        if xray_installed:
-            try:
-                cfg_path = _users_get_config()
-                with cfg_path.open() as f:
-                    c = json.load(f)
-                clients = c.get("inbounds", [{}])[0].get("settings", {}).get("clients", [])
-                new_clients = [cl for cl in clients if cl.get("email") != target]
-                if len(new_clients) < len(clients):
-                    c["inbounds"][0]["settings"]["clients"] = new_clients
-                    with cfg_path.open('w') as f:
-                        json.dump(c, f, indent=2, ensure_ascii=False)
-                    _users_apply_config(cfg_path)
-                    success(f"Пользователь '{target}' автоматически удален из VLESS (Xray)")
-            except Exception as e:
-                warn(f"Не удалось удалить пользователя из VLESS (Xray): {e}")
-
         try:
             from vless_installer.modules.naiveproxy import delete_user_noninteractive as np_del
             if np_del(target):
@@ -28599,15 +28549,10 @@ def _menu_install_system() -> None:
         print()
         _box_top("⚙️  УСТАНОВКА И СИСТЕМА")
         _box_row()
-        _box_item("1", f"🚀 Установить / Переустановить  {DIM}(режим A или B){NC}")
-        _box_item("D", f"🔍 Dry-run  {DIM}(предпросмотр — без изменений системы){NC}")
-        _box_item("2", f"🔀 Переключить режим A ↔ B  {DIM}(без переустановки){NC}")
-        _box_item("3", f"📦 Миграция  {DIM}(Экспорт / Импорт конфигурации){NC}")
-        _box_item("4", f"⚡ Оптимизация системы  {DIM}(Sysctl / Limits){NC}")
-        _box_item("5", "🔧 Обновить Xray-core")
-        _box_item("6", f"🛠️  Аварийное восстановление  {DIM}(из state.json, без переустановки){NC}")
-        _box_item("7", "🗑️  Удалить установку")
-        _box_item("8", "🧪 Запустить unit-тесты")
+        _box_item("1", f"📦 Миграция  {DIM}(Экспорт / Импорт конфигурации){NC}")
+        _box_item("2", f"⚡ Оптимизация системы  {DIM}(Sysctl / Limits){NC}")
+        _box_item("3", "🗑️  Удалить установку")
+        _box_item("4", "🧪 Запустить unit-тесты")
         _box_row()
         _box_back()
         _box_bottom()
@@ -28616,29 +28561,17 @@ def _menu_install_system() -> None:
         except KeyboardInterrupt:
             break
         if ch == "1":
-            do_full_install()
-            input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch.lower() == "d":
-            do_dry_run()
-        elif ch == "2":
-            switch_mode_ab()
-        elif ch == "3":
             _menu_migration()
-        elif ch == "4":
+        elif ch == "2":
             info("Применение оптимизаций sysctl/limits...")
             apply_sysctl_and_limits()
             input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch == "5":
-            do_xray_update_interactive()
-            input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch == "6":
-            do_emergency_repair()
-        elif ch == "7":
+        elif ch == "3":
             ans = input(f"{RED}Удалить установку? [y/N]:{NC} ").strip().lower()
             if ans == 'y':
                 do_uninstall()
             input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch == "8":
+        elif ch == "4":
             run_unit_tests()
             input(f"{BLUE}Нажмите Enter...{NC}")
         elif ch.lower() == "q" or ch == "":
@@ -28903,14 +28836,11 @@ def _menu_network() -> None:
         _box_item("4", f"☁️  Cloudflare WARP  {DIM}(управление туннелем){NC}")
         _box_item("5", f"🔄 Сменить домен / порт  {DIM}(без переустановки){NC}")
         _box_item("6", f"🌍 Стратегия исходящих  {DIM}(domainStrategy){NC}")
-        _box_item("7", f"📡 Exit-ноды каскада  {DIM}(Режим B, до 10 нод){NC}")
-        _box_item("8", f"🔗 Сводка каскадного прокси  {DIM}(Режим B){NC}")
-        _box_item("9", "🌐 Внешняя проверка домена / порта")
-        _box_item("0", "🌐 Геопроверка выходного IP")
+        _box_item("7", "🌐 Внешняя проверка домена / порта")
+        _box_item("8", "🌐 Геопроверка выходного IP")
         _box_sep()
         _box_item("D", f"🌐 Кастомные DNS правила  {DIM}(hosts / routing override){NC}")
         _box_item("M", f"📏 MTU/MSS автотюнинг  {DIM}(оптимизация для exit-нод){NC}")
-        _box_item("X", f"⚡ XTLS-flow режим  {DIM}(Vision / Splice / none — только REALITY){NC}")
         _box_sep()
         _box_item("H", f"🚀 Hysteria2 транспорт  {DIM}(Режим B, Exit-нода, Балансировщик, DPI){NC}")
         _box_row()
@@ -28940,48 +28870,11 @@ def _menu_network() -> None:
             do_change_domain_strategy()
             input(f"{BLUE}Нажмите Enter...{NC}")
         elif ch == "7":
-            _load_state_into_globals()
-            if AWG_EXIT_ENABLED and INSTALL_MODE == "B":
-                warn("Транспорт AWG активен — управление VLESS нодами недоступно.")
-                warn("Выход через туннель awg0. Используйте AWG Watchdog (Безопасность → W).")
-                time.sleep(2)
-            else:
-                do_manage_nodes()
-        elif ch == "8":
-            _load_state_into_globals()
-            if INSTALL_MODE != "B":
-                warn("Установка выполнена в Режиме A — каскад не настроен.")
-                time.sleep(2)
-                continue
-            if AWG_EXIT_ENABLED:
-                # AWG: показываем статус туннеля вместо VLESS-сводки
-                print()
-                _box_top("Сводка AWG 2.0 туннеля (Режим B)")
-                _box_row(f"  Транспорт:     {CYAN}AmneziaWG 2.0{NC}")
-                _box_row(f"  Exit-VPS:      {CYAN}{AWG_EXIT_HOST}:{AWG_EXIT_PORT}/udp{NC}")
-                _box_row(f"  Интерфейс:     {CYAN}{AWG_INTERFACE}{NC}")
-                _box_row(f"  Подсеть IPv4:  {CYAN}{AWG_SUBNET}{NC}")
-                _box_row(f"  Подсеть IPv6:  {CYAN}{AWG_SUBNET_V6}{NC}")
-                _r_awg = _run(["ip", "link", "show", AWG_INTERFACE], capture=True, check=False)
-                _awg_up = _r_awg.returncode == 0
-                _box_row(f"  Туннель:       {GREEN+'активен'+NC if _awg_up else RED+'не поднят'+NC}")
-                _box_row()
-                _box_row(f"  {DIM}Конфиг клиента: /etc/amnezia/amneziawg/awg0.conf{NC}")
-                _box_bottom()
-                input(f"{BLUE}Нажмите Enter...{NC}")
-            elif not CHAIN_EXIT_HOST:
-                warn("Параметры Exit Node не найдены. Переустановите в Режиме B.")
-                time.sleep(2)
-                continue
-            else:
-                generate_chain_summary()
-                input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch == "9":
             _box_top("Внешняя проверка домена")
             do_check_domain_external()
             _box_bottom()
             input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch == "0":
+        elif ch == "8":
             check_exit_geo(silent=False)
             input(f"{BLUE}Нажмите Enter...{NC}")
         elif ch.lower() == "r":
@@ -28990,13 +28883,6 @@ def _menu_network() -> None:
             do_manage_dns_rules()
         elif ch.lower() == "m":
             do_mtu_tuning()
-        elif ch.lower() == "x":
-            _load_state_into_globals()
-            if PROTOCOL_MODE != "reality":
-                warn("XTLS-flow доступен только для REALITY (Режим A/B с REALITY).")
-                time.sleep(2)
-            else:
-                do_manage_xtls_flow()
         elif ch.lower() == "h":
             do_hysteria2_menu()
         elif ch.lower() == "q" or ch == "":
