@@ -9787,7 +9787,7 @@ def _setup_subscription_domain_ssl() -> None:
             warn("Certbot сообщил об успехе, но файлы сертификата не найдены по стандартному пути.")
     else:
         err_msg = r.stderr or r.stdout or "Неизвестная ошибка"
-        error(f"Не удалось получить SSL-сертификат:\n{err_msg}")
+        warn(f"Не удалось получить SSL-сертификат:\n{err_msg}")
 
     time.sleep(3.5)
 
