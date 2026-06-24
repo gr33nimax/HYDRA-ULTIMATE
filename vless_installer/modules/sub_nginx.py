@@ -35,9 +35,26 @@ DEFAULT_SUB_PORT = 9443
 
 def _find_nginx_conf() -> Path | None:
     """Найти основной конфиг nginx."""
-    for p in NGINX_CONF_CANDIDATES:
+    candidates = list(NGINX_CONF_CANDIDATES)
+    
+    # Пытаемся получить домен из state.json
+    state_file = Path("/var/lib/xray-installer/state.json")
+    if state_file.exists():
+        try:
+            import json
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            domain = state.get("domain")
+            if domain:
+                # Вставляем доменные конфиги в начало списка
+                candidates.insert(0, Path(f"/etc/nginx/sites-enabled/{domain}"))
+                candidates.insert(1, Path(f"/etc/nginx/sites-available/{domain}"))
+        except Exception:
+            pass
+
+    for p in candidates:
         if p.exists():
             return p
+            
     # Попробуем найти через nginx -T
     try:
         r = subprocess.run(["nginx", "-T"], capture_output=True, text=True, timeout=5)
@@ -79,6 +96,36 @@ def check_sub_location(nginx_conf_path: str | Path | None = None) -> bool:
     return START_MARKER in content
 
 
+def find_active_server_brace(content: str) -> int:
+    """Находит индекс закрывающей фигурной скобки активного (незакомментированного) server-блока."""
+    clean_lines = []
+    for line in content.splitlines(keepends=True):
+        if "#" in line:
+            idx = line.index("#")
+            clean_lines.append(line[:idx] + " " * (len(line) - idx))
+        else:
+            clean_lines.append(line)
+    clean_content = "".join(clean_lines)
+
+    server_matches = list(re.finditer(r'\bserver\s*\{', clean_content))
+    if not server_matches:
+        return -1
+
+    # Ищем с последнего server-блока к первому
+    for last_server in reversed(server_matches):
+        start_idx = last_server.end()
+        depth = 1
+        for i in range(start_idx, len(clean_content)):
+            char = clean_content[i]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return i
+    return -1
+
+
 def inject_sub_location(nginx_conf_path: str | Path | None = None,
                         port: int = DEFAULT_SUB_PORT) -> bool:
     """Инжектировать location /sub/ в nginx-конфиг.
@@ -99,17 +146,22 @@ def inject_sub_location(nginx_conf_path: str | Path | None = None,
 
     location_block = generate_location_block(port)
 
-    # Ищем последнюю `}` от server-блока и вставляем перед ней
-    # Стратегия: находим последний `}` в файле
-    last_brace = content.rfind("}")
-    if last_brace == -1:
+    # Находим закрывающую скобку активного server-блока
+    server_brace = find_active_server_brace(content)
+    if server_brace == -1:
+        # Резервный вариант, если не смогли распарсить структуру скобок
+        server_brace = content.rfind("}")
+
+    if server_brace == -1:
         print("\033[0;31m[ERR]\033[0m   Не удалось найти server-блок в nginx-конфиге")
         return False
 
-    new_content = content[:last_brace] + location_block + "\n" + content[last_brace:]
+    new_content = content[:server_brace] + location_block + "\n" + content[server_brace:]
 
     # Бэкап + запись
     backup = conf.with_suffix(conf.suffix + ".sub.bak")
+    if backup.exists():
+        backup.unlink()
     conf.rename(backup)
     conf.write_text(new_content, encoding="utf-8")
 
