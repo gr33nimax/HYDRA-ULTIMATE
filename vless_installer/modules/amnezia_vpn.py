@@ -25,12 +25,12 @@ def _detect_colors() -> dict:
     if sys.stdout.isatty():
         light = os.environ.get("VLESS_THEME", "").lower() == "light"
         if light:
-            return dict(RED='\033[0;31m', GREEN='\033[0;32m', YELLOW='\033[0;33m',
-                        CYAN='\033[0;34m', BLUE='\033[0;35m', BOLD='\033[1m',
-                        DIM='\033[2m', WHITE='\033[0;30m', NC='\033[0m')
-        return dict(RED='\033[0;31m', GREEN='\033[0;32m', YELLOW='\033[1;33m',
-                    CYAN='\033[0;36m', BLUE='\033[0;34m', BOLD='\033[1m',
-                    DIM='\033[2m', WHITE='\033[1;37m', NC='\033[0m')
+            return dict(RED='\\033[0;31m', GREEN='\\033[0;32m', YELLOW='\\033[0;33m',
+                        CYAN='\\033[0;34m', BLUE='\\033[0;35m', BOLD='\\033[1m',
+                        DIM='\\033[2m', WHITE='\\033[0;30m', NC='\\033[0m')
+        return dict(RED='\\033[0;31m', GREEN='\\033[0;32m', YELLOW='\\033[1;33m',
+                    CYAN='\\033[0;36m', BLUE='\\033[0;34m', BOLD='\\033[1m',
+                    DIM='\\033[2m', WHITE='\\033[1;37m', NC='\\033[0m')
     return {k: '' for k in ('RED','GREEN','YELLOW','CYAN','BLUE','BOLD','DIM','WHITE','NC')}
 
 _C = _detect_colors()
@@ -78,9 +78,9 @@ from vless_installer.modules.box_renderer import (
 def _log(level: str, msg: str) -> None:
     try:
         _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        clean = re.sub(r'\x1b\[[0-9;]*m', '', msg)
+        clean = re.sub(r'\\x1b\\[[0-9;]*m', '', msg)
         with _LOG_FILE.open("a") as f:
-            f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [AMNEZIA] [{level}] {clean}\n")
+            f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [AMNEZIA] [{level}] {clean}\\n")
     except Exception:
         pass
 
@@ -248,6 +248,8 @@ def _get_client_configs() -> list[dict]:
         if r.returncode == 0:
             files = [f.strip() for f in r.stdout.splitlines() if f.strip()]
             for f in files:
+                if Path(f).name == "awg0.conf" or Path(f).name == "wg0.conf":
+                    continue
                 r_cat = subprocess.run([
                     "docker", "exec", name,
                     "cat", f
@@ -271,6 +273,269 @@ def _generate_client_qr(config_text: str, output_path: str) -> bool:
     except Exception:
         return False
 
+# ── Добавление и удаление пользователей (AmneziaWG в Docker) ──────────────────
+
+def parse_awg_conf(conf_text: str) -> tuple[dict, list[dict]]:
+    lines = conf_text.splitlines()
+    interface = {}
+    peers = []
+    
+    current_section = None
+    current_peer = {}
+    current_comment = None
+    
+    for line in lines:
+        line_strip = line.strip()
+        if not line_strip:
+            continue
+        if line_strip.startswith("#"):
+            if "CLIENT:" in line_strip:
+                current_comment = line_strip.split("CLIENT:")[-1].strip()
+            continue
+            
+        if line_strip.startswith("[Interface]"):
+            current_section = "interface"
+            continue
+        elif line_strip.startswith("[Peer]"):
+            if current_peer:
+                peers.append(current_peer)
+            current_section = "peer"
+            current_peer = {}
+            if current_comment:
+                current_peer["name"] = current_comment
+                current_comment = None
+            continue
+            
+        if "=" in line_strip:
+            key, val = line_strip.split("=", 1)
+            key = key.strip()
+            val = val.strip()
+            if current_section == "interface":
+                interface[key] = val
+            elif current_section == "peer":
+                current_peer[key] = val
+                
+    if current_peer:
+        peers.append(current_peer)
+        
+    return interface, peers
+
+def rebuild_awg_conf(interface: dict, peers: list[dict]) -> str:
+    lines = []
+    lines.append("[Interface]")
+    for k, v in interface.items():
+        lines.append(f"{k} = {v}")
+    lines.append("")
+    
+    for peer in peers:
+        if "name" in peer:
+            lines.append(f"### CLIENT: {peer['name']}")
+        lines.append("[Peer]")
+        for k, v in peer.items():
+            if k == "name":
+                continue
+            lines.append(f"{k} = {v}")
+        lines.append("")
+        
+    return "\\n".join(lines)
+
+def get_next_available_ip(interface_address: str, peers: list[dict]) -> str:
+    ip_part = interface_address.split("/")[0].split(",")[0].strip()
+    octets = ip_part.split(".")
+    base = ".".join(octets[:3])
+    server_last_octet = int(octets[3])
+    
+    used_octets = {server_last_octet}
+    for peer in peers:
+        allowed_ips = peer.get("AllowedIPs", "")
+        m = re.search(r'(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.(\\d{1,3}))', allowed_ips)
+        if m:
+            used_octets.add(int(m.group(2)))
+            
+    for i in range(2, 255):
+        if i not in used_octets:
+            return f"{base}.{i}"
+            
+    raise ValueError("Нет свободных IP-адресов в подсети сервера.")
+
+def _add_client(username: str) -> bool:
+    """Добавляет нового пользователя (пира) в контейнер AmneziaWG."""
+    if not _container_running():
+        _err("Контейнер должен быть запущен для настройки пира!")
+        return False
+        
+    name = _get_container_name()
+    username = re.sub(r'[^a-zA-Z0-9_-]', '', username)
+    if not username:
+        _err("Недопустимое имя пользователя!")
+        return False
+        
+    existing = _get_client_configs()
+    for cfg in existing:
+        if cfg["name"].lower() == username.lower():
+            _err(f"Пользователь с именем '{username}' уже существует!")
+            return False
+
+    r = subprocess.run(["docker", "exec", name, "cat", "/etc/amnezia/amneziawg/awg0.conf"], capture_output=True, text=True)
+    if r.returncode != 0:
+        r = subprocess.run(["docker", "exec", name, "cat", "/etc/wireguard/wg0.conf"], capture_output=True, text=True)
+        if r.returncode != 0:
+            _err("Не удалось найти файл конфигурации сервера (awg0.conf/wg0.conf)!")
+            return False
+            
+    conf_path_in_container = "/etc/amnezia/amneziawg/awg0.conf" if "amneziawg" in r.args[3] else "/etc/wireguard/wg0.conf"
+    conf_text = r.stdout
+    interface, peers = parse_awg_conf(conf_text)
+    
+    r_gen = subprocess.run(["docker", "exec", name, "awg", "genkey"], capture_output=True, text=True)
+    if r_gen.returncode != 0:
+        r_gen = subprocess.run(["docker", "exec", name, "wg", "genkey"], capture_output=True, text=True)
+        if r_gen.returncode != 0:
+            _err("Не удалось сгенерировать приватный ключ!")
+            return False
+    cli_private_key = r_gen.stdout.strip()
+    
+    tool_bin = "awg" if "awg" in r_gen.args[2] else "wg"
+    r_pub = subprocess.run(["docker", "exec", "-i", name, tool_bin, "pubkey"], input=cli_private_key, capture_output=True, text=True)
+    if r_pub.returncode != 0:
+        _err("Не удалось сгенерировать публичный ключ!")
+        return False
+    cli_public_key = r_pub.stdout.strip()
+    
+    srv_address = interface.get("Address", "10.8.0.1/24")
+    try:
+        cli_ip = get_next_available_ip(srv_address, peers)
+    except Exception as e:
+        _err(f"Ошибка выделения IP: {e}")
+        return False
+        
+    new_peer = {
+        "name": username,
+        "PublicKey": cli_public_key,
+        "AllowedIPs": f"{cli_ip}/32"
+    }
+    peers.append(new_peer)
+    
+    new_conf_text = rebuild_awg_conf(interface, peers)
+    r_write = subprocess.run(["docker", "exec", "-i", name, "tee", conf_path_in_container], input=new_conf_text, capture_output=True, text=True)
+    if r_write.returncode != 0:
+        _err("Не удалось сохранить конфигурацию на сервере!")
+        return False
+        
+    iface_name = "awg0" if "awg0" in conf_path_in_container else "wg0"
+    subprocess.run(["docker", "exec", name, tool_bin, "set", iface_name, "peer", cli_public_key, "allowed-ips", f"{cli_ip}/32"])
+    
+    srv_private_key = interface.get("PrivateKey")
+    if not srv_private_key:
+        _err("Не найден приватный ключ сервера в конфигурации!")
+        return False
+        
+    r_spub = subprocess.run(["docker", "exec", "-i", name, tool_bin, "pubkey"], input=srv_private_key, capture_output=True, text=True)
+    if r_spub.returncode != 0:
+        _err("Не удалось получить публичный ключ сервера!")
+        return False
+    srv_public_key = r_spub.stdout.strip()
+    
+    server_ip = "YOUR_SERVER_IP"
+    try:
+        if _STATE_FILE.exists():
+            st = json.loads(_STATE_FILE.read_text())
+            server_ip = st.get("domain", "") or st.get("server_ip", "")
+    except Exception:
+        pass
+    if not server_ip or server_ip == "YOUR_SERVER_IP":
+        r_ip = subprocess.run(["curl", "-s", "-4", "--connect-timeout", "5", "https://api4.ipify.org"], capture_output=True, text=True)
+        if r_ip.returncode == 0:
+            server_ip = r_ip.stdout.strip()
+            
+    srv_port = interface.get("ListenPort", "51820")
+    
+    cli_lines = [
+        "[Interface]",
+        f"PrivateKey = {cli_private_key}",
+        f"Address = {cli_ip}/24",
+        "DNS = 1.1.1.1"
+    ]
+    for k in ("Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"):
+        if k in interface:
+            cli_lines.append(f"{k} = {interface[k]}")
+            
+    cli_lines.extend([
+        "",
+        "[Peer]",
+        f"PublicKey = {srv_public_key}",
+        f"Endpoint = {server_ip}:{srv_port}",
+        "AllowedIPs = 0.0.0.0/0",
+        "PersistentKeepalive = 25"
+    ])
+    
+    client_config_text = "\\n".join(cli_lines)
+    
+    subprocess.run(["docker", "exec", name, "mkdir", "-p", "/opt/amnezia/clients/"])
+    client_config_path = f"/opt/amnezia/clients/{username}.conf"
+    r_cli_save = subprocess.run(["docker", "exec", "-i", name, "tee", client_config_path], input=client_config_text, capture_output=True, text=True)
+    
+    if r_cli_save.returncode == 0:
+        _ok(f"Пользователь '{username}' успешно добавлен!")
+        _ok(f"Конфиг сохранен в контейнере: {client_config_path}")
+        return True
+    else:
+        _err("Не удалось сохранить конфигурационный файл клиента в контейнер!")
+        return False
+
+def _delete_client(username: str) -> bool:
+    """Удаляет пользователя (клиента) из конфигурации AmneziaWG."""
+    if not _container_exists():
+        _err("Контейнер не существует!")
+        return False
+        
+    name = _get_container_name()
+    username = re.sub(r'[^a-zA-Z0-9_-]', '', username)
+    if not username:
+        _err("Недопустимое имя пользователя!")
+        return False
+
+    r = subprocess.run(["docker", "exec", name, "cat", "/etc/amnezia/amneziawg/awg0.conf"], capture_output=True, text=True)
+    if r.returncode != 0:
+        r = subprocess.run(["docker", "exec", name, "cat", "/etc/wireguard/wg0.conf"], capture_output=True, text=True)
+        if r.returncode != 0:
+            _err("Не удалось найти файл конфигурации сервера!")
+            return False
+            
+    conf_path_in_container = "/etc/amnezia/amneziawg/awg0.conf" if "amneziawg" in r.args[3] else "/etc/wireguard/wg0.conf"
+    conf_text = r.stdout
+    interface, peers = parse_awg_conf(conf_text)
+    
+    target_peer = None
+    new_peers = []
+    for peer in peers:
+        if peer.get("name", "").lower() == username.lower():
+            target_peer = peer
+        else:
+            new_peers.append(peer)
+            
+    if not target_peer:
+        _err(f"Пользователь '{username}' не найден в конфигурации сервера!")
+        return False
+        
+    cli_public_key = target_peer.get("PublicKey")
+    
+    new_conf_text = rebuild_awg_conf(interface, new_peers)
+    r_write = subprocess.run(["docker", "exec", "-i", name, "tee", conf_path_in_container], input=new_conf_text, capture_output=True, text=True)
+    if r_write.returncode != 0:
+        _err("Не удалось сохранить обновленную конфигурацию сервера!")
+        return False
+        
+    if _container_running() and cli_public_key:
+        tool_bin = "awg" if "awg" in conf_path_in_container else "wg"
+        iface_name = "awg0" if "awg0" in conf_path_in_container else "wg0"
+        subprocess.run(["docker", "exec", name, tool_bin, "set", iface_name, "peer", cli_public_key, "remove"])
+        
+    subprocess.run(["docker", "exec", name, "rm", "-f", f"/opt/amnezia/clients/{username}.conf"])
+    
+    _ok(f"Пользователь '{username}' успешно удален!")
+    return True
+
 # ── Меню ───────────────────────────────────────────────────────────────────────
 def do_amnezia_vpn_menu() -> None:
     """Главное интерактивное меню модуля AmneziaVPN."""
@@ -285,10 +550,8 @@ def do_amnezia_vpn_menu() -> None:
         info = _get_container_info()
         stats = _get_awg_interface_stats() if running else {"peers": []}
         
-        # Определение порта
         port_str = "—"
         if info["ports"]:
-            # Ищем UDP порт
             udp_ports = [host_port for c_port, host_port in info["ports"].items() if "udp" in c_port]
             if udp_ports:
                 port_str = f"{udp_ports[0]}/udp"
@@ -332,6 +595,9 @@ def do_amnezia_vpn_menu() -> None:
             _box_item("6", "Логи контейнера (последние 50 строк)")
             _box_item("7", "Показать клиентские конфиги")
             _box_item("8", "Генерировать QR-код для клиента")
+            if running:
+                _box_item("10", f"{GREEN}Добавить пользователя (клиента){NC}")
+                _box_item("11", f"{RED}Удалить пользователя (клиента){NC}")
             _box_item("9", f"{RED}Удалить контейнер {name}{NC}")
             
         _box_back()
@@ -366,17 +632,30 @@ def do_amnezia_vpn_menu() -> None:
             _box_top("👥 Статус подключенных пиров (awg show)")
             _box_bottom()
             print()
+            
+            configs = _get_client_configs()
+            key_to_name = {}
+            r_srv = subprocess.run(["docker", "exec", name, "cat", "/etc/amnezia/amneziawg/awg0.conf"], capture_output=True, text=True)
+            if r_srv.returncode == 0:
+                _, peers_parsed = parse_awg_conf(r_srv.stdout)
+                for p in peers_parsed:
+                    if p.get("PublicKey") and p.get("name"):
+                        key_to_name[p["PublicKey"]] = p["name"]
+            
             if stats["peers"]:
                 for p in stats["peers"]:
-                    print(f"{BOLD}Peer:{NC} {CYAN}{p.get('public_key')}{NC}")
+                    pubkey = p.get('public_key', '')
+                    friendly_name = key_to_name.get(pubkey, "Неизвестный клиент")
+                    print(f"{BOLD}Пользователь:{NC} {GREEN}{friendly_name}{NC}")
+                    print(f"  Public Key: {CYAN}{pubkey}{NC}")
                     if p.get("endpoint"):
-                        print(f"  Эндпоинт:  {p['endpoint']}")
+                        print(f"  Эндпоинт:   {p['endpoint']}")
                     if p.get("allowed_ips"):
-                        print(f"  AllowedIP: {p['allowed_ips']}")
+                        print(f"  AllowedIP:  {p['allowed_ips']}")
                     if p.get("latest_handshake"):
-                        print(f"  Handshake: {p['latest_handshake']}")
+                        print(f"  Handshake:  {p['latest_handshake']}")
                     if p.get("transfer"):
-                        print(f"  Трафик:    {p['transfer']}")
+                        print(f"  Трафик:     {p['transfer']}")
                     print()
             else:
                 print("  Нет подключенных пиров или статистика пуста.")
@@ -459,7 +738,6 @@ def do_amnezia_vpn_menu() -> None:
                 qr_path = f"/tmp/awg_qr_{cfg['name']}.png"
                 if _generate_client_qr(cfg["config_text"], qr_path):
                     _ok(f"QR-код успешно сохранен как картинка в: {qr_path}")
-                    # Попробуем отобразить ASCII QR в терминале
                     try:
                         subprocess.run(["qrencode", "-t", "ansiutf8"], input=cfg["config_text"], text=True)
                     except Exception:
@@ -479,6 +757,53 @@ def do_amnezia_vpn_menu() -> None:
                 else:
                     _err("Ошибка удаления контейнера.")
             time.sleep(1.5)
+            
+        elif ch == "10" and running:
+            os.system("clear")
+            print()
+            _box_top("👤 Добавить нового пользователя")
+            _box_bottom()
+            print()
+            try:
+                username = input("Введите имя нового пользователя (латиница, цифры, дефис): ").strip()
+            except KeyboardInterrupt:
+                continue
+            if username:
+                _add_client(username)
+            input(f"\\n{BLUE}Нажмите Enter...{NC}")
+            
+        elif ch == "11" and running:
+            os.system("clear")
+            print()
+            _box_top("👤  Удалить пользователя")
+            _box_bottom()
+            print()
+            configs = _get_client_configs()
+            if not configs:
+                _warn("Пользователи не найдены.")
+                input(f"{BLUE}Нажмите Enter...{NC}")
+                continue
+                
+            print("Список пользователей:")
+            for i, cfg in enumerate(configs, 1):
+                print(f"  {i}. {CYAN}{cfg['name']}{NC}")
+            print()
+            
+            try:
+                sel = input("Выберите номер пользователя для УДАЛЕНИЯ (Enter = отмена): ").strip()
+            except KeyboardInterrupt:
+                continue
+                
+            if sel.isdigit() and 1 <= int(sel) <= len(configs):
+                cfg = configs[int(sel)-1]
+                try:
+                    ans = input(f"Вы действительно хотите удалить пользователя {cfg['name']}? [y/N]: ").strip().lower()
+                except KeyboardInterrupt:
+                    continue
+                if ans == 'y':
+                    _delete_client(cfg['name'])
+            input(f"\\n{BLUE}Нажмите Enter...{NC}")
+            
         else:
             _warn("Неверный выбор")
             time.sleep(1)
