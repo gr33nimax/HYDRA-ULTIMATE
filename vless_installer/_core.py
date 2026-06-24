@@ -9774,6 +9774,20 @@ def _add_subscription_user() -> None:
             success(f"Пользователь '{new_email}' автоматически добавлен в Mieru")
     except Exception as e:
         warn(f"Не удалось добавить пользователя в Mieru: {e}")
+
+    try:
+        from vless_installer.modules.amnezia_vpn import _container_exists as awg_exists
+        if awg_exists():
+            from vless_installer.modules.amnezia_vpn import ensure_awg_user
+            username_clean = re.sub(r'[^a-zA-Z0-9_-]', '', new_email)
+            if username_clean:
+                created, msg = ensure_awg_user(username_clean)
+                if created:
+                    success(f"Пользователь '{new_email}' автоматически добавлен в AmneziaWG")
+            else:
+                warn(f"Имя пользователя '{new_email}' недопустимо для AmneziaWG")
+    except Exception as e:
+        warn(f"Не удалось добавить пользователя в AmneziaWG: {e}")
         
     # Сразу показываем ссылки
     sub_domain = state.get("sub_domain", "")
@@ -9846,6 +9860,17 @@ def _delete_subscription_user() -> None:
                 success(f"Пользователь '{target}' автоматически удален из Mieru")
         except Exception as e:
             warn(f"Не удалось удалить пользователя из Mieru: {e}")
+
+        try:
+            from vless_installer.modules.amnezia_vpn import _container_exists as awg_exists
+            if awg_exists():
+                from vless_installer.modules.amnezia_vpn import _delete_client as awg_del
+                username_clean = re.sub(r'[^a-zA-Z0-9_-]', '', target)
+                if username_clean:
+                    if awg_del(username_clean):
+                        success(f"Пользователь '{target}' автоматически удален из AmneziaWG")
+        except Exception as e:
+            warn(f"Не удалось удалить пользователя из AmneziaWG: {e}")
     else:
         info("Отменено")
     time.sleep(1.5)
