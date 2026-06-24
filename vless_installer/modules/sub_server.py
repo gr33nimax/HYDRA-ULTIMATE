@@ -119,6 +119,9 @@ class SubRequestHandler(BaseHTTPRequestHandler):
         """Чистый TLS/SSL shutdown для Windows/Schannel."""
         try:
             if hasattr(self.request, "unwrap"):
+                # Устанавливаем таймаут, чтобы unwrap не блокировал поток надолго,
+                # если клиент не поддерживает двухсторонний TLS-shutdown.
+                self.request.settimeout(1.0)
                 self.request.unwrap()
         except Exception:
             pass
