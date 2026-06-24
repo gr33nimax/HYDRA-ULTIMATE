@@ -28736,7 +28736,6 @@ def _menu_network() -> None:
         _box_item("2", "🌐 Внешняя проверка домена / порта")
         _box_item("3", "🌐 Геопроверка выходного IP")
         _box_sep()
-        _box_item("D", f"🌐 Кастомные DNS правила  {DIM}(hosts / routing override){NC}")
         _box_item("M", f"📏 MTU/MSS автотюнинг  {DIM}(оптимизация для exit-нод){NC}")
         _box_row()
         _box_back()
@@ -28755,8 +28754,6 @@ def _menu_network() -> None:
         elif ch == "3":
             check_exit_geo(silent=False)
             input(f"{BLUE}Нажмите Enter...{NC}")
-        elif ch.lower() == "d":
-            do_manage_dns_rules()
         elif ch.lower() == "m":
             do_mtu_tuning()
         elif ch.lower() == "q" or ch == "":
