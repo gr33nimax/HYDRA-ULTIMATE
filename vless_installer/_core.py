@@ -29306,11 +29306,11 @@ def _menu_diagnostics() -> None:
         elif ch.lower() == "s":
             print()
             print(f"{BOLD}Статус сервисов:{NC}")
-            svcs = ["xray", "nginx"]
+            svcs = []
             r = _run(["systemctl", "is-enabled", "dnscrypt-proxy"],
                      capture=True, check=False)
             if r.returncode == 0:
-                svcs = ["dnscrypt-proxy", "xray", "nginx"]
+                svcs = ["dnscrypt-proxy"]
             for svc in svcs:
                 rs = _run(["systemctl", "is-active", svc], capture=True, check=False)
                 if rs.stdout.strip() == "active":
