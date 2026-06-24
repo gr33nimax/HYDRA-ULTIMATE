@@ -115,6 +115,10 @@ def get_current_warp_routes(iface: str) -> set[str]:
             parts = line.strip().split()
             if parts:
                 cidr = parts[0]
+                if cidr == "default":
+                    continue
+                if not re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(/\d{1,2})?$', cidr):
+                    continue
                 if "/" not in cidr:
                     cidr = f"{cidr}/32"
                 routes.add(cidr)
