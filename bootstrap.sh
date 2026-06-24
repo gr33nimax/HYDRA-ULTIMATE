@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 #  VLESS Ultimate Installer v4.12.10 — Bootstrap
-#  bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/VLESS-Ultimate-Installer/main/bootstrap.sh)
+#  bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh)
 # ============================================================
 # EXPECTED_SHA256="PLACEHOLDER_SHA256_UPDATE_BEFORE_RELEASE"
 set -euo pipefail
@@ -34,7 +34,7 @@ echo -e "${NC}"
 echo -e "${BOLD}[1/5] Проверка прав${NC}"
 if [[ $EUID -ne 0 ]]; then
     err "Требуются права root"
-    echo -e "     ${YELLOW}sudo bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/VLESS-Ultimate-Installer/main/bootstrap.sh)${NC}"
+    echo -e "     ${YELLOW}sudo bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh)${NC}"
     exit 1
 fi
 ok "root: OK"
@@ -83,14 +83,17 @@ else
 fi
 
 # [4] Загрузка / обновление
-echo -e "\n${BOLD}[4/5] Загрузка VLESS Ultimate${NC}"
+echo -e "\n${BOLD}[4/5] Загрузка HYDRA Ultimate${NC}"
 INSTALL_DIR="/opt/vless-ultimate"
-REPO_URL="https://github.com/gr33nimax/VLESS-Ultimate-Installer"
+REPO_URL="https://github.com/gr33nimax/HYDRA-ULTIMATE"
 BRANCH="main"
 
 # Ищем существующую установку в нестандартных местах
 _found=""
 for _candidate in \
+    "/home/gr33nimax/HYDRA-ULTIMATE" \
+    "/root/HYDRA-ULTIMATE" \
+    "/opt/HYDRA-ULTIMATE" \
     "/home/gr33nimax/VLESS-Ultimate-Installer" \
     "/root/VLESS-Ultimate-Installer" \
     "/opt/VLESS-Ultimate-Installer"
@@ -102,7 +105,7 @@ do
 done
 # Также ищем через glob в /home/*/
 if [[ -z "$_found" ]]; then
-    for _p in /home/*/VLESS-Ultimate-Installer/main.py; do
+    for _p in /home/*/HYDRA-ULTIMATE/main.py /home/*/VLESS-Ultimate-Installer/main.py; do
         [[ -f "$_p" ]] && { _found="${_p%/main.py}"; break; }
     done
 fi
@@ -121,7 +124,7 @@ if [[ -d "${INSTALL_DIR}/.git" ]]; then
     # Принудительно обновляем ключевые модули напрямую с GitHub
     _update_module() {
         local rel_path="$1"
-        local url="https://raw.githubusercontent.com/gr33nimax/VLESS-Ultimate-Installer/${BRANCH}/${rel_path}"
+        local url="https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/${BRANCH}/${rel_path}"
         curl -fsSL --connect-timeout 15 -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "${INSTALL_DIR}/${rel_path}" "$url" 2>/dev/null \
             && info "Обновлён: ${rel_path}" \
             || warn "Не удалось обновить: ${rel_path}"
@@ -135,8 +138,8 @@ else
         # Установка без .git — принудительно обновляем все файлы с GitHub
         info "Установка без git обнаружена — принудительное обновление файлов..."
         ARCHIVE="${REPO_URL}/archive/refs/heads/${BRANCH}.tar.gz"
-        ARCHIVE_TMP="/tmp/vless_ultimate_update.tar.gz"
-        ARCHIVE_DIR="VLESS-Ultimate-Installer-${BRANCH}"
+        ARCHIVE_TMP="/tmp/hydra_ultimate_update.tar.gz"
+        ARCHIVE_DIR="HYDRA-ULTIMATE-${BRANCH}"
         curl -fsSL --connect-timeout 30 --retry 3 -o "$ARCHIVE_TMP" "$ARCHIVE" && {
             tar -xzf "$ARCHIVE_TMP" -C /tmp/
             cp -rf "/tmp/${ARCHIVE_DIR}/." "$INSTALL_DIR/"
@@ -146,7 +149,7 @@ else
         # Принудительно обновляем ключевые модули напрямую (минуя CDN-кэш архива)
         _update_module() {
             local rel_path="$1"
-            local url="https://raw.githubusercontent.com/gr33nimax/VLESS-Ultimate-Installer/${BRANCH}/${rel_path}"
+            local url="https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/${BRANCH}/${rel_path}"
             curl -fsSL --connect-timeout 15 -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "${INSTALL_DIR}/${rel_path}" "$url" 2>/dev/null \
                 && info "Принудительно обновлён: ${rel_path}" \
                 || warn "Не удалось обновить: ${rel_path}"
@@ -163,8 +166,8 @@ else
             warn "git clone не удался — загружаю архив..."
             mkdir -p "$INSTALL_DIR"
             ARCHIVE="${REPO_URL}/archive/refs/heads/${BRANCH}.tar.gz"
-            ARCHIVE_TMP="/tmp/vless_ultimate.tar.gz"
-            ARCHIVE_DIR="VLESS-Ultimate-Installer-${BRANCH}"
+            ARCHIVE_TMP="/tmp/hydra_ultimate.tar.gz"
+            ARCHIVE_DIR="HYDRA-ULTIMATE-${BRANCH}"
             curl -fsSL --connect-timeout 30 --retry 3 -o "$ARCHIVE_TMP" "$ARCHIVE" || {
                 err "Не удалось загрузить архив. Проверьте соединение."
                 exit 1
