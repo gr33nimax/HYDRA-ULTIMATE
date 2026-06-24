@@ -966,17 +966,52 @@ def do_amnezia_vpn_menu() -> None:
                     pass
             
             if stats["peers"]:
+                col_widths = [18, 16, 18, 28]
+                top_border = "  ┌" + "┬".join("─" * (w + 2) for w in col_widths) + "┐"
+                sep_border = "  ├" + "┼".join("─" * (w + 2) for w in col_widths) + "┤"
+                bot_border = "  └" + "┴".join("─" * (w + 2) for w in col_widths) + "┘"
+                
+                h_name = "Клиент".ljust(col_widths[0])
+                h_ip = "Внутренний IP".ljust(col_widths[1])
+                h_hs = "Активность".ljust(col_widths[2])
+                h_trf = "Трафик".ljust(col_widths[3])
+                
+                print(top_border)
+                print(f"  │ {BOLD}{h_name}{NC} │ {BOLD}{h_ip}{NC} │ {BOLD}{h_hs}{NC} │ {BOLD}{h_trf}{NC} │")
+                print(sep_border)
+                
                 for p in stats["peers"]:
                     pubkey = p.get('public_key', '')
-                    friendly_name = key_to_name.get(pubkey, "Неизвестный клиент")
-                    ip = p.get("allowed_ips", "—")
-                    hs = p.get("latest_handshake", "never")
-                    trf = p.get("transfer", "—").replace("received", "rx").replace("sent", "tx")
-                    endpoint = p.get("endpoint", "—")
-                    short_pk = pubkey[:8] + "..." + pubkey[-8:] if len(pubkey) > 16 else pubkey
+                    friendly_name = key_to_name.get(pubkey, "Неизвестный")
+                    if len(friendly_name) > col_widths[0]:
+                        friendly_name = friendly_name[:col_widths[0]-3] + "..."
+                    name_part = friendly_name.ljust(col_widths[0])
                     
-                    print(f"👤 {BOLD}{friendly_name}{NC} ({CYAN}{ip}{NC})")
-                    print(f"   Handshake: {YELLOW}{hs}{NC} | Трафик: {GREEN}{trf}{NC} | EP: {endpoint} | PK: {short_pk}")
+                    ip = p.get("allowed_ips", "—")
+                    if len(ip) > col_widths[1]:
+                        ip = ip[:col_widths[1]-3] + "..."
+                    ip_part = ip.ljust(col_widths[1])
+                    
+                    hs = p.get("latest_handshake", "never")
+                    hs_clean = hs.replace("seconds", "s").replace("second", "s") \
+                                 .replace("minutes", "m").replace("minute", "m") \
+                                 .replace("hours", "h").replace("hour", "h") \
+                                 .replace("days", "d").replace("day", "d") \
+                                 .replace(" ago", "")
+                    if len(hs_clean) > col_widths[2]:
+                        hs_clean = hs_clean[:col_widths[2]-3] + "..."
+                    hs_part = hs_clean.ljust(col_widths[2])
+                    
+                    trf = p.get("transfer", "—")
+                    trf_clean = trf.replace(" received", " rx").replace(" sent", " tx").replace(",", " /")
+                    if len(trf_clean) > col_widths[3]:
+                        trf_clean = trf_clean.replace(" KiB", " K").replace(" MiB", " M").replace(" GiB", " G")
+                    if len(trf_clean) > col_widths[3]:
+                        trf_clean = trf_clean[:col_widths[3]-3] + "..."
+                    trf_part = trf_clean.ljust(col_widths[3])
+                    
+                    print(f"  │ {GREEN}{name_part}{NC} │ {CYAN}{ip_part}{NC} │ {YELLOW}{hs_part}{NC} │ {WHITE}{trf_part}{NC} │")
+                print(bot_border)
             else:
                 print("  Нет подключенных пиров или статистика пуста.")
                 print()
