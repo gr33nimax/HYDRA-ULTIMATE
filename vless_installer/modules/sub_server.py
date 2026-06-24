@@ -115,13 +115,27 @@ class SubRequestHandler(BaseHTTPRequestHandler):
         """Перенаправляем логи в файл."""
         _log("HTTP", f"{self.client_address[0]} - {format % args}")
 
+    def finish(self) -> None:
+        """Чистый TLS/SSL shutdown для Windows/Schannel."""
+        try:
+            if hasattr(self.request, "unwrap"):
+                self.request.unwrap()
+        except Exception:
+            pass
+        try:
+            super().finish()
+        except Exception:
+            pass
+
     def _send_error(self, code: int, message: str) -> None:
         self.send_response(code)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(message.encode("utf-8"))
 
     def do_GET(self) -> None:
+        self.close_connection = True
         _log("INFO", f"do_GET: raw path = {self.path}")
         # Разбираем путь: /sub/<token>[/format]
         path = self.path
@@ -177,6 +191,7 @@ class SubRequestHandler(BaseHTTPRequestHandler):
                              f'attachment; filename="{email}_sub.txt"')
             self.send_header("Subscription-Userinfo", userinfo)
             self.send_header("Profile-Update-Interval", "6")  # обновлять каждые 6 часов
+            self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(body.encode("utf-8"))
 
@@ -188,6 +203,7 @@ class SubRequestHandler(BaseHTTPRequestHandler):
                              f'attachment; filename="{email}_clash.yaml"')
             self.send_header("Subscription-Userinfo", userinfo)
             self.send_header("Profile-Update-Interval", "6")
+            self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(body.encode("utf-8"))
 
@@ -199,6 +215,7 @@ class SubRequestHandler(BaseHTTPRequestHandler):
                              f'attachment; filename="{email}_singbox.json"')
             self.send_header("Subscription-Userinfo", userinfo)
             self.send_header("Profile-Update-Interval", "6")
+            self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(body.encode("utf-8"))
 
