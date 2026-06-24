@@ -429,7 +429,6 @@ def generate_singbox_json(state: dict, uuid_str: str, email: str) -> str:
                     "server_port": naive.get("port", 8443),
                     "username": u["username"],
                     "password": u["password"],
-                    "network": "tcp",
                     "tls": {
                         "enabled": True,
                         "server_name": host,
