@@ -224,6 +224,44 @@ def _container_logs(lines: int = 50) -> str:
     r = subprocess.run([
         "docker", "logs", "--tail", str(lines), name
     ], capture_output=True, text=True, errors="replace")
+    
+    err_msg = r.stderr or ""
+    if "configured logging driver does not support reading" in err_msg:
+        # 1. Пробуем получить логи через journalctl по имени контейнера
+        rj = subprocess.run([
+            "journalctl", f"CONTAINER_NAME={name}", "-n", str(lines), "--no-pager"
+        ], capture_output=True, text=True, errors="replace")
+        if rj.returncode == 0 and rj.stdout.strip():
+            return rj.stdout
+            
+        # 2. Пробуем по Full ID или Short ID
+        r_id = subprocess.run([
+            "docker", "inspect", "--format", "{{.Id}}", name
+        ], capture_output=True, text=True, errors="replace")
+        if r_id.returncode == 0 and r_id.stdout.strip():
+            full_id = r_id.stdout.strip()
+            rj_id = subprocess.run([
+                "journalctl", f"CONTAINER_ID_FULL={full_id}", "-n", str(lines), "--no-pager"
+            ], capture_output=True, text=True, errors="replace")
+            if rj_id.returncode == 0 and rj_id.stdout.strip():
+                return rj_id.stdout
+            
+            short_id = full_id[:12]
+            rj_short = subprocess.run([
+                "journalctl", f"CONTAINER_ID={short_id}", "-n", str(lines), "--no-pager"
+            ], capture_output=True, text=True, errors="replace")
+            if rj_short.returncode == 0 and rj_short.stdout.strip():
+                return rj_short.stdout
+
+        # 3. Резервный поиск по docker.service
+        rj_svc = subprocess.run([
+            "journalctl", "-u", "docker", "-n", "500", "--no-pager"
+        ], capture_output=True, text=True, errors="replace")
+        if rj_svc.returncode == 0 and rj_svc.stdout.strip():
+            lines_filtered = [l for l in rj_svc.stdout.splitlines() if name in l]
+            if lines_filtered:
+                return "\n".join(lines_filtered[-lines:])
+                
     return r.stdout + r.stderr
 
 def _get_client_configs() -> list[dict]:
@@ -611,6 +649,212 @@ def _delete_client(username: str) -> bool:
     
     _ok(f"Пользователь '{username}' успешно удален!")
     return True
+
+# ── Публичное API для интеграции с подписочной системой ───────────────────────
+
+def awg_user_exists(username: str) -> bool:
+    """Проверяет, существует ли пользователь AWG в clientsTable."""
+    if not _container_exists():
+        return False
+    name = _get_container_name()
+    r = subprocess.run(
+        ["docker", "exec", name, "cat", "/opt/amnezia/awg/clientsTable"],
+        capture_output=True, text=True, timeout=5
+    )
+    if r.returncode != 0:
+        return False
+    try:
+        clients = json.loads(r.stdout)
+        username_clean = re.sub(r'[^a-zA-Z0-9_-]', '', username).lower()
+        for cl in clients:
+            cname = cl.get("userData", {}).get("clientName", "").lower()
+            if cname == username_clean:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def ensure_awg_user(username: str) -> tuple[bool, str]:
+    """
+    Создаёт AWG-пользователя если его ещё нет.
+    Возвращает (created: bool, message: str).
+
+    Используется из подписочного меню (_core.py):
+        from vless_installer.modules.amnezia_vpn import ensure_awg_user
+        ok, msg = ensure_awg_user(email_prefix)
+    """
+    username_clean = re.sub(r'[^a-zA-Z0-9_-]', '', username)
+    if not username_clean:
+        return False, "Некорректное имя пользователя"
+
+    if not _docker_available():
+        return False, "Docker недоступен"
+    if not _container_exists():
+        return False, "Контейнер AmneziaWG не найден"
+    if not _container_running():
+        return False, "Контейнер не запущен"
+
+    if awg_user_exists(username_clean):
+        # Пользователь уже есть — проверим, есть ли у него client_.conf
+        conf = _get_client_conf_text(username_clean)
+        if conf:
+            return False, f"Пользователь '{username_clean}' уже существует (конфиг есть)"
+        else:
+            return False, f"Пользователь '{username_clean}' уже существует (конфиг в Amnezia-приложении)"
+
+    ok = _add_client(username_clean)
+    if ok:
+        return True, f"Пользователь '{username_clean}' создан в AmneziaWG"
+    return False, f"Не удалось создать пользователя '{username_clean}'"
+
+
+def _get_client_conf_text(username: str) -> str | None:
+    """Читает текст клиентского конфига из контейнера, или None если нет."""
+    if not _container_exists():
+        return None
+    name = _get_container_name()
+    conf_path = f"/opt/amnezia/awg/client_{username}.conf"
+    r = subprocess.run(
+        ["docker", "exec", name, "cat", conf_path],
+        capture_output=True, text=True, timeout=10
+    )
+    if r.returncode == 0 and r.stdout.strip():
+        return r.stdout.strip()
+    return None
+
+
+def get_awg_traffic_for_user(username: str) -> dict:
+    """
+    Возвращает статистику трафика AWG для конкретного пользователя.
+
+    Алгоритм:
+      1. Читаем clientsTable → находим publicKey по clientName
+      2. Запрашиваем 'awg show awg0' → находим peer по publicKey → берём transfer
+
+    Возвращает:
+      {
+        "found": bool,
+        "rx_bytes": int,   # получено (сервер → клиент)
+        "tx_bytes": int,   # отправлено (клиент → сервер)
+        "total_bytes": int,
+        "rx_human": str,   # "1.23 MiB"
+        "tx_human": str,
+        "total_human": str,
+        "handshake": str,  # "3d, 2h ago" или "never"
+        "client_ip": str,  # "10.8.1.3/32"
+        "data_received": str,  # из clientsTable (строка от Amnezia)
+        "data_sent": str,
+      }
+    """
+    empty = {
+        "found": False, "rx_bytes": 0, "tx_bytes": 0, "total_bytes": 0,
+        "rx_human": "0 B", "tx_human": "0 B", "total_human": "0 B",
+        "handshake": "never", "client_ip": "", "data_received": "0 B", "data_sent": "0 B",
+    }
+    if not _container_exists():
+        return empty
+
+    name = _get_container_name()
+    username_clean = re.sub(r'[^a-zA-Z0-9_-]', '', username).lower()
+
+    # Шаг 1: найти publicKey по clientName в clientsTable
+    target_pubkey = None
+    client_ip = ""
+    data_received_str = "0 B"
+    data_sent_str = "0 B"
+    try:
+        r = subprocess.run(
+            ["docker", "exec", name, "cat", "/opt/amnezia/awg/clientsTable"],
+            capture_output=True, text=True, timeout=5
+        )
+        if r.returncode == 0:
+            for cl in json.loads(r.stdout):
+                ud = cl.get("userData", {})
+                cname = ud.get("clientName", "").lower()
+                if cname == username_clean or cname.split(" (")[0] == username_clean:
+                    target_pubkey = cl.get("clientId", "")
+                    client_ip = ud.get("allowedIps", "")
+                    data_received_str = ud.get("dataReceived", "0 B")
+                    data_sent_str = ud.get("dataSent", "0 B")
+                    break
+    except Exception:
+        pass
+
+    if not target_pubkey:
+        return {**empty, "found": False}
+
+    # Шаг 2: получить live-статистику из awg show
+    rx_bytes = 0
+    tx_bytes = 0
+    handshake = "never"
+    try:
+        r2 = subprocess.run(
+            ["docker", "exec", name, "awg", "show", "awg0"],
+            capture_output=True, text=True, timeout=10
+        )
+        if r2.returncode != 0:
+            r2 = subprocess.run(
+                ["docker", "exec", name, "wg", "show", "awg0"],
+                capture_output=True, text=True, timeout=10
+            )
+        if r2.returncode == 0:
+            in_peer = False
+            for line in r2.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("peer:"):
+                    in_peer = target_pubkey in line
+                elif in_peer:
+                    if line.startswith("transfer:"):
+                        # "transfer: 12.34 MiB received, 56.78 MiB sent"
+                        parts = line.split("transfer:")[-1].strip().split(",")
+                        rx_bytes = _parse_transfer_bytes(parts[0].strip() if parts else "0")
+                        tx_bytes = _parse_transfer_bytes(parts[1].strip() if len(parts) > 1 else "0")
+                    elif line.startswith("latest handshake:"):
+                        handshake = line.split("latest handshake:")[-1].strip()
+                    elif line.startswith("peer:"):
+                        in_peer = False
+    except Exception:
+        pass
+
+    total = rx_bytes + tx_bytes
+    return {
+        "found": True,
+        "rx_bytes": rx_bytes,
+        "tx_bytes": tx_bytes,
+        "total_bytes": total,
+        "rx_human": _bytes_human(rx_bytes),
+        "tx_human": _bytes_human(tx_bytes),
+        "total_human": _bytes_human(total),
+        "handshake": handshake,
+        "client_ip": client_ip,
+        "data_received": data_received_str,
+        "data_sent": data_sent_str,
+    }
+
+
+def _parse_transfer_bytes(s: str) -> int:
+    """Парсит '12.34 MiB' → int байт."""
+    try:
+        parts = s.split()
+        if len(parts) < 2:
+            return 0
+        val = float(parts[0])
+        unit = parts[1].upper().rstrip('B').rstrip('I')
+        mult = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
+        return int(val * mult.get(unit, 1))
+    except Exception:
+        return 0
+
+
+def _bytes_human(n: int) -> str:
+    """Форматирует байты в человекочитаемый вид."""
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if n < 1024:
+            return f"{n:.1f} {unit}" if unit != "B" else f"{n} B"
+        n /= 1024
+    return f"{n:.1f} PiB"
+
 
 # ── Меню ───────────────────────────────────────────────────────────────────────
 def do_amnezia_vpn_menu() -> None:

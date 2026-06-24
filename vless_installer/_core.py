@@ -10009,6 +10009,65 @@ def do_subscription_menu() -> None:
         elif ch == "9":
             do_manage_ttl_users()
 
+        elif ch in ("a", "A"):
+            _ensure_awg_for_user()
+
+
+def _ensure_awg_for_user() -> None:
+    """Добавляет AWG-пользователя из подписочного списка если ещё нет."""
+    users = _get_all_sub_users()
+    if not users:
+        warn("Пользователи не найдены")
+        input(f"{BLUE}Нажмите Enter...{NC}")
+        return
+
+    os.system("clear")
+    _box_top("🛱  HYDRA → AmneziaWG: Добавить AWG-пользователя")
+    _box_row(f"  {DIM}Пользователь будет добавлен в AmneziaWG через Docker если ещё не существует{NC}")
+    _box_sep()
+    for i, u in enumerate(users, 1):
+        _box_item(f"{i}", u.get("email", "?"))
+    _box_item_exit("0", "← Отмена")
+    _box_bottom()
+
+    raw = input(f"{CYAN}Номер (Enter = все сразу):{NC} ").strip()
+    if raw in ("0", "q", "Q"):
+        return
+
+    targets = []
+    if raw == "":
+        # Всем подряд
+        targets = [u["email"] for u in users]
+    elif raw.isdigit() and 1 <= int(raw) <= len(users):
+        targets = [users[int(raw) - 1]["email"]]
+    else:
+        targets = [raw]
+
+    try:
+        from vless_installer.modules.amnezia_vpn import ensure_awg_user
+    except ImportError as e:
+        warn(f"Не удалось загрузить модуль amnezia_vpn: {e}")
+        input(f"{BLUE}Нажмите Enter...{NC}")
+        return
+
+    print()
+    created = 0
+    for email in targets:
+        username = email.split("@")[0] if "@" in email else email
+        ok, msg = ensure_awg_user(username)
+        if ok:
+            success(f"✅ {email}: {msg}")
+            created += 1
+        else:
+            info(f"ℹ️  {email}: {msg}")
+
+    print()
+    if created:
+        success(f"Создано AWG-пользователей: {created}")
+    else:
+        info("Все пользователи уже имеют AWG-профиль")
+    input(f"{BLUE}Нажмите Enter...{NC}")
+
 
 def _get_all_sub_users() -> list[dict]:
     """Возвращает список всех пользователей из Xray config, naiveproxy, mieru и sub_tokens."""
