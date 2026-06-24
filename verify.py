@@ -260,8 +260,8 @@ if failed == 0:
     print(f"\n  Команды для публикации:")
     print(f"  {CYAN}git init{NC}")
     print(f"  {CYAN}git add .{NC}")
-    print(f"  {CYAN}git commit -m 'VLESS Ultimate Installer v4.11.3'{NC}")
-    print(f"  {CYAN}git remote add origin https://github.com/gr33nimax/VLESS-Ultimate-Installer.git{NC}")
+    print(f"  {CYAN}git commit -m 'HYDRA ULTIMATE v0.0.1-alpha'{NC}")
+    print(f"  {CYAN}git remote add origin https://github.com/gr33nimax/HYDRA-ULTIMATE.git{NC}")
     print(f"  {CYAN}git push -u origin main{NC}")
 else:
     print(f"\n  {YELLOW}Есть проблемы — исправьте перед публикацией.{NC}")

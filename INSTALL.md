@@ -3,7 +3,7 @@
 ## Быстрый старт (рекомендуется)
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/VLESS-Ultimate-Installer/main/bootstrap.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh)
 ```
 
 Bootstrap скрипт автоматически:
@@ -18,7 +18,7 @@ Bootstrap скрипт автоматически:
 
 ```bash
 # 1. Клонировать репозиторий
-git clone https://github.com/gr33nimax/VLESS-Ultimate-Installer /opt/vless-ultimate
+git clone https://github.com/gr33nimax/HYDRA-ULTIMATE /opt/vless-ultimate
 cd /opt/vless-ultimate
 
 # 2. Проверить целостность

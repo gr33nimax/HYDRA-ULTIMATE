@@ -15,7 +15,7 @@
 Если вы обнаружили уязвимость — **не публикуйте её в Issues**.
 
 Напишите напрямую: откройте **приватное Security Advisory** на GitHub:
-`https://github.com/gr33nimax/VLESS-Ultimate-Installer/security/advisories/new`
+`https://github.com/gr33nimax/HYDRA-ULTIMATE/security/advisories/new`
 
 Либо свяжитесь через контакты в профиле. Ответ — в течение 72 часов.
 

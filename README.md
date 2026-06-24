@@ -44,7 +44,7 @@
 
 Для развертывания менеджера выполните команду на чистой ОС Ubuntu/Debian:
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/gr33nimax/VLESS-Ultimate-Installer/main/bootstrap.sh)"
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh)"
 ```
 
 ---

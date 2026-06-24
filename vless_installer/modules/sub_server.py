@@ -249,6 +249,8 @@ def generate_systemd_unit(host: str = DEFAULT_HOST,
     install_dir = "/opt/vless-ultimate"
     # Ищем реальную директорию установки
     for candidate in ("/opt/vless-ultimate",
+                      "/root/HYDRA-ULTIMATE",
+                      "/opt/HYDRA-ULTIMATE",
                       "/root/VLESS-Ultimate-Installer",
                       "/opt/VLESS-Ultimate-Installer"):
         if Path(candidate).exists():
