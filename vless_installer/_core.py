@@ -9857,6 +9857,32 @@ def _add_subscription_user() -> None:
     success(f"Пользователь '{new_email}' успешно добавлен в систему подписок.")
     
     # Автоматически добавляем во все установленные плагины
+    xray_installed = False
+    for p in (Path("/etc/xray/config.json"), Path("/usr/local/etc/xray/config.json")):
+        if p.exists():
+            xray_installed = True
+            break
+    if xray_installed:
+        try:
+            cfg_path = _users_get_config()
+            with cfg_path.open() as f:
+                c = json.load(f)
+            clients = c.get("inbounds", [{}])[0].get("settings", {}).get("clients", [])
+            if not any(cl.get("email") == new_email for cl in clients):
+                vless_uuid = gen_uuid()
+                net = (c.get("inbounds", [{}])[0]
+                       .get("streamSettings", {}).get("network", "tcp"))
+                new_client = {"id": vless_uuid, "email": new_email}
+                if net != "xhttp" and XTLS_FLOW:
+                    new_client["flow"] = XTLS_FLOW
+                c["inbounds"][0]["settings"]["clients"].append(new_client)
+                with cfg_path.open('w') as f:
+                    json.dump(c, f, indent=2, ensure_ascii=False)
+                _users_apply_config(cfg_path)
+                success(f"Пользователь '{new_email}' автоматически добавлен в VLESS (Xray)")
+        except Exception as e:
+            warn(f"Не удалось добавить пользователя в VLESS (Xray): {e}")
+
     try:
         from vless_installer.modules.naiveproxy import add_user_noninteractive as np_add
         res_np = np_add(new_email)
@@ -9934,6 +9960,27 @@ def _delete_subscription_user() -> None:
         success(f"Пользователь '{target}' удален из системы подписок")
         
         # Автоматически удаляем из всех установленных плагинов
+        xray_installed = False
+        for p in (Path("/etc/xray/config.json"), Path("/usr/local/etc/xray/config.json")):
+            if p.exists():
+                xray_installed = True
+                break
+        if xray_installed:
+            try:
+                cfg_path = _users_get_config()
+                with cfg_path.open() as f:
+                    c = json.load(f)
+                clients = c.get("inbounds", [{}])[0].get("settings", {}).get("clients", [])
+                new_clients = [cl for cl in clients if cl.get("email") != target]
+                if len(new_clients) < len(clients):
+                    c["inbounds"][0]["settings"]["clients"] = new_clients
+                    with cfg_path.open('w') as f:
+                        json.dump(c, f, indent=2, ensure_ascii=False)
+                    _users_apply_config(cfg_path)
+                    success(f"Пользователь '{target}' автоматически удален из VLESS (Xray)")
+            except Exception as e:
+                warn(f"Не удалось удалить пользователя из VLESS (Xray): {e}")
+
         try:
             from vless_installer.modules.naiveproxy import delete_user_noninteractive as np_del
             if np_del(target):
