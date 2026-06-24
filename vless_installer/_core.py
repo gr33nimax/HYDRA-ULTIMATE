@@ -9469,26 +9469,49 @@ def ensure_subscription_tokens() -> None:
     try:
         state = json.loads(STATE_FILE.read_text())
         sub_tokens = state.setdefault("sub_tokens", {})
+        changed = False
         
-        cfg_path = _users_get_config()
-        if cfg_path.exists():
-            with cfg_path.open() as f:
-                c = json.load(f)
-            clients = c.get("inbounds", [{}])[0].get("settings", {}).get("clients", [])
-            changed = False
-            for cl in clients:
-                email = cl.get("email")
-                if email and email not in sub_tokens:
-                    sub_tokens[email] = gen_uuid()
-                    changed = True
+        cfg_path = None
+        for p in (Path("/etc/xray/config.json"), Path("/usr/local/etc/xray/config.json")):
+            if p.exists():
+                cfg_path = p
+                break
+        if cfg_path:
+            try:
+                with cfg_path.open() as f:
+                    c = json.load(f)
+                clients = c.get("inbounds", [{}])[0].get("settings", {}).get("clients", [])
+                for cl in clients:
+                    email = cl.get("email")
+                    if email and email not in sub_tokens:
+                        sub_tokens[email] = gen_uuid()
+                        changed = True
+            except Exception:
+                pass
             
-            main_email = state.get("email") or "admin"
-            if main_email and main_email not in sub_tokens:
-                sub_tokens[main_email] = state.get("uuid") or gen_uuid()
+        # NaiveProxy users
+        naive_users = state.get("naiveproxy", {}).get("users", [])
+        for nu in naive_users:
+            username = nu.get("username")
+            if username and username not in sub_tokens:
+                sub_tokens[username] = gen_uuid()
                 changed = True
                 
-            if changed:
-                STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        # Mieru users
+        mieru_users = state.get("mieru", {}).get("users", [])
+        for mu in mieru_users:
+            username = mu.get("username")
+            if username and username not in sub_tokens:
+                sub_tokens[username] = gen_uuid()
+                changed = True
+                
+        main_email = state.get("email") or "admin"
+        if main_email and main_email not in sub_tokens:
+            sub_tokens[main_email] = state.get("uuid") or gen_uuid()
+            changed = True
+            
+        if changed:
+            STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
     except Exception:
         pass
 
@@ -9759,29 +9782,99 @@ def do_subscription_menu() -> None:
             _regenerate_user_token()
 
 
+def _get_all_sub_users() -> list[dict]:
+    """Возвращает список всех пользователей из Xray config, naiveproxy, mieru и sub_tokens."""
+    users = []
+    seen = set()
+    
+    # 1. Из Xray config
+    cfg_path = None
+    for p in (Path("/etc/xray/config.json"), Path("/usr/local/etc/xray/config.json")):
+        if p.exists():
+            cfg_path = p
+            break
+    if cfg_path:
+        try:
+            with cfg_path.open() as f:
+                c = json.load(f)
+            clients = c.get("inbounds", [{}])[0].get("settings", {}).get("clients", [])
+            for cl in clients:
+                email = cl.get("email")
+                uid = cl.get("id")
+                if email and email not in seen:
+                    users.append({"email": email, "id": uid, "source": "Xray"})
+                    seen.add(email)
+        except Exception:
+            pass
+            
+    # 2. Из state.json
+    if STATE_FILE.exists():
+        try:
+            state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            
+            # NaiveProxy users
+            naive_users = state.get("naiveproxy", {}).get("users", [])
+            for nu in naive_users:
+                username = nu.get("username")
+                if username and username not in seen:
+                    users.append({"email": username, "id": "NaiveProxy User", "source": "NaiveProxy"})
+                    seen.add(username)
+                    
+            # Mieru users
+            mieru_users = state.get("mieru", {}).get("users", [])
+            for mu in mieru_users:
+                username = mu.get("username")
+                if username and username not in seen:
+                    users.append({"email": username, "id": "Mieru User", "source": "Mieru"})
+                    seen.add(username)
+                    
+            # Из существующих токенов подписок
+            sub_tokens = state.get("sub_tokens", {})
+            for email in sub_tokens.keys():
+                if email and email not in seen:
+                    users.append({"email": email, "id": "Token only", "source": "Subscription"})
+                    seen.add(email)
+        except Exception:
+            pass
+            
+    return users
+
+
 def _show_user_subscription_links() -> None:
-    cfg = _users_get_config()
-    do_user_list()
-    target = input(f"{CYAN}Email или UUID пользователя:{NC} ").strip()
+    users = _get_all_sub_users()
+    _box_top("СПИСОК ПОЛЬЗОВАТЕЛЕЙ ПОДПИСОК")
+    if not users:
+        _box_row(f"  {DIM}Пользователи не найдены.{NC}")
+        _box_bottom()
+        time.sleep(1.5)
+        return
+    else:
+        _box_row(f"  {'N':<4} {'Email/имя':<30} {'Идентификатор/Тип':<30} {'Источник':<20}")
+        _box_bottom()
+        print("  " + "─" * 90)
+        for i, u in enumerate(users, 1):
+            print(f"  {i:<4} {u['email']:<30} {u['id']:<30} {u['source']:<20}")
+            
+    print()
+    target = input(f"{CYAN}Email пользователя (или порядковый номер):{NC} ").strip()
     if not target:
         warn("Отмена")
         return
 
-    try:
-        with cfg.open() as f:
-            c = json.load(f)
-        clients = c.get("inbounds", [{}])[0].get("settings", {}).get("clients", [])
-        found = next((cl for cl in clients
-                      if cl.get("email", "") == target or cl.get("id", "") == target), None)
-    except Exception:
-        found = None
+    found = None
+    if target.isdigit():
+        idx = int(target) - 1
+        if 0 <= idx < len(users):
+            found = users[idx]
+    if not found:
+        found = next((u for u in users if u["email"] == target or u["id"] == target), None)
 
     if not found:
         warn(f"Пользователь '{target}' не найден")
         time.sleep(1.5)
         return
 
-    email = found.get("email", "")
+    email = found["email"]
     state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
     sub_tokens = state.setdefault("sub_tokens", {})
     token = sub_tokens.get(email)
@@ -9836,28 +9929,40 @@ def _show_user_subscription_links() -> None:
 
 
 def _regenerate_user_token() -> None:
-    cfg = _users_get_config()
-    do_user_list()
-    target = input(f"{CYAN}Email или UUID пользователя для сброса токена:{NC} ").strip()
+    users = _get_all_sub_users()
+    _box_top("СПИСОК ПОЛЬЗОВАТЕЛЕЙ ПОДПИСОК")
+    if not users:
+        _box_row(f"  {DIM}Пользователи не найдены.{NC}")
+        _box_bottom()
+        time.sleep(1.5)
+        return
+    else:
+        _box_row(f"  {'N':<4} {'Email/имя':<30} {'Идентификатор/Тип':<30} {'Источник':<20}")
+        _box_bottom()
+        print("  " + "─" * 90)
+        for i, u in enumerate(users, 1):
+            print(f"  {i:<4} {u['email']:<30} {u['id']:<30} {u['source']:<20}")
+            
+    print()
+    target = input(f"{CYAN}Email пользователя для сброса токена (или номер):{NC} ").strip()
     if not target:
         warn("Отмена")
         return
 
-    try:
-        with cfg.open() as f:
-            c = json.load(f)
-        clients = c.get("inbounds", [{}])[0].get("settings", {}).get("clients", [])
-        found = next((cl for cl in clients
-                      if cl.get("email", "") == target or cl.get("id", "") == target), None)
-    except Exception:
-        found = None
+    found = None
+    if target.isdigit():
+        idx = int(target) - 1
+        if 0 <= idx < len(users):
+            found = users[idx]
+    if not found:
+        found = next((u for u in users if u["email"] == target or u["id"] == target), None)
 
     if not found:
         warn(f"Пользователь '{target}' не найден")
         time.sleep(1.5)
         return
 
-    email = found.get("email", "")
+    email = found["email"]
     ans = input(f"{YELLOW}Вы уверены, что хотите перегенерировать токен для {email}? Старая ссылка перестанет работать! [y/N]:{NC} ").strip().lower()
     if ans == "y":
         state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
