@@ -187,10 +187,30 @@ def generate_hysteria2_link(state: dict, email: str) -> Optional[str]:
 
 # ── Генерация Mieru ──────────────────────────────────────────────────────────
 
-def generate_mieru_link(state: dict, email: str) -> Optional[str]:
-    """Mieru не имеет стандартного URI-формата, возвращаем None для base64.
-    Mieru экспортируется только как sing-box outbound."""
-    return None
+def generate_mieru_link(state: dict, email: str) -> list[str]:
+    """Генерация mierus:// линков для Nekobox и Karing."""
+    mieru = _load_mieru_state()
+    if not mieru.get("installed"):
+        return []
+
+    host = state.get("domain", "") or _get_server_ip()
+    port_start = mieru.get("port_start", 8964)
+    protocol = mieru.get("protocol", "TCP")
+
+    links = []
+    for u in mieru.get("users", []):
+        if u.get("username") == email:
+            uname = urllib.parse.quote(u["username"])
+            pwd = urllib.parse.quote(u["password"])
+            # Nekobox формат
+            neko_link = f"mierus://{uname}:{pwd}@{host}:{port_start}?transport={protocol.lower()}&mtu=1400#{email}%20Mieru%20Neko"
+            links.append(neko_link)
+            # Karing формат
+            karing_link = f"mierus://{uname}:{pwd}@{host}?port={port_start}&protocol={protocol.upper()}&profile=default&mtu=1400&multiplexing=MULTIPLEXING_HIGH#{email}%20Mieru%20Karing"
+            links.append(karing_link)
+            break
+
+    return links
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -198,7 +218,7 @@ def generate_mieru_link(state: dict, email: str) -> Optional[str]:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_base64_sub(state: dict, uuid_str: str, email: str) -> str:
-    """Генерация Base64-подписки: все ссылки через \\n, затем base64."""
+    """Генерация Base64-подписки: все ссылки через \n, затем base64."""
     links: list[str] = []
 
     # VLESS
@@ -213,6 +233,10 @@ def generate_base64_sub(state: dict, uuid_str: str, email: str) -> str:
     h2_link = generate_hysteria2_link(state, email)
     if h2_link:
         links.append(h2_link)
+
+    # Mieru
+    mieru_links = generate_mieru_link(state, email)
+    links.extend(mieru_links)
 
     raw = "\n".join(links) + "\n"
     return base64.b64encode(raw.encode("utf-8")).decode("utf-8")
@@ -436,24 +460,7 @@ def generate_singbox_json(state: dict, uuid_str: str, email: str) -> str:
                 })
                 break
 
-    # Mieru → sing-box socks5 outbound
-    mieru = _load_mieru_state()
-    if mieru.get("installed"):
-        for u in mieru.get("users", []):
-            if u.get("username") == email:
-                tag = f"{email}-mieru"
-                tags.append(tag)
-                host = state.get("domain", "") or _get_server_ip()
-                outbounds.append({
-                    "type": "socks",
-                    "tag": tag,
-                    "server": host,
-                    "server_port": mieru.get("port_start", 8964),
-                    "username": u.get("username", ""),
-                    "password": u.get("password", ""),
-                    "version": "5",
-                })
-                break
+
 
     # Hysteria2
     h2 = state.get("hysteria2", {})
