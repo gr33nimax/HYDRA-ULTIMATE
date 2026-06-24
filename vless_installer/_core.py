@@ -9462,6 +9462,37 @@ def do_user_list() -> None:
     print()
 
 
+def ensure_subscription_tokens() -> None:
+    """Убедиться, что у всех существующих пользователей есть подписочный токен в state.json."""
+    if not STATE_FILE.exists():
+        return
+    try:
+        state = json.loads(STATE_FILE.read_text())
+        sub_tokens = state.setdefault("sub_tokens", {})
+        
+        cfg_path = _users_get_config()
+        if cfg_path.exists():
+            with cfg_path.open() as f:
+                c = json.load(f)
+            clients = c.get("inbounds", [{}])[0].get("settings", {}).get("clients", [])
+            changed = False
+            for cl in clients:
+                email = cl.get("email")
+                if email and email not in sub_tokens:
+                    sub_tokens[email] = gen_uuid()
+                    changed = True
+            
+            main_email = state.get("email") or "admin"
+            if main_email and main_email not in sub_tokens:
+                sub_tokens[main_email] = state.get("uuid") or gen_uuid()
+                changed = True
+                
+            if changed:
+                STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+    except Exception:
+        pass
+
+
 def do_user_add() -> None:
     cfg = _users_get_config()
     print()
@@ -9512,6 +9543,16 @@ def do_user_add() -> None:
         c["inbounds"][0]["settings"]["clients"].append(new_client)
         with cfg.open('w') as f:
             json.dump(c, f, indent=2, ensure_ascii=False)
+            
+        # Генерируем токен подписки в state.json
+        if STATE_FILE.exists():
+            try:
+                state = json.loads(STATE_FILE.read_text())
+                sub_tokens = state.setdefault("sub_tokens", {})
+                sub_tokens[new_email] = gen_uuid()
+                STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+            except Exception as e:
+                warn(f"Не удалось сохранить токен подписки: {e}")
     except Exception as e:
         warn(f"Ошибка добавления пользователя: {e}")
 
@@ -9566,6 +9607,18 @@ def do_user_delete() -> None:
         for p in (f"/root/vless_link_{del_email}.txt",
                   f"/root/vless_qr_{del_email}.png"):
             Path(p).unlink(missing_ok=True)
+            
+        # Удаляем токен подписки из state.json
+        if STATE_FILE.exists():
+            try:
+                state = json.loads(STATE_FILE.read_text())
+                sub_tokens = state.get("sub_tokens", {})
+                if del_email in sub_tokens:
+                    del sub_tokens[del_email]
+                    STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+            except Exception:
+                pass
+                
         _users_apply_config(cfg)
     except Exception as e:
         warn(f"Ошибка при удалении: {e}")
@@ -9623,6 +9676,200 @@ def do_user_menu() -> None:
             return
         else:
             warn("Введите L, A, D, S или Q")
+
+
+def do_subscription_menu() -> None:
+    """Интерактивное меню для управления подписками пользователей."""
+    ensure_subscription_tokens()
+
+    while True:
+        os.system("clear")
+        _box_top("📋 УПРАВЛЕНИЕ ПОДПИСКАМИ")
+        _box_row(f"  {DIM}Управление системой подписок пользователей{NC}")
+        _box_sep()
+
+        sub_svc_active = False
+        try:
+            r = subprocess.run(["systemctl", "is-active", "vless-sub"], capture_output=True, text=True)
+            sub_svc_active = (r.stdout.strip() == "active")
+        except Exception:
+            pass
+
+        try:
+            from vless_installer.modules.sub_nginx import check_sub_location
+            nginx_ok = check_sub_location()
+        except Exception:
+            nginx_ok = False
+
+        svc_status = f"{GREEN}активен{NC}" if sub_svc_active else f"{YELLOW}не активен{NC}"
+        nginx_status = f"{GREEN}настроен{NC}" if nginx_ok else f"{YELLOW}не настроен{NC}"
+
+        state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+        domain = state.get("domain", "") or get_server_ip("4")
+        sub_port = 9443
+
+        _box_row(f"  Сервис подписок:  {svc_status}")
+        _box_row(f"  Интеграция Nginx: {nginx_status}")
+        _box_row(f"  Сервер подписок:  http://127.0.0.1:{sub_port}")
+        _box_row(f"  Внешний URL:      https://{domain}/sub/<токен>")
+        _box_sep()
+
+        _box_item("1", f"{'Выключить' if sub_svc_active else 'Включить'} систему подписок")
+        _box_item("2", "🔗 Получить ссылки подписок для пользователя")
+        _box_item("3", "🔄 Перегенерировать токен пользователя")
+        _box_row()
+        _box_item_exit("0", "← Назад")
+        _box_bottom()
+
+        try:
+            ch = input(f"{CYAN}Выбор:{NC} ").strip()
+        except KeyboardInterrupt:
+            break
+
+        if ch in ("0", "q", "Q", ""):
+            break
+
+        elif ch == "1":
+            if sub_svc_active:
+                info("Отключение системы подписок...")
+                try:
+                    from vless_installer.modules.sub_server import uninstall_sub_service
+                    from vless_installer.modules.sub_nginx import remove_sub_location
+                    uninstall_sub_service()
+                    remove_sub_location()
+                    success("Система подписок отключена")
+                except Exception as e:
+                    warn(f"Ошибка отключения: {e}")
+            else:
+                info("Включение системы подписок...")
+                try:
+                    from vless_installer.modules.sub_server import install_sub_service
+                    from vless_installer.modules.sub_nginx import inject_sub_location
+                    install_sub_service("127.0.0.1", sub_port)
+                    inject_sub_location(port=sub_port)
+                    success("Система подписок включена")
+                except Exception as e:
+                    warn(f"Ошибка включения: {e}")
+            time.sleep(2)
+
+        elif ch == "2":
+            _show_user_subscription_links()
+
+        elif ch == "3":
+            _regenerate_user_token()
+
+
+def _show_user_subscription_links() -> None:
+    cfg = _users_get_config()
+    do_user_list()
+    target = input(f"{CYAN}Email или UUID пользователя:{NC} ").strip()
+    if not target:
+        warn("Отмена")
+        return
+
+    try:
+        with cfg.open() as f:
+            c = json.load(f)
+        clients = c.get("inbounds", [{}])[0].get("settings", {}).get("clients", [])
+        found = next((cl for cl in clients
+                      if cl.get("email", "") == target or cl.get("id", "") == target), None)
+    except Exception:
+        found = None
+
+    if not found:
+        warn(f"Пользователь '{target}' не найден")
+        time.sleep(1.5)
+        return
+
+    email = found.get("email", "")
+    state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+    sub_tokens = state.setdefault("sub_tokens", {})
+    token = sub_tokens.get(email)
+
+    if not token:
+        token = gen_uuid()
+        sub_tokens[email] = token
+        state["sub_tokens"] = sub_tokens
+        STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+
+    domain = state.get("domain", "") or get_server_ip("4")
+    base_url = f"https://{domain}/sub/{token}"
+
+    while True:
+        os.system("clear")
+        _box_top(f"ПОДПИСКИ ПОЛЬЗОВАТЕЛЯ {email}")
+        _box_row(f"  {BOLD}Токен:{NC} {token}")
+        _box_sep()
+        _box_row("  Вставьте одну из этих ссылок в клиент (v2rayNG, Clash, Nekobox):")
+        _box_row()
+        _box_row(f"  {CYAN}Base64 подписка{NC} (v2rayNG, Shadowrocket, Hiddify):")
+        _box_link(base_url)
+        _box_row()
+        _box_row(f"  {CYAN}Clash Meta YAML{NC} (Mihomo, Clash Verge):")
+        _box_link(f"{base_url}/clash")
+        _box_row()
+        _box_row(f"  {CYAN}Sing-box JSON{NC} (sing-box, Nekobox):")
+        _box_link(f"{base_url}/singbox")
+        _box_sep()
+        _box_item("1", "📱 Показать QR-код для Base64")
+        _box_item("2", "📱 Показать QR-код для Clash Meta")
+        _box_item("3", "📱 Показать QR-код для Sing-box")
+        _box_row()
+        _box_item_exit("0", "← Назад")
+        _box_bottom()
+
+        try:
+            choice = input(f"{CYAN}Выбор:{NC} ").strip()
+        except KeyboardInterrupt:
+            break
+        if choice in ("0", ""):
+            break
+        elif choice == "1":
+            _show_qr(base_url, f"{email} Base64 Sub", f"/root/sub_base64_qr_{email}.png")
+            input(f"{BLUE}Нажмите Enter...{NC}")
+        elif choice == "2":
+            _show_qr(f"{base_url}/clash", f"{email} Clash Sub", f"/root/sub_clash_qr_{email}.png")
+            input(f"{BLUE}Нажмите Enter...{NC}")
+        elif choice == "3":
+            _show_qr(f"{base_url}/singbox", f"{email} Sing-box Sub", f"/root/sub_singbox_qr_{email}.png")
+            input(f"{BLUE}Нажмите Enter...{NC}")
+
+
+def _regenerate_user_token() -> None:
+    cfg = _users_get_config()
+    do_user_list()
+    target = input(f"{CYAN}Email или UUID пользователя для сброса токена:{NC} ").strip()
+    if not target:
+        warn("Отмена")
+        return
+
+    try:
+        with cfg.open() as f:
+            c = json.load(f)
+        clients = c.get("inbounds", [{}])[0].get("settings", {}).get("clients", [])
+        found = next((cl for cl in clients
+                      if cl.get("email", "") == target or cl.get("id", "") == target), None)
+    except Exception:
+        found = None
+
+    if not found:
+        warn(f"Пользователь '{target}' не найден")
+        time.sleep(1.5)
+        return
+
+    email = found.get("email", "")
+    ans = input(f"{YELLOW}Вы уверены, что хотите перегенерировать токен для {email}? Старая ссылка перестанет работать! [y/N]:{NC} ").strip().lower()
+    if ans == "y":
+        state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+        sub_tokens = state.setdefault("sub_tokens", {})
+        new_token = gen_uuid()
+        sub_tokens[email] = new_token
+        state["sub_tokens"] = sub_tokens
+        STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        success(f"Токен для {email} успешно обновлен")
+    else:
+        info("Отменено")
+    time.sleep(2)
 
 # =============================================================================
 #  ГЕНЕРАЦИЯ ССЫЛОК + QR
@@ -28303,6 +28550,7 @@ def _menu_users() -> None:
             f"⏱  Временные пользователи (TTL)"
             f"  {DIM}({len(_ttl_data)} записей){NC}{_ttl_badge}"
         )
+        _box_item("7", f"📋 Подписки  {DIM}(Генератор, HTTP-сервер, Nginx){NC}")
         _box_item("E", f"📤 Экспорт конфига клиента  {DIM}(файл / SFTP / QR){NC}")
         _box_item("F", f"🔀 Ссылка + конфиг с фрагментацией  {DIM}(обход DPI){NC}")
         _box_item("G", f"📲 Поделиться конфигом  {DIM}(QR → скачать без scp){NC}")
@@ -28340,6 +28588,8 @@ def _menu_users() -> None:
             input(f"{BLUE}Нажмите Enter...{NC}")
         elif ch == "6":
             do_manage_ttl_users()
+        elif ch == "7":
+            do_subscription_menu()
         elif ch.lower() == "e":
             do_export_client_config()
             input(f"{BLUE}Нажмите Enter...{NC}")

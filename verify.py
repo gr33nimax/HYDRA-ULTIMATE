@@ -44,6 +44,10 @@ required = [
     ".gitignore",
     "vless_installer/__init__.py",
     "vless_installer/_core.py",
+    "vless_installer/modules/sub_generator.py",
+    "vless_installer/modules/sub_server.py",
+    "vless_installer/modules/sub_nginx.py",
+    "vless_installer/modules/warp_universal.py",
 ]
 for f in required:
     if Path(f).exists():
@@ -55,7 +59,11 @@ for f in required:
 section("2. Синтаксис Python файлов")
 for py in ["main.py", "verify.py",
            "vless_installer/__init__.py",
-           "vless_installer/_core.py"]:
+           "vless_installer/_core.py",
+           "vless_installer/modules/sub_generator.py",
+           "vless_installer/modules/sub_server.py",
+           "vless_installer/modules/sub_nginx.py",
+           "vless_installer/modules/warp_universal.py"]:
     try:
         ast.parse(Path(py).read_text())
         ok(f"{py} — синтаксис OK")
@@ -213,7 +221,7 @@ if failed == 0:
     print(f"  {CYAN}git init{NC}")
     print(f"  {CYAN}git add .{NC}")
     print(f"  {CYAN}git commit -m 'VLESS Ultimate Installer v4.11.3'{NC}")
-    print(f"  {CYAN}git remote add origin https://github.com/inferno1978/VLESS-Ultimate-Installer.git{NC}")
+    print(f"  {CYAN}git remote add origin https://github.com/gr33nimax/VLESS-Ultimate-Installer.git{NC}")
     print(f"  {CYAN}git push -u origin main{NC}")
 else:
     print(f"\n  {YELLOW}Есть проблемы — исправьте перед публикацией.{NC}")

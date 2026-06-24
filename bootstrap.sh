@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 #  VLESS Ultimate Installer v4.12.10 — Bootstrap
-#  bash <(curl -fsSL https://raw.githubusercontent.com/inferno1978/VLESS-Ultimate-Installer/main/bootstrap.sh)
+#  bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/VLESS-Ultimate-Installer/main/bootstrap.sh)
 # ============================================================
 set -euo pipefail
 
@@ -33,7 +33,7 @@ echo -e "${NC}"
 echo -e "${BOLD}[1/5] Проверка прав${NC}"
 if [[ $EUID -ne 0 ]]; then
     err "Требуются права root"
-    echo -e "     ${YELLOW}sudo bash <(curl -fsSL https://raw.githubusercontent.com/inferno1978/VLESS-Ultimate-Installer/main/bootstrap.sh)${NC}"
+    echo -e "     ${YELLOW}sudo bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/VLESS-Ultimate-Installer/main/bootstrap.sh)${NC}"
     exit 1
 fi
 ok "root: OK"
@@ -84,13 +84,13 @@ fi
 # [4] Загрузка / обновление
 echo -e "\n${BOLD}[4/5] Загрузка VLESS Ultimate${NC}"
 INSTALL_DIR="/opt/vless-ultimate"
-REPO_URL="https://github.com/inferno1978/VLESS-Ultimate-Installer"
+REPO_URL="https://github.com/gr33nimax/VLESS-Ultimate-Installer"
 BRANCH="main"
 
 # Ищем существующую установку в нестандартных местах
 _found=""
 for _candidate in \
-    "/home/inferno1978/VLESS-Ultimate-Installer" \
+    "/home/gr33nimax/VLESS-Ultimate-Installer" \
     "/root/VLESS-Ultimate-Installer" \
     "/opt/VLESS-Ultimate-Installer"
 do
@@ -120,7 +120,7 @@ if [[ -d "${INSTALL_DIR}/.git" ]]; then
     # Принудительно обновляем ключевые модули напрямую с GitHub
     _update_module() {
         local rel_path="$1"
-        local url="https://raw.githubusercontent.com/inferno1978/VLESS-Ultimate-Installer/${BRANCH}/${rel_path}"
+        local url="https://raw.githubusercontent.com/gr33nimax/VLESS-Ultimate-Installer/${BRANCH}/${rel_path}"
         curl -fsSL --connect-timeout 15 -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "${INSTALL_DIR}/${rel_path}" "$url" 2>/dev/null \
             && info "Обновлён: ${rel_path}" \
             || warn "Не удалось обновить: ${rel_path}"
@@ -145,7 +145,7 @@ else
         # Принудительно обновляем ключевые модули напрямую (минуя CDN-кэш архива)
         _update_module() {
             local rel_path="$1"
-            local url="https://raw.githubusercontent.com/inferno1978/VLESS-Ultimate-Installer/${BRANCH}/${rel_path}"
+            local url="https://raw.githubusercontent.com/gr33nimax/VLESS-Ultimate-Installer/${BRANCH}/${rel_path}"
             curl -fsSL --connect-timeout 15 -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "${INSTALL_DIR}/${rel_path}" "$url" 2>/dev/null \
                 && info "Принудительно обновлён: ${rel_path}" \
                 || warn "Не удалось обновить: ${rel_path}"
