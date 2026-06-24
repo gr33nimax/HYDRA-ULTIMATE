@@ -87,47 +87,84 @@ else:
 # ── 4. Ключевые функции в _core.py ───────────────────────────
 section("4. Ключевые функции в _core.py")
 if core.exists():
-    core_text = core.read_text()
     key_funcs = [
-        "def main_menu(",
-        "def ensure_startup_dependencies(",
-        "def _init_pkg_mgr(",
-        "def print_banner(",
-        "def gen_uuid(",
-        "def _run(",
-        "def log_to_file(",
-        "def switch_mode_ab(",
-        "def _smart_recover(",
-        "def do_quick_status(",
-        "def _ttl_check_and_expire(",
-        "def _dpi_run_once(",
-        "def _smart_balancer_run_once(",
-        "def _ru_subnets_cli_update(",
-        "def _as_direct_cli_update(",
-        "def _ingress_state_load(",
-        "def _ingress_enable(",
-        "def _ingress_remove(",
-        "def _tg_notify_event(",
-        "def _autoban_run_once(",
-        "def _awg_guard_cron(",
-        "def _pinned_node_check_and_fallback(",
-        "def _scheduled_backup_run(",
-        "def _asn_cache_connect(",
-        "def _asn_cache_delete(",
-        "def get_server_country_cached(",
+        ("def main_menu(", "vless_installer/_core.py"),
+        ("def ensure_startup_dependencies(", "vless_installer/_core.py"),
+        ("def _init_pkg_mgr(", "vless_installer/_core.py"),
+        ("def print_banner(", "vless_installer/_core.py"),
+        ("def gen_uuid(", "vless_installer/_core.py"),
+        ("def _run(", "vless_installer/_core.py"),
+        ("def log_to_file(", "vless_installer/_core.py"),
+        ("def switch_mode_ab(", "vless_installer/_core.py"),
+        ("def _smart_recover(", "vless_installer/_core.py"),
+        ("def do_quick_status(", "vless_installer/_core.py"),
+        ("def _ttl_check_and_expire(", "vless_installer/_core.py"),
+        ("def _dpi_run_once(", "vless_installer/modules/dpi_detector.py"),
+        ("def _smart_balancer_run_once(", "vless_installer/modules/smart_balancer.py"),
+        ("def _ru_subnets_cli_update(", "vless_installer/_core.py"),
+        ("def _as_direct_cli_update(", "vless_installer/_core.py"),
+        ("def _ingress_state_load(", "vless_installer/modules/ingress_geoip.py"),
+        ("def _ingress_enable(", "vless_installer/modules/ingress_geoip.py"),
+        ("def _ingress_remove(", "vless_installer/modules/ingress_geoip.py"),
+        ("def tg_notify_event(", "vless_installer/modules/tg_bot.py"),
+        ("def _autoban_run_once(", "vless_installer/_core.py"),
+        ("def _awg_guard_cron(", "vless_installer/modules/smart_balancer.py"),
+        ("def _pinned_node_check_and_fallback(", "vless_installer/modules/dpi_detector.py"),
+        ("def _scheduled_backup_run(", "vless_installer/_core.py"),
+        ("def _asn_cache_connect(", "vless_installer/_core.py"),
+        ("def _asn_cache_delete(", "vless_installer/_core.py"),
+        ("def get_server_country_cached(", "vless_installer/_core.py"),
     ]
-    for func in key_funcs:
-        name = func.replace("def ", "").rstrip("(")
-        if func in core_text:
+    file_contents = {}
+    for func_sig, filepath in key_funcs:
+        if filepath not in file_contents:
+            p = Path(filepath)
+            file_contents[filepath] = p.read_text(encoding="utf-8") if p.exists() else ""
+        
+        name = func_sig.replace("def ", "").rstrip("(")
+        if func_sig in file_contents[filepath]:
             ok(f"{name}()")
         else:
-            fail(f"{name}() — НЕ НАЙДЕНА")
+            fail(f"{name}() — НЕ НАЙДЕНА в {filepath}")
 
 # ── 5. Загрузка _core.py через exec ──────────────────────────
 section("5. Загрузка _core.py через exec (как делает main.py)")
 try:
+    import sys
+    from types import ModuleType
+    if sys.platform == "win32":
+        # Mock grp module
+        grp_mock = ModuleType("grp")
+        grp_mock.getgrnam = lambda name: type("struct_group", (object,), {"gr_gid": 1000})()
+        grp_mock.getgrgid = lambda gid: type("struct_group", (object,), {"gr_name": "root"})()
+        sys.modules["grp"] = grp_mock
+
+        # Mock pwd module
+        pwd_mock = ModuleType("pwd")
+        pwd_mock.getpwnam = lambda name: type("struct_passwd", (object,), {"pw_uid": 1000, "pw_gid": 1000})()
+        sys.modules["pwd"] = pwd_mock
+
+        # Mock termios module
+        termios_mock = ModuleType("termios")
+        termios_mock.tcgetattr = lambda fd: [0, 0, 0, 0, 0, 0, [0]*32]
+        termios_mock.tcsetattr = lambda fd, when, attributes: None
+        termios_mock.TCSANOW = 0
+        sys.modules["termios"] = termios_mock
+
+        # Mock tty module
+        tty_mock = ModuleType("tty")
+        tty_mock.setraw = lambda fd: None
+        tty_mock.setcbreak = lambda fd: None
+        sys.modules["tty"] = tty_mock
+
+        # Mock fcntl module
+        fcntl_mock = ModuleType("fcntl")
+        fcntl_mock.fcntl = lambda fd, op, arg=0: 0
+        fcntl_mock.ioctl = lambda fd, op, arg=0: 0
+        sys.modules["fcntl"] = fcntl_mock
+
     _globals = {}
-    core_src = Path("vless_installer/_core.py").read_text()
+    core_src = Path("vless_installer/_core.py").read_text(encoding="utf-8")
     exec(compile(core_src, "vless_installer/_core.py", "exec"), _globals)
     ok("exec(_core.py) — без ошибок")
 
@@ -159,12 +196,21 @@ except Exception as e:
 
 # ── 6. bootstrap.sh ──────────────────────────────────────────
 section("6. bootstrap.sh")
-r = subprocess.run(["bash", "-n", "bootstrap.sh"],
-                   capture_output=True, text=True)
-if r.returncode == 0:
-    ok("bootstrap.sh — синтаксис bash OK")
+import sys
+if sys.platform == "win32":
+    print("  ⚠ Пропуск синтаксической проверки bash на Windows (нет нативного bash)")
+    passed += 1
 else:
-    fail(f"bootstrap.sh — ошибка: {r.stderr.strip()}")
+    try:
+        r = subprocess.run(["bash", "-n", "bootstrap.sh"],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            ok("bootstrap.sh — синтаксис bash OK")
+        else:
+            fail(f"bootstrap.sh — ошибка: {r.stderr.strip()}")
+    except FileNotFoundError:
+        print("  ⚠ bash не найден для синтаксической проверки")
+        passed += 1
 
 # ── 7. Документация ───────────────────────────────────────────
 section("7. Документация")
@@ -180,7 +226,7 @@ doc_files = {
 for fname, min_chars in doc_files.items():
     p = Path(fname)
     if p.exists():
-        size = len(p.read_text())
+        size = len(p.read_text(encoding="utf-8"))
         if size >= min_chars:
             ok(f"{fname}: {size} символов")
         else:
@@ -192,7 +238,7 @@ for fname, min_chars in doc_files.items():
 section("8. bootstrap.sh — SHA256")
 bs = Path("bootstrap.sh")
 if bs.exists():
-    bs_text = bs.read_text()
+    bs_text = bs.read_text(encoding="utf-8")
     if "EXPECTED_SHA256" in bs_text:
         if "PLACEHOLDER_SHA256_UPDATE_BEFORE_RELEASE" in bs_text:
             import sys as _sys

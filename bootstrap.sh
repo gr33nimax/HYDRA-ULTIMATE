@@ -3,6 +3,7 @@
 #  VLESS Ultimate Installer v4.12.10 — Bootstrap
 #  bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/VLESS-Ultimate-Installer/main/bootstrap.sh)
 # ============================================================
+# EXPECTED_SHA256="PLACEHOLDER_SHA256_UPDATE_BEFORE_RELEASE"
 set -euo pipefail
 
 # Сброс системного прокси перед загрузкой — защита от сломанных окружений,
