@@ -152,17 +152,20 @@ def generate_vless_links(state: dict, uuid_str: str, email: str) -> list[str]:
 def generate_naive_link(state: dict, email: str) -> Optional[str]:
     """Генерация naive+https:// URI если NaiveProxy установлен."""
     naive = _load_naiveproxy_state()
-    if not naive.get("installed") or not naive.get("users"):
+    if not naive.get("installed"):
         return None
 
     host = naive.get("domain", "") or state.get("domain", "") or _get_server_ip()
     port = naive.get("port", 8443)
 
-    # Ищем пользователя, с возможностью fallback на первого
-    user_data = next((u for u in naive["users"] if u.get("username", "") == email), naive["users"][0])
-    user = urllib.parse.quote(user_data["username"])
-    pwd = urllib.parse.quote(user_data["password"])
-    return f"naive+https://{user}:{pwd}@{host}:{port}#{email}%20Naive"
+    # Ищем пользователя строго по email
+    for u in naive.get("users", []):
+        if u.get("username", "") == email:
+            user = urllib.parse.quote(u["username"])
+            pwd = urllib.parse.quote(u["password"])
+            return f"naive+https://{user}:{pwd}@{host}:{port}#{email}%20Naive"
+
+    return None
 
 
 # ── Генерация Hysteria2 ──────────────────────────────────────────────────────
@@ -212,25 +215,25 @@ def generate_mieru_nekobox_link(host: str, port: int, protocol: str, username: s
 def generate_mieru_link(state: dict, email: str) -> list[str]:
     """Генерация mieru линков для Nekobox и Karing."""
     mieru = _load_mieru_state()
-    if not mieru.get("installed") or not mieru.get("users"):
+    if not mieru.get("installed"):
         return []
 
     host = state.get("domain", "") or _get_server_ip()
     port_start = mieru.get("port_start", 8964)
     protocol = mieru.get("protocol", "TCP")
 
-    # Ищем пользователя, с возможностью fallback на первого
-    user_data = next((u for u in mieru["users"] if u.get("username") == email), mieru["users"][0])
-    uname = user_data["username"]
-    pwd = user_data["password"]
-
     links = []
-    # Nekobox sn://mieru формат
-    neko_link = generate_mieru_nekobox_link(host, port_start, protocol, uname, pwd, f"{email}_Mieru")
-    links.append(neko_link)
-    # Karing формат
-    karing_link = f"mierus://{urllib.parse.quote(uname)}:{urllib.parse.quote(pwd)}@{host}?port={port_start}&protocol={protocol.upper()}&profile=default&mtu=1400&multiplexing=MULTIPLEXING_HIGH#{email}%20Mieru%20Karing"
-    links.append(karing_link)
+    for u in mieru.get("users", []):
+        if u.get("username") == email:
+            uname = u["username"]
+            pwd = u["password"]
+            # Nekobox sn://mieru формат
+            neko_link = generate_mieru_nekobox_link(host, port_start, protocol, uname, pwd, f"{email}_Mieru")
+            links.append(neko_link)
+            # Karing формат
+            karing_link = f"mierus://{urllib.parse.quote(uname)}:{urllib.parse.quote(pwd)}@{host}?port={port_start}&protocol={protocol.upper()}&profile=default&mtu=1400&multiplexing=MULTIPLEXING_HIGH#{email}%20Mieru%20Karing"
+            links.append(karing_link)
+            break
 
     return links
 
