@@ -69,12 +69,19 @@ def _find_nginx_conf() -> Path | None:
     return None
 
 
-def generate_location_block(port: int = DEFAULT_SUB_PORT) -> str:
+def generate_location_block(port: int = DEFAULT_SUB_PORT, proto: str = "http") -> str:
     """Сгенерировать nginx location-блок для подписок."""
+    ssl_directives = ""
+    if proto == "https":
+        ssl_directives = """
+        proxy_ssl_verify off;
+        proxy_ssl_server_name on;
+        proxy_ssl_name $host;"""
+
     return f"""
     {START_MARKER}
     location /sub/ {{
-        proxy_pass http://127.0.0.1:{port};
+        proxy_pass {proto}://127.0.0.1:{port};{ssl_directives}
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -148,6 +155,101 @@ def inject_sub_location(nginx_conf_path: str | Path | None = None,
     # Удаляем старые конфликтующие бэкапы, если они есть
     _cleanup_stale_backups()
 
+    import json
+    state_file = Path("/var/lib/xray-installer/state.json")
+    state = {}
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    sub_domain = state.get("sub_domain")
+    main_domain = state.get("domain")
+
+    # Определяем протокол бэкенда (https если у sub_domain есть SSL-сертификаты)
+    backend_proto = "http"
+    if sub_domain:
+        cert_file = Path(f"/etc/letsencrypt/live/{sub_domain}/fullchain.pem")
+        key_file = Path(f"/etc/letsencrypt/live/{sub_domain}/privkey.pem")
+        if cert_file.exists() and key_file.exists():
+            backend_proto = "https"
+
+    # Если настроен выделенный sub_domain, отличный от основного домена
+    if sub_domain and sub_domain != main_domain:
+        cert_file = Path(f"/etc/letsencrypt/live/{sub_domain}/fullchain.pem")
+        key_file = Path(f"/etc/letsencrypt/live/{sub_domain}/privkey.pem")
+        if cert_file.exists() and key_file.exists():
+            print(f"\033[1;36m[INFO]\033[0m  Настройка выделенного nginx-конфига для sub_domain: {sub_domain}")
+            
+            ssl_directives = ""
+            if backend_proto == "https":
+                ssl_directives = """
+        proxy_ssl_verify off;
+        proxy_ssl_server_name on;
+        proxy_ssl_name $host;"""
+
+            config_content = f"""server {{
+    listen 80;
+    listen [::]:80;
+    server_name {sub_domain};
+    return 301 https://$host$request_uri;
+}}
+
+server {{
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name {sub_domain};
+
+    ssl_certificate {cert_file};
+    ssl_certificate_key {key_file};
+
+    location /sub/ {{
+        proxy_pass {backend_proto}://127.0.0.1:{port};{ssl_directives}
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 30s;
+    }}
+}}
+"""
+            target_dir = Path("/etc/nginx/sites-enabled")
+            if not target_dir.exists():
+                target_dir = Path("/etc/nginx/conf.d")
+            
+            if target_dir.exists():
+                conf_file = target_dir / f"{sub_domain}.conf" if target_dir.name == "conf.d" else target_dir / sub_domain
+                backup = Path(f"/tmp/{conf_file.name}.sub.bak")
+                if conf_file.exists():
+                    try:
+                        conf_file.rename(backup)
+                    except Exception:
+                        pass
+                
+                try:
+                    conf_file.write_text(config_content, encoding="utf-8")
+                    r = subprocess.run(["nginx", "-t"], capture_output=True, text=True)
+                    if r.returncode == 0:
+                        subprocess.run(["systemctl", "reload", "nginx"], capture_output=True)
+                        print(f"\033[0;32m[OK]\033[0m    Создан выделенный конфиг nginx: {conf_file}")
+                        return True
+                    else:
+                        print(f"\033[0;31m[ERR]\033[0m   nginx -t failed для выделенного конфига:\n{r.stderr}")
+                        conf_file.unlink()
+                        if backup.exists():
+                            backup.rename(conf_file)
+                except Exception as e:
+                    print(f"\033[0;31m[ERR]\033[0m   Ошибка записи выделенного конфига: {e}")
+                    if backup.exists():
+                        try:
+                            backup.rename(conf_file)
+                        except Exception:
+                            pass
+
+    # Резервный/общий вариант: инжектируем в существующий конфиг
     conf = Path(nginx_conf_path) if nginx_conf_path else _find_nginx_conf()
     if not conf:
         print("\033[0;31m[ERR]\033[0m   Не найден nginx-конфиг")
@@ -160,12 +262,10 @@ def inject_sub_location(nginx_conf_path: str | Path | None = None,
         print("\033[1;33m[WARN]\033[0m  location /sub/ уже добавлен")
         return True
 
-    location_block = generate_location_block(port)
+    location_block = generate_location_block(port, backend_proto)
 
-    # Находим закрывающую скобку активного server-блока
     server_brace = find_active_server_brace(content)
     if server_brace == -1:
-        # Резервный вариант, если не смогли распарсить структуру скобок
         server_brace = content.rfind("}")
 
     if server_brace == -1:
@@ -174,23 +274,22 @@ def inject_sub_location(nginx_conf_path: str | Path | None = None,
 
     new_content = content[:server_brace] + location_block + "\n" + content[server_brace:]
 
-    # Бэкап + запись (бэкапим в /tmp во избежание duplicate default server в nginx)
     backup = Path(f"/tmp/{conf.name}.sub.bak")
     if backup.exists():
-        backup.unlink()
+        try:
+            backup.unlink()
+        except Exception:
+            pass
     conf.rename(backup)
     conf.write_text(new_content, encoding="utf-8")
 
-    # Проверяем конфиг
     r = subprocess.run(["nginx", "-t"], capture_output=True, text=True)
     if r.returncode != 0:
-        # Откатываем
         conf.unlink()
         backup.rename(conf)
         print(f"\033[0;31m[ERR]\033[0m   nginx -t failed:\n{r.stderr}")
         return False
 
-    # Перезагружаем nginx
     subprocess.run(["systemctl", "reload", "nginx"], capture_output=True)
     print(f"\033[0;32m[OK]\033[0m    location /sub/ добавлен в {conf}")
     return True
@@ -201,14 +300,36 @@ def remove_sub_location(nginx_conf_path: str | Path | None = None) -> bool:
     # Удаляем старые конфликтующие бэкапы, если они есть
     _cleanup_stale_backups()
 
+    import json
+    state_file = Path("/var/lib/xray-installer/state.json")
+    state = {}
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    sub_domain = state.get("sub_domain")
+    if sub_domain:
+        # Ищем и удаляем выделенный конфиг
+        for folder in ("/etc/nginx/sites-enabled", "/etc/nginx/conf.d"):
+            p = Path(folder)
+            if p.exists():
+                for name in (sub_domain, f"{sub_domain}.conf"):
+                    conf_file = p / name
+                    if conf_file.exists():
+                        try:
+                            conf_file.unlink()
+                            print(f"\033[0;32m[OK]\033[0m    Удален выделенный конфиг nginx: {conf_file}")
+                        except Exception:
+                            pass
+
     conf = Path(nginx_conf_path) if nginx_conf_path else _find_nginx_conf()
     if not conf or not conf.exists():
-        print("\033[0;31m[ERR]\033[0m   Не найден nginx-конфиг")
-        return False
+        return True
 
     content = conf.read_text(encoding="utf-8", errors="replace")
     if START_MARKER not in content:
-        print("\033[1;33m[WARN]\033[0m  location /sub/ не найден в конфиге")
         return True
 
     # Удаляем всё между маркерами (включительно)
@@ -221,7 +342,10 @@ def remove_sub_location(nginx_conf_path: str | Path | None = None) -> bool:
     # Бэкап + запись (бэкапим в /tmp во избежание duplicate default server в nginx)
     backup = Path(f"/tmp/{conf.name}.sub.bak")
     if backup.exists():
-        backup.unlink()
+        try:
+            backup.unlink()
+        except Exception:
+            pass
     conf.rename(backup)
     conf.write_text(new_content, encoding="utf-8")
 
