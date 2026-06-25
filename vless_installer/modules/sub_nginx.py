@@ -152,6 +152,10 @@ def inject_sub_location(nginx_conf_path: str | Path | None = None,
 
     Вставляет блок внутрь первого server { } перед последней закрывающей }.
     """
+    import shutil
+    if not shutil.which("nginx"):
+        return True
+
     # Удаляем старые конфликтующие бэкапы, если они есть
     _cleanup_stale_backups()
 
@@ -297,6 +301,10 @@ server {{
 
 def remove_sub_location(nginx_conf_path: str | Path | None = None) -> bool:
     """Удалить инжектированный location /sub/ из nginx-конфига."""
+    import shutil
+    if not shutil.which("nginx"):
+        return True
+
     # Удаляем старые конфликтующие бэкапы, если они есть
     _cleanup_stale_backups()
 
