@@ -59,9 +59,6 @@ from typing import Any
 import getpass
 
 # ── Модули v4.12.9 ──────────────────────────────────────────────────────────────
-from vless_installer.modules.nginx_watchdog  import (
-    nginx_watchdog_install, nginx_watchdog_remove, do_manage_nginx_watchdog,
-)
 from vless_installer.modules.ipset_persist   import (
     ipset_save, ipset_restore_unit_install, ipset_restore_unit_remove,
     do_manage_ipset_persist,
@@ -125,7 +122,6 @@ from vless_installer.modules.tui        import (
 )
 from vless_installer.modules.port_hopping        import do_port_hopping_menu, ph_status
 from vless_installer.modules.tg_bot              import do_tg_bot_menu, do_manage_telegram, _tg_notify_event
-from vless_installer.modules.hysteria2_menu      import do_hysteria2_menu
 from vless_installer.modules.amnezia_vpn import do_amnezia_vpn_menu
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -30013,47 +30009,43 @@ def main_menu() -> None:
             _box_row(f"     {DIM}GeoIP блок, IP-Бан, Fail2ban, SSH Hardening и TG панель{NC}")
             _box_sep()
             _box_row()
-            _box_row(f"  {CYAN}6{NC}  📡 {TITLE}Telemt MTProxy{NC}")
+            _box_row(f"  {CYAN}6{NC}  🔐 {TITLE}NaiveProxy{NC}")
+            _box_row(f"     {DIM}HTTPS/HTTP2 + Chromium fingerprint + Caddy{NC}")
+            _box_sep()
+            _box_row()
+            _box_row(f"  {CYAN}7{NC}  🔒 {TITLE}Mieru{NC}")
+            _box_row(f"     {DIM}mTLS + random padding — маскировка без домена{NC}")
+            _box_sep()
+            _box_row()
+            _box_row(f"  {CYAN}8{NC}  🛡️  {TITLE}AmneziaVPN{NC}")
+            _box_row(f"     {DIM}AWG через Docker — управление контейнером Amnezia{NC}")
+            _box_sep()
+            _box_row()
+            _box_row(f"  {CYAN}9{NC}  📡 {TITLE}Telemt MTProxy{NC}")
             _box_row(f"     {DIM}Telegram MTProto-прокси (Rust/Tokio){NC}")
             _box_sep()
             _box_row()
-            _box_row(f"  {CYAN}7{NC}  📲 {TITLE}VK Turn Tunnel{NC}")
-            _box_row(f"     {DIM}FreeTurn (vk-turn-proxy) · WireTurn (Turnable){NC}")
-            _box_row()
+            _box_row(f"  {CYAN}10{NC} 📲 {TITLE}VK Turn Tunnel & qWDTT{NC}")
+            _box_row(f"     {DIM}Tunnels: FreeTurn · WireTurn · qWDTT (WireGuard over TURN){NC}")
             _box_sep()
-            _box_row(f"  {CYAN}8{NC}  🌐 {TITLE}SlipGate / SlipNet{NC}")
-            _box_row(f"     {DIM}DNS-туннели (DNSTT, NoizDNS, Slipstream) — обход полных блокировок{NC}")
             _box_row()
+            _box_row(f"  {CYAN}11{NC} 📹 {TITLE}olcRTC{NC}  {DIM}(Beta){NC}")
+            _box_row(f"     {DIM}TCP-over-WebRTC — туннель под видеозвонок{NC}")
             _box_sep()
-            _box_row(f"  {CYAN}9{NC} 🔒 {TITLE}qWDTT (WireGuard/TURN){NC}")
-            _box_row(f"     {DIM}WireGuard через TURN ВКонтакте — пароли, TTL, Telegram-бот{NC}")
             _box_row()
+            _box_row(f"  {CYAN}12{NC} 🌐 {TITLE}SlipGate / SlipNet{NC}")
+            _box_row(f"     {DIM}DNS-туннели (DNSTT, NoizDNS, Slipstream){NC}")
             _box_sep()
-            _box_row(f"  {CYAN}10{NC} 🔐 {TITLE}NaiveProxy{NC}")
-            _box_row(f"     {DIM}HTTPS/HTTP2 + Chromium fingerprint + probe resistance{NC}")
             _box_row()
-            _box_sep()
-            _box_row(f"  {CYAN}11{NC} 🔒 {TITLE}Mieru{NC}")
-            _box_row(f"     {DIM}mTLS + random padding — маскировка без домена{NC}")
-            _box_row()
-            _box_sep()
-            _box_row(f"  {CYAN}12{NC} 📹 {TITLE}olcRTC{NC}  {DIM}(Beta){NC}")
-            _box_row(f"     {DIM}TCP-over-WebRTC — туннель под видеозвонок (Jitsi/Телемост/WB Stream){NC}")
-            _box_row()
-            _box_sep()
             _box_row(f"  {CYAN}13{NC} ☁️  {TITLE}WebDAV Tunnel{NC}")
             _box_row(f"     {DIM}TCP/SOCKS5 поверх WebDAV-файлов — маскировка под облако{NC}")
-            _box_row()
             _box_sep()
-            _box_row(f"  {CYAN}14{NC} 🛡️  {TITLE}AmneziaVPN{NC}")
-            _box_row(f"     {DIM}AWG через Docker — управление контейнером Amnezia{NC}")
             _box_row()
-            _box_sep()
             _box_row(f"  {DIM}[{NC}{TITLE}{BOLD}0{NC}{DIM}]{NC}  🚪 Выход")
             _box_bottom()
             _BOX_W = _BOX_W_saved
             print()
-            choice = input(f"{CYAN}Выбор (1–14 / 0):{NC} ").strip()
+            choice = input(f"{CYAN}Выбор (1–13 / 0):{NC} ").strip()
         except KeyboardInterrupt:
             print()
             print(f"{GREEN}До свидания! 👋{NC}")
@@ -30082,48 +30074,37 @@ def main_menu() -> None:
 
         elif choice == "6":
             try:
-                from vless_installer.modules.mtproto import mtproto_menu
-                mtproto_menu()
-            except ImportError as _e:
-                warn(f"Модуль MTProxy не найден: {_e}")
-                time.sleep(2)
-
-        elif choice == "7":
-            try:
-                do_vkturn_menu()
-            except ImportError as _e:
-                warn(f"Модуль VK Turn Tunnel не найден: {_e}")
-                time.sleep(2)
-
-        elif choice == "8":
-            try:
-                do_slipgate_menu()
-            except ImportError as _e:
-                warn(f"Модуль SlipGate не найден: {_e}")
-                time.sleep(2)
-
-        elif choice == "9":
-            try:
-                do_wdtt_menu()
-            except ImportError as _e:
-                warn(f"Модуль qWDTT не найден: {_e}")
-                time.sleep(2)
-
-        elif choice == "10":
-            try:
                 do_naiveproxy_menu()
             except ImportError as _e:
                 warn(f"Модуль NaiveProxy не найден: {_e}")
                 time.sleep(2)
 
-        elif choice == "11":
+        elif choice == "7":
             try:
                 do_mieru_menu()
             except ImportError as _e:
                 warn(f"Модуль Mieru не найден: {_e}")
                 time.sleep(2)
 
-        elif choice == "12":
+        elif choice == "8":
+            try:
+                do_amnezia_vpn_menu()
+            except Exception as _e:
+                warn(f"Ошибка вызова AmneziaVPN: {_e}")
+                time.sleep(2)
+
+        elif choice == "9":
+            try:
+                from vless_installer.modules.mtproto import mtproto_menu
+                mtproto_menu()
+            except ImportError as _e:
+                warn(f"Модуль MTProxy не найден: {_e}")
+                time.sleep(2)
+
+        elif choice == "10":
+            _menu_vk_tunnels()
+
+        elif choice == "11":
             try:
                 from vless_installer.modules.olcrtc import do_olcrtc_menu
                 do_olcrtc_menu()
@@ -30131,18 +30112,18 @@ def main_menu() -> None:
                 warn(f"Модуль olcRTC не найден: {_e}")
                 time.sleep(2)
 
+        elif choice == "12":
+            try:
+                do_slipgate_menu()
+            except ImportError as _e:
+                warn(f"Модуль SlipGate не найден: {_e}")
+                time.sleep(2)
+
         elif choice == "13":
             try:
                 do_webdav_tunnel_menu()
             except ImportError as _e:
                 warn(f"Модуль WebDAV Tunnel не найден: {_e}")
-                time.sleep(2)
-
-        elif choice == "14":
-            try:
-                do_amnezia_vpn_menu()
-            except Exception as _e:
-                warn(f"Ошибка вызова AmneziaVPN: {_e}")
                 time.sleep(2)
 
         elif choice == "0":
@@ -30153,6 +30134,38 @@ def main_menu() -> None:
         else:
             warn(f"Неверный выбор: {choice}")
             time.sleep(1)
+
+
+def _menu_vk_tunnels() -> None:
+    """Подменю для VK Turn Tunnel и qWDTT."""
+    while True:
+        os.system("clear")
+        print()
+        _box_top("📲  VK TURN & qWDTT TUNNELS")
+        _box_row()
+        _box_item("1", f"VK Turn Tunnel  {DIM}(FreeTurn / WireTurn / Turnable){NC}")
+        _box_item("2", f"qWDTT  {DIM}(WireGuard через VK TURN){NC}")
+        _box_row()
+        _box_back()
+        _box_bottom()
+        try:
+            ch = input(f"{CYAN}Выбор:{NC} ").strip()
+        except KeyboardInterrupt:
+            break
+        if ch == "1":
+            try:
+                do_vkturn_menu()
+            except Exception as e:
+                warn(f"Ошибка VK Turn: {e}")
+                time.sleep(2)
+        elif ch == "2":
+            try:
+                do_wdtt_menu()
+            except Exception as e:
+                warn(f"Ошибка qWDTT: {e}")
+                time.sleep(2)
+        elif ch.lower() in ("q", ""):
+            break
 
 
 def apply_sysctl_and_limits() -> None:
