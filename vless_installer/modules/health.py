@@ -106,38 +106,45 @@ def _load_state_into_globals() -> None:
 
 
 # =============================================================================
-def health_check_xray() -> bool:
-    time.sleep(3)
-    r = _run(["systemctl", "is-active", "xray"], capture=True, check=False)
+def health_check_caddy() -> bool:
+    # Если NaiveProxy не установлен, пропускаем проверку
+    if not _get_state_value("naiveproxy", {}).get("installed", False):
+        return True
+    time.sleep(1)
+    r = _run(["systemctl", "is-active", "caddy-naive"], capture=True, check=False)
     if r.stdout.strip() != "active":
-        warn("Xray сервис не активен")
-        try:
-            logs = _run(["journalctl", "-u", "xray", "-n", "20", "--no-pager"],
-                        capture=True, check=False).stdout
-            log_to_file("WARN", logs[-2000:])
-        except Exception:
-            pass
+        warn("Caddy (NaiveProxy) сервис не активен")
         return False
-    r2 = _run(["pgrep", "-x", "xray"], capture=True, check=False)
-    if r2.returncode != 0:
-        warn("Xray процесс не запущен")
-        return False
-    success("Xray: OK")
+    success("Caddy (NaiveProxy): OK")
     return True
 
 
-def health_check_nginx() -> bool:
-    time.sleep(2)
-    r = _run(["systemctl", "is-active", "nginx"], capture=True, check=False)
+def health_check_mieru() -> bool:
+    # Если Mieru не установлен, пропускаем проверку
+    if not _get_state_value("mieru", {}).get("installed", False):
+        return True
+    time.sleep(1)
+    r = _run(["systemctl", "is-active", "mieru"], capture=True, check=False)
     if r.stdout.strip() != "active":
-        warn("Nginx сервис не активен")
+        warn("Mieru сервис не активен")
         return False
-    r2 = _run(["nginx", "-t"], capture=True, check=False)
-    if r2.returncode != 0:
-        warn("Nginx конфигурация невалидна")
-        log_to_file("WARN", r2.stderr)
+    success("Mieru: OK")
+    return True
+
+
+def health_check_amneziawg() -> bool:
+    # Если AmneziaWG не настроен в state, пропускаем
+    if not _get_state_value("awg_exit_host", "") and not _get_state_value("amnezia_vpn", {}).get("installed", False):
+        # Проверяем, есть ли хотя бы контейнер
+        r_ps = _run(["docker", "ps", "-a", "--filter", "name=amnezia-vpn", "--format", "{{.Names}}"], capture=True, check=False)
+        if not r_ps.stdout.strip():
+            return True
+    time.sleep(1)
+    r = _run(["docker", "ps", "--filter", "name=amnezia-vpn", "--format", "{{.Status}}"], capture=True, check=False)
+    if "Up" not in r.stdout:
+        warn("AmneziaWG Docker контейнер не запущен")
         return False
-    success("Nginx: OK")
+    success("AmneziaWG: OK")
     return True
 
 
@@ -318,9 +325,10 @@ def health_check_ports() -> bool:
 def run_full_health_check() -> bool:
     info("=== Полная проверка здоровья системы ===")
     status = "healthy"
-    if not health_check_xray():  status = "degraded"
-    if not health_check_nginx(): status = "degraded"
-    if not health_check_ssl():   status = "degraded"
+    if not health_check_caddy():     status = "degraded"
+    if not health_check_mieru():     status = "degraded"
+    if not health_check_amneziawg():  status = "degraded"
+    if not health_check_ssl():       status = "degraded"
     health_check_ports()
     HEALTH_CHECK_FILE.parent.mkdir(parents=True, exist_ok=True)
     HEALTH_CHECK_FILE.write_text(status)

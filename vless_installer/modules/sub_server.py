@@ -303,8 +303,8 @@ def generate_systemd_unit(host: str = DEFAULT_HOST,
 
     return textwrap.dedent(f"""\
         [Unit]
-        Description=VLESS Subscription Server
-        After=network.target xray.service
+        Description=HYDRA Subscription Server
+        After=network.target
         Wants=network.target
 
         [Service]
