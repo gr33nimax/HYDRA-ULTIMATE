@@ -107,7 +107,7 @@ _AWG_WATCHDOG_LOG    = Path("/var/log/awg-fallback.log")
 _AWG_WATCHDOG_STATE  = Path("/var/run/awg-fallback.state")
 
 from vless_installer.modules.health import (
-    health_check_xray, health_check_nginx, health_check_ssl,
+    health_check_caddy, health_check_mieru, health_check_amneziawg, health_check_ssl,
     health_check_ports, run_full_health_check, do_check_tls_cert,
     HEALTH_CHECK_FILE,
 )
@@ -9759,45 +9759,19 @@ def _add_subscription_user() -> None:
             continue
         break
         
-    token = gen_uuid()
-    sub_tokens[new_email] = token
-    state["sub_tokens"] = sub_tokens
-    STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
-    success(f"Пользователь '{new_email}' успешно добавлен в систему подписок.")
+    try:
+        from vless_installer.modules.user_lifecycle import sync_user_lifecycle
+        sync_user_lifecycle(new_email, "add")
+        success(f"Пользователь '{new_email}' успешно добавлен в систему подписок и все VPN-службы.")
+    except Exception as e:
+        warn(f"Ошибка при добавлении пользователя: {e}")
+        
+    state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+    users_db = state.get("users", {})
+    token = users_db.get(new_email, {}).get("token", "")
     
-    try:
-        from vless_installer.modules.naiveproxy import add_user_noninteractive as np_add
-        res_np = np_add(new_email)
-        if res_np:
-            success(f"Пользователь '{new_email}' автоматически добавлен в NaiveProxy")
-    except Exception as e:
-        warn(f"Не удалось добавить пользователя в NaiveProxy: {e}")
-        
-    try:
-        from vless_installer.modules.mieru import add_user_noninteractive as mieru_add
-        res_mieru = mieru_add(new_email)
-        if res_mieru:
-            success(f"Пользователь '{new_email}' автоматически добавлен в Mieru")
-    except Exception as e:
-        warn(f"Не удалось добавить пользователя в Mieru: {e}")
-
-    try:
-        from vless_installer.modules.amnezia_vpn import _container_exists as awg_exists
-        if awg_exists():
-            from vless_installer.modules.amnezia_vpn import ensure_awg_user
-            username_clean = re.sub(r'[^a-zA-Z0-9_-]', '', new_email)
-            if username_clean:
-                created, msg = ensure_awg_user(username_clean)
-                if created:
-                    success(f"Пользователь '{new_email}' автоматически добавлен в AmneziaWG")
-            else:
-                warn(f"Имя пользователя '{new_email}' недопустимо для AmneziaWG")
-    except Exception as e:
-        warn(f"Не удалось добавить пользователя в AmneziaWG: {e}")
-        
     # Сразу показываем ссылки
     sub_domain = state.get("sub_domain", "")
-    sub_port = state.get("sub_port", 9443)
     domain = sub_domain or state.get("domain", "") or get_server_ip("4")
     port_suffix = ""
     base_url = f"https://{domain}{port_suffix}/sub/{token}"
@@ -9848,35 +9822,12 @@ def _delete_subscription_user() -> None:
         
     ans = input(f"{YELLOW}Вы уверены, что хотите удалить пользователя {target}? [y/N]:{NC} ").strip().lower()
     if ans == "y":
-        del sub_tokens[target]
-        state["sub_tokens"] = sub_tokens
-        STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
-        success(f"Пользователь '{target}' удален из системы подписок")
-        
         try:
-            from vless_installer.modules.naiveproxy import delete_user_noninteractive as np_del
-            if np_del(target):
-                success(f"Пользователь '{target}' автоматически удален из NaiveProxy")
+            from vless_installer.modules.user_lifecycle import sync_user_lifecycle
+            sync_user_lifecycle(target, "delete")
+            success(f"Пользователь '{target}' удален из системы подписок и всех VPN-служб")
         except Exception as e:
-            warn(f"Не удалось удалить пользователя из NaiveProxy: {e}")
-            
-        try:
-            from vless_installer.modules.mieru import delete_user_noninteractive as mieru_del
-            if mieru_del(target):
-                success(f"Пользователь '{target}' автоматически удален из Mieru")
-        except Exception as e:
-            warn(f"Не удалось удалить пользователя из Mieru: {e}")
-
-        try:
-            from vless_installer.modules.amnezia_vpn import _container_exists as awg_exists
-            if awg_exists():
-                from vless_installer.modules.amnezia_vpn import _delete_client as awg_del
-                username_clean = re.sub(r'[^a-zA-Z0-9_-]', '', target)
-                if username_clean:
-                    if awg_del(username_clean):
-                        success(f"Пользователь '{target}' автоматически удален из AmneziaWG")
-        except Exception as e:
-            warn(f"Не удалось удалить пользователя из AmneziaWG: {e}")
+            warn(f"Ошибка при удалении пользователя: {e}")
     else:
         info("Отменено")
     time.sleep(1.5)
@@ -10039,12 +9990,13 @@ def do_subscription_menu() -> None:
     while True:
         os.system("clear")
         
-        # Считаем TTL-пользователей для бейджа в заголовке меню
-        _ttl_data   = _ttl_load()
+        state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+        users_db = state.get("users", {})
         _ttl_expiring = sum(
-            1 for r in _ttl_data.values()
-            if _ttl_expires_within_hours(r.get("expires_at", ""), 24)
-            and not _ttl_is_expired(r.get("expires_at", ""))
+            1 for r in users_db.values()
+            if r.get("expires_at")
+            and _ttl_expires_within_hours(r.get("expires_at"), 24)
+            and not _ttl_is_expired(r.get("expires_at"))
         )
         _ttl_badge = (
             f"  {YELLOW}⚠ {_ttl_expiring} истекают < 24ч{NC}" if _ttl_expiring else ""
@@ -10061,7 +10013,6 @@ def do_subscription_menu() -> None:
         except Exception:
             pass
 
-        state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
         sub_domain = state.get("sub_domain", "")
         sub_port = state.get("sub_port", 9443)
         domain = sub_domain or state.get("domain", "") or get_server_ip("4")
@@ -10102,7 +10053,7 @@ def do_subscription_menu() -> None:
         _box_item(
             "9",
             f"⏱  Временные пользователи (TTL)"
-            f"  {DIM}({len(_ttl_data)} записей){NC}{_ttl_badge}"
+            f"  {DIM}({sum(1 for u in users_db.values() if u.get('expires_at'))} записей){NC}{_ttl_badge}"
         )
         _box_item("10", "🔄 Синхронизировать и обновить все конфигурации")
         _box_row()
@@ -10136,6 +10087,7 @@ def do_subscription_menu() -> None:
                         sync_caddy_config()
                     except Exception:
                         pass
+                    uninstall_sync_agent()
                     success("Служба подписок отключена")
                 except Exception as e:
                     warn(f"Ошибка отключения: {e}")
@@ -10154,6 +10106,7 @@ def do_subscription_menu() -> None:
                         sync_caddy_config()
                     except Exception:
                         pass
+                    install_sync_agent()
                     success("Служба подписок включена")
                 except Exception as e:
                     warn(f"Ошибка включения: {e}")
@@ -22002,132 +21955,125 @@ def do_full_diagnostic() -> None:
 # =============================================================================
 
 TRAFFIC_LIMITS_FILE = Path("/var/lib/xray-installer/traffic_limits.json")
-
-
-def _limits_load() -> dict:
-    try:
-        if TRAFFIC_LIMITS_FILE.exists():
-            return json.loads(TRAFFIC_LIMITS_FILE.read_text())
-    except Exception:
-        pass
-    return {}
-
-
-def _limits_save(data: dict) -> None:
-    TRAFFIC_LIMITS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TRAFFIC_LIMITS_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-    TRAFFIC_LIMITS_FILE.chmod(0o600)
-
-
-def _query_user_traffic_bytes(email: str) -> int:
-    """Возвращает суммарный трафик пользователя (up+down) в байтах через Stats API."""
-    total = 0
-    for direction in ("uplink", "downlink"):
-        try:
-            r = _run([
-                str(XRAY_BIN), "api", "statsquery",
-                f"--server=127.0.0.1:{XRAY_STATS_API_PORT}",
-                f"--pattern=user>>>{email}>>>{direction}",
-            ], capture=True, check=False)
-            for line in r.stdout.splitlines():
-                m = re.search(r'"value"\s*:\s*"?(\d+)"?', line)
-                if m:
-                    total += int(m.group(1))
-        except Exception:
-            pass
-    return total
-
-
-def _stats_api_is_configured() -> bool:
-    """
-    Проверяет что Stats API реально включён в config.json
-    (секции stats + api + policy + inbound xray-stats-api присутствуют).
-    Без этого _query_user_traffic_bytes всегда вернёт 0 и лимиты никогда не сработают.
-    """
-    for cfg_path in (Path("/usr/local/etc/xray/config.json"), CONFIG_DIR / "config.json"):
-        if not cfg_path.exists():
-            continue
-        try:
-            cfg = json.loads(cfg_path.read_text())
-            has_stats  = "stats" in cfg
-            has_api    = any(ob.get("tag") == "xray-stats-api"
-                             for ob in cfg.get("outbounds", []))
-            has_policy = "policy" in cfg
-            has_inb    = any(ib.get("tag") == "xray-stats-api"
-                             for ib in cfg.get("inbounds", []))
-            return has_stats and has_api and has_policy and has_inb
-        except Exception:
-            pass
-    return False
-
-
-def _check_traffic_limits_once() -> None:
-    """Проверяет лимиты трафика. При превышении удаляет клиента из конфига."""
-    # Ранняя проверка: Stats API должен быть включён, иначе запросы вернут 0
-    # и лимиты никогда не сработают — молча пропускаем, логируем один раз.
-    if not _stats_api_is_configured():
-        log_to_file("WARN",
-            "traffic_limits: Stats API не настроен в config.json — "
-            "лимиты не могут быть применены. Используйте 'Патч Stats API' в меню диагностики.")
-        return
-
-    limits = _limits_load()
-    if not limits:
-        return
-    users = _users_load()
-    changed = False
-    for email, limit_cfg in limits.items():
-        limit_bytes = limit_cfg.get("limit_gb", 0) * 1024 ** 3
-        if not limit_bytes or limit_cfg.get("disabled"):
-            continue
-        used_bytes = _query_user_traffic_bytes(email)
-        limit_cfg["used_bytes"] = used_bytes
-        if used_bytes >= limit_bytes:
-            users_new = [u for u in users if u.get("email") != email]
-            if len(users_new) < len(users):
-                _users_save(users_new)
-                _users_apply_to_config(users_new)
-                limit_cfg["disabled"] = True
-                limit_cfg["disabled_at"] = datetime.now().isoformat()
-                changed = True
-                log_to_file("INFO",
-                    f"Traffic limit: {email} disabled "
-                    f"({used_bytes/1024**3:.2f} GB / {limit_cfg['limit_gb']} GB)")
-                _tg_notify_event(
-                    "traffic_limit",
-                    f"Пользователь <b>{email}</b> отключён: "
-                    f"использовано {used_bytes/1024**3:.2f} ГБ из {limit_cfg['limit_gb']} ГБ"
-                )
-    if changed:
-        _limits_save(limits)
-
+TTL_FILE = Path("/var/lib/xray-installer/ttl_users.json")
 
 def _get_subscription_users_list() -> list[dict]:
     """Возвращает список пользователей из системы подписок (state.json)."""
     state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
-    sub_tokens = state.get("sub_tokens", {})
+    users_db = state.get("users", {})
+    if not users_db:
+        # Fallback to sub_tokens for migration
+        sub_tokens = state.get("sub_tokens", {})
+        users_db = {}
+        for email, token in sub_tokens.items():
+            users_db[email] = {"token": token}
+    
     users = []
-    for email, token in sub_tokens.items():
+    for email, udata in users_db.items():
         users.append({
             "email": email,
-            "uuid": token,
-            "name": email
+            "uuid": udata.get("token", ""),
+            "name": email,
+            "limit_gb": udata.get("limit_gb", 0),
+            "expires_at": udata.get("expires_at", ""),
+            "is_blocked": udata.get("is_blocked", False),
+            "block_reason": udata.get("block_reason", "")
         })
     return users
 
 
+def install_sync_agent() -> None:
+    """Устанавливает oneshot-службу и таймер systemd для проверки лимитов и TTL."""
+    try:
+        agent_src = Path("/opt/vless-ultimate/vless_installer/modules/hydra_sync_agent.py")
+        agent_dst = Path("/usr/local/bin/hydra-sync-agent.py")
+        
+        # 1. Копируем скрипт агента
+        if agent_src.exists():
+            import shutil
+            shutil.copy2(agent_src, agent_dst)
+            agent_dst.chmod(0o755)
+            
+        # 2. Пишем systemd service
+        service_content = textwrap.dedent("""\
+            [Unit]
+            Description=Hydra User Traffic & TTL Sync Agent
+            After=network.target
+
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/bin/python3 /usr/local/bin/hydra-sync-agent.py
+            StandardOutput=journal
+            StandardError=journal
+        """)
+        Path("/etc/systemd/system/hydra-sync-agent.service").write_text(service_content)
+        
+        # 3. Пишем systemd timer
+        timer_content = textwrap.dedent("""\
+            [Unit]
+            Description=Run Hydra User Traffic & TTL Sync Agent every 5 minutes
+
+            [Timer]
+            OnBootSec=1min
+            OnUnitActiveSec=5min
+            Unit=hydra-sync-agent.service
+
+            [Install]
+            WantedBy=timers.target
+        """)
+        Path("/etc/systemd/system/hydra-sync-agent.timer").write_text(timer_content)
+        
+        # 4. Перезагружаем демоны и запускаем
+        _run(["systemctl", "daemon-reload"], check=False, quiet=True)
+        _run(["systemctl", "enable", "hydra-sync-agent.timer"], check=False, quiet=True)
+        _run(["systemctl", "start", "hydra-sync-agent.timer"], check=False, quiet=True)
+        
+        # 5. Чистим старый крон
+        Path("/etc/cron.d/xray-traffic-limits").unlink(missing_ok=True)
+        Path("/usr/local/bin/xray-traffic-limits.sh").unlink(missing_ok=True)
+        Path("/etc/cron.d/xray-ttl-check").unlink(missing_ok=True)
+        Path("/usr/local/bin/xray-ttl-check.sh").unlink(missing_ok=True)
+        
+        success("Systemd-таймер фоновой проверки лимитов установлен (каждые 5 мин)")
+    except Exception as e:
+        warn(f"Ошибка установки sync-агента: {e}")
+
+
+def uninstall_sync_agent() -> None:
+    """Удаляет systemd службу и таймер sync-агента."""
+    try:
+        _run(["systemctl", "stop", "hydra-sync-agent.timer"], check=False, quiet=True)
+        _run(["systemctl", "disable", "hydra-sync-agent.timer"], check=False, quiet=True)
+        
+        Path("/etc/systemd/system/hydra-sync-agent.timer").unlink(missing_ok=True)
+        Path("/etc/systemd/system/hydra-sync-agent.service").unlink(missing_ok=True)
+        Path("/usr/local/bin/hydra-sync-agent.py").unlink(missing_ok=True)
+        
+        _run(["systemctl", "daemon-reload"], check=False, quiet=True)
+        success("Systemd-таймер фоновой проверки лимитов удален")
+    except Exception as e:
+        warn(f"Ошибка удаления sync-агента: {e}")
+
+
+def sync_agent_active() -> bool:
+    """Проверяет активен ли таймер sync-агента."""
+    return Path("/etc/systemd/system/hydra-sync-agent.timer").exists()
+
+
 def do_manage_traffic_limits() -> None:
     """Меню управления лимитами трафика пользователей."""
+    from vless_installer.modules.user_lifecycle import get_user_cumulative_traffic, check_and_sync_all_users_limits, sync_user_lifecycle
     while True:
         os.system("clear")
-        limits = _limits_load()
-        users  = _get_subscription_users_list()
+        state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+        users_db = state.setdefault("users", {})
+        users = _get_subscription_users_list()
 
         print()
         _box_top(f"Лимиты трафика пользователей")
 
-        cron_active = Path("/etc/cron.d/xray-traffic-limits").exists()
-        _box_row(f"  Cron-проверка: {''+GREEN+'ВКЛЮЧЕНА (каждые 15 мин)'+NC if cron_active else ''+YELLOW+'ОТКЛЮЧЕНА'+NC}")
+        active = sync_agent_active()
+        _box_row(f"  Systemd-таймер: {''+GREEN+'ВКЛЮЧЕН (каждые 5 мин)'+NC if active else ''+YELLOW+'ОТКЛЮЧЕН'+NC}")
 
         if not users:
             _box_row(f"  {DIM}Пользователей нет{NC}")
@@ -22136,12 +22082,14 @@ def do_manage_traffic_limits() -> None:
             _box_row(f"  {'#':<4} {'Email':<{_EM_W}} {'Лимит':<12} {'Использовано':<20} {'Статус'}")
             _box_row(f"  {'─'*4} {'─'*_EM_W} {'─'*12} {'─'*20} {'─'*10}")
             for i, u in enumerate(users, 1):
-                email = u.get("email", "")
-                lim   = limits.get(email, {})
-                limit_gb   = lim.get("limit_gb", 0)
-                used_bytes = lim.get("used_bytes", 0)
-                used_gb    = used_bytes / 1024 ** 3
-                disabled   = lim.get("disabled", False)
+                email = u["email"]
+                limit_gb = u["limit_gb"]
+                
+                # Считаем живой накопленный трафик
+                used_bytes = get_user_cumulative_traffic(email, state)
+                used_gb = used_bytes / 1024 ** 3
+                
+                disabled = u["is_blocked"]
                 email_disp = email if len(email) <= _EM_W else email[:_EM_W - 1] + "…"
                 if limit_gb:
                     pct = min(100, used_gb / limit_gb * 100)
@@ -22151,13 +22099,13 @@ def do_manage_traffic_limits() -> None:
                     st_str   = f"{RED}ОТКЛЮЧЁН{NC}" if disabled else f"{GREEN}активен{NC}"
                 else:
                     lim_str  = f"{DIM}нет{NC}"
-                    used_str = f"{DIM}—{NC}"
-                    st_str   = f"{GREEN}активен{NC}"
+                    used_str = f"{col if used_gb > 0 else DIM}{used_gb:.2f} ГБ{NC}"
+                    st_str   = f"{RED}ЗАБЛОК{NC}" if disabled else f"{GREEN}активен{NC}"
                 _box_row(f"  {i:<4} {email_disp:<{_EM_W}} {lim_str:<12} {used_str:<20} {st_str}")
         _box_item("1", f"Задать/изменить лимит пользователя")
         _box_item("2", f"Снять лимит и восстановить пользователя")
         _box_item("3", f"Сбросить счётчики (новый месяц)")
-        _box_item("4", f"{'Отключить' if cron_active else 'Включить'} авто-проверку (cron 15 мин)")
+        _box_item("4", f"{'Отключить' if active else 'Включить'} авто-проверку (systemd timer 5 мин)")
         _box_item("5", f"Проверить лимиты прямо сейчас")
         _box_item("Q", f"Назад")
         _box_bottom()
@@ -22171,7 +22119,7 @@ def do_manage_traffic_limits() -> None:
                 continue
             _box_top("Выберите пользователя")
             for i, u in enumerate(users, 1):
-                _box_item(f"{i}", f"{u.get('email','?')}")
+                _box_item(f"{i}", f"{u['email']}")
             _box_bottom()
             raw = input("  Номер пользователя: ").strip()
             if not (raw.isdigit() and 1 <= int(raw) <= len(users)):
@@ -22179,19 +22127,28 @@ def do_manage_traffic_limits() -> None:
                 input(f"{BLUE}Нажмите Enter...{NC}")
                 continue
             u = users[int(raw)-1]
-            email = u.get("email", "")
+            email = u["email"]
             raw_gb = input(f"  Лимит трафика в ГБ (0 = без лимита): ").strip()
             if not raw_gb.isdigit():
                 warn("Введите число")
                 input(f"{BLUE}Нажмите Enter...{NC}")
                 continue
             limit_gb = int(raw_gb)
-            if email not in limits:
-                limits[email] = {}
-            limits[email]["limit_gb"] = limit_gb
-            limits[email].pop("disabled", None)
-            limits[email].pop("disabled_at", None)
-            _limits_save(limits)
+            
+            # Читаем свежий стейт
+            state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+            users_db = state.setdefault("users", {})
+            user_data = users_db.setdefault(email, {})
+            user_data["limit_gb"] = limit_gb
+            
+            STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+            
+            # Если лимит увеличен/снят и пользователь был заблокирован из-за лимита, разблокируем
+            if user_data.get("is_blocked"):
+                sync_user_lifecycle(email, "unblock")
+            else:
+                sync_user_lifecycle(email, "add")
+                
             success(f"Лимит {limit_gb} ГБ задан для {email}" if limit_gb else f"Лимит снят для {email}")
             input(f"{BLUE}Нажмите Enter...{NC}")
 
@@ -22200,124 +22157,48 @@ def do_manage_traffic_limits() -> None:
             raw = input("  Номер пользователя для восстановления: ").strip()
             target_email = ""
             if raw.isdigit() and 1 <= int(raw) <= len(users):
-                target_email = users[int(raw)-1].get("email", "")
+                target_email = users[int(raw)-1]["email"]
             else:
                 target_email = raw
-            if target_email in limits and limits[target_email].get("disabled"):
-                limits[target_email].pop("disabled", None)
-                limits[target_email].pop("disabled_at", None)
-                _limits_save(limits)
-                _users_apply_to_config(users)
-                success(f"Пользователь {target_email} восстановлен")
+                
+            state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+            users_db = state.setdefault("users", {})
+            if target_email in users_db:
+                # Снимаем лимит
+                users_db[target_email]["limit_gb"] = 0
+                STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+                sync_user_lifecycle(target_email, "unblock")
+                success(f"Пользователь {target_email} восстановлен (лимит сброшен)")
             else:
-                warn("Пользователь не найден или не был отключён")
+                warn("Пользователь не найден")
             input(f"{BLUE}Нажмите Enter...{NC}")
 
         elif ch == "3":
             ans = input(f"  {YELLOW}Сбросить счётчики для всех? [y/N]:{NC} ").strip().lower()
             if ans == "y":
-                for email in limits:
-                    limits[email]["used_bytes"] = 0
-                    limits[email].pop("disabled", None)
-                    limits[email].pop("disabled_at", None)
-                _limits_save(limits)
-                _run(["systemctl", "restart", "xray"], check=False, quiet=True)
-                time.sleep(2)
-                success("Счётчики сброшены, Xray перезапущен")
+                state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+                users_db = state.setdefault("users", {})
+                for email, udata in users_db.items():
+                    udata["traffic_accumulated"] = 0
+                    udata["traffic_baseline"] = udata.get("previous_live", 0)
+                    if udata.get("is_blocked") and "Превышен лимит трафика" in udata.get("block_reason", ""):
+                        # Разблокируем
+                        sync_user_lifecycle(email, "unblock")
+                STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+                success("Счётчики сброшены, пользователи разблокированы")
             input(f"{BLUE}Нажмите Enter...{NC}")
 
         elif ch == "4":
-            cron_p = Path("/etc/cron.d/xray-traffic-limits")
-            sh     = Path("/usr/local/bin/xray-traffic-limits.sh")
-            if cron_active:
-                cron_p.unlink(missing_ok=True)
-                sh.unlink(missing_ok=True)
-                success("Авто-проверка лимитов отключена")
+            if active:
+                uninstall_sync_agent()
             else:
-                sh.write_text(textwrap.dedent(f"""\
-                    #!/bin/bash
-                    python3 -c "
-import json, re, subprocess, sys, time
-from pathlib import Path
-from datetime import datetime
-XRAY_BIN = Path('/usr/local/bin/xray')
-XRAY_STATS_API_PORT = 10085
-USERS_FILE = Path('/etc/xray/users.json')
-TRAFFIC_LIMITS_FILE = Path('/var/lib/xray-installer/traffic_limits.json')
-TG_CONFIG_FILE = Path('/var/lib/xray-installer/telegram.json')
-
-def _run(args):
-    return subprocess.run(args, capture_output=True, text=True)
-
-def _users_load():
-    try: return json.loads(USERS_FILE.read_text()) if USERS_FILE.exists() else []
-    except: return []
-
-def _users_save(users):
-    USERS_FILE.write_text(json.dumps(users, indent=2, ensure_ascii=False))
-
-def _users_apply(users):
-    for cfg_path in (Path('/etc/xray/config.json'),Path('/usr/local/etc/xray/config.json')):
-        if not cfg_path.exists(): continue
-        try:
-            cfg = json.loads(cfg_path.read_text())
-            for inb in cfg.get('inbounds',[]):
-                s = inb.get('settings',{{}})
-                if 'clients' not in s: continue
-                use_flow = 'realitySettings' in inb.get('streamSettings',{{}})
-                s['clients'] = [dict(id=u['uuid'],email=u.get('email',''),**({{'flow':'xtls-rprx-vision'}} if use_flow else {{}})) for u in users]
-            cfg_path.write_text(json.dumps(cfg,indent=2))
-            import os; os.chmod(str(cfg_path),0o640)
-        except: pass
-    subprocess.run(['systemctl','restart','xray'],capture_output=True)
-
-def tg_send(msg):
-    try:
-        cfg=json.loads(TG_CONFIG_FILE.read_text()) if TG_CONFIG_FILE.exists() else {{}}
-        t,c=cfg.get('token'),cfg.get('chat_id')
-        if t and c:
-            subprocess.run(['curl','-s','-o','/dev/null','-m','10',
-                f'https://api.telegram.org/bot{{t}}/sendMessage',
-                '-d',f'chat_id={{c}}','-d',f'text={{msg}}','-d','parse_mode=HTML'],capture_output=True)
-    except: pass
-
-def qbytes(email):
-    total=0
-    for d in ('uplink','downlink'):
-        r=_run([str(XRAY_BIN),'api','statsquery',f'--server=127.0.0.1:{{XRAY_STATS_API_PORT}}',f'--pattern=user>>>{{email}}>>>{{d}}'])
-        for line in r.stdout.splitlines():
-            m=re.search(r'\"value\"\\s*:\\s*\"?(\\d+)\"?',line)
-            if m: total+=int(m.group(1))
-    return total
-
-limits=json.loads(TRAFFIC_LIMITS_FILE.read_text()) if TRAFFIC_LIMITS_FILE.exists() else {{}}
-users=_users_load()
-changed=False
-for email,lim in limits.items():
-    gb=lim.get('limit_gb',0)
-    if not gb or lim.get('disabled'): continue
-    used=qbytes(email)
-    lim['used_bytes']=used
-    if used>=gb*1024**3:
-        un=[u for u in users if u.get('email')!=email]
-        if len(un)<len(users):
-            _users_save(un); _users_apply(un)
-            lim['disabled']=True; changed=True
-            tg_send(f'Warning user {{email}} disabled: {{used/1024**3:.2f}} GB of {{gb}} GB')
-if changed:
-    TRAFFIC_LIMITS_FILE.write_text(json.dumps(limits,indent=2))
-" 2>>/var/log/xray-traffic-limits.log
-                """))
-                sh.chmod(0o750)
-                cron_p.write_text(f"*/15 * * * * root {sh} >> /var/log/xray-traffic-limits.log 2>&1\n")
-                cron_p.chmod(0o644)
-                success("Авто-проверка лимитов включена (каждые 15 мин)")
+                install_sync_agent()
             input(f"{BLUE}Нажмите Enter...{NC}")
 
         elif ch == "5":
             print()
             info("Проверка лимитов трафика...")
-            _check_traffic_limits_once()
+            check_and_sync_all_users_limits()
             success("Проверка завершена")
             input(f"{BLUE}Нажмите Enter...{NC}")
 
@@ -22326,52 +22207,6 @@ if changed:
         else:
             warn("Неверный выбор")
             time.sleep(1)
-
-
-# =============================================================================
-#  МОДУЛЬ 3: ВРЕМЕННЫЙ HTTP-СЕРВЕР ДЛЯ ПЕРЕДАЧИ КОНФИГА (QR / ССЫЛКА)
-# =============================================================================
-import threading
-import http.server
-import urllib.parse
-
-
-# =============================================================================
-#  МОДУЛЬ 3: ВРЕМЕННЫЕ ПОЛЬЗОВАТЕЛИ (TTL)
-#  Хранение: /var/lib/xray-installer/ttl_users.json
-#  Формат записи:
-#    {
-#      "email": "guest@xray",
-#      "expires_at": "2025-12-31T23:59:59+00:00",   # ISO-8601 UTC
-#      "days": 7,                                     # исходный TTL
-#      "notified_24h": false                          # флаг — алерт за 24ч отправлен
-#    }
-#  Cron-агент: /usr/local/bin/xray-ttl-check.sh
-#  Cron-файл:  /etc/cron.d/xray-ttl-check  (каждые 30 мин)
-# =============================================================================
-
-TTL_FILE        = Path("/var/lib/xray-installer/ttl_users.json")
-TTL_CRON_SCRIPT = Path("/usr/local/bin/xray-ttl-check.sh")
-TTL_CRON_FILE   = Path("/etc/cron.d/xray-ttl-check")
-TTL_LOG         = Path("/var/log/xray-ttl.log")
-
-
-# ── helpers ──────────────────────────────────────────────────────────────────
-
-def _ttl_load() -> dict:
-    """Загружает TTL-базу. Ключ — email пользователя."""
-    try:
-        if TTL_FILE.exists():
-            return json.loads(TTL_FILE.read_text())
-    except Exception:
-        pass
-    return {}
-
-
-def _ttl_save(data: dict) -> None:
-    TTL_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TTL_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-    TTL_FILE.chmod(0o600)
 
 
 def _ttl_expires_str(iso: str) -> str:
@@ -22408,7 +22243,6 @@ def _ttl_is_expired(iso: str) -> bool:
 
 
 def _ttl_expires_within_hours(iso: str, hours: int) -> bool:
-    """True если пользователь истечёт в течение `hours` часов."""
     try:
         exp = datetime.fromisoformat(iso)
         if exp.tzinfo is None:
@@ -22420,324 +22254,28 @@ def _ttl_expires_within_hours(iso: str, hours: int) -> bool:
         return False
 
 
-# ── добавление TTL к пользователю ────────────────────────────────────────────
-
-def _ttl_set(email: str, days: int) -> None:
-    """
-    Устанавливает TTL для существующего пользователя.
-    Если запись уже есть — перезаписывает (продление / сокращение).
-    """
-    data = _ttl_load()
-    expires_at = (
-        datetime.now(timezone.utc).replace(microsecond=0)
-        + __import__("datetime").timedelta(days=days)
-    ).isoformat()
-    data[email] = {
-        "email":        email,
-        "expires_at":   expires_at,
-        "days":         days,
-        "notified_24h": False,
-    }
-    _ttl_save(data)
-    log_to_file("INFO", f"TTL set: {email} expires {expires_at} ({days}d)")
-
-
-def _ttl_remove(email: str) -> None:
-    """Снимает TTL-ограничение с пользователя (делает постоянным)."""
-    data = _ttl_load()
-    if email in data:
-        del data[email]
-        _ttl_save(data)
-        log_to_file("INFO", f"TTL removed: {email}")
-
-
-# ── блокировка / разблокировка ───────────────────────────────────────────────
-
-BLOCKED_FILE = Path("/var/lib/xray-installer/blocked_users.json")
-
-
-def _blocked_load() -> dict:
-    """Загружает базу заблокированных. Ключ — email, значение — запись."""
-    try:
-        if BLOCKED_FILE.exists():
-            return json.loads(BLOCKED_FILE.read_text())
-    except Exception:
-        pass
-    return {}
-
-
-def _blocked_save(data: dict) -> None:
-    BLOCKED_FILE.parent.mkdir(parents=True, exist_ok=True)
-    BLOCKED_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-    BLOCKED_FILE.chmod(0o600)
-
-
-def block_subscription_user(email: str, reason: str = "expired") -> None:
-    """Блокирует пользователя в системе подписок: удаляет из Naive, Mieru, AWG и заносит в blocked_users."""
-    state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
-    blocked_users = state.setdefault("blocked_users", {})
-    blocked_users[email] = {
-        "blocked_at": datetime.now().isoformat(),
-        "reason": reason
-    }
-    state["blocked_users"] = blocked_users
-    STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
-    
-    # 2. Deprovision from NaiveProxy
-    try:
-        from vless_installer.modules.naiveproxy import delete_user_noninteractive
-        delete_user_noninteractive(email)
-    except Exception:
-        pass
-        
-    # 3. Deprovision from Mieru
-    try:
-        from vless_installer.modules.mieru import delete_user_noninteractive
-        delete_user_noninteractive(email)
-    except Exception:
-        pass
-        
-    # 4. Deprovision from AmneziaWG
-    try:
-        from vless_installer.modules.amnezia_vpn import _container_exists, _delete_client
-        if _container_exists():
-            username_clean = re.sub(r'[^a-zA-Z0-9_-]', '', email).lower()
-            if username_clean:
-                _delete_client(username_clean)
-    except Exception:
-        pass
-
-def unblock_subscription_user(email: str) -> None:
-    """Разблокирует пользователя: убирает из blocked_users и создает аккаунты в Naive, Mieru, AWG."""
-    state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
-    blocked_users = state.get("blocked_users", {})
-    if email in blocked_users:
-        del blocked_users[email]
-        state["blocked_users"] = blocked_users
-        STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
-        
-    # 2. Re-provision in NaiveProxy
-    try:
-        from vless_installer.modules.naiveproxy import add_user_noninteractive
-        add_user_noninteractive(email)
-    except Exception:
-        pass
-        
-    # 3. Re-provision in Mieru
-    try:
-        from vless_installer.modules.mieru import add_user_noninteractive
-        add_user_noninteractive(email)
-    except Exception:
-        pass
-        
-    # 4. Re-provision in AmneziaWG
-    try:
-        from vless_installer.modules.amnezia_vpn import _container_exists, ensure_awg_user
-        if _container_exists():
-            username_clean = re.sub(r'[^a-zA-Z0-9_-]', '', email)
-            if username_clean:
-                ensure_awg_user(username_clean)
-    except Exception:
-        pass
-
-def _ttl_block_user(email: str, reason: str = "ttl_expired") -> bool:
-    """
-    Блокирует пользователя в системе подписок и Xray.
-    Возвращает True если блокировка выполнена.
-    """
-    # 1. Блокируем в подписках (удаление из VPN-протоколов)
-    block_subscription_user(email, reason)
-    
-    # 2. Блокируем в Xray/users.json если есть
-    users = _users_load()
-    target = next(
-        (u for u in users if u.get("email") == email or u.get("uuid") == email),
-        None,
-    )
-    if target:
-        target["blocked"]    = True
-        target["blocked_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-        target["block_reason"] = reason
-        _users_save(users)
-        
-        # Сохраняем в отдельную базу заблокированных
-        blocked = _blocked_load()
-        blocked[email] = {
-            "email":       email,
-            "uuid":        target.get("uuid", ""),
-            "name":        target.get("name", ""),
-            "blocked_at":  target["blocked_at"],
-            "reason":      reason,
-        }
-        _blocked_save(blocked)
-        
-        # Применяем в Xray
-        active_users = [u for u in users if not u.get("blocked")]
-        _users_apply_to_config(active_users)
-        
-    log_to_file("INFO", f"User blocked: {email} (reason={reason})")
-    return True
-
-
-def _ttl_unblock_user(email: str) -> bool:
-    """
-    Снимает блокировку с пользователя в системе подписок и Xray.
-    Возвращает True при успешном завершении.
-    """
-    # 1. Разблокируем в подписках (создаем аккаунты в VPN-протоколах)
-    unblock_subscription_user(email)
-    
-    # 2. Разблокируем в Xray/users.json если есть
-    users = _users_load()
-    target = next(
-        (u for u in users if u.get("email") == email or u.get("uuid") == email),
-        None,
-    )
-    if target:
-        target.pop("blocked",      None)
-        target.pop("blocked_at",   None)
-        target.pop("block_reason", None)
-        _users_save(users)
-        
-        # Убираем из базы заблокированных
-        blocked = _blocked_load()
-        if email in blocked:
-            del blocked[email]
-            _blocked_save(blocked)
-            
-        # Применяем
-        active_users = [u for u in users if not u.get("blocked")]
-        _users_apply_to_config(active_users)
-        
-    log_to_file("INFO", f"User unblocked: {email}")
-    return True
-
-
-def _ttl_is_blocked(email: str) -> bool:
-    """True если пользователь заблокирован в системе подписок или Xray."""
-    state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
-    if email in state.get("blocked_users", {}):
-        return True
-        
-    users = _users_load()
-    target = next(
-        (u for u in users if u.get("email") == email or u.get("uuid") == email),
-        None,
-    )
-    return bool(target and target.get("blocked"))
-
-
-# ── проверка и блокировка истёкших ───────────────────────────────────────────
-
-def _ttl_check_and_expire() -> int:
-    """
-    Проверяет все TTL-записи:
-      • за 24 ч до истечения — отправляет TG-предупреждение
-      • при истечении — БЛОКИРУЕТ пользователя (убирает из Xray, но не удаляет
-        из users.json), помечает запись TTL как заблокированную.
-        Это позволяет продлить срок и разблокировать без повторного добавления.
-
-    Возвращает количество заблокированных пользователей.
-    """
-    data    = _ttl_load()
-    blocked = 0
-    changed = False
-
-    for email, rec in list(data.items()):
-        iso = rec.get("expires_at", "")
-
-        # ── алерт за 24 часа ──
-        if not rec.get("notified_24h") and _ttl_expires_within_hours(iso, 24):
-            left = _ttl_expires_str(iso)
-            _tg_notify_event(
-                "ttl_expiring",
-                f"⏳ Пользователь <b>{email}</b> истекает через <b>{left}</b>",
-            )
-            log_to_file("INFO", f"TTL 24h warning sent: {email}")
-            rec["notified_24h"] = True
-            changed = True
-
-        # ── истёк: блокируем (не удаляем) ──
-        if _ttl_is_expired(iso) and not rec.get("blocked"):
-            ok = _ttl_block_user(email, reason="ttl_expired")
-            if ok:
-                rec["blocked"] = True
-                _tg_notify_event(
-                    "ttl_expired",
-                    f"🔒 Пользователь <b>{email}</b> заблокирован — срок действия истёк",
-                )
-                log_to_file("INFO", f"TTL expired: {email} blocked in Xray")
-                blocked += 1
-            changed = True
-
-    if changed:
-        _ttl_save(data)
-
-    return blocked
-
-
-# ── cron-агент ───────────────────────────────────────────────────────────────
-
-def _ttl_install_cron() -> None:
-    """
-    Устанавливает cron-агент, вызывающий этот скрипт с флагом --ttl-check.
-    Запускается каждые 30 минут от root.
-    """
-    script = textwrap.dedent(f"""\
-        #!/bin/bash
-        # Xray TTL User Expiry Check (VLESS Installer)
-        LOG="{TTL_LOG}"
-        DATE=$(date '+%Y-%m-%d %H:%M:%S')
-        echo "[$DATE] TTL check start" >> "$LOG"
-        python3 {Path(__file__).resolve()} --ttl-check >> "$LOG" 2>&1
-        echo "[$DATE] TTL check done" >> "$LOG"
-    """)
-    TTL_CRON_SCRIPT.write_text(script)
-    TTL_CRON_SCRIPT.chmod(0o750)
-
-    TTL_CRON_FILE.write_text(
-        f"*/30 * * * * root {TTL_CRON_SCRIPT} >> {TTL_LOG} 2>&1\n"
-    )
-    TTL_CRON_FILE.chmod(0o644)
-    success(f"Cron-агент TTL установлен (каждые 30 мин) → {TTL_CRON_SCRIPT}")
-    success(f"Лог: {TTL_LOG}")
-
-
-def _ttl_remove_cron() -> None:
-    TTL_CRON_FILE.unlink(missing_ok=True)
-    TTL_CRON_SCRIPT.unlink(missing_ok=True)
-    success("Cron-агент TTL удалён")
-
-
-def _ttl_cron_active() -> bool:
-    return TTL_CRON_FILE.exists()
-
-
-# ── меню управления ───────────────────────────────────────────────────────────
-
 def do_manage_ttl_users() -> None:
     """
     Меню управления временными пользователями (TTL).
     Интегрируется в подменю пользователей.
     """
+    from vless_installer.modules.user_lifecycle import check_and_sync_all_users_limits, sync_user_lifecycle
+    from datetime import timedelta
     while True:
         os.system("clear")
         print()
-        data  = _ttl_load()
         users = _get_subscription_users_list()
+        ttl_users = [u for u in users if u["expires_at"]]
 
         _box_top("⏱  ВРЕМЕННЫЕ ПОЛЬЗОВАТЕЛИ (TTL)")
         _box_row()
 
-        # ── статус cron ──
-        cron_ok = _ttl_cron_active()
-        cron_str = f"{GREEN}ВКЛЮЧЁН (каждые 30 мин){NC}" if cron_ok \
-                   else f"{YELLOW}ОТКЛЮЧЁН{NC}"
-        _box_row(f"  Авто-проверка: {cron_str}")
+        active = sync_agent_active()
+        timer_str = f"{GREEN}ВКЛЮЧЁН (каждые 5 мин){NC}" if active else f"{YELLOW}ОТКЛЮЧЁН{NC}"
+        _box_row(f"  Авто-проверка: {timer_str}")
         _box_sep()
 
-        # ── список TTL-пользователей ──
-        if not data:
+        if not ttl_users:
             _box_row(f"  {DIM}Временных пользователей нет{NC}")
         else:
             _box_row(
@@ -22746,16 +22284,16 @@ def do_manage_ttl_users() -> None:
             _box_row(
                 f"  {'─'*4} {'─'*26} {'─'*18} {'─'*10} {'─'*14}"
             )
-            for i, (email, rec) in enumerate(data.items(), 1):
-                iso      = rec.get("expires_at", "")
-                left     = _ttl_expires_str(iso)
-                expired  = _ttl_is_expired(iso)
-                warn24   = _ttl_expires_within_hours(iso, 24) and not expired
-                is_blocked_now = _ttl_is_blocked(email)
+            for i, u in enumerate(ttl_users, 1):
+                email = u["email"]
+                iso = u["expires_at"]
+                left = _ttl_expires_str(iso)
+                expired = _ttl_is_expired(iso)
+                warn24 = _ttl_expires_within_hours(iso, 24) and not expired
+                is_blocked_now = u["is_blocked"]
 
-                # Форматируем дату без секунд
                 try:
-                    exp_dt   = datetime.fromisoformat(iso)
+                    exp_dt = datetime.fromisoformat(iso)
                     exp_show = exp_dt.strftime("%Y-%m-%d %H:%M")
                 except Exception:
                     exp_show = iso[:16]
@@ -22773,14 +22311,6 @@ def do_manage_ttl_users() -> None:
                     status = f"{GREEN}активен{NC}"
                     left_c = f"{GREEN}{left}{NC}"
 
-                # Проверяем существует ли юзер в users.json
-                in_users = any(
-                    u.get("email") == email or u.get("uuid") == email
-                    for u in users
-                )
-                if not in_users:
-                    status = f"{DIM}нет в базе{NC}"
-
                 _box_row(
                     f"  {i:<4} {email:<26} {exp_show:<18} {left_c:<10} {status}"
                 )
@@ -22792,7 +22322,7 @@ def do_manage_ttl_users() -> None:
         _box_item("3", f"Сделать пользователя постоянным (снять TTL)")
         _box_item("4", f"Проверить истёкших прямо сейчас")
         _box_item("5",
-            f"{'Отключить' if cron_ok else 'Включить'} авто-проверку (cron 30 мин)"
+            f"{'Отключить' if active else 'Включить'} авто-проверку (systemd timer 5 мин)"
         )
         _box_item("6", f"🔒 Заблокировать пользователя вручную")
         _box_item("7", f"🔓 Разблокировать пользователя")
@@ -22805,7 +22335,6 @@ def do_manage_ttl_users() -> None:
         except KeyboardInterrupt:
             break
 
-        # ── 1: Назначить TTL ──────────────────────────────────────────────
         if ch == "1":
             print()
             if not users:
@@ -22813,8 +22342,7 @@ def do_manage_ttl_users() -> None:
                 input(f"{BLUE}Нажмите Enter...{NC}")
                 continue
 
-            # Показываем только тех, у кого нет TTL
-            no_ttl = [u for u in users if u.get("email") not in data]
+            no_ttl = [u for u in users if not u["expires_at"]]
             if not no_ttl:
                 warn("У всех пользователей уже есть TTL.")
                 info("Используйте [2] для продления или [3] чтобы снять ограничение.")
@@ -22825,8 +22353,8 @@ def do_manage_ttl_users() -> None:
             for i, u in enumerate(no_ttl, 1):
                 _box_row(
                     f"  {DIM}[{NC}{BOLD}{i}{NC}{DIM}]{NC}"
-                    f"  {u.get('name', u.get('email', '—')):<20}"
-                    f"  {DIM}{u.get('email','')}{NC}"
+                    f"  {u.get('name', u['email']):<20}"
+                    f"  {DIM}{u['email']}{NC}"
                 )
             _box_bottom()
             raw = input(f"  Номер: ").strip()
@@ -22835,7 +22363,7 @@ def do_manage_ttl_users() -> None:
                 input(f"{BLUE}Нажмите Enter...{NC}")
                 continue
             target = no_ttl[int(raw) - 1]
-            email  = target.get("email", "")
+            email  = target["email"]
 
             print()
             presets = {"1": 1, "2": 3, "3": 7, "4": 14, "5": 30, "6": 90}
@@ -22860,45 +22388,45 @@ def do_manage_ttl_users() -> None:
                 input(f"{BLUE}Нажмите Enter...{NC}")
                 continue
 
-            _ttl_set(email, days)
+            state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+            users_db = state.setdefault("users", {})
+            user_data = users_db.setdefault(email, {})
+            
+            expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+            user_data["expires_at"] = expires_at
+            STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
 
-            # Устанавливаем cron если не был
-            if not cron_ok:
-                info("Cron-агент ещё не установлен — устанавливаю автоматически...")
-                _ttl_install_cron()
+            if user_data.get("is_blocked"):
+                sync_user_lifecycle(email, "unblock")
+            else:
+                sync_user_lifecycle(email, "add")
 
-            exp = _ttl_expires_str(data.get(email, {}).get("expires_at", ""))
-            # Перечитываем после _ttl_set
-            data = _ttl_load()
-            exp  = _ttl_expires_str(data.get(email, {}).get("expires_at", ""))
-            success(
-                f"TTL назначен: {email} → {days} дней (осталось: {exp})"
-            )
+            if not active:
+                info("Sync-агент ещё не установлен — устанавливаю автоматически...")
+                install_sync_agent()
+
+            success(f"TTL назначен: {email} → {days} дней")
             input(f"{BLUE}Нажмите Enter...{NC}")
 
-        # ── 2: Продлить / изменить ────────────────────────────────────────
         elif ch == "2":
             print()
-            if not data:
+            if not ttl_users:
                 warn("Нет TTL-пользователей")
                 input(f"{BLUE}Нажмите Enter...{NC}")
                 continue
 
-            emails = list(data.keys())
             _box_top("Выбор пользователя")
-            for i, e in enumerate(emails, 1):
-                rec  = data[e]
-                left = _ttl_expires_str(rec.get("expires_at", ""))
-                _box_row(f"  {DIM}[{NC}{BOLD}{i}{NC}{DIM}]{NC}  {e:<30}  осталось: {left}")
+            for i, u in enumerate(ttl_users, 1):
+                _box_row(f"  {DIM}[{NC}{BOLD}{i}{NC}{DIM}]{NC}  {u['email']:<30}  осталось: {_ttl_expires_str(u['expires_at'])}")
             _box_row()
             _box_bottom()
 
             raw = input("  Номер пользователя: ").strip()
-            if not (raw.isdigit() and 1 <= int(raw) <= len(emails)):
+            if not (raw.isdigit() and 1 <= int(raw) <= len(ttl_users)):
                 warn("Неверный номер")
                 input(f"{BLUE}Нажмите Enter...{NC}")
                 continue
-            email = emails[int(raw) - 1]
+            email = ttl_users[int(raw) - 1]["email"]
 
             print()
             presets = {"1": 1, "2": 3, "3": 7, "4": 14, "5": 30, "6": 90}
@@ -22923,95 +22451,79 @@ def do_manage_ttl_users() -> None:
                 input(f"{BLUE}Нажмите Enter...{NC}")
                 continue
 
-            _ttl_set(email, days)
-            # Если пользователь был заблокирован — снимаем блокировку
-            if _ttl_is_blocked(email):
-                _ttl_unblock_user(email)
-                success(f"Блокировка снята, срок продлён: {email} → {days} дней")
-            else:
-                data = _ttl_load()
-                exp  = _ttl_expires_str(data.get(email, {}).get("expires_at", ""))
-                success(f"Срок обновлён: {email} → {days} дней (осталось: {exp})")
+            state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+            users_db = state.setdefault("users", {})
+            user_data = users_db.setdefault(email, {})
+            expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+            user_data["expires_at"] = expires_at
+            STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+
+            sync_user_lifecycle(email, "unblock")
+            success(f"Блокировка снята, срок продлён: {email} → {days} дней")
             input(f"{BLUE}Нажмите Enter...{NC}")
 
-        # ── 3: Снять TTL ──────────────────────────────────────────────────
         elif ch == "3":
             print()
-            if not data:
+            if not ttl_users:
                 warn("Нет TTL-пользователей")
                 input(f"{BLUE}Нажмите Enter...{NC}")
                 continue
 
-            emails = list(data.keys())
             _box_top("Выбор пользователя")
-            for i, e in enumerate(emails, 1):
-                left = _ttl_expires_str(data[e].get("expires_at", ""))
-                blk  = f"  {RED}[заблокирован]{NC}" if _ttl_is_blocked(e) else ""
-                _box_row(f"  {DIM}[{NC}{BOLD}{i}{NC}{DIM}]{NC}  {e:<30}  осталось: {left}{blk}")
+            for i, u in enumerate(ttl_users, 1):
+                blk  = f"  {RED}[заблокирован]{NC}" if u["is_blocked"] else ""
+                _box_row(f"  {DIM}[{NC}{BOLD}{i}{NC}{DIM}]{NC}  {u['email']:<30}  осталось: {_ttl_expires_str(u['expires_at'])}{blk}")
             _box_row()
             _box_bottom()
 
             raw = input("  Номер: ").strip()
-            if not (raw.isdigit() and 1 <= int(raw) <= len(emails)):
+            if not (raw.isdigit() and 1 <= int(raw) <= len(ttl_users)):
                 warn("Неверный номер")
                 input(f"{BLUE}Нажмите Enter...{NC}")
                 continue
-            email = emails[int(raw) - 1]
+            email = ttl_users[int(raw) - 1]["email"]
 
             ans = input(
                 f"  {YELLOW}Сделать '{email}' постоянным (TTL будет снят, блокировка снята)? [y/N]:{NC} "
             ).strip().lower()
             if ans == "y":
-                # Снимаем блокировку если была
-                if _ttl_is_blocked(email):
-                    _ttl_unblock_user(email)
-                _ttl_remove(email)
-                success(f"TTL снят: {email} теперь постоянный пользователь")
+                state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+                users_db = state.setdefault("users", {})
+                if email in users_db:
+                    users_db[email]["expires_at"] = ""
+                    STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+                    sync_user_lifecycle(email, "unblock")
+                    success(f"TTL снят: {email} теперь постоянный пользователь")
             else:
                 info("Отмена")
             input(f"{BLUE}Нажмите Enter...{NC}")
 
-        # ── 4: Проверить прямо сейчас ─────────────────────────────────────
         elif ch == "4":
             print()
             info("Проверка истёкших TTL-пользователей...")
-            n = _ttl_check_and_expire()
-            if n:
-                success(f"Заблокировано {n} пользователей с истёкшим сроком")
-            else:
-                info("Истёкших пользователей не найдено")
+            check_and_sync_all_users_limits()
+            success("Проверка завершена")
             input(f"{BLUE}Нажмите Enter...{NC}")
 
-        # ── 5: Cron вкл/выкл ─────────────────────────────────────────────
         elif ch == "5":
             print()
-            if cron_ok:
-                ans = input(
-                    f"  {YELLOW}Отключить авто-проверку TTL? [y/N]:{NC} "
-                ).strip().lower()
-                if ans == "y":
-                    _ttl_remove_cron()
+            if active:
+                uninstall_sync_agent()
             else:
-                _ttl_install_cron()
+                install_sync_agent()
             input(f"{BLUE}Нажмите Enter...{NC}")
 
-        # ── 6: Заблокировать вручную ──────────────────────────────────────
         elif ch == "6":
             print()
-            # Показываем незаблокированных TTL-пользователей
-            active_ttl = [
-                e for e in data
-                if not _ttl_is_blocked(e)
-            ]
+            active_ttl = [u for u in ttl_users if not u["is_blocked"]]
             if not active_ttl:
                 warn("Нет активных TTL-пользователей для блокировки")
                 input(f"{BLUE}Нажмите Enter...{NC}")
                 continue
 
             _box_top("Заблокировать пользователя")
-            for i, e in enumerate(active_ttl, 1):
-                left = _ttl_expires_str(data[e].get("expires_at", ""))
-                _box_row(f"  {DIM}[{NC}{BOLD}{i}{NC}{DIM}]{NC}  {e:<30}  осталось: {left}")
+            for i, u in enumerate(active_ttl, 1):
+                _box_row(f"  {DIM}[{NC}{BOLD}{i}{NC}{DIM}]{NC}  {u['email']:<30}  осталось: {_ttl_expires_str(u['expires_at'])}")
             _box_row()
             _box_bottom()
 
@@ -23020,42 +22532,33 @@ def do_manage_ttl_users() -> None:
                 warn("Неверный номер")
                 input(f"{BLUE}Нажмите Enter...{NC}")
                 continue
-            email = active_ttl[int(raw) - 1]
+            email = active_ttl[int(raw) - 1]["email"]
 
             ans = input(
-                f"  {YELLOW}Заблокировать '{email}'? Xray откажет ему в соединении. [y/N]:{NC} "
+                f"  {YELLOW}Заблокировать '{email}'? [y/N]:{NC} "
             ).strip().lower()
             if ans == "y":
-                ok = _ttl_block_user(email, reason="manual")
-                if ok:
-                    success(f"Пользователь {email} заблокирован. Продлите TTL [2] чтобы разблокировать.")
-                else:
-                    warn(f"Не удалось заблокировать: {email} не найден в базе пользователей")
+                sync_user_lifecycle(email, "block")
+                success(f"Пользователь {email} заблокирован.")
             else:
                 info("Отмена")
             input(f"{BLUE}Нажмите Enter...{NC}")
 
-        # ── 7: Разблокировать ─────────────────────────────────────────────
         elif ch == "7":
             print()
-            blocked_ttl = [
-                e for e in data
-                if _ttl_is_blocked(e)
-            ]
+            blocked_ttl = [u for u in ttl_users if u["is_blocked"]]
             if not blocked_ttl:
                 info("Нет заблокированных пользователей")
                 input(f"{BLUE}Нажмите Enter...{NC}")
                 continue
 
             _box_top("Разблокировать пользователя")
-            for i, e in enumerate(blocked_ttl, 1):
-                rec  = data[e]
-                iso  = rec.get("expires_at", "")
-                exp_expired = _ttl_is_expired(iso)
-                left = _ttl_expires_str(iso)
+            for i, u in enumerate(blocked_ttl, 1):
+                exp_expired = _ttl_is_expired(u["expires_at"])
+                left = _ttl_expires_str(u["expires_at"])
                 left_c = f"{RED}{left}{NC}" if exp_expired else f"{YELLOW}{left}{NC}"
                 note = f"  {RED}срок истёк — рекомендуется продлить [2]{NC}" if exp_expired else ""
-                _box_row(f"  {DIM}[{NC}{BOLD}{i}{NC}{DIM}]{NC}  {e:<30}  {left_c}{note}")
+                _box_row(f"  {DIM}[{NC}{BOLD}{i}{NC}{DIM}]{NC}  {u['email']:<30}  {left_c}{note}")
             _box_row()
             _box_bottom()
 
@@ -23064,13 +22567,11 @@ def do_manage_ttl_users() -> None:
                 warn("Неверный номер")
                 input(f"{BLUE}Нажмите Enter...{NC}")
                 continue
-            email = blocked_ttl[int(raw) - 1]
+            email = blocked_ttl[int(raw) - 1]["email"]
 
-            # Предупреждаем если срок уже истёк
-            rec = data.get(email, {})
-            if _ttl_is_expired(rec.get("expires_at", "")):
+            if _ttl_is_expired(blocked_ttl[int(raw) - 1]["expires_at"]):
                 warn(f"Срок действия {email} уже истёк. После разблокировки он снова")
-                warn("заблокируется при следующей проверке cron (каждые 30 мин).")
+                warn("заблокируется при следующей проверке (таймер 5 мин).")
                 warn("Рекомендуется продлить срок через [2] или снять TTL через [3].")
                 ans = input(
                     f"  {YELLOW}Всё равно разблокировать временно? [y/N]:{NC} "
@@ -23081,15 +22582,8 @@ def do_manage_ttl_users() -> None:
                 ).strip().lower()
 
             if ans == "y":
-                # Сбрасываем флаг blocked в TTL-записи
-                if email in data:
-                    data[email].pop("blocked", None)
-                    _ttl_save(data)
-                ok = _ttl_unblock_user(email)
-                if ok:
-                    success(f"Пользователь {email} разблокирован")
-                else:
-                    warn(f"Не удалось разблокировать: {email} не найден в базе")
+                sync_user_lifecycle(email, "unblock")
+                success(f"Пользователь {email} разблокирован")
             else:
                 info("Отмена")
             input(f"{BLUE}Нажмите Enter...{NC}")
@@ -23098,7 +22592,20 @@ def do_manage_ttl_users() -> None:
             break
         else:
             warn("Неверный выбор")
-            time.sleep(1)
+
+
+def _ttl_check_and_expire() -> int:
+    """Обертка для обратной совместимости с main.py --ttl-check."""
+    from vless_installer.modules.user_lifecycle import check_and_sync_all_users_limits
+    state_before = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+    blocked_before = sum(1 for u in state_before.get("users", {}).values() if u.get("is_blocked"))
+    
+    check_and_sync_all_users_limits()
+    
+    state_after = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+    blocked_after = sum(1 for u in state_after.get("users", {}).values() if u.get("is_blocked"))
+    
+    return max(0, blocked_after - blocked_before)
 
 
 def do_share_config_server() -> None:
