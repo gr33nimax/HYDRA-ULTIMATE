@@ -5750,10 +5750,10 @@ def _get_dnscrypt_port() -> int:
         pass
     return DNSCRYPT_LISTEN_PORT
 
-def install_dnscrypt() -> None:
+def install_dnscrypt(force: bool = False) -> None:
     global DNSCRYPT_INSTALLED, DNSCRYPT_LISTEN_PORT
 
-    if not PARAM_USE_DNSCRYPT:
+    if not force and not PARAM_USE_DNSCRYPT:
         info("DNSCrypt-proxy: пропускаем по выбору пользователя")
         DNSCRYPT_INSTALLED = False
         return
@@ -28620,6 +28620,15 @@ def configure_system_dns_for_dnscrypt(enable: bool) -> None:
         warn(f"Ошибка настройки iptables NAT для DNS: {e}")
 
 
+def _save_global_state(data: dict) -> None:
+    try:
+        state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+        state.update(data)
+        STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+    except Exception as e:
+        warn(f"Не удалось обновить state.json: {e}")
+
+
 def do_manage_dnscrypt() -> None:
     global PARAM_USE_DNSCRYPT
     while True:
@@ -28679,15 +28688,15 @@ def do_manage_dnscrypt() -> None:
                 _run(["systemctl", "stop", "dnscrypt-proxy"], check=False, quiet=True)
                 success("DNSCrypt-proxy отключен")
             else:
-                info("Включение DNSCrypt-proxy системно...")
-                PARAM_USE_DNSCRYPT = True
-                _save_global_state({"use_dnscrypt": True})
-                if not DNSCRYPT_BIN.exists():
-                    install_dnscrypt()
-                else:
-                    _run(["systemctl", "start", "dnscrypt-proxy"], check=False, quiet=True)
-                configure_system_dns_for_dnscrypt(True)
-                success("DNSCrypt-proxy включен")
+                 info("Включение DNSCrypt-proxy системно...")
+                 PARAM_USE_DNSCRYPT = True
+                 _save_global_state({"use_dnscrypt": True})
+                 if not DNSCRYPT_BIN.exists():
+                     install_dnscrypt(force=True)
+                 else:
+                     _run(["systemctl", "start", "dnscrypt-proxy"], check=False, quiet=True)
+                 configure_system_dns_for_dnscrypt(True)
+                 success("DNSCrypt-proxy включен")
             input(f"{BLUE}Нажмите Enter...{NC}")
         elif ch == "2":
             if not DNSCRYPT_BIN.exists():
@@ -28706,7 +28715,7 @@ def do_manage_dnscrypt() -> None:
                     DNSCRYPT_BIN.unlink(missing_ok=True)
                 except Exception:
                     pass
-                install_dnscrypt()
+                install_dnscrypt(force=True)
                 if PARAM_USE_DNSCRYPT:
                     configure_system_dns_for_dnscrypt(True)
             input(f"{BLUE}Нажмите Enter...{NC}")
