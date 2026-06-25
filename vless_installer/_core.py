@@ -29048,6 +29048,163 @@ def do_manage_xtls_flow() -> None:
 
     input(f"\n{BLUE}  Нажмите Enter...{NC}")
 
+def configure_system_dns_for_dnscrypt(enable: bool) -> None:
+    """Настраивает system-wide DNS для использования DNSCrypt-proxy."""
+    # 1. Настройка systemd-resolved
+    resolved_conf = Path("/etc/systemd/resolved.conf")
+    if resolved_conf.exists():
+        try:
+            content = resolved_conf.read_text(encoding="utf-8")
+            lines = []
+            for line in content.splitlines():
+                if not line.strip().startswith("DNS=") and not line.strip().startswith("Domains="):
+                    lines.append(line)
+            
+            if enable:
+                new_lines = []
+                for line in lines:
+                    new_lines.append(line)
+                    if line.strip() == "[Resolve]":
+                        new_lines.append(f"DNS=127.0.0.1:{DNSCRYPT_LISTEN_PORT}")
+                        new_lines.append("Domains=~.")
+                content = "\n".join(new_lines)
+            else:
+                content = "\n".join(lines)
+                
+            resolved_conf.write_text(content, encoding="utf-8")
+            _run(["systemctl", "restart", "systemd-resolved"], check=False, quiet=True)
+            if enable:
+                success("systemd-resolved настроен на использование DNSCrypt-proxy")
+            else:
+                success("systemd-resolved возвращен к стандартным настройкам")
+        except Exception as e:
+            warn(f"Ошибка настройки systemd-resolved: {e}")
+
+    # 2. Настройка правил перенаправления DNS (iptables NAT REDIRECT) для внутренних подсетей (Docker, VPN, Tunnels)
+    try:
+        if enable:
+            for subnet in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"):
+                # UDP
+                r = _run(["iptables", "-t", "nat", "-C", "PREROUTING", "-s", subnet, "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-ports", str(DNSCRYPT_LISTEN_PORT)], check=False, quiet=True)
+                if r.returncode != 0:
+                    _run(["iptables", "-t", "nat", "-A", "PREROUTING", "-s", subnet, "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-ports", str(DNSCRYPT_LISTEN_PORT)], check=False, quiet=True)
+                # TCP
+                r_tcp = _run(["iptables", "-t", "nat", "-C", "PREROUTING", "-s", subnet, "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-ports", str(DNSCRYPT_LISTEN_PORT)], check=False, quiet=True)
+                if r_tcp.returncode != 0:
+                    _run(["iptables", "-t", "nat", "-A", "PREROUTING", "-s", subnet, "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-ports", str(DNSCRYPT_LISTEN_PORT)], check=False, quiet=True)
+            success("Правила iptables NAT REDIRECT для DNS настроены")
+        else:
+            for subnet in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"):
+                while True:
+                    r = _run(["iptables", "-t", "nat", "-D", "PREROUTING", "-s", subnet, "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-ports", str(DNSCRYPT_LISTEN_PORT)], check=False, quiet=True)
+                    if r.returncode != 0:
+                        break
+                while True:
+                    r = _run(["iptables", "-t", "nat", "-D", "PREROUTING", "-s", subnet, "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-ports", str(DNSCRYPT_LISTEN_PORT)], check=False, quiet=True)
+                    if r.returncode != 0:
+                        break
+            success("Правила iptables NAT REDIRECT для DNS удалены")
+
+        # Сохранение правил iptables
+        if Path("/etc/iptables").exists():
+            r4 = _run(["iptables-save"], capture=True, check=False)
+            Path("/etc/iptables/rules.v4").write_text(r4.stdout)
+    except Exception as e:
+        warn(f"Ошибка настройки iptables NAT для DNS: {e}")
+
+
+def do_manage_dnscrypt() -> None:
+    global PARAM_USE_DNSCRYPT
+    while True:
+        os.system("clear")
+        _load_state_into_globals()
+        
+        # Проверяем статус службы
+        r_active = _run(["systemctl", "is-active", "dnscrypt-proxy"], capture=True, check=False)
+        active_status = r_active.stdout.strip()
+        status_color = GREEN if active_status == "active" else RED
+        
+        # Получаем список выбранных резолверов
+        server_names = []
+        if DNSCRYPT_CONF.exists():
+            try:
+                content = DNSCRYPT_CONF.read_text(encoding="utf-8")
+                m = re.search(r'^server_names\s*=\s*(.+)$', content, re.MULTILINE)
+                if m:
+                    server_names = json.loads(m.group(1).replace("'", '"'))
+            except Exception:
+                pass
+        
+        print()
+        _box_top("🔒 УПРАВЛЕНИЕ DNSCRYPT-PROXY")
+        _box_row(f"  Статус системы:   {'Используется' if PARAM_USE_DNSCRYPT else 'Отключена'}")
+        _box_row(f"  Статус службы:    {status_color}{active_status.upper()}{NC}")
+        _box_row(f"  Порт прослушивания: {DNSCRYPT_LISTEN_ADDR}:{DNSCRYPT_LISTEN_PORT}")
+        if server_names:
+            _box_row(f"  Выбранные DNS:    {CYAN}{', '.join(server_names)}{NC}")
+        else:
+            _box_row(f"  Выбранные DNS:    {DIM}автовыбор (все доступные){NC}")
+        _box_sep()
+        _box_row()
+        if PARAM_USE_DNSCRYPT:
+            _box_item("1", f"{RED}Отключить DNSCrypt-proxy системно{NC}")
+        else:
+            _box_item("1", f"{GREEN}Включить DNSCrypt-proxy системно{NC}")
+        _box_item("2", "⚡ Выбрать быстрые резолверы (latency RTT тест)")
+        _box_item("3", "🔄 Переустановить / Обновить DNSCrypt-proxy")
+        _box_row()
+        _box_back()
+        _box_bottom()
+        
+        try:
+            ch = input(f"{CYAN}Выбор:{NC} ").strip()
+        except KeyboardInterrupt:
+            break
+            
+        if ch in ("0", "q", "Q", ""):
+            break
+        elif ch == "1":
+            if PARAM_USE_DNSCRYPT:
+                info("Отключение DNSCrypt-proxy системно...")
+                PARAM_USE_DNSCRYPT = False
+                _save_global_state({"use_dnscrypt": False})
+                configure_system_dns_for_dnscrypt(False)
+                _run(["systemctl", "stop", "dnscrypt-proxy"], check=False, quiet=True)
+                success("DNSCrypt-proxy отключен")
+            else:
+                info("Включение DNSCrypt-proxy системно...")
+                PARAM_USE_DNSCRYPT = True
+                _save_global_state({"use_dnscrypt": True})
+                if not DNSCRYPT_BIN.exists():
+                    install_dnscrypt()
+                else:
+                    _run(["systemctl", "start", "dnscrypt-proxy"], check=False, quiet=True)
+                configure_system_dns_for_dnscrypt(True)
+                success("DNSCrypt-proxy включен")
+            input(f"{BLUE}Нажмите Enter...{NC}")
+        elif ch == "2":
+            if not DNSCRYPT_BIN.exists():
+                warn("Сначала установите и включите DNSCrypt-proxy")
+                time.sleep(2)
+                continue
+            try:
+                do_dnscrypt_selector_menu()
+            except Exception as e:
+                warn(f"Ошибка селектора: {e}")
+                time.sleep(2)
+        elif ch == "3":
+            ans = input(f"{YELLOW}Переустановить DNSCrypt-proxy? [y/N]:{NC} ").strip().lower()
+            if ans == 'y':
+                try:
+                    DNSCRYPT_BIN.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                install_dnscrypt()
+                if PARAM_USE_DNSCRYPT:
+                    configure_system_dns_for_dnscrypt(True)
+            input(f"{BLUE}Нажмите Enter...{NC}")
+
+
 def _menu_network() -> None:
     while True:
         os.system("clear")
@@ -29058,6 +29215,7 @@ def _menu_network() -> None:
         _box_item("1", f"☁️  Cloudflare WARP  {DIM}(управление туннелем){NC}")
         _box_item("2", "🌐 Внешняя проверка домена / порта")
         _box_item("3", "🌐 Геопроверка выходного IP")
+        _box_item("4", f"🔒 DNSCrypt-proxy  {DIM}(управление и latency тест){NC}")
         _box_sep()
         _box_item("M", f"📏 MTU/MSS автотюнинг  {DIM}(оптимизация для exit-нод){NC}")
         _box_row()
@@ -29077,6 +29235,8 @@ def _menu_network() -> None:
         elif ch == "3":
             check_exit_geo(silent=False)
             input(f"{BLUE}Нажмите Enter...{NC}")
+        elif ch == "4":
+            do_manage_dnscrypt()
         elif ch.lower() == "m":
             do_mtu_tuning()
         elif ch.lower() == "q" or ch == "":
