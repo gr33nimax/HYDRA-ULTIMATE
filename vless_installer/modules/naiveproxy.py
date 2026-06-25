@@ -436,6 +436,17 @@ def _build_caddyfile(domain: str, port: int, users: list,
     else:
         tls_block = "    tls {\n        on_demand\n    }"
 
+    # Читаем порт подписок для реверс-прокси
+    sub_port = 9443
+    try:
+        state_file = Path("/var/lib/xray-installer/state.json")
+        if state_file.exists():
+            import json
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            sub_port = state.get("sub_port", 9443)
+    except Exception:
+        pass
+
     # ВАЖНО (см. официальную документацию klzgrad/forwardproxy):
     # ":{port} must appear first" в списке match-доменов, иначе forward_proxy
     # может работать непредсказуемо. Также обязательна глобальная
@@ -447,6 +458,7 @@ def _build_caddyfile(domain: str, port: int, users: list,
 
 :{port}, {domain}:{port} {{
 {tls_block}
+    reverse_proxy /sub/* 127.0.0.1:{sub_port}
     forward_proxy {{
 {auth_lines}            hide_ip
             hide_via
