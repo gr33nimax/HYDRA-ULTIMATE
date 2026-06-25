@@ -29849,6 +29849,14 @@ def apply_sysctl_and_limits() -> None:
     sysctl_conf = OPTIMIZER_CONF
     limits_conf = LIMITS_CONF
     applied = False
+
+    # Если файлов оптимизации нет, сгенерируем их
+    if not sysctl_conf.exists() or not limits_conf.exists():
+        info("Конфигурационные файлы оптимизации не найдены. Генерируем...")
+        PROGRESS.init(100, "Оптимизация")
+        apply_network_optimizations()
+        PROGRESS.update(100 - PROGRESS.current, "Готово")
+
     if sysctl_conf.exists():
         r = _run(["sysctl", "--system"], check=False, quiet=False)
         if r.returncode == 0:
