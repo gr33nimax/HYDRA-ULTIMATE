@@ -436,16 +436,32 @@ def _build_caddyfile(domain: str, port: int, users: list,
     else:
         tls_block = "    tls {\n        on_demand\n    }"
 
-    # Читаем порт подписок для реверс-прокси
+    # Читаем порт подписок и субдомен для реверс-прокси
     sub_port = 9443
+    sub_domain = ""
     try:
         state_file = Path("/var/lib/xray-installer/state.json")
         if state_file.exists():
             import json
             state = json.loads(state_file.read_text(encoding="utf-8"))
             sub_port = state.get("sub_port", 9443)
+            sub_domain = state.get("sub_domain", "")
     except Exception:
         pass
+
+    # Определяем бэкенд протокол и транспорт для подписок
+    backend_proto = "http"
+    sub_transport = ""
+    if sub_domain:
+        cert_file_sub = Path(f"/etc/letsencrypt/live/{sub_domain}/fullchain.pem")
+        key_file_sub = Path(f"/etc/letsencrypt/live/{sub_domain}/privkey.pem")
+        if cert_file_sub.exists() and key_file_sub.exists():
+            backend_proto = "https"
+            sub_transport = """ {
+        transport http {
+            tls_insecure_skip_verify
+        }
+    }"""
 
     # ВАЖНО (см. официальную документацию klzgrad/forwardproxy):
     # ":{port} must appear first" в списке match-доменов, иначе forward_proxy
@@ -458,7 +474,7 @@ def _build_caddyfile(domain: str, port: int, users: list,
 
 :{port}, {domain}:{port} {{
 {tls_block}
-    reverse_proxy /sub/* 127.0.0.1:{sub_port}
+    reverse_proxy /sub/* {backend_proto}://127.0.0.1:{sub_port}{sub_transport}
     forward_proxy {{
 {auth_lines}            hide_ip
             hide_via
@@ -473,6 +489,23 @@ def _build_caddyfile(domain: str, port: int, users: list,
             roll_keep 3
         }}
     }}
+}}
+"""
+
+    if sub_domain and sub_domain != domain:
+        cert_file_sub = Path(f"/etc/letsencrypt/live/{sub_domain}/fullchain.pem")
+        key_file_sub = Path(f"/etc/letsencrypt/live/{sub_domain}/privkey.pem")
+        if cert_file_sub.exists() and key_file_sub.exists():
+            caddyfile += f"""
+{sub_domain}:{port} {{
+    tls {cert_file_sub} {key_file_sub}
+    reverse_proxy /sub/* {backend_proto}://127.0.0.1:{sub_port}{sub_transport}
+}}
+"""
+        else:
+            caddyfile += f"""
+{sub_domain}:{port} {{
+    reverse_proxy /sub/* {backend_proto}://127.0.0.1:{sub_port}
 }}
 """
     return caddyfile
@@ -1504,6 +1537,22 @@ def delete_user_noninteractive(username: str) -> bool:
         state.get("upstream", ""),
     )
     return True
+
+
+def sync_caddy_config() -> bool:
+    """Перезаписывает Caddyfile и перезапускает caddy-naive на основе текущего состояния."""
+    if not _is_installed():
+        return False
+    state = _load_state()
+    users = state.get("users", [])
+    err = _apply_config(
+        state.get("domain", ""), state.get("port", _DEFAULT_PORT), users,
+        state.get("fake_url", _DEFAULT_FAKE),
+        state.get("probe_secret", ""),
+        state.get("upstream", ""),
+    )
+    return err is None
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  АВТОНОМНЫЙ ЗАПУСК

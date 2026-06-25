@@ -9727,6 +9727,11 @@ def _setup_subscription_domain_ssl() -> None:
                 inject_sub_location(port=sub_port)
             except Exception:
                 pass
+            try:
+                from vless_installer.modules.naiveproxy import sync_caddy_config
+                sync_caddy_config()
+            except Exception:
+                pass
         else:
             warn("Certbot сообщил об успехе, но файлы сертификата не найдены по стандартному пути.")
     else:
@@ -9908,6 +9913,11 @@ def _change_subscription_port() -> None:
             try:
                 from vless_installer.modules.sub_nginx import inject_sub_location
                 inject_sub_location(port=new_port)
+            except Exception:
+                pass
+            try:
+                from vless_installer.modules.naiveproxy import sync_caddy_config
+                sync_caddy_config()
             except Exception:
                 pass
     except ValueError:
@@ -10125,6 +10135,11 @@ def do_subscription_menu() -> None:
                         remove_sub_location()
                     except Exception:
                         pass
+                    try:
+                        from vless_installer.modules.naiveproxy import sync_caddy_config
+                        sync_caddy_config()
+                    except Exception:
+                        pass
                     success("Служба подписок отключена")
                 except Exception as e:
                     warn(f"Ошибка отключения: {e}")
@@ -10136,6 +10151,11 @@ def do_subscription_menu() -> None:
                     try:
                         from vless_installer.modules.sub_nginx import inject_sub_location
                         inject_sub_location(port=sub_port)
+                    except Exception:
+                        pass
+                    try:
+                        from vless_installer.modules.naiveproxy import sync_caddy_config
+                        sync_caddy_config()
                     except Exception:
                         pass
                     success("Служба подписок включена")
