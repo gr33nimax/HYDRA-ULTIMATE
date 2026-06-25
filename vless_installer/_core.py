@@ -9793,7 +9793,7 @@ def _add_subscription_user() -> None:
     sub_domain = state.get("sub_domain", "")
     sub_port = state.get("sub_port", 9443)
     domain = sub_domain or state.get("domain", "") or get_server_ip("4")
-    port_suffix = f":{sub_port}" if sub_port != 443 else ""
+    port_suffix = ""
     base_url = f"https://{domain}{port_suffix}/sub/{token}"
     
     print()
@@ -10061,7 +10061,7 @@ def do_subscription_menu() -> None:
                 ssl_status = f"{RED}ошибка (сертификаты не найдены){NC}"
 
         svc_status = f"{GREEN}активен{NC}" if sub_svc_active else f"{YELLOW}не активен{NC}"
-        port_suffix = f":{sub_port}" if sub_port != 443 else ""
+        port_suffix = ""
 
         _box_row(f"  Сервис подписок:  {svc_status}")
         _box_row(f"  Домен подписок:   {sub_domain if sub_domain else f'{YELLOW}не настроен{NC}'}")
@@ -10325,7 +10325,7 @@ def _show_user_subscription_links() -> None:
     sub_domain = state.get("sub_domain", "")
     sub_port = state.get("sub_port", 9443)
     domain = sub_domain or state.get("domain", "") or get_server_ip("4")
-    port_suffix = f":{sub_port}" if sub_port != 443 else ""
+    port_suffix = ""
     base_url = f"https://{domain}{port_suffix}/sub/{token}"
 
     while True:

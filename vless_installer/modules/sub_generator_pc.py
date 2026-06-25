@@ -48,7 +48,8 @@ def generate_naive_link(state: dict, email: str) -> Optional[str]:
 
 def generate_awg_link(state: dict, email: str) -> Optional[str]:
     """Генерация wg:// URI для AmneziaWG на ПК (NekoBox)."""
-    awg_username = email.split('@')[0] if '@' in email else email
+    import re
+    awg_username = re.sub(r'[^a-zA-Z0-9_-]', '', email)
     awg_conf = get_awg_client_config(awg_username)
     if not awg_conf:
         return None

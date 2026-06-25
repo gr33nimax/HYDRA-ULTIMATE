@@ -709,6 +709,23 @@ def ensure_awg_user(username: str) -> tuple[bool, str]:
     return False, f"Не удалось создать пользователя '{username_clean}'"
 
 
+def ensure_delete_awg_user(username: str) -> tuple[bool, str]:
+    """Удаляет AWG-пользователя из контейнера AmneziaWG."""
+    username_clean = re.sub(r'[^a-zA-Z0-9_-]', '', username)
+    if not username_clean:
+        return False, "Некорректное имя пользователя"
+    if not _container_exists():
+        return False, "Контейнер AmneziaWG не найден"
+    if not _container_running():
+        return False, "Контейнер не запущен"
+    if not awg_user_exists(username_clean):
+        return False, f"Пользователь '{username_clean}' не найден в AmneziaWG"
+    ok = _delete_client(username_clean)
+    if ok:
+        return True, f"Пользователь '{username_clean}' успешно удален"
+    return False, f"Не удалось удалить пользователя '{username_clean}'"
+
+
 def _get_client_conf_text(username: str) -> str | None:
     """Читает текст клиентского конфига из контейнера, или None если нет."""
     if not _container_exists():

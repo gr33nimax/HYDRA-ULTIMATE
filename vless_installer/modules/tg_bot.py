@@ -401,6 +401,12 @@ def add_user_to_all(tag):
         mieru_add(tag)
     except Exception as e:
         _log(f"Error adding to Mieru: {{e}}")
+
+    try:
+        from vless_installer.modules.amnezia_vpn import ensure_awg_user
+        ensure_awg_user(tag)
+    except Exception as e:
+        _log(f"Error adding to AmneziaWG: {{e}}")
         
     return True, token
 
@@ -431,7 +437,7 @@ def get_subscription_url(email):
         except Exception:
             domain_to_use = "IP_СЕРВЕРА"
             
-    port_suffix = f":{{sub_port}}" if sub_port != 443 else ""
+    port_suffix = ""
     return f"https://{{domain_to_use}}{{port_suffix}}/sub/{{token}}"
 
 def handle_start(msg, args):
@@ -469,6 +475,8 @@ def handle_config(msg):
         f"<code>{{sub_url}}</code>\\n\\n"
         f"📋 <b>Ваша подписка (PC - NekoBox/Throne):</b>\\n"
         f"<code>{{sub_url_pc}}</code>\\n\\n"
+        f"📖 <b>Инструкция по подключению:</b>\\n"
+        f"https://telegra.ph/Instrukciya-k-podklyucheniyu-06-24\\n\\n"
         f"📲 <b>Как подключиться:</b>\\n"
         f"1. Скопируйте нужную ссылку выше\\n"
         f"2. Откройте ваш VPN-клиент (v2rayNG, Hiddify, NekoBox, Throne)\\n"
@@ -898,6 +906,12 @@ def del_user_from_all(tag):
         mieru_del(tag)
     except Exception as e:
         _log(f"Error deleting from Mieru: {{e}}")
+
+    try:
+        from vless_installer.modules.amnezia_vpn import ensure_delete_awg_user
+        ensure_delete_awg_user(tag)
+    except Exception as e:
+        _log(f"Error deleting from AmneziaWG: {{e}}")
         
     # Clean up limits & ttl
     try:
@@ -1086,7 +1100,7 @@ def handle_users(chat_id):
         try: domain_to_use = subprocess.check_output(["curl", "-s", "-4", "https://api.ipify.org"], text=True, timeout=5).strip()
         except: domain_to_use = "IP_СЕРВЕРА"
             
-    port_suffix = f":{{sub_port}}" if sub_port != 443 else ""
+    port_suffix = ""
     
     lines = []
     for tag, token in sorted(sub_tokens.items()):
@@ -1177,7 +1191,7 @@ def handle_sub(chat_id, args):
         try: domain_to_use = subprocess.check_output(["curl", "-s", "-4", "https://api.ipify.org"], text=True, timeout=5).strip()
         except: domain_to_use = "IP_СЕРВЕРА"
             
-    port_suffix = f":{{sub_port}}" if sub_port != 443 else ""
+    port_suffix = ""
     sub_url = f"https://{{domain_to_use}}{{port_suffix}}/sub/{{token}}"
     sub_url_pc = f"{{sub_url}}/pc"
     

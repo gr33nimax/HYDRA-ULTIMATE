@@ -179,7 +179,7 @@ def _detect_awg_container() -> str:
 def get_awg_client_config(username: str) -> Optional[str]:
     """
     Читает клиентский .conf файл из контейнера AmneziaWG.
-    Возвращает текст конфига или None если не найден.
+    Если не найден, пробует автоматически создать пользователя (self-healing).
     """
     container = _detect_awg_container()
     conf_path = f'/opt/amnezia/awg/client_{username}.conf'
@@ -192,6 +192,21 @@ def get_awg_client_config(username: str) -> Optional[str]:
             return r.stdout.strip()
     except Exception:
         pass
+
+    # Self-healing: пробуем создать пользователя, если конфиг пропал
+    try:
+        from vless_installer.modules.amnezia_vpn import ensure_awg_user
+        created, msg = ensure_awg_user(username)
+        if created:
+            r = subprocess.run(
+                ['docker', 'exec', container, 'cat', conf_path],
+                capture_output=True, text=True, timeout=10
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout.strip()
+    except Exception:
+        pass
+
     return None
 
 
@@ -398,8 +413,9 @@ def generate_base64_sub(state: dict, uuid_str: str, email: str) -> str:
     mieru_links = generate_mieru_link(state, email)
     links.extend(mieru_links)
 
-    # AmneziaWG — ищем конфиг по имени пользователя (email без домена)
-    awg_username = email.split('@')[0] if '@' in email else email
+    # AmneziaWG — ищем конфиг по очищенному имени пользователя
+    import re
+    awg_username = re.sub(r'[^a-zA-Z0-9_-]', '', email)
     awg_conf = get_awg_client_config(awg_username)
     if awg_conf:
         awg_link = generate_awg_sn_link(awg_conf, profile_name=f'{awg_username} AWG')
