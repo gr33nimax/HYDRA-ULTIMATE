@@ -345,7 +345,27 @@ def run_admin_bot():
 
     def _state():
         try:
-            return json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
+            state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
+            users_db = state.setdefault("users", {})
+            sub_tokens = state.setdefault("sub_tokens", {})
+            changed = False
+            for email, token in sub_tokens.items():
+                if email not in users_db:
+                    users_db[email] = {
+                        "token": token,
+                        "created_at": datetime.now().isoformat(),
+                        "expires_at": "",
+                        "limit_gb": 0,
+                        "is_blocked": False,
+                        "block_reason": "",
+                        "traffic_baseline": 0,
+                        "traffic_accumulated": 0,
+                        "previous_live": 0
+                    }
+                    changed = True
+            if changed:
+                _save_state(state)
+            return state
         except Exception:
             return {}
 
@@ -1158,7 +1178,30 @@ def run_user_bot():
 
     def _state():
         try:
-            return json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
+            state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
+            users_db = state.setdefault("users", {})
+            sub_tokens = state.setdefault("sub_tokens", {})
+            changed = False
+            for email, token in sub_tokens.items():
+                if email not in users_db:
+                    users_db[email] = {
+                        "token": token,
+                        "created_at": datetime.now().isoformat(),
+                        "expires_at": "",
+                        "limit_gb": 0,
+                        "is_blocked": False,
+                        "block_reason": "",
+                        "traffic_baseline": 0,
+                        "traffic_accumulated": 0,
+                        "previous_live": 0
+                    }
+                    changed = True
+            if changed:
+                try:
+                    state_file.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+                except Exception as e:
+                    _log(f"Error saving state: {e}")
+            return state
         except Exception:
             return {}
 
@@ -1224,8 +1267,52 @@ def run_user_bot():
         sub_url = f"https://{domain_to_use}/sub/{token_str}"
         sub_url_pc = f"{sub_url}/pc"
 
+        sys.path.insert(0, "/opt/vless-ultimate")
+        try:
+            from vless_installer.modules.user_lifecycle import get_user_cumulative_traffic
+            used_bytes = get_user_cumulative_traffic(email, st)
+        except Exception:
+            used_bytes = udata.get("used_bytes", 0)
+
+        limit_gb = udata.get("limit_gb", 0)
+        expires_at = udata.get("expires_at", "")
+
+        def get_expires_desc(iso):
+            if not iso:
+                return "бессрочно"
+            try:
+                exp = datetime.fromisoformat(iso)
+                now = datetime.now(timezone.utc)
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                delta = exp - now
+                total = int(delta.total_seconds())
+                if total <= 0:
+                    return f"ИСТЁК ({exp.strftime('%Y-%m-%d %H:%M')})"
+                days = total // 86400
+                hours = (total % 86400) // 3600
+                if days > 0:
+                    return f"{days}д {hours}ч ({exp.strftime('%Y-%m-%d %H:%M')})"
+                return f"{hours}ч (истекает сегодня)"
+            except Exception:
+                return iso
+
+        pct_str = ""
+        bar_str = ""
+        if limit_gb:
+            limit_bytes = int(limit_gb * 1024**3)
+            pct = min(100, int(used_bytes / limit_bytes * 100)) if limit_bytes else 0
+            filled = pct // 10
+            bar_str = "\n[" + "■" * filled + "□" * (10 - filled) + f"] {pct}%"
+            pct_str = f" / {limit_gb} GB"
+
+        traffic_info = f"📊 <b>Трафик:</b> <code>{_bytes_human(used_bytes)}{pct_str}</code>{bar_str}"
+        expires_info = f"⏳ <b>Действует до:</b> <code>{get_expires_desc(expires_at)}</code>"
+
         send(chat_id, (
-            f"👤 <b>Пользователь:</b> {email}\n\n"
+            f"👤 <b>Пользователь:</b> {email}\n"
+            f"{traffic_info}\n"
+            f"{expires_info}\n\n"
             f"📋 <b>Ваша подписка (Mobile):</b>\n"
             f"<code>{sub_url}</code>\n\n"
             f"📋 <b>Ваша подписка (PC - NekoBox/Throne):</b>\n"

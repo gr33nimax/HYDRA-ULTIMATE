@@ -187,7 +187,45 @@ def _get_awg_interface_stats() -> dict:
                 elif line.startswith("latest handshake:") and current_peer:
                     current_peer["latest_handshake"] = line.split(":")[-1].strip()
                 elif line.startswith("transfer:") and current_peer:
-                    current_peer["transfer"] = line.split(":")[-1].strip()
+                    trf_val = line.split(":", 1)[-1].strip()
+                    current_peer["transfer"] = trf_val
+                    rx_bytes = 0
+                    tx_bytes = 0
+                    try:
+                        import re
+                        def _parse_bytes(val_str: str) -> int:
+                            val_str = val_str.strip()
+                            match = re.match(r'^([\d\.]+)\s*([a-zA-Z]+)?$', val_str)
+                            if not match:
+                                return 0
+                            val = float(match.group(1))
+                            unit = match.group(2)
+                            if not unit:
+                                return int(val)
+                            unit = unit.lower()
+                            if 'k' in unit:
+                                return int(val * 1024)
+                            elif 'm' in unit:
+                                return int(val * 1024 * 1024)
+                            elif 'g' in unit:
+                                return int(val * 1024 * 1024 * 1024)
+                            elif 't' in unit:
+                                return int(val * 1024 * 1024 * 1024 * 1024)
+                            return int(val)
+                        
+                        parts_trf = trf_val.split(",")
+                        if len(parts_trf) >= 2:
+                            rx_str = parts_trf[0].replace("received", "").strip()
+                            tx_str = parts_trf[1].replace("sent", "").strip()
+                            rx_bytes = _parse_bytes(rx_str)
+                            tx_bytes = _parse_bytes(tx_str)
+                        elif len(parts_trf) == 1:
+                            rx_str = parts_trf[0].replace("received", "").strip()
+                            rx_bytes = _parse_bytes(rx_str)
+                    except Exception:
+                        pass
+                    current_peer["rx_bytes"] = rx_bytes
+                    current_peer["tx_bytes"] = tx_bytes
             if current_peer:
                 stats["peers"].append(current_peer)
     except Exception as e:
