@@ -1308,6 +1308,7 @@ def run_user_bot():
 
         traffic_info = f"📊 <b>Трафик:</b> <code>{_bytes_human(used_bytes)}{pct_str}</code>{bar_str}"
         expires_info = f"⏳ <b>Действует до:</b> <code>{get_expires_desc(expires_at)}</code>"
+        instruction_url = cfg.get("instruction_url", "https://telegra.ph/Instrukciya-k-podklyucheniyu-06-24")
 
         send(chat_id, (
             f"👤 <b>Пользователь:</b> {email}\n"
@@ -1318,7 +1319,7 @@ def run_user_bot():
             f"📋 <b>Ваша подписка (PC - NekoBox/Throne):</b>\n"
             f"<code>{sub_url_pc}</code>\n\n"
             f"📖 <b>Инструкция по подключению:</b>\n"
-            f"https://telegra.ph/Instrukciya-k-podklyucheniyu-06-24\n\n"
+            f"{instruction_url}\n\n"
             f"📲 <b>Как подключиться:</b>\n"
             f"1. Скопируйте нужную ссылку выше\n"
             f"2. Откройте ваш VPN-клиент\n"
@@ -1817,6 +1818,7 @@ def do_tg_bot_menu() -> None:
         admin_id     = bot_cfg.get("admin_id") or notif_cfg.get("chat_id", "")
         bot_password = bot_cfg.get("bot_password", "")
         allowed      = bot_cfg.get("allowed_users", [])
+        instruction_url = bot_cfg.get("instruction_url", "https://telegra.ph/Instrukciya-k-podklyucheniyu-06-24")
 
         configured = bool(token and admin_id and bot_password)
 
@@ -1834,6 +1836,7 @@ def do_tg_bot_menu() -> None:
             _box_row(f"  Admin Chat ID:    {CYAN}{admin_id}{NC}")
             _box_row(f"  Пароль юзеров:    {GREEN}{bot_password}{NC}")
             _box_row(f"  Авторизовано:     {CYAN}{len(allowed)}{NC} пользователей")
+            _box_row(f"  Инструкция URL:   {CYAN}{instruction_url}{NC}")
         _box_sep()
         if not configured:
             _box_item("1", f"Настроить бота (токен + admin ID + пароль)")
@@ -1847,6 +1850,7 @@ def do_tg_bot_menu() -> None:
             _box_item("4", f"Список авторизованных пользователей")
             _box_item("5", f"Удалить пользователя из списка")
             _box_item("6", f"Проверить статус сервиса")
+            _box_item("7", f"Изменить ссылку на инструкцию")
         _box_sep()
         _box_info("Бот работает как systemd-сервис xray-tg-bot")
         _box_info("Токен: @BotFather → /newbot")
@@ -1877,11 +1881,32 @@ def do_tg_bot_menu() -> None:
             _menu_bot_remove_user(bot_cfg)
         elif ch == "6" and configured:
             _menu_bot_svc_status()
+        elif ch == "7" and configured:
+            _menu_bot_change_instruction(bot_cfg)
         elif ch in ("q", "Q", "0", ""):
             return
         else:
             _warn("Неверный выбор")
             time.sleep(1)
+
+
+def _menu_bot_change_instruction(bot_cfg: dict) -> None:
+    os.system("clear")
+    print()
+    _box_top("📖 Изменение ссылки на инструкцию")
+    cur_url = bot_cfg.get("instruction_url", "https://telegra.ph/Instrukciya-k-podklyucheniyu-06-24")
+    _box_row(f"  Текущая ссылка: {CYAN}{cur_url}{NC}")
+    _box_bottom()
+    print()
+    try:
+        new_url = input(f"  Новая ссылка [{DIM}Enter = оставить{NC}]: ").strip()
+    except KeyboardInterrupt:
+        return
+    if new_url:
+        bot_cfg["instruction_url"] = new_url
+        _bot_save(bot_cfg)
+        _info("Ссылка на инструкцию обновлена!")
+        time.sleep(1.5)
 
 
 def _menu_bot_configure(bot_cfg: dict, notif_cfg: dict) -> None:
