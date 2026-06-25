@@ -465,6 +465,28 @@ def handle_config(msg):
     if not email:
         send(uid, "⚠️ Ошибка: нет привязанного пользователя подписки. Попробуйте пройти авторизацию заново.")
         return
+
+    # Проверяем, заблокирован ли пользователь
+    st = _state()
+    blocked_users = st.get("blocked_users", {{}})
+    if email in blocked_users:
+        send(uid, "❌ <b>Ваша подписка заблокирована или истекла.</b>\\nДля продления обратитесь к администратору.")
+        return
+
+    # Self-healing: проверяем и досоздаем конфигурации в протоколах при необходимости
+    sys.path.insert(0, "/opt/vless-ultimate")
+    try:
+        from vless_installer.modules.naiveproxy import add_user_noninteractive as np_add
+        np_add(email)
+    except Exception: pass
+    try:
+        from vless_installer.modules.mieru import add_user_noninteractive as mieru_add
+        mieru_add(email)
+    except Exception: pass
+    try:
+        from vless_installer.modules.amnezia_vpn import ensure_awg_user
+        ensure_awg_user(email)
+    except Exception: pass
         
     sub_url = get_subscription_url(email)
     sub_url_pc = f"{{sub_url}}/pc"
@@ -500,13 +522,22 @@ def handle_traffic(msg):
     if not email:
         send(uid, "⚠️ Нет привязанного аккаунта.")
         return
+
+    # Проверяем, заблокирован ли пользователь
+    st = _state()
+    blocked_users = st.get("blocked_users", {{}})
+    if email in blocked_users:
+        send(uid, "❌ <b>Ваша подписка заблокирована или истекла.</b>\\nДля продления обратитесь к администратору.")
+        return
     
     total = 0
-    # NaiveProxy traffic stats for this user from access.log
+    # 1. NaiveProxy traffic stats for this user from access.log
     try:
         naive_log = Path("/var/log/caddy-naive/access.log")
         if naive_log.exists():
             with naive_log.open("r", errors="replace") as f:
+                size = naive_log.stat().st_size
+                f.seek(max(0, size - 10*1024*1024))
                 for line in f:
                     line = line.strip()
                     if not line: continue
@@ -525,6 +556,15 @@ def handle_traffic(msg):
                                 total += entry.get("size", 0) or 0
                     except: pass
     except: pass
+
+    # 2. AmneziaWG traffic stats
+    try:
+        sys.path.insert(0, "/opt/vless-ultimate")
+        from vless_installer.modules.amnezia_vpn import get_awg_traffic_for_user
+        awg_stats = get_awg_traffic_for_user(email)
+        if awg_stats.get("found"):
+            total += awg_stats.get("total_bytes", 0)
+    except: pass
     
     limits = {{}}
     try:
@@ -532,6 +572,17 @@ def handle_traffic(msg):
     except:
         pass
     limit_gb = limits.get("limit_gb", 0)
+    baseline = limits.get("reset_baseline", 0)
+
+    if total < baseline:
+        try:
+            full_limits = json.loads(LIMITS_F.read_text())
+            full_limits[email]["reset_baseline"] = total
+            LIMITS_F.write_text(json.dumps(full_limits, indent=2))
+        except: pass
+        baseline = total
+
+    used_bytes = max(0, total - baseline)
     
     ttl_info = ""
     try:
@@ -543,10 +594,10 @@ def handle_traffic(msg):
         pass
     
     text = f"📊 <b>Ваш трафик ({{email}}):</b>\\n\\n"
-    text += f"Использовано: <b>{{_bytes_human(total)}}</b>\\n"
+    text += f"Использовано: <b>{{_bytes_human(used_bytes)}}</b>\\n"
     if limit_gb:
         limit_bytes = int(limit_gb * 1024**3)
-        pct = min(100, int(total / limit_bytes * 100)) if limit_bytes else 0
+        pct = min(100, int(used_bytes / limit_bytes * 100)) if limit_bytes else 0
         filled = pct // 10
         bar = "■" * filled + "□" * (10 - filled)
         text += f"Лимит: {{limit_gb}} GB\\n[{{bar}}] {{pct}}%\\n"
@@ -571,6 +622,13 @@ def handle_qr(msg):
         
     if not email:
         send(uid, "⚠️ Нет привязанного пользователя.")
+        return
+
+    # Проверяем, заблокирован ли пользователь
+    st = _state()
+    blocked_users = st.get("blocked_users", {{}})
+    if email in blocked_users:
+        send(uid, "❌ <b>Ваша подписка заблокирована или истекла.</b>\\nДля продления обратитесь к администратору.")
         return
         
     sub_url = get_subscription_url(email)
@@ -1047,7 +1105,7 @@ def handle_traffic(chat_id):
                 if "peer:" in line:
                     cur_peer = line.split()[-1][:8] + "..."
                 elif "transfer:" in line and cur_peer:
-                    m = re.findall(r'([\d\.]+)\s+([a-zA-Z]+)', line)
+                    m = re.findall(r'([\\d\\.]+)\\s+([a-zA-Z]+)', line)
                     peer_bytes = 0
                     for val_str, unit in m:
                         val = float(val_str)
@@ -1911,14 +1969,14 @@ def _menu_bot_invite(bot_cfg: dict, token: str, admin_id: str) -> None:
     """Создаёт одноразовый invite-токен и показывает ссылку."""
     emails = _get_xray_emails()
     if not emails:
-        _warn("Сначала добавьте пользователей в xray")
+        _warn("Сначала добавьте пользователей в подписки")
         input(f"{BLUE}Нажмите Enter...{NC}")
         return
 
     os.system("clear")
     print()
     _box_top("Создать invite-ссылку")
-    _box_row("Выберите пользователя Xray, для которого создается ссылка:")
+    _box_row("Выберите пользователя подписки, для которого создается ссылка:")
     _box_sep()
     for i, e in enumerate(emails, 1):
         _box_row(f"  {i}. {CYAN}{e}{NC}")

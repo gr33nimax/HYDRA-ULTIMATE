@@ -99,6 +99,12 @@ def find_user_by_token(token: str) -> Optional[tuple[str, str]]:
         _log("WARN", f"find_user_by_token: No email matched for token '{token}'")
         return None
 
+    # Проверяем, заблокирован ли пользователь в системе подписок
+    blocked_users = state.get("blocked_users", {})
+    if email in blocked_users:
+        _log("WARN", f"find_user_by_token: User '{email}' is blocked! Reason: {blocked_users[email].get('reason')}")
+        return None
+
     # VLESS/Xray вырезаны, возвращаем пустой UUID, но разрешаем авторизацию
     _log("INFO", f"User '{email}' authenticated successfully via token.")
     return ("", email)

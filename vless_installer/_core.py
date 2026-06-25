@@ -9722,6 +9722,11 @@ def _setup_subscription_domain_ssl() -> None:
             info("Перезапуск службы подписок с новым SSL-сертификатом...")
             from vless_installer.modules.sub_server import install_sub_service
             install_sub_service("0.0.0.0", sub_port)
+            try:
+                from vless_installer.modules.sub_nginx import inject_sub_location
+                inject_sub_location(port=sub_port)
+            except Exception:
+                pass
         else:
             warn("Certbot сообщил об успехе, но файлы сертификата не найдены по стандартному пути.")
     else:
@@ -9900,6 +9905,11 @@ def _change_subscription_port() -> None:
             info("Перезапуск службы с новым портом...")
             from vless_installer.modules.sub_server import install_sub_service
             install_sub_service("0.0.0.0", new_port)
+            try:
+                from vless_installer.modules.sub_nginx import inject_sub_location
+                inject_sub_location(port=new_port)
+            except Exception:
+                pass
     except ValueError:
         warn("Некорректный порт")
     except Exception as e:
@@ -10110,6 +10120,11 @@ def do_subscription_menu() -> None:
                 try:
                     from vless_installer.modules.sub_server import uninstall_sub_service
                     uninstall_sub_service()
+                    try:
+                        from vless_installer.modules.sub_nginx import remove_sub_location
+                        remove_sub_location()
+                    except Exception:
+                        pass
                     success("Служба подписок отключена")
                 except Exception as e:
                     warn(f"Ошибка отключения: {e}")
@@ -10118,6 +10133,11 @@ def do_subscription_menu() -> None:
                 try:
                     from vless_installer.modules.sub_server import install_sub_service
                     install_sub_service("0.0.0.0", sub_port)
+                    try:
+                        from vless_installer.modules.sub_nginx import inject_sub_location
+                        inject_sub_location(port=sub_port)
+                    except Exception:
+                        pass
                     success("Служба подписок включена")
                 except Exception as e:
                     warn(f"Ошибка включения: {e}")
@@ -22066,12 +22086,26 @@ def _check_traffic_limits_once() -> None:
         _limits_save(limits)
 
 
+def _get_subscription_users_list() -> list[dict]:
+    """Возвращает список пользователей из системы подписок (state.json)."""
+    state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+    sub_tokens = state.get("sub_tokens", {})
+    users = []
+    for email, token in sub_tokens.items():
+        users.append({
+            "email": email,
+            "uuid": token,
+            "name": email
+        })
+    return users
+
+
 def do_manage_traffic_limits() -> None:
     """Меню управления лимитами трафика пользователей."""
     while True:
         os.system("clear")
         limits = _limits_load()
-        users  = _users_load()
+        users  = _get_subscription_users_list()
 
         print()
         _box_top(f"Лимиты трафика пользователей")
@@ -22422,84 +22456,153 @@ def _blocked_save(data: dict) -> None:
     BLOCKED_FILE.chmod(0o600)
 
 
+def block_subscription_user(email: str, reason: str = "expired") -> None:
+    """Блокирует пользователя в системе подписок: удаляет из Naive, Mieru, AWG и заносит в blocked_users."""
+    state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+    blocked_users = state.setdefault("blocked_users", {})
+    blocked_users[email] = {
+        "blocked_at": datetime.now().isoformat(),
+        "reason": reason
+    }
+    state["blocked_users"] = blocked_users
+    STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+    
+    # 2. Deprovision from NaiveProxy
+    try:
+        from vless_installer.modules.naiveproxy import delete_user_noninteractive
+        delete_user_noninteractive(email)
+    except Exception:
+        pass
+        
+    # 3. Deprovision from Mieru
+    try:
+        from vless_installer.modules.mieru import delete_user_noninteractive
+        delete_user_noninteractive(email)
+    except Exception:
+        pass
+        
+    # 4. Deprovision from AmneziaWG
+    try:
+        from vless_installer.modules.amnezia_vpn import _container_exists, _delete_client
+        if _container_exists():
+            username_clean = re.sub(r'[^a-zA-Z0-9_-]', '', email).lower()
+            if username_clean:
+                _delete_client(username_clean)
+    except Exception:
+        pass
+
+def unblock_subscription_user(email: str) -> None:
+    """Разблокирует пользователя: убирает из blocked_users и создает аккаунты в Naive, Mieru, AWG."""
+    state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+    blocked_users = state.get("blocked_users", {})
+    if email in blocked_users:
+        del blocked_users[email]
+        state["blocked_users"] = blocked_users
+        STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        
+    # 2. Re-provision in NaiveProxy
+    try:
+        from vless_installer.modules.naiveproxy import add_user_noninteractive
+        add_user_noninteractive(email)
+    except Exception:
+        pass
+        
+    # 3. Re-provision in Mieru
+    try:
+        from vless_installer.modules.mieru import add_user_noninteractive
+        add_user_noninteractive(email)
+    except Exception:
+        pass
+        
+    # 4. Re-provision in AmneziaWG
+    try:
+        from vless_installer.modules.amnezia_vpn import _container_exists, ensure_awg_user
+        if _container_exists():
+            username_clean = re.sub(r'[^a-zA-Z0-9_-]', '', email)
+            if username_clean:
+                ensure_awg_user(username_clean)
+    except Exception:
+        pass
+
 def _ttl_block_user(email: str, reason: str = "ttl_expired") -> bool:
     """
-    Блокирует пользователя: убирает его UUID из конфига Xray и перезапускает
-    сервис, но сохраняет запись в users.json с флагом blocked=true.
-    Это позволяет разблокировать / продлить срок без повторного добавления.
-
-    Возвращает True если пользователь найден и заблокирован.
+    Блокирует пользователя в системе подписок и Xray.
+    Возвращает True если блокировка выполнена.
     """
+    # 1. Блокируем в подписках (удаление из VPN-протоколов)
+    block_subscription_user(email, reason)
+    
+    # 2. Блокируем в Xray/users.json если есть
     users = _users_load()
     target = next(
         (u for u in users if u.get("email") == email or u.get("uuid") == email),
         None,
     )
-    if not target:
-        log_to_file("WARN", f"_ttl_block_user: {email} not found in users.json")
-        return False
-
-    # Помечаем заблокированным в users.json
-    target["blocked"]    = True
-    target["blocked_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    target["block_reason"] = reason
-    _users_save(users)
-
-    # Сохраняем в отдельную базу заблокированных (для быстрого просмотра)
-    blocked = _blocked_load()
-    blocked[email] = {
-        "email":       email,
-        "uuid":        target.get("uuid", ""),
-        "name":        target.get("name", ""),
-        "blocked_at":  target["blocked_at"],
-        "reason":      reason,
-    }
-    _blocked_save(blocked)
-
-    # Применяем в Xray только НЕзаблокированных пользователей
-    active_users = [u for u in users if not u.get("blocked")]
-    _users_apply_to_config(active_users)
-
+    if target:
+        target["blocked"]    = True
+        target["blocked_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        target["block_reason"] = reason
+        _users_save(users)
+        
+        # Сохраняем в отдельную базу заблокированных
+        blocked = _blocked_load()
+        blocked[email] = {
+            "email":       email,
+            "uuid":        target.get("uuid", ""),
+            "name":        target.get("name", ""),
+            "blocked_at":  target["blocked_at"],
+            "reason":      reason,
+        }
+        _blocked_save(blocked)
+        
+        # Применяем в Xray
+        active_users = [u for u in users if not u.get("blocked")]
+        _users_apply_to_config(active_users)
+        
     log_to_file("INFO", f"User blocked: {email} (reason={reason})")
     return True
 
 
 def _ttl_unblock_user(email: str) -> bool:
     """
-    Снимает блокировку: возвращает UUID пользователя в конфиг Xray.
-    Возвращает True если разблокировка прошла успешно.
+    Снимает блокировку с пользователя в системе подписок и Xray.
+    Возвращает True при успешном завершении.
     """
+    # 1. Разблокируем в подписках (создаем аккаунты в VPN-протоколах)
+    unblock_subscription_user(email)
+    
+    # 2. Разблокируем в Xray/users.json если есть
     users = _users_load()
     target = next(
         (u for u in users if u.get("email") == email or u.get("uuid") == email),
         None,
     )
-    if not target:
-        log_to_file("WARN", f"_ttl_unblock_user: {email} not found in users.json")
-        return False
-
-    # Снимаем флаги блокировки
-    target.pop("blocked",      None)
-    target.pop("blocked_at",   None)
-    target.pop("block_reason", None)
-    _users_save(users)
-
-    # Убираем из базы заблокированных
-    blocked = _blocked_load()
-    if email in blocked:
-        del blocked[email]
-        _blocked_save(blocked)
-
-    # Применяем всех незаблокированных (включая только что разблокированного)
-    active_users = [u for u in users if not u.get("blocked")]
-    _users_apply_to_config(active_users)
-
+    if target:
+        target.pop("blocked",      None)
+        target.pop("blocked_at",   None)
+        target.pop("block_reason", None)
+        _users_save(users)
+        
+        # Убираем из базы заблокированных
+        blocked = _blocked_load()
+        if email in blocked:
+            del blocked[email]
+            _blocked_save(blocked)
+            
+        # Применяем
+        active_users = [u for u in users if not u.get("blocked")]
+        _users_apply_to_config(active_users)
+        
     log_to_file("INFO", f"User unblocked: {email}")
     return True
 
 
 def _ttl_is_blocked(email: str) -> bool:
-    """True если пользователь с данным email в настоящее время заблокирован."""
+    """True если пользователь заблокирован в системе подписок или Xray."""
+    state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+    if email in state.get("blocked_users", {}):
+        return True
+        
     users = _users_load()
     target = next(
         (u for u in users if u.get("email") == email or u.get("uuid") == email),
@@ -22605,7 +22708,7 @@ def do_manage_ttl_users() -> None:
         os.system("clear")
         print()
         data  = _ttl_load()
-        users = _users_load()
+        users = _get_subscription_users_list()
 
         _box_top("⏱  ВРЕМЕННЫЕ ПОЛЬЗОВАТЕЛИ (TTL)")
         _box_row()
