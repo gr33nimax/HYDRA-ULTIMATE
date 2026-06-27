@@ -94,16 +94,38 @@ def get_warp_gateway(iface: str) -> Optional[str]:
 
 
 def resolve_domain(domain: str) -> list[str]:
-    """Разрешить доменное имя в список IPv4-адресов (/32)."""
+    """Разрешить доменное имя в список IPv4-адресов (/32).
+
+    Сначала пробует системный DNS. Если DNSCrypt перехватил resolved и домен
+    не резолвится — fallback через публичный резолвер (минуя 127.0.0.1:5300).
+    """
     ips = set()
     try:
         infos = socket.getaddrinfo(domain, None, socket.AF_INET, socket.SOCK_STREAM)
         for item in infos:
-            ip = item[4][0]
-            ips.add(ip)
+            ips.add(item[4][0])
     except Exception as e:
-        _log("WARN", f"Не удалось разрешить домен {domain}: {e}")
-    return sorted(list(ips))
+        _log("WARN", f"Системный DNS не разрешил {domain}: {e}")
+
+    if not ips:
+        for resolver in ("1.1.1.1", "8.8.8.8"):
+            try:
+                r = subprocess.run(
+                    ["dig", "+short", "A", domain, f"@{resolver}"],
+                    capture_output=True, text=True, timeout=8,
+                )
+                if r.returncode == 0:
+                    for line in r.stdout.splitlines():
+                        line = line.strip()
+                        if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", line):
+                            ips.add(line)
+                if ips:
+                    _log("INFO", f"Домен {domain} разрешён через @{resolver} (bypass DNSCrypt)")
+                    break
+            except Exception as e:
+                _log("WARN", f"dig @{resolver} для {domain}: {e}")
+
+    return sorted(ips)
 
 
 def get_current_warp_routes(iface: str) -> set[str]:

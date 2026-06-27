@@ -1489,6 +1489,14 @@ def do_naiveproxy_menu() -> None:
             break
 
 
+def restore_user_noninteractive(username: str, password: str) -> Optional[tuple[str, str]]:
+    """Восстановить пользователя с тем же паролем (после block/unblock)."""
+    if not _is_installed() or not password:
+        return None
+    delete_user_noninteractive(username)
+    return add_user_noninteractive(username, password)
+
+
 def add_user_noninteractive(username: str, password: str = None) -> Optional[tuple[str, str]]:
     """Добавить пользователя без интерактива. Возвращает (username, password) или None."""
     if not _is_installed():

@@ -78,34 +78,50 @@ def _load_state() -> dict:
 
 
 def find_user_by_token(token: str) -> Optional[tuple[str, str]]:
-    """Найти пользователя по подписочному токену with rich debug logs.
+    """Найти пользователя по подписочному токену.
     Returns (uuid, email) or None.
     """
     state = _load_state()
     if not state:
         _log("WARN", "find_user_by_token: state.json is empty or failed to load")
-    sub_tokens = state.get("sub_tokens", {})
-    _log("INFO", f"Comparing requested token: '{token}' against {len(sub_tokens)} stored tokens")
 
-    email = None
+    try:
+        from vless_installer.modules.user_lifecycle import migrate_state_users
+        migrate_state_users(state)
+    except Exception:
+        pass
+
     token_lower = token.lower().strip()
-    for e, t in sub_tokens.items():
-        _log("INFO", f"Checking stored user '{e}' with token: '{t}'")
-        if str(t).lower().strip() == token_lower:
+    email = None
+
+    users_db = state.get("users", {})
+    for e, udata in users_db.items():
+        if str(udata.get("token", "")).lower().strip() == token_lower:
             email = e
             break
+
+    if not email:
+        sub_tokens = state.get("sub_tokens", {})
+        _log("INFO", f"Comparing requested token: '{token}' against {len(sub_tokens)} stored tokens")
+        for e, t in sub_tokens.items():
+            if str(t).lower().strip() == token_lower:
+                email = e
+                break
 
     if not email:
         _log("WARN", f"find_user_by_token: No email matched for token '{token}'")
         return None
 
-    # Проверяем, заблокирован ли пользователь в системе подписок
-    blocked_users = state.get("blocked_users", {})
-    if email in blocked_users:
-        _log("WARN", f"find_user_by_token: User '{email}' is blocked! Reason: {blocked_users[email].get('reason')}")
+    udata = users_db.get(email, {})
+    if udata.get("is_blocked"):
+        _log("WARN", f"find_user_by_token: User '{email}' is blocked! Reason: {udata.get('block_reason')}")
         return None
 
-    # VLESS/Xray вырезаны, возвращаем пустой UUID, но разрешаем авторизацию
+    blocked_users = state.get("blocked_users", {})
+    if email in blocked_users:
+        _log("WARN", f"find_user_by_token: User '{email}' is blocked (legacy)! Reason: {blocked_users[email].get('reason')}")
+        return None
+
     _log("INFO", f"User '{email}' authenticated successfully via token.")
     return ("", email)
 

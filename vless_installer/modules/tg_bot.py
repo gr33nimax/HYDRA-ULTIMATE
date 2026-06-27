@@ -346,6 +346,12 @@ def run_admin_bot():
     def _state():
         try:
             state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
+            try:
+                from vless_installer.modules.user_lifecycle import migrate_state_users
+                if migrate_state_users(state):
+                    state_file.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
             users_db = state.setdefault("users", {})
             sub_tokens = state.setdefault("sub_tokens", {})
             changed = False
@@ -801,7 +807,7 @@ def run_admin_bot():
             elif sub_act == "block":
                 sys.path.insert(0, "/opt/vless-ultimate")
                 from vless_installer.modules.user_lifecycle import sync_user_lifecycle
-                sync_user_lifecycle(email, "block")
+                sync_user_lifecycle(email, "block", reason="Заблокирован администратором")
                 show_user_details(chat_id, email, message_id, page)
             elif sub_act == "unblock":
                 sys.path.insert(0, "/opt/vless-ultimate")
@@ -825,6 +831,7 @@ def run_admin_bot():
                 sys.path.insert(0, "/opt/vless-ultimate")
                 from vless_installer.modules.user_lifecycle import sync_user_lifecycle
                 sync_user_lifecycle(email, "delete")
+                _purge_bot_user_binding(email)
                 text = f"✅ Пользователь <b>{email}</b> успешно удален."
                 inline_keyboard = [[{"text": "🔙 Назад к списку", "callback_data": f"admin:users:page:{page}"}]]
                 edit(chat_id, message_id, text, {"inline_keyboard": inline_keyboard})
@@ -1179,6 +1186,12 @@ def run_user_bot():
     def _state():
         try:
             state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
+            try:
+                from vless_installer.modules.user_lifecycle import migrate_state_users
+                if migrate_state_users(state):
+                    state_file.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
             users_db = state.setdefault("users", {})
             sub_tokens = state.setdefault("sub_tokens", {})
             changed = False
@@ -1233,6 +1246,23 @@ def run_user_bot():
         admin_id = str(cfg.get("admin_id", ""))
         return (str(uid) in [str(x) for x in allowed] and str(uid) in user_map) or str(uid) == admin_id
 
+    def _purge_bot_user_binding(target_email: str) -> None:
+        """Удаляет привязку Telegram-пользователя после delete в state.json."""
+        try:
+            cfg = json.loads(bot_file.read_text(encoding="utf-8")) if bot_file.exists() else {}
+            user_map = cfg.get("user_map", {})
+            allowed = cfg.get("allowed_users", [])
+            uids_to_remove = [uid for uid, em in user_map.items() if em == target_email]
+            for uid in uids_to_remove:
+                user_map.pop(uid, None)
+                allowed = [x for x in allowed if str(x) != str(uid)]
+            cfg["user_map"] = user_map
+            cfg["allowed_users"] = allowed
+            bot_file.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+            bot_file.chmod(0o600)
+        except Exception as e:
+            _log(f"Failed to purge bot binding for {target_email}: {e}")
+
     def handle_config(chat_id):
         cfg = json.loads(bot_file.read_text(encoding="utf-8")) if bot_file.exists() else {}
         email = cfg.get("user_map", {}).get(str(chat_id))
@@ -1249,7 +1279,18 @@ def run_user_bot():
         st = _state()
         users_db = st.get("users", {})
         udata = users_db.get(email, {})
-        
+
+        if not udata.get("token"):
+            sys.path.insert(0, "/opt/vless-ultimate")
+            try:
+                from vless_installer.modules.user_lifecycle import sync_user_lifecycle
+                sync_user_lifecycle(email, "add")
+                st = _state()
+                users_db = st.get("users", {})
+                udata = users_db.get(email, {})
+            except Exception as e:
+                _log(f"Self-heal failed for {email}: {e}")
+
         if udata.get("is_blocked"):
             send(chat_id, "❌ <b>Ваша подписка заблокирована или истекла.</b>\nДля продления обратитесь к администратору.")
             return
@@ -1257,7 +1298,11 @@ def run_user_bot():
         token_str = udata.get("token", "")
         if not token_str:
             token_str = st.get("sub_tokens", {}).get(email, "")
-            
+
+        if not token_str:
+            send(chat_id, "⚠️ Подписка не найдена. Обратитесь к администратору для повторной регистрации.")
+            return
+
         sub_domain = st.get("sub_domain", "")
         domain_to_use = sub_domain or st.get("domain", "")
         if not domain_to_use:

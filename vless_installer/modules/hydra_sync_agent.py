@@ -9,7 +9,9 @@ vless_installer/modules/hydra_sync_agent.py
 import sys
 from pathlib import Path
 
-sys.path.insert(0, "/opt/vless-ultimate")
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 try:
     from vless_installer.modules.user_lifecycle import check_and_sync_all_users_limits

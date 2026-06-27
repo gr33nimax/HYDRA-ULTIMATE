@@ -111,49 +111,31 @@ if "--warp-sync-routes" in sys.argv:
     sync_routes()
     sys.exit(0)
 
-# --- DPI-детектор (из cron каждые 5 мин) ---
+# --- Legacy CLI (удалённые модули VLESS/Hysteria2) — безопасный no-op для cron ---
+def _legacy_cli_disabled(feature: str) -> None:
+    print(f"[HYDRA] {feature}: недоступно (legacy-модуль удалён в HYDRA-only сборке)", file=sys.stderr)
+    sys.exit(0)
+
 if "--dpi-check" in sys.argv:
     if os.geteuid() != 0:
         print("ERROR: требуются права root", file=sys.stderr)
         sys.exit(1)
-    from vless_installer.modules.dpi_detector import _dpi_run_once
-    n = _dpi_run_once()
-    if n:
-        print(f"[DPI] Заблокировано: {n}")
-    sys.exit(0)
+    _legacy_cli_disabled("DPI detector")
 
-# --- Smart Balancer (из cron каждые N минут) ---
 if "--smart-balance" in sys.argv:
     if os.geteuid() != 0:
         print("ERROR: требуются права root", file=sys.stderr)
         sys.exit(1)
-    from vless_installer.modules.smart_balancer import _awg_guard_cron, _smart_balancer_run_once
-    if not _awg_guard_cron("SmartBalancer"):
-        _smart_balancer_run_once()
-    sys.exit(0)
+    _legacy_cli_disabled("Smart Balancer")
 
-# --- Pinned-нода: проверка доступности и авто-fallback (из cron) ---
 if "--pinned-fallback-check" in sys.argv:
     if os.geteuid() != 0:
         print("ERROR: требуются права root", file=sys.stderr)
         sys.exit(1)
-    from vless_installer.modules.smart_balancer import _awg_guard_cron
-    from vless_installer.modules.dpi_detector import _pinned_node_check_and_fallback
-    if _awg_guard_cron("PinnedFallback"):
-        sys.exit(0)
-    if STATE_FILE.exists():
-        try:
-            _st = json.loads(STATE_FILE.read_text())
-            CHAIN_NODES             = _st.get("chain_nodes", [])
-            CHAIN_PINNED_NODE_INDEX = _st.get("chain_pinned_node_index", -1)
-            INSTALL_MODE            = _st.get("install_mode", "A")
-            CHAIN_BALANCER_STRATEGY = _st.get("chain_balancer_strategy", "roundRobin")
-        except Exception:
-            pass
-    switched = _pinned_node_check_and_fallback()
-    if switched:
-        print("[PINNED-FALLBACK] Нода заменена — см. /var/log/xray-auto-fallback.log")
-    sys.exit(0)
+    _legacy_cli_disabled("Pinned fallback")
+
+if any(a.startswith("--h2-") for a in sys.argv):
+    _legacy_cli_disabled("Hysteria2")
 
 # --- Быстрый статус без меню ---
 if "--status" in sys.argv:
@@ -214,136 +196,6 @@ if "--ingress-geoip-update" in sys.argv:
     print("[ingress-geoip] Готово")
     sys.exit(0)
 
-# --- Hysteria2: установка Exit-ноды ---
-if "--h2-install-exit" in sys.argv:
-    if os.geteuid() != 0:
-        print("ERROR: требуются права root", file=sys.stderr)
-        sys.exit(1)
-    from vless_installer.modules.hysteria2_exit_mgr import h2_exit_install
-    _h2_raw = ""
-    if "--h2-port" in sys.argv:
-        _idx = sys.argv.index("--h2-port")
-        _h2_raw = sys.argv[_idx + 1] if _idx + 1 < len(sys.argv) else "443"
-    _h2_ports = [int(p.strip()) for p in _h2_raw.split(",")
-                 if p.strip().isdigit()] if _h2_raw else [443]
-    h2_exit_install(ports=_h2_ports)
-    sys.exit(0)
-
-# --- Hysteria2: статус ---
-if "--h2-status" in sys.argv:
-    from vless_installer.modules.hysteria2_exit_mgr import h2_exit_status
-    print(json.dumps(h2_exit_status(), indent=2, ensure_ascii=False))
-    sys.exit(0)
-
-# --- Hysteria2: health check (из cron) ---
-if "--h2-health" in sys.argv:
-    if os.geteuid() != 0:
-        sys.exit(1)
-    from vless_installer.modules.hysteria2_health import h2_health_check_cron
-    h2_health_check_cron()
-    sys.exit(0)
-
-# --- Hysteria2: watchdog (из cron каждые 2 мин) ---
-if "--h2-watchdog-run" in sys.argv:
-    if os.geteuid() != 0:
-        sys.exit(1)
-    from vless_installer.modules.hysteria2_watchdog import h2_watchdog_run
-    h2_watchdog_run()
-    sys.exit(0)
-
-# --- Hysteria2: автообновление (из cron ежесуточно) ---
-if "--h2-autoupdate" in sys.argv:
-    if os.geteuid() != 0:
-        sys.exit(1)
-    from vless_installer.modules.hysteria2_auto_update import h2_autoupdate_cron
-    h2_autoupdate_cron()
-    sys.exit(0)
-
-# --- Hysteria2: мониторинг сертификата (из cron еженедельно) ---
-if "--h2-cert-monitor" in sys.argv:
-    from vless_installer.modules.hysteria2_cert_mgr import h2_cert_monitor
-    h2_cert_monitor()
-    sys.exit(0)
-
-# --- Hysteria2: DPI авто-фолбэк (из cron) ---
-if "--h2-dpi-check" in sys.argv:
-    if os.geteuid() != 0:
-        sys.exit(1)
-    from vless_installer.modules.hysteria2_dpi import h2_dpi_auto_fallback
-    h2_dpi_auto_fallback()
-    sys.exit(0)
-
-# --- Hysteria2: статистика трафика ---
-if "--h2-traffic" in sys.argv:
-    from vless_installer.modules.hysteria2_traffic import h2_traffic_report
-    print(h2_traffic_report())
-    sys.exit(0)
-
-# --- Hysteria2: отчёт качества ---
-if "--h2-quality-report" in sys.argv:
-    from vless_installer.modules.hysteria2_quality import h2_quality_report
-    print(h2_quality_report(send_tg="--tg" in sys.argv))
-    sys.exit(0)
-
-# --- Hysteria2: логи ---
-if "--h2-logs" in sys.argv:
-    import subprocess as _sp
-    for _lf in ("/var/log/hysteria.log",
-                "/var/log/hysteria-watchdog.log",
-                "/var/log/hysteria-health.log"):
-        if Path(_lf).exists():
-            print(f"\n=== {_lf} ===")
-            _sp.run(["tail", "-n", "60", _lf])
-    sys.exit(0)
-
-# --- Hysteria2: переключение транспорта ---
-if "--h2-transport" in sys.argv:
-    if os.geteuid() != 0:
-        sys.exit(1)
-    _idx = sys.argv.index("--h2-transport")
-    _val = sys.argv[_idx + 1] if _idx + 1 < len(sys.argv) else "h2"
-    if _val.lower() == "awg":
-        from vless_installer.modules.hysteria2_transport import h2_transport_remove
-        h2_transport_remove()
-    else:
-        from vless_installer.modules.hysteria2_transport import h2_transport_apply
-        h2_transport_apply()
-    sys.exit(0)
-
-# --- Hysteria2: кластерные операции ---
-if "--h2-cluster" in sys.argv:
-    if os.geteuid() != 0:
-        sys.exit(1)
-    _idx = sys.argv.index("--h2-cluster")
-    _op  = sys.argv[_idx + 1] if _idx + 1 < len(sys.argv) else "status"
-    from vless_installer.modules.hysteria2_cluster import h2_cluster_run
-    h2_cluster_run(_op)
-    sys.exit(0)
-
-# --- Hysteria2: smoke test ---
-if "--h2-smoke" in sys.argv:
-    from vless_installer.modules.hysteria2_smoke_test import h2_smoke_test
-    sys.exit(0 if h2_smoke_test(verbose=True) else 1)
-
-# --- Hysteria2: веса балансировщика ---
-if "--h2-weights" in sys.argv:
-    _idx = sys.argv.index("--h2-weights")
-    _raw = sys.argv[_idx + 1] if _idx + 1 < len(sys.argv) else ""
-    if _raw:
-        from vless_installer.modules.hysteria2_common import _load_h2_state, _save_h2_state
-        _h2s = _load_h2_state()
-        for _pair in _raw.split(","):
-            if ":" in _pair:
-                _pip, _pw = _pair.rsplit(":", 1)
-                for _n in _h2s.get("exit_nodes", []):
-                    if _n.get("ip") == _pip.strip():
-                        try:
-                            _n["weight"] = float(_pw)
-                        except ValueError:
-                            pass
-        _save_h2_state(_h2s)
-    sys.exit(0)
-
 # =============================================================================
 #  ОСНОВНОЙ ИНТЕРАКТИВНЫЙ ЗАПУСК
 # =============================================================================
@@ -391,7 +243,7 @@ for _attempt in range(_MAX_RETRIES + 1):
             print_banner()
             print()
             _cc, _cn, _flag = get_server_country_cached()
-            info(f"VLESS Ultimate Installer v4.12.10 | RAM: {TOTAL_RAM}MB | CPU: {TOTAL_CPU} | {_flag} {_cn} ({_cc})")
+            info(f"HYDRA Multi-Proxy Manager v0.3.0-beta | RAM: {TOTAL_RAM}MB | CPU: {TOTAL_CPU} | {_flag} {_cn} ({_cc})")
             print()
             _time.sleep(1)
 

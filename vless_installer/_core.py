@@ -3241,18 +3241,12 @@ def _prompt_balancer_strategy() -> None:
     _box_desc(f"Поведение похоже на Round Robin, но без строгой очерёдности.")
     _box_desc(f"IP меняется непредсказуемо — хорошо для анонимности.")
     _box_row()
-    _box_item("5", f"⚖️  Smart Balancer {GREEN}(авто){NC}")
-    _box_desc(f"Автоматически выбирает лучшую ноду по задержке, нагрузке и пропускной способности.")
-    _box_desc(f"Cron запускается каждые {PROBE_INTERVAL_MIN} мин и переключает ноду при необходимости.")
-    _box_desc(f"Не требует ручной настройки — включается сразу после установки.")
-    _box_row()
 
     strategy_map = {
         "1": "roundRobin",
         "2": "leastPing",
         "3": "leastLoad",
         "4": "random",
-        "5": "smartBalancer",
     }
     _box_bottom()
     while True:
@@ -3264,9 +3258,9 @@ def _prompt_balancer_strategy() -> None:
         if choice in strategy_map:
             CHAIN_BALANCER_STRATEGY = strategy_map[choice]
             break
-        warn("  Введите 1, 2, 3, 4 или 5")
+        warn("  Введите 1, 2, 3 или 4")
 
-    labels = {"roundRobin": "Round Robin", "leastPing": "Least Ping", "leastLoad": "Least Load", "random": "Random", "smartBalancer": "Smart Balancer"}
+    labels = {"roundRobin": "Round Robin", "leastPing": "Least Ping", "leastLoad": "Least Load", "random": "Random"}
     success(f"Стратегия балансировки: {labels[CHAIN_BALANCER_STRATEGY]}")
 
 
@@ -3334,17 +3328,6 @@ def prompt_chain_params_multi() -> None:
 
     # --- Стратегия балансировки (только если нод больше одной) ---
     _prompt_balancer_strategy()
-
-    # Если выбран Smart Balancer (п.5) — сразу устанавливаем cron
-    if CHAIN_BALANCER_STRATEGY == "smartBalancer":
-        try:
-            _sb_install_cron(PROBE_INTERVAL_MIN)
-            success(f"Smart Balancer: cron активирован (каждые {PROBE_INTERVAL_MIN} мин)")
-        except Exception as _sb_err:
-            warn(f"Smart Balancer: не удалось установить cron: {_sb_err}")
-        # Для xray используем roundRobin как базовую стратегию —
-        # Smart Balancer управляет переключением нод через state-файл
-        CHAIN_BALANCER_STRATEGY = "roundRobin"
 
     _box_row()
     _box_bottom()
@@ -9719,11 +9702,6 @@ def _setup_subscription_domain_ssl() -> None:
             from vless_installer.modules.sub_server import install_sub_service
             install_sub_service("0.0.0.0", sub_port)
             try:
-                from vless_installer.modules.sub_nginx import inject_sub_location
-                inject_sub_location(port=sub_port)
-            except Exception:
-                pass
-            try:
                 from vless_installer.modules.naiveproxy import sync_caddy_config
                 sync_caddy_config()
             except Exception:
@@ -9857,11 +9835,6 @@ def _change_subscription_port() -> None:
             info("Перезапуск службы с новым портом...")
             from vless_installer.modules.sub_server import install_sub_service
             install_sub_service("0.0.0.0", new_port)
-            try:
-                from vless_installer.modules.sub_nginx import inject_sub_location
-                inject_sub_location(port=new_port)
-            except Exception:
-                pass
             try:
                 from vless_installer.modules.naiveproxy import sync_caddy_config
                 sync_caddy_config()
@@ -10078,11 +10051,6 @@ def do_subscription_menu() -> None:
                     from vless_installer.modules.sub_server import uninstall_sub_service
                     uninstall_sub_service()
                     try:
-                        from vless_installer.modules.sub_nginx import remove_sub_location
-                        remove_sub_location()
-                    except Exception:
-                        pass
-                    try:
                         from vless_installer.modules.naiveproxy import sync_caddy_config
                         sync_caddy_config()
                     except Exception:
@@ -10096,11 +10064,6 @@ def do_subscription_menu() -> None:
                 try:
                     from vless_installer.modules.sub_server import install_sub_service
                     install_sub_service("0.0.0.0", sub_port)
-                    try:
-                        from vless_installer.modules.sub_nginx import inject_sub_location
-                        inject_sub_location(port=sub_port)
-                    except Exception:
-                        pass
                     try:
                         from vless_installer.modules.naiveproxy import sync_caddy_config
                         sync_caddy_config()
@@ -29477,6 +29440,15 @@ def do_scheduler_menu() -> None:
     ]
 
     render_scheduler_menu(TASKS)
+
+def do_cold_boot_menu() -> None:
+    """Заглушка: Cold Boot Restore удалён в HYDRA-only сборке."""
+    warn("Cold Boot Restore недоступен в HYDRA-only сборке (legacy VLESS удалён).")
+    try:
+        input(f"{BLUE}Нажмите Enter...{NC}")
+    except KeyboardInterrupt:
+        pass
+
 
 def _menu_security() -> None:
     while True:

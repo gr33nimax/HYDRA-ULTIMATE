@@ -17,6 +17,8 @@ vless_installer/modules/sub_generator.py
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 import base64
 import json
 import socket
@@ -633,18 +635,43 @@ def generate_userinfo_header(state: dict, email: str) -> str:
     """Генерация заголовка Subscription-Userinfo.
     Формат: upload=0; download=N; total=T; expire=E
     """
-    # Базовые значения (расширяемо через state.json)
+    from datetime import timezone
+
     upload = 0
     download = 0
-    total = 0  # 0 = безлимит
-    expire = 0  # 0 = бессрочно
+    total = 0
+    expire = 0
 
-    # Попытка получить реальные данные из state
-    traffic = state.get("user_traffic", {}).get(email, {})
-    if traffic:
-        upload = traffic.get("upload", 0)
-        download = traffic.get("download", 0)
-        total = traffic.get("total", 0)
-        expire = traffic.get("expire", 0)
+    users_db = state.get("users", {})
+    udata = users_db.get(email, {})
+
+    try:
+        from vless_installer.modules.user_lifecycle import get_user_cumulative_traffic
+        download = get_user_cumulative_traffic(email, state)
+    except Exception:
+        download = udata.get("used_bytes", 0)
+
+    limit_gb = udata.get("limit_gb", 0)
+    if limit_gb:
+        total = int(limit_gb * 1024 ** 3)
+
+    expires_at = udata.get("expires_at", "")
+    if expires_at:
+        try:
+            exp = datetime.fromisoformat(expires_at)
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            expire = int(exp.timestamp())
+        except Exception:
+            expire = 0
+
+    # legacy fallback
+    if not download and not total and not expire:
+        traffic = state.get("user_traffic", {}).get(email, {})
+        if traffic:
+            upload = traffic.get("upload", 0)
+            download = traffic.get("download", 0)
+            total = traffic.get("total", 0)
+            expire = traffic.get("expire", 0)
 
     return f"upload={upload}; download={download}; total={total}; expire={expire}"

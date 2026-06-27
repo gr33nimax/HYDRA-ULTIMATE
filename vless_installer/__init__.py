@@ -1,2 +1,2 @@
-"""VLESS Ultimate Installer v4.12.10"""
-__version__ = "4.12.10"
+"""HYDRA Multi-Proxy Manager v0.3.0-beta"""
+__version__ = "0.3.0-beta"
