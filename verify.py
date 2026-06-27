@@ -170,6 +170,12 @@ try:
     else:
         fail("  service_registry.unit_name(sub) — неверное имя")
 
+    from vless_installer import __version__ as _pkg_version
+    if _pkg_version == "0.7.0-rc1":
+        ok(f"  __version__ → {_pkg_version}")
+    else:
+        fail(f"  __version__ → {_pkg_version} (ожидалось 0.7.0-rc1)")
+
     for sym in ["main_menu", "gen_uuid", "BANNER", "STATE_FILE", "do_subscription_menu"]:
         if hasattr(_core_mod, sym):
             ok(f"  _core.{sym}")
@@ -260,12 +266,8 @@ color = GREEN if score >= 9 else (YELLOW if score >= 7 else RED)
 print(f"\n  {color}{BOLD}Готовность к публикации: {score}/10{NC}")
 if failed == 0:
     print(f"\n  {GREEN}{BOLD}Проект готов к публикации на GitHub! 🚀{NC}")
-    print(f"\n  Команды для публикации:")
-    print(f"  {CYAN}git init{NC}")
-    print(f"  {CYAN}git add .{NC}")
-    print(f"  {CYAN}git commit -m 'HYDRA ULTIMATE v0.0.1-alpha'{NC}")
-    print(f"  {CYAN}git remote add origin https://github.com/gr33nimax/HYDRA-ULTIMATE.git{NC}")
-    print(f"  {CYAN}git push -u origin main{NC}")
+    print(f"\n  Ветка prerelease: {CYAN}git push origin prerelease{NC}")
+    print(f"  Проверка: {CYAN}python3 verify.py{NC}")
 else:
     print(f"\n  {YELLOW}Есть проблемы — исправьте перед публикацией.{NC}")
 

@@ -1608,7 +1608,7 @@ def _install_bot_service(bot_cfg: dict) -> bool:
 
     svc = (
         "[Unit]\n"
-        "Description=VLESS Telegram Config Bot\n"
+        "Description=HYDRA Telegram Config Bot\n"
         "After=network.target\n"
         "Wants=network-online.target\n\n"
         "[Service]\n"
@@ -1667,7 +1667,7 @@ def _install_admin_bot_service(bot_cfg: dict) -> bool:
 
     svc = (
         "[Unit]\n"
-        "Description=VLESS Telegram Admin Panel Bot\n"
+        "Description=HYDRA Telegram Admin Panel Bot\n"
         "After=network.target\n"
         "Wants=network-online.target\n\n"
         "[Service]\n"

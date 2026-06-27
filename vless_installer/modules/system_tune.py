@@ -70,7 +70,7 @@ def apply_network_optimizations() -> None:
 
     sysctl_content = textwrap.dedent(f"""\
         # =============================================================
-        #  Сетевые оптимизации для VLESS REALITY
+        #  Сетевые оптимизации для HYDRA (NaiveProxy / Mieru / AWG)
         #  Адаптировано под: {core.TOTAL_RAM}MB RAM, {core.TOTAL_CPU} CPU
         # =============================================================
         {congestion_lines}net.ipv4.tcp_fastopen = 3

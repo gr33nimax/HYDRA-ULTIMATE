@@ -131,7 +131,7 @@ def find_user_by_token(token: str) -> Optional[tuple[str, str]]:
 class SubRequestHandler(BaseHTTPRequestHandler):
     """Обработчик HTTP-запросов подписок."""
 
-    server_version = "VLESS-Sub/1.0"
+    server_version = "HYDRA-Sub/1.0"
 
     def log_message(self, format, *args):
         """Перенаправляем логи в файл."""
@@ -389,7 +389,7 @@ def is_sub_service_running() -> bool:
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="VLESS Subscription Server")
+    parser = argparse.ArgumentParser(description="HYDRA Subscription Server")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = parser.parse_args()

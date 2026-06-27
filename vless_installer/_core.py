@@ -168,7 +168,9 @@ def die(msg: str) -> None:
     sys.exit(1)
 
 
-log_to_file("INFO", "=== Запуск VLESS Ultimate Installer v4.12.10 ===")
+from vless_installer import __version__ as _HYDRA_VERSION
+
+log_to_file("INFO", f"=== Запуск HYDRA Multi-Proxy Manager v{_HYDRA_VERSION} ===")
 log_to_file("INFO", f"Время начала: {datetime.now()}")
 
 # =============================================================================
@@ -195,7 +197,7 @@ def _make_banner(show_ram_warning: bool = True) -> str:
         "  ╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝",
     ]
     _info_lines = [
-        "HYDRA: MULTI-PROTOCOL PROXY MANAGER v0.0.1",
+        f"HYDRA: MULTI-PROTOCOL PROXY MANAGER v{_HYDRA_VERSION}",
         "Mieru | NaiveProxy | SlipGate | WARP | MTProxy",
         "AmneziaWG | VPN & DNS Tunnels",
         "Dynamic Subscriptions | Fail2ban | GeoIP Block",

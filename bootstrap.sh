@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-#  VLESS Ultimate Installer v4.12.10 — Bootstrap
+#  HYDRA Multi-Proxy Manager v0.7.0-rc1 — Bootstrap
 #  bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh)
 # ============================================================
 # EXPECTED_SHA256="PLACEHOLDER_SHA256_UPDATE_BEFORE_RELEASE"
@@ -26,7 +26,7 @@ cat << 'BANNER'
   ██╔══██║  ╚██╔╝  ██║  ██║██╔══██╗██╔══██║
   ██║  ██║   ██║   ██████╔╝██║  ██║██║  ██║
   ╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
-  Multi-Proxy Manager v5.0.0
+  Multi-Proxy Manager v0.7.0-rc1
 BANNER
 echo -e "${NC}"
 

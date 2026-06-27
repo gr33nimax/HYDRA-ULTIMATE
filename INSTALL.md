@@ -1,4 +1,4 @@
-# Инструкция по установке — VLESS Ultimate Installer v4.12.10
+# Инструкция по установке — HYDRA Multi-Proxy Manager v0.7.0-rc1
 
 ## Быстрый старт (рекомендуется)
 

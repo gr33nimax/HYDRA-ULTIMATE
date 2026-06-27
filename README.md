@@ -1,6 +1,6 @@
-# 🐉 HYDRA (v0.0.2-alpha)
+# 🐉 HYDRA (v0.7.0-rc1)
 
-[![Version](https://img.shields.io/badge/version-0.0.2--alpha-red.svg)]()
+[![Version](https://img.shields.io/badge/version-0.7.0--rc1-red.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-green.svg)]()
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)]()
 [![Platform Support](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg)]()

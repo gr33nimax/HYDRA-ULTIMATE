@@ -2,6 +2,29 @@
 
 ---
 
+## 🐉 HYDRA v0.7.0-rc1 — hotfix waves 0–4 — 27 июня 2026
+
+### Добавлено
+
+- `runtime_paths.py` — единый поиск корня установки (`HYDRA_INSTALL_ROOT`, без хардкода `/opt/vless-ultimate`)
+- `service_registry.py` — реестр systemd-юнитов (в т.ч. `vless-sub` вместо `hydra-sub-server`)
+- `state_schema.py` — единый доступ к `state.json`, синхронизация `users.token` ↔ `sub_tokens`
+- GitHub Actions: `verify.py` на push/PR в `main` и `prerelease`
+
+### Исправлено
+
+- P0 NameError в меню: импорты ingress, fail2ban, honeypot, amnezia, warp, health, scheduler, tg_bot
+- Планировщик: удалены мёртвые задачи RU-subnets/AS-direct; TTL/лимиты → `hydra-sync-agent.timer`
+- Sync-agent, tg_bot и WARP cron используют `runtime_paths` вместо `/opt/vless-ultimate`
+- Перегенерация токена подписки синхронизирует `users` и `sub_tokens`
+- Sync-agent не разблокирует пользователей, заблокированных администратором (`block_source`)
+- Mieru добавлен в Clash Meta и sing-box подписки
+- Health-отчёт и дашборд переведены на HYDRA-стек (без xray/nginx)
+- MTU state унифицирован в `mtu_state.json` с миграцией из `mtu_tuning.json`
+- Баннер, лог запуска и версия пакета: **0.7.0-rc1**
+
+---
+
 ## 🔁 Telemt: фикс reload-фоллбэка и проба живых ME-серверов — 24 июня 2026
 
 ### Исправлено
