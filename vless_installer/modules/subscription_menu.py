@@ -167,9 +167,10 @@ def _setup_subscription_domain_ssl() -> None:
             core.success(f"SSL-сертификат успешно получен для домена {new_domain}!")
             
             # Переустанавливаем сервис подписок, чтобы обновить домен и порт
-            sub_port = state.get("sub_port", 9443)
-            core.info("Перезапуск службы подписок с новым SSL-сертификатом...")
+            from vless_installer.state_schema import get_sub_port
             from vless_installer.modules.sub_server import install_sub_service
+
+            sub_port = get_sub_port(state)
             install_sub_service("0.0.0.0", sub_port)
             try:
                 from vless_installer.modules.naiveproxy import sync_caddy_config
@@ -288,9 +289,9 @@ def _change_subscription_port() -> None:
         if not (1 <= new_port <= 65535):
             raise ValueError
         
-        state = json.loads(core.STATE_FILE.read_text()) if core.STATE_FILE.exists() else {}
-        state["sub_port"] = new_port
-        core.STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        from vless_installer.state_schema import set_sub_port
+
+        set_sub_port(new_port)
         core.success(f"Порт изменен на {new_port}")
         
         # Проверяем, активен ли сервис подписок
@@ -457,7 +458,9 @@ def do_subscription_menu() -> None:
             pass
 
         sub_domain = state.get("sub_domain", "")
-        sub_port = state.get("sub_port", 9443)
+        from vless_installer.state_schema import get_sub_port
+
+        sub_port = get_sub_port(state)
         domain = sub_domain or state.get("domain", "") or core.get_server_ip("4")
 
         # Проверка SSL-сертификата
@@ -724,10 +727,12 @@ def _show_user_subscription_links() -> None:
         state["sub_tokens"] = sub_tokens
         core.STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
 
+    from vless_installer.state_schema import get_sub_port
+
     sub_domain = state.get("sub_domain", "")
-    sub_port = state.get("sub_port", 9443)
+    sub_port = get_sub_port(state)
     domain = sub_domain or state.get("domain", "") or core.get_server_ip("4")
-    port_suffix = ""
+    port_suffix = "" if sub_port in (443, 80) else f":{sub_port}"
     base_url = f"https://{domain}{port_suffix}/sub/{token}"
 
     while True:
@@ -800,12 +805,10 @@ def _regenerate_user_token() -> None:
     email = found["email"]
     ans = input(f"{core.YELLOW}Вы уверены, что хотите перегенерировать токен для {email}? Старая ссылка перестанет работать! [y/N]:{core.NC} ").strip().lower()
     if ans == "y":
-        state = json.loads(core.STATE_FILE.read_text()) if core.STATE_FILE.exists() else {}
-        sub_tokens = state.setdefault("sub_tokens", {})
+        from vless_installer.state_schema import set_user_token
+
         new_token = core.gen_uuid()
-        sub_tokens[email] = new_token
-        state["sub_tokens"] = sub_tokens
-        core.STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        set_user_token(email, new_token)
         core.success(f"Токен для {email} успешно обновлен")
     else:
         core.info("Отменено")

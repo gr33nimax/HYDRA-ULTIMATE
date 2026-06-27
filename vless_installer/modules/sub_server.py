@@ -306,16 +306,9 @@ def start_sub_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
 def generate_systemd_unit(host: str = DEFAULT_HOST,
                            port: int = DEFAULT_PORT) -> str:
     """Генерация содержимого systemd unit-файла."""
-    install_dir = "/opt/vless-ultimate"
-    # Ищем реальную директорию установки
-    for candidate in ("/opt/vless-ultimate",
-                      "/root/HYDRA-ULTIMATE",
-                      "/opt/HYDRA-ULTIMATE",
-                      "/root/VLESS-Ultimate-Installer",
-                      "/opt/VLESS-Ultimate-Installer"):
-        if Path(candidate).exists():
-            install_dir = candidate
-            break
+    from vless_installer.runtime_paths import require_install_root
+
+    install_dir = require_install_root()
 
     return textwrap.dedent(f"""\
         [Unit]
@@ -353,6 +346,12 @@ def install_sub_service(host: str = DEFAULT_HOST,
         subprocess.run(["systemctl", "restart", SERVICE_NAME], check=True,
                        capture_output=True)
         success(f"Сервис {SERVICE_NAME} запущен на {host}:{port}")
+        try:
+            from vless_installer.state_schema import set_sub_port
+
+            set_sub_port(port)
+        except Exception as e:
+            warn(f"Не удалось записать sub_port в state.json: {e}")
         return True
     except Exception as e:
         error(f"Ошибка установки сервиса: {e}")

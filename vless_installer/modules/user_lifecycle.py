@@ -168,11 +168,38 @@ def _default_user_record(token: str = "") -> dict:
         "limit_gb": 0,
         "is_blocked": False,
         "block_reason": "",
+        "block_source": "",
         "traffic_baseline": 0,
         "traffic_accumulated": 0,
         "previous_live": 0,
         "creds": {},
     }
+
+
+_AUTO_BLOCK_PREFIXES = (
+    "Превышен лимит трафика",
+    "Срок действия подписки истек",
+    "Limit or TTL exceeded",
+)
+
+
+def _is_auto_block(user_data: dict) -> bool:
+    """True если блокировка поставлена sync-agent (лимит/TTL), не админом."""
+    source = str(user_data.get("block_source", "") or "")
+    if source == "admin":
+        return False
+    if source == "auto":
+        return True
+    reason = str(user_data.get("block_reason", "") or "")
+    return any(reason.startswith(p) for p in _AUTO_BLOCK_PREFIXES)
+
+
+def _block_source_for_reason(reason: str) -> str:
+    if "администратор" in reason.lower() or "вручную" in reason.lower():
+        return "admin"
+    if any(reason.startswith(p) for p in _AUTO_BLOCK_PREFIXES):
+        return "auto"
+    return "admin"
 
 
 def migrate_state_users(state: dict) -> bool:
@@ -202,6 +229,12 @@ def migrate_state_users(state: dict) -> bool:
         if not users_db[email].get("is_blocked"):
             users_db[email]["is_blocked"] = True
             users_db[email]["block_reason"] = info.get("reason", "Blocked (legacy)")
+            users_db[email]["block_source"] = "admin"
+            changed = True
+        elif not users_db[email].get("block_source"):
+            users_db[email]["block_source"] = (
+                "auto" if _is_auto_block(users_db[email]) else "admin"
+            )
             changed = True
 
     return changed
@@ -343,6 +376,7 @@ def sync_user_lifecycle(username: str, action: str, reason: str = "") -> None:
         record["token"] = token
         record["is_blocked"] = False
         record["block_reason"] = ""
+        record["block_source"] = ""
         users_db[username] = record
         sub_tokens[username] = token
         state["users"] = users_db
@@ -374,7 +408,10 @@ def sync_user_lifecycle(username: str, action: str, reason: str = "") -> None:
         creds = _merge_creds(user_data, username)
         user_data["creds"] = creds
         user_data["is_blocked"] = True
-        user_data["block_reason"] = reason or "Limit or TTL exceeded"
+        if not reason:
+            reason = "Заблокирован администратором"
+        user_data["block_reason"] = reason
+        user_data["block_source"] = _block_source_for_reason(reason)
         users_db[username] = user_data
         sub_tokens[username] = user_data.get("token") or sub_tokens.get(username, "")
         state["users"] = users_db
@@ -391,6 +428,7 @@ def sync_user_lifecycle(username: str, action: str, reason: str = "") -> None:
         user_data["creds"] = creds
         user_data["is_blocked"] = False
         user_data["block_reason"] = ""
+        user_data["block_source"] = ""
         user_data["traffic_baseline"] = user_data.get("previous_live", 0)
         user_data["traffic_accumulated"] = 0
         users_db[username] = user_data
@@ -464,14 +502,13 @@ def check_and_sync_all_users_limits() -> None:
         if should_block and not is_blocked:
             _log("INFO", f"SyncAgent: Blocking user {username}. Reason: {reason}")
             sync_user_lifecycle(username, "block", reason=reason)
-            # Снова читаем стейт, так как sync_user_lifecycle сохранил изменения
-            state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-            users_db = state.setdefault("users", {})
-            user_data = users_db.setdefault(username, {})
-            user_data["is_blocked"] = True
-            user_data["block_reason"] = reason
-            changed = True
-            
+            try:
+                state = _load_state_migrated()
+                users_db = state.get("users", {})
+                changed = True
+            except Exception:
+                pass
+
             # Уведомление в Телеграм
             try:
                 from vless_installer.modules.tg_bot import tg_notify_event
@@ -480,16 +517,18 @@ def check_and_sync_all_users_limits() -> None:
                 pass
                 
         elif not should_block and is_blocked:
-            # Пользователь был заблокирован, но теперь лимит увеличен или продлен TTL
+            if not _is_auto_block(user_data):
+                continue
+            # Пользователь был заблокирован автоматически, лимит увеличен или TTL продлён
             _log("INFO", f"SyncAgent: Unblocking user {username}")
             sync_user_lifecycle(username, "unblock")
-            state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-            users_db = state.setdefault("users", {})
-            user_data = users_db.setdefault(username, {})
-            user_data["is_blocked"] = False
-            user_data["block_reason"] = ""
-            changed = True
-            
+            try:
+                state = _load_state_migrated()
+                users_db = state.get("users", {})
+                changed = True
+            except Exception:
+                pass
+
             try:
                 from vless_installer.modules.tg_bot import tg_notify_event
                 tg_notify_event("traffic_limit", f"Пользователь <b>{username}</b> разблокирован.")

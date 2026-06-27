@@ -463,11 +463,13 @@ def get_status() -> dict:
 def install_cron_job() -> None:
     """Установить cron-задачу для синхронизации маршрутов каждые 5 минут."""
     try:
-        main_path = Path(__file__).resolve().parent.parent.parent / "main.py"
-        if not main_path.exists():
-            main_path = Path("/opt/vless-ultimate/main.py")
-        
-        cron_line = f"*/5 * * * * root /usr/bin/python3 {main_path} --warp-sync-routes >/dev/null 2>&1\n"
+        from vless_installer.runtime_paths import main_py_path
+
+        main_path = main_py_path()
+        cron_line = (
+            f"*/5 * * * * root /usr/bin/python3 {main_path} "
+            f"--warp-sync-routes >/dev/null 2>&1\n"
+        )
         CRON_FILE.write_text(cron_line, encoding="utf-8")
         CRON_FILE.chmod(0o644)
         _log("INFO", f"Установлена задача cron: {CRON_FILE}")

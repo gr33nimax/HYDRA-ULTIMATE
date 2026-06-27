@@ -50,7 +50,9 @@ required = [
     "vless_installer/modules/subscription_menu.py",
     "vless_installer/modules/hydra_migration.py",
     "vless_installer/modules/system_tune.py",
-    "vless_installer/modules/hydra_setup.py",
+    "vless_installer/runtime_paths.py",
+    "vless_installer/service_registry.py",
+    "vless_installer/state_schema.py",
 ]
 for f in required:
     if Path(f).exists():
@@ -67,6 +69,9 @@ for py in ["main.py", "verify.py",
            "vless_installer/modules/subscription_menu.py",
            "vless_installer/modules/hydra_migration.py",
            "vless_installer/modules/system_tune.py",
+           "vless_installer/runtime_paths.py",
+           "vless_installer/service_registry.py",
+           "vless_installer/state_schema.py",
            "vless_installer/modules/sub_generator.py",
            "vless_installer/modules/sub_server.py",
            "vless_installer/modules/warp_universal.py"]:
@@ -105,7 +110,9 @@ if core.exists():
         ("def _ttl_check_and_expire(", "vless_installer/_core.py"),
         ("def _ingress_state_load(", "vless_installer/modules/ingress_geoip.py"),
         ("def tg_notify_event(", "vless_installer/modules/tg_bot.py"),
-        ("def _scheduled_backup_run(", "vless_installer/_core.py"),
+        ("def find_install_root(", "vless_installer/runtime_paths.py"),
+        ("def unit_name(", "vless_installer/service_registry.py"),
+        ("def set_user_token(", "vless_installer/state_schema.py"),
         ("def main(", "vless_installer/cli.py"),
     ]
     file_contents = {}
@@ -149,8 +156,19 @@ try:
 
     import vless_installer._core as _core_mod
     from vless_installer import cli as _cli_mod
+    from vless_installer.runtime_paths import find_install_root
+    from vless_installer.service_registry import unit_name
     ok("import vless_installer._core — OK")
     ok("import vless_installer.cli — OK")
+    root = find_install_root()
+    if root and (root / "main.py").exists():
+        ok(f"  runtime_paths.find_install_root → {root}")
+    else:
+        fail("  runtime_paths.find_install_root — не нашёл корень (ожидаемо на Windows без /opt)")
+    if unit_name("sub") == "vless-sub":
+        ok("  service_registry.unit_name(sub) → vless-sub")
+    else:
+        fail("  service_registry.unit_name(sub) — неверное имя")
 
     for sym in ["main_menu", "gen_uuid", "BANNER", "STATE_FILE", "do_subscription_menu"]:
         if hasattr(_core_mod, sym):

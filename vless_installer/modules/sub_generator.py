@@ -469,6 +469,24 @@ def generate_clash_yaml(state: dict, uuid_str: str, email: str) -> str:
     skip-cert-verify: false""")
                 break
 
+    # Mieru (Mihomo / Clash Meta)
+    mieru = _load_mieru_state()
+    if mieru.get("installed"):
+        for u in mieru.get("users", []):
+            if u.get("username") == email:
+                name = f"{email} Mieru"
+                proxy_names.append(name)
+                host = state.get("domain", "") or _get_server_ip()
+                transport = str(mieru.get("protocol", "TCP")).upper()
+                proxies.append(f"""  - name: {_yaml_str(name)}
+    type: mieru
+    server: {host}
+    port: {mieru.get('port_start', 8964)}
+    username: {_yaml_str(u['username'])}
+    password: {_yaml_str(u['password'])}
+    transport: {transport}""")
+                break
+
     # Hysteria2
     h2 = state.get("hysteria2", {})
     if h2.get("installed") and h2.get("password"):
@@ -553,7 +571,24 @@ def generate_singbox_json(state: dict, uuid_str: str, email: str) -> str:
                 })
                 break
 
-
+    # Mieru → sing-box mieru outbound
+    mieru = _load_mieru_state()
+    if mieru.get("installed"):
+        for u in mieru.get("users", []):
+            if u.get("username") == email:
+                tag = f"{email}-mieru"
+                tags.append(tag)
+                host = state.get("domain", "") or _get_server_ip()
+                outbounds.append({
+                    "type": "mieru",
+                    "tag": tag,
+                    "server": host,
+                    "server_port": mieru.get("port_start", 8964),
+                    "username": u["username"],
+                    "password": u["password"],
+                    "transport": str(mieru.get("protocol", "TCP")).upper(),
+                })
+                break
 
     # Hysteria2
     h2 = state.get("hysteria2", {})

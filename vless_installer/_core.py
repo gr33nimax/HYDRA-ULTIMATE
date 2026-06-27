@@ -81,6 +81,19 @@ import vless_installer.modules.box_renderer as _br
 _BOX_W = _br._BOX_W  # алиас для совместимости с кодом в _core.py
 from vless_installer.modules.logrotate  import do_manage_logrotate
 from vless_installer.modules.dns_rules         import do_manage_dns_rules
+from vless_installer.modules.amnezia_vpn import do_amnezia_vpn_menu
+from vless_installer.modules.ingress_geoip import (
+    INGRESS_CRON_FILE,
+    _ingress_state_load,
+    do_manage_ingress_geoip,
+)
+from vless_installer.modules.fail2ban_manager import do_manage_fail2ban
+from vless_installer.modules.honeypot import do_manage_honeypot
+from vless_installer.modules.warp import do_manage_warp
+from vless_installer.modules.dnscrypt_selector import do_dnscrypt_selector_menu
+from vless_installer.modules.health import do_check_tls_cert
+from vless_installer.modules.scheduler import render_scheduler_menu
+from vless_installer.modules.tg_bot import tg_load as _tg_load, tg_send
 
 # Статический список uTLS-fingerprints
 _FM_FP_LIST = ["chrome", "firefox", "safari", "ios", "android", "edge", "none"]
@@ -692,19 +705,16 @@ def do_full_diagnostic() -> None:
     ts = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
     _box_row(f"  {DIM}{ts}{NC}")
     _box_row(f"  {BOLD}Сервисы:{NC}")
-    hydra_svcs = (
-        "caddy-naive", "mita", "hydra-sub-server",
-        "hydra-tg-bot", "hydra-tg-admin", "dnscrypt-proxy",
-    )
-    for svc in hydra_svcs:
-        r = _run(["systemctl", "is-active", svc], capture=True, check=False)
-        st = r.stdout.strip()
+    from vless_installer.service_registry import ALL_SERVICES, probe_status
+
+    for svc in ALL_SERVICES:
+        st = probe_status(svc.unit)
         if st == "active":
-            _box_row(f"  {GREEN}●{NC} {svc:<24} {GREEN}активен{NC}")
+            _box_row(f"  {GREEN}●{NC} {svc.unit:<24} {GREEN}активен{NC}  {DIM}{svc.label_ru}{NC}")
         elif st == "inactive":
-            _box_row(f"  {DIM}○{NC} {svc:<24} {DIM}не запущен{NC}")
+            _box_row(f"  {DIM}○{NC} {svc.unit:<24} {DIM}не запущен{NC}")
         else:
-            _box_row(f"  {RED}✗{NC} {svc:<24} {RED}{st or 'нет'}{NC}")
+            _box_row(f"  {RED}✗{NC} {svc.unit:<24} {RED}{st}{NC}")
     _box_row()
     if STATE_FILE.exists():
         try:
@@ -2220,20 +2230,27 @@ def _mtu_remove_rules(nodes: list | None = None) -> None:
 
 
 def _mtu_state_load() -> dict:
+    from vless_installer.modules.network_mtu import load_mtu_state, save_mtu_state
+
+    data = load_mtu_state()
+    if data:
+        return data
     try:
         if _MTU_STATE_FILE.exists():
-            return json.loads(_MTU_STATE_FILE.read_text())
+            legacy = json.loads(_MTU_STATE_FILE.read_text(encoding="utf-8"))
+            if isinstance(legacy, dict):
+                save_mtu_state(legacy)
+                _MTU_STATE_FILE.unlink(missing_ok=True)
+                return legacy
     except Exception:
         pass
     return {}
 
 
 def _mtu_state_save(data: dict) -> None:
-    try:
-        _MTU_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _MTU_STATE_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-    except Exception:
-        pass
+    from vless_installer.modules.network_mtu import save_mtu_state
+
+    save_mtu_state(data)
 
 
 def do_mtu_tuning() -> None:
@@ -3768,11 +3785,14 @@ def do_system_dashboard() -> None:
             except Exception:
                 uptime_str = "?"
 
-            # Активные соединения Xray
-            xray_conns = "?"
+            # Активные соединения прокси (caddy / mita)
+            proxy_conns = "?"
             try:
                 r = _run(["ss", "-tnp"], capture=True, check=False)
-                xray_conns = str(sum(1 for l in r.stdout.splitlines() if "xray" in l))
+                proxy_conns = str(sum(
+                    1 for l in r.stdout.splitlines()
+                    if any(k in l for k in ("caddy", "mita", "naive"))
+                ))
             except Exception:
                 pass
 
@@ -3788,10 +3808,12 @@ def do_system_dashboard() -> None:
             _box_row(f"  RAM:      {_bar(ram_pct)}  {DIM}({ram_used_mb}/{ram_total_mb} МБ){NC}")
             _box_row(f"  Disk /:   {_bar(disk_pct)}  {DIM}({disk_used}/{disk_total}){NC}")
             _box_row(f"  Uptime:   {CYAN}{uptime_str}{NC}")
-            _box_row(f"  Xray соединений: {CYAN}{xray_conns}{NC}")
+            _box_row(f"  Proxy conn: {CYAN}{proxy_conns}{NC}")
 
             # Статус сервисов
-            for svc in ("caddy-naive", "mita", "hydra-sub-server", "dnscrypt-proxy"):
+            from vless_installer.service_registry import diagnostic_unit_names
+
+            for svc in diagnostic_unit_names():
                 r = _run(["systemctl", "is-active", svc], capture=True, check=False)
                 st = r.stdout.strip()
                 colour = GREEN if st == "active" else YELLOW
@@ -3841,24 +3863,27 @@ def _get_subscription_users_list() -> list[dict]:
 def install_sync_agent() -> None:
     """Устанавливает oneshot-службу и таймер systemd для проверки лимитов и TTL."""
     try:
-        agent_src = Path("/opt/vless-ultimate/vless_installer/modules/hydra_sync_agent.py")
-        agent_dst = Path("/usr/local/bin/hydra-sync-agent.py")
-        
-        # 1. Копируем скрипт агента
-        if agent_src.exists():
-            import shutil
-            shutil.copy2(agent_src, agent_dst)
-            agent_dst.chmod(0o755)
-            
-        # 2. Пишем systemd service
-        service_content = textwrap.dedent("""\
+        from vless_installer.runtime_paths import module_path, require_install_root
+
+        install_dir = require_install_root()
+        agent_script = module_path("modules/hydra_sync_agent.py")
+
+        if not agent_script.exists():
+            warn(f"Скрипт sync-агента не найден: {agent_script}")
+            return
+
+        # 1. Пишем systemd service (запуск из дерева установки, без копии в /usr/local/bin)
+        service_content = textwrap.dedent(f"""\
             [Unit]
             Description=Hydra User Traffic & TTL Sync Agent
             After=network.target
 
             [Service]
             Type=oneshot
-            ExecStart=/usr/bin/python3 /usr/local/bin/hydra-sync-agent.py
+            WorkingDirectory={install_dir}
+            Environment=PYTHONPATH={install_dir}
+            Environment=HYDRA_INSTALL_ROOT={install_dir}
+            ExecStart=/usr/bin/python3 {agent_script}
             StandardOutput=journal
             StandardError=journal
         """)
@@ -3884,7 +3909,8 @@ def install_sync_agent() -> None:
         _run(["systemctl", "enable", "hydra-sync-agent.timer"], check=False, quiet=True)
         _run(["systemctl", "start", "hydra-sync-agent.timer"], check=False, quiet=True)
         
-        # 5. Чистим старый крон
+        # 5. Чистим старый крон и устаревшую копию агента
+        Path("/usr/local/bin/hydra-sync-agent.py").unlink(missing_ok=True)
         Path("/etc/cron.d/xray-traffic-limits").unlink(missing_ok=True)
         Path("/usr/local/bin/xray-traffic-limits.sh").unlink(missing_ok=True)
         Path("/etc/cron.d/xray-ttl-check").unlink(missing_ok=True)
@@ -3955,7 +3981,8 @@ def do_manage_traffic_limits() -> None:
                     st_str   = f"{RED}ОТКЛЮЧЁН{NC}" if disabled else f"{GREEN}активен{NC}"
                 else:
                     lim_str  = f"{DIM}нет{NC}"
-                    used_str = f"{col if used_gb > 0 else DIM}{used_gb:.2f} ГБ{NC}"
+                    used_col = GREEN if used_gb > 0 else DIM
+                    used_str = f"{used_col}{used_gb:.2f} ГБ{NC}"
                     st_str   = f"{RED}ЗАБЛОК{NC}" if disabled else f"{GREEN}активен{NC}"
                 _box_row(f"  {i:<4} {email_disp:<{_EM_W}} {lim_str:<12} {used_str:<20} {st_str}")
         _box_item("1", f"Задать/изменить лимит пользователя")
@@ -4394,7 +4421,7 @@ def do_manage_ttl_users() -> None:
                 f"  {YELLOW}Заблокировать '{email}'? [y/N]:{NC} "
             ).strip().lower()
             if ans == "y":
-                sync_user_lifecycle(email, "block")
+                sync_user_lifecycle(email, "block", reason="Заблокирован администратором")
                 success(f"Пользователь {email} заблокирован.")
             else:
                 info("Отмена")
@@ -4612,24 +4639,26 @@ def do_health_report(send_tg_flag: bool = True) -> str:
     except Exception:
         pass
 
-    lines.append(f"📋 <b>Daily Health Report [{hostname}]</b>  {ts}")
+    lines.append(f"📋 <b>HYDRA Daily Health [{hostname}]</b>  {ts}")
     lines.append("")
 
-    # Xray
-    r = _run(["systemctl", "is-active", "xray"], capture=True, check=False)
-    xray_ok = r.stdout.strip() == "active"
-    lines.append(f"{'✅' if xray_ok else '❌'} Xray: {'активен' if xray_ok else 'НЕ АКТИВЕН'}")
+    from vless_installer.service_registry import CORE_SERVICES, probe_status
 
-    # Nginx
-    r = _run(["systemctl", "is-active", "nginx"], capture=True, check=False)
-    nginx_ok = r.stdout.strip() == "active"
-    lines.append(f"{'✅' if nginx_ok else '❌'} Nginx: {'активен' if nginx_ok else 'НЕ АКТИВЕН'}")
+    for svc in CORE_SERVICES:
+        st = probe_status(svc.unit)
+        if st == "active":
+            lines.append(f"✅ {svc.label_ru} ({svc.unit}): активен")
+        elif st == "inactive":
+            lines.append(f"○ {svc.label_ru} ({svc.unit}): не запущен")
+        else:
+            lines.append(f"❌ {svc.label_ru} ({svc.unit}): {st}")
 
     # SSL
     domain = ""
     try:
         if STATE_FILE.exists():
-            domain = json.loads(STATE_FILE.read_text()).get("domain", "")
+            st = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            domain = st.get("sub_domain") or st.get("domain", "")
     except Exception:
         pass
     if domain:
@@ -4674,15 +4703,6 @@ def do_health_report(send_tg_flag: bool = True) -> str:
         lines.append(f"{icon} RAM: {used_mb}/{total_mb} МБ ({pct}%)")
     except Exception:
         lines.append("⚠️ RAM: не удалось проверить")
-
-    # Geo-файлы
-    for dat in (GEOSITE_DAT, GEOIP_DAT):
-        if dat.exists():
-            age = (time.time() - dat.stat().st_mtime) / 86400
-            icon = "✅" if age < 14 else "⚠️"
-            lines.append(f"{icon} {dat.name}: возраст {age:.0f} дн.")
-        else:
-            lines.append(f"❌ {dat.name}: не найден")
 
     text = "\n".join(lines)
     log_to_file("INFO", f"Health report generated")
@@ -7583,8 +7603,9 @@ def _menu_diagnostics() -> None:
         elif ch.lower() == "s":
             print()
             print(f"{BOLD}Статус сервисов:{NC}")
-            svcs = ["caddy-naive", "mita", "hydra-sub-server", "dnscrypt-proxy"]
-            for svc in svcs:
+            from vless_installer.service_registry import diagnostic_unit_names
+
+            for svc in diagnostic_unit_names():
                 rs = _run(["systemctl", "is-active", svc], capture=True, check=False)
                 if rs.stdout.strip() == "active":
                     success(f"{svc}: ● активен")
@@ -7702,9 +7723,9 @@ def do_scheduler_menu() -> None:
             "id":       "limits",
             "emoji":    "📊",
             "label":    "Лимиты трафика",
-            "schedule": "каждые 5 мин",
-            "cron":     "/etc/cron.d/xray-traffic-limits",
-            "unit":     None,
+            "schedule": "каждые 5 мин (sync-agent)",
+            "cron":     None,
+            "unit":     "hydra-sync-agent.timer",
             "log":      None,
             "configure": do_manage_traffic_limits,
         },
@@ -7712,9 +7733,9 @@ def do_scheduler_menu() -> None:
             "id":       "ttl",
             "emoji":    "⏱️",
             "label":    "TTL пользователей (авто-откл.)",
-            "schedule": "ежедневно",
-            "cron":     str(TTL_CRON_FILE),
-            "unit":     None,
+            "schedule": "каждые 5 мин (sync-agent)",
+            "cron":     None,
+            "unit":     "hydra-sync-agent.timer",
             "log":      None,
             "configure": do_manage_ttl_users,
         },
@@ -7748,26 +7769,6 @@ def do_scheduler_menu() -> None:
             "unit":     "xray-autoupdate.timer",
             "log":      None,
             "configure": None,  # управляется в меню установки
-        },
-        {
-            "id":       "rusubnets",
-            "emoji":    "RU",
-            "label":    "Обновление РУ-подсетей",
-            "schedule": "настраивается",
-            "cron":     None,
-            "unit":     "xray-ru-subnets.timer",
-            "log":      None,
-            "configure": do_manage_ru_subnet_direct,
-        },
-        {
-            "id":       "asdirect",
-            "emoji":    "AS",
-            "label":    "AS-провайдер → direct",
-            "schedule": "настраивается",
-            "cron":     None,
-            "unit":     "xray-as-direct.timer",
-            "log":      None,
-            "configure": do_manage_as_direct,
         },
         {
             "id":       "logrotate",

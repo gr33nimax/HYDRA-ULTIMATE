@@ -89,6 +89,27 @@ _ADMIN_SCRIPT = Path("/usr/local/bin/xray-tg-admin.py")
 _MONITOR_SVC = Path("/etc/cron.d/xray-tg-monitor")
 
 
+def _install_root() -> Path:
+    """Корень установки HYDRA для wrapper-скриптов и импортов в боте."""
+    try:
+        from vless_installer.runtime_paths import find_install_root
+
+        root = find_install_root()
+        if root:
+            return root
+    except Exception:
+        pass
+    return Path(__file__).resolve().parents[2]
+
+
+def _ensure_pkg_path() -> Path:
+    """Добавляет корень установки в sys.path (идемпотентно)."""
+    root = str(_install_root())
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    return Path(root)
+
+
 # ── box_renderer ───────────────────────────────────────────────────────────────
 from vless_installer.modules.box_renderer import (
     _box_top, _box_sep, _box_bottom, _box_row, _box_item,
@@ -289,10 +310,11 @@ def _generate_user_bot_script(bot_cfg: dict, notif_cfg: dict) -> str:
     """
     Генерирует легковесный скрипт-обертку для пользовательского бота.
     """
-    return """#!/usr/bin/env python3
+    root = str(_install_root())
+    return f"""#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import sys
-sys.path.insert(0, "/opt/vless-ultimate")
+sys.path.insert(0, {root!r})
 from vless_installer.modules.tg_bot import run_user_bot
 if __name__ == "__main__":
     run_user_bot()
@@ -303,10 +325,11 @@ def _generate_admin_bot_script(bot_cfg: dict) -> str:
     """
     Генерирует легковесный скрипт-обертку для админ-бота.
     """
-    return """#!/usr/bin/env python3
+    root = str(_install_root())
+    return f"""#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import sys
-sys.path.insert(0, "/opt/vless-ultimate")
+sys.path.insert(0, {root!r})
 from vless_installer.modules.tg_bot import run_admin_bot
 if __name__ == "__main__":
     run_admin_bot()
@@ -318,6 +341,7 @@ def run_admin_bot():
     from pathlib import Path
     from datetime import datetime, timezone, timedelta
 
+    _ensure_pkg_path()
     socket.setdefaulttimeout(35)
     
     bot_file = Path("/var/lib/xray-installer/tg_bot.json")
@@ -489,7 +513,7 @@ def run_admin_bot():
         udata = users_db[email]
         token = udata.get("token", "")
         
-        sys.path.insert(0, "/opt/vless-ultimate")
+        _ensure_pkg_path()
         try:
             from vless_installer.modules.user_lifecycle import get_user_cumulative_traffic
             used_bytes = get_user_cumulative_traffic(email, state)
@@ -693,7 +717,7 @@ def run_admin_bot():
             send(chat_id, text, {"inline_keyboard": inline_keyboard})
 
     def handle_traffic(chat_id):
-        sys.path.insert(0, "/opt/vless-ultimate")
+        _ensure_pkg_path()
         try:
             from vless_installer.modules.user_lifecycle import get_naive_traffic_by_user
             naive_users = get_naive_traffic_by_user()
@@ -733,7 +757,7 @@ def run_admin_bot():
             send(chat_id, "❌ Некорректное имя (разрешены буквы, цифры, точки, дефисы, подчёркивания).")
             return
             
-        sys.path.insert(0, "/opt/vless-ultimate")
+        _ensure_pkg_path()
         try:
             from vless_installer.modules.user_lifecycle import sync_user_lifecycle
             sync_user_lifecycle(username, "add")
@@ -765,7 +789,7 @@ def run_admin_bot():
             send(chat_id, "⚠️ Укажите имя: /delsub username")
             return
         username = args[0].strip()
-        sys.path.insert(0, "/opt/vless-ultimate")
+        _ensure_pkg_path()
         try:
             from vless_installer.modules.user_lifecycle import sync_user_lifecycle
             sync_user_lifecycle(username, "delete")
@@ -805,12 +829,12 @@ def run_admin_bot():
             if sub_act == "view":
                 show_user_details(chat_id, email, message_id, page)
             elif sub_act == "block":
-                sys.path.insert(0, "/opt/vless-ultimate")
+                _ensure_pkg_path()
                 from vless_installer.modules.user_lifecycle import sync_user_lifecycle
                 sync_user_lifecycle(email, "block", reason="Заблокирован администратором")
                 show_user_details(chat_id, email, message_id, page)
             elif sub_act == "unblock":
-                sys.path.insert(0, "/opt/vless-ultimate")
+                _ensure_pkg_path()
                 from vless_installer.modules.user_lifecycle import sync_user_lifecycle
                 sync_user_lifecycle(email, "unblock")
                 show_user_details(chat_id, email, message_id, page)
@@ -828,7 +852,7 @@ def run_admin_bot():
                 ]
                 edit(chat_id, message_id, text, {"inline_keyboard": inline_keyboard})
             elif sub_act == "delconfirm":
-                sys.path.insert(0, "/opt/vless-ultimate")
+                _ensure_pkg_path()
                 from vless_installer.modules.user_lifecycle import sync_user_lifecycle
                 sync_user_lifecycle(email, "delete")
                 _purge_bot_user_binding(email)
@@ -847,7 +871,7 @@ def run_admin_bot():
                     udata["expires_at"] = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
                 _save_state(st)
                 
-                sys.path.insert(0, "/opt/vless-ultimate")
+                _ensure_pkg_path()
                 from vless_installer.modules.user_lifecycle import sync_user_lifecycle
                 sync_user_lifecycle(email, "unblock" if udata.get("is_blocked") else "add")
                 show_user_details(chat_id, email, message_id, page)
@@ -864,7 +888,7 @@ def run_admin_bot():
                 udata["limit_gb"] = gb
                 _save_state(st)
                 
-                sys.path.insert(0, "/opt/vless-ultimate")
+                _ensure_pkg_path()
                 from vless_installer.modules.user_lifecycle import sync_user_lifecycle
                 if udata.get("is_blocked"):
                     sync_user_lifecycle(email, "unblock")
@@ -957,7 +981,7 @@ def run_admin_bot():
                         udata["expires_at"] = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
                     _save_state(st)
                     
-                    sys.path.insert(0, "/opt/vless-ultimate")
+                    _ensure_pkg_path()
                     from vless_installer.modules.user_lifecycle import sync_user_lifecycle
                     sync_user_lifecycle(email, "unblock" if udata.get("is_blocked") else "add")
                     
@@ -978,7 +1002,7 @@ def run_admin_bot():
                     udata["limit_gb"] = gb
                     _save_state(st)
                     
-                    sys.path.insert(0, "/opt/vless-ultimate")
+                    _ensure_pkg_path()
                     from vless_installer.modules.user_lifecycle import sync_user_lifecycle
                     if udata.get("is_blocked"):
                         sync_user_lifecycle(email, "unblock")
@@ -1158,6 +1182,7 @@ def run_user_bot():
     from pathlib import Path
     from datetime import datetime, timezone, timedelta
 
+    _ensure_pkg_path()
     socket.setdefaulttimeout(35)
     
     bot_file = Path("/var/lib/xray-installer/tg_bot.json")
@@ -1281,7 +1306,7 @@ def run_user_bot():
         udata = users_db.get(email, {})
 
         if not udata.get("token"):
-            sys.path.insert(0, "/opt/vless-ultimate")
+            _ensure_pkg_path()
             try:
                 from vless_installer.modules.user_lifecycle import sync_user_lifecycle
                 sync_user_lifecycle(email, "add")
@@ -1312,7 +1337,7 @@ def run_user_bot():
         sub_url = f"https://{domain_to_use}/sub/{token_str}"
         sub_url_pc = f"{sub_url}/pc"
 
-        sys.path.insert(0, "/opt/vless-ultimate")
+        _ensure_pkg_path()
         try:
             from vless_installer.modules.user_lifecycle import get_user_cumulative_traffic
             used_bytes = get_user_cumulative_traffic(email, st)
@@ -1392,7 +1417,7 @@ def run_user_bot():
             send(chat_id, "❌ <b>Ваша подписка заблокирована или истекла.</b>\nДля продления обратитесь к администратору.")
             return
 
-        sys.path.insert(0, "/opt/vless-ultimate")
+        _ensure_pkg_path()
         try:
             from vless_installer.modules.user_lifecycle import get_user_cumulative_traffic
             used_bytes = get_user_cumulative_traffic(email, st)
@@ -1515,7 +1540,7 @@ def run_user_bot():
                 if tag in sub_tokens and tag != f"tg_{uid}":
                     tag = f"{tag}_{uid}"
                     
-                sys.path.insert(0, "/opt/vless-ultimate")
+                _ensure_pkg_path()
                 from vless_installer.modules.user_lifecycle import sync_user_lifecycle
                 try:
                     sync_user_lifecycle(tag, "add")
