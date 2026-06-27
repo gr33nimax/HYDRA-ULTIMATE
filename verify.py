@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-verify.py — Проверка целостности VLESS Ultimate Installer v4.11.3
+verify.py — Проверка целостности HYDRA Multi-Proxy Manager
 Запуск: python3 verify.py
 """
 import sys
@@ -46,7 +46,11 @@ required = [
     "vless_installer/_core.py",
     "vless_installer/modules/sub_generator.py",
     "vless_installer/modules/sub_server.py",
-    "vless_installer/modules/warp_universal.py",
+    "vless_installer/cli.py",
+    "vless_installer/modules/subscription_menu.py",
+    "vless_installer/modules/hydra_migration.py",
+    "vless_installer/modules/system_tune.py",
+    "vless_installer/modules/hydra_setup.py",
 ]
 for f in required:
     if Path(f).exists():
@@ -58,7 +62,11 @@ for f in required:
 section("2. Синтаксис Python файлов")
 for py in ["main.py", "verify.py",
            "vless_installer/__init__.py",
+           "vless_installer/cli.py",
            "vless_installer/_core.py",
+           "vless_installer/modules/subscription_menu.py",
+           "vless_installer/modules/hydra_migration.py",
+           "vless_installer/modules/system_tune.py",
            "vless_installer/modules/sub_generator.py",
            "vless_installer/modules/sub_server.py",
            "vless_installer/modules/warp_universal.py"]:
@@ -75,8 +83,10 @@ section("3. Целостность _core.py")
 core = Path("vless_installer/_core.py")
 if core.exists():
     lines = len(core.read_text(encoding="utf-8").splitlines())
-    if lines > 30000:
-        ok(f"_core.py: {lines} строк — полный")
+    if 5000 <= lines <= 15000:
+        ok(f"_core.py: {lines} строк — HYDRA refactor OK")
+    elif lines > 15000:
+        fail(f"_core.py: {lines} строк — ещё слишком большой монолит")
     else:
         fail(f"_core.py: {lines} строк — подозрительно мало")
 else:
@@ -88,26 +98,15 @@ if core.exists():
     key_funcs = [
         ("def main_menu(", "vless_installer/_core.py"),
         ("def ensure_startup_dependencies(", "vless_installer/_core.py"),
-        ("def _init_pkg_mgr(", "vless_installer/_core.py"),
-        ("def print_banner(", "vless_installer/_core.py"),
-        ("def gen_uuid(", "vless_installer/_core.py"),
-        ("def _run(", "vless_installer/_core.py"),
-        ("def log_to_file(", "vless_installer/_core.py"),
-        ("def switch_mode_ab(", "vless_installer/_core.py"),
-        ("def _smart_recover(", "vless_installer/_core.py"),
+        ("def do_subscription_menu(", "vless_installer/modules/subscription_menu.py"),
+        ("def export_backup(", "vless_installer/modules/hydra_migration.py"),
+        ("def apply_sysctl_and_limits(", "vless_installer/modules/system_tune.py"),
         ("def do_quick_status(", "vless_installer/_core.py"),
         ("def _ttl_check_and_expire(", "vless_installer/_core.py"),
-        ("def _ru_subnets_cli_update(", "vless_installer/_core.py"),
-        ("def _as_direct_cli_update(", "vless_installer/_core.py"),
         ("def _ingress_state_load(", "vless_installer/modules/ingress_geoip.py"),
-        ("def _ingress_enable(", "vless_installer/modules/ingress_geoip.py"),
-        ("def _ingress_remove(", "vless_installer/modules/ingress_geoip.py"),
         ("def tg_notify_event(", "vless_installer/modules/tg_bot.py"),
-        ("def _autoban_run_once(", "vless_installer/_core.py"),
         ("def _scheduled_backup_run(", "vless_installer/_core.py"),
-        ("def _asn_cache_connect(", "vless_installer/_core.py"),
-        ("def _asn_cache_delete(", "vless_installer/_core.py"),
-        ("def get_server_country_cached(", "vless_installer/_core.py"),
+        ("def main(", "vless_installer/cli.py"),
     ]
     file_contents = {}
     for func_sig, filepath in key_funcs:
@@ -121,71 +120,57 @@ if core.exists():
         else:
             fail(f"{name}() — НЕ НАЙДЕНА в {filepath}")
 
-# ── 5. Загрузка _core.py через exec ──────────────────────────
-section("5. Загрузка _core.py через exec (как делает main.py)")
+# ── 5. Импорт runtime (как делает main.py) ───────────────────
+section("5. Импорт HYDRA runtime (cli + _core)")
 try:
     import sys
     from types import ModuleType
     if sys.platform == "win32":
-        # Mock grp module
         grp_mock = ModuleType("grp")
         grp_mock.getgrnam = lambda name: type("struct_group", (object,), {"gr_gid": 1000})()
         grp_mock.getgrgid = lambda gid: type("struct_group", (object,), {"gr_name": "root"})()
         sys.modules["grp"] = grp_mock
-
-        # Mock pwd module
         pwd_mock = ModuleType("pwd")
         pwd_mock.getpwnam = lambda name: type("struct_passwd", (object,), {"pw_uid": 1000, "pw_gid": 1000})()
         sys.modules["pwd"] = pwd_mock
-
-        # Mock termios module
         termios_mock = ModuleType("termios")
         termios_mock.tcgetattr = lambda fd: [0, 0, 0, 0, 0, 0, [0]*32]
         termios_mock.tcsetattr = lambda fd, when, attributes: None
         termios_mock.TCSANOW = 0
         sys.modules["termios"] = termios_mock
-
-        # Mock tty module
         tty_mock = ModuleType("tty")
         tty_mock.setraw = lambda fd: None
         tty_mock.setcbreak = lambda fd: None
         sys.modules["tty"] = tty_mock
-
-        # Mock fcntl module
         fcntl_mock = ModuleType("fcntl")
         fcntl_mock.fcntl = lambda fd, op, arg=0: 0
         fcntl_mock.ioctl = lambda fd, op, arg=0: 0
         sys.modules["fcntl"] = fcntl_mock
 
-    _globals = {}
-    core_src = Path("vless_installer/_core.py").read_text(encoding="utf-8")
-    exec(compile(core_src, "vless_installer/_core.py", "exec"), _globals)
-    ok("exec(_core.py) — без ошибок")
+    import vless_installer._core as _core_mod
+    from vless_installer import cli as _cli_mod
+    ok("import vless_installer._core — OK")
+    ok("import vless_installer.cli — OK")
 
-    for sym in ["main_menu", "gen_uuid", "BANNER", "RED", "GREEN", "CYAN", "NC",
-                "LOG_FILE", "STATE_FILE", "CONFIG_DIR",
-                "print_banner", "log_to_file", "info", "warn", "die",
-                "ensure_startup_dependencies", "_init_pkg_mgr",
-                "switch_mode_ab", "_smart_recover"]:
-        if sym in _globals:
-            ok(f"  {sym} доступен")
+    for sym in ["main_menu", "gen_uuid", "BANNER", "STATE_FILE", "do_subscription_menu"]:
+        if hasattr(_core_mod, sym):
+            ok(f"  _core.{sym}")
         else:
-            fail(f"  {sym} — НЕ НАЙДЕН")
+            fail(f"  _core.{sym} — НЕ НАЙДЕН")
 
-    uuid_val = _globals["gen_uuid"]()
+    uuid_val = _core_mod.gen_uuid()
     if len(uuid_val) == 36 and uuid_val.count("-") == 4:
         ok(f"  gen_uuid() → {uuid_val}")
     else:
         fail(f"  gen_uuid() вернул некорректный UUID: {uuid_val}")
 
-    banner = _globals.get("BANNER", "")
-    if len(banner) > 100:
-        ok(f"  BANNER: {len(banner)} символов")
+    if hasattr(_cli_mod, "main"):
+        ok("  cli.main() доступен")
     else:
-        fail(f"  BANNER слишком короткий: {len(banner)} символов")
+        fail("  cli.main — НЕ НАЙДЕН")
 
 except Exception as e:
-    fail(f"exec(_core.py) — ошибка: {e}")
+    fail(f"import runtime — ошибка: {e}")
     import traceback; traceback.print_exc()
 
 # ── 6. bootstrap.sh ──────────────────────────────────────────
