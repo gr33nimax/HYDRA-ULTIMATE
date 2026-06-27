@@ -3279,60 +3279,17 @@ def _mtu_get_iface() -> str:
     return "eth0"
 
 
-def _mtu_apply(iface: str, mtu: int, nodes: list) -> None:
-    """
-    Применяет MTU на интерфейс и ограничение MSS в iptables
-    для каждой exit-ноды (только для трафика каскада).
-    """
-    # 1. Устанавливаем MTU на интерфейсе
-    _run(["ip", "link", "set", iface, "mtu", str(mtu)], check=False, quiet=True)
-
-    # 2. MSS clamping для каждой exit-ноды
-    mss = mtu - 40  # TCP/IP заголовки: 20 IP + 20 TCP
-    for nd in nodes:
-        host = nd.get("host", "")
-        port = str(nd.get("port", 443))
-        if not host:
-            continue
-        try:
-            ip = socket.gethostbyname(host)
-        except Exception:
-            continue
-        # Удалим старое правило если есть, потом добавим новое
-        _run([
-            "iptables", "-t", "mangle", "-D", "FORWARD",
-            "-d", ip, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN",
-            "-j", "TCPMSS", "--set-mss", str(mss),
-        ], check=False, quiet=True)
-        _run([
-            "iptables", "-t", "mangle", "-A", "FORWARD",
-            "-d", ip, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN",
-            "-j", "TCPMSS", "--set-mss", str(mss),
-        ], check=False, quiet=True)
-
-    # 3. Общий FORWARD MSS clamping
-    _run([
-        "iptables", "-t", "mangle", "-C", "FORWARD",
-        "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN",
-        "-j", "TCPMSS", "--clamp-mss-to-pmtu",
-    ], check=False, quiet=True)
+def _mtu_apply(iface: str, mtu: int, nodes: list | None = None) -> None:
+    """Применяет MTU на интерфейс и MSS clamp (HYDRA)."""
+    from vless_installer.modules.network_mtu import apply_link_mtu, apply_mss_clamp
+    apply_link_mtu(iface, mtu)
+    apply_mss_clamp(mtu)
 
 
-def _mtu_remove_rules(nodes: list) -> None:
-    """Удаляет MSS-правила iptables для всех нод."""
-    for nd in nodes:
-        host = nd.get("host", "")
-        if not host:
-            continue
-        try:
-            ip = socket.gethostbyname(host)
-        except Exception:
-            continue
-        _run([
-            "iptables", "-t", "mangle", "-D", "FORWARD",
-            "-d", ip, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN",
-            "-j", "TCPMSS", "--set-mss", "1400",
-        ], check=False, quiet=True)
+def _mtu_remove_rules(nodes: list | None = None) -> None:
+    """Удаляет MSS-правила iptables."""
+    from vless_installer.modules.network_mtu import clear_mss_clamp
+    clear_mss_clamp()
 
 
 def _mtu_state_load() -> dict:
@@ -3401,9 +3358,9 @@ def do_mtu_tuning() -> None:
         _box_row(f"  {DIM}Последний тюнинг: {prev_ts}  →  MTU {prev_mtu}{NC}")
 
     _box_sep()
-    _box_row(f"  {CYAN}[1]{NC}  Запустить зондирование и применить")
-    _box_row(f"  {CYAN}[2]{NC}  Только зондирование (без применения)")
-    _box_row(f"  {CYAN}[3]{NC}  Сбросить — восстановить MTU 1500 и удалить MSS-правила")
+    _box_row(f"  {CYAN}[1]{NC}  Мастер стека: зондировать и применить  {DIM}(uplink+WARP+AWG+Mieru){NC}")
+    _box_row(f"  {CYAN}[2]{NC}  Мастер стека: только план  {DIM}(без применения){NC}")
+    _box_row(f"  {CYAN}[3]{NC}  Сбросить MTU/MSS  {DIM}(uplink 1500, WARP 1420){NC}")
     _box_row(f"  {CYAN}[4]{NC}  Показать текущие MSS-правила iptables")
     _box_row(f"  {CYAN}[5]{NC}  Диагностика MTU по маршруту  {DIM}(tracepath + ping sweep){NC}")
 
@@ -3424,16 +3381,25 @@ def do_mtu_tuning() -> None:
         return
 
     if ch == "3":
-        # Сброс
+        from vless_installer.modules.network_mtu import reset_stack_mtu
         os.system("clear")
         print()
         _box_top("📡  MTU — СБРОС")
-        _run(["ip", "link", "set", iface, "mtu", "1500"], check=False, quiet=True)
-        _mtu_remove_rules(nodes)
-        _MTU_STATE_FILE.unlink(missing_ok=True)
-        _box_ok(f"MTU {iface} восстановлен → 1500, MSS-правила удалены")
+        msgs = reset_stack_mtu()
+        for m in msgs:
+            _box_ok(m)
         _box_bottom()
         input(f"{BLUE}Нажмите Enter...{NC}")
+        return
+
+    if ch == "1":
+        from vless_installer.modules.network_mtu import do_mtu_stack_wizard
+        do_mtu_stack_wizard(apply=True)
+        return
+
+    if ch == "2":
+        from vless_installer.modules.network_mtu import do_mtu_stack_wizard
+        do_mtu_stack_wizard(apply=False)
         return
 
     if ch == "4":
@@ -3455,75 +3421,8 @@ def do_mtu_tuning() -> None:
         input(f"{BLUE}Нажмите Enter...{NC}")
         return
 
-    # ── Зондирование ─────────────────────────────────────────────────────────
-    os.system("clear")
-    print()
-    _box_top("📡  ЗОНДИРОВАНИЕ MTU")
-    _box_row(f"  {DIM}Бинарный поиск максимального MTU с DF-битом (не фрагментировать){NC}")
-    _box_row(f"  {DIM}Диапазон: 576–1500 байт  |  ~12 ping-пробов на хост{NC}")
-    _box_sep()
-
-    results = []
-    for target in probe_targets:
-        host  = target["host"]
-        label = target["label"]
-        _box_row(f"  Зондирую {CYAN}{label}{NC}  ({DIM}{host}{NC})...")
-
-        mtu = _mtu_probe(host, max_mtu=1500, min_mtu=576)
-        if mtu > 0:
-            col = GREEN if mtu >= 1400 else YELLOW if mtu >= 1200 else RED
-            _box_row(f"    {col}MTU = {mtu}{NC}  {DIM}(MSS = {mtu-40}){NC}")
-            results.append(mtu)
-        else:
-            _box_row(f"    {RED}Недоступен / ICMP заблокирован{NC}")
-
-    _box_sep()
-
-    if not results:
-        _box_warn("Ни один хост не ответил на ICMP DF-probe.")
-        _box_row(f"  {DIM}Возможные причины: файрволл блокирует ICMP на стороне хоста{NC}")
-        _box_row(f"  {DIM}Рекомендуется использовать стандартный MTU 1420 для VPN-туннелей{NC}")
-        optimal = 1420
-    else:
-        # Берём минимальный из всех нод — гарантирует отсутствие фрагментации
-        optimal = min(results)
-        _box_row(f"  Результаты: {DIM}{results}{NC}")
-
-    _box_row(f"  {BOLD}Оптимальный MTU: {GREEN}{optimal}{NC}  {DIM}(MSS = {optimal - 40}){NC}")
-
-    if ch == "2":
-        # Только показ, без применения
-        _box_row()
-        _box_row(f"  {DIM}Режим «только зондирование» — изменения не применены{NC}")
-        _box_row(f"  {DIM}Для применения выберите пункт [1]{NC}")
-        _box_bottom()
-        input(f"{BLUE}Нажмите Enter...{NC}")
-        return
-
-    # ── Применение ───────────────────────────────────────────────────────────
-    _box_row()
-    _box_row(f"  Применяю MTU {CYAN}{optimal}{NC} на интерфейс {CYAN}{iface}{NC}...")
-    _mtu_apply(iface, optimal, nodes if nodes else [])
-
-    # Делаем изменение постоянным через /etc/network/interfaces или netplan
-    _mtu_persist(iface, optimal)
-
-    # Сохраняем в state
-    _mtu_state_save({
-        "applied_mtu":   optimal,
-        "interface":     iface,
-        "mss":           optimal - 40,
-        "probed_hosts":  [t["host"] for t in probe_targets],
-        "probe_results": results,
-        "timestamp":     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    })
-
-    _box_ok(f"MTU {iface} = {optimal}  |  MSS clamping = {optimal - 40}")
-    _box_row(f"  {DIM}Изменение сохранено в {_MTU_STATE_FILE}{NC}")
-    _box_bottom()
-
-    log_to_file("INFO", f"MTU tuning: iface={iface}, mtu={optimal}, mss={optimal-40}, hosts={[t['host'] for t in probe_targets]}")
-    input(f"{BLUE}Нажмите Enter...{NC}")
+    warn("Неверный выбор.")
+    time.sleep(1)
 
 
 def _mtu_persist(iface: str, mtu: int) -> None:

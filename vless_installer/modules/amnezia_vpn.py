@@ -1148,6 +1148,7 @@ def do_amnezia_vpn_menu() -> None:
                 _box_item("10", f"{GREEN}Добавить пользователя (клиента){NC}")
                 _box_item("11", f"{RED}Удалить пользователя (клиента){NC}")
             _box_item("9", f"{RED}Удалить контейнер {name}{NC}")
+            _box_item("M", f"{GREEN}📏 Мастер MTU — применить к AWG/WARP стеку{NC}")
             
         _box_back()
         _box_bottom()
@@ -1322,6 +1323,10 @@ def do_amnezia_vpn_menu() -> None:
                     cfg = configs[int(sel)-1]
                     _show_single_client_config(cfg)
             
+        elif ch == "m":
+            from vless_installer.modules.network_mtu import do_mtu_stack_wizard
+            do_mtu_stack_wizard(apply=True)
+
         elif ch == "9":
             try:
                 ans = input(f"  {RED}Вы действительно хотите УДАЛИТЬ контейнер amnezia-awg2? [y/N]:{NC} ").strip().lower()

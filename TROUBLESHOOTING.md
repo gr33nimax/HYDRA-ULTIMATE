@@ -32,7 +32,14 @@ sudo python3 main.py   # → 3 → 5 → 3  (DNS с сервера)
 
 ## HYDRA: AWG + WARP — обрывы / низкая скорость
 
-**Рекомендация:** при одновременном AWG и WARP ставьте **MTU 1280** на AWG-клиенте. Подсказка в меню **8 → AmneziaVPN** (строка MTU) или **3 → 5 → 1**.
+**Рекомендация:** при одновременном AWG и WARP ставьте **MTU 1280** на AWG-клиенте.
+
+**Автоматически (v0.5.0-rc1+):** меню **3 → M** или **3 → 5 → 5** или **8 → AmneziaVPN → M** — мастер:
+1. Зондирует path-MTU до 1.1.1.1 / 8.8.8.8
+2. Строит план для uplink, `wg-warp`, AWG в Docker, Mieru
+3. По подтверждению применяет: `ip link set mtu`, патч `awg0.conf` и клиентских `.conf`, `server.json` mita, MSS clamp
+
+Подсказка после применения AWG: `/var/lib/xray-installer/awg_mtu_hint.json`
 
 ---
 

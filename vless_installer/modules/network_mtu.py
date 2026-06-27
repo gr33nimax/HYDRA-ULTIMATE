@@ -230,6 +230,42 @@ def apply_link_mtu(iface: str, mtu: int) -> bool:
     return r.returncode == 0
 
 
+def persist_link_mtu(iface: str, mtu: int) -> None:
+    """Сохраняет MTU uplink в netplan или /etc/network/interfaces."""
+    netplan_dir = Path("/etc/netplan")
+    if netplan_dir.exists():
+        for yf in list(netplan_dir.glob("*.yaml")) + list(netplan_dir.glob("*.yml")):
+            try:
+                txt = yf.read_text(encoding="utf-8")
+                if iface in txt and f"mtu: {mtu}" not in txt:
+                    new_txt = re.sub(
+                        rf"((?:ethernets|wifis|bonds|vlans):\s*\n\s+{re.escape(iface)}:.*?\n)",
+                        lambda m: m.group(0) + f"      mtu: {mtu}\n",
+                        txt,
+                        flags=re.DOTALL,
+                    )
+                    if new_txt != txt:
+                        yf.write_text(new_txt, encoding="utf-8")
+                        _run(["netplan", "apply"], check=False)
+                        return
+            except Exception:
+                pass
+    interfaces_file = Path("/etc/network/interfaces")
+    if interfaces_file.exists():
+        try:
+            txt = interfaces_file.read_text(encoding="utf-8")
+            if f"iface {iface}" in txt and f"mtu {mtu}" not in txt:
+                new_txt = re.sub(
+                    rf"(iface {re.escape(iface)}[^\n]*)",
+                    lambda m: m.group(0) + f"\n    mtu {mtu}",
+                    txt,
+                )
+                if new_txt != txt:
+                    interfaces_file.write_text(new_txt, encoding="utf-8")
+        except Exception:
+            pass
+
+
 def apply_mss_clamp(mtu: int, table: str = "mangle", chain: str = "FORWARD") -> bool:
     """TCP MSS clamp: MSS = MTU - 40 (IPv4)."""
     mss = max(mtu - 40, 536)
@@ -319,6 +355,7 @@ def do_network_diagnostics_menu() -> None:
         _box_item("2", "Матрица path-MTU (ping DF)")
         _box_item("3", "Проверка исходящего DNS с сервера")
         _box_item("4", "Политика DNSCrypt + WARP")
+        _box_item("5", f"{GREEN}Мастер MTU — зондирование и применение ко всему стеку{NC}")
         _box_row()
         _box_back()
         _box_bottom()
@@ -393,5 +430,406 @@ def do_network_diagnostics_menu() -> None:
             _box_bottom()
             input("\nНажмите Enter...")
 
+        elif ch == "5":
+            do_mtu_stack_wizard(apply=True)
+
         else:
             time.sleep(0.5)
+
+
+# =============================================================================
+#  Зондирование + применение MTU по всему стеку HYDRA
+# =============================================================================
+
+_PROBE_HOSTS = (
+    ("1.1.1.1", "Cloudflare"),
+    ("8.8.8.8", "Google DNS"),
+    ("208.67.222.222", "OpenDNS"),
+)
+
+_AWG_MTU_HINT = Path("/var/lib/xray-installer/awg_mtu_hint.json")
+_MIERU_SERVER_CFG = Path("/etc/mita/server.json")
+
+
+def get_warp_interface() -> str | None:
+    try:
+        from vless_installer.modules.warp_universal import detect_warp_interface
+        return detect_warp_interface()
+    except Exception:
+        pass
+    for iface in ("wg-warp", "warp0", "CloudflareWARP", "tun0"):
+        r = _run(["ip", "link", "show", iface], check=False)
+        if r.returncode == 0:
+            return iface
+    return None
+
+
+def get_awg_container_name() -> str | None:
+    try:
+        r = _run(["docker", "ps", "-a", "--format", "{{.Names}}"], check=False, timeout=10)
+        if r.returncode != 0:
+            return None
+        names = [n.strip() for n in (r.stdout or "").splitlines() if n.strip()]
+        for cand in ("amnezia-awg2", "amnezia-awg", "amnezia-wg"):
+            if cand in names:
+                return cand
+        for n in names:
+            if n.startswith("amnezia-") and ("awg" in n or "wg" in n):
+                return n
+    except Exception:
+        pass
+    return None
+
+
+def probe_uplink_mtu() -> tuple[int, list[dict]]:
+    """Path-MTU до внешних узлов; возвращает (оптимальный MTU, детали)."""
+    details: list[dict] = []
+    mtus: list[int] = []
+    for host, label in _PROBE_HOSTS:
+        m = probe_path_mtu(host)
+        details.append({"host": host, "label": label, "mtu": m})
+        if m > 0:
+            mtus.append(m)
+    optimal = min(mtus) if mtus else 1420
+    return optimal, details
+
+
+def compute_stack_mtu_plan(uplink_mtu: int, stack: dict[str, bool] | None = None) -> list[dict]:
+    """План: что и куда применить (uplink, WARP, AWG, Mieru, MSS)."""
+    if stack is None:
+        stack = detect_network_stack()
+    plan: list[dict] = []
+
+    main_iface = get_default_iface()
+    plan.append({
+        "component": "uplink",
+        "target": main_iface,
+        "mtu": uplink_mtu,
+        "mss": max(uplink_mtu - 40, 536),
+        "action": "ip_link",
+        "desc": f"Основной интерфейс {main_iface}",
+    })
+
+    warp_iface = get_warp_interface()
+    if stack.get("warp") and warp_iface:
+        warp_mtu = min(uplink_mtu - 80, 1420)
+        if stack.get("awg"):
+            warp_mtu = min(warp_mtu, 1280)
+        warp_mtu = max(int(warp_mtu), 1280)
+        plan.append({
+            "component": "warp",
+            "target": warp_iface,
+            "mtu": warp_mtu,
+            "mss": max(warp_mtu - 40, 536),
+            "action": "ip_link",
+            "desc": f"WARP {warp_iface}",
+        })
+
+    if stack.get("awg"):
+        awg_mtu = 1280 if stack.get("warp") else min(uplink_mtu - 80, 1420)
+        awg_mtu = max(int(awg_mtu), 1280)
+        cname = get_awg_container_name() or "amnezia"
+        plan.append({
+            "component": "awg",
+            "target": cname,
+            "mtu": awg_mtu,
+            "mss": max(awg_mtu - 40, 536),
+            "action": "awg_docker",
+            "desc": f"AWG в Docker ({cname}): awg0 + клиентские .conf",
+        })
+
+    if stack.get("mieru") and _MIERU_SERVER_CFG.exists():
+        mieru_mtu = min(uplink_mtu - 60, 1400)
+        mieru_mtu = max(int(mieru_mtu), 1200)
+        plan.append({
+            "component": "mieru",
+            "target": "mita",
+            "mtu": mieru_mtu,
+            "mss": max(mieru_mtu - 40, 536),
+            "action": "mieru_config",
+            "desc": "Mieru server.json + restart mita",
+        })
+
+    plan.append({
+        "component": "mss",
+        "target": "FORWARD",
+        "mtu": uplink_mtu,
+        "mss": max(uplink_mtu - 40, 536),
+        "action": "mss_clamp",
+        "desc": "iptables TCPMSS на FORWARD",
+    })
+    return plan
+
+
+def _patch_wg_conf_mtu(conf_text: str, mtu: int) -> str:
+    """Добавляет/заменяет MTU = в секции [Interface]."""
+    lines = conf_text.splitlines()
+    out: list[str] = []
+    in_iface = False
+    found_mtu = False
+    for line in lines:
+        stripped = line.strip()
+        low = stripped.lower()
+        if low == "[interface]":
+            in_iface = True
+            found_mtu = False
+            out.append(line)
+            continue
+        if stripped.startswith("[") and in_iface:
+            if not found_mtu:
+                out.append(f"MTU = {mtu}")
+            in_iface = False
+            found_mtu = False
+            out.append(line)
+            continue
+        if in_iface and low.startswith("mtu"):
+            out.append(f"MTU = {mtu}")
+            found_mtu = True
+            continue
+        out.append(line)
+    if in_iface and not found_mtu:
+        out.append(f"MTU = {mtu}")
+    return "\n".join(out) + ("\n" if out else "")
+
+
+def apply_awg_mtu_in_container(mtu: int) -> tuple[bool, str]:
+    """MTU на awg0 внутри контейнера + правка awg0.conf и клиентских конфигов."""
+    name = get_awg_container_name()
+    if not name:
+        return False, "контейнер AWG не найден"
+
+    msgs: list[str] = []
+    ok_any = False
+
+    for wg_iface in ("awg0", "wg0"):
+        r = _run(["docker", "exec", name, "ip", "link", "show", wg_iface], check=False, timeout=15)
+        if r.returncode != 0:
+            continue
+        r2 = _run(
+            ["docker", "exec", name, "ip", "link", "set", "dev", wg_iface, "mtu", str(mtu)],
+            check=False, timeout=15,
+        )
+        if r2.returncode == 0:
+            msgs.append(f"{wg_iface} mtu={mtu}")
+            ok_any = True
+
+    for conf_name in ("awg0.conf", "wg0.conf"):
+        conf_path = f"/opt/amnezia/awg/{conf_name}"
+        r = _run(["docker", "exec", name, "cat", conf_path], check=False, timeout=15)
+        if r.returncode != 0:
+            continue
+        patched = _patch_wg_conf_mtu(r.stdout, mtu)
+        if patched == r.stdout:
+            continue
+        proc = subprocess.run(
+            ["docker", "exec", "-i", name, "tee", conf_path],
+            input=patched, text=True, capture_output=True, timeout=30,
+        )
+        if proc.returncode == 0:
+            msgs.append(f"патч {conf_name}")
+            ok_any = True
+
+    r_files = _run(
+        ["docker", "exec", name, "find", "/opt/amnezia/awg/", "-name", "*.conf"],
+        check=False, timeout=20,
+    )
+    if r_files.returncode == 0:
+        for fpath in (r_files.stdout or "").splitlines():
+            fpath = fpath.strip()
+            if not fpath or fpath.endswith(("awg0.conf", "wg0.conf")):
+                continue
+            r_cat = _run(["docker", "exec", name, "cat", fpath], check=False, timeout=15)
+            if r_cat.returncode != 0 or "[Interface]" not in r_cat.stdout:
+                continue
+            patched = _patch_wg_conf_mtu(r_cat.stdout, mtu)
+            if patched == r_cat.stdout:
+                continue
+            proc = subprocess.run(
+                ["docker", "exec", "-i", name, "tee", fpath],
+                input=patched, text=True, capture_output=True, timeout=30,
+            )
+            if proc.returncode == 0:
+                msgs.append(f"клиент {Path(fpath).name}")
+                ok_any = True
+
+    _AWG_MTU_HINT.parent.mkdir(parents=True, exist_ok=True)
+    _AWG_MTU_HINT.write_text(
+        json.dumps({
+            "mtu": mtu,
+            "container": name,
+            "updated": datetime.now().isoformat(),
+            "note": "Укажите MTU = {mtu} в AmneziaVPN на клиенте, если приложение не подхватило из .conf",
+        }, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    if ok_any:
+        return True, "; ".join(msgs)
+    return False, "awg0/wg0 не найден в контейнере"
+
+
+def apply_mieru_mtu(mtu: int) -> tuple[bool, str]:
+    """Обновляет mtu в server.json и перезапускает mita."""
+    if not _MIERU_SERVER_CFG.exists():
+        return False, "server.json не найден — сначала установите Mieru"
+    try:
+        cfg = json.loads(_MIERU_SERVER_CFG.read_text(encoding="utf-8"))
+    except Exception as e:
+        return False, f"не читается server.json: {e}"
+
+    cfg["mtu"] = mtu
+    cfg_text = json.dumps(cfg, indent=2, ensure_ascii=False)
+    _MIERU_SERVER_CFG.write_text(cfg_text, encoding="utf-8")
+    tmp_cfg = Path("/etc/mita/server.json")
+    tmp_cfg.parent.mkdir(parents=True, exist_ok=True)
+    tmp_cfg.write_text(cfg_text, encoding="utf-8")
+    tmp_cfg.chmod(0o600)
+
+    mita = Path("/usr/local/bin/mita")
+    if mita.exists():
+        r = _run([str(mita), "apply", "config", str(tmp_cfg)], check=False, timeout=60)
+        if r.returncode != 0:
+            err = (r.stderr or r.stdout or "")[:200]
+            return False, f"mita apply config: {err}"
+
+    _run(["systemctl", "restart", "mita"], check=False)
+    return True, f"server.json mtu={mtu}, mita перезапущен"
+
+
+def apply_plan_item(item: dict) -> tuple[bool, str]:
+    action = item.get("action", "")
+    mtu = int(item.get("mtu", 1500))
+    target = item.get("target", "")
+
+    if action == "ip_link":
+        ok = apply_link_mtu(target, mtu)
+        return ok, f"{target} → MTU {mtu}" if ok else f"не удалось: {target}"
+
+    if action == "awg_docker":
+        return apply_awg_mtu_in_container(mtu)
+
+    if action == "mieru_config":
+        return apply_mieru_mtu(mtu)
+
+    if action == "mss_clamp":
+        ok = apply_mss_clamp(mtu)
+        return ok, f"MSS clamp {mtu - 40} на FORWARD"
+
+    return False, f"неизвестное действие: {action}"
+
+
+def apply_stack_mtu_plan(plan: list[dict]) -> list[dict]:
+    """Применяет план; возвращает список {component, ok, message}."""
+    results: list[dict] = []
+    for item in plan:
+        ok, msg = apply_plan_item(item)
+        results.append({
+            "component": item.get("component", "?"),
+            "ok": ok,
+            "message": msg,
+        })
+    return results
+
+
+def reset_stack_mtu() -> list[str]:
+    """Сброс uplink/WARP MTU и MSS-правил."""
+    msgs: list[str] = []
+    main = get_default_iface()
+    if apply_link_mtu(main, DEFAULT_MTU):
+        msgs.append(f"{main} → 1500")
+    warp = get_warp_interface()
+    if warp and apply_link_mtu(warp, 1420):
+        msgs.append(f"{warp} → 1420")
+    clear_mss_clamp()
+    msgs.append("MSS rules cleared")
+    if _MSS_STATE.exists():
+        _MSS_STATE.unlink()
+    return msgs
+
+
+def do_mtu_stack_wizard(apply: bool = True) -> None:
+    """
+    Мастер: зондирование uplink → план по стеку → (опционально) применение.
+    """
+    import os
+
+    from vless_installer.modules.box_renderer import (
+        BLUE, BOLD, CYAN, DIM, GREEN, NC, RED, YELLOW,
+        _box_bottom, _box_row, _box_sep, _box_top,
+    )
+
+    stack = detect_network_stack()
+    os.system("clear")
+    print()
+    _box_top("📡  МАСТЕР MTU — HYDRA STACK")
+    _box_row(f"  {DIM}Стек: {CYAN}{stack_label(stack)}{NC}")
+    _box_row(f"  {DIM}Зондирование path-MTU (ICMP DF)...{NC}")
+    _box_sep()
+
+    uplink_mtu, probe_details = probe_uplink_mtu()
+    for row in probe_details:
+        m = row["mtu"]
+        if m <= 0:
+            col, txt = RED, "н/д"
+        elif m >= 1400:
+            col, txt = GREEN, str(m)
+        elif m >= 1200:
+            col, txt = YELLOW, str(m)
+        else:
+            col, txt = RED, str(m)
+        _box_row(f"  {row['label']:<16} {col}{txt}{NC}")
+
+    _box_sep()
+    _box_row(f"  {BOLD}Uplink MTU:{NC}  {GREEN}{uplink_mtu}{NC}  {DIM}(min из ответивших){NC}")
+
+    plan = compute_stack_mtu_plan(uplink_mtu, stack)
+    _box_sep()
+    _box_row(f"  {BOLD}План применения:{NC}")
+    for p in plan:
+        if p["action"] == "mss_clamp":
+            _box_row(f"    {CYAN}{p['desc']}{NC}  MSS={p['mss']}")
+        else:
+            _box_row(f"    {CYAN}{p['desc']}{NC}  MTU={p['mtu']}")
+
+    if not apply:
+        _box_row()
+        _box_row(f"  {DIM}Режим просмотра — изменения не применены{NC}")
+        _box_bottom()
+        input(f"\n{BLUE}Нажмите Enter...{NC}")
+        return
+
+    _box_row()
+    try:
+        ans = input(f"  {YELLOW}Применить план ко всему стеку? [y/N]:{NC} ").strip().lower()
+    except KeyboardInterrupt:
+        return
+    if ans != "y":
+        _box_row(f"  {DIM}Отмена{NC}")
+        _box_bottom()
+        input(f"\n{BLUE}Нажмите Enter...{NC}")
+        return
+
+    _box_sep()
+    results = apply_stack_mtu_plan(plan)
+    for res in results:
+        col = GREEN if res["ok"] else RED
+        _box_row(f"  {col}{'✓' if res['ok'] else '✗'}{NC} {res['component']}: {res['message']}")
+
+    uplink_item = next((p for p in plan if p.get("component") == "uplink"), None)
+    if uplink_item and uplink_item.get("action") == "ip_link":
+        persist_link_mtu(uplink_item["target"], uplink_item["mtu"])
+        _box_row(f"  {DIM}Uplink MTU сохранён в netplan/interfaces (если доступно){NC}")
+
+    save_mtu_state({
+        "applied_mtu": uplink_mtu,
+        "interface": get_default_iface(),
+        "mss": uplink_mtu - 40,
+        "stack": stack,
+        "plan": [{"component": p["component"], "target": p["target"], "mtu": p["mtu"]} for p in plan],
+        "probe_results": probe_details,
+        "apply_results": results,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
+
+    _box_bottom()
+    input(f"\n{BLUE}Нажмите Enter...{NC}")
