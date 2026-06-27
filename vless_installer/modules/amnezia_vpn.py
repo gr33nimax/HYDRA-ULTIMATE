@@ -14,6 +14,7 @@ vless_installer/modules/amnezia_vpn.py
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -95,6 +96,89 @@ def _docker_available() -> bool:
     """Проверяет, установлен ли Docker."""
     r = subprocess.run(["which", "docker"], capture_output=True)
     return r.returncode == 0
+
+
+def _pkg_mgr() -> str:
+    if shutil.which("apt-get"):
+        return "apt"
+    if shutil.which("dnf"):
+        return "dnf"
+    return "unknown"
+
+
+def install_docker_engine() -> bool:
+    """Устанавливает Docker (docker.io / docker) и запускает службу."""
+    if _docker_available():
+        _ok("Docker уже установлен.")
+        subprocess.run(["systemctl", "enable", "--now", "docker"],
+                         capture_output=True, check=False)
+        return True
+
+    mgr = _pkg_mgr()
+    if mgr == "apt":
+        _info("Установка docker.io через apt...")
+        subprocess.run(["apt-get", "update", "-qq"], check=False, capture_output=True)
+        r = subprocess.run(
+            ["apt-get", "install", "-y", "--no-install-recommends", "docker.io"],
+            env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
+            capture_output=True,
+        )
+    elif mgr == "dnf":
+        _info("Установка docker через dnf...")
+        r = subprocess.run(["dnf", "install", "-y", "docker"], capture_output=True)
+    else:
+        _err("Неизвестный пакетный менеджер — установите Docker вручную.")
+        return False
+
+    if r.returncode != 0:
+        _err("Не удалось установить Docker.")
+        return False
+
+    subprocess.run(["systemctl", "enable", "--now", "docker"],
+                   capture_output=True, check=False)
+    if _docker_available():
+        _ok("Docker установлен и запущен.")
+        return True
+    _err("Docker установлен, но бинарник не найден в PATH.")
+    return False
+
+
+def prepare_awg_environment() -> None:
+    """Sysctl и MTU-подсказки для AWG на сервере."""
+    _info("Включаю net.ipv4.ip_forward...")
+    subprocess.run(
+        ["sysctl", "-w", "net.ipv4.ip_forward=1"],
+        capture_output=True, check=False,
+    )
+    sysctl_conf = Path("/etc/sysctl.d/99-hydra-awg.conf")
+    if not sysctl_conf.exists():
+        sysctl_conf.write_text("net.ipv4.ip_forward=1\n", encoding="utf-8")
+
+    try:
+        from vless_installer.modules.network_mtu import recommend_mtu_for_awg
+        mtu = recommend_mtu_for_awg()
+        _info(f"Рекомендуемый MTU для AWG-клиентов: {mtu}")
+    except Exception:
+        pass
+    _ok("Сервер подготовлен для AmneziaWG.")
+
+
+def show_awg_client_instructions() -> None:
+    """Показывает шаги установки контейнера через клиент Amnezia."""
+    os.system("clear")
+    print()
+    _box_top("📖  УСТАНОВКА AMNEZIAWG")
+    _box_row("Контейнер разворачивается официальным клиентом AmneziaVPN:")
+    _box_sep()
+    _box_row("  1. Установите AmneziaVPN на ПК/телефон")
+    _box_row("  2. Добавьте сервер → «Установить по SSH»")
+    _box_row("  3. Укажите IP, пользователя root и пароль/ключ")
+    _box_row("  4. Выберите протокол AmneziaWG (AWG)")
+    _box_row("  5. Дождитесь завершения — контейнер появится здесь")
+    _box_sep()
+    _box_warn("После установки управляйте AWG через меню HYDRA → AmneziaVPN.")
+    _box_bottom()
+
 
 def _container_exists() -> bool:
     """Проверяет, существует ли контейнер Amnezia."""
@@ -1012,15 +1096,13 @@ def do_amnezia_vpn_menu() -> None:
             _box_row(f"  Docker:       {RED}🔴 НЕ УСТАНОВЛЕН{NC}")
             _box_sep()
             _box_warn("Docker не обнаружен на сервере!")
-            _box_warn("Установите Docker и настройте AmneziaVPN")
-            _box_warn("через официальный клиент Amnezia по SSH.")
+            _box_item("I", f"{GREEN}🐳 Установить Docker{NC}")
         elif not exists:
             _box_row(f"  Docker:       {GREEN}🟢 установлен{NC}")
             _box_row(f"  Контейнер:    {RED}🔴 {name} не найден{NC}")
             _box_sep()
             _box_warn(f"Контейнер {name} не запущен и не настроен.")
-            _box_warn("Запустите установку AmneziaWG через официальный")
-            _box_warn("клиент AmneziaVPN (подключение по SSH к этому серверу).")
+            _box_item("P", f"{GREEN}📋 Подготовить сервер + инструкция Amnezia{NC}")
         else:
             _box_row(f"  Docker:       {GREEN}🟢 установлен{NC}")
             c_status_color = GREEN if running else RED
@@ -1056,9 +1138,21 @@ def do_amnezia_vpn_menu() -> None:
             
         if ch in ("q", "Q", "0", ""):
             return
+
+        if ch == "i" and not has_docker:
+            if install_docker_engine():
+                prepare_awg_environment()
+            input(f"\n{BLUE}Нажмите Enter...{NC}")
+            continue
+
+        if ch == "p" and has_docker and not exists:
+            prepare_awg_environment()
+            show_awg_client_instructions()
+            input(f"\n{BLUE}Нажмите Enter...{NC}")
+            continue
             
         if not exists:
-            _warn("Контейнер не существует. Действия недоступны.")
+            _warn("Контейнер не существует. Установите AWG через клиент Amnezia (пункт P).")
             time.sleep(1.5)
             continue
             

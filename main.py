@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """
-VLESS-ULTIMATE X v5.0.0 — Entry Point
+HYDRA Multi-Proxy Manager — Entry Point
 =============================================
 Запуск: sudo python3 main.py
-
-Этот файл — тонкая обёртка. Вся логика находится в vless_installer/_core.py.
 """
 
 import sys
@@ -28,49 +26,10 @@ exec(compile(_core_src, str(_core_path), "exec"), globals())  # noqa: S102
 #  Точка входа (перенесена из оригинального if __name__ == "__main__":)
 # =============================================================================
 
-# --- Headless переключение режима (вызывается из auto-fallback cron) ---
+# --- Headless: legacy cascade mode switch (disabled in HYDRA) ---
 if "--switch-mode-a" in sys.argv or "--switch-mode-b" in sys.argv:
-    if os.geteuid() != 0:
-        print("ERROR: требуются права root", file=sys.stderr)
-        sys.exit(1)
-    _init_pkg_mgr()
-    target = "A" if "--switch-mode-a" in sys.argv else "B"
-    if not STATE_FILE.exists():
-        print("ERROR: state.json не найден", file=sys.stderr)
-        sys.exit(1)
-    try:
-        _st = json.loads(STATE_FILE.read_text())
-    except Exception as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        sys.exit(1)
-    current = _st.get("install_mode", "A")
-    if current == target:
-        log_to_file("INFO", f"--switch-mode-{target.lower()}: режим уже {target}, пропуск.")
-        sys.exit(0)
-    import builtins as _builtins
-    _orig_input = _builtins.input
-    _builtins.input = lambda _="": "y"
-    try:
-        switch_mode_ab()
-    finally:
-        _builtins.input = _orig_input
-    sys.exit(0)
-
-# --- Режим ежесуточного обновления РФ подсетей ---
-if "--update-ru-subnets" in sys.argv:
-    if os.geteuid() != 0:
-        print("ERROR: требуются права root", file=sys.stderr)
-        sys.exit(1)
-    _ru_subnets_cli_update()
-    sys.exit(0)
-
-# --- Режим ежесуточного обновления AS-direct префиксов ---
-if "--update-as-direct" in sys.argv:
-    if os.geteuid() != 0:
-        print("ERROR: требуются права root", file=sys.stderr)
-        sys.exit(1)
-    _as_direct_cli_update()
-    sys.exit(0)
+    print("[HYDRA] --switch-mode-a/b: удалено (каскад VLESS не поддерживается)", file=sys.stderr)
+    sys.exit(1)
 
 # --- Сброс SQLite-кэша ASN-префиксов ---
 if "--clear-asn-cache" in sys.argv:
@@ -116,6 +75,9 @@ def _legacy_cli_disabled(feature: str) -> None:
     print(f"[HYDRA] {feature}: недоступно (legacy-модуль удалён в HYDRA-only сборке)", file=sys.stderr)
     sys.exit(0)
 
+if "--update-ru-subnets" in sys.argv or "--update-as-direct" in sys.argv:
+    _legacy_cli_disabled("Xray routing (RU subnets / AS-direct)")
+
 if "--dpi-check" in sys.argv:
     if os.geteuid() != 0:
         print("ERROR: требуются права root", file=sys.stderr)
@@ -148,6 +110,14 @@ if "--autoban" in sys.argv:
     if os.geteuid() != 0:
         sys.exit(1)
     _autoban_run_once()
+    sys.exit(0)
+
+# --- Снимок трафика (из cron) ---
+if "--traffic-snapshot" in sys.argv:
+    if os.geteuid() != 0:
+        print("ERROR: требуются права root", file=sys.stderr)
+        sys.exit(1)
+    _traffic_snapshot_save()
     sys.exit(0)
 
 # --- Автоматический бэкап по расписанию (вызывается из cron) ---
@@ -243,7 +213,7 @@ for _attempt in range(_MAX_RETRIES + 1):
             print_banner()
             print()
             _cc, _cn, _flag = get_server_country_cached()
-            info(f"HYDRA Multi-Proxy Manager v0.3.0-beta | RAM: {TOTAL_RAM}MB | CPU: {TOTAL_CPU} | {_flag} {_cn} ({_cc})")
+            info(f"HYDRA Multi-Proxy Manager v0.4.0-beta | RAM: {TOTAL_RAM}MB | CPU: {TOTAL_CPU} | {_flag} {_cn} ({_cc})")
             print()
             _time.sleep(1)
 

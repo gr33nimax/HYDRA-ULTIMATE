@@ -350,7 +350,7 @@ def _install_mita_package(version: str) -> bool:
             print(f"  {CYAN}→{NC}  Скачиваю mita {version} (.deb)...")
             try:
                 urllib.request.urlretrieve(url, str(local))
-                r = _run(["dpkg", "-i", str(local)], capture=True)
+                r = _run(["dpkg", "-i", "--force-overwrite", str(local)], capture=True)
                 if r.returncode == 0:
                     # dpkg кладёт бинарник в /usr/bin/mita
                     sys_bin = Path("/usr/bin/mita")
@@ -591,6 +591,29 @@ def _close_ports(proto: str, port_start: int, port_end: int) -> None:
         _ipt_close_port(proto, port_start, port_end)
         _ipt_persist()
 
+
+def _post_install_smoke_test(protocol: str, port_start: int, port_end: int) -> bool:
+    """Проверка: systemd active и порты слушаются после установки."""
+    r = _run(["systemctl", "is-active", _SERVICE_NAME], capture=True)
+    if r.stdout.strip() != "active":
+        print(f"  {RED}✗{NC}  Smoke-test: сервис mita не active")
+        return False
+
+    proto_u = protocol.upper()
+    ss_flag = "tln" if proto_u == "TCP" else "uln"
+    for port in range(port_start, port_end + 1):
+        r2 = _run(["ss", f"-{ss_flag}", f"sport = :{port}"], capture=True, check=False)
+        listening = bool((r2.stdout or "").strip())
+        if not listening:
+            r3 = _run(["netstat", "-tuln"], capture=True, check=False)
+            listening = f":{port} " in (r3.stdout or "")
+        if not listening:
+            print(f"  {RED}✗{NC}  Smoke-test: порт {port}/{proto_u} не слушается")
+            return False
+
+    print(f"  {GREEN}✓{NC}  Smoke-test: mita active, порты {port_start}-{port_end}/{proto_u} OK")
+    return True
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  SYSTEMD
 # ══════════════════════════════════════════════════════════════════════════════
@@ -810,10 +833,13 @@ def _run_install_inner() -> None:
               f"{YELLOW}{first_user}{NC} / {YELLOW}{first_pass}{NC}")
 
     # 5. Чистим остатки предыдущих установок
+    if _is_installed():
+        _close_ports(old_protocol, old_port_start, old_port_end)
     _run(["systemctl", "stop",    _SERVICE_NAME])
     _run(["systemctl", "disable", _SERVICE_NAME])
     if _SERVICE_FILE.exists():
         _SERVICE_FILE.unlink()
+    Path("/var/run/mita/mita.sock").unlink(missing_ok=True)
     _run(["systemctl", "daemon-reload"])
     _run(["systemctl", "reset-failed"], capture=True)
 
@@ -869,6 +895,8 @@ def _run_install_inner() -> None:
         "version":    version,
         "users":      users,
     })
+
+    _post_install_smoke_test(protocol, port_start, port_end)
 
     # ── Итог ──────────────────────────────────────────────────────────────────
     server_ip      = _get_server_ip()
