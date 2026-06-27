@@ -177,17 +177,143 @@ def show_awg_client_instructions() -> None:
     """Показывает шаги установки контейнера через клиент Amnezia."""
     os.system("clear")
     print()
-    _box_top("📖  УСТАНОВКА AMNEZIAWG")
+    _box_top("📖  AMNEZIAWG ЧЕРЕЗ ПРИЛОЖЕНИЕ AMNEZIA")
     _box_row("Контейнер разворачивается официальным клиентом AmneziaVPN:")
     _box_sep()
     _box_row("  1. Установите AmneziaVPN на ПК/телефон")
     _box_row("  2. Добавьте сервер → «Установить по SSH»")
     _box_row("  3. Укажите IP, пользователя root и пароль/ключ")
     _box_row("  4. Выберите протокол AmneziaWG (AWG)")
-    _box_row("  5. Дождитесь завершения — контейнер появится здесь")
+    _box_row("  5. Дождитесь завершения — контейнер появится в HYDRA")
     _box_sep()
-    _box_warn("После установки управляйте AWG через меню HYDRA → AmneziaVPN.")
+    _box_warn("После установки управляйте клиентами в меню AmneziaVPN.")
     _box_bottom()
+
+
+_AWG_NATIVE_INSTALLER_VER = "v5.18.0"
+_AWG_NATIVE_INSTALLER_URL = (
+    f"https://raw.githubusercontent.com/bivlked/amneziawg-installer/"
+    f"{_AWG_NATIVE_INSTALLER_VER}/install_amneziawg.sh"
+)
+
+
+def _save_awg_install_mode(mode: str) -> None:
+    try:
+        state = {}
+        if _STATE_FILE.exists():
+            state = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+        state["awg_install_mode"] = mode
+        _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+    except Exception as e:
+        _warn(f"Не удалось сохранить режим AWG в state: {e}")
+
+
+def install_native_amneziawg(*, preset: str = "", route_all: bool = False) -> bool:
+    """
+    Установка AmneziaWG 2.0 через amneziawg-installer (ядро DKMS, без Docker).
+    См. https://github.com/bivlked/amneziawg-installer
+    """
+    import urllib.request
+
+    if os.geteuid() != 0:
+        _err("Требуются права root.")
+        return False
+
+    prepare_awg_environment()
+
+    script_path = Path("/tmp/hydra_amneziawg_install.sh")
+    _info(f"Скачиваю amneziawg-installer {_AWG_NATIVE_INSTALLER_VER}...")
+    try:
+        req = urllib.request.Request(
+            _AWG_NATIVE_INSTALLER_URL,
+            headers={"User-Agent": "HYDRA-Installer/0.7.0-rc1"},
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            script_path.write_bytes(resp.read())
+        script_path.chmod(0o700)
+    except Exception as e:
+        _err(f"Не удалось скачать установщик: {e}")
+        return False
+
+    cmd = ["bash", str(script_path), "--yes"]
+    if preset:
+        cmd.append(f"--preset={preset}")
+    if route_all:
+        cmd.append("--route-all")
+
+    _info("Запуск нативного установщика AWG (10–25 мин, возможны перезагрузки)...")
+    _warn("Управление клиентами: /root/awg/manage_amneziawg.sh на сервере")
+    print()
+    r = subprocess.run(cmd, check=False)
+    if r.returncode == 0:
+        _ok("Нативный AmneziaWG установлен.")
+        _save_awg_install_mode("native")
+        return True
+    _err(f"Установщик завершился с кодом {r.returncode}. См. вывод выше.")
+    return False
+
+
+def run_awg_setup_wizard(*, from_hydra: bool = False) -> None:
+    """Выбор способа установки AWG: нативный скрипт / приложение Amnezia / только sysctl."""
+    os.system("clear")
+    print()
+    _box_top("🛡️  AMNEZIAWG — ВЫБОР СПОСОБА")
+    _box_row()
+    _box_item("1", f"{GREEN}Серверный установщик (DKMS){NC}  {DIM}QR на месте, без телефона{NC}")
+    _box_item("2", f"Через приложение Amnezia  {DIM}Docker-контейнер{NC}")
+    _box_item("3", f"Только подготовка сервера  {DIM}sysctl / MTU{NC}")
+    _box_row()
+    _box_back()
+    _box_bottom()
+
+    try:
+        ch = input(f"{CYAN}Выбор:{NC} ").strip()
+    except KeyboardInterrupt:
+        return
+
+    if ch == "1":
+        os.system("clear")
+        print()
+        _box_top("🛡️  НАТИВНЫЙ AWG — ПРЕСЕТ")
+        _box_row(f"  {DIM}На основе amneziawg-installer {_AWG_NATIVE_INSTALLER_VER}{NC}")
+        _box_sep()
+        _box_item("1", f"Обычный VPS  {DIM}(по умолчанию){NC}")
+        _box_item("2", f"Мобильный интернет / DPI  {DIM}(--preset=mobile){NC}")
+        _box_item("3", f"Весь трафик через VPN  {DIM}(--route-all){NC}")
+        _box_row()
+        _box_back()
+        _box_bottom()
+        try:
+            p = input(f"{CYAN}Пресет:{NC} ").strip()
+        except KeyboardInterrupt:
+            return
+        preset = ""
+        route_all = False
+        if p == "2":
+            preset = "mobile"
+        elif p == "3":
+            route_all = True
+        install_native_amneziawg(preset=preset, route_all=route_all)
+
+    elif ch == "2":
+        if not _docker_available():
+            _warn("Docker не установлен — устанавливаю...")
+            if not install_docker_engine():
+                return
+        prepare_awg_environment()
+        show_awg_client_instructions()
+        _save_awg_install_mode("docker_app")
+
+    elif ch == "3":
+        prepare_awg_environment()
+        _ok("Сервер подготовлен (ip_forward, MTU-подсказки).")
+
+    elif ch in ("q", ""):
+        return
+    else:
+        _warn("Неверный выбор.")
+        time.sleep(1)
 
 
 def _container_exists() -> bool:
@@ -1108,11 +1234,11 @@ def do_amnezia_vpn_menu() -> None:
             _box_warn("Docker не обнаружен на сервере!")
             _box_item("I", f"{GREEN}🐳 Установить Docker{NC}")
         elif not exists:
-            _box_row(f"  Docker:       {GREEN}🟢 установлен{NC}")
+            _box_row(f"  Docker:       {GREEN if has_docker else YELLOW}{'🟢 установлен' if has_docker else 'не нужен для нативного AWG'}{NC}")
             _box_row(f"  Контейнер:    {RED}🔴 {name} не найден{NC}")
             _box_sep()
-            _box_warn(f"Контейнер {name} не запущен и не настроен.")
-            _box_item("P", f"{GREEN}📋 Подготовить сервер + инструкция Amnezia{NC}")
+            _box_warn("AWG ещё не установлен.")
+            _box_item("P", f"{GREEN}🛡️ Установить AWG (нативно или через Amnezia){NC}")
         else:
             _box_row(f"  Docker:       {GREEN}🟢 установлен{NC}")
             c_status_color = GREEN if running else RED
@@ -1167,9 +1293,8 @@ def do_amnezia_vpn_menu() -> None:
             input(f"\n{BLUE}Нажмите Enter...{NC}")
             continue
 
-        if ch == "p" and has_docker and not exists:
-            prepare_awg_environment()
-            show_awg_client_instructions()
+        if ch == "p" and not exists:
+            run_awg_setup_wizard()
             input(f"\n{BLUE}Нажмите Enter...{NC}")
             continue
             

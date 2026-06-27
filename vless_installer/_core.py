@@ -1356,7 +1356,7 @@ def ensure_startup_dependencies() -> None:
              "coreutils", "iproute2", "procps", "jq",
              "ufw", "dnsutils", "zstd", "htop",
              "ipset", "iptables",
-             "logrotate", "hostname", "iputils-ping",
+             "logrotate", "hostname", "iputils-ping", "iputils-tracepath",
              "cron", "file", "openssh-server", "passwd",
              "git", "make", "golang-go"] +
             ["fail2ban", "qrencode", "python3-pip",
@@ -1525,7 +1525,7 @@ def ensure_startup_dependencies() -> None:
     _bar_advance(20, "nginx/certbot: пропущено (HYDRA)")
 
     # ── 6. Опциональные пакеты ────────────────────────────────────────────────
-    opt_apt = ["fail2ban", "qrencode", "python3-pip",
+    opt_apt = ["fail2ban", "qrencode", "python3-pip", "certbot",
                "irqbalance", "unattended-upgrades"]
     opt_dnf = ["fail2ban", "qrencode", "python3-pip", "irqbalance"]
     opt_list = opt_apt if PKG_MGR == "apt" else opt_dnf
@@ -1560,14 +1560,9 @@ def ensure_startup_dependencies() -> None:
     except ImportError:
         warn("\nМодуль unicodedata недоступен — отрисовка меню может быть нарушена")
 
-    # ── 8. Финальная проверка критичных зависимостей ──────────────────────────
+    # ── 8. Финальная проверка критичных зависимостей (HYDRA: без nginx) ───────
     _bar_advance(5, "финальная проверка...")
     critical_missing: list[str] = []
-    if not find_nginx_bin():
-        critical_missing.append("nginx")
-    if not (command_exists("certbot") or Path("/usr/bin/certbot").exists()
-            or Path("/snap/bin/certbot").exists()):
-        critical_missing.append("certbot")
     for cmd in ("curl", "openssl", "jq"):
         if not (command_exists(cmd) or Path(f"/usr/bin/{cmd}").exists()):
             critical_missing.append(cmd)
@@ -6399,8 +6394,10 @@ except: pass
             echo "[$DATE] certbot renew FAILED" >> "$LOG"
             send_tg "❌ certbot renew FAILED для домена $DOMAIN. Проверьте логи!"
         fi
-        # Перезагружаем nginx после обновления
+        # Перезагружаем веб-службы после обновления сертификата
+        systemctl reload caddy-naive >> "$LOG" 2>&1 || true
         systemctl reload nginx >> "$LOG" 2>&1 || true
+        systemctl reload caddy >> "$LOG" 2>&1 || true
     """))
     sh.chmod(0o750)
     # Дважды в день: 03:00 и 15:00
@@ -6882,7 +6879,6 @@ def _menu_install_system() -> None:
         if ch == "1":
             from vless_installer.modules.hydra_setup import do_hydra_setup_wizard
             do_hydra_setup_wizard()
-            input(f"{BLUE}Нажмите Enter...{NC}")
         elif ch == "2":
             _menu_migration()
         elif ch == "3":

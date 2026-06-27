@@ -33,6 +33,11 @@ from vless_installer.modules.box_renderer import (
 _STATE_FILE = Path("/var/lib/xray-installer/state.json")
 _BACKUP_DIR = Path("/var/lib/xray-installer/backups")
 
+# Тихий режим мастера «A» — без лишних Enter между шагами.
+_WIZARD_BATCH = False
+# Любой запуск из мастера (включая отдельные пункты 1–7).
+_WIZARD_MODE = False
+
 
 def _c() -> dict:
     if sys.stdout.isatty():
@@ -66,9 +71,12 @@ def _ask_yn(prompt: str, default_yes: bool = True) -> bool:
     return ans in ("y", "yes", "д", "да")
 
 
-def _pause() -> None:
+def _pause(msg: str | None = None) -> None:
+    if _WIZARD_BATCH or _WIZARD_MODE:
+        return
     try:
-        input(f"\n{BLUE}Нажмите Enter...{NC}")
+        text = msg or f"\n{BLUE}Нажмите Enter...{NC}"
+        input(text)
     except KeyboardInterrupt:
         pass
 
@@ -97,39 +105,27 @@ def _step_docker() -> None:
 
 def _step_naive() -> None:
     from vless_installer.modules.naiveproxy import _run_install
-    _run_install()
+    _run_install(from_wizard=_WIZARD_BATCH or _WIZARD_MODE)
 
 
 def _step_mieru() -> None:
     from vless_installer.modules.mieru import _run_install
-    _run_install()
+    _run_install(from_wizard=_WIZARD_BATCH or _WIZARD_MODE)
 
 
 def _step_awg() -> None:
     from vless_installer.modules.amnezia_vpn import (
-        _container_exists,
-        _docker_available,
-        install_docker_engine,
+        install_native_amneziawg,
         prepare_awg_environment,
-        show_awg_client_instructions,
+        run_awg_setup_wizard,
     )
 
-    os.system("clear")
-    _box_top("🛡️  AMNEZIAWG — ПОДГОТОВКА СЕРВЕРА")
-    _box_row()
-
-    if not _docker_available():
-        _box_warn("Docker не установлен — устанавливаю...")
-        _box_row()
-        _box_bottom()
-        print()
-        if install_docker_engine():
-            prepare_awg_environment()
-    elif not _container_exists():
+    if _WIZARD_BATCH:
         prepare_awg_environment()
-
-    show_awg_client_instructions()
-    _pause()
+        print(f"  {GREEN}→{NC}  AWG: нативный установщик (пресет VPS по умолчанию)...")
+        install_native_amneziawg()
+    else:
+        run_awg_setup_wizard(from_hydra=True)
 
 
 def _step_background() -> None:
@@ -145,15 +141,19 @@ def _step_background() -> None:
     if _ask_yn("Установить sync-агент (systemd timer)?", default_yes=True):
         core.install_sync_agent()
 
-    if _ask_yn("Установить сервер подписок (sub-server)?", default_yes=False):
+    if _ask_yn("Установить сервер подписок (vless-sub)?", default_yes=True):
         try:
-            port_raw = input(f"{CYAN}Порт подписок [8080]:{NC} ").strip() or "8080"
+            from vless_installer.state_schema import get_sub_port, set_sub_port
+
+            port_raw = input(f"{CYAN}Порт подписок [9443]:{NC} ").strip() or "9443"
             port = int(port_raw)
+            set_sub_port(port)
         except (ValueError, KeyboardInterrupt):
-            port = 8080
+            port = 9443
         from vless_installer.modules.sub_server import install_sub_service
         install_sub_service("0.0.0.0", port)
         print(f"  {GREEN}✓{NC}  Sub-server на порту {port}.")
+        print(f"  {DIM}SSL и домен — в меню «Подписки» → настройка домена.{NC}")
 
     _pause()
 
@@ -164,7 +164,7 @@ def _step_dnscrypt() -> None:
     _box_top("🔒  DNSCRYPT (ОПЦИОНАЛЬНО)")
     _box_row()
     _box_warn("DNSCrypt может конфликтовать с WARP-маршрутизацией.")
-    _box_warn("Рекомендуется включать только при понимании последствий.")
+    _box_warn("Не включайте оба сразу без понимания последствий.")
     _box_row()
     _box_bottom()
     print()
@@ -175,54 +175,80 @@ def _step_dnscrypt() -> None:
 
 def do_hydra_setup_wizard() -> None:
     """Пошаговый мастер установки HYDRA-стека."""
-    os.system("clear")
-    print()
-    _box_top("🚀  МАСТЕР УСТАНОВКИ HYDRA")
-    _box_row(f"  {DIM}Последовательная настройка: оптимизация → протоколы → фон.{NC}")
-    _box_sep()
-    _box_item("1", "⚡ Оптимизация системы (sysctl / limits)")
-    _box_item("2", "🐳 Docker + подготовка AWG")
-    _box_item("3", "🔒 NaiveProxy (Caddy)")
-    _box_item("4", "🔐 Mieru (mita)")
-    _box_item("5", "🛡️  AmneziaWG — инструкция / подготовка")
-    _box_item("6", "⚙️  Фоновые службы (sync-agent, sub-server)")
-    _box_item("7", "🔒 DNSCrypt (опционально, с предупреждением)")
-    _box_sep()
-    _box_item("A", "▶ Запустить всё по порядку (рекомендуется)")
-    _box_row()
-    _box_back()
-    _box_bottom()
+    global _WIZARD_BATCH, _WIZARD_MODE
 
+    _WIZARD_MODE = True
     try:
-        ch = input(f"{CYAN}Выбор:{NC} ").strip().lower()
-    except KeyboardInterrupt:
-        return
+        os.system("clear")
+        print()
+        _box_top("🚀  МАСТЕР УСТАНОВКИ HYDRA")
+        _box_row(f"  {DIM}Оптимизация → протоколы → фоновые службы{NC}")
+        _box_sep()
+        _box_item("1", "⚡ Оптимизация системы (sysctl / limits)")
+        _box_item("2", "🐳 Docker (нужен только для AWG через приложение Amnezia)")
+        _box_item("3", "🔒 NaiveProxy (Caddy)")
+        _box_item("4", "🔐 Mieru (mita)")
+        _box_item("5", "🛡️  AmneziaWG — выбор способа установки")
+        _box_item("6", "⚙️  Фоновые службы (sync-agent, sub-server)")
+        _box_item("7", "🔒 DNSCrypt (опционально)")
+        _box_sep()
+        _box_item("A", "▶ Запустить всё по порядку (рекомендуется)")
+        _box_row()
+        _box_back()
+        _box_bottom()
 
-    steps = {
-        "1": [_step_optimize],
-        "2": [_step_docker],
-        "3": [_step_naive],
-        "4": [_step_mieru],
-        "5": [_step_awg],
-        "6": [_step_background],
-        "7": [_step_dnscrypt],
-    }
-    if ch == "a":
-        for fn in (
-            _step_optimize, _step_docker, _step_naive, _step_mieru,
-            _step_awg, _step_background, _step_dnscrypt,
-        ):
-            fn()
-        return
+        try:
+            ch = input(f"{CYAN}Выбор:{NC} ").strip().lower()
+        except KeyboardInterrupt:
+            return
 
-    if ch in steps:
-        for fn in steps[ch]:
-            fn()
-    elif ch in ("q", ""):
-        return
-    else:
-        print(f"{YELLOW}Неверный выбор.{NC}")
-        time.sleep(1)
+        steps = {
+            "1": [_step_optimize],
+            "2": [_step_docker],
+            "3": [_step_naive],
+            "4": [_step_mieru],
+            "5": [_step_awg],
+            "6": [_step_background],
+            "7": [_step_dnscrypt],
+        }
+
+        if ch == "a":
+            _WIZARD_BATCH = True
+            try:
+                for fn in (
+                    _step_optimize,
+                    _step_naive,
+                    _step_mieru,
+                    _step_awg,
+                    _step_background,
+                ):
+                    fn()
+            finally:
+                _WIZARD_BATCH = False
+            os.system("clear")
+            print()
+            _box_top("✅  МАСТЕР HYDRA ЗАВЕРШЁН")
+            _box_row(f"  {GREEN}Основные компоненты установлены.{NC}")
+            _box_row(f"  {DIM}DNSCrypt и Docker — при необходимости из пунктов 2 и 7.{NC}")
+            _box_row(f"  {DIM}Подписки: меню «Подписки» → домен и SSL.{NC}")
+            _box_bottom()
+            _WIZARD_MODE = False
+            _pause()
+            return
+
+        if ch in steps:
+            for fn in steps[ch]:
+                fn()
+            _WIZARD_MODE = False
+            _pause()
+        elif ch in ("q", ""):
+            return
+        else:
+            print(f"{YELLOW}Неверный выбор.{NC}")
+            time.sleep(1)
+    finally:
+        _WIZARD_MODE = False
+        _WIZARD_BATCH = False
 
 
 def _backup_state() -> Path | None:

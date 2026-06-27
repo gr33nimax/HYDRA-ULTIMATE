@@ -128,10 +128,9 @@ _BIN_URL_AMD64   = (
     "https://github.com/klzgrad/naiveproxy/releases/latest/download/"
     "naiveproxy-linux-amd64.tar.xz"
 )
-# Caddy с forwardproxy плагином (альтернатива)
+_CADDY_NAIVE_API = "https://api.github.com/repos/Michaol/caddy-naive/releases/latest"
 _CADDY_NAIVE_URL = (
-    "https://github.com/Michaol/caddy-naive/releases/latest/download/"
-    "caddy-linux-amd64"
+    "https://github.com/Michaol/caddy-naive/releases/download/v2.11.4/caddy-linux-amd64"
 )
 
 _DEFAULT_PORT    = 443
@@ -261,6 +260,10 @@ def _pause() -> None:
     except (KeyboardInterrupt, EOFError, UnicodeDecodeError):
         print()
 
+def _pause_if(*, from_wizard: bool = False) -> None:
+    if not from_wizard:
+        _pause()
+
 def _ask(prompt: str, default: str = "", c: bool = False) -> str:
     try:
         print(prompt, end="", flush=True)
@@ -383,29 +386,111 @@ def _get_latest_version() -> str:
             return json.loads(r.read()).get("tag_name", "unknown").lstrip("v")
     except Exception: return "unknown"
 
-def _download_binary() -> bool:
+def _binary_usable() -> bool:
+    if not _BIN_PATH.exists():
+        return False
+    try:
+        r = subprocess.run(
+            [str(_BIN_PATH), "version"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        return r.returncode == 0 and "v" in (r.stdout or r.stderr or "")
+    except Exception:
+        return False
+
+
+def _resolve_caddy_download_urls() -> list[str]:
+    urls: list[str] = []
+    try:
+        req = urllib.request.Request(
+            _CADDY_NAIVE_API,
+            headers={"User-Agent": "HYDRA-Installer/0.7.0-rc1"},
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read())
+        for asset in data.get("assets", []):
+            name = asset.get("name", "")
+            if name == "caddy-linux-amd64":
+                urls.append(asset["browser_download_url"])
+                break
+    except Exception:
+        pass
+    urls.append(_CADDY_NAIVE_URL)
+    urls.append(
+        "https://github.com/Michaol/caddy-naive/releases/latest/download/caddy-linux-amd64"
+    )
+    seen: set[str] = set()
+    out: list[str] = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+def _fetch_url_curl(url: str, dest: Path) -> bool:
+    if not shutil.which("curl"):
+        return False
+    r = subprocess.run(
+        ["curl", "-fL", "--retry", "3", "--retry-delay", "2",
+         "--connect-timeout", "30", "--max-time", "600",
+         "-o", str(dest), url],
+        capture_output=True, text=True, check=False,
+    )
+    return r.returncode == 0 and dest.exists() and dest.stat().st_size > 1024 * 1024
+
+
+def _download_binary(*, force: bool = False) -> bool:
+    if not force and _binary_usable():
+        print(f"  {GREEN}✓{NC}  caddy-naive уже установлен: {_BIN_PATH}")
+        return True
+
     if not _is_amd64():
         print(f"  {RED}✗{NC}  caddy-forwardproxy-naive только amd64. "
               f"Текущая: {platform.machine()}")
         return False
 
-    print(f"  {CYAN}→{NC}  Скачиваю caddy-forwardproxy-naive...")
+    urls = _resolve_caddy_download_urls()
     tmp = Path(tempfile.mktemp(suffix=".bin"))
-    try:
-        urllib.request.urlretrieve(_CADDY_NAIVE_URL, str(tmp))
-        with tmp.open("rb") as f:
-            if f.read(4) != b'\x7fELF':
-                print(f"  {RED}✗{NC}  Скачанный файл не ELF-бинарник.")
-                return False
-        shutil.copy2(str(tmp), str(_BIN_PATH))
-        _BIN_PATH.chmod(0o755)
-        print(f"  {GREEN}✓{NC}  caddy-naive установлен: {_BIN_PATH}")
-        return True
-    except Exception as e:
-        print(f"  {RED}✗{NC}  Ошибка загрузки: {e}")
-        return False
-    finally:
-        tmp.unlink(missing_ok=True)
+    for url in urls:
+        print(f"  {CYAN}→{NC}  Скачиваю caddy-naive...")
+        print(f"  {DIM}    {url}{NC}")
+        sys.stdout.flush()
+        ok = False
+        try:
+            if _fetch_url_curl(url, tmp):
+                ok = True
+            else:
+                req = urllib.request.Request(
+                    url, headers={"User-Agent": "HYDRA-Installer/0.7.0-rc1"}
+                )
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    data = resp.read()
+                if len(data) < 1024 * 1024:
+                    print(f"  {YELLOW}⚠{NC}  Файл слишком маленький ({len(data)} байт), пробую зеркало...")
+                    continue
+                tmp.write_bytes(data)
+                ok = True
+            if not ok:
+                continue
+            data = tmp.read_bytes()
+            if data[:4] != b"\x7fELF":
+                print(f"  {YELLOW}⚠{NC}  Не ELF-бинарник, пробую зеркало...")
+                continue
+            shutil.copy2(str(tmp), str(_BIN_PATH))
+            _BIN_PATH.chmod(0o755)
+            if _binary_usable():
+                print(f"  {GREEN}✓{NC}  caddy-naive установлен: {_BIN_PATH}")
+                return True
+            print(f"  {YELLOW}⚠{NC}  Бинарник скачан, но не запускается — пробую зеркало...")
+        except Exception as e:
+            print(f"  {YELLOW}⚠{NC}  Ошибка загрузки: {e}")
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    print(f"  {RED}✗{NC}  Не удалось скачать caddy-naive ни с одного URL.")
+    print(f"  {DIM}    Проверьте доступ к github.com или скачайте вручную в {_BIN_PATH}{NC}")
+    return False
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  CADDYFILE
@@ -684,19 +769,22 @@ def _apply_config(domain: str, port: int, users: list,
 # ══════════════════════════════════════════════════════════════════════════════
 #  УСТАНОВКА
 # ══════════════════════════════════════════════════════════════════════════════
-def _run_install() -> None:
-    try: _run_install_inner()
+def _run_install(from_wizard: bool = False) -> None:
+    try:
+        _run_install_inner(from_wizard=from_wizard)
     except _Cancelled:
-        print(f"\n  {YELLOW}Установка прервана.{NC}\n"); _pause()
+        print(f"\n  {YELLOW}Установка прервана.{NC}\n")
+        if not from_wizard:
+            _pause()
 
-def _run_install_inner() -> None:
+def _run_install_inner(from_wizard: bool = False) -> None:
     os.system("clear")
     _box_top("🔐  УСТАНОВКА  •  NAIVEPROXY")
     _box_row()
 
     if not _is_amd64():
         _box_err(f"Только amd64. Текущая: {platform.machine()}")
-        _box_bot(); _pause(); return
+        _box_bot(); _pause_if(from_wizard=from_wizard); return
 
     if _is_installed():
         _box_warn("NaiveProxy уже установлен.")
@@ -733,7 +821,7 @@ def _run_install_inner() -> None:
             default=old_domain, c=True,
         ).strip()
         if not domain:
-            print(f"  {RED}✗{NC}  Домен обязателен."); _pause(); return
+            print(f"  {RED}✗{NC}  Домен обязателен."); _pause_if(from_wizard=from_wizard); return
 
         raw = _ask(
             f"  {CYAN}Порт [{old_port}]: {NC}",
@@ -760,10 +848,10 @@ def _run_install_inner() -> None:
     # 1. Бинарник
     _box_info("Скачиваю caddy-forwardproxy-naive...")
     _box_bot(); print()
-    if not _download_binary():
+    if not _download_binary(force=not _binary_usable()):
         _box_top("🔐  УСТАНОВКА  •  NAIVEPROXY")
         _box_err("Не удалось скачать бинарник.")
-        _box_bot(); _pause(); return
+        _box_bot(); _pause_if(from_wizard=from_wizard); return
     print()
 
     # 2. Probe secret
@@ -796,25 +884,28 @@ def _run_install_inner() -> None:
 
     # Caddy нужен порт 80 для ACME HTTP-01 challenge — останавливаем конкурентов
     # (только если нет готового сертификата)
-    _nginx_was_running = False
+    _stopped_for_acme: list[str] = []
     r80 = _run(["ss", "-tlpn"], capture=True)
-    if not existing_cert and (":80 " in r80.stdout or ":80	" in r80.stdout or " :80" in r80.stdout):
-        r_nginx = _run(["systemctl", "is-active", "nginx"], capture=True)
-        if r_nginx.stdout.strip() == "active":
-            _run(["systemctl", "stop", "nginx"])
-            _nginx_was_running = True
-            print(f"  {YELLOW}⚠{NC}  nginx остановлен (нужен порт 80 для TLS сертификата).")
+    if not existing_cert and (":80 " in r80.stdout or ":80\t" in r80.stdout or " :80" in r80.stdout):
+        for unit in ("nginx", "caddy-naive", "caddy"):
+            r_u = _run(["systemctl", "is-active", unit], capture=True)
+            if r_u.stdout.strip() == "active":
+                _run(["systemctl", "stop", unit])
+                _stopped_for_acme.append(unit)
+                print(f"  {YELLOW}⚠{NC}  {unit} остановлен (нужен порт 80 для TLS).")
     _install_service()
     err = _apply_config(domain, port, users, fake_url, probe_secret, upstream,
                        cert_file=existing_cert, key_file=existing_key)
     if err:
         print(f"  {RED}✗{NC}  {err}")
-        _pause(); return
+        _pause_if(from_wizard=from_wizard); return
 
-    # 5b. Возвращаем nginx если останавливали
-    if _nginx_was_running:
-        _run(["systemctl", "start", "nginx"])
-        print(f"  {GREEN}✓{NC}  nginx возвращён.")
+    # 5b. Возвращаем остановленные службы (кроме caddy-naive — его запустит apply_config)
+    for unit in _stopped_for_acme:
+        if unit == _SERVICE_NAME:
+            continue
+        _run(["systemctl", "start", unit])
+        print(f"  {GREEN}✓{NC}  {unit} возвращён.")
 
     # 6. Firewall (UFW если активен, иначе iptables)
     fw_msg = _open_port(port)
@@ -866,7 +957,7 @@ def _run_install_inner() -> None:
     _box_info("Добавьте пользователей через пункт [2].")
     _box_bot()
     print()
-    _pause()
+    _pause_if(from_wizard=from_wizard)
 
 def _show_singbox_json(domain: str, port: int, username: str, password: str) -> None:
     """Показывает sing-box outbound JSON для Karing/Exclave/NekoBox."""

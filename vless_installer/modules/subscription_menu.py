@@ -89,72 +89,129 @@ def ensure_subscription_tokens() -> None:
         pass
 
 
+def _web_units_state() -> dict[str, bool]:
+    """Какие веб-службы были активны (для остановки перед certbot)."""
+    units = ("caddy-naive", "nginx", "caddy")
+    active: dict[str, bool] = {}
+    for unit in units:
+        try:
+            r = subprocess.run(
+                ["systemctl", "is-active", unit],
+                capture_output=True, text=True, check=False,
+            )
+            active[unit] = r.stdout.strip() == "active"
+        except Exception:
+            active[unit] = False
+    return active
+
+
+def _stop_web_units(active: dict[str, bool]) -> None:
+    for unit, was in active.items():
+        if was:
+            core.info(f"Временная остановка {unit}...")
+            subprocess.run(["systemctl", "stop", unit], check=False)
+
+
+def _start_web_units(active: dict[str, bool]) -> None:
+    for unit, was in active.items():
+        if was:
+            core.info(f"Запуск {unit}...")
+            subprocess.run(["systemctl", "start", unit], check=False)
+
+
+def _certbot_webroot(certbot_bin: Path, domain: str) -> tuple[bool, str]:
+    webroots = (
+        Path("/var/www/naive-fake"),
+        Path("/var/www/html"),
+    )
+    for wr in webroots:
+        if not wr.is_dir():
+            continue
+        core.info(f"Certbot webroot: {wr}")
+        r = subprocess.run([
+            str(certbot_bin), "certonly", "--webroot",
+            "-w", str(wr),
+            "-d", domain,
+            "--non-interactive", "--agree-tos",
+            "-m", f"admin@{domain}",
+            "--keep-until-expiring",
+        ], capture_output=True, text=True)
+        if r.returncode == 0:
+            return True, ""
+        err = (r.stderr or r.stdout or "").strip()
+        core.warn(f"Webroot не сработал: {err[:200]}")
+    return False, "webroot недоступен"
+
+
+def _certbot_standalone(certbot_bin: Path, domain: str) -> tuple[bool, str]:
+    core.info("Пробую certbot --standalone (порт 80 должен быть свободен)...")
+    r = subprocess.run([
+        str(certbot_bin), "certonly", "--standalone",
+        "-d", domain,
+        "--non-interactive", "--agree-tos",
+        "-m", f"admin@{domain}",
+        "--keep-until-expiring",
+    ], capture_output=True, text=True)
+    if r.returncode == 0:
+        return True, ""
+    return False, (r.stderr or r.stdout or "неизвестная ошибка").strip()
+
+
+def _certbot_issue_domain(certbot_bin: Path, domain: str) -> tuple[bool, str]:
+    """Выпуск сертификата: webroot → standalone (без остановки веб-служб)."""
+    ok, err = _certbot_webroot(certbot_bin, domain)
+    if ok:
+        return True, ""
+    ok, err2 = _certbot_standalone(certbot_bin, domain)
+    return ok, err2
+
+
 def _setup_subscription_domain_ssl() -> None:
     print()
     core._box_top("НАСТРОЙКА ДОМЕНА + SSL")
-    core._box_row(f"  {core.YELLOW}Внимание:{core.NC} Будет выполнен выпуск SSL-сертификата Let's Encrypt.")
-    core._box_row("  Для этого порт 80 должен быть свободен. Скрипт автоматически")
-    core._box_row("  остановит Caddy / Nginx на время выпуска и запустит обратно.")
+    core._box_row(f"  {core.YELLOW}Внимание:{core.NC} Let's Encrypt для домена подписок.")
+    core._box_row("  HYDRA остановит caddy-naive/nginx только если нужен standalone.")
+    core._box_row("  Если NaiveProxy уже на 443 — лучше тот же домен или webroot.")
     core._box_bottom()
-    
-    new_domain = input(f"{core.CYAN}Введите домен для подписок (например, sub.yourdomain.com):{core.NC} ").strip()
+
+    new_domain = input(f"{core.CYAN}Введите домен для подписок (например, sub.example.com):{core.NC} ").strip()
     if not new_domain:
         core.warn("Домен не введен. Отмена.")
         time.sleep(1.5)
         return
-        
+
     certbot_bin = next(
         (p for p in (Path("/snap/bin/certbot"), Path("/usr/bin/certbot"))
          if p.exists()), None
     )
     if not certbot_bin:
-        core.warn("certbot не найден. Пожалуйста, установите certbot на сервере.")
+        core.warn("certbot не найден. Установите: apt install certbot")
         time.sleep(2)
         return
 
-    # Останавливаем веб-серверы
-    nginx_was_active = False
-    caddy_was_active = False
+    # Уже есть сертификат?
+    cert_file = Path(f"/etc/letsencrypt/live/{new_domain}/fullchain.pem")
+    key_file = Path(f"/etc/letsencrypt/live/{new_domain}/privkey.pem")
+    if cert_file.exists() and key_file.exists():
+        certbot_ok = True
+        core.success(f"Сертификат для {new_domain} уже существует.")
+    else:
+        web_active = _web_units_state()
+        err_msg = ""
+        certbot_ok, err_msg = _certbot_webroot(certbot_bin, new_domain)
+        if not certbot_ok:
+            stopped = any(web_active.values())
+            if stopped:
+                _stop_web_units(web_active)
+            certbot_ok, err_msg = _certbot_standalone(certbot_bin, new_domain)
+            if stopped:
+                _start_web_units(web_active)
 
-    try:
-        r = subprocess.run(["systemctl", "is-active", "nginx"], capture_output=True, text=True)
-        if r.stdout.strip() == "active":
-            core.info("Временная остановка Nginx...")
-            subprocess.run(["systemctl", "stop", "nginx"], check=False)
-            nginx_was_active = True
-    except Exception:
-        pass
-
-    try:
-        r = subprocess.run(["systemctl", "is-active", "caddy"], capture_output=True, text=True)
-        if r.stdout.strip() == "active":
-            core.info("Временная остановка Caddy...")
-            subprocess.run(["systemctl", "stop", "caddy"], check=False)
-            caddy_was_active = True
-    except Exception:
-        pass
-
-    core.info(f"Запуск certbot для домена {new_domain}...")
-    try:
-        r = subprocess.run([
-            str(certbot_bin), "certonly", "--standalone",
-            "-d", new_domain,
-            "--non-interactive", "--agree-tos",
-            "-m", f"admin@{new_domain}",
-            "--keep-until-expiring"
-        ], capture_output=True, text=True)
-        certbot_ok = (r.returncode == 0)
-    except Exception as e:
-        certbot_ok = False
-        core.warn(f"Ошибка вызова certbot: {e}")
-
-    # Запускаем веб-серверы обратно
-    if nginx_was_active:
-        core.info("Запуск Nginx...")
-        subprocess.run(["systemctl", "start", "nginx"], check=False)
-    if caddy_was_active:
-        core.info("Запуск Caddy...")
-        subprocess.run(["systemctl", "start", "caddy"], check=False)
+        if not certbot_ok:
+            core.warn(f"Не удалось получить SSL-сертификат:\n{err_msg}")
+            core.info("Подсказка: освободите порт 80 или используйте домен NaiveProxy с /sub в Caddy.")
+            time.sleep(3)
+            return
 
     if certbot_ok:
         # Проверяем файлы
@@ -179,9 +236,6 @@ def _setup_subscription_domain_ssl() -> None:
                 pass
         else:
             core.warn("Certbot сообщил об успехе, но файлы сертификата не найдены по стандартному пути.")
-    else:
-        err_msg = r.stderr or r.stdout or "Неизвестная ошибка"
-        core.warn(f"Не удалось получить SSL-сертификат:\n{err_msg}")
 
     time.sleep(3.5)
 

@@ -81,6 +81,7 @@ import time
 import urllib.request
 from pathlib import Path
 from typing import Optional
+from zoneinfo import available_timezones
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  ЦВЕТА
@@ -684,8 +685,85 @@ def _install_service() -> None:
     _run(["systemctl", "enable", _SERVICE_NAME])
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  СИНХРОНИЗАЦИЯ ВРЕМЕНИ
+#  СИНХРОНИЗАЦИЯ ВРЕМЕНИ / ЧАСОВОЙ ПОЯС
 # ══════════════════════════════════════════════════════════════════════════════
+_POPULAR_TIMEZONES: list[tuple[str, str]] = [
+    ("UTC", "Всемирное координированное (UTC)"),
+    ("Europe/Kaliningrad", "Калининград (UTC+2)"),
+    ("Europe/Moscow", "Москва (UTC+3)"),
+    ("Europe/Samara", "Самара (UTC+4)"),
+    ("Asia/Yekaterinburg", "Екатеринбург (UTC+5)"),
+    ("Asia/Omsk", "Омск (UTC+6)"),
+    ("Asia/Krasnoyarsk", "Красноярск (UTC+7)"),
+    ("Asia/Irkutsk", "Иркутск (UTC+8)"),
+    ("Asia/Yakutsk", "Якутск (UTC+9)"),
+    ("Asia/Vladivostok", "Владивосток (UTC+10)"),
+    ("Asia/Magadan", "Магадан (UTC+11)"),
+    ("Asia/Kamchatka", "Камчатка (UTC+12)"),
+    ("Europe/Riga", "Рига"),
+    ("Europe/Vilnius", "Вильнюс"),
+    ("Europe/Tallinn", "Таллин"),
+    ("Europe/Kyiv", "Киев"),
+    ("Europe/Berlin", "Берлин"),
+    ("Europe/Warsaw", "Варшава"),
+    ("Europe/London", "Лондон"),
+    ("Asia/Almaty", "Алматы"),
+    ("Asia/Tbilisi", "Тбилиси"),
+    ("Asia/Yerevan", "Ереван"),
+]
+
+
+def _get_current_timezone() -> str:
+    r = _run(["timedatectl", "show", "-p", "Timezone", "--value"], capture=True)
+    if r.returncode == 0 and (r.stdout or "").strip():
+        return r.stdout.strip()
+    try:
+        link = Path("/etc/localtime").resolve()
+        parts = link.parts
+        if "zoneinfo" in parts:
+            idx = parts.index("zoneinfo")
+            return "/".join(parts[idx + 1:])
+    except Exception:
+        pass
+    return ""
+
+
+def _timezone_valid(tz: str) -> bool:
+    tz = tz.strip()
+    if not tz or "/" not in tz:
+        return tz == "UTC"
+    return tz in available_timezones()
+
+
+def _save_timezone_pref(tz: str) -> None:
+    try:
+        state = {}
+        if _MODULE_STATE.exists():
+            state = json.loads(_MODULE_STATE.read_text(encoding="utf-8"))
+        state["timezone"] = tz
+        _MODULE_STATE.parent.mkdir(parents=True, exist_ok=True)
+        _MODULE_STATE.write_text(
+            json.dumps(state, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _set_timezone(tz: str) -> tuple[bool, str]:
+    tz = tz.strip()
+    if not _timezone_valid(tz):
+        return False, f"Неизвестный часовой пояс: {tz}"
+    if not shutil.which("timedatectl"):
+        return False, "timedatectl недоступен на этой системе"
+    r = _run(["timedatectl", "set-timezone", tz], capture=True)
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout or "ошибка timedatectl").strip()
+        return False, err
+    _save_timezone_pref(tz)
+    return True, tz
+
+
 def _check_time_sync() -> tuple[bool, str]:
     """Проверяет синхронизацию времени. Mieru требует ±30 сек."""
     # Через timedatectl
@@ -705,12 +783,176 @@ def _check_time_sync() -> tuple[bool, str]:
     return True, "Статус неизвестен — проверьте вручную"
 
 def _ensure_time_sync() -> None:
-    """Устанавливает chrony если нет NTP."""
+    """Включает NTP и ставит chrony при необходимости."""
+    if shutil.which("timedatectl"):
+        _run(["timedatectl", "set-ntp", "true"], capture=True)
     if shutil.which("chronyc") or shutil.which("ntpd"):
         return
+    if not shutil.which("apt-get"):
+        return
     print(f"  {CYAN}→{NC}  Устанавливаю chrony для синхронизации времени...")
+    _run(["apt-get", "update", "-qq"], capture=True)
     _run(["apt-get", "install", "-y", "chrony"], capture=True)
-    _run(["systemctl", "enable", "--now", "chrony"])
+    _run(["systemctl", "enable", "--now", "chrony"], capture=True)
+    if shutil.which("timedatectl"):
+        _run(["timedatectl", "set-ntp", "true"], capture=True)
+
+
+def _force_time_sync() -> tuple[bool, str]:
+    """Принудительная синхронизация NTP (после смены пояса или при сбое)."""
+    _ensure_time_sync()
+    if shutil.which("chronyc"):
+        _run(["chronyc", "makestep"], capture=True)
+        _run(["systemctl", "restart", "chrony"], capture=True)
+    elif shutil.which("systemctl"):
+        for svc in ("systemd-timesyncd", "ntp"):
+            _run(["systemctl", "enable", "--now", svc], capture=True)
+    for _ in range(6):
+        time.sleep(2)
+        ok, msg = _check_time_sync()
+        if ok:
+            return True, msg
+    return _check_time_sync()
+
+
+def _pick_timezone_from_list() -> str | None:
+    os.system("clear")
+    _box_top("⏱️  ВЫБОР ЧАСОВОГО ПОЯСА")
+    _box_row(f"  {DIM}Mieru отклоняет соединения при расхождении времени > ±30 сек{NC}")
+    _box_sep()
+    for i, (tz_id, label) in enumerate(_POPULAR_TIMEZONES, 1):
+        cur = _get_current_timezone()
+        mark = f" {GREEN}← сейчас{NC}" if tz_id == cur else ""
+        _box_item(str(i), f"{label}  {DIM}({tz_id}){NC}{mark}")
+    _box_row()
+    _box_item("M", f"Ввести вручную  {DIM}(например Europe/Riga){NC}")
+    _box_item("Q", "← Отмена")
+    _box_bot()
+    print()
+    try:
+        ch = _ask(f"{CYAN}Номер или M:{NC} ", c=True).strip().lower()
+    except _Cancelled:
+        return None
+    if ch in ("q", ""):
+        return None
+    if ch == "m":
+        try:
+            raw = _ask(f"{CYAN}Часовой пояс (IANA):{NC} ", c=True).strip()
+        except _Cancelled:
+            return None
+        return raw or None
+    if ch.isdigit():
+        idx = int(ch)
+        if 1 <= idx <= len(_POPULAR_TIMEZONES):
+            return _POPULAR_TIMEZONES[idx - 1][0]
+    print(f"  {YELLOW}⚠{NC}  Неверный выбор.")
+    time.sleep(1)
+    return None
+
+
+def run_mieru_time_setup_wizard(*, from_install: bool = False) -> bool:
+    """
+    Мастер: часовой пояс + синхронизация NTP.
+    Возвращает True, если время в допустимом состоянии для Mieru.
+    """
+    while True:
+        os.system("clear")
+        cur_tz = _get_current_timezone() or "—"
+        sync_ok, sync_msg = _check_time_sync()
+        r_time = _run(["timedatectl"], capture=True)
+        local_time = ""
+        if r_time.returncode == 0:
+            for line in (r_time.stdout or "").splitlines():
+                if "Local time:" in line:
+                    local_time = line.split(":", 1)[-1].strip()
+                    break
+
+        _box_top("⏱️  ЧАСОВОЙ ПОЯС И NTP  •  MIERU")
+        _box_row()
+        _box_kv("Пояс:", f"{YELLOW}{cur_tz}{NC}")
+        if local_time:
+            _box_kv("Локальное время:", local_time)
+        _box_kv(
+            "NTP:",
+            f"{GREEN}✓ {sync_msg}{NC}" if sync_ok else f"{RED}✗ {sync_msg}{NC}",
+        )
+        _box_row()
+        _box_warn("Без синхронизации NTP клиенты Mieru часто не подключаются.")
+        _box_sep()
+        _box_item("1", "Выбрать часовой пояс из списка")
+        _box_item("2", f"Только синхронизировать NTP  {DIM}(пояс не менять){NC}")
+        _box_item("3", f"Пояс + NTP  {DIM}(рекомендуется){NC}")
+        if not from_install:
+            _box_item("Q", "← Назад")
+        _box_bot()
+        print()
+
+        default = "3" if from_install else ""
+        try:
+            prompt = f"{CYAN}Выбор [{default or '1-3'}]:{NC} " if default else f"{CYAN}Выбор:{NC} "
+            ch = _ask(prompt, default=default, c=True).strip().lower()
+        except _Cancelled:
+            return sync_ok
+
+        if ch in ("q", "") and not from_install:
+            return sync_ok
+
+        if ch in ("1", "3"):
+            tz = _pick_timezone_from_list()
+            if not tz:
+                if from_install:
+                    continue
+                continue
+            ok, msg = _set_timezone(tz)
+            if ok:
+                print(f"  {GREEN}✓{NC}  Часовой пояс: {YELLOW}{msg}{NC}")
+            else:
+                print(f"  {RED}✗{NC}  Не удалось установить пояс: {msg}")
+                _pause()
+                continue
+            print(f"  {CYAN}→{NC}  Синхронизация NTP...")
+            sync_ok, sync_msg = _force_time_sync()
+        elif ch == "2":
+            print(f"  {CYAN}→{NC}  Синхронизация NTP...")
+            sync_ok, sync_msg = _force_time_sync()
+        elif from_install:
+            print(f"  {YELLOW}⚠{NC}  Пропуск настройки времени — возможны ошибки Mieru.")
+            return False
+        else:
+            print(f"  {YELLOW}⚠{NC}  Неверный выбор.")
+            time.sleep(1)
+            continue
+
+        os.system("clear")
+        _box_top("⏱️  РЕЗУЛЬТАТ")
+        _box_row()
+        _box_kv("Пояс:", f"{YELLOW}{_get_current_timezone() or '—'}{NC}")
+        _box_kv(
+            "NTP:",
+            f"{GREEN}✓ {sync_msg}{NC}" if sync_ok else f"{RED}✗ {sync_msg}{NC}",
+        )
+        if sync_ok:
+            _box_ok("Время готово для Mieru.")
+        else:
+            _box_warn("NTP всё ещё не синхронизирован.")
+            _box_info("Проверьте: timedatectl status")
+            _box_info("Убедитесь, что UDP 123 не блокируется фаерволом.")
+        _box_bot()
+        print()
+        if from_install:
+            if not sync_ok:
+                try:
+                    again = _ask(
+                        f"{YELLOW}Продолжить установку без NTP? [y/N]:{NC} ",
+                        c=True,
+                    ).strip().lower()
+                except _Cancelled:
+                    return False
+                return again in ("y", "yes", "д", "да")
+            time.sleep(1.5)
+            return True
+        _pause()
+        return sync_ok
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SING-BOX КОНФИГ ДЛЯ КЛИЕНТА
@@ -769,12 +1011,15 @@ def _gen_client_share_link_nekobox(server_ip: str, port_start: int,
 # ══════════════════════════════════════════════════════════════════════════════
 #  УСТАНОВКА
 # ══════════════════════════════════════════════════════════════════════════════
-def _run_install() -> None:
-    try: _run_install_inner()
+def _run_install(from_wizard: bool = False) -> None:
+    try:
+        _run_install_inner(from_wizard=from_wizard)
     except _Cancelled:
-        print(f"\n  {YELLOW}Установка прервана.{NC}\n"); _pause()
+        print(f"\n  {YELLOW}Установка прервана.{NC}\n")
+        if not from_wizard:
+            _pause()
 
-def _run_install_inner() -> None:
+def _run_install_inner(from_wizard: bool = False) -> None:
     os.system("clear")
     _box_top("🔒  УСТАНОВКА  •  MIERU")
     _box_row()
@@ -854,15 +1099,20 @@ def _run_install_inner() -> None:
     else:
         print(f"  {YELLOW}⚠{NC}  Сеть: ip_forward OK, DNS — {dns_msg}")
 
-    # 3. Синхронизация времени
-    print(f"  {CYAN}→{NC}  Проверяю синхронизацию времени...")
-    _ensure_time_sync()
+    # 3. Часовой пояс и синхронизация времени (критично для Mieru)
+    print(f"  {CYAN}→{NC}  Проверяю часовой пояс и NTP...")
     sync_ok, sync_msg = _check_time_sync()
+    cur_tz = _get_current_timezone()
     if sync_ok:
-        print(f"  {GREEN}✓{NC}  {sync_msg}")
+        tz_note = f", пояс {cur_tz}" if cur_tz else ""
+        print(f"  {GREEN}✓{NC}  {sync_msg}{tz_note}")
     else:
         print(f"  {YELLOW}⚠{NC}  {sync_msg}")
-        print(f"  {DIM}Mieru может не работать без синхронизации времени!{NC}")
+        print(f"  {DIM}Запуск мастера настройки времени...{NC}")
+        if not run_mieru_time_setup_wizard(from_install=from_wizard):
+            if not from_wizard:
+                _pause()
+            return
 
     # 4. Пользователи
     users = state.get("users") or []
@@ -973,7 +1223,8 @@ def _run_install_inner() -> None:
     _box_bot()
     print()
     _print_qr(share_link, f"Karing / mierus:// для {uname}")
-    _pause()
+    if not from_wizard:
+        _pause()
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ
@@ -1279,6 +1530,8 @@ def _show_status() -> None:
     _box_kv("Пользователей:", str(len(state.get("users", []))))
 
     sync_ok, sync_msg = _check_time_sync()
+    cur_tz = _get_current_timezone()
+    _box_kv("Часовой пояс:", cur_tz or "—")
     _box_kv("Время NTP:",
             f"{GREEN}✓ {sync_msg}{NC}" if sync_ok else f"{RED}✗ {sync_msg}{NC}")
 
@@ -1371,7 +1624,8 @@ def _guide_time() -> None:
     _box_info("Настройки → Дата и время → Авто-синхронизация: ВКЛ")
     _box_row()
     _box_sep()
-    _box_warn("Модуль автоматически устанавливает chrony при установке.")
+    _box_warn("Модуль автоматически предлагает мастер пояса/NTP при установке.")
+    _box_info("В меню Mieru: пункт [6] — часовой пояс и синхронизация.")
     _box_bot(); _pause()
 
 def _guide_clients() -> None:
@@ -1537,10 +1791,16 @@ def do_mieru_menu() -> None:
                           else f"{port_start}-{port_end}")
             _box_kv("Порт(ы):",       f"{YELLOW}{port_str}/{protocol}{NC}")
             _box_kv("Пользователей:", str(len(state.get("users", []))))
-            sync_ok, _ = _check_time_sync()
-            _box_kv("Время NTP:",
-                    f"{GREEN}✓ синхронизировано{NC}" if sync_ok
-                    else f"{RED}✗ не синхронизировано{NC}")
+
+        sync_ok, _ = _check_time_sync()
+        cur_tz = _get_current_timezone()
+        tz_short = cur_tz.split("/")[-1] if cur_tz else "—"
+        _box_kv(
+            "Пояс / NTP:",
+            f"{YELLOW}{tz_short}{NC} / {GREEN}✓ NTP{NC}"
+            if sync_ok
+            else f"{YELLOW}{tz_short}{NC} / {RED}✗ NTP{NC}",
+        )
 
         _box_row(); _box_sep()
 
@@ -1556,6 +1816,7 @@ def do_mieru_menu() -> None:
             _box_item("9", f"{RED}🗑️   Удалить Mieru{NC}")
 
         _box_sep()
+        _box_item("6", "⏱️  Часовой пояс и синхронизация NTP")
         _box_item("G", "📖  Гайд: как работает, клиенты, TCP vs UDP")
         _box_sep()
         _box_item("Q", "← Назад в главное меню VLESS")
@@ -1591,6 +1852,11 @@ def do_mieru_menu() -> None:
             try: _full_uninstall(silent=False)
             except _Cancelled:
                 print(f"  {DIM}Отменено.{NC}"); _pause()
+        elif ch == "6":
+            try:
+                run_mieru_time_setup_wizard()
+            except _Cancelled:
+                pass
         elif ch == "g":
             try: _show_guide()
             except _Cancelled: pass
