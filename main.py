@@ -213,7 +213,7 @@ for _attempt in range(_MAX_RETRIES + 1):
             print_banner()
             print()
             _cc, _cn, _flag = get_server_country_cached()
-            info(f"HYDRA Multi-Proxy Manager v0.4.0-beta | RAM: {TOTAL_RAM}MB | CPU: {TOTAL_CPU} | {_flag} {_cn} ({_cc})")
+            info(f"HYDRA Multi-Proxy Manager v0.5.0-rc1 | RAM: {TOTAL_RAM}MB | CPU: {TOTAL_CPU} | {_flag} {_cn} ({_cc})")
             print()
             _time.sleep(1)
 

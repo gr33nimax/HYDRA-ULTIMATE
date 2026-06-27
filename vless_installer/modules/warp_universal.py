@@ -93,6 +93,64 @@ def get_warp_gateway(iface: str) -> Optional[str]:
     return None
 
 
+def is_dnscrypt_hijacking_system_dns() -> bool:
+    """True если системный DNS указывает на локальный DNSCrypt/resolver."""
+    try:
+        r = subprocess.run(
+            ["systemctl", "is-active", "dnscrypt-proxy"],
+            capture_output=True, text=True, check=False,
+        )
+        if r.stdout.strip() == "active":
+            return True
+    except Exception:
+        pass
+    try:
+        resolv = Path("/etc/resolv.conf").read_text(encoding="utf-8", errors="replace")
+        for line in resolv.splitlines():
+            line = line.strip()
+            if line.startswith("nameserver") and "127.0.0.1" in line:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _resolve_via_upstream(domain: str) -> list[str]:
+    """Резолв через публичные DNS, минуя DNSCrypt/systemd-resolved."""
+    ips: set[str] = set()
+    for resolver in ("1.1.1.1", "8.8.8.8"):
+        try:
+            r = subprocess.run(
+                ["dig", "+short", "A", domain, f"@{resolver}"],
+                capture_output=True, text=True, timeout=8,
+            )
+            if r.returncode == 0:
+                for line in r.stdout.splitlines():
+                    line = line.strip()
+                    if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", line):
+                        ips.add(line)
+            if ips:
+                _log("INFO", f"Домен {domain} разрешён через @{resolver} (WARP upstream DNS)")
+                break
+        except Exception as e:
+            _log("WARN", f"dig @{resolver} для {domain}: {e}")
+    return sorted(ips)
+
+
+def resolve_domain_for_warp(domain: str) -> list[str]:
+    """Резолв для синхронизации WARP-маршрутов.
+
+    Политика HYDRA: при активном DNSCrypt системный DNS → DNSCrypt для приложений,
+    но WARP sync всегда использует upstream (1.1.1.1 / 8.8.8.8).
+    """
+    if is_dnscrypt_hijacking_system_dns():
+        ips = _resolve_via_upstream(domain)
+        if ips:
+            return ips
+        _log("WARN", f"Upstream DNS не разрешил {domain}, fallback на системный")
+    return resolve_domain(domain)
+
+
 def resolve_domain(domain: str) -> list[str]:
     """Разрешить доменное имя в список IPv4-адресов (/32).
 
@@ -213,7 +271,7 @@ def sync_routes(state: Optional[dict] = None) -> dict:
 
         new_resolved_cache = {}
         for domain in domains:
-            ips = resolve_domain(domain)
+            ips = resolve_domain_for_warp(domain)
             if ips:
                 new_resolved_cache[domain] = ips
                 for ip in ips:
@@ -444,6 +502,10 @@ def do_warp_routing_menu() -> None:
         _box_row(f"  Всего доменов:    {len(status['domains'])}")
         _box_row(f"  Всего подсетей:   {len(status['subnets'])}")
         _box_row(f"  Последняя синхр.: {DIM}{status['last_sync']}{NC}")
+        if is_dnscrypt_hijacking_system_dns():
+            _box_row(f"  DNS для sync:     {GREEN}upstream (1.1.1.1){NC}  {DIM}bypass DNSCrypt{NC}")
+        else:
+            _box_row(f"  DNS для sync:     {DIM}системный + fallback dig{NC}")
         _box_sep()
         
         _box_item("1", f"{'Выключить' if status['enabled'] else 'Включить'} обход")

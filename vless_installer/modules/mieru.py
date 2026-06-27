@@ -592,6 +592,34 @@ def _close_ports(proto: str, port_start: int, port_end: int) -> None:
         _ipt_persist()
 
 
+_MIERU_SYSCTL = Path("/etc/sysctl.d/99-hydra-mieru.conf")
+
+
+def ensure_mieru_server_networking() -> tuple[bool, str]:
+    """ip_forward + проверка исходящего DNS (нужно для исходящих соединений mita)."""
+    try:
+        from vless_installer.modules.network_mtu import test_outbound_dns
+    except ImportError:
+        test_outbound_dns = None
+
+    _run(["sysctl", "-w", "net.ipv4.ip_forward=1"], capture=True, check=False)
+    if not _MIERU_SYSCTL.exists():
+        _MIERU_SYSCTL.write_text(
+            "net.ipv4.ip_forward=1\nnet.ipv4.conf.all.rp_filter=0\n",
+            encoding="utf-8",
+        )
+
+    if test_outbound_dns:
+        ok, msg = test_outbound_dns("cloudflare.com")
+        return ok, msg
+    try:
+        import socket
+        socket.getaddrinfo("cloudflare.com", 443)
+        return True, "DNS OK"
+    except Exception as e:
+        return False, str(e)
+
+
 def _post_install_smoke_test(protocol: str, port_start: int, port_end: int) -> bool:
     """Проверка: systemd active и порты слушаются после установки."""
     r = _run(["systemctl", "is-active", _SERVICE_NAME], capture=True)
@@ -612,6 +640,13 @@ def _post_install_smoke_test(protocol: str, port_start: int, port_end: int) -> b
             return False
 
     print(f"  {GREEN}✓{NC}  Smoke-test: mita active, порты {port_start}-{port_end}/{proto_u} OK")
+
+    dns_ok, dns_msg = ensure_mieru_server_networking()
+    if dns_ok:
+        print(f"  {GREEN}✓{NC}  DNS с сервера: {dns_msg}")
+    else:
+        print(f"  {YELLOW}⚠{NC}  DNS с сервера: {dns_msg}")
+        print(f"  {DIM}Клиентам Mieru укажите DNS 1.1.1.1 / 8.8.8.8 в приложении{NC}")
     return True
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -812,6 +847,12 @@ def _run_install_inner() -> None:
     # 2. Бинарники — используем .deb если доступен dpkg, иначе tar.gz
     if not _install_mita_package(version):
         print(f"  {RED}✗{NC}  Не удалось установить mita."); _pause(); return
+
+    dns_ok, dns_msg = ensure_mieru_server_networking()
+    if dns_ok:
+        print(f"  {GREEN}✓{NC}  Сеть: ip_forward, DNS — {dns_msg}")
+    else:
+        print(f"  {YELLOW}⚠{NC}  Сеть: ip_forward OK, DNS — {dns_msg}")
 
     # 3. Синхронизация времени
     print(f"  {CYAN}→{NC}  Проверяю синхронизацию времени...")

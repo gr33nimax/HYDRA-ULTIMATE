@@ -3364,17 +3364,21 @@ def do_mtu_tuning() -> None:
     _box_sep()
 
     try:
-        from vless_installer.modules.network_mtu import recommend_mtu_for_awg
-        _awg_mtu = recommend_mtu_for_awg()
+        from vless_installer.modules.network_mtu import detect_network_stack, recommend_mtu_for_awg, stack_label
+        stack = detect_network_stack()
+        _awg_mtu = recommend_mtu_for_awg(stack)
+        _stack_str = stack_label(stack)
     except Exception:
+        stack = {}
         _awg_mtu = 1280
+        _stack_str = "—"
 
     probe_targets = [
         {"host": "1.1.1.1",        "label": "Cloudflare DNS", "port": 443},
         {"host": "8.8.8.8",        "label": "Google DNS",     "port": 443},
         {"host": "208.67.222.222", "label": "OpenDNS",        "port": 443},
     ]
-    _box_row(f"  {CYAN}Режим HYDRA:{NC} зондирование до внешних узлов (одна нода)")
+    _box_row(f"  {CYAN}Режим HYDRA:{NC} зондирование uplink  {DIM}({_stack_str}){NC}")
     _box_row(f"  {DIM}Рекомендуемый MTU для AWG-клиентов: {CYAN}{_awg_mtu}{NC}")
     nodes: list = []
 
@@ -8850,7 +8854,8 @@ def _menu_network() -> None:
         _box_item("3", "🌐 Геопроверка выходного IP")
         _box_item("4", f"🔒 DNSCrypt-proxy  {DIM}(управление и latency тест){NC}")
         _box_sep()
-        _box_item("M", f"📏 MTU/MSS автотюнинг  {DIM}(оптимизация для exit-нод){NC}")
+        _box_item("M", f"📏 MTU/MSS автотюнинг  {DIM}(оптимизация uplink){NC}")
+        _box_item("5", f"🔬 Диагностика сети HYDRA  {DIM}(стек AWG/WARP/DNS){NC}")
         _box_row()
         _box_back()
         _box_bottom()
@@ -8872,6 +8877,9 @@ def _menu_network() -> None:
             do_manage_dnscrypt()
         elif ch.lower() == "m":
             do_mtu_tuning()
+        elif ch == "5":
+            from vless_installer.modules.network_mtu import do_network_diagnostics_menu
+            do_network_diagnostics_menu()
         elif ch.lower() == "q" or ch == "":
             break
         else:

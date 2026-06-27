@@ -145,6 +145,13 @@ def install_docker_engine() -> bool:
 
 def prepare_awg_environment() -> None:
     """Sysctl и MTU-подсказки для AWG на сервере."""
+    from vless_installer.modules.network_mtu import (
+        build_mtu_recommendations,
+        detect_network_stack,
+        recommend_mtu_for_awg,
+        stack_label,
+    )
+
     _info("Включаю net.ipv4.ip_forward...")
     subprocess.run(
         ["sysctl", "-w", "net.ipv4.ip_forward=1"],
@@ -154,12 +161,15 @@ def prepare_awg_environment() -> None:
     if not sysctl_conf.exists():
         sysctl_conf.write_text("net.ipv4.ip_forward=1\n", encoding="utf-8")
 
-    try:
-        from vless_installer.modules.network_mtu import recommend_mtu_for_awg
-        mtu = recommend_mtu_for_awg()
-        _info(f"Рекомендуемый MTU для AWG-клиентов: {mtu}")
-    except Exception:
-        pass
+    stack = detect_network_stack()
+    mtu = recommend_mtu_for_awg(stack)
+    _info(f"Стек: {stack_label(stack)}")
+    _info(f"Рекомендуемый MTU для AWG-клиентов: {mtu}")
+    for rec in build_mtu_recommendations(stack):
+        if rec["target"].startswith("AWG"):
+            if stack.get("warp"):
+                _info("AWG+WARP: на клиенте Amnezia укажите MTU 1280")
+            break
     _ok("Сервер подготовлен для AmneziaWG.")
 
 
@@ -1115,6 +1125,17 @@ def do_amnezia_vpn_menu() -> None:
         
         if exists:
             _box_item("1", "Статус контейнера (подробно)")
+            try:
+                from vless_installer.modules.network_mtu import (
+                    detect_network_stack,
+                    recommend_mtu_for_awg,
+                    stack_label,
+                )
+                _st = detect_network_stack()
+                _mtu_hint = recommend_mtu_for_awg(_st)
+                _box_row(f"  {DIM}Стек: {stack_label(_st)}  |  MTU клиента: {_mtu_hint}{NC}")
+            except Exception:
+                pass
             if running:
                 _box_item("2", "Статус пиров (handshake, трафик)")
                 _box_item("3", "Перезапустить контейнер")
