@@ -1,10 +1,31 @@
-# Инструкция по установке — HYDRA Multi-Proxy Manager v0.7.0-rc1
+# Инструкция по установке — HYDRA v0.7.0-rc1
 
-## Быстрый старт (рекомендуется)
+## Стабильная ветка (`main`)
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh)
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh)"
 ```
+
+## Ветка prerelease (тест)
+
+```bash
+# Чистый сервер
+sudo HYDRA_BRANCH=prerelease bash -c "$(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/prerelease/bootstrap.sh)"
+
+# Или вручную
+sudo git clone -b prerelease --depth 1 https://github.com/gr33nimax/HYDRA-ULTIMATE /opt/vless-ultimate
+cd /opt/vless-ultimate && sudo python3 verify.py && sudo python3 main.py
+```
+
+Обновление уже установленной копии до prerelease:
+
+```bash
+cd /opt/vless-ultimate
+sudo git fetch origin && sudo git checkout prerelease && sudo git pull origin prerelease
+sudo python3 verify.py && sudo python3 main.py
+```
+
+Переменная **`HYDRA_BRANCH`** задаёт ветку для `bootstrap.sh` (по умолчанию `main`).
 
 Bootstrap скрипт автоматически:
 1. Проверяет права root
@@ -17,9 +38,11 @@ Bootstrap скрипт автоматически:
 ## Ручная установка
 
 ```bash
-# 1. Клонировать репозиторий
+# 1. Клонировать репозиторий (ветка main)
 git clone https://github.com/gr33nimax/HYDRA-ULTIMATE /opt/vless-ultimate
 cd /opt/vless-ultimate
+
+# Для prerelease: git clone -b prerelease ...
 
 # 2. Проверить целостность
 python3 verify.py
@@ -55,39 +78,16 @@ sudo apt-get install -y python3
 
 ---
 
-## Режимы установки
-
-### Режим A — Одиночный сервер
-
-Клиент → Ваш сервер → Интернет
-
-Выбор протокола при установке:
-- **VLESS + TCP + REALITY** — максимальная скорость, имитирует TLS 1.3
-- **VLESS + xHTTP + TLS** — для сред с жёстким DPI
-
-### Режим B — Каскад (Россия → Зарубеж)
-
-Клиент → RU-сервер → Зарубежный сервер → Интернет
-
-Нужно два VPS: один в России, один за рубежом. SSH-доступ к зарубежному серверу — для автонастройки.
-
-### Мульти-каскад
-
-До 10 зарубежных нод с балансировкой (`roundRobin`, `leastPing`, `pinned`).
-
----
-
 ## После установки
 
 ```bash
-# Проверить статус сервисов
-systemctl status xray nginx
-
-# Посмотреть сгенерированные ссылки
+# Панель
 sudo python3 /opt/vless-ultimate/main.py
-# → Управление пользователями → Показать ссылки
 
-# Лог установки
+# Статус HYDRA-служб
+systemctl status caddy-naive mita vless-sub dnscrypt-proxy
+
+# Лог
 tail -50 /var/log/vless-install.log
 ```
 
@@ -97,26 +97,18 @@ tail -50 /var/log/vless-install.log
 
 ```bash
 cd /opt/vless-ultimate
-git pull
+git pull origin main    # или: prerelease
+sudo python3 verify.py
 sudo python3 main.py
-# → Установка и Система → Обновить Xray
 ```
 
 ---
 
 ## Удаление
 
-```bash
-# Через меню
-sudo python3 /opt/vless-ultimate/main.py
-# → Управление пользователями → Полное удаление
+Через меню: **Установка HYDRA → Удаление HYDRA** (с опциональным бэкапом `state.json`).
 
-# Или вручную
-systemctl stop xray nginx
-systemctl disable xray nginx
-apt-get remove --purge nginx certbot
-rm -rf /etc/xray /var/lib/xray-installer /opt/vless-ultimate
-```
+Или вручную остановить службы `caddy-naive`, `mita`, `vless-sub`, `dnscrypt-proxy` и удалить каталог установки.
 
 ---
 

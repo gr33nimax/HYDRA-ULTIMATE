@@ -86,7 +86,8 @@ fi
 echo -e "\n${BOLD}[4/5] Загрузка HYDRA Ultimate${NC}"
 INSTALL_DIR="/opt/vless-ultimate"
 REPO_URL="https://github.com/gr33nimax/HYDRA-ULTIMATE"
-BRANCH="main"
+BRANCH="${HYDRA_BRANCH:-main}"
+info "Ветка git: ${BRANCH}"
 
 # Ищем существующую установку в нестандартных местах
 _found=""
