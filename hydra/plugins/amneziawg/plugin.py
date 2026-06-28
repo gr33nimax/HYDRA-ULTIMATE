@@ -83,6 +83,7 @@ class AmneziaWGPlugin(BasePlugin):
                 capture_output=True, text=True, timeout=120,
             )
             if r.returncode != 0:
+                print(f"  {r.stderr[:300]}")
                 return False
 
             r = subprocess.run(
@@ -91,6 +92,7 @@ class AmneziaWGPlugin(BasePlugin):
                 capture_output=True, text=True, timeout=300,
             )
             if r.returncode != 0:
+                print(f"  {r.stderr[:500]}")
                 return False
 
             lsmod = subprocess.run(["lsmod"], capture_output=True, text=True)
