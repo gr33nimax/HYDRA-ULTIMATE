@@ -71,7 +71,7 @@ def main_menu(state: AppState):
         total_p = len(plugins)
         u_active = sum(1 for u in state.users if not u.blocked)
 
-        print(f"  {CYAN}┌── Состояние{N}{'─' * 48}{NC}")
+        print(f"  {CYAN}┌── Состояние{NC}{'─' * 48}{NC}")
         print(f"  {CYAN}│{NC}  Sing-Box:    {_ok(sb_ok)}  {singbox_version() or 'не установлен'}")
         print(f"  {CYAN}│{NC}  Протоколов:  {GREEN}{active_p}{NC}/{total_p} запущено")
         print(f"  {CYAN}│{NC}  Пользователей: {GREEN if u_active else YELLOW}{u_active}{NC} из {len(state.users)}")
@@ -119,7 +119,7 @@ def menu_core(state: AppState):
         ok_r = is_running()
         ver = singbox_version()
 
-        print(f"\n  {CYAN}┌── Sing-Box{N}{'─' * 48}{NC}")
+        print(f"\n  {CYAN}┌── Sing-Box{NC}{'─' * 48}{NC}")
         print(f"  {CYAN}│{NC}  Статус:   {_ok(ok_r)} {'запущен' if ok_r else 'остановлен'}")
         print(f"  {CYAN}│{NC}  Версия:   {ver or '—'}")
         print(f"  {CYAN}│{NC}  Конфиг:   /etc/sing-box/config.json")
@@ -191,7 +191,7 @@ def menu_protocols(state: AppState):
         clear()
         plugins = get_all()
 
-        print(f"\n  {CYAN}┌── Протоколы{N}{'─' * 48}{NC}")
+        print(f"\n  {CYAN}┌── Протоколы{NC}{'─' * 48}{NC}")
         for p in plugins:
             s = p.status()
             ico = f"{GREEN}●{NC}" if s.running else (f"{YELLOW}●{NC}" if s.installed else f"{DIM}●{NC}")
@@ -236,7 +236,7 @@ def menu_plugin(state: AppState, plugin):
         s = plugin.status()
         proto = state.protocols.get(plugin.meta.name)
 
-        print(f"\n  {CYAN}╔══ {plugin.meta.name.upper()} {N}{'═' * (40 - len(plugin.meta.name))}{NC}")
+        print(f"\n  {CYAN}╔══ {plugin.meta.name.upper()} {NC}{'═' * (40 - len(plugin.meta.name))}{NC}")
         print(f"  {CYAN}║{NC}  {plugin.meta.description}")
         print(f"  {CYAN}║{NC}")
         print(f"  {CYAN}║{NC}  Установлен: {_ok(s.installed)}")
@@ -301,7 +301,7 @@ def menu_users(state: AppState):
         active = sum(1 for u in state.users if not u.blocked)
         blocked = sum(1 for u in state.users if u.blocked)
 
-        print(f"\n  {CYAN}┌── Пользователи{N}{'─' * 45}{NC}")
+        print(f"\n  {CYAN}┌── Пользователи{NC}{'─' * 45}{NC}")
         print(f"  {CYAN}│{NC}  Всего:          {len(state.users)}")
         print(f"  {CYAN}│{NC}  Активных:       {GREEN}{active}{NC}")
         print(f"  {CYAN}│{NC}  Заблокировано:  {RED}{blocked}{NC}")
@@ -441,7 +441,7 @@ def menu_telegram(state: AppState):
     while True:
         clear()
         tg = state.telegram
-        print(f"\n  {CYAN}┌── Telegram{N}{'─' * 50}{NC}")
+        print(f"\n  {CYAN}┌── Telegram{NC}{'─' * 50}{NC}")
         print(f"  {CYAN}│{NC}  Admin токен:  {_ok(bool(tg.admin_token))}")
         print(f"  {CYAN}│{NC}  Admin Chat ID: {tg.admin_chat_id or '—'}")
         print(f"  {CYAN}│{NC}  Admin бот:    {_ok(tg.admin_enabled)}")
@@ -540,7 +540,7 @@ def menu_monitoring(state: AppState):
         clear()
         traffic = collect_traffic(state)
         total = sum(traffic.values())
-        print(f"\n  {CYAN}┌── Мониторинг{N}{'─' * 47}{NC}")
+        print(f"\n  {CYAN}┌── Мониторинг{NC}{'─' * 47}{NC}")
         print(f"  {CYAN}│{NC}  Трафик всего: {_bytes(total)}")
         print(f"  {CYAN}│{NC}  Пользователей: {len(state.users)}")
         print(f"  {CYAN}└{'─' * 54}{NC}")
@@ -617,7 +617,7 @@ def menu_security(state: AppState):
     while True:
         clear()
         sec = state.security
-        print(f"\n  {CYAN}┌── Безопасность{N}{'─' * 46}{NC}")
+        print(f"\n  {CYAN}┌── Безопасность{NC}{'─' * 46}{NC}")
         print(f"  {CYAN}│{NC}  GeoIP:        {_ok(sec.geoip_block_enabled)}  (РФ, порт {sec.geoip_port})")
         print(f"  {CYAN}│{NC}  Fail2ban:     {_ok(sec.fail2ban_enabled)}")
         print(f"  {CYAN}│{NC}  Honeypot:     {_ok(sec.honeypot_enabled)}")
