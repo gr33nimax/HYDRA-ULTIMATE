@@ -69,7 +69,6 @@ class AmneziaWGPlugin(BasePlugin):
         if AWG_BIN.exists():
             self._down()
             subprocess.run(["modprobe", "-r", "amneziawg"], capture_output=True)
-            # Полная зачистка чтобы amneziawg-install.sh не видел старую установку
             subprocess.run(["rm", "-rf",
                 "/etc/amnezia/amneziawg",
                 "/usr/bin/awg", "/usr/bin/awg-quick",
@@ -91,13 +90,19 @@ class AmneziaWGPlugin(BasePlugin):
                 return False
 
             print("  Компиляция модуля ядра (может занять 2-5 мин)...")
+            # Авто-ответы: IP, Enter(порт по умолчанию), Enter(клиент), Enter(awg0)
+            server_ip = self._get_server_ip()
             r = subprocess.run(
                 ["bash", "amneziawg-install.sh"],
                 cwd=str(AWG_INSTALL_DIR),
-                timeout=600,
+                input=f"{server_ip}\n\n\n\n",
+                capture_output=True, text=True, timeout=600,
             )
+            print(r.stdout[-500:] if r.stdout else "")
             if r.returncode != 0:
                 print(f"  Ошибка: код {r.returncode}")
+                if r.stderr:
+                    print(f"  {r.stderr[:300]}")
                 return False
 
             lsmod = subprocess.run(["lsmod"], capture_output=True, text=True)
@@ -222,6 +227,14 @@ class AmneziaWGPlugin(BasePlugin):
     def _derive_key(seed: str) -> str:
         h = hashlib.sha256(seed.encode()).digest()
         return base64.b64encode(h[:32]).decode()
+
+    @staticmethod
+    def _get_server_ip() -> str:
+        r = subprocess.run(
+            ["curl", "-s", "-4", "--max-time", "5", "https://api.ipify.org"],
+            capture_output=True, text=True,
+        )
+        return r.stdout.strip() if r.returncode == 0 else "127.0.0.1"
 
     # ═════════════════════════════════════════════════════════════════════
     #  Клиентский конфиг
