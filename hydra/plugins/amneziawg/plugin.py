@@ -133,7 +133,7 @@ class AmneziaWGPlugin(BasePlugin):
         for pubkey in current_peers - wanted_peers:
             self._awg("set", AWG_INTERFACE, "peer", pubkey, "remove")
 
-        # Добавить недостающих
+        # Добавить недостающих + сохранить PSK для всех
         for user in users:
             pubkey = self._derive_pubkey(user.uuid)
             if pubkey not in current_peers:
@@ -144,10 +144,9 @@ class AmneziaWGPlugin(BasePlugin):
                 self._awg("set", AWG_INTERFACE, "peer", pubkey,
                           "preshared-key", str(psk_file),
                           "allowed-ips", peer_ip)
-                # Сохраняем PSK для будущих клиентских конфигов
-                psk_store = AWG_CONF_DIR / f"psk-{user.email}"
-                psk_store.write_text(psk)
                 psk_file.unlink(missing_ok=True)
+            # Всегда обновляем сохранённый PSK
+            self._save_psk(user.email)
 
         self._setup_nat(self._network())
 
@@ -169,6 +168,11 @@ class AmneziaWGPlugin(BasePlugin):
 
     def _gen_psk(self) -> str:
         return self._awg("genpsk").stdout.strip()
+
+    def _save_psk(self, email: str) -> None:
+        psk_store = AWG_CONF_DIR / f"psk-{email}"
+        if not psk_store.exists():
+            psk_store.write_text(self._gen_psk())
 
     def _peer_ip(self, user: User, state: AppState) -> str:
         network = self._network()
