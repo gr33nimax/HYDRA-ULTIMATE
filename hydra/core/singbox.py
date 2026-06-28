@@ -314,10 +314,18 @@ def start() -> bool:
     if not SINGBOX_CONFIG.exists():
         _log("INFO", "No config found, creating minimal default...")
         minimal = {
-            "log": {"level": "info", "output": "/var/log/sing-box/sing-box.log"},
-            "dns": {"servers": [{"tag": "dns-remote", "address": "https://dns.quad9.net/dns-query", "detour": "direct"}]},
-            "inbounds": [{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080}],
-            "outbounds": [{"type": "direct", "tag": "direct"}],
+            "log": {"level": "info"},
+            "dns": {
+                "servers": [
+                    {"tag": "dns-local", "address": "local", "detour": "direct"}
+                ]
+            },
+            "inbounds": [
+                {"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080}
+            ],
+            "outbounds": [
+                {"type": "direct", "tag": "direct"}
+            ],
         }
         write_config(minimal)
 
