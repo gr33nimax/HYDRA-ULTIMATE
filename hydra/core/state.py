@@ -151,7 +151,7 @@ def save_state(state: AppState) -> None:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         data = _to_dict(state)
         tmp = STATE_DIR / "state.json.tmp"
-        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=True), encoding="utf-8")
         tmp.replace(STATE_FILE)
 
 
