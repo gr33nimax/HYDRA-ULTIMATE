@@ -16,7 +16,7 @@ from typing import Optional
 
 from hydra.core.state import AppState, ProtocolState, load_state, save_state
 
-SINGBOX_BIN = Path("/usr/bin/sing-box")
+SINGBOX_BIN = Path("/usr/local/bin/sing-box")
 SINGBOX_CONFIG = Path("/etc/sing-box/config.json")
 SINGBOX_SERVICE = Path("/etc/systemd/system/sing-box.service")
 LOG_FILE = Path("/var/log/hydra/install.log")
@@ -302,13 +302,27 @@ WantedBy=multi-user.target
 
 
 def start() -> bool:
-    """Запускает sing-box."""
+    """Запускает sing-box. Создаёт минимальный конфиг, если его нет."""
+    # Если конфига нет — создаём минимальный рабочий
+    if not SINGBOX_CONFIG.exists():
+        _log("INFO", "No config found, creating minimal default...")
+        minimal = {
+            "log": {"level": "info", "output": "/var/log/sing-box/sing-box.log"},
+            "dns": {"servers": [{"tag": "dns-remote", "address": "https://dns.quad9.net/dns-query", "detour": "direct"}]},
+            "inbounds": [{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080}],
+            "outbounds": [{"type": "direct", "tag": "direct"}],
+        }
+        write_config(minimal)
+
     _install_service()
     r = _run(["systemctl", "start", "sing-box"], capture=False)
     if r.returncode != 0:
         return False
     time.sleep(1)
-    return is_running()
+    if is_running():
+        enable_autostart()
+        return True
+    return False
 
 
 def stop() -> bool:
