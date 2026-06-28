@@ -455,6 +455,7 @@ def _awg_generate_config(state: AppState, plugin):
             import re
             priv = re.search(r"PrivateKey\s*=\s*(\S+)", conf)
             pub = re.search(r"PublicKey\s*=\s*(\S+)", conf)
+            psk = re.search(r"PresharedKey\s*=\s*(\S+)", conf)
             ep = re.search(r"Endpoint\s*=\s*(\S+)", conf)
             addr = re.search(r"Address\s*=\s*(\S+)", conf)
             jc = re.search(r"Jc\s*=\s*(\S+)", conf)
@@ -462,6 +463,8 @@ def _awg_generate_config(state: AppState, plugin):
             jmax = re.search(r"Jmax\s*=\s*(\S+)", conf)
             s1 = re.search(r"S1\s*=\s*(\S+)", conf)
             s2 = re.search(r"S2\s*=\s*(\S+)", conf)
+            s3 = re.search(r"S3\s*=\s*(\S+)", conf)
+            s4 = re.search(r"S4\s*=\s*(\S+)", conf)
             h1 = re.search(r"H1\s*=\s*(\S+)", conf)
             h2 = re.search(r"H2\s*=\s*(\S+)", conf)
             h3 = re.search(r"H3\s*=\s*(\S+)", conf)
@@ -478,11 +481,14 @@ def _awg_generate_config(state: AppState, plugin):
                 if jmax: params.append(f"jmax={jmax.group(1)}")
                 if s1: params.append(f"s1={s1.group(1)}")
                 if s2: params.append(f"s2={s2.group(1)}")
+                if s3: params.append(f"s3={s3.group(1)}")
+                if s4: params.append(f"s4={s4.group(1)}")
                 if h1: params.append(f"h1={h1.group(1)}")
                 if h2: params.append(f"h2={h2.group(1)}")
                 if h3: params.append(f"h3={h3.group(1)}")
                 if h4: params.append(f"h4={h4.group(1)}")
                 if pub: params.append(f"public_key={pub.group(1)}")
+                if psk: params.append(f"pre_shared_key={psk.group(1)}")
                 params.append("persistent_keepalive_interval=25")
                 wg_link = f"wg://{ip}:{port}?{'&'.join(params)}#{user.email}%20AWG"
 
