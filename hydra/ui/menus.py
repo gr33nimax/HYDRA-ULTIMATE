@@ -19,7 +19,7 @@ from hydra.core.singbox import (
 )
 from hydra.plugins.registry import (
     get_all, get as get_plugin, get_enabled, collect_fragments,
-    install_all, status_all,
+    status_all,
 )
 from hydra.plugins.base import ConfigFragment
 from hydra.core.systemd import install_service, install_timer, remove_unit
@@ -132,9 +132,7 @@ def menu_core(state: AppState):
                 ("1", "📦 Установить Sing-Box" if not ok_i else "🔄 Переустановить",
                  "Официальный репозиторий / GitHub .deb"),
                 ("2", "▶️  Запустить" if not ok_r else "⏸️  Остановить", ""),
-                ("3", "📦 Установить все плагины",
-                 "Caddy, Mieru, AWG kernel, DNSCrypt, WARP"),
-                ("4", "🔄 Применить конфиг",
+                ("3", "🔄 Применить конфиг",
                  "Собрать /etc/sing-box/config.json и перезагрузить"),
                 ("0", "↩ Назад", ""),
             ],
@@ -164,11 +162,6 @@ def menu_core(state: AppState):
                     error("Не удалось запустить. Проверьте: systemctl status sing-box")
             prompt("Нажмите Enter")
         elif choice == "3":
-            info("Устанавливаю плагины...")
-            for name, ok in install_all(state).items():
-                (success if ok else error)(f"  {name}: {'OK' if ok else 'ОШИБКА'}")
-            prompt("Нажмите Enter")
-        elif choice == "4":
             info("Собираю конфиг...")
             frag_dicts = {}
             for n, f in collect_fragments(state).items():

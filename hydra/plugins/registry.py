@@ -9,8 +9,6 @@ from __future__ import annotations
 from typing import Optional
 
 from hydra.plugins.base import BasePlugin, ConfigFragment
-from hydra.plugins.naiveproxy.plugin import NaiveProxyPlugin
-from hydra.plugins.mieru.plugin import MieruPlugin
 from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
 from hydra.plugins.dnscrypt.plugin import DNSCryptPlugin
 from hydra.plugins.warp.plugin import WarpPlugin
@@ -22,8 +20,6 @@ from hydra.core.state import AppState
 # ═════════════════════════════════════════════════════════════════════════════
 
 _ALL_PLUGINS: list[BasePlugin] = [
-    NaiveProxyPlugin(),
-    MieruPlugin(),
     AmneziaWGPlugin(),
     DNSCryptPlugin(),
     WarpPlugin(),
