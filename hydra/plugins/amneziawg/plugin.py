@@ -69,7 +69,15 @@ class AmneziaWGPlugin(BasePlugin):
         if AWG_BIN.exists():
             self._down()
             subprocess.run(["modprobe", "-r", "amneziawg"], capture_output=True)
-            subprocess.run(["rm", "-rf", str(AWG_INSTALL_DIR)], capture_output=True)
+            # Полная зачистка чтобы amneziawg-install.sh не видел старую установку
+            subprocess.run(["rm", "-rf",
+                "/etc/amnezia/amneziawg",
+                "/usr/bin/awg", "/usr/bin/awg-quick",
+                "/usr/local/bin/awg", "/usr/local/bin/awg-quick",
+                "/lib/modules/*/extra/amneziawg*",
+                str(AWG_INSTALL_DIR),
+            ], capture_output=True)
+            subprocess.run(["depmod", "-a"], capture_output=True)
 
         try:
             r = subprocess.run(
