@@ -144,6 +144,9 @@ class AmneziaWGPlugin(BasePlugin):
                 self._awg("set", AWG_INTERFACE, "peer", pubkey,
                           "preshared-key", str(psk_file),
                           "allowed-ips", peer_ip)
+                # Сохраняем PSK для будущих клиентских конфигов
+                psk_store = AWG_CONF_DIR / f"psk-{user.email}"
+                psk_store.write_text(psk)
                 psk_file.unlink(missing_ok=True)
 
         self._setup_nat(self._network())
@@ -245,18 +248,11 @@ class AmneziaWGPlugin(BasePlugin):
         h4 = re.search(r"^H4\s*=\s*(\S+)", conf_text, re.M)
         mtu = re.search(r"^MTU\s*=\s*(\d+)", conf_text, re.M)
 
-        # PSK для этого пира — из awg0.conf (awg show скрывает)
-        client_pub = self._derive_pubkey(user.uuid)
+        # PSK — из сохранённого файла
         psk = None
-        if AWG_CONF.exists():
-            lines_list = conf_text.splitlines()
-            for i, line in enumerate(lines_list):
-                if line.strip() == f"PublicKey = {client_pub}":
-                    if i + 1 < len(lines_list) and "PresharedKey" in lines_list[i + 1]:
-                        m = re.search(r"PresharedKey\s*=\s*(\S+)", lines_list[i + 1])
-                        if m:
-                            psk = m.group(1)
-                    break
+        psk_store = AWG_CONF_DIR / f"psk-{user.email}"
+        if psk_store.exists():
+            psk = psk_store.read_text().strip()
 
         server_pub = self._awg("pubkey", _input=server_priv.group(1)).stdout.strip() if server_priv else ""
 
