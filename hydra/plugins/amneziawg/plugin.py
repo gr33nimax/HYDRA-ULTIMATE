@@ -79,6 +79,7 @@ class AmneziaWGPlugin(BasePlugin):
             subprocess.run(["depmod", "-a"], capture_output=True)
 
         try:
+            subprocess.run(["rm", "-rf", str(AWG_INSTALL_DIR)], capture_output=True)
             r = subprocess.run(
                 ["git", "clone", "--depth", "1",
                  "https://github.com/wiresock/amneziawg-install.git",
