@@ -90,35 +90,14 @@ class AmneziaWGPlugin(BasePlugin):
                 print(f"  {r.stderr[:300]}")
                 return False
 
-            print("  Компиляция модуля ядра (может занять 2-5 мин)...")
-            server_ip = self._get_server_ip()
-            answers = "\n" * 7 + f"{server_ip}\n" + "\n" * 15
-
-            import sys
-            proc = subprocess.Popen(
+            print("  Запуск установщика wiresock...")
+            print("  Отвечайте на вопросы (Enter = значение по умолчанию)")
+            print()
+            r = subprocess.run(
                 ["bash", "amneziawg-install.sh"],
                 cwd=str(AWG_INSTALL_DIR),
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1,
+                timeout=600,
             )
-            proc.stdin.write(answers)
-            proc.stdin.close()
-
-            lines: list[str] = []
-            for line in proc.stdout:
-                print(f"  {line.rstrip()}")
-                lines.append(line)
-            proc.wait(timeout=600)
-
-            # Сохраняем лог
-            log_file = Path("/var/log/hydra/awg-install.log")
-            log_file.parent.mkdir(parents=True, exist_ok=True)
-            log_file.write_text("".join(lines))
-
-            if proc.returncode != 0:
-                print(f"  Ошибка: код {proc.returncode}")
-                return False
 
             lsmod = subprocess.run(["lsmod"], capture_output=True, text=True)
             if "amneziawg" not in lsmod.stdout:
