@@ -245,10 +245,18 @@ class AmneziaWGPlugin(BasePlugin):
         h4 = re.search(r"^H4\s*=\s*(\S+)", conf_text, re.M)
         mtu = re.search(r"^MTU\s*=\s*(\d+)", conf_text, re.M)
 
-        # PSK для этого пира
+        # PSK для этого пира — из awg0.conf (awg show скрывает)
         client_pub = self._derive_pubkey(user.uuid)
-        peer_text = self._awg("show", AWG_INTERFACE, "peer", client_pub).stdout
-        psk = re.search(r"preshared key:\s*(\S+)", peer_text)
+        psk = None
+        if AWG_CONF.exists():
+            lines_list = conf_text.splitlines()
+            for i, line in enumerate(lines_list):
+                if line.strip() == f"PublicKey = {client_pub}":
+                    if i + 1 < len(lines_list) and "PresharedKey" in lines_list[i + 1]:
+                        m = re.search(r"PresharedKey\s*=\s*(\S+)", lines_list[i + 1])
+                        if m:
+                            psk = m.group(1)
+                    break
 
         server_pub = self._awg("pubkey", _input=server_priv.group(1)).stdout.strip() if server_priv else ""
 
