@@ -148,46 +148,62 @@ class AmneziaWGPlugin(BasePlugin):
         )
 
     def _load_or_generate_keys(self) -> dict:
+        # Всегда предпочитаем реальный awg0.conf (переживает переустановки)
+        existing = self._read_existing_keys()
+        if existing:
+            STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            STATE_FILE.write_text(json.dumps(existing, indent=2))
+            return existing
+        # Fallback: читаем из state или генерируем
         if STATE_FILE.exists():
             try:
                 return json.loads(STATE_FILE.read_text())
             except Exception:
                 pass
-
-        # Пробуем прочитать ключи из существующего конфига wiresock
-        existing = self._read_existing_keys()
-        if existing:
-            private = existing["private"]
-            port = existing.get("port", AWG_PORT)
-            public = self._awg("pubkey", _input=private).stdout.strip()
-            keys = {"private": private, "public": public, "port": port}
-            STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            STATE_FILE.write_text(json.dumps(keys, indent=2))
-            return keys
+        # Генерация (только если ничего нет)
+        private = self._awg("genkey").stdout.strip()
+        keys = {"private": private, "port": AWG_PORT,
+                "jc": OBFUSCATION["Jc"], "jmin": OBFUSCATION["Jmin"],
+                "jmax": OBFUSCATION["Jmax"],
+                "s1": OBFUSCATION["S1"], "s2": OBFUSCATION["S2"],
+                "s3": 0, "s4": 0,
+                "h1": f"{OBFUSCATION['H1']}-{OBFUSCATION['H1']+100000000}",
+                "h2": f"{OBFUSCATION['H2']}-{OBFUSCATION['H2']+100000000}",
+                "h3": f"{OBFUSCATION['H3']}-{OBFUSCATION['H3']+100000000}",
+                "h4": f"{OBFUSCATION['H4']}-{OBFUSCATION['H4']+100000000}",
+        }
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        STATE_FILE.write_text(json.dumps(keys, indent=2))
+        return keys
 
     def _build_conf(self, keys: dict, users: list, port: int, network: str, mtu: int) -> str:
+        server_ip = network.rsplit(".", 2)[0] + ".1"
         lines = [
             "[Interface]",
             f"PrivateKey = {keys['private']}",
-            f"Address = {AWG_SERVER_IP}/24",
+            f"Address = {server_ip}/24",
             f"ListenPort = {port}",
             f"MTU = {mtu}",
             "",
             "# Обфускация",
-            f"Jc = {OBFUSCATION['Jc']}",
-            f"Jmin = {OBFUSCATION['Jmin']}",
-            f"Jmax = {OBFUSCATION['Jmax']}",
-            f"S1 = {OBFUSCATION['S1']}",
-            f"S2 = {OBFUSCATION['S2']}",
-            f"H1 = {OBFUSCATION['H1']}",
-            f"H2 = {OBFUSCATION['H2']}",
-            f"H3 = {OBFUSCATION['H3']}",
-            f"H4 = {OBFUSCATION['H4']}",
-            "",
+            f"Jc = {keys.get('jc', OBFUSCATION['Jc'])}",
+            f"Jmin = {keys.get('jmin', OBFUSCATION['Jmin'])}",
+            f"Jmax = {keys.get('jmax', OBFUSCATION['Jmax'])}",
+            f"S1 = {keys.get('s1', OBFUSCATION['S1'])}",
+            f"S2 = {keys.get('s2', OBFUSCATION['S2'])}",
         ]
+        if keys.get('s3'):
+            lines.append(f"S3 = {keys['s3']}")
+        if keys.get('s4'):
+            lines.append(f"S4 = {keys['s4']}")
+        for h in ('h1', 'h2', 'h3', 'h4'):
+            if keys.get(h):
+                lines.append(f"H{int(h[1])} = {keys[h]}")
+        lines.append("")
 
+        base = network.rsplit(".", 2)[0]
         for idx, user in enumerate(users):
-            peer_ip = f"10.8.20.{idx + 2}"
+            peer_ip = f"{base}.{idx + 2}"
             client_private = self._derive_key(user.uuid)
             client_public = self._awg("pubkey", _input=client_private).stdout.strip()
 
@@ -239,26 +255,24 @@ class AmneziaWGPlugin(BasePlugin):
 
     def generate_client_config(self, user: User, state: AppState) -> str:
         keys = self._load_or_generate_keys()
-        proto = state.protocols.get("amneziawg")
-        config = proto.config if proto else {}
-        port = config.get("port", AWG_PORT)
+        port = self._current_port()
         mtus = {True: 1200, False: 1420}
         mtu = mtus[state.network.warp_enabled]
+        network = keys.get("network", AWG_NETWORK)
+        base = network.rsplit(".", 2)[0]
 
         server_ip = state.network.server_ip or self._get_server_ip()
-        port = self._current_port()  # Брать реальный порт из awg0.conf
-
         client_private = self._derive_key(user.uuid)
-        client_public = self._awg("pubkey", _input=client_private).stdout.strip()
+        peer_idx = next((i for i, u in enumerate(state.users) if u.email == user.email and not u.blocked), 0)
+        peer_ip = f"{base}.{peer_idx + 2}"
 
         dns = "1.1.1.1"
         if state.network.dnscrypt_enabled:
             dns = server_ip
 
-        peer_idx = next((i for i, u in enumerate(state.users) if u.email == user.email and not u.blocked), 0)
-        peer_ip = f"10.8.20.{peer_idx + 2}"
+        server_pub = self._awg("pubkey", _input=keys["private"]).stdout.strip()
 
-        return "\n".join([
+        lines = [
             "[Interface]",
             f"PrivateKey = {client_private}",
             f"Address = {peer_ip}/32",
@@ -266,22 +280,28 @@ class AmneziaWGPlugin(BasePlugin):
             f"MTU = {mtu}",
             "",
             "# Обфускация",
-            f"Jc = {OBFUSCATION['Jc']}",
-            f"Jmin = {OBFUSCATION['Jmin']}",
-            f"Jmax = {OBFUSCATION['Jmax']}",
-            f"S1 = {OBFUSCATION['S1']}",
-            f"S2 = {OBFUSCATION['S2']}",
-            f"H1 = {OBFUSCATION['H1']}",
-            f"H2 = {OBFUSCATION['H2']}",
-            f"H3 = {OBFUSCATION['H3']}",
-            f"H4 = {OBFUSCATION['H4']}",
+            f"Jc = {keys.get('jc', OBFUSCATION['Jc'])}",
+            f"Jmin = {keys.get('jmin', OBFUSCATION['Jmin'])}",
+            f"Jmax = {keys.get('jmax', OBFUSCATION['Jmax'])}",
+            f"S1 = {keys.get('s1', OBFUSCATION['S1'])}",
+            f"S2 = {keys.get('s2', OBFUSCATION['S2'])}",
+        ]
+        if keys.get('s3'):
+            lines.append(f"S3 = {keys['s3']}")
+        if keys.get('s4'):
+            lines.append(f"S4 = {keys['s4']}")
+        for h in ('h1', 'h2', 'h3', 'h4'):
+            if keys.get(h):
+                lines.append(f"H{int(h[1])} = {keys[h]}")
+        lines += [
             "",
             "[Peer]",
-            f"PublicKey = {keys['public']}",
+            f"PublicKey = {server_pub}",
             f"Endpoint = {server_ip}:{port}",
             "AllowedIPs = 0.0.0.0/0",
             "PersistentKeepalive = 25",
-        ])
+        ]
+        return "\n".join(lines)
 
     # ═════════════════════════════════════════════════════════════════════
     #  Статус / трафик
@@ -310,15 +330,42 @@ class AmneziaWGPlugin(BasePlugin):
         return AWG_PORT
 
     def _read_existing_keys(self) -> dict | None:
-        """Читает приватный ключ и порт из существующего awg0.conf (после wiresock)."""
+        """Читает все параметры из существующего awg0.conf."""
         if not AWG_CONF.exists():
             return None
         import re
         text = AWG_CONF.read_text()
         priv = re.search(r"PrivateKey\s*=\s*(\S+)", text)
         port = re.search(r"ListenPort\s*=\s*(\d+)", text)
+        addr = re.search(r"Address\s*=\s*(\S+)", text)
+        jc = re.search(r"Jc\s*=\s*(\S+)", text)
+        jmin = re.search(r"Jmin\s*=\s*(\S+)", text)
+        jmax = re.search(r"Jmax\s*=\s*(\S+)", text)
+        s1 = re.search(r"S1\s*=\s*(\S+)", text)
+        s2 = re.search(r"S2\s*=\s*(\S+)", text)
+        s3 = re.search(r"S3\s*=\s*(\S+)", text)
+        s4 = re.search(r"S4\s*=\s*(\S+)", text)
+        h1 = re.search(r"H1\s*=\s*(\S+)", text)
+        h2 = re.search(r"H2\s*=\s*(\S+)", text)
+        h3 = re.search(r"H3\s*=\s*(\S+)", text)
+        h4 = re.search(r"H4\s*=\s*(\S+)", text)
         if priv:
-            return {"private": priv.group(1), "port": int(port.group(1)) if port else AWG_PORT}
+            return {
+                "private": priv.group(1),
+                "port": int(port.group(1)) if port else AWG_PORT,
+                "network": addr.group(1).rsplit(".", 1)[0] + ".0/24" if addr else AWG_NETWORK,
+                "jc": int(jc.group(1)) if jc else OBFUSCATION["Jc"],
+                "jmin": int(jmin.group(1)) if jmin else OBFUSCATION["Jmin"],
+                "jmax": int(jmax.group(1)) if jmax else OBFUSCATION["Jmax"],
+                "s1": int(s1.group(1)) if s1 else OBFUSCATION["S1"],
+                "s2": int(s2.group(1)) if s2 else OBFUSCATION["S2"],
+                "s3": int(s3.group(1)) if s3 else 0,
+                "s4": int(s4.group(1)) if s4 else 0,
+                "h1": h1.group(1) if h1 else "",
+                "h2": h2.group(1) if h2 else "",
+                "h3": h3.group(1) if h3 else "",
+                "h4": h4.group(1) if h4 else "",
+            }
         return None
 
     def _awg(self, *args, _input: str = "") -> subprocess.CompletedProcess:
