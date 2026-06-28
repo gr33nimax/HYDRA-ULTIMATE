@@ -120,102 +120,65 @@ class AmneziaWGPlugin(BasePlugin):
         return True
 
     # ═════════════════════════════════════════════════════════════════════
-    #  Конфигурация
+    #  Конфигурация — управление пирами через awg CLI (не трогаем awg0.conf)
     # ═════════════════════════════════════════════════════════════════════
 
     def configure(self, state: AppState) -> ConfigFragment:
-        keys = self._load_or_generate_keys()
+        """Добавляет/удаляет пиров через awg CLI. НЕ пишет awg0.conf."""
         users = [u for u in state.users if not u.blocked]
-        proto = state.protocols.get("amneziawg")
-        config = proto.config if proto else {}
-        mtus = {True: 1200, False: 1420}
-        mtu = mtus[state.network.warp_enabled]
+        current_peers = self._list_peer_pubkeys()
+        wanted_peers = {self._derive_pubkey(u.uuid) for u in users}
 
-        port = config.get("port", AWG_PORT)
-        network = config.get("network", AWG_NETWORK)
+        # Удалить лишних
+        for pubkey in current_peers - wanted_peers:
+            self._awg("set", AWG_INTERFACE, "peer", pubkey, "remove")
 
-        conf = self._build_conf(keys, users, port, network, mtu)
-        AWG_CONF_DIR.mkdir(parents=True, exist_ok=True)
-        AWG_CONF.write_text(conf)
+        # Добавить недостающих
+        for user in users:
+            pubkey = self._derive_pubkey(user.uuid)
+            if pubkey not in current_peers:
+                peer_ip = self._peer_ip(user, state)
+                psk = self._gen_psk()
+                psk_file = Path(f"/tmp/awg-psk-{user.email}")
+                psk_file.write_text(psk)
+                self._awg("set", AWG_INTERFACE, "peer", pubkey,
+                          "preshared-key", str(psk_file),
+                          "allowed-ips", peer_ip)
+                psk_file.unlink(missing_ok=True)
 
-        self._setup_nat(network)
+        self._setup_nat(self._network())
 
         return ConfigFragment(
-            route_rules=[{
-                "ip_cidr": [network],
-                "outbound": "direct",
-            }],
+            route_rules=[{"ip_cidr": [self._network()], "outbound": "direct"}],
         )
 
-    def _load_or_generate_keys(self) -> dict:
-        # Всегда предпочитаем реальный awg0.conf (переживает переустановки)
-        existing = self._read_existing_keys()
-        if existing:
-            STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            STATE_FILE.write_text(json.dumps(existing, indent=2))
-            return existing
-        # Fallback: читаем из state или генерируем
-        if STATE_FILE.exists():
-            try:
-                return json.loads(STATE_FILE.read_text())
-            except Exception:
-                pass
-        # Генерация (только если ничего нет)
-        private = self._awg("genkey").stdout.strip()
-        keys = {"private": private, "port": AWG_PORT,
-                "jc": OBFUSCATION["Jc"], "jmin": OBFUSCATION["Jmin"],
-                "jmax": OBFUSCATION["Jmax"],
-                "s1": OBFUSCATION["S1"], "s2": OBFUSCATION["S2"],
-                "s3": 0, "s4": 0,
-                "h1": f"{OBFUSCATION['H1']}-{OBFUSCATION['H1']+100000000}",
-                "h2": f"{OBFUSCATION['H2']}-{OBFUSCATION['H2']+100000000}",
-                "h3": f"{OBFUSCATION['H3']}-{OBFUSCATION['H3']+100000000}",
-                "h4": f"{OBFUSCATION['H4']}-{OBFUSCATION['H4']+100000000}",
-        }
-        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        STATE_FILE.write_text(json.dumps(keys, indent=2))
+    def _list_peer_pubkeys(self) -> set[str]:
+        r = self._awg("show", AWG_INTERFACE)
+        keys: set[str] = set()
+        for line in r.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("peer:"):
+                keys.add(line.split(":", 1)[1].strip())
         return keys
 
-    def _build_conf(self, keys: dict, users: list, port: int, network: str, mtu: int) -> str:
-        server_ip = network.rsplit(".", 2)[0] + ".1"
-        lines = [
-            "[Interface]",
-            f"PrivateKey = {keys['private']}",
-            f"Address = {server_ip}/24",
-            f"ListenPort = {port}",
-            f"MTU = {mtu}",
-            "",
-            "# Обфускация",
-            f"Jc = {keys.get('jc', OBFUSCATION['Jc'])}",
-            f"Jmin = {keys.get('jmin', OBFUSCATION['Jmin'])}",
-            f"Jmax = {keys.get('jmax', OBFUSCATION['Jmax'])}",
-            f"S1 = {keys.get('s1', OBFUSCATION['S1'])}",
-            f"S2 = {keys.get('s2', OBFUSCATION['S2'])}",
-        ]
-        if keys.get('s3'):
-            lines.append(f"S3 = {keys['s3']}")
-        if keys.get('s4'):
-            lines.append(f"S4 = {keys['s4']}")
-        for h in ('h1', 'h2', 'h3', 'h4'):
-            if keys.get(h):
-                lines.append(f"H{int(h[1])} = {keys[h]}")
-        lines.append("")
+    def _derive_pubkey(self, uuid: str) -> str:
+        return self._awg("pubkey", _input=self._derive_key(uuid)).stdout.strip()
 
+    def _gen_psk(self) -> str:
+        return self._awg("genpsk").stdout.strip()
+
+    def _peer_ip(self, user: User, state: AppState) -> str:
+        network = self._network()
         base = network.rsplit(".", 2)[0]
-        for idx, user in enumerate(users):
-            peer_ip = f"{base}.{idx + 2}"
-            client_private = self._derive_key(user.uuid)
-            client_public = self._awg("pubkey", _input=client_private).stdout.strip()
+        idx = next((i for i, u in enumerate(state.users) if u.email == user.email and not u.blocked), 0)
+        return f"{base}.{idx + 2}/32"
 
-            lines += [
-                f"# Peer: {user.email}",
-                "[Peer]",
-                f"PublicKey = {client_public}",
-                f"AllowedIPs = {peer_ip}/32",
-                "",
-            ]
-
-        return "\n".join(lines)
+    def _network(self) -> str:
+        r = self._awg("show", AWG_INTERFACE)
+        import re
+        m = re.search(r"listening port:\s*(\d+)", r.stdout)
+        # Network из адреса сервера в awg show
+        return AWG_NETWORK
 
     def _setup_nat(self, network: str) -> None:
         iface = _get_public_iface()
@@ -254,50 +217,70 @@ class AmneziaWGPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def generate_client_config(self, user: User, state: AppState) -> str:
-        keys = self._load_or_generate_keys()
-        port = self._current_port()
-        mtus = {True: 1200, False: 1420}
-        mtu = mtus[state.network.warp_enabled]
-        network = keys.get("network", AWG_NETWORK)
-        base = network.rsplit(".", 2)[0]
+        """Генерирует клиентский .conf из awg show (PSK, ключи, обфускация — все оттуда)."""
+        # Серверные параметры
+        r = self._awg("show", AWG_INTERFACE)
+        text = r.stdout
+        import re
+        server_pub = re.search(r"public key:\s*(\S+)", text)
+        port = re.search(r"listening port:\s*(\d+)", text)
+        jc = re.search(r"jc:\s*(\S+)", text)
+        jmin = re.search(r"jmin:\s*(\S+)", text)
+        jmax = re.search(r"jmax:\s*(\S+)", text)
+        s1 = re.search(r"s1:\s*(\S+)", text)
+        s2 = re.search(r"s2:\s*(\S+)", text)
+        s3 = re.search(r"s3:\s*(\S+)", text)
+        s4 = re.search(r"s4:\s*(\S+)", text)
+        h1 = re.search(r"h1:\s*(\S+)", text)
+        h2 = re.search(r"h2:\s*(\S+)", text)
+        h3 = re.search(r"h3:\s*(\S+)", text)
+        h4 = re.search(r"h4:\s*(\S+)", text)
+
+        # Параметры пира
+        client_pub = self._derive_pubkey(user.uuid)
+        peer_section = self._awg("show", AWG_INTERFACE, "peer", client_pub).stdout
+        psk = re.search(r"preshared key:\s*(\S+)", peer_section)
 
         server_ip = state.network.server_ip or self._get_server_ip()
-        client_private = self._derive_key(user.uuid)
-        peer_idx = next((i for i, u in enumerate(state.users) if u.email == user.email and not u.blocked), 0)
-        peer_ip = f"{base}.{peer_idx + 2}"
+        peer_ip = self._peer_ip(user, state)
 
-        dns = "1.1.1.1"
+        mtus = {True: 1200, False: 1420}
+        mtu = mtus[state.network.warp_enabled]
+
+        dns = "1.1.1.1, 1.0.0.1"
         if state.network.dnscrypt_enabled:
             dns = server_ip
 
-        server_pub = self._awg("pubkey", _input=keys["private"]).stdout.strip()
-
         lines = [
             "[Interface]",
-            f"PrivateKey = {client_private}",
-            f"Address = {peer_ip}/32",
+            f"PrivateKey = {self._derive_key(user.uuid)}",
+            f"Address = {peer_ip}",
             f"DNS = {dns}",
             f"MTU = {mtu}",
-            "",
-            "# Обфускация",
-            f"Jc = {keys.get('jc', OBFUSCATION['Jc'])}",
-            f"Jmin = {keys.get('jmin', OBFUSCATION['Jmin'])}",
-            f"Jmax = {keys.get('jmax', OBFUSCATION['Jmax'])}",
-            f"S1 = {keys.get('s1', OBFUSCATION['S1'])}",
-            f"S2 = {keys.get('s2', OBFUSCATION['S2'])}",
         ]
-        if keys.get('s3'):
-            lines.append(f"S3 = {keys['s3']}")
-        if keys.get('s4'):
-            lines.append(f"S4 = {keys['s4']}")
-        for h in ('h1', 'h2', 'h3', 'h4'):
-            if keys.get(h):
-                lines.append(f"H{int(h[1])} = {keys[h]}")
+        if jc and jmin and jmax:
+            lines += ["", "# Обфускация",
+                      f"Jc = {jc.group(1)}",
+                      f"Jmin = {jmin.group(1)}",
+                      f"Jmax = {jmax.group(1)}"]
+        if s1: lines.append(f"S1 = {s1.group(1)}")
+        if s2: lines.append(f"S2 = {s2.group(1)}")
+        if s3: lines.append(f"S3 = {s3.group(1)}")
+        if s4: lines.append(f"S4 = {s4.group(1)}")
+        if h1: lines.append(f"H1 = {h1.group(1)}")
+        if h2: lines.append(f"H2 = {h2.group(1)}")
+        if h3: lines.append(f"H3 = {h3.group(1)}")
+        if h4: lines.append(f"H4 = {h4.group(1)}")
+
         lines += [
             "",
             "[Peer]",
-            f"PublicKey = {server_pub}",
-            f"Endpoint = {server_ip}:{port}",
+            f"PublicKey = {server_pub.group(1) if server_pub else 'SERVER_KEY'}",
+        ]
+        if psk:
+            lines.append(f"PresharedKey = {psk.group(1)}")
+        lines += [
+            f"Endpoint = {server_ip}:{port.group(1) if port else '51820'}",
             "AllowedIPs = 0.0.0.0/0",
             "PersistentKeepalive = 25",
         ]
@@ -321,52 +304,10 @@ class AmneziaWGPlugin(BasePlugin):
         )
 
     def _current_port(self) -> int:
-        if AWG_CONF.exists():
-            import re
-            text = AWG_CONF.read_text()
-            m = re.search(r"ListenPort\s*=\s*(\d+)", text)
-            if m:
-                return int(m.group(1))
-        return AWG_PORT
-
-    def _read_existing_keys(self) -> dict | None:
-        """Читает все параметры из существующего awg0.conf."""
-        if not AWG_CONF.exists():
-            return None
+        r = self._awg("show", AWG_INTERFACE)
         import re
-        text = AWG_CONF.read_text()
-        priv = re.search(r"PrivateKey\s*=\s*(\S+)", text)
-        port = re.search(r"ListenPort\s*=\s*(\d+)", text)
-        addr = re.search(r"Address\s*=\s*(\S+)", text)
-        jc = re.search(r"Jc\s*=\s*(\S+)", text)
-        jmin = re.search(r"Jmin\s*=\s*(\S+)", text)
-        jmax = re.search(r"Jmax\s*=\s*(\S+)", text)
-        s1 = re.search(r"S1\s*=\s*(\S+)", text)
-        s2 = re.search(r"S2\s*=\s*(\S+)", text)
-        s3 = re.search(r"S3\s*=\s*(\S+)", text)
-        s4 = re.search(r"S4\s*=\s*(\S+)", text)
-        h1 = re.search(r"H1\s*=\s*(\S+)", text)
-        h2 = re.search(r"H2\s*=\s*(\S+)", text)
-        h3 = re.search(r"H3\s*=\s*(\S+)", text)
-        h4 = re.search(r"H4\s*=\s*(\S+)", text)
-        if priv:
-            return {
-                "private": priv.group(1),
-                "port": int(port.group(1)) if port else AWG_PORT,
-                "network": addr.group(1).rsplit(".", 1)[0] + ".0/24" if addr else AWG_NETWORK,
-                "jc": int(jc.group(1)) if jc else OBFUSCATION["Jc"],
-                "jmin": int(jmin.group(1)) if jmin else OBFUSCATION["Jmin"],
-                "jmax": int(jmax.group(1)) if jmax else OBFUSCATION["Jmax"],
-                "s1": int(s1.group(1)) if s1 else OBFUSCATION["S1"],
-                "s2": int(s2.group(1)) if s2 else OBFUSCATION["S2"],
-                "s3": int(s3.group(1)) if s3 else 0,
-                "s4": int(s4.group(1)) if s4 else 0,
-                "h1": h1.group(1) if h1 else "",
-                "h2": h2.group(1) if h2 else "",
-                "h3": h3.group(1) if h3 else "",
-                "h4": h4.group(1) if h4 else "",
-            }
-        return None
+        m = re.search(r"listening port:\s*(\d+)", r.stdout)
+        return int(m.group(1)) if m else AWG_PORT
 
     def _awg(self, *args, _input: str = "") -> subprocess.CompletedProcess:
         bin_path = shutil.which("awg") or "/usr/bin/awg"
@@ -417,43 +358,12 @@ class AmneziaWGPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def _up(self) -> bool:
-        """Применяет пиров через awg addconf (работает на живом интерфейсе)."""
-        if AWG_CONF.exists() and self._current_peers_config():
-            r = subprocess.run(
-                ["awg", "addconf", AWG_INTERFACE, str(self._peers_conf_file())],
-                capture_output=True, timeout=10,
-            )
-            if r.returncode != 0:
-                return False
+        """Поднимает интерфейс."""
         r = subprocess.run(
             ["ip", "link", "set", AWG_INTERFACE, "up"],
             capture_output=True, timeout=10,
         )
         return r.returncode == 0
-
-    def _peers_conf_file(self) -> Path:
-        return AWG_CONF_DIR / "peers.conf"
-
-    def _current_peers_config(self) -> str | None:
-        """Извлекает только [Peer] секции из awg0.conf."""
-        if not AWG_CONF.exists():
-            return None
-        lines = AWG_CONF.read_text().splitlines()
-        peers: list[str] = []
-        in_peer = False
-        for line in lines:
-            if line.startswith("[Peer]"):
-                in_peer = True
-                peers.append(line)
-            elif line.startswith("[Interface]"):
-                in_peer = False
-            elif in_peer and line.strip():
-                peers.append(line)
-        if peers:
-            pf = self._peers_conf_file()
-            pf.write_text("\n".join(peers) + "\n")
-            return pf
-        return None
 
     def _down(self) -> None:
         subprocess.run(["ip", "link", "set", AWG_INTERFACE, "down"], capture_output=True)
