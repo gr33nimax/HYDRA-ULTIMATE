@@ -67,14 +67,16 @@ class AmneziaWGPlugin(BasePlugin):
 
     def install(self) -> bool:
         """Устанавливает AmneziaWG. При повторном вызове — полная переустановка."""
-        if AWG_BIN.exists():
+        if AWG_BIN.exists() or shutil.which("awg"):
             self._down()
             subprocess.run(["modprobe", "-r", "amneziawg"], capture_output=True)
+            # Полная зачистка пакетов и файлов
+            subprocess.run(["apt-get", "purge", "-y", "-qq",
+                "amneziawg", "amneziawg-tools", "amneziawg-dkms"], capture_output=True)
             subprocess.run(["rm", "-rf",
                 "/etc/amnezia/amneziawg",
                 "/usr/bin/awg", "/usr/bin/awg-quick",
                 "/usr/local/bin/awg", "/usr/local/bin/awg-quick",
-                "/lib/modules/*/extra/amneziawg*",
                 str(AWG_INSTALL_DIR),
             ], capture_output=True)
             subprocess.run(["depmod", "-a"], capture_output=True)

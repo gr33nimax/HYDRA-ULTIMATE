@@ -4,6 +4,7 @@ hydra/ui/menus.py — Главное меню и подменю.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import uuid as _uuid
 from datetime import datetime
@@ -305,42 +306,70 @@ def menu_plugin_awg(state: AppState, plugin):
         peers = plugin.connected_peers()
         total_bytes = sum(traffic.values())
 
-        print(f"\n  {CYAN}┌── AWG: AmneziaWG 2.0{NC}{'─' * 38}{NC}")
-        print(f"  {CYAN}│{NC}  Статус:      {_ok(s.running)} {'запущен' if s.running else 'остановлен'}")
-        print(f"  {CYAN}│{NC}  Установлен:  {_ok(s.installed)}")
-        print(f"  {CYAN}│{NC}  Интерфейс:   {YELLOW}awg0{NC}")
-        print(f"  {CYAN}│{NC}  Порт:        {port}")
-        print(f"  {CYAN}│{NC}  Сеть:        {network}")
-        print(f"  {CYAN}│{NC}  Пиров:       {len(peers)} онлайн  (всего {sum(1 for u in state.users if not u.blocked)})")
-        print(f"  {CYAN}│{NC}  Трафик:      {_bytes(total_bytes)}")
-        print(f"  {CYAN}└{'─' * 54}{NC}")
-        print()
+        if s.installed:
+            print(f"\n  {CYAN}┌── AWG: AmneziaWG 2.0{NC}{'─' * 38}{NC}")
+            print(f"  {CYAN}│{NC}  Статус:      {_ok(s.running)} {'запущен' if s.running else 'остановлен'}")
+            print(f"  {CYAN}│{NC}  Интерфейс:   {YELLOW}awg0{NC}")
+            print(f"  {CYAN}│{NC}  Порт:        {port}")
+            print(f"  {CYAN}│{NC}  Сеть:        {network}")
+            print(f"  {CYAN}│{NC}  Пиров:       {len(peers)} онлайн  (всего {sum(1 for u in state.users if not u.blocked)})")
+            print(f"  {CYAN}│{NC}  Трафик:      {_bytes(total_bytes)}")
+            print(f"  {CYAN}└{'─' * 54}{NC}")
+            print()
 
-        choice = menu(
-            [
-                ("1", "🔧 Установить kernel-модуль" if not s.installed else "🔄 Переустановить",
-                 "Клонировать wiresock и скомпилировать"),
+            opts = [
+                ("1", "🗑  Удалить AWG", "Полная очистка: пакеты, модуль, конфиги"),
                 ("2", "👥 Управление пирами",
-                 f"{sum(1 for u in state.users if not u.blocked)} пользователей → пиры"),
-                ("3", "📄 Сгенерировать клиентский конфиг",
-                 ".conf файл для WireGuard-клиента"),
-                ("4", "▶️  Запустить awg0" if not s.running else "⏸️  Остановить awg0",
-                 "Поднять/опустить интерфейс"),
+                 f"{sum(1 for u in state.users if not u.blocked)} пользователей"),
+                ("3", "📄 Клиентский конфиг", ".conf для WireGuard"),
+                ("4", "▶️  Запустить awg0" if not s.running else "⏸️  Остановить awg0", ""),
                 ("5", "📊 Статус пиров + трафик",
                  f"{len(peers)} онлайн, {_bytes(total_bytes)}"),
                 ("0", "↩ Назад", ""),
-            ],
-            "AMNEZIAWG 2.0",
-        )
+            ]
+        else:
+            print(f"\n  {CYAN}┌── AWG: AmneziaWG 2.0{NC}{'─' * 38}{NC}")
+            print(f"  {CYAN}│{NC}  Статус:      {RED}не установлен{NC}")
+            print(f"  {CYAN}└{'─' * 54}{NC}")
+            print()
+
+            opts = [
+                ("1", "🔧 Установить kernel-модуль", "Клонировать wiresock, скомпилировать"),
+                ("0", "↩ Назад", ""),
+            ]
+
+        choice = menu(opts, "AMNEZIAWG 2.0")
 
         if choice == "0":
             return
         elif choice == "1":
-            info("Устанавливаю AmneziaWG kernel-модуль...")
-            if plugin.install():
-                success("Установлен. Модуль загружен.")
+            if s.installed:
+                info("Полное удаление AmneziaWG...")
+                plugin.on_disable(state)
+                plugin.uninstall()
+                subprocess.run(["apt-get", "purge", "-y", "-qq",
+                    "amneziawg", "amneziawg-tools", "amneziawg-dkms"], capture_output=True)
+                subprocess.run(["modprobe", "-r", "amneziawg"], capture_output=True)
+                subprocess.run(["rm", "-rf",
+                    "/etc/amnezia/amneziawg",
+                    "/usr/bin/awg", "/usr/bin/awg-quick",
+                    "/usr/local/bin/awg", "/usr/local/bin/awg-quick",
+                    "/opt/awg-install",
+                ], capture_output=True)
+                if proto:
+                    proto.enabled = False
+                    proto.installed = False
+                save_state(state)
+                success("AmneziaWG полностью удалён")
             else:
-                error("Ошибка установки. Проверьте соединение.")
+                info("Устанавливаю AmneziaWG kernel-модуль...")
+                if plugin.install():
+                    if proto:
+                        proto.installed = True
+                    save_state(state)
+                    success("Установлен. Модуль загружен.")
+                else:
+                    error("Ошибка установки.")
             prompt("Нажмите Enter")
         elif choice == "2":
             _awg_peers_menu(state, plugin)
