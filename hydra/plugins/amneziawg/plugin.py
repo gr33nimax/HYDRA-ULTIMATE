@@ -80,10 +80,10 @@ class AmneziaWGPlugin(BasePlugin):
                 ["git", "clone", "--depth", "1",
                  "https://github.com/wiresock/amneziawg-install.git",
                  str(AWG_INSTALL_DIR)],
-                    capture_output=True, text=True, timeout=120,
-                )
-                if r.returncode != 0:
-                    return False
+                capture_output=True, text=True, timeout=120,
+            )
+            if r.returncode != 0:
+                return False
 
             r = subprocess.run(
                 ["bash", "awg-install.sh"],
