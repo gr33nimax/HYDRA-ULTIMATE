@@ -319,11 +319,9 @@ def menu_plugin_awg(state: AppState, plugin):
 
             opts = [
                 ("1", "🗑  Удалить AWG", "Полная очистка: пакеты, модуль, конфиги"),
-                ("2", "👥 Управление пирами",
-                 f"{sum(1 for u in state.users if not u.blocked)} пользователей"),
-                ("3", "📄 Клиентский конфиг", ".conf для WireGuard"),
-                ("4", "▶️  Запустить awg0" if not s.running else "⏸️  Остановить awg0", ""),
-                ("5", "📊 Статус пиров + трафик",
+                ("2", "📄 Клиентский конфиг + QR", ".conf, QR-код, wg:// и sn:// ссылки"),
+                ("3", "▶️  Запустить awg0" if not s.running else "⏸️  Остановить awg0", ""),
+                ("4", "📊 Статус пиров + трафик",
                  f"{len(peers)} онлайн, {_bytes(total_bytes)}"),
                 ("0", "↩ Назад", ""),
             ]
@@ -372,10 +370,8 @@ def menu_plugin_awg(state: AppState, plugin):
                     error("Ошибка установки.")
             prompt("Нажмите Enter")
         elif choice == "2":
-            _awg_peers_menu(state, plugin)
-        elif choice == "3":
             _awg_generate_config(state, plugin)
-        elif choice == "4":
+        elif choice == "3":
             if s.running:
                 plugin.on_disable(state)
                 if proto:
@@ -392,7 +388,7 @@ def menu_plugin_awg(state: AppState, plugin):
                     save_state(state)
                     success("awg0 запущен")
             prompt("Нажмите Enter")
-        elif choice == "5":
+        elif choice == "4":
             _awg_status_detail(state, plugin)
 
 
@@ -439,7 +435,7 @@ def _awg_generate_config(state: AppState, plugin):
     clear()
     users = [u for u in state.users if not u.blocked]
     if not users:
-        warn("Нет пользователей. Создайте в разделе «Пользователи».")
+        warn("Нет пользователей.")
         prompt("Нажмите Enter")
         return
 
@@ -449,14 +445,65 @@ def _awg_generate_config(state: AppState, plugin):
     print()
 
     try:
-        idx = int(prompt("Номер пользователя для генерации конфига", "1")) - 1
+        idx = int(prompt("Номер пользователя", "1")) - 1
         if 0 <= idx < len(users):
             user = users[idx]
             conf = plugin.generate_client_config(user, state)
             path = Path(f"/tmp/awg-{user.email}.conf")
             path.write_text(conf)
-            success(f"Конфиг сохранён: {path}")
-            print(f"\n{DIM}{conf[:300]}...{NC}\n")
+
+            import re
+            priv = re.search(r"PrivateKey\s*=\s*(\S+)", conf)
+            pub = re.search(r"PublicKey\s*=\s*(\S+)", conf)
+            ep = re.search(r"Endpoint\s*=\s*(\S+)", conf)
+            addr = re.search(r"Address\s*=\s*(\S+)", conf)
+            jc = re.search(r"Jc\s*=\s*(\S+)", conf)
+            jmin = re.search(r"Jmin\s*=\s*(\S+)", conf)
+            jmax = re.search(r"Jmax\s*=\s*(\S+)", conf)
+            s1 = re.search(r"S1\s*=\s*(\S+)", conf)
+            s2 = re.search(r"S2\s*=\s*(\S+)", conf)
+            h1 = re.search(r"H1\s*=\s*(\S+)", conf)
+            h2 = re.search(r"H2\s*=\s*(\S+)", conf)
+            h3 = re.search(r"H3\s*=\s*(\S+)", conf)
+            h4 = re.search(r"H4\s*=\s*(\S+)", conf)
+
+            if priv and pub and ep:
+                ip, port = ep.group(1).split(":") if ":" in ep.group(1) else (ep.group(1), "51820")
+                params = []
+                if priv: params.append(f"private_key={priv.group(1)}")
+                if addr: params.append(f"local_address={addr.group(1)}")
+                params.append("enable_amnezia=true")
+                if jc: params.append(f"jc={jc.group(1)}")
+                if jmin: params.append(f"jmin={jmin.group(1)}")
+                if jmax: params.append(f"jmax={jmax.group(1)}")
+                if s1: params.append(f"s1={s1.group(1)}")
+                if s2: params.append(f"s2={s2.group(1)}")
+                if h1: params.append(f"h1={h1.group(1)}")
+                if h2: params.append(f"h2={h2.group(1)}")
+                if h3: params.append(f"h3={h3.group(1)}")
+                if h4: params.append(f"h4={h4.group(1)}")
+                if pub: params.append(f"public_key={pub.group(1)}")
+                params.append("persistent_keepalive_interval=25")
+                wg_link = f"wg://{ip}:{port}?{'&'.join(params)}#{user.email}%20AWG"
+
+                import base64
+                sn_link = f"sn://awg?{base64.urlsafe_b64encode(conf.encode()).decode()}"
+
+                print(f"\n  {GREEN}OK{NC}  Конфиг: {path}")
+                print(f"  {CYAN}── Ссылки{NC}{'─' * 53}{NC}")
+                print(f"  wg://  {wg_link[:90]}...")
+                print(f"  sn://  {sn_link[:90]}...")
+
+                try:
+                    import qrcode
+                    qr = qrcode.QRCode()
+                    qr.add_data(wg_link)
+                    qr.print_ascii()
+                except ImportError:
+                    print(f"  {DIM}pip3 install qrcode — для QR{NC}")
+            else:
+                success(f"Конфиг сохранён: {path}")
+                print(f"\n{DIM}{conf[:400]}{NC}\n")
         else:
             warn("Неверный номер.")
     except ValueError:
@@ -525,6 +572,8 @@ def menu_users(state: AppState):
                 ("4", "🔒🔓 Заблокировать / Разблокировать", ""),
                 ("5", "📊 Лимит трафика", "Установить GB"),
                 ("6", "⏰ Срок действия (TTL)", "Дата окончания"),
+                ("7", "🔄 Синхронизировать со всеми протоколами",
+                 "Обновить пиры в AWG"),
                 ("0", "↩ Назад", ""),
             ],
             "ПОЛЬЗОВАТЕЛИ",
@@ -544,6 +593,8 @@ def menu_users(state: AppState):
             _set_limit(state)
         elif choice == "6":
             _set_ttl(state)
+        elif choice == "7":
+            _sync_all_protocols(state)
 
 
 def _show_users(state: AppState, traffic: dict[str, int]):
@@ -638,6 +689,20 @@ def _set_ttl(state: AppState):
             datetime.now().timestamp() + int(days) * 86400).isoformat()
         save_state(state)
         success(f"{email}: TTL {u.expiry_date[:10] if u.expiry_date else '∞'}")
+    prompt("Нажмите Enter")
+
+
+def _sync_all_protocols(state: AppState):
+    """Синхронизирует пользователей со всеми активными протоколами."""
+    from hydra.plugins.registry import get_enabled
+    info("Синхронизация пиров...")
+    for p in get_enabled(state):
+        try:
+            p.configure(state)
+            success(f"  {p.meta.name}: обновлён")
+        except Exception as e:
+            warn(f"  {p.meta.name}: {e}")
+    save_state(state)
     prompt("Нажмите Enter")
 
 
