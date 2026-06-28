@@ -95,17 +95,21 @@ class AmneziaWGPlugin(BasePlugin):
             server_ip = self._get_server_ip()
             log_file = Path("/var/log/hydra/awg-install.log")
             log_file.parent.mkdir(parents=True, exist_ok=True)
+            # Все defaults (\n) + IP на 8-м вопросе + Enter в конце
+            answers = "\n" * 7 + f"{server_ip}\n" + "\n" * 15
             with log_file.open("w") as lf:
                 r = subprocess.run(
                     ["bash", "amneziawg-install.sh"],
                     cwd=str(AWG_INSTALL_DIR),
-                    input=f"{server_ip}\n\n\n\n",
+                    input=answers,
                     stdout=lf, stderr=subprocess.STDOUT, text=True, timeout=600,
                 )
+            # Показываем последние 20 строк лога
+            if log_file.exists():
+                tail = "\n".join(log_file.read_text().splitlines()[-20:])
+                print(f"  {tail}")
             if r.returncode != 0:
                 print(f"  Ошибка: код {r.returncode}")
-                if r.stderr:
-                    print(f"  {r.stderr[:300]}")
                 return False
 
             lsmod = subprocess.run(["lsmod"], capture_output=True, text=True)
