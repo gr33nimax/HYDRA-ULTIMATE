@@ -642,53 +642,102 @@ def _add_user(state: AppState):
 
 
 def _delete_user(state: AppState):
-    email = prompt("Email для удаления")
-    u = find_user(state, email)
-    if not u:
-        warn("Не найден.")
-    else:
-        state.users.remove(u)
-        save_state(state)
-        success(f"{email} удалён.")
+    clear()
+    if not state.users:
+        warn("Нет пользователей.")
+        prompt("Нажмите Enter")
+        return
+
+    print(f"\n  {CYAN}Пользователи:{NC}\n")
+    for i, u in enumerate(state.users, 1):
+        ico = f"{RED}🔴{NC}" if u.blocked else f"{GREEN}🟢{NC}"
+        print(f"  {i}. {ico} {u.email}")
+    print()
+
+    try:
+        idx = int(prompt("Номер для удаления", "0")) - 1
+        if 0 <= idx < len(state.users):
+            u = state.users[idx]
+            state.users.remove(u)
+            save_state(state)
+            success(f"{u.email} удалён.")
+        else:
+            warn("Неверный номер.")
+    except ValueError:
+        warn("Введите число.")
     prompt("Нажмите Enter")
 
 
 def _toggle_block(state: AppState):
-    email = prompt("Email")
-    u = find_user(state, email)
-    if not u:
-        warn("Не найден.")
-    else:
-        u.blocked = not u.blocked
-        save_state(state)
-        success(f"{email} {'заблокирован' if u.blocked else 'разблокирован'}.")
+    clear()
+    if not state.users:
+        warn("Нет пользователей.")
+        prompt("Нажмите Enter")
+        return
+    print(f"\n  {CYAN}Пользователи:{NC}\n")
+    for i, u in enumerate(state.users, 1):
+        ico = f"{RED}🔴{NC}" if u.blocked else f"{GREEN}🟢{NC}"
+        print(f"  {i}. {ico} {u.email}")
+    print()
+    try:
+        idx = int(prompt("Номер", "0")) - 1
+        if 0 <= idx < len(state.users):
+            u = state.users[idx]
+            u.blocked = not u.blocked
+            save_state(state)
+            success(f"{u.email} {'заблокирован' if u.blocked else 'разблокирован'}.")
+        else:
+            warn("Неверный номер.")
+    except ValueError:
+        warn("Введите число.")
     prompt("Нажмите Enter")
 
 
 def _set_limit(state: AppState):
-    email = prompt("Email")
-    u = find_user(state, email)
-    if not u:
-        warn("Не найден.")
-    else:
-        gb = prompt("Лимит (GB, 0 = безлимит)", str(u.traffic_limit_gb))
-        u.traffic_limit_gb = float(gb) if gb else 0
-        save_state(state)
-        success(f"{email}: {u.traffic_limit_gb or '∞'} GB")
+    clear()
+    if not state.users:
+        warn("Нет пользователей.")
+        prompt("Нажмите Enter")
+        return
+    print(f"\n  {CYAN}Пользователи:{NC}\n")
+    for i, u in enumerate(state.users, 1):
+        print(f"  {i}. {u.email}  ({u.traffic_limit_gb or '∞'} GB)")
+    print()
+    try:
+        idx = int(prompt("Номер", "0")) - 1
+        if 0 <= idx < len(state.users):
+            u = state.users[idx]
+            gb = prompt("Лимит (GB, 0 = безлимит)", str(u.traffic_limit_gb))
+            u.traffic_limit_gb = float(gb) if gb else 0
+            save_state(state)
+            success(f"{u.email}: {u.traffic_limit_gb or '∞'} GB")
+    except ValueError:
+        warn("Введите число.")
     prompt("Нажмите Enter")
 
 
 def _set_ttl(state: AppState):
-    email = prompt("Email")
-    u = find_user(state, email)
-    if not u:
-        warn("Не найден.")
-    else:
-        days = prompt("Дней от сегодня (0 = бессрочно)", "0")
-        u.expiry_date = "" if int(days) <= 0 else datetime.fromtimestamp(
-            datetime.now().timestamp() + int(days) * 86400).isoformat()
-        save_state(state)
-        success(f"{email}: TTL {u.expiry_date[:10] if u.expiry_date else '∞'}")
+    clear()
+    if not state.users:
+        warn("Нет пользователей.")
+        prompt("Нажмите Enter")
+        return
+    print(f"\n  {CYAN}Пользователи:{NC}\n")
+    for i, u in enumerate(state.users, 1):
+        ttl = u.expiry_date[:10] if u.expiry_date else "∞"
+        print(f"  {i}. {u.email}  (TTL: {ttl})")
+    print()
+    try:
+        idx = int(prompt("Номер", "0")) - 1
+        if 0 <= idx < len(state.users):
+            u = state.users[idx]
+            days = prompt("Дней от сегодня (0 = бессрочно)", "0")
+            u.expiry_date = "" if int(days) <= 0 else datetime.fromtimestamp(
+                datetime.now().timestamp() + int(days) * 86400).isoformat()
+            save_state(state)
+            success(f"{u.email}: TTL {u.expiry_date[:10] if u.expiry_date else '∞'}")
+    except ValueError:
+        warn("Введите число.")
     prompt("Нажмите Enter")
 
 
