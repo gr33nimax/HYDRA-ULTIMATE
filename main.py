@@ -13,8 +13,8 @@ import sys
 import os
 from pathlib import Path
 
-# Добавляем корень проекта в PYTHONPATH
-PROJECT_ROOT = Path(__file__).parent
+# Добавляем корень проекта в PYTHONPATH (resolve — чтобы работал и symlink `hydra`)
+PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 

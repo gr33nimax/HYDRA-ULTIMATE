@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from hydra.core.state import (
-    AppState, User, load_state, save_state, find_user, add_user,
+    AppState, User, load_state, save_state, find_user, add_user, get_protocol,
 )
 from hydra.core.singbox import (
     install as install_singbox,
@@ -49,6 +49,16 @@ def _bytes(v: int) -> str:
 
 def _ok(ok: bool) -> str:
     return f"{GREEN}✓{NC}" if ok else f"{RED}✗{NC}"
+
+
+def _resync_awg(state: AppState) -> None:
+    """Приводит пиры AWG в соответствие с текущим списком пользователей."""
+    awg = get_plugin("amneziawg")
+    if awg and awg.status().installed:
+        try:
+            awg.configure(state)
+        except Exception:
+            pass
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -171,7 +181,10 @@ def menu_core(state: AppState):
             cfg = generate_config(state, frag_dicts)
             if write_config(cfg):
                 success("Конфиг записан")
-                (success if reload_singbox() else warn)("Sing-Box перезагружен" if reload_singbox() else "Перезагрузка не удалась")
+                if reload_singbox():
+                    success("Sing-Box перезагружен")
+                else:
+                    warn("Перезагрузка не удалась")
             else:
                 error("Ошибка валидации конфига")
             prompt("Нажмите Enter")
@@ -259,7 +272,10 @@ def menu_plugin(state: AppState, plugin):
             return
         elif choice == "1":
             info(f"Устанавливаю {plugin.meta.name}...")
-            (success if plugin.install() else error)(f"{plugin.meta.name}: {'OK' if plugin.install() else 'ОШИБКА'}")
+            if plugin.install():
+                success(f"{plugin.meta.name}: OK")
+            else:
+                error(f"{plugin.meta.name}: ОШИБКА")
             prompt("Нажмите Enter")
         elif choice == "2":
             if not s.enabled:
@@ -296,8 +312,8 @@ def menu_plugin_awg(state: AppState, plugin):
     while True:
         clear()
         s = plugin.status()
-        proto = state.protocols.get("amneziawg")
-        config = proto.config if proto else {}
+        proto = get_protocol(state, "amneziawg")
+        config = proto.config
         port = config.get("port", 51820)
         network = config.get("network", "10.8.20.0/24")
 
@@ -396,17 +412,15 @@ def _awg_peers_menu(state: AppState, plugin):
     while True:
         clear()
         users = [u for u in state.users if not u.blocked]
-        peers = plugin.connected_peers()
-        peer_keys = {p["pubkey"]: p for p in peers}
+        peers = {p["email"]: p for p in plugin.connected_peers()}
 
         print(f"\n  {CYAN}┌── Пиры AWG{NC}{'─' * 47}{NC}")
         for u in users:
-            pubkey = _derive_awg_pubkey(u.uuid)
-            online = "●" if pubkey in peer_keys else "○"
-            ico = f"{GREEN}{online}{NC}"
-            traffic_bytes = peer_keys[pubkey].get("transfer", "0 B") if pubkey in peer_keys else "0 B"
+            p = peers.get(u.email)
+            ico = f"{GREEN}●{NC}" if (p and p["online"]) else f"{DIM}○{NC}"
+            tx = _bytes((p["rx"] + p["tx"]) if p else 0)
             print(f"  {CYAN}│{NC}  {ico} {u.email}")
-            print(f"  {CYAN}│{NC}     трафик: {traffic_bytes}")
+            print(f"  {CYAN}│{NC}     трафик: {tx}")
         print(f"  {CYAN}│{NC}")
         print(f"  {CYAN}│{NC}  ● = онлайн  ○ = офлайн")
         print(f"  {CYAN}└{'─' * 54}{NC}")
@@ -423,11 +437,8 @@ def _awg_peers_menu(state: AppState, plugin):
             return
         elif choice == "1":
             plugin.configure(state)
-            if plugin.status().running:
-                plugin._down()
-                plugin._up()
             save_state(state)
-            success(f"Пиры синхронизированы: {len(users)} добавлено")
+            success(f"Пиры синхронизированы: {len(users)} активно")
             prompt("Нажмите Enter")
 
 
@@ -446,110 +457,60 @@ def _awg_generate_config(state: AppState, plugin):
 
     try:
         idx = int(prompt("Номер пользователя", "1")) - 1
-        if 0 <= idx < len(users):
-            user = users[idx]
-            conf = plugin.generate_client_config(user, state)
-            path = Path(f"/tmp/awg-{user.email}.conf")
-            path.write_text(conf)
-
-            import re
-            priv = re.search(r"PrivateKey\s*=\s*(\S+)", conf)
-            pub = re.search(r"PublicKey\s*=\s*(\S+)", conf)
-            psk = re.search(r"PresharedKey\s*=\s*(\S+)", conf)
-            ep = re.search(r"Endpoint\s*=\s*(\S+)", conf)
-            addr = re.search(r"Address\s*=\s*(\S+)", conf)
-            jc = re.search(r"Jc\s*=\s*(\S+)", conf)
-            jmin = re.search(r"Jmin\s*=\s*(\S+)", conf)
-            jmax = re.search(r"Jmax\s*=\s*(\S+)", conf)
-            s1 = re.search(r"S1\s*=\s*(\S+)", conf)
-            s2 = re.search(r"S2\s*=\s*(\S+)", conf)
-            s3 = re.search(r"S3\s*=\s*(\S+)", conf)
-            s4 = re.search(r"S4\s*=\s*(\S+)", conf)
-            h1 = re.search(r"H1\s*=\s*(\S+)", conf)
-            h2 = re.search(r"H2\s*=\s*(\S+)", conf)
-            h3 = re.search(r"H3\s*=\s*(\S+)", conf)
-            h4 = re.search(r"H4\s*=\s*(\S+)", conf)
-
-            if priv and pub and ep:
-                ip, port = ep.group(1).split(":") if ":" in ep.group(1) else (ep.group(1), "51820")
-                params = []
-                if priv: params.append(f"private_key={priv.group(1)}")
-                if addr: params.append(f"local_address={addr.group(1)}")
-                params.append("enable_amnezia=true")
-                if jc: params.append(f"jc={jc.group(1)}")
-                if jmin: params.append(f"jmin={jmin.group(1)}")
-                if jmax: params.append(f"jmax={jmax.group(1)}")
-                if s1: params.append(f"s1={s1.group(1)}")
-                if s2: params.append(f"s2={s2.group(1)}")
-                if s3: params.append(f"s3={s3.group(1)}")
-                if s4: params.append(f"s4={s4.group(1)}")
-                if h1: params.append(f"h1={h1.group(1)}")
-                if h2: params.append(f"h2={h2.group(1)}")
-                if h3: params.append(f"h3={h3.group(1)}")
-                if h4: params.append(f"h4={h4.group(1)}")
-                if pub: params.append(f"public_key={pub.group(1)}")
-                if psk: params.append(f"pre_shared_key={psk.group(1)}")
-                params.append("persistent_keepalive_interval=25")
-                wg_link = f"wg://{ip}:{port}?{'&'.join(params)}#{user.email}%20AWG"
-
-                import base64
-                sn_link = f"sn://awg?{base64.urlsafe_b64encode(conf.encode()).decode()}"
-
-                print(f"\n  {GREEN}Конфиг сохранён{NC}")
-                print(f"  {DIM}Файл: {path}{NC}")
-                print(f"  {CYAN}── wg://{NC}{'─' * 57}")
-                print(f"  {wg_link}")
-                print(f"  {CYAN}── sn://{NC}{'─' * 57}")
-                print(f"  {sn_link}")
-
-                try:
-                    import qrcode
-                    qr = qrcode.QRCode()
-                    qr.add_data(wg_link)
-                    qr.print_ascii()
-                except ImportError:
-                    print(f"  {DIM}pip3 install qrcode — для QR{NC}")
-            else:
-                success(f"Конфиг сохранён: {path}")
-                print(f"\n{DIM}{conf[:400]}{NC}\n")
-        else:
-            warn("Неверный номер.")
     except ValueError:
         warn("Введите число.")
+        prompt("Нажмите Enter")
+        return
+    if not (0 <= idx < len(users)):
+        warn("Неверный номер.")
+        prompt("Нажмите Enter")
+        return
+
+    user = users[idx]
+    conf = plugin.generate_client_config(user, state)
+    if not conf:
+        error("Не удалось сгенерировать конфиг (AWG не настроен?).")
+        prompt("Нажмите Enter")
+        return
+
+    path = Path(f"/tmp/awg-{user.email}.conf")
+    path.write_text(conf)
+    wg_link = plugin.client_link(user, state)
+
+    print(f"\n  {GREEN}Конфиг сохранён{NC}")
+    print(f"  {DIM}Файл: {path}{NC}")
+    print(f"  {CYAN}── .conf{NC}{'─' * 56}")
+    print(f"{DIM}{conf}{NC}")
+    if wg_link:
+        print(f"  {CYAN}── wg://{NC}{'─' * 57}")
+        print(f"  {wg_link}")
+        try:
+            import qrcode
+            qr = qrcode.QRCode()
+            qr.add_data(wg_link)
+            qr.print_ascii()
+        except ImportError:
+            print(f"  {DIM}pip3 install qrcode — для QR-кода{NC}")
     prompt("Нажмите Enter")
 
 
 def _awg_status_detail(state: AppState, plugin):
     clear()
     traffic = plugin.traffic()
-    peers = plugin.connected_peers()
-    users = state.users
+    peers = {p["email"]: p for p in plugin.connected_peers()}
 
     print(f"\n  {CYAN}┌── Статус пиров{NC}{'─' * 46}{NC}")
-    for u in users:
+    for u in state.users:
         if u.blocked:
             continue
-        pubkey = _derive_awg_pubkey(u.uuid)
-        online = pubkey in {p["pubkey"] for p in peers}
-        ico = f"{GREEN}● онлайн{NC}" if online else f"{DIM}○ офлайн{NC}"
-        used = traffic.get(pubkey, 0)
+        p = peers.get(u.email)
+        ico = f"{GREEN}● онлайн{NC}" if (p and p["online"]) else f"{DIM}○ офлайн{NC}"
+        used = traffic.get(u.email, 0)
         print(f"  {CYAN}│{NC}  {u.email}")
         print(f"  {CYAN}│{NC}     {ico}  |  {_bytes(used)}")
     print(f"  {CYAN}└{'─' * 54}{NC}")
     print()
     prompt("Нажмите Enter")
-
-
-def _derive_awg_pubkey(uuid: str) -> str:
-    import hashlib, base64
-    h = hashlib.sha256(uuid.encode()).digest()
-    private = base64.b64encode(h[:32]).decode()
-    import subprocess
-    r = subprocess.run(
-        ["awg", "pubkey"], input=private,
-        capture_output=True, text=True,
-    )
-    return r.stdout.strip() if r.returncode == 0 else ""
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -645,6 +606,7 @@ def _add_user(state: AppState):
     )
     add_user(state, user)
     save_state(state)
+    _resync_awg(state)
     success(f"{email} создан (UUID: {user.uuid[:16]}...)")
     prompt("Нажмите Enter")
 
@@ -668,6 +630,7 @@ def _delete_user(state: AppState):
             u = state.users[idx]
             state.users.remove(u)
             save_state(state)
+            _resync_awg(state)
             success(f"{u.email} удалён.")
         else:
             warn("Неверный номер.")
@@ -693,6 +656,7 @@ def _toggle_block(state: AppState):
             u = state.users[idx]
             u.blocked = not u.blocked
             save_state(state)
+            _resync_awg(state)
             success(f"{u.email} {'заблокирован' if u.blocked else 'разблокирован'}.")
         else:
             warn("Неверный номер.")

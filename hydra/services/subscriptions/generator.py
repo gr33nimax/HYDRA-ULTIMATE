@@ -122,45 +122,12 @@ def generate_base64_sub(user: User, state: AppState) -> str:
 
 
 def generate_awg_client_config(user: User, state: AppState) -> str:
-    """Генерирует клиентский конфиг AmneziaWG."""
-    from pathlib import Path
-    import json as _json
-
-    awg_state = Path("/var/lib/hydra/awg_state.json")
-    server_pub = ""
-    if awg_state.exists():
-        try:
-            server_pub = _json.loads(awg_state.read_text()).get("public", "")
-        except Exception:
-            pass
-
-    import hashlib as _hashlib
-    import base64 as _base64
-    h = _hashlib.sha256(user.uuid.encode()).digest()
-    client_private = _base64.b64encode(h[:32]).decode()
-
-    return f"""[Interface]
-PrivateKey = {client_private}
-Address = 10.8.20.100/24
-DNS = 1.1.1.1
-
-# AmneziaWG Obfuscation
-Jc = 4
-Jmin = 40
-Jmax = 70
-S1 = 8
-S2 = 72
-H1 = 1748384502
-H2 = 410655843
-H3 = 3426724947
-H4 = 4202318234
-
-[Peer]
-PublicKey = {server_pub}
-Endpoint = {state.network.server_ip or state.network.domain}:51820
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 25
-"""
+    """Генерирует клиентский конфиг AmneziaWG (единый источник — плагин)."""
+    from hydra.plugins.registry import get
+    plugin = get("amneziawg")
+    if not plugin:
+        return ""
+    return plugin.generate_client_config(user, state)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
