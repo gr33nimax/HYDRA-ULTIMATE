@@ -153,12 +153,8 @@ class AmneziaWGPlugin(BasePlugin):
             except Exception:
                 pass
 
-        private = subprocess.run(
-            ["awg", "genkey"], capture_output=True, text=True,
-        ).stdout.strip()
-        public = subprocess.run(
-            ["awg", "pubkey"], input=private, capture_output=True, text=True,
-        ).stdout.strip()
+        private = self._awg("genkey").stdout.strip()
+        public = self._awg("pubkey", _input=private).stdout.strip()
 
         keys = {"private": private, "public": public, "port": AWG_PORT}
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -189,10 +185,7 @@ class AmneziaWGPlugin(BasePlugin):
         for idx, user in enumerate(users):
             peer_ip = f"10.8.20.{idx + 2}"
             client_private = self._derive_key(user.uuid)
-            client_public = subprocess.run(
-                ["awg", "pubkey"], input=client_private,
-                capture_output=True, text=True,
-            ).stdout.strip()
+            client_public = self._awg("pubkey", _input=client_private).stdout.strip()
 
             lines += [
                 f"# Peer: {user.email}",
@@ -251,10 +244,7 @@ class AmneziaWGPlugin(BasePlugin):
         server_ip = state.network.server_ip or state.network.domain or "SERVER_IP"
 
         client_private = self._derive_key(user.uuid)
-        client_public = subprocess.run(
-            ["awg", "pubkey"], input=client_private,
-            capture_output=True, text=True,
-        ).stdout.strip()
+        client_public = self._awg("pubkey", _input=client_private).stdout.strip()
 
         dns = "1.1.1.1"
         if state.network.dnscrypt_enabled:
@@ -314,14 +304,18 @@ class AmneziaWGPlugin(BasePlugin):
                 return int(m.group(1))
         return AWG_PORT
 
+    def _awg(self, *args, _input: str = "") -> subprocess.CompletedProcess:
+        bin_path = shutil.which("awg") or "/usr/bin/awg"
+        kw = {"capture_output": True, "text": True}
+        if _input:
+            kw["input"] = _input
+        return subprocess.run([bin_path, *args], **kw)
+
     def traffic(self) -> dict[str, int]:
-        if not AWG_CONF.exists():
+        if not AWG_CONF.exists() or not shutil.which("awg"):
             return {}
 
-        r = subprocess.run(
-            ["awg", "show", AWG_INTERFACE, "transfer"],
-            capture_output=True, text=True,
-        )
+        r = self._awg("show", AWG_INTERFACE, "transfer")
         if r.returncode != 0:
             return {}
 
@@ -333,11 +327,9 @@ class AmneziaWGPlugin(BasePlugin):
         return traffic
 
     def connected_peers(self) -> list[dict]:
-        """Список подключённых пиров с деталями."""
-        r = subprocess.run(
-            ["awg", "show", AWG_INTERFACE],
-            capture_output=True, text=True,
-        )
+        if not shutil.which("awg"):
+            return []
+        r = self._awg("show", AWG_INTERFACE)
         if r.returncode != 0:
             return []
 
