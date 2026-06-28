@@ -147,13 +147,16 @@ class AmneziaWGPlugin(BasePlugin):
             except Exception:
                 pass
 
-        private = self._awg("genkey").stdout.strip()
-        public = self._awg("pubkey", _input=private).stdout.strip()
-
-        keys = {"private": private, "public": public, "port": AWG_PORT}
-        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        STATE_FILE.write_text(json.dumps(keys, indent=2))
-        return keys
+        # Пробуем прочитать ключи из существующего конфига wiresock
+        existing = self._read_existing_keys()
+        if existing:
+            private = existing["private"]
+            port = existing.get("port", AWG_PORT)
+            public = self._awg("pubkey", _input=private).stdout.strip()
+            keys = {"private": private, "public": public, "port": port}
+            STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            STATE_FILE.write_text(json.dumps(keys, indent=2))
+            return keys
 
     def _build_conf(self, keys: dict, users: list, port: int, network: str, mtu: int) -> str:
         lines = [
@@ -235,7 +238,7 @@ class AmneziaWGPlugin(BasePlugin):
         mtus = {True: 1200, False: 1420}
         mtu = mtus[state.network.warp_enabled]
 
-        server_ip = state.network.server_ip or state.network.domain or "SERVER_IP"
+        server_ip = state.network.server_ip or self._get_server_ip()
 
         client_private = self._derive_key(user.uuid)
         client_public = self._awg("pubkey", _input=client_private).stdout.strip()
@@ -297,6 +300,18 @@ class AmneziaWGPlugin(BasePlugin):
             if m:
                 return int(m.group(1))
         return AWG_PORT
+
+    def _read_existing_keys(self) -> dict | None:
+        """Читает приватный ключ и порт из существующего awg0.conf (после wiresock)."""
+        if not AWG_CONF.exists():
+            return None
+        import re
+        text = AWG_CONF.read_text()
+        priv = re.search(r"PrivateKey\s*=\s*(\S+)", text)
+        port = re.search(r"ListenPort\s*=\s*(\d+)", text)
+        if priv:
+            return {"private": priv.group(1), "port": int(port.group(1)) if port else AWG_PORT}
+        return None
 
     def _awg(self, *args, _input: str = "") -> subprocess.CompletedProcess:
         bin_path = shutil.which("awg") or "/usr/bin/awg"
