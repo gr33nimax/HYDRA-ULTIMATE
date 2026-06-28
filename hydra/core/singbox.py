@@ -152,19 +152,12 @@ def _base_config(state: AppState) -> dict:
         "log": {
             "level": "info",
             "timestamp": True,
-            "output": "/var/log/sing-box/sing-box.log",
         },
         "inbounds": [],
         "outbounds": [],
         "route": {
             "rules": [],
             "auto_detect_interface": True,
-        },
-        "experimental": {
-            "cache_file": {
-                "enabled": True,
-                "path": "/var/lib/sing-box/cache.db",
-            },
         },
     }
 
