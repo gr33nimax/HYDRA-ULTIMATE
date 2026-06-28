@@ -48,11 +48,13 @@ class NaiveProxyPlugin(BasePlugin):
         if CADDY_BIN.exists():
             return True
 
+        # Способ 1: официальный apt-репозиторий Caddy
         r = subprocess.run(
             [
                 "bash", "-c",
                 "apt-get update -qq && "
                 "apt-get install -y -qq debian-keyring debian-archive-keyring && "
+                "mkdir -p /usr/share/keyrings && "
                 "curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key "
                 "| gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg && "
                 "echo 'deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] "
@@ -64,13 +66,23 @@ class NaiveProxyPlugin(BasePlugin):
             capture_output=True, text=True, timeout=120,
         )
 
-        if r.returncode != 0:
-            return False
+        if r.returncode == 0 and CADDY_BIN.exists():
+            subprocess.run(["systemctl", "stop", "caddy"], capture_output=True)
+            subprocess.run(["systemctl", "disable", "caddy"], capture_output=True)
+            return True
 
-        # Останавливаем дефолтный Caddy — мы управляем им через наш Caddyfile
-        subprocess.run(["systemctl", "stop", "caddy"], capture_output=True)
-        subprocess.run(["systemctl", "disable", "caddy"], capture_output=True)
-        return True
+        # Способ 2: официальный установочный скрипт Caddy
+        r = subprocess.run(
+            ["bash", "-c", "curl -fsSL https://getcaddy.com | bash -s personal"],
+            capture_output=True, text=True, timeout=120,
+        )
+
+        if r.returncode == 0 and CADDY_BIN.exists():
+            subprocess.run(["systemctl", "stop", "caddy"], capture_output=True)
+            subprocess.run(["systemctl", "disable", "caddy"], capture_output=True)
+            return True
+
+        return False
 
     def uninstall(self) -> bool:
         """Останавливает Caddy и удаляет конфиг."""

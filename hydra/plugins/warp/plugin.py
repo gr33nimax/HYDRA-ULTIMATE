@@ -46,33 +46,32 @@ class WarpPlugin(BasePlugin):
         if WGCF_BIN.exists():
             return True
 
-        r = subprocess.run(
-            [
-                "bash", "-c",
-                "curl -fsSL https://raw.githubusercontent.com/ViRb3/wgcf/master/wgcf_install.sh | bash",
-            ],
-            capture_output=True, text=True, timeout=60,
-        )
-        if r.returncode != 0:
+        import urllib.request
+        try:
+            # Скачиваем wgcf напрямую
+            url = "https://github.com/ViRb3/wgcf/releases/latest/download/wgcf_linux_amd64"
+            urllib.request.urlretrieve(url, str(WGCF_BIN))
+            WGCF_BIN.chmod(0o755)
+
+            # Регистрация и генерация профиля
+            subprocess.run(
+                [str(WGCF_BIN), "register"],
+                capture_output=True, timeout=30,
+            )
+            subprocess.run(
+                [str(WGCF_BIN), "generate"],
+                capture_output=True, timeout=30,
+            )
+
+            # Перемещаем профиль
+            profile = Path("wgcf-profile.conf")
+            if profile.exists():
+                WGCF_PROFILE.parent.mkdir(parents=True, exist_ok=True)
+                profile.rename(WGCF_PROFILE)
+
+            return WGCF_PROFILE.exists()
+        except Exception:
             return False
-
-        # Регистрация и генерация профиля
-        subprocess.run(
-            [str(WGCF_BIN), "register"],
-            capture_output=True, timeout=30,
-        )
-        subprocess.run(
-            [str(WGCF_BIN), "generate"],
-            capture_output=True, timeout=30,
-        )
-
-        # Перемещаем профиль
-        profile = Path("wgcf-profile.conf")
-        if profile.exists():
-            WGCF_PROFILE.parent.mkdir(parents=True, exist_ok=True)
-            profile.rename(WGCF_PROFILE)
-
-        return WGCF_PROFILE.exists()
 
     def uninstall(self) -> bool:
         subprocess.run(

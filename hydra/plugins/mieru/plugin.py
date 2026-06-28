@@ -30,16 +30,28 @@ class MieruPlugin(BasePlugin):
         if MIERU_BIN.exists():
             return True
 
-        r = subprocess.run(
-            [
-                "bash", "-c",
-                "curl -fsSL https://github.com/enfein/mieru/releases/latest/download/"
-                "mita_amd64.deb -o /tmp/mita.deb && "
-                "dpkg -i /tmp/mita.deb && rm /tmp/mita.deb",
-            ],
-            capture_output=True, text=True, timeout=120,
-        )
-        return r.returncode == 0
+        import urllib.request
+        try:
+            req = urllib.request.Request(
+                "https://api.github.com/repos/enfein/mieru/releases/latest",
+                headers={"User-Agent": "hydra/1.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                rel = json.loads(resp.read().decode())
+            deb_url = None
+            for a in rel.get("assets", []):
+                n = a.get("name", "")
+                if "mita" in n and n.endswith(".deb"):
+                    deb_url = a["browser_download_url"]
+                    break
+            if not deb_url:
+                return False
+            deb = Path("/tmp/mita.deb")
+            urllib.request.urlretrieve(deb_url, str(deb))
+            subprocess.run(["dpkg", "-i", str(deb)], capture_output=True, timeout=60)
+            deb.unlink(missing_ok=True)
+            return MIERU_BIN.exists()
+        except Exception:
+            return False
 
     def uninstall(self) -> bool:
         subprocess.run(["systemctl", "stop", "mita"], capture_output=True)

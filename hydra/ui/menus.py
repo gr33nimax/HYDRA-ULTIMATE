@@ -15,7 +15,7 @@ from hydra.core.singbox import (
     install as install_singbox,
     generate_config, write_config, reload as reload_singbox,
     start as start_singbox, is_running, status_text,
-    is_installed as singbox_installed,
+    is_installed as singbox_installed, get_version as singbox_version,
 )
 from hydra.plugins.registry import (
     get_all, get as get_plugin, get_enabled, collect_fragments,
@@ -27,10 +27,26 @@ from hydra.services.subscriptions.generator import start_sub_server
 from hydra.services.traffic import collect_traffic
 from hydra.ui.tui import (
     clear, title, info, success, warn, error, menu, prompt,
-    BANNER, GREEN, CYAN, YELLOW, RED, BOLD, DIM, NC,
+    BANNER, GREEN, CYAN, YELLOW, RED, BLUE, BOLD, DIM, WHITE, NC,
 )
 
 _sub_server = None
+
+
+def _bar(value: float, maximum: float, width: int = 18) -> str:
+    if maximum <= 0:
+        return f"[{'█' * width}] ∞"
+    pct = min(value / maximum, 1.0)
+    filled = int(pct * width)
+    return f"{GREEN}[{'█' * filled}{DIM}{'░' * (width - filled)}{NC}] {pct:.0%}"
+
+
+def _bytes(v: int) -> str:
+    return f"{v / 1073741824:.2f} GB"
+
+
+def _ok(ok: bool) -> str:
+    return f"{GREEN}✓{NC}" if ok else f"{RED}✗{NC}"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -38,10 +54,7 @@ _sub_server = None
 # ═════════════════════════════════════════════════════════════════════════════
 
 def main_menu(state: AppState):
-    """Точка входа — главное меню HYDRA."""
     global _sub_server
-
-    # Запускаем сервер подписок в фоне
     if _sub_server is None:
         try:
             _sub_server = start_sub_server(state)
@@ -52,25 +65,34 @@ def main_menu(state: AppState):
         clear()
         print(BANNER)
 
-        sb_status = status_text() if singbox_installed() else f"{YELLOW}Sing-Box не установлен{NC}"
-        print(f"  {sb_status}")
+        sb_ok = singbox_installed() and is_running()
+        plugins = status_all()
+        active_p = sum(1 for s in plugins.values() if s["running"])
+        total_p = len(plugins)
+        u_active = sum(1 for u in state.users if not u.blocked)
+
+        print(f"  {CYAN}┌── Состояние{N}{'─' * 48}{NC}")
+        print(f"  {CYAN}│{NC}  Sing-Box:    {_ok(sb_ok)}  {singbox_version() or 'не установлен'}")
+        print(f"  {CYAN}│{NC}  Протоколов:  {GREEN}{active_p}{NC}/{total_p} запущено")
+        print(f"  {CYAN}│{NC}  Пользователей: {GREEN if u_active else YELLOW}{u_active}{NC} из {len(state.users)}")
+        print(f"  {CYAN}└{'─' * 54}{NC}")
         print()
 
         choice = menu(
             [
-                ("1", "⚙️  Ядро и система", "Установка Sing-Box, зависимости, тюнинг"),
-                ("2", "🧩 Протоколы", "NaiveProxy, Mieru, AmneziaWG, DNSCrypt, WARP"),
-                ("3", "👥 Пользователи и подписки", "Добавление, удаление, лимиты, TTL"),
-                ("4", "🤖 Telegram-боты", "Admin-панель и клиентский бот"),
-                ("5", "📊 Мониторинг", "Трафик, статус протоколов, логи"),
-                ("6", "🛡️ Безопасность", "GeoIP, fail2ban, honeypot"),
+                ("1", "⚙️  Ядро и система",     f"Установка Sing-Box, зависимости, применить конфиг"),
+                ("2", "🧩 Протоколы",           f"NaiveProxy, Mieru, AmneziaWG, DNSCrypt, WARP  [{active_p}/{total_p}]"),
+                ("3", "👥 Пользователи",        f"Создание, лимиты, TTL, подписки  [{u_active} активно]"),
+                ("4", "🤖 Telegram-боты",       f"Admin-панель и клиентский бот"),
+                ("5", "📊 Мониторинг",          f"Трафик, статус, sync-агент"),
+                ("6", "🛡️  Безопасность",       f"GeoIP, fail2ban, honeypot"),
                 ("0", "🚪 Выход", ""),
             ],
             "HYDRA MULTI-PROXY MANAGER",
         )
 
         if choice == "0":
-            print(f"\n{GREEN}До свидания! 👋{NC}")
+            print(f"\n{GREEN}До свидания!{NC}")
             sys.exit(0)
         elif choice == "1":
             menu_core(state)
@@ -93,15 +115,27 @@ def main_menu(state: AppState):
 def menu_core(state: AppState):
     while True:
         clear()
-        installed = singbox_installed()
-        running = is_running()
-        status_icon = "✅" if running else ("⚠️" if installed else "❌")
+        ok_i = singbox_installed()
+        ok_r = is_running()
+        ver = singbox_version()
+
+        print(f"\n  {CYAN}┌── Sing-Box{N}{'─' * 48}{NC}")
+        print(f"  {CYAN}│{NC}  Статус:   {_ok(ok_r)} {'запущен' if ok_r else 'остановлен'}")
+        print(f"  {CYAN}│{NC}  Версия:   {ver or '—'}")
+        print(f"  {CYAN}│{NC}  Конфиг:   /etc/sing-box/config.json")
+        print(f"  {CYAN}│{NC}  Лог:      /var/log/sing-box/sing-box.log")
+        print(f"  {CYAN}└{'─' * 54}{NC}")
+        print()
 
         choice = menu(
             [
-                ("1", f"{status_icon} Sing-Box", status_text()),
-                ("2", "📦 Установить все плагины", "Загрузить Caddy, Mieru, AWG, WARP..."),
-                ("3", "🔄 Применить конфиг", "Пересобрать и перезагрузить Sing-Box"),
+                ("1", "📦 Установить Sing-Box" if not ok_i else "🔄 Переустановить",
+                 "Официальный репозиторий / GitHub .deb"),
+                ("2", "▶️  Запустить" if not ok_r else "⏸️  Остановить", ""),
+                ("3", "📦 Установить все плагины",
+                 "Caddy, Mieru, AWG kernel, DNSCrypt, WARP"),
+                ("4", "🔄 Применить конфиг",
+                 "Собрать /etc/sing-box/config.json и перезагрузить"),
                 ("0", "↩ Назад", ""),
             ],
             "ЯДРО И СИСТЕМА",
@@ -110,48 +144,42 @@ def menu_core(state: AppState):
         if choice == "0":
             return
         elif choice == "1":
-            if not installed:
-                info("Устанавливаю Sing-Box...")
-                if install_singbox():
-                    success("Sing-Box установлен")
-                    if start_singbox():
-                        success("Sing-Box запущен")
-                else:
-                    error("Ошибка установки Sing-Box")
+            info("Устанавливаю Sing-Box...")
+            if install_singbox():
+                success(f"Sing-Box {singbox_version()} установлен")
+                if start_singbox():
+                    success("Запущен")
             else:
-                if running:
-                    info(f"Sing-Box запущен. Версия: {status_text()}")
-                else:
-                    warn("Sing-Box остановлен. Запускаю...")
-                    start_singbox()
-            prompt("Нажмите Enter для продолжения")
+                error("Не удалось установить")
+            prompt("Нажмите Enter")
         elif choice == "2":
-            info("Устанавливаю все плагины...")
-            results = install_all(state)
-            for name, ok in results.items():
-                (success if ok else error)(f"  {name}: {'OK' if ok else 'FAIL'}")
-            prompt("Нажмите Enter для продолжения")
-        elif choice == "3":
-            info("Собираю конфиг Sing-Box...")
-            fragments = collect_fragments(state)
-            # Конвертируем ConfigFragment → dict
-            frag_dicts = {}
-            for name, frag in fragments.items():
-                frag_dicts[name] = {
-                    "inbounds": frag.inbounds,
-                    "outbounds": frag.outbounds,
-                    "route_rules": frag.route_rules,
-                }
-            config = generate_config(state, frag_dicts)
-            if write_config(config):
-                success("Конфиг записан")
-                if reload_singbox():
-                    success("Sing-Box перезагружен")
+            if ok_r:
+                from hydra.core.singbox import stop
+                stop()
+                success("Остановлен")
+            else:
+                if start_singbox():
+                    success("Запущен")
                 else:
-                    warn("Не удалось перезагрузить Sing-Box. Попробуйте запустить вручную.")
+                    error("Не удалось запустить. Проверьте: systemctl status sing-box")
+            prompt("Нажмите Enter")
+        elif choice == "3":
+            info("Устанавливаю плагины...")
+            for name, ok in install_all(state).items():
+                (success if ok else error)(f"  {name}: {'OK' if ok else 'ОШИБКА'}")
+            prompt("Нажмите Enter")
+        elif choice == "4":
+            info("Собираю конфиг...")
+            frag_dicts = {}
+            for n, f in collect_fragments(state).items():
+                frag_dicts[n] = {"inbounds": f.inbounds, "outbounds": f.outbounds, "route_rules": f.route_rules}
+            cfg = generate_config(state, frag_dicts)
+            if write_config(cfg):
+                success("Конфиг записан")
+                (success if reload_singbox() else warn)("Sing-Box перезагружен" if reload_singbox() else "Перезагрузка не удалась")
             else:
                 error("Ошибка валидации конфига")
-            prompt("Нажмите Enter для продолжения")
+            prompt("Нажмите Enter")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -162,37 +190,32 @@ def menu_protocols(state: AppState):
     while True:
         clear()
         plugins = get_all()
-        options: list[tuple[str, str, str]] = []
 
-        for i, plugin in enumerate(plugins, 1):
-            status = plugin.status()
-            icon = "✅" if status.running else ("⚠️" if status.installed else "❌")
-            enabled = "вкл" if status.enabled else "выкл"
-            options.append((
-                str(i),
-                f"{icon} {plugin.meta.name} [{enabled}]",
-                plugin.meta.description,
-            ))
+        print(f"\n  {CYAN}┌── Протоколы{N}{'─' * 48}{NC}")
+        for p in plugins:
+            s = p.status()
+            ico = f"{GREEN}●{NC}" if s.running else (f"{YELLOW}●{NC}" if s.installed else f"{DIM}●{NC}")
+            port = f":{s.port}" if s.port else ""
+            st = "вкл" if s.enabled else "выкл"
+            print(f"  {CYAN}│{NC}  {ico} {p.meta.name:<14} {DIM}{st:>4}{NC}  порт{port}")
+        print(f"  {CYAN}└{'─' * 54}{NC}")
+        print()
 
-        options.append(("-", "", ""))
-        options.append(("A", "🔄 Применить конфиг и перезагрузить", ""))
-        options.append(("0", "↩ Назад", ""))
+        opts = []
+        for i, p in enumerate(plugins, 1):
+            s = p.status()
+            ico = f"{GREEN}✓{NC}" if s.running else (f"{YELLOW}⚠{NC}" if s.installed else f"{RED}✗{NC}")
+            opts.append((str(i), f"{ico} {p.meta.name}", f"порт {s.port}" if s.port else "не установлен"))
+        opts += [("-", "", ""), ("A", "🔄 Применить конфиг", ""), ("0", "↩ Назад", "")]
 
-        choice = menu(options, "ПРОТОКОЛЫ (ПЛАГИНЫ)")
-
+        choice = menu(opts, "УПРАВЛЕНИЕ ПРОТОКОЛАМИ")
         if choice == "0":
             return
         elif choice.upper() == "A":
-            fragments = collect_fragments(state)
-            frag_dicts = {}
-            for name, frag in fragments.items():
-                frag_dicts[name] = {
-                    "inbounds": frag.inbounds,
-                    "outbounds": frag.outbounds,
-                    "route_rules": frag.route_rules,
-                }
-            config = generate_config(state, frag_dicts)
-            if write_config(config):
+            fd = {n: {"inbounds": f.inbounds, "outbounds": f.outbounds, "route_rules": f.route_rules}
+                  for n, f in collect_fragments(state).items()}
+            cfg = generate_config(state, fd)
+            if write_config(cfg):
                 success("Конфиг применён")
                 reload_singbox()
             else:
@@ -208,54 +231,55 @@ def menu_protocols(state: AppState):
 
 
 def menu_plugin(state: AppState, plugin):
-    """Подменю конкретного плагина."""
     while True:
         clear()
-        status = plugin.status()
-        running_icon = "✅" if status.running else "❌"
-        enabled_icon = "✅" if status.enabled else "❌"
-
+        s = plugin.status()
         proto = state.protocols.get(plugin.meta.name)
+
+        print(f"\n  {CYAN}╔══ {plugin.meta.name.upper()} {N}{'═' * (40 - len(plugin.meta.name))}{NC}")
+        print(f"  {CYAN}║{NC}  {plugin.meta.description}")
+        print(f"  {CYAN}║{NC}")
+        print(f"  {CYAN}║{NC}  Установлен: {_ok(s.installed)}")
+        print(f"  {CYAN}║{NC}  Включён:    {_ok(s.enabled)}")
+        print(f"  {CYAN}║{NC}  Запущен:    {_ok(s.running)}")
+        print(f"  {CYAN}║{NC}  Порт:       {s.port or '—'}")
+        print(f"  {CYAN}╚{'═' * 54}{NC}")
+        print()
 
         choice = menu(
             [
-                ("1", f"Установлен: {running_icon if status.installed else '❌'}", ""),
-                ("2", f"Включён: {enabled_icon}", ""),
-                ("3", "🔧 Установить/обновить", "Загрузить зависимости"),
-                ("4", "▶️ Включить", "Активировать протокол"),
-                ("5", "⏸️ Выключить", "Деактивировать протокол"),
-                ("6", "🗑 Удалить", "Полностью удалить"),
+                ("1", "🔧 Установить" if not s.installed else "🔄 Переустановить", ""),
+                ("2", "▶️  Включить" if not s.enabled else "⏸️  Выключить", ""),
+                ("3", "🗑  Удалить", ""),
                 ("0", "↩ Назад", ""),
             ],
-            f"ПЛАГИН: {plugin.meta.name.upper()}",
+            plugin.meta.name.upper(),
         )
 
         if choice == "0":
             return
-        elif choice == "3":
-            if plugin.install():
-                success(f"{plugin.meta.name} установлен")
-            else:
-                error(f"Ошибка установки {plugin.meta.name}")
+        elif choice == "1":
+            info(f"Устанавливаю {plugin.meta.name}...")
+            (success if plugin.install() else error)(f"{plugin.meta.name}: {'OK' if plugin.install() else 'ОШИБКА'}")
             prompt("Нажмите Enter")
-        elif choice == "4":
-            if not status.installed:
-                warn("Сначала установите плагин (пункт 3)")
+        elif choice == "2":
+            if not s.enabled:
+                if not s.installed:
+                    warn("Сначала установите (пункт 1)")
+                else:
+                    plugin.on_enable(state)
+                    if proto:
+                        proto.enabled = True
+                    save_state(state)
+                    success(f"{plugin.meta.name} включён")
             else:
-                plugin.on_enable(state)
+                plugin.on_disable(state)
                 if proto:
-                    proto.enabled = True
+                    proto.enabled = False
                 save_state(state)
-                success(f"{plugin.meta.name} включён")
+                success(f"{plugin.meta.name} выключен")
             prompt("Нажмите Enter")
-        elif choice == "5":
-            plugin.on_disable(state)
-            if proto:
-                proto.enabled = False
-            save_state(state)
-            success(f"{plugin.meta.name} выключен")
-            prompt("Нажмите Enter")
-        elif choice == "6":
+        elif choice == "3":
             plugin.uninstall()
             if proto:
                 proto.enabled = False
@@ -266,62 +290,71 @@ def menu_plugin(state: AppState, plugin):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  3. Пользователи и подписки
+#  3. Пользователи
 # ═════════════════════════════════════════════════════════════════════════════
 
 def menu_users(state: AppState):
     while True:
         clear()
-        user_count = len(state.users)
-        active_count = sum(1 for u in state.users if not u.blocked)
+        traffic = collect_traffic(state)
+        total_bytes = sum(traffic.values())
+        active = sum(1 for u in state.users if not u.blocked)
+        blocked = sum(1 for u in state.users if u.blocked)
+
+        print(f"\n  {CYAN}┌── Пользователи{N}{'─' * 45}{NC}")
+        print(f"  {CYAN}│{NC}  Всего:          {len(state.users)}")
+        print(f"  {CYAN}│{NC}  Активных:       {GREEN}{active}{NC}")
+        print(f"  {CYAN}│{NC}  Заблокировано:  {RED}{blocked}{NC}")
+        print(f"  {CYAN}│{NC}  Трафик всего:   {_bytes(total_bytes)}")
+        print(f"  {CYAN}└{'─' * 54}{NC}")
+        print()
 
         choice = menu(
             [
-                ("1", "📋 Список пользователей", f"Всего: {user_count}, активно: {active_count}"),
-                ("2", "➕ Добавить пользователя", "Создать новую учётную запись"),
-                ("3", "🗑 Удалить пользователя", "Удалить по email"),
-                ("4", "🔒 Заблокировать", "Заблокировать по email"),
-                ("5", "🔓 Разблокировать", "Разблокировать по email"),
-                ("6", "📊 Лимиты трафика", "Установить лимит (GB)"),
-                ("7", "⏰ Срок действия (TTL)", "Установить дату окончания"),
+                ("1", "📋 Список пользователей", f"{len(state.users)} всего, {active} активно"),
+                ("2", "➕ Добавить", "Email, лимит, TTL"),
+                ("3", "🗑  Удалить", "По email"),
+                ("4", "🔒🔓 Заблокировать / Разблокировать", ""),
+                ("5", "📊 Лимит трафика", "Установить GB"),
+                ("6", "⏰ Срок действия (TTL)", "Дата окончания"),
                 ("0", "↩ Назад", ""),
             ],
-            "ПОЛЬЗОВАТЕЛИ И ПОДПИСКИ",
+            "ПОЛЬЗОВАТЕЛИ",
         )
 
         if choice == "0":
             return
         elif choice == "1":
-            _show_users(state)
+            _show_users(state, traffic)
         elif choice == "2":
             _add_user(state)
         elif choice == "3":
             _delete_user(state)
         elif choice == "4":
-            _block_user(state, True)
+            _toggle_block(state)
         elif choice == "5":
-            _block_user(state, False)
-        elif choice == "6":
             _set_limit(state)
-        elif choice == "7":
+        elif choice == "6":
             _set_ttl(state)
 
 
-def _show_users(state: AppState):
+def _show_users(state: AppState, traffic: dict[str, int]):
     clear()
     if not state.users:
         warn("Нет пользователей.")
         prompt("Нажмите Enter")
         return
-
-    print(f"\n{BOLD}{CYAN}Список пользователей:{NC}\n")
+    print(f"\n{BOLD}{CYAN}  Список пользователей:{NC}\n")
     for u in state.users:
-        icon = "🔴" if u.blocked else "🟢"
-        limit = f"{u.traffic_limit_gb} GB" if u.traffic_limit_gb else "∞"
+        ico = f"{RED}🔴{NC}" if u.blocked else f"{GREEN}🟢{NC}"
+        used = traffic.get(u.email, u.traffic_used_bytes)
+        limit_bytes = int(u.traffic_limit_gb * 1073741824) if u.traffic_limit_gb else 0
+        limit_str = f"{u.traffic_limit_gb} GB" if u.traffic_limit_gb else "∞"
         ttl = u.expiry_date[:10] if u.expiry_date else "∞"
-        print(f"  {icon} {u.email}")
-        print(f"     UUID: {u.uuid[:16]}...")
-        print(f"     Лимит: {limit}  |  TTL: {ttl}")
+        print(f"  {ico} {BOLD}{u.email}{NC}")
+        print(f"     Трафик: {_bytes(used)} / {limit_str}")
+        print(f"     {_bar(used, limit_bytes)}")
+        print(f"     TTL: {ttl}     UUID: {DIM}{u.uuid[:20]}...{NC}")
         print()
     prompt("Нажмите Enter")
 
@@ -331,129 +364,122 @@ def _add_user(state: AppState):
     if not email:
         return
     if find_user(state, email):
-        warn(f"Пользователь {email} уже существует.")
+        warn(f"{email} уже существует.")
         prompt("Нажмите Enter")
         return
-
-    limit = prompt("Лимит трафика (GB, 0 = безлимит)", "0")
-    ttl = prompt("Срок действия (дней, 0 = бессрочно)", "0")
-
+    limit = prompt("Лимит (GB, 0 = безлимит)", "0")
+    ttl = prompt("Срок (дней, 0 = бессрочно)", "0")
     user = User(
-        email=email,
-        uuid=str(_uuid.uuid4()),
+        email=email, uuid=str(_uuid.uuid4()),
         traffic_limit_gb=float(limit) if limit else 0,
-        expiry_date=(
-            datetime.now().isoformat() if int(ttl) <= 0
-            else datetime.fromtimestamp(
-                datetime.now().timestamp() + int(ttl) * 86400
-            ).isoformat()
-        ),
+        expiry_date=("" if int(ttl) <= 0 else datetime.fromtimestamp(
+            datetime.now().timestamp() + int(ttl) * 86400).isoformat()),
         created_at=datetime.now().isoformat(),
     )
     add_user(state, user)
     save_state(state)
-    success(f"Пользователь {email} создан.")
-
-
-def _delete_user(state: AppState):
-    email = prompt("Email пользователя для удаления")
-    user = find_user(state, email)
-    if not user:
-        warn("Пользователь не найден.")
-    else:
-        state.users.remove(user)
-        save_state(state)
-        success(f"Пользователь {email} удалён.")
+    success(f"{email} создан (UUID: {user.uuid[:16]}...)")
     prompt("Нажмите Enter")
 
 
-def _block_user(state: AppState, block: bool):
-    email = prompt("Email пользователя")
-    user = find_user(state, email)
-    if not user:
-        warn("Пользователь не найден.")
+def _delete_user(state: AppState):
+    email = prompt("Email для удаления")
+    u = find_user(state, email)
+    if not u:
+        warn("Не найден.")
     else:
-        user.blocked = block
+        state.users.remove(u)
         save_state(state)
-        action = "заблокирован" if block else "разблокирован"
-        success(f"Пользователь {email} {action}.")
+        success(f"{email} удалён.")
+    prompt("Нажмите Enter")
+
+
+def _toggle_block(state: AppState):
+    email = prompt("Email")
+    u = find_user(state, email)
+    if not u:
+        warn("Не найден.")
+    else:
+        u.blocked = not u.blocked
+        save_state(state)
+        success(f"{email} {'заблокирован' if u.blocked else 'разблокирован'}.")
     prompt("Нажмите Enter")
 
 
 def _set_limit(state: AppState):
-    email = prompt("Email пользователя")
-    user = find_user(state, email)
-    if not user:
-        warn("Пользователь не найден.")
+    email = prompt("Email")
+    u = find_user(state, email)
+    if not u:
+        warn("Не найден.")
     else:
-        gb = prompt("Лимит (GB, 0 = безлимит)", str(user.traffic_limit_gb))
-        user.traffic_limit_gb = float(gb) if gb else 0
+        gb = prompt("Лимит (GB, 0 = безлимит)", str(u.traffic_limit_gb))
+        u.traffic_limit_gb = float(gb) if gb else 0
         save_state(state)
-        success(f"Лимит для {email}: {user.traffic_limit_gb or '∞'} GB")
+        success(f"{email}: {u.traffic_limit_gb or '∞'} GB")
     prompt("Нажмите Enter")
 
 
 def _set_ttl(state: AppState):
-    email = prompt("Email пользователя")
-    user = find_user(state, email)
-    if not user:
-        warn("Пользователь не найден.")
+    email = prompt("Email")
+    u = find_user(state, email)
+    if not u:
+        warn("Не найден.")
     else:
-        days = prompt("Срок (дней от сегодня, 0 = бессрочно)", "0")
-        if int(days) > 0:
-            user.expiry_date = datetime.fromtimestamp(
-                datetime.now().timestamp() + int(days) * 86400
-            ).isoformat()
-        else:
-            user.expiry_date = ""
+        days = prompt("Дней от сегодня (0 = бессрочно)", "0")
+        u.expiry_date = "" if int(days) <= 0 else datetime.fromtimestamp(
+            datetime.now().timestamp() + int(days) * 86400).isoformat()
         save_state(state)
-        success(f"TTL для {email}: {user.expiry_date[:10] if user.expiry_date else '∞'}")
+        success(f"{email}: TTL {u.expiry_date[:10] if u.expiry_date else '∞'}")
     prompt("Нажмите Enter")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  4. Telegram-боты
+#  4. Telegram
 # ═════════════════════════════════════════════════════════════════════════════
 
 def menu_telegram(state: AppState):
     while True:
         clear()
         tg = state.telegram
-
+        print(f"\n  {CYAN}┌── Telegram{N}{'─' * 50}{NC}")
+        print(f"  {CYAN}│{NC}  Admin токен:  {_ok(bool(tg.admin_token))}")
+        print(f"  {CYAN}│{NC}  Admin Chat ID: {tg.admin_chat_id or '—'}")
+        print(f"  {CYAN}│{NC}  Admin бот:    {_ok(tg.admin_enabled)}")
+        print(f"  {CYAN}│{NC}  Client токен: {_ok(bool(tg.bot_token))}")
+        print(f"  {CYAN}│{NC}  Client бот:   {_ok(tg.bot_enabled)}")
+        print(f"  {CYAN}└{'─' * 54}{NC}")
+        print()
         choice = menu(
-            [
-                ("1", f"🔑 Admin-токен: {'✓' if tg.admin_token else '✗'}", ""),
-                ("2", f"💬 Admin Chat ID: {tg.admin_chat_id or '✗'}", ""),
-                ("3", f"🤖 Bot-токен: {'✓' if tg.bot_token else '✗'}", ""),
-                ("4", "▶️ Запустить ботов", "Установить systemd-сервисы"),
-                ("5", "⏸️ Остановить ботов", ""),
-                ("0", "↩ Назад", ""),
-            ],
-            "TELEGRAM-БОТЫ",
+            [("1", "🔑 Admin-токен", "@BotFather"),
+             ("2", "💬 Admin Chat ID", "@userinfobot"),
+             ("3", "🤖 Client-токен", "@BotFather"),
+             ("4", "▶️  Запустить ботов", "systemd-сервисы"),
+             ("5", "⏸️  Остановить ботов", ""),
+             ("0", "↩ Назад", "")],
+            "TELEGRAM",
         )
-
         if choice == "0":
             return
         elif choice == "1":
-            token = prompt("Токен admin-бота")
-            if token:
-                state.telegram.admin_token = token
+            t = prompt("Токен admin-бота")
+            if t:
+                state.telegram.admin_token = t
                 save_state(state)
-                success("Токен сохранён")
+                success("Сохранён")
             prompt("Нажмите Enter")
         elif choice == "2":
-            chat_id = prompt("Admin Chat ID (число)")
-            if chat_id:
-                state.telegram.admin_chat_id = chat_id
+            c = prompt("Admin Chat ID (число)")
+            if c:
+                state.telegram.admin_chat_id = c
                 save_state(state)
-                success("Chat ID сохранён")
+                success("Сохранён")
             prompt("Нажмите Enter")
         elif choice == "3":
-            token = prompt("Токен клиентского бота")
-            if token:
-                state.telegram.bot_token = token
+            t = prompt("Токен клиентского бота")
+            if t:
+                state.telegram.bot_token = t
                 save_state(state)
-                success("Токен сохранён")
+                success("Сохранён")
             prompt("Нажмите Enter")
         elif choice == "4":
             _install_bots(state)
@@ -469,47 +495,38 @@ def menu_telegram(state: AppState):
 
 def _install_bots(state: AppState):
     if not state.telegram.admin_token:
-        error("Сначала укажите admin-токен (пункт 1)")
+        error("Сначала укажите admin-токен")
         prompt("Нажмите Enter")
         return
-
-    admin_svc = f"""[Unit]
-Description=HYDRA Telegram Admin Bot
+    install_service("hydra-tg-admin", f"""[Unit]
+Description=HYDRA Admin Bot
 After=network.target
-
 [Service]
 Type=simple
 User=root
 ExecStart=/usr/bin/python3 -c "from hydra.services.telegram.bot import run_admin_bot; run_admin_bot('{state.telegram.admin_token}', '{state.telegram.admin_chat_id}')"
 Restart=always
 RestartSec=10
-
 [Install]
 WantedBy=multi-user.target
-"""
-    install_service("hydra-tg-admin", admin_svc)
+""")
     state.telegram.admin_enabled = True
-    success("Admin-бот запущен")
-
+    success("Admin-бот запущен (hydra-tg-admin)")
     if state.telegram.bot_token:
-        client_svc = f"""[Unit]
-Description=HYDRA Telegram Client Bot
+        install_service("hydra-tg-bot", f"""[Unit]
+Description=HYDRA Client Bot
 After=network.target
-
 [Service]
 Type=simple
 User=root
 ExecStart=/usr/bin/python3 -c "from hydra.services.telegram.bot import run_client_bot; run_client_bot('{state.telegram.bot_token}', '{state.telegram.admin_chat_id}')"
 Restart=always
 RestartSec=10
-
 [Install]
 WantedBy=multi-user.target
-"""
-        install_service("hydra-tg-bot", client_svc)
+""")
         state.telegram.bot_enabled = True
-        success("Client-бот запущен")
-
+        success("Client-бот запущен (hydra-tg-bot)")
     save_state(state)
     prompt("Нажмите Enter")
 
@@ -521,17 +538,20 @@ WantedBy=multi-user.target
 def menu_monitoring(state: AppState):
     while True:
         clear()
-
+        traffic = collect_traffic(state)
+        total = sum(traffic.values())
+        print(f"\n  {CYAN}┌── Мониторинг{N}{'─' * 47}{NC}")
+        print(f"  {CYAN}│{NC}  Трафик всего: {_bytes(total)}")
+        print(f"  {CYAN}│{NC}  Пользователей: {len(state.users)}")
+        print(f"  {CYAN}└{'─' * 54}{NC}")
+        print()
         choice = menu(
-            [
-                ("1", "📊 Трафик по пользователям", ""),
-                ("2", "🔌 Статус протоколов", ""),
-                ("3", "🔄 Установить Sync Agent", "systemd timer каждые 5 мин"),
-                ("0", "↩ Назад", ""),
-            ],
+            [("1", "📊 Трафик по пользователям", ""),
+             ("2", "🔌 Статус протоколов", ""),
+             ("3", "🔄 Sync Agent", "systemd timer, каждые 5 мин"),
+             ("0", "↩ Назад", "")],
             "МОНИТОРИНГ",
         )
-
         if choice == "0":
             return
         elif choice == "1":
@@ -545,49 +565,47 @@ def menu_monitoring(state: AppState):
 def _show_traffic(state: AppState):
     clear()
     traffic = collect_traffic(state)
-    print(f"\n{BOLD}{CYAN}Трафик по пользователям:{NC}\n")
-    for user in state.users:
-        used = traffic.get(user.email, user.traffic_used_bytes)
-        used_gb = used / 1073741824
-        limit_str = f"/ {user.traffic_limit_gb} GB" if user.traffic_limit_gb else "/ ∞"
-        bar = _progress(used, int(user.traffic_limit_gb * 1073741824) if user.traffic_limit_gb else 0)
-        print(f"  {user.email}: {used_gb:.2f} GB {limit_str}")
-        print(f"  {bar}")
+    print(f"\n{BOLD}{CYAN}  Трафик:{NC}\n")
+    for u in state.users:
+        used = traffic.get(u.email, u.traffic_used_bytes)
+        lim = int(u.traffic_limit_gb * 1073741824) if u.traffic_limit_gb else 0
+        ico = f"{RED}🔴{NC}" if u.blocked else f"{GREEN}🟢{NC}"
+        print(f"  {ico} {BOLD}{u.email}{NC}")
+        print(f"     {_bytes(used)} / {u.traffic_limit_gb or '∞'} GB")
+        print(f"     {_bar(used, lim)}")
         print()
     prompt("Нажмите Enter")
 
 
 def _show_status():
     clear()
-    print(f"\n{BOLD}{CYAN}Статус протоколов:{NC}\n")
+    print(f"\n{BOLD}{CYAN}  Статус протоколов:{NC}\n")
     for name, s in status_all().items():
-        icon = "✅" if s["running"] else ("⚠️" if s["installed"] else "❌")
-        print(f"  {icon} {name}: порт {s['port']}")
+        ico = f"{GREEN}●{NC}" if s["running"] else (f"{YELLOW}●{NC}" if s["installed"] else f"{DIM}●{NC}")
+        port = f":{s['port']}" if s["port"] else ""
+        print(f"  {ico} {name:<14} порт{port:<6} {'запущен' if s['running'] else 'стоп'}")
     print()
     prompt("Нажмите Enter")
 
 
 def _install_sync_agent(state: AppState):
-    svc = """[Unit]
+    install_timer("hydra-sync-agent",
+        """[Unit]
 Description=HYDRA Sync Agent
 After=network.target
-
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 -m hydra.services.sync_agent
-"""
-    tmr = """[Unit]
+""",
+        """[Unit]
 Description=HYDRA Sync Agent Timer
-
 [Timer]
 OnCalendar=*:0/5
 Persistent=true
-
 [Install]
 WantedBy=timers.target
-"""
-    install_timer("hydra-sync-agent", svc, tmr)
-    success("Sync Agent установлен (каждые 5 минут)")
+""")
+    success("Sync Agent установлен (каждые 5 мин)")
     prompt("Нажмите Enter")
 
 
@@ -599,46 +617,33 @@ def menu_security(state: AppState):
     while True:
         clear()
         sec = state.security
-
+        print(f"\n  {CYAN}┌── Безопасность{N}{'─' * 46}{NC}")
+        print(f"  {CYAN}│{NC}  GeoIP:        {_ok(sec.geoip_block_enabled)}  (РФ, порт {sec.geoip_port})")
+        print(f"  {CYAN}│{NC}  Fail2ban:     {_ok(sec.fail2ban_enabled)}")
+        print(f"  {CYAN}│{NC}  Honeypot:     {_ok(sec.honeypot_enabled)}")
+        print(f"  {CYAN}└{'─' * 54}{NC}")
+        print()
         choice = menu(
-            [
-                ("1", f"🌍 GeoIP-блокировка: {'✅' if sec.geoip_block_enabled else '❌'}", "Блокировка входящих из РФ"),
-                ("2", f"🛡️ Fail2ban: {'✅' if sec.fail2ban_enabled else '❌'}", "Защита от перебора"),
-                ("3", f"🪤 Honeypot: {'✅' if sec.honeypot_enabled else '❌'}", "Порты-ловушки"),
-                ("0", "↩ Назад", ""),
-            ],
+            [("1", f"🌍 GeoIP  [{_ok(sec.geoip_block_enabled)}]", "iptables + ipset"),
+             ("2", f"🛡️  Fail2ban  [{_ok(sec.fail2ban_enabled)}]", ""),
+             ("3", f"🪤 Honeypot  [{_ok(sec.honeypot_enabled)}]", ""),
+             ("0", "↩ Назад", "")],
             "БЕЗОПАСНОСТЬ",
         )
-
         if choice == "0":
             return
         elif choice == "1":
             sec.geoip_block_enabled = not sec.geoip_block_enabled
             save_state(state)
-            status = "включена" if sec.geoip_block_enabled else "выключена"
-            success(f"GeoIP-блокировка {status}")
+            success(f"GeoIP {'включен' if sec.geoip_block_enabled else 'выключен'}")
             prompt("Нажмите Enter")
         elif choice == "2":
             sec.fail2ban_enabled = not sec.fail2ban_enabled
             save_state(state)
-            status = "включён" if sec.fail2ban_enabled else "выключен"
-            success(f"Fail2ban {status}")
+            success(f"Fail2ban {'включён' if sec.fail2ban_enabled else 'выключен'}")
             prompt("Нажмите Enter")
         elif choice == "3":
             sec.honeypot_enabled = not sec.honeypot_enabled
             save_state(state)
-            status = "включён" if sec.honeypot_enabled else "выключен"
-            success(f"Honeypot {status}")
+            success(f"Honeypot {'включён' if sec.honeypot_enabled else 'выключен'}")
             prompt("Нажмите Enter")
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  Утилиты
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _progress(used: int, limit: int, width: int = 20) -> str:
-    if limit <= 0:
-        return f"[{'█' * width}] ∞"
-    pct = min(used / limit, 1.0)
-    filled = int(pct * width)
-    return f"[{'█' * filled}{'░' * (width - filled)}] {pct:.0%}"
