@@ -8,6 +8,7 @@ WARP/DNS/GeoIP → outbound/route/rules.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -15,10 +16,19 @@ from typing import Optional
 
 from hydra.core.state import AppState, ProtocolState, load_state, save_state
 
-SINGBOX_BIN = Path("/usr/local/bin/sing-box")
+SINGBOX_BIN = Path("/usr/bin/sing-box")
 SINGBOX_CONFIG = Path("/etc/sing-box/config.json")
 SINGBOX_SERVICE = Path("/etc/systemd/system/sing-box.service")
 LOG_FILE = Path("/var/log/hydra/install.log")
+
+
+def _find_singbox():
+    """Ищет бинарник sing-box в известных путях."""
+    for p in ("/usr/bin/sing-box", "/usr/local/bin/sing-box"):
+        if Path(p).exists():
+            return Path(p)
+    w = shutil.which("sing-box")
+    return Path(w) if w else None
 
 
 def _log(level: str, msg: str) -> None:
@@ -44,47 +54,88 @@ def _run(cmd: list, capture: bool = True, timeout: int = 30) -> subprocess.Compl
 
 def is_installed() -> bool:
     """Проверяет, установлен ли Sing-Box."""
-    return SINGBOX_BIN.exists()
+    return _find_singbox() is not None
 
 
 def get_version() -> Optional[str]:
     """Возвращает версию установленного Sing-Box."""
-    if not is_installed():
+    bin_path = _find_singbox()
+    if not bin_path:
         return None
-    r = _run([str(SINGBOX_BIN), "version"])
+    r = _run([str(bin_path), "version"])
     if r.returncode == 0:
         return r.stdout.strip().split()[-1]
     return None
 
 
 def install() -> bool:
-    """Устанавливает Sing-Box из официального репозитория."""
+    """Устанавливает Sing-Box. Пробует apt, затем прямой .deb."""
     if is_installed():
         return True
 
     _log("INFO", "Installing Sing-Box...")
 
-    script = """
-    set -e
-    curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
-    chmod 644 /etc/apt/keyrings/sagernet.asc
-    echo "deb [signed-by=/etc/apt/keyrings/sagernet.asc] https://deb.sagernet.org/ * *" \
-        > /etc/apt/sources.list.d/sagernet.list
-    apt-get update -qq
-    apt-get install -y -qq sing-box
-    """
+    # Способ 1: apt-репозиторий
+    keyring_dir = Path("/etc/apt/keyrings")
+    keyring_dir.mkdir(parents=True, exist_ok=True)
+    keyring_file = keyring_dir / "sagernet.asc"
 
-    r = subprocess.run(
-        ["bash", "-c", script],
-        capture_output=True, text=True, timeout=120,
+    r = _run(
+        ["curl", "-fsSL", "--connect-timeout", "15", "--retry", "3",
+         "https://sing-box.app/gpg.key", "-o", str(keyring_file)],
+        capture=False, timeout=60,
     )
+    if r.returncode == 0:
+        keyring_file.chmod(0o644)
+        source = "deb [signed-by=/etc/apt/keyrings/sagernet.asc] https://deb.sagernet.org/ * *"
+        Path("/etc/apt/sources.list.d/sagernet.list").write_text(source + "\n")
+        _run(["apt-get", "update", "-qq"], capture=False, timeout=60)
+        r = _run(
+            ["apt-get", "install", "-y", "-qq", "sing-box"],
+            capture=False, timeout=120,
+        )
+        if r.returncode == 0 and is_installed():
+            _log("INFO", f"Sing-Box installed via apt: {get_version()}")
+            return True
 
-    if r.returncode != 0:
-        _log("ERROR", f"Sing-Box install failed: {r.stderr[:500]}")
-        return False
+    # Способ 2: прямой .deb с GitHub
+    _log("WARN", "apt failed, trying direct .deb download...")
+    import platform as _pf
+    arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(_pf.machine(), "amd64")
 
-    _log("INFO", f"Sing-Box installed: {get_version()}")
-    return True
+    r = _run(
+        ["curl", "-s", "--connect-timeout", "15",
+         "https://api.github.com/repos/SagerNet/sing-box/releases/latest"],
+        timeout=30,
+    )
+    if r.returncode == 0:
+        try:
+            rel = json.loads(r.stdout)
+            deb_url = None
+            for a in rel.get("assets", []):
+                n = a.get("name", "")
+                if f"linux-{arch}" in n and n.endswith(".deb"):
+                    deb_url = a["browser_download_url"]
+                    break
+            if deb_url:
+                deb_path = Path("/tmp/sing-box.deb")
+                r = _run(
+                    ["curl", "-fsSL", "--connect-timeout", "30", "--retry", "3",
+                     deb_url, "-o", str(deb_path)],
+                    capture=False, timeout=120,
+                )
+                if r.returncode == 0:
+                    _run(["dpkg", "-i", str(deb_path)], capture=False, timeout=60)
+                    _run(["apt-get", "install", "-f", "-y", "-qq"], capture=False, timeout=60)
+                    deb_path.unlink(missing_ok=True)
+                    if is_installed():
+                        _log("INFO", f"Sing-Box installed via .deb: {get_version()}")
+                        return True
+        except Exception:
+            pass
+
+    _log("ERROR", "All Sing-Box install methods failed")
+    return False
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -201,7 +252,10 @@ def write_config(config: dict) -> bool:
     tmp.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
 
     # Валидация
-    r = _run([str(SINGBOX_BIN), "check", "-c", str(tmp)])
+    bin_path = _find_singbox()
+    if not bin_path:
+        return False
+    r = _run([str(bin_path), "check", "-c", str(tmp)])
     if r.returncode != 0:
         _log("ERROR", f"Sing-Box config invalid: {r.stderr[:500]}")
         tmp.unlink(missing_ok=True)
@@ -217,6 +271,9 @@ def write_config(config: dict) -> bool:
 
 def _install_service() -> bool:
     """Создаёт systemd-юнит для sing-box."""
+    bin_path = _find_singbox()
+    if not bin_path:
+        return False
     unit = f"""[Unit]
 Description=sing-box service
 Documentation=https://sing-box.sagernet.org
@@ -226,7 +283,7 @@ After=network.target nss-lookup.target
 Type=simple
 User=root
 WorkingDirectory=/var/lib/sing-box
-ExecStart={SINGBOX_BIN} run -c {SINGBOX_CONFIG}
+ExecStart={bin_path} run -c {SINGBOX_CONFIG}
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=30
