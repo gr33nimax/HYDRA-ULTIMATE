@@ -750,6 +750,10 @@ def _sync_all_protocols(state: AppState):
     for p in get_enabled(state):
         try:
             p.configure(state)
+            # Перезапуск AWG если был запущен
+            if p.meta.name == "amneziawg" and p.status().running:
+                p._down()
+                p._up()
             success(f"  {p.meta.name}: обновлён")
         except Exception as e:
             warn(f"  {p.meta.name}: {e}")
