@@ -316,11 +316,6 @@ def start() -> bool:
         _log("INFO", "No config found, creating minimal default...")
         minimal = {
             "log": {"level": "info"},
-            "dns": {
-                "servers": [
-                    {"tag": "dns-local", "address": "local", "detour": "direct"}
-                ]
-            },
             "inbounds": [
                 {"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080}
             ],
