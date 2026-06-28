@@ -1,195 +1,174 @@
 #!/usr/bin/env bash
-# ============================================================
-#  VLESS Ultimate Installer v4.12.10 — Bootstrap
-#  bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh)
-# ============================================================
-# EXPECTED_SHA256="PLACEHOLDER_SHA256_UPDATE_BEFORE_RELEASE"
+# ═══════════════════════════════════════════════════════════════════════════════
+# HYDRA v1.0.0-alpha — Bootstrap Installer
+# ═══════════════════════════════════════════════════════════════════════════════
+# Установка:
+#   curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash
+#
+# Что делает:
+#   1. Проверяет root, ОС (Ubuntu/Debian), Python 3.10+
+#   2. Устанавливает системные зависимости (curl, git, iptables, etc.)
+#   3. Устанавливает Sing-Box (из официального репозитория)
+#   4. Клонирует/обновляет репозиторий HYDRA
+#   5. Запускает main.py
+# ═══════════════════════════════════════════════════════════════════════════════
+
 set -euo pipefail
 
-# Сброс системного прокси перед загрузкой — защита от сломанных окружений,
-# когда в /etc/environment прописан прокси на несуществующий локальный порт.
+# Сброс прокси
 unset ALL_PROXY all_proxy HTTP_PROXY http_proxy HTTPS_PROXY https_proxy 2>/dev/null || true
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
 
-ok()   { echo -e "  ${GREEN}✓${NC} $*"; }
-err()  { echo -e "  ${RED}✗${NC} $*" >&2; }
-warn() { echo -e "  ${YELLOW}⚠${NC} $*"; }
-info() { echo -e "  ${CYAN}→${NC} $*"; }
+info()  { echo -e "  ${CYAN}→${NC} $*"; }
+ok()    { echo -e "  ${GREEN}✓${NC} $*"; }
+warn()  { echo -e "  ${YELLOW}⚠${NC} $*"; }
+err()   { echo -e "  ${RED}✗${NC} $*"; }
 
-echo -e "${CYAN}${BOLD}"
+echo -e "${GREEN}${BOLD}"
 cat << 'BANNER'
-  ██╗  ██╗██╗   ██╗██████╗ ██████╗  █████╗ 
+  ██╗  ██╗██╗   ██╗██████╗ ██████╗  █████╗
   ██║  ██║╚██╗ ██╔╝██╔══██╗██╔══██╗██╔══██╗
   ███████║ ╚████╔╝ ██║  ██║██████╔╝███████║
   ██╔══██║  ╚██╔╝  ██║  ██║██╔══██╗██╔══██║
   ██║  ██║   ██║   ██████╔╝██║  ██║██║  ██║
   ╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
-  Multi-Proxy Manager v5.0.0
+           SING-BOX MULTI-PROXY MANAGER v1.0
 BANNER
 echo -e "${NC}"
 
-# [1] Root check
+# ── [1/5] Root check ────────────────────────────────────────────────────────
 echo -e "${BOLD}[1/5] Проверка прав${NC}"
 if [[ $EUID -ne 0 ]]; then
     err "Требуются права root"
-    echo -e "     ${YELLOW}sudo bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh)${NC}"
+    echo -e "     sudo bash bootstrap.sh"
     exit 1
 fi
 ok "root: OK"
 
-# [2] Определение пакетного менеджера
+# ── [2/5] Система ───────────────────────────────────────────────────────────
 echo -e "\n${BOLD}[2/5] Система${NC}"
-if   command -v apt-get &>/dev/null; then PKG_INSTALL="apt-get install -y -q"
-elif command -v dnf     &>/dev/null; then PKG_INSTALL="dnf install -y -q"
-elif command -v yum     &>/dev/null; then PKG_INSTALL="yum install -y -q"
-else err "Не найден поддерживаемый пакетный менеджер"; exit 1; fi
-OS_ID=$(grep -oP '(?<=^ID=).+' /etc/os-release 2>/dev/null | tr -d '"' || echo "unknown")
-OS_VER=$(grep -oP '(?<=^VERSION_ID=).+' /etc/os-release 2>/dev/null | tr -d '"' || echo "?")
-ok "ОС: ${OS_ID} ${OS_VER}"
+if [[ -f /etc/os-release ]]; then
+    . /etc/os-release
+    OS=$ID
+    VER=$VERSION_ID
+else
+    err "Не удалось определить ОС"
+    exit 1
+fi
 
-# [3] Минимальные зависимости
+case "$OS" in
+    ubuntu|debian)
+        ok "ОС: $OS $VER"
+        PKG_INSTALL="apt-get install -y -qq"
+        ;;
+    *)
+        err "Поддерживаются только Ubuntu/Debian. Обнаружено: $OS"
+        exit 1
+        ;;
+esac
+
+# ── [3/5] Зависимости ───────────────────────────────────────────────────────
 echo -e "\n${BOLD}[3/5] Зависимости${NC}"
+
+apt-get update -qq
+
 MISSING=()
 command -v python3 &>/dev/null || MISSING+=("python3")
 command -v curl    &>/dev/null || MISSING+=("curl")
 command -v git     &>/dev/null || MISSING+=("git")
 
-if [[ ${#MISSING[@]} -gt 0 ]]; then
-    warn "Устанавливаю: ${MISSING[*]}"
-    if command -v apt-get &>/dev/null; then apt-get update -qq; fi
-    for pkg in "${MISSING[@]}"; do
-        $PKG_INSTALL "$pkg" || { err "Не удалось установить ${pkg}"; exit 1; }
-    done
-fi
+for pkg in "${MISSING[@]}"; do
+    info "Устанавливаю: $pkg"
+    $PKG_INSTALL "$pkg" || { err "Не удалось установить $pkg"; exit 1; }
+done
 
 PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-PY_MIN_OK=$(python3 -c "import sys; print(int(sys.version_info >= (3,10)))")
-PY_312_OK=$(python3 -c "import sys; print(int(sys.version_info >= (3,12)))")
-if [[ "$PY_MIN_OK" != "1" ]]; then
-    err "Требуется Python >= 3.10, найден ${PY_VER}"
+PY_OK=$(python3 -c "import sys; print(int(sys.version_info >= (3, 10)))")
+if [[ "$PY_OK" != "1" ]]; then
+    err "Требуется Python >= 3.10, найден $PY_VER"
     exit 1
 fi
-if [[ "$PY_312_OK" != "1" ]]; then
-    warn "Python ${PY_VER} — рекомендуется 3.12+ (Ubuntu 24.04)"
-    warn "На Python < 3.12 возможны ошибки вида:"
-    warn "  SyntaxError: f-string expression part cannot include a backslash"
-    warn "  SyntaxError: f-string: unmatched '('"
-    warn "Для обновления Python: https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa"
-    echo ""
+ok "Python $PY_VER: OK"
+
+# Дополнительные пакеты
+$PKG_INSTALL iptables iproute2 gnupg ca-certificates 2>/dev/null || true
+
+# ── Sing-Box ────────────────────────────────────────────────────────────────
+echo -e "\n${BOLD}Sing-Box${NC}"
+if ! command -v sing-box &> /dev/null; then
+    info "Установка Sing-Box..."
+    curl -fsSL https://sing-box.app/gpg.key -o /usr/share/keyrings/sagernet.asc 2>/dev/null
+    chmod 644 /usr/share/keyrings/sagernet.asc
+    echo "deb [signed-by=/usr/share/keyrings/sagernet.asc] https://deb.sagernet.org/ * *" \
+        > /etc/apt/sources.list.d/sagernet.list
+    apt-get update -qq
+    $PKG_INSTALL sing-box 2>/dev/null || {
+        warn "Не удалось установить sing-box через apt. Попробуйте вручную."
+    }
+    command -v sing-box &>/dev/null && ok "Sing-Box: $(sing-box version 2>/dev/null | head -1)" || warn "Sing-Box не установлен"
 else
-    ok "Python ${PY_VER}: OK"
+    ok "Sing-Box: $(sing-box version 2>/dev/null | head -1)"
 fi
 
-# [4] Загрузка / обновление
-echo -e "\n${BOLD}[4/5] Загрузка HYDRA Ultimate${NC}"
-INSTALL_DIR="/opt/vless-ultimate"
+# ── [4/5] Клонирование / обновление ─────────────────────────────────────────
+echo -e "\n${BOLD}[4/5] Загрузка HYDRA${NC}"
+INSTALL_DIR="/opt/hydra"
 REPO_URL="https://github.com/gr33nimax/HYDRA-ULTIMATE"
-BRANCH="main"
-
-# Ищем существующую установку в нестандартных местах
-_found=""
-for _candidate in \
-    "/home/gr33nimax/HYDRA-ULTIMATE" \
-    "/root/HYDRA-ULTIMATE" \
-    "/opt/HYDRA-ULTIMATE" \
-    "/home/gr33nimax/VLESS-Ultimate-Installer" \
-    "/root/VLESS-Ultimate-Installer" \
-    "/opt/VLESS-Ultimate-Installer"
-do
-    if [[ -f "${_candidate}/main.py" ]]; then
-        _found="$_candidate"
-        break
-    fi
-done
-# Также ищем через glob в /home/*/
-if [[ -z "$_found" ]]; then
-    for _p in /home/*/HYDRA-ULTIMATE/main.py /home/*/VLESS-Ultimate-Installer/main.py; do
-        [[ -f "$_p" ]] && { _found="${_p%/main.py}"; break; }
-    done
-fi
-if [[ -n "$_found" && "$_found" != "$INSTALL_DIR" ]]; then
-    warn "Найдена существующая установка: ${_found}"
-    info "Обновляю её (а не ${INSTALL_DIR})..."
-    INSTALL_DIR="$_found"
-fi
+BRANCH="dev"
 
 if [[ -d "${INSTALL_DIR}/.git" ]]; then
-    info "Обновление существующей git-установки..."
+    info "Обновление репозитория..."
     cd "$INSTALL_DIR"
-    git pull --quiet origin "$BRANCH" 2>/dev/null \
-        && ok "Обновлено до последней версии" \
-        || warn "Не удалось обновить через git — принудительно обновляю файлы..."
-    # Принудительно обновляем ключевые модули напрямую с GitHub
-    _update_module() {
-        local rel_path="$1"
-        local url="https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/${BRANCH}/${rel_path}"
-        curl -fsSL --connect-timeout 15 -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "${INSTALL_DIR}/${rel_path}" "$url" 2>/dev/null \
-            && info "Обновлён: ${rel_path}" \
-            || warn "Не удалось обновить: ${rel_path}"
-    }
-    _update_module "vless_installer/modules/tg_nets.py"
-    _update_module "vless_installer/modules/user_fp_manager.py"
-    _update_module "vless_installer/_core.py"
-    _update_module "main.py"
+    git fetch origin "$BRANCH" 2>/dev/null || true
+    git checkout "$BRANCH" 2>/dev/null || true
+    git reset --hard "origin/$BRANCH" 2>/dev/null || warn "git reset не удался"
+    ok "Репозиторий обновлён"
+elif [[ -d "$INSTALL_DIR" ]]; then
+    info "Установка без git — принудительное обновление..."
+    ARCHIVE="${REPO_URL}/archive/refs/heads/${BRANCH}.tar.gz"
+    curl -fsSL --connect-timeout 30 --retry 3 -o /tmp/hydra.tar.gz "$ARCHIVE" && {
+        tar -xzf /tmp/hydra.tar.gz -C /tmp/
+        cp -rf /tmp/HYDRA-ULTIMATE-${BRANCH}/. "$INSTALL_DIR/"
+        rm -rf /tmp/HYDRA-ULTIMATE-${BRANCH} /tmp/hydra.tar.gz
+        ok "Файлы обновлены"
+    } || err "Не удалось загрузить архив"
 else
-    if [[ -d "$INSTALL_DIR" ]] && [[ -f "${INSTALL_DIR}/main.py" ]]; then
-        # Установка без .git — принудительно обновляем все файлы с GitHub
-        info "Установка без git обнаружена — принудительное обновление файлов..."
+    info "Клонирование репозитория..."
+    mkdir -p "$INSTALL_DIR"
+    git clone --quiet --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR" 2>/dev/null || {
+        warn "git clone не удался — загружаю архив..."
         ARCHIVE="${REPO_URL}/archive/refs/heads/${BRANCH}.tar.gz"
-        ARCHIVE_TMP="/tmp/hydra_ultimate_update.tar.gz"
-        ARCHIVE_DIR="HYDRA-ULTIMATE-${BRANCH}"
-        curl -fsSL --connect-timeout 30 --retry 3 -o "$ARCHIVE_TMP" "$ARCHIVE" && {
-            tar -xzf "$ARCHIVE_TMP" -C /tmp/
-            cp -rf "/tmp/${ARCHIVE_DIR}/." "$INSTALL_DIR/"
-            rm -rf "/tmp/${ARCHIVE_DIR}" "$ARCHIVE_TMP"
-            ok "Файлы обновлены до последней версии"
-        } || warn "Не удалось обновить — используем текущую версию"
-        # Принудительно обновляем ключевые модули напрямую (минуя CDN-кэш архива)
-        _update_module() {
-            local rel_path="$1"
-            local url="https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/${BRANCH}/${rel_path}"
-            curl -fsSL --connect-timeout 15 -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "${INSTALL_DIR}/${rel_path}" "$url" 2>/dev/null \
-                && info "Принудительно обновлён: ${rel_path}" \
-                || warn "Не удалось обновить: ${rel_path}"
-        }
-        _update_module "vless_installer/_core.py"
-        _update_module "main.py"
-        _update_module "vless_installer/modules/tg_bot.py"
-        _update_module "vless_installer/modules/port_hopping.py"
-        _update_module "vless_installer/modules/tg_nets.py"
-        _update_module "vless_installer/modules/user_fp_manager.py"
-    else
-        info "Клонирование репозитория..."
-        if ! git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR" 2>/dev/null; then
-            warn "git clone не удался — загружаю архив..."
-            mkdir -p "$INSTALL_DIR"
-            ARCHIVE="${REPO_URL}/archive/refs/heads/${BRANCH}.tar.gz"
-            ARCHIVE_TMP="/tmp/hydra_ultimate.tar.gz"
-            ARCHIVE_DIR="HYDRA-ULTIMATE-${BRANCH}"
-            curl -fsSL --connect-timeout 30 --retry 3 -o "$ARCHIVE_TMP" "$ARCHIVE" || {
-                err "Не удалось загрузить архив. Проверьте соединение."
-                exit 1
-            }
-            tar -xzf "$ARCHIVE_TMP" -C /tmp/
-            cp -r "/tmp/${ARCHIVE_DIR}/." "$INSTALL_DIR/"
-            rm -rf "/tmp/${ARCHIVE_DIR}" "$ARCHIVE_TMP"
-        fi
-        ok "Загружено в ${INSTALL_DIR}"
-    fi
+        curl -fsSL --connect-timeout 30 --retry 3 -o /tmp/hydra.tar.gz "$ARCHIVE" && {
+            tar -xzf /tmp/hydra.tar.gz -C /tmp/
+            cp -rf /tmp/HYDRA-ULTIMATE-${BRANCH}/. "$INSTALL_DIR/"
+            rm -rf /tmp/HYDRA-ULTIMATE-${BRANCH} /tmp/hydra.tar.gz
+        } || { err "Не удалось загрузить репозиторий"; exit 1; }
+    }
+    ok "Загружено в $INSTALL_DIR"
 fi
 
-[[ -f "${INSTALL_DIR}/main.py" ]] || { err "main.py не найден в ${INSTALL_DIR}"; exit 1; }
+[[ -f "${INSTALL_DIR}/main.py" ]] || { err "main.py не найден в $INSTALL_DIR"; exit 1; }
 
-# [5] Запуск
+# ── Python-зависимости ──────────────────────────────────────────────────────
+info "Python-зависимости..."
+pip3 install -q "python-telegram-bot[job-queue]" 2>/dev/null || warn "python-telegram-bot не установлен (ботам требуется ручная установка)"
+
+# ── Symlink ──────────────────────────────────────────────────────────────────
+ln -sf "${INSTALL_DIR}/main.py" /usr/local/bin/hydra 2>/dev/null || true
+
+# ── [5/5] Запуск ────────────────────────────────────────────────────────────
 echo -e "\n${BOLD}[5/5] Запуск${NC}"
 echo ""
 echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}${BOLD}  Запускаю установщик...${NC}"
+echo -e "${GREEN}${BOLD}     🐉 HYDRA v1.0 установлена!${NC}"
+echo -e "${GREEN}${BOLD}     Запуск: sudo python3 ${INSTALL_DIR}/main.py${NC}"
+echo -e "${GREEN}${BOLD}     Или:    sudo hydra${NC}"
 echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "  ${DIM}Директория: ${INSTALL_DIR}${NC}"
-echo -e "  ${DIM}Лог: /var/log/vless-install.log${NC}"
+echo -e "  ${DIM}Лог: /var/log/hydra/install.log${NC}"
 echo ""
-cd "$INSTALL_DIR"
-exec python3 main.py "$@"
+
+if [[ -t 0 ]]; then
+    exec python3 "$INSTALL_DIR/main.py" "$@"
+fi
