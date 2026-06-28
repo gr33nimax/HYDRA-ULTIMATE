@@ -217,36 +217,41 @@ class AmneziaWGPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def generate_client_config(self, user: User, state: AppState) -> str:
-        """Генерирует клиентский .conf из awg show (PSK, ключи, обфускация — все оттуда)."""
-        # Серверные параметры
-        r = self._awg("show", AWG_INTERFACE)
-        text = r.stdout
+        """Генерирует клиентский .conf из awg0.conf (надёжный источник данных)."""
         import re
-        server_pub = re.search(r"public key:\s*(\S+)", text)
-        port = re.search(r"listening port:\s*(\d+)", text)
-        jc = re.search(r"jc:\s*(\S+)", text)
-        jmin = re.search(r"jmin:\s*(\S+)", text)
-        jmax = re.search(r"jmax:\s*(\S+)", text)
-        s1 = re.search(r"s1:\s*(\S+)", text)
-        s2 = re.search(r"s2:\s*(\S+)", text)
-        s3 = re.search(r"s3:\s*(\S+)", text)
-        s4 = re.search(r"s4:\s*(\S+)", text)
-        h1 = re.search(r"h1:\s*(\S+)", text)
-        h2 = re.search(r"h2:\s*(\S+)", text)
-        h3 = re.search(r"h3:\s*(\S+)", text)
-        h4 = re.search(r"h4:\s*(\S+)", text)
+        if not AWG_CONF.exists():
+            return ""
 
-        # Параметры пира
+        conf_text = AWG_CONF.read_text()
+        server_priv = re.search(r"PrivateKey\s*=\s*(\S+)", conf_text)
+        port = re.search(r"ListenPort\s*=\s*(\d+)", conf_text)
+        addr = re.search(r"Address\s*=\s*(\S+)", conf_text)
+
+        # Обфускация
+        jc = re.search(r"^Jc\s*=\s*(\S+)", conf_text, re.M)
+        jmin = re.search(r"^Jmin\s*=\s*(\S+)", conf_text, re.M)
+        jmax = re.search(r"^Jmax\s*=\s*(\S+)", conf_text, re.M)
+        s1 = re.search(r"^S1\s*=\s*(\S+)", conf_text, re.M)
+        s2 = re.search(r"^S2\s*=\s*(\S+)", conf_text, re.M)
+        s3 = re.search(r"^S3\s*=\s*(\S+)", conf_text, re.M)
+        s4 = re.search(r"^S4\s*=\s*(\S+)", conf_text, re.M)
+        h1 = re.search(r"^H1\s*=\s*(\S+)", conf_text, re.M)
+        h2 = re.search(r"^H2\s*=\s*(\S+)", conf_text, re.M)
+        h3 = re.search(r"^H3\s*=\s*(\S+)", conf_text, re.M)
+        h4 = re.search(r"^H4\s*=\s*(\S+)", conf_text, re.M)
+        mtu = re.search(r"^MTU\s*=\s*(\d+)", conf_text, re.M)
+
+        # PSK для этого пира
         client_pub = self._derive_pubkey(user.uuid)
-        peer_section = self._awg("show", AWG_INTERFACE, "peer", client_pub).stdout
-        psk = re.search(r"preshared key:\s*(\S+)", peer_section)
+        peer_text = self._awg("show", AWG_INTERFACE, "peer", client_pub).stdout
+        psk = re.search(r"preshared key:\s*(\S+)", peer_text)
+
+        server_pub = self._awg("pubkey", _input=server_priv.group(1)).stdout.strip() if server_priv else ""
+
+        base = addr.group(1).rsplit(".", 1)[0] if addr else "10.8.20"
+        peer_idx = next((i for i, u in enumerate(state.users) if u.email == user.email and not u.blocked), 0)
 
         server_ip = state.network.server_ip or self._get_server_ip()
-        peer_ip = self._peer_ip(user, state)
-
-        mtus = {True: 1200, False: 1420}
-        mtu = mtus[state.network.warp_enabled]
-
         dns = "1.1.1.1, 1.0.0.1"
         if state.network.dnscrypt_enabled:
             dns = server_ip
@@ -254,17 +259,17 @@ class AmneziaWGPlugin(BasePlugin):
         lines = [
             "[Interface]",
             f"PrivateKey = {self._derive_key(user.uuid)}",
-            f"Address = {peer_ip}",
+            f"Address = {base}.{peer_idx + 2}/32",
             f"DNS = {dns}",
-            f"MTU = {mtu}",
+            f"MTU = {mtu.group(1) if mtu else '1420'}",
+            "",
+            "# Обфускация",
+            f"Jc = {jc.group(1) if jc else '4'}",
+            f"Jmin = {jmin.group(1) if jmin else '40'}",
+            f"Jmax = {jmax.group(1) if jmax else '70'}",
+            f"S1 = {s1.group(1) if s1 else '8'}",
+            f"S2 = {s2.group(1) if s2 else '72'}",
         ]
-        if jc and jmin and jmax:
-            lines += ["", "# Обфускация",
-                      f"Jc = {jc.group(1)}",
-                      f"Jmin = {jmin.group(1)}",
-                      f"Jmax = {jmax.group(1)}"]
-        if s1: lines.append(f"S1 = {s1.group(1)}")
-        if s2: lines.append(f"S2 = {s2.group(1)}")
         if s3: lines.append(f"S3 = {s3.group(1)}")
         if s4: lines.append(f"S4 = {s4.group(1)}")
         if h1: lines.append(f"H1 = {h1.group(1)}")
@@ -275,7 +280,7 @@ class AmneziaWGPlugin(BasePlugin):
         lines += [
             "",
             "[Peer]",
-            f"PublicKey = {server_pub.group(1) if server_pub else 'SERVER_KEY'}",
+            f"PublicKey = {server_pub}",
         ]
         if psk:
             lines.append(f"PresharedKey = {psk.group(1)}")
