@@ -64,7 +64,11 @@ def get_version() -> Optional[str]:
         return None
     r = _run([str(bin_path), "version"])
     if r.returncode == 0:
-        return r.stdout.strip().split()[-1]
+        first_line = r.stdout.strip().split("\n")[0]
+        parts = first_line.split()
+        for p in parts:
+            if p[0].isdigit():
+                return p
     return None
 
 
@@ -150,7 +154,6 @@ def _base_config(state: AppState) -> dict:
             "timestamp": True,
             "output": "/var/log/sing-box/sing-box.log",
         },
-        "dns": _dns_config(state),
         "inbounds": [],
         "outbounds": [],
         "route": {
