@@ -82,13 +82,14 @@ class AmneziaWGPlugin(BasePlugin):
                 print(f"  {r.stderr[:300]}")
                 return False
 
+            print("  Компиляция модуля ядра (может занять 2-5 мин)...")
             r = subprocess.run(
                 ["bash", "amneziawg-install.sh"],
                 cwd=str(AWG_INSTALL_DIR),
-                capture_output=True, text=True, timeout=300,
+                timeout=600,
             )
             if r.returncode != 0:
-                print(f"  {r.stderr[:500]}")
+                print(f"  Ошибка: код {r.returncode}")
                 return False
 
             lsmod = subprocess.run(["lsmod"], capture_output=True, text=True)
