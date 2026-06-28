@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -90,12 +91,16 @@ class AmneziaWGPlugin(BasePlugin):
                 print(f"  {r.stderr[:300]}")
                 return False
 
-            print("  Запуск установщика wiresock...")
-            print("  Отвечайте на вопросы (Enter = значение по умолчанию)")
-            print()
+            print("  Авто-установка AmneziaWG...")
+            server_ip = self._get_server_ip()
+            env = os.environ.copy()
+            env["AUTO_INSTALL"] = "y"
+            env["ENABLE_IPV6"] = "n"
+            env["SERVER_PUB_IP"] = server_ip
             r = subprocess.run(
                 ["bash", "amneziawg-install.sh"],
                 cwd=str(AWG_INSTALL_DIR),
+                env=env,
                 timeout=600,
             )
 
