@@ -370,7 +370,7 @@ class AmneziaWGPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def _up(self) -> bool:
-        """Применяет конфиг и поднимает интерфейс."""
+        """Применяет конфиг (setconf работает на поднятом интерфейсе)."""
         if AWG_CONF.exists():
             r = subprocess.run(
                 ["awg", "setconf", AWG_INTERFACE, str(AWG_CONF)],
