@@ -295,7 +295,7 @@ class AmneziaWGPlugin(BasePlugin):
             f"PublicKey = {server_pub}",
         ]
         if psk:
-            lines.append(f"PresharedKey = {psk.group(1)}")
+            lines.append(f"PresharedKey = {psk}")
         lines += [
             f"Endpoint = {server_ip}:{port.group(1) if port else '51820'}",
             "AllowedIPs = 0.0.0.0/0",
