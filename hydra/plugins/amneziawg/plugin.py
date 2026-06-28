@@ -65,15 +65,21 @@ class AmneziaWGPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def install(self) -> bool:
+        """Устанавливает AmneziaWG. При повторном вызове — полная переустановка."""
+        # Полная очистка перед переустановкой
         if AWG_BIN.exists():
-            return True
+            self._down()
+            subprocess.run(
+                ["bash", "awg-remove.sh"],
+                cwd=str(AWG_INSTALL_DIR), capture_output=True, timeout=60,
+            )
+            subprocess.run(["rm", "-rf", str(AWG_INSTALL_DIR)], capture_output=True)
 
         try:
-            if not AWG_INSTALL_DIR.exists():
-                r = subprocess.run(
-                    ["git", "clone", "--depth", "1",
-                     "https://github.com/wiresock/amneziawg-install.git",
-                     str(AWG_INSTALL_DIR)],
+            r = subprocess.run(
+                ["git", "clone", "--depth", "1",
+                 "https://github.com/wiresock/amneziawg-install.git",
+                 str(AWG_INSTALL_DIR)],
                     capture_output=True, text=True, timeout=120,
                 )
                 if r.returncode != 0:
@@ -234,10 +240,13 @@ class AmneziaWGPlugin(BasePlugin):
         if state.network.dnscrypt_enabled:
             dns = server_ip
 
+        peer_idx = next((i for i, u in enumerate(state.users) if u.email == user.email and not u.blocked), 0)
+        peer_ip = f"10.8.20.{peer_idx + 2}"
+
         return "\n".join([
             "[Interface]",
             f"PrivateKey = {client_private}",
-            f"Address = 10.8.20.X/32",
+            f"Address = {peer_ip}/32",
             f"DNS = {dns}",
             f"MTU = {mtu}",
             "",
