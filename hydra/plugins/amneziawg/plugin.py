@@ -370,8 +370,14 @@ class AmneziaWGPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def _up(self) -> bool:
-        """Поднимает интерфейс через ip link (надёжнее awg-quick)."""
-        subprocess.run(["ip", "link", "set", AWG_INTERFACE, "down"], capture_output=True)
+        """Применяет конфиг и поднимает интерфейс."""
+        if AWG_CONF.exists():
+            r = subprocess.run(
+                ["awg", "setconf", AWG_INTERFACE, str(AWG_CONF)],
+                capture_output=True, timeout=10,
+            )
+            if r.returncode != 0:
+                return False
         r = subprocess.run(
             ["ip", "link", "set", AWG_INTERFACE, "up"],
             capture_output=True, timeout=10,
