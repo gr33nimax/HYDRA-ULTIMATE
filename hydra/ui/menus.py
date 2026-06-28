@@ -28,7 +28,7 @@ from hydra.core.systemd import install_service, install_timer, remove_unit
 from hydra.services.subscriptions.generator import start_sub_server
 from hydra.services.traffic import collect_traffic
 from hydra.ui.tui import (
-    clear, title, info, success, warn, error, menu, prompt,
+    clear, title, info, success, warn, error, menu, prompt, panel, kv,
     BANNER, GREEN, CYAN, YELLOW, RED, BLUE, BOLD, DIM, WHITE, NC,
 )
 
@@ -83,12 +83,11 @@ def main_menu(state: AppState):
         total_p = len(plugins)
         u_active = sum(1 for u in state.users if not u.blocked)
 
-        print(f"  {CYAN}┌── Состояние{NC}{'─' * 48}{NC}")
-        print(f"  {CYAN}│{NC}  Sing-Box:    {_ok(sb_ok)}  {singbox_version() or 'не установлен'}")
-        print(f"  {CYAN}│{NC}  Протоколов:  {GREEN}{active_p}{NC}/{total_p} запущено")
-        print(f"  {CYAN}│{NC}  Пользователей: {GREEN if u_active else YELLOW}{u_active}{NC} из {len(state.users)}")
-        print(f"  {CYAN}└{'─' * 54}{NC}")
-        print()
+        panel("Состояние", [
+            kv("Sing-Box:", f"{_ok(sb_ok)}  {singbox_version() or 'не установлен'}"),
+            kv("Протоколов:", f"{GREEN}{active_p}{NC}/{total_p} запущено"),
+            kv("Пользователей:", f"{GREEN if u_active else YELLOW}{u_active}{NC} из {len(state.users)}"),
+        ])
 
         choice = menu(
             [
@@ -104,7 +103,7 @@ def main_menu(state: AppState):
         )
 
         if choice == "0":
-            print(f"\n{GREEN}До свидания!{NC}")
+            print(f"\n{GREEN}До свидания! 👋{NC}")
             sys.exit(0)
         elif choice == "1":
             menu_core(state)
@@ -131,13 +130,12 @@ def menu_core(state: AppState):
         ok_r = is_running()
         ver = singbox_version()
 
-        print(f"\n  {CYAN}┌── Sing-Box{NC}{'─' * 48}{NC}")
-        print(f"  {CYAN}│{NC}  Статус:   {_ok(ok_r)} {'запущен' if ok_r else 'остановлен'}")
-        print(f"  {CYAN}│{NC}  Версия:   {ver or '—'}")
-        print(f"  {CYAN}│{NC}  Конфиг:   /etc/sing-box/config.json")
-        print(f"  {CYAN}│{NC}  Лог:      /var/log/sing-box/sing-box.log")
-        print(f"  {CYAN}└{'─' * 54}{NC}")
-        print()
+        panel("Sing-Box", [
+            kv("Статус:", f"{_ok(ok_r)} {'запущен' if ok_r else 'остановлен'}"),
+            kv("Версия:", ver or "—"),
+            kv("Конфиг:", f"{DIM}/etc/sing-box/config.json{NC}"),
+            kv("Лог:", f"{DIM}/var/log/sing-box/sing-box.log{NC}"),
+        ])
 
         choice = menu(
             [
@@ -199,15 +197,14 @@ def menu_protocols(state: AppState):
         clear()
         plugins = get_all()
 
-        print(f"\n  {CYAN}┌── Протоколы{NC}{'─' * 48}{NC}")
+        proto_lines = []
         for p in plugins:
             s = p.status()
             ico = f"{GREEN}●{NC}" if s.running else (f"{YELLOW}●{NC}" if s.installed else f"{DIM}●{NC}")
             port = f":{s.port}" if s.port else ""
             st = "вкл" if s.enabled else "выкл"
-            print(f"  {CYAN}│{NC}  {ico} {p.meta.name:<14} {DIM}{st:>4}{NC}  порт{port}")
-        print(f"  {CYAN}└{'─' * 54}{NC}")
-        print()
+            proto_lines.append(f"  {ico} {p.meta.name:<14} {DIM}{st:>4}{NC}  порт{port}")
+        panel("Протоколы", proto_lines)
 
         opts = []
         for i, p in enumerate(plugins, 1):
@@ -248,15 +245,14 @@ def menu_plugin(state: AppState, plugin):
         s = plugin.status()
         proto = state.protocols.get(plugin.meta.name)
 
-        print(f"\n  {CYAN}╔══ {plugin.meta.name.upper()} {NC}{'═' * (40 - len(plugin.meta.name))}{NC}")
-        print(f"  {CYAN}║{NC}  {plugin.meta.description}")
-        print(f"  {CYAN}║{NC}")
-        print(f"  {CYAN}║{NC}  Установлен: {_ok(s.installed)}")
-        print(f"  {CYAN}║{NC}  Включён:    {_ok(s.enabled)}")
-        print(f"  {CYAN}║{NC}  Запущен:    {_ok(s.running)}")
-        print(f"  {CYAN}║{NC}  Порт:       {s.port or '—'}")
-        print(f"  {CYAN}╚{'═' * 54}{NC}")
-        print()
+        panel(plugin.meta.name.upper(), [
+            f"  {DIM}{plugin.meta.description}{NC}",
+            "",
+            kv("Установлен:", _ok(s.installed)),
+            kv("Включён:", _ok(s.enabled)),
+            kv("Запущен:", _ok(s.running)),
+            kv("Порт:", str(s.port or "—")),
+        ])
 
         choice = menu(
             [
@@ -323,15 +319,14 @@ def menu_plugin_awg(state: AppState, plugin):
         total_bytes = sum(traffic.values())
 
         if s.installed:
-            print(f"\n  {CYAN}┌── AWG: AmneziaWG 2.0{NC}{'─' * 38}{NC}")
-            print(f"  {CYAN}│{NC}  Статус:      {_ok(s.running)} {'запущен' if s.running else 'остановлен'}")
-            print(f"  {CYAN}│{NC}  Интерфейс:   {YELLOW}awg0{NC}")
-            print(f"  {CYAN}│{NC}  Порт:        {port}")
-            print(f"  {CYAN}│{NC}  Сеть:        {network}")
-            print(f"  {CYAN}│{NC}  Пиров:       {len(peers)} онлайн  (всего {sum(1 for u in state.users if not u.blocked)})")
-            print(f"  {CYAN}│{NC}  Трафик:      {_bytes(total_bytes)}")
-            print(f"  {CYAN}└{'─' * 54}{NC}")
-            print()
+            panel("AWG: AmneziaWG 2.0", [
+                kv("Статус:", f"{_ok(s.running)} {'запущен' if s.running else 'остановлен'}"),
+                kv("Интерфейс:", f"{YELLOW}awg0{NC}"),
+                kv("Порт:", str(port)),
+                kv("Сеть:", network),
+                kv("Пиров:", f"{len(peers)} онлайн  (всего {sum(1 for u in state.users if not u.blocked)})"),
+                kv("Трафик:", _bytes(total_bytes)),
+            ])
 
             opts = [
                 ("1", "🗑  Удалить AWG", "Полная очистка: пакеты, модуль, конфиги"),
@@ -342,10 +337,9 @@ def menu_plugin_awg(state: AppState, plugin):
                 ("0", "↩ Назад", ""),
             ]
         else:
-            print(f"\n  {CYAN}┌── AWG: AmneziaWG 2.0{NC}{'─' * 38}{NC}")
-            print(f"  {CYAN}│{NC}  Статус:      {RED}не установлен{NC}")
-            print(f"  {CYAN}└{'─' * 54}{NC}")
-            print()
+            panel("AWG: AmneziaWG 2.0", [
+                kv("Статус:", f"{RED}не установлен{NC}"),
+            ])
 
             opts = [
                 ("1", "🔧 Установить kernel-модуль", "Клонировать wiresock, скомпилировать"),
@@ -414,17 +408,15 @@ def _awg_peers_menu(state: AppState, plugin):
         users = [u for u in state.users if not u.blocked]
         peers = {p["email"]: p for p in plugin.connected_peers()}
 
-        print(f"\n  {CYAN}┌── Пиры AWG{NC}{'─' * 47}{NC}")
+        peer_lines = []
         for u in users:
             p = peers.get(u.email)
             ico = f"{GREEN}●{NC}" if (p and p["online"]) else f"{DIM}○{NC}"
             tx = _bytes((p["rx"] + p["tx"]) if p else 0)
-            print(f"  {CYAN}│{NC}  {ico} {u.email}")
-            print(f"  {CYAN}│{NC}     трафик: {tx}")
-        print(f"  {CYAN}│{NC}")
-        print(f"  {CYAN}│{NC}  ● = онлайн  ○ = офлайн")
-        print(f"  {CYAN}└{'─' * 54}{NC}")
-        print()
+            peer_lines.append(f"  {ico} {u.email}")
+            peer_lines.append(f"     {DIM}трафик: {tx}{NC}")
+        peer_lines += ["", f"  {DIM}● = онлайн  ○ = офлайн{NC}"]
+        panel("Пиры AWG", peer_lines)
 
         choice = menu(
             [("1", "➕ Синхронизировать пиры с пользователями",
@@ -499,17 +491,16 @@ def _awg_status_detail(state: AppState, plugin):
     traffic = plugin.traffic()
     peers = {p["email"]: p for p in plugin.connected_peers()}
 
-    print(f"\n  {CYAN}┌── Статус пиров{NC}{'─' * 46}{NC}")
+    status_lines = []
     for u in state.users:
         if u.blocked:
             continue
         p = peers.get(u.email)
         ico = f"{GREEN}● онлайн{NC}" if (p and p["online"]) else f"{DIM}○ офлайн{NC}"
         used = traffic.get(u.email, 0)
-        print(f"  {CYAN}│{NC}  {u.email}")
-        print(f"  {CYAN}│{NC}     {ico}  |  {_bytes(used)}")
-    print(f"  {CYAN}└{'─' * 54}{NC}")
-    print()
+        status_lines.append(f"  {BOLD}{u.email}{NC}")
+        status_lines.append(f"     {ico}  |  {_bytes(used)}")
+    panel("Статус пиров", status_lines)
     prompt("Нажмите Enter")
 
 
@@ -525,13 +516,12 @@ def menu_users(state: AppState):
         active = sum(1 for u in state.users if not u.blocked)
         blocked = sum(1 for u in state.users if u.blocked)
 
-        print(f"\n  {CYAN}┌── Пользователи{NC}{'─' * 45}{NC}")
-        print(f"  {CYAN}│{NC}  Всего:          {len(state.users)}")
-        print(f"  {CYAN}│{NC}  Активных:       {GREEN}{active}{NC}")
-        print(f"  {CYAN}│{NC}  Заблокировано:  {RED}{blocked}{NC}")
-        print(f"  {CYAN}│{NC}  Трафик всего:   {_bytes(total_bytes)}")
-        print(f"  {CYAN}└{'─' * 54}{NC}")
-        print()
+        panel("Пользователи", [
+            kv("Всего:", str(len(state.users))),
+            kv("Активных:", f"{GREEN}{active}{NC}"),
+            kv("Заблокировано:", f"{RED}{blocked}{NC}"),
+            kv("Трафик всего:", _bytes(total_bytes)),
+        ])
 
         choice = menu(
             [
@@ -572,7 +562,8 @@ def _show_users(state: AppState, traffic: dict[str, int]):
         warn("Нет пользователей.")
         prompt("Нажмите Enter")
         return
-    print(f"\n{BOLD}{CYAN}  Список пользователей:{NC}\n")
+    title("Список пользователей")
+    print()
     for u in state.users:
         ico = f"{RED}🔴{NC}" if u.blocked else f"{GREEN}🟢{NC}"
         used = traffic.get(u.email, u.traffic_used_bytes)
@@ -738,14 +729,13 @@ def menu_telegram(state: AppState):
     while True:
         clear()
         tg = state.telegram
-        print(f"\n  {CYAN}┌── Telegram{NC}{'─' * 50}{NC}")
-        print(f"  {CYAN}│{NC}  Admin токен:  {_ok(bool(tg.admin_token))}")
-        print(f"  {CYAN}│{NC}  Admin Chat ID: {tg.admin_chat_id or '—'}")
-        print(f"  {CYAN}│{NC}  Admin бот:    {_ok(tg.admin_enabled)}")
-        print(f"  {CYAN}│{NC}  Client токен: {_ok(bool(tg.bot_token))}")
-        print(f"  {CYAN}│{NC}  Client бот:   {_ok(tg.bot_enabled)}")
-        print(f"  {CYAN}└{'─' * 54}{NC}")
-        print()
+        panel("Telegram", [
+            kv("Admin токен:", _ok(bool(tg.admin_token))),
+            kv("Admin Chat ID:", tg.admin_chat_id or "—"),
+            kv("Admin бот:", _ok(tg.admin_enabled)),
+            kv("Client токен:", _ok(bool(tg.bot_token))),
+            kv("Client бот:", _ok(tg.bot_enabled)),
+        ])
         choice = menu(
             [("1", "🔑 Admin-токен", "@BotFather"),
              ("2", "💬 Admin Chat ID", "@userinfobot"),
@@ -837,11 +827,10 @@ def menu_monitoring(state: AppState):
         clear()
         traffic = collect_traffic(state)
         total = sum(traffic.values())
-        print(f"\n  {CYAN}┌── Мониторинг{NC}{'─' * 47}{NC}")
-        print(f"  {CYAN}│{NC}  Трафик всего: {_bytes(total)}")
-        print(f"  {CYAN}│{NC}  Пользователей: {len(state.users)}")
-        print(f"  {CYAN}└{'─' * 54}{NC}")
-        print()
+        panel("Мониторинг", [
+            kv("Трафик всего:", _bytes(total)),
+            kv("Пользователей:", str(len(state.users))),
+        ])
         choice = menu(
             [("1", "📊 Трафик по пользователям", ""),
              ("2", "🔌 Статус протоколов", ""),
@@ -862,7 +851,8 @@ def menu_monitoring(state: AppState):
 def _show_traffic(state: AppState):
     clear()
     traffic = collect_traffic(state)
-    print(f"\n{BOLD}{CYAN}  Трафик:{NC}\n")
+    title("Трафик")
+    print()
     for u in state.users:
         used = traffic.get(u.email, u.traffic_used_bytes)
         lim = int(u.traffic_limit_gb * 1073741824) if u.traffic_limit_gb else 0
@@ -876,7 +866,8 @@ def _show_traffic(state: AppState):
 
 def _show_status():
     clear()
-    print(f"\n{BOLD}{CYAN}  Статус протоколов:{NC}\n")
+    title("Статус протоколов")
+    print()
     for name, s in status_all().items():
         ico = f"{GREEN}●{NC}" if s["running"] else (f"{YELLOW}●{NC}" if s["installed"] else f"{DIM}●{NC}")
         port = f":{s['port']}" if s["port"] else ""
@@ -914,12 +905,11 @@ def menu_security(state: AppState):
     while True:
         clear()
         sec = state.security
-        print(f"\n  {CYAN}┌── Безопасность{NC}{'─' * 46}{NC}")
-        print(f"  {CYAN}│{NC}  GeoIP:        {_ok(sec.geoip_block_enabled)}  (РФ, порт {sec.geoip_port})")
-        print(f"  {CYAN}│{NC}  Fail2ban:     {_ok(sec.fail2ban_enabled)}")
-        print(f"  {CYAN}│{NC}  Honeypot:     {_ok(sec.honeypot_enabled)}")
-        print(f"  {CYAN}└{'─' * 54}{NC}")
-        print()
+        panel("Безопасность", [
+            kv("GeoIP:", f"{_ok(sec.geoip_block_enabled)}  (РФ, порт {sec.geoip_port})"),
+            kv("Fail2ban:", _ok(sec.fail2ban_enabled)),
+            kv("Honeypot:", _ok(sec.honeypot_enabled)),
+        ])
         choice = menu(
             [("1", f"🌍 GeoIP  [{_ok(sec.geoip_block_enabled)}]", "iptables + ipset"),
              ("2", f"🛡️  Fail2ban  [{_ok(sec.fail2ban_enabled)}]", ""),
