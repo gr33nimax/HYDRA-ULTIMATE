@@ -370,17 +370,16 @@ class AmneziaWGPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def _up(self) -> bool:
+        """Поднимает интерфейс через ip link (надёжнее awg-quick)."""
+        subprocess.run(["ip", "link", "set", AWG_INTERFACE, "down"], capture_output=True)
         r = subprocess.run(
-            ["awg-quick", "up", str(AWG_CONF)],
-            capture_output=True, text=True, timeout=30,
+            ["ip", "link", "set", AWG_INTERFACE, "up"],
+            capture_output=True, timeout=10,
         )
         return r.returncode == 0
 
     def _down(self) -> None:
-        subprocess.run(
-            ["awg-quick", "down", str(AWG_CONF)],
-            capture_output=True,
-        )
+        subprocess.run(["ip", "link", "set", AWG_INTERFACE, "down"], capture_output=True)
 
     def on_enable(self, state: AppState) -> None:
         self.configure(state)
