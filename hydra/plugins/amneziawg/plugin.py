@@ -174,10 +174,14 @@ class AmneziaWGPlugin(BasePlugin):
         return f"{base}.{idx + 2}/32"
 
     def _network(self) -> str:
-        r = self._awg("show", AWG_INTERFACE)
-        import re
-        m = re.search(r"listening port:\s*(\d+)", r.stdout)
-        # Network из адреса сервера в awg show
+        """Извлекает сеть из адреса сервера в awg0.conf."""
+        if AWG_CONF.exists():
+            import re
+            text = AWG_CONF.read_text()
+            m = re.search(r"Address\s*=\s*(\S+)", text)
+            if m:
+                parts = m.group(1).split(".")
+                return f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
         return AWG_NETWORK
 
     def _setup_nat(self, network: str) -> None:
