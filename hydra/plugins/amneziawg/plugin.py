@@ -176,7 +176,8 @@ class AmneziaWGPlugin(BasePlugin):
 
     def _peer_ip(self, user: User, state: AppState) -> str:
         network = self._network()
-        base = network.rsplit(".", 2)[0]
+        # 10.66.66.0/24 → base = 10.66.66
+        base = network.rsplit(".", 1)[0]
         idx = next((i for i, u in enumerate(state.users) if u.email == user.email and not u.blocked), 0)
         return f"{base}.{idx + 2}/32"
 
