@@ -489,10 +489,12 @@ def _awg_generate_config(state: AppState, plugin):
                 import base64
                 sn_link = f"sn://awg?{base64.urlsafe_b64encode(conf.encode()).decode()}"
 
-                print(f"\n  {GREEN}OK{NC}  Конфиг: {path}")
-                print(f"  {CYAN}── Ссылки{NC}{'─' * 53}{NC}")
-                print(f"  wg://  {wg_link[:90]}...")
-                print(f"  sn://  {sn_link[:90]}...")
+                print(f"\n  {GREEN}Конфиг сохранён{NC}")
+                print(f"  {DIM}Файл: {path}{NC}")
+                print(f"  {CYAN}── wg://{NC}{'─' * 57}")
+                print(f"  {wg_link}")
+                print(f"  {CYAN}── sn://{NC}{'─' * 57}")
+                print(f"  {sn_link}")
 
                 try:
                     import qrcode
