@@ -370,10 +370,10 @@ class AmneziaWGPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def _up(self) -> bool:
-        """Применяет конфиг (setconf работает на поднятом интерфейсе)."""
-        if AWG_CONF.exists():
+        """Применяет пиров через awg addconf (работает на живом интерфейсе)."""
+        if AWG_CONF.exists() and self._current_peers_config():
             r = subprocess.run(
-                ["awg", "setconf", AWG_INTERFACE, str(AWG_CONF)],
+                ["awg", "addconf", AWG_INTERFACE, str(self._peers_conf_file())],
                 capture_output=True, timeout=10,
             )
             if r.returncode != 0:
@@ -383,6 +383,30 @@ class AmneziaWGPlugin(BasePlugin):
             capture_output=True, timeout=10,
         )
         return r.returncode == 0
+
+    def _peers_conf_file(self) -> Path:
+        return AWG_CONF_DIR / "peers.conf"
+
+    def _current_peers_config(self) -> str | None:
+        """Извлекает только [Peer] секции из awg0.conf."""
+        if not AWG_CONF.exists():
+            return None
+        lines = AWG_CONF.read_text().splitlines()
+        peers: list[str] = []
+        in_peer = False
+        for line in lines:
+            if line.startswith("[Peer]"):
+                in_peer = True
+                peers.append(line)
+            elif line.startswith("[Interface]"):
+                in_peer = False
+            elif in_peer and line.strip():
+                peers.append(line)
+        if peers:
+            pf = self._peers_conf_file()
+            pf.write_text("\n".join(peers) + "\n")
+            return pf
+        return None
 
     def _down(self) -> None:
         subprocess.run(["ip", "link", "set", AWG_INTERFACE, "down"], capture_output=True)
