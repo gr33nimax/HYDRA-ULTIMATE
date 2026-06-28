@@ -91,15 +91,17 @@ class AmneziaWGPlugin(BasePlugin):
                 return False
 
             print("  Компиляция модуля ядра (может занять 2-5 мин)...")
-            # Авто-ответы: IP, Enter(порт по умолчанию), Enter(клиент), Enter(awg0)
+            print(f"  Лог: /var/log/hydra/awg-install.log")
             server_ip = self._get_server_ip()
-            r = subprocess.run(
-                ["bash", "amneziawg-install.sh"],
-                cwd=str(AWG_INSTALL_DIR),
-                input=f"{server_ip}\n\n\n\n",
-                capture_output=True, text=True, timeout=600,
-            )
-            print(r.stdout[-500:] if r.stdout else "")
+            log_file = Path("/var/log/hydra/awg-install.log")
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            with log_file.open("w") as lf:
+                r = subprocess.run(
+                    ["bash", "amneziawg-install.sh"],
+                    cwd=str(AWG_INSTALL_DIR),
+                    input=f"{server_ip}\n\n\n\n",
+                    stdout=lf, stderr=subprocess.STDOUT, text=True, timeout=600,
+                )
             if r.returncode != 0:
                 print(f"  Ошибка: код {r.returncode}")
                 if r.stderr:
