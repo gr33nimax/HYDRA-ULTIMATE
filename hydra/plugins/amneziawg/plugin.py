@@ -148,7 +148,7 @@ class AmneziaWGPlugin(BasePlugin):
             # Всегда обновляем сохранённый PSK
             self._save_psk(user.email)
 
-        self._setup_nat(self._network())
+        # Wiresock уже настроил nftables — не добавляем iptables
 
         return ConfigFragment(
             route_rules=[{"ip_cidr": [self._network()], "outbound": "direct"}],
