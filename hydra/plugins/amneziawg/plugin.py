@@ -68,11 +68,7 @@ class AmneziaWGPlugin(BasePlugin):
         """Устанавливает AmneziaWG. При повторном вызове — полная переустановка."""
         if AWG_BIN.exists():
             self._down()
-            if AWG_INSTALL_DIR.exists():
-                subprocess.run(
-                    ["bash", "awg-remove.sh"],
-                    cwd=str(AWG_INSTALL_DIR), capture_output=True, timeout=60,
-                )
+            subprocess.run(["modprobe", "-r", "amneziawg"], capture_output=True)
             subprocess.run(["rm", "-rf", str(AWG_INSTALL_DIR)], capture_output=True)
 
         try:
@@ -87,7 +83,7 @@ class AmneziaWGPlugin(BasePlugin):
                 return False
 
             r = subprocess.run(
-                ["bash", "awg-install.sh"],
+                ["bash", "amneziawg-install.sh"],
                 cwd=str(AWG_INSTALL_DIR),
                 capture_output=True, text=True, timeout=300,
             )
