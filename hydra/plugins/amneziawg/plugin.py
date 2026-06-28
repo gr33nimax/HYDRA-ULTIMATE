@@ -246,6 +246,7 @@ class AmneziaWGPlugin(BasePlugin):
         mtu = mtus[state.network.warp_enabled]
 
         server_ip = state.network.server_ip or self._get_server_ip()
+        port = self._current_port()  # Брать реальный порт из awg0.conf
 
         client_private = self._derive_key(user.uuid)
         client_public = self._awg("pubkey", _input=client_private).stdout.strip()
