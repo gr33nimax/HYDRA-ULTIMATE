@@ -305,7 +305,7 @@ def menu_plugin_awg(state: AppState, plugin):
         peers = plugin.connected_peers()
         total_bytes = sum(traffic.values())
 
-        print(f"\n  {CYAN}┌── AWG: AmneziaWG 2.0{N}{'─' * 38}{NC}")
+        print(f"\n  {CYAN}┌── AWG: AmneziaWG 2.0{NC}{'─' * 38}{NC}")
         print(f"  {CYAN}│{NC}  Статус:      {_ok(s.running)} {'запущен' if s.running else 'остановлен'}")
         print(f"  {CYAN}│{NC}  Установлен:  {_ok(s.installed)}")
         print(f"  {CYAN}│{NC}  Интерфейс:   {YELLOW}awg0{NC}")
@@ -374,7 +374,7 @@ def _awg_peers_menu(state: AppState, plugin):
         peers = plugin.connected_peers()
         peer_keys = {p["pubkey"]: p for p in peers}
 
-        print(f"\n  {CYAN}┌── Пиры AWG{N}{'─' * 47}{NC}")
+        print(f"\n  {CYAN}┌── Пиры AWG{NC}{'─' * 47}{NC}")
         for u in users:
             pubkey = _derive_awg_pubkey(u.uuid)
             online = "●" if pubkey in peer_keys else "○"
@@ -441,7 +441,7 @@ def _awg_status_detail(state: AppState, plugin):
     peers = plugin.connected_peers()
     users = state.users
 
-    print(f"\n  {CYAN}┌── Статус пиров{N}{'─' * 46}{NC}")
+    print(f"\n  {CYAN}┌── Статус пиров{NC}{'─' * 46}{NC}")
     for u in users:
         if u.blocked:
             continue
