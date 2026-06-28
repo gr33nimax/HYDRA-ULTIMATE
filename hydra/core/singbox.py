@@ -241,8 +241,16 @@ def generate_config(state: AppState, plugin_fragments: dict[str, dict]) -> dict:
     if warp:
         config["outbounds"].append(warp)
 
-    # Default direct outbound (always present)
-    config["outbounds"].append({"type": "direct", "tag": "direct"})
+    # Если плагины не дали ни одного inbound — добавляем fallback
+    if not config["inbounds"]:
+        config["inbounds"].append({
+            "type": "mixed", "tag": "mixed-in",
+            "listen": "127.0.0.1", "listen_port": 2080,
+        })
+    # Гарантируем direct outbound (нужен для DNS и как fallback)
+    has_direct = any(o.get("tag") == "direct" for o in config["outbounds"])
+    if not has_direct:
+        config["outbounds"].append({"type": "direct", "tag": "direct"})
 
     return config
 
