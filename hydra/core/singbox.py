@@ -288,6 +288,7 @@ After=network.target nss-lookup.target
 Type=simple
 User=root
 WorkingDirectory=/var/lib/sing-box
+Environment=LEGACY_DNS_SERVERS=true
 ExecStart={bin_path} run -c {SINGBOX_CONFIG}
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
