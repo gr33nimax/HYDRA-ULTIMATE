@@ -7,6 +7,7 @@ import json
 import sys
 import uuid as _uuid
 from datetime import datetime
+from pathlib import Path
 
 from hydra.core.state import (
     AppState, User, load_state, save_state, find_user, add_user,
@@ -218,7 +219,11 @@ def menu_protocols(state: AppState):
             try:
                 idx = int(choice) - 1
                 if 0 <= idx < len(plugins):
-                    menu_plugin(state, plugins[idx])
+                    p = plugins[idx]
+                    if p.meta.name == "amneziawg":
+                        menu_plugin_awg(state, p)
+                    else:
+                        menu_plugin(state, p)
             except ValueError:
                 pass
 
@@ -280,6 +285,187 @@ def menu_plugin(state: AppState, plugin):
             save_state(state)
             success(f"{plugin.meta.name} удалён")
             prompt("Нажмите Enter")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  AWG — специализированное меню
+# ═════════════════════════════════════════════════════════════════════════════
+
+def menu_plugin_awg(state: AppState, plugin):
+    while True:
+        clear()
+        s = plugin.status()
+        proto = state.protocols.get("amneziawg")
+        config = proto.config if proto else {}
+        port = config.get("port", 51820)
+        network = config.get("network", "10.8.20.0/24")
+
+        # Трафик и пиры
+        traffic = plugin.traffic()
+        peers = plugin.connected_peers()
+        total_bytes = sum(traffic.values())
+
+        print(f"\n  {CYAN}┌── AWG: AmneziaWG 2.0{N}{'─' * 38}{NC}")
+        print(f"  {CYAN}│{NC}  Статус:      {_ok(s.running)} {'запущен' if s.running else 'остановлен'}")
+        print(f"  {CYAN}│{NC}  Установлен:  {_ok(s.installed)}")
+        print(f"  {CYAN}│{NC}  Интерфейс:   {YELLOW}awg0{NC}")
+        print(f"  {CYAN}│{NC}  Порт:        {port}")
+        print(f"  {CYAN}│{NC}  Сеть:        {network}")
+        print(f"  {CYAN}│{NC}  Пиров:       {len(peers)} онлайн  (всего {sum(1 for u in state.users if not u.blocked)})")
+        print(f"  {CYAN}│{NC}  Трафик:      {_bytes(total_bytes)}")
+        print(f"  {CYAN}└{'─' * 54}{NC}")
+        print()
+
+        choice = menu(
+            [
+                ("1", "🔧 Установить kernel-модуль" if not s.installed else "🔄 Переустановить",
+                 "Клонировать wiresock и скомпилировать"),
+                ("2", "👥 Управление пирами",
+                 f"{sum(1 for u in state.users if not u.blocked)} пользователей → пиры"),
+                ("3", "📄 Сгенерировать клиентский конфиг",
+                 ".conf файл для WireGuard-клиента"),
+                ("4", "▶️  Запустить awg0" if not s.running else "⏸️  Остановить awg0",
+                 "Поднять/опустить интерфейс"),
+                ("5", "📊 Статус пиров + трафик",
+                 f"{len(peers)} онлайн, {_bytes(total_bytes)}"),
+                ("0", "↩ Назад", ""),
+            ],
+            "AMNEZIAWG 2.0",
+        )
+
+        if choice == "0":
+            return
+        elif choice == "1":
+            info("Устанавливаю AmneziaWG kernel-модуль...")
+            if plugin.install():
+                success("Установлен. Модуль загружен.")
+            else:
+                error("Ошибка установки. Проверьте соединение.")
+            prompt("Нажмите Enter")
+        elif choice == "2":
+            _awg_peers_menu(state, plugin)
+        elif choice == "3":
+            _awg_generate_config(state, plugin)
+        elif choice == "4":
+            if s.running:
+                plugin.on_disable(state)
+                if proto:
+                    proto.enabled = False
+                save_state(state)
+                success("awg0 остановлен")
+            else:
+                if not s.installed:
+                    warn("Сначала установите (пункт 1)")
+                else:
+                    plugin.on_enable(state)
+                    if proto:
+                        proto.enabled = True
+                    save_state(state)
+                    success("awg0 запущен")
+            prompt("Нажмите Enter")
+        elif choice == "5":
+            _awg_status_detail(state, plugin)
+
+
+def _awg_peers_menu(state: AppState, plugin):
+    while True:
+        clear()
+        users = [u for u in state.users if not u.blocked]
+        peers = plugin.connected_peers()
+        peer_keys = {p["pubkey"]: p for p in peers}
+
+        print(f"\n  {CYAN}┌── Пиры AWG{N}{'─' * 47}{NC}")
+        for u in users:
+            pubkey = _derive_awg_pubkey(u.uuid)
+            online = "●" if pubkey in peer_keys else "○"
+            ico = f"{GREEN}{online}{NC}"
+            traffic_bytes = peer_keys[pubkey].get("transfer", "0 B") if pubkey in peer_keys else "0 B"
+            print(f"  {CYAN}│{NC}  {ico} {u.email}")
+            print(f"  {CYAN}│{NC}     трафик: {traffic_bytes}")
+        print(f"  {CYAN}│{NC}")
+        print(f"  {CYAN}│{NC}  ● = онлайн  ○ = офлайн")
+        print(f"  {CYAN}└{'─' * 54}{NC}")
+        print()
+
+        choice = menu(
+            [("1", "➕ Синхронизировать пиры с пользователями",
+              "Добавить всех незаблокированных, убрать заблокированных"),
+             ("0", "↩ Назад", "")],
+            "УПРАВЛЕНИЕ ПИРАМИ",
+        )
+
+        if choice == "0":
+            return
+        elif choice == "1":
+            plugin.configure(state)
+            if plugin.status().running:
+                plugin._down()
+                plugin._up()
+            save_state(state)
+            success(f"Пиры синхронизированы: {len(users)} добавлено")
+            prompt("Нажмите Enter")
+
+
+def _awg_generate_config(state: AppState, plugin):
+    clear()
+    users = [u for u in state.users if not u.blocked]
+    if not users:
+        warn("Нет пользователей. Создайте в разделе «Пользователи».")
+        prompt("Нажмите Enter")
+        return
+
+    print(f"\n  {CYAN}Пользователи:{NC}\n")
+    for i, u in enumerate(users, 1):
+        print(f"  {i}. {u.email}")
+    print()
+
+    try:
+        idx = int(prompt("Номер пользователя для генерации конфига", "1")) - 1
+        if 0 <= idx < len(users):
+            user = users[idx]
+            conf = plugin.generate_client_config(user, state)
+            path = Path(f"/tmp/awg-{user.email}.conf")
+            path.write_text(conf)
+            success(f"Конфиг сохранён: {path}")
+            print(f"\n{DIM}{conf[:300]}...{NC}\n")
+        else:
+            warn("Неверный номер.")
+    except ValueError:
+        warn("Введите число.")
+    prompt("Нажмите Enter")
+
+
+def _awg_status_detail(state: AppState, plugin):
+    clear()
+    traffic = plugin.traffic()
+    peers = plugin.connected_peers()
+    users = state.users
+
+    print(f"\n  {CYAN}┌── Статус пиров{N}{'─' * 46}{NC}")
+    for u in users:
+        if u.blocked:
+            continue
+        pubkey = _derive_awg_pubkey(u.uuid)
+        online = pubkey in {p["pubkey"] for p in peers}
+        ico = f"{GREEN}● онлайн{NC}" if online else f"{DIM}○ офлайн{NC}"
+        used = traffic.get(pubkey, 0)
+        print(f"  {CYAN}│{NC}  {u.email}")
+        print(f"  {CYAN}│{NC}     {ico}  |  {_bytes(used)}")
+    print(f"  {CYAN}└{'─' * 54}{NC}")
+    print()
+    prompt("Нажмите Enter")
+
+
+def _derive_awg_pubkey(uuid: str) -> str:
+    import hashlib, base64
+    h = hashlib.sha256(uuid.encode()).digest()
+    private = base64.b64encode(h[:32]).decode()
+    import subprocess
+    r = subprocess.run(
+        ["awg", "pubkey"], input=private,
+        capture_output=True, text=True,
+    )
+    return r.stdout.strip() if r.returncode == 0 else ""
 
 
 # ═════════════════════════════════════════════════════════════════════════════
