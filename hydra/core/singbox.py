@@ -274,6 +274,11 @@ def _install_service() -> bool:
     bin_path = _find_singbox()
     if not bin_path:
         return False
+
+    # Создаём рабочую директорию (нужна для sing-box run)
+    work_dir = Path("/var/lib/sing-box")
+    work_dir.mkdir(parents=True, exist_ok=True)
+
     unit = f"""[Unit]
 Description=sing-box service
 Documentation=https://sing-box.sagernet.org
@@ -303,7 +308,9 @@ WantedBy=multi-user.target
 
 def start() -> bool:
     """Запускает sing-box. Создаёт минимальный конфиг, если его нет."""
-    # Если конфига нет — создаём минимальный рабочий
+    # Сбрасываем предыдущее состояние (мог застрять в auto-restart)
+    _run(["systemctl", "stop", "sing-box"], capture=False)
+
     if not SINGBOX_CONFIG.exists():
         _log("INFO", "No config found, creating minimal default...")
         minimal = {
