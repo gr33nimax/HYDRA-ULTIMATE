@@ -393,11 +393,11 @@ def _awg_peers_menu(state: AppState, plugin):
     peer_lines = []
     for u in users:
         p = peers.get(u.email)
-            ico = f"{GREEN}●{NC}" if (p and p["online"]) else f"{DIM}○{NC}"
-            tx = _bytes((p["rx"] + p["tx"]) if p else 0)
-            peer_lines.append(f"  {ico} {u.email}")
-            peer_lines.append(f"     {DIM}трафик: {tx}{NC}")
-        peer_lines += ["", f"  {DIM}● = онлайн  ○ = офлайн{NC}"]
+        ico = f"{GREEN}●{NC}" if (p and p["online"]) else f"{DIM}○{NC}"
+        tx = _bytes((p["rx"] + p["tx"]) if p else 0)
+        peer_lines.append(f"  {ico} {u.email}")
+        peer_lines.append(f"     {DIM}трафик: {tx}{NC}")
+    peer_lines += ["", f"  {DIM}● = онлайн  ○ = офлайн{NC}"]
         panel("Пиры AWG", peer_lines)
 
         choice = menu(
