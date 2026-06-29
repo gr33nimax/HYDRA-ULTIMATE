@@ -1780,7 +1780,7 @@
 
 # \- \[x] 8. TUI generic → ✅ `hydra/ui/tui.py` + `hydra/ui/menus.py` (главное меню, протоколы, пользователи, Telegram, мониторинг, безопасность)
 
-# \- \[x] 9.1 naive / \[x] 9.2 telemt / \[x] 9.3 vkturn / \[x] 9.4 wdtt / \[x] 9.5 olcrtc / \[x] 9.6 slipgate / \[ ] 9.7 webdav
+# \- \[x] 9.1 naive / \[x] 9.2 telemt / \[x] 9.3 vkturn / \[x] 9.4 wdtt / \[x] 9.5 olcrtc / \[x] 9.6 slipgate / \[x] 9.7 webdav
 
 # \- \[ ] 10.1 dnscrypt / 10.2 warp / 10.3 porthopping / 10.4 fail2ban / 10.5 geoip / 10.6 honeypot / 10.7 ipban
 
