@@ -1,7 +1,7 @@
 """
 hydra/ui/tui.py — Текстовый UI-фреймворк.
 
-Минимальный набор для отрисовки меню: цвета, рамки, заголовки, панели.
+Цвета, рамки, заголовки, панели, утилиты ввода.
 """
 from __future__ import annotations
 
@@ -54,14 +54,14 @@ def _strip(s: str) -> str:
 
 BANNER = rf"""
 {CYAN}        ██╗  ██╗{GREEN}██╗   ██╗{CYAN}██████╗ {GREEN}██████╗ {CYAN} █████╗
-        ██║  ██║{GREEN}╚██╗ ██╔╝{CYAN}██╔══██╗{GREEN}██╔══██╗{CYAN}██╔══██╗
-        ███████║{GREEN} ╚████╔╝ {CYAN}██║  ██║{GREEN}██████╔╝{CYAN}███████║
-        ██╔══██║{GREEN}  ╚██╔╝  {CYAN}██║  ██║{GREEN}██╔══██╗{CYAN}██╔══██║
-        ██║  ██║{GREEN}   ██║   {CYAN}██████╔╝{GREEN}██║  ██║{CYAN}██║  ██║
-        ╚═╝  ╚═╝{GREEN}   ╚═╝   {CYAN}╚═════╝ {GREEN}╚═╝  ╚═╝{CYAN}╚═╝  ╚═╝{NC}
+         ██║  ██║{GREEN}╚██╗ ██╔╝{CYAN}██╔══██╗{GREEN}██╔══██╗{CYAN}██╔══██╗
+         ███████║{GREEN} ╚████╔╝ {CYAN}██║  ██║{GREEN}██████╔╝{CYAN}███████║
+         ██╔══██║{GREEN}  ╚██╔╝  {CYAN}██║  ██║{GREEN}██╔══██╗{CYAN}██╔══██║
+         ██║  ██║{GREEN}   ██║   {CYAN}██████╔╝{GREEN}██║  ██║{CYAN}██║  ██║
+         ╚═╝  ╚═╝{GREEN}   ╚═╝   {CYAN}╚═════╝ {GREEN}╚═╝  ╚═╝{CYAN}╚═╝  ╚═╝{NC}
 {DIM}        ─────────────────────────────────────────────────{NC}
 {MAGENTA}              🐉  Multi-Protocol Proxy Manager{NC}
-{DIM}                         v1.0{NC}
+{DIM}                         v2.0{NC}
 """
 
 
@@ -194,3 +194,49 @@ def prompt(text: str, default: str = "") -> str:
         return result or default
     except (KeyboardInterrupt, EOFError):
         return default
+
+
+def confirm(text: str, default: bool = True) -> bool:
+    """Запрашивает да/нет."""
+    hint = f"{GREEN}Y{NC}/{RED}n{NC}" if default else f"{RED}y{NC}/{GREEN}N{NC}"
+    try:
+        r = input(f"{INDENT}{CYAN}▸{NC} {BOLD}{text}{NC} ({hint}) › ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        return default
+    if not r:
+        return default
+    return r[0] == "y"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Утилиты
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _bytes_auto(v: int) -> str:
+    """Форматирует байты в человекочитаемый вид (B/KB/MB/GB/TB)."""
+    if v < 1024:
+        return f"{v} B"
+    if v < 1048576:
+        return f"{v / 1024:.1f} KB"
+    if v < 1073741824:
+        return f"{v / 1048576:.1f} MB"
+    if v < 1099511627776:
+        return f"{v / 1073741824:.2f} GB"
+    return f"{v / 1099511627776:.2f} TB"
+
+
+def _bytes(v: int) -> str:
+    """Форматирует байты в GB (совместимость)."""
+    return f"{v / 1073741824:.2f} GB"
+
+
+def _bar(value: float, maximum: float, width: int = 18) -> str:
+    if maximum <= 0:
+        return f"{GREEN}[{'█' * width}{NC}] ∞"
+    pct = min(value / maximum, 1.0)
+    filled = int(pct * width)
+    return f"{GREEN}[{'█' * filled}{DIM}{'░' * (width - filled)}{NC}] {pct:.0%}"
+
+
+def _ok(ok: bool) -> str:
+    return f"{GREEN}✓{NC}" if ok else f"{RED}✗{NC}"

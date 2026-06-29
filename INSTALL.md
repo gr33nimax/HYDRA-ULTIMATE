@@ -1,125 +1,52 @@
-# Инструкция по установке — VLESS Ultimate Installer v4.12.10
+# Установка HYDRA v2.0
 
-## Быстрый старт (рекомендуется)
+## Быстрый старт (одна команда)
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh)
 ```
 
-Bootstrap скрипт автоматически:
-1. Проверяет права root
-2. Устанавливает `python3`, `curl`, `git` если отсутствуют
-3. Клонирует репозиторий в `/opt/vless-ultimate`
-4. Запускает установщик
-
----
+Bootstrap сам:
+1. Проверяет root, ОС (Ubuntu/Debian), Python 3.10+
+2. Устанавливает зависимости (curl, git, iptables, ipset)
+3. Устанавливает Sing-Box из официального репозитория
+4. Клонирует HYDRA в `/opt/hydra`
+5. Запускает TUI `main.py`
 
 ## Ручная установка
 
 ```bash
-# 1. Клонировать репозиторий
-git clone https://github.com/gr33nimax/HYDRA-ULTIMATE /opt/vless-ultimate
-cd /opt/vless-ultimate
-
-# 2. Проверить целостность
-python3 verify.py
-
-# 3. Запустить
+git clone --branch dev https://github.com/gr33nimax/HYDRA-ULTIMATE /opt/hydra
+cd /opt/hydra
 sudo python3 main.py
 ```
-
----
 
 ## Требования
 
 | Параметр | Значение |
-|----------|----------|
-| ОС | Ubuntu 20.04 / 22.04 / 24.04 LTS, Debian 11 / 12 / 13 |
+|---|---|
+| ОС | Ubuntu 20.04+, Debian 11+ |
 | Python | 3.10+ (рекомендуется 3.12) |
 | RAM | минимум 512 МБ |
 | Диск | минимум 2 ГБ |
 | Права | root |
-| Сеть | публичный IP, домен с A-записью |
-
-### Предустановка Python 3.12 (если нужно)
-
-```bash
-# Ubuntu 20.04 / 22.04
-sudo add-apt-repository ppa:deadsnakes/ppa
-sudo apt-get update
-sudo apt-get install -y python3.12
-
-# Ubuntu 24.04 / Debian 12+
-sudo apt-get install -y python3
-```
-
----
-
-## Режимы установки
-
-### Режим A — Одиночный сервер
-
-Клиент → Ваш сервер → Интернет
-
-Выбор протокола при установке:
-- **VLESS + TCP + REALITY** — максимальная скорость, имитирует TLS 1.3
-- **VLESS + xHTTP + TLS** — для сред с жёстким DPI
-
-### Режим B — Каскад (Россия → Зарубеж)
-
-Клиент → RU-сервер → Зарубежный сервер → Интернет
-
-Нужно два VPS: один в России, один за рубежом. SSH-доступ к зарубежному серверу — для автонастройки.
-
-### Мульти-каскад
-
-До 10 зарубежных нод с балансировкой (`roundRobin`, `leastPing`, `pinned`).
-
----
+| Сеть | публичный IP + домен для Naive/SlipGate |
 
 ## После установки
 
 ```bash
-# Проверить статус сервисов
-systemctl status xray nginx
-
-# Посмотреть сгенерированные ссылки
-sudo python3 /opt/vless-ultimate/main.py
-# → Управление пользователями → Показать ссылки
-
-# Лог установки
-tail -50 /var/log/vless-install.log
+sudo hydra          # или sudo python3 /opt/hydra/main.py
 ```
 
----
+В TUI:
+- **Протоколы** → включить нужные транспорты
+- **Надстройки** → DNSCrypt, WARP, PortHopping
+- **Безопасность** → Fail2ban, GeoIP, Honeypot, IPBan
+- **Пользователи** → добавить → получить ссылки/QR
 
-## Обновление
+## Логи
 
 ```bash
-cd /opt/vless-ultimate
-git pull
-sudo python3 main.py
-# → Установка и Система → Обновить Xray
+tail -f /var/log/hydra/install.log
+journalctl -u sing-box -n 50 --no-pager
 ```
-
----
-
-## Удаление
-
-```bash
-# Через меню
-sudo python3 /opt/vless-ultimate/main.py
-# → Управление пользователями → Полное удаление
-
-# Или вручную
-systemctl stop xray nginx
-systemctl disable xray nginx
-apt-get remove --purge nginx certbot
-rm -rf /etc/xray /var/lib/xray-installer /opt/vless-ultimate
-```
-
----
-
-## Проблемы при установке?
-
-Смотри [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
