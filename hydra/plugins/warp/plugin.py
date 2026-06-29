@@ -40,7 +40,7 @@ class WarpPlugin(BasePlugin):
         name="warp",
         description="Cloudflare WARP: туннелирование через сеть Cloudflare",
         category=PluginCategory.ENHANCEMENT,
-        version="1.0.0",
+        version="2.0.0",
     )
 
     def install(self) -> bool:
@@ -108,7 +108,7 @@ class WarpPlugin(BasePlugin):
         outbound = {
             "type": "wireguard",
             "tag": "warp",
-            "server": "162.159.193.1",
+            "server": "engage.cloudflareclient.com",
             "server_port": 2408,
             "local_address": [warp_cfg["address"]],
             "private_key": warp_cfg["private_key"],

@@ -208,22 +208,6 @@ def _dns_config(state: AppState) -> dict:
     }
 
 
-def _warp_outbound(state: AppState) -> dict | None:
-    """WARP-исходящее, если включено."""
-    if not state.network.warp_enabled:
-        return None
-    return {
-        "type": "wireguard",
-        "tag": "warp",
-        "server": "engage.cloudflareclient.com",
-        "server_port": 2408,
-        "local_address": ["172.16.0.2/32"],
-        "private_key": "{{WARP_PRIVATE_KEY}}",
-        "peer_public_key": "{{WARP_PEER_KEY}}",
-        "mtu": 1280,
-    }
-
-
 def generate_config(state: AppState, fragments: dict[str, ConfigFragment]) -> dict:
     config = _base_config(state)
     for name, frag in fragments.items():
@@ -231,10 +215,8 @@ def generate_config(state: AppState, fragments: dict[str, ConfigFragment]) -> di
         config["outbounds"].extend(frag.outbounds)
         config["route"]["rules"].extend(frag.route_rules)
 
-    # WARP outbound
-    warp = _warp_outbound(state)
-    if warp:
-        config["outbounds"].append(warp)
+    # DNS-конфиг (DNSCrypt / публичные DoH)
+    config["dns"] = _dns_config(state)
 
     # Если плагины не дали ни одного inbound — добавляем fallback
     if not config["inbounds"]:

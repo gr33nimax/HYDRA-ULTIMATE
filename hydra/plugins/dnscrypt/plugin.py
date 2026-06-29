@@ -22,11 +22,11 @@ class DNSCryptPlugin(BasePlugin):
         name="dnscrypt",
         description="DNSCrypt-proxy: шифрование DNS (DoH/DNSCrypt) на системном уровне",
         category=PluginCategory.ENHANCEMENT,
-        version="1.0.0",
+        version="2.0.0",
     )
 
     def install(self) -> bool:
-        if DNSCRYPT_BIN.exists():
+        if self._installed():
             return True
 
         r = subprocess.run(
@@ -37,10 +37,15 @@ class DNSCryptPlugin(BasePlugin):
             return False
 
         self._write_default_config()
+        subprocess.run(["systemctl", "enable", "--now", "dnscrypt-proxy"], capture_output=True)
         return True
 
     def uninstall(self) -> bool:
         subprocess.run(["systemctl", "stop", "dnscrypt-proxy"], capture_output=True)
+        subprocess.run(["systemctl", "disable", "dnscrypt-proxy"], capture_output=True)
+        subprocess.run(["apt-get", "remove", "-y", "-qq", "dnscrypt-proxy"], capture_output=True, timeout=60)
+        if DNSCRYPT_CONF.exists():
+            DNSCRYPT_CONF.unlink(missing_ok=True)
         return True
 
     def _write_default_config(self) -> None:
@@ -66,7 +71,7 @@ use_syslog = true
         return ConfigFragment()
 
     def status(self) -> PluginStatus:
-        installed = DNSCRYPT_BIN.exists()
+        installed = self._installed()
         running = False
         if installed:
             r = subprocess.run(
@@ -80,6 +85,10 @@ use_syslog = true
             running=running,
             port=DNSCRYPT_PORT,
         )
+
+    @staticmethod
+    def _installed() -> bool:
+        return DNSCRYPT_BIN.exists()
 
     def traffic(self, state: AppState) -> dict[str, int]:
         return {}
