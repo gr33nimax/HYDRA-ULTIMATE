@@ -156,3 +156,28 @@ def test_connected_clients_returns_list():
         assert len(clients) >= 1
         assert clients[0]["email"] == "a@x.com"
         assert "pubkey" in clients[0]
+
+
+def test_resolve_network_avoids_conflicts():
+    from hydra.core.state import PluginState
+    p = AmneziaWGPlugin()
+    state = _make_state()
+    # Эмулируем конфликт: WDTT занял 10.66.66.0/16
+    state.protocols["wdtt"] = PluginState(enabled=True, config={"network": "10.66.66.0/16"})
+    state.protocols["amneziawg"] = PluginState(enabled=True, config={})
+
+    # Если awg0.conf не существует, должен выбрать первую свободную сеть (10.67.67.0/24)
+    with patch("hydra.plugins.amneziawg.plugin.AWG_CONF") as mock_conf:
+        mock_conf.exists.return_value = False
+        net = p._resolve_network(state)
+        assert net == "10.67.67.0/24"
+        assert state.protocols["amneziawg"].config["network"] == "10.67.67.0/24"
+
+    # Если в awg0.conf прописана конфликтующая сеть (10.66.66.1/24), он должен проигнорировать её и выбрать свободную (10.67.67.0/24)
+    with patch("hydra.plugins.amneziawg.plugin.AWG_CONF") as mock_conf:
+        mock_conf.exists.return_value = True
+        mock_conf.read_text.return_value = "Address = 10.66.66.1/24"
+        # Сбрасываем старую сохраненную сеть
+        state.protocols["amneziawg"].config = {}
+        net = p._resolve_network(state)
+        assert net == "10.67.67.0/24"

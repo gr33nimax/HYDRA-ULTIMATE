@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import re
 import shutil
 import subprocess
@@ -28,8 +29,9 @@ AWG_PARAMS = AWG_CONF_DIR / "params"
 AWG_INTERFACE = "awg0"
 AWG_UNIT = "awg-quick@awg0"
 
-DEFAULT_NETWORK = "10.67.67.0/24"
 DEFAULT_PORT = 51820
+_KNOWN_SUBNETS = ["10.66.66.0/16", "172.17.0.0/16"]
+_PREFERRED_SUBNETS = ["10.67.67.0/24"]
 DEFAULT_OBFUSCATION = {
     "Jc": "4", "Jmin": "40", "Jmax": "70",
     "S1": "8", "S2": "72",
@@ -116,9 +118,9 @@ class AmneziaWGPlugin(BasePlugin):
         if not AWG_CONF.exists():
             return ConfigFragment()
 
-        iface_block = self._interface_block()
         existing_ips = self._existing_peer_ips()
-        base, server_octet, network = self._network()
+        base, server_octet, network = self._network(state)
+        iface_block = self._interface_block_for_network(base, server_octet)
 
         used = set(existing_ips.values()) | {server_octet}
         peer_map: dict[str, str] = {}
@@ -186,6 +188,14 @@ class AmneziaWGPlugin(BasePlugin):
             out.append(line)
         return "\n".join(out)
 
+    def _interface_block_for_network(self, base: str, server_octet: str) -> str:
+        """Возвращает [Interface] с Address из выбранной AWG-сети."""
+        block = self._interface_block()
+        address = f"Address = {base}.{server_octet}/24"
+        if re.search(r"^Address\s*=", block, re.M):
+            return re.sub(r"^Address\s*=.*$", address, block, flags=re.M)
+        return f"{block.rstrip()}\n{address}" if block.strip() else address
+
     def _existing_peer_ips(self) -> dict[str, str]:
         """Возвращает {pubkey: octet} из текущих [Peer]-секций."""
         if not AWG_CONF.exists():
@@ -204,15 +214,58 @@ class AmneziaWGPlugin(BasePlugin):
                 cur_pub = None
         return result
 
-    def _network(self) -> tuple[str, str, str]:
-        """('10.66.66', server_octet, '10.66.66.0/24') из Address в awg0.conf."""
+    def _network(self, state: AppState) -> tuple[str, str, str]:
+        """('10.x.y', server_octet, '10.x.y.0/24') из state или awg0.conf."""
+        network = self._resolve_network(state)
+        base = network.rsplit(".", 1)[0]
+        server_octet = "1"
         if AWG_CONF.exists():
             m = re.search(r"Address\s*=\s*(\d+)\.(\d+)\.(\d+)\.(\d+)", AWG_CONF.read_text())
+            if m and f"{m.group(1)}.{m.group(2)}.{m.group(3)}" == base:
+                server_octet = m.group(4)
+        return base, server_octet, network
+
+    def _resolve_network(self, state: AppState) -> str:
+        """Автовыбор свободной /24 подсети: из state → awg0.conf → сканирование."""
+        ps = state.protocols.get("amneziawg")
+        used = self._used_networks(state)
+        if ps and ps.config.get("network") and self._is_network_free(ps.config["network"], used):
+            return ps.config["network"]
+        if AWG_CONF.exists():
+            m = re.search(r"Address\s*=\s*(\d+)\.(\d+)\.(\d+)\.", AWG_CONF.read_text())
             if m:
-                base = f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
-                return base, m.group(4), f"{base}.0/24"
-        base = DEFAULT_NETWORK.rsplit(".", 1)[0]
-        return base, "1", DEFAULT_NETWORK
+                network = f"{m.group(1)}.{m.group(2)}.{m.group(3)}.0/24"
+                if self._is_network_free(network, used):
+                    if ps:
+                        ps.config["network"] = network
+                    return network
+        for network in _PREFERRED_SUBNETS:
+            if self._is_network_free(network, used):
+                if ps:
+                    ps.config["network"] = network
+                return network
+        for i in range(100, 256):
+            for j in range(0, 256):
+                candidate = ipaddress.ip_network(f"10.{i}.{j}.0/24", strict=False)
+                if self._is_network_free(str(candidate), used):
+                    net_str = str(candidate)
+                    if ps:
+                        ps.config["network"] = net_str
+                    return net_str
+        return "10.100.0.0/24"
+
+    @staticmethod
+    def _is_network_free(network: str, used: list[str]) -> bool:
+        candidate = ipaddress.ip_network(network, strict=False)
+        return not any(candidate.overlaps(ipaddress.ip_network(u, strict=False)) for u in used)
+
+    @staticmethod
+    def _used_networks(state: AppState) -> list[str]:
+        used = list(_KNOWN_SUBNETS)
+        for name, p in state.protocols.items():
+            if name != "amneziawg" and p.config.get("network"):
+                used.append(p.config["network"])
+        return used
 
     @staticmethod
     def _first_free(used: set[str]) -> str:
@@ -286,7 +339,7 @@ class AmneziaWGPlugin(BasePlugin):
         ip = self._existing_peer_ips().get(pub)
         if not ip:
             return ""
-        base, _, _ = self._network()
+        base, _, _ = self._network(state)
 
         server_pub = self._server_pubkey()
         port = self._current_port()
@@ -423,12 +476,12 @@ class AmneziaWGPlugin(BasePlugin):
         self.apply(state)
         if not self._is_up():
             subprocess.run(["systemctl", "enable", "--now", AWG_UNIT], capture_output=True)
-        self._ensure_nat()
+        self._ensure_nat(state)
         self._ensure_forward()
 
     def on_disable(self, state: AppState) -> None:
         self._remove_forward()
-        self._remove_nat()
+        self._remove_nat(state)
         subprocess.run(["systemctl", "stop", AWG_UNIT], capture_output=True)
 
     @staticmethod
@@ -444,9 +497,9 @@ class AmneziaWGPlugin(BasePlugin):
                 ["sh", "-c", "grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf || "
                  "echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf"], capture_output=True)
 
-    def _ensure_nat(self):
+    def _ensure_nat(self, state: AppState):
         """Добавляет MASQUERADE для трафика AWG, если правила нет."""
-        _, _, network = self._network()
+        _, _, network = self._network(state)
         iface = self._wan_iface()
         r = subprocess.run(
             ["iptables", "-t", "nat", "-C", "POSTROUTING",
@@ -460,9 +513,9 @@ class AmneziaWGPlugin(BasePlugin):
                 capture_output=True,
             )
 
-    def _remove_nat(self):
+    def _remove_nat(self, state: AppState):
         """Удаляет MASQUERADE для трафика AWG."""
-        _, _, network = self._network()
+        _, _, network = self._network(state)
         iface = self._wan_iface()
         subprocess.run(
             ["iptables", "-t", "nat", "-D", "POSTROUTING",
