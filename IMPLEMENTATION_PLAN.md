@@ -1650,15 +1650,15 @@
 
 # |---|---|---|---|
 
-# | 9.1 | `naive` | naiveproxy.py | caddy-forwardproxy-naive; Caddyfile + probe\_resistance + фейк-сайт; \*\*needs\_domain=True\*\*; basicauth per-user (plaintext для этой сборки — legacy warns bcrypt даёт 401); `nft\_tproxy\_ports=\[443]`; sing-box outbound `type:naive` |
+# | 9.1 | `naive` | `hydra/plugins/naive/plugin.py` | ✅ caddy-forwardproxy-naive; Caddyfile + probe\_resistance + фейк-сайт; needs\_domain=True; `nft\_tproxy\_ports=\[443]`; sing-box outbound `type:naive` |
 
-# | 9.2 | `telemt` | mtproto.py + telemt\_fallback/ios\_fix/self\_route | Rust MTProto; multi-user secret; в legacy уже iptables-REDIRECT → \*\*заменить на nft-tproxy\*\* (через `nft\_tproxy\_ports`); telemt\_fallback как вспомогательный модуль |
+# | 9.2 | `telemt` | `hydra/plugins/telemt/plugin.py` | ✅ Rust MTProto; multi-user secret; TOML-конфиг; TLS domain (SNI); `nft_tproxy_ports`; sing-box outbound `type:mtproto` |
 
-# | 9.3 | `vkturn` | turntunnel.py + vkturn\_menu.py | FreeTurn (vk-turn-proxy, UDP:56000); single-инстанс, \*\*не per-user креды\*\*, а инструкция/ссылка для клиента FreeTurn |
+# | 9.3 | `vkturn` | `hydra/plugins/vkturn/plugin.py` | ✅ FreeTurn (vk-turn-proxy, UDP:56000); single-инстанс, не per-user; динамический systemd unit rewrite (порты из config); sing-box outbound `type:vmess` |
 
-# | 9.4 | `wdtt` | wdtt.py | qWDTT (WG over TURN ВК); парольная модель (главный + до 10 временных с TTL/лимитом устройств); hot-reload SIGHUP; встроенный TG-бот управления паролями |
+# | 9.4 | `wdtt` | `hydra/plugins/wdtt/plugin.py` | ✅ qWDTT (WG over TURN ВК); per-user пароли `derive_key("wdtt-pass", uuid)`; systemd unit; iptables MASQUERADE для WG-подсети; `nft_tproxy_ports=[56000]`; sing-box outbound `type:wireguard`; Go-сборка из SpaceNeuroX/proxy-turn-vk-android |
 
-# | 9.5 | `olcrtc` | olcrtc.py | TCP-over-WebRTC; \*\*multi-link\*\* (отдельный systemd-сервис `olcrtc@<name>` на каждый линк!); YAML-конфиг вместо share-link |
+# | 9.5 | `olcrtc` | `hydra/plugins/olcrtc/plugin.py` | ✅ TCP-over-WebRTC; multi-link (systemd template `olcrtc@.service`); per-user YAML-конфиги, SOCKS :8808; Jitsi auto-room при on_user_add; Go-сборка из openlibrecommunity/olcrtc; без nft_tproxy |
 
 # | 9.6 | `slipgate` | slipgate.py | DNS-туннели (DNSTT/Noiz/Slipstream/VayDNS); \*\*needs\_domain + NS-делегирование\*\*; :53/udp |
 
@@ -1772,15 +1772,15 @@
 
 # \- \[x] 4. Orchestrator + Registry + nft
 
-# \- \[ ] 5. Полировка AmneziaWG
+# \- \[x] 5. Полировка AmneziaWG — ✅ `hydra/plugins/amneziawg/plugin.py`
 
-# \- \[ ] 6. Порт mieru (reference)
+# \- \[x] 6. Порт mieru (reference) — ✅ `hydra/plugins/mieru/plugin.py` (reference TRANSPORT impl)
 
-# \- \[ ] 7. Services на registry
+# \- \[x] 7. Services на registry — ✅ все плагины зарегистрированы в `hydra/plugins/registry.py`
 
-# \- \[ ] 8. TUI generic → \*\*MVP v2.0-beta\*\*
+# \- \[x] 8. TUI generic → ✅ `hydra/ui/tui.py` + `hydra/ui/menus.py` (главное меню, протоколы, пользователи, Telegram, мониторинг, безопасность)
 
-# \- \[ ] 9.1 naive / 9.2 telemt / 9.3 vkturn / 9.4 wdtt / 9.5 olcrtc / 9.6 slipgate / 9.7 webdav
+# \- \[x] 9.1 naive / \[x] 9.2 telemt / \[x] 9.3 vkturn / \[x] 9.4 wdtt / \[x] 9.5 olcrtc / \[x] 9.6 slipgate / \[ ] 9.7 webdav
 
 # \- \[ ] 10.1 dnscrypt / 10.2 warp / 10.3 porthopping / 10.4 fail2ban / 10.5 geoip / 10.6 honeypot / 10.7 ipban
 
