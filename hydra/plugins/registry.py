@@ -14,6 +14,7 @@ from hydra.plugins.wdtt.plugin import WdttPlugin
 from hydra.plugins.dnscrypt.plugin import DNSCryptPlugin
 from hydra.plugins.warp.plugin import WarpPlugin
 from hydra.plugins.slipgate.plugin import SlipGatePlugin
+from hydra.plugins.webdav.plugin import WebdavPlugin
 from hydra.core.state import AppState
 
 _PLUGINS: list[BasePlugin] = [
@@ -27,6 +28,7 @@ _PLUGINS: list[BasePlugin] = [
     DNSCryptPlugin(),
     WarpPlugin(),
     SlipGatePlugin(),
+    WebdavPlugin(),
 ]
 
 
