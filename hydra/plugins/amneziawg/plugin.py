@@ -416,13 +416,64 @@ class AmneziaWGPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def on_enable(self, state: AppState) -> None:
+        self._ensure_ip_forward()
         self.configure(state)
         self.apply(state)
         if not self._is_up():
             subprocess.run(["systemctl", "enable", "--now", AWG_UNIT], capture_output=True)
+        self._ensure_nat()
 
     def on_disable(self, state: AppState) -> None:
+        self._remove_nat()
         subprocess.run(["systemctl", "stop", AWG_UNIT], capture_output=True)
+
+    @staticmethod
+    def _ensure_ip_forward():
+        """Включает ip_forward, если выключен."""
+        r = subprocess.run(["sysctl", "-n", "net.ipv4.ip_forward"], capture_output=True, text=True)
+        if r.stdout.strip() != "1":
+            subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], capture_output=True)
+            subprocess.run(
+                ["sed", "-i", "s/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/g",
+                 "/etc/sysctl.conf"], capture_output=True)
+            subprocess.run(
+                ["sh", "-c", "grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf || "
+                 "echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf"], capture_output=True)
+
+    def _ensure_nat(self):
+        """Добавляет MASQUERADE для трафика AWG, если правила нет."""
+        _, _, network = self._network()
+        iface = self._wan_iface()
+        r = subprocess.run(
+            ["iptables", "-t", "nat", "-C", "POSTROUTING",
+             "-s", network, "-o", iface, "-j", "MASQUERADE"],
+            capture_output=True,
+        )
+        if r.returncode != 0:
+            subprocess.run(
+                ["iptables", "-t", "nat", "-A", "POSTROUTING",
+                 "-s", network, "-o", iface, "-j", "MASQUERADE"],
+                capture_output=True,
+            )
+
+    def _remove_nat(self):
+        """Удаляет MASQUERADE для трафика AWG."""
+        _, _, network = self._network()
+        iface = self._wan_iface()
+        subprocess.run(
+            ["iptables", "-t", "nat", "-D", "POSTROUTING",
+             "-s", network, "-o", iface, "-j", "MASQUERADE"],
+            capture_output=True,
+        )
+
+    @staticmethod
+    def _wan_iface() -> str:
+        """Определяет интерфейс с default route (eth0 / ens3 / etc)."""
+        r = subprocess.run(
+            ["sh", "-c", "ip route show default | awk '{print $5}'"],
+            capture_output=True, text=True,
+        )
+        return r.stdout.strip() or "eth0"
 
     # ═════════════════════════════════════════════════════════════════════
     #  Низкоуровневые помощники

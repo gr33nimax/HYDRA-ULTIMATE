@@ -160,15 +160,12 @@ def _user_links(state: AppState, user: User):
             except ImportError:
                 pass
         if conf:
-            print(f"  {DIM}{conf[:PANEL_W]}{NC}")
-            if len(conf) > PANEL_W:
-                print(f"  {DIM}... ({len(conf)} всего символов){NC}")
+            print(f"  {DIM}{'─' * PANEL_W}{NC}")
+            for line in conf.splitlines():
+                print(f"  {DIM}{line}{NC}")
+            print(f"  {DIM}{'─' * PANEL_W}{NC}")
         print()
 
-    sub_url = f"http://{state.network.server_ip or 'SERVER_IP'}:8443/?token={user.uuid}&format=base64"
-    print(f"  {CYAN}── Подписка (Base64){'─' * (PANEL_W - 22)}{NC}")
-    print(f"  {DIM}{sub_url}{NC}")
-    print()
     prompt("Нажмите Enter")
 
 
@@ -471,6 +468,7 @@ def menu_plugin_awg(state: AppState, plugin):
                 ("3", "▶️  Запустить awg0" if not s.running else "⏸️  Остановить awg0", ""),
                 ("4", "📊 Статус пиров + трафик",
                  f"{len(peers)} онлайн, {_bytes_auto(total_bytes)}"),
+                ("5", "🔧 Проверить маршрутизацию", "ip_forward, NAT, iptables"),
                 ("0", "↩ Назад", ""),
             ]
         else:
@@ -536,6 +534,8 @@ def menu_plugin_awg(state: AppState, plugin):
             prompt("Нажмите Enter")
         elif choice == "4":
             _awg_status_detail(state, plugin)
+        elif choice == "5":
+            _awg_diagnose(state, plugin)
 
 
 def _awg_peers_menu(state: AppState, plugin):
@@ -601,6 +601,57 @@ def _awg_generate_config(state: AppState, plugin):
             qr.print_ascii()
         except ImportError:
             print(f"  {DIM}pip3 install qrcode — для QR-кода{NC}")
+    prompt("Нажмите Enter")
+
+
+def _awg_diagnose(state: AppState, plugin):
+    """Диагностика маршрутизации AWG: ip_forward, NAT, интерфейс."""
+    clear()
+    title("Диагностика AWG")
+    print()
+    lines = []
+    nat_ok = False
+
+    r = subprocess.run(["sysctl", "-n", "net.ipv4.ip_forward"], capture_output=True, text=True)
+    ip_fwd = r.stdout.strip() == "1"
+    lines.append(kv("ip_forward:", f"{_ok(ip_fwd)} {'включён' if ip_fwd else 'ВЫКЛЮЧЕН!'}"))
+
+    r = subprocess.run(["ip", "link", "show", "awg0"], capture_output=True, text=True)
+    awg_up = r.returncode == 0
+    lines.append(kv("awg0:", f"{_ok(awg_up)} {'поднят' if awg_up else 'ОПУЩЕН!'}"))
+
+    if awg_up:
+        _, _, network = plugin._network()
+        try:
+            iface = subprocess.run(
+                ["sh", "-c", "ip route show default | awk '{print $5}'"],
+                capture_output=True, text=True).stdout.strip() or "eth0"
+        except Exception:
+            iface = "eth0"
+        r = subprocess.run(
+            ["iptables", "-t", "nat", "-C", "POSTROUTING",
+             "-s", network, "-o", iface, "-j", "MASQUERADE"],
+            capture_output=True,
+        )
+        nat_ok = r.returncode == 0
+        lines.append(kv("NAT (MASQUERADE):", f"{_ok(nat_ok)} {'есть' if nat_ok else 'ОТСУТСТВУЕТ!'}"))
+
+    panel("AWG маршрутизация", lines)
+
+    if not awg_up:
+        warn("Интерфейс awg0 не поднят")
+    if not ip_fwd:
+        warn("ip_forward выключен — трафик не пойдёт!")
+        if confirm("Включить ip_forward?", True):
+            plugin._ensure_ip_forward()
+            success("ip_forward включён")
+    if awg_up and not nat_ok:
+        warn("NAT правило отсутствует — интернет не работает!")
+        if confirm("Добавить NAT (MASQUERADE)?", True):
+            plugin._ensure_nat()
+            success("NAT добавлен")
+
+    print()
     prompt("Нажмите Enter")
 
 
