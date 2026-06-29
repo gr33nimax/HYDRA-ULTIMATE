@@ -62,14 +62,49 @@
 
 ---
 
-## Быстрый старт
+## Установка
+
+### Требования
+
+| Параметр | Значение |
+|---|---|
+| ОС | Ubuntu 20.04+, Debian 11+ |
+| Python | 3.10+ |
+| RAM | от 512 МБ |
+| Диск | от 2 ГБ |
+| Права | root |
+| Сеть | публичный IP, домен (для Naive/SlipGate) |
+
+### Автоматическая (рекомендуется)
 
 ```bash
-# Установка (одна команда)
-curl -fsSL https://raw.githubusercontent.com/anomalyco/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash
+bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh)
+```
 
-# Запуск TUI
-sudo python3 /opt/hydra/main.py
+Скрипт сам установит Python, Sing-Box, клонирует HYDRA в `/opt/hydra` и запустит TUI.
+
+### Ручная
+
+```bash
+git clone --branch dev https://github.com/gr33nimax/HYDRA-ULTIMATE /opt/hydra
+cd /opt/hydra
+sudo python3 main.py
+```
+
+### После установки
+
+В TUI:
+
+1. **Протоколы** → включить транспорты (AmneziaWG, Mieru, Naive и т.д.)
+2. **Надстройки** → DNSCrypt, WARP, PortHopping
+3. **Безопасность** → Fail2ban, GeoIP, Honeypot, IPBan
+4. **Пользователи** → Добавить → готовы ссылки и QR
+
+Проверить статус:
+
+```bash
+sudo hydra status
+journalctl -u sing-box -n 20 --no-pager
 ```
 
 ---
