@@ -5,12 +5,14 @@ from typing import Optional
 
 from hydra.plugins.base import BasePlugin, ConfigFragment, PluginCategory
 from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
+from hydra.plugins.mieru.plugin import MieruPlugin
 from hydra.plugins.dnscrypt.plugin import DNSCryptPlugin
 from hydra.plugins.warp.plugin import WarpPlugin
 from hydra.core.state import AppState
 
 _PLUGINS: list[BasePlugin] = [
     AmneziaWGPlugin(),
+    MieruPlugin(),
     DNSCryptPlugin(),
     WarpPlugin(),
 ]
