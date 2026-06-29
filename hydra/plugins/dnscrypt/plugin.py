@@ -9,7 +9,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, ConfigFragment
+from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
 from hydra.core.state import AppState
 
 DNSCRYPT_BIN = Path("/usr/bin/dnscrypt-proxy")
@@ -21,6 +21,7 @@ class DNSCryptPlugin(BasePlugin):
     meta = PluginMeta(
         name="dnscrypt",
         description="DNSCrypt-proxy: шифрование DNS (DoH/DNSCrypt) на системном уровне",
+        category=PluginCategory.ENHANCEMENT,
         version="1.0.0",
     )
 
@@ -80,7 +81,7 @@ use_syslog = true
             port=DNSCRYPT_PORT,
         )
 
-    def traffic(self) -> dict[str, int]:
+    def traffic(self, state: AppState) -> dict[str, int]:
         return {}
 
     def on_enable(self, state: AppState) -> None:

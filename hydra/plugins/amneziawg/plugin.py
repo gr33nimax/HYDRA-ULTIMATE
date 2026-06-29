@@ -23,7 +23,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, ConfigFragment
+from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
 from hydra.core.state import AppState, User
 
 AWG_INSTALL_DIR = Path("/opt/awg-install")
@@ -53,6 +53,7 @@ class AmneziaWGPlugin(BasePlugin):
     meta = PluginMeta(
         name="amneziawg",
         description="AmneziaWG 2.0: WireGuard с обфускацией (kernel-модуль)",
+        category=PluginCategory.TRANSPORT,
         version="2.0.0",
     )
 
@@ -350,7 +351,7 @@ class AmneziaWGPlugin(BasePlugin):
             port=self._current_port() if installed else 0,
         )
 
-    def traffic(self) -> dict[str, int]:
+    def traffic(self, state: AppState) -> dict[str, int]:
         """{email: bytes}. Переводит pubkey→email по карте, сохранённой в configure()."""
         if not self._installed() or not self._is_up():
             return {}

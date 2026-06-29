@@ -3,7 +3,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, ConfigFragment
+from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
 from hydra.core.state import AppState, PluginState
 
 
@@ -12,6 +12,7 @@ class MockPlugin(BasePlugin):
     meta = PluginMeta(
         name="mock",
         description="Mock plugin for testing",
+        category=PluginCategory.ENHANCEMENT,
         version="0.0.1",
     )
 
@@ -34,7 +35,7 @@ class MockPlugin(BasePlugin):
             port=9999,
         )
 
-    def traffic(self) -> dict[str, int]:
+    def traffic(self, state: AppState) -> dict[str, int]:
         return {"test@example.com": 1024}
 
 
@@ -73,7 +74,8 @@ def test_plugin_status():
 def test_plugin_traffic():
     """Трафик плагина."""
     plugin = MockPlugin()
-    traffic = plugin.traffic()
+    state = AppState()
+    traffic = plugin.traffic(state)
     assert traffic["test@example.com"] == 1024
 
 

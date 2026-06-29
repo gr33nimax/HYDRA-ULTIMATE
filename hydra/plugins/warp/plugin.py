@@ -18,7 +18,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, ConfigFragment
+from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
 from hydra.core.state import AppState
 
 WGCF_BIN = Path("/usr/local/bin/wgcf")
@@ -39,6 +39,7 @@ class WarpPlugin(BasePlugin):
     meta = PluginMeta(
         name="warp",
         description="Cloudflare WARP: туннелирование через сеть Cloudflare",
+        category=PluginCategory.ENHANCEMENT,
         version="1.0.0",
     )
 
@@ -144,7 +145,7 @@ class WarpPlugin(BasePlugin):
             running=running,
         )
 
-    def traffic(self) -> dict[str, int]:
+    def traffic(self, state: AppState) -> dict[str, int]:
         return {}
 
     def on_enable(self, state: AppState) -> None:

@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from hydra.plugins.base import ConfigFragment
 from hydra.core.state import AppState, PluginState, load_state, save_state
 
 SINGBOX_BIN = Path("/usr/local/bin/sing-box")
@@ -147,19 +148,32 @@ def install() -> bool:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _base_config(state: AppState) -> dict:
-    """Базовый скелет конфига Sing-Box."""
-    return {
-        "log": {
-            "level": "info",
-            "timestamp": True,
-        },
-        "inbounds": [],
+    config = {
+        "log": {"level": "info", "timestamp": True},
+        "inbounds": [
+            {
+                "type": "socks",
+                "tag": "socks-in",
+                "listen": "127.0.0.1",
+                "listen_port": 1080,
+            },
+        ],
         "outbounds": [],
         "route": {
             "rules": [],
             "auto_detect_interface": True,
         },
     }
+    if state.network.tproxy_enabled:
+        config["inbounds"].append({
+            "type": "direct",
+            "tag": "tproxy-in",
+            "listen": "::",
+            "listen_port": state.network.tproxy_port,
+            "network": "tcp",
+            "sniff": True,
+        })
+    return config
 
 
 def _dns_config(state: AppState) -> dict:
@@ -210,24 +224,12 @@ def _warp_outbound(state: AppState) -> dict | None:
     }
 
 
-def generate_config(state: AppState, plugin_fragments: dict[str, dict]) -> dict:
-    """
-    Собирает полный конфиг Sing-Box из базового скелета и фрагментов плагинов.
-
-    Каждый плагин отдаёт словарь с опциональными ключами:
-      - inbounds: list[dict]
-      - outbounds: list[dict]
-      - route: dict (rules)
-    """
+def generate_config(state: AppState, fragments: dict[str, ConfigFragment]) -> dict:
     config = _base_config(state)
-
-    # Собираем inbound'ы от активных плагинов
-    for name, proto in state.protocols.items():
-        if proto.enabled and name in plugin_fragments:
-            frag = plugin_fragments[name]
-            config["inbounds"].extend(frag.get("inbounds", []))
-            config["outbounds"].extend(frag.get("outbounds", []))
-            config["route"]["rules"].extend(frag.get("route_rules", []))
+    for name, frag in fragments.items():
+        config["inbounds"].extend(frag.inbounds)
+        config["outbounds"].extend(frag.outbounds)
+        config["route"]["rules"].extend(frag.route_rules)
 
     # WARP outbound
     warp = _warp_outbound(state)
