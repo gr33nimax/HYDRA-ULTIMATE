@@ -1,11 +1,12 @@
 """
-hydra/services/telegram/bot.py — Telegram-боты (Admin + Client).
+hydra/services/telegram/bot.py — Telegram-боты (Admin + Client) v2.
 
 Архитектура:
   - Admin Bot: управление пользователями, трафик, безопасность
   - Client Bot: выдача подписок, конфигов, QR-кодов
 
 Оба бота работают как отдельные systemd-сервисы.
+Используют новый динамический генератор подписок v2.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -22,12 +24,12 @@ from hydra.core.state import (
     AppState, User, load_state, save_state, find_user, add_user,
 )
 from hydra.services.subscriptions.generator import (
-    generate_singbox_config, generate_base64_sub, generate_awg_client_config,
+    generate_singbox_config, generate_base64_sub, generate_client_config,
+    generate_links,
 )
 from hydra.services.traffic import collect_traffic
 from hydra.plugins.registry import status_all
 
-# Стараемся импортировать python-telegram-bot
 try:
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.ext import (
@@ -47,8 +49,6 @@ ADMIN_STATE_FILE = BOT_DIR / "admin_state.json"
 # ═════════════════════════════════════════════════════════════════════════════
 
 class AdminBot:
-    """Telegram-бот для администратора."""
-
     def __init__(self, token: str, admin_chat_id: str):
         if not TELEGRAM_AVAILABLE:
             raise RuntimeError("python-telegram-bot не установлен")
@@ -57,17 +57,16 @@ class AdminBot:
         self.app: Optional[Application] = None
 
     async def _check_admin(self, update: Update) -> bool:
-        """Проверяет, что сообщение от администратора."""
         if update.effective_user and update.effective_user.id == self.admin_chat_id:
             return True
-        await update.message.reply_text("⛔ Доступ запрещён.")
+        await update.message.reply_text("Доступ запрещён.")
         return False
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await self._check_admin(update):
             return
         await update.message.reply_text(
-            "🐉 *HYDRA Admin Panel*\n\n"
+            "HYDRA Admin Panel\n\n"
             "/users — управление пользователями\n"
             "/traffic — статистика трафика\n"
             "/status — статус протоколов\n"
@@ -85,7 +84,7 @@ class AdminBot:
             await update.message.reply_text("Нет пользователей.")
             return
 
-        lines = ["*👥 Пользователи:*\n"]
+        lines = ["Пользователи:\n"]
         for u in state.users:
             status_icon = "🔴" if u.blocked else "🟢"
             limit = f"{u.traffic_limit_gb} GB" if u.traffic_limit_gb else "∞"
@@ -103,7 +102,7 @@ class AdminBot:
         state = load_state()
         traffic = collect_traffic(state)
 
-        lines = ["*📊 Трафик:*\n"]
+        lines = ["Трафик:\n"]
         for u in state.users:
             used = traffic.get(u.email, u.traffic_used_bytes)
             used_gb = used / 1073741824
@@ -117,7 +116,7 @@ class AdminBot:
         if not await self._check_admin(update):
             return
         plugins = status_all()
-        lines = ["*🔌 Статус протоколов:*\n"]
+        lines = ["Статус протоколов:\n"]
         for name, s in plugins.items():
             icon = "✅" if s["running"] else ("⚠️" if s["installed"] else "❌")
             lines.append(f"{icon} *{name}*: порт {s['port']}")
@@ -149,7 +148,7 @@ class AdminBot:
         save_state(state)
 
         await update.message.reply_text(
-            f"✅ Пользователь `{email}` создан.\n"
+            f"Пользователь `{email}` создан.\n"
             f"UUID: `{user.uuid}`",
             parse_mode="Markdown",
         )
@@ -170,10 +169,9 @@ class AdminBot:
 
         state.users.remove(user)
         save_state(state)
-        await update.message.reply_text(f"🗑 Пользователь `{email}` удалён.", parse_mode="Markdown")
+        await update.message.reply_text(f"Пользователь `{email}` удалён.", parse_mode="Markdown")
 
     def run(self):
-        """Запускает бота (блокирующий вызов)."""
         self.app = Application.builder().token(self.token).build()
         self.app.add_handler(CommandHandler("start", self.cmd_start))
         self.app.add_handler(CommandHandler("users", self.cmd_users))
@@ -189,8 +187,6 @@ class AdminBot:
 # ═════════════════════════════════════════════════════════════════════════════
 
 class ClientBot:
-    """Telegram-бот для конечных пользователей."""
-
     def __init__(self, token: str, admin_chat_id: str):
         if not TELEGRAM_AVAILABLE:
             raise RuntimeError("python-telegram-bot не установлен")
@@ -212,7 +208,6 @@ class ClientBot:
         user = self._find_user_by_telegram(state, tid)
 
         if not user:
-            # Проверяем invite-токен
             token = context.args[0] if context.args else None
             if token:
                 for u in state.users:
@@ -224,16 +219,16 @@ class ClientBot:
 
         if not user:
             await update.message.reply_text(
-                "🔒 У вас нет доступа. Обратитесь к администратору за invite-ссылкой."
+                "У вас нет доступа. Обратитесь к администратору за invite-ссылкой."
             )
             return
 
         if user.blocked:
-            await update.message.reply_text("🚫 Ваша подписка заблокирована.")
+            await update.message.reply_text("Ваша подписка заблокирована.")
             return
 
         await update.message.reply_text(
-            f"🐉 *HYDRA Subscription*\n\n"
+            f"HYDRA Subscription\n\n"
             f"Пользователь: `{user.email}`\n"
             f"Лимит: {user.traffic_limit_gb or '∞'} GB\n\n"
             "/config — получить конфиг (Sing-Box)\n"
@@ -249,15 +244,13 @@ class ClientBot:
         state = load_state()
         user = self._find_user_by_telegram(state, update.effective_user.id)
         if not user or user.blocked:
-            await update.message.reply_text("⛔ Нет доступа.")
+            await update.message.reply_text("Нет доступа.")
             return
 
         config = generate_singbox_config(user, state)
         config_str = json.dumps(config, indent=2, ensure_ascii=False)
 
         if len(config_str) > 4000:
-            # Отправляем как файл
-            import tempfile
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".json", delete=False, encoding="utf-8",
             ) as f:
@@ -281,14 +274,23 @@ class ClientBot:
         state = load_state()
         user = self._find_user_by_telegram(state, update.effective_user.id)
         if not user or user.blocked:
-            await update.message.reply_text("⛔ Нет доступа.")
+            await update.message.reply_text("Нет доступа.")
+            return
+
+        links = generate_links(user, state)
+        if not links:
+            await update.message.reply_text("Нет доступных ссылок для импорта.")
             return
 
         sub_link = generate_base64_sub(user, state)
+        lines = [f"`{link}`" for link in links]
+        lines.append(
+            f"\nBase64-подписка:\n"
+            f"`https://{state.network.domain}:8443/sub"
+            f"?token={user.uuid}&format=base64`"
+        )
         await update.message.reply_text(
-            f"🔗 Ссылка для импорта:\n\n"
-            f"`https://{state.network.domain}:{8443}/sub?token={user.uuid}&format=base64`\n\n"
-            f"Или скопируйте в клиент:\n`{sub_link[:200]}...`",
+            "\n".join(lines),
             parse_mode="Markdown",
         )
 
@@ -298,11 +300,14 @@ class ClientBot:
         state = load_state()
         user = self._find_user_by_telegram(state, update.effective_user.id)
         if not user or user.blocked:
-            await update.message.reply_text("⛔ Нет доступа.")
+            await update.message.reply_text("Нет доступа.")
             return
 
-        config = generate_awg_client_config(user, state)
-        import tempfile
+        config = generate_client_config(user, state, "amneziawg")
+        if not config:
+            await update.message.reply_text("AmneziaWG не доступен.")
+            return
+
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".conf", delete=False, encoding="utf-8",
         ) as f:
@@ -321,7 +326,7 @@ class ClientBot:
         state = load_state()
         user = self._find_user_by_telegram(state, update.effective_user.id)
         if not user or user.blocked:
-            await update.message.reply_text("⛔ Нет доступа.")
+            await update.message.reply_text("Нет доступа.")
             return
 
         used_gb = user.traffic_used_bytes / 1073741824
@@ -329,14 +334,13 @@ class ClientBot:
         bar = _progress_bar(user.traffic_used_bytes, int(user.traffic_limit_gb * 1073741824) if user.traffic_limit_gb else 0)
 
         await update.message.reply_text(
-            f"📊 *Статус подписки*\n\n"
+            f"Статус подписки\n\n"
             f"Трафик: {used_gb:.2f} GB / {limit_str}\n{bar}\n"
             f"Действует до: {user.expiry_date[:10] if user.expiry_date else '∞'}",
             parse_mode="Markdown",
         )
 
     def run(self):
-        """Запускает бота (блокирующий вызов)."""
         self.app = Application.builder().token(self.token).build()
         self.app.add_handler(CommandHandler("start", self.cmd_start))
         self.app.add_handler(CommandHandler("config", self.cmd_config))
@@ -351,7 +355,6 @@ class ClientBot:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _progress_bar(used: int, limit: int, width: int = 15) -> str:
-    """Рисует прогресс-бар: [████████░░░░░░░] 67%"""
     if limit <= 0:
         return "`[███████████████]` ∞"
     pct = min(used / limit, 1.0)
@@ -361,12 +364,10 @@ def _progress_bar(used: int, limit: int, width: int = 15) -> str:
 
 
 def run_admin_bot(token: str, admin_chat_id: str):
-    """Точка входа для systemd-сервиса admin-бота."""
     bot = AdminBot(token, admin_chat_id)
     bot.run()
 
 
 def run_client_bot(token: str, admin_chat_id: str):
-    """Точка входа для systemd-сервиса клиентского бота."""
     bot = ClientBot(token, admin_chat_id)
     bot.run()

@@ -1,30 +1,47 @@
 """
-hydra/services/subscriptions/generator.py — Генератор подписок.
+hydra/services/subscriptions/generator.py — Генератор подписок v2.
 
 Форматы:
   • Base64 (для v2rayNG, Shadowrocket, Hiddify)
   • Sing-Box JSON (для NekoBox, Karing)
-  • Mieru-ссылки
-  • AmneziaWG-конфиги
+  • Протокол-специфичные конфиги (AWG .conf)
 
-Поддерживает персональные подписки (один пользователь) и
-общие (все пользователи, только admin).
+Динамически собирает ссылки/конфиги со всех включённых TRANSPORT-плагинов
+через их v2-методы client_link() и generate_client_config().
 """
 from __future__ import annotations
 
 import base64
 import json
-import uuid as _uuid
 from typing import Optional
 
 from hydra.core.state import AppState, User
+from hydra.plugins.base import PluginCategory
+from hydra.plugins.registry import enabled, get
+
+
+def generate_links(user: User, state: AppState) -> list[str]:
+    """Собирает ссылки со всех включённых TRANSPORT-плагинов."""
+    links: list[str] = []
+    for p in enabled(state, PluginCategory.TRANSPORT):
+        try:
+            link = p.client_link(user, state)
+            if link:
+                links.append(link)
+        except Exception:
+            pass
+    return links
+
+
+def generate_base64_sub(user: User, state: AppState) -> str:
+    """Base64-кодированные ссылки (v2rayNG-совместимые)."""
+    links = generate_links(user, state)
+    payload = "\n".join(links)
+    return base64.b64encode(payload.encode()).decode()
 
 
 def generate_singbox_config(user: User, state: AppState) -> dict:
-    """Генерирует персональный Sing-Box JSON-конфиг для клиента."""
-    domain = state.network.domain
-    server_ip = state.network.server_ip or domain
-
+    """Собирает sing-box конфиг из outbound'ов, возвращаемых плагинами."""
     config: dict = {
         "log": {"level": "info"},
         "inbounds": [
@@ -39,99 +56,31 @@ def generate_singbox_config(user: User, state: AppState) -> dict:
         "route": {"rules": [], "auto_detect_interface": True},
     }
 
-    # NaiveProxy outbound
-    if state.protocols.get("naiveproxy") and state.protocols["naiveproxy"].enabled:
-        config["outbounds"].append({
-            "type": "naive",
-            "tag": "naive-out",
-            "server": domain,
-            "server_port": 443,
-            "username": user.email,
-            "password": user.uuid,
-            "tls": {
-                "enabled": True,
-                "server_name": domain,
-            },
-        })
+    for p in enabled(state, PluginCategory.TRANSPORT):
+        conf_str = p.generate_client_config(user, state)
+        if not conf_str:
+            continue
+        try:
+            parsed = json.loads(conf_str)
+            for ob in parsed.get("outbounds", []):
+                config["outbounds"].append(ob)
+        except json.JSONDecodeError:
+            pass
 
-    # Mieru outbound
-    if state.protocols.get("mieru") and state.protocols["mieru"].enabled:
-        config["outbounds"].append({
-            "type": "mieru",
-            "tag": "mieru-out",
-            "server": server_ip,
-            "server_port": 8444,
-            "username": user.email,
-            "password": user.uuid[:16],
-            "mtls": True,
-        })
-
-    # AmneziaWG outbound (как WireGuard)
-    if state.protocols.get("amneziawg") and state.protocols["amneziawg"].enabled:
-        config["outbounds"].append({
-            "type": "wireguard",
-            "tag": "awg-out",
-            "server": server_ip,
-            "server_port": 51820,
-            "local_address": ["10.8.20.100/32"],
-            "private_key": "{{AWG_CLIENT_PRIVATE_KEY}}",
-            "peer_public_key": "{{AWG_SERVER_PUBLIC_KEY}}",
-            "mtu": 1420,
-        })
-
-    # Direct (fallback)
     config["outbounds"].append({"type": "direct", "tag": "direct"})
-
-    # Route: наивный трафик → Naive
-    if state.protocols.get("naiveproxy") and state.protocols["naiveproxy"].enabled:
-        config["route"]["rules"].append({
-            "outbound": "naive-out",
-            "domain": ["geosite:category-ads", "geosite:gfw"],
-        })
-
     return config
 
 
-def generate_base64_sub(user: User, state: AppState) -> str:
-    """Генерирует Base64-подписку (v2rayNG-совместимую)."""
-    links: list[str] = []
-
-    domain = state.network.domain
-    server_ip = state.network.server_ip or domain
-
-    # NaiveProxy ссылка
-    if state.protocols.get("naiveproxy") and state.protocols["naiveproxy"].enabled:
-        naive_link = (
-            f"naive+https://{user.email}:{user.uuid}@{domain}:443"
-            f"?padding=false#HYDRA-Naive"
-        )
-        links.append(naive_link)
-
-    # Mieru ссылка
-    if state.protocols.get("mieru") and state.protocols["mieru"].enabled:
-        mieru_link = (
-            f"mieru://{user.email}:{user.uuid[:16]}@{server_ip}:8444"
-            f"?mtls=true#HYDRA-Mieru"
-        )
-        links.append(mieru_link)
-
-    # AmneziaWG не имеет стандартной ссылки — пропускаем
-
-    payload = "\n".join(links)
-    return base64.b64encode(payload.encode()).decode()
-
-
-def generate_awg_client_config(user: User, state: AppState) -> str:
-    """Генерирует клиентский конфиг AmneziaWG (единый источник — плагин)."""
-    from hydra.plugins.registry import get
-    plugin = get("amneziawg")
-    if not plugin:
+def generate_client_config(user: User, state: AppState, protocol: str) -> str:
+    """Генерирует конфиг для конкретного протокола (например, AWG .conf)."""
+    p = get(protocol)
+    if not p:
         return ""
-    return plugin.generate_client_config(user, state)
+    return p.generate_client_config(user, state)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  HTTP-сервер подписок (минимальный)
+#  HTTP-сервер подписок
 # ═════════════════════════════════════════════════════════════════════════════
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -142,10 +91,10 @@ SUBSCRIPTION_PORT = 8443
 
 
 class SubscriptionHandler(BaseHTTPRequestHandler):
-    state: AppState = None  # type: ignore[assignment]
+    state: AppState = None
 
     def log_message(self, format, *args):
-        pass  # Безшумный режим
+        pass
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -156,7 +105,6 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             self.send_error(500, "Server not configured")
             return
 
-        # Проверяем токен (UUID пользователя)
         user = None
         for u in self.state.users:
             if u.uuid == token and not u.blocked:
@@ -167,14 +115,14 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             self.send_error(403, "Invalid or expired token")
             return
 
-        # Определяем формат: /sub?token=X&format=base64|singbox|awg
         fmt = params.get("format", ["singbox"])[0]
+        protocol = params.get("protocol", [None])[0]
 
         if fmt == "base64":
             content = generate_base64_sub(user, self.state)
             content_type = "text/plain; charset=utf-8"
-        elif fmt == "awg":
-            content = generate_awg_client_config(user, self.state)
+        elif fmt == "conf" and protocol:
+            content = generate_client_config(user, self.state, protocol)
             content_type = "text/plain; charset=utf-8"
         else:
             config = generate_singbox_config(user, self.state)
@@ -183,14 +131,20 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
 
         self.send_response(200)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Disposition", f"attachment; filename=hydra-{user.email}.json")
-        self.send_header("Subscription-Userinfo", f"upload=0; download={user.traffic_used_bytes}; total={int(user.traffic_limit_gb * 1073741824)}")
+        self.send_header(
+            "Content-Disposition",
+            f"attachment; filename=hydra-{user.email}.json",
+        )
+        self.send_header(
+            "Subscription-Userinfo",
+            f"upload=0; download={user.traffic_used_bytes}; "
+            f"total={int(user.traffic_limit_gb * 1073741824)}",
+        )
         self.end_headers()
         self.wfile.write(content.encode("utf-8"))
 
 
 def start_sub_server(state: AppState) -> HTTPServer:
-    """Запускает HTTP-сервер подписок в фоновом потоке."""
     SubscriptionHandler.state = state
     server = HTTPServer(("0.0.0.0", SUBSCRIPTION_PORT), SubscriptionHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)

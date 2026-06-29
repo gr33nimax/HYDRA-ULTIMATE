@@ -1,7 +1,8 @@
 """
-hydra/services/traffic.py — Учёт трафика.
+hydra/services/traffic.py — Учёт трафика v2.
 
-Агрегирует данные по трафику со всех плагинов и обновляет AppState.
+Агрегирует данные по трафику со всех плагинов (с передачей state)
+и обновляет AppState.
 """
 from __future__ import annotations
 
@@ -12,13 +13,14 @@ from hydra.plugins.registry import get_all
 def collect_traffic(state: AppState) -> dict[str, int]:
     """
     Собирает трафик со всех активных плагинов.
+    Передаёт state в plugin.traffic(state) для v2-совместимости.
     Возвращает {email: total_bytes}.
     """
     traffic: dict[str, int] = {}
 
     for plugin in get_all():
         try:
-            plugin_traffic = plugin.traffic()
+            plugin_traffic = plugin.traffic(state)
             for email, bytes_used in plugin_traffic.items():
                 traffic[email] = traffic.get(email, 0) + bytes_used
         except Exception:
@@ -49,7 +51,7 @@ def check_traffic_limits(state: AppState) -> list[str]:
     for user in state.users:
         if user.blocked:
             continue
-        limit_bytes = int(user.traffic_limit_gb * 1073741824)  # GB → bytes
+        limit_bytes = int(user.traffic_limit_gb * 1073741824)
         if limit_bytes > 0 and user.traffic_used_bytes > limit_bytes:
             exceeded.append(user.email)
 
