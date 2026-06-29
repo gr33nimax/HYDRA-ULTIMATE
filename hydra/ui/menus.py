@@ -39,6 +39,7 @@ from hydra.ui.tui import (
     clear, title, info, success, warn, error, menu, prompt, panel, kv,
     confirm, _bytes_auto, _bar, _ok,
     BANNER, GREEN, CYAN, YELLOW, RED, BOLD, DIM, WHITE, NC,
+    PANEL_W,
 )
 
 _sub_server = None
