@@ -8,6 +8,7 @@ from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
 from hydra.plugins.mieru.plugin import MieruPlugin
 from hydra.plugins.naive.plugin import NaivePlugin
 from hydra.plugins.telemt.plugin import TelemtPlugin
+from hydra.plugins.vkturn.plugin import VkTurnPlugin
 from hydra.plugins.dnscrypt.plugin import DNSCryptPlugin
 from hydra.plugins.warp.plugin import WarpPlugin
 from hydra.core.state import AppState
@@ -17,6 +18,7 @@ _PLUGINS: list[BasePlugin] = [
     MieruPlugin(),
     NaivePlugin(),
     TelemtPlugin(),
+    VkTurnPlugin(),
     DNSCryptPlugin(),
     WarpPlugin(),
 ]
