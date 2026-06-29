@@ -1,7 +1,8 @@
 """
-hydra/services/sync_agent.py — Фоновый агент синхронизации.
+hydra/services/sync_agent.py — Фоновый агент синхронизации v2.
 
 Проверяет лимиты трафика и сроки действия подписок.
+Уведомляет плагины при блокировке пользователя.
 Запускается через systemd timer каждые 5 минут.
 """
 from __future__ import annotations
@@ -18,9 +19,9 @@ from hydra.services.traffic import check_traffic_limits
 def run_sync() -> None:
     """
     Основная логика синхронизации:
-      1. Проверить лимиты трафика → заблокировать превысивших
-      2. Проверить TTL (срок действия) → заблокировать истёкших
-      3. Перегенерировать конфиги протоколов при необходимости
+      1. Проверить лимиты трафика -> заблокировать превысивших
+      2. Проверить TTL (срок действия) -> заблокировать истёкших
+      3. Уведомить плагины о блокировке
     """
     state = load_state()
 
@@ -31,6 +32,11 @@ def run_sync() -> None:
             if user.email == email and not user.blocked:
                 user.blocked = True
                 _log(f"User {email} blocked: traffic limit exceeded")
+                for p in get_enabled(state):
+                    try:
+                        p.on_user_block(user, state)
+                    except Exception:
+                        pass
 
     # 2. Проверка TTL
     now = datetime.now(timezone.utc)
@@ -44,6 +50,11 @@ def run_sync() -> None:
             if expiry < now:
                 user.blocked = True
                 _log(f"User {user.email} blocked: subscription expired")
+                for p in get_enabled(state):
+                    try:
+                        p.on_user_block(user, state)
+                    except Exception:
+                        pass
         except (ValueError, TypeError):
             pass
 
@@ -51,7 +62,6 @@ def run_sync() -> None:
 
 
 def _log(msg: str) -> None:
-    """Логирование в файл sync-агента."""
     try:
         log = Path("/var/log/hydra/sync-agent.log")
         log.parent.mkdir(parents=True, exist_ok=True)
@@ -62,7 +72,6 @@ def _log(msg: str) -> None:
         pass
 
 
-# Точка входа для systemd
 if __name__ == "__main__":
     try:
         run_sync()
