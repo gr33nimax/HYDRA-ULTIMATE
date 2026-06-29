@@ -1782,7 +1782,7 @@
 
 # \- \[x] 9.1 naive / \[x] 9.2 telemt / \[x] 9.3 vkturn / \[x] 9.4 wdtt / \[x] 9.5 olcrtc / \[x] 9.6 slipgate / \[x] 9.7 webdav
 
-# \- \[x] 10.1 dnscrypt / \[x] 10.2 warp / \[x] 10.3 porthopping / \[ ] 10.4 fail2ban / \[ ] 10.5 geoip / \[ ] 10.6 honeypot / \[ ] 10.7 ipban
+# \- \[x] 10.1 dnscrypt / \[x] 10.2 warp / \[x] 10.3 porthopping / \[x] 10.4 fail2ban / \[x] 10.5 geoip / \[x] 10.6 honeypot / \[x] 10.7 ipban
 
-# \- \[ ] 11. Тесты, доки, релиз
+# \- \[x] 11. Тесты, доки, релиз (230 тестов, README/CHANGELOG/docs обновлены, tag v2.0.0)
 

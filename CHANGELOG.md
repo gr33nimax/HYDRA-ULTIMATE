@@ -2,6 +2,35 @@
 
 ---
 
+## v2.0.0 — 29 июня 2026
+
+### Ядро
+
+- **Plugin contract v2**: категории (TRANSPORT/ENHANCEMENT/SECURITY), `configure()`/`apply()` split, per-user fan-out
+- **State v2**: User.credentials, NetworkConfig.tproxy, миграция v1→v2
+- **Orchestrator**: единый pipeline `apply_config()` = collect_fragments → generate_config → nft → write → reload
+- **Registry**: плагин-дискавери, фильтры по категориям, `collect_fragments(enabled())`
+- **nftables TPROXY**: заворот трафика транспортов в Sing-Box
+- **Mieru → reference impl**: шаблон для всех последующих транспортов
+
+### Новые плагины
+
+- **SlipGate** (TRANSPORT): DNS-туннели DNSTT/NoizeDNS/Slipstream/VayDNS
+- **WebDAV** (TRANSPORT): SOCKS5 поверх WebDAV, selfhosted/external
+- **PortHopping** (ENHANCEMENT): nftables PREROUTING REDIRECT диапазона
+- **Fail2ban** (SECURITY): защита от перебора, jails для sing-box/sshd/nginx
+- **GeoIP** (SECURITY): ipset-блокировка входящих из РФ через RIPE NCC
+- **Honeypot** (SECURITY): ловушка-порт с авто-баном через UFW
+- **IPBan** (SECURITY): ручная блокировка IP/CIDR/диапазона/ASN
+
+### Исправлено
+
+- **WARP / singbox**: удалён дублирующий `_warp_outbound()` с плейсхолдерными ключами
+- **DNSCrypt**: `install()` теперь запускает сервис, `uninstall()` удаляет пакет
+- **Sing-Box DNS**: `_dns_config()` теперь вызывается в `generate_config()` (была мёртвая функция)
+
+---
+
 ## 🔁 Telemt: фикс reload-фоллбэка и проба живых ME-серверов — 24 июня 2026
 
 ### Исправлено
