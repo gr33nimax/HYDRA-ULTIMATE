@@ -28,7 +28,7 @@ AWG_PARAMS = AWG_CONF_DIR / "params"
 AWG_INTERFACE = "awg0"
 AWG_UNIT = "awg-quick@awg0"
 
-DEFAULT_NETWORK = "10.66.66.0/24"
+DEFAULT_NETWORK = "10.67.67.0/24"
 DEFAULT_PORT = 51820
 DEFAULT_OBFUSCATION = {
     "Jc": "4", "Jmin": "40", "Jmax": "70",
@@ -257,6 +257,7 @@ class AmneziaWGPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def on_user_add(self, user: User, state: AppState) -> None:
+        self._ensure_forward()
         self.configure(state)
         self.apply(state)
 
@@ -267,6 +268,7 @@ class AmneziaWGPlugin(BasePlugin):
     def on_user_block(self, user: User, state: AppState) -> None:
         self.configure(state)
         self.apply(state)
+        self._ensure_forward()
 
     # ═════════════════════════════════════════════════════════════════════
     #  Клиентский конфиг
@@ -422,8 +424,10 @@ class AmneziaWGPlugin(BasePlugin):
         if not self._is_up():
             subprocess.run(["systemctl", "enable", "--now", AWG_UNIT], capture_output=True)
         self._ensure_nat()
+        self._ensure_forward()
 
     def on_disable(self, state: AppState) -> None:
+        self._remove_forward()
         self._remove_nat()
         subprocess.run(["systemctl", "stop", AWG_UNIT], capture_output=True)
 
@@ -463,6 +467,45 @@ class AmneziaWGPlugin(BasePlugin):
         subprocess.run(
             ["iptables", "-t", "nat", "-D", "POSTROUTING",
              "-s", network, "-o", iface, "-j", "MASQUERADE"],
+            capture_output=True,
+        )
+
+    def _ensure_forward(self):
+        """Добавляет ACCEPT в FORWARD и MSS clamping для AWG (иначе policy drop и MTU)."""
+        for rule in (["-i", AWG_INTERFACE], ["-o", AWG_INTERFACE]):
+            r = subprocess.run(
+                ["iptables", "-C", "FORWARD", *rule, "-j", "ACCEPT"],
+                capture_output=True,
+            )
+            if r.returncode != 0:
+                subprocess.run(
+                    ["iptables", "-I", "FORWARD", *rule, "-j", "ACCEPT"],
+                    capture_output=True,
+                )
+
+        # MSS clamping для трафика от AWG в интернет (AWG оверхед > MTU ens3)
+        for rule in (
+            ["-i", AWG_INTERFACE, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN"],
+        ):
+            r = subprocess.run(
+                ["iptables", "-t", "mangle", "-C", "FORWARD", *rule, "-j", "TCPMSS", "--clamp-mss-to-pmtu"],
+                capture_output=True,
+            )
+            if r.returncode != 0:
+                subprocess.run(
+                    ["iptables", "-t", "mangle", "-I", "FORWARD", *rule, "-j", "TCPMSS", "--clamp-mss-to-pmtu"],
+                    capture_output=True,
+                )
+
+    def _remove_forward(self):
+        """Удаляет ACCEPT-правила AWG из FORWARD и mangle."""
+        for rule in (["-i", AWG_INTERFACE], ["-o", AWG_INTERFACE]):
+            subprocess.run(
+                ["iptables", "-D", "FORWARD", *rule, "-j", "ACCEPT"],
+                capture_output=True,
+            )
+        subprocess.run(
+            ["iptables", "-t", "mangle", "-D", "FORWARD", "-i", AWG_INTERFACE, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu"],
             capture_output=True,
         )
 

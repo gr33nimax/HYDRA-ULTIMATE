@@ -114,10 +114,12 @@ def test_on_user_add_triggers_apply():
 
     with patch("hydra.plugins.amneziawg.plugin.AWG_CONF") as mock_conf, \
          patch.object(p, "_awg") as mock_awg, \
-         patch.object(p, "_is_up", return_value=True):
+         patch.object(p, "_is_up", return_value=True), \
+         patch("hydra.plugins.amneziawg.plugin.subprocess.run") as mock_run:
         mock_conf.exists.return_value = True
         mock_conf.read_text.return_value = FAKE_CONF
         mock_awg.return_value = MagicMock(stdout="mock_pubkey\n", returncode=0)
+        mock_run.return_value = MagicMock(returncode=0)
 
         p.on_user_add(user, state)
         mock_conf.write_text.assert_called_once()

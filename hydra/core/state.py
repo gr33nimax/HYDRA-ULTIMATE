@@ -113,9 +113,14 @@ def _from_dict(cls, data: dict):
     """Рекурсивно создаёт dataclass из словаря."""
     if cls is dict:
         return data
-    if hasattr(cls, "__origin__") and cls.__origin__ is list:
-        item_cls = cls.__args__[0]
-        return [_from_dict(item_cls, item) for item in data]
+    origin = getattr(cls, "__origin__", None)
+    if origin:
+        if origin is list:
+            item_cls = cls.__args__[0]
+            return [_from_dict(item_cls, item) for item in data]
+        if origin is dict:
+            val_cls = cls.__args__[1]
+            return {k: _from_dict(val_cls, v) for k, v in data.items()}
     if hasattr(cls, "__dataclass_fields__"):
         # Разрешаем строковые аннотации (from __future__ import annotations)
         try:
