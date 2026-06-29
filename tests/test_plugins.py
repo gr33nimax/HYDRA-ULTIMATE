@@ -1,12 +1,10 @@
-"""
-tests/test_plugins.py — Тесты для плагинной системы.
-"""
+"""tests/test_plugins.py — Тесты для плагинной системы."""
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, ConfigFragment
-from hydra.core.state import AppState, ProtocolState
+from hydra.core.state import AppState, PluginState
 
 
 class MockPlugin(BasePlugin):

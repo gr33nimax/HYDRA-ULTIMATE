@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from hydra.core.state import AppState, ProtocolState, load_state, save_state
+from hydra.core.state import AppState, PluginState, load_state, save_state
 
 SINGBOX_BIN = Path("/usr/local/bin/sing-box")
 SINGBOX_CONFIG = Path("/etc/sing-box/config.json")

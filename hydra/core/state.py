@@ -15,7 +15,7 @@ from typing import Optional, get_type_hints
 
 STATE_DIR = Path("/var/lib/hydra")
 STATE_FILE = STATE_DIR / "state.json"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _lock = threading.Lock()
 
@@ -25,8 +25,8 @@ _lock = threading.Lock()
 # ═════════════════════════════════════════════════════════════════════════════
 
 @dataclass
-class ProtocolState:
-    """Состояние одного протокола."""
+class PluginState:
+    """Состояние одного плагина (транспорт / надстройка / безопасность)."""
     enabled: bool = False
     port: int = 0
     installed: bool = False
@@ -44,6 +44,9 @@ class User:
     blocked: bool = False
     created_at: str = ""
     telegram_id: Optional[int] = None
+    credentials: dict[str, dict] = field(default_factory=dict)
+    # Per-user секреты по имени плагина.
+    # Пример: user.credentials["mieru"] = {"username": "...", "password": "..."}
 
 
 @dataclass
@@ -66,6 +69,8 @@ class NetworkConfig:
     warp_enabled: bool = False
     dnscrypt_enabled: bool = False
     dnscrypt_port: int = 5300
+    tproxy_enabled: bool = False
+    tproxy_port: int = 1081   # порт dokodemo-door sing-box для TPROXY
 
 
 @dataclass
@@ -82,7 +87,7 @@ class AppState:
     """Корневое состояние приложения."""
     version: int = SCHEMA_VERSION
     install: dict = field(default_factory=dict)            # install_mode, server_country, etc.
-    protocols: dict[str, ProtocolState] = field(default_factory=dict)
+    protocols: dict[str, PluginState] = field(default_factory=dict)
     users: list[User] = field(default_factory=list)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
@@ -165,6 +170,14 @@ def _migrate(data: dict, from_version: int) -> dict:
         data.setdefault("telegram", data.get("telegram", {}))
         data.setdefault("network", data.get("network", {}))
         data.setdefault("security", data.get("security", {}))
+    # v1 → v2: per-user credentials + tproxy
+    if from_version < 2:
+        for u in data.get("users", []):
+            u.setdefault("credentials", {})
+        net = data.setdefault("network", {})
+        net.setdefault("tproxy_enabled", False)
+        net.setdefault("tproxy_port", 1081)
+        data["version"] = 2
     return data
 
 
@@ -172,10 +185,10 @@ def _migrate(data: dict, from_version: int) -> dict:
 #  Удобные хелперы
 # ═════════════════════════════════════════════════════════════════════════════
 
-def get_protocol(state: AppState, name: str) -> ProtocolState:
+def get_protocol(state: AppState, name: str) -> PluginState:
     """Возвращает состояние протокола (создаёт, если нет)."""
     if name not in state.protocols:
-        state.protocols[name] = ProtocolState()
+        state.protocols[name] = PluginState()
     return state.protocols[name]
 
 

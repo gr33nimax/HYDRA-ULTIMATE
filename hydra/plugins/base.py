@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
 
-from hydra.core.state import AppState, ProtocolState
+from hydra.core.state import AppState, PluginState
 
 
 @dataclass

@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.core.state import (
-    AppState, ProtocolState, User, TelegramConfig, NetworkConfig, SecurityConfig,
+    AppState, PluginState, User, TelegramConfig, NetworkConfig, SecurityConfig,
     load_state, save_state, find_user, add_user, get_protocol,
     STATE_FILE,
 )
@@ -18,7 +18,7 @@ from hydra.core.state import (
 def test_app_state_defaults():
     """Пустое состояние имеет корректные значения по умолчанию."""
     state = AppState()
-    assert state.version == 1
+    assert state.version == 2
     assert state.protocols == {}
     assert state.users == []
     assert isinstance(state.telegram, TelegramConfig)
@@ -62,7 +62,7 @@ def test_get_protocol_creates():
     """get_protocol создаёт протокол, если его нет."""
     state = AppState()
     proto = get_protocol(state, "naiveproxy")
-    assert isinstance(proto, ProtocolState)
+    assert isinstance(proto, PluginState)
     assert not proto.enabled
     assert "naiveproxy" in state.protocols
 
@@ -87,7 +87,7 @@ def test_save_and_load():
             save_state(state)
             loaded = load_state()
 
-            assert loaded.version == 1
+            assert loaded.version == 2
             assert loaded.network.domain == "example.com"
             assert len(loaded.users) == 1
             assert loaded.users[0].email == "test@example.com"
@@ -106,9 +106,9 @@ def test_user_blocking():
     assert state.users[0].blocked is True
 
 
-def test_protocol_state():
-    """Состояние протокола."""
-    proto = ProtocolState()
+def test_plugin_state():
+    """Состояние плагина (переименован из ProtocolState → PluginState)."""
+    proto = PluginState()
     assert not proto.enabled
     assert proto.port == 0
     assert not proto.installed
@@ -118,3 +118,76 @@ def test_protocol_state():
     proto.installed = True
     assert proto.enabled
     assert proto.port == 8443
+
+
+def test_roundtrip_with_credentials():
+    """Сохранение и загрузка User с credentials → поля совпадают."""
+    state = AppState()
+    user = User(
+        email="cred@example.com",
+        uuid="cred-uuid-111",
+        credentials={"mieru": {"username": "u_abc", "password": "p_xyz"}},
+    )
+    add_user(state, user)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        import hydra.core.state as state_mod
+        orig_file = state_mod.STATE_FILE
+        orig_dir = state_mod.STATE_DIR
+        try:
+            state_mod.STATE_DIR = Path(tmp)
+            state_mod.STATE_FILE = Path(tmp) / "state.json"
+
+            save_state(state)
+            loaded = load_state()
+        finally:
+            state_mod.STATE_FILE = orig_file
+            state_mod.STATE_DIR = orig_dir
+
+    assert len(loaded.users) == 1
+    u = loaded.users[0]
+    assert u.email == "cred@example.com"
+    assert u.credentials == {"mieru": {"username": "u_abc", "password": "p_xyz"}}
+
+
+def test_migrate_v1_to_v2():
+    """Подать v1-словарь без credentials/tproxy → после load_state версия 2, поля есть."""
+    v1_data = {
+        "version": 1,
+        "install": {},
+        "protocols": {},
+        "users": [
+            {"email": "old@example.com", "uuid": "old-uuid",
+             "traffic_limit_gb": 5, "traffic_used_bytes": 0,
+             "expiry_date": "", "blocked": False,
+             "created_at": "", "telegram_id": None}
+        ],
+        "telegram": {},
+        "network": {"domain": "", "server_ip": ""},
+        "security": {},
+    }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        import hydra.core.state as state_mod
+        orig_file = state_mod.STATE_FILE
+        orig_dir = state_mod.STATE_DIR
+        try:
+            state_mod.STATE_DIR = Path(tmp)
+            state_mod.STATE_FILE = Path(tmp) / "state.json"
+
+            import json as _json
+            (Path(tmp) / "state.json").write_text(
+                _json.dumps(v1_data), encoding="utf-8"
+            )
+            loaded = load_state()
+        finally:
+            state_mod.STATE_FILE = orig_file
+            state_mod.STATE_DIR = orig_dir
+
+    # Версия должна мигрировать до 2
+    assert loaded.version == 2
+    # credentials добавлены каждому пользователю
+    assert loaded.users[0].credentials == {}
+    # tproxy-поля появились в NetworkConfig
+    assert loaded.network.tproxy_enabled is False
+    assert loaded.network.tproxy_port == 1081
