@@ -16,6 +16,10 @@ from hydra.plugins.warp.plugin import WarpPlugin
 from hydra.plugins.slipgate.plugin import SlipGatePlugin
 from hydra.plugins.webdav.plugin import WebdavPlugin
 from hydra.plugins.porthopping.plugin import PortHoppingPlugin
+from hydra.plugins.fail2ban.plugin import Fail2banPlugin
+from hydra.plugins.geoip.plugin import GeoIPPlugin
+from hydra.plugins.honeypot.plugin import HoneypotPlugin
+from hydra.plugins.ipban.plugin import IPBanPlugin
 from hydra.core.state import AppState
 
 _PLUGINS: list[BasePlugin] = [
@@ -31,6 +35,10 @@ _PLUGINS: list[BasePlugin] = [
     SlipGatePlugin(),
     WebdavPlugin(),
     PortHoppingPlugin(),
+    Fail2banPlugin(),
+    GeoIPPlugin(),
+    HoneypotPlugin(),
+    IPBanPlugin(),
 ]
 
 
