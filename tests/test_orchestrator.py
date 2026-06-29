@@ -168,6 +168,28 @@ def test_add_user_skips_disabled_transport():
     assert mock.added_users == []
 
 
+def test_unblock_user_reenables():
+    state, mock = _state_with_mock_transport()
+    user = User(email="bob@test", uuid="uuid-2")
+    state.users.append(user)
+    user.blocked = True
+
+    with (
+        patch("hydra.core.orchestrator.registry.transports", return_value=[mock]),
+        patch("hydra.core.orchestrator.registry.collect_fragments", return_value={}),
+        patch("hydra.core.orchestrator.singbox.generate_config", return_value={}),
+        patch("hydra.core.orchestrator.singbox.write_config", return_value=True),
+        patch("hydra.core.orchestrator.singbox.reload", return_value=True),
+        patch("hydra.core.orchestrator.nft.clear_tproxy"),
+        patch("hydra.core.orchestrator.save_state"),
+    ):
+        from hydra.core import orchestrator
+        orchestrator.unblock_user(state, "bob@test")
+
+    assert user.blocked is False
+    assert "bob@test" in mock.added_users
+
+
 def test_apply_config_calls_tproxy_when_enabled():
     state = AppState()
     state.network = NetworkConfig(tproxy_enabled=True, tproxy_port=1081)

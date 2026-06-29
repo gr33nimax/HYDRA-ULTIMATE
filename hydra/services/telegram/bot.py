@@ -27,6 +27,7 @@ from hydra.services.subscriptions.generator import (
     generate_singbox_config, generate_base64_sub, generate_client_config,
     generate_links,
 )
+from hydra.core import orchestrator
 from hydra.services.traffic import collect_traffic
 from hydra.plugins.registry import status_all
 
@@ -144,8 +145,7 @@ class AdminBot:
             traffic_limit_gb=0,
             created_at=datetime.now().isoformat(),
         )
-        add_user(state, user)
-        save_state(state)
+        orchestrator.add_user(state, user)
 
         await update.message.reply_text(
             f"Пользователь `{email}` создан.\n"
@@ -167,8 +167,7 @@ class AdminBot:
             await update.message.reply_text(f"Пользователь `{email}` не найден.")
             return
 
-        state.users.remove(user)
-        save_state(state)
+        orchestrator.remove_user(state, email)
         await update.message.reply_text(f"Пользователь `{email}` удалён.", parse_mode="Markdown")
 
     def run(self):

@@ -1,5 +1,6 @@
 """tests/test_plugins.py — Тесты для плагинной системы."""
 from pathlib import Path
+from unittest.mock import patch
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -86,6 +87,17 @@ def test_plugin_on_enable_disable():
     # Эти методы не должны падать
     plugin.on_enable(state)
     plugin.on_disable(state)
+
+
+def test_status_all_returns_all_plugins():
+    """status_all возвращает статусы всех зарегистрированных плагинов."""
+    from hydra.plugins.registry import status_all
+    with patch("hydra.plugins.registry._PLUGINS", [MockPlugin()]):
+        result = status_all()
+    assert isinstance(result, dict)
+    assert "mock" in result
+    assert result["mock"]["running"] is True
+    assert result["mock"]["installed"] is True
 
 
 def test_config_fragment_empty():

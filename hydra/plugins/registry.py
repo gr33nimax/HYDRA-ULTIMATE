@@ -58,6 +58,20 @@ def collect_fragments(state: AppState) -> dict[str, ConfigFragment]:
     return fragments
 
 
+def status_all() -> dict[str, dict]:
+    """Возвращает {name: {running, installed, port, enabled}} для всех плагинов."""
+    result: dict[str, dict] = {}
+    for p in _PLUGINS:
+        s = p.status()
+        result[p.meta.name] = {
+            "running": s.running,
+            "installed": s.installed,
+            "port": s.port,
+            "enabled": s.enabled,
+        }
+    return result
+
+
 # Обратная совместимость
 get_all = all_plugins
 get_enabled = enabled

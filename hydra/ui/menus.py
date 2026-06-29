@@ -23,8 +23,8 @@ from hydra.plugins.registry import (
     get_all, get_enabled, collect_fragments,
     status_all,
 )
-from hydra.plugins.base import ConfigFragment
 from hydra.core.systemd import install_service, install_timer, remove_unit
+from hydra.core import orchestrator
 from hydra.services.subscriptions.generator import start_sub_server
 from hydra.services.traffic import collect_traffic
 from hydra.ui.tui import (
@@ -163,10 +163,7 @@ def menu_core(state: AppState):
             prompt("Нажмите Enter")
         elif choice == "3":
             info("Собираю конфиг...")
-            frag_dicts = {}
-            for n, f in collect_fragments(state).items():
-                frag_dicts[n] = {"inbounds": f.inbounds, "outbounds": f.outbounds, "route_rules": f.route_rules}
-            cfg = generate_config(state, frag_dicts)
+            cfg = generate_config(state, collect_fragments(state))
             if write_config(cfg):
                 success("Конфиг записан")
                 if reload_singbox():
@@ -207,9 +204,7 @@ def menu_protocols(state: AppState):
         if choice == "0":
             return
         elif choice.upper() == "A":
-            fd = {n: {"inbounds": f.inbounds, "outbounds": f.outbounds, "route_rules": f.route_rules}
-                  for n, f in collect_fragments(state).items()}
-            cfg = generate_config(state, fd)
+            cfg = generate_config(state, collect_fragments(state))
             if write_config(cfg):
                 success("Конфиг применён")
                 reload_singbox()
@@ -301,8 +296,8 @@ def menu_plugin_awg(state: AppState, plugin):
         network = config.get("network", "10.8.20.0/24")
 
         # Трафик и пиры
-        traffic = plugin.traffic()
-        peers = plugin.connected_peers()
+        traffic = plugin.traffic(state)
+        peers = plugin.connected_clients()
         total_bytes = sum(traffic.values())
 
         if s.installed:
@@ -393,11 +388,11 @@ def _awg_peers_menu(state: AppState, plugin):
     while True:
         clear()
         users = [u for u in state.users if not u.blocked]
-        peers = {p["email"]: p for p in plugin.connected_peers()}
+    peers = {p["email"]: p for p in plugin.connected_clients()}
 
-        peer_lines = []
-        for u in users:
-            p = peers.get(u.email)
+    peer_lines = []
+    for u in users:
+        p = peers.get(u.email)
             ico = f"{GREEN}●{NC}" if (p and p["online"]) else f"{DIM}○{NC}"
             tx = _bytes((p["rx"] + p["tx"]) if p else 0)
             peer_lines.append(f"  {ico} {u.email}")
@@ -475,8 +470,8 @@ def _awg_generate_config(state: AppState, plugin):
 
 def _awg_status_detail(state: AppState, plugin):
     clear()
-    traffic = plugin.traffic()
-    peers = {p["email"]: p for p in plugin.connected_peers()}
+    traffic = plugin.traffic(state)
+    peers = {p["email"]: p for p in plugin.connected_clients()}
 
     status_lines = []
     for u in state.users:
@@ -582,9 +577,7 @@ def _add_user(state: AppState):
             datetime.now().timestamp() + int(ttl) * 86400).isoformat()),
         created_at=datetime.now().isoformat(),
     )
-    add_user(state, user)
-    save_state(state)
-    # TODO: orchestrator.add_user fan-out вместо _resync_awg (этап 8)
+    orchestrator.add_user(state, user)
     success(f"{email} создан (UUID: {user.uuid[:16]}...)")
     prompt("Нажмите Enter")
 
@@ -606,9 +599,7 @@ def _delete_user(state: AppState):
         idx = int(prompt("Номер для удаления", "0")) - 1
         if 0 <= idx < len(state.users):
             u = state.users[idx]
-            state.users.remove(u)
-            save_state(state)
-            # TODO: orchestrator.remove_user fan-out вместо _resync_awg (этап 8)
+            orchestrator.remove_user(state, u.email)
             success(f"{u.email} удалён.")
         else:
             warn("Неверный номер.")
@@ -632,10 +623,12 @@ def _toggle_block(state: AppState):
         idx = int(prompt("Номер", "0")) - 1
         if 0 <= idx < len(state.users):
             u = state.users[idx]
-            u.blocked = not u.blocked
-            save_state(state)
-            # TODO: orchestrator.block_user fan-out вместо _resync_awg (этап 8)
-            success(f"{u.email} {'заблокирован' if u.blocked else 'разблокирован'}.")
+            if u.blocked:
+                orchestrator.unblock_user(state, u.email)
+                success(f"{u.email} разблокирован.")
+            else:
+                orchestrator.block_user(state, u.email)
+                success(f"{u.email} заблокирован.")
         else:
             warn("Неверный номер.")
     except ValueError:
@@ -698,9 +691,7 @@ def _sync_all_protocols(state: AppState):
     for p in get_enabled(state):
         try:
             p.configure(state)
-            # Применить конфиг без down/up — setconf работает на живом интерфейсе
-            if p.meta.name == "amneziawg" and p.status().running:
-                p._up()
+            p.apply(state)
             success(f"  {p.meta.name}: обновлён")
         except Exception as e:
             warn(f"  {p.meta.name}: {e}")

@@ -108,3 +108,18 @@ def block_user(state: AppState, email: str) -> None:
                 pass
     save_state(state)
     apply_config(state)
+
+
+def unblock_user(state: AppState, email: str) -> None:
+    u = find_user(state, email)
+    if not u:
+        return
+    u.blocked = False
+    for p in registry.transports():
+        if state.protocols.get(p.meta.name) and state.protocols[p.meta.name].enabled:
+            try:
+                p.on_user_add(u, state)
+            except Exception:
+                pass
+    save_state(state)
+    apply_config(state)
