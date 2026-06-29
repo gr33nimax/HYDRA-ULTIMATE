@@ -1,23 +1,17 @@
 """
 hydra/plugins/amneziawg/plugin.py — AmneziaWG 2.0 (wiresock kernel-модуль).
 
-Модель (единый источник истины):
-  • /etc/amnezia/amneziawg/awg0.conf — авторитетный конфиг сервера.
-    Секция [Interface] (ключи сервера, порт, обфускация, nft PostUp) НЕ трогается.
-    Секции [Peer] ПОЛНОСТЬЮ перегенерируются из списка пользователей HYDRA.
-  • Ключи и PSK пира ДЕТЕРМИНИРОВАННО выводятся из user.uuid —
-    сервер и клиент всегда согласованы, хранить нечего.
-  • IP пира стабилен: берётся из существующей [Peer]-секции, новым — первый свободный.
-  • Применение вживую без разрыва туннеля: awg syncconf awg0 <(awg-quick strip awg0).
-  • Интерфейс поднимается/переживает ребут через systemd awg-quick@awg0.
-
-Поток данных: клиент → awg0 (kernel) → nft NAT (из PostUp) → интернет.
+Контракт v2:
+  • configure() — ЧИСТАЯ: генерит секции [Peer] в памяти, не трогает систему.
+  • apply() — пишет awg0.conf, применяет syncconf / поднимает интерфейс.
+  • per-user: on_user_add/remove/block → пересборка + apply.
+  • traffic(state) — строит pub→email из state.users.
+  • connected_clients() — без PEER_MAP, использует self._peer_map.
 """
 from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import re
 import shutil
 import subprocess
@@ -34,17 +28,12 @@ AWG_PARAMS = AWG_CONF_DIR / "params"
 AWG_INTERFACE = "awg0"
 AWG_UNIT = "awg-quick@awg0"
 
-# Карта pubkey→email для перевода трафика (traffic() не получает state).
-PEER_MAP = Path("/var/lib/hydra/awg_peers.json")
-
-# Дефолты, если awg0.conf ещё не создан.
 DEFAULT_NETWORK = "10.66.66.0/24"
 DEFAULT_PORT = 51820
 DEFAULT_OBFUSCATION = {
     "Jc": "4", "Jmin": "40", "Jmax": "70",
     "S1": "8", "S2": "72",
 }
-# Поля [Interface], которые копируются в клиентский конфиг как есть.
 OBFUSCATION_KEYS = ["Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4",
                     "H1", "H2", "H3", "H4"]
 
@@ -55,7 +44,12 @@ class AmneziaWGPlugin(BasePlugin):
         description="AmneziaWG 2.0: WireGuard с обфускацией (kernel-модуль)",
         category=PluginCategory.TRANSPORT,
         version="2.0.0",
+        needs_domain=False,
     )
+
+    def __init__(self):
+        self._pending_conf: str | None = None
+        self._peer_map: dict[str, str] = {}
 
     # ═════════════════════════════════════════════════════════════════════
     #  Установка / удаление
@@ -111,23 +105,19 @@ class AmneziaWGPlugin(BasePlugin):
             "/usr/local/bin/awg", "/usr/local/bin/awg-quick",
             str(AWG_INSTALL_DIR),
         ], capture_output=True)
-        PEER_MAP.unlink(missing_ok=True)
         return True
 
     # ═════════════════════════════════════════════════════════════════════
-    #  Конфигурация пиров (awg0.conf — источник истины)
+    #  configure — чистая: генерит конфиг в памяти, без side-effects
     # ═════════════════════════════════════════════════════════════════════
 
     def configure(self, state: AppState) -> ConfigFragment:
-        """
-        Приводит набор пиров awg0.conf и живого интерфейса в точное
-        соответствие незаблокированным пользователям. Идемпотентно.
-        """
+        """Собирает секции [Peer] из state.users. НЕ пишет файл, не вызывает syncconf."""
         if not AWG_CONF.exists():
             return ConfigFragment()
 
         iface_block = self._interface_block()
-        existing_ips = self._existing_peer_ips()        # {pubkey: octet}
+        existing_ips = self._existing_peer_ips()
         base, server_octet, network = self._network()
 
         used = set(existing_ips.values()) | {server_octet}
@@ -156,14 +146,20 @@ class AmneziaWGPlugin(BasePlugin):
                 "",
             ]
 
-        AWG_CONF.write_text("\n".join(blocks) + "\n")
-        AWG_CONF.chmod(0o600)
-        self._write_peer_map(peer_map)
-        self._apply()
+        self._pending_conf = "\n".join(blocks) + "\n"
+        self._peer_map = peer_map
 
         return ConfigFragment(
             route_rules=[{"ip_cidr": [network], "outbound": "direct"}],
         )
+
+    def apply(self, state: AppState) -> bool:
+        """Пишет awg0.conf и применяет syncconf / поднимает интерфейс."""
+        if not self._pending_conf:
+            return False
+        AWG_CONF.write_text(self._pending_conf)
+        AWG_CONF.chmod(0o600)
+        return self._apply()
 
     def _apply(self) -> bool:
         """Применяет awg0.conf без разрыва туннеля (или поднимает интерфейс)."""
@@ -257,6 +253,22 @@ class AmneziaWGPlugin(BasePlugin):
         return self._awg("pubkey", _input=m.group(1)).stdout.strip()
 
     # ═════════════════════════════════════════════════════════════════════
+    #  Per-user TRANSPORT-методы
+    # ═════════════════════════════════════════════════════════════════════
+
+    def on_user_add(self, user: User, state: AppState) -> None:
+        self.configure(state)
+        self.apply(state)
+
+    def on_user_remove(self, user: User, state: AppState) -> None:
+        self.configure(state)
+        self.apply(state)
+
+    def on_user_block(self, user: User, state: AppState) -> None:
+        self.configure(state)
+        self.apply(state)
+
+    # ═════════════════════════════════════════════════════════════════════
     #  Клиентский конфиг
     # ═════════════════════════════════════════════════════════════════════
 
@@ -265,8 +277,8 @@ class AmneziaWGPlugin(BasePlugin):
         if not AWG_CONF.exists():
             return ""
 
-        # Убедиться, что пир этого юзера создан и IP назначен.
         self.configure(state)
+        self.apply(state)
 
         pub = self._derive_pubkey(user.uuid)
         ip = self._existing_peer_ips().get(pub)
@@ -352,48 +364,52 @@ class AmneziaWGPlugin(BasePlugin):
         )
 
     def traffic(self, state: AppState) -> dict[str, int]:
-        """{email: bytes}. Переводит pubkey→email по карте, сохранённой в configure()."""
+        """{email: bytes}. Строит pubkey→email из state.users."""
         if not self._installed() or not self._is_up():
             return {}
         r = self._awg("show", AWG_INTERFACE, "transfer")
         if r.returncode != 0:
             return {}
-        peer_map = self._read_peer_map()
+
+        pub_to_email = {
+            self._derive_pubkey(u.uuid): u.email
+            for u in state.users if not u.blocked
+        }
+
         result: dict[str, int] = {}
         for line in r.stdout.strip().splitlines():
             parts = line.split()
             if len(parts) >= 3:
                 pub, rx, tx = parts[0], parts[1], parts[2]
-                email = peer_map.get(pub)
+                email = pub_to_email.get(pub)
                 if email:
                     result[email] = result.get(email, 0) + int(rx) + int(tx)
         return result
 
-    def connected_peers(self) -> list[dict]:
+    def connected_clients(self) -> list[dict]:
         """Список пиров с email, трафиком и последним рукопожатием."""
         if not self._installed() or not self._is_up():
             return []
         r = self._awg("show", AWG_INTERFACE, "dump")
         if r.returncode != 0:
             return []
-        peer_map = self._read_peer_map()
-        peers: list[dict] = []
-        for line in r.stdout.strip().splitlines()[1:]:  # первая строка — интерфейс
+        clients: list[dict] = []
+        for line in r.stdout.strip().splitlines()[1:]:
             p = line.split("\t")
             if len(p) < 8:
                 continue
             pub = p[0]
             handshake = int(p[4]) if p[4].isdigit() else 0
-            peers.append({
+            clients.append({
                 "pubkey": pub,
-                "email": peer_map.get(pub, "?"),
+                "email": self._peer_map.get(pub, "?"),
                 "endpoint": p[2],
                 "last_handshake": handshake,
                 "online": handshake > 0,
                 "rx": int(p[5]) if p[5].isdigit() else 0,
                 "tx": int(p[6]) if p[6].isdigit() else 0,
             })
-        return peers
+        return clients
 
     # ═════════════════════════════════════════════════════════════════════
     #  Управление интерфейсом
@@ -401,6 +417,7 @@ class AmneziaWGPlugin(BasePlugin):
 
     def on_enable(self, state: AppState) -> None:
         self.configure(state)
+        self.apply(state)
         if not self._is_up():
             subprocess.run(["systemctl", "enable", "--now", AWG_UNIT], capture_output=True)
 
@@ -438,7 +455,7 @@ class AmneziaWGPlugin(BasePlugin):
 
     def _awg(self, *args, _input: str = "") -> subprocess.CompletedProcess:
         bin_path = shutil.which("awg") or str(AWG_BIN)
-        kw = {"capture_output": True, "text": True}
+        kw: dict = {"capture_output": True, "text": True}
         if _input:
             kw["input"] = _input
         return subprocess.run([bin_path, *args], **kw)
@@ -450,16 +467,3 @@ class AmneziaWGPlugin(BasePlugin):
             capture_output=True, text=True,
         )
         return r.stdout.strip() if r.returncode == 0 else "127.0.0.1"
-
-    def _write_peer_map(self, peer_map: dict[str, str]) -> None:
-        try:
-            PEER_MAP.parent.mkdir(parents=True, exist_ok=True)
-            PEER_MAP.write_text(json.dumps(peer_map))
-        except Exception:
-            pass
-
-    def _read_peer_map(self) -> dict[str, str]:
-        try:
-            return json.loads(PEER_MAP.read_text())
-        except Exception:
-            return {}

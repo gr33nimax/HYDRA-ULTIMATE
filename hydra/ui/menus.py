@@ -20,7 +20,7 @@ from hydra.core.singbox import (
     is_installed as singbox_installed, get_version as singbox_version,
 )
 from hydra.plugins.registry import (
-    get_all, get as get_plugin, get_enabled, collect_fragments,
+    get_all, get_enabled, collect_fragments,
     status_all,
 )
 from hydra.plugins.base import ConfigFragment
@@ -49,16 +49,6 @@ def _bytes(v: int) -> str:
 
 def _ok(ok: bool) -> str:
     return f"{GREEN}✓{NC}" if ok else f"{RED}✗{NC}"
-
-
-def _resync_awg(state: AppState) -> None:
-    """Приводит пиры AWG в соответствие с текущим списком пользователей."""
-    awg = get_plugin("amneziawg")
-    if awg and awg.status().installed:
-        try:
-            awg.configure(state)
-        except Exception:
-            pass
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -231,10 +221,7 @@ def menu_protocols(state: AppState):
                 idx = int(choice) - 1
                 if 0 <= idx < len(plugins):
                     p = plugins[idx]
-                    if p.meta.name == "amneziawg":
-                        menu_plugin_awg(state, p)
-                    else:
-                        menu_plugin(state, p)
+                    menu_plugin(state, p)
             except ValueError:
                 pass
 
@@ -597,7 +584,7 @@ def _add_user(state: AppState):
     )
     add_user(state, user)
     save_state(state)
-    _resync_awg(state)
+    # TODO: orchestrator.add_user fan-out вместо _resync_awg (этап 8)
     success(f"{email} создан (UUID: {user.uuid[:16]}...)")
     prompt("Нажмите Enter")
 
@@ -621,7 +608,7 @@ def _delete_user(state: AppState):
             u = state.users[idx]
             state.users.remove(u)
             save_state(state)
-            _resync_awg(state)
+            # TODO: orchestrator.remove_user fan-out вместо _resync_awg (этап 8)
             success(f"{u.email} удалён.")
         else:
             warn("Неверный номер.")
@@ -647,7 +634,7 @@ def _toggle_block(state: AppState):
             u = state.users[idx]
             u.blocked = not u.blocked
             save_state(state)
-            _resync_awg(state)
+            # TODO: orchestrator.block_user fan-out вместо _resync_awg (этап 8)
             success(f"{u.email} {'заблокирован' if u.blocked else 'разблокирован'}.")
         else:
             warn("Неверный номер.")
