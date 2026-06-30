@@ -344,19 +344,11 @@ def menu_protocols(state: AppState):
             opts.append((str(i),
                          f"{ico} {p.meta.name}",
                          f"порт {s['port']}" if s.get("port") else "не установлен"))
-        opts += [("-", "", ""), ("A", "🔄 Применить конфиг", ""), ("0", "↩ Назад", "")]
+        opts += [("-", "", ""), ("0", "↩ Назад", "")]
 
         choice = menu(opts, "УПРАВЛЕНИЕ ПРОТОКОЛАМИ")
         if choice == "0":
             return
-        elif choice.upper() == "A":
-            cfg = generate_config(state, collect_fragments(state))
-            if write_config(cfg):
-                success("Конфиг применён")
-                reload_singbox()
-            else:
-                error("Ошибка конфига")
-            prompt("Нажмите Enter")
         else:
             try:
                 idx = int(choice) - 1
