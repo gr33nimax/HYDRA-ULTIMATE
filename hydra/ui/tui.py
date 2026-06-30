@@ -150,8 +150,14 @@ def panel(title_text: str, lines: list[str]):
     print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{WHITE}{title_fit}{NC}{' ' * pad_right}{CYAN}║{NC}")
     print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
     for line in lines:
-        line_fit, line_w = _fit_line(line, inner - 2)
-        pad = inner - 2 - line_w
+        plain_line = _strip(line).strip()
+        if plain_line and all(c in "─-" for c in plain_line):
+            line_fit = f"{DIM}{'─' * (inner - 2)}{NC}"
+            line_w = inner - 2
+            pad = 0
+        else:
+            line_fit, line_w = _fit_line(line, inner - 2)
+            pad = inner - 2 - line_w
         print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * pad} {CYAN}║{NC}")
     print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
 
@@ -167,8 +173,14 @@ def box(content: str, header: str = ""):
         print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{h_fit}{NC}{' ' * pad_right}{CYAN}║{NC}")
         print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
     for line in content.split("\n"):
-        line_fit, line_w = _fit_line(line, inner - 2)
-        pad = inner - 2 - line_w
+        plain_line = _strip(line).strip()
+        if plain_line and all(c in "─-" for c in plain_line):
+            line_fit = f"{DIM}{'─' * (inner - 2)}{NC}"
+            line_w = inner - 2
+            pad = 0
+        else:
+            line_fit, line_w = _fit_line(line, inner - 2)
+            pad = inner - 2 - line_w
         print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * pad} {CYAN}║{NC}")
     print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
 
@@ -224,13 +236,29 @@ def menu(options: list[tuple[str, str, str]], header: str = "") -> str:
             continue
         key_col = _menu_key(key)
         line = f"  {key_col}  {label}"
-        line_fit, line_w = _fit_line(line, inner - 2)
-        pad = inner - 2 - line_w
+        
+        plain_line = _strip(line).strip()
+        if plain_line and all(c in "─-" for c in plain_line):
+            line_fit = f"{DIM}{'─' * (inner - 2)}{NC}"
+            line_w = inner - 2
+            pad = 0
+        else:
+            line_fit, line_w = _fit_line(line, inner - 2)
+            pad = inner - 2 - line_w
+            
         print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * pad} {CYAN}║{NC}")
         if desc:
             dline = f"       {DIM}{desc}{NC}"
-            dline_fit, dline_w = _fit_line(dline, inner - 2)
-            dpad = inner - 2 - dline_w
+            
+            plain_dline = _strip(dline).strip()
+            if plain_dline and all(c in "─-" for c in plain_dline):
+                dline_fit = f"{DIM}{'─' * (inner - 2)}{NC}"
+                dline_w = inner - 2
+                dpad = 0
+            else:
+                dline_fit, dline_w = _fit_line(dline, inner - 2)
+                dpad = inner - 2 - dline_w
+                
             print(f"{INDENT}{CYAN}║{NC} {dline_fit}{' ' * dpad} {CYAN}║{NC}")
 
     print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
