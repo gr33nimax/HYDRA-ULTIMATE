@@ -312,7 +312,7 @@ def main_menu(state: AppState):
                 ("3", "👥 Пользователи",        f"Создание, лимиты, TTL, подписки  [{u_active} активно]"),
                 ("4", "🤖 Telegram-боты",       f"Admin-панель и клиентский бот"),
                 ("5", "📊 Мониторинг",          f"Трафик, статус, sync-агент, логи"),
-                ("6", "🛡️  Безопасность",       f"GeoIP, fail2ban, honeypot, IPBan"),
+                ("6", "🔒 Безопасность",       f"GeoIP, fail2ban, honeypot, IPBan"),
                 ("0", "🚪 Выход", ""),
             ],
             "HYDRA MULTI-PROXY MANAGER",
@@ -507,7 +507,7 @@ def menu_plugin(state: AppState, p):
                 options.append(("2", "👥 Клиенты", "Подключённые клиенты и трафик"))
             
             options.append(("8", "🔄 Переустановить", "Переустановка протокола"))
-            options.append(("9", "🗑  Удалить", "Полное удаление"))
+            options.append(("9", "❌ Удалить", "Полное удаление"))
         
         options.append(("0", "↩ Назад", ""))
         
@@ -697,7 +697,7 @@ def _user_detail_menu(state: AppState, user: User):
         choice = menu([
             ("1", "📄 Конфиги и ссылки", "Показать конфиги всех протоколов"),
             ("2", f"🔒🔓 {block_label}", "Переключить статус блокировки"),
-            ("3", "🗑  Удалить", "Удалить пользователя"),
+            ("3", "❌ Удалить", "Удалить пользователя"),
             ("0", "↩ Назад", ""),
         ], f"ПОЛЬЗОВАТЕЛЬ {user.email}")
         
@@ -756,7 +756,7 @@ def _user_configs(state: AppState, user: User):
                 for line in conf.splitlines():
                     box_lines.append(f"  {DIM}{line.rstrip()}{NC}")
                 
-                panel(f"🛡️  {p.meta.name.upper()} CONFIG", box_lines)
+                panel(f"⚙️  {p.meta.name.upper()} CONFIG", box_lines)
                 
                 # QR-код (если qrcode установлен)
                 try:
@@ -1076,7 +1076,7 @@ def menu_security(state: AppState):
         choice = menu(
             [
                 ("1", f"🌍 GeoIP         [{_ok(sec.geoip_block_enabled)}]", "Блокировка РФ по ipset"),
-                ("2", f"🛡️  Fail2ban     [{_ok(sec.fail2ban_enabled)}]", "Защита от брутфорса"),
+                ("2", f"🔒 Fail2ban     [{_ok(sec.fail2ban_enabled)}]", "Защита от брутфорса"),
                 ("3", f"🪤 Honeypot      [{_ok(sec.honeypot_enabled)}]", "Ловушка для сканеров"),
                 ("4", f"🚫 IPBan         [{_ok(st.get('ipban', {}).get('enabled', False))}]", "Блокировка по IP"),
                 ("-", "", ""),
