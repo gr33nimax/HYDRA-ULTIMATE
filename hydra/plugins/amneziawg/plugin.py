@@ -284,8 +284,6 @@ class AmneziaWGPlugin(BasePlugin):
             m = re.search(rf"^{key}\s*=\s*(\S+)", text, re.M)
             if m:
                 out[key] = m.group(1)
-        for k, v in DEFAULT_OBFUSCATION.items():
-            out.setdefault(k, v)
         return out
 
     # ── генерация и получение ключей пира ────────────────────────────────
