@@ -40,12 +40,25 @@ BLUE = C["BLUE"]; MAGENTA = C["MAGENTA"]; BOLD = C["BOLD"]; DIM = C["DIM"]
 WHITE = C["WHITE"]; NC = C["NC"]
 
 TERM_WIDTH = shutil.get_terminal_size().columns
-PANEL_W = min(TERM_WIDTH - 4, 62)
+PANEL_W = min(TERM_WIDTH - 4, 78)
 INDENT = "  "
 
 
 def _strip(s: str) -> str:
     return re.sub(r"\033\[[0-9;]*m", "", s)
+
+
+def _width(s: str) -> int:
+    """Возвращает визуальную ширину строки в терминале с учетом эмодзи."""
+    plain = _strip(s)
+    w = 0
+    for char in plain:
+        # Эмодзи и широкие символы занимают 2 ячейки
+        if ord(char) > 0xffff or 0x2000 <= ord(char) <= 0x32ff:
+            w += 2
+        else:
+            w += 1
+    return w
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -73,7 +86,7 @@ def clear():
     os.system("clear" if os.name != "nt" else "cls")
 
 
-def divider(char: str = "─", width: Optional[int] = None):
+def divider(char: str = "═", width: Optional[int] = None):
     w = width or PANEL_W
     print(f"{INDENT}{DIM}{char * w}{NC}")
 
@@ -88,29 +101,40 @@ def kv(label: str, value: str, label_w: int = 16) -> str:
 
 
 def panel(title_text: str, lines: list[str]):
-    """Панель состояния с заголовком и списком строк."""
-    plain_title = _strip(title_text)
-    tail = max(PANEL_W - len(plain_title) - 5, 8)
+    """Панель состояния с двойными рамками."""
+    inner = PANEL_W
+    
+    # Центрируем заголовок
+    title_w = _width(title_text)
+    pad_left = (inner - title_w) // 2
+    pad_right = inner - title_w - pad_left
+    
     print()
-    print(f"{INDENT}{CYAN}┌─ {BOLD}{WHITE}{title_text}{NC}{CYAN} {'─' * tail}{NC}")
+    print(f"{INDENT}{CYAN}╔{'═' * inner}╗{NC}")
+    print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{WHITE}{title_text}{NC}{' ' * pad_right}{CYAN}║{NC}")
+    print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
     for line in lines:
-        print(f"{INDENT}{CYAN}│{NC}{line}")
-    print(f"{INDENT}{CYAN}└{'─' * PANEL_W}{NC}")
+        line_w = _width(line)
+        pad = inner - line_w - 2
+        print(f"{INDENT}{CYAN}║{NC} {line}{' ' * max(pad, 0)} {CYAN}║{NC}")
+    print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
 
 
 def box(content: str, header: str = ""):
-    """Рисует рамку вокруг текста."""
-    width = min(TERM_WIDTH - 4, 72)
-    inner = width - 2
-    print(f"{INDENT}{CYAN}╭{'─' * inner}╮{NC}")
+    """Рисует рамку вокруг текста с двойными границами."""
+    inner = PANEL_W
+    print(f"{INDENT}{CYAN}╔{'═' * inner}╗{NC}")
     if header:
-        h_pad = inner - len(_strip(header)) - 2
-        print(f"{INDENT}{CYAN}│{NC} {BOLD}{header}{NC}{' ' * max(h_pad, 0)}{CYAN}│{NC}")
-        print(f"{INDENT}{CYAN}├{'─' * inner}┤{NC}")
+        h_w = _width(header)
+        pad_left = (inner - h_w) // 2
+        pad_right = inner - h_w - pad_left
+        print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{header}{NC}{' ' * pad_right}{CYAN}║{NC}")
+        print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
     for line in content.split("\n"):
-        pad = inner - len(_strip(line)) - 2
-        print(f"{INDENT}{CYAN}│{NC} {line}{' ' * max(pad, 0)}{CYAN}│{NC}")
-    print(f"{INDENT}{CYAN}╰{'─' * inner}╯{NC}")
+        line_w = _width(line)
+        pad = inner - line_w - 2
+        print(f"{INDENT}{CYAN}║{NC} {line}{' ' * max(pad, 0)} {CYAN}║{NC}")
+    print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -146,35 +170,34 @@ def _menu_key(key: str) -> str:
 
 
 def menu(options: list[tuple[str, str, str]], header: str = "") -> str:
-    """
-    Отображает меню и возвращает выбор пользователя.
-
-    options: список (ключ, метка, описание)
-    header: заголовок меню
-    """
+    """Отображает меню с двойными рамками."""
+    inner = PANEL_W
     print()
-    print(f"{INDENT}{CYAN}╭{'─' * PANEL_W}╮{NC}")
+    print(f"{INDENT}{CYAN}╔{'═' * inner}╗{NC}")
 
     if header:
-        h = f" {header} "
-        h_pad = PANEL_W - len(_strip(h))
-        print(f"{INDENT}{CYAN}│{NC}{BOLD}{WHITE}{h}{NC}{' ' * max(h_pad, 0)}{CYAN}│{NC}")
-        print(f"{INDENT}{CYAN}├{'─' * PANEL_W}┤{NC}")
+        h_w = _width(header)
+        pad_left = (inner - h_w) // 2
+        pad_right = inner - h_w - pad_left
+        print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{WHITE}{header}{NC}{' ' * pad_right}{CYAN}║{NC}")
+        print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
 
     for key, label, desc in options:
         if key == "-":
-            print(f"{INDENT}{CYAN}│{NC}{DIM}{'─' * PANEL_W}{NC}{CYAN}│{NC}")
+            print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
             continue
         key_col = _menu_key(key)
         line = f"  {key_col}  {label}"
-        pad = PANEL_W - len(_strip(line))
-        print(f"{INDENT}{CYAN}│{NC}{line}{' ' * max(pad, 0)}{CYAN}│{NC}")
+        line_w = _width(line)
+        pad = inner - line_w - 2
+        print(f"{INDENT}{CYAN}║{NC} {line}{' ' * max(pad, 0)} {CYAN}║{NC}")
         if desc:
             dline = f"       {DIM}{desc}{NC}"
-            dpad = PANEL_W - len(_strip(desc)) - 7
-            print(f"{INDENT}{CYAN}│{NC}{dline}{' ' * max(dpad, 0)}{CYAN}│{NC}")
+            dline_w = _width(dline)
+            dpad = inner - dline_w - 2
+            print(f"{INDENT}{CYAN}║{NC} {dline}{' ' * max(dpad, 0)} {CYAN}║{NC}")
 
-    print(f"{INDENT}{CYAN}╰{'─' * PANEL_W}╯{NC}")
+    print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
     print()
 
     keys = [k for k, _, _ in options if k not in ("-", "")]
