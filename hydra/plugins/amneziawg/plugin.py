@@ -34,7 +34,8 @@ _KNOWN_SUBNETS = ["10.66.66.0/16", "172.17.0.0/16"]
 _PREFERRED_SUBNETS = ["10.67.67.0/24"]
 DEFAULT_OBFUSCATION = {
     "Jc": "4", "Jmin": "40", "Jmax": "70",
-    "S1": "8", "S2": "72",
+    "S1": "8", "S2": "72", "S3": "12", "S4": "20",
+    "H1": "1", "H2": "2", "H3": "3", "H4": "4",
 }
 OBFUSCATION_KEYS = ["Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4",
                     "H1", "H2", "H3", "H4"]
@@ -129,8 +130,9 @@ class AmneziaWGPlugin(BasePlugin):
         for user in state.users:
             if user.blocked:
                 continue
-            pub = self._derive_pubkey(user.uuid)
-            psk = self._derive_psk(user.uuid)
+            keys = self._get_or_create_keys(user, state)
+            pub = keys["public_key"]
+            psk = keys["preshared_key"]
 
             if pub in existing_ips:
                 octet = existing_ips[pub]
@@ -286,24 +288,71 @@ class AmneziaWGPlugin(BasePlugin):
             out.setdefault(k, v)
         return out
 
-    # ── детерминированные ключи пира ────────────────────────────────────
+    # ── генерация и получение ключей пира ────────────────────────────────
 
-    @staticmethod
-    def _derive_priv(uuid: str) -> str:
-        return base64.b64encode(hashlib.sha256(f"awg-priv|{uuid}".encode()).digest()).decode()
-
-    @staticmethod
-    def _derive_psk(uuid: str) -> str:
-        return base64.b64encode(hashlib.sha256(f"awg-psk|{uuid}".encode()).digest()).decode()
-
-    def _derive_pubkey(self, uuid: str) -> str:
-        return self._awg("pubkey", _input=self._derive_priv(uuid)).stdout.strip()
+    def _get_or_create_keys(self, user: User, state: AppState) -> dict:
+        """Получает или создаёт ключи пользователя для AWG.
+        
+        Ключи хранятся в user.credentials["amneziawg"]:
+          - private_key: приватный ключ (awg genkey)
+          - public_key: публичный ключ (awg pubkey)
+          - preshared_key: PSK (awg genpsk)
+        """
+        creds = user.credentials.get("amneziawg")
+        if (creds 
+            and "private_key" in creds 
+            and "public_key" in creds 
+            and "preshared_key" in creds):
+            return creds
+        
+        # Генерируем новые ключи через awg
+        priv_r = self._awg("genkey")
+        if priv_r.returncode != 0:
+            # Фоллбэк: генерация через wg если awg недоступен
+            priv_r = subprocess.run(
+                ["wg", "genkey"], capture_output=True, text=True
+            )
+        private_key = priv_r.stdout.strip()
+        
+        pub_r = self._awg("pubkey", _input=private_key)
+        if pub_r.returncode != 0:
+            pub_r = subprocess.run(
+                ["wg", "pubkey"], input=private_key, 
+                capture_output=True, text=True
+            )
+        public_key = pub_r.stdout.strip()
+        
+        psk_r = self._awg("genpsk")
+        if psk_r.returncode != 0:
+            psk_r = subprocess.run(
+                ["wg", "genpsk"], capture_output=True, text=True
+            )
+        preshared_key = psk_r.stdout.strip()
+        
+        user.credentials["amneziawg"] = {
+            "private_key": private_key,
+            "public_key": public_key,
+            "preshared_key": preshared_key,
+        }
+        
+        from hydra.core.state import save_state
+        save_state(state)
+        
+        return user.credentials["amneziawg"]
 
     def _server_pubkey(self) -> str:
         m = re.search(r"PrivateKey\s*=\s*(\S+)", self._interface_block())
         if not m:
             return ""
-        return self._awg("pubkey", _input=m.group(1)).stdout.strip()
+        r = self._awg("pubkey", _input=m.group(1))
+        if r.returncode != 0:
+            r = subprocess.run(
+                ["wg", "pubkey"], input=m.group(1),
+                capture_output=True, text=True
+            )
+            if r.returncode != 0:
+                return ""
+        return r.stdout.strip()
 
     # ═════════════════════════════════════════════════════════════════════
     #  Per-user TRANSPORT-методы
@@ -332,11 +381,13 @@ class AmneziaWGPlugin(BasePlugin):
         if not AWG_CONF.exists():
             return ""
 
-        self.configure(state)
-        self.apply(state)
-
-        pub = self._derive_pubkey(user.uuid)
+        keys = self._get_or_create_keys(user, state)
+        pub = keys["public_key"]
         ip = self._existing_peer_ips().get(pub)
+        if not ip:
+            self.configure(state)
+            self.apply(state)
+            ip = self._existing_peer_ips().get(pub)
         if not ip:
             return ""
         base, _, _ = self._network(state)
@@ -357,7 +408,7 @@ class AmneziaWGPlugin(BasePlugin):
 
         lines = [
             "[Interface]",
-            f"PrivateKey = {self._derive_priv(user.uuid)}",
+            f"PrivateKey = {keys['private_key']}",
             f"Address = {base}.{ip}/32",
             f"DNS = {dns_line}",
             f"MTU = {mtu}",
@@ -370,7 +421,7 @@ class AmneziaWGPlugin(BasePlugin):
             "",
             "[Peer]",
             f"PublicKey = {server_pub}",
-            f"PresharedKey = {self._derive_psk(user.uuid)}",
+            f"PresharedKey = {keys['preshared_key']}",
             f"Endpoint = {endpoint}:{port}",
             "AllowedIPs = 0.0.0.0/0",
             "PersistentKeepalive = 25",
@@ -426,10 +477,13 @@ class AmneziaWGPlugin(BasePlugin):
         if r.returncode != 0:
             return {}
 
-        pub_to_email = {
-            self._derive_pubkey(u.uuid): u.email
-            for u in state.users if not u.blocked
-        }
+        pub_to_email = {}
+        for u in state.users:
+            if not u.blocked:
+                creds = u.credentials.get("amneziawg", {})
+                pub = creds.get("public_key")
+                if pub:
+                    pub_to_email[pub] = u.email
 
         result: dict[str, int] = {}
         for line in r.stdout.strip().splitlines():

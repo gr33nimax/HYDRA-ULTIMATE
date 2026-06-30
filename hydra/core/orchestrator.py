@@ -53,6 +53,15 @@ def enable(state: AppState, name: str) -> bool:
     proto = get_protocol(state, name)
     proto.enabled = True
     save_state(state)
+
+    # Генерируем конфиги для всех существующих пользователей
+    for user in state.users:
+        if not user.blocked:
+            try:
+                p.on_user_add(user, state)
+            except Exception:
+                pass
+
     return apply_config(state)
 
 
@@ -84,13 +93,13 @@ def remove_user(state: AppState, email: str) -> None:
     u = find_user(state, email)
     if not u:
         return
+    state.users = [x for x in state.users if x.email != email]
     for p in registry.transports():
         if state.protocols.get(p.meta.name) and state.protocols[p.meta.name].enabled:
             try:
                 p.on_user_remove(u, state)
             except Exception:
                 pass
-    state.users = [x for x in state.users if x.email != email]
     save_state(state)
     apply_config(state)
 
@@ -123,3 +132,20 @@ def unblock_user(state: AppState, email: str) -> None:
                 pass
     save_state(state)
     apply_config(state)
+
+
+def sync_user_configs(state: AppState, plugin_name: str | None = None) -> None:
+    """Пересоздаёт конфиги для всех пользователей на указанном или всех протоколах."""
+    targets = [registry.get(plugin_name)] if plugin_name else registry.transports()
+    for p in targets:
+        if p is None:
+            continue
+        ps = state.protocols.get(p.meta.name)
+        if not ps or not ps.enabled:
+            continue
+        try:
+            p.configure(state)
+            p.apply(state)
+        except Exception:
+            pass
+    save_state(state)
