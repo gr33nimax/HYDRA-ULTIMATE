@@ -5,7 +5,12 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg)]()
 
-> HYDRA — платформа для развёртывания прокси-серверов на базе **Sing-Box** как единого оркестратора трафика. Модульная архитектура: 17 плагинов (9 транспортов, 3 надстройки, 4 безопасности) с единой политикой роутинга, DNS и безопасности.
+> HYDRA – платформа для развёртывания прокси-серверов на базе **Sing-Box** как единого оркестратора трафика. Модульная архитектура: 17 плагинов (9 транспортов, 3 надстройки, 4 безопасности) с единой политикой роутинга, DNS и безопасности.
+
+> [!IMPORTANT]
+> **Текущий статус проекта:**
+> На данный момент полностью готов, отлажен и стабильно работает только плагин **AmneziaWG 2.0**.
+> Все остальные плагины (транспорты, надстройки и модули безопасности) находятся на этапе активной разработки и интеграции (WIP).
 
 ---
 
@@ -33,32 +38,32 @@
 ## Стек протоколов
 
 ### Транспорты (TRANSPORT)
-| Протокол | Плагин | Особенности |
-|---|---|---|
-| AmneziaWG 2.0 | `amneziawg` | Kernel-модуль, per-user pubkey |
-| Mieru | `mieru` | mTLS + random padding |
-| NaiveProxy | `naive` | Caddy (TLS) + fake-site |
-| MTProto | `telemt` | Telegram MTProto, multi-user |
-| FreeTurn | `vkturn` | UDP:56000, sing-box vmess outbound |
-| qWDTT | `wdtt` | WG over TURN, per-user |
-| OlaRTC | `olcrtc` | TCP over WebRTC, SOCKS :8808 |
-| SlipGate | `slipgate` | DNS-туннели (DNSTT/Noize/Slipstream/VayDNS) |
-| WebDAV | `webdav` | SOCKS5 over WebDAV |
+| Протокол | Плагин | Особенности | Статус |
+|---|---|---|---|
+| AmneziaWG 2.0 | `amneziawg` | Kernel-модуль, per-user pubkey | 🟢 Готов (Ready) |
+| Mieru | `mieru` | mTLS + random padding | 🟡 В разработке (WIP) |
+| NaiveProxy | `naive` | Caddy (TLS) + fake-site | 🟡 В разработке (WIP) |
+| MTProto | `telemt` | Telegram MTProto, multi-user | 🟡 В разработке (WIP) |
+| FreeTurn | `vkturn` | UDP:56000, sing-box vmess outbound | 🟡 В разработке (WIP) |
+| qWDTT | `wdtt` | WG over TURN, per-user | 🟡 В разработке (WIP) |
+| OlaRTC | `olcrtc` | TCP over WebRTC, SOCKS :8808 | 🟡 В разработке (WIP) |
+| SlipGate | `slipgate` | DNS-туннели (DNSTT/Noize/Slipstream/VayDNS) | 🟡 В разработке (WIP) |
+| WebDAV | `webdav` | SOCKS5 over WebDAV | 🟡 В разработке (WIP) |
 
 ### Надстройки (ENHANCEMENT)
-| Плагин | Что делает |
-|---|---|
-| DNSCrypt | Системный DNS-прокси :5300 (DoH/DNSCrypt) |
-| WARP | Cloudflare WARP — AI-домены через WireGuard |
-| PortHopping | nftables PREROUTING REDIRECT диапазона → порт |
+| Плагин | Что делает | Статус |
+|---|---|---|
+| DNSCrypt | Системный DNS-прокси :5300 (DoH/DNSCrypt) | 🟡 В разработке (WIP) |
+| WARP | Cloudflare WARP — AI-домены через WireGuard | 🟡 В разработке (WIP) |
+| PortHopping | nftables PREROUTING REDIRECT диапазона → порт | 🟡 В разработке (WIP) |
 
 ### Безопасность (SECURITY)
-| Плагин | Что делает |
-|---|---|
-| Fail2ban | Защита от перебора (sing-box/sshd/nginx) |
-| GeoIP | Блокировка входящих из РФ через ipset |
-| Honeypot | Ловушка для сканеров с авто-баном |
-| IPBan | Ручная блокировка IP/CIDR/ASN |
+| Плагин | Что делает | Статус |
+|---|---|---|
+| Fail2ban | Защита от перебора (sing-box/sshd/nginx) | 🟡 В разработке (WIP) |
+| GeoIP | Блокировка входящих из РФ через ipset | 🟡 В разработке (WIP) |
+| Honeypot | Ловушка для сканеров с авто-баном | 🟡 В разработке (WIP) |
+| IPBan | Ручная блокировка IP/CIDR/ASN | 🟡 В разработке (WIP) |
 
 ---
 
