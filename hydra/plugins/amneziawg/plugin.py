@@ -524,10 +524,20 @@ class AmneziaWGPlugin(BasePlugin):
                     result[email] = result.get(email, 0) + int(rx) + int(tx)
         return result
 
-    def connected_clients(self) -> list[dict]:
+    def connected_clients(self, state: AppState | None = None) -> list[dict]:
         """Список пиров с email, трафиком и последним рукопожатием."""
         if not self._installed() or not self._is_up():
             return []
+            
+        if state:
+            peer_map = {}
+            for u in state.users:
+                creds = u.credentials.get("amneziawg", {})
+                pub = creds.get("public_key")
+                if pub:
+                    peer_map[pub] = u.email
+            self._peer_map = peer_map
+
         r = self._awg("show", AWG_INTERFACE, "dump")
         if r.returncode != 0:
             return []
