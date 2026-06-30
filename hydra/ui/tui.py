@@ -53,12 +53,48 @@ def _width(s: str) -> int:
     plain = _strip(s)
     w = 0
     for char in plain:
+        if ord(char) == 0xfe0f:
+            continue
         # Эмодзи и широкие символы занимают 2 ячейки
         if ord(char) > 0xffff or 0x2000 <= ord(char) <= 0x32ff:
             w += 2
         else:
             w += 1
     return w
+
+
+def _fit_line(line: str, max_w: int) -> tuple[str, int]:
+    """Ограничивает визуальную ширину строки до max_w, обрезая её при необходимости."""
+    line_w = _width(line)
+    if line_w <= max_w:
+        return line, line_w
+        
+    parts = re.split(r"(\033\[[0-9;]*m)", line)
+    new_parts = []
+    accum_w = 0
+    target_w = max_w - 3
+    
+    for part in parts:
+        if not part:
+            continue
+        if part.startswith("\033["):
+            new_parts.append(part)
+        else:
+            for char in part:
+                if ord(char) == 0xfe0f:
+                    new_parts.append(char)
+                    continue
+                char_w = 2 if (ord(char) > 0xffff or 0x2000 <= ord(char) <= 0x32ff) else 1
+                if accum_w + char_w > target_w:
+                    new_parts.append("...")
+                    accum_w += 3
+                    break
+                new_parts.append(char)
+                accum_w += char_w
+            if accum_w >= target_w:
+                break
+    new_parts.append("\033[0m")
+    return "".join(new_parts), accum_w
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -105,18 +141,18 @@ def panel(title_text: str, lines: list[str]):
     inner = PANEL_W
     
     # Центрируем заголовок
-    title_w = _width(title_text)
+    title_fit, title_w = _fit_line(title_text, inner - 2)
     pad_left = (inner - title_w) // 2
     pad_right = inner - title_w - pad_left
     
     print()
     print(f"{INDENT}{CYAN}╔{'═' * inner}╗{NC}")
-    print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{WHITE}{title_text}{NC}{' ' * pad_right}{CYAN}║{NC}")
+    print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{WHITE}{title_fit}{NC}{' ' * pad_right}{CYAN}║{NC}")
     print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
     for line in lines:
-        line_w = _width(line)
-        pad = inner - line_w - 2
-        print(f"{INDENT}{CYAN}║{NC} {line}{' ' * max(pad, 0)} {CYAN}║{NC}")
+        line_fit, line_w = _fit_line(line, inner - 2)
+        pad = inner - 2 - line_w
+        print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * pad} {CYAN}║{NC}")
     print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
 
 
@@ -125,15 +161,15 @@ def box(content: str, header: str = ""):
     inner = PANEL_W
     print(f"{INDENT}{CYAN}╔{'═' * inner}╗{NC}")
     if header:
-        h_w = _width(header)
+        h_fit, h_w = _fit_line(header, inner - 2)
         pad_left = (inner - h_w) // 2
         pad_right = inner - h_w - pad_left
-        print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{header}{NC}{' ' * pad_right}{CYAN}║{NC}")
+        print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{h_fit}{NC}{' ' * pad_right}{CYAN}║{NC}")
         print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
     for line in content.split("\n"):
-        line_w = _width(line)
-        pad = inner - line_w - 2
-        print(f"{INDENT}{CYAN}║{NC} {line}{' ' * max(pad, 0)} {CYAN}║{NC}")
+        line_fit, line_w = _fit_line(line, inner - 2)
+        pad = inner - 2 - line_w
+        print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * pad} {CYAN}║{NC}")
     print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
 
 
@@ -176,10 +212,10 @@ def menu(options: list[tuple[str, str, str]], header: str = "") -> str:
     print(f"{INDENT}{CYAN}╔{'═' * inner}╗{NC}")
 
     if header:
-        h_w = _width(header)
+        h_fit, h_w = _fit_line(header, inner - 2)
         pad_left = (inner - h_w) // 2
         pad_right = inner - h_w - pad_left
-        print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{WHITE}{header}{NC}{' ' * pad_right}{CYAN}║{NC}")
+        print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{WHITE}{h_fit}{NC}{' ' * pad_right}{CYAN}║{NC}")
         print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
 
     for key, label, desc in options:
@@ -188,14 +224,14 @@ def menu(options: list[tuple[str, str, str]], header: str = "") -> str:
             continue
         key_col = _menu_key(key)
         line = f"  {key_col}  {label}"
-        line_w = _width(line)
-        pad = inner - line_w - 2
-        print(f"{INDENT}{CYAN}║{NC} {line}{' ' * max(pad, 0)} {CYAN}║{NC}")
+        line_fit, line_w = _fit_line(line, inner - 2)
+        pad = inner - 2 - line_w
+        print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * pad} {CYAN}║{NC}")
         if desc:
             dline = f"       {DIM}{desc}{NC}"
-            dline_w = _width(dline)
-            dpad = inner - dline_w - 2
-            print(f"{INDENT}{CYAN}║{NC} {dline}{' ' * max(dpad, 0)} {CYAN}║{NC}")
+            dline_fit, dline_w = _fit_line(dline, inner - 2)
+            dpad = inner - 2 - dline_w
+            print(f"{INDENT}{CYAN}║{NC} {dline_fit}{' ' * dpad} {CYAN}║{NC}")
 
     print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
     print()
