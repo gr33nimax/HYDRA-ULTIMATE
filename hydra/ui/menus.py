@@ -572,7 +572,7 @@ def _user_detail_menu(state: AppState, user: User):
 def _user_configs(state: AppState, user: User):
     """Показывает конфиги и ссылки для всех протоколов."""
     clear()
-    title(f"Конфиги: {user.email}")
+    title(f"Конфигурации для пользователя: {user.email}")
     
     from hydra.plugins import registry
     enabled_transports = registry.enabled(state, PluginCategory.TRANSPORT)
@@ -583,27 +583,34 @@ def _user_configs(state: AppState, user: User):
         return
     
     for p in enabled_transports:
-        print()
-        title(f"  {p.meta.name.upper()}")
-        
         # Ссылка
         link = ""
         try:
             link = p.client_link(user, state)
-            if link:
-                print(f"  Ссылка: {link}")
-        except Exception as e:
-            error(f"  Ошибка ссылки: {e}")
-        
+        except Exception:
+            pass
+            
         # Конфиг
         try:
             conf = p.generate_client_config(user, state)
             if conf:
-                # Рисуем рамку
                 box_lines = []
+                
+                # Показываем ссылку, если она есть
+                if link:
+                    box_lines.append(f"{YELLOW}{BOLD}Ссылка для подключения (URL):{NC}")
+                    # Оборачиваем ссылку по ширине коробки (PANEL_W - 6)
+                    link_width = PANEL_W - 6
+                    for chunk in [link[i:i+link_width] for i in range(0, len(link), link_width)]:
+                        box_lines.append(f"  {CYAN}{chunk}{NC}")
+                    box_lines.append(f"{DIM}{'─' * (PANEL_W - 4)}{NC}")
+                
+                # Показываем конфиг
+                box_lines.append(f"{GREEN}{BOLD}Файл конфигурации (Client Config):{NC}")
                 for line in conf.splitlines():
-                    box_lines.append(f"  {DIM}{line}{NC}")
-                panel(f"{p.meta.name} config", box_lines)
+                    box_lines.append(f"  {DIM}{line.rstrip()}{NC}")
+                
+                panel(f"🛡️  {p.meta.name.upper()} CONFIG", box_lines)
                 
                 # QR-код (если qrcode установлен)
                 try:
@@ -611,12 +618,14 @@ def _user_configs(state: AppState, user: User):
                     qr = qrcode.QRCode(border=1)
                     target = link if link else conf
                     qr.add_data(target)
+                    print(f"\n  {BOLD}{WHITE}Отсканируйте QR-код для быстрого импорта:{NC}")
                     qr.print_ascii(invert=True)
                 except ImportError:
                     pass
         except Exception as e:
-            error(f"  Ошибка конфига: {e}")
-    
+            error(f"  Ошибка получения конфигурации {p.meta.name}: {e}")
+            
+    print()
     prompt("Нажмите Enter")
 
 
