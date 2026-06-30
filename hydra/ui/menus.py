@@ -50,43 +50,43 @@ _sub_server = None
 # ═════════════════════════════════════════════════════════════════════════════
 
 import threading
+import os
+from pathlib import Path
 
+# 1. DNS резолвится синхронно и моментально на этапе импорта модуля
+_cached_dns = "1.1.1.1"
+try:
+    if os.path.exists("/etc/resolv.conf"):
+        dns_list = []
+        with open("/etc/resolv.conf", "r") as f:
+            for line in f:
+                if line.startswith("nameserver"):
+                    dns_list.append(line.split()[1])
+        if dns_list:
+            _cached_dns = dns_list[0]
+except Exception:
+    pass
+
+# 2. Публичный IP запускается в фоновом потоке сразу при импорте модуля
 _cached_pub_ip = "Получение..."
-_cached_dns = "Получение..."
 _network_fetched = False
 
 def _fetch_network_info_bg():
-    global _cached_pub_ip, _cached_dns, _network_fetched
+    global _cached_pub_ip, _network_fetched
     try:
         from hydra.utils.net import public_ip
-        import os
-        
-        # 1. Public IP (curl is fast but can block, so we run in background)
         ip = public_ip()
         _cached_pub_ip = ip
-        
-        # 2. DNS Nameserver
-        dns_list = []
-        if os.path.exists("/etc/resolv.conf"):
-            with open("/etc/resolv.conf", "r") as f:
-                for line in f:
-                    if line.startswith("nameserver"):
-                        dns_list.append(line.split()[1])
-        _cached_dns = dns_list[0] if dns_list else "1.1.1.1"
     except Exception:
         _cached_pub_ip = "127.0.0.1"
-        _cached_dns = "1.1.1.1"
     _network_fetched = True
 
-
-def _start_network_fetch():
-    global _network_fetched
-    if not _network_fetched:
-        t = threading.Thread(target=_fetch_network_info_bg, daemon=True)
-        t.start()
+# Запускаем фоновый поток немедленно на старте программы
+t = threading.Thread(target=_fetch_network_info_bg, daemon=True)
+t.start()
 
 
-def _sys_info() -> list[str]:
+def _sys_info(state: AppState | None = None) -> list[str]:
     """Возвращает строки с информацией о системе и сети."""
     lines = []
     try:
@@ -106,9 +106,7 @@ def _sys_info() -> list[str]:
     except ImportError:
         # Резервный сбор метрик через стандартную библиотеку и /proc (на Linux)
         try:
-            import os
             import shutil
-            from pathlib import Path
             
             # 1. Диск через shutil (стандартная библиотека)
             total_d, used_d, free_d = shutil.disk_usage("/")
@@ -166,12 +164,13 @@ def _sys_info() -> list[str]:
     # Добавление сетевой информации (асинхронно, без фризов интерфейса)
     try:
         from hydra.utils.net import local_ip
-        _start_network_fetch()
         
-        # IP адреса
-        lines.append(kv("IP (Pub/Loc):", f"{CYAN}{_cached_pub_ip}{NC} / {DIM}{local_ip()}{NC}"))
-        
-        # DNS
+        # Получаем внешний IP (берем из кэша, если пуст — пробуем AppState)
+        pub_ip = _cached_pub_ip
+        if pub_ip == "Получение..." and state and state.network.server_ip:
+            pub_ip = state.network.server_ip
+            
+        lines.append(kv("IP (Pub/Loc):", f"{CYAN}{pub_ip}{NC} / {DIM}{local_ip()}{NC}"))
         lines.append(kv("DNS:", _cached_dns))
     except Exception:
         pass
@@ -302,7 +301,7 @@ def main_menu(state: AppState):
             kv("Протоколов:", f"{GREEN}{active_p}{NC}/{total_p} запущено"),
             kv("Пользователей:", f"{GREEN if u_active else YELLOW}{u_active}{NC} из {len(state.users)}"),
         ]
-        lines += _sys_info()
+        lines += _sys_info(state)
         panel("Состояние", lines)
 
         choice = menu(
@@ -966,7 +965,7 @@ def menu_monitoring(state: AppState):
             kv("Трафик всего:", _bytes_auto(total)),
             kv("Пользователей:", str(len(state.users))),
         ]
-        lines += _sys_info()
+        lines += _sys_info(state)
         panel("Мониторинг", lines)
 
         choice = menu(
