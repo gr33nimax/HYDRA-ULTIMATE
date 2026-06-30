@@ -49,8 +49,45 @@ _sub_server = None
 #  Утилиты
 # ═════════════════════════════════════════════════════════════════════════════
 
+import threading
+
+_cached_pub_ip = "Получение..."
+_cached_dns = "Получение..."
+_network_fetched = False
+
+def _fetch_network_info_bg():
+    global _cached_pub_ip, _cached_dns, _network_fetched
+    try:
+        from hydra.utils.net import public_ip
+        import os
+        
+        # 1. Public IP (curl is fast but can block, so we run in background)
+        ip = public_ip()
+        _cached_pub_ip = ip
+        
+        # 2. DNS Nameserver
+        dns_list = []
+        if os.path.exists("/etc/resolv.conf"):
+            with open("/etc/resolv.conf", "r") as f:
+                for line in f:
+                    if line.startswith("nameserver"):
+                        dns_list.append(line.split()[1])
+        _cached_dns = dns_list[0] if dns_list else "1.1.1.1"
+    except Exception:
+        _cached_pub_ip = "127.0.0.1"
+        _cached_dns = "1.1.1.1"
+    _network_fetched = True
+
+
+def _start_network_fetch():
+    global _network_fetched
+    if not _network_fetched:
+        t = threading.Thread(target=_fetch_network_info_bg, daemon=True)
+        t.start()
+
+
 def _sys_info() -> list[str]:
-    """Возвращает строки с информацией о системе."""
+    """Возвращает строки с информацией о системе и сети."""
     lines = []
     try:
         import psutil
@@ -125,6 +162,20 @@ def _sys_info() -> list[str]:
             pass
     except Exception:
         pass
+        
+    # Добавление сетевой информации (асинхронно, без фризов интерфейса)
+    try:
+        from hydra.utils.net import local_ip
+        _start_network_fetch()
+        
+        # IP адреса
+        lines.append(kv("IP (Pub/Loc):", f"{CYAN}{_cached_pub_ip}{NC} / {DIM}{local_ip()}{NC}"))
+        
+        # DNS
+        lines.append(kv("DNS:", _cached_dns))
+    except Exception:
+        pass
+
     return lines
 
 
