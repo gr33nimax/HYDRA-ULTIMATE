@@ -67,9 +67,29 @@ try:
 except Exception:
     pass
 
-# 2. Публичный IP запускается в фоновом потоке сразу при импорте модуля
+# 2. Определение IP адресов
 _cached_pub_ip = "Получение..."
 _network_fetched = False
+
+def _is_private_ip(ip: str) -> bool:
+    if not ip or ip == "127.0.0.1":
+        return True
+    parts = ip.split(".")
+    if len(parts) != 4:
+        return True
+    try:
+        p0, p1 = int(parts[0]), int(parts[1])
+        if p0 == 10:
+            return True
+        if p0 == 192 and p1 == 168:
+            return True
+        if p0 == 172 and (16 <= p1 <= 31):
+            return True
+        if p0 == 127:
+            return True
+        return False
+    except ValueError:
+        return True
 
 def _fetch_network_info_bg():
     global _cached_pub_ip, _network_fetched
@@ -81,9 +101,21 @@ def _fetch_network_info_bg():
         _cached_pub_ip = "127.0.0.1"
     _network_fetched = True
 
-# Запускаем фоновый поток немедленно на старте программы
-t = threading.Thread(target=_fetch_network_info_bg, daemon=True)
-t.start()
+# Инициализируем IP-адреса на этапе импорта модуля
+try:
+    from hydra.utils.net import local_ip
+    loc = local_ip()
+    if loc and not _is_private_ip(loc):
+        # Локальный IP-адрес уже публичный — используем его сразу и не делаем сетевых curl-запросов!
+        _cached_pub_ip = loc
+        _network_fetched = True
+    else:
+        # Локальный IP приватный (сервер за NAT) — опрашиваем внешнюю сеть в фоне
+        t = threading.Thread(target=_fetch_network_info_bg, daemon=True)
+        t.start()
+except Exception:
+    t = threading.Thread(target=_fetch_network_info_bg, daemon=True)
+    t.start()
 
 
 def _sys_info(state: AppState | None = None) -> list[str]:
@@ -164,13 +196,19 @@ def _sys_info(state: AppState | None = None) -> list[str]:
     # Добавление сетевой информации (асинхронно, без фризов интерфейса)
     try:
         from hydra.utils.net import local_ip
+        loc = local_ip()
         
         # Получаем внешний IP (берем из кэша, если пуст — пробуем AppState)
         pub_ip = _cached_pub_ip
         if pub_ip == "Получение..." and state and state.network.server_ip:
             pub_ip = state.network.server_ip
             
-        lines.append(kv("IP (Pub/Loc):", f"{CYAN}{pub_ip}{NC} / {DIM}{local_ip()}{NC}"))
+        # Если публичный и локальный совпадают (нет NAT), выводим один IP для красоты
+        if pub_ip == loc:
+            lines.append(kv("IP (Public):", f"{CYAN}{pub_ip}{NC}"))
+        else:
+            lines.append(kv("IP (Pub/Loc):", f"{CYAN}{pub_ip}{NC} / {DIM}{loc}{NC}"))
+            
         lines.append(kv("DNS:", _cached_dns))
     except Exception:
         pass
