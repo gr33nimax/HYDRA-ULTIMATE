@@ -55,8 +55,8 @@ def _width(s: str) -> int:
     for char in plain:
         if ord(char) == 0xfe0f:
             continue
-        # Эмодзи и широкие символы занимают 2 ячейки
-        if ord(char) > 0xffff or 0x2000 <= ord(char) <= 0x32ff:
+        # Только символы вне BMP (> 0xffff) считаются за 2 ячейки (эмодзи)
+        if ord(char) > 0xffff:
             w += 2
         else:
             w += 1
@@ -84,7 +84,7 @@ def _fit_line(line: str, max_w: int) -> tuple[str, int]:
                 if ord(char) == 0xfe0f:
                     new_parts.append(char)
                     continue
-                char_w = 2 if (ord(char) > 0xffff or 0x2000 <= ord(char) <= 0x32ff) else 1
+                char_w = 2 if ord(char) > 0xffff else 1
                 if accum_w + char_w > target_w:
                     new_parts.append("...")
                     accum_w += 3
