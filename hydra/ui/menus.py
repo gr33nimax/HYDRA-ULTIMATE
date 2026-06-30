@@ -362,315 +362,127 @@ def menu_protocols(state: AppState):
                 idx = int(choice) - 1
                 if 0 <= idx < len(all_p):
                     p = all_p[idx]
-                    if p.meta.name == "amneziawg":
-                        menu_plugin_awg(state, p)
-                    else:
-                        menu_plugin(state, p)
+                    menu_plugin(state, p)
             except ValueError:
                 pass
 
 
-def menu_plugin(state: AppState, plugin):
+def menu_plugin(state: AppState, p):
+    """Универсальное меню плагина."""
+    from hydra.core.state import get_protocol
+    
     while True:
         clear()
-        s = plugin.status()
-
-        panel(plugin.meta.name.upper(), [
-            f"  {DIM}{plugin.meta.description}{NC}",
-            "",
-            kv("Категория:", plugin.meta.category.value),
-            kv("Версия:", plugin.meta.version),
-            kv("Установлен:", _ok(s.installed)),
-            kv("Включён:", _ok(s.enabled)),
-            kv("Запущен:", _ok(s.running)),
-            kv("Порт:", str(s.port or "—")),
-        ])
-
-        choice = menu(
-            [
-                ("1", "🔧 Установить" if not s.installed else "🔄 Переустановить", ""),
-                ("2", "▶️  Включить" if not s.enabled else "⏸️  Выключить", ""),
-                ("3", "🗑  Удалить", ""),
-                ("0", "↩ Назад", ""),
-            ],
-            plugin.meta.name.upper(),
-        )
-
-        if choice == "0":
-            return
-        elif choice == "1":
-            info(f"Устанавливаю {plugin.meta.name}...")
-            if plugin.install():
-                success(f"{plugin.meta.name}: OK")
-            else:
-                error(f"{plugin.meta.name}: ОШИБКА")
-            prompt("Нажмите Enter")
-        elif choice == "2":
-            if not s.enabled:
-                if not s.installed:
-                    warn("Сначала установите (пункт 1)")
-                else:
-                    plugin.on_enable(state)
-                    proto = get_protocol(state, plugin.meta.name)
-                    if proto:
-                        proto.enabled = True
-                    save_state(state)
-                    success(f"{plugin.meta.name} включён")
-            else:
-                plugin.on_disable(state)
-                proto = get_protocol(state, plugin.meta.name)
-                if proto:
-                    proto.enabled = False
-                save_state(state)
-                success(f"{plugin.meta.name} выключен")
-            prompt("Нажмите Enter")
-        elif choice == "3":
-            plugin.uninstall()
-            proto = get_protocol(state, plugin.meta.name)
-            if proto:
-                proto.enabled = False
-                proto.installed = False
-            save_state(state)
-            success(f"{plugin.meta.name} удалён")
-            prompt("Нажмите Enter")
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  AWG — специализированное меню (самый сложный протокол)
-# ═════════════════════════════════════════════════════════════════════════════
-
-def menu_plugin_awg(state: AppState, plugin):
-    while True:
-        clear()
-        s = plugin.status()
-        proto = get_protocol(state, "amneziawg")
-        config = proto.config
-        port = config.get("port", 51820)
-        network = config.get("network", "10.8.20.0/24")
-
-        traffic = plugin.traffic(state)
-        peers = plugin.connected_clients()
-        total_bytes = sum(traffic.values())
-
-        if s.installed:
-            panel("AWG: AmneziaWG 2.0", [
-                kv("Статус:", f"{_ok(s.running)} {'запущен' if s.running else 'остановлен'}"),
-                kv("Интерфейс:", f"{YELLOW}awg0{NC}"),
-                kv("Порт:", str(port)),
-                kv("Сеть:", network),
-                kv("Пиров:", f"{len(peers)} онлайн  (всего {sum(1 for u in state.users if not u.blocked)})"),
-                kv("Трафик:", _bytes_auto(total_bytes)),
-            ])
-
-            opts = [
-                ("1", "🗑  Удалить AWG", "Полная очистка: пакеты, модуль, конфиги"),
-                ("2", "📄 Клиентский конфиг + QR", ".conf, QR-код, wg:// и sn:// ссылки"),
-                ("3", "▶️  Запустить awg0" if not s.running else "⏸️  Остановить awg0", ""),
-                ("4", "📊 Статус пиров + трафик",
-                 f"{len(peers)} онлайн, {_bytes_auto(total_bytes)}"),
-                ("5", "🔧 Проверить маршрутизацию", "ip_forward, NAT, iptables"),
-                ("0", "↩ Назад", ""),
-            ]
-        else:
-            panel("AWG: AmneziaWG 2.0", [
-                kv("Статус:", f"{RED}не установлен{NC}"),
-            ])
-            opts = [
-                ("1", "🔧 Установить kernel-модуль", "Клонировать wiresock, скомпилировать"),
-                ("0", "↩ Назад", ""),
-            ]
-
-        choice = menu(opts, "AMNEZIAWG 2.0")
-
-        if choice == "0":
-            return
-        elif choice == "1":
-            if s.installed:
-                info("Полное удаление AmneziaWG...")
-                plugin.on_disable(state)
-                plugin.uninstall()
-                subprocess.run(["apt-get", "purge", "-y", "-qq",
-                    "amneziawg", "amneziawg-tools", "amneziawg-dkms"], capture_output=True)
-                subprocess.run(["modprobe", "-r", "amneziawg"], capture_output=True)
-                subprocess.run(["rm", "-rf",
-                    "/etc/amnezia/amneziawg",
-                    "/usr/bin/awg", "/usr/bin/awg-quick",
-                    "/usr/local/bin/awg", "/usr/local/bin/awg-quick",
-                    "/opt/awg-install",
-                ], capture_output=True)
-                if proto:
-                    proto.enabled = False
-                    proto.installed = False
-                save_state(state)
-                success("AmneziaWG полностью удалён")
-            else:
-                info("Устанавливаю AmneziaWG kernel-модуль...")
-                if plugin.install():
-                    if proto:
-                        proto.installed = True
-                    save_state(state)
-                    success("Установлен. Модуль загружен.")
-                else:
-                    error("Ошибка установки.")
-            prompt("Нажмите Enter")
-        elif choice == "2":
-            _awg_generate_config(state, plugin)
-        elif choice == "3":
-            if s.running:
-                plugin.on_disable(state)
-                if proto:
-                    proto.enabled = False
-                save_state(state)
-                success("awg0 остановлен")
-            else:
-                if not s.installed:
-                    warn("Сначала установите (пункт 1)")
-                else:
-                    plugin.on_enable(state)
-                    if proto:
-                        proto.enabled = True
-                    save_state(state)
-                    success("awg0 запущен")
-            prompt("Нажмите Enter")
-        elif choice == "4":
-            _awg_status_detail(state, plugin)
-        elif choice == "5":
-            _awg_diagnose(state, plugin)
-
-
-def _awg_peers_menu(state: AppState, plugin):
-    while True:
-        clear()
-        users = [u for u in state.users if not u.blocked]
-        peers = {p["email"]: p for p in plugin.connected_clients()}
-
-        peer_lines = []
-        for u in users:
-            p = peers.get(u.email)
-            ico = f"{GREEN}●{NC}" if (p and p["online"]) else f"{DIM}○{NC}"
-            tx = _bytes_auto((p["rx"] + p["tx"]) if p else 0)
-            peer_lines.append(f"  {ico} {u.email}")
-            peer_lines.append(f"     {DIM}трафик: {tx}{NC}")
-        peer_lines += ["", f"  {DIM}● = онлайн  ○ = офлайн{NC}"]
-        panel("Пиры AWG", peer_lines)
-
-        choice = menu(
-            [("1", "➕ Синхронизировать пиры с пользователями",
-              "Добавить всех незаблокированных, убрать заблокированных"),
-             ("0", "↩ Назад", "")],
-            "УПРАВЛЕНИЕ ПИРАМИ",
-        )
-
-        if choice == "0":
-            return
-        elif choice == "1":
-            plugin.configure(state)
-            save_state(state)
-            success(f"Пиры синхронизированы: {len(users)} активно")
-            prompt("Нажмите Enter")
-
-
-def _awg_generate_config(state: AppState, plugin):
-    clear()
-    user = _select_user(state, "Номер пользователя для конфига")
-    if not user:
-        prompt("Нажмите Enter")
-        return
-
-    conf = plugin.generate_client_config(user, state)
-    if not conf:
-        error("Не удалось сгенерировать конфиг (AWG не настроен?).")
-        prompt("Нажмите Enter")
-        return
-
-    path = Path(f"/tmp/awg-{user.email}.conf")
-    path.write_text(conf)
-    wg_link = plugin.client_link(user, state)
-
-    print(f"\n  {GREEN}Конфиг сохранён{NC}")
-    print(f"  {DIM}Файл: {path}{NC}")
-    print(f"  {CYAN}── .conf{NC}{'─' * 56}")
-    print(f"{DIM}{conf}{NC}")
-    if wg_link:
-        print(f"  {CYAN}── wg://{NC}{'─' * 57}")
-        print(f"  {wg_link}")
+        ps = get_protocol(state, p.meta.name)
+        
+        # Статус
         try:
-            import qrcode
-            qr = qrcode.QRCode()
-            qr.add_data(wg_link)
-            qr.print_ascii()
-        except ImportError:
-            print(f"  {DIM}pip3 install qrcode — для QR-кода{NC}")
-    prompt("Нажмите Enter")
-
-
-def _awg_diagnose(state: AppState, plugin):
-    """Диагностика маршрутизации AWG: ip_forward, NAT, интерфейс."""
-    clear()
-    title("Диагностика AWG")
-    print()
-    lines = []
-    nat_ok = False
-
-    r = subprocess.run(["sysctl", "-n", "net.ipv4.ip_forward"], capture_output=True, text=True)
-    ip_fwd = r.stdout.strip() == "1"
-    lines.append(kv("ip_forward:", f"{_ok(ip_fwd)} {'включён' if ip_fwd else 'ВЫКЛЮЧЕН!'}"))
-
-    r = subprocess.run(["ip", "link", "show", "awg0"], capture_output=True, text=True)
-    awg_up = r.returncode == 0
-    lines.append(kv("awg0:", f"{_ok(awg_up)} {'поднят' if awg_up else 'ОПУЩЕН!'}"))
-
-    if awg_up:
-        _, _, network = plugin._network()
-        try:
-            iface = subprocess.run(
-                ["sh", "-c", "ip route show default | awk '{print $5}'"],
-                capture_output=True, text=True).stdout.strip() or "eth0"
+            st = p.status()
+            lines = [
+                f"  Статус:      {'🟢 Работает' if st.running else '🔴 Остановлен'}",
+                f"  Установлен:  {_ok(st.installed)}",
+                f"  Включён:     {_ok(st.enabled)}",
+            ]
+            if st.port:
+                lines.append(f"  Порт:        {st.port}")
+            if st.info:
+                for k, v in st.info.items():
+                    lines.append(f"  {k}: {v}")
+            panel(f"{p.meta.name.upper()} v{p.meta.version}", lines)
         except Exception:
-            iface = "eth0"
-        r = subprocess.run(
-            ["iptables", "-t", "nat", "-C", "POSTROUTING",
-             "-s", network, "-o", iface, "-j", "MASQUERADE"],
-            capture_output=True,
-        )
-        nat_ok = r.returncode == 0
-        lines.append(kv("NAT (MASQUERADE):", f"{_ok(nat_ok)} {'есть' if nat_ok else 'ОТСУТСТВУЕТ!'}"))
+            panel(p.meta.name.upper(), ["  Статус недоступен"])
+        print()
+        
+        # Опции зависят от состояния
+        options = []
+        
+        if not ps.installed:
+            options.append(("1", "🔧 Установить", p.meta.description))
+        else:
+            if ps.enabled:
+                options.append(("1", "⏸️  Выключить", "Отключить протокол"))
+            else:
+                options.append(("1", "▶️  Включить", "Активировать протокол"))
+            
+            # Для TRANSPORT-плагинов: показать подключённых клиентов
+            if p.meta.category == PluginCategory.TRANSPORT and ps.enabled:
+                options.append(("2", "👥 Клиенты", "Подключённые клиенты и трафик"))
+            
+            options.append(("8", "🔄 Переустановить", "Переустановка протокола"))
+            options.append(("9", "🗑  Удалить", "Полное удаление"))
+        
+        options.append(("0", "↩ Назад", ""))
+        
+        choice = menu(options, p.meta.name.upper())
+        
+        if choice == "1":
+            if not ps.installed:
+                info("Установка...")
+                ok = orchestrator.install_plugin(state, p.meta.name)
+                if ok:
+                    success("Установлено!")
+                    orchestrator.enable(state, p.meta.name)
+                else:
+                    error("Ошибка установки")
+            elif ps.enabled:
+                orchestrator.disable(state, p.meta.name)
+                success("Протокол выключен")
+            else:
+                orchestrator.enable(state, p.meta.name)
+                success("Протокол включён")
+            prompt("Нажмите Enter")
+        
+        elif choice == "2" and ps.installed and ps.enabled:
+            _show_plugin_clients(state, p)
+        
+        elif choice == "8" and ps.installed:
+            if confirm("Переустановить?", default=False):
+                orchestrator.uninstall_plugin(state, p.meta.name)
+                ok = orchestrator.install_plugin(state, p.meta.name)
+                msg = "Переустановлено!" if ok else "Ошибка переустановки"
+                (success if ok else error)(msg)
+                prompt("Нажмите Enter")
+        
+        elif choice == "9" and ps.installed:
+            if confirm(f"Удалить {p.meta.name}?", default=False):
+                orchestrator.uninstall_plugin(state, p.meta.name)
+                success("Удалено")
+                prompt("Нажмите Enter")
+                return
+        
+        elif choice == "0":
+            return
 
-    panel("AWG маршрутизация", lines)
 
-    if not awg_up:
-        warn("Интерфейс awg0 не поднят")
-    if not ip_fwd:
-        warn("ip_forward выключен — трафик не пойдёт!")
-        if confirm("Включить ip_forward?", True):
-            plugin._ensure_ip_forward()
-            success("ip_forward включён")
-    if awg_up and not nat_ok:
-        warn("NAT правило отсутствует — интернет не работает!")
-        if confirm("Добавить NAT (MASQUERADE)?", True):
-            plugin._ensure_nat()
-            success("NAT добавлен")
-
-    print()
-    prompt("Нажмите Enter")
-
-
-def _awg_status_detail(state: AppState, plugin):
+def _show_plugin_clients(state: AppState, p):
+    """Показывает подключённых клиентов и трафик для протокола."""
     clear()
-    traffic = plugin.traffic(state)
-    peers = {p["email"]: p for p in plugin.connected_clients()}
-
-    status_lines = []
-    for u in state.users:
-        if u.blocked:
-            continue
-        p = peers.get(u.email)
-        ico = f"{GREEN}● онлайн{NC}" if (p and p["online"]) else f"{DIM}○ офлайн{NC}"
-        used = traffic.get(u.email, 0)
-        status_lines.append(f"  {BOLD}{u.email}{NC}")
-        status_lines.append(f"     {ico}  |  {_bytes_auto(used)}")
-    panel("Статус пиров", status_lines)
+    title(f"Клиенты: {p.meta.name.upper()}")
+    
+    try:
+        clients = p.connected_clients()
+        traffic = p.traffic(state)
+        
+        if not clients and not traffic:
+            info("Нет данных о подключениях")
+        else:
+            if clients:
+                for c in clients:
+                    status = "🟢" if c.get("online") else "🔴"
+                    email = c.get("email", "?")
+                    rx = _bytes_auto(c.get("rx", 0))
+                    tx = _bytes_auto(c.get("tx", 0))
+                    print(f"  {status} {email:<20} ↓{rx} ↑{tx}")
+            elif traffic:
+                for email, bytes_total in traffic.items():
+                    print(f"  {email:<20} {_bytes_auto(bytes_total)}")
+    except Exception as e:
+        error(f"Ошибка: {e}")
+    
     prompt("Нажмите Enter")
+
+
+
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -678,125 +490,137 @@ def _awg_status_detail(state: AppState, plugin):
 # ═════════════════════════════════════════════════════════════════════════════
 
 def menu_users(state: AppState):
+    """Управление пользователями."""
     while True:
         clear()
-        traffic = collect_traffic(state)
-        total_bytes = sum(traffic.values())
+        title("Пользователи")
+        
+        # Показать краткую сводку
+        total = len(state.users)
         active = sum(1 for u in state.users if not u.blocked)
-        blocked = sum(1 for u in state.users if u.blocked)
-
-        panel("Пользователи", [
-            kv("Всего:", str(len(state.users))),
-            kv("Активных:", f"{GREEN}{active}{NC}"),
-            kv("Заблокировано:", f"{RED}{blocked}{NC}"),
-            kv("Трафик всего:", _bytes_auto(total_bytes)),
-        ])
-
-        choice = menu(
-            [
-                ("1", "📋 Список пользователей", f"{len(state.users)} всего, {active} активно"),
-                ("2", "👤 Детально / Конфиги",  "Выбрать пользователя: трафик, TTL, ссылки, QR"),
-                ("3", "➕ Добавить",            "Email, лимит, TTL"),
-                ("4", "🗑  Удалить",            "По email"),
-                ("5", "🔒🔓 Заблокировать / Разблокировать", ""),
-                ("6", "📊 Лимит трафика",       "Установить GB"),
-                ("7", "⏰ Срок действия (TTL)",  "Дата окончания"),
-                ("8", "🔄 Синхронизировать",    "Обновить пиры во всех протоколах"),
-                ("0", "↩ Назад", ""),
-            ],
-            "ПОЛЬЗОВАТЕЛИ",
-        )
-
-        if choice == "0":
-            return
-        elif choice == "1":
-            _show_users(state, traffic)
+        info(f"Всего: {total}  |  Активных: {active}")
+        print()
+        
+        choice = menu([
+            ("1", "📋 Список пользователей", "Просмотр всех пользователей"),
+            ("2", "👤 Добавить пользователя", "Создать нового пользователя"),
+            ("3", "⚙️  Управление пользователем", "Конфиги, блокировка, удаление"),
+            ("0", "↩ Назад", ""),
+        ], "ПОЛЬЗОВАТЕЛИ")
+        
+        if choice == "1":
+            _show_users(state)
         elif choice == "2":
-            user = _select_user(state, "Номер пользователя")
+            _add_user(state)
+        elif choice == "3":
+            user = _select_user(state)
             if user:
                 _user_detail_menu(state, user)
-        elif choice == "3":
-            _add_user(state)
-        elif choice == "4":
-            _delete_user(state)
-        elif choice == "5":
-            _toggle_block(state)
-        elif choice == "6":
-            _set_limit(state)
-        elif choice == "7":
-            _set_ttl(state)
-        elif choice == "8":
-            _sync_all_protocols(state)
+        elif choice == "0":
+            return
 
 
 def _user_detail_menu(state: AppState, user: User):
-    """Подменю для одного выбранного пользователя."""
+    """Детальное меню пользователя с конфигами и управлением."""
     while True:
         clear()
-        traffic = collect_traffic(state)
-        used = traffic.get(user.email, user.traffic_used_bytes)
-        lim = int(user.traffic_limit_gb * 1073741824) if user.traffic_limit_gb else 0
-        ico = f"{RED}🔴{NC}" if user.blocked else f"{GREEN}🟢{NC}"
-
-        panel(f"👤 {user.email}", [
-            kv("Статус:", f"{'ЗАБЛОКИРОВАН' if user.blocked else 'АКТИВЕН'}"),
-            kv("UUID:", f"{DIM}{user.uuid}{NC}"),
-            kv("Трафик:", f"{_bytes_auto(used)} / {user.traffic_limit_gb or '∞'} GB"),
-            *([kv("Прогресс:", _bar(used, lim))] if user.traffic_limit_gb else []),
-            kv("TTL:", user.expiry_date[:10] if user.expiry_date else "∞"),
-            kv("Создан:", user.created_at[:10] if user.created_at else "—"),
-            kv("Telegram ID:", str(user.telegram_id or "—")),
-            kv("Подписка:", f"{DIM}{state.network.server_ip or 'SERVER_IP'}:8443?token={user.uuid[:8]}...{NC}"),
-        ])
-
-        choice = menu(
-            [
-                ("1", "📄 Показать ссылки / конфиги", "Все протоколы, QR, подписка"),
-                ("2", "🔒 Заблокировать" if not user.blocked else "🔓 Разблокировать", ""),
-                ("3", "📊 Изменить лимит", f"Сейчас: {user.traffic_limit_gb or '∞'} GB"),
-                ("4", "⏰ Изменить TTL", f"Сейчас: {user.expiry_date[:10] if user.expiry_date else '∞'}"),
-                ("5", "🗑  Удалить", ""),
-                ("0", "↩ Назад", ""),
-            ],
-            f"ПОЛЬЗОВАТЕЛЬ {user.email}",
-        )
-
-        if choice == "0":
-            return
-        elif choice == "1":
-            _user_links(state, user)
+        
+        # Панель информации о пользователе
+        status_icon = f"{GREEN}🟢{NC}" if not user.blocked else f"{RED}🔴{NC}"
+        lines = [
+            f"  Email:    {status_icon} {user.email}",
+            f"  UUID:     {user.uuid[:8]}...",
+            f"  Трафик:   {_bytes_auto(user.traffic_used_bytes)}",
+            f"  Создан:   {user.created_at[:10] if user.created_at else '—'}",
+        ]
+        panel(f"Пользователь: {user.email}", lines)
+        print()
+        
+        # Показать доступные протоколы
+        from hydra.plugins import registry
+        enabled_transports = registry.enabled(state, PluginCategory.TRANSPORT)
+        if enabled_transports:
+            proto_names = ", ".join(p.meta.name for p in enabled_transports)
+            info(f"Включённые протоколы: {proto_names}")
+        else:
+            warn("Нет включённых транспортных протоколов")
+        print()
+        
+        block_label = "Разблокировать" if user.blocked else "Заблокировать"
+        
+        choice = menu([
+            ("1", "📄 Конфиги и ссылки", "Показать конфиги всех протоколов"),
+            ("2", f"🔒🔓 {block_label}", "Переключить статус блокировки"),
+            ("3", "🗑  Удалить", "Удалить пользователя"),
+            ("0", "↩ Назад", ""),
+        ], f"ПОЛЬЗОВАТЕЛЬ {user.email}")
+        
+        if choice == "1":
+            _user_configs(state, user)
         elif choice == "2":
-            if user.blocked:
-                orchestrator.unblock_user(state, user.email)
-                success(f"{user.email} разблокирован")
-            else:
-                orchestrator.block_user(state, user.email)
-                success(f"{user.email} заблокирован")
-            prompt("Нажмите Enter")
+            _toggle_block(state, user)
         elif choice == "3":
-            gb = prompt("Лимит (GB, 0 = безлимит)", str(user.traffic_limit_gb))
-            user.traffic_limit_gb = float(gb) if gb else 0
-            save_state(state)
-            success(f"{user.email}: {user.traffic_limit_gb or '∞'} GB")
-            prompt("Нажмите Enter")
-        elif choice == "4":
-            days = prompt("Дней от сегодня (0 = бессрочно)", "0")
-            if days:
-                user.expiry_date = "" if int(days) <= 0 else datetime.fromtimestamp(
-                    datetime.now().timestamp() + int(days) * 86400).isoformat()
-                save_state(state)
-                ttl = user.expiry_date[:10] if user.expiry_date else "∞"
-                success(f"{user.email}: TTL {ttl}")
-            prompt("Нажмите Enter")
-        elif choice == "5":
             if confirm(f"Удалить {user.email}?", default=False):
                 orchestrator.remove_user(state, user.email)
-                success(f"{user.email} удалён")
-            prompt("Нажмите Enter")
+                success(f"Пользователь {user.email} удалён")
+                prompt("Нажмите Enter")
+                return
+        elif choice == "0":
             return
 
 
-def _show_users(state: AppState, traffic: dict[str, int]):
+def _user_configs(state: AppState, user: User):
+    """Показывает конфиги и ссылки для всех протоколов."""
+    clear()
+    title(f"Конфиги: {user.email}")
+    
+    from hydra.plugins import registry
+    enabled_transports = registry.enabled(state, PluginCategory.TRANSPORT)
+    
+    if not enabled_transports:
+        warn("Нет включённых транспортных протоколов")
+        prompt("Нажмите Enter")
+        return
+    
+    for p in enabled_transports:
+        print()
+        title(f"  {p.meta.name.upper()}")
+        
+        # Ссылка
+        link = ""
+        try:
+            link = p.client_link(user, state)
+            if link:
+                print(f"  Ссылка: {link}")
+        except Exception as e:
+            error(f"  Ошибка ссылки: {e}")
+        
+        # Конфиг
+        try:
+            conf = p.generate_client_config(user, state)
+            if conf:
+                # Рисуем рамку
+                box_lines = []
+                for line in conf.splitlines():
+                    box_lines.append(f"  {DIM}{line}{NC}")
+                panel(f"{p.meta.name} config", box_lines)
+                
+                # QR-код (если qrcode установлен)
+                try:
+                    import qrcode
+                    qr = qrcode.QRCode(border=1)
+                    target = link if link else conf
+                    qr.add_data(target)
+                    qr.print_ascii(invert=True)
+                except ImportError:
+                    pass
+        except Exception as e:
+            error(f"  Ошибка конфига: {e}")
+    
+    prompt("Нажмите Enter")
+
+
+def _show_users(state: AppState):
     clear()
     if not state.users:
         warn("Нет пользователей.")
@@ -804,109 +628,65 @@ def _show_users(state: AppState, traffic: dict[str, int]):
         return
     title("Список пользователей")
     print()
+    traffic = collect_traffic(state)
     for u in state.users:
         ico = f"{RED}🔴{NC}" if u.blocked else f"{GREEN}🟢{NC}"
         used = traffic.get(u.email, u.traffic_used_bytes)
-        limit_bytes = int(u.traffic_limit_gb * 1073741824) if u.traffic_limit_gb else 0
-        limit_str = f"{u.traffic_limit_gb} GB" if u.traffic_limit_gb else "∞"
-        ttl = u.expiry_date[:10] if u.expiry_date else "∞"
         print(f"  {ico} {BOLD}{u.email}{NC}")
-        print(f"     Трафик: {_bytes_auto(used)} / {limit_str}")
-        print(f"     {_bar(used, limit_bytes)}")
-        print(f"     TTL: {ttl}     UUID: {DIM}{u.uuid[:20]}...{NC}")
+        print(f"     Трафик: {_bytes_auto(used)}     UUID: {DIM}{u.uuid[:20]}...{NC}")
         print()
     prompt("Нажмите Enter")
 
 
 def _add_user(state: AppState):
+    """Добавление нового пользователя с автогенерацией конфигов."""
+    clear()
+    title("Добавить пользователя")
+    
+    # Показать какие протоколы создадут конфиги
+    from hydra.plugins import registry
+    enabled_transports = registry.enabled(state, PluginCategory.TRANSPORT)
+    
+    if enabled_transports:
+        proto_names = ", ".join(p.meta.name for p in enabled_transports)
+        info(f"Конфиги будут созданы для: {proto_names}")
+    else:
+        warn("Нет включённых протоколов — конфиги не будут созданы")
+    print()
+    
     email = prompt("Email пользователя")
     if not email:
         return
+    
+    # Проверка дубликата
     if find_user(state, email):
-        warn(f"{email} уже существует.")
+        error(f"Пользователь {email} уже существует")
         prompt("Нажмите Enter")
         return
-    limit = prompt("Лимит (GB, 0 = безлимит)", "0")
-    ttl = prompt("Срок (дней, 0 = бессрочно)", "0")
+    
     user = User(
-        email=email, uuid=str(_uuid.uuid4()),
-        traffic_limit_gb=float(limit) if limit else 0,
-        expiry_date=("" if int(ttl) <= 0 else datetime.fromtimestamp(
-            datetime.now().timestamp() + int(ttl) * 86400).isoformat()),
+        email=email,
+        uuid=str(_uuid.uuid4()),
         created_at=datetime.now().isoformat(),
     )
+    
     orchestrator.add_user(state, user)
-    success(f"{email} создан (UUID: {user.uuid[:16]}...)")
+    
+    success(f"Пользователь {email} создан")
+    if enabled_transports:
+        success(f"Конфиги сгенерированы для {len(enabled_transports)} протокол(ов)")
+    
     prompt("Нажмите Enter")
 
 
-def _delete_user(state: AppState):
-    clear()
-    user = _select_user(state, "Номер для удаления")
-    if not user:
-        prompt("Нажмите Enter")
-        return
-    if confirm(f"Удалить {user.email}?", default=False):
-        orchestrator.remove_user(state, user.email)
-        success(f"{user.email} удалён.")
-    prompt("Нажмите Enter")
-
-
-def _toggle_block(state: AppState):
-    clear()
-    user = _select_user(state, "Номер")
-    if not user:
-        prompt("Нажмите Enter")
-        return
+def _toggle_block(state: AppState, user: User):
+    """Переключает блокировку пользователя."""
     if user.blocked:
         orchestrator.unblock_user(state, user.email)
-        success(f"{user.email} разблокирован.")
+        success(f"{user.email} разблокирован")
     else:
         orchestrator.block_user(state, user.email)
-        success(f"{user.email} заблокирован.")
-    prompt("Нажмите Enter")
-
-
-def _set_limit(state: AppState):
-    clear()
-    user = _select_user(state, "Номер")
-    if not user:
-        prompt("Нажмите Enter")
-        return
-    gb = prompt("Лимит (GB, 0 = безлимит)", str(user.traffic_limit_gb))
-    user.traffic_limit_gb = float(gb) if gb else 0
-    save_state(state)
-    success(f"{user.email}: {user.traffic_limit_gb or '∞'} GB")
-    prompt("Нажмите Enter")
-
-
-def _set_ttl(state: AppState):
-    clear()
-    user = _select_user(state, "Номер")
-    if not user:
-        prompt("Нажмите Enter")
-        return
-    days = prompt("Дней от сегодня (0 = бессрочно)", "0")
-    if days:
-        user.expiry_date = "" if int(days) <= 0 else datetime.fromtimestamp(
-            datetime.now().timestamp() + int(days) * 86400).isoformat()
-        save_state(state)
-        ttl = user.expiry_date[:10] if user.expiry_date else "∞"
-        success(f"{user.email}: TTL {ttl}")
-    prompt("Нажмите Enter")
-
-
-def _sync_all_protocols(state: AppState):
-    """Синхронизирует пользователей со всеми активными протоколами."""
-    info("Синхронизация пиров...")
-    for p in enabled(state):
-        try:
-            p.configure(state)
-            p.apply(state)
-            success(f"  {p.meta.name}: обновлён")
-        except Exception as e:
-            warn(f"  {p.meta.name}: {e}")
-    save_state(state)
+        success(f"{user.email} заблокирован")
     prompt("Нажмите Enter")
 
 

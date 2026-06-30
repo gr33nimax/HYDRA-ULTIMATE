@@ -89,6 +89,7 @@ def test_configure_empty_when_no_conf():
 def test_traffic_uses_state():
     p = AmneziaWGPlugin()
     user_a = _make_user("a@x.com", uuid="uuid-a")
+    user_a.credentials["amneziawg"] = {"public_key": "pub_a"}
     state = _make_state([user_a])
 
     with patch.object(p, "_installed", return_value=True), \
