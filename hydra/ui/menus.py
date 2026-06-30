@@ -67,7 +67,62 @@ def _sys_info() -> list[str]:
         lines.append(kv("Диск:", f"{disk.percent:.0f}%  ({_bytes_auto(disk.used)} / {_bytes_auto(disk.total)})"))
         lines.append(kv("Uptime:", f"{d}д {h:02d}:{m:02d}"))
     except ImportError:
-        lines.append(kv("PSUTIL:", f"{YELLOW}не установлен{NC}"))
+        # Резервный сбор метрик через стандартную библиотеку и /proc (на Linux)
+        try:
+            import os
+            import shutil
+            from pathlib import Path
+            
+            # 1. Диск через shutil (стандартная библиотека)
+            total_d, used_d, free_d = shutil.disk_usage("/")
+            disk_pct = (used_d / total_d) * 100 if total_d > 0 else 0
+            
+            # 2. Метрики для Unix-систем
+            uptime_str = "—"
+            load_str = "—"
+            mem_str = "—"
+            
+            if os.name != "nt":
+                # Uptime из /proc/uptime
+                uptime_file = Path("/proc/uptime")
+                if uptime_file.exists():
+                    with open(uptime_file, "r") as f:
+                        uptime_sec = float(f.readline().split()[0])
+                    d, r = divmod(int(uptime_sec), 86400)
+                    h, m = divmod(r, 3600)
+                    m, _ = divmod(m, 60)
+                    uptime_str = f"{d}д {h:02d}:{m:02d}"
+                
+                # Средняя нагрузка (Load Average)
+                avg1, avg5, _ = os.getloadavg()
+                load_str = f"{avg1:.2f}, {avg5:.2f}"
+                
+                # RAM из /proc/meminfo
+                meminfo_file = Path("/proc/meminfo")
+                if meminfo_file.exists():
+                    meminfo = {}
+                    with open(meminfo_file, "r") as f:
+                        for line in f:
+                            parts = line.split()
+                            if len(parts) >= 2:
+                                meminfo[parts[0].rstrip(":")] = int(parts[1]) * 1024
+                    m_total = meminfo.get("MemTotal", 0)
+                    m_free = meminfo.get("MemFree", 0)
+                    m_buffers = meminfo.get("Buffers", 0)
+                    m_cached = meminfo.get("Cached", 0)
+                    m_used = m_total - m_free - m_buffers - m_cached
+                    m_pct = (m_used / m_total) * 100 if m_total > 0 else 0
+                    mem_str = f"{m_pct:.0f}%  ({_bytes_auto(m_used)} / {_bytes_auto(m_total)})"
+            
+            if load_str != "—":
+                lines.append(kv("Load Avg:", load_str))
+            if mem_str != "—":
+                lines.append(kv("RAM:", mem_str))
+            lines.append(kv("Диск:", f"{disk_pct:.0f}%  ({_bytes_auto(used_d)} / {_bytes_auto(total_d)})"))
+            if uptime_str != "—":
+                lines.append(kv("Uptime:", uptime_str))
+        except Exception:
+            pass
     except Exception:
         pass
     return lines
