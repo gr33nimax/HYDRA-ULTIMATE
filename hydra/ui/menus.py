@@ -447,30 +447,78 @@ def menu_plugin(state: AppState, p):
 
 
 def _show_plugin_clients(state: AppState, p):
-    """Показывает подключённых клиентов и трафик для протокола."""
+    """Показывает подключённых клиентов и трафик для протокола с двойными рамками."""
     clear()
-    title(f"Клиенты: {p.meta.name.upper()}")
     
     try:
-        clients = p.connected_clients()
+        # Безопасно проверяем, поддерживает ли метод connected_clients передачу state
+        import inspect
+        sig = inspect.signature(p.connected_clients)
+        if "state" in sig.parameters or len(sig.parameters) > 0:
+            clients = p.connected_clients(state)
+        else:
+            clients = p.connected_clients()
+            
         traffic = p.traffic(state)
         
+        box_lines = []
+        
+        # Сводные показатели
+        total_clients = len(clients) if clients else len(traffic) if traffic else 0
+        online_clients = sum(1 for c in clients if c.get("online")) if clients else 0
+        total_rx = sum(c.get("rx", 0) for c in clients) if clients else 0
+        total_tx = sum(c.get("tx", 0) for c in clients) if clients else 0
+        
         if not clients and not traffic:
-            info("Нет данных о подключениях")
+            box_lines.append(f"{YELLOW}Нет активных клиентов или трафика{NC}")
         else:
             if clients:
+                box_lines.append(f"{BOLD}{WHITE}Активные сессии:{NC}")
+                now_ts = int(datetime.now().timestamp())
                 for c in clients:
-                    status = "🟢" if c.get("online") else "🔴"
+                    status = f"{GREEN}🟢{NC}" if c.get("online") else f"{RED}🔴{NC}"
                     email = c.get("email", "?")
                     rx = _bytes_auto(c.get("rx", 0))
                     tx = _bytes_auto(c.get("tx", 0))
-                    print(f"  {status} {email:<20} ↓{rx} ↑{tx}")
+                    
+                    # Форматируем время последнего хендшейка
+                    handshake = c.get("last_handshake", 0)
+                    if handshake == 0:
+                        activity = f"{DIM}не активен{NC}"
+                    else:
+                        diff = now_ts - handshake
+                        if diff < 10:
+                            activity = f"{GREEN}активен{NC}"
+                        elif diff < 60:
+                            activity = f"{GREEN}только что{NC}"
+                        elif diff < 3600:
+                            activity = f"{GREEN}{diff // 60} мин. назад{NC}"
+                        elif diff < 86400:
+                            activity = f"{DIM}{diff // 3600} ч. назад{NC}"
+                        else:
+                            activity = f"{DIM}{diff // 86400} дн. назад{NC}"
+                            
+                    box_lines.append(f"  {status} {BOLD}{email:<18}{NC}  ↓{rx:<9} ↑{tx:<9}  {activity}")
             elif traffic:
+                box_lines.append(f"{BOLD}{WHITE}Статистика трафика:{NC}")
                 for email, bytes_total in traffic.items():
-                    print(f"  {email:<20} {_bytes_auto(bytes_total)}")
+                    box_lines.append(f"  {BOLD}{email:<20}{NC}  {_bytes_auto(bytes_total)}")
+            
+            # Добавляем сводный блок трафика
+            box_lines.append(f"{DIM}{'─' * (PANEL_W - 4)}{NC}")
+            box_lines.append(f"{BOLD}{WHITE}СВОДНАЯ СТАТИСТИКА ПОТОКА:{NC}")
+            box_lines.append(f"  Всего клиентов:  {total_clients}")
+            if clients:
+                box_lines.append(f"  В сети (online): {GREEN}{online_clients}{NC}")
+                box_lines.append(f"  Получено (RX):   {GREEN}{_bytes_auto(total_rx)}{NC}")
+                box_lines.append(f"  Отправлено (TX): {GREEN}{_bytes_auto(total_tx)}{NC}")
+                box_lines.append(f"  Общий трафик:    {CYAN}{_bytes_auto(total_rx + total_tx)}{NC}")
+                
+        panel(f"👥  КЛИЕНТЫ: {p.meta.name.upper()}", box_lines)
     except Exception as e:
-        error(f"Ошибка: {e}")
+        error(f"Ошибка получения клиентов: {e}")
     
+    print()
     prompt("Нажмите Enter")
 
 
