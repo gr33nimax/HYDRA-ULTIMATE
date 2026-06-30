@@ -427,7 +427,7 @@ class AmneziaWGPlugin(BasePlugin):
         obf = self._obfuscation()
 
         mtu_m = re.search(r"^MTU\s*=\s*(\d+)", self._interface_block(), re.M)
-        mtu = mtu_m.group(1) if mtu_m else "1376"
+        mtu = mtu_m.group(1) if (mtu_m and mtu_m.group(1) != "1420") else "1376"
 
         dns = self._params().get("CLIENT_DNS_1", "1.1.1.1")
         dns2 = self._params().get("CLIENT_DNS_2", "")
