@@ -166,7 +166,19 @@ class AmneziaWGPlugin(BasePlugin):
         return self._apply()
 
     def _apply(self) -> bool:
-        """Применяет awg0.conf без разрыва туннеля (или поднимает интерфейс)."""
+        """Применяет awg0.conf без разрыва туннеля (или поднимает/перезапускает интерфейс)."""
+        active_ip = self._active_ip()
+        config_ip = None
+        if AWG_CONF.exists():
+            m = re.search(r"Address\s*=\s*(\d+\.\d+\.\d+\.\d+)", AWG_CONF.read_text())
+            if m:
+                config_ip = m.group(1)
+
+        if active_ip and config_ip and active_ip != config_ip:
+            # Сетевой адрес изменился (например, из-за конфликта с wdtt). Перезапускаем интерфейс.
+            subprocess.run(["systemctl", "restart", AWG_UNIT], capture_output=True)
+            return self._is_up()
+
         if self._is_up():
             r = subprocess.run(
                 ["bash", "-c", f"awg syncconf {AWG_INTERFACE} <(awg-quick strip {AWG_INTERFACE})"],
@@ -177,6 +189,25 @@ class AmneziaWGPlugin(BasePlugin):
         if r.returncode != 0:
             r = subprocess.run(["awg-quick", "up", AWG_INTERFACE], capture_output=True)
         return r.returncode == 0
+
+    def _active_ip(self) -> str | None:
+        """Возвращает текущий активный IPv4-адрес интерфейса awg0."""
+        import platform
+        if platform.system() != "Linux":
+            return None
+        try:
+            r = subprocess.run(
+                ["ip", "-o", "-4", "addr", "show", AWG_INTERFACE],
+                capture_output=True, text=True, timeout=5
+            )
+            if not isinstance(r.stdout, str):
+                return None
+            if r.returncode != 0:
+                return None
+            m = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", r.stdout)
+            return m.group(1) if m else None
+        except Exception:
+            return None
 
     # ── разбор awg0.conf ────────────────────────────────────────────────
 
