@@ -91,6 +91,7 @@ def apply_tproxy(fragments: dict, tproxy_port: int = 1081) -> None:
         port_list = ", ".join(str(p) for p in sorted(ports))
         ruleset += "    chain output {\n"
         ruleset += "        type route hook output priority mangle; policy accept;\n"
+        ruleset += "        meta mark 0xff return\n"
         ruleset += f"        meta l4proto {{ tcp, udp }} th dport {{ {port_list} }} meta mark set 0x1\n"
         ruleset += "    }\n"
 
