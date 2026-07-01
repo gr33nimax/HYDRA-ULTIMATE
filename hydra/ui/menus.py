@@ -408,8 +408,10 @@ def menu_core(state: AppState):
             info("Устанавливаю Sing-Box...")
             if install_singbox():
                 success(f"Sing-Box {singbox_version()} установлен")
-                if start_singbox():
-                    success("Запущен")
+                if orchestrator.apply_config(state):
+                    success("Конфигурация пересобрана и применена")
+                else:
+                    warn("Внимание: не удалось автоматически применить конфиг")
             else:
                 error("Не удалось установить")
             prompt("Нажмите Enter")
@@ -551,15 +553,22 @@ def menu_plugin(state: AppState, p):
                 ok = orchestrator.install_plugin(state, p.meta.name)
                 if ok:
                     success("Установлено!")
-                    orchestrator.enable(state, p.meta.name)
+                    if orchestrator.enable(state, p.meta.name):
+                        success("Протокол включён и применён")
+                    else:
+                        error("Ошибка применения конфигурации")
                 else:
                     error("Ошибка установки")
             elif ps.enabled:
-                orchestrator.disable(state, p.meta.name)
-                success("Протокол выключен")
+                if orchestrator.disable(state, p.meta.name):
+                    success("Протокол выключен")
+                else:
+                    error("Ошибка применения конфигурации")
             else:
-                orchestrator.enable(state, p.meta.name)
-                success("Протокол включён")
+                if orchestrator.enable(state, p.meta.name):
+                    success("Протокол включён")
+                else:
+                    error("Ошибка применения конфигурации")
             prompt("Нажмите Enter")
         
         elif choice == "2" and ps.installed and ps.enabled:
