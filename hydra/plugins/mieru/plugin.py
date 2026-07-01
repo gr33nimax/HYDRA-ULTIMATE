@@ -174,9 +174,49 @@ class MieruPlugin(BasePlugin):
         """TODO: получить трафик из sing-box API/логов."""
         return {}
 
-    def connected_clients(self) -> list[dict]:
-        """TODO: получить из sing-box connections API."""
-        return []
+    def connected_clients(self, state: AppState | None = None) -> list[dict]:
+        """Получает список подключённых клиентов через утилиту ss."""
+        import shutil
+        import subprocess
+        import time
+        if not shutil.which("ss"):
+            return []
+
+        r = subprocess.run(
+            ["ss", "-t", "-H", "-n", "state", "established"],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            return []
+
+        clients = []
+        now_ts = int(time.time())
+
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+
+            local_addr = parts[3]
+            remote_addr = parts[4]
+
+            local_port_str = local_addr.split(":")[-1]
+            if not local_port_str.isdigit():
+                continue
+            local_port = int(local_port_str)
+
+            if DEFAULT_PORT_START <= local_port <= DEFAULT_PORT_END:
+                remote_parts = remote_addr.split(":")
+                remote_ip = ":".join(remote_parts[:-1]).strip("[]")
+
+                clients.append({
+                    "online": True,
+                    "email": remote_ip,
+                    "rx": 0,
+                    "tx": 0,
+                    "last_handshake": now_ts,
+                })
+        return clients
 
     # ═══════════════════════════════════════════════════════════════════
     #  Управление

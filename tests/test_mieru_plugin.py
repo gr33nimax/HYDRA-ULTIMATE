@@ -1,7 +1,7 @@
 """tests/test_mieru_plugin.py — Тесты для Mieru plugin v2 (sing-box inbound)."""
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -165,3 +165,33 @@ def test_status_delegates_to_singbox():
         assert s.installed is True
         assert s.running is True
         assert s.port == 2012
+
+
+def test_connected_clients_with_ss():
+    """connected_clients() парсит вывод ss."""
+    p = MieruPlugin()
+    
+    mock_ss_output = (
+        "ESTAB 0      0             146.103.126.78:2012        109.252.12.34:58291\n"
+        "ESTAB 0      0             [::1]:2015                 [::1]:58292\n"
+        "ESTAB 0      0             146.103.126.78:8080        109.252.12.34:58293\n"
+    )
+    
+    import subprocess
+    mock_res = MagicMock(spec=subprocess.CompletedProcess)
+    mock_res.returncode = 0
+    mock_res.stdout = mock_ss_output
+    
+    with patch("shutil.which", return_value="/usr/bin/ss"), \
+         patch("subprocess.run", return_value=mock_res):
+        clients = p.connected_clients()
+        assert len(clients) == 2
+        
+        # Первая сессия: порт 2012
+        assert clients[0]["email"] == "109.252.12.34"
+        assert clients[0]["online"] is True
+        
+        # Вторая сессия: порт 2015 (внутри диапазона 2012-2022)
+        assert clients[1]["email"] == "::1"
+        assert clients[1]["online"] is True
+
