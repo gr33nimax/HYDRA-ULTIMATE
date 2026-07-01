@@ -56,7 +56,7 @@ class MieruPlugin(BasePlugin):
             if user.blocked:
                 continue
             users.append({
-                "uuid": self._derive_username(user.uuid),
+                "name": self._derive_username(user.uuid),
                 "password": self._derive_password(user.uuid),
             })
 
