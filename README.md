@@ -49,6 +49,9 @@
 | OlaRTC | `olcrtc` | TCP over WebRTC, SOCKS :8808 | 🟡 В разработке (WIP) |
 | SlipGate | `slipgate` | DNS-туннели (DNSTT/Noize/Slipstream/VayDNS) | 🟡 В разработке (WIP) |
 | WebDAV | `webdav` | SOCKS5 over WebDAV | 🟡 В разработке (WIP) |
+| VLESS | `vless` | VLESS-XTLS-Reality (sing-box native) | 🟡 В планах (Roadmap) |
+| AnyTLS | `anytls` | TLS-обфускатор для обхода DPI | 🟡 В планах (Roadmap) |
+| TrustTunnel | `trusttunnel` | Защищённый туннель для обхода блокировок | 🟡 В планах (Roadmap) |
 
 ### Надстройки (ENHANCEMENT)
 | Плагин | Что делает | Статус |
