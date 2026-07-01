@@ -9,7 +9,7 @@
 
 > [!IMPORTANT]
 > **Текущий статус проекта:**
-> На данный момент полностью готов, отлажен и стабильно работает только плагин **AmneziaWG 2.0**.
+> На данный момент полностью готовы, отлажены и стабильно работают плагины **AmneziaWG 2.0** и **Mieru**.
 > Все остальные плагины (транспорты, надстройки и модули безопасности) находятся на этапе активной разработки и интеграции (WIP).
 
 ---
@@ -41,7 +41,7 @@
 | Протокол | Плагин | Особенности | Статус |
 |---|---|---|---|
 | AmneziaWG 2.0 | `amneziawg` | Kernel-модуль, per-user pubkey | 🟢 Готов (Ready) |
-| Mieru | `mieru` | mTLS + random padding | 🟡 В разработке (WIP) |
+| Mieru | `mieru` | mTLS + random padding | 🟢 Готов (Ready) |
 | NaiveProxy | `naive` | Caddy (TLS) + fake-site | 🟡 В разработке (WIP) |
 | MTProto | `telemt` | Telegram MTProto, multi-user | 🟡 В разработке (WIP) |
 | FreeTurn | `vkturn` | UDP:56000, sing-box vmess outbound | 🟡 В разработке (WIP) |
