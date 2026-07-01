@@ -273,11 +273,11 @@ class MieruPlugin(BasePlugin):
         self._remove_iptables_rules()
         for p in range(DEFAULT_PORT_START, DEFAULT_PORT_END + 1):
             subprocess.run([
-                "iptables", "-A", "INPUT", "-p", "tcp", "--dport", str(p),
+                "iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", str(p),
                 "-m", "comment", "--comment", f"mieru-rx-{p}"
             ], capture_output=True)
             subprocess.run([
-                "iptables", "-A", "OUTPUT", "-p", "tcp", "--sport", str(p),
+                "iptables", "-I", "OUTPUT", "1", "-p", "tcp", "--sport", str(p),
                 "-m", "comment", "--comment", f"mieru-tx-{p}"
             ], capture_output=True)
 
