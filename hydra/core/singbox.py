@@ -161,8 +161,9 @@ def _base_config(state: AppState) -> dict:
             "tag": "tproxy-in",
             "listen": "::",
             "listen_port": state.network.tproxy_port,
-            "sniff": True,
-            "sniff_override_destination": True,
+        })
+        config["route"]["rules"].append({
+            "action": "sniff",
         })
     return config
 
