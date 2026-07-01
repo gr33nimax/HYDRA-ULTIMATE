@@ -73,74 +73,60 @@ def get_version() -> Optional[str]:
     return None
 
 
+EXTENDED_REPO = "shtorm-7/sing-box-extended"
+
+
 def install() -> bool:
-    """Устанавливает Sing-Box. Пробует apt, затем прямой .deb."""
+    """Устанавливает sing-box-extended из GitHub releases."""
     if is_installed():
         return True
 
-    _log("INFO", "Installing Sing-Box...")
+    _log("INFO", "Installing sing-box-extended...")
 
-    # Способ 1: apt-репозиторий
-    keyring_dir = Path("/etc/apt/keyrings")
-    keyring_dir.mkdir(parents=True, exist_ok=True)
-    keyring_file = keyring_dir / "sagernet.asc"
+    from hydra.utils.net import detect_arch
+    from hydra.utils.downloader import download_github_asset_filtered, extract_tarball
 
-    r = _run(
-        ["curl", "-fsSL", "--connect-timeout", "15", "--retry", "3",
-         "https://sing-box.app/gpg.key", "-o", str(keyring_file)],
-        capture=False, timeout=60,
-    )
-    if r.returncode == 0:
-        keyring_file.chmod(0o644)
-        source = "deb [signed-by=/etc/apt/keyrings/sagernet.asc] https://deb.sagernet.org/ * *"
-        Path("/etc/apt/sources.list.d/sagernet.list").write_text(source + "\n")
-        _run(["apt-get", "update", "-qq"], capture=False, timeout=60)
-        r = _run(
-            ["apt-get", "install", "-y", "-qq", "sing-box"],
-            capture=False, timeout=120,
+    arch = detect_arch()  # "amd64" | "arm64"
+
+    def _match(name: str) -> bool:
+        """Точный фильтр: linux-{arch}.tar.gz без суффиксов."""
+        return (
+            f"linux-{arch}.tar.gz" in name
+            and "compressed" not in name
+            and "musl" not in name
+            and "glibc" not in name
+            and "purego" not in name
         )
-        if r.returncode == 0 and is_installed():
-            _log("INFO", f"Sing-Box installed via apt: {get_version()}")
-            return True
 
-    # Способ 2: прямой .deb с GitHub
-    _log("WARN", "apt failed, trying direct .deb download...")
-    import platform as _pf
-    arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(_pf.machine(), "amd64")
+    dest = Path("/tmp/singbox-install")
+    dest.mkdir(parents=True, exist_ok=True)
+    tarball = dest / "sing-box.tar.gz"
 
-    r = _run(
-        ["curl", "-s", "--connect-timeout", "15",
-         "https://api.github.com/repos/SagerNet/sing-box/releases/latest"],
-        timeout=30,
-    )
-    if r.returncode == 0:
-        try:
-            rel = json.loads(r.stdout)
-            deb_url = None
-            for a in rel.get("assets", []):
-                n = a.get("name", "")
-                if f"linux-{arch}" in n and n.endswith(".deb"):
-                    deb_url = a["browser_download_url"]
-                    break
-            if deb_url:
-                deb_path = Path("/tmp/sing-box.deb")
-                r = _run(
-                    ["curl", "-fsSL", "--connect-timeout", "30", "--retry", "3",
-                     deb_url, "-o", str(deb_path)],
-                    capture=False, timeout=120,
-                )
-                if r.returncode == 0:
-                    _run(["dpkg", "-i", str(deb_path)], capture=False, timeout=60)
-                    _run(["apt-get", "install", "-f", "-y", "-qq"], capture=False, timeout=60)
-                    deb_path.unlink(missing_ok=True)
-                    if is_installed():
-                        _log("INFO", f"Sing-Box installed via .deb: {get_version()}")
-                        return True
-        except Exception:
-            pass
+    if not download_github_asset_filtered(EXTENDED_REPO, _match, tarball):
+        _log("ERROR", "Failed to download sing-box-extended")
+        return False
 
-    _log("ERROR", "All Sing-Box install methods failed")
-    return False
+    extract_tarball(tarball, dest)
+
+    # Найти бинарник sing-box в распакованном каталоге
+    candidate = None
+    for p in dest.rglob("sing-box"):
+        if p.is_file() and p.stat().st_size > 1_000_000:  # >1MB = бинарник
+            candidate = p
+            break
+
+    if not candidate:
+        _log("ERROR", "sing-box binary not found in archive")
+        shutil.rmtree(str(dest), ignore_errors=True)
+        return False
+
+    import shutil as _sh
+    _sh.move(str(candidate), str(SINGBOX_BIN))
+    SINGBOX_BIN.chmod(0o755)
+    _sh.rmtree(str(dest), ignore_errors=True)
+
+    _log("INFO", f"sing-box-extended installed: {get_version()}")
+    return is_installed()
 
 
 # ═════════════════════════════════════════════════════════════════════════════

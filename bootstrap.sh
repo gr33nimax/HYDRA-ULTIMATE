@@ -95,19 +95,41 @@ ok "Python $PY_VER: OK"
 # Дополнительные пакеты
 $PKG_INSTALL iptables iproute2 gnupg ca-certificates 2>/dev/null || true
 
-# ── Sing-Box ────────────────────────────────────────────────────────────────
-echo -e "\n${BOLD}Sing-Box${NC}"
+# ── Sing-Box Extended ──────────────────────────────────────────────────────
+echo -e "\n${BOLD}Sing-Box Extended${NC}"
 if ! command -v sing-box &> /dev/null; then
-    info "Установка Sing-Box..."
-    curl -fsSL https://sing-box.app/gpg.key -o /usr/share/keyrings/sagernet.asc 2>/dev/null
-    chmod 644 /usr/share/keyrings/sagernet.asc
-    echo "deb [signed-by=/usr/share/keyrings/sagernet.asc] https://deb.sagernet.org/ * *" \
-        > /etc/apt/sources.list.d/sagernet.list
-    apt-get update -qq
-    $PKG_INSTALL sing-box 2>/dev/null || {
-        warn "Не удалось установить sing-box через apt. Попробуйте вручную."
-    }
-    command -v sing-box &>/dev/null && ok "Sing-Box: $(sing-box version 2>/dev/null | head -1)" || warn "Sing-Box не установлен"
+    info "Установка sing-box-extended..."
+    ARCH=$(uname -m)
+    case "$ARCH" in
+        x86_64|amd64) SB_ARCH="amd64" ;;
+        aarch64|arm64) SB_ARCH="arm64" ;;
+        *) err "Неподдерживаемая архитектура: $ARCH"; exit 1 ;;
+    esac
+
+    SB_URL=$(curl -s https://api.github.com/repos/shtorm-7/sing-box-extended/releases/latest \
+        | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for a in data.get('assets', []):
+    n = a['name']
+    if 'linux-${SB_ARCH}.tar.gz' in n \
+       and 'compressed' not in n and 'musl' not in n \
+       and 'glibc' not in n and 'purego' not in n:
+        print(a['browser_download_url']); break
+")
+
+    if [[ -n "$SB_URL" ]]; then
+        curl -fsSL "$SB_URL" -o /tmp/sing-box.tar.gz
+        mkdir -p /tmp/sing-box-install
+        tar -xzf /tmp/sing-box.tar.gz -C /tmp/sing-box-install
+        find /tmp/sing-box-install -name "sing-box" -type f \
+            -size +1M -exec cp {} /usr/local/bin/sing-box \;
+        chmod 755 /usr/local/bin/sing-box
+        rm -rf /tmp/sing-box.tar.gz /tmp/sing-box-install
+        ok "Sing-Box Extended: $(sing-box version 2>/dev/null | head -1)"
+    else
+        err "Не удалось определить URL для sing-box-extended"
+    fi
 else
     ok "Sing-Box: $(sing-box version 2>/dev/null | head -1)"
 fi
