@@ -9,7 +9,7 @@
 
 > [!IMPORTANT]
 > **Текущий статус проекта:**
-> На данный момент полностью готовы, отлажены и стабильно работают плагины **AmneziaWG 2.0** (интегрирован напрямую в ядро Sing-Box через TPROXY) и **Mieru**.
+> На данный момент полностью готовы, отлажены и стабильно работают плагины **AmneziaWG 2.0** (интегрирован напрямую в ядро Sing-Box через TPROXY), **Mieru** и **NaiveProxy**.
 > Все остальные плагины (транспорты, надстройки и модули безопасности) находятся на этапе активной разработки и интеграции (WIP).
 
 ---
@@ -42,7 +42,7 @@
 |---|---|---|---|
 | AmneziaWG 2.0 | `amneziawg` | Kernel-модуль, интегрирован в ядро Sing-Box через TPROXY | 🟢 Готов (Ready) |
 | Mieru | `mieru` | mTLS + random padding | 🟢 Готов (Ready) |
-| NaiveProxy | `naive` | Caddy (TLS) + fake-site | 🟡 В разработке (WIP) |
+| NaiveProxy | `naive` | Caddy (TLS) + fake-site | 🟢 Готов (Ready) |
 | MTProto | `telemt` | Telegram MTProto, multi-user | 🟡 В разработке (WIP) |
 | FreeTurn | `vkturn` | UDP:56000, sing-box vmess outbound | 🟡 В разработке (WIP) |
 | qWDTT | `wdtt` | WG over TURN, per-user | 🟡 В разработке (WIP) |
