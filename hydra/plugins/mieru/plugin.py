@@ -194,11 +194,11 @@ class MieruPlugin(BasePlugin):
 
         for line in r.stdout.splitlines():
             parts = line.split()
-            if len(parts) < 5:
+            if len(parts) < 4:
                 continue
 
-            local_addr = parts[3]
-            remote_addr = parts[4]
+            local_addr = parts[2]
+            remote_addr = parts[3]
 
             local_port_str = local_addr.split(":")[-1]
             if not local_port_str.isdigit():
