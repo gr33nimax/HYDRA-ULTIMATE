@@ -76,9 +76,9 @@ def get_version() -> Optional[str]:
 EXTENDED_REPO = "shtorm-7/sing-box-extended"
 
 
-def install() -> bool:
+def install(force: bool = False) -> bool:
     """Устанавливает sing-box-extended из GitHub releases."""
-    if is_installed():
+    if not force and is_installed() and "extended" in (get_version() or "").lower():
         return True
 
     _log("INFO", "Installing sing-box-extended...")

@@ -97,7 +97,7 @@ $PKG_INSTALL iptables iproute2 gnupg ca-certificates 2>/dev/null || true
 
 # ── Sing-Box Extended ──────────────────────────────────────────────────────
 echo -e "\n${BOLD}Sing-Box Extended${NC}"
-if ! command -v sing-box &> /dev/null; then
+if ! command -v sing-box &> /dev/null || ! sing-box version 2>/dev/null | head -1 | grep -q "extended"; then
     info "Установка sing-box-extended..."
     ARCH=$(uname -m)
     case "$ARCH" in
