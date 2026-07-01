@@ -1785,4 +1785,12 @@
 # \- \[x] 10.1 dnscrypt / \[x] 10.2 warp / \[x] 10.3 porthopping / \[x] 10.4 fail2ban / \[x] 10.5 geoip / \[x] 10.6 honeypot / \[x] 10.7 ipban
 
 # \- \[x] 11. Тесты, доки, релиз (230 тестов, README/CHANGELOG/docs обновлены, tag v2.0.0)
+# \- \[ ] 12. Интеграция VLESS, AnyTLS и TrustTunnel
+
+# 
+# # ЭТАП 12 — Интеграция VLESS, AnyTLS и TrustTunnel
+# 
+# - **VLESS**: Реализовать vless-transport плагин (VLESS-XTLS-Reality) для интеграции с sing-box.
+# - **AnyTLS**: Реализовать TLS-обфускатор AnyTLS для обхода глубокого анализа пакетов (DPI).
+# - **TrustTunnel**: Реализовать защищенный туннель TrustTunnel как отдельный транспортный плагин.
 

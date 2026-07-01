@@ -1,6 +1,6 @@
-# HYDRA v2.0
+# HYDRA v0.0.3 BETA
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)]()
+[![Version](https://img.shields.io/badge/version-0.0.3--beta-blue.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)]()
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg)]()
@@ -9,7 +9,7 @@
 
 > [!IMPORTANT]
 > **Текущий статус проекта:**
-> На данный момент полностью готовы, отлажены и стабильно работают плагины **AmneziaWG 2.0** и **Mieru**.
+> На данный момент полностью готовы, отлажены и стабильно работают плагины **AmneziaWG 2.0** (интегрирован напрямую в ядро Sing-Box через TPROXY) и **Mieru**.
 > Все остальные плагины (транспорты, надстройки и модули безопасности) находятся на этапе активной разработки и интеграции (WIP).
 
 ---
@@ -40,7 +40,7 @@
 ### Транспорты (TRANSPORT)
 | Протокол | Плагин | Особенности | Статус |
 |---|---|---|---|
-| AmneziaWG 2.0 | `amneziawg` | Kernel-модуль, per-user pubkey | 🟢 Готов (Ready) |
+| AmneziaWG 2.0 | `amneziawg` | Kernel-модуль, интегрирован в ядро Sing-Box через TPROXY | 🟢 Готов (Ready) |
 | Mieru | `mieru` | mTLS + random padding | 🟢 Готов (Ready) |
 | NaiveProxy | `naive` | Caddy (TLS) + fake-site | 🟡 В разработке (WIP) |
 | MTProto | `telemt` | Telegram MTProto, multi-user | 🟡 В разработке (WIP) |
