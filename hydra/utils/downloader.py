@@ -67,6 +67,32 @@ def download_github_asset(repo: str, asset_pattern: str, dest: Path) -> bool:
         return False
 
 
+def download_github_asset_filtered(repo: str, name_filter: callable, dest: Path) -> bool:
+    """Скачивает ассет из latest release, фильтруя через callable.
+
+    name_filter принимает имя ассета (str) и возвращает True если подходит.
+    Это решает проблему подстрочного поиска: 'linux-amd64.tar.gz' больше
+    не матчит 'linux-amd64-compressed.tar.gz'.
+
+    Пример:
+        download_github_asset_filtered("owner/repo",
+            lambda n: "linux-amd64.tar.gz" in n and "compressed" not in n,
+            Path("/tmp/file.tar.gz"))
+    """
+    url = f"https://api.github.com/repos/{repo}/releases/latest"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "HYDRA-Installer"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read())
+
+        for asset in data.get("assets", []):
+            if name_filter(asset["name"]):
+                return download(asset["browser_download_url"], dest)
+        return False
+    except Exception:
+        return False
+
+
 def verify_elf(path: Path) -> bool:
     """True если первые 4 байта == b'\\x7fELF'."""
     try:

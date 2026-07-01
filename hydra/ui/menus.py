@@ -392,8 +392,8 @@ def menu_core(state: AppState):
 
         choice = menu(
             [
-                ("1", "📦 Установить Sing-Box" if not ok_i else "🔄 Переустановить",
-                 "Официальный репозиторий / GitHub .deb"),
+                ("1", "📦 Установить Sing-Box Extended" if not ok_i else "🔄 Переустановить",
+                 "shtorm-7/sing-box-extended"),
                 ("2", "▶️  Запустить" if not ok_r else "⏸️  Остановить", ""),
                 ("3", "🔄 Применить конфиг",
                  "Собрать /etc/sing-box/config.json и перезагрузить"),
@@ -425,16 +425,11 @@ def menu_core(state: AppState):
                     error("Не удалось запустить. Проверьте: systemctl status sing-box")
             prompt("Нажмите Enter")
         elif choice == "3":
-            info("Собираю конфиг...")
-            cfg = generate_config(state, collect_fragments(state))
-            if write_config(cfg):
-                success("Конфиг записан")
-                if reload_singbox():
-                    success("Sing-Box перезагружен")
-                else:
-                    warn("Перезагрузка не удалась")
+            info("Пересобираю конфиг...")
+            if orchestrator.apply_config(state):
+                success("Конфиг применён, Sing-Box перезагружен")
             else:
-                error("Ошибка валидации конфига")
+                error("Ошибка применения конфига")
             prompt("Нажмите Enter")
 
 
