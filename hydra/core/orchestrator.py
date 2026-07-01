@@ -7,15 +7,17 @@ from hydra.plugins import registry
 
 
 def apply_config(state: AppState) -> bool:
+    # Принудительно включаем TPROXY — необходим для AWG и других транспортов
+    if not state.network.tproxy_enabled:
+        state.network.tproxy_enabled = True
+        save_state(state)
+
     fragments = registry.collect_fragments(state)
     cfg = singbox.generate_config(state, fragments)
     if not singbox.write_config(cfg):
         return False
     try:
-        if state.network.tproxy_enabled:
-            nft.apply_tproxy(fragments, state.network.tproxy_port)
-        else:
-            nft.clear_tproxy()
+        nft.apply_tproxy(fragments, state.network.tproxy_port)
     except Exception:
         pass
     return singbox.reload()

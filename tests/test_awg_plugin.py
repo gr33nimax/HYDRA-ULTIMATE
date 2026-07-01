@@ -40,7 +40,7 @@ def test_plugin_meta():
     assert p.meta.needs_domain is False
 
 
-def test_configure_returns_route_rule():
+def test_configure_returns_tproxy_ifaces():
     p = AmneziaWGPlugin()
     state = _make_state([_make_user("a@x.com")])
 
@@ -53,8 +53,8 @@ def test_configure_returns_route_rule():
         frag = p.configure(state)
 
         assert isinstance(frag, ConfigFragment)
-        assert len(frag.route_rules) == 1
-        assert "ip_cidr" in frag.route_rules[0]
+        assert frag.nft_tproxy_ifaces == [AWG_INTERFACE]
+        assert frag.route_rules == []
         assert frag.nft_tproxy_ports == []
         assert frag.inbounds == []
         assert frag.outbounds == []

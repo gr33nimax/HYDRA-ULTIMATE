@@ -56,7 +56,7 @@ def test_apply_config_pipeline():
         patch("hydra.core.orchestrator.singbox.generate_config", return_value={}) as mock_gen,
         patch("hydra.core.orchestrator.singbox.write_config", return_value=True) as mock_write,
         patch("hydra.core.orchestrator.singbox.reload", return_value=True) as mock_reload,
-        patch("hydra.core.orchestrator.nft.clear_tproxy"),
+        patch("hydra.core.orchestrator.nft.apply_tproxy"),
         patch("hydra.core.orchestrator.save_state"),
     ):
         from hydra.core import orchestrator
@@ -76,7 +76,7 @@ def test_apply_config_returns_false_on_write_error():
         patch("hydra.core.orchestrator.singbox.generate_config", return_value={}),
         patch("hydra.core.orchestrator.singbox.write_config", return_value=False),
         patch("hydra.core.orchestrator.singbox.reload") as mock_reload,
-        patch("hydra.core.orchestrator.nft.clear_tproxy"),
+        patch("hydra.core.orchestrator.nft.apply_tproxy"),
     ):
         from hydra.core import orchestrator
         result = orchestrator.apply_config(state)
@@ -95,7 +95,7 @@ def test_add_user_fanout():
         patch("hydra.core.orchestrator.singbox.generate_config", return_value={}),
         patch("hydra.core.orchestrator.singbox.write_config", return_value=True),
         patch("hydra.core.orchestrator.singbox.reload", return_value=True),
-        patch("hydra.core.orchestrator.nft.clear_tproxy"),
+        patch("hydra.core.orchestrator.nft.apply_tproxy"),
         patch("hydra.core.orchestrator.save_state"),
     ):
         from hydra.core import orchestrator
@@ -116,7 +116,7 @@ def test_block_user_calls_on_user_block():
         patch("hydra.core.orchestrator.singbox.generate_config", return_value={}),
         patch("hydra.core.orchestrator.singbox.write_config", return_value=True),
         patch("hydra.core.orchestrator.singbox.reload", return_value=True),
-        patch("hydra.core.orchestrator.nft.clear_tproxy"),
+        patch("hydra.core.orchestrator.nft.apply_tproxy"),
         patch("hydra.core.orchestrator.save_state"),
     ):
         from hydra.core import orchestrator
@@ -137,7 +137,7 @@ def test_remove_user_calls_on_user_remove():
         patch("hydra.core.orchestrator.singbox.generate_config", return_value={}),
         patch("hydra.core.orchestrator.singbox.write_config", return_value=True),
         patch("hydra.core.orchestrator.singbox.reload", return_value=True),
-        patch("hydra.core.orchestrator.nft.clear_tproxy"),
+        patch("hydra.core.orchestrator.nft.apply_tproxy"),
         patch("hydra.core.orchestrator.save_state"),
     ):
         from hydra.core import orchestrator
@@ -159,7 +159,7 @@ def test_add_user_skips_disabled_transport():
         patch("hydra.core.orchestrator.singbox.generate_config", return_value={}),
         patch("hydra.core.orchestrator.singbox.write_config", return_value=True),
         patch("hydra.core.orchestrator.singbox.reload", return_value=True),
-        patch("hydra.core.orchestrator.nft.clear_tproxy"),
+        patch("hydra.core.orchestrator.nft.apply_tproxy"),
         patch("hydra.core.orchestrator.save_state"),
     ):
         from hydra.core import orchestrator
@@ -180,7 +180,7 @@ def test_unblock_user_reenables():
         patch("hydra.core.orchestrator.singbox.generate_config", return_value={}),
         patch("hydra.core.orchestrator.singbox.write_config", return_value=True),
         patch("hydra.core.orchestrator.singbox.reload", return_value=True),
-        patch("hydra.core.orchestrator.nft.clear_tproxy"),
+        patch("hydra.core.orchestrator.nft.apply_tproxy"),
         patch("hydra.core.orchestrator.save_state"),
     ):
         from hydra.core import orchestrator
@@ -200,10 +200,8 @@ def test_apply_config_calls_tproxy_when_enabled():
         patch("hydra.core.orchestrator.singbox.write_config", return_value=True),
         patch("hydra.core.orchestrator.singbox.reload", return_value=True),
         patch("hydra.core.orchestrator.nft.apply_tproxy") as mock_tproxy,
-        patch("hydra.core.orchestrator.nft.clear_tproxy") as mock_clear,
     ):
         from hydra.core import orchestrator
         orchestrator.apply_config(state)
 
     mock_tproxy.assert_called_once_with({}, 1081)
-    mock_clear.assert_not_called()

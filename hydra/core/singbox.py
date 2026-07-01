@@ -152,16 +152,17 @@ def _base_config(state: AppState) -> dict:
         "route": {
             "rules": [],
             "auto_detect_interface": True,
+            "default_mark": 255,
         },
     }
     if state.network.tproxy_enabled:
         config["inbounds"].append({
-            "type": "direct",
+            "type": "tproxy",
             "tag": "tproxy-in",
             "listen": "::",
             "listen_port": state.network.tproxy_port,
-            "network": "tcp",
             "sniff": True,
+            "sniff_override_destination": True,
         })
     return config
 

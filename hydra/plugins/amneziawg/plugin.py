@@ -154,7 +154,7 @@ class AmneziaWGPlugin(BasePlugin):
         self._peer_map = peer_map
 
         return ConfigFragment(
-            route_rules=[{"ip_cidr": [network], "outbound": "direct"}],
+            nft_tproxy_ifaces=[AWG_INTERFACE],
         )
 
     def apply(self, state: AppState) -> bool:
@@ -565,16 +565,35 @@ class AmneziaWGPlugin(BasePlugin):
 
     def on_enable(self, state: AppState) -> None:
         self._ensure_ip_forward()
+
+        # Миграция: превентивно удаляем старые iptables MASQUERADE
+        # из прошлых версий, где AWG работал без sing-box
+        try:
+            self._remove_nat(state)
+        except Exception:
+            pass
+
         self.configure(state)
         self.apply(state)
         if not self._is_up():
             subprocess.run(["systemctl", "enable", "--now", AWG_UNIT], capture_output=True)
-        self._ensure_nat(state)
+
+        # НЕ вызываем _ensure_nat() — MASQUERADE больше не нужен,
+        # трафик идёт через sing-box TPROXY → sing-box routing.
+
+        # FORWARD правила оставляем — ядру нужно разрешить пересылку
+        # пакетов с awg0 до того, как они попадут в nftables TPROXY.
         self._ensure_forward()
 
     def on_disable(self, state: AppState) -> None:
         self._remove_forward()
-        self._remove_nat(state)
+
+        # Превентивная зачистка: удаляем NAT, если он остался от старой версии
+        try:
+            self._remove_nat(state)
+        except Exception:
+            pass
+
         subprocess.run(["systemctl", "stop", AWG_UNIT], capture_output=True)
 
     @staticmethod
