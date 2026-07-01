@@ -574,7 +574,7 @@ class NaivePlugin(BasePlugin):
     order forward_proxy before reverse_proxy
 }}
 
-{domain}:{port} {{
+:{port}, {domain}:{port} {{
 {tls_line}    forward_proxy {{
 {auth_lines}            hide_ip
             hide_via
