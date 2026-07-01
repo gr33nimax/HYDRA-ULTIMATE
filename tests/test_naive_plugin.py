@@ -174,12 +174,11 @@ def test_build_caddyfile_basic():
     )
 
     assert "vpn.example.com:443" in caddyfile
-    assert ":443" in caddyfile
     assert "basic_auth testuser testpass" in caddyfile
     assert "probe_resistance mysecret123" in caddyfile
     assert "forward_proxy" in caddyfile
     assert "reverse_proxy https://www.google.com" in caddyfile
-    assert "on_demand" in caddyfile
+    assert "tls" in caddyfile
 
 
 def test_build_caddyfile_no_probe_secret():

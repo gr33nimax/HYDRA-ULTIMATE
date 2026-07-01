@@ -561,7 +561,7 @@ class NaivePlugin(BasePlugin):
         if cert_file and key_file:
             tls_line = f"    tls {cert_file} {key_file}"
         else:
-            tls_line = "    tls {\n        on_demand\n    }"
+            tls_line = "    tls"
 
         return f"""\
 {{
@@ -569,7 +569,7 @@ class NaivePlugin(BasePlugin):
     order forward_proxy before reverse_proxy
 }}
 
-:{port}, {domain}:{port} {{
+{domain}:{port} {{
 {tls_line}
     forward_proxy {{
 {auth_lines}            hide_ip
