@@ -100,12 +100,19 @@ class NaivePlugin(BasePlugin):
         probe_secret = (ps.config.get("probe_secret", "") if ps and ps.config else "")
         decoy_url = (ps.config.get("decoy_url", "https://www.bing.com") if ps and ps.config else "https://www.bing.com")
 
+        cert_file = (ps.config.get("cert_file", "") if ps and ps.config else "")
+        key_file = (ps.config.get("key_file", "") if ps and ps.config else "")
+        if not cert_file or not key_file:
+            cert_file, key_file = self._find_existing_cert(domain)
+
         caddyfile = self._build_caddyfile(
             domain=domain,
             port=port,
             users=users,
             probe_secret=probe_secret,
             decoy_url=decoy_url,
+            cert_file=cert_file,
+            key_file=key_file,
         )
 
         self._pending_cfg = caddyfile
@@ -367,6 +374,23 @@ class NaivePlugin(BasePlugin):
                 ps.config["probe_secret"] = new_secret
                 modified = True
 
+            from hydra.ui.tui import confirm
+            use_custom = confirm("Использовать собственный SSL-сертификат (указать пути вручную)?", default=False)
+            if use_custom:
+                custom_cert = prompt("Путь к файлу сертификата (fullchain.pem)", default=ps.config.get("cert_file", ""))
+                custom_key = prompt("Путь к приватному ключу (privkey.pem)", default=ps.config.get("key_file", ""))
+                if custom_cert and custom_key:
+                    ps.config["cert_file"] = custom_cert
+                    ps.config["key_file"] = custom_key
+                    modified = True
+            else:
+                if "cert_file" in ps.config:
+                    del ps.config["cert_file"]
+                    modified = True
+                if "key_file" in ps.config:
+                    del ps.config["key_file"]
+                    modified = True
+
         if modified:
             from hydra.core.state import save_state
             save_state(state)
@@ -455,6 +479,19 @@ class NaivePlugin(BasePlugin):
                         total_bytes += int(parts[1])
         return total_bytes
 
+    def _find_existing_cert(self, domain: str) -> tuple[str, str]:
+        """Ищет существующий сертификат для домена в стандартных путях."""
+        paths = [
+            (f"/etc/letsencrypt/live/{domain}/fullchain.pem", f"/etc/letsencrypt/live/{domain}/privkey.pem"),
+            (f"/etc/xray/{domain}.crt", f"/etc/xray/{domain}.key"),
+            ("/etc/xray/xray.crt", "/etc/xray/xray.key"),
+        ]
+        for cert, key in paths:
+            cert_p, key_p = Path(cert), Path(key)
+            if cert_p.exists() and key_p.exists():
+                return cert, key
+        return "", ""
+
     @staticmethod
     def _installed() -> bool:
         return BIN_PATH.exists() or shutil.which("caddy-naive") is not None
@@ -510,6 +547,8 @@ class NaivePlugin(BasePlugin):
         users: list[dict],
         probe_secret: str,
         decoy_url: str = "https://www.bing.com",
+        cert_file: str = "",
+        key_file: str = "",
     ) -> str:
         auth_lines = ""
         for u in users:
@@ -519,6 +558,11 @@ class NaivePlugin(BasePlugin):
         if probe_secret:
             probe_line = f"            probe_resistance {probe_secret}\n"
 
+        if cert_file and key_file:
+            tls_line = f"    tls {cert_file} {key_file}"
+        else:
+            tls_line = "    tls {\n        on_demand\n    }"
+
         return f"""\
 {{
     http_port 0
@@ -526,9 +570,7 @@ class NaivePlugin(BasePlugin):
 }}
 
 :{port}, {domain}:{port} {{
-    tls {{
-        on_demand
-    }}
+{tls_line}
     forward_proxy {{
 {auth_lines}            hide_ip
             hide_via
