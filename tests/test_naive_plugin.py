@@ -163,13 +163,14 @@ def test_status_returns_plugin_status():
 
 
 def test_build_caddyfile_basic():
-    """_build_caddyfile генерирует валидный Caddyfile."""
+    """_build_caddyfile генерирует валидный Caddyfile с reverse_proxy decoy."""
     p = NaivePlugin()
     caddyfile = p._build_caddyfile(
         domain="vpn.example.com",
         port=443,
         users=[{"username": "testuser", "password": "testpass"}],
         probe_secret="mysecret123",
+        decoy_url="https://www.google.com",
     )
 
     assert "vpn.example.com:443" in caddyfile
@@ -177,7 +178,7 @@ def test_build_caddyfile_basic():
     assert "basic_auth testuser testpass" in caddyfile
     assert "probe_resistance mysecret123" in caddyfile
     assert "forward_proxy" in caddyfile
-    assert "file_server" in caddyfile
+    assert "reverse_proxy https://www.google.com" in caddyfile
     assert "on_demand" in caddyfile
 
 
@@ -209,3 +210,57 @@ def test_build_caddyfile_multiple_users():
     lines = caddyfile.splitlines()
     auth_lines = [l for l in lines if "basic_auth" in l]
     assert len(auth_lines) == 3
+
+
+def test_on_enable_opens_firewall():
+    """on_enable() открывает порт 443."""
+    p = NaivePlugin()
+    state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
+    with patch("hydra.utils.firewall.open_tcp") as mock_open, \
+         patch("subprocess.run") as mock_run, \
+         patch.object(p, "apply", return_value=True):
+        mock_run.return_value = MagicMock(stdout="active\n", returncode=0)
+        p.on_enable(state)
+        mock_open.assert_called_once_with(443, "naive")
+
+
+def test_on_disable_closes_firewall():
+    """on_disable() закрывает порт 443."""
+    p = NaivePlugin()
+    state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
+    with patch("hydra.utils.firewall.close_tcp") as mock_close, \
+         patch("subprocess.run") as mock_run:
+        p.on_disable(state)
+        mock_close.assert_called_once_with(443)
+
+
+def test_connected_clients_parses_ss():
+    """connected_clients() парсит ss output и группирует по IP."""
+    p = NaivePlugin()
+    mock_ss = (
+        "0      0      10.0.0.1:443    203.0.113.5:58291\n"
+        "0      0      10.0.0.1:443    203.0.113.5:58292\n"
+        "0      0      10.0.0.1:443    198.51.100.1:59001\n"
+    )
+    with patch("shutil.which", return_value="/usr/bin/ss"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(stdout=mock_ss, returncode=0)
+        clients = p.connected_clients()
+        assert len(clients) == 2
+        ips = {c["email"].split(" ")[0] for c in clients}
+        assert "203.0.113.5" in ips
+        assert "198.51.100.1" in ips
+
+
+def test_status_shows_traffic():
+    """status() показывает Общий трафик в info."""
+    p = NaivePlugin()
+    with patch.object(NaivePlugin, "_installed", return_value=True), \
+         patch("subprocess.run") as mock_run, \
+         patch.object(NaivePlugin, "_get_total_traffic", return_value=1048576):
+        mock_run.return_value = MagicMock(stdout="active\n", returncode=0)
+        with patch("hydra.plugins.naive.plugin.CADDYFILE") as mock_cfg:
+            mock_cfg.exists.return_value = True
+            s = p.status()
+            assert "Общий трафик" in s.info
+            assert "1.00 MB" in s.info["Общий трафик"]

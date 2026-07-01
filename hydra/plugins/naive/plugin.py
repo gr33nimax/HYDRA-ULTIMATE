@@ -20,12 +20,10 @@ from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCateg
 from hydra.core.state import AppState, User
 from hydra.utils.crypto import derive_key
 from hydra.utils.downloader import download_github_asset, verify_elf
-from hydra.utils.net import public_ip
 
 BIN_PATH = Path("/usr/local/bin/caddy-naive")
 CFG_DIR = Path("/etc/caddy-naive")
 CADDYFILE = CFG_DIR / "Caddyfile"
-FAKE_SITE_DIR = Path("/var/www/naive-fake")
 LOG_DIR = Path("/var/log/caddy-naive")
 SERVICE_FILE = Path("/etc/systemd/system/caddy-naive.service")
 SERVICE_NAME = "caddy-naive"
@@ -60,7 +58,6 @@ class NaivePlugin(BasePlugin):
             print("  Не удалось установить caddy-naive.")
             return False
 
-        self._create_fake_site()
         self._install_service()
         return self._installed()
 
@@ -74,7 +71,7 @@ class NaivePlugin(BasePlugin):
 
         if BIN_PATH.exists():
             BIN_PATH.unlink()
-        for d in (CFG_DIR, FAKE_SITE_DIR, LOG_DIR):
+        for d in (CFG_DIR, LOG_DIR):
             if d.exists():
                 shutil.rmtree(d, ignore_errors=True)
         return True
@@ -101,12 +98,14 @@ class NaivePlugin(BasePlugin):
 
         ps = state.protocols.get("naive")
         probe_secret = (ps.config.get("probe_secret", "") if ps and ps.config else "")
+        decoy_url = (ps.config.get("decoy_url", "https://www.bing.com") if ps and ps.config else "https://www.bing.com")
 
         caddyfile = self._build_caddyfile(
             domain=domain,
             port=port,
             users=users,
             probe_secret=probe_secret,
+            decoy_url=decoy_url,
         )
 
         self._pending_cfg = caddyfile
@@ -208,6 +207,7 @@ class NaivePlugin(BasePlugin):
     def status(self) -> PluginStatus:
         installed = self._installed()
         running = False
+        enabled = CADDYFILE.exists()
         if installed:
             r = subprocess.run(
                 ["systemctl", "is-active", SERVICE_NAME],
@@ -215,11 +215,28 @@ class NaivePlugin(BasePlugin):
             )
             running = r.stdout.strip() == "active"
 
+        info = {}
+        if installed and running:
+            try:
+                total = self._get_total_traffic()
+                size = float(total)
+                for unit in ('B', 'KB', 'MB', 'GB', 'TB'):
+                    if size < 1024.0:
+                        formatted = f"{size:.2f} {unit}" if unit != 'B' else f"{int(size)} B"
+                        break
+                    size /= 1024.0
+                else:
+                    formatted = f"{size:.2f} PB"
+                info["Общий трафик"] = formatted
+            except Exception:
+                pass
+
         return PluginStatus(
             installed=installed,
-            enabled=CADDYFILE.exists(),
+            enabled=enabled,
             running=running,
             port=DEFAULT_PORT,
+            info=info,
         )
 
     def traffic(self, state: AppState) -> dict[str, int]:
@@ -250,14 +267,100 @@ class NaivePlugin(BasePlugin):
                             result[email] = result.get(email, 0) + int(parts[0])
         return result
 
-    def connected_clients(self) -> list[dict]:
-        return []
+    def connected_clients(self, state: AppState | None = None) -> list[dict]:
+        """Получает список подключённых клиентов через ss с группировкой по IP."""
+        import shutil
+        import time
+        if not shutil.which("ss"):
+            return []
+
+        r = subprocess.run(
+            ["ss", "-t", "-H", "-n", "state", "established"],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            return []
+
+        ip_counts = {}
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+
+            local_addr = parts[2]
+            local_port_str = local_addr.split(":")[-1]
+            if not local_port_str.isdigit():
+                continue
+            local_port = int(local_port_str)
+
+            if local_port == DEFAULT_PORT:
+                remote_addr = parts[3]
+                remote_parts = remote_addr.split(":")
+                remote_ip = ":".join(remote_parts[:-1]).strip("[]")
+                ip_counts[remote_ip] = ip_counts.get(remote_ip, 0) + 1
+
+        # rx/tx из iptables accounting
+        rx_bytes = 0
+        tx_bytes = 0
+        r_rx = subprocess.run(["iptables", "-t", "filter", "-L", "INPUT", "-n", "-v", "-x"], capture_output=True, text=True)
+        if r_rx.returncode == 0:
+            for line in r_rx.stdout.splitlines():
+                if "naive-rx" in line:
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        rx_bytes += int(parts[1])
+        r_tx = subprocess.run(["iptables", "-t", "filter", "-L", "OUTPUT", "-n", "-v", "-x"], capture_output=True, text=True)
+        if r_tx.returncode == 0:
+            for line in r_tx.stdout.splitlines():
+                if "naive-tx" in line:
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        tx_bytes += int(parts[1])
+
+        clients = []
+        now_ts = int(time.time())
+        n_clients = len(ip_counts)
+
+        for remote_ip, count in ip_counts.items():
+            clients.append({
+                "online": True,
+                "email": f"{remote_ip} ({count} TCP)",
+                "rx": rx_bytes // n_clients if n_clients > 0 else 0,
+                "tx": tx_bytes // n_clients if n_clients > 0 else 0,
+                "last_handshake": now_ts,
+            })
+        return clients
 
     # ═════════════════════════════════════════════════════════════════════
     #  Управление сервисом
     # ═════════════════════════════════════════════════════════════════════
 
     def on_enable(self, state: AppState) -> None:
+        from hydra.utils.firewall import open_tcp
+        open_tcp(DEFAULT_PORT, "naive")
+
+        # iptables accounting для подсчёта трафика
+        import subprocess
+        
+        # Проверка доступности порта 443 (чтобы не сломать Let's Encrypt и Caddy)
+        # Если мы не running (т.е. включаем первый раз), и порт занят — это конфликт
+        r_status = subprocess.run(["systemctl", "is-active", SERVICE_NAME], capture_output=True, text=True)
+        if r_status.stdout.strip() != "active":
+            import socket
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if s.connect_ex(('127.0.0.1', DEFAULT_PORT)) == 0:
+                    print(f"  [Предупреждение] Порт {DEFAULT_PORT} уже занят другим процессом. NaiveProxy может не запуститься.")
+
+        self._remove_iptables_rules()
+        subprocess.run([
+            "iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", str(DEFAULT_PORT),
+            "-m", "comment", "--comment", "naive-rx"
+        ], capture_output=True)
+        subprocess.run([
+            "iptables", "-I", "OUTPUT", "1", "-p", "tcp", "--sport", str(DEFAULT_PORT),
+            "-m", "comment", "--comment", "naive-tx"
+        ], capture_output=True)
+
         self.configure(state)
         self.apply(state)
         r = subprocess.run(
@@ -268,7 +371,10 @@ class NaivePlugin(BasePlugin):
             subprocess.run(["systemctl", "enable", "--now", SERVICE_NAME], capture_output=True)
 
     def on_disable(self, state: AppState) -> None:
+        from hydra.utils.firewall import close_tcp
         subprocess.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
+        close_tcp(DEFAULT_PORT)
+        self._remove_iptables_rules()
 
     # ═════════════════════════════════════════════════════════════════════
     #  Внутренние помощники
@@ -282,16 +388,51 @@ class NaivePlugin(BasePlugin):
     def _derive_password(uuid: str) -> str:
         return derive_key("naive-pass", uuid)
 
+    def _remove_iptables_rules(self) -> None:
+        """Удаляет iptables accounting правила naive-rx/naive-tx."""
+        import subprocess
+        for chain in ("INPUT", "OUTPUT"):
+            r = subprocess.run(["iptables", "-S", chain], capture_output=True, text=True)
+            if r.returncode != 0:
+                continue
+            for line in r.stdout.splitlines():
+                if "naive-" in line:
+                    parts = line.split()
+                    if parts[0] == "-A":
+                        parts[0] = "-D"
+                        subprocess.run(["iptables"] + parts, capture_output=True)
+
+    def _get_total_traffic(self) -> int:
+        """Считает суммарный трафик на порту NaiveProxy через iptables accounting."""
+        import subprocess
+        total_bytes = 0
+        for chain in ("INPUT", "OUTPUT"):
+            r = subprocess.run(
+                ["iptables", "-t", "filter", "-L", chain, "-n", "-v", "-x"],
+                capture_output=True, text=True,
+            )
+            if r.returncode != 0:
+                continue
+            for line in r.stdout.splitlines():
+                if "naive-" in line:
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        total_bytes += int(parts[1])
+        return total_bytes
+
     @staticmethod
     def _installed() -> bool:
         return BIN_PATH.exists() or shutil.which("caddy-naive") is not None
 
     def _download_binary(self) -> bool:
+        from hydra.utils.net import detect_arch
+        arch = detect_arch()
+
         dest = Path("/tmp/caddy-naive-install")
         dest.mkdir(parents=True, exist_ok=True)
-        binary = dest / "caddy-linux-amd64"
+        binary = dest / f"caddy-linux-{arch}"
 
-        if not download_github_asset(GITHUB_REPO, "caddy-linux-amd64", binary):
+        if not download_github_asset(GITHUB_REPO, f"caddy-linux-{arch}", binary):
             return False
 
         if not verify_elf(binary):
@@ -300,14 +441,6 @@ class NaivePlugin(BasePlugin):
         shutil.copy2(str(binary), str(BIN_PATH))
         BIN_PATH.chmod(0o755)
         return True
-
-    @staticmethod
-    def _create_fake_site() -> None:
-        FAKE_SITE_DIR.mkdir(parents=True, exist_ok=True)
-        (FAKE_SITE_DIR / "index.html").write_text(
-            "<!DOCTYPE html><html><head><title>Welcome</title></head>"
-            "<body><h1>Welcome</h1><p>This site is under maintenance.</p></body></html>\n"
-        )
 
     @staticmethod
     def _install_service() -> None:
@@ -325,7 +458,7 @@ class NaivePlugin(BasePlugin):
             "Restart=on-failure\n"
             "RestartSec=5\n"
             "LimitNOFILE=1048576\n"
-            f"ReadWritePaths={CFG_DIR} {LOG_DIR} {FAKE_SITE_DIR}\n"
+            f"ReadWritePaths={CFG_DIR} {LOG_DIR}\n"
             "AmbientCapabilities=CAP_NET_BIND_SERVICE\n"
             "NoNewPrivileges=true\n"
             "\n"
@@ -341,6 +474,7 @@ class NaivePlugin(BasePlugin):
         port: int,
         users: list[dict],
         probe_secret: str,
+        decoy_url: str = "https://www.bing.com",
     ) -> str:
         auth_lines = ""
         for u in users:
@@ -353,7 +487,7 @@ class NaivePlugin(BasePlugin):
         return f"""\
 {{
     http_port 0
-    order forward_proxy before file_server
+    order forward_proxy before reverse_proxy
 }}
 
 :{port}, {domain}:{port} {{
@@ -364,8 +498,8 @@ class NaivePlugin(BasePlugin):
 {auth_lines}            hide_ip
             hide_via
 {probe_line}    }}
-    file_server {{
-        root {FAKE_SITE_DIR}
+    reverse_proxy {decoy_url} {{
+        header_up Host {{upstream_hostport}}
     }}
     log {{
         output file {LOG_DIR}/access.log {{
