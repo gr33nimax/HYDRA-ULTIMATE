@@ -151,33 +151,9 @@ class MieruPlugin(BasePlugin):
     #  Статус
     # ═══════════════════════════════════════════════════════════════════
 
-    def status(self) -> PluginStatus:
-        from hydra.core.singbox import is_installed, is_running
-        from hydra.core.state import load_state
-        installed = is_installed()
-        enabled = False
-        try:
-            state = load_state()
-            ps = state.protocols.get("mieru")
-            if ps:
-                enabled = ps.enabled
-        except Exception:
-            pass
-        return PluginStatus(
-            installed=installed,
-            enabled=enabled,
-            running=installed and is_running() and enabled,
-            port=DEFAULT_PORT_START,
-        )
-
-    def traffic(self, state: AppState) -> dict[str, int]:
-        """Считает трафик на портах Mieru через iptables accounting."""
+    def _get_total_traffic(self) -> int:
+        """Считает суммарный трафик на портах Mieru через iptables accounting."""
         import subprocess
-        active_users = [u for u in state.users if not u.blocked]
-        if not active_users:
-            return {}
-        primary_email = active_users[0].email
-
         total_bytes = 0
         for chain in ("INPUT", "OUTPUT"):
             r = subprocess.run(
@@ -191,8 +167,47 @@ class MieruPlugin(BasePlugin):
                     parts = line.split()
                     if len(parts) >= 2 and parts[1].isdigit():
                         total_bytes += int(parts[1])
+        return total_bytes
 
-        return {primary_email: total_bytes}
+    def status(self) -> PluginStatus:
+        from hydra.core.singbox import is_installed, is_running
+        from hydra.core.state import load_state
+        installed = is_installed()
+        enabled = False
+        try:
+            state = load_state()
+            ps = state.protocols.get("mieru")
+            if ps:
+                enabled = ps.enabled
+        except Exception:
+            pass
+
+        info = {}
+        if installed and enabled:
+            try:
+                total = self._get_total_traffic()
+                size = float(total)
+                for unit in ('B', 'KB', 'MB', 'GB', 'TB'):
+                    if size < 1024.0:
+                        formatted = f"{size:.2f} {unit}" if unit != 'B' else f"{int(size)} B"
+                        break
+                    size /= 1024.0
+                else:
+                    formatted = f"{size:.2f} PB"
+                info["Общий трафик"] = formatted
+            except Exception:
+                pass
+
+        return PluginStatus(
+            installed=installed,
+            enabled=enabled,
+            running=installed and is_running() and enabled,
+            port=DEFAULT_PORT_START,
+            info=info,
+        )
+
+    def traffic(self, state: AppState) -> dict[str, int]:
+        return {}
 
     def connected_clients(self, state: AppState | None = None) -> list[dict]:
         """Получает список подключённых клиентов через утилиту ss с группировкой по IP."""

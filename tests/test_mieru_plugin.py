@@ -200,7 +200,7 @@ def test_connected_clients_with_ss():
 
 
 def test_traffic_iptables():
-    """traffic() считает байты по правилам iptables."""
+    """traffic() возвращает пустой словарь, статус содержит Общий трафик."""
     p = MieruPlugin()
     
     import subprocess
@@ -215,9 +215,20 @@ def test_traffic_iptables():
             res.stdout = ""
         return res
         
-    with patch("subprocess.run", side_effect=side_effect):
-        tr = p.traffic(_state([_user("a@x.com")]))
-        # 1250000 + 1500000 = 2750000
-        assert tr == {"a@x.com": 2750000}
+    with patch("subprocess.run", side_effect=side_effect), \
+         patch("hydra.core.singbox.is_installed", return_value=True), \
+         patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.state.load_state") as mock_load:
+        
+        from hydra.core.state import PluginState
+        state = _state([_user("a@x.com")])
+        state.protocols["mieru"] = PluginState(enabled=True)
+        mock_load.return_value = state
+        
+        tr = p.traffic(state)
+        assert tr == {}
+        
+        st = p.status()
+        assert st.info == {"Общий трафик": "2.62 MB"}
 
 
