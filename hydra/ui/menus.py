@@ -553,10 +553,13 @@ def menu_plugin(state: AppState, p):
                 ok = orchestrator.install_plugin(state, p.meta.name)
                 if ok:
                     success("Установлено!")
-                    if orchestrator.enable(state, p.meta.name):
-                        success("Протокол включён и применён")
-                    else:
-                        error("Ошибка применения конфигурации")
+                    try:
+                        if orchestrator.enable(state, p.meta.name):
+                            success("Протокол включён и применён")
+                        else:
+                            error("Ошибка применения конфигурации")
+                    except Exception as e:
+                        error(f"Ошибка активации протокола: {e}")
                 else:
                     error("Ошибка установки")
             elif ps.enabled:
@@ -565,10 +568,13 @@ def menu_plugin(state: AppState, p):
                 else:
                     error("Ошибка применения конфигурации")
             else:
-                if orchestrator.enable(state, p.meta.name):
-                    success("Протокол включён")
-                else:
-                    error("Ошибка применения конфигурации")
+                try:
+                    if orchestrator.enable(state, p.meta.name):
+                        success("Протокол включён")
+                    else:
+                        error("Ошибка применения конфигурации")
+                except Exception as e:
+                    error(f"Ошибка активации протокола: {e}")
             prompt("Нажмите Enter")
         
         elif choice == "2" and ps.installed and ps.enabled:

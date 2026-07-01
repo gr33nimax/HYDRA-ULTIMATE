@@ -218,10 +218,23 @@ def test_on_enable_opens_firewall():
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
     with patch("hydra.utils.firewall.open_tcp") as mock_open, \
          patch("subprocess.run") as mock_run, \
+         patch("hydra.ui.tui.prompt", side_effect=lambda text, default="": default), \
          patch.object(p, "apply", return_value=True):
         mock_run.return_value = MagicMock(stdout="active\n", returncode=0)
         p.on_enable(state)
         mock_open.assert_called_once_with(443, "naive")
+
+
+def test_on_enable_raises_error_without_domain():
+    """on_enable() бросает ValueError, если домен не указан."""
+    p = NaivePlugin()
+    state = _make_state([_make_user("a@x.com", uuid="uuid-a")], domain="")
+    with patch("hydra.ui.tui.prompt", return_value=""):
+        try:
+            p.on_enable(state)
+            assert False, "Должно было выброситься ValueError"
+        except ValueError:
+            pass
 
 
 def test_on_disable_closes_firewall():

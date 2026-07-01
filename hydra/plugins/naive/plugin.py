@@ -336,6 +336,41 @@ class NaivePlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def on_enable(self, state: AppState) -> None:
+        # Интерактивный визард
+        modified = False
+        from hydra.ui.tui import prompt
+        
+        domain = state.network.domain
+        new_domain = prompt("Введите домен для NaiveProxy (например, proxy.example.com)", default=domain)
+        if not new_domain:
+            raise ValueError("Домен обязателен для работы NaiveProxy!")
+        if new_domain != domain:
+            state.network.domain = new_domain
+            modified = True
+
+        ps = state.protocols.get("naive")
+        if ps:
+            if not ps.config:
+                ps.config = {}
+            current_decoy = ps.config.get("decoy_url", "https://www.bing.com")
+            new_decoy = prompt("Введите decoy URL (для маскировки)", default=current_decoy)
+            if new_decoy != ps.config.get("decoy_url"):
+                ps.config["decoy_url"] = new_decoy
+                modified = True
+                
+            current_secret = ps.config.get("probe_secret", "")
+            if not current_secret:
+                import secrets
+                current_secret = secrets.token_hex(16)
+            new_secret = prompt("Введите секрет для защиты от зондирования (probe_resistance)", default=current_secret)
+            if new_secret != ps.config.get("probe_secret"):
+                ps.config["probe_secret"] = new_secret
+                modified = True
+
+        if modified:
+            from hydra.core.state import save_state
+            save_state(state)
+
         from hydra.utils.firewall import open_tcp
         open_tcp(DEFAULT_PORT, "naive")
 
