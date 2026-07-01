@@ -171,11 +171,31 @@ class MieruPlugin(BasePlugin):
         )
 
     def traffic(self, state: AppState) -> dict[str, int]:
-        """TODO: получить трафик из sing-box API/логов."""
-        return {}
+        """Считает трафик на портах Mieru через iptables accounting."""
+        import subprocess
+        active_users = [u for u in state.users if not u.blocked]
+        if not active_users:
+            return {}
+        primary_email = active_users[0].email
+
+        total_bytes = 0
+        for chain in ("INPUT", "OUTPUT"):
+            r = subprocess.run(
+                ["iptables", "-t", "filter", "-L", chain, "-n", "-v", "-x"],
+                capture_output=True, text=True,
+            )
+            if r.returncode != 0:
+                continue
+            for line in r.stdout.splitlines():
+                if "mieru-" in line:
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        total_bytes += int(parts[1])
+
+        return {primary_email: total_bytes}
 
     def connected_clients(self, state: AppState | None = None) -> list[dict]:
-        """Получает список подключённых клиентов через утилиту ss."""
+        """Получает список подключённых клиентов через утилиту ss с группировкой по IP."""
         import shutil
         import subprocess
         import time
@@ -189,9 +209,7 @@ class MieruPlugin(BasePlugin):
         if r.returncode != 0:
             return []
 
-        clients = []
-        now_ts = int(time.time())
-
+        ip_counts = {}
         for line in r.stdout.splitlines():
             parts = line.split()
             if len(parts) < 4:
@@ -208,14 +226,38 @@ class MieruPlugin(BasePlugin):
             if DEFAULT_PORT_START <= local_port <= DEFAULT_PORT_END:
                 remote_parts = remote_addr.split(":")
                 remote_ip = ":".join(remote_parts[:-1]).strip("[]")
+                ip_counts[remote_ip] = ip_counts.get(remote_ip, 0) + 1
 
-                clients.append({
-                    "online": True,
-                    "email": remote_ip,
-                    "rx": 0,
-                    "tx": 0,
-                    "last_handshake": now_ts,
-                })
+        # Считаем rx/tx из iptables для вывода в сводке
+        rx_bytes = 0
+        tx_bytes = 0
+        r_rx = subprocess.run(["iptables", "-t", "filter", "-L", "INPUT", "-n", "-v", "-x"], capture_output=True, text=True)
+        if r_rx.returncode == 0:
+            for line in r_rx.stdout.splitlines():
+                if "mieru-rx-" in line:
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        rx_bytes += int(parts[1])
+        r_tx = subprocess.run(["iptables", "-t", "filter", "-L", "OUTPUT", "-n", "-v", "-x"], capture_output=True, text=True)
+        if r_tx.returncode == 0:
+            for line in r_tx.stdout.splitlines():
+                if "mieru-tx-" in line:
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        tx_bytes += int(parts[1])
+
+        clients = []
+        now_ts = int(time.time())
+        n_clients = len(ip_counts)
+
+        for remote_ip, count in ip_counts.items():
+            clients.append({
+                "online": True,
+                "email": f"{remote_ip} ({count} TCP)",
+                "rx": rx_bytes // n_clients if n_clients > 0 else 0,
+                "tx": tx_bytes // n_clients if n_clients > 0 else 0,
+                "last_handshake": now_ts,
+            })
         return clients
 
     # ═══════════════════════════════════════════════════════════════════
@@ -225,14 +267,41 @@ class MieruPlugin(BasePlugin):
     def on_enable(self, state: AppState) -> None:
         from hydra.utils.firewall import open_range
         open_range("tcp", DEFAULT_PORT_START, DEFAULT_PORT_END, "mieru")
+        
+        # Добавляем iptables правила для подсчёта трафика
+        import subprocess
+        self._remove_iptables_rules()
+        for p in range(DEFAULT_PORT_START, DEFAULT_PORT_END + 1):
+            subprocess.run([
+                "iptables", "-A", "INPUT", "-p", "tcp", "--dport", str(p),
+                "-m", "comment", "--comment", f"mieru-rx-{p}"
+            ], capture_output=True)
+            subprocess.run([
+                "iptables", "-A", "OUTPUT", "-p", "tcp", "--sport", str(p),
+                "-m", "comment", "--comment", f"mieru-tx-{p}"
+            ], capture_output=True)
 
     def on_disable(self, state: AppState) -> None:
         from hydra.utils.firewall import close_range
         close_range("tcp", DEFAULT_PORT_START, DEFAULT_PORT_END)
+        self._remove_iptables_rules()
 
     # ═══════════════════════════════════════════════════════════════════
     #  Внутренние помощники
     # ═══════════════════════════════════════════════════════════════════
+
+    def _remove_iptables_rules(self) -> None:
+        import subprocess
+        for chain in ("INPUT", "OUTPUT"):
+            r = subprocess.run(["iptables", "-S", chain], capture_output=True, text=True)
+            if r.returncode != 0:
+                continue
+            for line in r.stdout.splitlines():
+                if "mieru-" in line:
+                    parts = line.split()
+                    if parts[0] == "-A":
+                        parts[0] = "-D"
+                        subprocess.run(["iptables"] + parts, capture_output=True)
 
     @staticmethod
     def _derive_username(uuid: str) -> str:

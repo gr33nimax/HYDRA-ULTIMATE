@@ -138,7 +138,8 @@ def test_generate_client_config_valid_json():
 def test_on_enable_opens_firewall():
     """on_enable() открывает порты."""
     p = MieruPlugin()
-    with patch("hydra.utils.firewall.open_range") as mock:
+    with patch("hydra.utils.firewall.open_range") as mock, \
+         patch("subprocess.run") as mock_run:
         p.on_enable(_state())
         mock.assert_called_once_with("tcp", 2012, 2022, "mieru")
 
@@ -146,7 +147,8 @@ def test_on_enable_opens_firewall():
 def test_on_disable_closes_firewall():
     """on_disable() закрывает порты."""
     p = MieruPlugin()
-    with patch("hydra.utils.firewall.close_range") as mock:
+    with patch("hydra.utils.firewall.close_range") as mock, \
+         patch("subprocess.run") as mock_run:
         p.on_disable(_state())
         mock.assert_called_once_with("tcp", 2012, 2022)
 
@@ -168,13 +170,13 @@ def test_status_delegates_to_singbox():
 
 
 def test_connected_clients_with_ss():
-    """connected_clients() парсит вывод ss."""
+    """connected_clients() парсит вывод ss с группировкой по IP."""
     p = MieruPlugin()
     
     mock_ss_output = (
         "0      0             146.103.126.78:2012        109.252.12.34:58291\n"
-        "0      0             [::1]:2015                 [::1]:58292\n"
-        "0      0             146.103.126.78:8080        109.252.12.34:58293\n"
+        "0      0             146.103.126.78:2012        109.252.12.34:58292\n"
+        "0      0             [::1]:2015                 [::1]:58293\n"
     )
     
     import subprocess
@@ -185,13 +187,37 @@ def test_connected_clients_with_ss():
     with patch("shutil.which", return_value="/usr/bin/ss"), \
          patch("subprocess.run", return_value=mock_res):
         clients = p.connected_clients()
+        # Сгруппировано: 109.252.12.34 (2 сессии) и ::1 (1 сессия)
         assert len(clients) == 2
         
-        # Первая сессия: порт 2012
-        assert clients[0]["email"] == "109.252.12.34"
+        # Первая сессия: порт 2012 с 2 TCP каналами
+        assert clients[0]["email"] == "109.252.12.34 (2 TCP)"
         assert clients[0]["online"] is True
         
-        # Вторая сессия: порт 2015 (внутри диапазона 2012-2022)
-        assert clients[1]["email"] == "::1"
+        # Вторая сессия: порт 2015 с 1 TCP каналом
+        assert clients[1]["email"] == "::1 (1 TCP)"
         assert clients[1]["online"] is True
+
+
+def test_traffic_iptables():
+    """traffic() считает байты по правилам iptables."""
+    p = MieruPlugin()
+    
+    import subprocess
+    def side_effect(args, **kwargs):
+        res = MagicMock(spec=subprocess.CompletedProcess)
+        res.returncode = 0
+        if "INPUT" in args:
+            res.stdout = "      250     1250000 INPUT      all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* mieru-rx-2012 */\n"
+        elif "OUTPUT" in args:
+            res.stdout = "      300     1500000 OUTPUT     all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* mieru-tx-2012 */\n"
+        else:
+            res.stdout = ""
+        return res
+        
+    with patch("subprocess.run", side_effect=side_effect):
+        tr = p.traffic(_state([_user("a@x.com")]))
+        # 1250000 + 1500000 = 2750000
+        assert tr == {"a@x.com": 2750000}
+
 
