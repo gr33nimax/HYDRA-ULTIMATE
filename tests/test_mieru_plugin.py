@@ -63,9 +63,9 @@ def test_configure_users_in_inbound():
         _user("a@x.com", uuid="u1"),
         _user("b@x.com", uuid="u2"),
     ]))
-    names = [u["name"] for u in frag.inbounds[0]["users"]]
-    assert len(names) == 2
-    assert all(n.startswith("u") for n in names)
+    uuids = [u["uuid"] for u in frag.inbounds[0]["users"]]
+    assert len(uuids) == 2
+    assert all(n.startswith("u") for n in uuids)
 
 
 def test_configure_skips_blocked():
