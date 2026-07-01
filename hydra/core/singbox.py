@@ -49,6 +49,7 @@ def _run(cmd: list, capture: bool = True, timeout: int = 30) -> subprocess.Compl
         kw.update(capture_output=True, text=True, encoding="utf-8", errors="replace")
     env = os.environ.copy()
     env["ENABLE_DEPRECATED_LEGACY_DNS_SERVERS"] = "true"
+    env["ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER"] = "true"
     return subprocess.run(cmd, env=env, **kw)
 
 
@@ -265,7 +266,7 @@ After=network.target nss-lookup.target
 Type=simple
 User=root
 WorkingDirectory=/var/lib/sing-box
-Environment=LEGACY_DNS_SERVERS=true ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true
+Environment=LEGACY_DNS_SERVERS=true ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER=true
 ExecStart={bin_path} run -c {SINGBOX_CONFIG}
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
