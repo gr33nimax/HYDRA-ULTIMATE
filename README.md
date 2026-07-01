@@ -1,5 +1,9 @@
 # 🐉 HYDRA (v0.0.2-alpha)
 
+> [!WARNING]
+> **Ветка `main` в данный момент заморожена!**
+> Все последние обновления, разработка и основной рефакторинг происходят в ветке **`dev`**. Рекомендуется использовать ветку `dev` для установки и тестирования.
+
 [![Version](https://img.shields.io/badge/version-0.0.2--alpha-red.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-green.svg)]()
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)]()
