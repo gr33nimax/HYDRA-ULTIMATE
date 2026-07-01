@@ -43,10 +43,13 @@ def _log(level: str, msg: str) -> None:
 
 
 def _run(cmd: list, capture: bool = True, timeout: int = 30) -> subprocess.CompletedProcess:
+    import os
     kw = {"timeout": timeout}
     if capture:
         kw.update(capture_output=True, text=True, encoding="utf-8", errors="replace")
-    return subprocess.run(cmd, **kw)
+    env = os.environ.copy()
+    env["ENABLE_DEPRECATED_LEGACY_DNS_SERVERS"] = "true"
+    return subprocess.run(cmd, env=env, **kw)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -262,7 +265,7 @@ After=network.target nss-lookup.target
 Type=simple
 User=root
 WorkingDirectory=/var/lib/sing-box
-Environment=LEGACY_DNS_SERVERS=true
+Environment=LEGACY_DNS_SERVERS=true ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true
 ExecStart={bin_path} run -c {SINGBOX_CONFIG}
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
