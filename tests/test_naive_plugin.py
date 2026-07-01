@@ -219,6 +219,7 @@ def test_on_enable_opens_firewall():
     with patch("hydra.utils.firewall.open_tcp") as mock_open, \
          patch("subprocess.run") as mock_run, \
          patch("hydra.ui.tui.prompt", side_effect=lambda text, default="": default), \
+         patch("hydra.ui.tui.confirm", return_value=False), \
          patch.object(p, "apply", return_value=True):
         mock_run.return_value = MagicMock(stdout="active\n", returncode=0)
         p.on_enable(state)
@@ -229,7 +230,8 @@ def test_on_enable_raises_error_without_domain():
     """on_enable() бросает ValueError, если домен не указан."""
     p = NaivePlugin()
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")], domain="")
-    with patch("hydra.ui.tui.prompt", return_value=""):
+    with patch("hydra.ui.tui.prompt", return_value=""), \
+         patch("hydra.ui.tui.confirm", return_value=False):
         try:
             p.on_enable(state)
             assert False, "Должно было выброситься ValueError"
@@ -277,3 +279,23 @@ def test_status_shows_traffic():
             s = p.status()
             assert "Общий трафик" in s.info
             assert "1.00 MB" in s.info["Общий трафик"]
+
+
+def test_find_existing_cert_and_tls_config():
+    """_find_existing_cert находит сертификаты, а _build_caddyfile подставляет их в конфиг."""
+    p = NaivePlugin()
+    with patch("pathlib.Path.exists", return_value=True):
+        cert, key = p._find_existing_cert("my.example.com")
+        assert cert == "/etc/letsencrypt/live/my.example.com/fullchain.pem"
+        assert key == "/etc/letsencrypt/live/my.example.com/privkey.pem"
+
+    caddyfile = p._build_caddyfile(
+        domain="my.example.com",
+        port=443,
+        users=[],
+        probe_secret="",
+        cert_file="/path/to/cert.pem",
+        key_file="/path/to/key.pem",
+    )
+    assert "tls /path/to/cert.pem /path/to/key.pem" in caddyfile
+    assert "on_demand" not in caddyfile
