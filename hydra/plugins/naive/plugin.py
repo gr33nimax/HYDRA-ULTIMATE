@@ -559,9 +559,9 @@ class NaivePlugin(BasePlugin):
             probe_line = f"            probe_resistance {probe_secret}\n"
 
         if cert_file and key_file:
-            tls_line = f"    tls {cert_file} {key_file}"
+            tls_line = f"    tls {cert_file} {key_file}\n"
         else:
-            tls_line = "    tls"
+            tls_line = ""
 
         return f"""\
 {{
@@ -570,8 +570,7 @@ class NaivePlugin(BasePlugin):
 }}
 
 {domain}:{port} {{
-{tls_line}
-    forward_proxy {{
+{tls_line}    forward_proxy {{
 {auth_lines}            hide_ip
             hide_via
 {probe_line}    }}
