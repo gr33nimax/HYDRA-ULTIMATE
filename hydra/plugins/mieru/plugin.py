@@ -118,6 +118,7 @@ class MieruPlugin(BasePlugin):
             "username": username,
             "password": password,
             "multiplexing": "MULTIPLEXING_HIGH",
+            "traffic_pattern": DEFAULT_TRAFFIC_PATTERN,
         }
 
         full = {

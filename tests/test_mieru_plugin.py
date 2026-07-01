@@ -132,6 +132,7 @@ def test_generate_client_config_valid_json():
     assert len(mieru_out) == 1
     assert mieru_out[0]["server_port"] == 2012
     assert mieru_out[0]["transport"] == "TCP"
+    assert mieru_out[0]["traffic_pattern"] == "GgQIARAK"
 
 
 def test_on_enable_opens_firewall():
