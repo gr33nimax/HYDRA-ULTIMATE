@@ -75,7 +75,7 @@ def collect_fragments(state: AppState) -> dict[str, ConfigFragment]:
     for p in enabled(state):
         try:
             f = p.configure(state)
-            if f and (f.inbounds or f.outbounds or f.route_rules or f.nft_tproxy_ports):
+            if f and (f.inbounds or f.outbounds or f.route_rules or f.nft_tproxy_ports or f.nft_tproxy_ifaces):
                 fragments[p.meta.name] = f
         except Exception:
             pass
