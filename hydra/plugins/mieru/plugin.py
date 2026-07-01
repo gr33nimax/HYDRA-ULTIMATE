@@ -135,8 +135,9 @@ class MieruPlugin(BasePlugin):
 
     def client_link(self, user: User, state: AppState) -> str:
         """mierus:// ссылка для Karing."""
-        username = self._derive_username(user.uuid)
-        password = self._derive_password(user.uuid)
+        import urllib.parse
+        username = urllib.parse.quote(self._derive_username(user.uuid))
+        password = urllib.parse.quote(self._derive_password(user.uuid))
         server_ip = state.network.server_ip or public_ip()
 
         return (
@@ -151,11 +152,20 @@ class MieruPlugin(BasePlugin):
 
     def status(self) -> PluginStatus:
         from hydra.core.singbox import is_installed, is_running
+        from hydra.core.state import load_state
         installed = is_installed()
+        enabled = False
+        try:
+            state = load_state()
+            ps = state.protocols.get("mieru")
+            if ps:
+                enabled = ps.enabled
+        except Exception:
+            pass
         return PluginStatus(
             installed=installed,
-            enabled=True,
-            running=installed and is_running(),
+            enabled=enabled,
+            running=installed and is_running() and enabled,
             port=DEFAULT_PORT_START,
         )
 

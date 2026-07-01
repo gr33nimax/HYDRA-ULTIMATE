@@ -154,7 +154,12 @@ def test_status_delegates_to_singbox():
     """status() проверяет sing-box, не mita."""
     p = MieruPlugin()
     with patch("hydra.core.singbox.is_installed", return_value=True), \
-         patch("hydra.core.singbox.is_running", return_value=True):
+         patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.state.load_state") as mock_load:
+        from hydra.core.state import PluginState
+        state = _state()
+        state.protocols["mieru"] = PluginState(enabled=True)
+        mock_load.return_value = state
         s = p.status()
         assert s.installed is True
         assert s.running is True

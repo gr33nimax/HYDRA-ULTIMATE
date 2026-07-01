@@ -25,7 +25,7 @@ LOG_FILE = Path("/var/log/hydra/install.log")
 
 def _find_singbox():
     """Ищет бинарник sing-box в известных путях."""
-    for p in ("/usr/bin/sing-box", "/usr/local/bin/sing-box"):
+    for p in ("/usr/local/bin/sing-box", "/usr/bin/sing-box"):
         if Path(p).exists():
             return Path(p)
     w = shutil.which("sing-box")
