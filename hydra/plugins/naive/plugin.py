@@ -441,11 +441,14 @@ class NaivePlugin(BasePlugin):
 
     @staticmethod
     def _derive_username(uuid: str) -> str:
-        return "u" + derive_key("naive-user", uuid)[:8]
+        import hashlib
+        h = hashlib.sha256(f"naive-user|{uuid}".encode()).hexdigest()
+        return "u" + h[:8]
 
     @staticmethod
     def _derive_password(uuid: str) -> str:
-        return derive_key("naive-pass", uuid)
+        import hashlib
+        return hashlib.sha256(f"naive-pass|{uuid}".encode()).hexdigest()[:24]
 
     def _remove_iptables_rules(self) -> None:
         """Удаляет iptables accounting правила naive-rx/naive-tx."""
