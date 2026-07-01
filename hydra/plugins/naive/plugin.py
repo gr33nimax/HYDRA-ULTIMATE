@@ -553,9 +553,21 @@ class NaivePlugin(BasePlugin):
         cert_file: str = "",
         key_file: str = "",
     ) -> str:
+        import subprocess
         auth_lines = ""
         for u in users:
-            auth_lines += f"            basic_auth {u['username']} {u['password']}\n"
+            password_hash = u['password']
+            try:
+                r = subprocess.run(
+                    [str(BIN_PATH), "hash-password", "--plaintext", u['password']],
+                    capture_output=True, text=True, check=True
+                )
+                hashed = r.stdout.strip()
+                if hashed:
+                    password_hash = hashed
+            except Exception:
+                pass
+            auth_lines += f"            basic_auth {u['username']} {password_hash}\n"
 
         probe_line = ""
         if probe_secret:
