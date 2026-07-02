@@ -44,11 +44,8 @@
 | Mieru | `mieru` | mTLS + random padding | 🟢 Готов (Ready) |
 | NaiveProxy | `naive` | Caddy (TLS) + fake-site | 🟢 Готов (Ready) |
 | MTProto | `telemt` | Telegram MTProto, multi-user | 🟡 В разработке (WIP) |
-| FreeTurn | `vkturn` | UDP:56000, sing-box vmess outbound | 🟡 В разработке (WIP) |
 | qWDTT | `wdtt` | WG over TURN, per-user | 🟡 В разработке (WIP) |
-| OlaRTC | `olcrtc` | TCP over WebRTC, SOCKS :8808 | 🟡 В разработке (WIP) |
 | SlipGate | `slipgate` | DNS-туннели (DNSTT/Noize/Slipstream/VayDNS) | 🟡 В разработке (WIP) |
-| WebDAV | `webdav` | SOCKS5 over WebDAV | 🟡 В разработке (WIP) |
 | VLESS | `vless` | VLESS-XTLS-Reality (sing-box native) | 🟡 В планах (Roadmap) |
 | AnyTLS | `anytls` | TLS-обфускатор для обхода DPI | 🟡 В планах (Roadmap) |
 | TrustTunnel | `trusttunnel` | Защищённый туннель для обхода блокировок | 🟡 В планах (Roadmap) |
@@ -137,11 +134,8 @@ hydra/
 │   │   ├── mieru/              # Mieru (reference impl)
 │   │   ├── naive/              # NaiveProxy
 │   │   ├── telemt/             # MTProto
-│   │   ├── vkturn/             # FreeTurn
 │   │   ├── wdtt/               # qWDTT
-│   │   ├── olcrtc/             # OlaRTC
 │   │   ├── slipgate/           # DNS-туннели
-│   │   ├── webdav/             # WebDAV tunnel
 │   │   ├── dnscrypt/           # DNSCrypt-proxy
 │   │   ├── warp/               # Cloudflare WARP
 │   │   ├── porthopping/        # Port hopping

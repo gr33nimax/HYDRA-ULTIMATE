@@ -7,14 +7,11 @@ from hydra.plugins.base import BasePlugin, ConfigFragment, PluginCategory
 from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
 from hydra.plugins.mieru.plugin import MieruPlugin
 from hydra.plugins.naive.plugin import NaivePlugin
-from hydra.plugins.olcrtc.plugin import OlcrtcPlugin
 from hydra.plugins.telemt.plugin import TelemtPlugin
-from hydra.plugins.vkturn.plugin import VkTurnPlugin
 from hydra.plugins.wdtt.plugin import WdttPlugin
 from hydra.plugins.dnscrypt.plugin import DNSCryptPlugin
 from hydra.plugins.warp.plugin import WarpPlugin
 from hydra.plugins.slipgate.plugin import SlipGatePlugin
-from hydra.plugins.webdav.plugin import WebdavPlugin
 from hydra.plugins.porthopping.plugin import PortHoppingPlugin
 from hydra.plugins.fail2ban.plugin import Fail2banPlugin
 from hydra.plugins.geoip.plugin import GeoIPPlugin
@@ -26,14 +23,11 @@ _PLUGINS: list[BasePlugin] = [
     AmneziaWGPlugin(),
     MieruPlugin(),
     NaivePlugin(),
-    OlcrtcPlugin(),
     TelemtPlugin(),
-    VkTurnPlugin(),
     WdttPlugin(),
     DNSCryptPlugin(),
     WarpPlugin(),
     SlipGatePlugin(),
-    WebdavPlugin(),
     PortHoppingPlugin(),
     Fail2banPlugin(),
     GeoIPPlugin(),
