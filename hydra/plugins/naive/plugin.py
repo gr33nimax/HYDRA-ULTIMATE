@@ -82,7 +82,8 @@ class NaivePlugin(BasePlugin):
 
     def configure(self, state: AppState) -> ConfigFragment:
         domain = state.network.domain
-        port = DEFAULT_PORT
+        from hydra.core.sni_router import get_effective_port
+        port = get_effective_port("naive", state)
 
         if not domain:
             self._pending_cfg = None
@@ -238,11 +239,20 @@ class NaivePlugin(BasePlugin):
             except Exception:
                 pass
 
+        effective_port = DEFAULT_PORT
+        try:
+            from hydra.core.state import load_state
+            from hydra.core.sni_router import get_effective_port
+            state = load_state()
+            effective_port = get_effective_port("naive", state)
+        except Exception:
+            pass
+
         return PluginStatus(
             installed=installed,
             enabled=enabled,
             running=running,
-            port=DEFAULT_PORT,
+            port=effective_port,
             info=info,
         )
 
@@ -274,7 +284,9 @@ class NaivePlugin(BasePlugin):
                 continue
             local_port = int(local_port_str)
 
-            if local_port == DEFAULT_PORT:
+            from hydra.core.sni_router import get_effective_port
+            effective = get_effective_port("naive", state) if state else DEFAULT_PORT
+            if local_port == effective or local_port == DEFAULT_PORT:
                 remote_addr = parts[3]
                 remote_parts = remote_addr.split(":")
                 remote_ip = ":".join(remote_parts[:-1]).strip("[]")
@@ -379,14 +391,16 @@ class NaivePlugin(BasePlugin):
                 from hydra.core.state import save_state
                 save_state(state)
 
-        # Проверка доступности порта 443 (чтобы не сломать Let's Encrypt и Caddy)
+        # Проверка доступности порта (чтобы не сломать Let's Encrypt и Caddy)
         # Если мы не running (т.е. включаем первый раз), и порт занят — это конфликт
         r_status = subprocess.run(["systemctl", "is-active", SERVICE_NAME], capture_output=True, text=True)
         if r_status.stdout.strip() != "active":
             import socket
+            from hydra.core.sni_router import get_effective_port
+            effective_port = get_effective_port("naive", state)
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                if s.connect_ex(('127.0.0.1', DEFAULT_PORT)) == 0:
-                    raise RuntimeError(f"Порт {DEFAULT_PORT} уже занят другим процессом. Не удается запустить NaiveProxy.")
+                if s.connect_ex(('127.0.0.1', effective_port)) == 0:
+                    raise RuntimeError(f"Порт {effective_port} уже занят другим процессом. Не удается запустить NaiveProxy.")
 
         from hydra.utils.firewall import open_tcp
         open_tcp(DEFAULT_PORT, "naive")
@@ -403,6 +417,9 @@ class NaivePlugin(BasePlugin):
             "-m", "comment", "--comment", "naive-tx"
         ], capture_output=True)
 
+        # Выставляем enabled = True, чтобы rebuild знал, что Naive включен
+        ps.enabled = True
+
         self.configure(state)
         self.apply(state)
         r = subprocess.run(
@@ -412,11 +429,22 @@ class NaivePlugin(BasePlugin):
         if r.stdout.strip() != "active":
             subprocess.run(["systemctl", "enable", "--now", SERVICE_NAME], capture_output=True)
 
+        # Пересобрать SNI-мультиплексор
+        from hydra.core.sni_router import rebuild
+        rebuild(state)
+
     def on_disable(self, state: AppState) -> None:
         from hydra.utils.firewall import close_tcp
         subprocess.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
         close_tcp(DEFAULT_PORT)
         self._remove_iptables_rules()
+
+        ps = state.protocols.get("naive")
+        if ps:
+            ps.enabled = False
+
+        from hydra.core.sni_router import rebuild
+        rebuild(state)
 
     # ═════════════════════════════════════════════════════════════════════
     #  Внутренние помощники

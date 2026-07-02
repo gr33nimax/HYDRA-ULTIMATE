@@ -20,7 +20,11 @@ def apply_config(state: AppState) -> bool:
         nft.apply_tproxy(fragments, state.network.tproxy_port)
     except Exception:
         pass
-    return singbox.reload()
+    res = singbox.reload()
+    # Пересобрать SNI-мультиплексор если нужно
+    from hydra.core.sni_router import rebuild
+    rebuild(state)
+    return res
 
 
 def install_plugin(state: AppState, name: str) -> bool:
