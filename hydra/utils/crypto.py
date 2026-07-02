@@ -28,3 +28,11 @@ def derive_key(purpose: str, seed: str) -> str:
     """
     digest = hashlib.sha256(f"{purpose}|{seed}".encode()).digest()
     return base64.b64encode(digest).decode()
+
+
+def derive_hex_key(purpose: str, seed: str) -> str:
+    """Детерминированный hex-ключ: sha256(f'{purpose}|{seed}').
+
+    Используется NaiveProxy для URL-безопасных учетных данных без спецсимволов.
+    """
+    return hashlib.sha256(f"{purpose}|{seed}".encode()).hexdigest()

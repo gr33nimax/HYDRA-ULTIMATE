@@ -78,6 +78,26 @@ class TestDeriveKey:
         assert len(decoded) == 32  # SHA-256
 
 
+class TestDeriveHexKey:
+    def test_derive_hex_key_deterministic(self):
+        """Одинаковый purpose и seed → одинаковый ключ."""
+        k1 = crypto.derive_hex_key("test", "seed-123")
+        k2 = crypto.derive_hex_key("test", "seed-123")
+        assert k1 == k2
+
+    def test_derive_hex_key_different_purpose(self):
+        """Разный purpose → разный ключ при том же seed."""
+        k1 = crypto.derive_hex_key("test-a", "seed-123")
+        k2 = crypto.derive_hex_key("test-b", "seed-123")
+        assert k1 != k2
+
+    def test_derive_hex_key_is_hex(self):
+        """Результат — корректная шестнадцатеричная строка из 64 символов."""
+        key = crypto.derive_hex_key("p", "s")
+        assert len(key) == 64
+        assert all(c in "0123456789abcdef" for c in key)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  downloader — verify_elf
 # ══════════════════════════════════════════════════════════════════════════════

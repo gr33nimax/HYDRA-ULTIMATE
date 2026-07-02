@@ -18,7 +18,7 @@ from pathlib import Path
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
 from hydra.core.state import AppState, User
-from hydra.utils.crypto import derive_key
+from hydra.utils.crypto import derive_key, derive_hex_key
 from hydra.utils.downloader import download_github_asset, verify_elf
 
 BIN_PATH = Path("/usr/local/bin/caddy-naive")
@@ -247,37 +247,11 @@ class NaivePlugin(BasePlugin):
         )
 
     def traffic(self, state: AppState) -> dict[str, int]:
-        """iptables accounting по username → email (как в mieru)."""
-        if not self._installed():
-            return {}
-
-        username_to_email: dict[str, str] = {}
-        for u in state.users:
-            if u.blocked:
-                continue
-            uname = self._derive_username(u.uuid)
-            username_to_email[uname] = u.email
-
-        result: dict[str, int] = {}
-        for username, email in username_to_email.items():
-            for chain in ("INPUT", "OUTPUT"):
-                r = subprocess.run(
-                    ["iptables", "-t", "filter", "-L", chain, "-n", "-v", "-x"],
-                    capture_output=True, text=True,
-                )
-                if r.returncode != 0:
-                    continue
-                for line in r.stdout.splitlines():
-                    if username in line:
-                        parts = line.split()
-                        if len(parts) >= 2 and parts[0].isdigit():
-                            result[email] = result.get(email, 0) + int(parts[0])
-        return result
+        """Для NaiveProxy поюзерный учёт трафика на уровне iptables невозможен."""
+        return {}
 
     def connected_clients(self, state: AppState | None = None) -> list[dict]:
         """Получает список подключённых клиентов через ss с группировкой по IP."""
-        import shutil
-        import time
         if not shutil.which("ss"):
             return []
 
@@ -405,12 +379,6 @@ class NaivePlugin(BasePlugin):
                 from hydra.core.state import save_state
                 save_state(state)
 
-        from hydra.utils.firewall import open_tcp
-        open_tcp(DEFAULT_PORT, "naive")
-
-        # iptables accounting для подсчёта трафика
-        import subprocess
-        
         # Проверка доступности порта 443 (чтобы не сломать Let's Encrypt и Caddy)
         # Если мы не running (т.е. включаем первый раз), и порт занят — это конфликт
         r_status = subprocess.run(["systemctl", "is-active", SERVICE_NAME], capture_output=True, text=True)
@@ -418,7 +386,12 @@ class NaivePlugin(BasePlugin):
             import socket
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 if s.connect_ex(('127.0.0.1', DEFAULT_PORT)) == 0:
-                    print(f"  [Предупреждение] Порт {DEFAULT_PORT} уже занят другим процессом. NaiveProxy может не запуститься.")
+                    raise RuntimeError(f"Порт {DEFAULT_PORT} уже занят другим процессом. Не удается запустить NaiveProxy.")
+
+        from hydra.utils.firewall import open_tcp
+        open_tcp(DEFAULT_PORT, "naive")
+
+        # iptables accounting для подсчёта трафика
 
         self._remove_iptables_rules()
         subprocess.run([
@@ -451,18 +424,14 @@ class NaivePlugin(BasePlugin):
 
     @staticmethod
     def _derive_username(uuid: str) -> str:
-        import hashlib
-        h = hashlib.sha256(f"naive-user|{uuid}".encode()).hexdigest()
-        return "u" + h[:8]
+        return "u" + derive_hex_key("naive-user", uuid)[:8]
 
     @staticmethod
     def _derive_password(uuid: str) -> str:
-        import hashlib
-        return hashlib.sha256(f"naive-pass|{uuid}".encode()).hexdigest()[:24]
+        return derive_hex_key("naive-pass", uuid)[:24]
 
     def _remove_iptables_rules(self) -> None:
         """Удаляет iptables accounting правила naive-rx/naive-tx."""
-        import subprocess
         for chain in ("INPUT", "OUTPUT"):
             r = subprocess.run(["iptables", "-S", chain], capture_output=True, text=True)
             if r.returncode != 0:
@@ -476,7 +445,6 @@ class NaivePlugin(BasePlugin):
 
     def _get_total_traffic(self) -> int:
         """Считает суммарный трафик на порту NaiveProxy через iptables accounting."""
-        import subprocess
         total_bytes = 0
         for chain in ("INPUT", "OUTPUT"):
             r = subprocess.run(
@@ -563,8 +531,7 @@ class NaivePlugin(BasePlugin):
         decoy_url: str = "https://www.bing.com",
         cert_file: str = "",
         key_file: str = "",
-    ) -> str:
-        import subprocess
+     ) -> str:
         auth_lines = ""
         for u in users:
             auth_lines += f"            basic_auth {u['username']} {u['password']}\n"
