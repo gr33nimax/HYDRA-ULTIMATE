@@ -619,10 +619,18 @@ def menu_plugin(state: AppState, p):
         
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):
+                was_enabled = ps.enabled
                 orchestrator.uninstall_plugin(state, p.meta.name)
                 ok = orchestrator.install_plugin(state, p.meta.name)
-                msg = "Переустановлено!" if ok else "Ошибка переустановки"
-                (success if ok else error)(msg)
+                if ok:
+                    if was_enabled:
+                        try:
+                            orchestrator.enable(state, p.meta.name)
+                        except Exception as e:
+                            error(f"Ошибка активации: {e}")
+                    success("Переустановлено!")
+                else:
+                    error("Ошибка переустановки")
                 prompt("Нажмите Enter")
         
         elif choice == "9" and ps.installed:
