@@ -549,7 +549,7 @@ class NaivePlugin(BasePlugin):
             f"--config {CADDYFILE} --adapter caddyfile\n"
             "ExecReload=/bin/kill -USR1 $MAINPID\n"
             "Restart=on-failure\n"
-            "RestartSec=5\n"
+            "RestartSec=1\n"
             "TimeoutStopSec=5\n"
             "LimitNOFILE=1048576\n"
             f"ReadWritePaths={CFG_DIR} {LOG_DIR}\n"

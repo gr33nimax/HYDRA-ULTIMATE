@@ -47,6 +47,14 @@ def apply_config(state: AppState) -> bool:
             time.sleep(0.3)
         rebuild_mux(state)
 
+    # Если caddy-naive включен, он мог упасть из-за конфликта портов на этапе p.apply(state).
+    # Перезапускаем его сейчас, когда 443 порт гарантированно распределен правильно.
+    naive_proto = state.protocols.get("naive")
+    if naive_proto and naive_proto.enabled:
+        import subprocess
+        subprocess.run(["systemctl", "reset-failed", "caddy-naive"], capture_output=True)
+        subprocess.run(["systemctl", "restart", "caddy-naive"], capture_output=True)
+
     return res
 
 
