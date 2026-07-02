@@ -49,6 +49,7 @@
 | VLESS | `vless` | VLESS-XTLS-Reality (sing-box native) | 🟡 В планах (Roadmap) |
 | AnyTLS | `anytls` | TLS-обфускатор для обхода DPI | 🟡 В планах (Roadmap) |
 | TrustTunnel | `trusttunnel` | Защищённый туннель для обхода блокировок | 🟡 В планах (Roadmap) |
+| ShadowTLS | `shadowtls` | TLS-обертка с имитацией рукопожатия доверенных сайтов | 🟡 В планах (Roadmap) |
 
 ### Надстройки (ENHANCEMENT)
 | Плагин | Что делает | Статус |
