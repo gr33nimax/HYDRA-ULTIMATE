@@ -56,7 +56,7 @@ class MieruPlugin(BasePlugin):
             if user.blocked:
                 continue
             users.append({
-                "name": self._derive_username(user.uuid),
+                "name": self._derive_username(user),
                 "password": self._derive_password(user.uuid),
             })
 
@@ -90,7 +90,7 @@ class MieruPlugin(BasePlugin):
 
     def on_user_add(self, user: User, state: AppState) -> None:
         user.credentials.setdefault("mieru", {})
-        user.credentials["mieru"]["username"] = self._derive_username(user.uuid)
+        user.credentials["mieru"]["username"] = self._derive_username(user)
         user.credentials["mieru"]["password"] = self._derive_password(user.uuid)
 
     def on_user_remove(self, user: User, state: AppState) -> None:
@@ -105,7 +105,7 @@ class MieruPlugin(BasePlugin):
 
     def generate_client_config(self, user: User, state: AppState) -> str:
         """Sing-box клиентский конфиг JSON."""
-        username = self._derive_username(user.uuid)
+        username = self._derive_username(user)
         password = self._derive_password(user.uuid)
         server_ip = state.network.server_ip or public_ip()
 
@@ -137,7 +137,7 @@ class MieruPlugin(BasePlugin):
     def client_link(self, user: User, state: AppState) -> str:
         """mierus:// ссылка для Karing."""
         import urllib.parse
-        username = urllib.parse.quote(self._derive_username(user.uuid))
+        username = urllib.parse.quote(self._derive_username(user))
         password = urllib.parse.quote(self._derive_password(user.uuid))
         server_ip = state.network.server_ip or public_ip()
 
@@ -319,8 +319,8 @@ class MieruPlugin(BasePlugin):
                         subprocess.run(["iptables"] + parts, capture_output=True)
 
     @staticmethod
-    def _derive_username(uuid: str) -> str:
-        return "u" + derive_key("mieru-user", uuid)[:8]
+    def _derive_username(user: User) -> str:
+        return user.email
 
     @staticmethod
     def _derive_password(uuid: str) -> str:

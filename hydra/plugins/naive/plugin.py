@@ -92,7 +92,7 @@ class NaivePlugin(BasePlugin):
         for user in state.users:
             if user.blocked:
                 continue
-            username = self._derive_username(user.uuid)
+            username = self._derive_username(user)
             password = self._derive_password(user.uuid)
             users.append({"username": username, "password": password})
 
@@ -143,7 +143,7 @@ class NaivePlugin(BasePlugin):
 
     def on_user_add(self, user: User, state: AppState) -> None:
         user.credentials.setdefault("naive", {})
-        user.credentials["naive"]["username"] = self._derive_username(user.uuid)
+        user.credentials["naive"]["username"] = self._derive_username(user)
         user.credentials["naive"]["password"] = self._derive_password(user.uuid)
         self.configure(state)
         self.apply(state)
@@ -164,7 +164,7 @@ class NaivePlugin(BasePlugin):
         domain = state.network.domain
         if not domain:
             return ""
-        username = self._derive_username(user.uuid)
+        username = self._derive_username(user)
         password = self._derive_password(user.uuid)
         port = DEFAULT_PORT
 
@@ -198,7 +198,7 @@ class NaivePlugin(BasePlugin):
         domain = state.network.domain
         if not domain:
             return ""
-        username = self._derive_username(user.uuid)
+        username = self._derive_username(user)
         password = self._derive_password(user.uuid)
         port = DEFAULT_PORT
 
@@ -423,8 +423,8 @@ class NaivePlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     @staticmethod
-    def _derive_username(uuid: str) -> str:
-        return "u" + derive_hex_key("naive-user", uuid)[:8]
+    def _derive_username(user: User) -> str:
+        return user.email
 
     @staticmethod
     def _derive_password(uuid: str) -> str:

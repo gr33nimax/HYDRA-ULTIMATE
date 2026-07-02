@@ -65,7 +65,8 @@ def test_configure_users_in_inbound():
     ]))
     names = [u["name"] for u in frag.inbounds[0]["users"]]
     assert len(names) == 2
-    assert all(n.startswith("u") for n in names)
+    assert "a@x.com" in names
+    assert "b@x.com" in names
 
 
 def test_configure_skips_blocked():
@@ -101,16 +102,17 @@ def test_on_user_add_sets_credentials():
     user = _user("a@x.com", uuid="uuid-a")
     p.on_user_add(user, _state([user]))
     assert "mieru" in user.credentials
-    assert user.credentials["mieru"]["username"].startswith("u")
+    assert user.credentials["mieru"]["username"] == "a@x.com"
     assert len(user.credentials["mieru"]["password"]) > 0
 
 
 def test_deterministic_creds():
-    """Одинаковый uuid → одинаковые креды."""
+    """Одинаковый email/uuid → одинаковые креды."""
     p = MieruPlugin()
-    assert p._derive_username("same") == p._derive_username("same")
+    u1 = _user("a@x.com", uuid="same")
+    u2 = _user("a@x.com", uuid="same")
+    assert p._derive_username(u1) == p._derive_username(u2)
     assert p._derive_password("same") == p._derive_password("same")
-    assert p._derive_username("aaa") != p._derive_username("bbb")
 
 
 def test_client_link_valid():

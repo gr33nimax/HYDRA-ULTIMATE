@@ -97,19 +97,19 @@ def test_on_user_add_sets_credentials():
     assert "naive" in user.credentials
     assert "username" in user.credentials["naive"]
     assert "password" in user.credentials["naive"]
-    assert user.credentials["naive"]["username"].startswith("u")
+    assert user.credentials["naive"]["username"] == "a@x.com"
 
 
 def test_deterministic_creds():
-    """Одинаковый uuid → одинаковые креды."""
+    """Одинаковый email/uuid → одинаковые креды."""
     p = NaivePlugin()
     uuid = "same-uuid-123"
 
     u1 = _make_user("a@x.com", uuid=uuid)
-    u2 = _make_user("b@x.com", uuid=uuid)
+    u2 = _make_user("a@x.com", uuid=uuid)
 
-    uname1 = p._derive_username(u1.uuid)
-    uname2 = p._derive_username(u2.uuid)
+    uname1 = p._derive_username(u1)
+    uname2 = p._derive_username(u2)
     assert uname1 == uname2
 
     pass1 = p._derive_password(u1.uuid)
