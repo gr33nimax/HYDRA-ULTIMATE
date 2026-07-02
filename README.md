@@ -46,7 +46,6 @@
 | MTProto | `telemt` | Telegram MTProto, multi-user | 🟡 В разработке (WIP) |
 | qWDTT | `wdtt` | WG over TURN, per-user | 🟡 В разработке (WIP) |
 | SlipGate | `slipgate` | DNS-туннели (DNSTT/Noize/Slipstream/VayDNS) | 🟡 В разработке (WIP) |
-| VLESS | `vless` | VLESS-XTLS-Reality (sing-box native) | 🟡 В планах (Roadmap) |
 | AnyTLS | `anytls` | TLS-обфускатор для обхода DPI | 🟡 В планах (Roadmap) |
 | TrustTunnel | `trusttunnel` | Защищённый туннель для обхода блокировок | 🟡 В планах (Roadmap) |
 | ShadowTLS | `shadowtls` | TLS-обертка с имитацией рукопожатия доверенных сайтов | 🟡 В планах (Roadmap) |
