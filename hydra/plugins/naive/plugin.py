@@ -513,7 +513,16 @@ class NaivePlugin(BasePlugin):
         dest.mkdir(parents=True, exist_ok=True)
         binary = dest / f"caddy-linux-{arch}"
 
-        if not download_github_asset(GITHUB_REPO, f"caddy-linux-{arch}", binary):
+        # Сначала пробуем через API-поиск ассетов
+        download_ok = download_github_asset(GITHUB_REPO, f"caddy-linux-{arch}", binary)
+
+        # Если API выдал ошибку (лимиты GitHub или блокировки api.github.com), пробуем прямую ссылку
+        if not download_ok:
+            from hydra.utils.downloader import download
+            direct_url = f"https://github.com/{GITHUB_REPO}/releases/latest/download/caddy-linux-{arch}"
+            download_ok = download(direct_url, binary)
+
+        if not download_ok:
             return False
 
         if not verify_elf(binary):
