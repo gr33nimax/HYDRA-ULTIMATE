@@ -46,6 +46,8 @@ def uninstall_plugin(state: AppState, name: str) -> bool:
     proto = get_protocol(state, name)
     proto.installed = False
     proto.enabled = False
+    proto.config = {}
+    proto.port = 0
     save_state(state)
     apply_config(state)
     return ok
