@@ -71,7 +71,7 @@ class NaivePlugin(BasePlugin):
 
         if BIN_PATH.exists():
             BIN_PATH.unlink()
-        for d in (CFG_DIR, LOG_DIR):
+        for d in (CFG_DIR, LOG_DIR, Path("/var/lib/caddy-naive")):
             if d.exists():
                 shutil.rmtree(d, ignore_errors=True)
         return True
@@ -126,6 +126,7 @@ class NaivePlugin(BasePlugin):
             return False
 
         CFG_DIR.mkdir(parents=True, exist_ok=True)
+        Path("/var/lib/caddy-naive").mkdir(parents=True, exist_ok=True)
         CADDYFILE.write_text(self._pending_cfg)
         CADDYFILE.chmod(0o640)
 
@@ -551,8 +552,10 @@ class NaivePlugin(BasePlugin):
             "Restart=on-failure\n"
             "RestartSec=1\n"
             "TimeoutStopSec=5\n"
+            "Environment=\"XDG_DATA_HOME=/var/lib/caddy-naive\"\n"
+            "Environment=\"XDG_CONFIG_HOME=/var/lib/caddy-naive\"\n"
             "LimitNOFILE=1048576\n"
-            f"ReadWritePaths={CFG_DIR} {LOG_DIR}\n"
+            f"ReadWritePaths={CFG_DIR} {LOG_DIR} /var/lib/caddy-naive\n"
             "AmbientCapabilities=CAP_NET_BIND_SERVICE\n"
             "NoNewPrivileges=true\n"
             "\n"
