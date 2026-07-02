@@ -285,11 +285,19 @@ class AnyTLSPlugin(BasePlugin):
             except Exception:
                 pass
 
+        effective_port = 443
+        if state:
+            try:
+                from hydra.core.sni_router import get_effective_port
+                effective_port = get_effective_port("anytls", state)
+            except Exception:
+                pass
+
         return PluginStatus(
             installed=installed,
             enabled=enabled,
             running=installed and is_running() and enabled,
-            port=443,
+            port=effective_port,
             info=info,
         )
 
