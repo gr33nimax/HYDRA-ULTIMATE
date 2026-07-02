@@ -409,22 +409,58 @@ class AnyTLSPlugin(BasePlugin):
 
     def _obtain_cert_certbot(self, domain: str) -> bool:
         """Автоматическое получение сертификата через certbot.
-        
+
         Использует HTTP-01 challenge (порт 80).
-        Порт 80 обычно свободен — naive слушает только 443.
+        Временно открывает порт 80 в UFW/iptables.
         """
         import shutil
+        from hydra.utils.firewall import is_ufw_active
+
+        # 1. Проверяем/устанавливаем certbot
         if not shutil.which("certbot"):
+            print("  Устанавливаю certbot...")
             subprocess.run(["apt-get", "update"], capture_output=True)
-            subprocess.run(["apt-get", "install", "-y", "certbot"],
-                           capture_output=True)
+            subprocess.run(["apt-get", "install", "-y", "certbot"], capture_output=True)
+
+        # 2. Временно открываем порт 80 в фаерволе
+        ufw_opened = False
+        ipt_opened = False
+        if is_ufw_active():
+            subprocess.run(["ufw", "allow", "80/tcp", "comment", "temp-certbot"], capture_output=True)
+            ufw_opened = True
+        else:
+            # Проверяем, нет ли уже правила в iptables
+            r_chk = subprocess.run([
+                "iptables", "-C", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"
+            ], capture_output=True)
+            if r_chk.returncode != 0:
+                subprocess.run([
+                    "iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"
+                ], capture_output=True)
+                ipt_opened = True
+
+        # 3. Запускаем certbot
         r = subprocess.run([
             "certbot", "certonly", "--standalone",
             "-d", domain,
             "--non-interactive", "--agree-tos",
             "--register-unsafely-without-email",
         ], capture_output=True, text=True)
-        return r.returncode == 0
+
+        success = r.returncode == 0
+
+        if not success:
+            print(f"  [Ошибка certbot] Вывод:\n{r.stderr or r.stdout or ''}")
+
+        # 4. Закрываем порт 80 в фаерволе
+        if ufw_opened:
+            subprocess.run(["ufw", "delete", "allow", "80/tcp"], capture_output=True)
+        if ipt_opened:
+            subprocess.run([
+                "iptables", "-D", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"
+            ], capture_output=True)
+
+        return success
 
     def _remove_iptables_rules(self) -> None:
         """Удаляет правила anytls-rx / anytls-tx."""
