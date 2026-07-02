@@ -50,13 +50,14 @@ class NaivePlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def install(self) -> bool:
-        if not self._installed():
-            print("  Скачиваю caddy-naive...")
-            if not self._download_binary():
-                print("  Не удалось установить caddy-naive.")
-                return False
+        if self._installed():
+            return True
 
-        # Всегда обновляем systemd-сервис на случай обновлений (например, новых путей или переменных окружения)
+        print("  Скачиваю caddy-naive...")
+        if not self._download_binary():
+            print("  Не удалось установить caddy-naive.")
+            return False
+
         self._install_service()
         return self._installed()
 
@@ -590,13 +591,14 @@ class NaivePlugin(BasePlugin):
         return f"""\
 {{
     http_port 0
+    https_port {port}
     order forward_proxy before reverse_proxy
     servers {{
         protocols h1 h2
     }}
 }}
 
-:{port}, {domain}:{port} {{
+{domain} {{
 {tls_line}    forward_proxy {{
 {auth_lines}            hide_ip
             hide_via
