@@ -50,14 +50,13 @@ class NaivePlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def install(self) -> bool:
-        if self._installed():
-            return True
+        if not self._installed():
+            print("  Скачиваю caddy-naive...")
+            if not self._download_binary():
+                print("  Не удалось установить caddy-naive.")
+                return False
 
-        print("  Скачиваю caddy-naive...")
-        if not self._download_binary():
-            print("  Не удалось установить caddy-naive.")
-            return False
-
+        # Всегда обновляем systemd-сервис на случай обновлений (например, новых путей или переменных окружения)
         self._install_service()
         return self._installed()
 
