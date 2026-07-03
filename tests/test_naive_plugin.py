@@ -30,24 +30,24 @@ def test_plugin_meta():
     assert p.meta.needs_domain is True
 
 
-def test_configure_returns_fragment_with_port():
-    """configure() возвращает ConfigFragment с nft_tproxy_ports=[443]."""
+def test_configure_returns_fragment_empty_tproxy():
+    """configure() возвращает ConfigFragment с nft_tproxy_ports=[] (TPROXY не используется)."""
     p = NaivePlugin()
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
     frag = p.configure(state)
 
     assert isinstance(frag, ConfigFragment)
-    assert frag.nft_tproxy_ports == [443]
+    assert frag.nft_tproxy_ports == []
     assert frag.inbounds == []
     assert frag.outbounds == []
 
 
 def test_configure_returns_fragment_even_without_users():
-    """Без юзеров configure всё равно возвращает nft_tproxy_ports."""
+    """Без юзеров configure всё равно возвращает пустой nft_tproxy_ports."""
     p = NaivePlugin()
     state = _make_state([])
     frag = p.configure(state)
-    assert frag.nft_tproxy_ports == [443]
+    assert frag.nft_tproxy_ports == []
 
 
 def test_configure_skips_blocked_users():
@@ -58,7 +58,7 @@ def test_configure_skips_blocked_users():
         _make_user("blocked@x.com", uuid="uuid-b", blocked=True),
     ])
     frag = p.configure(state)
-    assert frag.nft_tproxy_ports == [443]
+    assert frag.nft_tproxy_ports == []
     # В Caddyfile только один пользователь
     assert "uuid-a" not in p._pending_cfg or True
     lines = p._pending_cfg.splitlines()
@@ -177,6 +177,7 @@ def test_build_caddyfile_basic():
     assert "basic_auth testuser testpass" in caddyfile
     assert "probe_resistance mysecret123" in caddyfile
     assert "forward_proxy" in caddyfile
+    assert "upstream socks5://127.0.0.1:1080" in caddyfile
     assert "reverse_proxy https://www.google.com" in caddyfile
     assert "tls" not in caddyfile
 
@@ -206,6 +207,7 @@ def test_build_caddyfile_multiple_users():
         ],
         probe_secret="s",
     )
+    assert "upstream socks5://127.0.0.1:1080" in caddyfile
     lines = caddyfile.splitlines()
     auth_lines = [l for l in lines if "basic_auth" in l]
     assert len(auth_lines) == 3
@@ -297,4 +299,5 @@ def test_find_existing_cert_and_tls_config():
         key_file="/path/to/key.pem",
     )
     assert "tls /path/to/cert.pem /path/to/key.pem" in caddyfile
+    assert "upstream socks5://127.0.0.1:1080" in caddyfile
     assert "on_demand" not in caddyfile

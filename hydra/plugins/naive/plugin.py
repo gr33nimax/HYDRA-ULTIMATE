@@ -5,7 +5,8 @@
   • apply() — пишет Caddyfile, caddy validate + systemctl reload.
   • per-user: детерминированные username/password из uuid через derive_key.
   • traffic — iptables accounting (как mieru).
-  • nft_tproxy_ports=[443] — трафик заворачивается в sing-box через TPROXY.
+  • TPROXY не используется: Caddy сам биндится на порт (443), а исходящий трафик
+    проксируется в sing-box через `upstream socks5://127.0.0.1:1080` в Caddyfile.
 """
 from __future__ import annotations
 
@@ -117,9 +118,7 @@ class NaivePlugin(BasePlugin):
         )
 
         self._pending_cfg = caddyfile
-        return ConfigFragment(
-            nft_tproxy_ports=[port],
-        )
+        return ConfigFragment()
 
     def apply(self, state: AppState) -> bool:
         if not self._pending_cfg:
@@ -602,6 +601,7 @@ class NaivePlugin(BasePlugin):
 {tls_line}    forward_proxy {{
 {auth_lines}            hide_ip
             hide_via
+            upstream socks5://127.0.0.1:1080
 {probe_line}    }}
     reverse_proxy {decoy_url} {{
         header_up Host {{upstream_hostport}}
