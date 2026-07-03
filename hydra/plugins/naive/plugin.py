@@ -103,6 +103,12 @@ class NaivePlugin(BasePlugin):
         probe_secret = (ps.config.get("probe_secret", "") if ps and ps.config else "")
 
         cert_file, key_file = self._resolve_certs(domain, ps)
+        if not cert_file or not key_file:
+            if self._obtain_cert_certbot(domain):
+                cert_file, key_file = self._find_existing_cert(domain)
+                if ps and ps.config is not None:
+                    ps.config["cert_file"] = cert_file
+                    ps.config["key_file"] = key_file
 
         caddyfile = self._build_caddyfile(
             domain=domain,
@@ -489,6 +495,9 @@ class NaivePlugin(BasePlugin):
     def _obtain_cert_certbot(self, domain: str) -> bool:
         """Автоматическое получение сертификата через certbot (HTTP-01 challenge, порт 80)."""
         from hydra.utils.firewall import is_ufw_active
+
+        if not shutil.which("apt-get") and not shutil.which("certbot"):
+            return False
 
         if not shutil.which("certbot"):
             print("  Устанавливаю certbot...")
