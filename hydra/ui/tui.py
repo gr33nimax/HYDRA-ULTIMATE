@@ -55,9 +55,6 @@ def _char_width(char: str) -> int:
     # Emojis > 0xffff are always 2 cells wide
     if code > 0xffff:
         return 2
-    # Specific BMP symbols that render as 2 cells wide in modern terminal fonts (⚙, ⚡, ⚠)
-    if code in (0x2699, 0x26a1, 0x26a0):
-        return 2
     # CJK characters
     if (0x4e00 <= code <= 0x9fff or 
         0x3000 <= code <= 0x303f or 
