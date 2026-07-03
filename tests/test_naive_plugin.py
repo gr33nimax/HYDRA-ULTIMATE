@@ -174,12 +174,12 @@ def test_build_caddyfile_basic():
         decoy_url="https://www.google.com",
     )
 
-    assert "vpn.example.com {" in caddyfile
+    assert "vpn.example.com:443 {" in caddyfile
     assert "basic_auth testuser testpass" in caddyfile
     assert "probe_resistance mysecret123" in caddyfile
     assert "forward_proxy" in caddyfile
     assert "reverse_proxy https://www.google.com" in caddyfile
-    assert "tls" not in caddyfile
+    assert "on_demand" in caddyfile
 
 
 def test_build_caddyfile_fake_site():
