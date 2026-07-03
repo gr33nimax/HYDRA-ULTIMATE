@@ -31,7 +31,7 @@ def test_is_valid_domain():
 def test_configure(mock_cache, mock_load_config):
     mock_load_config.return_value = {
         "private_key": "test_private_key",
-        "address": "172.16.0.2/32"
+        "addresses": ["172.16.0.2/32"]
     }
     
     # Мокаем существование кэша внешних правил (не существует для базового теста)

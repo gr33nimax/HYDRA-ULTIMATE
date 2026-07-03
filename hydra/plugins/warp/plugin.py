@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import socket
 import subprocess
 from pathlib import Path
 
@@ -90,7 +91,6 @@ class WarpPlugin(BasePlugin):
                 cwd=str(WGCF_PROFILE.parent)
             )
             if r.returncode != 0:
-                # Дописываем к существующему логу
                 with log_path.open("a", encoding="utf-8") as lf:
                     lf.write(
                         f"wgcf generate failed with code {r.returncode}\n"
@@ -132,14 +132,26 @@ class WarpPlugin(BasePlugin):
             return None
 
         private = re.search(r"PrivateKey\s*=\s*(\S+)", text)
-        address = re.search(r"Address\s*=\s*(\S+)", text)
-
         if not private:
             return None
 
+        # Надежно парсим Address (может быть как IPv4, так и IPv6 через запятую)
+        address_match = re.search(r"Address\s*=\s*(.+)", text)
+        addresses = []
+        if address_match:
+            raw_addr = address_match.group(1)
+            # Разделяем по запятым, убираем пробелы и лишние знаки препинания
+            for addr in raw_addr.split(","):
+                addr = addr.strip()
+                if addr:
+                    addresses.append(addr)
+        
+        if not addresses:
+            addresses = ["172.16.0.2/32"]
+
         return {
             "private_key": private.group(1),
-            "address": address.group(1) if address else "172.16.0.2/32",
+            "addresses": addresses,
         }
 
     def configure(self, state: AppState) -> ConfigFragment:
@@ -148,15 +160,21 @@ class WarpPlugin(BasePlugin):
         if not warp_cfg:
             return ConfigFragment()
 
+        # Sing-Box требует IP-адрес в качестве `server` (домены не поддерживаются напрямую)
+        try:
+            server_ip = socket.gethostbyname("engage.cloudflareclient.com")
+        except Exception:
+            server_ip = "162.159.192.1"
+
         # WARP outbound
         outbound = {
             "type": "wireguard",
             "tag": "warp",
-            "server": "engage.cloudflareclient.com",
+            "server": server_ip,
             "server_port": 2408,
-            "local_address": [warp_cfg["address"]],
-            "private_key": warp_cfg["private_key"],
+            "local_address": warp_cfg["addresses"],
             "peer_public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+            "private_key": warp_cfg["private_key"],
             "mtu": 1280,
         }
 
