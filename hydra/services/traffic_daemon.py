@@ -58,6 +58,7 @@ def run_daemon() -> None:
 
             connections = data.get("connections", [])
             if connections:
+                _log(f"Raw first connection: {json.dumps(connections[0])}")
                 summary = []
                 for c in connections:
                     cid = c.get("id")
@@ -67,7 +68,7 @@ def run_daemon() -> None:
                     up = c.get("upload", 0)
                     down = c.get("download", 0)
                     summary.append(f"ID={cid}, User={user}, Tag={tag}, Rx={down}, Tx={up}")
-                _log(f"Active connections: {'; '.join(summary)}")
+                _log(f"Active connections summary: count={len(connections)}")
 
             current_ids = set()
             state_changed = False
