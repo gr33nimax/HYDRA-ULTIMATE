@@ -100,7 +100,7 @@ class NaivePlugin(BasePlugin):
             users.append({"username": username, "password": password})
 
         ps = state.protocols.get("naive")
-        probe_secret = (ps.config.get("probe_secret", "") if ps and ps.config else "")
+        decoy_url = (ps.config.get("decoy_url", "") if ps and ps.config else "")
 
         cert_file, key_file = self._resolve_certs(domain, ps)
         if not cert_file or not key_file:
@@ -114,10 +114,10 @@ class NaivePlugin(BasePlugin):
             domain=domain,
             port=port,
             users=users,
-            probe_secret=probe_secret,
             fake_site_dir=str(FAKE_SITE_DIR),
             cert_file=cert_file,
             key_file=key_file,
+            decoy_url=decoy_url,
         )
 
         self._pending_cfg = caddyfile
@@ -338,7 +338,7 @@ class NaivePlugin(BasePlugin):
             return
 
         domain = state.network.domain
-        has_config = bool(domain and ps.config and ps.config.get("probe_secret"))
+        has_config = bool(domain and ps.config and "decoy_url" in ps.config)
 
         if not has_config:
             from hydra.ui.tui import prompt
@@ -352,12 +352,11 @@ class NaivePlugin(BasePlugin):
             if not ps.config:
                 ps.config = {}
 
-            current_secret = ps.config.get("probe_secret", "")
-            if not current_secret:
-                import secrets
-                current_secret = secrets.token_hex(16)
-            new_secret = prompt("Введите секрет для защиты от зондирования (probe_resistance)", default=current_secret)
-            ps.config["probe_secret"] = new_secret
+            decoy_url = prompt(
+                "URL или домен для сайта-декоя (например, https://bing.com или опустите для HTML-заглушки)",
+                default=ps.config.get("decoy_url", "")
+            )
+            ps.config["decoy_url"] = decoy_url
 
             from hydra.ui.tui import confirm
             use_custom = confirm("Использовать собственный SSL-сертификат (указать пути вручную)?", default=False)
@@ -626,7 +625,10 @@ class NaivePlugin(BasePlugin):
             tls_line = ""
 
         if decoy_url:
-            decoy_block = f"    reverse_proxy {decoy_url} {{\n        header_up Host {{upstream_hostport}}\n    }}\n"
+            target_decoy = decoy_url.strip()
+            if not target_decoy.startswith("http://") and not target_decoy.startswith("https://"):
+                target_decoy = f"https://{target_decoy}"
+            decoy_block = f"    reverse_proxy {target_decoy} {{\n        header_up Host {{upstream_hostport}}\n    }}\n"
         else:
             decoy_block = f"    file_server {{\n        root {fake_site_dir}\n    }}\n"
 
@@ -641,13 +643,13 @@ class NaivePlugin(BasePlugin):
 {{
     http_port 0
     order forward_proxy before file_server
+    order forward_proxy before reverse_proxy
 }}
 
 {site_header} {{
 {bind_line}{tls_line}    forward_proxy {{
 {auth_lines}            hide_ip
             hide_via
-            probe_resistance
     }}
 {decoy_block}    log {{
         output file {LOG_DIR}/access.log {{
