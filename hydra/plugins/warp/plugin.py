@@ -65,8 +65,13 @@ class WarpPlugin(BasePlugin):
                 WGCF_BIN.parent.mkdir(parents=True, exist_ok=True)
                 ok = download_github_asset_filtered("ViRb3/wgcf", _match, WGCF_BIN)
                 if not ok:
-                    log_path.write_text("Failed to download wgcf binary from GitHub.\n", encoding="utf-8")
-                    return False
+                    # Резервный прямой запуск скачивания (на случай лимитов API)
+                    fallback_url = f"https://github.com/ViRb3/wgcf/releases/download/v2.2.31/wgcf_2.2.31_linux_{arch}"
+                    log_path.write_text(f"GitHub API query failed. Trying fallback direct download from: {fallback_url}\n", encoding="utf-8")
+                    ok = self._download_file(fallback_url, WGCF_BIN)
+                    if not ok:
+                        log_path.write_text("Failed both GitHub API query and direct download.\n", encoding="utf-8")
+                        return False
                 WGCF_BIN.chmod(0o755)
 
             # Регистрация
@@ -120,6 +125,23 @@ class WarpPlugin(BasePlugin):
         except Exception:
             pass
         return True
+
+    @staticmethod
+    def _download_file(url: str, dest: Path) -> bool:
+        import urllib.request
+        import shutil
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            req = urllib.request.Request(
+                url, 
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            )
+            with urllib.request.urlopen(req, timeout=60) as response:
+                with dest.open("wb") as out_file:
+                    shutil.copyfileobj(response, out_file)
+            return True
+        except Exception:
+            return False
 
     def _load_warp_config(self) -> dict | None:
         """Извлекает ключи из wgcf-профиля."""
