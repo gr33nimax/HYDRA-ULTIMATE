@@ -397,6 +397,9 @@ class NaivePlugin(BasePlugin):
 
         ps.enabled = True
 
+        from hydra.core.sni_router import rebuild
+        rebuild(state)
+
         self.configure(state)
         self.apply(state)
 
@@ -406,9 +409,6 @@ class NaivePlugin(BasePlugin):
         )
         if r.stdout.strip() != "active":
             subprocess.run(["systemctl", "enable", "--now", SERVICE_NAME], capture_output=True)
-
-        from hydra.core.sni_router import rebuild
-        rebuild(state)
 
     def on_disable(self, state: AppState) -> None:
         from hydra.utils.firewall import close_tcp
@@ -610,7 +610,7 @@ class NaivePlugin(BasePlugin):
         domain: str,
         port: int,
         users: list[dict],
-        probe_secret: str,
+        probe_secret: str = "",
         fake_site_dir: str = "/var/www/naive-fake",
         cert_file: str = "",
         key_file: str = "",
@@ -620,19 +620,22 @@ class NaivePlugin(BasePlugin):
         for u in users:
             auth_lines += f"            basic_auth {u['username']} {u['password']}\n"
 
-        probe_line = ""
-        if probe_secret:
-            probe_line = f"            probe_resistance {probe_secret}\n"
-
         if cert_file and key_file:
             tls_line = f"    tls {cert_file} {key_file}\n"
         else:
-            tls_line = "    tls {\n        on_demand\n    }\n"
+            tls_line = ""
 
         if decoy_url:
             decoy_block = f"    reverse_proxy {decoy_url} {{\n        header_up Host {{upstream_hostport}}\n    }}\n"
         else:
             decoy_block = f"    file_server {{\n        root {fake_site_dir}\n    }}\n"
+
+        if port != DEFAULT_PORT:
+            site_header = f":{port}"
+            bind_line = "    bind 127.0.0.1\n"
+        else:
+            site_header = f":{port}, {domain}"
+            bind_line = ""
 
         return f"""\
 {{
@@ -640,11 +643,12 @@ class NaivePlugin(BasePlugin):
     order forward_proxy before file_server
 }}
 
-:{port}, {domain}:{port} {{
-{tls_line}    forward_proxy {{
+{site_header} {{
+{bind_line}{tls_line}    forward_proxy {{
 {auth_lines}            hide_ip
             hide_via
-{probe_line}    }}
+            probe_resistance
+    }}
 {decoy_block}    log {{
         output file {LOG_DIR}/access.log {{
             roll_size 10mb
