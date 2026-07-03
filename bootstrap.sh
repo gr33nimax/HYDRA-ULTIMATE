@@ -178,6 +178,7 @@ info "Python-зависимости..."
 pip3 install -q "python-telegram-bot[job-queue]" 2>/dev/null || warn "python-telegram-bot не установлен (ботам требуется ручная установка)"
 
 # ── Symlink ──────────────────────────────────────────────────────────────────
+chmod +x "${INSTALL_DIR}/main.py" 2>/dev/null || true
 ln -sf "${INSTALL_DIR}/main.py" /usr/local/bin/hydra 2>/dev/null || true
 
 # ── [5/5] Запуск ────────────────────────────────────────────────────────────
