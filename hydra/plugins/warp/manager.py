@@ -53,11 +53,15 @@ def _show_diagnostic_info():
     # Показываем отладочный конфиг, если он существует
     debug_path = Path("/var/log/hydra/warp_debug_config.json")
     if debug_path.exists():
-        warn("Содержимое сгенерированного конфига (/var/log/hydra/warp_debug_config.json):")
+        warn("Секции outbounds и route из сгенерированного конфига:")
         try:
-            print(f"  {DIM}{debug_path.read_text(encoding='utf-8')[:1500]}{NC}")
-        except Exception:
-            pass
+            cfg = json.loads(debug_path.read_text(encoding='utf-8'))
+            print(f"  {BOLD}outbounds:{NC}")
+            print(f"  {DIM}{json.dumps(cfg.get('outbounds', []), indent=2)}{NC}")
+            print(f"  {BOLD}route:{NC}")
+            print(f"  {DIM}{json.dumps(cfg.get('route', {}), indent=2)}{NC}")
+        except Exception as e:
+            print(f"  Ошибка чтения конфига: {e}")
 
     # 2. Проверяем статус sing-box
     import subprocess
