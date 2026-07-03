@@ -628,30 +628,24 @@ class NaivePlugin(BasePlugin):
             target_decoy = decoy_url.strip()
             if not target_decoy.startswith("http://") and not target_decoy.startswith("https://"):
                 target_decoy = f"https://{target_decoy}"
-            parsed = urllib.parse.urlparse(target_decoy)
-            host_header = parsed.netloc or parsed.path
-            decoy_block = f"    reverse_proxy {target_decoy} {{\n        header_up Host {host_header}\n    }}\n"
+            decoy_block = f"    reverse_proxy {target_decoy} {{\n        header_up Host {{upstream_hostport}}\n    }}\n"
+            order_line = "    order forward_proxy before reverse_proxy\n"
         else:
             decoy_block = f"    file_server {{\n        root {fake_site_dir}\n    }}\n"
+            order_line = "    order forward_proxy before file_server\n"
 
-        if port != DEFAULT_PORT:
-            site_header = f":{port}"
-            bind_line = "    bind 127.0.0.1\n"
-        else:
-            site_header = f"{domain}:443"
-            bind_line = ""
+        site_header = f":{port}, {domain}"
 
         return f"""\
 {{
     http_port 0
-    order forward_proxy before file_server
-    order forward_proxy before reverse_proxy
-}}
+{order_line}}}
 
 {site_header} {{
-{bind_line}{tls_line}    forward_proxy {{
+{tls_line}    forward_proxy {{
 {auth_lines}            hide_ip
             hide_via
+            probe_resistance
     }}
 {decoy_block}    log {{
         output file {LOG_DIR}/access.log {{
