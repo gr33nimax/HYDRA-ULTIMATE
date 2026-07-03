@@ -8,6 +8,7 @@ from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
 from hydra.plugins.mieru.plugin import MieruPlugin
 from hydra.plugins.naive.plugin import NaivePlugin
 from hydra.plugins.anytls.plugin import AnyTLSPlugin
+from hydra.plugins.trusttunnel.plugin import TrustTunnelPlugin
 from hydra.plugins.telemt.plugin import TelemtPlugin
 from hydra.plugins.wdtt.plugin import WdttPlugin
 from hydra.plugins.dnscrypt.plugin import DNSCryptPlugin
@@ -21,6 +22,7 @@ from hydra.core.state import AppState
 _PLUGINS: list[BasePlugin] = [
     AmneziaWGPlugin(),
     AnyTLSPlugin(),
+    TrustTunnelPlugin(),
     MieruPlugin(),
     NaivePlugin(),
     TelemtPlugin(),

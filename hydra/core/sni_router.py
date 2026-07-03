@@ -16,6 +16,7 @@ FRONTEND_PORT = 443
 _INTERNAL_PORTS = {
     "naive": 10443,
     "anytls": 10444,
+    "trusttunnel": 10445,
 }
 
 def is_installed() -> bool:
@@ -126,7 +127,7 @@ def rebuild(state: AppState) -> bool:
             domain = ""
             if name == "naive":
                 domain = state.network.domain
-            elif name == "anytls":
+            elif name in ("anytls", "trusttunnel"):
                 domain = proto.config.get("domain", "")
             if domain:
                 backends.append({

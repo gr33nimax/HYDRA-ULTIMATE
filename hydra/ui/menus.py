@@ -1184,8 +1184,12 @@ def _show_traffic_combined(state: AppState):
         mieru_traffic = 0
         for u in state.users:
             mieru_traffic += u.credentials.get("mieru", {}).get("traffic_used_bytes", 0)
+
+        trusttunnel_traffic = 0
+        for u in state.users:
+            trusttunnel_traffic += u.credentials.get("trusttunnel", {}).get("traffic_used_bytes", 0)
             
-        total_traffic = awg_traffic + naive_traffic + anytls_traffic + mieru_traffic
+        total_traffic = awg_traffic + naive_traffic + anytls_traffic + mieru_traffic + trusttunnel_traffic
         
         print(f"  {BOLD}Трафик по протоколам:{NC}")
         print(f"  {BOLD}{'Протокол':<15} {'Потребление':<20}{NC}")
@@ -1194,6 +1198,7 @@ def _show_traffic_combined(state: AppState):
         print(f"  NaiveProxy      {GREEN}{_bytes_auto(naive_traffic):<20}{NC}")
         print(f"  AnyTLS          {GREEN}{_bytes_auto(anytls_traffic):<20}{NC}")
         print(f"  Mieru           {GREEN}{_bytes_auto(mieru_traffic):<20}{NC}")
+        print(f"  TrustTunnel     {GREEN}{_bytes_auto(trusttunnel_traffic):<20}{NC}")
         print(f"  {DIM}{'─' * 38}{NC}")
         print(f"  {BOLD}ИТОГО:          {CYAN}{_bytes_auto(total_traffic):<20}{NC}")
         print()

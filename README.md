@@ -47,7 +47,7 @@
 | qWDTT | `wdtt` | WG over TURN, per-user | 🟡 В разработке (WIP) |
 | SlipGate | `slipgate` | DNS-туннели (DNSTT/Noize/Slipstream/VayDNS) | 🟡 В разработке (WIP) |
 | AnyTLS | `anytls` | TLS-shaped tunnel с padding scheme | 🟢 Готов (Ready) |
-| TrustTunnel | `trusttunnel` | Защищённый туннель для обхода блокировок | 🟡 В планах (Roadmap) |
+| TrustTunnel | `trusttunnel` | Защищённый туннель для обхода блокировок | 🟢 Готов (Ready) |
 | ShadowTLS | `shadowtls` | TLS-обертка с имитацией рукопожатия доверенных сайтов | 🟡 В планах (Roadmap) |
 
 ### Сетевые службы (ENHANCEMENT)
