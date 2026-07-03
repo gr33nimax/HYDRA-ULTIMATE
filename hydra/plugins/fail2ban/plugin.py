@@ -66,14 +66,6 @@ class Fail2banPlugin(BasePlugin):
                 "bantime": "3600",
                 "findtime": "600",
             },
-            "hydra-nginx-auth": {
-                "enabled": "true",
-                "filter": "nginx-http-auth",
-                "logpath": "/var/log/nginx/error.log",
-                "maxretry": "5",
-                "bantime": "3600",
-                "findtime": "600",
-            },
         }
         for name, opts in jails.items():
             path = JAIL_DIR / f"{name}.local"

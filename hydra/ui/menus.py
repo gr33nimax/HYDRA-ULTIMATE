@@ -538,6 +538,15 @@ def menu_network_services(state: AppState):
 
 def menu_plugin(state: AppState, p):
     """Универсальное меню плагина."""
+    if p.meta.name == "fail2ban":
+        from hydra.plugins.fail2ban.manager import menu_fail2ban
+        menu_fail2ban(state, p)
+        return
+    if p.meta.name == "ipban":
+        from hydra.plugins.ipban.manager import menu_ipban
+        menu_ipban(state, p)
+        return
+
     from hydra.core.state import get_protocol
     
     while True:
