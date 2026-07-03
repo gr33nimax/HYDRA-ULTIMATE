@@ -30,7 +30,7 @@ def run_daemon() -> None:
         port_to_user = {}
         try:
             r = subprocess.run(
-                ["journalctl", "-u", "sing-box", "--since", "5 minutes ago", "--no-pager"],
+                ["journalctl", "-u", "sing-box", "-n", "1000", "--no-pager"],
                 capture_output=True, text=True, timeout=3
             )
             if r.returncode == 0:
@@ -95,6 +95,7 @@ def run_daemon() -> None:
 
             connections = data.get("connections", [])
             anytls_ports = _get_anytls_ports()
+            _log(f"DEBUG: anytls_ports count = {len(anytls_ports)}, first 5 items = {dict(list(anytls_ports.items())[:5])}")
 
             if connections:
                 _log(f"Raw first connection: {json.dumps(connections[0])}")
