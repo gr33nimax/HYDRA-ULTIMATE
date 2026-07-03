@@ -72,7 +72,8 @@ def _manage_traffic_daemon(state: AppState) -> None:
     enabled = getattr(state.network, "clash_api_enabled", False)
     
     if enabled:
-        unit = """[Unit]
+        project_root = Path(__file__).resolve().parent.parent.parent
+        unit = f"""[Unit]
 Description=HYDRA User Traffic Accounting Daemon
 After=sing-box.service
 Wants=sing-box.service
@@ -80,6 +81,8 @@ Wants=sing-box.service
 [Service]
 Type=simple
 User=root
+WorkingDirectory={project_root}
+Environment=PYTHONPATH={project_root}
 ExecStart=/usr/bin/python3 -m hydra.services.traffic_daemon
 Restart=always
 RestartSec=5
@@ -93,7 +96,8 @@ WantedBy=multi-user.target
                 subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
                 subprocess.run(["systemctl", "enable", "hydra-traffic-daemon"], capture_output=True)
             
-            subprocess.run(["systemctl", "start", "hydra-traffic-daemon"], capture_output=True)
+            # Restart to make sure the new environment/working directory takes effect
+            subprocess.run(["systemctl", "restart", "hydra-traffic-daemon"], capture_output=True)
         except Exception:
             pass
     else:
