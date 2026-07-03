@@ -116,15 +116,17 @@ def test_generate_client_config():
 
 
 def test_client_link():
-    """Генерирует правильную ссылку trusttunnel://."""
+    """Генерирует правильную ссылку tt://."""
     p = TrustTunnelPlugin()
     state = _state([_user("a@x.com", uuid="uuid-a")], domain="custom.domain")
     user = state.users[0]
     
     link = p.client_link(user, state)
-    assert link.startswith("trusttunnel://")
+    assert link.startswith("tt://")
     assert "custom.domain" in link
     assert "a%40x.com" in link  # URL-encoded
+    assert "security=tls" in link
+    assert "alpn" in link
 
 
 def test_on_user_add():

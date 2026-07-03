@@ -150,7 +150,7 @@ class TrustTunnelPlugin(BasePlugin):
         username = urllib.parse.quote(self._derive_username(user), safe="")
         password = urllib.parse.quote(self._derive_password(user.uuid), safe="")
         tag = urllib.parse.quote(self._derive_username(user), safe="")
-        return f"trusttunnel://{username}:{password}@{domain}:443?sni={domain}#{tag}"
+        return f"tt://{username}:{password}@{domain}:443?security=tls&sni={domain}&alpn#{tag}"
 
     # ═════════════════════════════════════════════════════════════════════
     #  Управление сервисом
