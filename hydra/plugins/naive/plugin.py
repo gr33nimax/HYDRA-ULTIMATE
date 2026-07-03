@@ -439,7 +439,9 @@ class NaivePlugin(BasePlugin):
 
     @staticmethod
     def _derive_username(user: User) -> str:
-        return user.email
+        clean = user.email.split("@")[0]
+        sanitized = "".join(c for c in clean if c.isalnum() or c in ("_", "-"))
+        return sanitized or user.email
 
     @staticmethod
     def _derive_password(uuid: str) -> str:

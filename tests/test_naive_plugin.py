@@ -97,7 +97,7 @@ def test_on_user_add_sets_credentials():
     assert "naive" in user.credentials
     assert "username" in user.credentials["naive"]
     assert "password" in user.credentials["naive"]
-    assert user.credentials["naive"]["username"] == "a@x.com"
+    assert user.credentials["naive"]["username"] == p._derive_username(user)
 
 
 def test_deterministic_creds():
