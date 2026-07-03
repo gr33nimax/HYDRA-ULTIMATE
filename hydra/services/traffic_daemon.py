@@ -60,8 +60,8 @@ def run_daemon() -> None:
             current_ids = set()
             state_changed = False
 
-            # Собираем дельты трафика по пользователям
-            deltas: dict[str, int] = {}
+            # Собираем дельты трафика по пользователям и протоколам
+            deltas: dict[tuple[str, str], int] = {}
 
             for conn in connections:
                 conn_id = conn.get("id")
@@ -74,19 +74,25 @@ def run_daemon() -> None:
                 if not email:
                     continue
 
+                # Определяем протокол по inboundTag
+                inbound_tag = metadata.get("inboundTag", "")
+                protocol = "anytls" if "anytls" in inbound_tag else ("mieru" if "mieru" in inbound_tag else "unknown")
+
                 upload = conn.get("upload", 0)
                 download = conn.get("download", 0)
                 total = upload + download
+
+                key = (email, protocol)
 
                 if conn_id in active_connections:
                     old_total = active_connections[conn_id]["total"]
                     delta = total - old_total
                     if delta > 0:
-                        deltas[email] = deltas.get(email, 0) + delta
+                        deltas[key] = deltas.get(key, 0) + delta
                         active_connections[conn_id]["total"] = total
                 else:
                     # Новое подключение
-                    deltas[email] = deltas.get(email, 0) + total
+                    deltas[key] = deltas.get(key, 0) + total
                     active_connections[conn_id] = {
                         "user": email,
                         "total": total
@@ -99,10 +105,15 @@ def run_daemon() -> None:
 
             # Применяем накопленные дельты к AppState
             if deltas:
-                for email, delta in deltas.items():
+                for (email, protocol), delta in deltas.items():
                     for user in state.users:
                         if user.email == email:
                             user.traffic_used_bytes += delta
+                            # Записываем в credentials по протоколам
+                            if not isinstance(user.credentials, dict):
+                                user.credentials = {}
+                            proto_dict = user.credentials.setdefault(protocol, {})
+                            proto_dict["traffic_used_bytes"] = proto_dict.get("traffic_used_bytes", 0) + delta
                             state_changed = True
 
             if state_changed:

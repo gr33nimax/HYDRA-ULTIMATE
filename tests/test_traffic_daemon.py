@@ -91,5 +91,7 @@ def test_daemon_collects_traffic_from_clash_api():
             
         assert user1.traffic_used_bytes == 400
         assert user2.traffic_used_bytes == 500
+        assert user1.credentials["anytls"]["traffic_used_bytes"] == 400
+        assert user2.credentials["mieru"]["traffic_used_bytes"] == 500
         assert len(saved_states) >= 2
 

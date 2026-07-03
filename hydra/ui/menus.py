@@ -1081,52 +1081,165 @@ def _is_enter_pressed() -> bool:
 
 
 def menu_monitoring(state: AppState):
-    from hydra.plugins.registry import transports
     while True:
         clear()
-        traffic = collect_traffic(state)
-        total = sum(traffic.values())
-        
-        sb_ok = singbox_installed() and is_running()
-        active_t = sum(1 for p in transports() if status_all().get(p.meta.name, {}).get("running"))
-        
         lines = [
-            kv("Трафик всего:", _bytes_auto(total)),
-            kv("Пользователей:", f"{len(state.users)} (активно: {sum(1 for u in state.users if not u.blocked)})"),
-            kv("Sing-Box:", f"{_ok(sb_ok)}  {singbox_version() or 'не установлен'}"),
-            kv("Служб активно:", f"{active_t} из {len(transports())}"),
-            f"  {DIM}{'─' * (PANEL_W - 2)}{NC}",
+            f"  {BOLD}Мониторинг параметров системы и использования трафика.{NC}",
+            f"  {DIM}Выберите нужный пункт для просмотра детальной статистики.{NC}"
         ]
-        lines += _sys_info(state)
         panel("Мониторинг", lines)
 
         choice = menu(
-            [("1", "📊 Панель трафика пользователей", "Сортировка, лимиты, детальный просмотр"),
-             ("2", "🔌 Активные подключения", "Сессии пользователей в реальном времени"),
-             ("3", "🚦 Статус протоколов", "Порты и состояние запущенных служб"),
-             ("4", "📈 Живой монитор CPU/RAM", "Секундное обновление метрик, скорость сети"),
-             ("5", "📋 Просмотр системных логов", "Sing-Box, Sync-Agent, Fail2ban, Honeypot"),
-             ("6", "🔄 Управление Sync Agent", "Контроль фоновой службы и ручной запуск"),
-             ("7", "⚙️ Настройки Clash API", "Локальный API статистики Sing-Box"),
+            [("1", "📊 Трафик по протоколам", "Общий объем трафика по типам подключений"),
+             ("2", "👥 Трафик по пользователям", "Детальная таблица потребления лимитов клиентов"),
+             ("3", "🔌 Активные подключения", "Сессии пользователей в реальном времени"),
+             ("4", "🚦 Статус протоколов", "Порты и состояние запущенных служб"),
+             ("5", "📈 Живой монитор CPU/RAM", "Нагрузка системы, скорость сети и метрики"),
+             ("6", "📋 Просмотр системных логов", "Sing-Box, Sync-Agent, Fail2ban и др."),
+             ("7", "🔄 Управление Sync Agent", "Контроль фоновой службы синхронизации"),
+             ("8", "⚙️ Настройки Clash API", "Локальный порт и секретный ключ статистики"),
              ("0", "↩ Назад", "")],
             "МОНИТОРИНГ",
         )
         if choice == "0":
             return
         elif choice == "1":
-            _show_traffic_dashboard(state)
+            _show_protocol_traffic(state)
         elif choice == "2":
-            _show_connections(state)
+            _show_traffic_dashboard(state)
         elif choice == "3":
-            _show_status()
+            _show_connections(state)
         elif choice == "4":
-            _show_realtime_sys_monitor()
+            _show_status()
         elif choice == "5":
-            _menu_logs(state)
+            _show_realtime_sys_monitor()
         elif choice == "6":
-            _menu_sync_agent(state)
+            _menu_logs(state)
         elif choice == "7":
+            _menu_sync_agent(state)
+        elif choice == "8":
             _menu_clash_api(state)
+
+
+def _show_protocol_traffic(state: AppState):
+    clear()
+    title("📊 Трафик по протоколам")
+    print()
+    
+    from hydra.plugins.registry import get as get_plugin
+    
+    awg_traffic = 0
+    p_awg = get_plugin("amneziawg")
+    if p_awg:
+        try:
+            awg_traffic = sum(p_awg.traffic(state).values())
+        except Exception:
+            pass
+            
+    naive_traffic = 0
+    p_naive = get_plugin("naive")
+    if p_naive:
+        try:
+            naive_traffic = sum(p_naive.traffic(state).values())
+        except Exception:
+            pass
+            
+    anytls_traffic = 0
+    for u in state.users:
+        anytls_traffic += u.credentials.get("anytls", {}).get("traffic_used_bytes", 0)
+        
+    mieru_traffic = 0
+    for u in state.users:
+        mieru_traffic += u.credentials.get("mieru", {}).get("traffic_used_bytes", 0)
+        
+    total_traffic = awg_traffic + naive_traffic + anytls_traffic + mieru_traffic
+    
+    print(f"  {BOLD}{'Протокол':<15} {'Потребление':<20}{NC}")
+    print(f"  {DIM}{'─' * 38}{NC}")
+    print(f"  AmneziaWG       {GREEN}{_bytes_auto(awg_traffic):<20}{NC}")
+    print(f"  NaiveProxy      {GREEN}{_bytes_auto(naive_traffic):<20}{NC}")
+    print(f"  AnyTLS          {GREEN}{_bytes_auto(anytls_traffic):<20}{NC}")
+    print(f"  Mieru           {GREEN}{_bytes_auto(mieru_traffic):<20}{NC}")
+    print(f"  {DIM}{'─' * 38}{NC}")
+    print(f"  {BOLD}ИТОГО:          {CYAN}{_bytes_auto(total_traffic):<20}{NC}")
+    print()
+    prompt("Нажмите Enter для возврата")
+
+
+def _show_traffic_dashboard(state: AppState):
+    sort_by = "traffic"
+    while True:
+        clear()
+        traffic = collect_traffic(state)
+        title("Потребление трафика по пользователям")
+        print()
+        
+        users_sorted = list(state.users)
+        if sort_by == "traffic":
+            users_sorted.sort(key=lambda u: traffic.get(u.email, u.traffic_used_bytes), reverse=True)
+        elif sort_by == "name":
+            users_sorted.sort(key=lambda u: u.email.lower())
+        elif sort_by == "limit":
+            users_sorted.sort(key=lambda u: u.traffic_limit_gb, reverse=True)
+        elif sort_by == "expiry":
+            def get_expiry(u):
+                if not u.expiry_date:
+                    return "9999-12-31"
+                return u.expiry_date
+            users_sorted.sort(key=get_expiry)
+
+        print(f"  {BOLD}{'#':<3} {'Пользователь':<25} {'Использовано':<15} {'Лимит':<10} {'Статус':<10} {'Срок':<12}{NC}")
+        print(f"  {DIM}{'─' * 77}{NC}")
+        for i, u in enumerate(users_sorted, 1):
+            used = traffic.get(u.email, u.traffic_used_bytes)
+            status_str = f"{RED}Блок{NC}" if u.blocked else f"{GREEN}Активен{NC}"
+            
+            expiry_str = "бессрочно"
+            if u.expiry_date:
+                try:
+                    expiry = datetime.fromisoformat(u.expiry_date)
+                    now = datetime.now(expiry.tzinfo)
+                    delta = expiry - now
+                    if delta.days < 0:
+                        expiry_str = f"{RED}истёк{NC}"
+                    else:
+                        expiry_str = f"{delta.days}дн"
+                except Exception:
+                    expiry_str = u.expiry_date[:10]
+            
+            lim_str = f"{u.traffic_limit_gb:.1f} GB" if u.traffic_limit_gb else "∞"
+            print(f"  {i:<3d} {BOLD}{u.email:<25}{NC} {_bytes_auto(used):<15} {lim_str:<10} {status_str:<10} {expiry_str:<12}")
+            
+        print(f"  {DIM}{'─' * 77}{NC}")
+        print("  Сортировка: " + (f"{BOLD}[Трафик]{NC}" if sort_by == "traffic" else "[Трафик]") + " " +
+                             (f"{BOLD}[Имя]{NC}" if sort_by == "name" else "[Имя]") + " " +
+                             (f"{BOLD}[Лимит]{NC}" if sort_by == "limit" else "[Лимит]") + " " +
+                             (f"{BOLD}[Срок]{NC}" if sort_by == "expiry" else "[Срок]"))
+        print()
+        
+        choice = menu([
+            ("1", "Сортировать по трафику", ""),
+            ("2", "Сортировать по имени", ""),
+            ("3", "Сортировать по лимиту", ""),
+            ("4", "Сортировать по сроку подписки", ""),
+            ("D", "🔍 Детальная информация пользователя", ""),
+            ("0", "↩ Назад", "")
+        ], "УПРАВЛЕНИЕ ТРАФИКОМ")
+        
+        if choice == "0":
+            break
+        elif choice == "1":
+            sort_by = "traffic"
+        elif choice == "2":
+            sort_by = "name"
+        elif choice == "3":
+            sort_by = "limit"
+        elif choice == "4":
+            sort_by = "expiry"
+        elif choice.upper() == "D":
+            u = _select_user(state, "Выберите пользователя для просмотра деталей")
+            if u:
+                _show_user_detail(state, u)
 
 
 def _show_connections(state: AppState):
@@ -1200,82 +1313,78 @@ def _show_connections(state: AppState):
             break
 
 
-def _show_traffic_dashboard(state: AppState):
-    sort_by = "traffic"
-    while True:
-        clear()
-        traffic = collect_traffic(state)
-        title("Панель трафика пользователей")
-        print()
+def _show_status():
+    clear()
+    title("🚦 Статус протоколов")
+    print()
+    
+    st = status_all()
+    
+    print(f"  {BOLD}{'Протокол':<15} {'Порт':<7} {'Состояние':<12} {'Автозапуск':<12}{NC}")
+    print(f"  {DIM}{'─' * 55}{NC}")
+    
+    for name, s in st.items():
+        ico = f"{GREEN}запущен{NC}" if s["running"] else (f"{YELLOW}остановлен{NC}" if s["installed"] else f"{DIM}не уст.{NC}")
+        port_str = str(s['port']) if s['port'] else "—"
+        autostart_str = "вкл" if s.get("enabled", False) else "выкл"
         
-        users_sorted = list(state.users)
-        if sort_by == "traffic":
-            users_sorted.sort(key=lambda u: traffic.get(u.email, u.traffic_used_bytes), reverse=True)
-        elif sort_by == "name":
-            users_sorted.sort(key=lambda u: u.email.lower())
-        elif sort_by == "limit":
-            users_sorted.sort(key=lambda u: u.traffic_limit_gb, reverse=True)
-        elif sort_by == "expiry":
-            def get_expiry(u):
-                if not u.expiry_date:
-                    return "9999-12-31"
-                return u.expiry_date
-            users_sorted.sort(key=get_expiry)
+        print(f"  {name:<15} {port_str:<7} {ico:<12} {autostart_str:<12}")
+        
+    print()
+    prompt("Нажмите Enter для возврата")
 
-        for i, u in enumerate(users_sorted, 1):
-            used = traffic.get(u.email, u.traffic_used_bytes)
-            lim = int(u.traffic_limit_gb * 1073741824) if u.traffic_limit_gb else 0
-            
-            ico = f"{RED}🔴{NC}" if u.blocked else f"{GREEN}🟢{NC}"
-            
-            expiry_str = "бессрочно"
-            if u.expiry_date:
-                try:
-                    expiry = datetime.fromisoformat(u.expiry_date)
-                    now = datetime.now(expiry.tzinfo)
-                    delta = expiry - now
-                    if delta.days < 0:
-                        expiry_str = f"{RED}истёк{NC}"
-                    else:
-                        expiry_str = f"{delta.days}дн осталось"
-                except Exception:
-                    expiry_str = u.expiry_date[:10]
-            
-            lim_str = f"{u.traffic_limit_gb:.1f} GB" if u.traffic_limit_gb else "∞"
-            print(f"  {i:2d}. {ico} {BOLD}{u.email:<22}{NC}  {_bytes_auto(used)} / {lim_str}  ({expiry_str})")
-            print(f"      {_bar(used, lim, width=20)}")
-            print()
-            
-        print(f"  {DIM}{'─' * PANEL_W}{NC}")
-        print("  Сортировка: " + (f"{BOLD}[Трафик]{NC}" if sort_by == "traffic" else "[Трафик]") + " " +
-                             (f"{BOLD}[Имя]{NC}" if sort_by == "name" else "[Имя]") + " " +
-                             (f"{BOLD}[Лимит]{NC}" if sort_by == "limit" else "[Лимит]") + " " +
-                             (f"{BOLD}[Срок]{NC}" if sort_by == "expiry" else "[Срок]"))
-        print()
-        
-        choice = menu([
-            ("1", "Сортировать по трафику", ""),
-            ("2", "Сортировать по имени", ""),
-            ("3", "Сортировать по лимиту", ""),
-            ("4", "Сортировать по сроку подписки", ""),
-            ("D", "🔍 Детальная информация пользователя", ""),
-            ("0", "↩ Назад", "")
-        ], "УПРАВЛЕНИЕ ТРАФИКОМ")
-        
-        if choice == "0":
-            break
-        elif choice == "1":
-            sort_by = "traffic"
-        elif choice == "2":
-            sort_by = "name"
-        elif choice == "3":
-            sort_by = "limit"
-        elif choice == "4":
-            sort_by = "expiry"
-        elif choice.upper() == "D":
-            u = _select_user(state, "Выберите пользователя для просмотра деталей")
-            if u:
-                _show_user_detail(state, u)
+
+def _read_proc_cpu() -> tuple[float, float]:
+    try:
+        with open("/proc/stat", "r") as f:
+            line = f.readline()
+            if line.startswith("cpu"):
+                parts = [float(x) for x in line.split()[1:8]]
+                idle = parts[3] + parts[4]
+                total = sum(parts)
+                return idle, total
+    except Exception:
+        pass
+    return 0.0, 0.0
+
+
+def _read_proc_mem() -> tuple[int, int, float]:
+    try:
+        meminfo = {}
+        with open("/proc/meminfo", "r") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2:
+                    meminfo[parts[0].rstrip(":")] = int(parts[1]) * 1024
+        total = meminfo.get("MemTotal", 0)
+        free = meminfo.get("MemFree", 0)
+        buffers = meminfo.get("Buffers", 0)
+        cached = meminfo.get("Cached", 0)
+        used = total - free - buffers - cached
+        pct = (used / total) * 100 if total > 0 else 0.0
+        return used, total, pct
+    except Exception:
+        pass
+    return 0, 0, 0.0
+
+
+def _read_proc_net() -> tuple[int, int]:
+    try:
+        rx = 0
+        tx = 0
+        with open("/proc/net/dev", "r") as f:
+            lines = f.readlines()
+            for line in lines[2:]:
+                parts = line.split()
+                if len(parts) >= 10:
+                    if parts[0].startswith("lo:"):
+                        continue
+                    rx += int(parts[1])
+                    tx += int(parts[8])
+        return rx, tx
+    except Exception:
+        pass
+    return 0, 0
 
 
 def _show_realtime_sys_monitor():
@@ -1285,7 +1394,23 @@ def _show_realtime_sys_monitor():
     print(f"  {DIM}Нажмите [Enter] для возврата в меню.{NC}\n")
     time.sleep(0.5)
     
-    cpu_history = []
+    has_psutil = False
+    try:
+        import psutil
+        has_psutil = True
+    except ImportError:
+        pass
+
+    if has_psutil:
+        try:
+            prev_net = psutil.net_io_counters()
+        except Exception:
+            prev_net = None
+    else:
+        prev_net = _read_proc_net()
+        prev_cpu_idle, prev_cpu_total = _read_proc_cpu()
+        
+    last_time = time.time()
     
     while True:
         try:
@@ -1297,45 +1422,73 @@ def _show_realtime_sys_monitor():
             print(f"  {DIM}Нажмите [Enter] для возврата в меню. Обновление каждую секунду.{NC}")
             print()
             
-            import psutil
-            cpu = psutil.cpu_percent(interval=0)
-            mem = psutil.virtual_memory()
-            disk = psutil.disk_usage("/")
-            
-            cpu_history.append(cpu)
-            if len(cpu_history) > 30:
-                cpu_history.pop(0)
+            if has_psutil:
+                import psutil
+                cpu = psutil.cpu_percent(interval=0)
+                mem = psutil.virtual_memory()
+                disk = psutil.disk_usage("/")
                 
-            sparks = " ▂▃▄▅▆▇█"
-            graph = ""
-            for val in cpu_history:
-                idx = min(int(val / 12.5), 7)
-                graph += sparks[idx]
+                cpu_str = f"{cpu:.1f}%"
+                ram_str = f"{mem.percent:.1f}%  ({_bytes_auto(mem.used)} / {_bytes_auto(mem.total)})"
+                disk_str = f"{disk.percent:.1f}%  ({_bytes_auto(disk.used)} / {_bytes_auto(disk.total)})"
+                
+                try:
+                    curr_net = psutil.net_io_counters()
+                    now = time.time()
+                    dt = now - last_time
+                    if dt <= 0:
+                        dt = 1.0
+                    rx_speed = (curr_net.bytes_recv - prev_net.bytes_recv) / dt
+                    tx_speed = (curr_net.bytes_sent - prev_net.bytes_sent) / dt
+                    prev_net = curr_net
+                    last_time = now
+                except Exception:
+                    rx_speed, tx_speed = 0.0, 0.0
+            else:
+                curr_cpu_idle, curr_cpu_total = _read_proc_cpu()
+                diff_total = curr_cpu_total - prev_cpu_total
+                diff_idle = curr_cpu_idle - prev_cpu_idle
+                if diff_total > 0:
+                    cpu_val = (diff_total - diff_idle) / diff_total * 100
+                else:
+                    cpu_val = 0.0
+                prev_cpu_total = curr_cpu_total
+                prev_cpu_idle = curr_cpu_idle
+                cpu_str = f"{cpu_val:.1f}%"
+                
+                r_used, r_total, r_pct = _read_proc_mem()
+                ram_str = f"{r_pct:.1f}%  ({_bytes_auto(r_used)} / {_bytes_auto(r_total)})"
+                
+                try:
+                    import shutil
+                    d_total, d_used, d_free = shutil.disk_usage("/")
+                    d_pct = (d_used / d_total) * 100 if d_total > 0 else 0.0
+                    disk_str = f"{d_pct:.1f}%  ({_bytes_auto(d_used)} / {_bytes_auto(d_total)})"
+                except Exception:
+                    disk_str = "н/д"
+                    
+                curr_rx, curr_tx = _read_proc_net()
+                now = time.time()
+                dt = now - last_time
+                if dt <= 0:
+                    dt = 1.0
+                rx_speed = (curr_rx - prev_net[0]) / dt
+                tx_speed = (curr_tx - prev_net[1]) / dt
+                prev_net = (curr_rx, curr_tx)
+                last_time = now
                 
             lines = [
-                kv("CPU Usage:", f"{_bar(cpu, 100, 20)} {cpu:.1f}%"),
-                kv("CPU График:", f"{CYAN}{graph:<30}{NC}"),
+                kv("Загрузка CPU:", cpu_str),
+                kv("Использование RAM:", ram_str),
+                kv("Дисковое пространство:", disk_str),
                 f"  {DIM}{'─' * (PANEL_W - 2)}{NC}",
-                kv("RAM Usage:", f"{_bar(mem.used, mem.total, 20)} {mem.percent:.1f}%"),
-                kv("RAM Детали:", f"{_bytes_auto(mem.used)} / {_bytes_auto(mem.total)}"),
-                f"  {DIM}{'─' * (PANEL_W - 2)}{NC}",
-                kv("Диск всего:", f"{_bar(disk.used, disk.total, 20)} {disk.percent:.1f}%"),
-                kv("Диск Детали:", f"{_bytes_auto(disk.used)} / {_bytes_auto(disk.total)}"),
+                kv("Сетевой вход (Rx):", f"{GREEN}{_bytes_auto(int(rx_speed))}/s{NC}"),
+                kv("Сетевой выход (Tx):", f"{CYAN}{_bytes_auto(int(tx_speed))}/s{NC}"),
             ]
-            panel("Живые Метрики", lines)
+            panel("Текущие параметры", lines)
             
-            try:
-                net_before = psutil.net_io_counters()
-                time.sleep(1)
-                net_after = psutil.net_io_counters()
-                rx_speed = net_after.bytes_recv - net_before.bytes_recv
-                tx_speed = net_after.bytes_sent - net_before.bytes_sent
-                print(f"  {BOLD}Сетевая активность (в сек):{NC}")
-                print(f"    📥 Получено: {GREEN}{_bytes_auto(rx_speed)}/s{NC}")
-                print(f"    📤 Отправлено: {CYAN}{_bytes_auto(tx_speed)}/s{NC}")
-            except Exception:
-                time.sleep(1)
-                
+            time.sleep(1)
+            
         except (KeyboardInterrupt, SystemExit):
             break
         except Exception as e:
