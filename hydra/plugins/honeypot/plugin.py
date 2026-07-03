@@ -158,6 +158,11 @@ class HoneypotPlugin(BasePlugin):
                 pass
         return {"banned": {}, "port": HONEYPOT_PORT, "whitelist": ["127.0.0.1", "::1"]}
 
+    def _save_state(self, data: dict) -> None:
+        HONEYPOT_STATE.parent.mkdir(parents=True, exist_ok=True)
+        HONEYPOT_STATE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        HONEYPOT_STATE.chmod(0o600)
+
     def traffic(self, state: AppState) -> dict[str, int]:
         return {}
 

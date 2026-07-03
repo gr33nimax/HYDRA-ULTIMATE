@@ -546,6 +546,10 @@ def menu_plugin(state: AppState, p):
         from hydra.plugins.ipban.manager import menu_ipban
         menu_ipban(state, p)
         return
+    if p.meta.name == "honeypot":
+        from hydra.plugins.honeypot.manager import menu_honeypot
+        menu_honeypot(state, p)
+        return
 
     from hydra.core.state import get_protocol
     
