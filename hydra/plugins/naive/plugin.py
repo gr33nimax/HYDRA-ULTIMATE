@@ -182,10 +182,12 @@ class NaivePlugin(BasePlugin):
             "server_port": port,
             "username": username,
             "password": password,
+            "network": "udp",
+            "quic": True,
             "tls": {
                 "enabled": True,
                 "server_name": domain,
-                "alpn": ["h2"],
+                "alpn": ["h3", "h2"],
             },
         }
 
@@ -213,7 +215,8 @@ class NaivePlugin(BasePlugin):
         user_q = urllib.parse.quote(username, safe="")
         pass_q = urllib.parse.quote(password, safe="")
         tag = urllib.parse.quote(username, safe="")
-        return f"naive+https://{user_q}:{pass_q}@{domain}:{port}/#{tag}"
+        sni_q = urllib.parse.quote(domain, safe="")
+        return f"naive+https://{user_q}:{pass_q}@{domain}:{port}?sni={sni_q}&quic=1#{tag}"
 
     # ═════════════════════════════════════════════════════════════════════
     #  Статус / трафик

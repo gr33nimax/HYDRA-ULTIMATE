@@ -162,6 +162,12 @@ def rebuild(state: AppState) -> bool:
             naive_plugin.configure(state)
             naive_plugin.apply(state)
 
+    # Блокируем внешний доступ к внутренним портам (только loopback / HAProxy)
+    for b in backends:
+        port = b["port"]
+        subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+        subprocess.run(["iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+
     # Запускаем/перезапускаем службу HAProxy
     subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
     r = subprocess.run(["systemctl", "restart", SERVICE_NAME], capture_output=True)
@@ -172,3 +178,5 @@ def stop() -> None:
     if is_installed():
         subprocess.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
         subprocess.run(["systemctl", "disable", SERVICE_NAME], capture_output=True)
+    for port in _INTERNAL_PORTS.values():
+        subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
