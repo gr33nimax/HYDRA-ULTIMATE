@@ -1090,87 +1090,97 @@ def menu_monitoring(state: AppState):
         panel("Мониторинг", lines)
 
         choice = menu(
-            [("1", "📊 Трафик по протоколам", "Общий объем трафика по типам подключений"),
-             ("2", "👥 Трафик по пользователям", "Детальная таблица потребления лимитов клиентов"),
-             ("3", "🔌 Активные подключения", "Сессии пользователей в реальном времени"),
-             ("4", "📈 Живой монитор CPU/RAM", "Нагрузка системы, скорость сети и метрики"),
-             ("5", "📋 Просмотр системных логов", "Sing-Box, Sync-Agent, Fail2ban и др."),
-             ("6", "🔄 Управление Sync Agent", "Контроль фоновой службы синхронизации"),
-             ("7", "⚙️ Настройки Clash API", "Локальный порт и секретный ключ статистики"),
+            [("1", "📊 Потребление трафика", "Сводная статистика по протоколам и пользователям"),
+             ("2", "🔌 Активные подключения", "Сессии пользователей в реальном времени"),
+             ("3", "📈 Живой монитор CPU/RAM", "Нагрузка системы, скорость сети и метрики"),
+             ("4", "⚙️ Сервисные настройки", "Управление Clash API, Sync Agent, системные логи"),
              ("0", "↩ Назад", "")],
             "МОНИТОРИНГ",
         )
         if choice == "0":
             return
         elif choice == "1":
-            _show_protocol_traffic(state)
+            _show_traffic_combined(state)
         elif choice == "2":
-            _show_traffic_dashboard(state)
-        elif choice == "3":
             _show_connections(state)
-        elif choice == "4":
+        elif choice == "3":
             _show_realtime_sys_monitor()
-        elif choice == "5":
+        elif choice == "4":
+            _menu_service_settings(state)
+
+
+def _menu_service_settings(state: AppState):
+    while True:
+        clear()
+        choice = menu([
+            ("1", "📋 Просмотр системных логов", "Sing-Box, Sync-Agent, Fail2ban и др."),
+            ("2", "🔄 Управление Sync Agent", "Контроль фоновой службы синхронизации"),
+            ("3", "⚙️ Настройки Clash API", "Локальный порт и секретный ключ статистики"),
+            ("0", "↩ Назад", "")
+        ], "СЕРВИСНЫЕ НАСТРОЙКИ")
+        
+        if choice == "0":
+            break
+        elif choice == "1":
             _menu_logs(state)
-        elif choice == "6":
+        elif choice == "2":
             _menu_sync_agent(state)
-        elif choice == "7":
+        elif choice == "3":
             _menu_clash_api(state)
 
 
-def _show_protocol_traffic(state: AppState):
-    clear()
-    title("📊 Трафик по протоколам")
-    print()
-    
-    from hydra.plugins.registry import get as get_plugin
-    
-    awg_traffic = 0
-    p_awg = get_plugin("amneziawg")
-    if p_awg:
-        try:
-            awg_traffic = sum(p_awg.traffic(state).values())
-        except Exception:
-            pass
-            
-    naive_traffic = 0
-    p_naive = get_plugin("naive")
-    if p_naive:
-        try:
-            naive_traffic = sum(p_naive.traffic(state).values())
-        except Exception:
-            pass
-            
-    anytls_traffic = 0
-    for u in state.users:
-        anytls_traffic += u.credentials.get("anytls", {}).get("traffic_used_bytes", 0)
-        
-    mieru_traffic = 0
-    for u in state.users:
-        mieru_traffic += u.credentials.get("mieru", {}).get("traffic_used_bytes", 0)
-        
-    total_traffic = awg_traffic + naive_traffic + anytls_traffic + mieru_traffic
-    
-    print(f"  {BOLD}{'Протокол':<15} {'Потребление':<20}{NC}")
-    print(f"  {DIM}{'─' * 38}{NC}")
-    print(f"  AmneziaWG       {GREEN}{_bytes_auto(awg_traffic):<20}{NC}")
-    print(f"  NaiveProxy      {GREEN}{_bytes_auto(naive_traffic):<20}{NC}")
-    print(f"  AnyTLS          {GREEN}{_bytes_auto(anytls_traffic):<20}{NC}")
-    print(f"  Mieru           {GREEN}{_bytes_auto(mieru_traffic):<20}{NC}")
-    print(f"  {DIM}{'─' * 38}{NC}")
-    print(f"  {BOLD}ИТОГО:          {CYAN}{_bytes_auto(total_traffic):<20}{NC}")
-    print()
-    prompt("Нажмите Enter для возврата")
-
-
-def _show_traffic_dashboard(state: AppState):
+def _show_traffic_combined(state: AppState):
     sort_by = "traffic"
     while True:
         clear()
-        traffic = collect_traffic(state)
-        title("Потребление трафика по пользователям")
+        title("📊 Потребление трафика")
         print()
         
+        # 1. Выводим трафик по протоколам
+        from hydra.plugins.registry import get as get_plugin
+        
+        awg_traffic = 0
+        p_awg = get_plugin("amneziawg")
+        if p_awg:
+            try:
+                awg_traffic = sum(p_awg.traffic(state).values())
+            except Exception:
+                pass
+                
+        naive_traffic = 0
+        p_naive = get_plugin("naive")
+        if p_naive:
+            try:
+                naive_traffic = sum(p_naive.traffic(state).values())
+            except Exception:
+                pass
+                
+        anytls_traffic = 0
+        for u in state.users:
+            anytls_traffic += u.credentials.get("anytls", {}).get("traffic_used_bytes", 0)
+            
+        mieru_traffic = 0
+        for u in state.users:
+            mieru_traffic += u.credentials.get("mieru", {}).get("traffic_used_bytes", 0)
+            
+        total_traffic = awg_traffic + naive_traffic + anytls_traffic + mieru_traffic
+        
+        print(f"  {BOLD}Трафик по протоколам:{NC}")
+        print(f"  {BOLD}{'Протокол':<15} {'Потребление':<20}{NC}")
+        print(f"  {DIM}{'─' * 38}{NC}")
+        print(f"  AmneziaWG       {GREEN}{_bytes_auto(awg_traffic):<20}{NC}")
+        print(f"  NaiveProxy      {GREEN}{_bytes_auto(naive_traffic):<20}{NC}")
+        print(f"  AnyTLS          {GREEN}{_bytes_auto(anytls_traffic):<20}{NC}")
+        print(f"  Mieru           {GREEN}{_bytes_auto(mieru_traffic):<20}{NC}")
+        print(f"  {DIM}{'─' * 38}{NC}")
+        print(f"  {BOLD}ИТОГО:          {CYAN}{_bytes_auto(total_traffic):<20}{NC}")
+        print()
+        
+        # 2. Выводим трафик по пользователям
+        print(f"  {BOLD}Потребление трафика по пользователям:{NC}")
+        print()
+        
+        traffic = collect_traffic(state)
         users_sorted = list(state.users)
         if sort_by == "traffic":
             users_sorted.sort(key=lambda u: traffic.get(u.email, u.traffic_used_bytes), reverse=True)
@@ -1184,7 +1194,7 @@ def _show_traffic_dashboard(state: AppState):
                     return "9999-12-31"
                 return u.expiry_date
             users_sorted.sort(key=get_expiry)
-
+            
         print(f"  {BOLD}{'#':<3} {'Пользователь':<25} {'Использовано':<15} {'Лимит':<10} {'Статус':<10} {'Срок':<12}{NC}")
         print(f"  {DIM}{'─' * 77}{NC}")
         for i, u in enumerate(users_sorted, 1):

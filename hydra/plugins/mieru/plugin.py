@@ -207,7 +207,12 @@ class MieruPlugin(BasePlugin):
         )
 
     def traffic(self, state: AppState) -> dict[str, int]:
-        return {}
+        res = {}
+        for u in state.users:
+            t = u.credentials.get("mieru", {}).get("traffic_used_bytes", 0)
+            if t > 0:
+                res[u.email] = t
+        return res
 
     def connected_clients(self, state: AppState | None = None) -> list[dict]:
         """Получает список подключённых клиентов через утилиту ss с группировкой по IP."""

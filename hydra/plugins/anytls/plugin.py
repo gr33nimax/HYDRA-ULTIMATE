@@ -300,7 +300,12 @@ class AnyTLSPlugin(BasePlugin):
         )
 
     def traffic(self, state: AppState) -> dict[str, int]:
-        return {}
+        res = {}
+        for u in state.users:
+            t = u.credentials.get("anytls", {}).get("traffic_used_bytes", 0)
+            if t > 0:
+                res[u.email] = t
+        return res
 
     def connected_clients(self, state: AppState | None = None) -> list[dict]:
         if not shutil.which("ss"):
