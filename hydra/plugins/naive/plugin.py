@@ -182,10 +182,12 @@ class NaivePlugin(BasePlugin):
             "server_port": port,
             "username": username,
             "password": password,
+            "network": "udp",
+            "quic": True,
             "tls": {
                 "enabled": True,
                 "server_name": domain,
-                "alpn": ["h2"],
+                "alpn": ["h3", "h2"],
             },
         }
 
@@ -214,7 +216,7 @@ class NaivePlugin(BasePlugin):
         pass_q = urllib.parse.quote(password, safe="")
         tag = urllib.parse.quote(username, safe="")
         sni_q = urllib.parse.quote(domain, safe="")
-        return f"naive+https://{user_q}:{pass_q}@{domain}:{port}?sni={sni_q}#{tag}"
+        return f"naive+https://{user_q}:{pass_q}@{domain}:{port}?sni={sni_q}&quic=1#{tag}"
 
     # ═════════════════════════════════════════════════════════════════════
     #  Статус / трафик
@@ -635,7 +637,12 @@ class NaivePlugin(BasePlugin):
             decoy_block = f"    file_server {{\n        root {fake_site_dir}\n    }}\n"
             order_line = "    order forward_proxy before file_server\n"
 
-        site_header = f":{port}, {domain}"
+        if port != DEFAULT_PORT:
+            bind_line = "    bind 127.0.0.1\n"
+        else:
+            bind_line = ""
+
+        site_header = f":{port}, {domain}:{port}"
 
         return f"""\
 {{
@@ -643,7 +650,7 @@ class NaivePlugin(BasePlugin):
 {order_line}}}
 
 {site_header} {{
-{tls_line}    forward_proxy {{
+{bind_line}{tls_line}    forward_proxy {{
 {auth_lines}            hide_ip
             hide_via
             probe_resistance
