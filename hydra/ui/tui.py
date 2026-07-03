@@ -48,18 +48,28 @@ def _strip(s: str) -> str:
     return re.sub(r"\033\[[0-9;]*m", "", s)
 
 
+def _char_width(char: str) -> int:
+    code = ord(char)
+    if code == 0xfe0f:
+        return 0
+    # CJK, Emojis, Dingbats, and Miscellaneous Symbols that render as 2 cells wide
+    if (code > 0xffff or 
+        0x2600 <= code <= 0x27BF or 
+        0x2300 <= code <= 0x23FF or 
+        0x2B50 <= code <= 0x2B55 or
+        0x4E00 <= code <= 0x9FFF or 
+        0x3000 <= code <= 0x303F or 
+        0xFF00 <= code <= 0xFFEF):
+        return 2
+    return 1
+
+
 def _width(s: str) -> int:
     """Возвращает визуальную ширину строки в терминале с учетом эмодзи."""
     plain = _strip(s)
     w = 0
     for char in plain:
-        if ord(char) == 0xfe0f:
-            continue
-        # Только символы вне BMP (> 0xffff) считаются за 2 ячейки (эмодзи)
-        if ord(char) > 0xffff:
-            w += 2
-        else:
-            w += 1
+        w += _char_width(char)
     return w
 
 
@@ -84,7 +94,7 @@ def _fit_line(line: str, max_w: int) -> tuple[str, int]:
                 if ord(char) == 0xfe0f:
                     new_parts.append(char)
                     continue
-                char_w = 2 if ord(char) > 0xffff else 1
+                char_w = _char_width(char)
                 if accum_w + char_w > target_w:
                     new_parts.append("...")
                     accum_w += 3
