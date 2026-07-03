@@ -52,14 +52,16 @@ def _char_width(char: str) -> int:
     code = ord(char)
     if code == 0xfe0f:
         return 0
-    # CJK, Emojis, Dingbats, and Miscellaneous Symbols that render as 2 cells wide
-    if (code > 0xffff or 
-        0x2600 <= code <= 0x27BF or 
-        0x2300 <= code <= 0x23FF or 
-        0x2B50 <= code <= 0x2B55 or
-        0x4E00 <= code <= 0x9FFF or 
-        0x3000 <= code <= 0x303F or 
-        0xFF00 <= code <= 0xFFEF):
+    # Emojis > 0xffff are always 2 cells wide
+    if code > 0xffff:
+        return 2
+    # Specific BMP symbols that render as 2 cells wide in modern terminal fonts (⚙, ⚡, ⚠)
+    if code in (0x2699, 0x26a1, 0x26a0):
+        return 2
+    # CJK characters
+    if (0x4e00 <= code <= 0x9fff or 
+        0x3000 <= code <= 0x303f or 
+        0xff00 <= code <= 0xffef):
         return 2
     return 1
 
