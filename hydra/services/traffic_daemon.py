@@ -57,6 +57,18 @@ def run_daemon() -> None:
                 continue
 
             connections = data.get("connections", [])
+            if connections:
+                summary = []
+                for c in connections:
+                    cid = c.get("id")
+                    meta = c.get("metadata", {})
+                    user = meta.get("user")
+                    tag = meta.get("inboundTag")
+                    up = c.get("upload", 0)
+                    down = c.get("download", 0)
+                    summary.append(f"ID={cid}, User={user}, Tag={tag}, Rx={down}, Tx={up}")
+                _log(f"Active connections: {'; '.join(summary)}")
+
             current_ids = set()
             state_changed = False
 
