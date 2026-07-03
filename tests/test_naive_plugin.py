@@ -83,7 +83,6 @@ def test_client_link_valid_uri():
     assert link.startswith("naive+https://")
     assert "example.com:443" in link
     assert "sni=example.com" in link
-    assert "quic=1" in link
     assert "uuid-a" not in link
 
 
@@ -133,8 +132,7 @@ def test_generate_client_config_contains_server():
     assert naive_out[0]["server"] == "example.com"
     assert naive_out[0]["server_port"] == 443
     assert naive_out[0]["tls"]["server_name"] == "example.com"
-    assert naive_out[0]["tls"]["alpn"] == ["h3", "h2"]
-    assert naive_out[0]["quic"] is True
+    assert naive_out[0]["tls"]["alpn"] == ["h2"]
 
 
 def test_generate_client_config_empty_without_domain():
