@@ -1083,9 +1083,31 @@ def _is_enter_pressed() -> bool:
 def menu_monitoring(state: AppState):
     while True:
         clear()
+        
+        # Сбор быстрых системных метрик для панели
+        load_str = "—"
+        ram_str = "—"
+        if os.name != "nt":
+            try:
+                avg1, avg5, _ = os.getloadavg()
+                load_str = f"{avg1:.2f}, {avg5:.2f}"
+            except Exception:
+                pass
+            try:
+                _, _, r_pct = _read_proc_mem()
+                ram_str = f"{r_pct:.0f}%"
+            except Exception:
+                pass
+                
+        active_protos = [p for p in state.protocols.values() if p.enabled]
+        protos_count = len(active_protos)
+        users_count = len(state.users)
+        
         lines = [
-            f"  {BOLD}Мониторинг параметров системы и использования трафика.{NC}",
-            f"  {DIM}Выберите нужный пункт для просмотра детальной статистики.{NC}"
+            f"  {BOLD}Сводный мониторинг и управление лимитами трафика{NC}",
+            "────────────────────────────────────────────────────────",
+            f"  {BOLD}Активные протоколы:{NC} {GREEN}{protos_count}{NC}  │  {BOLD}Всего клиентов:{NC} {CYAN}{users_count}{NC}",
+            f"  {BOLD}Нагрузка Load Avg:{NC}   {YELLOW}{load_str}{NC}  │  {BOLD}Память RAM:{NC}     {RED}{ram_str}{NC}"
         ]
         panel("Мониторинг", lines)
 
