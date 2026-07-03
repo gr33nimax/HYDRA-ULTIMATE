@@ -175,6 +175,7 @@ def test_client_link_valid():
     link = p.client_link(user, state)
     
     assert link.startswith("anytls://")
+    assert "@anytls.example.com:443" in link
     assert "?sni=anytls.example.com" in link
 
 

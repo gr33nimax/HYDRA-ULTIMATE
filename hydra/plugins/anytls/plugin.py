@@ -166,10 +166,8 @@ class AnyTLSPlugin(BasePlugin):
             return ""
 
         password = self._derive_password(user.uuid)
-        server_ip = state.network.server_ip or public_ip()
         tag = urllib.parse.quote(self._derive_username(user), safe="")
-
-        return f"anytls://{password}@{server_ip}:443?sni={anytls_domain}#{tag}"
+        return f"anytls://{password}@{anytls_domain}:443?sni={anytls_domain}#{tag}"
 
     # ═════════════════════════════════════════════════════════════════════
     #  Управление сервисом
