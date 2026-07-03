@@ -188,6 +188,8 @@ def _sys_info(state: AppState | None = None) -> list[str]:
             lines.append(kv("Диск:", f"{_bar(used_d, total_d, 12)} {disk_pct:.0f}%  ({_bytes_auto(used_d)} / {_bytes_auto(total_d)})"))
             if uptime_str != "—":
                 lines.append(kv("Uptime:", uptime_str))
+        except Exception:
+            pass
     except Exception:
         pass
         
