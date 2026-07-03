@@ -354,7 +354,7 @@ def main_menu(state: AppState):
 
         choice = menu(
             [
-                ("1", "🛠️ Ядро и система",       "Установка Sing-Box, зависимости, применить конфиг"),
+                ("1", "📦 Ядро и система",       "Установка Sing-Box, зависимости, применить конфиг"),
                 ("2", "🧩 Протоколы",           f"Транспорты (Naive, AmneziaWG, Mieru...)  [{active_t}/{total_t}]"),
                 ("3", "👥 Пользователи",        f"Создание, лимиты, TTL, подписки  [{u_active} активно]"),
                 ("4", "🤖 Telegram-боты",       "Admin-панель и клиентский бот"),
@@ -755,7 +755,7 @@ def menu_users(state: AppState):
         choice = menu([
             ("1", "📋 Список пользователей", "Просмотр всех пользователей"),
             ("2", "👤 Добавить пользователя", "Создать нового пользователя"),
-            ("3", "🛠️  Управление пользователем", "Конфиги, блокировка, удаление"),
+            ("3", "🔧  Управление пользователем", "Конфиги, блокировка, удаление"),
             ("0", "↩ Назад", ""),
         ], "ПОЛЬЗОВАТЕЛИ")
         
@@ -861,7 +861,7 @@ def _user_configs(state: AppState, user: User):
                 for line in conf.splitlines():
                     box_lines.append(f"  {DIM}{line.rstrip()}{NC}")
                 
-                panel(f"🛠️  {p.meta.name.upper()} CONFIG", box_lines)
+                panel(f"🔧  {p.meta.name.upper()} CONFIG", box_lines)
                 
                 # QR-код (если qrcode установлен)
                 try:
@@ -1104,7 +1104,7 @@ def menu_monitoring(state: AppState):
         users_count = len(state.users)
         
         lines = [
-            f"  🛠️ {BOLD}Сводный мониторинг и управление лимитами трафика{NC}",
+            f"  📋 {BOLD}Сводный мониторинг и управление лимитами трафика{NC}",
             "────────────────────────────────────────────────────────",
             f"  🔌 {BOLD}Активные протоколы:{NC} {GREEN}{protos_count:<3}{NC} │  👥 {BOLD}Всего клиентов:{NC} {CYAN}{users_count}{NC}",
             f"  🚀 {BOLD}Нагрузка Load Avg:{NC}   {YELLOW}{load_str:<3}{NC} │  💾 {BOLD}Память RAM:{NC}     {RED}{ram_str}{NC}"
@@ -1560,7 +1560,7 @@ def _menu_logs(state: AppState):
             
         opts += [
             ("-", "", ""),
-            ("L", f"🛠️ Изменить лимит строк ({lines_count})", ""),
+            ("L", f"📝 Изменить лимит строк ({lines_count})", ""),
             ("0", "↩ Назад", "")
         ]
         
