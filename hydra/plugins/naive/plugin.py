@@ -637,6 +637,11 @@ class NaivePlugin(BasePlugin):
             decoy_block = f"    file_server {{\n        root {fake_site_dir}\n    }}\n"
             order_line = "    order forward_proxy before file_server\n"
 
+        if port != DEFAULT_PORT:
+            bind_line = "    bind 127.0.0.1\n"
+        else:
+            bind_line = ""
+
         site_header = f":{port}, {domain}"
 
         return f"""\
@@ -645,7 +650,7 @@ class NaivePlugin(BasePlugin):
 {order_line}}}
 
 {site_header} {{
-{tls_line}    forward_proxy {{
+{bind_line}{tls_line}    forward_proxy {{
 {auth_lines}            hide_ip
             hide_via
             probe_resistance

@@ -167,6 +167,8 @@ def rebuild(state: AppState) -> bool:
         port = b["port"]
         subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
         subprocess.run(["iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+        subprocess.run(["iptables", "-D", "INPUT", "-p", "udp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+        subprocess.run(["iptables", "-I", "INPUT", "1", "-p", "udp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
 
     # Запускаем/перезапускаем службу HAProxy
     subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
@@ -180,3 +182,4 @@ def stop() -> None:
         subprocess.run(["systemctl", "disable", SERVICE_NAME], capture_output=True)
     for port in _INTERNAL_PORTS.values():
         subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+        subprocess.run(["iptables", "-D", "INPUT", "-p", "udp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
