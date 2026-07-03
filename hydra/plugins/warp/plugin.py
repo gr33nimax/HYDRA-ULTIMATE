@@ -49,7 +49,12 @@ class WarpPlugin(BasePlugin):
         from hydra.utils.net import detect_arch
         from hydra.utils.downloader import download_github_asset_filtered
 
+        # Путь для логов отладки
+        log_path = Path("/var/log/hydra/warp_install.log")
         try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            WGCF_PROFILE.parent.mkdir(parents=True, exist_ok=True)
+
             # Скачиваем wgcf напрямую через GitHub API, если его нет
             if not WGCF_BIN.exists():
                 arch = detect_arch()
@@ -59,26 +64,45 @@ class WarpPlugin(BasePlugin):
                 WGCF_BIN.parent.mkdir(parents=True, exist_ok=True)
                 ok = download_github_asset_filtered("ViRb3/wgcf", _match, WGCF_BIN)
                 if not ok:
+                    log_path.write_text("Failed to download wgcf binary from GitHub.\n", encoding="utf-8")
                     return False
                 WGCF_BIN.chmod(0o755)
 
-            # Регистрация и генерация профиля в директории /etc/wireguard
-            WGCF_PROFILE.parent.mkdir(parents=True, exist_ok=True)
-            
-            subprocess.run(
-                [str(WGCF_BIN), "register"],
-                capture_output=True, timeout=30,
-                cwd=str(WGCF_PROFILE.parent)
-            )
-            subprocess.run(
-                [str(WGCF_BIN), "generate"],
-                capture_output=True, timeout=30,
-                cwd=str(WGCF_PROFILE.parent)
-            )
+            # Регистрация
+            account_toml = WGCF_PROFILE.parent / "wgcf-account.toml"
+            if not account_toml.exists():
+                r = subprocess.run(
+                    [str(WGCF_BIN), "register", "--accept-tos"],
+                    capture_output=True, text=True, timeout=30,
+                    cwd=str(WGCF_PROFILE.parent)
+                )
+                if r.returncode != 0:
+                    log_path.write_text(
+                        f"wgcf register failed with code {r.returncode}\n"
+                        f"Stdout: {r.stdout}\nStderr: {r.stderr}\n",
+                        encoding="utf-8"
+                    )
 
-            # wgcf-profile.conf и wgcf-account.toml должны создаться в /etc/wireguard/
+            # Генерация профиля
+            r = subprocess.run(
+                [str(WGCF_BIN), "generate"],
+                capture_output=True, text=True, timeout=30,
+                cwd=str(WGCF_PROFILE.parent)
+            )
+            if r.returncode != 0:
+                # Дописываем к существующему логу
+                with log_path.open("a", encoding="utf-8") as lf:
+                    lf.write(
+                        f"wgcf generate failed with code {r.returncode}\n"
+                        f"Stdout: {r.stdout}\nStderr: {r.stderr}\n"
+                    )
+
             return WGCF_PROFILE.exists()
-        except Exception:
+        except Exception as e:
+            try:
+                log_path.write_text(f"Installation exception: {e}\n", encoding="utf-8")
+            except Exception:
+                pass
             return False
 
     def uninstall(self) -> bool:
