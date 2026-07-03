@@ -248,6 +248,13 @@ def write_config(config: dict) -> bool:
         return False
     r = _run([str(bin_path), "check", "-c", str(tmp)])
     if r.returncode != 0:
+        # Сохраним невалидный конфиг для отладки
+        debug_path = Path("/var/log/hydra/warp_debug_config.json")
+        try:
+            debug_path.parent.mkdir(parents=True, exist_ok=True)
+            debug_path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
         _log("ERROR", f"Sing-Box config invalid. Stdout: {r.stdout} Stderr: {r.stderr}")
         tmp.unlink(missing_ok=True)
         return False

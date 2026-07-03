@@ -50,6 +50,15 @@ def _show_diagnostic_info():
         warn("Последняя ошибка из /var/log/hydra/install.log:")
         print(f"  {RED}{install_err}{NC}")
     
+    # Показываем отладочный конфиг, если он существует
+    debug_path = Path("/var/log/hydra/warp_debug_config.json")
+    if debug_path.exists():
+        warn("Содержимое сгенерированного конфига (/var/log/hydra/warp_debug_config.json):")
+        try:
+            print(f"  {DIM}{debug_path.read_text(encoding='utf-8')[:1500]}{NC}")
+        except Exception:
+            pass
+
     # 2. Проверяем статус sing-box
     import subprocess
     r = subprocess.run(["systemctl", "status", "sing-box"], capture_output=True, text=True)
