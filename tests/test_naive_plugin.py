@@ -182,16 +182,19 @@ def test_build_caddyfile_basic():
     assert "tls" not in caddyfile
 
 
-def test_build_caddyfile_no_probe_secret():
-    """Без probe_secret директива probe_resistance не добавляется."""
+def test_build_caddyfile_fake_site():
+    """_build_caddyfile генерирует Caddyfile с file_server (HTML-заглушкой)."""
     p = NaivePlugin()
     caddyfile = p._build_caddyfile(
         domain="vpn.example.com",
         port=443,
-        users=[],
-        probe_secret="",
+        users=[{"username": "testuser", "password": "testpass"}],
+        probe_secret="mysecret123",
+        fake_site_dir="/var/www/naive-fake",
     )
-    assert "probe_resistance" not in caddyfile
+    assert "file_server" in caddyfile
+    assert "root /var/www/naive-fake" in caddyfile
+    assert "upstream socks5://127.0.0.1:1080" in caddyfile
 
 
 def test_build_caddyfile_multiple_users():

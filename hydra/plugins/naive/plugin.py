@@ -2,11 +2,12 @@
 
 Контракт v2 — TRANSPORT-плагин с needs_domain=True:
   • configure() — генерит Caddyfile в памяти.
-  • apply() — пишет Caddyfile, caddy validate + systemctl reload.
+  • apply() — создает фейковый сайт, пишет Caddyfile, caddy validate + systemctl reload.
   • per-user: детерминированные username/password из uuid через derive_key.
   • traffic — iptables accounting (как mieru).
-  • TPROXY не используется: Caddy сам биндится на порт (443), а исходящий трафик
-    проксируется в sing-box через `upstream socks5://127.0.0.1:1080` в Caddyfile.
+  • TLS & HAProxy: использует certbot / существующий SSL-сертификат для корректной работы за HAProxy.
+  • sing-box integration: исходящий трафик проксируется в sing-box через `upstream socks5://127.0.0.1:1080`.
+  • probe resistance: незнакомые клиенты получают отклик от фейкового HTML-файла.
 """
 from __future__ import annotations
 
@@ -19,18 +20,18 @@ from pathlib import Path
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
 from hydra.core.state import AppState, User
-from hydra.utils.crypto import derive_key, derive_hex_key
+from hydra.utils.crypto import derive_hex_key
 from hydra.utils.downloader import download_github_asset, verify_elf
 
 BIN_PATH = Path("/usr/local/bin/caddy-naive")
 CFG_DIR = Path("/etc/caddy-naive")
 CADDYFILE = CFG_DIR / "Caddyfile"
 LOG_DIR = Path("/var/log/caddy-naive")
+FAKE_SITE_DIR = Path("/var/www/naive-fake")
 SERVICE_FILE = Path("/etc/systemd/system/caddy-naive.service")
 SERVICE_NAME = "caddy-naive"
 
 DEFAULT_PORT = 443
-
 GITHUB_REPO = "Michaol/caddy-naive"
 
 
@@ -100,19 +101,15 @@ class NaivePlugin(BasePlugin):
 
         ps = state.protocols.get("naive")
         probe_secret = (ps.config.get("probe_secret", "") if ps and ps.config else "")
-        decoy_url = (ps.config.get("decoy_url", "https://www.bing.com") if ps and ps.config else "https://www.bing.com")
 
-        cert_file = (ps.config.get("cert_file", "") if ps and ps.config else "")
-        key_file = (ps.config.get("key_file", "") if ps and ps.config else "")
-        if not cert_file or not key_file:
-            cert_file, key_file = self._find_existing_cert(domain)
+        cert_file, key_file = self._resolve_certs(domain, ps)
 
         caddyfile = self._build_caddyfile(
             domain=domain,
             port=port,
             users=users,
             probe_secret=probe_secret,
-            decoy_url=decoy_url,
+            fake_site_dir=str(FAKE_SITE_DIR),
             cert_file=cert_file,
             key_file=key_file,
         )
@@ -125,7 +122,10 @@ class NaivePlugin(BasePlugin):
             return False
 
         CFG_DIR.mkdir(parents=True, exist_ok=True)
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
         Path("/var/lib/caddy-naive").mkdir(parents=True, exist_ok=True)
+        self._create_fake_site()
+
         CADDYFILE.write_text(self._pending_cfg)
         CADDYFILE.chmod(0o640)
 
@@ -257,11 +257,9 @@ class NaivePlugin(BasePlugin):
         )
 
     def traffic(self, state: AppState) -> dict[str, int]:
-        """Для NaiveProxy поюзерный учёт трафика на уровне iptables невозможен."""
         return {}
 
     def connected_clients(self, state: AppState | None = None) -> list[dict]:
-        """Получает список подключённых клиентов через ss с группировкой по IP."""
         if not shutil.which("ss"):
             return []
 
@@ -292,7 +290,6 @@ class NaivePlugin(BasePlugin):
                 remote_ip = ":".join(remote_parts[:-1]).strip("[]")
                 ip_counts[remote_ip] = ip_counts.get(remote_ip, 0) + 1
 
-        # rx/tx из iptables accounting
         rx_bytes = 0
         tx_bytes = 0
         r_rx = subprocess.run(["iptables", "-t", "filter", "-L", "INPUT", "-n", "-v", "-x"], capture_output=True, text=True)
@@ -334,41 +331,26 @@ class NaivePlugin(BasePlugin):
             return
 
         domain = state.network.domain
-        has_config = bool(
-            domain and 
-            ps.config and 
-            ps.config.get("decoy_url") and 
-            ps.config.get("probe_secret")
-        )
+        has_config = bool(domain and ps.config and ps.config.get("probe_secret"))
 
         if not has_config:
-            # Интерактивный визард
-            modified = False
             from hydra.ui.tui import prompt
-            
             new_domain = prompt("Введите домен для NaiveProxy (например, proxy.example.com)", default=domain)
             if not new_domain:
                 raise ValueError("Домен обязателен для работы NaiveProxy!")
             if new_domain != domain:
                 state.network.domain = new_domain
-                modified = True
+                domain = new_domain
 
             if not ps.config:
                 ps.config = {}
-            current_decoy = ps.config.get("decoy_url", "https://www.bing.com")
-            new_decoy = prompt("Введите decoy URL (для маскировки)", default=current_decoy)
-            if new_decoy != ps.config.get("decoy_url"):
-                ps.config["decoy_url"] = new_decoy
-                modified = True
-                
+
             current_secret = ps.config.get("probe_secret", "")
             if not current_secret:
                 import secrets
                 current_secret = secrets.token_hex(16)
             new_secret = prompt("Введите секрет для защиты от зондирования (probe_resistance)", default=current_secret)
-            if new_secret != ps.config.get("probe_secret"):
-                ps.config["probe_secret"] = new_secret
-                modified = True
+            ps.config["probe_secret"] = new_secret
 
             from hydra.ui.tui import confirm
             use_custom = confirm("Использовать собственный SSL-сертификат (указать пути вручную)?", default=False)
@@ -378,37 +360,23 @@ class NaivePlugin(BasePlugin):
                 if custom_cert and custom_key:
                     ps.config["cert_file"] = custom_cert
                     ps.config["key_file"] = custom_key
-                    modified = True
-            else:
-                if "cert_file" in ps.config:
-                    del ps.config["cert_file"]
-                    modified = True
-                if "key_file" in ps.config:
-                    del ps.config["key_file"]
-                    modified = True
 
-            if modified:
-                from hydra.core.state import save_state
-                save_state(state)
+            from hydra.core.state import save_state
+            save_state(state)
 
-        # Проверка доступности порта (чтобы не сломать Let's Encrypt и Caddy)
-        # Если мы не running (т.е. включаем первый раз), и порт занят — это конфликт
-        r_status = subprocess.run(["systemctl", "is-active", SERVICE_NAME], capture_output=True, text=True)
-        if r_status.stdout.strip() != "active":
-            import socket
-            from hydra.core.sni_router import get_effective_port
-            was_enabled = ps.enabled
-            ps.enabled = True
-            effective_port = get_effective_port("naive", state)
-            ps.enabled = was_enabled
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                if s.connect_ex(('127.0.0.1', effective_port)) == 0:
-                    raise RuntimeError(f"Порт {effective_port} уже занят другим процессом. Не удается запустить NaiveProxy.")
+        # Разрешение / получение TLS-сертификата (certbot)
+        cert_file, key_file = self._resolve_certs(domain, ps)
+        if not cert_file or not key_file:
+            print(f"  Получаю TLS-сертификат для {domain} через certbot...")
+            if self._obtain_cert_certbot(domain):
+                cert_file, key_file = self._find_existing_cert(domain)
+
+        if cert_file and key_file:
+            ps.config["cert_file"] = cert_file
+            ps.config["key_file"] = key_file
 
         from hydra.utils.firewall import open_tcp
         open_tcp(DEFAULT_PORT, "naive")
-
-        # iptables accounting для подсчёта трафика
 
         self._remove_iptables_rules()
         subprocess.run([
@@ -420,11 +388,11 @@ class NaivePlugin(BasePlugin):
             "-m", "comment", "--comment", "naive-tx"
         ], capture_output=True)
 
-        # Выставляем enabled = True, чтобы rebuild знал, что Naive включен
         ps.enabled = True
 
         self.configure(state)
         self.apply(state)
+
         r = subprocess.run(
             ["systemctl", "is-active", SERVICE_NAME],
             capture_output=True, text=True,
@@ -432,7 +400,6 @@ class NaivePlugin(BasePlugin):
         if r.stdout.strip() != "active":
             subprocess.run(["systemctl", "enable", "--now", SERVICE_NAME], capture_output=True)
 
-        # Пересобрать SNI-мультиплексор
         from hydra.core.sni_router import rebuild
         rebuild(state)
 
@@ -454,6 +421,16 @@ class NaivePlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     @staticmethod
+    def _create_fake_site() -> None:
+        FAKE_SITE_DIR.mkdir(parents=True, exist_ok=True)
+        index_file = FAKE_SITE_DIR / "index.html"
+        if not index_file.exists():
+            index_file.write_text(
+                "<!DOCTYPE html><html><head><title>Welcome</title></head>"
+                "<body><h1>Welcome</h1><p>This site is under maintenance.</p></body></html>\n"
+            )
+
+    @staticmethod
     def _derive_username(user: User) -> str:
         return user.email
 
@@ -462,7 +439,6 @@ class NaivePlugin(BasePlugin):
         return derive_hex_key("naive-pass", uuid)[:24]
 
     def _remove_iptables_rules(self) -> None:
-        """Удаляет iptables accounting правила naive-rx/naive-tx."""
         for chain in ("INPUT", "OUTPUT"):
             r = subprocess.run(["iptables", "-S", chain], capture_output=True, text=True)
             if r.returncode != 0:
@@ -475,7 +451,6 @@ class NaivePlugin(BasePlugin):
                         subprocess.run(["iptables"] + parts, capture_output=True)
 
     def _get_total_traffic(self) -> int:
-        """Считает суммарный трафик на порту NaiveProxy через iptables accounting."""
         total_bytes = 0
         for chain in ("INPUT", "OUTPUT"):
             r = subprocess.run(
@@ -491,8 +466,14 @@ class NaivePlugin(BasePlugin):
                         total_bytes += int(parts[1])
         return total_bytes
 
+    def _resolve_certs(self, domain: str, ps) -> tuple[str, str]:
+        cert = (ps.config.get("cert_file", "") if ps and ps.config else "")
+        key = (ps.config.get("key_file", "") if ps and ps.config else "")
+        if cert and key and Path(cert).exists() and Path(key).exists():
+            return cert, key
+        return self._find_existing_cert(domain)
+
     def _find_existing_cert(self, domain: str) -> tuple[str, str]:
-        """Ищет существующий сертификат для домена в стандартных путях."""
         paths = [
             (f"/etc/letsencrypt/live/{domain}/fullchain.pem", f"/etc/letsencrypt/live/{domain}/privkey.pem"),
             (f"/etc/xray/{domain}.crt", f"/etc/xray/{domain}.key"),
@@ -503,6 +484,56 @@ class NaivePlugin(BasePlugin):
             if cert_p.exists() and key_p.exists():
                 return cert, key
         return "", ""
+
+    def _obtain_cert_certbot(self, domain: str) -> bool:
+        """Автоматическое получение сертификата через certbot (HTTP-01 challenge, порт 80)."""
+        from hydra.utils.firewall import is_ufw_active
+
+        if not shutil.which("certbot"):
+            print("  Устанавливаю certbot...")
+            subprocess.run(["apt-get", "update"], capture_output=True)
+            subprocess.run(["apt-get", "install", "-y", "certbot"], capture_output=True)
+
+        services_to_stop = ["caddy-naive", "nginx", "apache2"]
+        was_running = []
+        for s in services_to_stop:
+            r = subprocess.run(["systemctl", "is-active", s], capture_output=True, text=True)
+            if r.stdout.strip() == "active":
+                print(f"  Временно останавливаю {s}...")
+                subprocess.run(["systemctl", "stop", s], capture_output=True)
+                was_running.append(s)
+
+        ufw_opened = False
+        ipt_opened = False
+        if is_ufw_active():
+            subprocess.run(["ufw", "allow", "80/tcp", "comment", "temp-certbot"], capture_output=True)
+            ufw_opened = True
+        else:
+            r_chk = subprocess.run(["iptables", "-C", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"], capture_output=True)
+            if r_chk.returncode != 0:
+                subprocess.run(["iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"], capture_output=True)
+                ipt_opened = True
+
+        r = subprocess.run([
+            "certbot", "certonly", "--standalone",
+            "-d", domain,
+            "--non-interactive", "--agree-tos",
+            "--register-unsafely-without-email",
+        ], capture_output=True, text=True)
+
+        success = r.returncode == 0
+
+        if ufw_opened:
+            subprocess.run(["ufw", "delete", "allow", "80/tcp"], capture_output=True)
+        if ipt_opened:
+            subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"], capture_output=True)
+
+        for s in was_running:
+            if s != "caddy-naive":
+                print(f"  Восстанавливаю {s}...")
+                subprocess.run(["systemctl", "start", s], capture_output=True)
+
+        return success
 
     @staticmethod
     def _installed() -> bool:
@@ -516,10 +547,8 @@ class NaivePlugin(BasePlugin):
         dest.mkdir(parents=True, exist_ok=True)
         binary = dest / f"caddy-linux-{arch}"
 
-        # Сначала пробуем через API-поиск ассетов
         download_ok = download_github_asset(GITHUB_REPO, f"caddy-linux-{arch}", binary)
 
-        # Если API выдал ошибку (лимиты GitHub или блокировки api.github.com), пробуем прямую ссылку
         if not download_ok:
             from hydra.utils.downloader import download
             direct_url = f"https://github.com/{GITHUB_REPO}/releases/latest/download/caddy-linux-{arch}"
@@ -554,7 +583,7 @@ class NaivePlugin(BasePlugin):
             "Environment=\"XDG_DATA_HOME=/var/lib/caddy-naive\"\n"
             "Environment=\"XDG_CONFIG_HOME=/var/lib/caddy-naive\"\n"
             "LimitNOFILE=1048576\n"
-            f"ReadWritePaths={CFG_DIR} {LOG_DIR} /var/lib/caddy-naive\n"
+            f"ReadWritePaths={CFG_DIR} {LOG_DIR} {FAKE_SITE_DIR} /var/lib/caddy-naive\n"
             "AmbientCapabilities=CAP_NET_BIND_SERVICE\n"
             "NoNewPrivileges=true\n"
             "\n"
@@ -570,10 +599,11 @@ class NaivePlugin(BasePlugin):
         port: int,
         users: list[dict],
         probe_secret: str,
-        decoy_url: str = "https://www.bing.com",
+        fake_site_dir: str = "/var/www/naive-fake",
         cert_file: str = "",
         key_file: str = "",
-     ) -> str:
+        decoy_url: str = "",
+    ) -> str:
         auth_lines = ""
         for u in users:
             auth_lines += f"            basic_auth {u['username']} {u['password']}\n"
@@ -584,14 +614,21 @@ class NaivePlugin(BasePlugin):
 
         if cert_file and key_file:
             tls_line = f"    tls {cert_file} {key_file}\n"
+        elif port == 443:
+            tls_line = "    tls {\n        on_demand\n    }\n"
         else:
-            tls_line = ""
+            tls_line = "    tls internal\n"
+
+        if decoy_url:
+            decoy_block = f"    reverse_proxy {decoy_url} {{\n        header_up Host {{upstream_hostport}}\n    }}\n"
+        else:
+            decoy_block = f"    file_server {{\n        root {fake_site_dir}\n    }}\n"
 
         return f"""\
 {{
     http_port 0
     https_port {port}
-    order forward_proxy before reverse_proxy
+    order forward_proxy before file_server
     servers {{
         protocols h1 h2
     }}
@@ -603,10 +640,7 @@ class NaivePlugin(BasePlugin):
             hide_via
             upstream socks5://127.0.0.1:1080
 {probe_line}    }}
-    reverse_proxy {decoy_url} {{
-        header_up Host {{upstream_hostport}}
-    }}
-    log {{
+{decoy_block}    log {{
         output file {LOG_DIR}/access.log {{
             roll_size 10mb
             roll_keep 3
