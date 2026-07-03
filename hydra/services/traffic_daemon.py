@@ -24,6 +24,43 @@ def run_daemon() -> None:
         except Exception:
             pass
 
+    def _get_anytls_ports() -> dict[str, str]:
+        import subprocess
+        import re
+        port_to_user = {}
+        try:
+            r = subprocess.run(
+                ["journalctl", "-u", "sing-box", "--since", "5 minutes ago", "--no-pager"],
+                capture_output=True, text=True, timeout=3
+            )
+            if r.returncode == 0:
+                id_to_port = {}
+                id_to_user = {}
+                for line in r.stdout.splitlines():
+                    if "inbound/anytls" not in line:
+                        continue
+                    
+                    match_id = re.search(r"INFO\s+\[(\d+)\s+[^\]]+\]", line)
+                    if not match_id:
+                        continue
+                    conn_id = match_id.group(1)
+                    
+                    match_port = re.search(r"inbound connection from 127.0.0.1:(\d+)", line)
+                    if match_port:
+                        id_to_port[conn_id] = match_port.group(1)
+                        continue
+                    
+                    match_user = re.search(r"inbound/anytls\[[^\]]+\]:\s+\[([^\]]+)\]\s+inbound connection to", line)
+                    if match_user:
+                        id_to_user[conn_id] = match_user.group(1)
+                
+                for cid, user in id_to_user.items():
+                    if cid in id_to_port:
+                        port_to_user[id_to_port[cid]] = user
+        except Exception:
+            pass
+        return port_to_user
+
     _log("Traffic daemon started")
 
     active_connections: dict[str, dict] = {} # id -> {user, total}
@@ -57,6 +94,8 @@ def run_daemon() -> None:
                 continue
 
             connections = data.get("connections", [])
+            anytls_ports = _get_anytls_ports()
+
             if connections:
                 _log(f"Raw first connection: {json.dumps(connections[0])}")
                 summary = []
@@ -64,7 +103,10 @@ def run_daemon() -> None:
                     cid = c.get("id")
                     meta = c.get("metadata", {})
                     user = meta.get("user")
-                    tag = meta.get("inboundTag")
+                    tag = meta.get("inboundTag") or meta.get("type", "")
+                    sport = str(meta.get("sourcePort", ""))
+                    if not user and "anytls" in tag:
+                        user = anytls_ports.get(sport)
                     up = c.get("upload", 0)
                     down = c.get("download", 0)
                     summary.append(f"ID={cid}, User={user}, Tag={tag}, Rx={down}, Tx={up}")
@@ -84,12 +126,18 @@ def run_daemon() -> None:
 
                 metadata = conn.get("metadata", {})
                 email = metadata.get("user")
+                
+                # Определяем протокол по inboundTag или type
+                inbound_tag = metadata.get("inboundTag", "") or metadata.get("type", "")
+                protocol = "anytls" if "anytls" in inbound_tag else ("mieru" if "mieru" in inbound_tag else "unknown")
+
+                if not email and protocol == "anytls":
+                    sport = str(metadata.get("sourcePort", ""))
+                    if sport in anytls_ports:
+                        email = anytls_ports[sport]
+
                 if not email:
                     continue
-
-                # Определяем протокол по inboundTag
-                inbound_tag = metadata.get("inboundTag", "")
-                protocol = "anytls" if "anytls" in inbound_tag else ("mieru" if "mieru" in inbound_tag else "unknown")
 
                 upload = conn.get("upload", 0)
                 download = conn.get("download", 0)
