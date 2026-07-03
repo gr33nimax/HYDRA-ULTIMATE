@@ -166,16 +166,21 @@ class WarpPlugin(BasePlugin):
         except Exception:
             server_ip = "162.159.192.1"
 
-        # WARP outbound
+        # WARP outbound (используем стандартную структуру peers для совместимости с новыми версиями Sing-Box)
         outbound = {
             "type": "wireguard",
             "tag": "warp",
-            "server": server_ip,
-            "server_port": 2408,
             "local_address": warp_cfg["addresses"],
-            "peer_public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
             "private_key": warp_cfg["private_key"],
             "mtu": 1280,
+            "peers": [
+                {
+                    "server": server_ip,
+                    "server_port": 2408,
+                    "public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+                    "allowed_ips": ["0.0.0.0/0", "::/0"]
+                }
+            ]
         }
 
         # Получаем списки доменов и IP из конфига плагина

@@ -25,6 +25,47 @@ def _get_external_info() -> tuple[list[str], list[str], str]:
         return [], [], ""
 
 
+def _get_last_install_error() -> str:
+    path = Path("/var/log/hydra/install.log")
+    if not path.exists():
+        return ""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        # Ищем снизу вверх последнюю ошибку
+        for line in reversed(lines):
+            line_upper = line.upper()
+            if "[ERROR]" in line_upper or "CONFIG INVALID" in line_upper or "FAILED" in line_upper:
+                return line
+    except Exception:
+        pass
+    return ""
+
+
+def _show_diagnostic_info():
+    print(f"\n  {YELLOW}═══════════════ ДИАГНОСТИКА ОШИБКИ ═══════════════{NC}")
+    
+    # 1. Проверяем install.log
+    install_err = _get_last_install_error()
+    if install_err:
+        warn("Последняя ошибка из /var/log/hydra/install.log:")
+        print(f"  {RED}{install_err}{NC}")
+    
+    # 2. Проверяем статус sing-box
+    import subprocess
+    r = subprocess.run(["systemctl", "status", "sing-box"], capture_output=True, text=True)
+    if r.returncode != 0:
+        warn("Служба sing-box неактивна или сообщает об ошибке.")
+    
+    # 3. Показываем последние логи sing-box
+    r2 = subprocess.run(["journalctl", "-u", "sing-box", "-n", "10", "--no-pager"], capture_output=True, text=True)
+    if r2.stdout:
+        warn("Последние 10 строк логов sing-box из journalctl:")
+        for line in r2.stdout.splitlines():
+            print(f"  {DIM}{line}{NC}")
+            
+    print(f"  {YELLOW}══════════════════════════════════════════════════{NC}\n")
+
+
 def menu_warp(state: AppState, plugin) -> None:
     ps = state.protocols.setdefault("warp", state.protocols.get("warp") or __import__("hydra.core.state").core.state.PluginState())
     if not ps.config:
@@ -76,7 +117,7 @@ def menu_warp(state: AppState, plugin) -> None:
             
             status_lines.append("  " + "─" * 40)
             status_lines.append(f"  Всего доменов в WARP:    {GREEN}{total_domains}{NC}")
-            status_lines.append(f"  Всего IP/подсетей в WARP:{GREEN}{total_ips}{NC}")
+            status_lines.append(f"  Всего IP/подсетей in WARP:{GREEN}{total_ips}{NC}")
             
         panel("🌐 CLOUDFLARE WARP ROUTING", status_lines)
 
@@ -117,12 +158,14 @@ def menu_warp(state: AppState, plugin) -> None:
                     success("WARP успешно выключен.")
                 else:
                     error("Ошибка при выключении WARP.")
+                    _show_diagnostic_info()
             else:
                 info("Включаю WARP...")
                 if orchestrator.enable(state, "warp"):
                     success("WARP успешно включен.")
                 else:
                     error("Ошибка при включении WARP.")
+                    _show_diagnostic_info()
             prompt("Нажмите Enter для продолжения")
 
         # ── Управление доменами ──
@@ -149,7 +192,9 @@ def menu_warp(state: AppState, plugin) -> None:
                     success("Профиль успешно пересоздан!")
                     if st.enabled:
                         info("Применяю конфигурацию...")
-                        orchestrator.apply_config(state)
+                        if not orchestrator.apply_config(state):
+                            error("Не удалось применить новый конфиг.")
+                            _show_diagnostic_info()
                 else:
                     error("Ошибка генерации нового профиля.")
             prompt("Нажмите Enter для продолжения")
@@ -165,6 +210,7 @@ def menu_warp(state: AppState, plugin) -> None:
                     success("WARP полностью удалён с сервера.")
                 else:
                     error("Не удалось отключить WARP перед удалением.")
+                    _show_diagnostic_info()
             prompt("Нажмите Enter для продолжения")
 
 
@@ -204,7 +250,6 @@ def _menu_manage_domains(state: AppState, ps) -> None:
             tokens = [t.strip().lower() for t in raw.replace(",", " ").split() if t.strip()]
             added = 0
             for t in tokens:
-                # Импортируем из plugin для валидации
                 from hydra.plugins.warp.plugin import WarpPlugin
                 if not WarpPlugin._is_valid_domain(t):
                     warn(f"Некорректный формат домена: '{t}' (пропущено)")
@@ -219,7 +264,9 @@ def _menu_manage_domains(state: AppState, ps) -> None:
                 success(f"Добавлено доменов: {added}")
                 if ps.enabled:
                     info("Обновляю конфигурацию Sing-Box...")
-                    orchestrator.apply_config(state)
+                    if not orchestrator.apply_config(state):
+                        error("Ошибка применения нового конфига.")
+                        _show_diagnostic_info()
             else:
                 warn("Новых доменов не добавлено.")
             prompt("Нажмите Enter для продолжения")
@@ -254,7 +301,9 @@ def _menu_manage_domains(state: AppState, ps) -> None:
                 success(f"Удалено доменов: {removed}")
                 if ps.enabled:
                     info("Обновляю конфигурацию Sing-Box...")
-                    orchestrator.apply_config(state)
+                    if not orchestrator.apply_config(state):
+                        error("Ошибка применения нового конфига.")
+                        _show_diagnostic_info()
             else:
                 error("Ничего не удалено. Проверьте правильность ввода.")
             prompt("Нажмите Enter для продолжения")
@@ -300,7 +349,6 @@ def _menu_manage_ips(state: AppState, ps) -> None:
                 if not WarpPlugin._is_ip_or_cidr(t):
                     warn(f"Некорректный IP или CIDR: '{t}' (пропущено)")
                     continue
-                # Нормализация (если это одиночный IP, запишем без изменений или с маской, но лучше как ввел пользователь)
                 if t not in ips:
                     ips.append(t)
                     added += 1
@@ -311,7 +359,9 @@ def _menu_manage_ips(state: AppState, ps) -> None:
                 success(f"Добавлено IP/подсетей: {added}")
                 if ps.enabled:
                     info("Обновляю конфигурацию Sing-Box...")
-                    orchestrator.apply_config(state)
+                    if not orchestrator.apply_config(state):
+                        error("Ошибка применения нового конфига.")
+                        _show_diagnostic_info()
             else:
                 warn("Новых записей не добавлено.")
             prompt("Нажмите Enter для продолжения")
@@ -346,7 +396,9 @@ def _menu_manage_ips(state: AppState, ps) -> None:
                 success(f"Удалено записей: {removed}")
                 if ps.enabled:
                     info("Обновляю конфигурацию Sing-Box...")
-                    orchestrator.apply_config(state)
+                    if not orchestrator.apply_config(state):
+                        error("Ошибка применения нового конфига.")
+                        _show_diagnostic_info()
             else:
                 error("Ничего не удалено. Проверьте правильность ввода.")
             prompt("Нажмите Enter для продолжения")
@@ -408,7 +460,9 @@ def _menu_external_source(state: AppState, ps, plugin) -> None:
                     success(msg)
                     if ps.enabled:
                         info("Применяю новые правила в Sing-Box...")
-                        orchestrator.apply_config(state)
+                        if not orchestrator.apply_config(state):
+                            error("Ошибка применения нового конфига.")
+                            _show_diagnostic_info()
                 else:
                     error(msg)
             prompt("Нажмите Enter для продолжения")
@@ -421,7 +475,9 @@ def _menu_external_source(state: AppState, ps, plugin) -> None:
                 success("Ссылка очищена, кэш удален.")
                 if ps.enabled:
                     info("Применяю изменения в Sing-Box...")
-                    orchestrator.apply_config(state)
+                    if not orchestrator.apply_config(state):
+                        error("Ошибка применения нового конфига.")
+                        _show_diagnostic_info()
             prompt("Нажмите Enter для продолжения")
             
         elif choice == "3" and url:
@@ -431,7 +487,9 @@ def _menu_external_source(state: AppState, ps, plugin) -> None:
                 success(msg)
                 if ps.enabled:
                     info("Применяю новые правила в Sing-Box...")
-                    orchestrator.apply_config(state)
+                    if not orchestrator.apply_config(state):
+                        error("Ошибка применения нового конфига.")
+                        _show_diagnostic_info()
             else:
                 error(msg)
             prompt("Нажмите Enter для продолжения")
