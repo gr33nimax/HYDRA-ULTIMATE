@@ -216,7 +216,7 @@ class NaivePlugin(BasePlugin):
         pass_q = urllib.parse.quote(password, safe="")
         tag = urllib.parse.quote(username, safe="")
         sni_q = urllib.parse.quote(domain, safe="")
-        return f"naive+https://{user_q}:{pass_q}@{domain}:{port}?sni={sni_q}&quic=1#{tag}"
+        return f"naive+quic://{user_q}:{pass_q}@{domain}:{port}?congestion_control=bbr&security=tls&sni={sni_q}&alpn#{tag}"
 
     # ═════════════════════════════════════════════════════════════════════
     #  Статус / трафик

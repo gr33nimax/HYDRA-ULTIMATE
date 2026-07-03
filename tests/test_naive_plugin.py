@@ -80,10 +80,12 @@ def test_client_link_valid_uri():
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
     link = p.client_link(_make_user("a@x.com", uuid="uuid-a"), state)
 
-    assert link.startswith("naive+https://")
+    assert link.startswith("naive+quic://")
     assert "example.com:443" in link
     assert "sni=example.com" in link
-    assert "quic=1" in link
+    assert "congestion_control=bbr" in link
+    assert "security=tls" in link
+    assert "alpn" in link
     assert "uuid-a" not in link
 
 
