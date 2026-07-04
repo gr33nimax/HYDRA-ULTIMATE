@@ -235,7 +235,7 @@ def generate_mieru_nekobox_link(host: str, port: int, protocol: str, username: s
     s_port = struct.pack('<I', port)
     s_proto = _awg_serialize_string(protocol.upper())
     s_user = _awg_serialize_string(username)
-    s_pass = _awg_serialize_string(password)
+    s_pass = _awg_serialize_string_len(password)
     s_val = struct.pack('<I', 1)
     s_tag = _awg_serialize_string(tag)
     booleans = b'\x81\x81'
@@ -256,20 +256,9 @@ def clean_link_to_sn(link: str, user: User) -> Optional[str]:
         if scheme in ("naive", "naive+quic", "naive+https"):
             return None
             
-        # 2. AnyTLS (NekoBox does NOT support anytls:// natively, needs sn://anytls)
+        # 2. AnyTLS (NekoBox supports anytls:// natively)
         elif scheme == "anytls":
-            netloc = parsed.netloc
-            if "@" not in netloc:
-                return None
-            password, host_port = netloc.split("@", 1)
-            password = urllib.parse.unquote(password)
-            host, port_s = host_port.split(":", 1) if ":" in host_port else (host_port, "443")
-            port = int(port_s)
-            
-            query = urllib.parse.parse_qs(parsed.query)
-            sni = query.get("sni", [host])[0]
-            
-            return serialize_anytls(host, port, password, sni, "chrome", fragment)
+            return None
             
         # 3. TrustTunnel (NekoBox does NOT support tt:// natively, needs sn://trusttunnel)
         elif scheme in ("tt", "trusttunnel"):
