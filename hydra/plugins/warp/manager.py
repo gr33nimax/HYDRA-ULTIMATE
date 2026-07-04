@@ -437,7 +437,7 @@ def _menu_external_source(state: AppState, ps, plugin) -> None:
             short_desc = item['desc'].split(' (')[0]
             
             status_lines.append(f"  {status_ico}  {BOLD}{item['name']:<14}{NC} {DIM}({filename}){NC}")
-            status_lines.append(f"     Статус: {color}{status_txt:<8}{NC}  {DIM}│{NC}  {short_desc}")
+            status_lines.append(f"     {color}{status_txt:<8}{NC}  {DIM}│{NC}  {short_desc}")
             status_lines.append("")
             
         status_lines.append("  " + "─" * 70)
