@@ -8,7 +8,7 @@
 > HYDRA – платформа для развёртывания прокси-серверов на базе **Sing-Box** как единого оркестратора трафика. Модульная архитектура: 17 плагинов (9 транспортов, 3 надстройки, 4 безопасности) с единой политикой роутинга, DNS и безопасности.
 
 > [!IMPORTANT]
-> На данный момент полностью готовы, отлажены и стабильно работают плагины **AmneziaWG 2.0** (интегрирован напрямую в ядро Sing-Box через TPROXY), **Mieru**, **AnyTLS**, **TrustTunnel**, **NaiveProxy** (работает через HTTP/3 и QUIC) и **MTProto (Telemt)** (Rust MTProxy с защитой от DPI и продвинутой TUI-статистикой).
+> На данный момент полностью готовы, отлажены и стабильно работают плагины **AmneziaWG 2.0** (интегрирован напрямую в ядро Sing-Box через TPROXY), **Mieru**, **AnyTLS**, **TrustTunnel**, **NaiveProxy** (работает через HTTP/3 и QUIC), **MTProto (Telemt)** (Rust MTProxy с защитой от DPI и продвинутой TUI-статистикой) и **qWDTT** (WireGuard over TURN с изолированным парольным управлением и Telegram-ботом). Полностью готов и отлажен **подписочный функционал** для генерации клиентских подписок.
 > В разделе безопасности полностью готовы и снабжены интерактивными пультами управления плагины **Fail2ban** (защита от перебора sing-box/sshd), **Honeypot** (ловушка сканеров с авто-баном) и **IPBan** (ручная блокировка IP/CIDR/диапазонов/ASN).
 > В разделе сетевых служб полностью готовы модули **WARP** с выборочной маршрутизацией и **DNSCrypt** для системного шифрования DNS (с автоматическим замером latency и выбором серверов).
 > Все остальные плагины (транспорты, надстройки) находятся на этапе активной разработки (WIP).
@@ -45,8 +45,7 @@
 | Mieru | `mieru` | mTLS + random padding | 🟢 Готов (Ready) |
 | NaiveProxy | `naive` | Caddy (TLS) + fake-site (работает через HTTP/3 и QUIC) | 🟢 Готов (Ready) |
 | MTProto | `telemt` | Telegram MTProto, multi-user | 🟢 Готов (Ready) |
-| qWDTT | `wdtt` | WG over TURN, per-user | 🟡 В разработке (WIP) |
-| SlipGate | `slipgate` | DNS-туннели (DNSTT/Noize/Slipstream/VayDNS) | 🟡 В разработке (WIP) |
+| qWDTT | `wdtt` | WG over TURN с изолированным парольным управлением и Telegram-ботом | 🟢 Готов (Ready) |
 | AnyTLS | `anytls` | TLS-shaped tunnel с padding scheme | 🟢 Готов (Ready) |
 | TrustTunnel | `trusttunnel` | Защищённый туннель для обхода блокировок | 🟢 Готов (Ready) |
 | ShadowTLS | `shadowtls` | TLS-обертка с имитацией рукопожатия доверенных сайтов | 🟡 В планах (Roadmap) |
@@ -139,7 +138,7 @@
 | RAM | от 512 МБ |
 | Диск | от 2 ГБ |
 | Права | root |
-| Сеть | публичный IP, домен (для Naive/SlipGate) |
+| Сеть | публичный IP, домен (для NaiveProxy) |
 
 ### Автоматическая (рекомендуется)
 
@@ -196,7 +195,6 @@ hydra/
 │   │   ├── naive/              # NaiveProxy
 │   │   ├── telemt/             # MTProto
 │   │   ├── wdtt/               # qWDTT
-│   │   ├── slipgate/           # DNS-туннели
 │   │   ├── dnscrypt/           # DNSCrypt-proxy
 │   │   ├── warp/               # Cloudflare WARP
 │   │   ├── fail2ban/           # Fail2ban

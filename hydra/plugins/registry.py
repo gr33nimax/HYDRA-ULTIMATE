@@ -13,7 +13,6 @@ from hydra.plugins.telemt.plugin import TelemtPlugin
 from hydra.plugins.wdtt.plugin import WdttPlugin
 from hydra.plugins.dnscrypt.plugin import DNSCryptPlugin
 from hydra.plugins.warp.plugin import WarpPlugin
-from hydra.plugins.slipgate.plugin import SlipGatePlugin
 from hydra.plugins.fail2ban.plugin import Fail2banPlugin
 from hydra.plugins.honeypot.plugin import HoneypotPlugin
 from hydra.plugins.ipban.plugin import IPBanPlugin
@@ -29,7 +28,6 @@ _PLUGINS: list[BasePlugin] = [
     WdttPlugin(),
     DNSCryptPlugin(),
     WarpPlugin(),
-    SlipGatePlugin(),
     Fail2banPlugin(),
     HoneypotPlugin(),
     IPBanPlugin(),

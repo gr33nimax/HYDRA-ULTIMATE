@@ -359,13 +359,14 @@ def generate_base64_sub(user: User, state: AppState) -> str:
             
     # Особый случай для AmneziaWG: нужен контент .conf файла для генерации sn://awg
     awg_plugin = get("amneziawg")
-    if awg_plugin and awg_plugin.status().enabled:
+    if awg_plugin:
         try:
-            conf_text = awg_plugin.generate_client_config(user, state)
-            if conf_text:
-                awg_sn = generate_awg_sn_link(conf_text, f"{user.email} AWG")
-                if awg_sn:
-                    extended_links.append(awg_sn)
+            if awg_plugin.status().enabled:
+                conf_text = awg_plugin.generate_client_config(user, state)
+                if conf_text:
+                    awg_sn = generate_awg_sn_link(conf_text, f"{user.email} AWG")
+                    if awg_sn:
+                        extended_links.append(awg_sn)
         except Exception:
             pass
             
@@ -390,6 +391,53 @@ def generate_userinfo_header(user: User, state: AppState) -> str:
         except Exception:
             pass
     return f"upload={upload}; download={download}; total={total}; expire={expire}"
+
+
+def generate_singbox_config(user: User, state: AppState) -> dict:
+    """Генерирует персональный Sing-Box JSON-конфиг для клиента."""
+    from hydra.utils.net import public_ip
+    domain = state.network.domain
+    server_ip = state.network.server_ip or domain or public_ip()
+
+    config: dict = {
+        "log": {"level": "info"},
+        "inbounds": [
+            {
+                "type": "mixed",
+                "tag": "mixed-in",
+                "listen": "127.0.0.1",
+                "listen_port": 2080,
+            }
+        ],
+        "outbounds": [],
+        "route": {"rules": [], "auto_detect_interface": True},
+    }
+
+    for p in enabled(state, PluginCategory.TRANSPORT):
+        try:
+            p_conf_str = p.generate_client_config(user, state)
+            if p_conf_str:
+                p_conf = json.loads(p_conf_str)
+                if "outbounds" in p_conf:
+                    config["outbounds"].extend(p_conf["outbounds"])
+                if "route" in p_conf and "rules" in p_conf["route"]:
+                    config["route"]["rules"].extend(p_conf["route"]["rules"])
+        except Exception:
+            pass
+
+    config["outbounds"].append({"type": "direct", "tag": "direct"})
+    return config
+
+
+def generate_client_config(user: User, state: AppState, protocol: str) -> str:
+    """Генерирует индивидуальный конфиг для конкретного протокола."""
+    p = get(protocol)
+    if not p or not p.status().enabled:
+        return ""
+    try:
+        return p.generate_client_config(user, state)
+    except Exception:
+        return ""
 
 
 def get_subscription_url(user: User, state: AppState) -> str:
