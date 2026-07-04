@@ -671,6 +671,7 @@ class NaivePlugin(BasePlugin):
             order_line = "    order forward_proxy before file_server\n"
 
         site_header = f":{port}, {domain}:{port}"
+        probe_line = "            probe_resistance\n" if auth_lines else ""
 
         return f"""\
 {{
@@ -681,8 +682,7 @@ class NaivePlugin(BasePlugin):
 {tls_line}    forward_proxy {{
 {auth_lines}            hide_ip
             hide_via
-            probe_resistance
-    }}
+{probe_line}    }}
 {decoy_block}    log {{
         output file {LOG_DIR}/access.log {{
             roll_size 10mb
