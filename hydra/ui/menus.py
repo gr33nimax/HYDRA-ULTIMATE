@@ -1816,6 +1816,9 @@ Description=HYDRA Sync Agent
 After=network.target
 [Service]
 Type=oneshot
+User=root
+WorkingDirectory=/opt/hydra
+Environment=PYTHONPATH=/opt/hydra
 ExecStart=/usr/bin/python3 -m hydra.services.sync_agent
 """,
                 """[Unit]
