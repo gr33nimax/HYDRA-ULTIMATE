@@ -10,6 +10,7 @@ import time
 import urllib.request
 import json
 import shutil
+from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -380,7 +381,7 @@ def _run_install(state: AppState, plugin) -> None:
     ps.config["tls_domain"] = tls_domain
     ps.config["client_mss"] = client_mss
     ps.config["use_middle_proxy"] = use_mp
-    ps.config["fallback_cfg"] = fb_cfg.as_dict() if fb_cfg else None
+    ps.config["fallback_cfg"] = asdict(fb_cfg) if fb_cfg else None
     ps.config["singbox_integration_enabled"] = sb_int
     ps.installed = True
     ps.enabled = True
@@ -581,9 +582,9 @@ def _menu_fallback(state: AppState, plugin) -> None:
             if use_mp_ans:
                 if confirm("Настроить автоматический fallback на Direct?"):
                     fb_cfg = fb_mod.me_probe_menu(CONFIG_FILE)
-                    state.protocols["telemt"].config["fallback_cfg"] = fb_cfg.as_dict()
+                    state.protocols["telemt"].config["fallback_cfg"] = asdict(fb_cfg)
                 else:
-                    state.protocols["telemt"].config["fallback_cfg"] = fb_mod.FallbackConfig.defaults().as_dict()
+                    state.protocols["telemt"].config["fallback_cfg"] = asdict(fb_mod.FallbackConfig.defaults())
             else:
                 state.protocols["telemt"].config["fallback_cfg"] = None
                 
