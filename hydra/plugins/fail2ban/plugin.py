@@ -43,12 +43,21 @@ class Fail2banPlugin(BasePlugin):
         subprocess.run(["systemctl", "disable", "fail2ban"], capture_output=True)
         subprocess.run(["apt-get", "remove", "-y", "-qq", "fail2ban"], capture_output=True, timeout=120)
         if JAIL_DIR.exists():
+            (JAIL_DIR / "sshd.local").unlink(missing_ok=True)
             for f in JAIL_DIR.glob("hydra-*.local"):
                 f.unlink(missing_ok=True)
         return True
 
     def _write_jails(self) -> None:
         JAIL_DIR.mkdir(parents=True, exist_ok=True)
+        
+        # Отключаем дефолтный системный sshd джейл, чтобы избежать дублирования
+        try:
+            path_disable = JAIL_DIR / "sshd.local"
+            path_disable.write_text("[sshd]\nenabled = false\n", encoding="utf-8")
+        except Exception:
+            pass
+
         jails = {
             "hydra-singbox": {
                 "enabled": "true",
