@@ -39,6 +39,7 @@ class ConfigFragment:
     nft_tproxy_ports: list[int] = field(default_factory=list)
     nft_tproxy_ifaces: list[str] = field(default_factory=list)
     endpoints: list[dict] = field(default_factory=list)
+    dns: dict = field(default_factory=dict)
 
 
 class BasePlugin(ABC):

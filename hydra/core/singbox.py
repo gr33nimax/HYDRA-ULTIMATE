@@ -180,18 +180,7 @@ def _base_config(state: AppState) -> dict:
 
 
 def _dns_config(state: AppState) -> dict:
-    """DNS-конфиг: DNSCrypt или публичные DoH."""
-    if state.network.dnscrypt_enabled:
-        return {
-            "servers": [
-                {
-                    "tag": "dnscrypt-local",
-                    "address": f"127.0.0.1:{state.network.dnscrypt_port}",
-                    "detour": "direct",
-                }
-            ],
-            "rules": [],
-        }
+    """DNS-конфиг по умолчанию (публичные DoH)."""
     return {
         "servers": [
             {
@@ -228,7 +217,12 @@ def generate_config(state: AppState, fragments: dict[str, ConfigFragment]) -> di
         config.pop("endpoints")
 
     # DNS-конфиг (DNSCrypt / публичные DoH)
-    config["dns"] = _dns_config(state)
+    dns_config = {}
+    for name, frag in fragments.items():
+        if hasattr(frag, "dns") and frag.dns:
+            dns_config = frag.dns
+            break
+    config["dns"] = dns_config if dns_config else _dns_config(state)
 
     # Если плагины не дали ни одного inbound — добавляем fallback
     if not config["inbounds"]:

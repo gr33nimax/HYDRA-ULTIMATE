@@ -67,8 +67,18 @@ use_syslog = true
         DNSCRYPT_CONF.write_text(conf)
 
     def configure(self, state: AppState) -> ConfigFragment:
-        """DNSCrypt не генерирует Sing-Box фрагмент — он работает на системном уровне."""
-        return ConfigFragment()
+        """Возвращает DNS-конфиг для Sing-Box."""
+        dns_config = {
+            "servers": [
+                {
+                    "tag": "dnscrypt-local",
+                    "address": f"127.0.0.1:{DNSCRYPT_PORT}",
+                    "detour": "direct",
+                }
+            ],
+            "rules": [],
+        }
+        return ConfigFragment(dns=dns_config)
 
     def status(self) -> PluginStatus:
         installed = self._installed()
