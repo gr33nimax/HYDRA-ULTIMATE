@@ -63,7 +63,8 @@ def test_unban_ip_success():
     p = IPBanPlugin()
     with patch.object(IPBanPlugin, "_load_state", return_value={
         "entries": [{"display": "1.2.3.4", "cidrs": ["1.2.3.4/32"], "kind": "ip"}]
-    }), patch("subprocess.run") as mock_run, \
+    }), patch.object(IPBanPlugin, "_installed", return_value=True), \
+         patch("subprocess.run") as mock_run, \
          patch.object(IPBanPlugin, "_save_state") as mock_save:
         mock_run.return_value = MagicMock(returncode=0)
         assert p.unban_ip("1.2.3.4") is True

@@ -1,5 +1,5 @@
 """
-vless_installer/modules/telemt_syn_limiter.py
+hydra/plugins/telemt/telemt_syn_limiter.py
 ───────────────────────────────────────────────────────────────────────────────
 Per-IP лимитер входящих SYN-пакетов для Telemt — стабилизация TCP-рукопожатия.
 

@@ -76,7 +76,8 @@ class IPBanPlugin(BasePlugin):
         return True
 
     def _installed(self) -> bool:
-        return subprocess.run(["which", "ipset"], capture_output=True).returncode == 0
+        import shutil
+        return shutil.which("ipset") is not None
 
     def configure(self, state: AppState) -> ConfigFragment:
         return ConfigFragment()

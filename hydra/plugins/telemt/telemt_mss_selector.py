@@ -1,5 +1,5 @@
 """
-vless_installer/modules/telemt_mss_selector.py
+hydra/plugins/telemt/telemt_mss_selector.py
 ───────────────────────────────────────────────────────────────────────────────
 Выбор MSS-пресета для защиты Telemt от JA4/JA3 DPI-дактилоскопии TSPU.
 

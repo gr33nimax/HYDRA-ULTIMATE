@@ -1,5 +1,5 @@
 """
-vless_installer/modules/mtproto_stats.py
+hydra/plugins/telemt/mtproto_stats.py
 ───────────────────────────────────────────────────────────────────────────────
 Статистика трафика Telemt MTProxy — зрелая реализация.
 

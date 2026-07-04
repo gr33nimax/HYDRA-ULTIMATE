@@ -1,5 +1,5 @@
 """
-vless_installer/modules/telemt_fallback.py
+hydra/plugins/telemt/telemt_fallback.py
 ───────────────────────────────────────────────────────────────────────────────
 Гибридный режим Telemt: автоматический fallback из Middle Proxy → Direct Mode.
 
@@ -155,7 +155,7 @@ def fetch_live_me_endpoints(
     """
     try:
         req = urllib.request.Request(
-            url, headers={"User-Agent": "vless-ultimate-installer/telemt-fallback"}
+            url, headers={"User-Agent": "hydra-ultimate/telemt-fallback"}
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             text = resp.read().decode("utf-8", errors="replace")

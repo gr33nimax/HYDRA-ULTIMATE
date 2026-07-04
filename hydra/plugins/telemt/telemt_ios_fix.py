@@ -1,5 +1,5 @@
 """
-vless_installer/modules/telemt_ios_fix.py
+hydra/plugins/telemt/telemt_ios_fix.py
 ───────────────────────────────────────────────────────────────────────────────
 iOS-фикс для Telemt: MSS-clamp + redirect на отдельный порт.
 

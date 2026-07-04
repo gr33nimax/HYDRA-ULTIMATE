@@ -61,6 +61,32 @@ def run_daemon() -> None:
             pass
         return port_to_user
 
+    def _get_trusttunnel_users() -> dict[str, str]:
+        import subprocess
+        import re
+        id_to_user = {}
+        try:
+            r = subprocess.run(
+                ["journalctl", "-u", "sing-box", "-n", "1000", "--no-pager"],
+                capture_output=True, text=True, timeout=3
+            )
+            if r.returncode == 0:
+                for line in r.stdout.splitlines():
+                    if "inbound/trusttunnel" not in line:
+                        continue
+                    
+                    match_id = re.search(r"INFO\s+\[(\d+)\s+[^\]]+\]", line)
+                    if not match_id:
+                        continue
+                    conn_id = match_id.group(1)
+                    
+                    match_user = re.search(r"inbound/trusttunnel\[[^\]]+\]:\s+\[([^\]]+)\]\s+inbound connection", line)
+                    if match_user:
+                        id_to_user[conn_id] = match_user.group(1)
+        except Exception:
+            pass
+        return id_to_user
+
     _log("Traffic daemon started")
 
     active_connections: dict[str, dict] = {} # id -> {user, total}
@@ -95,7 +121,8 @@ def run_daemon() -> None:
 
             connections = data.get("connections", [])
             anytls_ports = _get_anytls_ports()
-            _log(f"DEBUG: anytls_ports count = {len(anytls_ports)}, first 5 items = {dict(list(anytls_ports.items())[:5])}")
+            trusttunnel_users = _get_trusttunnel_users()
+            _log(f"DEBUG: anytls_ports count = {len(anytls_ports)}, trusttunnel_users count = {len(trusttunnel_users)}")
 
             if connections:
                 _log(f"Raw first connection: {json.dumps(connections[0])}")
@@ -108,6 +135,8 @@ def run_daemon() -> None:
                     sport = str(meta.get("sourcePort", ""))
                     if not user and "anytls" in tag:
                         user = anytls_ports.get(sport)
+                    if not user and "trusttunnel" in tag:
+                        user = trusttunnel_users.get(cid)
                     up = c.get("upload", 0)
                     down = c.get("download", 0)
                     summary.append(f"ID={cid}, User={user}, Tag={tag}, Rx={down}, Tx={up}")
@@ -143,6 +172,9 @@ def run_daemon() -> None:
                     sport = str(metadata.get("sourcePort", ""))
                     if sport in anytls_ports:
                         email = anytls_ports[sport]
+
+                if not email and protocol == "trusttunnel":
+                    email = trusttunnel_users.get(conn_id)
 
                 if not email:
                     continue
