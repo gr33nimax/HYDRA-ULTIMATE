@@ -162,6 +162,19 @@ def run_streaming_cmd(title_text: str, cmd: str):
     success("Тест завершен.")
 
 
+def run_direct_cmd(title_text: str, cmd: str):
+    """Очищает экран, выводит заголовок HYDRA и запускает команду напрямую (для поддержки интерактивных TUI-меню)."""
+    clear()
+    print(f"\n  {CYAN}╔{'═' * 76}╗{NC}")
+    print(f"  {CYAN}║{NC} {BOLD}{title_text:<74}{NC} {CYAN}║{NC}")
+    print(f"  {CYAN}╚{'═' * 76}╝{NC}\n")
+    
+    try:
+        subprocess.run(cmd, shell=True, executable="/bin/bash")
+    except KeyboardInterrupt:
+        print(f"\n  {RED}[!] Выполнение прервано.{NC}")
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  Реализация диагностических тестов
 # ═════════════════════════════════════════════════════════════════════════════
@@ -421,25 +434,17 @@ def test_iperf3_ru():
 
 
 def test_ip_quality(interactive: bool = False):
-    """Тест 5 и 7. Проверка IP на блокировки и IPQuality (Check.Place) с нативным TUI-стримингом"""
-    clear()
-    test_title = "IPQuality (Check.Place -EI)" if interactive else "Блокировки зарубежными сервисами (IP.Check.Place)"
-    title(f"Тестирование: {test_title}")
-    print()
-    
+    """Тест 5 и 7. Проверка IP на блокировки и IPQuality (Check.Place) с нативным TUI"""
     if not ensure_packages(["curl"]):
         return
         
     cmd_args = "-E"
     if interactive:
-        # Для IPQuality добавляем флаг -EI
         cmd_args = "-EI"
         
-    try:
-        run_streaming_cmd(test_title, f"bash <(curl -Ls https://Check.Place) {cmd_args}")
-    except KeyboardInterrupt:
-        pass
-        
+    test_title = "IPQuality (Check.Place -EI)" if interactive else "Блокировки зарубежными сервисами (IP.Check.Place)"
+    run_direct_cmd(test_title, f"bash <(curl -Ls https://Check.Place) {cmd_args}")
+    print()
     prompt("Нажмите Enter для возврата...")
 
 
@@ -534,11 +539,8 @@ def menu_diagnostics(state: AppState):
         elif choice == "5":
             test_ip_quality(interactive=False)
         elif choice == "6":
-            try:
-                # Bench.sh запускаем стримингом
-                run_streaming_cmd("Bench.sh Benchmark", "wget -qO- bench.sh | bash")
-            except KeyboardInterrupt:
-                pass
+            run_direct_cmd("Bench.sh Benchmark", "wget -qO- bench.sh | bash")
+            print()
             prompt("Нажмите Enter...")
         elif choice == "7":
             test_ip_quality(interactive=True)
