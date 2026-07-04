@@ -249,8 +249,8 @@ def test_ip_region():
 def test_censorcheck(mode: str):
     """Тест 2 и 3. Censorcheck (geoblock или dpi) с нативным TUI"""
     clear()
-    mode_title = "геоблоков" if mode == "geoblock" else "DPI"
-    title(f"Тестирование: Censorcheck ({mode_title})")
+    mode_title = "Гео-блокировки" if mode == "geoblock" else "DPI РФ"
+    title(f"Тестирование: {mode_title}")
     print()
     
     if not ensure_packages(["wget", "curl", "jq", "dig"]):
@@ -258,7 +258,7 @@ def test_censorcheck(mode: str):
         
     try:
         stdout = run_with_spinner(
-            f"Проверка {mode_title}",
+            "Анализ доступности ресурсов",
             f"bash <(wget -qO- https://github.com/vernette/censorcheck/raw/master/censorcheck.sh) --mode {mode} -j"
         )
         data = json.loads(stdout)
@@ -302,7 +302,7 @@ def test_censorcheck(mode: str):
             s_res = get_status_str(https_v4)
             lines.append(kv(f"{domain}:", f"HTTP: {h_res:<25} │ HTTPS: {s_res}"))
             
-        panel(f"🛡️  Результаты Censorcheck ({mode.upper()})", lines)
+        panel(f"🛡️  Результаты проверки: {mode_title}", lines)
         
     except KeyboardInterrupt:
         pass
@@ -622,12 +622,12 @@ def menu_diagnostics(state: AppState):
         ])
         
         choice = menu([
-            ("1", "🌍 Геолокация и провайдер (GeoIP)", "Анализ региона IP, провайдера и автономной системы (ASN)"),
-            ("2", "🛡️ Гео-блокировки ресурсов (Censorcheck)", "Проверка доступности популярных сайтов и сервисов из РФ/Мира"),
-            ("3", "🛡️ Блокировки DPI в РФ (Censorcheck DPI)", "Анализ обхода DPI и фильтрации трафика российскими провайдерами"),
-            ("4", "⚡ Тест скорости до РФ (iPerf3)", "Нативный замер пропускной способности (Download/Upload) до узлов РФ"),
-            ("5", "🌐 Тест скорости: Мир (Global Download)", "Замер скорости скачивания и задержки (Ping) до глобальных дата-центров"),
-            ("6", "💻 Производительность CPU (Sysbench)", "Тест вычислительной мощности процессора VPS в один поток"),
+            ("1", "🌍 Геолокация и провайдер (GeoIP)", "Определение страны, города, провайдера и ASN"),
+            ("2", "🛡️ Доступность ресурсов (Censorcheck)", "Проверка блокировок популярных зарубежных сайтов"),
+            ("3", "🛡️ Обход DPI-фильтров (Censorcheck DPI)", "Тест прохождения трафика через цензуру провайдеров РФ"),
+            ("4", "⚡ Тест скорости до РФ (iPerf3)", "Замер пропускной способности (Download/Upload) до узлов РФ"),
+            ("5", "🌐 Тест скорости: Мир (Global)", "Тест скорости загрузки и Ping до мировых серверов"),
+            ("6", "💻 Производительность CPU (Sysbench)", "Оценка вычислительной мощности процессора VPS в один поток"),
             ("0", "↩ Возврат в главное меню", "")
         ], "ВЫБОР ДИАГНОСТИЧЕСКОГО ТЕСТА")
         
