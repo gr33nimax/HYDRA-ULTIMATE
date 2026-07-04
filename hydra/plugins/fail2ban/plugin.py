@@ -46,6 +46,7 @@ class Fail2banPlugin(BasePlugin):
             (JAIL_DIR / "sshd.local").unlink(missing_ok=True)
             for f in JAIL_DIR.glob("hydra-*.local"):
                 f.unlink(missing_ok=True)
+        Path("/etc/fail2ban/filter.d/sing-box.conf").unlink(missing_ok=True)
         return True
 
     def _write_jails(self) -> None:
@@ -58,11 +59,27 @@ class Fail2banPlugin(BasePlugin):
         except Exception:
             pass
 
+        # Создаем фильтр для sing-box, если его нет
+        try:
+            filter_dir = Path("/etc/fail2ban/filter.d")
+            filter_dir.mkdir(parents=True, exist_ok=True)
+            filter_path = filter_dir / "sing-box.conf"
+            filter_content = """[Definition]
+failregex = (?:WARNING|ERROR).*inbound/.*(?:handshake failed|decryption failed|authentication failed|connection failed|rejected|invalid).*from \\[?(?:::ffff:)?<HOST>\\]?:\\d+
+            inbound/.*(?:handshake failed|decryption failed|authentication failed|connection failed|rejected|invalid).*from \\[?(?:::ffff:)?<HOST>\\]?:\\d+
+            inbound/.*from \\[?(?:::ffff:)?<HOST>\\]?:\\d+.*(?:handshake failed|decryption failed|authentication failed|connection failed|rejected|invalid)
+ignoreregex =
+"""
+            filter_path.write_text(filter_content, encoding="utf-8")
+        except Exception:
+            pass
+
         jails = {
             "hydra-singbox": {
                 "enabled": "true",
                 "filter": "sing-box",
-                "logpath": "/var/log/sing-box/error.log",
+                "backend": "systemd",
+                "journalmatch": "_SYSTEMD_UNIT=sing-box.service",
                 "maxretry": "5",
                 "bantime": "3600",
                 "findtime": "600",
