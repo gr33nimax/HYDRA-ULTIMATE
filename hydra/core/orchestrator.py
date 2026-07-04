@@ -216,6 +216,11 @@ def remove_user(state: AppState, email: str) -> None:
     save_state(state)
     apply_config(state)
 
+    # Перезапуск сервера подписок, если он активен
+    from hydra.core.systemd import is_active as is_svc_active, restart as restart_svc
+    if is_svc_active("hydra-sub"):
+        restart_svc("hydra-sub")
+
 
 def block_user(state: AppState, email: str) -> None:
     u = find_user(state, email)
