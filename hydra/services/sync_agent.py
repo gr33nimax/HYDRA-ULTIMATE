@@ -22,8 +22,10 @@ def run_sync() -> None:
       1. Проверить лимиты трафика -> заблокировать превысивших
       2. Проверить TTL (срок действия) -> заблокировать истёкших
       3. Уведомить плагины о блокировке
+      4. Применить измененный конфиг к службам
     """
     state = load_state()
+    any_blocked = False
 
     # 1. Проверка лимитов трафика
     exceeded = check_traffic_limits(state)
@@ -31,6 +33,7 @@ def run_sync() -> None:
         for user in state.users:
             if user.email == email and not user.blocked:
                 user.blocked = True
+                any_blocked = True
                 _log(f"User {email} blocked: traffic limit exceeded")
                 for p in get_enabled(state):
                     try:
@@ -46,9 +49,15 @@ def run_sync() -> None:
         if not user.expiry_date:
             continue
         try:
-            expiry = datetime.fromisoformat(user.expiry_date)
+            dt_str = user.expiry_date
+            if dt_str.endswith("Z"):
+                dt_str = dt_str[:-1] + "+00:00"
+            expiry = datetime.fromisoformat(dt_str)
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
             if expiry < now:
                 user.blocked = True
+                any_blocked = True
                 _log(f"User {user.email} blocked: subscription expired")
                 for p in get_enabled(state):
                     try:
@@ -57,6 +66,12 @@ def run_sync() -> None:
                         pass
         except (ValueError, TypeError):
             pass
+
+    if any_blocked:
+        from hydra.core.orchestrator import apply_config
+        save_state(state)
+        apply_config(state)
+        _log("Applied server config due to new user block(s)")
 
     # 3. WARP: автообновление внешних списков (раз в 24 часа)
     try:
