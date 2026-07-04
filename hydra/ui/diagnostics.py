@@ -81,10 +81,10 @@ def run_with_spinner(title_text: str, cmd: str) -> str:
 
 
 def run_streaming_cmd(title_text: str, cmd: str):
-    """Стримит вывод команды в реальном времени с отступом для TUI HYDRA."""
-    print(f"\n  {CYAN}╔══════════════════════════════════════════════════════════════════════════════╗{NC}")
-    print(f"  {CYAN}║{NC} {BOLD}{title_text:<76}{NC} {CYAN}║{NC}")
-    print(f"  {CYAN}╚══════════════════════════════════════════════════════════════════════════════╝{NC}\n")
+    """Стримит вывод команды в реальном времени, фильтруя шум и оборачивая вывод в рамки HYDRA."""
+    print(f"\n  {CYAN}╔{'═' * 76}╗{NC}")
+    print(f"  {CYAN}║{NC} {BOLD}{title_text:<74}{NC} {CYAN}║{NC}")
+    print(f"  {CYAN}╠{'═' * 76}╣{NC}")
     
     process = subprocess.Popen(
         cmd,
@@ -96,18 +96,68 @@ def run_streaming_cmd(title_text: str, cmd: str):
         bufsize=1
     )
     
+    # Шумовые строки, которые лучше скрыть для чистоты интерфейса
+    skip_patterns = [
+        r"Performing IPv\d iperf3",
+        r"Preparing system for disk tests",
+        r"Generating fio test file",
+        r"Running fio random mixed",
+        r"yet-another-bench-script",
+        r"masonr/yet-another-bench-script",
+        r"# ## ## ## ## ## ## ##",
+        r"wget -qO- bench.sh",
+        r"Speedtest by Ookla"
+    ]
+    
     try:
-        # Стримим построчно
         for line in process.stdout:
-            sys.stdout.write(f"  {line}")
+            cleaned = line.strip()
+            if not cleaned:
+                # Рисуем пустую строку внутри рамки
+                sys.stdout.write(f"  {CYAN}║{NC}{' ' * 76}{CYAN}║{NC}\n")
+                sys.stdout.flush()
+                continue
+                
+            # Пропускаем шум
+            should_skip = False
+            for pat in skip_patterns:
+                if re.search(pat, cleaned):
+                    should_skip = True
+                    break
+            if should_skip:
+                continue
+                
+            # Заменяем разделители на ровную линию рамки
+            if all(c in "- ─" for c in cleaned) and len(cleaned) > 10:
+                sys.stdout.write(f"  {CYAN}║{NC}{DIM}{'─' * 76}{NC}{CYAN}║{NC}\n")
+                sys.stdout.flush()
+                continue
+                
+            # Убираем перевод строки, заменяем табы на пробелы
+            line_val = line.rstrip("\r\n").replace("\t", "    ")
+            
+            # Считаем видимую ширину без учета ANSI-последовательностей
+            plain = re.sub(r"\033\[[0-9;]*m", "", line_val)
+            visible_w = len(plain)
+            
+            if visible_w > 76:
+                padded_line = line_val[:76]
+            else:
+                padded_line = line_val + " " * (76 - visible_w)
+                
+            sys.stdout.write(f"  {CYAN}║{NC}{padded_line}{CYAN}║{NC}\n")
             sys.stdout.flush()
+            
     except KeyboardInterrupt:
         process.terminate()
         process.wait()
-        print(f"\n  {RED}[!] Выполнение прервано пользователем.{NC}")
+        sys.stdout.write("\r" + " " * 80 + "\r")
+        print(f"  {CYAN}╚{'═' * 76}╝{NC}")
+        print(f"\n  {RED}[!] Выполнение прервано.{NC}")
         raise KeyboardInterrupt
         
     process.wait()
+    print(f"  {CYAN}╚{'═' * 76}╝{NC}")
     print()
     success("Тест завершен.")
 
