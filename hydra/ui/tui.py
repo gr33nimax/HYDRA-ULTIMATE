@@ -60,6 +60,9 @@ def _char_width(char: str) -> int:
         0x25b6,  # ▶
     }:
         return 2
+    # Special case: 🛡 (shield) emoji is rendered as 1 cell wide in standard monospace fonts/terminals
+    if code == 0x1f6e1:
+        return 1
     # Emojis > 0xffff are always 2 cells wide
     if code > 0xffff:
         return 2

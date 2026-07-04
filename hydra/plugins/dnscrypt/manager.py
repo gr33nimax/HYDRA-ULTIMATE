@@ -265,7 +265,7 @@ def _measure_all_latency(resolvers: list[str]) -> list[tuple[str, float]]:
 
 def do_dnscrypt_selector(state: AppState, plugin) -> None:
     clear()
-    panel("ВЫБОР DNSCRYPT-РЕЗОЛВЕРОВ", [
+    panel("🔍 ВЫБОР DNSCRYPT-РЕЗОЛВЕРОВ", [
         "Замеряет latency до всех доступных резолверов с этого сервера",
         "и показывает топ-100 по скорости. Выберите 2–3 резолвера —",
         "они будут прописаны в server_names и применены немедленно.",
@@ -342,7 +342,7 @@ def do_dnscrypt_selector(state: AppState, plugin) -> None:
         status_lines.append("  Ввод номера через запятую (например: 1,3,7)")
         status_lines.append("  Ввод: [n] - след. страница, [p] - пред. страница, [0] - отмена")
 
-        panel("ВЫБОР DNSCRYPT-РЕЗОЛВЕРОВ", status_lines)
+        panel("🔍 ВЫБОР DNSCRYPT-РЕЗОЛВЕРОВ", status_lines)
 
         raw = prompt("Выбор").strip()
         if not raw:
@@ -402,7 +402,7 @@ def do_dnscrypt_selector(state: AppState, plugin) -> None:
             confirm_lines.append("")
             confirm_lines.append(f"  {YELLOW}⚠ Рекомендуется выбрать минимум 2 для отказоустойчивости.{NC}")
 
-        panel("ПОДТВЕРЖДЕНИЕ ВЫБОРА", confirm_lines)
+        panel("✅ ПОДТВЕРЖДЕНИЕ ВЫБОРА", confirm_lines)
 
         if confirm("Применить эти резолверы?"):
             info("Сохраняю server_names...")
@@ -461,7 +461,7 @@ def menu_dnscrypt(state: AppState, plugin) -> None:
             else:
                 status_lines.append(f"  Резолверы:   {YELLOW}используется весь пул{NC}")
 
-        panel("DNSCRYPT-PROXY CONTROL", status_lines)
+        panel("🛡️ DNSCRYPT-PROXY CONTROL", status_lines)
 
         options = []
         if not st.installed:
