@@ -32,7 +32,7 @@ SERVICE_FILE = Path("/etc/systemd/system/telemt.service")
 SERVICE_NAME = "telemt"
 LOG_FILE = Path("/var/log/telemt_install.log")
 
-DEFAULT_PORT = 8443
+DEFAULT_PORT = 8445
 GITHUB_REPO = "telemt/telemt"
 
 
