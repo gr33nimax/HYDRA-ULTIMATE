@@ -276,31 +276,51 @@ def test_iperf3_ru():
         cmd = ["iperf3", "-c", host, "-p", str(port), "-t", "4", "-P", "4", "-J"]
         if reverse:
             cmd.append("-R")
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        if r.returncode != 0:
-            return 0.0
         try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=6)
+            if r.returncode != 0:
+                return 0.0
             res_data = json.loads(r.stdout)
             sent = res_data.get("end", {}).get("sum_sent", {}).get("bits_per_second", 0)
             recv = res_data.get("end", {}).get("sum_received", {}).get("bits_per_second", 0)
             return max(sent, recv) / 1_000_000 # В Mbps
-        except Exception:
+        except (subprocess.TimeoutExpired, Exception):
             return 0.0
             
     def get_ping(host):
-        r = subprocess.run(["ping", "-c", "3", "-W", "2", host], capture_output=True, text=True)
-        match = re.search(r"rtt min/avg/max/mdev = [\d\.]+/(?P<avg>[\d\.]+)/[\d\.]+/[\d\.]+", r.stdout)
-        if match:
-            return f"{float(match.group('avg')):.1f} ms"
+        try:
+            r = subprocess.run(["ping", "-c", "3", "-W", "2", host], capture_output=True, text=True, timeout=4)
+            match = re.search(r"rtt min/avg/max/mdev = [\d\.]+/(?P<avg>[\d\.]+)/[\d\.]+/[\d\.]+", r.stdout)
+            if match:
+                return f"{float(match.group('avg')):.1f} ms"
+        except Exception:
+            pass
         return "N/A"
 
-    print(f"  {BOLD}{'Сервер':<18} │ {'Скачивание':<14} │ {'Выгрузка':<14} │ {'Пинг':<10}{NC}")
-    print(f"  {DIM}{'─' * 65}{NC}")
+    def print_row(city, down_tuple, up_tuple, ping_tuple, end_char="\n"):
+        val_down, col_down = down_tuple
+        val_up, col_up = up_tuple
+        val_ping, col_ping = ping_tuple
+        
+        p_down = f"{val_down:<16}"
+        p_up = f"{val_up:<16}"
+        p_ping = f"{val_ping:<12}"
+        
+        c_down = f"{col_down}{p_down}{NC}"
+        c_up = f"{col_up}{p_up}{NC}"
+        c_ping = f"{col_ping}{p_ping}{NC}"
+        
+        line = f"  {city:<20} │ {c_down} │ {c_up} │ {c_ping} "
+        sys.stdout.write(f"  {CYAN}║{NC}{line}{CYAN}║{NC}{end_char}")
+        sys.stdout.flush()
+
+    print(f"  {CYAN}╔{'═' * 76}╗{NC}")
+    print_row("Сервер", ("Скачивание", BOLD), ("Выгрузка", BOLD), ("Пинг", BOLD))
+    print(f"  {CYAN}╠{'═' * 76}╣{NC}")
     
     try:
         for city, cfg in SERVERS.items():
-            sys.stdout.write(f"  {city:<18} │ {YELLOW}Подключение...{NC}\r")
-            sys.stdout.flush()
+            print_row(city, ("Подключение...", YELLOW), ("", ""), ("—", ""), end_char="\r")
             
             def try_host(host):
                 target_port = None
@@ -313,18 +333,14 @@ def test_iperf3_ru():
                     
                 ping_val = get_ping(host)
                 
-                # Тест скачивания
-                sys.stdout.write(f"  {city:<18} │ {CYAN}{'Тест Down...':<14}{NC} │ {'':<14} │ {ping_val:<10}\r")
-                sys.stdout.flush()
+                print_row(city, ("Скачивание...", CYAN), ("", ""), (ping_val, ""), end_char="\r")
                 down_speed = run_speed(host, target_port, reverse=True)
                 
                 # Если тест скачивания выдал 0.0 (занят или ошибка), пробуем резервный
                 if down_speed == 0.0:
                     return None
                     
-                # Тест выгрузки
-                sys.stdout.write(f"  {city:<18} │ {GREEN}{f'{down_speed:.1f} Mbps':<14}{NC} │ {CYAN}{'Тест Up...':<14}{NC} │ {ping_val:<10}\r")
-                sys.stdout.flush()
+                print_row(city, (f"{down_speed:.1f} Mbps", GREEN), ("Выгрузка...", CYAN), (ping_val, ""), end_char="\r")
                 up_speed = run_speed(host, target_port, reverse=False)
                 
                 return down_speed, up_speed, ping_val
@@ -334,18 +350,20 @@ def test_iperf3_ru():
             
             # Если не вышло, пробуем резервный
             if res is None:
-                sys.stdout.write(f"  {city:<18} │ {YELLOW}Резервный...  {NC}\r")
-                sys.stdout.flush()
+                print_row(city, ("Резервный...", YELLOW), ("", ""), ("—", ""), end_char="\r")
                 res = try_host(cfg["fallback"])
                 
             if res is not None:
                 down_speed, up_speed, ping_val = res
-                sys.stdout.write(f"  {city:<18} │ {GREEN}{f'{down_speed:.1f} Mbps':<14}{NC} │ {GREEN}{f'{up_speed:.1f} Mbps':<14}{NC} │ {ping_val:<10}\n")
+                print_row(city, (f"{down_speed:.1f} Mbps", GREEN), (f"{up_speed:.1f} Mbps", GREEN), (ping_val, ""), end_char="\n")
             else:
-                sys.stdout.write(f"  {city:<18} │ {RED}{'Недоступен':<14}{NC} │ {RED}{'Недоступен':<14}{NC} │ {RED}{'—':<10}{NC}\n")
-            sys.stdout.flush()
+                print_row(city, ("Недоступен", RED), ("Недоступен", RED), ("—", RED), end_char="\n")
             
+        print(f"  {CYAN}╚{'═' * 76}╝{NC}")
+        
     except KeyboardInterrupt:
+        sys.stdout.write("\r" + " " * 80 + "\r")
+        print(f"  {CYAN}╚{'═' * 76}╝{NC}")
         print(f"\n\n  {RED}[!] Тест скорости прерван.{NC}")
         
     print()
