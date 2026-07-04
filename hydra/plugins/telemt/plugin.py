@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
-from hydra.core.state import AppState, User
+from hydra.core.state import AppState, User, PluginState
 from hydra.utils.crypto import derive_key
 from hydra.utils.downloader import latest_release, verify_elf
 from hydra.utils.net import public_ip
@@ -61,6 +61,9 @@ class TelemtPlugin(BasePlugin):
             print("  Не удалось установить telemt.")
             return False
 
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        WORK_DIR.mkdir(parents=True, exist_ok=True)
+
         self._install_service()
         return self._installed()
 
@@ -84,7 +87,7 @@ class TelemtPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def configure(self, state: AppState) -> ConfigFragment:
-        ps = state.protocols.setdefault("telemt", state.protocols.get("telemt") or __import__("hydra.core.state").core.state.PluginState())
+        ps = state.protocols.setdefault("telemt", state.protocols.get("telemt") or PluginState())
         cfg = ps.config or {}
 
         port = cfg.get("port", DEFAULT_PORT)
@@ -154,7 +157,7 @@ class TelemtPlugin(BasePlugin):
         CONFIG_FILE.chmod(0o640)
 
         # 1. Fallback конфигурация
-        ps = state.protocols.setdefault("telemt", state.protocols.get("telemt") or __import__("hydra.core.state").core.state.PluginState())
+        ps = state.protocols.setdefault("telemt", state.protocols.get("telemt") or PluginState())
         cfg = ps.config or {}
         fallback_cfg_dict = cfg.get("fallback_cfg")
         if fallback_cfg_dict:
@@ -228,7 +231,7 @@ class TelemtPlugin(BasePlugin):
         return json.dumps({"link": link, "protocol": "telemt"})
 
     def client_link(self, user: User, state: AppState) -> str:
-        ps = state.protocols.setdefault("telemt", state.protocols.get("telemt") or __import__("hydra.core.state").core.state.PluginState())
+        ps = state.protocols.setdefault("telemt", state.protocols.get("telemt") or PluginState())
         cfg = ps.config or {}
         port = cfg.get("port", DEFAULT_PORT)
         
@@ -398,6 +401,7 @@ class TelemtPlugin(BasePlugin):
 
     @staticmethod
     def _install_service() -> None:
+        WORK_DIR.mkdir(parents=True, exist_ok=True)
         SERVICE_FILE.write_text(
             "[Unit]\n"
             "Description=Telemt MTProxy Server\n"
