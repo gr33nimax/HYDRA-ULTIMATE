@@ -602,6 +602,12 @@ def syn_limiter_menu() -> None:
             break
 
 
+def disable_syn_limiter() -> None:
+    _remove_rules()
+    _persist_rules()
+    _save_state(SynLimiterConfig(enabled=False))
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  АВТОНОМНЫЙ ЗАПУСК
 # ══════════════════════════════════════════════════════════════════════════════

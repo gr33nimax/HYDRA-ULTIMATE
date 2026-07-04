@@ -563,6 +563,12 @@ def ios_fix_menu() -> None:
             break
 
 
+def disable_ios_fix() -> None:
+    _remove_rules()
+    _persist_rules()
+    _save_state(IosFixConfig(enabled=False))
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  АВТОНОМНЫЙ ЗАПУСК
 # ══════════════════════════════════════════════════════════════════════════════
