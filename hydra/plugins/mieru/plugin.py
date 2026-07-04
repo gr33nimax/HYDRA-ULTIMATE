@@ -138,7 +138,7 @@ class MieruPlugin(BasePlugin):
         """mierus:// ссылка для Karing."""
         import urllib.parse
         username = urllib.parse.quote(self._derive_username(user), safe="")
-        password = urllib.parse.quote(self._derive_password(user.uuid), safe="")
+        password = self._derive_password(user.uuid)
         server_ip = state.network.server_ip or public_ip()
 
         return (
