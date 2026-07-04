@@ -56,8 +56,6 @@ def _char_width(char: str) -> int:
     if code in {
         0x274c,  # ❌
         0x2705,  # ✅
-        0x23f8,  # ⏸
-        0x25b6,  # ▶
     }:
         return 2
     # Special case: 🛡 (shield) emoji is rendered as 1 cell wide in standard monospace fonts/terminals
