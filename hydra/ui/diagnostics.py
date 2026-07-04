@@ -58,7 +58,7 @@ def run_with_spinner(title_text: str, cmd: str) -> str:
         shell=True,
         executable="/bin/bash",
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, # Предотвращает deadlock при переполнении буфера stderr
         text=True,
     )
     
@@ -77,12 +77,12 @@ def run_with_spinner(title_text: str, cmd: str) -> str:
         sys.stdout.flush()
         raise KeyboardInterrupt
 
-    stdout, stderr = process.communicate()
+    stdout, _ = process.communicate()
     sys.stdout.write("\r" + " " * 80 + "\r")  # Очистка строки
     sys.stdout.flush()
     
     if process.returncode != 0:
-        raise Exception(f"Команда завершилась с ошибкой ({process.returncode}): {stderr.strip()}")
+        raise Exception(f"Команда завершилась с ошибкой ({process.returncode})")
         
     return stdout
 
