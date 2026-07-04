@@ -52,6 +52,14 @@ def _char_width(char: str) -> int:
     code = ord(char)
     if code == 0xfe0f:
         return 0
+    # Common 2-cell emojis in standard BMP
+    if code in {
+        0x274c,  # ❌
+        0x2705,  # ✅
+        0x23f8,  # ⏸
+        0x25b6,  # ▶
+    }:
+        return 2
     # Emojis > 0xffff are always 2 cells wide
     if code > 0xffff:
         return 2
