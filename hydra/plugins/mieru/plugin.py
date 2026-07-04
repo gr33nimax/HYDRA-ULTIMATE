@@ -137,8 +137,8 @@ class MieruPlugin(BasePlugin):
     def client_link(self, user: User, state: AppState) -> str:
         """mierus:// ссылка для Karing."""
         import urllib.parse
-        username = urllib.parse.quote(self._derive_username(user))
-        password = urllib.parse.quote(self._derive_password(user.uuid))
+        username = urllib.parse.quote(self._derive_username(user), safe="")
+        password = urllib.parse.quote(self._derive_password(user.uuid), safe="")
         server_ip = state.network.server_ip or public_ip()
 
         return (
