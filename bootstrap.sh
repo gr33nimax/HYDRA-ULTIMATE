@@ -93,7 +93,7 @@ fi
 ok "Python $PY_VER: OK"
 
 # Дополнительные пакеты
-$PKG_INSTALL iptables iproute2 gnupg ca-certificates 2>/dev/null || true
+$PKG_INSTALL iptables iproute2 gnupg ca-certificates ufw 2>/dev/null || true
 
 # ── Sing-Box Extended ──────────────────────────────────────────────────────
 echo -e "\n${BOLD}Sing-Box Extended${NC}"

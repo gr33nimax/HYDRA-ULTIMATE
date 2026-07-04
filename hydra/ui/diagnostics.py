@@ -27,6 +27,7 @@ def ensure_packages(pkgs: list[str]) -> bool:
         "dnsutils": "dig",
         "netcat-openbsd": "nc",
         "netcat": "nc",
+        "bsdmainutils": "column",
     }
     for pkg in pkgs:
         binary = pkg_to_binary.get(pkg, pkg)
@@ -192,7 +193,7 @@ def test_ip_region():
     title("Тестирование: IP region")
     print()
     
-    if not ensure_packages(["wget", "curl", "jq"]):
+    if not ensure_packages(["wget", "curl", "jq", "bsdmainutils", "dnsutils"]):
         return
         
     try:

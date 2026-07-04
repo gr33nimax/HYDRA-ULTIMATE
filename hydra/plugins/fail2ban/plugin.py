@@ -87,7 +87,7 @@ ignoreregex =
             "hydra-sshd": {
                 "enabled": "true",
                 "filter": "sshd",
-                "logpath": "/var/log/auth.log",
+                "backend": "systemd",
                 "maxretry": "5",
                 "bantime": "3600",
                 "findtime": "600",

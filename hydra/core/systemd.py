@@ -58,34 +58,46 @@ def remove_unit(name: str) -> bool:
 
 def is_active(name: str) -> bool:
     """Проверяет, активен ли юнит."""
-    r = subprocess.run(
-        ["systemctl", "is-active", "--quiet", name],
-    )
-    return r.returncode == 0
+    try:
+        r = subprocess.run(
+            ["systemctl", "is-active", "--quiet", name],
+        )
+        return r.returncode == 0
+    except FileNotFoundError:
+        return False
 
 
 def start(name: str) -> bool:
     """Запускает юнит."""
-    r = subprocess.run(
-        ["systemctl", "start", name],
-        capture_output=True,
-    )
-    return r.returncode == 0
+    try:
+        r = subprocess.run(
+            ["systemctl", "start", name],
+            capture_output=True,
+        )
+        return r.returncode == 0
+    except FileNotFoundError:
+        return False
 
 
 def stop(name: str) -> bool:
     """Останавливает юнит."""
-    r = subprocess.run(
-        ["systemctl", "stop", name],
-        capture_output=True,
-    )
-    return r.returncode == 0
+    try:
+        r = subprocess.run(
+            ["systemctl", "stop", name],
+            capture_output=True,
+        )
+        return r.returncode == 0
+    except FileNotFoundError:
+        return False
 
 
 def restart(name: str) -> bool:
     """Перезапускает юнит."""
-    r = subprocess.run(
-        ["systemctl", "restart", name],
-        capture_output=True,
-    )
-    return r.returncode == 0
+    try:
+        r = subprocess.run(
+            ["systemctl", "restart", name],
+            capture_output=True,
+        )
+        return r.returncode == 0
+    except FileNotFoundError:
+        return False
