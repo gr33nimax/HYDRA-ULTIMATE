@@ -93,101 +93,27 @@ def _find_cache_dir() -> str:
 
 
 def _fetch_resolver_list() -> tuple[list[str], bool, str]:
-    def _parse_names(stdout: str) -> list[str]:
-        names = []
-        seen = set()
-        for line in stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            if line.startswith("[") or line.startswith("#"):
-                continue
-            name = line.split()[0]
-            if re.match(r'^\d', name):
-                continue
-            if name not in seen:
-                seen.add(name)
-                names.append(name)
-        return names
-
     debug_info = []
-    tmp_conf = None
     try:
-        content = DNSCRYPT_CONF.read_text(encoding="utf-8")
-        tmp_content = re.sub(
-            r"^server_names\s*=\s*\[.*?\]",
-            "",
-            content,
-            flags=re.MULTILINE | re.DOTALL,
-        )
-        tmp_content = re.sub(
-            r"(listen_addresses\s*=\s*\[')[^']+(')",
-            r"\g<1>127.0.0.1:15353\g<2>",
-            tmp_content,
-        )
-        tmp_content = re.sub(
-            r'(listen_addresses\s*=\s*\[")[^"]+(")',
-            r'\g<1>127.0.0.1:15353\g<2>',
-            tmp_content,
-        )
-        fd, tmp_conf = tempfile.mkstemp(suffix=".toml")
-        with os.fdopen(fd, "w") as f:
-            f.write(tmp_content)
-        debug_info.append(f"Created tmp config: {tmp_conf}")
-    except Exception as e:
-        tmp_conf = None
-        debug_info.append(f"Failed to create tmp config: {e}")
+        # Check CACHE_PATHS presence
+        for cp in [
+            "/etc/dnscrypt-proxy/public-resolvers.md",
+            "/var/cache/dnscrypt-proxy/public-resolvers.md",
+            "/var/lib/dnscrypt-proxy/public-resolvers.md",
+            "/usr/local/etc/dnscrypt-proxy/public-resolvers.md"
+        ]:
+            debug_info.append(f"Cache file {cp}: exists={Path(cp).exists()}")
 
-    conf = tmp_conf if tmp_conf else str(DNSCRYPT_CONF)
-    dnscrypt_bin = get_dnscrypt_bin()
-    cwd_dir = _find_cache_dir()
-    debug_info.append(f"dnscrypt_bin: {dnscrypt_bin} (exists: {dnscrypt_bin.exists()})")
-    debug_info.append(f"conf: {conf} (exists: {Path(conf).exists()})")
-    debug_info.append(f"cwd_dir: {cwd_dir} (exists: {Path(cwd_dir).exists()})")
-
-    # Check CACHE_PATHS presence
-    for cp in [
-        "/etc/dnscrypt-proxy/public-resolvers.md",
-        "/var/cache/dnscrypt-proxy/public-resolvers.md",
-        "/var/lib/dnscrypt-proxy/public-resolvers.md",
-        "/usr/local/etc/dnscrypt-proxy/public-resolvers.md"
-    ]:
-        debug_info.append(f"Cache file {cp}: exists={Path(cp).exists()}")
-
-    try:
-        debug_info.append(f"Running sort command: {str(dnscrypt_bin)} -config {conf} -list -sort rtt")
-        r = subprocess.run(
-            [str(dnscrypt_bin), "-config", conf, "-list", "-sort", "rtt"],
-            capture_output=True, text=True, timeout=60,
-            cwd=cwd_dir
-        )
-        debug_info.append(f"Sort command returncode: {r.returncode}")
-        debug_info.append(f"Sort command stdout (first 200 chars): {r.stdout[:200]}")
-        debug_info.append(f"Sort command stderr (first 200 chars): {r.stderr[:200]}")
-        names = _parse_names(r.stdout)
+        stamp_ips = _parse_resolver_ips_from_md()
+        names = list(stamp_ips.keys())
+        debug_info.append(f"Loaded {len(names)} resolvers directly from public-resolvers.md")
         if names:
-            return names, True, "\n".join(debug_info)
-
-        debug_info.append(f"Running plain list command: {str(dnscrypt_bin)} -config {conf} -list")
-        r = subprocess.run(
-            [str(dnscrypt_bin), "-config", conf, "-list"],
-            capture_output=True, text=True, timeout=30,
-            cwd=cwd_dir
-        )
-        debug_info.append(f"Plain command returncode: {r.returncode}")
-        debug_info.append(f"Plain command stdout (first 200 chars): {r.stdout[:200]}")
-        debug_info.append(f"Plain command stderr (first 200 chars): {r.stderr[:200]}")
-        names = _parse_names(r.stdout)
-        return names, False, "\n".join(debug_info)
+            return names, False, "\n".join(debug_info)
     except Exception as e:
-        debug_info.append(f"Subprocess run exception: {e}")
-        return [], False, "\n".join(debug_info)
-    finally:
-        if tmp_conf:
-            try:
-                os.unlink(tmp_conf)
-            except Exception:
-                pass
+        debug_info.append(f"Error parsing public-resolvers.md: {e}")
+
+    debug_info.append("public-resolvers.md cache is empty or not found")
+    return [], False, "\n".join(debug_info)
 
 
 def _parse_resolver_ips_from_md() -> dict[str, tuple[str, list[int]]]:
