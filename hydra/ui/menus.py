@@ -67,8 +67,9 @@ try:
 except Exception:
     pass
 
-# 2. Определение IP адресов
+# 2. Определение IP адресов и GeoIP флага
 _cached_pub_ip = "Получение..."
+_cached_country_flag = ""
 _network_fetched = False
 
 def _is_private_ip(ip: str) -> bool:
@@ -92,25 +93,47 @@ def _is_private_ip(ip: str) -> bool:
         return True
 
 def _fetch_network_info_bg():
-    global _cached_pub_ip, _network_fetched
+    global _cached_pub_ip, _cached_country_flag, _network_fetched
     try:
         from hydra.utils.net import public_ip
         ip = public_ip()
         _cached_pub_ip = ip
+        
+        # Получаем код страны для флага
+        country_code = ""
+        import subprocess
+        for url in ("https://ipinfo.io/country", "https://ipapi.co/country/"):
+            try:
+                r = subprocess.run(
+                    ["curl", "-s", "--max-time", "3", url],
+                    capture_output=True, text=True, timeout=4
+                )
+                code = r.stdout.strip().upper()
+                if len(code) == 2 and code.isalpha():
+                    country_code = code
+                    break
+            except Exception:
+                continue
+                
+        if country_code:
+            # Конвертируем код страны в региональные индикаторы (флаг)
+            flag = chr(ord(country_code[0]) + 127397) + chr(ord(country_code[1]) + 127397)
+            _cached_country_flag = flag
+            
     except Exception:
         _cached_pub_ip = "127.0.0.1"
     _network_fetched = True
 
-# Инициализируем IP-адреса на этапе импорта модуля
+# Инициализируем IP-адреса и GeoIP в фоне
 try:
     from hydra.utils.net import local_ip
     loc = local_ip()
     if loc and not _is_private_ip(loc):
-        # Локальный IP-адрес уже публичный — используем его сразу и не делаем сетевых curl-запросов!
         _cached_pub_ip = loc
-        _network_fetched = True
+        # Всё равно запускаем фоновый поток для определения GeoIP флага
+        t = threading.Thread(target=_fetch_network_info_bg, daemon=True)
+        t.start()
     else:
-        # Локальный IP приватный (сервер за NAT) — опрашиваем внешнюю сеть в фоне
         t = threading.Thread(target=_fetch_network_info_bg, daemon=True)
         t.start()
 except Exception:
@@ -203,11 +226,12 @@ def _sys_info(state: AppState | None = None) -> list[str]:
         if pub_ip == "Получение..." and state and state.network.server_ip:
             pub_ip = state.network.server_ip
             
+        flag_suffix = f" {_cached_country_flag}" if _cached_country_flag else ""
         # Если публичный и локальный совпадают (нет NAT), выводим один IP для красоты
         if pub_ip == loc:
-            lines.append(kv("IP (Public):", f"{CYAN}{pub_ip}{NC}"))
+            lines.append(kv("IP (Public):", f"{CYAN}{pub_ip}{NC}{flag_suffix}"))
         else:
-            lines.append(kv("IP (Pub/Loc):", f"{CYAN}{pub_ip}{NC} / {DIM}{loc}{NC}"))
+            lines.append(kv("IP (Pub/Loc):", f"{CYAN}{pub_ip}{NC}{flag_suffix} / {DIM}{loc}{NC}"))
             
         dns_display = _cached_dns
         try:
