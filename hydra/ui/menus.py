@@ -209,7 +209,31 @@ def _sys_info(state: AppState | None = None) -> list[str]:
         else:
             lines.append(kv("IP (Pub/Loc):", f"{CYAN}{pub_ip}{NC} / {DIM}{loc}{NC}"))
             
-        lines.append(kv("DNS:", _cached_dns))
+        dns_display = _cached_dns
+        try:
+            import subprocess
+            import re
+            r = subprocess.run(["systemctl", "is-active", "dnscrypt-proxy"], capture_output=True, text=True, timeout=1)
+            if r.stdout.strip() == "active":
+                conf_path = Path("/etc/dnscrypt-proxy/dnscrypt-proxy.toml")
+                if conf_path.exists():
+                    content = conf_path.read_text(encoding="utf-8")
+                    m = re.search(r"^server_names\s*=\s*\[(.*?)\]", content, flags=re.MULTILINE | re.DOTALL)
+                    if m:
+                        names_str = m.group(1)
+                        names = [n.strip("'\" ") for n in names_str.split(",") if n.strip("'\" ")]
+                        if names:
+                            dns_display = f"{GREEN}DNSCrypt ({', '.join(names)}){NC}"
+                        else:
+                            dns_display = f"{GREEN}DNSCrypt (весь пул){NC}"
+                    else:
+                        dns_display = f"{GREEN}DNSCrypt (активен){NC}"
+                else:
+                    dns_display = f"{GREEN}DNSCrypt (активен){NC}"
+        except Exception:
+            pass
+
+        lines.append(kv("DNS:", dns_display))
     except Exception:
         pass
 
