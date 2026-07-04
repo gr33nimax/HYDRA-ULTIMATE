@@ -74,7 +74,7 @@ use_syslog = true
       'https://download.dnscrypt.info/resolvers-list/v3/public-resolvers.md'
   ]
   cache_file = '/var/cache/dnscrypt-proxy/public-resolvers.md'
-  minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1C30Q9S4n9n2WnK8Vq'
+  minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3'
 """
         DNSCRYPT_CONF.parent.mkdir(parents=True, exist_ok=True)
         DNSCRYPT_CONF.write_text(conf)
