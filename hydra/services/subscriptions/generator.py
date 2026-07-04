@@ -442,6 +442,32 @@ def find_any_cert(state: AppState) -> tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+def is_user_valid(user: User, state: AppState) -> bool:
+    """Проверяет лимиты трафика и времени пользователя в реальном времени."""
+    if user.blocked:
+        return False
+        
+    # Проверка даты окончания
+    if user.expiry_date:
+        try:
+            from datetime import datetime, timezone
+            expiry = datetime.fromisoformat(user.expiry_date)
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            if expiry < datetime.now(timezone.utc):
+                return False
+        except Exception:
+            pass
+            
+    # Проверка лимита трафика
+    if user.traffic_limit_gb:
+        limit_bytes = int(user.traffic_limit_gb * 1073741824)
+        if user.traffic_used_bytes >= limit_bytes:
+            return False
+            
+    return True
+
+
 # ── HTTP Server ───────────────────────────────────────────────────────────────
 
 class SubscriptionHandler(BaseHTTPRequestHandler):
@@ -495,12 +521,14 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             
         user = None
         for u in self.state.users:
-            if u.uuid == token and not u.blocked:
-                user = u
+            if u.uuid == token:
+                # Динамически проверяем лимиты и статус
+                if is_user_valid(u, self.state):
+                    user = u
                 break
                 
         if not user:
-            self._send_error(403, "Invalid or expired token")
+            self._send_error(403, "Invalid, expired or blocked token")
             return
             
         content = generate_base64_sub(user, self.state)

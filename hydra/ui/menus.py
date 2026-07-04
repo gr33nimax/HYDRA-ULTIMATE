@@ -836,10 +836,13 @@ def _user_detail_menu(state: AppState, user: User):
         # Панель информации о пользователе
         status_icon = f"{GREEN}🟢{NC}" if not user.blocked else f"{RED}🔴{NC}"
         sub_url = get_subscription_url(user, state)
+        lim_str = f"{user.traffic_limit_gb} GB" if user.traffic_limit_gb else "∞"
+        ttl_str = user.expiry_date[:10] if user.expiry_date else "∞"
         lines = [
             f"  Email:    {status_icon} {user.email}",
             f"  UUID:     {user.uuid}",
-            f"  Трафик:   {_bytes_auto(user.traffic_used_bytes)}",
+            f"  Трафик:   {_bytes_auto(user.traffic_used_bytes)} / {lim_str}",
+            f"  TTL:      {ttl_str}",
             f"  Создан:   {user.created_at[:10] if user.created_at else '—'}",
             f"  Подписка: {CYAN}{sub_url}{NC}",
         ]
@@ -861,7 +864,9 @@ def _user_detail_menu(state: AppState, user: User):
         choice = menu([
             ("1", "📄 Конфиги и ссылки", "Показать конфиги всех протоколов"),
             ("2", f"🔒🔓 {block_label}", "Переключить статус блокировки"),
-            ("3", "❌ Удалить", "Удалить пользователя"),
+            ("3", "📝 Изменить лимит трафика", "Задать квоту трафика в GB"),
+            ("4", "⏳ Изменить срок действия подписки", "Задать дату окончания TTL"),
+            ("5", "❌ Удалить", "Удалить пользователя"),
             ("0", "↩ Назад", ""),
         ], f"ПОЛЬЗОВАТЕЛЬ {user.email}")
         
@@ -870,6 +875,70 @@ def _user_detail_menu(state: AppState, user: User):
         elif choice == "2":
             _toggle_block(state, user)
         elif choice == "3":
+            new_lim = prompt("Введите лимит трафика в GB (0 или пусто для безлимита)", default=str(user.traffic_limit_gb or ""))
+            try:
+                val = float(new_lim) if new_lim.strip() else 0.0
+                user.traffic_limit_gb = val
+                save_state(state)
+                success(f"Лимит трафика для {user.email} установлен в {val or '∞'} GB")
+                
+                # Если пользователь был заблокирован, проверяем возможность авторазблокировки
+                limit_bytes = int(val * 1073741824) if val else 0
+                if user.blocked and (limit_bytes == 0 or user.traffic_used_bytes <= limit_bytes):
+                    is_expired = False
+                    if user.expiry_date:
+                        try:
+                            expiry = datetime.fromisoformat(user.expiry_date)
+                            now = datetime.now(expiry.tzinfo)
+                            if expiry < now:
+                                is_expired = True
+                        except Exception:
+                            pass
+                    if not is_expired:
+                        if confirm(f"Пользователь {user.email} теперь укладывается в лимиты. Разблокировать его?", default=True):
+                            orchestrator.unblock_user(state, user.email)
+                            success("Пользователь разблокирован")
+                prompt("Нажмите Enter")
+            except ValueError:
+                error("Неверный формат числа!")
+                prompt("Нажмите Enter")
+        elif choice == "4":
+            curr_ttl = user.expiry_date[:10] if user.expiry_date else ""
+            new_exp = prompt("Введите срок действия подписки (ГГГГ-ММ-ДД, или пусто для безлимита)", default=curr_ttl)
+            if not new_exp.strip():
+                user.expiry_date = ""
+                save_state(state)
+                success(f"Подписка для {user.email} сделана бессрочной")
+            else:
+                try:
+                    datetime.strptime(new_exp.strip(), "%Y-%m-%d")
+                    user.expiry_date = f"{new_exp.strip()}T23:59:59Z"
+                    save_state(state)
+                    success(f"Срок действия подписки для {user.email} установлен до {new_exp.strip()}")
+                except ValueError:
+                    error("Неверный формат даты! Используйте ГГГГ-ММ-ДД.")
+                    prompt("Нажмите Enter")
+                    continue
+                    
+            # Авторазблокировка при соответствии лимитам
+            if user.blocked:
+                limit_bytes = int(user.traffic_limit_gb * 1073741824) if user.traffic_limit_gb else 0
+                is_traffic_exceeded = limit_bytes > 0 and user.traffic_used_bytes > limit_bytes
+                is_expired = False
+                if user.expiry_date:
+                    try:
+                        expiry = datetime.fromisoformat(user.expiry_date)
+                        now = datetime.now(expiry.tzinfo)
+                        if expiry < now:
+                            is_expired = True
+                    except Exception:
+                        pass
+                if not is_expired and not is_traffic_exceeded:
+                    if confirm(f"Пользователь {user.email} теперь укладывается в лимиты. Разблокировать его?", default=True):
+                        orchestrator.unblock_user(state, user.email)
+                        success("Пользователь разблокирован")
+            prompt("Нажмите Enter")
+        elif choice == "5":
             if confirm(f"Удалить {user.email}?", default=False):
                 orchestrator.remove_user(state, user.email)
                 success(f"Пользователь {user.email} удалён")
