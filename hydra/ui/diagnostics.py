@@ -434,17 +434,110 @@ def test_iperf3_ru():
 
 
 def test_ip_quality(interactive: bool = False):
-    """Тест 5 и 7. Проверка IP на блокировки и IPQuality (Check.Place) с нативным TUI"""
-    if not ensure_packages(["curl"]):
+    """Тест 5 и 7. Проверка IP на блокировки и IPQuality (Check.Place) с парсингом в HYDRA TUI"""
+    clear()
+    test_title = "IPQuality (Check.Place -f)" if interactive else "Блокировки зарубежными сервисами (IP.Check.Place)"
+    title(f"Тестирование: {test_title}")
+    print()
+    
+    if not ensure_packages(["curl", "jq"]):
         return
         
-    cmd_args = "-E"
+    cmd_args = "-j -l en -n"
     if interactive:
-        cmd_args = "-EI"
+        # Для полного теста качества IP используем флаг -f
+        cmd_args = "-j -l en -n -f"
         
-    test_title = "IPQuality (Check.Place -EI)" if interactive else "Блокировки зарубежными сервисами (IP.Check.Place)"
-    run_direct_cmd(test_title, f"bash <(curl -Ls https://Check.Place) {cmd_args}")
-    print()
+    try:
+        stdout = run_with_spinner("Анализ репутации IP", f"bash <(curl -Ls https://IP.Check.Place) {cmd_args}")
+        
+        # Находим JSON в выводе (на случай если curl или bash выдаст предупреждения)
+        start = stdout.find("{")
+        end = stdout.rfind("}")
+        if start != -1 and end != -1:
+            data = json.loads(stdout[start:end+1])
+        else:
+            data = json.loads(stdout)
+            
+        lines = []
+        
+        # 1. Сводная инфа об IP
+        head = data.get("Head", {})
+        info_sec = data.get("Info", {})
+        
+        lines.append(f"  {BOLD}Информация об IP:{NC}")
+        lines.append("────────────────────────────────────────────────────────")
+        lines.append(kv("IP-адрес:", head.get("IP", "N/A")))
+        lines.append(kv("Тип IP:", info_sec.get("Type", "N/A")))
+        lines.append(kv("Организация:", info_sec.get("Organization", "N/A")))
+        
+        region = info_sec.get("Region", {})
+        if region:
+            lines.append(kv("Регион:", f"{region.get('Name', 'N/A')} ({region.get('Code', 'N/A')})"))
+        lines.append(kv("Временная зона:", info_sec.get("TimeZone", "N/A")))
+        
+        # 2. Оценки фрода / Risk Scores
+        score = data.get("Score", {})
+        if score:
+            lines.append("")
+            lines.append(f"  {BOLD}Оценки рисков фрода (Risk Scores):{NC}")
+            lines.append("────────────────────────────────────────────────────────")
+            for db, val in score.items():
+                if val is not None and str(val).lower() != "null":
+                    try:
+                        clean_val = str(val).replace("%", "").strip()
+                        val_num = float(clean_val)
+                        if val_num > 50:
+                            val_str = f"{RED}{val}{NC}"
+                        elif val_num > 20:
+                            val_str = f"{YELLOW}{val}{NC}"
+                        else:
+                            val_str = f"{GREEN}{val}{NC}"
+                    except ValueError:
+                        val_str = f"{GREEN}{val}{NC}" if str(val).lower() in ("0", "clean", "low") else f"{YELLOW}{val}{NC}"
+                    lines.append(kv(f"{db}:", val_str))
+                    
+        # 3. Факторы угроз (Proxy, VPN, Tor)
+        factor = data.get("Factor", {})
+        if factor:
+            lines.append("")
+            lines.append(f"  {BOLD}Угрозы и классификация IP (Threat Factors):{NC}")
+            lines.append("────────────────────────────────────────────────────────")
+            for k, v in factor.items():
+                if v is not None and str(v).lower() != "null":
+                    v_str = str(v).lower()
+                    if v_str in ("yes", "true", "1"):
+                        v_colored = f"{RED}Да (Обнаружено){NC}"
+                    elif v_str in ("no", "false", "0"):
+                        v_colored = f"{GREEN}Нет (Чисто){NC}"
+                    else:
+                        v_colored = f"{YELLOW}{v}{NC}"
+                    lines.append(kv(f"{k}:", v_colored))
+                    
+        # 4. Стриминг и ИИ (Media)
+        media = data.get("Media", {})
+        if media:
+            lines.append("")
+            lines.append(f"  {BOLD}Доступ к медиаресурсам:{NC}")
+            lines.append("────────────────────────────────────────────────────────")
+            for k, v in media.items():
+                if v is not None and str(v).lower() != "null":
+                    v_str = str(v).lower()
+                    if v_str in ("yes", "true", "available", "original"):
+                        v_colored = f"{GREEN}Доступен / Разблокирован{NC}"
+                    elif v_str in ("no", "false", "blocked"):
+                        v_colored = f"{RED}Заблокирован{NC}"
+                    else:
+                        v_colored = f"{YELLOW}{v}{NC}"
+                    lines.append(kv(f"{k}:", v_colored))
+                    
+        panel("🛡️  Репутация и Качество IP", lines)
+        
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        error(f"Не удалось выполнить тест: {e}")
+        
     prompt("Нажмите Enter для возврата...")
 
 
