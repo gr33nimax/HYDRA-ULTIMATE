@@ -22,8 +22,15 @@ from hydra.ui.tui import (
 def ensure_packages(pkgs: list[str]) -> bool:
     """Проверяет наличие бинарников в системе и при необходимости предлагает установить."""
     missing = []
+    # Сопоставляем имя пакета с именем исполняемого бинарного файла
+    pkg_to_binary = {
+        "dnsutils": "dig",
+        "netcat-openbsd": "nc",
+        "netcat": "nc",
+    }
     for pkg in pkgs:
-        if not shutil.which(pkg):
+        binary = pkg_to_binary.get(pkg, pkg)
+        if not shutil.which(binary):
             missing.append(pkg)
             
     if not missing:
@@ -440,7 +447,7 @@ def test_ip_quality(interactive: bool = False):
     title(f"Тестирование: {test_title}")
     print()
     
-    if not ensure_packages(["curl", "jq"]):
+    if not ensure_packages(["curl", "jq", "bc", "netcat-openbsd", "dnsutils"]):
         return
         
     cmd_args = "-j -l en -y"
