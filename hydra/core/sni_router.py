@@ -46,9 +46,8 @@ def needs_mux(state: AppState) -> bool:
         proto = state.protocols.get(name)
         if proto and proto.enabled:
             # Check if domain config is present
-            if name == "naive" and state.network.domain:
-                count += 1
-            elif name == "anytls" and proto.config.get("domain"):
+            domain = state.network.domain if name == "naive" else proto.config.get("domain")
+            if domain:
                 count += 1
     # Если настроен поддомен для подписок, он всегда требует мультиплексирования
     sub_domain = getattr(state.network, "sub_domain", "")

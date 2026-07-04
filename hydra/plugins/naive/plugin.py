@@ -567,6 +567,8 @@ class NaivePlugin(BasePlugin):
         ], capture_output=True, text=True)
 
         success = r.returncode == 0
+        if not success:
+            print(f"  [Ошибка certbot] Вывод:\n{r.stderr or r.stdout or ''}")
 
         if ufw_opened:
             subprocess.run(["ufw", "delete", "allow", "80/tcp"], capture_output=True)
@@ -697,5 +699,5 @@ class NaivePlugin(BasePlugin):
             capture_output=True, text=True,
         )
         if r.returncode != 0:
-            return (r.stderr or r.stdout or "")[:300]
+            return (r.stderr or r.stdout or "")[:4000]
         return None
