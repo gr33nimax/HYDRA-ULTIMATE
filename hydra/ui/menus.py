@@ -385,6 +385,7 @@ def main_menu(state: AppState):
                 ("5", "📊 Мониторинг",          "Трафик, статус, sync-агент, логи"),
                 ("6", "🔒 Безопасность",        f"Fail2ban, Honeypot, IPBan  [{active_s}/{total_s}]"),
                 ("7", "🌐 Сетевые службы",      f"DNSCrypt, WARP (DNS и маршрутизация)  [{active_e}/{total_e}]"),
+                ("8", "🛠️  Тестирование и отладка", "Проверка скорости, геоблоков, YABS, CPU, качества IP"),
                 ("0", "🚪 Выход", ""),
             ],
             "HYDRA MULTI-PROXY MANAGER",
@@ -407,6 +408,9 @@ def main_menu(state: AppState):
             menu_security(state)
         elif choice == "7":
             menu_network_services(state)
+        elif choice == "8":
+            from hydra.ui.diagnostics import menu_diagnostics
+            menu_diagnostics(state)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
