@@ -122,7 +122,11 @@ def _service_has_after() -> bool:
     """Проверяет наличие After=sing-box.service в telemt.service."""
     if not _TELEMT_SERVICE.exists():
         return False
-    return _AFTER_MARKER in _TELEMT_SERVICE.read_text()
+    text = _TELEMT_SERVICE.read_text()
+    for line in text.splitlines():
+        if line.startswith("After=") and "sing-box.service" in line:
+            return True
+    return False
 
 
 def _add_after_to_service() -> bool:
