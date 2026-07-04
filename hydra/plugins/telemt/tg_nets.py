@@ -79,6 +79,8 @@ def _vlen(s: str) -> int:
             width += 2; i += 2; continue
         if cp == 0x200D or (0x300 <= cp <= 0x36F) or (0xFE00 <= cp <= 0xFE0F):
             i += 1; continue
+        if cp in {0x2713, 0x2717, 0x26A0, 0x1F4CA, 0x1F310}:
+            width += 2; i += 1; continue
         eaw = _ud.east_asian_width(ch)
         if eaw in ('W', 'F'):
             width += 2

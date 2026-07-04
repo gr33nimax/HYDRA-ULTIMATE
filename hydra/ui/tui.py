@@ -62,6 +62,11 @@ def _char_width(char: str) -> int:
         0x274c,  # ❌
         0x2705,  # ✅
         0x26a1,  # ⚡
+        0x2713,  # ✓
+        0x2717,  # ✗
+        0x26a0,  # ⚠
+        0x1f4ca, # 📊
+        0x1f310, # 🌐
     }:
         return 2
     # Special cases: emojis that are rendered as 1 cell wide in standard monospace fonts/terminals
