@@ -1,7 +1,7 @@
 """tests/test_wdtt_plugin.py — Тесты для qWDTT plugin v2."""
 import json
 from pathlib import Path
-from unittest.mock import patch, MagicMock, ANY
+from unittest.mock import patch, MagicMock
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -38,14 +38,14 @@ def test_plugin_meta():
     assert p.meta.needs_domain is False
 
 
-def test_configure_returns_fragment_with_port():
+def test_configure_returns_empty_fragment():
     p = WdttPlugin()
     user = _make_user("a@x.com", uuid="uuid-a")
     state = _make_state([user])
     frag = p.configure(state)
 
     assert isinstance(frag, ConfigFragment)
-    assert frag.nft_tproxy_ports == [DEFAULT_DTLS_PORT]
+    assert frag.nft_tproxy_ports == []
     assert frag.inbounds == []
     assert frag.outbounds == []
 
@@ -55,7 +55,7 @@ def test_configure_uses_defaults_without_state():
     state = AppState()
     state.network.server_ip = "1.2.3.4"
     frag = p.configure(state)
-    assert frag.nft_tproxy_ports == [DEFAULT_DTLS_PORT]
+    assert frag.nft_tproxy_ports == []
 
 
 def test_configure_with_custom_ports():
@@ -66,7 +66,7 @@ def test_configure_with_custom_ports():
     assert p._pending_cfg["wg_port"] == 56002
 
 
-def test_configure_generates_passwords_from_users():
+def test_configure_does_not_generate_passwords_from_users():
     p = WdttPlugin()
     users = [
         _make_user("a@x.com", uuid="uuid-a"),
@@ -74,31 +74,12 @@ def test_configure_generates_passwords_from_users():
     ]
     state = _make_state(users)
     p.configure(state)
-    assert len(p._pending_cfg["passwords"]) == 2
-
-
-def test_configure_skips_blocked_users():
-    p = WdttPlugin()
-    users = [
-        _make_user("active@x.com", uuid="uuid-a"),
-        _make_user("blocked@x.com", uuid="uuid-b", blocked=True),
-    ]
-    state = _make_state(users)
-    p.configure(state)
-    assert len(p._pending_cfg["passwords"]) == 1
-
-
-def test_configure_uses_empty_passwords_without_users():
-    p = WdttPlugin()
-    state = _make_state([])
-    p.configure(state)
     assert p._pending_cfg["passwords"] == {}
 
 
 def test_apply_writes_configs_and_restarts():
     p = WdttPlugin()
-    users = [_make_user("a@x.com", uuid="uuid-a")]
-    state = _make_state(users)
+    state = _make_state()
     p.configure(state)
 
     with (
@@ -116,7 +97,7 @@ def test_apply_writes_configs_and_restarts():
     passwords_text = write_calls[0].args[0]
     pw_data = json.loads(passwords_text)
     assert pw_data["main_password"] == SYSTEM_PASSWORD
-    assert len(pw_data["passwords"]) == 1
+    assert pw_data["passwords"] == {}
     assert pw_data["admin_id"] == ""
     assert pw_data["bot_token"] == ""
 
@@ -136,35 +117,34 @@ def test_apply_returns_false_without_pending():
     assert p.apply(_make_state()) is False
 
 
-def test_on_user_add_sets_credentials():
+def test_on_user_add_does_nothing():
     p = WdttPlugin()
     user = _make_user("a@x.com", uuid="uuid-a")
     state = _make_state([user])
 
-    with patch.object(p, "apply", return_value=True):
+    with patch.object(p, "apply", return_value=True) as mock_apply:
         p.on_user_add(user, state)
-
-    assert "wdtt" in user.credentials
-    assert "password" in user.credentials["wdtt"]
-    assert len(user.credentials["wdtt"]["password"]) > 8
+        assert not mock_apply.called
 
 
-def test_on_user_remove_calls_configure_apply():
+def test_on_user_remove_does_nothing():
     p = WdttPlugin()
     state = _make_state([])
     with patch.object(p, "configure") as mock_cfg, \
-         patch.object(p, "apply", return_value=True):
+         patch.object(p, "apply", return_value=True) as mock_apply:
         p.on_user_remove(_make_user("a@x.com"), state)
-        assert mock_cfg.called
+        assert not mock_cfg.called
+        assert not mock_apply.called
 
 
-def test_on_user_block_calls_configure_apply():
+def test_on_user_block_does_nothing():
     p = WdttPlugin()
     state = _make_state([])
     with patch.object(p, "configure") as mock_cfg, \
-         patch.object(p, "apply", return_value=True):
+         patch.object(p, "apply", return_value=True) as mock_apply:
         p.on_user_block(_make_user("a@x.com"), state)
-        assert mock_cfg.called
+        assert not mock_cfg.called
+        assert not mock_apply.called
 
 
 def test_deterministic_password():
@@ -177,36 +157,20 @@ def test_deterministic_password():
     assert p1 != p3
 
 
-def test_client_link_returns_qwdtt_uri():
+def test_client_link_returns_empty():
     p = WdttPlugin()
     state = _make_state()
     user = _make_user("a@x.com", uuid="uuid-a")
     link = p.client_link(user, state)
-
-    assert link.startswith("qwdtt://config?name=")
-    assert "1.2.3.4:56000" in link
-    assert "hashes=VK_HASH" in link
-    assert "pass=" in link
-    assert "workers=16" in link
-    assert "port=9000" in link
+    assert link == ""
 
 
-def test_client_link_with_custom_port():
-    p = WdttPlugin()
-    state = _make_state(dtls_port=56001)
-    user = _make_user("a@x.com", uuid="uuid-a")
-    link = p.client_link(user, state)
-    assert "1.2.3.4:56001" in link
-
-
-def test_generate_client_config_returns_json():
+def test_generate_client_config_returns_empty():
     p = WdttPlugin()
     state = _make_state()
     user = _make_user("a@x.com", uuid="uuid-a")
     cfg = p.generate_client_config(user, state)
-    parsed = json.loads(cfg)
-    assert parsed["protocol"] == "wdtt"
-    assert parsed["link"].startswith("qwdtt://")
+    assert cfg == ""
 
 
 def test_status_returns_plugin_status():

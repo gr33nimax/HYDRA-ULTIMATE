@@ -606,6 +606,10 @@ def menu_plugin(state: AppState, p):
         from hydra.plugins.telemt.manager import menu_telemt
         menu_telemt(state, p)
         return
+    if p.meta.name == "wdtt":
+        from hydra.plugins.wdtt.manager import menu_wdtt
+        menu_wdtt(state, p)
+        return
 
     from hydra.core.state import get_protocol
     

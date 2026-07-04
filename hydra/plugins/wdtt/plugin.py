@@ -1,12 +1,10 @@
 """hydra/plugins/wdtt/plugin.py — qWDTT: WireGuard-over-VK-TURN туннель.
 
 Контракт v2 — TRANSPORT-плагин:
-  • configure() — генерит passwords.json в памяти (per-user из uuid).
-  • apply() — пишет конфиг, перезапускает wdtt-server.
-  • per-user: детерминированный пароль из uuid через derive_key.
-  • client_link — qwdtt:// ссылка с VK-хешем из конфига.
+  • configure() — подготавливает настройки на основе файлов и AppState.
+  • apply() — пишет конфиг, настраивает брандмауэр и NAT, перезапускает wdtt-server.
+  • Независим от пользователей state.json.
   • Сборка бинарника из Go-исходников SpaceNeuroX/proxy-turn-vk-android.
-  • nft_tproxy_ports=[56000] — DTLS-порт для nftables TPROXY.
 """
 from __future__ import annotations
 
@@ -22,9 +20,7 @@ import urllib.request
 from pathlib import Path
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
-from hydra.core.state import AppState, User
-from hydra.utils.crypto import derive_key
-from hydra.utils.net import public_ip
+from hydra.core.state import AppState, User, load_state, get_protocol
 
 BIN_PATH = Path("/usr/local/bin/wdtt-server")
 CONFIG_DIR = Path("/etc/wdtt")
@@ -57,6 +53,40 @@ class WdttPlugin(BasePlugin):
         self._pending_cfg: dict | None = None
 
     # ═════════════════════════════════════════════════════════════════════
+    #  Синхронизация с файловой системой
+    # ═════════════════════════════════════════════════════════════════════
+
+    def sync_fs_to_state(self, state: AppState) -> None:
+        """Синхронизирует конфигурацию и статус из файлов на диске в AppState."""
+        ps = get_protocol(state, self.meta.name)
+        
+        fs_installed = self._installed()
+        if fs_installed and not ps.installed:
+            ps.installed = True
+            
+        if fs_installed:
+            r = subprocess.run(["systemctl", "is-active", SERVICE_NAME], capture_output=True, text=True)
+            is_active = r.stdout.strip() == "active"
+            ps.enabled = is_active
+
+        if CONFIG_FILE.exists():
+            try:
+                cfg_data = json.loads(CONFIG_FILE.read_text())
+                ps.config["dtls_port"] = cfg_data.get("dtls_port", DEFAULT_DTLS_PORT)
+                ps.config["wg_port"] = cfg_data.get("wg_port", DEFAULT_WG_PORT)
+            except Exception:
+                pass
+
+        if PASSWORDS_FILE.exists():
+            try:
+                pw_data = json.loads(PASSWORDS_FILE.read_text())
+                ps.config["main_password"] = pw_data.get("main_password", SYSTEM_PASSWORD)
+                ps.config["admin_id"] = pw_data.get("admin_id", "")
+                ps.config["bot_token"] = pw_data.get("bot_token", "")
+            except Exception:
+                pass
+
+    # ═════════════════════════════════════════════════════════════════════
     #  Установка / удаление
     # ═════════════════════════════════════════════════════════════════════
 
@@ -69,10 +99,24 @@ class WdttPlugin(BasePlugin):
             print("  Не удалось собрать wdtt-server.")
             return False
 
-        self._install_service(DEFAULT_DTLS_PORT, DEFAULT_WG_PORT)
+        # Загружаем настройки для корректного создания сервиса
+        state = load_state()
+        ps = get_protocol(state, self.meta.name)
+        dtls_port = ps.config.get("dtls_port", DEFAULT_DTLS_PORT)
+        wg_port = ps.config.get("wg_port", DEFAULT_WG_PORT)
+        main_password = ps.config.get("main_password", SYSTEM_PASSWORD)
+        admin_id = ps.config.get("admin_id", "")
+        bot_token = ps.config.get("bot_token", "")
+
+        self._install_service(dtls_port, wg_port, main_password, admin_id, bot_token)
         return self._installed()
 
     def uninstall(self) -> bool:
+        # Получаем порт для удаления правил файрвола
+        state = load_state()
+        ps = get_protocol(state, self.meta.name)
+        dtls_port = ps.config.get("dtls_port", DEFAULT_DTLS_PORT)
+
         subprocess.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
         subprocess.run(["systemctl", "disable", SERVICE_NAME], capture_output=True)
         if SERVICE_FILE.exists():
@@ -83,56 +127,56 @@ class WdttPlugin(BasePlugin):
         if BIN_PATH.exists():
             BIN_PATH.unlink()
 
-        i = 0
-        while i < 5:
-            subprocess.run(
-                ["iptables", "-t", "nat", "-D", "POSTROUTING",
-                 "-s", "10.66.66.0/16", "!", "-d", "10.66.66.0/16",
-                 "-j", "MASQUERADE"],
-                capture_output=True,
-            )
-            i += 1
+        self._fw_close_udp(dtls_port)
+        self._remove_masquerade()
+
+        sysctl = Path("/etc/sysctl.d/99-wdtt.conf")
+        if sysctl.exists():
+            sysctl.unlink()
 
         if CONFIG_DIR.exists():
             shutil.rmtree(CONFIG_DIR, ignore_errors=True)
         return True
 
     # ═════════════════════════════════════════════════════════════════════
-    #  configure — чистая: генерит passwords.json в памяти
+    #  configure — чистая: генерит passwords.json на основе файлов
     # ═════════════════════════════════════════════════════════════════════
 
     def configure(self, state: AppState) -> ConfigFragment:
-        ps = state.protocols.get("wdtt")
+        self.sync_fs_to_state(state)
+        
+        ps = get_protocol(state, self.meta.name)
         cfg = ps.config if ps and ps.config else {}
 
         dtls_port = cfg.get("dtls_port", DEFAULT_DTLS_PORT)
         wg_port = cfg.get("wg_port", DEFAULT_WG_PORT)
 
-        passwords = {}
-        for user in state.users:
-            if user.blocked:
-                continue
-            password = self._derive_password(user.uuid)
-            passwords[password] = {
-                "device_ids": [],
-                "max_devices": 5,
-                "expires_at": 0,
-                "down_bytes": 0,
-                "up_bytes": 0,
-                "vk_hash": "",
-                "ports": "",
-                "is_deactivated": False,
-            }
+        existing_data = {}
+        if PASSWORDS_FILE.exists():
+            try:
+                existing_data = json.loads(PASSWORDS_FILE.read_text())
+            except Exception:
+                pass
+
+        main_password = cfg.get("main_password", existing_data.get("main_password", SYSTEM_PASSWORD))
+        admin_id = cfg.get("admin_id", existing_data.get("admin_id", ""))
+        bot_token = cfg.get("bot_token", existing_data.get("bot_token", ""))
+        passwords = existing_data.get("passwords", {})
+        devices = existing_data.get("devices", {})
 
         self._pending_cfg = {
             "dtls_port": dtls_port,
             "wg_port": wg_port,
+            "main_password": main_password,
+            "admin_id": admin_id,
+            "bot_token": bot_token,
             "passwords": passwords,
+            "devices": devices,
         }
 
-        return ConfigFragment(
-            nft_tproxy_ports=[dtls_port],
-        )
+        # Возвращаем пустой фрагмент: wdtt-server работает независимо,
+        # его трафик не должен заворачиваться в sing-box.
+        return ConfigFragment()
 
     def apply(self, state: AppState) -> bool:
         if not self._pending_cfg:
@@ -142,41 +186,36 @@ class WdttPlugin(BasePlugin):
 
         dtls_port = self._pending_cfg["dtls_port"]
         wg_port = self._pending_cfg["wg_port"]
+        main_password = self._pending_cfg["main_password"]
+        admin_id = self._pending_cfg["admin_id"]
+        bot_token = self._pending_cfg["bot_token"]
         passwords = self._pending_cfg["passwords"]
+        devices = self._pending_cfg["devices"]
 
         pw_data = {
-            "main_password": SYSTEM_PASSWORD,
-            "admin_id": "",
-            "bot_token": "",
+            "main_password": main_password,
+            "admin_id": admin_id,
+            "bot_token": bot_token,
             "passwords": passwords,
-            "devices": {},
+            "devices": devices,
         }
-        PASSWORDS_FILE.write_text(json.dumps(pw_data, indent=2))
+        PASSWORDS_FILE.write_text(json.dumps(pw_data, indent=2, ensure_ascii=False))
         PASSWORDS_FILE.chmod(0o600)
 
         cfg = {"dtls_port": dtls_port, "wg_port": wg_port, "wg_subnet": DEFAULT_WG_SUBNET}
         CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
         CONFIG_FILE.chmod(0o600)
 
-        self._install_service(dtls_port, wg_port)
+        self._install_service(dtls_port, wg_port, main_password, admin_id, bot_token)
 
+        # IP Forwarding
         subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], capture_output=True)
         sysctl = Path("/etc/sysctl.d/99-wdtt.conf")
         sysctl.write_text("net.ipv4.ip_forward = 1\n")
 
-        r = subprocess.run(
-            ["iptables", "-t", "nat", "-C", "POSTROUTING",
-             "-s", DEFAULT_WG_SUBNET, "!", "-d", DEFAULT_WG_SUBNET,
-             "-j", "MASQUERADE"],
-            capture_output=True,
-        )
-        if r.returncode != 0:
-            subprocess.run(
-                ["iptables", "-t", "nat", "-A", "POSTROUTING",
-                 "-s", DEFAULT_WG_SUBNET, "!", "-d", DEFAULT_WG_SUBNET,
-                 "-j", "MASQUERADE"],
-                capture_output=True,
-            )
+        # Настройка Firewall (открытие UDP порта) и MASQUERADE
+        self._fw_open_udp(dtls_port)
+        self._add_masquerade()
 
         subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
         subprocess.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
@@ -184,48 +223,27 @@ class WdttPlugin(BasePlugin):
         return True
 
     # ═════════════════════════════════════════════════════════════════════
-    #  Per-user TRANSPORT-методы
+    #  Per-user TRANSPORT-методы (не используются для wdtt)
     # ═════════════════════════════════════════════════════════════════════
 
     def on_user_add(self, user: User, state: AppState) -> None:
-        user.credentials.setdefault("wdtt", {})
-        user.credentials["wdtt"]["password"] = self._derive_password(user.uuid)
-        self.configure(state)
-        self.apply(state)
+        pass
 
     def on_user_remove(self, user: User, state: AppState) -> None:
-        self.configure(state)
-        self.apply(state)
+        pass
 
     def on_user_block(self, user: User, state: AppState) -> None:
-        self.configure(state)
-        self.apply(state)
+        pass
 
     # ═════════════════════════════════════════════════════════════════════
-    #  Клиентский конфиг
+    #  Клиентский конфиг (не используются для wdtt)
     # ═════════════════════════════════════════════════════════════════════
 
     def generate_client_config(self, user: User, state: AppState) -> str:
-        link = self.client_link(user, state)
-        if not link:
-            return ""
-        return json.dumps({"link": link, "protocol": "wdtt"})
+        return ""
 
     def client_link(self, user: User, state: AppState) -> str:
-        ps = state.protocols.get("wdtt")
-        cfg = ps.config if ps and ps.config else {}
-        dtls_port = cfg.get("dtls_port", DEFAULT_DTLS_PORT)
-
-        password = self._derive_password(user.uuid)
-        server_ip = state.network.server_ip or public_ip()
-
-        return (
-            f"qwdtt://config?name=qWDTT-{server_ip}"
-            f"&peer={server_ip}:{dtls_port}"
-            f"&hashes=VK_HASH"
-            f"&workers=16&port={LOCAL_TUN_PORT}"
-            f"&pass={password}"
-        )
+        return ""
 
     # ═════════════════════════════════════════════════════════════════════
     #  Статус / трафик
@@ -256,13 +274,9 @@ class WdttPlugin(BasePlugin):
         )
 
     def traffic(self, state: AppState) -> dict[str, int]:
-        if not self._installed():
-            return {}
         return {}
 
     def connected_clients(self) -> list[dict]:
-        if not self._installed():
-            return []
         return []
 
     # ═════════════════════════════════════════════════════════════════════
@@ -288,14 +302,16 @@ class WdttPlugin(BasePlugin):
 
     @staticmethod
     def _derive_password(uuid: str) -> str:
+        from hydra.utils.crypto import derive_key
         return derive_key("wdtt-pass", uuid)
 
     @staticmethod
     def _installed() -> bool:
-        return BIN_PATH.exists()
+        return BIN_PATH.exists() and SERVICE_FILE.exists()
 
     @staticmethod
-    def _install_service(dtls_port: int = DEFAULT_DTLS_PORT, wg_port: int = DEFAULT_WG_PORT) -> None:
+    def _install_service(dtls_port: int = DEFAULT_DTLS_PORT, wg_port: int = DEFAULT_WG_PORT,
+                         main_password: str = SYSTEM_PASSWORD, admin_id: str = "", bot_token: str = "") -> None:
         SERVICE_FILE.write_text(
             "[Unit]\n"
             "Description=qWDTT — WireGuard over VK TURN\n"
@@ -306,9 +322,12 @@ class WdttPlugin(BasePlugin):
             "Type=simple\n"
             f"ExecStart={BIN_PATH} "
             f"-config-dir {CONFIG_DIR} "
-            f"-password {SYSTEM_PASSWORD} "
+            f"-password {main_password} "
             f"-listen 0.0.0.0:{dtls_port} "
-            f"-wg-port {wg_port}\n"
+            f"-wg-port {wg_port} "
+            + (f"-admin {admin_id} " if admin_id else "")
+            + (f"-bot-token {bot_token} " if bot_token else "")
+            + "\n"
             "Restart=always\n"
             "RestartSec=5\n"
             "NoNewPrivileges=true\n"
@@ -318,6 +337,81 @@ class WdttPlugin(BasePlugin):
         )
         subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
         subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
+
+    # ── Брандмауэр и NAT ────────────────────────────────────────────────
+
+    @staticmethod
+    def _fw_tool() -> str:
+        if shutil.which("ufw"):
+            r = subprocess.run(["ufw", "status"], capture_output=True, text=True)
+            if "Status: active" in r.stdout:
+                return "ufw"
+        return "iptables"
+
+    def _fw_open_udp(self, port: int) -> None:
+        if self._fw_tool() == "ufw":
+            r = subprocess.run(["ufw", "status"], capture_output=True, text=True)
+            if not re.search(rf'^{port}/udp\b.*ALLOW', r.stdout, re.MULTILINE):
+                subprocess.run(["ufw", "allow", f"{port}/udp", "comment", "qWDTT DTLS"], capture_output=True)
+            return
+
+        args = ["-p", "udp", "--dport", str(port), "-j", "ACCEPT"]
+        r = subprocess.run(["iptables", "-t", "filter", "-C", "INPUT"] + args, capture_output=True)
+        if r.returncode != 0:
+            subprocess.run(["iptables", "-t", "filter", "-I", "INPUT", "1"] + args, capture_output=True)
+            self._ipt_persist()
+
+    def _fw_close_udp(self, port: int) -> None:
+        if shutil.which("ufw"):
+            subprocess.run(["ufw", "delete", "allow", f"{port}/udp"], capture_output=True)
+
+        args = ["-p", "udp", "--dport", str(port), "-j", "ACCEPT"]
+        for _ in range(5):
+            r = subprocess.run(["iptables", "-t", "filter", "-C", "INPUT"] + args, capture_output=True)
+            if r.returncode != 0:
+                break
+            subprocess.run(["iptables", "-t", "filter", "-D", "INPUT"] + args, capture_output=True)
+        self._ipt_persist()
+
+    @staticmethod
+    def _masquerade_exists() -> bool:
+        r = subprocess.run(
+            ["iptables", "-t", "nat", "-C", "POSTROUTING",
+             "-s", DEFAULT_WG_SUBNET, "!", "-d", DEFAULT_WG_SUBNET, "-j", "MASQUERADE"],
+            capture_output=True,
+        )
+        return r.returncode == 0
+
+    def _add_masquerade(self) -> None:
+        if not self._masquerade_exists():
+            subprocess.run(
+                ["iptables", "-t", "nat", "-A", "POSTROUTING",
+                 "-s", DEFAULT_WG_SUBNET, "!", "-d", DEFAULT_WG_SUBNET, "-j", "MASQUERADE"],
+                capture_output=True,
+            )
+            self._ipt_persist()
+
+    def _remove_masquerade(self) -> None:
+        for _ in range(3):
+            if not self._masquerade_exists():
+                break
+            subprocess.run(
+                ["iptables", "-t", "nat", "-D", "POSTROUTING",
+                 "-s", DEFAULT_WG_SUBNET, "!", "-d", DEFAULT_WG_SUBNET, "-j", "MASQUERADE"],
+                capture_output=True,
+            )
+        self._ipt_persist()
+
+    @staticmethod
+    def _ipt_persist(self=None) -> None:
+        if shutil.which("netfilter-persistent"):
+            subprocess.run(["netfilter-persistent", "save"], capture_output=True)
+            return
+        rules_dir = Path("/etc/iptables")
+        rules_dir.mkdir(parents=True, exist_ok=True)
+        r = subprocess.run(["iptables-save"], capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout:
+            (rules_dir / "rules.v4").write_text(r.stdout)
 
     # ── Сборка wdtt-server из исходников Go ─────────────────────────────
 
