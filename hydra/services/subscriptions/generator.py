@@ -276,18 +276,25 @@ def clean_link_to_sn(link: str, user: User) -> Optional[str]:
             return serialize_trusttunnel(host, port, username, password, sni, fragment)
             
         # 4. Mieru (NekoBox requires sn://mieru via its plugin)
+        # Ручной парсинг из-за возможного наличия '/' в незакодированном base64-пароле
         elif scheme == "mierus":
-            netloc = parsed.netloc
-            if "@" not in netloc:
-                return None
-            creds, host = netloc.split("@", 1)
-            username, password = urllib.parse.unquote(creds).split(":", 1) if ":" in creds else (urllib.parse.unquote(creds), "")
+            without_frag, _, frag_str = link.partition("#")
+            without_scheme = without_frag[len("mierus://"):]
+            without_query, _, query_str = without_scheme.partition("?")
+            creds, _, host = without_query.rpartition("@")
+            username, _, password = creds.partition(":")
+            
+            username = urllib.parse.unquote(username)
+            password = urllib.parse.unquote(password)
+            
             if ":" in host:
                 host, _ = host.split(":", 1)
-            
-            query = urllib.parse.parse_qs(parsed.query)
+                
+            query = urllib.parse.parse_qs(query_str)
             port = int(query.get("port", [8964])[0])
             protocol = query.get("protocol", ["TCP"])[0]
+            
+            fragment = urllib.parse.unquote(frag_str) if frag_str else user.email
             
             return generate_mieru_nekobox_link(host, port, protocol, username, password, fragment)
             
