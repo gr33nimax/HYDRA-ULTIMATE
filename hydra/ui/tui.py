@@ -63,8 +63,8 @@ def _char_width(char: str) -> int:
         0x2705,  # ✅
     }:
         return 2
-    # Special case: 🛡 (shield) emoji is rendered as 1 cell wide in standard monospace fonts/terminals
-    if code == 0x1f6e1:
+    # Special cases: emojis that are rendered as 1 cell wide in standard monospace fonts/terminals
+    if code in (0x1f6e1, 0x1f6e0):  # 🛡 and 🛠
         return 1
     # Emojis > 0xffff are always 2 cells wide
     if code > 0xffff:
@@ -81,8 +81,16 @@ def _width(s: str) -> int:
     """Возвращает визуальную ширину строки в терминале с учетом эмодзи."""
     plain = _strip(s)
     w = 0
+    flags_count = 0
     for char in plain:
+        code = ord(char)
+        if 0x1f1e6 <= code <= 0x1f1ff:
+            flags_count += 1
         w += _char_width(char)
+    
+    # Каждая пара региональных индикаторов представляет собой один флаг (2 ячейки).
+    # Без корректировки 2 символа давали бы 2 + 2 = 4 ячейки. Вычитаем разницу.
+    w -= (flags_count // 2) * 2
     return w
 
 
