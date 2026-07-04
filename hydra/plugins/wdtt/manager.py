@@ -16,7 +16,7 @@ from typing import Optional
 from hydra.core.state import AppState, save_state, get_protocol
 from hydra.ui.tui import (
     clear, menu, prompt, confirm, panel, info, success, warn, error, kv, _ok,
-    RED, GREEN, YELLOW, CYAN, BLUE, MAGENTA, BOLD, DIM, WHITE, NC, box
+    RED, GREEN, YELLOW, CYAN, BLUE, MAGENTA, BOLD, DIM, WHITE, NC, box, title
 )
 import hydra.core.orchestrator as orchestrator
 from hydra.plugins.wdtt.plugin import (
