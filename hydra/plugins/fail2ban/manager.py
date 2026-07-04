@@ -184,6 +184,12 @@ def _f2b_read_conf(jail_name: str) -> configparser.RawConfigParser:
 
 
 def _f2b_write_conf(jail_name: str, cp: configparser.RawConfigParser) -> bool:
+    if jail_name == "hydra-sshd":
+        if cp.has_section("hydra-sshd"):
+            if cp.has_option("hydra-sshd", "logpath"):
+                cp.remove_option("hydra-sshd", "logpath")
+            cp.set("hydra-sshd", "backend", "systemd")
+
     path = Path(f"/etc/fail2ban/jail.d/{jail_name}.local")
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
