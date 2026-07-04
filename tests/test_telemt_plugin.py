@@ -14,7 +14,7 @@ def _make_state(users: list | None = None, domain: str = "", server_ip: str = "1
     state = AppState()
     state.network.domain = domain
     state.network.server_ip = server_ip
-    state.protocols["telemt"] = PluginState(enabled=True, port=8445, config={})
+    state.protocols["telemt"] = PluginState(enabled=True, port=8443, config={})
     if users:
         state.users = users
     return state
@@ -38,7 +38,7 @@ def test_configure_returns_fragment_with_port():
     frag = p.configure(state)
 
     assert isinstance(frag, ConfigFragment)
-    assert frag.nft_tproxy_ports == [8445]
+    assert frag.nft_tproxy_ports == [8443]
     assert frag.inbounds == []
     assert frag.outbounds == []
 
@@ -48,7 +48,7 @@ def test_configure_returns_fragment_even_without_users():
     p = TelemtPlugin()
     state = _make_state([])
     frag = p.configure(state)
-    assert frag.nft_tproxy_ports == [8445]
+    assert frag.nft_tproxy_ports == [8443]
 
 
 def test_configure_skips_blocked_users():
@@ -59,7 +59,7 @@ def test_configure_skips_blocked_users():
         _make_user("blocked@x.com", uuid="uuid-b", blocked=True),
     ])
     frag = p.configure(state)
-    assert frag.nft_tproxy_ports == [8445]
+    assert frag.nft_tproxy_ports == [8443]
     assert "uuid-b" not in p._pending_cfg
     # в TOML только один пользователь
     user_lines = [l for l in p._pending_cfg.splitlines() if "uuid" in l]
@@ -74,7 +74,7 @@ def test_client_link_valid_uri():
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
     link = p.client_link(_make_user("a@x.com", uuid="uuid-a"), state)
 
-    assert link.startswith("tg://proxy?server=1.2.3.4&port=8445&secret=")
+    assert link.startswith("tg://proxy?server=1.2.3.4&port=8443&secret=")
     assert len(link.split("secret=")[1]) == 32  # 32 hex chars
 
 
@@ -84,7 +84,7 @@ def test_client_link_with_tls_domain():
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")], domain="example.com")
     link = p.client_link(_make_user("a@x.com", uuid="uuid-a"), state)
 
-    assert link.startswith("tg://proxy?server=1.2.3.4&port=8445&secret=ee")
+    assert link.startswith("tg://proxy?server=1.2.3.4&port=8443&secret=ee")
     # ee + 32 hex secret + domain in hex
     expected_domain_hex = "example.com".encode().hex()
     assert link.endswith(expected_domain_hex)
@@ -145,7 +145,7 @@ def test_status_returns_plugin_status():
         mock_run.return_value = MagicMock(stdout="active\n", returncode=0)
         s = p.status()
         assert s.installed is True
-        assert s.port == 8445
+        assert s.port == 8443
 
 
 def test_build_toml_basic():

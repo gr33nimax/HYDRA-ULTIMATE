@@ -87,7 +87,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 import threading
 
-SUBSCRIPTION_PORT = 8443
+SUBSCRIPTION_PORT = 9443
 
 
 class SubscriptionHandler(BaseHTTPRequestHandler):

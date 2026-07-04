@@ -285,7 +285,7 @@ class ClientBot:
         lines = [f"`{link}`" for link in links]
         lines.append(
             f"\nBase64-подписка:\n"
-            f"`https://{state.network.domain}:8443/sub"
+            f"`https://{state.network.domain}:9443/sub"
             f"?token={user.uuid}&format=base64`"
         )
         await update.message.reply_text(
