@@ -923,10 +923,14 @@ def _obtain_cert_for_sub(state: AppState) -> bool:
         subprocess.run(["apt-get", "update"], capture_output=True)
         subprocess.run(["apt-get", "install", "-y", "certbot"], capture_output=True)
         
-    haproxy_running = subprocess.run(["systemctl", "is-active", "haproxy"], capture_output=True, text=True).stdout.strip() == "active"
-    if haproxy_running:
-        info("Временно останавливаем HAProxy для проверки домена...")
-        subprocess.run(["systemctl", "stop", "haproxy"])
+    services_to_stop = ["haproxy", "caddy-naive", "nginx", "apache2"]
+    was_running = []
+    for s in services_to_stop:
+        r = subprocess.run(["systemctl", "is-active", s], capture_output=True, text=True)
+        if r.stdout.strip() == "active":
+            info(f"Временно останавливаем {s} для освобождения порта 80...")
+            subprocess.run(["systemctl", "stop", s])
+            was_running.append(s)
         
     subprocess.run(["ufw", "allow", "80/tcp"], capture_output=True)
     
@@ -937,9 +941,9 @@ def _obtain_cert_for_sub(state: AppState) -> bool:
         "--register-unsafely-without-email"
     ], capture_output=True, text=True)
     
-    if haproxy_running:
-        info("Запускаем HAProxy обратно...")
-        subprocess.run(["systemctl", "start", "haproxy"])
+    for s in reversed(was_running):
+        info(f"Запускаем {s} обратно...")
+        subprocess.run(["systemctl", "start", s])
         
     if r.returncode == 0:
         success("Сертификат успешно получен!")
