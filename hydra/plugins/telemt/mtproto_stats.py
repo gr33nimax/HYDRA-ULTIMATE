@@ -254,11 +254,12 @@ def _get_username_to_email_map() -> dict:
     mapping = {}
     try:
         from hydra.core.state import load_state
+        import hashlib
         state = load_state()
         for u in state.users:
-            username = u.credentials.get("telemt", {}).get("username")
-            if username:
-                mapping[username] = u.email
+            h = hashlib.sha256(f"telemt-username|{u.uuid}".encode()).hexdigest()
+            username = "u" + h[:8]
+            mapping[username] = u.email
     except Exception:
         pass
     return mapping
