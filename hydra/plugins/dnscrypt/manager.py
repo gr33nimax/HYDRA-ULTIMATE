@@ -80,6 +80,36 @@ def _fetch_resolver_list() -> tuple[list[str], bool]:
                 names.append(name)
         return names
 
+def _find_cache_dir() -> str:
+    for p in [
+        "/var/cache/dnscrypt-proxy",
+        "/var/lib/dnscrypt-proxy",
+        "/etc/dnscrypt-proxy",
+        "/usr/local/etc/dnscrypt-proxy"
+    ]:
+        if (Path(p) / "public-resolvers.md").exists():
+            return p
+    return "/etc/dnscrypt-proxy"
+
+
+def _fetch_resolver_list() -> tuple[list[str], bool]:
+    def _parse_names(stdout: str) -> list[str]:
+        names = []
+        seen = set()
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("[") or line.startswith("#"):
+                continue
+            name = line.split()[0]
+            if re.match(r'^\d', name):
+                continue
+            if name not in seen:
+                seen.add(name)
+                names.append(name)
+        return names
+
     tmp_conf = None
     try:
         content = DNSCRYPT_CONF.read_text(encoding="utf-8")
@@ -107,11 +137,13 @@ def _fetch_resolver_list() -> tuple[list[str], bool]:
 
     conf = tmp_conf if tmp_conf else str(DNSCRYPT_CONF)
     dnscrypt_bin = get_dnscrypt_bin()
+    cwd_dir = _find_cache_dir()
 
     try:
         r = subprocess.run(
             [str(dnscrypt_bin), "-config", conf, "-list", "-sort", "rtt"],
             capture_output=True, text=True, timeout=60,
+            cwd=cwd_dir
         )
         names = _parse_names(r.stdout)
         if names:
@@ -120,6 +152,7 @@ def _fetch_resolver_list() -> tuple[list[str], bool]:
         r = subprocess.run(
             [str(dnscrypt_bin), "-config", conf, "-list"],
             capture_output=True, text=True, timeout=30,
+            cwd=cwd_dir
         )
         names = _parse_names(r.stdout)
         return names, False
