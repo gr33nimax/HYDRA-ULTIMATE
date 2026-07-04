@@ -302,41 +302,47 @@ def test_iperf3_ru():
             sys.stdout.write(f"  {city:<18} │ {YELLOW}Подключение...{NC}\r")
             sys.stdout.flush()
             
-            # Ищем порт на основном сервере, если нет — на резервном
-            target_host = cfg["host"]
-            target_port = None
-            for p in ports:
-                if check_port(target_host, p):
-                    target_port = p
-                    break
-            
-            if not target_port:
-                # Пробуем fallback
-                target_host = cfg["fallback"]
+            def try_host(host):
+                target_port = None
                 for p in ports:
-                    if check_port(target_host, p):
+                    if check_port(host, p):
                         target_port = p
                         break
-            
-            if not target_port:
-                sys.stdout.write(f"  {city:<18} │ {RED}{'Недоступен':<14}{NC} │ {RED}{'—':<14}{NC} │ {RED}{'—':<10}{NC}\n")
-                sys.stdout.flush()
-                continue
+                if not target_port:
+                    return None
+                    
+                ping_val = get_ping(host)
                 
-            # Замеряем пинг
-            ping_val = get_ping(target_host)
+                # Тест скачивания
+                sys.stdout.write(f"  {city:<18} │ {CYAN}{'Тест Down...':<14}{NC} │ {'':<14} │ {ping_val:<10}\r")
+                sys.stdout.flush()
+                down_speed = run_speed(host, target_port, reverse=True)
+                
+                # Если тест скачивания выдал 0.0 (занят или ошибка), пробуем резервный
+                if down_speed == 0.0:
+                    return None
+                    
+                # Тест выгрузки
+                sys.stdout.write(f"  {city:<18} │ {GREEN}{f'{down_speed:.1f} Mbps':<14}{NC} │ {CYAN}{'Тест Up...':<14}{NC} │ {ping_val:<10}\r")
+                sys.stdout.flush()
+                up_speed = run_speed(host, target_port, reverse=False)
+                
+                return down_speed, up_speed, ping_val
+
+            # Пробуем основной
+            res = try_host(cfg["host"])
             
-            # Тест скачивания
-            sys.stdout.write(f"  {city:<18} │ {CYAN}{'Тест Down...':<14}{NC} │ {'':<14} │ {ping_val:<10}\r")
-            sys.stdout.flush()
-            down_speed = run_speed(target_host, target_port, reverse=True)
-            
-            # Тест выгрузки
-            sys.stdout.write(f"  {city:<18} │ {GREEN}{down_speed:.1f} Mbps{NC:<14} │ {CYAN}{'Тест Up...':<14}{NC} │ {ping_val:<10}\r")
-            sys.stdout.flush()
-            up_speed = run_speed(target_host, target_port, reverse=False)
-            
-            sys.stdout.write(f"  {city:<18} │ {GREEN}{down_speed:.1f} Mbps{NC:<14} │ {GREEN}{up_speed:.1f} Mbps{NC:<14} │ {ping_val:<10}\n")
+            # Если не вышло, пробуем резервный
+            if res is None:
+                sys.stdout.write(f"  {city:<18} │ {YELLOW}Резервный...  {NC}\r")
+                sys.stdout.flush()
+                res = try_host(cfg["fallback"])
+                
+            if res is not None:
+                down_speed, up_speed, ping_val = res
+                sys.stdout.write(f"  {city:<18} │ {GREEN}{f'{down_speed:.1f} Mbps':<14}{NC} │ {GREEN}{f'{up_speed:.1f} Mbps':<14}{NC} │ {ping_val:<10}\n")
+            else:
+                sys.stdout.write(f"  {city:<18} │ {RED}{'Недоступен':<14}{NC} │ {RED}{'Недоступен':<14}{NC} │ {RED}{'—':<10}{NC}\n")
             sys.stdout.flush()
             
     except KeyboardInterrupt:
