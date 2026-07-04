@@ -68,6 +68,15 @@ fallback_resolvers = ['9.9.9.9:53', '1.1.1.1:53']
 ignore_system_dns = true
 log_level = 2
 use_syslog = true
+
+[sources]
+  [sources.'public-resolvers']
+  urls = [
+      'https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/public-resolvers.md',
+      'https://download.dnscrypt.info/resolvers-list/v3/public-resolvers.md'
+  ]
+  cache_file = '/var/cache/dnscrypt-proxy/public-resolvers.md'
+  minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1C30Q9S4n9n2WnK8Vq'
 """
         DNSCRYPT_CONF.parent.mkdir(parents=True, exist_ok=True)
         DNSCRYPT_CONF.write_text(conf)
