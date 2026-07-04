@@ -237,4 +237,75 @@ Jul 03 19:42:56 sing-box[222339]: +0300 2026-07-03 19:42:56 INFO inbound/trusttu
         assert len(saved_states) >= 1
 
 
+def test_daemon_collects_mieru_traffic_using_journalctl():
+    state = AppState()
+    state.network.clash_api_enabled = True
+    state.network.clash_api_port = 9090
+    state.network.clash_api_secret = "mysecret"
+    
+    user = User(email="tester_mieru@example.com", uuid="u_mieru")
+    state.users = [user]
+    
+    api_response = {
+        "connections": [
+            {
+                "id": "conn-mieru-1",
+                "metadata": {
+                    "destinationIP": "1.1.1.1",
+                    "destinationPort": "443",
+                    "dnsMode": "normal",
+                    "host": "cloudflare.com",
+                    "network": "tcp",
+                    "processPath": "",
+                    "sourceIP": "::ffff:5.180.242.78",
+                    "sourcePort": "6481",
+                    "type": "mieru/mieru-in"
+                },
+                "upload": 200,
+                "download": 800
+            }
+        ]
+    }
+    
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = json.dumps(api_response).encode("utf-8")
+    mock_resp.__enter__.return_value = mock_resp
+    
+    fake_journal = """
+Jul 04 17:13:23 sing-box[222339]: +0300 2026-07-04 17:13:23 INFO [898639574 1ms] inbound/mieru[mieru-in]: inbound TCP connection from [::ffff:5.180.242.78]:6481 to cloudflare.com:443
+Jul 04 17:13:23 sing-box[222339]: +0300 2026-07-04 17:13:23 INFO [898639574 1ms] inbound/mieru[mieru-in]: [tester_mieru@example.com] inbound TCP connection
+"""
+    
+    mock_sub = MagicMock()
+    mock_sub.returncode = 0
+    mock_sub.stdout = fake_journal
+    
+    call_count = 0
+    def mock_sleep(secs):
+        nonlocal call_count
+        call_count += 1
+        if call_count >= 1:
+            raise SystemExit()
+            
+    saved_states = []
+    def mock_save(st):
+        saved_states.append(st)
+        
+    with patch("hydra.services.traffic_daemon.load_state", return_value=state), \
+         patch("hydra.services.traffic_daemon.save_state", side_effect=mock_save), \
+         patch("hydra.services.traffic_daemon.urllib.request.urlopen", return_value=mock_resp), \
+         patch("time.sleep", side_effect=mock_sleep), \
+         patch("subprocess.run", return_value=mock_sub), \
+         patch("hydra.services.traffic_daemon.Path") as mock_path:
+         
+        mock_path.return_value.open.return_value.__enter__.return_value = MagicMock()
+        
+        with pytest.raises(SystemExit):
+            run_daemon()
+            
+        assert user.traffic_used_bytes == 1000
+        assert user.credentials["mieru"]["traffic_used_bytes"] == 1000
+        assert len(saved_states) >= 1
+
+
 

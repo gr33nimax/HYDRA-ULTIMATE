@@ -90,6 +90,55 @@ def run_daemon() -> None:
             pass
         return addr_to_user
 
+    def _get_mieru_users() -> dict[tuple[str, str], str]:
+        import subprocess
+        import re
+        conn_to_addr = {} # conn_id -> (ip, port)
+        conn_to_user = {} # conn_id -> user
+        addr_to_user = {} # (ip, port) -> user
+        try:
+            r = subprocess.run(
+                ["journalctl", "-u", "sing-box", "-n", "1000", "--no-pager"],
+                capture_output=True, text=True, timeout=3
+            )
+            if r.returncode == 0:
+                for line in r.stdout.splitlines():
+                    if "inbound/mieru" not in line:
+                        continue
+                    
+                    # 1. Ищем строку с адресом
+                    m_addr = re.search(
+                        r"INFO\s+\[(\d+)\s+[^\]]+\]\s+inbound/mieru\[[^\]]+\]:\s+inbound\s+(?:TCP|UDP)\s+connection\s+from\s+\[?([a-zA-Z0-9\-\.:]+)\]?:(\d+)",
+                        line
+                    )
+                    if m_addr:
+                        conn_id = m_addr.group(1)
+                        ip = m_addr.group(2).lower()
+                        port = m_addr.group(3)
+                        conn_to_addr[conn_id] = (ip, port)
+                        continue
+                    
+                    # 2. Ищем строку с юзером
+                    m_user = re.search(
+                        r"INFO\s+\[(\d+)\s+[^\]]+\]\s+inbound/mieru\[[^\]]+\]:\s+\[([^\]]+)\]\s+inbound\s+(?:TCP|UDP)\s+connection",
+                        line
+                    )
+                    if m_user:
+                        conn_id = m_user.group(1)
+                        user = m_user.group(2)
+                        conn_to_user[conn_id] = user
+                
+                # Сопоставляем
+                for conn_id, user in conn_to_user.items():
+                    if conn_id in conn_to_addr:
+                        ip, port = conn_to_addr[conn_id]
+                        addr_to_user[(ip, port)] = user
+                        if ip.startswith("::ffff:"):
+                            addr_to_user[(ip[7:], port)] = user
+        except Exception:
+            pass
+        return addr_to_user
+
     _log("Traffic daemon started")
 
     active_connections: dict[str, dict] = {} # id -> {user, total}
@@ -125,7 +174,8 @@ def run_daemon() -> None:
             connections = data.get("connections", [])
             anytls_ports = _get_anytls_ports()
             trusttunnel_users = _get_trusttunnel_users()
-            _log(f"DEBUG: anytls_ports count = {len(anytls_ports)}, trusttunnel_users count = {len(trusttunnel_users)}")
+            mieru_users = _get_mieru_users()
+            _log(f"DEBUG: anytls_ports count = {len(anytls_ports)}, trusttunnel_users count = {len(trusttunnel_users)}, mieru_users count = {len(mieru_users)}")
 
             if connections:
                 _log(f"Raw first connection: {json.dumps(connections[0])}")
@@ -142,6 +192,10 @@ def run_daemon() -> None:
                         host = meta.get("host") or meta.get("destinationIP", "")
                         dport = str(meta.get("destinationPort", ""))
                         user = trusttunnel_users.get((host.lower(), dport))
+                    if not user and "mieru" in tag:
+                        sip = meta.get("sourceIP", "")
+                        sport = str(meta.get("sourcePort", ""))
+                        user = mieru_users.get((sip.lower(), sport))
                     up = c.get("upload", 0)
                     down = c.get("download", 0)
                     summary.append(f"ID={cid}, User={user}, Tag={tag}, Rx={down}, Tx={up}")
@@ -182,6 +236,11 @@ def run_daemon() -> None:
                     host = metadata.get("host") or metadata.get("destinationIP", "")
                     dport = str(metadata.get("destinationPort", ""))
                     email = trusttunnel_users.get((host.lower(), dport))
+
+                if not email and protocol == "mieru":
+                    sip = metadata.get("sourceIP", "")
+                    sport = str(metadata.get("sourcePort", ""))
+                    email = mieru_users.get((sip.lower(), sport))
 
                 if not email:
                     continue
