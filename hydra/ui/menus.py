@@ -34,7 +34,7 @@ from hydra.plugins.base import PluginCategory
 from hydra.core.systemd import install_service, install_timer, remove_unit
 from hydra.core import orchestrator
 from hydra.services.subscriptions.generator import get_subscription_url
-from hydra.services.traffic import collect_traffic
+from hydra.services.traffic import collect_traffic, update_user_traffic
 from hydra.ui.tui import (
     clear, title, info, success, warn, error, menu, prompt, panel, kv,
     confirm, _bytes_auto, _bar, _ok,
@@ -269,6 +269,7 @@ def _select_user(state: AppState, prompt_text: str = "") -> User | None:
         warn("Нет пользователей.")
         return None
 
+    update_user_traffic(state)
     print(f"\n  {CYAN}Пользователи:{NC}\n")
     for i, u in enumerate(state.users, 1):
         ico = f"{RED}🔴{NC}" if u.blocked else f"{GREEN}🟢{NC}"
@@ -292,8 +293,8 @@ def _select_user(state: AppState, prompt_text: str = "") -> User | None:
 def _show_user_detail(state: AppState, user: User):
     """Детальная информация о пользователе + ссылки."""
     clear()
-    traffic = collect_traffic(state)
-    used = traffic.get(user.email, user.traffic_used_bytes)
+    update_user_traffic(state)
+    used = user.traffic_used_bytes
     lim = int(user.traffic_limit_gb * 1073741824) if user.traffic_limit_gb else 0
     ico = f"{RED}🔴{NC}" if user.blocked else f"{GREEN}🟢{NC}"
 
@@ -836,6 +837,7 @@ def _user_detail_menu(state: AppState, user: User):
     """Детальное меню пользователя с конфигами и управлением."""
     while True:
         clear()
+        update_user_traffic(state)
         
         # Панель информации о пользователе
         status_icon = f"{GREEN}🟢{NC}" if not user.blocked else f"{RED}🔴{NC}"
@@ -1254,10 +1256,10 @@ def _show_users(state: AppState):
         return
     title("Список пользователей")
     print()
-    traffic = collect_traffic(state)
+    update_user_traffic(state)
     for u in state.users:
         ico = f"{RED}🔴{NC}" if u.blocked else f"{GREEN}🟢{NC}"
-        used = traffic.get(u.email, u.traffic_used_bytes)
+        used = u.traffic_used_bytes
         print(f"  {ico} {BOLD}{u.email}{NC}")
         print(f"     Трафик: {_bytes_auto(used)}     UUID: {DIM}{u.uuid[:20]}...{NC}")
         print()
@@ -1573,10 +1575,10 @@ def _show_traffic_combined(state: AppState):
         print(f"  {BOLD}Потребление трафика по пользователям:{NC}")
         print()
         
-        traffic = collect_traffic(state)
+        update_user_traffic(state)
         users_sorted = list(state.users)
         if sort_by == "traffic":
-            users_sorted.sort(key=lambda u: traffic.get(u.email, u.traffic_used_bytes), reverse=True)
+            users_sorted.sort(key=lambda u: u.traffic_used_bytes, reverse=True)
         elif sort_by == "name":
             users_sorted.sort(key=lambda u: u.email.lower())
         elif sort_by == "limit":
@@ -1591,7 +1593,7 @@ def _show_traffic_combined(state: AppState):
         print(f"  {BOLD}{'#':<3} {'Пользователь':<25} {'Использовано':<15} {'Лимит':<10} {'Статус':<10} {'Срок':<12}{NC}")
         print(f"  {DIM}{'─' * 77}{NC}")
         for i, u in enumerate(users_sorted, 1):
-            used = traffic.get(u.email, u.traffic_used_bytes)
+            used = u.traffic_used_bytes
             status_str = f"{RED}Блок{NC}" if u.blocked else f"{GREEN}Активен{NC}"
             
             expiry_str = "бессрочно"
