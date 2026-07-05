@@ -134,3 +134,31 @@ def test_internal_ports_unique():
     """Все порты в пуле _INTERNAL_PORTS уникальны."""
     ports = list(_INTERNAL_PORTS.values())
     assert len(ports) == len(set(ports))
+
+
+def test_needs_mux_with_sub_domain():
+    """needs_mux() -> True когда настроен sub_domain, независимо от других плагинов."""
+    s = _state(naive_enabled=False, anytls_enabled=False)
+    s.network.sub_domain = "sub.domain.com"
+    assert needs_mux(s) is True
+
+
+def test_rebuild_runs_haproxy_with_only_sub_domain():
+    """rebuild() запускает haproxy, если активен только домен подписок."""
+    s = _state(naive_enabled=False, anytls_enabled=False)
+    s.network.sub_domain = "sub.domain.com"
+    
+    mock_cfg = MagicMock()
+    mock_cfg_dir = MagicMock()
+    with patch("hydra.core.sni_router.is_installed", return_value=True), \
+         patch("hydra.core.sni_router.HAPROXY_CFG", mock_cfg), \
+         patch("hydra.core.sni_router.HAPROXY_CFG_DIR", mock_cfg_dir), \
+         patch("subprocess.run") as mock_run:
+        
+        mock_run.return_value = MagicMock(returncode=0)
+        assert rebuild(s) is True
+        
+        # Проверяем, что конфиг был записан и haproxy запущен/перезапущен
+        mock_cfg.write_text.assert_called_once()
+        mock_run.assert_any_call(["systemctl", "restart", "haproxy"], capture_output=True)
+

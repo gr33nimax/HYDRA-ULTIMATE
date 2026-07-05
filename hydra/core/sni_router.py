@@ -53,7 +53,8 @@ def needs_mux(state: AppState) -> bool:
     sub_domain = getattr(state.network, "sub_domain", "")
     if sub_domain:
         count += 1
-    return count >= 2
+    return count >= 2 or bool(sub_domain)
+
 
 def is_active() -> bool:
     """Проверяет, активен ли SNI-мультиплексор (>1 бэкенд на :443)."""
@@ -156,7 +157,8 @@ def rebuild(state: AppState) -> bool:
             "port": 9443
         })
 
-    if len(backends) < 2:
+    has_sub = any(b["name"] == "sub_server" for b in backends)
+    if len(backends) < 2 and not (len(backends) == 1 and has_sub):
         stop()
         return True
 
