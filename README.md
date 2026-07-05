@@ -1,6 +1,6 @@
-# HYDRA v0.5 BETA
+# HYDRA v2.3.1
 
-[![Version](https://img.shields.io/badge/version-0.5--beta-blue.svg)]()
+[![Version](https://img.shields.io/badge/version-2.3.1-blue.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)]()
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg)]()
@@ -8,7 +8,7 @@
 > HYDRA – платформа для развёртывания прокси-серверов на базе **Sing-Box** как единого оркестратора трафика. Модульная архитектура: 17 плагинов (9 транспортов, 3 надстройки, 4 безопасности) с единой политикой роутинга, DNS и безопасности.
 
 > [!IMPORTANT]
-> На данный момент полностью готовы, отлажены и стабильно работают плагины **AmneziaWG 2.0** (интегрирован напрямую в ядро Sing-Box через TPROXY), **Mieru**, **AnyTLS**, **TrustTunnel**, **NaiveProxy** (работает через HTTP/2), **MTProto (Telemt)** (Rust MTProxy с защитой от DPI и продвинутой TUI-статистикой) и **qWDTT** (WireGuard over TURN с изолированным парольным управлением и Telegram-ботом). Полностью готов и отлажен **подписочный функционал** для генерации клиентских подписок.
+> На данный момент полностью готовы, отлажены и стабильно работают плагины **AmneziaWG 2.0** (интегрирован напрямую в ядро Sing-Box через TPROXY), **Mieru**, **AnyTLS**, **TrustTunnel**, **NaiveProxy** (работает через HTTP/2), **MTProto (Telemt)** (Rust MTProxy с защитой от DPI и продвинутой TUI-статистикой) и **qWDTT** (WireGuard over TURN с изолированным парольным управлением; *внимание: интеграция с Telegram-ботом находится в разработке и еще не готова*). Полностью готов и отлажен **подписочный функционал** для генерации клиентских подписок.
 > В разделе безопасности полностью готовы и снабжены интерактивными пультами управления плагины **Fail2ban** (защита от перебора sing-box/sshd), **Honeypot** (ловушка сканеров с авто-баном) и **IPBan** (ручная блокировка IP/CIDR/диапазонов/ASN).
 > В разделе сетевых служб полностью готовы модули **WARP** с выборочной маршрутизацией и **DNSCrypt** для системного шифрования DNS (с автоматическим замером latency и выбором серверов).
 > Все остальные плагины (транспорты, надстройки) находятся на этапе активной разработки (WIP).
@@ -45,7 +45,7 @@
 | Mieru | `mieru` | mTLS + random padding | 🟢 Готов (Ready) |
 | NaiveProxy | `naive` | Caddy (TLS) + fake-site (работает через HTTP/2) | 🟢 Готов (Ready) |
 | MTProto | `telemt` | Telegram MTProto, multi-user | 🟢 Готов (Ready) |
-| qWDTT | `wdtt` | WG over TURN с изолированным парольным управлением и Telegram-ботом | 🟢 Готов (Ready) |
+| qWDTT | `wdtt` | WG over TURN с изолированным парольным управлением (интеграция Telegram-ботов в разработке) | 🟢 Готов (Ready) |
 | AnyTLS | `anytls` | TLS-shaped tunnel с padding scheme | 🟢 Готов (Ready) |
 | TrustTunnel | `trusttunnel` | Защищённый туннель для обхода блокировок | 🟢 Готов (Ready) |
 | ShadowTLS | `shadowtls` | TLS-обертка с имитацией рукопожатия доверенных сайтов | 🟡 В планах (Roadmap) |
@@ -202,7 +202,7 @@ hydra/
 │   │   └── ipban/              # IPBan
 │   ├── services/
 │   │   ├── subscriptions/      # Генератор подписок
-│   │   ├── telegram/           # Telegram-боты
+│   │   ├── telegram/           # Telegram-боты (в разработке)
 │   │   ├── traffic.py          # Агрегация трафика
 │   │   └── sync_agent.py       # Лимиты/TTL
 │   ├── utils/
@@ -215,6 +215,57 @@ hydra/
 │   │   └── menus.py            # Меню
 └── tests/                      # 230+ тестов
 ```
+
+---
+
+## История изменений (Changelog)
+
+| Дата | Версия | Тип | Ключевые изменения |
+| :--- | :--- | :--- | :--- |
+| **05.07.2026** | **v2.3.1** | `fix` | Исправление багов деплоя, перезапуска подписочного сервера при блокировках, схем ссылок `naive+https://`. |
+| **04.07.2026** | **v2.3.0-beta** | `feat` | Запуск HTTPS-сервера подписок (порт 9443), интеграция MTProxy (Telemt) и qWDTT, пульт VPS-диагностики. |
+| **03.07.2026** | **v0.5 BETA** / *v2.2.0* | `feat` | Внедрение Traffic Accounting Daemon, модулей Fail2ban, IPBan, Honeypot, интеграция TrustTunnel, лимиты WARP. |
+| **02.07.2026** | **v2.1.1** | `fix` | Исправления авторизации NaiveProxy (plaintext basic_auth) и биндинга портов Caddy. |
+| **01.07.2026** | **v0.0.3 BETA** / *v2.1.0* | `feat` | Миграция на `sing-box-extended`, нативный Mieru inbound, плагин NaiveProxy, исправление nftables TPROXY петель. |
+| **30.06.2026** | **v2.0.1-beta** | `feat` | Автоматический выбор неконфликтующих подсетей для AmneziaWG, фикс MTU 1376, двойные рамки TUI. |
+| **29.06.2026** | **v2.0.0** | `release` | Релиз HYDRA v2.0: новая модульная архитектура плагинов, удаление legacy-ядер, внедрение оркестратора. |
+
+<details>
+<summary><b>Развернуть детальную историю изменений</b></summary>
+
+### v2.3.1 (05.07.2026)
+* **fix(orchestrator):** Немедленный перезапуск сервера подписок при блокировке/удалении пользователя для отзыва токенов.
+* **fix(naive):** Изменен формат ссылок подключения клиентов на `naive+https://`.
+* **fix(fail2ban):** Авто-миграция старых конфигураций jail sshd при перезаписи.
+
+### v2.3.0-beta (04.07.2026)
+* **feat(subscriptions):** Поднят HTTPS-сервер на порту 9443, раздающий конфиги в формате NekoBox (`sn://`) с проверкой лимитов трафика/TTL.
+* **feat(telemt):** Интегрирован плагин Telegram MTProxy с Sing-Box (сбор статистики по пользователям).
+* **feat(wdtt):** Добавлен плагин qWDTT (WireGuard over TURN) с изолированным парольным управлением.
+* **feat(diagnostics):** Пульт VPS-диагностики в TUI (тесты GeoIP, скорость iPerf3 до РФ, глобальный замер HTTP-загрузки, тесты DPI через Censorcheck).
+
+### v0.5 BETA / v2.2.0-beta (03.07.2026)
+* **feat(traffic):** Разработан фоновый Traffic Daemon (учет трафика AnyTLS/Mieru/TrustTunnel по journalctl и Caddy).
+* **feat(security):** Добавлены интерактивные TUI пульты для Fail2ban, IPBan, Honeypot.
+* **feat(warp):** Умный WARP с 24h-обновлением списков РФ/GoogleAI/GEO-block.
+* **feat(trusttunnel):** Интегрирован защищенный транспорт TrustTunnel с генерацией ссылок `tt://`.
+
+### v2.1.1 (02.07.2026)
+* **fix(naive):** Исправлены сбои basic_auth в Caddy (использование plaintext basic_auth).
+* **fix(naive):** Назначен биндинг Caddy на `127.0.0.1:10443`.
+
+### v0.0.3 BETA / v2.1.0-beta (01.07.2026)
+* **feat(singbox):** Переход на `sing-box-extended` и интеграция плагина Mieru как нативного inbound.
+* **feat(naive):** Интеграция плагина NaiveProxy с Caddy (авто-выпуск SSL через Certbot).
+* **fix(nftables):** Исправление петель маршрутизации TPROXY добавлением проверки метки сокета `meta mark 0xff` в nftables.
+
+### v2.0.1-beta (30.06.2026)
+* **feat(awg):** Автоматический бесконфликтный выбор подсетей для AmneziaWG и ограничение MTU до 1376.
+* **style(tui):** Переход на двойные рамки окон TUI и исправление расчета ширины Emoji (>0xFFFF).
+
+### v2.0.0 (29.06.2026)
+* **release:** Релиз новой архитектуры HYDRA v2.0. Модульная структура плагинов, удаление устаревших ядер Xray/VLESS. Старт единого оркестратора Sing-Box.
+</details>
 
 ---
 
