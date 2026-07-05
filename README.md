@@ -52,6 +52,7 @@
 |---|---|---|
 | DNSCrypt | Системный DNS-прокси :5300 (DoH/DNSCrypt) | 🟢 Готов (Ready) |
 | WARP | Cloudflare WARP — выборочный роутинг через WireGuard | 🟢 Готов (Ready) |
+| Telegram Bot | Управление пользователями и подписками через Telegram | 🟡 В разработке (WIP) |
 
 ### Безопасность (SECURITY)
 | Плагин | Что делает | Статус |
