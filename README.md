@@ -242,3 +242,8 @@ sudo python3 main.py         # TUI (только Linux)
 ## Лицензия
 
 MIT License — см. [LICENSE](LICENSE)
+
+---
+
+## Связанные проекты
+- [VLESS Ultimate](https://github.com/inferno1978/VLESS-Ultimate-Installer) — Xray-core (VLESS/Reality, XHTTP) как альтернатива ядру sing-box, используемому в HYDRA-ULTIMATE.
