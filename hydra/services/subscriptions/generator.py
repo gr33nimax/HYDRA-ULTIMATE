@@ -547,6 +547,9 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         self.wfile.write(message.encode("utf-8"))
 
     def do_GET(self):
+        from hydra.core.state import load_state
+        state = load_state()
+
         path = self.path
         if "?" in path:
             path = path.split("?")[0]
@@ -562,19 +565,15 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             params = urllib.parse.parse_qs(parsed.query)
             token = params.get("token", [None])[0]
             
-        if not self.state:
-            self._send_error(500, "Server not configured")
-            return
-            
         if not token:
             self._send_error(404, "Not found")
             return
             
         user = None
-        for u in self.state.users:
+        for u in state.users:
             if u.uuid == token:
                 # Динамически проверяем лимиты и статус
-                if is_user_valid(u, self.state):
+                if is_user_valid(u, state):
                     user = u
                 break
                 
@@ -582,8 +581,8 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             self._send_error(403, "Invalid, expired or blocked token")
             return
             
-        content = generate_base64_sub(user, self.state)
-        userinfo = generate_userinfo_header(user, self.state)
+        content = generate_base64_sub(user, state)
+        userinfo = generate_userinfo_header(user, state)
         
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
