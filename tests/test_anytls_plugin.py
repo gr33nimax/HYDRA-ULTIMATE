@@ -134,7 +134,7 @@ def test_configure_uses_internal_port():
     with patch("pathlib.Path.exists", return_value=True):
         frag = p.configure(state)
 
-    assert frag.inbounds[0]["listen_port"] == 10444
+    assert frag.inbounds[0]["listen_port"] == 20444
 
 
 def test_install_checks_singbox():

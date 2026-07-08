@@ -1,6 +1,7 @@
 """hydra/core/orchestrator.py — единая точка применения конфигурации."""
 from __future__ import annotations
 
+import subprocess
 from hydra.core.state import AppState, User, save_state, get_protocol, find_user
 from hydra.core import singbox, nft
 from hydra.plugins import registry
@@ -21,13 +22,17 @@ def apply_config(state: AppState) -> bool:
     except Exception:
         pass
 
-    from hydra.core.sni_router import needs_mux, stop as stop_mux, rebuild as rebuild_mux
+    from hydra.core.sni_router import needs_mux, stop as stop_mux, rebuild as rebuild_mux, uninstall_haproxy
     import socket
     import time
+    import subprocess
+
+    # Onetime HAProxy migration
+    _maybe_migrate_haproxy(state)
 
     mux_active = needs_mux(state)
 
-    # Если мультиплексор не нужен, гасим HAProxy ДО перезапуска sing-box, чтобы освободить порт 443
+    # Если мультиплексор не нужен, гасим caddy-l4 ДО перезапуска sing-box, чтобы освободить порт 443
     if not mux_active:
         stop_mux()
         for _ in range(10):
@@ -38,7 +43,7 @@ def apply_config(state: AppState) -> bool:
 
     res = singbox.reload()
 
-    # Если мультиплексор нужен, ждем пока sing-box освободит порт 443, и только тогда запускаем HAProxy
+    # Если мультиплексор нужен, ждем пока sing-box освободит порт 443, и только тогда запускаем caddy-l4
     if mux_active:
         for _ in range(10):
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -47,13 +52,13 @@ def apply_config(state: AppState) -> bool:
             time.sleep(0.3)
         rebuild_mux(state)
 
-    # Если caddy-naive включен, он мог упасть из-за конфликта портов на этапе p.apply(state).
-    # Перезапускаем его сейчас, когда 443 порт гарантированно распределен правильно.
+    # Если caddy-naive включен как отдельный сервис, он мог упасть из-за конфликта портов
     naive_proto = state.protocols.get("naive")
     if naive_proto and naive_proto.enabled:
-        import subprocess
-        subprocess.run(["systemctl", "reset-failed", "caddy-naive"], capture_output=True)
-        subprocess.run(["systemctl", "restart", "caddy-naive"], capture_output=True)
+        r = subprocess.run(["systemctl", "cat", "caddy-naive"], capture_output=True)
+        if r.returncode == 0:
+            subprocess.run(["systemctl", "reset-failed", "caddy-naive"], capture_output=True)
+            subprocess.run(["systemctl", "restart", "caddy-naive"], capture_output=True)
 
     # Управляем traffic daemon
     try:
@@ -62,6 +67,28 @@ def apply_config(state: AppState) -> bool:
         pass
 
     return res
+
+
+def _maybe_migrate_haproxy(state: AppState) -> None:
+    """Performs a one-time migration from HAProxy to Caddy L4 if HAProxy was enabled."""
+    from hydra.core.sni_router import uninstall_haproxy
+    import shutil
+    marker = state.install.get("caddy_l4_migrated", False)
+    if marker:
+        return
+
+    if shutil.which("systemctl"):
+        try:
+            # Check if HAProxy service is enabled
+            r = subprocess.run(["systemctl", "is-enabled", "haproxy"], capture_output=True, text=True)
+            if r.stdout.strip() == "enabled":
+                print("  Migration: stopping and disabling HAProxy...")
+                uninstall_haproxy()
+        except Exception:
+            pass
+
+    state.install["caddy_l4_migrated"] = True
+    save_state(state)
 
 
 def _manage_traffic_daemon(state: AppState) -> None:

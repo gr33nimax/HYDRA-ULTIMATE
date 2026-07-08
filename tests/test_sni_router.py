@@ -1,6 +1,7 @@
-"""tests/test_sni_router.py — Тесты для SNI-мультиплексора (HAProxy)."""
+"""tests/test_sni_router.py — Tests for SNI multiplexer (Caddy L4)."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import sys
@@ -18,16 +19,17 @@ from hydra.core.sni_router import (
 from hydra.core.state import AppState, PluginState
 
 
-def _state(naive_enabled=False, anytls_enabled=False, naive_domain="naive.com", anytls_domain="anytls.com"):
+def _state(naive_enabled=False, anytls_enabled=False, trusttunnel_enabled=False, naive_domain="naive.com", anytls_domain="anytls.com", trusttunnel_domain="trusttunnel.com"):
     s = AppState()
     s.network.domain = naive_domain
     s.protocols["naive"] = PluginState(enabled=naive_enabled)
     s.protocols["anytls"] = PluginState(enabled=anytls_enabled, config={"domain": anytls_domain})
+    s.protocols["trusttunnel"] = PluginState(enabled=trusttunnel_enabled, config={"domain": trusttunnel_domain})
     return s
 
 
 def test_needs_mux_single_plugin():
-    """needs_mux() -> False когда активен 0 или 1 плагин."""
+    """needs_mux() -> False when 0 or 1 plugin is active."""
     s = _state(naive_enabled=False, anytls_enabled=False)
     assert needs_mux(s) is False
 
@@ -39,85 +41,89 @@ def test_needs_mux_single_plugin():
 
 
 def test_needs_mux_two_plugins():
-    """needs_mux() -> True когда активны оба плагина."""
+    """needs_mux() -> True when 2+ plugins are active."""
     s = _state(naive_enabled=True, anytls_enabled=True)
     assert needs_mux(s) is True
 
 
 def test_get_effective_port_no_mux():
-    """Если мультиплексор не нужен, оба плагина слушают порт 443 напрямую."""
+    """If multiplexer is not needed, plugins listen on port 443 directly."""
     s = _state(naive_enabled=True, anytls_enabled=False)
     assert get_effective_port("naive", s) == 443
     assert get_effective_port("anytls", s) == 443
 
 
 def test_get_effective_port_with_mux():
-    """Если мультиплексор нужен, плагины переключаются на внутренние порты."""
+    """If multiplexer is needed, plugins switch to internal ports."""
     s = _state(naive_enabled=True, anytls_enabled=True)
     assert get_effective_port("naive", s) == 10443
-    assert get_effective_port("anytls", s) == 10444
+    assert get_effective_port("anytls", s) == 20444
 
 
 def test_generate_config_two_backends():
-    """Генерация конфига HAProxy для двух бэкендов."""
+    """Caddy L4 config generation for two backends."""
+    s = _state(naive_enabled=True, anytls_enabled=True)
     backends = [
-        {"name": "naive", "domain": "naive.com", "port": 10443},
-        {"name": "anytls", "domain": "anytls.com", "port": 10444},
+        {"name": "naive", "domain": "naive.com", "port": 10443, "cert_file": "cert.pem", "key_file": "key.pem"},
+        {"name": "anytls", "domain": "anytls.com", "port": 20444, "cert_file": "cert2.pem", "key_file": "key2.pem"},
     ]
-    cfg = _generate_config(backends)
+    cfg = _generate_config(backends, s)
     
-    assert "bind *:443" in cfg
-    assert "backend bk_naive" in cfg
-    assert "backend bk_anytls" in cfg
-    assert "server naive 127.0.0.1:10443" in cfg
-    assert "server anytls 127.0.0.1:10444" in cfg
+    assert "apps" in cfg
+    assert "layer4" in cfg["apps"]
+    assert "tls_mux" in cfg["apps"]["layer4"]["servers"]
+    
+    routes = cfg["apps"]["layer4"]["servers"]["tls_mux"]["routes"]
+    assert len(routes) >= 2
+    
+    # Check naive route
+    naive_route = next(r for r in routes if r.get("match") and r["match"][0].get("tls", {}).get("sni") == ["naive.com"])
+    assert naive_route["handle"][1]["upstreams"][0]["dial"] == ["127.0.0.1:10443"]
+
+    # Check anytls route
+    anytls_route = next(r for r in routes if r.get("match") and r["match"][0].get("tls", {}).get("sni") == ["anytls.com"])
+    # AnyTLS has a subroute to filter out non-HTTP
+    assert anytls_route["handle"][1]["handler"] == "subroute"
 
 
 def test_config_has_sni_rules():
-    """Конфиг содержит правила ssl_sni."""
+    """Config has correct SNI routing rules."""
+    s = _state(naive_enabled=True, anytls_enabled=True)
     backends = [
-        {"name": "naive", "domain": "naive.com", "port": 10443},
-        {"name": "anytls", "domain": "anytls.com", "port": 10444},
+        {"name": "naive", "domain": "naive.com", "port": 10443, "cert_file": "cert.pem", "key_file": "key.pem"},
+        {"name": "anytls", "domain": "anytls.com", "port": 20444, "cert_file": "cert2.pem", "key_file": "key2.pem"},
     ]
-    cfg = _generate_config(backends)
+    cfg = _generate_config(backends, s)
+    routes = cfg["apps"]["layer4"]["servers"]["tls_mux"]["routes"]
     
-    assert "req_ssl_sni -i naive.com" in cfg
-    assert "req_ssl_sni -i anytls.com" in cfg
-    assert "default_backend bk_naive" in cfg
+    snis = [r["match"][0]["tls"]["sni"][0] for r in routes if r.get("match")]
+    assert "naive.com" in snis
+    assert "anytls.com" in snis
 
 
-def test_rebuild_starts_haproxy():
-    """rebuild() генерирует конфиг и запускает службу haproxy."""
+def test_rebuild_starts_caddy():
+    """rebuild() generates config and restarts/reloads caddy-l4."""
     s = _state(naive_enabled=True, anytls_enabled=True)
     
     mock_cfg = MagicMock()
     mock_cfg_dir = MagicMock()
     with patch("hydra.core.sni_router.is_installed", return_value=True), \
-         patch("hydra.core.sni_router.HAPROXY_CFG", mock_cfg), \
-         patch("hydra.core.sni_router.HAPROXY_CFG_DIR", mock_cfg_dir), \
-         patch("subprocess.run") as mock_run, \
-         patch("hydra.plugins.registry.get") as mock_registry_get:
-        
-        # Настраиваем mock для naive плагина, чтобы проверить, что он переконфигурируется
-        mock_plugin = MagicMock()
-        mock_registry_get.return_value = mock_plugin
+         patch("hydra.core.sni_router.CADDY_CFG", mock_cfg), \
+         patch("hydra.core.sni_router.CADDY_CFG_DIR", mock_cfg_dir), \
+         patch("subprocess.run") as mock_run:
         
         mock_run.return_value = MagicMock(returncode=0)
         
         assert rebuild(s) is True
         
-        # Проверяем запись конфига
+        # Check config write
         mock_cfg.write_text.assert_called_once()
-        # Проверяем, что naive плагин был настроен и применен
-        mock_plugin.configure.assert_called_once_with(s)
-        mock_plugin.apply.assert_called_once_with(s)
-        # Проверяем, что haproxy был перезапущен
-        mock_run.assert_any_call(["systemctl", "restart", "haproxy"], capture_output=True)
-
+        # Check caddy-l4 was restarted/reloaded
+        mock_run.assert_any_call(["systemctl", "reload-or-restart", "caddy-l4"], capture_output=True)
 
 
 def test_rebuild_stops_when_single():
-    """rebuild() останавливает haproxy при 0-1 активном бэкенде."""
+    """rebuild() stops caddy-l4 when 0-1 backends are active."""
     s = _state(naive_enabled=True, anytls_enabled=False)
     
     with patch("hydra.core.sni_router.is_installed", return_value=True), \
@@ -126,11 +132,11 @@ def test_rebuild_stops_when_single():
         mock_run.return_value = MagicMock(returncode=0)
         assert rebuild(s) is True
         
-        # Проверяем, что haproxy был остановлен
-        mock_run.assert_any_call(["systemctl", "stop", "haproxy"], capture_output=True)
+        # Check caddy-l4 was stopped
+        mock_run.assert_any_call(["systemctl", "stop", "caddy-l4"], capture_output=True)
 
 
 def test_internal_ports_unique():
-    """Все порты в пуле _INTERNAL_PORTS уникальны."""
+    """All internal ports are unique."""
     ports = list(_INTERNAL_PORTS.values())
     assert len(ports) == len(set(ports))

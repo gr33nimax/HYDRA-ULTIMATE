@@ -80,23 +80,25 @@ class AnyTLSPlugin(BasePlugin):
             return ConfigFragment()
 
         # Порт: через SNI-мультиплексор или напрямую
-        from hydra.core.sni_router import get_effective_port
+        from hydra.core.sni_router import get_effective_port, needs_mux
         listen_port = get_effective_port("anytls", state)
+        behind_mux = needs_mux(state)
 
         inbound = {
             "type": "anytls",
             "tag": "anytls-in",
-            "listen": "::",
+            "listen": "127.0.0.1" if behind_mux else "::",
             "listen_port": listen_port,
             "users": users,
             "padding_scheme": DEFAULT_PADDING_SCHEME,
-            "tls": {
+        }
+        if not behind_mux:
+            inbound["tls"] = {
                 "enabled": True,
                 "server_name": anytls_domain,
                 "certificate_path": cert_file,
                 "key_path": key_file,
-            },
-        }
+            }
         return ConfigFragment(inbounds=[inbound])
 
     def apply(self, state: AppState) -> bool:

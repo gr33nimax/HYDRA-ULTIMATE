@@ -462,13 +462,8 @@ class NaivePlugin(BasePlugin):
 
     @staticmethod
     def _create_fake_site() -> None:
-        FAKE_SITE_DIR.mkdir(parents=True, exist_ok=True)
-        index_file = FAKE_SITE_DIR / "index.html"
-        if not index_file.exists():
-            index_file.write_text(
-                "<!DOCTYPE html><html><head><title>Welcome</title></head>"
-                "<body><h1>Welcome</h1><p>This site is under maintenance.</p></body></html>\n"
-            )
+        from hydra.core.decoy import ensure_decoy_site
+        ensure_decoy_site("naive")
 
     @staticmethod
     def _derive_username(user: User) -> str:
@@ -660,15 +655,10 @@ class NaivePlugin(BasePlugin):
         else:
             tls_line = ""
 
-        if decoy_url:
-            target_decoy = decoy_url.strip()
-            if not target_decoy.startswith("http://") and not target_decoy.startswith("https://"):
-                target_decoy = f"https://{target_decoy}"
-            decoy_block = f"    reverse_proxy {target_decoy} {{\n        header_up Host {{upstream_hostport}}\n    }}\n"
-            order_line = "    order forward_proxy before reverse_proxy\n"
-        else:
-            decoy_block = f"    file_server {{\n        root {fake_site_dir}\n    }}\n"
-            order_line = "    order forward_proxy before file_server\n"
+        from hydra.core.decoy import DECOY_DIRS
+        decoy_dir = DECOY_DIRS.get("naive", Path(fake_site_dir)).as_posix()
+        decoy_block = f"    file_server {{\n        root {decoy_dir}\n    }}\n"
+        order_line = "    order forward_proxy before file_server\n"
 
         site_header = f":{port}, {domain}:{port}"
         probe_line = "            probe_resistance\n" if auth_lines else ""

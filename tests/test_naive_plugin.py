@@ -169,7 +169,7 @@ def test_status_returns_plugin_status():
 
 
 def test_build_caddyfile_basic():
-    """_build_caddyfile генерирует валидный Caddyfile с reverse_proxy decoy."""
+    """_build_caddyfile генерирует валидный Caddyfile с file_server decoy."""
     p = NaivePlugin()
     caddyfile = p._build_caddyfile(
         domain="vpn.example.com",
@@ -183,7 +183,8 @@ def test_build_caddyfile_basic():
     assert "basic_auth testuser testpass" in caddyfile
     assert "probe_resistance" in caddyfile
     assert "forward_proxy" in caddyfile
-    assert "reverse_proxy https://www.google.com" in caddyfile
+    assert "file_server" in caddyfile
+    assert "root /var/www/decoy-a" in caddyfile
 
 
 def test_build_caddyfile_fake_site():
@@ -197,7 +198,7 @@ def test_build_caddyfile_fake_site():
         fake_site_dir="/var/www/naive-fake",
     )
     assert "file_server" in caddyfile
-    assert "root /var/www/naive-fake" in caddyfile
+    assert "root /var/www/decoy-a" in caddyfile
 
 
 def test_build_caddyfile_multiple_users():

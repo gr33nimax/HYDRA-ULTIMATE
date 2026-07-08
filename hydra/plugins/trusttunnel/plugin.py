@@ -65,22 +65,25 @@ class TrustTunnelPlugin(BasePlugin):
         if not cert_file or not key_file:
             return ConfigFragment()
 
-        from hydra.core.sni_router import get_effective_port
+        # Порт: через SNI-мультиплексор или напрямую
+        from hydra.core.sni_router import get_effective_port, needs_mux
         listen_port = get_effective_port("trusttunnel", state)
+        behind_mux = needs_mux(state)
 
         inbound = {
             "type": "trusttunnel",
             "tag": "trusttunnel-in",
-            "listen": "::",
+            "listen": "127.0.0.1" if behind_mux else "::",
             "listen_port": listen_port,
             "users": users,
-            "tls": {
+        }
+        if not behind_mux:
+            inbound["tls"] = {
                 "enabled": True,
                 "server_name": domain,
                 "certificate_path": cert_file,
                 "key_path": key_file,
-            },
-        }
+            }
         return ConfigFragment(inbounds=[inbound])
 
     def apply(self, state: AppState) -> bool:
