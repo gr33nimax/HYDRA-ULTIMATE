@@ -77,13 +77,12 @@ class TrustTunnelPlugin(BasePlugin):
             "listen_port": listen_port,
             "users": users,
         }
-        if not behind_mux:
-            inbound["tls"] = {
-                "enabled": True,
-                "server_name": domain,
-                "certificate_path": cert_file,
-                "key_path": key_file,
-            }
+        inbound["tls"] = {
+            "enabled": True,
+            "server_name": domain,
+            "certificate_path": cert_file,
+            "key_path": key_file,
+        }
         return ConfigFragment(inbounds=[inbound])
 
     def apply(self, state: AppState) -> bool:

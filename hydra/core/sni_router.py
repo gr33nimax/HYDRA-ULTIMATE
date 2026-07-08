@@ -569,7 +569,10 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                                             "upstreams": [{"dial": f"127.0.0.1:{tt_port}"}],
                                             "transport": {
                                                 "protocol": "http",
-                                                "versions": ["h2c", "2"]
+                                                "versions": ["2"],
+                                                "tls": {
+                                                    "insecure_skip_verify": True
+                                                }
                                             },
                                             "handle_response": [
                                                 {
