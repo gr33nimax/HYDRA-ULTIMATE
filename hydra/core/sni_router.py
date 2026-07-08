@@ -143,7 +143,16 @@ def _get_adapted_forward_proxy_config(naive_users: list[dict]) -> dict:
         find_handler(routes)
         
         if fp_handler:
-            if "credentials" in fp_handler:
+            if "auth_credentials" in fp_handler:
+                real_creds = []
+                for u in naive_users:
+                    cred = f"{u['username']}:{u['password']}"
+                    cred_b64 = base64.b64encode(cred.encode("utf-8")).decode("utf-8")
+                    cred_b64_2 = base64.b64encode(cred_b64.encode("utf-8")).decode("utf-8")
+                    real_creds.append(cred_b64_2)
+                fp_handler["auth_credentials"] = real_creds
+                return fp_handler
+            elif "credentials" in fp_handler:
                 real_creds = []
                 for u in naive_users:
                     bcrypt_hash = _hash_password_caddy(u["password"])
