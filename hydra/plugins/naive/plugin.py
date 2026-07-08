@@ -372,7 +372,7 @@ class NaivePlugin(BasePlugin):
             return
 
         domain = state.network.domain
-        has_config = bool(domain and ps.config and "decoy_url" in ps.config)
+        has_config = bool(domain and ps.config)
 
         if not has_config:
             from hydra.ui.tui import prompt
@@ -385,12 +385,6 @@ class NaivePlugin(BasePlugin):
 
             if not ps.config:
                 ps.config = {}
-
-            decoy_url = prompt(
-                "URL или домен для сайта-декоя (например, https://bing.com или опустите для HTML-заглушки)",
-                default=ps.config.get("decoy_url", "")
-            )
-            ps.config["decoy_url"] = decoy_url
 
             from hydra.ui.tui import confirm
             use_custom = confirm("Использовать собственный SSL-сертификат (указать пути вручную)?", default=False)
