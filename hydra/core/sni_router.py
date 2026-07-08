@@ -238,11 +238,35 @@ def install() -> bool:
     os.makedirs(go_path, exist_ok=True)
     env = {**os.environ, "GOPATH": go_path, "GOBIN": f"{go_path}/bin"}
     
-    subprocess.run([
-        "go", "install", "github.com/caddyserver/xcaddy/cmd/xcaddy@latest"
-    ], capture_output=True, env=env)
-
     xcaddy_bin = f"{go_path}/bin/xcaddy"
+    if not os.path.exists(xcaddy_bin):
+        # Try to download precompiled xcaddy first
+        from hydra.utils.downloader import download_github_asset
+        import tarfile
+        
+        xcaddy_tar = Path("/tmp/xcaddy.tar.gz")
+        print("  Downloading precompiled xcaddy from GitHub...")
+        if download_github_asset("caddyserver/xcaddy", "linux_amd64.tar.gz", xcaddy_tar):
+            try:
+                with tarfile.open(xcaddy_tar, "r:gz") as tar:
+                    tar.extract("xcaddy", path=f"{go_path}/bin")
+                os.chmod(xcaddy_bin, 0o755)
+                print("  Successfully downloaded and extracted xcaddy.")
+            except Exception as e:
+                print(f"  Failed to extract xcaddy: {e}")
+            finally:
+                if xcaddy_tar.exists():
+                    xcaddy_tar.unlink()
+        else:
+            print("  Downloading precompiled xcaddy failed.")
+
+    if not os.path.exists(xcaddy_bin):
+        # Fallback to go install if download failed
+        print("  Trying go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest...")
+        subprocess.run([
+            "go", "install", "github.com/caddyserver/xcaddy/cmd/xcaddy@latest"
+        ], capture_output=True, env=env)
+
     if not os.path.exists(xcaddy_bin):
         xcaddy_bin = shutil.which("xcaddy") or "xcaddy"
 
