@@ -595,7 +595,7 @@ def rebuild(state: AppState) -> bool:
     """Rebuilds the Caddy L4 config and reloads/starts the service."""
     backends = _collect_backends(state)
 
-    if len(backends) < 2 and not _has_sub_domain(state):
+    if not needs_mux(state):
         stop()
         return True
 
