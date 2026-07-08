@@ -12,20 +12,6 @@ import subprocess
 from pathlib import Path
 from hydra.core.state import AppState
 
-def _hash_password_caddy(password: str) -> str:
-    """Uses Caddy's built-in command to generate a bcrypt password hash."""
-    if not CADDY_BIN.exists():
-        return "$2a$10$MockedBcryptHashForTestingOnlyValueThisIsNotReal"
-    try:
-        r = subprocess.run([
-            str(CADDY_BIN), "hash-password", "--plaintext", password
-        ], capture_output=True, text=True)
-        if r.returncode == 0:
-            return r.stdout.strip()
-    except Exception:
-        pass
-    return ""
-
 CADDY_BIN = Path("/usr/local/bin/caddy-l4")
 CADDY_CFG = Path("/etc/caddy-l4/config.json")
 CADDY_CFG_DIR = Path("/etc/caddy-l4")
@@ -46,6 +32,132 @@ _DECOY_HTTP_PORTS = {
     "anytls": 10801,
     "trusttunnel": 10802,
 }
+
+def _hash_password_caddy(password: str) -> str:
+    """Uses Caddy's built-in command to generate a bcrypt password hash."""
+    if not CADDY_BIN.exists():
+        return "$2a$10$MockedBcryptHashForTestingOnlyValueThisIsNotReal"
+    try:
+        r = subprocess.run([
+            str(CADDY_BIN), "hash-password", "--plaintext", password
+        ], capture_output=True, text=True)
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+def _get_adapted_forward_proxy_config(naive_users: list[dict]) -> dict:
+    """Adapts a temporary Caddyfile using the caddy-l4 binary to get a correct JSON config for forward_proxy."""
+    if not CADDY_BIN.exists():
+        return {
+            "handler": "forward_proxy",
+            "hide_ip": True,
+            "hide_via": True,
+            "probe_resistance": {},
+            "auth_user": naive_users[0]["username"] if naive_users else "",
+            "auth_pass": naive_users[0]["password"] if naive_users else ""
+        }
+
+    dummy_user = "DUMMYUSER"
+    dummy_pass = "DUMMYPASS"
+    auth_line = f"basic_auth {dummy_user} {dummy_pass}" if naive_users else ""
+    caddyfile_content = f""":10443 {{
+    forward_proxy {{
+        {auth_line}
+        hide_ip
+        hide_via
+        probe_resistance
+    }}
+}}"""
+    
+    tmp_cf = Path("/tmp/naive_caddyfile_tmp")
+    try:
+        tmp_cf.write_text(caddyfile_content, encoding="utf-8")
+        r = subprocess.run([
+            str(CADDY_BIN), "adapt", "--config", str(tmp_cf), "--adapter", "caddyfile"
+        ], capture_output=True, text=True)
+    except Exception:
+        class MockResult:
+            returncode = 1
+            stdout = ""
+        r = MockResult()
+    finally:
+        try:
+            tmp_cf.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    if r.returncode != 0:
+        return {
+            "handler": "forward_proxy",
+            "hide_ip": True,
+            "hide_via": True,
+            "probe_resistance": {},
+            "auth_user": naive_users[0]["username"] if naive_users else "",
+            "auth_pass": naive_users[0]["password"] if naive_users else ""
+        }
+        
+    try:
+        adapted = json.loads(r.stdout)
+        servers = adapted.get("apps", {}).get("http", {}).get("servers", {})
+        server_key = list(servers.keys())[0]
+        routes = servers[server_key].get("routes", [])
+        
+        fp_handler = None
+        
+        def find_handler(node):
+            nonlocal fp_handler
+            if isinstance(node, dict):
+                if node.get("handler") == "forward_proxy":
+                    fp_handler = node
+                    return
+                for k, v in node.items():
+                    find_handler(v)
+            elif isinstance(node, list):
+                for item in node:
+                    find_handler(item)
+                    
+        find_handler(routes)
+        
+        if fp_handler:
+            if "credentials" in fp_handler:
+                real_creds = []
+                for u in naive_users:
+                    bcrypt_hash = _hash_password_caddy(u["password"])
+                    if bcrypt_hash:
+                        cred = f"{u['username']}:{bcrypt_hash}"
+                        cred_b64 = base64.b64encode(cred.encode("utf-8")).decode("utf-8")
+                        real_creds.append(cred_b64)
+                fp_handler["credentials"] = real_creds
+            elif "auth_user" in fp_handler:
+                if naive_users:
+                    fp_handler["auth_user"] = naive_users[0]["username"]
+                    fp_handler["auth_pass"] = naive_users[0]["password"]
+                else:
+                    fp_handler.pop("auth_user", None)
+                    fp_handler.pop("auth_pass", None)
+            elif "basic_auth" in fp_handler:
+                real_creds = []
+                for u in naive_users:
+                    bcrypt_hash = _hash_password_caddy(u["password"])
+                    if bcrypt_hash:
+                        cred = f"{u['username']}:{bcrypt_hash}"
+                        cred_b64 = base64.b64encode(cred.encode("utf-8")).decode("utf-8")
+                        real_creds.append(cred_b64)
+                fp_handler["basic_auth"] = real_creds
+            return fp_handler
+    except Exception:
+        pass
+
+    return {
+        "handler": "forward_proxy",
+        "hide_ip": True,
+        "hide_via": True,
+        "probe_resistance": {},
+        "auth_user": naive_users[0]["username"] if naive_users else "",
+        "auth_pass": naive_users[0]["password"] if naive_users else ""
+    }
 
 
 def is_installed() -> bool:
@@ -317,27 +429,10 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
             })
 
         # Generate forward_proxy route config
+        fp_handler = _get_adapted_forward_proxy_config(naive_users)
         fp_route = {
-            "handle": [
-                {
-                    "handler": "forward_proxy",
-                    "hide_ip": True,
-                    "hide_via": True,
-                    "probe_resistance": {}
-                }
-            ]
+            "handle": [fp_handler]
         }
-        # Add auth if users exist
-        if naive_users:
-            basic_auth_entries = []
-            for u in naive_users:
-                bcrypt_hash = _hash_password_caddy(u["password"])
-                if bcrypt_hash:
-                    cred = f"{u['username']}:{bcrypt_hash}"
-                    cred_b64 = base64.b64encode(cred.encode("utf-8")).decode("utf-8")
-                    basic_auth_entries.append(cred_b64)
-            if basic_auth_entries:
-                fp_route["handle"][0]["credentials"] = basic_auth_entries
 
         http_servers["naive_server"] = {
             "listen": [f"127.0.0.1:{_INTERNAL_PORTS['naive']}"],
