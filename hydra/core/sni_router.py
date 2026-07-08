@@ -97,9 +97,6 @@ def _get_adapted_forward_proxy_config(naive_users: list[dict]) -> dict:
             pass
 
     if r.returncode != 0:
-        print(f"  [DEBUG] Caddy adapt failed! returncode={getattr(r, 'returncode', 'N/A')}")
-        print(f"  [DEBUG] Stdout: {getattr(r, 'stdout', 'N/A')}")
-        print(f"  [DEBUG] Stderr: {getattr(r, 'stderr', 'N/A')}")
         try:
             CADDY_LOG_DIR.mkdir(parents=True, exist_ok=True)
             debug_log = CADDY_LOG_DIR / "adapt_debug.log"
@@ -190,8 +187,6 @@ def _get_adapted_forward_proxy_config(naive_users: list[dict]) -> dict:
                 return fp_handler
             
             # If no matches, log for debugging
-            print(f"  [DEBUG] No matching fields found in fp_handler! Keys: {list(fp_handler.keys())}")
-            print(f"  [DEBUG] fp_handler content: {json.dumps(fp_handler)}")
             try:
                 CADDY_LOG_DIR.mkdir(parents=True, exist_ok=True)
                 debug_log = CADDY_LOG_DIR / "adapt_debug.log"
@@ -204,7 +199,6 @@ def _get_adapted_forward_proxy_config(naive_users: list[dict]) -> dict:
             except Exception:
                 pass
     except Exception as e:
-        print(f"  [DEBUG] Exception during JSON parse or traversal: {e}")
         try:
             CADDY_LOG_DIR.mkdir(parents=True, exist_ok=True)
             debug_log = CADDY_LOG_DIR / "adapt_debug.log"
