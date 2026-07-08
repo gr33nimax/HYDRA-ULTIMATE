@@ -578,7 +578,8 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                                 "request": {
                                     "set": {
                                         "Proxy-Authorization": ["{http.request.header.Proxy-Authorization}"],
-                                        "Authorization": ["{http.request.header.Authorization}"]
+                                        "Authorization": ["{http.request.header.Authorization}"],
+                                        "Host": ["{http.request.host}"]
                                     }
                                 }
                             },
