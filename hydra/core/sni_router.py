@@ -574,6 +574,14 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                                                     "insecure_skip_verify": True
                                                 }
                                             },
+                                            "headers": {
+                                                "request": {
+                                                    "set": {
+                                                        "Proxy-Authorization": ["{http.request.header.Proxy-Authorization}"],
+                                                        "Authorization": ["{http.request.header.Authorization}"]
+                                                    }
+                                                }
+                                            },
                                             "handle_response": [
                                                 {
                                                     "match": {"status_code": [502, 503]},
