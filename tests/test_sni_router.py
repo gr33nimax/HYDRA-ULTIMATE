@@ -78,7 +78,7 @@ def test_generate_config_two_backends():
     
     # Check naive route
     naive_route = next(r for r in routes if r.get("match") and r["match"][0].get("tls", {}).get("sni") == ["naive.com"])
-    assert naive_route["handle"][1]["upstreams"][0]["dial"] == ["127.0.0.1:10443"]
+    assert naive_route["handle"][0]["upstreams"][0]["dial"] == ["127.0.0.1:10443"]
 
     # Check anytls route
     anytls_route = next(r for r in routes if r.get("match") and r["match"][0].get("tls", {}).get("sni") == ["anytls.com"])

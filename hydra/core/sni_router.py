@@ -373,7 +373,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
     # 2. TLS app (load certificates for SNI matching)
     certificates = []
     for b in backends:
-        if b["cert_file"] and b["key_file"]:
+        if b["name"] in ("anytls", "trusttunnel") and b["cert_file"] and b["key_file"]:
             certificates.append({
                 "certificate": b["cert_file"],
                 "key": b["key_file"]
@@ -393,11 +393,10 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
         port = b["port"]
 
         if name == "naive":
-            # Naive route: TLS termination -> local forward_proxy HTTP server
+            # Naive route: TLS passthrough -> dial caddy-naive directly
             l4_routes.append({
                 "match": [{"tls": {"sni": [domain]}}],
                 "handle": [
-                    {"handler": "tls"},
                     {"handler": "proxy", "upstreams": [{"dial": [f"127.0.0.1:{port}"]}]}
                 ]
             })
@@ -446,13 +445,14 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                 ]
             })
 
-    # Default fallback route for unrecognized SNI (routes to naive_server decoy)
-    naive_backend = next((b for b in backends if b["name"] == "naive"), None)
-    if naive_backend:
+    # Default fallback route for unrecognized SNI (routes to anytls decoy or trusttunnel decoy)
+    fallback_backend = next((b for b in backends if b["name"] in ("anytls", "trusttunnel")), None)
+    if fallback_backend:
+        decoy_port = _DECOY_HTTP_PORTS[fallback_backend["name"]]
         l4_routes.append({
             "handle": [
                 {"handler": "tls"},
-                {"handler": "proxy", "upstreams": [{"dial": [f"127.0.0.1:{_INTERNAL_PORTS['naive']}"]}]}
+                {"handler": "proxy", "upstreams": [{"dial": [f"127.0.0.1:{decoy_port}"]}]}
             ]
         })
 
@@ -467,57 +467,6 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
 
     # 4. HTTP app (decoy websites & forward_proxy)
     http_servers = {}
-
-    # Naive HTTP server (hosts forward_proxy + decoy-a)
-    if any(b["name"] == "naive" for b in backends):
-        # Build users credentials for forward_proxy
-        naive_users = []
-        for user in state.users:
-            if user.blocked:
-                continue
-            # derive credentials identically to naive plugin
-            from hydra.utils.crypto import derive_hex_key
-            clean = user.email.split("@")[0]
-            username = "".join(c for c in clean if c.isalnum() or c in ("_", "-")) or user.email
-            password = derive_hex_key("naive-pass", user.uuid)[:24]
-            naive_users.append({
-                "username": username,
-                "password": password
-            })
-
-        # Generate forward_proxy route config
-        fp_handler = _get_adapted_forward_proxy_config(naive_users)
-        fp_route = {
-            "handle": [fp_handler]
-        }
-
-        http_servers["naive_server"] = {
-            "listen": [f"127.0.0.1:{_INTERNAL_PORTS['naive']}"],
-            "automatic_https": {
-                "disable": True,
-                "disable_redirects": True
-            },
-            "routes": [
-                {
-                    "handle": [
-                        {
-                          "handler": "subroute",
-                          "routes": [
-                            fp_route,
-                            {
-                              "handle": [
-                                {"handler": "file_server", "root": "/var/www/decoy-a"}
-                              ]
-                            }
-                          ]
-                        }
-                    ]
-                }
-            ],
-            "logs": {
-                "logger_names": {state.network.domain: "decoy"}
-            }
-        }
 
     # AnyTLS Decoy HTTP server
     if any(b["name"] == "anytls" for b in backends):
