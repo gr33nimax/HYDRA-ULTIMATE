@@ -222,13 +222,56 @@ def is_installed() -> bool:
     return CADDY_BIN.exists() or shutil.which("caddy-l4") is not None
 
 
+def _ensure_modern_go() -> bool:
+    """Ensures a Go compiler version >= 1.21 is installed.
+
+    If not, downloads and installs the official Go binary.
+    """
+    go_bin = shutil.which("go")
+    if go_bin:
+        try:
+            r = subprocess.run([go_bin, "version"], capture_output=True, text=True)
+            if r.returncode == 0:
+                parts = r.stdout.split()
+                if len(parts) >= 3 and parts[2].startswith("go"):
+                    ver_str = parts[2][2:]
+                    ver_parts = [int(x) for x in ver_str.split(".") if x.isdigit()]
+                    if ver_parts and ver_parts[0] >= 1 and (len(ver_parts) < 2 or ver_parts[1] >= 21):
+                        return True
+        except Exception:
+            pass
+
+    print("  Modern Go compiler (>= 1.21) not found. Installing official Go 1.22...")
+    # Clean up old install
+    subprocess.run(["rm", "-rf", "/usr/local/go"], capture_output=True)
+
+    # Download Go tarball
+    go_tar = Path("/tmp/go.tar.gz")
+    go_url = "https://go.dev/dl/go1.22.5.linux-amd64.tar.gz"
+
+    from hydra.utils.downloader import download
+    if download(go_url, go_tar):
+        print("  Extracting Go compiler to /usr/local/go...")
+        try:
+            subprocess.run(["tar", "-C", "/usr/local", "-xzf", str(go_tar)], capture_output=True)
+            os.environ["PATH"] = f"{os.environ.get('PATH', '')}:/usr/local/go/bin"
+            return True
+        except Exception as e:
+            print(f"  Failed to extract Go: {e}")
+        finally:
+            if go_tar.exists():
+                go_tar.unlink()
+    return False
+
+
 def install() -> bool:
     """Builds and installs caddy-l4 with forwardproxy using xcaddy."""
     if is_installed():
         return True
 
     print("  Installing Go compiler...")
-    if not shutil.which("go"):
+    if not _ensure_modern_go():
+        print("  Failed to install a modern Go compiler. Trying apt fallback...")
         subprocess.run(["apt-get", "update"], capture_output=True)
         subprocess.run(["apt-get", "install", "-y", "golang-go"], capture_output=True)
 
