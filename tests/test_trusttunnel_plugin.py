@@ -47,8 +47,8 @@ def test_configure_returns_inbound():
     assert len(frag.inbounds) == 1
     assert frag.inbounds[0]["type"] == "trusttunnel"
     assert frag.inbounds[0]["tag"] == "trusttunnel-in"
-    assert frag.inbounds[0]["listen"] == "::"
-    assert frag.inbounds[0]["listen_port"] == 443
+    assert frag.inbounds[0]["listen"] == "127.0.0.1"
+    assert frag.inbounds[0]["listen_port"] == 20445
 
 
 def test_configure_has_tls():

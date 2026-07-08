@@ -37,7 +37,7 @@ def test_needs_mux_single_plugin():
     assert needs_mux(s) is False
 
     s = _state(naive_enabled=False, anytls_enabled=True)
-    assert needs_mux(s) is False
+    assert needs_mux(s) is True
 
 
 def test_needs_mux_two_plugins():

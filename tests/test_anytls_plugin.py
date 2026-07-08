@@ -47,8 +47,8 @@ def test_configure_returns_inbound():
     assert len(frag.inbounds) == 1
     assert frag.inbounds[0]["type"] == "anytls"
     assert frag.inbounds[0]["tag"] == "anytls-in"
-    assert frag.inbounds[0]["listen"] == "::"
-    assert frag.inbounds[0]["listen_port"] == 443
+    assert frag.inbounds[0]["listen"] == "127.0.0.1"
+    assert frag.inbounds[0]["listen_port"] == 20444
 
 
 def test_configure_has_tls():
@@ -58,9 +58,8 @@ def test_configure_has_tls():
     
     with patch("pathlib.Path.exists", return_value=True):
         frag = p.configure(state)
-
-    assert frag.inbounds[0]["tls"]["enabled"] is True
-    assert frag.inbounds[0]["tls"]["server_name"] == "custom.domain"
+    
+    assert "tls" not in frag.inbounds[0]
 
 
 def test_configure_has_padding_scheme():
@@ -261,5 +260,5 @@ def test_status_delegates_to_singbox():
         assert status.installed is True
         assert status.running is True
         assert status.enabled is True
-        assert status.port == 443
+        assert status.port == 20444
         assert status.info["Общий трафик"] == "1.00 KB"

@@ -300,7 +300,19 @@ def get_effective_port(plugin_name: str, state: AppState) -> int:
 
 
 def needs_mux(state: AppState) -> bool:
-    """Returns True if multiplexing is required (2+ TLS plugins active or sub_domain configured)."""
+    """Returns True if multiplexing is required.
+
+    Multiplexing is required if:
+    - anytls or trusttunnel is enabled (to provide fallback decoy protection via Caddy L4)
+    - OR 2+ TLS plugins are active
+    - OR sub_domain is configured
+    """
+    for name in ("anytls", "trusttunnel"):
+        proto = state.protocols.get(name)
+        if proto and proto.enabled:
+            if proto.config.get("domain"):
+                return True
+
     count = 0
     for name in _INTERNAL_PORTS:
         if name == "sub_server":
