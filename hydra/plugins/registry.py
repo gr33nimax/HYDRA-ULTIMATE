@@ -69,8 +69,12 @@ def collect_fragments(state: AppState) -> dict[str, ConfigFragment]:
             f = p.configure(state)
             if f and (f.inbounds or f.outbounds or f.route_rules or f.nft_tproxy_ports or f.nft_tproxy_ifaces or f.dns):
                 fragments[p.meta.name] = f
-        except Exception:
-            pass
+            else:
+                print(f"  [DEBUG] Plugin {p.meta.name} returned empty or invalid fragment: {f}")
+        except Exception as e:
+            import traceback
+            print(f"  [DEBUG] Error configuring plugin {p.meta.name}: {e}")
+            traceback.print_exc()
     return fragments
 
 
