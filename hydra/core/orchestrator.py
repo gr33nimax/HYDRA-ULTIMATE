@@ -55,6 +55,10 @@ def apply_config(state: AppState) -> bool:
     try:
         naive_proto = state.protocols.get("naive")
         if naive_proto and naive_proto.enabled:
+            p_naive = registry.get("naive")
+            if p_naive:
+                p_naive.configure(state)
+                p_naive.apply(state)
             r = subprocess.run(["systemctl", "cat", "caddy-naive"], capture_output=True)
             if r.returncode == 0:
                 subprocess.run(["systemctl", "reset-failed", "caddy-naive"], capture_output=True)
