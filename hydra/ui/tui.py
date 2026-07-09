@@ -304,7 +304,28 @@ def menu(options: list[tuple[str, str, str]], header: str = "") -> str:
         choice = input(f"{INDENT}{CYAN}▸{NC} {BOLD}Выбор{NC}{DIM} ({hint}):{NC} ").strip()
     except (KeyboardInterrupt, EOFError):
         return "0"
-    return choice
+        
+    if not choice:
+        return hint
+
+    choice = choice.upper()
+    # Маппинг кириллических homoglyphs (похожих букв) и раскладки в латиницу
+    cyrillic_map = {
+        "А": "A",
+        "В": "B",
+        "Б": "B",
+        "С": "C",
+        "Е": "E",
+        "Н": "H",
+        "К": "K",
+        "М": "M",
+        "О": "O",
+        "Р": "P",
+        "Т": "T",
+        "Х": "X",
+        "У": "Y",
+    }
+    return cyrillic_map.get(choice, choice)
 
 
 def prompt(text: str, default: str = "") -> str:
