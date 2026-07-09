@@ -1,6 +1,7 @@
-# HYDRA v2.3.2
+# HYDRA v2.3.3
 
-[![Version](https://img.shields.io/badge/version-2.3.2-blue.svg)]()
+[![Version](https://img.shields.io/badge/version-2.3.3-blue.svg)]()
+
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)]()
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg)]()
@@ -220,7 +221,9 @@ hydra/
 
 | Версия / Дата | Критические исправления | Новые модули и интеграции |
 | :--- | :--- | :--- |
+| **v2.3.3**<br>*(09.07.2026)* | - Исправлены параметры ссылок подключения AmneziaWG в подписках.<br>- Исправлена и доработана обфускация трафика в Mieru (поддержка пресетов `disabled`, `basic`, `medium`, `aggressive`). | - Встроенная TUI-панель управления пресетами обфускации Mieru с авто-применением настроек.<br>- Добавлена генерация ссылок `mierus://` с query-параметром `traffic-pattern` для Karing. |
 | **v2.3.2**<br>*(09.07.2026)* | - Автоматическая бесшовная миграция с HAProxy на Caddy L4 в качестве SNI-мультиплексора.<br>- Исправлены конфликты портов NaiveProxy при активации TLS-транспортов.<br>- Исправлена приоритизация путей компилятора Go и добавлена поддержка ARM64/AMD64.<br>- Исправлена ошибка запуска службы `caddy-naive` из-за некорректных путей в namespace.<br>- Добавлена авто-установка плагинов безопасности при глобальном включении и дефолты при вводе в TUI. | |
+
 | **v2.3.1**<br>*(05.07.2026)* | - Немедленный отзыв сессий и токенов на сервере подписок при блокировке/удалении пользователя.<br>- Исправлены проблемы первого запуска на чистой ОС и авто-миграция старых конфигураций Fail2ban. | - Ссылки подключения NaiveProxy изменены на формат `naive+https://`. |
 | **v2.3.0-beta**<br>*(04.07.2026)* | | - HTTPS-сервер подписок (порт 9443) с поддержкой формата NekoBox (`sn://`), лимитами трафика и TTL в реальном времени.<br>- Интеграция плагинов **Telemt (MTProxy)** для Telegram и **qWDTT** (WireGuard over TURN) с изолированным парольным управлением.<br>- Панель VPS-диагностики в TUI (тесты GeoIP, скорость iPerf3 до РФ, тесты DPI через Censorcheck и Global Speedtest). |
 | **v0.5 BETA / v2.2.0**<br>*(03.07.2026)* | | - Фоновый демон `traffic_daemon` для сбора статистики трафика и биллинга пользователей AnyTLS, Mieru и TrustTunnel.<br>- **HAProxy** как единая точка входа (порт 443) для распределения запросов по SNI между AnyTLS, NaiveProxy и TrustTunnel.<br>- Интерактивные TUI-пульты управления для Fail2ban, Honeypot и IPBan.<br>- Модуль выборочного маршрутизации Cloudflare WARP. |

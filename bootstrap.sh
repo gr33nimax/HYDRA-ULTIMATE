@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# HYDRA v2.3.2 — Bootstrap Installer
+# HYDRA v2.3.3 — Bootstrap Installer
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Установка:
 #   curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash
