@@ -2321,19 +2321,27 @@ def _menu_amneziawg(state: AppState, p):
         # Статус
         try:
             st = p.status()
-            lines = [
-                f"  Статус:      {'🟢 Работает' if st.running else '🔴 Остановлен'}",
-                f"  Установлен:  {_ok(st.installed)}",
-                f"  Включён:     {_ok(st.enabled)}",
-            ]
-            profiles = p.get_profiles(state)
-            lines.append(f"  Профили:     {len(profiles)} active")
-            for prof in profiles:
-                lines.append(f"    - {prof['label']} ({prof['interface']}) on port {prof['port']} [{prof['preset']}]")
+            if not st.installed:
+                lines = [
+                    "  Статус:      🔴 Остановлен",
+                    "  Установлен:  🔴 Нет",
+                    "  Включён:     🔴 Нет",
+                    "  ⚠️ AWG не установлен в системе",
+                ]
+            else:
+                lines = [
+                    f"  Статус:      {'🟢 Работает' if st.running else '🔴 Остановлен'}",
+                    f"  Установлен:  {_ok(st.installed)}",
+                    f"  Включён:     {_ok(st.enabled)}",
+                ]
+                profiles = p.get_profiles(state)
+                lines.append(f"  Профили:     {len(profiles)} active")
+                for prof in profiles:
+                    lines.append(f"    - {prof['label']} ({prof['interface']}) on port {prof['port']} [{prof['preset']}]")
             
             panel("🛡️ AMNEZIAWG CONTROL", lines)
-        except Exception as e:
-            panel("AMNEZIAWG CONTROL", [f"  Статус недоступен: {e}"])
+        except Exception:
+            panel("AMNEZIAWG CONTROL", ["  Статус недоступен: AWG не установлен"])
         print()
         
         options = []

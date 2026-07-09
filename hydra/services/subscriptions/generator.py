@@ -182,10 +182,10 @@ def generate_awg_sn_link(conf_text: str, profile_name: str = 'AmneziaWG') -> Opt
         s3   = _parse_int(_get_awg_val(iface, 'S3',   '0'), 0)
         s4   = _parse_int(_get_awg_val(iface, 'S4',   '0'), 0)
         
-        h1   = _get_awg_val(iface, 'H1', '0')
-        h2   = _get_awg_val(iface, 'H2', '0')
-        h3   = _get_awg_val(iface, 'H3', '0')
-        h4   = _get_awg_val(iface, 'H4', '0')
+        h1   = _parse_int(_get_awg_val(iface, 'H1',   '1'), 1)
+        h2   = _parse_int(_get_awg_val(iface, 'H2',   '2'), 2)
+        h3   = _parse_int(_get_awg_val(iface, 'H3',   '3'), 3)
+        h4   = _parse_int(_get_awg_val(iface, 'H4',   '4'), 4)
         i1   = _get_awg_val(iface, 'I1', '')
 
         persistent_keepalive = _parse_int(_get_awg_val(peer, 'PersistentKeepalive', '25'), 25)
@@ -210,12 +210,12 @@ def generate_awg_sn_link(conf_text: str, profile_name: str = 'AmneziaWG') -> Opt
             _u32(jmax)                                 +
             _u32(s1)                                   +
             _u32(s2)                                   +
-            _awg_serialize_string(h1)                  +
-            _awg_serialize_string(h2)                  +
+            _u32(h1)                                   +
+            _u32(h2)                                   +
             _u32(s3)                                   +
             _u32(s4)                                   +
-            _awg_serialize_string(h3)                  +
-            _awg_serialize_string(h4)                  +
+            _u32(h3)                                   +
+            _u32(h4)                                   +
             _awg_serialize_string_len(i1)              +
             b'\x81\x81\x81\x81'                       +  # boolean flags
             _u32(1)                                    +  # PersistentKeepalive enabled

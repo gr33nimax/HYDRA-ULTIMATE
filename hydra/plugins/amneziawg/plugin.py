@@ -874,11 +874,17 @@ class AmneziaWGPlugin(BasePlugin):
 
     def status(self) -> PluginStatus:
         installed = self._installed()
+        port = 0
+        if installed:
+            try:
+                port = self._current_port()
+            except Exception:
+                pass
         return PluginStatus(
             installed=installed,
             enabled=AWG_CONF.exists(),
             running=installed and (self._is_up() or self._is_up_iface(AWG_INTERFACE_1)),
-            port=self._current_port() if installed else 0,
+            port=port,
         )
 
     def traffic(self, state: AppState) -> dict[str, int]:
@@ -1134,12 +1140,18 @@ class AmneziaWGPlugin(BasePlugin):
             ["ip", "link", "show", interface], capture_output=True).returncode == 0
 
     def _current_port(self) -> int:
-        r = self._awg("show", AWG_INTERFACE)
-        m = re.search(r"listening port:\s*(\d+)", r.stdout)
-        if m:
-            return int(m.group(1))
-        m = re.search(r"ListenPort\s*=\s*(\d+)", self._interface_block())
-        return int(m.group(1)) if m else DEFAULT_PORT
+        try:
+            r = self._awg("show", AWG_INTERFACE)
+            m = re.search(r"listening port:\s*(\d+)", r.stdout)
+            if m:
+                return int(m.group(1))
+        except Exception:
+            pass
+        try:
+            m = re.search(r"ListenPort\s*=\s*(\d+)", self._interface_block())
+            return int(m.group(1)) if m else DEFAULT_PORT
+        except Exception:
+            return DEFAULT_PORT
 
     def _params(self) -> dict[str, str]:
         out: dict[str, str] = {}
