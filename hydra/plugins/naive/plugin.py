@@ -617,6 +617,10 @@ class NaivePlugin(BasePlugin):
 
     @staticmethod
     def _install_service() -> None:
+        from hydra.core.decoy import DECOY_DIRS
+        decoy_dir = DECOY_DIRS.get("naive", FAKE_SITE_DIR)
+        decoy_dir.mkdir(parents=True, exist_ok=True)
+
         SERVICE_FILE.write_text(
             "[Unit]\n"
             "Description=NaiveProxy (caddy-forwardproxy-naive)\n"
@@ -634,7 +638,7 @@ class NaivePlugin(BasePlugin):
             "Environment=\"XDG_DATA_HOME=/var/lib/caddy-naive\"\n"
             "Environment=\"XDG_CONFIG_HOME=/var/lib/caddy-naive\"\n"
             "LimitNOFILE=1048576\n"
-            f"ReadWritePaths={CFG_DIR} {LOG_DIR} {FAKE_SITE_DIR} /var/lib/caddy-naive\n"
+            f"ReadWritePaths={CFG_DIR} {LOG_DIR} {decoy_dir} /var/lib/caddy-naive\n"
             "AmbientCapabilities=CAP_NET_BIND_SERVICE\n"
             "NoNewPrivileges=true\n"
             "\n"
