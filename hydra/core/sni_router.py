@@ -289,13 +289,15 @@ def install(state: AppState | None = None) -> bool:
     
     xcaddy_bin = f"{go_path}/bin/xcaddy"
     if not os.path.exists(xcaddy_bin):
-        # Try to download precompiled xcaddy first
         from hydra.utils.downloader import download_github_asset
+        from hydra.utils.net import detect_arch
         import tarfile
         
         xcaddy_tar = Path("/tmp/xcaddy.tar.gz")
         print("  Downloading precompiled xcaddy from GitHub...")
-        if download_github_asset("caddyserver/xcaddy", "linux_amd64.tar.gz", xcaddy_tar):
+        arch = detect_arch()
+        asset_pattern = f"linux_{arch}.tar.gz"
+        if download_github_asset("caddyserver/xcaddy", asset_pattern, xcaddy_tar):
             try:
                 with tarfile.open(xcaddy_tar, "r:gz") as tar:
                     tar.extract("xcaddy", path=f"{go_path}/bin")
@@ -349,6 +351,10 @@ def install(state: AppState | None = None) -> bool:
             "--with", "github.com/mholt/caddy-l4",
             "--output", str(CADDY_BIN)
         ], capture_output=True, text=True, env=env)
+
+    if r.returncode != 0:
+        print(f"  [Ошибка build caddy-l4] Код возврата: {r.returncode}")
+        print(f"  Вывод ошибок:\n{r.stderr or r.stdout or ''}")
 
     if r.returncode == 0 and CADDY_BIN.exists():
         CADDY_BIN.chmod(0o755)
