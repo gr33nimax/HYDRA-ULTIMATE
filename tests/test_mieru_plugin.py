@@ -234,3 +234,50 @@ def test_traffic_iptables():
         assert st.info == {"Общий трафик": "2.62 MB"}
 
 
+def test_mieru_presets_change_configure():
+    """Тест изменения пресета обфускации и его влияния на configure()."""
+    from hydra.core.state import PluginState
+    p = MieruPlugin()
+    
+    # 1. Сначала проверяем medium
+    state = _state([_user("a@x.com")])
+    state.protocols["mieru"] = PluginState(enabled=True, config={"traffic_preset": "medium"})
+    frag = p.configure(state)
+    assert frag.inbounds[0]["traffic_pattern"] == "GgQIARAKIggIARABGAYgCCoFCEAQgAE="
+
+    # 2. Проверяем disabled
+    state = _state([_user("a@x.com")])
+    state.protocols["mieru"] = PluginState(enabled=True, config={"traffic_preset": "disabled"})
+    frag = p.configure(state)
+    assert frag.inbounds[0]["traffic_pattern"] == "GgIIACoECAAQAA=="
+
+
+def test_mieru_set_preset_saves_and_applies():
+    """set_preset() сохраняет пресет в state и применяет конфиг."""
+    p = MieruPlugin()
+    state = _state([_user("a@x.com")])
+    
+    with patch("hydra.core.state.save_state") as mock_save, \
+         patch("hydra.core.orchestrator.apply_config", return_value=True) as mock_apply:
+        
+        ok = p.set_preset(state, "medium")
+        assert ok is True
+        assert state.protocols["mieru"].config["traffic_preset"] == "medium"
+        mock_save.assert_called_once_with(state)
+        mock_apply.assert_called_once_with(state)
+
+
+def test_mieru_client_link_includes_preset():
+    """client_link() содержит корректный query-параметр traffic-pattern."""
+    from hydra.core.state import PluginState
+    p = MieruPlugin()
+    
+    state = _state()
+    state.protocols["mieru"] = PluginState(enabled=True, config={"traffic_preset": "medium"})
+    
+    link = p.client_link(_user("a@x.com", uuid="uuid-a"), state)
+    assert "traffic-pattern=GgQIARAKIggIARABGAYgCCoFCEAQgAE%3D" in link
+
+
+
+

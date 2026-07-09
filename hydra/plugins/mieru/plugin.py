@@ -69,7 +69,7 @@ class MieruPlugin(BasePlugin):
             "listen_port": DEFAULT_PORT_START,
             "transport": DEFAULT_PROTOCOL,
             "users": users,
-            "traffic_pattern": DEFAULT_TRAFFIC_PATTERN,
+            "traffic_pattern": self._get_traffic_pattern(state),
         }
 
         # Диапазон портов
@@ -108,6 +108,7 @@ class MieruPlugin(BasePlugin):
         username = self._derive_username(user)
         password = self._derive_password(user.uuid)
         server_ip = state.network.server_ip or public_ip()
+        pattern = self._get_traffic_pattern(state)
 
         outbound = {
             "type": "mieru",
@@ -118,7 +119,7 @@ class MieruPlugin(BasePlugin):
             "username": username,
             "password": password,
             "multiplexing": "MULTIPLEXING_HIGH",
-            "traffic_pattern": DEFAULT_TRAFFIC_PATTERN,
+            "traffic_pattern": pattern,
         }
 
         full = {
@@ -140,11 +141,13 @@ class MieruPlugin(BasePlugin):
         username = urllib.parse.quote(self._derive_username(user), safe="")
         password = self._derive_password(user.uuid)
         server_ip = state.network.server_ip or public_ip()
+        pattern = self._get_traffic_pattern(state)
 
         return (
             f"mierus://{username}:{password}@{server_ip}"
             f"?port={DEFAULT_PORT_START}&protocol={DEFAULT_PROTOCOL}"
             f"&profile=default&mtu=1400&multiplexing=MULTIPLEXING_HIGH"
+            f"&traffic-pattern={urllib.parse.quote(pattern, safe='')}"
         )
 
     # ═══════════════════════════════════════════════════════════════════
@@ -330,3 +333,34 @@ class MieruPlugin(BasePlugin):
     @staticmethod
     def _derive_password(uuid: str) -> str:
         return derive_key("mieru-pass", uuid)
+
+    def _get_traffic_pattern(self, state: AppState) -> str:
+        """Возвращает base64 traffic_pattern для текущего пресета."""
+        from hydra.plugins.mieru.presets import get_preset_base64
+        ps = state.protocols.get("mieru")
+        preset_name = "basic"
+        if ps and ps.config and "traffic_preset" in ps.config:
+            preset_name = ps.config["traffic_preset"]
+        return get_preset_base64(preset_name)
+
+    def get_current_preset(self, state: AppState) -> str:
+        """Возвращает имя текущего пресета обфускации."""
+        ps = state.protocols.get("mieru")
+        if ps and ps.config and "traffic_preset" in ps.config:
+            return ps.config["traffic_preset"]
+        return "basic"
+
+
+    def set_preset(self, state: AppState, preset_name: str) -> bool:
+        """Устанавливает пресет обфускации и применяет конфиг."""
+        from hydra.plugins.mieru.presets import PRESETS
+        if preset_name not in PRESETS:
+            return False
+        
+        from hydra.core.state import get_protocol, save_state
+        ps = get_protocol(state, "mieru")
+        ps.config["traffic_preset"] = preset_name
+        save_state(state)
+        
+        from hydra.core import orchestrator
+        return orchestrator.apply_config(state)
