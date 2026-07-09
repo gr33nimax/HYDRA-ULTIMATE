@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# HYDRA v2.3.1 — Bootstrap Installer
+# HYDRA v2.3.2 — Bootstrap Installer
 # ═══════════════════════════════════════════════════════════════════════════════
 # Установка:
 #   curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash
@@ -138,7 +138,7 @@ fi
 echo -e "\n${BOLD}[4/5] Загрузка HYDRA${NC}"
 INSTALL_DIR="/opt/hydra"
 REPO_URL="https://github.com/gr33nimax/HYDRA-ULTIMATE"
-BRANCH="main"
+BRANCH="dev"
 
 if [[ -d "${INSTALL_DIR}/.git" ]]; then
     info "Обновление репозитория..."
