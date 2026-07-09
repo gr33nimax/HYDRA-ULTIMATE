@@ -149,22 +149,22 @@ def test_needs_mux_with_sub_domain():
     assert needs_mux(s) is True
 
 
-def test_rebuild_runs_haproxy_with_only_sub_domain():
-    """rebuild() запускает haproxy, если активен только домен подписок."""
+def test_rebuild_runs_caddy_l4_with_only_sub_domain():
+    """rebuild() запускает caddy-l4, если активен только домен подписок."""
     s = _state(naive_enabled=False, anytls_enabled=False)
     s.network.sub_domain = "sub.domain.com"
     
     mock_cfg = MagicMock()
     mock_cfg_dir = MagicMock()
     with patch("hydra.core.sni_router.is_installed", return_value=True), \
-         patch("hydra.core.sni_router.HAPROXY_CFG", mock_cfg), \
-         patch("hydra.core.sni_router.HAPROXY_CFG_DIR", mock_cfg_dir), \
+         patch("hydra.core.sni_router.CADDY_CFG", mock_cfg), \
+         patch("hydra.core.sni_router.CADDY_CFG_DIR", mock_cfg_dir), \
          patch("subprocess.run") as mock_run:
         
         mock_run.return_value = MagicMock(returncode=0)
         assert rebuild(s) is True
         
-        # Проверяем, что конфиг был записан и haproxy запущен/перезапущен
+        # Проверяем, что конфиг был записан и caddy-l4 запущен/перезапущен
         mock_cfg.write_text.assert_called_once()
-        mock_run.assert_any_call(["systemctl", "restart", "haproxy"], capture_output=True)
+        mock_run.assert_any_call(["systemctl", "reload-or-restart", "caddy-l4"], capture_output=True)
 
