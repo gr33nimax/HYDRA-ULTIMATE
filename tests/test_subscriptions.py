@@ -188,3 +188,35 @@ def test_generate_client_config_mock():
         result = generate_client_config(user, state, "mock-transport")
         parsed = json.loads(result)
         assert parsed["outbounds"][0]["type"] == "mock"
+
+
+def test_generate_awg_sn_link():
+    conf = """[Interface]
+PrivateKey = MOaSN+H5tfDmpWIGmv2nXBZwV5NEezzjoDu6mZyvqXI=
+Address = 10.68.68.3/32
+DNS = 1.1.1.1
+MTU = 1280
+Jc = 3
+Jmin = 49
+Jmax = 114
+S1 = 0
+S2 = 0
+S3 = 0
+S4 = 0
+H1 = 1
+H2 = 2
+H3 = 3
+H4 = 4
+I1 = 7e8ef37f3541bf9be0d39ec98635bc6190e26e818ffbe5bede1b39a3612c81
+
+[Peer]
+PublicKey = C0reEXAcpsdLQvUDhukTJLc2g5iq0QP3pEg3wTspkn0=
+PresharedKey = rHbKMxS+vx+lecmMFErDnwPy+av9zJFbBmsXpxQLnnI=
+Endpoint = 31.77.203.66:51821
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+"""
+    from hydra.services.subscriptions.generator import generate_awg_sn_link
+    expected = "sn://awg?eNpFjrFSg0AYhE8dH8JnYAbv-MNxFBRGiCFCDJOoTDoOjqjxkIABQhfeh8bC1t6nEhvd2Z1vq509RQgBUQ1D1TCo9FN-I0SwStmv4RI-ev8uWs6Vqf6e2jJ_dG9kpWXheF0_6HNHtO3Lm72ncn2odqFr9de4EE54Fedl4gXVvf20365mXqxt9OcdDhaQOxuoV2W-zbDVF1N-6zdLpWqUVxFLf-IUdlYvDkpUme1swseyDPMm8LLMtS6Gn-gcoePZQDKkQP_qSKf9dehGX4ZgIgUjBX1EeGpygRMwRWwyCjqPKTGx0KhghKUpFzoXiSAczAgo0WJGjoNOhqkBP0NhUSE"
+    assert generate_awg_sn_link(conf, "") == expected
+
