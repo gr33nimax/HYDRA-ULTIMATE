@@ -394,6 +394,12 @@ class TelemtPlugin(BasePlugin):
                 print("  Бинарник telemt не найден в архиве")
                 return False
 
+            if BIN_PATH.exists():
+                try:
+                    BIN_PATH.unlink()
+                except Exception:
+                    pass
+
             shutil.copy2(str(found[0]), str(BIN_PATH))
             BIN_PATH.chmod(0o755)
 

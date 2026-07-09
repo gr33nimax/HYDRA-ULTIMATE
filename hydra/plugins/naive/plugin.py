@@ -611,6 +611,12 @@ class NaivePlugin(BasePlugin):
         if not verify_elf(binary):
             return False
 
+        if BIN_PATH.exists():
+            try:
+                BIN_PATH.unlink()
+            except Exception:
+                pass
+
         shutil.copy2(str(binary), str(BIN_PATH))
         BIN_PATH.chmod(0o755)
         return True

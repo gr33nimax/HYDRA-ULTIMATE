@@ -87,6 +87,12 @@ def install(force: bool = False) -> bool:
 
     _log("INFO", "Installing sing-box-extended...")
 
+    # Останавливаем службу перед заменой бинарника, чтобы не было конфликтов
+    try:
+        stop()
+    except Exception as e:
+        _log("WARNING", f"Failed to stop sing-box: {e}")
+
     from hydra.utils.net import detect_arch
     from hydra.utils.downloader import download_github_asset_filtered, extract_tarball
 
@@ -123,6 +129,13 @@ def install(force: bool = False) -> bool:
         _log("ERROR", "sing-box binary not found in archive")
         shutil.rmtree(str(dest), ignore_errors=True)
         return False
+
+    # Удаляем старый бинарник, если он существует, для исключения "Text file busy"
+    if SINGBOX_BIN.exists():
+        try:
+            SINGBOX_BIN.unlink()
+        except Exception as e:
+            _log("WARNING", f"Failed to unlink {SINGBOX_BIN}: {e}")
 
     import shutil as _sh
     _sh.move(str(candidate), str(SINGBOX_BIN))

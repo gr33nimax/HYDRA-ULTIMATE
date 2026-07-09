@@ -422,8 +422,6 @@ def needs_mux(state: AppState) -> bool:
             if domain:
                 count += 1
     sub_domain = getattr(state.network, "sub_domain", "")
-    if sub_domain:
-        count += 1
     return count >= 2 or bool(sub_domain)
 
 
@@ -567,6 +565,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
             ]
         })
 
+<<<<<<< HEAD
     l4_app = {
         "servers": {
             "tls_mux": {

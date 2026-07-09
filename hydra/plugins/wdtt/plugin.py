@@ -470,6 +470,12 @@ class WdttPlugin(BasePlugin):
                 return False
 
             BIN_PATH.parent.mkdir(parents=True, exist_ok=True)
+            if BIN_PATH.exists():
+                try:
+                    BIN_PATH.unlink()
+                except Exception:
+                    pass
+
             shutil.copy2(str(built), str(BIN_PATH))
             BIN_PATH.chmod(0o755)
             print(f"  wdtt-server установлен: {BIN_PATH}")
