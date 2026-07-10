@@ -104,7 +104,7 @@ failregex = amneziawg.*Invalid.*from <HOST>
 ignoreregex =
 """,
             "hydra-portscan": r"""[Definition]
-failregex = HYDRA-PORTSCAN.*SRC=<HOST>
+failregex = (?:HYDRA-PORTSCAN|\[UFW BLOCK\]).*SRC=<HOST>
 ignoreregex =
 """
         }

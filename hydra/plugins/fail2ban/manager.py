@@ -204,8 +204,7 @@ def _f2b_write_conf(jail_name: str, cp: configparser.RawConfigParser) -> bool:
 
 def _portscan_add_log_rule():
     subprocess.run([
-        "iptables", "-I", "INPUT", "-p", "tcp", "--syn",
-        "-m", "state", "--state", "NEW",
+        "iptables", "-A", "INPUT", "!", "-i", "lo", "-p", "tcp", "--syn",
         "-j", "LOG", "--log-prefix", "HYDRA-PORTSCAN ", "--log-level", "4"
     ], capture_output=True)
 
