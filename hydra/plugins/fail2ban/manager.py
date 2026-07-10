@@ -607,15 +607,19 @@ def menu_fail2ban(state: AppState, plugin) -> None:
                     lines = _F2B_LOG.read_text(errors="replace").splitlines()[-30:]
                 except Exception:
                     lines = []
-                log_lines = []
+                print()
+                print(f"  {BOLD}{CYAN}📋 ЛОГ FAIL2BAN (последние 30 строк){NC}")
+                print(f"  {CYAN}" + "═" * 70 + f"{NC}")
                 if not lines:
-                    log_lines.append(f"  {DIM}Лог-файл пуст{NC}")
-                for line in lines:
-                    col = RED if " Ban " in line else (YELLOW if " Unban " in line else DIM)
-                    log_lines.append(f"  {col}{line[:100]}{NC}")
-                panel("📋 ЛОГ FAIL2BAN (последние 30 строк)", log_lines)
+                    print(f"  {DIM}Лог-файл пуст{NC}")
+                else:
+                    for line in lines:
+                        col = RED if " Ban " in line else (YELLOW if " Unban " in line else DIM)
+                        print(f"  {col}{line}{NC}")
+                print(f"  {CYAN}" + "═" * 70 + f"{NC}")
             else:
                 error(f"Файл лога не найден: {_F2B_LOG}")
+            print()
             prompt("Нажмите Enter для продолжения")
             
         # ── 8. Восстановление базового конфига ────────────────────────────────
