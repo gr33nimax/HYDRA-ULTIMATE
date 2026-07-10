@@ -224,6 +224,9 @@ ignoreregex =
         return ConfigFragment()
 
     def apply(self, state: AppState) -> bool:
+        if not self._installed():
+            return False
+        self._write_jails(state)
         r = subprocess.run(["fail2ban-client", "reload"], capture_output=True, timeout=15)
         if r.returncode != 0:
             subprocess.run(["systemctl", "restart", "fail2ban"], capture_output=True, timeout=20)
