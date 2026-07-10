@@ -34,7 +34,7 @@ class Fail2banPlugin(BasePlugin):
         if r.returncode != 0:
             return False
 
-        self._write_jails()
+        self._write_jails(None)
         subprocess.run(["systemctl", "enable", "--now", "fail2ban"], capture_output=True)
         return True
 
@@ -46,12 +46,30 @@ class Fail2banPlugin(BasePlugin):
             (JAIL_DIR / "sshd.local").unlink(missing_ok=True)
             for f in JAIL_DIR.glob("hydra-*.local"):
                 f.unlink(missing_ok=True)
-        Path("/etc/fail2ban/filter.d/sing-box.conf").unlink(missing_ok=True)
-        Path("/etc/fail2ban/filter.d/awg-invalid.conf").unlink(missing_ok=True)
+        filter_dir = Path("/etc/fail2ban/filter.d")
+        for name in ("hydra-anytls", "hydra-mieru", "hydra-trusttunnel", "hydra-naive", "hydra-awg", "hydra-portscan"):
+            (filter_dir / f"{name}.conf").unlink(missing_ok=True)
+        (filter_dir / "sing-box.conf").unlink(missing_ok=True)
+        (filter_dir / "awg-invalid.conf").unlink(missing_ok=True)
         return True
 
-    def _write_jails(self) -> None:
+    def _write_jails(self, state: AppState | None = None) -> None:
         JAIL_DIR.mkdir(parents=True, exist_ok=True)
+        filter_dir = Path("/etc/fail2ban/filter.d")
+        filter_dir.mkdir(parents=True, exist_ok=True)
+
+        # Миграция: удаляем устаревшие файлы от старого формата
+        old_files = [
+            JAIL_DIR / "hydra-singbox.local",
+            JAIL_DIR / "hydra-awg.local",
+            filter_dir / "sing-box.conf",
+            filter_dir / "awg-invalid.conf",
+        ]
+        for f in old_files:
+            try:
+                f.unlink(missing_ok=True)
+            except Exception:
+                pass
         
         # Отключаем дефолтный системный sshd джейл, чтобы избежать дублирования
         try:
@@ -60,32 +78,85 @@ class Fail2banPlugin(BasePlugin):
         except Exception:
             pass
 
-        # Создаем фильтр для sing-box, если его нет
-        try:
-            filter_dir = Path("/etc/fail2ban/filter.d")
-            filter_dir.mkdir(parents=True, exist_ok=True)
-            filter_path = filter_dir / "sing-box.conf"
-            filter_content = """[Definition]
-failregex = (?:WARNING|ERROR).*inbound/.*(?:handshake failed|decryption failed|authentication failed|connection failed|rejected|invalid).*from \\[?(?:::ffff:)?<HOST>\\]?:\\d+
-            inbound/.*(?:handshake failed|decryption failed|authentication failed|connection failed|rejected|invalid).*from \\[?(?:::ffff:)?<HOST>\\]?:\\d+
-            inbound/.*from \\[?(?:::ffff:)?<HOST>\\]?:\\d+.*(?:handshake failed|decryption failed|authentication failed|connection failed|rejected|invalid)
-            inbound/tproxy.*(?:connection rejected|process connection|bad request).*from \\[?(?:::ffff:)?<HOST>\\]?
-            inbound/.*(?:TLS handshake error|unknown certificate|reality.*reject).*from \\[?(?:::ffff:)?<HOST>\\]?:\\d+
+        # Создаем фильтры для всех протоколов
+        filters = {
+            "hydra-anytls": r"""[Definition]
+failregex = inbound/anytls\[.*\]:\s+process connection from \[?(?:::ffff:)?<HOST>\]?:\d+:\s+.*
+ignoreregex =
+""",
+            "hydra-mieru": r"""[Definition]
+failregex = inbound/mieru\[.*\]:\s+process connection from \[?(?:::ffff:)?<HOST>\]?:\d+:\s+.*
+ignoreregex =
+""",
+            "hydra-trusttunnel": r"""[Definition]
+failregex = inbound/trusttunnel\[.*\]:\s+process connection from \[?(?:::ffff:)?<HOST>\]?:\d+:\s+.*
+ignoreregex =
+""",
+            "hydra-naive": r"""[Definition]
+failregex = "remote_ip":\s*"<HOST>".*"status":\s*(?:407|401|403)
+            "status":\s*(?:407|401|403).*"remote_ip":\s*"<HOST>"
+ignoreregex =
+""",
+            "hydra-awg": r"""[Definition]
+failregex = amneziawg.*Invalid.*from <HOST>
+            amneziawg.*Handshake.*failed.*<HOST>
+            wireguard.*Invalid.*from <HOST>
+ignoreregex =
+""",
+            "hydra-portscan": r"""[Definition]
+failregex = HYDRA-PORTSCAN.*SRC=<HOST>
 ignoreregex =
 """
-            filter_path.write_text(filter_content, encoding="utf-8")
-        except Exception:
-            pass
+        }
+
+        for fname, fcontent in filters.items():
+            try:
+                (filter_dir / f"{fname}.conf").write_text(fcontent, encoding="utf-8")
+            except Exception:
+                pass
+
+        def is_proto_enabled(proto_name: str) -> bool:
+            if not state:
+                return True
+            p = state.protocols.get(proto_name)
+            return p.enabled if p else False
 
         jails = {
-            "hydra-singbox": {
-                "enabled": "true",
-                "filter": "sing-box",
+            "hydra-anytls": {
+                "enabled": "true" if is_proto_enabled("anytls") else "false",
+                "filter": "hydra-anytls",
                 "backend": "systemd",
                 "journalmatch": "_SYSTEMD_UNIT=sing-box.service",
-                "maxretry": "5",
+                "maxretry": "3",
                 "bantime": "3600",
-                "findtime": "600",
+                "findtime": "300",
+            },
+            "hydra-mieru": {
+                "enabled": "true" if is_proto_enabled("mieru") else "false",
+                "filter": "hydra-mieru",
+                "backend": "systemd",
+                "journalmatch": "_SYSTEMD_UNIT=sing-box.service",
+                "maxretry": "3",
+                "bantime": "3600",
+                "findtime": "300",
+            },
+            "hydra-trusttunnel": {
+                "enabled": "true" if is_proto_enabled("trusttunnel") else "false",
+                "filter": "hydra-trusttunnel",
+                "backend": "systemd",
+                "journalmatch": "_SYSTEMD_UNIT=sing-box.service",
+                "maxretry": "3",
+                "bantime": "3600",
+                "findtime": "300",
+            },
+            "hydra-naive": {
+                "enabled": "true" if is_proto_enabled("naive") else "false",
+                "filter": "hydra-naive",
+                "backend": "auto",
+                "logpath": "/var/log/caddy-naive/access.log",
+                "maxretry": "5",
+                "bantime": "7200",
+                "findtime": "300",
             },
             "hydra-sshd": {
                 "enabled": "true",
@@ -95,39 +166,56 @@ ignoreregex =
                 "bantime": "3600",
                 "findtime": "600",
             },
+            "hydra-recidive": {
+                "enabled": "true",
+                "filter": "recidive",
+                "logpath": "/var/log/fail2ban.log",
+                "maxretry": "3",
+                "findtime": "86400",
+                "bantime": "604800",
+                "banaction": "iptables-allports",
+            },
+            "hydra-portscan": {
+                "enabled": "false",
+                "filter": "hydra-portscan",
+                "backend": "systemd",
+                "journalmatch": "_TRANSPORT=kernel",
+                "maxretry": "15",
+                "findtime": "120",
+                "bantime": "3600",
+                "banaction": "iptables-allports",
+            }
         }
 
         # Опциональный джейл для AWG kernel log
         import shutil
         awg_installed = Path("/usr/bin/awg").exists() or shutil.which("awg") is not None
+        awg_enabled = awg_installed
+        if state:
+            p = state.protocols.get("amneziawg")
+            if p:
+                awg_enabled = awg_enabled and p.enabled
+
         if awg_installed:
-            try:
-                awg_filter_path = filter_dir / "awg-invalid.conf"
-                awg_filter_content = """[Definition]
-failregex = amneziawg.*: Invalid.*from <HOST>
-            amneziawg.*: Handshake.*failed.*<HOST>
-ignoreregex =
-"""
-                awg_filter_path.write_text(awg_filter_content, encoding="utf-8")
-                
-                jails["hydra-awg"] = {
-                    "enabled": "true",
-                    "filter": "awg-invalid",
-                    "backend": "systemd",
-                    "journalmatch": "_TRANSPORT=kernel",
-                    "maxretry": "10",
-                    "bantime": "1800",
-                    "findtime": "300",
-                }
-            except Exception:
-                pass
+            jails["hydra-awg"] = {
+                "enabled": "true" if awg_enabled else "false",
+                "filter": "hydra-awg",
+                "backend": "systemd",
+                "journalmatch": "_TRANSPORT=kernel",
+                "maxretry": "5",
+                "bantime": "1800",
+                "findtime": "300",
+            }
 
         for name, opts in jails.items():
-            path = JAIL_DIR / f"{name}.local"
-            parts = []
-            for k, v in opts.items():
-                parts.append(f"{k} = {v}")
-            path.write_text(f"[{name}]\n" + "\n".join(parts) + "\n", encoding="utf-8")
+            try:
+                path = JAIL_DIR / f"{name}.local"
+                parts = []
+                for k, v in opts.items():
+                    parts.append(f"{k} = {v}")
+                path.write_text(f"[{name}]\n" + "\n".join(parts) + "\n", encoding="utf-8")
+            except Exception:
+                pass
 
     def _installed(self) -> bool:
         return F2B_BIN.exists()

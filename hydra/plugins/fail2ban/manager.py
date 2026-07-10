@@ -200,6 +200,25 @@ def _f2b_write_conf(jail_name: str, cp: configparser.RawConfigParser) -> bool:
     return _f2b_reload()
 
 
+def _portscan_add_log_rule():
+    subprocess.run([
+        "iptables", "-I", "INPUT", "-p", "tcp", "--syn",
+        "-m", "state", "--state", "NEW",
+        "-j", "LOG", "--log-prefix", "HYDRA-PORTSCAN ", "--log-level", "4"
+    ], capture_output=True)
+
+
+def _portscan_remove_log_rule():
+    r = subprocess.run(["iptables", "-S", "INPUT"], capture_output=True, text=True)
+    if r.returncode == 0:
+        for line in r.stdout.splitlines():
+            if "HYDRA-PORTSCAN" in line:
+                parts = line.split()
+                if parts[0] == "-A":
+                    parts[0] = "-D"
+                    subprocess.run(["iptables"] + parts, capture_output=True)
+
+
 # ── Селф-контейнед парсинг пользовательского ввода ───────────────────────────
 def _parse_ip(raw: str) -> list[str]:
     net = ipaddress.ip_address(raw)
@@ -305,8 +324,12 @@ def menu_fail2ban(state: AppState, plugin) -> None:
         active = _f2b_active() if installed else False
         live_jails = _f2b_list_jails() if active else []
         
-        # В гидре мы ориентируемся на джейлы hydra-singbox и hydra-sshd
-        configured_jails = ["hydra-singbox", "hydra-sshd"]
+        # В гидре мы ориентируемся на джейлы hydra-anytls, hydra-mieru, hydra-trusttunnel, hydra-naive, hydra-awg, hydra-sshd, hydra-recidive, hydra-portscan
+        configured_jails = [
+            "hydra-anytls", "hydra-mieru", "hydra-trusttunnel",
+            "hydra-naive", "hydra-awg", "hydra-sshd",
+            "hydra-recidive", "hydra-portscan",
+        ]
         jail_names = live_jails if live_jails else configured_jails
         
         total_banned = 0
@@ -549,6 +572,11 @@ def menu_fail2ban(state: AppState, plugin) -> None:
             
             info(f"Переключаю статус {jail}...")
             if _f2b_write_conf(jail, cp):
+                if jail == "hydra-portscan":
+                    if new_en == "true":
+                        _portscan_add_log_rule()
+                    else:
+                        _portscan_remove_log_rule()
                 success(f"Джейл {jail} успешно {'выключен' if cur_en else 'включен'}!")
             else:
                 warn("Статус изменен, но Fail2ban не смог перезапуститься автоматически")
@@ -579,7 +607,7 @@ def menu_fail2ban(state: AppState, plugin) -> None:
             warn("Локальные изменения лимитов и параметров джейлов будут удалены.")
             if confirm("Продолжить?", default=False):
                 info("Восстанавливаю конфигурации...")
-                plugin._write_jails()
+                plugin._write_jails(state)
                 if _f2b_reload():
                     success("Базовая конфигурация восстановлена!")
                 else:
