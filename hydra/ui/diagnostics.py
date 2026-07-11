@@ -394,7 +394,8 @@ def query_primary_geoip(ip: str, service: str) -> str:
         "IFCONFIG_CO": f"https://ifconfig.co/country-iso?ip={ip}",
         "IPAPI_COM": f"http://ip-api.com/json/{ip}?fields=countryCode",
         "IPWHO_IS": f"https://ipwho.is/{ip}",
-        "IP2LOCATION_IO": f"https://api.ip2location.io/?ip={ip}"
+        "IP2LOCATION_IO": f"https://api.ip2location.io/?ip={ip}",
+        "RIPE": f"https://stat.ripe.net/data/rir-geo/data.json?resource={ip}"
     }
     
     url = urls.get(service)
@@ -436,6 +437,12 @@ def query_primary_geoip(ip: str, service: str) -> str:
             elif service == "IP2LOCATION_IO":
                 val = json.loads(data).get("country_code")
                 return val.upper() if val else "—"
+            elif service == "RIPE":
+                resources = json.loads(data).get("data", {}).get("located_resources", [])
+                if resources:
+                    val = resources[0].get("location")
+                    return val.upper() if val else "—"
+                return "—"
     except Exception:
         pass
     finally:
@@ -791,7 +798,7 @@ def test_ip_region():
             except Exception:
                 pass
         
-        primary_services = ["MAXMIND", "IPINFO_IO", "CLOUDFLARE", "IPREGISTRY", "IPAPI_CO", "IPAPI_COM", "IPWHO_IS", "IP2LOCATION_IO"]
+        primary_services = ["RIPE", "MAXMIND", "IPINFO_IO", "CLOUDFLARE", "IPREGISTRY", "IPAPI_CO", "IPAPI_COM", "IPWHO_IS", "IP2LOCATION_IO"]
         custom_services = ["Google", "YouTube", "Twitch", "ChatGPT", "Netflix", "Spotify", "Disney+", "Steam", "Claude"]
         
         primary_results = []
@@ -1649,7 +1656,7 @@ def run_diagnostics_report() -> str:
     report.append("")
     
     system_has_ipv6 = check_system_ipv6()
-    primary_services = ["MAXMIND", "IPINFO_IO", "CLOUDFLARE", "IPREGISTRY", "IPAPI_CO", "IPAPI_COM", "IPWHO_IS", "IP2LOCATION_IO"]
+    primary_services = ["RIPE", "MAXMIND", "IPINFO_IO", "CLOUDFLARE", "IPREGISTRY", "IPAPI_CO", "IPAPI_COM", "IPWHO_IS", "IP2LOCATION_IO"]
     custom_services = ["Google", "YouTube", "Twitch", "ChatGPT", "Netflix", "Spotify", "Disney+", "Steam", "Claude"]
     
     report.append("### Детекция баз GeoIP")

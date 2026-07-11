@@ -79,6 +79,16 @@ class TestDiagnosticsGeoIPAndServices:
         assert res == "DE"
 
     @patch("urllib.request.urlopen")
+    def test_query_primary_geoip_ripe(self, mock_urlopen):
+        """Проверка парсинга результатов RIPE базы."""
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"data": {"located_resources": [{"location": "FR"}]}}'
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+        
+        res = diagnostics.query_primary_geoip("1.2.3.4", "RIPE")
+        assert res == "FR"
+
+    @patch("urllib.request.urlopen")
     def test_check_custom_service_netflix(self, mock_urlopen):
         """Проверка определения страны библиотеки Netflix."""
         mock_resp = MagicMock()
