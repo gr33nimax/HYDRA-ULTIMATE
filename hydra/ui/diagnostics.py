@@ -53,35 +53,64 @@ def check_system_ipv6() -> bool:
 
 # Списки доменов для проверок блокировок
 DPI_BLOCKED_SITES = [
-    "youtube.com",
-    "redirector.googlevideo.com",
-    "discord.com",
-    "instagram.com",
-    "facebook.com",
-    "x.com",
-    "linkedin.com",
-    "rutracker.org",
-    "digitalocean.com",
     "amnezia.org",
-    "getoutline.org",
-    "mailfence.com",
-    "flibusta.is",
-    "rezka.ag",
     "api.telegram.org",
-    "play.google.com"
+    "bbc.com",
+    "digitalocean.com",
+    "discord.com",
+    "dw.com",
+    "facebook.com",
+    "flibusta.is",
+    "getoutline.org",
+    "instagram.com",
+    "linkedin.com",
+    "mailfence.com",
+    "medium.com",
+    "mullvad.net",
+    "nordvpn.com",
+    "play.google.com",
+    "pornhub.com",
+    "proton.me",
+    "redirector.googlevideo.com",
+    "rezka.ag",
+    "rutracker.org",
+    "surfshark.com",
+    "tailscale.com",
+    "torproject.org",
+    "windscribe.com",
+    "x.com",
+    "youtube.com"
 ]
 
 GEO_BLOCKED_SITES = [
-    "spotify.com",
-    "netflix.com",
-    "patreon.com",
-    "swagger.io",
-    "snyk.io",
-    "mongodb.com",
+    "adobe.com",
+    "amd.com",
     "autodesk.com",
+    "canva.com",
+    "cisco.com",
+    "claude.ai",
+    "copilot.microsoft.com",
+    "coursera.org",
+    "dell.com",
+    "figma.com",
     "graylog.org",
+    "hub.docker.com",
+    "huggingface.co",
+    "intel.com",
+    "mongodb.com",
+    "netflix.com",
+    "notion.so",
+    "nvidia.com",
+    "openai.com",
+    "oracle.com",
+    "patreon.com",
     "redis.io",
-    "copilot.microsoft.com"
+    "slack.com",
+    "snyk.io",
+    "spotify.com",
+    "supercell.com",
+    "swagger.io",
+    "zoom.us"
 ]
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -624,7 +653,7 @@ def run_censorcheck_python(mode: str) -> dict:
             }
         }
         
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
         futures = {executor.submit(worker, d): d for d in domains}
         for future in concurrent.futures.as_completed(futures):
             results.append(future.result())
