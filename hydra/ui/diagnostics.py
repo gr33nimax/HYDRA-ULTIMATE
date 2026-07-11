@@ -974,15 +974,26 @@ def run_tspu_radar(target_ip: str, sni: str) -> dict:
         
     results_url = f"https://atlas.ripe.net/api/v2/measurements/{msm_id}/results/"
     results = []
-    start_time = time.time()
     
-    for attempt in range(25):
+    last_count = 0
+    stagnant_attempts = 0
+    
+    for attempt in range(15):
         time.sleep(2.0)
         try:
             req_res = urllib.request.Request(results_url)
             with urllib.request.urlopen(req_res, context=ctx, timeout=3.0) as response:
                 results = json.loads(response.read().decode("utf-8"))
-                if len(results) >= 33:
+                current_count = len(results)
+                if current_count >= 33:
+                    break
+                if current_count > 0 and current_count == last_count:
+                    stagnant_attempts += 1
+                else:
+                    stagnant_attempts = 0
+                last_count = current_count
+                
+                if stagnant_attempts >= 3 and current_count >= 10:
                     break
         except Exception:
             pass
