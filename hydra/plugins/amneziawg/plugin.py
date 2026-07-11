@@ -962,24 +962,7 @@ class AmneziaWGPlugin(BasePlugin):
         inner["client_priv_key"] = keys["private_key"]
         if keys.get("preshared_key"):
             inner["psk_key"] = keys["preshared_key"]
-        min_conf_lines = [
-            "[Interface]",
-            f"PrivateKey = {keys['private_key']}",
-            f"Address = {base}.{ip}/32",
-            "DNS = 1.1.1.1, 1.0.0.1",
-            f"MTU = {mtu}",
-            "",
-            "[Peer]",
-            f"PublicKey = {server_pub}",
-        ]
-        if keys.get("preshared_key"):
-            min_conf_lines.append(f"PresharedKey = {keys['preshared_key']}")
-        min_conf_lines.append(f"Endpoint = {endpoint}:{port}")
-        min_conf_lines.append("AllowedIPs = 0.0.0.0/0")
-        min_conf_lines.append("PersistentKeepalive = 25")
-        min_conf = "\n".join(min_conf_lines)
-
-        inner["config"] = min_conf
+        inner["config"] = conf
         inner["hostName"] = endpoint
         inner["mtu"] = str(mtu)
         inner["persistent_keep_alive"] = "25"

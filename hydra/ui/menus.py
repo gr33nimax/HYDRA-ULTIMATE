@@ -357,11 +357,11 @@ def _user_links(state: AppState, user: User):
                 print(f"  {CYAN}── {BOLD}{p.meta.name.upper()} ({label_ru}){NC}{CYAN}{'─' * (PANEL_W - 14 - len(p.meta.name) - len(label_ru))}{NC}")
                 if link:
                     print(f"  {GREEN}Ссылка (WireGuard):{NC}  {link}")
-                if vpn_link:
+                if conf:
                     try:
                         import qrcode
-                        qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L)
-                        qr.add_data(vpn_link)
+                        qr = qrcode.QRCode()
+                        qr.add_data(conf)
                         qr.print_ascii()
                     except Exception:
                         pass
@@ -1322,18 +1322,14 @@ def _user_configs(state: AppState, user: User):
                             panel(f"🔧  {p.meta.name.upper()} {prof.upper()} CONFIG", box_lines)
                             
                             # QR-код (если qrcode установлен)
-                            if vpn_link:
-                                try:
-                                    import qrcode
-                                    qr = qrcode.QRCode(
-                                        error_correction=qrcode.constants.ERROR_CORRECT_L,
-                                        border=1
-                                    )
-                                    qr.add_data(vpn_link)
-                                    print(f"\n  {BOLD}{WHITE}Отсканируйте QR-код для импорта в Amnezia VPN ({label_ru}):{NC}")
-                                    qr.print_ascii(invert=True)
-                                except Exception as e:
-                                    error(f"  Не удалось создать QR-код для Amnezia VPN: {e}")
+                            try:
+                                import qrcode
+                                qr = qrcode.QRCode(border=1)
+                                qr.add_data(conf)
+                                print(f"\n  {BOLD}{WHITE}Отсканируйте QR-код для быстрого импорта ({label_ru}):{NC}")
+                                qr.print_ascii(invert=True)
+                            except Exception as e:
+                                error(f"  Не удалось создать QR-код: {e}")
                     except Exception as e:
                         error(f"  Ошибка получения конфигурации {p.meta.name} ({prof}): {e}")
                 continue
