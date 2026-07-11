@@ -895,8 +895,18 @@ def _user_detail_menu(state: AppState, user: User):
             f"  Трафик:   {_bytes_auto(user.traffic_used_bytes)} / {lim_str}",
             f"  TTL:      {ttl_str}",
             f"  Создан:   {user.created_at[:10] if user.created_at else '—'}",
-            f"  Подписка: {CYAN}{sub_url}{NC}",
         ]
+        
+        prefix = "  Подписка: "
+        link_width = 60
+        chunks = [sub_url[i:i+link_width] for i in range(0, len(sub_url), link_width)]
+        if chunks:
+            lines.append(f"{prefix}{CYAN}{chunks[0]}{NC}")
+            for chunk in chunks[1:]:
+                lines.append(f"{' ' * len(prefix)}{CYAN}{chunk}{NC}")
+        else:
+            lines.append(f"{prefix}{CYAN}{NC}")
+
         panel(f"Пользователь: {user.email}", lines)
         print()
         
