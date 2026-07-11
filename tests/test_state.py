@@ -191,3 +191,24 @@ def test_migrate_v1_to_v2():
     # tproxy-поля появились в NetworkConfig
     assert loaded.network.tproxy_enabled is False
     assert loaded.network.tproxy_port == 1081
+
+
+def test_singbox_generate_config_tproxy_reject_rule():
+    """Тест генерации конфига sing-box с правилом защиты от петель TPROXY."""
+    from hydra.core.singbox import generate_config
+    state = AppState()
+    state.network.tproxy_enabled = True
+    state.network.tproxy_port = 1081
+    
+    config = generate_config(state, {})
+    
+    rules = config.get("route", {}).get("rules", [])
+    reject_rule = None
+    for rule in rules:
+        if rule.get("action") == "reject":
+            reject_rule = rule
+            break
+            
+    assert reject_rule is not None
+    assert reject_rule["inbound"] == ["tproxy-in"]
+    assert reject_rule["port"] == [1081]

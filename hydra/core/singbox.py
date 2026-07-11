@@ -181,6 +181,12 @@ def _base_config(state: AppState) -> dict:
             "listen": "::",
             "listen_port": state.network.tproxy_port,
         })
+        # Предотвращение петель маршрутизации TPROXY
+        config["route"]["rules"].append({
+            "inbound": ["tproxy-in"],
+            "port": [state.network.tproxy_port],
+            "action": "reject"
+        })
         config["route"]["rules"].append({
             "action": "sniff",
             "sniffer": ["http", "tls", "quic"],
