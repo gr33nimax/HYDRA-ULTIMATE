@@ -17,7 +17,7 @@ import subprocess
 from pathlib import Path
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
-from hydra.core.state import AppState
+from hydra.core.state import AppState, PluginState
 
 WGCF_BIN = Path("/usr/local/bin/wgcf")
 WGCF_PROFILE = Path("/etc/wireguard/wgcf-profile.conf")
@@ -226,10 +226,53 @@ class WarpPlugin(BasePlugin):
     def configure(self, state: AppState) -> ConfigFragment:
         """Генерирует Sing-Box outbound/endpoints для WARP и route-правила."""
         WARP_PROFILES_DIR.mkdir(parents=True, exist_ok=True)
-        endpoints = []
-        rules = []
 
-        # Загружаем кастомные гео-профили
+        ps = state.protocols.setdefault("warp", state.protocols.get("warp") or PluginState())
+        if not ps.config:
+            ps.config = {}
+
+        # ── ИНИЦИАЛИЗАЦИЯ ДЕФОЛТНЫХ НАСТРОЕК ──
+        if "local_lists" not in ps.config and "list_targets" not in ps.config:
+            if "domains" not in ps.config and "ips" not in ps.config:
+                local_lists = ps.config.setdefault("local_lists", {})
+                local_lists["default"] = {"domains": DEFAULT_WARP_DOMAINS.copy(), "ips": []}
+                list_targets = ps.config.setdefault("list_targets", {})
+                list_targets["local:default"] = "warp"
+                from hydra.core.state import save_state
+                save_state(state)
+
+        # ── МИГРАЦИЯ СТАРЫХ НАСТРОЕК ──
+        migrated = False
+        old_domains = ps.config.pop("domains", None)
+        old_ips = ps.config.pop("ips", None)
+        if old_domains is not None or old_ips is not None:
+            local_lists = ps.config.setdefault("local_lists", {})
+            default_list = local_lists.setdefault("default", {"domains": [], "ips": []})
+            if old_domains:
+                default_list["domains"] = list(set(default_list["domains"] + old_domains))
+            if old_ips:
+                default_list["ips"] = list(set(default_list["ips"] + old_ips))
+            
+            list_targets = ps.config.setdefault("list_targets", {})
+            list_targets.setdefault("local:default", "warp")
+            migrated = True
+
+        enabled_ext = ps.config.pop("enabled_external_lists", None)
+        if enabled_ext is not None:
+            list_targets = ps.config.setdefault("list_targets", {})
+            for ext_key in enabled_ext:
+                list_targets.setdefault(f"ext:{ext_key}", "warp")
+            migrated = True
+
+        if migrated:
+            from hydra.core.state import save_state
+            save_state(state)
+
+        # ── ЗАГРУЗКА ТОЧЕК ВЫХОДА (OUTBOUNDS/ENDPOINTS) ──
+        endpoints = []
+        destinations = set()
+
+        # 1. Кастомные гео-профили из /etc/hydra/warp_profiles/
         custom_profiles = []
         for p_file in sorted(WARP_PROFILES_DIR.glob("*.conf")):
             profile_name = p_file.stem
@@ -242,98 +285,69 @@ class WarpPlugin(BasePlugin):
                 from hydra.core.singbox import _log
                 _log("ERROR", f"Failed to parse warp profile {p_file}: {e}")
 
-        ps = state.protocols.get("warp")
-        routes_config = {}
-        if ps and "routes" in ps.config:
-            routes_config = ps.config["routes"]
-
-        if custom_profiles:
-            for profile_name, parsed in custom_profiles:
-                # Извлекаем endpoint хост и порт
-                raw_endpoint = parsed["peer"].get("endpoint", "")
-                if ":" in raw_endpoint:
-                    host, port_str = raw_endpoint.rsplit(":", 1)
-                    try:
-                        port = int(port_str)
-                    except ValueError:
-                        port = 2408
-                else:
-                    host = raw_endpoint
-                    port = 2408
-
+        for profile_name, parsed in custom_profiles:
+            raw_endpoint = parsed["peer"].get("endpoint", "")
+            if ":" in raw_endpoint:
+                host, port_str = raw_endpoint.rsplit(":", 1)
                 try:
-                    server_ip = socket.gethostbyname(host)
-                except Exception:
-                    server_ip = host
+                    port = int(port_str)
+                except ValueError:
+                    port = 2408
+            else:
+                host = raw_endpoint
+                port = 2408
 
-                # Проверяем, AmneziaWG ли это
-                is_amnezia = any(k in parsed["interface"] for k in ["s1", "s2", "jc", "jmin", "jmax", "h1", "h2", "h3", "h4"])
-                
-                # Собираем адреса
-                addresses = []
-                for addr in parsed["interface"].get("address", "").split(","):
-                    addr = addr.strip()
-                    if addr:
-                        if "/" not in addr:
-                            addr += "/128" if ":" in addr else "/32"
-                        addresses.append(addr)
+            try:
+                server_ip = socket.gethostbyname(host)
+            except Exception:
+                server_ip = host
 
-                if not addresses:
-                    addresses = ["172.16.0.2/32"]
+            is_amnezia = any(k in parsed["interface"] for k in ["s1", "s2", "jc", "jmin", "jmax", "h1", "h2", "h3", "h4"])
+            
+            addresses = []
+            for addr in parsed["interface"].get("address", "").split(","):
+                addr = addr.strip()
+                if addr:
+                    if "/" not in addr:
+                        addr += "/128" if ":" in addr else "/32"
+                    addresses.append(addr)
 
-                endpoint = {
-                    "type": "amneziawg" if is_amnezia else "wireguard",
-                    "tag": f"warp_{profile_name}",
-                    "address": addresses,
-                    "private_key": parsed["interface"].get("privatekey", ""),
-                    "mtu": int(parsed["interface"].get("mtu", 1280)),
-                    "peers": [
-                        {
-                            "address": server_ip,
-                            "port": port,
-                            "public_key": parsed["peer"].get("publickey", ""),
-                            "allowed_ips": [ip.strip() for ip in parsed["peer"].get("allowedips", "0.0.0.0/0, ::/0").split(",") if ip.strip()]
-                        }
-                    ]
-                }
+            if not addresses:
+                addresses = ["172.16.0.2/32"]
 
-                if is_amnezia:
-                    # Переносим параметры обфускации
-                    for k in ["s1", "s2", "jc", "jmin", "jmax", "h1", "h2", "h3", "h4"]:
-                        if k in parsed["interface"]:
-                            try:
-                                endpoint[k] = int(parsed["interface"][k])
-                            except ValueError:
-                                pass
+            tag = f"warp_{profile_name}"
+            destinations.add(tag)
 
-                endpoints.append(endpoint)
+            endpoint = {
+                "type": "amneziawg" if is_amnezia else "wireguard",
+                "tag": tag,
+                "address": addresses,
+                "private_key": parsed["interface"].get("privatekey", ""),
+                "mtu": int(parsed["interface"].get("mtu", 1280)),
+                "peers": [
+                    {
+                        "address": server_ip,
+                        "port": port,
+                        "public_key": parsed["peer"].get("publickey", ""),
+                        "allowed_ips": [ip.strip() for ip in parsed["peer"].get("allowedips", "0.0.0.0/0, ::/0").split(",") if ip.strip()]
+                    }
+                ]
+            }
 
-                # Добавляем правила маршрутизации из routes_config
-                profile_route = routes_config.get(profile_name, {})
-                domains = profile_route.get("domains", [])
-                ips = profile_route.get("ips", [])
+            if is_amnezia:
+                for k in ["s1", "s2", "jc", "jmin", "jmax", "h1", "h2", "h3", "h4"]:
+                    if k in parsed["interface"]:
+                        try:
+                            endpoint[k] = int(parsed["interface"][k])
+                        except ValueError:
+                            pass
 
-                if domains:
-                    clean_domains = [d.strip() for d in domains if d.strip()]
-                    if clean_domains:
-                        rules.append({
-                            "domain": clean_domains,
-                            "outbound": f"warp_{profile_name}"
-                        })
-                if ips:
-                    clean_ips = [ip.strip() for ip in ips if ip.strip()]
-                    if clean_ips:
-                        rules.append({
-                            "ip_cidr": clean_ips,
-                            "outbound": f"warp_{profile_name}"
-                        })
+            endpoints.append(endpoint)
 
-        else:
-            # Совместимый режим (стандартный WGCF)
-            warp_cfg = self._load_warp_config()
-            if not warp_cfg:
-                return ConfigFragment()
-
+        # 2. Стандартный WGCF (если профиль сгенерирован)
+        warp_cfg = self._load_warp_config()
+        if warp_cfg:
+            destinations.add("warp")
             try:
                 server_ip = socket.gethostbyname("engage.cloudflareclient.com")
             except Exception:
@@ -356,44 +370,59 @@ class WarpPlugin(BasePlugin):
             }
             endpoints.append(endpoint)
 
-            if ps:
-                if "domains" not in ps.config:
-                    ps.config["domains"] = DEFAULT_WARP_DOMAINS.copy()
-                if "ips" not in ps.config:
-                    ps.config["ips"] = []
-                domains = ps.config.get("domains", [])
-                ips = ps.config.get("ips", [])
-            else:
-                domains = DEFAULT_WARP_DOMAINS.copy()
-                ips = []
+        # ── СБОРКА ПРАВИЛ МАРШРУТИЗАЦИИ ──
+        list_targets = ps.config.get("list_targets", {})
+        local_lists = ps.config.get("local_lists", {})
 
-            ext_domains = []
-            ext_ips = []
-            if WARP_EXTERNAL_CACHE.exists():
-                try:
-                    ext_data = json.loads(WARP_EXTERNAL_CACHE.read_text(encoding="utf-8"))
-                    ext_domains = ext_data.get("domains", [])
-                    ext_ips = ext_data.get("ips", [])
-                except Exception:
-                    pass
+        ext_rules = {}
+        if WARP_EXTERNAL_CACHE.exists():
+            try:
+                ext_rules = json.loads(WARP_EXTERNAL_CACHE.read_text(encoding="utf-8"))
+            except Exception:
+                pass
 
-            all_domains = list(set(domains + ext_domains))
-            all_ips = list(set(ips + ext_ips))
+        outbound_domains = {}
+        outbound_ips = {}
 
-            if all_domains:
-                clean_domains = [d.strip() for d in all_domains if d.strip()]
-                if clean_domains:
-                    rules.append({
-                        "domain": clean_domains,
-                        "outbound": "warp",
-                    })
-            if all_ips:
-                clean_ips = [ip.strip() for ip in all_ips if ip.strip()]
-                if clean_ips:
-                    rules.append({
-                        "ip_cidr": clean_ips,
-                        "outbound": "warp",
-                    })
+        for list_key, target in list_targets.items():
+            if not target or target == "none" or target not in destinations:
+                continue
+
+            domains = []
+            ips = []
+
+            if list_key.startswith("local:"):
+                list_name = list_key.split(":", 1)[1]
+                local_list = local_lists.get(list_name, {})
+                domains = local_list.get("domains", [])
+                ips = local_list.get("ips", [])
+            elif list_key.startswith("ext:"):
+                list_name = list_key.split(":", 1)[1]
+                ext_list = ext_rules.get(list_name, {})
+                domains = ext_list.get("domains", [])
+                ips = ext_list.get("ips", [])
+
+            if domains:
+                outbound_domains.setdefault(target, []).extend(domains)
+            if ips:
+                outbound_ips.setdefault(target, []).extend(ips)
+
+        rules = []
+        for target, domains_list in outbound_domains.items():
+            clean_domains = list(set([d.strip() for d in domains_list if d.strip()]))
+            if clean_domains:
+                rules.append({
+                    "domain": clean_domains,
+                    "outbound": target,
+                })
+
+        for target, ips_list in outbound_ips.items():
+            clean_ips = list(set([ip.strip() for ip in ips_list if ip.strip()]))
+            if clean_ips:
+                rules.append({
+                    "ip_cidr": clean_ips,
+                    "outbound": target,
+                })
 
         if not rules:
             return ConfigFragment()
@@ -466,7 +495,12 @@ class WarpPlugin(BasePlugin):
         if not ps:
             return False, "Плагин не настроен в state.json"
         
-        enabled_keys = ps.config.get("enabled_external_lists", [])
+        list_targets = ps.config.get("list_targets", {})
+        enabled_keys = []
+        for k, target in list_targets.items():
+            if k.startswith("ext:") and target and target != "none":
+                enabled_keys.append(k.split(":", 1)[1])
+
         if not enabled_keys:
             if WARP_EXTERNAL_CACHE.exists():
                 try:
@@ -476,8 +510,7 @@ class WarpPlugin(BasePlugin):
             return True, "Нет активных внешних списков"
 
         import urllib.request
-        domains = []
-        ips = []
+        downloaded_lists = {}
         downloaded_count = 0
         errors = []
 
@@ -486,6 +519,8 @@ class WarpPlugin(BasePlugin):
                 continue
             item = EXTERNAL_LISTS[key]
             url = item["url"]
+            domains = []
+            ips = []
             try:
                 req = urllib.request.Request(
                     url, 
@@ -507,21 +542,45 @@ class WarpPlugin(BasePlugin):
                             ips.append(token)
                         elif self._is_valid_domain(token):
                             domains.append(token)
+                
+                downloaded_lists[key] = {
+                    "domains": list(set(domains)),
+                    "ips": list(set(ips))
+                }
                 downloaded_count += 1
             except Exception as e:
                 errors.append(f"{item['name']}: {e}")
 
+        if not downloaded_lists:
+            status_msg = f"Ошибка обновления списков."
+            if errors:
+                status_msg += f" Ошибки: {'; '.join(errors)}"
+            return False, status_msg
+
         try:
+            existing = {}
+            if WARP_EXTERNAL_CACHE.exists():
+                try:
+                    existing = json.loads(WARP_EXTERNAL_CACHE.read_text(encoding="utf-8"))
+                    if "domains" in existing and not isinstance(existing["domains"], dict):
+                        existing = {}
+                except Exception:
+                    pass
+
+            for key in downloaded_lists:
+                existing[key] = downloaded_lists[key]
+
+            # Удаляем из кэша списки, которые больше не активны
+            keys_to_delete = [k for k in existing if k != "updated_at" and k not in enabled_keys]
+            for k in keys_to_delete:
+                existing.pop(k, None)
+
+            existing["updated_at"] = __import__("datetime").datetime.now().isoformat()
+
             WARP_EXTERNAL_CACHE.parent.mkdir(parents=True, exist_ok=True)
-            WARP_EXTERNAL_CACHE.write_text(json.dumps({
-                "domains": list(set(domains)),
-                "ips": list(set(ips)),
-                "updated_at": __import__("datetime").datetime.now().isoformat()
-            }, indent=2, ensure_ascii=False), encoding="utf-8")
+            WARP_EXTERNAL_CACHE.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
             
             status_msg = f"Обновлено списков: {downloaded_count}/{len(enabled_keys)}."
-            if downloaded_count > 0:
-                status_msg += f" Загружено доменов: {len(set(domains))}, IP: {len(set(ips))}."
             if errors:
                 status_msg += f" Ошибки: {'; '.join(errors)}"
             

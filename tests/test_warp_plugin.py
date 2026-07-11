@@ -92,7 +92,11 @@ invalid_domain_name
     # Мок состояния
     mock_state = AppState()
     ps = mock_state.protocols.setdefault("warp", PluginState())
-    ps.config = {"enabled_external_lists": ["russia"]}
+    ps.config = {
+        "list_targets": {
+            "ext:russia": "warp"
+        }
+    }
     mock_load_state.return_value = mock_state
 
     # Мок пути кэша
@@ -111,8 +115,8 @@ invalid_domain_name
     # Проверяем, что записан валидный JSON с нашими доменами и IP через mock_cache_path
     mock_cache_path.write_text.assert_called_once()
     written_data = json.loads(mock_cache_path.write_text.call_args[0][0])
-    assert written_data["domains"] == ["openai.com"]
-    assert set(written_data["ips"]) == {"1.1.1.1", "192.168.0.0/16"}
+    assert written_data["russia"]["domains"] == ["openai.com"]
+    assert set(written_data["russia"]["ips"]) == {"1.1.1.1", "192.168.0.0/16"}
 
 
 @patch("hydra.plugins.warp.plugin.socket.gethostbyname")
@@ -153,7 +157,10 @@ AllowedIPs = 0.0.0.0/0
     state = AppState()
     ps = state.protocols.setdefault("warp", PluginState())
     ps.config = {
-        "routes": {
+        "list_targets": {
+            "local:russia": "warp_russia"
+        },
+        "local_lists": {
             "russia": {
                 "domains": ["yandex.ru"],
                 "ips": ["95.0.0.0/8"]
