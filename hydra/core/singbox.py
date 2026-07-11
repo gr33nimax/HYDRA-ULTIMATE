@@ -161,11 +161,17 @@ def _base_config(state: AppState) -> dict:
                 "listen_port": 1080,
             },
         ],
-        "outbounds": [],
+        "outbounds": [
+            {
+                "type": "direct",
+                "tag": "direct",
+            }
+        ],
         "route": {
             "rules": [],
             "auto_detect_interface": True,
             "default_mark": 255,
+            "final": "direct",
         },
     }
     if state.network.tproxy_enabled:
