@@ -958,6 +958,19 @@ def test_bench_speedtest():
     if not ensure_packages(["ping"]):
         return
         
+    choice = menu([
+        ("1", "Быстрый тест (замер для 5 серверов с лучшим пингом)", "Экономит время"),
+        ("2", "Полный тест (замер для всех доступных серверов)", "Занимает около 1 минуты"),
+        ("0", "↩ Назад", "")
+    ], "ВЫБОР РЕЖИМА ТЕСТА СКОРОСТИ")
+    
+    if choice == "0":
+        return
+        
+    clear()
+    title("Тест скорости до зарубежных серверов (Global)")
+    print()
+    
     NODES = [
         {"city": "Atlanta, GA, US", "provider": "Linode", "url": "http://speedtest.atlanta.linode.com/100MB-atlanta.bin"},
         {"city": "Dallas, TX, US", "provider": "Enzu", "url": "https://speedtest.dfw1.enzu.com/100MB.bin"},
@@ -969,7 +982,7 @@ def test_bench_speedtest():
         {"city": "Taipei, Taiwan", "provider": "Hinet", "url": "http://tpdb.speed2.hinet.net/test_100m.zip"},
         {"city": "Tokyo, Japan", "provider": "Linode", "url": "http://speedtest.tokyo2.linode.com/100MB-tokyo2.bin"},
         {"city": "Nuremberg, Germany", "provider": "Hetzner", "url": "https://nbg1-speed.hetzner.com/100MB.bin"},
-        {"city": "Rotterdam, Netherlands", "provider": "id3.net", "url": "http://mirror.i3d.net/100mb.bin"},
+        {"city": "Helsinki, Finland", "provider": "Hetzner", "url": "https://hel1-speed.hetzner.com/100MB.bin"},
         {"city": "Amsterdam, Netherlands", "provider": "Leaseweb", "url": "http://speedtest.ams1.nl.leaseweb.net/100mb.bin"},
         {"city": "Milan, Italy", "provider": "Linode", "url": "http://speedtest.milan.linode.com/100MB-milan.bin"},
         {"city": "Sydney, AU", "provider": "Datapacket", "url": "https://syd.download.datapacket.com/100mb.bin"},
@@ -992,15 +1005,18 @@ def test_bench_speedtest():
     try:
         ping_results = run_function_with_spinner("Измерение пинга до мировых серверов", run_parallel_pings, NODES)
         
-        # Сортируем ноды по пингу, выбираем топ-5
+        # Сортируем ноды по пингу
         sorted_nodes = []
         for node in NODES:
             ping_str, ping_val = ping_results.get(node["url"], ("N/A", float('inf')))
             sorted_nodes.append((node, ping_str, ping_val))
         sorted_nodes.sort(key=lambda x: x[2])
         
-        # Получаем URL 5 лучших серверов
-        top_urls = {item[0]["url"] for item in sorted_nodes[:5]}
+        # В зависимости от выбора пользователя определяем список нод для замера скорости
+        if choice == "1":
+            active_urls = {item[0]["url"] for item in sorted_nodes[:5]}
+        else:
+            active_urls = {item[0]["url"] for item in sorted_nodes if item[2] != float('inf')}
         
         print(f"  {CYAN}╔{'═' * 76}╗{NC}")
         print_row("Локация", "Провайдер", ("↓ Speed", BOLD), ("Ping", BOLD))
@@ -1012,7 +1028,7 @@ def test_bench_speedtest():
             url = node["url"]
             ping_str, ping_val = ping_results.get(url, ("N/A", float('inf')))
             
-            if url in top_urls and ping_val != float('inf'):
+            if url in active_urls and ping_val != float('inf'):
                 print_row(loc, prov, ("Download...", CYAN), (ping_str, ""), end_char="\r")
                 speed_mbps = run_http_speed(url)
                 
@@ -1025,7 +1041,7 @@ def test_bench_speedtest():
                 else:
                     print_row(loc, prov, ("Unavailable", RED), (ping_str, RED), end_char="\n")
             else:
-                # Ноды не из топ-5 пропускаются для скорости
+                # Нода пропущена
                 speed_str = "—" if ping_val == float('inf') else "Skipped"
                 print_row(loc, prov, (speed_str, DIM), (ping_str, ""), end_char="\n")
                 
