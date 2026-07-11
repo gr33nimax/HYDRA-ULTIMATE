@@ -339,6 +339,13 @@ def query_primary_geoip(ip: str, service: str) -> str:
     if not ip or ip == "—":
         return "—"
         
+    # Определяем версию IP для подключения к сервису
+    is_target_ipv6 = ":" in ip
+    if is_target_ipv6 and service in ("MAXMIND", "CLOUDFLARE"):
+        conn_ip_version = 6
+    else:
+        conn_ip_version = 4
+
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"}
     if service == "IPREGISTRY":
         headers["Origin"] = "https://ipregistry.co"
@@ -350,24 +357,38 @@ def query_primary_geoip(ip: str, service: str) -> str:
         headers["Referer"] = "https://speed.cloudflare.com"
 
     urls = {
+        "MAXMIND": "https://geoip.maxmind.com/geoip/v2.1/city/me",
         "IPINFO_IO": f"https://ipinfo.io/widget/demo/{ip}",
+        "IPREGISTRY": f"https://api.ipregistry.co/{ip}?hostname=true&key=sb69ksjcajfs4c",
         "IPAPI_CO": f"https://ipapi.co/{ip}/json/",
         "CLOUDFLARE": "https://speed.cloudflare.com/meta",
         "IFCONFIG_CO": f"https://ifconfig.co/country-iso?ip={ip}",
-        "IPAPI_COM": f"https://demo.ip-api.com/json/{ip}?fields=countryCode",
-        "IPWHO_IS": f"https://ipwho.is/{ip}"
+        "IPAPI_COM": f"http://ip-api.com/json/{ip}?fields=countryCode",
+        "IPWHO_IS": f"https://ipwho.is/{ip}",
+        "IP2LOCATION_IO": f"https://api.ip2location.io/?ip={ip}"
     }
     
     url = urls.get(service)
     if not url:
         return "—"
         
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    _thread_local.ip_version = conn_ip_version
     try:
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=2.0) as resp:
+        with urllib.request.urlopen(req, context=ctx, timeout=2.0) as resp:
             data = resp.read().decode("utf-8", errors="ignore")
-            if service == "IPINFO_IO":
+            if service == "MAXMIND":
+                val = json.loads(data).get("country", {}).get("iso_code")
+                return val.upper() if val else "—"
+            elif service == "IPINFO_IO":
                 val = json.loads(data).get("data", {}).get("country")
+                return val.upper() if val else "—"
+            elif service == "IPREGISTRY":
+                val = json.loads(data).get("location", {}).get("country", {}).get("code")
                 return val.upper() if val else "—"
             elif service == "IPAPI_CO":
                 val = json.loads(data).get("country")
@@ -383,19 +404,27 @@ def query_primary_geoip(ip: str, service: str) -> str:
             elif service == "IPWHO_IS":
                 val = json.loads(data).get("country_code")
                 return val.upper() if val else "—"
+            elif service == "IP2LOCATION_IO":
+                val = json.loads(data).get("country_code")
+                return val.upper() if val else "—"
     except Exception:
         pass
+    finally:
+        _thread_local.ip_version = None
         
-    # Fallback to demo.ip-api.com to avoid N/A on rate-limits/blocks
+    # Fallback to ip-api.com (which is IPv4-only) to avoid N/A on rate-limits/blocks/ssl errors
+    _thread_local.ip_version = 4
     try:
-        fallback_url = f"https://demo.ip-api.com/json/{ip}?fields=countryCode"
+        fallback_url = f"http://ip-api.com/json/{ip}?fields=countryCode"
         req = urllib.request.Request(fallback_url, headers=headers)
-        with urllib.request.urlopen(req, timeout=1.5) as resp:
+        with urllib.request.urlopen(req, context=ctx, timeout=1.5) as resp:
             res_data = json.loads(resp.read().decode("utf-8"))
             val = res_data.get("countryCode")
             return val.upper() if val else "—"
     except Exception:
         pass
+    finally:
+        _thread_local.ip_version = None
         
     return "—"
 
