@@ -43,7 +43,7 @@ def test_configure(mock_cache, mock_load_config):
     # 1. Тест с дефолтными настройками
     frag = p.configure(state)
     assert len(frag.outbounds) == 1
-    assert frag.outbounds[0] == {"type": "direct", "tag": "warp", "detour": "warp_ep"}
+    assert frag.outbounds[0] == {"type": "selector", "tag": "warp", "outbounds": ["warp_ep"]}
     
     assert len(frag.endpoints) == 1
     assert frag.endpoints[0]["type"] == "wireguard"
@@ -172,7 +172,7 @@ AllowedIPs = 0.0.0.0/0
     frag = p.configure(state)
     
     assert len(frag.outbounds) == 1
-    assert frag.outbounds[0] == {"type": "direct", "tag": "warp_russia", "detour": "warp_russia_ep"}
+    assert frag.outbounds[0] == {"type": "selector", "tag": "warp_russia", "outbounds": ["warp_russia_ep"]}
     
     assert len(frag.endpoints) == 1
     endpoint = frag.endpoints[0]

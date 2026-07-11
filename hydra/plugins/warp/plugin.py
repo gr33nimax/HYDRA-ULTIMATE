@@ -349,9 +349,9 @@ class WarpPlugin(BasePlugin):
 
             endpoints.append(endpoint)
             outbounds.append({
-                "type": "direct",
+                "type": "selector",
                 "tag": tag,
-                "detour": ep_tag
+                "outbounds": [ep_tag]
             })
 
         # 2. Стандартный WGCF (если профиль сгенерирован)
@@ -381,9 +381,9 @@ class WarpPlugin(BasePlugin):
             }
             endpoints.append(endpoint)
             outbounds.append({
-                "type": "direct",
+                "type": "selector",
                 "tag": "warp",
-                "detour": ep_tag
+                "outbounds": [ep_tag]
             })
 
         # ── СБОРКА ПРАВИЛ МАРШРУТИЗАЦИИ ──
