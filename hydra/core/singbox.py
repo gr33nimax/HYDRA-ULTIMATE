@@ -47,6 +47,8 @@ def _run(cmd: list, capture: bool = True, timeout: int = 30) -> subprocess.Compl
     kw = {"timeout": timeout}
     if capture:
         kw.update(capture_output=True, text=True, encoding="utf-8", errors="replace")
+    else:
+        kw.update(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     env = os.environ.copy()
     env["ENABLE_DEPRECATED_LEGACY_DNS_SERVERS"] = "true"
     env["ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER"] = "true"
