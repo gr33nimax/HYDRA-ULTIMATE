@@ -170,10 +170,9 @@ AllowedIPs = 0.0.0.0/0
     
     frag = p.configure(state)
     
-    # Должен сгенерироваться один AmneziaWG эндпоинт
     assert len(frag.endpoints) == 1
     endpoint = frag.endpoints[0]
-    assert endpoint["type"] == "amneziawg"
+    assert endpoint["type"] == "wireguard"
     assert endpoint["tag"] == "warp_russia"
     assert endpoint["address"] == ["172.16.0.2/32", "2606:4700:110::1/128"]
     assert endpoint["private_key"] == "my_private_key"

@@ -319,7 +319,7 @@ class WarpPlugin(BasePlugin):
             destinations.add(tag)
 
             endpoint = {
-                "type": "amneziawg" if is_amnezia else "wireguard",
+                "type": "wireguard",
                 "tag": tag,
                 "address": addresses,
                 "private_key": parsed["interface"].get("privatekey", ""),
