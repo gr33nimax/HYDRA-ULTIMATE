@@ -177,15 +177,15 @@ AllowedIPs = 0.0.0.0/0
     assert endpoint["address"] == ["172.16.0.2/32", "2606:4700:110::1/128"]
     assert endpoint["private_key"] == "my_private_key"
     assert endpoint["mtu"] == 1280
-    assert endpoint["jc"] == 4
-    assert endpoint["jmin"] == 40
-    assert endpoint["jmax"] == 70
-    assert endpoint["s1"] == 0
-    assert endpoint["s2"] == 0
-    assert endpoint["h1"] == 1
-    assert endpoint["h2"] == 2
-    assert endpoint["h3"] == 3
-    assert endpoint["h4"] == 4
+    assert endpoint["amnezia"]["jc"] == 4
+    assert endpoint["amnezia"]["jmin"] == 40
+    assert endpoint["amnezia"]["jmax"] == 70
+    assert endpoint["amnezia"]["s1"] == 0
+    assert endpoint["amnezia"]["s2"] == 0
+    assert endpoint["amnezia"]["h1"] == 1
+    assert endpoint["amnezia"]["h2"] == 2
+    assert endpoint["amnezia"]["h3"] == 3
+    assert endpoint["amnezia"]["h4"] == 4
     
     # Должен содержать один peer
     assert len(endpoint["peers"]) == 1
