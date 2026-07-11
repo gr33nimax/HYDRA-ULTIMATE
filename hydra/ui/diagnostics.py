@@ -336,7 +336,7 @@ def query_primary_geoip(ip: str, service: str) -> str:
     if not ip or ip == "—":
         return "—"
         
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"}
     if service == "IPREGISTRY":
         headers["Origin"] = "https://ipregistry.co"
     elif service == "MAXMIND":
@@ -364,19 +364,36 @@ def query_primary_geoip(ip: str, service: str) -> str:
         with urllib.request.urlopen(req, timeout=2.0) as resp:
             data = resp.read().decode("utf-8", errors="ignore")
             if service == "IPINFO_IO":
-                return json.loads(data).get("country", "—")
+                val = json.loads(data).get("data", {}).get("country")
+                return val.upper() if val else "—"
             elif service == "IPAPI_CO":
-                return json.loads(data).get("country_code", "—")
+                val = json.loads(data).get("country")
+                return val.upper() if val else "—"
             elif service == "CLOUDFLARE":
-                return json.loads(data).get("country", "—")
+                val = json.loads(data).get("country")
+                return val.upper() if val else "—"
             elif service == "IFCONFIG_CO":
-                return data.strip()
+                return data.strip().upper()
             elif service == "IPAPI_COM":
-                return json.loads(data).get("countryCode", "—")
+                val = json.loads(data).get("countryCode")
+                return val.upper() if val else "—"
             elif service == "IPWHO_IS":
-                return json.loads(data).get("country_code", "—")
+                val = json.loads(data).get("country_code")
+                return val.upper() if val else "—"
     except Exception:
         pass
+        
+    # Fallback to demo.ip-api.com to avoid N/A on rate-limits/blocks
+    try:
+        fallback_url = f"https://demo.ip-api.com/json/{ip}?fields=countryCode"
+        req = urllib.request.Request(fallback_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            res_data = json.loads(resp.read().decode("utf-8"))
+            val = res_data.get("countryCode")
+            return val.upper() if val else "—"
+    except Exception:
+        pass
+        
     return "—"
 
 
@@ -503,6 +520,50 @@ def test_ip_region():
         ipv4 = get_ip_address(4) or "—"
         ipv6 = get_ip_address(6) or "—"
         
+        # Получаем детальную инфу для IPv4
+        v4_detail = {"isp": "—", "asn": "—", "location": "—"}
+        if ipv4 and ipv4 != "—":
+            try:
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"}
+                req = urllib.request.Request(f"http://ip-api.com/json/{ipv4}", headers=headers)
+                with urllib.request.urlopen(req, timeout=2.0) as resp:
+                    res_data = json.loads(resp.read().decode("utf-8"))
+                    if res_data.get("status") == "success":
+                        v4_detail["isp"] = res_data.get("isp") or res_data.get("org") or "—"
+                        as_val = res_data.get("as", "—")
+                        v4_detail["asn"] = as_val.split()[0] if as_val and as_val != "—" else "—"
+                        
+                        loc_parts = []
+                        if res_data.get("country"):
+                            loc_parts.append(res_data["country"])
+                        if res_data.get("city"):
+                            loc_parts.append(res_data["city"])
+                        v4_detail["location"] = ", ".join(loc_parts) if loc_parts else "—"
+            except Exception:
+                pass
+
+        # Получаем детальную инфу для IPv6
+        v6_detail = {"isp": "—", "asn": "—", "location": "—"}
+        if ipv6 and ipv6 != "—":
+            try:
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"}
+                req = urllib.request.Request(f"http://ip-api.com/json/{ipv6}", headers=headers)
+                with urllib.request.urlopen(req, timeout=2.0) as resp:
+                    res_data = json.loads(resp.read().decode("utf-8"))
+                    if res_data.get("status") == "success":
+                        v6_detail["isp"] = res_data.get("isp") or res_data.get("org") or "—"
+                        as_val = res_data.get("as", "—")
+                        v6_detail["asn"] = as_val.split()[0] if as_val and as_val != "—" else "—"
+                        
+                        loc_parts = []
+                        if res_data.get("country"):
+                            loc_parts.append(res_data["country"])
+                        if res_data.get("city"):
+                            loc_parts.append(res_data["city"])
+                        v6_detail["location"] = ", ".join(loc_parts) if loc_parts else "—"
+            except Exception:
+                pass
+        
         primary_services = ["IPINFO_IO", "CLOUDFLARE", "IPAPI_CO", "IPAPI_COM", "IPWHO_IS"]
         custom_services = ["Google", "YouTube", "Twitch", "ChatGPT", "Netflix", "Spotify"]
         
@@ -539,6 +600,8 @@ def test_ip_region():
         return {
             "ipv4": ipv4,
             "ipv6": ipv6,
+            "v4_detail": v4_detail,
+            "v6_detail": v6_detail,
             "results": {
                 "primary": primary_results,
                 "custom": custom_results
@@ -552,10 +615,19 @@ def test_ip_region():
             f"  {BOLD}Основная информация:{NC}",
             "────────────────────────────────────────────────────────"
         ]
-        if data.get("ipv4"):
+        if data.get("ipv4") and data["ipv4"] != "—":
             lines.append(kv("IPv4-адрес:", data["ipv4"]))
-        if data.get("ipv6"):
+            lines.append(kv("  Провайдер/ISP:", data["v4_detail"]["isp"]))
+            lines.append(kv("  ASN:", data["v4_detail"]["asn"]))
+            lines.append(kv("  Геолокация:", data["v4_detail"]["location"]))
+            
+        if data.get("ipv6") and data["ipv6"] != "—":
+            if data.get("ipv4") and data["ipv4"] != "—":
+                lines.append("")
             lines.append(kv("IPv6-адрес:", data["ipv6"]))
+            lines.append(kv("  Провайдер/ISP:", data["v6_detail"]["isp"]))
+            lines.append(kv("  ASN:", data["v6_detail"]["asn"]))
+            lines.append(kv("  Геолокация:", data["v6_detail"]["location"]))
             
         res = data.get("results", {})
         

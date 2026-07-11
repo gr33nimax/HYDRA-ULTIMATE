@@ -72,7 +72,7 @@ class TestDiagnosticsGeoIPAndServices:
     def test_query_primary_geoip(self, mock_urlopen):
         """Проверка парсинга результатов GeoIP баз."""
         mock_resp = MagicMock()
-        mock_resp.read.return_value = b'{"country_code": "DE"}'
+        mock_resp.read.return_value = b'{"country": "DE"}'
         mock_urlopen.return_value.__enter__.return_value = mock_resp
         
         res = diagnostics.query_primary_geoip("1.2.3.4", "IPAPI_CO")
