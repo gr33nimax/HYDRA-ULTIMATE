@@ -177,6 +177,7 @@ def _base_config(state: AppState) -> dict:
         })
         config["route"]["rules"].append({
             "action": "sniff",
+            "sniffer": ["http", "tls", "quic"],
         })
         
     if getattr(state.network, "clash_api_enabled", False):
