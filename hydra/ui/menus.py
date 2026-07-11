@@ -1223,6 +1223,14 @@ def _user_configs(state: AppState, user: User):
     clear()
     title(f"Конфигурации для пользователя: {user.email}")
     
+    # Проверка наличия qrcode
+    try:
+        import qrcode
+    except ImportError:
+        warn("Библиотека qrcode не установлена, QR-коды не будут отображаться.")
+        info("Установите её командой: pip3 install qrcode")
+        print()
+
     # Ссылка на подписку
     sub_url = get_subscription_url(user, state)
     print(f"  {YELLOW}{BOLD}Base64 Subscription (v2rayNG, Shadowrocket, NekoBox, Karing):{NC}")
