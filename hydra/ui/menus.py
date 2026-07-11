@@ -358,7 +358,6 @@ def _user_links(state: AppState, user: User):
                 if link:
                     print(f"  {GREEN}Ссылка (WireGuard):{NC}  {link}")
                 if vpn_link:
-                    print(f"  {GREEN}Ссылка (AmneziaVPN):{NC} {vpn_link}")
                     try:
                         import qrcode
                         qr = qrcode.QRCode()
@@ -1328,13 +1327,7 @@ def _user_configs(state: AppState, user: User):
                                     box_lines.append(f"  {CYAN}{chunk}{NC}")
                                 box_lines.append(f"{DIM}{'─' * (PANEL_W - 4)}{NC}")
                                 
-                            # Показываем Amnezia VPN (vpn://) ссылку
-                            if vpn_link:
-                                box_lines.append(f"{YELLOW}{BOLD}Ссылка для импорта в Amnezia VPN (vpn:// - {label_ru}):{NC}")
-                                link_width = PANEL_W - 6
-                                for chunk in [vpn_link[i:i+link_width] for i in range(0, len(vpn_link), link_width)]:
-                                    box_lines.append(f"  {CYAN}{chunk}{NC}")
-                                box_lines.append(f"{DIM}{'─' * (PANEL_W - 4)}{NC}")
+
                             
                             # Показываем конфиг
                             box_lines.append(f"{GREEN}{BOLD}Файл конфигурации (Client Config - {label_ru}):{NC}")
