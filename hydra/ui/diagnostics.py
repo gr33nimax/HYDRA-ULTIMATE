@@ -598,8 +598,22 @@ def check_custom_service(service_name: str, ip_version: int, system_has_ipv6: bo
     return "No"
 
 
+RKN_STUB_IPS = {
+    "195.208.4.1", "195.208.5.1", "188.186.157.35",
+    "80.93.183.168", "213.87.154.141", "92.101.255.255"
+}
+
 def check_domain_censor(domain: str, secure: bool = True) -> int:
     """Выполняет проверку доступности конкретного домена по HTTP/HTTPS (возвращает статус-код или код ошибки)."""
+    # 1. DNS check & RKN stub check
+    try:
+        ips = socket.getaddrinfo(domain, None)
+        resolved_ips = {ip[4][0] for ip in ips}
+        if resolved_ips.intersection(RKN_STUB_IPS):
+            return -4  # DNS spoof
+    except Exception:
+        return -3  # DNS resolve error
+        
     url = f"{'https' if secure else 'http'}://{domain}"
     ctx = None
     if secure:
@@ -607,22 +621,51 @@ def check_domain_censor(domain: str, secure: bool = True) -> int:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Connection": "keep-alive"
+    })
+    
     try:
-        with urllib.request.urlopen(req, context=ctx, timeout=2.0) as resp:
+        with urllib.request.urlopen(req, context=ctx, timeout=3.0) as resp:
+            # Check regional block in body
+            content_type = resp.headers.get("Content-Type", "")
+            if "text/html" in content_type:
+                body = resp.read().decode("utf-8", errors="ignore").lower()
+                if any(x in body for x in [
+                    "sorry, you have been blocked", "you are unable to access",
+                    "not available in your region", "restricted in your country",
+                    "access denied due to location", "blocked in your area",
+                    "not available", "forbidden-location"
+                ]):
+                    return -5  # Regional block
             return resp.status
     except urllib.error.HTTPError as e:
+        # Check body of 403/451 errors for geoblock messages
+        try:
+            body = e.read().decode("utf-8", errors="ignore").lower()
+            if any(x in body for x in [
+                "sorry, you have been blocked", "you are unable to access",
+                "not available in your region", "restricted in your country",
+                "access denied due to location", "blocked in your area",
+                "not available", "forbidden-location"
+            ]):
+                return -5
+        except Exception:
+            pass
         return e.code
     except urllib.error.URLError as e:
         reason = str(e.reason).lower()
         if "timed out" in reason or "timeout" in reason:
-            return 0
+            return 0  # Timeout
         elif "reset" in reason or "connection reset" in reason:
-            return -2
+            return -2  # Reset
         elif "refused" in reason:
-            return -1
+            return -1  # Refused
         elif "not known" in reason or "resolve" in reason:
-            return -3
+            return -3  # DNS error
         else:
             return 0
     except (socket.timeout, TimeoutError):
@@ -631,6 +674,8 @@ def check_domain_censor(domain: str, secure: bool = True) -> int:
         return -2
     except ConnectionRefusedError:
         return -1
+    except ssl.SSLError:
+        return -6  # TLS/SSL error
     except Exception:
         return 0
 
@@ -640,6 +685,18 @@ def run_censorcheck_python(mode: str) -> dict:
     domains = GEO_BLOCKED_SITES if mode == "geoblock" else DPI_BLOCKED_SITES
     results = []
     
+    def fetch_asn():
+        try:
+            req = urllib.request.Request("http://ip-api.com/json/", headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                res_data = json.loads(resp.read().decode("utf-8"))
+                if res_data.get("status") == "success":
+                    asn = res_data.get("as", "")
+                    return asn.split()[0] if asn else "—"
+        except Exception:
+            pass
+        return "—"
+        
     def worker(domain):
         http_status = check_domain_censor(domain, secure=False)
         https_status = check_domain_censor(domain, secure=True)
@@ -654,13 +711,16 @@ def run_censorcheck_python(mode: str) -> dict:
         }
         
     with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+        asn_future = executor.submit(fetch_asn)
         futures = {executor.submit(worker, d): d for d in domains}
         for future in concurrent.futures.as_completed(futures):
             results.append(future.result())
             
+        asn = asn_future.result()
+            
     # Сортируем результаты по алфавиту для красоты
     results.sort(key=lambda x: x["service"])
-    return {"results": results}
+    return {"results": results, "asn": asn}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -825,6 +885,148 @@ def test_ip_region():
     prompt("Нажмите Enter для возврата...")
 
 
+def is_port_listening(port: int) -> bool:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1.0)
+        s.bind(("127.0.0.1", port))
+        s.close()
+        return False
+    except OSError:
+        return True
+
+def get_reality_sni() -> str:
+    """Пытается распарсить SNI из конфигурации sing-box, либо возвращает fallback."""
+    config_path = "/etc/sing-box/config.json"
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                def find_sni(data):
+                    if isinstance(data, dict):
+                        for k in ("server_name", "server_names", "dest", "server"):
+                            if k in data and isinstance(data[k], str) and "." in data[k]:
+                                return data[k]
+                            elif k in data and isinstance(data[k], list):
+                                for item in data[k]:
+                                    if isinstance(item, str) and "." in item:
+                                        return item
+                        for v in data.values():
+                            res = find_sni(v)
+                            if res:
+                                return res
+                    elif isinstance(data, list):
+                        for item in data:
+                            res = find_sni(item)
+                            if res:
+                                return res
+                    return None
+                sni = find_sni(cfg)
+                if sni:
+                    return sni
+        except Exception:
+            pass
+    return "dl.google.com"  # fallback
+
+def run_tspu_radar(target_ip: str, sni: str) -> dict:
+    """Выполняет проверку ТСПУ с использованием API RIPE Atlas."""
+    api_key = "dbfb4e08-e6fe-4d8c-a180-3a416688e7dc"
+    url = "https://atlas.ripe.net/api/v2/measurements/"
+    
+    data = {
+        "definitions": [{
+            "target": target_ip, 
+            "description": "Reality TLS Handshake",
+            "type": "sslcert",
+            "port": 443,
+            "hostname": sni,
+            "af": 4
+        }],
+        "probes": [
+            {"requested": 3, "type": "asn", "value": 12389, "tags": {"include": ["system-ipv4-works"]}},
+            {"requested": 5, "type": "asn", "value": 8402,  "tags": {"include": ["system-ipv4-works"]}},
+            {"requested": 5, "type": "asn", "value": 25513, "tags": {"include": ["system-ipv4-works"]}},
+            {"requested": 3, "type": "asn", "value": 8359,  "tags": {"include": ["system-ipv4-works"]}},
+            {"requested": 3, "type": "asn", "value": 3216,  "tags": {"include": ["system-ipv4-works"]}},
+            {"requested": 2, "type": "asn", "value": 20485, "tags": {"include": ["system-ipv4-works"]}},
+            {"requested": 1, "type": "asn", "value": 25490, "tags": {"include": ["system-ipv4-works"]}},
+            {"requested": 1, "type": "asn", "value": 43727, "tags": {"include": ["system-ipv4-works"]}},
+            {"requested": 4, "type": "asn", "value": 12714, "tags": {"include": ["system-ipv4-works"]}},
+            {"requested": 2, "type": "asn", "value": 34757, "tags": {"include": ["system-ipv4-works"]}},
+            {"requested": 2, "type": "asn", "value": 29124, "tags": {"include": ["system-ipv4-works"]}},
+            {"requested": 2, "type": "asn", "value": 12768, "tags": {"include": ["system-ipv4-works"]}}
+        ],
+        "is_oneoff": True
+    }
+    
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    
+    try:
+        req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), 
+                                     headers={"Content-Type": "application/json", "Authorization": f"Key {api_key}"})
+        with urllib.request.urlopen(req, context=ctx, timeout=5.0) as response:
+            resp_data = json.loads(response.read().decode("utf-8"))
+            msm_id = resp_data["measurements"][0]
+    except Exception as e:
+        return {"status": "error", "message": f"API create error: {e}"}
+        
+    results_url = f"https://atlas.ripe.net/api/v2/measurements/{msm_id}/results/"
+    results = []
+    start_time = time.time()
+    
+    for attempt in range(25):
+        time.sleep(2.0)
+        try:
+            req_res = urllib.request.Request(results_url)
+            with urllib.request.urlopen(req_res, context=ctx, timeout=3.0) as response:
+                results = json.loads(response.read().decode("utf-8"))
+                if len(results) >= 33:
+                    break
+        except Exception:
+            pass
+            
+    if not results:
+        return {"status": "error", "message": "No data received from RIPE probes"}
+        
+    blocked = 0
+    blocked_prb_ids = []
+    for probe in results:
+        if "cert" in probe or "method" in probe or "alert" in probe:
+            pass
+        else:
+            blocked += 1
+            prb_id = probe.get("prb_id")
+            if prb_id:
+                blocked_prb_ids.append(prb_id)
+                
+    total = len(results)
+    success = total - blocked
+    
+    blocked_asns = {}
+    if blocked_prb_ids:
+        try:
+            ids_str = ",".join(str(p) for p in blocked_prb_ids)
+            probes_url = f"https://atlas.ripe.net/api/v2/probes/?id__in={ids_str}&fields=id,asn_v4"
+            req_prb = urllib.request.Request(probes_url)
+            with urllib.request.urlopen(req_prb, context=ctx, timeout=5.0) as response:
+                probe_info = json.loads(response.read().decode("utf-8"))
+                for p in probe_info.get("results", []):
+                    asn = p.get("asn_v4")
+                    if asn:
+                        blocked_asns[asn] = blocked_asns.get(asn, 0) + 1
+        except Exception:
+            pass
+            
+    return {
+        "status": "success",
+        "total": total,
+        "success": success,
+        "blocked": blocked,
+        "blocked_asns": blocked_asns
+    }
+
 def test_censorcheck(mode: str):
     """Тест 2 и 3. Censorcheck (проверка гео-блокировок или обхода DPI)"""
     clear()
@@ -835,51 +1037,147 @@ def test_censorcheck(mode: str):
     try:
         data = run_function_with_spinner("Анализ доступности ресурсов", run_censorcheck_python, mode)
         results = data.get("results", [])
+        asn = data.get("asn", "—")
         
-        lines = []
+        def pad_ansi(s, width):
+            clean_len = len(re.sub(r'\x1b\[[0-9;]*m', '', s))
+            if clean_len >= width:
+                return s
+            return s + " " * (width - clean_len)
+            
+        print(f"  {BOLD}{'Domain':<28} │ {'Status':<14} │ Block Type{NC}")
+        print("  " + "─" * 74)
+        
+        ok_count = 0
+        blocked_count = 0
+        partial_count = 0
+        
         for item in results:
             domain = item.get("service", "")
             http = item.get("http", {})
             https = item.get("https", {})
             
-            http_v4 = http.get("ipv4") or {}
-            https_v4 = https.get("ipv4") or {}
+            http_status = http.get("ipv4", {}).get("status", 0)
+            https_status = https.get("ipv4", {}).get("status", 0)
             
-            def get_status_str(res_obj):
-                if not res_obj or res_obj == "null":
-                    return f"{DIM}N/A{NC}"
-                status = res_obj.get("status")
-                if status is None or str(status).lower() == "null":
-                    return f"{DIM}N/A{NC}"
-                
-                try:
-                    status_int = int(status)
-                except ValueError:
-                    return f"{YELLOW}{status}{NC}"
-                    
-                if status_int == 200:
-                    return f"{GREEN}Доступен (200){NC}"
-                elif status_int == -1:
-                    return f"{RED}Блок (Порт){NC}"
-                elif status_int == -2:
-                    return f"{RED}Блок (Сброс){NC}"
-                elif status_int == -3:
-                    return f"{RED}Блок (DNS){NC}"
-                elif status_int == 0:
-                    return f"{RED}Блок (Таймаут){NC}"
-                elif 300 <= status_int < 400:
-                    return f"{GREEN}Редирект ({status_int}){NC}"
-                elif status_int == 403:
-                    return f"{RED}Отказ (403){NC}"
+            if https_status == 200 or (300 <= https_status < 400):
+                status_str = f"{GREEN}OK{NC}"
+                block_type_str = f"{GREEN}✓TLS{NC}"
+                ok_count += 1
+            elif https_status == -5:
+                status_str = f"{RED}BLOCKED{NC}"
+                block_type_str = f"{RED}(REGIONAL) ✓TLS{NC}"
+                blocked_count += 1
+            elif https_status == -4:
+                status_str = f"{RED}BLOCKED{NC}"
+                block_type_str = f"{RED}(DNS-SPOOF){NC}"
+                blocked_count += 1
+            elif https_status == -3:
+                status_str = f"{RED}BLOCKED{NC}"
+                block_type_str = f"{RED}(DNS){NC}"
+                blocked_count += 1
+            elif https_status == -2:
+                status_str = f"{RED}BLOCKED{NC}"
+                block_type_str = f"{RED}(DPI/RESET){NC}"
+                blocked_count += 1
+            elif https_status == -1:
+                status_str = f"{RED}BLOCKED{NC}"
+                block_type_str = f"{RED}(TCP/REFUSED){NC}"
+                blocked_count += 1
+            elif https_status == -6:
+                status_str = f"{RED}BLOCKED{NC}"
+                block_type_str = f"{RED}(TLS/SSL){NC}"
+                blocked_count += 1
+            elif https_status == 0:
+                if http_status == 200 or (300 <= http_status < 400):
+                    status_str = f"{YELLOW}PARTIAL{NC}"
+                    block_type_str = f"{YELLOW}(DPI/KEYWORD) ✓HTTP{NC}"
+                    partial_count += 1
                 else:
-                    return f"{YELLOW}Код {status_int}{NC}"
+                    status_str = f"{RED}BLOCKED{NC}"
+                    block_type_str = f"{RED}(TIMEOUT){NC}"
+                    blocked_count += 1
+            elif https_status == 403:
+                status_str = f"{RED}BLOCKED{NC}"
+                block_type_str = f"{RED}(REGIONAL) ✗TLS{NC}"
+                blocked_count += 1
+            else:
+                if http_status == 200 or (300 <= http_status < 400):
+                    status_str = f"{YELLOW}PARTIAL{NC}"
+                    block_type_str = f"{YELLOW}(HTTP RESPONSE) {https_status}{NC}"
+                    partial_count += 1
+                else:
+                    status_str = f"{RED}BLOCKED{NC}"
+                    block_type_str = f"{RED}(CODE {https_status}){NC}"
+                    blocked_count += 1
                     
-            h_res = get_status_str(http_v4)
-            s_res = get_status_str(https_v4)
-            lines.append(kv(f"{domain}:", f"HTTP: {h_res:<25} │ HTTPS: {s_res}"))
+            print(f"  {domain:<28} │ {pad_ansi(status_str, 14)} │ {block_type_str}")
             
-        panel(f"🛡️  Результаты проверки: {mode_title}", lines)
+        print("  " + "─" * 74)
+        summary = f"{GREEN}OK:{ok_count}{NC}  {RED}BLOCKED:{blocked_count}{NC}  {YELLOW}PARTIAL:{partial_count}{NC}  {DIM}Total:{len(results)}{NC}"
+        if asn != "—":
+            summary += f" {DIM}|{NC} {CYAN}{asn}{NC}"
+        print(f"  {summary}")
+        print("  " + "─" * 74)
         
+        if mode == "dpi":
+            if not is_port_listening(443):
+                print()
+                print(f"  {DIM}Радар ТСПУ отменен: порт 443 не активен (убедитесь, что VPN запущен){NC}")
+                print()
+            else:
+                print()
+                print(f"  {CYAN}Опрос сетей РФ: РТК, МТС, МГТС, Билайн, ТТК, РТК-Юг, Мегафон...{NC}")
+                target_ip = get_ip_address(4)
+                sni = get_reality_sni()
+                
+                radar_res = run_function_with_spinner("Запуск радара ТСПУ", run_tspu_radar, target_ip, sni)
+                print()
+                if radar_res.get("status") == "success":
+                    total = radar_res["total"]
+                    success_prbs = radar_res["success"]
+                    blocked_prbs = radar_res["blocked"]
+                    
+                    percent = (success_prbs * 100 // total) if total > 0 else 0
+                    if percent == 100:
+                        color = GREEN
+                        text = "ПОЛНЫЙ ДОСТУП ИЗ РФ"
+                    elif percent > 50:
+                        color = YELLOW
+                        text = "ЧАСТИЧНАЯ БЛОКИРОВКА IP (Дропы у части провайдеров)"
+                    else:
+                        color = RED
+                        text = "КРИТИЧНАЯ БЛОКИРОВКА ТСПУ (IP недоступен)"
+                        
+                    print(f"  Зондов ответило: {CYAN}{total}{NC} | Пробились: {GREEN}{success_prbs}{NC} | Заблокированы: {RED}{blocked_prbs}{NC}")
+                    print(f"  ТСПУ Статус: {color}{percent}% {text}{NC}")
+                    
+                    blocked_asns = radar_res.get("blocked_asns", {})
+                    if blocked_asns:
+                        asn_names = {
+                            12389: "Ростелеком",
+                            8402: "Билайн",
+                            25513: "МГТС",
+                            8359: "МТС",
+                            3216: "Билайн",
+                            20485: "ТТК",
+                            25490: "РТК-Юг",
+                            43727: "Мегафон",
+                            12714: "Мегафон",
+                            34757: "Сибсети",
+                            29124: "Искрателеком",
+                            12768: "Дом.ру"
+                        }
+                        blocking_list = []
+                        for b_asn, count in blocked_asns.items():
+                            name = asn_names.get(int(b_asn), f"AS{b_asn}")
+                            blocking_list.append(f"{RED}{name}{NC} ({count})")
+                        print(f"  {RED}Блокируют:{NC} {', '.join(blocking_list)}")
+                    print()
+                else:
+                    print(f"  {YELLOW}Не удалось запустить радар ТСПУ: {radar_res.get('message')}{NC}")
+                    print()
+                    
     except KeyboardInterrupt:
         pass
     except Exception as e:

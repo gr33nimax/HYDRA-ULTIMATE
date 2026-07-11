@@ -141,6 +141,7 @@ class TestDiagnosticsCensorcheck:
         """Запуск проверки блокировок для группы доменов."""
         mock_resp = MagicMock()
         mock_resp.status = 200
+        mock_resp.read.return_value = b'{"status": "success", "as": "AS12389 Rostelecom"}'
         mock_urlopen.return_value.__enter__.return_value = mock_resp
         
         res = diagnostics.run_censorcheck_python("geoblock")
