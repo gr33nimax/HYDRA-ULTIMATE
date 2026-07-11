@@ -52,8 +52,8 @@ def test_configure(mock_cache, mock_load_config):
     
     # Дефолтные домены должны быть в правилах
     assert len(frag.route_rules) == 1
-    assert "domain" in frag.route_rules[0]
-    assert "openai.com" in frag.route_rules[0]["domain"]
+    assert "domain_suffix" in frag.route_rules[0]
+    assert "openai.com" in frag.route_rules[0]["domain_suffix"]
     assert frag.route_rules[0]["outbound"] == "warp"
 
     # 2. Тест с кастомными доменами и IP из state
@@ -67,8 +67,8 @@ def test_configure(mock_cache, mock_load_config):
     assert len(frag.route_rules) == 2
     
     # Правило доменов
-    domain_rule = next(r for r in frag.route_rules if "domain" in r)
-    assert domain_rule["domain"] == ["mycustomdomain.org"]
+    domain_rule = next(r for r in frag.route_rules if "domain_suffix" in r)
+    assert domain_rule["domain_suffix"] == ["mycustomdomain.org"]
     
     # Правило IP
     ip_rule = next(r for r in frag.route_rules if "ip_cidr" in r)
@@ -202,8 +202,8 @@ AllowedIPs = 0.0.0.0/0
     
     # Должно быть 2 правила маршрутизации
     assert len(frag.route_rules) == 2
-    domain_rule = next(r for r in frag.route_rules if "domain" in r)
-    assert domain_rule["domain"] == ["yandex.ru"]
+    domain_rule = next(r for r in frag.route_rules if "domain_suffix" in r)
+    assert domain_rule["domain_suffix"] == ["yandex.ru"]
     assert domain_rule["outbound"] == "warp_russia"
     
     ip_rule = next(r for r in frag.route_rules if "ip_cidr" in r)

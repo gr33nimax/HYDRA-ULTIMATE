@@ -433,7 +433,7 @@ class WarpPlugin(BasePlugin):
             clean_domains = list(set([d.strip() for d in domains_list if d.strip()]))
             if clean_domains:
                 rules.append({
-                    "domain": clean_domains,
+                    "domain_suffix": clean_domains,
                     "outbound": target,
                 })
 
