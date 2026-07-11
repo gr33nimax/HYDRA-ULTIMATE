@@ -359,7 +359,21 @@ def menu_fail2ban(state: AppState, plugin) -> None:
             status_lines.append(f"  Статус:      {RED}не установлен{NC}")
         else:
             status_lines.append(f"  Статус:      {(GREEN+'● активен') if active else (DIM+'○ остановлен')}{NC}")
-            status_lines.append(f"  Джейлов:     {CYAN}{len(jail_names)}{NC} ({', '.join(jail_names)})")
+            
+            # Группировка активных джейлов
+            active_proxies = []
+            active_systems = []
+            for j in jail_names:
+                if j in ["hydra-anytls", "hydra-mieru", "hydra-trusttunnel", "hydra-naive", "hydra-awg"]:
+                    active_proxies.append(j.replace("hydra-", ""))
+                else:
+                    active_systems.append(j.replace("hydra-", ""))
+            
+            if active_proxies:
+                status_lines.append(f"  Прокси:      {CYAN}{len(active_proxies)}{NC} ({', '.join(active_proxies)})")
+            if active_systems:
+                status_lines.append(f"  Система:     {YELLOW}{len(active_systems)}{NC} ({', '.join(active_systems)})")
+                
             status_lines.append(f"  Забанено:    {(RED if total_banned else DIM)}{total_banned}{NC} IP (сейчас)")
             
         panel("🛡️ FAIL2BAN — ЗАЩИТА ОТ ПЕРЕБОРА", status_lines)
@@ -526,13 +540,23 @@ def menu_fail2ban(state: AppState, plugin) -> None:
         elif choice == "5":
             clear()
             jail_opts = []
-            for i, j in enumerate(configured_jails, 1):
-                jail_opts.append((str(i), j, ""))
+            proxies = ["hydra-anytls", "hydra-mieru", "hydra-trusttunnel", "hydra-naive", "hydra-awg"]
+            systems = ["hydra-sshd", "hydra-recidive", "hydra-portscan"]
+            all_jails = proxies + systems
+            
+            idx = 1
+            for j in proxies:
+                jail_opts.append((str(idx), f"{CYAN}[Прокси]{NC} {j}", ""))
+                idx += 1
+            jail_opts.append(("-", "", ""))
+            for j in systems:
+                jail_opts.append((str(idx), f"{YELLOW}[Система]{NC} {j}", ""))
+                idx += 1
                 
             raw_j = menu(jail_opts, "ВЫБЕРИТЕ ДЖЕЙЛ ДЛЯ НАСТРОЙКИ")
-            if not (raw_j.isdigit() and 1 <= int(raw_j) <= len(configured_jails)):
+            if not (raw_j.isdigit() and 1 <= int(raw_j) <= len(all_jails)):
                 continue
-            jail = configured_jails[int(raw_j) - 1]
+            jail = all_jails[int(raw_j) - 1]
             
             cp = _f2b_read_conf(jail)
             cur_bt = cp.get(jail, "bantime", fallback="3600")
@@ -571,16 +595,29 @@ def menu_fail2ban(state: AppState, plugin) -> None:
         elif choice == "6":
             clear()
             jail_opts = []
-            for i, j in enumerate(configured_jails, 1):
+            proxies = ["hydra-anytls", "hydra-mieru", "hydra-trusttunnel", "hydra-naive", "hydra-awg"]
+            systems = ["hydra-sshd", "hydra-recidive", "hydra-portscan"]
+            all_jails = proxies + systems
+            
+            idx = 1
+            for j in proxies:
                 cp = _f2b_read_conf(j)
                 en = cp.get(j, "enabled", fallback="true").strip().lower() == "true"
                 state_str = f"{GREEN}вкл{NC}" if en else f"{DIM}выкл{NC}"
-                jail_opts.append((str(i), f"{j} [{state_str}]", ""))
+                jail_opts.append((str(idx), f"{CYAN}[Прокси]{NC} {j} [{state_str}]", ""))
+                idx += 1
+            jail_opts.append(("-", "", ""))
+            for j in systems:
+                cp = _f2b_read_conf(j)
+                en = cp.get(j, "enabled", fallback="true").strip().lower() == "true"
+                state_str = f"{GREEN}вкл{NC}" if en else f"{DIM}выкл{NC}"
+                jail_opts.append((str(idx), f"{YELLOW}[Система]{NC} {j} [{state_str}]", ""))
+                idx += 1
                 
             raw_j = menu(jail_opts, "ВКЛЮЧИТЬ / ВЫКЛЮЧИТЬ ДЖЕЙЛ")
-            if not (raw_j.isdigit() and 1 <= int(raw_j) <= len(configured_jails)):
+            if not (raw_j.isdigit() and 1 <= int(raw_j) <= len(all_jails)):
                 continue
-            jail = configured_jails[int(raw_j) - 1]
+            jail = all_jails[int(raw_j) - 1]
             
             cp = _f2b_read_conf(jail)
             cur_en = cp.get(jail, "enabled", fallback="true").strip().lower() == "true"
