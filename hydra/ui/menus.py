@@ -360,8 +360,13 @@ def _user_links(state: AppState, user: User):
                 if vpn_link:
                     try:
                         import qrcode
-                        qr = qrcode.QRCode()
-                        qr.add_data(vpn_link)
+                        try:
+                            qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L)
+                            qr.add_data(vpn_link)
+                            qr.make(fit=True)
+                        except Exception:
+                            qr = qrcode.QRCode()
+                            qr.add_data(link if link else conf)
                         qr.print_ascii()
                     except ImportError:
                         pass
@@ -1347,9 +1352,18 @@ def _user_configs(state: AppState, user: User):
                             # QR-код (если qrcode установлен)
                             try:
                                 import qrcode
-                                qr = qrcode.QRCode(border=1)
-                                target = vpn_link if vpn_link else (link_prof if link_prof else conf)
-                                qr.add_data(target)
+                                try:
+                                    qr = qrcode.QRCode(
+                                        error_correction=qrcode.constants.ERROR_CORRECT_L,
+                                        border=1
+                                    )
+                                    target = vpn_link if vpn_link else (link_prof if link_prof else conf)
+                                    qr.add_data(target)
+                                    qr.make(fit=True)
+                                except Exception:
+                                    qr = qrcode.QRCode(border=1)
+                                    target = link_prof if link_prof else conf
+                                    qr.add_data(target)
                                 print(f"\n  {BOLD}{WHITE}Отсканируйте QR-код для импорта в Amnezia VPN ({label_ru}):{NC}")
                                 qr.print_ascii(invert=True)
                             except ImportError:
