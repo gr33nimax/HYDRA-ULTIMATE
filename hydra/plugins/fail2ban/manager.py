@@ -495,9 +495,10 @@ def menu_fail2ban(state: AppState, plugin) -> None:
             jail_opts = []
             for i, j in enumerate(jail_names, 1):
                 jail_opts.append((str(i), j, ""))
+            jail_opts.append(("0", "Отмена", ""))
                 
             raw_j = menu(jail_opts, "ВЫБЕРИТЕ ДЖЕЙЛ ДЛЯ БАНА")
-            if not (raw_j.isdigit() and 1 <= int(raw_j) <= len(jail_names)):
+            if raw_j == "0" or not (raw_j.isdigit() and 1 <= int(raw_j) <= len(jail_names)):
                 continue
             jail = jail_names[int(raw_j) - 1]
             
@@ -552,9 +553,10 @@ def menu_fail2ban(state: AppState, plugin) -> None:
             for j in systems:
                 jail_opts.append((str(idx), f"{YELLOW}[Система]{NC} {j}", ""))
                 idx += 1
+            jail_opts.append(("0", "Отмена", ""))
                 
             raw_j = menu(jail_opts, "ВЫБЕРИТЕ ДЖЕЙЛ ДЛЯ НАСТРОЙКИ")
-            if not (raw_j.isdigit() and 1 <= int(raw_j) <= len(all_jails)):
+            if raw_j == "0" or not (raw_j.isdigit() and 1 <= int(raw_j) <= len(all_jails)):
                 continue
             jail = all_jails[int(raw_j) - 1]
             
@@ -614,8 +616,10 @@ def menu_fail2ban(state: AppState, plugin) -> None:
                 jail_opts.append((str(idx), f"{YELLOW}[Система]{NC} {j} [{state_str}]", ""))
                 idx += 1
                 
+            jail_opts.append(("0", "Отмена", ""))
+                
             raw_j = menu(jail_opts, "ВКЛЮЧИТЬ / ВЫКЛЮЧИТЬ ДЖЕЙЛ")
-            if not (raw_j.isdigit() and 1 <= int(raw_j) <= len(all_jails)):
+            if raw_j == "0" or not (raw_j.isdigit() and 1 <= int(raw_j) <= len(all_jails)):
                 continue
             jail = all_jails[int(raw_j) - 1]
             
