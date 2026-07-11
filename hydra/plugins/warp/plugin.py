@@ -317,11 +317,12 @@ class WarpPlugin(BasePlugin):
                 addresses = ["172.16.0.2/32"]
 
             tag = f"warp_{profile_name}"
+            ep_tag = f"{tag}_ep"
             destinations.add(tag)
 
             endpoint = {
                 "type": "wireguard",
-                "tag": tag,
+                "tag": ep_tag,
                 "address": addresses,
                 "private_key": parsed["interface"].get("privatekey", ""),
                 "mtu": int(parsed["interface"].get("mtu", 1280)),
@@ -347,11 +348,17 @@ class WarpPlugin(BasePlugin):
                     endpoint["amnezia"] = amnezia_params
 
             endpoints.append(endpoint)
+            outbounds.append({
+                "type": "direct",
+                "tag": tag,
+                "detour": ep_tag
+            })
 
         # 2. Стандартный WGCF (если профиль сгенерирован)
         warp_cfg = self._load_warp_config()
         if warp_cfg:
             destinations.add("warp")
+            ep_tag = "warp_ep"
             try:
                 server_ip = socket.gethostbyname("engage.cloudflareclient.com")
             except Exception:
@@ -359,7 +366,7 @@ class WarpPlugin(BasePlugin):
 
             endpoint = {
                 "type": "wireguard",
-                "tag": "warp",
+                "tag": ep_tag,
                 "address": warp_cfg["addresses"],
                 "private_key": warp_cfg["private_key"],
                 "mtu": 1280,
@@ -373,6 +380,11 @@ class WarpPlugin(BasePlugin):
                 ]
             }
             endpoints.append(endpoint)
+            outbounds.append({
+                "type": "direct",
+                "tag": "warp",
+                "detour": ep_tag
+            })
 
         # ── СБОРКА ПРАВИЛ МАРШРУТИЗАЦИИ ──
         list_targets = ps.config.get("list_targets", {})
