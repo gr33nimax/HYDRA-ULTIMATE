@@ -144,6 +144,7 @@ def menu_warp(state: AppState, plugin) -> None:
             options.append(("2", f"📝 Управление доменами ({len(domains)} шт.)", "Просмотр, добавление и удаление доменов"))
             options.append(("3", f"📝 Управление IP/подсетями ({len(ips)} шт.)", "Просмотр, добавление и удаление IP-адресов/CIDR"))
             options.append(("4", "🔗 Настройка внешнего источника", "Задать ссылку на внешний список правил"))
+            options.append(("5", "⚙️ Настройка Гео-профилей (релеев)", "Добавить/удалить кастомные WireGuard/AmneziaWG профили"))
             options.append(("-", "", ""))
             options.append(("8", "🔄 Переустановить", "Пересоздать профиль WARP с нуля"))
             options.append(("9", "❌ Удалить", "Полное удаление WARP и профилей с сервера"))
@@ -194,6 +195,10 @@ def menu_warp(state: AppState, plugin) -> None:
         # ── Внешний источник ──
         elif choice == "4" and st.installed:
             _menu_external_source(state, ps, plugin)
+
+        # ── Гео-профили (релеи) ──
+        elif choice == "5" and st.installed:
+            _menu_geo_profiles(state, ps)
 
         # ── Переустановка ──
         elif choice == "8" and st.installed:
@@ -523,4 +528,299 @@ def _menu_external_source(state: AppState, ps, plugin) -> None:
                         _show_diagnostic_info()
             else:
                 error(msg)
+            prompt("Нажмите Enter для продолжения")
+
+
+# ── Вспомогательное меню: Управление гео-профилями ──
+def _menu_geo_profiles(state: AppState, ps) -> None:
+    from hydra.plugins.warp.plugin import WARP_PROFILES_DIR
+    WARP_PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+    
+    while True:
+        clear()
+        
+        # Получаем список профилей
+        profiles = sorted([p.stem for p in WARP_PROFILES_DIR.glob("*.conf")])
+        routes_config = ps.config.setdefault("routes", {})
+
+        status_lines = [
+            f"  {BOLD}Каталог профилей:{NC} {WARP_PROFILES_DIR}",
+            f"  Для добавления нового профиля загрузите .conf файл в этот каталог.",
+            "  " + "─" * 60
+        ]
+        
+        if not profiles:
+            status_lines.append(f"  {YELLOW}Нет обнаруженных гео-профилей.{NC}")
+            status_lines.append("  Система работает в стандартном режиме (один общий WARP).")
+        else:
+            for idx, name in enumerate(profiles, 1):
+                # Читаем инфо о профиле
+                routes = routes_config.setdefault(name, {"domains": [], "ips": []})
+                domains_count = len(routes.get("domains", []))
+                ips_count = len(routes.get("ips", []))
+                
+                # Проверим, есть ли AmneziaWG в этом профиле
+                is_amnezia = False
+                h4_warning = False
+                try:
+                    conf_text = (WARP_PROFILES_DIR / f"{name}.conf").read_text(encoding="utf-8", errors="replace")
+                    is_amnezia = any(k in conf_text.lower() for k in ["s1", "s2", "jc", "jmin", "jmax"])
+                    import re
+                    h4_match = re.search(r"H4\s*=\s*(\d+)", conf_text, re.IGNORECASE)
+                    if h4_match and int(h4_match.group(1)) > 255:
+                        h4_warning = True
+                except Exception:
+                    pass
+                
+                type_str = f"{CYAN}AmneziaWG{NC}" if is_amnezia else f"{BLUE}WireGuard{NC}"
+                warn_str = f" {RED}(⚠ H4 > 255){NC}" if h4_warning else ""
+                
+                status_lines.append(
+                    f"  {idx}. {BOLD}{name:<15}{NC} [{type_str}]{warn_str} "
+                    f"│ Маршрутов: {domains_count} доменов, {ips_count} IP"
+                )
+                
+        panel("⚙️ ГЕО-ПРОФИЛИ WARP (РЕЛЕИ)", status_lines)
+        
+        options = []
+        if profiles:
+            options.append(("1", "📝 Настроить маршруты для профиля", "Выбрать профиль и добавить/удалить домены/IP"))
+            options.append(("2", "🗑️  Удалить файл профиля", "Удалить .conf файл с диска"))
+        options.append(("3", "💡 Показать инструкцию по установке", "Как получить конфиг и скопировать на сервер"))
+        options.append(("0", "↩ Назад", ""))
+        
+        choice = menu(options, "ГЕО-ПРОФИЛИ WARP")
+        if choice == "0":
+            break
+            
+        elif choice == "1" and profiles:
+            # Выбор профиля
+            opts_prof = []
+            for i, name in enumerate(profiles, start=1):
+                opts_prof.append((str(i), name, f"Настроить домены/IP для {name}"))
+            opts_prof.append(("0", "Назад", ""))
+            
+            p_choice = menu(opts_prof, "ВЫБЕРИТЕ ПРОФИЛЬ ДЛЯ НАСТРОЙКИ")
+            if p_choice == "0" or not p_choice.isdigit():
+                continue
+                
+            idx = int(p_choice) - 1
+            if 0 <= idx < len(profiles):
+                _menu_manage_profile_routes(state, ps, profiles[idx])
+                
+        elif choice == "2" and profiles:
+            opts_prof = []
+            for i, name in enumerate(profiles, start=1):
+                opts_prof.append((str(i), name, f"УДАЛИТЬ {name}.conf"))
+            opts_prof.append(("0", "Назад", ""))
+            
+            p_choice = menu(opts_prof, "ВЫБЕРИТЕ ПРОФИЛЬ ДЛЯ УДАЛЕНИЯ")
+            if p_choice == "0" or not p_choice.isdigit():
+                continue
+                
+            idx = int(p_choice) - 1
+            if 0 <= idx < len(profiles):
+                name = profiles[idx]
+                if confirm(f"Вы действительно хотите удалить профиль '{name}' ({name}.conf)?", default=False):
+                    (WARP_PROFILES_DIR / f"{name}.conf").unlink(missing_ok=True)
+                    if name in routes_config:
+                        del routes_config[name]
+                    save_state(state)
+                    success(f"Профиль {name} успешно удален.")
+                    if ps.enabled:
+                        info("Обновляю конфигурацию Sing-Box...")
+                        if not orchestrator.apply_config(state):
+                            error("Ошибка применения нового конфига.")
+                            _show_diagnostic_info()
+                    prompt("Нажмите Enter для продолжения")
+                    
+        elif choice == "3":
+            clear()
+            lines = [
+                f"  {BOLD}Как настроить гео-WARP релей:{NC}",
+                "",
+                "  1. Сгенерируйте профиль через Telegram-бота (например, @warp3_bot) или сайт.",
+                "  2. Скачайте полученный .conf файл (например, 'russia.conf' или 'finland.conf').",
+                "  3. Подключитесь к вашему VPS по SFTP (используя FileZilla, WinSCP или команду scp).",
+                f"  4. Скопируйте файл в каталог на сервере: {GREEN}{WARP_PROFILES_DIR}{NC}",
+                "     Имя файла (без .conf) будет использоваться как имя гео-профиля.",
+                "  5. Вернитесь в это меню, выберите профиль и настройте для него список доменов.",
+                "  6. Нажмите 'Применить/Включить' WARP, чтобы обновить конфигурацию Sing-Box.",
+                "",
+                "  Важно: Название файла должно содержать только английские буквы, цифры и дефис.",
+                "  Пример: russia.conf, finland.conf, nl-amsterdam.conf",
+            ]
+            panel("ИНСТРУКЦИЯ ПО УСТАНОВКЕ", lines)
+            prompt("Нажмите Enter, чтобы вернуться")
+
+
+# ── Вспомогательное меню: Управление маршрутами гео-профилей ──
+def _menu_manage_profile_routes(state: AppState, ps, profile_name: str) -> None:
+    routes_config = ps.config.setdefault("routes", {})
+    route = routes_config.setdefault(profile_name, {"domains": [], "ips": []})
+    
+    while True:
+        clear()
+        domains = route.setdefault("domains", [])
+        ips = route.setdefault("ips", [])
+        
+        status_lines = [
+            f"  Профиль:       {GREEN}{profile_name}{NC}",
+            "  " + "─" * 50,
+            f"  Доменов в маршруте:     {CYAN}{len(domains)}{NC}",
+            f"  IP/подсетей в маршруте:  {CYAN}{len(ips)}{NC}",
+            "",
+            f"  Примеры доменов: {DIM}openai.com, .googlevideo.com{NC}",
+            f"  Примеры IP:      {DIM}142.250.0.0/16, 8.8.8.8{NC}",
+        ]
+        panel(f"📝 МАРШРУТЫ ГЕО-ПРОФИЛЯ: {profile_name.upper()}", status_lines)
+        
+        options = [
+            ("1", "➕ Добавить домен(ы)", "Добавить домены для маршрутизации через этот релей"),
+            ("2", "🗑️  Удалить домен(ы)", "Показать список и удалить домены"),
+            ("3", "➕ Добавить IP/подсеть(и)", "Добавить IP/CIDR для маршрутизации через этот релей"),
+            ("4", "🗑️  Удалить IP/подсеть(и)", "Показать список и удалить IP/CIDR"),
+            ("0", "↩ Назад", "")
+        ]
+        
+        choice = menu(options, f"МАРШРУТЫ ДЛЯ {profile_name.upper()}")
+        if choice == "0":
+            break
+            
+        elif choice == "1":
+            raw = prompt("Введите домен(ы) (через пробел или запятую)").strip()
+            if not raw:
+                continue
+            
+            tokens = [t.strip().lower() for t in raw.replace(",", " ").split() if t.strip()]
+            added = 0
+            from hydra.plugins.warp.plugin import WarpPlugin
+            for t in tokens:
+                if not WarpPlugin._is_valid_domain(t):
+                    warn(f"Некорректный формат домена: '{t}' (пропущено)")
+                    continue
+                if t not in domains:
+                    domains.append(t)
+                    added += 1
+            
+            if added:
+                route["domains"] = domains
+                save_state(state)
+                success(f"Добавлено доменов: {added}")
+                if ps.enabled:
+                    info("Обновляю конфигурацию Sing-Box...")
+                    if not orchestrator.apply_config(state):
+                        error("Ошибка применения нового конфига.")
+                        _show_diagnostic_info()
+            else:
+                warn("Новых доменов не добавлено.")
+            prompt("Нажмите Enter для продолжения")
+            
+        elif choice == "2":
+            if not domains:
+                error("Список доменов пуст.")
+                prompt("Нажмите Enter")
+                continue
+                
+            clear()
+            lines = [f"  {idx}. {d}" for idx, d in enumerate(domains, 1)]
+            panel(f"СПИСОК ДОМЕНОВ ДЛЯ {profile_name.upper()}", lines)
+            
+            raw = prompt("Введите домен или его порядковый номер для удаления").strip()
+            if not raw:
+                continue
+                
+            tokens = [t.strip().lower() for t in raw.replace(",", " ").split() if t.strip()]
+            removed = 0
+            for t in tokens:
+                if t.isdigit():
+                    idx = int(t) - 1
+                    if 0 <= idx < len(domains):
+                        domains.remove(domains[idx])
+                        removed += 1
+                else:
+                    if t in domains:
+                        domains.remove(t)
+                        removed += 1
+            
+            if removed:
+                route["domains"] = domains
+                save_state(state)
+                success(f"Удалено доменов: {removed}")
+                if ps.enabled:
+                    info("Обновляю конфигурацию Sing-Box...")
+                    if not orchestrator.apply_config(state):
+                        error("Ошибка применения нового конфига.")
+                        _show_diagnostic_info()
+            else:
+                error("Ничего не удалено.")
+            prompt("Нажмите Enter для продолжения")
+            
+        elif choice == "3":
+            raw = prompt("Введите IP/подсеть(и) (через пробел или запятую)").strip()
+            if not raw:
+                continue
+                
+            tokens = [t.strip().lower() for t in raw.replace(",", " ").split() if t.strip()]
+            added = 0
+            from hydra.plugins.warp.plugin import WarpPlugin
+            for t in tokens:
+                if not WarpPlugin._is_ip_or_cidr(t):
+                    warn(f"Некорректный IP или CIDR: '{t}' (пропущено)")
+                    continue
+                if t not in ips:
+                    ips.append(t)
+                    added += 1
+                    
+            if added:
+                route["ips"] = ips
+                save_state(state)
+                success(f"Добавлено IP/подсетей: {added}")
+                if ps.enabled:
+                    info("Обновляю конфигурацию Sing-Box...")
+                    if not orchestrator.apply_config(state):
+                        error("Ошибка применения нового конфига.")
+                        _show_diagnostic_info()
+            else:
+                warn("Новых записей не добавлено.")
+            prompt("Нажмите Enter для продолжения")
+            
+        elif choice == "4":
+            if not ips:
+                error("Список IP пуст.")
+                prompt("Нажмите Enter")
+                continue
+                
+            clear()
+            lines = [f"  {idx}. {ip}" for idx, ip in enumerate(ips, 1)]
+            panel(f"СПИСОК IP ДЛЯ {profile_name.upper()}", lines)
+            
+            raw = prompt("Введите IP/CIDR или порядковый номер для удаления").strip()
+            if not raw:
+                continue
+                
+            tokens = [t.strip().lower() for t in raw.replace(",", " ").split() if t.strip()]
+            removed = 0
+            for t in tokens:
+                if t.isdigit():
+                    idx = int(t) - 1
+                    if 0 <= idx < len(ips):
+                        ips.remove(ips[idx])
+                        removed += 1
+                else:
+                    if t in ips:
+                        ips.remove(t)
+                        removed += 1
+                        
+            if removed:
+                route["ips"] = ips
+                save_state(state)
+                success(f"Удалено записей: {removed}")
+                if ps.enabled:
+                    info("Обновляю конфигурацию Sing-Box...")
+                    if not orchestrator.apply_config(state):
+                        error("Ошибка применения нового конфига.")
+                        _show_diagnostic_info()
+            else:
+                error("Ничего не удалено.")
             prompt("Нажмите Enter для продолжения")

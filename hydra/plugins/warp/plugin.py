@@ -23,6 +23,7 @@ WGCF_BIN = Path("/usr/local/bin/wgcf")
 WGCF_PROFILE = Path("/etc/wireguard/wgcf-profile.conf")
 WARP_INTERFACE = "wgcf"
 WARP_EXTERNAL_CACHE = Path("/var/lib/hydra/warp_external.json")
+WARP_PROFILES_DIR = Path("/etc/hydra/warp_profiles")
 
 DEFAULT_WARP_DOMAINS = [
     "openai.com",
@@ -198,89 +199,208 @@ class WarpPlugin(BasePlugin):
             "addresses": addresses,
         }
 
+    def _parse_wg_conf(self, text: str) -> dict | None:
+        """Парсит WireGuard / AmneziaWG .conf файл."""
+        import re
+        result = {"interface": {}, "peer": {}}
+        current_section = None
+        
+        for line in text.splitlines():
+            # Очищаем inline комментарии и пробелы
+            line = re.sub(r"[#;].*$", "", line).strip()
+            if not line:
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                current_section = line[1:-1].lower()
+                continue
+            if current_section and "=" in line:
+                parts = line.split("=", 1)
+                key = parts[0].strip().lower()
+                val = parts[1].strip()
+                result[current_section][key] = val
+                
+        if not result["interface"] or not result["peer"]:
+            return None
+        return result
+
     def configure(self, state: AppState) -> ConfigFragment:
-        """Генерирует Sing-Box outbound для WARP и route-правила."""
-        warp_cfg = self._load_warp_config()
-        if not warp_cfg:
-            return ConfigFragment()
-
-        # Sing-Box требует IP-адрес в качестве `server` (домены не поддерживаются напрямую)
-        try:
-            server_ip = socket.gethostbyname("engage.cloudflareclient.com")
-        except Exception:
-            server_ip = "162.159.192.1"
-
-        # WireGuard Endpoint (Синтаксис Sing-Box 1.13.0+)
-        endpoint = {
-            "type": "wireguard",
-            "tag": "warp",
-            "address": warp_cfg["addresses"],
-            "private_key": warp_cfg["private_key"],
-            "mtu": 1280,
-            "peers": [
-                {
-                    "address": server_ip,
-                    "port": 2408,
-                    "public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
-                    "allowed_ips": ["0.0.0.0/0", "::/0"]
-                }
-            ]
-        }
-
-        # Получаем списки доменов и IP из конфига плагина
-        ps = state.protocols.get("warp")
-        if ps:
-            # Инициализация дефолтами, если ключи отсутствуют
-            if "domains" not in ps.config:
-                ps.config["domains"] = DEFAULT_WARP_DOMAINS.copy()
-            if "ips" not in ps.config:
-                ps.config["ips"] = []
-            
-            domains = ps.config.get("domains", [])
-            ips = ps.config.get("ips", [])
-        else:
-            domains = DEFAULT_WARP_DOMAINS.copy()
-            ips = []
-
-        # Загружаем правила из кэша внешнего источника
-        ext_domains = []
-        ext_ips = []
-        if WARP_EXTERNAL_CACHE.exists():
-            try:
-                ext_data = json.loads(WARP_EXTERNAL_CACHE.read_text(encoding="utf-8"))
-                ext_domains = ext_data.get("domains", [])
-                ext_ips = ext_data.get("ips", [])
-            except Exception:
-                pass
-
-        all_domains = list(set(domains + ext_domains))
-        all_ips = list(set(ips + ext_ips))
-
-        # Генерируем route_rules для Sing-Box
+        """Генерирует Sing-Box outbound/endpoints для WARP и route-правила."""
+        WARP_PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+        endpoints = []
         rules = []
-        if all_domains:
-            clean_domains = [d.strip() for d in all_domains if d.strip()]
-            if clean_domains:
-                rules.append({
-                    "domain": clean_domains,
-                    "outbound": "warp",
-                })
-        if all_ips:
-            clean_ips = [ip.strip() for ip in all_ips if ip.strip()]
-            if clean_ips:
-                rules.append({
-                    "ip_cidr": clean_ips,
-                    "outbound": "warp",
-                })
 
-        # Если нет ни одного правила маршрутизации, не отдаем outbound/правила,
-        # чтобы зря не занимать ресурсы и не перезаписывать пустые правила
+        # Загружаем кастомные гео-профили
+        custom_profiles = []
+        for p_file in sorted(WARP_PROFILES_DIR.glob("*.conf")):
+            profile_name = p_file.stem
+            try:
+                text = p_file.read_text(encoding="utf-8", errors="replace")
+                parsed = self._parse_wg_conf(text)
+                if parsed:
+                    custom_profiles.append((profile_name, parsed))
+            except Exception as e:
+                from hydra.core.singbox import _log
+                _log("ERROR", f"Failed to parse warp profile {p_file}: {e}")
+
+        ps = state.protocols.get("warp")
+        routes_config = {}
+        if ps and "routes" in ps.config:
+            routes_config = ps.config["routes"]
+
+        if custom_profiles:
+            for profile_name, parsed in custom_profiles:
+                # Извлекаем endpoint хост и порт
+                raw_endpoint = parsed["peer"].get("endpoint", "")
+                if ":" in raw_endpoint:
+                    host, port_str = raw_endpoint.rsplit(":", 1)
+                    try:
+                        port = int(port_str)
+                    except ValueError:
+                        port = 2408
+                else:
+                    host = raw_endpoint
+                    port = 2408
+
+                try:
+                    server_ip = socket.gethostbyname(host)
+                except Exception:
+                    server_ip = host
+
+                # Проверяем, AmneziaWG ли это
+                is_amnezia = any(k in parsed["interface"] for k in ["s1", "s2", "jc", "jmin", "jmax", "h1", "h2", "h3", "h4"])
+                
+                # Собираем адреса
+                addresses = []
+                for addr in parsed["interface"].get("address", "").split(","):
+                    addr = addr.strip()
+                    if addr:
+                        if "/" not in addr:
+                            addr += "/128" if ":" in addr else "/32"
+                        addresses.append(addr)
+
+                if not addresses:
+                    addresses = ["172.16.0.2/32"]
+
+                endpoint = {
+                    "type": "amneziawg" if is_amnezia else "wireguard",
+                    "tag": f"warp_{profile_name}",
+                    "address": addresses,
+                    "private_key": parsed["interface"].get("privatekey", ""),
+                    "mtu": int(parsed["interface"].get("mtu", 1280)),
+                    "peers": [
+                        {
+                            "address": server_ip,
+                            "port": port,
+                            "public_key": parsed["peer"].get("publickey", ""),
+                            "allowed_ips": [ip.strip() for ip in parsed["peer"].get("allowedips", "0.0.0.0/0, ::/0").split(",") if ip.strip()]
+                        }
+                    ]
+                }
+
+                if is_amnezia:
+                    # Переносим параметры обфускации
+                    for k in ["s1", "s2", "jc", "jmin", "jmax", "h1", "h2", "h3", "h4"]:
+                        if k in parsed["interface"]:
+                            try:
+                                endpoint[k] = int(parsed["interface"][k])
+                            except ValueError:
+                                pass
+
+                endpoints.append(endpoint)
+
+                # Добавляем правила маршрутизации из routes_config
+                profile_route = routes_config.get(profile_name, {})
+                domains = profile_route.get("domains", [])
+                ips = profile_route.get("ips", [])
+
+                if domains:
+                    clean_domains = [d.strip() for d in domains if d.strip()]
+                    if clean_domains:
+                        rules.append({
+                            "domain": clean_domains,
+                            "outbound": f"warp_{profile_name}"
+                        })
+                if ips:
+                    clean_ips = [ip.strip() for ip in ips if ip.strip()]
+                    if clean_ips:
+                        rules.append({
+                            "ip_cidr": clean_ips,
+                            "outbound": f"warp_{profile_name}"
+                        })
+
+        else:
+            # Совместимый режим (стандартный WGCF)
+            warp_cfg = self._load_warp_config()
+            if not warp_cfg:
+                return ConfigFragment()
+
+            try:
+                server_ip = socket.gethostbyname("engage.cloudflareclient.com")
+            except Exception:
+                server_ip = "162.159.192.1"
+
+            endpoint = {
+                "type": "wireguard",
+                "tag": "warp",
+                "address": warp_cfg["addresses"],
+                "private_key": warp_cfg["private_key"],
+                "mtu": 1280,
+                "peers": [
+                    {
+                        "address": server_ip,
+                        "port": 2408,
+                        "public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+                        "allowed_ips": ["0.0.0.0/0", "::/0"]
+                    }
+                ]
+            }
+            endpoints.append(endpoint)
+
+            if ps:
+                if "domains" not in ps.config:
+                    ps.config["domains"] = DEFAULT_WARP_DOMAINS.copy()
+                if "ips" not in ps.config:
+                    ps.config["ips"] = []
+                domains = ps.config.get("domains", [])
+                ips = ps.config.get("ips", [])
+            else:
+                domains = DEFAULT_WARP_DOMAINS.copy()
+                ips = []
+
+            ext_domains = []
+            ext_ips = []
+            if WARP_EXTERNAL_CACHE.exists():
+                try:
+                    ext_data = json.loads(WARP_EXTERNAL_CACHE.read_text(encoding="utf-8"))
+                    ext_domains = ext_data.get("domains", [])
+                    ext_ips = ext_data.get("ips", [])
+                except Exception:
+                    pass
+
+            all_domains = list(set(domains + ext_domains))
+            all_ips = list(set(ips + ext_ips))
+
+            if all_domains:
+                clean_domains = [d.strip() for d in all_domains if d.strip()]
+                if clean_domains:
+                    rules.append({
+                        "domain": clean_domains,
+                        "outbound": "warp",
+                    })
+            if all_ips:
+                clean_ips = [ip.strip() for ip in all_ips if ip.strip()]
+                if clean_ips:
+                    rules.append({
+                        "ip_cidr": clean_ips,
+                        "outbound": "warp",
+                    })
+
         if not rules:
             return ConfigFragment()
 
         return ConfigFragment(
             outbounds=[],
-            endpoints=[endpoint],
+            endpoints=endpoints,
             route_rules=rules,
         )
 
