@@ -1,6 +1,6 @@
-# HYDRA v2.3.3
+# HYDRA v2.3.4
 
-![Version](https://img.shields.io/badge/version-2.3.3-blue.svg)
+![Version](https://img.shields.io/badge/version-2.3.4-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg)
@@ -224,13 +224,7 @@ hydra/
 ### [2.3.4] — 2026-07-11
 
 #### Добавлено
-* Поддержка кастомных WireGuard и AmneziaWG профилей релеев в `/etc/hydra/warp_profiles/` для распределенной маршрутизации списков.
-* Парсинг расширенных параметров обфускации AmneziaWG (включая CPS-подписи `i1`–`i5`, мусорные пакеты и заголовки `s1`–`s4`, `h1`–`h4`).
-* Переход на сопоставление `domain_suffix` вместо `domain` в правилах маршрутизации для автоматического проксирования всех поддоменов.
-
-#### Исправлено
-* Зависание AmneziaWG-рукопожатий при использовании сигнатур Custom Protocol Signature (`I1`–`I5`).
-* Ошибка падения всего трафика VPS на WARP-интерфейс (добавлена явная привязка `"final": "direct"` в базовой конфигурации Sing-Box).
+* Поддержка кастомных профилей WireGuard/AmneziaWG и раздельный роутинг списков по разным профилям релеев.
 
 ---
 
