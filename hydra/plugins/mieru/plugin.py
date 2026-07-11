@@ -136,17 +136,18 @@ class MieruPlugin(BasePlugin):
         return json.dumps(full, indent=2)
 
     def client_link(self, user: User, state: AppState) -> str:
-        """mierus:// ссылка для Karing."""
+        """mierus:// ссылка для Karing и Throne."""
         import urllib.parse
         username = urllib.parse.quote(self._derive_username(user), safe="")
-        password = self._derive_password(user.uuid)
+        password = urllib.parse.quote(self._derive_password(user.uuid), safe="")
         server_ip = state.network.server_ip or public_ip()
         pattern = self._get_traffic_pattern(state)
 
         return (
             f"mierus://{username}:{password}@{server_ip}"
-            f"?port={DEFAULT_PORT_START}&protocol={DEFAULT_PROTOCOL}"
-            f"&profile=default&mtu=1400&multiplexing=MULTIPLEXING_HIGH"
+            f"?profile=default&port={DEFAULT_PORT_START}&protocol={DEFAULT_PROTOCOL}"
+            f"&port={DEFAULT_PORT_START}-{DEFAULT_PORT_END}&protocol={DEFAULT_PROTOCOL}"
+            f"&multiplexing=MULTIPLEXING_HIGH"
             f"&traffic-pattern={urllib.parse.quote(pattern, safe='')}"
         )
 
