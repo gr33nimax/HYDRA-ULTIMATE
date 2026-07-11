@@ -1226,11 +1226,8 @@ def _user_configs(state: AppState, user: User):
     
     # Ссылка на подписку
     sub_url = get_subscription_url(user, state)
-    sub_lines = [
-        f"{YELLOW}{BOLD}Base64 Subscription (v2rayNG, Shadowrocket, NekoBox, Karing):{NC}",
-        f"  {CYAN}{sub_url}{NC}"
-    ]
-    panel("🔗 ССЫЛКА НА ПОДПИСКУ", sub_lines)
+    print(f"  {YELLOW}{BOLD}Base64 Subscription (v2rayNG, Shadowrocket, NekoBox, Karing):{NC}")
+    print(f"  {CYAN}{sub_url}{NC}")
     print()
     
     from hydra.plugins import registry
