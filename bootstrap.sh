@@ -79,6 +79,7 @@ MISSING=()
 command -v python3 &>/dev/null || MISSING+=("python3")
 command -v curl    &>/dev/null || MISSING+=("curl")
 command -v git     &>/dev/null || MISSING+=("git")
+command -v pip3    &>/dev/null || MISSING+=("python3-pip")
 
 for pkg in "${MISSING[@]}"; do
     info "Устанавливаю: $pkg"
