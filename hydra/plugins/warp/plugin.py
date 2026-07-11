@@ -270,6 +270,7 @@ class WarpPlugin(BasePlugin):
 
         # ── ЗАГРУЗКА ТОЧЕК ВЫХОДА (OUTBOUNDS/ENDPOINTS) ──
         endpoints = []
+        outbounds = []
         destinations = set()
 
         # 1. Кастомные гео-профили из /etc/hydra/warp_profiles/
@@ -286,34 +287,20 @@ class WarpPlugin(BasePlugin):
                 _log("ERROR", f"Failed to parse warp profile {p_file}: {e}")
 
         for profile_name, parsed in custom_profiles:
-            raw_endpoint = parsed["peer"].get("endpoint", "")
-            if ":" in raw_endpoint:
-                host, port_str = raw_endpoint.rsplit(":", 1)
-                try:
-                    port = int(port_str)
-                except ValueError:
-                    port = 2408
-            else:
-                host = raw_endpoint
+            is_amnezia = any(k in parsed["interface"] for k in ["s1", "s2", "jc", "jmin", "jmax", "h1", "h2", "h3", "h4"])
+            try:
+                endpoint_host, endpoint_port = parsed["peer"].get("endpoint", "engage.cloudflareclient.com:2408").split(":")
+                port = int(endpoint_port)
+            except Exception:
+                endpoint_host = "engage.cloudflareclient.com"
                 port = 2408
 
             try:
-                server_ip = socket.gethostbyname(host)
+                server_ip = socket.gethostbyname(endpoint_host)
             except Exception:
-                server_ip = host
+                server_ip = "162.159.192.1"
 
-            is_amnezia = any(k in parsed["interface"] for k in ["s1", "s2", "jc", "jmin", "jmax", "h1", "h2", "h3", "h4"])
-            
-            addresses = []
-            for addr in parsed["interface"].get("address", "").split(","):
-                addr = addr.strip()
-                if addr:
-                    if "/" not in addr:
-                        addr += "/128" if ":" in addr else "/32"
-                    addresses.append(addr)
-
-            if not addresses:
-                addresses = ["172.16.0.2/32"]
+            addresses = [addr.strip() for addr in parsed["interface"].get("address", "172.16.0.2/32").split(",") if addr.strip()]
 
             tag = f"warp_{profile_name}"
             destinations.add(tag)
@@ -346,6 +333,11 @@ class WarpPlugin(BasePlugin):
                     endpoint["amnezia"] = amnezia_params
 
             endpoints.append(endpoint)
+            outbounds.append({
+                "type": "direct",
+                "tag": tag,
+                "detour": tag
+            })
 
         # 2. Стандартный WGCF (если профиль сгенерирован)
         warp_cfg = self._load_warp_config()
@@ -372,6 +364,11 @@ class WarpPlugin(BasePlugin):
                 ]
             }
             endpoints.append(endpoint)
+            outbounds.append({
+                "type": "direct",
+                "tag": "warp",
+                "detour": "warp"
+            })
 
         # ── СБОРКА ПРАВИЛ МАРШРУТИЗАЦИИ ──
         list_targets = ps.config.get("list_targets", {})
@@ -431,7 +428,7 @@ class WarpPlugin(BasePlugin):
             return ConfigFragment()
 
         return ConfigFragment(
-            outbounds=[],
+            outbounds=outbounds,
             endpoints=endpoints,
             route_rules=rules,
         )
