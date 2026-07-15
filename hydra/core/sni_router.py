@@ -449,6 +449,7 @@ def _collect_backends(state: AppState) -> list[dict]:
                     "port": port,
                     "cert_file": cert_file,
                     "key_file": key_file,
+                    "network_mode": proto.config.get("network", "tcp") if name == "naive" else "",
                 })
     sub_domain = getattr(state.network, "sub_domain", "")
     if sub_domain:
@@ -575,6 +576,25 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
             }
         }
     }
+
+    # QUIC (UDP) для NaiveProxy
+    naive_backend = next((b for b in backends if b["name"] == "naive"), None)
+    naive_needs_quic = naive_backend and naive_backend.get("network_mode") in ("quic", "both")
+
+    if naive_needs_quic:
+        l4_app["servers"]["quic_mux"] = {
+            "listen": ["udp/:443"],
+            "routes": [
+                {
+                    "handle": [
+                        {
+                            "handler": "proxy",
+                            "upstreams": [{"dial": [f"127.0.0.1:{naive_backend['port']}"]}]
+                        }
+                    ]
+                }
+            ]
+        }
 
     # 4. HTTP app (decoy websites & forward_proxy)
     http_servers = {}
@@ -736,6 +756,9 @@ def rebuild(state: AppState) -> bool:
             port = b["port"]
             subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
             subprocess.run(["iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+            if b["name"] == "naive" and b.get("network_mode") in ("quic", "both"):
+                subprocess.run(["iptables", "-D", "INPUT", "-p", "udp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+                subprocess.run(["iptables", "-I", "INPUT", "1", "-p", "udp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
         
         # Block decoy ports from external access too
         for decoy_port in _DECOY_HTTP_PORTS.values():
@@ -743,6 +766,12 @@ def rebuild(state: AppState) -> bool:
             subprocess.run(["iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", str(decoy_port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
     except Exception:
         pass
+
+    # Open UDP:443 for QUIC if naive needs it
+    naive_proto = state.protocols.get("naive")
+    if naive_proto and naive_proto.enabled and naive_proto.config.get("network") in ("quic", "both"):
+        from hydra.utils.firewall import open_udp
+        open_udp(443, "naive-quic-mux")
 
     # 7. Enable and reload/restart service
     subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
@@ -760,6 +789,7 @@ def stop() -> None:
         # Remove firewall blocks
         for port in _INTERNAL_PORTS.values():
             subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+            subprocess.run(["iptables", "-D", "INPUT", "-p", "udp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
         for decoy_port in _DECOY_HTTP_PORTS.values():
             subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(decoy_port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
     except Exception:

@@ -696,6 +696,12 @@ def menu_plugin(state: AppState, p):
             if p.meta.category == PluginCategory.TRANSPORT and ps.enabled:
                 options.append(("2", "👥 Клиенты", "Подключённые клиенты и трафик"))
             
+            # Для NaiveProxy — пункт смены транспорта
+            if p.meta.name == "naive" and ps.enabled:
+                current_net = ps.config.get("network", "tcp") if ps.config else "tcp"
+                net_label = {"tcp": "HTTP/2", "quic": "QUIC", "both": "HTTP/2+QUIC"}.get(current_net, current_net)
+                options.append(("3", "🔀 Сменить транспорт", f"Текущий: {net_label}"))
+
             options.append(("8", "🔄 Переустановить", "Переустановка протокола"))
             options.append(("9", "❌ Удалить", "Полное удаление"))
         
@@ -736,6 +742,54 @@ def menu_plugin(state: AppState, p):
         elif choice == "2" and ps.installed and ps.enabled:
             _show_plugin_clients(state, p)
         
+        elif choice == "3" and p.meta.name == "naive" and ps.enabled:
+            mode_choice = menu([
+                ("1", "HTTP/2 (TCP)", "Стандартный режим, максимальная совместимость"),
+                ("2", "QUIC (UDP)", "HTTP/3 через UDP, может быть быстрее"),
+                ("3", "HTTP/2 + QUIC", "Оба транспорта одновременно"),
+                ("0", "↩ Отмена", ""),
+            ], header="Транспорт NaiveProxy")
+            if mode_choice != "0":
+                mode_map = {"1": "tcp", "2": "quic", "3": "both"}
+                new_mode = mode_map.get(mode_choice)
+                if new_mode:
+                    old_mode = ps.config.get("network", "tcp")
+                    ps.config["network"] = new_mode
+                    from hydra.core.state import save_state
+                    save_state(state)
+
+                    # Переоткрыть/закрыть UDP-порт и обновить iptables
+                    from hydra.utils.firewall import open_udp, close_udp
+                    if new_mode in ("quic", "both") and old_mode == "tcp":
+                        open_udp(443, "naive-quic")
+                        subprocess.run([
+                            "iptables", "-I", "INPUT", "1", "-p", "udp", "--dport", "443",
+                            "-m", "comment", "--comment", "naive-rx-udp"
+                        ], capture_output=True)
+                        subprocess.run([
+                            "iptables", "-I", "OUTPUT", "1", "-p", "udp", "--sport", "443",
+                            "-m", "comment", "--comment", "naive-tx-udp"
+                        ], capture_output=True)
+                    elif new_mode == "tcp" and old_mode in ("quic", "both"):
+                        close_udp(443)
+                        p._remove_iptables_rules()
+                        # Re-add TCP accounting rules
+                        subprocess.run([
+                            "iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", "443",
+                            "-m", "comment", "--comment", "naive-rx"
+                        ], capture_output=True)
+                        subprocess.run([
+                            "iptables", "-I", "OUTPUT", "1", "-p", "tcp", "--sport", "443",
+                            "-m", "comment", "--comment", "naive-tx"
+                        ], capture_output=True)
+
+                    try:
+                        orchestrator.apply_config(state)
+                        success(f"Транспорт изменён на {new_mode}")
+                    except Exception as e:
+                        error(f"Ошибка: {e}")
+                    prompt("Нажмите Enter")
+
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):
                 orchestrator.uninstall_plugin(state, p.meta.name)

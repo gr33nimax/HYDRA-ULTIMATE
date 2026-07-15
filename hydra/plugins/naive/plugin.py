@@ -173,20 +173,41 @@ class NaivePlugin(BasePlugin):
         password = self._derive_password(user.uuid)
         port = DEFAULT_PORT
 
-        outbound = {
-            "type": "naive",
-            "tag": f"naive-{username}",
-            "server": domain,
-            "server_port": port,
-            "username": username,
-            "password": password,
-            "network": "tcp",
-            "tls": {
-                "enabled": True,
-                "server_name": domain,
-                "alpn": ["h2"],
-            },
-        }
+        ps = state.protocols.get("naive")
+        network_mode = ps.config.get("network", "tcp") if ps and ps.config else "tcp"
+
+        outbounds = []
+
+        if network_mode in ("tcp", "both"):
+            outbounds.append({
+                "type": "naive",
+                "tag": f"naive-h2-{username}",
+                "server": domain,
+                "server_port": port,
+                "username": username,
+                "password": password,
+                "network": "tcp",
+                "tls": {
+                    "enabled": True,
+                    "server_name": domain,
+                    "alpn": ["h2"],
+                },
+            })
+
+        if network_mode in ("quic", "both"):
+            outbounds.append({
+                "type": "naive",
+                "tag": f"naive-quic-{username}",
+                "server": domain,
+                "server_port": port,
+                "username": username,
+                "password": password,
+                "network": "quic",
+                "tls": {
+                    "enabled": True,
+                    "server_name": domain,
+                },
+            })
 
         full = {
             "log": {"level": "info"},
@@ -196,8 +217,8 @@ class NaivePlugin(BasePlugin):
                     {"tag": "local", "address": "1.1.1.1", "detour": "direct"},
                 ],
             },
-            "outbounds": [outbound, {"type": "direct", "tag": "direct"}],
-            "route": {"final": outbound["tag"]},
+            "outbounds": outbounds + [{"type": "direct", "tag": "direct"}],
+            "route": {"final": outbounds[0]["tag"] if outbounds else "direct"},
         }
         return json.dumps(full, indent=2)
 
@@ -209,12 +230,50 @@ class NaivePlugin(BasePlugin):
         password = self._derive_password(user.uuid)
         port = DEFAULT_PORT
 
+        ps = state.protocols.get("naive")
+        network_mode = ps.config.get("network", "tcp") if ps and ps.config else "tcp"
+
         user_q = urllib.parse.quote(username, safe="")
         pass_q = urllib.parse.quote(password, safe="")
-        tag_raw = f"{username} NaiveProxy"
-        tag_q = urllib.parse.quote(tag_raw, safe="")
         sni_q = urllib.parse.quote(domain, safe="")
-        return f"naive+https://{user_q}:{pass_q}@{domain}:{port}?security=tls&sni={sni_q}#{tag_q}"
+
+        if network_mode == "quic":
+            tag_raw = f"{username} NaiveProxy QUIC"
+            tag_q = urllib.parse.quote(tag_raw, safe="")
+            return f"naive+quic://{user_q}:{pass_q}@{domain}:{port}?security=tls&sni={sni_q}#{tag_q}"
+        else:
+            tag_raw = f"{username} NaiveProxy"
+            tag_q = urllib.parse.quote(tag_raw, safe="")
+            return f"naive+https://{user_q}:{pass_q}@{domain}:{port}?security=tls&sni={sni_q}#{tag_q}"
+
+    def client_links(self, user: User, state: AppState) -> list[str]:
+        """Возвращает список клиентских ссылок (может быть >1 при network=both)."""
+        domain = state.network.domain
+        if not domain:
+            return []
+
+        ps = state.protocols.get("naive")
+        network_mode = ps.config.get("network", "tcp") if ps and ps.config else "tcp"
+
+        username = self._derive_username(user)
+        password = self._derive_password(user.uuid)
+        port = DEFAULT_PORT
+
+        user_q = urllib.parse.quote(username, safe="")
+        pass_q = urllib.parse.quote(password, safe="")
+        sni_q = urllib.parse.quote(domain, safe="")
+
+        links = []
+
+        if network_mode in ("tcp", "both"):
+            tag_q = urllib.parse.quote(f"{username} NaiveProxy", safe="")
+            links.append(f"naive+https://{user_q}:{pass_q}@{domain}:{port}?security=tls&sni={sni_q}#{tag_q}")
+
+        if network_mode in ("quic", "both"):
+            tag_q = urllib.parse.quote(f"{username} NaiveProxy QUIC", safe="")
+            links.append(f"naive+quic://{user_q}:{pass_q}@{domain}:{port}?security=tls&sni={sni_q}#{tag_q}")
+
+        return links
 
     # ═════════════════════════════════════════════════════════════════════
     #  Статус / трафик
@@ -253,6 +312,12 @@ class NaivePlugin(BasePlugin):
             from hydra.core.sni_router import get_effective_port
             state = load_state()
             effective_port = get_effective_port("naive", state)
+
+            ps = state.protocols.get("naive")
+            if ps and ps.config:
+                mode = ps.config.get("network", "tcp")
+                mode_labels = {"tcp": "HTTP/2 (TCP)", "quic": "QUIC (UDP)", "both": "HTTP/2 + QUIC"}
+                info["Транспорт"] = mode_labels.get(mode, mode)
         except Exception:
             pass
 
@@ -302,32 +367,55 @@ class NaivePlugin(BasePlugin):
         if not shutil.which("ss"):
             return []
 
+        ip_counts = {}
+
         r = subprocess.run(
             ["ss", "-t", "-H", "-n", "state", "established"],
             capture_output=True, text=True,
         )
-        if r.returncode != 0:
-            return []
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
 
-        ip_counts = {}
-        for line in r.stdout.splitlines():
-            parts = line.split()
-            if len(parts) < 4:
-                continue
+                local_addr = parts[2]
+                local_port_str = local_addr.split(":")[-1]
+                if not local_port_str.isdigit():
+                    continue
+                local_port = int(local_port_str)
 
-            local_addr = parts[2]
-            local_port_str = local_addr.split(":")[-1]
-            if not local_port_str.isdigit():
-                continue
-            local_port = int(local_port_str)
+                from hydra.core.sni_router import get_effective_port
+                effective = get_effective_port("naive", state) if state else DEFAULT_PORT
+                if local_port == effective or local_port == DEFAULT_PORT:
+                    remote_addr = parts[3]
+                    remote_parts = remote_addr.split(":")
+                    remote_ip = ":".join(remote_parts[:-1]).strip("[]")
+                    ip_counts[remote_ip] = ip_counts.get(remote_ip, 0) + 1
 
-            from hydra.core.sni_router import get_effective_port
-            effective = get_effective_port("naive", state) if state else DEFAULT_PORT
-            if local_port == effective or local_port == DEFAULT_PORT:
-                remote_addr = parts[3]
-                remote_parts = remote_addr.split(":")
-                remote_ip = ":".join(remote_parts[:-1]).strip("[]")
-                ip_counts[remote_ip] = ip_counts.get(remote_ip, 0) + 1
+        # Также проверяем UDP (QUIC)
+        r_udp = subprocess.run(
+            ["ss", "-u", "-H", "-n", "state", "established"],
+            capture_output=True, text=True,
+        )
+        if r_udp.returncode == 0:
+            for line in r_udp.stdout.splitlines():
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+                local_addr = parts[2]
+                local_port_str = local_addr.split(":")[-1]
+                if not local_port_str.isdigit():
+                    continue
+                local_port = int(local_port_str)
+
+                from hydra.core.sni_router import get_effective_port
+                effective = get_effective_port("naive", state) if state else DEFAULT_PORT
+                if local_port == effective or local_port == DEFAULT_PORT:
+                    remote_addr = parts[3]
+                    remote_parts = remote_addr.split(":")
+                    remote_ip = ":".join(remote_parts[:-1]).strip("[]")
+                    ip_counts[remote_ip] = ip_counts.get(remote_ip, 0) + 1
 
         rx_bytes = 0
         tx_bytes = 0
@@ -353,7 +441,7 @@ class NaivePlugin(BasePlugin):
         for remote_ip, count in ip_counts.items():
             clients.append({
                 "online": True,
-                "email": f"{remote_ip} ({count} TCP)",
+                "email": f"{remote_ip} ({count} Conn)",
                 "rx": rx_bytes // n_clients if n_clients > 0 else 0,
                 "tx": tx_bytes // n_clients if n_clients > 0 else 0,
                 "last_handshake": now_ts,
@@ -393,6 +481,18 @@ class NaivePlugin(BasePlugin):
                     ps.config["cert_file"] = custom_cert
                     ps.config["key_file"] = custom_key
 
+            from hydra.ui.tui import menu as tui_menu
+            current_mode = ps.config.get("network", "tcp")
+            print()
+            print("  Выберите режим транспорта NaiveProxy:")
+            mode_choice = tui_menu([
+                ("1", "HTTP/2 (TCP)", "Стандартный режим, максимальная совместимость"),
+                ("2", "QUIC (UDP)", "HTTP/3 через UDP, может быть быстрее"),
+                ("3", "HTTP/2 + QUIC", "Оба транспорта одновременно (2 ссылки на клиента)"),
+            ], header="Транспорт NaiveProxy")
+            mode_map = {"1": "tcp", "2": "quic", "3": "both"}
+            ps.config["network"] = mode_map.get(mode_choice, current_mode)
+
             from hydra.core.state import save_state
             save_state(state)
 
@@ -410,6 +510,11 @@ class NaivePlugin(BasePlugin):
         from hydra.utils.firewall import open_tcp
         open_tcp(DEFAULT_PORT, "naive")
 
+        network_mode = ps.config.get("network", "tcp")
+        if network_mode in ("quic", "both"):
+            from hydra.utils.firewall import open_udp
+            open_udp(DEFAULT_PORT, "naive-quic")
+
         self._remove_iptables_rules()
         subprocess.run([
             "iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", str(DEFAULT_PORT),
@@ -419,6 +524,16 @@ class NaivePlugin(BasePlugin):
             "iptables", "-I", "OUTPUT", "1", "-p", "tcp", "--sport", str(DEFAULT_PORT),
             "-m", "comment", "--comment", "naive-tx"
         ], capture_output=True)
+
+        if network_mode in ("quic", "both"):
+            subprocess.run([
+                "iptables", "-I", "INPUT", "1", "-p", "udp", "--dport", str(DEFAULT_PORT),
+                "-m", "comment", "--comment", "naive-rx-udp"
+            ], capture_output=True)
+            subprocess.run([
+                "iptables", "-I", "OUTPUT", "1", "-p", "udp", "--sport", str(DEFAULT_PORT),
+                "-m", "comment", "--comment", "naive-tx-udp"
+            ], capture_output=True)
 
         ps.enabled = True
 
@@ -439,6 +554,10 @@ class NaivePlugin(BasePlugin):
         from hydra.utils.firewall import close_tcp
         subprocess.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
         close_tcp(DEFAULT_PORT)
+
+        from hydra.utils.firewall import close_udp
+        close_udp(DEFAULT_PORT)
+
         self._remove_iptables_rules()
 
         ps = state.protocols.get("naive")

@@ -229,6 +229,7 @@ def test_on_enable_opens_firewall():
          patch("subprocess.run") as mock_run, \
          patch("hydra.ui.tui.prompt", side_effect=lambda text, default="": default), \
          patch("hydra.ui.tui.confirm", return_value=False), \
+         patch("hydra.ui.tui.menu", return_value="1"), \
          patch.object(p, "apply", return_value=True):
         mock_run.return_value = MagicMock(stdout="active\n", returncode=0)
         p.on_enable(state)
@@ -332,4 +333,87 @@ def test_traffic_parses_caddy_access_logs(tmp_path):
          patch("hydra.plugins.naive.plugin.LOG_DIR", tmp_path):
         traffic_data = p.traffic(state)
         assert traffic_data == {"user_email@example.com": 3000}
+
+
+# === QUIC tests ===
+
+def _make_state_with_network(users, domain="example.com", network="tcp"):
+    state = _make_state(users, domain)
+    state.protocols["naive"].config["network"] = network
+    return state
+
+
+def test_client_link_quic_mode():
+    """При network=quic ссылка начинается с naive+quic://."""
+    p = NaivePlugin()
+    user = _make_user("a@x.com", uuid="uuid-a")
+    state = _make_state_with_network([user], network="quic")
+    link = p.client_link(user, state)
+    assert link.startswith("naive+quic://")
+    assert "example.com:443" in link
+
+
+def test_client_links_both_mode():
+    """client_links() возвращает 2 ссылки при network=both."""
+    p = NaivePlugin()
+    user = _make_user("a@x.com", uuid="uuid-a")
+    state = _make_state_with_network([user], network="both")
+    links = p.client_links(user, state)
+    assert len(links) == 2
+    schemes = [l.split("://")[0] for l in links]
+    assert "naive+https" in schemes
+    assert "naive+quic" in schemes
+
+
+def test_client_links_tcp_mode():
+    """client_links() возвращает 1 ссылку при network=tcp."""
+    p = NaivePlugin()
+    user = _make_user("a@x.com", uuid="uuid-a")
+    state = _make_state_with_network([user], network="tcp")
+    links = p.client_links(user, state)
+    assert len(links) == 1
+    assert links[0].startswith("naive+https://")
+
+
+def test_generate_client_config_quic():
+    """Конфиг с network=quic содержит quic outbound без alpn."""
+    p = NaivePlugin()
+    user = _make_user("a@x.com", uuid="uuid-a")
+    state = _make_state_with_network([user], network="quic")
+    cfg = json.loads(p.generate_client_config(user, state))
+    naive_outs = [o for o in cfg["outbounds"] if o["type"] == "naive"]
+    assert len(naive_outs) == 1
+    assert naive_outs[0]["network"] == "quic"
+    assert "alpn" not in naive_outs[0].get("tls", {})
+
+
+def test_generate_client_config_both():
+    """Конфиг с network=both содержит 2 outbound-а."""
+    p = NaivePlugin()
+    user = _make_user("a@x.com", uuid="uuid-a")
+    state = _make_state_with_network([user], network="both")
+    cfg = json.loads(p.generate_client_config(user, state))
+    naive_outs = [o for o in cfg["outbounds"] if o["type"] == "naive"]
+    assert len(naive_outs) == 2
+    networks = {o["network"] for o in naive_outs}
+    assert networks == {"tcp", "quic"}
+
+
+def test_on_enable_opens_udp_for_quic():
+    """on_enable() вызывает open_udp(443) при network=quic."""
+    p = NaivePlugin()
+    state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
+    state.protocols["naive"].config["network"] = "quic"
+    with patch("hydra.utils.firewall.open_tcp") as mock_tcp, \
+         patch("hydra.utils.firewall.open_udp") as mock_udp, \
+         patch("subprocess.run") as mock_run, \
+         patch("hydra.ui.tui.prompt", side_effect=lambda text, default="": default), \
+         patch("hydra.ui.tui.confirm", return_value=False), \
+         patch("hydra.ui.tui.menu", return_value="2"), \
+         patch.object(p, "apply", return_value=True):
+        mock_run.return_value = MagicMock(stdout="active\n", returncode=0)
+        p.on_enable(state)
+        mock_tcp.assert_called_once_with(443, "naive")
+        mock_udp.assert_called_once_with(443, "naive-quic")
+
 

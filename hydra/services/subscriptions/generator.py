@@ -315,6 +315,9 @@ def generate_links(user: User, state: AppState) -> list[str]:
                     link = p.client_link(user, state, profile=prof["name"])
                     if link:
                         links.append(link)
+            elif hasattr(p, "client_links"):
+                multi = p.client_links(user, state)
+                links.extend(multi)
             else:
                 link = p.client_link(user, state)
                 if link:
