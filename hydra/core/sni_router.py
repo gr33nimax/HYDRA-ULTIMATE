@@ -589,7 +589,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                     "handle": [
                         {
                             "handler": "proxy",
-                            "upstreams": [{"dial": [f"127.0.0.1:{naive_backend['port']}"]}]
+                            "upstreams": [{"dial": [f"udp/127.0.0.1:{naive_backend['port']}"]}]
                         }
                     ]
                 }
