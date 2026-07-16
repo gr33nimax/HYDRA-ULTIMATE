@@ -628,6 +628,9 @@ def menu_plugin(state: AppState, p):
     if p.meta.name == "mieru":
         _menu_mieru(state, p)
         return
+    if p.meta.name == "trusttunnel":
+        _menu_trusttunnel(state, p)
+        return
     if p.meta.name == "dnscrypt":
         from hydra.plugins.dnscrypt.manager import menu_dnscrypt
         menu_dnscrypt(state, p)
@@ -2840,6 +2843,199 @@ def _menu_mieru_obfuscation(state: AppState, p):
                 else:
                     error("Не удалось применить пресет")
                 prompt("Нажмите Enter")
+
+
+def _menu_trusttunnel(state: AppState, p):
+    """Подменю управления TrustTunnel."""
+    from hydra.core.state import get_protocol
+
+    while True:
+        clear()
+        ps = get_protocol(state, p.meta.name)
+
+        # Статус
+        try:
+            st = p.status()
+            current_preset = p.get_current_preset(state)
+            current_transport = p.get_current_transport(state)
+            from hydra.plugins.trusttunnel.presets import get_preset as _tt_get_preset
+            preset_obj = _tt_get_preset(current_preset)
+            transport_labels = {"tcp": "HTTP/2 (TCP)", "quic": "QUIC (UDP)", "both": "HTTP/2 + QUIC"}
+
+            lines = [
+                f"  Статус:      {'🟢 Работает' if st.running else '🔴 Остановлен'}",
+                f"  Установлен:  {_ok(st.installed)}",
+                f"  Включён:     {_ok(st.enabled)}",
+            ]
+            if st.port:
+                lines.append(f"  Порт:        {st.port}")
+            domain = ps.config.get("domain", "") if ps.config else ""
+            if domain:
+                lines.append(f"  Домен:       {domain}")
+            lines.append(f"  Транспорт:   {BOLD}{CYAN}{transport_labels.get(current_transport, current_transport)}{NC}")
+            lines.append(f"  Пресет:      {BOLD}{CYAN}{preset_obj.label}{NC}")
+            if preset_obj.utls_fingerprint:
+                lines.append(f"  Fingerprint: {preset_obj.utls_fingerprint}")
+            if preset_obj.multiplex:
+                lines.append(f"  Multiplex:   {preset_obj.multiplex['protocol']}")
+            if preset_obj.padding:
+                lines.append(f"  Padding:     Включён")
+            if st.info:
+                for k, v in st.info.items():
+                    lines.append(f"  {k}: {v}")
+            panel("🛡️ TRUSTTUNNEL CONTROL", lines)
+        except Exception:
+            panel("TRUSTTUNNEL CONTROL", ["  Статус недоступен"])
+        print()
+
+        options = []
+        if not ps.installed:
+            options.append(("1", "🔧 Установить", p.meta.description))
+        else:
+            if ps.enabled:
+                options.append(("1", "⏸️  Выключить", "Отключить протокол"))
+                options.append(("2", "👥 Клиенты", "Подключённые клиенты и трафик"))
+                options.append(("3", "🔒 Пресет обфускации", f"Текущий: {preset_obj.label}"))
+                options.append(("4", "🌐 Сменить транспорт", f"Текущий: {transport_labels.get(current_transport, current_transport)}"))
+            else:
+                options.append(("1", "▶️  Включить", "Активировать протокол"))
+
+            options.append(("8", "🔄 Переустановить", "Переустановка протокола"))
+            options.append(("9", "❌ Удалить", "Полное удаление"))
+
+        options.append(("0", "↩ Назад", ""))
+
+        choice = menu(options, "TRUSTTUNNEL")
+
+        if choice == "0":
+            break
+
+        elif choice == "1":
+            if not ps.installed:
+                info("Установка...")
+                ok = orchestrator.install_plugin(state, p.meta.name)
+                if ok:
+                    success("Установлено!")
+                    try:
+                        if orchestrator.enable(state, p.meta.name):
+                            success("Протокол включён и применён")
+                        else:
+                            error("Ошибка применения конфигурации")
+                    except Exception as e:
+                        error(f"Ошибка активации протокола: {e}")
+                else:
+                    error("Ошибка установки")
+            elif ps.enabled:
+                if orchestrator.disable(state, p.meta.name):
+                    success("Протокол выключен")
+                else:
+                    error("Ошибка применения конфигурации")
+            else:
+                try:
+                    if orchestrator.enable(state, p.meta.name):
+                        success("Протокол включён")
+                    else:
+                        error("Ошибка применения конфигурации")
+                except Exception as e:
+                    error(f"Ошибка активации протокола: {e}")
+            prompt("Нажмите Enter")
+
+        elif choice == "2" and ps.installed and ps.enabled:
+            _show_plugin_clients(state, p)
+
+        elif choice == "3" and ps.installed and ps.enabled:
+            _menu_trusttunnel_preset(state, p)
+
+        elif choice == "4" and ps.installed and ps.enabled:
+            _menu_trusttunnel_transport(state, p)
+
+        elif choice == "8" and ps.installed:
+            if confirm("Переустановить?", default=False):
+                orchestrator.uninstall_plugin(state, p.meta.name)
+                ok = orchestrator.install_plugin(state, p.meta.name)
+                if ok:
+                    try:
+                        orchestrator.enable(state, p.meta.name)
+                        success("Переустановлено!")
+                    except Exception as e:
+                        error(f"Ошибка активации: {e}")
+                else:
+                    error("Ошибка установки")
+                prompt("Нажмите Enter")
+
+        elif choice == "9" and ps.installed:
+            if confirm("Вы уверены, что хотите полностью удалить TrustTunnel?", default=False):
+                orchestrator.uninstall_plugin(state, p.meta.name)
+                success("Удалено")
+                prompt("Нажмите Enter")
+                return
+
+
+def _menu_trusttunnel_preset(state: AppState, p):
+    """Меню выбора пресета обфускации TrustTunnel."""
+    from hydra.plugins.trusttunnel.presets import list_presets
+
+    while True:
+        clear()
+        current_preset = p.get_current_preset(state)
+        presets = list_presets()
+
+        lines = [
+            f"Текущий пресет обфускации: {BOLD}{CYAN}{current_preset}{NC}",
+            "",
+            "Смена пресета перегенерирует конфигурацию sing-box.",
+            "Клиенты получат новые настройки при обновлении подписки.",
+        ]
+        panel("🔒 ОБФУСКАЦИЯ TRUSTTUNNEL", lines)
+        print()
+
+        transport_labels = {"tcp": "TCP", "quic": "QUIC", "both": "TCP+QUIC"}
+        options = []
+        for idx, pr in enumerate(presets, 1):
+            marker = "• " if pr["name"] == current_preset else "  "
+            badge = f"[{transport_labels.get(pr['transport'], pr['transport'])}]"
+            options.append((str(idx), f"{marker}{pr['label']} {badge}", pr["description"]))
+
+        options.append(("0", "↩ Назад", ""))
+
+        choice = menu(options, "ПРЕСЕТ TRUSTTUNNEL")
+        if choice == "0":
+            break
+
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(presets):
+                preset_name = presets[idx]["name"]
+                info(f"Применяю пресет обфускации {preset_name}...")
+                if p.set_preset(state, preset_name):
+                    success(f"Пreset {presets[idx]['label']} успешно применён!")
+                else:
+                    error("Не удалось применить пресет")
+                prompt("Нажмите Enter")
+
+
+def _menu_trusttunnel_transport(state: AppState, p):
+    """Меню выбора транспорта TrustTunnel."""
+    current = p.get_current_transport(state)
+
+    choice = menu([
+        ("1", "HTTP/2 (TCP)", "Стандартный режим, максимальная совместимость"),
+        ("2", "QUIC (UDP)", "HTTP/3 через UDP, может быть быстрее"),
+        ("3", "HTTP/2 + QUIC", "Оба транспорта одновременно (2 ссылки на клиента)"),
+        ("0", "↩ Отмена", ""),
+    ], header="Транспорт TrustTunnel")
+
+    if choice != "0":
+        mode_map = {"1": "tcp", "2": "quic", "3": "both"}
+        new_transport = mode_map.get(choice)
+        if new_transport:
+            transport_labels = {"tcp": "HTTP/2 (TCP)", "quic": "QUIC (UDP)", "both": "HTTP/2 + QUIC"}
+            info(f"Применяю транспорт {transport_labels.get(new_transport, new_transport)}...")
+            if p.set_transport(state, new_transport):
+                success(f"Транспорт изменён на {transport_labels.get(new_transport, new_transport)}")
+            else:
+                error("Не удалось изменить транспорт")
+            prompt("Нажмите Enter")
 
 
 def _awg_generate_wizard_menu(state: AppState, p):
