@@ -145,7 +145,7 @@ def test_presets_logic():
     from hydra.plugins.trusttunnel.presets import list_presets, get_preset, validate_preset
     
     presets = list_presets()
-    assert len(presets) >= 7
+    assert len(presets) == 3
     assert any(pr["name"] == "stealth" for pr in presets)
     
     default_pr = get_preset("default")
@@ -158,37 +158,6 @@ def test_presets_logic():
     assert validate_preset("stealth") is True
     assert validate_preset("nonexistent") is False
 
-
-def test_configure_quic_mode():
-    p = TrustTunnelPlugin()
-    state = _state([_user("a@x.com", uuid="uuid-a")])
-    state.protocols["trusttunnel"].config["preset"] = "performance"
-    state.protocols["trusttunnel"].config["transport"] = "quic"
-    
-    with patch("pathlib.Path.exists", return_value=True):
-        frag = p.configure(state)
-        
-    assert len(frag.inbounds) == 1
-    assert frag.inbounds[0]["type"] == "trusttunnel"
-    assert frag.inbounds[0]["network"] == "udp"
-    assert frag.inbounds[0]["tls"]["alpn"] == ["h3"]
-
-
-def test_configure_both_mode():
-    p = TrustTunnelPlugin()
-    state = _state([_user("a@x.com", uuid="uuid-a")])
-    state.protocols["trusttunnel"].config["preset"] = "dual"
-    state.protocols["trusttunnel"].config["transport"] = "both"
-    
-    with patch("pathlib.Path.exists", return_value=True):
-        frag = p.configure(state)
-        
-    assert len(frag.inbounds) == 2
-    types = [ib["type"] for ib in frag.inbounds]
-    tags = [ib["tag"] for ib in frag.inbounds]
-    assert all(t == "trusttunnel" for t in types)
-    assert "trusttunnel-in" in tags
-    assert "trusttunnel-quic-in" in tags
 
 
 def test_generate_client_config_with_multiplex():
@@ -206,15 +175,3 @@ def test_generate_client_config_with_multiplex():
     assert outbound["multiplex"]["protocol"] == "h2mux"
     assert outbound["multiplex"]["padding"] is True
 
-
-def test_client_links():
-    p = TrustTunnelPlugin()
-    state = _state([_user("a@x.com", uuid="uuid-a")])
-    state.protocols["trusttunnel"].config["preset"] = "dual"
-    user = state.users[0]
-    
-    links = p.client_links(user, state)
-    assert len(links) == 2
-    assert all(link.startswith("tt://") for link in links)
-    assert any("alpn=h2" in link for link in links)
-    assert any("alpn=h3" in link for link in links)

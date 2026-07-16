@@ -38,16 +38,6 @@ PRESETS: dict[str, TrustTunnelPreset] = {
         multiplex={"protocol": "h2mux", "max_connections": 4, "min_streams": 2, "max_streams": 0},
         padding=True,
     ),
-    "performance": TrustTunnelPreset(
-        name="performance",
-        label="⚡ Быстрый",
-        description="HTTP/3 через QUIC — оптимально для нестабильных сетей",
-        transport="quic",
-        alpn=["h3"],
-        utls_fingerprint=None,
-        multiplex=None,
-        padding=False,
-    ),
     "fortress": TrustTunnelPreset(
         name="fortress",
         label="🏰 Крепость",
@@ -64,43 +54,8 @@ PRESETS: dict[str, TrustTunnelPreset] = {
         },
         padding=True,
     ),
-    "dual": TrustTunnelPreset(
-        name="dual",
-        label="🔄 Дуал",
-        description="TCP + QUIC одновременно (2 ссылки на клиента)",
-        transport="both",
-        alpn=["h2"],  # TCP использует h2, QUIC использует h3
-        utls_fingerprint="chrome",
-        multiplex={"protocol": "h2mux", "max_connections": 4, "min_streams": 2, "max_streams": 0},
-        padding=True,
-    ),
-    "mobile": TrustTunnelPreset(
-        name="mobile",
-        label="📱 Мобильный",
-        description="QUIC + Safari fingerprint, оптимизирован для мобильных сетей",
-        transport="quic",
-        alpn=["h3"],
-        utls_fingerprint="safari",
-        multiplex={"protocol": "smux", "max_connections": 2, "min_streams": 1, "max_streams": 0},
-        padding=True,
-    ),
-    "paranoid": TrustTunnelPreset(
-        name="paranoid",
-        label="🛡️ Параноид",
-        description="Двойной транспорт + рандом fingerprint + yamux padding + Brutal",
-        transport="both",
-        alpn=["h2"],
-        utls_fingerprint="randomized",
-        multiplex={
-            "protocol": "yamux",
-            "max_connections": 8,
-            "min_streams": 4,
-            "max_streams": 0,
-            "brutal": {"enabled": True, "up_mbps": 50, "down_mbps": 100},
-        },
-        padding=True,
-    ),
 }
+
 
 
 def list_presets() -> list[dict]:

@@ -80,51 +80,21 @@ class TrustTunnelPlugin(BasePlugin):
         inbounds = []
 
         # TCP inbound (HTTP/2)
-        if transport in ("tcp", "both"):
-            tcp_inbound = {
-                "type": "trusttunnel",
-                "tag": "trusttunnel-in",
-                "listen": "127.0.0.1" if behind_mux else "::",
-                "listen_port": listen_port,
-                "users": users,
-                "tls": {
-                    "enabled": True,
-                    "server_name": domain,
-                    "certificate_path": cert_file,
-                    "key_path": key_file,
-                    "alpn": ["h2"],
-                },
-            }
-            inbounds.append(tcp_inbound)
-
-        # QUIC inbound (HTTP/3)
-        if transport in ("quic", "both"):
-            # QUIC: определяем порт
-            # Если ТОЛЬКО quic (не both) и нет mux — слушаем на 443
-            # Если both или mux — используем отдельный внутренний порт
-            if transport == "quic" and not behind_mux:
-                quic_port = 443
-                quic_listen = "::"
-            else:
-                quic_port = listen_port  # будет проксироваться через quic_mux в SNI router
-                quic_listen = "127.0.0.1" if behind_mux else "::"
-
-            quic_inbound = {
-                "type": "trusttunnel",
-                "tag": "trusttunnel-quic-in",
-                "listen": quic_listen,
-                "listen_port": quic_port,
-                "users": users,
-                "network": "udp",
-                "tls": {
-                    "enabled": True,
-                    "server_name": domain,
-                    "certificate_path": cert_file,
-                    "key_path": key_file,
-                    "alpn": ["h3"],
-                },
-            }
-            inbounds.append(quic_inbound)
+        tcp_inbound = {
+            "type": "trusttunnel",
+            "tag": "trusttunnel-in",
+            "listen": "127.0.0.1" if behind_mux else "::",
+            "listen_port": listen_port,
+            "users": users,
+            "tls": {
+                "enabled": True,
+                "server_name": domain,
+                "certificate_path": cert_file,
+                "key_path": key_file,
+                "alpn": ["h2"],
+            },
+        }
+        inbounds.append(tcp_inbound)
 
         return ConfigFragment(inbounds=inbounds)
 
@@ -167,75 +137,38 @@ class TrustTunnelPlugin(BasePlugin):
         outbounds = []
 
         # TCP outbound
-        if transport in ("tcp", "both"):
-            tcp_out = {
-                "type": "trusttunnel",
-                "tag": f"trusttunnel-{username}",
-                "server": domain or server_ip,
-                "server_port": 443,
-                "username": username,
-                "password": password,
-                "tls": {
-                    "enabled": True,
-                    "server_name": domain,
-                },
-            }
-            # uTLS fingerprint (client-side only)
-            if preset.utls_fingerprint:
-                tcp_out["tls"]["utls"] = {
-                    "enabled": True,
-                    "fingerprint": preset.utls_fingerprint,
+        tcp_out = {
+            "type": "trusttunnel",
+            "tag": f"trusttunnel-{username}",
+            "server": domain or server_ip,
+            "server_port": 443,
+            "username": username,
+            "password": password,
+            "tls": {
+                "enabled": True,
+                "server_name": domain,
+            },
+        }
+        # uTLS fingerprint (client-side only)
+        if preset.utls_fingerprint:
+            tcp_out["tls"]["utls"] = {
+                "enabled": True,
+                "fingerprint": preset.utls_fingerprint,
                 }
-            # Multiplex
-            if preset.multiplex:
-                mux = {"enabled": True, "protocol": preset.multiplex["protocol"]}
-                if "max_connections" in preset.multiplex:
-                    mux["max_connections"] = preset.multiplex["max_connections"]
-                if "min_streams" in preset.multiplex:
-                    mux["min_streams"] = preset.multiplex["min_streams"]
-                if "max_streams" in preset.multiplex:
-                    mux["max_streams"] = preset.multiplex["max_streams"]
-                mux["padding"] = preset.padding
-                if "brutal" in preset.multiplex:
-                    mux["brutal"] = preset.multiplex["brutal"]
-                tcp_out["multiplex"] = mux
-            outbounds.append(tcp_out)
-
-        # QUIC outbound
-        if transport in ("quic", "both"):
-            quic_out = {
-                "type": "trusttunnel",
-                "tag": f"trusttunnel-quic-{username}",
-                "server": domain or server_ip,
-                "server_port": 443,
-                "username": username,
-                "password": password,
-                "quic": True,
-                "tls": {
-                    "enabled": True,
-                    "server_name": domain,
-                    "alpn": ["h3"],
-                },
-            }
-            if preset.utls_fingerprint:
-                quic_out["tls"]["utls"] = {
-                    "enabled": True,
-                    "fingerprint": preset.utls_fingerprint,
-                }
-            # QUIC с multiplex (если задан в пресете и протокол поддерживает)
-            if preset.multiplex:
-                mux = {"enabled": True, "protocol": preset.multiplex["protocol"]}
-                if "max_connections" in preset.multiplex:
-                    mux["max_connections"] = preset.multiplex["max_connections"]
-                if "min_streams" in preset.multiplex:
-                    mux["min_streams"] = preset.multiplex["min_streams"]
-                if "max_streams" in preset.multiplex:
-                    mux["max_streams"] = preset.multiplex["max_streams"]
-                mux["padding"] = preset.padding
-                if "brutal" in preset.multiplex:
-                    mux["brutal"] = preset.multiplex["brutal"]
-                quic_out["multiplex"] = mux
-            outbounds.append(quic_out)
+        # Multiplex
+        if preset.multiplex:
+            mux = {"enabled": True, "protocol": preset.multiplex["protocol"]}
+            if "max_connections" in preset.multiplex:
+                mux["max_connections"] = preset.multiplex["max_connections"]
+            if "min_streams" in preset.multiplex:
+                mux["min_streams"] = preset.multiplex["min_streams"]
+            if "max_streams" in preset.multiplex:
+                mux["max_streams"] = preset.multiplex["max_streams"]
+            mux["padding"] = preset.padding
+            if "brutal" in preset.multiplex:
+                mux["brutal"] = preset.multiplex["brutal"]
+            tcp_out["multiplex"] = mux
+        outbounds.append(tcp_out)
 
         direct_out = {"type": "direct", "tag": "direct"}
 
@@ -270,11 +203,6 @@ class TrustTunnelPlugin(BasePlugin):
         preset = get_preset(preset_name)
         transport = ps.config.get("transport", preset.transport) if ps and ps.config else preset.transport
 
-        if transport == "quic":
-            tag_q = urllib.parse.quote(f"{self._derive_username(user)} TrustTunnel QUIC", safe="")
-            fp_param = f"&fp={preset.utls_fingerprint}" if preset.utls_fingerprint else ""
-            return f"tt://{username}:{password}@{domain}:443?security=tls&sni={domain}&alpn=h3{fp_param}#{tag_q}"
-
         fp_param = f"&fp={preset.utls_fingerprint}" if preset.utls_fingerprint else ""
         return f"tt://{username}:{password}@{domain}:443?security=tls&sni={domain}&alpn=h2{fp_param}#{tag}"
 
@@ -295,13 +223,8 @@ class TrustTunnelPlugin(BasePlugin):
         fp_param = f"&fp={preset.utls_fingerprint}" if preset.utls_fingerprint else ""
         links = []
 
-        if transport in ("tcp", "both"):
-            tag = urllib.parse.quote(f"{self._derive_username(user)} TrustTunnel", safe="")
-            links.append(f"tt://{username}:{password}@{domain}:443?security=tls&sni={domain}&alpn=h2{fp_param}#{tag}")
-
-        if transport in ("quic", "both"):
-            tag = urllib.parse.quote(f"{self._derive_username(user)} TrustTunnel QUIC", safe="")
-            links.append(f"tt://{username}:{password}@{domain}:443?security=tls&sni={domain}&alpn=h3{fp_param}#{tag}")
+        tag = urllib.parse.quote(f"{self._derive_username(user)} TrustTunnel", safe="")
+        links.append(f"tt://{username}:{password}@{domain}:443?security=tls&sni={domain}&alpn=h2{fp_param}#{tag}")
 
         return links
 
@@ -365,14 +288,9 @@ class TrustTunnelPlugin(BasePlugin):
         # Firewall (порт 443)
         from hydra.utils.firewall import open_tcp
         open_tcp(443, "trusttunnel")
-        
-        # QUIC firewall (UDP)
-        preset_name = ps.config.setdefault("preset", "default")
-        preset = get_preset(preset_name)
-        transport = ps.config.setdefault("transport", preset.transport)
-        if transport in ("quic", "both"):
-            from hydra.utils.firewall import open_udp
-            open_udp(443, "trusttunnel-quic")
+
+        ps.config.setdefault("preset", "default")
+        ps.config.setdefault("transport", "tcp")
         
         # iptables accounting
         self._remove_iptables_rules()
@@ -382,16 +300,6 @@ class TrustTunnelPlugin(BasePlugin):
         
         from hydra.core.sni_router import rebuild
         rebuild(state)
-
-    def on_disable(self, state: AppState) -> None:
-        self._remove_iptables_rules()
-        
-        # Закрыть UDP порт
-        try:
-            from hydra.utils.firewall import close_udp
-            close_udp(443)
-        except Exception:
-            pass
 
         ps = state.protocols.get("trusttunnel")
         if ps:
@@ -496,44 +404,6 @@ class TrustTunnelPlugin(BasePlugin):
                     remote_ip = ":".join(remote_parts[:-1]).strip("[]")
                     ip_counts[remote_ip] = ip_counts.get(remote_ip, 0) + 1
 
-        # Check UDP (QUIC)
-        r_udp = subprocess.run(
-            ["ss", "-u", "-H", "-n", "state", "established"],
-            capture_output=True, text=True,
-        )
-        if r_udp.returncode == 0:
-            for line in r_udp.stdout.splitlines():
-                parts = line.split()
-                if len(parts) < 4:
-                    continue
-                local_addr = parts[2]
-                local_port_str = local_addr.split(":")[-1]
-                if not local_port_str.isdigit():
-                    continue
-                local_port = int(local_port_str)
-                if local_port == effective_port or local_port == 443:
-                    remote_addr = parts[3]
-                    remote_parts = remote_addr.split(":")
-                    remote_ip = ":".join(remote_parts[:-1]).strip("[]")
-                    ip_counts[remote_ip] = ip_counts.get(remote_ip, 0) + 1
-                
-        rx_bytes = 0
-        tx_bytes = 0
-        r_rx = subprocess.run(["iptables", "-t", "filter", "-L", "INPUT", "-n", "-v", "-x"], capture_output=True, text=True)
-        if r_rx.returncode == 0:
-            for line in r_rx.stdout.splitlines():
-                if "trusttunnel-rx" in line:
-                    parts = line.split()
-                    if len(parts) >= 2 and parts[1].isdigit():
-                        rx_bytes += int(parts[1])
-        r_tx = subprocess.run(["iptables", "-t", "filter", "-L", "OUTPUT", "-n", "-v", "-x"], capture_output=True, text=True)
-        if r_tx.returncode == 0:
-            for line in r_tx.stdout.splitlines():
-                if "trusttunnel-tx" in line:
-                    parts = line.split()
-                    if len(parts) >= 2 and parts[1].isdigit():
-                        tx_bytes += int(parts[1])
-                        
         clients = []
         now_ts = int(time.time())
         n_clients = len(ip_counts)
@@ -587,25 +457,15 @@ class TrustTunnelPlugin(BasePlugin):
 
     def set_transport(self, state: AppState, transport: str) -> bool:
         """Устанавливает транспорт (override поверх пресета)."""
-        if transport not in ("tcp", "quic", "both"):
+        if transport not in ("tcp",):
             return False
         from hydra.core.state import get_protocol, save_state
         ps = get_protocol(state, "trusttunnel")
         ps.config["transport"] = transport
         save_state(state)
 
-        # Обновить firewall для QUIC
         self._remove_iptables_rules()
         self._add_iptables_rules(state)
-        if transport in ("quic", "both"):
-            from hydra.utils.firewall import open_udp
-            open_udp(443, "trusttunnel-quic")
-        else:
-            from hydra.utils.firewall import close_udp
-            try:
-                close_udp(443)
-            except Exception:
-                pass
 
         from hydra.core.sni_router import rebuild
         rebuild(state)
@@ -738,20 +598,7 @@ class TrustTunnelPlugin(BasePlugin):
             "-m", "comment", "--comment", "trusttunnel-tx"
         ], capture_output=True)
 
-        # UDP accounting для QUIC
-        ps = state.protocols.get("trusttunnel")
-        preset_name = ps.config.get("preset", "default") if ps and ps.config else "default"
-        preset = get_preset(preset_name)
-        transport = ps.config.get("transport", preset.transport) if ps and ps.config else preset.transport
-        if transport in ("quic", "both"):
-            subprocess.run([
-                "iptables", "-I", "INPUT", "1", "-p", "udp", "--dport", str(port),
-                "-m", "comment", "--comment", "trusttunnel-rx-udp"
-            ], capture_output=True)
-            subprocess.run([
-                "iptables", "-I", "OUTPUT", "1", "-p", "udp", "--sport", str(port),
-                "-m", "comment", "--comment", "trusttunnel-tx-udp"
-            ], capture_output=True)
+        pass
 
     def _get_total_traffic(self) -> int:
         total_bytes = 0
