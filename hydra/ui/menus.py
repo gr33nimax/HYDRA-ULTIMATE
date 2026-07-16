@@ -374,21 +374,26 @@ def _user_links(state: AppState, user: User):
             continue
 
         conf = ""
-        link = ""
+        links = []
         try:
             conf = p.generate_client_config(user, state) or ""
         except Exception:
             pass
         try:
-            link = p.client_link(user, state) or ""
+            if hasattr(p, "client_links"):
+                links = p.client_links(user, state)
+            else:
+                l = p.client_link(user, state)
+                if l:
+                    links = [l]
         except Exception:
             pass
-        if not conf and not link:
+        if not conf and not links:
             continue
         print(f"  {CYAN}── {BOLD}{p.meta.name}{NC}{CYAN}{'─' * (PANEL_W - 10 - len(p.meta.name))}{NC}")
-        if link:
-            print(f"  {GREEN}Ссылка:{NC}  {link}")
-            pass
+        if links:
+            for l in links:
+                print(f"  {GREEN}Ссылка:{NC}  {l}")
         if conf:
             print(f"  {DIM}{'─' * PANEL_W}{NC}")
             for line in conf.splitlines():
@@ -1289,10 +1294,15 @@ def _user_configs(state: AppState, user: User):
         return
     
     for p in enabled_transports:
-        # Ссылка
-        link = ""
+        # Ссылки
+        links = []
         try:
-            link = p.client_link(user, state)
+            if hasattr(p, "client_links"):
+                links = p.client_links(user, state)
+            else:
+                l = p.client_link(user, state)
+                if l:
+                    links = [l]
         except Exception:
             pass
             
@@ -1396,12 +1406,16 @@ def _user_configs(state: AppState, user: User):
                 box_lines = []
                 
                 # Показываем ссылку, если она есть
-                if link:
-                    box_lines.append(f"{YELLOW}{BOLD}Ссылка для подключения (URL):{NC}")
+                if links:
+                    label = "Ссылки для подключения (URL):" if len(links) > 1 else "Ссылка для подключения (URL):"
+                    box_lines.append(f"{YELLOW}{BOLD}{label}{NC}")
                     # Оборачиваем ссылку по ширине коробки (PANEL_W - 6)
                     link_width = PANEL_W - 6
-                    for chunk in [link[i:i+link_width] for i in range(0, len(link), link_width)]:
-                        box_lines.append(f"  {CYAN}{chunk}{NC}")
+                    for idx, l in enumerate(links):
+                        if idx > 0:
+                            box_lines.append(f"  {DIM}{'┄' * (PANEL_W - 8)}{NC}")
+                        for chunk in [l[i:i+link_width] for i in range(0, len(l), link_width)]:
+                            box_lines.append(f"  {CYAN}{chunk}{NC}")
                     box_lines.append(f"{DIM}{'─' * (PANEL_W - 4)}{NC}")
                 
                 # Показываем конфиг
