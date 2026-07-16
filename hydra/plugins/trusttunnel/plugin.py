@@ -171,7 +171,7 @@ class TrustTunnelPlugin(BasePlugin):
             tcp_out = {
                 "type": "trusttunnel",
                 "tag": f"trusttunnel-{username}",
-                "server": server_ip,
+                "server": domain or server_ip,
                 "server_port": 443,
                 "username": username,
                 "password": password,
@@ -206,7 +206,7 @@ class TrustTunnelPlugin(BasePlugin):
             quic_out = {
                 "type": "trusttunnel",
                 "tag": f"trusttunnel-quic-{username}",
-                "server": server_ip,
+                "server": domain or server_ip,
                 "server_port": 443,
                 "username": username,
                 "password": password,
