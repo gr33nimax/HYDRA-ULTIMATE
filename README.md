@@ -2,7 +2,7 @@
 
 ![Version](https://img.shields.io/badge/version-2.3.4-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-green.svg)
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![License](https://img.shields.io/badge/license-GPLv3-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg)
 
 > **HYDRA** — автоматизированная платформа развёртывания и администрирования многопротокольных прокси-серверов на базе **Sing-Box** (используется как единый сетевой оркестратор). Модульная архитектура объединяет 14 плагинов (8 транспортов, 3 сетевые службы, 3 модуля безопасности) с централизованным роутингом, шифрованием DNS и политиками ограничения доступа.
@@ -347,7 +347,8 @@ hydra/
 
 ## Лицензия
 
-Проект лицензирован на условиях MIT License — см. файл [LICENSE](LICENSE).
+Проект лицензирован на условиях GNU General Public License v3.0 (GPL-3.0) — см. файл [LICENSE](LICENSE).
+Copyright (c) 2026 gr33nimax.
 
 ---
 
