@@ -28,7 +28,12 @@ def run_sync() -> None:
     any_blocked = False
 
     # 1. Проверка лимитов трафика
-    exceeded = check_traffic_limits(state)
+    # Refresh counters and persist them under the same cross-process lock used
+    # by the traffic daemon.
+    def refresh_and_check(latest):
+        return check_traffic_limits(latest)
+
+    state, exceeded = update_state(refresh_and_check)
     for email in exceeded:
         for user in state.users:
             if user.email == email and not user.blocked:

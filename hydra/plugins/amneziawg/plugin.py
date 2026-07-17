@@ -16,6 +16,7 @@ import ipaddress
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
@@ -1041,7 +1042,7 @@ class AmneziaWGPlugin(BasePlugin):
         return result
 
     def connected_clients(self, state: AppState | None = None) -> list[dict]:
-        """Список пиров с email, трафиком и последним рукопожатием."""
+        """Active peers, grouped by user across desktop/mobile profiles."""
         if not self._installed():
             return []
 
@@ -1062,7 +1063,9 @@ class AmneziaWGPlugin(BasePlugin):
         if self._is_up_iface(AWG_INTERFACE_1):
             interfaces.append(AWG_INTERFACE_1)
 
-        clients: list[dict] = []
+        now = int(time.time())
+        active_window = 180
+        grouped: dict[str, dict] = {}
         for iface in interfaces:
             r = self._awg("show", iface, "dump")
             if r.returncode != 0:
@@ -1077,20 +1080,25 @@ class AmneziaWGPlugin(BasePlugin):
                 email = self._peer_map.get(pub, "?")
                 if isinstance(email, tuple):
                     email = email[0]
-                
+                if email == "?" or handshake <= 0 or now - handshake > active_window:
+                    continue
+
                 profile = "Mobile" if iface == AWG_INTERFACE_1 else "Desktop"
-                
-                clients.append({
-                    "pubkey": pub,
+                item = grouped.setdefault(email, {
                     "email": email,
-                    "profile": profile,
+                    "profiles": [],
                     "endpoint": p[2],
                     "last_handshake": handshake,
-                    "online": handshake > 0,
-                    "rx": int(p[5]) if p[5].isdigit() else 0,
-                    "tx": int(p[6]) if p[6].isdigit() else 0,
+                    "online": True,
+                    "rx": 0,
+                    "tx": 0,
+                    "traffic_scope": "interface",
                 })
-        return clients
+                item["profiles"].append(profile)
+                item["last_handshake"] = max(item["last_handshake"], handshake)
+                item["rx"] += int(p[5]) if p[5].isdigit() else 0
+                item["tx"] += int(p[6]) if p[6].isdigit() else 0
+        return list(grouped.values())
 
     # ═════════════════════════════════════════════════════════════════════
     #  Управление интерфейсом

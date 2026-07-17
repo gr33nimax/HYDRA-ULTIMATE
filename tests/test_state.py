@@ -97,6 +97,34 @@ def test_save_and_load():
             state_mod.STATE_DIR = Path(original).parent
 
 
+def test_stale_settings_save_preserves_newer_traffic_counters(tmp_path):
+    import hydra.core.state as state_mod
+
+    original_file, original_dir = state_mod.STATE_FILE, state_mod.STATE_DIR
+    try:
+        state_mod.STATE_FILE = tmp_path / "state.json"
+        state_mod.STATE_DIR = tmp_path
+        initial = AppState(users=[User(email="u@example.com", uuid="u1")])
+        save_state(initial)
+
+        stale = load_state()
+        latest = load_state()
+        latest.users[0].traffic_used_bytes = 500
+        latest.users[0].credentials["anytls"] = {"traffic_used_bytes": 500}
+        latest.install["traffic_connection_counters"] = {"c1": {"total": 500}}
+        save_state(latest)
+
+        stale.network.domain = "changed.example"
+        save_state(stale)
+        merged = load_state()
+        assert merged.network.domain == "changed.example"
+        assert merged.users[0].traffic_used_bytes == 500
+        assert merged.users[0].credentials["anytls"]["traffic_used_bytes"] == 500
+        assert "c1" in merged.install["traffic_connection_counters"]
+    finally:
+        state_mod.STATE_FILE, state_mod.STATE_DIR = original_file, original_dir
+
+
 def test_user_blocking():
     """Блокировка пользователя."""
     state = AppState()

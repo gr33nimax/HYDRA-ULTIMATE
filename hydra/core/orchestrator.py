@@ -184,8 +184,8 @@ WantedBy=multi-user.target
             if not service_file.exists() or service_file.read_text() != unit:
                 service_file.write_text(unit)
                 subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
-                subprocess.run(["systemctl", "enable", "hydra-traffic-daemon"], capture_output=True)
-            
+            subprocess.run(["systemctl", "enable", "hydra-traffic-daemon"], capture_output=True)
+
             # Restart to make sure the new environment/working directory takes effect
             subprocess.run(["systemctl", "restart", "hydra-traffic-daemon"], capture_output=True)
         except Exception:

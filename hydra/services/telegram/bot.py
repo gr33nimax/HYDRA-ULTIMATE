@@ -28,7 +28,7 @@ from hydra.services.subscriptions.generator import (
     generate_links,
 )
 from hydra.core import orchestrator
-from hydra.services.traffic import collect_traffic
+from hydra.services.traffic import collect_traffic, refresh_traffic_state
 from hydra.plugins.registry import status_all
 
 try:
@@ -88,7 +88,7 @@ class AdminBot:
         lines = ["Пользователи:\n"]
         for u in state.users:
             status_icon = "🔴" if u.blocked else "🟢"
-            limit = f"{u.traffic_limit_gb} GB" if u.traffic_limit_gb else "∞"
+            limit = f"{u.traffic_limit_gb} GiB" if u.traffic_limit_gb else "∞"
             expiry = u.expiry_date[:10] if u.expiry_date else "∞"
             lines.append(
                 f"{status_icon} `{u.email}`\n"
@@ -100,14 +100,14 @@ class AdminBot:
     async def cmd_traffic(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await self._check_admin(update):
             return
-        state = load_state()
+        state = refresh_traffic_state()
         traffic = collect_traffic(state)
 
         lines = ["Трафик:\n"]
         for u in state.users:
             used = traffic.get(u.email, u.traffic_used_bytes)
             used_gb = used / 1073741824
-            limit = f"/ {u.traffic_limit_gb} GB" if u.traffic_limit_gb else ""
+            limit = f"/ {u.traffic_limit_gb} GiB" if u.traffic_limit_gb else ""
             bar = _progress_bar(used, int(u.traffic_limit_gb * 1073741824) if u.traffic_limit_gb else 0)
             lines.append(f"`{u.email}`: {used_gb:.2f} GB {limit}\n{bar}")
 
@@ -226,10 +226,11 @@ class ClientBot:
             await update.message.reply_text("Ваша подписка заблокирована.")
             return
 
+        limit_text = f"{user.traffic_limit_gb} GiB" if user.traffic_limit_gb else "∞"
         await update.message.reply_text(
             f"HYDRA Subscription\n\n"
             f"Пользователь: `{user.email}`\n"
-            f"Лимит: {user.traffic_limit_gb or '∞'} GB\n\n"
+            f"Лимит: {limit_text}\n\n"
             "/config — получить конфиг (Sing-Box)\n"
             "/link — ссылка для импорта\n"
             "/awg — конфиг AmneziaWG\n"
@@ -329,7 +330,7 @@ class ClientBot:
             return
 
         used_gb = user.traffic_used_bytes / 1073741824
-        limit_str = f"{user.traffic_limit_gb} GB" if user.traffic_limit_gb else "∞"
+        limit_str = f"{user.traffic_limit_gb} GiB" if user.traffic_limit_gb else "∞"
         bar = _progress_bar(user.traffic_used_bytes, int(user.traffic_limit_gb * 1073741824) if user.traffic_limit_gb else 0)
 
         await update.message.reply_text(

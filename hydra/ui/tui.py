@@ -362,21 +362,21 @@ def confirm(text: str, default: bool = True) -> bool:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _bytes_auto(v: int) -> str:
-    """Форматирует байты в человекочитаемый вид (B/KB/MB/GB/TB)."""
+    """Форматирует байты в IEC-единицах."""
     if v < 1024:
         return f"{v} B"
     if v < 1048576:
-        return f"{v / 1024:.1f} KB"
+        return f"{v / 1024:.1f} KiB"
     if v < 1073741824:
-        return f"{v / 1048576:.1f} MB"
+        return f"{v / 1048576:.1f} MiB"
     if v < 1099511627776:
-        return f"{v / 1073741824:.2f} GB"
-    return f"{v / 1099511627776:.2f} TB"
+        return f"{v / 1073741824:.2f} GiB"
+    return f"{v / 1099511627776:.2f} TiB"
 
 
 def _bytes(v: int) -> str:
     """Форматирует байты в GB (совместимость)."""
-    return f"{v / 1073741824:.2f} GB"
+    return f"{v / 1073741824:.2f} GiB"
 
 
 def _bar(value: float, maximum: float, width: int = 18) -> str:

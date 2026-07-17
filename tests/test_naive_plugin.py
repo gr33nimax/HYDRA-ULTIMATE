@@ -336,6 +336,24 @@ def test_traffic_parses_caddy_access_logs(tmp_path):
         assert traffic_data == {"user_email@example.com": 3000}
 
 
+def test_update_traffic_uses_log_cursor_without_double_counting(tmp_path):
+    p = NaivePlugin()
+    user = _make_user("user_email@example.com", uuid="uuid-a")
+    state = _make_state([user])
+    username = p._derive_username(user)
+    log_file = tmp_path / "access.log"
+    log_file.write_text(f'{{"user_id":"{username}","size":1000}}\n', encoding="utf-8")
+
+    with patch("hydra.plugins.naive.plugin.LOG_DIR", tmp_path):
+        p.update_traffic(state)
+        p.update_traffic(state)
+        with log_file.open("a", encoding="utf-8") as handle:
+            handle.write(f'{{"user_id":"{username}","size":500}}\n')
+        p.update_traffic(state)
+
+    assert user.credentials["naive"]["traffic_used_bytes"] == 1500
+
+
 # === QUIC tests ===
 
 def _make_state_with_network(users, domain="example.com", network="tcp"):

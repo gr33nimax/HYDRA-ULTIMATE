@@ -2,6 +2,7 @@
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import sys
+import time
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin, AWG_CONF, AWG_INTERFACE
@@ -148,17 +149,45 @@ def test_connected_clients_returns_list():
     with patch.object(p, "_installed", return_value=True), \
          patch.object(p, "_is_up", return_value=True), \
          patch.object(p, "_awg") as mock_awg:
+        handshake = int(time.time()) - 30
         mock_awg.return_value = MagicMock(
-            stdout="interface\tpriv\tpub\t1234\npub_key\tendpoint\t:51820\t10.66.66.2/32\t1000000\t500\t200\t1234\n",
+            stdout=f"interface\tpriv\tpub\t1234\npub_key\tendpoint\t:51820\t10.66.66.2/32\t{handshake}\t500\t200\t1234\n",
             returncode=0,
         )
         p._peer_map = {"pub_key": "a@x.com"}
         clients = p.connected_clients()
         assert len(clients) >= 1
         assert clients[0]["email"] == "a@x.com"
-        assert "pubkey" in clients[0]
 
 
+def test_connected_clients_hides_stale_peers_and_groups_profiles():
+    p = AmneziaWGPlugin()
+    now = int(time.time())
+    dumps = {
+        "awg0": f"header\npub_d\tpsk\t1.2.3.4:1\t10.0.0.2/32\t{now - 20}\t500\t200\t0\n",
+        "awg1": f"header\npub_m\tpsk\t1.2.3.4:2\t10.0.1.2/32\t{now - 40}\t300\t100\t0\n"
+                f"pub_old\tpsk\t1.2.3.5:1\t10.0.1.3/32\t{now - 9999}\t999\t999\t0\n",
+    }
+
+    def awg(*args):
+        return MagicMock(returncode=0, stdout=dumps[args[1]])
+
+    state = AppState(users=[User(
+        email="same@example.com", uuid="u1", credentials={
+            "amneziawg": {"public_key": "pub_d"},
+            "amneziawg_mobile": {"public_key": "pub_m"},
+        },
+    )])
+    with patch.object(p, "_installed", return_value=True), \
+         patch.object(p, "_is_up_iface", return_value=True), \
+         patch.object(p, "_awg", side_effect=awg):
+        clients = p.connected_clients(state)
+
+    assert len(clients) == 1
+    assert clients[0]["email"] == "same@example.com"
+    assert set(clients[0]["profiles"]) == {"Desktop", "Mobile"}
+    assert clients[0]["rx"] == 800
+    assert clients[0]["tx"] == 300
 def test_resolve_network_avoids_conflicts():
     from hydra.core.state import PluginState
     p = AmneziaWGPlugin()

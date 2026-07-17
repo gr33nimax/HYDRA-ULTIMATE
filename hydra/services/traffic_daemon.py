@@ -22,6 +22,7 @@ def _apply_connection_snapshot(
     mieru_users: dict[tuple[str, str], str],
 ) -> bool:
     """Atomically apply connection deltas using counters persisted in AppState."""
+    state.install["traffic_daemon_last_poll"] = time.time()
     active = state.install.setdefault("traffic_connection_counters", {})
     current_ids: set[str] = set()
     deltas: dict[tuple[str, str], int] = {}
@@ -40,6 +41,7 @@ def _apply_connection_snapshot(
         elif "trusttunnel" in inbound_tag:
             protocol = "trusttunnel"
             host = metadata.get("host") or metadata.get("destinationIP", "")
+            user = user or trusttunnel_users.get(("__id__", str(connection_id)))
             user = user or trusttunnel_users.get((host.lower(), str(metadata.get("destinationPort", ""))))
         elif "mieru" in inbound_tag:
             protocol = "mieru"
@@ -48,17 +50,45 @@ def _apply_connection_snapshot(
         else:
             protocol = "unknown"
 
-        total = max(0, int(connection.get("upload", 0)) + int(connection.get("download", 0)))
+        upload = max(0, int(connection.get("upload", 0)))
+        download = max(0, int(connection.get("download", 0)))
+        total = upload + download
         previous = active.get(connection_id, {})
         old_total = int(previous.get("total", 0))
-        delta = max(0, total - old_total)
-        active[connection_id] = {"user": user or "", "protocol": protocol, "total": total}
-        if user and delta:
+        if not user:
+            user = previous.get("user") or ""
+        if protocol == "unknown" and previous.get("protocol"):
+            protocol = previous["protocol"]
+        credited = int(previous.get(
+            "credited_total", old_total if previous.get("user") else 0,
+        ))
+        if total < old_total:
+            # A reused connection id or a reset runtime counter starts a new
+            # accounting generation.
+            credited = 0
+        delta = max(0, total - credited) if user and protocol != "unknown" else 0
+        active[connection_id] = {
+            "user": user,
+            "protocol": protocol,
+            "total": total,
+            "upload": upload,
+            "download": download,
+            "credited_total": total if delta else credited,
+            "missed_polls": 0,
+            "seen_at": time.time(),
+        }
+        if user and protocol != "unknown" and delta:
             key = (user, protocol)
             deltas[key] = deltas.get(key, 0) + delta
 
+    # Keep a short tombstone window. A transiently incomplete API snapshot must
+    # not erase the baseline and charge the full connection again, while short
+    # sessions must not accumulate indefinitely in state.json.
     for connection_id in set(active) - current_ids:
-        active.pop(connection_id, None)
+        record = active[connection_id]
+        record["missed_polls"] = int(record.get("missed_polls", 0)) + 1
+        if record["missed_polls"] > 5:
+            active.pop(connection_id, None)
 
     changed = bool(deltas)
     for (email, protocol), delta in deltas.items():
@@ -144,6 +174,9 @@ def run_daemon() -> None:
                         host = m.group(2)
                         port = m.group(3)
                         key = (host.lower(), port)
+                        match_id = re.search(r"INFO\s+\[(\d+)\s+[^\]]+\]", line)
+                        if match_id:
+                            addr_to_user[("__id__", match_id.group(1))] = user
                         previous = addr_to_user.get(key)
                         if previous is not None and previous != user:
                             # Destination-only attribution is ambiguous when
@@ -238,32 +271,6 @@ def run_daemon() -> None:
             anytls_ports = _get_anytls_ports()
             trusttunnel_users = _get_trusttunnel_users()
             mieru_users = _get_mieru_users()
-            _log(f"DEBUG: anytls_ports count = {len(anytls_ports)}, trusttunnel_users count = {len(trusttunnel_users)}, mieru_users count = {len(mieru_users)}")
-
-            if connections:
-                _log(f"Raw first connection: {json.dumps(connections[0])}")
-                summary = []
-                for c in connections:
-                    cid = c.get("id")
-                    meta = c.get("metadata", {})
-                    user = meta.get("user")
-                    tag = meta.get("inboundTag") or meta.get("type", "")
-                    sport = str(meta.get("sourcePort", ""))
-                    if not user and "anytls" in tag:
-                        user = anytls_ports.get(sport)
-                    if not user and "trusttunnel" in tag:
-                        host = meta.get("host") or meta.get("destinationIP", "")
-                        dport = str(meta.get("destinationPort", ""))
-                        user = trusttunnel_users.get((host.lower(), dport))
-                    if not user and "mieru" in tag:
-                        sip = meta.get("sourceIP", "")
-                        sport = str(meta.get("sourcePort", ""))
-                        user = mieru_users.get((sip.lower(), sport))
-                    up = c.get("upload", 0)
-                    down = c.get("download", 0)
-                    summary.append(f"ID={cid}, User={user}, Tag={tag}, Rx={down}, Tx={up}")
-                _log(f"Active connections summary: count={len(connections)}")
-
             update_state(lambda latest: _apply_connection_snapshot(
                 latest, connections, anytls_ports, trusttunnel_users, mieru_users,
             ))
@@ -271,7 +278,7 @@ def run_daemon() -> None:
         except Exception as e:
             _log(f"General error: {e}")
 
-        time.sleep(5)
+        time.sleep(2)
 
 if __name__ == "__main__":
     try:

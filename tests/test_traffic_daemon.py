@@ -29,6 +29,38 @@ def test_connection_counters_survive_daemon_restart_without_double_counting():
     assert _apply_connection_snapshot(state, [connection], {}, {}, {}) is True
     assert state.users[0].traffic_used_bytes == 450
 
+
+def test_transient_empty_snapshot_keeps_connection_baseline():
+    state = AppState(users=[User(email="user@example.com", uuid="u1")])
+    connection = {
+        "id": "stable-id",
+        "metadata": {"user": "user@example.com", "inboundTag": "anytls-in"},
+        "upload": 100,
+        "download": 200,
+    }
+    _apply_connection_snapshot(state, [connection], {}, {}, {})
+    _apply_connection_snapshot(state, [], {}, {}, {})
+    connection["download"] = 250
+    _apply_connection_snapshot(state, [connection], {}, {}, {})
+    assert state.users[0].traffic_used_bytes == 350
+
+
+def test_late_user_attribution_backfills_uncredited_bytes():
+    state = AppState(users=[User(email="user@example.com", uuid="u1")])
+    connection = {
+        "id": "late-user",
+        "metadata": {"inboundTag": "anytls-in", "sourcePort": "12345"},
+        "upload": 100,
+        "download": 200,
+    }
+    _apply_connection_snapshot(state, [connection], {}, {}, {})
+    assert state.users[0].traffic_used_bytes == 0
+    connection["download"] = 250
+    _apply_connection_snapshot(
+        state, [connection], {"12345": "user@example.com"}, {}, {},
+    )
+    assert state.users[0].traffic_used_bytes == 350
+
 def test_daemon_collects_traffic_from_clash_api():
     state = AppState()
     state.network.clash_api_enabled = True

@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import threading
+import copy
 from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -222,6 +223,33 @@ def _save_state_unlocked(state: AppState) -> None:
 def save_state(state: AppState) -> None:
     """Сохраняет состояние в state.json (атомарно через temp-файл)."""
     with _state_lock():
+        # Long-running menus hold an older AppState while the traffic daemon
+        # updates counters in another process. Preserve the monotonic runtime
+        # accounting fields instead of letting an unrelated settings save roll
+        # them back.
+        if STATE_FILE.exists():
+            latest = _load_state_unlocked()
+            latest_users = {user.email: user for user in latest.users}
+            for user in state.users:
+                current = latest_users.get(user.email)
+                if current is None:
+                    continue
+                user.traffic_used_bytes = max(
+                    int(user.traffic_used_bytes), int(current.traffic_used_bytes),
+                )
+                for protocol, current_stats in current.credentials.items():
+                    if not isinstance(current_stats, dict):
+                        continue
+                    target_stats = user.credentials.setdefault(protocol, {})
+                    current_total = int(current_stats.get("traffic_used_bytes", 0))
+                    target_total = int(target_stats.get("traffic_used_bytes", 0))
+                    if current_total >= target_total:
+                        target_stats["traffic_used_bytes"] = current_total
+                        if "traffic_last_raw_bytes" in current_stats:
+                            target_stats["traffic_last_raw_bytes"] = current_stats["traffic_last_raw_bytes"]
+            for key in ("traffic_connection_counters", "traffic_log_cursors"):
+                if key in latest.install:
+                    state.install[key] = copy.deepcopy(latest.install[key])
         _save_state_unlocked(state)
 
 

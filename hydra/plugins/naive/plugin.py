@@ -441,6 +441,69 @@ class NaivePlugin(BasePlugin):
             pass
         return result
 
+    def update_traffic(self, state: AppState) -> None:
+        """Increment persisted totals from unread access-log records.
+
+        Cursors are keyed by the file inode, so Caddy may rename a live log
+        during rotation without making already processed records reappear.
+        """
+        import gzip
+        import json
+
+        uname_to_user = {self._derive_username(user): user for user in state.users}
+        cursor_root = state.install.setdefault("traffic_log_cursors", {})
+        cursors = cursor_root.setdefault("naive", {})
+
+        try:
+            paths = sorted(LOG_DIR.glob("access.log*"), key=lambda p: p.stat().st_mtime_ns)
+        except OSError:
+            return
+
+        for path in paths:
+            try:
+                stat = path.stat()
+                if path.suffix == ".gz":
+                    key = f"gz:{path.name}:{stat.st_mtime_ns}:{stat.st_size}"
+                    if cursors.get(key) == "done":
+                        continue
+                    handle = gzip.open(path, "rt", encoding="utf-8", errors="replace")
+                    start = 0
+                else:
+                    key = f"inode:{stat.st_dev}:{stat.st_ino}"
+                    start = max(0, int(cursors.get(key, 0)))
+                    if start > stat.st_size:
+                        start = 0
+                    handle = path.open("r", encoding="utf-8", errors="replace")
+
+                with handle:
+                    if start:
+                        handle.seek(start)
+                    while True:
+                        line = handle.readline()
+                        if not line:
+                            break
+                        try:
+                            data = json.loads(line)
+                            username = data.get("user_id") or data.get("user")
+                            user = uname_to_user.get(username)
+                            size = max(0, int(data.get("size", 0)))
+                        except (json.JSONDecodeError, TypeError, ValueError):
+                            continue
+                        if user is not None and size:
+                            stats = user.credentials.setdefault("naive", {})
+                            stats["traffic_used_bytes"] = (
+                                max(0, int(stats.get("traffic_used_bytes", 0))) + size
+                            )
+                    cursors[key] = "done" if path.suffix == ".gz" else handle.tell()
+            except OSError:
+                continue
+
+        # Bound metadata while retaining enough tombstones to recognize old
+        # compressed rotations that may still be present.
+        if len(cursors) > 128:
+            for key in list(cursors)[:-128]:
+                cursors.pop(key, None)
+
     def connected_clients(self, state: AppState | None = None) -> list[dict]:
         if not shutil.which("ss"):
             return []
