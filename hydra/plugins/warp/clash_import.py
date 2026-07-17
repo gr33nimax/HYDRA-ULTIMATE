@@ -114,7 +114,6 @@ def _normalise_proxy(proxy: dict, index: int) -> dict:
             raise ClashImportError(f"{name}: reserved должен содержать числа") from exc
         if any(value < 0 or value > 255 for value in reserved):
             raise ClashImportError(f"{name}: reserved должен содержать байты 0..255")
-        peer["reserved"] = reserved
 
     identity = hashlib.sha256(f"{name}\0{server}\0{port}".encode("utf-8")).hexdigest()[:10]
     result = {
@@ -126,6 +125,19 @@ def _normalise_proxy(proxy: dict, index: int) -> dict:
         "peer": peer,
     }
     amnezia = _amnezia(proxy)
+    # sing-box-extended 1.13.x omits peers.reserved from its endpoint schema.
+    # For AmneziaWG the same wire bytes can be represented by folding the three
+    # reserved bytes into its 32-bit H1-H4 packet signatures.
+    if reserved and any(reserved):
+        if not amnezia:
+            raise ClashImportError(
+                f"{name}: ненулевой reserved без amnezia-wg-option не поддерживается sing-box-extended"
+            )
+        reserved_bits = reserved[0] << 8 | reserved[1] << 16 | reserved[2] << 24
+        for packet_type in range(1, 5):
+            key = f"h{packet_type}"
+            signature = int(amnezia.get(key, packet_type))
+            amnezia[key] = (signature & 0xFF) | reserved_bits
     if amnezia:
         result["amnezia"] = amnezia
     return result
@@ -185,7 +197,7 @@ def import_clash_warp_bundle(source: Path, destination: Path = WARP_ULTIMATE_BUN
     canonical_source = source if source_is_managed else destination.with_suffix(".yaml")
 
     bundle = {
-        "version": 3,
+        "version": 4,
         "name": source.stem,
         "source_file": canonical_source.name,
         "source_sha256": source_hash,
@@ -227,7 +239,7 @@ def load_warp_bundle(path: Path = WARP_ULTIMATE_BUNDLE) -> dict | None:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if data.get("version") != 3 or not isinstance(data.get("endpoints"), list):
+    if data.get("version") != 4 or not isinstance(data.get("endpoints"), list):
         return None
     return data
 

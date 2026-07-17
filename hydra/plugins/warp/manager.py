@@ -667,13 +667,10 @@ def _menu_routing_rules(
         )
         if chosen is None:
             continue
+        previous_targets = {key: list_targets.get(key) for key in category.source_keys}
         for key in category.source_keys:
             list_targets[key] = chosen
         save_state(state)
-        if chosen == "none":
-            success(f"Отдельный маршрут для «{category.label}» отключён.")
-        else:
-            success(f"«{category.label}» → {dict(destination_options).get(chosen, chosen)}")
         if any(key.startswith("ext:") for key in category.source_keys):
             info("Обновляю правила категории...")
             plugin = __import__("hydra.plugins.warp.plugin").plugins.warp.plugin.WarpPlugin()
@@ -682,7 +679,23 @@ def _menu_routing_rules(
         if ps.enabled:
             info("Применяю конфигурацию в Sing-Box...")
             if not orchestrator.apply_config(state):
+                for key, previous in previous_targets.items():
+                    if previous is None:
+                        list_targets.pop(key, None)
+                    else:
+                        list_targets[key] = previous
+                save_state(state)
                 error("Ошибка применения конфигурации.")
+                warn("Изменение маршрута отменено; предыдущая конфигурация сохранена.")
+                last_error = _get_last_install_error()
+                if last_error:
+                    error(last_error[-1000:])
+                prompt("Нажмите Enter для продолжения")
+                continue
+        if chosen == "none":
+            success(f"Отдельный маршрут для «{category.label}» отключён.")
+        else:
+            success(f"«{category.label}» → {dict(destination_options).get(chosen, chosen)}")
         prompt("Нажмите Enter для продолжения")
 
 

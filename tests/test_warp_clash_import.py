@@ -56,8 +56,10 @@ def test_import_clash_bundle_and_generate_groups(tmp_path):
     assert bundle["warnings"] == []
     imported = bundle["endpoints"][0]
     assert imported["name"] == "Netherlands"
-    assert imported["peer"]["reserved"] == [1, 2, 3]
+    assert "reserved" not in imported["peer"]
     assert imported["amnezia"]["i1"] == "<b 0x0102>"
+    assert imported["amnezia"]["h1"] == 0x03020101
+    assert imported["amnezia"]["h4"] == 0x03020104
 
     profiles = tmp_path / "profiles"
     profiles.mkdir()
@@ -78,7 +80,7 @@ def test_import_clash_bundle_and_generate_groups(tmp_path):
         fragment = WarpPlugin().configure(state)
 
     assert fragment.endpoints[0]["peers"][0]["address"] == "192.0.2.10"
-    assert fragment.endpoints[0]["peers"][0]["reserved"] == [1, 2, 3]
+    assert "reserved" not in fragment.endpoints[0]["peers"][0]
     assert any(item["tag"] == "warp_ultimate" for item in fragment.outbounds)
     assert fragment.route_rules[0]["outbound"] == imported["tag"]
 
@@ -92,6 +94,16 @@ def test_import_rejects_invalid_key_without_replacing_bundle(tmp_path):
     with pytest.raises(ClashImportError, match="импорт отменён"):
         import_clash_warp_bundle(source, destination)
     assert destination.read_text(encoding="utf-8") == '{"old": true}'
+
+
+def test_import_rejects_nonzero_reserved_without_amnezia(tmp_path):
+    source = tmp_path / "reserved.yaml"
+    source.write_text(
+        _yaml().replace("  amnezia-wg-option:\n", "  disabled-amnezia-wg-option:\n"),
+        encoding="utf-8",
+    )
+    with pytest.raises(ClashImportError, match="reserved без amnezia-wg-option"):
+        import_clash_warp_bundle(source, tmp_path / "bundle.json")
 
 
 def test_direct_route_is_not_discarded(tmp_path):
@@ -159,7 +171,7 @@ rules:
   - RULE-SET,private,DIRECT
 """, encoding="utf-8")
     bundle = import_clash_warp_bundle(source, tmp_path / "ultimate.json")
-    assert bundle["version"] == 3
+    assert bundle["version"] == 4
     assert "rule_providers" not in bundle
 
 
