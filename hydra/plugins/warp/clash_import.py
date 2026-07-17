@@ -177,9 +177,18 @@ def import_clash_warp_bundle(source: Path, destination: Path = WARP_ULTIMATE_BUN
         suffix = f"; ещё ошибок: {len(errors) - 3}" if len(errors) > 3 else ""
         raise ClashImportError(f"импорт отменён, обнаружены некорректные endpoints: {preview}{suffix}")
 
+    source_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
+    try:
+        source_is_managed = source.resolve().parent == destination.parent.resolve()
+    except OSError:
+        source_is_managed = False
+    canonical_source = source if source_is_managed else destination.with_suffix(".yaml")
+
     bundle = {
         "version": 1,
         "name": source.stem,
+        "source_file": canonical_source.name,
+        "source_sha256": source_hash,
         "endpoints": endpoints,
         "skipped_unsupported": skipped,
         "warnings": warnings,
@@ -189,6 +198,20 @@ def import_clash_warp_bundle(source: Path, destination: Path = WARP_ULTIMATE_BUN
         destination.parent.chmod(0o700)
     except OSError:
         pass
+    # Храним рядом исходник: его удобно обновлять вручную, а JSON остаётся
+    # внутренним нормализованным представлением для генератора Sing-Box.
+    if not source_is_managed:
+        source_tmp = canonical_source.with_suffix(".yaml.tmp")
+        source_tmp.write_text(source_text, encoding="utf-8")
+        try:
+            source_tmp.chmod(0o600)
+        except OSError:
+            pass
+        source_tmp.replace(canonical_source)
+    try:
+        canonical_source.chmod(0o600)
+    except OSError:
+        pass
     tmp = destination.with_suffix(destination.suffix + ".tmp")
     tmp.write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
@@ -196,16 +219,6 @@ def import_clash_warp_bundle(source: Path, destination: Path = WARP_ULTIMATE_BUN
     except OSError:
         pass
     tmp.replace(destination)
-    # Храним рядом исходник: его удобно обновлять вручную, а JSON остаётся
-    # внутренним нормализованным представлением для генератора Sing-Box.
-    canonical_source = destination.with_suffix(".yaml")
-    source_tmp = canonical_source.with_suffix(".yaml.tmp")
-    source_tmp.write_text(source_text, encoding="utf-8")
-    try:
-        source_tmp.chmod(0o600)
-    except OSError:
-        pass
-    source_tmp.replace(canonical_source)
     return bundle
 
 
@@ -217,3 +230,37 @@ def load_warp_bundle(path: Path = WARP_ULTIMATE_BUNDLE) -> dict | None:
     if data.get("version") != 1 or not isinstance(data.get("endpoints"), list):
         return None
     return data
+
+
+def discover_warp_yaml_sources(directory: Path = WARP_CONFIGS_DIR) -> list[Path]:
+    """Return managed Clash YAML files in deterministic order."""
+    try:
+        return sorted(
+            path for path in directory.iterdir()
+            if path.is_file() and path.suffix.lower() in (".yaml", ".yml")
+        )
+    except OSError:
+        return []
+
+
+def load_or_refresh_warp_bundle(destination: Path = WARP_ULTIMATE_BUNDLE) -> dict | None:
+    """Auto-discover one YAML file and rebuild stale normalised data."""
+    sources = discover_warp_yaml_sources(destination.parent)
+    if not sources:
+        return None
+    if len(sources) > 1:
+        names = ", ".join(path.name for path in sources[:5])
+        raise ClashImportError(
+            f"в {destination.parent} найдено несколько YAML-файлов ({names}); "
+            "оставьте один Ultimate-конфиг"
+        )
+    source = sources[0]
+    bundle = load_warp_bundle(destination)
+    try:
+        source_text = source.read_text(encoding="utf-8")
+        digest = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
+    except (OSError, UnicodeError) as exc:
+        raise ClashImportError(f"не удалось прочитать {source}: {exc}") from exc
+    if bundle and bundle.get("source_sha256") == digest:
+        return bundle
+    return import_clash_warp_bundle(source, destination)

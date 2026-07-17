@@ -19,7 +19,10 @@ from pathlib import Path
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
 from hydra.core.state import AppState, PluginState
-from hydra.plugins.warp.clash_import import WARP_ULTIMATE_BUNDLE, load_warp_bundle
+from hydra.plugins.warp.clash_import import (
+    ClashImportError, WARP_ULTIMATE_BUNDLE, discover_warp_yaml_sources,
+    load_or_refresh_warp_bundle,
+)
 
 WGCF_BIN = Path("/usr/local/bin/wgcf")
 WGCF_PROFILE = Path("/etc/wireguard/wgcf-profile.conf")
@@ -245,7 +248,10 @@ class WarpPlugin(BasePlugin):
         result = [("direct", "Прямое подключение")]
         for path in sorted(WARP_PROFILES_DIR.glob("*.conf")):
             result.append((f"warp_{path.stem}", path.stem))
-        bundle = load_warp_bundle(WARP_ULTIMATE_BUNDLE)
+        try:
+            bundle = load_or_refresh_warp_bundle(WARP_ULTIMATE_BUNDLE)
+        except ClashImportError:
+            bundle = None
         if bundle:
             endpoints = bundle.get("endpoints", [])
             if endpoints:
@@ -399,7 +405,7 @@ class WarpPlugin(BasePlugin):
             })
 
         # 2. Нормализованный Clash/Mihomo WARP bundle (Ultimate).
-        bundle = load_warp_bundle(WARP_ULTIMATE_BUNDLE)
+        bundle = load_or_refresh_warp_bundle(WARP_ULTIMATE_BUNDLE)
         ultimate_tags = []
         if bundle:
             for item in bundle.get("endpoints", []):
@@ -542,7 +548,7 @@ class WarpPlugin(BasePlugin):
         installed = (
             WGCF_PROFILE.exists()
             or any(WARP_PROFILES_DIR.glob("*.conf"))
-            or load_warp_bundle(WARP_ULTIMATE_BUNDLE) is not None
+            or bool(discover_warp_yaml_sources(WARP_ULTIMATE_BUNDLE.parent))
         )
         enabled = False
         running = False

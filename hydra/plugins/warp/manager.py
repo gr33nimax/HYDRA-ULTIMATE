@@ -14,7 +14,7 @@ import hydra.core.orchestrator as orchestrator
 from hydra.plugins.warp.plugin import DEFAULT_WARP_DOMAINS, WARP_EXTERNAL_CACHE, WGCF_PROFILE
 from hydra.plugins.warp.clash_import import (
     ClashImportError, WARP_CONFIGS_DIR, WARP_ULTIMATE_BUNDLE, WARP_ULTIMATE_SOURCE,
-    import_clash_warp_bundle, load_warp_bundle,
+    discover_warp_yaml_sources, import_clash_warp_bundle, load_or_refresh_warp_bundle,
 )
 
 
@@ -106,7 +106,13 @@ def menu_warp(state: AppState, plugin) -> None:
         destination_options = plugin.available_destinations()
         destinations = [tag for tag, _label in destination_options]
         custom_profiles = sorted([p.stem for p in WARP_PROFILES_DIR.glob("*.conf")])
-        ultimate_bundle = load_warp_bundle()
+        yaml_sources = discover_warp_yaml_sources()
+        discovery_error = ""
+        try:
+            ultimate_bundle = load_or_refresh_warp_bundle()
+        except ClashImportError as exc:
+            ultimate_bundle = None
+            discovery_error = str(exc)
 
         # Читаем списки
         local_lists = ps.config.setdefault("local_lists", {})
@@ -713,7 +719,13 @@ def _menu_geo_profiles(state: AppState, ps) -> None:
         clear()
         
         profiles = sorted([p.stem for p in WARP_PROFILES_DIR.glob("*.conf")])
-        ultimate_bundle = load_warp_bundle()
+        yaml_sources = discover_warp_yaml_sources()
+        discovery_error = ""
+        try:
+            ultimate_bundle = load_or_refresh_warp_bundle()
+        except ClashImportError as exc:
+            ultimate_bundle = None
+            discovery_error = str(exc)
         list_targets = ps.config.setdefault("list_targets", {})
 
         status_lines = [
@@ -734,8 +746,14 @@ def _menu_geo_profiles(state: AppState, ps) -> None:
             if count > 1:
                 status_lines.append("  • warp_ultimate_auto — автоматический выбор по задержке")
             status_lines.append("")
+        elif discovery_error:
+            status_lines.append(f"  {RED}Ошибка автообнаружения YAML:{NC} {discovery_error}")
+            status_lines.append("")
+        elif not yaml_sources:
+            status_lines.append(f"  {DIM}YAML не найден — поместите один .yaml/.yml в каталог выше.{NC}")
+            status_lines.append("")
         
-        if not profiles:
+        if not profiles and not ultimate_bundle and not discovery_error:
             status_lines.append(f"  {YELLOW}Нет обнаруженных профилей релеев.{NC}")
             status_lines.append("  Доступен только стандартный дефолтный WARP.")
         else:
@@ -770,7 +788,7 @@ def _menu_geo_profiles(state: AppState, ps) -> None:
                 
         panel("⚙️ УПРАВЛЕНИЕ ПРОФИЛЯМИ РЕЛЕЕВ", status_lines)
         
-        options = [("1", "📦 Импортировать Ultimate YAML", "Установить или обновить набор WARP endpoints из Clash/Mihomo")]
+        options = [("1", "📦 Импортировать YAML по пути", "Необязательно: скопировать YAML из другого каталога")]
         if ultimate_bundle:
             options.append(("2", "🗑️  Удалить Ultimate bundle", "Удалить импортированный набор WARP endpoints"))
         if profiles:
@@ -783,16 +801,25 @@ def _menu_geo_profiles(state: AppState, ps) -> None:
             break
             
         elif choice == "1":
-            source_raw = prompt("Путь к Clash/Mihomo YAML на сервере", str(WARP_ULTIMATE_SOURCE))
+            if len(yaml_sources) > 1:
+                error("Сначала оставьте в каталоге только один YAML-файл.")
+                prompt("Нажмите Enter для продолжения")
+                continue
+            default_source = str(yaml_sources[0]) if len(yaml_sources) == 1 else str(WARP_ULTIMATE_SOURCE)
+            source_raw = prompt("Путь к Clash/Mihomo YAML на сервере", default_source)
             if not source_raw.strip():
                 continue
             if ultimate_bundle and not confirm("Заменить уже установленный Ultimate bundle?", default=False):
                 continue
+            previous_source = yaml_sources[0] if len(yaml_sources) == 1 else None
             try:
                 bundle = import_clash_warp_bundle(Path(source_raw.strip()))
             except ClashImportError as exc:
                 error(str(exc))
             else:
+                imported_source = WARP_CONFIGS_DIR / Path(str(bundle["source_file"])).name
+                if previous_source and previous_source != imported_source:
+                    previous_source.unlink(missing_ok=True)
                 valid_targets = {"warp_ultimate", "warp_ultimate_auto"}
                 valid_targets.update(item["tag"] for item in bundle["endpoints"])
                 for key, target in list(list_targets.items()):
@@ -812,8 +839,10 @@ def _menu_geo_profiles(state: AppState, ps) -> None:
 
         elif choice == "2" and ultimate_bundle:
             if confirm("Удалить Ultimate bundle и отключить связанные маршруты?", default=False):
+                source_name = str(ultimate_bundle.get("source_file", WARP_ULTIMATE_SOURCE.name))
+                source_path = WARP_CONFIGS_DIR / Path(source_name).name
                 WARP_ULTIMATE_BUNDLE.unlink(missing_ok=True)
-                WARP_ULTIMATE_SOURCE.unlink(missing_ok=True)
+                source_path.unlink(missing_ok=True)
                 for key, target in list(list_targets.items()):
                     if target in ("warp_ultimate", "warp_ultimate_auto") or target.startswith("warp_ultimate_"):
                         list_targets[key] = "none"
@@ -855,12 +884,14 @@ def _menu_geo_profiles(state: AppState, ps) -> None:
             lines = [
                 f"  {BOLD}Ultimate Clash/Mihomo YAML:{NC}",
                 "",
-                f"  1. Скопируйте YAML в {WARP_ULTIMATE_SOURCE}",
-                "     и выберите «Импортировать Ultimate YAML».",
-                "  2. HYDRA извлечёт только proxies типа wireguard.",
-                "  3. Clash TUN, DNS, listeners и rules не импортируются:",
+                f"  1. Скопируйте один .yaml/.yml в {WARP_CONFIGS_DIR}",
+                "     Имя файла произвольное: HYDRA обнаружит его автоматически.",
+                "  2. При первом чтении и после изменения файла HYDRA",
+                "     автоматически обновит внутренний Ultimate bundle.",
+                "  3. HYDRA извлечёт только proxies типа wireguard.",
+                "  4. Clash TUN, DNS, listeners и rules не импортируются:",
                 "     ими продолжает управлять общий сетевой стек HYDRA.",
-                "  4. Для списка можно выбрать конкретную локацию,",
+                "  5. Для списка можно выбрать конкретную локацию,",
                 "     warp_ultimate (ручной selector) или",
                 "     warp_ultimate_auto (минимальная задержка).",
                 "",

@@ -5,7 +5,10 @@ from unittest.mock import patch
 import pytest
 
 from hydra.core.state import AppState, PluginState
-from hydra.plugins.warp.clash_import import ClashImportError, import_clash_warp_bundle
+from hydra.plugins.warp.clash_import import (
+    ClashImportError, discover_warp_yaml_sources, import_clash_warp_bundle,
+    load_or_refresh_warp_bundle,
+)
 from hydra.plugins.warp.plugin import WarpPlugin
 
 
@@ -108,3 +111,29 @@ def test_direct_route_is_not_discarded(tmp_path):
     ):
         fragment = WarpPlugin().configure(state)
     assert fragment.route_rules == [{"domain_suffix": ["example.org"], "outbound": "direct"}]
+
+
+def test_yaml_is_auto_discovered_and_refreshed(tmp_path):
+    configs = tmp_path / "configs"
+    configs.mkdir()
+    source = configs / "my-warp-profile.yml"
+    destination = configs / "ultimate.json"
+    source.write_text(_yaml(), encoding="utf-8")
+
+    first = load_or_refresh_warp_bundle(destination)
+    assert first["source_file"] == source.name
+    assert first["endpoints"][0]["name"] == "Netherlands"
+    assert discover_warp_yaml_sources(configs) == [source]
+    assert not (configs / "ultimate.yaml").exists()
+
+    source.write_text(_yaml().replace("Netherlands", "Finland"), encoding="utf-8")
+    second = load_or_refresh_warp_bundle(destination)
+    assert second["source_sha256"] != first["source_sha256"]
+    assert second["endpoints"][0]["name"] == "Finland"
+
+
+def test_auto_discovery_rejects_multiple_yaml_files(tmp_path):
+    (tmp_path / "one.yaml").write_text(_yaml(), encoding="utf-8")
+    (tmp_path / "two.yml").write_text(_yaml(), encoding="utf-8")
+    with pytest.raises(ClashImportError, match="несколько YAML-файлов"):
+        load_or_refresh_warp_bundle(tmp_path / "ultimate.json")
