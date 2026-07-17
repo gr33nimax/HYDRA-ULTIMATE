@@ -370,6 +370,46 @@ ignoreregex =
     def configure(self, state: AppState) -> ConfigFragment:
         return ConfigFragment()
 
+    def restore_defaults(self, state: AppState) -> bool:
+        """Restore generated jail defaults without changing service state."""
+        if not self._installed():
+            return False
+
+        protocol = get_protocol(state, "fail2ban")
+        marker = object()
+        previous_jails = protocol.config.pop("jails", marker)
+        was_running = self.status().running
+
+        if not self._write_jails(state):
+            if previous_jails is not marker:
+                protocol.config["jails"] = previous_jails
+            return False
+
+        portscan_enabled = (
+            was_running
+            and self.jail_options(state)["hydra-portscan"]["enabled"] == "true"
+        )
+        applied = self._sync_portscan_rule(portscan_enabled)
+        if applied and was_running:
+            reload_result = _run(["fail2ban-client", "reload"], timeout=20)
+            if reload_result.returncode != 0 or not self.status().running:
+                restart = _run(["systemctl", "restart", "fail2ban"], timeout=30)
+                applied = restart.returncode == 0 and self.status().running
+            else:
+                applied = True
+
+        if applied:
+            return True
+
+        # Keep persisted state and files in agreement if applying the defaults
+        # fails after they have already passed fail2ban-client's syntax check.
+        if previous_jails is not marker:
+            protocol.config["jails"] = previous_jails
+        self._write_jails(state)
+        if was_running:
+            _run(["fail2ban-client", "reload"], timeout=20)
+        return False
+
     def apply(self, state: AppState) -> bool:
         if not self._installed() or not self._write_jails(state):
             return False

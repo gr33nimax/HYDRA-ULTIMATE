@@ -158,3 +158,22 @@ def test_portscan_rule_is_idempotent():
         assert Fail2banPlugin._sync_portscan_rule(True) is True
     assert run.call_count == 1
     assert "-C" in run.call_args.args[0]
+
+
+def test_restore_defaults_keeps_stopped_service_stopped():
+    p = Fail2banPlugin()
+    state = _make_state()
+    state.protocols["fail2ban"].config["jails"] = {
+        "hydra-sshd": {"maxretry": "9"},
+    }
+
+    with patch.object(Fail2banPlugin, "_installed", return_value=True), \
+         patch.object(Fail2banPlugin, "status", return_value=MagicMock(running=False)), \
+         patch.object(Fail2banPlugin, "_write_jails", return_value=True), \
+         patch.object(Fail2banPlugin, "_sync_portscan_rule", return_value=True) as sync, \
+         patch("hydra.plugins.fail2ban.plugin._run") as run:
+        assert p.restore_defaults(state) is True
+
+    assert "jails" not in state.protocols["fail2ban"].config
+    sync.assert_called_once_with(False)
+    run.assert_not_called()

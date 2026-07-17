@@ -681,16 +681,16 @@ def menu_fail2ban(state: AppState, plugin) -> None:
             warn("Локальные изменения лимитов и параметров джейлов будут удалены.")
             if confirm("Продолжить?", default=False):
                 info("Восстанавливаю конфигурации...")
-                from hydra.core.state import get_protocol, save_state
-                p_state = get_protocol(state, "fail2ban")
-                previous_jails = p_state.config.pop("jails", None)
-                if plugin.apply(state):
+                from hydra.core.state import save_state
+                was_active = _f2b_active()
+                if plugin.restore_defaults(state):
                     save_state(state)
-                    success("Базовая конфигурация восстановлена!")
+                    if was_active:
+                        success("Базовая конфигурация восстановлена и применена!")
+                    else:
+                        success("Базовая конфигурация восстановлена. Служба оставлена остановленной.")
                 else:
-                    if previous_jails is not None:
-                        p_state.config["jails"] = previous_jails
-                    error("Базовая конфигурация записана, но служба не запустилась.")
+                    error("Не удалось восстановить конфигурацию; предыдущие настройки сохранены.")
             else:
                 info("Отменено.")
             prompt("Нажмите Enter для продолжения")
