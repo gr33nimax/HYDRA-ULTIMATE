@@ -1589,6 +1589,8 @@ WantedBy=multi-user.target
 #  5. Мониторинг
 # ═════════════════════════════════════════════════════════════════════════════
 
+_MONITORING_EXCLUDED_PROTOCOLS = frozenset({"wdtt"})
+
 def _is_enter_pressed() -> bool:
     import select
     import os
@@ -1627,10 +1629,15 @@ def menu_monitoring(state: AppState):
             except Exception:
                 pass
                 
-        active_protos = [p for p in state.protocols.values() if p.enabled]
+        active_protos = [
+            p for name, p in state.protocols.items()
+            if p.enabled and name not in _MONITORING_EXCLUDED_PROTOCOLS
+        ]
         protos_count = len(active_protos)
         running_count = 0
         for plugin in enabled(state, PluginCategory.TRANSPORT):
+            if plugin.meta.name in _MONITORING_EXCLUDED_PROTOCOLS:
+                continue
             try:
                 running_count += int(plugin.status().running)
             except Exception:
@@ -1647,7 +1654,7 @@ def menu_monitoring(state: AppState):
 
         choice = menu(
             [("1", "📊 Потребление трафика", "Сводная статистика по протоколам и пользователям"),
-             ("2", "🔌 Активные подключения", "Сессии пользователей в реальном времени"),
+             ("2", "🔌 Подключения и активность", "Активные сессии и недавние запросы пользователей"),
              ("3", "📈 Живой монитор CPU/RAM", "Нагрузка системы, скорость сети и метрики"),
              ("4", "🔧 Сервисные настройки", "Управление Clash API, Sync Agent, системные логи"),
              ("0", "↩ Назад", "")],
@@ -1697,14 +1704,20 @@ def _show_traffic_combined(state: AppState):
         # increments with the stale object that opened the main menu.
         state = refresh_traffic_state()
         by_protocol = protocol_totals(state)
-        enabled_names = {plugin.meta.name for plugin in enabled(state, PluginCategory.TRANSPORT)}
+        enabled_names = {
+            plugin.meta.name for plugin in enabled(state, PluginCategory.TRANSPORT)
+            if plugin.meta.name not in _MONITORING_EXCLUDED_PROTOCOLS
+        }
         labels = {
             "amneziawg": "AmneziaWG", "naive": "NaiveProxy",
             "anytls": "AnyTLS", "mieru": "Mieru",
             "trusttunnel": "TrustTunnel", "telemt": "Telemt",
-            "wdtt": "WebTunnel",
         }
-        order = ["amneziawg", "naive", "anytls", "mieru", "trusttunnel", "telemt", "wdtt"]
+        by_protocol = {
+            name: value for name, value in by_protocol.items()
+            if name not in _MONITORING_EXCLUDED_PROTOCOLS
+        }
+        order = ["amneziawg", "naive", "anytls", "mieru", "trusttunnel", "telemt"]
         names = [name for name in order if name in enabled_names or by_protocol.get(name, 0)]
         names.extend(sorted(set(by_protocol) - set(names)))
         distributed = sum(by_protocol.values())
@@ -1801,17 +1814,32 @@ def _show_connections(state: AppState):
     
     while True:
         clear()
-        title("🔌 Активные подключения")
+        title("🔌 Подключения и активность")
         print()
         
         state = load_state()
         all_clients = []
+        has_naive = False
         from hydra.services.active_connections import tracked_active_connections
         all_clients.extend(tracked_active_connections(state))
         for p in enabled(state, PluginCategory.TRANSPORT):
+            if p.meta.name in _MONITORING_EXCLUDED_PROTOCOLS:
+                continue
             # These are represented by the attributed Clash API snapshot. ss
             # sees only internal proxy legs and cannot identify their users.
-            if p.meta.name in {"anytls", "mieru", "trusttunnel", "naive"}:
+            if p.meta.name == "naive":
+                has_naive = True
+                recent = getattr(p, "recent_connections", None)
+                if recent:
+                    try:
+                        for client in recent(state):
+                            row = dict(client)
+                            row["plugin"] = "naive"
+                            all_clients.append(row)
+                    except Exception:
+                        pass
+                continue
+            if p.meta.name in {"anytls", "mieru", "trusttunnel"}:
                 continue
             try:
                 try:
@@ -1862,7 +1890,8 @@ def _show_connections(state: AppState):
                 elif online:
                     activity = "активен"
                     
-                status_ico = f"{GREEN}●{NC}" if online else f"{DIM}●{NC}"
+                recent = c.get("activity_kind") == "recent"
+                status_ico = f"{GREEN}●{NC}" if online else (f"{YELLOW}◐{NC}" if recent else f"{DIM}●{NC}")
                 traffic_str = f"{_bytes_auto(rx)} / {_bytes_auto(tx)}" if (rx or tx) else "—"
                 
                 email_disp = email
@@ -1871,20 +1900,20 @@ def _show_connections(state: AppState):
                     
                 print(f"  {plugin_name:<12} {status_ico} {BOLD}{email_disp:<28}{NC} {traffic_str:<20} {activity:<15}")
             print()
-            print(f"  {DIM}Rx/Tx: AWG — с запуска интерфейса; остальные — активные сессии. Накопленный итог — в разделе 1.{NC}")
+            print(f"  {DIM}● активен; ◐ завершённый Naive CONNECT за последние 5 минут. Накопленный итог — в разделе 1.{NC}")
 
         from hydra.services.active_connections import traffic_daemon_fresh
         if not state.network.clash_api_enabled:
             print(f"  {YELLOW}AnyTLS/Mieru/TrustTunnel не показаны: Clash API и демон статистики выключены.{NC}")
         elif not traffic_daemon_fresh(state):
             print(f"  {YELLOW}Данные Clash API устарели: проверьте службу hydra-traffic-daemon.{NC}")
-        if any(plugin.meta.name == "naive" for plugin in enabled(state, PluginCategory.TRANSPORT)):
-            print(f"  {DIM}NaiveProxy: внутренние прокси-соединения скрыты — они не позволяют достоверно определить пользователя.{NC}")
+        if has_naive:
+            print(f"  {DIM}NaiveProxy берётся из Caddy access-log: имя и Rx/Tx достоверны после завершения CONNECT.{NC}")
             
         choice = menu([
             ("R", "🔄 Обновить список", ""),
             ("0", "↩ Назад", "")
-        ], "АКТИВНЫЕ ПОДКЛЮЧЕНИЯ")
+        ], "ПОДКЛЮЧЕНИЯ И АКТИВНОСТЬ")
         
         if choice == "0":
             break

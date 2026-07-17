@@ -247,6 +247,11 @@ def save_state(state: AppState) -> None:
                         target_stats["traffic_used_bytes"] = current_total
                         if "traffic_last_raw_bytes" in current_stats:
                             target_stats["traffic_last_raw_bytes"] = current_stats["traffic_last_raw_bytes"]
+                        for stat_key, stat_value in current_stats.items():
+                            if stat_key.startswith("traffic_") and stat_key not in {
+                                "traffic_used_bytes", "traffic_last_raw_bytes",
+                            }:
+                                target_stats[stat_key] = copy.deepcopy(stat_value)
             for key in ("traffic_connection_counters", "traffic_log_cursors"):
                 if key in latest.install:
                     state.install[key] = copy.deepcopy(latest.install[key])

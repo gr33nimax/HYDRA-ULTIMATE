@@ -4,7 +4,7 @@
   • configure() — генерит Caddyfile в памяти.
   • apply() — создает фейковый сайт, пишет Caddyfile, caddy validate + systemctl reload.
   • per-user: детерминированные username/password из uuid через derive_key.
-  • traffic — iptables accounting (как mieru).
+  • traffic — per-user Caddy access-log accounting (Rx + Tx).
   • TLS & HAProxy: использует certbot / существующий SSL-сертификат для корректной работы за HAProxy.
   • sing-box integration: исходящий трафик проксируется в sing-box через `upstream socks5://127.0.0.1:1080`.
   • probe resistance: незнакомые клиенты получают отклик от фейкового HTML-файла.
@@ -431,7 +431,7 @@ class NaivePlugin(BasePlugin):
                         if not user_id:
                             user_id = data.get("user")
                         if user_id:
-                            size = data.get("size", 0)
+                            size = self._access_log_bytes(data)
                             email = uname_to_email.get(user_id)
                             if email:
                                 result[email] = result.get(email, 0) + size
@@ -440,6 +440,24 @@ class NaivePlugin(BasePlugin):
         except Exception:
             pass
         return result
+
+    @staticmethod
+    def _access_log_directions(data: dict) -> tuple[int, int]:
+        """Return client Rx/Tx from a structured Caddy access-log record."""
+        try:
+            rx = max(0, int(data.get("size", 0)))
+        except (TypeError, ValueError):
+            rx = 0
+        try:
+            tx = max(0, int(data.get("bytes_read", 0)))
+        except (TypeError, ValueError):
+            tx = 0
+        return rx, tx
+
+    @classmethod
+    def _access_log_bytes(cls, data: dict) -> int:
+        rx, tx = cls._access_log_directions(data)
+        return rx + tx
 
     def update_traffic(self, state: AppState) -> None:
         """Increment persisted totals from unread access-log records.
@@ -486,13 +504,20 @@ class NaivePlugin(BasePlugin):
                             data = json.loads(line)
                             username = data.get("user_id") or data.get("user")
                             user = uname_to_user.get(username)
-                            size = max(0, int(data.get("size", 0)))
+                            rx, tx = self._access_log_directions(data)
+                            size = rx + tx
                         except (json.JSONDecodeError, TypeError, ValueError):
                             continue
                         if user is not None and size:
                             stats = user.credentials.setdefault("naive", {})
                             stats["traffic_used_bytes"] = (
                                 max(0, int(stats.get("traffic_used_bytes", 0))) + size
+                            )
+                            stats["traffic_rx_bytes"] = (
+                                max(0, int(stats.get("traffic_rx_bytes", 0))) + rx
+                            )
+                            stats["traffic_tx_bytes"] = (
+                                max(0, int(stats.get("traffic_tx_bytes", 0))) + tx
                             )
                     cursors[key] = "done" if path.suffix == ".gz" else handle.tell()
             except OSError:
@@ -503,6 +528,62 @@ class NaivePlugin(BasePlugin):
         if len(cursors) > 128:
             for key in list(cursors)[:-128]:
                 cursors.pop(key, None)
+
+    def recent_connections(self, state: AppState, window_seconds: int = 300) -> list[dict]:
+        """Return recently completed authenticated Caddy requests.
+
+        Caddy emits an access record after the request/CONNECT handler returns,
+        so these rows are deliberately marked as recent rather than online.
+        """
+        import gzip
+        import json
+
+        now = time.time()
+        cutoff = now - max(1, window_seconds)
+        uname_to_email = {self._derive_username(user): user.email for user in state.users}
+        grouped: dict[str, dict] = {}
+        try:
+            paths = sorted(LOG_DIR.glob("access.log*"), key=lambda p: p.stat().st_mtime_ns)
+        except OSError:
+            return []
+
+        for path in paths:
+            try:
+                opener = gzip.open if path.suffix == ".gz" else open
+                with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
+                    for line in handle:
+                        try:
+                            data = json.loads(line)
+                            ts = float(data.get("ts", 0))
+                        except (json.JSONDecodeError, TypeError, ValueError):
+                            continue
+                        if ts < cutoff:
+                            continue
+                        username = data.get("user_id") or data.get("user")
+                        email = uname_to_email.get(username)
+                        if not email:
+                            continue
+                        request = data.get("request", {})
+                        method = request.get("method", "") if isinstance(request, dict) else ""
+                        if method and method != "CONNECT":
+                            continue
+                        rx, tx = self._access_log_directions(data)
+                        row = grouped.setdefault(email, {
+                            "email": email,
+                            "online": False,
+                            "rx": 0,
+                            "tx": 0,
+                            "connections": 0,
+                            "last_handshake": int(ts),
+                            "activity_kind": "recent",
+                        })
+                        row["rx"] += rx
+                        row["tx"] += tx
+                        row["connections"] += 1
+                        row["last_handshake"] = max(row["last_handshake"], int(ts))
+            except OSError:
+                continue
+        return list(grouped.values())
 
     def connected_clients(self, state: AppState | None = None) -> list[dict]:
         if not shutil.which("ss"):

@@ -1,5 +1,6 @@
 """tests/test_naive_plugin.py — Тесты для NaiveProxy plugin v2."""
 import json
+import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import sys
@@ -320,7 +321,7 @@ def test_traffic_parses_caddy_access_logs(tmp_path):
     caddy_username = p._derive_username(user)
     
     log_content = (
-        f'{{"ts":1698246377,"user_id":"{caddy_username}","size":1000}}\n'
+        f'{{"ts":1698246377,"user_id":"{caddy_username}","size":1000,"bytes_read":200}}\n'
         f'{{"ts":1698246378,"user_id":"{caddy_username}","size":1500}}\n'
         f'{{"ts":1698246379,"user_id":"other_user","size":5000}}\n'
         f'{{"ts":1698246380,"user":"{caddy_username}","size":500}}\n'
@@ -333,7 +334,7 @@ def test_traffic_parses_caddy_access_logs(tmp_path):
     with patch.object(p, "_installed", return_value=True), \
          patch("hydra.plugins.naive.plugin.LOG_DIR", tmp_path):
         traffic_data = p.traffic(state)
-        assert traffic_data == {"user_email@example.com": 3000}
+        assert traffic_data == {"user_email@example.com": 3200}
 
 
 def test_update_traffic_uses_log_cursor_without_double_counting(tmp_path):
@@ -342,16 +343,52 @@ def test_update_traffic_uses_log_cursor_without_double_counting(tmp_path):
     state = _make_state([user])
     username = p._derive_username(user)
     log_file = tmp_path / "access.log"
-    log_file.write_text(f'{{"user_id":"{username}","size":1000}}\n', encoding="utf-8")
+    log_file.write_text(
+        f'{{"user_id":"{username}","size":1000,"bytes_read":250}}\n',
+        encoding="utf-8",
+    )
 
     with patch("hydra.plugins.naive.plugin.LOG_DIR", tmp_path):
         p.update_traffic(state)
         p.update_traffic(state)
         with log_file.open("a", encoding="utf-8") as handle:
-            handle.write(f'{{"user_id":"{username}","size":500}}\n')
+            handle.write(f'{{"user_id":"{username}","size":500,"bytes_read":100}}\n')
         p.update_traffic(state)
 
-    assert user.credentials["naive"]["traffic_used_bytes"] == 1500
+    assert user.credentials["naive"]["traffic_used_bytes"] == 1850
+    assert user.credentials["naive"]["traffic_rx_bytes"] == 1500
+    assert user.credentials["naive"]["traffic_tx_bytes"] == 350
+
+
+def test_recent_connections_uses_completed_caddy_connect_records(tmp_path):
+    p = NaivePlugin()
+    user = _make_user("user_email@example.com", uuid="uuid-a")
+    state = _make_state([user])
+    username = p._derive_username(user)
+    now = time.time()
+    records = [
+        {"ts": now - 30, "user_id": username, "size": 1000, "bytes_read": 200,
+         "request": {"method": "CONNECT"}},
+        {"ts": now - 10, "user_id": username, "size": 500, "bytes_read": 100,
+         "request": {"method": "CONNECT"}},
+        {"ts": now - 600, "user_id": username, "size": 9999, "bytes_read": 9999,
+         "request": {"method": "CONNECT"}},
+        {"ts": now - 5, "user_id": username, "size": 9999, "bytes_read": 9999,
+         "request": {"method": "GET"}},
+    ]
+    (tmp_path / "access.log").write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8",
+    )
+
+    with patch("hydra.plugins.naive.plugin.LOG_DIR", tmp_path):
+        rows = p.recent_connections(state)
+
+    assert len(rows) == 1
+    assert rows[0]["email"] == user.email
+    assert rows[0]["online"] is False
+    assert rows[0]["connections"] == 2
+    assert rows[0]["rx"] == 1500
+    assert rows[0]["tx"] == 300
 
 
 # === QUIC tests ===
