@@ -361,15 +361,10 @@ class TrustTunnelPlugin(BasePlugin):
                 else:
                     formatted = f"{size:.2f} PB"
                 info["Общий трафик"] = formatted
-                info["Транспорт"] = self._transport(
-                    state.protocols.get("trusttunnel")
-                ).upper()
             except Exception:
                 pass
             try:
                 health_report = self.health(state)
-                info["Sing-box"] = "OK" if health_report["singbox"] else "FAIL"
-                info["Caddy L4"] = "OK" if health_report["caddy_l4"] else "FAIL"
                 errors = health_report.get("errors", [])
                 if errors:
                     info["Проверка"] = str(errors[0])
