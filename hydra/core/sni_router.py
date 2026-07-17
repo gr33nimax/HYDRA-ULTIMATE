@@ -39,6 +39,11 @@ _DECOY_HTTP_PORTS = {
 }
 
 _SOURCE_PRESERVED_BACKENDS = frozenset({"naive", "anytls", "trusttunnel"})
+# Disabled after production smoke tests showed that non-local loopback source
+# binding breaks Caddy backend return traffic on supported server kernels.
+# Keep the transactional cleanup code so hosts that applied the experimental
+# routing are restored automatically on their next configuration rebuild.
+SOURCE_PRESERVATION_ENABLED = False
 
 
 def _proxy_handler(address: str, *, preserve_source: bool = False) -> dict:
@@ -50,7 +55,7 @@ def _proxy_handler(address: str, *, preserve_source: bool = False) -> dict:
     Fail2ban; source_transparency routes the backend replies back to Caddy.
     """
     upstream = {"dial": [address]}
-    if preserve_source:
+    if preserve_source and SOURCE_PRESERVATION_ENABLED:
         upstream["local_address"] = ["{l4.conn.remote_addr}"]
     return {"handler": "proxy", "upstreams": [upstream]}
 
@@ -822,6 +827,8 @@ def _has_source_preservation(config: dict) -> bool:
 
 
 def _source_preservation_ports(backends: list[dict], quic_owner: str | None) -> tuple[set[int], set[int]]:
+    if not SOURCE_PRESERVATION_ENABLED:
+        return set(), set()
     tcp_ports: set[int] = set()
     udp_ports: set[int] = set()
     names = {backend["name"] for backend in backends}
@@ -978,7 +985,7 @@ def rebuild(state: AppState) -> bool:
         else:
             _remove_source_service()
             source_transparency.clear()
-        if not _install_service():
+        if not _install_service(source_required=bool(tcp_ports or udp_ports)):
             raise RuntimeError("cannot install Caddy L4 systemd unit")
     except Exception as exc:
         if upgraded_binary:
@@ -1088,13 +1095,15 @@ def uninstall_haproxy() -> None:
         pass
 
 
-def _install_service() -> bool:
+def _install_service(*, source_required: bool = False) -> bool:
     """Generates the systemd unit file for caddy-l4."""
+    source_after = f" {SOURCE_SERVICE_NAME}.service" if source_required else ""
+    source_requires = f"Requires={SOURCE_SERVICE_NAME}.service\n" if source_required else ""
     unit_content = f"""[Unit]
 Description=Caddy L4 (TLS multiplexer + decoy)
-After=network-online.target sing-box.service {SOURCE_SERVICE_NAME}.service
+After=network-online.target sing-box.service{source_after}
 Wants=network-online.target
-Requires={SOURCE_SERVICE_NAME}.service
+{source_requires}
 
 [Service]
 Type=notify

@@ -89,14 +89,14 @@ def test_generate_config_two_backends():
     # Check naive route
     naive_route = next(r for r in routes if r.get("match") and r["match"][0].get("tls", {}).get("sni") == ["naive.com"])
     assert naive_route["handle"][0]["upstreams"][0]["dial"] == ["127.0.0.1:10443"]
-    assert naive_route["handle"][0]["upstreams"][0]["local_address"] == ["{l4.conn.remote_addr}"]
+    assert "local_address" not in naive_route["handle"][0]["upstreams"][0]
 
     # Check anytls route
     anytls_route = next(r for r in routes if r.get("match") and r["match"][0].get("tls", {}).get("sni") == ["anytls.com"])
     # AnyTLS has a subroute to filter out non-HTTP
     assert anytls_route["handle"][1]["handler"] == "subroute"
     anytls_proxy = anytls_route["handle"][1]["routes"][0]["handle"][0]
-    assert anytls_proxy["upstreams"][0]["local_address"] == ["{l4.conn.remote_addr}"]
+    assert "local_address" not in anytls_proxy["upstreams"][0]
 
 
 def test_config_has_sni_rules():
