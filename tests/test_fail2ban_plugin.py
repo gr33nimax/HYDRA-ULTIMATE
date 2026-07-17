@@ -19,7 +19,7 @@ def test_plugin_meta():
     p = Fail2banPlugin()
     assert p.meta.name == "fail2ban"
     assert p.meta.category == PluginCategory.SECURITY
-    assert p.meta.version == "2.2.0"
+    assert p.meta.version == "2.3.0"
 
 
 def test_configure_returns_empty_fragment():
@@ -105,74 +105,32 @@ def test_write_jails_with_whitelist():
     assert "ignoreip = 127.0.0.1/8 ::1 192.168.1.100 10.0.0.0/24" in content
 
 
-def test_proxy_filters_only_match_authentication_failures():
+def test_only_filters_with_trustworthy_public_sources_are_generated():
     filters = Fail2banPlugin._filters()
-    assert "unknown user password" in filters["hydra-anytls"]
-    assert '"status"\\s*:\\s*407' in filters["hydra-trusttunnel"]
-    assert "authorization failed" in filters["hydra-trusttunnel-quic"]
-    assert '"status"\\s*:\\s*407' in filters["hydra-naive"]
-    assert "401|403" not in filters["hydra-naive"]
+    assert set(filters) == {"hydra-awg", "hydra-portscan"}
     assert "Unknown message from" in filters["hydra-awg"]
     assert "Invalid MAC of handshake" in filters["hydra-awg"]
     assert "tproxy" not in filters["hydra-awg"].lower()
 
 
-def test_trusttunnel_tcp_and_quic_use_separate_log_sources():
+def test_tls_transport_jails_and_legacy_overrides_are_ignored():
     p = Fail2banPlugin()
     state = _make_state()
-    state.protocols["trusttunnel"] = PluginState(
-        enabled=True, port=443, config={"transport": "both"},
-    )
-
-    jails = p.jail_options(state)
-    assert jails["hydra-trusttunnel"]["enabled"] == "true"
-    assert jails["hydra-trusttunnel"]["logpath"].endswith("decoy-access.log")
-    assert jails["hydra-trusttunnel-quic"]["enabled"] == "true"
-    assert jails["hydra-trusttunnel-quic"]["backend"] == "systemd"
-
-
-def test_trusttunnel_manual_override_cannot_enable_wrong_transport():
-    p = Fail2banPlugin()
-    state = _make_state()
-    state.protocols["trusttunnel"] = PluginState(
-        enabled=True, port=443, config={"transport": "quic"},
-    )
+    for name in ("anytls", "trusttunnel", "naive"):
+        state.protocols[name] = PluginState(enabled=True, port=443)
     state.protocols["fail2ban"].config["jails"] = {
+        "hydra-anytls": {"enabled": True},
         "hydra-trusttunnel": {"enabled": True},
+        "hydra-trusttunnel-quic": {"enabled": True},
+        "hydra-naive": {"enabled": True},
     }
 
     jails = p.jail_options(state)
-    assert jails["hydra-trusttunnel"]["enabled"] == "false"
-    assert jails["hydra-trusttunnel-quic"]["enabled"] == "true"
-
-
-def test_trusttunnel_legacy_timings_are_copied_to_quic_jail():
-    p = Fail2banPlugin()
-    state = _make_state()
-    state.protocols["trusttunnel"] = PluginState(
-        enabled=True, port=443, config={"transport": "both"},
-    )
-    state.protocols["fail2ban"].config["jails"] = {
-        "hydra-trusttunnel": {"bantime": "9000", "maxretry": "7"},
-    }
-
-    quic = p.jail_options(state)["hydra-trusttunnel-quic"]
-    assert quic["bantime"] == "9000"
-    assert quic["maxretry"] == "7"
-
-
-def test_jail_overrides_persist_but_cannot_enable_disabled_protocol():
-    p = Fail2banPlugin()
-    state = _make_state()
-    state.protocols["anytls"] = PluginState(enabled=True, port=443)
-    state.protocols["fail2ban"].config["jails"] = {
-        "hydra-anytls": {"bantime": "9000", "enabled": False},
-        "hydra-trusttunnel": {"enabled": True},
-    }
-    jails = p.jail_options(state)
-    assert jails["hydra-anytls"]["bantime"] == "9000"
-    assert jails["hydra-anytls"]["enabled"] == "false"
-    assert jails["hydra-trusttunnel"]["enabled"] == "false"
+    assert not ({
+        "hydra-anytls", "hydra-trusttunnel",
+        "hydra-trusttunnel-quic", "hydra-naive",
+    } & set(jails))
+    assert set(jails) == {"hydra-sshd", "hydra-recidive", "hydra-portscan", "hydra-awg"}
 
 
 def test_invalid_generated_configuration_is_rolled_back(tmp_path):
@@ -183,6 +141,10 @@ def test_invalid_generated_configuration_is_rolled_back(tmp_path):
     filter_dir.mkdir()
     defaults = jail_dir / "00-hydra-defaults.local"
     defaults.write_text("original", encoding="utf-8")
+    legacy_jail = jail_dir / "hydra-anytls.local"
+    legacy_filter = filter_dir / "hydra-anytls.conf"
+    legacy_jail.write_text("legacy jail", encoding="utf-8")
+    legacy_filter.write_text("legacy filter", encoding="utf-8")
 
     with patch("hydra.plugins.fail2ban.plugin.JAIL_DIR", jail_dir), \
          patch("hydra.plugins.fail2ban.plugin.FILTER_DIR", filter_dir), \
@@ -191,7 +153,8 @@ def test_invalid_generated_configuration_is_rolled_back(tmp_path):
         assert p._write_jails(_make_state()) is False
 
     assert defaults.read_text(encoding="utf-8") == "original"
-    assert list(filter_dir.iterdir()) == []
+    assert legacy_jail.read_text(encoding="utf-8") == "legacy jail"
+    assert legacy_filter.read_text(encoding="utf-8") == "legacy filter"
 
 
 def test_current_ssh_client_is_persisted_in_whitelist():
@@ -228,20 +191,33 @@ def test_restore_defaults_keeps_stopped_service_stopped():
     run.assert_not_called()
 
 
-def test_write_jails_prepares_naive_log_before_validation(tmp_path):
+def test_write_jails_removes_obsolete_tls_transport_files(tmp_path):
     p = Fail2banPlugin()
     state = _make_state()
-    state.protocols["naive"] = PluginState(enabled=True, port=443)
-    naive_log = tmp_path / "caddy-naive" / "access.log"
+    state.protocols["fail2ban"].config["jails"] = {
+        "hydra-anytls": {"enabled": True},
+        "hydra-sshd": {"maxretry": "8"},
+    }
+    jail_dir = tmp_path / "jail.d"
+    filter_dir = tmp_path / "filter.d"
+    jail_dir.mkdir()
+    filter_dir.mkdir()
+    for name in ("hydra-anytls", "hydra-trusttunnel", "hydra-trusttunnel-quic", "hydra-naive"):
+        (jail_dir / f"{name}.local").write_text("legacy", encoding="utf-8")
+        (filter_dir / f"{name}.conf").write_text("legacy", encoding="utf-8")
 
-    with patch("hydra.plugins.fail2ban.plugin.JAIL_DIR", tmp_path / "jail.d"), \
-         patch("hydra.plugins.fail2ban.plugin.FILTER_DIR", tmp_path / "filter.d"), \
-         patch("hydra.plugins.fail2ban.plugin.NAIVE_LOG", naive_log), \
+    with patch("hydra.plugins.fail2ban.plugin.JAIL_DIR", jail_dir), \
+         patch("hydra.plugins.fail2ban.plugin.FILTER_DIR", filter_dir), \
          patch("hydra.plugins.fail2ban.plugin.F2B_LOG", tmp_path / "fail2ban.log"), \
          patch("hydra.plugins.fail2ban.plugin._run", return_value=MagicMock(returncode=0, stdout="", stderr="")):
         assert p._write_jails(state) is True
 
-    assert naive_log.exists()
+    for name in ("hydra-anytls", "hydra-trusttunnel", "hydra-trusttunnel-quic", "hydra-naive"):
+        assert not (jail_dir / f"{name}.local").exists()
+        assert not (filter_dir / f"{name}.conf").exists()
+    assert state.protocols["fail2ban"].config["jails"] == {
+        "hydra-sshd": {"maxretry": "8"},
+    }
 
 
 def test_awg_jail_covers_all_profile_ports():

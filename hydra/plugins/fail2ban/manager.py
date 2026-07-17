@@ -19,10 +19,7 @@ from hydra.ui.tui import (
 )
 
 _F2B_LOG = Path("/var/log/fail2ban.log")
-_PROXY_JAILS = [
-    "hydra-anytls", "hydra-trusttunnel", "hydra-trusttunnel-quic",
-    "hydra-naive", "hydra-awg",
-]
+_PROTOCOL_JAILS = ["hydra-awg"]
 _SYSTEM_JAILS = ["hydra-sshd", "hydra-recidive", "hydra-portscan"]
 
 _BAN_LINE_RE = re.compile(
@@ -310,8 +307,8 @@ def menu_fail2ban(state: AppState, plugin) -> None:
         active = _f2b_active() if installed else False
         live_jails = _f2b_list_jails() if active else []
         
-        # В гидре мы ориентируемся на джейлы hydra-anytls, hydra-mieru, hydra-trusttunnel, hydra-naive, hydra-awg, hydra-sshd, hydra-recidive, hydra-portscan
-        configured_jails = _PROXY_JAILS + _SYSTEM_JAILS
+        # Hydra keeps only jails with trustworthy public source addresses.
+        configured_jails = _PROTOCOL_JAILS + _SYSTEM_JAILS
         jail_names = live_jails if live_jails else configured_jails
         
         total_banned = 0
@@ -326,16 +323,16 @@ def menu_fail2ban(state: AppState, plugin) -> None:
             status_lines.append(f"  Статус:      {(GREEN+'● активен') if active else (DIM+'○ остановлен')}{NC}")
             
             # Группировка активных джейлов
-            active_proxies = []
+            active_protocols = []
             active_systems = []
             for j in jail_names:
-                if j in _PROXY_JAILS:
-                    active_proxies.append(j.replace("hydra-", ""))
+                if j in _PROTOCOL_JAILS:
+                    active_protocols.append(j.replace("hydra-", ""))
                 else:
                     active_systems.append(j.replace("hydra-", ""))
             
-            if active_proxies:
-                status_lines.append(f"  Прокси:      {CYAN}{len(active_proxies)}{NC} ({', '.join(active_proxies)})")
+            if active_protocols:
+                status_lines.append(f"  Протоколы:   {CYAN}{len(active_protocols)}{NC} ({', '.join(active_protocols)})")
             if active_systems:
                 status_lines.append(f"  Система:     {YELLOW}{len(active_systems)}{NC} ({', '.join(active_systems)})")
                 
@@ -432,11 +429,13 @@ def menu_fail2ban(state: AppState, plugin) -> None:
             
         # ── 2. Reload / restart ───────────────────────────────────────────────
         elif choice == "2":
-            info("Перечитываю конфигурацию (reload)...")
-            if _f2b_reload():
+            info("Пересобираю и применяю конфигурацию...")
+            if plugin.apply(state):
+                from hydra.core.state import save_state
+                save_state(state)
                 success("Конфигурация успешно применена!")
             else:
-                error("Не удалось перезапустить Fail2ban. Проверьте: journalctl -u fail2ban")
+                error("Не удалось применить конфигурацию Fail2ban. Проверьте: journalctl -u fail2ban")
             prompt("Нажмите Enter для продолжения")
             
         # ── 3. Забаненные IP + разбан ─────────────────────────────────────────
@@ -540,13 +539,13 @@ def menu_fail2ban(state: AppState, plugin) -> None:
         elif choice == "5":
             clear()
             jail_opts = []
-            proxies = _PROXY_JAILS
+            proxies = _PROTOCOL_JAILS
             systems = _SYSTEM_JAILS
             all_jails = proxies + systems
             
             idx = 1
             for j in proxies:
-                jail_opts.append((str(idx), f"{CYAN}[Прокси]{NC} {j}", ""))
+                jail_opts.append((str(idx), f"{CYAN}[Протокол]{NC} {j}", ""))
                 idx += 1
             jail_opts.append(("-", "", ""))
             for j in systems:
@@ -599,7 +598,7 @@ def menu_fail2ban(state: AppState, plugin) -> None:
         elif choice == "6":
             clear()
             jail_opts = []
-            proxies = _PROXY_JAILS
+            proxies = _PROTOCOL_JAILS
             systems = _SYSTEM_JAILS
             all_jails = proxies + systems
             
@@ -607,7 +606,7 @@ def menu_fail2ban(state: AppState, plugin) -> None:
             for j in proxies:
                 en = plugin.jail_options(state).get(j, {}).get("enabled", "false") == "true"
                 state_str = f"{GREEN}вкл{NC}" if en else f"{DIM}выкл{NC}"
-                jail_opts.append((str(idx), f"{CYAN}[Прокси]{NC} {j} [{state_str}]", ""))
+                jail_opts.append((str(idx), f"{CYAN}[Протокол]{NC} {j} [{state_str}]", ""))
                 idx += 1
             jail_opts.append(("-", "", ""))
             for j in systems:
@@ -626,9 +625,6 @@ def menu_fail2ban(state: AppState, plugin) -> None:
             cur_en = plugin.jail_options(state).get(jail, {}).get("enabled", "false") == "true"
             new_en = not cur_en
             required_protocol = {
-                "hydra-anytls": "anytls",
-                "hydra-trusttunnel": "trusttunnel",
-                "hydra-naive": "naive",
                 "hydra-awg": "amneziawg",
             }.get(jail)
             if new_en and required_protocol:

@@ -16,8 +16,6 @@ F2B_BIN = Path("/usr/bin/fail2ban-client")
 JAIL_DIR = Path("/etc/fail2ban/jail.d")
 FILTER_DIR = Path("/etc/fail2ban/filter.d")
 F2B_LOG = Path("/var/log/fail2ban.log")
-NAIVE_LOG = Path("/var/log/caddy-naive/access.log")
-CADDY_DECOY_LOG = Path("/var/log/caddy-l4/decoy-access.log")
 AWG_DEBUG_SERVICE = Path("/etc/systemd/system/hydra-awg-fail2ban-debug.service")
 AWG_DYNAMIC_DEBUG_PATHS = (
     Path("/sys/kernel/debug/dynamic_debug/control"),
@@ -80,9 +78,9 @@ class Fail2banPlugin(BasePlugin):
     last_error = ""
     meta = PluginMeta(
         name="fail2ban",
-        description="Fail2ban: защита SSH и прокси от перебора аутентификации",
+        description="Fail2ban: защита SSH, AWG и системных сервисов",
         category=PluginCategory.SECURITY,
-        version="2.2.0",
+        version="2.3.0",
     )
 
     def install(self) -> bool:
@@ -118,30 +116,10 @@ class Fail2banPlugin(BasePlugin):
 
     @staticmethod
     def _filters() -> dict[str, str]:
-        # Only authentication failures with a trustworthy source address are
-        # matched. Generic "process connection" errors include upstream and
-        # client network failures and must never be used as ban events.
+        # Only sources that expose the real public peer before a local reverse
+        # proxy are eligible. TLS transports behind Caddy deliberately rely on
+        # strong generated credentials and probe-resistant decoy sites instead.
         return {
-            "hydra-anytls": r"""[Definition]
-failregex = ^.*inbound/anytls\[[^]]+\]:\s+process connection from \[?(?:::ffff:)?<HOST>\]?:\d+:\s+unknown user password(?:\s*:\s*fallback disabled)?\s*$
-ignoreregex =
-""",
-            # TCP is terminated by Caddy. Its 407 access entry retains the
-            # original peer while sing-box necessarily sees the HTTP proxy.
-            "hydra-trusttunnel": r"""[Definition]
-failregex = ^.*"remote_ip"\s*:\s*"<HOST>".*"status"\s*:\s*407(?:\D|$).*$
-            ^.*"status"\s*:\s*407(?:\D|$).*"remote_ip"\s*:\s*"<HOST>".*$
-ignoreregex =
-""",
-            "hydra-trusttunnel-quic": r"""[Definition]
-failregex = ^.*inbound/trusttunnel\[[^]]+\]:\s+process connection from \[?(?:::ffff:)?<HOST>\]?:\d+:\s+authorization failed\s*$
-ignoreregex =
-""",
-            "hydra-naive": r"""[Definition]
-failregex = ^.*"remote_ip"\s*:\s*"<HOST>".*"status"\s*:\s*407(?:\D|$).*$
-            ^.*"status"\s*:\s*407(?:\D|$).*"remote_ip"\s*:\s*"<HOST>".*$
-ignoreregex =
-""",
             "hydra-awg": r"""[Definition]
 failregex = ^.*amneziawg:\s+awg[01]:\s+Unknown message from \[?<HOST>\]?:\d+ encountered, packet dropped\s*$
             ^.*amneziawg:\s+awg[01]:\s+Invalid MAC of handshake, dropping packet from \[?<HOST>\]?:\d+\s*$
@@ -160,18 +138,6 @@ ignoreregex =
             return False
         protocol = state.protocols.get(name)
         return bool(protocol and protocol.enabled)
-
-    @staticmethod
-    def _protocol_port(state: AppState | None, name: str, fallback: int) -> str:
-        if state is not None:
-            protocol = state.protocols.get(name)
-            try:
-                port = int(protocol.port or 0) if protocol else 0
-            except (TypeError, ValueError):
-                port = 0
-            if 1 <= port <= 65535:
-                return str(port)
-        return str(fallback)
 
     @staticmethod
     def _awg_ports(state: AppState | None) -> str:
@@ -201,51 +167,9 @@ ignoreregex =
         return ",".join(str(port) for port in sorted(ports))
 
     def jail_options(self, state: AppState | None) -> dict[str, dict[str, str]]:
-        anytls = self._protocol_enabled(state, "anytls")
-        trusttunnel = self._protocol_enabled(state, "trusttunnel")
-        trusttunnel_transport = "tcp"
-        if trusttunnel and state is not None:
-            value = state.protocols["trusttunnel"].config.get("transport", "tcp")
-            if value in ("tcp", "quic", "both"):
-                trusttunnel_transport = value
-        trusttunnel_tcp = trusttunnel and trusttunnel_transport in ("tcp", "both")
-        trusttunnel_quic = trusttunnel and trusttunnel_transport in ("quic", "both")
-        naive = self._protocol_enabled(state, "naive")
         awg = self._protocol_enabled(state, "amneziawg")
 
         jails: dict[str, dict[str, str]] = {
-            "hydra-anytls": {
-                "enabled": str(anytls).lower(),
-                "filter": "hydra-anytls",
-                "backend": "systemd",
-                "journalmatch": "_SYSTEMD_UNIT=sing-box.service",
-                "port": self._protocol_port(state, "anytls", 443),
-                "maxretry": "4", "findtime": "300", "bantime": "3600",
-            },
-            "hydra-trusttunnel": {
-                "enabled": str(trusttunnel_tcp).lower(),
-                "filter": "hydra-trusttunnel",
-                "backend": "auto",
-                "logpath": str(CADDY_DECOY_LOG),
-                "port": self._protocol_port(state, "trusttunnel", 443),
-                "maxretry": "4", "findtime": "300", "bantime": "3600",
-            },
-            "hydra-trusttunnel-quic": {
-                "enabled": str(trusttunnel_quic).lower(),
-                "filter": "hydra-trusttunnel-quic",
-                "backend": "systemd",
-                "journalmatch": "_SYSTEMD_UNIT=sing-box.service",
-                "port": self._protocol_port(state, "trusttunnel", 443),
-                "maxretry": "4", "findtime": "300", "bantime": "3600",
-            },
-            "hydra-naive": {
-                "enabled": str(naive).lower(),
-                "filter": "hydra-naive",
-                "backend": "auto",
-                "logpath": "/var/log/caddy-naive/access.log",
-                "port": self._protocol_port(state, "naive", 443),
-                "maxretry": "5", "findtime": "300", "bantime": "7200",
-            },
             "hydra-sshd": {
                 "enabled": "true",
                 "filter": "sshd",
@@ -299,25 +223,10 @@ ignoreregex =
                             candidate = str(value)
                             if candidate.isdigit() and int(candidate) > 0:
                                 jails[jail][option] = candidate
-                # Before 2.2 TrustTunnel TCP and QUIC shared one jail. Preserve
-                # its timing overrides for the newly split QUIC jail.
-                legacy_tt = overrides.get("hydra-trusttunnel")
-                if (
-                    "hydra-trusttunnel-quic" not in overrides
-                    and isinstance(legacy_tt, dict)
-                ):
-                    for option in ("bantime", "findtime", "maxretry"):
-                        candidate = str(legacy_tt.get(option, ""))
-                        if candidate.isdigit() and int(candidate) > 0:
-                            jails["hydra-trusttunnel-quic"][option] = candidate
 
         # Manual overrides cannot activate a jail whose backing protocol is
         # disabled or whose required file is absent.
         availability = {
-            "hydra-anytls": anytls,
-            "hydra-trusttunnel": trusttunnel_tcp,
-            "hydra-trusttunnel-quic": trusttunnel_quic,
-            "hydra-naive": naive,
             "hydra-awg": awg,
         }
         for jail, available in availability.items():
@@ -380,29 +289,36 @@ ignoreregex =
         for name, content in self._filters().items():
             contents[FILTER_DIR / f"{name}.conf"] = content
         jail_options = self.jail_options(state)
-        if jail_options["hydra-naive"]["enabled"] == "true":
-            try:
-                NAIVE_LOG.parent.mkdir(parents=True, exist_ok=True)
-                NAIVE_LOG.touch(exist_ok=True)
-            except OSError as exc:
-                self.last_error = f"Не удалось подготовить лог Naive: {exc}"
-                return False
-        if jail_options["hydra-trusttunnel"]["enabled"] == "true":
-            try:
-                CADDY_DECOY_LOG.parent.mkdir(parents=True, exist_ok=True)
-                CADDY_DECOY_LOG.touch(exist_ok=True)
-            except OSError as exc:
-                self.last_error = f"Не удалось подготовить лог TrustTunnel: {exc}"
-                return False
         for name, options in jail_options.items():
             body = "\n".join(f"{key} = {value}" for key, value in options.items())
             contents[JAIL_DIR / f"{name}.local"] = f"[{name}]\n{body}\n"
 
+        obsolete_paths = tuple(
+            JAIL_DIR / f"{name}.local"
+            for name in (
+                "hydra-anytls", "hydra-trusttunnel",
+                "hydra-trusttunnel-quic", "hydra-naive",
+                "hydra-singbox", "hydra-mieru",
+            )
+        ) + tuple(
+            FILTER_DIR / f"{name}.conf"
+            for name in (
+                "hydra-anytls", "hydra-trusttunnel",
+                "hydra-trusttunnel-quic", "hydra-naive",
+                "sing-box", "awg-invalid", "hydra-mieru",
+            )
+        )
         backups: dict[Path, bytes | None] = {}
         try:
             for path, content in contents.items():
                 backups[path] = path.read_bytes() if path.exists() else None
                 _atomic_write(path, content)
+            # Removed protocol jails must disappear before validation;
+            # otherwise Fail2ban continues loading their old .local files.
+            for path in obsolete_paths:
+                if path not in backups:
+                    backups[path] = path.read_bytes() if path.exists() else None
+                path.unlink(missing_ok=True)
             client = shutil.which("fail2ban-client") or str(F2B_BIN)
             check = _run([client, "-t"], timeout=30, text=True)
             if check.returncode != 0:
@@ -421,21 +337,23 @@ ignoreregex =
                     pass
             return False
 
-        # Remove obsolete Hydra files only after the new configuration passed.
-        for obsolete in (
-            JAIL_DIR / "hydra-singbox.local",
-            FILTER_DIR / "sing-box.conf",
-            FILTER_DIR / "awg-invalid.conf",
-            FILTER_DIR / "hydra-mieru.conf",
-            JAIL_DIR / "hydra-mieru.local",
-        ):
-            obsolete.unlink(missing_ok=True)
         legacy_sshd = JAIL_DIR / "sshd.local"
         try:
             if legacy_sshd.read_text(encoding="utf-8") == "[sshd]\nenabled = false\n":
                 legacy_sshd.unlink()
         except OSError:
             pass
+        if state is not None:
+            config = get_protocol(state, "fail2ban").config
+            overrides = config.get("jails")
+            if isinstance(overrides, dict):
+                for name in (
+                    "hydra-anytls", "hydra-trusttunnel",
+                    "hydra-trusttunnel-quic", "hydra-naive",
+                ):
+                    overrides.pop(name, None)
+                if not overrides:
+                    config.pop("jails", None)
         return True
 
     @staticmethod
