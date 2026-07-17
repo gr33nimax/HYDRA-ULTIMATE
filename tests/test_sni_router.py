@@ -89,11 +89,14 @@ def test_generate_config_two_backends():
     # Check naive route
     naive_route = next(r for r in routes if r.get("match") and r["match"][0].get("tls", {}).get("sni") == ["naive.com"])
     assert naive_route["handle"][0]["upstreams"][0]["dial"] == ["127.0.0.1:10443"]
+    assert naive_route["handle"][0]["upstreams"][0]["local_address"] == ["{l4.conn.remote_addr}"]
 
     # Check anytls route
     anytls_route = next(r for r in routes if r.get("match") and r["match"][0].get("tls", {}).get("sni") == ["anytls.com"])
     # AnyTLS has a subroute to filter out non-HTTP
     assert anytls_route["handle"][1]["handler"] == "subroute"
+    anytls_proxy = anytls_route["handle"][1]["routes"][0]["handle"][0]
+    assert anytls_proxy["upstreams"][0]["local_address"] == ["{l4.conn.remote_addr}"]
 
 
 def test_config_has_sni_rules():
@@ -118,9 +121,13 @@ def test_rebuild_starts_caddy():
     mock_cfg = MagicMock()
     mock_cfg_dir = MagicMock()
     with patch("hydra.core.sni_router.is_installed", return_value=True), \
-         patch("hydra.core.sni_router.CADDY_CFG", mock_cfg), \
-         patch("hydra.core.sni_router.CADDY_CFG_DIR", mock_cfg_dir), \
-         patch("subprocess.run") as mock_run:
+        patch("hydra.core.sni_router.CADDY_CFG", mock_cfg), \
+        patch("hydra.core.sni_router.CADDY_CFG_DIR", mock_cfg_dir), \
+        patch("hydra.core.sni_router.is_active", return_value=True), \
+        patch("hydra.core.sni_router._install_source_service"), \
+        patch("hydra.core.sni_router._install_service", return_value=True), \
+        patch("hydra.core.source_transparency.apply"), \
+        patch("subprocess.run") as mock_run:
         
         mock_run.return_value = MagicMock(returncode=0)
         
@@ -223,9 +230,13 @@ def test_rebuild_runs_caddy_l4_with_only_sub_domain():
     mock_cfg = MagicMock()
     mock_cfg_dir = MagicMock()
     with patch("hydra.core.sni_router.is_installed", return_value=True), \
-         patch("hydra.core.sni_router.CADDY_CFG", mock_cfg), \
-         patch("hydra.core.sni_router.CADDY_CFG_DIR", mock_cfg_dir), \
-         patch("subprocess.run") as mock_run:
+        patch("hydra.core.sni_router.CADDY_CFG", mock_cfg), \
+        patch("hydra.core.sni_router.CADDY_CFG_DIR", mock_cfg_dir), \
+        patch("hydra.core.sni_router.is_active", return_value=True), \
+        patch("hydra.core.sni_router._remove_source_service"), \
+        patch("hydra.core.sni_router._install_service", return_value=True), \
+        patch("hydra.core.source_transparency.clear"), \
+        patch("subprocess.run") as mock_run:
         
         mock_run.return_value = MagicMock(returncode=0)
         assert rebuild(s) is True

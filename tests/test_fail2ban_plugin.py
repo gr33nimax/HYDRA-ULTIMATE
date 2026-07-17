@@ -19,7 +19,7 @@ def test_plugin_meta():
     p = Fail2banPlugin()
     assert p.meta.name == "fail2ban"
     assert p.meta.category == PluginCategory.SECURITY
-    assert p.meta.version == "2.1.0"
+    assert p.meta.version == "2.2.0"
 
 
 def test_configure_returns_empty_fragment():
@@ -108,12 +108,57 @@ def test_write_jails_with_whitelist():
 def test_proxy_filters_only_match_authentication_failures():
     filters = Fail2banPlugin._filters()
     assert "unknown user password" in filters["hydra-anytls"]
-    assert "authorization failed" in filters["hydra-trusttunnel"]
+    assert '"status"\\s*:\\s*407' in filters["hydra-trusttunnel"]
+    assert "authorization failed" in filters["hydra-trusttunnel-quic"]
     assert '"status"\\s*:\\s*407' in filters["hydra-naive"]
     assert "401|403" not in filters["hydra-naive"]
     assert "Unknown message from" in filters["hydra-awg"]
     assert "Invalid MAC of handshake" in filters["hydra-awg"]
     assert "tproxy" not in filters["hydra-awg"].lower()
+
+
+def test_trusttunnel_tcp_and_quic_use_separate_log_sources():
+    p = Fail2banPlugin()
+    state = _make_state()
+    state.protocols["trusttunnel"] = PluginState(
+        enabled=True, port=443, config={"transport": "both"},
+    )
+
+    jails = p.jail_options(state)
+    assert jails["hydra-trusttunnel"]["enabled"] == "true"
+    assert jails["hydra-trusttunnel"]["logpath"].endswith("decoy-access.log")
+    assert jails["hydra-trusttunnel-quic"]["enabled"] == "true"
+    assert jails["hydra-trusttunnel-quic"]["backend"] == "systemd"
+
+
+def test_trusttunnel_manual_override_cannot_enable_wrong_transport():
+    p = Fail2banPlugin()
+    state = _make_state()
+    state.protocols["trusttunnel"] = PluginState(
+        enabled=True, port=443, config={"transport": "quic"},
+    )
+    state.protocols["fail2ban"].config["jails"] = {
+        "hydra-trusttunnel": {"enabled": True},
+    }
+
+    jails = p.jail_options(state)
+    assert jails["hydra-trusttunnel"]["enabled"] == "false"
+    assert jails["hydra-trusttunnel-quic"]["enabled"] == "true"
+
+
+def test_trusttunnel_legacy_timings_are_copied_to_quic_jail():
+    p = Fail2banPlugin()
+    state = _make_state()
+    state.protocols["trusttunnel"] = PluginState(
+        enabled=True, port=443, config={"transport": "both"},
+    )
+    state.protocols["fail2ban"].config["jails"] = {
+        "hydra-trusttunnel": {"bantime": "9000", "maxretry": "7"},
+    }
+
+    quic = p.jail_options(state)["hydra-trusttunnel-quic"]
+    assert quic["bantime"] == "9000"
+    assert quic["maxretry"] == "7"
 
 
 def test_jail_overrides_persist_but_cannot_enable_disabled_protocol():

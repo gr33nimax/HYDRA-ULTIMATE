@@ -19,7 +19,10 @@ from hydra.ui.tui import (
 )
 
 _F2B_LOG = Path("/var/log/fail2ban.log")
-_PROXY_JAILS = ["hydra-anytls", "hydra-trusttunnel", "hydra-naive", "hydra-awg"]
+_PROXY_JAILS = [
+    "hydra-anytls", "hydra-trusttunnel", "hydra-trusttunnel-quic",
+    "hydra-naive", "hydra-awg",
+]
 _SYSTEM_JAILS = ["hydra-sshd", "hydra-recidive", "hydra-portscan"]
 
 _BAN_LINE_RE = re.compile(

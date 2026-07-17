@@ -9,6 +9,7 @@ import json
 import shutil
 import base64
 import subprocess
+import tempfile
 from pathlib import Path
 from hydra.core.state import AppState
 
@@ -19,7 +20,11 @@ CADDY_LOG_DIR = Path("/var/log/caddy-l4")
 DECOY_LOG = CADDY_LOG_DIR / "decoy-access.log"
 SERVICE_NAME = "caddy-l4"
 SERVICE_FILE = Path("/etc/systemd/system/caddy-l4.service")
+SOURCE_SERVICE_NAME = "hydra-caddy-source"
+SOURCE_SERVICE_FILE = Path(f"/etc/systemd/system/{SOURCE_SERVICE_NAME}.service")
 FRONTEND_PORT = 443
+CADDY_L4_VERSION = "42db5690dea199f930a6f08005fe2e4aab10dcc9"
+GO_VERSION = "1.25.1"
 
 _INTERNAL_PORTS = {
     "naive": 10443,       # Caddy HTTP app (forward_proxy + file_server)
@@ -32,6 +37,22 @@ _DECOY_HTTP_PORTS = {
     "anytls": 10801,
     "trusttunnel": 10802,
 }
+
+_SOURCE_PRESERVED_BACKENDS = frozenset({"naive", "anytls", "trusttunnel"})
+
+
+def _proxy_handler(address: str, *, preserve_source: bool = False) -> dict:
+    """Build a Caddy L4 proxy handler.
+
+    ``l4.conn.remote_addr`` includes the original source port and is expanded
+    for every connection by current caddy-l4 builds.  Binding the loopback
+    upstream socket to it makes protocol authentication logs usable by
+    Fail2ban; source_transparency routes the backend replies back to Caddy.
+    """
+    upstream = {"dial": [address]}
+    if preserve_source:
+        upstream["local_address"] = ["{l4.conn.remote_addr}"]
+    return {"handler": "proxy", "upstreams": [upstream]}
 
 def _hash_password_caddy(password: str) -> str:
     """Uses Caddy's built-in command to generate a bcrypt password hash."""
@@ -223,7 +244,7 @@ def is_installed() -> bool:
 
 
 def _ensure_modern_go() -> bool:
-    """Ensures a Go compiler version >= 1.21 is installed.
+    """Ensures a Go compiler version compatible with pinned Caddy L4.
 
     If not, downloads and installs the official Go binary.
     """
@@ -239,40 +260,60 @@ def _ensure_modern_go() -> bool:
                 if len(parts) >= 3 and parts[2].startswith("go"):
                     ver_str = parts[2][2:]
                     ver_parts = [int(x) for x in ver_str.split(".") if x.isdigit()]
-                    if ver_parts and ver_parts[0] >= 1 and (len(ver_parts) < 2 or ver_parts[1] >= 21):
+                    if ver_parts and tuple((ver_parts + [0, 0])[:2]) >= (1, 25):
                         return True
         except Exception:
             pass
 
-    print("  Modern Go compiler (>= 1.21) not found. Installing official Go 1.22...")
-    # Clean up old install
-    subprocess.run(["rm", "-rf", "/usr/local/go"], capture_output=True)
-
-    # Download Go tarball
-    go_tar = Path("/tmp/go.tar.gz")
+    print(f"  Modern Go compiler (>= 1.25) not found. Installing official Go {GO_VERSION}...")
+    # Download and validate the replacement before moving the existing Go
+    # installation. The prior tree is retained as a recoverable backup.
+    go_tar = Path(f"/tmp/hydra-go-{os.getpid()}.tar.gz")
     from hydra.utils.net import detect_arch
     arch = detect_arch()
     go_arch = arch if arch in ("amd64", "arm64") else "amd64"
-    go_url = f"https://go.dev/dl/go1.22.5.linux-{go_arch}.tar.gz"
+    go_url = f"https://go.dev/dl/go{GO_VERSION}.linux-{go_arch}.tar.gz"
 
     from hydra.utils.downloader import download
     if download(go_url, go_tar):
-        print("  Extracting Go compiler to /usr/local/go...")
+        extract_root = Path(tempfile.mkdtemp(prefix="hydra-go-", dir="/tmp"))
+        current_go = Path("/usr/local/go")
+        backup_go = Path(f"/usr/local/go.hydra-previous-{os.getpid()}")
         try:
-            subprocess.run(["tar", "-C", "/usr/local", "-xzf", str(go_tar)], capture_output=True)
+            extracted = subprocess.run(
+                ["tar", "-C", str(extract_root), "-xzf", str(go_tar)],
+                capture_output=True,
+            )
+            candidate = extract_root / "go"
+            if extracted.returncode != 0 or not (candidate / "bin" / "go").exists():
+                return False
+            if current_go.exists():
+                shutil.move(str(current_go), str(backup_go))
+            shutil.move(str(candidate), str(current_go))
             os.environ["PATH"] = f"/usr/local/go/bin:{os.environ.get('PATH', '')}"
-            return True
+            check = subprocess.run(
+                [str(current_go / "bin" / "go"), "version"],
+                capture_output=True, text=True,
+            )
+            if check.returncode == 0 and f"go{GO_VERSION}" in check.stdout:
+                return True
+            if current_go.exists():
+                shutil.move(str(current_go), str(extract_root / "failed-go"))
+            if backup_go.exists():
+                shutil.move(str(backup_go), str(current_go))
         except Exception as e:
             print(f"  Failed to extract Go: {e}")
+            if not current_go.exists() and backup_go.exists():
+                shutil.move(str(backup_go), str(current_go))
         finally:
-            if go_tar.exists():
-                go_tar.unlink()
+            go_tar.unlink(missing_ok=True)
+            shutil.rmtree(extract_root, ignore_errors=True)
     return False
 
 
-def install(state: AppState | None = None) -> bool:
+def install(state: AppState | None = None, *, force: bool = False) -> bool:
     """Builds and installs caddy-l4 with optional forwardproxy using xcaddy."""
-    if is_installed():
+    if is_installed() and not force:
         return True
 
     # Определяем, нужен ли forwardproxy-naive модуль
@@ -326,7 +367,12 @@ def install(state: AppState | None = None) -> bool:
         xcaddy_bin = shutil.which("xcaddy") or "xcaddy"
 
     # Build Caddy с УСЛОВНЫМ набором модулей
-    build_args = [xcaddy_bin, "build", "--with", "github.com/mholt/caddy-l4"]
+    pending_binary = CADDY_BIN.with_suffix(".pending")
+    pending_binary.unlink(missing_ok=True)
+    build_args = [
+        xcaddy_bin, "build", "--with",
+        f"github.com/mholt/caddy-l4@{CADDY_L4_VERSION}",
+    ]
     
     if need_naive_fp:
         build_args += [
@@ -334,7 +380,7 @@ def install(state: AppState | None = None) -> bool:
             "github.com/caddyserver/forwardproxy@caddy2=github.com/Michaol/forwardproxy-naive@caddy2",
         ]
     
-    build_args += ["--output", str(CADDY_BIN)]
+    build_args += ["--output", str(pending_binary)]
     
     r = subprocess.run(build_args, capture_output=True, text=True, env=env)
 
@@ -342,9 +388,9 @@ def install(state: AppState | None = None) -> bool:
         # Fallback: попробовать без naive-форка
         build_args_fallback = [
             xcaddy_bin, "build",
-            "--with", "github.com/mholt/caddy-l4",
+            "--with", f"github.com/mholt/caddy-l4@{CADDY_L4_VERSION}",
             "--with", "github.com/caddyserver/forwardproxy@caddy2",
-            "--output", str(CADDY_BIN)
+            "--output", str(pending_binary)
         ]
         r = subprocess.run(build_args_fallback, capture_output=True, text=True, env=env)
 
@@ -352,16 +398,29 @@ def install(state: AppState | None = None) -> bool:
         # Fallback 2: вообще без forwardproxy
         r = subprocess.run([
             xcaddy_bin, "build",
-            "--with", "github.com/mholt/caddy-l4",
-            "--output", str(CADDY_BIN)
+            "--with", f"github.com/mholt/caddy-l4@{CADDY_L4_VERSION}",
+            "--output", str(pending_binary)
         ], capture_output=True, text=True, env=env)
 
     if r.returncode != 0:
         print(f"  [Ошибка build caddy-l4] Код возврата: {r.returncode}")
         print(f"  Вывод ошибок:\n{r.stderr or r.stdout or ''}")
 
-    if r.returncode == 0 and CADDY_BIN.exists():
-        CADDY_BIN.chmod(0o755)
+    if r.returncode == 0 and pending_binary.exists():
+        modules = subprocess.run(
+            [str(pending_binary), "list-modules"], capture_output=True, text=True,
+        )
+        required = ["layer4.handlers.proxy"]
+        if need_naive_fp:
+            required.append("http.handlers.forward_proxy")
+        if modules.returncode != 0 or any(name not in modules.stdout for name in required):
+            pending_binary.unlink(missing_ok=True)
+            print("  Built Caddy binary is missing required Hydra modules")
+            return False
+        pending_binary.chmod(0o755)
+        if CADDY_BIN.exists():
+            shutil.copy2(CADDY_BIN, CADDY_BIN.with_suffix(".previous"))
+        pending_binary.replace(CADDY_BIN)
         return True
 
     return False
@@ -549,7 +608,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
             l4_routes.append({
                 "match": [{"tls": {"sni": [domain]}}],
                 "handle": [
-                    {"handler": "proxy", "upstreams": [{"dial": [f"127.0.0.1:{port}"]}]}
+                    _proxy_handler(f"127.0.0.1:{port}", preserve_source=True)
                 ]
             })
         elif name == "anytls":
@@ -566,12 +625,12 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                             {
                                 "match": [{"not": [{"http": []}]}],
                                 "handle": [
-                                    {"handler": "proxy", "upstreams": [{"dial": [f"127.0.0.1:{port}"]}]}
+                                    _proxy_handler(f"127.0.0.1:{port}", preserve_source=True)
                                 ]
                             },
                             {
                                 "handle": [
-                                    {"handler": "proxy", "upstreams": [{"dial": [f"127.0.0.1:{decoy_port}"]}]}
+                                    _proxy_handler(f"127.0.0.1:{decoy_port}", preserve_source=True)
                                 ]
                             }
                         ]
@@ -585,7 +644,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                 "match": [{"tls": {"sni": [domain]}}],
                 "handle": [
                     {"handler": "tls"},
-                    {"handler": "proxy", "upstreams": [{"dial": [f"127.0.0.1:{decoy_port}"]}]}
+                    _proxy_handler(f"127.0.0.1:{decoy_port}", preserve_source=True)
                 ]
             })
         elif name == "sub_server":
@@ -593,7 +652,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
             l4_routes.append({
                 "match": [{"tls": {"sni": [domain]}}],
                 "handle": [
-                    {"handler": "proxy", "upstreams": [{"dial": [f"127.0.0.1:{port}"]}]}
+                    _proxy_handler(f"127.0.0.1:{port}")
                 ]
             })
 
@@ -604,7 +663,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
         l4_routes.append({
             "handle": [
                 {"handler": "tls"},
-                {"handler": "proxy", "upstreams": [{"dial": [f"127.0.0.1:{decoy_port}"]}]}
+                _proxy_handler(f"127.0.0.1:{decoy_port}", preserve_source=True)
             ]
         })
     l4_app = {
@@ -627,12 +686,10 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
             raise ValueError(f"QUIC backend {quic_owner} отсутствует в Caddy config")
         quic_routes = [{
             "handle": [
-                {
-                    "handler": "proxy",
-                    "upstreams": [{
-                        "dial": [f"udp/127.0.0.1:{quic_backend['port']}"]
-                    }]
-                }
+                _proxy_handler(
+                    f"udp/127.0.0.1:{quic_backend['port']}",
+                    preserve_source=quic_backend["name"] in _SOURCE_PRESERVED_BACKENDS,
+                )
             ]
         }]
         l4_app["servers"]["quic_mux"] = {
@@ -754,6 +811,98 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
     }
 
 
+def _has_source_preservation(config: dict) -> bool:
+    if isinstance(config, dict):
+        if config.get("local_address") == ["{l4.conn.remote_addr}"]:
+            return True
+        return any(_has_source_preservation(value) for value in config.values())
+    if isinstance(config, list):
+        return any(_has_source_preservation(value) for value in config)
+    return False
+
+
+def _source_preservation_ports(backends: list[dict], quic_owner: str | None) -> tuple[set[int], set[int]]:
+    tcp_ports: set[int] = set()
+    udp_ports: set[int] = set()
+    names = {backend["name"] for backend in backends}
+    if "naive" in names:
+        tcp_ports.add(_INTERNAL_PORTS["naive"])
+    if "anytls" in names:
+        tcp_ports.update((_INTERNAL_PORTS["anytls"], _DECOY_HTTP_PORTS["anytls"]))
+    if "trusttunnel" in names:
+        # TCP terminates at this HTTP server. Its access log supplies the
+        # original address for the TrustTunnel 407 authentication jail.
+        tcp_ports.add(_DECOY_HTTP_PORTS["trusttunnel"])
+    if quic_owner in _SOURCE_PRESERVED_BACKENDS:
+        udp_ports.add(_INTERNAL_PORTS[quic_owner])
+    return tcp_ports, udp_ports
+
+
+def _restore_previous_caddy_binary() -> bool:
+    backup = CADDY_BIN.with_suffix(".previous")
+    if not backup.exists():
+        return False
+    rollback = CADDY_BIN.with_suffix(".failed")
+    try:
+        if CADDY_BIN.exists():
+            CADDY_BIN.replace(rollback)
+        shutil.copy2(backup, CADDY_BIN)
+        CADDY_BIN.chmod(0o755)
+        rollback.unlink(missing_ok=True)
+        return True
+    except OSError:
+        if rollback.exists() and not CADDY_BIN.exists():
+            rollback.replace(CADDY_BIN)
+        return False
+
+
+def _install_source_service(tcp_ports: set[int], udp_ports: set[int]) -> None:
+    tcp = ",".join(str(port) for port in sorted(tcp_ports))
+    udp = ",".join(str(port) for port in sorted(udp_ports))
+    project_root = Path(__file__).resolve().parent.parent.parent
+    unit = f"""[Unit]
+Description=Hydra Caddy source-address reply routing
+After=network-online.target
+Before={SERVICE_NAME}.service
+
+[Service]
+Type=oneshot
+WorkingDirectory={project_root}
+Environment=PYTHONPATH={project_root}
+ExecStart=/usr/bin/python3 -m hydra.core.source_transparency apply --tcp {tcp} --udp {udp}
+ExecStop=/usr/bin/python3 -m hydra.core.source_transparency clear
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+"""
+    SOURCE_SERVICE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SOURCE_SERVICE_FILE.write_text(unit, encoding="utf-8")
+    subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+    result = subprocess.run(
+        ["systemctl", "enable", SOURCE_SERVICE_NAME], capture_output=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("cannot enable persistent Caddy source routing")
+
+
+def _remove_source_service() -> None:
+    subprocess.run(
+        ["systemctl", "disable", "--now", SOURCE_SERVICE_NAME], capture_output=True,
+    )
+    SOURCE_SERVICE_FILE.unlink(missing_ok=True)
+    subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+
+
+def _restore_unit_file(path: Path, content: bytes | None) -> None:
+    if content is None:
+        path.unlink(missing_ok=True)
+    else:
+        rollback = path.with_suffix(path.suffix + ".rollback")
+        rollback.write_bytes(content)
+        rollback.replace(path)
+
+
 def rebuild(state: AppState) -> bool:
     """Rebuilds the Caddy L4 config and reloads/starts the service."""
     # Fail fast before touching files, firewall or services.
@@ -791,19 +940,64 @@ def rebuild(state: AppState) -> bool:
     pending_config.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
     # 4. Validate config
+    upgraded_binary = False
     r = subprocess.run([
         str(CADDY_BIN), "validate", "--config", str(pending_config)
     ], capture_output=True, text=True)
+    if r.returncode != 0 and "local_address" in f"{r.stderr}\n{r.stdout}":
+        print("  Updating Caddy L4 for source-address preservation...")
+        upgraded_binary = install(state=state, force=True)
+        if upgraded_binary:
+            r = subprocess.run([
+                str(CADDY_BIN), "validate", "--config", str(pending_config)
+            ], capture_output=True, text=True)
     if r.returncode != 0:
+        if upgraded_binary:
+            _restore_previous_caddy_binary()
         pending_config.unlink(missing_ok=True)
         print(f"  Caddy L4 config validation error: {r.stderr or r.stdout}")
         return False
+
+    previous_config = CADDY_CFG.read_bytes() if CADDY_CFG.exists() else None
+    previous_caddy_unit = SERVICE_FILE.read_bytes() if SERVICE_FILE.exists() else None
+    previous_source_unit = SOURCE_SERVICE_FILE.read_bytes() if SOURCE_SERVICE_FILE.exists() else None
+    previous_transparency = False
+    if previous_config is not None:
+        try:
+            previous_transparency = _has_source_preservation(json.loads(previous_config))
+        except (TypeError, ValueError):
+            pass
+
+    # Source routing must exist before Caddy opens a non-local backend socket.
+    from hydra.core import source_transparency
+    tcp_ports, udp_ports = _source_preservation_ports(backends, quic_owner)
+    try:
+        if tcp_ports or udp_ports:
+            source_transparency.apply(tcp_ports, udp_ports)
+            _install_source_service(tcp_ports, udp_ports)
+        else:
+            _remove_source_service()
+            source_transparency.clear()
+        if not _install_service():
+            raise RuntimeError("cannot install Caddy L4 systemd unit")
+    except Exception as exc:
+        if upgraded_binary:
+            _restore_previous_caddy_binary()
+        _restore_unit_file(SERVICE_FILE, previous_caddy_unit)
+        _restore_unit_file(SOURCE_SERVICE_FILE, previous_source_unit)
+        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+        if not previous_transparency:
+            _remove_source_service()
+            source_transparency.clear()
+        else:
+            subprocess.run(["systemctl", "restart", SOURCE_SERVICE_NAME], capture_output=True)
+        pending_config.unlink(missing_ok=True)
+        print(f"  Caddy source-preservation routing error: {exc}")
+        return False
+
     pending_config.replace(CADDY_CFG)
 
-    # 5. Write systemd service file
-    _install_service()
-
-    # 6. Apply block-firewall rules for loopback isolation
+    # 5. Apply block-firewall rules for loopback isolation
     try:
         for b in backends:
             port = b["port"]
@@ -830,7 +1024,33 @@ def rebuild(state: AppState) -> bool:
     # 7. Enable and reload/restart service
     subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
     r = subprocess.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
-    return r.returncode == 0
+    if r.returncode == 0 and is_active():
+        return True
+
+    # A valid JSON configuration can still fail at runtime (for example due to
+    # kernel routing support). Restore the exact prior Caddy config and service.
+    try:
+        if previous_config is None:
+            CADDY_CFG.unlink(missing_ok=True)
+        else:
+            rollback = CADDY_CFG.with_suffix(".json.rollback")
+            rollback.write_bytes(previous_config)
+            rollback.replace(CADDY_CFG)
+        subprocess.run(["systemctl", "restart", SERVICE_NAME], capture_output=True)
+    finally:
+        _restore_unit_file(SERVICE_FILE, previous_caddy_unit)
+        _restore_unit_file(SOURCE_SERVICE_FILE, previous_source_unit)
+        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+        if upgraded_binary:
+            _restore_previous_caddy_binary()
+        if not previous_transparency:
+            _remove_source_service()
+            source_transparency.clear()
+        else:
+            subprocess.run(["systemctl", "restart", SOURCE_SERVICE_NAME], capture_output=True)
+        if previous_config is not None:
+            subprocess.run(["systemctl", "restart", SERVICE_NAME], capture_output=True)
+    return False
 
 
 def stop() -> None:
@@ -848,6 +1068,12 @@ def stop() -> None:
             subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(decoy_port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
     except Exception:
         pass
+    try:
+        _remove_source_service()
+        from hydra.core import source_transparency
+        source_transparency.clear()
+    except Exception:
+        pass
 
 
 def uninstall_haproxy() -> None:
@@ -862,12 +1088,13 @@ def uninstall_haproxy() -> None:
         pass
 
 
-def _install_service() -> None:
+def _install_service() -> bool:
     """Generates the systemd unit file for caddy-l4."""
     unit_content = f"""[Unit]
 Description=Caddy L4 (TLS multiplexer + decoy)
-After=network-online.target sing-box.service
+After=network-online.target sing-box.service {SOURCE_SERVICE_NAME}.service
 Wants=network-online.target
+Requires={SOURCE_SERVICE_NAME}.service
 
 [Service]
 Type=notify
@@ -886,6 +1113,7 @@ WantedBy=multi-user.target
     try:
         SERVICE_FILE.parent.mkdir(parents=True, exist_ok=True)
         SERVICE_FILE.write_text(unit_content, encoding="utf-8")
-        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+        result = subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+        return result.returncode == 0
     except OSError:
-        pass
+        return False
