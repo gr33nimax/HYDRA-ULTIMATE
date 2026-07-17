@@ -1,4 +1,5 @@
 import base64
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -137,3 +138,62 @@ def test_auto_discovery_rejects_multiple_yaml_files(tmp_path):
     (tmp_path / "two.yml").write_text(_yaml(), encoding="utf-8")
     with pytest.raises(ClashImportError, match="несколько YAML-файлов"):
         load_or_refresh_warp_bundle(tmp_path / "ultimate.json")
+
+
+def test_imports_rule_provider_metadata(tmp_path):
+    source = tmp_path / "rules.yaml"
+    source.write_text(_yaml() + """
+rule-providers:
+  youtube:
+    type: http
+    behavior: classical
+    url: https://example.com/youtube.yaml
+    interval: 86400
+  private:
+    type: http
+    behavior: domain
+    format: mrs
+    url: https://example.com/private.mrs
+rules:
+  - RULE-SET,youtube,YouTube
+  - RULE-SET,private,DIRECT
+""", encoding="utf-8")
+    bundle = import_clash_warp_bundle(source, tmp_path / "ultimate.json")
+    providers = {item["name"]: item for item in bundle["rule_providers"]}
+    assert providers["youtube"]["supported"] is True
+    assert providers["youtube"]["route_group"] == "YouTube"
+    assert providers["private"]["supported"] is False
+    assert "MRS" in providers["private"]["unsupported_reason"]
+
+
+def test_tui_selected_location_becomes_selector_default(tmp_path):
+    source = tmp_path / "ultimate.yaml"
+    destination = tmp_path / "ultimate.json"
+    source.write_text(_yaml(), encoding="utf-8")
+    bundle = import_clash_warp_bundle(source, destination)
+    second = json.loads(json.dumps(bundle["endpoints"][0]))
+    second["tag"] = "warp_ultimate_second"
+    second["name"] = "Finland"
+    bundle["endpoints"].append(second)
+    destination.write_text(json.dumps(bundle), encoding="utf-8")
+
+    state = AppState()
+    state.protocols["warp"] = PluginState(
+        enabled=True,
+        config={
+            "ultimate_selected_tag": second["tag"],
+            "local_lists": {"test": {"domains": ["example.org"], "ips": []}},
+            "list_targets": {"local:test": "warp_ultimate"},
+        },
+    )
+    profiles = tmp_path / "profiles"
+    profiles.mkdir()
+    with (
+        patch("hydra.plugins.warp.plugin.WARP_ULTIMATE_BUNDLE", destination),
+        patch("hydra.plugins.warp.plugin.WARP_PROFILES_DIR", profiles),
+        patch.object(WarpPlugin, "_load_warp_config", return_value=None),
+        patch.object(WarpPlugin, "_resolve_endpoint_host", return_value="192.0.2.10"),
+    ):
+        fragment = WarpPlugin().configure(state)
+    selector = next(item for item in fragment.outbounds if item["tag"] == "warp_ultimate")
+    assert selector["default"] == second["tag"]

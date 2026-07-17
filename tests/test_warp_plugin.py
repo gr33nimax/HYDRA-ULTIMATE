@@ -120,6 +120,33 @@ invalid_domain_name
     assert set(written_data["russia"]["ips"]) == {"1.1.1.1", "192.168.0.0/16"}
 
 
+@patch("hydra.plugins.warp.plugin.load_or_refresh_warp_bundle")
+@patch("urllib.request.urlopen")
+@patch("hydra.core.state.load_state")
+@patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")
+def test_update_yaml_rule_provider(mock_cache, mock_load_state, mock_urlopen, mock_bundle):
+    state = AppState()
+    state.protocols["warp"] = PluginState(config={"list_targets": {"yaml:youtube": "warp_ultimate"}})
+    mock_load_state.return_value = state
+    mock_bundle.return_value = {"rule_providers": [{
+        "name": "youtube",
+        "behavior": "classical",
+        "format": "yaml",
+        "url": "https://example.com/youtube.yaml",
+        "supported": True,
+    }]}
+    response = MagicMock()
+    response.read.return_value = b"payload:\n  - DOMAIN-SUFFIX,youtube.com\n"
+    mock_urlopen.return_value.__enter__.return_value = response
+    mock_cache.exists.return_value = False
+
+    ok, message = WarpPlugin().update_external_rules()
+    assert ok is True
+    assert "1/1" in message
+    written = json.loads(mock_cache.write_text.call_args[0][0])
+    assert written["yaml:youtube"]["domain_suffix"] == ["youtube.com"]
+
+
 @patch("hydra.plugins.warp.plugin.socket.gethostbyname")
 @patch("hydra.plugins.warp.plugin.WARP_PROFILES_DIR")
 def test_custom_profiles(mock_profiles_dir, mock_gethostbyname, tmp_path):

@@ -19,6 +19,7 @@ WARP_ULTIMATE_SOURCE = WARP_CONFIGS_DIR / "ultimate.yaml"
 WARP_ULTIMATE_BUNDLE = WARP_CONFIGS_DIR / "ultimate.json"
 MAX_CLASH_CONFIG_SIZE = 5 * 1024 * 1024
 MAX_WARP_ENDPOINTS = 256
+SUPPORTED_RULE_BEHAVIORS = frozenset({"classical", "domain", "ipcidr"})
 
 
 class ClashImportError(ValueError):
@@ -131,6 +132,59 @@ def _normalise_proxy(proxy: dict, index: int) -> dict:
     return result
 
 
+def _normalise_rule_providers(data: dict) -> list[dict]:
+    providers = data.get("rule-providers") or {}
+    if not isinstance(providers, dict):
+        raise ClashImportError("rule-providers должен быть объектом")
+
+    route_groups: dict[str, str] = {}
+    for raw_rule in data.get("rules") or []:
+        if not isinstance(raw_rule, str):
+            continue
+        if raw_rule.startswith("RULE-SET,"):
+            parts = [part.strip() for part in raw_rule.split(",")]
+            if len(parts) >= 3:
+                route_groups.setdefault(parts[1], parts[2])
+            continue
+        # Clash logical rule, e.g. AND,((NETWORK,udp),(RULE-SET,discord-ip)),Discord
+        target = raw_rule.rsplit(",", 1)[-1].strip()
+        for provider_name in re.findall(r"RULE-SET,([^,)]+)", raw_rule):
+            route_groups.setdefault(provider_name.strip(), target)
+
+    result = []
+    for name, raw in providers.items():
+        if not isinstance(raw, dict):
+            continue
+        behavior = str(raw.get("behavior", "classical")).lower()
+        provider_format = str(raw.get("format", "yaml")).lower()
+        url = str(raw.get("url", "")).strip()
+        supported = True
+        reason = ""
+        if raw.get("type", "http") != "http":
+            supported, reason = False, "поддерживаются только HTTP providers"
+        elif provider_format == "mrs":
+            supported, reason = False, "бинарный Mihomo MRS пока не поддерживается"
+        elif behavior not in SUPPORTED_RULE_BEHAVIORS:
+            supported, reason = False, f"неподдерживаемый behavior={behavior}"
+        elif not re.match(r"^https?://", url, re.IGNORECASE):
+            supported, reason = False, "отсутствует HTTP(S) URL"
+        try:
+            interval = max(300, int(raw.get("interval", 86400)))
+        except (TypeError, ValueError):
+            interval = 86400
+        result.append({
+            "name": str(name),
+            "behavior": behavior,
+            "format": provider_format,
+            "url": url,
+            "interval": interval,
+            "route_group": route_groups.get(str(name), ""),
+            "supported": supported,
+            "unsupported_reason": reason,
+        })
+    return result
+
+
 def import_clash_warp_bundle(source: Path, destination: Path = WARP_ULTIMATE_BUNDLE) -> dict:
     """Validate *source* and atomically store its WireGuard endpoints as JSON."""
     source = Path(source).expanduser()
@@ -185,13 +239,14 @@ def import_clash_warp_bundle(source: Path, destination: Path = WARP_ULTIMATE_BUN
     canonical_source = source if source_is_managed else destination.with_suffix(".yaml")
 
     bundle = {
-        "version": 1,
+        "version": 2,
         "name": source.stem,
         "source_file": canonical_source.name,
         "source_sha256": source_hash,
         "endpoints": endpoints,
         "skipped_unsupported": skipped,
         "warnings": warnings,
+        "rule_providers": _normalise_rule_providers(data),
     }
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -227,7 +282,7 @@ def load_warp_bundle(path: Path = WARP_ULTIMATE_BUNDLE) -> dict | None:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if data.get("version") != 1 or not isinstance(data.get("endpoints"), list):
+    if data.get("version") != 2 or not isinstance(data.get("endpoints"), list):
         return None
     return data
 

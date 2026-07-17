@@ -64,7 +64,7 @@ class WarpPlugin(BasePlugin):
         name="warp",
         description="Cloudflare WARP: выборочное туннелирование через сеть Cloudflare",
         category=PluginCategory.ENHANCEMENT,
-        version="2.1.0",
+        version="2.2.0",
     )
 
     def install(self) -> bool:
@@ -431,11 +431,14 @@ class WarpPlugin(BasePlugin):
                 destinations.add(tag)
                 ultimate_tags.append(tag)
             if ultimate_tags:
+                selected_tag = ps.config.get("ultimate_selected_tag")
+                if selected_tag not in ultimate_tags:
+                    selected_tag = ultimate_tags[0]
                 outbounds.append({
                     "type": "selector",
                     "tag": "warp_ultimate",
                     "outbounds": ultimate_tags,
-                    "default": ultimate_tags[0],
+                    "default": selected_tag,
                 })
                 destinations.add("warp_ultimate")
             if len(ultimate_tags) > 1:
@@ -490,28 +493,50 @@ class WarpPlugin(BasePlugin):
                 pass
 
         outbound_domains = {}
+        outbound_domain_suffix = {}
+        outbound_domain_keyword = {}
         outbound_ips = {}
+        valid_yaml_keys = {
+            f"yaml:{item.get('name')}" for item in (bundle or {}).get("rule_providers", [])
+            if item.get("supported") and item.get("name")
+        }
 
         for list_key, target in list_targets.items():
             if not target or target == "none" or target not in destinations:
                 continue
+            if list_key.startswith("yaml:") and list_key not in valid_yaml_keys:
+                continue
 
             domains = []
+            domain_suffix = []
+            domain_keyword = []
             ips = []
 
             if list_key.startswith("local:"):
                 list_name = list_key.split(":", 1)[1]
                 local_list = local_lists.get(list_name, {})
-                domains = local_list.get("domains", [])
+                domain_suffix = local_list.get("domains", [])
                 ips = local_list.get("ips", [])
             elif list_key.startswith("ext:"):
                 list_name = list_key.split(":", 1)[1]
                 ext_list = ext_rules.get(list_name, {})
+                domain_suffix = ext_list.get("domain_suffix", ext_list.get("domains", []))
+                domains = ext_list.get("domains_exact", [])
+                domain_keyword = ext_list.get("domain_keyword", [])
+                ips = ext_list.get("ips", [])
+            elif list_key.startswith("yaml:"):
+                ext_list = ext_rules.get(list_key, {})
                 domains = ext_list.get("domains", [])
+                domain_suffix = ext_list.get("domain_suffix", [])
+                domain_keyword = ext_list.get("domain_keyword", [])
                 ips = ext_list.get("ips", [])
 
             if domains:
                 outbound_domains.setdefault(target, []).extend(domains)
+            if domain_suffix:
+                outbound_domain_suffix.setdefault(target, []).extend(domain_suffix)
+            if domain_keyword:
+                outbound_domain_keyword.setdefault(target, []).extend(domain_keyword)
             if ips:
                 outbound_ips.setdefault(target, []).extend(ips)
 
@@ -520,9 +545,19 @@ class WarpPlugin(BasePlugin):
             clean_domains = list(set([d.strip() for d in domains_list if d.strip()]))
             if clean_domains:
                 rules.append({
-                    "domain_suffix": clean_domains,
+                    "domain": clean_domains,
                     "outbound": target,
                 })
+
+        for target, domains_list in outbound_domain_suffix.items():
+            clean_domains = list(set([d.strip() for d in domains_list if d.strip()]))
+            if clean_domains:
+                rules.append({"domain_suffix": clean_domains, "outbound": target})
+
+        for target, keywords in outbound_domain_keyword.items():
+            clean_keywords = list(set([d.strip() for d in keywords if d.strip()]))
+            if clean_keywords:
+                rules.append({"domain_keyword": clean_keywords, "outbound": target})
 
         for target, ips_list in outbound_ips.items():
             clean_ips = list(set([ip.strip() for ip in ips_list if ip.strip()]))
@@ -609,11 +644,14 @@ class WarpPlugin(BasePlugin):
         
         list_targets = ps.config.get("list_targets", {})
         enabled_keys = []
+        enabled_yaml_keys = []
         for k, target in list_targets.items():
             if k.startswith("ext:") and target and target != "none":
                 enabled_keys.append(k.split(":", 1)[1])
+            elif k.startswith("yaml:") and target and target != "none":
+                enabled_yaml_keys.append(k.split(":", 1)[1])
 
-        if not enabled_keys:
+        if not enabled_keys and not enabled_yaml_keys:
             if WARP_EXTERNAL_CACHE.exists():
                 try:
                     WARP_EXTERNAL_CACHE.unlink()
@@ -663,6 +701,39 @@ class WarpPlugin(BasePlugin):
             except Exception as e:
                 errors.append(f"{item['name']}: {e}")
 
+        try:
+            bundle = load_or_refresh_warp_bundle(WARP_ULTIMATE_BUNDLE)
+        except ClashImportError as exc:
+            return False, f"Ошибка Ultimate YAML: {exc}"
+        providers = {
+            item.get("name"): item for item in (bundle or {}).get("rule_providers", [])
+            if item.get("name")
+        }
+        from hydra.plugins.warp.clash_rules import parse_clash_rule_provider
+        for key in enabled_yaml_keys:
+            item = providers.get(key)
+            if not item:
+                errors.append(f"{key}: provider отсутствует в текущем YAML")
+                continue
+            if not item.get("supported"):
+                errors.append(f"{key}: {item.get('unsupported_reason', 'неподдерживаемый provider')}")
+                continue
+            try:
+                req = urllib.request.Request(item["url"], headers={"User-Agent": "HYDRA/2 WARP rules"})
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    raw = response.read(10 * 1024 * 1024 + 1)
+                if len(raw) > 10 * 1024 * 1024:
+                    raise ValueError("provider превышает лимит 10 МБ")
+                parsed = parse_clash_rule_provider(
+                    raw.decode("utf-8", errors="replace"),
+                    item.get("behavior", "classical"),
+                    item.get("format", "yaml"),
+                )
+                downloaded_lists[f"yaml:{key}"] = parsed
+                downloaded_count += 1
+            except Exception as exc:
+                errors.append(f"{key}: {exc}")
+
         if not downloaded_lists:
             status_msg = f"Ошибка обновления списков."
             if errors:
@@ -683,7 +754,12 @@ class WarpPlugin(BasePlugin):
                 existing[key] = downloaded_lists[key]
 
             # Удаляем из кэша списки, которые больше не активны
-            keys_to_delete = [k for k in existing if k != "updated_at" and k not in enabled_keys]
+            valid_enabled_yaml = {
+                f"yaml:{key}" for key in enabled_yaml_keys
+                if providers.get(key, {}).get("supported")
+            }
+            active_cache_keys = set(enabled_keys) | valid_enabled_yaml
+            keys_to_delete = [k for k in existing if k != "updated_at" and k not in active_cache_keys]
             for k in keys_to_delete:
                 existing.pop(k, None)
 
@@ -692,7 +768,14 @@ class WarpPlugin(BasePlugin):
             WARP_EXTERNAL_CACHE.parent.mkdir(parents=True, exist_ok=True)
             WARP_EXTERNAL_CACHE.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
             
-            status_msg = f"Обновлено списков: {downloaded_count}/{len(enabled_keys)}."
+            total_enabled = len(enabled_keys) + len(enabled_yaml_keys)
+            status_msg = f"Обновлено списков: {downloaded_count}/{total_enabled}."
+            skipped_rules = sum(
+                int(item.get("skipped", 0)) for item in downloaded_lists.values()
+                if isinstance(item, dict)
+            )
+            if skipped_rules:
+                status_msg += f" Пропущено неподдерживаемых правил: {skipped_rules}."
             if errors:
                 status_msg += f" Ошибки: {'; '.join(errors)}"
             
