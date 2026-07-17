@@ -102,7 +102,16 @@ def _ensure_policy_rule() -> None:
 
     routes = _run(["ip", "-4", "route", "show", "table", ROUTE_TABLE], text=True)
     if routes.returncode != 0:
-        raise RuntimeError(routes.stderr or f"cannot inspect route table {ROUTE_TABLE}")
+        detail = str(routes.stderr or routes.stdout or "")
+        # Some iproute2 versions return exit code 2 instead of an empty result
+        # when a numeric table has never been created. `ip route replace` below
+        # creates it, so this is not a collision or configuration failure.
+        if "FIB table does not exist" in detail or "ipv4: FIB table does not exist" in detail:
+            routes = subprocess.CompletedProcess(
+                routes.args, 0, stdout="", stderr="",
+            )
+        else:
+            raise RuntimeError(detail or f"cannot inspect route table {ROUTE_TABLE}")
     expected_route = "local 0.0.0.0/0 dev lo"
     if routes.stdout.strip() and expected_route not in routes.stdout:
         raise RuntimeError(f"policy-routing table {ROUTE_TABLE} is already in use")

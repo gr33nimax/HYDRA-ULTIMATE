@@ -41,6 +41,33 @@ def test_apply_writes_persistent_sysctl_and_checks_nft(tmp_path):
     assert ["nft", "-f", "-"] in commands
 
 
+def test_missing_numeric_fib_table_is_created():
+    checked = []
+
+    def fake_run(command, **kwargs):
+        if command[:4] == ["ip", "-4", "rule", "show"]:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        if command[:5] == ["ip", "-4", "route", "show", "table"]:
+            return MagicMock(
+                args=command,
+                returncode=2,
+                stdout="",
+                stderr="Error: ipv4: FIB table does not exist.\nDump terminated\n",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    def fake_checked(command, **kwargs):
+        checked.append(command)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch.object(source, "_run", side_effect=fake_run), \
+         patch.object(source, "_run_checked", side_effect=fake_checked):
+        source._ensure_policy_rule()
+
+    assert any(command[:4] == ["ip", "-4", "rule", "add"] for command in checked)
+    assert any(command[:4] == ["ip", "-4", "route", "replace"] for command in checked)
+
+
 def test_clear_restores_baseline(tmp_path):
     sysctl_file = tmp_path / "sysctl.conf"
     state_file = tmp_path / "state.json"
