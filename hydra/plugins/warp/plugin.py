@@ -64,7 +64,7 @@ class WarpPlugin(BasePlugin):
         name="warp",
         description="Cloudflare WARP: выборочное туннелирование через сеть Cloudflare",
         category=PluginCategory.ENHANCEMENT,
-        version="2.2.0",
+        version="2.3.0",
     )
 
     def install(self) -> bool:
