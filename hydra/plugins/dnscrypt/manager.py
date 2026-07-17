@@ -62,24 +62,6 @@ def _apply_server_names(names: list[str]) -> bool:
         return False
 
 
-def _fetch_resolver_list() -> tuple[list[str], bool]:
-    def _parse_names(stdout: str) -> list[str]:
-        names = []
-        seen = set()
-        for line in stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            if line.startswith("[") or line.startswith("#"):
-                continue
-            name = line.split()[0]
-            if re.match(r'^\d', name):
-                continue
-            if name not in seen:
-                seen.add(name)
-                names.append(name)
-        return names
-
 def _find_cache_dir() -> str:
     for p in [
         "/var/cache/dnscrypt-proxy",

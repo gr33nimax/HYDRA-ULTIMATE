@@ -11,6 +11,7 @@ WARP обеспечивает выборочный исходящий трафи
 from __future__ import annotations
 
 import json
+import ipaddress
 import re
 import socket
 import subprocess
@@ -18,6 +19,7 @@ from pathlib import Path
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
 from hydra.core.state import AppState, PluginState
+from hydra.plugins.warp.clash_import import WARP_ULTIMATE_BUNDLE, load_warp_bundle
 
 WGCF_BIN = Path("/usr/local/bin/wgcf")
 WGCF_PROFILE = Path("/etc/wireguard/wgcf-profile.conf")
@@ -110,6 +112,7 @@ class WarpPlugin(BasePlugin):
                         f"Stdout: {r.stdout}\nStderr: {r.stderr}\n",
                         encoding="utf-8"
                     )
+                    return False
 
             # Генерация профиля
             r = subprocess.run(
@@ -143,10 +146,8 @@ class WarpPlugin(BasePlugin):
         Path("/etc/wireguard/wgcf-account.toml").unlink(missing_ok=True)
         Path("wgcf-account.toml").unlink(missing_ok=True)
         Path("wgcf-profile.conf").unlink(missing_ok=True)
-        try:
-            WARP_EXTERNAL_CACHE.unlink(missing_ok=True)
-        except Exception:
-            pass
+        # Внешние списки также используются кастомными/Ultimate профилями
+        # и не относятся к жизненному циклу локальной учётной записи WGCF.
         return True
 
     @staticmethod
@@ -223,6 +224,41 @@ class WarpPlugin(BasePlugin):
             return None
         return result
 
+    @staticmethod
+    def _resolve_endpoint_host(host: str) -> str:
+        """Resolve a peer hostname while preserving literal IPv4/IPv6 values."""
+        host = host.strip()
+        if host.startswith("[") and host.endswith("]"):
+            host = host[1:-1]
+        try:
+            return str(ipaddress.ip_address(host))
+        except ValueError:
+            pass
+        try:
+            return socket.gethostbyname(host)
+        except Exception:
+            return host
+
+    @staticmethod
+    def available_destinations() -> list[tuple[str, str]]:
+        """Return route target tags and user-facing names."""
+        result = [("direct", "Прямое подключение")]
+        for path in sorted(WARP_PROFILES_DIR.glob("*.conf")):
+            result.append((f"warp_{path.stem}", path.stem))
+        bundle = load_warp_bundle(WARP_ULTIMATE_BUNDLE)
+        if bundle:
+            endpoints = bundle.get("endpoints", [])
+            if endpoints:
+                result.append(("warp_ultimate", "Ultimate — ручной выбор"))
+            if len(endpoints) > 1:
+                result.append(("warp_ultimate_auto", "Ultimate — самый быстрый"))
+            for endpoint in endpoints:
+                if endpoint.get("tag") and endpoint.get("name"):
+                    result.append((endpoint["tag"], endpoint["name"]))
+        if WGCF_PROFILE.exists():
+            result.append(("warp", "Cloudflare WARP (WGCF)"))
+        return result
+
     def configure(self, state: AppState) -> ConfigFragment:
         """Генерирует Sing-Box outbound/endpoints для WARP и route-правила."""
         WARP_PROFILES_DIR.mkdir(parents=True, exist_ok=True)
@@ -271,7 +307,7 @@ class WarpPlugin(BasePlugin):
         # ── ЗАГРУЗКА ТОЧЕК ВЫХОДА (OUTBOUNDS/ENDPOINTS) ──
         endpoints = []
         outbounds = []
-        destinations = set()
+        destinations = {"direct"}
 
         # 1. Кастомные гео-профили из /etc/hydra/warp_profiles/
         custom_profiles = []
@@ -288,20 +324,23 @@ class WarpPlugin(BasePlugin):
 
         for profile_name, parsed in custom_profiles:
             raw_endpoint = parsed["peer"].get("endpoint", "")
-            if ":" in raw_endpoint:
+            if raw_endpoint.startswith("[") and "]:" in raw_endpoint:
+                host, port_str = raw_endpoint[1:].rsplit("]:", 1)
+            elif ":" in raw_endpoint:
                 host, port_str = raw_endpoint.rsplit(":", 1)
-                try:
-                    port = int(port_str)
-                except ValueError:
-                    port = 2408
             else:
                 host = raw_endpoint
-                port = 2408
-
             try:
-                server_ip = socket.gethostbyname(host)
-            except Exception:
-                server_ip = host
+                port = int(port_str) if raw_endpoint and ":" in raw_endpoint else 2408
+                mtu = int(parsed["interface"].get("mtu", 1280))
+            except ValueError:
+                continue
+
+            private_key = parsed["interface"].get("privatekey", "").strip()
+            public_key = parsed["peer"].get("publickey", "").strip()
+            if not host or not private_key or not public_key or not 1 <= port <= 65535:
+                continue
+            server_ip = self._resolve_endpoint_host(host)
 
             is_amnezia = any(k in parsed["interface"] for k in ["s1", "s2", "jc", "jmin", "jmax", "h1", "h2", "h3", "h4"])
             
@@ -324,13 +363,13 @@ class WarpPlugin(BasePlugin):
                 "type": "wireguard",
                 "tag": ep_tag,
                 "address": addresses,
-                "private_key": parsed["interface"].get("privatekey", ""),
-                "mtu": int(parsed["interface"].get("mtu", 1280)),
+                "private_key": private_key,
+                "mtu": mtu,
                 "peers": [
                     {
                         "address": server_ip,
                         "port": port,
-                        "public_key": parsed["peer"].get("publickey", ""),
+                        "public_key": public_key,
                         "allowed_ips": [ip.strip() for ip in parsed["peer"].get("allowedips", "0.0.0.0/0, ::/0").split(",") if ip.strip()]
                     }
                 ]
@@ -359,15 +398,57 @@ class WarpPlugin(BasePlugin):
                 "outbounds": [ep_tag]
             })
 
-        # 2. Стандартный WGCF (если профиль сгенерирован)
+        # 2. Нормализованный Clash/Mihomo WARP bundle (Ultimate).
+        bundle = load_warp_bundle(WARP_ULTIMATE_BUNDLE)
+        ultimate_tags = []
+        if bundle:
+            for item in bundle.get("endpoints", []):
+                try:
+                    tag = str(item["tag"])
+                    ep_tag = f"{tag}_ep"
+                    peer = dict(item["peer"])
+                    peer["address"] = self._resolve_endpoint_host(str(peer["address"]))
+                    endpoint = {
+                        "type": "wireguard",
+                        "tag": ep_tag,
+                        "address": list(item["address"]),
+                        "private_key": item["private_key"],
+                        "mtu": int(item.get("mtu", 1280)),
+                        "peers": [peer],
+                    }
+                    if item.get("amnezia"):
+                        endpoint["amnezia"] = dict(item["amnezia"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                endpoints.append(endpoint)
+                outbounds.append({"type": "selector", "tag": tag, "outbounds": [ep_tag]})
+                destinations.add(tag)
+                ultimate_tags.append(tag)
+            if ultimate_tags:
+                outbounds.append({
+                    "type": "selector",
+                    "tag": "warp_ultimate",
+                    "outbounds": ultimate_tags,
+                    "default": ultimate_tags[0],
+                })
+                destinations.add("warp_ultimate")
+            if len(ultimate_tags) > 1:
+                outbounds.append({
+                    "type": "urltest",
+                    "tag": "warp_ultimate_auto",
+                    "outbounds": ultimate_tags,
+                    "url": "http://speed.cloudflare.com/",
+                    "interval": "5m",
+                    "tolerance": 50,
+                })
+                destinations.add("warp_ultimate_auto")
+
+        # 3. Стандартный WGCF (если профиль сгенерирован)
         warp_cfg = self._load_warp_config()
         if warp_cfg:
             destinations.add("warp")
             ep_tag = "warp_ep"
-            try:
-                server_ip = socket.gethostbyname("engage.cloudflareclient.com")
-            except Exception:
-                server_ip = "162.159.192.1"
+            server_ip = self._resolve_endpoint_host("engage.cloudflareclient.com")
 
             endpoint = {
                 "type": "wireguard",
@@ -458,7 +539,11 @@ class WarpPlugin(BasePlugin):
         from hydra.core.singbox import is_running as sb_running
         from hydra.core.state import load_state
 
-        installed = WGCF_PROFILE.exists()
+        installed = (
+            WGCF_PROFILE.exists()
+            or any(WARP_PROFILES_DIR.glob("*.conf"))
+            or load_warp_bundle(WARP_ULTIMATE_BUNDLE) is not None
+        )
         enabled = False
         running = False
         

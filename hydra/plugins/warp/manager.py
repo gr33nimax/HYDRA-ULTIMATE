@@ -12,6 +12,10 @@ from hydra.ui.tui import (
 )
 import hydra.core.orchestrator as orchestrator
 from hydra.plugins.warp.plugin import DEFAULT_WARP_DOMAINS, WARP_EXTERNAL_CACHE, WGCF_PROFILE
+from hydra.plugins.warp.clash_import import (
+    ClashImportError, WARP_CONFIGS_DIR, WARP_ULTIMATE_BUNDLE, WARP_ULTIMATE_SOURCE,
+    import_clash_warp_bundle, load_warp_bundle,
+)
 
 
 def _get_external_info() -> tuple[list[str], list[str], str]:
@@ -99,12 +103,10 @@ def menu_warp(state: AppState, plugin) -> None:
         st = plugin.status()
         
         # Определяем доступные точки выхода
-        destinations = ["direct"]
+        destination_options = plugin.available_destinations()
+        destinations = [tag for tag, _label in destination_options]
         custom_profiles = sorted([p.stem for p in WARP_PROFILES_DIR.glob("*.conf")])
-        for p in custom_profiles:
-            destinations.append(f"warp_{p}")
-        if WGCF_PROFILE.exists():
-            destinations.append("warp")
+        ultimate_bundle = load_warp_bundle()
 
         # Читаем списки
         local_lists = ps.config.setdefault("local_lists", {})
@@ -127,6 +129,9 @@ def menu_warp(state: AppState, plugin) -> None:
             
             for p in custom_profiles:
                 status_lines.append(f"  • warp_{p}:       {CYAN}активен (релей){NC}")
+            if ultimate_bundle:
+                endpoint_count = len(ultimate_bundle.get("endpoints", []))
+                status_lines.append(f"  • warp_ultimate:  {MAGENTA}{endpoint_count} точек, ручной/авто выбор{NC}")
 
             status_lines.append("  " + "─" * 45)
 
@@ -205,7 +210,7 @@ def menu_warp(state: AppState, plugin) -> None:
             _menu_rules_lists(state, ps)
 
         elif choice == "3" and (st.installed or custom_profiles):
-            _menu_routing_rules(state, ps, destinations)
+            _menu_routing_rules(state, ps, destination_options)
 
         elif choice == "4":
             _menu_geo_profiles(state, ps)
@@ -573,17 +578,13 @@ def _menu_external_sources_toggle(state: AppState, ps) -> None:
                     orchestrator.apply_config(state)
             else:
                 success(f"Включаем список {EXTERNAL_LISTS[key]['name']}.")
-                from hydra.plugins.warp.plugin import WARP_PROFILES_DIR
-                destinations = ["direct"]
-                custom_profiles = sorted([p.stem for p in WARP_PROFILES_DIR.glob("*.conf")])
-                for p in custom_profiles:
-                    destinations.append(f"warp_{p}")
-                if WGCF_PROFILE.exists():
-                    destinations.append("warp")
+                plugin = __import__("hydra.plugins.warp.plugin").plugins.warp.plugin.WarpPlugin()
+                destination_options = plugin.available_destinations()
+                destinations = [tag for tag, _label in destination_options]
                 
                 opts_dest = []
-                for i, d in enumerate(destinations, start=1):
-                    opts_dest.append((str(i), d, f"Направить трафик на {d}"))
+                for i, (tag, label) in enumerate(destination_options, start=1):
+                    opts_dest.append((str(i), label, f"Направить трафик на {tag}"))
                 
                 d_choice = menu(opts_dest, f"ВЫБЕРИТЕ НАПРАВЛЕНИЕ ДЛЯ {EXTERNAL_LISTS[key]['name'].upper()}")
                 if d_choice.isdigit():
@@ -610,7 +611,7 @@ def _menu_external_sources_toggle(state: AppState, ps) -> None:
 
 
 # ── Вспомогательное меню: Настройка маршрутизации списков ──
-def _menu_routing_rules(state: AppState, ps, destinations: list[str]) -> None:
+def _menu_routing_rules(state: AppState, ps, destination_options: list[tuple[str, str]]) -> None:
     while True:
         clear()
         list_targets = ps.config.setdefault("list_targets", {})
@@ -657,9 +658,10 @@ def _menu_routing_rules(state: AppState, ps, destinations: list[str]) -> None:
                 key, display_name, current_target = active_rules[idx]
                 
                 opts_dest = []
-                for i, d in enumerate(destinations, start=1):
-                    opts_dest.append((str(i), d, f"Направить на {d}"))
-                opts_dest.append((str(len(destinations) + 1), "none (отключить)", "Отключить маршрутизацию этого списка"))
+                destinations = [tag for tag, _label in destination_options]
+                for i, (tag, label) in enumerate(destination_options, start=1):
+                    opts_dest.append((str(i), label, f"Направить на {tag}"))
+                opts_dest.append((str(len(destination_options) + 1), "none (отключить)", "Отключить маршрутизацию этого списка"))
                 opts_dest.append(("0", "Отмена", ""))
                 
                 d_choice = menu(opts_dest, f"НАПРАВЛЕНИЕ ДЛЯ {display_name.upper()}")
@@ -701,18 +703,37 @@ def _menu_routing_rules(state: AppState, ps, destinations: list[str]) -> None:
 def _menu_geo_profiles(state: AppState, ps) -> None:
     from hydra.plugins.warp.plugin import WARP_PROFILES_DIR
     WARP_PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+    WARP_CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        WARP_CONFIGS_DIR.chmod(0o700)
+    except OSError:
+        pass
     
     while True:
         clear()
         
         profiles = sorted([p.stem for p in WARP_PROFILES_DIR.glob("*.conf")])
+        ultimate_bundle = load_warp_bundle()
         list_targets = ps.config.setdefault("list_targets", {})
 
         status_lines = [
             f"  {BOLD}Каталог профилей:{NC} {WARP_PROFILES_DIR}",
-            f"  Для добавления нового релея загрузите .conf файл в этот каталог.",
+            f"  {BOLD}Каталог YAML:{NC}     {WARP_CONFIGS_DIR}",
+            f"  Одиночные профили: .conf; Ultimate: Clash/Mihomo .yaml.",
             "  " + "─" * 60
         ]
+
+        if ultimate_bundle:
+            count = len(ultimate_bundle.get("endpoints", []))
+            skipped = ultimate_bundle.get("skipped_unsupported", 0)
+            status_lines.append(
+                f"  {MAGENTA}Ultimate:{NC} {ultimate_bundle.get('name', 'bundle')} — "
+                f"{count} WARP endpoints" + (f", пропущено: {skipped}" if skipped else "")
+            )
+            status_lines.append("  • warp_ultimate — ручной выбор через Clash API")
+            if count > 1:
+                status_lines.append("  • warp_ultimate_auto — автоматический выбор по задержке")
+            status_lines.append("")
         
         if not profiles:
             status_lines.append(f"  {YELLOW}Нет обнаруженных профилей релеев.{NC}")
@@ -749,17 +770,60 @@ def _menu_geo_profiles(state: AppState, ps) -> None:
                 
         panel("⚙️ УПРАВЛЕНИЕ ПРОФИЛЯМИ РЕЛЕЕВ", status_lines)
         
-        options = []
+        options = [("1", "📦 Импортировать Ultimate YAML", "Установить или обновить набор WARP endpoints из Clash/Mihomo")]
+        if ultimate_bundle:
+            options.append(("2", "🗑️  Удалить Ultimate bundle", "Удалить импортированный набор WARP endpoints"))
         if profiles:
-            options.append(("1", "🗑️  Удалить файл профиля релея", "Удалить .conf файл с диска"))
-        options.append(("2", "💡 Показать инструкцию по установке", "Как получить конфиг и скопировать на сервер"))
+            options.append(("3", "🗑️  Удалить одиночный профиль", "Удалить .conf файл с диска"))
+        options.append(("4", "💡 Показать инструкцию по установке", "Поддерживаемые форматы и установка"))
         options.append(("0", "↩ Назад", ""))
         
         choice = menu(options, "ПРОФИЛИ РЕЛЕЕВ")
         if choice == "0":
             break
             
-        elif choice == "1" and profiles:
+        elif choice == "1":
+            source_raw = prompt("Путь к Clash/Mihomo YAML на сервере", str(WARP_ULTIMATE_SOURCE))
+            if not source_raw.strip():
+                continue
+            if ultimate_bundle and not confirm("Заменить уже установленный Ultimate bundle?", default=False):
+                continue
+            try:
+                bundle = import_clash_warp_bundle(Path(source_raw.strip()))
+            except ClashImportError as exc:
+                error(str(exc))
+            else:
+                valid_targets = {"warp_ultimate", "warp_ultimate_auto"}
+                valid_targets.update(item["tag"] for item in bundle["endpoints"])
+                for key, target in list(list_targets.items()):
+                    if target.startswith("warp_ultimate_") and target not in valid_targets:
+                        list_targets[key] = "none"
+                save_state(state)
+                success(f"Импортировано WARP endpoints: {len(bundle['endpoints'])}.")
+                skipped = bundle.get("skipped_unsupported", 0)
+                if skipped:
+                    warn(f"Пропущено неподдерживаемых Clash proxies: {skipped} (например, MASQUE).")
+                for message in bundle.get("warnings", [])[:5]:
+                    warn(message)
+                if ps.enabled and not orchestrator.apply_config(state):
+                    error("Bundle сохранён, но Sing-Box отклонил итоговый конфиг.")
+                    _show_diagnostic_info()
+            prompt("Нажмите Enter для продолжения")
+
+        elif choice == "2" and ultimate_bundle:
+            if confirm("Удалить Ultimate bundle и отключить связанные маршруты?", default=False):
+                WARP_ULTIMATE_BUNDLE.unlink(missing_ok=True)
+                WARP_ULTIMATE_SOURCE.unlink(missing_ok=True)
+                for key, target in list(list_targets.items()):
+                    if target in ("warp_ultimate", "warp_ultimate_auto") or target.startswith("warp_ultimate_"):
+                        list_targets[key] = "none"
+                save_state(state)
+                success("Ultimate bundle удалён.")
+                if ps.enabled and not orchestrator.apply_config(state):
+                    error("Не удалось применить конфигурацию после удаления.")
+            prompt("Нажмите Enter для продолжения")
+
+        elif choice == "3" and profiles:
             opts_prof = []
             for i, name in enumerate(profiles, start=1):
                 opts_prof.append((str(i), name, f"УДАЛИТЬ {name}.conf"))
@@ -786,26 +850,23 @@ def _menu_geo_profiles(state: AppState, ps) -> None:
                             _show_diagnostic_info()
                 prompt("Нажмите Enter для продолжения")
                     
-        elif choice == "2":
+        elif choice == "4":
             clear()
             lines = [
-                f"  {BOLD}Как настроить гео-WARP релей:{NC}",
+                f"  {BOLD}Ultimate Clash/Mihomo YAML:{NC}",
                 "",
-                "  1. Сгенерируйте профиль через Telegram-бота",
-                f"     {GREEN}@warp_generator_bot{NC} или сайт.",
-                "  2. Скачайте полученный .conf файл",
-                "     (например, 'russia.conf' или 'finland.conf').",
-                "  3. Подключитесь к VPS по SFTP (FileZilla, WinSCP и др.).",
-                f"  4. Скопируйте файл в каталог на сервере:",
-                f"     {GREEN}{WARP_PROFILES_DIR}{NC}",
-                "     Имя файла (без .conf) будет именем релея.",
-                "  5. Свяжите нужные списки правил с этим релеем в меню",
-                "     'Настройка маршрутизации'.",
-                "  6. Включите WARP для применения конфигурации.",
+                f"  1. Скопируйте YAML в {WARP_ULTIMATE_SOURCE}",
+                "     и выберите «Импортировать Ultimate YAML».",
+                "  2. HYDRA извлечёт только proxies типа wireguard.",
+                "  3. Clash TUN, DNS, listeners и rules не импортируются:",
+                "     ими продолжает управлять общий сетевой стек HYDRA.",
+                "  4. Для списка можно выбрать конкретную локацию,",
+                "     warp_ultimate (ручной selector) или",
+                "     warp_ultimate_auto (минимальная задержка).",
                 "",
-                f"  {BOLD}Важно:{NC} Имя файла должно содержать только",
-                "  английские буквы, цифры и дефис.",
-                "  Пример: russia.conf, finland.conf, nl-amsterdam.conf",
+                f"  {BOLD}Одиночные .conf:{NC} по-прежнему поддерживаются в {WARP_PROFILES_DIR}.",
+                "  MASQUE из Clash пока пропускается: его ключевой формат",
+                "  несовместим с профилем MASQUE в sing-box-extended.",
             ]
             panel("ИНСТРУКЦИЯ ПО УСТАНОВКЕ", lines)
             prompt("Нажмите Enter, чтобы вернуться")

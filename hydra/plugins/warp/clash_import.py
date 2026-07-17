@@ -1,0 +1,219 @@
+"""Import the WARP-compatible subset of a Clash/Mihomo configuration.
+
+The source YAML is intentionally not used as the sing-box configuration.  HYDRA
+owns its listeners, DNS and TPROXY rules, so only WireGuard endpoints are
+normalised and persisted here.
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import ipaddress
+import json
+import re
+from pathlib import Path
+
+
+WARP_CONFIGS_DIR = Path("/etc/hydra/warp_configs")
+WARP_ULTIMATE_SOURCE = WARP_CONFIGS_DIR / "ultimate.yaml"
+WARP_ULTIMATE_BUNDLE = WARP_CONFIGS_DIR / "ultimate.json"
+MAX_CLASH_CONFIG_SIZE = 5 * 1024 * 1024
+MAX_WARP_ENDPOINTS = 256
+
+
+class ClashImportError(ValueError):
+    """Raised when a Clash file cannot be safely converted."""
+
+
+def _key(value: object, field: str) -> str:
+    value = str(value or "").strip()
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except Exception as exc:
+        raise ClashImportError(f"{field}: ключ не является корректным base64") from exc
+    if len(decoded) != 32:
+        raise ClashImportError(f"{field}: ожидается 32-байтовый ключ")
+    return value
+
+
+def _addresses(proxy: dict) -> list[str]:
+    result: list[str] = []
+    for field in ("ip", "ipv6"):
+        raw = str(proxy.get(field, "")).strip()
+        if not raw:
+            continue
+        try:
+            value = ipaddress.ip_interface(raw if "/" in raw else raw + ("/128" if ":" in raw else "/32"))
+        except ValueError as exc:
+            raise ClashImportError(f"{field}: некорректный адрес {raw!r}") from exc
+        result.append(str(value))
+    if not result:
+        raise ClashImportError("у WireGuard endpoint отсутствуют ip/ipv6")
+    return result
+
+
+def _allowed_ips(proxy: dict) -> list[str]:
+    values = proxy.get("allowed-ips", ["0.0.0.0/0", "::/0"])
+    if isinstance(values, str):
+        values = [part.strip() for part in values.split(",")]
+    if not isinstance(values, list) or not values:
+        raise ClashImportError("allowed-ips должен быть непустым списком")
+    result = []
+    for raw in values:
+        try:
+            result.append(str(ipaddress.ip_network(str(raw).strip(), strict=False)))
+        except ValueError as exc:
+            raise ClashImportError(f"allowed-ips: некорректная сеть {raw!r}") from exc
+    return result
+
+
+def _amnezia(proxy: dict) -> dict:
+    source = proxy.get("amnezia-wg-option") or {}
+    if not isinstance(source, dict):
+        raise ClashImportError("amnezia-wg-option должен быть объектом")
+    result = {}
+    for key in ("jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4", "itime"):
+        if key in source:
+            try:
+                result[key] = int(source[key])
+            except (TypeError, ValueError) as exc:
+                raise ClashImportError(f"amnezia-wg-option.{key}: ожидается целое число") from exc
+    for key in ("i1", "i2", "i3", "i4", "i5", "j1", "j2", "j3"):
+        value = str(source.get(key, "")).strip()
+        if value:
+            result[key] = value
+    return result
+
+
+def _normalise_proxy(proxy: dict, index: int) -> dict:
+    name = str(proxy.get("name", "")).strip() or f"WARP endpoint {index}"
+    server = str(proxy.get("server", "")).strip()
+    if not server or re.search(r"\s", server):
+        raise ClashImportError(f"{name}: отсутствует или некорректен server")
+    try:
+        port = int(proxy.get("port"))
+        mtu = int(proxy.get("mtu", 1280))
+    except (TypeError, ValueError) as exc:
+        raise ClashImportError(f"{name}: port/mtu должны быть числами") from exc
+    if not 1 <= port <= 65535 or not 576 <= mtu <= 65535:
+        raise ClashImportError(f"{name}: port или mtu вне допустимого диапазона")
+
+    peer = {
+        "address": server,
+        "port": port,
+        "public_key": _key(proxy.get("public-key"), f"{name}.public-key"),
+        "allowed_ips": _allowed_ips(proxy),
+    }
+    reserved = proxy.get("reserved")
+    if reserved is not None:
+        if not isinstance(reserved, list) or len(reserved) != 3:
+            raise ClashImportError(f"{name}: reserved должен содержать три байта")
+        try:
+            reserved = [int(value) for value in reserved]
+        except (TypeError, ValueError) as exc:
+            raise ClashImportError(f"{name}: reserved должен содержать числа") from exc
+        if any(value < 0 or value > 255 for value in reserved):
+            raise ClashImportError(f"{name}: reserved должен содержать байты 0..255")
+        peer["reserved"] = reserved
+
+    identity = hashlib.sha256(f"{name}\0{server}\0{port}".encode("utf-8")).hexdigest()[:10]
+    result = {
+        "tag": f"warp_ultimate_{identity}",
+        "name": name,
+        "address": _addresses(proxy),
+        "private_key": _key(proxy.get("private-key"), f"{name}.private-key"),
+        "mtu": mtu,
+        "peer": peer,
+    }
+    amnezia = _amnezia(proxy)
+    if amnezia:
+        result["amnezia"] = amnezia
+    return result
+
+
+def import_clash_warp_bundle(source: Path, destination: Path = WARP_ULTIMATE_BUNDLE) -> dict:
+    """Validate *source* and atomically store its WireGuard endpoints as JSON."""
+    source = Path(source).expanduser()
+    if not source.is_file():
+        raise ClashImportError(f"файл не найден: {source}")
+    if source.stat().st_size > MAX_CLASH_CONFIG_SIZE:
+        raise ClashImportError("Clash-конфиг слишком большой (лимит 5 МБ)")
+    try:
+        import yaml
+    except ImportError as exc:
+        raise ClashImportError("не установлен PyYAML; переустановите HYDRA или выполните: pip3 install PyYAML") from exc
+    try:
+        source_text = source.read_text(encoding="utf-8")
+        data = yaml.safe_load(source_text)
+    except Exception as exc:
+        raise ClashImportError(f"ошибка разбора YAML: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("proxies"), list):
+        raise ClashImportError("в конфиге отсутствует список proxies")
+
+    wireguard = [item for item in data["proxies"] if isinstance(item, dict) and item.get("type") == "wireguard"]
+    skipped = len(data["proxies"]) - len(wireguard)
+    if not wireguard:
+        raise ClashImportError("в конфиге нет поддерживаемых WireGuard endpoints")
+    if len(wireguard) > MAX_WARP_ENDPOINTS:
+        raise ClashImportError(f"слишком много WireGuard endpoints (лимит {MAX_WARP_ENDPOINTS})")
+
+    endpoints = []
+    errors = []
+    warnings = []
+    for index, proxy in enumerate(wireguard, 1):
+        try:
+            endpoint = _normalise_proxy(proxy, index)
+            endpoints.append(endpoint)
+            named_port = re.search(r":(\d+)\s*$", endpoint["name"])
+            if named_port and int(named_port.group(1)) != endpoint["peer"]["port"]:
+                warnings.append(
+                    f"{endpoint['name']}: в имени указан порт {named_port.group(1)}, "
+                    f"но фактическое поле port={endpoint['peer']['port']}"
+                )
+        except ClashImportError as exc:
+            errors.append(str(exc))
+    if errors:
+        preview = "; ".join(errors[:3])
+        suffix = f"; ещё ошибок: {len(errors) - 3}" if len(errors) > 3 else ""
+        raise ClashImportError(f"импорт отменён, обнаружены некорректные endpoints: {preview}{suffix}")
+
+    bundle = {
+        "version": 1,
+        "name": source.stem,
+        "endpoints": endpoints,
+        "skipped_unsupported": skipped,
+        "warnings": warnings,
+    }
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        destination.parent.chmod(0o700)
+    except OSError:
+        pass
+    tmp = destination.with_suffix(destination.suffix + ".tmp")
+    tmp.write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        tmp.chmod(0o600)
+    except OSError:
+        pass
+    tmp.replace(destination)
+    # Храним рядом исходник: его удобно обновлять вручную, а JSON остаётся
+    # внутренним нормализованным представлением для генератора Sing-Box.
+    canonical_source = destination.with_suffix(".yaml")
+    source_tmp = canonical_source.with_suffix(".yaml.tmp")
+    source_tmp.write_text(source_text, encoding="utf-8")
+    try:
+        source_tmp.chmod(0o600)
+    except OSError:
+        pass
+    source_tmp.replace(canonical_source)
+    return bundle
+
+
+def load_warp_bundle(path: Path = WARP_ULTIMATE_BUNDLE) -> dict | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if data.get("version") != 1 or not isinstance(data.get("endpoints"), list):
+        return None
+    return data

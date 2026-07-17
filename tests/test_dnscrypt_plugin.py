@@ -38,6 +38,7 @@ def test_dnscrypt_install(mock_write_config, mock_run, mock_installed):
     
     # 1. Если уже установлен (должен записать конфиг и запустить службу)
     mock_installed.return_value = True
+    mock_run.return_value = MagicMock(returncode=0)
     assert p.install() is True
     mock_write_config.assert_called_once()
     mock_run.assert_called_once_with(["systemctl", "enable", "--now", "dnscrypt-proxy"], capture_output=True)
@@ -113,6 +114,15 @@ def test_dnscrypt_on_enable_disable(mock_write_config, mock_run):
     assert state.network.dnscrypt_enabled is False
     mock_run.assert_any_call(["systemctl", "stop", "dnscrypt-proxy"], capture_output=True)
     mock_run.assert_any_call(["systemctl", "disable", "dnscrypt-proxy"], capture_output=True)
+
+
+@patch("hydra.plugins.dnscrypt.plugin.subprocess.run")
+@patch("hydra.plugins.dnscrypt.plugin.DNSCryptPlugin._write_default_config")
+@patch("hydra.plugins.dnscrypt.plugin.DNSCRYPT_CONF")
+def test_dnscrypt_enable_preserves_existing_config(mock_conf, mock_write_config, mock_run):
+    mock_conf.exists.return_value = True
+    DNSCryptPlugin().on_enable(AppState())
+    mock_write_config.assert_not_called()
 
 
 def test_get_dnscrypt_bin():
