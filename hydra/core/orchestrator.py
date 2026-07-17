@@ -1,6 +1,7 @@
 """hydra/core/orchestrator.py — единая точка применения конфигурации."""
 from __future__ import annotations
 
+import copy
 import subprocess
 from hydra.core.state import AppState, User, save_state, get_protocol, find_user
 from hydra.core import singbox, nft
@@ -44,13 +45,14 @@ def apply_config(state: AppState) -> bool:
     res = singbox.reload()
 
     # Если мультиплексор нужен, ждем пока sing-box освободит порт 443, и только тогда запускаем caddy-l4
+    mux_ok = True
     if mux_active:
         for _ in range(10):
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 if s.connect_ex(('127.0.0.1', 443)) != 0:
                     break
             time.sleep(0.3)
-        rebuild_mux(state)
+        mux_ok = rebuild_mux(state)
 
     try:
         naive_proto = state.protocols.get("naive")
@@ -72,7 +74,7 @@ def apply_config(state: AppState) -> bool:
     except Exception:
         pass
 
-    return res
+    return bool(res and mux_ok)
 
 
 def _maybe_migrate_haproxy(state: AppState) -> None:
@@ -182,8 +184,9 @@ def enable(state: AppState, name: str) -> bool:
     p = registry.get(name)
     if not p:
         return False
-    p.on_enable(state)
     proto = get_protocol(state, name)
+    previous_proto = copy.deepcopy(proto)
+    p.on_enable(state)
     proto.enabled = True
     if name == "fail2ban":
         state.security.fail2ban_enabled = True
@@ -201,7 +204,26 @@ def enable(state: AppState, name: str) -> bool:
             except Exception:
                 pass
 
-    return apply_config(state)
+    try:
+        applied = apply_config(state)
+    except Exception:
+        if name == "trusttunnel":
+            state.protocols[name] = previous_proto
+            save_state(state)
+            try:
+                apply_config(state)
+            except Exception:
+                pass
+        raise
+
+    if not applied and name == "trusttunnel":
+        state.protocols[name] = previous_proto
+        save_state(state)
+        try:
+            apply_config(state)
+        except Exception:
+            pass
+    return applied
 
 
 def disable(state: AppState, name: str) -> bool:

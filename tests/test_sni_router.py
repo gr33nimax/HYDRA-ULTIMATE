@@ -14,17 +14,27 @@ from hydra.core.sni_router import (
     _generate_config,
     rebuild,
     stop,
+    get_quic_owner,
+    get_quic_owners,
     _INTERNAL_PORTS,
 )
 from hydra.core.state import AppState, PluginState
 
 
-def _state(naive_enabled=False, anytls_enabled=False, trusttunnel_enabled=False, naive_domain="naive.com", anytls_domain="anytls.com", trusttunnel_domain="trusttunnel.com"):
+def _state(naive_enabled=False, anytls_enabled=False, trusttunnel_enabled=False,
+           naive_domain="naive.com", anytls_domain="anytls.com",
+           trusttunnel_domain="trusttunnel.com", naive_network="tcp",
+           trusttunnel_transport="tcp"):
     s = AppState()
     s.network.domain = naive_domain
-    s.protocols["naive"] = PluginState(enabled=naive_enabled)
+    s.protocols["naive"] = PluginState(
+        enabled=naive_enabled, config={"network": naive_network},
+    )
     s.protocols["anytls"] = PluginState(enabled=anytls_enabled, config={"domain": anytls_domain})
-    s.protocols["trusttunnel"] = PluginState(enabled=trusttunnel_enabled, config={"domain": trusttunnel_domain})
+    s.protocols["trusttunnel"] = PluginState(
+        enabled=trusttunnel_enabled,
+        config={"domain": trusttunnel_domain, "transport": trusttunnel_transport},
+    )
     return s
 
 
@@ -140,6 +150,61 @@ def test_internal_ports_unique():
     """All internal ports are unique."""
     ports = list(_INTERNAL_PORTS.values())
     assert len(ports) == len(set(ports))
+
+
+def test_trusttunnel_quic_is_proxied_by_caddy_udp():
+    s = _state(trusttunnel_enabled=True, trusttunnel_transport="quic")
+    backends = [
+        {
+            "name": "trusttunnel", "domain": "trusttunnel.com",
+            "port": 20445, "cert_file": "cert.pem", "key_file": "key.pem",
+            "network_mode": "quic",
+        },
+    ]
+
+    cfg = _generate_config(backends, s)
+
+    quic_server = cfg["apps"]["layer4"]["servers"]["quic_mux"]
+    assert quic_server["listen"] == ["udp/:443"]
+    upstream = quic_server["routes"][0]["handle"][0]["upstreams"][0]
+    assert upstream["dial"] == ["udp/127.0.0.1:20445"]
+
+
+def test_naive_quic_remains_caddy_udp_owner():
+    s = _state(
+        naive_enabled=True, anytls_enabled=True, naive_network="quic",
+    )
+    backends = [
+        {
+            "name": "naive", "domain": "naive.com", "port": 10443,
+            "cert_file": "", "key_file": "", "network_mode": "quic",
+        },
+        {
+            "name": "anytls", "domain": "anytls.com", "port": 20444,
+            "cert_file": "cert.pem", "key_file": "key.pem",
+            "network_mode": "",
+        },
+    ]
+
+    cfg = _generate_config(backends, s)
+
+    upstream = cfg["apps"]["layer4"]["servers"]["quic_mux"]["routes"][0]["handle"][0]["upstreams"][0]
+    assert upstream["dial"] == ["udp/127.0.0.1:10443"]
+
+
+def test_quic_owner_rejects_naive_and_trusttunnel_conflict():
+    s = _state(
+        naive_enabled=True, trusttunnel_enabled=True,
+        naive_network="quic", trusttunnel_transport="both",
+    )
+
+    assert get_quic_owners(s) == ["naive", "trusttunnel"]
+    try:
+        get_quic_owner(s)
+    except ValueError as exc:
+        assert "UDP/443" in str(exc)
+    else:
+        raise AssertionError("QUIC owner conflict was not rejected")
 
 
 def test_needs_mux_with_sub_domain():

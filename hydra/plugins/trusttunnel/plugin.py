@@ -1,6 +1,7 @@
-"""hydra/plugins/trusttunnel/plugin.py — TrustTunnel: HTTP/2-based obfuscated tunnel (sing-box inbound)."""
+"""TrustTunnel transport: HTTP/2 TCP and experimental QUIC via sing-box."""
 from __future__ import annotations
 
+import copy
 import json
 import shutil
 import subprocess
@@ -13,16 +14,18 @@ from hydra.plugins.base import (
 )
 from hydra.core.state import AppState, User
 from hydra.utils.crypto import derive_hex_key
-from hydra.utils.net import public_ip
 
+
+_VALID_TRANSPORTS = {"tcp", "quic", "both"}
+_DEFAULT_TRANSPORT = "tcp"
 
 
 class TrustTunnelPlugin(BasePlugin):
     meta = PluginMeta(
         name="trusttunnel",
-        description="TrustTunnel: HTTP/2 obfuscated tunnel (sing-box inbound)",
+        description="TrustTunnel: HTTP/2 and QUIC obfuscated tunnel (sing-box inbound)",
         category=PluginCategory.TRANSPORT,
-        version="2.0.0",
+        version="2.1.0",
         needs_domain=True,
     )
 
@@ -66,19 +69,41 @@ class TrustTunnelPlugin(BasePlugin):
         if not cert_file or not key_file:
             return ConfigFragment()
 
-        # Порт: через SNI-мультиплексор или напрямую
+        transport = self._transport(ps)
+        if transport in ("quic", "both"):
+            from hydra.core.sni_router import get_quic_owner
+            get_quic_owner(state)
+
+        # TrustTunnel всегда находится за Caddy L4: TCP проходит через HTTP
+        # reverse-proxy, UDP/QUIC — через raw UDP proxy.
         from hydra.core.sni_router import get_effective_port, needs_mux
         listen_port = get_effective_port("trusttunnel", state)
         behind_mux = needs_mux(state)
 
         inbounds = []
 
-        # TCP inbound (HTTP/2)
-        tcp_inbound = {
+        if transport in ("tcp", "both"):
+            inbounds.append(self._build_tcp_inbound(
+                domain, cert_file, key_file, users, listen_port, behind_mux,
+            ))
+
+        if transport in ("quic", "both"):
+            inbounds.append(self._build_quic_inbound(
+                domain, cert_file, key_file, users, listen_port, behind_mux,
+            ))
+
+        return ConfigFragment(inbounds=inbounds)
+
+    @staticmethod
+    def _build_tcp_inbound(domain: str, cert_file: str, key_file: str,
+                           users: list[dict], listen_port: int,
+                           behind_mux: bool) -> dict:
+        return {
             "type": "trusttunnel",
             "tag": "trusttunnel-in",
             "listen": "127.0.0.1" if behind_mux else "::",
             "listen_port": listen_port,
+            "network": "tcp",
             "users": users,
             "tls": {
                 "enabled": True,
@@ -88,9 +113,28 @@ class TrustTunnelPlugin(BasePlugin):
                 "alpn": ["h2"],
             },
         }
-        inbounds.append(tcp_inbound)
 
-        return ConfigFragment(inbounds=inbounds)
+    @staticmethod
+    def _build_quic_inbound(domain: str, cert_file: str, key_file: str,
+                            users: list[dict], listen_port: int,
+                            behind_mux: bool) -> dict:
+        # Проверено для sing-box extended 1.13.14: server-side QUIC выбирается
+        # network=udp; поле quic на inbound не поддерживается.
+        return {
+            "type": "trusttunnel",
+            "tag": "trusttunnel-quic-in",
+            "listen": "127.0.0.1" if behind_mux else "::",
+            "listen_port": listen_port,
+            "network": "udp",
+            "users": users,
+            "tls": {
+                "enabled": True,
+                "server_name": domain,
+                "certificate_path": cert_file,
+                "key_path": key_file,
+                "alpn": ["h3"],
+            },
+        }
 
     def apply(self, state: AppState) -> bool:
         return True
@@ -122,24 +166,21 @@ class TrustTunnelPlugin(BasePlugin):
 
         username = self._derive_username(user)
         password = self._derive_password(user.uuid)
-        server_ip = state.network.server_ip or public_ip()
 
+        transport = self._transport(ps)
+        # Domain is required above; never emit an empty QUIC remote endpoint.
+        server = domain
         outbounds = []
 
-        # TCP outbound
-        tcp_out = {
-            "type": "trusttunnel",
-            "tag": f"trusttunnel-{username}",
-            "server": domain or server_ip,
-            "server_port": 443,
-            "username": username,
-            "password": password,
-            "tls": {
-                "enabled": True,
-                "server_name": domain,
-            },
-        }
-        outbounds.append(tcp_out)
+        if transport in ("tcp", "both"):
+            outbounds.append(self._build_client_outbound(
+                server, domain, username, password, quic=False,
+            ))
+
+        if transport in ("quic", "both"):
+            outbounds.append(self._build_client_outbound(
+                server, domain, username, password, quic=True,
+            ))
 
         direct_out = {"type": "direct", "tag": "direct"}
 
@@ -159,6 +200,28 @@ class TrustTunnelPlugin(BasePlugin):
         }
         return json.dumps(full, indent=2)
 
+    @staticmethod
+    def _build_client_outbound(server: str, domain: str, username: str,
+                               password: str, quic: bool) -> dict:
+        outbound = {
+            "type": "trusttunnel",
+            "tag": f"trusttunnel{'-quic' if quic else ''}-{username}",
+            "server": server,
+            "server_port": 443,
+            "username": username,
+            "password": password,
+            "tls": {
+                "enabled": True,
+                "server_name": domain,
+            },
+        }
+        if quic:
+            # В client outbound используем отдельный флаг core, а не
+            # network=udp (последнее означает тип проксируемого трафика).
+            outbound["quic"] = True
+            outbound["tls"]["alpn"] = ["h3"]
+        return outbound
+
     def client_link(self, user: User, state: AppState) -> str:
         """Основная ссылка (для совместимости). При both — возвращает TCP."""
         ps = state.protocols.get("trusttunnel")
@@ -168,14 +231,37 @@ class TrustTunnelPlugin(BasePlugin):
 
         username = urllib.parse.quote(self._derive_username(user), safe="")
         password = urllib.parse.quote(self._derive_password(user.uuid), safe="")
-        tag = urllib.parse.quote(self._derive_username(user), safe="")
+        transport = self._transport(ps)
+        alpn = "h3" if transport == "quic" else "h2"
+        suffix = " TrustTunnel QUIC" if transport == "quic" else ""
+        tag = urllib.parse.quote(f"{self._derive_username(user)}{suffix}", safe="")
 
-        return f"tt://{username}:{password}@{domain}:443?security=tls&sni={domain}&alpn=h2#{tag}"
+        return f"tt://{username}:{password}@{domain}:443?security=tls&sni={domain}&alpn={alpn}#{tag}"
 
     def client_links(self, user: User, state: AppState) -> list[str]:
-        """Возвращает список ссылок."""
-        link = self.client_link(user, state)
-        return [link] if link else []
+        """Возвращает TCP/QUIC ссылки, сохраняя существующий URI-формат."""
+        ps = state.protocols.get("trusttunnel")
+        domain = (ps.config.get("domain", "") if ps and ps.config else "")
+        if not domain:
+            return []
+
+        username = urllib.parse.quote(self._derive_username(user), safe="")
+        password = urllib.parse.quote(self._derive_password(user.uuid), safe="")
+        transport = self._transport(ps)
+        links = []
+        if transport in ("tcp", "both"):
+            tag = urllib.parse.quote(self._derive_username(user), safe="")
+            links.append(
+                f"tt://{username}:{password}@{domain}:443?security=tls&sni={domain}&alpn=h2#{tag}"
+            )
+        if transport in ("quic", "both"):
+            tag = urllib.parse.quote(
+                f"{self._derive_username(user)} TrustTunnel QUIC", safe="",
+            )
+            links.append(
+                f"tt://{username}:{password}@{domain}:443?security=tls&sni={domain}&alpn=h3#{tag}"
+            )
+        return links
 
     # ═════════════════════════════════════════════════════════════════════
     #  Управление сервисом
@@ -187,6 +273,8 @@ class TrustTunnelPlugin(BasePlugin):
             from hydra.core.state import get_protocol
             ps = get_protocol(state, "trusttunnel")
 
+        ps.config.setdefault("transport", _DEFAULT_TRANSPORT)
+        transport = self._transport(ps)
         domain = ps.config.get("domain", "") if ps and ps.config else ""
         if not domain:
             from hydra.ui.tui import prompt
@@ -196,23 +284,12 @@ class TrustTunnelPlugin(BasePlugin):
             if not domain:
                 raise ValueError("Домен обязателен для TrustTunnel!")
             
-            # Проверка: не совпадает ли с доменом naive
-            if domain == state.network.domain:
-                naive_ps = state.protocols.get("naive")
-                if naive_ps and naive_ps.enabled:
-                    raise ValueError(
-                        f"Домен {domain} уже используется NaiveProxy! TrustTunnel требует отдельный домен."
-                    )
-            
-            # Проверка: не совпадает ли с другими доменами
-            for other_name in ("anytls",):
-                other_ps = state.protocols.get(other_name)
-                if other_ps and other_ps.enabled and other_ps.config.get("domain") == domain:
-                    raise ValueError(
-                        f"Домен {domain} уже используется {other_name}! TrustTunnel требует отдельный домен."
-                    )
-            
             ps.config["domain"] = domain
+
+        validation_errors = self.validate_config(state, require_cert=False,
+                                                 prospective_enable=True)
+        if validation_errors:
+            raise ValueError("; ".join(validation_errors))
         
         cert_file, key_file = self._resolve_certs(domain, ps)
         if not cert_file or not key_file:
@@ -234,25 +311,24 @@ class TrustTunnelPlugin(BasePlugin):
         ps.config["cert_file"] = cert_file
         ps.config["key_file"] = key_file
         
-        # Firewall (порт 443)
+        # Firewall: Caddy L4 является внешним владельцем TCP/UDP 443.
         from hydra.utils.firewall import open_tcp
         open_tcp(443, "trusttunnel")
-        
-        # iptables accounting
-        self._remove_iptables_rules()
-        self._add_iptables_rules(state)
-        
-        ps.enabled = True
-        
-        from hydra.core.sni_router import rebuild
-        rebuild(state)
+        if transport in ("quic", "both"):
+            from hydra.utils.firewall import open_udp
+            open_udp(443, "udp-quic-mux")
 
+        # Удаляем legacy accounting rules: per-user статистика уже ведётся
+        # traffic_daemon, а общие портовые счётчики нельзя честно разнести
+        # по подключённым пользователям.
+        self._remove_iptables_rules()
+
+    def on_disable(self, state: AppState) -> None:
+        """Удаляет только legacy-ресурсы; общий config применяет orchestrator."""
+        self._remove_iptables_rules()
         ps = state.protocols.get("trusttunnel")
         if ps:
             ps.enabled = False
-        
-        from hydra.core.sni_router import rebuild
-        rebuild(state)
 
     # ═════════════════════════════════════════════════════════════════════
     #  Статус / подключенные клиенты
@@ -272,9 +348,10 @@ class TrustTunnelPlugin(BasePlugin):
             pass
 
         info = {}
+        health_report: dict[str, object] | None = None
         if installed and enabled:
             try:
-                total = self._get_total_traffic()
+                total = self._get_total_traffic(state)
                 size = float(total)
                 for unit in ('B', 'KB', 'MB', 'GB', 'TB'):
                     if size < 1024.0:
@@ -284,8 +361,20 @@ class TrustTunnelPlugin(BasePlugin):
                 else:
                     formatted = f"{size:.2f} PB"
                 info["Общий трафик"] = formatted
+                info["Транспорт"] = self._transport(
+                    state.protocols.get("trusttunnel")
+                ).upper()
             except Exception:
                 pass
+            try:
+                health_report = self.health(state)
+                info["Sing-box"] = "OK" if health_report["singbox"] else "FAIL"
+                info["Caddy L4"] = "OK" if health_report["caddy_l4"] else "FAIL"
+                errors = health_report.get("errors", [])
+                if errors:
+                    info["Проверка"] = str(errors[0])
+            except Exception:
+                health_report = None
 
         effective_port = 443
         try:
@@ -298,7 +387,10 @@ class TrustTunnelPlugin(BasePlugin):
         return PluginStatus(
             installed=installed,
             enabled=enabled,
-            running=installed and is_running() and enabled,
+            running=(
+                installed and enabled
+                and bool(health_report and health_report.get("ok"))
+            ),
             port=effective_port,
             info=info,
         )
@@ -324,42 +416,30 @@ class TrustTunnelPlugin(BasePlugin):
                 
         from hydra.core.sni_router import get_effective_port
         effective_port = get_effective_port("trusttunnel", state) if state else 443
-        
-        # Check TCP
-        r = subprocess.run(
-            ["ss", "-t", "-H", "-n", "state", "established"],
-            capture_output=True, text=True,
+        transport = self._transport(
+            state.protocols.get("trusttunnel") if state else None
         )
         
-        ip_counts = {}
-        if r.returncode == 0:
-            for line in r.stdout.splitlines():
-                parts = line.split()
-                if len(parts) < 4:
-                    continue
-                    
-                local_addr = parts[2]
-                local_port_str = local_addr.split(":")[-1]
-                if not local_port_str.isdigit():
-                    continue
-                local_port = int(local_port_str)
-                
-                if local_port == effective_port or local_port == 443:
-                    remote_addr = parts[3]
-                    remote_parts = remote_addr.split(":")
-                    remote_ip = ":".join(remote_parts[:-1]).strip("[]")
-                    ip_counts[remote_ip] = ip_counts.get(remote_ip, 0) + 1
+        ip_counts: dict[tuple[str, str], int] = {}
+        if transport in ("tcp", "both"):
+            self._collect_ss_clients(
+                ["ss", "-t", "-H", "-n", "state", "established"],
+                effective_port, "TCP", ip_counts,
+            )
+        if transport in ("quic", "both"):
+            self._collect_ss_clients(
+                ["ss", "-u", "-H", "-n"],
+                effective_port, "QUIC", ip_counts,
+            )
 
         clients = []
         now_ts = int(time.time())
-        n_clients = len(ip_counts)
-        
-        for remote_ip, count in ip_counts.items():
+        for (kind, remote_ip), count in ip_counts.items():
             clients.append({
                 "online": True,
-                "email": f"{remote_ip} ({count} Conns)",
-                "rx": rx_bytes // n_clients if n_clients > 0 else 0,
-                "tx": tx_bytes // n_clients if n_clients > 0 else 0,
+                "email": f"{remote_ip} ({kind}, {count} Conns)",
+                "rx": 0,
+                "tx": 0,
                 "last_handshake": now_ts,
             })
         return clients
@@ -367,6 +447,145 @@ class TrustTunnelPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
     #  Внутренние помощники
     # ═════════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _transport(ps) -> str:
+        value = ps.config.get("transport", _DEFAULT_TRANSPORT) if ps and ps.config else _DEFAULT_TRANSPORT
+        return value if value in _VALID_TRANSPORTS else _DEFAULT_TRANSPORT
+
+    def validate_config(self, state: AppState, require_cert: bool = True,
+                        prospective_enable: bool = False) -> list[str]:
+        """Возвращает ошибки до изменения runtime-конфигурации."""
+        ps = state.protocols.get("trusttunnel")
+        if not ps:
+            return ["состояние TrustTunnel отсутствует"]
+
+        errors = []
+        transport = ps.config.get("transport", _DEFAULT_TRANSPORT)
+        if transport not in _VALID_TRANSPORTS:
+            errors.append(f"неизвестный транспорт: {transport}")
+
+        domain = ps.config.get("domain", "").strip()
+        if not domain:
+            errors.append("домен TrustTunnel не задан")
+        else:
+            naive = state.protocols.get("naive")
+            if naive and naive.enabled and state.network.domain == domain:
+                errors.append(f"домен {domain} уже используется NaiveProxy")
+            for other_name in ("anytls",):
+                other = state.protocols.get(other_name)
+                if other and other.enabled and other.config.get("domain") == domain:
+                    errors.append(f"домен {domain} уже используется {other_name}")
+
+        if require_cert and domain:
+            cert_file, key_file = self._resolve_certs(domain, ps)
+            if not cert_file or not key_file:
+                errors.append(f"TLS-сертификат для {domain} не найден")
+
+        if self._transport(ps) in ("quic", "both"):
+            try:
+                from hydra.core.sni_router import get_quic_owner
+                get_quic_owner(
+                    state,
+                    prospective="trusttunnel" if prospective_enable else None,
+                )
+            except ValueError as exc:
+                errors.append(str(exc))
+        return errors
+
+    def health(self, state: AppState) -> dict[str, object]:
+        """Лёгкий health report без сетевого подключения к внешнему сайту."""
+        ps = state.protocols.get("trusttunnel")
+        transport = self._transport(ps)
+        errors = self.validate_config(state)
+        report: dict[str, object] = {
+            "ok": not errors,
+            "transport": transport,
+            "errors": errors,
+            "singbox": False,
+            "caddy_l4": False,
+        }
+        try:
+            from hydra.core.singbox import is_running
+            report["singbox"] = is_running()
+        except Exception:
+            pass
+        try:
+            r = subprocess.run(
+                ["systemctl", "is-active", "--quiet", "caddy-l4"],
+                capture_output=True,
+            )
+            report["caddy_l4"] = r.returncode == 0
+        except OSError:
+            pass
+        report["ok"] = bool(report["ok"] and report["singbox"] and report["caddy_l4"])
+        return report
+
+    def set_transport(self, state: AppState, transport: str) -> bool:
+        """Транзакционно переключает transport и откатывает runtime при сбое."""
+        if transport not in _VALID_TRANSPORTS:
+            return False
+        from hydra.core.state import get_protocol, save_state
+
+        ps = get_protocol(state, "trusttunnel")
+        old_config = copy.deepcopy(ps.config)
+        ps.config["transport"] = transport
+        errors = self.validate_config(
+            state, require_cert=ps.enabled, prospective_enable=not ps.enabled,
+        )
+        if errors:
+            ps.config = old_config
+            return False
+
+        if not ps.enabled:
+            save_state(state)
+            return True
+
+        from hydra.core.orchestrator import apply_config
+        try:
+            if apply_config(state):
+                save_state(state)
+                return True
+        except Exception:
+            pass
+
+        ps.config = old_config
+        save_state(state)
+        try:
+            apply_config(state)
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def _split_endpoint(endpoint: str) -> tuple[str, int | None]:
+        endpoint = endpoint.strip()
+        if endpoint.startswith("[") and "]:" in endpoint:
+            host, _, port = endpoint[1:].partition("]:")
+        else:
+            host, sep, port = endpoint.rpartition(":")
+            if not sep:
+                return endpoint.strip("[]"), None
+        return host.strip("[]"), int(port) if port.isdigit() else None
+
+    def _collect_ss_clients(self, cmd: list[str], port: int, kind: str,
+                            counts: dict[tuple[str, str], int]) -> None:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        except OSError:
+            return
+        if result.returncode != 0:
+            return
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            _, local_port = self._split_endpoint(parts[-2])
+            remote_host, _ = self._split_endpoint(parts[-1])
+            if local_port != port or not remote_host or remote_host == "*":
+                continue
+            key = (kind, remote_host)
+            counts[key] = counts.get(key, 0) + 1
 
 
 
@@ -381,7 +600,7 @@ class TrustTunnelPlugin(BasePlugin):
     def _resolve_certs(self, domain: str, ps) -> tuple[str, str]:
         cert = (ps.config.get("cert_file", "") if ps and ps.config else "")
         key = (ps.config.get("key_file", "") if ps and ps.config else "")
-        if cert and key:
+        if cert and key and Path(cert).exists() and Path(key).exists():
             return cert, key
         return self._find_existing_cert(domain)
 
@@ -423,54 +642,65 @@ class TrustTunnelPlugin(BasePlugin):
             subprocess.run(["apt-get", "install", "-y", "certbot"], capture_output=True)
 
         services_to_stop = ["caddy-l4", "caddy-naive", "nginx", "apache2"]
-        was_running = []
-        for s in services_to_stop:
-            r = subprocess.run(["systemctl", "is-active", s], capture_output=True, text=True)
-            if r.stdout.strip() == "active":
-                print(f"  Временно останавливаю {s}...")
-                subprocess.run(["systemctl", "stop", s], capture_output=True)
-                was_running.append(s)
-
+        was_running: list[str] = []
         ufw_opened = False
         ipt_opened = False
-        if is_ufw_active():
-            subprocess.run(["ufw", "allow", "80/tcp", "comment", "temp-certbot"], capture_output=True)
-            ufw_opened = True
-        else:
-            r_chk = subprocess.run([
-                "iptables", "-C", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"
-            ], capture_output=True)
-            if r_chk.returncode != 0:
+        try:
+            for service in services_to_stop:
+                status = subprocess.run(
+                    ["systemctl", "is-active", service],
+                    capture_output=True, text=True,
+                )
+                if status.stdout.strip() == "active":
+                    print(f"  Временно останавливаю {service}...")
+                    stopped = subprocess.run(
+                        ["systemctl", "stop", service], capture_output=True,
+                    )
+                    if stopped.returncode == 0:
+                        was_running.append(service)
+
+            if is_ufw_active():
                 subprocess.run([
-                    "iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"
+                    "ufw", "allow", "80/tcp", "comment", "temp-certbot",
                 ], capture_output=True)
-                ipt_opened = True
+                ufw_opened = True
+            else:
+                r_chk = subprocess.run([
+                    "iptables", "-C", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"
+                ], capture_output=True)
+                if r_chk.returncode != 0:
+                    inserted = subprocess.run([
+                        "iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"
+                    ], capture_output=True)
+                    ipt_opened = inserted.returncode == 0
 
-        r = subprocess.run([
-            "certbot", "certonly", "--standalone",
-            "-d", domain,
-            "--non-interactive", "--agree-tos",
-            "--register-unsafely-without-email",
-            "--keep-until-expiring",
-        ], capture_output=True, text=True)
-
-        success = r.returncode == 0
-
-        if not success:
-            print(f"  [Ошибка certbot] Вывод:\n{r.stderr or r.stdout or ''}")
-
-        if ufw_opened:
-            subprocess.run(["ufw", "delete", "allow", "80/tcp"], capture_output=True)
-        if ipt_opened:
-            subprocess.run([
-                "iptables", "-D", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"
-            ], capture_output=True)
-
-        for s in was_running:
-            print(f"  Восстанавливаю {s}...")
-            subprocess.run(["systemctl", "start", s], capture_output=True)
-
-        return success
+            result = subprocess.run([
+                "certbot", "certonly", "--standalone",
+                "-d", domain,
+                "--non-interactive", "--agree-tos",
+                "--register-unsafely-without-email",
+                "--keep-until-expiring",
+            ], capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"  [Ошибка certbot] Вывод:\n{result.stderr or result.stdout or ''}")
+            return result.returncode == 0
+        except OSError as exc:
+            print(f"  [Ошибка certbot] {exc}")
+            return False
+        finally:
+            if ufw_opened:
+                subprocess.run(
+                    ["ufw", "delete", "allow", "80/tcp"], capture_output=True,
+                )
+            if ipt_opened:
+                subprocess.run([
+                    "iptables", "-D", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"
+                ], capture_output=True)
+            for service in was_running:
+                print(f"  Восстанавливаю {service}...")
+                subprocess.run(
+                    ["systemctl", "start", service], capture_output=True,
+                )
 
     def _remove_iptables_rules(self) -> None:
         for chain in ("INPUT", "OUTPUT"):
@@ -484,32 +714,9 @@ class TrustTunnelPlugin(BasePlugin):
                         parts[0] = "-D"
                         subprocess.run(["iptables"] + parts, capture_output=True)
 
-    def _add_iptables_rules(self, state: AppState) -> None:
-        from hydra.core.sni_router import get_effective_port
-        port = get_effective_port("trusttunnel", state)
-        subprocess.run([
-            "iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", str(port),
-            "-m", "comment", "--comment", "trusttunnel-rx"
-        ], capture_output=True)
-        subprocess.run([
-            "iptables", "-I", "OUTPUT", "1", "-p", "tcp", "--sport", str(port),
-            "-m", "comment", "--comment", "trusttunnel-tx"
-        ], capture_output=True)
-
-        pass
-
-    def _get_total_traffic(self) -> int:
-        total_bytes = 0
-        for chain in ("INPUT", "OUTPUT"):
-            r = subprocess.run(
-                ["iptables", "-t", "filter", "-L", chain, "-n", "-v", "-x"],
-                capture_output=True, text=True,
-            )
-            if r.returncode != 0:
-                continue
-            for line in r.stdout.splitlines():
-                if "trusttunnel-" in line:
-                    parts = line.split()
-                    if len(parts) >= 2 and parts[1].isdigit():
-                        total_bytes += int(parts[1])
-        return total_bytes
+    @staticmethod
+    def _get_total_traffic(state: AppState) -> int:
+        return sum(
+            int(user.credentials.get("trusttunnel", {}).get("traffic_used_bytes", 0))
+            for user in state.users
+        )

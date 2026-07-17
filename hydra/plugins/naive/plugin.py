@@ -512,6 +512,10 @@ class NaivePlugin(BasePlugin):
 
         network_mode = ps.config.get("network", "tcp")
         if network_mode in ("quic", "both"):
+            from hydra.core.sni_router import get_quic_owner
+            # Caddy L4 raw UDP proxy не умеет делить UDP/443 между двумя
+            # QUIC backend без QUIC-aware SNI matcher.
+            get_quic_owner(state, prospective="naive")
             from hydra.utils.firewall import open_udp
             open_udp(DEFAULT_PORT, "naive-quic")
 

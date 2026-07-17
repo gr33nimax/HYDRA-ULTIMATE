@@ -24,7 +24,7 @@ FRONTEND_PORT = 443
 _INTERNAL_PORTS = {
     "naive": 10443,       # Caddy HTTP app (forward_proxy + file_server)
     "anytls": 20444,      # sing-box anytls (tls OFF)
-    "trusttunnel": 20445, # sing-box trusttunnel (tls OFF)
+    "trusttunnel": 20445, # sing-box TrustTunnel TCP/UDP backend (TLS ON)
     "sub_server": 9443,
 }
 
@@ -427,6 +427,41 @@ def needs_mux(state: AppState) -> bool:
     return count >= 2 or bool(sub_domain)
 
 
+def get_quic_owners(state: AppState, prospective: str | None = None) -> list[str]:
+    """Возвращает HYDRA-протоколы, претендующие на внешний UDP/443."""
+    owners: list[str] = []
+    naive = state.protocols.get("naive")
+    if naive and (naive.enabled or prospective == "naive"):
+        if naive.config.get("network", "tcp") in ("quic", "both"):
+            owners.append("naive")
+
+    trusttunnel = state.protocols.get("trusttunnel")
+    if trusttunnel and (trusttunnel.enabled or prospective == "trusttunnel"):
+        if trusttunnel.config.get("transport", "tcp") in ("quic", "both"):
+            owners.append("trusttunnel")
+    return owners
+
+
+def get_quic_owner(state: AppState, prospective: str | None = None) -> str | None:
+    """Определяет единственного raw UDP backend или отклоняет конфликт."""
+    owners = get_quic_owners(state, prospective=prospective)
+    if len(owners) > 1:
+        labels = ", ".join(owners)
+        raise ValueError(
+            f"UDP/443 одновременно запрошен несколькими QUIC-протоколами: {labels}"
+        )
+    return owners[0] if owners else None
+
+
+def _caddy_config_had_quic_proxy() -> bool:
+    try:
+        current = json.loads(CADDY_CFG.read_text(encoding="utf-8"))
+        servers = current.get("apps", {}).get("layer4", {}).get("servers", {})
+        return "quic_mux" in servers
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 
 def _has_sub_domain(state: AppState) -> bool:
     return bool(getattr(state.network, "sub_domain", ""))
@@ -451,7 +486,10 @@ def _collect_backends(state: AppState) -> list[dict]:
                     "key_file": key_file,
                     "network_mode": (
                         proto.config.get("network", "tcp") if name == "naive"
-                        else ""
+                        else (
+                            proto.config.get("transport", "tcp")
+                            if name == "trusttunnel" else ""
+                        )
                     ),
                 })
     sub_domain = getattr(state.network, "sub_domain", "")
@@ -580,16 +618,22 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
         }
     }
 
-    # QUIC (UDP) для NaiveProxy
-    naive_backend = next((b for b in backends if b["name"] == "naive"), None)
-    naive_needs_quic = naive_backend and naive_backend.get("network_mode") in ("quic", "both")
-
-    if naive_needs_quic:
+    # Raw UDP proxy. Это не QUIC-SNI multiplexer: UDP/443 может иметь только
+    # одного владельца, выбранного get_quic_owner().
+    quic_owner = get_quic_owner(state)
+    if quic_owner:
+        quic_backend = next(
+            (b for b in backends if b["name"] == quic_owner), None,
+        )
+        if not quic_backend:
+            raise ValueError(f"QUIC backend {quic_owner} отсутствует в Caddy config")
         quic_routes = [{
             "handle": [
                 {
                     "handler": "proxy",
-                    "upstreams": [{"dial": [f"udp/127.0.0.1:{naive_backend['port']}"]}]
+                    "upstreams": [{
+                        "dial": [f"udp/127.0.0.1:{quic_backend['port']}"]
+                    }]
                 }
             ]
         }]
@@ -714,9 +758,15 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
 
 def rebuild(state: AppState) -> bool:
     """Rebuilds the Caddy L4 config and reloads/starts the service."""
+    # Fail fast before touching files, firewall or services.
+    quic_owner = get_quic_owner(state)
+    had_quic_proxy = _caddy_config_had_quic_proxy()
     backends = _collect_backends(state)
 
     if not needs_mux(state):
+        if had_quic_proxy and not quic_owner:
+            from hydra.utils.firewall import close_udp
+            close_udp(443)
         stop()
         return True
 
@@ -758,7 +808,7 @@ def rebuild(state: AppState) -> bool:
             port = b["port"]
             subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
             subprocess.run(["iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
-            if b["name"] == "naive" and b.get("network_mode") in ("quic", "both"):
+            if b["name"] == quic_owner:
                 subprocess.run(["iptables", "-D", "INPUT", "-p", "udp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
                 subprocess.run(["iptables", "-I", "INPUT", "1", "-p", "udp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
         
@@ -769,15 +819,12 @@ def rebuild(state: AppState) -> bool:
     except Exception:
         pass
 
-    # Open UDP:443 for QUIC if naive needs it
-    needs_udp = False
-    naive_proto = state.protocols.get("naive")
-    if naive_proto and naive_proto.enabled and naive_proto.config.get("network") in ("quic", "both"):
-        needs_udp = True
-
-    if needs_udp:
+    if quic_owner:
         from hydra.utils.firewall import open_udp
         open_udp(443, "udp-quic-mux")
+    elif had_quic_proxy:
+        from hydra.utils.firewall import close_udp
+        close_udp(443)
 
     # 7. Enable and reload/restart service
     subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)

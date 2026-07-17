@@ -2880,6 +2880,13 @@ def _menu_trusttunnel(state: AppState, p):
             domain = ps.config.get("domain", "") if ps.config else ""
             if domain:
                 lines.append(f"  Домен:       {domain}")
+            transport = ps.config.get("transport", "tcp") if ps.config else "tcp"
+            transport_labels = {
+                "tcp": "HTTP/2 TCP",
+                "quic": "QUIC UDP (экспериментальный)",
+                "both": "HTTP/2 + QUIC (экспериментальный)",
+            }
+            lines.append(f"  Транспорт:   {transport_labels.get(transport, 'HTTP/2 TCP')}")
             if st.info:
                 for k, v in st.info.items():
                     lines.append(f"  {k}: {v}")
@@ -2900,6 +2907,7 @@ def _menu_trusttunnel(state: AppState, p):
 
             options.append(("3", "🔄 Переустановить", "Переустановка протокола"))
             options.append(("4", "❌ Удалить", "Полное удаление"))
+            options.append(("5", "🌐 Транспорт", "HTTP/2 TCP / QUIC UDP / оба"))
 
         options.append(("0", "↩ Назад", ""))
 
@@ -2961,6 +2969,27 @@ def _menu_trusttunnel(state: AppState, p):
                 success("Удалено")
                 prompt("Нажмите Enter")
                 return
+
+        elif choice == "5" and ps.installed:
+            current = ps.config.get("transport", "tcp")
+            mode_choice = menu([
+                ("1", "HTTP/2 TCP", "Стабильный режим по умолчанию"),
+                ("2", "QUIC UDP", "Экспериментальный HTTP/3 через Caddy UDP proxy"),
+                ("3", "HTTP/2 + QUIC", "Две клиентские ссылки"),
+                ("0", "Отмена", "Оставить текущий режим"),
+            ], "ТРАНСПОРТ TRUSTTUNNEL")
+            selected = {"1": "tcp", "2": "quic", "3": "both"}.get(mode_choice)
+            if selected is not None:
+                if selected == current:
+                    info("Этот транспорт уже выбран")
+                elif p.set_transport(state, selected):
+                    success("Транспорт изменён")
+                else:
+                    error(
+                        "Не удалось применить транспорт. Проверьте конфликт UDP/443, "
+                        "сертификат и журнал sing-box; прежняя конфигурация восстановлена."
+                    )
+                prompt("Нажмите Enter")
 
 
 

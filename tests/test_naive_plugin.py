@@ -228,9 +228,10 @@ def test_on_enable_opens_firewall():
     with patch("hydra.utils.firewall.open_tcp") as mock_open, \
          patch("subprocess.run") as mock_run, \
          patch("hydra.ui.tui.prompt", side_effect=lambda text, default="": default), \
-         patch("hydra.ui.tui.confirm", return_value=False), \
-         patch("hydra.ui.tui.menu", return_value="1"), \
-         patch.object(p, "apply", return_value=True):
+             patch("hydra.ui.tui.confirm", return_value=False), \
+             patch("hydra.ui.tui.menu", return_value="1"), \
+             patch("hydra.core.state.save_state"), \
+             patch.object(p, "apply", return_value=True):
         mock_run.return_value = MagicMock(stdout="active\n", returncode=0)
         p.on_enable(state)
         mock_open.assert_called_once_with(443, "naive")
