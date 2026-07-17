@@ -11,12 +11,28 @@ from hydra.ui.tui import (
     RED, GREEN, YELLOW, CYAN, BLUE, MAGENTA, BOLD, DIM, WHITE, NC
 )
 import hydra.core.orchestrator as orchestrator
-from hydra.plugins.warp.plugin import DEFAULT_WARP_DOMAINS, WGCF_PROFILE
-from hydra.plugins.warp.clash_import import (
-    ClashImportError, WARP_CONFIGS_DIR, WARP_ULTIMATE_BUNDLE, WARP_ULTIMATE_SOURCE,
-    discover_warp_yaml_sources, import_clash_warp_bundle, load_or_refresh_warp_bundle,
-)
-from hydra.plugins.warp.routing_catalog import build_routing_catalog, category_target
+from hydra.plugins.warp.plugin import DEFAULT_WARP_DOMAINS, WARP_EXTERNAL_CACHE, WGCF_PROFILE
+
+
+def _get_external_info() -> tuple[list[str], list[str], str]:
+    """Возвращает (domains, ips, updated_at)."""
+    if not WARP_EXTERNAL_CACHE.exists():
+        return [], [], ""
+    try:
+        data = json.loads(WARP_EXTERNAL_CACHE.read_text(encoding="utf-8"))
+        # Поддержка словаря (нового формата)
+        if isinstance(data, dict) and "domains" not in data:
+            domains = []
+            ips = []
+            for key, val in data.items():
+                if key != "updated_at" and isinstance(val, dict):
+                    domains.extend(val.get("domains", []))
+                    ips.extend(val.get("ips", []))
+            return list(set(domains)), list(set(ips)), data.get("updated_at", "")
+        # Поддержка старого формата
+        return data.get("domains", []), data.get("ips", []), data.get("updated_at", "")
+    except Exception:
+        return [], [], ""
 
 
 def _get_last_install_error() -> str:
@@ -68,120 +84,6 @@ def _show_diagnostic_info():
     print(f"  {YELLOW}══════════════════════════════════════════════════{NC}\n")
 
 
-def _ultimate_endpoint_options(bundle: dict | None) -> list[tuple[str, str]]:
-    if not bundle:
-        return []
-    return [
-        (str(item["tag"]), str(item["name"]))
-        for item in bundle.get("endpoints", [])
-        if item.get("tag") and item.get("name")
-    ]
-
-
-def _remove_legacy_yaml_routes(ps) -> bool:
-    """Drop routes created by the retired Clash rule-provider importer."""
-    list_targets = ps.config.setdefault("list_targets", {})
-    legacy_keys = [key for key in list_targets if key.startswith("yaml:")]
-    for key in legacy_keys:
-        list_targets.pop(key, None)
-    return bool(legacy_keys)
-
-
-def _compact_destination_options(plugin, ps, bundle: dict | None) -> list[tuple[str, str]]:
-    """Return friendly destinations, prioritising locations chosen by the user."""
-    endpoint_options = _ultimate_endpoint_options(bundle)
-    endpoint_tags = {tag for tag, _label in endpoint_options}
-    selected = ps.config.get("ultimate_selected_tag")
-    labels = dict(endpoint_options)
-    favourite_tags = [
-        tag for tag in ps.config.get("ultimate_route_tags", []) if tag in endpoint_tags
-    ]
-    if not favourite_tags and selected in endpoint_tags:
-        favourite_tags = [selected]
-    available = dict(plugin.available_destinations())
-    result = [("direct", "Напрямую — IP этого сервера")]
-    if "warp_ultimate_auto" in available:
-        result.append(("warp_ultimate_auto", "Автовыбор — самая быстрая локация"))
-    for tag, label in endpoint_options:
-        if tag in favourite_tags:
-            result.append((tag, f"{label} — WARP-локация"))
-    for tag, label in available.items():
-        if tag in endpoint_tags or tag in ("direct", "warp_ultimate", "warp_ultimate_auto", "warp"):
-            continue
-        result.append((tag, f"{label} — отдельный профиль"))
-    if "warp" in available:
-        result.append(("warp", "Cloudflare WARP — стандартный профиль"))
-    # Keep the old selector visible only while a pre-2.3 route still uses it.
-    if "warp_ultimate" in ps.config.get("list_targets", {}).values():
-        selected_label = labels.get(selected, endpoint_options[0][1] if endpoint_options else "не выбрана")
-        result.append(("warp_ultimate", f"Текущая локация — {selected_label} (старый маршрут)"))
-    if endpoint_options and len(favourite_tags) < len(endpoint_options):
-        result.append(("__ultimate_location__", "Другая WARP-локация…"))
-    return result
-
-
-def _choose_destination(title: str, options: list[tuple[str, str]], bundle: dict | None) -> str | None:
-    menu_options = [
-        (str(index), label, "Использовать для этой категории")
-        for index, (tag, label) in enumerate(options, 1)
-    ]
-    menu_options.append((str(len(options) + 1), "Не маршрутизировать", "Убрать отдельное правило для категории"))
-    menu_options.append(("0", "Отмена", ""))
-    choice = menu(menu_options, title)
-    if choice == "0" or not choice.isdigit():
-        return None
-    index = int(choice) - 1
-    if index == len(options):
-        return "none"
-    if not 0 <= index < len(options):
-        return None
-    tag = options[index][0]
-    if tag != "__ultimate_location__":
-        return tag
-
-    endpoint_options = _ultimate_endpoint_options(bundle)
-    nested = [(str(i), label, "WARP-локация") for i, (_tag, label) in enumerate(endpoint_options, 1)]
-    nested.append(("0", "Назад", ""))
-    nested_choice = menu(nested, "ВЫБЕРИТЕ КОНКРЕТНУЮ WARP-ЛОКАЦИЮ")
-    if not nested_choice.isdigit() or nested_choice == "0":
-        return None
-    nested_index = int(nested_choice) - 1
-    return endpoint_options[nested_index][0] if 0 <= nested_index < len(endpoint_options) else None
-
-
-def _menu_route_locations(state: AppState, ps, bundle: dict) -> None:
-    """Choose the small set of locations displayed in everyday routing menus."""
-    endpoint_options = _ultimate_endpoint_options(bundle)
-    valid_tags = {tag for tag, _label in endpoint_options}
-    selected = {
-        tag for tag in ps.config.get("ultimate_route_tags", []) if tag in valid_tags
-    }
-    if not selected and endpoint_options:
-        selected.add(ps.config.get("ultimate_selected_tag", endpoint_options[0][0]))
-    while True:
-        options = []
-        for index, (tag, label) in enumerate(endpoint_options, 1):
-            marker = "✓" if tag in selected else " "
-            options.append((str(index), f"[{marker}] {label}", "Показывать в выборе направления"))
-        options.append(("a", "✓ Выбрать все", "Показывать все локации"))
-        options.append(("c", "Очистить выбор", "Оставить только автовыбор и прямое подключение"))
-        options.append(("0", "Готово", "Сохранить выбор"))
-        choice = menu(options, "МОИ WARP-ЛОКАЦИИ")
-        if choice == "0":
-            ps.config["ultimate_route_tags"] = [
-                tag for tag, _label in endpoint_options if tag in selected
-            ]
-            save_state(state)
-            return
-        if choice == "a":
-            selected = set(valid_tags)
-        elif choice == "c":
-            selected.clear()
-        elif choice.isdigit() and 1 <= int(choice) <= len(endpoint_options):
-            tag = endpoint_options[int(choice) - 1][0]
-            selected.remove(tag) if tag in selected else selected.add(tag)
-
-
 def menu_warp(state: AppState, plugin) -> None:
     ps = state.protocols.setdefault("warp", state.protocols.get("warp") or __import__("hydra.core.state").core.state.PluginState())
     if not ps.config:
@@ -197,22 +99,16 @@ def menu_warp(state: AppState, plugin) -> None:
         st = plugin.status()
         
         # Определяем доступные точки выхода
+        destinations = ["direct"]
         custom_profiles = sorted([p.stem for p in WARP_PROFILES_DIR.glob("*.conf")])
-        yaml_sources = discover_warp_yaml_sources()
-        discovery_error = ""
-        try:
-            ultimate_bundle = load_or_refresh_warp_bundle()
-        except ClashImportError as exc:
-            ultimate_bundle = None
-            discovery_error = str(exc)
-        destination_options = _compact_destination_options(plugin, ps, ultimate_bundle)
-        destinations = [tag for tag, _label in destination_options if not tag.startswith("__")]
+        for p in custom_profiles:
+            destinations.append(f"warp_{p}")
+        if WGCF_PROFILE.exists():
+            destinations.append("warp")
 
         # Читаем списки
         local_lists = ps.config.setdefault("local_lists", {})
         list_targets = ps.config.setdefault("list_targets", {})
-        if _remove_legacy_yaml_routes(ps):
-            save_state(state)
 
         status_lines = []
         if not st.installed and not custom_profiles:
@@ -231,31 +127,26 @@ def menu_warp(state: AppState, plugin) -> None:
             
             for p in custom_profiles:
                 status_lines.append(f"  • warp_{p}:       {CYAN}активен (релей){NC}")
-            if ultimate_bundle:
-                endpoint_count = len(ultimate_bundle.get("endpoints", []))
-                endpoint_labels = dict(_ultimate_endpoint_options(ultimate_bundle))
-                favourite_labels = [
-                    endpoint_labels[tag] for tag in ps.config.get("ultimate_route_tags", [])
-                    if tag in endpoint_labels
-                ]
-                selected_text = ", ".join(favourite_labels) if favourite_labels else "не выбраны"
-                status_lines.append(f"  • WARP-локации:  {MAGENTA}{endpoint_count} доступно; мои: {selected_text}{NC}")
 
             status_lines.append("  " + "─" * 45)
 
-            status_lines.append(f"  {BOLD}Маршрутизация по категориям:{NC}")
-            from hydra.plugins.warp.plugin import EXTERNAL_LISTS
-            categories = build_routing_catalog(EXTERNAL_LISTS, local_lists)
-            destination_labels = dict(destination_options)
+            status_lines.append(f"  {BOLD}Маршруты списков правил:{NC}")
             active_routes = 0
-            for category in categories:
-                target = category_target(category, list_targets)
-                if target == "none":
+            for list_key, target in list_targets.items():
+                if not target or target == "none":
                     continue
                 active_routes += 1
-                label = "несколько направлений" if target == "mixed" else destination_labels.get(target, target)
-                target_color = GREEN if target not in ("direct", "mixed") else YELLOW
-                status_lines.append(f"  • {category.label:<26} → {target_color}{label}{NC}")
+                
+                if list_key.startswith("ext:"):
+                    from hydra.plugins.warp.plugin import EXTERNAL_LISTS
+                    ext_key = list_key.split(":", 1)[1]
+                    list_name = EXTERNAL_LISTS.get(ext_key, {}).get("name", ext_key) + " (внешн.)"
+                else:
+                    list_name = list_key.split(":", 1)[1] + " (локал.)"
+                
+                target_color = GREEN if target != "direct" else YELLOW
+                status_lines.append(f"  • {list_name:<22} → {target_color}{target}{NC}")
+
             if active_routes == 0:
                 status_lines.append(f"  {YELLOW}Нет активных маршрутов. Настройте их ниже.{NC}")
 
@@ -264,13 +155,13 @@ def menu_warp(state: AppState, plugin) -> None:
         options = []
         if not st.installed and not custom_profiles:
             options.append(("1", "🔧 Установить Cloudflare WARP (WGCF)", "Скачать и настроить локальный профиль по умолчанию"))
-            options.append(("4", "📍 Локации и конфигурация", "Загрузить конфиг и выбрать WARP-локации"))
+            options.append(("4", "⚙️ Управление профилями релеев", "Добавить сторонние профили AmneziaWG/WireGuard"))
         else:
             options.append(("1", f"{'⏸️  Выключить' if st.enabled else '▶️  Включить'} WARP", "Переключить статус службы в Sing-Box"))
-            options.append(("2", "📝 Свои домены и IP", "Необязательно: добавить собственную категорию"))
-            options.append(("3", "🔀 Категории и направления", "Например: блокировки → Нидерланды, РФ-сервисы → Россия"))
-            options.append(("4", "📍 Локации и конфигурация", "Загрузить конфиг и выбрать используемые локации"))
-            options.append(("5", "🔄 Обновить категории", "Скачать свежие правила для настроенных категорий"))
+            options.append(("2", "📋 Управление списками правил", "Добавление/редактирование локальных и внешних списков"))
+            options.append(("3", "🔀 Настройка маршрутизации", "Связать списки правил с точками выхода (WARP/релеи)"))
+            options.append(("4", "⚙️ Управление профилями релеев", "Добавить/удалить кастомные профили релеев в /etc/hydra/warp_profiles/"))
+            options.append(("5", "🔄 Обновить внешние списки сейчас", "Загрузить свежие списки правил с GitHub"))
             options.append(("-", "", ""))
             if WGCF_PROFILE.exists():
                 options.append(("8", "🔄 Пересоздать локальный WGCF", "Перегенерировать стандартный профиль WARP"))
@@ -314,7 +205,7 @@ def menu_warp(state: AppState, plugin) -> None:
             _menu_rules_lists(state, ps)
 
         elif choice == "3" and (st.installed or custom_profiles):
-            _menu_routing_rules(state, ps, destination_options, ultimate_bundle)
+            _menu_routing_rules(state, ps, destinations)
 
         elif choice == "4":
             _menu_geo_profiles(state, ps)
@@ -367,7 +258,9 @@ def _menu_rules_lists(state: AppState, ps) -> None:
         local_lists = ps.config.setdefault("local_lists", {})
         list_targets = ps.config.setdefault("list_targets", {})
         
-        status_lines = [f"  {BOLD}Свои категории доменов и IP:{NC}"]
+        status_lines = [
+            f"  {BOLD}Пользовательские локальные списки:{NC}",
+        ]
         
         if not local_lists:
             status_lines.append(f"  {DIM}Нет созданных локальных списков.{NC}")
@@ -375,18 +268,30 @@ def _menu_rules_lists(state: AppState, ps) -> None:
             for idx, (name, val) in enumerate(local_lists.items(), 1):
                 domains_cnt = len(val.get("domains", []))
                 ips_cnt = len(val.get("ips", []))
-                status_lines.append(f"  {idx}. {BOLD}{name:<20}{NC} {domains_cnt} доменов · {ips_cnt} IP")
+                target = list_targets.get(f"local:{name}", "none")
+                status_lines.append(f"  {idx}. {BOLD}{name:<15}{NC} ({domains_cnt} доменов, {ips_cnt} IP) [→ {target}]")
 
-        panel("📝 СВОИ ДОМЕНЫ И IP", status_lines)
+        status_lines.append("")
+        status_lines.append("  " + "─" * 50)
+        status_lines.append(f"  {BOLD}Внешние источники правил (itdoginfo):{NC}")
+
+        from hydra.plugins.warp.plugin import EXTERNAL_LISTS
+        for key, val in EXTERNAL_LISTS.items():
+            target = list_targets.get(f"ext:{key}", "none")
+            status = f"{GREEN}Активен [→ {target}]{NC}" if target != "none" else f"{DIM}Отключен{NC}"
+            status_lines.append(f"  • {BOLD}{val['name']:<14}{NC} — {status}")
+
+        panel("📋 УПРАВЛЕНИЕ СПИСКАМИ ПРАВИЛ", status_lines)
 
         options = [
             ("1", "➕ Создать локальный список", "Создать новую группу доменов/IP"),
             ("2", "📝 Редактировать локальный список", "Добавить/удалить домены и IP в локальном списке"),
             ("3", "🗑️  Удалить локальный список", "Удалить пользовательскую группу"),
+            ("4", "🔗 Настройка внешних источников", "Включить/отключить списки РФ-сервисов, GEO-block и др."),
             ("0", "↩ Назад", "")
         ]
 
-        choice = menu(options, "СВОИ КАТЕГОРИИ")
+        choice = menu(options, "СПИСКИ ПРАВИЛ")
         if choice == "0":
             break
 
@@ -458,6 +363,10 @@ def _menu_rules_lists(state: AppState, ps) -> None:
                     if ps.enabled:
                         orchestrator.apply_config(state)
                 prompt("Нажмите Enter")
+
+        elif choice == "4":
+            _menu_external_sources_toggle(state, ps)
+
 
 # ── Вспомогательное меню: Редактирование локального списка ──
 def _menu_manage_local_list_items(state: AppState, ps, list_name: str) -> None:
@@ -616,142 +525,196 @@ def _menu_manage_local_list_items(state: AppState, ps, list_name: str) -> None:
             prompt("Нажмите Enter для продолжения")
 
 
-# ── Единое меню категорий и направлений ──
-def _menu_routing_rules(
-    state: AppState,
-    ps,
-    destination_options: list[tuple[str, str]],
-    ultimate_bundle: dict | None,
-) -> None:
-    list_targets = ps.config.setdefault("list_targets", {})
-    local_lists = ps.config.setdefault("local_lists", {})
+# ── Вспомогательное меню: Включение/выключение внешних списков ──
+def _menu_external_sources_toggle(state: AppState, ps) -> None:
     from hydra.plugins.warp.plugin import EXTERNAL_LISTS
-
     while True:
         clear()
-        categories = build_routing_catalog(EXTERNAL_LISTS, local_lists)
-        destination_labels = dict(destination_options)
-        destination_labels["none"] = "не настроено"
-        destination_labels["mixed"] = "несколько направлений"
-        lines = []
-        for index, category in enumerate(categories, 1):
-            target = category_target(category, list_targets)
-            target_label = destination_labels.get(target, target)
-            color = GREEN if target not in ("none", "mixed", "direct") else YELLOW if target == "direct" else DIM
-            lines.append(f"  {index:<3} {category.label:<26} → {color}{target_label}{NC}")
-        panel("🔀 КАТЕГОРИИ И НАПРАВЛЕНИЯ", lines or [f"  {DIM}Категории пока не найдены.{NC}"])
-        options = [
-            (str(index), category.label,
-             f"{category.description} · {len(category.source_keys)} ист.")
-            for index, category in enumerate(categories, 1)
-        ]
-        details_key = str(len(categories) + 1)
-        options.append((details_key, "ℹ Что входит в категории", "Показать источники правил понятным списком"))
-        options.append(("0", "↩ Назад", ""))
-        choice = menu(options, "ВЫБЕРИТЕ КАТЕГОРИЮ — ЗАТЕМ КУДА ЕЁ НАПРАВИТЬ")
+        list_targets = ps.config.setdefault("list_targets", {})
+        
+        status_lines = []
+        for key, item in EXTERNAL_LISTS.items():
+            target = list_targets.get(f"ext:{key}", "none")
+            status_ico = "🟢" if target != "none" else "🔴"
+            status_txt = f"Активен (→ {target})" if target != "none" else "Отключен"
+            color = GREEN if target != "none" else RED
+            
+            filename = item['url'].split('/')[-1]
+            short_desc = item['desc'].split(' (')[0]
+            
+            status_lines.append(f"  {status_ico}  {BOLD}{item['name']:<14}{NC} {DIM}({filename}){NC}")
+            status_lines.append(f"     {color}{status_txt:<8}{NC}  {DIM}│{NC}  {short_desc}")
+            status_lines.append("")
+            
+        panel("🔗 ВНЕШНИЕ ИСТОЧНИКИ ПРАВИЛ (itdoginfo)", status_lines)
+        
+        opts = []
+        for idx, (key, item) in enumerate(EXTERNAL_LISTS.items(), start=1):
+            target = list_targets.get(f"ext:{key}", "none")
+            action = "Отключить" if target != "none" else "Включить"
+            opts.append((str(idx), f"Toggle {item['name']}", f"{action} {item['name']}"))
+            
+        opts.append(("0", "↩ Назад", ""))
+        
+        choice = menu(opts, "ВНЕШНИЕ ИСТОЧНИКИ")
         if choice == "0":
             break
-        if choice == details_key:
-            detail_lines = []
-            for category in categories:
-                detail_lines.append(f"  {BOLD}{category.label}{NC} — {category.description}")
-                detail_lines.extend(f"    • {source}" for source in category.sources)
-            panel("СОСТАВ КАТЕГОРИЙ", detail_lines or ["  Нет источников правил."])
-            prompt("Нажмите Enter для продолжения")
-            continue
-        if not choice.isdigit() or not 1 <= int(choice) <= len(categories):
-            continue
-        category = categories[int(choice) - 1]
-        chosen = _choose_destination(
-            f"КУДА НАПРАВИТЬ: {category.label.upper()}", destination_options, ultimate_bundle
-        )
-        if chosen is None:
-            continue
-        previous_targets = {key: list_targets.get(key) for key in category.source_keys}
-        for key in category.source_keys:
-            list_targets[key] = chosen
-        save_state(state)
-        if any(key.startswith("ext:") for key in category.source_keys):
-            info("Обновляю правила категории...")
-            plugin = __import__("hydra.plugins.warp.plugin").plugins.warp.plugin.WarpPlugin()
-            ok, message = plugin.update_external_rules()
-            (success if ok else warn)(message)
-        if ps.enabled:
-            info("Применяю конфигурацию в Sing-Box...")
-            if not orchestrator.apply_config(state):
-                for key, previous in previous_targets.items():
-                    if previous is None:
-                        list_targets.pop(key, None)
-                    else:
-                        list_targets[key] = previous
+            
+        elif choice in ("1", "2", "3"):
+            keys = list(EXTERNAL_LISTS.keys())
+            key = keys[int(choice) - 1]
+            target = list_targets.get(f"ext:{key}", "none")
+            
+            if target != "none":
+                list_targets[f"ext:{key}"] = "none"
                 save_state(state)
-                error("Ошибка применения конфигурации.")
-                warn("Изменение маршрута отменено; предыдущая конфигурация сохранена.")
-                last_error = _get_last_install_error()
-                if last_error:
-                    error(last_error[-1000:])
+                success(f"Список {EXTERNAL_LISTS[key]['name']} успешно отключен.")
+                if ps.enabled:
+                    orchestrator.apply_config(state)
+            else:
+                success(f"Включаем список {EXTERNAL_LISTS[key]['name']}.")
+                from hydra.plugins.warp.plugin import WARP_PROFILES_DIR
+                destinations = ["direct"]
+                custom_profiles = sorted([p.stem for p in WARP_PROFILES_DIR.glob("*.conf")])
+                for p in custom_profiles:
+                    destinations.append(f"warp_{p}")
+                if WGCF_PROFILE.exists():
+                    destinations.append("warp")
+                
+                opts_dest = []
+                for i, d in enumerate(destinations, start=1):
+                    opts_dest.append((str(i), d, f"Направить трафик на {d}"))
+                
+                d_choice = menu(opts_dest, f"ВЫБЕРИТЕ НАПРАВЛЕНИЕ ДЛЯ {EXTERNAL_LISTS[key]['name'].upper()}")
+                if d_choice.isdigit():
+                    d_idx = int(d_choice) - 1
+                    if 0 <= d_idx < len(destinations):
+                        chosen_dest = destinations[d_idx]
+                        list_targets[f"ext:{key}"] = chosen_dest
+                        save_state(state)
+                        success(f"Список {EXTERNAL_LISTS[key]['name']} направлен на {chosen_dest}!")
+                        
+                        info("Скачиваю список правил...")
+                        plugin = __import__("hydra.plugins.warp.plugin").plugins.warp.plugin.WarpPlugin()
+                        ok, msg = plugin.update_external_rules()
+                        if ok:
+                            success(msg)
+                        else:
+                            warn(msg)
+                            
+                        if ps.enabled:
+                            info("Применяю конфигурацию в Sing-Box...")
+                            orchestrator.apply_config(state)
+                            
+            prompt("Нажмите Enter для продолжения")
+
+
+# ── Вспомогательное меню: Настройка маршрутизации списков ──
+def _menu_routing_rules(state: AppState, ps, destinations: list[str]) -> None:
+    while True:
+        clear()
+        list_targets = ps.config.setdefault("list_targets", {})
+        local_lists = ps.config.setdefault("local_lists", {})
+        
+        status_lines = [
+            f"  {BOLD}Текущее сопоставление списков и точек выхода:{NC}",
+            "  " + "─" * 60
+        ]
+        
+        active_rules = []
+        
+        # 1. Локальные списки
+        for name in local_lists.keys():
+            key = f"local:{name}"
+            target = list_targets.get(key, "none")
+            active_rules.append((key, name + " (локал.)", target))
+            
+        # 2. Внешние списки
+        from hydra.plugins.warp.plugin import EXTERNAL_LISTS
+        for name, item in EXTERNAL_LISTS.items():
+            key = f"ext:{name}"
+            target = list_targets.get(key, "none")
+            active_rules.append((key, item["name"] + " (внешн.)", target))
+            
+        for idx, (key, display_name, target) in enumerate(active_rules, 1):
+            target_color = GREEN if target != "none" and target != "direct" else (YELLOW if target == "direct" else DIM)
+            status_lines.append(f"  {idx:<3} {display_name:<25} → {target_color}{target}{NC}")
+            
+        panel("🔀 МАРШРУТИЗАЦИЯ СПИСКОВ ПРАВИЛ", status_lines)
+        
+        opts = []
+        for idx, (key, display_name, target) in enumerate(active_rules, 1):
+            opts.append((str(idx), display_name, f"Изменить направление (сейчас: {target})"))
+        opts.append(("0", "↩ Назад", ""))
+        
+        choice = menu(opts, "ВЫБЕРИТЕ МАРШРУТ ДЛЯ ИЗМЕНЕНИЯ")
+        if choice == "0":
+            break
+            
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(active_rules):
+                key, display_name, current_target = active_rules[idx]
+                
+                opts_dest = []
+                for i, d in enumerate(destinations, start=1):
+                    opts_dest.append((str(i), d, f"Направить на {d}"))
+                opts_dest.append((str(len(destinations) + 1), "none (отключить)", "Отключить маршрутизацию этого списка"))
+                opts_dest.append(("0", "Отмена", ""))
+                
+                d_choice = menu(opts_dest, f"НАПРАВЛЕНИЕ ДЛЯ {display_name.upper()}")
+                if d_choice == "0":
+                    continue
+                
+                if d_choice.isdigit():
+                    d_idx = int(d_choice) - 1
+                    if 0 <= d_idx < len(destinations):
+                        chosen_dest = destinations[d_idx]
+                        list_targets[key] = chosen_dest
+                        save_state(state)
+                        success(f"Маршрут для {display_name} изменен на {chosen_dest}!")
+                        
+                        if key.startswith("ext:") and chosen_dest != "none":
+                            info("Скачиваю список правил...")
+                            plugin = __import__("hydra.plugins.warp.plugin").plugins.warp.plugin.WarpPlugin()
+                            ok, msg = plugin.update_external_rules()
+                            if ok:
+                                success(msg)
+                            else:
+                                warn(msg)
+                                
+                        if ps.enabled:
+                            info("Применяю конфигурацию в Sing-Box...")
+                            orchestrator.apply_config(state)
+                    elif d_idx == len(destinations):
+                        list_targets[key] = "none"
+                        save_state(state)
+                        success(f"Маршрут для {display_name} отключен.")
+                        if ps.enabled:
+                            info("Применяю конфигурацию в Sing-Box...")
+                            orchestrator.apply_config(state)
+                            
                 prompt("Нажмите Enter для продолжения")
-                continue
-        if chosen == "none":
-            success(f"Отдельный маршрут для «{category.label}» отключён.")
-        else:
-            success(f"«{category.label}» → {dict(destination_options).get(chosen, chosen)}")
-        prompt("Нажмите Enter для продолжения")
 
 
 # ── Вспомогательное меню: Управление профилями релеев ──
 def _menu_geo_profiles(state: AppState, ps) -> None:
     from hydra.plugins.warp.plugin import WARP_PROFILES_DIR
     WARP_PROFILES_DIR.mkdir(parents=True, exist_ok=True)
-    WARP_CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
-    try:
-        WARP_CONFIGS_DIR.chmod(0o700)
-    except OSError:
-        pass
     
     while True:
         clear()
         
         profiles = sorted([p.stem for p in WARP_PROFILES_DIR.glob("*.conf")])
-        yaml_sources = discover_warp_yaml_sources()
-        discovery_error = ""
-        try:
-            ultimate_bundle = load_or_refresh_warp_bundle()
-        except ClashImportError as exc:
-            ultimate_bundle = None
-            discovery_error = str(exc)
         list_targets = ps.config.setdefault("list_targets", {})
 
         status_lines = [
-            f"  {BOLD}Конфигурации:{NC} {WARP_CONFIGS_DIR}",
-            f"  {BOLD}Одиночные профили:{NC} {WARP_PROFILES_DIR}",
+            f"  {BOLD}Каталог профилей:{NC} {WARP_PROFILES_DIR}",
+            f"  Для добавления нового релея загрузите .conf файл в этот каталог.",
             "  " + "─" * 60
         ]
-
-        if ultimate_bundle:
-            count = len(ultimate_bundle.get("endpoints", []))
-            skipped = ultimate_bundle.get("skipped_unsupported", 0)
-            endpoint_labels = dict(_ultimate_endpoint_options(ultimate_bundle))
-            favourite_tags = ps.config.get("ultimate_route_tags", [])
-            favourite_labels = [endpoint_labels[tag] for tag in favourite_tags if tag in endpoint_labels]
-            status_lines.append(
-                f"  {MAGENTA}Загружено:{NC} {ultimate_bundle.get('name', 'конфигурация')} — "
-                f"{count} локаций" + (f", пропущено: {skipped}" if skipped else "")
-            )
-            selected_text = ", ".join(favourite_labels) if favourite_labels else "только прямое подключение и автовыбор"
-            status_lines.append(f"  • Мои локации: {CYAN}{selected_text}{NC}")
-            status_lines.append("  • Категории берутся из каталога HYDRA, а не из конфигурации")
-            if count > 1:
-                status_lines.append("  • Доступен автоматический выбор самой быстрой локации")
-            status_lines.append("")
-        elif discovery_error:
-            status_lines.append(f"  {RED}Ошибка конфигурации:{NC} {discovery_error}")
-            status_lines.append("")
-        elif not yaml_sources:
-            status_lines.append(f"  {DIM}Конфигурация не загружена. Выберите «Загрузить конфигурацию».{NC}")
-            status_lines.append("")
         
-        if not profiles and not ultimate_bundle and not discovery_error:
+        if not profiles:
             status_lines.append(f"  {YELLOW}Нет обнаруженных профилей релеев.{NC}")
             status_lines.append("  Доступен только стандартный дефолтный WARP.")
         else:
@@ -777,92 +740,26 @@ def _menu_geo_profiles(state: AppState, ps) -> None:
                         list_name = k.split(":", 1)[1]
                         mapped_lists.append(list_name)
                 
-                routes_str = f"Категорий назначено: {len(mapped_lists)}" if mapped_lists else "Категории не назначены"
+                routes_str = f"Направлены списки: {', '.join(mapped_lists)}" if mapped_lists else "Нет привязанных списков"
                 
                 status_lines.append(
-                    f"  {idx}. {BOLD}{name:<17}{NC} [{type_str}]{warn_str} "
+                    f"  {idx}. {BOLD}warp_{name:<12}{NC} [{type_str}]{warn_str} "
                     f"│ {DIM}{routes_str}{NC}"
                 )
                 
-        panel("📍 ЛОКАЦИИ И КОНФИГУРАЦИЯ", status_lines)
+        panel("⚙️ УПРАВЛЕНИЕ ПРОФИЛЯМИ РЕЛЕЕВ", status_lines)
         
-        options = [("1", "📦 Загрузить конфигурацию", "Clash/Mihomo YAML с WARP-локациями и категориями")]
-        if ultimate_bundle:
-            options.append(("5", "📍 Выбрать используемые локации", "Они появятся в простом меню маршрутизации"))
-            options.append(("2", "🗑️  Удалить конфигурацию", "Удалить импортированные локации и категории"))
+        options = []
         if profiles:
-            options.append(("3", "🗑️  Удалить одиночный профиль", "Удалить .conf файл с диска"))
-        options.append(("4", "💡 Показать инструкцию по установке", "Поддерживаемые форматы и установка"))
+            options.append(("1", "🗑️  Удалить файл профиля релея", "Удалить .conf файл с диска"))
+        options.append(("2", "💡 Показать инструкцию по установке", "Как получить конфиг и скопировать на сервер"))
         options.append(("0", "↩ Назад", ""))
         
         choice = menu(options, "ПРОФИЛИ РЕЛЕЕВ")
         if choice == "0":
             break
             
-        elif choice == "1":
-            if len(yaml_sources) > 1:
-                error("Сначала оставьте в каталоге только один YAML-файл.")
-                prompt("Нажмите Enter для продолжения")
-                continue
-            default_source = str(yaml_sources[0]) if len(yaml_sources) == 1 else str(WARP_ULTIMATE_SOURCE)
-            source_raw = prompt("Путь к Clash/Mihomo YAML на сервере", default_source)
-            if not source_raw.strip():
-                continue
-            if ultimate_bundle and not confirm("Заменить уже установленный Ultimate bundle?", default=False):
-                continue
-            previous_source = yaml_sources[0] if len(yaml_sources) == 1 else None
-            try:
-                bundle = import_clash_warp_bundle(Path(source_raw.strip()))
-            except ClashImportError as exc:
-                error(str(exc))
-            else:
-                imported_source = WARP_CONFIGS_DIR / Path(str(bundle["source_file"])).name
-                if previous_source and previous_source != imported_source:
-                    previous_source.unlink(missing_ok=True)
-                valid_targets = {"warp_ultimate", "warp_ultimate_auto"}
-                valid_targets.update(item["tag"] for item in bundle["endpoints"])
-                for key, target in list(list_targets.items()):
-                    if target.startswith("warp_ultimate_") and target not in valid_targets:
-                        list_targets[key] = "none"
-                    if key.startswith("yaml:"):
-                        list_targets.pop(key, None)
-                endpoint_tags = {item["tag"] for item in bundle["endpoints"]}
-                if ps.config.get("ultimate_selected_tag") not in endpoint_tags:
-                    ps.config["ultimate_selected_tag"] = bundle["endpoints"][0]["tag"]
-                previous_favourites = [
-                    tag for tag in ps.config.get("ultimate_route_tags", []) if tag in endpoint_tags
-                ]
-                ps.config["ultimate_route_tags"] = previous_favourites or [bundle["endpoints"][0]["tag"]]
-                save_state(state)
-                success(f"Импортировано WARP endpoints: {len(bundle['endpoints'])}.")
-                skipped = bundle.get("skipped_unsupported", 0)
-                if skipped:
-                    warn(f"Пропущено неподдерживаемых Clash proxies: {skipped} (например, MASQUE).")
-                for message in bundle.get("warnings", [])[:5]:
-                    warn(message)
-                if ps.enabled and not orchestrator.apply_config(state):
-                    error("Bundle сохранён, но Sing-Box отклонил итоговый конфиг.")
-                    _show_diagnostic_info()
-                info("Теперь выберите локации, которые хотите видеть при маршрутизации.")
-                _menu_route_locations(state, ps, bundle)
-            prompt("Нажмите Enter для продолжения")
-
-        elif choice == "2" and ultimate_bundle:
-            if confirm("Удалить Ultimate bundle и отключить связанные маршруты?", default=False):
-                source_name = str(ultimate_bundle.get("source_file", WARP_ULTIMATE_SOURCE.name))
-                source_path = WARP_CONFIGS_DIR / Path(source_name).name
-                WARP_ULTIMATE_BUNDLE.unlink(missing_ok=True)
-                source_path.unlink(missing_ok=True)
-                for key, target in list(list_targets.items()):
-                    if target in ("warp_ultimate", "warp_ultimate_auto") or target.startswith("warp_ultimate_"):
-                        list_targets[key] = "none"
-                save_state(state)
-                success("Ultimate bundle удалён.")
-                if ps.enabled and not orchestrator.apply_config(state):
-                    error("Не удалось применить конфигурацию после удаления.")
-            prompt("Нажмите Enter для продолжения")
-
-        elif choice == "3" and profiles:
+        elif choice == "1" and profiles:
             opts_prof = []
             for i, name in enumerate(profiles, start=1):
                 opts_prof.append((str(i), name, f"УДАЛИТЬ {name}.conf"))
@@ -888,30 +785,27 @@ def _menu_geo_profiles(state: AppState, ps) -> None:
                             error("Ошибка применения нового конфига.")
                             _show_diagnostic_info()
                 prompt("Нажмите Enter для продолжения")
-
-        elif choice == "5" and ultimate_bundle:
-            _menu_route_locations(state, ps, ultimate_bundle)
-            success("Список локаций для маршрутизации сохранён.")
                     
-        elif choice == "4":
+        elif choice == "2":
             clear()
             lines = [
-                f"  {BOLD}Конфигурация Clash/Mihomo:{NC}",
+                f"  {BOLD}Как настроить гео-WARP релей:{NC}",
                 "",
-                f"  1. Скопируйте один .yaml/.yml в {WARP_CONFIGS_DIR}",
-                "     Имя файла произвольное: HYDRA обнаружит его автоматически.",
-                "  2. HYDRA извлечёт из файла только WARP-локации.",
-                "  3. Отметьте локации, которые хотите использовать.",
-                "  4. В «Категории и направления» выберите простой маршрут:",
-                "     например, «Обход блокировок → Нидерланды».",
-                "     Правила берутся из каталога HYDRA и своих списков.",
-                "     rule-providers и rules из YAML намеренно игнорируются.",
-                "     Clash TUN, DNS и listeners не импортируются.",
-                "  5. Правила действуют на всех интерфейсах HYDRA.",
+                "  1. Сгенерируйте профиль через Telegram-бота",
+                f"     {GREEN}@warp_generator_bot{NC} или сайт.",
+                "  2. Скачайте полученный .conf файл",
+                "     (например, 'russia.conf' или 'finland.conf').",
+                "  3. Подключитесь к VPS по SFTP (FileZilla, WinSCP и др.).",
+                f"  4. Скопируйте файл в каталог на сервере:",
+                f"     {GREEN}{WARP_PROFILES_DIR}{NC}",
+                "     Имя файла (без .conf) будет именем релея.",
+                "  5. Свяжите нужные списки правил с этим релеем в меню",
+                "     'Настройка маршрутизации'.",
+                "  6. Включите WARP для применения конфигурации.",
                 "",
-                f"  {BOLD}Одиночные .conf:{NC} по-прежнему поддерживаются в {WARP_PROFILES_DIR}.",
-                "  MASQUE из Clash пока пропускается: его ключевой формат",
-                "  несовместим с профилем MASQUE в sing-box-extended.",
+                f"  {BOLD}Важно:{NC} Имя файла должно содержать только",
+                "  английские буквы, цифры и дефис.",
+                "  Пример: russia.conf, finland.conf, nl-amsterdam.conf",
             ]
             panel("ИНСТРУКЦИЯ ПО УСТАНОВКЕ", lines)
             prompt("Нажмите Enter, чтобы вернуться")

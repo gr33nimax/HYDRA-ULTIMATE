@@ -177,7 +177,7 @@ fi
 
 # ── Python-зависимости ──────────────────────────────────────────────────────
 info "Python-зависимости..."
-pip3 install -q "python-telegram-bot[job-queue]" "qrcode" "PyYAML>=6.0" 2>/dev/null || warn "Не все Python-зависимости установлены"
+pip3 install -q "python-telegram-bot[job-queue]" "qrcode" 2>/dev/null || warn "Зависимости python-telegram-bot или qrcode не установлены"
 
 # ── Symlink ──────────────────────────────────────────────────────────────────
 chmod +x "${INSTALL_DIR}/main.py" 2>/dev/null || true

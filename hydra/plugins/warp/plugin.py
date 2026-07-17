@@ -11,7 +11,6 @@ WARP обеспечивает выборочный исходящий трафи
 from __future__ import annotations
 
 import json
-import ipaddress
 import re
 import socket
 import subprocess
@@ -19,10 +18,6 @@ from pathlib import Path
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
 from hydra.core.state import AppState, PluginState
-from hydra.plugins.warp.clash_import import (
-    ClashImportError, WARP_ULTIMATE_BUNDLE, discover_warp_yaml_sources,
-    load_or_refresh_warp_bundle,
-)
 
 WGCF_BIN = Path("/usr/local/bin/wgcf")
 WGCF_PROFILE = Path("/etc/wireguard/wgcf-profile.conf")
@@ -64,7 +59,7 @@ class WarpPlugin(BasePlugin):
         name="warp",
         description="Cloudflare WARP: выборочное туннелирование через сеть Cloudflare",
         category=PluginCategory.ENHANCEMENT,
-        version="2.4.1",
+        version="2.1.0",
     )
 
     def install(self) -> bool:
@@ -115,7 +110,6 @@ class WarpPlugin(BasePlugin):
                         f"Stdout: {r.stdout}\nStderr: {r.stderr}\n",
                         encoding="utf-8"
                     )
-                    return False
 
             # Генерация профиля
             r = subprocess.run(
@@ -149,8 +143,10 @@ class WarpPlugin(BasePlugin):
         Path("/etc/wireguard/wgcf-account.toml").unlink(missing_ok=True)
         Path("wgcf-account.toml").unlink(missing_ok=True)
         Path("wgcf-profile.conf").unlink(missing_ok=True)
-        # Внешние списки также используются кастомными/Ultimate профилями
-        # и не относятся к жизненному циклу локальной учётной записи WGCF.
+        try:
+            WARP_EXTERNAL_CACHE.unlink(missing_ok=True)
+        except Exception:
+            pass
         return True
 
     @staticmethod
@@ -227,44 +223,6 @@ class WarpPlugin(BasePlugin):
             return None
         return result
 
-    @staticmethod
-    def _resolve_endpoint_host(host: str) -> str:
-        """Resolve a peer hostname while preserving literal IPv4/IPv6 values."""
-        host = host.strip()
-        if host.startswith("[") and host.endswith("]"):
-            host = host[1:-1]
-        try:
-            return str(ipaddress.ip_address(host))
-        except ValueError:
-            pass
-        try:
-            return socket.gethostbyname(host)
-        except Exception:
-            return host
-
-    @staticmethod
-    def available_destinations() -> list[tuple[str, str]]:
-        """Return route target tags and user-facing names."""
-        result = [("direct", "Прямое подключение")]
-        for path in sorted(WARP_PROFILES_DIR.glob("*.conf")):
-            result.append((f"warp_{path.stem}", path.stem))
-        try:
-            bundle = load_or_refresh_warp_bundle(WARP_ULTIMATE_BUNDLE)
-        except ClashImportError:
-            bundle = None
-        if bundle:
-            endpoints = bundle.get("endpoints", [])
-            if endpoints:
-                result.append(("warp_ultimate", "Ultimate — ручной выбор"))
-            if len(endpoints) > 1:
-                result.append(("warp_ultimate_auto", "Ultimate — самый быстрый"))
-            for endpoint in endpoints:
-                if endpoint.get("tag") and endpoint.get("name"):
-                    result.append((endpoint["tag"], endpoint["name"]))
-        if WGCF_PROFILE.exists():
-            result.append(("warp", "Cloudflare WARP (WGCF)"))
-        return result
-
     def configure(self, state: AppState) -> ConfigFragment:
         """Генерирует Sing-Box outbound/endpoints для WARP и route-правила."""
         WARP_PROFILES_DIR.mkdir(parents=True, exist_ok=True)
@@ -313,7 +271,7 @@ class WarpPlugin(BasePlugin):
         # ── ЗАГРУЗКА ТОЧЕК ВЫХОДА (OUTBOUNDS/ENDPOINTS) ──
         endpoints = []
         outbounds = []
-        destinations = {"direct"}
+        destinations = set()
 
         # 1. Кастомные гео-профили из /etc/hydra/warp_profiles/
         custom_profiles = []
@@ -330,23 +288,20 @@ class WarpPlugin(BasePlugin):
 
         for profile_name, parsed in custom_profiles:
             raw_endpoint = parsed["peer"].get("endpoint", "")
-            if raw_endpoint.startswith("[") and "]:" in raw_endpoint:
-                host, port_str = raw_endpoint[1:].rsplit("]:", 1)
-            elif ":" in raw_endpoint:
+            if ":" in raw_endpoint:
                 host, port_str = raw_endpoint.rsplit(":", 1)
+                try:
+                    port = int(port_str)
+                except ValueError:
+                    port = 2408
             else:
                 host = raw_endpoint
-            try:
-                port = int(port_str) if raw_endpoint and ":" in raw_endpoint else 2408
-                mtu = int(parsed["interface"].get("mtu", 1280))
-            except ValueError:
-                continue
+                port = 2408
 
-            private_key = parsed["interface"].get("privatekey", "").strip()
-            public_key = parsed["peer"].get("publickey", "").strip()
-            if not host or not private_key or not public_key or not 1 <= port <= 65535:
-                continue
-            server_ip = self._resolve_endpoint_host(host)
+            try:
+                server_ip = socket.gethostbyname(host)
+            except Exception:
+                server_ip = host
 
             is_amnezia = any(k in parsed["interface"] for k in ["s1", "s2", "jc", "jmin", "jmax", "h1", "h2", "h3", "h4"])
             
@@ -369,13 +324,13 @@ class WarpPlugin(BasePlugin):
                 "type": "wireguard",
                 "tag": ep_tag,
                 "address": addresses,
-                "private_key": private_key,
-                "mtu": mtu,
+                "private_key": parsed["interface"].get("privatekey", ""),
+                "mtu": int(parsed["interface"].get("mtu", 1280)),
                 "peers": [
                     {
                         "address": server_ip,
                         "port": port,
-                        "public_key": public_key,
+                        "public_key": parsed["peer"].get("publickey", ""),
                         "allowed_ips": [ip.strip() for ip in parsed["peer"].get("allowedips", "0.0.0.0/0, ::/0").split(",") if ip.strip()]
                     }
                 ]
@@ -404,60 +359,15 @@ class WarpPlugin(BasePlugin):
                 "outbounds": [ep_tag]
             })
 
-        # 2. Нормализованный Clash/Mihomo WARP bundle (Ultimate).
-        bundle = load_or_refresh_warp_bundle(WARP_ULTIMATE_BUNDLE)
-        ultimate_tags = []
-        if bundle:
-            for item in bundle.get("endpoints", []):
-                try:
-                    tag = str(item["tag"])
-                    ep_tag = f"{tag}_ep"
-                    peer = dict(item["peer"])
-                    peer["address"] = self._resolve_endpoint_host(str(peer["address"]))
-                    endpoint = {
-                        "type": "wireguard",
-                        "tag": ep_tag,
-                        "address": list(item["address"]),
-                        "private_key": item["private_key"],
-                        "mtu": int(item.get("mtu", 1280)),
-                        "peers": [peer],
-                    }
-                    if item.get("amnezia"):
-                        endpoint["amnezia"] = dict(item["amnezia"])
-                except (KeyError, TypeError, ValueError):
-                    continue
-                endpoints.append(endpoint)
-                outbounds.append({"type": "selector", "tag": tag, "outbounds": [ep_tag]})
-                destinations.add(tag)
-                ultimate_tags.append(tag)
-            if ultimate_tags:
-                selected_tag = ps.config.get("ultimate_selected_tag")
-                if selected_tag not in ultimate_tags:
-                    selected_tag = ultimate_tags[0]
-                outbounds.append({
-                    "type": "selector",
-                    "tag": "warp_ultimate",
-                    "outbounds": ultimate_tags,
-                    "default": selected_tag,
-                })
-                destinations.add("warp_ultimate")
-            if len(ultimate_tags) > 1:
-                outbounds.append({
-                    "type": "urltest",
-                    "tag": "warp_ultimate_auto",
-                    "outbounds": ultimate_tags,
-                    "url": "http://speed.cloudflare.com/",
-                    "interval": "5m",
-                    "tolerance": 50,
-                })
-                destinations.add("warp_ultimate_auto")
-
-        # 3. Стандартный WGCF (если профиль сгенерирован)
+        # 2. Стандартный WGCF (если профиль сгенерирован)
         warp_cfg = self._load_warp_config()
         if warp_cfg:
             destinations.add("warp")
             ep_tag = "warp_ep"
-            server_ip = self._resolve_endpoint_host("engage.cloudflareclient.com")
+            try:
+                server_ip = socket.gethostbyname("engage.cloudflareclient.com")
+            except Exception:
+                server_ip = "162.159.192.1"
 
             endpoint = {
                 "type": "wireguard",
@@ -493,36 +403,28 @@ class WarpPlugin(BasePlugin):
                 pass
 
         outbound_domains = {}
-        outbound_domain_suffix = {}
-        outbound_domain_keyword = {}
         outbound_ips = {}
+
         for list_key, target in list_targets.items():
             if not target or target == "none" or target not in destinations:
                 continue
 
             domains = []
-            domain_suffix = []
-            domain_keyword = []
             ips = []
 
             if list_key.startswith("local:"):
                 list_name = list_key.split(":", 1)[1]
                 local_list = local_lists.get(list_name, {})
-                domain_suffix = local_list.get("domains", [])
+                domains = local_list.get("domains", [])
                 ips = local_list.get("ips", [])
             elif list_key.startswith("ext:"):
                 list_name = list_key.split(":", 1)[1]
                 ext_list = ext_rules.get(list_name, {})
-                domain_suffix = ext_list.get("domain_suffix", ext_list.get("domains", []))
-                domains = ext_list.get("domains_exact", [])
-                domain_keyword = ext_list.get("domain_keyword", [])
+                domains = ext_list.get("domains", [])
                 ips = ext_list.get("ips", [])
+
             if domains:
                 outbound_domains.setdefault(target, []).extend(domains)
-            if domain_suffix:
-                outbound_domain_suffix.setdefault(target, []).extend(domain_suffix)
-            if domain_keyword:
-                outbound_domain_keyword.setdefault(target, []).extend(domain_keyword)
             if ips:
                 outbound_ips.setdefault(target, []).extend(ips)
 
@@ -531,19 +433,9 @@ class WarpPlugin(BasePlugin):
             clean_domains = list(set([d.strip() for d in domains_list if d.strip()]))
             if clean_domains:
                 rules.append({
-                    "domain": clean_domains,
+                    "domain_suffix": clean_domains,
                     "outbound": target,
                 })
-
-        for target, domains_list in outbound_domain_suffix.items():
-            clean_domains = list(set([d.strip() for d in domains_list if d.strip()]))
-            if clean_domains:
-                rules.append({"domain_suffix": clean_domains, "outbound": target})
-
-        for target, keywords in outbound_domain_keyword.items():
-            clean_keywords = list(set([d.strip() for d in keywords if d.strip()]))
-            if clean_keywords:
-                rules.append({"domain_keyword": clean_keywords, "outbound": target})
 
         for target, ips_list in outbound_ips.items():
             clean_ips = list(set([ip.strip() for ip in ips_list if ip.strip()]))
@@ -566,11 +458,7 @@ class WarpPlugin(BasePlugin):
         from hydra.core.singbox import is_running as sb_running
         from hydra.core.state import load_state
 
-        installed = (
-            WGCF_PROFILE.exists()
-            or any(WARP_PROFILES_DIR.glob("*.conf"))
-            or bool(discover_warp_yaml_sources(WARP_ULTIMATE_BUNDLE.parent))
-        )
+        installed = WGCF_PROFILE.exists()
         enabled = False
         running = False
         
@@ -704,8 +592,7 @@ class WarpPlugin(BasePlugin):
                 existing[key] = downloaded_lists[key]
 
             # Удаляем из кэша списки, которые больше не активны
-            active_cache_keys = set(enabled_keys)
-            keys_to_delete = [k for k in existing if k != "updated_at" and k not in active_cache_keys]
+            keys_to_delete = [k for k in existing if k != "updated_at" and k not in enabled_keys]
             for k in keys_to_delete:
                 existing.pop(k, None)
 
