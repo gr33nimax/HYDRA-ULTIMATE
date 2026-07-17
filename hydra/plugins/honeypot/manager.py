@@ -56,12 +56,19 @@ def menu_honeypot(state: AppState, plugin) -> None:
             proto = get_protocol(state, "honeypot")
             if active:
                 info("Останавливаю Honeypot...")
-                plugin.on_disable(state)
-                if proto:
-                    proto.enabled = False
-                state.security.honeypot_enabled = False
-                save_state(state)
-                success("Honeypot остановлен.")
+                try:
+                    plugin.on_disable(state)
+                except RuntimeError as exc:
+                    error(str(exc))
+                else:
+                    if plugin.status().running:
+                        error("Honeypot всё ещё активен после команды остановки.")
+                    else:
+                        if proto:
+                            proto.enabled = False
+                        state.security.honeypot_enabled = False
+                        save_state(state)
+                        success("Honeypot остановлен.")
             else:
                 info("Запускаю Honeypot...")
                 if not plugin.install():
@@ -73,12 +80,15 @@ def menu_honeypot(state: AppState, plugin) -> None:
                 except RuntimeError as exc:
                     error(str(exc))
                 else:
-                    if proto:
-                        proto.installed = True
-                        proto.enabled = True
-                    state.security.honeypot_enabled = True
-                    save_state(state)
-                    success(f"Honeypot запущен на порту {port}.")
+                    if not plugin.status().running:
+                        error("Honeypot завершился сразу после запуска. Проверьте journalctl -u hydra-honeypot.")
+                    else:
+                        if proto:
+                            proto.installed = True
+                            proto.enabled = True
+                        state.security.honeypot_enabled = True
+                        save_state(state)
+                        success(f"Honeypot запущен на порту {port}.")
             prompt("Нажмите Enter для продолжения")
             
         elif choice == "2":

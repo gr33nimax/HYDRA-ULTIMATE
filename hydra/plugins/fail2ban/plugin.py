@@ -16,6 +16,7 @@ F2B_BIN = Path("/usr/bin/fail2ban-client")
 JAIL_DIR = Path("/etc/fail2ban/jail.d")
 FILTER_DIR = Path("/etc/fail2ban/filter.d")
 F2B_LOG = Path("/var/log/fail2ban.log")
+NAIVE_LOG = Path("/var/log/caddy-naive/access.log")
 
 _OWNED_FILTERS = (
     "hydra-anytls",
@@ -67,6 +68,7 @@ def _atomic_write(path: Path, content: str) -> None:
 
 
 class Fail2banPlugin(BasePlugin):
+    last_error = ""
     meta = PluginMeta(
         name="fail2ban",
         description="Fail2ban: защита SSH и прокси от перебора аутентификации",
@@ -283,6 +285,7 @@ ignoreregex =
             whitelist.append(address)
 
     def _write_jails(self, state: AppState | None = None) -> bool:
+        self.last_error = ""
         JAIL_DIR.mkdir(parents=True, exist_ok=True)
         FILTER_DIR.mkdir(parents=True, exist_ok=True)
         contents: dict[Path, str] = {
@@ -293,7 +296,15 @@ ignoreregex =
         }
         for name, content in self._filters().items():
             contents[FILTER_DIR / f"{name}.conf"] = content
-        for name, options in self.jail_options(state).items():
+        jail_options = self.jail_options(state)
+        if jail_options["hydra-naive"]["enabled"] == "true":
+            try:
+                NAIVE_LOG.parent.mkdir(parents=True, exist_ok=True)
+                NAIVE_LOG.touch(exist_ok=True)
+            except OSError as exc:
+                self.last_error = f"Не удалось подготовить лог Naive: {exc}"
+                return False
+        for name, options in jail_options.items():
             body = "\n".join(f"{key} = {value}" for key, value in options.items())
             contents[JAIL_DIR / f"{name}.local"] = f"[{name}]\n{body}\n"
 
@@ -302,10 +313,12 @@ ignoreregex =
             for path, content in contents.items():
                 backups[path] = path.read_bytes() if path.exists() else None
                 _atomic_write(path, content)
-            check = _run([str(F2B_BIN), "-t"], timeout=30, text=True)
+            client = shutil.which("fail2ban-client") or str(F2B_BIN)
+            check = _run([client, "-t"], timeout=30, text=True)
             if check.returncode != 0:
                 raise RuntimeError(check.stderr or check.stdout or "fail2ban configuration test failed")
-        except Exception:
+        except Exception as exc:
+            self.last_error = " ".join(str(exc).split())[:600]
             for path, original in backups.items():
                 try:
                     if original is None:
@@ -373,6 +386,7 @@ ignoreregex =
     def restore_defaults(self, state: AppState) -> bool:
         """Restore generated jail defaults without changing service state."""
         if not self._installed():
+            self.last_error = "fail2ban-client не найден"
             return False
 
         protocol = get_protocol(state, "fail2ban")
@@ -390,11 +404,16 @@ ignoreregex =
             and self.jail_options(state)["hydra-portscan"]["enabled"] == "true"
         )
         applied = self._sync_portscan_rule(portscan_enabled)
+        if not applied:
+            self.last_error = "Не удалось синхронизировать правило portscan в iptables"
         if applied and was_running:
             reload_result = _run(["fail2ban-client", "reload"], timeout=20)
             if reload_result.returncode != 0 or not self.status().running:
                 restart = _run(["systemctl", "restart", "fail2ban"], timeout=30)
                 applied = restart.returncode == 0 and self.status().running
+                if not applied:
+                    detail = restart.stderr or restart.stdout or "служба не перешла в active"
+                    self.last_error = " ".join(str(detail).split())[:600]
             else:
                 applied = True
 

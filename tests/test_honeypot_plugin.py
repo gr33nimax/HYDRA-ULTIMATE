@@ -69,9 +69,22 @@ def test_on_enable():
 
 def test_on_disable():
     p = HoneypotPlugin()
-    with patch.object(HoneypotPlugin, "_remove_service") as mock_rm:
+    with patch.object(HoneypotPlugin, "_remove_service", return_value=True) as mock_rm:
         p.on_disable(_make_state())
-        mock_rm.assert_called_once()
+        mock_rm.assert_called_once_with(close_port=True)
+
+
+def test_on_enable_reports_service_diagnostics():
+    p = HoneypotPlugin()
+    p.last_error = "Address already in use"
+    with patch.object(HoneypotPlugin, "_load_state", return_value={"port": 9999, "whitelist": []}), \
+         patch.object(HoneypotPlugin, "_install_service", return_value=False):
+        try:
+            p.on_enable(_make_state())
+        except RuntimeError as exc:
+            assert "Address already in use" in str(exc)
+        else:
+            raise AssertionError("on_enable must fail when the service is not stable")
 
 
 def test_whitelist_is_normalized_and_invalid_values_are_ignored():

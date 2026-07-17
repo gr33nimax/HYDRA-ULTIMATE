@@ -690,7 +690,10 @@ def menu_fail2ban(state: AppState, plugin) -> None:
                     else:
                         success("Базовая конфигурация восстановлена. Служба оставлена остановленной.")
                 else:
+                    detail = getattr(plugin, "last_error", "")
                     error("Не удалось восстановить конфигурацию; предыдущие настройки сохранены.")
+                    if detail:
+                        error(f"Причина: {detail}")
             else:
                 info("Отменено.")
             prompt("Нажмите Enter для продолжения")

@@ -177,3 +177,19 @@ def test_restore_defaults_keeps_stopped_service_stopped():
     assert "jails" not in state.protocols["fail2ban"].config
     sync.assert_called_once_with(False)
     run.assert_not_called()
+
+
+def test_write_jails_prepares_naive_log_before_validation(tmp_path):
+    p = Fail2banPlugin()
+    state = _make_state()
+    state.protocols["naive"] = PluginState(enabled=True, port=443)
+    naive_log = tmp_path / "caddy-naive" / "access.log"
+
+    with patch("hydra.plugins.fail2ban.plugin.JAIL_DIR", tmp_path / "jail.d"), \
+         patch("hydra.plugins.fail2ban.plugin.FILTER_DIR", tmp_path / "filter.d"), \
+         patch("hydra.plugins.fail2ban.plugin.NAIVE_LOG", naive_log), \
+         patch("hydra.plugins.fail2ban.plugin.F2B_LOG", tmp_path / "fail2ban.log"), \
+         patch("hydra.plugins.fail2ban.plugin._run", return_value=MagicMock(returncode=0, stdout="", stderr="")):
+        assert p._write_jails(state) is True
+
+    assert naive_log.exists()

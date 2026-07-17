@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import textwrap
+import time
 from pathlib import Path
 
 from hydra.core.state import AppState
@@ -31,6 +32,7 @@ def _run(command: list[str], *, text: bool = False, timeout: int = 20) -> subpro
 
 
 class HoneypotPlugin(BasePlugin):
+    last_error = ""
     meta = PluginMeta(
         name="honeypot",
         description="Honeypot: TCP-ловушка с проверяемым IPv4/IPv6 firewall-баном",
@@ -61,7 +63,27 @@ class HoneypotPlugin(BasePlugin):
             return self._install_service(config["port"], config["whitelist"])
         self._write_script(config["port"], config["whitelist"])
         restarted = _run(["systemctl", "restart", "hydra-honeypot"])
-        return restarted.returncode == 0 and self.status().running
+        return restarted.returncode == 0 and self._wait_until_stably_running()
+
+    def _service_diagnostics(self) -> str:
+        result = _run(
+            ["journalctl", "-u", "hydra-honeypot", "-n", "8", "--no-pager", "-o", "cat"],
+            text=True,
+        )
+        lines = [line.strip() for line in str(result.stdout or result.stderr or "").splitlines() if line.strip()]
+        return " | ".join(lines[-3:])[:600] or "служба не перешла в active"
+
+    def _wait_until_stably_running(self) -> bool:
+        # systemctl start may return while Python is still importing and before
+        # bind(). Recheck after the process has had time to fail on a busy port
+        # or an invalid sandbox/runtime setting.
+        for _ in range(10):
+            if self.status().running:
+                time.sleep(1)
+                if self.status().running:
+                    return True
+            time.sleep(0.2)
+        return False
 
     def status(self) -> PluginStatus:
         result = _run(["systemctl", "is-active", "hydra-honeypot"], text=True)
@@ -209,7 +231,12 @@ class HoneypotPlugin(BasePlugin):
     def _install_service(self, port: int, whitelist: list[str]) -> bool:
         from hydra.utils import firewall
 
+        self.last_error = ""
         self._write_script(port, whitelist)
+        # systemd validates ReadWritePaths before ExecStart, so both paths must
+        # already exist even though the generated script also creates them.
+        HONEYPOT_STATE.parent.mkdir(parents=True, exist_ok=True)
+        HONEYPOT_LOG.parent.mkdir(parents=True, exist_ok=True)
         port_was_open = firewall.port_is_open("tcp", port)
         if not port_was_open:
             firewall.open_tcp(port, _PORT_COMMENT)
@@ -246,15 +273,22 @@ class HoneypotPlugin(BasePlugin):
             f"{HONEYPOT_LOG} {{\n  weekly\n  rotate 8\n  compress\n  missingok\n  notifempty\n  copytruncate\n}}\n",
             encoding="utf-8",
         )
-        _run(["systemctl", "daemon-reload"])
+        daemon_reload = _run(["systemctl", "daemon-reload"])
+        if daemon_reload.returncode != 0:
+            self.last_error = str(daemon_reload.stderr or daemon_reload.stdout or "systemctl daemon-reload failed")
+            if not port_was_open:
+                firewall.close_tcp(port, _PORT_COMMENT)
+            return False
         enabled = _run(["systemctl", "enable", "--now", "hydra-honeypot"])
-        if enabled.returncode == 0 and self.status().running:
+        if enabled.returncode == 0 and self._wait_until_stably_running():
             return True
+        self.last_error = self._service_diagnostics()
+        _run(["systemctl", "disable", "--now", "hydra-honeypot"])
         if not port_was_open:
             firewall.close_tcp(port, _PORT_COMMENT)
         return False
 
-    def _remove_service(self, *, close_port: bool = True) -> None:
+    def _remove_service(self, *, close_port: bool = True) -> bool:
         from hydra.utils import firewall
 
         config = self._load_state()
@@ -264,6 +298,7 @@ class HoneypotPlugin(BasePlugin):
         _run(["systemctl", "daemon-reload"])
         if close_port:
             firewall.close_tcp(int(config.get("port", HONEYPOT_PORT)), _PORT_COMMENT)
+        return not self.status().running
 
     def _unban_ip(self, ip: str) -> bool:
         config = self._load_state()
@@ -318,7 +353,9 @@ class HoneypotPlugin(BasePlugin):
     def on_enable(self, state: AppState) -> None:
         config = self._load_state()
         if not self._install_service(config["port"], config["whitelist"]):
-            raise RuntimeError("Honeypot service could not be installed or started")
+            detail = f": {self.last_error}" if self.last_error else ""
+            raise RuntimeError(f"Honeypot не удалось запустить{detail}")
 
     def on_disable(self, state: AppState) -> None:
-        self._remove_service(close_port=True)
+        if not self._remove_service(close_port=True):
+            raise RuntimeError("Honeypot не удалось остановить")
