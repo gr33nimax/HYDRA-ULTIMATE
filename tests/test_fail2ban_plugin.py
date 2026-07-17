@@ -111,6 +111,9 @@ def test_proxy_filters_only_match_authentication_failures():
     assert "authorization failed" in filters["hydra-trusttunnel"]
     assert '"status"\\s*:\\s*407' in filters["hydra-naive"]
     assert "401|403" not in filters["hydra-naive"]
+    assert "Unknown message from" in filters["hydra-awg"]
+    assert "Invalid MAC of handshake" in filters["hydra-awg"]
+    assert "tproxy" not in filters["hydra-awg"].lower()
 
 
 def test_jail_overrides_persist_but_cannot_enable_disabled_protocol():
@@ -194,3 +197,41 @@ def test_write_jails_prepares_naive_log_before_validation(tmp_path):
         assert p._write_jails(state) is True
 
     assert naive_log.exists()
+
+
+def test_awg_jail_covers_all_profile_ports():
+    p = Fail2banPlugin()
+    state = _make_state()
+    state.protocols["amneziawg"] = PluginState(
+        enabled=True,
+        port=51820,
+        config={"profiles": {"mobile": {"port": 51821}}},
+    )
+    state.protocols["fail2ban"].config["jails"] = {
+        "hydra-awg": {"enabled": True},
+    }
+
+    awg = p.jail_options(state)["hydra-awg"]
+    assert awg["enabled"] == "true"
+    assert awg["port"] == "51820,51821"
+    assert awg["banaction"] == "%(banaction_allports)s"
+
+
+def test_awg_dynamic_debug_is_enabled_and_persisted(tmp_path):
+    p = Fail2banPlugin()
+    control = tmp_path / "dynamic_debug_control"
+    service = tmp_path / "hydra-awg-fail2ban-debug.service"
+    control.touch()
+
+    with patch("hydra.plugins.fail2ban.plugin.AWG_DYNAMIC_DEBUG_PATHS", (control,)), \
+         patch("hydra.plugins.fail2ban.plugin.AWG_DEBUG_SERVICE", service), \
+         patch("hydra.plugins.fail2ban.plugin._run", return_value=MagicMock(returncode=0)) as run:
+        assert p._sync_awg_debug(True) is True
+
+    control_text = control.read_text(encoding="utf-8")
+    assert "module amneziawg func prepare_awg_message +p" in control_text
+    assert "module amneziawg func wg_receive_handshake_packet +p" in control_text
+    service_text = service.read_text(encoding="utf-8")
+    assert "prepare_awg_message +p" in service_text
+    assert "wg_receive_handshake_packet +p" in service_text
+    assert any("enable" in call.args[0] for call in run.call_args_list)
