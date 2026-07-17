@@ -2441,12 +2441,18 @@ def menu_security(state: AppState):
                 success("Все службы безопасности включены")
             prompt("Нажмите Enter")
         elif choice == "B":
+            errors = []
             for p in plugins_list:
                 try:
                     _toggle_security_plugin(state, p.meta.name, force_enable=False)
-                except Exception:
-                    pass
-            success("Все службы безопасности выключены")
+                except Exception as exc:
+                    errors.append(f"{p.meta.name}: {exc}")
+            if errors:
+                for err in errors:
+                    warn(err)
+                warn("Часть служб безопасности не удалось выключить")
+            else:
+                success("Все службы безопасности выключены")
             prompt("Нажмите Enter")
         else:
             try:
@@ -2459,16 +2465,13 @@ def menu_security(state: AppState):
 
 
 def _toggle_security_plugin(state: AppState, name: str, force_enable: bool | None = None):
-    """Включает/выключает security-плагин через его on_enable/on_disable."""
+    """Toggle a security plugin through the transactional orchestrator."""
     from hydra.plugins.registry import get as get_plugin
     p = get_plugin(name)
     if not p:
         return
 
     proto = get_protocol(state, name)
-    enabled_val = False
-
-    # Determine target state
     if force_enable is True:
         target_enable = True
     elif force_enable is False:
@@ -2477,30 +2480,15 @@ def _toggle_security_plugin(state: AppState, name: str, force_enable: bool | Non
         target_enable = not (proto and proto.enabled)
 
     if target_enable:
-        # If not installed, install first
         if proto and not proto.installed:
             ok = orchestrator.install_plugin(state, name)
             if not ok:
                 raise RuntimeError(f"Не удалось установить плагин {name}")
-        p.on_enable(state)
-        if proto:
-            proto.enabled = True
-        enabled_val = True
+        if not orchestrator.enable(state, name):
+            raise RuntimeError(f"Не удалось включить плагин {name}")
     else:
-        p.on_disable(state)
-        if proto:
-            proto.enabled = False
-        enabled_val = False
-            
-    if name == "fail2ban":
-        state.security.fail2ban_enabled = enabled_val
-    elif name == "honeypot":
-        state.security.honeypot_enabled = enabled_val
-    elif name == "ipban":
-        state.security.ipban_enabled = enabled_val
-        
-    save_state(state)
-    orchestrator.apply_config(state)
+        if not orchestrator.disable(state, name):
+            raise RuntimeError(f"Не удалось выключить плагин {name}")
 
 
 def _menu_amneziawg(state: AppState, p):

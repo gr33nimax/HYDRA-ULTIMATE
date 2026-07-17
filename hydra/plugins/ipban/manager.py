@@ -3,13 +3,12 @@ hydra/plugins/ipban/manager.py — TUI-консоль управления IP-б
 """
 from __future__ import annotations
 
-import os
 import time
 import subprocess
 from hydra.core.state import AppState
 from hydra.ui.tui import (
     clear, menu, prompt, confirm, panel, info, success, warn, error,
-    RED, GREEN, YELLOW, CYAN, BLUE, MAGENTA, BOLD, DIM, WHITE, NC
+    GREEN, CYAN, BOLD, DIM, NC
 )
 
 def menu_ipban(state: AppState, plugin) -> None:
@@ -24,14 +23,16 @@ def menu_ipban(state: AppState, plugin) -> None:
             cnt_v4, cnt_v6 = plugin._ipset_count()
             # Проверяем статус правил iptables
             chk4 = subprocess.run(
-                ["iptables", "-C", "INPUT", "-m", "set", "--match-set", "hydra_manual_ban", "src", "-j", "DROP"],
+                ["iptables", "-C", "INPUT", "-m", "set", "--match-set", "hydra_manual_ban", "src",
+                 "-m", "comment", "--comment", "hydra-ipban", "-j", "DROP"],
                 capture_output=True
             ).returncode == 0
             chk6 = subprocess.run(
-                ["ip6tables", "-C", "INPUT", "-m", "set", "--match-set", "hydra_manual_ban6", "src", "-j", "DROP"],
+                ["ip6tables", "-C", "INPUT", "-m", "set", "--match-set", "hydra_manual_ban6", "src",
+                 "-m", "comment", "--comment", "hydra-ipban", "-j", "DROP"],
                 capture_output=True
             ).returncode == 0
-            rules_ok = chk4 or chk6
+            rules_ok = chk4 and chk6
         else:
             cnt_v4 = cnt_v6 = 0
             rules_ok = False
@@ -66,6 +67,12 @@ def menu_ipban(state: AppState, plugin) -> None:
             if choice == "1":
                 info("Установка ipset и настройка правил...")
                 if plugin.install():
+                    from hydra.core.state import get_protocol, save_state
+                    proto = get_protocol(state, "ipban")
+                    proto.installed = True
+                    proto.enabled = True
+                    state.security.ipban_enabled = True
+                    save_state(state)
                     success("Успешно установлено!")
                 else:
                     error("Не удалось настроить ipset. Подробнее в логе: /var/log/hydra/install.log")
@@ -195,13 +202,16 @@ def menu_ipban(state: AppState, plugin) -> None:
             warn("Будут удалены все правила iptables, ipset-сеты и очищена база данных.")
             if confirm("Вы уверены?", default=False):
                 info("Очищаю...")
-                plugin._remove_iptables_rules()
-                subprocess.run(["ipset", "flush", "hydra_manual_ban"], capture_output=True)
-                subprocess.run(["ipset", "flush", "hydra_manual_ban6"], capture_output=True)
-                subprocess.run(["ipset", "destroy", "hydra_manual_ban"], capture_output=True)
-                subprocess.run(["ipset", "destroy", "hydra_manual_ban6"], capture_output=True)
-                plugin._save_state({"entries": []})
-                success("Все блокировки успешно сброшены!")
+                if plugin._remove_iptables_rules():
+                    subprocess.run(["ipset", "flush", "hydra_manual_ban"], capture_output=True)
+                    subprocess.run(["ipset", "flush", "hydra_manual_ban6"], capture_output=True)
+                    plugin._save_state({"entries": []})
+                    if plugin._ensure_iptables_rules():
+                        success("Все блокировки успешно сброшены!")
+                    else:
+                        error("Баны сняты, но защитные правила не удалось восстановить")
+                else:
+                    error("Не удалось удалить все правила firewall; база оставлена без изменений")
             else:
                 info("Отменено.")
             prompt("Нажмите Enter для продолжения")

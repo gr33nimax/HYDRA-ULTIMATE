@@ -19,7 +19,7 @@ def test_plugin_meta():
     p = IPBanPlugin()
     assert p.meta.name == "ipban"
     assert p.meta.category == PluginCategory.SECURITY
-    assert p.meta.version == "2.0.0"
+    assert p.meta.version == "2.1.0"
 
 
 def test_configure_returns_empty_fragment():
@@ -94,3 +94,50 @@ def test_status():
 def test_traffic_returns_empty():
     p = IPBanPlugin()
     assert p.traffic(_make_state()) == {}
+
+
+def test_iptables_rules_are_exact_ordered_and_family_specific():
+    p = IPBanPlugin()
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if "-C" in command and len([c for c in calls if "-C" in c]) <= 2:
+            return MagicMock(returncode=1)
+        return MagicMock(returncode=0)
+
+    with patch("hydra.plugins.ipban.plugin._run", side_effect=fake_run):
+        assert p._ensure_iptables_rules() is True
+
+    inserts = [call for call in calls if "-I" in call]
+    assert inserts[0][:5] == ["iptables", "-I", "INPUT", "1", "-m"]
+    assert inserts[1][:5] == ["ip6tables", "-I", "INPUT", "1", "-m"]
+    assert all("hydra-ipban" in call for call in inserts)
+    assert not any(call[0] == "iptables" and "hydra_manual_ban6" in call for call in calls)
+
+
+def test_failed_ipset_add_is_not_saved():
+    p = IPBanPlugin()
+    with patch.object(IPBanPlugin, "_ensure_sets", return_value=True), \
+         patch.object(IPBanPlugin, "_ensure_iptables_rules", return_value=True), \
+         patch("hydra.plugins.ipban.plugin._run", return_value=MagicMock(returncode=1, stderr=b"full")), \
+         patch.object(IPBanPlugin, "_state_add_entry") as save:
+        assert p.ban_ip("1.2.3.4") is False
+    save.assert_not_called()
+
+
+def test_unban_keeps_shared_cidr_until_last_reference():
+    p = IPBanPlugin()
+    state = {
+        "entries": [
+            {"display": "AS1", "cidrs": ["1.2.3.0/24"]},
+            {"display": "1.2.3.0/24", "cidrs": ["1.2.3.0/24"]},
+        ]
+    }
+    with patch.object(IPBanPlugin, "_installed", return_value=True), \
+         patch.object(IPBanPlugin, "_load_state", return_value=state), \
+         patch.object(IPBanPlugin, "_save_state") as save, \
+         patch("hydra.plugins.ipban.plugin._run") as run:
+        assert p.unban_ip("AS1") is True
+    run.assert_not_called()
+    assert save.call_args.args[0]["entries"][0]["display"] == "1.2.3.0/24"

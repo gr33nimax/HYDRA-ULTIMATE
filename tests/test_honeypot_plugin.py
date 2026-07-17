@@ -19,7 +19,7 @@ def test_plugin_meta():
     p = HoneypotPlugin()
     assert p.meta.name == "honeypot"
     assert p.meta.category == PluginCategory.SECURITY
-    assert p.meta.version == "2.0.0"
+    assert p.meta.version == "2.1.0"
 
 
 def test_configure_returns_empty_fragment():
@@ -53,9 +53,10 @@ def test_traffic_returns_empty():
     assert p.traffic(_make_state()) == {}
 
 
-def test_install_always_true():
+def test_install_checks_dependencies():
     p = HoneypotPlugin()
-    assert p.install() is True
+    with patch("shutil.which", return_value="/usr/bin/tool"):
+        assert p.install() is True
 
 
 def test_on_enable():
@@ -71,3 +72,25 @@ def test_on_disable():
     with patch.object(HoneypotPlugin, "_remove_service") as mock_rm:
         p.on_disable(_make_state())
         mock_rm.assert_called_once()
+
+
+def test_whitelist_is_normalized_and_invalid_values_are_ignored():
+    result = HoneypotPlugin._normalize_whitelist([
+        "192.168.1.42", "10.0.0.99/24", "bad-value",
+    ])
+    assert "192.168.1.42/32" in result
+    assert "10.0.0.0/24" in result
+    assert "bad-value" not in result
+
+
+def test_generated_script_records_only_verified_firewall_bans():
+    p = HoneypotPlugin()
+    with patch("pathlib.Path.mkdir"), \
+         patch("pathlib.Path.write_text") as write_text, \
+         patch("pathlib.Path.chmod"):
+        p._write_script(9999, ["127.0.0.1/8"])
+    script = write_text.call_args.args[0]
+    compile(script, "hydra-honeypot.py", "exec")
+    assert "if not ok:\n        return False" in script
+    assert '"-C", "INPUT"' in script
+    assert '"-I", "INPUT", "1"' in script

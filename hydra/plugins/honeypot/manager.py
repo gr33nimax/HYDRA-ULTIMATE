@@ -3,15 +3,14 @@ hydra/plugins/honeypot/manager.py — TUI-консоль управления Ho
 """
 from __future__ import annotations
 
-import os
-import time
+import ipaddress
 import subprocess
 from pathlib import Path
 
 from hydra.core.state import AppState
 from hydra.ui.tui import (
-    clear, menu, prompt, confirm, panel, info, success, warn, error,
-    RED, GREEN, YELLOW, CYAN, BLUE, MAGENTA, BOLD, DIM, WHITE, NC
+    clear, menu, prompt, panel, info, success, warn, error,
+    RED, GREEN, YELLOW, CYAN, BOLD, DIM, NC
 )
 
 HONEYPOT_LOG = Path("/var/log/hydra-honeypot.log")
@@ -60,15 +59,26 @@ def menu_honeypot(state: AppState, plugin) -> None:
                 plugin.on_disable(state)
                 if proto:
                     proto.enabled = False
+                state.security.honeypot_enabled = False
                 save_state(state)
                 success("Honeypot остановлен.")
             else:
                 info("Запускаю Honeypot...")
-                plugin.on_enable(state)
-                if proto:
-                    proto.enabled = True
-                save_state(state)
-                success(f"Honeypot запущен на порту {port}.")
+                if not plugin.install():
+                    error("Не найдены обязательные зависимости: python3/systemd")
+                    prompt("Нажмите Enter для продолжения")
+                    continue
+                try:
+                    plugin.on_enable(state)
+                except RuntimeError as exc:
+                    error(str(exc))
+                else:
+                    if proto:
+                        proto.installed = True
+                        proto.enabled = True
+                    state.security.honeypot_enabled = True
+                    save_state(state)
+                    success(f"Honeypot запущен на порту {port}.")
             prompt("Нажмите Enter для продолжения")
             
         elif choice == "2":
@@ -96,7 +106,13 @@ def menu_honeypot(state: AppState, plugin) -> None:
                 if active:
                     info("Перезапускаю Honeypot с новым портом...")
                     plugin._remove_service()
-                    plugin._install_service(new_port, wl)
+                    if not plugin._install_service(new_port, wl):
+                        cfg["port"] = port
+                        plugin._save_state(cfg)
+                        plugin._install_service(port, wl)
+                        error("Новый порт не удалось активировать; восстановлен прежний")
+                        prompt("Нажмите Enter для продолжения")
+                        continue
                 success(f"Порт изменен на {new_port}")
             else:
                 error("Некорректный номер порта!")
@@ -121,15 +137,21 @@ def menu_honeypot(state: AppState, plugin) -> None:
                 if wl_choice == "0":
                     break
                 elif wl_choice == "1":
-                    new_ip = prompt("Введите IP").strip()
-                    if new_ip and new_ip not in wl:
-                        wl.append(new_ip)
+                    new_ip = prompt("Введите IP или подсеть CIDR").strip()
+                    try:
+                        normalized = str(ipaddress.ip_network(new_ip, strict=False))
+                    except ValueError:
+                        error("Некорректный IP или CIDR.")
+                        prompt("Нажмите Enter для продолжения")
+                        continue
+                    if normalized not in wl:
+                        wl.append(normalized)
                         cfg["whitelist"] = wl
                         plugin._save_state(cfg)
                         if active:
                             plugin._write_script(port, wl)
                             subprocess.run(["systemctl", "restart", "hydra-honeypot"], capture_output=True)
-                        success(f"Добавлен в whitelist: {new_ip}")
+                        success(f"Добавлен в whitelist: {normalized}")
                     else:
                         warn("IP пуст или уже в списке.")
                     prompt("Нажмите Enter для продолжения")
@@ -176,9 +198,9 @@ def menu_honeypot(state: AppState, plugin) -> None:
                 prompt("Нажмите Enter для продолжения")
                 continue
                 
-            ban_list = list(banned.keys())
+            ban_list = list(banned.keys())[-20:]
             list_lines = []
-            for i, ip in enumerate(ban_list[-20:], 1):
+            for i, ip in enumerate(ban_list, 1):
                 list_lines.append(f"  {CYAN}{i:>2}.{NC} {RED}{ip}{NC}")
                 
             panel("Выберите IP для разбана", list_lines)
@@ -193,11 +215,10 @@ def menu_honeypot(state: AppState, plugin) -> None:
                 
             if target:
                 info(f"Разбаниваю {target}...")
-                subprocess.run(["ufw", "delete", "deny", "from", target, "to", "any"], capture_output=True)
-                del banned[target]
-                cfg["banned"] = banned
-                plugin._save_state(cfg)
-                success(f"Разбанен: {target}")
+                if plugin._unban_ip(target):
+                    success(f"Разбанен: {target}")
+                else:
+                    error("Firewall не подтвердил удаление правила; запись сохранена")
             else:
                 error("IP не найден.")
             prompt("Нажмите Enter для продолжения")

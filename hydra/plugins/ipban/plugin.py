@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
+import shutil
+import shlex
 import subprocess
 import time
 import urllib.request
@@ -17,6 +20,22 @@ IPSET_V4 = "hydra_manual_ban"
 IPSET_V6 = "hydra_manual_ban6"
 STATE_FILE = Path("/var/lib/hydra/ipban.json")
 RIPE_URL = "https://stat.ripe.net/data/announced-prefixes/data.json?resource={asn}"
+_RULE_COMMENT = "hydra-ipban"
+
+
+def _rule_spec(ipset_name: str) -> list[str]:
+    return [
+        "-m", "set", "--match-set", ipset_name, "src",
+        "-m", "comment", "--comment", _RULE_COMMENT,
+        "-j", "DROP",
+    ]
+
+
+def _run(command: list[str], *, text: bool = False, timeout: int = 30) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(command, capture_output=True, text=text, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return subprocess.CompletedProcess(command, 1, stdout="" if text else b"", stderr=str(exc))
 
 
 class IPBanPlugin(BasePlugin):
@@ -24,13 +43,11 @@ class IPBanPlugin(BasePlugin):
         name="ipban",
         description="IP-бан: ручная блокировка IP/CIDR/диапазона/ASN через ipset",
         category=PluginCategory.SECURITY,
-        version="2.0.0",
+        version="2.1.0",
     )
 
     def install(self) -> bool:
         if not self._installed():
-            import shutil
-            import os
             from hydra.utils.logging import error as log_error, info as log_info
             
             log_info("Starting ipset installation...")
@@ -61,32 +78,27 @@ class IPBanPlugin(BasePlugin):
         if not self._installed():
             return False
             
-        self._ensure_sets()
-        self._ensure_iptables_rules()
-        return True
+        return self._ensure_sets() and self._ensure_iptables_rules()
 
     def uninstall(self) -> bool:
-        self._remove_iptables_rules()
+        rules_removed = self._remove_iptables_rules()
+        if not rules_removed:
+            return False
         if self._installed():
-            subprocess.run(["ipset", "flush", IPSET_V4], capture_output=True)
-            subprocess.run(["ipset", "flush", IPSET_V6], capture_output=True)
-            subprocess.run(["ipset", "destroy", IPSET_V4], capture_output=True)
-            subprocess.run(["ipset", "destroy", IPSET_V6], capture_output=True)
+            for name in (IPSET_V4, IPSET_V6):
+                _run(["ipset", "flush", name])
+                _run(["ipset", "destroy", name])
         STATE_FILE.unlink(missing_ok=True)
         return True
 
     def _installed(self) -> bool:
-        import shutil
-        return shutil.which("ipset") is not None
+        return all(shutil.which(binary) is not None for binary in ("ipset", "iptables", "ip6tables"))
 
     def configure(self, state: AppState) -> ConfigFragment:
         return ConfigFragment()
 
     def apply(self, state: AppState) -> bool:
-        self._ensure_sets()
-        self._ensure_iptables_rules()
-        self._restore_from_state()
-        return True
+        return self._ensure_sets() and self._ensure_iptables_rules() and self._restore_from_state()
 
     def status(self) -> PluginStatus:
         if not self._installed():
@@ -94,26 +106,34 @@ class IPBanPlugin(BasePlugin):
         state = self._load_state()
         entries = state.get("entries", [])
         v4, v6 = self._ipset_count()
+        rules_present = self._iptables_rules_present()
         return PluginStatus(
             installed=True,
-            enabled=len(entries) > 0,
-            running=True,
+            enabled=rules_present,
+            running=rules_present,
             info={"entries": len(entries), "cidrs_v4": v4, "cidrs_v6": v6},
         )
 
     def ban_ip(self, raw: str, comment: str = "") -> bool:
-        self._ensure_sets()
-        self._ensure_iptables_rules()
+        if not self._ensure_sets() or not self._ensure_iptables_rules():
+            return False
         try:
             display, kind, cidrs = self._resolve_to_cidrs(raw)
         except (ValueError, RuntimeError) as e:
             return False
         v4 = [c for c in cidrs if ":" not in c]
         v6 = [c for c in cidrs if ":" in c]
-        for c in v4:
-            subprocess.run(["ipset", "add", IPSET_V4, c, "-exist"], capture_output=True)
-        for c in v6:
-            subprocess.run(["ipset", "add", IPSET_V6, c, "-exist"], capture_output=True)
+        added: list[tuple[str, str]] = []
+        for set_name, values in ((IPSET_V4, v4), (IPSET_V6, v6)):
+            for cidr in values:
+                existed = _run(["ipset", "test", set_name, cidr]).returncode == 0
+                result = _run(["ipset", "add", set_name, cidr, "-exist"])
+                if result.returncode != 0:
+                    for rollback_set, rollback_cidr in added:
+                        _run(["ipset", "del", rollback_set, rollback_cidr])
+                    return False
+                if not existed:
+                    added.append((set_name, cidr))
         self._state_add_entry(display, cidrs, kind, comment)
         return True
 
@@ -124,12 +144,26 @@ class IPBanPlugin(BasePlugin):
         entry = next((e for e in state.get("entries", []) if e.get("display") == display), None)
         if not entry:
             return False
+        remaining = [e for e in state.get("entries", []) if e.get("display") != display]
+        still_referenced = {
+            cidr for other in remaining for cidr in other.get("cidrs", [])
+        }
+        ok = True
         for cidr in entry.get("cidrs", []):
+            if cidr in still_referenced:
+                continue
             if ":" not in cidr:
-                subprocess.run(["ipset", "del", IPSET_V4, cidr], capture_output=True)
+                result = _run(["ipset", "del", IPSET_V4, cidr])
             else:
-                subprocess.run(["ipset", "del", IPSET_V6, cidr], capture_output=True)
-        state["entries"] = [e for e in state["entries"] if e.get("display") != display]
+                result = _run(["ipset", "del", IPSET_V6, cidr])
+            # Missing members are already unbanned; other failures must not be
+            # hidden by deleting the database entry.
+            stderr = result.stderr.decode(errors="replace") if isinstance(result.stderr, bytes) else str(result.stderr or "")
+            if result.returncode != 0 and "not in set" not in stderr.lower():
+                ok = False
+        if not ok:
+            return False
+        state["entries"] = remaining
         self._save_state(state)
         return True
 
@@ -184,34 +218,68 @@ class IPBanPlugin(BasePlugin):
             raise RuntimeError(f"0 префиксов для {asn}")
         return result
 
-    def _ensure_sets(self) -> None:
+    def _ensure_sets(self) -> bool:
         if not self._installed():
-            return
+            return False
         for name, family in [(IPSET_V4, "inet"), (IPSET_V6, "inet6")]:
-            subprocess.run(["ipset", "create", name, "hash:net", "family", family, "maxelem", "65536", "-exist"], capture_output=True)
+            result = _run(["ipset", "create", name, "hash:net", "family", family, "maxelem", "65536", "-exist"])
+            if result.returncode != 0:
+                return False
+        return True
 
-    def _ensure_iptables_rules(self) -> None:
-        for ipset_name in (IPSET_V4, IPSET_V6):
-            check = subprocess.run(["iptables", "-C", "INPUT", "-m", "set", "--match-set", ipset_name, "src", "-j", "DROP"], capture_output=True)
+    def _ensure_iptables_rules(self) -> bool:
+        for binary, ipset_name in (("iptables", IPSET_V4), ("ip6tables", IPSET_V6)):
+            spec = _rule_spec(ipset_name)
+            check = _run([binary, "-C", "INPUT", *spec])
             if check.returncode != 0:
-                subprocess.run(["iptables", "-A", "INPUT", "-m", "set", "--match-set", ipset_name, "src", "-j", "DROP", "-m", "comment", "--comment", "hydra-ipban"], capture_output=True)
-        check6 = subprocess.run(["ip6tables", "-C", "INPUT", "-m", "set", "--match-set", IPSET_V6, "src", "-j", "DROP"], capture_output=True)
-        if check6.returncode != 0:
-            subprocess.run(["ip6tables", "-A", "INPUT", "-m", "set", "--match-set", IPSET_V6, "src", "-j", "DROP", "-m", "comment", "--comment", "hydra-ipban"], capture_output=True)
+                inserted = _run([binary, "-I", "INPUT", "1", *spec])
+                if inserted.returncode != 0:
+                    return False
+        return self._iptables_rules_present()
 
-    def _remove_iptables_rules(self) -> None:
-        for _ in range(10):
-            r = subprocess.run(["iptables", "-D", "INPUT", "-m", "set", "--match-set", IPSET_V4, "src", "-j", "DROP"], capture_output=True)
-            if r.returncode != 0:
-                break
-        for _ in range(10):
-            r = subprocess.run(["ip6tables", "-D", "INPUT", "-m", "set", "--match-set", IPSET_V6, "src", "-j", "DROP"], capture_output=True)
-            if r.returncode != 0:
-                break
+    def _iptables_rules_present(self) -> bool:
+        return all(
+            _run([binary, "-C", "INPUT", *_rule_spec(ipset_name)]).returncode == 0
+            for binary, ipset_name in (("iptables", IPSET_V4), ("ip6tables", IPSET_V6))
+        )
+
+    def _remove_iptables_rules(self) -> bool:
+        ok = True
+        for binary, ipset_name in (("iptables", IPSET_V4), ("ip6tables", IPSET_V6)):
+            listed = _run([binary, "-S", "INPUT"], text=True)
+            if listed.returncode != 0:
+                ok = False
+                continue
+            for line in listed.stdout.splitlines():
+                if _RULE_COMMENT not in line and ipset_name not in line:
+                    continue
+                try:
+                    parts = shlex.split(line)
+                except ValueError:
+                    ok = False
+                    continue
+                if not parts or parts[0] != "-A":
+                    continue
+                parts[0] = "-D"
+                if _run([binary, *parts]).returncode != 0:
+                    ok = False
+
+        # Migration cleanup for the historical bug that attached the IPv6 set
+        # to the IPv4 table as well.
+        listed_v4 = _run(["iptables", "-S", "INPUT"], text=True)
+        for line in listed_v4.stdout.splitlines() if listed_v4.returncode == 0 else []:
+            if IPSET_V6 not in line:
+                continue
+            parts = shlex.split(line)
+            if parts and parts[0] == "-A":
+                parts[0] = "-D"
+                if _run(["iptables", *parts]).returncode != 0:
+                    ok = False
+        return ok
 
     def _ipset_count(self) -> tuple[int, int]:
         def _cnt(name):
-            r = subprocess.run(["ipset", "list", name], capture_output=True, text=True)
+            r = _run(["ipset", "list", name], text=True)
             if "Members:" not in r.stdout:
                 return 0
             after = r.stdout.split("Members:", 1)[1]
@@ -228,7 +296,16 @@ class IPBanPlugin(BasePlugin):
 
     def _save_state(self, data: dict) -> None:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        STATE_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        temporary = STATE_FILE.with_name(f".{STATE_FILE.name}.{os.getpid()}.tmp")
+        try:
+            with temporary.open("w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=2, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.chmod(0o600)
+            temporary.replace(STATE_FILE)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _state_add_entry(self, display: str, cidrs: list[str], kind: str, comment: str = "") -> None:
         state = self._load_state()
@@ -240,30 +317,31 @@ class IPBanPlugin(BasePlugin):
         })
         self._save_state(state)
 
-    def _restore_from_state(self) -> None:
+    def _restore_from_state(self) -> bool:
         if not self._installed():
-            return
+            return False
         state = self._load_state()
         for e in state.get("entries", []):
             for cidr in e.get("cidrs", []):
                 if ":" not in cidr:
-                    subprocess.run(["ipset", "add", IPSET_V4, cidr, "-exist"], capture_output=True)
+                    result = _run(["ipset", "add", IPSET_V4, cidr, "-exist"])
                 else:
-                    subprocess.run(["ipset", "add", IPSET_V6, cidr, "-exist"], capture_output=True)
+                    result = _run(["ipset", "add", IPSET_V6, cidr, "-exist"])
+                if result.returncode != 0:
+                    return False
+        return True
 
     def traffic(self, state: AppState) -> dict[str, int]:
         return {}
 
     def on_enable(self, state: AppState) -> None:
-        if not self._installed():
-            return
-        self._ensure_sets()
-        self._ensure_iptables_rules()
-        self._restore_from_state()
+        if not self.apply(state):
+            raise RuntimeError("IPBan firewall rules could not be installed")
 
     def on_disable(self, state: AppState) -> None:
         if not self._installed():
             return
-        self._remove_iptables_rules()
-        subprocess.run(["ipset", "flush", IPSET_V4], capture_output=True)
-        subprocess.run(["ipset", "flush", IPSET_V6], capture_output=True)
+        if not self._remove_iptables_rules():
+            raise RuntimeError("IPBan firewall rules could not be removed")
+        _run(["ipset", "flush", IPSET_V4])
+        _run(["ipset", "flush", IPSET_V6])
