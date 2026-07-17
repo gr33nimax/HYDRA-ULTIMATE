@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import re
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -51,9 +53,20 @@ def _ufw_open(proto: str, port_start: int, port_end: int, comment: str) -> None:
         _run(["ufw", "allow", f"{port_start}:{port_end}/{proto}", "comment", comment])
 
 
-def _ufw_close(proto: str, port_start: int, port_end: int) -> None:
+def _ufw_close(proto: str, port_start: int, port_end: int, comment: str | None = None) -> None:
     """Закрывает порты через UFW."""
     proto = proto.lower()
+    if comment:
+        status = _run(["ufw", "status", "numbered"])
+        numbers = []
+        for line in status.stdout.splitlines():
+            match = re.match(r"^\[\s*(\d+)\]", line.strip())
+            port_spec = f"{port_start}/{proto}" if port_start == port_end else f"{port_start}:{port_end}/{proto}"
+            if match and port_spec in line and f"# {comment}" in line:
+                numbers.append(int(match.group(1)))
+        for number in sorted(numbers, reverse=True):
+            _run(["ufw", "--force", "delete", str(number)])
+        return
     if port_start == port_end:
         _run(["ufw", "delete", "allow", f"{port_start}/{proto}"])
     else:
@@ -78,18 +91,22 @@ def _ipt_open(proto: str, port_start: int, port_end: int, comment: str) -> None:
             _run(["iptables", "-t", "filter", "-I", "INPUT", "1"] + spec)
 
 
-def _ipt_close(proto: str, port_start: int, port_end: int) -> None:
+def _ipt_close(proto: str, port_start: int, port_end: int, comment: str | None = None) -> None:
     """Закрывает порты через iptables INPUT."""
     proto = proto.lower()
     if port_start == port_end:
         for _ in range(5):
             spec = ["-p", proto, "--dport", str(port_start), "-j", "ACCEPT"]
+            if comment:
+                spec += ["-m", "comment", "--comment", comment]
             if not _ipt_rule_exists("filter", "INPUT", spec):
                 break
             _run(["iptables", "-t", "filter", "-D", "INPUT"] + spec)
     else:
         for _ in range(5):
             spec = ["-p", proto, "--dport", f"{port_start}:{port_end}", "-j", "ACCEPT"]
+            if comment:
+                spec += ["-m", "comment", "--comment", comment]
             if not _ipt_rule_exists("filter", "INPUT", spec):
                 break
             _run(["iptables", "-t", "filter", "-D", "INPUT"] + spec)
@@ -145,28 +162,58 @@ def open_range(proto: str, start: int, end: int, comment: str = "hydra") -> str:
     return f"iptables: {proto} {start}-{end} открыт."
 
 
-def close_tcp(port: int) -> None:
+def close_tcp(port: int, comment: str | None = None) -> None:
     """Закрывает TCP порт через UFW (если активен) иначе iptables."""
     if is_ufw_active():
-        _ufw_close("tcp", port, port)
+        _ufw_close("tcp", port, port, comment)
     else:
-        _ipt_close("tcp", port, port)
+        _ipt_close("tcp", port, port, comment)
         persist()
 
 
-def close_udp(port: int) -> None:
+def close_udp(port: int, comment: str | None = None) -> None:
     """Закрывает UDP порт через UFW (если активен) иначе iptables."""
     if is_ufw_active():
-        _ufw_close("udp", port, port)
+        _ufw_close("udp", port, port, comment)
     else:
-        _ipt_close("udp", port, port)
+        _ipt_close("udp", port, port, comment)
         persist()
 
 
-def close_range(proto: str, start: int, end: int) -> None:
+def close_range(proto: str, start: int, end: int, comment: str | None = None) -> None:
     """Закрывает диапазон портов. proto = 'tcp' | 'udp'."""
     if is_ufw_active():
-        _ufw_close(proto, start, end)
+        _ufw_close(proto, start, end, comment)
     else:
-        _ipt_close(proto, start, end)
+        _ipt_close(proto, start, end, comment)
         persist()
+
+
+def port_is_open(proto: str, port: int) -> bool:
+    """Return whether an allow rule already exists for a port."""
+    proto = proto.lower()
+    if is_ufw_active():
+        result = _run(["ufw", "status"])
+        pattern = re.compile(rf"\b{port}/{re.escape(proto)}\b.*\bALLOW\b", re.IGNORECASE)
+        return any(pattern.search(line) for line in result.stdout.splitlines())
+    spec = ["-p", proto, "--dport", str(port), "-j", "ACCEPT"]
+    return _ipt_rule_exists("filter", "INPUT", spec)
+
+
+@contextmanager
+def temporary_open_port(proto: str, port: int, comment: str = "hydra-temporary"):
+    """Open a firewall port only when needed and restore its prior state."""
+    already_open = port_is_open(proto, port)
+    if not already_open:
+        if proto.lower() == "tcp":
+            open_tcp(port, comment)
+        else:
+            open_udp(port, comment)
+    try:
+        yield
+    finally:
+        if not already_open:
+            if proto.lower() == "tcp":
+                close_tcp(port, comment)
+            else:
+                close_udp(port, comment)

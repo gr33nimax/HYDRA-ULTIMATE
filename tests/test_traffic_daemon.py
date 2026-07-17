@@ -5,7 +5,29 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from hydra.core.state import AppState, User
-from hydra.services.traffic_daemon import run_daemon
+from hydra.services.traffic_daemon import _apply_connection_snapshot, run_daemon
+
+
+def test_connection_counters_survive_daemon_restart_without_double_counting():
+    state = AppState(users=[User(email="user@example.com", uuid="u1")])
+    connection = {
+        "id": "stable-id",
+        "metadata": {"user": "user@example.com", "inboundTag": "anytls-in"},
+        "upload": 100,
+        "download": 200,
+    }
+
+    assert _apply_connection_snapshot(state, [connection], {}, {}, {}) is True
+    assert state.users[0].traffic_used_bytes == 300
+
+    # A daemon restart reloads the counters from AppState; the same totals
+    # must not be charged a second time.
+    assert _apply_connection_snapshot(state, [connection], {}, {}, {}) is False
+    assert state.users[0].traffic_used_bytes == 300
+
+    connection["download"] = 350
+    assert _apply_connection_snapshot(state, [connection], {}, {}, {}) is True
+    assert state.users[0].traffic_used_bytes == 450
 
 def test_daemon_collects_traffic_from_clash_api():
     state = AppState()
@@ -70,14 +92,16 @@ def test_daemon_collects_traffic_from_clash_api():
             raise SystemExit()
             
     saved_states = []
-    def mock_save(st):
-        saved_states.append(st)
+    def mock_update(mutator):
+        result = mutator(state)
+        saved_states.append(state)
+        return state, result
         
     # We patch _log by patching the print or log function if needed, or by allowing it to fail silently.
     import urllib.request
     
     with patch("hydra.services.traffic_daemon.load_state", return_value=state), \
-         patch("hydra.services.traffic_daemon.save_state", side_effect=mock_save), \
+         patch("hydra.services.traffic_daemon.update_state", side_effect=mock_update), \
          patch("hydra.services.traffic_daemon.urllib.request.urlopen") as mock_urlopen, \
          patch("time.sleep", side_effect=mock_sleep), \
          patch("hydra.services.traffic_daemon.Path") as mock_path:
@@ -147,11 +171,13 @@ Jul 03 19:42:56 sing-box[222339]: +0300 2026-07-03 19:42:56 INFO [2371721395 89m
             raise SystemExit()
             
     saved_states = []
-    def mock_save(st):
-        saved_states.append(st)
+    def mock_update(mutator):
+        result = mutator(state)
+        saved_states.append(state)
+        return state, result
         
     with patch("hydra.services.traffic_daemon.load_state", return_value=state), \
-         patch("hydra.services.traffic_daemon.save_state", side_effect=mock_save), \
+         patch("hydra.services.traffic_daemon.update_state", side_effect=mock_update), \
          patch("hydra.services.traffic_daemon.urllib.request.urlopen", return_value=mock_resp), \
          patch("time.sleep", side_effect=mock_sleep), \
          patch("subprocess.run", return_value=mock_sub), \
@@ -217,11 +243,13 @@ Jul 03 19:42:56 sing-box[222339]: +0300 2026-07-03 19:42:56 INFO inbound/trusttu
             raise SystemExit()
             
     saved_states = []
-    def mock_save(st):
-        saved_states.append(st)
+    def mock_update(mutator):
+        result = mutator(state)
+        saved_states.append(state)
+        return state, result
         
     with patch("hydra.services.traffic_daemon.load_state", return_value=state), \
-         patch("hydra.services.traffic_daemon.save_state", side_effect=mock_save), \
+         patch("hydra.services.traffic_daemon.update_state", side_effect=mock_update), \
          patch("hydra.services.traffic_daemon.urllib.request.urlopen", return_value=mock_resp), \
          patch("time.sleep", side_effect=mock_sleep), \
          patch("subprocess.run", return_value=mock_sub), \
@@ -288,11 +316,13 @@ Jul 04 17:13:23 sing-box[222339]: +0300 2026-07-04 17:13:23 INFO [898639574 1ms]
             raise SystemExit()
             
     saved_states = []
-    def mock_save(st):
-        saved_states.append(st)
+    def mock_update(mutator):
+        result = mutator(state)
+        saved_states.append(state)
+        return state, result
         
     with patch("hydra.services.traffic_daemon.load_state", return_value=state), \
-         patch("hydra.services.traffic_daemon.save_state", side_effect=mock_save), \
+         patch("hydra.services.traffic_daemon.update_state", side_effect=mock_update), \
          patch("hydra.services.traffic_daemon.urllib.request.urlopen", return_value=mock_resp), \
          patch("time.sleep", side_effect=mock_sleep), \
          patch("subprocess.run", return_value=mock_sub), \

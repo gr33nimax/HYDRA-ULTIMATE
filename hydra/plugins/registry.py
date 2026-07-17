@@ -33,6 +33,19 @@ _PLUGINS: list[BasePlugin] = [
     IPBanPlugin(),
 ]
 
+# WDTT remains on its legacy manager-controlled lifecycle by explicit product
+# decision.  All other plugins use the centralized configure/apply pipeline.
+_CENTRAL_APPLY_EXCLUSIONS = frozenset({"wdtt"})
+
+
+class PluginConfigurationError(RuntimeError):
+    """An enabled plugin could not produce a valid configuration."""
+
+    def __init__(self, plugin_name: str, cause: Exception):
+        super().__init__(f"Plugin {plugin_name} configuration failed: {cause}")
+        self.plugin_name = plugin_name
+        self.__cause__ = cause
+
 
 def all_plugins() -> list[BasePlugin]:
     return _PLUGINS
@@ -67,12 +80,26 @@ def collect_fragments(state: AppState) -> dict[str, ConfigFragment]:
     for p in enabled(state):
         try:
             f = p.configure(state)
-            if f and (f.inbounds or f.outbounds or f.route_rules or f.nft_tproxy_ports or f.nft_tproxy_ifaces or f.dns):
+            if f and (f.inbounds or f.outbounds or f.route_rules or f.nft_tproxy_ports or f.nft_tproxy_ifaces or f.endpoints or f.dns):
                 fragments[p.meta.name] = f
         except Exception as e:
             from hydra.core.singbox import _log
             _log("ERROR", f"Error configuring plugin {p.meta.name}: {e}")
+            raise PluginConfigurationError(p.meta.name, e) from e
     return fragments
+
+
+def apply_enabled(state: AppState) -> None:
+    """Apply the configuration prepared by every enabled plugin."""
+    for plugin in enabled(state):
+        if plugin.meta.name in _CENTRAL_APPLY_EXCLUSIONS:
+            continue
+        try:
+            applied = plugin.apply(state)
+        except Exception as exc:
+            raise RuntimeError(f"Plugin {plugin.meta.name} apply failed: {exc}") from exc
+        if not applied:
+            raise RuntimeError(f"Plugin {plugin.meta.name} apply returned false")
 
 
 def status_all() -> dict[str, dict]:

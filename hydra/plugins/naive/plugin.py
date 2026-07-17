@@ -131,15 +131,21 @@ class NaivePlugin(BasePlugin):
         Path("/var/lib/caddy-naive").mkdir(parents=True, exist_ok=True)
         self._create_fake_site()
 
-        CADDYFILE.write_text(self._pending_cfg)
-        CADDYFILE.chmod(0o640)
+        pending = CADDYFILE.with_suffix(".pending")
+        pending.write_text(self._pending_cfg)
+        pending.chmod(0o640)
 
-        err = self._validate_caddy()
+        err = self._validate_caddy(pending)
         if err:
+            pending.unlink(missing_ok=True)
             print(f"  Caddyfile validation error: {err}")
             return False
+        pending.replace(CADDYFILE)
 
-        subprocess.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
+        enabled = subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
+        restarted = subprocess.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
+        if enabled.returncode != 0 or restarted.returncode != 0:
+            return False
         time.sleep(2)
         return True
 
@@ -151,16 +157,12 @@ class NaivePlugin(BasePlugin):
         user.credentials.setdefault("naive", {})
         user.credentials["naive"]["username"] = self._derive_username(user)
         user.credentials["naive"]["password"] = self._derive_password(user.uuid)
-        self.configure(state)
-        self.apply(state)
 
     def on_user_remove(self, user: User, state: AppState) -> None:
-        self.configure(state)
-        self.apply(state)
+        pass
 
     def on_user_block(self, user: User, state: AppState) -> None:
-        self.configure(state)
-        self.apply(state)
+        pass
 
     # ═════════════════════════════════════════════════════════════════════
     #  Клиентский конфиг
@@ -330,7 +332,7 @@ class NaivePlugin(BasePlugin):
         if network in ("quic", "both"):
             open_udp(DEFAULT_PORT, "naive-quic")
         elif old_network in ("quic", "both"):
-            close_udp(DEFAULT_PORT)
+            close_udp(DEFAULT_PORT, "naive-quic")
 
         self._remove_iptables_rules()
         subprocess.run([
@@ -617,35 +619,19 @@ class NaivePlugin(BasePlugin):
 
         ps.enabled = True
 
-        from hydra.core.sni_router import rebuild
-        rebuild(state)
-
-        self.configure(state)
-        self.apply(state)
-
-        r = subprocess.run(
-            ["systemctl", "is-active", SERVICE_NAME],
-            capture_output=True, text=True,
-        )
-        if r.stdout.strip() != "active":
-            subprocess.run(["systemctl", "enable", "--now", SERVICE_NAME], capture_output=True)
-
     def on_disable(self, state: AppState) -> None:
         from hydra.utils.firewall import close_tcp
         subprocess.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
-        close_tcp(DEFAULT_PORT)
+        close_tcp(DEFAULT_PORT, "naive")
 
         from hydra.utils.firewall import close_udp
-        close_udp(DEFAULT_PORT)
+        close_udp(DEFAULT_PORT, "naive-quic")
 
         self._remove_iptables_rules()
 
         ps = state.protocols.get("naive")
         if ps:
             ps.enabled = False
-
-        from hydra.core.sni_router import rebuild
-        rebuild(state)
 
     # ═════════════════════════════════════════════════════════════════════
     #  Внутренние помощники
@@ -731,7 +717,7 @@ class NaivePlugin(BasePlugin):
             except Exception:
                 pass
 
-        from hydra.utils.firewall import is_ufw_active
+        from hydra.utils.firewall import temporary_open_port
 
         if not shutil.which("apt-get") and not shutil.which("certbot"):
             return False
@@ -750,40 +736,23 @@ class NaivePlugin(BasePlugin):
                 subprocess.run(["systemctl", "stop", s], capture_output=True)
                 was_running.append(s)
 
-        ufw_opened = False
-        ipt_opened = False
-        if is_ufw_active():
-            subprocess.run(["ufw", "allow", "80/tcp", "comment", "temp-certbot"], capture_output=True)
-            ufw_opened = True
-        else:
-            r_chk = subprocess.run(["iptables", "-C", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"], capture_output=True)
-            if r_chk.returncode != 0:
-                subprocess.run(["iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"], capture_output=True)
-                ipt_opened = True
-
-        r = subprocess.run([
-            "certbot", "certonly", "--standalone",
-            "-d", domain,
-            "--non-interactive", "--agree-tos",
-            "--register-unsafely-without-email",
-            "--keep-until-expiring",
-        ], capture_output=True, text=True)
-
-        success = r.returncode == 0
-        if not success:
-            print(f"  [Ошибка certbot] Вывод:\n{r.stderr or r.stdout or ''}")
-
-        if ufw_opened:
-            subprocess.run(["ufw", "delete", "allow", "80/tcp"], capture_output=True)
-        if ipt_opened:
-            subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"], capture_output=True)
-
-        for s in was_running:
-            if s != "caddy-naive":
-                print(f"  Восстанавливаю {s}...")
-                subprocess.run(["systemctl", "start", s], capture_output=True)
-
-        return success
+        try:
+            with temporary_open_port("tcp", 80, "temp-certbot"):
+                r = subprocess.run([
+                    "certbot", "certonly", "--standalone",
+                    "-d", domain,
+                    "--non-interactive", "--agree-tos",
+                    "--register-unsafely-without-email",
+                    "--keep-until-expiring",
+                ], capture_output=True, text=True)
+            if r.returncode != 0:
+                print(f"  [Ошибка certbot] Вывод:\n{r.stderr or r.stdout or ''}")
+            return r.returncode == 0
+        finally:
+            for s in was_running:
+                if s != "caddy-naive":
+                    print(f"  Восстанавливаю {s}...")
+                    subprocess.run(["systemctl", "start", s], capture_output=True)
 
     @staticmethod
     def _installed() -> bool:
@@ -901,10 +870,10 @@ class NaivePlugin(BasePlugin):
 }}
 """
 
-    def _validate_caddy(self) -> str | None:
+    def _validate_caddy(self, config_path: Path = CADDYFILE) -> str | None:
         r = subprocess.run(
             [str(BIN_PATH), "validate",
-             "--config", str(CADDYFILE), "--adapter", "caddyfile"],
+             "--config", str(config_path), "--adapter", "caddyfile"],
             capture_output=True, text=True,
         )
         if r.returncode != 0:

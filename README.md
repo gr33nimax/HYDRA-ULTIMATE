@@ -1,6 +1,6 @@
-# HYDRA v2.3.4
+# HYDRA v2.3.5
 
-![Version](https://img.shields.io/badge/version-2.3.4-blue.svg)
+![Version](https://img.shields.io/badge/version-2.3.5-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-green.svg)
 ![License](https://img.shields.io/badge/license-GPLv3-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg)
@@ -221,6 +221,18 @@ hydra/
 ---
 
 ## История изменений (Changelog)
+
+### [2.3.5] — 2026-07-17
+
+#### Исправлено
+* Унифицирован транзакционный lifecycle плагинов: `configure → validate → apply → commit/rollback`.
+* Добавлена межпроцессная блокировка и атомарное обновление общего состояния.
+* Исправлены удаление правил UFW/iptables и безопасная работа с общими портами.
+* nftables и конфигурация Caddy теперь проверяются до замены рабочей конфигурации.
+* Счётчики активных соединений сохраняются атомарно, исключая повторное начисление трафика после перезапуска демона.
+* Добавлена безопасная распаковка загружаемых tar-архивов.
+
+---
 
 ### [2.3.4] — 2026-07-11
 

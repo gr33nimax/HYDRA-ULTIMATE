@@ -307,7 +307,7 @@ class MieruPlugin(BasePlugin):
 
     def on_disable(self, state: AppState) -> None:
         from hydra.utils.firewall import close_range
-        close_range("tcp", DEFAULT_PORT_START, DEFAULT_PORT_END)
+        close_range("tcp", DEFAULT_PORT_START, DEFAULT_PORT_END, "mieru")
         self._remove_iptables_rules()
 
     # ═══════════════════════════════════════════════════════════════════

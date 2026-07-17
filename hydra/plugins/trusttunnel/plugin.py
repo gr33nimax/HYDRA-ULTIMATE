@@ -629,7 +629,7 @@ class TrustTunnelPlugin(BasePlugin):
                 pass
 
         import shutil
-        from hydra.utils.firewall import is_ufw_active
+        from hydra.utils.firewall import temporary_open_port
 
         if not shutil.which("certbot"):
             print("  Устанавливаю certbot...")
@@ -638,8 +638,6 @@ class TrustTunnelPlugin(BasePlugin):
 
         services_to_stop = ["caddy-l4", "caddy-naive", "nginx", "apache2"]
         was_running: list[str] = []
-        ufw_opened = False
-        ipt_opened = False
         try:
             for service in services_to_stop:
                 status = subprocess.run(
@@ -654,28 +652,14 @@ class TrustTunnelPlugin(BasePlugin):
                     if stopped.returncode == 0:
                         was_running.append(service)
 
-            if is_ufw_active():
-                subprocess.run([
-                    "ufw", "allow", "80/tcp", "comment", "temp-certbot",
-                ], capture_output=True)
-                ufw_opened = True
-            else:
-                r_chk = subprocess.run([
-                    "iptables", "-C", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"
-                ], capture_output=True)
-                if r_chk.returncode != 0:
-                    inserted = subprocess.run([
-                        "iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"
-                    ], capture_output=True)
-                    ipt_opened = inserted.returncode == 0
-
-            result = subprocess.run([
-                "certbot", "certonly", "--standalone",
-                "-d", domain,
-                "--non-interactive", "--agree-tos",
-                "--register-unsafely-without-email",
-                "--keep-until-expiring",
-            ], capture_output=True, text=True)
+            with temporary_open_port("tcp", 80, "temp-certbot"):
+                result = subprocess.run([
+                    "certbot", "certonly", "--standalone",
+                    "-d", domain,
+                    "--non-interactive", "--agree-tos",
+                    "--register-unsafely-without-email",
+                    "--keep-until-expiring",
+                ], capture_output=True, text=True)
             if result.returncode != 0:
                 print(f"  [Ошибка certbot] Вывод:\n{result.stderr or result.stdout or ''}")
             return result.returncode == 0
@@ -683,14 +667,6 @@ class TrustTunnelPlugin(BasePlugin):
             print(f"  [Ошибка certbot] {exc}")
             return False
         finally:
-            if ufw_opened:
-                subprocess.run(
-                    ["ufw", "delete", "allow", "80/tcp"], capture_output=True,
-                )
-            if ipt_opened:
-                subprocess.run([
-                    "iptables", "-D", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"
-                ], capture_output=True)
             for service in was_running:
                 print(f"  Восстанавливаю {service}...")
                 subprocess.run(

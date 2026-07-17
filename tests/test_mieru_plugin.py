@@ -152,7 +152,7 @@ def test_on_disable_closes_firewall():
     with patch("hydra.utils.firewall.close_range") as mock, \
          patch("subprocess.run") as mock_run:
         p.on_disable(_state())
-        mock.assert_called_once_with("tcp", 2012, 2022)
+        mock.assert_called_once_with("tcp", 2012, 2022, "mieru")
 
 
 def test_status_delegates_to_singbox():

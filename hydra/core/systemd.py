@@ -12,8 +12,8 @@ from pathlib import Path
 SYSTEMD_DIR = Path("/etc/systemd/system")
 
 
-def _reload() -> None:
-    subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+def _reload() -> bool:
+    return subprocess.run(["systemctl", "daemon-reload"], capture_output=True).returncode == 0
 
 
 def install_service(name: str, content: str) -> bool:
@@ -21,9 +21,11 @@ def install_service(name: str, content: str) -> bool:
     unit_path = SYSTEMD_DIR / f"{name}.service"
     unit_path.parent.mkdir(parents=True, exist_ok=True)
     unit_path.write_text(content)
-    _reload()
-    subprocess.run(["systemctl", "enable", f"{name}.service"], capture_output=True)
-    return True
+    if not _reload():
+        return False
+    return subprocess.run(
+        ["systemctl", "enable", f"{name}.service"], capture_output=True,
+    ).returncode == 0
 
 
 def install_timer(name: str, service_content: str, timer_content: str) -> bool:
@@ -32,10 +34,11 @@ def install_timer(name: str, service_content: str, timer_content: str) -> bool:
     tmr_path = SYSTEMD_DIR / f"{name}.timer"
     svc_path.write_text(service_content)
     tmr_path.write_text(timer_content)
-    _reload()
-    subprocess.run(["systemctl", "enable", f"{name}.timer"], capture_output=True)
-    subprocess.run(["systemctl", "start", f"{name}.timer"], capture_output=True)
-    return True
+    if not _reload():
+        return False
+    enabled = subprocess.run(["systemctl", "enable", f"{name}.timer"], capture_output=True)
+    started = subprocess.run(["systemctl", "start", f"{name}.timer"], capture_output=True)
+    return enabled.returncode == 0 and started.returncode == 0
 
 
 def remove_unit(name: str) -> bool:
@@ -52,8 +55,7 @@ def remove_unit(name: str) -> bool:
                 capture_output=True,
             )
             path.unlink()
-    _reload()
-    return True
+    return _reload()
 
 
 def is_active(name: str) -> bool:

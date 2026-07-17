@@ -10,12 +10,19 @@ if TYPE_CHECKING:
 NFT_TABLE = "hydra-tproxy"
 
 
+def _run_checked(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+    result = subprocess.run(cmd, capture_output=True, **kwargs)
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="replace") if isinstance(result.stderr, bytes) else result.stderr
+        raise RuntimeError(f"{' '.join(cmd)} failed: {stderr or 'unknown error'}")
+    return result
+
+
 def _ensure_tproxy_modules():
     """Загружает kernel modules, необходимые для nftables TPROXY."""
     for mod in ("nft_tproxy", "nf_tproxy_ipv4", "nf_tproxy_ipv6"):
-        subprocess.run(
+        _run_checked(
             ["modprobe", mod],
-            capture_output=True,
         )
 
 
@@ -26,18 +33,14 @@ def _ensure_policy_routing():
         capture_output=True, text=True,
     )
     if "0x1" not in r.stdout:
-        subprocess.run(["ip", "rule", "add", "fwmark", "0x1", "table", "100"],
-                       capture_output=True)
+        _run_checked(["ip", "rule", "add", "fwmark", "0x1", "table", "100"])
 
     r = subprocess.run(
         ["ip", "route", "show", "table", "100"],
         capture_output=True, text=True,
     )
     if "local" not in r.stdout:
-        subprocess.run(
-            ["ip", "route", "add", "local", "0.0.0.0/0", "dev", "lo", "table", "100"],
-            capture_output=True,
-        )
+        _run_checked(["ip", "route", "add", "local", "0.0.0.0/0", "dev", "lo", "table", "100"])
 
 
 def _cleanup_policy_routing():
@@ -57,16 +60,16 @@ def apply_tproxy(fragments: dict, tproxy_port: int = 1081) -> None:
         ports.update(getattr(frag, "nft_tproxy_ports", []))
         ifaces.update(getattr(frag, "nft_tproxy_ifaces", []))
 
-    subprocess.run(
-        ["nft", "delete", "table", "inet", NFT_TABLE],
-        capture_output=True,
-    )
-
     if not ports and not ifaces:
+        subprocess.run(["nft", "delete", "table", "inet", NFT_TABLE], capture_output=True)
         _cleanup_policy_routing()
         return
 
-    ruleset = f"table inet {NFT_TABLE} {{\n"
+    table_exists = subprocess.run(
+        ["nft", "list", "table", "inet", NFT_TABLE], capture_output=True,
+    ).returncode == 0
+    ruleset = f"delete table inet {NFT_TABLE}\n" if table_exists else ""
+    ruleset += f"table inet {NFT_TABLE} {{\n"
     ruleset += "    chain prerouting {\n"
     ruleset += "        type filter hook prerouting priority mangle; policy accept;\n"
     ruleset += "        meta mark 0xff return\n"
@@ -97,11 +100,8 @@ def apply_tproxy(fragments: dict, tproxy_port: int = 1081) -> None:
 
     ruleset += "}\n"
 
-    subprocess.run(
-        ["nft", "-f", "-"],
-        input=ruleset.encode(),
-        capture_output=True,
-    )
+    _run_checked(["nft", "--check", "-f", "-"], input=ruleset.encode())
+    _run_checked(["nft", "-f", "-"], input=ruleset.encode())
 
     _ensure_policy_routing()
 

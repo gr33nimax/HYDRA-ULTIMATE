@@ -96,6 +96,13 @@ use_syslog = true
     def status(self) -> PluginStatus:
         installed = self._installed()
         running = False
+        enabled = False
+        try:
+            from hydra.core.state import load_state
+            plugin_state = load_state().protocols.get(self.meta.name)
+            enabled = plugin_state.enabled if plugin_state else DNSCRYPT_CONF.exists()
+        except Exception:
+            enabled = DNSCRYPT_CONF.exists()
         if installed:
             r = subprocess.run(
                 ["systemctl", "is-active", "--quiet", "dnscrypt-proxy"],
@@ -104,7 +111,7 @@ use_syslog = true
 
         return PluginStatus(
             installed=installed,
-            enabled=bool(DNSCRYPT_CONF.exists()),
+            enabled=enabled,
             running=running,
             port=DNSCRYPT_PORT,
         )

@@ -14,14 +14,26 @@ def apply_config(state: AppState) -> bool:
         state.network.tproxy_enabled = True
         save_state(state)
 
-    fragments = registry.collect_fragments(state)
+    try:
+        fragments = registry.collect_fragments(state)
+    except Exception as exc:
+        singbox._log("ERROR", str(exc))
+        return False
     cfg = singbox.generate_config(state, fragments)
+    previous_config = None
+    if singbox.SINGBOX_CONFIG.exists():
+        try:
+            previous_config = singbox.SINGBOX_CONFIG.read_bytes()
+        except OSError:
+            previous_config = None
     if not singbox.write_config(cfg):
         return False
     try:
         nft.apply_tproxy(fragments, state.network.tproxy_port)
-    except Exception:
-        pass
+    except Exception as exc:
+        singbox._log("ERROR", f"Failed to apply plugin/network configuration: {exc}")
+        _restore_singbox_config(previous_config)
+        return False
 
     from hydra.core.sni_router import needs_mux, stop as stop_mux, rebuild as rebuild_mux, uninstall_haproxy
     import socket
@@ -42,6 +54,13 @@ def apply_config(state: AppState) -> bool:
                     break
             time.sleep(0.3)
 
+    try:
+        registry.apply_enabled(state)
+    except Exception as exc:
+        singbox._log("ERROR", f"Failed to apply plugin configuration: {exc}")
+        _restore_singbox_config(previous_config)
+        return False
+
     res = singbox.reload()
 
     # Если мультиплексор нужен, ждем пока sing-box освободит порт 443, и только тогда запускаем caddy-l4
@@ -54,27 +73,63 @@ def apply_config(state: AppState) -> bool:
             time.sleep(0.3)
         mux_ok = rebuild_mux(state)
 
-    try:
-        naive_proto = state.protocols.get("naive")
-        if naive_proto and naive_proto.enabled:
-            p_naive = registry.get("naive")
-            if p_naive:
-                p_naive.configure(state)
-                p_naive.apply(state)
-            r = subprocess.run(["systemctl", "cat", "caddy-naive"], capture_output=True)
-            if r.returncode == 0:
-                subprocess.run(["systemctl", "reset-failed", "caddy-naive"], capture_output=True)
-                subprocess.run(["systemctl", "restart", "caddy-naive"], capture_output=True)
-    except Exception:
-        pass
-
     # Управляем traffic daemon
     try:
         _manage_traffic_daemon(state)
     except Exception:
         pass
 
-    return bool(res and mux_ok)
+    if not res or not mux_ok:
+        _restore_singbox_config(previous_config)
+        try:
+            singbox.reload()
+        except Exception as exc:
+            singbox._log("ERROR", f"Failed to reload restored sing-box config: {exc}")
+        return False
+    return True
+
+
+def _restore_singbox_config(previous: bytes | None) -> None:
+    """Restore the last known configuration after a failed apply phase."""
+    try:
+        if previous is None:
+            singbox.SINGBOX_CONFIG.unlink(missing_ok=True)
+        else:
+            tmp = singbox.SINGBOX_CONFIG.with_suffix(".json.rollback")
+            tmp.write_bytes(previous)
+            tmp.replace(singbox.SINGBOX_CONFIG)
+    except OSError as exc:
+        singbox._log("ERROR", f"Failed to restore sing-box config: {exc}")
+
+
+def _restore_state(target: AppState, snapshot: AppState) -> None:
+    """Restore AppState in place so existing UI references remain valid."""
+    for field_name in snapshot.__dataclass_fields__:
+        setattr(target, field_name, copy.deepcopy(getattr(snapshot, field_name)))
+
+
+def _rollback_plugin_change(state: AppState, snapshot: AppState, plugin, undo_hook: str) -> None:
+    try:
+        getattr(plugin, undo_hook)(state)
+    except Exception as exc:
+        singbox._log("ERROR", f"Plugin rollback hook {plugin.meta.name}.{undo_hook} failed: {exc}")
+    _restore_state(state, snapshot)
+    save_state(state)
+    try:
+        apply_config(state)
+    except Exception as exc:
+        singbox._log("ERROR", f"Configuration rollback failed: {exc}")
+
+
+def _commit_state_change(state: AppState, snapshot: AppState) -> None:
+    """Persist and apply a state mutation, restoring the snapshot on failure."""
+    save_state(state)
+    if apply_config(state):
+        return
+    _restore_state(state, snapshot)
+    save_state(state)
+    apply_config(state)
+    raise RuntimeError("Configuration apply failed; state change was rolled back")
 
 
 def _maybe_migrate_haproxy(state: AppState) -> None:
@@ -155,7 +210,8 @@ def install_plugin(state: AppState, name: str) -> bool:
     proto = get_protocol(state, name)
     proto.installed = ok
     save_state(state)
-    apply_config(state)
+    if ok and proto.enabled:
+        return apply_config(state)
     return ok
 
 
@@ -163,6 +219,7 @@ def uninstall_plugin(state: AppState, name: str) -> bool:
     p = registry.get(name)
     if not p:
         return False
+    snapshot = copy.deepcopy(state)
     proto = get_protocol(state, name)
     if proto and proto.enabled:
         try:
@@ -170,24 +227,31 @@ def uninstall_plugin(state: AppState, name: str) -> bool:
         except Exception:
             pass
     ok = p.uninstall()
+    if not ok:
+        _restore_state(state, snapshot)
+        save_state(state)
+        return False
     proto = get_protocol(state, name)
     proto.installed = False
     proto.enabled = False
     proto.config = {}
     proto.port = 0
     save_state(state)
-    apply_config(state)
-    return ok
+    return apply_config(state)
 
 
 def enable(state: AppState, name: str) -> bool:
     p = registry.get(name)
     if not p:
         return False
-    proto = get_protocol(state, name)
-    previous_proto = copy.deepcopy(proto)
-    p.on_enable(state)
-    proto.enabled = True
+    snapshot = copy.deepcopy(state)
+    try:
+        p.on_enable(state)
+        proto = get_protocol(state, name)
+        proto.enabled = True
+    except Exception:
+        _rollback_plugin_change(state, snapshot, p, "on_disable")
+        raise
     if name == "fail2ban":
         state.security.fail2ban_enabled = True
     elif name == "honeypot":
@@ -202,27 +266,17 @@ def enable(state: AppState, name: str) -> bool:
             try:
                 p.on_user_add(user, state)
             except Exception:
-                pass
+                _rollback_plugin_change(state, snapshot, p, "on_disable")
+                raise
 
     try:
         applied = apply_config(state)
     except Exception:
-        if name == "trusttunnel":
-            state.protocols[name] = previous_proto
-            save_state(state)
-            try:
-                apply_config(state)
-            except Exception:
-                pass
+        _rollback_plugin_change(state, snapshot, p, "on_disable")
         raise
 
-    if not applied and name == "trusttunnel":
-        state.protocols[name] = previous_proto
-        save_state(state)
-        try:
-            apply_config(state)
-        except Exception:
-            pass
+    if not applied:
+        _rollback_plugin_change(state, snapshot, p, "on_disable")
     return applied
 
 
@@ -230,7 +284,13 @@ def disable(state: AppState, name: str) -> bool:
     p = registry.get(name)
     if not p:
         return False
-    p.on_disable(state)
+    snapshot = copy.deepcopy(state)
+    try:
+        p.on_disable(state)
+    except Exception:
+        _restore_state(state, snapshot)
+        save_state(state)
+        raise
     proto = get_protocol(state, name)
     proto.enabled = False
     if name == "fail2ban":
@@ -240,20 +300,29 @@ def disable(state: AppState, name: str) -> bool:
     elif name == "ipban":
         state.security.ipban_enabled = False
     save_state(state)
-    return apply_config(state)
+    try:
+        applied = apply_config(state)
+    except Exception:
+        _rollback_plugin_change(state, snapshot, p, "on_enable")
+        raise
+    if not applied:
+        _rollback_plugin_change(state, snapshot, p, "on_enable")
+    return applied
 
 
 def add_user(state: AppState, user: User) -> None:
     from hydra.core.state import add_user as _add
+    snapshot = copy.deepcopy(state)
     _add(state, user)
     for p in registry.transports():
         if state.protocols.get(p.meta.name) and state.protocols[p.meta.name].enabled:
             try:
                 p.on_user_add(user, state)
             except Exception:
-                pass
-    save_state(state)
-    apply_config(state)
+                _restore_state(state, snapshot)
+                save_state(state)
+                raise
+    _commit_state_change(state, snapshot)
 
     # Перезапуск сервера подписок, если он активен
     from hydra.core.systemd import is_active as is_svc_active, restart as restart_svc
@@ -265,15 +334,17 @@ def remove_user(state: AppState, email: str) -> None:
     u = find_user(state, email)
     if not u:
         return
+    snapshot = copy.deepcopy(state)
     state.users = [x for x in state.users if x.email != email]
     for p in registry.transports():
         if state.protocols.get(p.meta.name) and state.protocols[p.meta.name].enabled:
             try:
                 p.on_user_remove(u, state)
             except Exception:
-                pass
-    save_state(state)
-    apply_config(state)
+                _restore_state(state, snapshot)
+                save_state(state)
+                raise
+    _commit_state_change(state, snapshot)
 
     # Перезапуск сервера подписок, если он активен
     from hydra.core.systemd import is_active as is_svc_active, restart as restart_svc
@@ -285,30 +356,34 @@ def block_user(state: AppState, email: str) -> None:
     u = find_user(state, email)
     if not u:
         return
+    snapshot = copy.deepcopy(state)
     u.blocked = True
     for p in registry.transports():
         if state.protocols.get(p.meta.name) and state.protocols[p.meta.name].enabled:
             try:
                 p.on_user_block(u, state)
             except Exception:
-                pass
-    save_state(state)
-    apply_config(state)
+                _restore_state(state, snapshot)
+                save_state(state)
+                raise
+    _commit_state_change(state, snapshot)
 
 
 def unblock_user(state: AppState, email: str) -> None:
     u = find_user(state, email)
     if not u:
         return
+    snapshot = copy.deepcopy(state)
     u.blocked = False
     for p in registry.transports():
         if state.protocols.get(p.meta.name) and state.protocols[p.meta.name].enabled:
             try:
                 p.on_user_add(u, state)
             except Exception:
-                pass
-    save_state(state)
-    apply_config(state)
+                _restore_state(state, snapshot)
+                save_state(state)
+                raise
+    _commit_state_change(state, snapshot)
 
 
 def sync_user_configs(state: AppState, plugin_name: str | None = None) -> None:
@@ -320,9 +395,7 @@ def sync_user_configs(state: AppState, plugin_name: str | None = None) -> None:
         ps = state.protocols.get(p.meta.name)
         if not ps or not ps.enabled:
             continue
-        try:
-            p.configure(state)
-            p.apply(state)
-        except Exception:
-            pass
+        p.configure(state)
+        if not p.apply(state):
+            raise RuntimeError(f"Plugin {p.meta.name} apply returned false")
     save_state(state)

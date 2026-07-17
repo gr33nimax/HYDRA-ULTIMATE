@@ -11,7 +11,65 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-from hydra.core.state import load_state, save_state
+from hydra.core.state import AppState, load_state, update_state
+
+
+def _apply_connection_snapshot(
+    state: AppState,
+    connections: list[dict],
+    anytls_ports: dict[str, str],
+    trusttunnel_users: dict[tuple[str, str], str | None],
+    mieru_users: dict[tuple[str, str], str],
+) -> bool:
+    """Atomically apply connection deltas using counters persisted in AppState."""
+    active = state.install.setdefault("traffic_connection_counters", {})
+    current_ids: set[str] = set()
+    deltas: dict[tuple[str, str], int] = {}
+
+    for connection in connections:
+        connection_id = connection.get("id")
+        if not connection_id:
+            continue
+        current_ids.add(connection_id)
+        metadata = connection.get("metadata", {})
+        user = metadata.get("user")
+        inbound_tag = metadata.get("inboundTag", "") or metadata.get("type", "")
+        if "anytls" in inbound_tag:
+            protocol = "anytls"
+            user = user or anytls_ports.get(str(metadata.get("sourcePort", "")))
+        elif "trusttunnel" in inbound_tag:
+            protocol = "trusttunnel"
+            host = metadata.get("host") or metadata.get("destinationIP", "")
+            user = user or trusttunnel_users.get((host.lower(), str(metadata.get("destinationPort", ""))))
+        elif "mieru" in inbound_tag:
+            protocol = "mieru"
+            key = (metadata.get("sourceIP", "").lower(), str(metadata.get("sourcePort", "")))
+            user = user or mieru_users.get(key)
+        else:
+            protocol = "unknown"
+
+        total = max(0, int(connection.get("upload", 0)) + int(connection.get("download", 0)))
+        previous = active.get(connection_id, {})
+        old_total = int(previous.get("total", 0))
+        delta = max(0, total - old_total)
+        active[connection_id] = {"user": user or "", "protocol": protocol, "total": total}
+        if user and delta:
+            key = (user, protocol)
+            deltas[key] = deltas.get(key, 0) + delta
+
+    for connection_id in set(active) - current_ids:
+        active.pop(connection_id, None)
+
+    changed = bool(deltas)
+    for (email, protocol), delta in deltas.items():
+        for user in state.users:
+            if user.email != email:
+                continue
+            user.traffic_used_bytes += delta
+            protocol_stats = user.credentials.setdefault(protocol, {})
+            protocol_stats["traffic_used_bytes"] = int(protocol_stats.get("traffic_used_bytes", 0)) + delta
+            break
+    return changed
 
 def run_daemon() -> None:
     def _log(msg: str) -> None:
@@ -61,7 +119,7 @@ def run_daemon() -> None:
             pass
         return port_to_user
 
-    def _get_trusttunnel_users() -> dict[tuple[str, str], str]:
+    def _get_trusttunnel_users() -> dict[tuple[str, str], str | None]:
         import subprocess
         import re
         addr_to_user = {}
@@ -85,7 +143,14 @@ def run_daemon() -> None:
                         user = m.group(1)
                         host = m.group(2)
                         port = m.group(3)
-                        addr_to_user[(host.lower(), port)] = user
+                        key = (host.lower(), port)
+                        previous = addr_to_user.get(key)
+                        if previous is not None and previous != user:
+                            # Destination-only attribution is ambiguous when
+                            # multiple users access the same endpoint.
+                            addr_to_user[key] = None
+                        elif key not in addr_to_user:
+                            addr_to_user[key] = user
         except Exception:
             pass
         return addr_to_user
@@ -140,8 +205,6 @@ def run_daemon() -> None:
         return addr_to_user
 
     _log("Traffic daemon started")
-
-    active_connections: dict[str, dict] = {} # id -> {user, total}
 
     while True:
         try:
@@ -201,90 +264,9 @@ def run_daemon() -> None:
                     summary.append(f"ID={cid}, User={user}, Tag={tag}, Rx={down}, Tx={up}")
                 _log(f"Active connections summary: count={len(connections)}")
 
-            current_ids = set()
-            state_changed = False
-
-            # Собираем дельты трафика по пользователям и протоколам
-            deltas: dict[tuple[str, str], int] = {}
-
-            for conn in connections:
-                conn_id = conn.get("id")
-                if not conn_id:
-                    continue
-                current_ids.add(conn_id)
-
-                metadata = conn.get("metadata", {})
-                email = metadata.get("user")
-                
-                # Определяем протокол по inboundTag или type
-                inbound_tag = metadata.get("inboundTag", "") or metadata.get("type", "")
-                if "anytls" in inbound_tag:
-                    protocol = "anytls"
-                elif "mieru" in inbound_tag:
-                    protocol = "mieru"
-                elif "trusttunnel" in inbound_tag:
-                    protocol = "trusttunnel"
-                else:
-                    protocol = "unknown"
-
-                if not email and protocol == "anytls":
-                    sport = str(metadata.get("sourcePort", ""))
-                    if sport in anytls_ports:
-                        email = anytls_ports[sport]
-
-                if not email and protocol == "trusttunnel":
-                    host = metadata.get("host") or metadata.get("destinationIP", "")
-                    dport = str(metadata.get("destinationPort", ""))
-                    email = trusttunnel_users.get((host.lower(), dport))
-
-                if not email and protocol == "mieru":
-                    sip = metadata.get("sourceIP", "")
-                    sport = str(metadata.get("sourcePort", ""))
-                    email = mieru_users.get((sip.lower(), sport))
-
-                if not email:
-                    continue
-
-                upload = conn.get("upload", 0)
-                download = conn.get("download", 0)
-                total = upload + download
-
-                key = (email, protocol)
-
-                if conn_id in active_connections:
-                    old_total = active_connections[conn_id]["total"]
-                    delta = total - old_total
-                    if delta > 0:
-                        deltas[key] = deltas.get(key, 0) + delta
-                        active_connections[conn_id]["total"] = total
-                else:
-                    # Новое подключение
-                    deltas[key] = deltas.get(key, 0) + total
-                    active_connections[conn_id] = {
-                        "user": email,
-                        "total": total
-                    }
-
-            # Очищаем закрытые соединения из памяти
-            closed_ids = set(active_connections.keys()) - current_ids
-            for cid in closed_ids:
-                active_connections.pop(cid, None)
-
-            # Применяем накопленные дельты к AppState
-            if deltas:
-                for (email, protocol), delta in deltas.items():
-                    for user in state.users:
-                        if user.email == email:
-                            user.traffic_used_bytes += delta
-                            # Записываем в credentials по протоколам
-                            if not isinstance(user.credentials, dict):
-                                user.credentials = {}
-                            proto_dict = user.credentials.setdefault(protocol, {})
-                            proto_dict["traffic_used_bytes"] = proto_dict.get("traffic_used_bytes", 0) + delta
-                            state_changed = True
-
-            if state_changed:
-                save_state(state)
+            update_state(lambda latest: _apply_connection_snapshot(
+                latest, connections, anytls_ports, trusttunnel_users, mieru_users,
+            ))
 
         except Exception as e:
             _log(f"General error: {e}")

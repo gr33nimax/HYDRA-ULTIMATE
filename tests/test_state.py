@@ -94,6 +94,7 @@ def test_save_and_load():
             assert loaded.users[0].traffic_limit_gb == 25
         finally:
             state_mod.STATE_FILE = Path(original)
+            state_mod.STATE_DIR = Path(original).parent
 
 
 def test_user_blocking():
@@ -212,3 +213,40 @@ def test_singbox_generate_config_tproxy_reject_rule():
     assert reject_rule is not None
     assert reject_rule["inbound"] == ["tproxy-in"]
     assert reject_rule["port"] == [1081]
+
+
+def test_load_recovers_from_backup(tmp_path):
+    import hydra.core.state as state_mod
+    original_file, original_dir = state_mod.STATE_FILE, state_mod.STATE_DIR
+    try:
+        state_mod.STATE_DIR = tmp_path
+        state_mod.STATE_FILE = tmp_path / "state.json"
+        first = AppState()
+        first.network.domain = "backup.example"
+        save_state(first)
+        second = AppState()
+        second.network.domain = "current.example"
+        save_state(second)
+        state_mod.STATE_FILE.write_text("{broken", encoding="utf-8")
+
+        assert load_state().network.domain == "backup.example"
+    finally:
+        state_mod.STATE_FILE, state_mod.STATE_DIR = original_file, original_dir
+
+
+def test_update_state_is_atomic_mutation(tmp_path):
+    import hydra.core.state as state_mod
+    original_file, original_dir = state_mod.STATE_FILE, state_mod.STATE_DIR
+    try:
+        state_mod.STATE_DIR = tmp_path
+        state_mod.STATE_FILE = tmp_path / "state.json"
+        save_state(AppState())
+
+        state, result = state_mod.update_state(
+            lambda current: current.install.setdefault("updates", 1)
+        )
+        assert result == 1
+        assert state.install["updates"] == 1
+        assert load_state().install["updates"] == 1
+    finally:
+        state_mod.STATE_FILE, state_mod.STATE_DIR = original_file, original_dir

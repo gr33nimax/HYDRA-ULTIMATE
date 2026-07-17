@@ -776,18 +776,13 @@ class AmneziaWGPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def on_user_add(self, user: User, state: AppState) -> None:
-        self._ensure_forward()
-        self.configure(state)
-        self.apply(state)
+        pass
 
     def on_user_remove(self, user: User, state: AppState) -> None:
-        self.configure(state)
-        self.apply(state)
+        pass
 
     def on_user_block(self, user: User, state: AppState) -> None:
-        self.configure(state)
-        self.apply(state)
-        self._ensure_forward()
+        pass
 
     # ═════════════════════════════════════════════════════════════════════
     #  Клиентский конфиг
@@ -1121,9 +1116,6 @@ class AmneziaWGPlugin(BasePlugin):
         except Exception:
             pass
 
-        self.configure(state)
-        self.apply(state)
-        
         profiles = self.get_profiles(state)
         for p in profiles:
             unit = p.get("unit", AWG_UNIT)

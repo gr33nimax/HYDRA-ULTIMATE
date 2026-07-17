@@ -4,6 +4,8 @@ tests/test_utils.py — Тесты для hydra/utils (firewall, downloader, cry
 from __future__ import annotations
 
 import string
+import io
+import tarfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -121,6 +123,33 @@ class TestVerifyElf:
         """Несуществующий файл → False (не Exception)."""
         from hydra.utils import downloader
         assert downloader.verify_elf(tmp_path / "nope") is False
+
+
+def test_extract_tarball_rejects_parent_traversal(tmp_path):
+    from hydra.utils import downloader
+    archive = tmp_path / "unsafe.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        info = tarfile.TarInfo("../outside.txt")
+        payload = b"unsafe"
+        info.size = len(payload)
+        tar.addfile(info, io.BytesIO(payload))
+
+    with pytest.raises(ValueError, match="Unsafe path"):
+        downloader.extract_tarball(archive, tmp_path / "extract")
+
+
+def test_iptables_close_uses_owner_comment():
+    from hydra.utils import firewall
+    with patch.object(firewall, "_ipt_rule_exists", side_effect=[True, False]), \
+         patch.object(firewall, "_run") as run:
+        firewall._ipt_close("tcp", 443, 443, "naive")
+
+    delete = run.call_args_list[0].args[0]
+    assert delete == [
+        "iptables", "-t", "filter", "-D", "INPUT", "-p", "tcp",
+        "--dport", "443", "-j", "ACCEPT", "-m", "comment",
+        "--comment", "naive",
+    ]
 
 
 # ══════════════════════════════════════════════════════════════════════════════

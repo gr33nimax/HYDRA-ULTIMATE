@@ -270,16 +270,22 @@ def test_set_transport_rolls_back_after_apply_failure():
 def test_certbot_restores_services_and_firewall_on_exception():
     p = TrustTunnelPlugin()
     calls = []
+    rule_added = False
 
     def fake_run(cmd, **kwargs):
+        nonlocal rule_added
         calls.append(cmd)
         result = MagicMock(returncode=0, stdout="")
         if cmd[:3] == ["systemctl", "is-active", "caddy-l4"]:
             result.stdout = "active\n"
         if cmd and cmd[0] == "certbot":
             raise OSError("certbot crashed")
-        if cmd[:2] == ["iptables", "-C"]:
-            result.returncode = 1
+        if cmd and cmd[0] == "iptables" and "-C" in cmd:
+            result.returncode = 0 if rule_added else 1
+        if cmd and cmd[0] == "iptables" and "-I" in cmd:
+            rule_added = True
+        if cmd and cmd[0] == "iptables" and "-D" in cmd:
+            rule_added = False
         return result
 
     with patch("pathlib.Path.exists", return_value=False), \
@@ -289,9 +295,11 @@ def test_certbot_restores_services_and_firewall_on_exception():
         assert p._obtain_cert_certbot("tt.example.com") is False
 
     assert ["systemctl", "start", "caddy-l4"] in calls
-    assert [
-        "iptables", "-D", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"
-    ] in calls
+    assert any(
+        cmd[:5] == ["iptables", "-t", "filter", "-D", "INPUT"]
+        and "temp-certbot" in cmd
+        for cmd in calls
+    )
 
 
 

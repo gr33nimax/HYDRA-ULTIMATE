@@ -36,7 +36,9 @@ def download(url: str, dest: Path, timeout: int = 120) -> bool:
         # Скачиваем во временный файл, затем атомарно перемещаем
         fd, tmp = tempfile.mkstemp(dir=str(dest.parent))
         try:
-            urllib.request.urlretrieve(url, tmp)
+            request = urllib.request.Request(url, headers={"User-Agent": "HYDRA-Installer"})
+            with urllib.request.urlopen(request, timeout=timeout) as response, open(tmp, "wb") as output:
+                shutil.copyfileobj(response, output)
             shutil.move(tmp, str(dest))
             return True
         except Exception:
@@ -103,8 +105,18 @@ def verify_elf(path: Path) -> bool:
 
 
 def extract_tarball(archive: Path, dest: Path) -> Path:
-    """Распаковывает tar.gz архив в dest. Возвращает dest."""
+    """Safely extract a tar.gz archive inside ``dest``."""
     dest.mkdir(parents=True, exist_ok=True)
     with tarfile.open(str(archive), "r:gz") as tar:
-        tar.extractall(path=str(dest))
+        destination = dest.resolve()
+        members = tar.getmembers()
+        for member in members:
+            member_path = (destination / member.name).resolve()
+            try:
+                member_path.relative_to(destination)
+            except ValueError as exc:
+                raise ValueError(f"Unsafe path in archive: {member.name}") from exc
+            if member.issym() or member.islnk() or member.isdev():
+                raise ValueError(f"Unsafe archive member: {member.name}")
+        tar.extractall(path=str(destination), members=members)
     return dest

@@ -230,18 +230,18 @@ def test_on_enable_opens_firewall():
          patch("subprocess.run") as mock_run:
         p.on_enable(state)
         mock_open.assert_called_once_with(443, "anytls")
-        mock_rebuild.assert_called_once_with(state)
+        mock_rebuild.assert_not_called()
 
 
-def test_on_disable_triggers_rebuild():
-    """on_disable() вызывает sni_router.rebuild()."""
+def test_on_disable_defers_rebuild_to_orchestrator():
+    """SNI rebuild is centralized in orchestrator.apply_config()."""
     p = AnyTLSPlugin()
     state = _state()
     
     with patch("hydra.core.sni_router.rebuild") as mock_rebuild, \
          patch("subprocess.run") as mock_run:
         p.on_disable(state)
-        mock_rebuild.assert_called_once_with(state)
+        mock_rebuild.assert_not_called()
         # Проверяем, что disabled выставлен в False
         assert state.protocols["anytls"].enabled is False
 

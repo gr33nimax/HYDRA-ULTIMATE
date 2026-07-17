@@ -237,10 +237,6 @@ class AnyTLSPlugin(BasePlugin):
         # Выставляем enabled = True, чтобы rebuild знал, что AnyTLS включен
         ps.enabled = True
         
-        # 5. Пересобрать SNI-мультиплексор (если нужен)
-        from hydra.core.sni_router import rebuild
-        rebuild(state)
-
     def on_disable(self, state: AppState) -> None:
         self._remove_iptables_rules()
         
@@ -248,10 +244,6 @@ class AnyTLSPlugin(BasePlugin):
         if ps:
             ps.enabled = False
         
-        # Пересобрать SNI-мультиплексор (возможно отключить)
-        from hydra.core.sni_router import rebuild
-        rebuild(state)
-
     # ═════════════════════════════════════════════════════════════════════
     #  Статус / подключенные клиенты
     # ═════════════════════════════════════════════════════════════════════
@@ -443,7 +435,7 @@ class AnyTLSPlugin(BasePlugin):
                 pass
 
         import shutil
-        from hydra.utils.firewall import is_ufw_active
+        from hydra.utils.firewall import temporary_open_port
 
         # 1. Проверяем/устанавливаем certbot
         if not shutil.which("certbot"):
@@ -461,51 +453,22 @@ class AnyTLSPlugin(BasePlugin):
                 subprocess.run(["systemctl", "stop", s], capture_output=True)
                 was_running.append(s)
 
-        # 3. Временно открываем порт 80 в фаерволе
-        ufw_opened = False
-        ipt_opened = False
-        if is_ufw_active():
-            subprocess.run(["ufw", "allow", "80/tcp", "comment", "temp-certbot"], capture_output=True)
-            ufw_opened = True
-        else:
-            # Проверяем, нет ли уже правила в iptables
-            r_chk = subprocess.run([
-                "iptables", "-C", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"
-            ], capture_output=True)
-            if r_chk.returncode != 0:
-                subprocess.run([
-                    "iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"
-                ], capture_output=True)
-                ipt_opened = True
-
-        # 4. Запускаем certbot
-        r = subprocess.run([
-            "certbot", "certonly", "--standalone",
-            "-d", domain,
-            "--non-interactive", "--agree-tos",
-            "--register-unsafely-without-email",
-            "--keep-until-expiring",
-        ], capture_output=True, text=True)
-
-        success = r.returncode == 0
-
-        if not success:
-            print(f"  [Ошибка certbot] Вывод:\n{r.stderr or r.stdout or ''}")
-
-        # 5. Закрываем порт 80 в фаерволе
-        if ufw_opened:
-            subprocess.run(["ufw", "delete", "allow", "80/tcp"], capture_output=True)
-        if ipt_opened:
-            subprocess.run([
-                "iptables", "-D", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"
-            ], capture_output=True)
-
-        # 6. Восстанавливаем работу веб-серверов
-        for s in was_running:
-            print(f"  Восстанавливаю {s}...")
-            subprocess.run(["systemctl", "start", s], capture_output=True)
-
-        return success
+        try:
+            with temporary_open_port("tcp", 80, "temp-certbot"):
+                r = subprocess.run([
+                    "certbot", "certonly", "--standalone",
+                    "-d", domain,
+                    "--non-interactive", "--agree-tos",
+                    "--register-unsafely-without-email",
+                    "--keep-until-expiring",
+                ], capture_output=True, text=True)
+            if r.returncode != 0:
+                print(f"  [Ошибка certbot] Вывод:\n{r.stderr or r.stdout or ''}")
+            return r.returncode == 0
+        finally:
+            for s in was_running:
+                print(f"  Восстанавливаю {s}...")
+                subprocess.run(["systemctl", "start", s], capture_output=True)
 
     def _remove_iptables_rules(self) -> None:
         """Удаляет правила anytls-rx / anytls-tx."""

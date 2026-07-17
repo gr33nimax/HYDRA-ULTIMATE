@@ -11,7 +11,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from hydra.core.state import load_state, save_state
+from hydra.core.state import load_state, update_state
 from hydra.plugins.registry import get_enabled
 from hydra.services.traffic import check_traffic_limits
 
@@ -69,7 +69,17 @@ def run_sync() -> None:
 
     if any_blocked:
         from hydra.core.orchestrator import apply_config
-        save_state(state)
+        blocked_emails = {user.email for user in state.users if user.blocked}
+
+        def merge_blocks(latest):
+            changed = False
+            for user in latest.users:
+                if user.email in blocked_emails and not user.blocked:
+                    user.blocked = True
+                    changed = True
+            return changed
+
+        state, _ = update_state(merge_blocks)
         apply_config(state)
         _log("Applied server config due to new user block(s)")
 
@@ -104,9 +114,6 @@ def run_sync() -> None:
                     apply_config(state)
     except Exception as e:
         _log(f"WARP auto-update check failed: {e}")
-
-    save_state(state)
-
 
 def _log(msg: str) -> None:
     try:

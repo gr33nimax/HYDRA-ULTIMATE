@@ -108,7 +108,7 @@ def test_traffic_uses_state():
         assert "?" not in result
 
 
-def test_on_user_add_triggers_apply():
+def test_on_user_add_defers_apply_to_orchestrator():
     p = AmneziaWGPlugin()
     user = _make_user("a@x.com")
     state = _make_state([user])
@@ -123,10 +123,10 @@ def test_on_user_add_triggers_apply():
         mock_run.return_value = MagicMock(returncode=0)
 
         p.on_user_add(user, state)
-        mock_conf.write_text.assert_called_once()
+        mock_conf.write_text.assert_not_called()
 
 
-def test_on_user_remove_reconfigures():
+def test_on_user_remove_defers_apply_to_orchestrator():
     p = AmneziaWGPlugin()
     user = _make_user("a@x.com")
     state = _make_state([user])
@@ -140,7 +140,7 @@ def test_on_user_remove_reconfigures():
 
         state.users = []
         p.on_user_remove(user, state)
-        mock_conf.write_text.assert_called_once()
+        mock_conf.write_text.assert_not_called()
 
 
 def test_connected_clients_returns_list():

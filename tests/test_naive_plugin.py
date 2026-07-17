@@ -257,7 +257,7 @@ def test_on_disable_closes_firewall():
     with patch("hydra.utils.firewall.close_tcp") as mock_close, \
          patch("subprocess.run") as mock_run:
         p.on_disable(state)
-        mock_close.assert_called_once_with(443)
+        mock_close.assert_called_once_with(443, "naive")
 
 
 def test_connected_clients_parses_ss():

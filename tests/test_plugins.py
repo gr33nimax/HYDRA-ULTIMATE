@@ -1,6 +1,7 @@
 """tests/test_plugins.py — Тесты для плагинной системы."""
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+import pytest
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -106,3 +107,41 @@ def test_config_fragment_empty():
     assert frag.inbounds == []
     assert frag.outbounds == []
     assert frag.route_rules == []
+
+
+def test_collect_fragments_fails_closed_for_enabled_plugin():
+    from hydra.plugins import registry
+    plugin = MockPlugin()
+    plugin.configure = MagicMock(side_effect=ValueError("invalid config"))
+    state = AppState(protocols={"mock": PluginState(enabled=True)})
+
+    with patch("hydra.plugins.registry._PLUGINS", [plugin]), \
+         pytest.raises(registry.PluginConfigurationError, match="mock"):
+        registry.collect_fragments(state)
+
+
+def test_collect_fragments_keeps_endpoint_only_fragment():
+    from hydra.plugins import registry
+    plugin = MockPlugin()
+    plugin.configure = MagicMock(
+        return_value=ConfigFragment(endpoints=[{"type": "wireguard", "tag": "ep"}])
+    )
+    state = AppState(protocols={"mock": PluginState(enabled=True)})
+
+    with patch("hydra.plugins.registry._PLUGINS", [plugin]):
+        fragments = registry.collect_fragments(state)
+
+    assert fragments["mock"].endpoints[0]["tag"] == "ep"
+
+
+def test_central_apply_preserves_wdtt_legacy_lifecycle():
+    from hydra.plugins import registry
+    plugin = MockPlugin()
+    plugin.meta = PluginMeta(name="wdtt", description="legacy")
+    plugin.apply = MagicMock(return_value=True)
+    state = AppState(protocols={"wdtt": PluginState(enabled=True)})
+
+    with patch("hydra.plugins.registry._PLUGINS", [plugin]):
+        registry.apply_enabled(state)
+
+    plugin.apply.assert_not_called()

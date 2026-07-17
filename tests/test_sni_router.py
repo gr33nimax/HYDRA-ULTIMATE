@@ -126,8 +126,9 @@ def test_rebuild_starts_caddy():
         
         assert rebuild(s) is True
         
-        # Check config write
-        mock_cfg.write_text.assert_called_once()
+        # Config is validated through a pending file before atomic replacement.
+        mock_cfg.with_suffix.return_value.write_text.assert_called_once()
+        mock_cfg.with_suffix.return_value.replace.assert_called_once_with(mock_cfg)
         # Check caddy-l4 was restarted/reloaded
         mock_run.assert_any_call(["systemctl", "reload-or-restart", "caddy-l4"], capture_output=True)
 
@@ -229,7 +230,8 @@ def test_rebuild_runs_caddy_l4_with_only_sub_domain():
         mock_run.return_value = MagicMock(returncode=0)
         assert rebuild(s) is True
         
-        # Проверяем, что конфиг был записан и caddy-l4 запущен/перезапущен
-        mock_cfg.write_text.assert_called_once()
+        # Проверяем атомарную запись и запуск/перезапуск caddy-l4
+        mock_cfg.with_suffix.return_value.write_text.assert_called_once()
+        mock_cfg.with_suffix.return_value.replace.assert_called_once_with(mock_cfg)
         mock_run.assert_any_call(["systemctl", "reload-or-restart", "caddy-l4"], capture_output=True)
 

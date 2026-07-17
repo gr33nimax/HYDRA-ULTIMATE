@@ -295,9 +295,8 @@ def install(state: AppState | None = None) -> bool:
     
     xcaddy_bin = f"{go_path}/bin/xcaddy"
     if not os.path.exists(xcaddy_bin):
-        from hydra.utils.downloader import download_github_asset
+        from hydra.utils.downloader import download_github_asset, extract_tarball
         from hydra.utils.net import detect_arch
-        import tarfile
         
         xcaddy_tar = Path("/tmp/xcaddy.tar.gz")
         print("  Downloading precompiled xcaddy from GitHub...")
@@ -305,8 +304,7 @@ def install(state: AppState | None = None) -> bool:
         asset_pattern = f"linux_{arch}.tar.gz"
         if download_github_asset("caddyserver/xcaddy", asset_pattern, xcaddy_tar):
             try:
-                with tarfile.open(xcaddy_tar, "r:gz") as tar:
-                    tar.extract("xcaddy", path=f"{go_path}/bin")
+                extract_tarball(xcaddy_tar, Path(f"{go_path}/bin"))
                 os.chmod(xcaddy_bin, 0o755)
                 print("  Successfully downloaded and extracted xcaddy.")
             except Exception as e:
@@ -766,7 +764,7 @@ def rebuild(state: AppState) -> bool:
     if not needs_mux(state):
         if had_quic_proxy and not quic_owner:
             from hydra.utils.firewall import close_udp
-            close_udp(443)
+            close_udp(443, "udp-quic-mux")
         stop()
         return True
 
@@ -789,15 +787,18 @@ def rebuild(state: AppState) -> bool:
     CADDY_CFG_DIR.mkdir(parents=True, exist_ok=True)
     CADDY_LOG_DIR.mkdir(parents=True, exist_ok=True)
     
-    CADDY_CFG.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    pending_config = CADDY_CFG.with_suffix(".json.pending")
+    pending_config.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
     # 4. Validate config
     r = subprocess.run([
-        str(CADDY_BIN), "validate", "--config", str(CADDY_CFG)
+        str(CADDY_BIN), "validate", "--config", str(pending_config)
     ], capture_output=True, text=True)
     if r.returncode != 0:
+        pending_config.unlink(missing_ok=True)
         print(f"  Caddy L4 config validation error: {r.stderr or r.stdout}")
         return False
+    pending_config.replace(CADDY_CFG)
 
     # 5. Write systemd service file
     _install_service()
@@ -824,7 +825,7 @@ def rebuild(state: AppState) -> bool:
         open_udp(443, "udp-quic-mux")
     elif had_quic_proxy:
         from hydra.utils.firewall import close_udp
-        close_udp(443)
+        close_udp(443, "udp-quic-mux")
 
     # 7. Enable and reload/restart service
     subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)

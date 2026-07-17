@@ -14,7 +14,6 @@ import json
 import platform
 import shutil
 import subprocess
-import tarfile
 import time
 from pathlib import Path
 
@@ -170,8 +169,11 @@ class TelemtPlugin(BasePlugin):
                 print(f"  [telemt] Ошибка записи fallback настроек: {e}")
 
         # 2. Перезапуск службы
-        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
-        subprocess.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
+        daemon_reload = subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+        enable = subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
+        restart = subprocess.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
+        if any(result.returncode != 0 for result in (daemon_reload, enable, restart)):
+            return False
 
         # 3. Интеграция с Sing-Box (Self-Route)
         sb_int = cfg.get("singbox_integration_enabled", False)
@@ -217,16 +219,12 @@ class TelemtPlugin(BasePlugin):
         user.credentials.setdefault("telemt", {})
         user.credentials["telemt"]["username"] = self._derive_username(user.uuid)
         user.credentials["telemt"]["secret"] = self._derive_secret(user.uuid)
-        self.configure(state)
-        self.apply(state)
 
     def on_user_remove(self, user: User, state: AppState) -> None:
-        self.configure(state)
-        self.apply(state)
+        pass
 
     def on_user_block(self, user: User, state: AppState) -> None:
-        self.configure(state)
-        self.apply(state)
+        pass
 
     # ═════════════════════════════════════════════════════════════════════
     #  Клиентский конфиг
@@ -325,14 +323,7 @@ class TelemtPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def on_enable(self, state: AppState) -> None:
-        self.configure(state)
-        self.apply(state)
-        r = subprocess.run(
-            ["systemctl", "is-active", SERVICE_NAME],
-            capture_output=True, text=True,
-        )
-        if r.stdout.strip() != "active":
-            subprocess.run(["systemctl", "enable", "--now", SERVICE_NAME], capture_output=True)
+        subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
 
     def on_disable(self, state: AppState) -> None:
         subprocess.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
@@ -376,7 +367,7 @@ class TelemtPlugin(BasePlugin):
         return True
 
     def _download_and_extract(self, asset_pattern: str, dest: Path, archive: Path) -> bool:
-        from hydra.utils.downloader import download_github_asset
+        from hydra.utils.downloader import download_github_asset, extract_tarball
 
         if not download_github_asset(GITHUB_REPO, asset_pattern, archive):
             print(f"  Не удалось скачать {asset_pattern}")
@@ -386,8 +377,7 @@ class TelemtPlugin(BasePlugin):
         extract_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            with tarfile.open(str(archive), "r:gz") as tf:
-                tf.extractall(path=str(extract_dir))
+            extract_tarball(archive, extract_dir)
 
             found = list(extract_dir.rglob("telemt"))
             if not found:
