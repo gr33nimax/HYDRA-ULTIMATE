@@ -78,6 +78,7 @@ class Hysteria2Plugin(BasePlugin):
         from hydra.core.decoy import ensure_decoy_site
         from hydra.utils.firewall import open_tcp
         ensure_decoy_site("hysteria2")
+        open_tcp(80, "hysteria2-decoy-http")
         open_tcp(443, "hysteria2-decoy")
         return True
 
@@ -143,6 +144,7 @@ class Hysteria2Plugin(BasePlugin):
     def on_disable(self, state: AppState) -> None:
         from hydra.utils.firewall import close_tcp, close_udp
         close_udp(self._port(state), "hysteria2")
+        close_tcp(80, "hysteria2-decoy-http")
         close_tcp(443, "hysteria2-decoy")
 
     def status(self) -> PluginStatus:

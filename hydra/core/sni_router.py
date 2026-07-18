@@ -736,7 +736,30 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
         }
 
     # 4. HTTP app (decoy websites & forward_proxy)
-    http_servers = {}
+    http_servers = {
+        "https_redirect": {
+            "listen": [":80"],
+            "automatic_https": {
+                "disable": True,
+                "disable_redirects": True
+            },
+            "routes": [
+                {
+                    "handle": [
+                        {
+                            "handler": "static_response",
+                            "status_code": 308,
+                            "headers": {
+                                "Location": [
+                                    "https://{http.request.host}{http.request.uri}"
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    }
 
     # AnyTLS Decoy HTTP server
     if any(b["name"] == "anytls" for b in backends):

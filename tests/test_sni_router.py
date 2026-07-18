@@ -155,6 +155,17 @@ def test_hysteria2_has_browser_https_decoy_route():
         "handler": "file_server", "root": "/var/www/decoy-hysteria2",
     }
 
+    redirect = cfg["apps"]["http"]["servers"]["https_redirect"]
+    assert redirect["listen"] == [":80"]
+    response = redirect["routes"][0]["handle"][0]
+    assert response == {
+        "handler": "static_response",
+        "status_code": 308,
+        "headers": {
+            "Location": ["https://{http.request.host}{http.request.uri}"],
+        },
+    }
+
 
 def test_rebuild_starts_caddy():
     """rebuild() generates config and restarts/reloads caddy-l4."""
