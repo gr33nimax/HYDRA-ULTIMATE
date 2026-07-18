@@ -285,6 +285,9 @@ def test_generate_nekobox_sub_wraps_shadowtls_chain_as_native_config():
     data = zlib.decompress(base64.urlsafe_b64decode(encoded))
     assert b'"detour":"shadowtls-out"' in data
     assert b'"type":"tun"' in data
+    assert b'"address":["172.19.0.1/28","fdfe:dcba:9876::1/126"]' in data
+    assert b'inet4_address' not in data
+    assert b'inet6_address' not in data
 
 
 def test_resolve_subscription_format_uses_explicit_override_then_user_agent():
