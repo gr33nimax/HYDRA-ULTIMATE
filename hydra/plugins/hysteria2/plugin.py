@@ -13,6 +13,7 @@ from hydra.utils.net import public_ip
 
 
 DEFAULT_PORT = 8443
+DECOY_DIR = "/var/www/decoy-hysteria2"
 
 
 class Hysteria2Plugin(BasePlugin):
@@ -61,10 +62,8 @@ class Hysteria2Plugin(BasePlugin):
                 "key_path": key,
             },
             "masquerade": {
-                "type": "string",
-                "status_code": 404,
-                "headers": {"content-type": ["text/html; charset=utf-8"]},
-                "content": "<html><body><h1>404 Not Found</h1></body></html>",
+                "type": "file",
+                "directory": DECOY_DIR,
             },
         }
         mode = self._congestion_mode(state)
@@ -76,6 +75,8 @@ class Hysteria2Plugin(BasePlugin):
         return ConfigFragment(inbounds=[inbound])
 
     def apply(self, state: AppState) -> bool:
+        from hydra.core.decoy import ensure_decoy_site
+        ensure_decoy_site("hysteria2")
         return True
 
     def on_user_add(self, user: User, state: AppState) -> None:

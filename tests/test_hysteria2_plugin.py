@@ -6,7 +6,7 @@ import pytest
 
 from hydra.core.state import AppState, PluginState, User
 from hydra.plugins.base import PluginCategory
-from hydra.plugins.hysteria2.plugin import DEFAULT_PORT, Hysteria2Plugin
+from hydra.plugins.hysteria2.plugin import DECOY_DIR, DEFAULT_PORT, Hysteria2Plugin
 
 
 def _state(*users: User) -> AppState:
@@ -35,7 +35,14 @@ def test_meta_and_extended_inbound_contract():
     assert inbound["users"][0]["name"] == "a@example.com"
     assert inbound["obfs"] == {"type": "salamander", "password": "salamander-secret"}
     assert inbound["tls"]["alpn"] == ["h3"]
-    assert inbound["masquerade"]["type"] == "string"
+    assert inbound["masquerade"] == {"type": "file", "directory": DECOY_DIR}
+
+
+def test_apply_ensures_hysteria2_decoy_site():
+    plugin = Hysteria2Plugin()
+    with patch("hydra.core.decoy.ensure_decoy_site") as ensure:
+        assert plugin.apply(_state()) is True
+    ensure.assert_called_once_with("hysteria2")
 
 
 def test_blocked_users_are_not_authorized():
