@@ -40,9 +40,20 @@ def test_meta_and_extended_inbound_contract():
 
 def test_apply_ensures_hysteria2_decoy_site():
     plugin = Hysteria2Plugin()
-    with patch("hydra.core.decoy.ensure_decoy_site") as ensure:
+    with patch("hydra.core.decoy.ensure_decoy_site") as ensure, \
+         patch("hydra.utils.firewall.open_tcp") as open_tcp:
         assert plugin.apply(_state()) is True
     ensure.assert_called_once_with("hysteria2")
+    open_tcp.assert_called_once_with(443, "hysteria2-decoy")
+
+
+def test_disable_closes_transport_and_decoy_ports():
+    plugin = Hysteria2Plugin()
+    with patch("hydra.utils.firewall.close_udp") as close_udp, \
+         patch("hydra.utils.firewall.close_tcp") as close_tcp:
+        plugin.on_disable(_state())
+    close_udp.assert_called_once_with(DEFAULT_PORT, "hysteria2")
+    close_tcp.assert_called_once_with(443, "hysteria2-decoy")
 
 
 def test_blocked_users_are_not_authorized():
