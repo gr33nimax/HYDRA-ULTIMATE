@@ -184,7 +184,7 @@ class NaivePlugin(BasePlugin):
         if network_mode in ("tcp", "both"):
             outbounds.append({
                 "type": "naive",
-                "tag": f"naive-h2-{username}",
+                "tag": f"naive-tcp-{username}",
                 "server": domain,
                 "server_port": port,
                 "username": username,
@@ -193,7 +193,6 @@ class NaivePlugin(BasePlugin):
                 "tls": {
                     "enabled": True,
                     "server_name": domain,
-                    "alpn": ["h2"],
                 },
             })
 

@@ -402,6 +402,50 @@ def generate_base64_sub(user: User, state: AppState) -> str:
     return base64.b64encode(payload.encode("utf-8")).decode("utf-8")
 
 
+def generate_throne_sub(user: User, state: AppState) -> str:
+    """Build a Throne subscription without flattening ShadowTLS detours."""
+    payload = base64.b64decode(generate_base64_sub(user, state)).decode("utf-8")
+    links = []
+    for link in payload.splitlines():
+        parsed = urllib.parse.urlparse(link)
+        query = urllib.parse.parse_qs(parsed.query)
+        is_shadowtls_trojan = (
+            parsed.scheme == "trojan"
+            and "shadow-tls" in query.get("plugin", [])
+        )
+        if link and not is_shadowtls_trojan:
+            links.append(link)
+
+    shadowtls = next(
+        (p for p in enabled(state, PluginCategory.TRANSPORT) if p.meta.name == "shadowtls"),
+        None,
+    )
+    if shadowtls:
+        try:
+            config = json.loads(shadowtls.generate_client_config(user, state))
+            config["inbounds"] = [{
+                "type": "mixed",
+                "tag": "mixed-in",
+                "listen": "127.0.0.1",
+                "listen_port": 2080,
+            }]
+            wrapper = {
+                "type": "custom",
+                "name": f"{user.email} ShadowTLS",
+                "subtype": "fullconfig",
+                "config": json.dumps(config, ensure_ascii=False, separators=(",", ":")),
+            }
+            encoded = base64.urlsafe_b64encode(
+                json.dumps(wrapper, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            ).decode("ascii").rstrip("=")
+            links.append(f"json://shadowtls#{encoded}")
+        except Exception:
+            pass
+
+    throne_payload = "\n".join(links) + "\n"
+    return base64.b64encode(throne_payload.encode("utf-8")).decode("ascii")
+
+
 def generate_userinfo_header(user: User, state: AppState) -> str:
     """Генерация заголовка Subscription-Userinfo с трафиком и окончанием подписки."""
     upload = 0
@@ -621,7 +665,11 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             self._send_error(403, "Invalid, expired or blocked token")
             return
             
-        if response_format in ("singbox", "sing-box", "json"):
+        if response_format == "throne":
+            content = generate_throne_sub(user, state)
+            content_type = "text/plain; charset=utf-8"
+            filename = f"hydra-{user.email}-throne.txt"
+        elif response_format in ("singbox", "sing-box", "json"):
             content = json.dumps(
                 generate_singbox_config(user, state),
                 ensure_ascii=False,

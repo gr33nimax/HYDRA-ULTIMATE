@@ -294,6 +294,11 @@ class ClientBot:
             f"`https://{state.network.domain}:9443/sub"
             f"?token={user.uuid}&format=singbox`"
         )
+        lines.append(
+            f"\nThrone (ShadowTLS chain):\n"
+            f"`https://{state.network.domain}:9443/sub"
+            f"?token={user.uuid}&format=throne`"
+        )
         await update.message.reply_text(
             "\n".join(lines),
             parse_mode="Markdown",
