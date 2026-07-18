@@ -17,6 +17,8 @@ from hydra.services.subscriptions.generator import (
     resolve_subscription_format,
     serialize_nekobox_config,
     generate_client_config,
+    get_subscription_urls,
+    get_user_access_status,
 )
 from hydra.core.state import AppState, User
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
@@ -127,6 +129,49 @@ def test_generate_links_skips_empty():
     with patch("hydra.services.subscriptions.generator.enabled", return_value=[p1, p2]):
         links = generate_links(user, state)
         assert links == ["mock://a@x.com@example.com"]
+
+
+def test_generate_links_deduplicates_and_excludes_system_wdtt():
+    duplicate = MockTransport()
+    duplicate.client_links = MagicMock(return_value=["mock://same", "mock://same", ""])
+    wdtt = MockTransport()
+    wdtt.meta = PluginMeta(
+        name="wdtt",
+        description="System-wide qWDTT",
+        category=PluginCategory.TRANSPORT,
+        version="1.0.0",
+    )
+    user = _make_user("a@x.com")
+    state = _make_state([user])
+
+    with patch("hydra.services.subscriptions.generator.enabled", return_value=[duplicate, wdtt]):
+        assert generate_links(user, state) == ["mock://same"]
+
+
+def test_subscription_urls_escape_token_and_offer_canonical_formats():
+    user = _make_user("a@x.com", uuid="token/with space")
+    state = _make_state([user])
+    state.network.sub_domain = "sub.example.com"
+
+    urls = get_subscription_urls(user, state)
+
+    assert urls["auto"] == "https://sub.example.com/sub/token%2Fwith%20space"
+    assert urls["nekobox"].endswith("?format=nekobox")
+    assert urls["throne"].endswith("?format=throne")
+    assert urls["singbox"].endswith("?format=singbox")
+
+
+def test_user_access_status_reports_real_restriction_reason():
+    blocked = _make_user("blocked@x.com", blocked=True)
+    expired = _make_user("expired@x.com", blocked=True)
+    expired.expiry_date = "2000-01-01T00:00:00Z"
+    exhausted = _make_user("quota@x.com")
+    exhausted.traffic_limit_gb = 1
+    exhausted.traffic_used_bytes = 1073741824
+
+    assert get_user_access_status(blocked) == (False, "заблокирован")
+    assert get_user_access_status(expired) == (False, "срок истёк")
+    assert get_user_access_status(exhausted) == (False, "лимит исчерпан")
 
 
 # ═════════════════════════════════════════════════════════════════════════════

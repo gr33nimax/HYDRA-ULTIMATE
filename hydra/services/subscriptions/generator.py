@@ -330,6 +330,8 @@ def generate_links(user: User, state: AppState) -> list[str]:
     """Собирает ссылки со всех включённых TRANSPORT-плагинов."""
     links: list[str] = []
     for p in enabled(state, PluginCategory.TRANSPORT):
+        if p.meta.name == "wdtt":
+            continue
         try:
             if p.meta.name == "amneziawg":
                 profiles = p.get_profiles(state)
@@ -338,15 +340,19 @@ def generate_links(user: User, state: AppState) -> list[str]:
                     if link:
                         links.append(link)
             elif hasattr(p, "client_links"):
-                multi = p.client_links(user, state)
-                links.extend(multi)
+                multi = p.client_links(user, state) or []
+                links.extend(link for link in multi if link)
             else:
                 link = p.client_link(user, state)
                 if link:
                     links.append(link)
         except Exception:
             pass
-    return links
+
+    # Некоторые плагины возвращают основную ссылку и ту же ссылку в наборе
+    # вариантов. Подписка должна быть стабильной и не создавать дубликаты
+    # профилей в клиенте при каждом обновлении.
+    return list(dict.fromkeys(links))
 
 
 def generate_base64_sub(user: User, state: AppState) -> str:
@@ -619,6 +625,11 @@ def resolve_subscription_format(requested: Optional[str], user_agent: str = "") 
     return "base64"
 
 
+SUPPORTED_SUBSCRIPTION_FORMATS = {
+    "base64", "nekobox", "throne", "singbox", "sing-box", "json",
+}
+
+
 def generate_userinfo_header(user: User, state: AppState) -> str:
     """Генерация заголовка Subscription-Userinfo с трафиком и окончанием подписки."""
     upload = 0
@@ -662,6 +673,8 @@ def generate_singbox_config(user: User, state: AppState) -> dict:
     selected_outbound = ""
 
     for p in enabled(state, PluginCategory.TRANSPORT):
+        if p.meta.name == "wdtt":
+            continue
         try:
             p_conf_str = p.generate_client_config(user, state)
             if p_conf_str:
@@ -700,13 +713,30 @@ def generate_client_config(user: User, state: AppState, protocol: str) -> str:
 
 def get_subscription_url(user: User, state: AppState) -> str:
     """Возвращает ссылку на подписку (учитывая sub_domain для скрытия порта)."""
+    token = urllib.parse.quote(str(user.uuid), safe="")
     sub_domain = getattr(state.network, "sub_domain", "")
     if sub_domain:
-        return f"https://{sub_domain}/sub/{user.uuid}"
+        return f"https://{sub_domain}/sub/{token}"
     
     from hydra.utils.net import public_ip
     host = state.network.domain or state.network.server_ip or public_ip()
-    return f"https://{host}:9443/sub/{user.uuid}"
+    return f"https://{host}:9443/sub/{token}"
+
+
+def get_subscription_urls(user: User, state: AppState) -> dict[str, str]:
+    """Возвращает канонические URL без ручной конкатенации query-параметров."""
+    base = get_subscription_url(user, state)
+
+    def with_format(value: str) -> str:
+        separator = "&" if "?" in base else "?"
+        return f"{base}{separator}format={urllib.parse.quote(value, safe='')}"
+
+    return {
+        "auto": base,
+        "nekobox": with_format("nekobox"),
+        "throne": with_format("throne"),
+        "singbox": with_format("singbox"),
+    }
 
 # ── SSL и Сертификаты ─────────────────────────────────────────────────────────
 
@@ -751,11 +781,8 @@ def find_any_cert(state: AppState) -> tuple[Optional[str], Optional[str]]:
     return None, None
 
 
-def is_user_valid(user: User, state: AppState) -> bool:
-    """Проверяет лимиты трафика и времени пользователя в реальном времени."""
-    if user.blocked:
-        return False
-        
+def get_user_entitlement_status(user: User) -> tuple[bool, str]:
+    """Проверяет срок и квоту независимо от ручной блокировки."""
     # Проверка даты окончания
     if user.expiry_date:
         try:
@@ -763,18 +790,32 @@ def is_user_valid(user: User, state: AppState) -> bool:
             expiry = datetime.fromisoformat(user.expiry_date)
             if expiry.tzinfo is None:
                 expiry = expiry.replace(tzinfo=timezone.utc)
-            if expiry < datetime.now(timezone.utc):
-                return False
-        except Exception:
-            pass
+            if expiry <= datetime.now(timezone.utc):
+                return False, "срок истёк"
+        except (TypeError, ValueError):
+            return False, "ошибка даты"
             
     # Проверка лимита трафика
     if user.traffic_limit_gb:
         limit_bytes = int(user.traffic_limit_gb * 1073741824)
         if user.traffic_used_bytes >= limit_bytes:
-            return False
-            
-    return True
+            return False, "лимит исчерпан"
+
+    return True, "активен"
+
+
+def get_user_access_status(user: User) -> tuple[bool, str]:
+    """Возвращает доступность подписки и понятную причину ограничения."""
+    if user.blocked:
+        entitled, reason = get_user_entitlement_status(user)
+        return False, reason if not entitled else "заблокирован"
+    return get_user_entitlement_status(user)
+
+
+def is_user_valid(user: User, state: AppState) -> bool:
+    """Проверяет лимиты трафика и времени пользователя в реальном времени."""
+    valid, _ = get_user_access_status(user)
+    return valid
 
 
 # ── HTTP Server ───────────────────────────────────────────────────────────────
@@ -815,6 +856,9 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             requested_format,
             self.headers.get("User-Agent", ""),
         )
+        if response_format not in SUPPORTED_SUBSCRIPTION_FORMATS:
+            self._send_error(400, "Unsupported subscription format")
+            return
         path = parsed_request.path
         path = path.strip("/")
         parts = path.split("/")
@@ -845,11 +889,11 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         if response_format == "nekobox":
             content = generate_nekobox_sub(user, state)
             content_type = "text/plain; charset=utf-8"
-            filename = f"hydra-{user.email}-nekobox.txt"
+            filename_suffix = "nekobox.txt"
         elif response_format == "throne":
             content = generate_throne_sub(user, state)
             content_type = "text/plain; charset=utf-8"
-            filename = f"hydra-{user.email}-throne.txt"
+            filename_suffix = "throne.txt"
         elif response_format in ("singbox", "sing-box", "json"):
             content = json.dumps(
                 generate_singbox_config(user, state),
@@ -857,20 +901,20 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
                 separators=(",", ":"),
             )
             content_type = "application/json; charset=utf-8"
-            filename = f"hydra-{user.email}-singbox.json"
+            filename_suffix = "singbox.json"
         else:
             content = generate_base64_sub(user, state)
             content_type = "text/plain; charset=utf-8"
-            filename = f"hydra-{user.email}-sub.txt"
+            filename_suffix = "sub.txt"
+        safe_email = re.sub(r"[^A-Za-z0-9._@+-]+", "_", user.email).strip("._") or "user"
+        filename = f"hydra-{safe_email}-{filename_suffix}"
         userinfo = generate_userinfo_header(user, state)
         
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Subscription-Userinfo", userinfo)
-        self.send_header("subscription-userinfo", userinfo)
         self.send_header("Profile-Update-Interval", "6")
-        self.send_header("profile-update-interval", "6")
         self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(content.encode("utf-8"))

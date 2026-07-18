@@ -14,6 +14,8 @@ from __future__ import annotations
 import subprocess
 import sys
 import uuid as _uuid
+import math
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -33,7 +35,10 @@ from hydra.plugins.registry import (
 from hydra.plugins.base import PluginCategory
 from hydra.core.systemd import install_service, install_timer, remove_unit
 from hydra.core import orchestrator
-from hydra.services.subscriptions.generator import get_subscription_url
+from hydra.services.subscriptions.generator import (
+    get_subscription_urls, get_user_access_status,
+    get_user_entitlement_status,
+)
 from hydra.services.traffic import (
     collect_traffic, update_user_traffic, refresh_traffic_state, protocol_totals,
 )
@@ -277,11 +282,13 @@ def _select_user(state: AppState, prompt_text: str = "") -> User | None:
     update_user_traffic(state)
     print(f"\n  {CYAN}Пользователи:{NC}\n")
     for i, u in enumerate(state.users, 1):
-        ico = f"{RED}🔴{NC}" if u.blocked else f"{GREEN}🟢{NC}"
+        available, reason = get_user_access_status(u)
+        ico = f"{GREEN}🟢{NC}" if available else f"{RED}🔴{NC}"
         used = _bytes_auto(u.traffic_used_bytes)
-        lim = f"{u.traffic_limit_gb} GiB" if u.traffic_limit_gb else "∞"
+        lim = f"{u.traffic_limit_gb:g} GiB" if u.traffic_limit_gb else "∞"
         ttl = u.expiry_date[:10] if u.expiry_date else "∞"
-        print(f"  {i}. {ico} {BOLD}{u.email:<24}{NC}  {used} / {lim}  TTL: {ttl}")
+        state_text = "" if available else f"  {RED}{reason}{NC}"
+        print(f"  {i}. {ico} {BOLD}{u.email:<24}{NC}  {used} / {lim}  до {ttl}{state_text}")
     print()
 
     try:
@@ -467,7 +474,7 @@ def main_menu(state: AppState):
         active_s = sum(1 for p in sec_plugins() if plugins.get(p.meta.name, {}).get("running"))
         total_s = len(sec_plugins())
 
-        u_active = sum(1 for u in state.users if not u.blocked)
+        u_active = sum(1 for u in state.users if get_user_access_status(u)[0])
 
         lines = [
             kv("Sing-Box:", f"{_ok(sb_ok)}  {singbox_version() or 'не установлен'}"),
@@ -947,8 +954,9 @@ def menu_users(state: AppState):
         
         # Показать краткую сводку
         total = len(state.users)
-        active = sum(1 for u in state.users if not u.blocked)
-        info(f"Всего: {total}  |  Активных: {active}")
+        active = sum(1 for u in state.users if get_user_access_status(u)[0])
+        restricted = total - active
+        info(f"Всего: {total}  |  Активных: {active}  |  Ограничено: {restricted}")
         print()
         
         choice = menu([
@@ -980,34 +988,26 @@ def _user_detail_menu(state: AppState, user: User):
         update_user_traffic(state)
         
         # Панель информации о пользователе
-        status_icon = f"{GREEN}🟢{NC}" if not user.blocked else f"{RED}🔴{NC}"
-        sub_url = get_subscription_url(user, state)
-        lim_str = f"{user.traffic_limit_gb} GiB" if user.traffic_limit_gb else "∞"
+        available, access_reason = get_user_access_status(user)
+        status_icon = f"{GREEN}🟢{NC}" if available else f"{RED}🔴{NC}"
+        lim_str = f"{user.traffic_limit_gb:g} GiB" if user.traffic_limit_gb else "∞"
         ttl_str = user.expiry_date[:10] if user.expiry_date else "∞"
         lines = [
-            f"  Email:    {status_icon} {user.email}",
-            f"  UUID:     {user.uuid}",
-            f"  Трафик:   {_bytes_auto(user.traffic_used_bytes)} / {lim_str}",
-            f"  TTL:      {ttl_str}",
-            f"  Создан:   {user.created_at[:10] if user.created_at else '—'}",
+            kv("Статус:", f"{status_icon} {access_reason}"),
+            kv("Трафик:", f"{_bytes_auto(user.traffic_used_bytes)} / {lim_str}"),
+            kv("Действует до:", ttl_str),
+            kv("Создан:", user.created_at[:10] if user.created_at else "—"),
         ]
         
-        prefix = "  Подписка: "
-        link_width = 60
-        chunks = [sub_url[i:i+link_width] for i in range(0, len(sub_url), link_width)]
-        if chunks:
-            lines.append(f"{prefix}{CYAN}{chunks[0]}{NC}")
-            for chunk in chunks[1:]:
-                lines.append(f"{' ' * len(prefix)}{CYAN}{chunk}{NC}")
-        else:
-            lines.append(f"{prefix}{CYAN}{NC}")
-
         panel(f"Пользователь: {user.email}", lines)
         print()
         
         # Показать доступные протоколы
         from hydra.plugins import registry
-        enabled_transports = registry.enabled(state, PluginCategory.TRANSPORT)
+        enabled_transports = [
+            p for p in registry.enabled(state, PluginCategory.TRANSPORT)
+            if p.meta.name != "wdtt"
+        ]
         if enabled_transports:
             proto_names = ", ".join(p.meta.name for p in enabled_transports)
             info(f"Включённые протоколы: {proto_names}")
@@ -1018,47 +1018,36 @@ def _user_detail_menu(state: AppState, user: User):
         block_label = "Разблокировать" if user.blocked else "Заблокировать"
         
         choice = menu([
-            ("1", "📄 Конфиги и ссылки", "Показать конфиги всех протоколов"),
-            ("2", f"🔒🔓 {block_label}", "Переключить статус блокировки"),
-            ("3", "📝 Изменить лимит трафика", "Задать квоту трафика в GiB"),
-            ("4", "⏳ Изменить срок действия подписки", "Задать дату окончания TTL"),
-            ("5", "❌ Удалить", "Удалить пользователя"),
+            ("1", "🔗 Ссылки подписки", "Автоопределение клиента и специальные форматы"),
+            ("2", "📄 Ручные конфиги", "Ссылки и конфиги отдельных протоколов"),
+            ("3", f"🔒🔓 {block_label}", "Переключить статус блокировки"),
+            ("4", "📝 Изменить лимит трафика", "Задать квоту трафика в GiB"),
+            ("5", "⏳ Изменить срок действия", "Задать дату окончания подписки"),
+            ("6", "❌ Удалить", "Удалить пользователя"),
             ("0", "↩ Назад", ""),
         ], f"ПОЛЬЗОВАТЕЛЬ {user.email}")
         
         if choice == "1":
-            _user_configs(state, user)
+            _show_subscription_links(state, user)
         elif choice == "2":
-            _toggle_block(state, user)
+            _user_configs(state, user)
         elif choice == "3":
+            _toggle_block(state, user)
+        elif choice == "4":
             new_lim = prompt("Введите лимит трафика в GiB (0 или пусто для безлимита)", default=str(user.traffic_limit_gb or ""))
             try:
                 val = float(new_lim) if new_lim.strip() else 0.0
+                if not math.isfinite(val) or val < 0:
+                    raise ValueError
                 user.traffic_limit_gb = val
                 save_state(state)
-                success(f"Лимит трафика для {user.email} установлен в {val or '∞'} GiB")
-                
-                # Если пользователь был заблокирован, проверяем возможность авторазблокировки
-                limit_bytes = int(val * 1073741824) if val else 0
-                if user.blocked and (limit_bytes == 0 or user.traffic_used_bytes < limit_bytes):
-                    is_expired = False
-                    if user.expiry_date:
-                        try:
-                            expiry = datetime.fromisoformat(user.expiry_date)
-                            now = datetime.now(expiry.tzinfo)
-                            if expiry < now:
-                                is_expired = True
-                        except Exception:
-                            pass
-                    if not is_expired:
-                        if confirm(f"Пользователь {user.email} теперь укладывается в лимиты. Разблокировать его?", default=True):
-                            orchestrator.unblock_user(state, user.email)
-                            success("Пользователь разблокирован")
+                success(f"Лимит трафика: {f'{val:g} GiB' if val else 'без ограничений'}")
+                _reconcile_user_access(state, user)
                 prompt("Нажмите Enter")
             except ValueError:
-                error("Неверный формат числа!")
+                error("Лимит должен быть неотрицательным конечным числом.")
                 prompt("Нажмите Enter")
-        elif choice == "4":
+        elif choice == "5":
             curr_ttl = user.expiry_date[:10] if user.expiry_date else ""
             new_exp = prompt("Введите срок действия подписки (ГГГГ-ММ-ДД, или пусто для безлимита)", default=curr_ttl)
             if not new_exp.strip():
@@ -1075,26 +1064,9 @@ def _user_detail_menu(state: AppState, user: User):
                     error("Неверный формат даты! Используйте ГГГГ-ММ-ДД.")
                     prompt("Нажмите Enter")
                     continue
-                    
-            # Авторазблокировка при соответствии лимитам
-            if user.blocked:
-                limit_bytes = int(user.traffic_limit_gb * 1073741824) if user.traffic_limit_gb else 0
-                is_traffic_exceeded = limit_bytes > 0 and user.traffic_used_bytes >= limit_bytes
-                is_expired = False
-                if user.expiry_date:
-                    try:
-                        expiry = datetime.fromisoformat(user.expiry_date)
-                        now = datetime.now(expiry.tzinfo)
-                        if expiry < now:
-                            is_expired = True
-                    except Exception:
-                        pass
-                if not is_expired and not is_traffic_exceeded:
-                    if confirm(f"Пользователь {user.email} теперь укладывается в лимиты. Разблокировать его?", default=True):
-                        orchestrator.unblock_user(state, user.email)
-                        success("Пользователь разблокирован")
+            _reconcile_user_access(state, user)
             prompt("Нажмите Enter")
-        elif choice == "5":
+        elif choice == "6":
             if confirm(f"Удалить {user.email}?", default=False):
                 orchestrator.remove_user(state, user.email)
                 success(f"Пользователь {user.email} удалён")
@@ -1102,6 +1074,18 @@ def _user_detail_menu(state: AppState, user: User):
                 return
         elif choice == "0":
             return
+
+
+def _reconcile_user_access(state: AppState, user: User) -> None:
+    """Немедленно применяет новые TTL/квоту к серверным конфигурациям."""
+    entitled, reason = get_user_entitlement_status(user)
+    if not entitled and not user.blocked:
+        orchestrator.block_user(state, user.email)
+        warn(f"Доступ отключён: {reason}.")
+    elif entitled and user.blocked:
+        if confirm("Ограничения больше не превышены. Разблокировать пользователя?", default=True):
+            orchestrator.unblock_user(state, user.email)
+            success("Пользователь разблокирован")
 
 
 def install_sub_systemd_service(state: AppState) -> bool:
@@ -1299,6 +1283,28 @@ def menu_subscription_server(state: AppState):
             prompt("Нажмите Enter")
 
 
+def _show_subscription_links(state: AppState, user: User) -> None:
+    """Показывает каноническую подписку отдельно от ручных конфигов."""
+    clear()
+    title(f"Подписка: {user.email}")
+    urls = get_subscription_urls(user, state)
+    available, reason = get_user_access_status(user)
+    panel("ДОСТУП", [
+        kv("Статус:", f"{GREEN if available else RED}{reason}{NC}"),
+        kv("Обновление:", "каждые 6 часов"),
+    ])
+    print()
+    print(f"  {BOLD}Основная ссылка (рекомендуется){NC}")
+    print(f"  {DIM}NekoBox и Throne определяются автоматически по приложению.{NC}")
+    print(f"  {CYAN}{urls['auto']}{NC}\n")
+    print(f"  {BOLD}Ручной выбор формата{NC}")
+    print(f"  NekoBox:       {CYAN}{urls['nekobox']}{NC}")
+    print(f"  Throne:        {CYAN}{urls['throne']}{NC}")
+    print(f"  Sing-Box JSON: {CYAN}{urls['singbox']}{NC}")
+    print(f"\n  {DIM}Ссылка содержит секретный токен — передавайте её только владельцу.{NC}")
+    prompt("Нажмите Enter")
+
+
 def _user_configs(state: AppState, user: User):
     """Показывает конфиги и ссылки для всех протоколов."""
     clear()
@@ -1312,20 +1318,11 @@ def _user_configs(state: AppState, user: User):
         info("Установите её командой: pip3 install qrcode")
         print()
 
-    # Ссылка на подписку
-    sub_url = get_subscription_url(user, state)
-    print(f"  {YELLOW}{BOLD}Auto Subscription (NekoBox, Throne, compatible clients):{NC}")
-    print(f"  {CYAN}{sub_url}{NC}")
-    print(f"  {YELLOW}{BOLD}NekoBox Subscription (ShadowTLS chain):{NC}")
-    print(f"  {CYAN}{sub_url}?format=nekobox{NC}")
-    print(f"  {YELLOW}{BOLD}Sing-Box JSON config:{NC}")
-    print(f"  {CYAN}{sub_url}?format=singbox{NC}")
-    print(f"  {YELLOW}{BOLD}Throne Subscription (ShadowTLS chain):{NC}")
-    print(f"  {CYAN}{sub_url}?format=throne{NC}")
-    print()
-    
     from hydra.plugins import registry
-    enabled_transports = registry.enabled(state, PluginCategory.TRANSPORT)
+    enabled_transports = [
+        p for p in registry.enabled(state, PluginCategory.TRANSPORT)
+        if p.meta.name != "wdtt"
+    ]
     
     if not enabled_transports:
         warn("Нет включённых транспортных протоколов")
@@ -1409,15 +1406,20 @@ def _user_configs(state: AppState, user: User):
                         if conf:
                             box_lines = []
                             label_ru = "ПК / Desktop" if prof == "desktop" else "Смартфон / Mobile"
+                            link_width = PANEL_W - 6
                             
                             # Показываем WireGuard/AmneziaWG ссылку
                             if link_prof:
                                 box_lines.append(f"{YELLOW}{BOLD}Ссылка для подключения (WireGuard / URL - {label_ru}):{NC}")
-                                link_width = PANEL_W - 6
                                 for chunk in [link_prof[i:i+link_width] for i in range(0, len(link_prof), link_width)]:
                                     box_lines.append(f"  {CYAN}{chunk}{NC}")
                                 box_lines.append(f"{DIM}{'─' * (PANEL_W - 4)}{NC}")
-                                
+
+                            if vpn_link and vpn_link != link_prof:
+                                box_lines.append(f"{YELLOW}{BOLD}Импорт в AmneziaVPN:{NC}")
+                                for chunk in [vpn_link[i:i+link_width] for i in range(0, len(vpn_link), link_width)]:
+                                    box_lines.append(f"  {CYAN}{chunk}{NC}")
+                                box_lines.append(f"{DIM}{'─' * (PANEL_W - 4)}{NC}")
 
                             
                             # Показываем конфиг
@@ -1441,7 +1443,7 @@ def _user_configs(state: AppState, user: User):
                 continue
 
             conf = p.generate_client_config(user, state)
-            if conf:
+            if conf or links:
                 box_lines = []
                 
                 # Показываем ссылку, если она есть
@@ -1457,10 +1459,10 @@ def _user_configs(state: AppState, user: User):
                             box_lines.append(f"  {CYAN}{chunk}{NC}")
                     box_lines.append(f"{DIM}{'─' * (PANEL_W - 4)}{NC}")
                 
-                # Показываем конфиг
-                box_lines.append(f"{GREEN}{BOLD}Файл конфигурации (Client Config):{NC}")
-                for line in conf.splitlines():
-                    box_lines.append(f"  {DIM}{line.rstrip()}{NC}")
+                if conf:
+                    box_lines.append(f"{GREEN}{BOLD}Файл конфигурации (Client Config):{NC}")
+                    for line in conf.splitlines():
+                        box_lines.append(f"  {DIM}{line.rstrip()}{NC}")
                 
                 panel(f"🔧  {p.meta.name.upper()} CONFIG", box_lines)
                 
@@ -1481,12 +1483,19 @@ def _show_users(state: AppState):
     title("Список пользователей")
     print()
     update_user_traffic(state)
-    for u in state.users:
-        ico = f"{RED}🔴{NC}" if u.blocked else f"{GREEN}🟢{NC}"
-        used = u.traffic_used_bytes
-        print(f"  {ico} {BOLD}{u.email}{NC}")
-        print(f"     Трафик: {_bytes_auto(used)}     UUID: {DIM}{u.uuid[:20]}...{NC}")
-        print()
+    print(f"  {BOLD}{'Пользователь':<30} {'Статус':<17} {'Трафик':>20} {'Действует до':>12}{NC}")
+    print(f"  {DIM}{'─' * 83}{NC}")
+    for u in sorted(state.users, key=lambda item: item.email.casefold()):
+        available, reason = get_user_access_status(u)
+        color = GREEN if available else RED
+        limit = f"{u.traffic_limit_gb:g} GiB" if u.traffic_limit_gb else "∞"
+        traffic = f"{_bytes_auto(u.traffic_used_bytes)} / {limit}"
+        expiry = u.expiry_date[:10] if u.expiry_date else "∞"
+        print(
+            f"  {color}{'●'}{NC} {BOLD}{u.email:<28}{NC} "
+            f"{color}{reason:<17}{NC} {traffic:>20} {expiry:>12}"
+        )
+    print()
     prompt("Нажмите Enter")
 
 
@@ -1497,7 +1506,10 @@ def _add_user(state: AppState):
     
     # Показать какие протоколы создадут конфиги
     from hydra.plugins import registry
-    enabled_transports = registry.enabled(state, PluginCategory.TRANSPORT)
+    enabled_transports = [
+        p for p in registry.enabled(state, PluginCategory.TRANSPORT)
+        if p.meta.name != "wdtt"
+    ]
     
     if enabled_transports:
         proto_names = ", ".join(p.meta.name for p in enabled_transports)
@@ -1506,12 +1518,16 @@ def _add_user(state: AppState):
         warn("Нет включённых протоколов — конфиги не будут созданы")
     print()
     
-    email = prompt("Email пользователя")
+    email = prompt("Email пользователя").strip().lower()
     if not email:
+        return
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+", email):
+        error("Введите корректный email без пробелов.")
+        prompt("Нажмите Enter")
         return
     
     # Проверка дубликата
-    if find_user(state, email):
+    if any(existing.email.casefold() == email.casefold() for existing in state.users):
         error(f"Пользователь {email} уже существует")
         prompt("Нажмите Enter")
         return
@@ -1534,6 +1550,11 @@ def _add_user(state: AppState):
 def _toggle_block(state: AppState, user: User):
     """Переключает блокировку пользователя."""
     if user.blocked:
+        entitled, reason = get_user_entitlement_status(user)
+        if not entitled:
+            error(f"Нельзя разблокировать: {reason}. Сначала измените лимит или срок действия.")
+            prompt("Нажмите Enter")
+            return
         orchestrator.unblock_user(state, user.email)
         success(f"{user.email} разблокирован")
     else:
