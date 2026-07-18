@@ -549,6 +549,8 @@ def menu_core(state: AppState):
                 ("2", "▶️  Запустить" if not ok_r else "⏸️  Остановить", ""),
                 ("3", "🔄 Применить конфиг",
                  "Собрать /etc/sing-box/config.json и перезагрузить"),
+                ("4", "🚀 Оптимизировать сеть", "BBR/FQ, TCP/UDP-буферы и очереди в один клик"),
+                ("5", "↩️  Откатить оптимизацию сети", "Восстановить параметры до первого применения"),
                 ("0", "↩ Назад", ""),
             ],
             "ЯДРО И СИСТЕМА",
@@ -585,6 +587,64 @@ def menu_core(state: AppState):
             else:
                 error("Ошибка применения конфига")
             prompt("Нажмите Enter")
+        elif choice == "4":
+            _apply_network_tuning_menu()
+        elif choice == "5":
+            _rollback_network_tuning_menu()
+
+
+def _apply_network_tuning_menu() -> None:
+    from hydra.core.network_tuning import apply_network_tuning
+
+    if not confirm(
+        "Применить оптимальный сетевой профиль HYDRA? Текущие значения будут сохранены",
+        default=True,
+    ):
+        return
+    info("Настраиваю сетевой стек VPS...")
+    try:
+        report = apply_network_tuning()
+    except Exception as exc:
+        error(f"Не удалось применить сетевой профиль: {exc}")
+        prompt("Нажмите Enter")
+        return
+    changed = sum(1 for item in report["sysctl"].values() if item.get("changed"))
+    skipped = sum(1 for item in report["sysctl"].values() if item.get("skipped"))
+    lines = [
+        f"  Изменено параметров: {GREEN}{changed}{NC}",
+        f"  BBR: {_ok(report['bbr_available'])}",
+        f"  Постоянный профиль: {DIM}{report['config_path']}{NC}",
+    ]
+    if skipped:
+        lines.append(f"  Не поддерживается ядром: {YELLOW}{skipped}{NC}")
+    for message in report["errors"][:5]:
+        lines.append(f"  {RED}{message}{NC}")
+    panel("Сетевая оптимизация", lines)
+    if report["success"]:
+        success("Сетевой профиль применён. Перезагрузка не требуется")
+    else:
+        warn("Профиль применён частично; подробности показаны выше")
+    prompt("Нажмите Enter")
+
+
+def _rollback_network_tuning_menu() -> None:
+    from hydra.core.network_tuning import rollback_network_tuning
+
+    if not confirm("Восстановить сетевые параметры до оптимизации?", default=False):
+        return
+    try:
+        report = rollback_network_tuning()
+    except Exception as exc:
+        error(f"Не удалось откатить сетевой профиль: {exc}")
+        prompt("Нажмите Enter")
+        return
+    if report["success"]:
+        success(f"Восстановлено параметров: {report['restored']}")
+    else:
+        error("Не удалось полностью откатить сетевой профиль")
+        for message in report["errors"]:
+            warn(message)
+    prompt("Нажмите Enter")
 
 
 # ═════════════════════════════════════════════════════════════════════════════

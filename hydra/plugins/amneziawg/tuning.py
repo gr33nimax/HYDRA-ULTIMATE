@@ -7,71 +7,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
-SYSCTL_TARGETS: dict[str, int | str] = {
-    "net.ipv4.ip_forward": 1,
-    "net.ipv6.conf.all.forwarding": 1,
-    "net.core.default_qdisc": "fq",
-    "net.ipv4.tcp_congestion_control": "bbr",
-    "net.core.rmem_max": 7500000,
-    "net.core.wmem_max": 7500000,
-    "net.core.rmem_default": 7500000,
-    "net.core.wmem_default": 7500000,
-}
-
-SYSCTL_CONF = Path("/etc/sysctl.d/99-hydra-tuning.conf")
-
-
-def sysctl_get(key: str) -> str:
-    """Читает текущее значение sysctl-параметра."""
-    try:
-        r = subprocess.run(["sysctl", "-n", key], capture_output=True, text=True)
-        return r.stdout.strip() if r.returncode == 0 else ""
-    except Exception:
-        return ""
-
-
-def sysctl_set(key: str, value: int | str) -> bool:
-    """Применяет значение sysctl (runtime + persistent)."""
-    try:
-        # Runtime
-        r = subprocess.run(["sysctl", "-w", f"{key}={value}"], capture_output=True, text=True)
-        if r.returncode != 0:
-            return False
-
-        # Persistent
-        SYSCTL_CONF.parent.mkdir(parents=True, exist_ok=True)
-        existing = SYSCTL_CONF.read_text(encoding="utf-8") if SYSCTL_CONF.exists() else ""
-        new_lines = [l for l in existing.splitlines() if not l.strip().startswith(f"{key}=")]
-        new_lines.append(f"{key} = {value}")
-        SYSCTL_CONF.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-        return True
-    except Exception:
-        return False
-
 
 def sysctl_apply_idempotent() -> dict:
     """Применяет все целевые sysctl-настройки idempotent-методом."""
-    results = {}
-    for key, target in SYSCTL_TARGETS.items():
-        current = sysctl_get(key)
-        # IPv6 forwarding check
-        if key == "net.ipv6.conf.all.forwarding":
-            ipv6_disable = sysctl_get("net.ipv6.conf.all.disable_ipv6")
-            if ipv6_disable == "1":
-                results[key] = {"old": current, "new": current, "changed": False, "skipped": "IPv6 disabled on host"}
-                continue
-
-        if str(current) == str(target):
-            results[key] = {"old": current, "new": current, "changed": False}
-            continue
-
-        ok = sysctl_set(key, target)
-        results[key] = {
-            "old": current,
-            "new": str(target) if ok else current,
-            "changed": ok
-        }
-    return results
+    from hydra.core.network_tuning import apply_network_tuning
+    return apply_network_tuning()["sysctl"]
 
 
 def detect_ram_mb() -> int:
