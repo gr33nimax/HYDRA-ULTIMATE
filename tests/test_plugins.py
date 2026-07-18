@@ -101,6 +101,23 @@ def test_status_all_returns_all_plugins():
     assert result["mock"]["installed"] is True
 
 
+def test_status_all_isolates_broken_plugin():
+    """Ошибка одного status() не должна скрывать остальные протоколы."""
+    from hydra.plugins import registry
+
+    healthy = MockPlugin()
+    broken = MockPlugin()
+    broken.meta = PluginMeta(name="broken", description="broken")
+    broken.status = MagicMock(side_effect=RuntimeError("service unavailable"))
+
+    with patch.object(registry, "_PLUGINS", [broken, healthy]):
+        result = registry.status_all()
+
+    assert result["broken"]["running"] is False
+    assert result["broken"]["error"] == "service unavailable"
+    assert result["mock"]["running"] is True
+
+
 def test_config_fragment_empty():
     """Пустой фрагмент конфига."""
     frag = ConfigFragment()

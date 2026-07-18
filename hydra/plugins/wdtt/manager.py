@@ -18,6 +18,7 @@ from hydra.ui.tui import (
     clear, menu, prompt, confirm, panel, info, success, warn, error, kv, _ok,
     RED, GREEN, YELLOW, CYAN, BLUE, MAGENTA, BOLD, DIM, WHITE, NC, box, title
 )
+from hydra.ui.protocol_ui import protocol_menu_title, protocol_status_panel
 import hydra.core.orchestrator as orchestrator
 from hydra.plugins.wdtt.plugin import (
     BIN_PATH, CONFIG_DIR, CONFIG_FILE, PASSWORDS_FILE, SERVICE_FILE, SERVICE_NAME,
@@ -93,39 +94,31 @@ def menu_wdtt(state: AppState, plugin):
         r = subprocess.run(["systemctl", "is-active", SERVICE_NAME], capture_output=True, text=True)
         running = r.stdout.strip() == "active"
         
-        svc_str = (
-            f"{GREEN}● запущен{NC}" if running else
-            f"{RED}● остановлен{NC}" if installed else
-            f"{YELLOW}● не установлен{NC}"
-        )
-        
-        lines = [
-            f"  Статус:      {svc_str}",
-            f"  Установлен:  {_ok(installed)}",
-            f"  Включён:     {_ok(ps.enabled)}",
-        ]
+        details = []
         
         if installed:
-            dtls_port = ps.config.get("dtls_port", DEFAULT_DTLS_PORT)
             wg_port = ps.config.get("wg_port", DEFAULT_WG_PORT)
-            lines.append(f"  DTLS порт:   {dtls_port}")
-            lines.append(f"  WG порт:     {wg_port}")
+            details.append(("WG порт", wg_port))
             
             try:
                 if PASSWORDS_FILE.exists():
                     pw_data = json.loads(PASSWORDS_FILE.read_text(encoding="utf-8"))
                     pw_count = len(pw_data.get("passwords", {}))
                     dev_count = len(pw_data.get("devices", {}))
-                    lines.append(f"  Паролей:     {pw_count}")
-                    lines.append(f"  Устройств:   {dev_count}")
+                    details.append(("Паролей", pw_count))
+                    details.append(("Устройств", dev_count))
                     
                     tg = "✓ настроен" if pw_data.get("bot_token") else "не настроен"
                     tg_col = GREEN if pw_data.get("bot_token") else DIM
-                    lines.append(f"  Telegram:    {tg_col}{tg}{NC}")
+                    details.append(("Telegram", f"{tg_col}{tg}{NC}"))
             except Exception:
                 pass
-                
-        panel("🛡️ QWDTT (WireGuard over TURN)", lines)
+
+        protocol_status_panel(
+            "wdtt", installed=installed, enabled=ps.enabled, running=running,
+            port=ps.config.get("dtls_port", DEFAULT_DTLS_PORT) if installed else None,
+            details=details,
+        )
         
         options = []
         if not installed:
@@ -136,12 +129,12 @@ def menu_wdtt(state: AppState, plugin):
             options.append(("3", "🔗 Показать ссылку (главный пароль)", "qwdtt:// ссылка администратора"))
             options.append(("4", "🔄 Перезапустить сервис", "Выполнить systemctl restart wdtt"))
             options.append(("5", "📊 Статус / логи", "Просмотр логов systemd и journalctl"))
-            options.append(("8", "❌ Удалить qWDTT", "Полное удаление бинарников, конфигов и правил"))
+            options.append(("9", "❌ Удалить qWDTT", "Полное удаление бинарников, конфигов и правил"))
             
         options.append(("G", "📖 Гайд", "Руководство по установке, VK-хешам и боту"))
         options.append(("0", "↩ Назад", ""))
         
-        choice = menu(options, "QWDTT CONTROL")
+        choice = menu(options, protocol_menu_title("wdtt"))
         
         if choice == "0":
             break
@@ -155,7 +148,7 @@ def menu_wdtt(state: AppState, plugin):
             _restart_service()
         elif choice == "5" and installed:
             _show_status_logs()
-        elif choice == "8" and installed:
+        elif choice == "9" and installed:
             _uninstall_wdtt(state, plugin)
         elif choice.upper() == "G":
             _show_guide()

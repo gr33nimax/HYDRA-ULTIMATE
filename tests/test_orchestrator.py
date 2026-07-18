@@ -86,6 +86,33 @@ def test_apply_config_returns_false_on_write_error():
     mock_reload.assert_not_called()
 
 
+def test_reinstall_plugin_preserves_configuration_and_enabled_state():
+    state, mock = _state_with_mock_transport()
+    state.protocols["mock_transport"].port = 9443
+    state.protocols["mock_transport"].config = {
+        "domain": "vpn.example",
+        "transport": "quic",
+    }
+
+    with (
+        patch("hydra.core.orchestrator.registry.get", return_value=mock),
+        patch("hydra.core.orchestrator.apply_config", return_value=True),
+        patch("hydra.core.orchestrator.save_state"),
+    ):
+        from hydra.core import orchestrator
+        result = orchestrator.reinstall_plugin(state, "mock_transport")
+
+    protocol = state.protocols["mock_transport"]
+    assert result is True
+    assert protocol.installed is True
+    assert protocol.enabled is True
+    assert protocol.port == 9443
+    assert protocol.config == {
+        "domain": "vpn.example",
+        "transport": "quic",
+    }
+
+
 def test_add_user_fanout():
     state, mock = _state_with_mock_transport()
     user = User(email="alice@test", uuid="uuid-1")

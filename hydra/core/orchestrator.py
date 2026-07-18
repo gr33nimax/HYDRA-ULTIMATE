@@ -256,6 +256,32 @@ def uninstall_plugin(state: AppState, name: str) -> bool:
     return apply_config(state)
 
 
+def reinstall_plugin(state: AppState, name: str) -> bool:
+    """Reinstall a plugin without turning "reinstall" into a settings reset.
+
+    Full uninstall intentionally clears the protocol configuration.  A TUI
+    reinstall, however, is a repair operation and must retain user choices.
+    """
+    proto = get_protocol(state, name)
+    saved_config = copy.deepcopy(proto.config)
+    saved_port = proto.port
+    was_enabled = proto.enabled
+
+    if not uninstall_plugin(state, name):
+        return False
+
+    proto = get_protocol(state, name)
+    proto.config = saved_config
+    proto.port = saved_port
+    save_state(state)
+
+    if not install_plugin(state, name):
+        return False
+    if was_enabled:
+        return enable(state, name)
+    return True
+
+
 def enable(state: AppState, name: str) -> bool:
     p = registry.get(name)
     if not p:

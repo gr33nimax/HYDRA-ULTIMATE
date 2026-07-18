@@ -19,6 +19,7 @@ from hydra.ui.tui import (
     clear, menu, prompt, confirm, panel, info, success, warn, error,
     RED, GREEN, YELLOW, CYAN, BLUE, MAGENTA, BOLD, DIM, WHITE, NC
 )
+from hydra.ui.protocol_ui import protocol_menu_title, protocol_status_panel
 import hydra.core.orchestrator as orchestrator
 
 from hydra.plugins.telemt.plugin import (
@@ -175,17 +176,10 @@ def menu_telemt(state: AppState, plugin) -> None:
         r = _run(["systemctl", "is-active", SERVICE_NAME], capture=True)
         is_active = r.stdout.strip() == "active"
         ver = _get_installed_version() if installed else None
-        
-        svc_str = (
-            f"{GREEN}● запущен   {ver or ''}{NC}" if is_active else
-            f"{RED}● остановлен{NC}" if installed else
-            f"{YELLOW}● не установлен{NC}"
-        )
 
-        status_lines = [
-            f"  Статус:      {svc_str}",
-            f"  Порт:        {ps.config.get('port', DEFAULT_PORT)}",
-            f"  Домен (TLS): {ps.config.get('tls_domain', '—')}",
+        status_details = [
+            ("Версия", ver),
+            ("Домен TLS", ps.config.get("tls_domain", "—")),
         ]
 
         # Статус интеграции с Sing-Box
@@ -200,29 +194,33 @@ def menu_telemt(state: AppState, plugin) -> None:
                 route_status += f"  {GREEN}[rule: OK]{NC}"
             else:
                 route_status += f"  {YELLOW}[rule: нет]{NC}"
-            status_lines.append(f"  Sing-Box:    {route_status}")
+            status_details.append(("Sing-Box", route_status))
         else:
-            status_lines.append(f"  Sing-Box:    {DIM}выключена (direct){NC}")
+            status_details.append(("Sing-Box", f"{DIM}выключена (direct){NC}"))
 
         # Статус подсетей Telegram
-        status_lines.append(f"  Подсети TG:  {tg_nets_status_line()}")
+        status_details.append(("Подсети TG", tg_nets_status_line()))
 
         # Статус fallback
         fb_mod = _get_fallback_module()
         if fb_mod and CONFIG_FILE.exists():
-            status_lines.append(f"  Fallback:    {fb_mod.fallback_status_line(CONFIG_FILE)}")
+            status_details.append(("Fallback", fb_mod.fallback_status_line(CONFIG_FILE)))
 
         # Статус SYN-лимитера
         sl_mod = _get_syn_limiter_module()
         if sl_mod and CONFIG_FILE.exists():
-            status_lines.append(f"  SYN-limiter: {sl_mod.syn_limiter_status_line()}")
+            status_details.append(("SYN-limiter", sl_mod.syn_limiter_status_line()))
 
         # iOS-фикс
         if_mod = _get_ios_fix_module()
         if if_mod and CONFIG_FILE.exists():
-            status_lines.append(f"  iOS-фикс:    {if_mod.ios_fix_status_line()}")
+            status_details.append(("iOS-фикс", if_mod.ios_fix_status_line()))
 
-        panel("🛡️ TELEMT CONTROL PANEL", status_lines)
+        protocol_status_panel(
+            "telemt", installed=installed, enabled=ps.enabled,
+            running=is_active, port=ps.config.get("port", DEFAULT_PORT),
+            details=status_details,
+        )
 
         opts = [
             ("1", "🚀  Установить / Переустановить", "Интерактивная настройка с нуля"),
@@ -236,12 +234,12 @@ def menu_telemt(state: AppState, plugin) -> None:
             ("S", "🛡️   SYN-limiter (защита от флуда)", "Ограничение скорости SYN-пакетов"),
             ("I", "🍎  iOS-фикс (MSS + порт)", "Обход блокировок на Apple устройствах"),
             ("N", "🌐  Обновить подсети Telegram (RIPE)", "Загрузить свежие диапазоны IP Telegram"),
-            ("8", f"{RED}🗑️   Полное удаление{NC}", "Удалить сервис, правила фаервола и бинарник"),
+            ("9", f"{RED}🗑️   Полное удаление{NC}", "Удалить сервис, правила фаервола и бинарник"),
             ("-", "", ""),
             ("0", "↩ Назад в главное меню", "")
         ]
 
-        choice = menu(opts, "ВЫБЕРИТЕ ОПЦИЮ")
+        choice = menu(opts, protocol_menu_title("telemt"))
         
         try:
             if choice == "0":
@@ -273,7 +271,7 @@ def menu_telemt(state: AppState, plugin) -> None:
             elif choice == "6":
                 _view_logs()
                 
-            elif choice == "8":
+            elif choice == "9":
                 if confirm("Вы уверены, что хотите полностью удалить Telemt?"):
                     _run_uninstall(state, plugin)
                     _pause()

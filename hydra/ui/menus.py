@@ -43,6 +43,9 @@ from hydra.ui.tui import (
     BANNER, GREEN, CYAN, YELLOW, RED, BOLD, DIM, WHITE, NC,
     PANEL_W,
 )
+from hydra.ui.protocol_ui import (
+    protocol_label, protocol_menu_title, protocol_status_panel, status_icon,
+)
 
 
 
@@ -551,28 +554,37 @@ def menu_protocols(state: AppState):
         transport_lines = []
         for p in transports():
             s = st.get(p.meta.name, {})
-            ico = f"{GREEN}●{NC}" if s.get("running") else (f"{YELLOW}●{NC}" if s.get("installed") else f"{DIM}●{NC}")
-            port = f":{s['port']}" if s.get("port") else ""
-            st_txt = "вкл" if s.get("enabled") else "выкл"
-            transport_lines.append(f"  {ico} {p.meta.name:<14} {DIM}{st_txt:>4}{NC}  порт{port}")
+            state_text = (
+                "работает" if s.get("running") else
+                "ошибка" if s.get("error") else
+                "не работает" if s.get("enabled") else
+                "отключён" if s.get("installed") else
+                "не установлен"
+            )
+            port = f":{s['port']}" if s.get("port") else "—"
+            transport_lines.append(
+                f"  {status_icon(s)} {protocol_label(p.meta.name):<16} "
+                f"{state_text:<14} {DIM}порт {port}{NC}"
+            )
 
         lines = [
-            f"  {BOLD}Транспорты:{NC}",
+            f"  {BOLD}Транспортные протоколы{NC}",
             *transport_lines,
         ]
-        panel("Протоколы", lines)
+        panel("Протоколы · обзор", lines)
 
         all_p = transports()
         opts: list[tuple[str, str, str]] = []
         for i, p in enumerate(all_p, 1):
             s = st.get(p.meta.name, {})
-            ico = f"{GREEN}✓{NC}" if s.get("running") else (f"{YELLOW}⚠{NC}" if s.get("installed") else f"{RED}✗{NC}")
+            ico = status_icon(s)
+            desc = s.get("error") or p.meta.description
             opts.append((str(i),
-                         f"{ico} {p.meta.name}",
-                         f"порт {s['port']}" if s.get("port") else "не установлен"))
+                         f"{ico} {protocol_label(p.meta.name)}",
+                         desc))
         opts += [("-", "", ""), ("0", "↩ Назад", "")]
 
-        choice = menu(opts, "УПРАВЛЕНИЕ ПРОТОКОЛАМИ")
+        choice = menu(opts, "ПРОТОКОЛЫ · УПРАВЛЕНИЕ")
         if choice == "0":
             return
         else:
@@ -676,23 +688,26 @@ def menu_plugin(state: AppState, p):
         clear()
         ps = get_protocol(state, p.meta.name)
         
-        # Статус
+        # Единая карточка статуса для протоколов без собственного менеджера.
         try:
             st = p.status()
-            lines = [
-                f"  Статус:      {'🟢 Работает' if st.running else '🔴 Остановлен'}",
-                f"  Установлен:  {_ok(st.installed)}",
-                f"  Включён:     {_ok(st.enabled)}",
-            ]
-            if st.port:
-                lines.append(f"  Порт:        {st.port}")
-            if st.info:
-                for k, v in st.info.items():
-                    lines.append(f"  {k}: {v}")
-            panel(f"🛡️ {p.meta.name.upper()} CONTROL", lines)
-        except Exception:
-            panel(p.meta.name.upper(), ["  Статус недоступен"])
-        print()
+            protocol_status_panel(
+                p.meta.name,
+                installed=st.installed,
+                enabled=st.enabled,
+                running=st.running,
+                port=st.port,
+                details=(st.info or {}).items(),
+            )
+        except Exception as exc:
+            protocol_status_panel(
+                p.meta.name,
+                installed=ps.installed,
+                enabled=ps.enabled,
+                running=False,
+                port=ps.port,
+                error=str(exc) or exc.__class__.__name__,
+            )
         
         # Опции зависят от состояния
         options = []
@@ -720,7 +735,7 @@ def menu_plugin(state: AppState, p):
         
         options.append(("0", "↩ Назад", ""))
         
-        choice = menu(options, p.meta.name.upper())
+        choice = menu(options, protocol_menu_title(p.meta.name))
         
         if choice == "1":
             if not ps.installed:
@@ -777,13 +792,8 @@ def menu_plugin(state: AppState, p):
 
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):
-                orchestrator.uninstall_plugin(state, p.meta.name)
-                ok = orchestrator.install_plugin(state, p.meta.name)
+                ok = orchestrator.reinstall_plugin(state, p.meta.name)
                 if ok:
-                    try:
-                        orchestrator.enable(state, p.meta.name)
-                    except Exception as e:
-                        error(f"Ошибка активации/настройки: {e}")
                     success("Переустановлено!")
                 else:
                     error("Ошибка переустановки")
@@ -2507,31 +2517,24 @@ def _menu_amneziawg(state: AppState, p):
         clear()
         ps = get_protocol(state, p.meta.name)
         
-        # Статус
         try:
             st = p.status()
-            if not st.installed:
-                lines = [
-                    "  Статус:      🔴 Остановлен",
-                    "  Установлен:  🔴 Нет",
-                    "  Включён:     🔴 Нет",
-                    "  ⚠️ AWG не установлен в системе",
-                ]
-            else:
-                lines = [
-                    f"  Статус:      {'🟢 Работает' if st.running else '🔴 Остановлен'}",
-                    f"  Установлен:  {_ok(st.installed)}",
-                    f"  Включён:     {_ok(st.enabled)}",
-                ]
-                profiles = p.get_profiles(state)
-                lines.append(f"  Профили:     {len(profiles)} active")
-                for prof in profiles:
-                    lines.append(f"    - {prof['label']} ({prof['interface']}) on port {prof['port']} [{prof['preset']}]")
-            
-            panel("🛡️ AMNEZIAWG CONTROL", lines)
-        except Exception:
-            panel("AMNEZIAWG CONTROL", ["  Статус недоступен: AWG не установлен"])
-        print()
+            profiles = p.get_profiles(state) if st.installed else []
+            details = [("Профили", len(profiles))]
+            details.extend(
+                ("", f"{prof['label']} · {prof['interface']} · :{prof['port']} · {prof['preset']}")
+                for prof in profiles
+            )
+            protocol_status_panel(
+                p.meta.name, installed=st.installed, enabled=st.enabled,
+                running=st.running, port=st.port, details=details,
+            )
+        except Exception as exc:
+            protocol_status_panel(
+                p.meta.name, installed=ps.installed, enabled=ps.enabled,
+                running=False, port=ps.port,
+                error=str(exc) or exc.__class__.__name__,
+            )
         
         options = []
         if not ps.installed:
@@ -2552,7 +2555,7 @@ def _menu_amneziawg(state: AppState, p):
             
         options.append(("0", "↩ Назад", ""))
         
-        choice = menu(options, "AMNEZIAWG")
+        choice = menu(options, protocol_menu_title(p.meta.name))
         
         if choice == "0":
             break
@@ -2604,14 +2607,9 @@ def _menu_amneziawg(state: AppState, p):
             
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):
-                orchestrator.uninstall_plugin(state, p.meta.name)
-                ok = orchestrator.install_plugin(state, p.meta.name)
+                ok = orchestrator.reinstall_plugin(state, p.meta.name)
                 if ok:
-                    try:
-                        orchestrator.enable(state, p.meta.name)
-                        success("Переустановлено!")
-                    except Exception as e:
-                        error(f"Ошибка активации: {e}")
+                    success("Переустановлено!")
                 else:
                     error("Ошибка установки")
                 prompt("Нажмите Enter")
@@ -2746,21 +2744,18 @@ def _menu_mieru(state: AppState, p):
             st = p.status()
             current_preset = p.get_current_preset(state)
             
-            lines = [
-                f"  Статус:      {'🟢 Работает' if st.running else '🔴 Остановлен'}",
-                f"  Установлен:  {_ok(st.installed)}",
-                f"  Включён:     {_ok(st.enabled)}",
-            ]
-            if st.port:
-                lines.append(f"  Порт:        {st.port}")
-            lines.append(f"  Обфускация:  {BOLD}{CYAN}{current_preset}{NC}")
-            if st.info:
-                for k, v in st.info.items():
-                    lines.append(f"  {k}: {v}")
-            panel("🛡️ MIERU CONTROL", lines)
-        except Exception:
-            panel("MIERU CONTROL", ["  Статус недоступен"])
-        print()
+            details = [("Обфускация", f"{BOLD}{CYAN}{current_preset}{NC}")]
+            details.extend((st.info or {}).items())
+            protocol_status_panel(
+                p.meta.name, installed=st.installed, enabled=st.enabled,
+                running=st.running, port=st.port, details=details,
+            )
+        except Exception as exc:
+            protocol_status_panel(
+                p.meta.name, installed=ps.installed, enabled=ps.enabled,
+                running=False, port=ps.port,
+                error=str(exc) or exc.__class__.__name__,
+            )
         
         options = []
         if not ps.installed:
@@ -2778,7 +2773,7 @@ def _menu_mieru(state: AppState, p):
         
         options.append(("0", "↩ Назад", ""))
         
-        choice = menu(options, "MIERU")
+        choice = menu(options, protocol_menu_title(p.meta.name))
         
         if choice == "0":
             break
@@ -2821,14 +2816,9 @@ def _menu_mieru(state: AppState, p):
             
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):
-                orchestrator.uninstall_plugin(state, p.meta.name)
-                ok = orchestrator.install_plugin(state, p.meta.name)
+                ok = orchestrator.reinstall_plugin(state, p.meta.name)
                 if ok:
-                    try:
-                        orchestrator.enable(state, p.meta.name)
-                        success("Переустановлено!")
-                    except Exception as e:
-                        error(f"Ошибка активации: {e}")
+                    success("Переустановлено!")
                 else:
                     error("Ошибка установки")
                 prompt("Нажмите Enter")
@@ -2897,21 +2887,18 @@ def _menu_anytls(state: AppState, p):
             from hydra.plugins.anytls.presets import get_preset
             preset_label = get_preset(current_preset)["label"]
             
-            lines = [
-                f"  Статус:      {'🟢 Работает' if st.running else '🔴 Остановлен'}",
-                f"  Установлен:  {_ok(st.installed)}",
-                f"  Включён:     {_ok(st.enabled)}",
-            ]
-            if st.port:
-                lines.append(f"  Порт:        {st.port}")
-            lines.append(f"  Обфускация:  {BOLD}{CYAN}{preset_label}{NC}")
-            if st.info:
-                for k, v in st.info.items():
-                    lines.append(f"  {k}: {v}")
-            panel("🛡️ ANYTLS CONTROL", lines)
-        except Exception:
-            panel("ANYTLS CONTROL", ["  Статус недоступен"])
-        print()
+            details = [("Обфускация", f"{BOLD}{CYAN}{preset_label}{NC}")]
+            details.extend((st.info or {}).items())
+            protocol_status_panel(
+                p.meta.name, installed=st.installed, enabled=st.enabled,
+                running=st.running, port=st.port, details=details,
+            )
+        except Exception as exc:
+            protocol_status_panel(
+                p.meta.name, installed=ps.installed, enabled=ps.enabled,
+                running=False, port=ps.port,
+                error=str(exc) or exc.__class__.__name__,
+            )
         
         options = []
         if not ps.installed:
@@ -2929,7 +2916,7 @@ def _menu_anytls(state: AppState, p):
         
         options.append(("0", "↩ Назад", ""))
         
-        choice = menu(options, "ANYTLS")
+        choice = menu(options, protocol_menu_title(p.meta.name))
         
         if choice == "0":
             break
@@ -2972,14 +2959,9 @@ def _menu_anytls(state: AppState, p):
             
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):
-                orchestrator.uninstall_plugin(state, p.meta.name)
-                ok = orchestrator.install_plugin(state, p.meta.name)
+                ok = orchestrator.reinstall_plugin(state, p.meta.name)
                 if ok:
-                    try:
-                        orchestrator.enable(state, p.meta.name)
-                        success("Переустановлено!")
-                    except Exception as e:
-                        error(f"Ошибка активации: {e}")
+                    success("Переустановлено!")
                 else:
                     error("Ошибка установки")
                 prompt("Нажмите Enter")
@@ -3043,33 +3025,30 @@ def _menu_trusttunnel(state: AppState, p):
         clear()
         ps = get_protocol(state, p.meta.name)
 
-        # Статус
         try:
             st = p.status()
-            lines = [
-                f"  Статус:      {'🟢 Работает' if st.running else '🔴 Остановлен'}",
-                f"  Установлен:  {_ok(st.installed)}",
-                f"  Включён:     {_ok(st.enabled)}",
-            ]
-            if st.port:
-                lines.append(f"  Порт:        {st.port}")
             domain = ps.config.get("domain", "") if ps.config else ""
-            if domain:
-                lines.append(f"  Домен:       {domain}")
             transport = ps.config.get("transport", "tcp") if ps.config else "tcp"
             transport_labels = {
                 "tcp": "HTTP/2 TCP",
                 "quic": "QUIC UDP (экспериментальный)",
                 "both": "HTTP/2 + QUIC (экспериментальный)",
             }
-            lines.append(f"  Транспорт:   {transport_labels.get(transport, 'HTTP/2 TCP')}")
-            if st.info:
-                for k, v in st.info.items():
-                    lines.append(f"  {k}: {v}")
-            panel("🛡️ TRUSTTUNNEL CONTROL", lines)
-        except Exception:
-            panel("TRUSTTUNNEL CONTROL", ["  Статус недоступен"])
-        print()
+            details = [
+                ("Домен", domain),
+                ("Транспорт", transport_labels.get(transport, "HTTP/2 TCP")),
+            ]
+            details.extend((st.info or {}).items())
+            protocol_status_panel(
+                p.meta.name, installed=st.installed, enabled=st.enabled,
+                running=st.running, port=st.port, details=details,
+            )
+        except Exception as exc:
+            protocol_status_panel(
+                p.meta.name, installed=ps.installed, enabled=ps.enabled,
+                running=False, port=ps.port,
+                error=str(exc) or exc.__class__.__name__,
+            )
 
         options = []
         if not ps.installed:
@@ -3081,13 +3060,13 @@ def _menu_trusttunnel(state: AppState, p):
             else:
                 options.append(("1", "▶️  Включить", "Активировать протокол"))
 
-            options.append(("3", "🔄 Переустановить", "Переустановка протокола"))
-            options.append(("4", "❌ Удалить", "Полное удаление"))
-            options.append(("5", "🌐 Транспорт", "HTTP/2 TCP / QUIC UDP / оба"))
+            options.append(("3", "🌐 Транспорт", "HTTP/2 TCP / QUIC UDP / оба"))
+            options.append(("8", "🔄 Переустановить", "Переустановка протокола"))
+            options.append(("9", "❌ Удалить", "Полное удаление"))
 
         options.append(("0", "↩ Назад", ""))
 
-        choice = menu(options, "TRUSTTUNNEL")
+        choice = menu(options, protocol_menu_title(p.meta.name))
 
         if choice == "0":
             break
@@ -3125,28 +3104,23 @@ def _menu_trusttunnel(state: AppState, p):
         elif choice == "2" and ps.installed and ps.enabled:
             _show_plugin_clients(state, p)
 
-        elif choice == "3" and ps.installed:
+        elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):
-                orchestrator.uninstall_plugin(state, p.meta.name)
-                ok = orchestrator.install_plugin(state, p.meta.name)
+                ok = orchestrator.reinstall_plugin(state, p.meta.name)
                 if ok:
-                    try:
-                        orchestrator.enable(state, p.meta.name)
-                        success("Переустановлено!")
-                    except Exception as e:
-                        error(f"Ошибка активации: {e}")
+                    success("Переустановлено!")
                 else:
                     error("Ошибка установки")
                 prompt("Нажмите Enter")
 
-        elif choice == "4" and ps.installed:
+        elif choice == "9" and ps.installed:
             if confirm("Вы уверены, что хотите полностью удалить TrustTunnel?", default=False):
                 orchestrator.uninstall_plugin(state, p.meta.name)
                 success("Удалено")
                 prompt("Нажмите Enter")
                 return
 
-        elif choice == "5" and ps.installed:
+        elif choice == "3" and ps.installed:
             current = ps.config.get("transport", "tcp")
             mode_choice = menu([
                 ("1", "HTTP/2 TCP", "Стабильный режим по умолчанию"),
