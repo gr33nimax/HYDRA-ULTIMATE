@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import copy
 import subprocess
+from pathlib import Path
 from hydra.core.state import AppState, User, save_state, get_protocol, find_user
 from hydra.core import singbox, nft
 from hydra.plugins import registry
+
+
+TRAFFIC_DAEMON_SERVICE = Path("/etc/systemd/system/hydra-traffic-daemon.service")
 
 
 def apply_config(state: AppState) -> bool:
@@ -155,14 +159,18 @@ def _maybe_migrate_haproxy(state: AppState) -> None:
 
 
 def _manage_traffic_daemon(state: AppState) -> None:
-    import subprocess
-    from pathlib import Path
-    
-    service_file = Path("/etc/systemd/system/hydra-traffic-daemon.service")
+    service_file = TRAFFIC_DAEMON_SERVICE
     enabled = getattr(state.network, "clash_api_enabled", False)
     
     if enabled:
+        import hashlib
+
         project_root = Path(__file__).resolve().parent.parent.parent
+        daemon_source = project_root / "hydra" / "services" / "traffic_daemon.py"
+        try:
+            daemon_revision = hashlib.sha256(daemon_source.read_bytes()).hexdigest()[:12]
+        except OSError:
+            daemon_revision = "unknown"
         unit = f"""[Unit]
 Description=HYDRA User Traffic Accounting Daemon
 After=sing-box.service
@@ -173,6 +181,7 @@ Type=simple
 User=root
 WorkingDirectory={project_root}
 Environment=PYTHONPATH={project_root}
+Environment=HYDRA_TRAFFIC_DAEMON_REV={daemon_revision}
 ExecStart=/usr/bin/python3 -m hydra.services.traffic_daemon
 Restart=always
 RestartSec=5
@@ -181,13 +190,20 @@ RestartSec=5
 WantedBy=multi-user.target
 """
         try:
-            if not service_file.exists() or service_file.read_text() != unit:
+            unit_changed = not service_file.exists() or service_file.read_text() != unit
+            if unit_changed:
                 service_file.write_text(unit)
                 subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
             subprocess.run(["systemctl", "enable", "hydra-traffic-daemon"], capture_output=True)
-
-            # Restart to make sure the new environment/working directory takes effect
-            subprocess.run(["systemctl", "restart", "hydra-traffic-daemon"], capture_output=True)
+            active = subprocess.run(
+                ["systemctl", "is-active", "--quiet", "hydra-traffic-daemon"],
+                capture_output=True,
+            ).returncode == 0
+            if unit_changed:
+                # A changed executable environment must be picked up once.
+                subprocess.run(["systemctl", "restart", "hydra-traffic-daemon"], capture_output=True)
+            elif not active:
+                subprocess.run(["systemctl", "start", "hydra-traffic-daemon"], capture_output=True)
         except Exception:
             pass
     else:

@@ -14,6 +14,33 @@ from pathlib import Path
 from hydra.core.state import AppState, load_state, update_state
 
 
+TRAFFIC_LOG = Path("/var/log/hydra/traffic-daemon.log")
+TRAFFIC_LOG_BACKUP = Path("/var/log/hydra/traffic-daemon.log.1")
+TRAFFIC_LOG_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _write_log(message: str) -> None:
+    """Append one event while keeping the custom log bounded on disk."""
+    try:
+        TRAFFIC_LOG.parent.mkdir(parents=True, exist_ok=True)
+        if TRAFFIC_LOG.exists() and TRAFFIC_LOG.stat().st_size >= TRAFFIC_LOG_MAX_BYTES:
+            # Old versions could grow this file indefinitely. Preserve only
+            # the most recent bounded tail instead of renaming a huge file.
+            with TRAFFIC_LOG.open("rb") as handle:
+                handle.seek(-min(TRAFFIC_LOG.stat().st_size, TRAFFIC_LOG_MAX_BYTES), 2)
+                tail = handle.read()
+            newline = tail.find(b"\n")
+            if newline >= 0:
+                tail = tail[newline + 1:]
+            TRAFFIC_LOG_BACKUP.write_bytes(tail)
+            TRAFFIC_LOG.write_text("", encoding="utf-8")
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with TRAFFIC_LOG.open("a", encoding="utf-8") as handle:
+            handle.write(f"[{timestamp}] {message}\n")
+    except OSError:
+        pass
+
+
 def _apply_connection_snapshot(
     state: AppState,
     connections: list[dict],
@@ -109,16 +136,6 @@ def _apply_connection_snapshot(
     return changed
 
 def run_daemon() -> None:
-    def _log(msg: str) -> None:
-        try:
-            log_path = Path("/var/log/hydra/traffic-daemon.log")
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            ts = time.strftime("%Y-%m-%d %H:%M:%S")
-            with log_path.open("a", encoding="utf-8") as f:
-                f.write(f"[{ts}] {msg}\n")
-        except Exception:
-            pass
-
     def _get_anytls_ports() -> dict[str, str]:
         import subprocess
         import re
@@ -283,7 +300,7 @@ def run_daemon() -> None:
             pass
         return addr_to_user
 
-    _log("Traffic daemon started")
+    _write_log("Traffic daemon started")
 
     while True:
         try:
@@ -309,7 +326,7 @@ def run_daemon() -> None:
                 time.sleep(10)
                 continue
             except Exception as e:
-                _log(f"API query error: {e}")
+                _write_log(f"API query error: {e}")
                 time.sleep(10)
                 continue
 
@@ -324,7 +341,7 @@ def run_daemon() -> None:
             ))
 
         except Exception as e:
-            _log(f"General error: {e}")
+            _write_log(f"General error: {e}")
 
         time.sleep(2)
 

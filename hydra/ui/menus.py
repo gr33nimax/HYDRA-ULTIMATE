@@ -296,34 +296,71 @@ def _select_user(state: AppState, prompt_text: str = "") -> User | None:
 
 
 def _show_user_detail(state: AppState, user: User):
-    """Детальная информация о пользователе + ссылки."""
+    """Monitoring-only user statistics without secrets or client links."""
     clear()
     update_user_traffic(state)
     used = user.traffic_used_bytes
     lim = int(user.traffic_limit_gb * 1073741824) if user.traffic_limit_gb else 0
-    ico = f"{RED}🔴{NC}" if user.blocked else f"{GREEN}🟢{NC}"
-
-    protos = []
-    for p in enabled(state):
-        link = ""
+    status = f"{RED}заблокирован 🔴{NC}" if user.blocked else f"{GREEN}активен 🟢{NC}"
+    expiry = user.expiry_date[:10] if user.expiry_date else "бессрочно"
+    if user.expiry_date:
         try:
-            link = p.client_link(user, state) or ""
-        except Exception:
+            expiry_dt = datetime.fromisoformat(user.expiry_date)
+            remaining = (expiry_dt - datetime.now(expiry_dt.tzinfo)).days
+            expiry = f"{expiry} · {'истёк' if remaining < 0 else f'{remaining} дн.'}"
+        except (TypeError, ValueError):
             pass
-        protos.append(f"  {p.meta.name:<14} {GREEN}{p.status().port or '—'}{NC}  {DIM}{link[:50]}{NC}")
 
-    panel(f"Пользователь {user.email}", [
-        kv("Статус:", f"{'ЗАБЛОКИРОВАН' if user.blocked else 'АКТИВЕН'}"),
-        kv("UUID:", user.uuid),
-        kv("Трафик:", f"{_bytes_auto(used)} / " + (f"{user.traffic_limit_gb} GiB" if user.traffic_limit_gb else "∞")),
+    summary = [
+        kv("Статус:", status),
+        kv("Трафик:", f"{BOLD}{_bytes_auto(used)}{NC}"),
+        kv("Лимит:", f"{user.traffic_limit_gb:g} GiB" if user.traffic_limit_gb else "без ограничений"),
         *([kv("Прогресс:", _bar(used, lim))] if user.traffic_limit_gb else []),
-        kv("TTL:", user.expiry_date[:10] if user.expiry_date else "∞"),
+        kv("Подписка:", expiry),
         kv("Создан:", user.created_at[:10] if user.created_at else "—"),
-        kv("Telegram ID:", str(user.telegram_id or "—")),
-        "",
-        f"  {BOLD}Протоколы:{NC}",
-        *protos,
-    ])
+    ]
+    panel(f"👤 {user.email}", summary)
+
+    enabled_names = {
+        plugin.meta.name for plugin in enabled(state, PluginCategory.TRANSPORT)
+        if plugin.meta.name != "wdtt"
+    }
+    labels = {
+        "amneziawg": "AmneziaWG", "naive": "NaiveProxy",
+        "anytls": "AnyTLS", "mieru": "Mieru",
+        "trusttunnel": "TrustTunnel", "shadowtls": "ShadowTLS",
+        "telemt": "Telemt",
+    }
+    order = [
+        "amneziawg", "naive", "anytls", "mieru", "trusttunnel",
+        "shadowtls", "telemt",
+    ]
+    protocol_values = {
+        name: max(0, int(stats.get("traffic_used_bytes", 0)))
+        for name, stats in user.credentials.items()
+        if isinstance(stats, dict)
+    }
+    names = [name for name in order if name in enabled_names or protocol_values.get(name, 0)]
+    names.extend(sorted(set(protocol_values) - set(names) - {"wdtt"}))
+    attributed = sum(protocol_values.get(name, 0) for name in names)
+
+    print()
+    print(f"  {BOLD}Трафик по протоколам{NC}")
+    print(f"  {BOLD}{'Протокол':<18} {'Накоплено':>14} {'Доля':>9}{NC}")
+    print(f"  {DIM}{'─' * 45}{NC}")
+    for name in names:
+        value = protocol_values.get(name, 0)
+        share = value / used * 100 if used else 0
+        print(f"  {labels.get(name, name):<18} {_bytes_auto(value):>14} {share:>8.1f}%")
+    legacy = max(0, used - attributed)
+    if legacy:
+        share = legacy / used * 100 if used else 0
+        print(f"  {'Без разбивки':<18} {_bytes_auto(legacy):>14} {share:>8.1f}%")
+    if not names and not legacy:
+        print(f"  {DIM}Пользователь пока не расходовал трафик.{NC}")
+    print(f"  {DIM}{'─' * 45}{NC}")
+    print(f"  {DIM}qWDTT здесь не отображается: для него доступен только общий счётчик.{NC}")
+    print()
     prompt("Нажмите Enter")
 
 
@@ -1901,7 +1938,7 @@ def _show_traffic_combined(state: AppState):
             ("3", f"{'✓ ' if sort_by == 'limit' else ''}Сортировать по лимиту", ""),
             ("4", f"{'✓ ' if sort_by == 'expiry' else ''}Сортировать по сроку", ""),
             ("Z", "Показать всех пользователей" if not show_zero_users else "Скрыть пользователей без трафика", ""),
-            ("D", "🔍 Детальная информация пользователя", ""),
+            ("D", "🔍 Статистика пользователя", "Без UUID, ссылок и секретов"),
             ("0", "↩ Назад", "")
         ], f"УПРАВЛЕНИЕ · {sort_labels[sort_by].upper()}")
         

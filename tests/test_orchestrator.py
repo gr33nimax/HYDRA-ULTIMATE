@@ -86,6 +86,48 @@ def test_apply_config_returns_false_on_write_error():
     mock_reload.assert_not_called()
 
 
+def test_active_traffic_daemon_is_not_restarted_when_unit_is_unchanged(tmp_path):
+    from hydra.core import orchestrator
+
+    state = AppState()
+    state.network.clash_api_enabled = True
+    service_file = tmp_path / "hydra-traffic-daemon.service"
+    completed = MagicMock(returncode=0)
+
+    with patch.object(orchestrator, "TRAFFIC_DAEMON_SERVICE", service_file), \
+         patch("hydra.core.orchestrator.subprocess.run", return_value=completed) as run:
+        orchestrator._manage_traffic_daemon(state)
+        run.reset_mock()
+        orchestrator._manage_traffic_daemon(state)
+
+    commands = [call.args[0] for call in run.call_args_list]
+    assert ["systemctl", "restart", "hydra-traffic-daemon"] not in commands
+    assert ["systemctl", "start", "hydra-traffic-daemon"] not in commands
+
+
+def test_inactive_traffic_daemon_is_started_without_forced_restart(tmp_path):
+    from hydra.core import orchestrator
+
+    state = AppState()
+    state.network.clash_api_enabled = True
+    service_file = tmp_path / "hydra-traffic-daemon.service"
+
+    with patch.object(orchestrator, "TRAFFIC_DAEMON_SERVICE", service_file), \
+         patch("hydra.core.orchestrator.subprocess.run", return_value=MagicMock(returncode=0)):
+        orchestrator._manage_traffic_daemon(state)
+
+    def result_for(command, **kwargs):
+        return MagicMock(returncode=1 if "is-active" in command else 0)
+
+    with patch.object(orchestrator, "TRAFFIC_DAEMON_SERVICE", service_file), \
+         patch("hydra.core.orchestrator.subprocess.run", side_effect=result_for) as run:
+        orchestrator._manage_traffic_daemon(state)
+
+    commands = [call.args[0] for call in run.call_args_list]
+    assert ["systemctl", "start", "hydra-traffic-daemon"] in commands
+    assert ["systemctl", "restart", "hydra-traffic-daemon"] not in commands
+
+
 def test_reinstall_plugin_preserves_configuration_and_enabled_state():
     state, mock = _state_with_mock_transport()
     state.protocols["mock_transport"].port = 9443

@@ -5,7 +5,25 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from hydra.core.state import AppState, User
-from hydra.services.traffic_daemon import _apply_connection_snapshot, run_daemon
+from hydra.services.traffic_daemon import _apply_connection_snapshot, _write_log, run_daemon
+
+
+def test_custom_log_is_bounded_and_keeps_recent_tail(tmp_path):
+    from hydra.services import traffic_daemon
+
+    log = tmp_path / "traffic-daemon.log"
+    backup = tmp_path / "traffic-daemon.log.1"
+    log.write_text("old event\n" * 100, encoding="utf-8")
+
+    with patch.object(traffic_daemon, "TRAFFIC_LOG", log), \
+         patch.object(traffic_daemon, "TRAFFIC_LOG_BACKUP", backup), \
+         patch.object(traffic_daemon, "TRAFFIC_LOG_MAX_BYTES", 128):
+        _write_log("new event")
+
+    assert "new event" in log.read_text(encoding="utf-8")
+    assert backup.exists()
+    assert backup.stat().st_size <= 128
+    assert "old event" in backup.read_text(encoding="utf-8")
 
 
 def test_connection_counters_survive_daemon_restart_without_double_counting():
