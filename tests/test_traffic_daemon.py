@@ -61,6 +61,29 @@ def test_late_user_attribution_backfills_uncredited_bytes():
     )
     assert state.users[0].traffic_used_bytes == 350
 
+
+def test_shadowtls_connection_is_attributed_to_authenticated_user():
+    state = AppState(users=[User(email="shadow@example.com", uuid="u-shadow")])
+    connection = {
+        "id": "shadow-connection",
+        "metadata": {
+            "inboundTag": "shadowtls-trojan-in",
+            "host": "cp.cloudflare.com",
+            "destinationPort": "80",
+        },
+        "upload": 120,
+        "download": 480,
+    }
+    shadowtls_users = {
+        ("__id__", "shadow-connection"): "shadow@example.com",
+    }
+
+    assert _apply_connection_snapshot(
+        state, [connection], {}, {}, {}, shadowtls_users,
+    ) is True
+    assert state.users[0].traffic_used_bytes == 600
+    assert state.users[0].credentials["shadowtls"]["traffic_used_bytes"] == 600
+
 def test_daemon_collects_traffic_from_clash_api():
     state = AppState()
     state.network.clash_api_enabled = True

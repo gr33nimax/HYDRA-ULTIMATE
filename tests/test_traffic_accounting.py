@@ -58,3 +58,27 @@ def test_active_connections_group_only_current_attributed_sessions():
     assert rows[0]["rx"] == 150
     assert rows[0]["tx"] == 30
     assert rows[0]["connections"] == 2
+
+
+def test_active_connections_include_attributed_shadowtls_sessions():
+    state = AppState()
+    state.network.clash_api_enabled = True
+    import time
+    state.install["traffic_daemon_last_poll"] = time.time()
+    state.install["traffic_connection_counters"] = {
+        "shadow": {
+            "user": "shadow@example.com",
+            "protocol": "shadowtls",
+            "download": 480,
+            "upload": 120,
+            "missed_polls": 0,
+            "seen_at": time.time(),
+        },
+    }
+
+    rows = tracked_active_connections(state)
+    assert len(rows) == 1
+    assert rows[0]["plugin"] == "shadowtls"
+    assert rows[0]["email"] == "shadow@example.com"
+    assert rows[0]["rx"] == 480
+    assert rows[0]["tx"] == 120

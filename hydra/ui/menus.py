@@ -723,6 +723,10 @@ def menu_plugin(state: AppState, p):
                 net_label = {"tcp": "HTTP/2", "quic": "QUIC", "both": "HTTP/2+QUIC"}.get(current_net, current_net)
                 options.append(("3", "🔀 Сменить транспорт", f"Текущий: {net_label}"))
 
+            if p.meta.name == "shadowtls":
+                current_sni = ps.config.get("handshake_sni", "не выбран") if ps.config else "не выбран"
+                options.append(("3", "🌐 Сменить SNI", f"Текущий: {current_sni}"))
+
             options.append(("8", "🔄 Переустановить", "Переустановка протокола"))
             options.append(("9", "❌ Удалить", "Полное удаление"))
         
@@ -782,6 +786,15 @@ def menu_plugin(state: AppState, p):
                             "занят TrustTunnel QUIC; прежний режим восстановлен."
                         )
                     prompt("Нажмите Enter")
+
+        elif choice == "3" and p.meta.name == "shadowtls" and ps.installed:
+            new_sni = p.choose_handshake_sni()
+            if new_sni:
+                if p.set_handshake_sni(state, new_sni):
+                    success(f"SNI ShadowTLS изменён на {new_sni}")
+                else:
+                    error("Не удалось применить SNI; прежняя конфигурация восстановлена")
+            prompt("Нажмите Enter")
 
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):
@@ -1723,13 +1736,17 @@ def _show_traffic_combined(state: AppState):
         labels = {
             "amneziawg": "AmneziaWG", "naive": "NaiveProxy",
             "anytls": "AnyTLS", "mieru": "Mieru",
-            "trusttunnel": "TrustTunnel", "telemt": "Telemt",
+            "trusttunnel": "TrustTunnel", "shadowtls": "ShadowTLS",
+            "telemt": "Telemt",
         }
         by_protocol = {
             name: value for name, value in by_protocol.items()
             if name not in _MONITORING_EXCLUDED_PROTOCOLS
         }
-        order = ["amneziawg", "naive", "anytls", "mieru", "trusttunnel", "telemt"]
+        order = [
+            "amneziawg", "naive", "anytls", "mieru", "trusttunnel",
+            "shadowtls", "telemt",
+        ]
         names = [name for name in order if name in enabled_names or by_protocol.get(name, 0)]
         names.extend(sorted(set(by_protocol) - set(names)))
         distributed = sum(by_protocol.values())
@@ -1849,7 +1866,7 @@ def _show_connections(state: AppState):
                     except Exception:
                         pass
                 continue
-            if p.meta.name in {"anytls", "mieru", "trusttunnel"}:
+            if p.meta.name in {"anytls", "mieru", "trusttunnel", "shadowtls"}:
                 continue
             try:
                 try:
@@ -1914,7 +1931,7 @@ def _show_connections(state: AppState):
 
         from hydra.services.active_connections import traffic_daemon_fresh
         if not state.network.clash_api_enabled:
-            print(f"  {YELLOW}AnyTLS/Mieru/TrustTunnel не показаны: Clash API и демон статистики выключены.{NC}")
+            print(f"  {YELLOW}AnyTLS/Mieru/TrustTunnel/ShadowTLS не показаны: Clash API и демон статистики выключены.{NC}")
         elif not traffic_daemon_fresh(state):
             print(f"  {YELLOW}Данные Clash API устарели: проверьте службу hydra-traffic-daemon.{NC}")
             

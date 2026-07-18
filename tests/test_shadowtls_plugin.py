@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from hydra.plugins.shadowtls.plugin import ShadowTLSPlugin
+from hydra.plugins.shadowtls.plugin import ShadowTLSPlugin, SHADOWTLS_SNI_PRESETS
 from hydra.plugins.base import PluginCategory, ConfigFragment
 from hydra.core.state import AppState, User, PluginState
 
@@ -34,6 +34,30 @@ def test_meta():
     assert p.meta.name == "shadowtls"
     assert p.meta.category == PluginCategory.TRANSPORT
     assert p.meta.needs_domain is False
+
+
+def test_sni_presets_are_unique_hostnames():
+    domains = [domain for domain, _label in SHADOWTLS_SNI_PRESETS]
+    labels = [label for _domain, label in SHADOWTLS_SNI_PRESETS]
+    assert len(domains) >= 10
+    assert len(domains) == len(set(domains))
+    assert all("." in domain and "://" not in domain for domain in domains)
+    assert labels[0].startswith("Международный")
+    assert any(label.startswith("Россия") for label in labels)
+
+
+def test_choose_handshake_sni_supports_preset_and_custom_domain():
+    p = ShadowTLSPlugin()
+
+    with patch("hydra.ui.tui.menu", return_value="1"), \
+         patch("hydra.ui.tui.prompt") as mock_prompt:
+        assert p.choose_handshake_sni() == SHADOWTLS_SNI_PRESETS[0][0]
+        mock_prompt.assert_not_called()
+
+    custom_key = str(len(SHADOWTLS_SNI_PRESETS) + 1)
+    with patch("hydra.ui.tui.menu", return_value=custom_key), \
+         patch("hydra.ui.tui.prompt", return_value=" custom.example.com "):
+        assert p.choose_handshake_sni() == "custom.example.com"
 
 
 def test_configure_returns_inbound():
@@ -194,13 +218,42 @@ def test_domain_conflict_check():
     state = _state(naive_enabled=False, naive_domain="conflict.com")
     state.protocols["shadowtls"].config["handshake_sni"] = ""
 
-    with patch("hydra.ui.tui.prompt", return_value="conflict.com"), \
+    custom_key = str(len(SHADOWTLS_SNI_PRESETS) + 1)
+    with patch("hydra.ui.tui.menu", return_value=custom_key), \
+         patch("hydra.ui.tui.prompt", return_value="conflict.com"), \
          patch("hydra.utils.firewall.open_tcp") as mock_open, \
          patch("subprocess.run") as mock_run:
         with pytest.raises(ValueError) as excinfo:
             p.on_enable(state)
         assert "принадлежит этому серверу" in str(excinfo.value)
         mock_open.assert_not_called()
+
+
+def test_set_handshake_sni_saves_disabled_plugin_without_runtime_apply():
+    p = ShadowTLSPlugin()
+    state = _state(handshake_sni="old.example.com")
+    state.protocols["shadowtls"].enabled = False
+
+    with patch("hydra.core.state.save_state") as mock_save, \
+         patch("hydra.core.orchestrator.apply_config") as mock_apply:
+        assert p.set_handshake_sni(state, "YA.RU.") is True
+
+    assert state.protocols["shadowtls"].config["handshake_sni"] == "ya.ru"
+    mock_save.assert_called_once_with(state)
+    mock_apply.assert_not_called()
+
+
+def test_set_handshake_sni_rolls_back_enabled_plugin_on_apply_failure():
+    p = ShadowTLSPlugin()
+    state = _state(handshake_sni="old.example.com")
+
+    with patch("hydra.core.orchestrator.apply_config", side_effect=[False, True]) as mock_apply, \
+         patch("hydra.core.state.save_state") as mock_save:
+        assert p.set_handshake_sni(state, "ya.ru") is False
+
+    assert state.protocols["shadowtls"].config["handshake_sni"] == "old.example.com"
+    assert mock_apply.call_count == 2
+    mock_save.assert_not_called()
 
 
 def test_existing_local_handshake_sni_is_rejected():

@@ -20,12 +20,14 @@ def _apply_connection_snapshot(
     anytls_ports: dict[str, str],
     trusttunnel_users: dict[tuple[str, str], str | None],
     mieru_users: dict[tuple[str, str], str],
+    shadowtls_users: dict[tuple[str, str], str | None] | None = None,
 ) -> bool:
     """Atomically apply connection deltas using counters persisted in AppState."""
     state.install["traffic_daemon_last_poll"] = time.time()
     active = state.install.setdefault("traffic_connection_counters", {})
     current_ids: set[str] = set()
     deltas: dict[tuple[str, str], int] = {}
+    shadowtls_users = shadowtls_users or {}
 
     for connection in connections:
         connection_id = connection.get("id")
@@ -43,6 +45,11 @@ def _apply_connection_snapshot(
             host = metadata.get("host") or metadata.get("destinationIP", "")
             user = user or trusttunnel_users.get(("__id__", str(connection_id)))
             user = user or trusttunnel_users.get((host.lower(), str(metadata.get("destinationPort", ""))))
+        elif "shadowtls" in inbound_tag:
+            protocol = "shadowtls"
+            host = metadata.get("host") or metadata.get("destinationIP", "")
+            user = user or shadowtls_users.get(("__id__", str(connection_id)))
+            user = user or shadowtls_users.get((host.lower(), str(metadata.get("destinationPort", ""))))
         elif "mieru" in inbound_tag:
             protocol = "mieru"
             key = (metadata.get("sourceIP", "").lower(), str(metadata.get("sourcePort", "")))
@@ -188,6 +195,45 @@ def run_daemon() -> None:
             pass
         return addr_to_user
 
+    def _get_shadowtls_users() -> dict[tuple[str, str], str | None]:
+        """Map Trojan detour connections back to authenticated ShadowTLS users."""
+        import subprocess
+        import re
+
+        addr_to_user: dict[tuple[str, str], str | None] = {}
+        try:
+            result = subprocess.run(
+                ["journalctl", "-u", "sing-box", "-n", "1000", "--no-pager"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if result.returncode != 0:
+                return addr_to_user
+            for line in result.stdout.splitlines():
+                if "shadowtls" not in line.lower():
+                    continue
+                match = re.search(
+                    r"inbound/(?:shadowtls|trojan)\[[^\]]*shadowtls[^\]]*\]:\s+"
+                    r"\[([^\]]+)\]\s+inbound connection to\s+"
+                    r"([a-zA-Z0-9\-\._]+|\[[0-9a-fA-F:]+\]):(\d+)",
+                    line,
+                    re.IGNORECASE,
+                )
+                if not match:
+                    continue
+                user, host, port = match.groups()
+                connection_id = re.search(r"INFO\s+\[(\d+)\s+[^\]]+\]", line)
+                if connection_id:
+                    addr_to_user[("__id__", connection_id.group(1))] = user
+                key = (host.lower(), port)
+                previous = addr_to_user.get(key)
+                if previous is not None and previous != user:
+                    addr_to_user[key] = None
+                elif key not in addr_to_user:
+                    addr_to_user[key] = user
+        except Exception:
+            pass
+        return addr_to_user
+
     def _get_mieru_users() -> dict[tuple[str, str], str]:
         import subprocess
         import re
@@ -271,8 +317,10 @@ def run_daemon() -> None:
             anytls_ports = _get_anytls_ports()
             trusttunnel_users = _get_trusttunnel_users()
             mieru_users = _get_mieru_users()
+            shadowtls_users = _get_shadowtls_users()
             update_state(lambda latest: _apply_connection_snapshot(
                 latest, connections, anytls_ports, trusttunnel_users, mieru_users,
+                shadowtls_users,
             ))
 
         except Exception as e:

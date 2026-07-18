@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import ipaddress
+import copy
 import shutil
 import subprocess
 import time
@@ -15,6 +16,22 @@ from hydra.plugins.base import (
 from hydra.core.state import AppState, User
 from hydra.utils.crypto import derive_hex_key
 from hydra.utils.net import public_ip
+
+
+SHADOWTLS_SNI_PRESETS = (
+    ("www.microsoft.com", "Международный · Microsoft"),
+    ("www.apple.com", "Международный · Apple"),
+    ("www.cloudflare.com", "Международный · Cloudflare"),
+    ("www.amazon.com", "Международный · Amazon"),
+    ("www.samsung.com", "Международный · Samsung"),
+    ("www.adobe.com", "Международный · Adobe"),
+    ("ya.ru", "Россия · Яндекс"),
+    ("vk.com", "Россия · ВКонтакте"),
+    ("max.ru", "Россия · MAX"),
+    ("dzen.ru", "Россия · Дзен"),
+    ("rutube.ru", "Россия · Rutube"),
+    ("www.ozon.ru", "Россия · Ozon"),
+)
 
 
 class ShadowTLSPlugin(BasePlugin):
@@ -203,8 +220,7 @@ class ShadowTLSPlugin(BasePlugin):
 
         handshake_sni = ps.config.get("handshake_sni", "") if ps and ps.config else ""
         if not handshake_sni:
-            from hydra.ui.tui import prompt
-            handshake_sni = prompt("Введите SNI домена для маскировки ShadowTLS (например, www.google.com)")
+            handshake_sni = self.choose_handshake_sni()
             if not handshake_sni:
                 raise ValueError("SNI домен обязателен для маскировки ShadowTLS!")
 
@@ -222,6 +238,60 @@ class ShadowTLSPlugin(BasePlugin):
         self._add_iptables_rules()
 
         ps.enabled = True
+
+    def choose_handshake_sni(self) -> str:
+        """Show curated TLS 1.3 presets and a custom-domain option."""
+        from hydra.ui.tui import menu, prompt
+
+        options = [
+            (str(index), domain, label)
+            for index, (domain, label) in enumerate(SHADOWTLS_SNI_PRESETS, start=1)
+        ]
+        custom_key = str(len(options) + 1)
+        options.extend([
+            (custom_key, "Свой домен", "Введите произвольный TLS 1.3 SNI"),
+            ("0", "Отмена", ""),
+        ])
+        choice = menu(options, "SNI ДЛЯ SHADOWTLS")
+        if choice == "0":
+            return ""
+        if choice == custom_key:
+            return prompt("Введите сторонний TLS 1.3 домен").strip()
+        try:
+            return SHADOWTLS_SNI_PRESETS[int(choice) - 1][0]
+        except (ValueError, IndexError):
+            return ""
+
+    def set_handshake_sni(self, state: AppState, value: str) -> bool:
+        """Validate and transactionally apply a new handshake SNI."""
+        from hydra.core.state import get_protocol, save_state
+
+        try:
+            handshake_sni = self._validate_handshake_sni(value, state)
+        except ValueError:
+            return False
+
+        ps = get_protocol(state, "shadowtls")
+        old_config = copy.deepcopy(ps.config)
+        ps.config["handshake_sni"] = handshake_sni
+        if not ps.enabled:
+            save_state(state)
+            return True
+
+        from hydra.core.orchestrator import apply_config
+        try:
+            if apply_config(state):
+                save_state(state)
+                return True
+        except Exception:
+            pass
+
+        ps.config = old_config
+        try:
+            apply_config(state)
+        except Exception:
+            pass
+        return False
 
     def on_disable(self, state: AppState) -> None:
         self._remove_iptables_rules()
