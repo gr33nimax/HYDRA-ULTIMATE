@@ -518,21 +518,57 @@ def _restart_service():
         error("Ошибка перезапуска сервиса. Проверьте статус/логи.")
     prompt("Нажмите Enter...")
 
+
+def _diagnostic_output(command: list[str], empty_message: str, timeout: int = 5) -> str:
+    """Run a read-only diagnostic command without letting it freeze the TUI."""
+    command_env = {
+        **os.environ,
+        "SYSTEMD_PAGER": "cat",
+        "SYSTEMD_COLORS": "0",
+        "PAGER": "cat",
+    }
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            env=command_env,
+        )
+    except subprocess.TimeoutExpired:
+        return f"Команда не ответила за {timeout} сек. Вывод пропущен."
+    except FileNotFoundError:
+        return f"Команда {command[0]} не найдена."
+    except OSError as exc:
+        return f"Не удалось выполнить {command[0]}: {exc}"
+
+    return (result.stdout or result.stderr or empty_message).strip()
+
+
 def _show_status_logs():
     clear()
     title("Статус и Логи qWDTT")
-    
-    r = subprocess.run(["systemctl", "status", SERVICE_NAME], capture_output=True, text=True)
-    status_output = r.stdout or r.stderr or "Нет вывода"
-    
+
+    status_output = _diagnostic_output(
+        ["systemctl", "status", SERVICE_NAME, "--no-pager", "--full"],
+        "Нет данных о состоянии службы.",
+    )
     print(f"\n{CYAN}=== systemctl status wdtt ==={NC}\n")
     print(status_output)
-    
+
     print(f"\n{CYAN}=== Последние 20 строк journalctl ==={NC}\n")
-    r2 = subprocess.run(["journalctl", "-u", SERVICE_NAME, "-n", "20", "--no-pager"], capture_output=True, text=True)
-    print(r2.stdout or r2.stderr or "Нет записей")
-    
-    prompt("Нажмите Enter...")
+    journal_output = _diagnostic_output(
+        [
+            "journalctl", "-u", SERVICE_NAME, "-n", "20",
+            "--no-pager", "--output=short-iso",
+        ],
+        "В журнале пока нет записей.",
+    )
+    print(journal_output)
+
+    prompt("Нажмите Enter, чтобы вернуться")
 
 def _uninstall_wdtt(state: AppState, plugin):
     clear()
