@@ -72,13 +72,14 @@ def protocol_status_panel(
     panel(f"{CYAN}◈{NC} {protocol_label(name)}", lines)
 
 
-def status_icon(status: dict[str, Any]) -> str:
+def status_badge(status: dict[str, Any]) -> str:
+    """Return an explicit status marker that remains clear without colours."""
     if status.get("running"):
-        return f"{GREEN}●{NC}"
+        return f"{GREEN}{BOLD}{'✓ РАБОТАЕТ':<16}{NC}"
     if status.get("error"):
-        return f"{RED}●{NC}"
+        return f"{RED}{BOLD}{'! ОШИБКА СТАТУСА':<16}{NC}"
     if status.get("installed") and status.get("enabled"):
-        return f"{RED}●{NC}"
+        return f"{RED}{BOLD}{'✕ СБОЙ':<16}{NC}"
     if status.get("installed"):
-        return f"{YELLOW}●{NC}"
-    return f"{DIM}●{NC}"
+        return f"{YELLOW}{'○ ОТКЛЮЧЁН':<16}{NC}"
+    return f"{DIM}{'— НЕ УСТАНОВЛЕН':<16}{NC}"

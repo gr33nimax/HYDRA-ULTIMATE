@@ -3,6 +3,7 @@ from hydra.ui.protocol_ui import (
     protocol_menu_title,
     protocol_state,
     protocol_status_panel,
+    status_badge,
 )
 
 
@@ -16,6 +17,14 @@ def test_protocol_state_distinguishes_disabled_and_failed():
     assert "Отключён" in protocol_state(True, False, False)
     assert "Не работает" in protocol_state(True, True, False)
     assert "Не установлен" in protocol_state(False, False, False)
+
+
+def test_status_badges_are_explicit_without_relying_on_colour():
+    assert "✓ РАБОТАЕТ" in status_badge({"running": True})
+    assert "○ ОТКЛЮЧЁН" in status_badge({"installed": True})
+    assert "✕ СБОЙ" in status_badge({"installed": True, "enabled": True})
+    assert "— НЕ УСТАНОВЛЕН" in status_badge({})
+    assert "! ОШИБКА СТАТУСА" in status_badge({"error": "boom"})
 
 
 def test_protocol_panel_has_canonical_field_order(capsys):

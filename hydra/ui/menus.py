@@ -44,7 +44,7 @@ from hydra.ui.tui import (
     PANEL_W,
 )
 from hydra.ui.protocol_ui import (
-    protocol_label, protocol_menu_title, protocol_status_panel, status_icon,
+    protocol_label, protocol_menu_title, protocol_status_panel, status_badge,
 )
 
 
@@ -554,17 +554,10 @@ def menu_protocols(state: AppState):
         transport_lines = []
         for p in transports():
             s = st.get(p.meta.name, {})
-            state_text = (
-                "работает" if s.get("running") else
-                "ошибка" if s.get("error") else
-                "не работает" if s.get("enabled") else
-                "отключён" if s.get("installed") else
-                "не установлен"
-            )
-            port = f":{s['port']}" if s.get("port") else "—"
+            port = str(s["port"]) if s.get("port") else "—"
             transport_lines.append(
-                f"  {status_icon(s)} {protocol_label(p.meta.name):<16} "
-                f"{state_text:<14} {DIM}порт {port}{NC}"
+                f"  {status_badge(s)}  {protocol_label(p.meta.name):<16} "
+                f"{DIM}порт {port}{NC}"
             )
 
         lines = [
@@ -577,10 +570,10 @@ def menu_protocols(state: AppState):
         opts: list[tuple[str, str, str]] = []
         for i, p in enumerate(all_p, 1):
             s = st.get(p.meta.name, {})
-            ico = status_icon(s)
+            badge = status_badge(s)
             desc = s.get("error") or p.meta.description
             opts.append((str(i),
-                         f"{ico} {protocol_label(p.meta.name)}",
+                         f"{badge}  {protocol_label(p.meta.name)}",
                          desc))
         opts += [("-", "", ""), ("0", "↩ Назад", "")]
 
@@ -3031,8 +3024,8 @@ def _menu_trusttunnel(state: AppState, p):
             transport = ps.config.get("transport", "tcp") if ps.config else "tcp"
             transport_labels = {
                 "tcp": "HTTP/2 TCP",
-                "quic": "QUIC UDP (экспериментальный)",
-                "both": "HTTP/2 + QUIC (экспериментальный)",
+                "quic": "QUIC UDP",
+                "both": "HTTP/2 + QUIC",
             }
             details = [
                 ("Домен", domain),
