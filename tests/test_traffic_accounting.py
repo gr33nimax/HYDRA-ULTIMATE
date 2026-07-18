@@ -102,3 +102,27 @@ def test_active_connections_include_attributed_shadowtls_sessions():
     assert rows[0]["email"] == "shadow@example.com"
     assert rows[0]["rx"] == 480
     assert rows[0]["tx"] == 120
+
+
+def test_active_connections_include_attributed_hysteria2_sessions():
+    state = AppState()
+    state.network.clash_api_enabled = True
+    import time
+    state.install["traffic_daemon_last_poll"] = time.time()
+    state.install["traffic_connection_counters"] = {
+        "hysteria2": {
+            "user": "hy2@example.com",
+            "protocol": "hysteria2",
+            "download": 500,
+            "upload": 200,
+            "missed_polls": 0,
+            "seen_at": time.time(),
+        },
+    }
+
+    rows = tracked_active_connections(state)
+    assert len(rows) == 1
+    assert rows[0]["plugin"] == "hysteria2"
+    assert rows[0]["email"] == "hy2@example.com"
+    assert rows[0]["rx"] == 500
+    assert rows[0]["tx"] == 200
