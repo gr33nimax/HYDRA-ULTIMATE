@@ -6,7 +6,9 @@ import time
 from hydra.core.state import AppState
 
 
-TRACKED_PROTOCOLS = frozenset({"anytls", "mieru", "trusttunnel", "shadowtls"})
+TRACKED_PROTOCOLS = frozenset({
+    "anytls", "mieru", "trusttunnel", "shadowtls", "hysteria2", "snell",
+})
 
 
 def traffic_daemon_fresh(state: AppState, max_age: float = 15.0) -> bool:

@@ -1,12 +1,12 @@
 Created At: 2026-07-09T15:09:55Z
 Completed At: 2026-07-09T15:09:55Z
-File Path: `file:///c:/Users/user/Desktop/hydra/_vless_analysis/vless_installer/modules/awg_qr.py`
+File Path: `legacy/modules/awg_qr.py`
 Total Lines: 367
 Total Bytes: 18503
 Showing lines 1 to 367
 The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
 1: """
-2: vless_installer/modules/awg_qr.py
+2: legacy/modules/awg_qr.py
 3: ───────────────────────────────────────────────────────────────────────────────
 4: Генерация QR-кодов и vpn:// URI для клиентов AmneziaWG.
 5: 
@@ -26,7 +26,7 @@ The following code has been modified to include a line number before every line,
 19: 
 20: def _core_module():
 21:     import importlib
-22:     return importlib.import_module("vless_installer._core")
+22:     return importlib.import_module("legacy_installer._core")
 23: 
 24: 
 25: # ── Генерация клиентского конфига (.conf) ───────────────────────────────────
@@ -108,7 +108,7 @@ The following code has been modified to include a line number before every line,
 101:             AWGS_KEYS_DIR.chmod(0o700)
 102:         except Exception as e:
 103:             # Тихий провал chmod на директории с секретами недопустим —
-104:             # логируем WARNING, чтобы админ заметил в /var/log/vless-install.log.
+104:             # логируем WARNING, чтобы админ заметил в /var/log/hydra/install.log.
 105:             core.log_to_file("WARNING", f"chmod 0o700 failed for {AWGS_KEYS_DIR}: {e}")
 106:         name = peer.get("name", "client")
 107:         path = AWGS_KEYS_DIR / f"{name}.conf"
@@ -293,7 +293,7 @@ The following code has been modified to include a line number before every line,
 286:         (TUI-меню), CLI, и подобных интерактивных контекстов.
 287:       • False — API-режим (REST API /api/awg/.../qr, /api/awg/my-peer/qr):
 288:         НЕ печатает QR в stdout. Это критично, потому что под systemd
-289:         stdout процесса уходит в journal (journalctl -u vless-web), а
+289:         stdout процесса уходит в journal соответствующего web-сервиса, а
 290:         ANSI QR-код содержит vpn:// URI с приватным ключом клиента + PSK.
 291:         Печать в journal = утечка боевого секрета в системный лог,
 292:         читаемый любым, у кого есть доступ к journalctl.

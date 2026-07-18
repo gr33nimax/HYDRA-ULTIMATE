@@ -336,11 +336,12 @@ def _show_user_detail(state: AppState, user: User):
         "amneziawg": "AmneziaWG", "naive": "NaiveProxy",
         "anytls": "AnyTLS", "mieru": "Mieru",
         "trusttunnel": "TrustTunnel", "shadowtls": "ShadowTLS",
+        "hysteria2": "Hysteria2", "snell": "Snell",
         "telemt": "Telemt",
     }
     order = [
         "amneziawg", "naive", "anytls", "mieru", "trusttunnel",
-        "shadowtls", "telemt",
+        "shadowtls", "hysteria2", "snell", "telemt",
     ]
     protocol_values = {
         name: max(0, int(stats.get("traffic_used_bytes", 0)))
@@ -771,6 +772,9 @@ def menu_plugin(state: AppState, p):
                 current_sni = ps.config.get("handshake_sni", "не выбран") if ps.config else "не выбран"
                 options.append(("3", "🌐 Сменить SNI", f"Текущий: {current_sni}"))
 
+            if p.meta.name in {"hysteria2", "snell"}:
+                options.append(("3", "⚙️  Настройки", "Параметры транспорта и обфускации"))
+
             options.append(("8", "🔄 Переустановить", "Переустановка протокола"))
             options.append(("9", "❌ Удалить", "Полное удаление"))
         
@@ -843,6 +847,12 @@ def menu_plugin(state: AppState, p):
                     error(str(exc))
             prompt("Нажмите Enter")
 
+        elif choice == "3" and p.meta.name == "hysteria2" and ps.installed:
+            _menu_hysteria2_settings(state, p)
+
+        elif choice == "3" and p.meta.name == "snell" and ps.installed:
+            _menu_snell_settings(state, p)
+
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):
                 ok = orchestrator.reinstall_plugin(state, p.meta.name)
@@ -861,6 +871,120 @@ def menu_plugin(state: AppState, p):
         
         elif choice == "0":
             return
+
+
+def _menu_hysteria2_settings(state: AppState, plugin) -> None:
+    """Runtime-safe Hysteria2 settings editor."""
+    from hydra.core.state import get_protocol
+    from hydra.utils.crypto import gen_token
+
+    while True:
+        ps = get_protocol(state, "hysteria2")
+        mode = ps.config.get("congestion_mode", "bbr")
+        bandwidth = ""
+        if mode == "brutal":
+            bandwidth = f" · {ps.config.get('up_mbps', 100)}/{ps.config.get('down_mbps', 100)} Mbps"
+        choice = menu([
+            ("1", "🌐 Домен и TLS", ps.config.get("domain", "не задан")),
+            ("2", "🔌 UDP-порт", str(ps.config.get("port", 8443))),
+            ("3", "🚀 Congestion control", f"{str(mode).upper()}{bandwidth}"),
+            ("4", "🔑 Сменить Salamander-пароль", "Клиентские ссылки обновятся"),
+            ("0", "↩ Назад", ""),
+        ], "НАСТРОЙКИ HYSTERIA2")
+        if choice == "0":
+            return
+        try:
+            if choice == "1":
+                domain = prompt("Новый домен Hysteria2", default=ps.config.get("domain", ""))
+                if domain and plugin.set_domain(state, domain):
+                    success("Домен и TLS-сертификат обновлены")
+                elif domain:
+                    error("Не удалось применить домен; прежняя конфигурация восстановлена")
+            elif choice == "2":
+                value = prompt("Новый UDP-порт", default=str(ps.config.get("port", 8443)))
+                if plugin.set_port(state, int(value)):
+                    success("UDP-порт обновлён")
+                else:
+                    error("Не удалось применить порт; прежняя конфигурация восстановлена")
+            elif choice == "3":
+                selected = menu([
+                    ("1", "BBR", "Автоматическая оценка пропускной способности"),
+                    ("2", "Brutal", "Явно заданные upload/download Mbps"),
+                    ("0", "Отмена", ""),
+                ], "CONGESTION CONTROL HYSTERIA2")
+                if selected == "1":
+                    ok = plugin.set_congestion(state, "bbr")
+                elif selected == "2":
+                    up = int(prompt("Upload Mbps", default=str(ps.config.get("up_mbps", 100))))
+                    down = int(prompt("Download Mbps", default=str(ps.config.get("down_mbps", 100))))
+                    ok = plugin.set_congestion(state, "brutal", up, down)
+                else:
+                    continue
+                success("Congestion control обновлён") if ok else error(
+                    "Не удалось применить режим; прежняя конфигурация восстановлена"
+                )
+            elif choice == "4":
+                value = prompt(
+                    "Новый пароль (пусто = сгенерировать)", default="",
+                ).strip() or gen_token(24)
+                if plugin.set_obfs_password(state, value):
+                    success("Salamander-пароль обновлён")
+                else:
+                    error("Не удалось сменить пароль; прежняя конфигурация восстановлена")
+        except (TypeError, ValueError) as exc:
+            error(str(exc))
+        prompt("Нажмите Enter")
+
+
+def _menu_snell_settings(state: AppState, plugin) -> None:
+    """Runtime-safe Snell version and simple-obfs editor."""
+    from hydra.core.state import get_protocol
+
+    while True:
+        ps = get_protocol(state, "snell")
+        version = int(ps.config.get("version", 5))
+        mode = str(ps.config.get("obfs_mode", "tls"))
+        host = str(ps.config.get("obfs_host", "www.bing.com"))
+        choice = menu([
+            ("1", "📦 Версия протокола", f"Snell v{version}"),
+            ("2", "🎭 Simple obfs", f"{mode.upper()} · {host}" if mode else "выключен"),
+            ("0", "↩ Назад", ""),
+        ], "НАСТРОЙКИ SNELL")
+        if choice == "0":
+            return
+        try:
+            if choice == "1":
+                selected = menu([
+                    ("4", "Snell v4", "Совместимость с клиентами Snell v4"),
+                    ("5", "Snell v5", "Текущий формат Sing-Box Extended"),
+                    ("0", "Отмена", ""),
+                ], "ВЕРСИЯ SNELL")
+                if selected in {"4", "5"}:
+                    ok = plugin.set_settings(state, int(selected), mode, host)
+                else:
+                    continue
+            elif choice == "2":
+                selected = menu([
+                    ("1", "TLS obfs", "Имитация TLS-трафика"),
+                    ("2", "HTTP obfs", "Имитация HTTP-трафика"),
+                    ("3", "Выключить", "Чистый Snell без simple-obfs"),
+                    ("0", "Отмена", ""),
+                ], "SIMPLE OBFS SNELL")
+                new_mode = {"1": "tls", "2": "http", "3": ""}.get(selected)
+                if new_mode is None:
+                    continue
+                new_host = host
+                if new_mode:
+                    new_host = prompt("Маскировочный host", default=host)
+                ok = plugin.set_settings(state, version, new_mode, new_host)
+            else:
+                continue
+            success("Настройки Snell обновлены") if ok else error(
+                "Не удалось применить настройки; прежняя конфигурация восстановлена"
+            )
+        except (TypeError, ValueError) as exc:
+            error(str(exc))
+        prompt("Нажмите Enter")
 
 
 def _show_plugin_clients(state: AppState, p):
@@ -1834,11 +1958,12 @@ def _show_traffic_combined(state: AppState):
             "amneziawg": "AmneziaWG", "naive": "NaiveProxy",
             "anytls": "AnyTLS", "mieru": "Mieru",
             "trusttunnel": "TrustTunnel", "shadowtls": "ShadowTLS",
+            "hysteria2": "Hysteria2", "snell": "Snell",
             "telemt": "Telemt", "wdtt": "qWDTT",
         }
         order = [
             "amneziawg", "naive", "anytls", "mieru", "trusttunnel",
-            "shadowtls", "telemt", "wdtt",
+            "shadowtls", "hysteria2", "snell", "telemt", "wdtt",
         ]
         names = [name for name in order if name in enabled_names or by_protocol.get(name, 0)]
         names.extend(sorted(set(by_protocol) - set(names)))
@@ -2002,7 +2127,9 @@ def _show_connections(state: AppState):
                     except Exception:
                         pass
                 continue
-            if p.meta.name in {"anytls", "mieru", "trusttunnel", "shadowtls"}:
+            if p.meta.name in {
+                "anytls", "mieru", "trusttunnel", "shadowtls", "hysteria2", "snell",
+            }:
                 continue
             try:
                 try:

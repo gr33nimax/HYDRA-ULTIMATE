@@ -331,6 +331,9 @@ def enable(state: AppState, name: str) -> bool:
             except Exception:
                 _rollback_plugin_change(state, snapshot, p, "on_disable")
                 raise
+    # on_user_add hooks populate protocol credentials for users that predate
+    # the plugin. Persist them before applying services and subscriptions.
+    save_state(state)
 
     try:
         applied = apply_config(state)

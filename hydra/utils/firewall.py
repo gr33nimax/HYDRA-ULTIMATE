@@ -1,7 +1,7 @@
 """
 hydra/utils/firewall.py — Менеджер firewall: авто-выбор UFW/iptables, persist правил.
 
-Логика портирована из legacy vless_installer/modules/naiveproxy.py и mieru.py
+Логика портирована из legacy-модулей NaiveProxy и Mieru
 (_ipt_*/_ufw_* хелперы — идентичны в обоих модулях).
 """
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """
 hydra/utils/downloader.py — Скачивание бинарников с GitHub releases.
 
-Логика портирована из legacy vless_installer/modules/naiveproxy.py
+Логика портирована из legacy-модуля NaiveProxy
 (_download_binary, _get_latest_version).
 """
 from __future__ import annotations

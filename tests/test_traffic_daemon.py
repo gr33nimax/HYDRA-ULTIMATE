@@ -102,6 +102,33 @@ def test_shadowtls_connection_is_attributed_to_authenticated_user():
     assert state.users[0].traffic_used_bytes == 600
     assert state.users[0].credentials["shadowtls"]["traffic_used_bytes"] == 600
 
+
+def test_hysteria2_uses_authenticated_clash_metadata():
+    state = AppState(users=[User(email="hy2@example.com", uuid="hy2-user")])
+    connection = {
+        "id": "hy2-connection",
+        "metadata": {"inboundTag": "hysteria2-in", "user": "hy2@example.com"},
+        "upload": 200,
+        "download": 500,
+    }
+    assert _apply_connection_snapshot(state, [connection], {}, {}, {}) is True
+    assert state.users[0].credentials["hysteria2"]["traffic_used_bytes"] == 700
+
+
+def test_snell_inbound_tag_maps_back_to_its_isolated_user():
+    from hydra.plugins.snell.plugin import SnellPlugin
+
+    user = User(email="snell@example.com", uuid="snell-user")
+    state = AppState(users=[user])
+    connection = {
+        "id": "snell-connection",
+        "metadata": {"inboundTag": SnellPlugin()._tag(user)},
+        "upload": 300,
+        "download": 600,
+    }
+    assert _apply_connection_snapshot(state, [connection], {}, {}, {}) is True
+    assert state.users[0].credentials["snell"]["traffic_used_bytes"] == 900
+
 def test_daemon_collects_traffic_from_clash_api():
     state = AppState()
     state.network.clash_api_enabled = True

@@ -89,6 +89,17 @@ def _apply_connection_snapshot(
             protocol = "mieru"
             key = (metadata.get("sourceIP", "").lower(), str(metadata.get("sourcePort", "")))
             user = user or mieru_users.get(key)
+        elif "hysteria2" in inbound_tag:
+            protocol = "hysteria2"
+        elif "snell-" in inbound_tag:
+            protocol = "snell"
+            if not user:
+                from hydra.plugins.snell.plugin import SnellPlugin
+                plugin = SnellPlugin()
+                for candidate in state.users:
+                    if plugin._tag(candidate) in inbound_tag:
+                        user = candidate.email
+                        break
         else:
             protocol = "unknown"
 

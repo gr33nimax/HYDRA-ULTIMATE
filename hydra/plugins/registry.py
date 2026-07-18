@@ -17,6 +17,8 @@ from hydra.plugins.fail2ban.plugin import Fail2banPlugin
 from hydra.plugins.honeypot.plugin import HoneypotPlugin
 from hydra.plugins.ipban.plugin import IPBanPlugin
 from hydra.plugins.shadowtls.plugin import ShadowTLSPlugin
+from hydra.plugins.hysteria2.plugin import Hysteria2Plugin
+from hydra.plugins.snell.plugin import SnellPlugin
 from hydra.core.state import AppState
 
 _PLUGINS: list[BasePlugin] = [
@@ -24,6 +26,8 @@ _PLUGINS: list[BasePlugin] = [
     AnyTLSPlugin(),
     TrustTunnelPlugin(),
     ShadowTLSPlugin(),
+    Hysteria2Plugin(),
+    SnellPlugin(),
     MieruPlugin(),
     NaivePlugin(),
     TelemtPlugin(),

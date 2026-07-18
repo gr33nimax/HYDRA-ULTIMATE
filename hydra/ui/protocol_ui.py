@@ -16,6 +16,8 @@ PROTOCOL_LABELS = {
     "anytls": "AnyTLS",
     "trusttunnel": "TrustTunnel",
     "shadowtls": "ShadowTLS",
+    "hysteria2": "Hysteria2",
+    "snell": "Snell",
     "mieru": "Mieru",
     "naive": "NaiveProxy",
     "telemt": "Telemt",
