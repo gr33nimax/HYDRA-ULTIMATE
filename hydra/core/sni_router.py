@@ -951,7 +951,7 @@ def rebuild(state: AppState) -> bool:
     # 2. Ensure decoy site files exist
     from hydra.core.decoy import ensure_decoy_site
     for b in backends:
-        if b["name"] != "sub_server":
+        if b["name"] not in ("sub_server", "shadowtls"):
             try:
                 ensure_decoy_site(b["name"])
             except Exception as e:
