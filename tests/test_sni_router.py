@@ -22,8 +22,10 @@ from hydra.core.state import AppState, PluginState
 
 
 def _state(naive_enabled=False, anytls_enabled=False, trusttunnel_enabled=False,
+           hysteria2_enabled=False,
            naive_domain="naive.com", anytls_domain="anytls.com",
-           trusttunnel_domain="trusttunnel.com", naive_network="tcp",
+           trusttunnel_domain="trusttunnel.com", hysteria2_domain="hysteria2.com",
+           naive_network="tcp",
            trusttunnel_transport="tcp"):
     s = AppState()
     s.network.domain = naive_domain
@@ -34,6 +36,14 @@ def _state(naive_enabled=False, anytls_enabled=False, trusttunnel_enabled=False,
     s.protocols["trusttunnel"] = PluginState(
         enabled=trusttunnel_enabled,
         config={"domain": trusttunnel_domain, "transport": trusttunnel_transport},
+    )
+    s.protocols["hysteria2"] = PluginState(
+        enabled=hysteria2_enabled,
+        config={
+            "domain": hysteria2_domain,
+            "cert_file": "hysteria2-cert.pem",
+            "key_file": "hysteria2-key.pem",
+        },
     )
     return s
 
@@ -47,6 +57,9 @@ def test_needs_mux_single_plugin():
     assert needs_mux(s) is False
 
     s = _state(naive_enabled=False, anytls_enabled=True)
+    assert needs_mux(s) is True
+
+    s = _state(hysteria2_enabled=True)
     assert needs_mux(s) is True
 
 
@@ -112,6 +125,46 @@ def test_config_has_sni_rules():
     snis = [r["match"][0]["tls"]["sni"][0] for r in routes if r.get("match")]
     assert "naive.com" in snis
     assert "anytls.com" in snis
+
+
+def test_hysteria2_has_browser_https_decoy_route():
+    s = _state(hysteria2_enabled=True)
+    backends = [
+        {
+            "name": "hysteria2", "domain": "hysteria2.com", "port": 20447,
+            "cert_file": "hysteria2-cert.pem", "key_file": "hysteria2-key.pem",
+            "network_mode": "",
+        },
+    ]
+
+    cfg = _generate_config(backends, s)
+
+    routes = cfg["apps"]["layer4"]["servers"]["tls_mux"]["routes"]
+    route = next(r for r in routes if r.get("match"))
+    assert route["match"][0]["tls"]["sni"] == ["hysteria2.com"]
+    assert route["handle"][0] == {"handler": "tls"}
+    assert route["handle"][1]["upstreams"][0]["dial"] == ["127.0.0.1:10803"]
+
+    tls_files = cfg["apps"]["tls"]["certificates"]["load_files"]
+    assert tls_files == [{
+        "certificate": "hysteria2-cert.pem", "key": "hysteria2-key.pem",
+    }]
+    decoy = cfg["apps"]["http"]["servers"]["hysteria2_decoy"]
+    assert decoy["listen"] == ["127.0.0.1:10803"]
+    assert decoy["routes"][0]["handle"][0] == {
+        "handler": "file_server", "root": "/var/www/decoy-hysteria2",
+    }
+
+    redirect = cfg["apps"]["http"]["servers"]["https_redirect"]
+    assert redirect["listen"] == [":80"]
+    response = redirect["routes"][0]["handle"][0]
+    assert response == {
+        "handler": "static_response",
+        "status_code": 308,
+        "headers": {
+            "Location": ["https://{http.request.host}{http.request.uri}"],
+        },
+    }
 
 
 def test_rebuild_starts_caddy():

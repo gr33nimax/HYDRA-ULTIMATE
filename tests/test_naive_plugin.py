@@ -188,6 +188,7 @@ def test_build_caddyfile_basic():
     assert "forward_proxy" in caddyfile
     assert "file_server" in caddyfile
     assert "root /var/www/decoy-a" in caddyfile
+    assert "auto_https disable_redirects" in caddyfile
     assert "upstream socks5://127.0.0.1:1080" in caddyfile
 
 

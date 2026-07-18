@@ -31,12 +31,14 @@ _INTERNAL_PORTS = {
     "anytls": 20444,      # sing-box anytls (tls OFF)
     "trusttunnel": 20445, # sing-box TrustTunnel TCP/UDP backend (TLS ON)
     "shadowtls": 20446,   # sing-box ShadowTLS v3
+    "hysteria2": 20447,   # Decoy-only TCP route; Hysteria2 itself stays on UDP
     "sub_server": 9443,
 }
 
 _DECOY_HTTP_PORTS = {
     "anytls": 10801,
     "trusttunnel": 10802,
+    "hysteria2": 10803,
 }
 
 _SOURCE_PRESERVED_BACKENDS = frozenset({"naive", "anytls", "trusttunnel", "shadowtls"})
@@ -465,11 +467,11 @@ def needs_mux(state: AppState) -> bool:
     """Returns True if multiplexing is required.
 
     Multiplexing is required if:
-    - anytls or trusttunnel is enabled (to provide fallback decoy protection via Caddy L4)
+    - anytls, trusttunnel or hysteria2 is enabled (to provide a browser-visible decoy via Caddy L4)
     - OR 2+ TLS plugins are active
     - OR sub_domain is configured
     """
-    for name in ("anytls", "trusttunnel"):
+    for name in ("anytls", "trusttunnel", "hysteria2"):
         proto = state.protocols.get(name)
         if proto and proto.enabled:
             if proto.config.get("domain"):
@@ -600,7 +602,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
     # 2. TLS app (load certificates for SNI matching)
     certificates = []
     for b in backends:
-        if b["name"] in ("anytls", "trusttunnel") and b["cert_file"] and b["key_file"]:
+        if b["name"] in ("anytls", "trusttunnel", "hysteria2") and b["cert_file"] and b["key_file"]:
             certificates.append({
                 "certificate": b["cert_file"],
                 "key": b["key_file"]
@@ -671,6 +673,18 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                     _proxy_handler(f"127.0.0.1:{decoy_port}", preserve_source=True)
                 ]
             })
+        elif name == "hysteria2":
+            # Browsers probe TCP/443, while Hysteria2 itself listens on UDP.
+            # Terminate regular HTTPS here and serve the same decoy used by
+            # the protocol's native HTTP/3 masquerade.
+            decoy_port = _DECOY_HTTP_PORTS["hysteria2"]
+            l4_routes.append({
+                "match": [{"tls": {"sni": [domain]}}],
+                "handle": [
+                    {"handler": "tls"},
+                    _proxy_handler(f"127.0.0.1:{decoy_port}", preserve_source=True)
+                ]
+            })
         elif name == "sub_server":
             # Subscription server route: simple TCP proxy to sub_server port (no termination here)
             l4_routes.append({
@@ -722,7 +736,30 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
         }
 
     # 4. HTTP app (decoy websites & forward_proxy)
-    http_servers = {}
+    http_servers = {
+        "https_redirect": {
+            "listen": [":80"],
+            "automatic_https": {
+                "disable": True,
+                "disable_redirects": True
+            },
+            "routes": [
+                {
+                    "handle": [
+                        {
+                            "handler": "static_response",
+                            "status_code": 308,
+                            "headers": {
+                                "Location": [
+                                    "https://{http.request.host}{http.request.uri}"
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    }
 
     # AnyTLS Decoy HTTP server
     if any(b["name"] == "anytls" for b in backends):
@@ -814,6 +851,28 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
             },
             "logs": {
                 "logger_names": {tt_backend["domain"]: "decoy"}
+            }
+        }
+
+    # Hysteria2 browser-visible HTTPS decoy. The Hysteria2 inbound continues
+    # to serve this directory itself for authenticated-layer HTTP/3 probes.
+    if any(b["name"] == "hysteria2" for b in backends):
+        hysteria2_backend = next(b for b in backends if b["name"] == "hysteria2")
+        http_servers["hysteria2_decoy"] = {
+            "listen": [f"127.0.0.1:{_DECOY_HTTP_PORTS['hysteria2']}"],
+            "automatic_https": {
+                "disable": True,
+                "disable_redirects": True
+            },
+            "routes": [
+                {
+                    "handle": [
+                        {"handler": "file_server", "root": "/var/www/decoy-hysteria2"}
+                    ]
+                }
+            ],
+            "logs": {
+                "logger_names": {hysteria2_backend["domain"]: "decoy"}
             }
         }
 

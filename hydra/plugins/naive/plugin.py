@@ -996,6 +996,7 @@ class NaivePlugin(BasePlugin):
         return f"""\
 {{
     http_port 0
+    auto_https disable_redirects
 {order_line}}}
 
 {site_header} {{

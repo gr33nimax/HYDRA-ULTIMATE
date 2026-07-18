@@ -5,7 +5,9 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from hydra.core.state import AppState, User
-from hydra.services.traffic_daemon import _apply_connection_snapshot, _write_log, run_daemon
+from hydra.services.traffic_daemon import (
+    _apply_connection_snapshot, _parse_hysteria2_users, _write_log, run_daemon,
+)
 
 
 def test_custom_log_is_bounded_and_keeps_recent_tail(tmp_path):
@@ -113,6 +115,47 @@ def test_hysteria2_uses_authenticated_clash_metadata():
     }
     assert _apply_connection_snapshot(state, [connection], {}, {}, {}) is True
     assert state.users[0].credentials["hysteria2"]["traffic_used_bytes"] == 700
+
+
+def test_hysteria2_real_clash_metadata_is_attributed_from_logs():
+    state = AppState(users=[User(email="hy2@example.com", uuid="hy2-user")])
+    connection = {
+        "id": "clash-generated-uuid",
+        "metadata": {
+            "type": "hysteria2/hysteria2-in",
+            "sourceIP": "198.51.100.20",
+            "sourcePort": "43123",
+        },
+        "upload": 200,
+        "download": 500,
+    }
+    users = {("198.51.100.20", "43123"): "hy2@example.com"}
+
+    assert _apply_connection_snapshot(
+        state, [connection], {}, {}, {}, {}, users,
+    ) is True
+    record = state.install["traffic_connection_counters"]["clash-generated-uuid"]
+    assert record["protocol"] == "hysteria2"
+    assert record["user"] == "hy2@example.com"
+
+
+def test_parse_hysteria2_users_correlates_tcp_and_udp_log_contexts():
+    lines = [
+        "INFO [123456 0ms] inbound/hysteria2[hysteria2-in]: "
+        "inbound connection from [::ffff:198.51.100.20]:43123",
+        "INFO [123456 1ms] inbound/hysteria2[hysteria2-in]: "
+        "[hy2@example.com] inbound connection to example.com:443",
+        "INFO [789012 0ms] inbound/hysteria2[hysteria2-in]: "
+        "inbound packet connection from 2001:db8::10:53100",
+        "INFO [789012 1ms] inbound/hysteria2[hysteria2-in]: "
+        "[udp@example.com] inbound packet connection to 1.1.1.1:53",
+    ]
+
+    users = _parse_hysteria2_users(lines)
+
+    assert users[("::ffff:198.51.100.20", "43123")] == "hy2@example.com"
+    assert users[("198.51.100.20", "43123")] == "hy2@example.com"
+    assert users[("2001:db8::10", "53100")] == "udp@example.com"
 
 
 def test_snell_inbound_tag_maps_back_to_its_isolated_user():

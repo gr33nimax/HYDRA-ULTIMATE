@@ -19,6 +19,49 @@ TRAFFIC_LOG_BACKUP = Path("/var/log/hydra/traffic-daemon.log.1")
 TRAFFIC_LOG_MAX_BYTES = 5 * 1024 * 1024
 
 
+def _parse_hysteria2_users(lines: list[str]) -> dict[tuple[str, str], str]:
+    """Correlate Hysteria2 log contexts with the source tuple exposed by Clash API."""
+    import re
+
+    context_sources: dict[str, tuple[str, str]] = {}
+    context_users: dict[str, str] = {}
+    for line in lines:
+        if "inbound/hysteria2" not in line.lower():
+            continue
+        context = re.search(r"INFO\s+\[(\d+)\s+[^\]]+\]", line)
+        if not context:
+            continue
+        context_id = context.group(1)
+        source = re.search(
+            r"inbound (?:packet )?connection from\s+"
+            r"(\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9._:-]+):(\d+)",
+            line,
+            re.IGNORECASE,
+        )
+        if source:
+            host = source.group(1).strip("[]").lower()
+            context_sources[context_id] = (host, source.group(2))
+            continue
+        user = re.search(
+            r"inbound/hysteria2\[[^\]]+\]:\s+\[([^\]]+)\]\s+"
+            r"inbound (?:packet )?connection to",
+            line,
+            re.IGNORECASE,
+        )
+        if user:
+            context_users[context_id] = user.group(1)
+
+    source_users: dict[tuple[str, str], str] = {}
+    for context_id, user in context_users.items():
+        source = context_sources.get(context_id)
+        if not source:
+            continue
+        source_users[source] = user
+        if source[0].startswith("::ffff:"):
+            source_users[(source[0][7:], source[1])] = user
+    return source_users
+
+
 def maintain_traffic_log() -> None:
     """Compact an oversized legacy log while preserving its recent tail."""
     try:
@@ -56,6 +99,7 @@ def _apply_connection_snapshot(
     trusttunnel_users: dict[tuple[str, str], str | None],
     mieru_users: dict[tuple[str, str], str],
     shadowtls_users: dict[tuple[str, str], str | None] | None = None,
+    hysteria2_users: dict[tuple[str, str], str] | None = None,
 ) -> bool:
     """Atomically apply connection deltas using counters persisted in AppState."""
     state.install["traffic_daemon_last_poll"] = time.time()
@@ -63,6 +107,7 @@ def _apply_connection_snapshot(
     current_ids: set[str] = set()
     deltas: dict[tuple[str, str], int] = {}
     shadowtls_users = shadowtls_users or {}
+    hysteria2_users = hysteria2_users or {}
 
     for connection in connections:
         connection_id = connection.get("id")
@@ -91,6 +136,8 @@ def _apply_connection_snapshot(
             user = user or mieru_users.get(key)
         elif "hysteria2" in inbound_tag:
             protocol = "hysteria2"
+            key = (metadata.get("sourceIP", "").lower(), str(metadata.get("sourcePort", "")))
+            user = user or hysteria2_users.get(key)
         elif "snell-" in inbound_tag:
             protocol = "snell"
             if not user:
@@ -319,6 +366,20 @@ def run_daemon() -> None:
             pass
         return addr_to_user
 
+    def _get_hysteria2_users() -> dict[tuple[str, str], str]:
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["journalctl", "-u", "sing-box", "-n", "1000", "--no-pager"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if result.returncode == 0:
+                return _parse_hysteria2_users(result.stdout.splitlines())
+        except Exception:
+            pass
+        return {}
+
     last_summary_at = 0.0
     last_api_error_at = 0.0
 
@@ -359,9 +420,10 @@ def run_daemon() -> None:
             trusttunnel_users = _get_trusttunnel_users()
             mieru_users = _get_mieru_users()
             shadowtls_users = _get_shadowtls_users()
+            hysteria2_users = _get_hysteria2_users()
             state, counters_updated = update_state(lambda latest: _apply_connection_snapshot(
                 latest, connections, anytls_ports, trusttunnel_users, mieru_users,
-                shadowtls_users,
+                shadowtls_users, hysteria2_users,
             ))
             now = time.monotonic()
             if now - last_summary_at >= 300:
