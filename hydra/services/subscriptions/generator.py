@@ -487,10 +487,7 @@ def generate_nekobox_sub(user: User, state: AppState) -> str:
                     "tag": "tun-in",
                     "stack": "mixed",
                     "mtu": 9000,
-                    "address": [
-                        "172.19.0.1/28",
-                        "fdfe:dcba:9876::1/126",
-                    ],
+                    "address": ["172.19.0.1/30"],
                     "endpoint_independent_nat": True,
                 },
                 {
