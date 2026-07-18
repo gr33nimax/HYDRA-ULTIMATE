@@ -17,41 +17,176 @@
 
 ## 📐 Архитектура системы
 
-HYDRA использует двухуровневую обработку трафика: входящие TLS-соединения мультиплексируются по SNI с помощью **Caddy L4**, а прочие протоколы (например, UDP/TPROXY) обрабатываются непосредственно в ядре **Sing-Box**.
+HYDRA использует несколько параллельных путей обработки трафика. Caddy L4 при необходимости распределяет TCP/443 по SNI и проксирует одного владельца UDP/443, нативные Sing-Box-транспорты слушают собственные порты, а туннельные интерфейсы попадают в Sing-Box через nftables/TPROXY.
 
 ### Схема прохождения трафика
 
-```mermaid
-flowchart TB
-    tcp["TLS-клиенты и браузеры"] -->|"TCP/TLS :443"| mux["Caddy L4<br/>SNI-мультиплексор"]
+Обозначения: `[опц.]` — узел или маршрут существует только при включённой настройке; `<SNI>` — выбор по доменному имени из TLS ClientHello.
 
-    mux -->|"Naive SNI"| naive["NaiveProxy<br/>:10443"]
-    mux -->|"AnyTLS SNI"| anytls["AnyTLS<br/>:20444"]
-    mux -->|"TrustTunnel SNI"| trust["TrustTunnel<br/>:20445"]
-    mux -->|"Hysteria2 SNI"| tls["TLS termination"]
-    mux -->|"Неизвестный SNI"| fallback["Fallback Decoy"]
+```text
+ПУБЛИЧНЫЕ HTTP/TLS-ВХОДЫ
+========================
 
-    tls --> hyDecoy["Hysteria2 Decoy<br/>:10803"]
-    hyDecoy --> protected["Статический сайт<br/>защита от active probing"]
-    fallback --> protected
+  Браузер / HTTP-клиент
+           |
+           +-- TCP :80 [при активном Caddy L4]
+           |       `--> Caddy HTTP --> 308 Redirect на HTTPS
+           |
+           `-- TCP :443 --> выбор режима
+                              |
+                              +-- SNI-мультиплексор НЕ нужен
+                              |       |
+                              |       `--> единственный TLS-транспорт на :443:
+                              |              +-- Naive --> caddy-naive
+                              |              `-- ShadowTLS --> Sing-Box ShadowTLS
+                              |
+                              `-- SNI-мультиплексор нужен
+                                      |
+                                      v
+                               Caddy L4 / tls_mux :443
+                                      |
+                 +-------------------------------------+-----------------------------+
+                 |                                     |                             |
+                 | <Naive SNI>                         | <AnyTLS SNI>                |
+                 | TLS passthrough                     | TLS termination             |
+                 v                                     v                             |
+          caddy-naive :10443                  определение HTTP после TLS             |
+                 |                                     |                             |
+          +------+-------+                     +-------+--------+                    |
+          |              |                     |                |                    |
+   авторизованный    обычный HTTPS/       не-HTTP AnyTLS     HTTP/браузер             |
+   forward_proxy     active probe              |                |                    |
+          |              |                     v                v                    |
+   SOCKS 127.0.0.1:1080  `--> Naive decoy   AnyTLS inbound   HTTP :10801              |
+          |                    static site    127.0.0.1:20444      |                    |
+          |                    /var/www/      (TLS уже снят)       `--> decoy-b         |
+          |                    decoy-a               |                static site      |
+          |                                          |                                 |
+          +--------------------------+---------------+                                 |
+                                     |                                                 |
+                                     v                                                 |
+                              Sing-Box routing                                         |
+                                                                                       |
+                 +---------------------------------------------------------------------+
+                 |
+                 | <TrustTunnel SNI>                 <Hysteria2 SNI>
+                 | TLS termination                   TLS termination
+                 v                                   v
+          Caddy HTTP :10802                   Caddy HTTP :10803
+                 |                                   |
+          +------+--------+                          `--> Hysteria2 decoy
+          |               |                               /var/www/decoy-hysteria2
+      CONNECT          обычный HTTP /
+          |            ошибка upstream
+          v               |
+   reverse_proxy h2       `--> decoy-c
+          |                    static site
+          v
+   TrustTunnel inbound
+   127.0.0.1:20445 (TLS/h2)
+          |
+          `--------------------------------------------------> Sing-Box routing
 
-    hyClients["Hysteria2-клиенты"] -->|"UDP/QUIC<br/>настроенный порт"| hyInbound["Hysteria2 inbound"]
-    nativeClients["AWG / Mieru / Snell / другие"] -->|"native inbound / nftables TPROXY"| nativeInbound["Sing-Box inbounds"]
+                 <ShadowTLS handshake SNI>
+                 TLS passthrough
+                        |
+                        v
+                 ShadowTLS inbound :20446
+                        |
+                        `--> detour: Trojan inbound --> Sing-Box routing
 
-    naive --> routing["Sing-Box routing"]
-    anytls --> routing
-    trust --> routing
-    hyInbound --> routing
-    nativeInbound --> routing
+                 <Subscription SNI> [опц.]
+                 TLS passthrough --> subscription server 127.0.0.1:9443
 
-    routing --> warp["WARP outbound"]
-    routing --> direct["Direct outbound"]
-    warp --> cloudflare["Cloudflare"]
-    direct --> internet["Интернет"]
+                 <неизвестный/отсутствующий SNI>
+                        |
+                        +-- если включён AnyTLS ------> TLS termination --> :10801 decoy-b
+                        +-- иначе, если TrustTunnel --> TLS termination --> :10802 decoy-c
+                        `-- иначе --------------------> соединение закрывается
 
-    routing -. "DNS-запросы" .-> dnscrypt["DNSCrypt :5300"]
-    dnscrypt --> dnsUpstream["Зашифрованный DNS upstream"]
+
+ПУБЛИЧНЫЕ UDP/QUIC-ВХОДЫ
+========================
+
+  Naive QUIC ИЛИ TrustTunnel QUIC (одновременно только один владелец UDP/443)
+          |
+          `-- UDP :443 --> Caddy L4 raw UDP proxy
+                              |
+                              +-- Naive --------> 127.0.0.1:10443 --> caddy-naive
+                              `-- TrustTunnel --> 127.0.0.1:20445 --> TT QUIC inbound
+                                                                         |
+                                                                         v
+                                                                  Sing-Box routing
+
+  Hysteria2-клиент
+          |
+          `-- UDP/QUIC :<настроенный порт> --> Hysteria2 inbound Sing-Box
+                                                   |
+                                                   +-- валидный пользователь
+                                                   |        `--> Sing-Box routing
+                                                   |
+                                                   `-- HTTP/3 probe/masquerade
+                                                            `--> /var/www/decoy-hysteria2
+
+  Важно: Hysteria2 не проходит через UDP/443-мультиплексор Caddy. Его UDP-порт
+  задаётся отдельно; TCP/443 с тем же доменом обслуживает браузерную заглушку.
+
+
+ОСТАЛЬНЫЕ ТРАНСПОРТЫ И ТУННЕЛИ
+==============================
+
+  Mieru :<порт/диапазон> --------------------------> Mieru inbound --------+
+  Snell :<порт пользователя> ----------------------> Snell inbound --------+
+  AmneziaWG UDP --> awg0/awg1 ----+                                      |
+  qWDTT DTLS/WireGuard --> wdtt0 -+--> nftables policy + TPROXY ----------+
+                                                                        |
+                                                                        v
+                                                    Sing-Box inbounds / tproxy-in
+                                                                        |
+                                                                        v
+                                                              Sing-Box routing
+
+  MTProto-клиент --> Telemt :<порт> --> MTProto / middle-proxy
+                                           |
+                                           +-- интеграция Sing-Box выключена --> direct
+                                           `-- интеграция Sing-Box включена
+                                                  |
+                                                  `--> iptables OUTPUT redirect
+                                                       для сетей Telegram
+                                                            |
+                                                            v
+                                                redirect inbound 127.0.0.1:10811
+                                                            |
+                                                            `--> Sing-Box routing
+
+
+ЕДИНОЕ ЯДРО, DNS, ВЫХОДЫ И МОНИТОРИНГ
+=====================================
+
+  Все Sing-Box inbounds
+          |
+          v
+  аутентификация + route rules + sniffing [при TPROXY]
+          |
+          +-- совпало с WARP-правилом [опц.] --> WARP / warp_<profile>
+          |                                      WireGuard endpoint
+          |                                             |
+          |                                             v
+          |                                      Cloudflare --> Интернет
+          |
+          `-- правило не совпало / WARP выключен --> direct --> Интернет
+
+  DNS Sing-Box
+          |
+          +-- DNSCrypt включён [опц.] --> 127.0.0.1:5300 --> зашифрованный upstream
+          `-- DNSCrypt выключен ------> Quad9 DoH (bootstrap: 1.1.1.1) --> direct
+
+  Мониторинг активных соединений [опц.]
+          `-- Clash API 127.0.0.1:<порт, по умолчанию 9090>
+                    `--> текущие соединения Sing-Box, включая Hysteria2
 ```
+
+Caddy L4 запускается, если включён AnyTLS, TrustTunnel или Hysteria2 с доменом, если одновременно активны два и более TLS-транспорта с доменами либо настроен домен сервера подписок. Порты `10443`, `20444`–`20446`, `10801`–`10803` и `9443` являются внутренними и не должны открываться наружу.
 
 Модули безопасности:
 
@@ -130,10 +265,11 @@ flowchart TB
 * **Нативная адресация в Sing-Box (1.13.0+)**: Интеграция осуществляется без промежуточных TUN-интерфейсов на уровне ОС — пакеты направляются напрямую в абстракцию `endpoints` с поддержкой всех расширенных параметров AmneziaWG (CPS-подписи, шумовой трафик, заголовки).
 
 ### 2. SNI-мультиплексирование на базе Caddy L4
-Для бесконфликтного совместного использования входящего порта TCP/443 несколькими TLS-транспортами HYDRA разворачивает фронтенд-мультиплексор на уровне Caddy с модулем `layer4`:
-* **SSL Passthrough (Без дешифрования)**: Маршрутизатор Caddy L4 анализирует структуру пакета `Client Hello` на этапе TLS-рукопожатия, считывает значение поля SNI (Server Name Indication) и перенаправляет сырой зашифрованный поток на соответствующий локальный порт транспорта (например, NaiveProxy на `10443`, AnyTLS на `20444`, TrustTunnel на `20445`). Это исключает раскрытие приватных ключей на уровне мультиплексора.
-* **Активная защита от зондирования (Decoy)**: Запросы с некорректным, отсутствующим или неавторизованным SNI автоматически перенаправляются на локальный веб-сервер, отдающий статические decoy-страницы из каталогов `/var/www/decoy-*/`, имитируя работу стандартного веб-ресурса.
-* **Спектр UDP/443 (QUIC)**: Для транспортов, поддерживающих протокол QUIC/HTTP3 (NaiveProxy, TrustTunnel), настраивается raw UDP proxy. Оркестратор автоматически отслеживает владение UDP-портом и предотвращает конфликты адресации на этапе валидации изменений.
+Для бесконфликтного совместного использования TCP/443 HYDRA при необходимости разворачивает Caddy с модулем `layer4`. Мультиплексор обязателен для браузерной маскировки AnyTLS, TrustTunnel и Hysteria2, для двух и более одновременных TLS-транспортов либо при наличии отдельного домена подписок:
+* **TLS passthrough**: Caddy читает SNI из `ClientHello`, не снимает TLS и передаёт зашифрованный поток NaiveProxy (`10443`), ShadowTLS (`20446`) или серверу подписок (`9443`).
+* **TLS termination и decoy**: Для AnyTLS Caddy снимает TLS и разделяет протокольный не-HTTP трафик (`20444`) и браузерный HTTP (`10801`). Для TrustTunnel HTTPS поступает на локальный HTTP-сервер (`10802`), который отправляет CONNECT в Sing-Box (`20445`), а обычный запрос — на decoy. Для SNI Hysteria2 весь TCP/HTTPS-трафик направляется на браузерную заглушку (`10803`), тогда как сам Hysteria2 работает независимо на настроенном UDP-порту.
+* **Fallback неизвестного SNI**: Fallback создаётся только при активном AnyTLS или TrustTunnel и использует decoy соответствующего транспорта. Без них соединение с неизвестным SNI не получает универсальную заглушку.
+* **UDP/443 (QUIC)**: Caddy выполняет raw UDP proxy для NaiveProxy либо TrustTunnel. UDP/443 не мультиплексируется по SNI и может принадлежать только одному из этих транспортов; конфликт блокируется при валидации.
 
 ### 3. Транзакционный биллинг и дистрибуция подписок
 Автономный модуль контроля доступа и учета потребляемых ресурсов:
