@@ -234,26 +234,45 @@ def test_set_handshake_sni_saves_disabled_plugin_without_runtime_apply():
     state = _state(handshake_sni="old.example.com")
     state.protocols["shadowtls"].enabled = False
 
-    with patch("hydra.core.state.save_state") as mock_save, \
+    with patch.object(p, "_probe_handshake_sni") as mock_probe, \
+         patch("hydra.core.state.save_state") as mock_save, \
          patch("hydra.core.orchestrator.apply_config") as mock_apply:
         assert p.set_handshake_sni(state, "YA.RU.") is True
 
     assert state.protocols["shadowtls"].config["handshake_sni"] == "ya.ru"
     mock_save.assert_called_once_with(state)
     mock_apply.assert_not_called()
+    mock_probe.assert_called_once_with("ya.ru")
 
 
 def test_set_handshake_sni_rolls_back_enabled_plugin_on_apply_failure():
     p = ShadowTLSPlugin()
     state = _state(handshake_sni="old.example.com")
 
-    with patch("hydra.core.orchestrator.apply_config", side_effect=[False, True]) as mock_apply, \
+    with patch.object(p, "_probe_handshake_sni"), \
+         patch("hydra.core.orchestrator.apply_config", side_effect=[False, True]) as mock_apply, \
          patch("hydra.core.state.save_state") as mock_save:
         assert p.set_handshake_sni(state, "ya.ru") is False
 
     assert state.protocols["shadowtls"].config["handshake_sni"] == "old.example.com"
     assert mock_apply.call_count == 2
     mock_save.assert_not_called()
+
+
+def test_probe_handshake_sni_rejects_non_tls13_target():
+    p = ShadowTLSPlugin()
+    raw = MagicMock()
+    raw.__enter__.return_value = raw
+    tls = MagicMock()
+    tls.__enter__.return_value = tls
+    tls.version.return_value = "TLSv1.2"
+    context = MagicMock()
+    context.wrap_socket.return_value = tls
+
+    with patch("socket.create_connection", return_value=raw), \
+         patch("ssl.create_default_context", return_value=context):
+        with pytest.raises(ValueError, match="не согласовал TLS 1.3"):
+            p._probe_handshake_sni("legacy.example.com")
 
 
 def test_existing_local_handshake_sni_is_rejected():

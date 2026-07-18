@@ -790,10 +790,13 @@ def menu_plugin(state: AppState, p):
         elif choice == "3" and p.meta.name == "shadowtls" and ps.installed:
             new_sni = p.choose_handshake_sni()
             if new_sni:
-                if p.set_handshake_sni(state, new_sni):
-                    success(f"SNI ShadowTLS изменён на {new_sni}")
-                else:
-                    error("Не удалось применить SNI; прежняя конфигурация восстановлена")
+                try:
+                    if p.set_handshake_sni(state, new_sni):
+                        success(f"SNI ShadowTLS изменён на {new_sni}")
+                    else:
+                        error("Не удалось применить SNI; прежняя конфигурация восстановлена")
+                except ValueError as exc:
+                    error(str(exc))
             prompt("Нажмите Enter")
 
         elif choice == "8" and ps.installed:

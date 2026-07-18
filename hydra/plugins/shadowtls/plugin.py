@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import ipaddress
 import copy
+import socket
+import ssl
 import shutil
 import subprocess
 import time
@@ -23,7 +25,6 @@ SHADOWTLS_SNI_PRESETS = (
     ("www.apple.com", "Международный · Apple"),
     ("www.cloudflare.com", "Международный · Cloudflare"),
     ("www.amazon.com", "Международный · Amazon"),
-    ("www.samsung.com", "Международный · Samsung"),
     ("www.adobe.com", "Международный · Adobe"),
     ("ya.ru", "Россия · Яндекс"),
     ("vk.com", "Россия · ВКонтакте"),
@@ -219,6 +220,7 @@ class ShadowTLSPlugin(BasePlugin):
             ps = get_protocol(state, "shadowtls")
 
         handshake_sni = ps.config.get("handshake_sni", "") if ps and ps.config else ""
+        selected_now = not handshake_sni
         if not handshake_sni:
             handshake_sni = self.choose_handshake_sni()
             if not handshake_sni:
@@ -227,6 +229,8 @@ class ShadowTLSPlugin(BasePlugin):
         # Validate before touching firewall/accounting state. In particular, a
         # handshake back to this server would recursively enter ShadowTLS.
         handshake_sni = self._validate_handshake_sni(handshake_sni, state)
+        if selected_now:
+            self._probe_handshake_sni(handshake_sni)
         ps.config["handshake_sni"] = handshake_sni
 
         # Firewall (порт 443)
@@ -266,10 +270,8 @@ class ShadowTLSPlugin(BasePlugin):
         """Validate and transactionally apply a new handshake SNI."""
         from hydra.core.state import get_protocol, save_state
 
-        try:
-            handshake_sni = self._validate_handshake_sni(value, state)
-        except ValueError:
-            return False
+        handshake_sni = self._validate_handshake_sni(value, state)
+        self._probe_handshake_sni(handshake_sni)
 
         ps = get_protocol(state, "shadowtls")
         old_config = copy.deepcopy(ps.config)
@@ -471,6 +473,25 @@ class ShadowTLSPlugin(BasePlugin):
                 "Для ShadowTLS укажите сторонний TLS 1.3 домен, иначе возникает циклическое подключение."
             )
         return handshake_sni
+
+    @staticmethod
+    def _probe_handshake_sni(handshake_sni: str, timeout: float = 6.0) -> None:
+        """Verify from the VPS that the target completes a valid TLS 1.3 handshake."""
+        context = ssl.create_default_context()
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        try:
+            with socket.create_connection((handshake_sni, 443), timeout=timeout) as raw:
+                with context.wrap_socket(raw, server_hostname=handshake_sni) as tls:
+                    if tls.version() != "TLSv1.3":
+                        raise ValueError(
+                            f"SNI {handshake_sni} не согласовал TLS 1.3"
+                        )
+        except ValueError:
+            raise
+        except (OSError, ssl.SSLError) as exc:
+            raise ValueError(
+                f"SNI {handshake_sni} недоступен с этого VPS по TLS 1.3: {exc}"
+            ) from exc
 
     @staticmethod
     def _server_ip(state: AppState) -> str:
