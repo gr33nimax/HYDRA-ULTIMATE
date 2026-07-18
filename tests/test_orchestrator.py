@@ -252,3 +252,22 @@ def test_apply_config_returns_false_when_caddy_rebuild_fails():
          patch("hydra.core.sni_router.rebuild", return_value=False), \
          patch("socket.socket", return_value=fake_socket):
         assert orchestrator.apply_config(state) is False
+
+
+def test_install_plugin_rolls_back_state_when_apply_fails():
+    from hydra.core import orchestrator
+
+    state = AppState()
+    state.protocols["mock_transport"] = PluginState(enabled=True, installed=False)
+    plugin = _MockTransport()
+
+    with patch("hydra.core.orchestrator.registry.get", return_value=plugin), \
+         patch("hydra.core.orchestrator.apply_config", side_effect=[False, True]) as apply, \
+         patch("hydra.core.orchestrator.save_state") as save:
+        result = orchestrator.install_plugin(state, "mock_transport")
+
+    assert result is False
+    assert state.protocols["mock_transport"].installed is False
+    assert state.protocols["mock_transport"].enabled is True
+    assert apply.call_count == 2
+    assert save.call_count == 2

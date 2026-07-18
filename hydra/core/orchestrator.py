@@ -206,12 +206,28 @@ def install_plugin(state: AppState, name: str) -> bool:
     p = registry.get(name)
     if not p:
         return False
-    ok = p.install()
+    snapshot = copy.deepcopy(state)
+    try:
+        ok = p.install()
+    except Exception:
+        _restore_state(state, snapshot)
+        save_state(state)
+        raise
     proto = get_protocol(state, name)
     proto.installed = ok
     save_state(state)
     if ok and proto.enabled:
-        return apply_config(state)
+        try:
+            applied = apply_config(state)
+        except Exception:
+            _restore_state(state, snapshot)
+            save_state(state)
+            raise
+        if not applied:
+            _restore_state(state, snapshot)
+            save_state(state)
+            apply_config(state)
+        return applied
     return ok
 
 

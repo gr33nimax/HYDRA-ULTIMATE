@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import shutil
 import subprocess
 import time
@@ -46,6 +47,7 @@ class ShadowTLSPlugin(BasePlugin):
 
         if not handshake_sni:
             return ConfigFragment()
+        handshake_sni = self._validate_handshake_sni(handshake_sni, state)
 
         users_stls = []
         users_trojan = []
@@ -131,7 +133,7 @@ class ShadowTLSPlugin(BasePlugin):
         username = self._derive_username(user)
         stls_password = self._derive_stls_password(user.uuid)
         trojan_password = self._derive_trojan_password(user.uuid)
-        server_ip = state.network.server_ip or public_ip()
+        server_ip = self._server_ip(state)
 
         outbound_trojan = {
             "type": "trojan",
@@ -181,7 +183,7 @@ class ShadowTLSPlugin(BasePlugin):
         stls_password = self._derive_stls_password(user.uuid)
         trojan_password = self._derive_trojan_password(user.uuid)
         tag = urllib.parse.quote(self._derive_username(user), safe="")
-        host = state.network.domain or state.network.server_ip or public_ip()
+        host = self._url_host(self._server_ip(state))
         
         # Format options for shadow-tls plugin
         opts = f"host={handshake_sni};password={stls_password};version=3"
@@ -206,16 +208,10 @@ class ShadowTLSPlugin(BasePlugin):
             if not handshake_sni:
                 raise ValueError("SNI домен обязателен для маскировки ShadowTLS!")
 
-            # Проверка конфликтов
-            if handshake_sni == state.network.domain:
-                naive_ps = state.protocols.get("naive")
-                if naive_ps and naive_ps.enabled:
-                    raise ValueError(
-                        f"Домен {handshake_sni} уже используется NaiveProxy! "
-                        "ShadowTLS требует другой маскировочный SNI."
-                    )
-            
-            ps.config["handshake_sni"] = handshake_sni
+        # Validate before touching firewall/accounting state. In particular, a
+        # handshake back to this server would recursively enter ShadowTLS.
+        handshake_sni = self._validate_handshake_sni(handshake_sni, state)
+        ps.config["handshake_sni"] = handshake_sni
 
         # Firewall (порт 443)
         from hydra.utils.firewall import open_tcp
@@ -375,6 +371,48 @@ class ShadowTLSPlugin(BasePlugin):
     @staticmethod
     def _derive_trojan_password(uuid: str) -> str:
         return derive_hex_key("shadowtls-pass", uuid)
+
+    @staticmethod
+    def _normalized_host(value: str) -> str:
+        return value.strip().rstrip(".").lower()
+
+    def _validate_handshake_sni(self, value: str, state: AppState) -> str:
+        handshake_sni = self._normalized_host(value)
+        if not handshake_sni:
+            raise ValueError("SNI домен обязателен для маскировки ShadowTLS!")
+
+        own_hosts = {
+            self._normalized_host(state.network.domain),
+            self._normalized_host(state.network.sub_domain),
+            self._normalized_host(state.network.server_ip),
+        }
+        for name, protocol in state.protocols.items():
+            if name == "shadowtls" or not protocol.enabled:
+                continue
+            own_hosts.add(self._normalized_host(protocol.config.get("domain", "")))
+
+        own_hosts.discard("")
+        if handshake_sni in own_hosts:
+            raise ValueError(
+                f"SNI {handshake_sni} принадлежит этому серверу. "
+                "Для ShadowTLS укажите сторонний TLS 1.3 домен, иначе возникает циклическое подключение."
+            )
+        return handshake_sni
+
+    @staticmethod
+    def _server_ip(state: AppState) -> str:
+        value = (state.network.server_ip or public_ip()).strip()
+        try:
+            return str(ipaddress.ip_address(value))
+        except ValueError as exc:
+            raise ValueError(
+                "Для ShadowTLS не удалось определить публичный IP сервера"
+            ) from exc
+
+    @staticmethod
+    def _url_host(value: str) -> str:
+        address = ipaddress.ip_address(value)
+        return f"[{address}]" if address.version == 6 else str(address)
 
     def _remove_iptables_rules(self) -> None:
         for chain in ("INPUT", "OUTPUT"):

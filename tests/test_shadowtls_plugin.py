@@ -17,6 +17,7 @@ from hydra.core.state import AppState, User, PluginState
 def _state(users=None, handshake_sni="google.com", naive_enabled=False, naive_domain="naive.example.com"):
     s = AppState()
     s.network.domain = naive_domain
+    s.network.server_ip = "203.0.113.10"
     s.protocols["naive"] = PluginState(enabled=naive_enabled)
     s.protocols["shadowtls"] = PluginState(enabled=True, config={"handshake_sni": handshake_sni})
     if users:
@@ -145,7 +146,8 @@ def test_client_link_valid():
     link = p.client_link(user, state)
 
     assert link.startswith("trojan://")
-    assert "@naive.example.com:443" in link
+    assert "@203.0.113.10:443" in link
+    assert "naive.example.com" not in link
     assert "plugin=shadow-tls" in link
     assert "plugin-opts=" in link
 
@@ -162,15 +164,16 @@ def test_generate_client_config_json():
     stls_out = [o for o in parsed["outbounds"] if o["type"] == "shadowtls"][0]
 
     assert trojan_out["server_port"] == 443
+    assert trojan_out["server"] == "203.0.113.10"
     assert trojan_out["detour"] == stls_out["tag"]
     assert stls_out["tls"]["server_name"] == "google.com"
     assert stls_out["version"] == 3
 
 
 def test_domain_conflict_check():
-    """on_enable() raises ValueError if handshake_sni conflicts with naive domain."""
+    """A local handshake SNI is rejected before firewall changes."""
     p = ShadowTLSPlugin()
-    state = _state(naive_enabled=True, naive_domain="conflict.com")
+    state = _state(naive_enabled=False, naive_domain="conflict.com")
     state.protocols["shadowtls"].config["handshake_sni"] = ""
 
     with patch("hydra.ui.tui.prompt", return_value="conflict.com"), \
@@ -178,7 +181,29 @@ def test_domain_conflict_check():
          patch("subprocess.run") as mock_run:
         with pytest.raises(ValueError) as excinfo:
             p.on_enable(state)
-        assert "уже используется NaiveProxy" in str(excinfo.value)
+        assert "принадлежит этому серверу" in str(excinfo.value)
+        mock_open.assert_not_called()
+
+
+def test_existing_local_handshake_sni_is_rejected():
+    p = ShadowTLSPlugin()
+    state = _state(handshake_sni="NAIVE.EXAMPLE.COM.")
+
+    with patch("hydra.utils.firewall.open_tcp") as mock_open, \
+         patch("subprocess.run"):
+        with pytest.raises(ValueError, match="циклическое подключение"):
+            p.on_enable(state)
+        mock_open.assert_not_called()
+
+
+def test_client_link_formats_ipv6_server_ip():
+    p = ShadowTLSPlugin()
+    state = _state()
+    state.network.server_ip = "2001:db8::10"
+
+    link = p.client_link(_user("a@x.com", uuid="uuid-a"), state)
+
+    assert "@[2001:db8::10]:443" in link
 
 
 def test_on_enable_opens_firewall():
