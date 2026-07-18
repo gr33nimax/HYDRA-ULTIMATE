@@ -284,6 +284,7 @@ def test_generate_nekobox_sub_wraps_shadowtls_chain_as_native_config():
     encoded = links[1].split("?", 1)[1] + "=" * (-len(links[1].split("?", 1)[1]) % 4)
     data = zlib.decompress(base64.urlsafe_b64decode(encoded))
     assert b'"detour":"shadowtls-out"' in data
+    assert b'"auto_detect_interface":true' in data
     assert b'"type":"tun"' in data
     assert b'"address":["172.19.0.1/30"]' in data
     assert b'fdfe:dcba:9876' not in data

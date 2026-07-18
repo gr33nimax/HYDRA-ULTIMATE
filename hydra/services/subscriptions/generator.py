@@ -481,6 +481,7 @@ def generate_nekobox_sub(user: User, state: AppState) -> str:
     try:
         config = _shadowtls_client_config(user, state)
         if config:
+            config.setdefault("route", {})["auto_detect_interface"] = True
             config["inbounds"] = [
                 {
                     "type": "tun",
