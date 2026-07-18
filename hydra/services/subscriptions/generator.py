@@ -260,6 +260,9 @@ def clean_link_to_sn(link: str, user: User) -> Optional[str]:
         elif scheme == "anytls":
             return None
             
+        elif scheme == "shadowtls":
+            return None
+            
         # 3. TrustTunnel (NekoBox does NOT support tt:// natively, needs sn://trusttunnel)
         elif scheme in ("tt", "trusttunnel"):
             netloc = parsed.netloc
@@ -356,6 +359,8 @@ def generate_base64_sub(user: User, state: AppState) -> str:
                     proto_suffix = "TrustTunnel"
             elif scheme == "mierus":
                 proto_suffix = "Mieru"
+            elif scheme == "shadowtls":
+                proto_suffix = "ShadowTLS"
                 
             if proto_suffix:
                 # Обновляем фрагмент (тэг) ссылки

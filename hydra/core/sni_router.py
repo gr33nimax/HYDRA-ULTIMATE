@@ -30,6 +30,7 @@ _INTERNAL_PORTS = {
     "naive": 10443,       # Caddy HTTP app (forward_proxy + file_server)
     "anytls": 20444,      # sing-box anytls (tls OFF)
     "trusttunnel": 20445, # sing-box TrustTunnel TCP/UDP backend (TLS ON)
+    "shadowtls": 20446,   # sing-box ShadowTLS v3
     "sub_server": 9443,
 }
 
@@ -38,7 +39,7 @@ _DECOY_HTTP_PORTS = {
     "trusttunnel": 10802,
 }
 
-_SOURCE_PRESERVED_BACKENDS = frozenset({"naive", "anytls", "trusttunnel"})
+_SOURCE_PRESERVED_BACKENDS = frozenset({"naive", "anytls", "trusttunnel", "shadowtls"})
 # Disabled after production smoke tests showed that non-local loopback source
 # binding breaks Caddy backend return traffic on supported server kernels.
 # Keep the transactional cleanup code so hosts that applied the experimental
@@ -480,7 +481,12 @@ def needs_mux(state: AppState) -> bool:
             continue
         proto = state.protocols.get(name)
         if proto and proto.enabled:
-            domain = state.network.domain if name == "naive" else proto.config.get("domain")
+            if name == "naive":
+                domain = state.network.domain
+            elif name == "shadowtls":
+                domain = proto.config.get("handshake_sni")
+            else:
+                domain = proto.config.get("domain")
             if domain:
                 count += 1
     sub_domain = getattr(state.network, "sub_domain", "")
@@ -536,7 +542,12 @@ def _collect_backends(state: AppState) -> list[dict]:
             continue
         proto = state.protocols.get(name)
         if proto and proto.enabled:
-            domain = state.network.domain if name == "naive" else proto.config.get("domain", "")
+            if name == "naive":
+                domain = state.network.domain
+            elif name == "shadowtls":
+                domain = proto.config.get("handshake_sni", "")
+            else:
+                domain = proto.config.get("domain", "")
             cert_file = proto.config.get("cert_file", "")
             key_file = proto.config.get("key_file", "")
             if domain:
@@ -610,6 +621,14 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
 
         if name == "naive":
             # Naive route: TLS passthrough -> dial caddy-naive directly
+            l4_routes.append({
+                "match": [{"tls": {"sni": [domain]}}],
+                "handle": [
+                    _proxy_handler(f"127.0.0.1:{port}", preserve_source=True)
+                ]
+            })
+        elif name == "shadowtls":
+            # ShadowTLS: TLS passthrough -> dial sing-box shadowtls directly
             l4_routes.append({
                 "match": [{"tls": {"sni": [domain]}}],
                 "handle": [
