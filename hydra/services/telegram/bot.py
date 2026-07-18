@@ -289,6 +289,11 @@ class ClientBot:
             f"`https://{state.network.domain}:9443/sub"
             f"?token={user.uuid}&format=base64`"
         )
+        lines.append(
+            f"\nSing-Box JSON (ShadowTLS):\n"
+            f"`https://{state.network.domain}:9443/sub"
+            f"?token={user.uuid}&format=singbox`"
+        )
         await update.message.reply_text(
             "\n".join(lines),
             parse_mode="Markdown",

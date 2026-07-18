@@ -370,7 +370,7 @@ class ShadowTLSPlugin(BasePlugin):
 
     @staticmethod
     def _derive_trojan_password(uuid: str) -> str:
-        return derive_hex_key("shadowtls-pass", uuid)
+        return derive_hex_key("shadowtls-trojan-pass", uuid)
 
     @staticmethod
     def _normalized_host(value: str) -> str:

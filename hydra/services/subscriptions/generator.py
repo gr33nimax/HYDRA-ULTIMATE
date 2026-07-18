@@ -441,19 +441,32 @@ def generate_singbox_config(user: User, state: AppState) -> dict:
         "route": {"rules": [], "auto_detect_interface": True},
     }
 
+    outbound_tags: set[str] = set()
+    selected_outbound = ""
+
     for p in enabled(state, PluginCategory.TRANSPORT):
         try:
             p_conf_str = p.generate_client_config(user, state)
             if p_conf_str:
                 p_conf = json.loads(p_conf_str)
-                if "outbounds" in p_conf:
-                    config["outbounds"].extend(p_conf["outbounds"])
+                for outbound in p_conf.get("outbounds", []):
+                    tag = outbound.get("tag", "")
+                    if tag and tag in outbound_tags:
+                        continue
+                    config["outbounds"].append(outbound)
+                    if tag:
+                        outbound_tags.add(tag)
+                    if not selected_outbound and outbound.get("type") != "direct":
+                        selected_outbound = tag
                 if "route" in p_conf and "rules" in p_conf["route"]:
                     config["route"]["rules"].extend(p_conf["route"]["rules"])
         except Exception:
             pass
 
-    config["outbounds"].append({"type": "direct", "tag": "direct"})
+    if "direct" not in outbound_tags:
+        config["outbounds"].append({"type": "direct", "tag": "direct"})
+    if selected_outbound:
+        config["route"]["final"] = selected_outbound
     return config
 
 
@@ -578,9 +591,10 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         from hydra.core.state import load_state
         state = load_state()
 
-        path = self.path
-        if "?" in path:
-            path = path.split("?")[0]
+        parsed_request = urllib.parse.urlparse(self.path)
+        params = urllib.parse.parse_qs(parsed_request.query)
+        response_format = params.get("format", ["base64"])[0].lower()
+        path = parsed_request.path
         path = path.strip("/")
         parts = path.split("/")
         
@@ -589,8 +603,6 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             token = parts[1]
         else:
             # Fallback для query-параметра ?token=...
-            parsed = urllib.parse.urlparse(self.path)
-            params = urllib.parse.parse_qs(parsed.query)
             token = params.get("token", [None])[0]
             
         if not token:
@@ -609,12 +621,23 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             self._send_error(403, "Invalid, expired or blocked token")
             return
             
-        content = generate_base64_sub(user, state)
+        if response_format in ("singbox", "sing-box", "json"):
+            content = json.dumps(
+                generate_singbox_config(user, state),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            content_type = "application/json; charset=utf-8"
+            filename = f"hydra-{user.email}-singbox.json"
+        else:
+            content = generate_base64_sub(user, state)
+            content_type = "text/plain; charset=utf-8"
+            filename = f"hydra-{user.email}-sub.txt"
         userinfo = generate_userinfo_header(user, state)
         
         self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Disposition", f'attachment; filename="hydra-{user.email}-sub.txt"')
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Subscription-Userinfo", userinfo)
         self.send_header("subscription-userinfo", userinfo)
         self.send_header("Profile-Update-Interval", "6")

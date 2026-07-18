@@ -1260,6 +1260,8 @@ def _user_configs(state: AppState, user: User):
     sub_url = get_subscription_url(user, state)
     print(f"  {YELLOW}{BOLD}Base64 Subscription (v2rayNG, Shadowrocket, NekoBox, Karing):{NC}")
     print(f"  {CYAN}{sub_url}{NC}")
+    print(f"  {YELLOW}{BOLD}Sing-Box JSON (цепочки ShadowTLS, Throne/NekoBox):{NC}")
+    print(f"  {CYAN}{sub_url}?format=singbox{NC}")
     print()
     
     from hydra.plugins import registry

@@ -83,6 +83,24 @@ def test_configure_users_in_inbounds():
     assert "b@x.com" in names_trojan
 
 
+def test_shadowtls_and_trojan_use_independent_passwords():
+    """The transport and the inner proxy are separate authentication layers."""
+    p = ShadowTLSPlugin()
+    user = _user("a@x.com", uuid="uuid-a")
+    state = _state([user])
+
+    frag = p.configure(state)
+    stls = next(i for i in frag.inbounds if i["type"] == "shadowtls")
+    trojan = next(i for i in frag.inbounds if i["type"] == "trojan")
+    client = json.loads(p.generate_client_config(user, state))
+    stls_out = next(o for o in client["outbounds"] if o["type"] == "shadowtls")
+    trojan_out = next(o for o in client["outbounds"] if o["type"] == "trojan")
+
+    assert stls["users"][0]["password"] != trojan["users"][0]["password"]
+    assert stls_out["password"] == stls["users"][0]["password"]
+    assert trojan_out["password"] == trojan["users"][0]["password"]
+
+
 def test_configure_skips_blocked():
     """Blocked users do not get included in the configure output."""
     p = ShadowTLSPlugin()

@@ -153,6 +153,25 @@ def test_generate_singbox_config_includes_outbounds():
         assert config["outbounds"][0]["type"] == "mock"
         assert config["outbounds"][0]["tag"] == "mock-a@x.com"
         assert config["outbounds"][-1]["type"] == "direct"
+        assert config["route"]["final"] == "mock-a@x.com"
+
+
+def test_generate_singbox_config_deduplicates_direct_outbound():
+    p = MockTransport()
+    user = _make_user("a@x.com")
+    state = _make_state([user])
+    p.generate_client_config = MagicMock(return_value=json.dumps({
+        "outbounds": [
+            {"type": "trojan", "tag": "trojan-out"},
+            {"type": "direct", "tag": "direct"},
+        ],
+    }))
+
+    with patch("hydra.services.subscriptions.generator.enabled", return_value=[p]):
+        config = generate_singbox_config(user, state)
+
+    assert [o["tag"] for o in config["outbounds"]].count("direct") == 1
+    assert config["route"]["final"] == "trojan-out"
 
 
 def test_generate_singbox_config_base_structure():
