@@ -78,7 +78,16 @@ def test_firewall_uses_dedicated_tcp_range():
     open_range.assert_called_once_with("tcp", PORT_START, PORT_END, "snell")
 
 
-def test_v4_and_disabled_obfs_are_configurable():
+def test_enable_migrates_legacy_v5_setting_to_v4():
+    plugin = SnellPlugin()
+    state = _state()
+    state.protocols["snell"].config["version"] = 5
+    with patch("hydra.utils.firewall.open_range"):
+        plugin.on_enable(state)
+    assert state.protocols["snell"].config["version"] == 4
+
+
+def test_disabled_obfs_is_configurable():
     plugin = SnellPlugin()
     user = User("a@example.com", "uuid-a")
     state = _state(user)
@@ -118,6 +127,22 @@ def test_invalid_runtime_settings_do_not_mutate_state():
     plugin = SnellPlugin()
     state = _state(User("a@example.com", "uuid-a"))
     before = dict(state.protocols["snell"].config)
-    with pytest.raises(ValueError, match="versions 4 and 5"):
+    with pytest.raises(ValueError, match="version 4"):
         plugin.set_settings(state, 3, "tls", "cdn.example.com")
     assert state.protocols["snell"].config == before
+
+
+def test_legacy_v5_is_normalized_to_v4_on_both_ends():
+    plugin = SnellPlugin()
+    user = User("a@example.com", "uuid-a")
+    state = _state(user)
+    state.protocols["snell"].config["version"] = 5
+
+    inbound = plugin.configure(state).inbounds[0]
+    outbound = next(
+        item for item in json.loads(plugin.generate_client_config(user, state))["outbounds"]
+        if item["type"] == "snell"
+    )
+
+    assert inbound["version"] == outbound["version"] == 4
+    assert "version=4" in plugin.client_link(user, state)

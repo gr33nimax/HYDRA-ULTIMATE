@@ -937,33 +937,22 @@ def _menu_hysteria2_settings(state: AppState, plugin) -> None:
 
 
 def _menu_snell_settings(state: AppState, plugin) -> None:
-    """Runtime-safe Snell version and simple-obfs editor."""
+    """Runtime-safe Snell simple-obfs editor."""
     from hydra.core.state import get_protocol
 
     while True:
         ps = get_protocol(state, "snell")
-        version = int(ps.config.get("version", 5))
+        version = plugin._version(state)
         mode = str(ps.config.get("obfs_mode", "tls"))
         host = str(ps.config.get("obfs_host", "www.bing.com"))
         choice = menu([
-            ("1", "📦 Версия протокола", f"Snell v{version}"),
-            ("2", "🎭 Simple obfs", f"{mode.upper()} · {host}" if mode else "выключен"),
+            ("1", "🎭 Simple obfs", f"{mode.upper()} · {host}" if mode else "выключен"),
             ("0", "↩ Назад", ""),
-        ], "НАСТРОЙКИ SNELL")
+        ], f"НАСТРОЙКИ SNELL v{version}")
         if choice == "0":
             return
         try:
             if choice == "1":
-                selected = menu([
-                    ("4", "Snell v4", "Совместимость с клиентами Snell v4"),
-                    ("5", "Snell v5", "Текущий формат Sing-Box Extended"),
-                    ("0", "Отмена", ""),
-                ], "ВЕРСИЯ SNELL")
-                if selected in {"4", "5"}:
-                    ok = plugin.set_settings(state, int(selected), mode, host)
-                else:
-                    continue
-            elif choice == "2":
                 selected = menu([
                     ("1", "TLS obfs", "Имитация TLS-трафика"),
                     ("2", "HTTP obfs", "Имитация HTTP-трафика"),

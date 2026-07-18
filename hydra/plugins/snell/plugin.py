@@ -1,4 +1,4 @@
-"""Per-user Snell v4/v5 inbounds via sing-box-extended."""
+"""Per-user Snell v4 inbounds via sing-box-extended."""
 from __future__ import annotations
 
 import hashlib
@@ -14,7 +14,7 @@ from hydra.utils.net import public_ip
 
 PORT_START = 32000
 PORT_END = 32999
-SNELL_VERSION = 5
+SNELL_VERSION = 4
 OBFS_MODE = "tls"
 OBFS_HOST = "www.bing.com"
 
@@ -22,9 +22,9 @@ OBFS_HOST = "www.bing.com"
 class SnellPlugin(BasePlugin):
     meta = PluginMeta(
         name="snell",
-        description="Snell v5: отдельный PSK и порт для каждого пользователя",
+        description="Snell v4: отдельный PSK и порт для каждого пользователя",
         category=PluginCategory.TRANSPORT,
-        version="1.0.0",
+        version="1.0.1",
         needs_domain=False,
     )
 
@@ -101,7 +101,9 @@ class SnellPlugin(BasePlugin):
 
     def on_enable(self, state: AppState) -> None:
         ps = get_protocol(state, "snell")
-        ps.config.setdefault("version", SNELL_VERSION)
+        # sing-box-extended accepts v5 on the inbound, but its outbound maps
+        # v5 to v4.  Keeping both ends on v4 avoids an incompatible handshake.
+        ps.config["version"] = self._version(state)
         ps.config.setdefault("obfs_mode", OBFS_MODE)
         ps.config.setdefault("obfs_host", OBFS_HOST)
         from hydra.utils.firewall import open_range
@@ -131,6 +133,8 @@ class SnellPlugin(BasePlugin):
 
     @staticmethod
     def _psk(seed: str) -> str:
+        # Keep the original derivation label so existing installations retain
+        # their issued PSKs while migrating the wire protocol to v4.
         return derive_hex_key("snell-v5-psk", seed)
 
     @staticmethod
@@ -179,9 +183,13 @@ class SnellPlugin(BasePlugin):
     def _version(state: AppState) -> int:
         ps = state.protocols.get("snell")
         version = int(ps.config.get("version", SNELL_VERSION)) if ps else SNELL_VERSION
-        if version not in {4, 5}:
-            raise ValueError("Snell inbound supports only versions 4 and 5")
-        return version
+        if version == 5:
+            # Compatibility migration for installations created before the
+            # sing-box-extended outbound v5->v4 behaviour was accounted for.
+            return 4
+        if version != 4:
+            raise ValueError("Hydra Snell supports version 4")
+        return SNELL_VERSION
 
     @staticmethod
     def _obfs_mode(state: AppState) -> str:
@@ -207,7 +215,7 @@ class SnellPlugin(BasePlugin):
         ps = get_protocol(state, "snell")
         previous = copy.deepcopy(ps.config)
         ps.config.update({
-            "version": int(version),
+            "version": 4 if int(version) == 5 else int(version),
             "obfs_mode": obfs_mode,
             "obfs_host": obfs_host.strip(),
         })
