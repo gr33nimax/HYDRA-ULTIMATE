@@ -4,13 +4,17 @@ from unittest.mock import patch, MagicMock
 import base64
 import json
 import sys
+import zlib
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.services.subscriptions.generator import (
     generate_links,
     generate_base64_sub,
     generate_singbox_config,
+    generate_nekobox_sub,
     generate_throne_sub,
+    resolve_subscription_format,
+    serialize_nekobox_config,
     generate_client_config,
 )
 from hydra.core.state import AppState, User
@@ -232,6 +236,62 @@ def test_generate_throne_sub_wraps_shadowtls_chain_as_custom_config():
     assert config["route"]["final"] == "trojan-out"
     assert config["outbounds"][0]["detour"] == "shadowtls-out"
     assert config["inbounds"][0]["type"] == "mixed"
+
+
+def test_serialize_nekobox_config_matches_configbean_kryo_format():
+    config = '{"outbounds":[{"type":"trojan","tag":"trojan-out","detour":"shadowtls-out"}]}'
+    assert serialize_nekobox_config(config, "test ShadowTLS") == (
+        "sn://config?eNpjYGBgMDQy1zMAwo0WLAxgcI6xWim_tCQpvzQvpVjJKrpaqaSyIFXJSqmkKD8r"
+        "MU9JR6kkMR3O1QUqBQqlpJbklxYBRYszElPyy0tyisEStbG1jEAjS1KLSxSCwTIhP"
+        "pcbGwHRcCU0"
+    )
+
+
+def test_generate_nekobox_sub_wraps_shadowtls_chain_as_native_config():
+    user = _make_user("a@x.com")
+    state = _make_state([user])
+    p = MockTransport()
+    p.meta = PluginMeta(
+        name="shadowtls",
+        description="ShadowTLS",
+        category=PluginCategory.TRANSPORT,
+        version="1.0.0",
+    )
+    p.generate_client_config = MagicMock(return_value=json.dumps({
+        "outbounds": [
+            {"type": "trojan", "tag": "trojan-out", "detour": "shadowtls-out"},
+            {"type": "shadowtls", "tag": "shadowtls-out"},
+        ],
+        "route": {"final": "trojan-out"},
+    }))
+    raw_links = "\n".join([
+        "naive+https://u:p@example.com:443#naive",
+        "trojan://inner@203.0.113.10:443?plugin=shadow-tls&plugin-opts=x#shadow",
+        "",
+    ])
+
+    with patch(
+        "hydra.services.subscriptions.generator.generate_base64_sub",
+        return_value=base64.b64encode(raw_links.encode()).decode(),
+    ), patch("hydra.services.subscriptions.generator.enabled", return_value=[p]):
+        subscription = generate_nekobox_sub(user, state)
+
+    links = base64.b64decode(subscription).decode().splitlines()
+    assert links[0].startswith("naive+https://")
+    assert not any(link.startswith("trojan://") for link in links)
+    assert links[1].startswith("sn://config?")
+
+    encoded = links[1].split("?", 1)[1] + "=" * (-len(links[1].split("?", 1)[1]) % 4)
+    data = zlib.decompress(base64.urlsafe_b64decode(encoded))
+    assert b'"detour":"shadowtls-out"' in data
+    assert b'"type":"tun"' in data
+
+
+def test_resolve_subscription_format_uses_explicit_override_then_user_agent():
+    assert resolve_subscription_format("base64", "NekoBox/Android/1.4.2") == "base64"
+    assert resolve_subscription_format(None, "NekoBox/Android/1.4.2") == "nekobox"
+    assert resolve_subscription_format("auto", "Throne/1.0") == "throne"
+    assert resolve_subscription_format(None, "curl/8") == "base64"
 
 
 # ═════════════════════════════════════════════════════════════════════════════

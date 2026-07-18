@@ -1258,8 +1258,10 @@ def _user_configs(state: AppState, user: User):
 
     # Ссылка на подписку
     sub_url = get_subscription_url(user, state)
-    print(f"  {YELLOW}{BOLD}Base64 Subscription (v2rayNG, Shadowrocket, NekoBox, Karing):{NC}")
+    print(f"  {YELLOW}{BOLD}Auto Subscription (NekoBox, Throne, compatible clients):{NC}")
     print(f"  {CYAN}{sub_url}{NC}")
+    print(f"  {YELLOW}{BOLD}NekoBox Subscription (ShadowTLS chain):{NC}")
+    print(f"  {CYAN}{sub_url}?format=nekobox{NC}")
     print(f"  {YELLOW}{BOLD}Sing-Box JSON config:{NC}")
     print(f"  {CYAN}{sub_url}?format=singbox{NC}")
     print(f"  {YELLOW}{BOLD}Throne Subscription (ShadowTLS chain):{NC}")

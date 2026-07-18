@@ -24,7 +24,7 @@ from hydra.core.state import (
     AppState, User, load_state, save_state, find_user, add_user,
 )
 from hydra.services.subscriptions.generator import (
-    generate_singbox_config, generate_base64_sub, generate_client_config,
+    generate_singbox_config, generate_client_config,
     generate_links,
 )
 from hydra.core import orchestrator
@@ -282,12 +282,21 @@ class ClientBot:
             await update.message.reply_text("Нет доступных ссылок для импорта.")
             return
 
-        sub_link = generate_base64_sub(user, state)
         lines = [f"`{link}`" for link in links]
+        lines.append(
+            f"\nАвтоподписка (NekoBox / Throne):\n"
+            f"`https://{state.network.domain}:9443/sub"
+            f"?token={user.uuid}`"
+        )
         lines.append(
             f"\nBase64-подписка:\n"
             f"`https://{state.network.domain}:9443/sub"
             f"?token={user.uuid}&format=base64`"
+        )
+        lines.append(
+            f"\nNekoBox (ShadowTLS chain):\n"
+            f"`https://{state.network.domain}:9443/sub"
+            f"?token={user.uuid}&format=nekobox`"
         )
         lines.append(
             f"\nSing-Box JSON (ShadowTLS):\n"

@@ -3,8 +3,9 @@ hydra/services/subscriptions/generator.py — Генератор подписо�
 
 Форматы:
   • Base64 (для v2rayNG, Shadowrocket, Hiddify)
-  • Sing-Box JSON (для NekoBox, Karing)
-  • NekoBox sn:// ссылки для NaiveProxy, AnyTLS, TrustTunnel, Mieru, AmneziaWG
+  • Sing-Box JSON (для совместимых клиентов)
+  • NekoBox sn:// ссылки, включая атомарный Trojan-over-ShadowTLS config
+  • Throne custom config для атомарной ShadowTLS-цепочки
 
 Динамически собирает ссылки/конфиги со всех включённых TRANSPORT-плагинов
 через их v2-методы client_link() и generate_client_config().
@@ -61,6 +62,21 @@ def _awg_serialize_len(length: int) -> bytes:
 
 def _awg_serialize_string_len(s: str) -> bytes:
     return _awg_serialize_len(len(s)) + s.encode('utf-8')
+
+
+def serialize_nekobox_config(config: str, name: str) -> str:
+    """Serialize a full sing-box config as NekoBox's native ConfigBean link."""
+    data = struct.pack('<I', 0)  # ConfigBean version
+    data += _awg_serialize_string("127.0.0.1")
+    data += struct.pack('<I', 1080)
+    data += struct.pack('<I', 0)  # ConfigBean type: full config
+    data += _awg_serialize_string_len(config)
+    data += struct.pack('<I', 1)  # AbstractBean extra fields version
+    data += _awg_serialize_string(name)
+    data += b'\x81\x81'  # empty, non-null custom outbound/config JSON
+    compressed = zlib.compress(data, 9)
+    encoded = base64.urlsafe_b64encode(compressed).decode('ascii').rstrip('=')
+    return f"sn://config?{encoded}"
 
 
 def serialize_naive(server: str, port: int, network: str, username: str, password: str, sni: str, fingerprint: str, name: str) -> str:
@@ -402,8 +418,7 @@ def generate_base64_sub(user: User, state: AppState) -> str:
     return base64.b64encode(payload.encode("utf-8")).decode("utf-8")
 
 
-def generate_throne_sub(user: User, state: AppState) -> str:
-    """Build a Throne subscription without flattening ShadowTLS detours."""
+def _links_without_shadowtls_plugin(user: User, state: AppState) -> list[str]:
     payload = base64.b64decode(generate_base64_sub(user, state)).decode("utf-8")
     links = []
     for link in payload.splitlines():
@@ -415,14 +430,27 @@ def generate_throne_sub(user: User, state: AppState) -> str:
         )
         if link and not is_shadowtls_trojan:
             links.append(link)
+    return links
 
+
+def _shadowtls_client_config(user: User, state: AppState) -> Optional[dict]:
+    """Return the atomic Trojan-over-ShadowTLS config, if the plugin is enabled."""
     shadowtls = next(
         (p for p in enabled(state, PluginCategory.TRANSPORT) if p.meta.name == "shadowtls"),
         None,
     )
-    if shadowtls:
-        try:
-            config = json.loads(shadowtls.generate_client_config(user, state))
+    if not shadowtls:
+        return None
+    return json.loads(shadowtls.generate_client_config(user, state))
+
+
+def generate_throne_sub(user: User, state: AppState) -> str:
+    """Build a Throne subscription without flattening ShadowTLS detours."""
+    links = _links_without_shadowtls_plugin(user, state)
+
+    try:
+        config = _shadowtls_client_config(user, state)
+        if config:
             config["inbounds"] = [{
                 "type": "mixed",
                 "tag": "mixed-in",
@@ -439,11 +467,59 @@ def generate_throne_sub(user: User, state: AppState) -> str:
                 json.dumps(wrapper, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             ).decode("ascii").rstrip("=")
             links.append(f"json://shadowtls#{encoded}")
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     throne_payload = "\n".join(links) + "\n"
     return base64.b64encode(throne_payload.encode("utf-8")).decode("ascii")
+
+
+def generate_nekobox_sub(user: User, state: AppState) -> str:
+    """Build a NekoBox subscription with ShadowTLS kept as one full config."""
+    links = _links_without_shadowtls_plugin(user, state)
+
+    try:
+        config = _shadowtls_client_config(user, state)
+        if config:
+            config["inbounds"] = [
+                {
+                    "type": "tun",
+                    "tag": "tun-in",
+                    "stack": "mixed",
+                    "mtu": 9000,
+                    "inet4_address": ["172.19.0.1/28"],
+                    "inet6_address": ["fdfe:dcba:9876::1/126"],
+                    "endpoint_independent_nat": True,
+                },
+                {
+                    "type": "mixed",
+                    "tag": "mixed-in",
+                    "listen": "127.0.0.1",
+                    "listen_port": 2080,
+                },
+            ]
+            compact = json.dumps(config, ensure_ascii=False, separators=(",", ":"))
+            links.append(serialize_nekobox_config(compact, f"{user.email} ShadowTLS"))
+    except Exception:
+        pass
+
+    payload = "\n".join(links) + "\n"
+    return base64.b64encode(payload.encode("utf-8")).decode("ascii")
+
+
+def resolve_subscription_format(requested: Optional[str], user_agent: str = "") -> str:
+    """Resolve an explicit format or negotiate a client-specific subscription."""
+    if requested:
+        normalized = requested.lower()
+        if normalized not in ("auto", "default"):
+            return normalized
+
+    ua = user_agent.lower()
+    if "nekobox/android" in ua or "nekobox" in ua:
+        return "nekobox"
+    if "throne" in ua:
+        return "throne"
+    return "base64"
 
 
 def generate_userinfo_header(user: User, state: AppState) -> str:
@@ -637,7 +713,11 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
 
         parsed_request = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed_request.query)
-        response_format = params.get("format", ["base64"])[0].lower()
+        requested_format = params.get("format", [None])[0]
+        response_format = resolve_subscription_format(
+            requested_format,
+            self.headers.get("User-Agent", ""),
+        )
         path = parsed_request.path
         path = path.strip("/")
         parts = path.split("/")
@@ -665,7 +745,11 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             self._send_error(403, "Invalid, expired or blocked token")
             return
             
-        if response_format == "throne":
+        if response_format == "nekobox":
+            content = generate_nekobox_sub(user, state)
+            content_type = "text/plain; charset=utf-8"
+            filename = f"hydra-{user.email}-nekobox.txt"
+        elif response_format == "throne":
             content = generate_throne_sub(user, state)
             content_type = "text/plain; charset=utf-8"
             filename = f"hydra-{user.email}-throne.txt"
