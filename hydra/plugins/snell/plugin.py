@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import copy
 import urllib.parse
@@ -15,7 +16,7 @@ from hydra.utils.net import public_ip
 PORT_START = 32000
 PORT_END = 32999
 SNELL_VERSION = 4
-OBFS_MODE = "tls"
+OBFS_MODE = ""
 OBFS_HOST = "www.bing.com"
 
 
@@ -24,7 +25,7 @@ class SnellPlugin(BasePlugin):
         name="snell",
         description="Snell v4: отдельный PSK и порт для каждого пользователя",
         category=PluginCategory.TRANSPORT,
-        version="1.0.1",
+        version="1.0.2",
         needs_domain=False,
     )
 
@@ -69,7 +70,7 @@ class SnellPlugin(BasePlugin):
         pass
 
     def generate_client_config(self, user: User, state: AppState) -> str:
-        server = state.network.server_ip or state.network.domain or public_ip()
+        server = self._server_ip(state)
         outbound = {
             "type": "snell",
             "tag": self._tag(user).replace("-in", "-out"),
@@ -89,7 +90,7 @@ class SnellPlugin(BasePlugin):
         }, indent=2)
 
     def client_link(self, user: User, state: AppState) -> str:
-        server = state.network.server_ip or state.network.domain or public_ip()
+        server = self._url_host(self._server_ip(state))
         psk = urllib.parse.quote(self._psk(user.uuid), safe="")
         query_params = {"version": self._version(state)}
         mode = self._obfs_mode(state)
@@ -178,6 +179,20 @@ class SnellPlugin(BasePlugin):
             return port
         size = PORT_END - PORT_START + 1
         return PORT_START + int(hashlib.sha256(user.uuid.encode()).hexdigest()[:8], 16) % size
+
+    @staticmethod
+    def _server_ip(state: AppState) -> str:
+        """Return the server IP without borrowing a domain from another plugin."""
+        value = (state.network.server_ip or public_ip()).strip().strip("[]")
+        try:
+            return str(ipaddress.ip_address(value))
+        except ValueError as exc:
+            raise ValueError("Не удалось определить публичный IP сервера для Snell") from exc
+
+    @staticmethod
+    def _url_host(value: str) -> str:
+        address = ipaddress.ip_address(value)
+        return f"[{address}]" if address.version == 6 else str(address)
 
     @staticmethod
     def _version(state: AppState) -> int:

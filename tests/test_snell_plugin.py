@@ -67,7 +67,9 @@ def test_client_material_matches_inbound():
 
     assert outbound["psk"] == inbound["psk"]
     assert outbound["server_port"] == inbound["listen_port"]
-    assert outbound["obfs"] == {"mode": "tls", "host": "www.bing.com"}
+    assert "obfs" not in inbound
+    assert "obfs" not in outbound
+    assert "obfs=" not in plugin.client_link(user, state)
     assert plugin.client_link(user, state).startswith("snell://")
 
 
@@ -87,12 +89,12 @@ def test_enable_migrates_legacy_v5_setting_to_v4():
     assert state.protocols["snell"].config["version"] == 4
 
 
-def test_disabled_obfs_is_configurable():
+def test_tls_obfs_is_configurable_for_clients_that_support_it():
     plugin = SnellPlugin()
     user = User("a@example.com", "uuid-a")
     state = _state(user)
     state.protocols["snell"].config.update({
-        "version": 4, "obfs_mode": "", "obfs_host": "www.example.com",
+        "version": 4, "obfs_mode": "tls", "obfs_host": "www.example.com",
     })
     inbound = plugin.configure(state).inbounds[0]
     outbound = next(
@@ -100,9 +102,9 @@ def test_disabled_obfs_is_configurable():
         if item["type"] == "snell"
     )
     assert inbound["version"] == outbound["version"] == 4
-    assert "obfs" not in inbound
-    assert "obfs" not in outbound
-    assert "obfs=" not in plugin.client_link(user, state)
+    assert inbound["obfs"] == {"mode": "tls"}
+    assert outbound["obfs"] == {"mode": "tls", "host": "www.example.com"}
+    assert "obfs=tls" in plugin.client_link(user, state)
 
 
 def test_runtime_settings_apply_and_rollback():
@@ -146,3 +148,29 @@ def test_legacy_v5_is_normalized_to_v4_on_both_ends():
 
     assert inbound["version"] == outbound["version"] == 4
     assert "version=4" in plugin.client_link(user, state)
+
+
+def test_naive_domain_is_never_reused_as_snell_endpoint():
+    plugin = SnellPlugin()
+    user = User("a@example.com", "uuid-a")
+    state = _state(user)
+    state.network.server_ip = ""
+    state.network.domain = "yagami.gr33nimax.ru"
+
+    with patch("hydra.plugins.snell.plugin.public_ip", return_value="31.77.203.66"):
+        client = json.loads(plugin.generate_client_config(user, state))
+        link = plugin.client_link(user, state)
+
+    outbound = next(item for item in client["outbounds"] if item["type"] == "snell")
+    assert outbound["server"] == "31.77.203.66"
+    assert "@31.77.203.66:" in link
+    assert "yagami.gr33nimax.ru" not in link
+
+
+def test_ipv6_endpoint_is_bracketed_in_share_link():
+    plugin = SnellPlugin()
+    user = User("a@example.com", "uuid-a")
+    state = _state(user)
+    state.network.server_ip = "2001:db8::10"
+
+    assert "@[2001:db8::10]:" in plugin.client_link(user, state)
