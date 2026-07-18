@@ -182,7 +182,12 @@ class ShadowTLSPlugin(BasePlugin):
         trojan_password = self._derive_trojan_password(user.uuid)
         tag = urllib.parse.quote(self._derive_username(user), safe="")
         host = state.network.domain or state.network.server_ip or public_ip()
-        return f"shadowtls://{stls_password}@{host}:443?password={trojan_password}&sni={handshake_sni}&version=3#{tag}"
+        
+        # Format options for shadow-tls plugin
+        opts = f"host={handshake_sni};password={stls_password};version=3"
+        encoded_opts = urllib.parse.quote(opts, safe="")
+        
+        return f"trojan://{trojan_password}@{host}:443?plugin=shadow-tls&plugin-opts={encoded_opts}#{tag}"
 
     # ═════════════════════════════════════════════════════════════════════
     #  Управление сервисом

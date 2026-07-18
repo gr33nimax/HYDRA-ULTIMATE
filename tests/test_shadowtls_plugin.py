@@ -138,16 +138,16 @@ def test_on_user_add_sets_credentials():
 
 
 def test_client_link_valid():
-    """client_link() returns a valid shadowtls:// link."""
+    """client_link() returns a valid trojan:// link with shadow-tls plugin."""
     p = ShadowTLSPlugin()
     state = _state()
     user = _user("a@x.com", uuid="uuid-a")
     link = p.client_link(user, state)
 
-    assert link.startswith("shadowtls://")
+    assert link.startswith("trojan://")
     assert "@naive.example.com:443" in link
-    assert "password=" in link
-    assert "sni=google.com" in link
+    assert "plugin=shadow-tls" in link
+    assert "plugin-opts=" in link
 
 
 def test_generate_client_config_json():

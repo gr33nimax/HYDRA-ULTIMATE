@@ -359,8 +359,10 @@ def generate_base64_sub(user: User, state: AppState) -> str:
                     proto_suffix = "TrustTunnel"
             elif scheme == "mierus":
                 proto_suffix = "Mieru"
-            elif scheme == "shadowtls":
-                proto_suffix = "ShadowTLS"
+            elif scheme == "trojan":
+                query = urllib.parse.parse_qs(parsed.query)
+                if "plugin" in query and "shadow-tls" in query["plugin"]:
+                    proto_suffix = "ShadowTLS"
                 
             if proto_suffix:
                 # Обновляем фрагмент (тэг) ссылки
