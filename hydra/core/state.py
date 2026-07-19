@@ -313,8 +313,12 @@ def validate_state(state: AppState) -> None:
     if state.version < 0:
         raise ValueError("state version must be non-negative")
     for user in state.users:
-        if not user.email or not isinstance(user.email, str) or "@" not in user.email:
-            raise ValueError(f"invalid user email: {user.email!r}")
+        if (
+            not isinstance(user.email, str)
+            or not user.email.strip()
+            or any(char.isspace() for char in user.email)
+        ):
+            raise ValueError(f"invalid user identifier: {user.email!r}")
         if not user.uuid or not isinstance(user.uuid, str):
             raise ValueError(f"invalid UUID for user {user.email}")
         if user.traffic_limit_gb < 0 or user.traffic_used_bytes < 0:

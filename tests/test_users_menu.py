@@ -19,6 +19,18 @@ def test_add_user_normalizes_email_and_rejects_case_insensitive_duplicate():
     show_error.assert_called_once()
 
 
+def test_add_user_accepts_username_without_email_domain():
+    state = AppState()
+    with patch.object(menus, "clear"), \
+         patch.object(menus, "title"), \
+         patch.object(menus, "prompt", side_effect=["testik", ""]), \
+         patch("hydra.plugins.registry.enabled", return_value=[]), \
+         patch.object(menus.orchestrator, "add_user") as add_user:
+        menus._add_user(state)
+
+    assert add_user.call_args.args[1].email == "testik"
+
+
 def test_reconcile_blocks_user_immediately_when_quota_is_exhausted():
     user = User(
         email="alice@example.com",

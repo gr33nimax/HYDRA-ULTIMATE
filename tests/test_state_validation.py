@@ -7,6 +7,7 @@ from hydra.core.state import AppState, User, validate_state
 
 def test_validate_state_accepts_defaults_and_users():
     validate_state(AppState(users=[User(email="u@example.com", uuid="u1")]))
+    validate_state(AppState(users=[User(email="gr33nimax", uuid="u2")]))
 
 
 def test_validate_state_rejects_invalid_port():
@@ -16,6 +17,6 @@ def test_validate_state_rejects_invalid_port():
         validate_state(state)
 
 
-def test_validate_state_rejects_invalid_email():
-    with pytest.raises(ValueError, match="email"):
-        validate_state(AppState(users=[User(email="invalid", uuid="u1")]))
+def test_validate_state_rejects_blank_or_spaced_identifier():
+    with pytest.raises(ValueError, match="identifier"):
+        validate_state(AppState(users=[User(email="bad name", uuid="u1")]))

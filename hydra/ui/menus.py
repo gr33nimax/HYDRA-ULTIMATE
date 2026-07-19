@@ -1727,8 +1727,8 @@ def _add_user(state: AppState):
     email = prompt("Email пользователя").strip().lower()
     if not email:
         return
-    if not re.fullmatch(r"[^\s@]+@[^\s@]+", email):
-        error("Введите корректный email без пробелов.")
+    if not re.fullmatch(r"\S+", email):
+        error("Введите имя пользователя или email без пробелов.")
         prompt("Нажмите Enter")
         return
     
