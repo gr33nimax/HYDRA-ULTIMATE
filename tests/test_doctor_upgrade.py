@@ -14,6 +14,14 @@ def test_doctor_reports_required_failures():
     assert "state_directory" in result["required_failures"]
 
 
+def test_doctor_exposes_runtime_reconciliation_plan():
+    statuses = {"demo": {"drift": "stopped", "installed": True, "running": False}}
+    with patch("hydra.plugins.registry.status_all", return_value=statuses):
+        result = run_doctor(AppState())
+    assert result["reconciliation"]["planned"][0]["plugin"] == "demo"
+    assert result["reconciliation"]["planned"][0]["operation"] == "enable"
+
+
 def test_upgrade_check_accepts_clean_supported_state(tmp_path):
     (tmp_path / ".git").mkdir()
     completed = type("Result", (), {"returncode": 0, "stdout": ""})()

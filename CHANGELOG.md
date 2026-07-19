@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Runtime reconciliation
+
+`hydra doctor` now reports desired-vs-actual runtime drift and a read-only correction plan. The new `hydra reconcile` command shows the same plan; `hydra reconcile --apply` explicitly applies only safe enable/disable actions and never installs missing components automatically.
+
+### Runtime reconciliation
+
+`hydra doctor` now reports desired-vs-actual runtime drift and a read-only correction plan. The new `hydra reconcile` command shows the same plan; `hydra reconcile --apply` explicitly applies only safe enable/disable actions and never installs missing components automatically.
+
 ### P1 architectural foundation
 
 HostBackend — добавлен единый injectable boundary для bounded commands, atomic file writes, systemd и сохранения firewall.

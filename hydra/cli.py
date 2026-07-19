@@ -82,6 +82,8 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser("validate", help="Validate persisted state")
     commands.add_parser("plan", help="Build a side-effect-free apply plan")
     commands.add_parser("doctor", help="Run read-only host readiness checks")
+    reconcile = commands.add_parser("reconcile", help="Show or apply safe runtime drift corrections")
+    reconcile.add_argument("--apply", action="store_true", help="Apply planned enable/disable operations")
     backup = commands.add_parser("backup", help="Create a state and service configuration backup")
     backup.add_argument("--output", type=str, default="", help="Archive path or destination directory")
     restore = commands.add_parser("restore", help="Validate or restore a HYDRA backup")
@@ -132,6 +134,23 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "doctor":
             from hydra.core.doctor import run_doctor
             payload = run_doctor(state)
+        elif args.command == "reconcile":
+            from hydra.core import orchestrator
+            from hydra.plugins import registry
+            from hydra.services.protocols import ProtocolService
+            service = ProtocolService(orchestrator, registry).reconciliation()
+            if args.apply:
+                _require_root()
+                from dataclasses import asdict
+                report = service.apply(state)
+                payload = {
+                    "planned": [asdict(action) for action in report.planned],
+                    "applied": report.applied,
+                    "failed": report.failed,
+                }
+            else:
+                from dataclasses import asdict
+                payload = {"planned": [asdict(action) for action in service.plan(state)]}
         elif args.command == "upgrade" and args.upgrade_action == "check":
             from hydra.core.upgrade import check_upgrade
             payload = check_upgrade(state)

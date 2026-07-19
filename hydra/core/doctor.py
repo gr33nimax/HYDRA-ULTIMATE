@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 from hydra.core.host import HOST
@@ -45,9 +46,30 @@ def run_doctor(state: AppState) -> dict:
     ))
     required_failures = [item["name"] for item in checks if item["required"] and not item["ok"]]
     warnings = [item["name"] for item in checks if not item["required"] and not item["ok"]]
+    reconciliation: dict = {"planned": [], "drift": {}}
+    try:
+        from hydra.core import orchestrator
+        from hydra.plugins import registry
+        from hydra.services.protocols import ProtocolService
+
+        statuses = registry.status_all(state)
+        service = ProtocolService(orchestrator, registry).reconciliation()
+        actions = service.plan(state)
+        reconciliation = {
+            "planned": [asdict(action) for action in actions],
+            "drift": {
+                name: status["drift"]
+                for name, status in statuses.items()
+                if status.get("drift", "none") != "none"
+            },
+        }
+    except Exception as exc:
+        # Diagnostics must remain useful even if an optional plugin is broken.
+        reconciliation = {"planned": [], "drift": {}, "error": str(exc) or exc.__class__.__name__}
     return {
         "ok": not required_failures,
         "required_failures": required_failures,
         "warnings": warnings,
         "checks": checks,
+        "reconciliation": reconciliation,
     }
