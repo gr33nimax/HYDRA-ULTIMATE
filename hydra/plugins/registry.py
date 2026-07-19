@@ -65,6 +65,44 @@ def all_plugins() -> list[BasePlugin]:
     return _PLUGINS
 
 
+def contract_errors(plugin: BasePlugin) -> list[str]:
+    """Return declarative contract violations without touching the host."""
+    errors: list[str] = []
+    meta = getattr(plugin, "meta", None)
+    if meta is None:
+        return ["missing meta"]
+    if not isinstance(meta.name, str) or not meta.name.strip():
+        errors.append("meta.name must be a non-empty string")
+    if not isinstance(meta.description, str):
+        errors.append("meta.description must be a string")
+    if not isinstance(meta.version, str) or not meta.version.strip():
+        errors.append("meta.version must be a non-empty string")
+    capabilities = meta.capabilities
+    for field_name in ("required_commands", "required_services", "conflicts_with"):
+        values = getattr(capabilities, field_name)
+        if any(not isinstance(value, str) or not value.strip() for value in values):
+            errors.append(f"meta.{field_name} must contain non-empty strings")
+    for method_name in (
+        "install", "uninstall", "install_result", "uninstall_result",
+        "enable_result", "disable_result", "status", "configure",
+        "health_result", "snapshot", "rollback",
+    ):
+        if not callable(getattr(plugin, method_name, None)):
+            errors.append(f"missing {method_name}()")
+    return errors
+
+
+def validate_contracts() -> None:
+    """Fail fast when a registered plugin violates the static contract."""
+    violations = {
+        plugin.meta.name: errors
+        for plugin in _PLUGINS
+        if (errors := contract_errors(plugin))
+    }
+    if violations:
+        raise ValueError(f"plugin contract violations: {violations}")
+
+
 def get(name: str) -> Optional[BasePlugin]:
     for p in _PLUGINS:
         if p.meta.name == name:
@@ -212,7 +250,8 @@ def health_all(state: AppState) -> dict[str, str]:
         if not _uses_central_apply(plugin):
             continue
         try:
-            healthy, detail = plugin.healthcheck()
+            health = plugin.health_result()
+            healthy, detail = health.healthy, health.detail
         except Exception as exc:
             healthy, detail = False, str(exc) or exc.__class__.__name__
         if not healthy:

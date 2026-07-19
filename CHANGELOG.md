@@ -14,6 +14,8 @@ Transactional lifecycle completion — legacy Honeypot, IPBan, Fail2ban, DNSCryp
 
 Rollback deduplication — shared state/configuration rollback registration is now provided by `state_transaction`; lifecycle operations keep plugin-specific rollback actions explicit while using one canonical restore ordering.
 
+Plugin contract completion — added typed `PluginCapabilities`, `LifecycleResult` and `HealthResult` models with compatibility adapters for legacy bool/tuple implementations. Registry contract validation now checks every registered plugin without touching the host.
+
 ### Runtime reconciliation
 
 `hydra doctor` now reports desired-vs-actual runtime drift and a read-only correction plan. The new `hydra reconcile` command shows the same plan; `hydra reconcile --apply` explicitly applies only safe enable/disable actions and never installs missing components automatically.

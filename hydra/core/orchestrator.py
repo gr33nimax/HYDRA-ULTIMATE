@@ -15,6 +15,7 @@ from hydra.core import singbox, nft
 from hydra.core.host import HOST
 from hydra.core.apply_transaction import ApplyTransaction
 from hydra.core.transaction_helpers import state_transaction
+from hydra.plugins.base import lifecycle_result
 from hydra.plugins import registry
 
 
@@ -288,7 +289,7 @@ def _require_success(result: bool, message: str) -> None:
 def _restore_plugin_install(state: AppState, name: str, plugin) -> None:
     if get_protocol(state, name).installed:
         return
-    _require_success(plugin.install(), f"Plugin {name} repair install failed")
+    _require_success(lifecycle_result(plugin, "install"), f"Plugin {name} repair install failed")
 
 
 def _commit_user_transaction(state: AppState, transaction: ApplyTransaction) -> None:
@@ -421,7 +422,7 @@ def install_plugin(state: AppState, name: str) -> bool:
         lambda: _reapply_restored_state(state),
     )
     try:
-        ok = p.install()
+        ok = lifecycle_result(p, "install")
     except Exception:
         transaction.rollback(_log_rollback_error)
         raise
@@ -432,7 +433,7 @@ def install_plugin(state: AppState, name: str) -> bool:
     if not get_protocol(snapshot, name).installed:
         transaction.add_rollback(
             f"plugin {name}.uninstall",
-            lambda: _require_success(p.uninstall(), f"Plugin {name} cleanup failed"),
+            lambda: _require_success(lifecycle_result(p, "uninstall"), f"Plugin {name} cleanup failed"),
             priority=10,
         )
     proto = get_protocol(state, name)
@@ -465,23 +466,23 @@ def uninstall_plugin(state: AppState, name: str) -> bool:
     )
     if was_enabled:
         try:
-            p.on_disable(state)
+            lifecycle_result(p, "disable", state)
         except Exception:
             transaction.rollback(_log_rollback_error)
             raise
         transaction.add_rollback(
             f"plugin {name}.on_enable",
-            lambda: p.on_enable(state),
+            lambda: lifecycle_result(p, "enable", state),
             priority=10,
         )
     if was_installed:
         transaction.add_rollback(
             f"plugin {name}.install",
-            lambda: _require_success(p.install(), f"Plugin {name} reinstall failed"),
+            lambda: _require_success(lifecycle_result(p, "install"), f"Plugin {name} reinstall failed"),
             priority=5,
         )
     try:
-        ok = p.uninstall()
+        ok = lifecycle_result(p, "uninstall")
     except Exception:
         transaction.rollback(_log_rollback_error)
         raise
@@ -536,7 +537,7 @@ def reinstall_plugin(state: AppState, name: str) -> bool:
     if was_enabled:
         transaction.add_rollback(
             f"plugin {name}.on_enable",
-            lambda: p.on_enable(state),
+            lambda: lifecycle_result(p, "enable", state),
             priority=10,
         )
 
@@ -571,11 +572,11 @@ def enable(state: AppState, name: str) -> bool:
     )
     transaction.add_rollback(
         f"plugin {name}.on_disable",
-        lambda: p.on_disable(state),
+        lambda: lifecycle_result(p, "disable", state),
         priority=10,
     )
     try:
-        p.on_enable(state)
+        lifecycle_result(p, "enable", state)
         proto = get_protocol(state, name)
         proto.enabled = True
         if name == "fail2ban":
@@ -615,13 +616,13 @@ def disable(state: AppState, name: str) -> bool:
         lambda: _reapply_restored_state(state),
     )
     try:
-        p.on_disable(state)
+        lifecycle_result(p, "disable", state)
     except Exception:
         transaction.rollback(_log_rollback_error)
         raise
     transaction.add_rollback(
         f"plugin {name}.on_enable",
-        lambda: p.on_enable(state),
+        lambda: lifecycle_result(p, "enable", state),
         priority=10,
     )
     try:
