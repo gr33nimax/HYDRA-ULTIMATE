@@ -47,7 +47,7 @@ from hydra.ui.tui import (
     clear, title, info, success, warn, error, menu, prompt, panel, kv,
     confirm, _bytes_auto, _bar, _ok,
     BANNER, GREEN, CYAN, YELLOW, RED, BOLD, DIM, WHITE, NC,
-    PANEL_W,
+    PANEL_W, box, dashboard_menu,
 )
 from hydra.ui.protocol_ui import (
     protocol_label, protocol_menu_title, protocol_status_panel, status_badge,
@@ -477,7 +477,7 @@ def _user_links(state: AppState, user: User):
 def main_menu(state: AppState):
     while True:
         clear()
-        print(BANNER)
+        box(BANNER.strip())
 
         sb_ok = singbox_installed() and is_running()
         plugins = status_all()
@@ -493,18 +493,22 @@ def main_menu(state: AppState):
 
         u_active = sum(1 for u in state.users if get_user_access_status(u)[0])
 
-        lines = [
+        node_lines = [
             kv("Sing-Box:", f"{_ok(sb_ok)}  {singbox_version() or 'не установлен'}"),
-            kv("Протоколы:", f"{GREEN}{active_t}{NC}/{total_t} активны"),
-            kv("Сетевые службы:", f"{GREEN}{active_e}{NC}/{total_e} активны"),
-            kv("Безопасность:", f"{GREEN}{active_s}{NC}/{total_s} активны"),
-            kv("Пользователи:", f"{GREEN if u_active else YELLOW}{u_active}{NC} из {len(state.users)}"),
         ]
-        lines += _sys_info(state)
-        panel("Состояние узла", lines)
-        panel("ГИДРА СОВЕТУЕТ", [f"💬 {HYDRA_SAYING}"])
+        node_lines += _sys_info(state)
 
-        choice = menu(
+        choice = dashboard_menu(
+            [
+                ("СОСТОЯНИЕ УЗЛА", node_lines),
+                ("СЛУЖБЫ", [
+                    kv("Протоколы:", f"{GREEN}{active_t}{NC}/{total_t} активны"),
+                    kv("Сетевые службы:", f"{GREEN}{active_e}{NC}/{total_e} активны"),
+                    kv("Безопасность:", f"{GREEN}{active_s}{NC}/{total_s} активны"),
+                    kv("Пользователи:", f"{GREEN if u_active else YELLOW}{u_active}{NC} из {len(state.users)}"),
+                ]),
+                ("ГИДРА СОВЕТУЕТ", [f"💬 {HYDRA_SAYING}"]),
+            ],
             [
                 ("1", "⚙️  Ядро и система",      "Установка Sing-Box, зависимости, применить конфиг"),
                 ("2", "🐍 Протоколы",           f"Транспорты (Naive, AmneziaWG, Mieru...)  [{active_t}/{total_t}]"),

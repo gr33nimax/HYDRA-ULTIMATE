@@ -334,6 +334,63 @@ def menu(options: list[tuple[str, str, str]], header: str = "") -> str:
     return cyrillic_map.get(choice, choice)
 
 
+def dashboard_menu(
+    sections: list[tuple[str, list[str]]],
+    options: list[tuple[str, str, str]],
+    header: str = "",
+) -> str:
+    """Рисует составной главный экран с единой рамкой и секциями."""
+    inner = PANEL_W
+    print()
+    print(f"{INDENT}{CYAN}╔{'═' * inner}╗{NC}")
+    if header:
+        h_fit, h_w = _fit_line(header, inner - 2)
+        pad_left = (inner - h_w) // 2
+        pad_right = inner - h_w - pad_left
+        print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{WHITE}{h_fit}{NC}{' ' * pad_right}{CYAN}║{NC}")
+        print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+
+    for section_title, lines in sections:
+        title_fit, title_w = _fit_line(section_title, inner - 4)
+        print(f"{INDENT}{CYAN}║{NC} {BOLD}{CYAN}{title_fit}{NC}{' ' * (inner - 3 - title_w)} {CYAN}║{NC}")
+        for line in lines:
+            line_fit, line_w = _fit_line(line, inner - 2)
+            print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * (inner - 2 - line_w)} {CYAN}║{NC}")
+        print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+
+    for key, label, desc in options:
+        if key == "-":
+            print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+            continue
+        line = f"  {_menu_key(key)}  {label}"
+        line_fit, line_w = _fit_line(line, inner - 2)
+        print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * (inner - 2 - line_w)} {CYAN}║{NC}")
+        if desc:
+            import textwrap
+            for paragraph in desc.split("\n"):
+                for wrapped in textwrap.wrap(paragraph, width=max(20, inner - 9)) or [""]:
+                    dline = f"       {DIM}{wrapped}{NC}"
+                    dline_fit, dline_w = _fit_line(dline, inner - 2)
+                    print(f"{INDENT}{CYAN}║{NC} {dline_fit}{' ' * (inner - 2 - dline_w)} {CYAN}║{NC}")
+
+    print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
+    print()
+    keys = [k for k, _, _ in options if k not in ("-", "")]
+    hint = "0" if "0" in keys else keys[-1] if keys else "0"
+    try:
+        choice = input(f"{INDENT}{CYAN}▸{NC} {BOLD}Выбор{NC}{DIM} ({hint}):{NC} ").strip()
+    except (KeyboardInterrupt, EOFError):
+        return "0"
+    if not choice:
+        return hint
+    choice = choice.upper()
+    cyrillic_map = {
+        "А": "A", "В": "B", "Б": "B", "С": "C", "Е": "E", "Н": "H",
+        "К": "K", "М": "M", "О": "O", "Р": "P", "Т": "T", "Х": "X", "У": "Y",
+    }
+    return cyrillic_map.get(choice, choice)
+
+
 def prompt(text: str, default: str = "") -> str:
     """Запрашивает ввод у пользователя."""
     d = f" {DIM}[{default}]{NC}" if default else ""
