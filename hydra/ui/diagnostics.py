@@ -1538,55 +1538,61 @@ def run_diagnostics_report() -> str:
     from hydra.core import orchestrator, singbox
     from hydra.core.state import load_state
 
+    width = 74
     report: list[str] = [
-        "HYDRA — диагностика",
-        f"Проверка: {time.strftime('%Y-%m-%d %H:%M:%S')}",
-        "",
+        "╭" + "─" * width + "╮",
+        "│" + "HYDRA — диагностика".center(width) + "│",
+        "│" + f"Проверка: {time.strftime('%Y-%m-%d %H:%M:%S')}".center(width) + "│",
+        "╰" + "─" * width + "╯",
     ]
     errors = 0
 
-    report.append("СОСТОЯНИЕ HYDRA")
+    def section(name: str) -> None:
+        report.extend(["", f"┌─ {name} " + "─" * max(1, width - len(name) - 4)])
+
+    def item(marker: str, text: str) -> None:
+        report.append(f"│ {marker:<7} {text}")
+
+    section("СОСТОЯНИЕ HYDRA")
     try:
         state = load_state()
         enabled = [name for name, value in state.protocols.items() if value.enabled]
-        report.append(f"  [OK] state.json: корректен, schema {state.version}")
-        report.append(f"  [OK] Пользователи: {len(state.users)}")
-        report.append(f"  [OK] Включённые протоколы: {', '.join(enabled) if enabled else 'нет'}")
+        item("[OK]", f"state.json       корректен, schema {state.version}")
+        item("[OK]", f"Пользователи      {len(state.users)}")
+        item("[OK]", f"Протоколы         {', '.join(enabled) if enabled else 'нет'}")
     except Exception as exc:
         errors += 1
-        report.append(f"  [ERROR] state.json: {exc}")
+        item("[ERROR]", f"state.json        {exc}")
 
-    report.append("")
-    report.append("ЯДРО")
+    section("ЯДРО SING-BOX")
     if singbox.is_installed():
-        report.append(f"  [OK] Sing-Box установлен: {singbox.get_version() or 'версия не определена'}")
+        item("[OK]", f"Sing-Box          установлен, {singbox.get_version() or 'версия не определена'}")
     else:
         errors += 1
-        report.append("  [ERROR] Sing-Box не установлен")
+        item("[ERROR]", "Sing-Box          не установлен")
     config_exists = singbox.SINGBOX_CONFIG.exists()
     if config_exists:
-        report.append("  [OK] Конфигурация Sing-Box существует")
+        item("[OK]", "Конфигурация      существует")
     else:
-        report.append("  [WARNING] Конфигурация Sing-Box ещё не создана")
+        item("[WARNING]", "Конфигурация      ещё не создана")
     binary = singbox._find_singbox()
     if binary and config_exists:
         try:
             checked = singbox._run([str(binary), "check", "-c", str(singbox.SINGBOX_CONFIG)])
             if checked.returncode == 0:
-                report.append("  [OK] Синтаксис активной конфигурации корректен")
+                item("[OK]", "Проверка конфига  синтаксис корректен")
             else:
                 errors += 1
                 detail = (checked.stderr or checked.stdout or "неизвестная ошибка").strip().splitlines()[-1]
-                report.append(f"  [ERROR] Активная конфигурация не прошла проверку: {detail[:300]}")
+                item("[ERROR]", f"Проверка конфига  {detail[:300]}")
         except (OSError, subprocess.SubprocessError) as exc:
-            report.append(f"  [WARNING] Проверка активной конфигурации недоступна: {exc}")
-    report.append(f"  [INFO] Последняя ошибка применения: {orchestrator.last_apply_error() or 'нет'}")
+            item("[WARNING]", f"Проверка конфига  недоступна: {exc}")
+    item("[INFO]", f"Ошибка применения  {orchestrator.last_apply_error() or 'нет'}")
 
-    report.append("")
-    report.append("СЕРВИСЫ")
+    section("СЕРВИСЫ")
     services = ["sing-box", "caddy-l4", "dnscrypt-proxy", "fail2ban", "hydra-traffic-daemon"]
     if os.name == "nt":
-        report.append("  [INFO] Проверка systemd недоступна в Windows-окружении")
+        item("[INFO]", "systemd            недоступен в Windows-окружении")
     else:
         shown_services = 0
         for service in services:
@@ -1611,43 +1617,54 @@ def run_diagnostics_report() -> str:
                 marker = "OK" if active.returncode == 0 else "WARNING"
                 if active.returncode != 0:
                     errors += 1 if enabled.returncode == 0 else 0
-                report.append(f"  [{marker}] {service}: active={active_state}, enabled={enabled_state}")
+                item(f"[{marker}]", f"{service:<20} {active_state}, автозапуск: {enabled_state}")
             except (OSError, subprocess.SubprocessError) as exc:
-                report.append(f"  [WARNING] {service}: проверка недоступна ({exc})")
+                item("[WARNING]", f"{service:<20} проверка недоступна: {exc}")
         if not shown_services:
-            report.append("  [INFO] Управляемые systemd-сервисы не установлены")
+            item("[INFO]", "Сервисы            управляемые systemd-сервисы не установлены")
 
-    report.append("")
-    report.append("ПЛАГИНЫ")
+    section("ПЛАГИНЫ")
     if os.name == "nt":
-        report.append("  [INFO] Runtime-статусы плагинов доступны только на Linux")
+        item("[INFO]", "Runtime-статусы    доступны только на Linux")
     else:
         try:
             from hydra.plugins.registry import status_all
             statuses = status_all()
             installed = 0
+            active_plugins = []
+            disabled_plugins = []
             for name, status in statuses.items():
                 if not status.get("installed"):
                     continue
                 installed += 1
-                marker = "OK" if status.get("running") else "WARNING"
-                report.append(
-                    f"  [{marker}] {name}: installed=yes, enabled={status.get('enabled')}, "
-                    f"running={status.get('running')}, port={status.get('port') or '—'}"
-                )
+                if status.get("enabled"):
+                    active_plugins.append((name, status))
+                else:
+                    disabled_plugins.append((name, status))
+            if active_plugins:
+                report.append("│ АКТИВНЫЕ")
+                for name, status in active_plugins:
+                    marker = "[OK]" if status.get("running") else "[ERROR]"
+                    if not status.get("running"):
+                        errors += 1
+                    port = str(status.get("port") or "—")
+                    item(marker, f"{name:<18} {'запущен' if status.get('running') else 'не запущен':<11} порт: {port}")
+            if disabled_plugins:
+                report.append("│ ОТКЛЮЧЕНЫ (установлены, но не участвуют в работе)")
+                for name, status in disabled_plugins:
+                    item("[INFO]", f"{name:<18} отключён" + (f", порт: {status.get('port')}" if status.get("port") else ""))
             if not installed:
-                report.append("  [INFO] Установленных плагинов нет")
+                item("[INFO]", "Установленные     плагины отсутствуют")
         except Exception as exc:
             errors += 1
-            report.append(f"  [ERROR] Не удалось получить статусы плагинов: {exc}")
+            item("[ERROR]", f"Статусы плагинов   не удалось получить: {exc}")
 
-    report.append("")
-    report.append("ПОСЛЕДНЕЕ ПРИМЕНЕНИЕ")
+    section("ПОСЛЕДНЕЕ ПРИМЕНЕНИЕ")
     journal = getattr(orchestrator, "APPLY_JOURNAL", Path("/var/log/hydra/apply.jsonl"))
     if journal.exists():
         try:
             entries = [line.strip() for line in journal.read_text(encoding="utf-8").splitlines() if line.strip()]
-            report.append(f"  [OK] Журнал: {len(entries)} событий")
+            item("[OK]", f"Журнал             {len(entries)} событий")
             if entries:
                 latest = json.loads(entries[-1])
                 event = str(latest.get("event", "unknown"))
@@ -1664,19 +1681,20 @@ def run_diagnostics_report() -> str:
                 marker = "OK" if event == "committed" else "WARNING"
                 if event in {"rolled_back", "failed", "rejected"}:
                     errors += 1
-                report.append(f"  [{marker}] Результат: {event_names.get(event, event)}")
+                item(f"[{marker}]", f"Результат          {event_names.get(event, event)}")
                 if latest.get("ts"):
-                    report.append(f"  [INFO] Время: {latest['ts']}")
+                    item("[INFO]", f"Время              {latest['ts']}")
                 if latest.get("stage"):
-                    report.append(f"  [INFO] Этап: {latest['stage']}")
+                    item("[INFO]", f"Этап               {latest['stage']}")
                 if latest.get("error"):
-                    report.append(f"  [ERROR] Причина: {str(latest['error'])[:500]}")
+                    item("[ERROR]", f"Причина            {str(latest['error'])[:500]}")
         except (OSError, ValueError, TypeError) as exc:
-            report.append(f"  [WARNING] Журнал недоступен: {exc}")
+            item("[WARNING]", f"Журнал             недоступен: {exc}")
     else:
-        report.append("  [INFO] Применений ещё не зарегистрировано")
+        item("[INFO]", "Журнал             применений ещё не зарегистрировано")
 
-    report.extend(["", f"ИТОГ: {'ERROR' if errors else 'OK'}"])
+    result = "ERROR" if errors else "OK"
+    report.extend(["", "└─ ИТОГ: " + ("ОБНАРУЖЕНЫ ОШИБКИ" if errors else "СИСТЕМА В НОРМЕ") + f" [{result}]"])
     return "\n".join(report)
 
 
