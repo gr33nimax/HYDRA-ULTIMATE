@@ -388,7 +388,7 @@ def _run_install(state: AppState, plugin) -> None:
     save_state(state)
 
     info("Скачиваю зависимости и бинарник telemt...")
-    if not plugin.install():
+    if not orchestrator.install_plugin(state, plugin.meta.name):
         error("Установка бинарника провалилась.")
         _pause()
         return
@@ -734,7 +734,7 @@ def _run_uninstall(state: AppState, plugin) -> None:
     _run(["sysctl", "--system"])
 
     # 6. Запускаем стандартный uninstall плагина
-    if plugin.uninstall():
+    if orchestrator.uninstall_plugin(state, plugin.meta.name):
         ps = state.protocols["telemt"]
         ps.installed = False
         ps.enabled = False

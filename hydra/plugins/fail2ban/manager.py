@@ -3,6 +3,8 @@ hydra/plugins/fail2ban/manager.py — TUI-консоль управления Fa
 """
 from __future__ import annotations
 
+import hydra.core.orchestrator as orchestrator
+
 import re
 import time
 import shutil
@@ -370,7 +372,7 @@ def menu_fail2ban(state: AppState, plugin) -> None:
         if not installed:
             if choice == "1":
                 info("Устанавливаю и настраиваю Fail2ban...")
-                if plugin.install():
+                if orchestrator.install_plugin(state, plugin.meta.name):
                     from hydra.core.state import get_protocol, save_state
                     proto = get_protocol(state, "fail2ban")
                     proto.installed = True
@@ -381,7 +383,7 @@ def menu_fail2ban(state: AppState, plugin) -> None:
                         success("Fail2ban успешно установлен и запущен!")
                     else:
                         try:
-                            plugin.on_disable(state)
+                            orchestrator.disable(state, plugin.meta.name)
                         except RuntimeError:
                             pass
                         proto.enabled = False
@@ -400,7 +402,7 @@ def menu_fail2ban(state: AppState, plugin) -> None:
             if active:
                 info("Останавливаю Fail2ban...")
                 try:
-                    plugin.on_disable(state)
+                    orchestrator.disable(state, plugin.meta.name)
                 except RuntimeError:
                     pass
                 time.sleep(1)
@@ -414,7 +416,7 @@ def menu_fail2ban(state: AppState, plugin) -> None:
             else:
                 info("Запускаю Fail2ban...")
                 try:
-                    plugin.on_enable(state)
+                    orchestrator.enable(state, plugin.meta.name)
                 except RuntimeError:
                     pass
                 time.sleep(2)

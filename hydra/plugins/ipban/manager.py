@@ -3,6 +3,8 @@ hydra/plugins/ipban/manager.py — TUI-консоль управления IP-б
 """
 from __future__ import annotations
 
+import hydra.core.orchestrator as orchestrator
+
 import time
 from hydra.core.host import HOST
 from hydra.core.state import AppState
@@ -64,7 +66,7 @@ def menu_ipban(state: AppState, plugin) -> None:
         if not installed:
             if choice == "1":
                 info("Установка ipset и настройка правил...")
-                if plugin.install():
+                if orchestrator.install_plugin(state, plugin.meta.name):
                     from hydra.core.state import get_protocol, save_state
                     proto = get_protocol(state, "ipban")
                     proto.installed = True

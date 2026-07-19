@@ -10,6 +10,8 @@
 
 Host boundary completion — production `subprocess.run`/`Popen` calls now pass through the injectable `HostBackend`; nftables, Sing-Box, Caddy/SNI, networking, protocol lifecycle and background service operations use bounded host commands. A regression guard prevents new direct subprocess calls outside the command boundary.
 
+Transactional lifecycle completion — legacy Honeypot, IPBan, Fail2ban, DNSCrypt, Telemt and WARP managers now delegate install/uninstall/enable/disable operations to the orchestrator transaction boundary. Managers no longer mutate plugin runtime directly.
+
 ### Runtime reconciliation
 
 `hydra doctor` now reports desired-vs-actual runtime drift and a read-only correction plan. The new `hydra reconcile` command shows the same plan; `hydra reconcile --apply` explicitly applies only safe enable/disable actions and never installs missing components automatically.

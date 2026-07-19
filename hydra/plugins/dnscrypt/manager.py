@@ -464,7 +464,7 @@ def menu_dnscrypt(state: AppState, plugin) -> None:
         # ── Установка ──
         if choice == "1" and not st.installed:
             info("Устанавливаю DNSCrypt-proxy...")
-            if plugin.install():
+            if orchestrator.install_plugin(state, plugin.meta.name):
                 success("DNSCrypt-proxy успешно установлен!")
             else:
                 error("Ошибка при установке.")
@@ -496,9 +496,9 @@ def menu_dnscrypt(state: AppState, plugin) -> None:
             warn("ПЕРЕУСТАНОВКА DNSCRYPT!")
             if confirm("Продолжить?", default=False):
                 info("Удаляю текущую установку...")
-                plugin.uninstall()
+                orchestrator.uninstall_plugin(state, plugin.meta.name)
                 info("Устанавливаю заново...")
-                if plugin.install():
+                if orchestrator.install_plugin(state, plugin.meta.name):
                     success("Успешно переустановлено!")
                     if st.enabled:
                         info("Применяю конфигурацию...")
@@ -513,7 +513,7 @@ def menu_dnscrypt(state: AppState, plugin) -> None:
             if confirm("Вы уверены?", default=False):
                 info("Удаляю...")
                 if orchestrator.disable(state, "dnscrypt"):
-                    plugin.uninstall()
+                    orchestrator.uninstall_plugin(state, plugin.meta.name)
                     success("DNSCrypt полностью удалён.")
                 else:
                     error("Не удалось отключить DNSCrypt перед удалением.")

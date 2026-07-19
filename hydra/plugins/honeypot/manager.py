@@ -3,6 +3,8 @@ hydra/plugins/honeypot/manager.py — TUI-консоль управления Ho
 """
 from __future__ import annotations
 
+import hydra.core.orchestrator as orchestrator
+
 import ipaddress
 from pathlib import Path
 
@@ -56,7 +58,7 @@ def menu_honeypot(state: AppState, plugin) -> None:
             if active:
                 info("Останавливаю Honeypot...")
                 try:
-                    plugin.on_disable(state)
+                    orchestrator.disable(state, plugin.meta.name)
                 except RuntimeError as exc:
                     error(str(exc))
                 else:
@@ -70,12 +72,12 @@ def menu_honeypot(state: AppState, plugin) -> None:
                         success("Honeypot остановлен.")
             else:
                 info("Запускаю Honeypot...")
-                if not plugin.install():
+                if not orchestrator.install_plugin(state, plugin.meta.name):
                     error("Не найдены обязательные зависимости: python3/systemd")
                     prompt("Нажмите Enter для продолжения")
                     continue
                 try:
-                    plugin.on_enable(state)
+                    orchestrator.enable(state, plugin.meta.name)
                 except RuntimeError as exc:
                     error(str(exc))
                 else:

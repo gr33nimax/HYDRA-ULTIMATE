@@ -181,7 +181,7 @@ def menu_warp(state: AppState, plugin) -> None:
         elif choice == "1":
             if not st.installed and not custom_profiles:
                 info("Устанавливаю и регистрирую Cloudflare WARP...")
-                if plugin.install():
+                if orchestrator.install_plugin(state, plugin.meta.name):
                     success("WARP успешно установлен!")
                 else:
                     error("Не удалось выполнить установку.")
@@ -230,14 +230,14 @@ def menu_warp(state: AppState, plugin) -> None:
             if WGCF_PROFILE.exists():
                 warn("ПЕРЕУСТАНОВКА WGCF!")
                 if confirm("Продолжить?", default=False):
-                    plugin.uninstall()
-                    if plugin.install():
+                    orchestrator.uninstall_plugin(state, plugin.meta.name)
+                    if orchestrator.install_plugin(state, plugin.meta.name):
                         success("Локальный WGCF профиль успешно пересоздан!")
                         if ps.enabled:
                             orchestrator.apply_config(state)
             else:
                 info("Устанавливаю локальный WGCF...")
-                if plugin.install():
+                if orchestrator.install_plugin(state, plugin.meta.name):
                     success("Локальный WGCF профиль успешно создан!")
                     if ps.enabled:
                         orchestrator.apply_config(state)
@@ -246,7 +246,7 @@ def menu_warp(state: AppState, plugin) -> None:
         elif choice == "9" and WGCF_PROFILE.exists():
             warn("УДАЛЕНИЕ ЛОКАЛЬНОГО WGCF!")
             if confirm("Вы уверены?", default=False):
-                plugin.uninstall()
+                orchestrator.uninstall_plugin(state, plugin.meta.name)
                 success("Локальный WGCF профиль успешно удален.")
                 if ps.enabled:
                     orchestrator.apply_config(state)
