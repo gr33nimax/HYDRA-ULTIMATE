@@ -47,7 +47,7 @@ from hydra.ui.tui import (
     clear, title, info, success, warn, error, menu, prompt, panel, kv,
     confirm, _bytes_auto, _bar, _ok,
     BANNER, GREEN, CYAN, YELLOW, RED, BOLD, DIM, WHITE, NC,
-    PANEL_W, box, dashboard_menu,
+    PANEL_W, dashboard_menu,
 )
 from hydra.ui.protocol_ui import (
     protocol_label, protocol_menu_title, protocol_status_panel, status_badge,
@@ -477,7 +477,6 @@ def _user_links(state: AppState, user: User):
 def main_menu(state: AppState):
     while True:
         clear()
-        box(BANNER.strip())
 
         sb_ok = singbox_installed() and is_running()
         plugins = status_all()
@@ -508,6 +507,7 @@ def main_menu(state: AppState):
                     kv("Пользователи:", f"{GREEN if u_active else YELLOW}{u_active}{NC} из {len(state.users)}"),
                 ]),
                 ("ГИДРА СОВЕТУЕТ", [f"💬 {HYDRA_SAYING}"]),
+                ("УПРАВЛЕНИЕ", []),
             ],
             [
                 ("1", "⚙️  Ядро и система",      "Установка Sing-Box, зависимости, применить конфиг"),
@@ -520,7 +520,7 @@ def main_menu(state: AppState):
                 ("8", "🧪  Тестирование и отладка", "Проверка скорости, блокировок, GeoIP и CPU"),
                 ("0", "🚪 Выход", ""),
             ],
-            "HYDRA · УПРАВЛЕНИЕ",
+            banner=BANNER.strip(),
         )
 
         if choice == "0":

@@ -338,11 +338,24 @@ def dashboard_menu(
     sections: list[tuple[str, list[str]]],
     options: list[tuple[str, str, str]],
     header: str = "",
+    banner: str = "",
 ) -> str:
     """Рисует составной главный экран с единой рамкой и секциями."""
     inner = PANEL_W
     print()
     print(f"{INDENT}{CYAN}╔{'═' * inner}╗{NC}")
+
+    if banner:
+        for raw_line in banner.splitlines():
+            if not raw_line.strip():
+                print(f"{INDENT}{CYAN}║{NC}{' ' * inner}{CYAN}║{NC}")
+                continue
+            line_fit, line_w = _fit_line(raw_line, inner - 2)
+            left = max(0, (inner - line_w) // 2)
+            right = max(0, inner - line_w - left)
+            print(f"{INDENT}{CYAN}║{NC}{' ' * left}{line_fit}{' ' * right}{CYAN}║{NC}")
+        print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+
     if header:
         h_fit, h_w = _fit_line(header, inner - 2)
         pad_left = (inner - h_w) // 2
