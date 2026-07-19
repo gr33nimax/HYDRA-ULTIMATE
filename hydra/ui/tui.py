@@ -65,13 +65,12 @@ def _char_width(char: str) -> int:
         0x274c,  # ❌
         0x2705,  # ✅
         0x26a1,  # ⚡
+        0x2699,  # ⚙
+        0x23f1,  # ⏱
         0x1f4ca, # 📊
         0x1f310, # 🌐
     }:
         return 2
-    # Special cases: emojis that are rendered as 1 cell wide in standard monospace fonts/terminals
-    if code in (0x1f6e1, 0x1f6e0):  # 🛡 and 🛠
-        return 1
     # Emojis > 0xffff are always 2 cells wide
     if code > 0xffff:
         return 2
@@ -139,7 +138,7 @@ def _fit_line(line: str, max_w: int) -> tuple[str, int]:
 # ═════════════════════════════════════════════════════════════════════════════
 
 BANNER = rf"""
-{CYAN}        🐍  ██╗  ██╗{GREEN}██╗   ██╗{CYAN}██████╗ {GREEN}██████╗ {CYAN} █████╗  🐍
+{CYAN}        ██╗  ██╗{GREEN}██╗   ██╗{CYAN}██████╗ {GREEN}██████╗ {CYAN} █████╗
          ██║  ██║{GREEN}╚██╗ ██╔╝{CYAN}██╔══██╗{GREEN}██╔══██╗{CYAN}██╔══██╗
          ███████║{GREEN} ╚████╔╝ {CYAN}██║  ██║{GREEN}██████╔╝{CYAN}███████║
          ██╔══██║{GREEN}  ╚██╔╝  {CYAN}██║  ██║{GREEN}██╔══██╗{CYAN}██╔══██║
@@ -349,6 +348,9 @@ def dashboard_menu(
     print()
     print(f"{INDENT}{CYAN}╔{'═' * inner}╗{NC}")
 
+    def section_divider() -> None:
+        print(f"{INDENT}{CYAN}║{NC}{DIM}{'─' * inner}{NC}{CYAN}║{NC}")
+
     if banner:
         import textwrap
         banner = textwrap.dedent(banner)
@@ -362,14 +364,14 @@ def dashboard_menu(
             right = max(0, inner - line_w - left)
             print(f"{INDENT}{CYAN}║{NC}{' ' * left}{line_fit}{' ' * right}{CYAN}║{NC}")
         print(f"{INDENT}{CYAN}║{NC}{' ' * inner}{CYAN}║{NC}")
-        print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+        section_divider()
 
     if header:
         h_fit, h_w = _fit_line(header, inner - 2)
         pad_left = (inner - h_w) // 2
         pad_right = inner - h_w - pad_left
         print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{WHITE}{h_fit}{NC}{' ' * pad_right}{CYAN}║{NC}")
-        print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+        section_divider()
 
     for section_title, lines in sections:
         title_fit, title_w = _fit_line(section_title, inner - 4)
@@ -379,7 +381,7 @@ def dashboard_menu(
             line_fit, line_w = _fit_line(line, inner - 2)
             print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * (inner - 2 - line_w)} {CYAN}║{NC}")
         print(f"{INDENT}{CYAN}║{NC}{' ' * inner}{CYAN}║{NC}")
-        print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+        section_divider()
 
     if options_header:
         title_fit, title_w = _fit_line(options_header, inner - 4)
@@ -388,7 +390,7 @@ def dashboard_menu(
 
     for key, label, desc in options:
         if key == "-":
-            print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+            section_divider()
             continue
         line = f"  {_menu_key(key)}  {TEXT}{label}{NC}"
         line_fit, line_w = _fit_line(line, inner - 2)

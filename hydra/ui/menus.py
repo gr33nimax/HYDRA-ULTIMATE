@@ -45,7 +45,7 @@ from hydra.services.traffic import (
 )
 from hydra.ui.tui import (
     clear, title, info, success, warn, error, menu, prompt, panel, kv,
-    confirm, _bytes_auto, _bar, _ok,
+    confirm, _bytes_auto, _bar, _ok, _width,
     BANNER, GREEN, CYAN, YELLOW, RED, BOLD, DIM, WHITE, TEXT, NC,
     PANEL_W, dashboard_menu,
 )
@@ -168,6 +168,20 @@ except Exception:
     t.start()
 
 
+def _pad_visible(text: str, width: int) -> str:
+    return text + " " * max(0, width - _width(text))
+
+
+def _status_row(icon: str, label: str, value: str, detail: str = "") -> str:
+    label_part = f"{icon} {TEXT}{label}{NC}"
+    return f"  {_pad_visible(label_part, 20)}{_pad_visible(value, 18)}{detail}"
+
+
+def _service_cell(icon: str, label: str, value: str) -> str:
+    label_part = f"{icon} {TEXT}{label}{NC}"
+    return _pad_visible(label_part, 19) + value
+
+
 def _sys_info(state: AppState | None = None) -> list[str]:
     """Возвращает компактный статус узла для главного экрана."""
     cpu_pct: float | None = None
@@ -186,7 +200,7 @@ def _sys_info(state: AppState | None = None) -> list[str]:
         d, r = divmod(int(uptime.total_seconds()), 86400)
         h, m = divmod(r, 3600)
         m, _ = divmod(m, 60)
-        uptime_str = f"{d} дн. {h:02d}:{m:02d}"
+        uptime_str = f"{d} дн. {h} ч. {m} мин."
     except ImportError:
         try:
             import shutil
@@ -200,7 +214,7 @@ def _sys_info(state: AppState | None = None) -> list[str]:
                     d, r = divmod(int(uptime_sec), 86400)
                     h, m = divmod(r, 3600)
                     m, _ = divmod(m, 60)
-                    uptime_str = f"{d} дн. {h:02d}:{m:02d}"
+                    uptime_str = f"{d} дн. {h} ч. {m} мин."
                 meminfo_file = Path("/proc/meminfo")
                 if meminfo_file.exists():
                     meminfo = {}
@@ -223,13 +237,10 @@ def _sys_info(state: AppState | None = None) -> list[str]:
     pub_ip = _cached_pub_ip
     if pub_ip == "Получение..." and state and state.network.server_ip:
         pub_ip = state.network.server_ip
-    geo = ""
-    if _cached_country_flag:
-        geo = f"  {_cached_country_flag}"
-        if _cached_country_code:
-            geo += f" {_cached_country_code}"
+    geo = _cached_country_flag or (f"[{_cached_country_code}]" if _cached_country_code else "")
 
-    dns_display = _cached_dns
+    dns_service = _cached_dns
+    dns_detail = ""
     try:
         r = subprocess.run(["systemctl", "is-active", "dnscrypt-proxy"], capture_output=True, text=True, timeout=1)
         if r.stdout.strip() == "active":
@@ -239,11 +250,14 @@ def _sys_info(state: AppState | None = None) -> list[str]:
                 match = re.search(r"^server_names\s*=\s*\[(.*?)\]", content, flags=re.MULTILINE | re.DOTALL)
                 if match:
                     names = [n.strip("'\" ") for n in match.group(1).split(",") if n.strip("'\" ")]
-                    dns_display = f"DNSCrypt · {', '.join(names)}" if names else "DNSCrypt · активен"
+                    dns_service = "DNSCrypt"
+                    dns_detail = ", ".join(names) if names else "активен"
                 else:
-                    dns_display = "DNSCrypt · активен"
+                    dns_service = "DNSCrypt"
+                    dns_detail = "активен"
             else:
-                dns_display = "DNSCrypt · активен"
+                dns_service = "DNSCrypt"
+                dns_detail = "активен"
     except Exception:
         pass
 
@@ -254,9 +268,9 @@ def _sys_info(state: AppState | None = None) -> list[str]:
         return f"{GREEN}{'█' * filled}{DIM}{'░' * (8 - filled)}{NC} {value:.0f}%"
 
     return [
-        kv("🌐 Публичный IP", f"{CYAN}{pub_ip}{NC}{geo}"),
-        kv("🔒 DNS", f"{GREEN}{dns_display}{NC}"),
-        kv("⏱ Время работы", uptime_str),
+        _status_row("🌐", "Публичный IP", f"{CYAN}{pub_ip}{NC}", geo),
+        _status_row("🔒", "DNS", f"{GREEN}{dns_service}{NC}", dns_detail),
+        _status_row("⏱", "Аптайм", uptime_str),
         "",
         f"  {TEXT}CPU{NC}  {usage(cpu_pct)}     {TEXT}RAM{NC}  {usage(mem_pct)}     {TEXT}Диск{NC}  {usage(disk_pct)}",
     ]
@@ -462,9 +476,9 @@ def main_menu(state: AppState):
 
         u_active = sum(1 for u in state.users if get_user_access_status(u)[0])
 
-        core_status = f"{GREEN}🟢 запущен{NC}" if sb_ok else f"{RED}🔴 остановлен{NC}"
+        core_status = f"{GREEN}запущен{NC}" if sb_ok else f"{RED}остановлен{NC}"
         core_version = singbox_version() or "не установлен"
-        node_lines = [kv("Sing-Box", f"{core_status} · {core_version}")]
+        node_lines = [_status_row("🟢" if sb_ok else "🔴", "Sing-Box", core_status, f"· {core_version}")]
         node_lines += _sys_info(state)
 
         warp_running = bool(plugins.get("warp", {}).get("running"))
@@ -477,8 +491,10 @@ def main_menu(state: AppState):
             [
                 ("СОСТОЯНИЕ УЗЛА", node_lines),
                 ("СЛУЖБЫ", [
-                    f"  🐍 {TEXT}Протоколы{NC}       {transport_status}       👥 {TEXT}Пользователи{NC}   {users_status}",
-                    f"  🛡️  {TEXT}Безопасность{NC}   {security_status}       🌐 {TEXT}WARP{NC}            {warp_status}",
+                    "  " + _pad_visible(_service_cell("🐍", "Протоколы", transport_status), 38)
+                    + _service_cell("👥", "Пользователи", users_status),
+                    "  " + _pad_visible(_service_cell("🛡️", "Безопасность", security_status), 38)
+                    + _service_cell("🌐", "WARP", warp_status),
                 ]),
                 ("ГИДРА СОВЕТУЕТ", [f"💬 {HYDRA_SAYING}"]),
             ],
