@@ -105,7 +105,11 @@ class HoneypotPlugin(BasePlugin):
         except OSError:
             pass
         restarted = _run(["systemctl", "restart", "hydra-honeypot"])
-        return restarted.returncode == 0 and self._wait_until_stably_running()
+        if restarted.returncode != 0 or not self._wait_until_stably_running():
+            self.last_error = self._service_diagnostics()
+            return False
+        self.last_error = ""
+        return True
 
     def _service_diagnostics(self) -> str:
         result = _run(
