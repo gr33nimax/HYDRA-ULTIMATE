@@ -279,6 +279,11 @@ def _log_rollback_error(message: str) -> None:
     singbox._log("ERROR", message)
 
 
+def _require_success(result: bool, message: str) -> None:
+    if not result:
+        raise RuntimeError(message)
+
+
 def _commit_state_change(state: AppState, snapshot: AppState) -> None:
     """Persist and apply a state mutation, restoring the snapshot on failure."""
     save_state(state)
@@ -394,28 +399,47 @@ def install_plugin(state: AppState, name: str) -> bool:
     if not p:
         return False
     snapshot = copy.deepcopy(state)
+    transaction = ApplyTransaction()
+    transaction.advance("apply")
+    transaction.add_rollback(
+        "application state",
+        lambda: _restore_and_save_state(state, snapshot),
+        priority=20,
+    )
     try:
         ok = p.install()
     except Exception:
-        _restore_state(state, snapshot)
-        save_state(state)
+        transaction.rollback(_log_rollback_error)
         raise
+    if not ok:
+        transaction.rollback(_log_rollback_error)
+        return False
+
+    if not get_protocol(snapshot, name).installed:
+        transaction.add_rollback(
+            f"plugin {name}.uninstall",
+            lambda: _require_success(p.uninstall(), f"Plugin {name} cleanup failed"),
+            priority=10,
+        )
     proto = get_protocol(state, name)
-    proto.installed = ok
-    save_state(state)
-    if ok and proto.enabled:
-        try:
+    try:
+        proto.installed = True
+        save_state(state)
+        if proto.enabled:
+            transaction.add_rollback(
+                "restored configuration",
+                lambda: _reapply_restored_state(state),
+                priority=30,
+            )
             applied = apply_config(state)
-        except Exception:
-            _restore_state(state, snapshot)
-            save_state(state)
-            raise
-        if not applied:
-            _restore_state(state, snapshot)
-            save_state(state)
-            apply_config(state)
-        return applied
-    return ok
+            if not applied:
+                transaction.rollback(_log_rollback_error)
+                return False
+    except Exception:
+        transaction.rollback(_log_rollback_error)
+        raise
+    transaction.commit()
+    return True
 
 
 def uninstall_plugin(state: AppState, name: str) -> bool:
@@ -424,23 +448,61 @@ def uninstall_plugin(state: AppState, name: str) -> bool:
         return False
     snapshot = copy.deepcopy(state)
     proto = get_protocol(state, name)
-    if proto and proto.enabled:
+    was_installed = proto.installed
+    was_enabled = proto.enabled
+    transaction = ApplyTransaction()
+    transaction.advance("apply")
+    transaction.add_rollback(
+        "application state",
+        lambda: _restore_and_save_state(state, snapshot),
+        priority=20,
+    )
+    if was_enabled:
         try:
             p.on_disable(state)
         except Exception:
-            pass
-    ok = p.uninstall()
+            transaction.rollback(_log_rollback_error)
+            raise
+        transaction.add_rollback(
+            f"plugin {name}.on_enable",
+            lambda: p.on_enable(state),
+            priority=10,
+        )
+    if was_installed:
+        transaction.add_rollback(
+            f"plugin {name}.install",
+            lambda: _require_success(p.install(), f"Plugin {name} reinstall failed"),
+            priority=5,
+        )
+    try:
+        ok = p.uninstall()
+    except Exception:
+        transaction.rollback(_log_rollback_error)
+        raise
     if not ok:
-        _restore_state(state, snapshot)
-        save_state(state)
+        transaction.rollback(_log_rollback_error)
         return False
-    proto = get_protocol(state, name)
-    proto.installed = False
-    proto.enabled = False
-    proto.config = {}
-    proto.port = 0
-    save_state(state)
-    return apply_config(state)
+    transaction.add_rollback(
+        "restored configuration",
+        lambda: _reapply_restored_state(state),
+        priority=30,
+    )
+    try:
+        proto = get_protocol(state, name)
+        proto.installed = False
+        proto.enabled = False
+        proto.config = {}
+        proto.port = 0
+        save_state(state)
+        applied = apply_config(state)
+    except Exception:
+        transaction.rollback(_log_rollback_error)
+        raise
+    if not applied:
+        transaction.rollback(_log_rollback_error)
+        return False
+    transaction.commit()
+    return True
 
 
 def reinstall_plugin(state: AppState, name: str) -> bool:

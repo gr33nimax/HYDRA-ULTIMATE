@@ -421,3 +421,51 @@ def test_install_plugin_rolls_back_state_when_apply_fails():
     assert state.protocols["mock_transport"].enabled is True
     assert apply.call_count == 2
     assert save.call_count == 2
+
+
+def test_install_plugin_removes_new_install_when_apply_fails():
+    from hydra.core import orchestrator
+
+    state = AppState(protocols={"mock": PluginState(enabled=True, installed=False)})
+    plugin = MagicMock()
+    plugin.install.return_value = True
+    plugin.uninstall.return_value = True
+
+    with patch("hydra.core.orchestrator.registry.get", return_value=plugin), \
+         patch("hydra.core.orchestrator.apply_config", side_effect=[False, True]), \
+         patch("hydra.core.orchestrator.save_state"):
+        assert orchestrator.install_plugin(state, "mock") is False
+
+    plugin.uninstall.assert_called_once_with()
+    assert state.protocols["mock"].installed is False
+
+
+def test_uninstall_plugin_reinstalls_and_restores_state_when_apply_fails():
+    from hydra.core import orchestrator
+
+    state = AppState(
+        protocols={
+            "mock": PluginState(
+                enabled=True,
+                installed=True,
+                port=9443,
+                config={"domain": "vpn.example"},
+            )
+        }
+    )
+    plugin = MagicMock()
+    plugin.uninstall.return_value = True
+    plugin.install.return_value = True
+
+    with patch("hydra.core.orchestrator.registry.get", return_value=plugin), \
+         patch("hydra.core.orchestrator.apply_config", side_effect=[False, True]), \
+         patch("hydra.core.orchestrator.save_state"):
+        assert orchestrator.uninstall_plugin(state, "mock") is False
+
+    plugin.install.assert_called_once_with()
+    plugin.on_enable.assert_called_once_with(state)
+    restored = state.protocols["mock"]
+    assert restored.installed is True
+    assert restored.enabled is True
+    assert restored.port == 9443
+    assert restored.config == {"domain": "vpn.example"}
