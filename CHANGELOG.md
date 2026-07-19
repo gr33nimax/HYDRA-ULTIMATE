@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Unified error model — stage 11
+
+Добавлены `ErrorCode`, `ApplicationError` и `ServiceResult` для единого контракта ошибок между domain/application и transport-слоями. Старые bool-методы сохранены, а CLI получил дополнительный структурированный `error_details` с кодом ошибки и признаком повторяемости операции.
+
 ### Dependency injection — stage 10
 
 CLI и основные TUI-потоки теперь получают `ApplicationService` явно через composition root вместо глобальных экземпляров сервисов. Сохранены совместимые fallback-вызовы для старых интеграций и тестов; добавлены проверки подмены зависимостей и изоляции transport-слоя.

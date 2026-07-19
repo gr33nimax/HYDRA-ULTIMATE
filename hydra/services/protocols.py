@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from hydra.core.state import AppState
+from hydra.core.errors import ErrorCode, ServiceResult, failed_result
 from hydra.plugins.base import BasePlugin, PluginCategory
 from hydra.services.reconciliation import ReconciliationService
 
@@ -53,6 +54,20 @@ class ProtocolService:
 
     def install(self, state: AppState, name: str) -> bool:
         return self.operations.install_plugin(state, name)
+
+    def lifecycle_result(self, state: AppState, operation: str, name: str) -> ServiceResult:
+        """Normalize legacy bool lifecycle operations for all adapters."""
+        try:
+            callback = getattr(self, operation)
+            ok = bool(callback(state, name))
+            if ok:
+                return ServiceResult(True, value={"operation": operation, "name": name})
+            return failed_result(
+                RuntimeError(f"{operation} failed for {name}"),
+                fallback=ErrorCode.OPERATION_FAILED,
+            )
+        except Exception as exc:
+            return failed_result(exc, fallback=ErrorCode.PLUGIN)
 
     def reinstall(self, state: AppState, name: str) -> bool:
         return self.operations.reinstall_plugin(state, name)

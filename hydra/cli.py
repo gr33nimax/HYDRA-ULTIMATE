@@ -10,6 +10,7 @@ import uuid
 from dataclasses import asdict
 
 from hydra.core.state import AppState, User, load_state, validate_state
+from hydra.core.errors import ErrorCode, normalize_error
 from hydra.core.status import public_user
 from hydra.services.application import production_application
 
@@ -160,7 +161,14 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "apply":
             _require_root()
             ok = app.apply(state)
-            payload = {"ok": ok, "error": "" if ok else app.apply_error()}
+            if ok:
+                payload = {"ok": True, "error": ""}
+            else:
+                detail = normalize_error(
+                    RuntimeError(app.apply_error() or "configuration apply failed"),
+                    fallback=ErrorCode.OPERATION_FAILED,
+                )
+                payload = {"ok": False, "error": detail.message, "error_details": detail.as_dict()}
             _print(payload)
             return 0 if ok else 1
         else:
@@ -168,7 +176,8 @@ def main(argv: list[str] | None = None) -> int:
         _print(payload)
         return 0
     except Exception as exc:
-        _print({"ok": False, "error": str(exc) or exc.__class__.__name__})
+        detail = normalize_error(exc)
+        _print({"ok": False, "error": detail.message, "error_details": detail.as_dict()})
         return 1
 
 

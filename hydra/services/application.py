@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from hydra.core.state import AppState, User
+from hydra.core.errors import ErrorCode, ServiceResult, failed_result
 from hydra.services.protocols import ProtocolService
 from hydra.services.users import UserService
 
@@ -31,6 +32,18 @@ class ApplicationService:
     def apply(self, state: AppState) -> bool:
         return bool(self.apply_config(state))
 
+    def apply_result(self, state: AppState) -> ServiceResult:
+        try:
+            if self.apply_config(state):
+                return ServiceResult(True, value=True)
+            message = self.apply_error() or "configuration apply failed"
+            return ServiceResult(
+                False,
+                error=failed_result(RuntimeError(message), fallback=ErrorCode.OPERATION_FAILED).error,
+            )
+        except Exception as exc:
+            return failed_result(exc, fallback=ErrorCode.CONFIGURATION)
+
     def apply_error(self) -> str:
         return str(self.last_apply_error() or "")
 
@@ -45,6 +58,18 @@ class ApplicationService:
 
     def unblock_user(self, state: AppState, email: str) -> None:
         self.users.unblock(state, email)
+
+    def user_result(self, operation: str, state: AppState, email: str, user: User | None = None) -> ServiceResult:
+        """Run a user operation and normalize expected failures for adapters."""
+        try:
+            if operation == "add":
+                if user is None:
+                    raise ValueError("user is required")
+                return ServiceResult(True, value=self.add_user(state, user))
+            getattr(self, f"{operation}_user")(state, email)
+            return ServiceResult(True, value=email)
+        except Exception as exc:
+            return failed_result(exc, fallback=ErrorCode.PLUGIN)
 
 
 def production_application() -> ApplicationService:
