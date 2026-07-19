@@ -246,6 +246,7 @@ def test_daemon_collects_traffic_from_clash_api():
     with patch("hydra.services.traffic_daemon.load_state", return_value=state), \
          patch("hydra.services.traffic_daemon.update_state", side_effect=mock_update), \
          patch("hydra.services.traffic_daemon.urllib.request.urlopen") as mock_urlopen, \
+         patch("hydra.services.traffic_daemon.HOST.run", return_value=MagicMock(returncode=1, stdout="")), \
          patch("time.sleep", side_effect=mock_sleep), \
          patch("hydra.services.traffic_daemon.Path") as mock_path:
          
