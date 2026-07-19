@@ -1,10 +1,10 @@
-# 🐙 HYDRA v2.4.0 — Multi-Protocol Proxy & Routing Orchestrator
+# 🐙 HYDRA v2.4.1 — Multi-Protocol Proxy & Routing Orchestrator
 
-[![Version](https://img.shields.io/badge/version-2.4.0-blue.svg?style=flat-square)](https://github.com/gr33nimax/HYDRA-ULTIMATE)
+[![Version](https://img.shields.io/badge/version-2.4.1-blue.svg?style=flat-square)](https://github.com/gr33nimax/HYDRA-ULTIMATE)
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg?style=flat-square)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg?style=flat-square)](https://ubuntu.com/)
-[![Tests](https://img.shields.io/badge/tests-460%2B%20passed-brightgreen.svg?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/tests-536%20passed-brightgreen.svg?style=flat-square)](tests/)
 
 **HYDRA** — это автоматизированная модульная платформа развёртывания, оркестрации и администрирования многопротокольных прокси-серверов на базе **Sing-Box** (используется как единое сетевое ядро). 
 
@@ -378,50 +378,25 @@ HYDRA-ULTIMATE/
 
 ---
 
-## 📜 История изменений (Changelog)
+## 📜 История изменений
 
-### [2.4.0] — 18.07.2026
+Полная история версий и подробные release notes вынесены в отдельный файл:
+[CHANGELOG.md](CHANGELOG.md).
 
-| Компонент | Описание изменений |
-| :--- | :--- |
-| **Новые транспорты** | Добавлены ShadowTLS v3 + Trojan, Hysteria2 с Salamander obfuscation и Snell v4; реализованы установка, настройка из TUI, управление пользователями и выдача клиентских конфигураций. |
-| **Подписки и доступ** | Расширена генерация конфигураций для NekoBox и Throne, сохранены цепочки ShadowTLS и режим TrustTunnel QUIC; блокировка и удаление пользователя теперь немедленно отзывают доступ. |
-| **Мониторинг и трафик** | Переработаны экран трафика и просмотр сервисных логов, стабилизирован `traffic_daemon`, добавлен детальный мониторинг пользователей и повтор применения конфигурации после сбоя синхронизации. |
-| **Маршрутизация** | qWDTT интегрирован в общий контур маршрутизации; исправлены зависание просмотра логов, совместимость ShadowTLS и конфликты клиентских TUN/QUIC-конфигураций. |
-| **TUI и диагностика** | Унифицированы экраны управления протоколами и статусы, добавлены пресеты SNI/обфускации, повышена точность VPS-диагностики и расширено тестовое покрытие. |
-| **Оптимизация сети** | Добавлен системный профиль автотюнинга прокси-нагрузки: BBR/FQ, адаптивные буферы, очереди и TCP-параметры применяются из TUI в один клик с резервной копией и откатом. |
+## Headless CLI
 
-### [2.3.5] — 17.07.2026
+Для автоматизации и безопасного просмотра состояния доступен JSON CLI:
 
-| Компонент | Описание изменений |
-| :--- | :--- |
-| **Оркестрация** | Внедрен транзакционный цикл `configure → validate → apply → commit/rollback` с межпроцессными блокировками. |
-| **Безопасность** | Исправлено управление портами, удаление правил UFW/iptables, валидация nftables/Caddy перед применением. |
-| **Биллинг** | Реализован монотонный учет трафика по Clash API (устойчивый к сбросу интерфейсов и ротации логов). |
-| **UI/TUI** | Приведение единиц к IEC (KiB/MiB/GiB), скрытие неактивных пиров AWG. |
+```bash
+sudo hydra status
+sudo hydra validate
+sudo hydra plan
+sudo hydra apply --dry-run
+sudo hydra user list
+```
 
-### [2.3.4] — 11.07.2026
-
-| Компонент | Описание изменений |
-| :--- | :--- |
-| **WARP** | Поддержка кастомных WireGuard/AmneziaWG профилей и раздельный роутинг списков. |
-
-### [2.3.3] — 09.07.2026
-
-| Компонент | Описание изменений |
-| :--- | :--- |
-| **Fail2ban** | Изолированные джейлы для каждого протокола (`recidive`), защита от Portscan для приватных подсетей. |
-| **AmneziaWG** | Добавлен мастер настройки обфускации и гейминг-профиль `low_latency`. |
-| **Mieru** | Пресеты обфускации в TUI и генерация ссылок `mierus://` для клиента Karing. |
-
-### [2.3.2] — 09.07.2026
-
-| Компонент | Описание изменений |
-| :--- | :--- |
-| **Мультиплексор** | Бесшовная миграция с HAProxy на Caddy L4. Разрешены конфликты портов NaiveProxy. |
-| **Компиляция** | Поддержка кросс-компиляции на ARM64/AMD64. |
-
----
+`apply --dry-run` только собирает и проверяет план. Изменения выполняются
+только командой `sudo hydra apply`.
 
 ## 🔗 Связанные проекты
 
@@ -439,17 +414,3 @@ HYDRA-ULTIMATE/
 3. Распространение любых измененных или производных версий кода на аналогичных условиях лицензии GPL-3.0 (принцип копилефта).
 
 Copyright (c) 2026 gr33nimax.
-### Headless CLI
-
-Для автоматизации и безопасного просмотра состояния доступен JSON CLI:
-
-```bash
-sudo hydra status
-sudo hydra validate
-sudo hydra plan
-sudo hydra apply --dry-run
-sudo hydra user list
-```
-
-`apply --dry-run` только собирает и проверяет план. Изменения выполняются
-только командой `sudo hydra apply`.
