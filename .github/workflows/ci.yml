@@ -9,8 +9,34 @@ permissions:
   contents: read
 
 jobs:
-  tests:
+  # Fast feedback for the normal dev/main push workflow.
+  tests-fast:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - name: Install development dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.lock
+      - name: Compile
+        run: python -m compileall -q main.py hydra
+      - name: Lint correctness
+        run: ruff check main.py hydra tests
+      - name: Test
+        env:
+          PYTHONFAULTHANDLER: "1"
+        run: python -m pytest -vv --tb=short
+
+  # Exercise every supported interpreter before merging a pull request.
+  tests-matrix:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -29,10 +55,13 @@ jobs:
       - name: Lint correctness
         run: ruff check main.py hydra tests
       - name: Test
-        run: python -m pytest -q
+        env:
+          PYTHONFAULTHANDLER: "1"
+        run: python -m pytest -vv --tb=short
 
   dependency-audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
