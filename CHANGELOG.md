@@ -18,6 +18,8 @@ Plugin contract completion — added typed `PluginCapabilities`, `LifecycleResul
 
 Typed configuration boundary — plugin config and `ConfigFragment` now use recursive JSON types, strict nested validation, serialization helpers and a defensive legacy-dict adapter. Invalid Python-only values are rejected before state persistence or runtime configuration.
 
+Persisted/runtime separation — added immutable `RuntimeSnapshot` and `RuntimePluginState` models. Status, doctor and reconciliation consume live runtime facts without adding runtime snapshots to persisted `state.json`.
+
 ### Runtime reconciliation
 
 `hydra doctor` now reports desired-vs-actual runtime drift and a read-only correction plan. The new `hydra reconcile` command shows the same plan; `hydra reconcile --apply` explicitly applies only safe enable/disable actions and never installs missing components automatically.

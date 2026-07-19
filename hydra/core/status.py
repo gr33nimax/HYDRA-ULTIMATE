@@ -24,6 +24,8 @@ def build_status(state: AppState) -> dict:
     from hydra.plugins.registry import status_all
 
     plugins = status_all(state)
+    from hydra.core.runtime_state import RuntimeSnapshot
+    runtime = RuntimeSnapshot.from_statuses(plugins)
     network = asdict(state.network)
     dnscrypt = plugins.get("dnscrypt", {})
     # Older state files may have a stale network flag while the dedicated
@@ -38,4 +40,5 @@ def build_status(state: AppState) -> dict:
         "users": len(state.users),
         "network": network,
         "plugins": plugins,
+        "runtime": runtime.as_dict(),
     }

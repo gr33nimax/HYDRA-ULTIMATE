@@ -8,6 +8,7 @@ from pathlib import Path
 
 from hydra.core.host import HOST
 from hydra.core.state import AppState, STATE_DIR, validate_state
+from hydra.core.runtime_state import RuntimeSnapshot
 
 
 def _check(name: str, ok: bool, detail: str, *, required: bool = True) -> dict:
@@ -53,14 +54,14 @@ def run_doctor(state: AppState) -> dict:
         from hydra.services.protocols import ProtocolService
 
         statuses = registry.status_all(state)
+        runtime = RuntimeSnapshot.from_statuses(statuses)
         service = ProtocolService(orchestrator, registry).reconciliation()
         actions = service.plan(state)
         reconciliation = {
             "planned": [asdict(action) for action in actions],
             "drift": {
-                name: status["drift"]
-                for name, status in statuses.items()
-                if status.get("drift", "none") != "none"
+                name: drift
+                for name, drift in runtime.drifts().items()
             },
         }
     except Exception as exc:
