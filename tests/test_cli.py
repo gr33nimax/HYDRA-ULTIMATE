@@ -30,3 +30,13 @@ def test_user_list_does_not_require_root(capsys):
     assert "u@example.com" in output
     assert "secret" not in output
     assert '"protocols": [\n        "naive"' in output
+
+
+def test_backup_command_dispatches_to_backup_service(capsys):
+    result = {"ok": True, "archive": "/tmp/hydra.tar.gz", "files": 1, "bytes": 42}
+    with patch.object(cli, "load_state", return_value=AppState()), \
+         patch.object(cli, "_require_root"), \
+         patch("hydra.core.backup.create_backup", return_value=result) as create:
+        assert cli.main(["backup", "--output", "/tmp/hydra.tar.gz"]) == 0
+    create.assert_called_once_with("/tmp/hydra.tar.gz")
+    assert '"archive": "/tmp/hydra.tar.gz"' in capsys.readouterr().out

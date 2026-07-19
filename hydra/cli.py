@@ -80,6 +80,8 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser("status", help="Show runtime and plugin status as JSON")
     commands.add_parser("validate", help="Validate persisted state")
     commands.add_parser("plan", help="Build a side-effect-free apply plan")
+    backup = commands.add_parser("backup", help="Create a state and service configuration backup")
+    backup.add_argument("--output", type=str, default="", help="Archive path or destination directory")
     apply = commands.add_parser("apply", help="Apply configuration")
     apply.add_argument("--dry-run", action="store_true")
 
@@ -108,6 +110,10 @@ def main(argv: list[str] | None = None) -> int:
             payload = {"valid": True, "schema_version": state.version}
         elif args.command == "plan" or (args.command == "apply" and args.dry_run):
             payload = build_plan(state)
+        elif args.command == "backup":
+            _require_root()
+            from hydra.core.backup import create_backup
+            payload = create_backup(args.output or None)
         elif args.command == "apply":
             _require_root()
             from hydra.core.orchestrator import apply_config, last_apply_error
