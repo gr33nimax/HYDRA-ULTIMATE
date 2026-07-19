@@ -148,7 +148,29 @@ def test_collect_fragments_keeps_endpoint_only_fragment():
     with patch("hydra.plugins.registry._PLUGINS", [plugin]):
         fragments = registry.collect_fragments(state)
 
+    assert "mock" in fragments
     assert fragments["mock"].endpoints[0]["tag"] == "ep"
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    [
+        ConfigFragment(inbounds=["not-an-object"]),
+        ConfigFragment(nft_tproxy_ports=[0]),
+        ConfigFragment(nft_tproxy_ports=[True]),
+        ConfigFragment(nft_tproxy_ifaces=[""]),
+    ],
+)
+def test_collect_fragments_rejects_invalid_plugin_output(fragment):
+    from hydra.plugins import registry
+
+    state = AppState(protocols={"mock": PluginState(enabled=True)})
+    plugin = MockPlugin()
+
+    with patch.object(registry, "_PLUGINS", [plugin]), \
+         patch.object(plugin, "configure", return_value=fragment), \
+         pytest.raises(registry.PluginConfigurationError, match="mock"):
+        registry.collect_fragments(state)
 
 
 def test_central_apply_preserves_wdtt_legacy_lifecycle():

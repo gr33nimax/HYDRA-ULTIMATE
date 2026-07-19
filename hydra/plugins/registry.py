@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Optional
 
 from hydra.plugins.base import BasePlugin, ConfigFragment, PluginCategory
+from hydra.plugins.config import validate_fragment
 from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
 from hydra.plugins.mieru.plugin import MieruPlugin
 from hydra.plugins.naive.plugin import NaivePlugin
@@ -91,7 +92,8 @@ def collect_fragments(state: AppState) -> dict[str, ConfigFragment]:
     for p in enabled(state):
         try:
             f = p.configure(state)
-            if f and (f.inbounds or f.outbounds or f.route_rules or f.nft_tproxy_ports or f.nft_tproxy_ifaces or f.endpoints or f.dns):
+            validate_fragment(f)
+            if not f.is_empty():
                 fragments[p.meta.name] = f
         except Exception as e:
             from hydra.core.singbox import _log

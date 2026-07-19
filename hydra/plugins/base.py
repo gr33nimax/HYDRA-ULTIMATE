@@ -5,6 +5,7 @@ import enum
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from hydra.core.state import AppState, User
+from hydra.plugins.config import ConfigFragment
 
 
 class PluginCategory(enum.Enum):
@@ -33,17 +34,6 @@ class PluginStatus:
     running: bool
     port: int = 0
     info: dict = field(default_factory=dict)
-
-
-@dataclass
-class ConfigFragment:
-    inbounds: list[dict] = field(default_factory=list)
-    outbounds: list[dict] = field(default_factory=list)
-    route_rules: list[dict] = field(default_factory=list)
-    nft_tproxy_ports: list[int] = field(default_factory=list)
-    nft_tproxy_ifaces: list[str] = field(default_factory=list)
-    endpoints: list[dict] = field(default_factory=list)
-    dns: dict = field(default_factory=dict)
 
 
 class BasePlugin(ABC):

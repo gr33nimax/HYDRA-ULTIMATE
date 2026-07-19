@@ -9,6 +9,7 @@ Typed errors — добавлены типизированные ошибки `H
 Plugin capabilities — `PluginMeta` теперь может декларативно описывать required commands, services и конфликты; `hydra plan` показывает проблемы зависимостей до применения.
 UI decomposition — фоновое определение public IP, GeoIP-флага и системного DNS вынесено из монолитного `menus.py` в отдельный потокобезопасный `network_info.py`.
 Log viewer — чтение файловых логов, journalctl и live-follow вынесены в отдельный `log_viewer.py`; публичные внутренние функции меню сохранены для обратной совместимости.
+Typed plugin config — `ConfigFragment` вынесен в отдельную типизированную границу и валидируется до генерации Sing-Box/nftables; некорректный вывод плагина теперь останавливает apply с именем виновного плагина.
 
 ### Backup и восстановление
 
