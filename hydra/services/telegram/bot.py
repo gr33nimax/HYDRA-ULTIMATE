@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from hydra.core.state import (
-    AppState, User, load_state, save_state, find_user, add_user,
+    AppState, User, load_state, save_state, find_user,
 )
 from hydra.services.subscriptions.generator import (
     generate_singbox_config, generate_client_config,

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Application services — stage 9
+
+Добавлен единый `ApplicationService` как composition root для CLI и будущих адаптеров. Проверенный CLI теперь получает пользовательский lifecycle, управление протоколами, статус и применение конфигурации через прикладной фасад; CLI больше не собирает `orchestrator` и `registry` вручную. Telegram-бот намеренно не включён в этот перенос: его рабочий контракт и smoke-проверки требуют отдельного этапа. Сервисный слой покрыт делегирующими и failure-тестами.
+
 ### UI decomposition — stage 8
 
 Protocol and network-service menu presentation is now isolated in `hydra/ui/protocol_menu.py`. Deterministic status rows, selectable options, common navigation entries and runtime-status fallback rendering no longer live inside the monolithic `menus.py` loop. Existing menu entry points and plugin ordering remain unchanged, while the extracted boundary is directly covered by focused tests.

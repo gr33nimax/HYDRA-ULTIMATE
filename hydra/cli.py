@@ -10,7 +10,11 @@ import uuid
 from dataclasses import asdict
 
 from hydra.core.state import AppState, User, load_state, validate_state
-from hydra.core.status import build_status, public_user
+from hydra.core.status import public_user
+from hydra.services.application import production_application
+
+
+APP = production_application()
 
 
 def _print(payload: object) -> None:
@@ -32,10 +36,7 @@ def build_plan(state: AppState) -> dict:
     fragments = registry.collect_fragments(candidate)
     config = singbox.generate_config(candidate, fragments)
     conflicts = singbox._preflight_conflicts(config)
-    from hydra.core import orchestrator
-    from hydra.plugins import registry
-    from hydra.services.protocols import ProtocolService
-    reconciliation = ProtocolService(orchestrator, registry).reconciliation().plan(state)
+    reconciliation = APP.protocols.reconciliation().plan(state)
     return {
         "valid": not conflicts,
         "conflicts": conflicts,
@@ -52,14 +53,12 @@ def build_plan(state: AppState) -> dict:
 
 
 def _status(state: AppState) -> dict:
-    return build_status(state)
+    return APP.status(state)
 
 
 def _user_command(args: argparse.Namespace, state: AppState) -> dict:
-    from hydra.core import orchestrator
-
     if args.user_action == "list":
-        return {"users": [public_user(user) for user in state.users]}
+        return {"users": [public_user(user) for user in APP.users.list(state)]}
     _require_root()
     if args.user_action == "add":
         user = User(
@@ -69,12 +68,12 @@ def _user_command(args: argparse.Namespace, state: AppState) -> dict:
             expiry_date=args.expiry_date,
         )
         validate_state(AppState(users=[user]))
-        orchestrator.add_user(state, user)
+        APP.add_user(state, user)
         return {"ok": True, "user": asdict(user)}
     actions = {
-        "block": orchestrator.block_user,
-        "unblock": orchestrator.unblock_user,
-        "remove": orchestrator.remove_user,
+        "block": APP.block_user,
+        "unblock": APP.unblock_user,
+        "remove": APP.remove_user,
     }
     actions[args.user_action](state, args.email)
     return {"ok": True, "email": args.email, "action": args.user_action}
@@ -140,10 +139,7 @@ def main(argv: list[str] | None = None) -> int:
             from hydra.core.doctor import run_doctor
             payload = run_doctor(state)
         elif args.command == "reconcile":
-            from hydra.core import orchestrator
-            from hydra.plugins import registry
-            from hydra.services.protocols import ProtocolService
-            service = ProtocolService(orchestrator, registry).reconciliation()
+            service = APP.protocols.reconciliation()
             if args.apply:
                 _require_root()
                 from dataclasses import asdict
@@ -161,9 +157,8 @@ def main(argv: list[str] | None = None) -> int:
             payload = check_upgrade(state)
         elif args.command == "apply":
             _require_root()
-            from hydra.core.orchestrator import apply_config, last_apply_error
-            ok = apply_config(state)
-            payload = {"ok": ok, "error": "" if ok else last_apply_error()}
+            ok = APP.apply(state)
+            payload = {"ok": ok, "error": "" if ok else APP.apply_error()}
             _print(payload)
             return 0 if ok else 1
         else:
