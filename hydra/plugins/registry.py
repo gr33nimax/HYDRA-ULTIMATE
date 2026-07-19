@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from hydra.plugins.base import BasePlugin, ConfigFragment, PluginCategory
+from hydra.plugins.base import BasePlugin, ConfigFragment, PluginCategory, PluginStatus
 from hydra.plugins.config import validate_fragment
 from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
 from hydra.plugins.mieru.plugin import MieruPlugin
@@ -24,6 +24,7 @@ from hydra.core.state import AppState
 from hydra.core.host import HOST
 from hydra.core.apply_transaction import ApplyTransaction
 from hydra.core.errors import PluginError
+from hydra.plugins.runtime import assess
 
 _PLUGINS: list[BasePlugin] = [
     AmneziaWGPlugin(),
@@ -162,28 +163,44 @@ def apply_enabled(state: AppState) -> list[tuple[BasePlugin, object]]:
     return applied
 
 
-def status_all() -> dict[str, dict]:
+def status_all(state: AppState | None = None) -> dict[str, dict]:
     """Возвращает {name: {running, installed, port, enabled}} для всех плагинов."""
     result: dict[str, dict] = {}
     for p in _PLUGINS:
         try:
             s = p.status()
+            desired_enabled = (
+                state.protocols.get(p.meta.name).enabled
+                if state is not None and state.protocols.get(p.meta.name)
+                else s.enabled
+            )
             result[p.meta.name] = {
                 "running": s.running,
                 "installed": s.installed,
                 "port": s.port,
                 "enabled": s.enabled,
                 "error": "",
+                **assess(s, desired_enabled).as_dict(),
             }
         except Exception as exc:
             # A broken optional service must not make the whole protocol
             # dashboard unusable.  Its own card will expose the failure.
+            desired_enabled = (
+                state.protocols.get(p.meta.name).enabled
+                if state is not None and state.protocols.get(p.meta.name)
+                else False
+            )
             result[p.meta.name] = {
                 "running": False,
                 "installed": False,
                 "port": 0,
                 "enabled": False,
                 "error": str(exc) or exc.__class__.__name__,
+                **assess(
+                    PluginStatus(installed=False, enabled=False, running=False),
+                    desired_enabled,
+                    str(exc) or exc.__class__.__name__,
+                ).as_dict(),
             }
     return result
 

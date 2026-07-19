@@ -101,6 +101,23 @@ def test_status_all_returns_all_plugins():
     assert result["mock"]["installed"] is True
 
 
+def test_status_all_separates_desired_state_from_runtime():
+    from hydra.plugins import registry
+
+    plugin = MockPlugin()
+    plugin.status = MagicMock(
+        return_value=PluginStatus(installed=True, enabled=False, running=False)
+    )
+    state = AppState(protocols={"mock": PluginState(enabled=True)})
+
+    with patch.object(registry, "_PLUGINS", [plugin]):
+        result = registry.status_all(state)["mock"]
+
+    assert result["desired_enabled"] is True
+    assert result["actual_state"] == "stopped"
+    assert result["drift"] == "stopped"
+
+
 def test_status_all_isolates_broken_plugin():
     """Ошибка одного status() не должна скрывать остальные протоколы."""
     from hydra.plugins import registry

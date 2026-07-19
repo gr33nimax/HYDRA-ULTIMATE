@@ -21,7 +21,7 @@ class ProtocolCatalog(Protocol):
     def transports(self) -> list[BasePlugin]: ...
     def enhancements(self) -> list[BasePlugin]: ...
     def security(self) -> list[BasePlugin]: ...
-    def status_all(self) -> dict[str, dict[str, Any]]: ...
+    def status_all(self, state: AppState | None = None) -> dict[str, dict[str, Any]]: ...
 
 
 @dataclass(frozen=True)
@@ -47,8 +47,8 @@ class ProtocolService:
     def get(self, name: str) -> BasePlugin | None:
         return self.catalog.get(name)
 
-    def statuses(self) -> dict[str, dict[str, Any]]:
-        return self.catalog.status_all()
+    def statuses(self, state: AppState | None = None) -> dict[str, dict[str, Any]]:
+        return self.catalog.status_all(state) if state is not None else self.catalog.status_all()
 
     def install(self, state: AppState, name: str) -> bool:
         return self.operations.install_plugin(state, name)

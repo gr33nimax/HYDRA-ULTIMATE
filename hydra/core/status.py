@@ -23,7 +23,7 @@ def build_status(state: AppState) -> dict:
     """Build a JSON-safe status snapshot with effective runtime flags."""
     from hydra.plugins.registry import status_all
 
-    plugins = status_all()
+    plugins = status_all(state)
     network = asdict(state.network)
     dnscrypt = plugins.get("dnscrypt", {})
     # Older state files may have a stale network flag while the dedicated

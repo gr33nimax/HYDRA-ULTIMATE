@@ -76,11 +76,16 @@ def protocol_status_panel(
 
 def status_badge(status: dict[str, Any]) -> str:
     """Return an explicit status marker that remains clear without colours."""
+    drift = status.get("drift")
+    if drift == "unexpectedly_running":
+        return f"{YELLOW}{BOLD}{'! ЛИШНИЙ ПРОЦЕСС':<16}{NC}"
+    if drift == "unknown":
+        return f"{RED}{BOLD}{'! НЕИЗВЕСТНО':<16}{NC}"
     if status.get("running"):
         return f"{GREEN}{BOLD}{'✓ РАБОТАЕТ':<16}{NC}"
     if status.get("error"):
         return f"{RED}{BOLD}{'! ОШИБКА СТАТУСА':<16}{NC}"
-    if status.get("installed") and status.get("enabled"):
+    if status.get("installed") and status.get("desired_enabled", status.get("enabled")):
         return f"{RED}{BOLD}{'✕ СБОЙ':<16}{NC}"
     if status.get("installed"):
         return f"{YELLOW}{'○ ОТКЛЮЧЁН':<16}{NC}"

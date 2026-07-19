@@ -610,7 +610,7 @@ def _rollback_network_tuning_menu() -> None:
 def menu_protocols(state: AppState):
     while True:
         clear()
-        st = _protocol_service.statuses()
+        st = _protocol_service.statuses(state)
 
         transport_lines = []
         for p in _protocol_service.list(PluginCategory.TRANSPORT):
@@ -654,7 +654,7 @@ def menu_protocols(state: AppState):
 def menu_network_services(state: AppState):
     while True:
         clear()
-        st = _protocol_service.statuses()
+        st = _protocol_service.statuses(state)
 
         enhancement_lines = []
         for p in _protocol_service.list(PluginCategory.ENHANCEMENT):

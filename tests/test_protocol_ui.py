@@ -25,6 +25,8 @@ def test_status_badges_are_explicit_without_relying_on_colour():
     assert "✕ СБОЙ" in status_badge({"installed": True, "enabled": True})
     assert "— НЕ УСТАНОВЛЕН" in status_badge({})
     assert "! ОШИБКА СТАТУСА" in status_badge({"error": "boom"})
+    assert "! ЛИШНИЙ ПРОЦЕСС" in status_badge({"running": True, "drift": "unexpectedly_running"})
+    assert "! НЕИЗВЕСТНО" in status_badge({"drift": "unknown"})
 
 
 def test_protocol_panel_has_canonical_field_order(capsys):
