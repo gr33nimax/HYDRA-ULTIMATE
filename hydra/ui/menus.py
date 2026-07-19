@@ -60,12 +60,12 @@ from hydra.ui.protocol_menu import (
 )
 from hydra.ui.network_info import snapshot as network_snapshot
 from hydra.ui import log_viewer, system_monitor
-from hydra.services.users import UserService
-from hydra.services.protocols import ProtocolService
+from hydra.services.application import ApplicationService, production_application
 
 
-_user_service = UserService(orchestrator)
-_protocol_service = ProtocolService(orchestrator, plugin_registry)
+def _application(app: ApplicationService | None = None) -> ApplicationService:
+    """Resolve explicit menu dependencies while keeping legacy calls working."""
+    return app or production_application()
 
 
 def _apply_error_text(default: str = "Ошибка применения конфигурации") -> str:
@@ -391,7 +391,8 @@ def _user_links(state: AppState, user: User):
 #  Главное меню
 # ═════════════════════════════════════════════════════════════════════════════
 
-def main_menu(state: AppState):
+def main_menu(state: AppState, app: ApplicationService | None = None):
+    app = _application(app)
     while True:
         clear()
         print(BANNER)
@@ -441,9 +442,9 @@ def main_menu(state: AppState):
         elif choice == "1":
             menu_core(state)
         elif choice == "2":
-            menu_protocols(state)
+            menu_protocols(state, app)
         elif choice == "3":
-            menu_users(state)
+            menu_users(state, app)
         elif choice == "4":
             menu_telegram(state)
         elif choice == "5":
@@ -451,7 +452,7 @@ def main_menu(state: AppState):
         elif choice == "6":
             menu_security(state)
         elif choice == "7":
-            menu_network_services(state)
+            menu_network_services(state, app)
         elif choice == "8":
             from hydra.ui.diagnostics import menu_diagnostics
             menu_diagnostics(state)
@@ -613,11 +614,12 @@ def _rollback_network_tuning_menu() -> None:
 #  2. Протоколы — разбиты по категориям
 # ═════════════════════════════════════════════════════════════════════════════
 
-def menu_protocols(state: AppState):
+def menu_protocols(state: AppState, app: ApplicationService | None = None):
+    app = _application(app)
     while True:
         clear()
-        st = _protocol_service.statuses(state)
-        all_p = _protocol_service.list(PluginCategory.TRANSPORT)
+        st = app.protocols.statuses(state)
+        all_p = app.protocols.list(PluginCategory.TRANSPORT)
 
         transport_lines = transport_summary_lines(all_p, st)
 
@@ -637,16 +639,17 @@ def menu_protocols(state: AppState):
                 idx = int(choice) - 1
                 if 0 <= idx < len(all_p):
                     p = all_p[idx]
-                    menu_plugin(state, p)
+                    menu_plugin(state, p, app)
             except ValueError:
                 pass
 
 
-def menu_network_services(state: AppState):
+def menu_network_services(state: AppState, app: ApplicationService | None = None):
+    app = _application(app)
     while True:
         clear()
-        st = _protocol_service.statuses(state)
-        all_p = _protocol_service.list(PluginCategory.ENHANCEMENT)
+        st = app.protocols.statuses(state)
+        all_p = app.protocols.list(PluginCategory.ENHANCEMENT)
 
         enhancement_lines = enhancement_summary_lines(all_p, st)
 
@@ -666,12 +669,13 @@ def menu_network_services(state: AppState):
                 idx = int(choice) - 1
                 if 0 <= idx < len(all_p):
                     p = all_p[idx]
-                    menu_plugin(state, p)
+                    menu_plugin(state, p, app)
             except ValueError:
                 pass
 
 
-def menu_plugin(state: AppState, p):
+def menu_plugin(state: AppState, p, app: ApplicationService | None = None):
+    app = _application(app)
     """Универсальное меню плагина."""
     if p.meta.name == "amneziawg":
         _menu_amneziawg(state, p)
@@ -761,11 +765,11 @@ def menu_plugin(state: AppState, p):
         if choice == "1":
             if not ps.installed:
                 info("Установка...")
-                ok = _protocol_service.install(state, p.meta.name)
+                ok = app.protocols.install(state, p.meta.name)
                 if ok:
                     success("Установлено!")
                     try:
-                        if _protocol_service.enable(state, p.meta.name):
+                        if app.protocols.enable(state, p.meta.name):
                             success("Протокол включён и применён")
                         else:
                             error(_apply_error_text())
@@ -774,13 +778,13 @@ def menu_plugin(state: AppState, p):
                 else:
                     error("Ошибка установки")
             elif ps.enabled:
-                if _protocol_service.disable(state, p.meta.name):
+                if app.protocols.disable(state, p.meta.name):
                     success("Протокол выключен")
                 else:
                     error(_apply_error_text())
             else:
                 try:
-                    if _protocol_service.enable(state, p.meta.name):
+                    if app.protocols.enable(state, p.meta.name):
                         success("Протокол включён")
                     else:
                         error(_apply_error_text())
@@ -831,7 +835,7 @@ def menu_plugin(state: AppState, p):
 
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):
-                ok = _protocol_service.reinstall(state, p.meta.name)
+                ok = app.protocols.reinstall(state, p.meta.name)
                 if ok:
                     success("Переустановлено!")
                 else:
@@ -840,7 +844,7 @@ def menu_plugin(state: AppState, p):
         
         elif choice == "9" and ps.installed:
             if confirm(f"Удалить {p.meta.name}?", default=False):
-                _protocol_service.uninstall(state, p.meta.name)
+                app.protocols.uninstall(state, p.meta.name)
                 success("Удалено")
                 prompt("Нажмите Enter")
                 return
@@ -1034,7 +1038,8 @@ def _show_plugin_clients(state: AppState, p):
 #  3. Пользователи — полностью переработано
 # ═════════════════════════════════════════════════════════════════════════════
 
-def menu_users(state: AppState):
+def menu_users(state: AppState, app: ApplicationService | None = None):
+    app = _application(app)
     """Управление пользователями."""
     while True:
         clear()
@@ -1058,18 +1063,19 @@ def menu_users(state: AppState):
         if choice == "1":
             _show_users(state)
         elif choice == "2":
-            _add_user(state)
+            _add_user(state, app)
         elif choice == "3":
             user = _select_user(state)
             if user:
-                _user_detail_menu(state, user)
+                _user_detail_menu(state, user, app)
         elif choice == "4":
             menu_subscription_server(state)
         elif choice == "0":
             return
 
 
-def _user_detail_menu(state: AppState, user: User):
+def _user_detail_menu(state: AppState, user: User, app: ApplicationService | None = None):
+    app = _application(app)
     """Детальное меню пользователя с конфигами и управлением."""
     while True:
         clear()
@@ -1120,7 +1126,7 @@ def _user_detail_menu(state: AppState, user: User):
         elif choice == "2":
             _user_configs(state, user)
         elif choice == "3":
-            _toggle_block(state, user)
+            _toggle_block(state, user, app)
         elif choice == "4":
             new_lim = prompt("Введите лимит трафика в GiB (0 или пусто для безлимита)", default=str(user.traffic_limit_gb or ""))
             try:
@@ -1130,7 +1136,7 @@ def _user_detail_menu(state: AppState, user: User):
                 user.traffic_limit_gb = val
                 save_state(state)
                 success(f"Лимит трафика: {f'{val:g} GiB' if val else 'без ограничений'}")
-                _reconcile_user_access(state, user)
+                _reconcile_user_access(state, user, app)
                 prompt("Нажмите Enter")
             except ValueError:
                 error("Лимит должен быть неотрицательным конечным числом.")
@@ -1152,11 +1158,11 @@ def _user_detail_menu(state: AppState, user: User):
                     error("Неверный формат даты! Используйте ГГГГ-ММ-ДД.")
                     prompt("Нажмите Enter")
                     continue
-            _reconcile_user_access(state, user)
+            _reconcile_user_access(state, user, app)
             prompt("Нажмите Enter")
         elif choice == "6":
             if confirm(f"Удалить {user.email}?", default=False):
-                _user_service.remove(state, user.email)
+                app.remove_user(state, user.email)
                 success(f"Пользователь {user.email} удалён")
                 prompt("Нажмите Enter")
                 return
@@ -1164,15 +1170,16 @@ def _user_detail_menu(state: AppState, user: User):
             return
 
 
-def _reconcile_user_access(state: AppState, user: User) -> None:
+def _reconcile_user_access(state: AppState, user: User, app: ApplicationService | None = None) -> None:
+    app = _application(app)
     """Немедленно применяет новые TTL/квоту к серверным конфигурациям."""
     entitled, reason = get_user_entitlement_status(user)
     if not entitled and not user.blocked:
-        _user_service.block(state, user.email)
+        app.block_user(state, user.email)
         warn(f"Доступ отключён: {reason}.")
     elif entitled and user.blocked:
         if confirm("Ограничения больше не превышены. Разблокировать пользователя?", default=True):
-            _user_service.unblock(state, user.email)
+            app.unblock_user(state, user.email)
             success("Пользователь разблокирован")
 
 
@@ -1587,7 +1594,8 @@ def _show_users(state: AppState):
     prompt("Нажмите Enter")
 
 
-def _add_user(state: AppState):
+def _add_user(state: AppState, app: ApplicationService | None = None):
+    app = _application(app)
     """Добавление нового пользователя с автогенерацией конфигов."""
     clear()
     title("Добавить пользователя")
@@ -1626,7 +1634,7 @@ def _add_user(state: AppState):
         created_at=datetime.now().isoformat(),
     )
     
-    _user_service.add(state, user)
+    app.add_user(state, user)
     
     success(f"Пользователь {email} создан")
     if enabled_transports:
@@ -1635,7 +1643,8 @@ def _add_user(state: AppState):
     prompt("Нажмите Enter")
 
 
-def _toggle_block(state: AppState, user: User):
+def _toggle_block(state: AppState, user: User, app: ApplicationService | None = None):
+    app = _application(app)
     """Переключает блокировку пользователя."""
     if user.blocked:
         entitled, reason = get_user_entitlement_status(user)
@@ -1643,10 +1652,10 @@ def _toggle_block(state: AppState, user: User):
             error(f"Нельзя разблокировать: {reason}. Сначала измените лимит или срок действия.")
             prompt("Нажмите Enter")
             return
-        _user_service.unblock(state, user.email)
+        app.unblock_user(state, user.email)
         success(f"{user.email} разблокирован")
     else:
-        _user_service.block(state, user.email)
+        app.block_user(state, user.email)
         success(f"{user.email} заблокирован")
     prompt("Нажмите Enter")
 

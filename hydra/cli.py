@@ -14,7 +14,6 @@ from hydra.core.status import public_user
 from hydra.services.application import production_application
 
 
-APP = production_application()
 
 
 def _print(payload: object) -> None:
@@ -26,7 +25,7 @@ def _require_root() -> None:
         raise PermissionError("Команда, изменяющая систему, требует root")
 
 
-def build_plan(state: AppState) -> dict:
+def build_plan(state: AppState, app=None) -> dict:
     """Build and validate configuration on a copy without changing runtime state."""
     from hydra.core import singbox
     from hydra.plugins import registry
@@ -36,7 +35,8 @@ def build_plan(state: AppState) -> dict:
     fragments = registry.collect_fragments(candidate)
     config = singbox.generate_config(candidate, fragments)
     conflicts = singbox._preflight_conflicts(config)
-    reconciliation = APP.protocols.reconciliation().plan(state)
+    app = app or production_application()
+    reconciliation = app.protocols.reconciliation().plan(state)
     return {
         "valid": not conflicts,
         "conflicts": conflicts,
@@ -52,13 +52,14 @@ def build_plan(state: AppState) -> dict:
     }
 
 
-def _status(state: AppState) -> dict:
-    return APP.status(state)
+def _status(state: AppState, app=None) -> dict:
+    return (app or production_application()).status(state)
 
 
-def _user_command(args: argparse.Namespace, state: AppState) -> dict:
+def _user_command(args: argparse.Namespace, state: AppState, app=None) -> dict:
+    app = app or production_application()
     if args.user_action == "list":
-        return {"users": [public_user(user) for user in APP.users.list(state)]}
+        return {"users": [public_user(user) for user in app.users.list(state)]}
     _require_root()
     if args.user_action == "add":
         user = User(
@@ -68,12 +69,12 @@ def _user_command(args: argparse.Namespace, state: AppState) -> dict:
             expiry_date=args.expiry_date,
         )
         validate_state(AppState(users=[user]))
-        APP.add_user(state, user)
+        app.add_user(state, user)
         return {"ok": True, "user": asdict(user)}
     actions = {
-        "block": APP.block_user,
-        "unblock": APP.unblock_user,
-        "remove": APP.remove_user,
+        "block": app.block_user,
+        "unblock": app.unblock_user,
+        "remove": app.remove_user,
     }
     actions[args.user_action](state, args.email)
     return {"ok": True, "email": args.email, "action": args.user_action}
@@ -116,15 +117,16 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    app = production_application()
     try:
         state = load_state()
         if args.command == "status":
-            payload = _status(state)
+            payload = _status(state, app)
         elif args.command == "validate":
             validate_state(state)
             payload = {"valid": True, "schema_version": state.version}
         elif args.command == "plan" or (args.command == "apply" and args.dry_run):
-            payload = build_plan(state)
+            payload = build_plan(state, app)
         elif args.command == "backup":
             _require_root()
             from hydra.core.backup import create_backup
@@ -139,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
             from hydra.core.doctor import run_doctor
             payload = run_doctor(state)
         elif args.command == "reconcile":
-            service = APP.protocols.reconciliation()
+            service = app.protocols.reconciliation()
             if args.apply:
                 _require_root()
                 from dataclasses import asdict
@@ -157,12 +159,12 @@ def main(argv: list[str] | None = None) -> int:
             payload = check_upgrade(state)
         elif args.command == "apply":
             _require_root()
-            ok = APP.apply(state)
-            payload = {"ok": ok, "error": "" if ok else APP.apply_error()}
+            ok = app.apply(state)
+            payload = {"ok": ok, "error": "" if ok else app.apply_error()}
             _print(payload)
             return 0 if ok else 1
         else:
-            payload = _user_command(args, state)
+            payload = _user_command(args, state, app)
         _print(payload)
         return 0
     except Exception as exc:
