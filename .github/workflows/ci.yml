@@ -30,7 +30,19 @@ jobs:
       - name: Test
         env:
           PYTHONFAULTHANDLER: "1"
-        run: python -m pytest -vv --tb=short
+        shell: bash
+        run: |
+          set +e
+          python -m pytest -vv --tb=short 2>&1 | tee pytest.log
+          status=${PIPESTATUS[0]}
+          if (( status != 0 )); then
+            summary=$(tail -n 40 pytest.log)
+            summary=${summary//'%'/'%25'}
+            summary=${summary//$'\r'/'%0D'}
+            summary=${summary//$'\n'/'%0A'}
+            echo "::error title=Pytest failure::$summary"
+          fi
+          exit "$status"
 
   # Exercise every supported interpreter before merging a pull request.
   tests-matrix:
@@ -57,7 +69,19 @@ jobs:
       - name: Test
         env:
           PYTHONFAULTHANDLER: "1"
-        run: python -m pytest -vv --tb=short
+        shell: bash
+        run: |
+          set +e
+          python -m pytest -vv --tb=short 2>&1 | tee pytest.log
+          status=${PIPESTATUS[0]}
+          if (( status != 0 )); then
+            summary=$(tail -n 40 pytest.log)
+            summary=${summary//'%'/'%25'}
+            summary=${summary//$'\r'/'%0D'}
+            summary=${summary//$'\n'/'%0A'}
+            echo "::error title=Pytest failure::$summary"
+          fi
+          exit "$status"
 
   dependency-audit:
     runs-on: ubuntu-latest
