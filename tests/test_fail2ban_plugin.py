@@ -67,6 +67,14 @@ def test_install_already_installed():
         assert p.install() is True
 
 
+def test_portscan_cleanup_is_bounded_when_rule_never_disappears():
+    with patch("hydra.plugins.fail2ban.plugin.shutil.which", return_value="/usr/sbin/iptables"), \
+         patch("hydra.plugins.fail2ban.plugin._run", return_value=MagicMock(returncode=0)) as run:
+        assert Fail2banPlugin._sync_portscan_rule(False) is False
+    # check + (delete, check) repeated at most 32 times.
+    assert run.call_count == 1 + (32 * 2)
+
+
 def test_install_with_success():
     p = Fail2banPlugin()
     with patch.object(Fail2banPlugin, "_installed", side_effect=[False, True]), \

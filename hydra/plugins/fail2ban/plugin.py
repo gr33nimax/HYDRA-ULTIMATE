@@ -446,11 +446,15 @@ ignoreregex =
             if check.returncode == 0:
                 return True
             return _run(["iptables", "-I", "INPUT", "1", *_PORTSCAN_RULE]).returncode == 0
-        while check.returncode == 0:
+        # Keep cleanup bounded if iptables reports a stale/unchanging rule
+        # forever (and to prevent a broken command wrapper from hanging CI).
+        for _ in range(32):
+            if check.returncode != 0:
+                return True
             if _run(["iptables", "-D", "INPUT", *_PORTSCAN_RULE]).returncode != 0:
                 return False
             check = _run(["iptables", "-C", "INPUT", *_PORTSCAN_RULE])
-        return True
+        return check.returncode != 0
 
     def configure(self, state: AppState) -> ConfigFragment:
         return ConfigFragment()
