@@ -22,6 +22,7 @@ from hydra.plugins.hysteria2.plugin import Hysteria2Plugin
 from hydra.plugins.snell.plugin import SnellPlugin
 from hydra.core.state import AppState
 from hydra.core.host import HOST
+from hydra.core.apply_transaction import ApplyTransaction
 from hydra.core.errors import PluginError
 
 _PLUGINS: list[BasePlugin] = [
@@ -126,43 +127,39 @@ def requirements(state: AppState) -> dict[str, dict[str, list[str]]]:
 def apply_enabled(state: AppState) -> list[tuple[BasePlugin, object]]:
     """Apply the configuration prepared by every enabled plugin."""
     applied: list[tuple[BasePlugin, object]] = []
+    transaction = ApplyTransaction()
+    transaction.advance("snapshot")
+
+    def log_rollback_error(message: str) -> None:
+        from hydra.core.singbox import _log
+        _log("ERROR", message)
+
     for plugin in enabled(state):
         if not _uses_central_apply(plugin):
             continue
-        snapshot = None
-        snapshot_created = False
         try:
             snapshot = plugin.snapshot(state)
-            snapshot_created = True
+        except Exception as exc:
+            transaction.rollback(log_rollback_error)
+            raise RuntimeError(f"Plugin {plugin.meta.name} apply failed: {exc}") from exc
+
+        transaction.add_rollback(
+            f"plugin {plugin.meta.name}",
+            lambda plugin=plugin, snapshot=snapshot: plugin.rollback(state, snapshot),
+            priority=-(len(applied) + 1),
+        )
+        transaction.advance("apply")
+        try:
             apply_result = plugin.apply(state)
         except Exception as exc:
-            if snapshot_created:
-                try:
-                    plugin.rollback(state, snapshot)
-                except Exception as rollback_exc:
-                    from hydra.core.singbox import _log
-                    _log("ERROR", f"Rollback плагина {plugin.meta.name} не выполнен: {rollback_exc}")
-            _rollback_plugins(state, applied)
+            transaction.rollback(log_rollback_error)
             raise RuntimeError(f"Plugin {plugin.meta.name} apply failed: {exc}") from exc
         if not apply_result:
-            try:
-                plugin.rollback(state, snapshot)
-            except Exception as rollback_exc:
-                from hydra.core.singbox import _log
-                _log("ERROR", f"Rollback плагина {plugin.meta.name} не выполнен: {rollback_exc}")
-            _rollback_plugins(state, applied)
+            transaction.rollback(log_rollback_error)
             raise RuntimeError(f"Plugin {plugin.meta.name} apply returned false")
         applied.append((plugin, snapshot))
+    transaction.commit()
     return applied
-
-
-def _rollback_plugins(state: AppState, applied: list[tuple[BasePlugin, object]]) -> None:
-    for plugin, snapshot in reversed(applied):
-        try:
-            plugin.rollback(state, snapshot)
-        except Exception as rollback_exc:
-            from hydra.core.singbox import _log
-            _log("ERROR", f"Rollback плагина {plugin.meta.name} не выполнен: {rollback_exc}")
 
 
 def status_all() -> dict[str, dict]:

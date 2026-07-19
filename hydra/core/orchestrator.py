@@ -191,11 +191,13 @@ def _apply_config_unlocked(state: AppState) -> bool:
         message = f"Не удалось применить конфигурацию плагина: {exc}"
         return fail("plugins", message)
 
-    transaction.add_rollback(
-        "plugins",
-        lambda: _rollback_applied_plugins(state, applied_plugins),
-        priority=30,
-    )
+    plugin_count = len(applied_plugins)
+    for index, (plugin, snapshot) in enumerate(applied_plugins):
+        transaction.add_rollback(
+            f"plugin {plugin.meta.name}",
+            lambda plugin=plugin, snapshot=snapshot: plugin.rollback(state, snapshot),
+            priority=30 + plugin_count - index,
+        )
 
     res = singbox.reload()
 
@@ -242,14 +244,6 @@ def _restore_nft_snapshot(snapshot: nft.TproxySnapshot) -> None:
         nft.restore_tproxy(snapshot)
     except Exception as exc:
         singbox._log("ERROR", f"Не удалось восстановить правила nftables HYDRA: {exc}")
-
-
-def _rollback_applied_plugins(state: AppState, applied: list[tuple[object, object]]) -> None:
-    for plugin, snapshot in reversed(applied):
-        try:
-            plugin.rollback(state, snapshot)
-        except Exception as exc:
-            singbox._log("ERROR", f"Rollback плагина {plugin.meta.name} не выполнен: {exc}")
 
 
 def _restore_singbox_config(previous: bytes | None) -> None:

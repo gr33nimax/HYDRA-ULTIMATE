@@ -243,6 +243,26 @@ def test_central_apply_does_not_reuse_previous_snapshot_when_snapshot_fails():
     second.rollback.assert_not_called()
 
 
+def test_central_apply_rolls_back_plugins_in_reverse_order():
+    from hydra.plugins import registry
+
+    events = []
+    plugins = []
+    for name in ("first", "second", "third"):
+        plugin = MockPlugin()
+        plugin.meta = PluginMeta(name=name, description=name)
+        plugin.snapshot = MagicMock(return_value={"name": name})
+        plugin.rollback = MagicMock(side_effect=lambda state, snapshot: events.append(snapshot["name"]))
+        plugins.append(plugin)
+    plugins[-1].apply = MagicMock(return_value=False)
+    state = AppState(protocols={name: PluginState(enabled=True) for name in ("first", "second", "third")})
+
+    with patch.object(registry, "_PLUGINS", plugins), pytest.raises(RuntimeError):
+        registry.apply_enabled(state)
+
+    assert events == ["third", "second", "first"]
+
+
 def test_health_all_reports_only_unhealthy_enabled_plugins():
     from hydra.plugins import registry
 
