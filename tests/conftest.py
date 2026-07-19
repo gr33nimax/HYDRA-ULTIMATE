@@ -19,6 +19,8 @@ def isolate_host_filesystem(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(state, "STATE_DIR", state_dir)
     monkeypatch.setattr(state, "STATE_FILE", state_dir / "state.json")
     monkeypatch.setattr(sync_agent, "SYNC_LOCK", tmp_path / "run" / "sync-agent.lock")
+    monkeypatch.setattr(sync_agent, "WARP_CACHE_FILE", tmp_path / "warp_external.json")
+    monkeypatch.setattr(sync_agent, "SYNC_LOG", tmp_path / "sync-agent.log")
     monkeypatch.setattr(warp_plugin, "WARP_PROFILES_DIR", tmp_path / "warp-profiles")
     monkeypatch.setattr(sni_router, "CADDY_LOG_DIR", tmp_path / "caddy-log")
     monkeypatch.setattr(sni_router, "DECOY_LOG", tmp_path / "caddy-log" / "decoy-access.log")

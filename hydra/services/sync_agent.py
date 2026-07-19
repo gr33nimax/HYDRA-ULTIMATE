@@ -19,6 +19,8 @@ from hydra.services.traffic import check_traffic_limits
 
 
 SYNC_LOCK = Path("/run/hydra/sync-agent.lock")
+WARP_CACHE_FILE = Path("/var/lib/hydra/warp_external.json")
+SYNC_LOG = Path("/var/log/hydra/sync-agent.log")
 
 
 @contextmanager
@@ -139,7 +141,7 @@ def _run_sync(
             status = p.status()
             if status.enabled:
                 # Проверяем кэш
-                cache_file = Path("/var/lib/hydra/warp_external.json")
+                cache_file = WARP_CACHE_FILE
                 need_update = force_all_checks or not cache_file.exists()
                 if not need_update and cache_file.exists():
                     try:
@@ -257,7 +259,7 @@ def _run_sync(
 
 def _log(msg: str) -> None:
     try:
-        log = Path("/var/log/hydra/sync-agent.log")
+        log = SYNC_LOG
         log.parent.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with log.open("a", encoding="utf-8") as f:
