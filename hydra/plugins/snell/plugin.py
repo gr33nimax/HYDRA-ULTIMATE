@@ -98,7 +98,7 @@ class SnellPlugin(BasePlugin):
         }
         mode = self._obfs_mode(state)
         if mode:
-            query_params.update({"obfs": mode, "obfs-host": self._obfs_host(state)})
+            query_params.update({"obfs-mode": mode, "obfs-host": self._obfs_host(state)})
         query = urllib.parse.urlencode(query_params)
         tag = urllib.parse.quote(f"{user.email} Snell", safe="")
         return f"snell://{psk}@{server}:{self._port_for(user, state)}?{query}#{tag}"
