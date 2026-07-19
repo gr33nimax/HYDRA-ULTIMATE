@@ -100,6 +100,47 @@ class IPBanPlugin(BasePlugin):
     def apply(self, state: AppState) -> bool:
         return self._ensure_sets() and self._ensure_iptables_rules() and self._restore_from_state()
 
+    def snapshot(self, state: AppState):
+        saved_sets: list[str] = []
+        for name in (IPSET_V4, IPSET_V6):
+            result = _run(["ipset", "save", name], text=True)
+            if result.returncode == 0 and result.stdout:
+                saved_sets.append(result.stdout)
+        return {
+            "sets": "\n".join(saved_sets),
+            "rules_present": self._iptables_rules_present(),
+            "state": STATE_FILE.read_bytes() if STATE_FILE.exists() else None,
+        }
+
+    def rollback(self, state: AppState, snapshot) -> bool:
+        previous = snapshot or {}
+        ok = self._remove_iptables_rules()
+        for name in (IPSET_V4, IPSET_V6):
+            _run(["ipset", "flush", name])
+            _run(["ipset", "destroy", name])
+        saved_sets = previous.get("sets", "")
+        if saved_sets:
+            try:
+                restored = subprocess.run(
+                    ["ipset", "restore"], input=saved_sets,
+                    capture_output=True, text=True, timeout=30,
+                )
+                ok = restored.returncode == 0 and ok
+            except (OSError, subprocess.TimeoutExpired):
+                ok = False
+        state_content = previous.get("state")
+        if state_content is None:
+            STATE_FILE.unlink(missing_ok=True)
+        else:
+            STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            temporary = STATE_FILE.with_suffix(".json.rollback")
+            temporary.write_bytes(state_content)
+            temporary.replace(STATE_FILE)
+            STATE_FILE.chmod(0o600)
+        if previous.get("rules_present"):
+            ok = self._ensure_iptables_rules() and ok
+        return ok
+
     def status(self) -> PluginStatus:
         if not self._installed():
             return PluginStatus(installed=False, enabled=False, running=False)

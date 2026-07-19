@@ -95,17 +95,46 @@ def collect_fragments(state: AppState) -> dict[str, ConfigFragment]:
     return fragments
 
 
-def apply_enabled(state: AppState) -> None:
+def apply_enabled(state: AppState) -> list[tuple[BasePlugin, object]]:
     """Apply the configuration prepared by every enabled plugin."""
+    applied: list[tuple[BasePlugin, object]] = []
     for plugin in enabled(state):
         if plugin.meta.name in _CENTRAL_APPLY_EXCLUSIONS:
             continue
+        snapshot = None
+        snapshot_created = False
         try:
-            applied = plugin.apply(state)
+            snapshot = plugin.snapshot(state)
+            snapshot_created = True
+            apply_result = plugin.apply(state)
         except Exception as exc:
+            if snapshot_created:
+                try:
+                    plugin.rollback(state, snapshot)
+                except Exception as rollback_exc:
+                    from hydra.core.singbox import _log
+                    _log("ERROR", f"Rollback плагина {plugin.meta.name} не выполнен: {rollback_exc}")
+            _rollback_plugins(state, applied)
             raise RuntimeError(f"Plugin {plugin.meta.name} apply failed: {exc}") from exc
-        if not applied:
+        if not apply_result:
+            try:
+                plugin.rollback(state, snapshot)
+            except Exception as rollback_exc:
+                from hydra.core.singbox import _log
+                _log("ERROR", f"Rollback плагина {plugin.meta.name} не выполнен: {rollback_exc}")
+            _rollback_plugins(state, applied)
             raise RuntimeError(f"Plugin {plugin.meta.name} apply returned false")
+        applied.append((plugin, snapshot))
+    return applied
+
+
+def _rollback_plugins(state: AppState, applied: list[tuple[BasePlugin, object]]) -> None:
+    for plugin, snapshot in reversed(applied):
+        try:
+            plugin.rollback(state, snapshot)
+        except Exception as rollback_exc:
+            from hydra.core.singbox import _log
+            _log("ERROR", f"Rollback плагина {plugin.meta.name} не выполнен: {rollback_exc}")
 
 
 def status_all() -> dict[str, dict]:
@@ -132,6 +161,21 @@ def status_all() -> dict[str, dict]:
                 "error": str(exc) or exc.__class__.__name__,
             }
     return result
+
+
+def health_all(state: AppState) -> dict[str, str]:
+    """Return failures for enabled plugins without making apply side effects."""
+    failures: dict[str, str] = {}
+    for plugin in enabled(state):
+        if plugin.meta.name in _CENTRAL_APPLY_EXCLUSIONS:
+            continue
+        try:
+            healthy, detail = plugin.healthcheck()
+        except Exception as exc:
+            healthy, detail = False, str(exc) or exc.__class__.__name__
+        if not healthy:
+            failures[plugin.meta.name] = detail or "проверка не пройдена"
+    return failures
 
 
 # Обратная совместимость

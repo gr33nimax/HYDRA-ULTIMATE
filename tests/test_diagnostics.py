@@ -513,29 +513,23 @@ class TestReportsAndMenus:
         ) as makedirs, patch("builtins.open", writer):
             result = diagnostics.run_diagnostics_report()
 
-        assert result == "/var/log/hydra/diagnostics_report.md"
-        makedirs.assert_called_once_with("/var/log/hydra", exist_ok=True)
-        report = writer().write.call_args.args[0]
-        assert "# HYDRA Diagnostics Report" in report
-        assert "`203.0.113.4`" in report
-        assert "| RIPE | DE | — |" in report
-        assert "| Google | Yes | — |" in report
-        assert "| sing-box | active |" in report
-        assert geoip.call_count == 9
-        assert custom.call_count == 9
-        assert censor.call_count == 2 * (len(diagnostics.GEO_BLOCKED_SITES) + len(diagnostics.DPI_BLOCKED_SITES))
-        assert run.call_count == 5
+        assert "HYDRA" in result
+        assert "СОСТОЯНИЕ HYDRA" in result
+        assert "СЕРВИСЫ" in result
+        assert "ПЛАГИНЫ" in result
+        assert "ПОСЛЕДНЕЕ ПРИМЕНЕНИЕ" in result
+        assert not writer.called
+        assert geoip.call_count == 0
+        assert custom.call_count == 0
+        assert censor.call_count == 0
 
     def test_generate_report_success_contract(self):
         with patch.object(diagnostics, "clear"), patch.object(diagnostics, "title"), patch.object(
-            diagnostics, "run_function_with_spinner", return_value="/tmp/report.md"
-        ) as spinner, patch.object(diagnostics, "success") as success, patch.object(
-            diagnostics, "panel"
-        ) as panel, patch.object(diagnostics, "prompt"):
+            diagnostics, "run_function_with_spinner", return_value="HYDRA report"
+        ) as spinner, patch("builtins.print") as output, patch.object(diagnostics, "prompt"):
             diagnostics.test_generate_report()
         assert spinner.call_args.args[1] is diagnostics.run_diagnostics_report
-        success.assert_called_once()
-        assert "/tmp/report.md" in "\n".join(panel.call_args.args[1])
+        assert output.call_args_list[-1].args == ("HYDRA report",)
 
     def test_cpu_sysbench_parses_metrics(self):
         output = """

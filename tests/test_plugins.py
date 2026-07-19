@@ -162,3 +162,75 @@ def test_central_apply_preserves_wdtt_legacy_lifecycle():
         registry.apply_enabled(state)
 
     plugin.apply.assert_not_called()
+
+
+def test_central_apply_rolls_back_previous_plugins_on_failure():
+    from hydra.plugins import registry
+
+    first = MockPlugin()
+    first.meta = PluginMeta(name="first", description="first")
+    first.snapshot = MagicMock(return_value={"old": 1})
+    first.rollback = MagicMock(return_value=True)
+    second = MockPlugin()
+    second.meta = PluginMeta(name="second", description="second")
+    second.snapshot = MagicMock(return_value={"old": 2})
+    second.apply = MagicMock(side_effect=RuntimeError("boom"))
+    second.rollback = MagicMock(return_value=True)
+    state = AppState(protocols={"first": PluginState(enabled=True), "second": PluginState(enabled=True)})
+
+    with patch("hydra.plugins.registry._PLUGINS", [first, second]), pytest.raises(RuntimeError):
+        registry.apply_enabled(state)
+
+    first.rollback.assert_called_once_with(state, {"old": 1})
+    second.rollback.assert_called_once_with(state, {"old": 2})
+
+
+def test_central_apply_rolls_back_current_plugin_on_false_result():
+    from hydra.plugins import registry
+
+    plugin = MockPlugin()
+    plugin.meta = PluginMeta(name="broken", description="broken")
+    plugin.snapshot = MagicMock(return_value={"old": True})
+    plugin.apply = MagicMock(return_value=False)
+    plugin.rollback = MagicMock(return_value=True)
+    state = AppState(protocols={"broken": PluginState(enabled=True)})
+
+    with patch("hydra.plugins.registry._PLUGINS", [plugin]), pytest.raises(RuntimeError):
+        registry.apply_enabled(state)
+
+    plugin.rollback.assert_called_once_with(state, {"old": True})
+
+
+def test_central_apply_does_not_reuse_previous_snapshot_when_snapshot_fails():
+    from hydra.plugins import registry
+
+    first = MockPlugin()
+    first.meta = PluginMeta(name="first", description="first")
+    first.snapshot = MagicMock(return_value={"first": True})
+    first.rollback = MagicMock(return_value=True)
+    second = MockPlugin()
+    second.meta = PluginMeta(name="second", description="second")
+    second.snapshot = MagicMock(side_effect=RuntimeError("snapshot failed"))
+    second.rollback = MagicMock(return_value=True)
+    state = AppState(protocols={"first": PluginState(enabled=True), "second": PluginState(enabled=True)})
+
+    with patch("hydra.plugins.registry._PLUGINS", [first, second]), pytest.raises(RuntimeError):
+        registry.apply_enabled(state)
+
+    first.rollback.assert_called_once_with(state, {"first": True})
+    second.rollback.assert_not_called()
+
+
+def test_health_all_reports_only_unhealthy_enabled_plugins():
+    from hydra.plugins import registry
+
+    healthy = MockPlugin()
+    healthy.meta = PluginMeta(name="healthy", description="healthy")
+    healthy.healthcheck = MagicMock(return_value=(True, ""))
+    broken = MockPlugin()
+    broken.meta = PluginMeta(name="broken", description="broken")
+    broken.healthcheck = MagicMock(return_value=(False, "порт недоступен"))
+    state = AppState(protocols={"healthy": PluginState(enabled=True), "broken": PluginState(enabled=True)})
+
+    with patch("hydra.plugins.registry._PLUGINS", [healthy, broken]):
+        assert registry.health_all(state) == {"broken": "порт недоступен"}

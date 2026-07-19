@@ -54,6 +54,28 @@ class DNSCryptPlugin(BasePlugin):
             DNSCRYPT_CONF.unlink(missing_ok=True)
         return True
 
+    def snapshot(self, state: AppState):
+        return {
+            "config": DNSCRYPT_CONF.read_bytes() if DNSCRYPT_CONF.exists() else None,
+            "running": self.status().running,
+        }
+
+    def rollback(self, state: AppState, snapshot) -> bool:
+        previous = snapshot or {}
+        config = previous.get("config")
+        if config is None:
+            DNSCRYPT_CONF.unlink(missing_ok=True)
+        else:
+            DNSCRYPT_CONF.parent.mkdir(parents=True, exist_ok=True)
+            tmp = DNSCRYPT_CONF.with_suffix(".toml.rollback")
+            tmp.write_bytes(config)
+            tmp.replace(DNSCRYPT_CONF)
+        if previous.get("running"):
+            result = subprocess.run(["systemctl", "restart", "dnscrypt-proxy"], capture_output=True)
+        else:
+            result = subprocess.run(["systemctl", "stop", "dnscrypt-proxy"], capture_output=True)
+        return result.returncode == 0
+
     def _write_default_config(self) -> None:
         """Пишет базовый конфиг DNSCrypt-proxy."""
         conf = f"""

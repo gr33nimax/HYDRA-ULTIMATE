@@ -2,12 +2,57 @@
 from __future__ import annotations
 
 import subprocess
+import shutil
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from hydra.plugins.base import ConfigFragment
 
 NFT_TABLE = "hydra-tproxy"
+
+
+@dataclass(frozen=True)
+class TproxySnapshot:
+    ruleset: str | None
+    policy_routing: bool
+
+
+def snapshot_tproxy() -> TproxySnapshot:
+    """Capture only HYDRA's nft table and policy-routing presence."""
+    if not shutil.which("nft"):
+        return TproxySnapshot(None, False)
+    table = subprocess.run(
+        ["nft", "list", "table", "inet", NFT_TABLE],
+        capture_output=True,
+        text=True,
+    )
+    ruleset = table.stdout if table.returncode == 0 else None
+    policy = False
+    if shutil.which("ip"):
+        rule = subprocess.run(
+            ["ip", "rule", "show", "fwmark", "0x1"],
+            capture_output=True,
+            text=True,
+        )
+        policy = rule.returncode == 0 and "0x1" in rule.stdout
+    return TproxySnapshot(ruleset, policy)
+
+
+def restore_tproxy(snapshot: TproxySnapshot) -> None:
+    """Restore a HYDRA-only snapshot without touching unrelated firewall rules."""
+    if not shutil.which("nft"):
+        return
+    subprocess.run(
+        ["nft", "delete", "table", "inet", NFT_TABLE],
+        capture_output=True,
+    )
+    if snapshot.ruleset:
+        _run_checked(["nft", "-f", "-"], input=snapshot.ruleset.encode())
+    if snapshot.policy_routing:
+        _ensure_policy_routing()
+    else:
+        _cleanup_policy_routing()
 
 
 def _run_checked(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:

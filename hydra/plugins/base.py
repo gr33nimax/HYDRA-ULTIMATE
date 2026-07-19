@@ -60,6 +60,28 @@ class BasePlugin(ABC):
     def apply(self, state: AppState) -> bool:
         return True
 
+    def healthcheck(self) -> tuple[bool, str]:
+        """Return runtime health without changing plugin state."""
+        try:
+            status = self.status()
+            if status.running:
+                return True, ""
+            return False, "сервис не находится в active"
+        except Exception as exc:
+            return False, str(exc) or exc.__class__.__name__
+
+    def snapshot(self, state: AppState):
+        """Capture plugin-owned runtime state before apply.
+
+        The default is intentionally a no-op for backwards compatibility.
+        Plugins that write external files or units can override this hook.
+        """
+        return None
+
+    def rollback(self, state: AppState, snapshot) -> bool:
+        """Restore a snapshot captured before ``apply``."""
+        return True
+
     def traffic(self, state: AppState) -> dict[str, int]:
         return {}
 

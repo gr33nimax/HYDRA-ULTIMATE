@@ -529,6 +529,44 @@ ignoreregex =
                 return False
         return self.status().running
 
+    def snapshot(self, state: AppState):
+        def collect(directory: Path, prefixes: tuple[str, ...]):
+            result = {}
+            if directory.exists():
+                for path in directory.iterdir():
+                    if path.is_file() and path.name.startswith(prefixes):
+                        result[str(path)] = path.read_bytes()
+            return result
+        return {
+            "jails": collect(JAIL_DIR, _OWNED_JAILS),
+            "filters": collect(FILTER_DIR, _OWNED_FILTERS),
+            "awg_service": AWG_DEBUG_SERVICE.read_bytes() if AWG_DEBUG_SERVICE.exists() else None,
+            "running": self.status().running,
+        }
+
+    def rollback(self, state: AppState, snapshot) -> bool:
+        previous = snapshot or {}
+        for directory, key, prefixes in (
+            (JAIL_DIR, "jails", _OWNED_JAILS),
+            (FILTER_DIR, "filters", _OWNED_FILTERS),
+        ):
+            directory.mkdir(parents=True, exist_ok=True)
+            for path in directory.iterdir():
+                if path.is_file() and path.name.startswith(prefixes):
+                    path.unlink(missing_ok=True)
+            for name, content in previous.get(key, {}).items():
+                path = Path(name)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+        service = previous.get("awg_service")
+        if service is None:
+            AWG_DEBUG_SERVICE.unlink(missing_ok=True)
+        else:
+            AWG_DEBUG_SERVICE.parent.mkdir(parents=True, exist_ok=True)
+            AWG_DEBUG_SERVICE.write_bytes(service)
+        result = _run(["fail2ban-client", "reload"], timeout=20) if previous.get("running") else _run(["systemctl", "stop", "fail2ban"])
+        return result.returncode == 0
+
     def status(self) -> PluginStatus:
         installed = self._installed()
         running = False

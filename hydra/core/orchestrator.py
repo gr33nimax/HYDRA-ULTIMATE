@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import copy
+import json
 import subprocess
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from hydra.core.state import AppState, User, save_state, get_protocol, find_user
 from hydra.core import singbox, nft
@@ -10,9 +13,52 @@ from hydra.plugins import registry
 
 
 TRAFFIC_DAEMON_SERVICE = Path("/etc/systemd/system/hydra-traffic-daemon.service")
+APPLY_JOURNAL = Path("/var/log/hydra/apply.jsonl")
+_last_apply_error = ""
+_apply_lock = threading.Lock()
+
+
+def last_apply_error() -> str:
+    return _last_apply_error
+
+
+def _set_apply_error(message: str) -> None:
+    global _last_apply_error
+    _last_apply_error = message
+
+
+def _journal(event: str, **fields) -> None:
+    """Append a compact apply event without making logging a failure source."""
+    record = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "event": event,
+        **fields,
+    }
+    try:
+        APPLY_JOURNAL.parent.mkdir(parents=True, exist_ok=True)
+        with APPLY_JOURNAL.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        if hasattr(APPLY_JOURNAL, "chmod"):
+            APPLY_JOURNAL.chmod(0o600)
+    except OSError:
+        pass
 
 
 def apply_config(state: AppState) -> bool:
+    """Apply one configuration transaction at a time."""
+    if not _apply_lock.acquire(blocking=False):
+        _set_apply_error("Применение конфигурации уже выполняется")
+        _journal("rejected", reason="already_running")
+        return False
+    try:
+        return _apply_config_unlocked(state)
+    finally:
+        _apply_lock.release()
+
+
+def _apply_config_unlocked(state: AppState) -> bool:
+    _set_apply_error("")
+    _journal("started")
     # Принудительно включаем TPROXY — необходим для AWG и других транспортов
     if not state.network.tproxy_enabled:
         state.network.tproxy_enabled = True
@@ -20,8 +66,11 @@ def apply_config(state: AppState) -> bool:
 
     try:
         fragments = registry.collect_fragments(state)
+        _journal("fragments_collected", plugins=list(fragments))
     except Exception as exc:
+        _set_apply_error(str(exc))
         singbox._log("ERROR", str(exc))
+        _journal("failed", stage="collect_fragments", error=str(exc))
         return False
     cfg = singbox.generate_config(state, fragments)
     previous_config = None
@@ -31,12 +80,20 @@ def apply_config(state: AppState) -> bool:
         except OSError:
             previous_config = None
     if not singbox.write_config(cfg):
+        _set_apply_error(singbox.last_error() or "Не удалось записать конфигурацию Sing-Box")
+        _journal("failed", stage="singbox_config", error=last_apply_error())
         return False
+    nft_snapshot = nft.snapshot_tproxy()
     try:
         nft.apply_tproxy(fragments, state.network.tproxy_port)
+        _journal("nft_applied")
     except Exception as exc:
-        singbox._log("ERROR", f"Failed to apply plugin/network configuration: {exc}")
+        message = f"Не удалось применить сетевую конфигурацию: {exc}"
+        _set_apply_error(message)
+        singbox._log("ERROR", message)
         _restore_singbox_config(previous_config)
+        _restore_nft_snapshot(nft_snapshot)
+        _journal("rolled_back", stage="nft", error=message)
         return False
 
     from hydra.core.sni_router import needs_mux, stop as stop_mux, rebuild as rebuild_mux, uninstall_haproxy
@@ -59,10 +116,15 @@ def apply_config(state: AppState) -> bool:
             time.sleep(0.3)
 
     try:
-        registry.apply_enabled(state)
+        applied_plugins = registry.apply_enabled(state)
+        _journal("plugins_applied", plugins=[p.meta.name for p in registry.enabled(state)])
     except Exception as exc:
-        singbox._log("ERROR", f"Failed to apply plugin configuration: {exc}")
+        message = f"Не удалось применить конфигурацию плагина: {exc}"
+        _set_apply_error(message)
+        singbox._log("ERROR", message)
         _restore_singbox_config(previous_config)
+        _restore_nft_snapshot(nft_snapshot)
+        _journal("rolled_back", stage="plugins", error=message)
         return False
 
     res = singbox.reload()
@@ -83,14 +145,52 @@ def apply_config(state: AppState) -> bool:
     except Exception:
         pass
 
-    if not res or not mux_ok:
+    plugin_health = registry.health_all(state)
+    if plugin_health:
+        details = "; ".join(f"{name}: {reason}" for name, reason in plugin_health.items())
+        _set_apply_error(f"Проверка сервисов не пройдена: {details}")
+        singbox._log("ERROR", last_apply_error())
         _restore_singbox_config(previous_config)
+        _restore_nft_snapshot(nft_snapshot)
+        _rollback_applied_plugins(state, applied_plugins)
+        _journal("rolled_back", stage="plugin_health", error=last_apply_error())
+        try:
+            singbox.reload()
+        except Exception as exc:
+            singbox._log("ERROR", f"Не удалось перезагрузить восстановленный Sing-Box: {exc}")
+        return False
+
+    if not res or not mux_ok:
+        if not res:
+            _set_apply_error(singbox.last_error() or "Sing-Box не запустился после применения")
+        else:
+            _set_apply_error("SNI-маршрутизатор не запустился после применения")
+        _restore_singbox_config(previous_config)
+        _restore_nft_snapshot(nft_snapshot)
+        _rollback_applied_plugins(state, applied_plugins)
+        _journal("rolled_back", stage="healthcheck", error=last_apply_error())
         try:
             singbox.reload()
         except Exception as exc:
             singbox._log("ERROR", f"Failed to reload restored sing-box config: {exc}")
         return False
+    _journal("committed")
     return True
+
+
+def _restore_nft_snapshot(snapshot: nft.TproxySnapshot) -> None:
+    try:
+        nft.restore_tproxy(snapshot)
+    except Exception as exc:
+        singbox._log("ERROR", f"Не удалось восстановить правила nftables HYDRA: {exc}")
+
+
+def _rollback_applied_plugins(state: AppState, applied: list[tuple[object, object]]) -> None:
+    for plugin, snapshot in reversed(applied):
+        try:
+            plugin.rollback(state, snapshot)
+        except Exception as exc:
+            singbox._log("ERROR", f"Rollback плагина {plugin.meta.name} не выполнен: {exc}")
 
 
 def _restore_singbox_config(previous: bytes | None) -> None:

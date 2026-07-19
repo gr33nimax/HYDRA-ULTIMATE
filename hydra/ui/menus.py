@@ -53,6 +53,11 @@ from hydra.ui.protocol_ui import (
 )
 
 
+def _apply_error_text(default: str = "Ошибка применения конфигурации") -> str:
+    """Prefer the concrete error reported by the orchestrator."""
+    return orchestrator.last_apply_error() or default
+
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Утилиты
@@ -579,7 +584,7 @@ def menu_core(state: AppState):
                 if orchestrator.apply_config(state):
                     success("Конфигурация пересобрана и применена")
                 else:
-                    warn("Внимание: не удалось автоматически применить конфиг")
+                    warn(_apply_error_text("Не удалось автоматически применить конфигурацию"))
             else:
                 error("Не удалось установить")
             prompt("Нажмите Enter")
@@ -592,7 +597,7 @@ def menu_core(state: AppState):
                 if orchestrator.apply_config(state):
                     success("Конфигурация пересобрана и применена")
                 else:
-                    warn("Внимание: не удалось автоматически применить конфиг")
+                    warn(_apply_error_text("Не удалось автоматически применить конфигурацию"))
             else:
                 error(msg)
             prompt("Нажмите Enter")
@@ -614,7 +619,7 @@ def menu_core(state: AppState):
             if orchestrator.apply_config(state):
                 success("Конфиг применён, Sing-Box перезагружен")
             else:
-                error("Ошибка применения конфига")
+                error(_apply_error_text("Ошибка применения конфигурации"))
             prompt("Нажмите Enter")
         elif choice == "4":
             _apply_network_tuning_menu()
@@ -881,7 +886,7 @@ def menu_plugin(state: AppState, p):
                         if orchestrator.enable(state, p.meta.name):
                             success("Протокол включён и применён")
                         else:
-                            error("Ошибка применения конфигурации")
+                            error(_apply_error_text())
                     except Exception as e:
                         error(f"Ошибка активации протокола: {e}")
                 else:
@@ -890,13 +895,13 @@ def menu_plugin(state: AppState, p):
                 if orchestrator.disable(state, p.meta.name):
                     success("Протокол выключен")
                 else:
-                    error("Ошибка применения конфигурации")
+                    error(_apply_error_text())
             else:
                 try:
                     if orchestrator.enable(state, p.meta.name):
                         success("Протокол включён")
                     else:
-                        error("Ошибка применения конфигурации")
+                        error(_apply_error_text())
                 except Exception as e:
                     error(f"Ошибка активации протокола: {e}")
             prompt("Нажмите Enter")
@@ -2887,7 +2892,7 @@ def _menu_clash_api(state: AppState):
                     lambda latest: setattr(latest.network, "clash_api_enabled", enabled_status)
                 )
                 apply_config(state)
-                error("Не удалось применить настройку; прежнее состояние восстановлено")
+                error(_apply_error_text("Не удалось применить настройку; прежнее состояние восстановлено"))
             prompt("Нажмите Enter")
 
 
@@ -3063,7 +3068,7 @@ def _menu_amneziawg(state: AppState, p):
                         if orchestrator.enable(state, p.meta.name):
                             success("Протокол включён и применён")
                         else:
-                            error("Ошибка применения конфигурации")
+                            error(_apply_error_text())
                     except Exception as e:
                         error(f"Ошибка активации протокола: {e}")
                 else:
@@ -3072,13 +3077,13 @@ def _menu_amneziawg(state: AppState, p):
                 if orchestrator.disable(state, p.meta.name):
                     success("Протокол выключен")
                 else:
-                    error("Ошибка применения конфигурации")
+                    error(_apply_error_text())
             else:
                 try:
                     if orchestrator.enable(state, p.meta.name):
                         success("Протокол включён")
                     else:
-                        error("Ошибка применения конфигурации")
+                        error(_apply_error_text())
                 except Exception as e:
                     error(f"Ошибка активации протокола: {e}")
             prompt("Нажмите Enter")
@@ -3281,7 +3286,7 @@ def _menu_mieru(state: AppState, p):
                         if orchestrator.enable(state, p.meta.name):
                             success("Протокол включён и применён")
                         else:
-                            error("Ошибка применения конфигурации")
+                            error(_apply_error_text())
                     except Exception as e:
                         error(f"Ошибка активации протокола: {e}")
                 else:
@@ -3290,13 +3295,13 @@ def _menu_mieru(state: AppState, p):
                 if orchestrator.disable(state, p.meta.name):
                     success("Протокол выключен")
                 else:
-                    error("Ошибка применения конфигурации")
+                    error(_apply_error_text())
             else:
                 try:
                     if orchestrator.enable(state, p.meta.name):
                         success("Протокол включён")
                     else:
-                        error("Ошибка применения конфигурации")
+                        error(_apply_error_text())
                 except Exception as e:
                     error(f"Ошибка активации протокола: {e}")
             prompt("Нажмите Enter")
@@ -3362,7 +3367,7 @@ def _menu_mieru_obfuscation(state: AppState, p):
                 if p.set_preset(state, preset_name):
                     success(f"Пресет {preset_name} успешно применён!")
                 else:
-                    error("Не удалось применить пресет")
+                    error(_apply_error_text("Не удалось применить пресет"))
                 prompt("Нажмите Enter")
 
 
@@ -3424,7 +3429,7 @@ def _menu_anytls(state: AppState, p):
                         if orchestrator.enable(state, p.meta.name):
                             success("Протокол включён и применён")
                         else:
-                            error("Ошибка применения конфигурации")
+                            error(_apply_error_text())
                     except Exception as e:
                         error(f"Ошибка активации протокола: {e}")
                 else:
@@ -3433,13 +3438,13 @@ def _menu_anytls(state: AppState, p):
                 if orchestrator.disable(state, p.meta.name):
                     success("Протокол выключен")
                 else:
-                    error("Ошибка применения конфигурации")
+                    error(_apply_error_text())
             else:
                 try:
                     if orchestrator.enable(state, p.meta.name):
                         success("Протокол включён")
                     else:
-                        error("Ошибка применения конфигурации")
+                        error(_apply_error_text())
                 except Exception as e:
                     error(f"Ошибка активации протокола: {e}")
             prompt("Нажмите Enter")
@@ -3506,7 +3511,7 @@ def _menu_anytls_obfuscation(state: AppState, p):
                 if p.set_preset(state, preset_name):
                     success(f"Пресет {preset_name} успешно применён!")
                 else:
-                    error("Не удалось применить пресет")
+                    error(_apply_error_text("Не удалось применить пресет"))
                 prompt("Нажмите Enter")
 
 
@@ -3574,7 +3579,7 @@ def _menu_trusttunnel(state: AppState, p):
                         if orchestrator.enable(state, p.meta.name):
                             success("Протокол включён и применён")
                         else:
-                            error("Ошибка применения конфигурации")
+                            error(_apply_error_text())
                     except Exception as e:
                         error(f"Ошибка активации протокола: {e}")
                 else:
@@ -3583,13 +3588,13 @@ def _menu_trusttunnel(state: AppState, p):
                 if orchestrator.disable(state, p.meta.name):
                     success("Протокол выключен")
                 else:
-                    error("Ошибка применения конфигурации")
+                    error(_apply_error_text())
             else:
                 try:
                     if orchestrator.enable(state, p.meta.name):
                         success("Протокол включён")
                     else:
-                        error("Ошибка применения конфигурации")
+                        error(_apply_error_text())
                 except Exception as e:
                     error(f"Ошибка активации протокола: {e}")
             prompt("Нажмите Enter")
@@ -3665,7 +3670,7 @@ def _awg_generate_wizard_menu(state: AppState, p):
                 success("Параметры успешно применены!")
                 info("Клиенты автоматически получат новые настройки при обновлении подписки.")
             else:
-                error("Ошибка применения параметров.")
+                error(_apply_error_text("Ошибка применения параметров"))
             prompt("Нажмите Enter")
 
 

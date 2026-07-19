@@ -311,16 +311,37 @@ def test_apply_config_returns_false_when_caddy_rebuild_fails():
     fake_socket = MagicMock()
     fake_socket.__enter__.return_value.connect_ex.return_value = 1
 
+    snapshot = MagicMock()
+    plugin = MagicMock()
+    plugin.meta.name = "mock"
+    plugin_snapshot = {"old": True}
     with patch("hydra.core.orchestrator.registry.collect_fragments", return_value={}), \
+         patch("hydra.core.orchestrator.registry.apply_enabled", return_value=[(plugin, plugin_snapshot)]), \
          patch("hydra.core.orchestrator.singbox.generate_config", return_value={}), \
          patch("hydra.core.orchestrator.singbox.write_config", return_value=True), \
          patch("hydra.core.orchestrator.singbox.reload", return_value=True), \
          patch("hydra.core.orchestrator.nft.apply_tproxy"), \
+         patch("hydra.core.orchestrator.nft.snapshot_tproxy", return_value=snapshot), \
+         patch("hydra.core.orchestrator.nft.restore_tproxy") as restore_nft, \
          patch("hydra.core.orchestrator.save_state"), \
          patch("hydra.core.sni_router.needs_mux", return_value=True), \
          patch("hydra.core.sni_router.rebuild", return_value=False), \
          patch("socket.socket", return_value=fake_socket):
         assert orchestrator.apply_config(state) is False
+    restore_nft.assert_called_once_with(snapshot)
+    plugin.rollback.assert_called_once_with(state, plugin_snapshot)
+
+
+def test_apply_config_rejects_parallel_transaction():
+    from hydra.core import orchestrator
+
+    state = AppState()
+    orchestrator._apply_lock.acquire()
+    try:
+        assert orchestrator.apply_config(state) is False
+        assert orchestrator.last_apply_error() == "Применение конфигурации уже выполняется"
+    finally:
+        orchestrator._apply_lock.release()
 
 
 def test_install_plugin_rolls_back_state_when_apply_fails():

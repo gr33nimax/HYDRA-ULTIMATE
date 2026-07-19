@@ -21,6 +21,19 @@ STATE_DIR = Path("/var/lib/hydra")
 STATE_FILE = STATE_DIR / "state.json"
 SCHEMA_VERSION = 2
 
+
+def _restrict_file(path: Path) -> None:
+    """Restrict state/backup files to the current owner on POSIX systems.
+
+    Windows does not expose POSIX mode bits in the same way; leaving the
+    operation as a no-op there keeps the existing cross-platform test setup.
+    """
+    if os.name != "nt":
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+
 _lock = threading.Lock()
 T = TypeVar("T")
 
@@ -32,6 +45,7 @@ def _state_lock():
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         lock_path = STATE_DIR / "state.lock"
         with lock_path.open("a+b") as lock_file:
+            _restrict_file(lock_path)
             lock_file.seek(0, os.SEEK_END)
             if lock_file.tell() == 0:
                 lock_file.write(b"\0")
@@ -174,16 +188,40 @@ def _from_dict(cls, data: dict):
     return data
 
 
+def _validate_raw_state(raw: object) -> None:
+    """Reject structurally invalid state before constructing dataclasses."""
+    if not isinstance(raw, dict):
+        raise ValueError("state root must be an object")
+    version = raw.get("version", 0)
+    if not isinstance(version, int) or version < 0:
+        raise ValueError("state version must be a non-negative integer")
+    for key in ("protocols", "install"):
+        if key in raw and not isinstance(raw[key], dict):
+            raise ValueError(f"state field '{key}' must be an object")
+    if "users" in raw:
+        if not isinstance(raw["users"], list) or any(not isinstance(user, dict) for user in raw["users"]):
+            raise ValueError("state field 'users' must be a list of objects")
+        for user in raw["users"]:
+            if not isinstance(user.get("email", ""), str) or not isinstance(user.get("uuid", ""), str):
+                raise ValueError("user email and uuid must be strings")
+    if "protocols" in raw:
+        for name, protocol in raw["protocols"].items():
+            if not isinstance(name, str) or not isinstance(protocol, dict):
+                raise ValueError("protocol entries must be named objects")
+
+
 def _load_state_unlocked() -> AppState:
     if not STATE_FILE.exists():
         return AppState()
     try:
         raw = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        _validate_raw_state(raw)
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
         backup = STATE_FILE.with_suffix(".json.bak")
         try:
             raw = json.loads(backup.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
+            _validate_raw_state(raw)
+        except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
             quarantine = STATE_FILE.with_suffix(".json.corrupt")
             try:
                 shutil.copy2(STATE_FILE, quarantine)
@@ -196,6 +234,7 @@ def _load_state_unlocked() -> AppState:
     version = raw.get("version", 0)
     if version < SCHEMA_VERSION:
         raw = _migrate(raw, version)
+    _validate_raw_state(raw)
     return _from_dict(AppState, raw)
 
 
@@ -209,13 +248,16 @@ def _save_state_unlocked(state: AppState) -> None:
     data = _to_dict(state)
     if STATE_FILE.exists():
         shutil.copy2(STATE_FILE, STATE_FILE.with_suffix(".json.bak"))
+        _restrict_file(STATE_FILE.with_suffix(".json.bak"))
     tmp = STATE_DIR / f"state.json.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
         with tmp.open("w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2, ensure_ascii=True)
             handle.flush()
             os.fsync(handle.fileno())
+        _restrict_file(tmp)
         tmp.replace(STATE_FILE)
+        _restrict_file(STATE_FILE)
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -316,6 +358,9 @@ def find_user(state: AppState, email: str) -> Optional[User]:
 
 def add_user(state: AppState, user: User) -> None:
     """Добавляет пользователя. Заменяет существующего с тем же email."""
+    duplicate_uuid = next((item for item in state.users if item.uuid == user.uuid and item.email != user.email), None)
+    if duplicate_uuid is not None:
+        raise ValueError(f"UUID уже используется пользователем {duplicate_uuid.email}")
     existing = find_user(state, user.email)
     if existing:
         idx = state.users.index(existing)

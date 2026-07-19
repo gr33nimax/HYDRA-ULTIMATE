@@ -211,6 +211,32 @@ class AmneziaWGPlugin(BasePlugin):
             
         return ok
 
+    def snapshot(self, state: AppState):
+        def read(path: Path):
+            return path.read_bytes() if path.exists() else None
+        return {
+            "awg0": read(AWG_CONF),
+            "awg1": read(AWG_CONF_1),
+            "running0": self._is_up(),
+            "running1": self._is_up_iface(AWG_INTERFACE_1),
+        }
+
+    def rollback(self, state: AppState, snapshot) -> bool:
+        previous = snapshot or {}
+        for key, path in (("awg0", AWG_CONF), ("awg1", AWG_CONF_1)):
+            content = previous.get(key)
+            if content is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+                path.chmod(0o600)
+        ok = True
+        for unit, running in ((AWG_UNIT, previous.get("running0")), (AWG_UNIT_1, previous.get("running1"))):
+            command = ["systemctl", "restart", unit] if running else ["systemctl", "stop", unit]
+            ok = subprocess.run(command, capture_output=True).returncode == 0 and ok
+        return ok
+
     def _apply_iface(self, interface: str, conf_path: Path, unit: str) -> bool:
         """Применяет conf без разрыва туннеля (или перезапускает)."""
         active_ip = self._active_ip_iface(interface)

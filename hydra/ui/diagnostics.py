@@ -1530,213 +1530,179 @@ def test_bench_speedtest():
 # ═════════════════════════════════════════════════════════════════════════════
 
 def run_diagnostics_report() -> str:
-    """Фоновый сборщик Markdown-отчета без длительных нагрузочных тестов."""
-    import platform
-    
-    # 1. Сбор системных данных
-    os_info = platform.platform()
-    cpu_model = "—"
-    if os.path.exists("/proc/cpuinfo"):
-        try:
-            with open("/proc/cpuinfo", "r") as f:
-                for line in f:
-                    if "model name" in line:
-                        cpu_model = line.split(":", 1)[1].strip()
-                        break
-        except Exception:
-            pass
-            
-    ram_total = "—"
-    ram_free = "—"
-    if os.path.exists("/proc/meminfo"):
-        try:
-            with open("/proc/meminfo", "r") as f:
-                for line in f:
-                    if "MemTotal" in line:
-                        ram_total = line.split(":", 1)[1].strip()
-                    elif "MemAvailable" in line or "MemFree" in line:
-                        ram_free = line.split(":", 1)[1].strip()
-        except Exception:
-            pass
-            
-    load_avg = "—"
+    """Collect a live HYDRA runtime report for immediate display in the TUI.
+
+    This intentionally does not run network benchmarks, censor checks or
+    export files. Those remain separate diagnostics menu actions.
+    """
+    from hydra.core import orchestrator, singbox
+    from hydra.core.state import load_state
+
+    report: list[str] = [
+        "HYDRA — диагностика",
+        f"Проверка: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+    ]
+    errors = 0
+
+    report.append("СОСТОЯНИЕ HYDRA")
     try:
-        avg1, avg5, avg15 = os.getloadavg()
-        load_avg = f"{avg1:.2f}, {avg5:.2f}, {avg15:.2f}"
-    except Exception:
-        pass
-        
-    report = []
-    report.append("# HYDRA Diagnostics Report")
-    report.append(f"Сгенерировано: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    report.append("")
-    report.append("## 1. Информация о системе")
-    report.append(f"- **ОС/Платформа**: {os_info}")
-    report.append(f"- **Процессор (CPU)**: {cpu_model}")
-    report.append(f"- **Оперативная память (RAM)**: Всего: {ram_total} | Доступно: {ram_free}")
-    report.append(f"- **Загрузка системы (LA)**: {load_avg}")
-    report.append(f"- **Версия Python**: {platform.python_version()}")
-    report.append("")
-    
-    # 2. Сетевое геоопределение
-    report.append("## 2. Сетевое геоопределение (IP Geolocation)")
-    ipv4 = get_ip_address(4) or "—"
-    ipv6 = get_ip_address(6) or "—"
+        state = load_state()
+        enabled = [name for name, value in state.protocols.items() if value.enabled]
+        report.append(f"  [OK] state.json: корректен, schema {state.version}")
+        report.append(f"  [OK] Пользователи: {len(state.users)}")
+        report.append(f"  [OK] Включённые протоколы: {', '.join(enabled) if enabled else 'нет'}")
+    except Exception as exc:
+        errors += 1
+        report.append(f"  [ERROR] state.json: {exc}")
 
-    # Получаем детальную инфу для IPv4
-    v4_detail = {"isp": "—", "asn": "—", "location": "—"}
-    if ipv4 and ipv4 != "—":
+    report.append("")
+    report.append("ЯДРО")
+    if singbox.is_installed():
+        report.append(f"  [OK] Sing-Box установлен: {singbox.get_version() or 'версия не определена'}")
+    else:
+        errors += 1
+        report.append("  [ERROR] Sing-Box не установлен")
+    config_exists = singbox.SINGBOX_CONFIG.exists()
+    if config_exists:
+        report.append("  [OK] Конфигурация Sing-Box существует")
+    else:
+        report.append("  [WARNING] Конфигурация Sing-Box ещё не создана")
+    binary = singbox._find_singbox()
+    if binary and config_exists:
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"}
-            req = urllib.request.Request(f"http://ip-api.com/json/{ipv4}", headers=headers)
-            with urllib.request.urlopen(req, timeout=2.0) as resp:
-                res_data = json.loads(resp.read().decode("utf-8"))
-                if res_data.get("status") == "success":
-                    v4_detail["isp"] = res_data.get("isp") or res_data.get("org") or "—"
-                    as_val = res_data.get("as", "—")
-                    v4_detail["asn"] = as_val.split()[0] if as_val and as_val != "—" else "—"
-                    
-                    loc_parts = []
-                    if res_data.get("country"):
-                        loc_parts.append(res_data["country"])
-                    if res_data.get("city"):
-                        loc_parts.append(res_data["city"])
-                    v4_detail["location"] = ", ".join(loc_parts) if loc_parts else "—"
-        except Exception:
-            pass
+            checked = singbox._run([str(binary), "check", "-c", str(singbox.SINGBOX_CONFIG)])
+            if checked.returncode == 0:
+                report.append("  [OK] Синтаксис активной конфигурации корректен")
+            else:
+                errors += 1
+                detail = (checked.stderr or checked.stdout or "неизвестная ошибка").strip().splitlines()[-1]
+                report.append(f"  [ERROR] Активная конфигурация не прошла проверку: {detail[:300]}")
+        except (OSError, subprocess.SubprocessError) as exc:
+            report.append(f"  [WARNING] Проверка активной конфигурации недоступна: {exc}")
+    report.append(f"  [INFO] Последняя ошибка применения: {orchestrator.last_apply_error() or 'нет'}")
 
-    # Получаем детальную инфу для IPv6
-    v6_detail = {"isp": "—", "asn": "—", "location": "—"}
-    if ipv6 and ipv6 != "—":
+    report.append("")
+    report.append("СЕРВИСЫ")
+    services = ["sing-box", "caddy-l4", "dnscrypt-proxy", "fail2ban", "hydra-traffic-daemon"]
+    if os.name == "nt":
+        report.append("  [INFO] Проверка systemd недоступна в Windows-окружении")
+    else:
+        shown_services = 0
+        for service in services:
+            try:
+                loaded = subprocess.run(
+                    ["systemctl", "show", service, "--property=LoadState", "--value"],
+                    capture_output=True, text=True, timeout=2.0,
+                )
+                if loaded.returncode != 0 or loaded.stdout.strip() != "loaded":
+                    continue
+                shown_services += 1
+                active = subprocess.run(
+                    ["systemctl", "is-active", service],
+                    capture_output=True, text=True, timeout=2.0,
+                )
+                enabled = subprocess.run(
+                    ["systemctl", "is-enabled", service],
+                    capture_output=True, text=True, timeout=2.0,
+                )
+                active_state = active.stdout.strip() or "не установлен"
+                enabled_state = enabled.stdout.strip() or "не включён"
+                marker = "OK" if active.returncode == 0 else "WARNING"
+                if active.returncode != 0:
+                    errors += 1 if enabled.returncode == 0 else 0
+                report.append(f"  [{marker}] {service}: active={active_state}, enabled={enabled_state}")
+            except (OSError, subprocess.SubprocessError) as exc:
+                report.append(f"  [WARNING] {service}: проверка недоступна ({exc})")
+        if not shown_services:
+            report.append("  [INFO] Управляемые systemd-сервисы не установлены")
+
+    report.append("")
+    report.append("ПЛАГИНЫ")
+    if os.name == "nt":
+        report.append("  [INFO] Runtime-статусы плагинов доступны только на Linux")
+    else:
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"}
-            req = urllib.request.Request(f"http://ip-api.com/json/{ipv6}", headers=headers)
-            with urllib.request.urlopen(req, timeout=2.0) as resp:
-                res_data = json.loads(resp.read().decode("utf-8"))
-                if res_data.get("status") == "success":
-                    v6_detail["isp"] = res_data.get("isp") or res_data.get("org") or "—"
-                    as_val = res_data.get("as", "—")
-                    v6_detail["asn"] = as_val.split()[0] if as_val and as_val != "—" else "—"
-                    
-                    loc_parts = []
-                    if res_data.get("country"):
-                        loc_parts.append(res_data["country"])
-                    if res_data.get("city"):
-                        loc_parts.append(res_data["city"])
-                    v6_detail["location"] = ", ".join(loc_parts) if loc_parts else "—"
-        except Exception:
-            pass
+            from hydra.plugins.registry import status_all
+            statuses = status_all()
+            installed = 0
+            for name, status in statuses.items():
+                if not status.get("installed"):
+                    continue
+                installed += 1
+                marker = "OK" if status.get("running") else "WARNING"
+                report.append(
+                    f"  [{marker}] {name}: installed=yes, enabled={status.get('enabled')}, "
+                    f"running={status.get('running')}, port={status.get('port') or '—'}"
+                )
+            if not installed:
+                report.append("  [INFO] Установленных плагинов нет")
+        except Exception as exc:
+            errors += 1
+            report.append(f"  [ERROR] Не удалось получить статусы плагинов: {exc}")
 
-    report.append(f"- **Внешний IPv4**: `{ipv4}`")
-    if ipv4 and ipv4 != "—":
-        report.append(f"  - **Провайдер/ISP**: `{v4_detail['isp']}`")
-        report.append(f"  - **ASN**: `{v4_detail['asn']}`")
-        report.append(f"  - **Геолокация**: `{v4_detail['location']}`")
-        
-    report.append(f"- **Внешний IPv6**: `{ipv6}`")
-    if ipv6 and ipv6 != "—":
-        report.append(f"  - **Провайдер/ISP**: `{v6_detail['isp']}`")
-        report.append(f"  - **ASN**: `{v6_detail['asn']}`")
-        report.append(f"  - **Геолокация**: `{v6_detail['location']}`")
-        
     report.append("")
-    
-    system_has_ipv6 = check_system_ipv6()
-    primary_services = ["RIPE", "MAXMIND", "IPINFO_IO", "CLOUDFLARE", "IPREGISTRY", "IPAPI_CO", "IPAPI_COM", "IPWHO_IS", "IP2LOCATION_IO"]
-    custom_services = ["Google", "YouTube", "Twitch", "ChatGPT", "Netflix", "Spotify", "Disney+", "Steam", "Claude"]
-    
-    report.append("### Детекция баз GeoIP")
-    report.append("| База | Страна (IPv4) | Страна (IPv6) |")
-    report.append("| --- | --- | --- |")
-    for s in primary_services:
-        cc_v4 = query_primary_geoip(ipv4, s)
-        cc_v6 = query_primary_geoip(ipv6, s) if system_has_ipv6 else "—"
-        report.append(f"| {s} | {cc_v4} | {cc_v6} |")
-    report.append("")
-    
-    report.append("### Статус доступа к стримингам и ИИ")
-    report.append("| Сервис | Статус (IPv4) | Статус (IPv6) |")
-    report.append("| --- | --- | --- |")
-    for s in custom_services:
-        status_v4 = check_custom_service(s, 4, system_has_ipv6)
-        status_v6 = check_custom_service(s, 6, system_has_ipv6) if system_has_ipv6 else "—"
-        report.append(f"| {s} | {status_v4} | {status_v6} |")
-    report.append("")
-    
-    # 3. Блокировки доменов
-    report.append("## 3. Проверка блокировок и цензуры (Censorcheck)")
-    report.append("### Гео-ограничения")
-    report.append("| Домен | Статус HTTP | Статус HTTPS |")
-    report.append("| --- | --- | --- |")
-    for domain in GEO_BLOCKED_SITES:
-        http_s = check_domain_censor(domain, secure=False)
-        https_s = check_domain_censor(domain, secure=True)
-        report.append(f"| {domain} | {http_s} | {https_s} |")
-    report.append("")
-    
-    report.append("### Цензура и DPI (Ресурсы, блокируемые в РФ)")
-    report.append("| Домен | Статус HTTP | Статус HTTPS |")
-    report.append("| --- | --- | --- |")
-    for domain in DPI_BLOCKED_SITES:
-        http_s = check_domain_censor(domain, secure=False)
-        https_s = check_domain_censor(domain, secure=True)
-        report.append(f"| {domain} | {http_s} | {https_s} |")
-    report.append("")
-    
-    # 4. Статус сервисов
-    report.append("## 4. Состояние служб HYDRA")
-    services = ["sing-box", "caddy", "dnscrypt-proxy", "fail2ban", "hydra-traffic-daemon"]
-    report.append("| Служба | Активность (systemd) |")
-    report.append("| --- | --- |")
-    for s in services:
-        status_str = "Unknown"
+    report.append("ПОСЛЕДНЕЕ ПРИМЕНЕНИЕ")
+    journal = getattr(orchestrator, "APPLY_JOURNAL", Path("/var/log/hydra/apply.jsonl"))
+    if journal.exists():
         try:
-            r = subprocess.run(["systemctl", "is-active", s], capture_output=True, text=True, timeout=2.0)
-            status_str = r.stdout.strip()
-        except Exception:
-            pass
-        report.append(f"| {s} | {status_str} |")
-    report.append("")
-    
-    # Запись в лог
-    os.makedirs("/var/log/hydra", exist_ok=True)
-    report_path = "/var/log/hydra/diagnostics_report.md"
-    try:
-        with open(report_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(report))
-        return report_path
-    except Exception as e:
-        raise Exception(f"Не удалось записать файл отчета: {e}")
+            entries = [line.strip() for line in journal.read_text(encoding="utf-8").splitlines() if line.strip()]
+            report.append(f"  [OK] Журнал: {len(entries)} событий")
+            if entries:
+                latest = json.loads(entries[-1])
+                event = str(latest.get("event", "unknown"))
+                event_names = {
+                    "started": "применение начато",
+                    "fragments_collected": "конфигурация плагинов собрана",
+                    "nft_applied": "сетевые правила применены",
+                    "plugins_applied": "плагины применены",
+                    "committed": "применение успешно завершено",
+                    "rolled_back": "изменения отменены",
+                    "failed": "применение завершилось ошибкой",
+                    "rejected": "применение отклонено",
+                }
+                marker = "OK" if event == "committed" else "WARNING"
+                if event in {"rolled_back", "failed", "rejected"}:
+                    errors += 1
+                report.append(f"  [{marker}] Результат: {event_names.get(event, event)}")
+                if latest.get("ts"):
+                    report.append(f"  [INFO] Время: {latest['ts']}")
+                if latest.get("stage"):
+                    report.append(f"  [INFO] Этап: {latest['stage']}")
+                if latest.get("error"):
+                    report.append(f"  [ERROR] Причина: {str(latest['error'])[:500]}")
+        except (OSError, ValueError, TypeError) as exc:
+            report.append(f"  [WARNING] Журнал недоступен: {exc}")
+    else:
+        report.append("  [INFO] Применений ещё не зарегистрировано")
 
-
-def test_generate_report():
-    """Тест 7. Запуск сборщика отчета в TUI"""
-    clear()
-    title("Генерация диагностического отчета")
-    print()
-    
-    try:
-        report_path = run_function_with_spinner("Сбор системных данных и проведение сетевых тестов", run_diagnostics_report)
-        success(f"Отчет успешно создан!")
-        print()
-        panel("📁 Путь к файлу отчета", [
-            f"Вы можете скопировать или передать файл:",
-            f"{BOLD}{report_path}{NC}",
-            "",
-            f"Чтобы просмотреть его содержимое, выполните:",
-            f"{CYAN}cat {report_path}{NC}"
-        ])
-    except KeyboardInterrupt:
-        pass
-    except Exception as e:
-        error(f"Не удалось сгенерировать отчет: {e}")
-        
-    prompt("Нажмите Enter для возврата...")
+    report.extend(["", f"ИТОГ: {'ERROR' if errors else 'OK'}"])
+    return "\n".join(report)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Главное меню раздела диагностики
 # ═════════════════════════════════════════════════════════════════════════════
+
+def show_live_report():
+    """Run the runtime report, display it, then return to the menu."""
+    clear()
+    title("Диагностика HYDRA")
+    print()
+    try:
+        report = run_function_with_spinner("Опрос состояния HYDRA и сервисов", run_diagnostics_report)
+        print(report)
+    except KeyboardInterrupt:
+        pass
+    except Exception as exc:
+        error(f"Не удалось получить диагностику: {exc}")
+    prompt("Нажмите Enter для возврата в меню...")
+
+
+# Keep the existing symbol used by callers/tests, but change its behavior from
+# file export to an in-place runtime report.
+test_generate_report = show_live_report
+
 
 def menu_diagnostics(state: AppState):
     """Меню раздела «Тестирование и диагностика VPS»"""
@@ -1763,7 +1729,7 @@ def menu_diagnostics(state: AppState):
             ("4", "🌐 Тест пропускной способности (Global)", "Замер скорости до мировых узлов"),
             ("5", "⚡ Тест пропускной способности (iPerf3 RU)", "Замер скорости до серверов в РФ"),
             ("6", "💻 Производительность процессора (Sysbench)", "Бенчмарк вычислительной мощности CPU"),
-            ("7", "📝 Экспорт диагностического отчета", "GeoIP, доступность сайтов и состояние служб"),
+            ("7", "🔎 Диагностика HYDRA", "Сервисы, плагины, state и последнее применение"),
             ("0", "↩ Назад", "Возврат в главное меню")
         ], "ВЫБОР ДИАГНОСТИЧЕСКОГО ТЕСТА")
         

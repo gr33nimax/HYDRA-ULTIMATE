@@ -57,6 +57,33 @@ class HoneypotPlugin(BasePlugin):
     def configure(self, state: AppState) -> ConfigFragment:
         return ConfigFragment()
 
+    def snapshot(self, state: AppState):
+        def read(path: Path):
+            return path.read_bytes() if path.exists() else None
+        return {
+            "script": read(HONEYPOT_SCRIPT),
+            "service": read(HONEYPOT_SERVICE),
+            "state": read(HONEYPOT_STATE),
+            "running": self.status().running,
+        }
+
+    def rollback(self, state: AppState, snapshot) -> bool:
+        previous = snapshot or {}
+        for key, path in (("script", HONEYPOT_SCRIPT), ("service", HONEYPOT_SERVICE), ("state", HONEYPOT_STATE)):
+            content = previous.get(key)
+            if content is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = path.with_suffix(path.suffix + ".rollback")
+                tmp.write_bytes(content)
+                tmp.replace(path)
+        if previous.get("running"):
+            result = _run(["systemctl", "restart", "hydra-honeypot"])
+        else:
+            result = _run(["systemctl", "stop", "hydra-honeypot"])
+        return result.returncode == 0
+
     def apply(self, state: AppState) -> bool:
         config = self._load_state()
         if not self.status().running:

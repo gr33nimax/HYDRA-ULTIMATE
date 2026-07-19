@@ -211,6 +211,28 @@ class TelemtPlugin(BasePlugin):
         time.sleep(2)
         return True
 
+    def snapshot(self, state: AppState):
+        cron = Path("/etc/cron.d/telemt-stats")
+        return {
+            "config": CONFIG_FILE.read_bytes() if CONFIG_FILE.exists() else None,
+            "service": SERVICE_FILE.read_bytes() if SERVICE_FILE.exists() else None,
+            "cron": cron.read_bytes() if cron.exists() else None,
+            "running": self.status().running,
+        }
+
+    def rollback(self, state: AppState, snapshot) -> bool:
+        previous = snapshot or {}
+        cron = Path("/etc/cron.d/telemt-stats")
+        for key, path in (("config", CONFIG_FILE), ("service", SERVICE_FILE), ("cron", cron)):
+            content = previous.get(key)
+            if content is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+        command = ["systemctl", "restart", SERVICE_NAME] if previous.get("running") else ["systemctl", "stop", SERVICE_NAME]
+        return subprocess.run(command, capture_output=True).returncode == 0
+
     # ═════════════════════════════════════════════════════════════════════
     #  Per-user TRANSPORT-методы
     # ═════════════════════════════════════════════════════════════════════

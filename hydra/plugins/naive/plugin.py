@@ -48,6 +48,28 @@ class NaivePlugin(BasePlugin):
     def __init__(self):
         self._pending_cfg: str | None = None
 
+    def snapshot(self, state: AppState):
+        return {
+            "config": CADDYFILE.read_bytes() if CADDYFILE.exists() else None,
+            "service": SERVICE_FILE.read_bytes() if SERVICE_FILE.exists() else None,
+            "running": self.status().running,
+        }
+
+    def rollback(self, state: AppState, snapshot) -> bool:
+        previous = snapshot or {}
+        for key, path in (("config", CADDYFILE), ("service", SERVICE_FILE)):
+            content = previous.get(key)
+            if content is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = path.with_suffix(path.suffix + ".rollback")
+                tmp.write_bytes(content)
+                tmp.replace(path)
+        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+        command = ["systemctl", "restart", SERVICE_NAME] if previous.get("running") else ["systemctl", "stop", SERVICE_NAME]
+        return subprocess.run(command, capture_output=True).returncode == 0
+
     # ═════════════════════════════════════════════════════════════════════
     #  Установка / удаление
     # ═════════════════════════════════════════════════════════════════════

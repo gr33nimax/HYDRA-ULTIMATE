@@ -39,6 +39,15 @@ def test_add_and_find_user():
     assert found.traffic_limit_gb == 10
 
 
+def test_add_user_rejects_duplicate_uuid_for_different_email():
+    import pytest
+    from hydra.core.state import add_user
+
+    state = AppState(users=[User(email="first@example.com", uuid="same")])
+    with pytest.raises(ValueError, match="UUID"):
+        add_user(state, User(email="second@example.com", uuid="same"))
+
+
 def test_add_user_replace():
     """Повторное добавление заменяет существующего."""
     state = AppState()
@@ -266,6 +275,22 @@ def test_load_recovers_from_backup(tmp_path):
         state_mod.STATE_FILE.write_text("{broken", encoding="utf-8")
 
         assert load_state().network.domain == "backup.example"
+    finally:
+        state_mod.STATE_FILE, state_mod.STATE_DIR = original_file, original_dir
+
+
+def test_load_recovers_from_structurally_invalid_state(tmp_path):
+    import hydra.core.state as state_mod
+
+    original_file, original_dir = state_mod.STATE_FILE, state_mod.STATE_DIR
+    try:
+        state_mod.STATE_FILE = tmp_path / "state.json"
+        state_mod.STATE_DIR = tmp_path
+        state_mod.STATE_FILE.write_text(json.dumps({"version": 2, "users": "invalid"}), encoding="utf-8")
+        state_mod.STATE_FILE.with_suffix(".json.bak").write_text(
+            json.dumps({"version": 2, "users": [], "protocols": {}}), encoding="utf-8"
+        )
+        assert load_state().users == []
     finally:
         state_mod.STATE_FILE, state_mod.STATE_DIR = original_file, original_dir
 

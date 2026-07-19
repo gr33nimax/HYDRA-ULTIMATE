@@ -8,6 +8,7 @@ WARP/DNS/GeoIP → outbound/route/rules.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -21,6 +22,17 @@ SINGBOX_BIN = Path("/usr/local/bin/sing-box")
 SINGBOX_CONFIG = Path("/etc/sing-box/config.json")
 SINGBOX_SERVICE = Path("/etc/systemd/system/sing-box.service")
 LOG_FILE = Path("/var/log/hydra/install.log")
+_last_error = ""
+
+
+def last_error() -> str:
+    """Return the most recent user-facing configuration error."""
+    return _last_error
+
+
+def _set_error(message: str) -> None:
+    global _last_error
+    _last_error = message
 
 
 def _find_singbox():
@@ -266,16 +278,84 @@ def generate_config(state: AppState, fragments: dict[str, ConfigFragment]) -> di
     return config
 
 
+def _preflight_conflicts(config: dict) -> list[str]:
+    """Return human-readable conflicts that Sing-Box's schema check cannot catch."""
+    errors: list[str] = []
+    tags: dict[str, str] = {}
+    ports: dict[tuple[str, int], str] = {}
+    snis: dict[str, str] = {}
+
+    for section in ("inbounds", "outbounds", "endpoints"):
+        for item in config.get(section, []) or []:
+            if not isinstance(item, dict):
+                continue
+            tag = item.get("tag")
+            if tag:
+                owner = f"{section}:{item.get('type', 'unknown')}"
+                if tag in tags:
+                    errors.append(f"дублирующийся tag '{tag}' ({tags[tag]} и {owner})")
+                else:
+                    tags[tag] = owner
+
+            if section != "inbounds":
+                continue
+            try:
+                port = int(item.get("listen_port", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if port <= 0:
+                continue
+            listen = str(item.get("listen", "0.0.0.0"))
+            key = (listen, port)
+            owner = str(tag or item.get("type", "inbound"))
+            if key in ports:
+                errors.append(f"порт {port} на {listen} используется дважды ({ports[key]} и {owner})")
+            else:
+                ports[key] = owner
+
+            tls = item.get("tls")
+            if isinstance(tls, dict):
+                server_name = tls.get("server_name")
+                names = server_name if isinstance(server_name, list) else [server_name]
+                for name in names:
+                    normalized = str(name or "").strip().lower()
+                    if not normalized:
+                        continue
+                    if normalized in snis and snis[normalized] != owner:
+                        errors.append(
+                            f"SNI '{normalized}' назначен нескольким inbound ({snis[normalized]} и {owner})"
+                        )
+                    else:
+                        snis[normalized] = owner
+    return errors
+
+
 def write_config(config: dict) -> bool:
     """Записывает конфиг и проверяет валидность."""
     SINGBOX_CONFIG.parent.mkdir(parents=True, exist_ok=True)
 
     tmp = SINGBOX_CONFIG.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+    if os.name != "nt":
+        try:
+            tmp.chmod(0o600)
+        except OSError:
+            pass
 
     # Валидация
+    conflicts = _preflight_conflicts(config)
+    if conflicts:
+        message = "Проверка конфигурации не пройдена: " + "; ".join(conflicts)
+        _set_error(message)
+        _log("ERROR", message)
+        tmp.unlink(missing_ok=True)
+        return False
     bin_path = _find_singbox()
     if not bin_path:
+        tmp.unlink(missing_ok=True)
+        message = "Проверка конфигурации Sing-Box невозможна: бинарник не найден"
+        _set_error(message)
+        _log("ERROR", message)
         return False
     r = _run([str(bin_path), "check", "-c", str(tmp)])
     if r.returncode != 0:
@@ -286,11 +366,19 @@ def write_config(config: dict) -> bool:
             debug_path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
-        _log("ERROR", f"Sing-Box config invalid. Stdout: {r.stdout} Stderr: {r.stderr}")
+        message = f"Некорректная конфигурация Sing-Box: {r.stderr or r.stdout or 'неизвестная ошибка'}"
+        _set_error(message)
+        _log("ERROR", message)
         tmp.unlink(missing_ok=True)
         return False
 
     tmp.replace(SINGBOX_CONFIG)
+    _set_error("")
+    if os.name != "nt":
+        try:
+            SINGBOX_CONFIG.chmod(0o600)
+        except OSError:
+            pass
     return True
 
 
@@ -357,11 +445,15 @@ def start() -> bool:
     _install_service()
     r = _run(["systemctl", "start", "sing-box"], capture=False)
     if r.returncode != 0:
+        _set_error("Не удалось запустить Sing-Box: ошибка systemd")
         return False
-    time.sleep(1)
-    if is_running():
+    if wait_until_stable():
+        _set_error("")
         enable_autostart()
         return True
+    message = f"Sing-Box завершился после запуска: {_service_failure_detail()}"
+    _set_error(message)
+    _log("ERROR", message)
     return False
 
 
@@ -371,12 +463,48 @@ def stop() -> bool:
     return not is_running()
 
 
+def _service_failure_detail() -> str:
+    """Return a short systemd journal detail suitable for TUI and logs."""
+    try:
+        result = _run(
+            ["journalctl", "-u", "sing-box", "-n", "8", "--no-pager"],
+            timeout=5,
+        )
+        lines = [line.strip() for line in (result.stdout or result.stderr or "").splitlines() if line.strip()]
+        if lines:
+            return lines[-1]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "служба не перешла в стабильное состояние"
+
+
+def wait_until_stable(checks: int = 3, interval: float = 0.5) -> bool:
+    """Require several consecutive active checks after start/reload."""
+    for index in range(checks):
+        if not is_running():
+            return False
+        if index + 1 < checks:
+            time.sleep(interval)
+    return True
+
+
 def reload() -> bool:
     """Перезагружает конфиг sing-box (graceful)."""
     if not is_running():
         return start()
-    r = _run(["systemctl", "reload", "sing-box"], capture=False)
-    return r.returncode == 0
+    r = _run(["systemctl", "reload", "sing-box"])
+    if r.returncode != 0:
+        message = f"Не удалось перезагрузить Sing-Box: {r.stderr or r.stdout or 'ошибка systemd'}"
+        _set_error(message)
+        _log("ERROR", message)
+        return False
+    if not wait_until_stable():
+        message = f"Sing-Box завершился после применения: {_service_failure_detail()}"
+        _set_error(message)
+        _log("ERROR", message)
+        return False
+    _set_error("")
+    return True
 
 
 def restart() -> bool:
