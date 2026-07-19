@@ -14,6 +14,7 @@ from hydra.core.state import AppState, User, save_state, get_protocol, find_user
 from hydra.core import singbox, nft
 from hydra.core.host import HOST
 from hydra.core.apply_transaction import ApplyTransaction
+from hydra.core.transaction_helpers import state_transaction
 from hydra.plugins import registry
 
 
@@ -305,19 +306,10 @@ def _commit_user_transaction(state: AppState, transaction: ApplyTransaction) -> 
 
 
 def _new_user_transaction(state: AppState, snapshot: AppState) -> ApplyTransaction:
-    transaction = ApplyTransaction()
-    transaction.advance("apply")
-    transaction.add_rollback(
-        "application state",
+    return state_transaction(
         lambda: _restore_and_save_state(state, snapshot),
-        priority=20,
-    )
-    transaction.add_rollback(
-        "restored configuration",
         lambda: _reapply_restored_state(state),
-        priority=30,
     )
-    return transaction
 
 
 def _maybe_migrate_haproxy(state: AppState) -> None:
@@ -424,12 +416,9 @@ def install_plugin(state: AppState, name: str) -> bool:
     if not p:
         return False
     snapshot = copy.deepcopy(state)
-    transaction = ApplyTransaction()
-    transaction.advance("apply")
-    transaction.add_rollback(
-        "application state",
+    transaction = state_transaction(
         lambda: _restore_and_save_state(state, snapshot),
-        priority=20,
+        lambda: _reapply_restored_state(state),
     )
     try:
         ok = p.install()
@@ -451,11 +440,6 @@ def install_plugin(state: AppState, name: str) -> bool:
         proto.installed = True
         save_state(state)
         if proto.enabled:
-            transaction.add_rollback(
-                "restored configuration",
-                lambda: _reapply_restored_state(state),
-                priority=30,
-            )
             applied = apply_config(state)
             if not applied:
                 transaction.rollback(_log_rollback_error)
@@ -475,12 +459,9 @@ def uninstall_plugin(state: AppState, name: str) -> bool:
     proto = get_protocol(state, name)
     was_installed = proto.installed
     was_enabled = proto.enabled
-    transaction = ApplyTransaction()
-    transaction.advance("apply")
-    transaction.add_rollback(
-        "application state",
+    transaction = state_transaction(
         lambda: _restore_and_save_state(state, snapshot),
-        priority=20,
+        lambda: _reapply_restored_state(state),
     )
     if was_enabled:
         try:
@@ -507,11 +488,6 @@ def uninstall_plugin(state: AppState, name: str) -> bool:
     if not ok:
         transaction.rollback(_log_rollback_error)
         return False
-    transaction.add_rollback(
-        "restored configuration",
-        lambda: _reapply_restored_state(state),
-        priority=30,
-    )
     try:
         proto = get_protocol(state, name)
         proto.installed = False
@@ -548,8 +524,10 @@ def reinstall_plugin(state: AppState, name: str) -> bool:
     if not uninstall_plugin(state, name):
         return False
 
-    transaction = ApplyTransaction()
-    transaction.advance("apply")
+    transaction = state_transaction(
+        lambda: _restore_and_save_state(state, snapshot),
+        lambda: _reapply_restored_state(state),
+    )
     transaction.add_rollback(
         f"plugin {name}.install",
         lambda: _restore_plugin_install(state, name, p),
@@ -561,16 +539,6 @@ def reinstall_plugin(state: AppState, name: str) -> bool:
             lambda: p.on_enable(state),
             priority=10,
         )
-    transaction.add_rollback(
-        "application state",
-        lambda: _restore_and_save_state(state, snapshot),
-        priority=20,
-    )
-    transaction.add_rollback(
-        "restored configuration",
-        lambda: _reapply_restored_state(state),
-        priority=30,
-    )
 
     try:
         proto = get_protocol(state, name)
@@ -597,22 +565,14 @@ def enable(state: AppState, name: str) -> bool:
     if not p:
         return False
     snapshot = copy.deepcopy(state)
-    transaction = ApplyTransaction()
-    transaction.advance("apply")
+    transaction = state_transaction(
+        lambda: _restore_and_save_state(state, snapshot),
+        lambda: _reapply_restored_state(state),
+    )
     transaction.add_rollback(
         f"plugin {name}.on_disable",
         lambda: p.on_disable(state),
         priority=10,
-    )
-    transaction.add_rollback(
-        "application state",
-        lambda: _restore_and_save_state(state, snapshot),
-        priority=20,
-    )
-    transaction.add_rollback(
-        "restored configuration",
-        lambda: _reapply_restored_state(state),
-        priority=30,
     )
     try:
         p.on_enable(state)
@@ -650,12 +610,9 @@ def disable(state: AppState, name: str) -> bool:
     if not p:
         return False
     snapshot = copy.deepcopy(state)
-    transaction = ApplyTransaction()
-    transaction.advance("apply")
-    transaction.add_rollback(
-        "application state",
+    transaction = state_transaction(
         lambda: _restore_and_save_state(state, snapshot),
-        priority=20,
+        lambda: _reapply_restored_state(state),
     )
     try:
         p.on_disable(state)
@@ -666,11 +623,6 @@ def disable(state: AppState, name: str) -> bool:
         f"plugin {name}.on_enable",
         lambda: p.on_enable(state),
         priority=10,
-    )
-    transaction.add_rollback(
-        "restored configuration",
-        lambda: _reapply_restored_state(state),
-        priority=30,
     )
     try:
         proto = get_protocol(state, name)

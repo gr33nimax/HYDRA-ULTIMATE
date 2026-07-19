@@ -12,6 +12,8 @@ Host boundary completion — production `subprocess.run`/`Popen` calls now pass 
 
 Transactional lifecycle completion — legacy Honeypot, IPBan, Fail2ban, DNSCrypt, Telemt and WARP managers now delegate install/uninstall/enable/disable operations to the orchestrator transaction boundary. Managers no longer mutate plugin runtime directly.
 
+Rollback deduplication — shared state/configuration rollback registration is now provided by `state_transaction`; lifecycle operations keep plugin-specific rollback actions explicit while using one canonical restore ordering.
+
 ### Runtime reconciliation
 
 `hydra doctor` now reports desired-vs-actual runtime drift and a read-only correction plan. The new `hydra reconcile` command shows the same plan; `hydra reconcile --apply` explicitly applies only safe enable/disable actions and never installs missing components automatically.
