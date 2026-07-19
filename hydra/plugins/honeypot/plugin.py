@@ -88,9 +88,22 @@ class HoneypotPlugin(BasePlugin):
 
     def apply(self, state: AppState) -> bool:
         config = self._load_state()
+        previous_script = None
+        try:
+            previous_script = HONEYPOT_SCRIPT.read_bytes()
+        except OSError:
+            pass
         if not self.status().running:
             return self._install_service(config["port"], config["whitelist"])
         self._write_script(config["port"], config["whitelist"])
+        # Applying an unrelated protocol must not restart a healthy honeypot.
+        # Besides avoiding needless downtime, this keeps Mieru/other protocol
+        # lifecycle operations independent from a transient honeypot restart.
+        try:
+            if previous_script is not None and HONEYPOT_SCRIPT.read_bytes() == previous_script:
+                return True
+        except OSError:
+            pass
         restarted = _run(["systemctl", "restart", "hydra-honeypot"])
         return restarted.returncode == 0 and self._wait_until_stably_running()
 

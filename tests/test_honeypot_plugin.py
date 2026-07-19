@@ -5,6 +5,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.plugins.honeypot.plugin import HoneypotPlugin, HONEYPOT_PORT, HONEYPOT_SCRIPT
+import hydra.plugins.honeypot.plugin as honeypot_module
 from hydra.plugins.base import PluginCategory, ConfigFragment
 from hydra.core.state import AppState, PluginState
 
@@ -110,3 +111,17 @@ def test_generated_script_records_only_verified_firewall_bans():
     assert "if not ok:\n        return False" in script
     assert '"-C", "INPUT"' in script
     assert '"-I", "INPUT", "1"' in script
+
+
+def test_apply_does_not_restart_healthy_honeypot_when_script_is_unchanged(tmp_path, monkeypatch):
+    script = tmp_path / "hydra-honeypot.py"
+    script.write_bytes(b"stable-script")
+    monkeypatch.setattr(honeypot_module, "HONEYPOT_SCRIPT", script)
+    plugin = HoneypotPlugin()
+    with patch.object(plugin, "_load_state", return_value={"port": 9999, "whitelist": []}), \
+         patch.object(plugin, "status", return_value=MagicMock(running=True)), \
+         patch.object(plugin, "_write_script") as write_script, \
+         patch.object(honeypot_module, "_run") as run:
+        assert plugin.apply(_make_state()) is True
+    write_script.assert_called_once_with(9999, [])
+    run.assert_not_called()
