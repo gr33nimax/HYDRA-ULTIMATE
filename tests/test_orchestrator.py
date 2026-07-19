@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import patch, MagicMock
 from contextlib import contextmanager
+import pytest
 
 from hydra.core.state import AppState, NetworkConfig, PluginState, User
 from hydra.plugins.base import ConfigFragment, PluginCategory, PluginMeta, PluginStatus
@@ -205,6 +206,25 @@ def test_add_user_fanout():
 
     assert "alice@test" in mock.added_users
     assert user in state.users
+
+
+def test_add_user_rolls_back_plugin_hooks_and_state_when_apply_fails():
+    from hydra.core import orchestrator
+
+    state, mock = _state_with_mock_transport()
+    user = User(email="rollback@test", uuid="uuid-rollback")
+
+    with (
+        patch("hydra.core.orchestrator.registry.transports", return_value=[mock]),
+        patch("hydra.core.orchestrator.apply_config", side_effect=[False, True]),
+        patch("hydra.core.orchestrator.save_state"),
+        pytest.raises(RuntimeError, match="user change"),
+    ):
+        orchestrator.add_user(state, user)
+
+    assert not any(existing.email == user.email for existing in state.users)
+    assert mock.added_users == [user.email]
+    assert mock.removed_users == [user.email]
 
 
 def test_block_user_calls_on_user_block():

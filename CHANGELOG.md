@@ -22,6 +22,7 @@ Plugin transaction — `registry.apply_enabled` использует общий 
 Lifecycle transaction — enable/disable плагинов используют единый rollback-план для обратного hook, восстановления AppState и повторного применения прежней конфигурации.
 Install transaction — install/uninstall восстанавливают пакет, enable-hook, AppState и прежнюю конфигурацию при сбое; частично установленный новый плагин очищается.
 Reinstall transaction — repair/reinstall получил внешнюю транзакцию поверх uninstall/install и восстанавливает исходный рабочий плагин при сбое повторной установки.
+User lifecycle transaction — hooks транспортов при add/remove/block/unblock откатываются вместе с AppState и конфигурацией при неудачном apply.
 
 ### Backup и восстановление
 

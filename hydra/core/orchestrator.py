@@ -290,15 +290,34 @@ def _restore_plugin_install(state: AppState, name: str, plugin) -> None:
     _require_success(plugin.install(), f"Plugin {name} repair install failed")
 
 
-def _commit_state_change(state: AppState, snapshot: AppState) -> None:
-    """Persist and apply a state mutation, restoring the snapshot on failure."""
-    save_state(state)
-    if apply_config(state):
-        return
-    _restore_state(state, snapshot)
-    save_state(state)
-    apply_config(state)
-    raise RuntimeError("Configuration apply failed; state change was rolled back")
+def _commit_user_transaction(state: AppState, transaction: ApplyTransaction) -> None:
+    """Persist a user mutation and roll it back if configuration apply fails."""
+    try:
+        save_state(state)
+        applied = apply_config(state)
+    except Exception:
+        transaction.rollback(_log_rollback_error)
+        raise
+    if not applied:
+        transaction.rollback(_log_rollback_error)
+        raise RuntimeError("Configuration apply failed; user change was rolled back")
+    transaction.commit()
+
+
+def _new_user_transaction(state: AppState, snapshot: AppState) -> ApplyTransaction:
+    transaction = ApplyTransaction()
+    transaction.advance("apply")
+    transaction.add_rollback(
+        "application state",
+        lambda: _restore_and_save_state(state, snapshot),
+        priority=20,
+    )
+    transaction.add_rollback(
+        "restored configuration",
+        lambda: _reapply_restored_state(state),
+        priority=30,
+    )
+    return transaction
 
 
 def _maybe_migrate_haproxy(state: AppState) -> None:
@@ -678,15 +697,20 @@ def add_user(state: AppState, user: User) -> None:
     from hydra.core.state import add_user as _add
     snapshot = copy.deepcopy(state)
     _add(state, user)
-    for p in registry.transports():
+    transaction = _new_user_transaction(state, snapshot)
+    for index, p in enumerate(registry.transports()):
         if state.protocols.get(p.meta.name) and state.protocols[p.meta.name].enabled:
+            transaction.add_rollback(
+                f"user {user.email} plugin {p.meta.name}",
+                lambda p=p: p.on_user_remove(user, state),
+                priority=10 - index,
+            )
             try:
                 p.on_user_add(user, state)
             except Exception:
-                _restore_state(state, snapshot)
-                save_state(state)
+                transaction.rollback(_log_rollback_error)
                 raise
-    _commit_state_change(state, snapshot)
+    _commit_user_transaction(state, transaction)
 
     # Перезапуск сервера подписок, если он активен
     from hydra.core.systemd import is_active as is_svc_active, restart as restart_svc
@@ -700,15 +724,20 @@ def remove_user(state: AppState, email: str) -> None:
         return
     snapshot = copy.deepcopy(state)
     state.users = [x for x in state.users if x.email != email]
-    for p in registry.transports():
+    transaction = _new_user_transaction(state, snapshot)
+    for index, p in enumerate(registry.transports()):
         if state.protocols.get(p.meta.name) and state.protocols[p.meta.name].enabled:
+            transaction.add_rollback(
+                f"user {u.email} plugin {p.meta.name}",
+                lambda p=p: p.on_user_add(u, state),
+                priority=10 - index,
+            )
             try:
                 p.on_user_remove(u, state)
             except Exception:
-                _restore_state(state, snapshot)
-                save_state(state)
+                transaction.rollback(_log_rollback_error)
                 raise
-    _commit_state_change(state, snapshot)
+    _commit_user_transaction(state, transaction)
 
     # Перезапуск сервера подписок, если он активен
     from hydra.core.systemd import is_active as is_svc_active, restart as restart_svc
@@ -722,15 +751,20 @@ def block_user(state: AppState, email: str) -> None:
         return
     snapshot = copy.deepcopy(state)
     u.blocked = True
-    for p in registry.transports():
+    transaction = _new_user_transaction(state, snapshot)
+    for index, p in enumerate(registry.transports()):
         if state.protocols.get(p.meta.name) and state.protocols[p.meta.name].enabled:
+            transaction.add_rollback(
+                f"block {u.email} plugin {p.meta.name}",
+                lambda p=p: p.on_user_add(u, state),
+                priority=10 - index,
+            )
             try:
                 p.on_user_block(u, state)
             except Exception:
-                _restore_state(state, snapshot)
-                save_state(state)
+                transaction.rollback(_log_rollback_error)
                 raise
-    _commit_state_change(state, snapshot)
+    _commit_user_transaction(state, transaction)
 
 
 def unblock_user(state: AppState, email: str) -> None:
@@ -739,15 +773,20 @@ def unblock_user(state: AppState, email: str) -> None:
         return
     snapshot = copy.deepcopy(state)
     u.blocked = False
-    for p in registry.transports():
+    transaction = _new_user_transaction(state, snapshot)
+    for index, p in enumerate(registry.transports()):
         if state.protocols.get(p.meta.name) and state.protocols[p.meta.name].enabled:
+            transaction.add_rollback(
+                f"unblock {u.email} plugin {p.meta.name}",
+                lambda p=p: p.on_user_block(u, state),
+                priority=10 - index,
+            )
             try:
                 p.on_user_add(u, state)
             except Exception:
-                _restore_state(state, snapshot)
-                save_state(state)
+                transaction.rollback(_log_rollback_error)
                 raise
-    _commit_state_change(state, snapshot)
+    _commit_user_transaction(state, transaction)
 
 
 def sync_user_configs(state: AppState, plugin_name: str | None = None) -> None:

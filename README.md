@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg?style=flat-square)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg?style=flat-square)](https://ubuntu.com/)
-[![Tests](https://img.shields.io/badge/tests-575%20passed-brightgreen.svg?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/tests-576%20passed-brightgreen.svg?style=flat-square)](tests/)
 
 **HYDRA** — это автоматизированная модульная платформа развёртывания, оркестрации и администрирования многопротокольных прокси-серверов на базе **Sing-Box** (используется как единое сетевое ядро). 
 
