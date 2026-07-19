@@ -1,10 +1,10 @@
-# 🐙 HYDRA v2.4.1 — Multi-Protocol Proxy & Routing Orchestrator
+# 🐙 HYDRA v2.5.0 — Multi-Protocol Proxy & Routing Orchestrator
 
-[![Version](https://img.shields.io/badge/version-2.4.1-blue.svg?style=flat-square)](https://github.com/gr33nimax/HYDRA-ULTIMATE)
+[![Version](https://img.shields.io/badge/version-2.5.0-blue.svg?style=flat-square)](https://github.com/gr33nimax/HYDRA-ULTIMATE)
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg?style=flat-square)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg?style=flat-square)](https://ubuntu.com/)
-[![Tests](https://img.shields.io/badge/tests-628%20passed-brightgreen.svg?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/tests-630%20passed-brightgreen.svg?style=flat-square)](tests/)
 
 **HYDRA** — это автоматизированная модульная платформа развёртывания, оркестрации и администрирования многопротокольных прокси-серверов на базе **Sing-Box** (используется как единое сетевое ядро). 
 
@@ -12,6 +12,12 @@
 
 > [!IMPORTANT]
 > Платформа находится в стадии активного бета-тестирования. Рекомендуется развертывание на чистой операционной системе (Ubuntu 20.04+ / Debian 11+).
+
+### 📚 Документация
+
+- [История изменений и release notes](CHANGELOG.md)
+- [Полное руководство Headless CLI](docs/CLI.md)
+- [Процесс подготовки релиза](docs/RELEASING.md)
 
 ---
 
@@ -347,14 +353,14 @@ HYDRA-ULTIMATE/
 │   └── ui/                     # Интерфейс пользователя
 │       ├── tui.py              # [tui.py](hydra/ui/tui.py) - Обертка над Curtsies для управления окнами TUI
 │       └── menus.py            # [menus.py](hydra/ui/menus.py) - Меню, формы ввода и диалоговые окна TUI
-└── tests/                      # [tests/](tests/) - Набор автоматизированных тестов (более 500 тест-кейсов)
+└── tests/                      # [tests/](tests/) - Набор автоматизированных тестов (630 тест-кейсов)
 ```
 
 ---
 
 ## 🧪 Разработка и тестирование
 
-Проект покрыт развитой системой автоматических тестов (более 500 тестов), проверяющих генерацию конфигураций, транзакционный жизненный цикл плагинов, работу Caddy L4 и биллинг-демона.
+Проект покрыт развитой системой автоматических тестов (630 тестов), проверяющих генерацию конфигураций, транзакционный жизненный цикл плагинов, работу Caddy L4 и биллинг-демона.
 
 1. Клонируйте репозиторий:
    ```bash
@@ -383,37 +389,13 @@ HYDRA-ULTIMATE/
 Полная история версий и подробные release notes вынесены в отдельный файл:
 [CHANGELOG.md](CHANGELOG.md).
 
-## Headless CLI
+## 🧰 Headless CLI
 
-Для автоматизации и безопасного просмотра состояния доступен JSON CLI:
+JSON CLI предназначен для автоматизации, диагностики и безопасного управления
+VPS без запуска TUI. Полное описание команд, exit codes, транзакционного
+`apply`, резервного копирования, восстановления, пользователей и TLS-аудита:
 
-```bash
-sudo hydra status
-sudo hydra validate
-sudo hydra plan
-sudo hydra apply --dry-run
-sudo hydra doctor
-sudo hydra reconcile
-sudo hydra reconcile --apply
-sudo hydra upgrade check
-sudo hydra backup
-sudo hydra restore /var/backups/hydra/hydra-backup-*.tar.gz --dry-run
-sudo hydra user list
-```
-
-`apply --dry-run` только собирает и проверяет план. Изменения выполняются
-только командой `sudo hydra apply`.
-
-Восстановление требует отдельной проверки и явного подтверждения:
-
-```bash
-sudo hydra restore /var/backups/hydra/hydra-backup-20260719.tar.gz --dry-run
-sudo hydra restore /var/backups/hydra/hydra-backup-20260719.tar.gz --yes
-sudo hydra validate
-sudo hydra apply
-```
-
-Перед фактическим восстановлением HYDRA автоматически создаёт страховочную резервную копию.
+📘 [Руководство Headless CLI](docs/CLI.md)
 
 ## 🔗 Связанные проекты
 
