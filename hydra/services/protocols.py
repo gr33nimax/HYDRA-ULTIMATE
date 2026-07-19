@@ -6,6 +6,7 @@ from typing import Any, Protocol
 
 from hydra.core.state import AppState
 from hydra.plugins.base import BasePlugin, PluginCategory
+from hydra.services.reconciliation import ReconciliationService
 
 
 class ProtocolOperations(Protocol):
@@ -64,3 +65,6 @@ class ProtocolService:
 
     def disable(self, state: AppState, name: str) -> bool:
         return self.operations.disable(state, name)
+
+    def reconciliation(self) -> ReconciliationService:
+        return ReconciliationService(self)
