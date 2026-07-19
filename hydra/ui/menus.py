@@ -53,6 +53,10 @@ from hydra.ui.protocol_ui import (
 )
 from hydra.ui.network_info import snapshot as network_snapshot
 from hydra.ui import log_viewer, system_monitor
+from hydra.services.users import UserService
+
+
+_user_service = UserService(orchestrator)
 
 
 def _apply_error_text(default: str = "Ошибка применения конфигурации") -> str:
@@ -1189,7 +1193,7 @@ def _user_detail_menu(state: AppState, user: User):
             prompt("Нажмите Enter")
         elif choice == "6":
             if confirm(f"Удалить {user.email}?", default=False):
-                orchestrator.remove_user(state, user.email)
+                _user_service.remove(state, user.email)
                 success(f"Пользователь {user.email} удалён")
                 prompt("Нажмите Enter")
                 return
@@ -1201,11 +1205,11 @@ def _reconcile_user_access(state: AppState, user: User) -> None:
     """Немедленно применяет новые TTL/квоту к серверным конфигурациям."""
     entitled, reason = get_user_entitlement_status(user)
     if not entitled and not user.blocked:
-        orchestrator.block_user(state, user.email)
+        _user_service.block(state, user.email)
         warn(f"Доступ отключён: {reason}.")
     elif entitled and user.blocked:
         if confirm("Ограничения больше не превышены. Разблокировать пользователя?", default=True):
-            orchestrator.unblock_user(state, user.email)
+            _user_service.unblock(state, user.email)
             success("Пользователь разблокирован")
 
 
@@ -1659,7 +1663,7 @@ def _add_user(state: AppState):
         created_at=datetime.now().isoformat(),
     )
     
-    orchestrator.add_user(state, user)
+    _user_service.add(state, user)
     
     success(f"Пользователь {email} создан")
     if enabled_transports:
@@ -1676,10 +1680,10 @@ def _toggle_block(state: AppState, user: User):
             error(f"Нельзя разблокировать: {reason}. Сначала измените лимит или срок действия.")
             prompt("Нажмите Enter")
             return
-        orchestrator.unblock_user(state, user.email)
+        _user_service.unblock(state, user.email)
         success(f"{user.email} разблокирован")
     else:
-        orchestrator.block_user(state, user.email)
+        _user_service.block(state, user.email)
         success(f"{user.email} заблокирован")
     prompt("Нажмите Enter")
 
