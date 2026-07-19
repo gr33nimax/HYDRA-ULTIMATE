@@ -16,6 +16,8 @@ Rollback deduplication — shared state/configuration rollback registration is n
 
 Plugin contract completion — added typed `PluginCapabilities`, `LifecycleResult` and `HealthResult` models with compatibility adapters for legacy bool/tuple implementations. Registry contract validation now checks every registered plugin without touching the host.
 
+Typed configuration boundary — plugin config and `ConfigFragment` now use recursive JSON types, strict nested validation, serialization helpers and a defensive legacy-dict adapter. Invalid Python-only values are rejected before state persistence or runtime configuration.
+
 ### Runtime reconciliation
 
 `hydra doctor` now reports desired-vs-actual runtime drift and a read-only correction plan. The new `hydra reconcile` command shows the same plan; `hydra reconcile --apply` explicitly applies only safe enable/disable actions and never installs missing components automatically.

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional, TypeVar, get_type_hints
+from hydra.plugins.config import PluginConfig, validate_json_object
 
 STATE_DIR = Path("/var/lib/hydra")
 STATE_FILE = STATE_DIR / "state.json"
@@ -79,7 +80,7 @@ class PluginState:
     enabled: bool = False
     port: int = 0
     installed: bool = False
-    config: dict = field(default_factory=dict)
+    config: PluginConfig = field(default_factory=dict)
 
 
 @dataclass
@@ -334,6 +335,10 @@ def validate_state(state: AppState) -> None:
     for name, protocol in state.protocols.items():
         if not isinstance(name, str) or not name.strip() or not isinstance(protocol.config, dict):
             raise ValueError("protocol entries must have a name and object config")
+        try:
+            validate_json_object(protocol.config, path=f"protocols.{name}.config")
+        except Exception as exc:
+            raise ValueError(str(exc)) from exc
         if not isinstance(protocol.port, int) or not 0 <= protocol.port <= 65535:
             raise ValueError(f"protocol {name} has an invalid port")
 
