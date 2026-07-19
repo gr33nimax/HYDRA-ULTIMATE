@@ -32,6 +32,7 @@ from hydra.plugins.registry import (
     enabled, collect_fragments,
     status_all, transports, enhancements, security as sec_plugins,
 )
+from hydra.plugins import registry as plugin_registry
 from hydra.plugins.base import PluginCategory
 from hydra.core.systemd import install_service, install_timer, remove_unit
 from hydra.core import orchestrator
@@ -54,9 +55,11 @@ from hydra.ui.protocol_ui import (
 from hydra.ui.network_info import snapshot as network_snapshot
 from hydra.ui import log_viewer, system_monitor
 from hydra.services.users import UserService
+from hydra.services.protocols import ProtocolService
 
 
 _user_service = UserService(orchestrator)
+_protocol_service = ProtocolService(orchestrator, plugin_registry)
 
 
 def _apply_error_text(default: str = "Ошибка применения конфигурации") -> str:
@@ -607,10 +610,10 @@ def _rollback_network_tuning_menu() -> None:
 def menu_protocols(state: AppState):
     while True:
         clear()
-        st = status_all()
+        st = _protocol_service.statuses()
 
         transport_lines = []
-        for p in transports():
+        for p in _protocol_service.list(PluginCategory.TRANSPORT):
             s = st.get(p.meta.name, {})
             port = str(s["port"]) if s.get("port") else "—"
             transport_lines.append(
@@ -624,7 +627,7 @@ def menu_protocols(state: AppState):
         ]
         panel("Протоколы · обзор", lines)
 
-        all_p = transports()
+        all_p = _protocol_service.list(PluginCategory.TRANSPORT)
         opts: list[tuple[str, str, str]] = []
         for i, p in enumerate(all_p, 1):
             s = st.get(p.meta.name, {})
@@ -651,10 +654,10 @@ def menu_protocols(state: AppState):
 def menu_network_services(state: AppState):
     while True:
         clear()
-        st = status_all()
+        st = _protocol_service.statuses()
 
         enhancement_lines = []
-        for p in enhancements():
+        for p in _protocol_service.list(PluginCategory.ENHANCEMENT):
             s = st.get(p.meta.name, {})
             ico = f"{GREEN}●{NC}" if s.get("running") else (f"{YELLOW}●{NC}" if s.get("installed") else f"{DIM}●{NC}")
             port = f":{s['port']}" if s.get("port") else ""
@@ -667,7 +670,7 @@ def menu_network_services(state: AppState):
         ]
         panel("Сетевые службы", lines)
 
-        all_p = enhancements()
+        all_p = _protocol_service.list(PluginCategory.ENHANCEMENT)
         opts: list[tuple[str, str, str]] = []
         for i, p in enumerate(all_p, 1):
             s = st.get(p.meta.name, {})
@@ -798,11 +801,11 @@ def menu_plugin(state: AppState, p):
         if choice == "1":
             if not ps.installed:
                 info("Установка...")
-                ok = orchestrator.install_plugin(state, p.meta.name)
+                ok = _protocol_service.install(state, p.meta.name)
                 if ok:
                     success("Установлено!")
                     try:
-                        if orchestrator.enable(state, p.meta.name):
+                        if _protocol_service.enable(state, p.meta.name):
                             success("Протокол включён и применён")
                         else:
                             error(_apply_error_text())
@@ -811,13 +814,13 @@ def menu_plugin(state: AppState, p):
                 else:
                     error("Ошибка установки")
             elif ps.enabled:
-                if orchestrator.disable(state, p.meta.name):
+                if _protocol_service.disable(state, p.meta.name):
                     success("Протокол выключен")
                 else:
                     error(_apply_error_text())
             else:
                 try:
-                    if orchestrator.enable(state, p.meta.name):
+                    if _protocol_service.enable(state, p.meta.name):
                         success("Протокол включён")
                     else:
                         error(_apply_error_text())
@@ -868,7 +871,7 @@ def menu_plugin(state: AppState, p):
 
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):
-                ok = orchestrator.reinstall_plugin(state, p.meta.name)
+                ok = _protocol_service.reinstall(state, p.meta.name)
                 if ok:
                     success("Переустановлено!")
                 else:
@@ -877,7 +880,7 @@ def menu_plugin(state: AppState, p):
         
         elif choice == "9" and ps.installed:
             if confirm(f"Удалить {p.meta.name}?", default=False):
-                orchestrator.uninstall_plugin(state, p.meta.name)
+                _protocol_service.uninstall(state, p.meta.name)
                 success("Удалено")
                 prompt("Нажмите Enter")
                 return
