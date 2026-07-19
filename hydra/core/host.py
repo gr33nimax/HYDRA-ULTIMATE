@@ -23,6 +23,9 @@ class HostPaths:
     iptables_rules: Path = field(default_factory=lambda: Path(
         os.environ.get("HYDRA_IPTABLES_RULES", "/etc/iptables/rules.v4")
     ))
+    nftables_rules: Path = field(default_factory=lambda: Path(
+        os.environ.get("HYDRA_NFTABLES_RULES", "/etc/nftables.conf")
+    ))
 
 
 @dataclass

@@ -1,11 +1,11 @@
 """hydra/core/nft.py — nftables TPROXY: заворот трафика транспортов в sing-box."""
 from __future__ import annotations
 
-import subprocess
-import shutil
+from subprocess import CompletedProcess
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from hydra.utils.commands import DEFAULT_TIMEOUT
+from hydra.core.host import HOST
 
 if TYPE_CHECKING:
     from hydra.plugins.base import ConfigFragment
@@ -21,19 +21,17 @@ class TproxySnapshot:
 
 def snapshot_tproxy() -> TproxySnapshot:
     """Capture only HYDRA's nft table and policy-routing presence."""
-    if not shutil.which("nft"):
+    if not HOST.which("nft"):
         return TproxySnapshot(None, False)
-    table = subprocess.run(
+    table = HOST.run(
         ["nft", "list", "table", "inet", NFT_TABLE],
-        capture_output=True,
         text=True,
     )
     ruleset = table.stdout if table.returncode == 0 else None
     policy = False
-    if shutil.which("ip"):
-        rule = subprocess.run(
+    if HOST.which("ip"):
+        rule = HOST.run(
             ["ip", "rule", "show", "fwmark", "0x1"],
-            capture_output=True,
             text=True,
         )
         policy = rule.returncode == 0 and "0x1" in rule.stdout
@@ -42,11 +40,10 @@ def snapshot_tproxy() -> TproxySnapshot:
 
 def restore_tproxy(snapshot: TproxySnapshot) -> None:
     """Restore a HYDRA-only snapshot without touching unrelated firewall rules."""
-    if not shutil.which("nft"):
+    if not HOST.which("nft"):
         return
-    subprocess.run(
+    HOST.run(
         ["nft", "delete", "table", "inet", NFT_TABLE],
-        capture_output=True,
     )
     if snapshot.ruleset:
         _run_checked(["nft", "-f", "-"], input=snapshot.ruleset.encode())
@@ -56,9 +53,9 @@ def restore_tproxy(snapshot: TproxySnapshot) -> None:
         _cleanup_policy_routing()
 
 
-def _run_checked(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+def _run_checked(cmd: list[str], **kwargs) -> CompletedProcess:
     kwargs.setdefault("timeout", DEFAULT_TIMEOUT)
-    result = subprocess.run(cmd, capture_output=True, **kwargs)
+    result = HOST.run(cmd, **kwargs)
     if result.returncode != 0:
         stderr = result.stderr.decode(errors="replace") if isinstance(result.stderr, bytes) else result.stderr
         raise RuntimeError(f"{' '.join(cmd)} failed: {stderr or 'unknown error'}")
@@ -75,16 +72,16 @@ def _ensure_tproxy_modules():
 
 def _ensure_policy_routing():
     """Настраивает ip rule + ip route для TPROXY (fwmark 0x1 → local routing)."""
-    r = subprocess.run(
+    r = HOST.run(
         ["ip", "rule", "show", "fwmark", "0x1"],
-        capture_output=True, text=True,
+        text=True,
     )
     if "0x1" not in r.stdout:
         _run_checked(["ip", "rule", "add", "fwmark", "0x1", "table", "100"])
 
-    r = subprocess.run(
+    r = HOST.run(
         ["ip", "route", "show", "table", "100"],
-        capture_output=True, text=True,
+        text=True,
     )
     if "local" not in r.stdout:
         _run_checked(["ip", "route", "add", "local", "0.0.0.0/0", "dev", "lo", "table", "100"])
@@ -92,10 +89,8 @@ def _ensure_policy_routing():
 
 def _cleanup_policy_routing():
     """Удаляет policy routing правила TPROXY."""
-    subprocess.run(["ip", "rule", "del", "fwmark", "0x1", "table", "100"],
-                   capture_output=True)
-    subprocess.run(["ip", "route", "flush", "table", "100"],
-                   capture_output=True)
+    HOST.run(["ip", "rule", "del", "fwmark", "0x1", "table", "100"])
+    HOST.run(["ip", "route", "flush", "table", "100"])
 
 
 def apply_tproxy(fragments: dict, tproxy_port: int = 1081) -> None:
@@ -108,13 +103,11 @@ def apply_tproxy(fragments: dict, tproxy_port: int = 1081) -> None:
         ifaces.update(getattr(frag, "nft_tproxy_ifaces", []))
 
     if not ports and not ifaces:
-        subprocess.run(["nft", "delete", "table", "inet", NFT_TABLE], capture_output=True)
+        HOST.run(["nft", "delete", "table", "inet", NFT_TABLE])
         _cleanup_policy_routing()
         return
 
-    table_exists = subprocess.run(
-        ["nft", "list", "table", "inet", NFT_TABLE], capture_output=True,
-    ).returncode == 0
+    table_exists = HOST.run(["nft", "list", "table", "inet", NFT_TABLE]).returncode == 0
     ruleset = f"delete table inet {NFT_TABLE}\n" if table_exists else ""
     ruleset += f"table inet {NFT_TABLE} {{\n"
     ruleset += "    chain prerouting {\n"
@@ -154,22 +147,19 @@ def apply_tproxy(fragments: dict, tproxy_port: int = 1081) -> None:
 
 
 def clear_tproxy() -> None:
-    subprocess.run(
+    HOST.run(
         ["nft", "delete", "table", "inet", NFT_TABLE],
-        capture_output=True,
     )
     _cleanup_policy_routing()
 
 
 def persist() -> None:
     try:
-        result = subprocess.run(
+        result = HOST.run(
             ["nft", "list", "ruleset"],
-            capture_output=True,
             text=True,
         )
         if result.returncode == 0:
-            from pathlib import Path
-            Path("/etc/nftables.conf").write_text(result.stdout)
+            HOST.atomic_write(HOST.paths.nftables_rules, result.stdout, mode=0o600)
     except Exception:
         pass
