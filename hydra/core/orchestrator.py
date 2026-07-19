@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from hydra.core.state import AppState, User, save_state, get_protocol, find_user
 from hydra.core import singbox, nft
+from hydra.core.host import HOST
 from hydra.plugins import registry
 
 
@@ -304,7 +305,7 @@ def _maybe_migrate_haproxy(state: AppState) -> None:
     if shutil.which("systemctl"):
         try:
             # Check if HAProxy service is enabled
-            r = subprocess.run(["systemctl", "is-enabled", "haproxy"], capture_output=True, text=True)
+            r = HOST.run(["systemctl", "is-enabled", "haproxy"], text=True)
             if r.stdout.strip() == "enabled":
                 print("  Migration: stopping and disabling HAProxy...")
                 uninstall_haproxy()
@@ -326,9 +327,7 @@ def _manage_traffic_daemon(state: AppState) -> None:
 
     def systemctl(*args: str, allow_inactive: bool = False) -> subprocess.CompletedProcess:
         try:
-            result = subprocess.run(
-                ["systemctl", *args], capture_output=True, text=True, timeout=30,
-            )
+            result = HOST.run(["systemctl", *args], text=True, timeout=30)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(f"systemctl {' '.join(args)} failed: {exc}") from exc
         if result.returncode != 0 and not allow_inactive:

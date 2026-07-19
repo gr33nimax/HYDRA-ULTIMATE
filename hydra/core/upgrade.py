@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import os
-import shutil
 import sys
 from pathlib import Path
 
 from hydra import __version__
 from hydra.core.state import AppState, SCHEMA_VERSION, validate_state
-from hydra.utils.commands import CommandError, run
+from hydra.core.host import HOST
+from hydra.utils.commands import CommandError
 
 
 def check_upgrade(state: AppState, project_dir: Path | None = None) -> dict:
@@ -26,9 +26,9 @@ def check_upgrade(state: AppState, project_dir: Path | None = None) -> dict:
     record("python", sys.version_info >= (3, 10), sys.version.split()[0])
 
     root = Path(project_dir) if project_dir else Path(__file__).resolve().parents[2]
-    if (root / ".git").exists() and shutil.which("git"):
+    if (root / ".git").exists() and HOST.which("git"):
         try:
-            result = run(
+            result = HOST.run(
                 ["git", "-C", root, "status", "--porcelain"],
                 text=True,
                 timeout=10,

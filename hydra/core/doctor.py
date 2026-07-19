@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import os
-import shutil
 import sys
 from pathlib import Path
 
+from hydra.core.host import HOST
 from hydra.core.state import AppState, STATE_DIR, validate_state
 
 
@@ -33,7 +33,7 @@ def run_doctor(state: AppState) -> dict:
         ("nft", False),
         ("iptables", False),
     ):
-        resolved = shutil.which(command)
+        resolved = HOST.which(command)
         checks.append(_check(command, bool(resolved), resolved or "not found", required=required))
 
     state_dir = Path(STATE_DIR)
