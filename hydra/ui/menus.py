@@ -1003,7 +1003,7 @@ def _menu_snell_settings(state: AppState, plugin) -> None:
     while True:
         ps = get_protocol(state, "snell")
         version = plugin._version(state)
-        mode = str(ps.config.get("obfs_mode", "tls"))
+        mode = str(ps.config.get("obfs_mode", "http"))
         host = str(ps.config.get("obfs_host", "www.bing.com"))
         choice = menu([
             ("1", "🎭 Simple obfs", f"{mode.upper()} · {host}" if mode else "выключен"),
@@ -1014,12 +1014,11 @@ def _menu_snell_settings(state: AppState, plugin) -> None:
         try:
             if choice == "1":
                 selected = menu([
-                    ("1", "TLS obfs", "Имитация TLS-трафика"),
-                    ("2", "HTTP obfs", "Имитация HTTP-трафика"),
-                    ("3", "Выключить", "Чистый Snell без simple-obfs"),
+                    ("1", "HTTP obfs", "Имитация HTTP-трафика"),
+                    ("2", "Выключить", "Чистый Snell без simple-obfs"),
                     ("0", "Отмена", ""),
                 ], "SIMPLE OBFS SNELL")
-                new_mode = {"1": "tls", "2": "http", "3": ""}.get(selected)
+                new_mode = {"1": "http", "2": ""}.get(selected)
                 if new_mode is None:
                     continue
                 new_host = host

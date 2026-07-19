@@ -92,7 +92,10 @@ class SnellPlugin(BasePlugin):
     def client_link(self, user: User, state: AppState) -> str:
         server = self._url_host(self._server_ip(state))
         psk = urllib.parse.quote(self._psk(user.uuid), safe="")
-        query_params = {"version": self._version(state)}
+        query_params = {
+            "version": self._version(state),
+            "udp-relay": "true",
+        }
         mode = self._obfs_mode(state)
         if mode:
             query_params.update({"obfs": mode, "obfs-host": self._obfs_host(state)})
@@ -210,8 +213,8 @@ class SnellPlugin(BasePlugin):
     def _obfs_mode(state: AppState) -> str:
         ps = state.protocols.get("snell")
         mode = str(ps.config.get("obfs_mode", OBFS_MODE)) if ps else OBFS_MODE
-        if mode not in {"", "http", "tls"}:
-            raise ValueError("Snell obfs mode must be empty, http or tls")
+        if mode not in {"", "http"}:
+            raise ValueError("Snell obfs mode must be empty or http")
         return mode
 
     @staticmethod

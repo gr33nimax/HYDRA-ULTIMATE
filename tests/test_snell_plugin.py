@@ -70,6 +70,7 @@ def test_client_material_matches_inbound():
     assert "obfs" not in inbound
     assert "obfs" not in outbound
     assert "obfs=" not in plugin.client_link(user, state)
+    assert "udp-relay=true" in plugin.client_link(user, state)
     assert plugin.client_link(user, state).startswith("snell://")
 
 
@@ -89,12 +90,12 @@ def test_enable_migrates_legacy_v5_setting_to_v4():
     assert state.protocols["snell"].config["version"] == 4
 
 
-def test_tls_obfs_is_configurable_for_clients_that_support_it():
+def test_http_obfs_is_configurable():
     plugin = SnellPlugin()
     user = User("a@example.com", "uuid-a")
     state = _state(user)
     state.protocols["snell"].config.update({
-        "version": 4, "obfs_mode": "tls", "obfs_host": "www.example.com",
+        "version": 4, "obfs_mode": "http", "obfs_host": "www.example.com",
     })
     inbound = plugin.configure(state).inbounds[0]
     outbound = next(
@@ -102,9 +103,10 @@ def test_tls_obfs_is_configurable_for_clients_that_support_it():
         if item["type"] == "snell"
     )
     assert inbound["version"] == outbound["version"] == 4
-    assert inbound["obfs"] == {"mode": "tls"}
-    assert outbound["obfs"] == {"mode": "tls", "host": "www.example.com"}
-    assert "obfs=tls" in plugin.client_link(user, state)
+    assert inbound["obfs"] == {"mode": "http"}
+    assert outbound["obfs"] == {"mode": "http", "host": "www.example.com"}
+    assert "obfs=http" in plugin.client_link(user, state)
+    assert "udp-relay=true" in plugin.client_link(user, state)
 
 
 def test_runtime_settings_apply_and_rollback():
@@ -119,7 +121,7 @@ def test_runtime_settings_apply_and_rollback():
 
     with patch("hydra.core.state.save_state"), \
          patch("hydra.core.orchestrator.apply_config", side_effect=[False, True]):
-        assert plugin.set_settings(state, 5, "tls", "new.example.com") is False
+        assert plugin.set_settings(state, 5, "http", "new.example.com") is False
     assert state.protocols["snell"].config == {
         "version": 4, "obfs_mode": "http", "obfs_host": "cdn.example.com",
     }
@@ -130,7 +132,11 @@ def test_invalid_runtime_settings_do_not_mutate_state():
     state = _state(User("a@example.com", "uuid-a"))
     before = dict(state.protocols["snell"].config)
     with pytest.raises(ValueError, match="version 4"):
-        plugin.set_settings(state, 3, "tls", "cdn.example.com")
+        plugin.set_settings(state, 3, "http", "cdn.example.com")
+    assert state.protocols["snell"].config == before
+
+    with pytest.raises(ValueError, match="Snell obfs mode"):
+        plugin.set_settings(state, 4, "tls", "cdn.example.com")
     assert state.protocols["snell"].config == before
 
 

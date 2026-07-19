@@ -24,13 +24,13 @@ def test_hysteria2_tui_changes_congestion_mode():
 def test_snell_tui_changes_obfs():
     state = AppState()
     state.protocols["snell"] = PluginState(installed=True, enabled=True, config={
-        "version": 4, "obfs_mode": "tls", "obfs_host": "www.bing.com",
+        "version": 4, "obfs_mode": "http", "obfs_host": "www.bing.com",
     })
     plugin = MagicMock()
     plugin._version.return_value = 4
     plugin.set_settings.return_value = True
 
-    with patch("hydra.ui.menus.menu", side_effect=["1", "3", "0"]), \
+    with patch("hydra.ui.menus.menu", side_effect=["1", "2", "0"]), \
          patch("hydra.ui.menus.prompt", return_value=""):
         _menu_snell_settings(state, plugin)
 
