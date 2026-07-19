@@ -32,11 +32,16 @@ def build_plan(state: AppState) -> dict:
     fragments = registry.collect_fragments(candidate)
     config = singbox.generate_config(candidate, fragments)
     conflicts = singbox._preflight_conflicts(config)
+    from hydra.core import orchestrator
+    from hydra.plugins import registry
+    from hydra.services.protocols import ProtocolService
+    reconciliation = ProtocolService(orchestrator, registry).reconciliation().plan(state)
     return {
         "valid": not conflicts,
         "conflicts": conflicts,
         "plugins": sorted(fragments),
         "requirements": registry.requirements(candidate),
+        "reconciliation": [asdict(action) for action in reconciliation],
         "changes": {
             "inbounds": len(config.get("inbounds", [])),
             "outbounds": len(config.get("outbounds", [])),

@@ -10,10 +10,12 @@ def test_build_plan_uses_copy_and_reports_changes():
     state = AppState(protocols={"mock": PluginState(enabled=True)})
     with patch("hydra.plugins.registry.collect_fragments", return_value={}), \
          patch("hydra.core.singbox.generate_config", return_value={"inbounds": [], "outbounds": [], "route": {"rules": []}}), \
-         patch("hydra.core.singbox._preflight_conflicts", return_value=[]):
+         patch("hydra.core.singbox._preflight_conflicts", return_value=[]), \
+         patch("hydra.plugins.registry.status_all", return_value={}):
         result = cli.build_plan(state)
     assert result["valid"] is True
     assert state.network.tproxy_enabled is False
+    assert result["reconciliation"] == []
 
 
 def test_validate_command_prints_json(capsys):
