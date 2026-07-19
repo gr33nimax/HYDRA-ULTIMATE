@@ -54,6 +54,10 @@ from hydra.ui.tui import (
 from hydra.ui.protocol_ui import (
     protocol_label, protocol_menu_title, protocol_status_panel, status_badge,
 )
+from hydra.ui.protocol_menu import (
+    enhancement_options, enhancement_summary_lines, menu_footer,
+    render_protocol_status, transport_options, transport_summary_lines,
+)
 from hydra.ui.network_info import snapshot as network_snapshot
 from hydra.ui import log_viewer, system_monitor
 from hydra.services.users import UserService
@@ -613,15 +617,9 @@ def menu_protocols(state: AppState):
     while True:
         clear()
         st = _protocol_service.statuses(state)
+        all_p = _protocol_service.list(PluginCategory.TRANSPORT)
 
-        transport_lines = []
-        for p in _protocol_service.list(PluginCategory.TRANSPORT):
-            s = st.get(p.meta.name, {})
-            port = str(s["port"]) if s.get("port") else "—"
-            transport_lines.append(
-                f"  {status_badge(s)}  {protocol_label(p.meta.name):<16} "
-                f"{DIM}порт {port}{NC}"
-            )
+        transport_lines = transport_summary_lines(all_p, st)
 
         lines = [
             f"  {BOLD}Транспортные протоколы{NC}",
@@ -629,16 +627,7 @@ def menu_protocols(state: AppState):
         ]
         panel("Протоколы · обзор", lines)
 
-        all_p = _protocol_service.list(PluginCategory.TRANSPORT)
-        opts: list[tuple[str, str, str]] = []
-        for i, p in enumerate(all_p, 1):
-            s = st.get(p.meta.name, {})
-            badge = status_badge(s)
-            desc = s.get("error") or p.meta.description
-            opts.append((str(i),
-                         f"{badge}  {protocol_label(p.meta.name)}",
-                         desc))
-        opts += [("-", "", ""), ("0", "↩ Назад", "")]
+        opts = transport_options(all_p, st) + menu_footer()
 
         choice = menu(opts, "ПРОТОКОЛЫ · УПРАВЛЕНИЕ")
         if choice == "0":
@@ -657,14 +646,9 @@ def menu_network_services(state: AppState):
     while True:
         clear()
         st = _protocol_service.statuses(state)
+        all_p = _protocol_service.list(PluginCategory.ENHANCEMENT)
 
-        enhancement_lines = []
-        for p in _protocol_service.list(PluginCategory.ENHANCEMENT):
-            s = st.get(p.meta.name, {})
-            ico = f"{GREEN}●{NC}" if s.get("running") else (f"{YELLOW}●{NC}" if s.get("installed") else f"{DIM}●{NC}")
-            port = f":{s['port']}" if s.get("port") else ""
-            st_txt = "вкл" if s.get("enabled") else "выкл"
-            enhancement_lines.append(f"  {ico} {p.meta.name:<14} {DIM}{st_txt:>4}{NC}  порт{port}")
+        enhancement_lines = enhancement_summary_lines(all_p, st)
 
         lines = [
             f"  {BOLD}Сетевые службы (DNS / Маршрутизация):{NC}",
@@ -672,15 +656,7 @@ def menu_network_services(state: AppState):
         ]
         panel("Сетевые службы", lines)
 
-        all_p = _protocol_service.list(PluginCategory.ENHANCEMENT)
-        opts: list[tuple[str, str, str]] = []
-        for i, p in enumerate(all_p, 1):
-            s = st.get(p.meta.name, {})
-            ico = f"{GREEN}✓{NC}" if s.get("running") else (f"{YELLOW}⚠{NC}" if s.get("installed") else f"{RED}✗{NC}")
-            opts.append((str(i),
-                         f"{ico} {p.meta.name}",
-                         f"{p.meta.description}"))
-        opts += [("-", "", ""), ("0", "↩ Назад", "")]
+        opts = enhancement_options(all_p, st) + menu_footer()
 
         choice = menu(opts, "СЕТЕВЫЕ СЛУЖБЫ")
         if choice == "0":
@@ -745,25 +721,7 @@ def menu_plugin(state: AppState, p):
         ps = get_protocol(state, p.meta.name)
         
         # Единая карточка статуса для протоколов без собственного менеджера.
-        try:
-            st = p.status()
-            protocol_status_panel(
-                p.meta.name,
-                installed=st.installed,
-                enabled=st.enabled,
-                running=st.running,
-                port=st.port,
-                details=(st.info or {}).items(),
-            )
-        except Exception as exc:
-            protocol_status_panel(
-                p.meta.name,
-                installed=ps.installed,
-                enabled=ps.enabled,
-                running=False,
-                port=ps.port,
-                error=str(exc) or exc.__class__.__name__,
-            )
+        render_protocol_status(p, ps)
         
         # Опции зависят от состояния
         options = []

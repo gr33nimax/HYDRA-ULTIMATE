@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### UI decomposition — stage 8
+
+Protocol and network-service menu presentation is now isolated in `hydra/ui/protocol_menu.py`. Deterministic status rows, selectable options, common navigation entries and runtime-status fallback rendering no longer live inside the monolithic `menus.py` loop. Existing menu entry points and plugin ordering remain unchanged, while the extracted boundary is directly covered by focused tests.
+
 ### Runtime reconciliation
 
 `hydra doctor` now reports desired-vs-actual runtime drift and a read-only correction plan. The new `hydra reconcile` command shows the same plan; `hydra reconcile --apply` explicitly applies only safe enable/disable actions and never installs missing components automatically.
