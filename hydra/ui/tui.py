@@ -62,9 +62,7 @@ def _char_width(char: str) -> int:
         return 0
     # Problematic characters that render as 1-cell in typical terminal fonts
     if code in {
-        0x1f7e2, # 🟢
-        0x1f534, # 🔴
-        0x23f1,  # ⏱
+        0x1f512, # 🔒
         0x1f6e1, # 🛡
         0x2699,  # ⚙
     }:
@@ -74,6 +72,7 @@ def _char_width(char: str) -> int:
         0x274c,  # ❌
         0x2705,  # ✅
         0x26a1,  # ⚡
+        0x23f1,  # ⏱
         0x1f4ca, # 📊
         0x1f310, # 🌐
     }:
