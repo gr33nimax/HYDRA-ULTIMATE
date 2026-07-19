@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Failure-test suite — stage 12
+
+Добавлен отдельный набор failure-контрактов для application error mapping, частичных lifecycle-сбоев, атомарности `update_state`, fail-closed firewall persistence и CLI-ошибок. Тесты проверяют не только наличие ошибки, но и отсутствие побочных изменений, retryability и совместимость старого текстового сообщения.
+
 ### Unified error model — stage 11
 
 Добавлены `ErrorCode`, `ApplicationError` и `ServiceResult` для единого контракта ошибок между domain/application и transport-слоями. Старые bool-методы сохранены, а CLI получил дополнительный структурированный `error_details` с кодом ошибки и признаком повторяемости операции.
