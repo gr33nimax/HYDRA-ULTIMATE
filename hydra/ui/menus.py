@@ -52,7 +52,7 @@ from hydra.ui.protocol_ui import (
     protocol_label, protocol_menu_title, protocol_status_panel, status_badge,
 )
 from hydra.ui.network_info import snapshot as network_snapshot
-from hydra.ui import log_viewer
+from hydra.ui import log_viewer, system_monitor
 
 
 def _apply_error_text(default: str = "Ошибка применения конфигурации") -> str:
@@ -2226,181 +2226,25 @@ def _show_status():
 
 
 def _read_proc_cpu() -> tuple[float, float]:
-    try:
-        with open("/proc/stat", "r") as f:
-            line = f.readline()
-            if line.startswith("cpu"):
-                parts = [float(x) for x in line.split()[1:8]]
-                idle = parts[3] + parts[4]
-                total = sum(parts)
-                return idle, total
-    except Exception:
-        pass
-    return 0.0, 0.0
+    return system_monitor.read_proc_cpu()
 
 
 def _read_proc_mem() -> tuple[int, int, float]:
-    try:
-        meminfo = {}
-        with open("/proc/meminfo", "r") as f:
-            for line in f:
-                parts = line.split()
-                if len(parts) >= 2:
-                    meminfo[parts[0].rstrip(":")] = int(parts[1]) * 1024
-        total = meminfo.get("MemTotal", 0)
-        available = meminfo.get("MemAvailable", 0)
-        if not available:
-            available = (
-                meminfo.get("MemFree", 0) + meminfo.get("Buffers", 0)
-                + meminfo.get("Cached", 0) + meminfo.get("SReclaimable", 0)
-                - meminfo.get("Shmem", 0)
-            )
-        used = max(0, total - available)
-        pct = (used / total) * 100 if total > 0 else 0.0
-        return used, total, pct
-    except Exception:
-        pass
-    return 0, 0, 0.0
+    return system_monitor.read_proc_mem()
 
 
 def _read_proc_net() -> tuple[int, int]:
-    try:
-        rx = 0
-        tx = 0
-        default_ifaces: set[str] = set()
-        try:
-            with open("/proc/net/route", "r") as routes:
-                for route in routes.readlines()[1:]:
-                    fields = route.split()
-                    if len(fields) >= 4 and fields[1] == "00000000" and int(fields[3], 16) & 2:
-                        default_ifaces.add(fields[0])
-        except Exception:
-            pass
-        with open("/proc/net/dev", "r") as f:
-            lines = f.readlines()
-            for line in lines[2:]:
-                if ":" not in line:
-                    continue
-                iface = line.split(":", 1)[0].strip()
-                if iface == "lo" or (default_ifaces and iface not in default_ifaces):
-                    continue
-                parts = line.split(":", 1)[1].split()
-                if len(parts) >= 9:
-                    rx += int(parts[0])
-                    tx += int(parts[8])
-        return rx, tx
-    except Exception:
-        pass
-    return 0, 0
+    return system_monitor.read_proc_net()
 
 
 def _show_realtime_sys_monitor():
-    import time
-    clear()
-    print(f"\n  {BOLD}{CYAN}▸ Запуск живого мониторинга...{NC}")
-    print(f"  {DIM}Нажмите [Enter] для возврата в меню.{NC}\n")
-    time.sleep(0.5)
-    
-    has_psutil = False
-    try:
-        import psutil
-        has_psutil = True
-    except ImportError:
-        pass
-
-    if has_psutil:
-        try:
-            prev_net = _read_proc_net()
-        except Exception:
-            prev_net = None
-    else:
-        prev_net = _read_proc_net()
-        prev_cpu_idle, prev_cpu_total = _read_proc_cpu()
-        
-    last_time = time.time()
-    
-    while True:
-        try:
-            if _is_enter_pressed():
-                break
-                
-            clear()
-            title("📈 Живой мониторинг системы")
-            print(f"  {DIM}Нажмите [Enter] для возврата в меню. Обновление каждую секунду.{NC}")
-            print()
-            
-            if has_psutil:
-                import psutil
-                cpu = psutil.cpu_percent(interval=0)
-                mem = psutil.virtual_memory()
-                disk = psutil.disk_usage("/")
-                
-                cpu_str = f"{cpu:.1f}%"
-                ram_str = f"{mem.percent:.1f}%  ({_bytes_auto(mem.used)} / {_bytes_auto(mem.total)})"
-                disk_str = f"{disk.percent:.1f}%  ({_bytes_auto(disk.used)} / {_bytes_auto(disk.total)})"
-                
-                try:
-                    curr_net = _read_proc_net()
-                    now = time.time()
-                    dt = now - last_time
-                    if dt <= 0:
-                        dt = 1.0
-                    rx_speed = (curr_net[0] - prev_net[0]) / dt
-                    tx_speed = (curr_net[1] - prev_net[1]) / dt
-                    prev_net = curr_net
-                    last_time = now
-                except Exception:
-                    rx_speed, tx_speed = 0.0, 0.0
-            else:
-                curr_cpu_idle, curr_cpu_total = _read_proc_cpu()
-                diff_total = curr_cpu_total - prev_cpu_total
-                diff_idle = curr_cpu_idle - prev_cpu_idle
-                if diff_total > 0:
-                    cpu_val = (diff_total - diff_idle) / diff_total * 100
-                else:
-                    cpu_val = 0.0
-                prev_cpu_total = curr_cpu_total
-                prev_cpu_idle = curr_cpu_idle
-                cpu_str = f"{cpu_val:.1f}%"
-                
-                r_used, r_total, r_pct = _read_proc_mem()
-                ram_str = f"{r_pct:.1f}%  ({_bytes_auto(r_used)} / {_bytes_auto(r_total)})"
-                
-                try:
-                    import shutil
-                    d_total, d_used, d_free = shutil.disk_usage("/")
-                    d_pct = (d_used / d_total) * 100 if d_total > 0 else 0.0
-                    disk_str = f"{d_pct:.1f}%  ({_bytes_auto(d_used)} / {_bytes_auto(d_total)})"
-                except Exception:
-                    disk_str = "н/д"
-                    
-                curr_rx, curr_tx = _read_proc_net()
-                now = time.time()
-                dt = now - last_time
-                if dt <= 0:
-                    dt = 1.0
-                rx_speed = (curr_rx - prev_net[0]) / dt
-                tx_speed = (curr_tx - prev_net[1]) / dt
-                prev_net = (curr_rx, curr_tx)
-                last_time = now
-                
-            lines = [
-                kv("Загрузка CPU:", cpu_str),
-                kv("Использование RAM:", ram_str),
-                kv("Дисковое пространство:", disk_str),
-                f"  {DIM}{'─' * (PANEL_W - 2)}{NC}",
-                kv("Сетевой вход (Rx):", f"{GREEN}{_bytes_auto(int(rx_speed))}/s{NC}"),
-                kv("Сетевой выход (Tx):", f"{CYAN}{_bytes_auto(int(tx_speed))}/s{NC}"),
-            ]
-            panel("Текущие параметры", lines)
-            
-            time.sleep(1)
-            
-        except (KeyboardInterrupt, SystemExit):
-            break
-        except Exception as e:
-            error(f"Ошибка мониторинга: {e}")
-            time.sleep(2)
+    system_monitor.show_realtime(
+        enter_pressed=_is_enter_pressed,
+        bytes_auto=_bytes_auto,
+        read_cpu=_read_proc_cpu,
+        read_mem=_read_proc_mem,
+        read_net=_read_proc_net,
+    )
 
 
 def _menu_logs(state: AppState):
