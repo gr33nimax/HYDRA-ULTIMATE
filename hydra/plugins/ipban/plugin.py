@@ -15,6 +15,7 @@ from pathlib import Path
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
 from hydra.core.state import AppState
+from hydra.core.host import HOST
 
 IPSET_V4 = "hydra_manual_ban"
 IPSET_V6 = "hydra_manual_ban6"
@@ -33,8 +34,8 @@ def _rule_spec(ipset_name: str) -> list[str]:
 
 def _run(command: list[str], *, text: bool = False, timeout: int = 30) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(command, capture_output=True, text=text, timeout=timeout)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        return HOST.run(command, text=text, timeout=timeout)
+    except Exception as exc:
         return subprocess.CompletedProcess(command, 1, stdout="" if text else b"", stderr=str(exc))
 
 
@@ -55,24 +56,24 @@ class IPBanPlugin(BasePlugin):
             if shutil.which("apt-get"):
                 env = dict(os.environ)
                 env["DEBIAN_FRONTEND"] = "noninteractive"
-                subprocess.run(["apt-get", "update", "-qq"], capture_output=True, timeout=120)
-                r = subprocess.run(["apt-get", "install", "-y", "-qq", "ipset"], capture_output=True, text=True, timeout=180, env=env)
+                HOST.run(["apt-get", "update", "-qq"], timeout=120, env=env)
+                r = HOST.run(["apt-get", "install", "-y", "-qq", "ipset"], text=True, timeout=180, env=env)
                 if r.returncode != 0:
                     log_error(f"apt-get install ipset failed (code {r.returncode}). Stderr: {r.stderr.strip()}")
             elif shutil.which("dnf"):
-                r = subprocess.run(["dnf", "install", "-y", "-q", "ipset"], capture_output=True, text=True, timeout=180)
+                r = HOST.run(["dnf", "install", "-y", "-q", "ipset"], text=True, timeout=180)
                 if r.returncode != 0:
                     log_error(f"dnf install ipset failed. Stderr: {r.stderr.strip()}")
             elif shutil.which("yum"):
-                r = subprocess.run(["yum", "install", "-y", "-q", "ipset"], capture_output=True, text=True, timeout=180)
+                r = HOST.run(["yum", "install", "-y", "-q", "ipset"], text=True, timeout=180)
                 if r.returncode != 0:
                     log_error(f"yum install ipset failed. Stderr: {r.stderr.strip()}")
             elif shutil.which("apk"):
-                r = subprocess.run(["apk", "add", "--no-cache", "ipset"], capture_output=True, text=True, timeout=180)
+                r = HOST.run(["apk", "add", "--no-cache", "ipset"], text=True, timeout=180)
                 if r.returncode != 0:
                     log_error(f"apk add ipset failed. Stderr: {r.stderr.strip()}")
             elif shutil.which("pacman"):
-                r = subprocess.run(["pacman", "-Sy", "--noconfirm", "ipset"], capture_output=True, text=True, timeout=180)
+                r = HOST.run(["pacman", "-Sy", "--noconfirm", "ipset"], text=True, timeout=180)
                 if r.returncode != 0:
                     log_error(f"pacman install ipset failed. Stderr: {r.stderr.strip()}")
                     
@@ -122,10 +123,7 @@ class IPBanPlugin(BasePlugin):
         saved_sets = previous.get("sets", "")
         if saved_sets:
             try:
-                restored = subprocess.run(
-                    ["ipset", "restore"], input=saved_sets,
-                    capture_output=True, text=True, timeout=30,
-                )
+                restored = HOST.run(["ipset", "restore"], input=saved_sets, text=True, timeout=30)
                 ok = restored.returncode == 0 and ok
             except (OSError, subprocess.TimeoutExpired):
                 ok = False

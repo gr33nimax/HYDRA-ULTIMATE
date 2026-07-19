@@ -30,8 +30,12 @@ class HostBackend:
     paths: HostPaths = field(default_factory=HostPaths)
 
     def run(self, args: Sequence[object], *, timeout: float = commands.DEFAULT_TIMEOUT,
-            check: bool = False, text: bool = False) -> CompletedProcess:
-        return commands.run(args, timeout=timeout, check=check, text=text)
+            check: bool = False, text: bool = False,
+            input: bytes | str | None = None,
+            env: dict[str, str] | None = None) -> CompletedProcess:
+        return commands.run(
+            args, timeout=timeout, check=check, text=text, input=input, env=env,
+        )
 
     def which(self, executable: str) -> str | None:
         return shutil.which(executable)

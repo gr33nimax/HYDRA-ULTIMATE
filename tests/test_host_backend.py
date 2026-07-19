@@ -20,3 +20,18 @@ def test_host_backend_firewall_persistence_is_injectable(tmp_path):
          patch.object(host, "run", return_value=MagicMock(returncode=0, stdout="*filter\n")):
         assert host.persist_firewall() is True
     assert rules.read_text(encoding="utf-8") == "*filter\n"
+
+
+def test_host_backend_forwards_stdin_and_environment():
+    host = HostBackend()
+    with patch("hydra.core.host.commands.run", return_value=MagicMock(returncode=0)) as run:
+        host.run(["ipset", "restore"], input="create hydra_manual_ban hash:ip", env={"LANG": "C"})
+
+    run.assert_called_once_with(
+        ["ipset", "restore"],
+        timeout=30,
+        check=False,
+        text=False,
+        input="create hydra_manual_ban hash:ip",
+        env={"LANG": "C"},
+    )

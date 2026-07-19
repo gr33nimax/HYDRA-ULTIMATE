@@ -4,7 +4,7 @@ hydra/plugins/ipban/manager.py — TUI-консоль управления IP-б
 from __future__ import annotations
 
 import time
-import subprocess
+from hydra.core.host import HOST
 from hydra.core.state import AppState
 from hydra.ui.tui import (
     clear, menu, prompt, confirm, panel, info, success, warn, error,
@@ -22,15 +22,13 @@ def menu_ipban(state: AppState, plugin) -> None:
         if installed:
             cnt_v4, cnt_v6 = plugin._ipset_count()
             # Проверяем статус правил iptables
-            chk4 = subprocess.run(
+            chk4 = HOST.run(
                 ["iptables", "-C", "INPUT", "-m", "set", "--match-set", "hydra_manual_ban", "src",
                  "-m", "comment", "--comment", "hydra-ipban", "-j", "DROP"],
-                capture_output=True
             ).returncode == 0
-            chk6 = subprocess.run(
+            chk6 = HOST.run(
                 ["ip6tables", "-C", "INPUT", "-m", "set", "--match-set", "hydra_manual_ban6", "src",
                  "-m", "comment", "--comment", "hydra-ipban", "-j", "DROP"],
-                capture_output=True
             ).returncode == 0
             rules_ok = chk4 and chk6
         else:
@@ -203,8 +201,8 @@ def menu_ipban(state: AppState, plugin) -> None:
             if confirm("Вы уверены?", default=False):
                 info("Очищаю...")
                 if plugin._remove_iptables_rules():
-                    subprocess.run(["ipset", "flush", "hydra_manual_ban"], capture_output=True)
-                    subprocess.run(["ipset", "flush", "hydra_manual_ban6"], capture_output=True)
+                    HOST.run(["ipset", "flush", "hydra_manual_ban"])
+                    HOST.run(["ipset", "flush", "hydra_manual_ban6"])
                     plugin._save_state({"entries": []})
                     if plugin._ensure_iptables_rules():
                         success("Все блокировки успешно сброшены!")
