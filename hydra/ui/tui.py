@@ -168,7 +168,7 @@ def title(text: str):
 
 def kv(label: str, value: str, label_w: int = 16) -> str:
     """Строка «ключ — значение» для панелей."""
-    return f"  {DIM}{label:<{label_w}}{NC} {value}"
+    return f"  {WHITE}{label:<{label_w}}{NC} {value}"
 
 
 def panel(title_text: str, lines: list[str]):
@@ -339,6 +339,7 @@ def dashboard_menu(
     options: list[tuple[str, str, str]],
     header: str = "",
     banner: str = "",
+    options_header: str = "",
 ) -> str:
     """Рисует составной главный экран с единой рамкой и секциями."""
     inner = PANEL_W
@@ -346,6 +347,7 @@ def dashboard_menu(
     print(f"{INDENT}{CYAN}╔{'═' * inner}╗{NC}")
 
     if banner:
+        print(f"{INDENT}{CYAN}║{NC}{' ' * inner}{CYAN}║{NC}")
         for raw_line in banner.splitlines():
             if not raw_line.strip():
                 print(f"{INDENT}{CYAN}║{NC}{' ' * inner}{CYAN}║{NC}")
@@ -354,6 +356,7 @@ def dashboard_menu(
             left = max(0, (inner - line_w) // 2)
             right = max(0, inner - line_w - left)
             print(f"{INDENT}{CYAN}║{NC}{' ' * left}{line_fit}{' ' * right}{CYAN}║{NC}")
+        print(f"{INDENT}{CYAN}║{NC}{' ' * inner}{CYAN}║{NC}")
         print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
 
     if header:
@@ -366,23 +369,30 @@ def dashboard_menu(
     for section_title, lines in sections:
         title_fit, title_w = _fit_line(section_title, inner - 4)
         print(f"{INDENT}{CYAN}║{NC} {BOLD}{CYAN}{title_fit}{NC}{' ' * (inner - 3 - title_w)} {CYAN}║{NC}")
+        print(f"{INDENT}{CYAN}║{NC}{' ' * inner}{CYAN}║{NC}")
         for line in lines:
             line_fit, line_w = _fit_line(line, inner - 2)
             print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * (inner - 2 - line_w)} {CYAN}║{NC}")
+        print(f"{INDENT}{CYAN}║{NC}{' ' * inner}{CYAN}║{NC}")
         print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+
+    if options_header:
+        title_fit, title_w = _fit_line(options_header, inner - 4)
+        print(f"{INDENT}{CYAN}║{NC} {BOLD}{CYAN}{title_fit}{NC}{' ' * (inner - 3 - title_w)} {CYAN}║{NC}")
+        print(f"{INDENT}{CYAN}║{NC}{' ' * inner}{CYAN}║{NC}")
 
     for key, label, desc in options:
         if key == "-":
             print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
             continue
-        line = f"  {_menu_key(key)}  {label}"
+        line = f"  {_menu_key(key)}  {WHITE}{BOLD}{label}{NC}"
         line_fit, line_w = _fit_line(line, inner - 2)
         print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * (inner - 2 - line_w)} {CYAN}║{NC}")
         if desc:
             import textwrap
             for paragraph in desc.split("\n"):
                 for wrapped in textwrap.wrap(paragraph, width=max(20, inner - 9)) or [""]:
-                    dline = f"       {DIM}{wrapped}{NC}"
+                    dline = f"       {WHITE}{DIM}{wrapped}{NC}"
                     dline_fit, dline_w = _fit_line(dline, inner - 2)
                     print(f"{INDENT}{CYAN}║{NC} {dline_fit}{' ' * (inner - 2 - dline_w)} {CYAN}║{NC}")
 

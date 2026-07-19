@@ -95,6 +95,7 @@ except Exception:
 # 2. Определение IP адресов и GeoIP флага
 _cached_pub_ip = "Получение..."
 _cached_country_flag = ""
+_cached_country_code = ""
 _network_fetched = False
 
 def _is_private_ip(ip: str) -> bool:
@@ -118,7 +119,7 @@ def _is_private_ip(ip: str) -> bool:
         return True
 
 def _fetch_network_info_bg():
-    global _cached_pub_ip, _cached_country_flag, _network_fetched
+    global _cached_pub_ip, _cached_country_flag, _cached_country_code, _network_fetched
     try:
         from hydra.utils.net import public_ip
         ip = public_ip()
@@ -144,6 +145,7 @@ def _fetch_network_info_bg():
             # Конвертируем код страны в региональные индикаторы (флаг)
             flag = chr(ord(country_code[0]) + 127397) + chr(ord(country_code[1]) + 127397)
             _cached_country_flag = flag
+            _cached_country_code = country_code
             
     except Exception:
         _cached_pub_ip = "127.0.0.1"
@@ -167,38 +169,30 @@ except Exception:
 
 
 def _sys_info(state: AppState | None = None) -> list[str]:
-    """Возвращает строки с информацией о системе и сети."""
-    lines = []
+    """Возвращает компактный статус узла для главного экрана."""
+    cpu_pct: float | None = None
+    mem_pct: float | None = None
+    disk_pct: float | None = None
+    uptime_str = "—"
     try:
         import psutil
-        cpu = psutil.cpu_percent(interval=0)
+        cpu_pct = psutil.cpu_percent(interval=0)
         mem = psutil.virtual_memory()
         disk = psutil.disk_usage("/")
+        mem_pct = mem.percent
+        disk_pct = disk.percent
         boot = datetime.fromtimestamp(psutil.boot_time())
         uptime = datetime.now() - boot
         d, r = divmod(int(uptime.total_seconds()), 86400)
         h, m = divmod(r, 3600)
         m, _ = divmod(m, 60)
-        lines.append(kv("CPU:", f"{cpu:.0f}%"))
-        lines.append(kv("RAM:", f"{mem.percent:.0f}%  ({_bytes_auto(mem.used)} / {_bytes_auto(mem.total)})"))
-        lines.append(kv("Диск:", f"{disk.percent:.0f}%  ({_bytes_auto(disk.used)} / {_bytes_auto(disk.total)})"))
-        lines.append(kv("Uptime:", f"{d}д {h:02d}:{m:02d}"))
+        uptime_str = f"{d} дн. {h:02d}:{m:02d}"
     except ImportError:
-        # Резервный сбор метрик через стандартную библиотеку и /proc (на Linux)
         try:
             import shutil
-            
-            # 1. Диск через shutil (стандартная библиотека)
             total_d, used_d, free_d = shutil.disk_usage("/")
             disk_pct = (used_d / total_d) * 100 if total_d > 0 else 0
-            
-            # 2. Метрики для Unix-систем
-            uptime_str = "—"
-            load_str = "—"
-            mem_str = "—"
-            
             if os.name != "nt":
-                # Uptime из /proc/uptime
                 uptime_file = Path("/proc/uptime")
                 if uptime_file.exists():
                     with open(uptime_file, "r") as f:
@@ -206,13 +200,7 @@ def _sys_info(state: AppState | None = None) -> list[str]:
                     d, r = divmod(int(uptime_sec), 86400)
                     h, m = divmod(r, 3600)
                     m, _ = divmod(m, 60)
-                    uptime_str = f"{d}д {h:02d}:{m:02d}"
-                
-                # Средняя нагрузка (Load Average)
-                avg1, avg5, _ = os.getloadavg()
-                load_str = f"{avg1:.2f}, {avg5:.2f}"
-                
-                # RAM из /proc/meminfo
+                    uptime_str = f"{d} дн. {h:02d}:{m:02d}"
                 meminfo_file = Path("/proc/meminfo")
                 if meminfo_file.exists():
                     meminfo = {}
@@ -226,67 +214,52 @@ def _sys_info(state: AppState | None = None) -> list[str]:
                     m_buffers = meminfo.get("Buffers", 0)
                     m_cached = meminfo.get("Cached", 0)
                     m_used = m_total - m_free - m_buffers - m_cached
-                    m_pct = (m_used / m_total) * 100 if m_total > 0 else 0
-                    mem_str = f"{m_pct:.0f}%  ({_bytes_auto(m_used)} / {_bytes_auto(m_total)})"
-            
-            if load_str != "—":
-                lines.append(kv("Load Avg:", load_str))
-            if mem_str != "—":
-                lines.append(kv("RAM:", mem_str))
-            lines.append(kv("Диск:", f"{disk_pct:.0f}%  ({_bytes_auto(used_d)} / {_bytes_auto(total_d)})"))
-            if uptime_str != "—":
-                lines.append(kv("Uptime:", uptime_str))
+                    mem_pct = (m_used / m_total) * 100 if m_total > 0 else 0
         except Exception:
             pass
     except Exception:
         pass
-        
-    # Добавление сетевой информации (асинхронно, без фризов интерфейса)
+
+    pub_ip = _cached_pub_ip
+    if pub_ip == "Получение..." and state and state.network.server_ip:
+        pub_ip = state.network.server_ip
+    geo = ""
+    if _cached_country_flag:
+        geo = f"  {_cached_country_flag}"
+        if _cached_country_code:
+            geo += f" {_cached_country_code}"
+
+    dns_display = _cached_dns
     try:
-        from hydra.utils.net import local_ip
-        loc = local_ip()
-        
-        # Получаем внешний IP (берем из кэша, если пуст — пробуем AppState)
-        pub_ip = _cached_pub_ip
-        if pub_ip == "Получение..." and state and state.network.server_ip:
-            pub_ip = state.network.server_ip
-            
-        flag_suffix = f" {_cached_country_flag}" if _cached_country_flag else ""
-        # Если публичный и локальный совпадают (нет NAT), выводим один IP для красоты
-        if pub_ip == loc:
-            lines.append(kv("IP (Public):", f"{CYAN}{pub_ip}{NC}{flag_suffix}"))
-        else:
-            lines.append(kv("IP (Pub/Loc):", f"{CYAN}{pub_ip}{NC}{flag_suffix} / {DIM}{loc}{NC}"))
-            
-        dns_display = _cached_dns
-        try:
-            import subprocess
-            import re
-            r = subprocess.run(["systemctl", "is-active", "dnscrypt-proxy"], capture_output=True, text=True, timeout=1)
-            if r.stdout.strip() == "active":
-                conf_path = Path("/etc/dnscrypt-proxy/dnscrypt-proxy.toml")
-                if conf_path.exists():
-                    content = conf_path.read_text(encoding="utf-8")
-                    m = re.search(r"^server_names\s*=\s*\[(.*?)\]", content, flags=re.MULTILINE | re.DOTALL)
-                    if m:
-                        names_str = m.group(1)
-                        names = [n.strip("'\" ") for n in names_str.split(",") if n.strip("'\" ")]
-                        if names:
-                            dns_display = f"{GREEN}DNSCrypt ({', '.join(names)}){NC}"
-                        else:
-                            dns_display = f"{GREEN}DNSCrypt (весь пул){NC}"
-                    else:
-                        dns_display = f"{GREEN}DNSCrypt (активен){NC}"
+        r = subprocess.run(["systemctl", "is-active", "dnscrypt-proxy"], capture_output=True, text=True, timeout=1)
+        if r.stdout.strip() == "active":
+            conf_path = Path("/etc/dnscrypt-proxy/dnscrypt-proxy.toml")
+            if conf_path.exists():
+                content = conf_path.read_text(encoding="utf-8")
+                match = re.search(r"^server_names\s*=\s*\[(.*?)\]", content, flags=re.MULTILINE | re.DOTALL)
+                if match:
+                    names = [n.strip("'\" ") for n in match.group(1).split(",") if n.strip("'\" ")]
+                    dns_display = f"DNSCrypt · {', '.join(names)}" if names else "DNSCrypt · активен"
                 else:
-                    dns_display = f"{GREEN}DNSCrypt (активен){NC}"
-        except Exception:
-            pass
-
-        lines.append(kv("DNS:", dns_display))
+                    dns_display = "DNSCrypt · активен"
+            else:
+                dns_display = "DNSCrypt · активен"
     except Exception:
         pass
 
-    return lines
+    def usage(value: float | None) -> str:
+        if value is None:
+            return f"{DIM}{'░' * 8}{NC}  —"
+        filled = min(8, max(0, round(value / 100 * 8)))
+        return f"{GREEN}{'█' * filled}{DIM}{'░' * (8 - filled)}{NC} {value:.0f}%"
+
+    return [
+        kv("🌐 Публичный IP", f"{CYAN}{pub_ip}{NC}{geo}"),
+        kv("🔒 DNS", f"{GREEN}{dns_display}{NC}"),
+        kv("⏱ Время работы", uptime_str),
+        "",
+        f"  {WHITE}CPU{NC}  {usage(cpu_pct)}     {WHITE}RAM{NC}  {usage(mem_pct)}     {WHITE}Диск{NC}  {usage(disk_pct)}",
+    ]
 
 
 def _select_user(state: AppState, prompt_text: str = "") -> User | None:
@@ -484,43 +457,44 @@ def main_menu(state: AppState):
         active_t = sum(1 for p in transports() if plugins.get(p.meta.name, {}).get("running"))
         total_t = len(transports())
 
-        active_e = sum(1 for p in enhancements() if plugins.get(p.meta.name, {}).get("running"))
-        total_e = len(enhancements())
-
         active_s = sum(1 for p in sec_plugins() if plugins.get(p.meta.name, {}).get("running"))
         total_s = len(sec_plugins())
 
         u_active = sum(1 for u in state.users if get_user_access_status(u)[0])
 
-        node_lines = [
-            kv("Sing-Box:", f"{_ok(sb_ok)}  {singbox_version() or 'не установлен'}"),
-        ]
+        core_status = f"{GREEN}🟢 запущен{NC}" if sb_ok else f"{RED}🔴 остановлен{NC}"
+        core_version = singbox_version() or "не установлен"
+        node_lines = [kv("Sing-Box", f"{core_status} · {core_version}")]
         node_lines += _sys_info(state)
+
+        warp_running = bool(plugins.get("warp", {}).get("running"))
+        warp_status = f"{GREEN}активен{NC}" if warp_running else f"{DIM}отключён{NC}"
+        transport_status = f"{GREEN}{active_t} / {total_t} активны{NC}"
+        users_status = f"{GREEN if u_active else YELLOW}{u_active} / {len(state.users)}{NC}"
+        security_status = f"{GREEN}{active_s} / {total_s} активны{NC}"
 
         choice = dashboard_menu(
             [
                 ("СОСТОЯНИЕ УЗЛА", node_lines),
                 ("СЛУЖБЫ", [
-                    kv("Протоколы:", f"{GREEN}{active_t}{NC}/{total_t} активны"),
-                    kv("Сетевые службы:", f"{GREEN}{active_e}{NC}/{total_e} активны"),
-                    kv("Безопасность:", f"{GREEN}{active_s}{NC}/{total_s} активны"),
-                    kv("Пользователи:", f"{GREEN if u_active else YELLOW}{u_active}{NC} из {len(state.users)}"),
+                    f"  🐍 {WHITE}Протоколы{NC}       {transport_status}       👥 {WHITE}Пользователи{NC}   {users_status}",
+                    f"  🛡️  {WHITE}Безопасность{NC}   {security_status}       🌐 {WHITE}WARP{NC}            {warp_status}",
                 ]),
                 ("ГИДРА СОВЕТУЕТ", [f"💬 {HYDRA_SAYING}"]),
-                ("УПРАВЛЕНИЕ", []),
             ],
             [
-                ("1", "⚙️  Ядро и система",      "Установка Sing-Box, зависимости, применить конфиг"),
-                ("2", "🐍 Протоколы",           f"Транспорты (Naive, AmneziaWG, Mieru...)  [{active_t}/{total_t}]"),
-                ("3", "👥 Пользователи",        f"Создание, лимиты, TTL, подписки  [{u_active} активно]"),
-                ("4", "🤖 Telegram-боты",       "Admin-панель и клиентский бот"),
-                ("5", "📊 Мониторинг",          "Трафик, статус, sync-агент, логи"),
+                ("1", "⚙️  Ядро и система",      "Установка, настройка и обновления"),
+                ("2", "🐍 Протоколы",           "Транспортные протоколы и подключения"),
+                ("3", "👥 Пользователи",        "Доступ, лимиты и подписки"),
+                ("4", "🤖 Telegram-боты",       "Управление ботами"),
+                ("5", "📊 Мониторинг",          "Трафик, подключения и журналы"),
                 ("6", "🛡️  Безопасность",       f"Fail2ban, Honeypot, IPBan  [{active_s}/{total_s}]"),
-                ("7", "🌐 Сетевые службы",      f"DNSCrypt, WARP (DNS и маршрутизация)  [{active_e}/{total_e}]"),
-                ("8", "🧪  Тестирование и отладка", "Проверка скорости, блокировок, GeoIP и CPU"),
+                ("7", "🌐 Сетевые службы",      "DNSCrypt, WARP и маршрутизация"),
+                ("8", "🧪  Диагностика",        "Доступность, GeoIP и производительность"),
                 ("0", "🚪 Выход", ""),
             ],
             banner=BANNER.strip(),
+            options_header="УПРАВЛЕНИЕ",
         )
 
         if choice == "0":
