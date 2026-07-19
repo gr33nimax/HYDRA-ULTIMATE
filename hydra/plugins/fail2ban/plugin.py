@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from hydra.core.state import AppState, get_protocol
+from hydra.core.host import HOST
 from hydra.plugins.base import BasePlugin, ConfigFragment, PluginCategory, PluginMeta, PluginStatus
 
 
@@ -56,8 +57,8 @@ _PORTSCAN_RULE = [
 
 def _run(command: list[str], *, timeout: int = 20, text: bool = False) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(command, capture_output=True, text=text, timeout=timeout)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        return HOST.run(command, timeout=timeout, text=text)
+    except Exception as exc:
         return subprocess.CompletedProcess(command, 1, stdout="" if text else b"", stderr=str(exc))
 
 

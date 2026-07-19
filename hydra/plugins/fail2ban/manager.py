@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 from hydra.core.state import AppState
+from hydra.core.host import HOST
 from hydra.ui.tui import (
     clear, menu, prompt, confirm, panel, info, success, warn, error,
     RED, GREEN, YELLOW, CYAN, BOLD, DIM, NC
@@ -33,14 +34,13 @@ def _f2b_installed() -> bool:
 
 
 def _f2b_active() -> bool:
-    r = subprocess.run(["systemctl", "is-active", "fail2ban"], capture_output=True, text=True)
-    return r.stdout.strip() == "active"
+    return HOST.systemd("is-active", "fail2ban").returncode == 0
 
 
 def _f2b_client(*args: str, timeout: int = 15) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(["fail2ban-client", *args], capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
+        return HOST.run(["fail2ban-client", *args], timeout=timeout, text=True)
+    except Exception:
         return subprocess.CompletedProcess(list(args), 1, stdout="", stderr="timeout")
     except Exception:
         return subprocess.CompletedProcess(list(args), 1, stdout="", stderr="error")
@@ -50,7 +50,7 @@ def _f2b_reload() -> bool:
     r = _f2b_client("reload")
     if r.returncode == 0:
         return True
-    subprocess.run(["systemctl", "restart", "fail2ban"], capture_output=True)
+    HOST.systemd("restart", "fail2ban")
     time.sleep(2)
     return _f2b_active()
 
@@ -181,9 +181,9 @@ def _portscan_add_log_rule():
         "-m", "comment", "--comment", "hydra-portscan-log",
         "-j", "LOG", "--log-prefix", "HYDRA-PORTSCAN ", "--log-level", "4",
     ]
-    check = subprocess.run(["iptables", "-C", "INPUT", *spec], capture_output=True)
+    check = HOST.run(["iptables", "-C", "INPUT", *spec])
     if check.returncode != 0:
-        subprocess.run(["iptables", "-I", "INPUT", "1", *spec], capture_output=True)
+        HOST.run(["iptables", "-I", "INPUT", "1", *spec])
 
 
 def _portscan_remove_log_rule():
@@ -196,10 +196,10 @@ def _portscan_remove_log_rule():
         "-j", "LOG", "--log-prefix", "HYDRA-PORTSCAN ", "--log-level", "4",
     ]
     for _ in range(10):
-        check = subprocess.run(["iptables", "-C", "INPUT", *spec], capture_output=True)
+        check = HOST.run(["iptables", "-C", "INPUT", *spec])
         if check.returncode != 0:
             break
-        subprocess.run(["iptables", "-D", "INPUT", *spec], capture_output=True)
+        HOST.run(["iptables", "-D", "INPUT", *spec])
 
 
 # ── Селф-контейнед парсинг пользовательского ввода ───────────────────────────

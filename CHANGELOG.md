@@ -12,6 +12,7 @@ Log viewer — чтение файловых логов, journalctl и live-foll
 Typed plugin config — `ConfigFragment` вынесен в отдельную типизированную границу и валидируется до генерации Sing-Box/nftables; некорректный вывод плагина теперь останавливает apply с именем виновного плагина.
 System monitor — чтение `/proc` и realtime-отрисовка метрик вынесены из `menus.py` в тестируемый `system_monitor.py`; отрицательная скорость после сброса сетевых счётчиков больше не отображается.
 DNSCrypt host boundary — установка, systemd lifecycle, статус и атомарная запись конфига переведены на общий `HostBackend`; shell-цепочка установки заменена на отдельные ограниченные по времени команды.
+Fail2ban host boundary — plugin и TUI-менеджер используют общий `HostBackend` для fail2ban-client, systemd и iptables с едиными таймаутами.
 
 ### Backup и восстановление
 
