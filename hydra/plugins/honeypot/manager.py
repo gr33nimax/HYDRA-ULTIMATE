@@ -4,9 +4,9 @@ hydra/plugins/honeypot/manager.py — TUI-консоль управления Ho
 from __future__ import annotations
 
 import ipaddress
-import subprocess
 from pathlib import Path
 
+from hydra.core.host import HOST
 from hydra.core.state import AppState
 from hydra.ui.tui import (
     clear, menu, prompt, panel, info, success, warn, error,
@@ -25,8 +25,7 @@ def menu_honeypot(state: AppState, plugin) -> None:
         banned = cfg.get("banned", {})
         
         # Проверяем реальный статус сервиса
-        r = subprocess.run(["systemctl", "is-active", "hydra-honeypot"], capture_output=True, text=True)
-        active = r.stdout.strip() == "active"
+        active = HOST.systemd("is-active", "hydra-honeypot").returncode == 0
         
         status_lines = [
             f"  Сервис:      {(GREEN+'● активен') if active else (DIM+'○ остановлен')}{NC}",
@@ -160,7 +159,7 @@ def menu_honeypot(state: AppState, plugin) -> None:
                         plugin._save_state(cfg)
                         if active:
                             plugin._write_script(port, wl)
-                            subprocess.run(["systemctl", "restart", "hydra-honeypot"], capture_output=True)
+                            HOST.systemd("restart", "hydra-honeypot")
                         success(f"Добавлен в whitelist: {normalized}")
                     else:
                         warn("IP пуст или уже в списке.")
@@ -177,7 +176,7 @@ def menu_honeypot(state: AppState, plugin) -> None:
                         plugin._save_state(cfg)
                         if active:
                             plugin._write_script(port, wl)
-                            subprocess.run(["systemctl", "restart", "hydra-honeypot"], capture_output=True)
+                            HOST.systemd("restart", "hydra-honeypot")
                         success(f"Удален из whitelist: {removed}")
                     else:
                         error("Неверный номер.")

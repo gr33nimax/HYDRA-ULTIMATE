@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from hydra.core.state import AppState
+from hydra.core.host import HOST
 from hydra.plugins.base import BasePlugin, ConfigFragment, PluginCategory, PluginMeta, PluginStatus
 
 
@@ -26,8 +27,8 @@ _PORT_COMMENT = "hydra-honeypot-port"
 
 def _run(command: list[str], *, text: bool = False, timeout: int = 20) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(command, capture_output=True, text=text, timeout=timeout)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        return HOST.run(command, text=text, timeout=timeout)
+    except Exception as exc:
         return subprocess.CompletedProcess(command, 1, stdout="" if text else b"", stderr=str(exc))
 
 
@@ -192,10 +193,10 @@ class HoneypotPlugin(BasePlugin):
             def ensure_firewall_ban(ip):
                 binary, spec = firewall_spec(ip)
                 try:
-                    check = subprocess.run([binary, "-C", "INPUT", *spec], capture_output=True, timeout=10)
+                    check = HOST.run([binary, "-C", "INPUT", *spec], timeout=10)
                     if check.returncode == 0:
                         return True, binary
-                    result = subprocess.run([binary, "-I", "INPUT", "1", *spec], capture_output=True, timeout=10)
+                    result = HOST.run([binary, "-I", "INPUT", "1", *spec], timeout=10)
                     return result.returncode == 0, binary
                 except (OSError, subprocess.TimeoutExpired):
                     return False, binary
