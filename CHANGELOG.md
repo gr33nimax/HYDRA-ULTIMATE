@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Final legacy audit — stage 13
+
+Проведён финальный аудит архитектурных границ: удалены неиспользуемые импорты и устаревшая версия в entrypoint, добавлен `docs/ARCHITECTURE_AUDIT.md` с перечнем допустимых compatibility-путей и regression-проверки глобальных application-сервисов/версии. Legacy-адаптеры, миграции состояния и протокольная совместимость сохранены намеренно; Telegram остаётся отдельным будущим этапом.
+
 ### Failure-test suite — stage 12
 
 Добавлен отдельный набор failure-контрактов для application error mapping, частичных lifecycle-сбоев, атомарности `update_state`, fail-closed firewall persistence и CLI-ошибок. Тесты проверяют не только наличие ошибки, но и отсутствие побочных изменений, retryability и совместимость старого текстового сообщения.

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from hydra.core.host import HOST
 
-import subprocess
+import subprocess  # legacy test/import surface; command execution uses HostBackend/log_viewer
 import sys
 import uuid as _uuid
 import math
@@ -34,7 +34,6 @@ from hydra.plugins.registry import (
     enabled, collect_fragments,
     status_all, transports, enhancements, security as sec_plugins,
 )
-from hydra.plugins import registry as plugin_registry
 from hydra.plugins.base import PluginCategory
 from hydra.core.systemd import install_service, install_timer, remove_unit
 from hydra.core import orchestrator
@@ -79,7 +78,6 @@ def _apply_error_text(default: str = "Ошибка применения конф
 # ═════════════════════════════════════════════════════════════════════════════
 
 import os
-from pathlib import Path
 
 
 def _sys_info(state: AppState | None = None) -> list[str]:
