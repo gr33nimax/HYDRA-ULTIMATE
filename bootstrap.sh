@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
 # HYDRA v2.4.1 — Bootstrap Installer
 
@@ -256,6 +256,10 @@ fi
 
 # ── Symlink ──────────────────────────────────────────────────────────────────
 chmod +x "${INSTALL_DIR}/main.py"
+# Older releases created /usr/local/bin/hydra as a symlink to main.py.  Remove
+# it before writing the wrapper, otherwise shell redirection follows the link
+# and overwrites the Python entrypoint.
+rm -f /usr/local/bin/hydra
 cat > /usr/local/bin/hydra <<EOF
 #!/usr/bin/env bash
 exec "${VENV_DIR}/bin/python" "${INSTALL_DIR}/main.py" "\$@"
