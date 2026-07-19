@@ -284,6 +284,12 @@ def _require_success(result: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
+def _restore_plugin_install(state: AppState, name: str, plugin) -> None:
+    if get_protocol(state, name).installed:
+        return
+    _require_success(plugin.install(), f"Plugin {name} repair install failed")
+
+
 def _commit_state_change(state: AppState, snapshot: AppState) -> None:
     """Persist and apply a state mutation, restoring the snapshot on failure."""
     save_state(state)
@@ -511,6 +517,10 @@ def reinstall_plugin(state: AppState, name: str) -> bool:
     Full uninstall intentionally clears the protocol configuration.  A TUI
     reinstall, however, is a repair operation and must retain user choices.
     """
+    p = registry.get(name)
+    if not p:
+        return False
+    snapshot = copy.deepcopy(state)
     proto = get_protocol(state, name)
     saved_config = copy.deepcopy(proto.config)
     saved_port = proto.port
@@ -519,15 +529,47 @@ def reinstall_plugin(state: AppState, name: str) -> bool:
     if not uninstall_plugin(state, name):
         return False
 
-    proto = get_protocol(state, name)
-    proto.config = saved_config
-    proto.port = saved_port
-    save_state(state)
-
-    if not install_plugin(state, name):
-        return False
+    transaction = ApplyTransaction()
+    transaction.advance("apply")
+    transaction.add_rollback(
+        f"plugin {name}.install",
+        lambda: _restore_plugin_install(state, name, p),
+        priority=5,
+    )
     if was_enabled:
-        return enable(state, name)
+        transaction.add_rollback(
+            f"plugin {name}.on_enable",
+            lambda: p.on_enable(state),
+            priority=10,
+        )
+    transaction.add_rollback(
+        "application state",
+        lambda: _restore_and_save_state(state, snapshot),
+        priority=20,
+    )
+    transaction.add_rollback(
+        "restored configuration",
+        lambda: _reapply_restored_state(state),
+        priority=30,
+    )
+
+    try:
+        proto = get_protocol(state, name)
+        proto.config = saved_config
+        proto.port = saved_port
+        save_state(state)
+
+        installed = install_plugin(state, name)
+        if not installed:
+            transaction.rollback(_log_rollback_error)
+            return False
+        if was_enabled and not enable(state, name):
+            transaction.rollback(_log_rollback_error)
+            return False
+    except Exception:
+        transaction.rollback(_log_rollback_error)
+        raise
+    transaction.commit()
     return True
 
 

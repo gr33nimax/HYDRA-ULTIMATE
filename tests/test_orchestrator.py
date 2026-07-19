@@ -156,6 +156,37 @@ def test_reinstall_plugin_preserves_configuration_and_enabled_state():
     }
 
 
+def test_reinstall_plugin_restores_original_install_when_repair_fails():
+    from hydra.core import orchestrator
+
+    state = AppState(
+        protocols={
+            "mock": PluginState(
+                enabled=True,
+                installed=True,
+                port=9443,
+                config={"domain": "vpn.example"},
+            )
+        }
+    )
+    plugin = MagicMock()
+    plugin.uninstall.return_value = True
+    plugin.install.side_effect = [False, True]
+
+    with patch("hydra.core.orchestrator.registry.get", return_value=plugin), \
+         patch("hydra.core.orchestrator.apply_config", return_value=True), \
+         patch("hydra.core.orchestrator.save_state"):
+        assert orchestrator.reinstall_plugin(state, "mock") is False
+
+    assert plugin.install.call_count == 2
+    plugin.on_enable.assert_called_once_with(state)
+    restored = state.protocols["mock"]
+    assert restored.installed is True
+    assert restored.enabled is True
+    assert restored.port == 9443
+    assert restored.config == {"domain": "vpn.example"}
+
+
 def test_add_user_fanout():
     state, mock = _state_with_mock_transport()
     user = User(email="alice@test", uuid="uuid-1")

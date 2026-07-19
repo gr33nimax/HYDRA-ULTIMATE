@@ -21,6 +21,7 @@ Apply transaction — rollback Sing-Box, nftables и плагинов форма
 Plugin transaction — `registry.apply_enabled` использует общий transaction engine; дублирующая реализация rollback удалена, обратный порядок отката плагинов закреплён тестом.
 Lifecycle transaction — enable/disable плагинов используют единый rollback-план для обратного hook, восстановления AppState и повторного применения прежней конфигурации.
 Install transaction — install/uninstall восстанавливают пакет, enable-hook, AppState и прежнюю конфигурацию при сбое; частично установленный новый плагин очищается.
+Reinstall transaction — repair/reinstall получил внешнюю транзакцию поверх uninstall/install и восстанавливает исходный рабочий плагин при сбое повторной установки.
 
 ### Backup и восстановление
 
