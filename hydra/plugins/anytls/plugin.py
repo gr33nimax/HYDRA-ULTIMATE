@@ -1,6 +1,8 @@
 """hydra/plugins/anytls/plugin.py — AnyTLS: TLS-shaped tunnel с padding scheme (sing-box inbound)."""
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import json
 import shutil
 import subprocess
@@ -347,7 +349,7 @@ class AnyTLSPlugin(BasePlugin):
         from hydra.core.sni_router import get_effective_port
         effective_port = get_effective_port("anytls", state) if state else 443
         
-        r = subprocess.run(
+        r = HOST.run(
             ["ss", "-t", "-H", "-n", "state", "established"],
             capture_output=True, text=True,
         )
@@ -376,14 +378,14 @@ class AnyTLSPlugin(BasePlugin):
         # rx/tx из iptables accounting
         rx_bytes = 0
         tx_bytes = 0
-        r_rx = subprocess.run(["iptables", "-t", "filter", "-L", "INPUT", "-n", "-v", "-x"], capture_output=True, text=True)
+        r_rx = HOST.run(["iptables", "-t", "filter", "-L", "INPUT", "-n", "-v", "-x"], capture_output=True, text=True)
         if r_rx.returncode == 0:
             for line in r_rx.stdout.splitlines():
                 if "anytls-rx" in line:
                     parts = line.split()
                     if len(parts) >= 2 and parts[1].isdigit():
                         rx_bytes += int(parts[1])
-        r_tx = subprocess.run(["iptables", "-t", "filter", "-L", "OUTPUT", "-n", "-v", "-x"], capture_output=True, text=True)
+        r_tx = HOST.run(["iptables", "-t", "filter", "-L", "OUTPUT", "-n", "-v", "-x"], capture_output=True, text=True)
         if r_tx.returncode == 0:
             for line in r_tx.stdout.splitlines():
                 if "anytls-tx" in line:
@@ -456,7 +458,7 @@ class AnyTLSPlugin(BasePlugin):
         key_path = Path(f"/etc/letsencrypt/live/{domain}/privkey.pem")
         if cert_path.exists() and key_path.exists():
             try:
-                r = subprocess.run(
+                r = HOST.run(
                     ["openssl", "x509", "-checkend", "2592000", "-noout", "-in", str(cert_path)],
                     capture_output=True
                 )
@@ -472,22 +474,22 @@ class AnyTLSPlugin(BasePlugin):
         # 1. Проверяем/устанавливаем certbot
         if not shutil.which("certbot"):
             print("  Устанавливаю certbot...")
-            subprocess.run(["apt-get", "update"], capture_output=True)
-            subprocess.run(["apt-get", "install", "-y", "certbot"], capture_output=True)
+            HOST.run(["apt-get", "update"], capture_output=True)
+            HOST.run(["apt-get", "install", "-y", "certbot"], capture_output=True)
 
         # 2. Временно останавливаем конфликтующие веб-серверы на порту 80
         services_to_stop = ["caddy-l4", "caddy-naive", "nginx", "apache2"]
         was_running = []
         for s in services_to_stop:
-            r = subprocess.run(["systemctl", "is-active", s], capture_output=True, text=True)
+            r = HOST.run(["systemctl", "is-active", s], capture_output=True, text=True)
             if r.stdout.strip() == "active":
                 print(f"  Временно останавливаю {s}...")
-                subprocess.run(["systemctl", "stop", s], capture_output=True)
+                HOST.run(["systemctl", "stop", s], capture_output=True)
                 was_running.append(s)
 
         try:
             with temporary_open_port("tcp", 80, "temp-certbot"):
-                r = subprocess.run([
+                r = HOST.run([
                     "certbot", "certonly", "--standalone",
                     "-d", domain,
                     "--non-interactive", "--agree-tos",
@@ -500,12 +502,12 @@ class AnyTLSPlugin(BasePlugin):
         finally:
             for s in was_running:
                 print(f"  Восстанавливаю {s}...")
-                subprocess.run(["systemctl", "start", s], capture_output=True)
+                HOST.run(["systemctl", "start", s], capture_output=True)
 
     def _remove_iptables_rules(self) -> None:
         """Удаляет правила anytls-rx / anytls-tx."""
         for chain in ("INPUT", "OUTPUT"):
-            r = subprocess.run(["iptables", "-S", chain], capture_output=True, text=True)
+            r = HOST.run(["iptables", "-S", chain], capture_output=True, text=True)
             if r.returncode != 0:
                 continue
             for line in r.stdout.splitlines():
@@ -513,15 +515,15 @@ class AnyTLSPlugin(BasePlugin):
                     parts = line.split()
                     if parts[0] == "-A":
                         parts[0] = "-D"
-                        subprocess.run(["iptables"] + parts, capture_output=True)
+                        HOST.run(["iptables"] + parts, capture_output=True)
 
     def _add_iptables_rules(self) -> None:
         """Добавляет iptables accounting для порта 443."""
-        subprocess.run([
+        HOST.run([
             "iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", "443",
             "-m", "comment", "--comment", "anytls-rx"
         ], capture_output=True)
-        subprocess.run([
+        HOST.run([
             "iptables", "-I", "OUTPUT", "1", "-p", "tcp", "--sport", "443",
             "-m", "comment", "--comment", "anytls-tx"
         ], capture_output=True)
@@ -530,7 +532,7 @@ class AnyTLSPlugin(BasePlugin):
         """Суммарный трафик через iptables accounting."""
         total_bytes = 0
         for chain in ("INPUT", "OUTPUT"):
-            r = subprocess.run(
+            r = HOST.run(
                 ["iptables", "-t", "filter", "-L", chain, "-n", "-v", "-x"],
                 capture_output=True, text=True,
             )

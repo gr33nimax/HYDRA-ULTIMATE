@@ -6,6 +6,8 @@ telemt_self_route.py
 """
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import shutil
 import subprocess
 from pathlib import Path
@@ -28,7 +30,7 @@ from hydra.plugins.telemt.tg_nets import get_tg_nets
 # ---------------------------------------------------------------------------
 
 def _run(cmd: list) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True)
+    return HOST.run(cmd, capture_output=True, text=True)
 
 
 def _return_rule_exists() -> bool:

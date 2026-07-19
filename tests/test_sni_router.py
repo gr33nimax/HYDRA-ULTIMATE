@@ -180,7 +180,7 @@ def test_rebuild_starts_caddy():
         patch("hydra.core.sni_router._install_source_service"), \
         patch("hydra.core.sni_router._install_service", return_value=True), \
         patch("hydra.core.source_transparency.apply"), \
-        patch("subprocess.run") as mock_run:
+        patch("hydra.core.sni_router.HOST.run") as mock_run:
         
         mock_run.return_value = MagicMock(returncode=0)
         
@@ -198,7 +198,7 @@ def test_rebuild_stops_when_single():
     s = _state(naive_enabled=True, anytls_enabled=False)
     
     with patch("hydra.core.sni_router.is_installed", return_value=True), \
-         patch("subprocess.run") as mock_run:
+         patch("hydra.core.sni_router.HOST.run") as mock_run:
         
         mock_run.return_value = MagicMock(returncode=0)
         assert rebuild(s) is True
@@ -289,7 +289,7 @@ def test_rebuild_runs_caddy_l4_with_only_sub_domain():
         patch("hydra.core.sni_router._remove_source_service"), \
         patch("hydra.core.sni_router._install_service", return_value=True), \
         patch("hydra.core.source_transparency.clear"), \
-        patch("subprocess.run") as mock_run:
+        patch("hydra.core.sni_router.HOST.run") as mock_run:
         
         mock_run.return_value = MagicMock(returncode=0)
         assert rebuild(s) is True

@@ -1,3 +1,4 @@
+from hydra.core.host import HOST
 import sys
 import os
 import time
@@ -166,7 +167,7 @@ def _command_argv(cmd: str | list[str] | tuple[str, ...]) -> list[str]:
 
 def run_with_spinner(title_text: str, cmd: str | list[str] | tuple[str, ...]) -> str:
     """Запускает системную команду с плавной TUI-анимацией загрузки (spinner) и возвращает stdout."""
-    process = subprocess.Popen(
+    process = HOST.popen(
         _command_argv(cmd),
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -245,7 +246,7 @@ def run_streaming_cmd(title_text: str, cmd: str | list[str] | tuple[str, ...]):
     print(f"  {CYAN}║{NC} {BOLD}{title_text:<74}{NC} {CYAN}║{NC}")
     print(f"  {CYAN}╠{'═' * 76}╣{NC}")
     
-    process = subprocess.Popen(
+    process = HOST.popen(
         _command_argv(cmd),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -320,7 +321,7 @@ def run_direct_cmd(title_text: str, cmd: str | list[str] | tuple[str, ...]):
     print(f"  {CYAN}╚{'═' * 76}╝{NC}\n")
     
     try:
-        subprocess.run(_command_argv(cmd), timeout=DEFAULT_TIMEOUT, check=False)
+        HOST.run(_command_argv(cmd), timeout=DEFAULT_TIMEOUT, check=False)
     except KeyboardInterrupt:
         print(f"\n  {RED}[!] Выполнение прервано.{NC}")
 
@@ -1255,7 +1256,7 @@ def test_iperf3_ru():
         if reverse:
             cmd.append("-R")
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=6)
+            r = HOST.run(cmd, capture_output=True, text=True, timeout=6)
             if r.returncode != 0:
                 return 0.0
             res_data = json.loads(r.stdout)
@@ -1267,7 +1268,7 @@ def test_iperf3_ru():
             
     def get_ping(host):
         try:
-            r = subprocess.run(["ping", "-c", "2", "-W", "1.5", host], capture_output=True, text=True, timeout=3.0)
+            r = HOST.run(["ping", "-c", "2", "-W", "1.5", host], capture_output=True, text=True, timeout=3.0)
             match = re.search(r"rtt min/avg/max/mdev = [\d\.]+/(?P<avg>[\d\.]+)/[\d\.]+/[\d\.]+", r.stdout)
             if match:
                 return f"{float(match.group('avg')):.1f} ms"
@@ -1386,7 +1387,7 @@ def run_parallel_pings(nodes):
     """Выполняет быстрый ICMP-пинг до всех серверов в пуле параллельно."""
     def get_ping_ms(host):
         try:
-            r = subprocess.run(["ping", "-c", "2", "-W", "1.5", host], capture_output=True, text=True, timeout=3.0)
+            r = HOST.run(["ping", "-c", "2", "-W", "1.5", host], capture_output=True, text=True, timeout=3.0)
             match = re.search(r"rtt min/avg/max/mdev = [\d\.]+/(?P<avg>[\d\.]+)/[\d\.]+/[\d\.]+", r.stdout)
             if match:
                 return f"{float(match.group('avg')):.1f} ms", float(match.group('avg'))
@@ -1614,18 +1615,18 @@ def run_diagnostics_report() -> str:
         shown_services = 0
         for service in services:
             try:
-                loaded = subprocess.run(
+                loaded = HOST.run(
                     ["systemctl", "show", service, "--property=LoadState", "--value"],
                     capture_output=True, text=True, timeout=2.0,
                 )
                 if loaded.returncode != 0 or loaded.stdout.strip() != "loaded":
                     continue
                 shown_services += 1
-                active = subprocess.run(
+                active = HOST.run(
                     ["systemctl", "is-active", service],
                     capture_output=True, text=True, timeout=2.0,
                 )
-                enabled = subprocess.run(
+                enabled = HOST.run(
                     ["systemctl", "is-enabled", service],
                     capture_output=True, text=True, timeout=2.0,
                 )

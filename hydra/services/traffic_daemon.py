@@ -4,6 +4,8 @@ hydra/services/traffic_daemon.py — Фоновый демон учета тра
 """
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import json
 import time
 import sys
@@ -208,7 +210,7 @@ def run_daemon() -> None:
         import re
         port_to_user = {}
         try:
-            r = subprocess.run(
+            r = HOST.run(
                 ["journalctl", "-u", "sing-box", "-n", "1000", "--no-pager"],
                 capture_output=True, text=True, timeout=3
             )
@@ -245,7 +247,7 @@ def run_daemon() -> None:
         import re
         addr_to_user = {}
         try:
-            r = subprocess.run(
+            r = HOST.run(
                 ["journalctl", "-u", "sing-box", "-n", "1000", "--no-pager"],
                 capture_output=True, text=True, timeout=3
             )
@@ -286,7 +288,7 @@ def run_daemon() -> None:
 
         addr_to_user: dict[tuple[str, str], str | None] = {}
         try:
-            result = subprocess.run(
+            result = HOST.run(
                 ["journalctl", "-u", "sing-box", "-n", "1000", "--no-pager"],
                 capture_output=True, text=True, timeout=3,
             )
@@ -325,7 +327,7 @@ def run_daemon() -> None:
         conn_to_user = {} # conn_id -> user
         addr_to_user = {} # (ip, port) -> user
         try:
-            r = subprocess.run(
+            r = HOST.run(
                 ["journalctl", "-u", "sing-box", "-n", "1000", "--no-pager"],
                 capture_output=True, text=True, timeout=3
             )
@@ -371,7 +373,7 @@ def run_daemon() -> None:
         import subprocess
 
         try:
-            result = subprocess.run(
+            result = HOST.run(
                 ["journalctl", "-u", "sing-box", "-n", "1000", "--no-pager"],
                 capture_output=True, text=True, timeout=3,
             )

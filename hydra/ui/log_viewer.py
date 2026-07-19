@@ -1,6 +1,8 @@
 """Reusable log and journal viewing primitives for TUI menus."""
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import select
 import subprocess
 import time
@@ -14,7 +16,7 @@ from hydra.ui.tui import DIM, NC, PANEL_W, clear, error, menu, prompt, title, wa
 
 def unit_known(unit: str) -> bool:
     try:
-        result = subprocess.run(
+        result = HOST.run(
             ["systemctl", "show", "--property=LoadState", "--value", unit],
             capture_output=True,
             text=True,
@@ -37,7 +39,7 @@ def read_source(source_type: str, source: str, num_lines: int) -> tuple[list[str
             return [], f"Ошибка чтения файла: {exc}"
 
     try:
-        result = subprocess.run(
+        result = HOST.run(
             [
                 "journalctl",
                 "-u",
@@ -210,7 +212,7 @@ def watch_journal(
     print(f"  {DIM}{'─' * PANEL_W}{NC}\n")
 
     try:
-        process = subprocess.Popen(
+        process = HOST.popen(
             [
                 "journalctl",
                 "-u",

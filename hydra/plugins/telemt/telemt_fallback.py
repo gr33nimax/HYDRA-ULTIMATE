@@ -42,6 +42,8 @@ fallback через:
 
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import re
 import socket
 import subprocess
@@ -438,7 +440,7 @@ def check_journal_for_me_failures(
     Не бросает исключений.
     """
     try:
-        r = subprocess.run(
+        r = HOST.run(
             ["journalctl", "-u", service, "-n", str(lines),
              "--no-pager", "--output=short"],
             capture_output=True, text=True, encoding="utf-8",
@@ -581,7 +583,7 @@ def _reload_telemt(service: str = _SERVICE_NAME) -> bool:
     Возвращает True при успехе.
     """
     try:
-        r = subprocess.run(
+        r = HOST.run(
             ["systemctl", "reload", service],
             capture_output=True, timeout=15,
         )
@@ -593,7 +595,7 @@ def _reload_telemt(service: str = _SERVICE_NAME) -> bool:
 def _restart_telemt(service: str = _SERVICE_NAME) -> bool:
     """Полный рестарт (fallback если reload не сработал)."""
     try:
-        r = subprocess.run(
+        r = HOST.run(
             ["systemctl", "restart", service],
             capture_output=True, timeout=30,
         )

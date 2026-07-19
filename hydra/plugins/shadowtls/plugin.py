@@ -1,6 +1,8 @@
 """hydra/plugins/shadowtls/plugin.py — ShadowTLS v3 + Trojan plugin."""
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import json
 import ipaddress
 import copy
@@ -370,7 +372,7 @@ class ShadowTLSPlugin(BasePlugin):
         from hydra.core.sni_router import get_effective_port
         effective_port = get_effective_port("shadowtls", state) if state else 443
 
-        r = subprocess.run(
+        r = HOST.run(
             ["ss", "-t", "-H", "-n", "state", "established"],
             capture_output=True, text=True,
         )
@@ -397,14 +399,14 @@ class ShadowTLSPlugin(BasePlugin):
 
         rx_bytes = 0
         tx_bytes = 0
-        r_rx = subprocess.run(["iptables", "-t", "filter", "-L", "INPUT", "-n", "-v", "-x"], capture_output=True, text=True)
+        r_rx = HOST.run(["iptables", "-t", "filter", "-L", "INPUT", "-n", "-v", "-x"], capture_output=True, text=True)
         if r_rx.returncode == 0:
             for line in r_rx.stdout.splitlines():
                 if "shadowtls-rx" in line:
                     parts = line.split()
                     if len(parts) >= 2 and parts[1].isdigit():
                         rx_bytes += int(parts[1])
-        r_tx = subprocess.run(["iptables", "-t", "filter", "-L", "OUTPUT", "-n", "-v", "-x"], capture_output=True, text=True)
+        r_tx = HOST.run(["iptables", "-t", "filter", "-L", "OUTPUT", "-n", "-v", "-x"], capture_output=True, text=True)
         if r_tx.returncode == 0:
             for line in r_tx.stdout.splitlines():
                 if "shadowtls-tx" in line:
@@ -508,7 +510,7 @@ class ShadowTLSPlugin(BasePlugin):
 
     def _remove_iptables_rules(self) -> None:
         for chain in ("INPUT", "OUTPUT"):
-            r = subprocess.run(["iptables", "-S", chain], capture_output=True, text=True)
+            r = HOST.run(["iptables", "-S", chain], capture_output=True, text=True)
             if r.returncode != 0:
                 continue
             for line in r.stdout.splitlines():
@@ -516,14 +518,14 @@ class ShadowTLSPlugin(BasePlugin):
                     parts = line.split()
                     if parts[0] == "-A":
                         parts[0] = "-D"
-                        subprocess.run(["iptables"] + parts, capture_output=True)
+                        HOST.run(["iptables"] + parts, capture_output=True)
 
     def _add_iptables_rules(self) -> None:
-        subprocess.run([
+        HOST.run([
             "iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", "443",
             "-m", "comment", "--comment", "shadowtls-rx"
         ], capture_output=True)
-        subprocess.run([
+        HOST.run([
             "iptables", "-I", "OUTPUT", "1", "-p", "tcp", "--sport", "443",
             "-m", "comment", "--comment", "shadowtls-tx"
         ], capture_output=True)
@@ -531,7 +533,7 @@ class ShadowTLSPlugin(BasePlugin):
     def _get_total_traffic(self) -> int:
         total_bytes = 0
         for chain in ("INPUT", "OUTPUT"):
-            r = subprocess.run(
+            r = HOST.run(
                 ["iptables", "-t", "filter", "-L", chain, "-n", "-v", "-x"],
                 capture_output=True, text=True,
             )

@@ -107,7 +107,7 @@ class TestCommandRunners:
         process = MagicMock(returncode=0)
         process.poll.return_value = 0
         process.communicate.return_value = ("result\n", None)
-        with patch.object(diagnostics.subprocess, "Popen", return_value=process) as popen:
+        with patch.object(diagnostics.HOST, "popen", return_value=process) as popen:
             assert diagnostics.run_with_spinner("work", "echo ok") == "result\n"
         popen.assert_called_once_with(
             ["echo", "ok"],
@@ -120,7 +120,7 @@ class TestCommandRunners:
         process = MagicMock(returncode=7)
         process.poll.return_value = 7
         process.communicate.return_value = ("", None)
-        with patch.object(diagnostics.subprocess, "Popen", return_value=process):
+        with patch.object(diagnostics.HOST, "popen", return_value=process):
             with pytest.raises(Exception, match=r"ошибкой \(7\)"):
                 diagnostics.run_with_spinner("work", "false")
 
@@ -135,7 +135,7 @@ class TestCommandRunners:
             diagnostics.run_function_with_spinner("fail", fail)
 
     def test_run_direct_cmd_uses_argv_without_shell(self):
-        with patch.object(diagnostics, "clear"), patch.object(diagnostics.subprocess, "run") as run:
+        with patch.object(diagnostics, "clear"), patch.object(diagnostics.HOST, "run") as run:
             diagnostics.run_direct_cmd("title", "tool --flag")
         run.assert_called_once_with(["tool", "--flag"], timeout=diagnostics.DEFAULT_TIMEOUT, check=False)
 
@@ -468,7 +468,7 @@ class TestRadarSpeedAndConfig:
     def test_run_parallel_pings_parses_average(self):
         completed = MagicMock(stdout="rtt min/avg/max/mdev = 1.0/12.34/20.0/1.0 ms\n")
         nodes = [{"url": "https://a.example/file"}, {"url": "https://b.example/file"}]
-        with patch.object(diagnostics.subprocess, "run", return_value=completed) as run:
+        with patch.object(diagnostics.HOST, "run", return_value=completed) as run:
             result = diagnostics.run_parallel_pings(nodes)
         assert result == {
             "https://a.example/file": ("12.3 ms", 12.34),
@@ -477,7 +477,7 @@ class TestRadarSpeedAndConfig:
         assert run.call_count == 2
 
     def test_run_parallel_pings_marks_failure(self):
-        with patch.object(diagnostics.subprocess, "run", side_effect=OSError("no ping")):
+        with patch.object(diagnostics.HOST, "run", side_effect=OSError("no ping")):
             result = diagnostics.run_parallel_pings([{"url": "https://a.example/file"}])
         assert result["https://a.example/file"] == ("N/A", float("inf"))
 
@@ -509,7 +509,7 @@ class TestReportsAndMenus:
             diagnostics, "query_primary_geoip", return_value="DE"
         ) as geoip, patch.object(diagnostics, "check_custom_service", return_value="Yes") as custom, patch.object(
             diagnostics, "check_domain_censor", return_value=200
-        ) as censor, patch.object(diagnostics.subprocess, "run", return_value=service) as run, patch.object(
+        ) as censor, patch.object(diagnostics.HOST, "run", return_value=service) as run, patch.object(
             diagnostics.os, "makedirs"
         ) as makedirs, patch("builtins.open", writer):
             result = diagnostics.run_diagnostics_report()
@@ -584,7 +584,7 @@ Latency (ms):
         with patch.object(diagnostics, "clear"), patch.object(diagnostics, "title"), patch.object(
             diagnostics, "ensure_packages", return_value=True
         ), patch.object(diagnostics.socket, "socket", return_value=socket_cm), patch.object(
-            diagnostics.subprocess, "run", side_effect=run_command
+            diagnostics.HOST, "run", side_effect=run_command
         ) as run, patch.object(diagnostics, "prompt"):
             diagnostics.test_iperf3_ru()
 

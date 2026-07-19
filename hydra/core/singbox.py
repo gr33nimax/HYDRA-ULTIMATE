@@ -17,6 +17,7 @@ from typing import Optional
 
 from hydra.plugins.base import ConfigFragment
 from hydra.core.state import AppState, PluginState, load_state, save_state
+from hydra.core.host import HOST
 from hydra.utils.commands import redact_text
 
 SINGBOX_BIN = Path("/usr/local/bin/sing-box")
@@ -65,7 +66,7 @@ def _run(cmd: list, capture: bool = True, timeout: int = 30) -> subprocess.Compl
     env = os.environ.copy()
     env["ENABLE_DEPRECATED_LEGACY_DNS_SERVERS"] = "true"
     env["ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER"] = "true"
-    return subprocess.run(cmd, env=env, **kw)
+    return HOST.run(cmd, env=env, **kw)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -421,7 +422,7 @@ WantedBy=multi-user.target
 """
     SINGBOX_SERVICE.parent.mkdir(parents=True, exist_ok=True)
     SINGBOX_SERVICE.write_text(unit)
-    subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+    HOST.run(["systemctl", "daemon-reload"])
     return True
 
 

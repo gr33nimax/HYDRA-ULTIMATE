@@ -3,6 +3,8 @@ hydra/utils/net.py — Сетевые утилиты: IP, архитектура
 """
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import platform
 import socket
 import subprocess
@@ -15,7 +17,7 @@ def public_ip() -> str:
         ["curl", "-s", "-4", "--max-time", "5", "https://ifconfig.me"],
     ):
         try:
-            r = subprocess.run(
+            r = HOST.run(
                 cmd, capture_output=True, text=True, timeout=8,
             )
             ip = r.stdout.strip().split()[0] if r.stdout.strip() else ""

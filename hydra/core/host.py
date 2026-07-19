@@ -9,8 +9,8 @@ import os
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from subprocess import CompletedProcess
-from typing import Sequence
+from subprocess import CompletedProcess, Popen
+from typing import Any, Sequence
 
 from hydra.utils import commands
 
@@ -35,10 +35,27 @@ class HostBackend:
     def run(self, args: Sequence[object], *, timeout: float = commands.DEFAULT_TIMEOUT,
             check: bool = False, text: bool = False,
             input: bytes | str | None = None,
-            env: dict[str, str] | None = None) -> CompletedProcess:
-        return commands.run(
-            args, timeout=timeout, check=check, text=text, input=input, env=env,
-        )
+            env: dict[str, str] | None = None, capture_output: bool = True,
+            cwd: str | os.PathLike[str] | None = None,
+            stdout=None, stderr=None, encoding: str | None = None,
+            errors: str | None = None) -> CompletedProcess:
+        options = {
+            "timeout": timeout, "check": check, "text": text,
+            "input": input, "env": env,
+        }
+        if not capture_output:
+            options["capture_output"] = False
+        for key, value in (
+            ("cwd", cwd), ("stdout", stdout), ("stderr", stderr),
+            ("encoding", encoding), ("errors", errors),
+        ):
+            if value is not None:
+                options[key] = value
+        return commands.run(args, **options)
+
+    def popen(self, args: Sequence[object], *, timeout: float = commands.DEFAULT_TIMEOUT,
+              **kwargs: Any) -> Popen:
+        return commands.popen(args, timeout=timeout, **kwargs)
 
     def which(self, executable: str) -> str | None:
         return shutil.which(executable)

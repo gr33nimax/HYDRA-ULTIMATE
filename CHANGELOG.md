@@ -8,6 +8,8 @@
 
 `hydra plan` now includes the same reconciliation actions alongside configuration changes and dependency requirements, keeping the complete preflight view side-effect free.
 
+Host boundary completion — production `subprocess.run`/`Popen` calls now pass through the injectable `HostBackend`; nftables, Sing-Box, Caddy/SNI, networking, protocol lifecycle and background service operations use bounded host commands. A regression guard prevents new direct subprocess calls outside the command boundary.
+
 ### Runtime reconciliation
 
 `hydra doctor` now reports desired-vs-actual runtime drift and a read-only correction plan. The new `hydra reconcile` command shows the same plan; `hydra reconcile --apply` explicitly applies only safe enable/disable actions and never installs missing components automatically.

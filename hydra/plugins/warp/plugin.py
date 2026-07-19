@@ -10,6 +10,8 @@ WARP обеспечивает выборочный исходящий трафи
 """
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import json
 import re
 import socket
@@ -76,7 +78,7 @@ class WarpPlugin(BasePlugin):
             WGCF_PROFILE.parent.mkdir(parents=True, exist_ok=True)
 
             # Принудительно убиваем любые зависшие процессы wgcf, чтобы избежать Text file busy
-            subprocess.run(["pkill", "-9", "wgcf"], capture_output=True)
+            HOST.run(["pkill", "-9", "wgcf"], capture_output=True)
 
             # Скачиваем wgcf напрямую через GitHub API, если его нет
             if not WGCF_BIN.exists():
@@ -99,7 +101,7 @@ class WarpPlugin(BasePlugin):
             # Регистрация
             account_toml = WGCF_PROFILE.parent / "wgcf-account.toml"
             if not account_toml.exists():
-                r = subprocess.run(
+                r = HOST.run(
                     [str(WGCF_BIN), "register", "--accept-tos"],
                     capture_output=True, text=True, timeout=30,
                     cwd=str(WGCF_PROFILE.parent)
@@ -112,7 +114,7 @@ class WarpPlugin(BasePlugin):
                     )
 
             # Генерация профиля
-            r = subprocess.run(
+            r = HOST.run(
                 [str(WGCF_BIN), "generate"],
                 capture_output=True, text=True, timeout=30,
                 cwd=str(WGCF_PROFILE.parent)
@@ -133,7 +135,7 @@ class WarpPlugin(BasePlugin):
             return False
 
     def uninstall(self) -> bool:
-        subprocess.run(["pkill", "-9", "wgcf"], capture_output=True)
+        HOST.run(["pkill", "-9", "wgcf"], capture_output=True)
         if WGCF_PROFILE.exists():
             WGCF_PROFILE.unlink()
         if WGCF_BIN.exists():

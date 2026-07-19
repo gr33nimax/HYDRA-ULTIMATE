@@ -12,6 +12,7 @@ import argparse
 import json
 import subprocess
 from pathlib import Path
+from hydra.core.host import HOST
 from hydra.utils.commands import DEFAULT_TIMEOUT
 
 
@@ -26,7 +27,7 @@ STATE_FILE = Path("/var/lib/hydra/caddy-source-state.json")
 
 def _run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
     kwargs.setdefault("timeout", DEFAULT_TIMEOUT)
-    return subprocess.run(command, capture_output=True, **kwargs)
+    return HOST.run(command, **kwargs)
 
 
 def _run_checked(command: list[str], **kwargs) -> subprocess.CompletedProcess:

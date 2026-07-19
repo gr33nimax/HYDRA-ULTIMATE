@@ -11,6 +11,8 @@ hydra/ui/menus.py — Главное меню и подменю HYDRA v2.
 """
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import subprocess
 import sys
 import uuid as _uuid
@@ -173,7 +175,7 @@ def _sys_info(state: AppState | None = None) -> list[str]:
         try:
             import subprocess
             import re
-            r = subprocess.run(["systemctl", "is-active", "dnscrypt-proxy"], capture_output=True, text=True, timeout=1)
+            r = HOST.run(["systemctl", "is-active", "dnscrypt-proxy"], capture_output=True, text=True, timeout=1)
             if r.stdout.strip() == "active":
                 conf_path = Path("/etc/dnscrypt-proxy/dnscrypt-proxy.toml")
                 if conf_path.exists():
@@ -1259,7 +1261,7 @@ def _obtain_cert_for_sub(state: AppState) -> bool:
     key_path = Path(f"/etc/letsencrypt/live/{sub_domain}/privkey.pem")
     if cert_path.exists() and key_path.exists():
         try:
-            r = subprocess.run(
+            r = HOST.run(
                 ["openssl", "x509", "-checkend", "2592000", "-noout", "-in", str(cert_path)],
                 capture_output=True
             )
@@ -1273,21 +1275,21 @@ def _obtain_cert_for_sub(state: AppState) -> bool:
     import shutil
     if not shutil.which("certbot"):
         info("Установка certbot...")
-        subprocess.run(["apt-get", "update"], capture_output=True)
-        subprocess.run(["apt-get", "install", "-y", "certbot"], capture_output=True)
+        HOST.run(["apt-get", "update"], capture_output=True)
+        HOST.run(["apt-get", "install", "-y", "certbot"], capture_output=True)
         
     services_to_stop = ["haproxy", "caddy-naive", "nginx", "apache2"]
     was_running = []
     for s in services_to_stop:
-        r = subprocess.run(["systemctl", "is-active", s], capture_output=True, text=True)
+        r = HOST.run(["systemctl", "is-active", s], capture_output=True, text=True)
         if r.stdout.strip() == "active":
             info(f"Временно останавливаем {s} для освобождения порта 80...")
-            subprocess.run(["systemctl", "stop", s])
+            HOST.run(["systemctl", "stop", s])
             was_running.append(s)
         
-    subprocess.run(["ufw", "allow", "80/tcp"], capture_output=True)
+    HOST.run(["ufw", "allow", "80/tcp"], capture_output=True)
     
-    r = subprocess.run([
+    r = HOST.run([
         "certbot", "certonly", "--standalone",
         "-d", sub_domain,
         "--non-interactive", "--agree-tos",
@@ -1297,7 +1299,7 @@ def _obtain_cert_for_sub(state: AppState) -> bool:
     
     for s in reversed(was_running):
         info(f"Запускаем {s} обратно...")
-        subprocess.run(["systemctl", "start", s])
+        HOST.run(["systemctl", "start", s])
         
     if r.returncode == 0:
         success("Сертификат успешно получен!")
@@ -1374,7 +1376,7 @@ def menu_subscription_server(state: AppState):
             
         elif choice == "2":
             if stop("hydra-sub"):
-                subprocess.run(["systemctl", "disable", "hydra-sub"], capture_output=True)
+                HOST.run(["systemctl", "disable", "hydra-sub"], capture_output=True)
                 success("Служба hydra-sub остановлена и отключена из автозапуска")
             else:
                 error("Не удалось остановить службу")
@@ -1806,7 +1808,7 @@ WantedBy=multi-user.target
 def _unit_active(unit: str) -> bool:
     """Безопасно проверяет systemd-юнит, в том числе вне Linux."""
     try:
-        result = subprocess.run(
+        result = HOST.run(
             ["systemctl", "is-active", "--quiet", unit],
             capture_output=True,
         )

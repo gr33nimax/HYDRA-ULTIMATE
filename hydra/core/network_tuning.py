@@ -11,6 +11,7 @@ import os
 import subprocess
 from pathlib import Path
 from typing import Any
+from hydra.core.host import HOST
 
 
 SYSCTL_CONF = Path("/etc/sysctl.d/99-hydra-network-tuning.conf")
@@ -28,7 +29,7 @@ _CAPACITY_KEYS = {
 
 
 def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, capture_output=True, text=True)
+    return HOST.run(command, text=True)
 
 
 def _sysctl_get(key: str) -> str | None:

@@ -10,6 +10,8 @@ hydra/plugins/amneziawg/plugin.py — AmneziaWG 2.0 (wiresock kernel-модул�
 """
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import base64
 import hashlib
 import ipaddress
@@ -75,8 +77,8 @@ class AmneziaWGPlugin(BasePlugin):
 
         import os
         try:
-            subprocess.run(["rm", "-rf", str(AWG_INSTALL_DIR)], capture_output=True)
-            r = subprocess.run(
+            HOST.run(["rm", "-rf", str(AWG_INSTALL_DIR)], capture_output=True)
+            r = HOST.run(
                 ["git", "clone", "--depth", "1",
                  "https://github.com/wiresock/amneziawg-install.git",
                  str(AWG_INSTALL_DIR)],
@@ -91,14 +93,14 @@ class AmneziaWGPlugin(BasePlugin):
             env["AUTO_INSTALL"] = "y"
             env["ENABLE_IPV6"] = "n"
             env["SERVER_PUB_IP"] = self._public_ip()
-            subprocess.run(
+            HOST.run(
                 ["bash", "amneziawg-install.sh"],
                 cwd=str(AWG_INSTALL_DIR), env=env, timeout=900,
             )
 
-            if "amneziawg" not in subprocess.run(
+            if "amneziawg" not in HOST.run(
                 ["lsmod"], capture_output=True, text=True).stdout:
-                subprocess.run(["modprobe", "amneziawg"], capture_output=True)
+                HOST.run(["modprobe", "amneziawg"], capture_output=True)
 
             return self._installed()
         except Exception as e:
@@ -107,14 +109,14 @@ class AmneziaWGPlugin(BasePlugin):
 
     def uninstall(self) -> bool:
         """Полностью удаляет AmneziaWG: служба, пакеты, модуль, файлы."""
-        subprocess.run(["systemctl", "stop", AWG_UNIT], capture_output=True)
-        subprocess.run(["systemctl", "disable", AWG_UNIT], capture_output=True)
-        subprocess.run(["systemctl", "stop", AWG_UNIT_1], capture_output=True)
-        subprocess.run(["systemctl", "disable", AWG_UNIT_1], capture_output=True)
-        subprocess.run(["apt-get", "purge", "-y", "-qq",
+        HOST.run(["systemctl", "stop", AWG_UNIT], capture_output=True)
+        HOST.run(["systemctl", "disable", AWG_UNIT], capture_output=True)
+        HOST.run(["systemctl", "stop", AWG_UNIT_1], capture_output=True)
+        HOST.run(["systemctl", "disable", AWG_UNIT_1], capture_output=True)
+        HOST.run(["apt-get", "purge", "-y", "-qq",
             "amneziawg", "amneziawg-tools", "amneziawg-dkms"], capture_output=True)
-        subprocess.run(["modprobe", "-r", "amneziawg"], capture_output=True)
-        subprocess.run(["rm", "-rf",
+        HOST.run(["modprobe", "-r", "amneziawg"], capture_output=True)
+        HOST.run(["rm", "-rf",
             str(AWG_CONF_DIR),
             "/usr/bin/awg", "/usr/bin/awg-quick",
             "/usr/local/bin/awg", "/usr/local/bin/awg-quick",
@@ -234,7 +236,7 @@ class AmneziaWGPlugin(BasePlugin):
         ok = True
         for unit, running in ((AWG_UNIT, previous.get("running0")), (AWG_UNIT_1, previous.get("running1"))):
             command = ["systemctl", "restart", unit] if running else ["systemctl", "stop", unit]
-            ok = subprocess.run(command, capture_output=True).returncode == 0 and ok
+            ok = HOST.run(command, capture_output=True).returncode == 0 and ok
         return ok
 
     def _apply_iface(self, interface: str, conf_path: Path, unit: str) -> bool:
@@ -247,18 +249,18 @@ class AmneziaWGPlugin(BasePlugin):
                 config_ip = m.group(1)
 
         if active_ip and config_ip and active_ip != config_ip:
-            subprocess.run(["systemctl", "restart", unit], capture_output=True)
+            HOST.run(["systemctl", "restart", unit], capture_output=True)
             return self._is_up_iface(interface)
 
         if self._is_up_iface(interface):
-            r = subprocess.run(
+            r = HOST.run(
                 ["bash", "-c", f"awg syncconf {interface} <(awg-quick strip {interface})"],
                 capture_output=True, text=True,
             )
             return r.returncode == 0
-        r = subprocess.run(["systemctl", "start", unit], capture_output=True)
+        r = HOST.run(["systemctl", "start", unit], capture_output=True)
         if r.returncode != 0:
-            r = subprocess.run(["awg-quick", "up", interface], capture_output=True)
+            r = HOST.run(["awg-quick", "up", interface], capture_output=True)
         return r.returncode == 0
 
     def _apply(self) -> bool:
@@ -269,7 +271,7 @@ class AmneziaWGPlugin(BasePlugin):
         if platform.system() != "Linux":
             return None
         try:
-            r = subprocess.run(
+            r = HOST.run(
                 ["ip", "-o", "-4", "addr", "show", interface],
                 capture_output=True, text=True, timeout=5
             )
@@ -448,14 +450,14 @@ class AmneziaWGPlugin(BasePlugin):
         
         priv_r = self._awg("genkey")
         if priv_r.returncode != 0:
-            priv_r = subprocess.run(
+            priv_r = HOST.run(
                 ["wg", "genkey"], capture_output=True, text=True
             )
         private_key = priv_r.stdout.strip()
         
         pub_r = self._awg("pubkey", _input=private_key)
         if pub_r.returncode != 0:
-            pub_r = subprocess.run(
+            pub_r = HOST.run(
                 ["wg", "pubkey"], input=private_key, 
                 capture_output=True, text=True
             )
@@ -463,7 +465,7 @@ class AmneziaWGPlugin(BasePlugin):
         
         psk_r = self._awg("genpsk")
         if psk_r.returncode != 0:
-            psk_r = subprocess.run(
+            psk_r = HOST.run(
                 ["wg", "genpsk"], capture_output=True, text=True
             )
         preshared_key = psk_r.stdout.strip()
@@ -490,7 +492,7 @@ class AmneziaWGPlugin(BasePlugin):
             return ""
         r = self._awg("pubkey", _input=m.group(1))
         if r.returncode != 0:
-            r = subprocess.run(
+            r = HOST.run(
                 ["wg", "pubkey"], input=m.group(1),
                 capture_output=True, text=True
             )
@@ -589,7 +591,7 @@ class AmneziaWGPlugin(BasePlugin):
         
         priv_r = self._awg("genkey")
         if priv_r.returncode != 0:
-            priv_r = subprocess.run(["wg", "genkey"], capture_output=True, text=True)
+            priv_r = HOST.run(["wg", "genkey"], capture_output=True, text=True)
         server_private_key = priv_r.stdout.strip()
         
         from hydra.plugins.amneziawg.presets import generate_params, LEGACY_PRESET_MAP, STRATEGIES
@@ -664,7 +666,7 @@ class AmneziaWGPlugin(BasePlugin):
         from hydra.core.state import save_state
         save_state(state)
         
-        subprocess.run(["systemctl", "enable", "--now", AWG_UNIT_1], capture_output=True)
+        HOST.run(["systemctl", "enable", "--now", AWG_UNIT_1], capture_output=True)
         
         from hydra.core.orchestrator import apply_config
         apply_config(state)
@@ -679,8 +681,8 @@ class AmneziaWGPlugin(BasePlugin):
         if not ps or "profiles" not in ps.config or "mobile" not in ps.config["profiles"]:
             return False
         
-        subprocess.run(["systemctl", "stop", AWG_UNIT_1], capture_output=True)
-        subprocess.run(["systemctl", "disable", AWG_UNIT_1], capture_output=True)
+        HOST.run(["systemctl", "stop", AWG_UNIT_1], capture_output=True)
+        HOST.run(["systemctl", "disable", AWG_UNIT_1], capture_output=True)
         
         if AWG_CONF_1.exists():
             AWG_CONF_1.unlink()
@@ -772,12 +774,12 @@ class AmneziaWGPlugin(BasePlugin):
         conf_path.write_text(text, encoding="utf-8")
         conf_path.chmod(0o600)
         
-        r = subprocess.run(
+        r = HOST.run(
             ["bash", "-c", f"awg syncconf {interface} <(awg-quick strip {interface})"],
             capture_output=True, text=True,
         )
         if r.returncode != 0:
-            subprocess.run(["systemctl", "restart", unit], capture_output=True)
+            HOST.run(["systemctl", "restart", unit], capture_output=True)
             
         if ps:
             if "profiles" not in ps.config:
@@ -1151,7 +1153,7 @@ class AmneziaWGPlugin(BasePlugin):
         for p in profiles:
             unit = p.get("unit", AWG_UNIT)
             if not self._is_up_iface(p["interface"]):
-                subprocess.run(["systemctl", "enable", "--now", unit], capture_output=True)
+                HOST.run(["systemctl", "enable", "--now", unit], capture_output=True)
 
         self._ensure_forward()
 
@@ -1163,19 +1165,19 @@ class AmneziaWGPlugin(BasePlugin):
         except Exception:
             pass
 
-        subprocess.run(["systemctl", "stop", AWG_UNIT], capture_output=True)
-        subprocess.run(["systemctl", "stop", AWG_UNIT_1], capture_output=True)
+        HOST.run(["systemctl", "stop", AWG_UNIT], capture_output=True)
+        HOST.run(["systemctl", "stop", AWG_UNIT_1], capture_output=True)
 
     @staticmethod
     def _ensure_ip_forward():
         """Включает ip_forward, если выключен."""
-        r = subprocess.run(["sysctl", "-n", "net.ipv4.ip_forward"], capture_output=True, text=True)
+        r = HOST.run(["sysctl", "-n", "net.ipv4.ip_forward"], capture_output=True, text=True)
         if r.stdout.strip() != "1":
-            subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], capture_output=True)
-            subprocess.run(
+            HOST.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], capture_output=True)
+            HOST.run(
                 ["sed", "-i", "s/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/g",
                  "/etc/sysctl.conf"], capture_output=True)
-            subprocess.run(
+            HOST.run(
                 ["sh", "-c", "grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf || "
                  "echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf"], capture_output=True)
 
@@ -1183,13 +1185,13 @@ class AmneziaWGPlugin(BasePlugin):
         """Добавляет MASQUERADE для трафика AWG, если правила нет."""
         _, _, network = self._network(state)
         iface = self._wan_iface()
-        r = subprocess.run(
+        r = HOST.run(
             ["iptables", "-t", "nat", "-C", "POSTROUTING",
              "-s", network, "-o", iface, "-j", "MASQUERADE"],
             capture_output=True,
         )
         if r.returncode != 0:
-            subprocess.run(
+            HOST.run(
                 ["iptables", "-t", "nat", "-A", "POSTROUTING",
                  "-s", network, "-o", iface, "-j", "MASQUERADE"],
                 capture_output=True,
@@ -1199,7 +1201,7 @@ class AmneziaWGPlugin(BasePlugin):
         """Удаляет MASQUERADE для трафика AWG."""
         _, _, network = self._network(state)
         iface = self._wan_iface()
-        subprocess.run(
+        HOST.run(
             ["iptables", "-t", "nat", "-D", "POSTROUTING",
              "-s", network, "-o", iface, "-j", "MASQUERADE"],
             capture_output=True,
@@ -1213,23 +1215,23 @@ class AmneziaWGPlugin(BasePlugin):
 
         for iface in interfaces:
             for rule in (["-i", iface], ["-o", iface]):
-                r = subprocess.run(
+                r = HOST.run(
                     ["iptables", "-C", "FORWARD", *rule, "-j", "ACCEPT"],
                     capture_output=True,
                 )
                 if r.returncode != 0:
-                    subprocess.run(
+                    HOST.run(
                         ["iptables", "-I", "FORWARD", *rule, "-j", "ACCEPT"],
                         capture_output=True,
                     )
 
             rule = ["-i", iface, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN"]
-            r = subprocess.run(
+            r = HOST.run(
                 ["iptables", "-t", "mangle", "-C", "FORWARD", *rule, "-j", "TCPMSS", "--clamp-mss-to-pmtu"],
                 capture_output=True,
             )
             if r.returncode != 0:
-                subprocess.run(
+                HOST.run(
                     ["iptables", "-t", "mangle", "-I", "FORWARD", *rule, "-j", "TCPMSS", "--clamp-mss-to-pmtu"],
                     capture_output=True,
                 )
@@ -1242,11 +1244,11 @@ class AmneziaWGPlugin(BasePlugin):
             
         for iface in interfaces:
             for rule in (["-i", iface], ["-o", iface]):
-                subprocess.run(
+                HOST.run(
                     ["iptables", "-D", "FORWARD", *rule, "-j", "ACCEPT"],
                     capture_output=True,
                 )
-            subprocess.run(
+            HOST.run(
                 ["iptables", "-t", "mangle", "-D", "FORWARD", "-i", iface, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu"],
                 capture_output=True,
             )
@@ -1254,7 +1256,7 @@ class AmneziaWGPlugin(BasePlugin):
     @staticmethod
     def _wan_iface() -> str:
         """Определяет интерфейс с default route (eth0 / ens3 / etc)."""
-        r = subprocess.run(
+        r = HOST.run(
             ["sh", "-c", "ip route show default | awk '{print $5}'"],
             capture_output=True, text=True,
         )
@@ -1272,7 +1274,7 @@ class AmneziaWGPlugin(BasePlugin):
         import platform
         if platform.system() != "Linux":
             return False
-        return subprocess.run(
+        return HOST.run(
             ["ip", "link", "show", AWG_INTERFACE], capture_output=True).returncode == 0
 
     def _is_up_iface(self, interface: str) -> bool:
@@ -1281,7 +1283,7 @@ class AmneziaWGPlugin(BasePlugin):
         import platform
         if platform.system() != "Linux":
             return False
-        return subprocess.run(
+        return HOST.run(
             ["ip", "link", "show", interface], capture_output=True).returncode == 0
 
     def _current_port(self) -> int:
@@ -1312,11 +1314,11 @@ class AmneziaWGPlugin(BasePlugin):
         kw: dict = {"capture_output": True, "text": True}
         if _input:
             kw["input"] = _input
-        return subprocess.run([bin_path, *args], **kw)
+        return HOST.run([bin_path, *args], **kw)
 
     @staticmethod
     def _public_ip() -> str:
-        r = subprocess.run(
+        r = HOST.run(
             ["curl", "-s", "-4", "--max-time", "5", "https://api.ipify.org"],
             capture_output=True, text=True,
         )

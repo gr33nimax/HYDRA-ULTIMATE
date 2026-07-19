@@ -3,6 +3,8 @@ hydra/plugins/telemt/manager.py — TUI-консоль управления Tele
 """
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import os
 import re
 import subprocess
@@ -87,7 +89,7 @@ def _run(cmd: list, capture: bool = False) -> subprocess.CompletedProcess:
         kw.update(capture_output=True, text=True, encoding="utf-8", errors="replace")
     else:
         kw.update(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return subprocess.run(cmd, **kw)
+    return HOST.run(cmd, **kw)
 
 def _get_installed_version() -> Optional[str]:
     if not BIN_PATH.exists():
@@ -475,11 +477,11 @@ def _run_update(plugin) -> None:
 def _view_logs() -> None:
     clear()
     panel("СТАТУС СЛУЖБЫ TELEMT", [])
-    r1 = subprocess.run(["systemctl", "status", SERVICE_NAME, "--no-pager"], capture_output=True, text=True)
+    r1 = HOST.run(["systemctl", "status", SERVICE_NAME, "--no-pager"], capture_output=True, text=True)
     print(r1.stdout or r1.stderr)
     
     print(f"\n{BOLD}{CYAN}Последние 25 строк логов:{NC}")
-    r2 = subprocess.run(["journalctl", "-u", SERVICE_NAME, "-n", "25", "--no-pager"], capture_output=True, text=True)
+    r2 = HOST.run(["journalctl", "-u", SERVICE_NAME, "-n", "25", "--no-pager"], capture_output=True, text=True)
     print(r2.stdout or r2.stderr)
     _pause()
 

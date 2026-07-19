@@ -3,6 +3,8 @@ hydra/plugins/warp/manager.py — TUI-консоль управления Cloudf
 """
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import json
 from pathlib import Path
 from hydra.core.state import AppState, save_state
@@ -71,11 +73,11 @@ def _show_diagnostic_info():
             print(f"  Ошибка чтения конфига: {e}")
 
     import subprocess
-    r = subprocess.run(["systemctl", "status", "sing-box"], capture_output=True, text=True)
+    r = HOST.run(["systemctl", "status", "sing-box"], capture_output=True, text=True)
     if r.returncode != 0:
         warn("Служба sing-box неактивна или сообщает об ошибке.")
     
-    r2 = subprocess.run(["journalctl", "-u", "sing-box", "-n", "10", "--no-pager"], capture_output=True, text=True)
+    r2 = HOST.run(["journalctl", "-u", "sing-box", "-n", "10", "--no-pager"], capture_output=True, text=True)
     if r2.stdout:
         warn("Последние 10 строк логов sing-box из journalctl:")
         for line in r2.stdout.splitlines():

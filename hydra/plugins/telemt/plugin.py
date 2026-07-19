@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import hashlib
 import json
 import platform
@@ -68,12 +70,12 @@ class TelemtPlugin(BasePlugin):
         return self._installed()
 
     def uninstall(self) -> bool:
-        subprocess.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
-        subprocess.run(["systemctl", "disable", SERVICE_NAME], capture_output=True)
+        HOST.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
+        HOST.run(["systemctl", "disable", SERVICE_NAME], capture_output=True)
         if SERVICE_FILE.exists():
             SERVICE_FILE.unlink()
-        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
-        subprocess.run(["systemctl", "reset-failed"], capture_output=True)
+        HOST.run(["systemctl", "daemon-reload"], capture_output=True)
+        HOST.run(["systemctl", "reset-failed"], capture_output=True)
 
         if BIN_PATH.exists():
             BIN_PATH.unlink()
@@ -170,9 +172,9 @@ class TelemtPlugin(BasePlugin):
                 print(f"  [telemt] Ошибка записи fallback настроек: {e}")
 
         # 2. Перезапуск службы
-        daemon_reload = subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
-        enable = subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
-        restart = subprocess.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
+        daemon_reload = HOST.run(["systemctl", "daemon-reload"], capture_output=True)
+        enable = HOST.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
+        restart = HOST.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
         if any(result.returncode != 0 for result in (daemon_reload, enable, restart)):
             return False
 
@@ -198,7 +200,7 @@ class TelemtPlugin(BasePlugin):
                 "d = _load_stats(); d = _collect(d); _save_stats(d)\" >/dev/null 2>&1\n"
             )
             cron_file.chmod(0o644)
-            subprocess.run(["systemctl", "restart", "cron"], capture_output=True)
+            HOST.run(["systemctl", "restart", "cron"], capture_output=True)
         except Exception as e:
             print(f"  [telemt] Ошибка создания задания cron: {e}")
 
@@ -232,7 +234,7 @@ class TelemtPlugin(BasePlugin):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(content)
         command = ["systemctl", "restart", SERVICE_NAME] if previous.get("running") else ["systemctl", "stop", SERVICE_NAME]
-        return subprocess.run(command, capture_output=True).returncode == 0
+        return HOST.run(command, capture_output=True).returncode == 0
 
     # ═════════════════════════════════════════════════════════════════════
     #  Per-user TRANSPORT-методы
@@ -294,7 +296,7 @@ class TelemtPlugin(BasePlugin):
         port = DEFAULT_PORT
         
         if installed:
-            r = subprocess.run(
+            r = HOST.run(
                 ["systemctl", "is-active", SERVICE_NAME],
                 capture_output=True, text=True,
             )
@@ -346,10 +348,10 @@ class TelemtPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def on_enable(self, state: AppState) -> None:
-        subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
+        HOST.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
 
     def on_disable(self, state: AppState) -> None:
-        subprocess.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
+        HOST.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
 
     # ═════════════════════════════════════════════════════════════════════
     #  Внутренние помощники
@@ -449,8 +451,8 @@ class TelemtPlugin(BasePlugin):
             "WantedBy=multi-user.target\n"
             "\n"
         )
-        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
-        subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
+        HOST.run(["systemctl", "daemon-reload"], capture_output=True)
+        HOST.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
 
     def _build_toml(
         self,

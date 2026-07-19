@@ -1,6 +1,8 @@
 """Non-blocking network identity cache used by the TUI dashboard."""
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import os
 import subprocess
 import threading
@@ -64,7 +66,7 @@ def _fetch() -> None:
         public = public_ip()
         for url in ("https://ipinfo.io/country", "https://ipapi.co/country/"):
             try:
-                result = subprocess.run(
+                result = HOST.run(
                     ["curl", "-s", "--max-time", "3", url],
                     capture_output=True, text=True, timeout=4,
                 )

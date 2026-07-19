@@ -1,6 +1,9 @@
 """hydra/plugins/wdtt/manager.py — TUI-консоль управления qWDTT."""
 from __future__ import annotations
 
+from hydra.core.host import HOST
+from hydra.core.errors import HostOperationError
+
 import json
 import os
 import re
@@ -44,11 +47,11 @@ def _save_passwords(data: dict) -> None:
     PASSWORDS_FILE.chmod(0o600)
 
 def _hot_reload() -> bool:
-    r = subprocess.run(["pidof", "wdtt-server"], capture_output=True, text=True)
+    r = HOST.run(["pidof", "wdtt-server"], capture_output=True, text=True)
     pid = r.stdout.strip()
     if not pid:
         return False
-    subprocess.run(["kill", "-HUP", pid])
+    HOST.run(["kill", "-HUP", pid])
     return True
 
 def _get_server_ip() -> str:
@@ -91,7 +94,7 @@ def menu_wdtt(state: AppState, plugin):
         
         # Определение статуса
         installed = plugin._installed()
-        r = subprocess.run(["systemctl", "is-active", SERVICE_NAME], capture_output=True, text=True)
+        r = HOST.run(["systemctl", "is-active", SERVICE_NAME], capture_output=True, text=True)
         running = r.stdout.strip() == "active"
         
         details = []
@@ -509,9 +512,9 @@ def _show_main_link(state: AppState):
 
 def _restart_service():
     info("Перезапускаю wdtt-server...")
-    subprocess.run(["systemctl", "restart", SERVICE_NAME], capture_output=True)
+    HOST.run(["systemctl", "restart", SERVICE_NAME], capture_output=True)
     time.sleep(1.5)
-    r = subprocess.run(["systemctl", "is-active", SERVICE_NAME], capture_output=True, text=True)
+    r = HOST.run(["systemctl", "is-active", SERVICE_NAME], capture_output=True, text=True)
     if r.stdout.strip() == "active":
         success("Сервис успешно перезапущен!")
     else:
@@ -528,7 +531,7 @@ def _diagnostic_output(command: list[str], empty_message: str, timeout: int = 5)
         "PAGER": "cat",
     }
     try:
-        result = subprocess.run(
+        result = HOST.run(
             command,
             capture_output=True,
             text=True,
@@ -537,7 +540,7 @@ def _diagnostic_output(command: list[str], empty_message: str, timeout: int = 5)
             timeout=timeout,
             env=command_env,
         )
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, HostOperationError):
         return f"Команда не ответила за {timeout} сек. Вывод пропущен."
     except FileNotFoundError:
         return f"Команда {command[0]} не найдена."

@@ -13,6 +13,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 from hydra.core.state import AppState
+from hydra.core.host import HOST
 
 CADDY_BIN = Path("/usr/local/bin/caddy-l4")
 CADDY_CFG = Path("/etc/caddy-l4/config.json")
@@ -68,7 +69,7 @@ def _hash_password_caddy(password: str) -> str:
     if not CADDY_BIN.exists():
         return "$2a$10$MockedBcryptHashForTestingOnlyValueThisIsNotReal"
     try:
-        r = subprocess.run([
+        r = HOST.run([
             str(CADDY_BIN), "hash-password", "--plaintext", password
         ], capture_output=True, text=True)
         if r.returncode == 0:
@@ -111,7 +112,7 @@ def _get_adapted_forward_proxy_config(naive_users: list[dict]) -> dict:
     tmp_cf = Path("/tmp/naive_caddyfile_tmp")
     try:
         tmp_cf.write_text(caddyfile_content, encoding="utf-8")
-        r = subprocess.run([
+        r = HOST.run([
             str(CADDY_BIN), "adapt", "--config", str(tmp_cf), "--adapter", "caddyfile"
         ], capture_output=True, text=True)
     except Exception as e:
@@ -263,7 +264,7 @@ def _ensure_modern_go() -> bool:
     go_bin = shutil.which("go")
     if go_bin:
         try:
-            r = subprocess.run([go_bin, "version"], capture_output=True, text=True)
+            r = HOST.run([go_bin, "version"], capture_output=True, text=True)
             if r.returncode == 0:
                 parts = r.stdout.split()
                 if len(parts) >= 3 and parts[2].startswith("go"):
@@ -304,7 +305,7 @@ def _ensure_modern_go() -> bool:
         current_go = Path("/usr/local/go")
         backup_go = Path(f"/usr/local/go.hydra-previous-{os.getpid()}")
         try:
-            extracted = subprocess.run(
+            extracted = HOST.run(
                 ["tar", "-C", str(extract_root), "-xzf", str(go_tar)],
                 capture_output=True,
             )
@@ -315,7 +316,7 @@ def _ensure_modern_go() -> bool:
                 shutil.move(str(current_go), str(backup_go))
             shutil.move(str(candidate), str(current_go))
             os.environ["PATH"] = f"/usr/local/go/bin:{os.environ.get('PATH', '')}"
-            check = subprocess.run(
+            check = HOST.run(
                 [str(current_go / "bin" / "go"), "version"],
                 capture_output=True, text=True,
             )
@@ -349,8 +350,8 @@ def install(state: AppState | None = None, *, force: bool = False) -> bool:
     print("  Installing Go compiler...")
     if not _ensure_modern_go():
         print("  Failed to install a modern Go compiler. Trying apt fallback...")
-        subprocess.run(["apt-get", "update"], capture_output=True, timeout=300)
-        subprocess.run(["apt-get", "install", "-y", "golang-go"], capture_output=True, timeout=300)
+        HOST.run(["apt-get", "update"], capture_output=True, timeout=300)
+        HOST.run(["apt-get", "install", "-y", "golang-go"], capture_output=True, timeout=300)
 
     print("  Installing xcaddy and building caddy-l4...")
     # Install xcaddy in a local path to avoid global permissions issues
@@ -383,7 +384,7 @@ def install(state: AppState | None = None, *, force: bool = False) -> bool:
     if not os.path.exists(xcaddy_bin):
         # Fallback to go install if download failed
         print("  Trying go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest...")
-        subprocess.run([
+        HOST.run([
             "go", "install", "github.com/caddyserver/xcaddy/cmd/xcaddy@latest"
         ], capture_output=True, env=env)
 
@@ -406,7 +407,7 @@ def install(state: AppState | None = None, *, force: bool = False) -> bool:
     
     build_args += ["--output", str(pending_binary)]
     
-    r = subprocess.run(build_args, capture_output=True, text=True, env=env)
+    r = HOST.run(build_args, capture_output=True, text=True, env=env)
 
     if r.returncode != 0 and need_naive_fp:
         # Fallback: попробовать без naive-форка
@@ -416,11 +417,11 @@ def install(state: AppState | None = None, *, force: bool = False) -> bool:
             "--with", "github.com/caddyserver/forwardproxy@caddy2",
             "--output", str(pending_binary)
         ]
-        r = subprocess.run(build_args_fallback, capture_output=True, text=True, env=env)
+        r = HOST.run(build_args_fallback, capture_output=True, text=True, env=env)
 
     if r.returncode != 0 and need_naive_fp:
         # Fallback 2: вообще без forwardproxy
-        r = subprocess.run([
+        r = HOST.run([
             xcaddy_bin, "build",
             "--with", f"github.com/mholt/caddy-l4@{CADDY_L4_VERSION}",
             "--output", str(pending_binary)
@@ -431,7 +432,7 @@ def install(state: AppState | None = None, *, force: bool = False) -> bool:
         print(f"  Вывод ошибок:\n{r.stderr or r.stdout or ''}")
 
     if r.returncode == 0 and pending_binary.exists():
-        modules = subprocess.run(
+        modules = HOST.run(
             [str(pending_binary), "list-modules"], capture_output=True, text=True,
         )
         required = ["layer4.handlers.proxy"]
@@ -454,7 +455,7 @@ def is_active() -> bool:
     """Checks if the caddy-l4 service is active."""
     if not is_installed():
         return False
-    r = subprocess.run(["systemctl", "is-active", SERVICE_NAME], capture_output=True, text=True)
+    r = HOST.run(["systemctl", "is-active", SERVICE_NAME], capture_output=True, text=True)
     return r.stdout.strip() == "active"
 
 
@@ -979,8 +980,8 @@ WantedBy=multi-user.target
 """
     SOURCE_SERVICE_FILE.parent.mkdir(parents=True, exist_ok=True)
     SOURCE_SERVICE_FILE.write_text(unit, encoding="utf-8")
-    subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
-    result = subprocess.run(
+    HOST.run(["systemctl", "daemon-reload"], capture_output=True)
+    result = HOST.run(
         ["systemctl", "enable", SOURCE_SERVICE_NAME], capture_output=True,
     )
     if result.returncode != 0:
@@ -988,11 +989,11 @@ WantedBy=multi-user.target
 
 
 def _remove_source_service() -> None:
-    subprocess.run(
+    HOST.run(
         ["systemctl", "disable", "--now", SOURCE_SERVICE_NAME], capture_output=True,
     )
     SOURCE_SERVICE_FILE.unlink(missing_ok=True)
-    subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+    HOST.run(["systemctl", "daemon-reload"], capture_output=True)
 
 
 def _restore_unit_file(path: Path, content: bytes | None) -> None:
@@ -1042,14 +1043,14 @@ def rebuild(state: AppState) -> bool:
 
     # 4. Validate config
     upgraded_binary = False
-    r = subprocess.run([
+    r = HOST.run([
         str(CADDY_BIN), "validate", "--config", str(pending_config)
     ], capture_output=True, text=True)
     if r.returncode != 0 and "local_address" in f"{r.stderr}\n{r.stdout}":
         print("  Updating Caddy L4 for source-address preservation...")
         upgraded_binary = install(state=state, force=True)
         if upgraded_binary:
-            r = subprocess.run([
+            r = HOST.run([
                 str(CADDY_BIN), "validate", "--config", str(pending_config)
             ], capture_output=True, text=True)
     if r.returncode != 0:
@@ -1086,12 +1087,12 @@ def rebuild(state: AppState) -> bool:
             _restore_previous_caddy_binary()
         _restore_unit_file(SERVICE_FILE, previous_caddy_unit)
         _restore_unit_file(SOURCE_SERVICE_FILE, previous_source_unit)
-        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+        HOST.run(["systemctl", "daemon-reload"], capture_output=True)
         if not previous_transparency:
             _remove_source_service()
             source_transparency.clear()
         else:
-            subprocess.run(["systemctl", "restart", SOURCE_SERVICE_NAME], capture_output=True)
+            HOST.run(["systemctl", "restart", SOURCE_SERVICE_NAME], capture_output=True)
         pending_config.unlink(missing_ok=True)
         print(f"  Caddy source-preservation routing error: {exc}")
         return False
@@ -1102,16 +1103,16 @@ def rebuild(state: AppState) -> bool:
     try:
         for b in backends:
             port = b["port"]
-            subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
-            subprocess.run(["iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+            HOST.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+            HOST.run(["iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
             if b["name"] == quic_owner:
-                subprocess.run(["iptables", "-D", "INPUT", "-p", "udp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
-                subprocess.run(["iptables", "-I", "INPUT", "1", "-p", "udp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+                HOST.run(["iptables", "-D", "INPUT", "-p", "udp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+                HOST.run(["iptables", "-I", "INPUT", "1", "-p", "udp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
         
         # Block decoy ports from external access too
         for decoy_port in _DECOY_HTTP_PORTS.values():
-            subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(decoy_port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
-            subprocess.run(["iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", str(decoy_port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+            HOST.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(decoy_port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+            HOST.run(["iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", str(decoy_port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
     except Exception:
         pass
 
@@ -1123,8 +1124,8 @@ def rebuild(state: AppState) -> bool:
         close_udp(443, "udp-quic-mux")
 
     # 7. Enable and reload/restart service
-    subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
-    r = subprocess.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
+    HOST.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
+    r = HOST.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
     if r.returncode == 0 and is_active():
         return True
 
@@ -1137,20 +1138,20 @@ def rebuild(state: AppState) -> bool:
             rollback = CADDY_CFG.with_suffix(".json.rollback")
             rollback.write_bytes(previous_config)
             rollback.replace(CADDY_CFG)
-        subprocess.run(["systemctl", "restart", SERVICE_NAME], capture_output=True)
+        HOST.run(["systemctl", "restart", SERVICE_NAME], capture_output=True)
     finally:
         _restore_unit_file(SERVICE_FILE, previous_caddy_unit)
         _restore_unit_file(SOURCE_SERVICE_FILE, previous_source_unit)
-        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+        HOST.run(["systemctl", "daemon-reload"], capture_output=True)
         if upgraded_binary:
             _restore_previous_caddy_binary()
         if not previous_transparency:
             _remove_source_service()
             source_transparency.clear()
         else:
-            subprocess.run(["systemctl", "restart", SOURCE_SERVICE_NAME], capture_output=True)
+            HOST.run(["systemctl", "restart", SOURCE_SERVICE_NAME], capture_output=True)
         if previous_config is not None:
-            subprocess.run(["systemctl", "restart", SERVICE_NAME], capture_output=True)
+            HOST.run(["systemctl", "restart", SERVICE_NAME], capture_output=True)
     return False
 
 
@@ -1158,15 +1159,15 @@ def stop() -> None:
     """Stops and disables the Caddy L4 service."""
     try:
         if is_installed():
-            subprocess.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
-            subprocess.run(["systemctl", "disable", SERVICE_NAME], capture_output=True)
+            HOST.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
+            HOST.run(["systemctl", "disable", SERVICE_NAME], capture_output=True)
         
         # Remove firewall blocks
         for port in _INTERNAL_PORTS.values():
-            subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
-            subprocess.run(["iptables", "-D", "INPUT", "-p", "udp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+            HOST.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+            HOST.run(["iptables", "-D", "INPUT", "-p", "udp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
         for decoy_port in _DECOY_HTTP_PORTS.values():
-            subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(decoy_port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+            HOST.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(decoy_port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
     except Exception:
         pass
     try:
@@ -1180,11 +1181,11 @@ def stop() -> None:
 def uninstall_haproxy() -> None:
     """Stops, disables, and removes the old HAProxy service."""
     try:
-        subprocess.run(["systemctl", "stop", "haproxy"], capture_output=True)
-        subprocess.run(["systemctl", "disable", "haproxy"], capture_output=True)
+        HOST.run(["systemctl", "stop", "haproxy"], capture_output=True)
+        HOST.run(["systemctl", "disable", "haproxy"], capture_output=True)
         # Clear iptables rules previously set for HAProxy internal ports
         for port in (10443, 10444, 10445, 9443):
-            subprocess.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
+            HOST.run(["iptables", "-D", "INPUT", "-p", "tcp", "--dport", str(port), "!", "-i", "lo", "-j", "DROP"], capture_output=True)
     except Exception:
         pass
 
@@ -1216,7 +1217,7 @@ WantedBy=multi-user.target
     try:
         SERVICE_FILE.parent.mkdir(parents=True, exist_ok=True)
         SERVICE_FILE.write_text(unit_content, encoding="utf-8")
-        result = subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+        result = HOST.run(["systemctl", "daemon-reload"], capture_output=True)
         return result.returncode == 0
     except OSError:
         return False

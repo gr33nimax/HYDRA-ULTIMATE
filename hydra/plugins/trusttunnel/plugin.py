@@ -1,6 +1,9 @@
 """TrustTunnel transport: HTTP/2 TCP and experimental QUIC via sing-box."""
 from __future__ import annotations
 
+from hydra.core.host import HOST
+from hydra.core.errors import HostOperationError
+
 import copy
 import json
 import shutil
@@ -506,7 +509,7 @@ class TrustTunnelPlugin(BasePlugin):
         except Exception:
             pass
         try:
-            r = subprocess.run(
+            r = HOST.run(
                 ["systemctl", "is-active", "--quiet", "caddy-l4"],
                 capture_output=True,
             )
@@ -566,7 +569,7 @@ class TrustTunnelPlugin(BasePlugin):
     def _collect_ss_clients(self, cmd: list[str], port: int, kind: str,
                             counts: dict[tuple[str, str], int]) -> None:
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = HOST.run(cmd, capture_output=True, text=True)
         except OSError:
             return
         if result.returncode != 0:
@@ -618,7 +621,7 @@ class TrustTunnelPlugin(BasePlugin):
         key_path = Path(f"/etc/letsencrypt/live/{domain}/privkey.pem")
         if cert_path.exists() and key_path.exists():
             try:
-                r = subprocess.run(
+                r = HOST.run(
                     ["openssl", "x509", "-checkend", "2592000", "-noout", "-in", str(cert_path)],
                     capture_output=True
                 )
@@ -633,27 +636,27 @@ class TrustTunnelPlugin(BasePlugin):
 
         if not shutil.which("certbot"):
             print("  Устанавливаю certbot...")
-            subprocess.run(["apt-get", "update"], capture_output=True)
-            subprocess.run(["apt-get", "install", "-y", "certbot"], capture_output=True)
+            HOST.run(["apt-get", "update"], capture_output=True)
+            HOST.run(["apt-get", "install", "-y", "certbot"], capture_output=True)
 
         services_to_stop = ["caddy-l4", "caddy-naive", "nginx", "apache2"]
         was_running: list[str] = []
         try:
             for service in services_to_stop:
-                status = subprocess.run(
+                status = HOST.run(
                     ["systemctl", "is-active", service],
                     capture_output=True, text=True,
                 )
                 if status.stdout.strip() == "active":
                     print(f"  Временно останавливаю {service}...")
-                    stopped = subprocess.run(
+                    stopped = HOST.run(
                         ["systemctl", "stop", service], capture_output=True,
                     )
                     if stopped.returncode == 0:
                         was_running.append(service)
 
             with temporary_open_port("tcp", 80, "temp-certbot"):
-                result = subprocess.run([
+                result = HOST.run([
                     "certbot", "certonly", "--standalone",
                     "-d", domain,
                     "--non-interactive", "--agree-tos",
@@ -663,19 +666,19 @@ class TrustTunnelPlugin(BasePlugin):
             if result.returncode != 0:
                 print(f"  [Ошибка certbot] Вывод:\n{result.stderr or result.stdout or ''}")
             return result.returncode == 0
-        except OSError as exc:
+        except (OSError, HostOperationError) as exc:
             print(f"  [Ошибка certbot] {exc}")
             return False
         finally:
             for service in was_running:
                 print(f"  Восстанавливаю {service}...")
-                subprocess.run(
+                HOST.run(
                     ["systemctl", "start", service], capture_output=True,
                 )
 
     def _remove_iptables_rules(self) -> None:
         for chain in ("INPUT", "OUTPUT"):
-            r = subprocess.run(["iptables", "-S", chain], capture_output=True, text=True)
+            r = HOST.run(["iptables", "-S", chain], capture_output=True, text=True)
             if r.returncode != 0:
                 continue
             for line in r.stdout.splitlines():
@@ -683,7 +686,7 @@ class TrustTunnelPlugin(BasePlugin):
                     parts = line.split()
                     if parts[0] == "-A":
                         parts[0] = "-D"
-                        subprocess.run(["iptables"] + parts, capture_output=True)
+                        HOST.run(["iptables"] + parts, capture_output=True)
 
     @staticmethod
     def _get_total_traffic(state: AppState) -> int:

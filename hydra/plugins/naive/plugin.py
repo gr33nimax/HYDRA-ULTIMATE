@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import copy
 import json
 import shutil
@@ -67,9 +69,9 @@ class NaivePlugin(BasePlugin):
                 tmp = path.with_suffix(path.suffix + ".rollback")
                 tmp.write_bytes(content)
                 tmp.replace(path)
-        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+        HOST.run(["systemctl", "daemon-reload"], capture_output=True)
         command = ["systemctl", "restart", SERVICE_NAME] if previous.get("running") else ["systemctl", "stop", SERVICE_NAME]
-        return subprocess.run(command, capture_output=True).returncode == 0
+        return HOST.run(command, capture_output=True).returncode == 0
 
     # ═════════════════════════════════════════════════════════════════════
     #  Установка / удаление
@@ -88,12 +90,12 @@ class NaivePlugin(BasePlugin):
         return self._installed()
 
     def uninstall(self) -> bool:
-        subprocess.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
-        subprocess.run(["systemctl", "disable", SERVICE_NAME], capture_output=True)
+        HOST.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
+        HOST.run(["systemctl", "disable", SERVICE_NAME], capture_output=True)
         if SERVICE_FILE.exists():
             SERVICE_FILE.unlink()
-        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
-        subprocess.run(["systemctl", "reset-failed"], capture_output=True)
+        HOST.run(["systemctl", "daemon-reload"], capture_output=True)
+        HOST.run(["systemctl", "reset-failed"], capture_output=True)
 
         if BIN_PATH.exists():
             BIN_PATH.unlink()
@@ -165,8 +167,8 @@ class NaivePlugin(BasePlugin):
             return False
         pending.replace(CADDYFILE)
 
-        enabled = subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
-        restarted = subprocess.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
+        enabled = HOST.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
+        restarted = HOST.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
         if enabled.returncode != 0 or restarted.returncode != 0:
             return False
         time.sleep(2)
@@ -357,20 +359,20 @@ class NaivePlugin(BasePlugin):
             close_udp(DEFAULT_PORT, "naive-quic")
 
         self._remove_iptables_rules()
-        subprocess.run([
+        HOST.run([
             "iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", str(DEFAULT_PORT),
             "-m", "comment", "--comment", "naive-rx",
         ], capture_output=True)
-        subprocess.run([
+        HOST.run([
             "iptables", "-I", "OUTPUT", "1", "-p", "tcp", "--sport", str(DEFAULT_PORT),
             "-m", "comment", "--comment", "naive-tx",
         ], capture_output=True)
         if network in ("quic", "both"):
-            subprocess.run([
+            HOST.run([
                 "iptables", "-I", "INPUT", "1", "-p", "udp", "--dport", str(DEFAULT_PORT),
                 "-m", "comment", "--comment", "naive-rx-udp",
             ], capture_output=True)
-            subprocess.run([
+            HOST.run([
                 "iptables", "-I", "OUTPUT", "1", "-p", "udp", "--sport", str(DEFAULT_PORT),
                 "-m", "comment", "--comment", "naive-tx-udp",
             ], capture_output=True)
@@ -384,7 +386,7 @@ class NaivePlugin(BasePlugin):
         running = False
         enabled = CADDYFILE.exists()
         if installed:
-            r = subprocess.run(
+            r = HOST.run(
                 ["systemctl", "is-active", SERVICE_NAME],
                 capture_output=True, text=True,
             )
@@ -613,7 +615,7 @@ class NaivePlugin(BasePlugin):
 
         ip_counts = {}
 
-        r = subprocess.run(
+        r = HOST.run(
             ["ss", "-t", "-H", "-n", "state", "established"],
             capture_output=True, text=True,
         )
@@ -638,7 +640,7 @@ class NaivePlugin(BasePlugin):
                     ip_counts[remote_ip] = ip_counts.get(remote_ip, 0) + 1
 
         # Также проверяем UDP (QUIC)
-        r_udp = subprocess.run(
+        r_udp = HOST.run(
             ["ss", "-u", "-H", "-n", "state", "established"],
             capture_output=True, text=True,
         )
@@ -663,14 +665,14 @@ class NaivePlugin(BasePlugin):
 
         rx_bytes = 0
         tx_bytes = 0
-        r_rx = subprocess.run(["iptables", "-t", "filter", "-L", "INPUT", "-n", "-v", "-x"], capture_output=True, text=True)
+        r_rx = HOST.run(["iptables", "-t", "filter", "-L", "INPUT", "-n", "-v", "-x"], capture_output=True, text=True)
         if r_rx.returncode == 0:
             for line in r_rx.stdout.splitlines():
                 if "naive-rx" in line:
                     parts = line.split()
                     if len(parts) >= 2 and parts[1].isdigit():
                         rx_bytes += int(parts[1])
-        r_tx = subprocess.run(["iptables", "-t", "filter", "-L", "OUTPUT", "-n", "-v", "-x"], capture_output=True, text=True)
+        r_tx = HOST.run(["iptables", "-t", "filter", "-L", "OUTPUT", "-n", "-v", "-x"], capture_output=True, text=True)
         if r_tx.returncode == 0:
             for line in r_tx.stdout.splitlines():
                 if "naive-tx" in line:
@@ -764,21 +766,21 @@ class NaivePlugin(BasePlugin):
             open_udp(DEFAULT_PORT, "naive-quic")
 
         self._remove_iptables_rules()
-        subprocess.run([
+        HOST.run([
             "iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", str(DEFAULT_PORT),
             "-m", "comment", "--comment", "naive-rx"
         ], capture_output=True)
-        subprocess.run([
+        HOST.run([
             "iptables", "-I", "OUTPUT", "1", "-p", "tcp", "--sport", str(DEFAULT_PORT),
             "-m", "comment", "--comment", "naive-tx"
         ], capture_output=True)
 
         if network_mode in ("quic", "both"):
-            subprocess.run([
+            HOST.run([
                 "iptables", "-I", "INPUT", "1", "-p", "udp", "--dport", str(DEFAULT_PORT),
                 "-m", "comment", "--comment", "naive-rx-udp"
             ], capture_output=True)
-            subprocess.run([
+            HOST.run([
                 "iptables", "-I", "OUTPUT", "1", "-p", "udp", "--sport", str(DEFAULT_PORT),
                 "-m", "comment", "--comment", "naive-tx-udp"
             ], capture_output=True)
@@ -787,7 +789,7 @@ class NaivePlugin(BasePlugin):
 
     def on_disable(self, state: AppState) -> None:
         from hydra.utils.firewall import close_tcp
-        subprocess.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
+        HOST.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
         close_tcp(DEFAULT_PORT, "naive")
 
         from hydra.utils.firewall import close_udp
@@ -820,7 +822,7 @@ class NaivePlugin(BasePlugin):
 
     def _remove_iptables_rules(self) -> None:
         for chain in ("INPUT", "OUTPUT"):
-            r = subprocess.run(["iptables", "-S", chain], capture_output=True, text=True)
+            r = HOST.run(["iptables", "-S", chain], capture_output=True, text=True)
             if r.returncode != 0:
                 continue
             for line in r.stdout.splitlines():
@@ -828,12 +830,12 @@ class NaivePlugin(BasePlugin):
                     parts = line.split()
                     if parts[0] == "-A":
                         parts[0] = "-D"
-                        subprocess.run(["iptables"] + parts, capture_output=True)
+                        HOST.run(["iptables"] + parts, capture_output=True)
 
     def _get_total_traffic(self) -> int:
         total_bytes = 0
         for chain in ("INPUT", "OUTPUT"):
-            r = subprocess.run(
+            r = HOST.run(
                 ["iptables", "-t", "filter", "-L", chain, "-n", "-v", "-x"],
                 capture_output=True, text=True,
             )
@@ -873,7 +875,7 @@ class NaivePlugin(BasePlugin):
         key_path = Path(f"/etc/letsencrypt/live/{domain}/privkey.pem")
         if cert_path.exists() and key_path.exists():
             try:
-                r = subprocess.run(
+                r = HOST.run(
                     ["openssl", "x509", "-checkend", "2592000", "-noout", "-in", str(cert_path)],
                     capture_output=True
                 )
@@ -890,21 +892,21 @@ class NaivePlugin(BasePlugin):
 
         if not shutil.which("certbot"):
             print("  Устанавливаю certbot...")
-            subprocess.run(["apt-get", "update"], capture_output=True)
-            subprocess.run(["apt-get", "install", "-y", "certbot"], capture_output=True)
+            HOST.run(["apt-get", "update"], capture_output=True)
+            HOST.run(["apt-get", "install", "-y", "certbot"], capture_output=True)
 
         services_to_stop = ["caddy-naive", "nginx", "apache2"]
         was_running = []
         for s in services_to_stop:
-            r = subprocess.run(["systemctl", "is-active", s], capture_output=True, text=True)
+            r = HOST.run(["systemctl", "is-active", s], capture_output=True, text=True)
             if r.stdout.strip() == "active":
                 print(f"  Временно останавливаю {s}...")
-                subprocess.run(["systemctl", "stop", s], capture_output=True)
+                HOST.run(["systemctl", "stop", s], capture_output=True)
                 was_running.append(s)
 
         try:
             with temporary_open_port("tcp", 80, "temp-certbot"):
-                r = subprocess.run([
+                r = HOST.run([
                     "certbot", "certonly", "--standalone",
                     "-d", domain,
                     "--non-interactive", "--agree-tos",
@@ -918,7 +920,7 @@ class NaivePlugin(BasePlugin):
             for s in was_running:
                 if s != "caddy-naive":
                     print(f"  Восстанавливаю {s}...")
-                    subprocess.run(["systemctl", "start", s], capture_output=True)
+                    HOST.run(["systemctl", "start", s], capture_output=True)
 
     @staticmethod
     def _installed() -> bool:
@@ -980,8 +982,8 @@ class NaivePlugin(BasePlugin):
             "[Install]\n"
             "WantedBy=multi-user.target\n"
         )
-        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
-        subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
+        HOST.run(["systemctl", "daemon-reload"], capture_output=True)
+        HOST.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
 
     def _build_caddyfile(
         self,
@@ -1033,7 +1035,7 @@ class NaivePlugin(BasePlugin):
 """
 
     def _validate_caddy(self, config_path: Path = CADDYFILE) -> str | None:
-        r = subprocess.run(
+        r = HOST.run(
             [str(BIN_PATH), "validate",
              "--config", str(config_path), "--adapter", "caddyfile"],
             capture_output=True, text=True,

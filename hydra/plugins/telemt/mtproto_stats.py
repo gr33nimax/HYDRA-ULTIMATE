@@ -20,6 +20,8 @@ hydra/plugins/telemt/mtproto_stats.py
 
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import json
 import os
 import re
@@ -67,7 +69,7 @@ except ImportError:
             kw.update(capture_output=True, text=True, encoding="utf-8", errors="replace")
         else:
             kw.update(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return subprocess.run(cmd, **kw)
+        return HOST.run(cmd, **kw)
 
     def _plain(s): return re.sub(r'\033\[[0-9;]*m', '', s)
     def _wlen(s):

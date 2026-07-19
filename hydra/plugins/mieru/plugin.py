@@ -9,6 +9,8 @@ hydra/plugins/mieru/plugin.py — Mieru: mTLS-туннель через sing-box
 """
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import json
 
 from hydra.plugins.base import (
@@ -160,7 +162,7 @@ class MieruPlugin(BasePlugin):
         import subprocess
         total_bytes = 0
         for chain in ("INPUT", "OUTPUT"):
-            r = subprocess.run(
+            r = HOST.run(
                 ["iptables", "-t", "filter", "-L", chain, "-n", "-v", "-x"],
                 capture_output=True, text=True,
             )
@@ -226,7 +228,7 @@ class MieruPlugin(BasePlugin):
         if not shutil.which("ss"):
             return []
 
-        r = subprocess.run(
+        r = HOST.run(
             ["ss", "-t", "-H", "-n", "state", "established"],
             capture_output=True, text=True,
         )
@@ -255,14 +257,14 @@ class MieruPlugin(BasePlugin):
         # Считаем rx/tx из iptables для вывода в сводке
         rx_bytes = 0
         tx_bytes = 0
-        r_rx = subprocess.run(["iptables", "-t", "filter", "-L", "INPUT", "-n", "-v", "-x"], capture_output=True, text=True)
+        r_rx = HOST.run(["iptables", "-t", "filter", "-L", "INPUT", "-n", "-v", "-x"], capture_output=True, text=True)
         if r_rx.returncode == 0:
             for line in r_rx.stdout.splitlines():
                 if "mieru-rx-" in line:
                     parts = line.split()
                     if len(parts) >= 2 and parts[1].isdigit():
                         rx_bytes += int(parts[1])
-        r_tx = subprocess.run(["iptables", "-t", "filter", "-L", "OUTPUT", "-n", "-v", "-x"], capture_output=True, text=True)
+        r_tx = HOST.run(["iptables", "-t", "filter", "-L", "OUTPUT", "-n", "-v", "-x"], capture_output=True, text=True)
         if r_tx.returncode == 0:
             for line in r_tx.stdout.splitlines():
                 if "mieru-tx-" in line:
@@ -296,11 +298,11 @@ class MieruPlugin(BasePlugin):
         import subprocess
         self._remove_iptables_rules()
         for p in range(DEFAULT_PORT_START, DEFAULT_PORT_END + 1):
-            subprocess.run([
+            HOST.run([
                 "iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", str(p),
                 "-m", "comment", "--comment", f"mieru-rx-{p}"
             ], capture_output=True)
-            subprocess.run([
+            HOST.run([
                 "iptables", "-I", "OUTPUT", "1", "-p", "tcp", "--sport", str(p),
                 "-m", "comment", "--comment", f"mieru-tx-{p}"
             ], capture_output=True)
@@ -317,7 +319,7 @@ class MieruPlugin(BasePlugin):
     def _remove_iptables_rules(self) -> None:
         import subprocess
         for chain in ("INPUT", "OUTPUT"):
-            r = subprocess.run(["iptables", "-S", chain], capture_output=True, text=True)
+            r = HOST.run(["iptables", "-S", chain], capture_output=True, text=True)
             if r.returncode != 0:
                 continue
             for line in r.stdout.splitlines():
@@ -325,7 +327,7 @@ class MieruPlugin(BasePlugin):
                     parts = line.split()
                     if parts[0] == "-A":
                         parts[0] = "-D"
-                        subprocess.run(["iptables"] + parts, capture_output=True)
+                        HOST.run(["iptables"] + parts, capture_output=True)
 
     @staticmethod
     def _derive_username(user: User) -> str:

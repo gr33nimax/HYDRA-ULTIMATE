@@ -2,6 +2,8 @@
 hydra/plugins/amneziawg/tuning.py — Hardware-aware tuning для VPS.
 """
 from __future__ import annotations
+
+from hydra.core.host import HOST
 import re
 import shutil
 import subprocess
@@ -37,7 +39,7 @@ def optimize_swap() -> dict:
 
     # Текущий swap
     try:
-        r = subprocess.run(["swapon", "--show=SIZE", "--bytes", "--noheadings"], capture_output=True, text=True)
+        r = HOST.run(["swapon", "--show=SIZE", "--bytes", "--noheadings"], capture_output=True, text=True)
         current_swap_bytes = 0
         if r.returncode == 0:
             for line in r.stdout.splitlines():
@@ -67,14 +69,14 @@ def optimize_swap() -> dict:
             current_size = swapfile.stat().st_size // (1024 * 1024)
             if current_size >= target_swap_mb:
                 return result
-            subprocess.run(["swapoff", str(swapfile)], capture_output=True)
+            HOST.run(["swapoff", str(swapfile)], capture_output=True)
             swapfile.unlink()
 
         # fallocate -> chmod -> mkswap -> swapon
-        subprocess.run(["fallocate", "-l", f"{target_swap_mb}M", str(swapfile)], capture_output=True)
-        subprocess.run(["chmod", "600", str(swapfile)], capture_output=True)
-        subprocess.run(["mkswap", str(swapfile)], capture_output=True)
-        subprocess.run(["swapon", str(swapfile)], capture_output=True)
+        HOST.run(["fallocate", "-l", f"{target_swap_mb}M", str(swapfile)], capture_output=True)
+        HOST.run(["chmod", "600", str(swapfile)], capture_output=True)
+        HOST.run(["mkswap", str(swapfile)], capture_output=True)
+        HOST.run(["swapon", str(swapfile)], capture_output=True)
 
         # fstab entry
         fstab = Path("/etc/fstab")
@@ -93,7 +95,7 @@ def optimize_swap() -> dict:
 def detect_default_iface() -> str:
     """Возвращает имя интерфейса по умолчанию."""
     try:
-        r = subprocess.run(["ip", "route", "show", "default"], capture_output=True, text=True)
+        r = HOST.run(["ip", "route", "show", "default"], capture_output=True, text=True)
         if r.returncode == 0:
             m = re.search(r"\bdev\s+(\S+)", r.stdout)
             if m:
@@ -119,7 +121,7 @@ def optimize_nic() -> dict:
 
     for offload in ("gro", "gso", "tso"):
         try:
-            r = subprocess.run(["ethtool", "-k", iface], capture_output=True, text=True)
+            r = HOST.run(["ethtool", "-k", iface], capture_output=True, text=True)
             if r.returncode != 0:
                 continue
             # Ищем статус generic-receive-offload/generic-segmentation-offload/tcp-segmentation-offload
@@ -128,7 +130,7 @@ def optimize_nic() -> dict:
             if m and m.group(1).lower() == "on":
                 continue
 
-            subprocess.run(["ethtool", "-K", iface, offload, "on"], capture_output=True)
+            HOST.run(["ethtool", "-K", iface, offload, "on"], capture_output=True)
             result["changed"].append(offload)
         except Exception:
             pass

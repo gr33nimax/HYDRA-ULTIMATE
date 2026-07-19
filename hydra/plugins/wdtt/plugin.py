@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import json
 import os
 import platform
@@ -70,7 +72,7 @@ class WdttPlugin(BasePlugin):
             ps.installed = True
             
         if fs_installed:
-            r = subprocess.run(["systemctl", "is-active", SERVICE_NAME], capture_output=True, text=True)
+            r = HOST.run(["systemctl", "is-active", SERVICE_NAME], capture_output=True, text=True)
             is_active = r.stdout.strip() == "active"
             ps.enabled = is_active
 
@@ -122,12 +124,12 @@ class WdttPlugin(BasePlugin):
         ps = get_protocol(state, self.meta.name)
         dtls_port = ps.config.get("dtls_port", DEFAULT_DTLS_PORT)
 
-        subprocess.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
-        subprocess.run(["systemctl", "disable", SERVICE_NAME], capture_output=True)
+        HOST.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
+        HOST.run(["systemctl", "disable", SERVICE_NAME], capture_output=True)
         if SERVICE_FILE.exists():
             SERVICE_FILE.unlink()
-        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
-        subprocess.run(["systemctl", "reset-failed"], capture_output=True)
+        HOST.run(["systemctl", "daemon-reload"], capture_output=True)
+        HOST.run(["systemctl", "reset-failed"], capture_output=True)
 
         if BIN_PATH.exists():
             BIN_PATH.unlink()
@@ -216,7 +218,7 @@ class WdttPlugin(BasePlugin):
         self._install_service(dtls_port, wg_port, main_password, admin_id, bot_token)
 
         # IP Forwarding
-        subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], capture_output=True)
+        HOST.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], capture_output=True)
         sysctl = Path("/etc/sysctl.d/99-wdtt.conf")
         sysctl.write_text("net.ipv4.ip_forward = 1\n")
 
@@ -224,8 +226,8 @@ class WdttPlugin(BasePlugin):
         self._fw_open_udp(dtls_port)
         self._add_masquerade()
 
-        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
-        subprocess.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
+        HOST.run(["systemctl", "daemon-reload"], capture_output=True)
+        HOST.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
         time.sleep(2)
         return True
 
@@ -261,7 +263,7 @@ class WdttPlugin(BasePlugin):
         running = False
         port = DEFAULT_DTLS_PORT
         if installed:
-            r = subprocess.run(
+            r = HOST.run(
                 ["systemctl", "is-active", SERVICE_NAME],
                 capture_output=True, text=True,
             )
@@ -305,15 +307,15 @@ class WdttPlugin(BasePlugin):
     def on_enable(self, state: AppState) -> None:
         self.configure(state)
         self.apply(state)
-        r = subprocess.run(
+        r = HOST.run(
             ["systemctl", "is-active", SERVICE_NAME],
             capture_output=True, text=True,
         )
         if r.stdout.strip() != "active":
-            subprocess.run(["systemctl", "enable", "--now", SERVICE_NAME], capture_output=True)
+            HOST.run(["systemctl", "enable", "--now", SERVICE_NAME], capture_output=True)
 
     def on_disable(self, state: AppState) -> None:
-        subprocess.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
+        HOST.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
 
     # ═════════════════════════════════════════════════════════════════════
     #  Внутренние помощники
@@ -354,47 +356,47 @@ class WdttPlugin(BasePlugin):
             "[Install]\n"
             "WantedBy=multi-user.target\n"
         )
-        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
-        subprocess.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
+        HOST.run(["systemctl", "daemon-reload"], capture_output=True)
+        HOST.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
 
     # ── Брандмауэр и NAT ────────────────────────────────────────────────
 
     @staticmethod
     def _fw_tool() -> str:
         if shutil.which("ufw"):
-            r = subprocess.run(["ufw", "status"], capture_output=True, text=True)
+            r = HOST.run(["ufw", "status"], capture_output=True, text=True)
             if "Status: active" in r.stdout:
                 return "ufw"
         return "iptables"
 
     def _fw_open_udp(self, port: int) -> None:
         if self._fw_tool() == "ufw":
-            r = subprocess.run(["ufw", "status"], capture_output=True, text=True)
+            r = HOST.run(["ufw", "status"], capture_output=True, text=True)
             if not re.search(rf'^{port}/udp\b.*ALLOW', r.stdout, re.MULTILINE):
-                subprocess.run(["ufw", "allow", f"{port}/udp", "comment", "qWDTT DTLS"], capture_output=True)
+                HOST.run(["ufw", "allow", f"{port}/udp", "comment", "qWDTT DTLS"], capture_output=True)
             return
 
         args = ["-p", "udp", "--dport", str(port), "-j", "ACCEPT"]
-        r = subprocess.run(["iptables", "-t", "filter", "-C", "INPUT"] + args, capture_output=True)
+        r = HOST.run(["iptables", "-t", "filter", "-C", "INPUT"] + args, capture_output=True)
         if r.returncode != 0:
-            subprocess.run(["iptables", "-t", "filter", "-I", "INPUT", "1"] + args, capture_output=True)
+            HOST.run(["iptables", "-t", "filter", "-I", "INPUT", "1"] + args, capture_output=True)
             self._ipt_persist()
 
     def _fw_close_udp(self, port: int) -> None:
         if shutil.which("ufw"):
-            subprocess.run(["ufw", "delete", "allow", f"{port}/udp"], capture_output=True)
+            HOST.run(["ufw", "delete", "allow", f"{port}/udp"], capture_output=True)
 
         args = ["-p", "udp", "--dport", str(port), "-j", "ACCEPT"]
         for _ in range(5):
-            r = subprocess.run(["iptables", "-t", "filter", "-C", "INPUT"] + args, capture_output=True)
+            r = HOST.run(["iptables", "-t", "filter", "-C", "INPUT"] + args, capture_output=True)
             if r.returncode != 0:
                 break
-            subprocess.run(["iptables", "-t", "filter", "-D", "INPUT"] + args, capture_output=True)
+            HOST.run(["iptables", "-t", "filter", "-D", "INPUT"] + args, capture_output=True)
         self._ipt_persist()
 
     @staticmethod
     def _masquerade_exists() -> bool:
-        r = subprocess.run(
+        r = HOST.run(
             ["iptables", "-t", "nat", "-C", "POSTROUTING",
              "-s", DEFAULT_WG_SUBNET, "!", "-d", DEFAULT_WG_SUBNET, "-j", "MASQUERADE"],
             capture_output=True,
@@ -403,7 +405,7 @@ class WdttPlugin(BasePlugin):
 
     def _add_masquerade(self) -> None:
         if not self._masquerade_exists():
-            subprocess.run(
+            HOST.run(
                 ["iptables", "-t", "nat", "-A", "POSTROUTING",
                  "-s", DEFAULT_WG_SUBNET, "!", "-d", DEFAULT_WG_SUBNET, "-j", "MASQUERADE"],
                 capture_output=True,
@@ -414,7 +416,7 @@ class WdttPlugin(BasePlugin):
         for _ in range(3):
             if not self._masquerade_exists():
                 break
-            subprocess.run(
+            HOST.run(
                 ["iptables", "-t", "nat", "-D", "POSTROUTING",
                  "-s", DEFAULT_WG_SUBNET, "!", "-d", DEFAULT_WG_SUBNET, "-j", "MASQUERADE"],
                 capture_output=True,
@@ -435,7 +437,7 @@ class WdttPlugin(BasePlugin):
             urllib.request.urlretrieve(SOURCE_URL, str(archive))
 
             print(f"  Распаковываю...")
-            subprocess.run(
+            HOST.run(
                 ["tar", "-xzf", str(archive), "-C", str(tmp)],
                 capture_output=True, check=True,
             )
@@ -454,7 +456,7 @@ class WdttPlugin(BasePlugin):
                 return False
 
             print(f"  Разрешаю зависимости Go-модуля...")
-            r = subprocess.run(
+            r = HOST.run(
                 [go, "mod", "tidy"],
                 capture_output=True, text=True,
                 cwd=str(src_dir),
@@ -466,7 +468,7 @@ class WdttPlugin(BasePlugin):
 
             print(f"  Компилирую wdtt-server...")
             env = {**self._go_env(), "CGO_ENABLED": "0", "GOOS": "linux", "GOARCH": self._go_arch()}
-            r = subprocess.run(
+            r = HOST.run(
                 [go, "build", "-o", str(tmp / "wdtt-server"),
                  "-ldflags", "-s -w", "./server.go"],
                 capture_output=True, text=True,
@@ -526,13 +528,13 @@ class WdttPlugin(BasePlugin):
     def _check_go(self) -> str | None:
         go = "/usr/local/bin/go" if Path("/usr/local/bin/go").exists() else shutil.which("go")
         if go:
-            r = subprocess.run([go, "version"], capture_output=True, text=True)
+            r = HOST.run([go, "version"], capture_output=True, text=True)
             if r.returncode == 0:
                 return go
         return None
 
     def _go_installed_version(self, go: str) -> tuple:
-        r = subprocess.run([go, "version"], capture_output=True, text=True)
+        r = HOST.run([go, "version"], capture_output=True, text=True)
         m = re.search(r"go(\d+\.\d+(?:\.\d+)?)", r.stdout or "")
         if not m:
             return (0, 0, 0)
@@ -578,8 +580,8 @@ class WdttPlugin(BasePlugin):
 
         go_dir = Path("/usr/local/go")
         if go_dir.exists():
-            subprocess.run(["rm", "-rf", str(go_dir)], capture_output=True)
-        r = subprocess.run(
+            HOST.run(["rm", "-rf", str(go_dir)], capture_output=True)
+        r = HOST.run(
             ["tar", "-C", "/usr/local", "-xzf", str(tarball)],
             capture_output=True,
         )

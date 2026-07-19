@@ -38,19 +38,30 @@ def run(
     text: bool = False,
     capture_output: bool = True,
     env: dict[str, str] | None = None,
+    cwd: str | os.PathLike[str] | None = None,
+    stdout=None, stderr=None, encoding: str | None = None,
+    errors: str | None = None,
 ) -> subprocess.CompletedProcess:
     """Run an argv command without a shell and with a bounded runtime."""
     argv = [str(arg) for arg in args]
+    if stdout is not None or stderr is not None:
+        capture_output = False
     try:
-        result = subprocess.run(
-            argv,
-            input=input,
-            capture_output=capture_output,
-            text=text,
-            timeout=timeout,
-            env=env,
-            check=False,
-        )
+        options = {
+            "input": input,
+            "capture_output": capture_output,
+            "text": text,
+            "timeout": timeout,
+            "env": env,
+            "check": False,
+        }
+        for key, value in (
+            ("stdout", stdout), ("stderr", stderr), ("cwd", cwd),
+            ("encoding", encoding), ("errors", errors),
+        ):
+            if value is not None:
+                options[key] = value
+        result = subprocess.run(argv, **options)
     except subprocess.TimeoutExpired as exc:
         raise CommandError(f"Command timed out after {timeout:g}s: {redact_command(argv)}") from exc
     except OSError as exc:
@@ -64,7 +75,6 @@ def run(
 def popen(args: Sequence[object], *, timeout: float = DEFAULT_TIMEOUT, **kwargs) -> subprocess.Popen:
     """Start an argv command; streaming callers enforce the attached deadline."""
     argv = [str(arg) for arg in args]
-    kwargs.setdefault("env", os.environ.copy())
     process = subprocess.Popen(argv, **kwargs)
     process._hydra_timeout = timeout  # type: ignore[attr-defined]
     process._hydra_command = redact_command(argv)  # type: ignore[attr-defined]

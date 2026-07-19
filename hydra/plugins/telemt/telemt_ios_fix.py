@@ -80,6 +80,8 @@ telemt.toml тем же паттерном регулярки, что и telemt_
 """
 from __future__ import annotations
 
+from hydra.core.host import HOST
+
 import json
 import os
 import re
@@ -222,7 +224,7 @@ def _run(cmd: list, capture: bool = False) -> subprocess.CompletedProcess:
     else:
         kw.update(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        return subprocess.run(cmd, **kw)
+        return HOST.run(cmd, **kw)
     except Exception:
         return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="error")
 
