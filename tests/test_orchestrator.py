@@ -305,6 +305,26 @@ def test_enable_trusttunnel_rolls_back_plugin_state_on_apply_failure():
     assert apply.call_count == 2
 
 
+def test_disable_rolls_back_hook_and_state_on_apply_failure():
+    from hydra.core import orchestrator
+
+    state = AppState()
+    state.protocols["mock"] = PluginState(enabled=True, installed=True)
+    plugin = MagicMock()
+    plugin.meta.name = "mock"
+
+    with patch("hydra.core.orchestrator.registry.get", return_value=plugin), \
+         patch("hydra.core.orchestrator.apply_config", side_effect=[False, True]) as apply, \
+         patch("hydra.core.orchestrator.save_state"):
+        result = orchestrator.disable(state, "mock")
+
+    assert result is False
+    assert state.protocols["mock"].enabled is True
+    plugin.on_disable.assert_called_once_with(state)
+    plugin.on_enable.assert_called_once_with(state)
+    assert apply.call_count == 2
+
+
 def test_apply_config_returns_false_when_caddy_rebuild_fails():
     from hydra.core import orchestrator
 

@@ -265,17 +265,18 @@ def _restore_state(target: AppState, snapshot: AppState) -> None:
         setattr(target, field_name, copy.deepcopy(getattr(snapshot, field_name)))
 
 
-def _rollback_plugin_change(state: AppState, snapshot: AppState, plugin, undo_hook: str) -> None:
-    try:
-        getattr(plugin, undo_hook)(state)
-    except Exception as exc:
-        singbox._log("ERROR", f"Plugin rollback hook {plugin.meta.name}.{undo_hook} failed: {exc}")
+def _restore_and_save_state(state: AppState, snapshot: AppState) -> None:
     _restore_state(state, snapshot)
     save_state(state)
-    try:
-        apply_config(state)
-    except Exception as exc:
-        singbox._log("ERROR", f"Configuration rollback failed: {exc}")
+
+
+def _reapply_restored_state(state: AppState) -> None:
+    if not apply_config(state):
+        raise RuntimeError(last_apply_error() or "restored configuration apply failed")
+
+
+def _log_rollback_error(message: str) -> None:
+    singbox._log("ERROR", message)
 
 
 def _commit_state_change(state: AppState, snapshot: AppState) -> None:
@@ -473,41 +474,51 @@ def enable(state: AppState, name: str) -> bool:
     if not p:
         return False
     snapshot = copy.deepcopy(state)
+    transaction = ApplyTransaction()
+    transaction.advance("apply")
+    transaction.add_rollback(
+        f"plugin {name}.on_disable",
+        lambda: p.on_disable(state),
+        priority=10,
+    )
+    transaction.add_rollback(
+        "application state",
+        lambda: _restore_and_save_state(state, snapshot),
+        priority=20,
+    )
+    transaction.add_rollback(
+        "restored configuration",
+        lambda: _reapply_restored_state(state),
+        priority=30,
+    )
     try:
         p.on_enable(state)
         proto = get_protocol(state, name)
         proto.enabled = True
-    except Exception:
-        _rollback_plugin_change(state, snapshot, p, "on_disable")
-        raise
-    if name == "fail2ban":
-        state.security.fail2ban_enabled = True
-    elif name == "honeypot":
-        state.security.honeypot_enabled = True
-    elif name == "ipban":
-        state.security.ipban_enabled = True
-    save_state(state)
+        if name == "fail2ban":
+            state.security.fail2ban_enabled = True
+        elif name == "honeypot":
+            state.security.honeypot_enabled = True
+        elif name == "ipban":
+            state.security.ipban_enabled = True
+        save_state(state)
 
-    # Генерируем конфиги для всех существующих пользователей
-    for user in state.users:
-        if not user.blocked:
-            try:
+        # Генерируем конфиги для всех существующих пользователей
+        for user in state.users:
+            if not user.blocked:
                 p.on_user_add(user, state)
-            except Exception:
-                _rollback_plugin_change(state, snapshot, p, "on_disable")
-                raise
-    # on_user_add hooks populate protocol credentials for users that predate
-    # the plugin. Persist them before applying services and subscriptions.
-    save_state(state)
-
-    try:
+        # on_user_add hooks populate protocol credentials for users that predate
+        # the plugin. Persist them before applying services and subscriptions.
+        save_state(state)
         applied = apply_config(state)
     except Exception:
-        _rollback_plugin_change(state, snapshot, p, "on_disable")
+        transaction.rollback(_log_rollback_error)
         raise
 
     if not applied:
-        _rollback_plugin_change(state, snapshot, p, "on_disable")
+        transaction.rollback(_log_rollback_error)
+    else:
+        transaction.commit()
     return applied
 
 
@@ -516,28 +527,46 @@ def disable(state: AppState, name: str) -> bool:
     if not p:
         return False
     snapshot = copy.deepcopy(state)
+    transaction = ApplyTransaction()
+    transaction.advance("apply")
+    transaction.add_rollback(
+        "application state",
+        lambda: _restore_and_save_state(state, snapshot),
+        priority=20,
+    )
     try:
         p.on_disable(state)
     except Exception:
-        _restore_state(state, snapshot)
-        save_state(state)
+        transaction.rollback(_log_rollback_error)
         raise
-    proto = get_protocol(state, name)
-    proto.enabled = False
-    if name == "fail2ban":
-        state.security.fail2ban_enabled = False
-    elif name == "honeypot":
-        state.security.honeypot_enabled = False
-    elif name == "ipban":
-        state.security.ipban_enabled = False
-    save_state(state)
+    transaction.add_rollback(
+        f"plugin {name}.on_enable",
+        lambda: p.on_enable(state),
+        priority=10,
+    )
+    transaction.add_rollback(
+        "restored configuration",
+        lambda: _reapply_restored_state(state),
+        priority=30,
+    )
     try:
+        proto = get_protocol(state, name)
+        proto.enabled = False
+        if name == "fail2ban":
+            state.security.fail2ban_enabled = False
+        elif name == "honeypot":
+            state.security.honeypot_enabled = False
+        elif name == "ipban":
+            state.security.ipban_enabled = False
+        save_state(state)
         applied = apply_config(state)
     except Exception:
-        _rollback_plugin_change(state, snapshot, p, "on_enable")
+        transaction.rollback(_log_rollback_error)
         raise
     if not applied:
-        _rollback_plugin_change(state, snapshot, p, "on_enable")
+        transaction.rollback(_log_rollback_error)
+    else:
+        transaction.commit()
     return applied
 
 
