@@ -23,6 +23,10 @@ STATE_FILE = STATE_DIR / "state.json"
 SCHEMA_VERSION = 2
 
 
+class UnsupportedStateVersion(RuntimeError):
+    """Persisted state was produced by a newer HYDRA schema."""
+
+
 def _restrict_file(path: Path) -> None:
     """Restrict state/backup files to the current owner on POSIX systems.
 
@@ -34,6 +38,21 @@ def _restrict_file(path: Path) -> None:
             path.chmod(0o600)
         except OSError:
             pass
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist the directory entry after an atomic replace on POSIX."""
+    if os.name == "nt":
+        return
+    descriptor = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 _lock = threading.Lock()
 T = TypeVar("T")
@@ -211,17 +230,27 @@ def _validate_raw_state(raw: object) -> None:
                 raise ValueError("protocol entries must be named objects")
 
 
+def _validate_supported_version(raw: dict) -> None:
+    version = raw.get("version", 0)
+    if version > SCHEMA_VERSION:
+        raise UnsupportedStateVersion(
+            f"state schema {version} is newer than supported schema {SCHEMA_VERSION}"
+        )
+
+
 def _load_state_unlocked() -> AppState:
     if not STATE_FILE.exists():
         return AppState()
     try:
         raw = json.loads(STATE_FILE.read_text(encoding="utf-8"))
         _validate_raw_state(raw)
+        _validate_supported_version(raw)
     except (json.JSONDecodeError, OSError, TypeError, ValueError):
         backup = STATE_FILE.with_suffix(".json.bak")
         try:
             raw = json.loads(backup.read_text(encoding="utf-8"))
             _validate_raw_state(raw)
+            _validate_supported_version(raw)
         except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
             quarantine = STATE_FILE.with_suffix(".json.corrupt")
             try:
@@ -249,8 +278,15 @@ def _save_state_unlocked(state: AppState) -> None:
     validate_state(state)
     data = _to_dict(state)
     if STATE_FILE.exists():
-        shutil.copy2(STATE_FILE, STATE_FILE.with_suffix(".json.bak"))
-        _restrict_file(STATE_FILE.with_suffix(".json.bak"))
+        backup = STATE_FILE.with_suffix(".json.bak")
+        backup_pending = backup.with_suffix(".bak.pending")
+        try:
+            shutil.copy2(STATE_FILE, backup_pending)
+            _restrict_file(backup_pending)
+            backup_pending.replace(backup)
+            _restrict_file(backup)
+        finally:
+            backup_pending.unlink(missing_ok=True)
     tmp = STATE_DIR / f"state.json.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
         with tmp.open("w", encoding="utf-8") as handle:
@@ -260,6 +296,7 @@ def _save_state_unlocked(state: AppState) -> None:
         _restrict_file(tmp)
         tmp.replace(STATE_FILE)
         _restrict_file(STATE_FILE)
+        _fsync_directory(STATE_DIR)
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -313,6 +350,10 @@ def validate_state(state: AppState) -> None:
     """Validate semantic invariants before persisting or applying state."""
     if state.version < 0:
         raise ValueError("state version must be non-negative")
+    if state.version > SCHEMA_VERSION:
+        raise UnsupportedStateVersion(
+            f"state schema {state.version} is newer than supported schema {SCHEMA_VERSION}"
+        )
     for user in state.users:
         if (
             not isinstance(user.email, str)
@@ -352,26 +393,47 @@ def update_state(mutator: Callable[[AppState], T]) -> tuple[AppState, T]:
         return state, result
 
 
-def _migrate(data: dict, from_version: int) -> dict:
-    """Миграция схемы состояния между версиями."""
-    # v0 → v1: нормализация структуры
-    if from_version < 1:
-        data.setdefault("version", 1)
-        data.setdefault("install", data.get("install", {}))
-        data.setdefault("protocols", data.get("protocols", {}))
-        data.setdefault("telegram", data.get("telegram", {}))
-        data.setdefault("network", data.get("network", {}))
-        data.setdefault("security", data.get("security", {}))
-    # v1 → v2: per-user credentials + tproxy
-    if from_version < 2:
-        for u in data.get("users", []):
-            u.setdefault("credentials", {})
-        net = data.setdefault("network", {})
-        net.setdefault("tproxy_enabled", False)
-        net.setdefault("tproxy_port", 1081)
-        data["version"] = 2
+def _migrate_v0_to_v1(data: dict) -> dict:
+    data["version"] = 1
+    data.setdefault("install", {})
+    data.setdefault("protocols", {})
+    data.setdefault("telegram", {})
+    data.setdefault("network", {})
+    data.setdefault("security", {})
     return data
 
+
+def _migrate_v1_to_v2(data: dict) -> dict:
+    for user in data.get("users", []):
+        user.setdefault("credentials", {})
+    network = data.setdefault("network", {})
+    network.setdefault("tproxy_enabled", False)
+    network.setdefault("tproxy_port", 1081)
+    data["version"] = 2
+    return data
+
+
+_MIGRATIONS: dict[int, Callable[[dict], dict]] = {
+    0: _migrate_v0_to_v1,
+    1: _migrate_v1_to_v2,
+}
+
+
+def _migrate(data: dict, from_version: int) -> dict:
+    """Run every schema migration exactly once in version order."""
+    migrated = copy.deepcopy(data)
+    version = from_version
+    while version < SCHEMA_VERSION:
+        migration = _MIGRATIONS.get(version)
+        if migration is None:
+            raise RuntimeError(f"missing state migration {version} -> {version + 1}")
+        migrated = migration(migrated)
+        expected = version + 1
+        if migrated.get("version") != expected:
+            raise RuntimeError(f"state migration {version} did not produce schema {expected}")
+        _validate_raw_state(migrated)
+        version = expected
+    return migrated
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Удобные хелперы

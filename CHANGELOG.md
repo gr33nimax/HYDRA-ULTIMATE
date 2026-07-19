@@ -20,6 +20,8 @@ Typed configuration boundary — plugin config and `ConfigFragment` now use recu
 
 Persisted/runtime separation — added immutable `RuntimeSnapshot` and `RuntimePluginState` models. Status, doctor and reconciliation consume live runtime facts without adding runtime snapshots to persisted `state.json`.
 
+State storage hardening — schema migrations now run through an ordered vN→vN+1 registry, future schemas fail closed, backup replacement is atomic, directory entries are fsynced after state replacement, and double corruption preserves a quarantine copy.
+
 ### Runtime reconciliation
 
 `hydra doctor` now reports desired-vs-actual runtime drift and a read-only correction plan. The new `hydra reconcile` command shows the same plan; `hydra reconcile --apply` explicitly applies only safe enable/disable actions and never installs missing components automatically.
