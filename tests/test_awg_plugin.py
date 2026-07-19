@@ -46,9 +46,11 @@ def test_configure_returns_tproxy_ifaces():
     state = _make_state([_make_user("a@x.com")])
 
     with patch("hydra.plugins.amneziawg.plugin.AWG_CONF") as mock_conf, \
+         patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1") as mock_conf_1, \
          patch.object(p, "_awg") as mock_awg:
         mock_conf.exists.return_value = True
         mock_conf.read_text.return_value = FAKE_CONF
+        mock_conf_1.exists.return_value = False
         mock_awg.return_value = MagicMock(stdout="mock_pubkey\n", returncode=0)
 
         frag = p.configure(state)
@@ -66,9 +68,11 @@ def test_configure_no_side_effects():
     state = _make_state([_make_user("a@x.com")])
 
     with patch("hydra.plugins.amneziawg.plugin.AWG_CONF") as mock_conf, \
+         patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1") as mock_conf_1, \
          patch.object(p, "_awg") as mock_awg:
         mock_conf.exists.return_value = True
         mock_conf.read_text.return_value = FAKE_CONF
+        mock_conf_1.exists.return_value = False
         mock_awg.return_value = MagicMock(stdout="mock_pubkey\n", returncode=0)
 
         p.configure(state)
