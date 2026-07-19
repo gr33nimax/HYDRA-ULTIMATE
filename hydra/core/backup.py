@@ -8,6 +8,7 @@ import os
 import tarfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from hydra.core.errors import RestoreError
 
 
 BACKUP_DIR = Path(os.environ.get("HYDRA_BACKUP_DIR", "/var/backups/hydra"))
@@ -161,11 +162,11 @@ def _safe_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
         name = raw_name.strip("/")
         parts = PurePosixPath(name).parts
         if not name or raw_name.startswith("/") or ".." in parts or member.issym() or member.islnk():
-            raise ValueError(f"unsafe backup member: {member.name}")
+            raise RestoreError(f"unsafe backup member: {member.name}")
         if name != MANIFEST_NAME and not _is_allowed_archive_path(name):
-            raise ValueError(f"backup member is outside HYDRA paths: {member.name}")
+            raise RestoreError(f"backup member is outside HYDRA paths: {member.name}")
         if not member.isfile():
-            raise ValueError(f"unsupported backup member type: {member.name}")
+            raise RestoreError(f"unsupported backup member type: {member.name}")
         member.name = name
         members.append(member)
     return members
@@ -175,30 +176,30 @@ def inspect_backup(archive_path: Path) -> dict:
     """Validate archive structure, checksums and the persisted state payload."""
     path = Path(archive_path)
     if not path.is_file():
-        raise FileNotFoundError(f"backup not found: {path}")
+        raise RestoreError(f"backup not found: {path}")
     with tarfile.open(path, "r:gz") as archive:
         members = _safe_members(archive)
         by_name = {member.name: member for member in members}
         manifest_member = by_name.get(MANIFEST_NAME)
         if manifest_member is None:
-            raise ValueError("backup manifest is missing")
+            raise RestoreError("backup manifest is missing")
         manifest_handle = archive.extractfile(manifest_member)
         if manifest_handle is None:
-            raise ValueError("backup manifest cannot be read")
+            raise RestoreError("backup manifest cannot be read")
         manifest = json.loads(manifest_handle.read().decode("utf-8"))
         if manifest.get("format") != 2 or not isinstance(manifest.get("files"), list):
-            raise ValueError("unsupported backup format")
+            raise RestoreError("unsupported backup format")
         expected = {item.get("archive_path"): item for item in manifest["files"]}
         payload_names = {name for name in by_name if name != MANIFEST_NAME}
         if set(expected) != payload_names:
-            raise ValueError("backup manifest does not match archive contents")
+            raise RestoreError("backup manifest does not match archive contents")
         for name, item in expected.items():
             handle = archive.extractfile(by_name[name])
             if handle is None:
-                raise ValueError(f"backup member cannot be read: {name}")
+                raise RestoreError(f"backup member cannot be read: {name}")
             payload = handle.read()
             if hashlib.sha256(payload).hexdigest() != item.get("sha256"):
-                raise ValueError(f"backup checksum mismatch: {name}")
+                raise RestoreError(f"backup checksum mismatch: {name}")
             if name == "var/lib/hydra/state.json":
                 from hydra.core.state import _validate_raw_state
                 _validate_raw_state(json.loads(payload.decode("utf-8")))
@@ -231,7 +232,7 @@ def restore_backup(archive_path: Path, *, dry_run: bool = False) -> dict:
                 )
                 handle = archive.extractfile(members[name])
                 if handle is None:
-                    raise ValueError(f"backup member cannot be read: {name}")
+                    raise RestoreError(f"backup member cannot be read: {name}")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 temporary = target.with_name(f".{target.name}.{os.getpid()}.restore")
                 try:

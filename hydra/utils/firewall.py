@@ -12,6 +12,7 @@ import re
 from contextlib import contextmanager
 from pathlib import Path
 from hydra.utils.commands import DEFAULT_TIMEOUT
+from hydra.core.host import HOST
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -20,7 +21,7 @@ from hydra.utils.commands import DEFAULT_TIMEOUT
 
 def _run(cmd: list[str], capture: bool = True) -> subprocess.CompletedProcess:
     """Выполнить команду, вернуть CompletedProcess."""
-    return subprocess.run(cmd, capture_output=capture, text=True, timeout=DEFAULT_TIMEOUT)
+    return HOST.run(cmd, timeout=DEFAULT_TIMEOUT, text=True)
 
 
 def _ipt_rule_exists(table: str, chain: str, spec: list[str]) -> bool:
@@ -39,7 +40,7 @@ def is_ufw_active() -> bool:
     ВАЖНО: «inactive» содержит подстроку «active» — поэтому проверяем
     именно «status: active», а не просто «active» в выводе.
     """
-    if not shutil.which("ufw"):
+    if not HOST.which("ufw"):
         return False
     r = _run(["ufw", "status"], capture=True)
     return "status: active" in r.stdout.lower()
@@ -119,14 +120,7 @@ def _ipt_close(proto: str, port_start: int, port_end: int, comment: str | None =
 
 def persist() -> None:
     """Сохраняет текущие правила: netfilter-persistent save либо /etc/iptables/rules.v4."""
-    if shutil.which("netfilter-persistent"):
-        _run(["netfilter-persistent", "save"])
-        return
-    rules_dir = Path("/etc/iptables")
-    rules_dir.mkdir(parents=True, exist_ok=True)
-    r = _run(["iptables-save"])
-    if r.returncode == 0 and r.stdout:
-        (rules_dir / "rules.v4").write_text(r.stdout)
+    HOST.persist_firewall()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

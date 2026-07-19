@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### P1 architectural foundation
+
+HostBackend — добавлен единый injectable boundary для bounded commands, atomic file writes, systemd и сохранения firewall.
+Typed errors — добавлены типизированные ошибки `HydraError`, `HostOperationError`, `ConfigurationError`, `PluginError` и `RestoreError`.
+Plugin capabilities — `PluginMeta` теперь может декларативно описывать required commands, services и конфликты; `hydra plan` показывает проблемы зависимостей до применения.
+
 ### Backup и восстановление
 
 **Добавлен полный безопасный цикл резервного копирования и восстановления.**

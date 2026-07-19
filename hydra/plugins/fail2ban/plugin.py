@@ -81,6 +81,7 @@ class Fail2banPlugin(BasePlugin):
         description="Fail2ban: защита SSH, AWG и системных сервисов",
         category=PluginCategory.SECURITY,
         version="2.3.0",
+        required_commands=("systemctl", "iptables"),
     )
 
     def install(self) -> bool:

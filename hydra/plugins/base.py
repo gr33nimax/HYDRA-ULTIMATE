@@ -21,6 +21,9 @@ class PluginMeta:
     version: str = "1.0.0"
     needs_domain: bool = False
     central_apply: bool | None = None
+    required_commands: tuple[str, ...] = ()
+    required_services: tuple[str, ...] = ()
+    conflicts_with: tuple[str, ...] = ()
 
 
 @dataclass

@@ -20,6 +20,8 @@ from hydra.plugins.shadowtls.plugin import ShadowTLSPlugin
 from hydra.plugins.hysteria2.plugin import Hysteria2Plugin
 from hydra.plugins.snell.plugin import SnellPlugin
 from hydra.core.state import AppState
+from hydra.core.host import HOST
+from hydra.core.errors import PluginError
 
 _PLUGINS: list[BasePlugin] = [
     AmneziaWGPlugin(),
@@ -41,7 +43,7 @@ _PLUGINS: list[BasePlugin] = [
 
 # WDTT remains on its legacy manager-controlled lifecycle by explicit product
 # decision.  All other plugins use the centralized configure/apply pipeline.
-class PluginConfigurationError(RuntimeError):
+class PluginConfigurationError(PluginError):
     """An enabled plugin could not produce a valid configuration."""
 
     def __init__(self, plugin_name: str, cause: Exception):
@@ -96,6 +98,27 @@ def collect_fragments(state: AppState) -> dict[str, ConfigFragment]:
             _log("ERROR", f"Error configuring plugin {p.meta.name}: {e}")
             raise PluginConfigurationError(p.meta.name, e) from e
     return fragments
+
+
+def requirements(state: AppState) -> dict[str, dict[str, list[str]]]:
+    """Return declarative host/dependency requirements for enabled plugins."""
+    active = enabled(state)
+    active_names = {plugin.meta.name for plugin in active}
+    result: dict[str, dict[str, list[str]]] = {}
+    for plugin in active:
+        missing = sorted(
+            command for command in plugin.meta.required_commands
+            if HOST.which(command) is None
+        )
+        conflicts = sorted(
+            name for name in plugin.meta.conflicts_with if name in active_names
+        )
+        if missing or conflicts:
+            result[plugin.meta.name] = {
+                "missing_commands": missing,
+                "conflicts": conflicts,
+            }
+    return result
 
 
 def apply_enabled(state: AppState) -> list[tuple[BasePlugin, object]]:

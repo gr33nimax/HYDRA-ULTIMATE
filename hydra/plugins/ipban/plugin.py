@@ -44,6 +44,7 @@ class IPBanPlugin(BasePlugin):
         description="IP-бан: ручная блокировка IP/CIDR/диапазона/ASN через ipset",
         category=PluginCategory.SECURITY,
         version="2.1.0",
+        required_commands=("ipset", "iptables"),
     )
 
     def install(self) -> bool:

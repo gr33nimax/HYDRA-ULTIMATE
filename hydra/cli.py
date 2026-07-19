@@ -36,6 +36,7 @@ def build_plan(state: AppState) -> dict:
         "valid": not conflicts,
         "conflicts": conflicts,
         "plugins": sorted(fragments),
+        "requirements": registry.requirements(candidate),
         "changes": {
             "inbounds": len(config.get("inbounds", [])),
             "outbounds": len(config.get("outbounds", [])),

@@ -9,20 +9,21 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 from hydra.utils.commands import DEFAULT_TIMEOUT
+from hydra.core.host import HOST
+from hydra.utils.commands import CommandError
 
-SYSTEMD_DIR = Path("/etc/systemd/system")
+SYSTEMD_DIR = HOST.paths.systemd_dir
 
 
 def _run(args: list[str], *, timeout: float = DEFAULT_TIMEOUT) -> subprocess.CompletedProcess:
-    return subprocess.run(args, capture_output=True, timeout=timeout)
+    try:
+        return HOST.run(args, timeout=timeout)
+    except CommandError as exc:
+        return subprocess.CompletedProcess(args, 127, "", str(exc))
 
 
 def _atomic_write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pending = path.with_name(f".{path.name}.pending")
-    pending.write_text(content, encoding="utf-8")
-    pending.chmod(0o644)
-    pending.replace(path)
+    HOST.atomic_write(path, content)
 
 
 def _reload() -> bool:

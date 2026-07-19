@@ -29,6 +29,7 @@ class DNSCryptPlugin(BasePlugin):
         description="DNSCrypt-proxy: шифрование DNS (DoH/DNSCrypt) на системном уровне",
         category=PluginCategory.ENHANCEMENT,
         version="2.0.0",
+        required_commands=("systemctl",),
     )
 
     def install(self) -> bool:

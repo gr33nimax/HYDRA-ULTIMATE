@@ -5,9 +5,10 @@ import os
 import re
 import subprocess
 from collections.abc import Sequence
+from hydra.core.errors import HostOperationError
 
 
-class CommandError(RuntimeError):
+class CommandError(HostOperationError):
     """A command failed or exceeded its deadline."""
 
 

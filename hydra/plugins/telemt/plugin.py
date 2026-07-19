@@ -42,6 +42,7 @@ class TelemtPlugin(BasePlugin):
         category=PluginCategory.TRANSPORT,
         version="2.0.0",
         needs_domain=False,
+        required_commands=("systemctl",),
     )
 
     def __init__(self):

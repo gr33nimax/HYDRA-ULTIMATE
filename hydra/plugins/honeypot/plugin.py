@@ -38,6 +38,7 @@ class HoneypotPlugin(BasePlugin):
         description="Honeypot: TCP-ловушка с проверяемым IPv4/IPv6 firewall-баном",
         category=PluginCategory.SECURITY,
         version="2.1.0",
+        required_commands=("python3", "systemctl"),
     )
 
     def install(self) -> bool:

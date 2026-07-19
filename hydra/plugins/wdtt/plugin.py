@@ -51,6 +51,7 @@ class WdttPlugin(BasePlugin):
         version="2.0.0",
         needs_domain=False,
         central_apply=False,
+        required_commands=("systemctl", "iptables"),
     )
 
     def __init__(self):

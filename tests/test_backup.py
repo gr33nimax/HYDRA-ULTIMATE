@@ -5,6 +5,7 @@ import tarfile
 import pytest
 
 from hydra.core import backup
+from hydra.core.errors import RestoreError
 
 
 def test_create_backup_contains_manifest_and_state(tmp_path, monkeypatch):
@@ -63,5 +64,5 @@ def test_restore_rejects_path_traversal(tmp_path):
         member.size = len(payload)
         archive.addfile(member, io.BytesIO(payload))
 
-    with pytest.raises(ValueError, match="unsafe backup member"):
+    with pytest.raises(RestoreError, match="unsafe backup member"):
         backup.inspect_backup(archive_path)
