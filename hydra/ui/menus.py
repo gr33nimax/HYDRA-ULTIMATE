@@ -173,8 +173,13 @@ def _pad_visible(text: str, width: int) -> str:
 
 
 def _status_row(icon: str, label: str, value: str, detail: str = "") -> str:
-    label_part = f"{icon} {TEXT}{label}{NC}"
-    return f"  {_pad_visible(label_part, 20)}{_pad_visible(value, 18)}{detail}"
+    icon_padded = _pad_visible(icon, 2)
+    label_part = f"{TEXT}{label}{NC}"
+    prefix = f"  {icon_padded} {_pad_visible(label_part, 16)}"
+    if detail:
+        return f"{prefix} {value} {DIM}({detail}){NC}"
+    else:
+        return f"{prefix} {value}"
 
 
 def _service_cell(icon: str, label: str, value: str) -> str:
@@ -478,7 +483,7 @@ def main_menu(state: AppState):
 
         core_status = f"{GREEN}запущен{NC}" if sb_ok else f"{RED}остановлен{NC}"
         core_version = singbox_version() or "не установлен"
-        node_lines = [_status_row("🟢" if sb_ok else "🔴", "Sing-Box", core_status, f"· {core_version}")]
+        node_lines = [_status_row("🟢" if sb_ok else "🔴", "Sing-Box", core_status, core_version)]
         node_lines += _sys_info(state)
 
         warp_running = bool(plugins.get("warp", {}).get("running"))
@@ -494,7 +499,7 @@ def main_menu(state: AppState):
                     "  " + _pad_visible(_service_cell("🐍", "Протоколы", transport_status), 38)
                     + _service_cell("👥", "Пользователи", users_status),
                     "  " + _pad_visible(_service_cell("🛡️", "Безопасность", security_status), 38)
-                    + _service_cell("🌐", "WARP", warp_status),
+                    + _service_cell("🌐", "WARP-Relay", warp_status),
                 ]),
                 ("ГИДРА СОВЕТУЕТ", [f"💬 {HYDRA_SAYING}"]),
             ],
