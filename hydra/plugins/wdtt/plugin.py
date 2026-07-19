@@ -21,6 +21,7 @@ from pathlib import Path
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
 from hydra.core.state import AppState, User, load_state, get_protocol
+from hydra.utils import firewall
 
 BIN_PATH = Path("/usr/local/bin/wdtt-server")
 CONFIG_DIR = Path("/etc/wdtt")
@@ -421,14 +422,7 @@ class WdttPlugin(BasePlugin):
 
     @staticmethod
     def _ipt_persist(self=None) -> None:
-        if shutil.which("netfilter-persistent"):
-            subprocess.run(["netfilter-persistent", "save"], capture_output=True)
-            return
-        rules_dir = Path("/etc/iptables")
-        rules_dir.mkdir(parents=True, exist_ok=True)
-        r = subprocess.run(["iptables-save"], capture_output=True, text=True)
-        if r.returncode == 0 and r.stdout:
-            (rules_dir / "rules.v4").write_text(r.stdout)
+        firewall.persist()
 
     # ── Сборка wdtt-server из исходников Go ─────────────────────────────
 
