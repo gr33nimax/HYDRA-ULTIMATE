@@ -7,6 +7,7 @@
 HostBackend — добавлен единый injectable boundary для bounded commands, atomic file writes, systemd и сохранения firewall.
 Typed errors — добавлены типизированные ошибки `HydraError`, `HostOperationError`, `ConfigurationError`, `PluginError` и `RestoreError`.
 Plugin capabilities — `PluginMeta` теперь может декларативно описывать required commands, services и конфликты; `hydra plan` показывает проблемы зависимостей до применения.
+UI decomposition — фоновое определение public IP, GeoIP-флага и системного DNS вынесено из монолитного `menus.py` в отдельный потокобезопасный `network_info.py`.
 
 ### Backup и восстановление
 

@@ -51,6 +51,7 @@ from hydra.ui.tui import (
 from hydra.ui.protocol_ui import (
     protocol_label, protocol_menu_title, protocol_status_panel, status_badge,
 )
+from hydra.ui.network_info import snapshot as network_snapshot
 
 
 def _apply_error_text(default: str = "Ошибка применения конфигурации") -> str:
@@ -63,96 +64,8 @@ def _apply_error_text(default: str = "Ошибка применения конф
 #  Утилиты
 # ═════════════════════════════════════════════════════════════════════════════
 
-import threading
 import os
 from pathlib import Path
-
-# 1. DNS резолвится синхронно и моментально на этапе импорта модуля
-_cached_dns = "1.1.1.1"
-try:
-    if os.path.exists("/etc/resolv.conf"):
-        dns_list = []
-        with open("/etc/resolv.conf", "r") as f:
-            for line in f:
-                if line.startswith("nameserver"):
-                    dns_list.append(line.split()[1])
-        if dns_list:
-            _cached_dns = dns_list[0]
-except Exception:
-    pass
-
-# 2. Определение IP адресов и GeoIP флага
-_cached_pub_ip = "Получение..."
-_cached_country_flag = ""
-_network_fetched = False
-
-def _is_private_ip(ip: str) -> bool:
-    if not ip or ip == "127.0.0.1":
-        return True
-    parts = ip.split(".")
-    if len(parts) != 4:
-        return True
-    try:
-        p0, p1 = int(parts[0]), int(parts[1])
-        if p0 == 10:
-            return True
-        if p0 == 192 and p1 == 168:
-            return True
-        if p0 == 172 and (16 <= p1 <= 31):
-            return True
-        if p0 == 127:
-            return True
-        return False
-    except ValueError:
-        return True
-
-def _fetch_network_info_bg():
-    global _cached_pub_ip, _cached_country_flag, _network_fetched
-    try:
-        from hydra.utils.net import public_ip
-        ip = public_ip()
-        _cached_pub_ip = ip
-        
-        # Получаем код страны для флага
-        country_code = ""
-        import subprocess
-        for url in ("https://ipinfo.io/country", "https://ipapi.co/country/"):
-            try:
-                r = subprocess.run(
-                    ["curl", "-s", "--max-time", "3", url],
-                    capture_output=True, text=True, timeout=4
-                )
-                code = r.stdout.strip().upper()
-                if len(code) == 2 and code.isalpha():
-                    country_code = code
-                    break
-            except Exception:
-                continue
-                
-        if country_code:
-            # Конвертируем код страны в региональные индикаторы (флаг)
-            flag = chr(ord(country_code[0]) + 127397) + chr(ord(country_code[1]) + 127397)
-            _cached_country_flag = flag
-            
-    except Exception:
-        _cached_pub_ip = "127.0.0.1"
-    _network_fetched = True
-
-# Инициализируем IP-адреса и GeoIP в фоне
-try:
-    from hydra.utils.net import local_ip
-    loc = local_ip()
-    if loc and not _is_private_ip(loc):
-        _cached_pub_ip = loc
-        # Всё равно запускаем фоновый поток для определения GeoIP флага
-        t = threading.Thread(target=_fetch_network_info_bg, daemon=True)
-        t.start()
-    else:
-        t = threading.Thread(target=_fetch_network_info_bg, daemon=True)
-        t.start()
-except Exception:
-    t = threading.Thread(target=_fetch_network_info_bg, daemon=True)
-    t.start()
 
 
 def _sys_info(state: AppState | None = None) -> list[str]:
@@ -236,18 +149,19 @@ def _sys_info(state: AppState | None = None) -> list[str]:
         loc = local_ip()
         
         # Получаем внешний IP (берем из кэша, если пуст — пробуем AppState)
-        pub_ip = _cached_pub_ip
+        network = network_snapshot()
+        pub_ip = network.public_ip
         if pub_ip == "Получение..." and state and state.network.server_ip:
             pub_ip = state.network.server_ip
             
-        flag_suffix = f" {_cached_country_flag}" if _cached_country_flag else ""
+        flag_suffix = f" {network.country_flag}" if network.country_flag else ""
         # Если публичный и локальный совпадают (нет NAT), выводим один IP для красоты
         if pub_ip == loc:
             lines.append(kv("IP (Public):", f"{CYAN}{pub_ip}{NC}{flag_suffix}"))
         else:
             lines.append(kv("IP (Pub/Loc):", f"{CYAN}{pub_ip}{NC}{flag_suffix} / {DIM}{loc}{NC}"))
             
-        dns_display = _cached_dns
+        dns_display = network.dns
         try:
             import subprocess
             import re
