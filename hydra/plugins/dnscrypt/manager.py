@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import time
 import socket
 import tempfile
@@ -13,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from hydra.core.state import AppState, save_state
+from hydra.core.host import HOST
 from hydra.ui.tui import (
     clear, menu, prompt, confirm, panel, info, success, warn, error,
     RED, GREEN, YELLOW, CYAN, BLUE, MAGENTA, BOLD, DIM, WHITE, NC
@@ -391,20 +391,20 @@ def do_dnscrypt_selector(state: AppState, plugin) -> None:
             if _apply_server_names(new_chosen):
                 success("Настройки сохранены!")
                 info("Перезапускаю DNSCrypt...")
-                subprocess.run(["systemctl", "restart", "dnscrypt-proxy"], capture_output=True)
+                HOST.systemd("restart", "dnscrypt-proxy")
                 time.sleep(2)
 
                 # Проверяем статус
-                r = subprocess.run(["systemctl", "is-active", "dnscrypt-proxy"], capture_output=True, text=True)
-                if r.stdout.strip() == "active":
+                r = HOST.systemd("is-active", "dnscrypt-proxy")
+                if r.returncode == 0:
                     success("DNSCrypt-proxy успешно запущен!")
                     info("Тест DNS через 127.0.0.1:5300...")
                     for domain in ("google.com", "cloudflare.com", "github.com"):
                         try:
-                            r3 = subprocess.run(
+                            r3 = HOST.run(
                                 ["dig", f"@127.0.0.1", f"-p{DNSCRYPT_PORT}", domain,
                                  "+time=3", "+tries=1", "+noall", "+stats"],
-                                capture_output=True, text=True, timeout=5,
+                                text=True, timeout=5,
                             )
                             m2 = re.search(r"Query time:\s*(\d+)\s*msec", r3.stdout)
                             qt = m2.group(1) if m2 else None

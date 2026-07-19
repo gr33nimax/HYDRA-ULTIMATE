@@ -31,46 +31,49 @@ def test_dnscrypt_configure():
 
 
 @patch("hydra.plugins.dnscrypt.plugin.DNSCryptPlugin._installed")
-@patch("hydra.plugins.dnscrypt.plugin.subprocess.run")
+@patch("hydra.plugins.dnscrypt.plugin.HOST")
 @patch("hydra.plugins.dnscrypt.plugin.DNSCryptPlugin._write_default_config")
-def test_dnscrypt_install(mock_write_config, mock_run, mock_installed):
+def test_dnscrypt_install(mock_write_config, mock_host, mock_installed):
     p = DNSCryptPlugin()
     
     # 1. Если уже установлен (должен записать конфиг и запустить службу)
     mock_installed.return_value = True
-    mock_run.return_value = MagicMock(returncode=0)
+    mock_host.run.return_value = MagicMock(returncode=0)
     assert p.install() is True
     mock_write_config.assert_called_once()
-    mock_run.assert_called_once_with(["systemctl", "enable", "--now", "dnscrypt-proxy"], capture_output=True)
+    mock_host.run.assert_called_once_with(["systemctl", "enable", "--now", "dnscrypt-proxy"])
 
     # Сбрасываем моки
     mock_write_config.reset_mock()
-    mock_run.reset_mock()
+    mock_host.run.reset_mock()
 
     # 2. Если не установлен, пробуем установить успешно
     mock_installed.return_value = False
-    mock_run.return_value = MagicMock(returncode=0)
+    mock_host.run.return_value = MagicMock(returncode=0)
     assert p.install() is True
     mock_write_config.assert_called_once()
-    assert mock_run.call_count >= 2
+    assert mock_host.run.call_count == 3
 
 
-@patch("hydra.plugins.dnscrypt.plugin.subprocess.run")
+@patch("hydra.plugins.dnscrypt.plugin.HOST")
 @patch("hydra.plugins.dnscrypt.plugin.DNSCRYPT_CONF")
-def test_dnscrypt_uninstall(mock_conf, mock_run):
+def test_dnscrypt_uninstall(mock_conf, mock_host):
     p = DNSCryptPlugin()
     mock_conf.exists.return_value = True
     
     assert p.uninstall() is True
-    mock_run.assert_any_call(["systemctl", "stop", "dnscrypt-proxy"], capture_output=True)
-    mock_run.assert_any_call(["systemctl", "disable", "dnscrypt-proxy"], capture_output=True)
+    mock_host.systemd.assert_any_call("stop", "dnscrypt-proxy")
+    mock_host.systemd.assert_any_call("disable", "dnscrypt-proxy")
+    mock_host.run.assert_called_once_with(
+        ["apt-get", "remove", "-y", "-qq", "dnscrypt-proxy"], timeout=60,
+    )
     mock_conf.unlink.assert_called_once()
 
 
 @patch("hydra.plugins.dnscrypt.plugin.DNSCryptPlugin._installed")
-@patch("hydra.plugins.dnscrypt.plugin.subprocess.run")
+@patch("hydra.plugins.dnscrypt.plugin.HOST")
 @patch("hydra.plugins.dnscrypt.plugin.DNSCRYPT_CONF")
-def test_dnscrypt_status(mock_conf, mock_run, mock_installed):
+def test_dnscrypt_status(mock_conf, mock_host, mock_installed):
     p = DNSCryptPlugin()
     
     # 1. Не установлен
@@ -82,22 +85,22 @@ def test_dnscrypt_status(mock_conf, mock_run, mock_installed):
     # 2. Установлен, но не запущен
     mock_installed.return_value = True
     mock_conf.exists.return_value = True
-    mock_run.return_value = MagicMock(returncode=1)  # systemctl is-active -> inactive
+    mock_host.systemd.return_value = MagicMock(returncode=1)
     status = p.status()
     assert status.installed is True
     assert status.enabled is True
     assert status.running is False
 
     # 3. Установлен и запущен
-    mock_run.return_value = MagicMock(returncode=0)  # systemctl is-active -> active
+    mock_host.systemd.return_value = MagicMock(returncode=0)
     status = p.status()
     assert status.installed is True
     assert status.running is True
 
 
-@patch("hydra.plugins.dnscrypt.plugin.subprocess.run")
+@patch("hydra.plugins.dnscrypt.plugin.HOST")
 @patch("hydra.plugins.dnscrypt.plugin.DNSCryptPlugin._write_default_config")
-def test_dnscrypt_on_enable_disable(mock_write_config, mock_run):
+def test_dnscrypt_on_enable_disable(mock_write_config, mock_host):
     p = DNSCryptPlugin()
     state = AppState()
     
@@ -107,19 +110,19 @@ def test_dnscrypt_on_enable_disable(mock_write_config, mock_run):
     assert state.network.dnscrypt_enabled is True
     assert state.network.dnscrypt_port == DNSCRYPT_PORT
     mock_write_config.assert_called_once()
-    mock_run.assert_any_call(["systemctl", "enable", "dnscrypt-proxy"], capture_output=True)
-    mock_run.assert_any_call(["systemctl", "start", "dnscrypt-proxy"], capture_output=True)
+    mock_host.systemd.assert_any_call("enable", "dnscrypt-proxy")
+    mock_host.systemd.assert_any_call("start", "dnscrypt-proxy")
 
     p.on_disable(state)
     assert state.network.dnscrypt_enabled is False
-    mock_run.assert_any_call(["systemctl", "stop", "dnscrypt-proxy"], capture_output=True)
-    mock_run.assert_any_call(["systemctl", "disable", "dnscrypt-proxy"], capture_output=True)
+    mock_host.systemd.assert_any_call("stop", "dnscrypt-proxy")
+    mock_host.systemd.assert_any_call("disable", "dnscrypt-proxy")
 
 
-@patch("hydra.plugins.dnscrypt.plugin.subprocess.run")
+@patch("hydra.plugins.dnscrypt.plugin.HOST")
 @patch("hydra.plugins.dnscrypt.plugin.DNSCryptPlugin._write_default_config")
 @patch("hydra.plugins.dnscrypt.plugin.DNSCRYPT_CONF")
-def test_dnscrypt_enable_preserves_existing_config(mock_conf, mock_write_config, mock_run):
+def test_dnscrypt_enable_preserves_existing_config(mock_conf, mock_write_config, mock_host):
     mock_conf.exists.return_value = True
     DNSCryptPlugin().on_enable(AppState())
     mock_write_config.assert_not_called()

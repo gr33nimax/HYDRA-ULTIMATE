@@ -6,10 +6,10 @@ Sing-Box использует его как upstream DNS-сервер.
 """
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
+from hydra.core.host import HOST
 from hydra.core.state import AppState
 
 def get_dnscrypt_bin() -> Path:
@@ -34,23 +34,21 @@ class DNSCryptPlugin(BasePlugin):
 
     def install(self) -> bool:
         if not self._installed():
-            r = subprocess.run(
-                ["bash", "-c", "apt-get update -qq && apt-get install -y -qq dnscrypt-proxy"],
-                capture_output=True, text=True, timeout=60,
-            )
-            if r.returncode != 0:
+            if HOST.run(["apt-get", "update", "-qq"], timeout=60).returncode != 0:
+                return False
+            if HOST.run(
+                ["apt-get", "install", "-y", "-qq", "dnscrypt-proxy"], timeout=60,
+            ).returncode != 0:
                 return False
 
         self._write_default_config()
-        service = subprocess.run(
-            ["systemctl", "enable", "--now", "dnscrypt-proxy"], capture_output=True
-        )
+        service = HOST.run(["systemctl", "enable", "--now", "dnscrypt-proxy"])
         return service.returncode == 0
 
     def uninstall(self) -> bool:
-        subprocess.run(["systemctl", "stop", "dnscrypt-proxy"], capture_output=True)
-        subprocess.run(["systemctl", "disable", "dnscrypt-proxy"], capture_output=True)
-        subprocess.run(["apt-get", "remove", "-y", "-qq", "dnscrypt-proxy"], capture_output=True, timeout=60)
+        HOST.systemd("stop", "dnscrypt-proxy")
+        HOST.systemd("disable", "dnscrypt-proxy")
+        HOST.run(["apt-get", "remove", "-y", "-qq", "dnscrypt-proxy"], timeout=60)
         if DNSCRYPT_CONF.exists():
             DNSCRYPT_CONF.unlink(missing_ok=True)
         return True
@@ -67,14 +65,11 @@ class DNSCryptPlugin(BasePlugin):
         if config is None:
             DNSCRYPT_CONF.unlink(missing_ok=True)
         else:
-            DNSCRYPT_CONF.parent.mkdir(parents=True, exist_ok=True)
-            tmp = DNSCRYPT_CONF.with_suffix(".toml.rollback")
-            tmp.write_bytes(config)
-            tmp.replace(DNSCRYPT_CONF)
+            HOST.atomic_write(DNSCRYPT_CONF, config)
         if previous.get("running"):
-            result = subprocess.run(["systemctl", "restart", "dnscrypt-proxy"], capture_output=True)
+            result = HOST.systemd("restart", "dnscrypt-proxy")
         else:
-            result = subprocess.run(["systemctl", "stop", "dnscrypt-proxy"], capture_output=True)
+            result = HOST.systemd("stop", "dnscrypt-proxy")
         return result.returncode == 0
 
     def _write_default_config(self) -> None:
@@ -101,8 +96,7 @@ use_syslog = true
   cache_file = '/var/cache/dnscrypt-proxy/public-resolvers.md'
   minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3'
 """
-        DNSCRYPT_CONF.parent.mkdir(parents=True, exist_ok=True)
-        DNSCRYPT_CONF.write_text(conf)
+        HOST.atomic_write(DNSCRYPT_CONF, conf)
 
     def configure(self, state: AppState) -> ConfigFragment:
         """Возвращает DNS-конфиг для Sing-Box."""
@@ -129,9 +123,7 @@ use_syslog = true
         except Exception:
             enabled = DNSCRYPT_CONF.exists()
         if installed:
-            r = subprocess.run(
-                ["systemctl", "is-active", "--quiet", "dnscrypt-proxy"],
-            )
+            r = HOST.systemd("is-active", "dnscrypt-proxy")
             running = r.returncode == 0
 
         return PluginStatus(
@@ -154,10 +146,10 @@ use_syslog = true
         # Не затираем выбранные пользователем server_names при каждом toggle.
         if not DNSCRYPT_CONF.exists():
             self._write_default_config()
-        subprocess.run(["systemctl", "enable", "dnscrypt-proxy"], capture_output=True)
-        subprocess.run(["systemctl", "start", "dnscrypt-proxy"], capture_output=True)
+        HOST.systemd("enable", "dnscrypt-proxy")
+        HOST.systemd("start", "dnscrypt-proxy")
 
     def on_disable(self, state: AppState) -> None:
         state.network.dnscrypt_enabled = False
-        subprocess.run(["systemctl", "stop", "dnscrypt-proxy"], capture_output=True)
-        subprocess.run(["systemctl", "disable", "dnscrypt-proxy"], capture_output=True)
+        HOST.systemd("stop", "dnscrypt-proxy")
+        HOST.systemd("disable", "dnscrypt-proxy")
