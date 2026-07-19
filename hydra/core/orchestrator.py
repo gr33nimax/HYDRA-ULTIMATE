@@ -13,6 +13,7 @@ from pathlib import Path
 from hydra.core.state import AppState, User, save_state, get_protocol, find_user
 from hydra.core import singbox, nft
 from hydra.core.host import HOST
+from hydra.core.apply_transaction import ApplyTransaction
 from hydra.plugins import registry
 
 
@@ -106,6 +107,20 @@ def apply_config(state: AppState) -> bool:
 def _apply_config_unlocked(state: AppState) -> bool:
     _set_apply_error("")
     _journal("started")
+    transaction = ApplyTransaction()
+
+    def fail(stage: str, message: str, *, reload_restored: bool = False) -> bool:
+        _set_apply_error(message)
+        singbox._log("ERROR", message)
+        transaction.rollback(lambda error: singbox._log("ERROR", error))
+        _journal("rolled_back", stage=stage, error=message)
+        if reload_restored:
+            try:
+                singbox.reload()
+            except Exception as exc:
+                singbox._log("ERROR", f"Не удалось перезагрузить восстановленный Sing-Box: {exc}")
+        return False
+
     # Принудительно включаем TPROXY — необходим для AWG и других транспортов
     if not state.network.tproxy_enabled:
         state.network.tproxy_enabled = True
@@ -120,6 +135,7 @@ def _apply_config_unlocked(state: AppState) -> bool:
         _journal("failed", stage="collect_fragments", error=str(exc))
         return False
     cfg = singbox.generate_config(state, fragments)
+    transaction.advance("snapshot")
     previous_config = None
     if singbox.SINGBOX_CONFIG.exists():
         try:
@@ -130,18 +146,24 @@ def _apply_config_unlocked(state: AppState) -> bool:
         _set_apply_error(singbox.last_error() or "Не удалось записать конфигурацию Sing-Box")
         _journal("failed", stage="singbox_config", error=last_apply_error())
         return False
+    transaction.add_rollback(
+        "sing-box config",
+        lambda: _restore_singbox_config(previous_config),
+        priority=10,
+    )
     nft_snapshot = nft.snapshot_tproxy()
+    transaction.add_rollback(
+        "nftables",
+        lambda: _restore_nft_snapshot(nft_snapshot),
+        priority=20,
+    )
+    transaction.advance("apply")
     try:
         nft.apply_tproxy(fragments, state.network.tproxy_port)
         _journal("nft_applied")
     except Exception as exc:
         message = f"Не удалось применить сетевую конфигурацию: {exc}"
-        _set_apply_error(message)
-        singbox._log("ERROR", message)
-        _restore_singbox_config(previous_config)
-        _restore_nft_snapshot(nft_snapshot)
-        _journal("rolled_back", stage="nft", error=message)
-        return False
+        return fail("nft", message)
 
     from hydra.core.sni_router import needs_mux, stop as stop_mux, rebuild as rebuild_mux, uninstall_haproxy
     import socket
@@ -167,12 +189,13 @@ def _apply_config_unlocked(state: AppState) -> bool:
         _journal("plugins_applied", plugins=[p.meta.name for p in registry.enabled(state)])
     except Exception as exc:
         message = f"Не удалось применить конфигурацию плагина: {exc}"
-        _set_apply_error(message)
-        singbox._log("ERROR", message)
-        _restore_singbox_config(previous_config)
-        _restore_nft_snapshot(nft_snapshot)
-        _journal("rolled_back", stage="plugins", error=message)
-        return False
+        return fail("plugins", message)
+
+    transaction.add_rollback(
+        "plugins",
+        lambda: _rollback_applied_plugins(state, applied_plugins),
+        priority=30,
+    )
 
     res = singbox.reload()
 
@@ -191,47 +214,25 @@ def _apply_config_unlocked(state: AppState) -> bool:
         _manage_traffic_daemon(state)
     except Exception as exc:
         message = f"Не удалось применить сервис учёта трафика: {exc}"
-        _set_apply_error(message)
-        singbox._log("ERROR", message)
-        _restore_singbox_config(previous_config)
-        _restore_nft_snapshot(nft_snapshot)
-        _rollback_applied_plugins(state, applied_plugins)
-        _journal("rolled_back", stage="traffic_daemon", error=message)
-        try:
-            singbox.reload()
-        except Exception as reload_exc:
-            singbox._log("ERROR", f"Failed to reload restored sing-box config: {reload_exc}")
-        return False
+        return fail("traffic_daemon", message, reload_restored=True)
 
+    transaction.advance("healthcheck")
     plugin_health = registry.health_all(state)
     if plugin_health:
         details = "; ".join(f"{name}: {reason}" for name, reason in plugin_health.items())
-        _set_apply_error(f"Проверка сервисов не пройдена: {details}")
-        singbox._log("ERROR", last_apply_error())
-        _restore_singbox_config(previous_config)
-        _restore_nft_snapshot(nft_snapshot)
-        _rollback_applied_plugins(state, applied_plugins)
-        _journal("rolled_back", stage="plugin_health", error=last_apply_error())
-        try:
-            singbox.reload()
-        except Exception as exc:
-            singbox._log("ERROR", f"Не удалось перезагрузить восстановленный Sing-Box: {exc}")
-        return False
+        return fail(
+            "plugin_health",
+            f"Проверка сервисов не пройдена: {details}",
+            reload_restored=True,
+        )
 
     if not res or not mux_ok:
         if not res:
             _set_apply_error(singbox.last_error() or "Sing-Box не запустился после применения")
         else:
             _set_apply_error("SNI-маршрутизатор не запустился после применения")
-        _restore_singbox_config(previous_config)
-        _restore_nft_snapshot(nft_snapshot)
-        _rollback_applied_plugins(state, applied_plugins)
-        _journal("rolled_back", stage="healthcheck", error=last_apply_error())
-        try:
-            singbox.reload()
-        except Exception as exc:
-            singbox._log("ERROR", f"Failed to reload restored sing-box config: {exc}")
-        return False
+        return fail("healthcheck", last_apply_error(), reload_restored=True)
+    transaction.commit()
     _journal("committed")
     return True
 

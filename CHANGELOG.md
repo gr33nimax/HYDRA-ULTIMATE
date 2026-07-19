@@ -17,6 +17,7 @@ User application service — добавлен API-агностичный `UserSe
 Protocol application service — каталог, статусы и lifecycle протоколов доступны через `ProtocolService`; основные экраны CLI больше не связывают presentation напрямую с registry/orchestrator.
 Honeypot host boundary — lifecycle службы и firewall-команды переведены на общий `HostBackend`; генерируемый runtime-скрипт остаётся самостоятельным изолированным сервисом.
 IPBan host boundary — ipset/iptables lifecycle, установка пакета и restore из snapshot используют `HostBackend`; boundary расширен поддержкой stdin и окружения команд.
+Apply transaction — rollback Sing-Box, nftables и плагинов формализован через `ApplyTransaction` с явными фазами, приоритетами, at-most-once финализацией и продолжением отката при локальной ошибке.
 
 ### Backup и восстановление
 
