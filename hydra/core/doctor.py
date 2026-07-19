@@ -45,6 +45,18 @@ def run_doctor(state: AppState) -> dict:
         writable,
         f"{state_dir} ({'read/write' if writable else 'unavailable'})",
     ))
+    try:
+        from hydra.core.sni_router import audit_routes
+
+        mux = audit_routes(state)
+        if mux.ok:
+            detail = "not required" if not mux.required else f"{len(mux.actual)} SNI routes"
+        else:
+            problems = [*mux.missing, *mux.stale, *mux.certificate_errors, *mux.errors]
+            detail = "; ".join(problems) or "route audit failed"
+        checks.append(_check("caddy_routes", mux.ok, detail, required=mux.required))
+    except Exception as exc:
+        checks.append(_check("caddy_routes", False, str(exc), required=True))
     required_failures = [item["name"] for item in checks if item["required"] and not item["ok"]]
     warnings = [item["name"] for item in checks if not item["required"] and not item["ok"]]
     reconciliation: dict = {"planned": [], "drift": {}}

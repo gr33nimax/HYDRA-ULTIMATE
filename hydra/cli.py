@@ -38,12 +38,14 @@ def build_plan(state: AppState, app=None) -> dict:
     conflicts = singbox._preflight_conflicts(config)
     app = app or production_application()
     reconciliation = app.protocols.reconciliation().plan(state)
+    from hydra.core.sni_router import audit_routes
     return {
         "valid": not conflicts,
         "conflicts": conflicts,
         "plugins": sorted(fragments),
         "requirements": registry.requirements(candidate),
         "reconciliation": [asdict(action) for action in reconciliation],
+        "tls_mux": audit_routes(state).as_dict(),
         "changes": {
             "inbounds": len(config.get("inbounds", [])),
             "outbounds": len(config.get("outbounds", [])),

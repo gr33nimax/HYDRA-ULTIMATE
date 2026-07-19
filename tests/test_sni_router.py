@@ -16,6 +16,7 @@ from hydra.core.sni_router import (
     stop,
     get_quic_owner,
     get_quic_owners,
+    audit_routes,
     _INTERNAL_PORTS,
 )
 from hydra.core.state import AppState, PluginState
@@ -67,6 +68,43 @@ def test_needs_mux_two_plugins():
     """needs_mux() -> True when 2+ plugins are active."""
     s = _state(naive_enabled=True, anytls_enabled=True)
     assert needs_mux(s) is True
+
+
+def test_audit_routes_accepts_matching_config_and_certificates(tmp_path):
+    state = _state(anytls_enabled=True)
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    cert.write_text("cert")
+    key.write_text("key")
+    state.protocols["anytls"].config.update(cert_file=str(cert), key_file=str(key))
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "apps": {"layer4": {"servers": {"tls_mux": {"routes": [
+            {"match": [{"tls": {"sni": ["anytls.com"]}}]}
+        ]}}}}}
+    ))
+    with patch("hydra.core.sni_router.CADDY_CFG", config_path), \
+         patch("hydra.core.sni_router.is_active", return_value=True):
+        report = audit_routes(state)
+    assert report.ok is True
+    assert report.missing == ()
+    assert report.actual == ("anytls.com",)
+
+
+def test_audit_routes_reports_stale_and_missing_domains(tmp_path):
+    state = _state(anytls_enabled=True)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "apps": {"layer4": {"servers": {"tls_mux": {"routes": [
+            {"match": [{"tls": {"sni": ["old.example"]}}]}
+        ]}}}}}
+    ))
+    with patch("hydra.core.sni_router.CADDY_CFG", config_path), \
+         patch("hydra.core.sni_router.is_active", return_value=True):
+        report = audit_routes(state)
+    assert report.ok is False
+    assert report.missing == ("anytls.com",)
+    assert report.stale == ("old.example",)
 
 
 def test_get_effective_port_no_mux():

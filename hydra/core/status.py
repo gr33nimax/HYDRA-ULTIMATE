@@ -35,10 +35,13 @@ def build_status(state: AppState) -> dict:
     network["dnscrypt_enabled"] = bool(
         dnscrypt.get("enabled") or dnscrypt.get("running")
     )
+    from hydra.core.sni_router import audit_routes
+    tls_mux = audit_routes(state).as_dict()
     return {
         "version": state.version,
         "users": len(state.users),
         "network": network,
         "plugins": plugins,
         "runtime": runtime.as_dict(),
+        "tls_mux": tls_mux,
     }

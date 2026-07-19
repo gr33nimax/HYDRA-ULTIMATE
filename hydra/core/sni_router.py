@@ -11,6 +11,7 @@ import base64
 import subprocess
 import tempfile
 import urllib.request
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from hydra.core.state import AppState
 from hydra.core.host import HOST
@@ -49,6 +50,25 @@ _SOURCE_PRESERVED_BACKENDS = frozenset({"naive", "anytls", "trusttunnel", "shado
 # Keep the transactional cleanup code so hosts that applied the experimental
 # routing are restored automatically on their next configuration rebuild.
 SOURCE_PRESERVATION_ENABLED = False
+
+
+@dataclass(frozen=True)
+class CaddyRouteAudit:
+    """Read-only consistency report for the TLS/SNI multiplexer."""
+
+    ok: bool
+    required: bool
+    config_present: bool
+    service_active: bool | None
+    expected: tuple[str, ...]
+    actual: tuple[str, ...]
+    missing: tuple[str, ...] = ()
+    stale: tuple[str, ...] = ()
+    certificate_errors: tuple[str, ...] = ()
+    errors: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict:
+        return asdict(self)
 
 
 def _proxy_handler(address: str, *, preserve_source: bool = False) -> dict:
@@ -594,6 +614,92 @@ def _collect_backends(state: AppState) -> list[dict]:
             "key_file": "",
         })
     return backends
+
+
+def audit_routes(state: AppState) -> CaddyRouteAudit:
+    """Compare persisted SNI routes with the live Caddy JSON artifact.
+
+    This intentionally does not reload Caddy or repair anything.  It catches
+    the class of incident where ``state.json`` is correct but the generated
+    config is stale (for example, a newly enabled TrustTunnel domain missing
+    from ``tls_mux.routes``).
+    """
+    backends = _collect_backends(state)
+    expected = tuple(sorted({str(item["domain"]) for item in backends if item.get("domain")}))
+    required = needs_mux(state)
+    if not required:
+        return CaddyRouteAudit(
+            ok=True,
+            required=False,
+            config_present=CADDY_CFG.exists(),
+            service_active=None,
+            expected=expected,
+            actual=(),
+        )
+
+    errors: list[str] = []
+    actual: set[str] = set()
+    config_present = CADDY_CFG.is_file()
+    if config_present:
+        try:
+            config = json.loads(CADDY_CFG.read_text(encoding="utf-8"))
+
+            def collect_sni(node: object) -> None:
+                if isinstance(node, dict):
+                    match = node.get("match")
+                    if isinstance(match, list):
+                        for matcher in match:
+                            if isinstance(matcher, dict):
+                                tls = matcher.get("tls")
+                                if isinstance(tls, dict) and isinstance(tls.get("sni"), list):
+                                    actual.update(str(value) for value in tls["sni"] if value)
+                    for value in node.values():
+                        collect_sni(value)
+                elif isinstance(node, list):
+                    for value in node:
+                        collect_sni(value)
+
+            collect_sni(config.get("apps", {}).get("layer4", {}).get("servers", {}).get("tls_mux", {}))
+        except (OSError, ValueError, TypeError) as exc:
+            errors.append(f"invalid Caddy config: {exc}")
+    else:
+        errors.append(f"Caddy config missing: {CADDY_CFG}")
+
+    expected_set = set(expected)
+    missing = tuple(sorted(expected_set - actual))
+    stale = tuple(sorted(actual - expected_set))
+    certificate_errors: list[str] = []
+    for backend in backends:
+        if backend["name"] not in {"anytls", "trusttunnel", "hysteria2"}:
+            continue
+        for key in ("cert_file", "key_file"):
+            path = str(backend.get(key) or "")
+            if not path:
+                certificate_errors.append(f"{backend['domain']}: {key} is not configured")
+            elif not Path(path).is_file():
+                certificate_errors.append(f"{backend['domain']}: {key} missing ({path})")
+
+    service_active: bool | None
+    try:
+        service_active = is_active()
+    except Exception as exc:
+        service_active = None
+        errors.append(f"cannot check {SERVICE_NAME}: {exc}")
+    if service_active is False:
+        errors.append(f"{SERVICE_NAME} is not active")
+
+    return CaddyRouteAudit(
+        ok=not (missing or stale or certificate_errors or errors),
+        required=True,
+        config_present=config_present,
+        service_active=service_active,
+        expected=expected,
+        actual=tuple(sorted(actual)),
+        missing=missing,
+        stale=stale,
+        certificate_errors=tuple(certificate_errors),
+        errors=tuple(errors),
+    )
 
 
 def _generate_config(backends: list[dict], state: AppState) -> dict:
