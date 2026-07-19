@@ -39,6 +39,9 @@ class HoneypotPlugin(BasePlugin):
         description="Honeypot: TCP-ловушка с проверяемым IPv4/IPv6 firewall-баном",
         category=PluginCategory.SECURITY,
         version="2.1.0",
+        # Honeypot is a standalone systemd service. Its lifecycle is managed
+        # by orchestrator enable/disable hooks, not by every Sing-Box apply.
+        central_apply=False,
         required_commands=("python3", "systemctl"),
     )
 
@@ -161,6 +164,9 @@ class HoneypotPlugin(BasePlugin):
         return result
 
     def _write_script(self, port: int, whitelist: list[str]) -> None:
+        # audit: allow-generated-runtime-subprocess
+        # The following subprocess calls are emitted into a standalone
+        # systemd script, not executed by the Hydra process itself.
         normalized = self._normalize_whitelist(whitelist)
         script = textwrap.dedent(f"""\
             #!/usr/bin/env python3
@@ -210,10 +216,16 @@ class HoneypotPlugin(BasePlugin):
             def ensure_firewall_ban(ip):
                 binary, spec = firewall_spec(ip)
                 try:
-                    check = HOST.run([binary, "-C", "INPUT", *spec], timeout=10)
+                    check = subprocess.run(
+                        [binary, "-C", "INPUT", *spec], timeout=10,
+                        capture_output=True, check=False,
+                    )
                     if check.returncode == 0:
                         return True, binary
-                    result = HOST.run([binary, "-I", "INPUT", "1", *spec], timeout=10)
+                    result = subprocess.run(
+                        [binary, "-I", "INPUT", "1", *spec], timeout=10,
+                        capture_output=True, check=False,
+                    )
                     return result.returncode == 0, binary
                 except (OSError, subprocess.TimeoutExpired):
                     return False, binary

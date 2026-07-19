@@ -21,6 +21,7 @@ def test_plugin_meta():
     assert p.meta.name == "honeypot"
     assert p.meta.category == PluginCategory.SECURITY
     assert p.meta.version == "2.1.0"
+    assert p.meta.central_apply is False
 
 
 def test_configure_returns_empty_fragment():
@@ -111,6 +112,7 @@ def test_generated_script_records_only_verified_firewall_bans():
     assert "if not ok:\n        return False" in script
     assert '"-C", "INPUT"' in script
     assert '"-I", "INPUT", "1"' in script
+    assert "HOST.run" not in script
 
 
 def test_apply_does_not_restart_healthy_honeypot_when_script_is_unchanged(tmp_path, monkeypatch):
