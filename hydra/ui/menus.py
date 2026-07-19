@@ -52,6 +52,7 @@ from hydra.ui.protocol_ui import (
     protocol_label, protocol_menu_title, protocol_status_panel, status_badge,
 )
 from hydra.ui.network_info import snapshot as network_snapshot
+from hydra.ui import log_viewer
 
 
 def _apply_error_text(default: str = "Ошибка применения конфигурации") -> str:
@@ -2473,196 +2474,49 @@ def _menu_logs(state: AppState):
 
 
 def _unit_known(unit: str) -> bool:
-    try:
-        result = subprocess.run(
-            ["systemctl", "show", "--property=LoadState", "--value", unit],
-            capture_output=True, text=True, timeout=5,
-        )
-        return result.returncode == 0 and result.stdout.strip() == "loaded"
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+    return log_viewer.unit_known(unit)
 
 
 def _log_source_status(source_type: str, source: str) -> str:
-    if source_type == "file":
-        path = Path(source)
-        if not path.exists():
-            return "ещё не создан"
-        try:
-            return f"{_bytes_auto(path.stat().st_size)}"
-        except OSError:
-            return "недоступен"
-    if _unit_active(source):
-        return "активно"
-    return "остановлено" if _unit_known(source) else "не установлено"
+    if source_type != "file" and not _unit_active(source) and not _unit_known(source):
+        return "не установлено"
+    return log_viewer.source_status(
+        source_type, source, unit_active=_unit_active, bytes_auto=_bytes_auto,
+    )
 
 
 def _read_log_source(source_type: str, source: str, num_lines: int) -> tuple[list[str], str]:
-    if source_type == "file":
-        path = Path(source)
-        if not path.exists():
-            return [], "Файл ещё не создан."
-        try:
-            from collections import deque
-            with path.open("r", encoding="utf-8", errors="replace") as handle:
-                return [line.rstrip("\n") for line in deque(handle, maxlen=num_lines)], ""
-        except OSError as exc:
-            return [], f"Ошибка чтения файла: {exc}"
-    try:
-        result = subprocess.run(
-            ["journalctl", "-u", source, "-n", str(num_lines),
-             "--no-pager", "-o", "short-iso"],
-            capture_output=True, text=True, timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return [], f"Не удалось прочитать journalctl: {exc}"
-    output = (result.stdout or "").strip()
-    if result.returncode != 0:
-        return [], (result.stderr or output or "journalctl завершился с ошибкой").strip()
-    lines = [line for line in output.splitlines() if line.strip() and line.strip() != "-- No entries --"]
-    return lines, "" if lines else "В журнале пока нет записей."
+    return log_viewer.read_source(source_type, source, num_lines)
 
 
 def _show_log_source(title_text: str, source_type: str, source: str, num_lines: int):
-    source_label = source if source_type == "file" else f"journalctl -u {source}"
-    while True:
-        clear()
-        title(f"{title_text} ({num_lines} строк)")
-        print(f"  {DIM}Источник: {source_label}{NC}")
-        print()
-
-        lines, message = _read_log_source(source_type, source, num_lines)
-        for line in lines:
-            print(f"  {DIM}{line}{NC}")
-        if message:
-            warn(message)
-        print()
-
-        choice = menu([
-            ("R", "🔄 Обновить", ""),
-            ("W", "👀 Следить в реальном времени", ""),
-            ("0", "↩ Назад", "")
-        ], "ПРОСМОТР ЛОГА")
-
-        if choice == "0":
-            break
-        if choice.upper() == "W":
-            if source_type == "file":
-                _watch_log_file(title_text, source)
-            else:
-                _watch_journal(title_text, source)
+    log_viewer.show_source(
+        title_text, source_type, source, num_lines,
+        enter_pressed=_is_enter_pressed,
+    )
 
 
 def _show_log_file(title_text: str, path_str: str, num_lines: int):
     """Обратная совместимость для внутренних меню с файловыми логами."""
-    _show_log_source(title_text, "file", path_str, num_lines)
+    log_viewer.show_file(
+        title_text, path_str, num_lines,
+        enter_pressed=_is_enter_pressed,
+    )
 
 
 def _watch_log_file(title_text: str, path_str: str):
-    import time
-    path = Path(path_str)
-    clear()
-    title(f"👀 Слежение: {title_text}")
-    print(f"  {DIM}Файл: {path_str}{NC}")
-    print(f"  {DIM}Нажмите [Enter] для выхода из режима слежения.{NC}")
-    print(f"  {DIM}{'─' * PANEL_W}{NC}")
-    print()
-    
-    if not path.exists():
-        error("Файл лога не найден.")
-        prompt("Нажмите Enter")
-        return
-        
-    try:
-        with path.open("r", encoding="utf-8", errors="replace") as f:
-            f.seek(0, 2)
-            while True:
-                if _is_enter_pressed():
-                    break
-                line = f.readline()
-                if line:
-                    print(f"  {DIM}{line.strip()}{NC}")
-                else:
-                    time.sleep(0.5)
-    except KeyboardInterrupt:
-        pass
+    log_viewer.watch_file(title_text, path_str, _is_enter_pressed)
 
 
 def _watch_journal(title_text: str, unit: str):
-    import select
-    import time
-
-    clear()
-    title(f"👀 Слежение: {title_text}")
-    print(f"  {DIM}Источник: journalctl -u {unit}{NC}")
-    print(f"  {DIM}Нажмите [Enter] для выхода из режима слежения.{NC}")
-    print(f"  {DIM}{'─' * PANEL_W}{NC}")
-    print()
-
-    try:
-        process = subprocess.Popen(
-            ["journalctl", "-u", unit, "-f", "-n", "0", "--no-pager", "-o", "short-iso"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1,
-        )
-    except OSError as exc:
-        error(f"Не удалось запустить journalctl: {exc}")
-        prompt("Нажмите Enter")
-        return
-
-    try:
-        while True:
-            if _is_enter_pressed():
-                break
-            if process.stdout is not None:
-                ready, _, _ = select.select([process.stdout], [], [], 0.25)
-                if ready:
-                    line = process.stdout.readline()
-                    if line:
-                        print(f"  {DIM}{line.rstrip()}{NC}")
-                        continue
-            if process.poll() is not None:
-                warn("journalctl завершил работу.")
-                time.sleep(1)
-                break
-    except KeyboardInterrupt:
-        pass
-    finally:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
+    log_viewer.watch_journal(title_text, unit, _is_enter_pressed)
 
 
 def _sync_agent_log_snapshot(
     log_path: Path,
     now_timestamp: float | None = None,
 ) -> tuple[str, str, bool]:
-    """Return the latest non-empty log line and its freshness."""
-    lines, message = _read_log_source("file", str(log_path), 5)
-    last_line = next((line for line in reversed(lines) if line.strip()), "")
-    if not last_line:
-        return message or "нет логов", "нет данных", True
-
-    try:
-        current = datetime.now().timestamp() if now_timestamp is None else now_timestamp
-        age_seconds = max(0, int(current - log_path.stat().st_mtime))
-    except OSError:
-        return last_line, "время неизвестно", True
-
-    if age_seconds < 60:
-        freshness = "только что"
-    elif age_seconds < 3600:
-        freshness = f"{age_seconds // 60} мин назад"
-    elif age_seconds < 86400:
-        freshness = f"{age_seconds // 3600} ч назад"
-    else:
-        freshness = f"{age_seconds // 86400} дн назад"
-    # The timer runs every five minutes; after two missed intervals the status
-    # should visibly indicate that the displayed record is no longer current.
-    return last_line, freshness, age_seconds > 600
+    return log_viewer.sync_snapshot(log_path, now_timestamp)
 
 
 def _menu_sync_agent(state: AppState):

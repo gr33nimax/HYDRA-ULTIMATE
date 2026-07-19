@@ -8,6 +8,7 @@ HostBackend — добавлен единый injectable boundary для bounded
 Typed errors — добавлены типизированные ошибки `HydraError`, `HostOperationError`, `ConfigurationError`, `PluginError` и `RestoreError`.
 Plugin capabilities — `PluginMeta` теперь может декларативно описывать required commands, services и конфликты; `hydra plan` показывает проблемы зависимостей до применения.
 UI decomposition — фоновое определение public IP, GeoIP-флага и системного DNS вынесено из монолитного `menus.py` в отдельный потокобезопасный `network_info.py`.
+Log viewer — чтение файловых логов, journalctl и live-follow вынесены в отдельный `log_viewer.py`; публичные внутренние функции меню сохранены для обратной совместимости.
 
 ### Backup и восстановление
 
