@@ -7,13 +7,13 @@
 [![Tests](https://img.shields.io/badge/tests-630%20passed-brightgreen.svg?style=flat-square)](tests/)
 
 **HYDRA** — модульная платформа для развёртывания и администрирования
-многопротокольных proxy-серверов на базе Sing-Box. Она объединяет транспорты,
+многопротокольных прокси-серверов на базе Sing-Box. Она объединяет транспорты,
 маршрутизацию, DNS, безопасность, подписки, учёт трафика и TUI/JSON-интерфейсы
 в единый управляемый контур.
 
 > [!IMPORTANT]
 > `2.5.0` — архитектурный и эксплуатационный релиз. Проект всё ещё находится
-> в активном beta-тестировании; для production используйте чистый Ubuntu 20.04+
+> в активном бета-тестировании; для рабочей эксплуатации используйте чистый Ubuntu 20.04+
 > или Debian 11+ и обязательно настройте резервное копирование.
 
 ## 📚 Документация
@@ -37,7 +37,7 @@
 bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh)
 ```
 
-Bootstrap устанавливает зависимости, Sing-Box Extended, изолированное Python-
+Установщик подготавливает зависимости, Sing-Box Extended, изолированное Python-
 окружение и команду `hydra`. Caddy L4 и протоколы активируются только при
 включении соответствующих модулей.
 
@@ -65,9 +65,9 @@ sudo hydra doctor
 | :--- | :--- |
 | **AmneziaWG 2.0** | WireGuard-транспорт с расширенной обфускацией и TPROXY. |
 | **Mieru** | Обфусцированный mTLS-транспорт с `mierus://` ссылками. |
-| **NaiveProxy** | HTTP/2 proxy на базе Caddy forward-proxy. |
+| **NaiveProxy** | Прокси HTTP/2 на базе Caddy forward-proxy. |
 | **AnyTLS** | TLS-подобный обфусцированный туннель. |
-| **TrustTunnel** | TLS-транспорт с TCP/QUIC режимами и Caddy decoy. |
+| **TrustTunnel** | TLS-транспорт с режимами TCP/QUIC и сайтом-заглушкой Caddy. |
 | **Hysteria2** | QUIC-транспорт с Salamander и браузерной заглушкой. |
 | **ShadowTLS** | ShadowTLS v3 с Trojan detour. |
 | **Snell v4** | TCP/UDP-прокси из Sing-Box Extended. |
@@ -85,18 +85,20 @@ sudo hydra doctor
 | **IPBan** | Статические списки IP/CIDR/ASN/стран. |
 | **Traffic daemon** | Учёт трафика и применение лимитов/сроков пользователей. |
 
-Telegram-бот присутствует как экспериментальный модуль и не объявляется
-production-ready в версии `2.5.0`.
+Telegram-бот присутствует как экспериментальный модуль и не считается готовым
+для промышленной эксплуатации в версии `2.5.0`.
 
 ## 🏗️ Архитектурный обзор
 
-Сохранённое состояние, runtime-факты, plugin lifecycle, Sing-Box, nftables и
+Сохранённое состояние, фактическое состояние служб, жизненный цикл плагинов,
+Sing-Box, nftables и
 Caddy L4 разделены по слоям. Изменения применяются транзакционно, а TLS-
 маршруты проверяются отдельно, потому что они являются самым чувствительным
 артефактом системы.
 
-Подробная схема трафика, жизненный цикл применения, HostBackend, plugin
-contracts, state/runtime separation и эксплуатационные инварианты описаны в
+Подробная схема трафика, жизненный цикл применения, HostBackend, контракты
+плагинов, разделение state и фактического состояния, а также эксплуатационные
+правила описаны в
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## 🧪 Разработка и тестирование
@@ -108,30 +110,30 @@ python -m compileall -q hydra
 ```
 
 Полный локальный набор содержит 630 тестов. CI дополнительно проверяет Python
-3.10–3.13, dependency audit и Linux smoke-сценарии.
+3.10–3.13, зависимости и Linux-проверки на реальной системе.
 
 ## 📂 Структура проекта
 
 ```text
 HYDRA-ULTIMATE/
-├── main.py                  # интерактивный TUI entrypoint
+├── main.py                  # точка входа в интерактивный TUI
 ├── bootstrap.sh             # установка и подготовка VPS
-├── hydra/core/              # state, orchestrator, Sing-Box, nftables, Caddy
-├── hydra/plugins/           # transport, enhancement и security plugins
-├── hydra/services/          # application services, traffic, sync, subscriptions
-├── hydra/ui/                # TUI и presentation-модули
+├── hydra/core/              # state, оркестратор, Sing-Box, nftables, Caddy
+├── hydra/plugins/           # транспортные, сетевые и защитные плагины
+├── hydra/services/          # прикладные службы, учёт, синхронизация, подписки
+├── hydra/ui/                # TUI и модули представления
 ├── docs/                    # архитектура и headless CLI
 └── tests/                   # автоматические проверки
 ```
 
 ## 📜 История и лицензия
 
-- [CHANGELOG.md](CHANGELOG.md) — release notes и история версий.
+- [CHANGELOG.md](CHANGELOG.md) — история версий и описания релизов.
 - [LICENSE](LICENSE) — GNU GPLv3.
 
 ## 🔗 Связанный проект
 
 - [VLESS Ultimate](https://github.com/inferno1978/VLESS-Ultimate-Installer) —
-  альтернативный Xray-based стек для VLESS/Reality и XHTTP.
+  альтернативный стек на базе Xray для VLESS/Reality и XHTTP.
 
 Copyright (c) 2026 gr33nimax.
