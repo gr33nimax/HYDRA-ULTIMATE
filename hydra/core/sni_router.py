@@ -71,7 +71,12 @@ class CaddyRouteAudit:
         return asdict(self)
 
 
-def _proxy_handler(address: str, *, preserve_source: bool = False) -> dict:
+def _proxy_handler(
+    address: str,
+    *,
+    preserve_source: bool = False,
+    proxy_protocol: bool = False,
+) -> dict:
     """Build a Caddy L4 proxy handler.
 
     ``l4.conn.remote_addr`` includes the original source port and is expanded
@@ -82,7 +87,23 @@ def _proxy_handler(address: str, *, preserve_source: bool = False) -> dict:
     upstream = {"dial": [address]}
     if preserve_source and SOURCE_PRESERVATION_ENABLED:
         upstream["local_address"] = ["{l4.conn.remote_addr}"]
-    return {"handler": "proxy", "upstreams": [upstream]}
+    handler = {"handler": "proxy", "upstreams": [upstream]}
+    if proxy_protocol:
+        # Decoy HTTP servers otherwise see every connection as 127.0.0.1 and
+        # AntiDPI correctly discards it as loopback.  PROXY v2 carries the
+        # original L4 peer without requiring fragile transparent source binds.
+        handler["proxy_protocol"] = "v2"
+    return handler
+
+
+def _decoy_listener_wrappers() -> list[dict]:
+    """Accept L4 PROXY headers only from this host's loopback interfaces."""
+    return [{
+        "wrapper": "proxy_protocol",
+        "timeout": "1s",
+        "allow": ["127.0.0.0/8", "::1/128"],
+        "fallback_policy": "require",
+    }]
 
 def _hash_password_caddy(password: str) -> str:
     """Uses Caddy's built-in command to generate a bcrypt password hash."""
@@ -794,7 +815,10 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                             },
                             {
                                 "handle": [
-                                    _proxy_handler(f"127.0.0.1:{decoy_port}", preserve_source=True)
+                                    _proxy_handler(
+                                        f"127.0.0.1:{decoy_port}",
+                                        proxy_protocol=True,
+                                    )
                                 ]
                             }
                         ]
@@ -808,7 +832,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                 "match": [{"tls": {"sni": [domain]}}],
                 "handle": [
                     {"handler": "tls"},
-                    _proxy_handler(f"127.0.0.1:{decoy_port}", preserve_source=True)
+                    _proxy_handler(f"127.0.0.1:{decoy_port}", proxy_protocol=True)
                 ]
             })
         elif name == "hysteria2":
@@ -820,7 +844,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                 "match": [{"tls": {"sni": [domain]}}],
                 "handle": [
                     {"handler": "tls"},
-                    _proxy_handler(f"127.0.0.1:{decoy_port}", preserve_source=True)
+                    _proxy_handler(f"127.0.0.1:{decoy_port}", proxy_protocol=True)
                 ]
             })
         elif name == "sub_server":
@@ -839,7 +863,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
         l4_routes.append({
             "handle": [
                 {"handler": "tls"},
-                _proxy_handler(f"127.0.0.1:{decoy_port}", preserve_source=True)
+                _proxy_handler(f"127.0.0.1:{decoy_port}", proxy_protocol=True)
             ]
         })
     l4_app = {
@@ -904,6 +928,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
         anytls_backend = next(b for b in backends if b["name"] == "anytls")
         http_servers["anytls_decoy"] = {
             "listen": [f"127.0.0.1:{_DECOY_HTTP_PORTS['anytls']}"],
+            "listener_wrappers": _decoy_listener_wrappers(),
             "automatic_https": {
                 "disable": True,
                 "disable_redirects": True
@@ -926,6 +951,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
         tt_port = _INTERNAL_PORTS["trusttunnel"]
         http_servers["trusttunnel_decoy"] = {
             "listen": [f"127.0.0.1:{_DECOY_HTTP_PORTS['trusttunnel']}"],
+            "listener_wrappers": _decoy_listener_wrappers(),
             "automatic_https": {
                 "disable": True,
                 "disable_redirects": True
@@ -998,6 +1024,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
         hysteria2_backend = next(b for b in backends if b["name"] == "hysteria2")
         http_servers["hysteria2_decoy"] = {
             "listen": [f"127.0.0.1:{_DECOY_HTTP_PORTS['hysteria2']}"],
+            "listener_wrappers": _decoy_listener_wrappers(),
             "automatic_https": {
                 "disable": True,
                 "disable_redirects": True

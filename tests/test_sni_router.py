@@ -148,6 +148,19 @@ def test_generate_config_two_backends():
     assert anytls_route["handle"][1]["handler"] == "subroute"
     anytls_proxy = anytls_route["handle"][1]["routes"][0]["handle"][0]
     assert "local_address" not in anytls_proxy["upstreams"][0]
+    assert "proxy_protocol" not in anytls_proxy
+
+    # Only the browser/decoy branch carries the original peer to the local
+    # HTTP access logger. Protocol backends must not receive a PROXY preamble.
+    anytls_decoy_proxy = anytls_route["handle"][1]["routes"][1]["handle"][0]
+    assert anytls_decoy_proxy["proxy_protocol"] == "v2"
+    decoy_server = cfg["apps"]["http"]["servers"]["anytls_decoy"]
+    assert decoy_server["listener_wrappers"] == [{
+        "wrapper": "proxy_protocol",
+        "timeout": "1s",
+        "allow": ["127.0.0.0/8", "::1/128"],
+        "fallback_policy": "require",
+    }]
 
 
 def test_antidpi_bans_are_enforced_only_by_dynamic_firewall():
@@ -189,6 +202,7 @@ def test_hysteria2_has_browser_https_decoy_route():
     assert route["match"][0]["tls"]["sni"] == ["hysteria2.com"]
     assert route["handle"][0] == {"handler": "tls"}
     assert route["handle"][1]["upstreams"][0]["dial"] == ["127.0.0.1:10803"]
+    assert route["handle"][1]["proxy_protocol"] == "v2"
 
     tls_files = cfg["apps"]["tls"]["certificates"]["load_files"]
     assert tls_files == [{
@@ -196,6 +210,7 @@ def test_hysteria2_has_browser_https_decoy_route():
     }]
     decoy = cfg["apps"]["http"]["servers"]["hysteria2_decoy"]
     assert decoy["listen"] == ["127.0.0.1:10803"]
+    assert decoy["listener_wrappers"][0]["wrapper"] == "proxy_protocol"
     assert decoy["routes"][0]["handle"][0] == {
         "handler": "file_server", "root": "/var/www/decoy-hysteria2",
     }
@@ -343,4 +358,3 @@ def test_rebuild_runs_caddy_l4_with_only_sub_domain():
         mock_cfg.with_suffix.return_value.write_text.assert_called_once()
         mock_cfg.with_suffix.return_value.replace.assert_called_once_with(mock_cfg)
         mock_run.assert_any_call(["systemctl", "reload-or-restart", "caddy-l4"], capture_output=True)
-
