@@ -84,3 +84,21 @@ def test_ban_history_is_created_once_and_legacy_signals_are_safe(tmp_path):
     from hydra.plugins.antidpi.manager import _signals
     assert _signals({"signals": None}) == "—"
     assert _signals({"signals": "legacy"}) == "legacy"
+
+
+def test_service_wrapper_bootstraps_project_import_path(tmp_path):
+    plugin = AntiDPIPlugin()
+    script = tmp_path / "hydra-antidpi.py"
+    service = tmp_path / "hydra-antidpi.service"
+    project = tmp_path / "checkout"
+    with patch("hydra.plugins.antidpi.plugin.SCRIPT_FILE", script), \
+         patch("hydra.plugins.antidpi.plugin.SERVICE_FILE", service), \
+         patch("hydra.plugins.antidpi.plugin.PROJECT_ROOT", project):
+        plugin._write_service()
+    wrapper = script.read_text(encoding="utf-8")
+    unit = service.read_text(encoding="utf-8")
+    assert f"sys.path.insert(0, {str(project)!r})" in wrapper
+    assert "from hydra.plugins.antidpi.agent import run" in wrapper
+    assert f"WorkingDirectory={project}" in unit
+    assert f"ExecStart=" in unit and str(script) in unit
+    assert "StartLimitBurst=5" in unit

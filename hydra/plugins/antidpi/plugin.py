@@ -27,6 +27,7 @@ AWG_DEBUG_SERVICE = Path("/etc/systemd/system/hydra-awg-antidpi-debug.service")
 AWG_DEBUG_PATHS = (Path("/sys/kernel/debug/dynamic_debug/control"), Path("/proc/dynamic_debug/control"))
 SET_V4, SET_V6 = "hydra_antidpi", "hydra_antidpi6"
 RULE_COMMENT = "hydra-antidpi"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 # Signals are protocol-independent.  A score is more robust than a single
 # regex and keeps normal clients from being banned on one transient failure.
@@ -441,10 +442,32 @@ class AntiDPIPlugin(BasePlugin):
 
     def _write_service(self) -> None:
         SCRIPT_FILE.parent.mkdir(parents=True, exist_ok=True)
-        SCRIPT_FILE.write_text(_RUNTIME_SCRIPT, encoding="utf-8")
+        wrapper = (
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            f"sys.path.insert(0, {str(PROJECT_ROOT)!r})\n"
+            "from hydra.plugins.antidpi.agent import run\n"
+            "run()\n"
+        )
+        SCRIPT_FILE.write_text(wrapper, encoding="utf-8")
         SCRIPT_FILE.chmod(0o755)
         SERVICE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        SERVICE_FILE.write_text(f"""[Unit]\nAfter=network-online.target caddy-l4.service\n[Service]\nExecStart={sys.executable} -m hydra.plugins.antidpi.agent\nRestart=always\nRestartSec=2\n[Install]\nWantedBy=multi-user.target\n""", encoding="utf-8")
+        SERVICE_FILE.write_text(f"""[Unit]
+Description=HYDRA Anti-DPI probe detector
+After=network-online.target caddy-l4.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory={PROJECT_ROOT}
+ExecStart={sys.executable} {SCRIPT_FILE}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+""", encoding="utf-8")
 
 
 _RUNTIME_SCRIPT = r'''#!/usr/bin/env python3
