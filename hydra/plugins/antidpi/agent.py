@@ -129,6 +129,7 @@ class TextTail(JsonTail):
                 break
             event = parse_protocol_line(self.service, line)
             if event:
+                event[1]["source"] = f"{self.service}-log"
                 result.append(event)
         return result
 

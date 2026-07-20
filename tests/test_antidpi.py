@@ -3,6 +3,8 @@ from unittest.mock import MagicMock, patch
 from hydra.plugins.antidpi.plugin import (
     AntiDPIPlugin,
     active_bans,
+    ban_duration,
+    expire_bans,
     _scan_rule,
     decayed_score,
     prune_runtime_state,
@@ -197,6 +199,22 @@ def test_active_bans_filters_expired_and_malformed_entries():
         }
     }
     assert list(active_bans(data, now=1100)) == ["198.51.100.1"]
+
+
+def test_legacy_ban_duration_and_expired_history_are_reconciled():
+    data = {
+        "banned": {
+            "198.51.100.1": {"at": 1000},
+            "198.51.100.2": {"at": 1000, "duration": 600},
+        },
+        "history": [
+            {"ip": "198.51.100.2", "at": 1000, "duration": 600, "status": "active"},
+        ],
+    }
+    assert ban_duration(data["banned"]["198.51.100.1"]) == 86400
+    assert expire_bans(data, now=1700) is True
+    assert list(data["banned"]) == ["198.51.100.1"]
+    assert data["history"][0]["status"] == "expired"
 
 
 def test_scan_telemetry_rules_are_log_only_and_rate_limited():

@@ -22,3 +22,4 @@ def test_text_tail_normalizes_new_honeypot_lines(tmp_path):
     events = tail.read()
     assert events[0][0] == "198.51.100.91"
     assert events[0][1]["kind"] == "active_decoy_probe"
+    assert events[0][1]["source"] == "honeypot-log"

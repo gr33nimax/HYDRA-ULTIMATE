@@ -10,6 +10,15 @@ def test_non_evidence_is_ignored():
     assert parse_protocol_line("sing-box.service", "accepted connection from 203.0.113.9") is None
 
 
+def test_honeypot_ban_result_is_not_counted_as_a_second_probe():
+    assert parse_protocol_line(
+        "honeypot", "BAN 198.51.100.91 backend=iptables result=OK",
+    ) is None
+    assert parse_protocol_line(
+        "honeypot", "CONNECT 198.51.100.91:45600",
+    )[0] == "198.51.100.91"
+
+
 def test_kernel_tcp_scan_is_normalized():
     line = "HYDRA_SCAN_TCP IN=eth0 SRC=198.51.100.77 DST=192.0.2.1 SPT=44222 DPT=22"
     assert parse_kernel_scan_line(line) == (

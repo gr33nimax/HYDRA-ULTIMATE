@@ -7,7 +7,7 @@ from datetime import datetime
 import hydra.core.orchestrator as orchestrator
 from hydra.core.host import HOST
 from hydra.core.state import AppState
-from hydra.plugins.antidpi.plugin import _lock_state_file, active_bans
+from hydra.plugins.antidpi.plugin import _lock_state_file, active_bans, ban_duration, expire_bans
 from hydra.ui.tui import CYAN, DIM, GREEN, RED, clear, menu, panel, prompt, success, warn
 
 
@@ -70,7 +70,10 @@ def _format_signal_lines(signals: list[str], max_len: int = 45) -> list[str]:
 
 def _ban_history(plugin) -> None:
     import time
-    data = plugin._load_state()
+    with _lock_state_file():
+        data = plugin._load_state()
+        if expire_bans(data):
+            plugin._save_state(data)
     banned = active_bans(data)
     history = data.get("history", []) if isinstance(data.get("history"), list) else []
     now = time.time()
@@ -84,7 +87,7 @@ def _ban_history(plugin) -> None:
                 meta = {}
             score = meta.get("score", 0.0)
             at = meta.get("at", 0)
-            duration = meta.get("duration", 600)
+            duration = ban_duration(meta)
             offense = meta.get("offense_count", 1)
             sig_list = _get_signals_list(meta)
             rem = duration - (now - at)
@@ -115,8 +118,12 @@ def _ban_history(plugin) -> None:
             if ip in banned:
                 continue
             status_raw = item.get("status", "active")
-            st_color = RED if status_raw == "active" else GREEN
-            st_text = "АКТИВЕН" if status_raw == "active" else "СНЯТ"
+            if status_raw == "active":
+                st_color, st_text = RED, "АКТИВЕН"
+            elif status_raw == "expired":
+                st_color, st_text = DIM, "ИСТЁК"
+            else:
+                st_color, st_text = GREEN, "СНЯТ"
             score = item.get("score", 0.0)
             at = item.get("at", 0)
             sig_list = _get_signals_list(item)

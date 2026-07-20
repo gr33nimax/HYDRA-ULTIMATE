@@ -45,6 +45,7 @@ SIGNAL_WEIGHTS = {
 SCORE_HALF_LIFE = 300.0
 BAN_THRESHOLD = 8
 BAN_DURATIONS = (600, 3600, 86400, 604800)  # 10m -> 1h -> 24h -> 7d
+LEGACY_BAN_DURATION = 86400
 ALERT_COOLDOWN = 300.0
 SCORE_RETENTION = 86400.0
 MAX_SCORE_ENTRIES = 20000
@@ -108,6 +109,16 @@ def get_ban_duration(offense_count: int) -> int:
     return BAN_DURATIONS[idx]
 
 
+def ban_duration(metadata: object) -> int:
+    """Return persisted duration, preserving the old 24-hour ban format."""
+    if not isinstance(metadata, dict):
+        return 0
+    try:
+        return max(0, int(metadata.get("duration", LEGACY_BAN_DURATION)))
+    except (TypeError, ValueError):
+        return 0
+
+
 def active_bans(data: dict, *, now: float | None = None) -> dict:
     """Return only bans whose persisted timeout has not expired."""
     banned = data.get("banned", {}) if isinstance(data, dict) else {}
@@ -119,12 +130,52 @@ def active_bans(data: dict, *, now: float | None = None) -> dict:
         if not isinstance(metadata, dict):
             continue
         try:
-            expires_at = float(metadata.get("at", 0)) + int(metadata.get("duration", 86400))
+            expires_at = float(metadata.get("at", 0)) + ban_duration(metadata)
         except (TypeError, ValueError):
             continue
         if timestamp < expires_at:
             result[address] = metadata
     return result
+
+
+def expire_bans(data: dict, *, now: float | None = None) -> bool:
+    """Remove elapsed bans and reconcile their latest history records."""
+    banned = data.get("banned", {}) if isinstance(data, dict) else {}
+    if not isinstance(banned, dict):
+        data["banned"] = {}
+        return True
+    timestamp = time.time() if now is None else now
+    expired: set[str] = set()
+    changed = False
+    for address, metadata in list(banned.items()):
+        if not isinstance(metadata, dict):
+            banned.pop(address, None)
+            changed = True
+            continue
+        try:
+            elapsed = timestamp >= float(metadata.get("at", 0)) + ban_duration(metadata)
+        except (TypeError, ValueError):
+            elapsed = True
+        if elapsed:
+            banned.pop(address, None)
+            expired.add(address)
+            changed = True
+    if not expired:
+        return changed
+    remaining = set(expired)
+    history = data.get("history", [])
+    if isinstance(history, list):
+        for item in reversed(history):
+            if not isinstance(item, dict):
+                continue
+            address = item.get("ip")
+            if address in remaining and item.get("status") == "active":
+                item["status"] = "expired"
+                item["expired_at"] = timestamp
+                remaining.remove(address)
+                if not remaining:
+                    break
+    return changed
 
 
 
@@ -413,7 +464,7 @@ class AntiDPIPlugin(BasePlugin):
                 try:
                     address = ipaddress.ip_address(raw)
                     banned_at = float((metadata or {}).get("at", 0))
-                    duration = int((metadata or {}).get("duration", 86400))
+                    duration = ban_duration(metadata)
                 except (ValueError, TypeError):
                     banned.pop(raw, None)
                     continue
@@ -536,6 +587,8 @@ class AntiDPIPlugin(BasePlugin):
                 signal_counts[signal] = int(signal_counts.get(signal, 0)) + 1
             data["last_event_at"] = timestamp
             data["last_event_source"] = source
+            if data["events"] % 256 == 0:
+                expire_bans(data, now=timestamp)
             if len(scores) > MAX_SCORE_ENTRIES or data["events"] % 256 == 0:
                 prune_runtime_state(data, now=timestamp)
 
