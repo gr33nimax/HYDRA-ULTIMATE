@@ -34,8 +34,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SIGNAL_WEIGHTS = {
     "malformed_tls": 4, "non_tls_on_tls": 3, "unknown_sni": 2,
     "handshake_failure": 2, "protocol_mismatch": 3, "quic_retry_burst": 2,
-    "connection_burst": 1, "invalid_first_packet": 3,
-    "active_decoy_probe": 2, "auth_failure": 3,
+    "connection_burst": 2, "invalid_first_packet": 3,
+    "active_decoy_probe": 8, "auth_failure": 3,
 }
 
 SCORE_HALF_LIFE = 300.0
@@ -403,10 +403,19 @@ class AntiDPIPlugin(BasePlugin):
             if self._is_whitelisted(parsed_address, data):
                 return False
             scores = data.setdefault("scores", {})
-            entry = scores.setdefault(address, {"score": 0, "signals": [], "updated": 0})
+            entry = scores.setdefault(address, {"score": 0, "signals": [], "updated": 0, "last_unknown_sni_at": 0})
             timestamp = now if now is not None else time.time()
             previous = float(entry.get("score", 0))
             previous_at = float(entry.get("updated", timestamp) or timestamp)
+
+            # Consolidate parallel browser sockets for single page load (sub-0.5s window on pure unknown_sni)
+            last_unknown_sni = float(entry.get("last_unknown_sni_at", 0) or 0)
+            if set(signals) <= {"unknown_sni", "handshake_failure"}:
+                if timestamp - last_unknown_sni < 0.5:
+                    score = 0.0
+                else:
+                    entry["last_unknown_sni_at"] = timestamp
+
             entry["score"] = round(decayed_score(previous, timestamp - previous_at) + score, 4)
             entry["signals"] = list(dict.fromkeys(list(entry.get("signals", [])) + list(signals)))[-16:]
             entry["updated"] = timestamp
@@ -495,6 +504,13 @@ class AntiDPIPlugin(BasePlugin):
     def _is_whitelisted(address: ipaddress.IPv4Address | ipaddress.IPv6Address, data: dict) -> bool:
         if address.is_loopback or address.is_link_local:
             return True
+        try:
+            from hydra.core.state import load_state
+            server_ip = load_state().network.server_ip
+            if server_ip and address == ipaddress.ip_address(server_ip):
+                return True
+        except Exception:
+            pass
         networks = _get_whitelisted_networks(data.get("whitelist", []))
         for net in networks:
             if address in net:
