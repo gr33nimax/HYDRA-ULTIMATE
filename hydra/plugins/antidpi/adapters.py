@@ -38,7 +38,7 @@ def parse_protocol_line(service: str, line: str) -> tuple[str, dict] | None:
             ip = ipaddress.ip_address(raw_ip).compressed
         except ValueError:
             continue
-        return ip, {"protocol": owner, "kind": kind, "handshake_ok": False, "source": "journal"}
+        return ip, {"protocol": owner, "kind": kind, "source": "journal"}
     return None
 
 
@@ -57,5 +57,5 @@ def normalize_tls_auth_failure(record: dict) -> tuple[str, dict] | None:
     text = " ".join(str(record.get(k, "")) for k in ("msg", "error", "err", "reason")).lower()
     if any(token in text for token in ("auth_failure", "authentication failed", "invalid password", "unauthorized", "bad credentials")):
         proto = str(record.get("protocol", record.get("service", "tls"))).lower()
-        return ip, {"protocol": proto, "kind": "auth_failure", "handshake_ok": False, "source": "auth_log"}
+        return ip, {"protocol": proto, "kind": "auth_failure", "source": "auth_log"}
     return None

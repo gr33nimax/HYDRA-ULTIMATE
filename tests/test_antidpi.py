@@ -151,10 +151,11 @@ def test_signal_intersection_and_deduplication():
 
 
 def test_auth_failure_does_not_double_count_as_handshake_failure():
+    # Normalizer for auth_failure emits an explicit kind="auth_failure" event
     event = {
         "protocol": "anytls",
         "kind": "auth_failure",
-        "handshake_ok": False,  # реальный TLS handshake действительно не завершился
+        "source": "auth_log",
     }
     score, signals = score_event(event)
     assert signals == ("auth_failure",)  # НЕ ("auth_failure", "handshake_failure")

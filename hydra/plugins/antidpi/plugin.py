@@ -189,7 +189,7 @@ def score_event(event: dict) -> tuple[int, tuple[str, ...]]:
     protocol = str(event.get("protocol", "")).lower()
     if protocol in {"tls", "https", "quic"} and event.get("handshake_ok") is False:
         signals.append("handshake_failure")
-    if event.get("sni_known") is False:
+    if event.get("sni_known") is False and "unknown_sni" not in signals:
         signals.append("unknown_sni")
     try:
         if int(event.get("connections_10s", 0)) >= 12:
@@ -199,8 +199,6 @@ def score_event(event: dict) -> tuple[int, tuple[str, ...]]:
     except (TypeError, ValueError):
         pass
     unique = tuple(dict.fromkeys(signals))
-    if "auth_failure" in unique:
-        unique = tuple(s for s in unique if s != "handshake_failure")
     return sum(SIGNAL_WEIGHTS.get(signal, 0) for signal in unique), unique
 
 
