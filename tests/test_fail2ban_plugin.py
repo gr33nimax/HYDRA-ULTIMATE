@@ -115,10 +115,7 @@ def test_write_jails_with_whitelist():
 
 def test_only_filters_with_trustworthy_public_sources_are_generated():
     filters = Fail2banPlugin._filters()
-    assert set(filters) == {"hydra-awg", "hydra-portscan"}
-    assert "Unknown message from" in filters["hydra-awg"]
-    assert "Invalid MAC of handshake" in filters["hydra-awg"]
-    assert "tproxy" not in filters["hydra-awg"].lower()
+    assert set(filters) == {"hydra-portscan"}
 
 
 def test_tls_transport_jails_and_legacy_overrides_are_ignored():
@@ -138,7 +135,7 @@ def test_tls_transport_jails_and_legacy_overrides_are_ignored():
         "hydra-anytls", "hydra-trusttunnel",
         "hydra-trusttunnel-quic", "hydra-naive",
     } & set(jails))
-    assert set(jails) == {"hydra-sshd", "hydra-recidive", "hydra-portscan", "hydra-awg"}
+    assert set(jails) == {"hydra-sshd", "hydra-recidive", "hydra-portscan"}
 
 
 def test_invalid_generated_configuration_is_rolled_back(tmp_path):
@@ -228,7 +225,7 @@ def test_write_jails_removes_obsolete_tls_transport_files(tmp_path):
     }
 
 
-def test_awg_jail_covers_all_profile_ports():
+def test_awg_probe_detection_is_not_owned_by_fail2ban():
     p = Fail2banPlugin()
     state = _make_state()
     state.protocols["amneziawg"] = PluginState(
@@ -240,10 +237,7 @@ def test_awg_jail_covers_all_profile_ports():
         "hydra-awg": {"enabled": True},
     }
 
-    awg = p.jail_options(state)["hydra-awg"]
-    assert awg["enabled"] == "true"
-    assert awg["port"] == "51820,51821"
-    assert awg["banaction"] == "%(banaction_allports)s"
+    assert "hydra-awg" not in p.jail_options(state)
 
 
 def test_awg_dynamic_debug_is_enabled_and_persisted(tmp_path):

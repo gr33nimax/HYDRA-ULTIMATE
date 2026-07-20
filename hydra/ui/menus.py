@@ -703,6 +703,10 @@ def menu_plugin(state: AppState, p, app: ApplicationService | None = None):
         from hydra.plugins.honeypot.manager import menu_honeypot
         menu_honeypot(state, p)
         return
+    if p.meta.name == "antidpi":
+        from hydra.plugins.antidpi.manager import menu_antidpi
+        menu_antidpi(state, p)
+        return
     if p.meta.name == "warp":
         from hydra.plugins.warp.manager import menu_warp
         menu_warp(state, p)
@@ -2496,8 +2500,9 @@ def menu_security(state: AppState):
         p_f2b = get_plugin("fail2ban")
         p_hp = get_plugin("honeypot")
         p_ipb = get_plugin("ipban")
+        p_adpi = get_plugin("antidpi")
         
-        plugins_list = [p for p in [p_f2b, p_hp, p_ipb] if p is not None]
+        plugins_list = [p for p in [p_f2b, p_hp, p_ipb, p_adpi] if p is not None]
 
         for p in plugins_list:
             s = st.get(p.meta.name, {})
@@ -2520,7 +2525,7 @@ def menu_security(state: AppState):
         
         opts += [
             ("-", "", ""),
-            ("A", "✅ Включить всё", "Fail2ban + Honeypot + IPBan"),
+            ("A", "✅ Включить всё", "Fail2ban + Honeypot + IPBan + Anti-DPI"),
             ("B", "❌ Выключить всё", ""),
             ("0", "↩ Назад", "")
         ]

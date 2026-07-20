@@ -152,6 +152,7 @@ class SecurityConfig:
     fail2ban_enabled: bool = False
     honeypot_enabled: bool = False
     ipban_enabled: bool = False
+    antidpi_enabled: bool = False
 
 
 @dataclass

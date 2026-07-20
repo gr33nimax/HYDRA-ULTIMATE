@@ -122,12 +122,6 @@ class Fail2banPlugin(BasePlugin):
         # proxy are eligible. TLS transports behind Caddy deliberately rely on
         # strong generated credentials and probe-resistant decoy sites instead.
         return {
-            "hydra-awg": r"""[Definition]
-failregex = ^.*amneziawg:\s+awg[01]:\s+Unknown message from \[?<HOST>\]?:\d+ encountered, packet dropped\s*$
-            ^.*amneziawg:\s+awg[01]:\s+Invalid MAC of handshake, dropping packet from \[?<HOST>\]?:\d+\s*$
-            ^.*amneziawg:\s+awg[01]:\s+Invalid handshake (?:initiation|response) from \[?<HOST>\]?:\d+\s*$
-ignoreregex =
-""",
             "hydra-portscan": r"""[Definition]
 failregex = ^.*HYDRA-PORTSCAN.*SRC=<HOST>.*$
 ignoreregex =
@@ -169,8 +163,6 @@ ignoreregex =
         return ",".join(str(port) for port in sorted(ports))
 
     def jail_options(self, state: AppState | None) -> dict[str, dict[str, str]]:
-        awg = self._protocol_enabled(state, "amneziawg")
-
         jails: dict[str, dict[str, str]] = {
             "hydra-sshd": {
                 "enabled": "true",
@@ -197,18 +189,6 @@ ignoreregex =
                 "maxretry": "15", "findtime": "120", "bantime": "3600",
                 "banaction": "%(banaction_allports)s",
             },
-            "hydra-awg": {
-                # Hydra enables the module's ratelimited dynamic-debug events
-                # while this jail is active. These contain the public endpoint
-                # for rejected AWG handshakes before traffic reaches TProxy.
-                "enabled": "false",
-                "filter": "hydra-awg",
-                "backend": "systemd",
-                "journalmatch": "_TRANSPORT=kernel",
-                "port": self._awg_ports(state),
-                "maxretry": "4", "findtime": "300", "bantime": "3600",
-                "banaction": "%(banaction_allports)s",
-            },
         }
 
         if state is not None:
@@ -228,12 +208,6 @@ ignoreregex =
 
         # Manual overrides cannot activate a jail whose backing protocol is
         # disabled or whose required file is absent.
-        availability = {
-            "hydra-awg": awg,
-        }
-        for jail, available in availability.items():
-            if not available:
-                jails[jail]["enabled"] = "false"
         return jails
 
     @staticmethod
@@ -483,11 +457,7 @@ ignoreregex =
             was_running
             and self.jail_options(state)["hydra-portscan"]["enabled"] == "true"
         )
-        awg_enabled = (
-            was_running
-            and self.jail_options(state)["hydra-awg"]["enabled"] == "true"
-        )
-        applied = self._sync_awg_debug(awg_enabled)
+        applied = self._sync_awg_debug(False)
         if applied:
             applied = self._sync_portscan_rule(portscan_enabled)
             if not applied:
@@ -511,11 +481,7 @@ ignoreregex =
         if previous_jails is not marker:
             protocol.config["jails"] = previous_jails
         self._write_jails(state)
-        previous_awg_enabled = (
-            was_running
-            and self.jail_options(state)["hydra-awg"]["enabled"] == "true"
-        )
-        self._sync_awg_debug(previous_awg_enabled)
+        self._sync_awg_debug(False)
         if was_running:
             _run(["fail2ban-client", "reload"], timeout=20)
         return False
@@ -524,8 +490,7 @@ ignoreregex =
         if not self._installed() or not self._write_jails(state):
             return False
         options = self.jail_options(state)
-        awg_enabled = options["hydra-awg"]["enabled"] == "true"
-        if not self._sync_awg_debug(awg_enabled):
+        if not self._sync_awg_debug(False):
             return False
         portscan_enabled = options["hydra-portscan"]["enabled"] == "true"
         if not self._sync_portscan_rule(portscan_enabled):

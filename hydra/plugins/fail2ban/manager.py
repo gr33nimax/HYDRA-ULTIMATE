@@ -22,7 +22,7 @@ from hydra.ui.tui import (
 )
 
 _F2B_LOG = Path("/var/log/fail2ban.log")
-_PROTOCOL_JAILS = ["hydra-awg"]
+_PROTOCOL_JAILS: list[str] = []
 _SYSTEM_JAILS = ["hydra-sshd", "hydra-recidive", "hydra-portscan"]
 
 _BAN_LINE_RE = re.compile(

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — Anti-DPI security rework
+
+- Поведенческое обнаружение зондов вынесено из Fail2ban в отдельный плагин
+  `antidpi` с decay-score, whitelist, IPv4/IPv6 ipset и 24-часовым баном.
+- Caddy L4 пишет отдельную телеметрию, распознаёт активное сканирование decoy и
+  отбрасывает подтверждённые адреса первым `remote_ip`/`close` маршрутом.
+- Caddy собирается с `layer4.handlers.close` и проверяет модуль перед заменой
+  рабочего бинарника.
+- Добавлены journal-адаптеры AmneziaWG, Sing-Box, Hysteria2, Mieru, Snell и
+  Telemt; AWG jail удалён из Fail2ban.
+
 Все заметные изменения HYDRA собраны в этом файле. Даты указаны по календарю
 релиза; старые записи не переписываются задним числом.
 

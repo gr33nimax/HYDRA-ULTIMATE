@@ -17,6 +17,7 @@ from hydra.plugins.warp.plugin import WarpPlugin
 from hydra.plugins.fail2ban.plugin import Fail2banPlugin
 from hydra.plugins.honeypot.plugin import HoneypotPlugin
 from hydra.plugins.ipban.plugin import IPBanPlugin
+from hydra.plugins.antidpi.plugin import AntiDPIPlugin
 from hydra.plugins.shadowtls.plugin import ShadowTLSPlugin
 from hydra.plugins.hysteria2.plugin import Hysteria2Plugin
 from hydra.plugins.snell.plugin import SnellPlugin
@@ -42,6 +43,7 @@ _PLUGINS: list[BasePlugin] = [
     Fail2banPlugin(),
     HoneypotPlugin(),
     IPBanPlugin(),
+    AntiDPIPlugin(),
 ]
 
 # WDTT remains on its legacy manager-controlled lifecycle by explicit product

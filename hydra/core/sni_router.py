@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from hydra.core.state import AppState
 from hydra.core.host import HOST
+from hydra.plugins.antidpi.plugin import l4_deny_route, STATE_FILE as ANTIDPI_STATE_FILE
 
 CADDY_BIN = Path("/usr/local/bin/caddy-l4")
 CADDY_CFG = Path("/etc/caddy-l4/config.json")
@@ -417,6 +418,9 @@ def install(state: AppState | None = None, *, force: bool = False) -> bool:
     build_args = [
         xcaddy_bin, "build", "--with",
         f"github.com/mholt/caddy-l4@{CADDY_L4_VERSION}",
+        # Explicitly include the L4 close handler used by Anti-DPI's early
+        # deny route; older builds only included proxy/TLS modules.
+        "--with", f"github.com/mholt/caddy-l4/modules/l4close@{CADDY_L4_VERSION}",
     ]
     
     if need_naive_fp:
@@ -434,6 +438,7 @@ def install(state: AppState | None = None, *, force: bool = False) -> bool:
         build_args_fallback = [
             xcaddy_bin, "build",
             "--with", f"github.com/mholt/caddy-l4@{CADDY_L4_VERSION}",
+            "--with", f"github.com/mholt/caddy-l4/modules/l4close@{CADDY_L4_VERSION}",
             "--with", "github.com/caddyserver/forwardproxy@caddy2",
             "--output", str(pending_binary)
         ]
@@ -444,6 +449,7 @@ def install(state: AppState | None = None, *, force: bool = False) -> bool:
         r = HOST.run([
             xcaddy_bin, "build",
             "--with", f"github.com/mholt/caddy-l4@{CADDY_L4_VERSION}",
+            "--with", f"github.com/mholt/caddy-l4/modules/l4close@{CADDY_L4_VERSION}",
             "--output", str(pending_binary)
         ], capture_output=True, text=True, env=env)
 
@@ -455,7 +461,7 @@ def install(state: AppState | None = None, *, force: bool = False) -> bool:
         modules = HOST.run(
             [str(pending_binary), "list-modules"], capture_output=True, text=True,
         )
-        required = ["layer4.handlers.proxy"]
+        required = ["layer4.handlers.proxy", "layer4.handlers.close"]
         if need_naive_fp:
             required.append("http.handlers.forward_proxy")
         if modules.returncode != 0 or any(name not in modules.stdout for name in required):
@@ -718,6 +724,16 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                 },
                 "include": ["http.log.access.decoy"],
                 "level": "INFO"
+            },
+            # Keep L4 connection diagnostics separate so Anti-DPI can consume
+            # them without coupling its parser to Fail2ban's journal format.
+            "antidpi": {
+                "writer": {
+                    "output": "file",
+                    "filename": "/var/log/caddy-l4/antidpi.jsonl"
+                },
+                "include": ["layer4"],
+                "level": "INFO"
             }
         }
     }
@@ -739,6 +755,16 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
 
     # 3. Layer 4 app (TLS termination and routing)
     l4_routes = []
+    # Drop detector-confirmed probes before TLS parsing/SNI routing.  The
+    # route is optional and remains absent on hosts that have never enabled
+    # Anti-DPI, so existing deployments keep an unchanged Caddy config.
+    try:
+        antidpi_data = json.loads(ANTIDPI_STATE_FILE.read_text(encoding="utf-8"))
+        deny = l4_deny_route(list((antidpi_data.get("banned") or {}).keys()))
+        if deny:
+            l4_routes.append(deny)
+    except (OSError, ValueError, TypeError):
+        pass
     for b in backends:
         name = b["name"]
         domain = b["domain"]
