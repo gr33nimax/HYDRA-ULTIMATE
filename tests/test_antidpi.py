@@ -1,4 +1,7 @@
+from unittest.mock import MagicMock, patch
+
 from hydra.plugins.antidpi.plugin import (
+    AntiDPIPlugin,
     decayed_score,
     l4_deny_route,
     normalize_caddy_record,
@@ -49,3 +52,18 @@ def test_active_decoy_probe_is_evidence_but_normal_page_is_not():
     )
     request["uri"] = "/index.html"
     assert normalize_decoy_record({"request": request}) is None
+
+
+def test_firewall_rule_insert_has_a_valid_iptables_operation():
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return MagicMock(returncode=1 if "-C" in command else 0, stdout="", stderr="")
+
+    with patch("hydra.plugins.antidpi.plugin._run", side_effect=fake_run):
+        assert AntiDPIPlugin()._ensure_rules() is True
+
+    inserts = [command for command in calls if "-I" in command]
+    assert inserts[0][:4] == ["iptables", "-I", "INPUT", "1"]
+    assert inserts[1][:4] == ["ip6tables", "-I", "INPUT", "1"]

@@ -412,7 +412,7 @@ class AntiDPIPlugin(BasePlugin):
         for binary, name in (("iptables", SET_V4), ("ip6tables", SET_V6)):
             rule = [binary, "-C", "INPUT", "-m", "set", "--match-set", name, "src", "-m", "comment", "--comment", RULE_COMMENT, "-j", "DROP"]
             if _run(rule).returncode != 0:
-                add = _run([binary, *rule[2:]], text=True)
+                add = _run([binary, "-I", "INPUT", "1", *rule[3:]], text=True)
                 if add.returncode != 0:
                     self._fail(self._result_error(add, f"правило {binary} для {name}"))
                     ok = False
