@@ -7,12 +7,14 @@ hydra/services/telegram/bot.py — Telegram Admin Bot (System Info + Fail2ban & 
 """
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -45,14 +47,14 @@ def send_admin_notification(text: str, state: Optional[AppState] = None) -> bool
     try:
         if state is None:
             state = load_state()
-        token = getattr(state.telegram, "admin_token", "")
-        chat_id = getattr(state.telegram, "admin_chat_id", "")
+        token = getattr(state.telegram, "admin_token", "").strip()
+        chat_id = getattr(state.telegram, "admin_chat_id", "").strip()
         if not token or not chat_id:
             return False
 
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = json.dumps({
-            "chat_id": str(chat_id),
+            "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
@@ -66,7 +68,8 @@ def send_admin_notification(text: str, state: Optional[AppState] = None) -> bool
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status == 200
-    except Exception:
+    except Exception as e:
+        sys.stderr.write(f"[AdminBot Notification Error] {e}\n")
         return False
 
 
@@ -76,10 +79,10 @@ def send_admin_notification(text: str, state: Optional[AppState] = None) -> bool
 
 def get_system_info_text() -> str:
     """Сбор информации о ресурсах системы и Hydra-сервисах."""
-    hostname = socket.gethostname()
+    hostname = html.escape(socket.gethostname())
     try:
         state = load_state()
-        server_ip = state.network.server_ip or "N/A"
+        server_ip = html.escape(state.network.server_ip or "N/A")
     except Exception:
         server_ip = "N/A"
 
@@ -139,9 +142,9 @@ def get_system_info_text() -> str:
         for name, s in plugins.items():
             icon = "🟢" if s.get("running") else ("⚠️" if s.get("installed") else "🔴")
             port = f" (port {s['port']})" if s.get("port") else ""
-            services_lines.append(f"• {icon} <b>{name}</b>{port}")
+            services_lines.append(f"• {icon} <b>{html.escape(str(name))}</b>{html.escape(port)}")
     except Exception as e:
-        services_lines.append(f"Ошибка получения статуса: {e}")
+        services_lines.append(f"Ошибка получения статуса: {html.escape(str(e))}")
 
     services_block = "\n".join(services_lines) if services_lines else "Нет активных плагинов"
 
@@ -173,7 +176,7 @@ def get_antidpi_status_text() -> str:
             for ip, meta in banned.items():
                 score = meta.get("score", 0)
                 signals = ", ".join(meta.get("signals", []))
-                banned_ips.append(f"• <code>{ip}</code> (score: {score:.1f}, {signals})")
+                banned_ips.append(f"• <code>{html.escape(str(ip))}</code> (score: {score:.1f}, {html.escape(signals)})")
         except Exception:
             pass
 
@@ -191,7 +194,7 @@ def get_antidpi_status_text() -> str:
 
 
 def get_fail2ban_status_text() -> str:
-    """Получить статус Fail2ban и список актиных джейлов."""
+    """Получить статус Fail2ban и список активных джейлов."""
     from hydra.plugins.fail2ban.plugin import Fail2banPlugin
     plugin = Fail2banPlugin()
     status = plugin.status()
@@ -210,7 +213,7 @@ def get_fail2ban_status_text() -> str:
                     detail = HOST.run(["fail2ban-client", "status", jail], timeout=10, text=True)
                     curr = re.search(r"Currently banned:\s*(\d+)", detail.stdout)
                     count = curr.group(1) if curr else "0"
-                    jails_info.append(f"• <b>{jail}</b>: <code>{count} banned</code>")
+                    jails_info.append(f"• <b>{html.escape(jail)}</b>: <code>{count} banned</code>")
         except Exception:
             pass
 
@@ -228,25 +231,26 @@ def unban_ip_everywhere(ip: str) -> str:
     """Разблокировать IP адрес в AntiDPI и Fail2ban."""
     from hydra.plugins.antidpi.plugin import AntiDPIPlugin
     results = []
+    safe_ip = html.escape(str(ip).strip())
 
     # AntiDPI unban
     try:
         adpi_ok = AntiDPIPlugin().unban(ip)
         results.append(f"• AntiDPI: {'✅ Разблокирован' if adpi_ok else 'ℹ️ Не найден в бане'}")
     except Exception as e:
-        results.append(f"• AntiDPI: ❌ Ошибка ({e})")
+        results.append(f"• AntiDPI: ❌ Ошибка ({html.escape(str(e))})")
 
     # Fail2ban unban
     try:
         f2b_res = HOST.run(["fail2ban-client", "unban", ip], timeout=10, text=True)
         if f2b_res.returncode == 0:
-            results.append(f"• Fail2ban: ✅ Разблокирован ({f2b_res.stdout.strip()})")
+            results.append(f"• Fail2ban: ✅ Разблокирован ({html.escape(f2b_res.stdout.strip())})")
         else:
             results.append("• Fail2ban: ℹ️ Не найден в джейлах")
     except Exception as e:
-        results.append(f"• Fail2ban: ❌ Ошибка ({e})")
+        results.append(f"• Fail2ban: ❌ Ошибка ({html.escape(str(e))})")
 
-    return f"<b>🔓 Результат разблокировки IP <code>{ip}</code>:</b>\n\n" + "\n".join(results)
+    return f"<b>🔓 Результат разблокировки IP <code>{safe_ip}</code>:</b>\n\n" + "\n".join(results)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -256,9 +260,9 @@ def unban_ip_everywhere(ip: str) -> str:
 def _process_fail2ban_log_line(line: str) -> None:
     match = re.search(r"NOTICE\s+\[(?P<jail>[^\]]+)\]\s+(?P<action>Ban|Unban)\s+(?P<ip>\S+)", line)
     if match:
-        jail = match.group("jail")
+        jail = html.escape(match.group("jail"))
         action = match.group("action")
-        ip = match.group("ip")
+        ip = html.escape(match.group("ip"))
 
         if action == "Ban":
             msg = (
@@ -311,14 +315,18 @@ class AdminBot:
     def __init__(self, token: str, admin_chat_id: str):
         if not TELEGRAM_AVAILABLE:
             raise RuntimeError("python-telegram-bot не установлен")
-        self.token = token
-        self.admin_chat_id = int(admin_chat_id)
+        self.token = str(token or "").strip()
+        self.admin_chat_id = str(admin_chat_id or "").strip()
+        if not self.token:
+            raise ValueError("Admin Bot token пуст")
+        if not self.admin_chat_id:
+            raise ValueError("Admin Chat ID пуст")
         self.app: Optional[Application] = None
         self.stop_event = threading.Event()
         self.monitor_thread: Optional[threading.Thread] = None
 
     async def _check_admin(self, update: Update) -> bool:
-        if update.effective_user and update.effective_user.id == self.admin_chat_id:
+        if update.effective_user and str(update.effective_user.id).strip() == self.admin_chat_id:
             return True
         if update.message:
             await update.message.reply_text("Доступ запрещён.")
