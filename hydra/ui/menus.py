@@ -1735,7 +1735,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/bin/python3 -c "from hydra.services.telegram.bot import run_admin_bot; run_admin_bot('{state.telegram.admin_token}', '{state.telegram.admin_chat_id}')"
+ExecStart=/usr/bin/python3 -c "import sys; sys.path.insert(0, '/opt/hydra'); from hydra.services.telegram.bot import run_admin_bot; run_admin_bot('{state.telegram.admin_token}', '{state.telegram.admin_chat_id}')"
 Restart=always
 RestartSec=10
 [Install]
