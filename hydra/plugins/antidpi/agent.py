@@ -10,7 +10,7 @@ from pathlib import Path
 
 from hydra.core.host import HOST
 from hydra.core.sni_router import DECOY_LOG
-from hydra.plugins.antidpi.adapters import parse_protocol_line
+from hydra.plugins.antidpi.adapters import parse_protocol_line, normalize_tls_auth_failure
 from hydra.plugins.antidpi.plugin import (
     LOG_FILE,
     AntiDPIPlugin,
@@ -23,9 +23,9 @@ Normalized = tuple[str, dict]
 
 class JsonTail:
     """Polling JSONL tail that survives truncation and rename rotation."""
-    def __init__(self, path: Path, normalizer):
+    def __init__(self, path: Path, normalizers: tuple):
         self.path = path
-        self.normalizer = normalizer
+        self.normalizers = normalizers if isinstance(normalizers, (list, tuple)) else (normalizers,)
         self.handle = None
         self.inode = None
 
@@ -53,11 +53,17 @@ class JsonTail:
             if not line:
                 break
             try:
-                normalized = self.normalizer(json.loads(line))
+                record = json.loads(line)
             except (TypeError, ValueError):
-                normalized = None
-            if normalized:
-                result.append(normalized)
+                continue
+            for norm in self.normalizers:
+                try:
+                    normalized = norm(record)
+                except (TypeError, ValueError):
+                    normalized = None
+                if normalized:
+                    result.append(normalized)
+                    break
         return result
 
 
@@ -78,6 +84,8 @@ def _journal_worker(out: queue.Queue[Normalized], stop: threading.Event) -> None
             except ValueError:
                 continue
             event = parse_protocol_line(record.get("_SYSTEMD_UNIT", ""), record.get("MESSAGE", ""))
+            if not event:
+                event = normalize_tls_auth_failure(record)
             if event:
                 out.put(event)
         process.terminate()
@@ -91,7 +99,10 @@ def run() -> None:
     stop = threading.Event()
     worker = threading.Thread(target=_journal_worker, args=(events, stop), daemon=True)
     worker.start()
-    tails = (JsonTail(LOG_FILE, normalize_caddy_record), JsonTail(DECOY_LOG, normalize_decoy_record))
+    tails = (
+        JsonTail(LOG_FILE, (normalize_caddy_record, normalize_tls_auth_failure)),
+        JsonTail(DECOY_LOG, (normalize_decoy_record,)),
+    )
     try:
         while True:
             for tail in tails:

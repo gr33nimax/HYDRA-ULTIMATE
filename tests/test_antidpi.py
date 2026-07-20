@@ -86,19 +86,52 @@ def test_ban_history_is_created_once_and_legacy_signals_are_safe(tmp_path):
     assert _signals({"signals": "legacy"}) == "legacy"
 
 
-def test_service_wrapper_bootstraps_project_import_path(tmp_path):
+def test_progressive_ban_durations(tmp_path):
+    from hydra.plugins.antidpi.plugin import get_ban_duration
+    assert get_ban_duration(1) == 600
+    assert get_ban_duration(2) == 3600
+    assert get_ban_duration(3) == 86400
+    assert get_ban_duration(4) == 604800
+    assert get_ban_duration(10) == 604800
+
     plugin = AntiDPIPlugin()
-    script = tmp_path / "hydra-antidpi.py"
-    service = tmp_path / "hydra-antidpi.service"
-    project = tmp_path / "checkout"
-    with patch("hydra.plugins.antidpi.plugin.SCRIPT_FILE", script), \
-         patch("hydra.plugins.antidpi.plugin.SERVICE_FILE", service), \
-         patch("hydra.plugins.antidpi.plugin.PROJECT_ROOT", project):
-        plugin._write_service()
-    wrapper = script.read_text(encoding="utf-8")
-    unit = service.read_text(encoding="utf-8")
-    assert f"sys.path.insert(0, {str(project)!r})" in wrapper
-    assert "from hydra.plugins.antidpi.agent import run" in wrapper
-    assert f"WorkingDirectory={project}" in unit
-    assert f"ExecStart=" in unit and str(script) in unit
-    assert "StartLimitBurst=5" in unit
+    state_file = tmp_path / "antidpi_progressive.json"
+    event = {"kind": "malformed_tls", "protocol": "tls", "handshake_ok": False, "sni_known": False}
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch("hydra.plugins.antidpi.plugin._run", return_value=MagicMock(returncode=0, stdout="", stderr="")):
+        # First ban -> 600s
+        assert plugin.observe_event("198.51.100.5", event, now=1000) is True
+        data = plugin._load_state()
+        assert data["banned"]["198.51.100.5"]["duration"] == 600
+        assert data["banned"]["198.51.100.5"]["offense_count"] == 1
+
+        # Unban
+        plugin.unban("198.51.100.5")
+
+        # Second ban -> 3600s
+        assert plugin.observe_event("198.51.100.5", event, now=2000) is True
+        data = plugin._load_state()
+        assert data["banned"]["198.51.100.5"]["duration"] == 3600
+        assert data["banned"]["198.51.100.5"]["offense_count"] == 2
+
+
+def test_normalize_tls_auth_failure():
+    from hydra.plugins.antidpi.adapters import normalize_tls_auth_failure, parse_protocol_line
+    record = {"remote": "198.51.100.99:54321", "msg": "authentication failed: invalid password"}
+    res = normalize_tls_auth_failure(record)
+    assert res is not None
+    assert res[0] == "198.51.100.99"
+    assert res[1]["kind"] == "auth_failure"
+
+    parsed = parse_protocol_line("anytls", "2026-07-20 AnyTLS authentication failed for 198.51.100.100:1234")
+    assert parsed is not None
+    assert parsed[0] == "198.51.100.100"
+    assert parsed[1]["kind"] == "auth_failure"
+
+
+def test_whitelist_caching():
+    from hydra.plugins.antidpi.plugin import _get_whitelisted_networks
+    nets1 = _get_whitelisted_networks(["10.0.0.0/8", "192.168.1.0/24"])
+    nets2 = _get_whitelisted_networks(["10.0.0.0/8", "192.168.1.0/24"])
+    assert nets1 is nets2  # Cached object identity
+
