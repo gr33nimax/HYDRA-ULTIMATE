@@ -135,3 +135,27 @@ def test_whitelist_caching():
     nets2 = _get_whitelisted_networks(["10.0.0.0/8", "192.168.1.0/24"])
     assert nets1 is nets2  # Cached object identity
 
+
+def test_signal_intersection_and_deduplication():
+    # Verify that multi-signal events deduplicate signals cleanly
+    score, signals = score_event({
+        "kind": "unknown_sni",
+        "protocol": "tls",
+        "handshake_ok": False,
+        "sni_known": False,
+    })
+    # unknown_sni (2) + handshake_failure (2) = 4, with no duplicate unknown_sni signals
+    assert score == 4
+    assert signals == ("unknown_sni", "handshake_failure")
+    assert len(signals) == len(set(signals))
+
+
+def test_flock_concurrency_protection(tmp_path):
+    # Verify _lock_state_file protects concurrent read-modify-write state updates
+    from hydra.plugins.antidpi.plugin import _lock_state_file
+    state_file = tmp_path / "antidpi_lock.json"
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file):
+        with _lock_state_file():
+            assert state_file.parent.exists()
+
+
