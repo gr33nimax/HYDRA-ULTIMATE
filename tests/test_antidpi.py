@@ -264,6 +264,26 @@ def test_event_source_and_signal_counters_are_persisted(tmp_path):
     assert data["signal_counts"]["port_sweep"] == 1
 
 
+def test_ban_notifications_are_throttled_and_delivery_is_counted(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "antidpi_notifications.json"
+    result = MagicMock(returncode=0, stdout="", stderr="")
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch("hydra.plugins.antidpi.plugin._run", return_value=result), \
+         patch("hydra.services.telegram.bot.send_admin_notification", return_value=True) as notify:
+        assert plugin.observe_event(
+            "198.51.100.40", {"kind": "active_decoy_probe", "source": "test"}, now=1000,
+        ) is True
+        assert plugin.observe_event(
+            "198.51.100.41", {"kind": "active_decoy_probe", "source": "test"}, now=1001,
+        ) is True
+        data = plugin._load_state()
+
+    assert notify.call_count == 1
+    assert data["notification_stats"]["delivered"] == 1
+    assert data["suppressed_ban_notifications"] == 1
+
+
 
 def test_runtime_state_pruning_keeps_recent_entries_and_active_bans():
     data = {

@@ -47,6 +47,7 @@ BAN_THRESHOLD = 8
 BAN_DURATIONS = (600, 3600, 86400, 604800)  # 10m -> 1h -> 24h -> 7d
 LEGACY_BAN_DURATION = 86400
 ALERT_COOLDOWN = 300.0
+BAN_NOTIFICATION_COOLDOWN = 5.0
 SCORE_RETENTION = 86400.0
 MAX_SCORE_ENTRIES = 20000
 DEFAULT_TRUSTED_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
@@ -107,6 +108,19 @@ def get_ban_duration(offense_count: int) -> int:
     """Return ban duration in seconds based on progressive offense count."""
     idx = min(max(0, offense_count - 1), len(BAN_DURATIONS) - 1)
     return BAN_DURATIONS[idx]
+
+
+def _track_notification(data: dict, delivered: bool, *, now: float) -> None:
+    """Persist delivery telemetry without storing Telegram credentials."""
+    stats = data.setdefault("notification_stats", {})
+    if not isinstance(stats, dict):
+        stats = {}
+        data["notification_stats"] = stats
+    stats["attempted"] = int(stats.get("attempted", 0)) + 1
+    stats["last_attempt_at"] = now
+    key = "delivered" if delivered else "failed"
+    stats[key] = int(stats.get(key, 0)) + 1
+    stats[f"last_{key}_at"] = now
 
 
 def ban_duration(metadata: object) -> int:
@@ -627,21 +641,23 @@ class AntiDPIPlugin(BasePlugin):
             )
             if should_alert:
                 entry["last_alert_at"] = timestamp
+                delivered = False
                 try:
                     from hydra.services.telegram.bot import send_admin_notification
                     kind = html.escape(str(event.get("kind", event.get("reason", "anomaly"))))
                     proto = html.escape(str(event.get("protocol", "L4")))
                     sig_str = html.escape(", ".join(signals))
-                    send_admin_notification(
+                    delivered = bool(send_admin_notification(
                         f"🛡️ <b>AntiDPI Alert</b>\n"
                         f"<b>IP:</b> <code>{address}</code>\n"
                         f"<b>Protocol:</b> <code>{proto}</code> ({kind})\n"
                         f"<b>Signals:</b> <code>{sig_str}</code>\n"
                         f"<b>Score:</b> <code>{entry['score']:.1f} / {BAN_THRESHOLD}</code>",
                         category="antidpi",
-                    )
+                    ))
                 except Exception:
                     pass
+                _track_notification(data, delivered, now=timestamp)
 
             banned = active_ban or (entry["score"] >= BAN_THRESHOLD and ban_eligible)
             if banned:
@@ -668,20 +684,29 @@ class AntiDPIPlugin(BasePlugin):
                         history = []
                     history.append({"ip": address, **metadata, "status": "active"})
                     data["history"] = history[-1000:]
-                    try:
-                        from hydra.services.telegram.bot import send_admin_notification
-                        sig_str = html.escape(", ".join(str(value) for value in entry["signals"]))
-                        dur_str = f"{duration // 60}m" if duration < 3600 else (f"{duration // 3600}h" if duration < 86400 else f"{duration // 86400}d")
-                        send_admin_notification(
-                            f"🚨 <b>AntiDPI BAN</b>\n"
-                            f"<b>IP:</b> <code>{address}</code>\n"
-                            f"<b>Score:</b> <code>{entry['score']:.1f} / {BAN_THRESHOLD}</code>\n"
-                            f"<b>Signals:</b> <code>{sig_str}</code>\n"
-                            f"<b>Duration:</b> <code>{dur_str} (Offense #{offense_count})</code>",
-                            category="antidpi",
-                    )
-                    except Exception:
-                        pass
+                    last_notice = float(data.get("last_ban_notification_at", 0) or 0)
+                    if timestamp - last_notice >= BAN_NOTIFICATION_COOLDOWN:
+                        data["last_ban_notification_at"] = timestamp
+                        delivered = False
+                        try:
+                            from hydra.services.telegram.bot import send_admin_notification
+                            sig_str = html.escape(", ".join(str(value) for value in entry["signals"]))
+                            dur_str = f"{duration // 60}m" if duration < 3600 else (f"{duration // 3600}h" if duration < 86400 else f"{duration // 86400}d")
+                            delivered = bool(send_admin_notification(
+                                f"🚨 <b>AntiDPI BAN</b>\n"
+                                f"<b>IP:</b> <code>{address}</code>\n"
+                                f"<b>Score:</b> <code>{entry['score']:.1f} / {BAN_THRESHOLD}</code>\n"
+                                f"<b>Signals:</b> <code>{sig_str}</code>\n"
+                                f"<b>Duration:</b> <code>{dur_str} (Offense #{offense_count})</code>",
+                                category="antidpi",
+                            ))
+                        except Exception:
+                            pass
+                        _track_notification(data, delivered, now=timestamp)
+                    else:
+                        data["suppressed_ban_notifications"] = int(
+                            data.get("suppressed_ban_notifications", 0)
+                        ) + 1
                 else:
                     banned = False
             self._save_state(data)

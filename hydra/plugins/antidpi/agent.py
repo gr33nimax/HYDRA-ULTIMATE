@@ -95,14 +95,14 @@ class TextTail(JsonTail):
     def __init__(self, path: Path, service: str):
         super().__init__(path, ())
         self.service = service
-        self._read_from_start = not path.exists()
 
     def _open(self) -> None:
         # Protocol logs are owned by another service.  The hardened AntiDPI
-        # unit must never create or touch them; absence simply means no events.
+        # unit must never create, touch, or replay them. Honeypot already bans
+        # the first connection itself, so skipping a line during file creation
+        # is safer than replaying historical CONNECT records.
         self.handle = self.path.open("r", encoding="utf-8", errors="replace")
-        self.handle.seek(0 if self._read_from_start else 2)
-        self._read_from_start = False
+        self.handle.seek(0, 2)
         self.inode = self.path.stat().st_ino
 
     def read(self) -> list[Normalized]:
@@ -118,7 +118,6 @@ class TextTail(JsonTail):
                 self.handle = None
                 self._open()
         except FileNotFoundError:
-            self._read_from_start = True
             return []
         except OSError:
             return []

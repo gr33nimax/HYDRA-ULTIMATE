@@ -92,7 +92,9 @@ def send_admin_notification(
             return resp.status == 200
     except Exception as e:
         # HTTP exceptions may include the full Bot API URL, including the token.
-        sys.stderr.write(f"[AdminBot Notification Error] {type(e).__name__}\n")
+        status = getattr(e, "code", None)
+        suffix = f" status={status}" if status is not None else ""
+        sys.stderr.write(f"[AdminBot Notification Error] {type(e).__name__}{suffix}\n")
         return False
 
 
@@ -198,7 +200,14 @@ def get_antidpi_status_text() -> str:
             events_count = data.get("events", 0)
             source_counts = data.get("source_counts", {}) if isinstance(data.get("source_counts"), dict) else {}
             signal_counts = data.get("signal_counts", {}) if isinstance(data.get("signal_counts"), dict) else {}
-            for ip, meta in banned.items():
+            notification_stats = data.get("notification_stats", {}) if isinstance(data.get("notification_stats"), dict) else {}
+            suppressed_notices = int(data.get("suppressed_ban_notifications", 0) or 0)
+            ordered_bans = sorted(
+                banned.items(),
+                key=lambda item: float(item[1].get("at", 0) or 0),
+                reverse=True,
+            )
+            for ip, meta in ordered_bans:
                 try:
                     score = float(meta.get("score", 0))
                 except (TypeError, ValueError):
@@ -211,6 +220,8 @@ def get_antidpi_status_text() -> str:
 
     source_counts = locals().get("source_counts", {})
     signal_counts = locals().get("signal_counts", {})
+    notification_stats = locals().get("notification_stats", {})
+    suppressed_notices = locals().get("suppressed_notices", 0)
 
     def summarize(counter: dict) -> str:
         safe = []
@@ -224,6 +235,8 @@ def get_antidpi_status_text() -> str:
 
     sources_block = summarize(source_counts)
     signals_block = summarize(signal_counts)
+    delivered = int(notification_stats.get("delivered", 0) or 0)
+    failed = int(notification_stats.get("failed", 0) or 0)
     banned_block = "\n".join(banned_ips[:10]) if banned_ips else "<i>Нет заблокированных IP</i>"
     if len(banned_ips) > 10:
         banned_block += f"\n<i>...и ещё {len(banned_ips) - 10} IP</i>"
@@ -234,7 +247,9 @@ def get_antidpi_status_text() -> str:
         f"<b>Всего событий:</b> {events_count}\n"
         f"<b>Заблокировано IP:</b> {len(banned_ips)}\n"
         f"<b>Источники:</b> {sources_block}\n"
-        f"<b>Сигналы:</b> {signals_block}\n\n"
+        f"<b>Сигналы:</b> {signals_block}\n"
+        f"<b>Уведомления:</b> доставлено {delivered}, ошибок {failed}, "
+        f"сгруппировано {suppressed_notices}\n\n"
         f"<b>Заблокированные IP:</b>\n{banned_block}"
     )
 
@@ -472,7 +487,14 @@ def _antidpi_keyboard():
     rows = [[InlineKeyboardButton(action, callback_data="ask:antidpi_toggle")]]
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        addresses = list(active_bans(data))[:5]
+        banned = active_bans(data)
+        addresses = [
+            address for address, _metadata in sorted(
+                banned.items(),
+                key=lambda item: float(item[1].get("at", 0) or 0),
+                reverse=True,
+            )[:5]
+        ]
     except (OSError, ValueError, TypeError):
         addresses = []
     for address in addresses:

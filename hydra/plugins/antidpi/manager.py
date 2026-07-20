@@ -82,7 +82,12 @@ def _ban_history(plugin) -> None:
 
     if banned:
         lines.append(f"{RED}─── АКТИВНЫЕ БАНЫ ({len(banned)}) ───{DIM}")
-        for ip, meta in reversed(list(banned.items())):
+        ordered_bans = sorted(
+            banned.items(),
+            key=lambda item: float(item[1].get("at", 0) or 0),
+            reverse=True,
+        )
+        for ip, meta in ordered_bans[:30]:
             if not isinstance(meta, dict):
                 meta = {}
             score = meta.get("score", 0.0)
@@ -106,6 +111,9 @@ def _ban_history(plugin) -> None:
             lines.append(f"     {DIM}Время бана: {_time(at)}")
             for sig_line in _format_signal_lines(sig_list):
                 lines.append(f"     {DIM}{sig_line.strip()}")
+            lines.append("")
+        if len(ordered_bans) > 30:
+            lines.append(f"  {DIM}...и ещё {len(ordered_bans) - 30} активных IP{DIM}")
             lines.append("")
 
     if history:

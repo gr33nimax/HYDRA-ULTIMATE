@@ -14,9 +14,9 @@ def test_bounded_event_queue_does_not_block_and_keeps_recent_event():
 
 def test_text_tail_normalizes_new_honeypot_lines(tmp_path):
     log = tmp_path / "honeypot.log"
+    log.write_text("[2026-07-20] CONNECT 198.51.100.90:45500\n", encoding="utf-8")
     tail = TextTail(log, "honeypot")
     assert tail.read() == []
-    assert not log.exists()
     with log.open("a", encoding="utf-8") as handle:
         handle.write("[2026-07-20] CONNECT 198.51.100.91:45600\n")
     events = tail.read()
