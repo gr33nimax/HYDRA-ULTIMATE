@@ -4,12 +4,13 @@
 
 - Поведенческое обнаружение зондов вынесено из Fail2ban в отдельный плагин
   `antidpi` с decay-score, whitelist, IPv4/IPv6 ipset и 24-часовым баном.
-- Caddy L4 пишет отдельную телеметрию, распознаёт активное сканирование decoy и
-  отбрасывает подтверждённые адреса первым `remote_ip`/`close` маршрутом.
-- Caddy собирается с `layer4.handlers.close` и проверяет модуль перед заменой
-  рабочего бинарника.
-- Добавлены journal-адаптеры AmneziaWG, Sing-Box, Hysteria2, Mieru, Snell и
-  Telemt; AWG jail удалён из Fail2ban.
+- Caddy L4 пишет отдельную телеметрию и распознаёт активное сканирование decoy;
+  динамическое применение банов выполняется только firewall/ipset без stale Caddy snapshot.
+- Добавлена rate-limited kernel telemetry TCP SYN/UDP, multi-port корреляция и
+  защита от spoofed-SYN false positive.
+- Добавлены journal-адаптеры протоколов и Honeypot; jail `hydra-portscan` перенесён
+  из Fail2ban в AntiDPI и удаляется при миграции.
+- Telegram Admin Bot получил кнопочный Control Center и категорийные уведомления.
 
 Все заметные изменения HYDRA собраны в этом файле. Даты указаны по календарю
 релиза; старые записи не переписываются задним числом.

@@ -22,6 +22,10 @@ def test_app_state_defaults():
     assert state.protocols == {}
     assert state.users == []
     assert isinstance(state.telegram, TelegramConfig)
+    assert state.telegram.notifications_enabled is True
+    assert state.telegram.notify_antidpi is True
+    assert state.telegram.notify_fail2ban is True
+    assert state.telegram.notify_unbans is False
     assert isinstance(state.network, NetworkConfig)
     assert isinstance(state.security, SecurityConfig)
 

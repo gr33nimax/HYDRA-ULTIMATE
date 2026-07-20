@@ -150,17 +150,11 @@ def test_generate_config_two_backends():
     assert "local_address" not in anytls_proxy["upstreams"][0]
 
 
-def test_antidpi_bans_are_the_first_l4_route(tmp_path):
-    state_file = tmp_path / "antidpi.json"
-    state_file.write_text(json.dumps({"banned": {"203.0.113.8": {"score": 9}}}))
+def test_antidpi_bans_are_enforced_only_by_dynamic_firewall():
     backends = [{"name": "naive", "domain": "naive.com", "port": 10443, "cert_file": "", "key_file": ""}]
-    with patch("hydra.core.sni_router.ANTIDPI_STATE_FILE", state_file):
-        cfg = _generate_config(backends, _state(naive_enabled=True))
-    first = cfg["apps"]["layer4"]["servers"]["tls_mux"]["routes"][0]
-    assert first == {
-        "match": [{"remote_ip": {"ranges": ["203.0.113.8/32"]}}],
-        "handle": [{"handler": "close"}],
-    }
+    cfg = _generate_config(backends, _state(naive_enabled=True))
+    routes = cfg["apps"]["layer4"]["servers"]["tls_mux"]["routes"]
+    assert all("remote_ip" not in matcher for route in routes for matcher in route.get("match", []))
 
 
 def test_config_has_sni_rules():

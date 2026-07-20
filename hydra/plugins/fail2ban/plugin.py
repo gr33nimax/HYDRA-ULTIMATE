@@ -101,7 +101,7 @@ class Fail2banPlugin(BasePlugin):
         # activated later by apply(state), after their log sources exist.
         if not self._write_jails(None):
             return False
-        if not self._sync_portscan_rule(False):
+        if not self._remove_legacy_portscan_rule():
             return False
         enabled = _run(["systemctl", "enable", "--now", "fail2ban"])
         return enabled.returncode == 0 and self.status().running
@@ -109,7 +109,7 @@ class Fail2banPlugin(BasePlugin):
     def uninstall(self) -> bool:
         if not self._sync_awg_debug(False):
             return False
-        if not self._sync_portscan_rule(False):
+        if not self._remove_legacy_portscan_rule():
             return False
         _run(["systemctl", "disable", "--now", "fail2ban"])
         self._remove_owned_configuration()
@@ -121,12 +121,7 @@ class Fail2banPlugin(BasePlugin):
         # Only sources that expose the real public peer before a local reverse
         # proxy are eligible. TLS transports behind Caddy deliberately rely on
         # strong generated credentials and probe-resistant decoy sites instead.
-        return {
-            "hydra-portscan": r"""[Definition]
-failregex = ^.*HYDRA-PORTSCAN.*SRC=<HOST>.*$
-ignoreregex =
-""",
-        }
+        return {}
 
     @staticmethod
     def _protocol_enabled(state: AppState | None, name: str) -> bool:
@@ -178,15 +173,6 @@ ignoreregex =
                 "filter": "recidive",
                 "logpath": str(F2B_LOG),
                 "maxretry": "3", "findtime": "86400", "bantime": "604800",
-                "banaction": "%(banaction_allports)s",
-            },
-            "hydra-portscan": {
-                "enabled": "false",
-                "filter": "hydra-portscan",
-                "backend": "systemd",
-                "journalmatch": "_TRANSPORT=kernel",
-                "ignoreip": "127.0.0.0/8 ::1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 fc00::/7 fe80::/10",
-                "maxretry": "15", "findtime": "120", "bantime": "3600",
                 "banaction": "%(banaction_allports)s",
             },
         }
@@ -274,14 +260,14 @@ ignoreregex =
             for name in (
                 "hydra-anytls", "hydra-trusttunnel",
                 "hydra-trusttunnel-quic", "hydra-naive",
-                "hydra-singbox", "hydra-mieru",
+                "hydra-singbox", "hydra-mieru", "hydra-portscan",
             )
         ) + tuple(
             FILTER_DIR / f"{name}.conf"
             for name in (
                 "hydra-anytls", "hydra-trusttunnel",
                 "hydra-trusttunnel-quic", "hydra-naive",
-                "sing-box", "awg-invalid", "hydra-mieru",
+                "sing-box", "awg-invalid", "hydra-mieru", "hydra-portscan",
             )
         )
         backups: dict[Path, bytes | None] = {}
@@ -325,7 +311,7 @@ ignoreregex =
             if isinstance(overrides, dict):
                 for name in (
                     "hydra-anytls", "hydra-trusttunnel",
-                    "hydra-trusttunnel-quic", "hydra-naive",
+                    "hydra-trusttunnel-quic", "hydra-naive", "hydra-portscan",
                 ):
                     overrides.pop(name, None)
                 if not overrides:
@@ -414,24 +400,17 @@ ignoreregex =
         return True
 
     @staticmethod
-    def _sync_portscan_rule(enabled: bool) -> bool:
+    def _remove_legacy_portscan_rule() -> bool:
+        """Remove the pre-AntiDPI port-scan LOG rule during upgrades."""
         if shutil.which("iptables") is None:
-            return not enabled
+            return True
         check = _run(["iptables", "-C", "INPUT", *_PORTSCAN_RULE])
-        if enabled:
-            if check.returncode == 0:
-                return True
-            return _run(["iptables", "-I", "INPUT", "1", *_PORTSCAN_RULE]).returncode == 0
-        # Keep cleanup bounded if iptables reports a stale/unchanging rule
-        # forever (and to prevent a broken command wrapper from hanging CI).
         for _ in range(32):
             if check.returncode != 0:
                 return True
             if _run(["iptables", "-D", "INPUT", *_PORTSCAN_RULE]).returncode != 0:
                 return False
             check = _run(["iptables", "-C", "INPUT", *_PORTSCAN_RULE])
-        # A successful delete command is enough to consider cleanup complete;
-        # the bound prevents a broken/mock iptables probe from looping forever.
         return True
 
     def configure(self, state: AppState) -> ConfigFragment:
@@ -453,15 +432,11 @@ ignoreregex =
                 protocol.config["jails"] = previous_jails
             return False
 
-        portscan_enabled = (
-            was_running
-            and self.jail_options(state)["hydra-portscan"]["enabled"] == "true"
-        )
         applied = self._sync_awg_debug(False)
         if applied:
-            applied = self._sync_portscan_rule(portscan_enabled)
+            applied = self._remove_legacy_portscan_rule()
             if not applied:
-                self.last_error = "Не удалось синхронизировать правило portscan в iptables"
+                self.last_error = "Не удалось удалить устаревшее правило portscan из iptables"
         if applied and was_running:
             reload_result = _run(["fail2ban-client", "reload"], timeout=20)
             if reload_result.returncode != 0 or not self.status().running:
@@ -489,11 +464,11 @@ ignoreregex =
     def apply(self, state: AppState) -> bool:
         if not self._installed() or not self._write_jails(state):
             return False
-        options = self.jail_options(state)
         if not self._sync_awg_debug(False):
             return False
-        portscan_enabled = options["hydra-portscan"]["enabled"] == "true"
-        if not self._sync_portscan_rule(portscan_enabled):
+        # Port-scan telemetry belongs to AntiDPI. Keep this bounded cleanup for
+        # hosts upgraded from releases that installed the Fail2ban LOG rule.
+        if not self._remove_legacy_portscan_rule():
             return False
         reload_result = _run(["fail2ban-client", "reload"], timeout=20)
         if reload_result.returncode != 0 or not self.status().running:
@@ -576,7 +551,7 @@ ignoreregex =
     def on_disable(self, state: AppState) -> None:
         if not self._sync_awg_debug(False):
             raise RuntimeError("AmneziaWG dynamic debug could not be disabled")
-        if not self._sync_portscan_rule(False):
+        if not self._remove_legacy_portscan_rule():
             raise RuntimeError("Fail2ban port-scan log rule could not be removed")
         stopped = _run(["systemctl", "stop", "fail2ban"])
         if stopped.returncode != 0:

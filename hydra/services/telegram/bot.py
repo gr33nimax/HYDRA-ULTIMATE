@@ -7,7 +7,9 @@ hydra/services/telegram/bot.py — Telegram Admin Bot (System Info + Fail2ban & 
 """
 from __future__ import annotations
 
+import asyncio
 import html
+import ipaddress
 import json
 import os
 import re
@@ -22,13 +24,13 @@ from pathlib import Path
 from typing import Optional
 
 from hydra.core.host import HOST
-from hydra.core.state import AppState, load_state
+from hydra.core.state import AppState, load_state, update_state
 from hydra.plugins.registry import status_all
 
 try:
-    from telegram import Update
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
     from telegram.ext import (
-        Application, CommandHandler, ContextTypes,
+        Application, CallbackQueryHandler, CommandHandler, ContextTypes,
     )
     TELEGRAM_AVAILABLE = True
 except ImportError:
@@ -39,17 +41,36 @@ except ImportError:
 #  Уведомления Админа (Direct HTTP Dispatch)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def send_admin_notification(text: str, state: Optional[AppState] = None) -> bool:
-    """Отправка уведомления в Telegram админ-чат в реальном времени.
+_NOTIFICATION_FIELDS = {
+    "antidpi": "notify_antidpi",
+    "fail2ban": "notify_fail2ban",
+    "fail2ban_unban": "notify_unbans",
+    "system": "notify_system",
+}
 
-    Безопасный вызов напрямую из AntiDPI, Fail2ban, CLI или сервисов.
-    """
+
+def notification_allowed(state: AppState, category: str) -> bool:
+    telegram = state.telegram
+    if not getattr(telegram, "notifications_enabled", True):
+        return False
+    field = _NOTIFICATION_FIELDS.get(category, "notify_system")
+    return bool(getattr(telegram, field, True))
+
+
+def send_admin_notification(
+    text: str,
+    state: Optional[AppState] = None,
+    *,
+    category: str = "system",
+    force: bool = False,
+) -> bool:
+    """Send a categorized notification to the configured administrator."""
     try:
         if state is None:
             state = load_state()
         token = getattr(state.telegram, "admin_token", "").strip()
         chat_id = getattr(state.telegram, "admin_chat_id", "").strip()
-        if not token or not chat_id:
+        if not token or not chat_id or (not force and not notification_allowed(state, category)):
             return False
 
         url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -69,7 +90,8 @@ def send_admin_notification(text: str, state: Optional[AppState] = None) -> bool
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status == 200
     except Exception as e:
-        sys.stderr.write(f"[AdminBot Notification Error] {e}\n")
+        # HTTP exceptions may include the full Bot API URL, including the token.
+        sys.stderr.write(f"[AdminBot Notification Error] {type(e).__name__}\n")
         return False
 
 
@@ -161,7 +183,7 @@ def get_system_info_text() -> str:
 
 def get_antidpi_status_text() -> str:
     """Получить статус модуля AntiDPI и список заблокированных IP."""
-    from hydra.plugins.antidpi.plugin import AntiDPIPlugin, STATE_FILE
+    from hydra.plugins.antidpi.plugin import AntiDPIPlugin, STATE_FILE, active_bans
     plugin = AntiDPIPlugin()
     status = plugin.status()
     running_icon = "🟢 Активен" if status.running else ("⚠️ Установлен" if status.installed else "🔴 Отключен")
@@ -171,24 +193,47 @@ def get_antidpi_status_text() -> str:
     if STATE_FILE.exists():
         try:
             data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-            banned = data.get("banned", {})
+            banned = active_bans(data)
             events_count = data.get("events", 0)
+            source_counts = data.get("source_counts", {}) if isinstance(data.get("source_counts"), dict) else {}
+            signal_counts = data.get("signal_counts", {}) if isinstance(data.get("signal_counts"), dict) else {}
             for ip, meta in banned.items():
-                score = meta.get("score", 0)
-                signals = ", ".join(meta.get("signals", []))
+                try:
+                    score = float(meta.get("score", 0))
+                except (TypeError, ValueError):
+                    score = 0.0
+                raw_signals = meta.get("signals", [])
+                signals = ", ".join(str(value) for value in raw_signals) if isinstance(raw_signals, list) else str(raw_signals or "")
                 banned_ips.append(f"• <code>{html.escape(str(ip))}</code> (score: {score:.1f}, {html.escape(signals)})")
         except Exception:
             pass
 
-    banned_block = "\n".join(banned_ips[:25]) if banned_ips else "<i>Нет заблокированных IP</i>"
-    if len(banned_ips) > 25:
-        banned_block += f"\n<i>...и ещё {len(banned_ips) - 25} IP</i>"
+    source_counts = locals().get("source_counts", {})
+    signal_counts = locals().get("signal_counts", {})
+
+    def summarize(counter: dict) -> str:
+        safe = []
+        for name, value in counter.items():
+            try:
+                safe.append((str(name), int(value)))
+            except (TypeError, ValueError):
+                continue
+        safe.sort(key=lambda item: item[1], reverse=True)
+        return ", ".join(f"{html.escape(name)}: {value}" for name, value in safe[:5]) or "нет данных"
+
+    sources_block = summarize(source_counts)
+    signals_block = summarize(signal_counts)
+    banned_block = "\n".join(banned_ips[:10]) if banned_ips else "<i>Нет заблокированных IP</i>"
+    if len(banned_ips) > 10:
+        banned_block += f"\n<i>...и ещё {len(banned_ips) - 10} IP</i>"
 
     return (
         "<b>🛡️ AntiDPI Status</b>\n\n"
         f"<b>Статус:</b> {running_icon}\n"
         f"<b>Всего событий:</b> {events_count}\n"
-        f"<b>Заблокировано IP:</b> {len(banned_ips)}\n\n"
+        f"<b>Заблокировано IP:</b> {len(banned_ips)}\n"
+        f"<b>Источники:</b> {sources_block}\n"
+        f"<b>Сигналы:</b> {signals_block}\n\n"
         f"<b>Заблокированные IP:</b>\n{banned_block}"
     )
 
@@ -231,18 +276,30 @@ def unban_ip_everywhere(ip: str) -> str:
     """Разблокировать IP адрес в AntiDPI и Fail2ban."""
     from hydra.plugins.antidpi.plugin import AntiDPIPlugin
     results = []
-    safe_ip = html.escape(str(ip).strip())
+    try:
+        target_ip = ipaddress.ip_address(str(ip).strip().strip("[]")).compressed
+    except ValueError:
+        return "<b>❌ Некорректный IP-адрес.</b>"
+    safe_ip = html.escape(target_ip)
 
     # AntiDPI unban
     try:
-        adpi_ok = AntiDPIPlugin().unban(ip)
+        adpi_ok = AntiDPIPlugin().unban(target_ip)
         results.append(f"• AntiDPI: {'✅ Разблокирован' if adpi_ok else 'ℹ️ Не найден в бане'}")
     except Exception as e:
         results.append(f"• AntiDPI: ❌ Ошибка ({html.escape(str(e))})")
 
+    # Honeypot unban
+    try:
+        from hydra.plugins.honeypot.plugin import HoneypotPlugin
+        honeypot_ok = HoneypotPlugin().unban(target_ip)
+        results.append(f"• Honeypot: {'✅ Разблокирован' if honeypot_ok else 'ℹ️ Не найден в бане'}")
+    except Exception as e:
+        results.append(f"• Honeypot: ❌ Ошибка ({html.escape(str(e))})")
+
     # Fail2ban unban
     try:
-        f2b_res = HOST.run(["fail2ban-client", "unban", ip], timeout=10, text=True)
+        f2b_res = HOST.run(["fail2ban-client", "unban", target_ip], timeout=10, text=True)
         if f2b_res.returncode == 0:
             results.append(f"• Fail2ban: ✅ Разблокирован ({html.escape(f2b_res.stdout.strip())})")
         else:
@@ -276,23 +333,48 @@ def _process_fail2ban_log_line(line: str) -> None:
                 f"<b>Jail:</b> <code>{jail}</code>\n"
                 f"<b>IP:</b> <code>{ip}</code>"
             )
-        send_admin_notification(msg)
+        category = "fail2ban" if action == "Ban" else "fail2ban_unban"
+        send_admin_notification(msg, category=category)
 
 
 def _fail2ban_monitor_worker(stop_event: threading.Event) -> None:
     f2b_log = Path("/var/log/fail2ban.log")
     if f2b_log.exists():
+        handle = None
+        inode = None
         try:
-            with f2b_log.open("r", encoding="utf-8", errors="replace") as f:
-                f.seek(0, 2)
-                while not stop_event.is_set():
-                    line = f.readline()
-                    if not line:
-                        time.sleep(0.5)
+            while not stop_event.is_set():
+                if handle is None:
+                    try:
+                        handle = f2b_log.open("r", encoding="utf-8", errors="replace")
+                        handle.seek(0, 2)
+                        inode = f2b_log.stat().st_ino
+                    except OSError:
+                        if handle is not None:
+                            handle.close()
+                        handle = None
+                        stop_event.wait(0.5)
                         continue
+                try:
+                    stat = f2b_log.stat()
+                    if stat.st_ino != inode or stat.st_size < handle.tell():
+                        handle.close()
+                        handle = None
+                        continue
+                    line = handle.readline()
+                except OSError:
+                    handle.close()
+                    handle = None
+                    continue
+                if line:
                     _process_fail2ban_log_line(line)
+                else:
+                    stop_event.wait(0.5)
         except Exception:
             pass
+        finally:
+            if handle is not None:
+                handle.close()
     else:
         cmd = ["journalctl", "-u", "fail2ban", "-f", "-n", "0", "-o", "cat"]
         try:
@@ -311,6 +393,102 @@ def _fail2ban_monitor_worker(stop_event: threading.Event) -> None:
 #  Admin Bot implementation
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _notification_settings_text() -> str:
+    tg = load_state().telegram
+    mark = lambda value: "✅" if value else "❌"
+    return (
+        "<b>🔔 Настройки уведомлений</b>\n\n"
+        f"Все уведомления: {mark(getattr(tg, 'notifications_enabled', True))}\n"
+        f"AntiDPI: {mark(getattr(tg, 'notify_antidpi', True))}\n"
+        f"Fail2ban BAN: {mark(getattr(tg, 'notify_fail2ban', True))}\n"
+        f"События UNBAN: {mark(getattr(tg, 'notify_unbans', False))}\n"
+        f"Системные: {mark(getattr(tg, 'notify_system', True))}"
+    )
+
+
+def _toggle_notification(field: str) -> bool:
+    allowed = {
+        "notifications_enabled", "notify_antidpi", "notify_fail2ban",
+        "notify_unbans", "notify_system",
+    }
+    if field not in allowed:
+        raise ValueError("unknown notification setting")
+
+    def mutate(state: AppState) -> bool:
+        value = not bool(getattr(state.telegram, field, True))
+        setattr(state.telegram, field, value)
+        return value
+
+    _, value = update_state(mutate)
+    return value
+
+
+def _main_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🖥 Система", callback_data="view:system"),
+            InlineKeyboardButton("🛡 AntiDPI", callback_data="view:antidpi"),
+        ],
+        [
+            InlineKeyboardButton("🚫 Fail2ban", callback_data="view:fail2ban"),
+            InlineKeyboardButton("🔔 Уведомления", callback_data="view:notifications"),
+        ],
+        [InlineKeyboardButton("🔄 Обновить", callback_data="view:home")],
+    ])
+
+
+def _back_keyboard(*, refresh: str = "home", extra: list | None = None):
+    rows = list(extra or [])
+    rows.append([
+        InlineKeyboardButton("🔄 Обновить", callback_data=f"view:{refresh}"),
+        InlineKeyboardButton("⬅️ Меню", callback_data="view:home"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def _notification_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Все", callback_data="notify:notifications_enabled"),
+            InlineKeyboardButton("AntiDPI", callback_data="notify:notify_antidpi"),
+        ],
+        [
+            InlineKeyboardButton("Fail2ban", callback_data="notify:notify_fail2ban"),
+            InlineKeyboardButton("UNBAN", callback_data="notify:notify_unbans"),
+        ],
+        [
+            InlineKeyboardButton("Системные", callback_data="notify:notify_system"),
+            InlineKeyboardButton("⬅️ Меню", callback_data="view:home"),
+        ],
+    ])
+
+
+def _antidpi_keyboard():
+    from hydra.plugins.antidpi.plugin import AntiDPIPlugin, STATE_FILE, active_bans
+
+    status = AntiDPIPlugin().status()
+    action = "⏸ Остановить" if status.running else "▶️ Запустить"
+    rows = [[InlineKeyboardButton(action, callback_data="ask:antidpi_toggle")]]
+    try:
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        addresses = list(active_bans(data))[:5]
+    except (OSError, ValueError, TypeError):
+        addresses = []
+    for address in addresses:
+        rows.append([InlineKeyboardButton(f"🔓 {address}", callback_data=f"ask-unban:{address}")])
+    return _back_keyboard(refresh="antidpi", extra=rows)
+
+
+def _toggle_antidpi() -> tuple[bool, str]:
+    import hydra.core.orchestrator as orchestrator
+    from hydra.plugins.antidpi.plugin import AntiDPIPlugin
+
+    state = load_state()
+    running = AntiDPIPlugin().status().running
+    ok = orchestrator.disable(state, "antidpi") if running else orchestrator.enable(state, "antidpi")
+    return ok, "остановлен" if running else "запущен"
+
+
 class AdminBot:
     def __init__(self, token: str, admin_chat_id: str):
         if not TELEGRAM_AVAILABLE:
@@ -328,51 +506,129 @@ class AdminBot:
     async def _check_admin(self, update: Update) -> bool:
         if update.effective_user and str(update.effective_user.id).strip() == self.admin_chat_id:
             return True
-        if update.message:
-            await update.message.reply_text("Доступ запрещён.")
+        if update.callback_query:
+            await update.callback_query.answer("Доступ запрещён", show_alert=True)
+        elif update.effective_message:
+            await update.effective_message.reply_text("Доступ запрещён.")
         return False
+
+    async def _show(self, update: Update, text: str, keyboard=None) -> None:
+        if update.callback_query:
+            await update.callback_query.answer()
+            try:
+                await update.callback_query.edit_message_text(
+                    text, parse_mode="HTML", reply_markup=keyboard,
+                    disable_web_page_preview=True,
+                )
+                return
+            except Exception as exc:
+                if "message is not modified" in str(exc).lower():
+                    return
+        if update.effective_message:
+            await update.effective_message.reply_text(
+                text, parse_mode="HTML", reply_markup=keyboard,
+                disable_web_page_preview=True,
+            )
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await self._check_admin(update):
             return
-        await update.message.reply_text(
-            "<b>🛡️ HYDRA Admin Bot</b>\n\n"
-            "Доступные команды:\n"
-            "/system — Информация о системе и ресурсах\n"
-            "/antidpi — Статус AntiDPI и заблокированные IP\n"
-            "/fail2ban — Статус Fail2ban и джейлы\n"
-            "/unban &lt;ip&gt; — Разблокировать IP в AntiDPI и Fail2ban\n"
-            "/help — Справка по командам",
-            parse_mode="HTML",
+        await self._show(
+            update,
+            "<b>🛡️ HYDRA Control Center</b>\n\n"
+            "Управление защитой и мониторингом VPS. Выберите раздел:",
+            _main_keyboard(),
         )
 
     async def cmd_system(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await self._check_admin(update):
             return
-        msg = get_system_info_text()
-        await update.message.reply_text(msg, parse_mode="HTML")
+        msg = await asyncio.to_thread(get_system_info_text)
+        await self._show(update, msg, _back_keyboard(refresh="system"))
 
     async def cmd_antidpi(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await self._check_admin(update):
             return
-        msg = get_antidpi_status_text()
-        await update.message.reply_text(msg, parse_mode="HTML")
+        msg = await asyncio.to_thread(get_antidpi_status_text)
+        keyboard = await asyncio.to_thread(_antidpi_keyboard)
+        await self._show(update, msg, keyboard)
 
     async def cmd_fail2ban(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await self._check_admin(update):
             return
-        msg = get_fail2ban_status_text()
-        await update.message.reply_text(msg, parse_mode="HTML")
+        msg = await asyncio.to_thread(get_fail2ban_status_text)
+        await self._show(update, msg, _back_keyboard(refresh="fail2ban"))
+
+    async def cmd_notifications(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_admin(update):
+            return
+        msg = await asyncio.to_thread(_notification_settings_text)
+        await self._show(update, msg, _notification_keyboard())
 
     async def cmd_unban(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await self._check_admin(update):
             return
         if not context.args:
-            await update.message.reply_text("Использование: /unban <ip>")
+            await self._show(update, "Использование: <code>/unban &lt;ip&gt;</code>", _back_keyboard())
             return
-        target_ip = context.args[0].strip()
-        msg = unban_ip_everywhere(target_ip)
-        await update.message.reply_text(msg, parse_mode="HTML")
+        msg = await asyncio.to_thread(unban_ip_everywhere, context.args[0].strip())
+        await self._show(update, msg, _back_keyboard(refresh="antidpi"))
+
+    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_admin(update):
+            return
+        data = str(update.callback_query.data or "")
+        if data == "view:home":
+            await self.cmd_start(update, context)
+        elif data == "view:system":
+            await self.cmd_system(update, context)
+        elif data == "view:antidpi":
+            await self.cmd_antidpi(update, context)
+        elif data == "view:fail2ban":
+            await self.cmd_fail2ban(update, context)
+        elif data == "view:notifications":
+            await self.cmd_notifications(update, context)
+        elif data.startswith("notify:"):
+            field = data.split(":", 1)[1]
+            try:
+                await asyncio.to_thread(_toggle_notification, field)
+                msg = await asyncio.to_thread(_notification_settings_text)
+                await self._show(update, msg, _notification_keyboard())
+            except ValueError:
+                await update.callback_query.answer("Неизвестная настройка", show_alert=True)
+        elif data == "ask:antidpi_toggle":
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Подтвердить", callback_data="antidpi:toggle"),
+                InlineKeyboardButton("Отмена", callback_data="view:antidpi"),
+            ]])
+            await self._show(update, "Изменить состояние AntiDPI?", keyboard)
+        elif data.startswith("ask-unban:"):
+            address = data.split(":", 1)[1]
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Разбанить", callback_data=f"unban:{address}"),
+                InlineKeyboardButton("Отмена", callback_data="view:antidpi"),
+            ]])
+            await self._show(
+                update,
+                f"Снять блокировку с <code>{html.escape(address)}</code> во всех системах?",
+                keyboard,
+            )
+        elif data == "antidpi:toggle":
+            try:
+                ok, action = await asyncio.to_thread(_toggle_antidpi)
+                prefix = "✅" if ok else "❌"
+                status_text = await asyncio.to_thread(get_antidpi_status_text)
+                msg = f"{prefix} AntiDPI {action}.\n\n{status_text}"
+            except Exception as exc:
+                msg = f"❌ Не удалось изменить состояние AntiDPI: {html.escape(str(exc))}"
+            keyboard = await asyncio.to_thread(_antidpi_keyboard)
+            await self._show(update, msg, keyboard)
+        elif data.startswith("unban:"):
+            msg = await asyncio.to_thread(unban_ip_everywhere, data.split(":", 1)[1])
+            keyboard = await asyncio.to_thread(_antidpi_keyboard)
+            await self._show(update, msg, keyboard)
+        else:
+            await update.callback_query.answer("Неизвестное действие", show_alert=True)
 
     def run(self):
         self.stop_event.clear()
@@ -381,18 +637,21 @@ class AdminBot:
             args=(self.stop_event,),
             daemon=True,
         )
-        self.monitor_thread.start()
-
-        self.app = Application.builder().token(self.token).build()
-        self.app.add_handler(CommandHandler(["start", "help"], self.cmd_start))
-        self.app.add_handler(CommandHandler(["system", "status"], self.cmd_system))
-        self.app.add_handler(CommandHandler("antidpi", self.cmd_antidpi))
-        self.app.add_handler(CommandHandler("fail2ban", self.cmd_fail2ban))
-        self.app.add_handler(CommandHandler("unban", self.cmd_unban))
         try:
+            self.monitor_thread.start()
+            self.app = Application.builder().token(self.token).build()
+            self.app.add_handler(CommandHandler(["start", "help", "menu"], self.cmd_start))
+            self.app.add_handler(CommandHandler(["system", "status"], self.cmd_system))
+            self.app.add_handler(CommandHandler("antidpi", self.cmd_antidpi))
+            self.app.add_handler(CommandHandler("fail2ban", self.cmd_fail2ban))
+            self.app.add_handler(CommandHandler(["notifications", "notify"], self.cmd_notifications))
+            self.app.add_handler(CommandHandler("unban", self.cmd_unban))
+            self.app.add_handler(CallbackQueryHandler(self.handle_callback))
             self.app.run_polling()
         finally:
             self.stop_event.set()
+            if self.monitor_thread.is_alive():
+                self.monitor_thread.join(timeout=2)
 
 
 def run_admin_bot(token: str, admin_chat_id: str):

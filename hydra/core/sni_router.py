@@ -15,7 +15,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from hydra.core.state import AppState
 from hydra.core.host import HOST
-from hydra.plugins.antidpi.plugin import l4_deny_route, STATE_FILE as ANTIDPI_STATE_FILE
 
 CADDY_BIN = Path("/usr/local/bin/caddy-l4")
 CADDY_CFG = Path("/etc/caddy-l4/config.json")
@@ -755,16 +754,6 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
 
     # 3. Layer 4 app (TLS termination and routing)
     l4_routes = []
-    # Drop detector-confirmed probes before TLS parsing/SNI routing.  The
-    # route is optional and remains absent on hosts that have never enabled
-    # Anti-DPI, so existing deployments keep an unchanged Caddy config.
-    try:
-        antidpi_data = json.loads(ANTIDPI_STATE_FILE.read_text(encoding="utf-8"))
-        deny = l4_deny_route(list((antidpi_data.get("banned") or {}).keys()))
-        if deny:
-            l4_routes.append(deny)
-    except (OSError, ValueError, TypeError):
-        pass
     for b in backends:
         name = b["name"]
         domain = b["domain"]

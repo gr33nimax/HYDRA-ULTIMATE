@@ -8,8 +8,10 @@ malformed packet never causes a ban.
 # audit: allow-generated-runtime-subprocess
 from __future__ import annotations
 
+import html
 import ipaddress
 import json
+import os
 import subprocess
 import sys
 import time
@@ -27,6 +29,7 @@ AWG_DEBUG_SERVICE = Path("/etc/systemd/system/hydra-awg-antidpi-debug.service")
 AWG_DEBUG_PATHS = (Path("/sys/kernel/debug/dynamic_debug/control"), Path("/proc/dynamic_debug/control"))
 SET_V4, SET_V6 = "hydra_antidpi", "hydra_antidpi6"
 RULE_COMMENT = "hydra-antidpi"
+SCAN_RULE_COMMENT = "hydra-antidpi-scan"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 # Signals are protocol-independent.  A score is more robust than a single
@@ -35,12 +38,19 @@ SIGNAL_WEIGHTS = {
     "malformed_tls": 4, "non_tls_on_tls": 3, "unknown_sni": 2,
     "handshake_failure": 2, "protocol_mismatch": 3, "quic_retry_burst": 2,
     "connection_burst": 2, "invalid_first_packet": 3,
-    "active_decoy_probe": 8, "auth_failure": 3,
+    "active_decoy_probe": 8, "auth_failure": 3, "port_scan": 2,
+    "port_sweep": 6,
 }
 
 SCORE_HALF_LIFE = 300.0
 BAN_THRESHOLD = 8
 BAN_DURATIONS = (600, 3600, 86400, 604800)  # 10m -> 1h -> 24h -> 7d
+ALERT_COOLDOWN = 300.0
+SCORE_RETENTION = 86400.0
+MAX_SCORE_ENTRIES = 20000
+DEFAULT_TRUSTED_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7",
+))
 
 LOCK_FILE = STATE_FILE.with_suffix(".lock")
 
@@ -68,8 +78,8 @@ def _lock_state_file():
                         fcntl.flock(lock_fd, fcntl.LOCK_UN)
                     except OSError:
                         pass
-        except OSError:
-            yield
+        except OSError as exc:
+            raise RuntimeError(f"could not lock AntiDPI state: {exc}") from exc
     else:
         yield
 
@@ -96,6 +106,56 @@ def get_ban_duration(offense_count: int) -> int:
     """Return ban duration in seconds based on progressive offense count."""
     idx = min(max(0, offense_count - 1), len(BAN_DURATIONS) - 1)
     return BAN_DURATIONS[idx]
+
+
+def active_bans(data: dict, *, now: float | None = None) -> dict:
+    """Return only bans whose persisted timeout has not expired."""
+    banned = data.get("banned", {}) if isinstance(data, dict) else {}
+    if not isinstance(banned, dict):
+        return {}
+    timestamp = time.time() if now is None else now
+    result = {}
+    for address, metadata in banned.items():
+        if not isinstance(metadata, dict):
+            continue
+        try:
+            expires_at = float(metadata.get("at", 0)) + int(metadata.get("duration", 86400))
+        except (TypeError, ValueError):
+            continue
+        if timestamp < expires_at:
+            result[address] = metadata
+    return result
+
+
+
+def prune_runtime_state(data: dict, *, now: float | None = None) -> None:
+    """Bound per-address evidence while retaining active bans and recent scores."""
+    scores = data.get("scores", {})
+    if not isinstance(scores, dict):
+        data["scores"] = {}
+        return
+    timestamp = time.time() if now is None else now
+    active = set(active_bans(data, now=timestamp))
+    retained = {}
+    for address, metadata in scores.items():
+        if not isinstance(metadata, dict):
+            continue
+        try:
+            updated = float(metadata.get("updated", 0))
+        except (TypeError, ValueError):
+            continue
+        if address in active or timestamp - updated <= SCORE_RETENTION:
+            retained[address] = metadata
+    if len(retained) > MAX_SCORE_ENTRIES:
+        protected = {address: retained[address] for address in active if address in retained}
+        candidates = sorted(
+            ((address, metadata) for address, metadata in retained.items() if address not in protected),
+            key=lambda item: float(item[1].get("updated", 0)),
+            reverse=True,
+        )
+        available = max(0, MAX_SCORE_ENTRIES - len(protected))
+        retained = {**protected, **dict(candidates[:available])}
+    data["scores"] = retained
 
 
 def _remote_ip(value: object) -> str | None:
@@ -184,6 +244,7 @@ def score_event(event: dict) -> tuple[int, tuple[str, ...]]:
         "handshake_error": ("handshake_failure",), "handshake_failure": ("handshake_failure",),
         "protocol_mismatch": ("protocol_mismatch",), "invalid_first_packet": ("invalid_first_packet",),
         "active_decoy_probe": ("active_decoy_probe",), "auth_failure": ("auth_failure",),
+        "port_scan": ("port_scan",),
     }
     signals.extend(mapping.get(kind, ()))
     protocol = str(event.get("protocol", "")).lower()
@@ -192,6 +253,8 @@ def score_event(event: dict) -> tuple[int, tuple[str, ...]]:
     if event.get("sni_known") is False and "unknown_sni" not in signals:
         signals.append("unknown_sni")
     try:
+        if int(event.get("distinct_ports_60s", 0)) >= 4:
+            signals.append("port_sweep")
         if int(event.get("connections_10s", 0)) >= 12:
             signals.append("connection_burst")
         if protocol == "quic" and int(event.get("retries_10s", 0)) >= 6:
@@ -202,27 +265,34 @@ def score_event(event: dict) -> tuple[int, tuple[str, ...]]:
     return sum(SIGNAL_WEIGHTS.get(signal, 0) for signal in unique), unique
 
 
-def l4_deny_route(cidrs: list[str] | tuple[str, ...]) -> dict | None:
-    """Build a caddy-l4 early-drop route for currently banned CIDRs.
-
-    Note: Helper for generating caddy-l4 early-drop routes for active ipset bans.
-    """
-    valid = []
-    for raw in cidrs:
-        try:
-            valid.append(str(ipaddress.ip_network(raw, strict=False)))
-        except ValueError:
-            continue
-    if not valid:
-        return None
-    return {"match": [{"remote_ip": {"ranges": valid}}], "handle": [{"handler": "close"}]}
-
-
 def _run(command: list[str], *, text: bool = False, timeout: int = 20):
     try:
         return HOST.run(command, text=text, timeout=timeout)
     except Exception as exc:
         return subprocess.CompletedProcess(command, 1, stdout="" if text else b"", stderr=str(exc))
+
+
+def _scan_rule(binary: str, protocol: str) -> list[str]:
+    """Build a rate-limited LOG-only rule; the scorer decides whether to ban."""
+    version = "6" if binary == "ip6tables" else "4"
+    if protocol == "tcp":
+        transport = ["-p", "tcp", "--syn"]
+        threshold, burst, prefix = "120/minute", "60", "HYDRA_SCAN_TCP "
+    elif protocol == "udp":
+        transport = ["-p", "udp"]
+        threshold, burst, prefix = "300/minute", "150", "HYDRA_SCAN_UDP "
+    else:
+        raise ValueError(f"unsupported scan telemetry protocol: {protocol}")
+    return [
+        *transport,
+        "-m", "conntrack", "--ctstate", "NEW",
+        "-m", "hashlimit", "--hashlimit-above", threshold,
+        "--hashlimit-burst", burst, "--hashlimit-mode", "srcip",
+        "--hashlimit-name", f"hydra_adpi_{protocol}{version}",
+        "-m", "limit", "--limit", "30/minute", "--limit-burst", "20",
+        "-m", "comment", "--comment", SCAN_RULE_COMMENT,
+        "-j", "LOG", "--log-prefix", prefix, "--log-level", "4",
+    ]
 
 
 class AntiDPIPlugin(BasePlugin):
@@ -244,7 +314,7 @@ class AntiDPIPlugin(BasePlugin):
             missing = [name for name in self.meta.required_commands if HOST.which(name) is None]
         if missing:
             return self._fail("Не найдены команды: " + ", ".join(missing))
-        if not self._ensure_sets() or not self._ensure_rules():
+        if not self._ensure_sets() or not self._ensure_rules() or not self._ensure_scan_rules():
             return False
         if not self._restore_bans():
             return False
@@ -298,7 +368,8 @@ class AntiDPIPlugin(BasePlugin):
     def uninstall(self) -> bool:
         _run(["systemctl", "disable", "--now", "hydra-antidpi"])
         self._sync_awg_debug(False)
-        ok = self._remove_rules()
+        ok = self._remove_scan_rules()
+        ok = self._remove_rules() and ok
         for name in (SET_V4, SET_V6):
             _run(["ipset", "flush", name]); _run(["ipset", "destroy", name])
         for path in (SCRIPT_FILE, SERVICE_FILE, STATE_FILE):
@@ -363,16 +434,19 @@ class AntiDPIPlugin(BasePlugin):
         active = _run(["systemctl", "is-active", "hydra-antidpi"], text=True)
         running = active.returncode == 0 and str(active.stdout).strip() == "active"
         data = self._load_state()
-        return PluginStatus(installed=SCRIPT_FILE.exists() or SERVICE_FILE.exists(), enabled=running, running=running, info={"banned_ips": len(data.get("banned", {})), "events": data.get("events", 0), "last_error": self.last_error})
+        return PluginStatus(installed=SCRIPT_FILE.exists() or SERVICE_FILE.exists(), enabled=running, running=running, info={"banned_ips": len(active_bans(data)), "events": data.get("events", 0), "last_error": self.last_error})
 
     def healthcheck(self) -> HealthResult:
         status = self.status()
         sets_ok = all(_run(["ipset", "list", name]).returncode == 0 for name in (SET_V4, SET_V6))
         rules_ok = True
+        telemetry_ok = True
         for binary, name in (("iptables", SET_V4), ("ip6tables", SET_V6)):
             check = [binary, "-C", "INPUT", "-m", "set", "--match-set", name, "src", "-m", "comment", "--comment", RULE_COMMENT, "-j", "DROP"]
             rules_ok = _run(check).returncode == 0 and rules_ok
-        checks = {"service": status.running, "ipsets": sets_ok, "firewall": rules_ok}
+            for protocol in ("tcp", "udp"):
+                telemetry_ok = _run([binary, "-C", "INPUT", *_scan_rule(binary, protocol)]).returncode == 0 and telemetry_ok
+        checks = {"service": status.running, "ipsets": sets_ok, "firewall": rules_ok, "scan_telemetry": telemetry_ok}
         healthy = all(checks.values())
         return HealthResult(healthy, "" if healthy else "anti-DPI runtime is incomplete", "ok" if healthy else "error", checks)
 
@@ -383,6 +457,9 @@ class AntiDPIPlugin(BasePlugin):
     def on_disable(self, state: AppState) -> None:
         if _run(["systemctl", "disable", "--now", "hydra-antidpi"]).returncode != 0:
             raise RuntimeError("Anti-DPI service could not be stopped")
+        self._sync_awg_debug(False)
+        if not self._remove_scan_rules():
+            raise RuntimeError("Anti-DPI scan telemetry rules could not be removed")
 
     def observe_event(self, ip: str, event: dict, *, now: float | None = None) -> bool:
         """Record one normalized event; return True when the address is banned.
@@ -396,7 +473,7 @@ class AntiDPIPlugin(BasePlugin):
             address = parsed_address.compressed
         except ValueError:
             return False
-        score, signals = score_event(event)
+        event = dict(event) if isinstance(event, dict) else {}
 
         with _lock_state_file():
             data = self._load_state()
@@ -405,12 +482,38 @@ class AntiDPIPlugin(BasePlugin):
             scores = data.setdefault("scores", {})
             entry = scores.setdefault(address, {"score": 0, "signals": [], "updated": 0, "last_unknown_sni_at": 0})
             timestamp = now if now is not None else time.time()
+
+            source = str(event.get("source", "unknown"))[:80]
+            if source == "kernel-firewall":
+                try:
+                    destination_port = int(event.get("destination_port", 0))
+                except (TypeError, ValueError):
+                    destination_port = 0
+                recent_ports = entry.get("kernel_ports", {})
+                if not isinstance(recent_ports, dict):
+                    recent_ports = {}
+                recent_ports = {
+                    str(port): seen_at
+                    for port, seen_at in recent_ports.items()
+                    if isinstance(seen_at, (int, float)) and timestamp - float(seen_at) <= 60
+                }
+                if 1 <= destination_port <= 65535:
+                    recent_ports[str(destination_port)] = timestamp
+                entry["kernel_ports"] = dict(list(recent_ports.items())[-64:])
+                event["distinct_ports_60s"] = len(recent_ports)
+
+            score, signals = score_event(event)
+            if source != "kernel-firewall" and signals:
+                entry["last_non_kernel_evidence_at"] = timestamp
+            if "port_sweep" in signals:
+                entry["last_port_sweep_at"] = timestamp
+
             previous = float(entry.get("score", 0))
             previous_at = float(entry.get("updated", timestamp) or timestamp)
 
             # Consolidate parallel browser sockets for single page load (sub-0.5s window on pure unknown_sni)
             last_unknown_sni = float(entry.get("last_unknown_sni_at", 0) or 0)
-            if set(signals) <= {"unknown_sni", "handshake_failure"}:
+            if signals and set(signals) <= {"unknown_sni", "handshake_failure"}:
                 if timestamp - last_unknown_sni < 0.5:
                     score = 0.0
                 else:
@@ -420,33 +523,85 @@ class AntiDPIPlugin(BasePlugin):
             entry["signals"] = list(dict.fromkeys(list(entry.get("signals", [])) + list(signals)))[-16:]
             entry["updated"] = timestamp
             data["events"] = int(data.get("events", 0)) + 1
+            source_counts = data.setdefault("source_counts", {})
+            if not isinstance(source_counts, dict):
+                source_counts = {}
+                data["source_counts"] = source_counts
+            source_counts[source] = int(source_counts.get(source, 0)) + 1
+            signal_counts = data.setdefault("signal_counts", {})
+            if not isinstance(signal_counts, dict):
+                signal_counts = {}
+                data["signal_counts"] = signal_counts
+            for signal in signals:
+                signal_counts[signal] = int(signal_counts.get(signal, 0)) + 1
+            data["last_event_at"] = timestamp
+            data["last_event_source"] = source
+            if len(scores) > MAX_SCORE_ENTRIES or data["events"] % 256 == 0:
+                prune_runtime_state(data, now=timestamp)
 
-            if signals and (entry["score"] >= 6.0 or "active_decoy_probe" in signals):
+            banned_map = data.setdefault("banned", {})
+            if not isinstance(banned_map, dict):
+                banned_map = {}
+                data["banned"] = banned_map
+            active_metadata = banned_map.get(address)
+            active_ban = False
+            if isinstance(active_metadata, dict):
+                try:
+                    active_ban = timestamp < float(active_metadata.get("at", 0)) + int(active_metadata.get("duration", 0))
+                except (TypeError, ValueError):
+                    active_ban = False
+                if not active_ban:
+                    banned_map.pop(address, None)
+                    for item in reversed(data.get("history", [])):
+                        if isinstance(item, dict) and item.get("ip") == address and item.get("status") == "active":
+                            item["status"] = "expired"
+                            item["expired_at"] = timestamp
+                            break
+
+            last_non_kernel = float(entry.get("last_non_kernel_evidence_at", 0) or 0)
+            last_port_sweep = float(entry.get("last_port_sweep_at", 0) or 0)
+            ban_eligible = (
+                (last_non_kernel > 0 and timestamp - last_non_kernel <= SCORE_HALF_LIFE * 2)
+                or (last_port_sweep > 0 and timestamp - last_port_sweep <= SCORE_HALF_LIFE * 2)
+            )
+            last_alert_at = float(entry.get("last_alert_at", 0) or 0)
+            should_alert = (
+                not active_ban
+                and signals
+                and entry["score"] >= 6.0
+                and not (entry["score"] >= BAN_THRESHOLD and ban_eligible)
+                and timestamp - last_alert_at >= ALERT_COOLDOWN
+            )
+            if should_alert:
+                entry["last_alert_at"] = timestamp
                 try:
                     from hydra.services.telegram.bot import send_admin_notification
-                    kind = event.get("kind", event.get("reason", "anomaly"))
-                    proto = event.get("protocol", "L4")
-                    sig_str = ", ".join(signals)
+                    kind = html.escape(str(event.get("kind", event.get("reason", "anomaly"))))
+                    proto = html.escape(str(event.get("protocol", "L4")))
+                    sig_str = html.escape(", ".join(signals))
                     send_admin_notification(
                         f"🛡️ <b>AntiDPI Alert</b>\n"
                         f"<b>IP:</b> <code>{address}</code>\n"
                         f"<b>Protocol:</b> <code>{proto}</code> ({kind})\n"
                         f"<b>Signals:</b> <code>{sig_str}</code>\n"
-                        f"<b>Score:</b> <code>{entry['score']:.1f} / {BAN_THRESHOLD}</code>"
+                        f"<b>Score:</b> <code>{entry['score']:.1f} / {BAN_THRESHOLD}</code>",
+                        category="antidpi",
                     )
                 except Exception:
                     pass
 
-            banned = entry["score"] >= BAN_THRESHOLD
+            banned = active_ban or (entry["score"] >= BAN_THRESHOLD and ban_eligible)
             if banned:
+                if active_ban:
+                    self._save_state(data)
+                    return True
                 ban_counts = data.setdefault("ban_counts", {})
                 offense_count = int(ban_counts.get(address, 0)) + 1
-                ban_counts[address] = offense_count
                 duration = get_ban_duration(offense_count)
 
                 set_name = SET_V6 if parsed_address.version == 6 else SET_V4
                 if _run(["ipset", "add", set_name, address, "timeout", str(duration), "-exist"]).returncode == 0:
-                    was_banned = address in data.setdefault("banned", {})
+                    ban_counts[address] = offense_count
                     metadata = {
                         "at": entry["updated"],
                         "score": entry["score"],
@@ -454,24 +609,26 @@ class AntiDPIPlugin(BasePlugin):
                         "duration": duration,
                         "offense_count": offense_count,
                     }
-                    data["banned"][address] = metadata
-                    if not was_banned:
-                        history = data.setdefault("history", [])
-                        history.append({"ip": address, **metadata, "status": "active"})
-                        data["history"] = history[-1000:]
-                        try:
-                            from hydra.services.telegram.bot import send_admin_notification
-                            sig_str = ", ".join(entry["signals"])
-                            dur_str = f"{duration // 60}m" if duration < 3600 else (f"{duration // 3600}h" if duration < 86400 else f"{duration // 86400}d")
-                            send_admin_notification(
-                                f"🚨 <b>AntiDPI BAN</b>\n"
-                                f"<b>IP:</b> <code>{address}</code>\n"
-                                f"<b>Score:</b> <code>{entry['score']:.1f} / {BAN_THRESHOLD}</code>\n"
-                                f"<b>Signals:</b> <code>{sig_str}</code>\n"
-                                f"<b>Duration:</b> <code>{dur_str} (Offense #{offense_count})</code>"
-                            )
-                        except Exception:
-                            pass
+                    banned_map[address] = metadata
+                    history = data.setdefault("history", [])
+                    if not isinstance(history, list):
+                        history = []
+                    history.append({"ip": address, **metadata, "status": "active"})
+                    data["history"] = history[-1000:]
+                    try:
+                        from hydra.services.telegram.bot import send_admin_notification
+                        sig_str = html.escape(", ".join(str(value) for value in entry["signals"]))
+                        dur_str = f"{duration // 60}m" if duration < 3600 else (f"{duration // 3600}h" if duration < 86400 else f"{duration // 86400}d")
+                        send_admin_notification(
+                            f"🚨 <b>AntiDPI BAN</b>\n"
+                            f"<b>IP:</b> <code>{address}</code>\n"
+                            f"<b>Score:</b> <code>{entry['score']:.1f} / {BAN_THRESHOLD}</code>\n"
+                            f"<b>Signals:</b> <code>{sig_str}</code>\n"
+                            f"<b>Duration:</b> <code>{dur_str} (Offense #{offense_count})</code>",
+                            category="antidpi",
+                    )
+                    except Exception:
+                        pass
                 else:
                     banned = False
             self._save_state(data)
@@ -511,7 +668,7 @@ class AntiDPIPlugin(BasePlugin):
                 return True
         except Exception:
             pass
-        networks = _get_whitelisted_networks(data.get("whitelist", []))
+        networks = list(DEFAULT_TRUSTED_NETWORKS) + _get_whitelisted_networks(data.get("whitelist", []))
         for net in networks:
             if address in net:
                 return True
@@ -527,7 +684,11 @@ class AntiDPIPlugin(BasePlugin):
     def _save_state(self, data: dict) -> None:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         temporary = STATE_FILE.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.chmod(0o600)
         temporary.replace(STATE_FILE)
 
     def _ensure_sets(self) -> bool:
@@ -553,10 +714,39 @@ class AntiDPIPlugin(BasePlugin):
         ok = True
         for binary, name in (("iptables", SET_V4), ("ip6tables", SET_V6)):
             check = [binary, "-C", "INPUT", "-m", "set", "--match-set", name, "src", "-m", "comment", "--comment", RULE_COMMENT, "-j", "DROP"]
-            while _run(check).returncode == 0:
+            for _ in range(32):
+                if _run(check).returncode != 0:
+                    break
                 if _run([binary, "-D", *check[2:]]).returncode != 0:
                     ok = False
                     break
+        return ok
+
+    def _ensure_scan_rules(self) -> bool:
+        ok = True
+        for binary in ("iptables", "ip6tables"):
+            for protocol in ("tcp", "udp"):
+                spec = _scan_rule(binary, protocol)
+                if _run([binary, "-C", "INPUT", *spec]).returncode == 0:
+                    continue
+                result = _run([binary, "-I", "INPUT", "2", *spec], text=True)
+                if result.returncode != 0:
+                    self._fail(self._result_error(result, f"scan telemetry {binary}/{protocol}"))
+                    ok = False
+        return ok
+
+    def _remove_scan_rules(self) -> bool:
+        ok = True
+        for binary in ("iptables", "ip6tables"):
+            for protocol in ("tcp", "udp"):
+                spec = _scan_rule(binary, protocol)
+                check = [binary, "-C", "INPUT", *spec]
+                for _ in range(32):
+                    if _run(check).returncode != 0:
+                        break
+                    if _run([binary, "-D", "INPUT", *spec]).returncode != 0:
+                        ok = False
+                        break
         return ok
 
     def _write_service(self) -> None:
@@ -583,59 +773,19 @@ WorkingDirectory={PROJECT_ROOT}
 ExecStart={sys.executable} {SCRIPT_FILE}
 Restart=on-failure
 RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hydra /var/log/caddy-l4
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
 
 [Install]
 WantedBy=multi-user.target
 """, encoding="utf-8")
 
-
-_RUNTIME_SCRIPT = r'''#!/usr/bin/env python3
-import json, ipaddress, subprocess, time
-from collections import defaultdict
-from pathlib import Path
-LOG=Path("/var/log/caddy-l4/antidpi.jsonl"); STATE=Path("/var/lib/hydra/antidpi.json")
-WEIGHTS={"malformed_tls":4,"non_tls_on_tls":3,"unknown_sni":2,"handshake_failure":2,"protocol_mismatch":3,"quic_retry_burst":2,"connection_burst":1,"invalid_first_packet":3}
-scores=defaultdict(float); updated=defaultdict(float)
-HALF_LIFE=300.0
-def remote(value):
-    raw=str(value or "").strip()
-    if raw.startswith("[") and "]" in raw: raw=raw[1:raw.index("]")]
-    else:
-        try: return ipaddress.ip_address(raw).compressed
-        except ValueError: raw=raw.rsplit(":",1)[0]
-    try: return ipaddress.ip_address(raw).compressed
-    except ValueError: return ""
-def event_kind(e):
-    kind=str(e.get("kind",e.get("reason",""))).lower()
-    text=" ".join(str(e.get(k,"")) for k in ("msg","error","err")).lower()
-    if kind: return kind
-    if "no certificate" in text or "unknown sni" in text: return "unknown_sni"
-    if any(x in text for x in ("clienthello","malformed","record header","unexpected message")): return "malformed_tls"
-    if any(x in text for x in ("eof","handshake","tls alert")): return "handshake_failure"
-    return ""
-def ban(ip):
-    try: obj=ipaddress.ip_address(ip)
-    except ValueError: return
-    setname="hydra_antidpi6" if obj.version==6 else "hydra_antidpi"
-    subprocess.run(["ipset","add",setname,ip,"timeout","86400","-exist"],check=False)
-    data=json.loads(STATE.read_text()) if STATE.exists() else {"banned":{},"scores":{},"events":0}
-    data.setdefault("banned",{})[ip]={"at":time.time(),"reason":"behavioural-score","score":scores[ip]}; STATE.parent.mkdir(parents=True,exist_ok=True); STATE.write_text(json.dumps(data))
-def main():
-    LOG.parent.mkdir(parents=True,exist_ok=True); LOG.touch(); f=LOG.open("r",encoding="utf-8",errors="replace"); f.seek(0,2)
-    while True:
-        line=f.readline()
-        if not line:
-            time.sleep(0.25); continue
-        try: e=json.loads(line)
-        except ValueError: continue
-        ip=remote(e.get("remote_ip",e.get("remote",""))); kind=event_kind(e); w=WEIGHTS.get(kind,0)
-        if e.get("handshake_ok") is False: w+=2
-        if e.get("sni_known") is False: w+=2
-        if not ip: continue
-        now=time.time(); scores[ip]=scores[ip]*0.5**(max(0,now-updated[ip])/HALF_LIFE)+w; updated[ip]=now
-        if scores[ip]>=8: ban(ip)
-if __name__=="__main__": main()
-'''
 
 # Compatibility spelling for callers that derive plugin names mechanically.
 AntidpiPlugin = AntiDPIPlugin

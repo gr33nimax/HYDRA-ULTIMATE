@@ -70,7 +70,7 @@ def test_install_already_installed():
 def test_portscan_cleanup_is_bounded_when_rule_never_disappears():
     with patch("hydra.plugins.fail2ban.plugin.shutil.which", return_value="/usr/sbin/iptables"), \
          patch("hydra.plugins.fail2ban.plugin._run", return_value=MagicMock(returncode=0)) as run:
-        assert Fail2banPlugin._sync_portscan_rule(False) is True
+        assert Fail2banPlugin._remove_legacy_portscan_rule() is True
     # check + (delete, check) repeated at most 32 times.
     assert run.call_count == 1 + (32 * 2)
 
@@ -115,7 +115,7 @@ def test_write_jails_with_whitelist():
 
 def test_only_filters_with_trustworthy_public_sources_are_generated():
     filters = Fail2banPlugin._filters()
-    assert set(filters) == {"hydra-portscan"}
+    assert filters == {}
 
 
 def test_tls_transport_jails_and_legacy_overrides_are_ignored():
@@ -135,7 +135,7 @@ def test_tls_transport_jails_and_legacy_overrides_are_ignored():
         "hydra-anytls", "hydra-trusttunnel",
         "hydra-trusttunnel-quic", "hydra-naive",
     } & set(jails))
-    assert set(jails) == {"hydra-sshd", "hydra-recidive", "hydra-portscan"}
+    assert set(jails) == {"hydra-sshd", "hydra-recidive"}
 
 
 def test_invalid_generated_configuration_is_rolled_back(tmp_path):
@@ -169,12 +169,14 @@ def test_current_ssh_client_is_persisted_in_whitelist():
     assert state.protocols["fail2ban"].config["whitelist"] == ["203.0.113.7"]
 
 
-def test_portscan_rule_is_idempotent():
+def test_legacy_portscan_rule_is_cleanup_only():
     with patch("shutil.which", return_value="/usr/sbin/iptables"), \
-         patch("hydra.plugins.fail2ban.plugin._run", return_value=MagicMock(returncode=0)) as run:
-        assert Fail2banPlugin._sync_portscan_rule(True) is True
-    assert run.call_count == 1
-    assert "-C" in run.call_args.args[0]
+         patch("hydra.plugins.fail2ban.plugin._run", side_effect=[
+             MagicMock(returncode=0), MagicMock(returncode=0), MagicMock(returncode=1),
+         ]) as run:
+        assert Fail2banPlugin._remove_legacy_portscan_rule() is True
+    assert "-D" in run.call_args_list[1].args[0]
+    assert all("-I" not in call.args[0] for call in run.call_args_list)
 
 
 def test_restore_defaults_keeps_stopped_service_stopped():
@@ -187,12 +189,12 @@ def test_restore_defaults_keeps_stopped_service_stopped():
     with patch.object(Fail2banPlugin, "_installed", return_value=True), \
          patch.object(Fail2banPlugin, "status", return_value=MagicMock(running=False)), \
          patch.object(Fail2banPlugin, "_write_jails", return_value=True), \
-         patch.object(Fail2banPlugin, "_sync_portscan_rule", return_value=True) as sync, \
+         patch.object(Fail2banPlugin, "_remove_legacy_portscan_rule", return_value=True) as sync, \
          patch("hydra.plugins.fail2ban.plugin._run") as run:
         assert p.restore_defaults(state) is True
 
     assert "jails" not in state.protocols["fail2ban"].config
-    sync.assert_called_once_with(False)
+    sync.assert_called_once_with()
     run.assert_not_called()
 
 

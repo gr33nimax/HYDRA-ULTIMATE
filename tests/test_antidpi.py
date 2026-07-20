@@ -2,8 +2,10 @@ from unittest.mock import MagicMock, patch
 
 from hydra.plugins.antidpi.plugin import (
     AntiDPIPlugin,
+    active_bans,
+    _scan_rule,
     decayed_score,
-    l4_deny_route,
+    prune_runtime_state,
     normalize_caddy_record,
     normalize_decoy_record,
     score_event,
@@ -24,12 +26,6 @@ def test_probe_combination_scores_above_ban_threshold():
     })
     assert score >= 8
     assert {"malformed_tls", "unknown_sni", "handshake_failure", "connection_burst"} <= set(signals)
-
-
-def test_l4_deny_route_normalizes_only_valid_networks():
-    route = l4_deny_route(["203.0.113.7", "2001:db8::/32", "not-an-ip"])
-    assert route["match"][0]["remote_ip"]["ranges"] == ["203.0.113.7/32", "2001:db8::/32"]
-    assert l4_deny_route([]) is None
 
 
 def test_caddy_error_is_normalized_to_an_ip_event():
@@ -80,6 +76,8 @@ def test_ban_history_is_created_once_and_legacy_signals_are_safe(tmp_path):
         data = plugin._load_state()
     assert len(data["history"]) == 1
     assert data["history"][0]["ip"] == "203.0.113.20"
+    assert data["ban_counts"]["203.0.113.20"] == 1
+    assert data["banned"]["203.0.113.20"]["duration"] == 600
 
     from hydra.plugins.antidpi.manager import _signals
     assert _signals({"signals": None}) == "—"
@@ -122,6 +120,10 @@ def test_normalize_tls_auth_failure():
     assert res is not None
     assert res[0] == "198.51.100.99"
     assert res[1]["kind"] == "auth_failure"
+
+    ipv6 = normalize_tls_auth_failure({"remote": "[2001:db8::99]:54321", "msg": "authentication failed"})
+    assert ipv6 is not None
+    assert ipv6[0] == "2001:db8::99"
 
     parsed = parse_protocol_line("anytls", "2026-07-20 AnyTLS authentication failed for 198.51.100.100:1234")
     assert parsed is not None
@@ -171,3 +173,90 @@ def test_flock_concurrency_protection(tmp_path):
             assert state_file.parent.exists()
 
 
+
+
+def test_empty_signal_does_not_suppress_following_unknown_sni(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "antidpi_empty_signal.json"
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file):
+        assert plugin.observe_event("198.51.100.30", {"kind": "ignored"}, now=1000) is False
+        assert plugin.observe_event(
+            "198.51.100.30",
+            {"kind": "unknown_sni", "protocol": "tls", "handshake_ok": False, "sni_known": False},
+            now=1000.1,
+        ) is False
+        assert plugin._load_state()["scores"]["198.51.100.30"]["score"] == 4
+
+
+def test_active_bans_filters_expired_and_malformed_entries():
+    data = {
+        "banned": {
+            "198.51.100.1": {"at": 1000, "duration": 600},
+            "198.51.100.2": {"at": 1000, "duration": 10},
+            "invalid": None,
+        }
+    }
+    assert list(active_bans(data, now=1100)) == ["198.51.100.1"]
+
+
+def test_scan_telemetry_rules_are_log_only_and_rate_limited():
+    for binary in ("iptables", "ip6tables"):
+        for protocol in ("tcp", "udp"):
+            rule = _scan_rule(binary, protocol)
+            assert "LOG" in rule
+            assert "DROP" not in rule
+            assert "--hashlimit-above" in rule
+            assert "hydra-antidpi-scan" in rule
+
+
+def test_correlated_multi_port_scan_is_high_confidence_signal():
+    score, signals = score_event({
+        "kind": "port_scan",
+        "protocol": "tcp",
+        "source": "kernel-firewall",
+        "connections_10s": 12,
+        "distinct_ports_60s": 4,
+    })
+    assert score >= 8
+    assert {"port_scan", "connection_burst"} <= set(signals)
+
+
+def test_event_source_and_signal_counters_are_persisted(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "antidpi_sources.json"
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch("hydra.plugins.antidpi.plugin._run", return_value=MagicMock(returncode=0, stdout="", stderr="")):
+        results = []
+        for offset, port in enumerate((22, 80, 443, 3389)):
+            results.append(plugin.observe_event(
+                "198.51.100.44",
+                {
+                    "kind": "port_scan",
+                    "protocol": "tcp",
+                    "source": "kernel-firewall",
+                    "connections_10s": 12,
+                    "destination_port": port,
+                },
+                now=1000 + offset,
+            ))
+        data = plugin._load_state()
+    assert results == [False, False, False, True]
+    assert data["source_counts"]["kernel-firewall"] == 4
+    assert data["signal_counts"]["port_scan"] == 4
+    assert data["signal_counts"]["port_sweep"] == 1
+
+
+
+def test_runtime_state_pruning_keeps_recent_entries_and_active_bans():
+    data = {
+        "banned": {"198.51.100.9": {"at": 900, "duration": 1000}},
+        "scores": {
+            "198.51.100.1": {"updated": 999},
+            "198.51.100.2": {"updated": 998},
+            "198.51.100.3": {"updated": 1},
+            "198.51.100.9": {"updated": 1},
+        },
+    }
+    with patch("hydra.plugins.antidpi.plugin.MAX_SCORE_ENTRIES", 3):
+        prune_runtime_state(data, now=1000)
+    assert set(data["scores"]) == {"198.51.100.1", "198.51.100.2", "198.51.100.9"}

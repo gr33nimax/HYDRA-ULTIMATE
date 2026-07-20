@@ -7,6 +7,7 @@ from datetime import datetime
 import hydra.core.orchestrator as orchestrator
 from hydra.core.host import HOST
 from hydra.core.state import AppState
+from hydra.plugins.antidpi.plugin import _lock_state_file, active_bans
 from hydra.ui.tui import CYAN, DIM, GREEN, RED, clear, menu, panel, prompt, success, warn
 
 
@@ -47,6 +48,9 @@ def _format_dur(sec: float | int) -> str:
         return f"{s // 60}м"
     if s < 86400:
         return f"{s // 3600}ч"
+    return f"{s // 86400}д"
+
+
 def _format_signal_lines(signals: list[str], max_len: int = 45) -> list[str]:
     if not signals:
         return ["Сигналы: —"]
@@ -67,7 +71,7 @@ def _format_signal_lines(signals: list[str], max_len: int = 45) -> list[str]:
 def _ban_history(plugin) -> None:
     import time
     data = plugin._load_state()
-    banned = data.get("banned", {}) if isinstance(data.get("banned"), dict) else {}
+    banned = active_bans(data)
     history = data.get("history", []) if isinstance(data.get("history"), list) else []
     now = time.time()
     clear()
@@ -164,16 +168,24 @@ def _whitelist(plugin) -> None:
             prompt("Enter")
             continue
         if choice == "1":
-            if network not in values:
-                values.append(network)
-                data["whitelist"] = values
-                plugin._save_state(data)
+            with _lock_state_file():
+                data = plugin._load_state()
+                values = data.get("whitelist", []) if isinstance(data.get("whitelist"), list) else []
+                if network not in values:
+                    values.append(network)
+                    data["whitelist"] = values
+                    plugin._save_state(data)
             success("Добавлено в whitelist")
         elif choice == "2":
-            if network in values:
-                values.remove(network)
-                data["whitelist"] = values
-                plugin._save_state(data)
+            with _lock_state_file():
+                data = plugin._load_state()
+                values = data.get("whitelist", []) if isinstance(data.get("whitelist"), list) else []
+                found = network in values
+                if found:
+                    values.remove(network)
+                    data["whitelist"] = values
+                    plugin._save_state(data)
+            if found:
                 success("Удалено из whitelist")
             else:
                 warn("Запись не найдена")
@@ -194,7 +206,7 @@ def menu_antidpi(state: AppState, plugin) -> None:
     while True:
         status = plugin.status()
         data = plugin._load_state()
-        banned = data.get("banned", {}) if isinstance(data.get("banned"), dict) else {}
+        banned = active_bans(data)
         whitelist = data.get("whitelist", []) if isinstance(data.get("whitelist"), list) else []
         health = plugin.health_result()
         clear()

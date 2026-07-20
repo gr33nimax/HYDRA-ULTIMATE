@@ -1,54 +1,75 @@
 # Анти-DPI модуль
 
-Анти-DPI отделён от Fail2ban: Fail2ban остаётся журналным механизмом для
-аутентификационных ошибок (SSH/AWG), а `antidpi` анализирует поведение на L4 и
-использует собственные ipset `hydra_antidpi{,6}`.
+AntiDPI — отдельный поведенческий контур. Fail2ban отвечает за SSH и
+аутентификационные журналы, Honeypot — за ловушку на выделенном порту, а
+AntiDPI коррелирует сетевые и протокольные признаки и применяет временные
+блокировки через динамические IPv4/IPv6 ipset.
 
-## Что фиксируется
+## Поток обработки
 
-Сигналы намеренно слабые по отдельности и объединяются score-моделью:
+```text
+Caddy JSONL ─┐
+journald ────┼─> adapters -> normalized event -> score/decay/correlation
+kernel LOG ─┘                                      |
+                                                    v
+                                     whitelist -> ipset -> INPUT DROP
+                                                    |
+                                                    v
+                                      state/history/Telegram
+```
 
-- некорректный TLS ClientHello/первый пакет и protocol mismatch;
-- не-TLS данные на TLS-маршруте;
-- неизвестный SNI;
-- повторные ошибки рукопожатия;
-- burst TCP-подключений и QUIC retry-бурст;
-- аналогичные события от UDP/TCP адаптеров (поле `kind` нормализуется).
+Firewall ipset является единственным источником enforcement. В Caddy не
+встраивается статический список адресов: он устаревал бы без reload и мог бы
+удерживать IP после завершения таймаута.
 
-Один сбой не банит адрес. Порог по умолчанию — 8 баллов. Score имеет
-экспоненциальный half-life 5 минут, бан сохраняется на 24 часа и
-восстанавливается после перезапуска. Поддерживается IPv4/IPv6 whitelist.
+## Источники
 
-## Матрица покрытия
-
-| Поверхность | Источник | Подтверждённые сигналы |
+| Поверхность | Источник | Сигналы |
 |---|---|---|
-| Caddy L4 TCP/443 | JSON logger `layer4` | unknown SNI/certificate, malformed ClientHello, TLS handshake/EOF |
-| HTTP(S) decoy | Caddy access JSON | CONNECT/TRACE и активный поиск `.env`, WordPress, CGI, actuator |
-| AmneziaWG | kernel dynamic-debug journal | invalid MAC, invalid/unknown handshake |
-| Sing-Box transports | `sing-box.service` journal | handshake/protocol/authentication failures с публичным peer IP |
-| Hysteria2/QUIC | service journal | invalid packet/QUIC handshake с публичным peer IP |
-| Mieru/Snell/Telemt | service journal | доступные implementation-specific handshake failures |
+| TCP/443 и Caddy L4 | JSON logger `layer4` | unknown SNI, malformed ClientHello, handshake failure |
+| HTTPS decoy | Caddy access JSON | CONNECT/TRACE, поиск `.env`, WordPress, CGI, actuator |
+| Sing-Box transports | journald | protocol/auth/handshake failures с public peer IP |
+| AmneziaWG | kernel dynamic-debug | invalid MAC/handshake |
+| Hysteria2/QUIC | journald | invalid packet, QUIC handshake/retry |
+| Mieru/Snell/Telemt/Naive/qWDTT | journald | implementation-specific ошибки |
+| Вся VPS | rate-limited kernel firewall telemetry | TCP SYN/UDP и multi-port sweep |
+| Honeypot | `/var/log/hydra-honeypot.log` | подключение к порту-ловушке |
 
-Покрытие называется доступным только если конкретная версия сервиса пишет
-публичный peer IP. Зашифрованный протокол без такого источника нельзя безопасно
-приписать адресу за локальным reverse proxy; модуль в таком случае не делает
-вид, что сигнал существует.
+## Защита от ложных блокировок
 
-## Caddy L4
+Отдельный слабый сигнал не банит адрес. Score имеет half-life 5 минут. Kernel
+SYN можно подделать, поэтому высокая частота одного порта сама по себе не даёт
+права на бан. Блокировка разрешается, когда за 60 секунд замечены минимум
+четыре destination port, сетевой burst коррелирует с ошибкой протокола либо
+получен сильный decoy/honeypot-сигнал.
 
-При наличии записей в `/var/lib/hydra/antidpi.json` генератор Caddy добавляет
-первый маршрут `remote_ip` с handler `close`. Это отбрасывает адрес до SNI,
-TLS-терминации и проксирования. Такой matcher и close-handler предоставляются
-официальным caddy-l4 ([remote IP matcher](https://caddyserver.com/docs/caddyfile/matchers),
-[close handler](https://pkg.go.dev/github.com/mholt/caddy-l4/modules/l4close)).
-Сборка Caddy явно подключает `modules/l4close` и проверяет наличие
-`layer4.handlers.close` через `caddy list-modules`.
+Kernel-правила используют только target `LOG` и не блокируют трафик напрямую.
+RFC1918, ULA, loopback, link-local, IP сервера и пользовательский whitelist
+исключаются из анализа.
 
-## Ограничения покрытия
+## Firewall и владение
 
-Зашифрованные протоколы нельзя надёжно классифицировать по одному отпечатку:
-ECH, NAT и мобильные сети создают ложные совпадения. Поэтому модуль использует
-только наблюдаемые до расшифровки свойства (первый пакет, SNI, ошибки, частоту)
-и требует повторные/комбинированные сигналы внутри временного окна. Формат TLS ClientHello и обязательность
-проверки структуры определены [RFC 8446](https://www.rfc-editor.org/rfc/rfc8446).
+Создаются ipset `hydra_antidpi` и `hydra_antidpi6`. В INPUT размещаются DROP по
+ipset и rate-limited LOG-only правила TCP SYN/UDP. Старое правило и jail
+`hydra-portscan` удаляются Fail2ban как миграционный артефакт. Fail2ban
+сохраняет ответственность за SSH и auth-события.
+
+## Состояние и health
+
+`/var/lib/hydra/antidpi.json` записывается атомарно с fsync и mode 0600.
+Read-modify-write защищён flock. Evidence ограничен по размеру и очищается по
+возрасту. Healthcheck проверяет службу, оба ipset, DROP и kernel telemetry.
+Служба запускается с ограниченным набором capabilities.
+
+## Реальные ограничения
+
+Невозможно гарантировать обнаружение абсолютно каждого сканера:
+
+- корректное одиночное соединение неотличимо от обычного клиента;
+- low-and-slow ботнет может остаться ниже per-IP порога;
+- протокол без public peer IP в журнале нельзя связать с адресом;
+- NAT объединяет многих клиентов за одним IP;
+- DDoS-фильтрация должна выполняться у провайдера до VPS.
+
+Для максимального покрытия используйте AntiDPI, Honeypot, Fail2ban для
+SSH/auth, закрытый firewall по allow-list и provider DDoS protection.

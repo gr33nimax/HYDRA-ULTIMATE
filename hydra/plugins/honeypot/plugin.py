@@ -358,6 +358,16 @@ class HoneypotPlugin(BasePlugin):
             firewall.close_tcp(int(config.get("port", HONEYPOT_PORT)), _PORT_COMMENT)
         return not self.status().running
 
+    def unban(self, raw: str) -> bool:
+        try:
+            address = ipaddress.ip_address(str(raw).strip().strip("[]")).compressed
+        except ValueError:
+            return False
+        config = self._load_state()
+        if address not in config.get("banned", {}):
+            return False
+        return self._unban_ip(address)
+
     def _unban_ip(self, ip: str) -> bool:
         config = self._load_state()
         metadata = config.get("banned", {}).get(ip, {})
