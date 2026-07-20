@@ -67,3 +67,20 @@ def test_firewall_rule_insert_has_a_valid_iptables_operation():
     inserts = [command for command in calls if "-I" in command]
     assert inserts[0][:4] == ["iptables", "-I", "INPUT", "1"]
     assert inserts[1][:4] == ["ip6tables", "-I", "INPUT", "1"]
+
+
+def test_ban_history_is_created_once_and_legacy_signals_are_safe(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "antidpi.json"
+    event = {"kind": "malformed_tls", "protocol": "tls", "handshake_ok": False, "sni_known": False}
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch("hydra.plugins.antidpi.plugin._run", return_value=MagicMock(returncode=0, stdout="", stderr="")):
+        assert plugin.observe_event("203.0.113.20", event, now=1000) is True
+        assert plugin.observe_event("203.0.113.20", event, now=1001) is True
+        data = plugin._load_state()
+    assert len(data["history"]) == 1
+    assert data["history"][0]["ip"] == "203.0.113.20"
+
+    from hydra.plugins.antidpi.manager import _signals
+    assert _signals({"signals": None}) == "—"
+    assert _signals({"signals": "legacy"}) == "legacy"

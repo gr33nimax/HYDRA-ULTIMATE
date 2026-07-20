@@ -351,7 +351,13 @@ class AntiDPIPlugin(BasePlugin):
         if banned:
             set_name = SET_V6 if parsed_address.version == 6 else SET_V4
             if _run(["ipset", "add", set_name, address, "timeout", "86400", "-exist"]).returncode == 0:
-                data.setdefault("banned", {})[address] = {"at": entry["updated"], "score": entry["score"], "signals": entry["signals"]}
+                was_banned = address in data.setdefault("banned", {})
+                metadata = {"at": entry["updated"], "score": entry["score"], "signals": entry["signals"]}
+                data["banned"][address] = metadata
+                if not was_banned:
+                    history = data.setdefault("history", [])
+                    history.append({"ip": address, **metadata, "status": "active"})
+                    data["history"] = history[-1000:]
             else:
                 banned = False
         self._save_state(data)
@@ -371,6 +377,11 @@ class AntiDPIPlugin(BasePlugin):
         data = self._load_state()
         data.get("banned", {}).pop(address.compressed, None)
         data.get("scores", {}).pop(address.compressed, None)
+        for item in reversed(data.get("history", [])):
+            if isinstance(item, dict) and item.get("ip") == address.compressed and item.get("status") == "active":
+                item["status"] = "unbanned"
+                item["unbanned_at"] = time.time()
+                break
         self._save_state(data)
         return True
 
@@ -391,7 +402,7 @@ class AntiDPIPlugin(BasePlugin):
             data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else {}
         except (OSError, ValueError):
-            return {"banned": {}, "scores": {}, "events": 0, "whitelist": []}
+            return {"banned": {}, "scores": {}, "events": 0, "whitelist": [], "history": []}
 
     def _save_state(self, data: dict) -> None:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
