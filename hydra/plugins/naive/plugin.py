@@ -110,7 +110,7 @@ class NaivePlugin(BasePlugin):
 
     def configure(self, state: AppState) -> ConfigFragment:
         domain = state.network.domain
-        from hydra.core.sni_router import get_effective_port
+        from hydra.core.sni_router import get_effective_port, _INTERNAL_PORTS
         port = get_effective_port("naive", state)
 
         if not domain:
@@ -142,6 +142,7 @@ class NaivePlugin(BasePlugin):
             cert_file=cert_file,
             key_file=key_file,
             decoy_url=decoy_url,
+            accept_proxy_protocol=port == _INTERNAL_PORTS["naive"],
         )
 
         self._pending_cfg = caddyfile
@@ -995,6 +996,7 @@ class NaivePlugin(BasePlugin):
         cert_file: str = "",
         key_file: str = "",
         decoy_url: str = "",
+        accept_proxy_protocol: bool = False,
     ) -> str:
         auth_lines = ""
         for u in users:
@@ -1012,12 +1014,26 @@ class NaivePlugin(BasePlugin):
 
         site_header = f":{port}, {domain}:{port}"
         probe_line = "            probe_resistance\n" if auth_lines else ""
+        listener_wrappers = ""
+        if accept_proxy_protocol:
+            listener_wrappers = """\
+    servers {
+        listener_wrappers {
+            proxy_protocol {
+                timeout 1s
+                allow 127.0.0.0/8 ::1/128
+                fallback_policy require
+            }
+            tls
+        }
+    }
+"""
 
         return f"""\
 {{
     http_port 0
     auto_https disable_redirects
-{order_line}}}
+{listener_wrappers}{order_line}}}
 
 {site_header} {{
 {tls_line}    forward_proxy {{

@@ -283,6 +283,19 @@ def normalize_decoy_record(record: dict) -> tuple[str, dict] | None:
     return ip, {"protocol": "https", "kind": "active_decoy_probe", "source": "caddy-decoy"}
 
 
+def normalize_naive_decoy_record(record: dict) -> tuple[str, dict] | None:
+    """Recognize scanner paths without treating valid Naive CONNECT as probes."""
+    request = record.get("request", {}) if isinstance(record, dict) else {}
+    if not isinstance(request, dict) or str(request.get("method", "GET")).upper() == "CONNECT":
+        return None
+    normalized = normalize_decoy_record(record)
+    if normalized is None:
+        return None
+    address, event = normalized
+    event["source"] = "caddy-naive-decoy"
+    return address, event
+
+
 def decayed_score(score: float, elapsed: float, half_life: float = SCORE_HALF_LIFE) -> float:
     """Decay evidence exponentially so old probes cannot cause a late ban."""
     if elapsed <= 0:

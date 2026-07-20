@@ -16,9 +16,11 @@ from hydra.plugins.antidpi.plugin import (
     AntiDPIPlugin,
     normalize_caddy_record,
     normalize_decoy_record,
+    normalize_naive_decoy_record,
 )
 
 Normalized = tuple[str, dict]
+NAIVE_ACCESS_LOG = Path("/var/log/caddy-naive/access.log")
 
 
 def _offer_event(out: queue.Queue[Normalized], event: Normalized) -> None:
@@ -40,15 +42,17 @@ def _offer_event(out: queue.Queue[Normalized], event: Normalized) -> None:
 
 class JsonTail:
     """Polling JSONL tail that survives truncation and rename rotation."""
-    def __init__(self, path: Path, normalizers: tuple):
+    def __init__(self, path: Path, normalizers: tuple, *, create: bool = True):
         self.path = path
         self.normalizers = normalizers if isinstance(normalizers, (list, tuple)) else (normalizers,)
+        self.create = create
         self.handle = None
         self.inode = None
 
     def _open(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.touch(exist_ok=True)
+        if self.create:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.touch(exist_ok=True)
         self.handle = self.path.open("r", encoding="utf-8", errors="replace")
         self.handle.seek(0, 2)
         self.inode = self.path.stat().st_ino
@@ -206,6 +210,7 @@ def run() -> None:
     tails = (
         JsonTail(LOG_FILE, (normalize_caddy_record, normalize_tls_auth_failure)),
         JsonTail(DECOY_LOG, (normalize_decoy_record,)),
+        JsonTail(NAIVE_ACCESS_LOG, (normalize_naive_decoy_record,), create=False),
     )
     try:
         while True:

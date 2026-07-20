@@ -10,6 +10,7 @@ from hydra.plugins.antidpi.plugin import (
     prune_runtime_state,
     normalize_caddy_record,
     normalize_decoy_record,
+    normalize_naive_decoy_record,
     score_event,
 )
 
@@ -50,6 +51,20 @@ def test_active_decoy_probe_is_evidence_but_normal_page_is_not():
     )
     request["uri"] = "/index.html"
     assert normalize_decoy_record({"request": request}) is None
+
+
+def test_naive_decoy_ignores_legitimate_connect_but_detects_scanner_path():
+    connect = {"request": {
+        "remote_ip": "203.0.113.10", "method": "CONNECT", "uri": "example.com:443",
+    }}
+    assert normalize_naive_decoy_record(connect) is None
+    probe = {"request": {
+        "remote_ip": "203.0.113.10", "method": "GET", "uri": "/.env?scan=1",
+    }}
+    assert normalize_naive_decoy_record(probe) == (
+        "203.0.113.10",
+        {"protocol": "https", "kind": "active_decoy_probe", "source": "caddy-naive-decoy"},
+    )
 
 
 def test_firewall_rule_insert_has_a_valid_iptables_operation():

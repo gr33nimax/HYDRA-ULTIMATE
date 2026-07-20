@@ -786,7 +786,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
             l4_routes.append({
                 "match": [{"tls": {"sni": [domain]}}],
                 "handle": [
-                    _proxy_handler(f"127.0.0.1:{port}", preserve_source=True)
+                    _proxy_handler(f"127.0.0.1:{port}", proxy_protocol=True)
                 ]
             })
         elif name == "shadowtls":

@@ -206,6 +206,18 @@ def test_build_caddyfile_fake_site():
     assert "root /var/www/decoy-a" in caddyfile
 
 
+def test_build_caddyfile_accepts_proxy_protocol_only_behind_mux():
+    p = NaivePlugin()
+    direct = p._build_caddyfile("vpn.example.com", 443, [])
+    behind_mux = p._build_caddyfile(
+        "vpn.example.com", 10443, [], accept_proxy_protocol=True,
+    )
+    assert "proxy_protocol" not in direct
+    assert "proxy_protocol" in behind_mux
+    assert "allow 127.0.0.0/8 ::1/128" in behind_mux
+    assert "fallback_policy require" in behind_mux
+
+
 def test_build_caddyfile_multiple_users():
     """Несколько пользователей = несколько basic_auth строк."""
     p = NaivePlugin()
