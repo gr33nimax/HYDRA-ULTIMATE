@@ -22,8 +22,6 @@ PATTERNS: tuple[tuple[str, str, str], ...] = (
     ("telemt", rf"(?:handshake failed|invalid).*?{_IP}", "handshake_failure"),
     ("naive", rf"(?:authentication failed|invalid|malformed|protocol error).*?{_IP}", "auth_failure"),
     ("wdtt", rf"(?:invalid handshake|authentication failed|invalid packet).*?{_IP}", "handshake_failure"),
-    # BAN is the result of the preceding CONNECT, not independent evidence.
-    ("honeypot", rf"CONNECT\s+{_IP}", "active_decoy_probe"),
 )
 
 _KERNEL_SCAN = re.compile(

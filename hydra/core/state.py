@@ -129,6 +129,7 @@ class TelegramConfig:
     allowed_users: list[int] = field(default_factory=list)
     notifications_enabled: bool = True
     notify_antidpi: bool = True
+    notify_honeypot: bool = True
     notify_fail2ban: bool = True
     notify_unbans: bool = False
     notify_system: bool = True

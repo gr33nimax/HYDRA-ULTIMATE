@@ -295,6 +295,29 @@ def test_ban_notifications_are_throttled_and_delivery_is_counted(tmp_path):
     assert data["suppressed_ban_notifications"] == 1
 
 
+def test_honeypot_owned_bans_are_removed_from_antidpi(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "antidpi_honeypot_duplicates.json"
+    state = {
+        "banned": {
+            "198.51.100.60": {"at": 9999999000, "duration": 86400},
+            "198.51.100.61": {"at": 9999999000, "duration": 86400},
+        },
+        "scores": {},
+        "history": [],
+    }
+    result = MagicMock(returncode=0, stdout="", stderr="")
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch("hydra.plugins.antidpi.plugin._run", return_value=result), \
+         patch("hydra.plugins.honeypot.plugin.HoneypotPlugin._load_state", return_value={
+             "banned": {"198.51.100.60": {}},
+         }):
+        plugin._save_state(state)
+        assert plugin.cleanup_honeypot_duplicates() == 1
+        remaining = plugin._load_state()["banned"]
+    assert set(remaining) == {"198.51.100.61"}
+
+
 
 def test_runtime_state_pruning_keeps_recent_entries_and_active_bans():
     data = {

@@ -10,13 +10,13 @@ def test_non_evidence_is_ignored():
     assert parse_protocol_line("sing-box.service", "accepted connection from 203.0.113.9") is None
 
 
-def test_honeypot_ban_result_is_not_counted_as_a_second_probe():
+def test_honeypot_events_are_not_antidpi_evidence():
     assert parse_protocol_line(
         "honeypot", "BAN 198.51.100.91 backend=iptables result=OK",
     ) is None
     assert parse_protocol_line(
         "honeypot", "CONNECT 198.51.100.91:45600",
-    )[0] == "198.51.100.91"
+    ) is None
 
 
 def test_kernel_tcp_scan_is_normalized():

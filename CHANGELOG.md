@@ -8,9 +8,11 @@
   динамическое применение банов выполняется только firewall/ipset без stale Caddy snapshot.
 - Добавлена rate-limited kernel telemetry TCP SYN/UDP, multi-port корреляция и
   защита от spoofed-SYN false positive.
-- Добавлены journal-адаптеры протоколов и Honeypot; jail `hydra-portscan` перенесён
-  из Fail2ban в AntiDPI и удаляется при миграции.
-- Telegram Admin Bot получил кнопочный Control Center и категорийные уведомления.
+- Добавлены journal-адаптеры протоколов; jail `hydra-portscan` перенесён из
+  Fail2ban в AntiDPI и удаляется при миграции. Honeypot выделен в независимый
+  контур событий, блокировок, статуса и уведомлений.
+- Telegram Admin Bot получил управление AntiDPI, Honeypot и Fail2ban, отдельные
+  категории уведомлений и расширенную диагностику каждого Fail2ban jail.
 
 Все заметные изменения HYDRA собраны в этом файле. Даты указаны по календарю
 релиза; старые записи не переписываются задним числом.

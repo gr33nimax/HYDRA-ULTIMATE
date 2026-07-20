@@ -10,7 +10,6 @@ from pathlib import Path
 
 from hydra.core.host import HOST
 from hydra.core.sni_router import DECOY_LOG
-from hydra.plugins.honeypot.plugin import HONEYPOT_LOG
 from hydra.plugins.antidpi.adapters import parse_kernel_scan_line, parse_protocol_line, normalize_tls_auth_failure
 from hydra.plugins.antidpi.plugin import (
     LOG_FILE,
@@ -137,7 +136,7 @@ def _journal_worker(out: queue.Queue[Normalized], stop: threading.Event) -> None
         "journalctl", "-f", "-n", "0", "-o", "json",
         "-u", "caddy-l4", "-u", "sing-box", "-u", "amneziawg",
         "-u", "hysteria2", "-u", "mieru", "-u", "snell", "-u", "telemt",
-        "-u", "caddy-naive", "-u", "wdtt", "-u", "hydra-honeypot",
+        "-u", "caddy-naive", "-u", "wdtt",
     ]
     while not stop.is_set():
         process = None
@@ -195,6 +194,7 @@ def _kernel_worker(out: queue.Queue[Normalized], stop: threading.Event) -> None:
 
 def run() -> None:
     plugin = AntiDPIPlugin()
+    plugin.cleanup_honeypot_duplicates()
     events: queue.Queue[Normalized] = queue.Queue(maxsize=4096)
     stop = threading.Event()
     workers = (
@@ -206,7 +206,6 @@ def run() -> None:
     tails = (
         JsonTail(LOG_FILE, (normalize_caddy_record, normalize_tls_auth_failure)),
         JsonTail(DECOY_LOG, (normalize_decoy_record,)),
-        TextTail(HONEYPOT_LOG, "honeypot"),
     )
     try:
         while True:

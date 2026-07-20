@@ -12,14 +12,14 @@ def test_bounded_event_queue_does_not_block_and_keeps_recent_event():
     assert events.get_nowait() == second
 
 
-def test_text_tail_normalizes_new_honeypot_lines(tmp_path):
-    log = tmp_path / "honeypot.log"
-    log.write_text("[2026-07-20] CONNECT 198.51.100.90:45500\n", encoding="utf-8")
-    tail = TextTail(log, "honeypot")
+def test_text_tail_normalizes_new_protocol_lines(tmp_path):
+    log = tmp_path / "sing-box.log"
+    log.write_text("handshake failed 198.51.100.90\n", encoding="utf-8")
+    tail = TextTail(log, "sing-box")
     assert tail.read() == []
     with log.open("a", encoding="utf-8") as handle:
-        handle.write("[2026-07-20] CONNECT 198.51.100.91:45600\n")
+        handle.write("handshake failed 198.51.100.91\n")
     events = tail.read()
     assert events[0][0] == "198.51.100.91"
-    assert events[0][1]["kind"] == "active_decoy_probe"
-    assert events[0][1]["source"] == "honeypot-log"
+    assert events[0][1]["kind"] == "handshake_failure"
+    assert events[0][1]["source"] == "sing-box-log"

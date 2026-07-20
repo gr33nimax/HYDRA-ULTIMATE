@@ -33,7 +33,10 @@ Firewall ipset является единственным источником en
 | Hysteria2/QUIC | journald | invalid packet, QUIC handshake/retry |
 | Mieru/Snell/Telemt/Naive/qWDTT | journald | implementation-specific ошибки |
 | Вся VPS | rate-limited kernel firewall telemetry | TCP SYN/UDP и multi-port sweep |
-| Honeypot | `/var/log/hydra-honeypot.log` | подключение к порту-ловушке |
+
+Honeypot намеренно не входит в источники AntiDPI. Ловушка самостоятельно
+владеет своими событиями, состоянием и firewall-блокировками; это исключает
+двойной учёт и повторные Telegram-уведомления.
 
 ## Защита от ложных блокировок
 
@@ -41,7 +44,7 @@ Firewall ipset является единственным источником en
 SYN можно подделать, поэтому высокая частота одного порта сама по себе не даёт
 права на бан. Блокировка разрешается, когда за 60 секунд замечены минимум
 четыре destination port, сетевой burst коррелирует с ошибкой протокола либо
-получен сильный decoy/honeypot-сигнал.
+получен сильный сигнал встроенного HTTPS decoy.
 
 Kernel-правила используют только target `LOG` и не блокируют трафик напрямую.
 RFC1918, ULA, loopback, link-local, IP сервера и пользовательский whitelist

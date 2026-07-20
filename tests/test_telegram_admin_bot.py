@@ -14,9 +14,14 @@ from hydra.services.telegram.bot import (
     send_admin_notification,
     get_system_info_text,
     get_antidpi_status_text,
+    get_antidpi_dashboard_text,
+    get_honeypot_status_text,
+    get_fail2ban_dashboard_text,
     get_fail2ban_status_text,
     unban_ip_everywhere,
     _process_fail2ban_log_line,
+    _process_honeypot_log_line,
+    _parse_fail2ban_jail,
     _main_keyboard,
     _notification_settings_text,
     _toggle_notification,
@@ -122,7 +127,7 @@ def test_antidpi_observe_event_notification(tmp_path):
                 mock_notify.assert_called()
                 msg = mock_notify.call_args[0][0]
                 assert mock_notify.call_args.kwargs["category"] == "antidpi"
-                assert "AntiDPI Alert" in msg
+                assert "AntiDPI: подозрительная активность" in msg
                 assert "198.51.100.22" in msg
 
 
@@ -165,8 +170,64 @@ def test_main_keyboard_callback_payloads_fit_telegram_limit():
         for button in row
         if button.callback_data
     ]
-    assert {"view:system", "view:antidpi", "view:fail2ban", "view:notifications"} <= set(callbacks)
+    assert {"view:system", "view:antidpi", "view:honeypot", "view:fail2ban", "view:notifications"} <= set(callbacks)
     assert all(len(value.encode("utf-8")) <= 64 for value in callbacks)
+
+
+def test_honeypot_notification_is_separate_category():
+    with patch("hydra.services.telegram.bot.send_admin_notification") as notify, \
+         patch("hydra.plugins.honeypot.plugin.HoneypotPlugin._load_state", return_value={"port": 9999}):
+        _process_honeypot_log_line("[2026-07-21T10:00:00] CONNECT 198.51.100.55:45678")
+        _process_honeypot_log_line("[2026-07-21T10:00:00] BAN 198.51.100.55 backend=iptables result=FAIL")
+        _process_honeypot_log_line("[2026-07-21T10:00:00] BAN 198.51.100.55 backend=iptables result=OK")
+    notify.assert_called_once()
+    assert notify.call_args.kwargs["category"] == "honeypot"
+    assert "198.51.100.55" in notify.call_args.args[0]
+
+
+def test_fail2ban_jail_parser_extracts_full_status():
+    parsed = _parse_fail2ban_jail(
+        "Currently failed: 2\nTotal failed: 14\nCurrently banned: 1\n"
+        "Total banned: 5\nBanned IP list: 198.51.100.9\n"
+    )
+    assert parsed == {
+        "currently_failed": 2,
+        "total_failed": 14,
+        "currently_banned": 1,
+        "total_banned": 5,
+        "ips": ["198.51.100.9"],
+    }
+
+
+def test_expanded_fail2ban_dashboard_includes_policy_and_totals():
+    overall = MagicMock(returncode=0, stdout="Jail list: hydra-sshd")
+    detail = MagicMock(
+        returncode=0,
+        stdout=(
+            "Currently failed: 2\nTotal failed: 14\nCurrently banned: 1\n"
+            "Total banned: 5\nBanned IP list: 198.51.100.9\n"
+        ),
+    )
+    with patch("hydra.plugins.fail2ban.plugin.Fail2banPlugin.status", return_value=MagicMock(running=True)), \
+         patch("hydra.plugins.fail2ban.plugin.Fail2banPlugin.jail_options", return_value={
+             "hydra-sshd": {"maxretry": "5", "findtime": "600", "bantime": "3600"},
+         }), \
+         patch("hydra.services.telegram.bot.HOST.run", side_effect=[overall, detail]):
+        text = get_fail2ban_dashboard_text()
+    assert "Всего банов:</b> 5" in text
+    assert "5 попыток за 10м" in text
+    assert "198.51.100.9" in text
+
+
+def test_dedicated_security_dashboards_render(tmp_path):
+    with patch("hydra.plugins.antidpi.plugin.AntiDPIPlugin.status") as adpi_status, \
+         patch("hydra.plugins.antidpi.plugin.AntiDPIPlugin._load_state", return_value={"banned": {}, "events": 3}), \
+         patch("hydra.plugins.honeypot.plugin.HoneypotPlugin.status") as hp_status, \
+         patch("hydra.plugins.honeypot.plugin.HoneypotPlugin._load_state", return_value={"port": 9999, "banned": {}, "whitelist": []}):
+        adpi_status.return_value = MagicMock(running=True)
+        hp_status.return_value = MagicMock(running=True, port=9999)
+        assert "защита всей VPS" in get_antidpi_dashboard_text()
+        assert "отдельная ловушка" in get_honeypot_status_text()
 
 
 def test_admin_bot_installer_starts_and_verifies_service():

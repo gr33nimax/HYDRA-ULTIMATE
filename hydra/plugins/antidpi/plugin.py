@@ -648,11 +648,13 @@ class AntiDPIPlugin(BasePlugin):
                     proto = html.escape(str(event.get("protocol", "L4")))
                     sig_str = html.escape(", ".join(signals))
                     delivered = bool(send_admin_notification(
-                        f"🛡️ <b>AntiDPI Alert</b>\n"
+                        f"⚠️ <b>AntiDPI: подозрительная активность</b>\n\n"
                         f"<b>IP:</b> <code>{address}</code>\n"
-                        f"<b>Protocol:</b> <code>{proto}</code> ({kind})\n"
-                        f"<b>Signals:</b> <code>{sig_str}</code>\n"
-                        f"<b>Score:</b> <code>{entry['score']:.1f} / {BAN_THRESHOLD}</code>",
+                        f"<b>Детект:</b> <code>{kind}</code>\n"
+                        f"<b>Протокол/источник:</b> <code>{proto} / {html.escape(source)}</code>\n"
+                        f"<b>Признаки:</b> <code>{sig_str}</code>\n"
+                        f"<b>Риск:</b> <code>{entry['score']:.1f} / {BAN_THRESHOLD}</code>\n"
+                        "<b>Действие:</b> наблюдение продолжается, блокировки пока нет",
                         category="antidpi",
                     ))
                 except Exception:
@@ -675,6 +677,9 @@ class AntiDPIPlugin(BasePlugin):
                         "at": entry["updated"],
                         "score": entry["score"],
                         "signals": entry["signals"],
+                        "source": source,
+                        "protocol": str(event.get("protocol", "unknown"))[:40],
+                        "kind": str(event.get("kind", event.get("reason", "anomaly")))[:80],
                         "duration": duration,
                         "offense_count": offense_count,
                     }
@@ -693,11 +698,14 @@ class AntiDPIPlugin(BasePlugin):
                             sig_str = html.escape(", ".join(str(value) for value in entry["signals"]))
                             dur_str = f"{duration // 60}m" if duration < 3600 else (f"{duration // 3600}h" if duration < 86400 else f"{duration // 86400}d")
                             delivered = bool(send_admin_notification(
-                                f"🚨 <b>AntiDPI BAN</b>\n"
+                                f"🛑 <b>AntiDPI заблокировал источник</b>\n\n"
                                 f"<b>IP:</b> <code>{address}</code>\n"
-                                f"<b>Score:</b> <code>{entry['score']:.1f} / {BAN_THRESHOLD}</code>\n"
-                                f"<b>Signals:</b> <code>{sig_str}</code>\n"
-                                f"<b>Duration:</b> <code>{dur_str} (Offense #{offense_count})</code>",
+                                f"<b>Детект:</b> <code>{html.escape(str(event.get('kind', 'anomaly')))}</code>\n"
+                                f"<b>Протокол/источник:</b> <code>{html.escape(str(event.get('protocol', 'L4')))} / {html.escape(source)}</code>\n"
+                                f"<b>Признаки:</b> <code>{sig_str}</code>\n"
+                                f"<b>Риск:</b> <code>{entry['score']:.1f} / {BAN_THRESHOLD}</code>\n"
+                                f"<b>Срок:</b> <code>{dur_str}</code>, нарушение #{offense_count}\n"
+                                "<b>Эффект:</b> заблокированы все входящие подключения к VPS",
                                 category="antidpi",
                             ))
                         except Exception:
@@ -711,6 +719,20 @@ class AntiDPIPlugin(BasePlugin):
                     banned = False
             self._save_state(data)
             return banned
+
+    def cleanup_honeypot_duplicates(self) -> int:
+        """Drop AntiDPI ownership for addresses already owned by Honeypot."""
+        try:
+            from hydra.plugins.honeypot.plugin import HoneypotPlugin
+            honeypot_bans = set(HoneypotPlugin()._load_state().get("banned", {}))
+        except Exception:
+            return 0
+        antidpi_bans = set(active_bans(self._load_state()))
+        removed = 0
+        for address in sorted(antidpi_bans & honeypot_bans):
+            if self.unban(address):
+                removed += 1
+        return removed
 
     def unban(self, raw: str) -> bool:
         """Remove an address from ipset and persistent evidence."""
