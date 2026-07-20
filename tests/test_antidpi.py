@@ -67,6 +67,17 @@ def test_firewall_rule_insert_has_a_valid_iptables_operation():
     assert inserts[1][:4] == ["ip6tables", "-I", "INPUT", "1"]
 
 
+def test_antidpi_service_allows_outbound_telegram_sockets(tmp_path):
+    script = tmp_path / "hydra-antidpi.py"
+    service = tmp_path / "hydra-antidpi.service"
+    with patch("hydra.plugins.antidpi.plugin.SCRIPT_FILE", script), \
+         patch("hydra.plugins.antidpi.plugin.SERVICE_FILE", service):
+        AntiDPIPlugin()._write_service()
+
+    unit = service.read_text(encoding="utf-8")
+    assert "RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6" in unit
+
+
 def test_ban_history_is_created_once_and_legacy_signals_are_safe(tmp_path):
     plugin = AntiDPIPlugin()
     state_file = tmp_path / "antidpi.json"
