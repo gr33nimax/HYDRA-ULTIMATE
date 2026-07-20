@@ -421,7 +421,7 @@ class AntiDPIPlugin(BasePlugin):
             entry["updated"] = timestamp
             data["events"] = int(data.get("events", 0)) + 1
 
-            if signals:
+            if signals and (entry["score"] >= 6.0 or "active_decoy_probe" in signals):
                 try:
                     from hydra.services.telegram.bot import send_admin_notification
                     kind = event.get("kind", event.get("reason", "anomaly"))
