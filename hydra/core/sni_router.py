@@ -23,6 +23,7 @@ CADDY_LOG_DIR = Path("/var/log/caddy-l4")
 DECOY_LOG = CADDY_LOG_DIR / "decoy-access.log"
 SERVICE_NAME = "caddy-l4"
 SERVICE_FILE = Path("/etc/systemd/system/caddy-l4.service")
+CADDY_ADMIN_ADDRESS = "127.0.0.1:2021"
 SOURCE_SERVICE_NAME = "hydra-caddy-source"
 SOURCE_SERVICE_FILE = Path(f"/etc/systemd/system/{SOURCE_SERVICE_NAME}.service")
 FRONTEND_PORT = 443
@@ -1054,6 +1055,10 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
         apps["http"] = http_app
 
     return {
+        # HYDRA may run caddy-naive alongside caddy-l4. Giving the mux its own
+        # loopback-only Admin API prevents reloads and diagnostics from
+        # accidentally targeting the other Caddy process on the default 2019.
+        "admin": {"listen": CADDY_ADMIN_ADDRESS},
         "logging": logging,
         "apps": apps
     }
@@ -1274,6 +1279,12 @@ def rebuild(state: AppState) -> bool:
     # 7. Enable and reload/restart service
     HOST.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
     r = HOST.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
+    if r.returncode != 0:
+        # Migration from the shared default Admin API (2019) to the dedicated
+        # endpoint (2021) cannot reload through 2021 until the new config has
+        # started once. A validated config is safe to start; rollback below
+        # still restores the previous artifact if the restart fails.
+        r = HOST.run(["systemctl", "restart", SERVICE_NAME], capture_output=True)
     if r.returncode == 0 and is_active():
         return True
 
@@ -1351,7 +1362,10 @@ Wants=network-online.target
 [Service]
 Type=notify
 ExecStart={CADDY_BIN} run --config {CADDY_CFG}
-ExecReload=/bin/kill -USR1 $MAINPID
+# Use Caddy's transactional Admin API reload. SIGUSR1 may be ignored after
+# any earlier API-driven config change while kill(1) still reports success,
+# leaving the JSON file and the live configuration silently out of sync.
+ExecReload={CADDY_BIN} reload --config {CADDY_CFG} --address {CADDY_ADMIN_ADDRESS} --force
 Restart=on-failure
 RestartSec=1
 TimeoutStopSec=5

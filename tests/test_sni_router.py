@@ -18,6 +18,8 @@ from hydra.core.sni_router import (
     get_quic_owners,
     audit_routes,
     _INTERNAL_PORTS,
+    _install_service,
+    CADDY_ADMIN_ADDRESS,
 )
 from hydra.core.state import AppState, PluginState
 
@@ -131,6 +133,7 @@ def test_generate_config_two_backends():
     cfg = _generate_config(backends, s)
     
     assert "apps" in cfg
+    assert cfg["admin"] == {"listen": CADDY_ADMIN_ADDRESS}
     assert "layer4" in cfg["apps"]
     assert "tls_mux" in cfg["apps"]["layer4"]["servers"]
     
@@ -168,6 +171,24 @@ def test_antidpi_bans_are_enforced_only_by_dynamic_firewall():
     cfg = _generate_config(backends, _state(naive_enabled=True))
     routes = cfg["apps"]["layer4"]["servers"]["tls_mux"]["routes"]
     assert all("remote_ip" not in matcher for route in routes for matcher in route.get("match", []))
+
+
+def test_caddy_service_uses_transactional_cli_reload(tmp_path):
+    service = tmp_path / "caddy-l4.service"
+    binary = tmp_path / "caddy-l4"
+    config = tmp_path / "config.json"
+    result = MagicMock(returncode=0)
+    with patch("hydra.core.sni_router.SERVICE_FILE", service), \
+         patch("hydra.core.sni_router.CADDY_BIN", binary), \
+         patch("hydra.core.sni_router.CADDY_CFG", config), \
+         patch("hydra.core.sni_router.HOST.run", return_value=result):
+        assert _install_service() is True
+    unit = service.read_text(encoding="utf-8")
+    assert (
+        f"ExecReload={binary} reload --config {config} "
+        f"--address {CADDY_ADMIN_ADDRESS} --force"
+    ) in unit
+    assert "kill -USR1" not in unit
 
 
 def test_config_has_sni_rules():
@@ -251,6 +272,27 @@ def test_rebuild_starts_caddy():
         mock_cfg.with_suffix.return_value.replace.assert_called_once_with(mock_cfg)
         # Check caddy-l4 was restarted/reloaded
         mock_run.assert_any_call(["systemctl", "reload-or-restart", "caddy-l4"], capture_output=True)
+
+
+def test_rebuild_restarts_when_admin_endpoint_migration_breaks_reload():
+    s = _state(naive_enabled=True, anytls_enabled=True)
+    mock_cfg = MagicMock()
+
+    def run(command, **_kwargs):
+        code = 1 if command == ["systemctl", "reload-or-restart", "caddy-l4"] else 0
+        return MagicMock(returncode=code, stdout="", stderr="")
+
+    with patch("hydra.core.sni_router.is_installed", return_value=True), \
+         patch("hydra.core.sni_router.CADDY_CFG", mock_cfg), \
+         patch("hydra.core.sni_router.CADDY_CFG_DIR", MagicMock()), \
+         patch("hydra.core.sni_router.is_active", return_value=True), \
+         patch("hydra.core.sni_router._install_source_service"), \
+         patch("hydra.core.sni_router._install_service", return_value=True), \
+         patch("hydra.core.source_transparency.apply"), \
+         patch("hydra.core.sni_router.HOST.run", side_effect=run) as mock_run:
+        assert rebuild(s) is True
+
+    mock_run.assert_any_call(["systemctl", "restart", "caddy-l4"], capture_output=True)
 
 
 def test_rebuild_stops_when_single():
