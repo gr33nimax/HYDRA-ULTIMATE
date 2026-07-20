@@ -1670,20 +1670,16 @@ def menu_telegram(state: AppState):
     while True:
         clear()
         tg = state.telegram
-        panel("Telegram", [
+        panel("Telegram Admin Bot", [
             kv("Admin токен:", _ok(bool(tg.admin_token))),
             kv("Admin Chat ID:", tg.admin_chat_id or "—"),
             kv("Admin бот:", f"{_ok(tg.admin_enabled)} {'запущен' if tg.admin_enabled else 'остановлен'}"),
-            kv("Client токен:", _ok(bool(tg.bot_token))),
-            kv("Client бот:", f"{_ok(tg.bot_enabled)} {'запущен' if tg.bot_enabled else 'остановлен'}"),
         ])
         choice = menu(
             [("1", "🔑 Admin-токен", "@BotFather"),
              ("2", "💬 Admin Chat ID", "@userinfobot"),
-             ("3", "🤖 Client-токен", "@BotFather"),
-             ("4", "▶️  Запустить admin-бота", "systemd-сервис hydra-tg-admin"),
-             ("5", "▶️  Запустить client-бота", "systemd-сервис hydra-tg-bot"),
-             ("6", "⏸️  Остановить всех ботов", ""),
+             ("3", "▶️  Запустить Admin-бота", "systemd-сервис hydra-tg-admin"),
+             ("4", "⏸️  Остановить Admin-бота", ""),
              ("0", "↩ Назад", "")],
             "TELEGRAM",
         )
@@ -1692,35 +1688,26 @@ def menu_telegram(state: AppState):
         elif choice == "1":
             t = prompt("Токен admin-бота")
             if t:
-                state.telegram.admin_token = t
+                state.telegram.admin_token = t.strip()
                 save_state(state)
                 success("Сохранён")
             prompt("Нажмите Enter")
         elif choice == "2":
-            c = prompt("Admin Chat ID (число)")
+            c = prompt("Admin Chat ID")
             if c:
-                state.telegram.admin_chat_id = c
+                state.telegram.admin_chat_id = c.strip()
                 save_state(state)
                 success("Сохранён")
             prompt("Нажмите Enter")
         elif choice == "3":
-            t = prompt("Токен клиентского бота")
-            if t:
-                state.telegram.bot_token = t
-                save_state(state)
-                success("Сохранён")
-            prompt("Нажмите Enter")
-        elif choice == "4":
             _install_admin_bot(state)
-        elif choice == "5":
-            _install_client_bot(state)
-        elif choice == "6":
+        elif choice == "4":
             remove_unit("hydra-tg-admin")
             remove_unit("hydra-tg-bot")
             state.telegram.admin_enabled = False
             state.telegram.bot_enabled = False
             save_state(state)
-            success("Боты остановлены")
+            success("Admin-бот остановлен")
             prompt("Нажмите Enter")
 
 
@@ -1758,29 +1745,6 @@ WantedBy=multi-user.target
     state.telegram.admin_enabled = True
     save_state(state)
     success("Admin-бот запущен (hydra-tg-admin)")
-    prompt("Нажмите Enter")
-
-
-def _install_client_bot(state: AppState):
-    if not state.telegram.bot_token:
-        error("Сначала укажите client-токен (пункт 3)")
-        prompt("Нажмите Enter")
-        return
-    install_service("hydra-tg-bot", f"""[Unit]
-Description=HYDRA Client Bot
-After=network.target
-[Service]
-Type=simple
-User=root
-ExecStart=/usr/bin/python3 -c "from hydra.services.telegram.bot import run_client_bot; run_client_bot('{state.telegram.bot_token}', '{state.telegram.admin_chat_id}')"
-Restart=always
-RestartSec=10
-[Install]
-WantedBy=multi-user.target
-""")
-    state.telegram.bot_enabled = True
-    save_state(state)
-    success("Client-бот запущен (hydra-tg-bot)")
     prompt("Нажмите Enter")
 
 
@@ -2266,8 +2230,7 @@ def _menu_logs(state: AppState):
             ("A", "🍯 Honeypot events", "file", "/var/log/hydra-honeypot.log"),
             ("B", "📦 Сервер подписок", "journal", "hydra-sub"),
             ("C", "🤖 Telegram Admin Bot", "journal", "hydra-tg-admin"),
-            ("D", "🤖 Telegram Client Bot", "journal", "hydra-tg-bot"),
-            ("E", "🛠 HYDRA install", "file", "/var/log/hydra/install.log"),
+            ("D", "🛠 HYDRA install", "file", "/var/log/hydra/install.log"),
         ]
             
         print(f"  {BOLD}Текущий лимит строк для просмотра:{NC} {GREEN}{lines_count}{NC}\n")
