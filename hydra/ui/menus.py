@@ -1729,13 +1729,27 @@ def _install_admin_bot(state: AppState):
         error("Сначала укажите admin-токен (пункт 1)")
         prompt("Нажмите Enter")
         return
+    if not state.telegram.admin_chat_id:
+        error("Сначала укажите Admin Chat ID (пункт 2)")
+        prompt("Нажмите Enter")
+        return
+
+    try:
+        import telegram
+    except ImportError:
+        info("Устанавливаю python-telegram-bot...")
+        HOST.run([sys.executable, "-m", "pip", "install", "-q", "python-telegram-bot[job-queue]"])
+
+    project_root = Path(__file__).resolve().parents[2]
     install_service("hydra-tg-admin", f"""[Unit]
-Description=HYDRA Admin Bot
+Description=HYDRA Admin Bot (System Info + Security Alerts)
 After=network.target
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/bin/python3 -c "import sys; sys.path.insert(0, '/opt/hydra'); from hydra.services.telegram.bot import run_admin_bot; run_admin_bot('{state.telegram.admin_token}', '{state.telegram.admin_chat_id}')"
+WorkingDirectory={project_root}
+Environment=PYTHONPATH={project_root}
+ExecStart={sys.executable} -m hydra.services.telegram.admin_bot_entrypoint
 Restart=always
 RestartSec=10
 [Install]
