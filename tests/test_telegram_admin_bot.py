@@ -74,11 +74,13 @@ def test_fail2ban_log_processor():
         assert "192.168.1.50" in msg
 
 
-def test_antidpi_observe_event_notification():
+def test_antidpi_observe_event_notification(tmp_path):
     plugin = AntiDPIPlugin()
     event = {"kind": "malformed_tls", "protocol": "tls", "handshake_ok": False}
-    
-    with patch("hydra.services.telegram.bot.send_admin_notification") as mock_notify:
+    state_file = tmp_path / "antidpi.json"
+
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch("hydra.services.telegram.bot.send_admin_notification") as mock_notify:
         with patch.object(plugin, "_load_state", return_value={"scores": {}, "banned": {}, "whitelist": []}):
             with patch.object(plugin, "_save_state"):
                 plugin.observe_event("198.51.100.22", event)

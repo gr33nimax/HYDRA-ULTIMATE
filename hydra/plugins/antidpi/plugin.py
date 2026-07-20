@@ -55,10 +55,11 @@ from contextlib import contextmanager
 @contextmanager
 def _lock_state_file():
     """File lock context manager using fcntl.flock to protect read-modify-write ops."""
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = STATE_FILE.with_suffix(".lock")
     if fcntl is not None:
         try:
-            with open(LOCK_FILE, "w", encoding="utf-8") as lock_fd:
+            STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(lock_path, "w", encoding="utf-8") as lock_fd:
                 fcntl.flock(lock_fd, fcntl.LOCK_EX)
                 try:
                     yield
