@@ -15,7 +15,6 @@ from hydra.core.host import HOST
 import json
 import re
 import socket
-import subprocess
 from pathlib import Path
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
@@ -89,13 +88,16 @@ class WarpPlugin(BasePlugin):
                 WGCF_BIN.parent.mkdir(parents=True, exist_ok=True)
                 ok = download_github_asset_filtered("ViRb3/wgcf", _match, WGCF_BIN)
                 if not ok:
-                    # Резервный прямой запуск скачивания (на случай лимитов API)
-                    fallback_url = f"https://github.com/ViRb3/wgcf/releases/download/v2.2.31/wgcf_2.2.31_linux_{arch}"
-                    log_path.write_text(f"GitHub API query failed. Trying fallback direct download from: {fallback_url}\n", encoding="utf-8")
-                    ok = self._download_file(fallback_url, WGCF_BIN)
-                    if not ok:
-                        log_path.write_text("Failed both GitHub API query and direct download.\n", encoding="utf-8")
-                        return False
+                    log_path.write_text(
+                        "Failed to download a verified wgcf release asset.\n",
+                        encoding="utf-8",
+                    )
+                    return False
+                from hydra.utils.downloader import verify_elf
+                if not verify_elf(WGCF_BIN):
+                    WGCF_BIN.unlink(missing_ok=True)
+                    log_path.write_text("Downloaded wgcf asset is not an ELF binary.\n", encoding="utf-8")
+                    return False
                 WGCF_BIN.chmod(0o755)
 
             # Регистрация
@@ -112,6 +114,7 @@ class WarpPlugin(BasePlugin):
                         f"Stdout: {r.stdout}\nStderr: {r.stderr}\n",
                         encoding="utf-8"
                     )
+                    return False
 
             # Генерация профиля
             r = HOST.run(
@@ -125,6 +128,7 @@ class WarpPlugin(BasePlugin):
                         f"wgcf generate failed with code {r.returncode}\n"
                         f"Stdout: {r.stdout}\nStderr: {r.stderr}\n"
                     )
+                return False
 
             return WGCF_PROFILE.exists()
         except Exception as e:
@@ -136,15 +140,9 @@ class WarpPlugin(BasePlugin):
 
     def uninstall(self) -> bool:
         HOST.run(["pkill", "-9", "wgcf"], capture_output=True)
-        if WGCF_PROFILE.exists():
-            WGCF_PROFILE.unlink()
+        self.remove_local_profile()
         if WGCF_BIN.exists():
             WGCF_BIN.unlink()
-        
-        # Удаляем локальные и системные файлы учетных записей wgcf
-        Path("/etc/wireguard/wgcf-account.toml").unlink(missing_ok=True)
-        Path("wgcf-account.toml").unlink(missing_ok=True)
-        Path("wgcf-profile.conf").unlink(missing_ok=True)
         try:
             WARP_EXTERNAL_CACHE.unlink(missing_ok=True)
         except Exception:
@@ -152,21 +150,25 @@ class WarpPlugin(BasePlugin):
         return True
 
     @staticmethod
-    def _download_file(url: str, dest: Path) -> bool:
-        import urllib.request
-        import shutil
-        try:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            req = urllib.request.Request(
-                url, 
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-            )
-            with urllib.request.urlopen(req, timeout=60) as response:
-                with dest.open("wb") as out_file:
-                    shutil.copyfileobj(response, out_file)
+    def remove_local_profile() -> None:
+        """Remove WGCF credentials without touching relay profiles or rule cache."""
+        WGCF_PROFILE.unlink(missing_ok=True)
+        Path("/etc/wireguard/wgcf-account.toml").unlink(missing_ok=True)
+
+    def recreate_local_profile(self) -> bool:
+        """Regenerate WGCF credentials and restore the old pair on failure."""
+        account = Path("/etc/wireguard/wgcf-account.toml")
+        previous_profile = WGCF_PROFILE.read_bytes() if WGCF_PROFILE.exists() else None
+        previous_account = account.read_bytes() if account.exists() else None
+        self.remove_local_profile()
+        if self.install():
             return True
-        except Exception:
-            return False
+        self.remove_local_profile()
+        if previous_profile is not None:
+            HOST.atomic_write(WGCF_PROFILE, previous_profile, mode=0o600)
+        if previous_account is not None:
+            HOST.atomic_write(account, previous_account, mode=0o600)
+        return False
 
     def _load_warp_config(self) -> dict | None:
         """Извлекает ключи из wgcf-профиля."""
@@ -178,27 +180,31 @@ class WarpPlugin(BasePlugin):
         except Exception:
             return None
 
-        private = re.search(r"PrivateKey\s*=\s*(\S+)", text)
-        if not private:
+        parsed = self._parse_wg_conf(text)
+        if parsed is None:
             return None
-
-        # Надежно парсим Address (может быть как IPv4, так и IPv6 через запятую)
-        address_match = re.search(r"Address\s*=\s*(.+)", text)
         addresses = []
-        if address_match:
-            raw_addr = address_match.group(1)
-            # Разделяем по запятым, убираем пробелы и лишние знаки препинания
-            for addr in raw_addr.split(","):
-                addr = addr.strip()
-                if addr:
-                    addresses.append(addr)
+        for addr in parsed["interface"]["address"].split(","):
+            addr = addr.strip()
+            if addr and self._is_ip_or_cidr(addr):
+                if "/" not in addr:
+                    addr += "/128" if ":" in addr else "/32"
+                addresses.append(addr)
         
         if not addresses:
-            addresses = ["172.16.0.2/32"]
+            return None
 
         return {
-            "private_key": private.group(1),
+            "private_key": parsed["interface"]["privatekey"],
             "addresses": addresses,
+            "endpoint": parsed["peer"]["endpoint"],
+            "public_key": parsed["peer"]["publickey"],
+            "allowed_ips": [
+                value.strip()
+                for value in parsed["peer"].get("allowedips", "0.0.0.0/0, ::/0").split(",")
+                if self._is_ip_or_cidr(value.strip())
+            ],
+            "mtu": parsed["interface"].get("mtu", "1280"),
         }
 
     def _parse_wg_conf(self, text: str) -> dict | None:
@@ -215,15 +221,40 @@ class WarpPlugin(BasePlugin):
             if line.startswith("[") and line.endswith("]"):
                 current_section = line[1:-1].lower()
                 continue
-            if current_section and "=" in line:
+            if current_section in result and "=" in line:
                 parts = line.split("=", 1)
                 key = parts[0].strip().lower()
                 val = parts[1].strip()
                 result[current_section][key] = val
                 
-        if not result["interface"] or not result["peer"]:
+        required_interface = {"privatekey", "address"}
+        required_peer = {"publickey", "endpoint"}
+        if not all(result["interface"].get(key) for key in required_interface):
+            return None
+        if not all(result["peer"].get(key) for key in required_peer):
             return None
         return result
+
+    @staticmethod
+    def _parse_endpoint(raw_endpoint: str) -> tuple[str, int] | None:
+        """Parse WireGuard host:port, including bracketed IPv6 addresses."""
+        value = raw_endpoint.strip()
+        if value.startswith("["):
+            match = re.fullmatch(r"\[([^]]+)]:(\d+)", value)
+            if not match:
+                return None
+            host, port_text = match.groups()
+        else:
+            if ":" not in value:
+                return None
+            host, port_text = value.rsplit(":", 1)
+        try:
+            port = int(port_text)
+        except ValueError:
+            return None
+        if not host or not 1 <= port <= 65535:
+            return None
+        return host, port
 
     def configure(self, state: AppState) -> ConfigFragment:
         """Генерирует Sing-Box outbound/endpoints для WARP и route-правила."""
@@ -273,12 +304,14 @@ class WarpPlugin(BasePlugin):
         # ── ЗАГРУЗКА ТОЧЕК ВЫХОДА (OUTBOUNDS/ENDPOINTS) ──
         endpoints = []
         outbounds = []
-        destinations = set()
+        destinations = {"direct"}
 
         # 1. Кастомные гео-профили из /etc/hydra/warp_profiles/
         custom_profiles = []
         for p_file in sorted(WARP_PROFILES_DIR.glob("*.conf")):
             profile_name = p_file.stem
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", profile_name):
+                continue
             try:
                 text = p_file.read_text(encoding="utf-8", errors="replace")
                 parsed = self._parse_wg_conf(text)
@@ -290,15 +323,10 @@ class WarpPlugin(BasePlugin):
 
         for profile_name, parsed in custom_profiles:
             raw_endpoint = parsed["peer"].get("endpoint", "")
-            if ":" in raw_endpoint:
-                host, port_str = raw_endpoint.rsplit(":", 1)
-                try:
-                    port = int(port_str)
-                except ValueError:
-                    port = 2408
-            else:
-                host = raw_endpoint
-                port = 2408
+            endpoint_target = self._parse_endpoint(raw_endpoint)
+            if endpoint_target is None:
+                continue
+            host, port = endpoint_target
 
             try:
                 server_ip = socket.gethostbyname(host)
@@ -310,30 +338,45 @@ class WarpPlugin(BasePlugin):
             addresses = []
             for addr in parsed["interface"].get("address", "").split(","):
                 addr = addr.strip()
-                if addr:
+                if addr and self._is_ip_or_cidr(addr):
                     if "/" not in addr:
                         addr += "/128" if ":" in addr else "/32"
                     addresses.append(addr)
 
             if not addresses:
-                addresses = ["172.16.0.2/32"]
+                continue
+
+            try:
+                mtu = int(parsed["interface"].get("mtu", 1280))
+            except ValueError:
+                continue
+            if not 576 <= mtu <= 65535:
+                continue
 
             tag = f"warp_{profile_name}"
             ep_tag = f"{tag}_ep"
             destinations.add(tag)
+
+            allowed_ips = [
+                ip.strip()
+                for ip in parsed["peer"].get("allowedips", "0.0.0.0/0, ::/0").split(",")
+                if self._is_ip_or_cidr(ip.strip())
+            ]
+            if not allowed_ips:
+                continue
 
             endpoint = {
                 "type": "wireguard",
                 "tag": ep_tag,
                 "address": addresses,
                 "private_key": parsed["interface"].get("privatekey", ""),
-                "mtu": int(parsed["interface"].get("mtu", 1280)),
+                "mtu": mtu,
                 "peers": [
                     {
                         "address": server_ip,
                         "port": port,
                         "public_key": parsed["peer"].get("publickey", ""),
-                        "allowed_ips": [ip.strip() for ip in parsed["peer"].get("allowedips", "0.0.0.0/0, ::/0").split(",") if ip.strip()]
+                        "allowed_ips": allowed_ips,
                     }
                 ]
             }
@@ -364,25 +407,41 @@ class WarpPlugin(BasePlugin):
         # 2. Стандартный WGCF (если профиль сгенерирован)
         warp_cfg = self._load_warp_config()
         if warp_cfg:
+            endpoint_target = self._parse_endpoint(
+                warp_cfg.get("endpoint", "engage.cloudflareclient.com:2408")
+            )
+            try:
+                mtu = int(warp_cfg.get("mtu", 1280))
+            except (TypeError, ValueError):
+                mtu = 1280
+            allowed_ips = warp_cfg.get("allowed_ips") or ["0.0.0.0/0", "::/0"]
+            if endpoint_target is None or not 576 <= mtu <= 65535:
+                endpoint_target = None
+
+        if warp_cfg and endpoint_target is not None:
             destinations.add("warp")
             ep_tag = "warp_ep"
+            host, port = endpoint_target
             try:
-                server_ip = socket.gethostbyname("engage.cloudflareclient.com")
+                server_ip = socket.gethostbyname(host)
             except Exception:
-                server_ip = "162.159.192.1"
+                server_ip = host
 
             endpoint = {
                 "type": "wireguard",
                 "tag": ep_tag,
                 "address": warp_cfg["addresses"],
                 "private_key": warp_cfg["private_key"],
-                "mtu": 1280,
+                "mtu": mtu,
                 "peers": [
                     {
                         "address": server_ip,
-                        "port": 2408,
-                        "public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
-                        "allowed_ips": ["0.0.0.0/0", "::/0"]
+                        "port": port,
+                        "public_key": warp_cfg.get(
+                            "public_key",
+                            "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+                        ),
+                        "allowed_ips": allowed_ips,
                     }
                 ]
             }
@@ -432,7 +491,11 @@ class WarpPlugin(BasePlugin):
 
         rules = []
         for target, domains_list in outbound_domains.items():
-            clean_domains = list(set([d.strip() for d in domains_list if d.strip()]))
+            clean_domains = sorted({
+                d.strip().lower()
+                for d in domains_list
+                if isinstance(d, str) and self._is_valid_domain(d.strip())
+            })
             if clean_domains:
                 rules.append({
                     "domain_suffix": clean_domains,
@@ -440,7 +503,11 @@ class WarpPlugin(BasePlugin):
                 })
 
         for target, ips_list in outbound_ips.items():
-            clean_ips = list(set([ip.strip() for ip in ips_list if ip.strip()]))
+            clean_ips = sorted({
+                ip.strip()
+                for ip in ips_list
+                if isinstance(ip, str) and self._is_ip_or_cidr(ip.strip())
+            })
             if clean_ips:
                 rules.append({
                     "ip_cidr": clean_ips,
@@ -460,7 +527,7 @@ class WarpPlugin(BasePlugin):
         from hydra.core.singbox import is_running as sb_running
         from hydra.core.state import load_state
 
-        installed = WGCF_PROFILE.exists()
+        installed = WGCF_PROFILE.exists() or any(WARP_PROFILES_DIR.glob("*.conf"))
         enabled = False
         running = False
         
@@ -522,7 +589,9 @@ class WarpPlugin(BasePlugin):
         enabled_keys = []
         for k, target in list_targets.items():
             if k.startswith("ext:") and target and target != "none":
-                enabled_keys.append(k.split(":", 1)[1])
+                key = k.split(":", 1)[1]
+                if key not in enabled_keys:
+                    enabled_keys.append(key)
 
         if not enabled_keys:
             if WARP_EXTERNAL_CACHE.exists():
@@ -539,6 +608,7 @@ class WarpPlugin(BasePlugin):
 
         for key in enabled_keys:
             if key not in EXTERNAL_LISTS:
+                errors.append(f"Неизвестный источник: {key}")
                 continue
             item = EXTERNAL_LISTS[key]
             url = item["url"]
@@ -567,8 +637,8 @@ class WarpPlugin(BasePlugin):
                             domains.append(token)
                 
                 downloaded_lists[key] = {
-                    "domains": list(set(domains)),
-                    "ips": list(set(ips))
+                    "domains": sorted(set(domains)),
+                    "ips": sorted(set(ips))
                 }
                 downloaded_count += 1
             except Exception as e:
@@ -611,8 +681,11 @@ class WarpPlugin(BasePlugin):
             else:
                 existing["updated_at"] = attempted_at
 
-            WARP_EXTERNAL_CACHE.parent.mkdir(parents=True, exist_ok=True)
-            WARP_EXTERNAL_CACHE.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+            HOST.atomic_write(
+                WARP_EXTERNAL_CACHE,
+                json.dumps(existing, indent=2, ensure_ascii=False),
+                mode=0o600,
+            )
             
             status_msg = f"Обновлено списков: {downloaded_count}/{len(enabled_keys)}."
             if errors:

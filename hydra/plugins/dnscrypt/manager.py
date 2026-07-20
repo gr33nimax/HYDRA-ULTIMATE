@@ -3,19 +3,17 @@ hydra/plugins/dnscrypt/manager.py — TUI-консоль управления DN
 """
 from __future__ import annotations
 
-import os
 import re
 import time
 import socket
-import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from hydra.core.state import AppState, save_state
+from hydra.core.state import AppState
 from hydra.core.host import HOST
 from hydra.ui.tui import (
     clear, menu, prompt, confirm, panel, info, success, warn, error,
-    RED, GREEN, YELLOW, CYAN, BLUE, MAGENTA, BOLD, DIM, WHITE, NC
+    RED, GREEN, YELLOW, CYAN, BOLD, DIM, WHITE, NC
 )
 import hydra.core.orchestrator as orchestrator
 from hydra.plugins.dnscrypt.plugin import DNSCRYPT_CONF, DNSCRYPT_PORT, get_dnscrypt_bin
@@ -37,7 +35,10 @@ def _get_current_server_names() -> list[str]:
 def _apply_server_names(names: list[str]) -> bool:
     if not DNSCRYPT_CONF.exists():
         return False
+    if not names or any(not re.fullmatch(r"[A-Za-z0-9._-]+", name) for name in names):
+        return False
     try:
+        previous = DNSCRYPT_CONF.read_bytes()
         content = DNSCRYPT_CONF.read_text(encoding="utf-8")
         names_str = ", ".join(f"'{n}'" for n in names)
         new_line = f"server_names = [{names_str}]"
@@ -47,18 +48,41 @@ def _apply_server_names(names: list[str]) -> bool:
                 r"^server_names\s*=\s*\[.*?\]",
                 new_line,
                 content,
-                flags=re.MULTILINE,
+                count=1,
+                flags=re.MULTILINE | re.DOTALL,
             )
         else:
-            content = re.sub(
+            updated = re.sub(
                 r"(^listen_addresses\s*=\s*\[.*?\]\n)",
                 r"\1" + new_line + "\n",
                 content,
+                count=1,
                 flags=re.MULTILINE,
             )
-        DNSCRYPT_CONF.write_text(content, encoding="utf-8")
+            content = updated if updated != content else new_line + "\n" + content
+
+        HOST.atomic_write(DNSCRYPT_CONF, content)
+        checked = HOST.run(
+            [str(get_dnscrypt_bin()), "-check", "-config", str(DNSCRYPT_CONF)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if checked.returncode != 0:
+            HOST.atomic_write(DNSCRYPT_CONF, previous)
+            return False
+        restarted = HOST.systemd("restart", "dnscrypt-proxy")
+        if restarted.returncode != 0:
+            HOST.atomic_write(DNSCRYPT_CONF, previous)
+            HOST.systemd("restart", "dnscrypt-proxy")
+            return False
         return True
     except Exception:
+        try:
+            if "previous" in locals():
+                HOST.atomic_write(DNSCRYPT_CONF, previous)
+        except Exception:
+            pass
         return False
 
 
@@ -390,9 +414,7 @@ def do_dnscrypt_selector(state: AppState, plugin) -> None:
             info("Сохраняю server_names...")
             if _apply_server_names(new_chosen):
                 success("Настройки сохранены!")
-                info("Перезапускаю DNSCrypt...")
-                HOST.systemd("restart", "dnscrypt-proxy")
-                time.sleep(2)
+                time.sleep(1)
 
                 # Проверяем статус
                 r = HOST.systemd("is-active", "dnscrypt-proxy")
@@ -495,14 +517,9 @@ def menu_dnscrypt(state: AppState, plugin) -> None:
         elif choice == "8" and st.installed:
             warn("ПЕРЕУСТАНОВКА DNSCRYPT!")
             if confirm("Продолжить?", default=False):
-                info("Удаляю текущую установку...")
-                orchestrator.uninstall_plugin(state, plugin.meta.name)
-                info("Устанавливаю заново...")
-                if orchestrator.install_plugin(state, plugin.meta.name):
+                info("Восстанавливаю установку с сохранением настроек...")
+                if plugin.repair_installation(enabled=st.enabled):
                     success("Успешно переустановлено!")
-                    if st.enabled:
-                        info("Применяю конфигурацию...")
-                        orchestrator.apply_config(state)
                 else:
                     error("Ошибка при переустановке.")
             prompt("Нажмите Enter для продолжения")
