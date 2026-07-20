@@ -150,6 +150,17 @@ def test_signal_intersection_and_deduplication():
     assert len(signals) == len(set(signals))
 
 
+def test_auth_failure_does_not_double_count_as_handshake_failure():
+    event = {
+        "protocol": "anytls",
+        "kind": "auth_failure",
+        "handshake_ok": False,  # реальный TLS handshake действительно не завершился
+    }
+    score, signals = score_event(event)
+    assert signals == ("auth_failure",)  # НЕ ("auth_failure", "handshake_failure")
+    assert score == 3
+
+
 def test_flock_concurrency_protection(tmp_path):
     # Verify _lock_state_file protects concurrent read-modify-write state updates
     from hydra.plugins.antidpi.plugin import _lock_state_file

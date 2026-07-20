@@ -199,6 +199,8 @@ def score_event(event: dict) -> tuple[int, tuple[str, ...]]:
     except (TypeError, ValueError):
         pass
     unique = tuple(dict.fromkeys(signals))
+    if "auth_failure" in unique:
+        unique = tuple(s for s in unique if s != "handshake_failure")
     return sum(SIGNAL_WEIGHTS.get(signal, 0) for signal in unique), unique
 
 
