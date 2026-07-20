@@ -28,6 +28,17 @@ def _time(value: object) -> str:
         return "—"
 
 
+def _get_signals_list(metadata: object) -> list[str]:
+    if not isinstance(metadata, dict):
+        return []
+    val = metadata.get("signals", [])
+    if isinstance(val, list):
+        return [str(x) for x in val if x]
+    if isinstance(val, str) and val:
+        return [x.strip() for x in val.split(",") if x.strip()]
+    return []
+
+
 def _format_dur(sec: float | int) -> str:
     s = int(sec)
     if s < 60:
@@ -36,7 +47,21 @@ def _format_dur(sec: float | int) -> str:
         return f"{s // 60}м"
     if s < 86400:
         return f"{s // 3600}ч"
-    return f"{s // 86400}д"
+def _format_signal_lines(signals: list[str], max_len: int = 45) -> list[str]:
+    if not signals:
+        return ["Сигналы: —"]
+    lines = []
+    curr = "Сигналы: "
+    for i, s in enumerate(signals):
+        item = s + (", " if i < len(signals) - 1 else "")
+        if len(curr) + len(item) > max_len:
+            lines.append(curr)
+            curr = "         " + item
+        else:
+            curr += item
+    if curr.strip():
+        lines.append(curr)
+    return lines
 
 
 def _ban_history(plugin) -> None:
@@ -49,7 +74,7 @@ def _ban_history(plugin) -> None:
     lines = []
 
     if banned:
-        lines.append(f"{RED}─── АКТИВНЫЕ БАНОК ({len(banned)}) ───{DIM}")
+        lines.append(f"{RED}─── АКТИВНЫЕ БАНЫ ({len(banned)}) ───{DIM}")
         for ip, meta in reversed(list(banned.items())):
             if not isinstance(meta, dict):
                 meta = {}
@@ -57,18 +82,23 @@ def _ban_history(plugin) -> None:
             at = meta.get("at", 0)
             duration = meta.get("duration", 600)
             offense = meta.get("offense_count", 1)
-            signals_str = _signals(meta)
+            sig_list = _get_signals_list(meta)
             rem = duration - (now - at)
-            rem_str = f"осталось {_format_dur(rem)}" if rem > 0 else "истёк"
+            if rem > 0:
+                rem_str = f"осталось {_format_dur(rem)}"
+                icon = "🔴"
+            else:
+                rem_str = "истёк"
+                icon = "🟡"
             dur_str = _format_dur(duration)
 
             lines.append(
-                f"  🔴 {CYAN}{ip:<16}{DIM} | Score: {RED}{score:.1f}{DIM} | "
-                f"Бан: {GREEN}{dur_str}{DIM} ({rem_str}) | Нарушение #{offense}"
+                f"  {icon} {CYAN}{ip:<15}{DIM} | Score: {RED}{score:.1f}{DIM} | "
+                f"Срок: {GREEN}{dur_str}{DIM} ({rem_str}) | #{offense}"
             )
-            lines.append(
-                f"     {DIM}Время: {_time(at)} | Сигналы: {CYAN}{signals_str}{DIM}"
-            )
+            lines.append(f"     {DIM}Время бана: {_time(at)}")
+            for sig_line in _format_signal_lines(sig_list):
+                lines.append(f"     {DIM}{sig_line.strip()}")
             lines.append("")
 
     if history:
@@ -85,17 +115,16 @@ def _ban_history(plugin) -> None:
             st_text = "АКТИВЕН" if status_raw == "active" else "СНЯТ"
             score = item.get("score", 0.0)
             at = item.get("at", 0)
-            sig_str = _signals(item)
+            sig_list = _get_signals_list(item)
 
             lines.append(
-                f"  ⚪ {CYAN}{ip:<16}{DIM} | Score: {score:.1f} | Статус: {st_color}{st_text}{DIM} | Время: {_time(at)}"
+                f"  ⚪ {CYAN}{ip:<15}{DIM} | Score: {score:.1f} | Статус: {st_color}{st_text}{DIM} | Время: {_time(at)}"
             )
-            lines.append(
-                f"     {DIM}Сигналы: {sig_str}"
-            )
+            for sig_line in _format_signal_lines(sig_list):
+                lines.append(f"     {DIM}{sig_line.strip()}")
             lines.append("")
             shown += 1
-            if shown >= 15:
+            if shown >= 10:
                 break
 
     if not lines:
