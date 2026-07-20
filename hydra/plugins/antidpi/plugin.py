@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import ipaddress
 import json
-import shutil
 import subprocess
 import sys
 import time
@@ -167,6 +166,7 @@ def _run(command: list[str], *, text: bool = False, timeout: int = 20):
 
 
 class AntiDPIPlugin(BasePlugin):
+    last_error = ""
     meta = PluginMeta(
         name="antidpi",
         description="Анти-DPI: поведенческое обнаружение зондов на всех протоколах и Caddy L4",
@@ -177,15 +177,63 @@ class AntiDPIPlugin(BasePlugin):
     )
 
     def install(self) -> bool:
-        if shutil.which("ipset") is None:
-            return False
+        self.last_error = ""
+        missing = [name for name in self.meta.required_commands if HOST.which(name) is None]
+        if missing:
+            self._install_host_dependencies(missing)
+            missing = [name for name in self.meta.required_commands if HOST.which(name) is None]
+        if missing:
+            return self._fail("Не найдены команды: " + ", ".join(missing))
         if not self._ensure_sets() or not self._ensure_rules():
             return False
         if not self._restore_bans():
             return False
         self._sync_awg_debug(True)
-        self._write_service()
-        return _run(["systemctl", "daemon-reload"]).returncode == 0 and _run(["systemctl", "enable", "--now", "hydra-antidpi"]).returncode == 0
+        try:
+            self._write_service()
+        except OSError as exc:
+            return self._fail(f"Не удалось записать systemd unit: {exc}")
+        reload_result = _run(["systemctl", "daemon-reload"], text=True)
+        if reload_result.returncode != 0:
+            return self._fail(self._result_error(reload_result, "systemctl daemon-reload"))
+        start_result = _run(["systemctl", "enable", "--now", "hydra-antidpi"], text=True)
+        if start_result.returncode != 0:
+            return self._fail(self._result_error(start_result, "запуск hydra-antidpi"))
+        if not self.status().running:
+            return self._fail("hydra-antidpi не перешёл в active; проверьте journalctl -u hydra-antidpi")
+        return True
+
+    def _install_host_dependencies(self, missing: list[str]) -> None:
+        packages: list[str] = []
+        if any(name in missing for name in ("ipset", "iptables", "ip6tables")):
+            packages.extend(("ipset", "iptables"))
+        if not packages:
+            return
+        managers = (
+            (["apt-get", "install", "-y", "-qq", *packages], 180),
+            (["dnf", "install", "-y", "-q", *packages], 180),
+            (["yum", "install", "-y", "-q", *packages], 180),
+            (["apk", "add", "--no-cache", *packages], 180),
+            (["pacman", "-S", "--noconfirm", *packages], 180),
+        )
+        for command, timeout in managers:
+            if HOST.which(command[0]) is None:
+                continue
+            result = _run(command, text=True, timeout=timeout)
+            if result.returncode == 0:
+                return
+            self.last_error = self._result_error(result, "установка firewall dependencies")
+
+    def _fail(self, detail: str) -> bool:
+        self.last_error = str(detail).strip()[:800]
+        return False
+
+    @staticmethod
+    def _result_error(result, action: str) -> str:
+        detail = result.stderr or result.stdout or "неизвестная ошибка"
+        if isinstance(detail, bytes):
+            detail = detail.decode(errors="replace")
+        return f"{action}: {' '.join(str(detail).split())[:650]}"
 
     def uninstall(self) -> bool:
         _run(["systemctl", "disable", "--now", "hydra-antidpi"])
@@ -253,7 +301,7 @@ class AntiDPIPlugin(BasePlugin):
         active = _run(["systemctl", "is-active", "hydra-antidpi"], text=True)
         running = active.returncode == 0 and str(active.stdout).strip() == "active"
         data = self._load_state()
-        return PluginStatus(installed=SCRIPT_FILE.exists(), enabled=running, running=running, info={"banned_ips": len(data.get("banned", {})), "events": data.get("events", 0)})
+        return PluginStatus(installed=SCRIPT_FILE.exists() or SERVICE_FILE.exists(), enabled=running, running=running, info={"banned_ips": len(data.get("banned", {})), "events": data.get("events", 0), "last_error": self.last_error})
 
     def healthcheck(self) -> HealthResult:
         status = self.status()
@@ -309,6 +357,23 @@ class AntiDPIPlugin(BasePlugin):
         self._save_state(data)
         return banned
 
+    def unban(self, raw: str) -> bool:
+        """Remove an address from ipset and persistent evidence."""
+        try:
+            address = ipaddress.ip_address(str(raw).strip("[]"))
+        except ValueError:
+            return False
+        name = SET_V6 if address.version == 6 else SET_V4
+        result = _run(["ipset", "del", name, address.compressed], text=True)
+        detail = str(result.stderr or result.stdout or "").lower()
+        if result.returncode != 0 and "not in set" not in detail:
+            return False
+        data = self._load_state()
+        data.get("banned", {}).pop(address.compressed, None)
+        data.get("scores", {}).pop(address.compressed, None)
+        self._save_state(data)
+        return True
+
     @staticmethod
     def _is_whitelisted(address: ipaddress.IPv4Address | ipaddress.IPv6Address, data: dict) -> bool:
         if address.is_loopback or address.is_link_local:
@@ -337,8 +402,9 @@ class AntiDPIPlugin(BasePlugin):
     def _ensure_sets(self) -> bool:
         ok = True
         for name, family in ((SET_V4, "inet"), (SET_V6, "inet6")):
-            if _run(["ipset", "create", name, "hash:ip", "family", family, "timeout", "86400", "-exist"]).returncode != 0:
-                ok = False
+            result = _run(["ipset", "create", name, "hash:ip", "family", family, "timeout", "86400", "-exist"], text=True)
+            if result.returncode != 0:
+                ok = self._fail(self._result_error(result, f"создание ipset {name}")) and ok
         return ok
 
     def _ensure_rules(self) -> bool:
@@ -346,8 +412,10 @@ class AntiDPIPlugin(BasePlugin):
         for binary, name in (("iptables", SET_V4), ("ip6tables", SET_V6)):
             rule = [binary, "-C", "INPUT", "-m", "set", "--match-set", name, "src", "-m", "comment", "--comment", RULE_COMMENT, "-j", "DROP"]
             if _run(rule).returncode != 0:
-                add = _run([binary, *rule[2:]])
-                ok = add.returncode == 0 and ok
+                add = _run([binary, *rule[2:]], text=True)
+                if add.returncode != 0:
+                    self._fail(self._result_error(add, f"правило {binary} для {name}"))
+                    ok = False
         return ok
 
     def _remove_rules(self) -> bool:
