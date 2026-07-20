@@ -28,29 +28,87 @@ def _time(value: object) -> str:
         return "—"
 
 
+def _format_dur(sec: float | int) -> str:
+    s = int(sec)
+    if s < 60:
+        return f"{s}с"
+    if s < 3600:
+        return f"{s // 60}м"
+    if s < 86400:
+        return f"{s // 3600}ч"
+    return f"{s // 86400}д"
+
+
 def _ban_history(plugin) -> None:
+    import time
     data = plugin._load_state()
     banned = data.get("banned", {}) if isinstance(data.get("banned"), dict) else {}
     history = data.get("history", []) if isinstance(data.get("history"), list) else []
+    now = time.time()
     clear()
     lines = []
-    for item in reversed(history[-100:]):
-        if not isinstance(item, dict):
-            continue
-        status = "активен" if item.get("status", "active") == "active" else "снят"
-        lines.append(
-            f"  {CYAN}{item.get('ip', '?'):<39}{DIM} {_time(item.get('at'))}  "
-            f"score={item.get('score', 0)}  {status}  {_signals(item)}"
-        )
-    if not lines:
-        for ip, metadata in reversed(list(banned.items())):
-            meta = metadata if isinstance(metadata, dict) else {}
-            lines.append(f"  {CYAN}{ip:<39}{DIM} {_time(meta.get('at'))}  score={meta.get('score', 0)}  {_signals(meta)}")
-    panel(f"ИСТОРИЯ БАНОВ — АКТИВНЫХ: {len(banned)}", lines or ["  История пока пуста"])
+
     if banned:
-        raw = prompt("IP для разбана или Enter для возврата").strip()
+        lines.append(f"{RED}─── АКТИВНЫЕ БАНОК ({len(banned)}) ───{DIM}")
+        for ip, meta in reversed(list(banned.items())):
+            if not isinstance(meta, dict):
+                meta = {}
+            score = meta.get("score", 0.0)
+            at = meta.get("at", 0)
+            duration = meta.get("duration", 600)
+            offense = meta.get("offense_count", 1)
+            signals_str = _signals(meta)
+            rem = duration - (now - at)
+            rem_str = f"осталось {_format_dur(rem)}" if rem > 0 else "истёк"
+            dur_str = _format_dur(duration)
+
+            lines.append(
+                f"  🔴 {CYAN}{ip:<16}{DIM} | Score: {RED}{score:.1f}{DIM} | "
+                f"Бан: {GREEN}{dur_str}{DIM} ({rem_str}) | Нарушение #{offense}"
+            )
+            lines.append(
+                f"     {DIM}Время: {_time(at)} | Сигналы: {CYAN}{signals_str}{DIM}"
+            )
+            lines.append("")
+
+    if history:
+        lines.append(f"{CYAN}─── ИСТОРИЯ ПОСЛЕДНИХ СОБЫТИЙ ───{DIM}")
+        shown = 0
+        for item in reversed(history[-30:]):
+            if not isinstance(item, dict):
+                continue
+            ip = item.get("ip", "?")
+            if ip in banned:
+                continue
+            status_raw = item.get("status", "active")
+            st_color = RED if status_raw == "active" else GREEN
+            st_text = "АКТИВЕН" if status_raw == "active" else "СНЯТ"
+            score = item.get("score", 0.0)
+            at = item.get("at", 0)
+            sig_str = _signals(item)
+
+            lines.append(
+                f"  ⚪ {CYAN}{ip:<16}{DIM} | Score: {score:.1f} | Статус: {st_color}{st_text}{DIM} | Время: {_time(at)}"
+            )
+            lines.append(
+                f"     {DIM}Сигналы: {sig_str}"
+            )
+            lines.append("")
+            shown += 1
+            if shown >= 15:
+                break
+
+    if not lines:
+        lines = ["  История банов пока пуста."]
+
+    panel(f"ИСТОРИЯ И СТАТУС БАНОВ — АКТИВНЫХ: {len(banned)}", lines)
+    if banned:
+        raw = prompt("IP для разбана (или Enter для возврата)").strip()
         if raw:
-            success("Бан снят") if plugin.unban(raw) else warn("Не удалось снять бан")
+            if plugin.unban(raw):
+                success(f"Бан с IP {raw} успешно снят")
+            else:
+                warn(f"Не удалось снять бан с {raw} (не найден в бане)")
             prompt("Enter")
     else:
         prompt("Enter")
