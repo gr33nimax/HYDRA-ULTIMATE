@@ -38,7 +38,10 @@ def parse_protocol_line(service: str, line: str) -> tuple[str, dict] | None:
             ip = ipaddress.ip_address(raw_ip).compressed
         except ValueError:
             continue
-        return ip, {"protocol": owner, "kind": kind, "source": "journal"}
+        event = {"protocol": owner, "kind": kind, "source": "journal"}
+        if kind == "handshake_failure":
+            event["handshake_ok"] = False
+        return ip, event
     return None
 
 
