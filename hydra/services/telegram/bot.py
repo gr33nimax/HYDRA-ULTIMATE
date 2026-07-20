@@ -31,6 +31,7 @@ try:
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
     from telegram.ext import (
         Application, CallbackQueryHandler, CommandHandler, ContextTypes,
+        MessageHandler, filters,
     )
     TELEGRAM_AVAILABLE = True
 except ImportError:
@@ -574,6 +575,18 @@ class AdminBot:
         msg = await asyncio.to_thread(unban_ip_everywhere, context.args[0].strip())
         await self._show(update, msg, _back_keyboard(refresh="antidpi"))
 
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Keep the bot responsive to text and unsupported commands."""
+        if not await self._check_admin(update):
+            return
+        await self._show(
+            update,
+            "<b>🛡️ HYDRA Control Center</b>\n\n"
+            "Используйте кнопки меню или команды /system, /antidpi, "
+            "/fail2ban, /notifications и /unban &lt;ip&gt;.",
+            _main_keyboard(),
+        )
+
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await self._check_admin(update):
             return
@@ -647,6 +660,7 @@ class AdminBot:
             self.app.add_handler(CommandHandler(["notifications", "notify"], self.cmd_notifications))
             self.app.add_handler(CommandHandler("unban", self.cmd_unban))
             self.app.add_handler(CallbackQueryHandler(self.handle_callback))
+            self.app.add_handler(MessageHandler(filters.COMMAND | filters.TEXT, self.handle_message))
             self.app.run_polling()
         finally:
             self.stop_event.set()

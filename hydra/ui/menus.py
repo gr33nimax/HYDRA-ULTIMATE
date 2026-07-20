@@ -1722,15 +1722,27 @@ def _install_admin_bot(state: AppState):
         return
 
     try:
-        import telegram
+        from telegram.ext import Application, CallbackQueryHandler  # noqa: F401
     except ImportError:
-        info("Устанавливаю python-telegram-bot...")
-        HOST.run([sys.executable, "-m", "pip", "install", "-q", "python-telegram-bot[job-queue]"])
+        info("Устанавливаю совместимую версию python-telegram-bot...")
+        installed = HOST.run(
+            [
+                sys.executable, "-m", "pip", "install", "--upgrade", "-q",
+                "python-telegram-bot[job-queue]==22.8",
+            ],
+            timeout=180,
+            text=True,
+        )
+        if installed.returncode != 0:
+            error("Не удалось установить python-telegram-bot 22.8")
+            prompt("Нажмите Enter")
+            return
 
     project_root = Path(__file__).resolve().parents[2]
-    install_service("hydra-tg-admin", f"""[Unit]
+    unit_installed = install_service("hydra-tg-admin", f"""[Unit]
 Description=HYDRA Admin Bot (System Info + Security Alerts)
-After=network.target
+Wants=network-online.target
+After=network-online.target
 [Service]
 Type=simple
 User=root
@@ -1742,9 +1754,23 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 """)
-    state.telegram.admin_enabled = True
+    started = HOST.run(
+        ["systemctl", "restart", "hydra-tg-admin.service"],
+        timeout=30,
+        text=True,
+    )
+    active = HOST.run(
+        ["systemctl", "is-active", "--quiet", "hydra-tg-admin.service"],
+        timeout=15,
+    )
+    state.telegram.admin_enabled = bool(
+        unit_installed and started.returncode == 0 and active.returncode == 0
+    )
     save_state(state)
-    success("Admin-бот запущен (hydra-tg-admin)")
+    if state.telegram.admin_enabled:
+        success("Admin-бот запущен (hydra-tg-admin)")
+    else:
+        error("Admin-бот не запустился. Проверьте: journalctl -u hydra-tg-admin -n 100")
     prompt("Нажмите Enter")
 
 

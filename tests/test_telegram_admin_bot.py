@@ -4,6 +4,7 @@ tests/test_telegram_admin_bot.py — Tests for new Telegram Admin Bot & notifica
 from __future__ import annotations
 
 import json
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -166,3 +167,23 @@ def test_main_keyboard_callback_payloads_fit_telegram_limit():
     ]
     assert {"view:system", "view:antidpi", "view:fail2ban", "view:notifications"} <= set(callbacks)
     assert all(len(value.encode("utf-8")) <= 64 for value in callbacks)
+
+
+def test_admin_bot_installer_starts_and_verifies_service():
+    from hydra.ui import menus
+
+    state = AppState(telegram=TelegramConfig(
+        admin_token="123:TOKEN", admin_chat_id="999888",
+    ))
+    result = subprocess.CompletedProcess([], 0, "", "")
+    with patch.object(menus, "install_service", return_value=True), \
+         patch.object(menus.HOST, "run", return_value=result) as run, \
+         patch.object(menus, "save_state"), \
+         patch.object(menus, "success"), \
+         patch.object(menus, "prompt"):
+        menus._install_admin_bot(state)
+
+    commands = [call.args[0] for call in run.call_args_list]
+    assert ["systemctl", "restart", "hydra-tg-admin.service"] in commands
+    assert ["systemctl", "is-active", "--quiet", "hydra-tg-admin.service"] in commands
+    assert state.telegram.admin_enabled is True
