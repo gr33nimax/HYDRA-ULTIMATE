@@ -108,6 +108,38 @@ def resolve_mapping(protocol: str, relay_source_port: int, *, now: float | None 
     return None
 
 
+def resolve_recent_unique_source(protocol: str, *, now: float | None = None,
+                                 window: float = 2.0,
+                                 path: Path | None = None) -> str | None:
+    """Resolve a source only when all very recent mappings agree on one IP.
+
+    Some native protocol errors omit the peer endpoint entirely.  A short,
+    ambiguity-safe lookup lets AntiDPI attribute those errors during a single
+    test/connection without ever selecting an arbitrary concurrent peer.
+    """
+    mapping_path = path or MAP_FILE
+    timestamp = time.time() if now is None else now
+    sources: set[str] = set()
+    try:
+        lines = mapping_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines[-8192:]):
+        try:
+            item = json.loads(line)
+            age = timestamp - float(item.get("at", 0))
+            if age > window:
+                break
+            if age < -1 or str(item.get("protocol")) != str(protocol):
+                continue
+            sources.add(ipaddress.ip_address(item.get("source_ip", "")).compressed)
+            if len(sources) > 1:
+                return None
+        except (TypeError, ValueError):
+            continue
+    return next(iter(sources), None)
+
+
 def _pipe(client: socket.socket, backend: socket.socket) -> None:
     selector = selectors.DefaultSelector()
     selector.register(client, selectors.EVENT_READ, backend)

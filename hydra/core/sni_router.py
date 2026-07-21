@@ -50,6 +50,7 @@ _DECOY_HTTP_PORTS = {
 
 _SOURCE_RELAY_PORTS = {
     "anytls": 21444,
+    "trusttunnel": 21445,
     "shadowtls": 21446,
 }
 
@@ -980,6 +981,19 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
     if any(b["name"] == "trusttunnel" for b in backends):
         tt_backend = next(b for b in backends if b["name"] == "trusttunnel")
         tt_port = _INTERNAL_PORTS["trusttunnel"]
+        tt_relay_enabled = relay_enabled and "trusttunnel" in _SOURCE_RELAY_PORTS
+        tt_upstream_port = _SOURCE_RELAY_PORTS["trusttunnel"] if tt_relay_enabled else tt_port
+        tt_transport = {
+            "protocol": "http",
+            "versions": ["2"],
+            "response_header_timeout": "5s",
+            "tls": {"insecure_skip_verify": True},
+        }
+        if tt_relay_enabled:
+            tt_transport["proxy_protocol"] = "v2"
+            # A PROXY header describes one external client.  Never reuse or
+            # multiplex that upstream HTTP/2 connection for another client.
+            tt_transport["keep_alive"] = {"enabled": False}
         http_servers["trusttunnel_decoy"] = {
             "listen": [f"127.0.0.1:{_DECOY_HTTP_PORTS['trusttunnel']}"],
             "listener_wrappers": _decoy_listener_wrappers(),
@@ -997,15 +1011,8 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                     "handle": [
                         {
                             "handler": "reverse_proxy",
-                            "upstreams": [{"dial": f"127.0.0.1:{tt_port}"}],
-                            "transport": {
-                                "protocol": "http",
-                                "versions": ["2"],
-                                "response_header_timeout": "5s",
-                                "tls": {
-                                    "insecure_skip_verify": True
-                                }
-                            },
+                            "upstreams": [{"dial": f"127.0.0.1:{tt_upstream_port}"}],
+                            "transport": tt_transport,
                             "headers": {
                                 "request": {
                                     "set": {

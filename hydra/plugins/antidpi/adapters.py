@@ -118,13 +118,30 @@ def parse_protocol_line(service: str, line: object) -> tuple[str, dict] | None:
         event = {"protocol": owner, "kind": kind, "source": "journal"}
         if (
             peer_port is not None
-            and owner in {"anytls", "shadowtls"}
+            and owner in {"anytls", "trusttunnel", "shadowtls"}
             and ipaddress.ip_address(ip).is_loopback
         ):
             event["peer_port"] = peer_port
         if kind == "handshake_failure":
             event["handshake_ok"] = False
         return ip, event
+    return None
+
+
+def parse_unattributed_protocol_line(service: str, line: object) -> dict | None:
+    """Return strict native evidence whose log record omits the peer endpoint."""
+    service = str(service or "").lower()
+    text = decode_log_message(line)
+    lowered = text.lower()
+    if (
+        ("sing-box" in service or "shadowtls" in lowered)
+        and "inbound/shadowtls[" in lowered
+        and "client hello verify failed: hmac mismatch" in lowered
+    ):
+        return {
+            "protocol": "shadowtls", "kind": "auth_failure",
+            "source": "journal",
+        }
     return None
 
 

@@ -11,7 +11,12 @@ from pathlib import Path
 
 from hydra.core.host import HOST
 from hydra.core.sni_router import DECOY_LOG, TRUSTTUNNEL_LOG
-from hydra.plugins.antidpi.adapters import parse_kernel_scan_line, parse_protocol_line, normalize_tls_auth_failure
+from hydra.plugins.antidpi.adapters import (
+    normalize_tls_auth_failure,
+    parse_kernel_scan_line,
+    parse_protocol_line,
+    parse_unattributed_protocol_line,
+)
 from hydra.plugins.antidpi.plugin import (
     LOG_FILE,
     AntiDPIPlugin,
@@ -44,6 +49,19 @@ def _resolve_relay_source(event: Normalized | None) -> Normalized | None:
     resolved = dict(details)
     resolved["source"] = "caddy-source-relay"
     resolved["relay_peer_port"] = peer_port
+    return source, resolved
+
+
+def _resolve_unattributed_relay_source(details: dict | None) -> Normalized | None:
+    if not details:
+        return None
+    from hydra.core.source_relay import resolve_recent_unique_source
+    source = resolve_recent_unique_source(str(details.get("protocol", "")))
+    if not source:
+        return None
+    resolved = dict(details)
+    resolved["source"] = "caddy-source-relay"
+    resolved["attribution"] = "unique-recent-source"
     return source, resolved
 
 
@@ -184,6 +202,11 @@ def _journal_worker(out: queue.Queue[Normalized], stop: threading.Event) -> None
                 if not event:
                     event = normalize_tls_auth_failure(record)
                 event = _resolve_relay_source(event)
+                if not event:
+                    details = parse_unattributed_protocol_line(
+                        record.get("_SYSTEMD_UNIT", ""), record.get("MESSAGE", ""),
+                    )
+                    event = _resolve_unattributed_relay_source(details)
                 if event:
                     _offer_event(out, event)
         except (OSError, RuntimeError):

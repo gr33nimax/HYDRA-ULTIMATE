@@ -1,4 +1,7 @@
-from hydra.plugins.antidpi.adapters import decode_log_message, parse_kernel_scan_line, parse_protocol_line
+from hydra.plugins.antidpi.adapters import (
+    decode_log_message, parse_kernel_scan_line, parse_protocol_line,
+    parse_unattributed_protocol_line,
+)
 
 
 def test_awg_rejection_is_normalized():
@@ -129,3 +132,14 @@ def test_shadowtls_detoured_trojan_auth_failure_keeps_relay_endpoint():
     )
     assert bad_request[1]["kind"] == "auth_failure"
     assert bad_request[1]["peer_port"] == 32146
+
+
+def test_shadowtls_native_hmac_mismatch_is_strict_unattributed_evidence():
+    line = (
+        "WARN inbound/shadowtls[shadowtls-in]: "
+        "client hello verify failed: hmac mismatch"
+    )
+    assert parse_protocol_line("sing-box.service", line) is None
+    assert parse_unattributed_protocol_line("sing-box.service", line) == {
+        "protocol": "shadowtls", "kind": "auth_failure", "source": "journal",
+    }
