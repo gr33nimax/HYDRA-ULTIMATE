@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
@@ -490,7 +491,7 @@ def get_antidpi_dashboard_text() -> str:
     )
 
 
-def get_honeypot_status_text() -> str:
+def _legacy_honeypot_status_text() -> str:
     from hydra.plugins.honeypot.plugin import HoneypotPlugin
 
     plugin = HoneypotPlugin()
@@ -536,7 +537,7 @@ def _parse_fail2ban_jail(detail: str) -> dict:
     return result
 
 
-def get_fail2ban_dashboard_text() -> str:
+def _legacy_fail2ban_dashboard_text() -> str:
     from hydra.plugins.fail2ban.plugin import Fail2banPlugin
 
     plugin = Fail2banPlugin()
@@ -573,6 +574,173 @@ def get_fail2ban_dashboard_text() -> str:
         f"<b>Всего банов:</b> {total_ever}\n"
         f"<b>Всего ошибок:</b> {total_failed}\n\n"
         + ("\n\n".join(blocks) if blocks else "<i>Активных jail нет</i>")
+    )
+
+
+def _format_security_timestamp(value: object) -> str:
+    raw = str(value or "").strip().replace("T", " ")
+    match = re.match(r"(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})", raw)
+    if match:
+        year, month, day, hour, minute = match.groups()
+        return f"{day}.{month}.{year} {hour}:{minute}"
+    return raw[:16] or "—"
+
+
+def _parse_fail2ban_ban_lines(lines: list[str], limit: int = 5) -> list[dict[str, str]]:
+    pattern = re.compile(
+        r"^(?P<when>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}).*?"
+        r"NOTICE\s+\[(?P<jail>[^]]+)]\s+Ban\s+(?P<ip>\S+)",
+    )
+    result = []
+    seen = set()
+    for line in reversed(lines):
+        match = pattern.search(str(line))
+        if not match:
+            continue
+        try:
+            address = ipaddress.ip_address(match.group("ip").strip("[]")).compressed
+        except ValueError:
+            continue
+        if address in seen:
+            continue
+        seen.add(address)
+        result.append({
+            "ip": address, "jail": match.group("jail"), "when": match.group("when"),
+        })
+        if len(result) >= max(0, int(limit)):
+            break
+    return result
+
+
+def _recent_fail2ban_bans(limit: int = 5) -> list[dict[str, str]]:
+    path = Path("/var/log/fail2ban.log")
+    lines: list[str] = []
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            handle.seek(max(0, size - 4 * 1024 * 1024))
+            lines = handle.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        pass
+    recent = _parse_fail2ban_ban_lines(lines, limit)
+    if len(recent) >= limit:
+        return recent
+    try:
+        journal = HOST.run(
+            ["journalctl", "-u", "fail2ban", "-n", "5000", "--no-pager", "-o", "short-iso"],
+            timeout=15, text=True,
+        )
+        return _parse_fail2ban_ban_lines(
+            [*str(journal.stdout or "").splitlines(), *lines], limit,
+        )
+    except Exception:
+        return recent
+
+
+def _lookup_security_intel(addresses: list[str]) -> dict[str, dict[str, str]]:
+    from hydra.services.security_intel import lookup_ip
+
+    unique = list(dict.fromkeys(addresses))[:5]
+    if not unique:
+        return {}
+    with ThreadPoolExecutor(max_workers=len(unique)) as executor:
+        return dict(zip(unique, executor.map(lookup_ip, unique)))
+
+
+def _network_label(intel: dict[str, str]) -> str:
+    return " ".join(
+        value for value in (str(intel.get("asn", "")), str(intel.get("owner", "")))
+        if value and value != "N/A"
+    ).strip()
+
+
+def get_honeypot_status_text() -> str:
+    """Compact Honeypot status with five latest attributed blocks."""
+    from hydra.plugins.honeypot.plugin import HoneypotPlugin
+
+    plugin = HoneypotPlugin()
+    status = plugin.status()
+    data = plugin._load_state()
+    banned = data.get("banned", {}) if isinstance(data.get("banned"), dict) else {}
+    ordered = sorted(
+        banned.items(), key=lambda item: str((item[1] or {}).get("banned_at", "")), reverse=True,
+    )
+    latest = ordered[:5]
+    intel = _lookup_security_intel([str(address) for address, _ in latest])
+    rows = []
+    port = int(data.get("port", status.port or 0))
+    for address, metadata in latest:
+        details = intel.get(str(address), {})
+        flag = html.escape(str(details.get("flag", "🌐")))
+        when = _format_security_timestamp((metadata or {}).get("banned_at"))
+        backend = html.escape(str((metadata or {}).get("backend", "firewall")))
+        owner = _network_label(details)
+        suffix = f" · {html.escape(owner)}" if owner else ""
+        rows.append(
+            f"• {flag} <code>{html.escape(str(address))}</code> · {html.escape(when)}\n"
+            f"  <code>TCP/{port}</code> · {backend}{suffix}"
+        )
+    service = "🟢 работает" if status.running else "🔴 остановлен"
+    return (
+        "<b>🍯 Honeypot</b>\n\n"
+        f"{service} · <code>{port}/TCP</code>\n"
+        f"<b>Активных блокировок:</b> {len(ordered)}\n\n"
+        "<b>Последние блокировки:</b>\n"
+        + ("\n\n".join(rows) if rows else "<i>Блокировок нет</i>")
+    )
+
+
+def get_fail2ban_dashboard_text() -> str:
+    """Compact Fail2ban dashboard without duplicated lifetime counters."""
+    from hydra.plugins.fail2ban.plugin import Fail2banPlugin
+
+    plugin = Fail2banPlugin()
+    status = plugin.status()
+    if not status.running:
+        return "<b>🚫 Fail2ban</b>\n\n🔴 остановлен"
+    overall = HOST.run(["fail2ban-client", "status"], timeout=10, text=True)
+    match = re.search(r"Jail list:\s*(.*)", str(overall.stdout or ""))
+    jails = [item.strip() for item in match.group(1).split(",") if item.strip()] if match else []
+    options = plugin.jail_options(load_state())
+    jail_rows = []
+    total_current = 0
+    for jail in jails:
+        detail = HOST.run(["fail2ban-client", "status", jail], timeout=10, text=True)
+        info = _parse_fail2ban_jail(str(detail.stdout or ""))
+        current = info["currently_banned"]
+        total_current += current
+        config = options.get(jail, {})
+        jail_rows.append(
+            f"• <code>{html.escape(jail)}</code> · {current} IP · "
+            f"{html.escape(str(config.get('maxretry', '—')))}/{_format_period(config.get('findtime'))} "
+            f"→ {_format_period(config.get('bantime'))}"
+        )
+
+    recent = _recent_fail2ban_bans(5)
+    intel = _lookup_security_intel([item["ip"] for item in recent])
+    recent_rows = []
+    for item in recent:
+        details = intel.get(item["ip"], {})
+        flag = html.escape(str(details.get("flag", "🌐")))
+        jail = item["jail"]
+        duration = _format_period(options.get(jail, {}).get("bantime"))
+        owner = _network_label(details)
+        suffix = f" · {html.escape(owner)}" if owner else ""
+        recent_rows.append(
+            f"• {flag} <code>{html.escape(item['ip'])}</code> · "
+            f"{html.escape(_format_security_timestamp(item['when']))}\n"
+            f"  <code>{html.escape(jail)}</code> · бан {duration}{suffix}"
+        )
+
+    return (
+        "<b>🚫 Fail2ban</b>\n\n"
+        f"🟢 работает · <b>{total_current}</b> активных банов\n"
+        f"<b>Jail:</b> {len(jails)}\n\n"
+        "<b>Политики:</b>\n"
+        + ("\n".join(jail_rows) if jail_rows else "<i>Активных jail нет</i>")
+        + "\n\n<b>Последние блокировки:</b>\n"
+        + ("\n\n".join(recent_rows) if recent_rows else "<i>Событий Ban в журнале нет</i>")
     )
 
 

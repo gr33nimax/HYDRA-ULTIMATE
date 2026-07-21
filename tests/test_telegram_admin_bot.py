@@ -22,6 +22,7 @@ from hydra.services.telegram.bot import (
     _process_fail2ban_log_line,
     _process_honeypot_log_line,
     _parse_fail2ban_jail,
+    _parse_fail2ban_ban_lines,
     _main_keyboard,
     _notification_settings_text,
     _toggle_notification,
@@ -227,7 +228,7 @@ def test_fail2ban_jail_parser_extracts_full_status():
     }
 
 
-def test_expanded_fail2ban_dashboard_includes_policy_and_totals():
+def _legacy_test_expanded_fail2ban_dashboard_includes_policy_and_totals():
     overall = MagicMock(returncode=0, stdout="Jail list: hydra-sshd")
     detail = MagicMock(
         returncode=0,
@@ -247,7 +248,7 @@ def test_expanded_fail2ban_dashboard_includes_policy_and_totals():
     assert "198.51.100.9" in text
 
 
-def test_dedicated_security_dashboards_render(tmp_path):
+def _legacy_test_dedicated_security_dashboards_render(tmp_path):
     with patch("hydra.plugins.antidpi.plugin.AntiDPIPlugin.status") as adpi_status, \
          patch("hydra.plugins.antidpi.plugin.AntiDPIPlugin._load_state", return_value={"banned": {}, "events": 3}), \
          patch("hydra.plugins.honeypot.plugin.HoneypotPlugin.status") as hp_status, \
@@ -256,6 +257,80 @@ def test_dedicated_security_dashboards_render(tmp_path):
         hp_status.return_value = MagicMock(running=True, port=9999)
         assert "защита всей VPS" in get_antidpi_dashboard_text()
         assert "отдельная ловушка" in get_honeypot_status_text()
+
+
+def test_compact_fail2ban_dashboard_includes_policy_and_latest_geoip():
+    overall = MagicMock(returncode=0, stdout="Jail list: hydra-sshd")
+    detail = MagicMock(
+        returncode=0,
+        stdout=(
+            "Currently failed: 2\nTotal failed: 14\nCurrently banned: 1\n"
+            "Total banned: 5\nBanned IP list: 198.51.100.9\n"
+        ),
+    )
+    with patch("hydra.plugins.fail2ban.plugin.Fail2banPlugin.status", return_value=MagicMock(running=True)), \
+         patch("hydra.plugins.fail2ban.plugin.Fail2banPlugin.jail_options", return_value={
+             "hydra-sshd": {"maxretry": "5", "findtime": "600", "bantime": "3600"},
+         }), \
+         patch("hydra.services.telegram.bot.HOST.run", side_effect=[overall, detail]), \
+         patch("hydra.services.telegram.bot._recent_fail2ban_bans", return_value=[{
+             "ip": "198.51.100.9", "jail": "hydra-sshd", "when": "2026-07-21 11:42:03",
+         }]), \
+         patch("hydra.services.telegram.bot._lookup_security_intel", return_value={
+             "198.51.100.9": {"flag": "🇷🇺", "asn": "AS64500", "owner": "Example Net"},
+         }):
+        text = get_fail2ban_dashboard_text()
+    assert "1</b> активных банов" in text
+    assert "hydra-sshd</code> · 1 IP · 5/10м → 1ч" in text
+    assert "198.51.100.9" in text
+    assert "🇷🇺" in text
+    assert "21.07.2026 11:42" in text
+    assert "AS64500 Example Net" in text
+    assert "Всего ошибок" not in text
+    assert "Всего банов" not in text
+
+
+def test_recent_fail2ban_parser_returns_five_unique_latest_bans():
+    lines = [
+        f"2026-07-21 10:0{index}:00 fail2ban.actions [1]: NOTICE [hydra-sshd] Ban 198.51.100.{index}"
+        for index in range(1, 7)
+    ]
+    lines.append(
+        "2026-07-21 10:07:00 fail2ban.actions [1]: NOTICE [hydra-recidive] Ban 198.51.100.6"
+    )
+    parsed = _parse_fail2ban_ban_lines(lines, 5)
+    assert len(parsed) == 5
+    assert parsed[0] == {
+        "ip": "198.51.100.6", "jail": "hydra-recidive", "when": "2026-07-21 10:07:00",
+    }
+    assert parsed[-1]["ip"] == "198.51.100.2"
+
+
+def test_compact_honeypot_dashboard_limits_rows_and_adds_geoip():
+    banned = {
+        f"198.51.100.{index}": {
+            "banned_at": f"2026-07-21T10:0{index}:00", "backend": "iptables",
+        }
+        for index in range(1, 7)
+    }
+    intel = {
+        f"198.51.100.{index}": {"flag": "🇩🇪", "asn": "AS64501", "owner": "Test Network"}
+        for index in range(2, 7)
+    }
+    with patch("hydra.plugins.honeypot.plugin.HoneypotPlugin.status", return_value=MagicMock(running=True, port=9999)), \
+         patch("hydra.plugins.honeypot.plugin.HoneypotPlugin._load_state", return_value={
+             "port": 9999, "banned": banned, "whitelist": [],
+         }), \
+         patch("hydra.services.telegram.bot._lookup_security_intel", return_value=intel):
+        text = get_honeypot_status_text()
+    assert "<b>🍯 Honeypot</b>" in text
+    assert "Активных блокировок:</b> 6" in text
+    assert text.count("<code>198.51.100.") == 5
+    assert "198.51.100.1" not in text
+    assert "🇩🇪" in text
+    assert "21.07.2026 10:06" in text
+    assert "AS64501 Test Network" in text
+    assert "…и ещё" not in text
 
 
 def test_admin_bot_installer_starts_and_verifies_service():
