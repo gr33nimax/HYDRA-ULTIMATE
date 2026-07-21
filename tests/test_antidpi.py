@@ -334,6 +334,41 @@ def test_progressive_ban_durations(tmp_path):
         assert data["banned"]["198.51.100.5"]["offense_count"] == 2
 
 
+def test_manual_ban_uses_progressive_ipset_and_is_idempotent(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "antidpi-manual.json"
+    result = MagicMock(returncode=0, stdout="", stderr="")
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch.object(plugin, "_ensure_sets", return_value=True), \
+         patch.object(plugin, "_ensure_rules", return_value=True), \
+         patch("hydra.plugins.antidpi.plugin._run", return_value=result) as firewall:
+        first = plugin.manual_ban("198.51.100.77", source="telegram-admin")
+        second = plugin.manual_ban("198.51.100.77", source="telegram-admin")
+        data = plugin._load_state()
+
+    assert first["ok"] is True
+    assert first["already_active"] is False
+    assert first["duration"] == 600
+    assert second["ok"] is True
+    assert second["already_active"] is True
+    assert data["ban_counts"]["198.51.100.77"] == 1
+    assert data["banned"]["198.51.100.77"]["kind"] == "manual_ban"
+    assert data["banned"]["198.51.100.77"]["source"] == "telegram-admin"
+    assert firewall.call_count == 1
+
+
+def test_manual_ban_rejects_invalid_and_whitelisted_addresses(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "antidpi-manual-rejected.json"
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch.object(plugin, "_ensure_sets", return_value=True), \
+         patch.object(plugin, "_ensure_rules", return_value=True), \
+         patch("hydra.plugins.antidpi.plugin._run") as firewall:
+        assert plugin.manual_ban("--help")["error"] == "invalid_ip"
+        assert plugin.manual_ban("127.0.0.1")["error"] == "whitelisted"
+    firewall.assert_not_called()
+
+
 def test_normalize_tls_auth_failure():
     from hydra.plugins.antidpi.adapters import normalize_tls_auth_failure, parse_protocol_line
     record = {"remote": "198.51.100.99:54321", "msg": "authentication failed: invalid password"}

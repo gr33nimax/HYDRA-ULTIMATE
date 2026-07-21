@@ -66,6 +66,7 @@ def send_admin_notification(
     *,
     category: str = "system",
     force: bool = False,
+    reply_markup: Optional[dict] = None,
 ) -> bool:
     """Send a categorized notification to the configured administrator."""
     try:
@@ -77,12 +78,15 @@ def send_admin_notification(
             return False
 
         url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload = json.dumps({
+        request_data = {
             "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
-        }).encode("utf-8")
+        }
+        if reply_markup:
+            request_data["reply_markup"] = reply_markup
+        payload = json.dumps(request_data).encode("utf-8")
 
         req = urllib.request.Request(
             url,
@@ -338,6 +342,13 @@ def unban_ip_everywhere(ip: str) -> str:
         results.append(f"• Fail2ban: ❌ Ошибка ({html.escape(str(e))})")
 
     return f"<b>🔓 Результат разблокировки IP <code>{safe_ip}</code>:</b>\n\n" + "\n".join(results)
+
+
+def ban_ip_antidpi(ip: str) -> dict:
+    """Apply a validated manual AntiDPI ban from an admin interaction."""
+    from hydra.plugins.antidpi.plugin import AntiDPIPlugin
+
+    return AntiDPIPlugin().manual_ban(ip, source="telegram-admin")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1176,6 +1187,48 @@ class AdminBot:
             msg = await asyncio.to_thread(unban_ip_everywhere, data.split(":", 1)[1])
             keyboard = await asyncio.to_thread(_antidpi_keyboard)
             await self._show(update, msg, keyboard)
+        elif data.startswith("antidpi-ban:"):
+            address = data.split(":", 1)[1]
+            result = await asyncio.to_thread(ban_ip_antidpi, address)
+            if not result.get("ok"):
+                errors = {
+                    "invalid_ip": "Некорректный IP-адрес",
+                    "whitelisted": "IP находится в whitelist",
+                    "firewall_error": "Не удалось применить firewall ban",
+                }
+                await update.callback_query.answer(
+                    errors.get(str(result.get("error")), "Не удалось заблокировать IP"),
+                    show_alert=True,
+                )
+                return
+            duration = max(0, int(result.get("remaining", result.get("duration", 0)) or 0))
+            status = "already_banned" if result.get("already_active") else "manual_ban"
+            message = update.callback_query.message
+            original = getattr(message, "text_html", None)
+            if not isinstance(original, str) or not original:
+                original = html.escape(str(getattr(message, "text", "AntiDPI · ALERT") or "AntiDPI · ALERT"))
+            updated = (
+                f"{original}\n"
+                f"<b>Action:</b> <code>{status}</code>\n"
+                f"<b>TTL:</b> <code>{_format_period(duration)}</code>\n"
+                f"<b>Offense:</b> <code>{int(result.get('offense_count', 1) or 1)}</code>"
+            )
+            try:
+                await update.callback_query.edit_message_text(
+                    updated,
+                    parse_mode="HTML",
+                    reply_markup=None,
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                await update.callback_query.answer(
+                    "IP заблокирован, но сообщение не удалось обновить",
+                    show_alert=True,
+                )
+                return
+            await update.callback_query.answer(
+                "IP уже заблокирован" if result.get("already_active") else "IP заблокирован",
+            )
         else:
             await update.callback_query.answer("Неизвестное действие", show_alert=True)
 

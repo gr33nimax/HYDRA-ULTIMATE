@@ -3,9 +3,11 @@ tests/test_telegram_admin_bot.py — Tests for new Telegram Admin Bot & notifica
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -27,6 +29,7 @@ from hydra.services.telegram.bot import (
     _notification_settings_text,
     _toggle_notification,
     notification_allowed,
+    AdminBot,
 )
 from hydra.plugins.antidpi.plugin import AntiDPIPlugin
 
@@ -53,6 +56,21 @@ def test_send_admin_notification_success():
         data = json.loads(req.data.decode("utf-8"))
         assert data["chat_id"] == "999888"
         assert data["text"] == "Hello Admin"
+
+
+def test_send_admin_notification_includes_inline_keyboard():
+    state = AppState(telegram=TelegramConfig(admin_token="123:TOKEN", admin_chat_id="999888"))
+    keyboard = {
+        "inline_keyboard": [[{
+            "text": "🚫 Заблокировать",
+            "callback_data": "antidpi-ban:198.51.100.22",
+        }]],
+    }
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        mock_urlopen.return_value.__enter__.return_value.status = 200
+        assert send_admin_notification("Alert", state=state, reply_markup=keyboard) is True
+    request = mock_urlopen.call_args.args[0]
+    assert json.loads(request.data.decode("utf-8"))["reply_markup"] == keyboard
 
 
 def test_notification_categories_can_be_disabled():
@@ -138,6 +156,41 @@ def test_antidpi_observe_event_notification(tmp_path):
                 assert "AntiDPI · ALERT" in msg
                 assert "198.51.100.22" in msg
                 assert "Действие" not in msg
+                markup = mock_notify.call_args.kwargs["reply_markup"]
+                button = markup["inline_keyboard"][0][0]
+                assert button["callback_data"] == "antidpi-ban:198.51.100.22"
+                assert len(button["callback_data"].encode("utf-8")) <= 64
+
+
+def test_antidpi_alert_ban_callback_updates_original_message():
+    bot = AdminBot.__new__(AdminBot)
+    bot.admin_chat_id = "999888"
+    query = SimpleNamespace(
+        data="antidpi-ban:198.51.100.22",
+        message=SimpleNamespace(text_html="<b>AntiDPI · ALERT</b>", text="AntiDPI · ALERT"),
+        answer=AsyncMock(),
+        edit_message_text=AsyncMock(),
+    )
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id="999888"),
+        effective_message=query.message,
+        callback_query=query,
+    )
+    result = {
+        "ok": True,
+        "already_active": False,
+        "duration": 600,
+        "offense_count": 1,
+    }
+    with patch("hydra.services.telegram.bot.ban_ip_antidpi", return_value=result):
+        asyncio.run(bot.handle_callback(update, MagicMock()))
+
+    edited = query.edit_message_text.call_args.args[0]
+    assert "AntiDPI · ALERT" in edited
+    assert "manual_ban" in edited
+    assert "10м" in edited
+    assert query.edit_message_text.call_args.kwargs["reply_markup"] is None
+    query.answer.assert_awaited_once_with("IP заблокирован")
 
 
 def test_single_native_auth_failure_sends_alert_without_banning(tmp_path):

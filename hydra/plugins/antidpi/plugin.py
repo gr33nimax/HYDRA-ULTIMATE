@@ -886,6 +886,12 @@ class AntiDPIPlugin(BasePlugin):
                     delivered = bool(send_admin_notification(
                         format_security_event("AntiDPI", "ALERT", fields),
                         category="antidpi",
+                        reply_markup={
+                            "inline_keyboard": [[{
+                                "text": "🚫 Заблокировать",
+                                "callback_data": f"antidpi-ban:{address}",
+                            }]],
+                        },
                     ))
                 except Exception:
                     pass
@@ -989,6 +995,85 @@ class AntiDPIPlugin(BasePlugin):
                     break
             self._save_state(data)
         return True
+
+    def manual_ban(self, raw: str, *, source: str = "manual") -> dict:
+        """Block a validated address immediately on an explicit admin decision."""
+        try:
+            address = ipaddress.ip_address(str(raw).strip().strip("[]"))
+        except ValueError:
+            return {"ok": False, "error": "invalid_ip"}
+
+        if not self._ensure_sets() or not self._ensure_rules():
+            return {"ok": False, "error": "firewall_error"}
+
+        timestamp = time.time()
+        compressed = address.compressed
+        with _lock_state_file():
+            data = self._load_state()
+            if self._is_whitelisted(address, data):
+                return {"ok": False, "error": "whitelisted"}
+
+            expire_bans(data, now=timestamp)
+            current = active_bans(data, now=timestamp).get(compressed)
+            if isinstance(current, dict):
+                remaining = max(
+                    0,
+                    int(float(current.get("at", 0)) + ban_duration(current) - timestamp),
+                )
+                return {
+                    "ok": True,
+                    "already_active": True,
+                    "remaining": remaining,
+                    **current,
+                }
+
+            ban_counts = data.setdefault("ban_counts", {})
+            if not isinstance(ban_counts, dict):
+                ban_counts = {}
+                data["ban_counts"] = ban_counts
+            offense_count = int(ban_counts.get(compressed, 0) or 0) + 1
+            duration = get_ban_duration(offense_count)
+            set_name = SET_V6 if address.version == 6 else SET_V4
+            result = _run(
+                ["ipset", "add", set_name, compressed, "timeout", str(duration), "-exist"],
+                text=True,
+            )
+            if result.returncode != 0:
+                return {"ok": False, "error": "firewall_error"}
+
+            scores = data.get("scores", {})
+            if not isinstance(scores, dict):
+                scores = {}
+            entry = scores.get(compressed, {})
+            if not isinstance(entry, dict):
+                entry = {}
+            signals = entry.get("signals", [])
+            if not isinstance(signals, list):
+                signals = [str(signals)] if signals else []
+            signals = list(dict.fromkeys([*signals, "manual_ban"]))[-16:]
+            metadata = {
+                "at": timestamp,
+                "score": float(entry.get("verified_score", entry.get("score", 0)) or 0),
+                "signals": signals,
+                "source": str(source)[:80],
+                "protocol": "manual",
+                "kind": "manual_ban",
+                "duration": duration,
+                "offense_count": offense_count,
+            }
+            banned = data.setdefault("banned", {})
+            if not isinstance(banned, dict):
+                banned = {}
+                data["banned"] = banned
+            banned[compressed] = metadata
+            ban_counts[compressed] = offense_count
+            history = data.setdefault("history", [])
+            if not isinstance(history, list):
+                history = []
+            history.append({"ip": compressed, **metadata, "status": "active"})
+            data["history"] = history[-1000:]
+            self._save_state(data)
+            return {"ok": True, "already_active": False, **metadata}
 
     @staticmethod
     def _is_whitelisted(address: ipaddress.IPv4Address | ipaddress.IPv6Address, data: dict) -> bool:

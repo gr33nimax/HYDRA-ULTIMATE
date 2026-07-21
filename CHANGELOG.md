@@ -102,6 +102,9 @@ ban-eligible. Они формируют технический ALERT с поли
 
 - ALERT/BAN содержат IP, флаг страны, ASN/владельца, event, protocol, source,
   signals, observed score, verified score, TTL и offense.
+- AntiDPI ALERT получил inline-кнопку ручной блокировки IP. Действие доступно
+  только настроенному администратору, соблюдает whitelist, использует штатный
+  прогрессивный ipset-ban и не увеличивает offense при повторном callback.
 - Добавлено раздельное включение уведомлений AntiDPI, Honeypot, Fail2ban,
   unban и system events.
 - Статистика доставки хранит attempted/delivered/failed без Telegram secrets.
