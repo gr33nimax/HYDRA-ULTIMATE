@@ -98,6 +98,7 @@ def test_invalid_native_client_config_changes_only_ephemeral_copy():
     )
     generated = {
         "log": {"level": "info"},
+        "dns": {"servers": [{"address": "8.8.8.8"}]},
         "outbounds": [{
             "type": "hysteria2", "tag": "hy", "server": "203.0.113.1",
             "server_port": 443, "password": "real-password",
@@ -114,7 +115,29 @@ def test_invalid_native_client_config_changes_only_ephemeral_copy():
     assert config["outbounds"][0]["password"] == "HYDRA-INVALID-PASSWORD"
     assert config["outbounds"][0]["obfs"]["password"] == "real-obfs"
     assert config["inbounds"][0]["listen_port"] == 12345
+    assert config["dns"] == generated["dns"]
     assert generated["outbounds"][0]["password"] == "real-password"
+
+
+def test_awg_handshake_payload_uses_profile_header_and_padding():
+    state = AppState(protocols={
+        "amneziawg": PluginState(enabled=True, config={"profiles": {
+            "desktop": {
+                "port": 51830,
+                "obfuscation": {"H1": "287454020", "S1": "40"},
+            },
+        }}),
+    })
+    payload = selftest._awg_handshake_payload(state, selftest.Target("udp", 51830))
+    assert payload[:4] == b"\x44\x33\x22\x11"
+    assert len(payload) == 188
+
+
+def test_native_client_environment_enables_legacy_dns_without_mutating_host(monkeypatch):
+    monkeypatch.delenv("ENABLE_DEPRECATED_LEGACY_DNS_SERVERS", raising=False)
+    environment = selftest._client_environment()
+    assert environment["ENABLE_DEPRECATED_LEGACY_DNS_SERVERS"] == "true"
+    assert "ENABLE_DEPRECATED_LEGACY_DNS_SERVERS" not in selftest.os.environ
 
 
 def test_full_mode_records_native_client_coverage(tmp_path):

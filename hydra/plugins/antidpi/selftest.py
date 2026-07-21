@@ -7,6 +7,7 @@ import platform
 import re
 import socket
 import ssl
+import struct
 import subprocess
 import tarfile
 import tempfile
@@ -140,9 +141,29 @@ def _targets(state: AppState, protocol: str) -> list[Target]:
     return []
 
 
-def _probe(target: Target, timeout: float = 0.8) -> list[dict]:
+def _awg_handshake_payload(state: AppState, target: Target) -> bytes:
+    """Build a structurally sized, invalid AWG initiation for one profile."""
+    ps = state.protocols.get("amneziawg")
+    profiles = ps.config.get("profiles", {}) if ps else {}
+    for profile in profiles.values():
+        if not isinstance(profile, dict) or int(profile.get("port", 0) or 0) != target.port:
+            continue
+        obfuscation = profile.get("obfuscation", {})
+        if not isinstance(obfuscation, dict):
+            obfuscation = {}
+        try:
+            header = int(obfuscation.get("H1", 1)) & 0xFFFFFFFF
+            padding = max(0, min(int(obfuscation.get("S1", 0)), 1024))
+        except (TypeError, ValueError):
+            header, padding = 1, 0
+        return struct.pack("<I", header) + bytes(144 + padding)
+    return struct.pack("<I", 1) + bytes(144)
+
+
+def _probe(target: Target, timeout: float = 0.8,
+           extra_payloads: tuple[bytes, ...] = ()) -> list[dict]:
     results = []
-    for payload in _PAYLOADS:
+    for payload in (*_PAYLOADS, *extra_payloads):
         started = time.monotonic()
         error = ""
         try:
@@ -254,6 +275,12 @@ def _socks_trigger(port: int) -> str:
         return f"{exc.__class__.__name__}: {exc}"
 
 
+def _client_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    environment["ENABLE_DEPRECATED_LEGACY_DNS_SERVERS"] = "true"
+    return environment
+
+
 def _native_client_probe(state: AppState, protocol: str) -> dict:
     executable = HOST.which("sing-box")
     if not executable:
@@ -266,13 +293,17 @@ def _native_client_probe(state: AppState, protocol: str) -> dict:
         path = Path(temp_name) / "client.json"
         path.write_text(json.dumps(config), encoding="utf-8")
         path.chmod(0o600)
-        check = HOST.run([executable, "check", "-c", str(path)], capture_output=True, text=True, timeout=10)
+        client_env = _client_environment()
+        check = HOST.run(
+            [executable, "check", "-c", str(path)], capture_output=True,
+            text=True, timeout=10, env=client_env,
+        )
         if check.returncode != 0:
             detail = (check.stderr or check.stdout or "config check failed").strip()[-1000:]
             return {"status": "config_rejected", "started": False, "client_log": detail}
         process = HOST.popen(
             [executable, "run", "-c", str(path)], stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True,
+            stderr=subprocess.STDOUT, text=True, env=client_env,
         )
         trigger_error = "client listener did not start"
         triggered = False
@@ -480,7 +511,8 @@ def run_selftest(state: AppState, output: str | None = None, wait_seconds: float
         before = _offsets()
         since = time.time() - 0.05
         for target in targets:
-            item["probes"].extend(_probe(target))
+            extra = (_awg_handshake_payload(state, target),) if protocol == "amneziawg" else ()
+            item["probes"].extend(_probe(target, extra_payloads=extra))
         item["coverage"]["malformed_probe_sent"] = bool(item["probes"])
         if full:
             try:
