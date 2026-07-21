@@ -602,7 +602,9 @@ def enable(state: AppState, name: str) -> bool:
         raise
 
     if not applied:
+        failure = last_apply_error()
         transaction.rollback(_log_rollback_error)
+        _set_apply_error(failure)
     else:
         transaction.commit()
     return applied

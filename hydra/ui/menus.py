@@ -2612,6 +2612,7 @@ def _menu_amneziawg(state: AppState, p):
     from hydra.core.state import get_protocol
     
     while True:
+        state = load_state()
         clear()
         ps = get_protocol(state, p.meta.name)
         
