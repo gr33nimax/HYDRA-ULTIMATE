@@ -58,6 +58,17 @@ def test_naive_decoy_ignores_legitimate_connect_but_detects_scanner_path():
         "remote_ip": "203.0.113.10", "method": "CONNECT", "uri": "example.com:443",
     }}
     assert normalize_naive_decoy_record(connect) is None
+    failed = {"status": 407, "request": {
+        "remote_ip": "203.0.113.10", "method": "CONNECT", "uri": "example.com:443",
+    }}
+    assert normalize_naive_decoy_record(failed) == (
+        "203.0.113.10",
+        {"protocol": "naive", "kind": "auth_failure", "source": "caddy-naive"},
+    )
+    scanner = {"status": 407, "request": {
+        "remote_ip": "203.0.113.10", "method": "GET", "uri": "/.env",
+    }}
+    assert normalize_naive_decoy_record(scanner)[1]["kind"] == "active_decoy_probe"
     probe = {"request": {
         "remote_ip": "203.0.113.10", "method": "GET", "uri": "/.env?scan=1",
     }}

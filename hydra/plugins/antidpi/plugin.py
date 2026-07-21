@@ -285,14 +285,26 @@ def normalize_decoy_record(record: dict) -> tuple[str, dict] | None:
 def normalize_naive_decoy_record(record: dict) -> tuple[str, dict] | None:
     """Recognize scanner paths without treating valid Naive CONNECT as probes."""
     request = record.get("request", {}) if isinstance(record, dict) else {}
-    if not isinstance(request, dict) or str(request.get("method", "GET")).upper() == "CONNECT":
+    if not isinstance(request, dict):
+        return None
+    ip = _remote_ip(request.get("remote_ip", request.get("remote_addr", "")))
+    try:
+        status = int(record.get("status", 0))
+    except (TypeError, ValueError):
+        status = 0
+    method = str(request.get("method", "GET")).upper()
+    if method == "CONNECT":
+        if status in {401, 407} and ip is not None:
+            return ip, {"protocol": "naive", "kind": "auth_failure", "source": "caddy-naive"}
         return None
     normalized = normalize_decoy_record(record)
-    if normalized is None:
-        return None
-    address, event = normalized
-    event["source"] = "caddy-naive-decoy"
-    return address, event
+    if normalized is not None:
+        address, event = normalized
+        event["source"] = "caddy-naive-decoy"
+        return address, event
+    if status in {401, 407} and ip is not None:
+        return ip, {"protocol": "naive", "kind": "auth_failure", "source": "caddy-naive"}
+    return None
 
 
 def decayed_score(score: float, elapsed: float, half_life: float = SCORE_HALF_LIFE) -> float:

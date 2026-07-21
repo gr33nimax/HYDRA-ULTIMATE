@@ -142,6 +142,28 @@ def test_native_client_environment_enables_legacy_dns_without_mutating_host(monk
     assert "ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER" not in selftest.os.environ
 
 
+def test_native_naive_probe_uses_curl_against_loopback_sni():
+    state = AppState()
+    state.network.domain = "naive.example"
+    completed = type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+    with patch.object(selftest.HOST, "which", return_value="/usr/bin/curl"), \
+         patch.object(selftest.HOST, "run", return_value=completed) as run:
+        result = selftest._native_naive_probe(state)
+    assert result["triggered"] is True
+    command = run.call_args.args[0]
+    assert "naive.example:443:127.0.0.1" in command
+    assert "http://selftest.invalid/__hydra_antidpi_selftest__" in command
+
+
+def test_naive_log_filter_summary_recognizes_proxy_auth_failure():
+    line = json.dumps({
+        "status": 407,
+        "request": {"remote_ip": "127.0.0.1", "method": "GET", "uri": "/test"},
+    })
+    matches = selftest._log_filter_matches("naive", {"/tmp/access.log": [line]})
+    assert matches[0]["event"]["kind"] == "auth_failure"
+
+
 def test_full_mode_records_native_client_coverage(tmp_path):
     state = AppState(
         protocols={"snell": PluginState(enabled=True)},

@@ -23,6 +23,7 @@ from hydra.core.sni_router import DECOY_LOG, get_effective_port
 from hydra.core.state import AppState
 from hydra.plugins.antidpi.adapters import decode_log_message, parse_protocol_line
 from hydra.plugins.antidpi.agent import NAIVE_ACCESS_LOG
+from hydra.plugins.antidpi.plugin import normalize_naive_decoy_record
 
 SUPPORTED_PROTOCOLS = (
     "amneziawg", "anytls", "trusttunnel", "shadowtls", "hysteria2",
@@ -283,6 +284,8 @@ def _client_environment() -> dict[str, str]:
 
 
 def _native_client_probe(state: AppState, protocol: str) -> dict:
+    if protocol == "naive":
+        return _native_naive_probe(state)
     executable = HOST.which("sing-box")
     if not executable:
         return {"status": "missing_sing_box", "started": False}
@@ -334,6 +337,31 @@ def _native_client_probe(state: AppState, protocol: str) -> dict:
             "trigger_error": trigger_error,
             "client_log": str(output or "")[-2000:],
         }
+
+
+def _native_naive_probe(state: AppState) -> dict:
+    """Exercise Caddy Naive directly when sing-box lacks its optional client."""
+    executable = HOST.which("curl")
+    domain = str(state.network.domain or "").strip()
+    if not executable:
+        return {"status": "missing_curl", "started": False, "triggered": False}
+    if not domain:
+        return {"status": "missing_domain", "started": False, "triggered": False}
+    result = HOST.run([
+        executable,
+        "--silent", "--show-error", "--output", "/dev/null",
+        "--max-time", "5", "--proxy-insecure",
+        "--resolve", f"{domain}:443:127.0.0.1",
+        "--proxy", f"https://HYDRA-INVALID:HYDRA-INVALID@{domain}:443",
+        "http://selftest.invalid/__hydra_antidpi_selftest__",
+    ], capture_output=True, text=True, timeout=8)
+    return {
+        "status": "executed",
+        "started": True,
+        "triggered": True,
+        "returncode": result.returncode,
+        "client_log": str(result.stderr or result.stdout or "")[-1000:],
+    }
 
 
 def _journal(protocol: str, since: float, until: float) -> list[dict]:
@@ -461,6 +489,21 @@ def _record_summary(protocol: str, records: list[dict]) -> dict:
     }
 
 
+def _log_filter_matches(protocol: str, logs: dict[str, list[str]]) -> list[dict]:
+    matches = []
+    if protocol != "naive":
+        return matches
+    for path, lines in logs.items():
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if match := normalize_naive_decoy_record(record):
+                matches.append({"unit": path, "ip": match[0], "event": match[1]})
+    return matches
+
+
 def run_selftest(state: AppState, output: str | None = None, wait_seconds: float = 2.0,
                  *, full: bool = False) -> dict:
     """Probe enabled transports and write a redacted, support-friendly archive."""
@@ -532,6 +575,7 @@ def run_selftest(state: AppState, output: str | None = None, wait_seconds: float
         records = _journal(protocol, since, until)
         logs = _new_log_lines(before)
         item.update(_record_summary(protocol, records))
+        item["current_filter_matches"].extend(_log_filter_matches(protocol, logs))
         item["logs"] = {path: len(lines) for path, lines in logs.items()}
         item["coverage"]["native_log_observed"] = bool(records or logs)
         item["coverage"]["filter_match"] = bool(
