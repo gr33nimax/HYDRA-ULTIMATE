@@ -16,7 +16,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional, TypeVar, get_type_hints
-from hydra.plugins.config import PluginConfig, validate_json_object
+from hydra.plugins.config import JsonValue, PluginConfig, validate_json_object
 
 STATE_DIR = Path("/var/lib/hydra")
 STATE_FILE = STATE_DIR / "state.json"
@@ -127,6 +127,12 @@ class TelegramConfig:
     bot_enabled: bool = False
     admin_enabled: bool = False
     allowed_users: list[int] = field(default_factory=list)
+    notifications_enabled: bool = True
+    notify_antidpi: bool = True
+    notify_honeypot: bool = True
+    notify_fail2ban: bool = True
+    notify_unbans: bool = False
+    notify_system: bool = True
 
 
 @dataclass
@@ -152,6 +158,7 @@ class SecurityConfig:
     fail2ban_enabled: bool = False
     honeypot_enabled: bool = False
     ipban_enabled: bool = False
+    antidpi_enabled: bool = False
 
 
 @dataclass
@@ -197,8 +204,8 @@ def _from_dict(cls, data: dict):
         # Разрешаем строковые аннотации (from __future__ import annotations)
         try:
             resolved_types = get_type_hints(cls)
-        except Exception:
-            resolved_types = {}
+        except Exception as exc:
+            raise ValueError(f"could not resolve state type {cls.__name__}: {exc}") from exc
         kwargs = {}
         for key, value in data.items():
             field_type = resolved_types.get(key)

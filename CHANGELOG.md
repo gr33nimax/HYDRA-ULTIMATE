@@ -3,9 +3,218 @@
 Все заметные изменения HYDRA собраны в этом файле. Даты указаны по календарю
 релиза; старые записи не переписываются задним числом.
 
-## Unreleased
+## [2.5.2-dev] — 21 июля 2026
 
-Пока новых изменений после `2.5.0` нет.
+### Чистая установка и bootstrap
+
+- Bootstrap по умолчанию загружает ветку `dev`, а не `main`. Ветка из
+  `HYDRA_REF` сначала разрешается в точный remote SHA; Git update, clone и
+  архивный fallback устанавливают именно этот commit. До установки Python-
+  зависимостей bootstrap сверяет фактический `HEAD`/маркер архива с
+  выбранным SHA и останавливается при любом расхождении.
+- Исправлена однострочная dev-команда: bootstrap запускается через
+  `curl ... | sudo bash` и не требует Bash process substitution.
+- Для ручного `git clone` задокументирован запуск через `.venv` с
+  установкой `requirements.lock`. Это устраняет ошибку
+  `No module named 'qrcode'` и не смешивает зависимости HYDRA с системным
+  Python. Bootstrap явно сообщает о созданной команде `sudo hydra`;
+  простой clone сам по себе launcher в `/usr/local/bin` не создаёт.
+
+### AnyTLS, Caddy L4 и состояние
+
+- Чистая система больше не падает на сборке Caddy L4: checksum
+  закреплённой версии Go ищется в полном списке релизов, а таймаут
+  `xcaddy build` увеличен с 30 до 900 секунд для пустого Go module cache.
+- Исправлен ложный rollback AnyTLS и Mieru: healthcheck больше не читает
+  устаревший state во время транзакции.
+- TUI перечитывает state после возврата из вложенных меню и больше не
+  показывает только что установленный протокол выключенным.
+- Исправлена десериализация `state.json`: ошибка разрешения type hints
+  больше не превращала валидный `PluginState(enabled=true, installed=true)` в
+  пустой объект со значениями по умолчанию.
+- Status AnyTLS теперь совмещает сохранённые `installed/enabled` с
+  фактическим наличием Sing-Box, а не считает любой Sing-Box
+  доказательством установки AnyTLS.
+- Получение сертифика NaiveProxy больше не падает с `Could not bind TCP
+  port 80`, если `:80` занят уже установленным Caddy L4. Naive теперь
+  временно останавливает активные `caddy-l4`, `caddy-naive`, Nginx и Apache,
+  проверяет успех остановки и гарантированно восстанавливает их после Certbot,
+  включая аварийный выход.
+
+### AmneziaWG и AntiDPI
+
+- AmneziaWG проверяет загрузку kernel module как при установке, так и
+  при включении. Если DKMS собрал модуль для нового ядра, а VPS ещё
+  запущена на старом, TUI показывает оба ядра и требуемую перезагрузку
+  вместо безликой «Ошибки применения».
+- Fallback-запуск `awg-quick` больше не проглатывает stderr; status
+  AmneziaWG сверяет runtime с state, а восстановление профиля не
+  переиспользует уже занятую подсеть.
+- При обновлении старой установки AmneziaWG больше не пытается
+  разобрать транспортные значения `network=both/quic/tcp` других протоколов
+  как IP-подсети. Это устраняет ошибку `'both' does not appear to be an IPv4 or IPv6
+  network` при `hydra apply`; невалидные legacy-значения теперь игнорируются.
+- Обычный `hydra apply` больше не меняет подсеть уже существующего
+  `awg0.conf`. Ранее штатная сеть старой установки `10.66.66.0/24` могла
+  быть молча заменена на `10.67.67.0/24`, что ломало все ранее экспортированные
+  PC-профили. Теперь автовыбор сети выполняется только при создании нового
+  профиля, а сеть установленного интерфейса остаётся неизменной.
+- AntiDPI больше не считает штатные junk-пакеты AmneziaWG
+  ошибками handshake; noisy debug path отключён, а rejection-события
+  остаются доступными.
+- В AntiDPI ALERT добавлена кнопка ручной блокировки IP с проверкой
+  Telegram-администратора, whitelist и штатным progressive ban.
+
+### WARP/WGCF и общий загрузчик
+
+- Загрузчик закрывает writable-дескриптор, возвращённый `mkstemp`, до
+  атомарного перемещения бинарника. Это устраняет
+  `[Errno 26] Text file busy` при первом `wgcf register` и утечку дескрипторов
+  во всех скачиваниях через общий helper.
+
+### Благодарность
+
+Отдельная благодарность **@Monah99** за помощь в тестировании и
+предоставление VPS.
+
+## [2.5.1-dev] — «FORTRESS» — 21 июля 2026
+
+### Исправления применения конфигурации
+
+- Исправлен ложный rollback при включении AnyTLS и Mieru: healthcheck теперь
+  проверяет активный Sing-Box и inbound в применяемом конфиге, не перечитывая
+  устаревший флаг `enabled` из сохранённого state во время транзакции.
+- TUI перечитывает state после возврата из вложенных меню и после операций
+  AnyTLS, не позволяя старому снимку повторно показать или сохранить протокол
+  выключенным после успешного commit.
+
+### Контекст проблемы
+
+До FORTRESS защита HYDRA была разделена между Fail2ban, Honeypot, журналами
+отдельных протоколов и статическими firewall-правилами. Такая схема хорошо
+обрабатывала SSH brute force и обращения к выделенной ловушке, но не давала
+единого ответа на протокольную разведку VPS:
+
+- ошибки TLS, QUIC, DTLS и нестандартных транспортов имели разные форматы;
+- часть серверов молча закрывала соединение при неверной авторизации;
+- Caddy и backend-сервисы часто видели `127.0.0.1` вместо внешнего клиента;
+- UDP source IP можно подделать, поэтому прямой бан создавал возможность
+  удалённо заблокировать невиновный адрес;
+- закрытые порты и multi-port sweep контролировались устаревшим jail
+  `hydra-portscan`, смешивая сетевую разведку с auth-задачами Fail2ban;
+- события Honeypot попадали в общую статистику и создавали дублирование
+  владения банами и Telegram-уведомлений;
+- локальные синтетические тесты не доказывали, что событие проходит полный путь
+  от реального внешнего IP до firewall и Telegram.
+
+### Новый модуль AntiDPI
+
+Добавлен самостоятельный плагин `antidpi` — поведенческий IDS/IPS-контур для
+обнаружения протокольных зондов, неправильной авторизации, malformed handshake,
+decoy probes, connection burst и сканирования портов. Он не расшифровывает
+пользовательский трафик и не заменяет Fail2ban: модуль нормализует доказательства
+из Caddy, Sing-Box, kernel journal и нативных журналов протоколов, после чего
+применяет единую scoring-политику.
+
+Архитектурно разделены три независимые зоны ответственности:
+
+- Fail2ban — SSH и подтверждённые auth-журналы;
+- Honeypot — отдельная ловушка, собственное состояние и собственные баны;
+- AntiDPI — сетевые и протокольные аномалии на всей поверхности VPS.
+
+### Архитектура FORTRESS
+
+- Добавлен долгоживущий сервис `hydra-antidpi`, читающий Caddy JSONL,
+  `journald`, kernel LOG и нативные журналы протоколов.
+- Добавлен `hydra-source-relay` с обязательным PROXY Protocol v2 и точным
+  сопоставлением relay source port внешнему IPv4/IPv6. Это сохраняет реальный
+  источник для TCP и QUIC backend даже после loopback-проксирования.
+- Для ошибок без endpoint разрешена только ambiguity-safe корреляция: адрес
+  используется, если в коротком окне присутствует единственный кандидат.
+- Для AmneziaWG включается ограниченный dynamic-debug нативных rejection paths:
+  `Invalid MAC`, `Invalid handshake` и `unknown peer`. Штатные AWG junk-пакеты
+  из `Jc` исключены: `prepare_awg_message` принудительно выключен, а его
+  `Unknown message` больше не считается ошибкой handshake.
+- Из Fail2ban удалён исполняемый legacy протокольных плагинов; сохранён только
+  миграционный cleanup старых jail/filter и portscan rule. Cleanup прежнего AWG
+  unit больше не отключает rejection logging, принадлежащий AntiDPI.
+- Caddy decoy получил отдельную access-телеметрию с сохранением внешнего IP.
+- Созданы динамические ipset `hydra_antidpi` и `hydra_antidpi6`; только они
+  выполняют enforcement. Телеметрические iptables/ip6tables-правила используют
+  `LOG`, а не `DROP`.
+- Активные баны восстанавливаются после перезапуска с оставшимся TTL.
+
+### Политики обнаружения и блокировки
+
+- Введены два счётчика: `Observed score` для всех сигналов и `Verified score`
+  только для доказательств, которым разрешено влиять на бан.
+- Score экспоненциально затухает с half-life 5 минут; старые события не могут
+  сформировать позднюю блокировку.
+- Обычный ALERT создаётся при observed score `6`, явный `auth_failure` — при `3`.
+- BAN разрешён только при verified score `8` и свежем подтверждённом
+  протокольном событии либо подтверждённом multi-port sweep.
+- Сроки бана прогрессивные: 10 минут, 1 час, 24 часа, затем 7 дней.
+- Telegram cooldown действует отдельно для каждого IP и протокола, поэтому
+  событие Naive больше не подавляет последующие AWG, Hysteria2 или qWDTT alerts.
+- Дублирующиеся browser sockets для одного unknown-SNI события объединяются.
+- Встроенный whitelist исключает loopback, link-local, RFC1918, ULA, IP самой
+  VPS и пользовательские сети.
+
+### UDP spoof-safety
+
+Прямые UDP-сигналы Hysteria2, AmneziaWG и qWDTT считаются наблюдаемыми, но не
+ban-eligible. Они формируют технический ALERT с политикой
+`alert-only / unverified UDP source`, однако не увеличивают verified score и не
+могут подготовить будущий бан другому протоколу. Naive QUIC и TrustTunnel QUIC
+могут стать ban-eligible только после точной атрибуции через source relay и
+прикладного auth-события.
+
+### Покрытие протоколов
+
+- TLS/Caddy L4: malformed ClientHello, non-TLS, unknown SNI, handshake failure;
+- HTTPS decoy: активное обращение к приманке и scanner paths;
+- AnyTLS: auth failure и invalid first packet;
+- TrustTunnel TCP/QUIC: auth failure, malformed handshake и decoy;
+- ShadowTLS: HMAC mismatch, malformed TLS и Trojan auth failure;
+- Naive TCP/QUIC: HTTP proxy authentication failure;
+- Snell: malformed first packet и handshake failure;
+- Hysteria2: native rejection и rate-limited UDP probe telemetry;
+- AmneziaWG: native kernel rejection paths;
+- qWDTT: native DTLS handshake failure;
+- Mieru: повторяющиеся established TCP-сессии на `2012–2022`, закрывающиеся
+  после передачи не более 1 KiB. Сигнал является alert-only, потому что Mieru
+  не публикует нативную ошибку неправильного пароля;
+- Telemt: адаптер сохранён, но транспорт исключён из подтверждённой матрицы.
+
+### Telegram и эксплуатация
+
+- ALERT/BAN содержат IP, флаг страны, ASN/владельца, event, protocol, source,
+  signals, observed score, verified score, TTL и offense.
+- AntiDPI ALERT получил inline-кнопку ручной блокировки IP. Действие доступно
+  только настроенному администратору, соблюдает whitelist, использует штатный
+  прогрессивный ipset-ban и не увеличивает offense при повторном callback.
+- Добавлено раздельное включение уведомлений AntiDPI, Honeypot, Fail2ban,
+  unban и system events.
+- Статистика доставки хранит attempted/delivered/failed без Telegram secrets.
+- Добавлены команды `hydra antidpi sync`, `selftest`, `selftest --full` и
+  `capture`; внешний capture сохраняет дельту событий, журналы, firewall rules,
+  UDP/TCP sockets, source-relay mappings и AWG dynamic-debug.
+- Документирован полный переход с legacy-конфигурации: backup, validate/doctor,
+  plan/apply, синхронизация runtime, удаление `hydra-portscan`, перезапуск
+  Telegram bot и контрольная проверка сервисов, ipset и внешних событий.
+- Диагностические архивы автоматически скрывают пароли, UUID, PSK, токены и
+  приватные ключи и создаются с mode `0600`.
+
+### Проверка на реальной VPS
+
+Полный путь от внешнего клиента до Telegram подтверждён для TLS/decoy,
+AnyTLS, TrustTunnel, ShadowTLS, Naive TCP/QUIC, Snell, Hysteria2,
+AmneziaWG, qWDTT и Mieru. Проверки подтвердили как нативные rejection events,
+так и silent-failure fallback, точную source attribution и запрет ложных
+UDP-банов.
+
+Полная спецификация архитектуры и политик находится в
+[`docs/ANTIDPI_FORTRESS.md`](docs/ANTIDPI_FORTRESS.md).
 
 ## [2.5.0] — 20 июля 2026
 

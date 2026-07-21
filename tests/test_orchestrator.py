@@ -356,6 +356,27 @@ def test_enable_trusttunnel_rolls_back_plugin_state_on_apply_failure():
     assert apply.call_count == 2
 
 
+def test_enable_preserves_apply_error_across_successful_rollback():
+    from hydra.core import orchestrator
+
+    state = AppState(protocols={"mock": PluginState(installed=True)})
+    plugin = MagicMock()
+
+    def apply(current_state):
+        if current_state.protocols["mock"].enabled:
+            orchestrator._set_apply_error("kernel module requires reboot")
+            return False
+        orchestrator._set_apply_error("")
+        return True
+
+    with patch("hydra.core.orchestrator.registry.get", return_value=plugin), \
+         patch("hydra.core.orchestrator.apply_config", side_effect=apply), \
+         patch("hydra.core.orchestrator.save_state"):
+        assert orchestrator.enable(state, "mock") is False
+
+    assert orchestrator.last_apply_error() == "kernel module requires reboot"
+
+
 def test_disable_rolls_back_hook_and_state_on_apply_failure():
     from hydra.core import orchestrator
 

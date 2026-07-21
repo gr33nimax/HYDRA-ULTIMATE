@@ -22,6 +22,7 @@ import urllib.parse
 from pathlib import Path
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
+from hydra.core.errors import HostOperationError
 from hydra.core.state import AppState, User
 from hydra.utils.crypto import derive_hex_key
 from hydra.utils.downloader import download_github_asset, verify_elf
@@ -110,7 +111,7 @@ class NaivePlugin(BasePlugin):
 
     def configure(self, state: AppState) -> ConfigFragment:
         domain = state.network.domain
-        from hydra.core.sni_router import get_effective_port
+        from hydra.core.sni_router import get_effective_port, _INTERNAL_PORTS
         port = get_effective_port("naive", state)
 
         if not domain:
@@ -142,6 +143,7 @@ class NaivePlugin(BasePlugin):
             cert_file=cert_file,
             key_file=key_file,
             decoy_url=decoy_url,
+            accept_proxy_protocol=port == _INTERNAL_PORTS["naive"],
         )
 
         self._pending_cfg = caddyfile
@@ -214,7 +216,7 @@ class NaivePlugin(BasePlugin):
                 "server_port": port,
                 "username": username,
                 "password": password,
-                "network": "tcp",
+                "quic": False,
                 "tls": {
                     "enabled": True,
                     "server_name": domain,
@@ -229,7 +231,7 @@ class NaivePlugin(BasePlugin):
                 "server_port": port,
                 "username": username,
                 "password": password,
-                "network": "quic",
+                "quic": True,
                 "tls": {
                     "enabled": True,
                     "server_name": domain,
@@ -895,16 +897,26 @@ class NaivePlugin(BasePlugin):
             HOST.run(["apt-get", "update"], capture_output=True)
             HOST.run(["apt-get", "install", "-y", "certbot"], capture_output=True)
 
-        services_to_stop = ["caddy-naive", "nginx", "apache2"]
-        was_running = []
-        for s in services_to_stop:
-            r = HOST.run(["systemctl", "is-active", s], capture_output=True, text=True)
-            if r.stdout.strip() == "active":
-                print(f"  Временно останавливаю {s}...")
-                HOST.run(["systemctl", "stop", s], capture_output=True)
-                was_running.append(s)
-
+        services_to_stop = ["caddy-l4", "caddy-naive", "nginx", "apache2"]
+        was_running: list[str] = []
         try:
+            for service in services_to_stop:
+                status = HOST.run(
+                    ["systemctl", "is-active", service],
+                    capture_output=True, text=True,
+                )
+                if status.stdout.strip() != "active":
+                    continue
+                print(f"  Временно останавливаю {service}...")
+                stopped = HOST.run(
+                    ["systemctl", "stop", service], capture_output=True, text=True,
+                )
+                if stopped.returncode != 0:
+                    detail = stopped.stderr or stopped.stdout or "unknown error"
+                    print(f"  [Ошибка certbot] Не удалось освободить порт 80: {service}: {detail}")
+                    return False
+                was_running.append(service)
+
             with temporary_open_port("tcp", 80, "temp-certbot"):
                 r = HOST.run([
                     "certbot", "certonly", "--standalone",
@@ -916,11 +928,13 @@ class NaivePlugin(BasePlugin):
             if r.returncode != 0:
                 print(f"  [Ошибка certbot] Вывод:\n{r.stderr or r.stdout or ''}")
             return r.returncode == 0
+        except (OSError, HostOperationError) as exc:
+            print(f"  [Ошибка certbot] {exc}")
+            return False
         finally:
-            for s in was_running:
-                if s != "caddy-naive":
-                    print(f"  Восстанавливаю {s}...")
-                    HOST.run(["systemctl", "start", s], capture_output=True)
+            for service in was_running:
+                print(f"  Восстанавливаю {service}...")
+                HOST.run(["systemctl", "start", service], capture_output=True)
 
     @staticmethod
     def _installed() -> bool:
@@ -995,6 +1009,7 @@ class NaivePlugin(BasePlugin):
         cert_file: str = "",
         key_file: str = "",
         decoy_url: str = "",
+        accept_proxy_protocol: bool = False,
     ) -> str:
         auth_lines = ""
         for u in users:
@@ -1012,12 +1027,26 @@ class NaivePlugin(BasePlugin):
 
         site_header = f":{port}, {domain}:{port}"
         probe_line = "            probe_resistance\n" if auth_lines else ""
+        listener_wrappers = ""
+        if accept_proxy_protocol:
+            listener_wrappers = """\
+    servers {
+        listener_wrappers {
+            proxy_protocol {
+                timeout 1s
+                allow 127.0.0.0/8 ::1/128
+                fallback_policy require
+            }
+            tls
+        }
+    }
+"""
 
         return f"""\
 {{
     http_port 0
     auto_https disable_redirects
-{order_line}}}
+{listener_wrappers}{order_line}}}
 
 {site_header} {{
 {tls_line}    forward_proxy {{

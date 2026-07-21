@@ -1,385 +1,1262 @@
 """
-hydra/services/telegram/bot.py — Telegram-боты (Admin + Client) v2.
+hydra/services/telegram/bot.py — Telegram Admin Bot (System Info + Fail2ban & AntiDPI Notifications).
 
 Архитектура:
-  - Admin Bot: управление пользователями, трафик, безопасность
-  - Client Bot: выдача подписок, конфигов, QR-кодов
-
-Оба бота работают как отдельные systemd-сервисы.
-Используют новый динамический генератор подписок v2.
+  - Admin Bot: получение информации о системе, мониторинг Fail2ban и AntiDPI, разблокировка IP.
+  - Реагирование на события безопасности AntiDPI и Fail2ban в режиме реального времени.
 """
 from __future__ import annotations
 
+import asyncio
+import html
+import ipaddress
 import json
 import os
+import re
+import shutil
+import socket
 import subprocess
 import sys
-import tempfile
+import threading
 import time
-from datetime import datetime
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
-from hydra.core.state import (
-    AppState, User, load_state, save_state, find_user,
-)
-from hydra.services.subscriptions.generator import (
-    generate_singbox_config, generate_client_config,
-    generate_links,
-)
-from hydra.core import orchestrator
-from hydra.services.traffic import collect_traffic, refresh_traffic_state
+from hydra.core.host import HOST
+from hydra.core.state import AppState, load_state, update_state
 from hydra.plugins.registry import status_all
 
 try:
-    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
     from telegram.ext import (
-        Application, CommandHandler, CallbackQueryHandler,
-        MessageHandler, filters, ContextTypes, ConversationHandler,
+        Application, CallbackQueryHandler, CommandHandler, ContextTypes,
+        MessageHandler, filters,
     )
     TELEGRAM_AVAILABLE = True
 except ImportError:
     TELEGRAM_AVAILABLE = False
 
-BOT_DIR = Path("/var/lib/hydra/bots")
-ADMIN_STATE_FILE = BOT_DIR / "admin_state.json"
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Уведомления Админа (Direct HTTP Dispatch)
+# ═════════════════════════════════════════════════════════════════════════════
+
+_NOTIFICATION_FIELDS = {
+    "antidpi": "notify_antidpi",
+    "honeypot": "notify_honeypot",
+    "fail2ban": "notify_fail2ban",
+    "fail2ban_unban": "notify_unbans",
+    "system": "notify_system",
+}
+
+
+def notification_allowed(state: AppState, category: str) -> bool:
+    telegram = state.telegram
+    if not getattr(telegram, "notifications_enabled", True):
+        return False
+    field = _NOTIFICATION_FIELDS.get(category, "notify_system")
+    return bool(getattr(telegram, field, True))
+
+
+def send_admin_notification(
+    text: str,
+    state: Optional[AppState] = None,
+    *,
+    category: str = "system",
+    force: bool = False,
+    reply_markup: Optional[dict] = None,
+) -> bool:
+    """Send a categorized notification to the configured administrator."""
+    try:
+        if state is None:
+            state = load_state()
+        token = getattr(state.telegram, "admin_token", "").strip()
+        chat_id = getattr(state.telegram, "admin_chat_id", "").strip()
+        if not token or not chat_id or (not force and not notification_allowed(state, category)):
+            return False
+
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        request_data = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if reply_markup:
+            request_data["reply_markup"] = reply_markup
+        payload = json.dumps(request_data).encode("utf-8")
+
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status == 200
+    except Exception as e:
+        # HTTP exceptions may include the full Bot API URL, including the token.
+        status = getattr(e, "code", None)
+        suffix = f" status={status}" if status is not None else ""
+        sys.stderr.write(f"[AdminBot Notification Error] {type(e).__name__}{suffix}\n")
+        return False
+
+
+def format_security_event(component: str, action: str,
+                          fields: list[tuple[str, object]]) -> str:
+    """Render a compact and consistent technical security notification."""
+    title = f"<b>{html.escape(component)} · {html.escape(action.upper())}</b>"
+    rows = [
+        f"<b>{html.escape(label)}:</b> <code>{html.escape(str(value))}</code>"
+        for label, value in fields
+        if value not in (None, "")
+    ]
+    return "\n".join((title, *rows))
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Admin Bot
+#  Утилиты сбора данных и статусов
 # ═════════════════════════════════════════════════════════════════════════════
+
+def get_system_info_text() -> str:
+    """Сбор информации о ресурсах системы и Hydra-сервисах."""
+    hostname = html.escape(socket.gethostname())
+    try:
+        state = load_state()
+        server_ip = html.escape(state.network.server_ip or "N/A")
+    except Exception:
+        server_ip = "N/A"
+
+    # CPU load
+    try:
+        load1, load5, load15 = os.getloadavg()
+        load_str = f"{load1:.2f}, {load5:.2f}, {load15:.2f}"
+    except Exception:
+        load_str = "N/A"
+
+    # RAM
+    ram_str = "N/A"
+    try:
+        if Path("/proc/meminfo").exists():
+            mem = {}
+            with open("/proc/meminfo", "r", encoding="utf-8") as f:
+                for line in f:
+                    parts = line.split(":")
+                    if len(parts) == 2:
+                        key = parts[0].strip()
+                        val = parts[1].strip().split()[0]
+                        mem[key] = int(val)
+            total_kb = mem.get("MemTotal", 0)
+            avail_kb = mem.get("MemAvailable", mem.get("MemFree", 0))
+            used_kb = total_kb - avail_kb
+            if total_kb > 0:
+                ram_str = f"{used_kb / 1048576:.2f} GB / {total_kb / 1048576:.2f} GB ({(used_kb / total_kb) * 100:.0f}%)"
+    except Exception:
+        pass
+
+    # Disk
+    disk_str = "N/A"
+    try:
+        usage = shutil.disk_usage("/")
+        used_gb = usage.used / (1024**3)
+        total_gb = usage.total / (1024**3)
+        disk_str = f"{used_gb:.1f} GB / {total_gb:.1f} GB ({(usage.used / usage.total) * 100:.0f}%)"
+    except Exception:
+        pass
+
+    # Uptime
+    uptime_str = "N/A"
+    try:
+        if Path("/proc/uptime").exists():
+            secs = float(Path("/proc/uptime").read_text().split()[0])
+            days = int(secs // 86400)
+            hours = int((secs % 86400) // 3600)
+            mins = int((secs % 3600) // 60)
+            uptime_str = f"{days}d {hours}h {mins}m"
+    except Exception:
+        pass
+
+    # Status of Hydra plugins
+    services_lines = []
+    try:
+        plugins = status_all()
+        for name, s in plugins.items():
+            icon = "🟢" if s.get("running") else ("⚠️" if s.get("installed") else "🔴")
+            port = f" (port {s['port']})" if s.get("port") else ""
+            services_lines.append(f"• {icon} <b>{html.escape(str(name))}</b>{html.escape(port)}")
+    except Exception as e:
+        services_lines.append(f"Ошибка получения статуса: {html.escape(str(e))}")
+
+    services_block = "\n".join(services_lines) if services_lines else "Нет активных плагинов"
+
+    return (
+        "<b>🖥️ HYDRA System Information</b>\n\n"
+        f"<b>Сервер:</b> <code>{hostname}</code> ({server_ip})\n"
+        f"<b>Аптайм:</b> <code>{uptime_str}</code>\n"
+        f"<b>Load Average:</b> <code>{load_str}</code>\n"
+        f"<b>RAM:</b> <code>{ram_str}</code>\n"
+        f"<b>Диск:</b> <code>{disk_str}</code>\n\n"
+        f"<b>⚡ Статус сервисов:</b>\n{services_block}"
+    )
+
+
+def get_antidpi_status_text() -> str:
+    """Получить статус модуля AntiDPI и список заблокированных IP."""
+    from hydra.plugins.antidpi.plugin import AntiDPIPlugin, STATE_FILE, active_bans
+    plugin = AntiDPIPlugin()
+    status = plugin.status()
+    running_icon = "🟢 Активен" if status.running else ("⚠️ Установлен" if status.installed else "🔴 Отключен")
+
+    banned_ips = []
+    events_count = 0
+    if STATE_FILE.exists():
+        try:
+            data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            banned = active_bans(data)
+            events_count = data.get("events", 0)
+            source_counts = data.get("source_counts", {}) if isinstance(data.get("source_counts"), dict) else {}
+            signal_counts = data.get("signal_counts", {}) if isinstance(data.get("signal_counts"), dict) else {}
+            notification_stats = data.get("notification_stats", {}) if isinstance(data.get("notification_stats"), dict) else {}
+            suppressed_notices = int(data.get("suppressed_ban_notifications", 0) or 0)
+            ordered_bans = sorted(
+                banned.items(),
+                key=lambda item: float(item[1].get("at", 0) or 0),
+                reverse=True,
+            )
+            for ip, meta in ordered_bans:
+                try:
+                    score = float(meta.get("score", 0))
+                except (TypeError, ValueError):
+                    score = 0.0
+                raw_signals = meta.get("signals", [])
+                signals = ", ".join(str(value) for value in raw_signals) if isinstance(raw_signals, list) else str(raw_signals or "")
+                banned_ips.append(f"• <code>{html.escape(str(ip))}</code> (score: {score:.1f}, {html.escape(signals)})")
+        except Exception:
+            pass
+
+    source_counts = locals().get("source_counts", {})
+    signal_counts = locals().get("signal_counts", {})
+    notification_stats = locals().get("notification_stats", {})
+    suppressed_notices = locals().get("suppressed_notices", 0)
+
+    def summarize(counter: dict) -> str:
+        safe = []
+        for name, value in counter.items():
+            try:
+                safe.append((str(name), int(value)))
+            except (TypeError, ValueError):
+                continue
+        safe.sort(key=lambda item: item[1], reverse=True)
+        return ", ".join(f"{html.escape(name)}: {value}" for name, value in safe[:5]) or "нет данных"
+
+    sources_block = summarize(source_counts)
+    signals_block = summarize(signal_counts)
+    delivered = int(notification_stats.get("delivered", 0) or 0)
+    failed = int(notification_stats.get("failed", 0) or 0)
+    banned_block = "\n".join(banned_ips[:10]) if banned_ips else "<i>Нет заблокированных IP</i>"
+    if len(banned_ips) > 10:
+        banned_block += f"\n<i>...и ещё {len(banned_ips) - 10} IP</i>"
+
+    return (
+        "<b>🛡️ AntiDPI Status</b>\n\n"
+        f"<b>Статус:</b> {running_icon}\n"
+        f"<b>Всего событий:</b> {events_count}\n"
+        f"<b>Заблокировано IP:</b> {len(banned_ips)}\n"
+        f"<b>Источники:</b> {sources_block}\n"
+        f"<b>Сигналы:</b> {signals_block}\n"
+        f"<b>Уведомления:</b> доставлено {delivered}, ошибок {failed}, "
+        f"сгруппировано {suppressed_notices}\n\n"
+        f"<b>Заблокированные IP:</b>\n{banned_block}"
+    )
+
+
+def get_fail2ban_status_text() -> str:
+    """Получить статус Fail2ban и список активных джейлов."""
+    from hydra.plugins.fail2ban.plugin import Fail2banPlugin
+    plugin = Fail2banPlugin()
+    status = plugin.status()
+    running_icon = "🟢 Активен" if status.running else ("⚠️ Установлен" if status.installed else "🔴 Отключен")
+
+    jails_info = []
+    total_banned = status.info.get("banned_ips", 0)
+    if status.running:
+        try:
+            overall = HOST.run(["fail2ban-client", "status"], timeout=10, text=True)
+            match = re.search(r"Jail list:\s*(.*)", overall.stdout)
+            if match:
+                for jail in (item.strip() for item in match.group(1).split(",")):
+                    if not jail:
+                        continue
+                    detail = HOST.run(["fail2ban-client", "status", jail], timeout=10, text=True)
+                    curr = re.search(r"Currently banned:\s*(\d+)", detail.stdout)
+                    count = curr.group(1) if curr else "0"
+                    jails_info.append(f"• <b>{html.escape(jail)}</b>: <code>{count} banned</code>")
+        except Exception:
+            pass
+
+    jails_block = "\n".join(jails_info) if jails_info else "<i>Нет активных джейлов</i>"
+
+    return (
+        "<b>🚫 Fail2ban Status</b>\n\n"
+        f"<b>Статус:</b> {running_icon}\n"
+        f"<b>Всего заблокировано IP:</b> {total_banned}\n\n"
+        f"<b>Джейлы:</b>\n{jails_block}"
+    )
+
+
+def unban_ip_everywhere(ip: str) -> str:
+    """Разблокировать IP адрес в AntiDPI и Fail2ban."""
+    from hydra.plugins.antidpi.plugin import AntiDPIPlugin
+    results = []
+    try:
+        target_ip = ipaddress.ip_address(str(ip).strip().strip("[]")).compressed
+    except ValueError:
+        return "<b>❌ Некорректный IP-адрес.</b>"
+    safe_ip = html.escape(target_ip)
+
+    # AntiDPI unban
+    try:
+        adpi_ok = AntiDPIPlugin().unban(target_ip)
+        results.append(f"• AntiDPI: {'✅ Разблокирован' if adpi_ok else 'ℹ️ Не найден в бане'}")
+    except Exception as e:
+        results.append(f"• AntiDPI: ❌ Ошибка ({html.escape(str(e))})")
+
+    # Honeypot unban
+    try:
+        from hydra.plugins.honeypot.plugin import HoneypotPlugin
+        honeypot_ok = HoneypotPlugin().unban(target_ip)
+        results.append(f"• Honeypot: {'✅ Разблокирован' if honeypot_ok else 'ℹ️ Не найден в бане'}")
+    except Exception as e:
+        results.append(f"• Honeypot: ❌ Ошибка ({html.escape(str(e))})")
+
+    # Fail2ban unban
+    try:
+        f2b_res = HOST.run(["fail2ban-client", "unban", target_ip], timeout=10, text=True)
+        if f2b_res.returncode == 0:
+            results.append(f"• Fail2ban: ✅ Разблокирован ({html.escape(f2b_res.stdout.strip())})")
+        else:
+            results.append("• Fail2ban: ℹ️ Не найден в джейлах")
+    except Exception as e:
+        results.append(f"• Fail2ban: ❌ Ошибка ({html.escape(str(e))})")
+
+    return f"<b>🔓 Результат разблокировки IP <code>{safe_ip}</code>:</b>\n\n" + "\n".join(results)
+
+
+def ban_ip_antidpi(ip: str) -> dict:
+    """Apply a validated manual AntiDPI ban from an admin interaction."""
+    from hydra.plugins.antidpi.plugin import AntiDPIPlugin
+
+    return AntiDPIPlugin().manual_ban(ip, source="telegram-admin")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Fail2ban Monitor Thread
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _process_fail2ban_log_line(line: str) -> None:
+    match = re.search(r"NOTICE\s+\[(?P<jail>[^\]]+)\]\s+(?P<action>Ban|Unban)\s+(?P<ip>\S+)", line)
+    if match:
+        jail = match.group("jail")
+        action = match.group("action")
+        ip = match.group("ip")
+
+        fields = [("IP", ip)]
+        if action == "Ban":
+            from hydra.services.security_intel import notification_fields
+            fields.extend(notification_fields(ip))
+        fields.append(("Jail", jail))
+        msg = format_security_event("Fail2ban", action, fields)
+        category = "fail2ban" if action == "Ban" else "fail2ban_unban"
+        send_admin_notification(msg, category=category)
+
+
+def _fail2ban_monitor_worker(stop_event: threading.Event) -> None:
+    f2b_log = Path("/var/log/fail2ban.log")
+    if f2b_log.exists():
+        handle = None
+        inode = None
+        try:
+            while not stop_event.is_set():
+                if handle is None:
+                    try:
+                        handle = f2b_log.open("r", encoding="utf-8", errors="replace")
+                        handle.seek(0, 2)
+                        inode = f2b_log.stat().st_ino
+                    except OSError:
+                        if handle is not None:
+                            handle.close()
+                        handle = None
+                        stop_event.wait(0.5)
+                        continue
+                try:
+                    stat = f2b_log.stat()
+                    if stat.st_ino != inode or stat.st_size < handle.tell():
+                        handle.close()
+                        handle = None
+                        continue
+                    line = handle.readline()
+                except OSError:
+                    handle.close()
+                    handle = None
+                    continue
+                if line:
+                    _process_fail2ban_log_line(line)
+                else:
+                    stop_event.wait(0.5)
+        except Exception:
+            pass
+        finally:
+            if handle is not None:
+                handle.close()
+    else:
+        cmd = ["journalctl", "-u", "fail2ban", "-f", "-n", "0", "-o", "cat"]
+        try:
+            process = HOST.popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+            assert process.stdout is not None
+            for line in process.stdout:
+                if stop_event.is_set():
+                    break
+                _process_fail2ban_log_line(line)
+            process.terminate()
+        except Exception:
+            pass
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Dedicated security dashboards and Honeypot notifications
+# ═════════════════════════════════════════════════════════════════════════════
+
+_SIGNAL_LABELS = {
+    "malformed_tls": "повреждённый TLS ClientHello",
+    "handshake_failure": "ошибка handshake",
+    "unknown_sni": "неизвестный SNI",
+    "active_decoy_probe": "активная проверка decoy",
+    "auth_failure": "ошибка аутентификации",
+    "port_scan": "сканирование портов",
+    "connection_burst": "частые подключения",
+    "port_sweep": "перебор разных портов",
+    "protocol_mismatch": "несоответствие протокола",
+    "invalid_first_packet": "некорректный первый пакет",
+}
+
+
+def _format_period(seconds: object) -> str:
+    try:
+        value = max(0, int(float(seconds)))
+    except (TypeError, ValueError):
+        return "—"
+    if value < 60:
+        return f"{value}с"
+    if value < 3600:
+        return f"{value // 60}м"
+    if value < 86400:
+        return f"{value // 3600}ч"
+    return f"{value // 86400}д"
+
+
+def get_antidpi_dashboard_text() -> str:
+    """Operational AntiDPI view without Honeypot-owned counters."""
+    from hydra.plugins.antidpi.plugin import AntiDPIPlugin, active_bans
+
+    plugin = AntiDPIPlugin()
+    status = plugin.status()
+    data = plugin._load_state()
+    banned = active_bans(data)
+    now = time.time()
+    ordered = sorted(
+        banned.items(), key=lambda item: float(item[1].get("at", 0) or 0), reverse=True,
+    )
+    rows = []
+    for address, metadata in ordered[:8]:
+        signals = metadata.get("signals", [])
+        if not isinstance(signals, list):
+            signals = [str(signals)] if signals else []
+        reasons = ", ".join(_SIGNAL_LABELS.get(str(item), str(item)) for item in signals[:3]) or "аномальное поведение"
+        duration = int(metadata.get("duration", 0) or 0)
+        remaining = duration - max(0, now - float(metadata.get("at", 0) or 0))
+        source = str(metadata.get("source", "legacy/unknown"))
+        protocol = str(metadata.get("protocol", "unknown"))
+        score = float(metadata.get("score", 0) or 0)
+        offense = int(metadata.get("offense_count", 1) or 1)
+        rows.append(
+            f"• <code>{html.escape(address)}</code> — <b>{score:.1f}</b> баллов, "
+            f"осталось {_format_period(remaining)}\n"
+            f"  {html.escape(reasons)} · {html.escape(protocol)}/{html.escape(source)} · нарушение #{offense}"
+        )
+    if len(ordered) > 8:
+        rows.append(f"<i>…и ещё {len(ordered) - 8} активных блокировок</i>")
+    stats = data.get("notification_stats", {}) if isinstance(data.get("notification_stats"), dict) else {}
+    last_source = html.escape(str(data.get("last_event_source", "—")))
+    return (
+        "<b>🛡 AntiDPI — защита всей VPS</b>\n\n"
+        f"<b>Сервис:</b> {'🟢 работает' if status.running else '🔴 остановлен'}\n"
+        f"<b>Активных блокировок:</b> {len(ordered)}\n"
+        f"<b>Обработано событий:</b> {int(data.get('events', 0) or 0)}\n"
+        f"<b>Последний источник:</b> <code>{last_source}</code>\n"
+        f"<b>Telegram:</b> доставлено {int(stats.get('delivered', 0) or 0)}, "
+        f"ошибок {int(stats.get('failed', 0) or 0)}\n\n"
+        "<b>Последние активные баны:</b>\n"
+        + ("\n\n".join(rows) if rows else "<i>Активных банов нет</i>")
+    )
+
+
+def _legacy_honeypot_status_text() -> str:
+    from hydra.plugins.honeypot.plugin import HoneypotPlugin
+
+    plugin = HoneypotPlugin()
+    status = plugin.status()
+    data = plugin._load_state()
+    banned = data.get("banned", {}) if isinstance(data.get("banned"), dict) else {}
+    ordered = sorted(
+        banned.items(), key=lambda item: str(item[1].get("banned_at", "")), reverse=True,
+    )
+    rows = []
+    for address, metadata in ordered[:8]:
+        when = str(metadata.get("banned_at", "—")).replace("T", " ")[:19]
+        backend = str(metadata.get("backend", "firewall"))
+        rows.append(f"• <code>{html.escape(address)}</code> · {html.escape(when)} · {html.escape(backend)}")
+    if len(ordered) > 8:
+        rows.append(f"<i>…и ещё {len(ordered) - 8} адресов</i>")
+    return (
+        "<b>🍯 Honeypot — отдельная ловушка</b>\n\n"
+        f"<b>Сервис:</b> {'🟢 работает' if status.running else '🔴 остановлен'}\n"
+        f"<b>Порт ловушки:</b> <code>{int(data.get('port', status.port or 0))}</code>/TCP\n"
+        f"<b>Заблокировано адресов:</b> {len(ordered)}\n"
+        f"<b>Whitelist:</b> {len(data.get('whitelist', []))}\n\n"
+        "<b>Последние срабатывания:</b>\n"
+        + ("\n".join(rows) if rows else "<i>Подключений пока нет</i>")
+    )
+
+
+def _parse_fail2ban_jail(detail: str) -> dict:
+    result = {"currently_failed": 0, "total_failed": 0, "currently_banned": 0, "total_banned": 0, "ips": []}
+    mapping = {
+        "Currently failed": "currently_failed", "Total failed": "total_failed",
+        "Currently banned": "currently_banned", "Total banned": "total_banned",
+    }
+    for line in str(detail).splitlines():
+        clean = line.strip().lstrip("|-` ")
+        for label, key in mapping.items():
+            if label in clean:
+                match = re.search(r":\s*(\d+)", clean)
+                if match:
+                    result[key] = int(match.group(1))
+        if "Banned IP list" in clean and ":" in clean:
+            result["ips"] = clean.split(":", 1)[1].strip().split()
+    return result
+
+
+def _legacy_fail2ban_dashboard_text() -> str:
+    from hydra.plugins.fail2ban.plugin import Fail2banPlugin
+
+    plugin = Fail2banPlugin()
+    status = plugin.status()
+    if not status.running:
+        return "<b>🚫 Fail2ban</b>\n\n<b>Сервис:</b> 🔴 остановлен"
+    overall = HOST.run(["fail2ban-client", "status"], timeout=10, text=True)
+    match = re.search(r"Jail list:\s*(.*)", str(overall.stdout or ""))
+    jails = [item.strip() for item in match.group(1).split(",") if item.strip()] if match else []
+    options = plugin.jail_options(load_state())
+    blocks = []
+    total_current = total_ever = total_failed = 0
+    for jail in jails:
+        detail = HOST.run(["fail2ban-client", "status", jail], timeout=10, text=True)
+        info = _parse_fail2ban_jail(str(detail.stdout or ""))
+        total_current += info["currently_banned"]
+        total_ever += info["total_banned"]
+        total_failed += info["total_failed"]
+        config = options.get(jail, {})
+        ips = ", ".join(f"<code>{html.escape(ip)}</code>" for ip in info["ips"][:5]) or "—"
+        blocks.append(
+            f"<b>{html.escape(jail)}</b>\n"
+            f"  Сейчас: {info['currently_banned']} банов / {info['currently_failed']} ошибок\n"
+            f"  Всего: {info['total_banned']} банов / {info['total_failed']} ошибок\n"
+            f"  Политика: {config.get('maxretry', '—')} попыток за {_format_period(config.get('findtime'))}, "
+            f"бан {_format_period(config.get('bantime'))}\n"
+            f"  IP: {ips}"
+        )
+    return (
+        "<b>🚫 Fail2ban — защита авторизации</b>\n\n"
+        "<b>Сервис:</b> 🟢 работает\n"
+        f"<b>Jail:</b> {len(jails)}\n"
+        f"<b>Сейчас заблокировано:</b> {total_current}\n"
+        f"<b>Всего банов:</b> {total_ever}\n"
+        f"<b>Всего ошибок:</b> {total_failed}\n\n"
+        + ("\n\n".join(blocks) if blocks else "<i>Активных jail нет</i>")
+    )
+
+
+def _format_security_timestamp(value: object) -> str:
+    raw = str(value or "").strip().replace("T", " ")
+    match = re.match(r"(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})", raw)
+    if match:
+        year, month, day, hour, minute = match.groups()
+        return f"{day}.{month}.{year} {hour}:{minute}"
+    return raw[:16] or "—"
+
+
+def _parse_fail2ban_ban_lines(lines: list[str], limit: int = 5) -> list[dict[str, str]]:
+    pattern = re.compile(
+        r"^(?P<when>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}).*?"
+        r"NOTICE\s+\[(?P<jail>[^]]+)]\s+Ban\s+(?P<ip>\S+)",
+    )
+    result = []
+    seen = set()
+    for line in reversed(lines):
+        match = pattern.search(str(line))
+        if not match:
+            continue
+        try:
+            address = ipaddress.ip_address(match.group("ip").strip("[]")).compressed
+        except ValueError:
+            continue
+        if address in seen:
+            continue
+        seen.add(address)
+        result.append({
+            "ip": address, "jail": match.group("jail"), "when": match.group("when"),
+        })
+        if len(result) >= max(0, int(limit)):
+            break
+    return result
+
+
+def _recent_fail2ban_bans(limit: int = 5) -> list[dict[str, str]]:
+    path = Path("/var/log/fail2ban.log")
+    lines: list[str] = []
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            handle.seek(max(0, size - 4 * 1024 * 1024))
+            lines = handle.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        pass
+    recent = _parse_fail2ban_ban_lines(lines, limit)
+    if len(recent) >= limit:
+        return recent
+    try:
+        journal = HOST.run(
+            ["journalctl", "-u", "fail2ban", "-n", "5000", "--no-pager", "-o", "short-iso"],
+            timeout=15, text=True,
+        )
+        return _parse_fail2ban_ban_lines(
+            [*str(journal.stdout or "").splitlines(), *lines], limit,
+        )
+    except Exception:
+        return recent
+
+
+def _lookup_security_intel(addresses: list[str]) -> dict[str, dict[str, str]]:
+    from hydra.services.security_intel import lookup_ip
+
+    unique = list(dict.fromkeys(addresses))[:5]
+    if not unique:
+        return {}
+    with ThreadPoolExecutor(max_workers=len(unique)) as executor:
+        return dict(zip(unique, executor.map(lookup_ip, unique)))
+
+
+def _network_label(intel: dict[str, str]) -> str:
+    return " ".join(
+        value for value in (str(intel.get("asn", "")), str(intel.get("owner", "")))
+        if value and value != "N/A"
+    ).strip()
+
+
+def get_honeypot_status_text() -> str:
+    """Compact Honeypot status with five latest attributed blocks."""
+    from hydra.plugins.honeypot.plugin import HoneypotPlugin
+
+    plugin = HoneypotPlugin()
+    status = plugin.status()
+    data = plugin._load_state()
+    banned = data.get("banned", {}) if isinstance(data.get("banned"), dict) else {}
+    ordered = sorted(
+        banned.items(), key=lambda item: str((item[1] or {}).get("banned_at", "")), reverse=True,
+    )
+    latest = ordered[:5]
+    intel = _lookup_security_intel([str(address) for address, _ in latest])
+    rows = []
+    port = int(data.get("port", status.port or 0))
+    for address, metadata in latest:
+        details = intel.get(str(address), {})
+        flag = html.escape(str(details.get("flag", "🌐")))
+        when = _format_security_timestamp((metadata or {}).get("banned_at"))
+        backend = html.escape(str((metadata or {}).get("backend", "firewall")))
+        owner = _network_label(details)
+        suffix = f" · {html.escape(owner)}" if owner else ""
+        rows.append(
+            f"• {flag} <code>{html.escape(str(address))}</code> · {html.escape(when)}\n"
+            f"  <code>TCP/{port}</code> · {backend}{suffix}"
+        )
+    service = "🟢 работает" if status.running else "🔴 остановлен"
+    return (
+        "<b>🍯 Honeypot</b>\n\n"
+        f"{service} · <code>{port}/TCP</code>\n"
+        f"<b>Активных блокировок:</b> {len(ordered)}\n\n"
+        "<b>Последние блокировки:</b>\n"
+        + ("\n\n".join(rows) if rows else "<i>Блокировок нет</i>")
+    )
+
+
+def get_fail2ban_dashboard_text() -> str:
+    """Compact Fail2ban dashboard without duplicated lifetime counters."""
+    from hydra.plugins.fail2ban.plugin import Fail2banPlugin
+
+    plugin = Fail2banPlugin()
+    status = plugin.status()
+    if not status.running:
+        return "<b>🚫 Fail2ban</b>\n\n🔴 остановлен"
+    overall = HOST.run(["fail2ban-client", "status"], timeout=10, text=True)
+    match = re.search(r"Jail list:\s*(.*)", str(overall.stdout or ""))
+    jails = [item.strip() for item in match.group(1).split(",") if item.strip()] if match else []
+    options = plugin.jail_options(load_state())
+    jail_rows = []
+    total_current = 0
+    for jail in jails:
+        detail = HOST.run(["fail2ban-client", "status", jail], timeout=10, text=True)
+        info = _parse_fail2ban_jail(str(detail.stdout or ""))
+        current = info["currently_banned"]
+        total_current += current
+        config = options.get(jail, {})
+        jail_rows.append(
+            f"• <code>{html.escape(jail)}</code> · {current} IP · "
+            f"{html.escape(str(config.get('maxretry', '—')))}/{_format_period(config.get('findtime'))} "
+            f"→ {_format_period(config.get('bantime'))}"
+        )
+
+    recent = _recent_fail2ban_bans(5)
+    intel = _lookup_security_intel([item["ip"] for item in recent])
+    recent_rows = []
+    for item in recent:
+        details = intel.get(item["ip"], {})
+        flag = html.escape(str(details.get("flag", "🌐")))
+        jail = item["jail"]
+        duration = _format_period(options.get(jail, {}).get("bantime"))
+        owner = _network_label(details)
+        suffix = f" · {html.escape(owner)}" if owner else ""
+        recent_rows.append(
+            f"• {flag} <code>{html.escape(item['ip'])}</code> · "
+            f"{html.escape(_format_security_timestamp(item['when']))}\n"
+            f"  <code>{html.escape(jail)}</code> · бан {duration}{suffix}"
+        )
+
+    return (
+        "<b>🚫 Fail2ban</b>\n\n"
+        f"🟢 работает · <b>{total_current}</b> активных банов\n"
+        f"<b>Jail:</b> {len(jails)}\n\n"
+        "<b>Политики:</b>\n"
+        + ("\n".join(jail_rows) if jail_rows else "<i>Активных jail нет</i>")
+        + "\n\n<b>Последние блокировки:</b>\n"
+        + ("\n\n".join(recent_rows) if recent_rows else "<i>Событий Ban в журнале нет</i>")
+    )
+
+
+def _process_honeypot_log_line(line: str) -> None:
+    match = re.search(
+        r"^\[(?P<when>[^]]+)]\s+BAN\s+(?P<ip>\S+)\s+backend=(?P<backend>\S+)\s+result=OK",
+        str(line).strip(),
+    )
+    if not match:
+        return
+    try:
+        address = ipaddress.ip_address(match.group("ip").strip("[]")).compressed
+    except ValueError:
+        return
+    try:
+        from hydra.plugins.honeypot.plugin import HoneypotPlugin
+        trap_port = HoneypotPlugin()._load_state().get("port", "—")
+    except Exception:
+        trap_port = "—"
+    from hydra.services.security_intel import notification_fields
+    send_admin_notification(
+        format_security_event("Honeypot", "BAN", [
+            ("IP", address),
+            *notification_fields(address),
+            ("Port", f"{trap_port}/TCP"),
+            ("Backend", match.group("backend")),
+            ("Timestamp", match.group("when")),
+        ]),
+        category="honeypot",
+    )
+
+
+def _honeypot_monitor_worker(stop_event: threading.Event) -> None:
+    from hydra.plugins.honeypot.plugin import HONEYPOT_LOG
+
+    handle = None
+    inode = None
+    try:
+        while not stop_event.is_set():
+            if handle is None:
+                try:
+                    handle = HONEYPOT_LOG.open("r", encoding="utf-8", errors="replace")
+                    handle.seek(0, 2)
+                    inode = HONEYPOT_LOG.stat().st_ino
+                except OSError:
+                    handle = None
+                    stop_event.wait(0.5)
+                    continue
+            try:
+                stat = HONEYPOT_LOG.stat()
+                if stat.st_ino != inode or stat.st_size < handle.tell():
+                    handle.close()
+                    handle = None
+                    continue
+                line = handle.readline()
+            except OSError:
+                handle.close()
+                handle = None
+                continue
+            if line:
+                _process_honeypot_log_line(line)
+            else:
+                stop_event.wait(0.5)
+    finally:
+        if handle is not None:
+            handle.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Admin Bot implementation
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _notification_settings_text() -> str:
+    tg = load_state().telegram
+    mark = lambda value: "✅" if value else "❌"
+    return (
+        "<b>🔔 Настройки уведомлений</b>\n\n"
+        f"Все уведомления: {mark(getattr(tg, 'notifications_enabled', True))}\n"
+        f"AntiDPI: {mark(getattr(tg, 'notify_antidpi', True))}\n"
+        f"Honeypot: {mark(getattr(tg, 'notify_honeypot', True))}\n"
+        f"Fail2ban BAN: {mark(getattr(tg, 'notify_fail2ban', True))}\n"
+        f"События UNBAN: {mark(getattr(tg, 'notify_unbans', False))}\n"
+        f"Системные: {mark(getattr(tg, 'notify_system', True))}"
+    )
+
+
+def _toggle_notification(field: str) -> bool:
+    allowed = {
+        "notifications_enabled", "notify_antidpi", "notify_honeypot", "notify_fail2ban",
+        "notify_unbans", "notify_system",
+    }
+    if field not in allowed:
+        raise ValueError("unknown notification setting")
+
+    def mutate(state: AppState) -> bool:
+        value = not bool(getattr(state.telegram, field, True))
+        setattr(state.telegram, field, value)
+        return value
+
+    _, value = update_state(mutate)
+    return value
+
+
+def _main_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🖥 Система", callback_data="view:system"),
+            InlineKeyboardButton("🛡 AntiDPI", callback_data="view:antidpi"),
+        ],
+        [
+            InlineKeyboardButton("🚫 Fail2ban", callback_data="view:fail2ban"),
+            InlineKeyboardButton("🍯 Honeypot", callback_data="view:honeypot"),
+        ],
+        [InlineKeyboardButton("🔔 Уведомления", callback_data="view:notifications")],
+        [InlineKeyboardButton("🔄 Обновить", callback_data="view:home")],
+    ])
+
+
+def _back_keyboard(*, refresh: str = "home", extra: list | None = None):
+    rows = list(extra or [])
+    rows.append([
+        InlineKeyboardButton("🔄 Обновить", callback_data=f"view:{refresh}"),
+        InlineKeyboardButton("⬅️ Меню", callback_data="view:home"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def _notification_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Все", callback_data="notify:notifications_enabled"),
+            InlineKeyboardButton("AntiDPI", callback_data="notify:notify_antidpi"),
+        ],
+        [
+            InlineKeyboardButton("Honeypot", callback_data="notify:notify_honeypot"),
+            InlineKeyboardButton("Fail2ban", callback_data="notify:notify_fail2ban"),
+        ],
+        [
+            InlineKeyboardButton("UNBAN", callback_data="notify:notify_unbans"),
+            InlineKeyboardButton("Системные", callback_data="notify:notify_system"),
+            InlineKeyboardButton("⬅️ Меню", callback_data="view:home"),
+        ],
+    ])
+
+
+def _antidpi_keyboard():
+    from hydra.plugins.antidpi.plugin import AntiDPIPlugin, STATE_FILE, active_bans
+
+    status = AntiDPIPlugin().status()
+    action = "⏸ Остановить" if status.running else "▶️ Запустить"
+    rows = [[InlineKeyboardButton(action, callback_data="ask:antidpi_toggle")]]
+    try:
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        banned = active_bans(data)
+        addresses = [
+            address for address, _metadata in sorted(
+                banned.items(),
+                key=lambda item: float(item[1].get("at", 0) or 0),
+                reverse=True,
+            )[:5]
+        ]
+    except (OSError, ValueError, TypeError):
+        addresses = []
+    for address in addresses:
+        rows.append([InlineKeyboardButton(f"🔓 {address}", callback_data=f"ask-unban:{address}")])
+    return _back_keyboard(refresh="antidpi", extra=rows)
+
+
+def _toggle_antidpi() -> tuple[bool, str]:
+    import hydra.core.orchestrator as orchestrator
+    from hydra.plugins.antidpi.plugin import AntiDPIPlugin
+
+    state = load_state()
+    running = AntiDPIPlugin().status().running
+    ok = orchestrator.disable(state, "antidpi") if running else orchestrator.enable(state, "antidpi")
+    return ok, "остановлен" if running else "запущен"
+
+
+def _honeypot_keyboard():
+    from hydra.plugins.honeypot.plugin import HoneypotPlugin
+
+    plugin = HoneypotPlugin()
+    status = plugin.status()
+    rows = [[InlineKeyboardButton(
+        "⏹ Остановить" if status.running else "▶️ Запустить",
+        callback_data="ask:honeypot_toggle",
+    )]]
+    data = plugin._load_state()
+    banned = data.get("banned", {}) if isinstance(data.get("banned"), dict) else {}
+    ordered = sorted(
+        banned.items(), key=lambda item: str(item[1].get("banned_at", "")), reverse=True,
+    )
+    for address, _metadata in ordered[:5]:
+        rows.append([InlineKeyboardButton(f"🔓 {address}", callback_data=f"ask-hp-unban:{address}")])
+    return _back_keyboard(refresh="honeypot", extra=rows)
+
+
+def _toggle_honeypot() -> tuple[bool, str]:
+    import hydra.core.orchestrator as orchestrator
+    from hydra.plugins.honeypot.plugin import HoneypotPlugin
+
+    state = load_state()
+    running = HoneypotPlugin().status().running
+    ok = orchestrator.disable(state, "honeypot") if running else orchestrator.enable(state, "honeypot")
+    return ok, "остановлен" if running else "запущен"
+
+
+def _fail2ban_keyboard():
+    from hydra.plugins.fail2ban.plugin import Fail2banPlugin
+
+    running = Fail2banPlugin().status().running
+    action = "⏹ Остановить" if running else "▶️ Запустить"
+    return _back_keyboard(
+        refresh="fail2ban",
+        extra=[[InlineKeyboardButton(action, callback_data="ask:fail2ban_toggle")]],
+    )
+
+
+def _toggle_fail2ban() -> tuple[bool, str]:
+    import hydra.core.orchestrator as orchestrator
+    from hydra.plugins.fail2ban.plugin import Fail2banPlugin
+
+    state = load_state()
+    running = Fail2banPlugin().status().running
+    ok = orchestrator.disable(state, "fail2ban") if running else orchestrator.enable(state, "fail2ban")
+    return ok, "остановлен" if running else "запущен"
+
 
 class AdminBot:
     def __init__(self, token: str, admin_chat_id: str):
         if not TELEGRAM_AVAILABLE:
             raise RuntimeError("python-telegram-bot не установлен")
-        self.token = token
-        self.admin_chat_id = int(admin_chat_id)
+        self.token = str(token or "").strip()
+        self.admin_chat_id = str(admin_chat_id or "").strip()
+        if not self.token:
+            raise ValueError("Admin Bot token пуст")
+        if not self.admin_chat_id:
+            raise ValueError("Admin Chat ID пуст")
         self.app: Optional[Application] = None
+        self.stop_event = threading.Event()
+        self.monitor_threads: list[threading.Thread] = []
 
     async def _check_admin(self, update: Update) -> bool:
-        if update.effective_user and update.effective_user.id == self.admin_chat_id:
+        if update.effective_user and str(update.effective_user.id).strip() == self.admin_chat_id:
             return True
-        await update.message.reply_text("Доступ запрещён.")
+        if update.callback_query:
+            await update.callback_query.answer("Доступ запрещён", show_alert=True)
+        elif update.effective_message:
+            await update.effective_message.reply_text("Доступ запрещён.")
         return False
 
-    async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_admin(update):
-            return
-        await update.message.reply_text(
-            "HYDRA Admin Panel\n\n"
-            "/users — управление пользователями\n"
-            "/traffic — статистика трафика\n"
-            "/status — статус протоколов\n"
-            "/adduser <email> — добавить пользователя\n"
-            "/deluser <email> — удалить пользователя\n"
-            "/help — справка",
-            parse_mode="Markdown",
-        )
-
-    async def cmd_users(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_admin(update):
-            return
-        state = load_state()
-        if not state.users:
-            await update.message.reply_text("Нет пользователей.")
-            return
-
-        lines = ["Пользователи:\n"]
-        for u in state.users:
-            status_icon = "🔴" if u.blocked else "🟢"
-            limit = f"{u.traffic_limit_gb} GiB" if u.traffic_limit_gb else "∞"
-            expiry = u.expiry_date[:10] if u.expiry_date else "∞"
-            lines.append(
-                f"{status_icon} `{u.email}`\n"
-                f"   Лимит: {limit} | TTL: {expiry}"
-            )
-
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
-
-    async def cmd_traffic(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_admin(update):
-            return
-        state = refresh_traffic_state()
-        traffic = collect_traffic(state)
-
-        lines = ["Трафик:\n"]
-        for u in state.users:
-            used = traffic.get(u.email, u.traffic_used_bytes)
-            used_gb = used / 1073741824
-            limit = f"/ {u.traffic_limit_gb} GiB" if u.traffic_limit_gb else ""
-            bar = _progress_bar(used, int(u.traffic_limit_gb * 1073741824) if u.traffic_limit_gb else 0)
-            lines.append(f"`{u.email}`: {used_gb:.2f} GB {limit}\n{bar}")
-
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
-
-    async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_admin(update):
-            return
-        plugins = status_all()
-        lines = ["Статус протоколов:\n"]
-        for name, s in plugins.items():
-            icon = "✅" if s["running"] else ("⚠️" if s["installed"] else "❌")
-            lines.append(f"{icon} *{name}*: порт {s['port']}")
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
-
-    async def cmd_adduser(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_admin(update):
-            return
-        if not context.args:
-            await update.message.reply_text("Использование: /adduser <email>")
-            return
-
-        import uuid as _uuid
-        import secrets as _secrets
-        email = context.args[0]
-        state = load_state()
-
-        if find_user(state, email):
-            await update.message.reply_text(f"Пользователь `{email}` уже существует.")
-            return
-
-        user = User(
-            email=email,
-            uuid=str(_uuid.uuid4()),
-            traffic_limit_gb=0,
-            created_at=datetime.now().isoformat(),
-        )
-        orchestrator.add_user(state, user)
-
-        await update.message.reply_text(
-            f"Пользователь `{email}` создан.\n"
-            f"UUID: `{user.uuid}`",
-            parse_mode="Markdown",
-        )
-
-    async def cmd_deluser(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_admin(update):
-            return
-        if not context.args:
-            await update.message.reply_text("Использование: /deluser <email>")
-            return
-
-        email = context.args[0]
-        state = load_state()
-        user = find_user(state, email)
-        if not user:
-            await update.message.reply_text(f"Пользователь `{email}` не найден.")
-            return
-
-        orchestrator.remove_user(state, email)
-        await update.message.reply_text(f"Пользователь `{email}` удалён.", parse_mode="Markdown")
-
-    def run(self):
-        self.app = Application.builder().token(self.token).build()
-        self.app.add_handler(CommandHandler("start", self.cmd_start))
-        self.app.add_handler(CommandHandler("users", self.cmd_users))
-        self.app.add_handler(CommandHandler("traffic", self.cmd_traffic))
-        self.app.add_handler(CommandHandler("status", self.cmd_status))
-        self.app.add_handler(CommandHandler("adduser", self.cmd_adduser))
-        self.app.add_handler(CommandHandler("deluser", self.cmd_deluser))
-        self.app.run_polling()
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  Client Bot
-# ═════════════════════════════════════════════════════════════════════════════
-
-class ClientBot:
-    def __init__(self, token: str, admin_chat_id: str):
-        if not TELEGRAM_AVAILABLE:
-            raise RuntimeError("python-telegram-bot не установлен")
-        self.token = token
-        self.admin_chat_id = int(admin_chat_id)
-        self.app: Optional[Application] = None
-
-    def _find_user_by_telegram(self, state: AppState, telegram_id: int) -> Optional[User]:
-        for u in state.users:
-            if u.telegram_id == telegram_id:
-                return u
-        return None
-
-    async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update.effective_user:
-            return
-        tid = update.effective_user.id
-        state = load_state()
-        user = self._find_user_by_telegram(state, tid)
-
-        if not user:
-            token = context.args[0] if context.args else None
-            if token:
-                for u in state.users:
-                    if u.uuid == token:
-                        u.telegram_id = tid
-                        save_state(state)
-                        user = u
-                        break
-
-        if not user:
-            await update.message.reply_text(
-                "У вас нет доступа. Обратитесь к администратору за invite-ссылкой."
-            )
-            return
-
-        if user.blocked:
-            await update.message.reply_text("Ваша подписка заблокирована.")
-            return
-
-        limit_text = f"{user.traffic_limit_gb} GiB" if user.traffic_limit_gb else "∞"
-        await update.message.reply_text(
-            f"HYDRA Subscription\n\n"
-            f"Пользователь: `{user.email}`\n"
-            f"Лимит: {limit_text}\n\n"
-            "/config — получить конфиг (Sing-Box)\n"
-            "/link — ссылка для импорта\n"
-            "/awg — конфиг AmneziaWG\n"
-            "/status — статус подписки",
-            parse_mode="Markdown",
-        )
-
-    async def cmd_config(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update.effective_user:
-            return
-        state = load_state()
-        user = self._find_user_by_telegram(state, update.effective_user.id)
-        if not user or user.blocked:
-            await update.message.reply_text("Нет доступа.")
-            return
-
-        config = generate_singbox_config(user, state)
-        config_str = json.dumps(config, indent=2, ensure_ascii=False)
-
-        if len(config_str) > 4000:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".json", delete=False, encoding="utf-8",
-            ) as f:
-                f.write(config_str)
-                f.flush()
-                await update.message.reply_document(
-                    document=open(f.name, "rb"),
-                    filename=f"hydra-{user.email}.json",
-                    caption="Sing-Box конфиг",
+    async def _show(self, update: Update, text: str, keyboard=None) -> None:
+        if update.callback_query:
+            await update.callback_query.answer()
+            try:
+                await update.callback_query.edit_message_text(
+                    text, parse_mode="HTML", reply_markup=keyboard,
+                    disable_web_page_preview=True,
                 )
-            os.unlink(f.name)
+                return
+            except Exception as exc:
+                if "message is not modified" in str(exc).lower():
+                    return
+        if update.effective_message:
+            await update.effective_message.reply_text(
+                text, parse_mode="HTML", reply_markup=keyboard,
+                disable_web_page_preview=True,
+            )
+
+    async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_admin(update):
+            return
+        await self._show(
+            update,
+            "<b>🛡️ HYDRA Control Center</b>\n\n"
+            "Управление защитой и мониторингом VPS. Выберите раздел:",
+            _main_keyboard(),
+        )
+
+    async def cmd_system(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_admin(update):
+            return
+        msg = await asyncio.to_thread(get_system_info_text)
+        await self._show(update, msg, _back_keyboard(refresh="system"))
+
+    async def cmd_antidpi(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_admin(update):
+            return
+        msg = await asyncio.to_thread(get_antidpi_dashboard_text)
+        keyboard = await asyncio.to_thread(_antidpi_keyboard)
+        await self._show(update, msg, keyboard)
+
+    async def cmd_honeypot(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_admin(update):
+            return
+        msg = await asyncio.to_thread(get_honeypot_status_text)
+        keyboard = await asyncio.to_thread(_honeypot_keyboard)
+        await self._show(update, msg, keyboard)
+
+    async def cmd_fail2ban(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_admin(update):
+            return
+        msg = await asyncio.to_thread(get_fail2ban_dashboard_text)
+        keyboard = await asyncio.to_thread(_fail2ban_keyboard)
+        await self._show(update, msg, keyboard)
+
+    async def cmd_notifications(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_admin(update):
+            return
+        msg = await asyncio.to_thread(_notification_settings_text)
+        await self._show(update, msg, _notification_keyboard())
+
+    async def cmd_unban(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_admin(update):
+            return
+        if not context.args:
+            await self._show(update, "Использование: <code>/unban &lt;ip&gt;</code>", _back_keyboard())
+            return
+        msg = await asyncio.to_thread(unban_ip_everywhere, context.args[0].strip())
+        await self._show(update, msg, _back_keyboard(refresh="antidpi"))
+
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Keep the bot responsive to text and unsupported commands."""
+        if not await self._check_admin(update):
+            return
+        await self._show(
+            update,
+            "<b>🛡️ HYDRA Control Center</b>\n\n"
+            "Используйте кнопки меню или команды /system, /antidpi, "
+            "/honeypot, /fail2ban, /notifications и /unban &lt;ip&gt;.",
+            _main_keyboard(),
+        )
+
+    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_admin(update):
+            return
+        data = str(update.callback_query.data or "")
+        if data == "view:home":
+            await self.cmd_start(update, context)
+        elif data == "view:system":
+            await self.cmd_system(update, context)
+        elif data == "view:antidpi":
+            await self.cmd_antidpi(update, context)
+        elif data == "view:honeypot":
+            await self.cmd_honeypot(update, context)
+        elif data == "view:fail2ban":
+            await self.cmd_fail2ban(update, context)
+        elif data == "view:notifications":
+            await self.cmd_notifications(update, context)
+        elif data.startswith("notify:"):
+            field = data.split(":", 1)[1]
+            try:
+                await asyncio.to_thread(_toggle_notification, field)
+                msg = await asyncio.to_thread(_notification_settings_text)
+                await self._show(update, msg, _notification_keyboard())
+            except ValueError:
+                await update.callback_query.answer("Неизвестная настройка", show_alert=True)
+        elif data == "ask:antidpi_toggle":
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Подтвердить", callback_data="antidpi:toggle"),
+                InlineKeyboardButton("Отмена", callback_data="view:antidpi"),
+            ]])
+            await self._show(update, "Изменить состояние AntiDPI?", keyboard)
+        elif data == "ask:honeypot_toggle":
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Подтвердить", callback_data="honeypot:toggle"),
+                InlineKeyboardButton("Отмена", callback_data="view:honeypot"),
+            ]])
+            await self._show(update, "Изменить состояние Honeypot?", keyboard)
+        elif data == "ask:fail2ban_toggle":
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Подтвердить", callback_data="fail2ban:toggle"),
+                InlineKeyboardButton("Отмена", callback_data="view:fail2ban"),
+            ]])
+            await self._show(update, "Изменить состояние Fail2ban?", keyboard)
+        elif data.startswith("ask-unban:"):
+            address = data.split(":", 1)[1]
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Разбанить", callback_data=f"unban:{address}"),
+                InlineKeyboardButton("Отмена", callback_data="view:antidpi"),
+            ]])
+            await self._show(
+                update,
+                f"Снять блокировку с <code>{html.escape(address)}</code> во всех системах?",
+                keyboard,
+            )
+        elif data.startswith("ask-hp-unban:"):
+            address = data.split(":", 1)[1]
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Разбанить", callback_data=f"hp-unban:{address}"),
+                InlineKeyboardButton("Отмена", callback_data="view:honeypot"),
+            ]])
+            await self._show(
+                update,
+                f"Снять Honeypot-блокировку с <code>{html.escape(address)}</code>?",
+                keyboard,
+            )
+        elif data == "antidpi:toggle":
+            try:
+                ok, action = await asyncio.to_thread(_toggle_antidpi)
+                prefix = "✅" if ok else "❌"
+                status_text = await asyncio.to_thread(get_antidpi_dashboard_text)
+                msg = f"{prefix} AntiDPI {action}.\n\n{status_text}"
+            except Exception as exc:
+                msg = f"❌ Не удалось изменить состояние AntiDPI: {html.escape(str(exc))}"
+            keyboard = await asyncio.to_thread(_antidpi_keyboard)
+            await self._show(update, msg, keyboard)
+        elif data == "honeypot:toggle":
+            try:
+                ok, action = await asyncio.to_thread(_toggle_honeypot)
+                prefix = "✅" if ok else "❌"
+                status_text = await asyncio.to_thread(get_honeypot_status_text)
+                msg = f"{prefix} Honeypot {action}.\n\n{status_text}"
+            except Exception as exc:
+                msg = f"❌ Ошибка управления Honeypot: {html.escape(str(exc))}"
+            await self._show(update, msg, await asyncio.to_thread(_honeypot_keyboard))
+        elif data == "fail2ban:toggle":
+            try:
+                ok, action = await asyncio.to_thread(_toggle_fail2ban)
+                prefix = "✅" if ok else "❌"
+                status_text = await asyncio.to_thread(get_fail2ban_dashboard_text)
+                msg = f"{prefix} Fail2ban {action}.\n\n{status_text}"
+            except Exception as exc:
+                msg = f"❌ Ошибка управления Fail2ban: {html.escape(str(exc))}"
+            await self._show(update, msg, await asyncio.to_thread(_fail2ban_keyboard))
+        elif data.startswith("hp-unban:"):
+            from hydra.plugins.honeypot.plugin import HoneypotPlugin
+            address = data.split(":", 1)[1]
+            ok = await asyncio.to_thread(HoneypotPlugin().unban, address)
+            msg = f"{'✅' if ok else 'ℹ️'} Honeypot: <code>{html.escape(address)}</code> " + ("разблокирован" if ok else "не найден")
+            await self._show(update, msg, await asyncio.to_thread(_honeypot_keyboard))
+        elif data.startswith("unban:"):
+            msg = await asyncio.to_thread(unban_ip_everywhere, data.split(":", 1)[1])
+            keyboard = await asyncio.to_thread(_antidpi_keyboard)
+            await self._show(update, msg, keyboard)
+        elif data.startswith("antidpi-ban:"):
+            address = data.split(":", 1)[1]
+            result = await asyncio.to_thread(ban_ip_antidpi, address)
+            if not result.get("ok"):
+                errors = {
+                    "invalid_ip": "Некорректный IP-адрес",
+                    "whitelisted": "IP находится в whitelist",
+                    "firewall_error": "Не удалось применить firewall ban",
+                }
+                await update.callback_query.answer(
+                    errors.get(str(result.get("error")), "Не удалось заблокировать IP"),
+                    show_alert=True,
+                )
+                return
+            duration = max(0, int(result.get("remaining", result.get("duration", 0)) or 0))
+            status = "already_banned" if result.get("already_active") else "manual_ban"
+            message = update.callback_query.message
+            original = getattr(message, "text_html", None)
+            if not isinstance(original, str) or not original:
+                original = html.escape(str(getattr(message, "text", "AntiDPI · ALERT") or "AntiDPI · ALERT"))
+            updated = (
+                f"{original}\n"
+                f"<b>Action:</b> <code>{status}</code>\n"
+                f"<b>TTL:</b> <code>{_format_period(duration)}</code>\n"
+                f"<b>Offense:</b> <code>{int(result.get('offense_count', 1) or 1)}</code>"
+            )
+            try:
+                await update.callback_query.edit_message_text(
+                    updated,
+                    parse_mode="HTML",
+                    reply_markup=None,
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                await update.callback_query.answer(
+                    "IP заблокирован, но сообщение не удалось обновить",
+                    show_alert=True,
+                )
+                return
+            await update.callback_query.answer(
+                "IP уже заблокирован" if result.get("already_active") else "IP заблокирован",
+            )
         else:
-            await update.message.reply_text(
-                f"```json\n{config_str}\n```",
-                parse_mode="Markdown",
-            )
-
-    async def cmd_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update.effective_user:
-            return
-        state = load_state()
-        user = self._find_user_by_telegram(state, update.effective_user.id)
-        if not user or user.blocked:
-            await update.message.reply_text("Нет доступа.")
-            return
-
-        links = generate_links(user, state)
-        if not links:
-            await update.message.reply_text("Нет доступных ссылок для импорта.")
-            return
-
-        lines = [f"`{link}`" for link in links]
-        lines.append(
-            f"\nАвтоподписка (NekoBox / Throne):\n"
-            f"`https://{state.network.domain}:9443/sub"
-            f"?token={user.uuid}`"
-        )
-        lines.append(
-            f"\nBase64-подписка:\n"
-            f"`https://{state.network.domain}:9443/sub"
-            f"?token={user.uuid}&format=base64`"
-        )
-        lines.append(
-            f"\nNekoBox (ShadowTLS chain):\n"
-            f"`https://{state.network.domain}:9443/sub"
-            f"?token={user.uuid}&format=nekobox`"
-        )
-        lines.append(
-            f"\nSing-Box JSON (ShadowTLS):\n"
-            f"`https://{state.network.domain}:9443/sub"
-            f"?token={user.uuid}&format=singbox`"
-        )
-        lines.append(
-            f"\nThrone (ShadowTLS chain):\n"
-            f"`https://{state.network.domain}:9443/sub"
-            f"?token={user.uuid}&format=throne`"
-        )
-        await update.message.reply_text(
-            "\n".join(lines),
-            parse_mode="Markdown",
-        )
-
-    async def cmd_awg(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update.effective_user:
-            return
-        state = load_state()
-        user = self._find_user_by_telegram(state, update.effective_user.id)
-        if not user or user.blocked:
-            await update.message.reply_text("Нет доступа.")
-            return
-
-        config = generate_client_config(user, state, "amneziawg")
-        if not config:
-            await update.message.reply_text("AmneziaWG не доступен.")
-            return
-
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".conf", delete=False, encoding="utf-8",
-        ) as f:
-            f.write(config)
-            f.flush()
-            await update.message.reply_document(
-                document=open(f.name, "rb"),
-                filename=f"awg-{user.email}.conf",
-                caption="AmneziaWG конфиг",
-            )
-        os.unlink(f.name)
-
-    async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update.effective_user:
-            return
-        state = load_state()
-        user = self._find_user_by_telegram(state, update.effective_user.id)
-        if not user or user.blocked:
-            await update.message.reply_text("Нет доступа.")
-            return
-
-        used_gb = user.traffic_used_bytes / 1073741824
-        limit_str = f"{user.traffic_limit_gb} GiB" if user.traffic_limit_gb else "∞"
-        bar = _progress_bar(user.traffic_used_bytes, int(user.traffic_limit_gb * 1073741824) if user.traffic_limit_gb else 0)
-
-        await update.message.reply_text(
-            f"Статус подписки\n\n"
-            f"Трафик: {used_gb:.2f} GB / {limit_str}\n{bar}\n"
-            f"Действует до: {user.expiry_date[:10] if user.expiry_date else '∞'}",
-            parse_mode="Markdown",
-        )
+            await update.callback_query.answer("Неизвестное действие", show_alert=True)
 
     def run(self):
-        self.app = Application.builder().token(self.token).build()
-        self.app.add_handler(CommandHandler("start", self.cmd_start))
-        self.app.add_handler(CommandHandler("config", self.cmd_config))
-        self.app.add_handler(CommandHandler("link", self.cmd_link))
-        self.app.add_handler(CommandHandler("awg", self.cmd_awg))
-        self.app.add_handler(CommandHandler("status", self.cmd_status))
-        self.app.run_polling()
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  Утилиты
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _progress_bar(used: int, limit: int, width: int = 15) -> str:
-    if limit <= 0:
-        return "`[███████████████]` ∞"
-    pct = min(used / limit, 1.0)
-    filled = int(pct * width)
-    bar = "█" * filled + "░" * (width - filled)
-    return f"`[{bar}]` {pct:.0%}"
+        self.stop_event.clear()
+        self.monitor_threads = [
+            threading.Thread(target=worker, args=(self.stop_event,), daemon=True)
+            for worker in (_fail2ban_monitor_worker, _honeypot_monitor_worker)
+        ]
+        try:
+            for monitor in self.monitor_threads:
+                monitor.start()
+            self.app = Application.builder().token(self.token).build()
+            self.app.add_handler(CommandHandler(["start", "help", "menu"], self.cmd_start))
+            self.app.add_handler(CommandHandler(["system", "status"], self.cmd_system))
+            self.app.add_handler(CommandHandler("antidpi", self.cmd_antidpi))
+            self.app.add_handler(CommandHandler("honeypot", self.cmd_honeypot))
+            self.app.add_handler(CommandHandler("fail2ban", self.cmd_fail2ban))
+            self.app.add_handler(CommandHandler(["notifications", "notify"], self.cmd_notifications))
+            self.app.add_handler(CommandHandler("unban", self.cmd_unban))
+            self.app.add_handler(CallbackQueryHandler(self.handle_callback))
+            self.app.add_handler(MessageHandler(filters.COMMAND | filters.TEXT, self.handle_message))
+            self.app.run_polling()
+        finally:
+            self.stop_event.set()
+            for monitor in self.monitor_threads:
+                if monitor.is_alive():
+                    monitor.join(timeout=2)
 
 
 def run_admin_bot(token: str, admin_chat_id: str):
@@ -388,5 +1265,5 @@ def run_admin_bot(token: str, admin_chat_id: str):
 
 
 def run_client_bot(token: str, admin_chat_id: str):
-    bot = ClientBot(token, admin_chat_id)
-    bot.run()
+    """Совместимость со старым вызовом. Логика клиентского бота удалена."""
+    print("ClientBot устарел и отключен. Используйте AdminBot для мониторинга и уведомлений.")

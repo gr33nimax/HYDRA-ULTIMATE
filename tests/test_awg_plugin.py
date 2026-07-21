@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin, AWG_CONF, AWG_INTERFACE
 from hydra.plugins.base import PluginCategory, ConfigFragment
-from hydra.core.state import AppState, User
+from hydra.core.state import AppState, PluginState, User
 
 
 FAKE_CONF = """[Interface]
@@ -39,6 +39,49 @@ def test_plugin_meta():
     assert p.meta.name == "amneziawg"
     assert p.meta.category == PluginCategory.TRANSPORT
     assert p.meta.needs_domain is False
+
+
+def test_kernel_module_reports_reboot_when_dkms_targets_newer_kernel():
+    p = AmneziaWGPlugin()
+
+    def run(command, **kwargs):
+        if command == ["lsmod"]:
+            return MagicMock(returncode=0, stdout="")
+        if command == ["modprobe", "amneziawg"]:
+            return MagicMock(returncode=1, stdout="", stderr="module not found")
+        if command == ["dkms", "status"]:
+            return MagicMock(
+                returncode=0,
+                stdout="amneziawg/1.0.0, 6.12.96+deb13-amd64, x86_64: installed\n",
+            )
+        raise AssertionError(command)
+
+    with patch("hydra.plugins.amneziawg.plugin.HOST.run", side_effect=run), \
+         patch("hydra.plugins.amneziawg.plugin.HOST.which", return_value="/usr/sbin/dkms"), \
+         patch("platform.release", return_value="6.12.88+deb13-amd64"):
+        ready, detail = p._ensure_kernel_module()
+
+    assert ready is False
+    assert "6.12.96+deb13-amd64" in detail
+    assert "6.12.88+deb13-amd64" in detail
+    assert "Перезагрузите" in detail
+
+
+def test_status_uses_persisted_lifecycle_instead_of_config_presence():
+    p = AmneziaWGPlugin()
+    state = AppState(protocols={
+        "amneziawg": PluginState(installed=True, enabled=False),
+    })
+
+    with patch.object(p, "_installed", return_value=True), \
+         patch("hydra.core.state.load_state", return_value=state), \
+         patch("hydra.plugins.amneziawg.plugin.AWG_CONF") as config:
+        config.exists.return_value = True
+        status = p.status()
+
+    assert status.installed is True
+    assert status.enabled is False
+    assert status.running is False
 
 
 def test_configure_returns_tproxy_ifaces():
@@ -215,6 +258,82 @@ def test_resolve_network_avoids_conflicts():
         state.protocols["amneziawg"].config = {}
         net = p._resolve_network(state)
         assert net == "10.67.67.0/24"
+
+
+def test_network_discovery_ignores_transport_modes_from_other_plugins():
+    p = AmneziaWGPlugin()
+    state = AppState(protocols={
+        "amneziawg": PluginState(enabled=True, config={}),
+        "naive": PluginState(enabled=True, config={"network": "both"}),
+        "trusttunnel": PluginState(enabled=True, config={"network": "quic"}),
+        "wdtt": PluginState(enabled=True, config={"network": "10.80.0.0/16"}),
+    })
+
+    used = p._used_networks(state)
+
+    assert "both" not in used
+    assert "quic" not in used
+    assert "10.80.0.0/16" in used
+    assert p._is_network_free("10.67.67.0/24", used) is True
+    assert p._is_network_free("10.80.1.0/24", used) is False
+
+
+def test_invalid_legacy_amnezia_network_falls_back_without_raising():
+    p = AmneziaWGPlugin()
+    state = AppState(protocols={
+        "amneziawg": PluginState(
+            enabled=True,
+            config={"profiles": {"desktop": {"network": "both"}}},
+        ),
+        "naive": PluginState(enabled=True, config={"network": "both"}),
+    })
+    conf = MagicMock()
+    conf.exists.return_value = False
+
+    result = p._network_for_profile(state, conf, "desktop", "10.67.67.0/24")
+
+    assert result == ("10.67.67", "1", "10.67.67.0/24")
+
+
+def test_existing_profile_network_is_preserved_during_apply():
+    p = AmneziaWGPlugin()
+    state = AppState(protocols={
+        "amneziawg": PluginState(
+            enabled=True,
+            config={"profiles": {"desktop": {"network": "10.67.67.0/24"}}},
+        ),
+        "wdtt": PluginState(enabled=True, config={"network": "10.66.66.0/16"}),
+    })
+    conf = MagicMock()
+    conf.exists.return_value = True
+    conf.read_text.return_value = "[Interface]\nAddress = 10.66.66.1/24\n"
+
+    base, server_octet, network = p._network_for_profile(
+        state, conf, "desktop", "10.67.67.0/24",
+    )
+
+    assert (base, server_octet, network) == ("10.66.66", "1", "10.66.66.0/24")
+
+
+def test_configure_does_not_migrate_existing_interface_network(tmp_path):
+    p = AmneziaWGPlugin()
+    desktop_conf = tmp_path / "awg0.conf"
+    desktop_conf.write_text(FAKE_CONF, encoding="utf-8")
+    mobile_conf = tmp_path / "awg1.conf"
+    state = AppState(protocols={
+        "amneziawg": PluginState(
+            enabled=True,
+            config={"profiles": {"desktop": {"network": "10.67.67.0/24"}}},
+        ),
+        "wdtt": PluginState(enabled=True, config={"network": "10.66.66.0/16"}),
+    })
+
+    with patch("hydra.plugins.amneziawg.plugin.AWG_CONF", desktop_conf), \
+         patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1", mobile_conf):
+        p.configure(state)
+
+    assert "Address = 10.66.66.1/24" in p._pending_conf
+    assert "Address = 10.67.67.1/24" not in p._pending_conf
 
 
 def test_presets_strategies_and_overrides():

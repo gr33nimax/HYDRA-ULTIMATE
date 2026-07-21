@@ -293,3 +293,6 @@ def test_health_all_reports_only_unhealthy_enabled_plugins():
 
     with patch("hydra.plugins.registry._PLUGINS", [healthy, broken]):
         assert registry.health_all(state) == {"broken": "порт недоступен"}
+
+    healthy.healthcheck.assert_called_once_with()
+    broken.healthcheck.assert_called_once_with()

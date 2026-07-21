@@ -78,7 +78,8 @@ def test_configure(mock_cache, mock_load_config):
 @patch("urllib.request.urlopen")
 @patch("hydra.core.state.load_state")
 @patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")
-def test_update_external_rules(mock_cache_path, mock_load_state, mock_urlopen):
+@patch("hydra.plugins.warp.plugin.HOST")
+def test_update_external_rules(mock_host, mock_cache_path, mock_load_state, mock_urlopen):
     # Мок ответа сервера
     mock_response = MagicMock()
     mock_response.read.return_value = b"""# Comments
@@ -114,8 +115,8 @@ invalid_domain_name
     assert "Обновлено списков: 1/1" in msg
     
     # Проверяем, что записан валидный JSON с нашими доменами и IP через mock_cache_path
-    mock_cache_path.write_text.assert_called_once()
-    written_data = json.loads(mock_cache_path.write_text.call_args[0][0])
+    mock_host.atomic_write.assert_called_once()
+    written_data = json.loads(mock_host.atomic_write.call_args.args[1])
     assert written_data["russia"]["domains"] == ["openai.com"]
     assert set(written_data["russia"]["ips"]) == {"1.1.1.1", "192.168.0.0/16"}
     assert written_data["updated_at"] == written_data["last_attempt_at"]
@@ -124,7 +125,8 @@ invalid_domain_name
 @patch("urllib.request.urlopen")
 @patch("hydra.core.state.load_state")
 @patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")
-def test_partial_external_update_is_not_marked_fresh(mock_cache, mock_load_state, urlopen):
+@patch("hydra.plugins.warp.plugin.HOST")
+def test_partial_external_update_is_not_marked_fresh(mock_host, mock_cache, mock_load_state, urlopen):
     state = AppState()
     state.protocols["warp"] = PluginState(config={
         "list_targets": {"ext:russia": "warp", "ext:geoblock": "warp"},
@@ -140,7 +142,7 @@ def test_partial_external_update_is_not_marked_fresh(mock_cache, mock_load_state
     ok, _ = WarpPlugin().update_external_rules()
 
     assert ok is False
-    written = json.loads(mock_cache.write_text.call_args.args[0])
+    written = json.loads(mock_host.atomic_write.call_args.args[1])
     assert "last_attempt_at" in written
     assert "updated_at" not in written
 
@@ -234,3 +236,53 @@ AllowedIPs = 0.0.0.0/0
     ip_rule = next(r for r in frag.route_rules if "ip_cidr" in r)
     assert ip_rule["ip_cidr"] == ["95.0.0.0/8"]
     assert ip_rule["outbound"] == "warp_russia"
+
+
+@patch("hydra.plugins.warp.plugin.WarpPlugin._load_warp_config", return_value=None)
+@patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")
+def test_direct_rules_are_not_dropped(mock_cache, _mock_profile):
+    mock_cache.exists.return_value = False
+    state = AppState()
+    state.protocols["warp"] = PluginState(config={
+        "local_lists": {"bypass": {"domains": ["Example.COM"], "ips": []}},
+        "list_targets": {"local:bypass": "direct"},
+    })
+
+    fragment = WarpPlugin().configure(state)
+
+    assert fragment.outbounds == []
+    assert fragment.route_rules == [{"domain_suffix": ["example.com"], "outbound": "direct"}]
+
+
+def test_parse_endpoint_supports_ipv6_and_rejects_invalid_ports():
+    assert WarpPlugin._parse_endpoint("[2001:db8::1]:2408") == ("2001:db8::1", 2408)
+    assert WarpPlugin._parse_endpoint("host.example:0") is None
+    assert WarpPlugin._parse_endpoint("host.example:not-a-port") is None
+
+
+def test_wireguard_parser_ignores_unknown_sections_and_requires_keys():
+    plugin = WarpPlugin()
+    assert plugin._parse_wg_conf("[Unknown]\nFoo = bar") is None
+    assert plugin._parse_wg_conf("[Interface]\nAddress = 10.0.0.2/32\n[Peer]\nEndpoint = host:1") is None
+
+
+def test_load_wgcf_profile_uses_peer_values(tmp_path):
+    profile = tmp_path / "wgcf-profile.conf"
+    profile.write_text(
+        "[Interface]\nPrivateKey = private\nAddress = 172.16.0.2/32\nMTU = 1320\n"
+        "[Peer]\nPublicKey = current-public\nEndpoint = [2001:db8::1]:2408\n"
+        "AllowedIPs = 0.0.0.0/0, ::/0\n",
+        encoding="utf-8",
+    )
+
+    with patch("hydra.plugins.warp.plugin.WGCF_PROFILE", profile):
+        loaded = WarpPlugin()._load_warp_config()
+
+    assert loaded == {
+        "private_key": "private",
+        "addresses": ["172.16.0.2/32"],
+        "endpoint": "[2001:db8::1]:2408",
+        "public_key": "current-public",
+        "allowed_ips": ["0.0.0.0/0", "::/0"],
+        "mtu": "1320",
+    }

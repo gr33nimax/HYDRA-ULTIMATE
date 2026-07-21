@@ -6,6 +6,7 @@ from __future__ import annotations
 from hydra.core.host import HOST
 
 import json
+import re
 from pathlib import Path
 from hydra.core.state import AppState, save_state
 from hydra.ui.tui import (
@@ -13,7 +14,7 @@ from hydra.ui.tui import (
     RED, GREEN, YELLOW, CYAN, BLUE, MAGENTA, BOLD, DIM, WHITE, NC
 )
 import hydra.core.orchestrator as orchestrator
-from hydra.plugins.warp.plugin import DEFAULT_WARP_DOMAINS, WARP_EXTERNAL_CACHE, WGCF_PROFILE
+from hydra.plugins.warp.plugin import WARP_EXTERNAL_CACHE, WGCF_PROFILE
 
 
 def _get_external_info() -> tuple[list[str], list[str], str]:
@@ -72,7 +73,6 @@ def _show_diagnostic_info():
         except Exception as e:
             print(f"  Ошибка чтения конфига: {e}")
 
-    import subprocess
     r = HOST.run(["systemctl", "status", "sing-box"], capture_output=True, text=True)
     if r.returncode != 0:
         warn("Служба sing-box неактивна или сообщает об ошибке.")
@@ -230,11 +230,12 @@ def menu_warp(state: AppState, plugin) -> None:
             if WGCF_PROFILE.exists():
                 warn("ПЕРЕУСТАНОВКА WGCF!")
                 if confirm("Продолжить?", default=False):
-                    orchestrator.uninstall_plugin(state, plugin.meta.name)
-                    if orchestrator.install_plugin(state, plugin.meta.name):
+                    if plugin.recreate_local_profile():
                         success("Локальный WGCF профиль успешно пересоздан!")
-                        if ps.enabled:
-                            orchestrator.apply_config(state)
+                        if ps.enabled and not orchestrator.apply_config(state):
+                            error("Профиль создан, но не удалось применить конфигурацию.")
+                    else:
+                        error("Не удалось пересоздать локальный WGCF профиль.")
             else:
                 info("Устанавливаю локальный WGCF...")
                 if orchestrator.install_plugin(state, plugin.meta.name):
@@ -246,10 +247,16 @@ def menu_warp(state: AppState, plugin) -> None:
         elif choice == "9" and WGCF_PROFILE.exists():
             warn("УДАЛЕНИЕ ЛОКАЛЬНОГО WGCF!")
             if confirm("Вы уверены?", default=False):
-                orchestrator.uninstall_plugin(state, plugin.meta.name)
-                success("Локальный WGCF профиль успешно удален.")
-                if ps.enabled:
-                    orchestrator.apply_config(state)
+                if custom_profiles:
+                    plugin.remove_local_profile()
+                    if ps.enabled and not orchestrator.apply_config(state):
+                        error("Профиль удалён, но не удалось применить конфигурацию.")
+                    else:
+                        success("Локальный WGCF профиль успешно удален.")
+                elif orchestrator.uninstall_plugin(state, plugin.meta.name):
+                    success("Локальный WGCF профиль успешно удален.")
+                else:
+                    error("Не удалось удалить локальный WGCF профиль.")
             prompt("Нажмите Enter для продолжения")
 
 
@@ -299,8 +306,8 @@ def _menu_rules_lists(state: AppState, ps) -> None:
 
         elif choice == "1":
             name = prompt("Введите имя нового списка (латиница, цифры, дефис)").strip().lower()
-            if not name or not name.isalnum():
-                error("Некорректное имя списка. Разрешены только буквы и цифры.")
+            if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", name):
+                error("Некорректное имя списка. Разрешены латинские буквы, цифры и дефис.")
                 prompt("Нажмите Enter")
                 continue
             if name in local_lists:

@@ -2,6 +2,7 @@
 import json
 import time
 from pathlib import Path
+from contextlib import nullcontext
 from unittest.mock import patch, MagicMock
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -138,8 +139,8 @@ def test_generate_client_config_contains_server():
     assert naive_out[0]["tls"]["server_name"] == "example.com"
     assert "alpn" not in naive_out[0]["tls"]
     assert naive_out[0]["tag"] == "naive-tcp-a"
-    assert naive_out[0]["network"] == "tcp"
-    assert "quic" not in naive_out[0]
+    assert "network" not in naive_out[0]
+    assert naive_out[0]["quic"] is False
 
 
 def test_generate_client_config_empty_without_domain():
@@ -204,6 +205,18 @@ def test_build_caddyfile_fake_site():
     )
     assert "file_server" in caddyfile
     assert "root /var/www/decoy-a" in caddyfile
+
+
+def test_build_caddyfile_accepts_proxy_protocol_only_behind_mux():
+    p = NaivePlugin()
+    direct = p._build_caddyfile("vpn.example.com", 443, [])
+    behind_mux = p._build_caddyfile(
+        "vpn.example.com", 10443, [], accept_proxy_protocol=True,
+    )
+    assert "proxy_protocol" not in direct
+    assert "proxy_protocol" in behind_mux
+    assert "allow 127.0.0.0/8 ::1/128" in behind_mux
+    assert "fallback_policy require" in behind_mux
 
 
 def test_build_caddyfile_multiple_users():
@@ -441,7 +454,8 @@ def test_generate_client_config_quic():
     cfg = json.loads(p.generate_client_config(user, state))
     naive_outs = [o for o in cfg["outbounds"] if o["type"] == "naive"]
     assert len(naive_outs) == 1
-    assert naive_outs[0]["network"] == "quic"
+    assert "network" not in naive_outs[0]
+    assert naive_outs[0]["quic"] is True
     assert "alpn" not in naive_outs[0].get("tls", {})
 
 
@@ -453,8 +467,7 @@ def test_generate_client_config_both():
     cfg = json.loads(p.generate_client_config(user, state))
     naive_outs = [o for o in cfg["outbounds"] if o["type"] == "naive"]
     assert len(naive_outs) == 2
-    networks = {o["network"] for o in naive_outs}
-    assert networks == {"tcp", "quic"}
+    assert {o["quic"] for o in naive_outs} == {False, True}
 
 
 def test_set_transport_rejects_trusttunnel_quic_conflict_without_mutation():
@@ -523,5 +536,30 @@ def test_on_enable_opens_udp_for_quic():
         p.on_enable(state)
         mock_tcp.assert_called_once_with(443, "naive")
         mock_udp.assert_called_once_with(443, "naive-quic")
+
+
+def test_certbot_stops_and_restores_caddy_l4_on_exception():
+    p = NaivePlugin()
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        result = MagicMock(returncode=0, stdout="", stderr="")
+        if command[:3] == ["systemctl", "is-active", "caddy-l4"]:
+            result.stdout = "active\n"
+        if command and command[0] == "certbot":
+            raise OSError("certbot crashed")
+        return result
+
+    with patch("pathlib.Path.exists", return_value=False), \
+         patch("hydra.plugins.naive.plugin.shutil.which", return_value="/usr/bin/certbot"), \
+         patch("hydra.utils.firewall.temporary_open_port", return_value=nullcontext()), \
+         patch("hydra.plugins.naive.plugin.HOST.run", side_effect=fake_run):
+        assert p._obtain_cert_certbot("naive.example.com") is False
+
+    stop_index = calls.index(["systemctl", "stop", "caddy-l4"])
+    certbot_index = next(index for index, command in enumerate(calls) if command[0] == "certbot")
+    start_index = calls.index(["systemctl", "start", "caddy-l4"])
+    assert stop_index < certbot_index < start_index
 
 

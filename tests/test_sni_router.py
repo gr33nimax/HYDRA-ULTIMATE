@@ -18,6 +18,13 @@ from hydra.core.sni_router import (
     get_quic_owners,
     audit_routes,
     _INTERNAL_PORTS,
+    _install_service,
+    _udp_relay_routes,
+    CADDY_ADMIN_ADDRESS,
+    CADDY_BUILD_TIMEOUT,
+    GO_RELEASES_URL,
+    _official_go_digest,
+    _run_caddy_build,
 )
 from hydra.core.state import AppState, PluginState
 
@@ -47,6 +54,34 @@ def _state(naive_enabled=False, anytls_enabled=False, trusttunnel_enabled=False,
         },
     )
     return s
+
+
+def test_pinned_go_checksum_uses_complete_release_catalog():
+    response = MagicMock()
+    response.__enter__.return_value.read.return_value = json.dumps([{
+        "version": "go1.25.1",
+        "files": [{
+            "filename": "go1.25.1.linux-amd64.tar.gz",
+            "sha256": "a" * 64,
+        }],
+    }]).encode()
+
+    with patch("hydra.core.sni_router.urllib.request.urlopen", return_value=response) as urlopen:
+        digest = _official_go_digest("go1.25.1.linux-amd64.tar.gz")
+
+    assert digest == "a" * 64
+    request = urlopen.call_args.args[0]
+    assert request.full_url == GO_RELEASES_URL
+    assert "include=all" in request.full_url
+
+
+def test_xcaddy_build_allows_empty_module_cache():
+    result = MagicMock(returncode=0)
+    with patch("hydra.core.sni_router.HOST.run", return_value=result) as run:
+        assert _run_caddy_build(["xcaddy", "build"], {"GOPATH": "/tmp/go"}) is result
+
+    assert run.call_args.kwargs["timeout"] == CADDY_BUILD_TIMEOUT
+    assert CADDY_BUILD_TIMEOUT >= 600
 
 
 def test_needs_mux_single_plugin():
@@ -131,6 +166,7 @@ def test_generate_config_two_backends():
     cfg = _generate_config(backends, s)
     
     assert "apps" in cfg
+    assert cfg["admin"] == {"listen": CADDY_ADMIN_ADDRESS}
     assert "layer4" in cfg["apps"]
     assert "tls_mux" in cfg["apps"]["layer4"]["servers"]
     
@@ -141,6 +177,7 @@ def test_generate_config_two_backends():
     naive_route = next(r for r in routes if r.get("match") and r["match"][0].get("tls", {}).get("sni") == ["naive.com"])
     assert naive_route["handle"][0]["upstreams"][0]["dial"] == ["127.0.0.1:10443"]
     assert "local_address" not in naive_route["handle"][0]["upstreams"][0]
+    assert naive_route["handle"][0]["proxy_protocol"] == "v2"
 
     # Check anytls route
     anytls_route = next(r for r in routes if r.get("match") and r["match"][0].get("tls", {}).get("sni") == ["anytls.com"])
@@ -148,6 +185,78 @@ def test_generate_config_two_backends():
     assert anytls_route["handle"][1]["handler"] == "subroute"
     anytls_proxy = anytls_route["handle"][1]["routes"][0]["handle"][0]
     assert "local_address" not in anytls_proxy["upstreams"][0]
+    assert "proxy_protocol" not in anytls_proxy
+
+    # Only the browser/decoy branch carries the original peer to the local
+    # HTTP access logger. Protocol backends must not receive a PROXY preamble.
+    anytls_decoy_proxy = anytls_route["handle"][1]["routes"][1]["handle"][0]
+    assert anytls_decoy_proxy["proxy_protocol"] == "v2"
+    decoy_server = cfg["apps"]["http"]["servers"]["anytls_decoy"]
+    assert decoy_server["listener_wrappers"] == [{
+        "wrapper": "proxy_protocol",
+        "timeout": "1s",
+        "allow": ["127.0.0.0/8", "::1/128"],
+        "fallback_policy": "require",
+    }]
+
+
+def test_antidpi_bans_are_enforced_only_by_dynamic_firewall():
+    backends = [{"name": "naive", "domain": "naive.com", "port": 10443, "cert_file": "", "key_file": ""}]
+    cfg = _generate_config(backends, _state(naive_enabled=True))
+    routes = cfg["apps"]["layer4"]["servers"]["tls_mux"]["routes"]
+    assert all("remote_ip" not in matcher for route in routes for matcher in route.get("match", []))
+
+
+def test_antidpi_routes_native_backends_through_exact_source_relay():
+    state = _state(anytls_enabled=True)
+    state.security.antidpi_enabled = True
+    state.protocols["shadowtls"] = PluginState(
+        enabled=True, config={"domain": "shadow.example"},
+    )
+    backends = [
+        {"name": "anytls", "domain": "anytls.com", "port": 20444, "cert_file": "cert", "key_file": "key"},
+        {"name": "shadowtls", "domain": "shadow.example", "port": 20446, "cert_file": "", "key_file": ""},
+    ]
+    routes = _generate_config(backends, state)["apps"]["layer4"]["servers"]["tls_mux"]["routes"]
+    anytls = next(route for route in routes if route.get("match", [{}])[0].get("tls", {}).get("sni") == ["anytls.com"])
+    anytls_proxy = anytls["handle"][1]["routes"][0]["handle"][0]
+    shadow = next(route for route in routes if route.get("match", [{}])[0].get("tls", {}).get("sni") == ["shadow.example"])
+    assert anytls_proxy["upstreams"][0]["dial"] == ["127.0.0.1:21444"]
+    assert anytls_proxy["proxy_protocol"] == "v2"
+    assert shadow["handle"][0]["upstreams"][0]["dial"] == ["127.0.0.1:21446"]
+    assert shadow["handle"][0]["proxy_protocol"] == "v2"
+
+
+def test_legacy_antidpi_protocol_flag_also_enables_source_relay():
+    state = _state(anytls_enabled=True)
+    state.protocols["antidpi"] = PluginState(enabled=True)
+    backend = {
+        "name": "anytls", "domain": "anytls.com", "port": 20444,
+        "cert_file": "cert", "key_file": "key",
+    }
+    routes = _generate_config([backend], state)["apps"]["layer4"]["servers"]["tls_mux"]["routes"]
+    anytls = next(route for route in routes if route.get("match"))
+    proxy = anytls["handle"][1]["routes"][0]["handle"][0]
+    assert proxy["upstreams"][0]["dial"] == ["127.0.0.1:21444"]
+    assert proxy["proxy_protocol"] == "v2"
+
+
+def test_caddy_service_uses_transactional_cli_reload(tmp_path):
+    service = tmp_path / "caddy-l4.service"
+    binary = tmp_path / "caddy-l4"
+    config = tmp_path / "config.json"
+    result = MagicMock(returncode=0)
+    with patch("hydra.core.sni_router.SERVICE_FILE", service), \
+         patch("hydra.core.sni_router.CADDY_BIN", binary), \
+         patch("hydra.core.sni_router.CADDY_CFG", config), \
+         patch("hydra.core.sni_router.HOST.run", return_value=result):
+        assert _install_service() is True
+    unit = service.read_text(encoding="utf-8")
+    assert (
+        f"ExecReload={binary} reload --config {config} "
+        f"--address {CADDY_ADMIN_ADDRESS} --force"
+    ) in unit
+    assert "kill -USR1" not in unit
 
 
 def test_config_has_sni_rules():
@@ -182,6 +291,7 @@ def test_hysteria2_has_browser_https_decoy_route():
     assert route["match"][0]["tls"]["sni"] == ["hysteria2.com"]
     assert route["handle"][0] == {"handler": "tls"}
     assert route["handle"][1]["upstreams"][0]["dial"] == ["127.0.0.1:10803"]
+    assert route["handle"][1]["proxy_protocol"] == "v2"
 
     tls_files = cfg["apps"]["tls"]["certificates"]["load_files"]
     assert tls_files == [{
@@ -189,6 +299,7 @@ def test_hysteria2_has_browser_https_decoy_route():
     }]
     decoy = cfg["apps"]["http"]["servers"]["hysteria2_decoy"]
     assert decoy["listen"] == ["127.0.0.1:10803"]
+    assert decoy["listener_wrappers"][0]["wrapper"] == "proxy_protocol"
     assert decoy["routes"][0]["handle"][0] == {
         "handler": "file_server", "root": "/var/www/decoy-hysteria2",
     }
@@ -203,6 +314,27 @@ def test_hysteria2_has_browser_https_decoy_route():
             "Location": ["https://{http.request.host}{http.request.uri}"],
         },
     }
+
+
+def test_trusttunnel_auth_proxy_has_bounded_response_and_dedicated_log():
+    state = _state(trusttunnel_enabled=True)
+    state.security.antidpi_enabled = True
+    backend = {
+        "name": "trusttunnel", "domain": "trusttunnel.com", "port": 20445,
+        "cert_file": "cert.pem", "key_file": "key.pem", "network_mode": "tcp",
+    }
+    config = _generate_config([backend], state)
+    server = config["apps"]["http"]["servers"]["trusttunnel_decoy"]
+    proxy = server["routes"][0]["handle"][0]
+    assert proxy["upstreams"] == [{"dial": "127.0.0.1:21445"}]
+    assert proxy["transport"]["proxy_protocol"] == "v2"
+    assert proxy["transport"]["keep_alive"] == {"enabled": False}
+    assert proxy["transport"]["response_header_timeout"] == "5s"
+    assert proxy["handle_response"][0]["match"]["status_code"] == [502, 503, 504]
+    assert server["logs"]["logger_names"] == {"trusttunnel.com": "trusttunnel"}
+    assert config["logging"]["logs"]["trusttunnel"]["include"] == [
+        "http.log.access.trusttunnel",
+    ]
 
 
 def test_rebuild_starts_caddy():
@@ -229,6 +361,27 @@ def test_rebuild_starts_caddy():
         mock_cfg.with_suffix.return_value.replace.assert_called_once_with(mock_cfg)
         # Check caddy-l4 was restarted/reloaded
         mock_run.assert_any_call(["systemctl", "reload-or-restart", "caddy-l4"], capture_output=True)
+
+
+def test_rebuild_restarts_when_admin_endpoint_migration_breaks_reload():
+    s = _state(naive_enabled=True, anytls_enabled=True)
+    mock_cfg = MagicMock()
+
+    def run(command, **_kwargs):
+        code = 1 if command == ["systemctl", "reload-or-restart", "caddy-l4"] else 0
+        return MagicMock(returncode=code, stdout="", stderr="")
+
+    with patch("hydra.core.sni_router.is_installed", return_value=True), \
+         patch("hydra.core.sni_router.CADDY_CFG", mock_cfg), \
+         patch("hydra.core.sni_router.CADDY_CFG_DIR", MagicMock()), \
+         patch("hydra.core.sni_router.is_active", return_value=True), \
+         patch("hydra.core.sni_router._install_source_service"), \
+         patch("hydra.core.sni_router._install_service", return_value=True), \
+         patch("hydra.core.source_transparency.apply"), \
+         patch("hydra.core.sni_router.HOST.run", side_effect=run) as mock_run:
+        assert rebuild(s) is True
+
+    mock_run.assert_any_call(["systemctl", "restart", "caddy-l4"], capture_output=True)
 
 
 def test_rebuild_stops_when_single():
@@ -291,6 +444,32 @@ def test_naive_quic_remains_caddy_udp_owner():
     assert upstream["dial"] == ["udp/127.0.0.1:10443"]
 
 
+def test_antidpi_naive_quic_uses_proxy_v2_udp_relay():
+    state = _state(naive_enabled=True, naive_network="quic")
+    state.security.antidpi_enabled = True
+    backends = [{
+        "name": "naive", "domain": "naive.com", "port": 10443,
+        "cert_file": "", "key_file": "", "network_mode": "quic",
+    }]
+    proxy = _generate_config(backends, state)["apps"]["layer4"]["servers"]["quic_mux"]["routes"][0]["handle"][0]
+    assert proxy["upstreams"][0]["dial"] == ["udp/127.0.0.1:21443"]
+    assert proxy["proxy_protocol"] == "v2"
+    assert _udp_relay_routes(backends, state) == [("naive", 21443, 10443)]
+
+
+def test_antidpi_trusttunnel_quic_uses_proxy_v2_udp_relay():
+    state = _state(trusttunnel_enabled=True, trusttunnel_transport="quic")
+    state.security.antidpi_enabled = True
+    backends = [{
+        "name": "trusttunnel", "domain": "trusttunnel.com", "port": 20445,
+        "cert_file": "cert.pem", "key_file": "key.pem", "network_mode": "quic",
+    }]
+    proxy = _generate_config(backends, state)["apps"]["layer4"]["servers"]["quic_mux"]["routes"][0]["handle"][0]
+    assert proxy["upstreams"][0]["dial"] == ["udp/127.0.0.1:21445"]
+    assert proxy["proxy_protocol"] == "v2"
+    assert _udp_relay_routes(backends, state) == [("trusttunnel", 21445, 20445)]
+
+
 def test_quic_owner_rejects_naive_and_trusttunnel_conflict():
     s = _state(
         naive_enabled=True, trusttunnel_enabled=True,
@@ -336,4 +515,3 @@ def test_rebuild_runs_caddy_l4_with_only_sub_domain():
         mock_cfg.with_suffix.return_value.write_text.assert_called_once()
         mock_cfg.with_suffix.return_value.replace.assert_called_once_with(mock_cfg)
         mock_run.assert_any_call(["systemctl", "reload-or-restart", "caddy-l4"], capture_output=True)
-

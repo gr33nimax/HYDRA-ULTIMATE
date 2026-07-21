@@ -22,6 +22,11 @@ def test_app_state_defaults():
     assert state.protocols == {}
     assert state.users == []
     assert isinstance(state.telegram, TelegramConfig)
+    assert state.telegram.notifications_enabled is True
+    assert state.telegram.notify_antidpi is True
+    assert state.telegram.notify_honeypot is True
+    assert state.telegram.notify_fail2ban is True
+    assert state.telegram.notify_unbans is False
     assert isinstance(state.network, NetworkConfig)
     assert isinstance(state.security, SecurityConfig)
 
@@ -164,6 +169,31 @@ def test_plugin_state():
     proto.installed = True
     assert proto.enabled
     assert proto.port == 8443
+
+
+def test_protocol_state_roundtrip_preserves_lifecycle_and_config(tmp_path):
+    """Loading state must not replace a populated PluginState with defaults."""
+    import hydra.core.state as state_mod
+
+    original_file, original_dir = state_mod.STATE_FILE, state_mod.STATE_DIR
+    try:
+        state_mod.STATE_FILE = tmp_path / "state.json"
+        state_mod.STATE_DIR = tmp_path
+        state = AppState(protocols={
+            "anytls": PluginState(
+                enabled=True,
+                installed=True,
+                port=20444,
+                config={"domain": "anytls.example", "padding": ["1=1-2"]},
+            ),
+        })
+
+        save_state(state)
+        loaded = load_state()
+
+        assert loaded.protocols["anytls"] == state.protocols["anytls"]
+    finally:
+        state_mod.STATE_FILE, state_mod.STATE_DIR = original_file, original_dir
 
 
 def test_roundtrip_with_credentials():

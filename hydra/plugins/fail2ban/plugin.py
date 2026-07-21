@@ -18,12 +18,15 @@ JAIL_DIR = Path("/etc/fail2ban/jail.d")
 FILTER_DIR = Path("/etc/fail2ban/filter.d")
 F2B_LOG = Path("/var/log/fail2ban.log")
 AWG_DEBUG_SERVICE = Path("/etc/systemd/system/hydra-awg-fail2ban-debug.service")
+ANTIDPI_AWG_DEBUG_SERVICE = Path("/etc/systemd/system/hydra-awg-antidpi-debug.service")
 AWG_DYNAMIC_DEBUG_PATHS = (
     Path("/sys/kernel/debug/dynamic_debug/control"),
     Path("/proc/dynamic_debug/control"),
 )
-AWG_DEBUG_FUNCTIONS = ("prepare_awg_message", "wg_receive_handshake_packet")
+AWG_LEGACY_NOISY_DEBUG_FUNCTIONS = ("prepare_awg_message",)
 
+# Migration inventory only. Fail2ban no longer creates or operates these
+# protocol filters/jails; the names are retained so upgrades can delete them.
 _OWNED_FILTERS = (
     "hydra-anytls",
     "hydra-mieru",
@@ -79,7 +82,7 @@ class Fail2banPlugin(BasePlugin):
     last_error = ""
     meta = PluginMeta(
         name="fail2ban",
-        description="Fail2ban: защита SSH, AWG и системных сервисов",
+        description="Fail2ban: защита SSH и блокировка повторных нарушителей",
         category=PluginCategory.SECURITY,
         version="2.3.0",
         required_commands=("systemctl", "iptables"),
@@ -97,19 +100,19 @@ class Fail2banPlugin(BasePlugin):
             if install.returncode != 0 or not self._installed():
                 return False
 
-        # With no AppState only system jails are enabled. Protocol jails are
-        # activated later by apply(state), after their log sources exist.
+        # Fail2ban owns only system authentication jails. Protocol evidence is
+        # handled by AntiDPI and must not be recreated here during upgrades.
         if not self._write_jails(None):
             return False
-        if not self._sync_portscan_rule(False):
+        if not self._remove_legacy_portscan_rule():
             return False
         enabled = _run(["systemctl", "enable", "--now", "fail2ban"])
         return enabled.returncode == 0 and self.status().running
 
     def uninstall(self) -> bool:
-        if not self._sync_awg_debug(False):
+        if not self._cleanup_legacy_awg_debug():
             return False
-        if not self._sync_portscan_rule(False):
+        if not self._remove_legacy_portscan_rule():
             return False
         _run(["systemctl", "disable", "--now", "fail2ban"])
         self._remove_owned_configuration()
@@ -121,56 +124,9 @@ class Fail2banPlugin(BasePlugin):
         # Only sources that expose the real public peer before a local reverse
         # proxy are eligible. TLS transports behind Caddy deliberately rely on
         # strong generated credentials and probe-resistant decoy sites instead.
-        return {
-            "hydra-awg": r"""[Definition]
-failregex = ^.*amneziawg:\s+awg[01]:\s+Unknown message from \[?<HOST>\]?:\d+ encountered, packet dropped\s*$
-            ^.*amneziawg:\s+awg[01]:\s+Invalid MAC of handshake, dropping packet from \[?<HOST>\]?:\d+\s*$
-            ^.*amneziawg:\s+awg[01]:\s+Invalid handshake (?:initiation|response) from \[?<HOST>\]?:\d+\s*$
-ignoreregex =
-""",
-            "hydra-portscan": r"""[Definition]
-failregex = ^.*HYDRA-PORTSCAN.*SRC=<HOST>.*$
-ignoreregex =
-""",
-        }
-
-    @staticmethod
-    def _protocol_enabled(state: AppState | None, name: str) -> bool:
-        if state is None:
-            return False
-        protocol = state.protocols.get(name)
-        return bool(protocol and protocol.enabled)
-
-    @staticmethod
-    def _awg_ports(state: AppState | None) -> str:
-        ports: set[int] = set()
-        if state is not None:
-            protocol = state.protocols.get("amneziawg")
-            if protocol:
-                try:
-                    port = int(protocol.port or 0)
-                    if 1 <= port <= 65535:
-                        ports.add(port)
-                except (TypeError, ValueError):
-                    pass
-                profiles = protocol.config.get("profiles", {})
-                if isinstance(profiles, dict):
-                    for profile in profiles.values():
-                        if not isinstance(profile, dict):
-                            continue
-                        try:
-                            port = int(profile.get("port", 0))
-                            if 1 <= port <= 65535:
-                                ports.add(port)
-                        except (TypeError, ValueError):
-                            continue
-        if not ports:
-            ports.add(51820)
-        return ",".join(str(port) for port in sorted(ports))
+        return {}
 
     def jail_options(self, state: AppState | None) -> dict[str, dict[str, str]]:
-        awg = self._protocol_enabled(state, "amneziawg")
-
         jails: dict[str, dict[str, str]] = {
             "hydra-sshd": {
                 "enabled": "true",
@@ -186,27 +142,6 @@ ignoreregex =
                 "filter": "recidive",
                 "logpath": str(F2B_LOG),
                 "maxretry": "3", "findtime": "86400", "bantime": "604800",
-                "banaction": "%(banaction_allports)s",
-            },
-            "hydra-portscan": {
-                "enabled": "false",
-                "filter": "hydra-portscan",
-                "backend": "systemd",
-                "journalmatch": "_TRANSPORT=kernel",
-                "ignoreip": "127.0.0.0/8 ::1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 fc00::/7 fe80::/10",
-                "maxretry": "15", "findtime": "120", "bantime": "3600",
-                "banaction": "%(banaction_allports)s",
-            },
-            "hydra-awg": {
-                # Hydra enables the module's ratelimited dynamic-debug events
-                # while this jail is active. These contain the public endpoint
-                # for rejected AWG handshakes before traffic reaches TProxy.
-                "enabled": "false",
-                "filter": "hydra-awg",
-                "backend": "systemd",
-                "journalmatch": "_TRANSPORT=kernel",
-                "port": self._awg_ports(state),
-                "maxretry": "4", "findtime": "300", "bantime": "3600",
                 "banaction": "%(banaction_allports)s",
             },
         }
@@ -228,12 +163,6 @@ ignoreregex =
 
         # Manual overrides cannot activate a jail whose backing protocol is
         # disabled or whose required file is absent.
-        availability = {
-            "hydra-awg": awg,
-        }
-        for jail, available in availability.items():
-            if not available:
-                jails[jail]["enabled"] = "false"
         return jails
 
     @staticmethod
@@ -300,14 +229,14 @@ ignoreregex =
             for name in (
                 "hydra-anytls", "hydra-trusttunnel",
                 "hydra-trusttunnel-quic", "hydra-naive",
-                "hydra-singbox", "hydra-mieru",
+                "hydra-singbox", "hydra-mieru", "hydra-portscan",
             )
         ) + tuple(
             FILTER_DIR / f"{name}.conf"
             for name in (
                 "hydra-anytls", "hydra-trusttunnel",
                 "hydra-trusttunnel-quic", "hydra-naive",
-                "sing-box", "awg-invalid", "hydra-mieru",
+                "sing-box", "awg-invalid", "hydra-mieru", "hydra-portscan",
             )
         )
         backups: dict[Path, bytes | None] = {}
@@ -351,7 +280,8 @@ ignoreregex =
             if isinstance(overrides, dict):
                 for name in (
                     "hydra-anytls", "hydra-trusttunnel",
-                    "hydra-trusttunnel-quic", "hydra-naive",
+                    "hydra-trusttunnel-quic", "hydra-naive", "hydra-mieru",
+                    "hydra-awg", "hydra-portscan",
                 ):
                     overrides.pop(name, None)
                 if not overrides:
@@ -380,84 +310,46 @@ ignoreregex =
     def _awg_dynamic_debug_control() -> Path | None:
         return next((path for path in AWG_DYNAMIC_DEBUG_PATHS if path.exists()), None)
 
-    def _sync_awg_debug(self, enabled: bool) -> bool:
+    def _cleanup_legacy_awg_debug(self) -> bool:
+        """Remove the obsolete Fail2ban AWG debug owner without fighting AntiDPI."""
         control = self._awg_dynamic_debug_control()
-        if not enabled and control is None and not AWG_DEBUG_SERVICE.exists():
+        if control is None and not AWG_DEBUG_SERVICE.exists():
             return True
-        if enabled and control is None:
-            self.last_error = "Ядро не предоставляет dynamic_debug/control для модуля AmneziaWG"
-            return False
-
-        flag = "+p" if enabled else "-p"
-        commands = [
-            f"module amneziawg func {function} {flag}"
-            for function in AWG_DEBUG_FUNCTIONS
-        ]
         if control is not None:
             try:
-                control.write_text("\n".join(commands) + "\n", encoding="utf-8")
+                control.write_text(
+                    "\n".join(
+                        f"module amneziawg func {function} -p"
+                        for function in AWG_LEGACY_NOISY_DEBUG_FUNCTIONS
+                    ) + "\n",
+                    encoding="utf-8",
+                )
             except OSError as exc:
-                self.last_error = f"Не удалось переключить dynamic debug AmneziaWG: {exc}"
+                self.last_error = f"Не удалось убрать legacy AmneziaWG debug: {exc}"
                 return False
-
-        if enabled:
-            start_commands = "; ".join(
-                f"echo '{command}'" for command in commands
-            )
-            stop_commands = "; ".join(
-                f"echo '{command.replace('+p', '-p')}'" for command in commands
-            )
-            service = (
-                "[Unit]\n"
-                "Description=Enable AmneziaWG rejection logs for Fail2ban\n"
-                "After=systemd-modules-load.service awg-quick@awg0.service awg-quick@awg1.service\n"
-                f"ConditionPathExists={control}\n\n"
-                "[Service]\n"
-                "Type=oneshot\n"
-                f"ExecStart=/bin/sh -c \"({start_commands}) > {control}\"\n"
-                f"ExecStop=/bin/sh -c \"({stop_commands}) > {control}\"\n"
-                "RemainAfterExit=yes\n\n"
-                "[Install]\n"
-                "WantedBy=multi-user.target\n"
-            )
-            try:
-                _atomic_write(AWG_DEBUG_SERVICE, service)
-            except OSError as exc:
-                self.last_error = f"Не удалось записать systemd unit AWG debug: {exc}"
-                return False
-            daemon_reload = _run(["systemctl", "daemon-reload"])
-            enabled_result = _run(
-                ["systemctl", "enable", "hydra-awg-fail2ban-debug.service"]
-            )
-            if daemon_reload.returncode != 0 or enabled_result.returncode != 0:
-                self.last_error = "Не удалось включить автозапуск AWG dynamic debug"
-                return False
-            return True
 
         _run(["systemctl", "disable", "--now", "hydra-awg-fail2ban-debug.service"])
         AWG_DEBUG_SERVICE.unlink(missing_ok=True)
         _run(["systemctl", "daemon-reload"])
+        # Stopping a legacy oneshot executes its old ExecStop, which may also
+        # disable the rejection functions now owned by AntiDPI. Re-run the
+        # AntiDPI owner only when that unit exists and is already active.
+        if ANTIDPI_AWG_DEBUG_SERVICE.exists():
+            _run(["systemctl", "try-restart", "hydra-awg-antidpi-debug.service"])
         return True
 
     @staticmethod
-    def _sync_portscan_rule(enabled: bool) -> bool:
+    def _remove_legacy_portscan_rule() -> bool:
+        """Remove the pre-AntiDPI port-scan LOG rule during upgrades."""
         if shutil.which("iptables") is None:
-            return not enabled
+            return True
         check = _run(["iptables", "-C", "INPUT", *_PORTSCAN_RULE])
-        if enabled:
-            if check.returncode == 0:
-                return True
-            return _run(["iptables", "-I", "INPUT", "1", *_PORTSCAN_RULE]).returncode == 0
-        # Keep cleanup bounded if iptables reports a stale/unchanging rule
-        # forever (and to prevent a broken command wrapper from hanging CI).
         for _ in range(32):
             if check.returncode != 0:
                 return True
             if _run(["iptables", "-D", "INPUT", *_PORTSCAN_RULE]).returncode != 0:
                 return False
             check = _run(["iptables", "-C", "INPUT", *_PORTSCAN_RULE])
-        # A successful delete command is enough to consider cleanup complete;
-        # the bound prevents a broken/mock iptables probe from looping forever.
         return True
 
     def configure(self, state: AppState) -> ConfigFragment:
@@ -479,19 +371,11 @@ ignoreregex =
                 protocol.config["jails"] = previous_jails
             return False
 
-        portscan_enabled = (
-            was_running
-            and self.jail_options(state)["hydra-portscan"]["enabled"] == "true"
-        )
-        awg_enabled = (
-            was_running
-            and self.jail_options(state)["hydra-awg"]["enabled"] == "true"
-        )
-        applied = self._sync_awg_debug(awg_enabled)
+        applied = self._cleanup_legacy_awg_debug()
         if applied:
-            applied = self._sync_portscan_rule(portscan_enabled)
+            applied = self._remove_legacy_portscan_rule()
             if not applied:
-                self.last_error = "Не удалось синхронизировать правило portscan в iptables"
+                self.last_error = "Не удалось удалить устаревшее правило portscan из iptables"
         if applied and was_running:
             reload_result = _run(["fail2ban-client", "reload"], timeout=20)
             if reload_result.returncode != 0 or not self.status().running:
@@ -511,11 +395,7 @@ ignoreregex =
         if previous_jails is not marker:
             protocol.config["jails"] = previous_jails
         self._write_jails(state)
-        previous_awg_enabled = (
-            was_running
-            and self.jail_options(state)["hydra-awg"]["enabled"] == "true"
-        )
-        self._sync_awg_debug(previous_awg_enabled)
+        self._cleanup_legacy_awg_debug()
         if was_running:
             _run(["fail2ban-client", "reload"], timeout=20)
         return False
@@ -523,12 +403,11 @@ ignoreregex =
     def apply(self, state: AppState) -> bool:
         if not self._installed() or not self._write_jails(state):
             return False
-        options = self.jail_options(state)
-        awg_enabled = options["hydra-awg"]["enabled"] == "true"
-        if not self._sync_awg_debug(awg_enabled):
+        if not self._cleanup_legacy_awg_debug():
             return False
-        portscan_enabled = options["hydra-portscan"]["enabled"] == "true"
-        if not self._sync_portscan_rule(portscan_enabled):
+        # Port-scan telemetry belongs to AntiDPI. Keep this bounded cleanup for
+        # hosts upgraded from releases that installed the Fail2ban LOG rule.
+        if not self._remove_legacy_portscan_rule():
             return False
         reload_result = _run(["fail2ban-client", "reload"], timeout=20)
         if reload_result.returncode != 0 or not self.status().running:
@@ -609,9 +488,9 @@ ignoreregex =
             raise RuntimeError("Fail2ban configuration could not be validated or started")
 
     def on_disable(self, state: AppState) -> None:
-        if not self._sync_awg_debug(False):
+        if not self._cleanup_legacy_awg_debug():
             raise RuntimeError("AmneziaWG dynamic debug could not be disabled")
-        if not self._sync_portscan_rule(False):
+        if not self._remove_legacy_portscan_rule():
             raise RuntimeError("Fail2ban port-scan log rule could not be removed")
         stopped = _run(["systemctl", "stop", "fail2ban"])
         if stopped.returncode != 0:

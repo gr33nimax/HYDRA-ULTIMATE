@@ -26,6 +26,18 @@ def test_meta():
     assert p.meta.needs_domain is False
 
 
+def test_apply_healthcheck_uses_candidate_mieru_inbound():
+    plugin = MieruPlugin()
+    state = _state([_user("a@x.com")])
+
+    with patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.singbox.has_configured_inbound", return_value=True):
+        health = plugin.health_result(state)
+
+    assert health.healthy is True
+    assert health.checks == {"sing_box": True, "mieru_inbound": True}
+
+
 def test_configure_returns_inbound():
     """configure() генерит ConfigFragment с mieru inbound."""
     p = MieruPlugin()

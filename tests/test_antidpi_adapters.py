@@ -1,0 +1,215 @@
+from hydra.plugins.antidpi.adapters import (
+    decode_log_message, parse_kernel_scan_line, parse_protocol_line,
+    parse_unattributed_protocol_line,
+)
+
+
+def test_awg_rejection_is_normalized():
+    result = parse_protocol_line("amneziawg.service", "Invalid MAC of handshake from 203.0.113.9:48120")
+    assert result == ("203.0.113.9", {
+        "protocol": "amneziawg", "kind": "handshake_failure",
+        "handshake_ok": False, "source": "journal", "ban_eligible": False,
+    })
+
+
+def test_awg_real_kernel_invalid_mac_is_normalized():
+    result = parse_protocol_line(
+        "kernel",
+        "wireguard: awg0: Invalid MAC of handshake, dropping packet from 203.0.113.9:48120",
+    )
+    assert result == ("203.0.113.9", {
+        "protocol": "amneziawg", "kind": "handshake_failure",
+        "handshake_ok": False, "source": "journal", "ban_eligible": False,
+    })
+
+
+def test_awg_real_kernel_unknown_peer_is_normalized():
+    result = parse_protocol_line(
+        "kernel-journal",
+        "wireguard: awg1: unknown peer from [2001:db8::9]:48121",
+    )
+    assert result is not None
+    assert result[0] == "2001:db8::9"
+    assert result[1]["protocol"] == "amneziawg"
+    assert result[1]["ban_eligible"] is False
+
+
+def test_awg_legitimate_junk_packet_is_not_rejection_evidence():
+    result = parse_protocol_line(
+        "kernel",
+        "wireguard: awg0: Unknown message from 198.51.100.8:48120 encountered, packet dropped",
+    )
+    assert result is None
+
+
+def test_non_evidence_is_ignored():
+    assert parse_protocol_line("sing-box.service", "accepted connection from 203.0.113.9") is None
+
+
+def test_honeypot_events_are_not_antidpi_evidence():
+    assert parse_protocol_line(
+        "honeypot", "BAN 198.51.100.91 backend=iptables result=OK",
+    ) is None
+    assert parse_protocol_line(
+        "honeypot", "CONNECT 198.51.100.91:45600",
+    ) is None
+
+
+def test_kernel_tcp_scan_is_normalized():
+    line = "HYDRA_SCAN_TCP IN=eth0 SRC=198.51.100.77 DST=192.0.2.1 SPT=44222 DPT=22"
+    assert parse_kernel_scan_line(line) == (
+        "198.51.100.77",
+        {
+            "protocol": "tcp",
+            "kind": "port_scan",
+            "source": "kernel-firewall",
+            "connections_10s": 12,
+            "destination_port": 22,
+        },
+    )
+
+
+def test_kernel_udp_protocol_probe_is_alert_only():
+    line = "HYDRA_UDP_PROBE IN=eth0 SRC=198.51.100.78 DST=192.0.2.1 SPT=44222 DPT=8443"
+    assert parse_kernel_scan_line(line) == (
+        "198.51.100.78",
+        {
+            "protocol": "udp", "kind": "udp_probe", "source": "kernel-udp-probe",
+            "destination_port": 8443, "ban_eligible": False,
+        },
+    )
+
+
+def test_generic_kernel_udp_scan_is_also_alert_only():
+    line = "HYDRA_SCAN_UDP IN=eth0 SRC=198.51.100.79 DST=192.0.2.1 SPT=44222 DPT=8443"
+    parsed = parse_kernel_scan_line(line)
+    assert parsed is not None
+    assert parsed[1]["ban_eligible"] is False
+
+
+def test_mieru_low_volume_close_is_normalized_as_alert_only():
+    line = (
+        "HYDRA_MIERU_SHORT IN=ens3 SRC=198.51.100.80 DST=192.0.2.1 "
+        "SPT=60057 DPT=2012"
+    )
+    assert parse_kernel_scan_line(line) == (
+        "198.51.100.80",
+        {
+            "protocol": "mieru", "kind": "low_volume_session",
+            "source": "kernel-mieru", "source_port": 60057,
+            "destination_port": 2012, "ban_eligible": False,
+            "policy": "alert-only / inferred low-volume TCP rejection",
+        },
+    )
+
+
+def test_unrelated_kernel_message_is_ignored():
+    assert parse_kernel_scan_line("TCP: harmless kernel diagnostic") is None
+
+
+def test_protocol_error_with_ip_before_message_is_normalized():
+    result = parse_protocol_line(
+        "sing-box.service",
+        "peer 198.51.100.88:45500 handshake failed: protocol error",
+    )
+    assert result is not None
+    assert result[0] == "198.51.100.88"
+    assert result[1]["kind"] == "handshake_failure"
+
+
+def test_singbox_journal_byte_array_is_decoded_and_anytls_auth_is_normalized():
+    line = (
+        "+0000 ERROR inbound/anytls[anytls-in]: process connection from "
+        "127.0.0.1:14902: unknown user password: fallback disabled"
+    )
+    encoded = list(line.encode())
+    assert decode_log_message(encoded) == line
+    assert parse_protocol_line("sing-box.service", encoded) == (
+        "127.0.0.1",
+        {"protocol": "anytls", "kind": "auth_failure", "source": "journal", "peer_port": 14902},
+    )
+
+
+def test_anytls_eof_and_wdtt_native_errors_are_normalized():
+    anytls = parse_protocol_line(
+        "sing-box.service",
+        "inbound/anytls[anytls-in]: process connection from 198.51.100.7:1234: EOF: fallback disabled",
+    )
+    assert anytls == (
+        "198.51.100.7",
+        {"protocol": "anytls", "kind": "invalid_first_packet", "source": "journal"},
+    )
+    wdtt = parse_protocol_line(
+        "wdtt.service",
+        "[DTLS] [ERR] Handshake failed from 198.51.100.8:24420: handshake error: dtls fatal",
+    )
+    assert wdtt == (
+        "198.51.100.8",
+        {
+            "protocol": "wdtt", "kind": "handshake_failure", "handshake_ok": False,
+            "source": "journal", "ban_eligible": False,
+        },
+    )
+
+
+def test_trusttunnel_and_snell_production_messages_are_normalized():
+    trust = parse_protocol_line(
+        "sing-box.service",
+        "inbound/trusttunnel[trusttunnel-in]: process connection from 198.51.100.9:20550: authorization failed",
+    )
+    assert trust == (
+        "198.51.100.9",
+        {"protocol": "trusttunnel", "kind": "auth_failure", "source": "journal"},
+    )
+    snell = parse_protocol_line(
+        "sing-box.service",
+        'inbound/snell[snell-in]: process connection from 198.51.100.10:43498: malformed HTTP request "probe"',
+    )
+    assert snell == (
+        "198.51.100.10",
+        {"protocol": "snell", "kind": "invalid_first_packet", "source": "journal"},
+    )
+
+
+def test_reflected_client_keywords_do_not_become_protocol_evidence():
+    assert parse_protocol_line(
+        "sing-box.service",
+        'inbound/snell[snell-in]: process connection from 198.51.100.11:1234: EOF payload="INVALID-HANDSHAKE"',
+    ) is None
+    assert parse_protocol_line(
+        "sing-box.service",
+        'inbound/hysteria2[hysteria2-in]: connection from 198.51.100.12:1234 uses QUIC',
+    ) is None
+
+
+def test_shadowtls_detoured_trojan_auth_failure_keeps_relay_endpoint():
+    result = parse_protocol_line(
+        "sing-box.service",
+        "inbound/trojan[shadowtls-trojan-in]: process connection from "
+        "127.0.0.1:32145: invalid password",
+    )
+    assert result == (
+        "127.0.0.1",
+        {
+            "protocol": "shadowtls", "kind": "auth_failure",
+            "source": "journal", "peer_port": 32145,
+        },
+    )
+    bad_request = parse_protocol_line(
+        "sing-box.service",
+        "inbound/trojan[shadowtls-trojan-in]: process connection from "
+        "127.0.0.1:32146: bad request: fallback disabled",
+    )
+    assert bad_request[1]["kind"] == "auth_failure"
+    assert bad_request[1]["peer_port"] == 32146
+
+
+def test_shadowtls_native_hmac_mismatch_is_strict_unattributed_evidence():
+    line = (
+        "WARN inbound/shadowtls[shadowtls-in]: "
+        "client hello verify failed: hmac mismatch"
+    )
+    assert parse_protocol_line("sing-box.service", line) is None
+    assert parse_unattributed_protocol_line("sing-box.service", line) == {
+        "protocol": "shadowtls", "kind": "auth_failure", "source": "journal",
+    }

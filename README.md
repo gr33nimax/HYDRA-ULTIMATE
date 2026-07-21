@@ -1,6 +1,6 @@
-# 🐉 HYDRA v2.5.0 — Multi-Protocol Proxy & Routing Orchestrator
+# 🐉 HYDRA v2.5.2-dev — Multi-Protocol Proxy & Routing Orchestrator
 
-[![Version](https://img.shields.io/badge/version-2.5.0-blue.svg?style=flat-square)](https://github.com/gr33nimax/HYDRA-ULTIMATE)
+[![Version](https://img.shields.io/badge/version-2.5.2--dev-blue.svg?style=flat-square)](https://github.com/gr33nimax/HYDRA-ULTIMATE)
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg?style=flat-square)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg?style=flat-square)](https://ubuntu.com/)
@@ -12,7 +12,7 @@
 в единый управляемый контур.
 
 > [!IMPORTANT]
-> `2.5.0` — архитектурный и эксплуатационный релиз. Проект всё ещё находится
+> `2.5.2-dev` — текущая ветка разработки. Проект всё ещё находится
 > в активном бета-тестировании; для рабочей эксплуатации используйте чистый Ubuntu 20.04+
 > или Debian 11+ и обязательно настройте резервное копирование.
 
@@ -21,6 +21,8 @@
 - [Архитектура и ключевые механизмы](docs/ARCHITECTURE.md)
 - [Полное руководство Headless CLI](docs/CLI.md)
 - [История изменений](CHANGELOG.md)
+
+Остальная техническая документация находится в каталоге [`docs`](docs/).
 
 ## 💿 Установка и запуск
 
@@ -34,7 +36,7 @@
 ### Быстрая установка
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh)
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash
 ```
 
 Установщик подготавливает зависимости, Sing-Box Extended, изолированное Python-
@@ -44,10 +46,17 @@ bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/mai
 ### Запуск из исходников
 
 ```bash
-git clone https://github.com/gr33nimax/HYDRA-ULTIMATE /opt/hydra
+git clone -b dev https://github.com/gr33nimax/HYDRA-ULTIMATE /opt/hydra
 cd /opt/hydra
-sudo python3 main.py
+sudo apt-get install -y python3-venv
+sudo python3 -m venv .venv
+sudo .venv/bin/python -m pip install --upgrade pip
+sudo .venv/bin/python -m pip install -r requirements.lock
+sudo .venv/bin/python main.py
 ```
+
+Не запускайте исходники через системный `python3`: в таком режиме зависимости
+из `requirements.lock` (включая генератор QR-кодов) не устанавливаются.
 
 Первичная настройка выполняется в TUI: включите нужные протоколы и системные
 службы, создайте пользователей, затем проверьте состояние:
@@ -80,13 +89,14 @@ sudo hydra doctor
 | :--- | :--- |
 | **DNSCrypt** | Локальный шифрованный DNS-резолвер на `127.0.0.1:5300`. |
 | **WARP** | Выборочная маршрутизация через Cloudflare WireGuard. |
-| **Fail2ban** | Динамическая блокировка атакующих IP через nftables. |
+| **Fail2ban** | Блокировка SSH и аутентификационных атак. |
+| **AntiDPI** | Корреляция protocol probes и сканирования VPS с динамическим ipset. |
 | **Honeypot** | Обнаружение сканирования портов. |
 | **IPBan** | Статические списки IP/CIDR/ASN/стран. |
 | **Traffic daemon** | Учёт трафика и применение лимитов/сроков пользователей. |
 
-Telegram-бот присутствует как экспериментальный модуль и не считается готовым
-для промышленной эксплуатации в версии `2.5.0`.
+Telegram Admin Bot предоставляет кнопочное управление защитой, разбан и
+категорийные уведомления. Токен бота следует защищать как root-equivalent секрет.
 
 ## 🏗️ Архитектурный обзор
 

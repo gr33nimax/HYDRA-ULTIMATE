@@ -70,7 +70,7 @@ def test_install_already_installed():
 def test_portscan_cleanup_is_bounded_when_rule_never_disappears():
     with patch("hydra.plugins.fail2ban.plugin.shutil.which", return_value="/usr/sbin/iptables"), \
          patch("hydra.plugins.fail2ban.plugin._run", return_value=MagicMock(returncode=0)) as run:
-        assert Fail2banPlugin._sync_portscan_rule(False) is True
+        assert Fail2banPlugin._remove_legacy_portscan_rule() is True
     # check + (delete, check) repeated at most 32 times.
     assert run.call_count == 1 + (32 * 2)
 
@@ -115,10 +115,7 @@ def test_write_jails_with_whitelist():
 
 def test_only_filters_with_trustworthy_public_sources_are_generated():
     filters = Fail2banPlugin._filters()
-    assert set(filters) == {"hydra-awg", "hydra-portscan"}
-    assert "Unknown message from" in filters["hydra-awg"]
-    assert "Invalid MAC of handshake" in filters["hydra-awg"]
-    assert "tproxy" not in filters["hydra-awg"].lower()
+    assert filters == {}
 
 
 def test_tls_transport_jails_and_legacy_overrides_are_ignored():
@@ -138,7 +135,7 @@ def test_tls_transport_jails_and_legacy_overrides_are_ignored():
         "hydra-anytls", "hydra-trusttunnel",
         "hydra-trusttunnel-quic", "hydra-naive",
     } & set(jails))
-    assert set(jails) == {"hydra-sshd", "hydra-recidive", "hydra-portscan", "hydra-awg"}
+    assert set(jails) == {"hydra-sshd", "hydra-recidive"}
 
 
 def test_invalid_generated_configuration_is_rolled_back(tmp_path):
@@ -172,12 +169,14 @@ def test_current_ssh_client_is_persisted_in_whitelist():
     assert state.protocols["fail2ban"].config["whitelist"] == ["203.0.113.7"]
 
 
-def test_portscan_rule_is_idempotent():
+def test_legacy_portscan_rule_is_cleanup_only():
     with patch("shutil.which", return_value="/usr/sbin/iptables"), \
-         patch("hydra.plugins.fail2ban.plugin._run", return_value=MagicMock(returncode=0)) as run:
-        assert Fail2banPlugin._sync_portscan_rule(True) is True
-    assert run.call_count == 1
-    assert "-C" in run.call_args.args[0]
+         patch("hydra.plugins.fail2ban.plugin._run", side_effect=[
+             MagicMock(returncode=0), MagicMock(returncode=0), MagicMock(returncode=1),
+         ]) as run:
+        assert Fail2banPlugin._remove_legacy_portscan_rule() is True
+    assert "-D" in run.call_args_list[1].args[0]
+    assert all("-I" not in call.args[0] for call in run.call_args_list)
 
 
 def test_restore_defaults_keeps_stopped_service_stopped():
@@ -190,12 +189,12 @@ def test_restore_defaults_keeps_stopped_service_stopped():
     with patch.object(Fail2banPlugin, "_installed", return_value=True), \
          patch.object(Fail2banPlugin, "status", return_value=MagicMock(running=False)), \
          patch.object(Fail2banPlugin, "_write_jails", return_value=True), \
-         patch.object(Fail2banPlugin, "_sync_portscan_rule", return_value=True) as sync, \
+         patch.object(Fail2banPlugin, "_remove_legacy_portscan_rule", return_value=True) as sync, \
          patch("hydra.plugins.fail2ban.plugin._run") as run:
         assert p.restore_defaults(state) is True
 
     assert "jails" not in state.protocols["fail2ban"].config
-    sync.assert_called_once_with(False)
+    sync.assert_called_once_with()
     run.assert_not_called()
 
 
@@ -228,7 +227,7 @@ def test_write_jails_removes_obsolete_tls_transport_files(tmp_path):
     }
 
 
-def test_awg_jail_covers_all_profile_ports():
+def test_awg_probe_detection_is_not_owned_by_fail2ban():
     p = Fail2banPlugin()
     state = _make_state()
     state.protocols["amneziawg"] = PluginState(
@@ -240,27 +239,26 @@ def test_awg_jail_covers_all_profile_ports():
         "hydra-awg": {"enabled": True},
     }
 
-    awg = p.jail_options(state)["hydra-awg"]
-    assert awg["enabled"] == "true"
-    assert awg["port"] == "51820,51821"
-    assert awg["banaction"] == "%(banaction_allports)s"
+    assert "hydra-awg" not in p.jail_options(state)
 
 
-def test_awg_dynamic_debug_is_enabled_and_persisted(tmp_path):
-    p = Fail2banPlugin()
+def test_fail2ban_cleanup_does_not_disable_antidpi_rejection_debug(tmp_path):
+    plugin = Fail2banPlugin()
     control = tmp_path / "dynamic_debug_control"
-    service = tmp_path / "hydra-awg-fail2ban-debug.service"
+    legacy_service = tmp_path / "hydra-awg-fail2ban-debug.service"
+    antidpi_service = tmp_path / "hydra-awg-antidpi-debug.service"
     control.touch()
-
+    legacy_service.touch()
+    antidpi_service.touch()
     with patch("hydra.plugins.fail2ban.plugin.AWG_DYNAMIC_DEBUG_PATHS", (control,)), \
-         patch("hydra.plugins.fail2ban.plugin.AWG_DEBUG_SERVICE", service), \
+         patch("hydra.plugins.fail2ban.plugin.AWG_DEBUG_SERVICE", legacy_service), \
+         patch("hydra.plugins.fail2ban.plugin.ANTIDPI_AWG_DEBUG_SERVICE", antidpi_service), \
          patch("hydra.plugins.fail2ban.plugin._run", return_value=MagicMock(returncode=0)) as run:
-        assert p._sync_awg_debug(True) is True
+        assert plugin._cleanup_legacy_awg_debug() is True
 
     control_text = control.read_text(encoding="utf-8")
-    assert "module amneziawg func prepare_awg_message +p" in control_text
-    assert "module amneziawg func wg_receive_handshake_packet +p" in control_text
-    service_text = service.read_text(encoding="utf-8")
-    assert "prepare_awg_message +p" in service_text
-    assert "wg_receive_handshake_packet +p" in service_text
-    assert any("enable" in call.args[0] for call in run.call_args_list)
+    assert "prepare_awg_message -p" in control_text
+    assert "wg_receive_handshake_packet -p" not in control_text
+    assert ["systemctl", "try-restart", "hydra-awg-antidpi-debug.service"] in [
+        call.args[0] for call in run.call_args_list
+    ]

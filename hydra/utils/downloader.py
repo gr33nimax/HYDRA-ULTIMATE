@@ -62,6 +62,11 @@ def download(url: str, dest: Path, timeout: int = 120, *, sha256: str | None = N
         dest.parent.mkdir(parents=True, exist_ok=True)
         # Скачиваем во временный файл, затем атомарно перемещаем
         fd, tmp = tempfile.mkstemp(dir=str(dest.parent))
+        # mkstemp leaves its descriptor open. We reopen the path below, so the
+        # original writable descriptor must be closed before the downloaded
+        # executable is moved into place and launched (otherwise Linux raises
+        # ETXTBSY: "Text file busy").
+        os.close(fd)
         try:
             request = urllib.request.Request(url, headers={"User-Agent": "HYDRA-Installer"})
             with urllib.request.urlopen(request, timeout=timeout) as response, open(tmp, "wb") as output:

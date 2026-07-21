@@ -522,6 +522,18 @@ def is_running() -> bool:
     return r.returncode == 0
 
 
+def has_configured_inbound(tag: str) -> bool:
+    """Return whether the applied Sing-Box artifact contains an inbound tag."""
+    try:
+        config = json.loads(SINGBOX_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return False
+    return any(
+        isinstance(inbound, dict) and inbound.get("tag") == tag
+        for inbound in config.get("inbounds", [])
+    )
+
+
 def enable_autostart() -> None:
     """Включает автозапуск при загрузке."""
     _run(["systemctl", "enable", "sing-box"], capture=False)

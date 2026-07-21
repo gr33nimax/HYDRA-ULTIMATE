@@ -35,6 +35,30 @@ def test_meta():
     assert p.meta.needs_domain is True
 
 
+def test_apply_healthcheck_uses_candidate_anytls_inbound():
+    plugin = AnyTLSPlugin()
+    state = _state([_user("a@x.com")])
+
+    with patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.singbox.has_configured_inbound", return_value=True):
+        health = plugin.health_result(state)
+
+    assert health.healthy is True
+    assert health.checks == {"sing_box": True, "anytls_inbound": True}
+
+
+def test_apply_healthcheck_rejects_missing_anytls_inbound():
+    plugin = AnyTLSPlugin()
+    state = _state([_user("a@x.com")])
+
+    with patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.singbox.has_configured_inbound", return_value=False):
+        health = plugin.health_result(state)
+
+    assert health.healthy is False
+    assert "missing" in health.detail
+
+
 def test_configure_returns_inbound():
     """configure() генерит ConfigFragment с anytls inbound."""
     p = AnyTLSPlugin()
@@ -277,9 +301,10 @@ def test_status_delegates_to_singbox():
     p = AnyTLSPlugin()
     with patch("hydra.core.singbox.is_installed", return_value=True), \
          patch("hydra.core.singbox.is_running", return_value=True), \
-         patch("hydra.core.state.load_state") as mock_load, \
-         patch.object(p, "_get_total_traffic", return_value=1024):
+        patch("hydra.core.state.load_state") as mock_load, \
+        patch.object(p, "_get_total_traffic", return_value=1024):
         state = _state()
+        state.protocols["anytls"].installed = True
         mock_load.return_value = state
         
         status = p.status()
@@ -288,3 +313,20 @@ def test_status_delegates_to_singbox():
         assert status.enabled is True
         assert status.port == 20444
         assert status.info["Общий трафик"] == "1.00 KB"
+
+
+def test_status_does_not_treat_shared_singbox_as_anytls_install():
+    """A shared Sing-Box binary alone must not make AnyTLS look installed."""
+    p = AnyTLSPlugin()
+    state = _state()
+    state.protocols["anytls"].installed = False
+    state.protocols["anytls"].enabled = False
+
+    with patch("hydra.core.singbox.is_installed", return_value=True), \
+         patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.state.load_state", return_value=state):
+        status = p.status()
+
+    assert status.installed is False
+    assert status.enabled is False
+    assert status.running is False

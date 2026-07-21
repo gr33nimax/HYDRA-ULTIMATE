@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# HYDRA v2.5.0 — Bootstrap Installer
+# HYDRA v2.5.2-dev — Bootstrap Installer
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Установка:
-#   curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash
 #
 # Что делает:
 #   1. Проверяет root, ОС (Ubuntu/Debian), Python 3.10+
@@ -34,7 +34,11 @@ on_error() {
     local code=$?
     if [[ -n "${HYDRA_PREVIOUS_REV:-}" && -d "${INSTALL_DIR:-}/.git" ]]; then
         warn "Возвращаю код HYDRA к предыдущей проверенной версии..."
-        git -C "$INSTALL_DIR" reset --hard "$HYDRA_PREVIOUS_REV" >/dev/null 2>&1 || true
+        if [[ -n "${HYDRA_PREVIOUS_REF:-}" ]]; then
+            git -C "$INSTALL_DIR" checkout -B "$HYDRA_PREVIOUS_REF" "$HYDRA_PREVIOUS_REV" >/dev/null 2>&1 || true
+        else
+            git -C "$INSTALL_DIR" checkout --detach "$HYDRA_PREVIOUS_REV" >/dev/null 2>&1 || true
+        fi
     fi
     if [[ -n "${HYDRA_BACKUP_DIR:-}" && -d "$HYDRA_BACKUP_DIR/old" ]]; then
         warn "Восстанавливаю предыдущий каталог HYDRA..."
@@ -194,8 +198,22 @@ fi
 step "[4/5] Загрузка HYDRA"
 INSTALL_DIR="/opt/hydra"
 REPO_URL="https://github.com/gr33nimax/HYDRA-ULTIMATE"
-BRANCH="main"
-HYDRA_REF="${HYDRA_REF:-$BRANCH}"
+DEFAULT_BRANCH="dev"
+HYDRA_REF="${HYDRA_REF:-$DEFAULT_BRANCH}"
+if ! git check-ref-format --branch "$HYDRA_REF" >/dev/null 2>&1; then
+    err "Некорректное имя ветки HYDRA_REF: $HYDRA_REF"
+    exit 1
+fi
+HYDRA_REMOTE_REF="refs/heads/${HYDRA_REF}"
+if ! HYDRA_TARGET_REV=$(git ls-remote --exit-code "$REPO_URL" "$HYDRA_REMOTE_REF" | awk 'NR == 1 {print $1}'); then
+    err "Ветка $HYDRA_REF не найдена в $REPO_URL"
+    exit 1
+fi
+if [[ ! "$HYDRA_TARGET_REV" =~ ^[0-9a-f]{40}$ ]]; then
+    err "Не удалось определить commit ветки $HYDRA_REF"
+    exit 1
+fi
+info "Выбрана ветка ${HYDRA_REF}, commit ${HYDRA_TARGET_REV:0:12}"
 
 if [[ -d "${INSTALL_DIR}/.git" ]]; then
     info "Обновление репозитория..."
@@ -205,41 +223,56 @@ if [[ -d "${INSTALL_DIR}/.git" ]]; then
         exit 1
     fi
     HYDRA_PREVIOUS_REV=$(git rev-parse HEAD)
-    git fetch --prune origin "$HYDRA_REF"
-    HYDRA_TARGET_REV=$(git rev-parse FETCH_HEAD)
-    git reset --hard "$HYDRA_TARGET_REV"
+    HYDRA_PREVIOUS_REF=$(git symbolic-ref --quiet --short HEAD || true)
+    # Fetch the already resolved branch tip by SHA. A branch movement during
+    # installation therefore cannot make different paths install different
+    # revisions.
+    git fetch --quiet "$REPO_URL" "$HYDRA_TARGET_REV"
+    git checkout --quiet -B "$HYDRA_REF" "$HYDRA_TARGET_REV"
     ok "Репозиторий обновлён"
 elif [[ -d "$INSTALL_DIR" ]]; then
     info "Установка без git — принудительное обновление..."
-    ARCHIVE="${REPO_URL}/archive/refs/heads/${BRANCH}.tar.gz"
+    ARCHIVE="${REPO_URL}/archive/${HYDRA_TARGET_REV}.tar.gz"
     UPDATE_TMP=$(mktemp -d /tmp/hydra-update.XXXXXX)
     HYDRA_BACKUP_DIR=$(mktemp -d /tmp/hydra-previous.XXXXXX)
     mv "$INSTALL_DIR" "$HYDRA_BACKUP_DIR/old"
     curl -fsSL --connect-timeout 30 --retry 3 -o "$UPDATE_TMP/hydra.tar.gz" "$ARCHIVE"
-    tar -xzf "$UPDATE_TMP/hydra.tar.gz" -C "$UPDATE_TMP"
     mkdir -p "$INSTALL_DIR"
-    cp -a "$UPDATE_TMP/HYDRA-ULTIMATE-${BRANCH}/." "$INSTALL_DIR/"
+    tar -xzf "$UPDATE_TMP/hydra.tar.gz" -C "$INSTALL_DIR" --strip-components=1
+    printf '%s\n' "$HYDRA_TARGET_REV" > "$INSTALL_DIR/.hydra-source-revision"
     rm -rf "$UPDATE_TMP"
     ok "Файлы обновлены"
 else
     info "Клонирование репозитория..."
     PARENT_TMP=$(mktemp -d /tmp/hydra-clone.XXXXXX)
-    if git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_URL" "$PARENT_TMP/repo"; then
+    if git clone --quiet --depth 1 --branch "$HYDRA_REF" "$REPO_URL" "$PARENT_TMP/repo" \
+        && [[ "$(git -C "$PARENT_TMP/repo" rev-parse HEAD)" == "$HYDRA_TARGET_REV" ]]; then
         mkdir -p "$INSTALL_DIR"
         cp -a "$PARENT_TMP/repo/." "$INSTALL_DIR/"
     else
-        warn "git clone не удался — загружаю архив..."
-        ARCHIVE="${REPO_URL}/archive/refs/heads/${BRANCH}.tar.gz"
+        warn "git clone не дал выбранный commit — загружаю точный архив..."
+        rm -rf "$PARENT_TMP/repo"
+        ARCHIVE="${REPO_URL}/archive/${HYDRA_TARGET_REV}.tar.gz"
         curl -fsSL --connect-timeout 30 --retry 3 -o "$PARENT_TMP/hydra.tar.gz" "$ARCHIVE"
-        tar -xzf "$PARENT_TMP/hydra.tar.gz" -C "$PARENT_TMP"
         mkdir -p "$INSTALL_DIR"
-        cp -a "$PARENT_TMP/HYDRA-ULTIMATE-${BRANCH}/." "$INSTALL_DIR/"
+        tar -xzf "$PARENT_TMP/hydra.tar.gz" -C "$INSTALL_DIR" --strip-components=1
+        printf '%s\n' "$HYDRA_TARGET_REV" > "$INSTALL_DIR/.hydra-source-revision"
     fi
     rm -rf "$PARENT_TMP"
     ok "Загружено в $INSTALL_DIR"
 fi
 
 [[ -f "${INSTALL_DIR}/main.py" ]] || { err "main.py не найден в $INSTALL_DIR"; exit 1; }
+if [[ -d "${INSTALL_DIR}/.git" ]]; then
+    HYDRA_INSTALLED_REV=$(git -C "$INSTALL_DIR" rev-parse HEAD)
+else
+    HYDRA_INSTALLED_REV=$(cat "$INSTALL_DIR/.hydra-source-revision" 2>/dev/null || true)
+fi
+if [[ "$HYDRA_INSTALLED_REV" != "$HYDRA_TARGET_REV" ]]; then
+    err "Проверка версии не пройдена: ожидался $HYDRA_TARGET_REV, установлен ${HYDRA_INSTALLED_REV:-unknown}"
+    exit 1
+fi
+ok "Проверка commit: ${HYDRA_INSTALLED_REV:0:12}"
 
 # ── Python-зависимости ──────────────────────────────────────────────────────
 info "Изолированное Python-окружение..."
@@ -272,8 +305,7 @@ echo ""
 echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 HYDRA_VERSION=$("$VENV_DIR/bin/python" -c "from hydra import __version__; print(__version__)" 2>/dev/null || echo unknown)
 echo -e "${GREEN}${BOLD}     🐉 HYDRA v${HYDRA_VERSION} установлена!${NC}"
-echo -e "${GREEN}${BOLD}     Запуск: sudo python3 ${INSTALL_DIR}/main.py${NC}"
-echo -e "${GREEN}${BOLD}     Или:    sudo hydra${NC}"
+echo -e "${GREEN}${BOLD}     Запуск: sudo hydra${NC}"
 echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "  ${DIM}Лог: ${LOG_FILE}${NC}"
 echo ""

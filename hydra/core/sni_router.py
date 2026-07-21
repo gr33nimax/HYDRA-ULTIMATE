@@ -21,13 +21,19 @@ CADDY_CFG = Path("/etc/caddy-l4/config.json")
 CADDY_CFG_DIR = Path("/etc/caddy-l4")
 CADDY_LOG_DIR = Path("/var/log/caddy-l4")
 DECOY_LOG = CADDY_LOG_DIR / "decoy-access.log"
+TRUSTTUNNEL_LOG = CADDY_LOG_DIR / "trusttunnel-access.log"
 SERVICE_NAME = "caddy-l4"
 SERVICE_FILE = Path("/etc/systemd/system/caddy-l4.service")
+CADDY_ADMIN_ADDRESS = "127.0.0.1:2021"
 SOURCE_SERVICE_NAME = "hydra-caddy-source"
 SOURCE_SERVICE_FILE = Path(f"/etc/systemd/system/{SOURCE_SERVICE_NAME}.service")
+RELAY_SERVICE_NAME = "hydra-source-relay"
+RELAY_SERVICE_FILE = Path(f"/etc/systemd/system/{RELAY_SERVICE_NAME}.service")
 FRONTEND_PORT = 443
 CADDY_L4_VERSION = "42db5690dea199f930a6f08005fe2e4aab10dcc9"
 GO_VERSION = "1.25.1"
+GO_RELEASES_URL = "https://go.dev/dl/?mode=json&include=all"
+CADDY_BUILD_TIMEOUT = 900
 
 _INTERNAL_PORTS = {
     "naive": 10443,       # Caddy HTTP app (forward_proxy + file_server)
@@ -42,6 +48,17 @@ _DECOY_HTTP_PORTS = {
     "anytls": 10801,
     "trusttunnel": 10802,
     "hysteria2": 10803,
+}
+
+_SOURCE_RELAY_PORTS = {
+    "anytls": 21444,
+    "trusttunnel": 21445,
+    "shadowtls": 21446,
+}
+
+_UDP_SOURCE_RELAY_PORTS = {
+    "naive": 21443,
+    "trusttunnel": 21445,
 }
 
 _SOURCE_PRESERVED_BACKENDS = frozenset({"naive", "anytls", "trusttunnel", "shadowtls"})
@@ -71,7 +88,12 @@ class CaddyRouteAudit:
         return asdict(self)
 
 
-def _proxy_handler(address: str, *, preserve_source: bool = False) -> dict:
+def _proxy_handler(
+    address: str,
+    *,
+    preserve_source: bool = False,
+    proxy_protocol: bool = False,
+) -> dict:
     """Build a Caddy L4 proxy handler.
 
     ``l4.conn.remote_addr`` includes the original source port and is expanded
@@ -82,7 +104,30 @@ def _proxy_handler(address: str, *, preserve_source: bool = False) -> dict:
     upstream = {"dial": [address]}
     if preserve_source and SOURCE_PRESERVATION_ENABLED:
         upstream["local_address"] = ["{l4.conn.remote_addr}"]
-    return {"handler": "proxy", "upstreams": [upstream]}
+    handler = {"handler": "proxy", "upstreams": [upstream]}
+    if proxy_protocol:
+        # Decoy HTTP servers otherwise see every connection as 127.0.0.1 and
+        # AntiDPI correctly discards it as loopback.  PROXY v2 carries the
+        # original L4 peer without requiring fragile transparent source binds.
+        handler["proxy_protocol"] = "v2"
+    return handler
+
+
+def _decoy_listener_wrappers() -> list[dict]:
+    """Accept L4 PROXY headers only from this host's loopback interfaces."""
+    return [{
+        "wrapper": "proxy_protocol",
+        "timeout": "1s",
+        "allow": ["127.0.0.0/8", "::1/128"],
+        "fallback_policy": "require",
+    }]
+
+
+def _antidpi_enabled(state: AppState) -> bool:
+    """Accept both current and legacy persisted AntiDPI enablement flags."""
+    security_enabled = bool(getattr(state.security, "antidpi_enabled", False))
+    protocol = state.protocols.get("antidpi")
+    return security_enabled or bool(protocol and protocol.enabled)
 
 def _hash_password_caddy(password: str) -> str:
     """Uses Caddy's built-in command to generate a bcrypt password hash."""
@@ -273,6 +318,21 @@ def is_installed() -> bool:
     return CADDY_BIN.exists() or shutil.which("caddy-l4") is not None
 
 
+def _official_go_digest(go_filename: str) -> str | None:
+    """Return the official checksum for a pinned, possibly older Go release."""
+    try:
+        request = urllib.request.Request(GO_RELEASES_URL, headers={"User-Agent": "HYDRA"})
+        with urllib.request.urlopen(request, timeout=15) as response:
+            releases = json.loads(response.read())
+        for release in releases:
+            for file_info in release.get("files", []):
+                if file_info.get("filename") == go_filename:
+                    return file_info.get("sha256")
+    except (OSError, ValueError, TypeError):
+        pass
+    return None
+
+
 def _ensure_modern_go() -> bool:
     """Ensures a Go compiler version compatible with pinned Caddy L4.
 
@@ -306,20 +366,7 @@ def _ensure_modern_go() -> bool:
     go_url = f"https://go.dev/dl/{go_filename}"
 
     from hydra.utils.downloader import download
-    go_digest = None
-    try:
-        request = urllib.request.Request("https://go.dev/dl/?mode=json", headers={"User-Agent": "HYDRA"})
-        with urllib.request.urlopen(request, timeout=15) as response:
-            releases = json.loads(response.read())
-        for release in releases:
-            for file_info in release.get("files", []):
-                if file_info.get("filename") == go_filename:
-                    go_digest = file_info.get("sha256")
-                    break
-            if go_digest:
-                break
-    except (OSError, ValueError, TypeError):
-        go_digest = None
+    go_digest = _official_go_digest(go_filename)
     if go_digest and download(go_url, go_tar, sha256=go_digest):
         extract_root = Path(tempfile.mkdtemp(prefix="hydra-go-", dir="/tmp"))
         current_go = Path("/usr/local/go")
@@ -354,6 +401,21 @@ def _ensure_modern_go() -> bool:
             go_tar.unlink(missing_ok=True)
             shutil.rmtree(extract_root, ignore_errors=True)
     return False
+
+
+def _run_caddy_build(args: list[str], env: dict[str, str]):
+    """Run an xcaddy build with enough time for an empty module cache."""
+    try:
+        return HOST.run(
+            args,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=CADDY_BUILD_TIMEOUT,
+        )
+    except Exception as exc:
+        print(f"  caddy-l4 build failed: {exc}")
+        return None
 
 
 def install(state: AppState | None = None, *, force: bool = False) -> bool:
@@ -417,6 +479,9 @@ def install(state: AppState | None = None, *, force: bool = False) -> bool:
     build_args = [
         xcaddy_bin, "build", "--with",
         f"github.com/mholt/caddy-l4@{CADDY_L4_VERSION}",
+        # Explicitly include the L4 close handler used by Anti-DPI's early
+        # deny route; older builds only included proxy/TLS modules.
+        "--with", f"github.com/mholt/caddy-l4/modules/l4close@{CADDY_L4_VERSION}",
     ]
     
     if need_naive_fp:
@@ -427,25 +492,33 @@ def install(state: AppState | None = None, *, force: bool = False) -> bool:
     
     build_args += ["--output", str(pending_binary)]
     
-    r = HOST.run(build_args, capture_output=True, text=True, env=env)
+    r = _run_caddy_build(build_args, env)
+    if r is None:
+        return False
 
     if r.returncode != 0 and need_naive_fp:
         # Fallback: попробовать без naive-форка
         build_args_fallback = [
             xcaddy_bin, "build",
             "--with", f"github.com/mholt/caddy-l4@{CADDY_L4_VERSION}",
+            "--with", f"github.com/mholt/caddy-l4/modules/l4close@{CADDY_L4_VERSION}",
             "--with", "github.com/caddyserver/forwardproxy@caddy2",
             "--output", str(pending_binary)
         ]
-        r = HOST.run(build_args_fallback, capture_output=True, text=True, env=env)
+        r = _run_caddy_build(build_args_fallback, env)
+        if r is None:
+            return False
 
     if r.returncode != 0 and need_naive_fp:
         # Fallback 2: вообще без forwardproxy
-        r = HOST.run([
+        r = _run_caddy_build([
             xcaddy_bin, "build",
             "--with", f"github.com/mholt/caddy-l4@{CADDY_L4_VERSION}",
+            "--with", f"github.com/mholt/caddy-l4/modules/l4close@{CADDY_L4_VERSION}",
             "--output", str(pending_binary)
-        ], capture_output=True, text=True, env=env)
+        ], env)
+        if r is None:
+            return False
 
     if r.returncode != 0:
         print(f"  [Ошибка build caddy-l4] Код возврата: {r.returncode}")
@@ -455,7 +528,7 @@ def install(state: AppState | None = None, *, force: bool = False) -> bool:
         modules = HOST.run(
             [str(pending_binary), "list-modules"], capture_output=True, text=True,
         )
-        required = ["layer4.handlers.proxy"]
+        required = ["layer4.handlers.proxy", "layer4.handlers.close"]
         if need_naive_fp:
             required.append("http.handlers.forward_proxy")
         if modules.returncode != 0 or any(name not in modules.stdout for name in required):
@@ -718,6 +791,24 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                 },
                 "include": ["http.log.access.decoy"],
                 "level": "INFO"
+            },
+            # Keep L4 connection diagnostics separate so Anti-DPI can consume
+            # them without coupling its parser to Fail2ban's journal format.
+            "antidpi": {
+                "writer": {
+                    "output": "file",
+                    "filename": "/var/log/caddy-l4/antidpi.jsonl"
+                },
+                "include": ["layer4"],
+                "level": "INFO"
+            },
+            "trusttunnel": {
+                "writer": {
+                    "output": "file",
+                    "filename": str(TRUSTTUNNEL_LOG)
+                },
+                "include": ["http.log.access.trusttunnel"],
+                "level": "INFO"
             }
         }
     }
@@ -739,6 +830,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
 
     # 3. Layer 4 app (TLS termination and routing)
     l4_routes = []
+    relay_enabled = _antidpi_enabled(state)
     for b in backends:
         name = b["name"]
         domain = b["domain"]
@@ -749,7 +841,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
             l4_routes.append({
                 "match": [{"tls": {"sni": [domain]}}],
                 "handle": [
-                    _proxy_handler(f"127.0.0.1:{port}", preserve_source=True)
+                    _proxy_handler(f"127.0.0.1:{port}", proxy_protocol=True)
                 ]
             })
         elif name == "shadowtls":
@@ -757,7 +849,10 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
             l4_routes.append({
                 "match": [{"tls": {"sni": [domain]}}],
                 "handle": [
-                    _proxy_handler(f"127.0.0.1:{port}", preserve_source=True)
+                    _proxy_handler(
+                        f"127.0.0.1:{_SOURCE_RELAY_PORTS['shadowtls'] if relay_enabled else port}",
+                        proxy_protocol=relay_enabled,
+                    )
                 ]
             })
         elif name == "anytls":
@@ -774,12 +869,18 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                             {
                                 "match": [{"not": [{"http": []}]}],
                                 "handle": [
-                                    _proxy_handler(f"127.0.0.1:{port}", preserve_source=True)
+                                    _proxy_handler(
+                                        f"127.0.0.1:{_SOURCE_RELAY_PORTS['anytls'] if relay_enabled else port}",
+                                        proxy_protocol=relay_enabled,
+                                    )
                                 ]
                             },
                             {
                                 "handle": [
-                                    _proxy_handler(f"127.0.0.1:{decoy_port}", preserve_source=True)
+                                    _proxy_handler(
+                                        f"127.0.0.1:{decoy_port}",
+                                        proxy_protocol=True,
+                                    )
                                 ]
                             }
                         ]
@@ -793,7 +894,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                 "match": [{"tls": {"sni": [domain]}}],
                 "handle": [
                     {"handler": "tls"},
-                    _proxy_handler(f"127.0.0.1:{decoy_port}", preserve_source=True)
+                    _proxy_handler(f"127.0.0.1:{decoy_port}", proxy_protocol=True)
                 ]
             })
         elif name == "hysteria2":
@@ -805,7 +906,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                 "match": [{"tls": {"sni": [domain]}}],
                 "handle": [
                     {"handler": "tls"},
-                    _proxy_handler(f"127.0.0.1:{decoy_port}", preserve_source=True)
+                    _proxy_handler(f"127.0.0.1:{decoy_port}", proxy_protocol=True)
                 ]
             })
         elif name == "sub_server":
@@ -824,7 +925,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
         l4_routes.append({
             "handle": [
                 {"handler": "tls"},
-                _proxy_handler(f"127.0.0.1:{decoy_port}", preserve_source=True)
+                _proxy_handler(f"127.0.0.1:{decoy_port}", proxy_protocol=True)
             ]
         })
     l4_app = {
@@ -845,11 +946,19 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
         )
         if not quic_backend:
             raise ValueError(f"QUIC backend {quic_owner} отсутствует в Caddy config")
+        udp_relay_enabled = (
+            _antidpi_enabled(state) and quic_backend["name"] in _UDP_SOURCE_RELAY_PORTS
+        )
+        quic_target_port = (
+            _UDP_SOURCE_RELAY_PORTS[quic_backend["name"]]
+            if udp_relay_enabled else quic_backend["port"]
+        )
         quic_routes = [{
             "handle": [
                 _proxy_handler(
-                    f"udp/127.0.0.1:{quic_backend['port']}",
+                    f"udp/127.0.0.1:{quic_target_port}",
                     preserve_source=quic_backend["name"] in _SOURCE_PRESERVED_BACKENDS,
+                    proxy_protocol=udp_relay_enabled,
                 )
             ]
         }]
@@ -889,6 +998,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
         anytls_backend = next(b for b in backends if b["name"] == "anytls")
         http_servers["anytls_decoy"] = {
             "listen": [f"127.0.0.1:{_DECOY_HTTP_PORTS['anytls']}"],
+            "listener_wrappers": _decoy_listener_wrappers(),
             "automatic_https": {
                 "disable": True,
                 "disable_redirects": True
@@ -909,8 +1019,22 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
     if any(b["name"] == "trusttunnel" for b in backends):
         tt_backend = next(b for b in backends if b["name"] == "trusttunnel")
         tt_port = _INTERNAL_PORTS["trusttunnel"]
+        tt_relay_enabled = relay_enabled and "trusttunnel" in _SOURCE_RELAY_PORTS
+        tt_upstream_port = _SOURCE_RELAY_PORTS["trusttunnel"] if tt_relay_enabled else tt_port
+        tt_transport = {
+            "protocol": "http",
+            "versions": ["2"],
+            "response_header_timeout": "5s",
+            "tls": {"insecure_skip_verify": True},
+        }
+        if tt_relay_enabled:
+            tt_transport["proxy_protocol"] = "v2"
+            # A PROXY header describes one external client.  Never reuse or
+            # multiplex that upstream HTTP/2 connection for another client.
+            tt_transport["keep_alive"] = {"enabled": False}
         http_servers["trusttunnel_decoy"] = {
             "listen": [f"127.0.0.1:{_DECOY_HTTP_PORTS['trusttunnel']}"],
+            "listener_wrappers": _decoy_listener_wrappers(),
             "automatic_https": {
                 "disable": True,
                 "disable_redirects": True
@@ -925,14 +1049,8 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                     "handle": [
                         {
                             "handler": "reverse_proxy",
-                            "upstreams": [{"dial": f"127.0.0.1:{tt_port}"}],
-                            "transport": {
-                                "protocol": "http",
-                                "versions": ["2"],
-                                "tls": {
-                                    "insecure_skip_verify": True
-                                }
-                            },
+                            "upstreams": [{"dial": f"127.0.0.1:{tt_upstream_port}"}],
+                            "transport": tt_transport,
                             "headers": {
                                 "request": {
                                     "set": {
@@ -944,7 +1062,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                             },
                             "handle_response": [
                                 {
-                                    "match": {"status_code": [502, 503]},
+                                    "match": {"status_code": [502, 503, 504]},
                                     "routes": [
                                         {
                                             "handle": [
@@ -973,7 +1091,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                 ]
             },
             "logs": {
-                "logger_names": {tt_backend["domain"]: "decoy"}
+                "logger_names": {tt_backend["domain"]: "trusttunnel"}
             }
         }
 
@@ -983,6 +1101,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
         hysteria2_backend = next(b for b in backends if b["name"] == "hysteria2")
         http_servers["hysteria2_decoy"] = {
             "listen": [f"127.0.0.1:{_DECOY_HTTP_PORTS['hysteria2']}"],
+            "listener_wrappers": _decoy_listener_wrappers(),
             "automatic_https": {
                 "disable": True,
                 "disable_redirects": True
@@ -1012,6 +1131,10 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
         apps["http"] = http_app
 
     return {
+        # HYDRA may run caddy-naive alongside caddy-l4. Giving the mux its own
+        # loopback-only Admin API prevents reloads and diagnostics from
+        # accidentally targeting the other Caddy process on the default 2019.
+        "admin": {"listen": CADDY_ADMIN_ADDRESS},
         "logging": logging,
         "apps": apps
     }
@@ -1102,6 +1225,85 @@ def _remove_source_service() -> None:
     HOST.run(["systemctl", "daemon-reload"], capture_output=True)
 
 
+def _relay_routes(backends: list[dict], state: AppState) -> list[tuple[str, int, int]]:
+    if not _antidpi_enabled(state):
+        return []
+    return [
+        (backend["name"], _SOURCE_RELAY_PORTS[backend["name"]], int(backend["port"]))
+        for backend in backends
+        if backend["name"] in _SOURCE_RELAY_PORTS
+    ]
+
+
+def _udp_relay_routes(backends: list[dict], state: AppState) -> list[tuple[str, int, int]]:
+    if not _antidpi_enabled(state):
+        return []
+    owner = get_quic_owner(state)
+    if owner not in _UDP_SOURCE_RELAY_PORTS:
+        return []
+    backend = next((item for item in backends if item["name"] == owner), None)
+    if backend is None:
+        return []
+    return [(owner, _UDP_SOURCE_RELAY_PORTS[owner], int(backend["port"]))]
+
+
+def _install_relay_service(routes: list[tuple[str, int, int]],
+                           udp_routes: list[tuple[str, int, int]] | None = None) -> None:
+    udp_routes = list(udp_routes or [])
+    project_root = Path(__file__).resolve().parent.parent.parent
+    arguments = " ".join(
+        f"--route {protocol}:{listen}:{backend}"
+        for protocol, listen, backend in routes
+    )
+    udp_arguments = " ".join(
+        f"--udp-route {protocol}:{listen}:{backend}"
+        for protocol, listen, backend in udp_routes
+    )
+    arguments = " ".join(value for value in (arguments, udp_arguments) if value)
+    unit = f"""[Unit]
+Description=Hydra exact source attribution relay
+After=network-online.target sing-box.service
+Wants=network-online.target
+Before={SERVICE_NAME}.service
+
+[Service]
+Type=simple
+WorkingDirectory={project_root}
+Environment=PYTHONPATH={project_root}
+ExecStart=/usr/bin/python3 -m hydra.core.source_relay {arguments}
+Restart=on-failure
+RestartSec=1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RuntimeDirectory=hydra-source-relay
+RuntimeDirectoryMode=0750
+ReadWritePaths=/run/hydra-source-relay
+
+[Install]
+WantedBy=multi-user.target
+"""
+    RELAY_SERVICE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    RELAY_SERVICE_FILE.write_text(unit, encoding="utf-8")
+    HOST.run(["systemctl", "daemon-reload"], capture_output=True)
+    result = HOST.run(["systemctl", "enable", RELAY_SERVICE_NAME], capture_output=True)
+    if result.returncode == 0:
+        # Restart is intentional: route arguments may change after a protocol
+        # is enabled, disabled, or moved to another internal port.
+        result = HOST.run(["systemctl", "restart", RELAY_SERVICE_NAME], capture_output=True)
+    if result.returncode != 0:
+        raise RuntimeError("cannot start exact source attribution relay")
+
+
+def _remove_relay_service() -> None:
+    HOST.run(
+        ["systemctl", "disable", "--now", RELAY_SERVICE_NAME], capture_output=True,
+    )
+    RELAY_SERVICE_FILE.unlink(missing_ok=True)
+    HOST.run(["systemctl", "daemon-reload"], capture_output=True)
+
+
 def _restore_unit_file(path: Path, content: bytes | None) -> None:
     if content is None:
         path.unlink(missing_ok=True)
@@ -1169,6 +1371,7 @@ def rebuild(state: AppState) -> bool:
     previous_config = CADDY_CFG.read_bytes() if CADDY_CFG.exists() else None
     previous_caddy_unit = SERVICE_FILE.read_bytes() if SERVICE_FILE.exists() else None
     previous_source_unit = SOURCE_SERVICE_FILE.read_bytes() if SOURCE_SERVICE_FILE.exists() else None
+    previous_relay_unit = RELAY_SERVICE_FILE.read_bytes() if RELAY_SERVICE_FILE.exists() else None
     previous_transparency = False
     if previous_config is not None:
         try:
@@ -1179,6 +1382,8 @@ def rebuild(state: AppState) -> bool:
     # Source routing must exist before Caddy opens a non-local backend socket.
     from hydra.core import source_transparency
     tcp_ports, udp_ports = _source_preservation_ports(backends, quic_owner)
+    relay_routes = _relay_routes(backends, state)
+    udp_relay_routes = _udp_relay_routes(backends, state)
     try:
         if tcp_ports or udp_ports:
             source_transparency.apply(tcp_ports, udp_ports)
@@ -1186,19 +1391,31 @@ def rebuild(state: AppState) -> bool:
         else:
             _remove_source_service()
             source_transparency.clear()
-        if not _install_service(source_required=bool(tcp_ports or udp_ports)):
+        if relay_routes or udp_relay_routes:
+            _install_relay_service(relay_routes, udp_relay_routes)
+        else:
+            _remove_relay_service()
+        if not _install_service(
+            source_required=bool(tcp_ports or udp_ports),
+            relay_required=bool(relay_routes or udp_relay_routes),
+        ):
             raise RuntimeError("cannot install Caddy L4 systemd unit")
     except Exception as exc:
         if upgraded_binary:
             _restore_previous_caddy_binary()
         _restore_unit_file(SERVICE_FILE, previous_caddy_unit)
         _restore_unit_file(SOURCE_SERVICE_FILE, previous_source_unit)
+        _restore_unit_file(RELAY_SERVICE_FILE, previous_relay_unit)
         HOST.run(["systemctl", "daemon-reload"], capture_output=True)
         if not previous_transparency:
             _remove_source_service()
             source_transparency.clear()
         else:
             HOST.run(["systemctl", "restart", SOURCE_SERVICE_NAME], capture_output=True)
+        if previous_relay_unit is None:
+            _remove_relay_service()
+        else:
+            HOST.run(["systemctl", "restart", RELAY_SERVICE_NAME], capture_output=True)
         pending_config.unlink(missing_ok=True)
         print(f"  Caddy source-preservation routing error: {exc}")
         return False
@@ -1232,6 +1449,12 @@ def rebuild(state: AppState) -> bool:
     # 7. Enable and reload/restart service
     HOST.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
     r = HOST.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
+    if r.returncode != 0:
+        # Migration from the shared default Admin API (2019) to the dedicated
+        # endpoint (2021) cannot reload through 2021 until the new config has
+        # started once. A validated config is safe to start; rollback below
+        # still restores the previous artifact if the restart fails.
+        r = HOST.run(["systemctl", "restart", SERVICE_NAME], capture_output=True)
     if r.returncode == 0 and is_active():
         return True
 
@@ -1248,6 +1471,7 @@ def rebuild(state: AppState) -> bool:
     finally:
         _restore_unit_file(SERVICE_FILE, previous_caddy_unit)
         _restore_unit_file(SOURCE_SERVICE_FILE, previous_source_unit)
+        _restore_unit_file(RELAY_SERVICE_FILE, previous_relay_unit)
         HOST.run(["systemctl", "daemon-reload"], capture_output=True)
         if upgraded_binary:
             _restore_previous_caddy_binary()
@@ -1256,6 +1480,10 @@ def rebuild(state: AppState) -> bool:
             source_transparency.clear()
         else:
             HOST.run(["systemctl", "restart", SOURCE_SERVICE_NAME], capture_output=True)
+        if previous_relay_unit is None:
+            _remove_relay_service()
+        else:
+            HOST.run(["systemctl", "restart", RELAY_SERVICE_NAME], capture_output=True)
         if previous_config is not None:
             HOST.run(["systemctl", "restart", SERVICE_NAME], capture_output=True)
     return False
@@ -1278,6 +1506,7 @@ def stop() -> None:
         pass
     try:
         _remove_source_service()
+        _remove_relay_service()
         from hydra.core import source_transparency
         source_transparency.clear()
     except Exception:
@@ -1296,20 +1525,25 @@ def uninstall_haproxy() -> None:
         pass
 
 
-def _install_service(*, source_required: bool = False) -> bool:
+def _install_service(*, source_required: bool = False, relay_required: bool = False) -> bool:
     """Generates the systemd unit file for caddy-l4."""
     source_after = f" {SOURCE_SERVICE_NAME}.service" if source_required else ""
     source_requires = f"Requires={SOURCE_SERVICE_NAME}.service\n" if source_required else ""
+    relay_after = f" {RELAY_SERVICE_NAME}.service" if relay_required else ""
+    relay_requires = f"Requires={RELAY_SERVICE_NAME}.service\n" if relay_required else ""
     unit_content = f"""[Unit]
 Description=Caddy L4 (TLS multiplexer + decoy)
-After=network-online.target sing-box.service{source_after}
+After=network-online.target sing-box.service{source_after}{relay_after}
 Wants=network-online.target
-{source_requires}
+{source_requires}{relay_requires}
 
 [Service]
 Type=notify
 ExecStart={CADDY_BIN} run --config {CADDY_CFG}
-ExecReload=/bin/kill -USR1 $MAINPID
+# Use Caddy's transactional Admin API reload. SIGUSR1 may be ignored after
+# any earlier API-driven config change while kill(1) still reports success,
+# leaving the JSON file and the live configuration silently out of sync.
+ExecReload={CADDY_BIN} reload --config {CADDY_CFG} --address {CADDY_ADMIN_ADDRESS} --force
 Restart=on-failure
 RestartSec=1
 TimeoutStopSec=5

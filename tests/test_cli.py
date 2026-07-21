@@ -59,3 +59,43 @@ def test_restore_dry_run_dispatches(capsys):
         assert cli.main(["restore", "/tmp/backup.tar.gz", "--dry-run"]) == 0
     restore.assert_called_once_with("/tmp/backup.tar.gz", dry_run=True)
     assert '"dry_run": true' in capsys.readouterr().out
+
+
+def test_antidpi_selftest_dispatches(capsys):
+    result = {"ok": True, "archive": "/tmp/antidpi.tar.gz"}
+    with patch.object(cli, "load_state", return_value=AppState()), \
+         patch.object(cli, "_require_root"), \
+         patch("hydra.plugins.antidpi.selftest.run_selftest", return_value=result) as run:
+        assert cli.main(["antidpi", "selftest", "--output", "/tmp/antidpi.tar.gz", "--wait", "0", "--full"]) == 0
+    run.assert_called_once_with(AppState(), "/tmp/antidpi.tar.gz", 0.0, full=True)
+    assert '"archive": "/tmp/antidpi.tar.gz"' in capsys.readouterr().out
+
+
+def test_antidpi_capture_dispatches(capsys):
+    result = {"ok": True, "archive": "/tmp/capture.tar.gz"}
+    with patch.object(cli, "load_state", return_value=AppState()), \
+         patch.object(cli, "_require_root"), \
+         patch("hydra.plugins.antidpi.selftest.capture_external_tests", return_value=result) as capture:
+        assert cli.main([
+            "antidpi", "capture", "--output", "/tmp/capture.tar.gz", "--seconds", "30",
+        ]) == 0
+    capture.assert_called_once_with(AppState(), "/tmp/capture.tar.gz", 30.0)
+
+
+def test_antidpi_sync_reinstalls_and_reports_health(capsys):
+    health = type("Health", (), {
+        "healthy": True,
+        "as_dict": lambda self: {"healthy": True, "checks": {"udp": True}},
+    })()
+    plugin = type("Plugin", (), {
+        "last_error": "",
+        "install": lambda self: True,
+        "healthcheck": lambda self: health,
+    })()
+    with patch.object(cli, "load_state", return_value=AppState()), \
+         patch.object(cli, "_require_root"), \
+         patch("hydra.plugins.antidpi.plugin.AntiDPIPlugin", return_value=plugin):
+        assert cli.main(["antidpi", "sync"]) == 0
+    output = capsys.readouterr().out
+    assert '"ok": true' in output
+    assert '"udp": true' in output

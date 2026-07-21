@@ -33,7 +33,8 @@ class DNSCryptPlugin(BasePlugin):
     )
 
     def install(self) -> bool:
-        if not self._installed():
+        was_installed = self._installed()
+        if not was_installed:
             if HOST.run(["apt-get", "update", "-qq"], timeout=60).returncode != 0:
                 return False
             if HOST.run(
@@ -41,17 +42,44 @@ class DNSCryptPlugin(BasePlugin):
             ).returncode != 0:
                 return False
 
-        self._write_default_config()
+        # Preserve an existing administrator/user configuration.  A freshly
+        # installed distro config is replaced because HYDRA requires port 5300.
+        if not was_installed or not DNSCRYPT_CONF.exists():
+            self._write_default_config()
         service = HOST.run(["systemctl", "enable", "--now", "dnscrypt-proxy"])
         return service.returncode == 0
 
     def uninstall(self) -> bool:
         HOST.systemd("stop", "dnscrypt-proxy")
         HOST.systemd("disable", "dnscrypt-proxy")
-        HOST.run(["apt-get", "remove", "-y", "-qq", "dnscrypt-proxy"], timeout=60)
+        removed = HOST.run(
+            ["apt-get", "remove", "-y", "-qq", "dnscrypt-proxy"], timeout=60,
+        )
+        if removed.returncode != 0:
+            return False
         if DNSCRYPT_CONF.exists():
             DNSCRYPT_CONF.unlink(missing_ok=True)
         return True
+
+    def repair_installation(self, *, enabled: bool) -> bool:
+        """Reinstall the package while retaining HYDRA and user settings."""
+        previous = DNSCRYPT_CONF.read_bytes() if DNSCRYPT_CONF.exists() else None
+        repaired = HOST.run(
+            ["apt-get", "install", "--reinstall", "-y", "-qq", "dnscrypt-proxy"],
+            timeout=60,
+        )
+        if repaired.returncode != 0:
+            if previous is not None:
+                HOST.atomic_write(DNSCRYPT_CONF, previous)
+            return False
+        if previous is not None:
+            HOST.atomic_write(DNSCRYPT_CONF, previous)
+        else:
+            self._write_default_config()
+        action = [
+            "systemctl", "enable" if enabled else "disable", "--now", "dnscrypt-proxy",
+        ]
+        return HOST.run(action).returncode == 0
 
     def snapshot(self, state: AppState):
         return {
@@ -103,9 +131,10 @@ use_syslog = true
         dns_config = {
             "servers": [
                 {
+                    "type": "udp",
                     "tag": "dnscrypt-local",
-                    "address": f"127.0.0.1:{DNSCRYPT_PORT}",
-                    "detour": "direct",
+                    "server": "127.0.0.1",
+                    "server_port": DNSCRYPT_PORT,
                 }
             ],
             "rules": [],
@@ -146,10 +175,14 @@ use_syslog = true
         # Не затираем выбранные пользователем server_names при каждом toggle.
         if not DNSCRYPT_CONF.exists():
             self._write_default_config()
-        HOST.systemd("enable", "dnscrypt-proxy")
-        HOST.systemd("start", "dnscrypt-proxy")
+        enabled = HOST.systemd("enable", "dnscrypt-proxy")
+        started = HOST.systemd("start", "dnscrypt-proxy")
+        if enabled.returncode != 0 or started.returncode != 0:
+            raise RuntimeError("Не удалось включить или запустить dnscrypt-proxy")
 
     def on_disable(self, state: AppState) -> None:
         state.network.dnscrypt_enabled = False
-        HOST.systemd("stop", "dnscrypt-proxy")
-        HOST.systemd("disable", "dnscrypt-proxy")
+        stopped = HOST.systemd("stop", "dnscrypt-proxy")
+        disabled = HOST.systemd("disable", "dnscrypt-proxy")
+        if stopped.returncode != 0 or disabled.returncode != 0:
+            raise RuntimeError("Не удалось остановить или отключить dnscrypt-proxy")

@@ -392,6 +392,9 @@ def _user_links(state: AppState, user: User):
 def main_menu(state: AppState, app: ApplicationService | None = None):
     app = _application(app)
     while True:
+        # A nested menu or background service may have committed a newer
+        # state. Never carry the process-start snapshot into the next action.
+        state = load_state()
         clear()
         print(BANNER)
 
@@ -615,6 +618,9 @@ def _rollback_network_tuning_menu() -> None:
 def menu_protocols(state: AppState, app: ApplicationService | None = None):
     app = _application(app)
     while True:
+        # Protocol lifecycle operations are transactional and may replace the
+        # persisted artifact. Refresh before rendering or opening a submenu.
+        state = load_state()
         clear()
         st = app.protocols.statuses(state)
         all_p = app.protocols.list(PluginCategory.TRANSPORT)
@@ -702,6 +708,10 @@ def menu_plugin(state: AppState, p, app: ApplicationService | None = None):
     if p.meta.name == "honeypot":
         from hydra.plugins.honeypot.manager import menu_honeypot
         menu_honeypot(state, p)
+        return
+    if p.meta.name == "antidpi":
+        from hydra.plugins.antidpi.manager import menu_antidpi
+        menu_antidpi(state, p)
         return
     if p.meta.name == "warp":
         from hydra.plugins.warp.manager import menu_warp
@@ -1408,7 +1418,7 @@ def _user_configs(state: AppState, user: User):
         import qrcode
     except ImportError:
         warn("Библиотека qrcode не установлена, QR-коды не будут отображаться.")
-        info("Установите её командой: pip3 install qrcode")
+        info("Восстановите окружение: /opt/hydra/.venv/bin/python -m pip install -r /opt/hydra/requirements.lock")
         print()
 
     from hydra.plugins import registry
@@ -1666,20 +1676,16 @@ def menu_telegram(state: AppState):
     while True:
         clear()
         tg = state.telegram
-        panel("Telegram", [
+        panel("Telegram Admin Bot", [
             kv("Admin токен:", _ok(bool(tg.admin_token))),
             kv("Admin Chat ID:", tg.admin_chat_id or "—"),
             kv("Admin бот:", f"{_ok(tg.admin_enabled)} {'запущен' if tg.admin_enabled else 'остановлен'}"),
-            kv("Client токен:", _ok(bool(tg.bot_token))),
-            kv("Client бот:", f"{_ok(tg.bot_enabled)} {'запущен' if tg.bot_enabled else 'остановлен'}"),
         ])
         choice = menu(
             [("1", "🔑 Admin-токен", "@BotFather"),
              ("2", "💬 Admin Chat ID", "@userinfobot"),
-             ("3", "🤖 Client-токен", "@BotFather"),
-             ("4", "▶️  Запустить admin-бота", "systemd-сервис hydra-tg-admin"),
-             ("5", "▶️  Запустить client-бота", "systemd-сервис hydra-tg-bot"),
-             ("6", "⏸️  Остановить всех ботов", ""),
+             ("3", "▶️  Запустить Admin-бота", "systemd-сервис hydra-tg-admin"),
+             ("4", "⏸️  Остановить Admin-бота", ""),
              ("0", "↩ Назад", "")],
             "TELEGRAM",
         )
@@ -1688,35 +1694,26 @@ def menu_telegram(state: AppState):
         elif choice == "1":
             t = prompt("Токен admin-бота")
             if t:
-                state.telegram.admin_token = t
+                state.telegram.admin_token = t.strip()
                 save_state(state)
                 success("Сохранён")
             prompt("Нажмите Enter")
         elif choice == "2":
-            c = prompt("Admin Chat ID (число)")
+            c = prompt("Admin Chat ID")
             if c:
-                state.telegram.admin_chat_id = c
+                state.telegram.admin_chat_id = c.strip()
                 save_state(state)
                 success("Сохранён")
             prompt("Нажмите Enter")
         elif choice == "3":
-            t = prompt("Токен клиентского бота")
-            if t:
-                state.telegram.bot_token = t
-                save_state(state)
-                success("Сохранён")
-            prompt("Нажмите Enter")
-        elif choice == "4":
             _install_admin_bot(state)
-        elif choice == "5":
-            _install_client_bot(state)
-        elif choice == "6":
+        elif choice == "4":
             remove_unit("hydra-tg-admin")
             remove_unit("hydra-tg-bot")
             state.telegram.admin_enabled = False
             state.telegram.bot_enabled = False
             save_state(state)
-            success("Боты остановлены")
+            success("Admin-бот остановлен")
             prompt("Нажмите Enter")
 
 
@@ -1725,44 +1722,61 @@ def _install_admin_bot(state: AppState):
         error("Сначала укажите admin-токен (пункт 1)")
         prompt("Нажмите Enter")
         return
-    install_service("hydra-tg-admin", f"""[Unit]
-Description=HYDRA Admin Bot
-After=network.target
-[Service]
-Type=simple
-User=root
-ExecStart=/usr/bin/python3 -c "from hydra.services.telegram.bot import run_admin_bot; run_admin_bot('{state.telegram.admin_token}', '{state.telegram.admin_chat_id}')"
-Restart=always
-RestartSec=10
-[Install]
-WantedBy=multi-user.target
-""")
-    state.telegram.admin_enabled = True
-    save_state(state)
-    success("Admin-бот запущен (hydra-tg-admin)")
-    prompt("Нажмите Enter")
-
-
-def _install_client_bot(state: AppState):
-    if not state.telegram.bot_token:
-        error("Сначала укажите client-токен (пункт 3)")
+    if not state.telegram.admin_chat_id:
+        error("Сначала укажите Admin Chat ID (пункт 2)")
         prompt("Нажмите Enter")
         return
-    install_service("hydra-tg-bot", f"""[Unit]
-Description=HYDRA Client Bot
-After=network.target
+
+    try:
+        from telegram.ext import Application, CallbackQueryHandler  # noqa: F401
+    except ImportError:
+        info("Устанавливаю совместимую версию python-telegram-bot...")
+        installed = HOST.run(
+            [
+                sys.executable, "-m", "pip", "install", "--upgrade", "-q",
+                "python-telegram-bot[job-queue]==22.8",
+            ],
+            timeout=180,
+            text=True,
+        )
+        if installed.returncode != 0:
+            error("Не удалось установить python-telegram-bot 22.8")
+            prompt("Нажмите Enter")
+            return
+
+    project_root = Path(__file__).resolve().parents[2]
+    unit_installed = install_service("hydra-tg-admin", f"""[Unit]
+Description=HYDRA Admin Bot (System Info + Security Alerts)
+Wants=network-online.target
+After=network-online.target
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/bin/python3 -c "from hydra.services.telegram.bot import run_client_bot; run_client_bot('{state.telegram.bot_token}', '{state.telegram.admin_chat_id}')"
+WorkingDirectory={project_root}
+Environment=PYTHONPATH={project_root}
+ExecStart={sys.executable} -m hydra.services.telegram.admin_bot_entrypoint
 Restart=always
 RestartSec=10
 [Install]
 WantedBy=multi-user.target
 """)
-    state.telegram.bot_enabled = True
+    started = HOST.run(
+        ["systemctl", "restart", "hydra-tg-admin.service"],
+        timeout=30,
+        text=True,
+    )
+    active = HOST.run(
+        ["systemctl", "is-active", "--quiet", "hydra-tg-admin.service"],
+        timeout=15,
+    )
+    state.telegram.admin_enabled = bool(
+        unit_installed and started.returncode == 0 and active.returncode == 0
+    )
     save_state(state)
-    success("Client-бот запущен (hydra-tg-bot)")
+    if state.telegram.admin_enabled:
+        success("Admin-бот запущен (hydra-tg-admin)")
+    else:
+        error("Admin-бот не запустился. Проверьте: journalctl -u hydra-tg-admin -n 100")
     prompt("Нажмите Enter")
 
 
@@ -2248,8 +2262,7 @@ def _menu_logs(state: AppState):
             ("A", "🍯 Honeypot events", "file", "/var/log/hydra-honeypot.log"),
             ("B", "📦 Сервер подписок", "journal", "hydra-sub"),
             ("C", "🤖 Telegram Admin Bot", "journal", "hydra-tg-admin"),
-            ("D", "🤖 Telegram Client Bot", "journal", "hydra-tg-bot"),
-            ("E", "🛠 HYDRA install", "file", "/var/log/hydra/install.log"),
+            ("D", "🛠 HYDRA install", "file", "/var/log/hydra/install.log"),
         ]
             
         print(f"  {BOLD}Текущий лимит строк для просмотра:{NC} {GREEN}{lines_count}{NC}\n")
@@ -2496,8 +2509,9 @@ def menu_security(state: AppState):
         p_f2b = get_plugin("fail2ban")
         p_hp = get_plugin("honeypot")
         p_ipb = get_plugin("ipban")
+        p_adpi = get_plugin("antidpi")
         
-        plugins_list = [p for p in [p_f2b, p_hp, p_ipb] if p is not None]
+        plugins_list = [p for p in [p_f2b, p_hp, p_ipb, p_adpi] if p is not None]
 
         for p in plugins_list:
             s = st.get(p.meta.name, {})
@@ -2520,7 +2534,7 @@ def menu_security(state: AppState):
         
         opts += [
             ("-", "", ""),
-            ("A", "✅ Включить всё", "Fail2ban + Honeypot + IPBan"),
+            ("A", "✅ Включить всё", "Fail2ban + Honeypot + IPBan + Anti-DPI"),
             ("B", "❌ Выключить всё", ""),
             ("0", "↩ Назад", "")
         ]
@@ -2598,6 +2612,7 @@ def _menu_amneziawg(state: AppState, p):
     from hydra.core.state import get_protocol
     
     while True:
+        state = load_state()
         clear()
         ps = get_protocol(state, p.meta.name)
         
@@ -2961,6 +2976,9 @@ def _menu_anytls(state: AppState, p):
     from hydra.core.state import get_protocol
     
     while True:
+        # Keep the action label and subsequent save aligned with the state
+        # committed by the preceding enable/disable transaction.
+        state = load_state()
         clear()
         ps = get_protocol(state, p.meta.name)
         

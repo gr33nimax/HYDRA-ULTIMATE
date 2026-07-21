@@ -73,7 +73,10 @@ class AmneziaWGPlugin(BasePlugin):
     def install(self) -> bool:
         """Устанавливает AmneziaWG через wiresock/amneziawg-install (AUTO_INSTALL)."""
         if self._installed():
-            return True
+            ready, detail = self._ensure_kernel_module()
+            if not ready:
+                print(f"  {detail}")
+            return ready
 
         import os
         try:
@@ -98,10 +101,10 @@ class AmneziaWGPlugin(BasePlugin):
                 cwd=str(AWG_INSTALL_DIR), env=env, timeout=900,
             )
 
-            if "amneziawg" not in HOST.run(
-                ["lsmod"], capture_output=True, text=True).stdout:
-                HOST.run(["modprobe", "amneziawg"], capture_output=True)
-
+            ready, detail = self._ensure_kernel_module()
+            if not ready:
+                print(f"  {detail}")
+                return False
             return self._installed()
         except Exception as e:
             print(f"  install error: {e}")
@@ -258,9 +261,13 @@ class AmneziaWGPlugin(BasePlugin):
                 capture_output=True, text=True,
             )
             return r.returncode == 0
-        r = HOST.run(["systemctl", "start", unit], capture_output=True)
+        r = HOST.run(["systemctl", "start", unit], capture_output=True, text=True)
         if r.returncode != 0:
-            r = HOST.run(["awg-quick", "up", interface], capture_output=True)
+            fallback = HOST.run(["awg-quick", "up", interface], capture_output=True, text=True)
+            if fallback.returncode != 0:
+                detail = (fallback.stderr or fallback.stdout or r.stderr or r.stdout or "unknown error").strip()
+                raise RuntimeError(f"failed to start {interface}: {detail}")
+            r = fallback
         return r.returncode == 0
 
     def _apply(self) -> bool:
@@ -344,14 +351,21 @@ class AmneziaWGPlugin(BasePlugin):
     def _network_for_profile(self, state: AppState, conf_path: Path, profile_name: str, default_network: str) -> tuple[str, str, str]:
         ps = state.protocols.get("amneziawg")
         network = None
-        if ps and "profiles" in ps.config and profile_name in ps.config["profiles"]:
-            network = ps.config["profiles"][profile_name].get("network")
-        
-        if not network:
-            if conf_path.exists():
-                m = re.search(r"Address\s*=\s*(\d+)\.(\d+)\.(\d+)\.", conf_path.read_text(encoding="utf-8"))
-                if m:
-                    network = f"{m.group(1)}.{m.group(2)}.{m.group(3)}.0/24"
+        used = self._used_networks(state)
+
+        # An existing interface is authoritative. Silently moving it to a
+        # "free" subnet during a routine apply invalidates every previously
+        # exported client profile. Conflict avoidance belongs to profile
+        # creation, not reconciliation of an installed interface.
+        if conf_path.exists():
+            m = re.search(r"Address\s*=\s*(\d+)\.(\d+)\.(\d+)\.", conf_path.read_text(encoding="utf-8"))
+            if m:
+                network = f"{m.group(1)}.{m.group(2)}.{m.group(3)}.0/24"
+
+        if not network and ps and "profiles" in ps.config and profile_name in ps.config["profiles"]:
+            candidate = ps.config["profiles"][profile_name].get("network")
+            if candidate and self._is_network_free(candidate, used):
+                network = candidate
             
         if not network:
             network = default_network
@@ -397,16 +411,38 @@ class AmneziaWGPlugin(BasePlugin):
         return "10.100.0.0/24"
 
     @staticmethod
-    def _is_network_free(network: str, used: list[str]) -> bool:
-        candidate = ipaddress.ip_network(network, strict=False)
-        return not any(candidate.overlaps(ipaddress.ip_network(u, strict=False)) for u in used)
+    def _is_network_free(network: object, used: list[str]) -> bool:
+        """Return whether a valid CIDR does not overlap known valid networks."""
+        try:
+            candidate = ipaddress.ip_network(str(network), strict=False)
+        except (TypeError, ValueError):
+            return False
+        for raw_network in used:
+            try:
+                occupied = ipaddress.ip_network(str(raw_network), strict=False)
+            except (TypeError, ValueError):
+                # Older plugins reuse the ``network`` key for transport modes
+                # such as "tcp", "quic" and "both". They are not subnets.
+                continue
+            if candidate.overlaps(occupied):
+                return False
+        return True
 
     @staticmethod
     def _used_networks(state: AppState) -> list[str]:
-        used = list(_KNOWN_SUBNETS)
+        candidates: list[object] = list(_KNOWN_SUBNETS)
         for name, p in state.protocols.items():
             if name != "amneziawg" and p.config.get("network"):
-                used.append(p.config["network"])
+                candidates.append(p.config["network"])
+        used: list[str] = []
+        for raw_network in candidates:
+            try:
+                network = ipaddress.ip_network(str(raw_network), strict=False)
+            except (TypeError, ValueError):
+                continue
+            normalized = str(network)
+            if normalized not in used:
+                used.append(normalized)
         return used
 
     @staticmethod
@@ -1016,7 +1052,19 @@ class AmneziaWGPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def status(self) -> PluginStatus:
-        installed = self._installed()
+        from hydra.core.state import load_state
+
+        runtime_installed = self._installed()
+        installed = False
+        enabled = False
+        try:
+            state = load_state()
+            protocol = state.protocols.get("amneziawg")
+            if protocol:
+                installed = bool(protocol.installed and runtime_installed)
+                enabled = bool(protocol.enabled and installed)
+        except Exception:
+            pass
         port = 0
         if installed:
             try:
@@ -1025,8 +1073,8 @@ class AmneziaWGPlugin(BasePlugin):
                 pass
         return PluginStatus(
             installed=installed,
-            enabled=AWG_CONF.exists(),
-            running=installed and (self._is_up() or self._is_up_iface(AWG_INTERFACE_1)),
+            enabled=enabled,
+            running=enabled and (self._is_up() or self._is_up_iface(AWG_INTERFACE_1)),
             port=port,
         )
 
@@ -1130,6 +1178,9 @@ class AmneziaWGPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def on_enable(self, state: AppState) -> None:
+        ready, detail = self._ensure_kernel_module()
+        if not ready:
+            raise RuntimeError(detail)
         self._ensure_ip_forward()
 
         # Hardware tuning при первом включении
@@ -1269,6 +1320,40 @@ class AmneziaWGPlugin(BasePlugin):
     @staticmethod
     def _installed() -> bool:
         return AWG_BIN.exists() or shutil.which("awg") is not None
+
+    @staticmethod
+    def _ensure_kernel_module() -> tuple[bool, str]:
+        """Load the module for the running kernel and explain reboot mismatches."""
+        loaded = HOST.run(["lsmod"], capture_output=True, text=True)
+        if loaded.returncode == 0 and "amneziawg" in loaded.stdout:
+            return True, ""
+
+        result = HOST.run(["modprobe", "amneziawg"], capture_output=True, text=True)
+        if result.returncode == 0:
+            return True, ""
+
+        import platform
+        running_kernel = platform.release()
+        dkms = (
+            HOST.run(["dkms", "status"], capture_output=True, text=True)
+            if HOST.which("dkms") else None
+        )
+        other_kernels = []
+        if dkms is not None and dkms.returncode == 0:
+            for line in dkms.stdout.splitlines():
+                if "amneziawg" in line and ": installed" in line and running_kernel not in line:
+                    parts = [part.strip() for part in line.split(",")]
+                    if len(parts) >= 2:
+                        other_kernels.append(parts[1])
+        if other_kernels:
+            built = ", ".join(sorted(set(other_kernels)))
+            return False, (
+                f"Модуль AmneziaWG собран для ядра {built}, но сейчас запущено {running_kernel}. "
+                "Перезагрузите сервер и повторите включение."
+            )
+
+        error = (result.stderr or result.stdout or "module is unavailable").strip()
+        return False, f"Модуль AmneziaWG недоступен для ядра {running_kernel}: {error}"
 
     def _is_up(self) -> bool:
         import platform

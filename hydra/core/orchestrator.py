@@ -585,6 +585,8 @@ def enable(state: AppState, name: str) -> bool:
             state.security.honeypot_enabled = True
         elif name == "ipban":
             state.security.ipban_enabled = True
+        elif name == "antidpi":
+            state.security.antidpi_enabled = True
         save_state(state)
 
         # Генерируем конфиги для всех существующих пользователей
@@ -600,7 +602,9 @@ def enable(state: AppState, name: str) -> bool:
         raise
 
     if not applied:
+        failure = last_apply_error()
         transaction.rollback(_log_rollback_error)
+        _set_apply_error(failure)
     else:
         transaction.commit()
     return applied
@@ -634,6 +638,8 @@ def disable(state: AppState, name: str) -> bool:
             state.security.honeypot_enabled = False
         elif name == "ipban":
             state.security.ipban_enabled = False
+        elif name == "antidpi":
+            state.security.antidpi_enabled = False
         save_state(state)
         applied = apply_config(state)
     except Exception:

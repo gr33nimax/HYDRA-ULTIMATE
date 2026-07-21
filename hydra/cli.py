@@ -104,6 +104,24 @@ def parser() -> argparse.ArgumentParser:
     apply = commands.add_parser("apply", help="Apply configuration")
     apply.add_argument("--dry-run", action="store_true")
 
+    antidpi = commands.add_parser("antidpi", help="AntiDPI diagnostics")
+    antidpi_commands = antidpi.add_subparsers(dest="antidpi_action", required=True)
+    selftest = antidpi_commands.add_parser("selftest", help="Probe native protocol error logging")
+    selftest.add_argument("--output", default="", help="Diagnostic archive path or destination directory")
+    selftest.add_argument("--wait", type=float, default=2.0, help="Journal collection delay per protocol (0-10 seconds)")
+    selftest.add_argument(
+        "--full", action="store_true",
+        help="Also run temporary native clients with invalid authentication",
+    )
+    capture = antidpi_commands.add_parser(
+        "capture", help="Capture an external invalid-auth test window",
+    )
+    capture.add_argument("--seconds", type=float, default=120.0, help="Capture window (10-600 seconds)")
+    capture.add_argument("--output", default="", help="Diagnostic archive path or destination directory")
+    antidpi_commands.add_parser(
+        "sync", help="Install/update AntiDPI telemetry and restart its collector",
+    )
+
     users = commands.add_parser("user", help="Manage users")
     user_commands = users.add_subparsers(dest="user_action", required=True)
     user_commands.add_parser("list")
@@ -173,6 +191,28 @@ def main(argv: list[str] | None = None) -> int:
                 payload = {"ok": False, "error": detail.message, "error_details": detail.as_dict()}
             _print(payload)
             return 0 if ok else 1
+        elif args.command == "antidpi" and args.antidpi_action == "selftest":
+            _require_root()
+            from hydra.plugins.antidpi.selftest import run_selftest
+            payload = run_selftest(state, args.output or None, args.wait, full=args.full)
+        elif args.command == "antidpi" and args.antidpi_action == "capture":
+            _require_root()
+            from hydra.plugins.antidpi.selftest import capture_external_tests
+            payload = capture_external_tests(state, args.output or None, args.seconds)
+        elif args.command == "antidpi" and args.antidpi_action == "sync":
+            _require_root()
+            from hydra.plugins.antidpi.plugin import AntiDPIPlugin
+            plugin = AntiDPIPlugin()
+            ok = plugin.install()
+            health = plugin.healthcheck()
+            payload = {
+                "ok": bool(ok and health.healthy),
+                "error": "" if ok else plugin.last_error,
+                "health": health.as_dict(),
+            }
+            if not payload["ok"]:
+                _print(payload)
+                return 1
         else:
             payload = _user_command(args, state, app)
         _print(payload)
