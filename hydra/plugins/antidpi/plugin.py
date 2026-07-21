@@ -305,11 +305,23 @@ def normalize_naive_decoy_record(record: dict) -> tuple[str, dict] | None:
         status = 0
     method = str(request.get("method", "GET")).upper()
     user_id = str(request.get("user_id", record.get("user_id", ""))).lower()
+    def auth_event() -> tuple[str, dict] | None:
+        if ip is None:
+            return None
+        event = {"protocol": "naive", "kind": "auth_failure", "source": "caddy-naive"}
+        if ipaddress.ip_address(ip).is_loopback:
+            try:
+                peer_port = int(request.get("remote_port", 0))
+            except (TypeError, ValueError):
+                peer_port = 0
+            if peer_port > 0:
+                event["peer_port"] = peer_port
+        return ip, event
     if user_id.startswith("invalid:") and ip is not None:
-        return ip, {"protocol": "naive", "kind": "auth_failure", "source": "caddy-naive"}
+        return auth_event()
     if method == "CONNECT":
         if status in {401, 407} and ip is not None:
-            return ip, {"protocol": "naive", "kind": "auth_failure", "source": "caddy-naive"}
+            return auth_event()
         return None
     normalized = normalize_decoy_record(record)
     if normalized is not None:
@@ -317,7 +329,7 @@ def normalize_naive_decoy_record(record: dict) -> tuple[str, dict] | None:
         event["source"] = "caddy-naive-decoy"
         return address, event
     if status in {401, 407} and ip is not None:
-        return ip, {"protocol": "naive", "kind": "auth_failure", "source": "caddy-naive"}
+        return auth_event()
     return None
 
 

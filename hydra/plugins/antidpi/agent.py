@@ -265,7 +265,9 @@ def run() -> None:
         while True:
             for tail in tails:
                 for event in tail.read():
-                    _offer_event(events, event)
+                    resolved = _resolve_relay_source(event)
+                    if resolved:
+                        _offer_event(events, resolved)
             while True:
                 try:
                     ip, event = events.get_nowait()

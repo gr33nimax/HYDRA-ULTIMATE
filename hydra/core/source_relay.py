@@ -1,4 +1,4 @@
-"""Exact source attribution relay for Caddy-proxied TCP protocols.
+"""Exact source attribution relay for Caddy-proxied TCP and UDP protocols.
 
 Caddy sends PROXY v2 to this loopback-only relay.  The relay removes the
 header before forwarding bytes to a protocol backend and records the outbound
@@ -23,6 +23,8 @@ MAX_PROXY_PAYLOAD = 512
 MAPPING_TTL = 300.0
 MAX_MAP_BYTES = 8 * 1024 * 1024
 MAX_CONNECTIONS = 2048
+MAX_UDP_FLOWS = 4096
+UDP_IDLE_TIMEOUT = 60.0
 
 
 def _recv_exact(sock: socket.socket, size: int) -> bytes:
@@ -52,6 +54,29 @@ def read_proxy_v2(sock: socket.socket) -> tuple[str, int]:
     if family == 2 and length >= 36:
         return socket.inet_ntop(socket.AF_INET6, payload[:16]), struct.unpack("!H", payload[32:34])[0]
     raise ValueError("unsupported PROXY v2 address family")
+
+
+def parse_proxy_v2_datagram(data: bytes) -> tuple[str, int, bytes]:
+    """Strip one PROXY v2 DGRAM header and return source plus payload."""
+    if len(data) < 16 or data[:12] != PROXY_V2_SIGNATURE or data[12] >> 4 != 2:
+        raise ValueError("missing PROXY v2 datagram header")
+    command = data[12] & 0x0F
+    family = data[13] >> 4
+    transport = data[13] & 0x0F
+    length = struct.unpack("!H", data[14:16])[0]
+    end = 16 + length
+    if command != 1 or transport != 2 or length > MAX_PROXY_PAYLOAD or len(data) < end:
+        raise ValueError("unsupported PROXY v2 datagram")
+    payload = data[16:end]
+    if family == 1 and length >= 12:
+        source_ip = socket.inet_ntop(socket.AF_INET, payload[:4])
+        source_port = struct.unpack("!H", payload[8:10])[0]
+    elif family == 2 and length >= 36:
+        source_ip = socket.inet_ntop(socket.AF_INET6, payload[:16])
+        source_port = struct.unpack("!H", payload[32:34])[0]
+    else:
+        raise ValueError("unsupported PROXY v2 datagram address family")
+    return source_ip, source_port, data[end:]
 
 
 _map_lock = threading.Lock()
@@ -220,20 +245,122 @@ def _serve(listener: socket.socket, protocol: str, backend_port: int) -> None:
         ).start()
 
 
-def run(routes: list[tuple[str, int, int]]) -> None:
+def _udp_backend_reader(listener: socket.socket, backend: socket.socket,
+                        caddy_peer: tuple[str, int], flow: dict,
+                        lock: threading.Lock) -> None:
+    try:
+        while True:
+            payload = backend.recv(65535)
+            if not payload:
+                return
+            listener.sendto(payload, caddy_peer)
+            with lock:
+                flow["updated"] = time.monotonic()
+    except OSError:
+        pass
+
+
+def _open_udp_listener(listen_port: int) -> socket.socket:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        listener.bind(("127.0.0.1", listen_port))
+        listener.settimeout(1.0)
+        return listener
+    except Exception:
+        listener.close()
+        raise
+
+
+def _serve_udp(listener: socket.socket, protocol: str, backend_port: int) -> None:
+    flows: dict[tuple[str, int], dict] = {}
+    lock = threading.Lock()
+    while True:
+        now = time.monotonic()
+        try:
+            datagram, caddy_peer = listener.recvfrom(65535)
+        except socket.timeout:
+            datagram = b""
+            caddy_peer = ("", 0)
+        except OSError:
+            return
+        if datagram and ipaddress.ip_address(caddy_peer[0]).is_loopback:
+            try:
+                source_ip, source_port, payload = parse_proxy_v2_datagram(datagram)
+            except (ValueError, TypeError):
+                payload = b""
+            if payload:
+                with lock:
+                    flow = flows.get(caddy_peer)
+                    if flow and (
+                        flow["source_ip"] != source_ip or flow["source_port"] != source_port
+                    ):
+                        try:
+                            flow["backend"].close()
+                        except OSError:
+                            pass
+                        flows.pop(caddy_peer, None)
+                        flow = None
+                    if flow is None and len(flows) < MAX_UDP_FLOWS:
+                        backend = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                        backend.connect(("127.0.0.1", backend_port))
+                        relay_port = backend.getsockname()[1]
+                        flow = {
+                            "backend": backend, "source_ip": source_ip,
+                            "source_port": source_port, "updated": now,
+                        }
+                        flows[caddy_peer] = flow
+                        record_mapping(
+                            protocol, backend_port, relay_port, source_ip, source_port,
+                        )
+                        threading.Thread(
+                            target=_udp_backend_reader,
+                            args=(listener, backend, caddy_peer, flow, lock), daemon=True,
+                        ).start()
+                    if flow is not None:
+                        flow["updated"] = now
+                        try:
+                            flow["backend"].send(payload)
+                        except OSError:
+                            flow["updated"] = 0
+        with lock:
+            expired = [
+                peer for peer, flow in flows.items()
+                if now - float(flow.get("updated", 0)) > UDP_IDLE_TIMEOUT
+            ]
+            for peer in expired:
+                try:
+                    flows[peer]["backend"].close()
+                except OSError:
+                    pass
+                flows.pop(peer, None)
+
+
+def run(routes: list[tuple[str, int, int]],
+        udp_routes: list[tuple[str, int, int]] | None = None) -> None:
+    udp_routes = list(udp_routes or [])
     MAP_FILE.parent.mkdir(parents=True, exist_ok=True)
     MAP_FILE.write_text("", encoding="utf-8")
     listeners = []
     try:
         listeners = [_open_listener(route[1]) for route in routes]
+        udp_listeners = [_open_udp_listener(route[1]) for route in udp_routes]
     except Exception:
         for listener in listeners:
+            listener.close()
+        for listener in locals().get("udp_listeners", []):
             listener.close()
         raise
     threads = []
     for listener, (protocol, _listen_port, backend_port) in zip(listeners, routes):
         thread = threading.Thread(
             target=_serve, args=(listener, protocol, backend_port), daemon=True,
+        )
+        thread.start()
+        threads.append(thread)
+    for listener, (protocol, _listen_port, backend_port) in zip(udp_listeners, udp_routes):
+        thread = threading.Thread(
+            target=_serve_udp, args=(listener, protocol, backend_port), daemon=True,
         )
         thread.start()
         threads.append(thread)
@@ -244,14 +371,19 @@ def run(routes: list[tuple[str, int, int]]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--route", action="append", default=[], metavar="PROTO:LISTEN:BACKEND")
+    parser.add_argument("--udp-route", action="append", default=[], metavar="PROTO:LISTEN:BACKEND")
     args = parser.parse_args(argv)
     routes = []
     for raw in args.route:
         protocol, listen, backend = raw.split(":", 2)
         routes.append((protocol, int(listen), int(backend)))
-    if not routes:
+    udp_routes = []
+    for raw in args.udp_route:
+        protocol, listen, backend = raw.split(":", 2)
+        udp_routes.append((protocol, int(listen), int(backend)))
+    if not routes and not udp_routes:
         parser.error("at least one --route is required")
-    run(routes)
+    run(routes, udp_routes)
     return 0
 
 

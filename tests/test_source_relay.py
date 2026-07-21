@@ -5,7 +5,8 @@ import threading
 from unittest.mock import patch
 
 from hydra.core.source_relay import (
-    PROXY_V2_SIGNATURE, _handle, read_proxy_v2, resolve_mapping,
+    PROXY_V2_SIGNATURE, _handle, _serve_udp, parse_proxy_v2_datagram,
+    read_proxy_v2, resolve_mapping,
     resolve_recent_unique_source,
 )
 from hydra.plugins.antidpi.agent import (
@@ -23,6 +24,12 @@ def _header(source: str, destination: str, source_port: int, destination_port: i
     return PROXY_V2_SIGNATURE + bytes((0x21, family_byte)) + struct.pack("!H", len(packed)) + packed
 
 
+def _udp_header(source: str, destination: str, source_port: int, destination_port: int) -> bytes:
+    header = bytearray(_header(source, destination, source_port, destination_port))
+    header[13] = (header[13] & 0xF0) | 0x02
+    return bytes(header)
+
+
 def test_proxy_v2_ipv4_and_ipv6_are_parsed():
     for source, destination in (("198.51.100.8", "192.0.2.1"), ("2001:db8::8", "2001:db8::1")):
         left, right = socket.socketpair()
@@ -32,6 +39,11 @@ def test_proxy_v2_ipv4_and_ipv6_are_parsed():
         finally:
             left.close()
             right.close()
+
+
+def test_proxy_v2_udp_datagram_is_stripped():
+    packet = _udp_header("198.51.100.8", "192.0.2.1", 43123, 443) + b"quic-payload"
+    assert parse_proxy_v2_datagram(packet) == ("198.51.100.8", 43123, b"quic-payload")
 
 
 def test_exact_mapping_resolves_parallel_connections(tmp_path):
@@ -104,3 +116,31 @@ def test_relay_strips_header_and_records_backend_peer_port(tmp_path):
         caddy_side.close()
         worker.join(timeout=2)
     backend_listener.close()
+
+
+def test_udp_relay_strips_each_header_and_preserves_bidirectional_flow(tmp_path):
+    backend = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    backend.bind(("127.0.0.1", 0))
+    relay = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    relay.bind(("127.0.0.1", 0))
+    relay.settimeout(0.05)
+    caddy = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    caddy.bind(("127.0.0.1", 0))
+    caddy.settimeout(2)
+    mapping = tmp_path / "mappings.jsonl"
+    with patch("hydra.core.source_relay.MAP_FILE", mapping):
+        worker = threading.Thread(
+            target=_serve_udp,
+            args=(relay, "naive", backend.getsockname()[1]), daemon=True,
+        )
+        worker.start()
+        packet = _udp_header("198.51.100.42", "192.0.2.1", 45123, 443) + b"quic"
+        caddy.sendto(packet, relay.getsockname())
+        payload, relay_backend_peer = backend.recvfrom(64)
+        assert payload == b"quic"
+        assert resolve_mapping("naive", relay_backend_peer[1], path=mapping) == "198.51.100.42"
+        backend.sendto(b"reply", relay_backend_peer)
+        assert caddy.recv(64) == b"reply"
+    relay.close()
+    backend.close()
+    caddy.close()

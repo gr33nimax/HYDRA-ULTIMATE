@@ -19,6 +19,7 @@ from hydra.core.sni_router import (
     audit_routes,
     _INTERNAL_PORTS,
     _install_service,
+    _udp_relay_routes,
     CADDY_ADMIN_ADDRESS,
 )
 from hydra.core.state import AppState, PluginState
@@ -409,6 +410,32 @@ def test_naive_quic_remains_caddy_udp_owner():
 
     upstream = cfg["apps"]["layer4"]["servers"]["quic_mux"]["routes"][0]["handle"][0]["upstreams"][0]
     assert upstream["dial"] == ["udp/127.0.0.1:10443"]
+
+
+def test_antidpi_naive_quic_uses_proxy_v2_udp_relay():
+    state = _state(naive_enabled=True, naive_network="quic")
+    state.security.antidpi_enabled = True
+    backends = [{
+        "name": "naive", "domain": "naive.com", "port": 10443,
+        "cert_file": "", "key_file": "", "network_mode": "quic",
+    }]
+    proxy = _generate_config(backends, state)["apps"]["layer4"]["servers"]["quic_mux"]["routes"][0]["handle"][0]
+    assert proxy["upstreams"][0]["dial"] == ["udp/127.0.0.1:21443"]
+    assert proxy["proxy_protocol"] == "v2"
+    assert _udp_relay_routes(backends, state) == [("naive", 21443, 10443)]
+
+
+def test_antidpi_trusttunnel_quic_uses_proxy_v2_udp_relay():
+    state = _state(trusttunnel_enabled=True, trusttunnel_transport="quic")
+    state.security.antidpi_enabled = True
+    backends = [{
+        "name": "trusttunnel", "domain": "trusttunnel.com", "port": 20445,
+        "cert_file": "cert.pem", "key_file": "key.pem", "network_mode": "quic",
+    }]
+    proxy = _generate_config(backends, state)["apps"]["layer4"]["servers"]["quic_mux"]["routes"][0]["handle"][0]
+    assert proxy["upstreams"][0]["dial"] == ["udp/127.0.0.1:21445"]
+    assert proxy["proxy_protocol"] == "v2"
+    assert _udp_relay_routes(backends, state) == [("trusttunnel", 21445, 20445)]
 
 
 def test_quic_owner_rejects_naive_and_trusttunnel_conflict():

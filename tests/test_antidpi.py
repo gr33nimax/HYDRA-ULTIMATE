@@ -99,6 +99,23 @@ def test_naive_real_invalid_user_marker_overrides_redirect_status():
     )
 
 
+def test_naive_quic_auth_failure_keeps_udp_relay_source_port():
+    record = {
+        "status": 308,
+        "request": {
+            "remote_ip": "127.0.0.1", "remote_port": "32145",
+            "method": "CONNECT", "user_id": "invalid:tester",
+        },
+    }
+    assert normalize_naive_decoy_record(record) == (
+        "127.0.0.1",
+        {
+            "protocol": "naive", "kind": "auth_failure",
+            "source": "caddy-naive", "peer_port": 32145,
+        },
+    )
+
+
 def test_trusttunnel_dedicated_log_recognizes_failed_connect():
     record = {
         "status": 502,

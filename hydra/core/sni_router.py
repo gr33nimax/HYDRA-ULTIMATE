@@ -54,6 +54,11 @@ _SOURCE_RELAY_PORTS = {
     "shadowtls": 21446,
 }
 
+_UDP_SOURCE_RELAY_PORTS = {
+    "naive": 21443,
+    "trusttunnel": 21445,
+}
+
 _SOURCE_PRESERVED_BACKENDS = frozenset({"naive", "anytls", "trusttunnel", "shadowtls"})
 # Disabled after production smoke tests showed that non-local loopback source
 # binding breaks Caddy backend return traffic on supported server kernels.
@@ -916,11 +921,19 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
         )
         if not quic_backend:
             raise ValueError(f"QUIC backend {quic_owner} отсутствует в Caddy config")
+        udp_relay_enabled = (
+            _antidpi_enabled(state) and quic_backend["name"] in _UDP_SOURCE_RELAY_PORTS
+        )
+        quic_target_port = (
+            _UDP_SOURCE_RELAY_PORTS[quic_backend["name"]]
+            if udp_relay_enabled else quic_backend["port"]
+        )
         quic_routes = [{
             "handle": [
                 _proxy_handler(
-                    f"udp/127.0.0.1:{quic_backend['port']}",
+                    f"udp/127.0.0.1:{quic_target_port}",
                     preserve_source=quic_backend["name"] in _SOURCE_PRESERVED_BACKENDS,
+                    proxy_protocol=udp_relay_enabled,
                 )
             ]
         }]
@@ -1197,12 +1210,31 @@ def _relay_routes(backends: list[dict], state: AppState) -> list[tuple[str, int,
     ]
 
 
-def _install_relay_service(routes: list[tuple[str, int, int]]) -> None:
+def _udp_relay_routes(backends: list[dict], state: AppState) -> list[tuple[str, int, int]]:
+    if not _antidpi_enabled(state):
+        return []
+    owner = get_quic_owner(state)
+    if owner not in _UDP_SOURCE_RELAY_PORTS:
+        return []
+    backend = next((item for item in backends if item["name"] == owner), None)
+    if backend is None:
+        return []
+    return [(owner, _UDP_SOURCE_RELAY_PORTS[owner], int(backend["port"]))]
+
+
+def _install_relay_service(routes: list[tuple[str, int, int]],
+                           udp_routes: list[tuple[str, int, int]] | None = None) -> None:
+    udp_routes = list(udp_routes or [])
     project_root = Path(__file__).resolve().parent.parent.parent
     arguments = " ".join(
         f"--route {protocol}:{listen}:{backend}"
         for protocol, listen, backend in routes
     )
+    udp_arguments = " ".join(
+        f"--udp-route {protocol}:{listen}:{backend}"
+        for protocol, listen, backend in udp_routes
+    )
+    arguments = " ".join(value for value in (arguments, udp_arguments) if value)
     unit = f"""[Unit]
 Description=Hydra exact source attribution relay
 After=network-online.target sing-box.service
@@ -1326,6 +1358,7 @@ def rebuild(state: AppState) -> bool:
     from hydra.core import source_transparency
     tcp_ports, udp_ports = _source_preservation_ports(backends, quic_owner)
     relay_routes = _relay_routes(backends, state)
+    udp_relay_routes = _udp_relay_routes(backends, state)
     try:
         if tcp_ports or udp_ports:
             source_transparency.apply(tcp_ports, udp_ports)
@@ -1333,13 +1366,13 @@ def rebuild(state: AppState) -> bool:
         else:
             _remove_source_service()
             source_transparency.clear()
-        if relay_routes:
-            _install_relay_service(relay_routes)
+        if relay_routes or udp_relay_routes:
+            _install_relay_service(relay_routes, udp_relay_routes)
         else:
             _remove_relay_service()
         if not _install_service(
             source_required=bool(tcp_ports or udp_ports),
-            relay_required=bool(relay_routes),
+            relay_required=bool(relay_routes or udp_relay_routes),
         ):
             raise RuntimeError("cannot install Caddy L4 systemd unit")
     except Exception as exc:
