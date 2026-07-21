@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import queue
 import subprocess
 import threading
@@ -21,6 +22,28 @@ from hydra.plugins.antidpi.plugin import (
 
 Normalized = tuple[str, dict]
 NAIVE_ACCESS_LOG = Path("/var/log/caddy-naive/access.log")
+
+
+def _resolve_relay_source(event: Normalized | None) -> Normalized | None:
+    if not event:
+        return event
+    ip, details = event
+    try:
+        if not ipaddress.ip_address(ip).is_loopback:
+            return event
+        peer_port = int(details.get("peer_port", 0))
+    except (TypeError, ValueError):
+        return event
+    if peer_port <= 0:
+        return event
+    from hydra.core.source_relay import resolve_mapping
+    source = resolve_mapping(str(details.get("protocol", "")), peer_port)
+    if not source:
+        return event
+    resolved = dict(details)
+    resolved["source"] = "caddy-source-relay"
+    resolved["relay_peer_port"] = peer_port
+    return source, resolved
 
 
 def _offer_event(out: queue.Queue[Normalized], event: Normalized) -> None:
@@ -159,6 +182,7 @@ def _journal_worker(out: queue.Queue[Normalized], stop: threading.Event) -> None
                 event = parse_protocol_line(record.get("_SYSTEMD_UNIT", ""), record.get("MESSAGE", ""))
                 if not event:
                     event = normalize_tls_auth_failure(record)
+                event = _resolve_relay_source(event)
                 if event:
                     _offer_event(out, event)
         except (OSError, RuntimeError):

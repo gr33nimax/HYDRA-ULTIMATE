@@ -668,11 +668,13 @@ class AntiDPIPlugin(BasePlugin):
                 delivered = False
                 try:
                     from hydra.services.telegram.bot import format_security_event, send_admin_notification
+                    from hydra.services.security_intel import notification_fields
                     kind = str(event.get("kind", event.get("reason", "anomaly")))
                     proto = str(event.get("protocol", "L4"))
                     delivered = bool(send_admin_notification(
                         format_security_event("AntiDPI", "ALERT", [
                             ("IP", address),
+                            *notification_fields(address),
                             ("Event", kind),
                             ("Protocol", proto),
                             ("Source", source),
@@ -719,10 +721,12 @@ class AntiDPIPlugin(BasePlugin):
                         delivered = False
                         try:
                             from hydra.services.telegram.bot import format_security_event, send_admin_notification
+                            from hydra.services.security_intel import notification_fields
                             dur_str = f"{duration // 60}m" if duration < 3600 else (f"{duration // 3600}h" if duration < 86400 else f"{duration // 86400}d")
                             delivered = bool(send_admin_notification(
                                 format_security_event("AntiDPI", "BAN", [
                                     ("IP", address),
+                                    *notification_fields(address),
                                     ("Event", event.get("kind", "anomaly")),
                                     ("Protocol", event.get("protocol", "L4")),
                                     ("Source", source),

@@ -56,7 +56,7 @@ def test_singbox_journal_byte_array_is_decoded_and_anytls_auth_is_normalized():
     assert decode_log_message(encoded) == line
     assert parse_protocol_line("sing-box.service", encoded) == (
         "127.0.0.1",
-        {"protocol": "anytls", "kind": "auth_failure", "source": "journal"},
+        {"protocol": "anytls", "kind": "auth_failure", "source": "journal", "peer_port": 14902},
     )
 
 

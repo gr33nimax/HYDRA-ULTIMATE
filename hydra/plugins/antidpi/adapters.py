@@ -78,22 +78,23 @@ def _remote_ip(value: object) -> str | None:
 
 
 
-def _extract_ip(text: str) -> str | None:
+def _extract_endpoint(text: str) -> tuple[str | None, int | None]:
     candidates = []
-    candidates.extend(re.findall(r"\[([0-9a-fA-F:]+)\](?::\d+)?", text))
-    candidates.extend(re.findall(r"(?<![\d.])((?:\d{1,3}\.){3}\d{1,3})(?::\d+)?", text))
-    candidates.extend(token.strip("[](),;") for token in text.split() if ":" in token)
-    for candidate in candidates:
+    candidates.extend((ip, port) for ip, port in re.findall(r"\[([0-9a-fA-F:]+)\](?::(\d+))?", text))
+    candidates.extend((ip, port) for ip, port in re.findall(
+        r"(?<![\d.])((?:\d{1,3}\.){3}\d{1,3})(?::(\d+))?", text,
+    ))
+    for candidate, raw_port in candidates:
         value = str(candidate)
         try:
-            return ipaddress.ip_address(value).compressed
+            return ipaddress.ip_address(value).compressed, int(raw_port) if raw_port else None
         except ValueError:
-            if value.count(":") == 1:
-                try:
-                    return ipaddress.ip_address(value.rsplit(":", 1)[0]).compressed
-                except ValueError:
-                    pass
-    return None
+            continue
+    return None, None
+
+
+def _extract_ip(text: str) -> str | None:
+    return _extract_endpoint(text)[0]
 
 def parse_protocol_line(service: str, line: object) -> tuple[str, dict] | None:
     """Parse one journal line into a normalized event, if it is evidence."""
@@ -104,10 +105,16 @@ def parse_protocol_line(service: str, line: object) -> tuple[str, dict] | None:
             continue
         if not re.search(pattern, text, re.IGNORECASE):
             continue
-        ip = _extract_ip(text)
+        ip, peer_port = _extract_endpoint(text)
         if ip is None:
             continue
         event = {"protocol": owner, "kind": kind, "source": "journal"}
+        if (
+            peer_port is not None
+            and owner in {"anytls", "shadowtls"}
+            and ipaddress.ip_address(ip).is_loopback
+        ):
+            event["peer_port"] = peer_port
         if kind == "handshake_failure":
             event["handshake_ok"] = False
         return ip, event

@@ -174,6 +174,26 @@ def test_antidpi_bans_are_enforced_only_by_dynamic_firewall():
     assert all("remote_ip" not in matcher for route in routes for matcher in route.get("match", []))
 
 
+def test_antidpi_routes_native_backends_through_exact_source_relay():
+    state = _state(anytls_enabled=True)
+    state.security.antidpi_enabled = True
+    state.protocols["shadowtls"] = PluginState(
+        enabled=True, config={"domain": "shadow.example"},
+    )
+    backends = [
+        {"name": "anytls", "domain": "anytls.com", "port": 20444, "cert_file": "cert", "key_file": "key"},
+        {"name": "shadowtls", "domain": "shadow.example", "port": 20446, "cert_file": "", "key_file": ""},
+    ]
+    routes = _generate_config(backends, state)["apps"]["layer4"]["servers"]["tls_mux"]["routes"]
+    anytls = next(route for route in routes if route.get("match", [{}])[0].get("tls", {}).get("sni") == ["anytls.com"])
+    anytls_proxy = anytls["handle"][1]["routes"][0]["handle"][0]
+    shadow = next(route for route in routes if route.get("match", [{}])[0].get("tls", {}).get("sni") == ["shadow.example"])
+    assert anytls_proxy["upstreams"][0]["dial"] == ["127.0.0.1:21444"]
+    assert anytls_proxy["proxy_protocol"] == "v2"
+    assert shadow["handle"][0]["upstreams"][0]["dial"] == ["127.0.0.1:21446"]
+    assert shadow["handle"][0]["proxy_protocol"] == "v2"
+
+
 def test_caddy_service_uses_transactional_cli_reload(tmp_path):
     service = tmp_path / "caddy-l4.service"
     binary = tmp_path / "caddy-l4"

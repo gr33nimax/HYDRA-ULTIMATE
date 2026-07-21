@@ -26,6 +26,8 @@ SERVICE_FILE = Path("/etc/systemd/system/caddy-l4.service")
 CADDY_ADMIN_ADDRESS = "127.0.0.1:2021"
 SOURCE_SERVICE_NAME = "hydra-caddy-source"
 SOURCE_SERVICE_FILE = Path(f"/etc/systemd/system/{SOURCE_SERVICE_NAME}.service")
+RELAY_SERVICE_NAME = "hydra-source-relay"
+RELAY_SERVICE_FILE = Path(f"/etc/systemd/system/{RELAY_SERVICE_NAME}.service")
 FRONTEND_PORT = 443
 CADDY_L4_VERSION = "42db5690dea199f930a6f08005fe2e4aab10dcc9"
 GO_VERSION = "1.25.1"
@@ -43,6 +45,11 @@ _DECOY_HTTP_PORTS = {
     "anytls": 10801,
     "trusttunnel": 10802,
     "hysteria2": 10803,
+}
+
+_SOURCE_RELAY_PORTS = {
+    "anytls": 21444,
+    "shadowtls": 21446,
 }
 
 _SOURCE_PRESERVED_BACKENDS = frozenset({"naive", "anytls", "trusttunnel", "shadowtls"})
@@ -776,6 +783,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
 
     # 3. Layer 4 app (TLS termination and routing)
     l4_routes = []
+    relay_enabled = bool(getattr(state.security, "antidpi_enabled", False))
     for b in backends:
         name = b["name"]
         domain = b["domain"]
@@ -794,7 +802,10 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
             l4_routes.append({
                 "match": [{"tls": {"sni": [domain]}}],
                 "handle": [
-                    _proxy_handler(f"127.0.0.1:{port}", preserve_source=True)
+                    _proxy_handler(
+                        f"127.0.0.1:{_SOURCE_RELAY_PORTS['shadowtls'] if relay_enabled else port}",
+                        proxy_protocol=relay_enabled,
+                    )
                 ]
             })
         elif name == "anytls":
@@ -811,7 +822,10 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                             {
                                 "match": [{"not": [{"http": []}]}],
                                 "handle": [
-                                    _proxy_handler(f"127.0.0.1:{port}", preserve_source=True)
+                                    _proxy_handler(
+                                        f"127.0.0.1:{_SOURCE_RELAY_PORTS['anytls'] if relay_enabled else port}",
+                                        proxy_protocol=relay_enabled,
+                                    )
                                 ]
                             },
                             {
@@ -1149,6 +1163,66 @@ def _remove_source_service() -> None:
     HOST.run(["systemctl", "daemon-reload"], capture_output=True)
 
 
+def _relay_routes(backends: list[dict], state: AppState) -> list[tuple[str, int, int]]:
+    if not bool(getattr(state.security, "antidpi_enabled", False)):
+        return []
+    return [
+        (backend["name"], _SOURCE_RELAY_PORTS[backend["name"]], int(backend["port"]))
+        for backend in backends
+        if backend["name"] in _SOURCE_RELAY_PORTS
+    ]
+
+
+def _install_relay_service(routes: list[tuple[str, int, int]]) -> None:
+    project_root = Path(__file__).resolve().parent.parent.parent
+    arguments = " ".join(
+        f"--route {protocol}:{listen}:{backend}"
+        for protocol, listen, backend in routes
+    )
+    unit = f"""[Unit]
+Description=Hydra exact source attribution relay
+After=network-online.target sing-box.service
+Wants=network-online.target
+Before={SERVICE_NAME}.service
+
+[Service]
+Type=simple
+WorkingDirectory={project_root}
+Environment=PYTHONPATH={project_root}
+ExecStart=/usr/bin/python3 -m hydra.core.source_relay {arguments}
+Restart=on-failure
+RestartSec=1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RuntimeDirectory=hydra-source-relay
+RuntimeDirectoryMode=0750
+ReadWritePaths=/run/hydra-source-relay
+
+[Install]
+WantedBy=multi-user.target
+"""
+    RELAY_SERVICE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    RELAY_SERVICE_FILE.write_text(unit, encoding="utf-8")
+    HOST.run(["systemctl", "daemon-reload"], capture_output=True)
+    result = HOST.run(["systemctl", "enable", RELAY_SERVICE_NAME], capture_output=True)
+    if result.returncode == 0:
+        # Restart is intentional: route arguments may change after a protocol
+        # is enabled, disabled, or moved to another internal port.
+        result = HOST.run(["systemctl", "restart", RELAY_SERVICE_NAME], capture_output=True)
+    if result.returncode != 0:
+        raise RuntimeError("cannot start exact source attribution relay")
+
+
+def _remove_relay_service() -> None:
+    HOST.run(
+        ["systemctl", "disable", "--now", RELAY_SERVICE_NAME], capture_output=True,
+    )
+    RELAY_SERVICE_FILE.unlink(missing_ok=True)
+    HOST.run(["systemctl", "daemon-reload"], capture_output=True)
+
+
 def _restore_unit_file(path: Path, content: bytes | None) -> None:
     if content is None:
         path.unlink(missing_ok=True)
@@ -1216,6 +1290,7 @@ def rebuild(state: AppState) -> bool:
     previous_config = CADDY_CFG.read_bytes() if CADDY_CFG.exists() else None
     previous_caddy_unit = SERVICE_FILE.read_bytes() if SERVICE_FILE.exists() else None
     previous_source_unit = SOURCE_SERVICE_FILE.read_bytes() if SOURCE_SERVICE_FILE.exists() else None
+    previous_relay_unit = RELAY_SERVICE_FILE.read_bytes() if RELAY_SERVICE_FILE.exists() else None
     previous_transparency = False
     if previous_config is not None:
         try:
@@ -1226,6 +1301,7 @@ def rebuild(state: AppState) -> bool:
     # Source routing must exist before Caddy opens a non-local backend socket.
     from hydra.core import source_transparency
     tcp_ports, udp_ports = _source_preservation_ports(backends, quic_owner)
+    relay_routes = _relay_routes(backends, state)
     try:
         if tcp_ports or udp_ports:
             source_transparency.apply(tcp_ports, udp_ports)
@@ -1233,19 +1309,31 @@ def rebuild(state: AppState) -> bool:
         else:
             _remove_source_service()
             source_transparency.clear()
-        if not _install_service(source_required=bool(tcp_ports or udp_ports)):
+        if relay_routes:
+            _install_relay_service(relay_routes)
+        else:
+            _remove_relay_service()
+        if not _install_service(
+            source_required=bool(tcp_ports or udp_ports),
+            relay_required=bool(relay_routes),
+        ):
             raise RuntimeError("cannot install Caddy L4 systemd unit")
     except Exception as exc:
         if upgraded_binary:
             _restore_previous_caddy_binary()
         _restore_unit_file(SERVICE_FILE, previous_caddy_unit)
         _restore_unit_file(SOURCE_SERVICE_FILE, previous_source_unit)
+        _restore_unit_file(RELAY_SERVICE_FILE, previous_relay_unit)
         HOST.run(["systemctl", "daemon-reload"], capture_output=True)
         if not previous_transparency:
             _remove_source_service()
             source_transparency.clear()
         else:
             HOST.run(["systemctl", "restart", SOURCE_SERVICE_NAME], capture_output=True)
+        if previous_relay_unit is None:
+            _remove_relay_service()
+        else:
+            HOST.run(["systemctl", "restart", RELAY_SERVICE_NAME], capture_output=True)
         pending_config.unlink(missing_ok=True)
         print(f"  Caddy source-preservation routing error: {exc}")
         return False
@@ -1301,6 +1389,7 @@ def rebuild(state: AppState) -> bool:
     finally:
         _restore_unit_file(SERVICE_FILE, previous_caddy_unit)
         _restore_unit_file(SOURCE_SERVICE_FILE, previous_source_unit)
+        _restore_unit_file(RELAY_SERVICE_FILE, previous_relay_unit)
         HOST.run(["systemctl", "daemon-reload"], capture_output=True)
         if upgraded_binary:
             _restore_previous_caddy_binary()
@@ -1309,6 +1398,10 @@ def rebuild(state: AppState) -> bool:
             source_transparency.clear()
         else:
             HOST.run(["systemctl", "restart", SOURCE_SERVICE_NAME], capture_output=True)
+        if previous_relay_unit is None:
+            _remove_relay_service()
+        else:
+            HOST.run(["systemctl", "restart", RELAY_SERVICE_NAME], capture_output=True)
         if previous_config is not None:
             HOST.run(["systemctl", "restart", SERVICE_NAME], capture_output=True)
     return False
@@ -1331,6 +1424,7 @@ def stop() -> None:
         pass
     try:
         _remove_source_service()
+        _remove_relay_service()
         from hydra.core import source_transparency
         source_transparency.clear()
     except Exception:
@@ -1349,15 +1443,17 @@ def uninstall_haproxy() -> None:
         pass
 
 
-def _install_service(*, source_required: bool = False) -> bool:
+def _install_service(*, source_required: bool = False, relay_required: bool = False) -> bool:
     """Generates the systemd unit file for caddy-l4."""
     source_after = f" {SOURCE_SERVICE_NAME}.service" if source_required else ""
     source_requires = f"Requires={SOURCE_SERVICE_NAME}.service\n" if source_required else ""
+    relay_after = f" {RELAY_SERVICE_NAME}.service" if relay_required else ""
+    relay_requires = f"Requires={RELAY_SERVICE_NAME}.service\n" if relay_required else ""
     unit_content = f"""[Unit]
 Description=Caddy L4 (TLS multiplexer + decoy)
-After=network-online.target sing-box.service{source_after}
+After=network-online.target sing-box.service{source_after}{relay_after}
 Wants=network-online.target
-{source_requires}
+{source_requires}{relay_requires}
 
 [Service]
 Type=notify

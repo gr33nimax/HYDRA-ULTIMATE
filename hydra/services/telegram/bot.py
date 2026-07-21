@@ -350,9 +350,12 @@ def _process_fail2ban_log_line(line: str) -> None:
         action = match.group("action")
         ip = match.group("ip")
 
-        msg = format_security_event(
-            "Fail2ban", action, [("IP", ip), ("Jail", jail)],
-        )
+        fields = [("IP", ip)]
+        if action == "Ban":
+            from hydra.services.security_intel import notification_fields
+            fields.extend(notification_fields(ip))
+        fields.append(("Jail", jail))
+        msg = format_security_event("Fail2ban", action, fields)
         category = "fail2ban" if action == "Ban" else "fail2ban_unban"
         send_admin_notification(msg, category=category)
 
@@ -589,9 +592,11 @@ def _process_honeypot_log_line(line: str) -> None:
         trap_port = HoneypotPlugin()._load_state().get("port", "—")
     except Exception:
         trap_port = "—"
+    from hydra.services.security_intel import notification_fields
     send_admin_notification(
         format_security_event("Honeypot", "BAN", [
             ("IP", address),
+            *notification_fields(address),
             ("Port", f"{trap_port}/TCP"),
             ("Backend", match.group("backend")),
             ("Timestamp", match.group("when")),
