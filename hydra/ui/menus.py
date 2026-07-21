@@ -392,6 +392,9 @@ def _user_links(state: AppState, user: User):
 def main_menu(state: AppState, app: ApplicationService | None = None):
     app = _application(app)
     while True:
+        # A nested menu or background service may have committed a newer
+        # state. Never carry the process-start snapshot into the next action.
+        state = load_state()
         clear()
         print(BANNER)
 
@@ -615,6 +618,9 @@ def _rollback_network_tuning_menu() -> None:
 def menu_protocols(state: AppState, app: ApplicationService | None = None):
     app = _application(app)
     while True:
+        # Protocol lifecycle operations are transactional and may replace the
+        # persisted artifact. Refresh before rendering or opening a submenu.
+        state = load_state()
         clear()
         st = app.protocols.statuses(state)
         all_p = app.protocols.list(PluginCategory.TRANSPORT)
@@ -2969,6 +2975,9 @@ def _menu_anytls(state: AppState, p):
     from hydra.core.state import get_protocol
     
     while True:
+        # Keep the action label and subsequent save aligned with the state
+        # committed by the preceding enable/disable transaction.
+        state = load_state()
         clear()
         ps = get_protocol(state, p.meta.name)
         
