@@ -113,6 +113,13 @@ def _decoy_listener_wrappers() -> list[dict]:
         "fallback_policy": "require",
     }]
 
+
+def _antidpi_enabled(state: AppState) -> bool:
+    """Accept both current and legacy persisted AntiDPI enablement flags."""
+    security_enabled = bool(getattr(state.security, "antidpi_enabled", False))
+    protocol = state.protocols.get("antidpi")
+    return security_enabled or bool(protocol and protocol.enabled)
+
 def _hash_password_caddy(password: str) -> str:
     """Uses Caddy's built-in command to generate a bcrypt password hash."""
     if not CADDY_BIN.exists():
@@ -783,7 +790,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
 
     # 3. Layer 4 app (TLS termination and routing)
     l4_routes = []
-    relay_enabled = bool(getattr(state.security, "antidpi_enabled", False))
+    relay_enabled = _antidpi_enabled(state)
     for b in backends:
         name = b["name"]
         domain = b["domain"]
@@ -1164,7 +1171,7 @@ def _remove_source_service() -> None:
 
 
 def _relay_routes(backends: list[dict], state: AppState) -> list[tuple[str, int, int]]:
-    if not bool(getattr(state.security, "antidpi_enabled", False)):
+    if not _antidpi_enabled(state):
         return []
     return [
         (backend["name"], _SOURCE_RELAY_PORTS[backend["name"]], int(backend["port"]))

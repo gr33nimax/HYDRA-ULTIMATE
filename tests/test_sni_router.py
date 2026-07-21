@@ -194,6 +194,20 @@ def test_antidpi_routes_native_backends_through_exact_source_relay():
     assert shadow["handle"][0]["proxy_protocol"] == "v2"
 
 
+def test_legacy_antidpi_protocol_flag_also_enables_source_relay():
+    state = _state(anytls_enabled=True)
+    state.protocols["antidpi"] = PluginState(enabled=True)
+    backend = {
+        "name": "anytls", "domain": "anytls.com", "port": 20444,
+        "cert_file": "cert", "key_file": "key",
+    }
+    routes = _generate_config([backend], state)["apps"]["layer4"]["servers"]["tls_mux"]["routes"]
+    anytls = next(route for route in routes if route.get("match"))
+    proxy = anytls["handle"][1]["routes"][0]["handle"][0]
+    assert proxy["upstreams"][0]["dial"] == ["127.0.0.1:21444"]
+    assert proxy["proxy_protocol"] == "v2"
+
+
 def test_caddy_service_uses_transactional_cli_reload(tmp_path):
     service = tmp_path / "caddy-l4.service"
     binary = tmp_path / "caddy-l4"
