@@ -75,6 +75,10 @@ def test_targets_cover_enabled_protocol_shapes():
     assert selftest._targets(state, "amneziawg") == [selftest.Target("udp", 51830)]
 
 
+def test_mieru_journal_is_collected_from_sing_box_unit():
+    assert selftest.JOURNAL_UNITS["mieru"] == ("sing-box",)
+
+
 def test_naive_targets_use_global_domain_and_transport_mode():
     state = AppState(
         protocols={"naive": PluginState(enabled=True, config={"network": "both"})},

@@ -39,7 +39,8 @@ JOURNAL_UNITS = {
     "trusttunnel": ("sing-box",),
     "shadowtls": ("sing-box",),
     "hysteria2": ("sing-box", "hysteria2"),
-    "mieru": ("sing-box", "mieru"),
+    # Mieru is a sing-box-extended inbound, not a standalone systemd unit.
+    "mieru": ("sing-box",),
     "naive": ("caddy-naive", "caddy-l4"),
     "snell": ("sing-box", "snell"),
     "telemt": ("telemt",),
