@@ -21,6 +21,10 @@ from hydra.core.sni_router import (
     _install_service,
     _udp_relay_routes,
     CADDY_ADMIN_ADDRESS,
+    CADDY_BUILD_TIMEOUT,
+    GO_RELEASES_URL,
+    _official_go_digest,
+    _run_caddy_build,
 )
 from hydra.core.state import AppState, PluginState
 
@@ -50,6 +54,34 @@ def _state(naive_enabled=False, anytls_enabled=False, trusttunnel_enabled=False,
         },
     )
     return s
+
+
+def test_pinned_go_checksum_uses_complete_release_catalog():
+    response = MagicMock()
+    response.__enter__.return_value.read.return_value = json.dumps([{
+        "version": "go1.25.1",
+        "files": [{
+            "filename": "go1.25.1.linux-amd64.tar.gz",
+            "sha256": "a" * 64,
+        }],
+    }]).encode()
+
+    with patch("hydra.core.sni_router.urllib.request.urlopen", return_value=response) as urlopen:
+        digest = _official_go_digest("go1.25.1.linux-amd64.tar.gz")
+
+    assert digest == "a" * 64
+    request = urlopen.call_args.args[0]
+    assert request.full_url == GO_RELEASES_URL
+    assert "include=all" in request.full_url
+
+
+def test_xcaddy_build_allows_empty_module_cache():
+    result = MagicMock(returncode=0)
+    with patch("hydra.core.sni_router.HOST.run", return_value=result) as run:
+        assert _run_caddy_build(["xcaddy", "build"], {"GOPATH": "/tmp/go"}) is result
+
+    assert run.call_args.kwargs["timeout"] == CADDY_BUILD_TIMEOUT
+    assert CADDY_BUILD_TIMEOUT >= 600
 
 
 def test_needs_mux_single_plugin():

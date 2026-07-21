@@ -32,6 +32,8 @@ RELAY_SERVICE_FILE = Path(f"/etc/systemd/system/{RELAY_SERVICE_NAME}.service")
 FRONTEND_PORT = 443
 CADDY_L4_VERSION = "42db5690dea199f930a6f08005fe2e4aab10dcc9"
 GO_VERSION = "1.25.1"
+GO_RELEASES_URL = "https://go.dev/dl/?mode=json&include=all"
+CADDY_BUILD_TIMEOUT = 900
 
 _INTERNAL_PORTS = {
     "naive": 10443,       # Caddy HTTP app (forward_proxy + file_server)
@@ -316,6 +318,21 @@ def is_installed() -> bool:
     return CADDY_BIN.exists() or shutil.which("caddy-l4") is not None
 
 
+def _official_go_digest(go_filename: str) -> str | None:
+    """Return the official checksum for a pinned, possibly older Go release."""
+    try:
+        request = urllib.request.Request(GO_RELEASES_URL, headers={"User-Agent": "HYDRA"})
+        with urllib.request.urlopen(request, timeout=15) as response:
+            releases = json.loads(response.read())
+        for release in releases:
+            for file_info in release.get("files", []):
+                if file_info.get("filename") == go_filename:
+                    return file_info.get("sha256")
+    except (OSError, ValueError, TypeError):
+        pass
+    return None
+
+
 def _ensure_modern_go() -> bool:
     """Ensures a Go compiler version compatible with pinned Caddy L4.
 
@@ -349,20 +366,7 @@ def _ensure_modern_go() -> bool:
     go_url = f"https://go.dev/dl/{go_filename}"
 
     from hydra.utils.downloader import download
-    go_digest = None
-    try:
-        request = urllib.request.Request("https://go.dev/dl/?mode=json", headers={"User-Agent": "HYDRA"})
-        with urllib.request.urlopen(request, timeout=15) as response:
-            releases = json.loads(response.read())
-        for release in releases:
-            for file_info in release.get("files", []):
-                if file_info.get("filename") == go_filename:
-                    go_digest = file_info.get("sha256")
-                    break
-            if go_digest:
-                break
-    except (OSError, ValueError, TypeError):
-        go_digest = None
+    go_digest = _official_go_digest(go_filename)
     if go_digest and download(go_url, go_tar, sha256=go_digest):
         extract_root = Path(tempfile.mkdtemp(prefix="hydra-go-", dir="/tmp"))
         current_go = Path("/usr/local/go")
@@ -397,6 +401,21 @@ def _ensure_modern_go() -> bool:
             go_tar.unlink(missing_ok=True)
             shutil.rmtree(extract_root, ignore_errors=True)
     return False
+
+
+def _run_caddy_build(args: list[str], env: dict[str, str]):
+    """Run an xcaddy build with enough time for an empty module cache."""
+    try:
+        return HOST.run(
+            args,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=CADDY_BUILD_TIMEOUT,
+        )
+    except Exception as exc:
+        print(f"  caddy-l4 build failed: {exc}")
+        return None
 
 
 def install(state: AppState | None = None, *, force: bool = False) -> bool:
@@ -473,7 +492,9 @@ def install(state: AppState | None = None, *, force: bool = False) -> bool:
     
     build_args += ["--output", str(pending_binary)]
     
-    r = HOST.run(build_args, capture_output=True, text=True, env=env)
+    r = _run_caddy_build(build_args, env)
+    if r is None:
+        return False
 
     if r.returncode != 0 and need_naive_fp:
         # Fallback: попробовать без naive-форка
@@ -484,16 +505,20 @@ def install(state: AppState | None = None, *, force: bool = False) -> bool:
             "--with", "github.com/caddyserver/forwardproxy@caddy2",
             "--output", str(pending_binary)
         ]
-        r = HOST.run(build_args_fallback, capture_output=True, text=True, env=env)
+        r = _run_caddy_build(build_args_fallback, env)
+        if r is None:
+            return False
 
     if r.returncode != 0 and need_naive_fp:
         # Fallback 2: вообще без forwardproxy
-        r = HOST.run([
+        r = _run_caddy_build([
             xcaddy_bin, "build",
             "--with", f"github.com/mholt/caddy-l4@{CADDY_L4_VERSION}",
             "--with", f"github.com/mholt/caddy-l4/modules/l4close@{CADDY_L4_VERSION}",
             "--output", str(pending_binary)
-        ], capture_output=True, text=True, env=env)
+        ], env)
+        if r is None:
+            return False
 
     if r.returncode != 0:
         print(f"  [Ошибка build caddy-l4] Код возврата: {r.returncode}")
