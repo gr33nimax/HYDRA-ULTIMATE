@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from hydra.core.host import HOST
-from hydra.core.sni_router import DECOY_LOG
+from hydra.core.sni_router import DECOY_LOG, TRUSTTUNNEL_LOG
 from hydra.plugins.antidpi.adapters import parse_kernel_scan_line, parse_protocol_line, normalize_tls_auth_failure
 from hydra.plugins.antidpi.plugin import (
     LOG_FILE,
@@ -18,6 +18,7 @@ from hydra.plugins.antidpi.plugin import (
     normalize_caddy_record,
     normalize_decoy_record,
     normalize_naive_decoy_record,
+    normalize_trusttunnel_record,
 )
 
 Normalized = tuple[str, dict]
@@ -235,6 +236,7 @@ def run() -> None:
         JsonTail(LOG_FILE, (normalize_caddy_record, normalize_tls_auth_failure)),
         JsonTail(DECOY_LOG, (normalize_decoy_record,)),
         JsonTail(NAIVE_ACCESS_LOG, (normalize_naive_decoy_record,), create=False),
+        JsonTail(TRUSTTUNNEL_LOG, (normalize_trusttunnel_record,)),
     )
     try:
         while True:

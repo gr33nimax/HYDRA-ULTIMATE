@@ -18,7 +18,8 @@ PATTERNS: tuple[tuple[str, str, str], ...] = (
     (
         "shadowtls",
         r"inbound/trojan\[shadowtls-trojan-in\].*"
-        r"(?:authentication failed|invalid password|unknown user|unauthorized)",
+        r"(?:authentication failed|invalid password|unknown user|unauthorized|"
+        r"bad request: fallback disabled)",
         "auth_failure",
     ),
     (

@@ -21,6 +21,7 @@ CADDY_CFG = Path("/etc/caddy-l4/config.json")
 CADDY_CFG_DIR = Path("/etc/caddy-l4")
 CADDY_LOG_DIR = Path("/var/log/caddy-l4")
 DECOY_LOG = CADDY_LOG_DIR / "decoy-access.log"
+TRUSTTUNNEL_LOG = CADDY_LOG_DIR / "trusttunnel-access.log"
 SERVICE_NAME = "caddy-l4"
 SERVICE_FILE = Path("/etc/systemd/system/caddy-l4.service")
 CADDY_ADMIN_ADDRESS = "127.0.0.1:2021"
@@ -769,6 +770,14 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                 },
                 "include": ["layer4"],
                 "level": "INFO"
+            },
+            "trusttunnel": {
+                "writer": {
+                    "output": "file",
+                    "filename": str(TRUSTTUNNEL_LOG)
+                },
+                "include": ["http.log.access.trusttunnel"],
+                "level": "INFO"
             }
         }
     }
@@ -992,6 +1001,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                             "transport": {
                                 "protocol": "http",
                                 "versions": ["2"],
+                                "response_header_timeout": "5s",
                                 "tls": {
                                     "insecure_skip_verify": True
                                 }
@@ -1007,7 +1017,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                             },
                             "handle_response": [
                                 {
-                                    "match": {"status_code": [502, 503]},
+                                    "match": {"status_code": [502, 503, 504]},
                                     "routes": [
                                         {
                                             "handle": [
@@ -1036,7 +1046,7 @@ def _generate_config(backends: list[dict], state: AppState) -> dict:
                 ]
             },
             "logs": {
-                "logger_names": {tt_backend["domain"]: "decoy"}
+                "logger_names": {tt_backend["domain"]: "trusttunnel"}
             }
         }
 

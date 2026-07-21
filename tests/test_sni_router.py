@@ -283,6 +283,23 @@ def test_hysteria2_has_browser_https_decoy_route():
     }
 
 
+def test_trusttunnel_auth_proxy_has_bounded_response_and_dedicated_log():
+    state = _state(trusttunnel_enabled=True)
+    backend = {
+        "name": "trusttunnel", "domain": "trusttunnel.com", "port": 20445,
+        "cert_file": "cert.pem", "key_file": "key.pem", "network_mode": "tcp",
+    }
+    config = _generate_config([backend], state)
+    server = config["apps"]["http"]["servers"]["trusttunnel_decoy"]
+    proxy = server["routes"][0]["handle"][0]
+    assert proxy["transport"]["response_header_timeout"] == "5s"
+    assert proxy["handle_response"][0]["match"]["status_code"] == [502, 503, 504]
+    assert server["logs"]["logger_names"] == {"trusttunnel.com": "trusttunnel"}
+    assert config["logging"]["logs"]["trusttunnel"]["include"] == [
+        "http.log.access.trusttunnel",
+    ]
+
+
 def test_rebuild_starts_caddy():
     """rebuild() generates config and restarts/reloads caddy-l4."""
     s = _state(naive_enabled=True, anytls_enabled=True)

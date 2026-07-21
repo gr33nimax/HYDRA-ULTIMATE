@@ -19,7 +19,7 @@ from typing import Callable
 
 from hydra import __version__
 from hydra.core.host import HOST
-from hydra.core.sni_router import DECOY_LOG, get_effective_port
+from hydra.core.sni_router import DECOY_LOG, TRUSTTUNNEL_LOG, get_effective_port
 from hydra.core.state import AppState
 from hydra.plugins.antidpi.adapters import decode_log_message, parse_protocol_line
 from hydra.plugins.antidpi.agent import NAIVE_ACCESS_LOG
@@ -44,7 +44,10 @@ JOURNAL_UNITS = {
     "telemt": ("telemt",),
     "wdtt": ("wdtt",),
 }
-LOG_PATHS = (DECOY_LOG, NAIVE_ACCESS_LOG, Path("/var/log/caddy-l4/antidpi.jsonl"))
+LOG_PATHS = (
+    DECOY_LOG, TRUSTTUNNEL_LOG, NAIVE_ACCESS_LOG,
+    Path("/var/log/caddy-l4/antidpi.jsonl"),
+)
 _PAYLOADS = (
     b"HYDRA-ANTIDPI-SELFTEST\r\n",
     b"GET /__hydra_antidpi_selftest__ HTTP/1.1\r\nHost: invalid.local\r\nConnection: close\r\n\r\n",

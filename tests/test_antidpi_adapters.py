@@ -122,3 +122,10 @@ def test_shadowtls_detoured_trojan_auth_failure_keeps_relay_endpoint():
             "source": "journal", "peer_port": 32145,
         },
     )
+    bad_request = parse_protocol_line(
+        "sing-box.service",
+        "inbound/trojan[shadowtls-trojan-in]: process connection from "
+        "127.0.0.1:32146: bad request: fallback disabled",
+    )
+    assert bad_request[1]["kind"] == "auth_failure"
+    assert bad_request[1]["peer_port"] == 32146

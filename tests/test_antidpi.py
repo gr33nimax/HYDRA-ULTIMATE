@@ -11,6 +11,7 @@ from hydra.plugins.antidpi.plugin import (
     normalize_caddy_record,
     normalize_decoy_record,
     normalize_naive_decoy_record,
+    normalize_trusttunnel_record,
     score_event,
 )
 
@@ -75,6 +76,37 @@ def test_naive_decoy_ignores_legitimate_connect_but_detects_scanner_path():
     assert normalize_naive_decoy_record(probe) == (
         "203.0.113.10",
         {"protocol": "https", "kind": "active_decoy_probe", "source": "caddy-naive-decoy"},
+    )
+
+
+def test_naive_real_invalid_user_marker_overrides_redirect_status():
+    record = {
+        "status": 308,
+        "request": {
+            "remote_ip": "203.0.113.20", "method": "CONNECT",
+            "user_id": "invalid:tester", "uri": "cp.cloudflare.com:80",
+        },
+    }
+    assert normalize_naive_decoy_record(record) == (
+        "203.0.113.20",
+        {"protocol": "naive", "kind": "auth_failure", "source": "caddy-naive"},
+    )
+
+
+def test_trusttunnel_dedicated_log_recognizes_failed_connect():
+    record = {
+        "status": 502,
+        "request": {
+            "remote_ip": "203.0.113.21", "method": "CONNECT",
+            "uri": "example.com:443",
+        },
+    }
+    assert normalize_trusttunnel_record(record) == (
+        "203.0.113.21",
+        {
+            "protocol": "trusttunnel", "kind": "auth_failure",
+            "source": "caddy-trusttunnel",
+        },
     )
 
 
