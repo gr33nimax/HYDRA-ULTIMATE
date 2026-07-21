@@ -4,7 +4,7 @@
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Установка:
-#   curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash
 #
 # Что делает:
 #   1. Проверяет root, ОС (Ubuntu/Debian), Python 3.10+
@@ -194,8 +194,8 @@ fi
 step "[4/5] Загрузка HYDRA"
 INSTALL_DIR="/opt/hydra"
 REPO_URL="https://github.com/gr33nimax/HYDRA-ULTIMATE"
-BRANCH="main"
-HYDRA_REF="${HYDRA_REF:-$BRANCH}"
+DEFAULT_BRANCH="dev"
+HYDRA_REF="${HYDRA_REF:-$DEFAULT_BRANCH}"
 
 if [[ -d "${INSTALL_DIR}/.git" ]]; then
     info "Обновление репозитория..."
@@ -211,29 +211,27 @@ if [[ -d "${INSTALL_DIR}/.git" ]]; then
     ok "Репозиторий обновлён"
 elif [[ -d "$INSTALL_DIR" ]]; then
     info "Установка без git — принудительное обновление..."
-    ARCHIVE="${REPO_URL}/archive/refs/heads/${BRANCH}.tar.gz"
+    ARCHIVE="${REPO_URL}/archive/${HYDRA_REF}.tar.gz"
     UPDATE_TMP=$(mktemp -d /tmp/hydra-update.XXXXXX)
     HYDRA_BACKUP_DIR=$(mktemp -d /tmp/hydra-previous.XXXXXX)
     mv "$INSTALL_DIR" "$HYDRA_BACKUP_DIR/old"
     curl -fsSL --connect-timeout 30 --retry 3 -o "$UPDATE_TMP/hydra.tar.gz" "$ARCHIVE"
-    tar -xzf "$UPDATE_TMP/hydra.tar.gz" -C "$UPDATE_TMP"
     mkdir -p "$INSTALL_DIR"
-    cp -a "$UPDATE_TMP/HYDRA-ULTIMATE-${BRANCH}/." "$INSTALL_DIR/"
+    tar -xzf "$UPDATE_TMP/hydra.tar.gz" -C "$INSTALL_DIR" --strip-components=1
     rm -rf "$UPDATE_TMP"
     ok "Файлы обновлены"
 else
     info "Клонирование репозитория..."
     PARENT_TMP=$(mktemp -d /tmp/hydra-clone.XXXXXX)
-    if git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_URL" "$PARENT_TMP/repo"; then
+    if git clone --quiet --depth 1 --branch "$HYDRA_REF" "$REPO_URL" "$PARENT_TMP/repo"; then
         mkdir -p "$INSTALL_DIR"
         cp -a "$PARENT_TMP/repo/." "$INSTALL_DIR/"
     else
         warn "git clone не удался — загружаю архив..."
-        ARCHIVE="${REPO_URL}/archive/refs/heads/${BRANCH}.tar.gz"
+        ARCHIVE="${REPO_URL}/archive/${HYDRA_REF}.tar.gz"
         curl -fsSL --connect-timeout 30 --retry 3 -o "$PARENT_TMP/hydra.tar.gz" "$ARCHIVE"
-        tar -xzf "$PARENT_TMP/hydra.tar.gz" -C "$PARENT_TMP"
         mkdir -p "$INSTALL_DIR"
-        cp -a "$PARENT_TMP/HYDRA-ULTIMATE-${BRANCH}/." "$INSTALL_DIR/"
+        tar -xzf "$PARENT_TMP/hydra.tar.gz" -C "$INSTALL_DIR" --strip-components=1
     fi
     rm -rf "$PARENT_TMP"
     ok "Загружено в $INSTALL_DIR"

@@ -1,0 +1,25 @@
+"""Regression checks for the public one-command installer."""
+from pathlib import Path
+
+
+ROOT = Path(__file__).parent.parent
+BOOTSTRAP = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+README = (ROOT / "README.md").read_text(encoding="utf-8")
+
+
+def test_bootstrap_download_and_install_default_to_dev():
+    assert "HYDRA-ULTIMATE/dev/bootstrap.sh" in BOOTSTRAP
+    assert 'DEFAULT_BRANCH="dev"' in BOOTSTRAP
+    assert 'HYDRA_REF="${HYDRA_REF:-$DEFAULT_BRANCH}"' in BOOTSTRAP
+    assert 'BRANCH="main"' not in BOOTSTRAP
+
+
+def test_every_fresh_install_path_uses_selected_ref():
+    assert 'git clone --quiet --depth 1 --branch "$HYDRA_REF"' in BOOTSTRAP
+    assert BOOTSTRAP.count('ARCHIVE="${REPO_URL}/archive/${HYDRA_REF}.tar.gz"') == 2
+    assert BOOTSTRAP.count("--strip-components=1") == 2
+
+
+def test_readme_one_command_installs_dev():
+    assert "HYDRA-ULTIMATE/dev/bootstrap.sh" in README
+    assert "git clone -b dev" in README
