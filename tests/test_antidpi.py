@@ -306,6 +306,11 @@ def test_ban_notifications_are_throttled_and_delivery_is_counted(tmp_path):
         data = plugin._load_state()
 
     assert notify.call_count == 1
+    message = notify.call_args.args[0]
+    assert "AntiDPI · BAN" in message
+    assert "198.51.100.40" in message
+    assert "заблокировал источник" not in message
+    assert "Эффект" not in message
     assert data["notification_stats"]["delivered"] == 1
     assert data["suppressed_ban_notifications"] == 1
 

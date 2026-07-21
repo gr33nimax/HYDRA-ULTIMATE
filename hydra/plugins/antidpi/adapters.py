@@ -14,13 +14,19 @@ PATTERNS: tuple[tuple[str, str, str], ...] = (
     ("sing-box", r"(?:handshake failed|invalid handshake|protocol error)", "handshake_failure"),
     ("anytls", r"(?:authentication failed|invalid password|unknown user password|unauthorized|auth error)", "auth_failure"),
     ("anytls", r"(?:process connection.*?EOF: fallback disabled)", "invalid_first_packet"),
-    ("trusttunnel", r"(?:authentication failed|invalid token|unauthorized|auth error)", "auth_failure"),
-    ("shadowtls", r"(?:handshake failed|invalid client hello|unexpected)", "malformed_tls"),
-    ("hysteria2", r"(?:handshake failed|invalid packet|QUIC)", "invalid_first_packet"),
-    ("mieru", r"(?:handshake failed|authentication failed|invalid)", "auth_failure"),
-    ("snell", r"(?:handshake failed|invalid)", "handshake_failure"),
+    ("trusttunnel", r"(?:authentication failed|authorization failed|invalid token|unauthorized|auth error)", "auth_failure"),
+    (
+        "shadowtls",
+        r"(?:handshake failed|invalid client hello|read client handshake: unexpected EOF|"
+        r"extract server name: tls: handshake message .* exceeds maximum)",
+        "malformed_tls",
+    ),
+    ("hysteria2", r"(?:handshake failed|invalid packet|authentication failed|failed to parse QUIC)", "invalid_first_packet"),
+    ("mieru", r"(?:handshake failed|authentication failed|invalid credentials)", "auth_failure"),
+    ("snell", r"(?:process connection .*: malformed HTTP request)", "invalid_first_packet"),
+    ("snell", r"(?:handshake failed|invalid client handshake)", "handshake_failure"),
     ("telemt", r"(?:handshake failed|invalid)", "handshake_failure"),
-    ("naive", r"(?:authentication failed|invalid|malformed|protocol error)", "auth_failure"),
+    ("naive", r"(?:authentication failed|invalid credentials|malformed request|protocol error)", "auth_failure"),
     ("wdtt", r"(?:invalid handshake|handshake failed|authentication failed|auth failed|invalid packet)", "handshake_failure"),
 )
 

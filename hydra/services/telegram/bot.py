@@ -99,6 +99,18 @@ def send_admin_notification(
         return False
 
 
+def format_security_event(component: str, action: str,
+                          fields: list[tuple[str, object]]) -> str:
+    """Render a compact and consistent technical security notification."""
+    title = f"<b>{html.escape(component)} · {html.escape(action.upper())}</b>"
+    rows = [
+        f"<b>{html.escape(label)}:</b> <code>{html.escape(str(value))}</code>"
+        for label, value in fields
+        if value not in (None, "")
+    ]
+    return "\n".join((title, *rows))
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  Утилиты сбора данных и статусов
 # ═════════════════════════════════════════════════════════════════════════════
@@ -334,22 +346,13 @@ def unban_ip_everywhere(ip: str) -> str:
 def _process_fail2ban_log_line(line: str) -> None:
     match = re.search(r"NOTICE\s+\[(?P<jail>[^\]]+)\]\s+(?P<action>Ban|Unban)\s+(?P<ip>\S+)", line)
     if match:
-        jail = html.escape(match.group("jail"))
+        jail = match.group("jail")
         action = match.group("action")
-        ip = html.escape(match.group("ip"))
+        ip = match.group("ip")
 
-        if action == "Ban":
-            msg = (
-                f"🚨 <b>Fail2ban BAN</b>\n"
-                f"<b>Jail:</b> <code>{jail}</code>\n"
-                f"<b>IP:</b> <code>{ip}</code>"
-            )
-        else:
-            msg = (
-                f"✅ <b>Fail2ban UNBAN</b>\n"
-                f"<b>Jail:</b> <code>{jail}</code>\n"
-                f"<b>IP:</b> <code>{ip}</code>"
-            )
+        msg = format_security_event(
+            "Fail2ban", action, [("IP", ip), ("Jail", jail)],
+        )
         category = "fail2ban" if action == "Ban" else "fail2ban_unban"
         send_admin_notification(msg, category=category)
 
@@ -587,12 +590,12 @@ def _process_honeypot_log_line(line: str) -> None:
     except Exception:
         trap_port = "—"
     send_admin_notification(
-        "🍯 <b>Honeypot поймал подключение</b>\n\n"
-        f"<b>IP:</b> <code>{html.escape(address)}</code>\n"
-        f"<b>Порт ловушки:</b> <code>{html.escape(str(trap_port))}/TCP</code>\n"
-        f"<b>Время:</b> <code>{html.escape(match.group('when'))}</code>\n"
-        f"<b>Firewall:</b> <code>{html.escape(match.group('backend'))}</code>\n"
-        "<b>Действие:</b> подтверждённая блокировка на всей VPS",
+        format_security_event("Honeypot", "BAN", [
+            ("IP", address),
+            ("Port", f"{trap_port}/TCP"),
+            ("Backend", match.group("backend")),
+            ("Timestamp", match.group("when")),
+        ]),
         category="honeypot",
     )
 

@@ -8,7 +8,6 @@ malformed packet never causes a ban.
 # audit: allow-generated-runtime-subprocess
 from __future__ import annotations
 
-import html
 import ipaddress
 import json
 import os
@@ -656,18 +655,18 @@ class AntiDPIPlugin(BasePlugin):
                 entry["last_alert_at"] = timestamp
                 delivered = False
                 try:
-                    from hydra.services.telegram.bot import send_admin_notification
-                    kind = html.escape(str(event.get("kind", event.get("reason", "anomaly"))))
-                    proto = html.escape(str(event.get("protocol", "L4")))
-                    sig_str = html.escape(", ".join(signals))
+                    from hydra.services.telegram.bot import format_security_event, send_admin_notification
+                    kind = str(event.get("kind", event.get("reason", "anomaly")))
+                    proto = str(event.get("protocol", "L4"))
                     delivered = bool(send_admin_notification(
-                        f"⚠️ <b>AntiDPI: подозрительная активность</b>\n\n"
-                        f"<b>IP:</b> <code>{address}</code>\n"
-                        f"<b>Детект:</b> <code>{kind}</code>\n"
-                        f"<b>Протокол/источник:</b> <code>{proto} / {html.escape(source)}</code>\n"
-                        f"<b>Признаки:</b> <code>{sig_str}</code>\n"
-                        f"<b>Риск:</b> <code>{entry['score']:.1f} / {BAN_THRESHOLD}</code>\n"
-                        "<b>Действие:</b> наблюдение продолжается, блокировки пока нет",
+                        format_security_event("AntiDPI", "ALERT", [
+                            ("IP", address),
+                            ("Event", kind),
+                            ("Protocol", proto),
+                            ("Source", source),
+                            ("Signals", ", ".join(signals)),
+                            ("Score", f"{entry['score']:.1f}/{BAN_THRESHOLD}"),
+                        ]),
                         category="antidpi",
                     ))
                 except Exception:
@@ -707,18 +706,19 @@ class AntiDPIPlugin(BasePlugin):
                         data["last_ban_notification_at"] = timestamp
                         delivered = False
                         try:
-                            from hydra.services.telegram.bot import send_admin_notification
-                            sig_str = html.escape(", ".join(str(value) for value in entry["signals"]))
+                            from hydra.services.telegram.bot import format_security_event, send_admin_notification
                             dur_str = f"{duration // 60}m" if duration < 3600 else (f"{duration // 3600}h" if duration < 86400 else f"{duration // 86400}d")
                             delivered = bool(send_admin_notification(
-                                f"🛑 <b>AntiDPI заблокировал источник</b>\n\n"
-                                f"<b>IP:</b> <code>{address}</code>\n"
-                                f"<b>Детект:</b> <code>{html.escape(str(event.get('kind', 'anomaly')))}</code>\n"
-                                f"<b>Протокол/источник:</b> <code>{html.escape(str(event.get('protocol', 'L4')))} / {html.escape(source)}</code>\n"
-                                f"<b>Признаки:</b> <code>{sig_str}</code>\n"
-                                f"<b>Риск:</b> <code>{entry['score']:.1f} / {BAN_THRESHOLD}</code>\n"
-                                f"<b>Срок:</b> <code>{dur_str}</code>, нарушение #{offense_count}\n"
-                                "<b>Эффект:</b> заблокированы все входящие подключения к VPS",
+                                format_security_event("AntiDPI", "BAN", [
+                                    ("IP", address),
+                                    ("Event", event.get("kind", "anomaly")),
+                                    ("Protocol", event.get("protocol", "L4")),
+                                    ("Source", source),
+                                    ("Signals", ", ".join(str(value) for value in entry["signals"])),
+                                    ("Score", f"{entry['score']:.1f}/{BAN_THRESHOLD}"),
+                                    ("TTL", dur_str),
+                                    ("Offense", offense_count),
+                                ]),
                                 category="antidpi",
                             ))
                         except Exception:

@@ -109,6 +109,10 @@ def parser() -> argparse.ArgumentParser:
     selftest = antidpi_commands.add_parser("selftest", help="Probe native protocol error logging")
     selftest.add_argument("--output", default="", help="Diagnostic archive path or destination directory")
     selftest.add_argument("--wait", type=float, default=2.0, help="Journal collection delay per protocol (0-10 seconds)")
+    selftest.add_argument(
+        "--full", action="store_true",
+        help="Also run temporary native clients with invalid authentication",
+    )
 
     users = commands.add_parser("user", help="Manage users")
     user_commands = users.add_subparsers(dest="user_action", required=True)
@@ -182,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "antidpi" and args.antidpi_action == "selftest":
             _require_root()
             from hydra.plugins.antidpi.selftest import run_selftest
-            payload = run_selftest(state, args.output or None, args.wait)
+            payload = run_selftest(state, args.output or None, args.wait, full=args.full)
         else:
             payload = _user_command(args, state, app)
         _print(payload)

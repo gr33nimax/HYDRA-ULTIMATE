@@ -66,6 +66,6 @@ def test_antidpi_selftest_dispatches(capsys):
     with patch.object(cli, "load_state", return_value=AppState()), \
          patch.object(cli, "_require_root"), \
          patch("hydra.plugins.antidpi.selftest.run_selftest", return_value=result) as run:
-        assert cli.main(["antidpi", "selftest", "--output", "/tmp/antidpi.tar.gz", "--wait", "0"]) == 0
-    run.assert_called_once()
+        assert cli.main(["antidpi", "selftest", "--output", "/tmp/antidpi.tar.gz", "--wait", "0", "--full"]) == 0
+    run.assert_called_once_with(AppState(), "/tmp/antidpi.tar.gz", 0.0, full=True)
     assert '"archive": "/tmp/antidpi.tar.gz"' in capsys.readouterr().out

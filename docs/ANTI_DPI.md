@@ -85,6 +85,19 @@ SSH/auth, закрытый firewall по allow-list и provider DDoS protection.
 sudo hydra antidpi selftest
 ```
 
+Расширенный режим дополнительно запускает временные нативные клиенты с заведомо
+неверной авторизацией:
+
+```bash
+sudo hydra antidpi selftest --full --wait 3
+```
+
+Для AnyTLS, TrustTunnel, ShadowTLS, Hysteria2, Mieru, NaiveProxy и Snell он
+использует установленный `sing-box`. Временный конфиг создаётся с правами `0600`,
+не меняет конфиги пользователей или сервисов и удаляется вместе с клиентским
+процессом. Telemt, qWDTT и AmneziaWG не имеют совместимого локального клиента;
+для них в матрице покрытия это указывается явно, без ложного статуса проверки.
+
 Self-test последовательно отправляет короткие некорректные TCP, TLS и UDP первые
 пакеты на локальные порты AmneziaWG, AnyTLS, TrustTunnel, ShadowTLS, Hysteria2,
 Mieru, NaiveProxy, Snell, Telemt и qWDTT. Отключённые протоколы явно отмечаются
@@ -113,6 +126,11 @@ tar -xOzf /tmp/hydra-antidpi-selftest-*.tar.gz \
 ```bash
 sudo hydra antidpi selftest --wait 3 --output /tmp/antidpi-native.tar.gz
 ```
+
+В `report.json` для каждого протокола есть матрица `coverage`: отправка
+повреждённых пакетов, запуск нативного клиента, наличие нативного лога и совпадение
+с текущим фильтром. Проверка внешнего IP, firewall и доставки Telegram всегда
+отмечается как требующая отдельного запуска с другой сети.
 
 Локальный self-test намеренно не банит `127.0.0.1`, поэтому он проверяет
 нативные ошибки и фильтры, но не Telegram и firewall. Полный внешний путь

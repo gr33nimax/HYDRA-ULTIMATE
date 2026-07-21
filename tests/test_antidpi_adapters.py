@@ -77,3 +77,33 @@ def test_anytls_eof_and_wdtt_native_errors_are_normalized():
         "198.51.100.8",
         {"protocol": "wdtt", "kind": "handshake_failure", "handshake_ok": False, "source": "journal"},
     )
+
+
+def test_trusttunnel_and_snell_production_messages_are_normalized():
+    trust = parse_protocol_line(
+        "sing-box.service",
+        "inbound/trusttunnel[trusttunnel-in]: process connection from 198.51.100.9:20550: authorization failed",
+    )
+    assert trust == (
+        "198.51.100.9",
+        {"protocol": "trusttunnel", "kind": "auth_failure", "source": "journal"},
+    )
+    snell = parse_protocol_line(
+        "sing-box.service",
+        'inbound/snell[snell-in]: process connection from 198.51.100.10:43498: malformed HTTP request "probe"',
+    )
+    assert snell == (
+        "198.51.100.10",
+        {"protocol": "snell", "kind": "invalid_first_packet", "source": "journal"},
+    )
+
+
+def test_reflected_client_keywords_do_not_become_protocol_evidence():
+    assert parse_protocol_line(
+        "sing-box.service",
+        'inbound/snell[snell-in]: process connection from 198.51.100.11:1234: EOF payload="INVALID-HANDSHAKE"',
+    ) is None
+    assert parse_protocol_line(
+        "sing-box.service",
+        'inbound/hysteria2[hysteria2-in]: connection from 198.51.100.12:1234 uses QUIC',
+    ) is None

@@ -85,6 +85,55 @@ def test_run_selftest_writes_redacted_archive(tmp_path):
     with tarfile.open(archive, "r:gz") as bundle:
         report = json.loads(bundle.extractfile("hydra-antidpi-selftest/report.json").read())
         journal = bundle.extractfile("hydra-antidpi-selftest/journal/telemt.jsonl").read().decode()
-    assert report["protocols"]["telemt"]["status"] == "captured"
+    assert report["protocols"]["telemt"]["status"] in {"filter_match", "native_log_unmatched"}
+    assert report["protocols"]["telemt"]["coverage"]["native_log_observed"] is True
     assert "native-secret" not in journal
     assert "[REDACTED]" in journal
+
+
+def test_invalid_native_client_config_changes_only_ephemeral_copy():
+    state = AppState(
+        protocols={"hysteria2": PluginState(enabled=True, config={"domain": "hy.example", "port": 443})},
+        users=[User(email="u", uuid="user-id")],
+    )
+    generated = {
+        "log": {"level": "info"},
+        "outbounds": [{
+            "type": "hysteria2", "tag": "hy", "server": "203.0.113.1",
+            "server_port": 443, "password": "real-password",
+            "obfs": {"type": "salamander", "password": "real-obfs"},
+            "tls": {"enabled": True, "server_name": "hy.example"},
+        }],
+        "route": {"final": "hy"},
+    }
+    plugin = type("Plugin", (), {"generate_client_config": lambda self, user, app: json.dumps(generated)})()
+    with patch("hydra.plugins.registry.get", return_value=plugin):
+        config, status = selftest._invalid_client_config(state, "hysteria2", 12345)
+    assert status == "ready"
+    assert config["outbounds"][0]["server"] == "127.0.0.1"
+    assert config["outbounds"][0]["password"] == "HYDRA-INVALID-PASSWORD"
+    assert config["outbounds"][0]["obfs"]["password"] == "real-obfs"
+    assert config["inbounds"][0]["listen_port"] == 12345
+    assert generated["outbounds"][0]["password"] == "real-password"
+
+
+def test_full_mode_records_native_client_coverage(tmp_path):
+    state = AppState(
+        protocols={"snell": PluginState(enabled=True)},
+        users=[User(email="u", uuid="id", credentials={"snell": {"port": 32123}})],
+    )
+    archive = tmp_path / "full.tar.gz"
+    with patch.object(selftest, "_is_linux_host", return_value=True), \
+         patch.object(selftest, "_environment", return_value={}), \
+         patch.object(selftest, "_probe", return_value=[{"error": ""}]), \
+         patch.object(selftest, "_native_client_probe", return_value={
+             "status": "executed", "started": True, "triggered": True,
+         }), \
+         patch.object(selftest, "_journal", return_value=[]), \
+         patch.object(selftest, "_offsets", return_value={}), \
+         patch.object(selftest, "_new_log_lines", return_value={}), \
+         patch.object(selftest.time, "sleep"):
+        result = selftest.run_selftest(state, str(archive), wait_seconds=0, full=True)
+    item = result["report"]["protocols"]["snell"]
+    assert result["report"]["mode"] == "full"
+    assert item["coverage"]["native_client_probe_sent"] is True

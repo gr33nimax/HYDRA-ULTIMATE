@@ -109,9 +109,16 @@ def test_fail2ban_log_processor():
         mock_notify.assert_called_once()
         msg = mock_notify.call_args[0][0]
         assert mock_notify.call_args.kwargs["category"] == "fail2ban"
-        assert "Fail2ban BAN" in msg
+        assert "Fail2ban · BAN" in msg
         assert "hydra-sshd" in msg
         assert "192.168.1.50" in msg
+
+
+def test_security_event_formatter_escapes_all_dynamic_fields():
+    from hydra.services.telegram.bot import format_security_event
+
+    message = format_security_event("Anti<DPI", "alert", [("Source", "a&b")])
+    assert message == "<b>Anti&lt;DPI · ALERT</b>\n<b>Source:</b> <code>a&amp;b</code>"
 
 
 def test_antidpi_observe_event_notification(tmp_path):
@@ -127,8 +134,9 @@ def test_antidpi_observe_event_notification(tmp_path):
                 mock_notify.assert_called()
                 msg = mock_notify.call_args[0][0]
                 assert mock_notify.call_args.kwargs["category"] == "antidpi"
-                assert "AntiDPI: подозрительная активность" in msg
+                assert "AntiDPI · ALERT" in msg
                 assert "198.51.100.22" in msg
+                assert "Действие" not in msg
 
 
 def test_unban_ip_everywhere():
@@ -182,7 +190,10 @@ def test_honeypot_notification_is_separate_category():
         _process_honeypot_log_line("[2026-07-21T10:00:00] BAN 198.51.100.55 backend=iptables result=OK")
     notify.assert_called_once()
     assert notify.call_args.kwargs["category"] == "honeypot"
-    assert "198.51.100.55" in notify.call_args.args[0]
+    message = notify.call_args.args[0]
+    assert "Honeypot · BAN" in message
+    assert "198.51.100.55" in message
+    assert "поймал подключение" not in message
 
 
 def test_fail2ban_jail_parser_extracts_full_status():
