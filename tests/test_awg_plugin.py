@@ -260,6 +260,41 @@ def test_resolve_network_avoids_conflicts():
         assert net == "10.67.67.0/24"
 
 
+def test_network_discovery_ignores_transport_modes_from_other_plugins():
+    p = AmneziaWGPlugin()
+    state = AppState(protocols={
+        "amneziawg": PluginState(enabled=True, config={}),
+        "naive": PluginState(enabled=True, config={"network": "both"}),
+        "trusttunnel": PluginState(enabled=True, config={"network": "quic"}),
+        "wdtt": PluginState(enabled=True, config={"network": "10.80.0.0/16"}),
+    })
+
+    used = p._used_networks(state)
+
+    assert "both" not in used
+    assert "quic" not in used
+    assert "10.80.0.0/16" in used
+    assert p._is_network_free("10.67.67.0/24", used) is True
+    assert p._is_network_free("10.80.1.0/24", used) is False
+
+
+def test_invalid_legacy_amnezia_network_falls_back_without_raising():
+    p = AmneziaWGPlugin()
+    state = AppState(protocols={
+        "amneziawg": PluginState(
+            enabled=True,
+            config={"profiles": {"desktop": {"network": "both"}}},
+        ),
+        "naive": PluginState(enabled=True, config={"network": "both"}),
+    })
+    conf = MagicMock()
+    conf.exists.return_value = False
+
+    result = p._network_for_profile(state, conf, "desktop", "10.67.67.0/24")
+
+    assert result == ("10.67.67", "1", "10.67.67.0/24")
+
+
 def test_profile_network_rejects_installer_reserved_subnet():
     p = AmneziaWGPlugin()
     state = AppState(protocols={"amneziawg": PluginState(enabled=True, config={})})

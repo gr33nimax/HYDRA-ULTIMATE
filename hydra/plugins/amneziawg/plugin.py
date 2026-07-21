@@ -409,16 +409,38 @@ class AmneziaWGPlugin(BasePlugin):
         return "10.100.0.0/24"
 
     @staticmethod
-    def _is_network_free(network: str, used: list[str]) -> bool:
-        candidate = ipaddress.ip_network(network, strict=False)
-        return not any(candidate.overlaps(ipaddress.ip_network(u, strict=False)) for u in used)
+    def _is_network_free(network: object, used: list[str]) -> bool:
+        """Return whether a valid CIDR does not overlap known valid networks."""
+        try:
+            candidate = ipaddress.ip_network(str(network), strict=False)
+        except (TypeError, ValueError):
+            return False
+        for raw_network in used:
+            try:
+                occupied = ipaddress.ip_network(str(raw_network), strict=False)
+            except (TypeError, ValueError):
+                # Older plugins reuse the ``network`` key for transport modes
+                # such as "tcp", "quic" and "both". They are not subnets.
+                continue
+            if candidate.overlaps(occupied):
+                return False
+        return True
 
     @staticmethod
     def _used_networks(state: AppState) -> list[str]:
-        used = list(_KNOWN_SUBNETS)
+        candidates: list[object] = list(_KNOWN_SUBNETS)
         for name, p in state.protocols.items():
             if name != "amneziawg" and p.config.get("network"):
-                used.append(p.config["network"])
+                candidates.append(p.config["network"])
+        used: list[str] = []
+        for raw_network in candidates:
+            try:
+                network = ipaddress.ip_network(str(raw_network), strict=False)
+            except (TypeError, ValueError):
+                continue
+            normalized = str(network)
+            if normalized not in used:
+                used.append(normalized)
         return used
 
     @staticmethod

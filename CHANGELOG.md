@@ -45,6 +45,10 @@
 - Fallback-запуск `awg-quick` больше не проглатывает stderr; status
   AmneziaWG сверяет runtime с state, а восстановление профиля не
   переиспользует уже занятую подсеть.
+- При обновлении старой установки AmneziaWG больше не пытается
+  разобрать транспортные значения `network=both/quic/tcp` других протоколов
+  как IP-подсети. Это устраняет ошибку `'both' does not appear to be an IPv4 or IPv6
+  network` при `hydra apply`; невалидные legacy-значения теперь игнорируются.
 - AntiDPI больше не считает штатные junk-пакеты AmneziaWG
   ошибками handshake; noisy debug path отключён, а rejection-события
   остаются доступными.
