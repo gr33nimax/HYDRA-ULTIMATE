@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from hydra.plugins.antidpi.plugin import (
     AntiDPIPlugin,
     active_bans,
@@ -24,6 +26,25 @@ from hydra.core.state import AppState, PluginState
 def test_notification_score_does_not_round_up_to_the_ban_threshold():
     assert format_score(7.96) == "7.96/8.00"
     assert format_score(8) == "8.00/8.00"
+
+
+def test_disable_removes_enforcement_and_all_telemetry_rules():
+    plugin = AntiDPIPlugin()
+    with (
+        patch("hydra.plugins.antidpi.plugin._run", return_value=MagicMock(returncode=0)),
+        patch.object(plugin, "_sync_awg_debug", return_value=True),
+        patch.object(plugin, "_remove_rules", return_value=True) as enforcement,
+        patch.object(plugin, "_remove_scan_rules", return_value=False) as scan,
+        patch.object(plugin, "_remove_udp_probe_rules", return_value=True) as udp,
+        patch.object(plugin, "_remove_mieru_probe_rules", return_value=True) as mieru,
+    ):
+        with pytest.raises(RuntimeError, match="firewall rules"):
+            plugin.on_disable(AppState())
+
+    enforcement.assert_called_once_with()
+    scan.assert_called_once_with()
+    udp.assert_called_once_with()
+    mieru.assert_called_once_with()
 
 
 def test_enabled_udp_protocol_ports_are_discovered():

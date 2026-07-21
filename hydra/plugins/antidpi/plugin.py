@@ -723,11 +723,14 @@ class AntiDPIPlugin(BasePlugin):
         if _run(["systemctl", "disable", "--now", "hydra-antidpi"]).returncode != 0:
             raise RuntimeError("Anti-DPI service could not be stopped")
         self._sync_awg_debug(False)
-        if (
-            not self._remove_scan_rules() or not self._remove_udp_probe_rules()
-            or not self._remove_mieru_probe_rules()
-        ):
-            raise RuntimeError("Anti-DPI scan telemetry rules could not be removed")
+        cleanup_results = (
+            self._remove_rules(),
+            self._remove_scan_rules(),
+            self._remove_udp_probe_rules(),
+            self._remove_mieru_probe_rules(),
+        )
+        if not all(cleanup_results):
+            raise RuntimeError("Anti-DPI firewall rules could not be removed")
 
     def observe_event(self, ip: str, event: dict, *, now: float | None = None) -> bool:
         """Record one normalized event; return True when the address is banned.
