@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from hydra.plugins.wdtt.plugin import (
     WdttPlugin, BIN_PATH, SERVICE_FILE, CONFIG_DIR, CONFIG_FILE, PASSWORDS_FILE,
     DEFAULT_DTLS_PORT, DEFAULT_WG_PORT, DEFAULT_WG_SUBNET, SYSTEM_PASSWORD,
-    WG_INTERFACE,
+    WG_INTERFACE, SOURCE_EXTRACT_TIMEOUT, GO_MODULE_TIMEOUT, GO_BUILD_TIMEOUT,
 )
 from hydra.plugins.base import PluginCategory, ConfigFragment
 from hydra.core.state import AppState, User, PluginState
@@ -37,6 +37,38 @@ def test_plugin_meta():
     assert p.meta.name == "wdtt"
     assert p.meta.category == PluginCategory.TRANSPORT
     assert p.meta.needs_domain is False
+
+
+def test_source_build_allows_empty_go_cache(tmp_path):
+    p = WdttPlugin()
+    work_dir = tmp_path / "work"
+    src_dir = work_dir / "proxy-turn-vk-android-master"
+    src_dir.mkdir(parents=True)
+    (src_dir / "go.mod").write_text("go 1.25\n")
+    installed_binary = tmp_path / "installed" / "wdtt-server"
+
+    def fake_run(command, **kwargs):
+        result = MagicMock(returncode=0, stdout="", stderr="")
+        if len(command) > 1 and command[1] == "build":
+            output = Path(command[command.index("-o") + 1])
+            output.write_bytes(b"wdtt")
+        return result
+
+    with (
+        patch("hydra.plugins.wdtt.plugin.tempfile.mkdtemp", return_value=str(work_dir)),
+        patch("hydra.plugins.wdtt.plugin.urllib.request.urlretrieve"),
+        patch("hydra.plugins.wdtt.plugin.HOST.run", side_effect=fake_run) as run,
+        patch("hydra.plugins.wdtt.plugin.BIN_PATH", installed_binary),
+        patch.object(p, "_ensure_go", return_value="/usr/local/bin/go"),
+    ):
+        assert p._build_wdtt_server() is True
+
+    tar_call, mod_call, build_call = run.call_args_list
+    assert tar_call.kwargs["timeout"] == SOURCE_EXTRACT_TIMEOUT
+    assert mod_call.kwargs["timeout"] == GO_MODULE_TIMEOUT
+    assert build_call.kwargs["timeout"] == GO_BUILD_TIMEOUT
+    assert GO_MODULE_TIMEOUT >= 600
+    assert GO_BUILD_TIMEOUT >= 600
 
 
 def test_configure_connects_wdtt_interface_to_common_tproxy():

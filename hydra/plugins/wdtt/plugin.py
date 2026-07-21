@@ -44,6 +44,10 @@ GITHUB_REPO = "SpaceNeuroX/proxy-turn-vk-android"
 SOURCE_URL = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/master.tar.gz"
 GO_DL_URL = "https://go.dev/dl/"
 
+SOURCE_EXTRACT_TIMEOUT = 120
+GO_MODULE_TIMEOUT = 600
+GO_BUILD_TIMEOUT = 900
+
 
 class WdttPlugin(BasePlugin):
     meta = PluginMeta(
@@ -440,6 +444,7 @@ class WdttPlugin(BasePlugin):
             HOST.run(
                 ["tar", "-xzf", str(archive), "-C", str(tmp)],
                 capture_output=True, check=True,
+                timeout=SOURCE_EXTRACT_TIMEOUT,
             )
 
             src_dirs = list(tmp.glob("proxy-turn-vk-android-*"))
@@ -461,6 +466,7 @@ class WdttPlugin(BasePlugin):
                 capture_output=True, text=True,
                 cwd=str(src_dir),
                 env={**self._go_env(), "GOSUMDB": "off"},
+                timeout=GO_MODULE_TIMEOUT,
             )
             if r.returncode != 0:
                 print(f"  go mod tidy: {(r.stderr or '')[:300]}")
@@ -473,6 +479,7 @@ class WdttPlugin(BasePlugin):
                  "-ldflags", "-s -w", "./server.go"],
                 capture_output=True, text=True,
                 env=env, cwd=str(src_dir),
+                timeout=GO_BUILD_TIMEOUT,
             )
             if r.returncode != 0:
                 print(f"  Ошибка компиляции: {(r.stderr or '')[:300]}")
