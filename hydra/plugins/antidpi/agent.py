@@ -274,10 +274,15 @@ def run() -> None:
     plugin = AntiDPIPlugin()
     plugin.cleanup_honeypot_duplicates()
     plugin.sync_udp_probe_rules()
+    plugin.sync_mieru_probe_rules()
     try:
-        synced_udp_ports = udp_protocol_ports(load_state())
+        initial_state = load_state()
+        synced_udp_ports = udp_protocol_ports(initial_state)
+        initial_mieru = initial_state.protocols.get("mieru")
+        synced_mieru_enabled = bool(initial_mieru and initial_mieru.enabled)
     except Exception:
         synced_udp_ports = {}
+        synced_mieru_enabled = False
     events: queue.Queue[Normalized] = queue.Queue(maxsize=4096)
     stop = threading.Event()
     workers = (
@@ -297,14 +302,23 @@ def run() -> None:
         while True:
             if time.monotonic() - last_udp_sync >= 60:
                 try:
-                    current_udp_ports = udp_protocol_ports(load_state())
+                    current_state = load_state()
+                    current_udp_ports = udp_protocol_ports(current_state)
+                    current_mieru = current_state.protocols.get("mieru")
+                    current_mieru_enabled = bool(current_mieru and current_mieru.enabled)
                 except Exception:
                     current_udp_ports = synced_udp_ports
+                    current_mieru_enabled = synced_mieru_enabled
                 # Recreating hashlimit rules clears their counters. Refresh
                 # only when listener ports changed so sustained silent UDP
                 # rejects can cross the telemetry threshold.
                 if current_udp_ports != synced_udp_ports and plugin.sync_udp_probe_rules():
                     synced_udp_ports = current_udp_ports
+                if (
+                    current_mieru_enabled != synced_mieru_enabled
+                    and plugin.sync_mieru_probe_rules(current_state)
+                ):
+                    synced_mieru_enabled = current_mieru_enabled
                 last_udp_sync = time.monotonic()
             for tail in tails:
                 for event in tail.read():

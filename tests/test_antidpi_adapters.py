@@ -79,6 +79,22 @@ def test_generic_kernel_udp_scan_is_also_alert_only():
     assert parsed[1]["ban_eligible"] is False
 
 
+def test_mieru_low_volume_close_is_normalized_as_alert_only():
+    line = (
+        "HYDRA_MIERU_SHORT IN=ens3 SRC=198.51.100.80 DST=192.0.2.1 "
+        "SPT=60057 DPT=2012"
+    )
+    assert parse_kernel_scan_line(line) == (
+        "198.51.100.80",
+        {
+            "protocol": "mieru", "kind": "low_volume_session",
+            "source": "kernel-mieru", "source_port": 60057,
+            "destination_port": 2012, "ban_eligible": False,
+            "policy": "alert-only / inferred low-volume TCP rejection",
+        },
+    )
+
+
 def test_unrelated_kernel_message_is_ignored():
     assert parse_kernel_scan_line("TCP: harmless kernel diagnostic") is None
 

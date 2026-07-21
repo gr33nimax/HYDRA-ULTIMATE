@@ -49,6 +49,10 @@ _KERNEL_UDP_PROBE = re.compile(
     r"HYDRA_UDP_PROBE\b.*?SRC=(?P<ip>[^\s]+).*?DPT=(?P<port>\d+)",
     re.IGNORECASE,
 )
+_KERNEL_MIERU_SHORT = re.compile(
+    r"HYDRA_MIERU_SHORT\b.*?SRC=(?P<ip>[^\s]+).*?SPT=(?P<source_port>\d+).*?DPT=(?P<port>\d+)",
+    re.IGNORECASE,
+)
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -184,6 +188,20 @@ def normalize_tls_auth_failure(record: dict) -> tuple[str, dict] | None:
 
 def parse_kernel_scan_line(line: str) -> tuple[str, dict] | None:
     """Normalize a rate-limited kernel firewall scan signal."""
+    mieru = _KERNEL_MIERU_SHORT.search(str(line or ""))
+    if mieru:
+        try:
+            address = ipaddress.ip_address(mieru.group("ip").strip("[]")).compressed
+            source_port = int(mieru.group("source_port"))
+            destination_port = int(mieru.group("port"))
+        except ValueError:
+            return None
+        return address, {
+            "protocol": "mieru", "kind": "low_volume_session",
+            "source": "kernel-mieru", "source_port": source_port,
+            "destination_port": destination_port, "ban_eligible": False,
+            "policy": "alert-only / inferred low-volume TCP rejection",
+        }
     udp_probe = _KERNEL_UDP_PROBE.search(str(line or ""))
     if udp_probe:
         try:

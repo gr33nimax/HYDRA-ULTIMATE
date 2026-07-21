@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 from hydra.core.host import HOST
-from hydra.core.state import AppState
+from hydra.core.state import AppState, load_state
 from hydra.plugins.base import BasePlugin, ConfigFragment, HealthResult, PluginCategory, PluginMeta, PluginStatus
 
 STATE_FILE = Path("/var/lib/hydra/antidpi.json")
@@ -31,6 +31,8 @@ RULE_COMMENT = "hydra-antidpi"
 SCAN_RULE_COMMENT = "hydra-antidpi-scan"
 UDP_PROBE_RULE_COMMENT = "hydra-antidpi-udp-probes"
 UDP_PROBE_CHAIN = "HYDRA_ANTIDPI_UDP"
+MIERU_PROBE_RULE_COMMENT = "hydra-antidpi-mieru-probes"
+MIERU_PORT_RANGE = "2012:2022"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 # Signals are protocol-independent.  A score is more robust than a single
@@ -42,6 +44,7 @@ SIGNAL_WEIGHTS = {
     "active_decoy_probe": 8, "auth_failure": 3, "port_scan": 2,
     "port_sweep": 6,
     "udp_probe": 4,
+    "low_volume_session": 3,
 }
 
 SCORE_HALF_LIFE = 300.0
@@ -390,6 +393,7 @@ def score_event(event: dict) -> tuple[int, tuple[str, ...]]:
         "protocol_mismatch": ("protocol_mismatch",), "invalid_first_packet": ("invalid_first_packet",),
         "active_decoy_probe": ("active_decoy_probe",), "auth_failure": ("auth_failure",),
         "port_scan": ("port_scan",), "udp_probe": ("udp_probe",),
+        "low_volume_session": ("low_volume_session",),
     }
     signals.extend(mapping.get(kind, ()))
     protocol = str(event.get("protocol", "")).lower()
@@ -492,6 +496,25 @@ def _udp_probe_rule(binary: str, port: int) -> list[str]:
     ]
 
 
+def _mieru_probe_rule(binary: str, close_flag: str) -> list[str]:
+    """Log repeated established Mieru sessions that close after <=1 KiB client traffic."""
+    version = "6" if binary == "ip6tables" else "4"
+    flag = str(close_flag).upper()
+    return [
+        "-p", "tcp", "--dport", MIERU_PORT_RANGE,
+        "--tcp-flags", "FIN,RST", flag,
+        "-m", "conntrack", "--ctstate", "ESTABLISHED",
+        "-m", "connbytes", "--connbytes", "1:1024",
+        "--connbytes-dir", "original", "--connbytes-mode", "bytes",
+        "-m", "hashlimit", "--hashlimit-above", "2/minute",
+        "--hashlimit-burst", "2", "--hashlimit-mode", "srcip",
+        "--hashlimit-name", f"hadp_mieru_{flag.lower()}{version}",
+        "-m", "limit", "--limit", "30/minute", "--limit-burst", "10",
+        "-m", "comment", "--comment", MIERU_PROBE_RULE_COMMENT,
+        "-j", "LOG", "--log-prefix", "HYDRA_MIERU_SHORT ", "--log-level", "4",
+    ]
+
+
 class AntiDPIPlugin(BasePlugin):
     last_error = ""
     meta = PluginMeta(
@@ -514,6 +537,7 @@ class AntiDPIPlugin(BasePlugin):
         if (
             not self._ensure_sets() or not self._ensure_rules()
             or not self._ensure_scan_rules() or not self.sync_udp_probe_rules()
+            or not self.sync_mieru_probe_rules()
         ):
             return False
         if not self._restore_bans():
@@ -575,6 +599,7 @@ class AntiDPIPlugin(BasePlugin):
         _run(["systemctl", "disable", "--now", "hydra-antidpi"])
         self._sync_awg_debug(False)
         ok = self._remove_udp_probe_rules()
+        ok = self._remove_mieru_probe_rules() and ok
         ok = self._remove_scan_rules() and ok
         ok = self._remove_rules() and ok
         for name in (SET_V4, SET_V6):
@@ -653,6 +678,12 @@ class AntiDPIPlugin(BasePlugin):
         rules_ok = True
         telemetry_ok = True
         udp_probe_ok = True
+        mieru_probe_ok = True
+        try:
+            state = load_state()
+            mieru_enabled = bool(state.protocols.get("mieru") and state.protocols["mieru"].enabled)
+        except Exception:
+            mieru_enabled = False
         for binary, name in (("iptables", SET_V4), ("ip6tables", SET_V6)):
             check = [binary, "-C", "INPUT", "-m", "set", "--match-set", name, "src", "-m", "comment", "--comment", RULE_COMMENT, "-j", "DROP"]
             rules_ok = _run(check).returncode == 0 and rules_ok
@@ -663,9 +694,16 @@ class AntiDPIPlugin(BasePlugin):
                 "-j", UDP_PROBE_CHAIN,
             ]
             udp_probe_ok = _run([binary, "-C", "INPUT", *jump]).returncode == 0 and udp_probe_ok
+            if mieru_enabled:
+                for flag in ("FIN", "RST"):
+                    mieru_probe_ok = (
+                        _run([binary, "-C", "INPUT", *_mieru_probe_rule(binary, flag)]).returncode == 0
+                        and mieru_probe_ok
+                    )
         checks = {
             "service": status.running, "ipsets": sets_ok, "firewall": rules_ok,
             "scan_telemetry": telemetry_ok, "udp_probe_telemetry": udp_probe_ok,
+            "mieru_probe_telemetry": mieru_probe_ok,
         }
         healthy = all(checks.values())
         return HealthResult(healthy, "" if healthy else "anti-DPI runtime is incomplete", "ok" if healthy else "error", checks)
@@ -678,7 +716,10 @@ class AntiDPIPlugin(BasePlugin):
         if _run(["systemctl", "disable", "--now", "hydra-antidpi"]).returncode != 0:
             raise RuntimeError("Anti-DPI service could not be stopped")
         self._sync_awg_debug(False)
-        if not self._remove_scan_rules() or not self._remove_udp_probe_rules():
+        if (
+            not self._remove_scan_rules() or not self._remove_udp_probe_rules()
+            or not self._remove_mieru_probe_rules()
+        ):
             raise RuntimeError("Anti-DPI scan telemetry rules could not be removed")
 
     def observe_event(self, ip: str, event: dict, *, now: float | None = None) -> bool:
@@ -837,7 +878,9 @@ class AntiDPIPlugin(BasePlugin):
                             ("Score", format_score(entry["score"])),
                     ]
                     if not evidence_can_ban:
-                        fields.append(("Policy", "alert-only / unverified UDP source"))
+                        fields.append(("Policy", str(
+                            event.get("policy", "alert-only / unverified UDP source")
+                        )))
                     if entry["verified_score"] != entry["score"]:
                         fields.append(("Verified score", format_score(entry["verified_score"])))
                     delivered = bool(send_admin_notification(
@@ -1088,6 +1131,41 @@ class AntiDPIPlugin(BasePlugin):
                 detail = str(delete.stderr or delete.stdout or "").lower()
                 if "no chain" not in detail and "does not exist" not in detail:
                     ok = False
+        return ok
+
+    def sync_mieru_probe_rules(self, state: AppState | None = None) -> bool:
+        """Install LOG-only inference for Mieru's otherwise silent auth rejects."""
+        if state is None:
+            try:
+                from hydra.core.state import load_state
+                state = load_state()
+            except Exception:
+                return False
+        protocol = state.protocols.get("mieru")
+        enabled = bool(protocol and protocol.enabled)
+        ok = self._remove_mieru_probe_rules()
+        if not enabled:
+            return ok
+        for binary in ("iptables", "ip6tables"):
+            for flag in ("FIN", "RST"):
+                spec = _mieru_probe_rule(binary, flag)
+                result = _run([binary, "-I", "INPUT", "2", *spec], text=True)
+                if result.returncode != 0:
+                    self._fail(self._result_error(result, f"Mieru telemetry {binary}/{flag}"))
+                    ok = False
+        return ok
+
+    def _remove_mieru_probe_rules(self) -> bool:
+        ok = True
+        for binary in ("iptables", "ip6tables"):
+            for flag in ("FIN", "RST"):
+                spec = _mieru_probe_rule(binary, flag)
+                for _ in range(8):
+                    if _run([binary, "-C", "INPUT", *spec]).returncode != 0:
+                        break
+                    if _run([binary, "-D", "INPUT", *spec]).returncode != 0:
+                        ok = False
+                        break
         return ok
 
     def _write_service(self) -> None:

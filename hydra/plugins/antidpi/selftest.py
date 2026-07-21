@@ -691,7 +691,10 @@ def _udp_diagnostics(state: AppState) -> dict:
     commands = {
         "iptables_v4": ["iptables", "-S", UDP_PROBE_CHAIN],
         "iptables_v6": ["ip6tables", "-S", UDP_PROBE_CHAIN],
+        "input_rules_v4": ["iptables", "-S", "INPUT"],
+        "input_rules_v6": ["ip6tables", "-S", "INPUT"],
         "udp_sockets": ["ss", "-lunp"],
+        "tcp_sockets": ["ss", "-ltnp"],
     }
 
 

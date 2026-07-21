@@ -8,6 +8,7 @@ from hydra.plugins.antidpi.plugin import (
     format_score,
     udp_protocol_ports,
     _udp_probe_rule,
+    _mieru_probe_rule,
     _scan_rule,
     decayed_score,
     prune_runtime_state,
@@ -63,6 +64,15 @@ def test_udp_probe_firewall_rule_is_log_only_and_rate_limited():
     assert rule[:4] == ["-p", "udp", "--dport", "8443"]
     assert "--ctstate" in rule and "NEW" in rule
     assert "HYDRA_UDP_PROBE " in rule
+    assert "DROP" not in rule
+
+
+def test_mieru_probe_rule_requires_established_low_volume_close_and_never_drops():
+    rule = _mieru_probe_rule("iptables", "FIN")
+    assert rule[:4] == ["-p", "tcp", "--dport", "2012:2022"]
+    assert "ESTABLISHED" in rule
+    assert "--connbytes" in rule and "1:1024" in rule
+    assert "HYDRA_MIERU_SHORT " in rule
     assert "DROP" not in rule
 
 
