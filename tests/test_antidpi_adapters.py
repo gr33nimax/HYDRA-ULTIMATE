@@ -1,4 +1,4 @@
-from hydra.plugins.antidpi.adapters import parse_kernel_scan_line, parse_protocol_line
+from hydra.plugins.antidpi.adapters import decode_log_message, parse_kernel_scan_line, parse_protocol_line
 
 
 def test_awg_rejection_is_normalized():
@@ -45,3 +45,35 @@ def test_protocol_error_with_ip_before_message_is_normalized():
     assert result is not None
     assert result[0] == "198.51.100.88"
     assert result[1]["kind"] == "handshake_failure"
+
+
+def test_singbox_journal_byte_array_is_decoded_and_anytls_auth_is_normalized():
+    line = (
+        "+0000 ERROR inbound/anytls[anytls-in]: process connection from "
+        "127.0.0.1:14902: unknown user password: fallback disabled"
+    )
+    encoded = list(line.encode())
+    assert decode_log_message(encoded) == line
+    assert parse_protocol_line("sing-box.service", encoded) == (
+        "127.0.0.1",
+        {"protocol": "anytls", "kind": "auth_failure", "source": "journal"},
+    )
+
+
+def test_anytls_eof_and_wdtt_native_errors_are_normalized():
+    anytls = parse_protocol_line(
+        "sing-box.service",
+        "inbound/anytls[anytls-in]: process connection from 198.51.100.7:1234: EOF: fallback disabled",
+    )
+    assert anytls == (
+        "198.51.100.7",
+        {"protocol": "anytls", "kind": "invalid_first_packet", "source": "journal"},
+    )
+    wdtt = parse_protocol_line(
+        "wdtt.service",
+        "[DTLS] [ERR] Handshake failed from 198.51.100.8:24420: handshake error: dtls fatal",
+    )
+    assert wdtt == (
+        "198.51.100.8",
+        {"protocol": "wdtt", "kind": "handshake_failure", "handshake_ok": False, "source": "journal"},
+    )

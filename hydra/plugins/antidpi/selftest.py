@@ -19,7 +19,7 @@ from hydra import __version__
 from hydra.core.host import HOST
 from hydra.core.sni_router import DECOY_LOG, get_effective_port
 from hydra.core.state import AppState
-from hydra.plugins.antidpi.adapters import parse_protocol_line
+from hydra.plugins.antidpi.adapters import decode_log_message, parse_protocol_line
 from hydra.plugins.antidpi.agent import NAIVE_ACCESS_LOG
 
 SUPPORTED_PROTOCOLS = (
@@ -42,6 +42,8 @@ LOG_PATHS = (DECOY_LOG, NAIVE_ACCESS_LOG, Path("/var/log/caddy-l4/antidpi.jsonl"
 _PAYLOADS = (
     b"HYDRA-ANTIDPI-SELFTEST\r\n",
     b"GET /__hydra_antidpi_selftest__ HTTP/1.1\r\nHost: invalid.local\r\nConnection: close\r\n\r\n",
+    b"CONNECT selftest.invalid:443 HTTP/1.1\r\nHost: selftest.invalid:443\r\n"
+    b"Proxy-Authorization: Basic aW52YWxpZDppbnZhbGlk\r\nConnection: close\r\n\r\n",
     b"\x16\x03\x03\x00\x08INVALID!",
     b"\x00\xff\x00\xffHYDRA-INVALID-HANDSHAKE",
 )
@@ -57,11 +59,20 @@ def _environment() -> dict:
     for unit in units:
         result = HOST.run(["systemctl", "is-active", unit], capture_output=True, text=True, timeout=5)
         services[unit] = result.stdout.strip() or "unknown"
+    binaries = {}
+    for name in ("sing-box", "caddy-l4", "caddy-naive"):
+        executable = HOST.which(name)
+        if not executable:
+            continue
+        result = HOST.run([executable, "version"], capture_output=True, text=True, timeout=5)
+        output = (result.stdout or result.stderr or "").strip().splitlines()
+        binaries[name] = " | ".join(output[:3])[:500] if output else "unknown"
     return {
         "hydra_version": __version__,
         "kernel": platform.release(),
         "python": platform.python_version(),
         "services": services,
+        "binaries": binaries,
     }
 
 
@@ -107,10 +118,15 @@ def _targets(state: AppState, protocol: str) -> list[Target]:
         return targets
     if protocol in {"anytls", "trusttunnel", "shadowtls", "naive"}:
         port = get_effective_port(protocol, state)
-        domain = str(cfg.get("domain", "")).strip()
+        domain = str(cfg.get("domain", state.network.domain if protocol == "naive" else "")).strip()
         # The internal listener exercises the native parser. The SNI frontend
         # additionally checks routing when a domain is configured.
-        result = [Target("tcp", port)]
+        mode = str(cfg.get("network", "tcp")) if protocol == "naive" else "tcp"
+        result = []
+        if mode in {"tcp", "both"}:
+            result.append(Target("tcp", port))
+        if protocol == "naive" and mode in {"quic", "both"}:
+            result.append(Target("udp", port))
         if domain and port != 443:
             result.append(Target("tls", 443, sni=domain))
         return result
@@ -173,8 +189,27 @@ def _journal(protocol: str, since: float, until: float) -> list[dict]:
             except (TypeError, ValueError):
                 continue
             if isinstance(record, dict):
-                records.append(record)
+                normalized = dict(record)
+                normalized["MESSAGE"] = decode_log_message(record.get("MESSAGE", ""))
+                if _relevant_journal_record(protocol, normalized):
+                    records.append(normalized)
     return records
+
+
+def _relevant_journal_record(protocol: str, record: dict) -> bool:
+    text = str(record.get("MESSAGE", ""))
+    lowered = text.lower()
+    if "hydra-antidpi-selftest" in lowered or "__hydra_antidpi_selftest__" in lowered:
+        return True
+    local_peer = "127.0.0.1" in lowered or "[::1]" in lowered or " ::1" in lowered
+    if not local_peer:
+        return False
+    unit = str(record.get("_SYSTEMD_UNIT", "")).lower()
+    if protocol == "amneziawg":
+        return any(token in lowered for token in ("amnezia", "wireguard", "awg", "handshake", "invalid mac"))
+    if unit.startswith("sing-box"):
+        return protocol in lowered
+    return any(owner in unit for owner in JOURNAL_UNITS[protocol])
 
 
 def _offsets() -> dict[Path, int]:
@@ -194,7 +229,10 @@ def _new_log_lines(before: dict[Path, int]) -> dict[str, list[str]]:
             with path.open("r", encoding="utf-8", errors="replace") as handle:
                 if path.stat().st_size >= offset:
                     handle.seek(offset)
-                lines = handle.read().splitlines()
+                lines = [
+                    line for line in handle.read().splitlines()
+                    if "HYDRA-ANTIDPI-SELFTEST" in line.upper() or "__hydra_antidpi_selftest__" in line.lower()
+                ]
         except OSError:
             lines = []
         if lines:

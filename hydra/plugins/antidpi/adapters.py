@@ -6,28 +6,54 @@ combines them with rate and temporal context before touching the firewall.
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 
-_IP = r"(?P<ip>(?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F:]{3,})"
-
 PATTERNS: tuple[tuple[str, str, str], ...] = (
-    ("amneziawg", rf"(?:Invalid MAC|Invalid handshake|Unknown message).*?{_IP}", "handshake_failure"),
-    ("sing-box", rf"(?:handshake failed|invalid handshake|protocol error).*?{_IP}", "handshake_failure"),
-    ("anytls", rf"(?:authentication failed|invalid password|unauthorized|auth error).*?{_IP}", "auth_failure"),
-    ("trusttunnel", rf"(?:authentication failed|invalid token|unauthorized|auth error).*?{_IP}", "auth_failure"),
-    ("shadowtls", rf"(?:handshake failed|invalid client hello|unexpected).*?{_IP}", "malformed_tls"),
-    ("hysteria2", rf"(?:handshake failed|invalid packet|QUIC).*?{_IP}", "invalid_first_packet"),
-    ("mieru", rf"(?:handshake failed|authentication failed|invalid).*?{_IP}", "auth_failure"),
-    ("snell", rf"(?:handshake failed|invalid).*?{_IP}", "handshake_failure"),
-    ("telemt", rf"(?:handshake failed|invalid).*?{_IP}", "handshake_failure"),
-    ("naive", rf"(?:authentication failed|invalid|malformed|protocol error).*?{_IP}", "auth_failure"),
-    ("wdtt", rf"(?:invalid handshake|authentication failed|invalid packet).*?{_IP}", "handshake_failure"),
+    ("amneziawg", r"(?:Invalid MAC|Invalid handshake|Unknown message)", "handshake_failure"),
+    ("sing-box", r"(?:handshake failed|invalid handshake|protocol error)", "handshake_failure"),
+    ("anytls", r"(?:authentication failed|invalid password|unknown user password|unauthorized|auth error)", "auth_failure"),
+    ("anytls", r"(?:process connection.*?EOF: fallback disabled)", "invalid_first_packet"),
+    ("trusttunnel", r"(?:authentication failed|invalid token|unauthorized|auth error)", "auth_failure"),
+    ("shadowtls", r"(?:handshake failed|invalid client hello|unexpected)", "malformed_tls"),
+    ("hysteria2", r"(?:handshake failed|invalid packet|QUIC)", "invalid_first_packet"),
+    ("mieru", r"(?:handshake failed|authentication failed|invalid)", "auth_failure"),
+    ("snell", r"(?:handshake failed|invalid)", "handshake_failure"),
+    ("telemt", r"(?:handshake failed|invalid)", "handshake_failure"),
+    ("naive", r"(?:authentication failed|invalid|malformed|protocol error)", "auth_failure"),
+    ("wdtt", r"(?:invalid handshake|handshake failed|authentication failed|auth failed|invalid packet)", "handshake_failure"),
 )
 
 _KERNEL_SCAN = re.compile(
     r"HYDRA_SCAN_(?P<protocol>TCP|UDP)\b.*?SRC=(?P<ip>[^\s]+)(?:.*?DPT=(?P<port>\d+))?",
     re.IGNORECASE,
 )
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def decode_log_message(value: object) -> str:
+    """Decode journald's JSON byte-array representation used by sing-box.
+
+    Some sing-box-extended builds write ``[]byte`` to stdout. systemd stores
+    that as an array in JSON output instead of a normal MESSAGE string.
+    """
+    candidate = value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("[") and stripped.endswith("]") and len(stripped) <= 1_000_000:
+            try:
+                candidate = json.loads(stripped)
+            except (TypeError, ValueError):
+                candidate = value
+    if (
+        isinstance(candidate, list)
+        and len(candidate) <= 262_144
+        and all(isinstance(item, int) and 0 <= item <= 255 for item in candidate)
+    ):
+        text = bytes(candidate).decode("utf-8", errors="replace")
+    else:
+        text = str(value or "")
+    return _ANSI_ESCAPE.sub("", text)
 
 
 def _remote_ip(value: object) -> str | None:
@@ -63,24 +89,16 @@ def _extract_ip(text: str) -> str | None:
                     pass
     return None
 
-def parse_protocol_line(service: str, line: str) -> tuple[str, dict] | None:
+def parse_protocol_line(service: str, line: object) -> tuple[str, dict] | None:
     """Parse one journal line into a normalized event, if it is evidence."""
     service = str(service or "").lower()
-    text = str(line or "")
+    text = decode_log_message(line)
     for owner, pattern, kind in PATTERNS:
         if owner not in service and owner not in text.lower():
             continue
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            try:
-                ip = ipaddress.ip_address(match.group("ip")).compressed
-            except ValueError:
-                ip = _extract_ip(text)
-        else:
-            evidence_pattern = pattern.split(".*?", 1)[0]
-            if not re.search(evidence_pattern, text, re.IGNORECASE):
-                continue
-            ip = _extract_ip(text)
+        if not re.search(pattern, text, re.IGNORECASE):
+            continue
+        ip = _extract_ip(text)
         if ip is None:
             continue
         event = {"protocol": owner, "kind": kind, "source": "journal"}

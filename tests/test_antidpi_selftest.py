@@ -28,6 +28,33 @@ def test_targets_cover_enabled_protocol_shapes():
     assert selftest._targets(state, "amneziawg") == [selftest.Target("udp", 51830)]
 
 
+def test_naive_targets_use_global_domain_and_transport_mode():
+    state = AppState(
+        protocols={"naive": PluginState(enabled=True, config={"network": "both"})},
+    )
+    state.network.domain = "naive.example"
+    with patch("hydra.plugins.antidpi.selftest.get_effective_port", return_value=10443):
+        targets = selftest._targets(state, "naive")
+    assert selftest.Target("tcp", 10443) in targets
+    assert selftest.Target("udp", 10443) in targets
+    assert selftest.Target("tls", 443, sni="naive.example") in targets
+
+
+def test_journal_relevance_rejects_background_traffic():
+    assert selftest._relevant_journal_record("anytls", {
+        "_SYSTEMD_UNIT": "sing-box.service",
+        "MESSAGE": "inbound/anytls: unknown user password from 127.0.0.1:1234",
+    }) is True
+    assert selftest._relevant_journal_record("anytls", {
+        "_SYSTEMD_UNIT": "sing-box.service",
+        "MESSAGE": "inbound/tproxy: connection from 127.0.0.1:1234",
+    }) is False
+    assert selftest._relevant_journal_record("amneziawg", {
+        "_SYSTEMD_UNIT": "kernel",
+        "MESSAGE": "HYDRA-PORTSCAN SRC=127.0.0.1 DST=127.0.0.1",
+    }) is False
+
+
 def test_redactor_removes_state_secrets():
     state = AppState(
         telegram=TelegramConfig(admin_token="123456:SECRET-TOKEN"),
