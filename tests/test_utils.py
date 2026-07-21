@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import string
 import io
+import os
 import tarfile
+import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -153,6 +155,31 @@ def test_github_asset_fails_closed_without_digest(tmp_path):
          patch.object(downloader, "download") as download:
         assert downloader.download_github_asset("owner/repo", "tool-linux", tmp_path / "tool") is False
     download.assert_not_called()
+
+
+def test_download_closes_mkstemp_descriptor(tmp_path):
+    from hydra.utils import downloader
+
+    descriptors = []
+    real_mkstemp = tempfile.mkstemp
+
+    def tracked_mkstemp(*args, **kwargs):
+        fd, path = real_mkstemp(*args, **kwargs)
+        descriptors.append(fd)
+        return fd, path
+
+    response = MagicMock()
+    response.__enter__.return_value = io.BytesIO(b"downloaded binary")
+    destination = tmp_path / "tool"
+    with patch.object(downloader.tempfile, "mkstemp", side_effect=tracked_mkstemp), \
+         patch.object(downloader.urllib.request, "urlopen", return_value=response), \
+         patch.object(downloader, "_allow_unverified", return_value=True):
+        assert downloader.download("https://example.invalid/tool", destination) is True
+
+    assert destination.read_bytes() == b"downloaded binary"
+    assert len(descriptors) == 1
+    with pytest.raises(OSError):
+        os.fstat(descriptors[0])
 
 
 def test_extract_tarball_rejects_parent_traversal(tmp_path):

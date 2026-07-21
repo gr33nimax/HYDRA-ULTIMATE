@@ -1,6 +1,6 @@
 # Анти-DPI модуль
 
-> Актуальная полная спецификация релиза `2.5.1-dev «FORTRESS»`, включая
+> Актуальная полная спецификация релиза `2.5.2-dev «FORTRESS»`, включая
 > двухуровневый scoring, UDP spoof-safety, source relay, Mieru silent-reject и
 > подтверждённую протокольную матрицу, находится в
 > [ANTIDPI_FORTRESS.md](ANTIDPI_FORTRESS.md).

@@ -1,6 +1,6 @@
-# 🐉 HYDRA v2.5.1-dev — Multi-Protocol Proxy & Routing Orchestrator
+# 🐉 HYDRA v2.5.2-dev — Multi-Protocol Proxy & Routing Orchestrator
 
-[![Version](https://img.shields.io/badge/version-2.5.1--dev-blue.svg?style=flat-square)](https://github.com/gr33nimax/HYDRA-ULTIMATE)
+[![Version](https://img.shields.io/badge/version-2.5.2--dev-blue.svg?style=flat-square)](https://github.com/gr33nimax/HYDRA-ULTIMATE)
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg?style=flat-square)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg?style=flat-square)](https://ubuntu.com/)
@@ -12,7 +12,7 @@
 в единый управляемый контур.
 
 > [!IMPORTANT]
-> `2.5.1-dev «FORTRESS»` — текущая ветка разработки. Проект всё ещё находится
+> `2.5.2-dev «FORTRESS»` — текущая ветка разработки. Проект всё ещё находится
 > в активном бета-тестировании; для рабочей эксплуатации используйте чистый Ubuntu 20.04+
 > или Debian 11+ и обязательно настройте резервное копирование.
 
