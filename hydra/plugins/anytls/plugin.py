@@ -305,13 +305,16 @@ class AnyTLSPlugin(BasePlugin):
     def status(self) -> PluginStatus:
         from hydra.core.singbox import is_installed, is_running
         from hydra.core.state import load_state
-        installed = is_installed()
+        runtime_installed = is_installed()
+        state = None
+        installed = False
         enabled = False
         try:
             state = load_state()
             ps = state.protocols.get("anytls")
             if ps:
-                enabled = ps.enabled
+                installed = bool(ps.installed and runtime_installed)
+                enabled = bool(ps.enabled and installed)
         except Exception:
             pass
 
