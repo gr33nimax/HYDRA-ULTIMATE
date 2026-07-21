@@ -399,12 +399,12 @@ sudo hydra validate
 а затем продолжайте обновление. Не удаляйте старые файлы вручную до успешного
 завершения `apply`.
 
-### Шаг 2. Получить FORTRESS из ветки dev
+### Шаг 2. Получить HYDRA из ветки main
 
 ```bash
 cd /opt/hydra
 git status --short
-git pull origin dev
+git pull origin main
 git rev-parse --short HEAD
 ```
 

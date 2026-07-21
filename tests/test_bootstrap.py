@@ -7,11 +7,11 @@ BOOTSTRAP = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
 README = (ROOT / "README.md").read_text(encoding="utf-8")
 
 
-def test_bootstrap_download_and_install_default_to_dev():
-    assert "HYDRA-ULTIMATE/dev/bootstrap.sh" in BOOTSTRAP
-    assert 'DEFAULT_BRANCH="dev"' in BOOTSTRAP
+def test_bootstrap_download_and_install_default_to_main():
+    assert "HYDRA-ULTIMATE/main/bootstrap.sh" in BOOTSTRAP
+    assert 'DEFAULT_BRANCH="main"' in BOOTSTRAP
     assert 'HYDRA_REF="${HYDRA_REF:-$DEFAULT_BRANCH}"' in BOOTSTRAP
-    assert 'BRANCH="main"' not in BOOTSTRAP
+    assert 'DEFAULT_BRANCH="dev"' not in BOOTSTRAP
 
 
 def test_every_fresh_install_path_uses_selected_ref():
@@ -33,11 +33,11 @@ def test_bootstrap_verifies_exact_remote_commit_before_dependencies():
     )
 
 
-def test_readme_one_command_installs_dev():
+def test_readme_one_command_installs_main():
     assert (
         "curl -fsSL https://raw.githubusercontent.com/gr33nimax/"
-        "HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash"
+        "HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash"
     ) in README
-    assert "git clone -b dev" in README
+    assert "git clone -b main" in README
     assert ".venv/bin/python -m pip install -r requirements.lock" in README
     assert "sudo python3 main.py" not in README

@@ -1,10 +1,10 @@
-# 🐉 HYDRA v2.5.2-dev — Multi-Protocol Proxy & Routing Orchestrator
+# 🐉 HYDRA v2.5.2 — Multi-Protocol Proxy & Routing Orchestrator
 
-[![Version](https://img.shields.io/badge/version-2.5.2--dev-blue.svg?style=flat-square)](https://github.com/gr33nimax/HYDRA-ULTIMATE)
+[![Version](https://img.shields.io/badge/version-2.5.2-blue.svg?style=flat-square)](https://github.com/gr33nimax/HYDRA-ULTIMATE)
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg?style=flat-square)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg?style=flat-square)](https://ubuntu.com/)
-[![Tests](https://img.shields.io/badge/tests-630%20passed-brightgreen.svg?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/tests-784%20passed-brightgreen.svg?style=flat-square)](tests/)
 
 **HYDRA** — модульная платформа для развёртывания и администрирования
 многопротокольных прокси-серверов на базе Sing-Box. Она объединяет транспорты,
@@ -12,7 +12,7 @@
 в единый управляемый контур.
 
 > [!IMPORTANT]
-> `2.5.2-dev` — текущая ветка разработки. Проект всё ещё находится
+> `2.5.2` — текущий релиз. Проект всё ещё находится
 > в активном бета-тестировании; для рабочей эксплуатации используйте чистый Ubuntu 20.04+
 > или Debian 11+ и обязательно настройте резервное копирование.
 
@@ -36,7 +36,7 @@
 ### Быстрая установка
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash
 ```
 
 Установщик подготавливает зависимости, Sing-Box Extended, изолированное Python-
@@ -46,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootst
 ### Запуск из исходников
 
 ```bash
-git clone -b dev https://github.com/gr33nimax/HYDRA-ULTIMATE /opt/hydra
+git clone -b main https://github.com/gr33nimax/HYDRA-ULTIMATE /opt/hydra
 cd /opt/hydra
 sudo apt-get install -y python3-venv
 sudo python3 -m venv .venv

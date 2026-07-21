@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# HYDRA v2.5.2-dev — Bootstrap Installer
+# HYDRA v2.5.2 — Bootstrap Installer
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Установка:
-#   curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash
 #
 # Что делает:
 #   1. Проверяет root, ОС (Ubuntu/Debian), Python 3.10+
@@ -198,7 +198,7 @@ fi
 step "[4/5] Загрузка HYDRA"
 INSTALL_DIR="/opt/hydra"
 REPO_URL="https://github.com/gr33nimax/HYDRA-ULTIMATE"
-DEFAULT_BRANCH="dev"
+DEFAULT_BRANCH="main"
 HYDRA_REF="${HYDRA_REF:-$DEFAULT_BRANCH}"
 if ! git check-ref-format --branch "$HYDRA_REF" >/dev/null 2>&1; then
     err "Некорректное имя ветки HYDRA_REF: $HYDRA_REF"

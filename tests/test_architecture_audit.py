@@ -20,7 +20,7 @@ def test_version_is_consistent_across_runtime_and_entrypoint():
     from hydra import __version__
 
     entrypoint = (ROOT / "main.py").read_text(encoding="utf-8")
-    assert __version__ == "2.5.2-dev"
+    assert __version__ == "2.5.2"
     assert f"HYDRA v{__version__}" in entrypoint
 
 
