@@ -1,12 +1,33 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tarfile
 from pathlib import Path
 from unittest.mock import patch
 
 from hydra.core.state import AppState, PluginState, TelegramConfig, User
 from hydra.plugins.antidpi import selftest
+
+
+def test_udp_diagnostics_executes_inside_its_function(tmp_path):
+    mapping_file = tmp_path / "mappings.jsonl"
+    mapping_file.write_text('{"source_ip":"198.51.100.8"}\n', encoding="utf-8")
+    completed = subprocess.CompletedProcess([], 0, stdout="ok", stderr="")
+    state = AppState(protocols={
+        "hysteria2": PluginState(enabled=True, config={"port": 8443}),
+    })
+    with patch("hydra.plugins.antidpi.selftest.MAP_FILE", mapping_file), \
+         patch("hydra.plugins.antidpi.selftest.HOST.run", return_value=completed) as run:
+        result = selftest._udp_diagnostics(state)
+
+    assert result["protocol_ports"][8443] == "hysteria2"
+    assert result["source_relay_mappings"] == ['{"source_ip":"198.51.100.8"}']
+    assert set(result["commands"]) == {
+        "iptables_v4", "iptables_v6", "input_rules_v4", "input_rules_v6",
+        "udp_sockets", "tcp_sockets",
+    }
+    assert run.call_count == 6
 
 
 def test_external_capture_writes_redacted_bundle_without_probes(tmp_path):

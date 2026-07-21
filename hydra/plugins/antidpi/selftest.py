@@ -696,6 +696,35 @@ def _udp_diagnostics(state: AppState) -> dict:
         "udp_sockets": ["ss", "-lunp"],
         "tcp_sockets": ["ss", "-ltnp"],
     }
+    output = {}
+    for label, command in commands.items():
+        result = HOST.run(command, capture_output=True, text=True, timeout=10, check=False)
+        output[label] = {
+            "returncode": result.returncode,
+            "stdout": (result.stdout or "")[-100_000:],
+            "stderr": (result.stderr or "")[-10_000:],
+        }
+    try:
+        mappings = MAP_FILE.read_text(encoding="utf-8", errors="replace").splitlines()[-2000:]
+    except OSError:
+        mappings = []
+    debug_control = Path("/proc/dynamic_debug/control")
+    try:
+        awg_debug = [
+            line for line in debug_control.read_text(encoding="utf-8", errors="replace").splitlines()
+            if "amneziawg" in line or any(name in line for name in (
+                "prepare_awg_message", "wg_receive_handshake_packet",
+                "wg_noise_handshake_consume_initiation",
+            ))
+        ][-500:]
+    except OSError:
+        awg_debug = []
+    return {
+        "protocol_ports": udp_protocol_ports(state),
+        "commands": output,
+        "source_relay_mappings": mappings,
+        "amneziawg_dynamic_debug": awg_debug,
+    }
 
 
 def _capture_event_summary(records: list[dict], state: AppState) -> list[dict]:
@@ -762,35 +791,6 @@ def _runtime_delta(before: dict, after: dict) -> dict:
             key: max(0, int(new_notifications.get(key, 0) or 0) - int(old_notifications.get(key, 0) or 0))
             for key in ("attempted", "delivered", "failed")
         },
-    }
-    output = {}
-    for label, command in commands.items():
-        result = HOST.run(command, capture_output=True, text=True, timeout=10, check=False)
-        output[label] = {
-            "returncode": result.returncode,
-            "stdout": (result.stdout or "")[-100_000:],
-            "stderr": (result.stderr or "")[-10_000:],
-        }
-    try:
-        mappings = MAP_FILE.read_text(encoding="utf-8", errors="replace").splitlines()[-2000:]
-    except OSError:
-        mappings = []
-    debug_control = Path("/proc/dynamic_debug/control")
-    try:
-        awg_debug = [
-            line for line in debug_control.read_text(encoding="utf-8", errors="replace").splitlines()
-            if "amneziawg" in line or any(name in line for name in (
-                "prepare_awg_message", "wg_receive_handshake_packet",
-                "wg_noise_handshake_consume_initiation",
-            ))
-        ][-500:]
-    except OSError:
-        awg_debug = []
-    return {
-        "protocol_ports": udp_protocol_ports(state),
-        "commands": output,
-        "source_relay_mappings": mappings,
-        "amneziawg_dynamic_debug": awg_debug,
     }
 
 
