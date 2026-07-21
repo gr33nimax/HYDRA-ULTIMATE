@@ -171,6 +171,31 @@ def test_plugin_state():
     assert proto.port == 8443
 
 
+def test_protocol_state_roundtrip_preserves_lifecycle_and_config(tmp_path):
+    """Loading state must not replace a populated PluginState with defaults."""
+    import hydra.core.state as state_mod
+
+    original_file, original_dir = state_mod.STATE_FILE, state_mod.STATE_DIR
+    try:
+        state_mod.STATE_FILE = tmp_path / "state.json"
+        state_mod.STATE_DIR = tmp_path
+        state = AppState(protocols={
+            "anytls": PluginState(
+                enabled=True,
+                installed=True,
+                port=20444,
+                config={"domain": "anytls.example", "padding": ["1=1-2"]},
+            ),
+        })
+
+        save_state(state)
+        loaded = load_state()
+
+        assert loaded.protocols["anytls"] == state.protocols["anytls"]
+    finally:
+        state_mod.STATE_FILE, state_mod.STATE_DIR = original_file, original_dir
+
+
 def test_roundtrip_with_credentials():
     """Сохранение и загрузка User с credentials → поля совпадают."""
     state = AppState()
