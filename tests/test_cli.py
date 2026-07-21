@@ -59,3 +59,13 @@ def test_restore_dry_run_dispatches(capsys):
         assert cli.main(["restore", "/tmp/backup.tar.gz", "--dry-run"]) == 0
     restore.assert_called_once_with("/tmp/backup.tar.gz", dry_run=True)
     assert '"dry_run": true' in capsys.readouterr().out
+
+
+def test_antidpi_selftest_dispatches(capsys):
+    result = {"ok": True, "archive": "/tmp/antidpi.tar.gz"}
+    with patch.object(cli, "load_state", return_value=AppState()), \
+         patch.object(cli, "_require_root"), \
+         patch("hydra.plugins.antidpi.selftest.run_selftest", return_value=result) as run:
+        assert cli.main(["antidpi", "selftest", "--output", "/tmp/antidpi.tar.gz", "--wait", "0"]) == 0
+    run.assert_called_once()
+    assert '"archive": "/tmp/antidpi.tar.gz"' in capsys.readouterr().out
