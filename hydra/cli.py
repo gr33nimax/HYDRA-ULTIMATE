@@ -113,6 +113,11 @@ def parser() -> argparse.ArgumentParser:
         "--full", action="store_true",
         help="Also run temporary native clients with invalid authentication",
     )
+    capture = antidpi_commands.add_parser(
+        "capture", help="Capture an external invalid-auth test window",
+    )
+    capture.add_argument("--seconds", type=float, default=120.0, help="Capture window (10-600 seconds)")
+    capture.add_argument("--output", default="", help="Diagnostic archive path or destination directory")
 
     users = commands.add_parser("user", help="Manage users")
     user_commands = users.add_subparsers(dest="user_action", required=True)
@@ -187,6 +192,10 @@ def main(argv: list[str] | None = None) -> int:
             _require_root()
             from hydra.plugins.antidpi.selftest import run_selftest
             payload = run_selftest(state, args.output or None, args.wait, full=args.full)
+        elif args.command == "antidpi" and args.antidpi_action == "capture":
+            _require_root()
+            from hydra.plugins.antidpi.selftest import capture_external_tests
+            payload = capture_external_tests(state, args.output or None, args.seconds)
         else:
             payload = _user_command(args, state, app)
         _print(payload)

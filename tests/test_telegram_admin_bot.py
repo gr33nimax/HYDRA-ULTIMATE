@@ -139,6 +139,23 @@ def test_antidpi_observe_event_notification(tmp_path):
                 assert "Действие" not in msg
 
 
+def test_single_native_auth_failure_sends_alert_without_banning(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "antidpi-auth.json"
+    result = MagicMock(returncode=0, stdout="", stderr="")
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch("hydra.plugins.antidpi.plugin._run", return_value=result), \
+         patch("hydra.services.telegram.bot.send_admin_notification") as notify:
+        banned = plugin.observe_event(
+            "198.51.100.44",
+            {"kind": "auth_failure", "protocol": "naive", "source": "caddy-naive"},
+            now=1000,
+        )
+    assert banned is False
+    notify.assert_called_once()
+    assert "auth_failure" in notify.call_args.args[0]
+
+
 def test_unban_ip_everywhere():
     with patch("hydra.plugins.antidpi.plugin.AntiDPIPlugin.unban", return_value=True), \
          patch("hydra.plugins.honeypot.plugin.HoneypotPlugin.unban", return_value=True):

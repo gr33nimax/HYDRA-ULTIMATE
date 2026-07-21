@@ -633,3 +633,108 @@ def run_selftest(state: AppState, output: str | None = None, wait_seconds: float
         if item.get("status") in {"filter_match", "native_log_unmatched"}
     )
     return {"ok": True, "archive": str(archive), "captured_protocols": captured, "report": report}
+
+
+def _all_journal(since: float, until: float) -> list[dict]:
+    units = sorted({
+        "hydra-antidpi", "hydra-source-relay", "caddy-l4", "caddy-naive",
+        *[unit for owners in JOURNAL_UNITS.values() for unit in owners],
+    })
+    base = [
+        "journalctl", "--no-pager", "-o", "json",
+        f"--since=@{since:.3f}", f"--until=@{until:.3f}",
+    ]
+    command = list(base)
+    for unit in units:
+        command.extend(("-u", unit))
+    records = []
+    for journal_command in (command, [*base, "-k"]):
+        result = HOST.run(
+            journal_command, capture_output=True, text=True, timeout=30, check=False,
+        )
+        for line in result.stdout.splitlines():
+            try:
+                record = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(record, dict):
+                record = dict(record)
+                record["MESSAGE"] = decode_log_message(record.get("MESSAGE", ""))
+                records.append(record)
+    return records
+
+
+def _all_new_log_lines(before: dict[Path, int]) -> dict[str, list[str]]:
+    result = {}
+    for path, offset in before.items():
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                if path.stat().st_size >= offset:
+                    handle.seek(offset)
+                lines = handle.read(8 * 1024 * 1024).splitlines()
+        except OSError:
+            lines = []
+        if lines:
+            result[str(path)] = lines[-50000:]
+    return result
+
+
+def capture_external_tests(state: AppState, output: str | None = None,
+                           seconds: float = 120.0) -> dict:
+    """Capture real external tests in a bounded, automatically redacted bundle."""
+    if not _is_linux_host():
+        raise RuntimeError("AntiDPI capture must run on the HYDRA Linux host")
+    duration = max(10.0, min(float(seconds), 600.0))
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    archive = Path(output) if output else Path(f"/tmp/hydra-antidpi-capture-{stamp}.tar.gz")
+    if archive.is_dir():
+        archive = archive / f"hydra-antidpi-capture-{stamp}.tar.gz"
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    redact = _redactor(state)
+    before = _offsets()
+    since = time.time()
+    print(
+        f"AntiDPI capture active for {duration:.0f}s. "
+        "Run invalid-password clients now from an external IP...",
+        flush=True,
+    )
+    time.sleep(duration)
+    until = time.time()
+    records = _all_journal(since - 0.1, until + 0.1)
+    logs = _all_new_log_lines(before)
+    from hydra.plugins.antidpi.plugin import AntiDPIPlugin
+    runtime = AntiDPIPlugin()._load_state()
+    report = {
+        "schema": 1,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "mode": "external_capture",
+        "duration_seconds": round(until - since, 3),
+        "environment": _environment(),
+        "journal_records": len(records),
+        "log_lines": {path: len(lines) for path, lines in logs.items()},
+        "antidpi_runtime": runtime,
+    }
+    with tempfile.TemporaryDirectory(prefix="hydra-antidpi-capture-") as temp_name:
+        root = Path(temp_name) / "hydra-antidpi-capture"
+        root.mkdir(parents=True)
+        (root / "report.json").write_text(
+            redact(json.dumps(report, ensure_ascii=False, indent=2)), encoding="utf-8",
+        )
+        (root / "journal.jsonl").write_text(
+            redact("\n".join(json.dumps(item, ensure_ascii=False) for item in records)),
+            encoding="utf-8",
+        )
+        for index, (path, lines) in enumerate(logs.items(), 1):
+            label = Path(path).name.replace(".", "-")
+            (root / f"log-{index}-{label}.log").write_text(
+                redact("\n".join(lines)), encoding="utf-8",
+            )
+        (root / "README.txt").write_text(
+            "External AntiDPI capture. Runtime credentials are automatically redacted.\n"
+            "Review the archive before sharing.\n",
+            encoding="utf-8",
+        )
+        with tarfile.open(archive, "w:gz") as bundle:
+            bundle.add(root, arcname=root.name)
+    archive.chmod(0o600)
+    return {"ok": True, "archive": str(archive), "duration_seconds": duration}

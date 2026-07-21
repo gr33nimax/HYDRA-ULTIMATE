@@ -17,6 +17,12 @@ PATTERNS: tuple[tuple[str, str, str], ...] = (
     ("trusttunnel", r"(?:authentication failed|authorization failed|invalid token|unauthorized|auth error)", "auth_failure"),
     (
         "shadowtls",
+        r"inbound/trojan\[shadowtls-trojan-in\].*"
+        r"(?:authentication failed|invalid password|unknown user|unauthorized)",
+        "auth_failure",
+    ),
+    (
+        "shadowtls",
         r"(?:handshake failed|invalid client hello|read client handshake: unexpected EOF|"
         r"extract server name: tls: handshake message .* exceeds maximum)",
         "malformed_tls",

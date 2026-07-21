@@ -43,6 +43,8 @@ SIGNAL_WEIGHTS = {
 
 SCORE_HALF_LIFE = 300.0
 BAN_THRESHOLD = 8
+ALERT_THRESHOLD = 6
+AUTH_ALERT_THRESHOLD = 3
 BAN_DURATIONS = (600, 3600, 86400, 604800)  # 10m -> 1h -> 24h -> 7d
 LEGACY_BAN_DURATION = 86400
 ALERT_COOLDOWN = 300.0
@@ -659,7 +661,9 @@ class AntiDPIPlugin(BasePlugin):
             should_alert = (
                 not active_ban
                 and signals
-                and entry["score"] >= 6.0
+                and entry["score"] >= (
+                    AUTH_ALERT_THRESHOLD if "auth_failure" in signals else ALERT_THRESHOLD
+                )
                 and not (entry["score"] >= BAN_THRESHOLD and ban_eligible)
                 and timestamp - last_alert_at >= ALERT_COOLDOWN
             )

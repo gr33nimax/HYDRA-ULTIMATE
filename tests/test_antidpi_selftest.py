@@ -9,6 +9,25 @@ from hydra.core.state import AppState, PluginState, TelegramConfig, User
 from hydra.plugins.antidpi import selftest
 
 
+def test_external_capture_writes_redacted_bundle_without_probes(tmp_path):
+    archive = tmp_path / "capture.tar.gz"
+    state = AppState()
+    with patch("hydra.plugins.antidpi.selftest._is_linux_host", return_value=True), \
+         patch("hydra.plugins.antidpi.selftest._offsets", return_value={}), \
+         patch("hydra.plugins.antidpi.selftest._all_journal", return_value=[]), \
+         patch("hydra.plugins.antidpi.selftest._all_new_log_lines", return_value={}), \
+         patch("hydra.plugins.antidpi.selftest._environment", return_value={}), \
+         patch("hydra.plugins.antidpi.selftest.time.sleep"), \
+         patch("hydra.plugins.antidpi.selftest.time.time", side_effect=[100.0, 101.0, 102.0]), \
+         patch("hydra.plugins.antidpi.plugin.AntiDPIPlugin._load_state", return_value={"events": 2}):
+        result = selftest.capture_external_tests(state, str(archive), 10)
+    assert result["ok"] is True
+    with tarfile.open(archive) as bundle:
+        report = json.loads(bundle.extractfile("hydra-antidpi-capture/report.json").read())
+    assert report["mode"] == "external_capture"
+    assert report["antidpi_runtime"]["events"] == 2
+
+
 def test_targets_cover_enabled_protocol_shapes():
     state = AppState(
         protocols={
