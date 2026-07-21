@@ -111,6 +111,15 @@ def get_ban_duration(offense_count: int) -> int:
     return BAN_DURATIONS[idx]
 
 
+def format_score(value: object) -> str:
+    """Render detector precision without visually crossing the ban threshold."""
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        score = 0.0
+    return f"{score:.2f}/{BAN_THRESHOLD:.2f}"
+
+
 def _track_notification(data: dict, delivered: bool, *, now: float) -> None:
     """Persist delivery telemetry without storing Telegram credentials."""
     stats = data.setdefault("notification_stats", {})
@@ -712,7 +721,7 @@ class AntiDPIPlugin(BasePlugin):
                             ("Protocol", proto),
                             ("Source", source),
                             ("Signals", ", ".join(signals)),
-                            ("Score", f"{entry['score']:.1f}/{BAN_THRESHOLD}"),
+                            ("Score", format_score(entry["score"])),
                         ]),
                         category="antidpi",
                     ))
@@ -764,7 +773,7 @@ class AntiDPIPlugin(BasePlugin):
                                     ("Protocol", event.get("protocol", "L4")),
                                     ("Source", source),
                                     ("Signals", ", ".join(str(value) for value in entry["signals"])),
-                                    ("Score", f"{entry['score']:.1f}/{BAN_THRESHOLD}"),
+                                    ("Score", format_score(entry["score"])),
                                     ("TTL", dur_str),
                                     ("Offense", offense_count),
                                 ]),

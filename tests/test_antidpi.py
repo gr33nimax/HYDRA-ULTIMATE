@@ -5,6 +5,7 @@ from hydra.plugins.antidpi.plugin import (
     active_bans,
     ban_duration,
     expire_bans,
+    format_score,
     _scan_rule,
     decayed_score,
     prune_runtime_state,
@@ -14,6 +15,11 @@ from hydra.plugins.antidpi.plugin import (
     normalize_trusttunnel_record,
     score_event,
 )
+
+
+def test_notification_score_does_not_round_up_to_the_ban_threshold():
+    assert format_score(7.96) == "7.96/8.00"
+    assert format_score(8) == "8.00/8.00"
 
 
 def test_single_transient_failure_is_not_a_high_confidence_signal():
