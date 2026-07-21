@@ -252,7 +252,7 @@ def health_all(state: AppState) -> dict[str, str]:
         if not _uses_central_apply(plugin):
             continue
         try:
-            health = plugin.health_result()
+            health = plugin.health_result(state)
             healthy, detail = health.healthy, health.detail
         except Exception as exc:
             healthy, detail = False, str(exc) or exc.__class__.__name__

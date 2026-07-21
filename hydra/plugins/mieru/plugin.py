@@ -15,6 +15,7 @@ import json
 
 from hydra.plugins.base import (
     BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment,
+    HealthResult,
 )
 from hydra.core.state import AppState, User
 from hydra.utils.crypto import derive_key
@@ -85,6 +86,25 @@ class MieruPlugin(BasePlugin):
     def apply(self, state: AppState) -> bool:
         """No-op: конфиг применяется через orchestrator.apply_config()."""
         return True
+
+    def healthcheck_for_state(self, state: AppState) -> HealthResult:
+        """Validate the candidate Mieru inbound without reloading state."""
+        from hydra.core import singbox
+
+        service_active = singbox.is_running()
+        inbound_configured = singbox.has_configured_inbound("mieru-in")
+        healthy = service_active and inbound_configured
+        detail = ""
+        if not service_active:
+            detail = "sing-box service is not active"
+        elif not inbound_configured:
+            detail = "Mieru inbound is missing from the applied Sing-Box config"
+        return HealthResult(
+            healthy,
+            detail,
+            "ok" if healthy else "error",
+            {"sing_box": service_active, "mieru_inbound": inbound_configured},
+        )
 
     # ═══════════════════════════════════════════════════════════════════
     #  Per-user

@@ -143,8 +143,16 @@ class BasePlugin(ABC):
         except Exception as exc:
             return HealthResult(False, str(exc) or exc.__class__.__name__, "unknown")
 
-    def health_result(self) -> HealthResult:
-        result = self.healthcheck()
+    def healthcheck_for_state(self, state: AppState) -> HealthResult | tuple[bool, str]:
+        """Check the runtime against the state currently being applied.
+
+        Shared-runtime plugins can override this hook to avoid re-reading a
+        stale persisted enablement flag during an apply transaction.
+        """
+        return self.healthcheck()
+
+    def health_result(self, state: AppState | None = None) -> HealthResult:
+        result = self.healthcheck() if state is None else self.healthcheck_for_state(state)
         if isinstance(result, HealthResult):
             return result
         healthy, detail = result

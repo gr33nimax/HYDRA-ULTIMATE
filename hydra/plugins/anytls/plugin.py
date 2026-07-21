@@ -12,6 +12,7 @@ from pathlib import Path
 
 from hydra.plugins.base import (
     BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment,
+    HealthResult,
 )
 from hydra.core.state import AppState, User
 from hydra.utils.crypto import derive_key, derive_hex_key
@@ -107,6 +108,25 @@ class AnyTLSPlugin(BasePlugin):
 
     def apply(self, state: AppState) -> bool:
         return True
+
+    def healthcheck_for_state(self, state: AppState) -> HealthResult:
+        """Validate the candidate AnyTLS inbound without reloading state."""
+        from hydra.core import singbox
+
+        service_active = singbox.is_running()
+        inbound_configured = singbox.has_configured_inbound("anytls-in")
+        healthy = service_active and inbound_configured
+        detail = ""
+        if not service_active:
+            detail = "sing-box service is not active"
+        elif not inbound_configured:
+            detail = "AnyTLS inbound is missing from the applied Sing-Box config"
+        return HealthResult(
+            healthy,
+            detail,
+            "ok" if healthy else "error",
+            {"sing_box": service_active, "anytls_inbound": inbound_configured},
+        )
 
     def _get_padding_scheme(self, state: AppState) -> list[str]:
         ps = state.protocols.get("anytls")
