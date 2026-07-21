@@ -26,3 +26,5 @@ def test_readme_one_command_installs_dev():
         "HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash"
     ) in README
     assert "git clone -b dev" in README
+    assert ".venv/bin/python -m pip install -r requirements.lock" in README
+    assert "sudo python3 main.py" not in README

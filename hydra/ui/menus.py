@@ -1418,7 +1418,7 @@ def _user_configs(state: AppState, user: User):
         import qrcode
     except ImportError:
         warn("Библиотека qrcode не установлена, QR-коды не будут отображаться.")
-        info("Установите её командой: pip3 install qrcode")
+        info("Восстановите окружение: /opt/hydra/.venv/bin/python -m pip install -r /opt/hydra/requirements.lock")
         print()
 
     from hydra.plugins import registry

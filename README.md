@@ -48,8 +48,15 @@ curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootst
 ```bash
 git clone -b dev https://github.com/gr33nimax/HYDRA-ULTIMATE /opt/hydra
 cd /opt/hydra
-sudo python3 main.py
+sudo apt-get install -y python3-venv
+sudo python3 -m venv .venv
+sudo .venv/bin/python -m pip install --upgrade pip
+sudo .venv/bin/python -m pip install -r requirements.lock
+sudo .venv/bin/python main.py
 ```
+
+Не запускайте исходники через системный `python3`: в таком режиме зависимости
+из `requirements.lock` (включая генератор QR-кодов) не устанавливаются.
 
 Первичная настройка выполняется в TUI: включите нужные протоколы и системные
 службы, создайте пользователей, затем проверьте состояние:
