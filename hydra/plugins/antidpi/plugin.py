@@ -26,6 +26,11 @@ SCRIPT_FILE = Path("/usr/local/bin/hydra-antidpi.py")
 SERVICE_FILE = Path("/etc/systemd/system/hydra-antidpi.service")
 AWG_DEBUG_SERVICE = Path("/etc/systemd/system/hydra-awg-antidpi-debug.service")
 AWG_DEBUG_PATHS = (Path("/sys/kernel/debug/dynamic_debug/control"), Path("/proc/dynamic_debug/control"))
+AWG_REJECTION_DEBUG_FUNCTIONS = (
+    "wg_receive_handshake_packet",
+    "wg_noise_handshake_consume_initiation",
+)
+AWG_NOISY_DEBUG_FUNCTIONS = ("prepare_awg_message",)
 SET_V4, SET_V6 = "hydra_antidpi", "hydra_antidpi6"
 RULE_COMMENT = "hydra-antidpi"
 SCAN_RULE_COMMENT = "hydra-antidpi-scan"
@@ -615,14 +620,13 @@ class AntiDPIPlugin(BasePlugin):
                 _run(["systemctl", "disable", "--now", "hydra-awg-antidpi-debug.service"])
                 AWG_DEBUG_SERVICE.unlink(missing_ok=True)
             return True
-        functions = (
-            "prepare_awg_message",
-            "wg_receive_handshake_packet",
-            "wg_noise_handshake_consume_initiation",
-        )
         flag = "+p" if enabled else "-p"
+        commands = [
+            *(f"module amneziawg func {name} -p" for name in AWG_NOISY_DEBUG_FUNCTIONS),
+            *(f"module amneziawg func {name} {flag}" for name in AWG_REJECTION_DEBUG_FUNCTIONS),
+        ]
         try:
-            control.write_text("\n".join(f"module amneziawg func {name} {flag}" for name in functions) + "\n", encoding="utf-8")
+            control.write_text("\n".join(commands) + "\n", encoding="utf-8")
         except OSError:
             return not enabled
         if not enabled:
@@ -630,9 +634,12 @@ class AntiDPIPlugin(BasePlugin):
             AWG_DEBUG_SERVICE.unlink(missing_ok=True)
             _run(["systemctl", "daemon-reload"])
             return True
-        commands = "; ".join(f"echo 'module amneziawg func {name} +p'" for name in functions)
-        stop = "; ".join(f"echo 'module amneziawg func {name} -p'" for name in functions)
-        _atomic = f"""[Unit]\nAfter=systemd-modules-load.service\n[Service]\nType=oneshot\nExecStart=/bin/sh -c \"({commands}) > {control}\"\nExecStop=/bin/sh -c \"({stop}) > {control}\"\nRemainAfterExit=yes\n[Install]\nWantedBy=multi-user.target\n"""
+        start = "; ".join(f"echo '{command}'" for command in commands)
+        stop = "; ".join(
+            f"echo 'module amneziawg func {name} -p'"
+            for name in (*AWG_NOISY_DEBUG_FUNCTIONS, *AWG_REJECTION_DEBUG_FUNCTIONS)
+        )
+        _atomic = f"""[Unit]\nAfter=systemd-modules-load.service\n[Service]\nType=oneshot\nExecStart=/bin/sh -c \"({start}) > {control}\"\nExecStop=/bin/sh -c \"({stop}) > {control}\"\nRemainAfterExit=yes\n[Install]\nWantedBy=multi-user.target\n"""
         AWG_DEBUG_SERVICE.write_text(_atomic, encoding="utf-8")
         _run(["systemctl", "daemon-reload"])
         return _run(["systemctl", "enable", "--now", "hydra-awg-antidpi-debug.service"]).returncode == 0

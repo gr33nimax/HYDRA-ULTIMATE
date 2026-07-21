@@ -245,7 +245,7 @@ auth error и точной source-relay attribution.
 | Naive TCP/QUIC | HTTP proxy authentication failure | ALERT/BAN |
 | Snell | malformed first packet, handshake failure | ALERT/BAN |
 | Hysteria2 | native reject и UDP rate telemetry | ALERT only |
-| AmneziaWG | Unknown message, Invalid MAC/handshake, unknown peer | ALERT only |
+| AmneziaWG | Invalid MAC/handshake, unknown peer; штатный Jc junk игнорируется | ALERT only |
 | qWDTT | native DTLS handshake failure | ALERT only |
 | Mieru | repeated established low-volume TCP closes | ALERT only |
 | Telemt | native adapter сохранён | не входит в подтверждённую матрицу |

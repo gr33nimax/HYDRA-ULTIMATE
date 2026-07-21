@@ -34,6 +34,14 @@ def test_awg_real_kernel_unknown_peer_is_normalized():
     assert result[1]["ban_eligible"] is False
 
 
+def test_awg_legitimate_junk_packet_is_not_rejection_evidence():
+    result = parse_protocol_line(
+        "kernel",
+        "wireguard: awg0: Unknown message from 198.51.100.8:48120 encountered, packet dropped",
+    )
+    assert result is None
+
+
 def test_non_evidence_is_ignored():
     assert parse_protocol_line("sing-box.service", "accepted connection from 203.0.113.9") is None
 

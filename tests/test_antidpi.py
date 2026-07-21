@@ -286,6 +286,25 @@ def test_antidpi_service_allows_outbound_telegram_sockets(tmp_path):
     assert "RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6" in unit
 
 
+def test_awg_debug_disables_junk_parser_and_keeps_rejection_paths(tmp_path):
+    plugin = AntiDPIPlugin()
+    control = tmp_path / "dynamic_debug_control"
+    service = tmp_path / "hydra-awg-antidpi-debug.service"
+    control.touch()
+    with patch("hydra.plugins.antidpi.plugin.AWG_DEBUG_PATHS", (control,)), \
+         patch("hydra.plugins.antidpi.plugin.AWG_DEBUG_SERVICE", service), \
+         patch("hydra.plugins.antidpi.plugin._run", return_value=MagicMock(returncode=0)):
+        assert plugin._sync_awg_debug(True) is True
+
+    control_text = control.read_text(encoding="utf-8")
+    service_text = service.read_text(encoding="utf-8")
+    assert "prepare_awg_message -p" in control_text
+    assert "prepare_awg_message +p" not in control_text
+    assert "wg_receive_handshake_packet +p" in control_text
+    assert "prepare_awg_message -p" in service_text
+    assert "wg_receive_handshake_packet +p" in service_text
+
+
 def test_ban_history_is_created_once_and_legacy_signals_are_safe(tmp_path):
     plugin = AntiDPIPlugin()
     state_file = tmp_path / "antidpi.json"

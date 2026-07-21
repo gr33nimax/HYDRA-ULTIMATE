@@ -12,7 +12,7 @@ import re
 PATTERNS: tuple[tuple[str, str, str], ...] = (
     (
         "amneziawg",
-        r"(?:Invalid MAC(?: of handshake)?|Invalid handshake|Unknown message|unknown peer)",
+        r"(?:Invalid MAC(?: of handshake)?|Invalid handshake|unknown peer)",
         "handshake_failure",
     ),
     ("sing-box", r"(?:handshake failed|invalid handshake|protocol error)", "handshake_failure"),

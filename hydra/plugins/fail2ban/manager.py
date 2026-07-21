@@ -357,7 +357,7 @@ def menu_fail2ban(state: AppState, plugin) -> None:
                         proto.enabled = False
                         state.security.fail2ban_enabled = False
                         save_state(state)
-                        error("Fail2ban установлен, но конфигурация протокольных jail не применена.")
+                        error("Fail2ban установлен, но конфигурация системных jail не применена.")
                 else:
                     error("Не удалось выполнить установку Fail2ban.")
                 prompt("Нажмите Enter для продолжения")
@@ -594,15 +594,6 @@ def menu_fail2ban(state: AppState, plugin) -> None:
             
             cur_en = plugin.jail_options(state).get(jail, {}).get("enabled", "false") == "true"
             new_en = not cur_en
-            required_protocol = {
-                "hydra-awg": "amneziawg",
-            }.get(jail)
-            if new_en and required_protocol:
-                required_state = state.protocols.get(required_protocol)
-                if not required_state or not required_state.enabled:
-                    error(f"Сначала включите протокол {required_protocol}.")
-                    prompt("Нажмите Enter для продолжения")
-                    continue
             from hydra.core.state import get_protocol, save_state
             p_state = get_protocol(state, "fail2ban")
             jail_config = p_state.config.setdefault("jails", {}).setdefault(jail, {})

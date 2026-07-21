@@ -49,7 +49,12 @@ decoy probes, connection burst и сканирования портов. Он н
 - Для ошибок без endpoint разрешена только ambiguity-safe корреляция: адрес
   используется, если в коротком окне присутствует единственный кандидат.
 - Для AmneziaWG включается ограниченный dynamic-debug нативных rejection paths:
-  `Unknown message`, `Invalid MAC`, `Invalid handshake` и `unknown peer`.
+  `Invalid MAC`, `Invalid handshake` и `unknown peer`. Штатные AWG junk-пакеты
+  из `Jc` исключены: `prepare_awg_message` принудительно выключен, а его
+  `Unknown message` больше не считается ошибкой handshake.
+- Из Fail2ban удалён исполняемый legacy протокольных плагинов; сохранён только
+  миграционный cleanup старых jail/filter и portscan rule. Cleanup прежнего AWG
+  unit больше не отключает rejection logging, принадлежащий AntiDPI.
 - Caddy decoy получил отдельную access-телеметрию с сохранением внешнего IP.
 - Созданы динамические ipset `hydra_antidpi` и `hydra_antidpi6`; только они
   выполняют enforcement. Телеметрические iptables/ip6tables-правила используют

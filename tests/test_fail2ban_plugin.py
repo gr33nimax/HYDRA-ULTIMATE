@@ -242,21 +242,23 @@ def test_awg_probe_detection_is_not_owned_by_fail2ban():
     assert "hydra-awg" not in p.jail_options(state)
 
 
-def test_awg_dynamic_debug_is_enabled_and_persisted(tmp_path):
-    p = Fail2banPlugin()
+def test_fail2ban_cleanup_does_not_disable_antidpi_rejection_debug(tmp_path):
+    plugin = Fail2banPlugin()
     control = tmp_path / "dynamic_debug_control"
-    service = tmp_path / "hydra-awg-fail2ban-debug.service"
+    legacy_service = tmp_path / "hydra-awg-fail2ban-debug.service"
+    antidpi_service = tmp_path / "hydra-awg-antidpi-debug.service"
     control.touch()
-
+    legacy_service.touch()
+    antidpi_service.touch()
     with patch("hydra.plugins.fail2ban.plugin.AWG_DYNAMIC_DEBUG_PATHS", (control,)), \
-         patch("hydra.plugins.fail2ban.plugin.AWG_DEBUG_SERVICE", service), \
+         patch("hydra.plugins.fail2ban.plugin.AWG_DEBUG_SERVICE", legacy_service), \
+         patch("hydra.plugins.fail2ban.plugin.ANTIDPI_AWG_DEBUG_SERVICE", antidpi_service), \
          patch("hydra.plugins.fail2ban.plugin._run", return_value=MagicMock(returncode=0)) as run:
-        assert p._sync_awg_debug(True) is True
+        assert plugin._cleanup_legacy_awg_debug() is True
 
     control_text = control.read_text(encoding="utf-8")
-    assert "module amneziawg func prepare_awg_message +p" in control_text
-    assert "module amneziawg func wg_receive_handshake_packet +p" in control_text
-    service_text = service.read_text(encoding="utf-8")
-    assert "prepare_awg_message +p" in service_text
-    assert "wg_receive_handshake_packet +p" in service_text
-    assert any("enable" in call.args[0] for call in run.call_args_list)
+    assert "prepare_awg_message -p" in control_text
+    assert "wg_receive_handshake_packet -p" not in control_text
+    assert ["systemctl", "try-restart", "hydra-awg-antidpi-debug.service"] in [
+        call.args[0] for call in run.call_args_list
+    ]
