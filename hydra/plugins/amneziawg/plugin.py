@@ -352,18 +352,20 @@ class AmneziaWGPlugin(BasePlugin):
         ps = state.protocols.get("amneziawg")
         network = None
         used = self._used_networks(state)
-        if ps and "profiles" in ps.config and profile_name in ps.config["profiles"]:
+
+        # An existing interface is authoritative. Silently moving it to a
+        # "free" subnet during a routine apply invalidates every previously
+        # exported client profile. Conflict avoidance belongs to profile
+        # creation, not reconciliation of an installed interface.
+        if conf_path.exists():
+            m = re.search(r"Address\s*=\s*(\d+)\.(\d+)\.(\d+)\.", conf_path.read_text(encoding="utf-8"))
+            if m:
+                network = f"{m.group(1)}.{m.group(2)}.{m.group(3)}.0/24"
+
+        if not network and ps and "profiles" in ps.config and profile_name in ps.config["profiles"]:
             candidate = ps.config["profiles"][profile_name].get("network")
             if candidate and self._is_network_free(candidate, used):
                 network = candidate
-        
-        if not network:
-            if conf_path.exists():
-                m = re.search(r"Address\s*=\s*(\d+)\.(\d+)\.(\d+)\.", conf_path.read_text(encoding="utf-8"))
-                if m:
-                    candidate = f"{m.group(1)}.{m.group(2)}.{m.group(3)}.0/24"
-                    if self._is_network_free(candidate, used):
-                        network = candidate
             
         if not network:
             network = default_network

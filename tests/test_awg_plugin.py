@@ -295,9 +295,15 @@ def test_invalid_legacy_amnezia_network_falls_back_without_raising():
     assert result == ("10.67.67", "1", "10.67.67.0/24")
 
 
-def test_profile_network_rejects_installer_reserved_subnet():
+def test_existing_profile_network_is_preserved_during_apply():
     p = AmneziaWGPlugin()
-    state = AppState(protocols={"amneziawg": PluginState(enabled=True, config={})})
+    state = AppState(protocols={
+        "amneziawg": PluginState(
+            enabled=True,
+            config={"profiles": {"desktop": {"network": "10.67.67.0/24"}}},
+        ),
+        "wdtt": PluginState(enabled=True, config={"network": "10.66.66.0/16"}),
+    })
     conf = MagicMock()
     conf.exists.return_value = True
     conf.read_text.return_value = "[Interface]\nAddress = 10.66.66.1/24\n"
@@ -306,7 +312,28 @@ def test_profile_network_rejects_installer_reserved_subnet():
         state, conf, "desktop", "10.67.67.0/24",
     )
 
-    assert (base, server_octet, network) == ("10.67.67", "1", "10.67.67.0/24")
+    assert (base, server_octet, network) == ("10.66.66", "1", "10.66.66.0/24")
+
+
+def test_configure_does_not_migrate_existing_interface_network(tmp_path):
+    p = AmneziaWGPlugin()
+    desktop_conf = tmp_path / "awg0.conf"
+    desktop_conf.write_text(FAKE_CONF, encoding="utf-8")
+    mobile_conf = tmp_path / "awg1.conf"
+    state = AppState(protocols={
+        "amneziawg": PluginState(
+            enabled=True,
+            config={"profiles": {"desktop": {"network": "10.67.67.0/24"}}},
+        ),
+        "wdtt": PluginState(enabled=True, config={"network": "10.66.66.0/16"}),
+    })
+
+    with patch("hydra.plugins.amneziawg.plugin.AWG_CONF", desktop_conf), \
+         patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1", mobile_conf):
+        p.configure(state)
+
+    assert "Address = 10.66.66.1/24" in p._pending_conf
+    assert "Address = 10.67.67.1/24" not in p._pending_conf
 
 
 def test_presets_strategies_and_overrides():
