@@ -21,6 +21,7 @@
 - [Архитектура и ключевые механизмы](docs/ARCHITECTURE.md)
 - [Полное руководство Headless CLI](docs/CLI.md)
 - [Архитектура AntiDPI](docs/ANTI_DPI.md)
+- [AntiDPI 2.4.1-dev «FORTRESS»: полная спецификация](docs/ANTIDPI_FORTRESS.md)
 - [Telegram Admin Bot](docs/TELEGRAM_BOT.md)
 - [История изменений](CHANGELOG.md)
 
