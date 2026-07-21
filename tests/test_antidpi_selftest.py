@@ -17,6 +17,7 @@ def test_external_capture_writes_redacted_bundle_without_probes(tmp_path):
          patch("hydra.plugins.antidpi.selftest._all_journal", return_value=[]), \
          patch("hydra.plugins.antidpi.selftest._all_new_log_lines", return_value={}), \
          patch("hydra.plugins.antidpi.selftest._environment", return_value={}), \
+         patch("hydra.plugins.antidpi.selftest._udp_diagnostics", return_value={"ok": True}), \
          patch("hydra.plugins.antidpi.selftest.time.sleep"), \
          patch("hydra.plugins.antidpi.selftest.time.time", side_effect=[100.0, 101.0, 102.0]), \
          patch("hydra.plugins.antidpi.plugin.AntiDPIPlugin._load_state", return_value={"events": 2}):
@@ -26,6 +27,7 @@ def test_external_capture_writes_redacted_bundle_without_probes(tmp_path):
         report = json.loads(bundle.extractfile("hydra-antidpi-capture/report.json").read())
     assert report["mode"] == "external_capture"
     assert report["antidpi_runtime"]["events"] == 2
+    assert report["udp_diagnostics"] == {"ok": True}
 
 
 def test_targets_cover_enabled_protocol_shapes():

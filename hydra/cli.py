@@ -118,6 +118,9 @@ def parser() -> argparse.ArgumentParser:
     )
     capture.add_argument("--seconds", type=float, default=120.0, help="Capture window (10-600 seconds)")
     capture.add_argument("--output", default="", help="Diagnostic archive path or destination directory")
+    antidpi_commands.add_parser(
+        "sync", help="Install/update AntiDPI telemetry and restart its collector",
+    )
 
     users = commands.add_parser("user", help="Manage users")
     user_commands = users.add_subparsers(dest="user_action", required=True)
@@ -196,6 +199,20 @@ def main(argv: list[str] | None = None) -> int:
             _require_root()
             from hydra.plugins.antidpi.selftest import capture_external_tests
             payload = capture_external_tests(state, args.output or None, args.seconds)
+        elif args.command == "antidpi" and args.antidpi_action == "sync":
+            _require_root()
+            from hydra.plugins.antidpi.plugin import AntiDPIPlugin
+            plugin = AntiDPIPlugin()
+            ok = plugin.install()
+            health = plugin.healthcheck()
+            payload = {
+                "ok": bool(ok and health.healthy),
+                "error": "" if ok else plugin.last_error,
+                "health": health.as_dict(),
+            }
+            if not payload["ok"]:
+                _print(payload)
+                return 1
         else:
             payload = _user_command(args, state, app)
         _print(payload)

@@ -80,3 +80,22 @@ def test_antidpi_capture_dispatches(capsys):
             "antidpi", "capture", "--output", "/tmp/capture.tar.gz", "--seconds", "30",
         ]) == 0
     capture.assert_called_once_with(AppState(), "/tmp/capture.tar.gz", 30.0)
+
+
+def test_antidpi_sync_reinstalls_and_reports_health(capsys):
+    health = type("Health", (), {
+        "healthy": True,
+        "as_dict": lambda self: {"healthy": True, "checks": {"udp": True}},
+    })()
+    plugin = type("Plugin", (), {
+        "last_error": "",
+        "install": lambda self: True,
+        "healthcheck": lambda self: health,
+    })()
+    with patch.object(cli, "load_state", return_value=AppState()), \
+         patch.object(cli, "_require_root"), \
+         patch("hydra.plugins.antidpi.plugin.AntiDPIPlugin", return_value=plugin):
+        assert cli.main(["antidpi", "sync"]) == 0
+    output = capsys.readouterr().out
+    assert '"ok": true' in output
+    assert '"udp": true' in output

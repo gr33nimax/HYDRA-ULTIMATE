@@ -6,6 +6,8 @@ from hydra.plugins.antidpi.plugin import (
     ban_duration,
     expire_bans,
     format_score,
+    udp_protocol_ports,
+    _udp_probe_rule,
     _scan_rule,
     decayed_score,
     prune_runtime_state,
@@ -15,11 +17,96 @@ from hydra.plugins.antidpi.plugin import (
     normalize_trusttunnel_record,
     score_event,
 )
+from hydra.core.state import AppState, PluginState
 
 
 def test_notification_score_does_not_round_up_to_the_ban_threshold():
     assert format_score(7.96) == "7.96/8.00"
     assert format_score(8) == "8.00/8.00"
+
+
+def test_enabled_udp_protocol_ports_are_discovered():
+    state = AppState(protocols={
+        "hysteria2": PluginState(enabled=True, port=8443, config={}),
+        "amneziawg": PluginState(enabled=True, config={
+            "profiles": {"desktop": {"port": 51820}, "mobile": {"port": 51821}},
+        }),
+        "wdtt": PluginState(enabled=True, config={"dtls_port": 56000}),
+        "naive": PluginState(enabled=True, config={"network": "tcp"}),
+    })
+    assert udp_protocol_ports(state) == {
+        8443: "hysteria2", 51820: "amneziawg",
+        51821: "amneziawg", 56000: "wdtt",
+    }
+
+
+def test_invalid_udp_ports_are_ignored_instead_of_breaking_rule_sync():
+    state = AppState(protocols={
+        "hysteria2": PluginState(enabled=True, config={"port": "invalid"}),
+        "amneziawg": PluginState(enabled=True, config={
+            "profiles": {"bad": {"port": 70000}, "good": {"port": "51820"}},
+        }),
+    })
+    assert udp_protocol_ports(state) == {51820: "amneziawg"}
+
+
+def test_shared_quic_port_is_not_misattributed_to_one_protocol():
+    state = AppState(protocols={
+        "naive": PluginState(enabled=True, config={"network": "both"}),
+        "trusttunnel": PluginState(enabled=True, config={"transport": "quic"}),
+    })
+    assert udp_protocol_ports(state) == {443: "naive/trusttunnel"}
+
+
+def test_udp_probe_firewall_rule_is_log_only_and_rate_limited():
+    rule = _udp_probe_rule("iptables", 8443)
+    assert rule[:4] == ["-p", "udp", "--dport", "8443"]
+    assert "--ctstate" in rule and "NEW" in rule
+    assert "HYDRA_UDP_PROBE " in rule
+    assert "DROP" not in rule
+
+
+def test_unverified_udp_probe_alerts_but_never_bans(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "udp-alert-only.json"
+    event = {
+        "protocol": "hysteria2", "kind": "udp_probe",
+        "source": "kernel-udp-probe", "ban_eligible": False,
+    }
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch("hydra.plugins.antidpi.plugin._run") as firewall, \
+         patch("hydra.services.telegram.bot.send_admin_notification", return_value=True) as notify:
+        assert plugin.observe_event("198.51.100.40", event, now=1000) is False
+        assert plugin.observe_event("198.51.100.40", event, now=1001) is False
+        assert plugin.observe_event("198.51.100.40", event, now=1002) is False
+    firewall.assert_not_called()
+    notify.assert_called_once()
+    message = notify.call_args.args[0]
+    assert "alert-only / unverified UDP source" in message
+    assert "hysteria2" in message
+
+
+def test_unverified_udp_score_cannot_preload_a_later_verified_ban(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "separate-verified-score.json"
+    udp = {
+        "protocol": "amneziawg", "kind": "udp_probe",
+        "source": "kernel-udp-probe", "ban_eligible": False,
+    }
+    verified = {
+        "protocol": "tls", "kind": "auth_failure", "source": "journal",
+    }
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch("hydra.plugins.antidpi.plugin._run") as firewall, \
+         patch("hydra.services.telegram.bot.send_admin_notification", return_value=True):
+        plugin.observe_event("198.51.100.41", udp, now=1000)
+        plugin.observe_event("198.51.100.41", udp, now=1001)
+        assert plugin.observe_event("198.51.100.41", verified, now=1002) is False
+        state = plugin._load_state()
+    firewall.assert_not_called()
+    entry = state["scores"]["198.51.100.41"]
+    assert entry["score"] >= 8
+    assert entry["verified_score"] < 8
 
 
 def test_single_transient_failure_is_not_a_high_confidence_signal():

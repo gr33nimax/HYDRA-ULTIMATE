@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from hydra.core.host import HOST
+from hydra.core.state import load_state
 from hydra.core.sni_router import DECOY_LOG, TRUSTTUNNEL_LOG
 from hydra.plugins.antidpi.adapters import (
     normalize_tls_auth_failure,
@@ -24,10 +25,34 @@ from hydra.plugins.antidpi.plugin import (
     normalize_decoy_record,
     normalize_naive_decoy_record,
     normalize_trusttunnel_record,
+    udp_protocol_ports,
 )
 
 Normalized = tuple[str, dict]
 NAIVE_ACCESS_LOG = Path("/var/log/caddy-naive/access.log")
+_udp_port_cache: tuple[float, dict[int, str]] = (0.0, {})
+
+
+def _attribute_udp_protocol(event: Normalized | None) -> Normalized | None:
+    global _udp_port_cache
+    if not event:
+        return event
+    address, details = event
+    if details.get("kind") != "udp_probe":
+        return event
+    now = time.monotonic()
+    if now - _udp_port_cache[0] > 10:
+        try:
+            _udp_port_cache = (now, udp_protocol_ports(load_state()))
+        except Exception:
+            _udp_port_cache = (now, {})
+    try:
+        port = int(details.get("destination_port", 0))
+    except (TypeError, ValueError):
+        port = 0
+    resolved = dict(details)
+    resolved["protocol"] = _udp_port_cache[1].get(port, "udp")
+    return address, resolved
 
 
 def _resolve_relay_source(event: Normalized | None) -> Normalized | None:
@@ -232,6 +257,7 @@ def _kernel_worker(out: queue.Queue[Normalized], stop: threading.Event) -> None:
                 if stop.is_set():
                     break
                 event = parse_kernel_scan_line(line)
+                event = _attribute_udp_protocol(event)
                 if not event:
                     event = parse_protocol_line("kernel", line)
                 if event:
@@ -247,6 +273,11 @@ def _kernel_worker(out: queue.Queue[Normalized], stop: threading.Event) -> None:
 def run() -> None:
     plugin = AntiDPIPlugin()
     plugin.cleanup_honeypot_duplicates()
+    plugin.sync_udp_probe_rules()
+    try:
+        synced_udp_ports = udp_protocol_ports(load_state())
+    except Exception:
+        synced_udp_ports = {}
     events: queue.Queue[Normalized] = queue.Queue(maxsize=4096)
     stop = threading.Event()
     workers = (
@@ -262,7 +293,19 @@ def run() -> None:
         JsonTail(TRUSTTUNNEL_LOG, (normalize_trusttunnel_record,)),
     )
     try:
+        last_udp_sync = time.monotonic()
         while True:
+            if time.monotonic() - last_udp_sync >= 60:
+                try:
+                    current_udp_ports = udp_protocol_ports(load_state())
+                except Exception:
+                    current_udp_ports = synced_udp_ports
+                # Recreating hashlimit rules clears their counters. Refresh
+                # only when listener ports changed so sustained silent UDP
+                # rejects can cross the telemetry threshold.
+                if current_udp_ports != synced_udp_ports and plugin.sync_udp_probe_rules():
+                    synced_udp_ports = current_udp_ports
+                last_udp_sync = time.monotonic()
             for tail in tails:
                 for event in tail.read():
                     resolved = _resolve_relay_source(event)

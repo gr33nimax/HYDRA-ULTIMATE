@@ -20,6 +20,7 @@ from typing import Callable
 from hydra import __version__
 from hydra.core.host import HOST
 from hydra.core.sni_router import DECOY_LOG, TRUSTTUNNEL_LOG, get_effective_port
+from hydra.core.source_relay import MAP_FILE
 from hydra.core.state import AppState
 from hydra.plugins.antidpi.adapters import decode_log_message, parse_protocol_line
 from hydra.plugins.antidpi.agent import NAIVE_ACCESS_LOG
@@ -682,6 +683,46 @@ def _all_new_log_lines(before: dict[Path, int]) -> dict[str, list[str]]:
     return result
 
 
+def _udp_diagnostics(state: AppState) -> dict:
+    """Collect the state needed to diagnose real UDP attribution and alerts."""
+    from hydra.plugins.antidpi.plugin import UDP_PROBE_CHAIN, udp_protocol_ports
+
+    commands = {
+        "iptables_v4": ["iptables", "-S", UDP_PROBE_CHAIN],
+        "iptables_v6": ["ip6tables", "-S", UDP_PROBE_CHAIN],
+        "udp_sockets": ["ss", "-lunp"],
+    }
+    output = {}
+    for label, command in commands.items():
+        result = HOST.run(command, capture_output=True, text=True, timeout=10, check=False)
+        output[label] = {
+            "returncode": result.returncode,
+            "stdout": (result.stdout or "")[-100_000:],
+            "stderr": (result.stderr or "")[-10_000:],
+        }
+    try:
+        mappings = MAP_FILE.read_text(encoding="utf-8", errors="replace").splitlines()[-2000:]
+    except OSError:
+        mappings = []
+    debug_control = Path("/proc/dynamic_debug/control")
+    try:
+        awg_debug = [
+            line for line in debug_control.read_text(encoding="utf-8", errors="replace").splitlines()
+            if "amneziawg" in line or any(name in line for name in (
+                "prepare_awg_message", "wg_receive_handshake_packet",
+                "wg_noise_handshake_consume_initiation",
+            ))
+        ][-500:]
+    except OSError:
+        awg_debug = []
+    return {
+        "protocol_ports": udp_protocol_ports(state),
+        "commands": output,
+        "source_relay_mappings": mappings,
+        "amneziawg_dynamic_debug": awg_debug,
+    }
+
+
 def capture_external_tests(state: AppState, output: str | None = None,
                            seconds: float = 120.0) -> dict:
     """Capture real external tests in a bounded, automatically redacted bundle."""
@@ -707,8 +748,9 @@ def capture_external_tests(state: AppState, output: str | None = None,
     logs = _all_new_log_lines(before)
     from hydra.plugins.antidpi.plugin import AntiDPIPlugin
     runtime = AntiDPIPlugin()._load_state()
+    udp_diagnostics = _udp_diagnostics(state)
     report = {
-        "schema": 1,
+        "schema": 2,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "mode": "external_capture",
         "duration_seconds": round(until - since, 3),
@@ -716,6 +758,7 @@ def capture_external_tests(state: AppState, output: str | None = None,
         "journal_records": len(records),
         "log_lines": {path: len(lines) for path, lines in logs.items()},
         "antidpi_runtime": runtime,
+        "udp_diagnostics": udp_diagnostics,
     }
     with tempfile.TemporaryDirectory(prefix="hydra-antidpi-capture-") as temp_name:
         root = Path(temp_name) / "hydra-antidpi-capture"

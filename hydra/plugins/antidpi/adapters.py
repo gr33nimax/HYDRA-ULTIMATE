@@ -10,7 +10,11 @@ import json
 import re
 
 PATTERNS: tuple[tuple[str, str, str], ...] = (
-    ("amneziawg", r"(?:Invalid MAC|Invalid handshake|Unknown message)", "handshake_failure"),
+    (
+        "amneziawg",
+        r"(?:Invalid MAC(?: of handshake)?|Invalid handshake|Unknown message|unknown peer)",
+        "handshake_failure",
+    ),
     ("sing-box", r"(?:handshake failed|invalid handshake|protocol error)", "handshake_failure"),
     ("anytls", r"(?:authentication failed|invalid password|unknown user password|unauthorized|auth error)", "auth_failure"),
     ("anytls", r"(?:process connection.*?EOF: fallback disabled)", "invalid_first_packet"),
@@ -39,6 +43,10 @@ PATTERNS: tuple[tuple[str, str, str], ...] = (
 
 _KERNEL_SCAN = re.compile(
     r"HYDRA_SCAN_(?P<protocol>TCP|UDP)\b.*?SRC=(?P<ip>[^\s]+)(?:.*?DPT=(?P<port>\d+))?",
+    re.IGNORECASE,
+)
+_KERNEL_UDP_PROBE = re.compile(
+    r"HYDRA_UDP_PROBE\b.*?SRC=(?P<ip>[^\s]+).*?DPT=(?P<port>\d+)",
     re.IGNORECASE,
 )
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
@@ -108,7 +116,14 @@ def parse_protocol_line(service: str, line: object) -> tuple[str, dict] | None:
     service = str(service or "").lower()
     text = decode_log_message(line)
     for owner, pattern, kind in PATTERNS:
-        if owner not in service and owner not in text.lower():
+        owner_visible = owner in service or owner in text.lower()
+        # AmneziaWG emits native rejection diagnostics through the kernel
+        # journal. Some builds identify records as WireGuard or only by awgN.
+        if owner == "amneziawg" and service in {"kernel", "kernel-journal"}:
+            owner_visible = bool(re.search(pattern, text, re.IGNORECASE)) and bool(
+                re.search(r"(?:wireguard|amnezia|\bawg\d*\b)", text, re.IGNORECASE)
+            )
+        if not owner_visible:
             continue
         if not re.search(pattern, text, re.IGNORECASE):
             continue
@@ -116,6 +131,11 @@ def parse_protocol_line(service: str, line: object) -> tuple[str, dict] | None:
         if ip is None:
             continue
         event = {"protocol": owner, "kind": kind, "source": "journal"}
+        if owner in {"amneziawg", "hysteria2", "wdtt"}:
+            # Direct UDP source addresses are spoofable until a protocol log
+            # explicitly proves address validation. Keep these events useful
+            # for alerting without allowing them to trigger an IP ban alone.
+            event["ban_eligible"] = False
         if (
             peer_port is not None
             and owner in {"anytls", "trusttunnel", "shadowtls"}
@@ -164,6 +184,18 @@ def normalize_tls_auth_failure(record: dict) -> tuple[str, dict] | None:
 
 def parse_kernel_scan_line(line: str) -> tuple[str, dict] | None:
     """Normalize a rate-limited kernel firewall scan signal."""
+    udp_probe = _KERNEL_UDP_PROBE.search(str(line or ""))
+    if udp_probe:
+        try:
+            address = ipaddress.ip_address(udp_probe.group("ip").strip("[]")).compressed
+            port = int(udp_probe.group("port"))
+        except ValueError:
+            return None
+        return address, {
+            "protocol": "udp", "kind": "udp_probe",
+            "source": "kernel-udp-probe", "destination_port": port,
+            "ban_eligible": False,
+        }
     match = _KERNEL_SCAN.search(str(line or ""))
     if not match:
         return None
@@ -179,6 +211,8 @@ def parse_kernel_scan_line(line: str) -> tuple[str, dict] | None:
         "source": "kernel-firewall",
         "connections_10s": 12,
     }
+    if protocol == "udp":
+        event["ban_eligible"] = False
     if match.group("port"):
         event["destination_port"] = int(match.group("port"))
     return address, event

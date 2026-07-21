@@ -29,6 +29,8 @@ AWG_DEBUG_PATHS = (Path("/sys/kernel/debug/dynamic_debug/control"), Path("/proc/
 SET_V4, SET_V6 = "hydra_antidpi", "hydra_antidpi6"
 RULE_COMMENT = "hydra-antidpi"
 SCAN_RULE_COMMENT = "hydra-antidpi-scan"
+UDP_PROBE_RULE_COMMENT = "hydra-antidpi-udp-probes"
+UDP_PROBE_CHAIN = "HYDRA_ANTIDPI_UDP"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 # Signals are protocol-independent.  A score is more robust than a single
@@ -39,6 +41,7 @@ SIGNAL_WEIGHTS = {
     "connection_burst": 2, "invalid_first_packet": 3,
     "active_decoy_probe": 8, "auth_failure": 3, "port_scan": 2,
     "port_sweep": 6,
+    "udp_probe": 4,
 }
 
 SCORE_HALF_LIFE = 300.0
@@ -385,7 +388,7 @@ def score_event(event: dict) -> tuple[int, tuple[str, ...]]:
         "handshake_error": ("handshake_failure",), "handshake_failure": ("handshake_failure",),
         "protocol_mismatch": ("protocol_mismatch",), "invalid_first_packet": ("invalid_first_packet",),
         "active_decoy_probe": ("active_decoy_probe",), "auth_failure": ("auth_failure",),
-        "port_scan": ("port_scan",),
+        "port_scan": ("port_scan",), "udp_probe": ("udp_probe",),
     }
     signals.extend(mapping.get(kind, ()))
     protocol = str(event.get("protocol", "")).lower()
@@ -436,6 +439,58 @@ def _scan_rule(binary: str, protocol: str) -> list[str]:
     ]
 
 
+def udp_protocol_ports(state: AppState) -> dict[int, str]:
+    """Return enabled public UDP listeners relevant to protocol probing."""
+    result: dict[int, str] = {}
+
+    def add(raw_port: object, owner: str) -> None:
+        try:
+            port = int(raw_port)
+        except (TypeError, ValueError):
+            return
+        if 1 <= port <= 65535:
+            current = result.get(port)
+            owners = set(current.split("/")) if current else set()
+            owners.add(owner)
+            result[port] = "/".join(sorted(owners))
+
+    for name in ("hysteria2", "amneziawg", "wdtt", "naive", "trusttunnel"):
+        protocol = state.protocols.get(name)
+        if not protocol or not protocol.enabled:
+            continue
+        config = protocol.config if isinstance(protocol.config, dict) else {}
+        if name == "amneziawg":
+            profiles = config.get("profiles", {})
+            if isinstance(profiles, dict):
+                for profile in profiles.values():
+                    if isinstance(profile, dict) and profile.get("port"):
+                        add(profile["port"], name)
+            if not any(name in value.split("/") for value in result.values()):
+                add(protocol.port or 51820, name)
+        elif name == "hysteria2":
+            add(config.get("port", protocol.port or 8443), name)
+        elif name == "wdtt":
+            add(config.get("dtls_port", 56000), name)
+        elif name == "naive" and str(config.get("network", "tcp")) in {"quic", "both"}:
+            add(443, name)
+        elif name == "trusttunnel" and str(config.get("transport", "tcp")) in {"quic", "both"}:
+            add(443, name)
+    return {port: result[port] for port in sorted(result)}
+
+
+def _udp_probe_rule(binary: str, port: int) -> list[str]:
+    version = "6" if binary == "ip6tables" else "4"
+    return [
+        "-p", "udp", "--dport", str(int(port)),
+        "-m", "conntrack", "--ctstate", "NEW",
+        "-m", "hashlimit", "--hashlimit-above", "12/minute",
+        "--hashlimit-burst", "4", "--hashlimit-mode", "srcip",
+        "--hashlimit-name", f"hadp{version}_{int(port)}",
+        "-m", "limit", "--limit", "30/minute", "--limit-burst", "10",
+        "-j", "LOG", "--log-prefix", "HYDRA_UDP_PROBE ", "--log-level", "4",
+    ]
+
+
 class AntiDPIPlugin(BasePlugin):
     last_error = ""
     meta = PluginMeta(
@@ -455,7 +510,10 @@ class AntiDPIPlugin(BasePlugin):
             missing = [name for name in self.meta.required_commands if HOST.which(name) is None]
         if missing:
             return self._fail("Не найдены команды: " + ", ".join(missing))
-        if not self._ensure_sets() or not self._ensure_rules() or not self._ensure_scan_rules():
+        if (
+            not self._ensure_sets() or not self._ensure_rules()
+            or not self._ensure_scan_rules() or not self.sync_udp_probe_rules()
+        ):
             return False
         if not self._restore_bans():
             return False
@@ -467,7 +525,13 @@ class AntiDPIPlugin(BasePlugin):
         reload_result = _run(["systemctl", "daemon-reload"], text=True)
         if reload_result.returncode != 0:
             return self._fail(self._result_error(reload_result, "systemctl daemon-reload"))
-        start_result = _run(["systemctl", "enable", "--now", "hydra-antidpi"], text=True)
+        enable_result = _run(["systemctl", "enable", "hydra-antidpi"], text=True)
+        if enable_result.returncode != 0:
+            return self._fail(self._result_error(enable_result, "enable hydra-antidpi"))
+        # install() is also the supported update/sync operation. An already
+        # active unit must be restarted to load the new collector code and
+        # the freshly generated systemd sandbox.
+        start_result = _run(["systemctl", "restart", "hydra-antidpi"], text=True)
         if start_result.returncode != 0:
             return self._fail(self._result_error(start_result, "запуск hydra-antidpi"))
         if not self.status().running:
@@ -509,7 +573,8 @@ class AntiDPIPlugin(BasePlugin):
     def uninstall(self) -> bool:
         _run(["systemctl", "disable", "--now", "hydra-antidpi"])
         self._sync_awg_debug(False)
-        ok = self._remove_scan_rules()
+        ok = self._remove_udp_probe_rules()
+        ok = self._remove_scan_rules() and ok
         ok = self._remove_rules() and ok
         for name in (SET_V4, SET_V6):
             _run(["ipset", "flush", name]); _run(["ipset", "destroy", name])
@@ -524,7 +589,11 @@ class AntiDPIPlugin(BasePlugin):
                 _run(["systemctl", "disable", "--now", "hydra-awg-antidpi-debug.service"])
                 AWG_DEBUG_SERVICE.unlink(missing_ok=True)
             return True
-        functions = ("prepare_awg_message", "wg_receive_handshake_packet")
+        functions = (
+            "prepare_awg_message",
+            "wg_receive_handshake_packet",
+            "wg_noise_handshake_consume_initiation",
+        )
         flag = "+p" if enabled else "-p"
         try:
             control.write_text("\n".join(f"module amneziawg func {name} {flag}" for name in functions) + "\n", encoding="utf-8")
@@ -582,12 +651,21 @@ class AntiDPIPlugin(BasePlugin):
         sets_ok = all(_run(["ipset", "list", name]).returncode == 0 for name in (SET_V4, SET_V6))
         rules_ok = True
         telemetry_ok = True
+        udp_probe_ok = True
         for binary, name in (("iptables", SET_V4), ("ip6tables", SET_V6)):
             check = [binary, "-C", "INPUT", "-m", "set", "--match-set", name, "src", "-m", "comment", "--comment", RULE_COMMENT, "-j", "DROP"]
             rules_ok = _run(check).returncode == 0 and rules_ok
             for protocol in ("tcp", "udp"):
                 telemetry_ok = _run([binary, "-C", "INPUT", *_scan_rule(binary, protocol)]).returncode == 0 and telemetry_ok
-        checks = {"service": status.running, "ipsets": sets_ok, "firewall": rules_ok, "scan_telemetry": telemetry_ok}
+            jump = [
+                "-p", "udp", "-m", "comment", "--comment", UDP_PROBE_RULE_COMMENT,
+                "-j", UDP_PROBE_CHAIN,
+            ]
+            udp_probe_ok = _run([binary, "-C", "INPUT", *jump]).returncode == 0 and udp_probe_ok
+        checks = {
+            "service": status.running, "ipsets": sets_ok, "firewall": rules_ok,
+            "scan_telemetry": telemetry_ok, "udp_probe_telemetry": udp_probe_ok,
+        }
         healthy = all(checks.values())
         return HealthResult(healthy, "" if healthy else "anti-DPI runtime is incomplete", "ok" if healthy else "error", checks)
 
@@ -599,7 +677,7 @@ class AntiDPIPlugin(BasePlugin):
         if _run(["systemctl", "disable", "--now", "hydra-antidpi"]).returncode != 0:
             raise RuntimeError("Anti-DPI service could not be stopped")
         self._sync_awg_debug(False)
-        if not self._remove_scan_rules():
+        if not self._remove_scan_rules() or not self._remove_udp_probe_rules():
             raise RuntimeError("Anti-DPI scan telemetry rules could not be removed")
 
     def observe_event(self, ip: str, event: dict, *, now: float | None = None) -> bool:
@@ -644,12 +722,16 @@ class AntiDPIPlugin(BasePlugin):
                 event["distinct_ports_60s"] = len(recent_ports)
 
             score, signals = score_event(event)
-            if source != "kernel-firewall" and signals:
+            evidence_can_ban = event.get("ban_eligible") is not False
+            if source not in {"kernel-firewall", "kernel-udp-probe"} and signals and evidence_can_ban:
                 entry["last_non_kernel_evidence_at"] = timestamp
-            if "port_sweep" in signals:
+            if "port_sweep" in signals and evidence_can_ban:
                 entry["last_port_sweep_at"] = timestamp
 
             previous = float(entry.get("score", 0))
+            # Legacy state did not distinguish spoofable UDP evidence. Start
+            # its verified accumulator at zero instead of trusting old score.
+            previous_verified = float(entry.get("verified_score", 0))
             previous_at = float(entry.get("updated", timestamp) or timestamp)
 
             # Consolidate parallel browser sockets for single page load (sub-0.5s window on pure unknown_sni)
@@ -661,6 +743,11 @@ class AntiDPIPlugin(BasePlugin):
                     entry["last_unknown_sni_at"] = timestamp
 
             entry["score"] = round(decayed_score(previous, timestamp - previous_at) + score, 4)
+            entry["verified_score"] = round(
+                decayed_score(previous_verified, timestamp - previous_at)
+                + (score if evidence_can_ban else 0.0),
+                4,
+            )
             entry["signals"] = list(dict.fromkeys(list(entry.get("signals", [])) + list(signals)))[-16:]
             entry["updated"] = timestamp
             data["events"] = int(data.get("events", 0)) + 1
@@ -703,7 +790,7 @@ class AntiDPIPlugin(BasePlugin):
 
             last_non_kernel = float(entry.get("last_non_kernel_evidence_at", 0) or 0)
             last_port_sweep = float(entry.get("last_port_sweep_at", 0) or 0)
-            ban_eligible = (
+            ban_eligible = evidence_can_ban and (
                 (last_non_kernel > 0 and timestamp - last_non_kernel <= SCORE_HALF_LIFE * 2)
                 or (last_port_sweep > 0 and timestamp - last_port_sweep <= SCORE_HALF_LIFE * 2)
             )
@@ -714,7 +801,7 @@ class AntiDPIPlugin(BasePlugin):
                 and entry["score"] >= (
                     AUTH_ALERT_THRESHOLD if "auth_failure" in signals else ALERT_THRESHOLD
                 )
-                and not (entry["score"] >= BAN_THRESHOLD and ban_eligible)
+                and not (entry["verified_score"] >= BAN_THRESHOLD and ban_eligible)
                 and timestamp - last_alert_at >= ALERT_COOLDOWN
             )
             if should_alert:
@@ -725,8 +812,7 @@ class AntiDPIPlugin(BasePlugin):
                     from hydra.services.security_intel import notification_fields
                     kind = str(event.get("kind", event.get("reason", "anomaly")))
                     proto = str(event.get("protocol", "L4"))
-                    delivered = bool(send_admin_notification(
-                        format_security_event("AntiDPI", "ALERT", [
+                    fields = [
                             ("IP", address),
                             *notification_fields(address),
                             ("Event", kind),
@@ -734,14 +820,20 @@ class AntiDPIPlugin(BasePlugin):
                             ("Source", source),
                             ("Signals", ", ".join(signals)),
                             ("Score", format_score(entry["score"])),
-                        ]),
+                    ]
+                    if not evidence_can_ban:
+                        fields.append(("Policy", "alert-only / unverified UDP source"))
+                    if entry["verified_score"] != entry["score"]:
+                        fields.append(("Verified score", format_score(entry["verified_score"])))
+                    delivered = bool(send_admin_notification(
+                        format_security_event("AntiDPI", "ALERT", fields),
                         category="antidpi",
                     ))
                 except Exception:
                     pass
                 _track_notification(data, delivered, now=timestamp)
 
-            banned = active_ban or (entry["score"] >= BAN_THRESHOLD and ban_eligible)
+            banned = active_ban or (entry["verified_score"] >= BAN_THRESHOLD and ban_eligible)
             if banned:
                 if active_ban:
                     self._save_state(data)
@@ -755,7 +847,7 @@ class AntiDPIPlugin(BasePlugin):
                     ban_counts[address] = offense_count
                     metadata = {
                         "at": entry["updated"],
-                        "score": entry["score"],
+                        "score": entry["verified_score"],
                         "signals": entry["signals"],
                         "source": source,
                         "protocol": str(event.get("protocol", "unknown"))[:40],
@@ -930,6 +1022,57 @@ class AntiDPIPlugin(BasePlugin):
                     if _run([binary, "-D", "INPUT", *spec]).returncode != 0:
                         ok = False
                         break
+        return ok
+
+    def sync_udp_probe_rules(self, state: AppState | None = None) -> bool:
+        """Refresh low-rate, LOG-only telemetry for enabled UDP protocols."""
+        if state is None:
+            try:
+                from hydra.core.state import load_state
+                state = load_state()
+            except Exception:
+                return False
+        ports = udp_protocol_ports(state)
+        ok = True
+        for binary in ("iptables", "ip6tables"):
+            _run([binary, "-N", UDP_PROBE_CHAIN])
+            jump = [
+                "-p", "udp", "-m", "comment", "--comment", UDP_PROBE_RULE_COMMENT,
+                "-j", UDP_PROBE_CHAIN,
+            ]
+            if _run([binary, "-C", "INPUT", *jump]).returncode != 0:
+                result = _run([binary, "-I", "INPUT", "2", *jump], text=True)
+                if result.returncode != 0:
+                    self._fail(self._result_error(result, f"UDP telemetry jump {binary}"))
+                    ok = False
+                    continue
+            if _run([binary, "-F", UDP_PROBE_CHAIN], text=True).returncode != 0:
+                ok = False
+                continue
+            for port in ports:
+                result = _run([binary, "-A", UDP_PROBE_CHAIN, *_udp_probe_rule(binary, port)], text=True)
+                if result.returncode != 0:
+                    self._fail(self._result_error(result, f"UDP telemetry {binary}/{port}"))
+                    ok = False
+        return ok
+
+    def _remove_udp_probe_rules(self) -> bool:
+        ok = True
+        for binary in ("iptables", "ip6tables"):
+            jump = [
+                "-p", "udp", "-m", "comment", "--comment", UDP_PROBE_RULE_COMMENT,
+                "-j", UDP_PROBE_CHAIN,
+            ]
+            for _ in range(8):
+                if _run([binary, "-C", "INPUT", *jump]).returncode != 0:
+                    break
+                ok = _run([binary, "-D", "INPUT", *jump]).returncode == 0 and ok
+            _run([binary, "-F", UDP_PROBE_CHAIN])
+            delete = _run([binary, "-X", UDP_PROBE_CHAIN])
+            if delete.returncode != 0:
+                detail = str(delete.stderr or delete.stdout or "").lower()
+                if "no chain" not in detail and "does not exist" not in detail:
+                    ok = False
         return ok
 
     def _write_service(self) -> None:

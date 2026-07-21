@@ -6,7 +6,32 @@ from hydra.plugins.antidpi.adapters import (
 
 def test_awg_rejection_is_normalized():
     result = parse_protocol_line("amneziawg.service", "Invalid MAC of handshake from 203.0.113.9:48120")
-    assert result == ("203.0.113.9", {"protocol": "amneziawg", "kind": "handshake_failure", "handshake_ok": False, "source": "journal"})
+    assert result == ("203.0.113.9", {
+        "protocol": "amneziawg", "kind": "handshake_failure",
+        "handshake_ok": False, "source": "journal", "ban_eligible": False,
+    })
+
+
+def test_awg_real_kernel_invalid_mac_is_normalized():
+    result = parse_protocol_line(
+        "kernel",
+        "wireguard: awg0: Invalid MAC of handshake, dropping packet from 203.0.113.9:48120",
+    )
+    assert result == ("203.0.113.9", {
+        "protocol": "amneziawg", "kind": "handshake_failure",
+        "handshake_ok": False, "source": "journal", "ban_eligible": False,
+    })
+
+
+def test_awg_real_kernel_unknown_peer_is_normalized():
+    result = parse_protocol_line(
+        "kernel-journal",
+        "wireguard: awg1: unknown peer from [2001:db8::9]:48121",
+    )
+    assert result is not None
+    assert result[0] == "2001:db8::9"
+    assert result[1]["protocol"] == "amneziawg"
+    assert result[1]["ban_eligible"] is False
 
 
 def test_non_evidence_is_ignored():
@@ -34,6 +59,24 @@ def test_kernel_tcp_scan_is_normalized():
             "destination_port": 22,
         },
     )
+
+
+def test_kernel_udp_protocol_probe_is_alert_only():
+    line = "HYDRA_UDP_PROBE IN=eth0 SRC=198.51.100.78 DST=192.0.2.1 SPT=44222 DPT=8443"
+    assert parse_kernel_scan_line(line) == (
+        "198.51.100.78",
+        {
+            "protocol": "udp", "kind": "udp_probe", "source": "kernel-udp-probe",
+            "destination_port": 8443, "ban_eligible": False,
+        },
+    )
+
+
+def test_generic_kernel_udp_scan_is_also_alert_only():
+    line = "HYDRA_SCAN_UDP IN=eth0 SRC=198.51.100.79 DST=192.0.2.1 SPT=44222 DPT=8443"
+    parsed = parse_kernel_scan_line(line)
+    assert parsed is not None
+    assert parsed[1]["ban_eligible"] is False
 
 
 def test_unrelated_kernel_message_is_ignored():
@@ -78,7 +121,10 @@ def test_anytls_eof_and_wdtt_native_errors_are_normalized():
     )
     assert wdtt == (
         "198.51.100.8",
-        {"protocol": "wdtt", "kind": "handshake_failure", "handshake_ok": False, "source": "journal"},
+        {
+            "protocol": "wdtt", "kind": "handshake_failure", "handshake_ok": False,
+            "source": "journal", "ban_eligible": False,
+        },
     )
 
 
