@@ -137,7 +137,9 @@ def test_native_client_environment_enables_legacy_dns_without_mutating_host(monk
     monkeypatch.delenv("ENABLE_DEPRECATED_LEGACY_DNS_SERVERS", raising=False)
     environment = selftest._client_environment()
     assert environment["ENABLE_DEPRECATED_LEGACY_DNS_SERVERS"] == "true"
+    assert environment["ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER"] == "true"
     assert "ENABLE_DEPRECATED_LEGACY_DNS_SERVERS" not in selftest.os.environ
+    assert "ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER" not in selftest.os.environ
 
 
 def test_full_mode_records_native_client_coverage(tmp_path):

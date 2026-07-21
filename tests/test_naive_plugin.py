@@ -138,8 +138,8 @@ def test_generate_client_config_contains_server():
     assert naive_out[0]["tls"]["server_name"] == "example.com"
     assert "alpn" not in naive_out[0]["tls"]
     assert naive_out[0]["tag"] == "naive-tcp-a"
-    assert naive_out[0]["network"] == "tcp"
-    assert "quic" not in naive_out[0]
+    assert "network" not in naive_out[0]
+    assert naive_out[0]["quic"] is False
 
 
 def test_generate_client_config_empty_without_domain():
@@ -453,7 +453,8 @@ def test_generate_client_config_quic():
     cfg = json.loads(p.generate_client_config(user, state))
     naive_outs = [o for o in cfg["outbounds"] if o["type"] == "naive"]
     assert len(naive_outs) == 1
-    assert naive_outs[0]["network"] == "quic"
+    assert "network" not in naive_outs[0]
+    assert naive_outs[0]["quic"] is True
     assert "alpn" not in naive_outs[0].get("tls", {})
 
 
@@ -465,8 +466,7 @@ def test_generate_client_config_both():
     cfg = json.loads(p.generate_client_config(user, state))
     naive_outs = [o for o in cfg["outbounds"] if o["type"] == "naive"]
     assert len(naive_outs) == 2
-    networks = {o["network"] for o in naive_outs}
-    assert networks == {"tcp", "quic"}
+    assert {o["quic"] for o in naive_outs} == {False, True}
 
 
 def test_set_transport_rejects_trusttunnel_quic_conflict_without_mutation():

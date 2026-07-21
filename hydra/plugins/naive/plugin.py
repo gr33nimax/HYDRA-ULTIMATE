@@ -215,7 +215,7 @@ class NaivePlugin(BasePlugin):
                 "server_port": port,
                 "username": username,
                 "password": password,
-                "network": "tcp",
+                "quic": False,
                 "tls": {
                     "enabled": True,
                     "server_name": domain,
@@ -230,7 +230,7 @@ class NaivePlugin(BasePlugin):
                 "server_port": port,
                 "username": username,
                 "password": password,
-                "network": "quic",
+                "quic": True,
                 "tls": {
                     "enabled": True,
                     "server_name": domain,

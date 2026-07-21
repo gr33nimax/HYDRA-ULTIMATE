@@ -278,6 +278,7 @@ def _socks_trigger(port: int) -> str:
 def _client_environment() -> dict[str, str]:
     environment = dict(os.environ)
     environment["ENABLE_DEPRECATED_LEGACY_DNS_SERVERS"] = "true"
+    environment["ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER"] = "true"
     return environment
 
 
