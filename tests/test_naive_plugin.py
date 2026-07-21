@@ -2,6 +2,7 @@
 import json
 import time
 from pathlib import Path
+from contextlib import nullcontext
 from unittest.mock import patch, MagicMock
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -535,5 +536,30 @@ def test_on_enable_opens_udp_for_quic():
         p.on_enable(state)
         mock_tcp.assert_called_once_with(443, "naive")
         mock_udp.assert_called_once_with(443, "naive-quic")
+
+
+def test_certbot_stops_and_restores_caddy_l4_on_exception():
+    p = NaivePlugin()
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        result = MagicMock(returncode=0, stdout="", stderr="")
+        if command[:3] == ["systemctl", "is-active", "caddy-l4"]:
+            result.stdout = "active\n"
+        if command and command[0] == "certbot":
+            raise OSError("certbot crashed")
+        return result
+
+    with patch("pathlib.Path.exists", return_value=False), \
+         patch("hydra.plugins.naive.plugin.shutil.which", return_value="/usr/bin/certbot"), \
+         patch("hydra.utils.firewall.temporary_open_port", return_value=nullcontext()), \
+         patch("hydra.plugins.naive.plugin.HOST.run", side_effect=fake_run):
+        assert p._obtain_cert_certbot("naive.example.com") is False
+
+    stop_index = calls.index(["systemctl", "stop", "caddy-l4"])
+    certbot_index = next(index for index, command in enumerate(calls) if command[0] == "certbot")
+    start_index = calls.index(["systemctl", "start", "caddy-l4"])
+    assert stop_index < certbot_index < start_index
 
 

@@ -35,6 +35,11 @@
 - Status AnyTLS теперь совмещает сохранённые `installed/enabled` с
   фактическим наличием Sing-Box, а не считает любой Sing-Box
   доказательством установки AnyTLS.
+- Получение сертифика NaiveProxy больше не падает с `Could not bind TCP
+  port 80`, если `:80` занят уже установленным Caddy L4. Naive теперь
+  временно останавливает активные `caddy-l4`, `caddy-naive`, Nginx и Apache,
+  проверяет успех остановки и гарантированно восстанавливает их после Certbot,
+  включая аварийный выход.
 
 ### AmneziaWG и AntiDPI
 
