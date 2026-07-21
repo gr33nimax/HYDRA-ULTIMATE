@@ -109,6 +109,36 @@ def test_unverified_udp_score_cannot_preload_a_later_verified_ban(tmp_path):
     assert entry["verified_score"] < 8
 
 
+def test_alert_cooldown_is_scoped_per_protocol(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "protocol-alert-cooldown.json"
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch("hydra.services.telegram.bot.send_admin_notification", return_value=True) as notify:
+        for protocol in ("hysteria2", "amneziawg"):
+            event = {
+                "protocol": protocol, "kind": "udp_probe",
+                "source": "kernel-udp-probe", "ban_eligible": False,
+            }
+            plugin.observe_event("198.51.100.42", event, now=1000)
+            plugin.observe_event("198.51.100.42", event, now=1001)
+    assert notify.call_count == 2
+
+
+def test_observed_score_is_capped_for_sustained_unverified_udp(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "bounded-observed-score.json"
+    event = {
+        "protocol": "hysteria2", "kind": "udp_probe",
+        "source": "kernel-udp-probe", "ban_eligible": False,
+    }
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch("hydra.services.telegram.bot.send_admin_notification", return_value=True):
+        for offset in range(100):
+            plugin.observe_event("198.51.100.43", event, now=1000 + offset)
+        state = plugin._load_state()
+    assert state["scores"]["198.51.100.43"]["score"] == 16
+
+
 def test_single_transient_failure_is_not_a_high_confidence_signal():
     score, signals = score_event({"protocol": "tls", "handshake_ok": False})
     assert score == 2

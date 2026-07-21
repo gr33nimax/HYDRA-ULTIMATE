@@ -51,6 +51,7 @@ AUTH_ALERT_THRESHOLD = 3
 BAN_DURATIONS = (600, 3600, 86400, 604800)  # 10m -> 1h -> 24h -> 7d
 LEGACY_BAN_DURATION = 86400
 ALERT_COOLDOWN = 300.0
+MAX_OBSERVED_SCORE = BAN_THRESHOLD * 2
 BAN_NOTIFICATION_COOLDOWN = 5.0
 SCORE_RETENTION = 86400.0
 MAX_SCORE_ENTRIES = 20000
@@ -742,7 +743,10 @@ class AntiDPIPlugin(BasePlugin):
                 else:
                     entry["last_unknown_sni_at"] = timestamp
 
-            entry["score"] = round(decayed_score(previous, timestamp - previous_at) + score, 4)
+            entry["score"] = round(min(
+                MAX_OBSERVED_SCORE,
+                decayed_score(previous, timestamp - previous_at) + score,
+            ), 4)
             entry["verified_score"] = round(
                 decayed_score(previous_verified, timestamp - previous_at)
                 + (score if evidence_can_ban else 0.0),
@@ -794,7 +798,16 @@ class AntiDPIPlugin(BasePlugin):
                 (last_non_kernel > 0 and timestamp - last_non_kernel <= SCORE_HALF_LIFE * 2)
                 or (last_port_sweep > 0 and timestamp - last_port_sweep <= SCORE_HALF_LIFE * 2)
             )
-            last_alert_at = float(entry.get("last_alert_at", 0) or 0)
+            protocol_key = str(event.get("protocol", "L4"))[:40].lower()
+            protocol_alerts = entry.get("protocol_alerts", {})
+            if not isinstance(protocol_alerts, dict):
+                protocol_alerts = {}
+            protocol_alerts = {
+                str(key): float(value)
+                for key, value in protocol_alerts.items()
+                if isinstance(value, (int, float)) and timestamp - float(value) <= ALERT_COOLDOWN * 4
+            }
+            last_alert_at = float(protocol_alerts.get(protocol_key, 0) or 0)
             should_alert = (
                 not active_ban
                 and signals
@@ -806,6 +819,8 @@ class AntiDPIPlugin(BasePlugin):
             )
             if should_alert:
                 entry["last_alert_at"] = timestamp
+                protocol_alerts[protocol_key] = timestamp
+                entry["protocol_alerts"] = protocol_alerts
                 delivered = False
                 try:
                     from hydra.services.telegram.bot import format_security_event, send_admin_notification

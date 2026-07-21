@@ -20,7 +20,10 @@ def test_external_capture_writes_redacted_bundle_without_probes(tmp_path):
          patch("hydra.plugins.antidpi.selftest._udp_diagnostics", return_value={"ok": True}), \
          patch("hydra.plugins.antidpi.selftest.time.sleep"), \
          patch("hydra.plugins.antidpi.selftest.time.time", side_effect=[100.0, 101.0, 102.0]), \
-         patch("hydra.plugins.antidpi.plugin.AntiDPIPlugin._load_state", return_value={"events": 2}):
+         patch("hydra.plugins.antidpi.plugin.AntiDPIPlugin._load_state", side_effect=[
+             {"events": 1, "notification_stats": {"delivered": 3}},
+             {"events": 2, "notification_stats": {"delivered": 4}},
+         ]):
         result = selftest.capture_external_tests(state, str(archive), 10)
     assert result["ok"] is True
     with tarfile.open(archive) as bundle:
@@ -28,6 +31,29 @@ def test_external_capture_writes_redacted_bundle_without_probes(tmp_path):
     assert report["mode"] == "external_capture"
     assert report["antidpi_runtime"]["events"] == 2
     assert report["udp_diagnostics"] == {"ok": True}
+    assert report["capture_delta"]["events"] == 1
+    assert report["capture_delta"]["notifications"]["delivered"] == 1
+
+
+def test_capture_summary_attributes_udp_port_and_native_awg_evidence():
+    state = AppState(protocols={
+        "hysteria2": PluginState(enabled=True, config={"port": 8443}),
+        "amneziawg": PluginState(enabled=True, config={
+            "profiles": {"phone": {"port": 51820}},
+        }),
+    })
+    records = [
+        {"SYSLOG_IDENTIFIER": "kernel", "MESSAGE": (
+            "HYDRA_UDP_PROBE SRC=198.51.100.5 SPT=12345 DPT=8443"
+        )},
+        {"SYSLOG_IDENTIFIER": "kernel", "MESSAGE": (
+            "amneziawg: awg0: Invalid MAC of handshake, dropping packet "
+            "from 198.51.100.6:12346"
+        )},
+    ]
+    summary = selftest._capture_event_summary(records, state)
+    assert {item["protocol"] for item in summary} == {"hysteria2", "amneziawg"}
+    assert {item["kind"] for item in summary} == {"udp_probe", "handshake_failure"}
 
 
 def test_targets_cover_enabled_protocol_shapes():

@@ -692,6 +692,73 @@ def _udp_diagnostics(state: AppState) -> dict:
         "iptables_v6": ["ip6tables", "-S", UDP_PROBE_CHAIN],
         "udp_sockets": ["ss", "-lunp"],
     }
+
+
+def _capture_event_summary(records: list[dict], state: AppState) -> list[dict]:
+    """Summarize normalized evidence observed inside one capture window."""
+    from hydra.plugins.antidpi.adapters import parse_kernel_scan_line
+    from hydra.plugins.antidpi.plugin import udp_protocol_ports
+
+    ports = udp_protocol_ports(state)
+    counts: dict[tuple[str, str, str, str], int] = {}
+    for record in records:
+        message = decode_log_message(record.get("MESSAGE", ""))
+        service = str(record.get("_SYSTEMD_UNIT", "") or record.get("SYSLOG_IDENTIFIER", ""))
+        event = parse_kernel_scan_line(message)
+        if event and event[1].get("kind") == "udp_probe":
+            try:
+                destination_port = int(event[1].get("destination_port", 0))
+            except (TypeError, ValueError):
+                destination_port = 0
+            event[1]["protocol"] = ports.get(destination_port, "udp")
+        if not event:
+            event = parse_protocol_line(service, message)
+        if not event:
+            continue
+        address, details = event
+        key = (
+            address,
+            str(details.get("protocol", "unknown")),
+            str(details.get("kind", "unknown")),
+            str(details.get("source", "unknown")),
+        )
+        counts[key] = counts.get(key, 0) + 1
+    return [
+        {"ip": ip, "protocol": protocol, "kind": kind, "source": source, "count": count}
+        for (ip, protocol, kind, source), count in sorted(
+            counts.items(), key=lambda item: (-item[1], item[0]),
+        )
+    ]
+
+
+def _runtime_delta(before: dict, after: dict) -> dict:
+    def scalar(name: str) -> int:
+        return max(0, int(after.get(name, 0) or 0) - int(before.get(name, 0) or 0))
+
+    def counters(name: str) -> dict[str, int]:
+        old = before.get(name, {}) if isinstance(before.get(name), dict) else {}
+        new = after.get(name, {}) if isinstance(after.get(name), dict) else {}
+        return {
+            str(key): int(value or 0) - int(old.get(key, 0) or 0)
+            for key, value in new.items()
+            if int(value or 0) - int(old.get(key, 0) or 0) > 0
+        }
+
+    old_notifications = before.get("notification_stats", {})
+    new_notifications = after.get("notification_stats", {})
+    if not isinstance(old_notifications, dict):
+        old_notifications = {}
+    if not isinstance(new_notifications, dict):
+        new_notifications = {}
+    return {
+        "events": scalar("events"),
+        "sources": counters("source_counts"),
+        "signals": counters("signal_counts"),
+        "notifications": {
+            key: max(0, int(new_notifications.get(key, 0) or 0) - int(old_notifications.get(key, 0) or 0))
+            for key in ("attempted", "delivered", "failed")
+        },
+    }
     output = {}
     for label, command in commands.items():
         result = HOST.run(command, capture_output=True, text=True, timeout=10, check=False)
@@ -736,6 +803,9 @@ def capture_external_tests(state: AppState, output: str | None = None,
     archive.parent.mkdir(parents=True, exist_ok=True)
     redact = _redactor(state)
     before = _offsets()
+    from hydra.plugins.antidpi.plugin import AntiDPIPlugin
+    plugin = AntiDPIPlugin()
+    runtime_before = plugin._load_state()
     since = time.time()
     print(
         f"AntiDPI capture active for {duration:.0f}s. "
@@ -746,11 +816,10 @@ def capture_external_tests(state: AppState, output: str | None = None,
     until = time.time()
     records = _all_journal(since - 0.1, until + 0.1)
     logs = _all_new_log_lines(before)
-    from hydra.plugins.antidpi.plugin import AntiDPIPlugin
-    runtime = AntiDPIPlugin()._load_state()
+    runtime = plugin._load_state()
     udp_diagnostics = _udp_diagnostics(state)
     report = {
-        "schema": 2,
+        "schema": 3,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "mode": "external_capture",
         "duration_seconds": round(until - since, 3),
@@ -758,6 +827,8 @@ def capture_external_tests(state: AppState, output: str | None = None,
         "journal_records": len(records),
         "log_lines": {path: len(lines) for path, lines in logs.items()},
         "antidpi_runtime": runtime,
+        "capture_delta": _runtime_delta(runtime_before, runtime),
+        "observed_events": _capture_event_summary(records, state),
         "udp_diagnostics": udp_diagnostics,
     }
     with tempfile.TemporaryDirectory(prefix="hydra-antidpi-capture-") as temp_name:
