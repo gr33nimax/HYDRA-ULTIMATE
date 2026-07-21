@@ -21,5 +21,8 @@ def test_every_fresh_install_path_uses_selected_ref():
 
 
 def test_readme_one_command_installs_dev():
-    assert "HYDRA-ULTIMATE/dev/bootstrap.sh" in README
+    assert (
+        "curl -fsSL https://raw.githubusercontent.com/gr33nimax/"
+        "HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash"
+    ) in README
     assert "git clone -b dev" in README

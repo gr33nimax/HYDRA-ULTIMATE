@@ -36,7 +36,7 @@
 ### Быстрая установка
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh)
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash
 ```
 
 Установщик подготавливает зависимости, Sing-Box Extended, изолированное Python-
