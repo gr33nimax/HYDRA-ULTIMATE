@@ -1251,37 +1251,55 @@ def _obtain_cert_for_sub(state: AppState) -> bool:
         HOST.run(["apt-get", "update"], capture_output=True)
         HOST.run(["apt-get", "install", "-y", "certbot"], capture_output=True)
         
-    services_to_stop = ["haproxy", "caddy-naive", "nginx", "apache2"]
-    was_running = []
-    for s in services_to_stop:
-        r = HOST.run(["systemctl", "is-active", s], capture_output=True, text=True)
-        if r.stdout.strip() == "active":
-            info(f"Временно останавливаем {s} для освобождения порта 80...")
-            HOST.run(["systemctl", "stop", s])
-            was_running.append(s)
-        
-    HOST.run(["ufw", "allow", "80/tcp"], capture_output=True)
-    
-    r = HOST.run([
-        "certbot", "certonly", "--standalone",
-        "-d", sub_domain,
-        "--non-interactive", "--agree-tos",
-        "--register-unsafely-without-email",
-        "--keep-until-expiring",
-    ], capture_output=True, text=True)
-    
-    for s in reversed(was_running):
-        info(f"Запускаем {s} обратно...")
-        HOST.run(["systemctl", "start", s])
-        
-    if r.returncode == 0:
-        success("Сертификат успешно получен!")
-        return True
-    else:
+    from hydra.utils.firewall import temporary_open_port
+
+    services_to_stop = ["caddy-l4", "haproxy", "caddy-naive", "nginx", "apache2"]
+    was_running: list[str] = []
+    try:
+        for service in services_to_stop:
+            status = HOST.run(
+                ["systemctl", "is-active", service],
+                capture_output=True, text=True,
+            )
+            if status.stdout.strip() != "active":
+                continue
+            info(f"Временно останавливаем {service} для освобождения порта 80...")
+            stopped = HOST.run(
+                ["systemctl", "stop", service],
+                capture_output=True, text=True,
+            )
+            if stopped.returncode != 0:
+                detail = stopped.stderr or stopped.stdout or "неизвестная ошибка"
+                error(f"Не удалось освободить порт 80: {service}: {detail}")
+                return False
+            was_running.append(service)
+
+        with temporary_open_port("tcp", 80, "temp-certbot"):
+            result = HOST.run([
+                "certbot", "certonly", "--standalone",
+                "-d", sub_domain,
+                "--non-interactive", "--agree-tos",
+                "--register-unsafely-without-email",
+                "--keep-until-expiring",
+            ], capture_output=True, text=True)
+
+        if result.returncode == 0:
+            success("Сертификат успешно получен!")
+            return True
         error("Ошибка работы certbot!")
-        if r.stderr or r.stdout:
-            print(f"Вывод: {r.stderr or r.stdout}")
+        if result.stderr or result.stdout:
+            print(f"Вывод: {result.stderr or result.stdout}")
         return False
+    except Exception as exc:
+        error(f"Ошибка работы certbot: {exc}")
+        return False
+    finally:
+        for service in reversed(was_running):
+            info(f"Запускаем {service} обратно...")
+            HOST.run(
+                ["systemctl", "start", service],
+                capture_output=True, text=True,
+            )
 
 
 def menu_subscription_server(state: AppState):
