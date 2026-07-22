@@ -116,7 +116,7 @@ command -v curl    &>/dev/null || MISSING+=("curl")
 command -v git     &>/dev/null || MISSING+=("git")
 command -v tar     &>/dev/null || MISSING+=("tar")
 command -v sha256sum &>/dev/null || MISSING+=("coreutils")
-python3 -m venv --help &>/dev/null || MISSING+=("python3-venv")
+python3 -c 'import ensurepip' &>/dev/null || MISSING+=("python3-venv")
 
 for pkg in "${MISSING[@]}"; do
     info "Устанавливаю: $pkg"

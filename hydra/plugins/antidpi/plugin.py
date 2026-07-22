@@ -700,7 +700,7 @@ class AntiDPIPlugin(BasePlugin):
                 "-p", "udp", "-m", "comment", "--comment", UDP_PROBE_RULE_COMMENT,
                 "-j", UDP_PROBE_CHAIN,
             ]
-            udp_probe_ok = _run([binary, "-C", "INPUT", *jump]).returncode == 0 and udp_probe_ok
+            udp_probe_ok = _run([binary, "-C", "INPUT", *jump]).returncode != 0 and udp_probe_ok
             if mieru_enabled:
                 for flag in ("FIN", "RST"):
                     mieru_probe_ok = (
@@ -709,7 +709,7 @@ class AntiDPIPlugin(BasePlugin):
                     )
         checks = {
             "service": status.running, "ipsets": sets_ok, "firewall": rules_ok,
-            "scan_telemetry": telemetry_ok, "udp_probe_telemetry": udp_probe_ok,
+            "scan_telemetry": telemetry_ok, "udp_probe_telemetry_removed": udp_probe_ok,
             "mieru_probe_telemetry": mieru_probe_ok,
         }
         healthy = all(checks.values())
@@ -745,6 +745,12 @@ class AntiDPIPlugin(BasePlugin):
         except ValueError:
             return False
         event = dict(event) if isinstance(event, dict) else {}
+
+        # A packet rate on an enabled UDP listener cannot distinguish a real
+        # AWG/Hysteria/QUIC client from a probe. Older installations may still
+        # have queued records while their obsolete rules are being removed.
+        if event.get("source") == "kernel-udp-probe":
+            return False
 
         with _lock_state_file():
             data = self._load_state()
@@ -798,11 +804,11 @@ class AntiDPIPlugin(BasePlugin):
                 MAX_OBSERVED_SCORE,
                 decayed_score(previous, timestamp - previous_at) + score,
             ), 4)
-            entry["verified_score"] = round(
+            entry["verified_score"] = round(min(
+                MAX_OBSERVED_SCORE,
                 decayed_score(previous_verified, timestamp - previous_at)
                 + (score if evidence_can_ban else 0.0),
-                4,
-            )
+            ), 4)
             entry["signals"] = list(dict.fromkeys(list(entry.get("signals", [])) + list(signals)))[-16:]
             entry["updated"] = timestamp
             data["events"] = int(data.get("events", 0)) + 1
@@ -843,12 +849,10 @@ class AntiDPIPlugin(BasePlugin):
                             item["expired_at"] = timestamp
                             break
 
-            last_non_kernel = float(entry.get("last_non_kernel_evidence_at", 0) or 0)
-            last_port_sweep = float(entry.get("last_port_sweep_at", 0) or 0)
-            ban_eligible = evidence_can_ban and (
-                (last_non_kernel > 0 and timestamp - last_non_kernel <= SCORE_HALF_LIFE * 2)
-                or (last_port_sweep > 0 and timestamp - last_port_sweep <= SCORE_HALF_LIFE * 2)
-            )
+            # verified_score already contains only ban-eligible evidence.
+            # Requiring a second evidence category here left sustained TCP
+            # scans alerting forever after they crossed the ban threshold.
+            ban_eligible = evidence_can_ban
             protocol_key = str(event.get("protocol", "L4"))[:40].lower()
             protocol_alerts = entry.get("protocol_alerts", {})
             if not isinstance(protocol_alerts, dict):
@@ -1178,36 +1182,13 @@ class AntiDPIPlugin(BasePlugin):
         return ok
 
     def sync_udp_probe_rules(self, state: AppState | None = None) -> bool:
-        """Refresh low-rate, LOG-only telemetry for enabled UDP protocols."""
-        if state is None:
-            try:
-                from hydra.core.state import load_state
-                state = load_state()
-            except Exception:
-                return False
-        ports = udp_protocol_ports(state)
-        ok = True
-        for binary in ("iptables", "ip6tables"):
-            _run([binary, "-N", UDP_PROBE_CHAIN])
-            jump = [
-                "-p", "udp", "-m", "comment", "--comment", UDP_PROBE_RULE_COMMENT,
-                "-j", UDP_PROBE_CHAIN,
-            ]
-            if _run([binary, "-C", "INPUT", *jump]).returncode != 0:
-                result = _run([binary, "-I", "INPUT", "2", *jump], text=True)
-                if result.returncode != 0:
-                    self._fail(self._result_error(result, f"UDP telemetry jump {binary}"))
-                    ok = False
-                    continue
-            if _run([binary, "-F", UDP_PROBE_CHAIN], text=True).returncode != 0:
-                ok = False
-                continue
-            for port in ports:
-                result = _run([binary, "-A", UDP_PROBE_CHAIN, *_udp_probe_rule(binary, port)], text=True)
-                if result.returncode != 0:
-                    self._fail(self._result_error(result, f"UDP telemetry {binary}/{port}"))
-                    ok = False
-        return ok
+        """Remove obsolete per-listener UDP telemetry.
+
+        Rates on real UDP protocol ports produce false positives for normal
+        AWG, Hysteria and QUIC traffic. Broad ``HYDRA_SCAN_UDP`` telemetry
+        remains active with its substantially more conservative threshold.
+        """
+        return self._remove_udp_probe_rules()
 
     def _remove_udp_probe_rules(self) -> bool:
         ok = True

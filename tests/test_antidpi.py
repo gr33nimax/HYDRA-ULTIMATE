@@ -97,7 +97,7 @@ def test_mieru_probe_rule_requires_established_low_volume_close_and_never_drops(
     assert "DROP" not in rule
 
 
-def test_unverified_udp_probe_alerts_but_never_bans(tmp_path):
+def test_obsolete_udp_probe_is_ignored_without_alert_or_score(tmp_path):
     plugin = AntiDPIPlugin()
     state_file = tmp_path / "udp-alert-only.json"
     event = {
@@ -111,10 +111,15 @@ def test_unverified_udp_probe_alerts_but_never_bans(tmp_path):
         assert plugin.observe_event("198.51.100.40", event, now=1001) is False
         assert plugin.observe_event("198.51.100.40", event, now=1002) is False
     firewall.assert_not_called()
-    notify.assert_called_once()
-    message = notify.call_args.args[0]
-    assert "alert-only / unverified UDP source" in message
-    assert "hysteria2" in message
+    notify.assert_not_called()
+    assert plugin._load_state().get("scores", {}) == {}
+
+
+def test_udp_probe_sync_removes_legacy_rules_instead_of_recreating_them():
+    plugin = AntiDPIPlugin()
+    with patch.object(plugin, "_remove_udp_probe_rules", return_value=True) as remove:
+        assert plugin.sync_udp_probe_rules(AppState()) is True
+    remove.assert_called_once_with()
 
 
 def test_unverified_udp_score_cannot_preload_a_later_verified_ban(tmp_path):
@@ -122,7 +127,7 @@ def test_unverified_udp_score_cannot_preload_a_later_verified_ban(tmp_path):
     state_file = tmp_path / "separate-verified-score.json"
     udp = {
         "protocol": "amneziawg", "kind": "udp_probe",
-        "source": "kernel-udp-probe", "ban_eligible": False,
+        "source": "native-udp", "ban_eligible": False,
     }
     verified = {
         "protocol": "tls", "kind": "auth_failure", "source": "journal",
@@ -140,6 +145,23 @@ def test_unverified_udp_score_cannot_preload_a_later_verified_ban(tmp_path):
     assert entry["verified_score"] < 8
 
 
+def test_verified_tcp_scan_bans_at_threshold_without_extra_evidence_class(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "verified-tcp-scan.json"
+    event = {
+        "protocol": "tcp", "kind": "port_scan",
+        "source": "kernel-firewall", "connections_10s": 12,
+    }
+    result = MagicMock(returncode=0, stdout="", stderr="")
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch("hydra.plugins.antidpi.plugin._run", return_value=result), \
+         patch("hydra.services.telegram.bot.send_admin_notification", return_value=True) as notify:
+        assert plugin.observe_event("198.51.100.45", event, now=1000) is False
+        assert plugin.observe_event("198.51.100.45", event, now=1001) is False
+        assert plugin.observe_event("198.51.100.45", event, now=1002) is True
+    assert "AntiDPI · BAN" in notify.call_args.args[0]
+
+
 def test_alert_cooldown_is_scoped_per_protocol(tmp_path):
     plugin = AntiDPIPlugin()
     state_file = tmp_path / "protocol-alert-cooldown.json"
@@ -148,7 +170,7 @@ def test_alert_cooldown_is_scoped_per_protocol(tmp_path):
         for protocol in ("hysteria2", "amneziawg"):
             event = {
                 "protocol": protocol, "kind": "udp_probe",
-                "source": "kernel-udp-probe", "ban_eligible": False,
+                "source": "native-udp", "ban_eligible": False,
             }
             plugin.observe_event("198.51.100.42", event, now=1000)
             plugin.observe_event("198.51.100.42", event, now=1001)
@@ -160,7 +182,7 @@ def test_observed_score_is_capped_for_sustained_unverified_udp(tmp_path):
     state_file = tmp_path / "bounded-observed-score.json"
     event = {
         "protocol": "hysteria2", "kind": "udp_probe",
-        "source": "kernel-udp-probe", "ban_eligible": False,
+        "source": "native-udp", "ban_eligible": False,
     }
     with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
          patch("hydra.services.telegram.bot.send_admin_notification", return_value=True):
@@ -552,7 +574,7 @@ def test_event_source_and_signal_counters_are_persisted(tmp_path):
                 now=1000 + offset,
             ))
         data = plugin._load_state()
-    assert results == [False, False, False, True]
+    assert results == [False, False, True, True]
     assert data["source_counts"]["kernel-firewall"] == 4
     assert data["signal_counts"]["port_scan"] == 4
     assert data["signal_counts"]["port_sweep"] == 1
