@@ -13,6 +13,7 @@ from pathlib import Path
 from hydra.core.state import AppState
 from hydra.core.host import HOST
 from hydra.plugins.base import BasePlugin, ConfigFragment, PluginCategory, PluginMeta, PluginStatus
+from hydra.utils.net import host_ip_addresses
 
 
 HONEYPOT_SCRIPT = Path("/usr/local/bin/hydra-honeypot.py")
@@ -91,6 +92,7 @@ class HoneypotPlugin(BasePlugin):
 
     def apply(self, state: AppState) -> bool:
         config = self._load_state()
+        self._sync_host_whitelist(config, state)
         previous_script = None
         try:
             previous_script = HONEYPOT_SCRIPT.read_bytes()
@@ -162,6 +164,20 @@ class HoneypotPlugin(BasePlugin):
             if normalized not in result:
                 result.append(normalized)
         return result
+
+    def _sync_host_whitelist(self, config: dict, state: AppState) -> list[str]:
+        """Persist all VPS addresses before generating the honeypot service."""
+        current = config.get("whitelist", [])
+        if not isinstance(current, list):
+            current = []
+        effective = self._normalize_whitelist([
+            *current,
+            *host_ip_addresses((state.network.server_ip,)),
+        ])
+        if effective != current:
+            config["whitelist"] = effective
+            self._save_state(config)
+        return effective
 
     def _write_script(self, port: int, whitelist: list[str]) -> None:
         # audit: allow-generated-runtime-subprocess
@@ -420,6 +436,7 @@ class HoneypotPlugin(BasePlugin):
 
     def on_enable(self, state: AppState) -> None:
         config = self._load_state()
+        self._sync_host_whitelist(config, state)
         if not self._install_service(config["port"], config["whitelist"]):
             detail = f": {self.last_error}" if self.last_error else ""
             raise RuntimeError(f"Honeypot не удалось запустить{detail}")

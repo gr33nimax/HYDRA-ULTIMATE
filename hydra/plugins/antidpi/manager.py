@@ -93,16 +93,22 @@ def _ban_history(plugin) -> None:
             score = meta.get("score", 0.0)
             at = meta.get("at", 0)
             duration = ban_duration(meta)
+            permanent = meta.get("permanent") is True
             offense = meta.get("offense_count", 1)
             sig_list = _get_signals_list(meta)
             rem = duration - (now - at)
-            if rem > 0:
+            if permanent:
+                rem_str = "до ручного снятия"
+                dur_str = "бессрочно"
+                icon = "🔴"
+            elif rem > 0:
                 rem_str = f"осталось {_format_dur(rem)}"
+                dur_str = _format_dur(duration)
                 icon = "🔴"
             else:
                 rem_str = "истёк"
+                dur_str = _format_dur(duration)
                 icon = "🟡"
-            dur_str = _format_dur(duration)
 
             lines.append(
                 f"  {icon} {CYAN}{ip:<15}{DIM} | Score: {RED}{score:.1f}{DIM} | "

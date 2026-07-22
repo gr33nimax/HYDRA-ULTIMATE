@@ -5,9 +5,13 @@ from __future__ import annotations
 
 from hydra.core.host import HOST
 
+import ipaddress
+import json
+import os
 import platform
 import socket
 import subprocess
+from functools import lru_cache
 
 
 def public_ip() -> str:
@@ -36,6 +40,53 @@ def local_ip() -> str:
             return s.getsockname()[0]
     except Exception:
         return "127.0.0.1"
+
+
+@lru_cache(maxsize=16)
+def host_ip_addresses(configured: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """Return every known address owned by this host.
+
+    Security modules use this shared inventory to prevent the VPS from
+    banning itself when traffic loops through its public address.
+    """
+    values: set[str] = set()
+
+    def add(raw: object) -> None:
+        value = str(raw or "").strip().strip("[]")
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError:
+            return
+        if not address.is_unspecified and not address.is_multicast:
+            values.add(address.compressed)
+
+    for value in configured:
+        add(value)
+    add(local_ip())
+    if os.name != "nt":
+        add(public_ip())
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None):
+            add(info[4][0])
+    except OSError:
+        pass
+    try:
+        if os.name == "nt":
+            return tuple(sorted(values, key=lambda value: (ipaddress.ip_address(value).version, value)))
+        result = HOST.run(
+            ["ip", "-j", "address", "show"],
+            capture_output=True, text=True, timeout=8,
+        )
+        if result.returncode == 0:
+            for interface in json.loads(result.stdout or "[]"):
+                if not isinstance(interface, dict):
+                    continue
+                for item in interface.get("addr_info", []):
+                    if isinstance(item, dict):
+                        add(item.get("local"))
+    except Exception:
+        pass
+    return tuple(sorted(values, key=lambda value: (ipaddress.ip_address(value).version, value)))
 
 
 def detect_arch() -> str:

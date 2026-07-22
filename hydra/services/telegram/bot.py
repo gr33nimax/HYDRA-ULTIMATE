@@ -476,13 +476,18 @@ def get_antidpi_dashboard_text() -> str:
         reasons = ", ".join(_SIGNAL_LABELS.get(str(item), str(item)) for item in signals[:3]) or "аномальное поведение"
         duration = int(metadata.get("duration", 0) or 0)
         remaining = duration - max(0, now - float(metadata.get("at", 0) or 0))
+        expiry = (
+            "бессрочно"
+            if metadata.get("permanent") is True
+            else f"осталось {_format_period(remaining)}"
+        )
         source = str(metadata.get("source", "legacy/unknown"))
         protocol = str(metadata.get("protocol", "unknown"))
         score = float(metadata.get("score", 0) or 0)
         offense = int(metadata.get("offense_count", 1) or 1)
         rows.append(
             f"• <code>{html.escape(address)}</code> — <b>{score:.1f}</b> баллов, "
-            f"осталось {_format_period(remaining)}\n"
+            f"{expiry}\n"
             f"  {html.escape(reasons)} · {html.escape(protocol)}/{html.escape(source)} · нарушение #{offense}"
         )
     if len(ordered) > 8:
@@ -1221,6 +1226,7 @@ class AdminBot:
                 )
                 return
             duration = max(0, int(result.get("remaining", result.get("duration", 0)) or 0))
+            ttl = "бессрочно" if result.get("permanent") is True else _format_period(duration)
             status = "already_banned" if result.get("already_active") else "manual_ban"
             message = update.callback_query.message
             original = getattr(message, "text_html", None)
@@ -1229,7 +1235,7 @@ class AdminBot:
             updated = (
                 f"{original}\n"
                 f"<b>Action:</b> <code>{status}</code>\n"
-                f"<b>TTL:</b> <code>{_format_period(duration)}</code>\n"
+                f"<b>TTL:</b> <code>{ttl}</code>\n"
                 f"<b>Offense:</b> <code>{int(result.get('offense_count', 1) or 1)}</code>"
             )
             try:

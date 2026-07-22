@@ -145,7 +145,7 @@ def test_unverified_udp_score_cannot_preload_a_later_verified_ban(tmp_path):
     assert entry["verified_score"] < 8
 
 
-def test_verified_tcp_scan_bans_at_threshold_without_extra_evidence_class(tmp_path):
+def test_single_port_tcp_burst_alerts_but_does_not_ban(tmp_path):
     plugin = AntiDPIPlugin()
     state_file = tmp_path / "verified-tcp-scan.json"
     event = {
@@ -158,8 +158,9 @@ def test_verified_tcp_scan_bans_at_threshold_without_extra_evidence_class(tmp_pa
          patch("hydra.services.telegram.bot.send_admin_notification", return_value=True) as notify:
         assert plugin.observe_event("198.51.100.45", event, now=1000) is False
         assert plugin.observe_event("198.51.100.45", event, now=1001) is False
-        assert plugin.observe_event("198.51.100.45", event, now=1002) is True
-    assert "AntiDPI · BAN" in notify.call_args.args[0]
+        assert plugin.observe_event("198.51.100.45", event, now=1002) is False
+    assert notify.call_count == 1
+    assert "AntiDPI · ALERT" in notify.call_args.args[0]
 
 
 def test_alert_cooldown_is_scoped_per_protocol(tmp_path):
@@ -396,7 +397,7 @@ def test_progressive_ban_durations(tmp_path):
         assert data["banned"]["198.51.100.5"]["offense_count"] == 2
 
 
-def test_manual_ban_uses_progressive_ipset_and_is_idempotent(tmp_path):
+def test_manual_ban_is_permanent_and_idempotent(tmp_path):
     plugin = AntiDPIPlugin()
     state_file = tmp_path / "antidpi-manual.json"
     result = MagicMock(returncode=0, stdout="", stderr="")
@@ -410,13 +411,46 @@ def test_manual_ban_uses_progressive_ipset_and_is_idempotent(tmp_path):
 
     assert first["ok"] is True
     assert first["already_active"] is False
-    assert first["duration"] == 600
+    assert first["duration"] == 0
+    assert first["permanent"] is True
     assert second["ok"] is True
     assert second["already_active"] is True
     assert data["ban_counts"]["198.51.100.77"] == 1
     assert data["banned"]["198.51.100.77"]["kind"] == "manual_ban"
     assert data["banned"]["198.51.100.77"]["source"] == "telegram-admin"
+    assert data["banned"]["198.51.100.77"]["permanent"] is True
+    assert firewall.call_args.args[0][-3:] == ["timeout", "0", "-exist"]
     assert firewall.call_count == 1
+
+
+def test_manual_ban_promotes_active_timed_ban_to_permanent(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "antidpi-manual-promotion.json"
+    result = MagicMock(returncode=0, stdout="", stderr="")
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch.object(plugin, "_ensure_sets", return_value=True), \
+         patch.object(plugin, "_ensure_rules", return_value=True), \
+         patch("hydra.plugins.antidpi.plugin.time.time", return_value=1100), \
+         patch("hydra.plugins.antidpi.plugin._run", return_value=result) as firewall:
+        plugin._save_state({
+            "banned": {"198.51.100.78": {
+                "at": 1000, "duration": 600, "offense_count": 2,
+                "signals": ["unknown_sni"],
+            }},
+            "history": [{
+                "ip": "198.51.100.78", "at": 1000, "duration": 600,
+                "offense_count": 2, "signals": ["unknown_sni"], "status": "active",
+            }],
+            "ban_counts": {"198.51.100.78": 2},
+        })
+        promoted = plugin.manual_ban("198.51.100.78", source="telegram-admin")
+        data = plugin._load_state()
+
+    assert promoted["permanent"] is True
+    assert promoted["offense_count"] == 2
+    assert len(data["history"]) == 1
+    assert data["history"][0]["permanent"] is True
+    assert firewall.call_args.args[0][-3:] == ["timeout", "0", "-exist"]
 
 
 def test_manual_ban_rejects_invalid_and_whitelisted_addresses(tmp_path):
@@ -429,6 +463,26 @@ def test_manual_ban_rejects_invalid_and_whitelisted_addresses(tmp_path):
         assert plugin.manual_ban("--help")["error"] == "invalid_ip"
         assert plugin.manual_ban("127.0.0.1")["error"] == "whitelisted"
     firewall.assert_not_called()
+
+
+def test_vps_addresses_are_automatically_whitelisted(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "antidpi-host-whitelist.json"
+    app_state = AppState()
+    app_state.network.server_ip = "203.0.113.10"
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch("hydra.plugins.antidpi.plugin.load_state", return_value=app_state), \
+         patch("hydra.plugins.antidpi.plugin.host_ip_addresses", return_value=("203.0.113.10", "2001:db8::10")):
+        assert plugin.sync_host_whitelist() == ["203.0.113.10", "2001:db8::10"]
+        data = plugin._load_state()
+        assert plugin.observe_event(
+            "203.0.113.10",
+            {"kind": "port_scan", "source": "kernel-firewall", "connections_10s": 12},
+            now=1000,
+        ) is False
+
+    assert data["whitelist"] == ["203.0.113.10", "2001:db8::10"]
+    assert data.get("events", 0) == 0
 
 
 def test_normalize_tls_auth_failure():
@@ -511,10 +565,11 @@ def test_active_bans_filters_expired_and_malformed_entries():
         "banned": {
             "198.51.100.1": {"at": 1000, "duration": 600},
             "198.51.100.2": {"at": 1000, "duration": 10},
+            "198.51.100.3": {"at": 1, "duration": 0, "permanent": True},
             "invalid": None,
         }
     }
-    assert list(active_bans(data, now=1100)) == ["198.51.100.1"]
+    assert list(active_bans(data, now=1100)) == ["198.51.100.1", "198.51.100.3"]
 
 
 def test_legacy_ban_duration_and_expired_history_are_reconciled():
@@ -530,6 +585,17 @@ def test_legacy_ban_duration_and_expired_history_are_reconciled():
     assert ban_duration(data["banned"]["198.51.100.1"]) == 86400
     assert expire_bans(data, now=1700) is True
     assert list(data["banned"]) == ["198.51.100.1"]
+    assert data["history"][0]["status"] == "expired"
+
+
+def test_orphaned_active_history_is_reconciled():
+    data = {
+        "banned": {},
+        "history": [
+            {"ip": "45.148.10.244", "at": 1000, "duration": 600, "status": "active"},
+        ],
+    }
+    assert expire_bans(data, now=1700) is True
     assert data["history"][0]["status"] == "expired"
 
 
@@ -574,7 +640,7 @@ def test_event_source_and_signal_counters_are_persisted(tmp_path):
                 now=1000 + offset,
             ))
         data = plugin._load_state()
-    assert results == [False, False, True, True]
+    assert results == [False, False, False, True]
     assert data["source_counts"]["kernel-firewall"] == 4
     assert data["signal_counts"]["port_scan"] == 4
     assert data["signal_counts"]["port_sweep"] == 1

@@ -210,6 +210,11 @@ def _from_dict(cls, data: dict):
         for key, value in data.items():
             field_type = resolved_types.get(key)
             if field_type is not None:
+                # Older UI/config paths could persist null for boolean
+                # switches. Treat null as omitted so the declared default is
+                # used, while preserving an explicit false.
+                if value is None and field_type is bool:
+                    continue
                 kwargs[key] = _from_dict(field_type, value)
         return cls(**kwargs)
     return data

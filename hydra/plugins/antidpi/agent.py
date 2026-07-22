@@ -272,6 +272,7 @@ def _kernel_worker(out: queue.Queue[Normalized], stop: threading.Event) -> None:
 
 def run() -> None:
     plugin = AntiDPIPlugin()
+    plugin.sync_host_whitelist()
     plugin.cleanup_honeypot_duplicates()
     plugin.sync_udp_probe_rules()
     plugin.sync_mieru_probe_rules()

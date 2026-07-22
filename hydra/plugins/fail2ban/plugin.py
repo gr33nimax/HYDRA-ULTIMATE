@@ -11,6 +11,7 @@ from pathlib import Path
 from hydra.core.state import AppState, get_protocol
 from hydra.core.host import HOST
 from hydra.plugins.base import BasePlugin, ConfigFragment, PluginCategory, PluginMeta, PluginStatus
+from hydra.utils.net import host_ip_addresses
 
 
 F2B_BIN = Path("/usr/bin/fail2ban-client")
@@ -173,9 +174,12 @@ class Fail2banPlugin(BasePlugin):
         if ssh_connection:
             candidates.append(ssh_connection[0])
         if state is not None:
+            candidates.extend(host_ip_addresses((state.network.server_ip,)))
             configured = get_protocol(state, "fail2ban").config.get("whitelist", [])
             if isinstance(configured, list):
                 candidates.extend(configured)
+        else:
+            candidates.extend(host_ip_addresses())
         for value in candidates:
             try:
                 normalized = str(ipaddress.ip_network(str(value), strict=False)) if "/" in str(value) else str(ipaddress.ip_address(str(value)))
@@ -198,6 +202,17 @@ class Fail2banPlugin(BasePlugin):
         whitelist = config.setdefault("whitelist", [])
         if isinstance(whitelist, list) and address not in whitelist:
             whitelist.append(address)
+
+    @staticmethod
+    def _remember_host_addresses(state: AppState) -> None:
+        config = get_protocol(state, "fail2ban").config
+        whitelist = config.setdefault("whitelist", [])
+        if not isinstance(whitelist, list):
+            whitelist = []
+            config["whitelist"] = whitelist
+        for address in host_ip_addresses((state.network.server_ip,)):
+            if address not in whitelist:
+                whitelist.append(address)
 
     def _write_jails(self, state: AppState | None = None) -> bool:
         self.last_error = ""
@@ -484,6 +499,7 @@ class Fail2banPlugin(BasePlugin):
 
     def on_enable(self, state: AppState) -> None:
         self._remember_ssh_client(state)
+        self._remember_host_addresses(state)
         if not self.apply(state):
             raise RuntimeError("Fail2ban configuration could not be validated or started")
 

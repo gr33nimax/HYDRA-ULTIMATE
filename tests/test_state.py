@@ -31,6 +31,26 @@ def test_app_state_defaults():
     assert isinstance(state.security, SecurityConfig)
 
 
+def test_null_boolean_switches_use_dataclass_defaults(tmp_path, monkeypatch):
+    state_file = tmp_path / "state.json"
+    state_file.write_text(json.dumps({
+        "version": 2,
+        "telegram": {
+            "notifications_enabled": None,
+            "notify_antidpi": None,
+            "notify_unbans": None,
+        },
+    }), encoding="utf-8")
+    monkeypatch.setattr("hydra.core.state.STATE_FILE", state_file)
+    monkeypatch.setattr("hydra.core.state.STATE_DIR", tmp_path)
+
+    state = load_state()
+
+    assert state.telegram.notifications_enabled is True
+    assert state.telegram.notify_antidpi is True
+    assert state.telegram.notify_unbans is False
+
+
 def test_add_and_find_user():
     """Добавление и поиск пользователя."""
     state = AppState()

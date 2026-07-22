@@ -53,6 +53,20 @@ def test_ban_ip_cidr():
         mock_add.assert_called_once_with("10.0.0.0/8", ["10.0.0.0/8"], "cidr", "")
 
 
+def test_ban_ip_rejects_network_containing_vps_address():
+    p = IPBanPlugin()
+    state = AppState()
+    state.network.server_ip = "203.0.113.10"
+    with patch.object(p, "_ensure_sets", return_value=True), \
+         patch.object(p, "_ensure_iptables_rules", return_value=True), \
+         patch.object(p, "_resolve_to_cidrs", return_value=("203.0.113.0/24", "cidr", ["203.0.113.0/24"])), \
+         patch("hydra.plugins.ipban.plugin.load_state", return_value=state), \
+         patch("hydra.plugins.ipban.plugin.host_ip_addresses", return_value=("203.0.113.10",)), \
+         patch("hydra.plugins.ipban.plugin._run") as run:
+        assert p.ban_ip("203.0.113.0/24") is False
+    run.assert_not_called()
+
+
 def test_unban_ip_not_found():
     p = IPBanPlugin()
     with patch.object(IPBanPlugin, "_load_state", return_value={"entries": []}):

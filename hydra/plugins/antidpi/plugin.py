@@ -19,6 +19,7 @@ from pathlib import Path
 from hydra.core.host import HOST
 from hydra.core.state import AppState, load_state
 from hydra.plugins.base import BasePlugin, ConfigFragment, HealthResult, PluginCategory, PluginMeta, PluginStatus
+from hydra.utils.net import host_ip_addresses
 
 STATE_FILE = Path("/var/lib/hydra/antidpi.json")
 LOG_FILE = Path("/var/log/caddy-l4/antidpi.jsonl")
@@ -165,6 +166,9 @@ def active_bans(data: dict, *, now: float | None = None) -> dict:
     for address, metadata in banned.items():
         if not isinstance(metadata, dict):
             continue
+        if metadata.get("permanent") is True:
+            result[address] = metadata
+            continue
         try:
             expires_at = float(metadata.get("at", 0)) + ban_duration(metadata)
         except (TypeError, ValueError):
@@ -181,12 +185,13 @@ def expire_bans(data: dict, *, now: float | None = None) -> bool:
         data["banned"] = {}
         return True
     timestamp = time.time() if now is None else now
-    expired: set[str] = set()
     changed = False
     for address, metadata in list(banned.items()):
         if not isinstance(metadata, dict):
             banned.pop(address, None)
             changed = True
+            continue
+        if metadata.get("permanent") is True:
             continue
         try:
             elapsed = timestamp >= float(metadata.get("at", 0)) + ban_duration(metadata)
@@ -194,23 +199,21 @@ def expire_bans(data: dict, *, now: float | None = None) -> bool:
             elapsed = True
         if elapsed:
             banned.pop(address, None)
-            expired.add(address)
             changed = True
-    if not expired:
-        return changed
-    remaining = set(expired)
+    active = set(active_bans(data, now=timestamp))
     history = data.get("history", [])
     if isinstance(history, list):
         for item in reversed(history):
             if not isinstance(item, dict):
                 continue
             address = item.get("ip")
-            if address in remaining and item.get("status") == "active":
+            # Repair orphaned legacy records as well as bans that expired in
+            # this pass. A history item cannot be active when its address is
+            # absent from the current persisted ban map.
+            if item.get("status") == "active" and address not in active:
                 item["status"] = "expired"
                 item["expired_at"] = timestamp
-                remaining.remove(address)
-                if not remaining:
-                    break
+                changed = True
     return changed
 
 
@@ -660,8 +663,9 @@ class AntiDPIPlugin(BasePlugin):
                 except (ValueError, TypeError):
                     banned.pop(raw, None)
                     continue
-                remaining = int(duration - max(0, now - banned_at))
-                if remaining <= 0:
+                permanent = isinstance(metadata, dict) and metadata.get("permanent") is True
+                remaining = 0 if permanent else int(duration - max(0, now - banned_at))
+                if not permanent and remaining <= 0:
                     banned.pop(raw, None)
                     continue
                 set_name = SET_V6 if address.version == 6 else SET_V4
@@ -778,6 +782,12 @@ class AntiDPIPlugin(BasePlugin):
                     recent_ports[str(destination_port)] = timestamp
                 entry["kernel_ports"] = dict(list(recent_ports.items())[-64:])
                 event["distinct_ports_60s"] = len(recent_ports)
+                # A high connection rate to one service is a burst, not a
+                # verified port scan. Only a sweep across multiple ports is
+                # strong enough for an automatic firewall decision.
+                event["ban_eligible"] = len(recent_ports) >= 4
+                if not event["ban_eligible"]:
+                    event["policy"] = "alert-only / single-port connection burst"
 
             score, signals = score_event(event)
             evidence_can_ban = event.get("ban_eligible") is not False
@@ -838,7 +848,10 @@ class AntiDPIPlugin(BasePlugin):
             active_ban = False
             if isinstance(active_metadata, dict):
                 try:
-                    active_ban = timestamp < float(active_metadata.get("at", 0)) + int(active_metadata.get("duration", 0))
+                    active_ban = (
+                        active_metadata.get("permanent") is True
+                        or timestamp < float(active_metadata.get("at", 0)) + ban_duration(active_metadata)
+                    )
                 except (TypeError, ValueError):
                     active_ban = False
                 if not active_ban:
@@ -1011,7 +1024,7 @@ class AntiDPIPlugin(BasePlugin):
         return True
 
     def manual_ban(self, raw: str, *, source: str = "manual") -> dict:
-        """Block a validated address immediately on an explicit admin decision."""
+        """Permanently block an address until an administrator unbans it."""
         try:
             address = ipaddress.ip_address(str(raw).strip().strip("[]"))
         except ValueError:
@@ -1029,15 +1042,11 @@ class AntiDPIPlugin(BasePlugin):
 
             expire_bans(data, now=timestamp)
             current = active_bans(data, now=timestamp).get(compressed)
-            if isinstance(current, dict):
-                remaining = max(
-                    0,
-                    int(float(current.get("at", 0)) + ban_duration(current) - timestamp),
-                )
+            if isinstance(current, dict) and current.get("permanent") is True:
                 return {
                     "ok": True,
                     "already_active": True,
-                    "remaining": remaining,
+                    "remaining": 0,
                     **current,
                 }
 
@@ -1045,8 +1054,12 @@ class AntiDPIPlugin(BasePlugin):
             if not isinstance(ban_counts, dict):
                 ban_counts = {}
                 data["ban_counts"] = ban_counts
-            offense_count = int(ban_counts.get(compressed, 0) or 0) + 1
-            duration = get_ban_duration(offense_count)
+            offense_count = (
+                int(current.get("offense_count", 1) or 1)
+                if isinstance(current, dict)
+                else int(ban_counts.get(compressed, 0) or 0) + 1
+            )
+            duration = 0
             set_name = SET_V6 if address.version == 6 else SET_V4
             result = _run(
                 ["ipset", "add", set_name, compressed, "timeout", str(duration), "-exist"],
@@ -1073,6 +1086,7 @@ class AntiDPIPlugin(BasePlugin):
                 "protocol": "manual",
                 "kind": "manual_ban",
                 "duration": duration,
+                "permanent": True,
                 "offense_count": offense_count,
             }
             banned = data.setdefault("banned", {})
@@ -1084,10 +1098,39 @@ class AntiDPIPlugin(BasePlugin):
             history = data.setdefault("history", [])
             if not isinstance(history, list):
                 history = []
-            history.append({"ip": compressed, **metadata, "status": "active"})
+            promoted = False
+            if isinstance(current, dict):
+                for item in reversed(history):
+                    if isinstance(item, dict) and item.get("ip") == compressed and item.get("status") == "active":
+                        item.clear()
+                        item.update({"ip": compressed, **metadata, "status": "active"})
+                        promoted = True
+                        break
+            if not promoted:
+                history.append({"ip": compressed, **metadata, "status": "active"})
             data["history"] = history[-1000:]
             self._save_state(data)
             return {"ok": True, "already_active": False, **metadata}
+
+    def sync_host_whitelist(self, state: AppState | None = None) -> list[str]:
+        """Persist every known VPS address in the AntiDPI whitelist."""
+        if state is None:
+            state = load_state()
+        addresses = list(host_ip_addresses((state.network.server_ip,)))
+        with _lock_state_file():
+            data = self._load_state()
+            values = data.get("whitelist", [])
+            if not isinstance(values, list):
+                values = []
+            changed = False
+            for address in addresses:
+                if address not in values:
+                    values.append(address)
+                    changed = True
+            data["whitelist"] = values
+            if changed:
+                self._save_state(data)
+        return addresses
 
     @staticmethod
     def _is_whitelisted(address: ipaddress.IPv4Address | ipaddress.IPv6Address, data: dict) -> bool:
@@ -1095,8 +1138,8 @@ class AntiDPIPlugin(BasePlugin):
             return True
         try:
             from hydra.core.state import load_state
-            server_ip = load_state().network.server_ip
-            if server_ip and address == ipaddress.ip_address(server_ip):
+            state = load_state()
+            if address.compressed in host_ip_addresses((state.network.server_ip,)):
                 return True
         except Exception:
             pass

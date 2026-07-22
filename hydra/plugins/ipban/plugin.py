@@ -14,8 +14,9 @@ import urllib.request
 from pathlib import Path
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
-from hydra.core.state import AppState
+from hydra.core.state import AppState, load_state
 from hydra.core.host import HOST
+from hydra.utils.net import host_ip_addresses
 
 IPSET_V4 = "hydra_manual_ban"
 IPSET_V6 = "hydra_manual_ban6"
@@ -160,6 +161,18 @@ class IPBanPlugin(BasePlugin):
         try:
             display, kind, cidrs = self._resolve_to_cidrs(raw)
         except (ValueError, RuntimeError) as e:
+            return False
+        try:
+            configured = load_state().network.server_ip
+        except Exception:
+            configured = ""
+        owned = [ipaddress.ip_address(value) for value in host_ip_addresses((configured,))]
+        if any(
+            address.version == network.version and address in network
+            for cidr in cidrs
+            for network in (ipaddress.ip_network(cidr, strict=False),)
+            for address in owned
+        ):
             return False
         v4 = [c for c in cidrs if ":" not in c]
         v6 = [c for c in cidrs if ":" in c]

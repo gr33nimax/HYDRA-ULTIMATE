@@ -103,6 +103,7 @@ def test_write_jails_with_whitelist():
 
     with patch("pathlib.Path.mkdir"), \
          patch("hydra.plugins.fail2ban.plugin._atomic_write", side_effect=mock_atomic_write), \
+         patch("hydra.plugins.fail2ban.plugin.host_ip_addresses", return_value=("203.0.113.10",)), \
          patch("hydra.plugins.fail2ban.plugin._run", return_value=MagicMock(returncode=0, stdout="", stderr="")), \
          patch("pathlib.Path.unlink"):
         assert p._write_jails(state) is True
@@ -110,7 +111,7 @@ def test_write_jails_with_whitelist():
     assert "00-hydra-defaults.local" in written_files
     assert written_files["zz-hydra-disable-default-sshd.local"] == "[sshd]\nenabled = false\n"
     content = written_files["00-hydra-defaults.local"]
-    assert "ignoreip = 127.0.0.1/8 ::1 192.168.1.100 10.0.0.0/24" in content
+    assert "ignoreip = 127.0.0.1/8 ::1 203.0.113.10 192.168.1.100 10.0.0.0/24" in content
 
 
 def test_only_filters_with_trustworthy_public_sources_are_generated():

@@ -179,7 +179,8 @@ def test_antidpi_alert_ban_callback_updates_original_message():
     result = {
         "ok": True,
         "already_active": False,
-        "duration": 600,
+        "duration": 0,
+        "permanent": True,
         "offense_count": 1,
     }
     with patch("hydra.services.telegram.bot.ban_ip_antidpi", return_value=result):
@@ -188,7 +189,7 @@ def test_antidpi_alert_ban_callback_updates_original_message():
     edited = query.edit_message_text.call_args.args[0]
     assert "AntiDPI · ALERT" in edited
     assert "manual_ban" in edited
-    assert "10м" in edited
+    assert "бессрочно" in edited
     assert query.edit_message_text.call_args.kwargs["reply_markup"] is None
     query.answer.assert_awaited_once_with("IP заблокирован")
 

@@ -64,9 +64,12 @@ def test_install_checks_dependencies():
 def test_on_enable():
     p = HoneypotPlugin()
     with patch.object(HoneypotPlugin, "_load_state", return_value={"port": 9999, "whitelist": ["127.0.0.1"]}), \
+         patch("hydra.plugins.honeypot.plugin.host_ip_addresses", return_value=("203.0.113.10",)), \
+         patch.object(HoneypotPlugin, "_save_state"), \
          patch.object(HoneypotPlugin, "_install_service") as mock_install:
         p.on_enable(_make_state())
-        mock_install.assert_called_once_with(9999, ["127.0.0.1"])
+        whitelist = mock_install.call_args.args[1]
+        assert "203.0.113.10/32" in whitelist
 
 
 def test_on_disable():
@@ -121,9 +124,11 @@ def test_apply_does_not_restart_healthy_honeypot_when_script_is_unchanged(tmp_pa
     monkeypatch.setattr(honeypot_module, "HONEYPOT_SCRIPT", script)
     plugin = HoneypotPlugin()
     with patch.object(plugin, "_load_state", return_value={"port": 9999, "whitelist": []}), \
+         patch("hydra.plugins.honeypot.plugin.host_ip_addresses", return_value=()), \
+         patch.object(plugin, "_save_state"), \
          patch.object(plugin, "status", return_value=MagicMock(running=True)), \
          patch.object(plugin, "_write_script") as write_script, \
          patch.object(honeypot_module, "_run") as run:
         assert plugin.apply(_make_state()) is True
-    write_script.assert_called_once_with(9999, [])
+    write_script.assert_called_once_with(9999, ["127.0.0.0/8", "::1/128"])
     run.assert_not_called()
