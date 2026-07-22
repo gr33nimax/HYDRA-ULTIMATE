@@ -109,10 +109,11 @@ invalid_domain_name
     p = WarpPlugin()
     
     # Вызываем метод
-    ok, msg = p.update_external_rules()
+    ok, msg = p.update_external_rules(mock_state)
     
     assert ok is True
     assert "Обновлено списков: 1/1" in msg
+    mock_load_state.assert_not_called()
     
     # Проверяем, что записан валидный JSON с нашими доменами и IP через mock_cache_path
     mock_host.atomic_write.assert_called_once()

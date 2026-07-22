@@ -102,7 +102,7 @@ def _commit_route_target(state: AppState, ps, key: str, target: str, plugin) -> 
     save_state(state)
 
     if key.startswith("ext:") and target != "none":
-        ok, message = plugin.update_external_rules()
+        ok, message = plugin.update_external_rules(state)
         if not ok:
             _restore_route_target(list_targets, key, existed, previous)
             save_state(state)
@@ -246,7 +246,7 @@ def menu_warp(state: AppState, plugin) -> None:
 
         elif choice == "5" and (st.installed or custom_profiles):
             info("Обновляю внешние списки правил...")
-            ok, msg = plugin.update_external_rules()
+            ok, msg = plugin.update_external_rules(state)
             if ok:
                 success(msg)
                 if ps.enabled:
@@ -643,7 +643,7 @@ def _menu_external_sources_toggle(state: AppState, ps) -> None:
                         
                         info("Скачиваю список правил...")
                         plugin = __import__("hydra.plugins.warp.plugin").plugins.warp.plugin.WarpPlugin()
-                        ok, msg = plugin.update_external_rules()
+                        ok, msg = plugin.update_external_rules(state)
                         if ok:
                             success(msg)
                         else:

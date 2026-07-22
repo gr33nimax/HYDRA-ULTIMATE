@@ -596,10 +596,11 @@ class WarpPlugin(BasePlugin):
             return False
         return True
 
-    def update_external_rules(self) -> tuple[bool, str]:
+    def update_external_rules(self, state: AppState | None = None) -> tuple[bool, str]:
         """Загружает правила из всех включенных внешних источников и сохраняет их в кэш."""
-        from hydra.core.state import load_state
-        state = load_state()
+        if state is None:
+            from hydra.core.state import load_state
+            state = load_state()
         ps = state.protocols.get("warp")
         if not ps:
             return False, "Плагин не настроен в state.json"
