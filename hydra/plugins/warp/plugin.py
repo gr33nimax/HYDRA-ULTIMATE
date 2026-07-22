@@ -22,6 +22,7 @@ from hydra.core.state import AppState, PluginState
 
 WGCF_BIN = Path("/usr/local/bin/wgcf")
 WGCF_PROFILE = Path("/etc/wireguard/wgcf-profile.conf")
+WGCF_ACCOUNT = Path("/etc/wireguard/wgcf-account.toml")
 WARP_INTERFACE = "wgcf"
 WARP_EXTERNAL_CACHE = Path("/var/lib/hydra/warp_external.json")
 WARP_PROFILES_DIR = Path("/etc/hydra/warp_profiles")
@@ -101,7 +102,7 @@ class WarpPlugin(BasePlugin):
                 WGCF_BIN.chmod(0o755)
 
             # Регистрация
-            account_toml = WGCF_PROFILE.parent / "wgcf-account.toml"
+            account_toml = WGCF_ACCOUNT
             if not account_toml.exists():
                 r = HOST.run(
                     [str(WGCF_BIN), "register", "--accept-tos"],
@@ -153,21 +154,34 @@ class WarpPlugin(BasePlugin):
     def remove_local_profile() -> None:
         """Remove WGCF credentials without touching relay profiles or rule cache."""
         WGCF_PROFILE.unlink(missing_ok=True)
-        Path("/etc/wireguard/wgcf-account.toml").unlink(missing_ok=True)
+        WGCF_ACCOUNT.unlink(missing_ok=True)
+
+    @staticmethod
+    def snapshot_local_profile() -> tuple[bytes | None, bytes | None]:
+        """Capture WGCF credentials so a failed runtime apply can be rolled back."""
+        profile = WGCF_PROFILE.read_bytes() if WGCF_PROFILE.exists() else None
+        account = WGCF_ACCOUNT.read_bytes() if WGCF_ACCOUNT.exists() else None
+        return profile, account
+
+    @staticmethod
+    def restore_local_profile(snapshot: tuple[bytes | None, bytes | None]) -> None:
+        """Restore an earlier WGCF credential pair."""
+        profile, account = snapshot
+        WGCF_PROFILE.unlink(missing_ok=True)
+        WGCF_ACCOUNT.unlink(missing_ok=True)
+        if profile is not None:
+            HOST.atomic_write(WGCF_PROFILE, profile, mode=0o600)
+        if account is not None:
+            HOST.atomic_write(WGCF_ACCOUNT, account, mode=0o600)
 
     def recreate_local_profile(self) -> bool:
         """Regenerate WGCF credentials and restore the old pair on failure."""
-        account = Path("/etc/wireguard/wgcf-account.toml")
-        previous_profile = WGCF_PROFILE.read_bytes() if WGCF_PROFILE.exists() else None
-        previous_account = account.read_bytes() if account.exists() else None
+        snapshot = self.snapshot_local_profile()
         self.remove_local_profile()
         if self.install():
             return True
         self.remove_local_profile()
-        if previous_profile is not None:
-            HOST.atomic_write(WGCF_PROFILE, previous_profile, mode=0o600)
-        if previous_account is not None:
-            HOST.atomic_write(account, previous_account, mode=0o600)
+        self.restore_local_profile(snapshot)
         return False
 
     def _load_warp_config(self) -> dict | None:
@@ -225,7 +239,12 @@ class WarpPlugin(BasePlugin):
                 parts = line.split("=", 1)
                 key = parts[0].strip().lower()
                 val = parts[1].strip()
-                result[current_section][key] = val
+                # wg-quick permits Address and AllowedIPs to occur more than
+                # once. wgcf commonly emits separate IPv4 and IPv6 lines.
+                if key in {"address", "allowedips"} and result[current_section].get(key):
+                    result[current_section][key] += f", {val}"
+                else:
+                    result[current_section][key] = val
                 
         required_interface = {"privatekey", "address"}
         required_peer = {"publickey", "endpoint"}

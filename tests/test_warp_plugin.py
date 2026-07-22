@@ -266,6 +266,18 @@ def test_wireguard_parser_ignores_unknown_sections_and_requires_keys():
     assert plugin._parse_wg_conf("[Interface]\nAddress = 10.0.0.2/32\n[Peer]\nEndpoint = host:1") is None
 
 
+def test_wireguard_parser_preserves_repeated_ipv4_and_ipv6_lines():
+    parsed = WarpPlugin()._parse_wg_conf(
+        "[Interface]\nPrivateKey = private\n"
+        "Address = 172.16.0.2/32\nAddress = 2606:4700:110::2/128\n"
+        "[Peer]\nPublicKey = public\nEndpoint = engage.cloudflareclient.com:2408\n"
+        "AllowedIPs = 0.0.0.0/0\nAllowedIPs = ::/0\n"
+    )
+
+    assert parsed["interface"]["address"] == "172.16.0.2/32, 2606:4700:110::2/128"
+    assert parsed["peer"]["allowedips"] == "0.0.0.0/0, ::/0"
+
+
 def test_load_wgcf_profile_uses_peer_values(tmp_path):
     profile = tmp_path / "wgcf-profile.conf"
     profile.write_text(
@@ -286,3 +298,23 @@ def test_load_wgcf_profile_uses_peer_values(tmp_path):
         "allowed_ips": ["0.0.0.0/0", "::/0"],
         "mtu": "1320",
     }
+
+
+def test_restore_local_profile_restores_both_credentials(tmp_path):
+    profile = tmp_path / "wgcf-profile.conf"
+    account = tmp_path / "wgcf-account.toml"
+    profile.write_bytes(b"old-profile")
+    account.write_bytes(b"old-account")
+
+    with (
+        patch("hydra.plugins.warp.plugin.WGCF_PROFILE", profile),
+        patch("hydra.plugins.warp.plugin.WGCF_ACCOUNT", account),
+        patch("hydra.plugins.warp.plugin.HOST") as host,
+    ):
+        snapshot = WarpPlugin.snapshot_local_profile()
+        profile.write_bytes(b"new-profile")
+        account.write_bytes(b"new-account")
+        WarpPlugin.restore_local_profile(snapshot)
+
+    assert host.atomic_write.call_args_list[0].args[1] == b"old-profile"
+    assert host.atomic_write.call_args_list[1].args[1] == b"old-account"

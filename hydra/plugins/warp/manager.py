@@ -86,6 +86,38 @@ def _show_diagnostic_info():
     print(f"  {YELLOW}══════════════════════════════════════════════════{NC}\n")
 
 
+def _restore_route_target(list_targets: dict, key: str, existed: bool, value: str | None) -> None:
+    if existed:
+        list_targets[key] = value
+    else:
+        list_targets.pop(key, None)
+
+
+def _commit_route_target(state: AppState, ps, key: str, target: str, plugin) -> tuple[bool, str]:
+    """Persist and apply a mapping, restoring desired state if it is rejected."""
+    list_targets = ps.config.setdefault("list_targets", {})
+    existed = key in list_targets
+    previous = list_targets.get(key)
+    list_targets[key] = target
+    save_state(state)
+
+    if key.startswith("ext:") and target != "none":
+        ok, message = plugin.update_external_rules()
+        if not ok:
+            _restore_route_target(list_targets, key, existed, previous)
+            save_state(state)
+            return False, message
+
+    if ps.enabled and not orchestrator.apply_config(state):
+        apply_error = orchestrator.last_apply_error() or "неизвестная ошибка применения"
+        _restore_route_target(list_targets, key, existed, previous)
+        state.protocols["warp"] = ps
+        save_state(state)
+        return False, f"Sing-Box отклонил маршрут; изменение отменено: {apply_error}"
+
+    return True, ""
+
+
 def menu_warp(state: AppState, plugin) -> None:
     ps = state.protocols.setdefault("warp", state.protocols.get("warp") or __import__("hydra.core.state").core.state.PluginState())
     if not ps.config:
@@ -230,10 +262,16 @@ def menu_warp(state: AppState, plugin) -> None:
             if WGCF_PROFILE.exists():
                 warn("ПЕРЕУСТАНОВКА WGCF!")
                 if confirm("Продолжить?", default=False):
+                    previous_credentials = plugin.snapshot_local_profile()
                     if plugin.recreate_local_profile():
-                        success("Локальный WGCF профиль успешно пересоздан!")
                         if ps.enabled and not orchestrator.apply_config(state):
-                            error("Профиль создан, но не удалось применить конфигурацию.")
+                            apply_error = orchestrator.last_apply_error() or "неизвестная ошибка применения"
+                            plugin.restore_local_profile(previous_credentials)
+                            state.protocols["warp"] = ps
+                            error(f"Новый профиль отклонён и заменён прежним: {apply_error}")
+                            _show_diagnostic_info()
+                        else:
+                            success("Локальный WGCF профиль успешно пересоздан и применён!")
                     else:
                         error("Не удалось пересоздать локальный WGCF профиль.")
             else:
@@ -679,29 +717,29 @@ def _menu_routing_rules(state: AppState, ps, destinations: list[str]) -> None:
                     d_idx = int(d_choice) - 1
                     if 0 <= d_idx < len(destinations):
                         chosen_dest = destinations[d_idx]
-                        list_targets[key] = chosen_dest
-                        save_state(state)
-                        success(f"Маршрут для {display_name} изменен на {chosen_dest}!")
-                        
+                        plugin = __import__("hydra.plugins.warp.plugin").plugins.warp.plugin.WarpPlugin()
                         if key.startswith("ext:") and chosen_dest != "none":
                             info("Скачиваю список правил...")
-                            plugin = __import__("hydra.plugins.warp.plugin").plugins.warp.plugin.WarpPlugin()
-                            ok, msg = plugin.update_external_rules()
-                            if ok:
-                                success(msg)
-                            else:
-                                warn(msg)
-                                
                         if ps.enabled:
                             info("Применяю конфигурацию в Sing-Box...")
-                            orchestrator.apply_config(state)
+                        ok, msg = _commit_route_target(state, ps, key, chosen_dest, plugin)
+                        if ok:
+                            success(f"Маршрут для {display_name} изменен на {chosen_dest} и применён!")
+                        else:
+                            error(msg)
+                            if ps.enabled:
+                                _show_diagnostic_info()
                     elif d_idx == len(destinations):
-                        list_targets[key] = "none"
-                        save_state(state)
-                        success(f"Маршрут для {display_name} отключен.")
+                        plugin = __import__("hydra.plugins.warp.plugin").plugins.warp.plugin.WarpPlugin()
                         if ps.enabled:
                             info("Применяю конфигурацию в Sing-Box...")
-                            orchestrator.apply_config(state)
+                        ok, msg = _commit_route_target(state, ps, key, "none", plugin)
+                        if ok:
+                            success(f"Маршрут для {display_name} отключен.")
+                        else:
+                            error(msg)
+                            if ps.enabled:
+                                _show_diagnostic_info()
                             
                 prompt("Нажмите Enter для продолжения")
 
