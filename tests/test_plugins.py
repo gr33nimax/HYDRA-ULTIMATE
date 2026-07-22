@@ -310,6 +310,6 @@ def test_health_all_explains_how_to_disable_stopped_enabled_plugin():
         assert registry.health_all(state) == {
             "telemt": (
                 "service is not active while enabled in configuration; "
-                "run 'hydra plugins disable telemt' to disable it"
+                "disable telemt in the TUI protocol menu"
             )
         }
