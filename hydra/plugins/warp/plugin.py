@@ -26,6 +26,7 @@ WGCF_ACCOUNT = Path("/etc/wireguard/wgcf-account.toml")
 WARP_INTERFACE = "wgcf"
 WARP_EXTERNAL_CACHE = Path("/var/lib/hydra/warp_external.json")
 WARP_PROFILES_DIR = Path("/etc/hydra/warp_profiles")
+RUSSIA_TLD_SUFFIXES = [".ru", ".su"]
 
 DEFAULT_WARP_DOMAINS = [
     "openai.com",
@@ -502,6 +503,8 @@ class WarpPlugin(BasePlugin):
                 ext_list = ext_rules.get(list_name, {})
                 domains = ext_list.get("domains", [])
                 ips = ext_list.get("ips", [])
+                if list_name == "russia":
+                    domains = [*domains, *RUSSIA_TLD_SUFFIXES]
 
             if domains:
                 outbound_domains.setdefault(target, []).extend(domains)
@@ -590,6 +593,8 @@ class WarpPlugin(BasePlugin):
     def _is_valid_domain(token: str) -> bool:
         if not token or len(token) > 253:
             return False
+        if re.fullmatch(r"\.[a-zA-Z]{2,24}", token):
+            return True
         # Разрешаем опциональную начальную точку для wildcard-доменов в Sing-Box (например: .google.com)
         pattern = r"^\.?[a-zA-Z0-9][-a-zA-Z0-9._]*\.[a-zA-Z]{2,24}$"
         if not re.match(pattern, token):

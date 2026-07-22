@@ -22,6 +22,8 @@ def test_is_valid_domain():
     assert WarpPlugin._is_valid_domain("google.com") is True
     assert WarpPlugin._is_valid_domain("openai.com") is True
     assert WarpPlugin._is_valid_domain(".claude.ai") is True
+    assert WarpPlugin._is_valid_domain(".ru") is True
+    assert WarpPlugin._is_valid_domain(".su") is True
     assert WarpPlugin._is_valid_domain("invalid_domain") is False
     assert WarpPlugin._is_valid_domain("http://google.com") is False
 
@@ -253,6 +255,23 @@ def test_direct_rules_are_not_dropped(mock_cache, _mock_profile):
 
     assert fragment.outbounds == []
     assert fragment.route_rules == [{"domain_suffix": ["example.com"], "outbound": "direct"}]
+
+
+@patch("hydra.plugins.warp.plugin.WarpPlugin._load_warp_config", return_value=None)
+@patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")
+def test_russia_external_list_always_includes_ru_and_su_tlds(mock_cache, _mock_profile):
+    mock_cache.exists.return_value = False
+    state = AppState()
+    state.protocols["warp"] = PluginState(config={
+        "list_targets": {"ext:russia": "direct"},
+    })
+
+    fragment = WarpPlugin().configure(state)
+
+    assert fragment.route_rules == [{
+        "domain_suffix": [".ru", ".su"],
+        "outbound": "direct",
+    }]
 
 
 def test_parse_endpoint_supports_ipv6_and_rejects_invalid_ports():
