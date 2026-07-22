@@ -193,6 +193,61 @@ def test_antidpi_alert_ban_callback_updates_original_message():
     query.answer.assert_awaited_once_with("IP заблокирован")
 
 
+def test_configured_group_admin_can_use_antidpi_ban_callback():
+    bot = AdminBot.__new__(AdminBot)
+    bot.admin_chat_id = "-1001234567890"
+    telegram_bot = SimpleNamespace(get_chat_member=AsyncMock(
+        return_value=SimpleNamespace(status="administrator"),
+    ))
+    query = SimpleNamespace(
+        data="antidpi-ban:198.51.100.23",
+        message=SimpleNamespace(text_html="<b>AntiDPI · ALERT</b>", text="AntiDPI · ALERT"),
+        answer=AsyncMock(),
+        edit_message_text=AsyncMock(),
+    )
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=777),
+        effective_chat=SimpleNamespace(id=-1001234567890),
+        effective_message=query.message,
+        callback_query=query,
+        get_bot=MagicMock(return_value=telegram_bot),
+    )
+    result = {
+        "ok": True,
+        "already_active": False,
+        "duration": 600,
+        "offense_count": 1,
+    }
+    with patch("hydra.services.telegram.bot.ban_ip_antidpi", return_value=result):
+        asyncio.run(bot.handle_callback(update, MagicMock()))
+
+    telegram_bot.get_chat_member.assert_awaited_once_with(
+        chat_id=-1001234567890,
+        user_id=777,
+    )
+    assert "manual_ban" in query.edit_message_text.call_args.args[0]
+    query.answer.assert_awaited_once_with("IP заблокирован")
+
+
+def test_configured_group_regular_member_is_denied_admin_actions():
+    bot = AdminBot.__new__(AdminBot)
+    bot.admin_chat_id = "-1001234567890"
+    telegram_bot = SimpleNamespace(get_chat_member=AsyncMock(
+        return_value=SimpleNamespace(status="member"),
+    ))
+    query = SimpleNamespace(answer=AsyncMock())
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=778),
+        effective_chat=SimpleNamespace(id=-1001234567890),
+        callback_query=query,
+        effective_message=None,
+        get_bot=MagicMock(return_value=telegram_bot),
+    )
+
+    assert asyncio.run(bot._check_admin(update)) is False
+    query.answer.assert_awaited_once_with("Доступ запрещён", show_alert=True)
+
+
 def test_single_native_auth_failure_sends_alert_without_banning(tmp_path):
     plugin = AntiDPIPlugin()
     state_file = tmp_path / "antidpi-auth.json"

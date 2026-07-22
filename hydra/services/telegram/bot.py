@@ -995,8 +995,27 @@ class AdminBot:
         self.monitor_threads: list[threading.Thread] = []
 
     async def _check_admin(self, update: Update) -> bool:
-        if update.effective_user and str(update.effective_user.id).strip() == self.admin_chat_id:
+        user = getattr(update, "effective_user", None)
+        if user and str(user.id).strip() == self.admin_chat_id:
             return True
+
+        # ``admin_chat_id`` is also the notification destination and may be a
+        # negative Telegram group ID. In that case a user's personal ID can
+        # never equal it. Authorize only administrators of the configured
+        # group, and fail closed if Telegram cannot verify membership.
+        chat = getattr(update, "effective_chat", None)
+        if user and chat and str(chat.id).strip() == self.admin_chat_id:
+            try:
+                member = await update.get_bot().get_chat_member(
+                    chat_id=chat.id,
+                    user_id=user.id,
+                )
+                status = getattr(member, "status", "")
+                status = str(getattr(status, "value", status)).lower()
+                if status in {"administrator", "creator", "owner"}:
+                    return True
+            except Exception:
+                pass
         if update.callback_query:
             await update.callback_query.answer("Доступ запрещён", show_alert=True)
         elif update.effective_message:
