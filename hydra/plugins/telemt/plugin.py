@@ -351,7 +351,12 @@ class TelemtPlugin(BasePlugin):
         HOST.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
 
     def on_disable(self, state: AppState) -> None:
-        HOST.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
+        # Stopping only the process left systemd autostart enabled and made
+        # runtime disagree with state.json.
+        HOST.run(
+            ["systemctl", "disable", "--now", SERVICE_NAME],
+            capture_output=True,
+        )
 
     # ═════════════════════════════════════════════════════════════════════
     #  Внутренние помощники

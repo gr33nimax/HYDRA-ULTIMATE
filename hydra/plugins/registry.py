@@ -257,6 +257,11 @@ def health_all(state: AppState) -> dict[str, str]:
         except Exception as exc:
             healthy, detail = False, str(exc) or exc.__class__.__name__
         if not healthy:
+            if detail == "service is not active":
+                detail = (
+                    "service is not active while enabled in configuration; "
+                    f"run 'hydra plugins disable {plugin.meta.name}' to disable it"
+                )
             failures[plugin.meta.name] = detail or "проверка не пройдена"
     return failures
 

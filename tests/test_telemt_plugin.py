@@ -10,6 +10,28 @@ from hydra.plugins.base import PluginCategory, ConfigFragment
 from hydra.core.state import AppState, User, PluginState
 
 
+def test_manager_toggle_uses_transactional_orchestrator():
+    from hydra.plugins.telemt.manager import _set_telemt_enabled
+
+    state = AppState(protocols={"telemt": PluginState(enabled=True, installed=True)})
+    with patch("hydra.plugins.telemt.manager.orchestrator.disable", return_value=True) as disable:
+        assert _set_telemt_enabled(state, False) is True
+    disable.assert_called_once_with(state, "telemt")
+
+
+def test_disable_stops_and_disables_service():
+    plugin = TelemtPlugin()
+    state = _make_state()
+
+    with patch("hydra.plugins.telemt.plugin.HOST.run") as run:
+        plugin.on_disable(state)
+
+    run.assert_called_once_with(
+        ["systemctl", "disable", "--now", "telemt"],
+        capture_output=True,
+    )
+
+
 def _make_state(users: list | None = None, domain: str = "", server_ip: str = "1.2.3.4") -> AppState:
     state = AppState()
     state.network.domain = domain

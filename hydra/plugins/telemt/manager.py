@@ -151,6 +151,15 @@ def _ask(label: str, default: str = "", required: bool = False) -> str:
 def _make_tls_secret(base_secret: str, domain: str) -> str:
     return f"ee{base_secret}{domain.encode().hex()}"
 
+
+def _set_telemt_enabled(state: AppState, enabled: bool) -> bool:
+    """Change desired TeleMT state through the transactional lifecycle API."""
+    ps = state.protocols.get("telemt")
+    if ps is not None and ps.enabled is enabled:
+        return True
+    action = orchestrator.enable if enabled else orchestrator.disable
+    return action(state, "telemt")
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  ГЛАВНОЕ МЕНЮ И УПРАВЛЕНИЕ
 # ══════════════════════════════════════════════════════════════════════════════
@@ -231,6 +240,11 @@ def menu_telemt(state: AppState, plugin) -> None:
             ("4", "⬆️   Проверить и обновить бинарник", "Обновление telemt до последней версии с GitHub"),
             ("5", "📊  Статистика трафика", "Просмотр статистики по сессиям и байтам"),
             ("6", "📋  Статус службы / журналы логов", "Журналы systemd и stdout"),
+            (
+                "7",
+                "⏸️   Отключить TeleMT" if ps.enabled else "▶️   Включить TeleMT",
+                "Изменить конфигурацию и состояние службы согласованно",
+            ),
             ("X", "🌐  Sing-Box-интеграция (обход блоков)", "Заворот Telegram трафика в Sing-Box/WARP"),
             ("F", "🔀  Hybrid Fallback (Middle ↔ Direct)", "Параметры резервирования связи"),
             ("S", "🛡️   SYN-limiter (защита от флуда)", "Ограничение скорости SYN-пакетов"),
@@ -272,6 +286,21 @@ def menu_telemt(state: AppState, plugin) -> None:
                     
             elif choice == "6":
                 _view_logs()
+
+            elif choice == "7":
+                target_enabled = not ps.enabled
+                if target_enabled and not installed:
+                    warn("Сначала установите TeleMT.")
+                elif not target_enabled and not confirm("Отключить TeleMT?"):
+                    pass
+                else:
+                    info("Включаю TeleMT..." if target_enabled else "Отключаю TeleMT...")
+                    if _set_telemt_enabled(state, target_enabled):
+                        success("TeleMT включён." if target_enabled else "TeleMT отключён.")
+                    else:
+                        detail = orchestrator.last_apply_error()
+                        error(detail or "Не удалось изменить состояние TeleMT.")
+                _pause()
                 
             elif choice == "9":
                 if confirm("Вы уверены, что хотите полностью удалить Telemt?"):
