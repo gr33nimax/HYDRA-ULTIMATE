@@ -55,21 +55,27 @@ class TelemtPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def install(self) -> bool:
-        if self._installed():
-            return True
-
-        print("  Скачиваю telemt...")
-        if not self._download_binary():
-            print("  Не удалось установить telemt.")
-            return False
+        if not self._installed():
+            print("  Скачиваю telemt...")
+            if not self._download_binary():
+                print("  Не удалось установить telemt.")
+                return False
 
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         WORK_DIR.mkdir(parents=True, exist_ok=True)
-
+        # Repair partial installations where the binary survived a failed
+        # transaction but the unit file was never written.
         self._install_service()
-        return self._installed()
+        return self._installed() and SERVICE_FILE.exists()
 
     def uninstall(self) -> bool:
+        try:
+            from hydra.plugins.telemt.telemt_ios_fix import disable_ios_fix
+            from hydra.plugins.telemt.telemt_syn_limiter import disable_syn_limiter
+            disable_ios_fix()
+            disable_syn_limiter()
+        except Exception:
+            pass
         HOST.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
         HOST.run(["systemctl", "disable", SERVICE_NAME], capture_output=True)
         if SERVICE_FILE.exists():
@@ -82,6 +88,7 @@ class TelemtPlugin(BasePlugin):
         for d in (CONFIG_DIR, WORK_DIR):
             if d.exists():
                 shutil.rmtree(d, ignore_errors=True)
+        Path("/etc/cron.d/telemt-stats").unlink(missing_ok=True)
         return True
 
     # ═════════════════════════════════════════════════════════════════════
@@ -174,7 +181,9 @@ class TelemtPlugin(BasePlugin):
         # 2. Перезапуск службы
         daemon_reload = HOST.run(["systemctl", "daemon-reload"], capture_output=True)
         enable = HOST.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
-        restart = HOST.run(["systemctl", "reload-or-restart", SERVICE_NAME], capture_output=True)
+        # Telemt releases do not all handle SIGHUP consistently. A real restart
+        # is deterministic and avoids the observed active/inactive flapping.
+        restart = HOST.run(["systemctl", "restart", SERVICE_NAME], capture_output=True)
         if any(result.returncode != 0 for result in (daemon_reload, enable, restart)):
             return False
 
@@ -211,8 +220,38 @@ class TelemtPlugin(BasePlugin):
         except Exception as e:
             print(f"  [telemt] Ошибка настройки iptables-учёта: {e}")
 
-        time.sleep(2)
-        return True
+        # Reconcile optional firewall features after every service apply. This
+        # repairs configured-but-inactive rules after reboot or an nftables /
+        # iptables backend refresh.
+        try:
+            from hydra.plugins.telemt import telemt_ios_fix as ios_fix
+            ios_cfg = ios_fix._load_state()
+            if ios_cfg.enabled:
+                ok, message = ios_fix._apply_rules(ios_cfg)
+                if not ok:
+                    print(f"  [telemt] iOS-фикс не применён: {message}")
+        except Exception as e:
+            print(f"  [telemt] Ошибка восстановления iOS-фикса: {e}")
+        try:
+            from hydra.plugins.telemt import telemt_syn_limiter as syn_limiter
+            syn_cfg = syn_limiter._load_state()
+            if syn_cfg.enabled:
+                ok, message = syn_limiter._apply_rules(syn_cfg)
+                if not ok:
+                    print(f"  [telemt] SYN-limiter не применён: {message}")
+        except Exception as e:
+            print(f"  [telemt] Ошибка восстановления SYN-limiter: {e}")
+
+        for _ in range(5):
+            active = HOST.run(
+                ["systemctl", "is-active", SERVICE_NAME],
+                capture_output=True,
+                text=True,
+            )
+            if active.stdout.strip() == "active":
+                return True
+            time.sleep(0.5)
+        return False
 
     def snapshot(self, state: AppState):
         cron = Path("/etc/cron.d/telemt-stats")
@@ -376,7 +415,10 @@ class TelemtPlugin(BasePlugin):
 
     @staticmethod
     def _installed() -> bool:
-        return BIN_PATH.exists() or shutil.which("telemt") is not None
+        candidate = BIN_PATH if BIN_PATH.exists() else (
+            Path(found) if (found := shutil.which("telemt")) else None
+        )
+        return bool(candidate and verify_elf(candidate))
 
     def _download_binary(self) -> bool:
         arch = "aarch64" if platform.machine().lower() in ("aarch64", "arm64") else "x86_64"
@@ -404,6 +446,8 @@ class TelemtPlugin(BasePlugin):
             return False
 
         extract_dir = dest / "extracted"
+        if extract_dir.exists():
+            shutil.rmtree(extract_dir, ignore_errors=True)
         extract_dir.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -424,6 +468,7 @@ class TelemtPlugin(BasePlugin):
             BIN_PATH.chmod(0o755)
 
             if not verify_elf(BIN_PATH):
+                BIN_PATH.unlink(missing_ok=True)
                 print("  Скачанный файл не является ELF-бинарником")
                 return False
 
@@ -441,6 +486,8 @@ class TelemtPlugin(BasePlugin):
             "Description=Telemt MTProxy Server\n"
             "After=network-online.target\n"
             "Wants=network-online.target\n"
+            "StartLimitIntervalSec=60\n"
+            "StartLimitBurst=10\n"
             "\n"
             "[Service]\n"
             "Type=simple\n"
@@ -449,7 +496,7 @@ class TelemtPlugin(BasePlugin):
             f"ExecStart={BIN_PATH} {CONFIG_FILE}\n"
             "ExecReload=/bin/kill -HUP $MAINPID\n"
             "Restart=on-failure\n"
-            "RestartSec=10\n"
+            "RestartSec=2\n"
             "LimitNOFILE=1048576\n"
             "\n"
             "[Install]\n"

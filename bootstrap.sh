@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# HYDRA v2.5.2 — Bootstrap Installer
+# HYDRA v2.5.3 — Bootstrap Installer
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Установка:
@@ -133,6 +133,10 @@ ok "Python $PY_VER: OK"
 
 # New installations get a private KDF secret. Existing state files retain the
 # legacy derivation so current client links and credentials do not rotate.
+HYDRA_FRESH_INSTALL=0
+if [[ ! -f /var/lib/hydra/state.json ]]; then
+    HYDRA_FRESH_INSTALL=1
+fi
 if [[ ! -f /var/lib/hydra/state.json && ! -f /var/lib/hydra/master.key ]]; then
     mkdir -p /var/lib/hydra
     umask 077
@@ -298,6 +302,11 @@ cat > /usr/local/bin/hydra <<EOF
 exec "${VENV_DIR}/bin/python" "${INSTALL_DIR}/main.py" "\$@"
 EOF
 chmod 0755 /usr/local/bin/hydra
+
+if [[ "$HYDRA_FRESH_INSTALL" == "1" ]]; then
+    "$VENV_DIR/bin/python" "$INSTALL_DIR/main.py" user ensure-default >/dev/null
+    ok "Создан первый пользователь: default"
+fi
 
 # ── [5/5] Запуск ────────────────────────────────────────────────────────────
 step "[5/5] Готово"

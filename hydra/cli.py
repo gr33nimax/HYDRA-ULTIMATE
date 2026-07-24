@@ -8,8 +8,9 @@ import os
 import sys
 import uuid
 from dataclasses import asdict
+from datetime import datetime, timezone
 
-from hydra.core.state import AppState, User, load_state, validate_state
+from hydra.core.state import AppState, User, load_state, save_state, validate_state
 from hydra.core.errors import ErrorCode, normalize_error
 from hydra.core.status import public_user
 from hydra.services.application import production_application
@@ -70,9 +71,32 @@ def _user_command(args: argparse.Namespace, state: AppState, app=None) -> dict:
             uuid=args.uuid or str(uuid.uuid4()),
             traffic_limit_gb=args.traffic_limit_gb,
             expiry_date=args.expiry_date,
+            device_limit=args.device_limit,
         )
         validate_state(AppState(users=[user]))
         app.add_user(state, user)
+        return {"ok": True, "user": asdict(user)}
+    if args.user_action == "ensure-default":
+        if state.users:
+            return {"ok": True, "created": False, "user": asdict(state.users[0])}
+        user = User(
+            email="default",
+            uuid=str(uuid.uuid4()),
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        state.users.append(user)
+        save_state(state)
+        return {"ok": True, "created": True, "user": asdict(user)}
+    if args.user_action == "rename":
+        user = app.rename_user(state, args.email, args.new_email)
+        return {"ok": True, "old_email": args.email, "user": asdict(user)}
+    if args.user_action == "set-device-limit":
+        user = app.set_user_device_limit(
+            state,
+            args.email,
+            args.limit,
+            reset=args.reset,
+        )
         return {"ok": True, "user": asdict(user)}
     actions = {
         "block": app.block_user,
@@ -103,6 +127,10 @@ def parser() -> argparse.ArgumentParser:
     upgrade_commands.add_parser("check")
     apply = commands.add_parser("apply", help="Apply configuration")
     apply.add_argument("--dry-run", action="store_true")
+    uninstall = commands.add_parser("uninstall", help="Completely remove HYDRA")
+    uninstall.add_argument("--yes", action="store_true", help="Confirm removal")
+    uninstall.add_argument("--dry-run", action="store_true", help="Show the removal plan")
+    uninstall.add_argument("--keep-data", action="store_true", help="Keep state and logs")
 
     antidpi = commands.add_parser("antidpi", help="AntiDPI diagnostics")
     antidpi_commands = antidpi.add_subparsers(dest="antidpi_action", required=True)
@@ -130,6 +158,18 @@ def parser() -> argparse.ArgumentParser:
     add.add_argument("--uuid", default="")
     add.add_argument("--traffic-limit-gb", type=float, default=0)
     add.add_argument("--expiry-date", default="")
+    add.add_argument("--device-limit", type=int, default=0, help="0 means unlimited")
+    user_commands.add_parser(
+        "ensure-default",
+        help="Create the default user when the state has no users",
+    )
+    rename = user_commands.add_parser("rename")
+    rename.add_argument("email")
+    rename.add_argument("new_email")
+    device_limit = user_commands.add_parser("set-device-limit")
+    device_limit.add_argument("email")
+    device_limit.add_argument("limit", type=int)
+    device_limit.add_argument("--reset", action="store_true", help="Forget registered devices")
     for action in ("block", "unblock", "remove"):
         command = user_commands.add_parser(action)
         command.add_argument("email")
@@ -191,6 +231,15 @@ def main(argv: list[str] | None = None) -> int:
                 payload = {"ok": False, "error": detail.message, "error_details": detail.as_dict()}
             _print(payload)
             return 0 if ok else 1
+        elif args.command == "uninstall":
+            _require_root()
+            from hydra.core.uninstall import uninstall_hydra
+            payload = uninstall_hydra(
+                state,
+                confirmed=args.yes,
+                dry_run=args.dry_run,
+                keep_data=args.keep_data,
+            )
         elif args.command == "antidpi" and args.antidpi_action == "selftest":
             _require_root()
             from hydra.plugins.antidpi.selftest import run_selftest

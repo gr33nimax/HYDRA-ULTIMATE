@@ -285,7 +285,7 @@ def _preflight_conflicts(config: dict) -> list[str]:
     errors: list[str] = []
     tags: dict[str, str] = {}
     ports: dict[tuple[str, int], str] = {}
-    snis: dict[str, str] = {}
+    snis: dict[str, tuple[str, str]] = {}
 
     for section in ("inbounds", "outbounds", "endpoints"):
         for item in config.get(section, []) or []:
@@ -310,6 +310,11 @@ def _preflight_conflicts(config: dict) -> list[str]:
             listen = str(item.get("listen", "0.0.0.0"))
             key = (listen, port)
             owner = str(tag or item.get("type", "inbound"))
+            sni_scope = owner.lower()
+            for suffix in ("-quic-in", "-tcp-in", "-udp-in", "-in"):
+                if sni_scope.endswith(suffix):
+                    sni_scope = sni_scope.removesuffix(suffix)
+                    break
             if key in ports:
                 errors.append(f"порт {port} на {listen} используется дважды ({ports[key]} и {owner})")
             else:
@@ -323,12 +328,13 @@ def _preflight_conflicts(config: dict) -> list[str]:
                     normalized = str(name or "").strip().lower()
                     if not normalized:
                         continue
-                    if normalized in snis and snis[normalized] != owner:
+                    existing = snis.get(normalized)
+                    if existing and existing[0] != sni_scope:
                         errors.append(
-                            f"SNI '{normalized}' назначен нескольким inbound ({snis[normalized]} и {owner})"
+                            f"SNI '{normalized}' назначен нескольким inbound ({existing[1]} и {owner})"
                         )
                     else:
-                        snis[normalized] = owner
+                        snis[normalized] = (sni_scope, owner)
     return errors
 
 

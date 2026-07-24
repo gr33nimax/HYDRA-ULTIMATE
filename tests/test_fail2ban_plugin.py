@@ -170,6 +170,20 @@ def test_current_ssh_client_is_persisted_in_whitelist():
     assert state.protocols["fail2ban"].config["whitelist"] == ["203.0.113.7"]
 
 
+def test_effective_whitelist_includes_generated_ignoreip(tmp_path):
+    jail_dir = tmp_path / "jail.d"
+    jail_dir.mkdir()
+    (jail_dir / "00-hydra-defaults.local").write_text(
+        "[DEFAULT]\nignoreip = 127.0.0.1/8 ::1 185.79.103.56\n",
+        encoding="utf-8",
+    )
+    state = AppState()
+    with patch("hydra.plugins.fail2ban.plugin.JAIL_DIR", jail_dir), \
+         patch.dict("os.environ", {"SSH_CONNECTION": ""}):
+        whitelist = Fail2banPlugin.effective_whitelist(state)
+    assert "185.79.103.56" in whitelist
+
+
 def test_legacy_portscan_rule_is_cleanup_only():
     with patch("shutil.which", return_value="/usr/sbin/iptables"), \
          patch("hydra.plugins.fail2ban.plugin._run", side_effect=[

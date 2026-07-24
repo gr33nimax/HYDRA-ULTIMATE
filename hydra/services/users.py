@@ -16,6 +16,10 @@ class UserOperations(Protocol):
     def remove_user(self, state: AppState, email: str) -> None: ...
     def block_user(self, state: AppState, email: str) -> None: ...
     def unblock_user(self, state: AppState, email: str) -> None: ...
+    def rename_user(self, state: AppState, email: str, new_email: str) -> None: ...
+    def set_user_device_limit(
+        self, state: AppState, email: str, limit: int, *, reset: bool = False,
+    ) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -42,3 +46,19 @@ class UserService:
 
     def unblock(self, state: AppState, email: str) -> None:
         self.operations.unblock_user(state, email)
+
+    def rename(self, state: AppState, email: str, new_email: str) -> User:
+        self.operations.rename_user(state, email, new_email)
+        user = find_user(state, new_email)
+        if user is None:
+            raise RuntimeError("renamed user was not found")
+        return user
+
+    def set_device_limit(
+        self, state: AppState, email: str, limit: int, *, reset: bool = False,
+    ) -> User:
+        self.operations.set_user_device_limit(state, email, limit, reset=reset)
+        user = find_user(state, email)
+        if user is None:
+            raise RuntimeError("user was not found")
+        return user

@@ -20,7 +20,7 @@ from hydra.plugins.config import JsonValue, PluginConfig, validate_json_object
 
 STATE_DIR = Path("/var/lib/hydra")
 STATE_FILE = STATE_DIR / "state.json"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class UnsupportedStateVersion(RuntimeError):
@@ -114,6 +114,8 @@ class User:
     created_at: str = ""
     telegram_id: Optional[int] = None
     credentials: dict[str, dict] = field(default_factory=dict)
+    device_limit: int = 0
+    devices: dict[str, str] = field(default_factory=dict)
     # Per-user секреты по имени плагина.
     # Пример: user.credentials["mieru"] = {"username": "...", "password": "..."}
 
@@ -316,6 +318,7 @@ def _save_state_unlocked(state: AppState) -> None:
 def save_state(state: AppState) -> None:
     """Сохраняет состояние в state.json (атомарно через temp-файл)."""
     with _state_lock():
+        device_resets = set(state.install.pop("_device_binding_resets", []))
         # Long-running menus hold an older AppState while the traffic daemon
         # updates counters in another process. Preserve the monotonic runtime
         # accounting fields instead of letting an unrelated settings save roll
@@ -330,6 +333,11 @@ def save_state(state: AppState) -> None:
                 user.traffic_used_bytes = max(
                     int(user.traffic_used_bytes), int(current.traffic_used_bytes),
                 )
+                # Subscription requests can register a device while a long-lived
+                # TUI process still holds an older copy of AppState. Never erase
+                # those bindings during an unrelated settings save.
+                if user.uuid not in device_resets:
+                    user.devices = {**current.devices, **user.devices}
                 for protocol, current_stats in current.credentials.items():
                     if not isinstance(current_stats, dict):
                         continue
@@ -377,6 +385,13 @@ def validate_state(state: AppState) -> None:
             raise ValueError(f"invalid UUID for user {user.email}")
         if user.traffic_limit_gb < 0 or user.traffic_used_bytes < 0:
             raise ValueError(f"traffic counters cannot be negative for {user.email}")
+        if not isinstance(user.device_limit, int) or user.device_limit < 0:
+            raise ValueError(f"device limit cannot be negative for {user.email}")
+        if not isinstance(user.devices, dict) or any(
+            not isinstance(device_id, str) or not isinstance(last_seen, str)
+            for device_id, last_seen in user.devices.items()
+        ):
+            raise ValueError(f"device bindings are invalid for {user.email}")
     ports = {
         "network.tproxy_port": state.network.tproxy_port,
         "network.clash_api_port": state.network.clash_api_port,
@@ -425,9 +440,18 @@ def _migrate_v1_to_v2(data: dict) -> dict:
     return data
 
 
+def _migrate_v2_to_v3(data: dict) -> dict:
+    for user in data.get("users", []):
+        user.setdefault("device_limit", 0)
+        user.setdefault("devices", {})
+    data["version"] = 3
+    return data
+
+
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     0: _migrate_v0_to_v1,
     1: _migrate_v1_to_v2,
+    2: _migrate_v2_to_v3,
 }
 
 

@@ -15,6 +15,7 @@ def public_user(user: User) -> dict:
     """Return user metadata without exposing protocol secrets."""
     payload = asdict(user)
     payload.pop("credentials", None)
+    payload["devices_registered"] = len(payload.pop("devices", {}))
     payload["protocols"] = sorted(user.credentials)
     return payload
 

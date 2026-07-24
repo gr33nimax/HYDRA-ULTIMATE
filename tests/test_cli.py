@@ -34,6 +34,25 @@ def test_user_list_does_not_require_root(capsys):
     assert '"protocols": [\n        "naive"' in output
 
 
+def test_ensure_default_user_only_creates_on_empty_state(capsys):
+    state = AppState()
+    with patch.object(cli, "load_state", return_value=state), \
+         patch.object(cli, "save_state") as save, \
+         patch.object(cli, "_require_root"):
+        assert cli.main(["user", "ensure-default"]) == 0
+    assert len(state.users) == 1
+    assert state.users[0].email == "default"
+    save.assert_called_once_with(state)
+    assert '"created": true' in capsys.readouterr().out
+
+
+def test_uninstall_requires_confirmation(capsys):
+    with patch.object(cli, "load_state", return_value=AppState()), \
+         patch.object(cli, "_require_root"):
+        assert cli.main(["uninstall"]) == 1
+    assert "uninstall requires --yes" in capsys.readouterr().out
+
+
 def test_backup_command_dispatches_to_backup_service(capsys):
     result = {"ok": True, "archive": "/tmp/hydra.tar.gz", "files": 1, "bytes": 42}
     with patch.object(cli, "load_state", return_value=AppState()), \

@@ -368,6 +368,28 @@ def test_ban_history_is_created_once_and_legacy_signals_are_safe(tmp_path):
     assert _signals({"signals": "legacy"}) == "legacy"
 
 
+def test_unknown_sni_handshake_probe_is_alert_only(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "antidpi-karing.json"
+    event = {
+        "kind": "handshake_failure",
+        "protocol": "tls",
+        "handshake_ok": False,
+        "sni_known": False,
+    }
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch("hydra.plugins.antidpi.plugin._run") as firewall:
+        assert plugin.observe_event("203.0.113.50", event, now=1000) is False
+        assert plugin.observe_event("203.0.113.50", event, now=1001) is False
+        assert plugin.observe_event("203.0.113.50", event, now=1002) is False
+        data = plugin._load_state()
+    entry = data["scores"]["203.0.113.50"]
+    assert entry["score"] >= 8
+    assert entry["verified_score"] == 0
+    assert data.get("banned", {}) == {}
+    firewall.assert_not_called()
+
+
 def test_progressive_ban_durations(tmp_path):
     from hydra.plugins.antidpi.plugin import get_ban_duration
     assert get_ban_duration(1) == 600

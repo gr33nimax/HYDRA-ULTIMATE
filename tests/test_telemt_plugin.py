@@ -32,6 +32,20 @@ def test_disable_stops_and_disables_service():
     )
 
 
+def test_install_repairs_service_when_binary_already_exists():
+    plugin = TelemtPlugin()
+    with patch.object(plugin, "_installed", return_value=True), \
+         patch.object(plugin, "_install_service") as install_service, \
+         patch("hydra.plugins.telemt.plugin.CONFIG_DIR") as config_dir, \
+         patch("hydra.plugins.telemt.plugin.WORK_DIR") as work_dir, \
+         patch("hydra.plugins.telemt.plugin.SERVICE_FILE") as service_file:
+        service_file.exists.return_value = True
+        assert plugin.install() is True
+    config_dir.mkdir.assert_called_once_with(parents=True, exist_ok=True)
+    work_dir.mkdir.assert_called_once_with(parents=True, exist_ok=True)
+    install_service.assert_called_once_with()
+
+
 def _make_state(users: list | None = None, domain: str = "", server_ip: str = "1.2.3.4") -> AppState:
     state = AppState()
     state.network.domain = domain

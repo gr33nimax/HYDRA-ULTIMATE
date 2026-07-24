@@ -1099,6 +1099,11 @@ def _user_detail_menu(state: AppState, user: User, app: ApplicationService | Non
             kv("Трафик:", f"{_bytes_auto(user.traffic_used_bytes)} / {lim_str}"),
             kv("Действует до:", ttl_str),
             kv("Создан:", user.created_at[:10] if user.created_at else "—"),
+            kv(
+                "Устройства:",
+                f"{len(user.devices)} / {user.device_limit}"
+                if user.device_limit else f"{len(user.devices)} / ∞",
+            ),
         ]
         
         panel(f"Пользователь: {user.email}", lines)
@@ -1126,6 +1131,8 @@ def _user_detail_menu(state: AppState, user: User, app: ApplicationService | Non
             ("4", "📝 Изменить лимит трафика", "Задать квоту трафика в GiB"),
             ("5", "⏳ Изменить срок действия", "Задать дату окончания подписки"),
             ("6", "❌ Удалить", "Удалить пользователя"),
+            ("7", "✏️ Переименовать", "Изменить имя без смены UUID и ссылок"),
+            ("8", "📱 Лимит устройств", "Настроить HWID-ограничение и сбросить привязки"),
             ("0", "↩ Назад", ""),
         ], f"ПОЛЬЗОВАТЕЛЬ {user.email}")
         
@@ -1174,6 +1181,33 @@ def _user_detail_menu(state: AppState, user: User, app: ApplicationService | Non
                 success(f"Пользователь {user.email} удалён")
                 prompt("Нажмите Enter")
                 return
+        elif choice == "7":
+            old_email = user.email
+            new_email = prompt("Новое имя пользователя", default=old_email).strip().lower()
+            try:
+                app.rename_user(state, old_email, new_email)
+                success(f"Пользователь {old_email} переименован в {new_email}")
+            except ValueError as exc:
+                error(str(exc))
+            prompt("Нажмите Enter")
+        elif choice == "8":
+            raw_limit = prompt(
+                "Максимум устройств (0 = без ограничений)",
+                default=str(user.device_limit),
+            )
+            try:
+                limit = int(raw_limit)
+                if limit < 0:
+                    raise ValueError
+                reset = confirm("Сбросить текущие HWID-привязки?", default=False)
+                app.set_user_device_limit(state, user.email, limit, reset=reset)
+                success(
+                    f"Лимит устройств: {limit if limit else 'без ограничений'}"
+                    + ("; привязки сброшены" if reset else "")
+                )
+            except ValueError:
+                error("Лимит должен быть целым неотрицательным числом.")
+            prompt("Нажмите Enter")
         elif choice == "0":
             return
 

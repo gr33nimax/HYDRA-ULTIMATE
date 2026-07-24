@@ -790,6 +790,12 @@ class AntiDPIPlugin(BasePlugin):
                     event["policy"] = "alert-only / single-port connection burst"
 
             score, signals = score_event(event)
+            # Latency/configuration probes (notably Karing's ping test) open
+            # short TLS sessions with an unknown SNI and abort the handshake.
+            # That pair alone is compatibility telemetry, not proof of abuse.
+            if signals and set(signals) <= {"unknown_sni", "handshake_failure"}:
+                event["ban_eligible"] = False
+                event["policy"] = "alert-only / TLS compatibility or latency probe"
             evidence_can_ban = event.get("ban_eligible") is not False
             if source not in {"kernel-firewall", "kernel-udp-probe"} and signals and evidence_can_ban:
                 entry["last_non_kernel_evidence_at"] = timestamp

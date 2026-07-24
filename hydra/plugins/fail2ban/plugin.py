@@ -187,6 +187,47 @@ class Fail2banPlugin(BasePlugin):
                 continue
             if normalized not in result:
                 result.append(normalized)
+        # Preserve automatically captured installation/SSH addresses already
+        # present in the generated Fail2ban file. Otherwise the next unrelated
+        # apply could silently remove the admin's only safe access path.
+        for normalized in Fail2banPlugin._persisted_whitelist():
+            if normalized not in result:
+                result.append(normalized)
+        return result
+
+    @staticmethod
+    def _persisted_whitelist() -> list[str]:
+        """Read the effective ignoreip values generated for Fail2ban."""
+        path = JAIL_DIR / "00-hydra-defaults.local"
+        if not path.exists():
+            return []
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            return []
+        values: list[str] = []
+        for line in content.splitlines():
+            if not re.match(r"^\s*ignoreip\s*=", line, flags=re.IGNORECASE):
+                continue
+            for value in line.split("=", 1)[1].split():
+                try:
+                    normalized = (
+                        str(ipaddress.ip_network(value, strict=False))
+                        if "/" in value else str(ipaddress.ip_address(value))
+                    )
+                except ValueError:
+                    continue
+                if normalized not in values:
+                    values.append(normalized)
+        return values
+
+    @classmethod
+    def effective_whitelist(cls, state: AppState | None) -> list[str]:
+        """Return the union of configured, automatic and on-disk ignoreip."""
+        result = cls._valid_whitelist(state)
+        for value in cls._persisted_whitelist():
+            if value not in result:
+                result.append(value)
         return result
 
     @staticmethod

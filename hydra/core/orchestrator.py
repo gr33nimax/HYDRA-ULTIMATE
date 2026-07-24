@@ -677,6 +677,72 @@ def add_user(state: AppState, user: User) -> None:
         restart_svc("hydra-sub")
 
 
+def rename_user(state: AppState, email: str, new_email: str) -> None:
+    """Rename a user without rotating UUIDs or protocol credentials."""
+    user = find_user(state, email)
+    if not user:
+        raise ValueError(f"User {email} not found")
+    new_email = new_email.strip().lower()
+    if not new_email or any(char.isspace() for char in new_email):
+        raise ValueError("User identifier must be non-empty and contain no whitespace")
+    duplicate = find_user(state, new_email)
+    if duplicate is not None and duplicate is not user:
+        raise ValueError(f"User {new_email} already exists")
+    if new_email == user.email:
+        return
+
+    snapshot = copy.deepcopy(state)
+    previous = copy.deepcopy(user)
+    user.email = new_email
+    renamed = copy.deepcopy(user)
+    transaction = _new_user_transaction(state, snapshot)
+    for index, plugin in enumerate(registry.transports()):
+        protocol = state.protocols.get(plugin.meta.name)
+        if not protocol or not protocol.enabled:
+            continue
+
+        def restore_plugin(p=plugin, old=previous, new=renamed):
+            p.on_user_remove(new, state)
+            p.on_user_add(old, state)
+
+        transaction.add_rollback(
+            f"rename {email} plugin {plugin.meta.name}",
+            restore_plugin,
+            priority=10 - index,
+        )
+        try:
+            plugin.on_user_remove(previous, state)
+            plugin.on_user_add(user, state)
+        except Exception:
+            transaction.rollback(_log_rollback_error)
+            raise
+    _commit_user_transaction(state, transaction)
+
+    from hydra.core.systemd import is_active as is_svc_active, restart as restart_svc
+    if is_svc_active("hydra-sub"):
+        restart_svc("hydra-sub")
+
+
+def set_user_device_limit(
+    state: AppState,
+    email: str,
+    limit: int,
+    *,
+    reset: bool = False,
+) -> None:
+    """Set a subscription device limit; zero means unlimited."""
+    user = find_user(state, email)
+    if not user:
+        raise ValueError(f"User {email} not found")
+    if not isinstance(limit, int) or limit < 0:
+        raise ValueError("Device limit must be a non-negative integer")
+    user.device_limit = limit
+    if reset:
+        user.devices.clear()
+        state.install.setdefault("_device_binding_resets", []).append(user.uuid)
+    save_state(state)
+
+
 def remove_user(state: AppState, email: str) -> None:
     u = find_user(state, email)
     if not u:

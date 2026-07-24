@@ -59,6 +59,14 @@ class ApplicationService:
     def unblock_user(self, state: AppState, email: str) -> None:
         self.users.unblock(state, email)
 
+    def rename_user(self, state: AppState, email: str, new_email: str) -> User:
+        return self.users.rename(state, email, new_email)
+
+    def set_user_device_limit(
+        self, state: AppState, email: str, limit: int, *, reset: bool = False,
+    ) -> User:
+        return self.users.set_device_limit(state, email, limit, reset=reset)
+
     def user_result(self, operation: str, state: AppState, email: str, user: User | None = None) -> ServiceResult:
         """Run a user operation and normalize expected failures for adapters."""
         try:

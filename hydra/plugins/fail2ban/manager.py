@@ -317,6 +317,7 @@ def menu_fail2ban(state: AppState, plugin) -> None:
             from hydra.core.state import get_protocol
             p_state = get_protocol(state, "fail2ban")
             wl = p_state.config.get("whitelist", [])
+            effective_wl = plugin.effective_whitelist(state)
             options.append(("1", f"{'⏸️  Остановить' if active else '▶️  Запустить'} Fail2ban", "Переключить статус службы"))
             options.append(("2", "🔁 Перезапустить / применить конфигурацию", "Выполнить reload / restart"))
             options.append(("3", f"🚫 Забаненные IP ({total_banned} шт.)", "Просмотр заблокированных IP по джейлам и разбан"))
@@ -326,7 +327,7 @@ def menu_fail2ban(state: AppState, plugin) -> None:
             options.append(("7", "📋 Лог Fail2ban (последние 30 строк)", "Просмотр лог-файла в реальном времени"))
             options.append(("8", "🛠️  Восстановить базовую конфигурацию", "Сбросить локальные изменения джейлов"))
             options.append(("9", "📊 История банов за сутки", "Просмотр накопленной статистики"))
-            options.append(("W", f"⚪ Управление whitelist {DIM}({len(wl)} IP){NC}", "Список IP-адресов/подсетей-исключений"))
+            options.append(("W", f"⚪ Управление whitelist {DIM}({len(effective_wl)} IP){NC}", "Фактический ignoreip: ручные и автоматические адреса"))
             options.append(("-", "", ""))
             options.append(("X", "🧹 Очистить лог Fail2ban", ""))
             
@@ -684,12 +685,16 @@ def menu_fail2ban(state: AppState, plugin) -> None:
                 from hydra.core.state import get_protocol, save_state
                 p_state = get_protocol(state, "fail2ban")
                 wl = p_state.config.setdefault("whitelist", [])
+                effective_wl = plugin.effective_whitelist(state)
+                automatic_wl = [value for value in effective_wl if value not in wl]
                 
                 wl_lines = []
                 for i, ip in enumerate(wl, 1):
-                    wl_lines.append(f"  {CYAN}{i:>2}.{NC} {ip}")
+                    wl_lines.append(f"  {CYAN}{i:>2}.{NC} {ip} {DIM}(ручной){NC}")
+                for ip in automatic_wl:
+                    wl_lines.append(f"      {ip} {DIM}(автоматический / из ignoreip){NC}")
                 
-                panel("Доверенные IP / подсети (Whitelist)", wl_lines if wl_lines else ["  Список пуст"])
+                panel("Фактический Fail2ban ignoreip", wl_lines if wl_lines else ["  Список пуст"])
                 
                 wl_opts = [
                     ("1", "➕ Добавить IP/подсеть", "Внести адрес в список исключений"),

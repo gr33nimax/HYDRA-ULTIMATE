@@ -13,18 +13,21 @@ hydra/services/subscriptions/generator.py — Генератор подписо�
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import socket
 import struct
 import zlib
 import urllib.parse
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-from hydra.core.state import AppState, User
+from hydra.core.state import AppState, User, update_state
 from hydra.plugins.base import PluginCategory
 from hydra.plugins.registry import enabled, get
 
@@ -824,6 +827,55 @@ def is_user_valid(user: User, state: AppState) -> bool:
 
 # ── HTTP Server ───────────────────────────────────────────────────────────────
 
+def subscription_device_id(
+    headers: Mapping[str, str],
+    client_ip: str,
+    params: Mapping[str, list[str]],
+) -> str:
+    """Return a privacy-preserving stable device identifier for a request."""
+    raw = ""
+    source = ""
+    for name in (
+        "X-Hydra-HWID", "X-HWID", "X-Device-ID",
+        "X-Client-ID", "X-Installation-ID",
+    ):
+        raw = str(headers.get(name, "") or "").strip()
+        if raw:
+            source = name.lower()
+            break
+    if not raw:
+        for name in ("hwid", "device_id"):
+            values = params.get(name, [])
+            raw = str(values[0] if values else "").strip()
+            if raw:
+                source = name
+                break
+    if not raw:
+        raw = f"{client_ip}|{headers.get('User-Agent', '')}"
+        source = "network-client"
+    return hashlib.sha256(f"{source}:{raw}".encode("utf-8")).hexdigest()
+
+
+def register_subscription_device(token: str, device_id: str) -> tuple[AppState, User | None, str]:
+    """Atomically register a device, rejecting new devices above the user limit."""
+    now = datetime.now(timezone.utc).isoformat()
+
+    def mutate(state: AppState) -> tuple[str, str]:
+        user = next((item for item in state.users if item.uuid == token), None)
+        if user is None:
+            return "missing", ""
+        if user.device_limit <= 0:
+            return "allowed", user.email
+        if device_id not in user.devices and len(user.devices) >= user.device_limit:
+            return "limit", user.email
+        user.devices[device_id] = now
+        return "allowed", user.email
+
+    state, (status, email) = update_state(mutate)
+    user = next((item for item in state.users if item.email == email), None)
+    return state, user, status
+
+
 class SubscriptionHandler(BaseHTTPRequestHandler):
     state: AppState = None
 
@@ -878,6 +930,16 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             self._send_error(404, "Not found")
             return
             
+        device_id = subscription_device_id(
+            self.headers,
+            str(self.client_address[0] if self.client_address else ""),
+            params,
+        )
+        state, _, device_status = register_subscription_device(token, device_id)
+        if device_status == "limit":
+            self._send_error(403, "Device limit reached")
+            return
+
         user = None
         for u in state.users:
             if u.uuid == token:

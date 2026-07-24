@@ -412,20 +412,25 @@ def _run_install(state: AppState, plugin) -> None:
     ps.config["use_middle_proxy"] = use_mp
     ps.config["fallback_cfg"] = asdict(fb_cfg) if fb_cfg else None
     ps.config["singbox_integration_enabled"] = sb_int
-    ps.installed = True
-    ps.enabled = True
+    was_installed = ps.installed
+    # Installation must finish before the centralized apply pipeline sees the
+    # plugin as enabled; otherwise it tries to apply an empty pending config
+    # and rolls the just-downloaded binary back.
+    ps.enabled = False
     save_state(state)
 
     info("Скачиваю зависимости и бинарник telemt...")
-    if not orchestrator.install_plugin(state, plugin.meta.name):
+    install_ok = (
+        orchestrator.reinstall_plugin(state, plugin.meta.name)
+        if was_installed else orchestrator.install_plugin(state, plugin.meta.name)
+    )
+    if not install_ok:
         error("Установка бинарника провалилась.")
         _pause()
         return
 
     info("Записываю конфигурационные файлы...")
-    plugin.configure(state)
-    plugin.apply(state)
-    if orchestrator.apply_config(state):
+    if orchestrator.enable(state, plugin.meta.name):
         success("Установка успешно завершена!")
         # Дополнительно: оптимизация ядра sysctl
         _apply_optimizations()

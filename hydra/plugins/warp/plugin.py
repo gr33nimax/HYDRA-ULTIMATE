@@ -26,7 +26,7 @@ WGCF_ACCOUNT = Path("/etc/wireguard/wgcf-account.toml")
 WARP_INTERFACE = "wgcf"
 WARP_EXTERNAL_CACHE = Path("/var/lib/hydra/warp_external.json")
 WARP_PROFILES_DIR = Path("/etc/hydra/warp_profiles")
-RUSSIA_TLD_SUFFIXES = [".ru", ".su"]
+RUSSIA_TLD_SUFFIXES = [".su", ".ru", ".рф", ".xn--p1ai"]
 
 DEFAULT_WARP_DOMAINS = [
     "openai.com",
@@ -67,7 +67,10 @@ class WarpPlugin(BasePlugin):
 
     def install(self) -> bool:
         if WGCF_PROFILE.exists() and WGCF_BIN.exists():
-            return True
+            lists_ok, message = self.preload_external_rules()
+            if not lists_ok:
+                print(f"  Не удалось заранее загрузить списки WARP: {message}")
+            return lists_ok
 
         from hydra.utils.net import detect_arch
         from hydra.utils.downloader import download_github_asset_filtered
@@ -132,7 +135,15 @@ class WarpPlugin(BasePlugin):
                     )
                 return False
 
-            return WGCF_PROFILE.exists()
+            installed = WGCF_PROFILE.exists()
+            if installed:
+                lists_ok, message = self.preload_external_rules()
+                if not lists_ok:
+                    with log_path.open("a", encoding="utf-8") as log:
+                        log.write(f"External lists preload failed: {message}\n")
+                    print(f"  Не удалось заранее загрузить списки WARP: {message}")
+                return lists_ok
+            return False
         except Exception as e:
             try:
                 log_path.write_text(f"Installation exception: {e}\n", encoding="utf-8")
@@ -593,13 +604,31 @@ class WarpPlugin(BasePlugin):
     def _is_valid_domain(token: str) -> bool:
         if not token or len(token) > 253:
             return False
-        if re.fullmatch(r"\.[a-zA-Z]{2,24}", token):
+        leading_dot = token.startswith(".")
+        body = token[1:] if leading_dot else token
+        try:
+            ascii_body = body.encode("idna").decode("ascii")
+        except (UnicodeError, ValueError):
+            return False
+        normalized = f".{ascii_body}" if leading_dot else ascii_body
+        if re.fullmatch(r"\.[a-zA-Z0-9-]{2,63}", normalized):
             return True
         # Разрешаем опциональную начальную точку для wildcard-доменов в Sing-Box (например: .google.com)
-        pattern = r"^\.?[a-zA-Z0-9][-a-zA-Z0-9._]*\.[a-zA-Z]{2,24}$"
-        if not re.match(pattern, token):
+        pattern = r"^\.?[a-zA-Z0-9][-a-zA-Z0-9._]*\.[a-zA-Z0-9-]{2,63}$"
+        if not re.fullmatch(pattern, normalized):
             return False
         return True
+
+    def preload_external_rules(self) -> tuple[bool, str]:
+        """Download every bundled rule source during WARP installation."""
+        state = AppState(protocols={
+            "warp": PluginState(config={
+                "list_targets": {
+                    f"ext:{key}": "warp" for key in EXTERNAL_LISTS
+                },
+            }),
+        })
+        return self.update_external_rules(state)
 
     def update_external_rules(self, state: AppState | None = None) -> tuple[bool, str]:
         """Загружает правила из всех включенных внешних источников и сохраняет их в кэш."""

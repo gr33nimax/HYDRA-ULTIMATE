@@ -495,6 +495,34 @@ def test_install_plugin_rolls_back_state_when_apply_fails():
     assert save.call_count == 2
 
 
+def test_rename_user_preserves_identity_and_refreshes_plugins():
+    from hydra.core import orchestrator
+
+    user = User(
+        email="old-name",
+        uuid="stable-token",
+        credentials={"mock": {"secret": "stable-secret"}},
+    )
+    state = AppState(
+        users=[user],
+        protocols={"mock": PluginState(enabled=True, installed=True)},
+    )
+    plugin = MagicMock()
+    plugin.meta.name = "mock"
+
+    with patch.object(orchestrator.registry, "transports", return_value=[plugin]), \
+         patch.object(orchestrator, "save_state"), \
+         patch.object(orchestrator, "apply_config", return_value=True), \
+         patch("hydra.core.systemd.is_active", return_value=False):
+        orchestrator.rename_user(state, "old-name", "new-name")
+
+    assert user.email == "new-name"
+    assert user.uuid == "stable-token"
+    assert user.credentials["mock"]["secret"] == "stable-secret"
+    assert plugin.on_user_remove.call_args.args[0].email == "old-name"
+    assert plugin.on_user_add.call_args.args[0].email == "new-name"
+
+
 def test_install_plugin_removes_new_install_when_apply_fails():
     from hydra.core import orchestrator
 

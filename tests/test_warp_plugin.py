@@ -24,8 +24,21 @@ def test_is_valid_domain():
     assert WarpPlugin._is_valid_domain(".claude.ai") is True
     assert WarpPlugin._is_valid_domain(".ru") is True
     assert WarpPlugin._is_valid_domain(".su") is True
+    assert WarpPlugin._is_valid_domain(".рф") is True
+    assert WarpPlugin._is_valid_domain(".xn--p1ai") is True
     assert WarpPlugin._is_valid_domain("invalid_domain") is False
     assert WarpPlugin._is_valid_domain("http://google.com") is False
+
+
+def test_install_preloads_all_external_lists_when_profile_exists():
+    plugin = WarpPlugin()
+    with patch("hydra.plugins.warp.plugin.WGCF_PROFILE") as profile, \
+         patch("hydra.plugins.warp.plugin.WGCF_BIN") as binary, \
+         patch.object(plugin, "preload_external_rules", return_value=(True, "ok")) as preload:
+        profile.exists.return_value = True
+        binary.exists.return_value = True
+        assert plugin.install() is True
+    preload.assert_called_once_with()
 
 
 @patch("hydra.plugins.warp.plugin.WarpPlugin._load_warp_config")
@@ -259,7 +272,7 @@ def test_direct_rules_are_not_dropped(mock_cache, _mock_profile):
 
 @patch("hydra.plugins.warp.plugin.WarpPlugin._load_warp_config", return_value=None)
 @patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")
-def test_russia_external_list_always_includes_ru_and_su_tlds(mock_cache, _mock_profile):
+def test_russia_external_list_always_includes_all_russian_tlds(mock_cache, _mock_profile):
     mock_cache.exists.return_value = False
     state = AppState()
     state.protocols["warp"] = PluginState(config={
@@ -269,7 +282,7 @@ def test_russia_external_list_always_includes_ru_and_su_tlds(mock_cache, _mock_p
     fragment = WarpPlugin().configure(state)
 
     assert fragment.route_rules == [{
-        "domain_suffix": [".ru", ".su"],
+        "domain_suffix": [".ru", ".su", ".xn--p1ai", ".рф"],
         "outbound": "direct",
     }]
 

@@ -18,7 +18,7 @@ from hydra.core.state import (
 def test_app_state_defaults():
     """Пустое состояние имеет корректные значения по умолчанию."""
     state = AppState()
-    assert state.version == 2
+    assert state.version == 3
     assert state.protocols == {}
     assert state.users == []
     assert isinstance(state.telegram, TelegramConfig)
@@ -121,7 +121,7 @@ def test_save_and_load():
             save_state(state)
             loaded = load_state()
 
-            assert loaded.version == 2
+            assert loaded.version == 3
             assert loaded.network.domain == "example.com"
             assert len(loaded.users) == 1
             assert loaded.users[0].email == "test@example.com"
@@ -280,8 +280,10 @@ def test_migrate_v1_to_v2():
             state_mod.STATE_FILE = orig_file
             state_mod.STATE_DIR = orig_dir
 
-    # Версия должна мигрировать до 2
-    assert loaded.version == 2
+    # Версия должна мигрировать до актуальной схемы
+    assert loaded.version == 3
+    assert loaded.users[0].device_limit == 0
+    assert loaded.users[0].devices == {}
     # credentials добавлены каждому пользователю
     assert loaded.users[0].credentials == {}
     # tproxy-поля появились в NetworkConfig

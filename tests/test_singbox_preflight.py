@@ -51,6 +51,28 @@ def test_preflight_detects_duplicate_sni_case_insensitive():
     assert any("SNI 'example.com'" in error for error in errors)
 
 
+def test_preflight_allows_same_sni_for_modes_of_one_protocol():
+    config = {
+        "inbounds": [
+            {
+                "type": "trusttunnel",
+                "tag": "trusttunnel-in",
+                "listen": "127.0.0.1",
+                "listen_port": 8443,
+                "tls": {"server_name": "shared.example"},
+            },
+            {
+                "type": "trusttunnel",
+                "tag": "trusttunnel-quic-in",
+                "listen": "127.0.0.1",
+                "listen_port": 8444,
+                "tls": {"server_name": "shared.example"},
+            },
+        ]
+    }
+    assert _preflight_conflicts(config) == []
+
+
 def test_preflight_ignores_ephemeral_ports():
     config = {
         "inbounds": [
