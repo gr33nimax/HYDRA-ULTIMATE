@@ -33,6 +33,7 @@ def test_ban_ip_single():
     p = IPBanPlugin()
     with patch.object(IPBanPlugin, "_ensure_sets") as mock_s, \
          patch.object(IPBanPlugin, "_ensure_iptables_rules") as mock_i, \
+         patch("hydra.plugins.ipban.plugin.host_ip_addresses", return_value=()), \
          patch("subprocess.run") as mock_run, \
          patch.object(IPBanPlugin, "_state_add_entry") as mock_add:
         mock_run.return_value = MagicMock(returncode=0)
@@ -45,6 +46,7 @@ def test_ban_ip_cidr():
     p = IPBanPlugin()
     with patch.object(IPBanPlugin, "_ensure_sets") as mock_s, \
          patch.object(IPBanPlugin, "_ensure_iptables_rules") as mock_i, \
+         patch("hydra.plugins.ipban.plugin.host_ip_addresses", return_value=()), \
          patch("subprocess.run") as mock_run, \
          patch.object(IPBanPlugin, "_state_add_entry") as mock_add:
         mock_run.return_value = MagicMock(returncode=0)
