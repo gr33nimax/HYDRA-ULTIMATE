@@ -12,7 +12,6 @@ def _certificate_pair(domain: str) -> tuple[tuple[str, str], ...]:
             f"/etc/letsencrypt/live/{domain}/fullchain.pem",
             f"/etc/letsencrypt/live/{domain}/privkey.pem",
         ),
-        (f"/etc/xray/{domain}.crt", f"/etc/xray/{domain}.key"),
     )
 
 
@@ -44,7 +43,4 @@ def find_any_cert(state: AppState) -> tuple[str | None, str | None]:
         if result[0]:
             return result
 
-    fallback = ("/etc/xray/xray.crt", "/etc/xray/xray.key")
-    if Path(fallback[0]).exists() and Path(fallback[1]).exists():
-        return fallback
     return None, None

@@ -25,11 +25,10 @@ class ConfigurationApplier:
     journal: Callable[..., None]
     manage_traffic_daemon: Callable[[AppState], None]
     migrate_haproxy: Callable[[AppState], None]
+    prepare_state: Callable[[AppState], None] = lambda state: None
 
     def apply(self, state: AppState) -> bool:
-        self.set_apply_error("")
-        self.journal("started")
-        transaction = ApplyTransaction()
+        transaction = self._start_apply()
 
         def fail(
             stage: str,
@@ -53,9 +52,10 @@ class ConfigurationApplier:
                     )
             return False
 
-        if not state.network.tproxy_enabled:
-            state.network.tproxy_enabled = True
-            self.save_state(state)
+        if not self._run_preflight(state):
+            return False
+
+        self._ensure_tproxy_enabled(state)
 
         try:
             fragments = self.registry.collect_fragments(state)
@@ -186,6 +186,27 @@ class ConfigurationApplier:
         transaction.commit()
         self.journal("committed")
         return True
+
+    def _start_apply(self) -> ApplyTransaction:
+        self.set_apply_error("")
+        self.journal("started")
+        return ApplyTransaction()
+
+    def _run_preflight(self, state: AppState) -> bool:
+        try:
+            self.prepare_state(state)
+            return True
+        except Exception as exc:
+            message = f"TLS preflight failed: {exc}"
+            self.set_apply_error(message)
+            self.singbox.log("ERROR", message)
+            self.journal("failed", stage="preflight", error=message)
+            return False
+
+    def _ensure_tproxy_enabled(self, state: AppState) -> None:
+        if not state.network.tproxy_enabled:
+            state.network.tproxy_enabled = True
+            self.save_state(state)
 
     @staticmethod
     def _wait_for_port_release() -> None:

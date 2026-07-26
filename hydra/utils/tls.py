@@ -14,8 +14,6 @@ def resolve_tls_material(domain: str, config: dict) -> tuple[str, str]:
             f"/etc/letsencrypt/live/{domain}/fullchain.pem",
             f"/etc/letsencrypt/live/{domain}/privkey.pem",
         ),
-        (f"/etc/xray/{domain}.crt", f"/etc/xray/{domain}.key"),
-        ("/etc/xray/xray.crt", "/etc/xray/xray.key"),
     )
     return next(
         (

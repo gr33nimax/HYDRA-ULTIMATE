@@ -169,9 +169,4 @@ HYDRA-ULTIMATE/
 - [CHANGELOG.md](CHANGELOG.md) — история версий и описания релизов.
 - [LICENSE](LICENSE) — GNU GPLv3.
 
-## 🔗 Связанный проект
-
-- [VLESS Ultimate](https://github.com/inferno1978/VLESS-Ultimate-Installer) —
-  альтернативный стек на базе Xray для VLESS/Reality и XHTTP.
-
 Copyright (c) 2026 gr33nimax.

@@ -88,11 +88,11 @@ def build_client_outbound(
         "tls": {
             "enabled": True,
             "server_name": domain,
+            "alpn": ["h3" if quic else "h2"],
         },
     }
     if quic:
         outbound["quic"] = True
-        outbound["tls"]["alpn"] = ["h3"]
     return outbound
 
 

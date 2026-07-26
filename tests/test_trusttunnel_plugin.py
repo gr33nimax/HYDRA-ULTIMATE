@@ -148,6 +148,7 @@ def test_generate_client_config():
     assert outbound["username"] == "a@x.com"
     assert outbound["tls"]["enabled"] is True
     assert outbound["tls"]["server_name"] == "custom.domain"
+    assert outbound["tls"]["alpn"] == ["h2"]
 
 
 def test_generate_client_config_quic_has_server_and_quic_flag():

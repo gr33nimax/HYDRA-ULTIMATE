@@ -107,12 +107,81 @@ class CertificateProvisioner:
                     capture_output=True,
                 )
 
-    @staticmethod
-    def _existing(domain: str, config: dict) -> tuple[str, str]:
+    def _existing(self, domain: str, config: dict) -> tuple[str, str]:
         cert, key = resolve_tls_material(domain, config)
-        if cert and key and Path(cert).is_file() and Path(key).is_file():
+        if (
+            cert
+            and key
+            and Path(cert).is_file()
+            and Path(key).is_file()
+            and self._valid_for_domain(domain, cert, key)
+        ):
             return cert, key
         return "", ""
+
+    def _valid_for_domain(
+        self,
+        domain: str,
+        certificate: str,
+        key: str,
+    ) -> bool:
+        """Reject expired, wrong-host and mismatched TLS material."""
+        if not self.host.which("openssl"):
+            return False
+        commands = (
+            [
+                "openssl",
+                "x509",
+                "-checkend",
+                "2592000",
+                "-noout",
+                "-in",
+                certificate,
+            ],
+            [
+                "openssl",
+                "x509",
+                "-checkhost",
+                domain,
+                "-noout",
+                "-in",
+                certificate,
+            ],
+            [
+                "openssl",
+                "x509",
+                "-pubkey",
+                "-noout",
+                "-in",
+                certificate,
+            ],
+            [
+                "openssl",
+                "pkey",
+                "-pubout",
+                "-passin",
+                "pass:",
+                "-in",
+                key,
+            ],
+        )
+        try:
+            results = [
+                self.host.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                for command in commands
+            ]
+        except (OSError, HostOperationError):
+            return False
+        if any(result.returncode != 0 for result in results):
+            return False
+        certificate_key = str(results[2].stdout or "").strip()
+        private_key = str(results[3].stdout or "").strip()
+        return bool(certificate_key and certificate_key == private_key)
 
 
 __all__ = ["CertificateProvisioner", "resolve_tls_material"]

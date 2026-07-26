@@ -113,6 +113,16 @@ def _tls_app(backends: list[Backend]) -> dict[str, Any]:
     )
 
 
+def _tls_handler(backend: Backend) -> dict[str, Any]:
+    """Terminate TLS only when a complete certificate pair is planned."""
+    if not backend.get("cert_file") or not backend.get("key_file"):
+        raise ValueError(
+            f"TLS material is missing for {backend['name']} "
+            f"domain {backend['domain']}",
+        )
+    return {"handler": "tls"}
+
+
 def _tls_route(
     backend: Backend,
     settings: RenderSettings,
@@ -148,7 +158,7 @@ def _tls_route(
             else port
         )
         handlers = [
-            {"handler": "tls"},
+            _tls_handler(backend),
             {
                 "handler": "subroute",
                 "routes": [
@@ -175,7 +185,7 @@ def _tls_route(
         ]
     elif name in ("trusttunnel", "hysteria2"):
         handlers = [
-            {"handler": "tls"},
+            _tls_handler(backend),
             proxy_factory(
                 f"127.0.0.1:{settings.decoy_ports[name]}",
                 proxy_protocol=True,
@@ -220,7 +230,7 @@ def _tls_routes(
         routes.append(
             {
                 "handle": [
-                    {"handler": "tls"},
+                    _tls_handler(fallback),
                     proxy_factory(
                         f"127.0.0.1:{fallback_port}",
                         proxy_protocol=True,

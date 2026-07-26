@@ -262,7 +262,7 @@ def status(redirect_port: int = 10811) -> dict:
     Возвращает текущее состояние:
       {
         "return_rule": bool,   — RETURN rule для марки 0xff активен
-        "after_xray":  bool,   — After=sing-box.service в telemt.service
+        "after_singbox": bool, — After=sing-box.service в telemt.service
         "ipt_count":   int,    — количество активных правил REDIRECT
         "ipt_total":   int,    — общее количество подсетей Telegram
       }
@@ -272,8 +272,7 @@ def status(redirect_port: int = 10811) -> dict:
     
     return {
         "return_rule": _return_rule_exists(),
-        "after_xray":  _service_has_after(),
+        "after_singbox": _service_has_after(),
         "ipt_count":   ipt_active,
         "ipt_total":   len(nets),
-        "xray_uid":    None,
     }

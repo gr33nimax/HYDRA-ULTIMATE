@@ -416,7 +416,6 @@ class AnyTLSPlugin(BasePlugin):
         Порядок поиска:
         1. Из ps.config["cert_file"] / ps.config["key_file"] (ручной ввод)
         2. /etc/letsencrypt/live/{domain}/ (certbot)
-        3. /etc/xray/{domain}.crt/.key
         """
         config = ps.config if ps and ps.config else {}
         return resolve_tls_material(domain, config)

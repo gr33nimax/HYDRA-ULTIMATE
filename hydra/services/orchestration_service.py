@@ -169,6 +169,10 @@ class OrchestrationService:
             journal=self._journal,
             manage_traffic_daemon=self._manage_traffic_daemon,
             migrate_haproxy=self._migrate_haproxy,
+            prepare_state=ProtocolSetupService(
+                self.certificates,
+                self.plugins.get,
+            ).prepare_enabled,
         )
 
     def _migrate_haproxy(self, state: AppState) -> None:

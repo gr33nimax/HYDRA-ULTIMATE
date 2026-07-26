@@ -6,6 +6,8 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.core.sni_router import (
@@ -207,6 +209,22 @@ def test_antidpi_bans_are_enforced_only_by_dynamic_firewall():
     assert all("remote_ip" not in matcher for route in routes for matcher in route.get("match", []))
 
 
+@pytest.mark.parametrize("name", ["anytls", "trusttunnel", "hysteria2"])
+def test_tls_terminating_routes_reject_missing_certificate(name):
+    state = _state(**{f"{name}_enabled": True})
+    backend = {
+        "name": name,
+        "domain": f"{name}.example.com",
+        "port": 20444,
+        "cert_file": "",
+        "key_file": "",
+        "network_mode": "tcp",
+    }
+
+    with pytest.raises(ValueError, match="TLS material is missing"):
+        _generate_config([backend], state)
+
+
 def test_antidpi_routes_native_backends_through_exact_source_relay():
     state = _state(anytls_enabled=True)
     state.protocols["antidpi"] = PluginState(enabled=True)
@@ -340,6 +358,10 @@ def test_trusttunnel_auth_proxy_has_bounded_response_and_dedicated_log():
 def test_rebuild_starts_caddy():
     """rebuild() generates config and restarts/reloads caddy-l4."""
     s = _state(naive_enabled=True, anytls_enabled=True)
+    s.protocols["anytls"].config.update(
+        cert_file="cert.pem",
+        key_file="key.pem",
+    )
     
     mock_cfg = MagicMock()
     mock_cfg_dir = MagicMock()
@@ -365,6 +387,10 @@ def test_rebuild_starts_caddy():
 
 def test_rebuild_restarts_when_admin_endpoint_migration_breaks_reload():
     s = _state(naive_enabled=True, anytls_enabled=True)
+    s.protocols["anytls"].config.update(
+        cert_file="cert.pem",
+        key_file="key.pem",
+    )
     mock_cfg = MagicMock()
 
     def run(command, **_kwargs):

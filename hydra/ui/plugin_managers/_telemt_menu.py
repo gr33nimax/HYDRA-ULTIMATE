@@ -37,11 +37,11 @@ def _singbox_status(
     route = (
         self_route.status()
         if self_route and installed
-        else {"return_rule": False, "after_xray": False}
+        else {"return_rule": False, "after_singbox": False}
     )
     suffix = (
         f"{facade.GREEN}[rule: OK]{facade.NC}"
-        if route.get("return_rule") and route.get("after_xray")
+        if route.get("return_rule") and route.get("after_singbox")
         else f"{facade.YELLOW}[rule: нет]{facade.NC}"
     )
     return (

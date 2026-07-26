@@ -135,6 +135,10 @@ def _configuration_applier() -> ConfigurationApplier:
         journal=_journal,
         manage_traffic_daemon=_manage_traffic_daemon,
         migrate_haproxy=_maybe_migrate_haproxy,
+        prepare_state=ProtocolSetupService(
+            CertificateProvisioner(HOST),
+            registry.get,
+        ).prepare_enabled,
     )
 
 

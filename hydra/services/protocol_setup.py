@@ -86,6 +86,12 @@ class ProtocolSetupService:
         if source == "protocol":
             protocol.config["domain"] = normalized
 
+    def prepare_enabled(self, state: AppState) -> None:
+        """Refresh prerequisites for every enabled protocol before apply."""
+        for name, protocol in sorted(state.protocols.items()):
+            if protocol.enabled and self.get_plugin(name) is not None:
+                self.prepare_enable(state, name)
+
 
 __all__ = [
     "CertificateProvider",
