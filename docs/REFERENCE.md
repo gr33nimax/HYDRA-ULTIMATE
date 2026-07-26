@@ -34,6 +34,7 @@
 | `anytls` | AnyTLS | TLS-подобный обфусцированный туннель |
 | `trusttunnel` | TrustTunnel | TLS-транспорт с режимами TCP/QUIC и сайтом-заглушкой |
 | `hysteria2` | Hysteria2 | QUIC-транспорт с Salamander и браузерной заглушкой |
+| `vless` | VLESS + XHTTP | XHTTP-транспорт Sing-Box Extended с отдельным доменом и заглушкой |
 | `shadowtls` | ShadowTLS | ShadowTLS v3 с Trojan detour |
 | `snell` | Snell v4 | TCP/UDP-прокси из Sing-Box Extended |
 | `telemt` | MTProto / Telemt | Telegram MTProxy с управлением пользователями |
@@ -131,6 +132,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | :--- | :--- |
 | `/var/www/decoy-a`, `/var/www/decoy-b`, `/var/www/decoy-c` | Общие decoy-сайты Caddy L4 |
 | `/var/www/decoy-hysteria2` | Браузерная заглушка Hysteria2 |
+| `/var/www/decoy-vless` | Отдельная media-заглушка VLESS + XHTTP |
 | `/var/www/naive-fake` | Заглушка NaiveProxy |
 
 ### Резервные копии
@@ -215,7 +217,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 
 | Порт | Транспорт | Владелец |
 | ---: | :--- | :--- |
-| `443/tcp` | TCP | Caddy L4 — общий SNI-мультиплексор; напрямую NaiveProxy, AnyTLS, TrustTunnel или ShadowTLS |
+| `443/tcp` | TCP | Caddy L4 — общий SNI-мультиплексор для NaiveProxy, AnyTLS, TrustTunnel, ShadowTLS и VLESS + XHTTP |
 | `443/udp` | UDP | Один QUIC-транспорт: NaiveProxy **или** TrustTunnel |
 | `8443/udp` | UDP | Hysteria2 |
 | `8443/tcp` | TCP | Telemt (MTProto) |
@@ -241,6 +243,8 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 | `127.0.0.1:5300` | DNSCrypt-резолвер (`network.dnscrypt_port`) |
 | `127.0.0.1:9000` | Локальный TUN-порт qWDTT |
 | `127.0.0.1:9090` | Clash API Sing-Box, если включён (`network.clash_api_port`) |
+| `127.0.0.1:20448` | Внутренний VLESS + XHTTP inbound Sing-Box |
+| `127.0.0.1:10804` | HTTP-router и сайт-заглушка домена VLESS + XHTTP |
 | `1081` | TPROXY Sing-Box, если включён (`network.tproxy_port`) |
 
 Порты source-relay назначаются динамически на loopback и сопоставляются с

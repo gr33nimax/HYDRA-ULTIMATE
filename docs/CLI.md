@@ -264,6 +264,9 @@ Metadata-declared extension API:
 
 ```bash
 sudo hydra plugin command hysteria2 set_port --param port=8443
+sudo hydra plugin command vless set_domain --param domain=xhttp.example.com
+sudo hydra plugin command vless set_path --param path=/xhttp
+sudo hydra plugin command vless set_mode --param mode=stream-up
 hydra plugin query warp external_sources --with-state
 sudo hydra plugin action dnscrypt apply_server_names \
   --param 'names=["cloudflare","quad9-dnscrypt-ip4-filter-pri"]'
@@ -272,6 +275,11 @@ sudo hydra plugin action dnscrypt apply_server_names \
 `--param NAME=JSON` можно повторять. Операция должна быть объявлена в
 `PluginMeta.commands`, `queries` или `actions`; произвольные методы вызвать
 нельзя. Command/action требуют root, query является read-only.
+
+Для `vless` сначала задайте отдельный домен, DNS-запись которого указывает на
+VPS, затем выполните `sudo hydra plugin enable vless`. Certificate preflight
+получит сертификат, а общий apply создаст XHTTP inbound, маршрут Caddy и
+заглушку. Поддерживаемые mode: `stream-up`, `packet-up`, `stream-one`.
 
 `plugins` является алиасом `plugin`.
 

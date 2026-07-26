@@ -46,7 +46,22 @@ def _apply_loopback_firewall(
             )
             for backend in backends
         ]
-        ports.extend((str(port), False) for port in settings.decoy_ports.values())
+        decoy_ports = {
+            int(port)
+            for port in settings.decoy_ports.values()
+        }
+        decoy_ports.update(
+            int(backend["decoy_port"])
+            for backend in backends
+            if backend.get("decoy_port")
+        )
+        ports.extend((str(port), False) for port in sorted(decoy_ports))
+        dynamic_ports = {
+            int(value)
+            for backend in backends
+            if backend.get("route_kind") == "http_path_proxy"
+            for value in (backend["port"], backend["decoy_port"])
+        }
         for port, include_udp in ports:
             protocols = ("tcp", "udp") if include_udp else ("tcp",)
             for protocol in protocols:
@@ -62,6 +77,13 @@ def _apply_loopback_firewall(
                     "-j",
                     "DROP",
                 ]
+                if int(port) in dynamic_ports:
+                    rule[-2:-2] = [
+                        "-m",
+                        "comment",
+                        "--comment",
+                        "hydra-caddy-dynamic-loopback",
+                    ]
                 host.run(
                     ["iptables", "-D", *rule],
                     capture_output=True,
@@ -110,10 +132,16 @@ def _restore_routing_units(
 
 
 def _ensure_decoy_sites(backends: list[dict]) -> None:
-    from hydra.core.decoy import ensure_decoy_site
+    from hydra.core.decoy import ensure_decoy_site, ensure_site
 
     for backend in backends:
         if backend["name"] in ("sub_server", "shadowtls"):
+            continue
+        if backend.get("route_kind") == "http_path_proxy":
+            ensure_site(
+                Path(str(backend["decoy_root"])),
+                str(backend["decoy_theme"]),
+            )
             continue
         try:
             ensure_decoy_site(backend["name"])

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,31 @@ def config_had_quic_proxy(config_path: Path) -> bool:
         return False
 
 
+def configured_loopback_ports(config_path: Path) -> set[int]:
+    """Discover plugin-owned loopback ports from Hydra's current artifact."""
+    try:
+        document = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return set()
+    ports: set[int] = set()
+    pattern = re.compile(r"^(?:tcp/|udp/)?127\.0\.0\.1:(\d{1,5})$")
+
+    def visit(value: object) -> None:
+        if isinstance(value, dict):
+            for nested in value.values():
+                visit(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                visit(nested)
+        elif isinstance(value, str):
+            match = pattern.fullmatch(value)
+            if match and 1 <= int(match.group(1)) <= 65535:
+                ports.add(int(match.group(1)))
+
+    visit(document)
+    return ports
+
+
 def rebuild(
     state: AppState,
     settings: RuntimeSettings,
@@ -61,6 +87,7 @@ def stop(
 ) -> None:
     """Stop the router and clean up loopback isolation and routing units."""
     try:
+        configured_ports = configured_loopback_ports(settings.caddy_config)
         if is_installed():
             host.run(
                 ["systemctl", "stop", settings.caddy_service_name],
@@ -107,6 +134,33 @@ def stop(
                 ],
                 capture_output=True,
             )
+        static_ports = {
+            *settings.internal_ports.values(),
+            *settings.decoy_ports.values(),
+        }
+        for port in sorted(configured_ports - static_ports):
+            for protocol in ("tcp", "udp"):
+                host.run(
+                    [
+                        "iptables",
+                        "-D",
+                        "INPUT",
+                        "-p",
+                        protocol,
+                        "--dport",
+                        str(port),
+                        "!",
+                        "-i",
+                        "lo",
+                        "-m",
+                        "comment",
+                        "--comment",
+                        "hydra-caddy-dynamic-loopback",
+                        "-j",
+                        "DROP",
+                    ],
+                    capture_output=True,
+                )
     except Exception:
         pass
     try:
@@ -150,6 +204,7 @@ __all__ = [
     "RuntimeOperations",
     "RuntimeSettings",
     "config_had_quic_proxy",
+    "configured_loopback_ports",
     "is_active",
     "rebuild",
     "stop",

@@ -16,6 +16,18 @@
 
 ## [2.5.4] — 26 июля 2026
 
+### Транспорты
+
+- Добавлен встроенный `vless` transport на базе VLESS + XHTTP из
+  `shtorm-7/sing-box-extended`: multi-user inbound, Sing-Box client config,
+  `vless://` ссылки и выдача через общие подписки.
+- VLESS + XHTTP требует отдельный TLS-домен. Caddy L4 направляет настроенный
+  XHTTP-путь во внутренний Sing-Box, а остальные URL обслуживает собственный
+  сайт-заглушка `/var/www/decoy-vless` в виде нейтрального цифрового издания.
+- Plugin-owned TLS/HTTP routes стали декларативными: core валидирует порты,
+  путь, каталог и тему, включает их в транзакционный Caddy apply/rollback и
+  очищает динамические loopback firewall rules при остановке.
+
 ### Архитектура
 
 - Монолитные composition/lifecycle/UI-модули разделены на application services,

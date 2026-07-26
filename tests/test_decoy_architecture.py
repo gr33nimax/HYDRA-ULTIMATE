@@ -14,6 +14,7 @@ IMPLEMENTATION_MODULES = {
     "bootstrap.py",
     "docs.py",
     "landing.py",
+    "media.py",
     "status.py",
 }
 

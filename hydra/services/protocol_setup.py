@@ -24,7 +24,7 @@ def normalize_protocol_config(
     """Return normalized desired config without mutating the caller's value."""
     normalized = copy.deepcopy(dict(config))
     for key, value in defaults:
-        normalized.setdefault(key, value)
+        normalized.setdefault(key, copy.deepcopy(value))
     return normalized
 
 

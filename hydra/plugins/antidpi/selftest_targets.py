@@ -13,6 +13,7 @@ SUPPORTED_PROTOCOLS = (
     "trusttunnel",
     "shadowtls",
     "hysteria2",
+    "vless",
     "mieru",
     "naive",
     "snell",
@@ -25,6 +26,7 @@ JOURNAL_UNITS = {
     "trusttunnel": ("sing-box",),
     "shadowtls": ("sing-box",),
     "hysteria2": ("sing-box", "hysteria2"),
+    "vless": ("sing-box",),
     "mieru": ("sing-box",),
     "naive": ("caddy-naive", "caddy-l4"),
     "snell": ("sing-box", "snell"),
@@ -101,7 +103,15 @@ def targets(
         if config.get("transport") == "both":
             result.append(Target("tcp", port))
         return result
-    if protocol in {"anytls", "trusttunnel", "shadowtls", "naive"}:
+    if protocol == "vless":
+        domain = str(config.get("domain", "")).strip()
+        return [Target("tls", 443, sni=domain)] if domain else []
+    if protocol in {
+        "anytls",
+        "trusttunnel",
+        "shadowtls",
+        "naive",
+    }:
         port = effective_port(protocol, state)
         domain = str(
             config.get(

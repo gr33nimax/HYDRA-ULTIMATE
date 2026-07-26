@@ -24,7 +24,7 @@
 ---
 
 HYDRA разворачивает и обслуживает многопротокольный прокси-сервер на одной VPS.
-Десять транспортов, маршрутизация, DNS, защитные контуры, подписки, учёт трафика
+Одиннадцать транспортов, маршрутизация, DNS, защитные контуры, подписки, учёт трафика
 и интерфейсы TUI/CLI/Telegram работают как единый управляемый контур.
 
 Вручную конфигурации служб не редактируются: пользователи, протоколы и сеть
@@ -41,6 +41,7 @@ Caddy L4 и nftables. Применение — транзакционное, с 
                          ├─▶ TrustTunnel       ─┤
                          ├─▶ ShadowTLS         ─┤
                          ├─▶ NaiveProxy        ─┤
+                         ├─▶ VLESS + XHTTP     ─┤
                          └─▶ сайт-заглушка      │
                                                 ├─▶ Sing-Box ─▶ интернет
   UDP/443 ──────────▶  один QUIC-транспорт     ─┤   маршруты     напрямую
@@ -54,7 +55,7 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 
 | | |
 | :--- | :--- |
-| **Транспорты** | 10 |
+| **Транспорты** | 11 |
 | **Модули сети и защиты** | 6 |
 | **Интерфейсы** | TUI, headless JSON-CLI, Telegram Admin Bot |
 | **Схема состояния** | v4 |
@@ -81,12 +82,17 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 | **ShadowTLS** | `443/tcp` | ShadowTLS v3 + Trojan detour |
 | **NaiveProxy** | `443/tcp`, `443/udp` | HTTP/2 forward-proxy |
 | **Hysteria2** | `8443/udp` | QUIC + Salamander |
+| **VLESS + XHTTP** | `443/tcp` | XHTTP через Sing-Box Extended и Caddy L4 |
 | **Mieru** | `2012–2022/tcp` | обфусцированный mTLS |
 | **Snell v4** | `32000–32999/tcp` | TCP/UDP-прокси |
 | **MTProto / Telemt** | `8443/tcp` | Telegram MTProxy |
 | **qWDTT** | `56000/udp`, `56001/udp` | WireGuard поверх TURN |
 
-У AnyTLS, TrustTunnel, Hysteria2 и NaiveProxy есть сайт-заглушка на домене.
+У AnyTLS, TrustTunnel, Hysteria2, VLESS + XHTTP и NaiveProxy есть
+сайт-заглушка на домене. VLESS требует отдельный домен; XHTTP занимает
+`/xhttp` (по умолчанию), а остальные URL этого домена обслуживает собственный
+сайт из `/var/www/decoy-vless`. Для него используется отдельная нейтральная
+тема цифрового издания с разделами технологий, бизнеса и культуры.
 Клиентские ссылки и профили выдаются через сервер подписок и TUI; Mieru
 использует схему `mierus://`.
 
@@ -99,6 +105,7 @@ SNI и отдаёт соединение владельцу домена:
   TCP/443 ─┬─ SNI = a.example.com ──▶ AnyTLS        TLS завершается в Caddy
            ├─ SNI = b.example.com ──▶ TrustTunnel   TLS завершается в Caddy
            ├─ SNI = c.example.com ──▶ ShadowTLS     сквозной, без расшифровки
+           ├─ SNI = d.example.com ──▶ VLESS XHTTP   `/xhttp` → Sing-Box
            └─ SNI неизвестен ───────▶ сайт-заглушка при активной заглушке
 
   UDP/443 ─── SNI недоступен ───────▶ ровно один QUIC-транспорт

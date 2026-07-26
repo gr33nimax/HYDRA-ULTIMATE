@@ -212,7 +212,17 @@ def _has_sub_domain(state: AppState) -> bool:
 
 
 def _collect_backends(state: AppState) -> list[dict]:
-    return _planning.collect_backends(state, _INTERNAL_PORTS)
+    reserved_ports = {
+        *_DECOY_HTTP_PORTS.values(),
+        *_SOURCE_RELAY_PORTS.values(),
+        *_UDP_SOURCE_RELAY_PORTS.values(),
+        2021,
+    }
+    return _planning.collect_backends(
+        state,
+        _INTERNAL_PORTS,
+        reserved_ports=reserved_ports,
+    )
 
 
 def audit_routes(state: AppState) -> CaddyRouteAudit:

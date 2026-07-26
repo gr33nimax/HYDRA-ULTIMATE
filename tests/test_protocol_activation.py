@@ -11,6 +11,7 @@ from hydra.plugins.hysteria2.plugin import Hysteria2Plugin
 from hydra.plugins.naive.plugin import NaivePlugin
 from hydra.plugins.shadowtls.plugin import ShadowTLSPlugin
 from hydra.plugins.trusttunnel.plugin import TrustTunnelPlugin
+from hydra.plugins.vless_xhttp.plugin import VlessXhttpPlugin
 from hydra.ui._menus.protocol_activation import (
     prepare_interactive_activation,
     run_lifecycle_action,
@@ -22,6 +23,7 @@ DOMAIN_TLS_PLUGINS = (
     (AnyTLSPlugin, "protocol"),
     (TrustTunnelPlugin, "protocol"),
     (Hysteria2Plugin, "protocol"),
+    (VlessXhttpPlugin, "protocol"),
 )
 
 

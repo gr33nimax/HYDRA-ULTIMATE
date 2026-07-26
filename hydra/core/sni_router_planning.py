@@ -8,6 +8,11 @@ from typing import Any
 from hydra.core.state_models import AppState
 
 
+_DYNAMIC_ROUTE_KEY = "_tls_http_decoy_route"
+_DYNAMIC_ROUTE_KIND = "http_path_proxy"
+_DECOY_THEMES = frozenset({"landing", "blog", "docs", "media", "status"})
+
+
 @dataclass(frozen=True)
 class CaddyRouteAudit:
     """Read-only consistency report for the TLS/SNI multiplexer."""
@@ -45,6 +50,16 @@ def get_decoy_http_port(plugin_name: str, decoy_ports: Mapping[str, int]) -> int
 
 def needs_mux(state: AppState, internal_ports: Mapping[str, int]) -> bool:
     """Decide whether the public TCP/443 SNI multiplexer is required."""
+    if any(
+        protocol.enabled
+        and protocol.config.get("domain")
+        and isinstance(protocol.config.get(_DYNAMIC_ROUTE_KEY), Mapping)
+        and protocol.config[_DYNAMIC_ROUTE_KEY].get("kind")
+        == _DYNAMIC_ROUTE_KIND
+        for protocol in state.protocols.values()
+    ):
+        return True
+
     for name in ("anytls", "trusttunnel", "hysteria2"):
         proto = state.protocols.get(name)
         if proto and proto.enabled and proto.config.get("domain"):
@@ -107,6 +122,8 @@ def has_sub_domain(state: AppState) -> bool:
 def collect_backends(
     state: AppState,
     internal_ports: Mapping[str, int],
+    *,
+    reserved_ports: set[int] | frozenset[int] = frozenset(),
 ) -> list[dict[str, Any]]:
     """Project persisted protocol state into renderer-friendly backends."""
     backends: list[dict[str, Any]] = []
@@ -141,6 +158,27 @@ def collect_backends(
             ),
         })
 
+    occupied_ports = {
+        *(int(item) for item in internal_ports.values()),
+        *(int(item) for item in reserved_ports),
+    }
+    for name, proto in sorted(state.protocols.items()):
+        if name in internal_ports or not proto.enabled:
+            continue
+        route = proto.config.get(_DYNAMIC_ROUTE_KEY)
+        if route is None:
+            continue
+        backend = _dynamic_backend(
+            name,
+            proto.config,
+            route,
+            occupied_ports,
+        )
+        backends.append(backend)
+        occupied_ports.update(
+            (int(backend["port"]), int(backend["decoy_port"])),
+        )
+
     sub_domain = getattr(state.network, "sub_domain", "")
     if sub_domain:
         backends.append({
@@ -150,7 +188,111 @@ def collect_backends(
             "cert_file": "",
             "key_file": "",
         })
+    _validate_unique_domains(backends)
     return backends
+
+
+def _validate_unique_domains(backends: list[dict[str, Any]]) -> None:
+    owners: dict[str, str] = {}
+    for backend in backends:
+        domain = str(backend.get("domain", "")).strip().lower().rstrip(".")
+        if not domain:
+            continue
+        previous = owners.get(domain)
+        if previous is not None:
+            raise ValueError(
+                f"TLS domain {domain} is assigned to both "
+                f"{previous} and {backend['name']}",
+            )
+        owners[domain] = str(backend["name"])
+
+
+def _route_error(name: str, detail: str) -> ValueError:
+    return ValueError(f"Invalid plugin-owned TLS route for {name}: {detail}")
+
+
+def _route_port(
+    name: str,
+    value: object,
+    field: str,
+    occupied_ports: set[int],
+) -> int:
+    if isinstance(value, bool):
+        raise _route_error(name, f"{field} must be an integer port")
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        raise _route_error(name, f"{field} must be an integer port")
+    if not 1024 <= port <= 65535 or port in {80, 443}:
+        raise _route_error(name, f"{field} must be a private high port")
+    if port in occupied_ports:
+        raise _route_error(name, f"{field} conflicts with port {port}")
+    return port
+
+
+def _dynamic_backend(
+    name: str,
+    config: Mapping[str, Any],
+    route: object,
+    occupied_ports: set[int],
+) -> dict[str, Any]:
+    if (
+        not isinstance(route, Mapping)
+        or route.get("kind") != _DYNAMIC_ROUTE_KIND
+    ):
+        raise _route_error(name, f"kind must be {_DYNAMIC_ROUTE_KIND}")
+    domain = str(config.get("domain", "")).strip()
+    if not domain:
+        raise _route_error(name, "domain is required")
+    internal_port = _route_port(
+        name,
+        route.get("internal_port"),
+        "internal_port",
+        occupied_ports,
+    )
+    decoy_port = _route_port(
+        name,
+        route.get("decoy_http_port"),
+        "decoy_http_port",
+        occupied_ports | {internal_port},
+    )
+    root = str(route.get("decoy_root", ""))
+    root_parts = root.split("/")[1:]
+    if (
+        not root.startswith("/var/www/decoy-")
+        or "\\" in root
+        or any(part in {"", ".", ".."} for part in root_parts)
+    ):
+        raise _route_error(name, "decoy_root must be under /var/www/decoy-*")
+    theme = str(route.get("decoy_theme", ""))
+    if theme not in _DECOY_THEMES:
+        raise _route_error(name, "decoy_theme is not supported")
+    path_key = route.get("path_config")
+    if not isinstance(path_key, str) or not path_key:
+        raise _route_error(name, "path_config must name a config field")
+    proxy_path = str(config.get(path_key, "")).strip().rstrip("/")
+    path_parts = proxy_path.split("/")[1:]
+    if (
+        not proxy_path.startswith("/")
+        or proxy_path == ""
+        or any(character.isspace() for character in proxy_path)
+        or any(character in proxy_path for character in "?#*%\\")
+        or any(part in {"", ".", ".."} for part in path_parts)
+    ):
+        raise _route_error(name, f"{path_key} is not a valid HTTP path")
+    return {
+        "name": name,
+        "domain": domain,
+        "port": internal_port,
+        "cert_file": config.get("cert_file", ""),
+        "key_file": config.get("key_file", ""),
+        "network_mode": "",
+        "route_kind": _DYNAMIC_ROUTE_KIND,
+        "decoy_port": decoy_port,
+        "decoy_root": root,
+        "decoy_theme": theme,
+        "proxy_path": proxy_path,
+    }
 
 
 def has_source_preservation(config: object) -> bool:

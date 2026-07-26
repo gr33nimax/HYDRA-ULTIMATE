@@ -80,7 +80,11 @@ def audit_routes(
     stale = tuple(sorted(actual - expected_set))
     certificate_errors: list[str] = []
     for backend in backends:
-        if backend["name"] not in {"anytls", "trusttunnel", "hysteria2"}:
+        if (
+            backend["name"]
+            not in {"anytls", "trusttunnel", "hysteria2"}
+            and backend.get("route_kind") != "http_path_proxy"
+        ):
             continue
         for key in ("cert_file", "key_file"):
             certificate = str(backend.get(key) or "")

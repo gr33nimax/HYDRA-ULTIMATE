@@ -110,3 +110,35 @@ def test_hysteria2_has_its_own_status_decoy(tmp_path):
     assert "All systems operational" in index
     assert (site_dir / "css" / "style.css").is_file()
     assert (site_dir / "status.json").is_file()
+
+
+def test_vless_media_theme_is_distinct_and_content_rich(tmp_path):
+    site_dir = tmp_path / "vless"
+
+    decoy._create_site(site_dir, "media")
+
+    generated = {
+        path.relative_to(site_dir).as_posix()
+        for path in site_dir.rglob("*")
+        if path.is_file()
+    }
+    assert {
+        "index.html",
+        "technology.html",
+        "business.html",
+        "culture.html",
+        "about.html",
+        "css/style.css",
+        "js/site.js",
+        "robots.txt",
+        "sitemap.xml",
+        "site.webmanifest",
+    } <= generated
+
+    index = (site_dir / "index.html").read_text(encoding="utf-8")
+    styles = (site_dir / "css" / "style.css").read_text(encoding="utf-8")
+    assert "Meridian Daily" in index
+    assert "Latest stories" in index
+    assert "Most read" in index
+    assert "Apex Digital Agency" not in index
+    assert "@media" in styles

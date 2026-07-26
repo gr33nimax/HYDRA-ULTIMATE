@@ -66,6 +66,11 @@ def _protocol_suffix(link: str) -> str:
         return "Mieru"
     if scheme in ("hysteria2", "hy2"):
         return "Hysteria2"
+    if scheme == "vless":
+        query = urllib.parse.parse_qs(parsed.query)
+        if query.get("type", [""])[0] == "xhttp":
+            return "VLESS XHTTP"
+        return "VLESS"
     if scheme == "snell":
         return "Snell"
     if scheme == "trojan":

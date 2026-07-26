@@ -100,8 +100,11 @@ def _tls_app(backends: list[Backend]) -> dict[str, Any]:
         }
         for backend in backends
         if (
-            backend["name"]
-            in ("anytls", "trusttunnel", "hysteria2")
+            (
+                backend["name"]
+                in ("anytls", "trusttunnel", "hysteria2")
+                or backend.get("route_kind") == "http_path_proxy"
+            )
             and backend["cert_file"]
             and backend["key_file"]
         )
@@ -135,7 +138,15 @@ def _tls_route(
     port = backend["port"]
     match = [{"tls": {"sni": [domain]}}]
 
-    if name == "naive":
+    if backend.get("route_kind") == "http_path_proxy":
+        handlers = [
+            _tls_handler(backend),
+            proxy_factory(
+                f"127.0.0.1:{backend['decoy_port']}",
+                proxy_protocol=True,
+            ),
+        ]
+    elif name == "naive":
         handlers = [
             proxy_factory(f"127.0.0.1:{port}", proxy_protocol=True),
         ]

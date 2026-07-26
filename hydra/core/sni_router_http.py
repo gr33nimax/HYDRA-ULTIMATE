@@ -155,6 +155,69 @@ def _trusttunnel_server(
     }
 
 
+def _path_proxy_decoy_server(
+    backend: Backend,
+    *,
+    listener_wrappers: Callable[[], list[dict[str, Any]]],
+) -> dict[str, Any]:
+    path = str(backend["proxy_path"]).rstrip("/")
+    decoy_handler = {
+        "handler": "file_server",
+        "root": str(backend["decoy_root"]),
+    }
+    proxy = {
+        "handler": "reverse_proxy",
+        "upstreams": [
+            {"dial": f"127.0.0.1:{int(backend['port'])}"},
+        ],
+        "flush_interval": -1,
+        "transport": {
+            "protocol": "http",
+            "versions": ["2"],
+            "response_header_timeout": "30s",
+            "tls": {"server_name": str(backend["domain"])},
+        },
+        "headers": {
+            "request": {
+                "set": {
+                    "Host": [str(backend["domain"])],
+                },
+            },
+        },
+        "handle_response": [
+            {
+                "match": {"status_code": [502, 503, 504]},
+                "routes": [
+                    {"handle": [decoy_handler.copy()]},
+                ],
+            },
+        ],
+    }
+    return {
+        "listen": [f"127.0.0.1:{int(backend['decoy_port'])}"],
+        "listener_wrappers": listener_wrappers(),
+        "automatic_https": {
+            "disable": True,
+            "disable_redirects": True,
+        },
+        "routes": [
+            {
+                "match": [{"path": [path, f"{path}/*"]}],
+                "handle": [proxy],
+            },
+            {"handle": [decoy_handler.copy()]},
+        ],
+        "errors": {
+            "routes": [{"handle": [decoy_handler.copy()]}],
+        },
+        "logs": {
+            "logger_names": {
+                str(backend["domain"]): "decoy",
+            },
+        },
+    }
+
+
 def http_servers(
     backends: list[Backend],
     settings: RenderSettings,
@@ -186,6 +249,13 @@ def http_servers(
             listen_port=settings.decoy_ports["hysteria2"],
             root="/var/www/decoy-hysteria2",
             logger="decoy",
+            listener_wrappers=listener_wrappers,
+        )
+    for backend in backends:
+        if backend.get("route_kind") != "http_path_proxy":
+            continue
+        servers[f"{backend['name']}_decoy"] = _path_proxy_decoy_server(
+            backend,
             listener_wrappers=listener_wrappers,
         )
     return servers
