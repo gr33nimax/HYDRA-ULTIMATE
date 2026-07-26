@@ -59,6 +59,64 @@ def test_application_service_exposes_last_apply_error_without_leaking_exceptions
     assert app.apply_error() == "configuration failed"
 
 
+def test_application_check_combines_validation_host_and_change_preview():
+    system = SimpleNamespace(
+        validate=lambda state: {"valid": True, "schema_version": state.version},
+        doctor=lambda state: {"ok": True, "required_failures": []},
+    )
+    planner = SimpleNamespace(
+        build=lambda state: {
+            "valid": True,
+            "plugins": ["naive"],
+            "reconciliation": [],
+            "tls_mux": {"ok": True},
+        },
+    )
+    app = ApplicationService(
+        users=SimpleNamespace(),
+        protocols=SimpleNamespace(),
+        apply_config=lambda state: True,
+        last_apply_error=lambda: "",
+        plugin_statuses=lambda state: {},
+        system=system,
+        planner=planner,
+    )
+
+    assert app.check(AppState()) == {
+        "ok": True,
+        "configuration": {"valid": True, "schema_version": 4},
+        "host": {"ok": True, "required_failures": []},
+        "changes": {
+            "valid": True,
+            "plugins": ["naive"],
+            "reconciliation": [],
+            "tls_mux": {"ok": True},
+        },
+    }
+
+
+def test_application_check_includes_tls_runtime_audit_in_result():
+    app = ApplicationService(
+        users=SimpleNamespace(),
+        protocols=SimpleNamespace(),
+        apply_config=lambda state: True,
+        last_apply_error=lambda: "",
+        plugin_statuses=lambda state: {},
+        system=SimpleNamespace(
+            validate=lambda state: {"valid": True},
+            doctor=lambda state: {"ok": True},
+        ),
+        planner=SimpleNamespace(
+            build=lambda state: {
+                "valid": True,
+                "tls_mux": {"ok": False, "required": True},
+            },
+        ),
+    )
+
+    assert app.check(AppState())["ok"] is False
+
+
 def test_application_service_status_uses_injected_plugin_reader():
     calls = []
     app = ApplicationService(

@@ -75,7 +75,7 @@ class ServiceResult:
 
 def normalize_error(exc: BaseException, *, fallback: ErrorCode = ErrorCode.INTERNAL) -> ApplicationError:
     """Map domain exceptions to a stable error code without exposing internals."""
-    if isinstance(exc, HostOperationError):
+    if isinstance(exc, (HostOperationError, PermissionError)):
         code = ErrorCode.HOST_OPERATION
     elif isinstance(exc, PluginError):
         code = ErrorCode.PLUGIN

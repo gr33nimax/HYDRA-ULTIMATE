@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Transactional updater for an existing HYDRA installation.
 #
-# Download the complete script before executing it. See docs/DEV_UPGRADE.md.
+# Download the complete script before executing it. See docs/UPGRADE.md.
 
 set -Eeuo pipefail
 umask 022
@@ -400,12 +400,10 @@ run_stage_python \
     > "$ROLLBACK_DIR/target-version.txt"
 
 info "Running read-only target preflight against the live state"
-run_stage_python -m hydra.cli upgrade check \
+run_stage_python -m hydra.cli --json upgrade check \
     > "$ROLLBACK_DIR/preflight-upgrade.json"
-run_stage_python -m hydra.cli validate \
-    > "$ROLLBACK_DIR/preflight-validate.json"
-run_stage_python -m hydra.cli plan \
-    > "$ROLLBACK_DIR/preflight-plan.json"
+run_stage_python -m hydra.cli --json check \
+    > "$ROLLBACK_DIR/preflight-check.json"
 run_stage_python - "$ROLLBACK_DIR" <<'PY'
 import json
 import pathlib
@@ -413,11 +411,11 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 upgrade = json.loads((root / "preflight-upgrade.json").read_text())
-plan = json.loads((root / "preflight-plan.json").read_text())
+check = json.loads((root / "preflight-check.json").read_text())
 if not upgrade.get("ready"):
     raise SystemExit(f"upgrade preflight failed: {upgrade.get('failures', [])}")
-if not plan.get("valid"):
-    raise SystemExit(f"configuration preflight failed: {plan.get('conflicts', [])}")
+if not check.get("ok"):
+    raise SystemExit("target preflight failed")
 PY
 
 discover_units
@@ -446,21 +444,22 @@ WRAPPER_SNAPSHOT_READY=1
 
 info "Creating and verifying an application-level backup"
 run_stage_python \
-    -m hydra.cli backup \
+    -m hydra.cli --json backup create \
     --output "$ROLLBACK_DIR/hydra-backup.tar.gz" \
     > "$ROLLBACK_DIR/backup.json"
 run_stage_python \
-    -m hydra.cli restore "$ROLLBACK_DIR/hydra-backup.tar.gz" --dry-run \
+    -m hydra.cli --json backup restore \
+    "$ROLLBACK_DIR/hydra-backup.tar.gz" --dry-run \
     > "$ROLLBACK_DIR/backup-verification.json"
 
 info "Persisting the target state schema while writers are stopped"
 STATE_MUTATION_STARTED=1
 run_stage_python \
-    -m hydra.cli upgrade migrate-state \
+    -m hydra.cli --json upgrade migrate-state \
     > "$ROLLBACK_DIR/state-migration.json"
 run_stage_python \
-    -m hydra.cli validate \
-    > "$ROLLBACK_DIR/state-validation.json"
+    -m hydra.cli --json check \
+    > "$ROLLBACK_DIR/state-check.json"
 
 mv "$STAGE_DIR" "$RELEASE_DIR"
 STAGE_DIR=""
@@ -494,20 +493,18 @@ start_previous_units
 
 info "Running post-cutover validation"
 run_install_python \
-    -m hydra.cli validate > "$ROLLBACK_DIR/post-validate.json"
+    -m hydra.cli --json check > "$ROLLBACK_DIR/post-check.json"
 run_install_python \
-    -m hydra.cli plan > "$ROLLBACK_DIR/post-plan.json"
+    -m hydra.cli --json status > "$ROLLBACK_DIR/post-status.json"
 run_install_python \
-    -m hydra.cli status > "$ROLLBACK_DIR/post-status.json"
-run_install_python \
-    - "$ROLLBACK_DIR/post-plan.json" <<'PY'
+    - "$ROLLBACK_DIR/post-check.json" <<'PY'
 import json
 import pathlib
 import sys
 
-plan = json.loads(pathlib.Path(sys.argv[1]).read_text())
-if not plan.get("valid"):
-    raise SystemExit(f"post-cutover plan failed: {plan.get('conflicts', [])}")
+check = json.loads(pathlib.Path(sys.argv[1]).read_text())
+if not check.get("ok"):
+    raise SystemExit("post-cutover check failed")
 PY
 wait_for_previous_units
 

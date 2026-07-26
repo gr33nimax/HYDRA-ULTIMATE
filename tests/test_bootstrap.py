@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 BOOTSTRAP = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
 README = (ROOT / "README.md").read_text(encoding="utf-8")
+INSTALL_GUIDE = (ROOT / "docs" / "UPGRADE.md").read_text(encoding="utf-8")
 
 
 def test_bootstrap_download_and_install_default_to_main():
@@ -38,6 +39,10 @@ def test_readme_one_command_installs_main():
         "curl -fsSL https://raw.githubusercontent.com/gr33nimax/"
         "HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash"
     ) in README
-    assert "git clone -b main" in README
-    assert ".venv/bin/python -m pip install -r requirements.lock" in README
     assert "sudo python3 main.py" not in README
+
+
+def test_install_guide_runs_sources_through_the_isolated_environment():
+    assert "git clone -b main" in INSTALL_GUIDE
+    assert ".venv/bin/python -m pip install -r requirements.lock" in INSTALL_GUIDE
+    assert "sudo python3 main.py" not in INSTALL_GUIDE

@@ -68,7 +68,7 @@ class ProtocolService:
     def require(self, name: str) -> BasePlugin:
         plugin = self.get(name)
         if plugin is None:
-            raise LookupError(f"unknown plugin: {name}")
+            raise ValueError(f"unknown plugin: {name}")
         return plugin
 
     def display_name(self, name: str) -> str:
@@ -277,6 +277,37 @@ class ProtocolService:
             if state is not None
             else self.catalog.status_all()
         )
+
+    def inventory(
+        self,
+        state: AppState,
+        *,
+        category: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return a JSON-safe plugin catalog projection for management adapters."""
+        selected: PluginCategory | None = None
+        if category is not None:
+            try:
+                selected = PluginCategory(category)
+            except ValueError as exc:
+                raise ValueError(f"unknown plugin category: {category}") from exc
+        statuses = self.statuses(state)
+        inventory: list[dict[str, Any]] = []
+        for plugin in self.list(selected):
+            meta = plugin.meta
+            inventory.append(
+                {
+                    "name": meta.name,
+                    "display_name": meta.display_name or meta.name,
+                    "description": meta.description,
+                    "category": meta.category.value,
+                    "version": meta.version,
+                    "contract_version": meta.contract_version,
+                    "capabilities": meta.capabilities.as_dict(),
+                    "status": statuses.get(meta.name, {}),
+                },
+            )
+        return inventory
 
     def install(self, state: AppState, name: str) -> bool:
         return self.operations.install_plugin(state, name)

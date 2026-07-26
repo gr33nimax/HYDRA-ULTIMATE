@@ -1,300 +1,312 @@
-# 🐉 Командная строка HYDRA
+# Headless CLI
 
-Командная строка HYDRA — это JSON-интерфейс управления без запуска
-интерактивного TUI. Она предназначена для VPS, заданий cron/systemd,
-проверочных сценариев и будущих API-адаптеров.
+CLI HYDRA строится вокруг одного рабочего цикла:
 
 ```bash
-sudo hydra <команда> [параметры]
-```
-
-Команды чтения не должны менять состояние системы. Команды, которые изменяют
-систему, требуют `root`. Результат печатается в stdout в формате JSON UTF-8.
-При ошибке команда возвращает ненулевой код завершения и поле `error_details`.
-
-## 🧭 Безопасный рабочий цикл
-
-Перед изменением конфигурации рекомендуется выполнять команды в таком порядке:
-
-```bash
-sudo hydra backup --output /root/hydra-before-change.tar.gz
-sudo hydra validate
-sudo hydra doctor
-sudo hydra plan
+hydra status
+hydra check
 sudo hydra apply
-sudo hydra doctor
 ```
 
-`plan` и `apply --dry-run` не применяют конфигурацию. Если предварительная
-проверка сообщает об ошибке `tls_mux`, проверьте домены и сертификаты, затем
-повторите `sudo hydra apply`: команда пересоберёт Caddy L4 из актуального state.
+- `status` отвечает на вопрос «что сейчас происходит?»;
+- `check` проверяет всё необходимое и показывает будущие изменения;
+- `apply` транзакционно приводит сервер к желаемому состоянию.
 
-## 📋 Диагностика
+Внутренние стадии вроде state validation, host doctor, configuration plan и
+service reconciliation не являются отдельными пользовательскими сценариями.
+Они входят в `check` и не засоряют основную справку.
+
+## Быстрый справочник
+
+| Команда | Root | Назначение |
+| :--- | :---: | :--- |
+| `status` | — | Желаемое и фактическое состояние |
+| `check` | — | Полный read-only preflight и будущие изменения |
+| `apply` | ✔ | Транзакционно применить конфигурацию |
+| `apply --dry-run` | — | Полный эквивалент `check` |
+| `backup create` | ✔ | Создать проверяемый архив |
+| `backup inspect` | — | Проверить архив без восстановления |
+| `backup restore` | ✔ | Восстановить архив |
+| `user ...` | зависит | Управлять пользователями |
+| `plugin ...` | зависит | Управлять плагинами |
+| `upgrade ...` | зависит | Проверить или мигрировать установку |
+| `uninstall` | ✔ | Удалить HYDRA |
+| `antidpi ...` | ✔ | Расширенная диагностика AntiDPI |
+
+Глобальные параметры:
+
+```bash
+hydra --version
+hydra --json status
+hydra status --json
+hydra --compact status
+hydra status --compact
+```
+
+В интерактивном терминале CLI показывает короткие сводки, таблицы и понятные
+ошибки. При перенаправлении stdout вывод автоматически переключается на JSON,
+чтобы pipe, cron и systemd не зависели от терминального оформления.
+
+- `--json` всегда включает формат для автоматизации;
+- `--compact` включает однострочный JSON;
+- обе опции можно ставить до или после команды;
+- стандартная переменная `NO_COLOR` отключает ANSI-цвета.
+
+## Основной цикл
 
 ### `status`
 
-Показывает снимок системы:
-
 ```bash
-sudo hydra status
+hydra status
 ```
 
-Основные поля:
+Возвращает снимок без изменений:
 
-- `version`, `users` — версия state и количество пользователей;
-- `network` — сохранённые и фактические сетевые флаги;
-- `plugins` — сведения об установке, включении, запуске и работоспособности;
-- `runtime` — фактическое состояние и рассинхронизация;
-- `tls_mux` — проверка SNI-маршрутов Caddy.
+- количество пользователей и версию state;
+- желаемые и фактические флаги сети;
+- состояние плагинов;
+- runtime drift;
+- аудит TLS/SNI-маршрутов.
 
-`tls_mux.ok: false` означает, что мультиплексор требует внимания. Поля
-`missing`, `stale`, `certificate_errors` и `errors` объясняют причину.
+`status` предназначен для наблюдения. Он не отвечает, безопасно ли сейчас
+применять конфигурацию — для этого есть `check`.
 
-### `validate`
-
-Проверяет только сохранённый state и его схему:
+### `check`
 
 ```bash
-sudo hydra validate
+hydra check
 ```
 
-Команда не проверяет запущенные службы и не пересобирает конфигурации.
+Это единственная команда предварительной проверки. Она выполняет:
 
-### `doctor`
+1. semantic validation сохранённого state;
+2. проверки Python, systemd, зависимостей, каталогов и TLS-маршрутов;
+3. сбор и валидацию plugin `ConfigFragment`;
+4. preflight конфликтов Sing-Box;
+5. расчёт будущих runtime-изменений и service drift.
 
-Проверяет готовность VPS, зависимости, state, службы и рассинхронизацию:
-
-```bash
-sudo hydra doctor
-```
-
-Основные поля:
-
-- `ok` — обязательные проверки пройдены;
-- `required_failures` — проверки, из-за которых системе нельзя доверять;
-- `warnings` — необязательные компоненты, которые недоступны;
-- `checks` — Python, systemd, инструменты, каталог state и `caddy_routes`;
-- `reconciliation.planned` — безопасные действия для исправления состояния служб.
-
-Для включённых TLS-маршрутов проверка `caddy_routes` обязательна. Она читает
-конфигурацию и проверяет службу, но ничего не перезапускает.
-
-### `plan`
-
-Строит план применения без изменения системы:
-
-```bash
-sudo hydra plan
-```
-
-В план входят конфликты Sing-Box, включённые плагины и их зависимости,
-количество входящих и исходящих соединений, правила маршрутизации, безопасные
-действия для служб и текущий аудит `tls_mux`.
-
-План не гарантирует успех будущего применения: состояние сервера может
-измениться между `plan` и `apply`. После применения повторите `doctor`.
-
-### `reconcile`
-
-Показывает рассинхронизацию служб без изменений:
-
-```bash
-sudo hydra reconcile
-```
-
-Параметр `--apply` выполняет только безопасные действия включения и отключения:
-
-```bash
-sudo hydra reconcile --apply
-```
-
-Команда не устанавливает отсутствующие пакеты, не исправляет неизвестное
-состояние и не пересобирает Caddy. Для рассинхронизации конфигурации используйте
-`hydra apply` после проверки `hydra plan`.
-
-### `upgrade check`
-
-Проверяет готовность к обновлению:
-
-```bash
-sudo hydra upgrade check
-```
-
-Проверяются схема state, версия Python, локальные изменения в Git и текущая
-версия HYDRA. Поле `backup_required` напоминает о необходимости резервной копии.
-
-Для обновления уже работающей VPS не выполняйте вручную `git pull` и не
-запускайте повторно `bootstrap.sh`. Используйте транзакционный `upgrade.sh` по
-инструкции [DEV_UPGRADE.md](DEV_UPGRADE.md).
-
-### `upgrade migrate-state`
-
-Атомарно записывает текущую схему state после выполнения всех последовательных
-миграций:
-
-```bash
-sudo hydra upgrade migrate-state
-```
-
-Команда требует `root` и предназначена для `upgrade.sh` или аварийной процедуры
-с уже созданным и проверенным backup. На актуальной схеме она идемпотентна и
-возвращает `changed: false`, не переписывая файл. Не запускайте её параллельно
-с TUI, subscription server, traffic daemon или sync agent.
-
-## 🔧 Применение и восстановление
-
-### `apply`
-
-Применяет текущий state к VPS:
-
-```bash
-sudo hydra apply
-```
-
-Команда создаёт конфигурацию Sing-Box, применяет nftables/TPROXY, вызывает
-включённые плагины, перезагружает Sing-Box, при необходимости пересобирает
-Caddy L4, управляет службой учёта трафика и выполняет проверки работоспособности.
-
-Операция транзакционная: при критическом сбое HYDRA пытается восстановить state,
-конфигурации, межсетевой экран и плагины. Повторный запуск после исправления
-причины является штатным сценарием.
-
-Для просмотра плана без изменений:
-
-```bash
-sudo hydra apply --dry-run
-```
-
-### `backup`
-
-Создаёт архив state и известных конфигураций служб:
-
-```bash
-sudo hydra backup
-sudo hydra backup --output /root/hydra-before-change.tar.gz
-```
-
-Если `--output` указывает существующий каталог, архив создаётся внутри него.
-Существующий файл не перезаписывается: команда завершится ошибкой. Архив
-содержит манифест и SHA-256 файлов; на POSIX-системах права ограничиваются
-значением `0600`.
-
-### `restore`
-
-Сначала проверяйте архив без изменений:
-
-```bash
-sudo hydra restore /root/hydra-before-change.tar.gz --dry-run
-```
-
-Фактическое восстановление требует явного `--yes`:
-
-```bash
-sudo hydra restore /root/hydra-before-change.tar.gz --yes
-sudo hydra validate
-sudo hydra apply
-```
-
-Перед восстановлением HYDRA автоматически создаёт страховочную копию. Выход за
-разрешённые пути, симлинки и файлы вне разрешённых каталогов отклоняются.
-
-## 👤 Пользователи
-
-### Просмотр
-
-```bash
-sudo hydra user list
-```
-
-Секретные `credentials` в список не попадают; вместо них выводится перечень
-доступных протоколов.
-
-### Добавление
-
-```bash
-sudo hydra user add test
-sudo hydra user add test@example.com --traffic-limit-gb 100 --expiry-date 2026-12-31
-```
-
-Идентификатором может быть обычное имя или email. UUID создаётся автоматически
-и сохраняется для стабильности конфигураций. При необходимости его можно указать
-явно:
-
-```bash
-sudo hydra user add test --uuid 00000000-0000-0000-0000-000000000001
-```
-
-Добавление пользователя — транзакция: обработчики включённых транспортов, state
-и конфигурация откатываются, если применение не удалось.
-
-### Блокировка и удаление
-
-```bash
-sudo hydra user block test
-sudo hydra user unblock test
-sudo hydra user remove test
-```
-
-Операции немедленно обновляют конфигурации включённых транспортов и откатываются
-при ошибке применения.
-
-## 🚦 Коды завершения и ошибки
-
-- `0` — команда выполнена успешно;
-- `1` — ошибка проверки, операции на хосте, конфигурации или жизненного цикла
-  плагина;
-- другой ненулевой код может означать ошибку разбора параметров.
-
-Пример структурированной ошибки:
+В терминале результат разбит на три смысловых раздела: configuration, host
+checks и pending changes. Машиночитаемый эквивалент можно получить командой
+`hydra check --json`:
 
 ```json
 {
-  "ok": false,
-  "error": "configuration apply failed",
-  "error_details": {
-    "code": "operation_failed",
-    "message": "configuration apply failed",
-    "retryable": true
+  "ok": true,
+  "configuration": {
+    "valid": true,
+    "schema_version": 4,
+    "revision": 12
+  },
+  "host": {
+    "ok": true,
+    "required_failures": [],
+    "warnings": []
+  },
+  "changes": {
+    "valid": true,
+    "conflicts": [],
+    "plugins": ["naive"],
+    "reconciliation": [],
+    "tls_mux": {
+      "ok": true,
+      "required": true
+    }
   }
 }
 ```
 
-В автоматизации используйте `error_details`, а поле `error` оставляйте запасным
-вариантом для совместимости со старыми интеграциями.
+Код завершения равен `1`, если обязательная проверка не прошла.
 
-## 🧯 Типовые ситуации
-
-### Caddy показывает старый домен
+### `apply`
 
 ```bash
-sudo hydra doctor
-sudo hydra plan
 sudo hydra apply
-sudo hydra doctor
+hydra apply --dry-run
 ```
 
-Ищите `tls_mux.missing` и `tls_mux.stale`. Если ошибка остаётся, проверьте
-`systemctl status caddy-l4`, сертификат и DNS домена.
+Без параметров команда применяет текущее desired state: конфигурацию Sing-Box,
+nftables/TPROXY, Caddy L4, plugin runtime, traffic daemon и health checks.
+Операция использует snapshots и rollback.
 
-### Служба включена, но status показывает рассинхронизацию
+`--dry-run` не имеет отдельной логики и возвращает тот же результат, что
+`hydra check`.
 
-```bash
-sudo hydra reconcile
-sudo hydra reconcile --apply
-sudo hydra doctor
-```
-
-Для состояний `missing` и `unknown` автоматическая установка не выполняется:
-сначала исправьте зависимость или жизненный цикл вручную.
-
-### Применение завершилось ошибкой
+Рекомендуемый эксплуатационный цикл:
 
 ```bash
-sudo hydra doctor
-sudo hydra status
-sudo journalctl -u sing-box -u caddy-l4 --no-pager -n 100
+sudo hydra backup create --output /root/hydra-before-change.tar.gz
+hydra check
 sudo hydra apply
+hydra status
 ```
 
-Если конфигурация повреждена, используйте `restore --dry-run`, затем
-`restore --yes`, `validate` и повторное `apply`.
+## Backup
+
+```bash
+sudo hydra backup create
+sudo hydra backup create --output /root/hydra.tar.gz
+hydra backup inspect /root/hydra.tar.gz
+sudo hydra backup restore /root/hydra.tar.gz --dry-run
+sudo hydra backup restore /root/hydra.tar.gz --yes
+```
+
+- `create` использует trusted policy ядра и plugin backup declarations;
+- `inspect` проверяет manifest, SHA-256, размеры, state и допустимые пути;
+- `restore --dry-run` показывает изменения;
+- фактическое восстановление требует `--yes` и создаёт safety backup.
+
+Симлинки, path traversal, дубликаты и файлы вне policy отклоняются.
+
+## Пользователи
+
+Команды чтения:
+
+```bash
+hydra user list
+hydra user show alice@example.com
+```
+
+Credentials и отпечатки устройств не выводятся.
+
+Изменения:
+
+```bash
+sudo hydra user add alice@example.com
+sudo hydra user add alice@example.com \
+  --traffic-limit-gb 100 \
+  --expiry-date 2026-12-31 \
+  --device-limit 3
+sudo hydra user rename alice@example.com alice-new@example.com
+sudo hydra user set-device-limit alice-new@example.com 5 --reset
+sudo hydra user block alice-new@example.com
+sudo hydra user unblock alice-new@example.com
+sudo hydra user remove alice-new@example.com
+sudo hydra user ensure-default
+```
+
+User lifecycle проходит через общий application service и откатывается вместе
+с plugin hooks, state и runtime apply.
+
+`users` является алиасом `user`.
+
+## Плагины
+
+Просмотр metadata и runtime:
+
+```bash
+hydra plugin list
+hydra plugin list --category transport
+hydra plugin show naive
+hydra plugin status naive
+hydra plugin health naive
+```
+
+Lifecycle:
+
+```bash
+sudo hydra plugin install naive
+sudo hydra plugin enable naive
+sudo hydra plugin disable naive
+sudo hydra plugin reinstall naive
+sudo hydra plugin uninstall naive
+```
+
+Metadata-declared extension API:
+
+```bash
+sudo hydra plugin command hysteria2 set_port --param port=8443
+hydra plugin query warp external_sources --with-state
+sudo hydra plugin action dnscrypt apply_server_names \
+  --param 'names=["cloudflare","quad9-dnscrypt-ip4-filter-pri"]'
+```
+
+`--param NAME=JSON` можно повторять. Операция должна быть объявлена в
+`PluginMeta.commands`, `queries` или `actions`; произвольные методы вызвать
+нельзя. Command/action требуют root, query является read-only.
+
+`plugins` является алиасом `plugin`.
+
+## Upgrade и удаление
+
+```bash
+hydra upgrade check
+sudo hydra upgrade migrate-state
+
+sudo hydra uninstall --dry-run
+sudo hydra uninstall --yes
+sudo hydra uninstall --yes --keep-data
+```
+
+`upgrade migrate-state` атомарно записывает pending state migrations и
+идемпотентен на актуальной схеме.
+
+`uninstall` требует явного `--yes`; `--keep-data` сохраняет state и журналы.
+Перед удалением создайте backup и вынесите его за пределы VPS.
+
+## AntiDPI
+
+```bash
+sudo hydra antidpi sync
+sudo hydra antidpi selftest --full --wait 3
+sudo hydra antidpi capture --seconds 180
+```
+
+Это расширенные операции диагностики и обслуживания. Детали scoring,
+redaction, firewall и внешнего capture описаны в [ANTIDPI.md](ANTIDPI.md).
+
+## Совместимость
+
+Старые формы принимаются, но не показываются в основной справке:
+
+| Старый синтаксис | Выполняется как |
+| :--- | :--- |
+| `validate` | `check` |
+| `doctor` | `check` |
+| `plan` | `check` |
+| `reconcile` | `check` |
+| `apply --dry-run` | `check` |
+| `reconcile --apply` | `apply` |
+| `config validate` / `config plan` | `check` |
+| `runtime doctor` / `runtime reconcile` | `check` |
+| `config apply` | `apply` |
+| `runtime status` | `status` |
+| `backup` | `backup create` |
+| `restore ...` | `backup restore ...` |
+| `system uninstall` | `uninstall` |
+
+Таким образом, скрипты предыдущих релизов продолжают запускаться, но новые
+скрипты должны использовать только `status`, `check` и `apply`.
+
+## Форматы вывода и коды завершения
+
+- `0` — команда выполнена успешно;
+- `1` — preflight отрицательный либо операция завершилась ошибкой;
+- `2` — синтаксическая ошибка.
+
+В терминале ошибка показывается кратко:
+
+```text
+Command failed
+root required
+Code: host_operation
+```
+
+С `--json` и при перенаправлении stdout ошибки параметров возвращаются в
+стабильном JSON-контракте, а не как произвольный текст argparse:
+
+```json
+{
+  "ok": false,
+  "error": "the following arguments are required: name",
+  "error_details": {
+    "code": "invalid_input",
+    "message": "the following arguments are required: name",
+    "retryable": false,
+    "usage": "hydra plugin status NAME"
+  }
+}
+```
+
+Для автоматизации используйте `error_details.code` и
+`error_details.retryable`. Секреты, credentials и приватные ключи в публичный
+вывод не включаются.

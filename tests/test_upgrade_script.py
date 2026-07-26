@@ -4,7 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "upgrade.sh"
-UPGRADE_DOCS = (ROOT / "README.md", ROOT / "docs" / "DEV_UPGRADE.md")
+UPGRADE_DOCS = (ROOT / "README.md", ROOT / "docs" / "UPGRADE.md")
 
 
 def _source() -> str:
@@ -21,8 +21,8 @@ def test_existing_install_updater_is_transactional_and_dev_by_default():
     assert 'python3 -m venv "$STAGE_DIR/.venv"' in source
     assert 'PYTHONPATH="$STAGE_DIR"' in source
     assert 'PYTHONPATH="$INSTALL_DIR"' in source
-    assert "-m hydra.cli upgrade check" in source
-    assert "-m hydra.cli upgrade migrate-state" in source
+    assert "-m hydra.cli --json upgrade check" in source
+    assert "-m hydra.cli --json upgrade migrate-state" in source
     assert "hydra-backup.tar.gz" in source
     assert "wait_for_previous_units" in source
 
@@ -51,13 +51,13 @@ def test_target_commands_do_not_depend_on_the_updater_working_directory():
             r"(?m)^\s*run_stage_python\s+(?:\\\s*)?-m hydra\.cli\b",
             source,
         ),
-    ) == 7
+    ) == 6
     assert len(
         re.findall(
             r"(?m)^\s*run_install_python\s+(?:\\\s*)?-m hydra\.cli\b",
             source,
         ),
-    ) == 3
+    ) == 2
 
 
 def test_upgrade_orders_preflight_backup_migration_and_cutover_safely():

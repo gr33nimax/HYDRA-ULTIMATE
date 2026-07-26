@@ -42,5 +42,11 @@ public_key*
 
 # Test artifacts
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
+
+# Local scratch and tooling output — никогда не коммитить
+scratch/
+graphify-out/
+AGENTS.md

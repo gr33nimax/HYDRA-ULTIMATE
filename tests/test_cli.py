@@ -40,13 +40,15 @@ def test_user_list_does_not_require_root(capsys):
 
 def test_ensure_default_user_only_creates_on_empty_state(capsys):
     state = AppState()
+    app = MagicMock()
+    app.add_user.side_effect = lambda current, user: current.users.append(user)
     with patch.object(cli, "load_state", return_value=state), \
-         patch.object(cli, "save_state") as save, \
+         patch.object(cli, "production_application", return_value=app), \
          patch.object(cli, "_require_root"):
         assert cli.main(["user", "ensure-default"]) == 0
     assert len(state.users) == 1
     assert state.users[0].email == "default"
-    save.assert_called_once_with(state)
+    app.add_user.assert_called_once_with(state, state.users[0])
     assert '"created": true' in capsys.readouterr().out
 
 

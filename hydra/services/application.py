@@ -43,6 +43,10 @@ from hydra.services.system_monitoring import (
     SystemMonitoring,
     UnavailableSystemMonitoring,
 )
+from hydra.services.system import (
+    SystemOperations,
+    UnavailableSystemOperations,
+)
 from hydra.services.traffic import (
     TrafficOperations,
     UnavailableTrafficOperations,
@@ -75,6 +79,9 @@ class ApplicationService:
     )
     monitoring: SystemMonitoring = field(
         default_factory=UnavailableSystemMonitoring,
+    )
+    system: SystemOperations = field(
+        default_factory=UnavailableSystemOperations,
     )
     plugin_commands: PluginCommands = field(
         default_factory=UnavailablePluginCommands,
@@ -164,6 +171,29 @@ class ApplicationService:
 
     def plan(self, state: AppState) -> dict[str, Any]:
         return self.planner.build(state)
+
+    def check(self, state: AppState) -> dict[str, Any]:
+        """Run the complete read-only preflight exposed to operators."""
+        configuration = self.system.validate(state)
+        host = self.system.doctor(state)
+        changes = self.planner.build(state)
+        tls_mux = changes.get("tls_mux", {})
+        tls_mux_ok = (
+            bool(tls_mux.get("ok", tls_mux.get("valid", True)))
+            if isinstance(tls_mux, dict)
+            else True
+        )
+        return {
+            "ok": bool(
+                configuration.get("valid")
+                and host.get("ok")
+                and changes.get("valid")
+                and tls_mux_ok
+            ),
+            "configuration": configuration,
+            "host": host,
+            "changes": changes,
+        }
 
     def uninstall_plan(
         self,

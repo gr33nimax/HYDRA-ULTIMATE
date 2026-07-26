@@ -166,7 +166,7 @@ def test_core_uninstall_has_no_upward_or_concrete_plugin_dependencies():
 
 def test_cli_uninstall_routes_through_application_boundary():
     root = Path(__file__).parents[1]
-    source = (root / "hydra" / "cli.py").read_text(encoding="utf-8")
+    source = (root / "hydra" / "cli_dispatch.py").read_text(encoding="utf-8")
 
-    assert "payload = app.uninstall(" in source
+    assert "app.uninstall(" in source
     assert "from hydra.core.uninstall import" not in source

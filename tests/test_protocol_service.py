@@ -39,6 +39,53 @@ def test_get_and_statuses_delegate_to_catalog():
     assert service.statuses()["transport"]["running"] is True
 
 
+def test_inventory_is_json_safe_and_filters_by_public_category():
+    service, _, catalog = _fixture()
+    state = AppState()
+    catalog.status_all.return_value = {
+        "transport": {
+            "installed": True,
+            "enabled": False,
+            "running": False,
+        },
+    }
+
+    inventory = service.inventory(state, category="transport")
+
+    assert inventory == [
+        {
+            "name": "transport",
+            "display_name": "transport",
+            "description": "transport",
+            "category": "transport",
+            "version": "1.0.0",
+            "contract_version": 1,
+            "capabilities": {
+                "central_apply": True,
+                "required_commands": (),
+                "required_services": (),
+                "conflicts_with": (),
+                "commands": (),
+                "queries": (),
+                "actions": (),
+                "tls_domain_source": "",
+                "config_defaults": (),
+                "subscription_profile_query": "",
+                "subscription_enabled": True,
+                "connection_source": "plugin",
+                "maintenance_tasks": (),
+                "backup_resources": (),
+            },
+            "status": {
+                "installed": True,
+                "enabled": False,
+                "running": False,
+            },
+        },
+    ]
+    catalog.status_all.assert_called_once_with(state)
+
+
 def test_status_queries_receive_state_from_the_injected_reader():
     state = AppState()
     plugin = _plugin("transport", PluginCategory.TRANSPORT)

@@ -6,10 +6,12 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from hydra.core import nft, singbox
+from hydra.core.doctor import run_host_preflight
 from hydra.core.host import HOST
 from hydra.core.sni_router import audit_routes
-from hydra.core.state import load_state, save_state
-from hydra.core.state_models import get_protocol
+from hydra.core.state import load_state, migrate_persisted_state, save_state
+from hydra.core.state_models import get_protocol, validate_state
+from hydra.core.upgrade import check_upgrade
 from hydra.plugins.container import PluginContainer
 from hydra.plugins.defaults import PluginFactory, default_plugins
 from hydra.services.admin_infrastructure import AdminInfrastructure
@@ -30,6 +32,7 @@ from hydra.services.security_notifications import notify_security_event
 from hydra.services.sync_agent import run_sync
 from hydra.services.sync_ports import default_sync_operations
 from hydra.services.system_monitoring_infrastructure import HOST_MONITORING
+from hydra.services.system import SystemService
 from hydra.services.traffic import TrafficService
 from hydra.services.uninstall import CleanupStep, UninstallService
 from hydra.services.users import UserService
@@ -120,6 +123,12 @@ def production_application(
         ),
         diagnostics=HOST_DIAGNOSTICS,
         monitoring=HOST_MONITORING,
+        system=SystemService(
+            validate_state=validate_state,
+            doctor_check=run_host_preflight,
+            upgrade_readiness=check_upgrade,
+            migrate_persisted_state=migrate_persisted_state,
+        ),
         plugin_commands=PluginCommandService(
             get_plugin=plugins.get,
             apply_config=orchestration.apply_config,

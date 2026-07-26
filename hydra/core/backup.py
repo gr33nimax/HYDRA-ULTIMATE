@@ -386,7 +386,9 @@ def restore_backup(
         "archive": str(archive_path),
         "restored": len(written),
         "safety_backup": safety["archive"],
-        "next_step": "sudo hydra validate && sudo hydra apply",
+        "next_step": (
+            "hydra check && sudo hydra apply"
+        ),
     }
 
 

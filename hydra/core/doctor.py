@@ -28,18 +28,29 @@ def _check(name: str, ok: bool, detail: str, *, required: bool = True) -> dict:
     return {"name": name, "ok": bool(ok), "required": required, "detail": detail}
 
 
-def run_doctor(
-    state: AppState,
-    protocols: DoctorProtocolOperations | None = None,
-) -> dict:
-    """Return JSON-safe diagnostics without changing host state."""
-    checks: list[dict] = []
-    try:
-        validate_state(state)
-        checks.append(_check("state", True, f"schema {state.version}"))
-    except Exception as exc:
-        checks.append(_check("state", False, str(exc)))
+def _summary(checks: list[dict]) -> dict:
+    required_failures = [
+        item["name"]
+        for item in checks
+        if item["required"] and not item["ok"]
+    ]
+    warnings = [
+        item["name"]
+        for item in checks
+        if not item["required"] and not item["ok"]
+    ]
+    return {
+        "ok": not required_failures,
+        "required_failures": required_failures,
+        "warnings": warnings,
+        "checks": checks,
+    }
 
+
+def run_host_preflight(state: AppState) -> dict:
+    """Check host prerequisites not covered by configuration planning."""
+    del state
+    checks: list[dict] = []
     checks.append(_check(
         "python",
         sys.version_info >= (3, 10),
@@ -52,15 +63,41 @@ def run_doctor(
         ("iptables", False),
     ):
         resolved = HOST.which(command)
-        checks.append(_check(command, bool(resolved), resolved or "not found", required=required))
+        checks.append(
+            _check(
+                command,
+                bool(resolved),
+                resolved or "not found",
+                required=required,
+            ),
+        )
 
     state_dir = Path(STATE_DIR)
-    writable = state_dir.exists() and os.access(state_dir, os.R_OK | os.W_OK)
+    writable = state_dir.exists() and os.access(
+        state_dir,
+        os.R_OK | os.W_OK,
+    )
     checks.append(_check(
         "state_directory",
         writable,
         f"{state_dir} ({'read/write' if writable else 'unavailable'})",
     ))
+    return _summary(checks)
+
+
+def run_doctor(
+    state: AppState,
+    protocols: DoctorProtocolOperations | None = None,
+) -> dict:
+    """Compatibility report combining the formerly separate read models."""
+    checks: list[dict] = []
+    try:
+        validate_state(state)
+        checks.append(_check("state", True, f"schema {state.version}"))
+    except Exception as exc:
+        checks.append(_check("state", False, str(exc)))
+
+    checks.extend(run_host_preflight(state)["checks"])
     try:
         from hydra.core.sni_router import audit_routes
 
@@ -73,15 +110,11 @@ def run_doctor(
         checks.append(_check("caddy_routes", mux.ok, detail, required=mux.required))
     except Exception as exc:
         checks.append(_check("caddy_routes", False, str(exc), required=True))
-    required_failures = [item["name"] for item in checks if item["required"] and not item["ok"]]
-    warnings = [item["name"] for item in checks if not item["required"] and not item["ok"]]
+    summary = _summary(checks)
     reconciliation: dict = {"planned": [], "drift": {}}
     if protocols is None:
         return {
-            "ok": not required_failures,
-            "required_failures": required_failures,
-            "warnings": warnings,
-            "checks": checks,
+            **summary,
             "reconciliation": reconciliation,
         }
     try:
@@ -100,9 +133,6 @@ def run_doctor(
         # Diagnostics must remain useful even if an optional plugin is broken.
         reconciliation = {"planned": [], "drift": {}, "error": str(exc) or exc.__class__.__name__}
     return {
-        "ok": not required_failures,
-        "required_failures": required_failures,
-        "warnings": warnings,
-        "checks": checks,
+        **summary,
         "reconciliation": reconciliation,
     }
