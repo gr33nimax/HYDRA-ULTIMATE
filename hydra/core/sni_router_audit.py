@@ -26,6 +26,26 @@ def _collect_sni(node: object, actual: set[str]) -> None:
             _collect_sni(value, actual)
 
 
+def _loaded_certificate_pairs(config: object) -> set[tuple[str, str]]:
+    if not isinstance(config, dict):
+        return set()
+    files = (
+        config.get("apps", {})
+        .get("tls", {})
+        .get("certificates", {})
+        .get("load_files", [])
+    )
+    if not isinstance(files, list):
+        return set()
+    return {
+        (str(item.get("certificate") or ""), str(item.get("key") or ""))
+        for item in files
+        if isinstance(item, dict)
+        and item.get("certificate")
+        and item.get("key")
+    }
+
+
 def audit_routes(
     state: AppState,
     *,
@@ -59,6 +79,7 @@ def audit_routes(
 
     errors: list[str] = []
     actual: set[str] = set()
+    loaded_certificates: set[tuple[str, str]] = set()
     config_present = config_path.is_file()
     if config_present:
         try:
@@ -70,6 +91,7 @@ def audit_routes(
                 .get("tls_mux", {})
             )
             _collect_sni(tls_mux, actual)
+            loaded_certificates = _loaded_certificate_pairs(config)
         except (OSError, ValueError, TypeError) as exc:
             errors.append(f"invalid Caddy config: {exc}")
     else:
@@ -86,16 +108,27 @@ def audit_routes(
             and backend.get("route_kind") != "http_path_proxy"
         ):
             continue
+        pair_complete = True
         for key in ("cert_file", "key_file"):
             certificate = str(backend.get(key) or "")
             if not certificate:
+                pair_complete = False
                 certificate_errors.append(
                     f"{backend['domain']}: {key} is not configured"
                 )
             elif not Path(certificate).is_file():
+                pair_complete = False
                 certificate_errors.append(
                     f"{backend['domain']}: {key} missing ({certificate})"
                 )
+        pair = (
+            str(backend.get("cert_file") or ""),
+            str(backend.get("key_file") or ""),
+        )
+        if pair_complete and pair not in loaded_certificates:
+            certificate_errors.append(
+                f"{backend['domain']}: certificate pair is not loaded by Caddy"
+            )
 
     try:
         service_active: bool | None = is_active()

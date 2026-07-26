@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 
@@ -177,3 +178,98 @@ def test_enable_rejects_missing_tls_without_firewall_mutation():
             plugin.on_enable(state)
 
     open_tcp.assert_not_called()
+
+
+def test_health_rejects_missing_caddy_route_metadata():
+    plugin = VlessXhttpPlugin()
+    state = _state(User("active@example.com", "uuid-active"))
+    state.protocols["vless"].config.pop(ROUTE_CONFIG_KEY)
+
+    with patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.singbox.has_configured_inbound", return_value=True), \
+         patch("hydra.core.sni_router.is_active", return_value=True), \
+         patch("hydra.core.sni_router.audit_routes") as audit, \
+         patch("hydra.core.sni_router.probe_tls_route") as probe:
+        result = plugin.healthcheck_for_state(state)
+
+    assert result.healthy is False
+    assert result.detail == "VLESS XHTTP Caddy route metadata is missing"
+    audit.assert_not_called()
+    probe.assert_not_called()
+
+
+def test_health_rejects_route_missing_from_active_caddy_config():
+    plugin = VlessXhttpPlugin()
+    state = _state(User("active@example.com", "uuid-active"))
+    report = SimpleNamespace(
+        ok=False,
+        missing=("xhttp.example.com",),
+        certificate_errors=(),
+        errors=(),
+        actual=(),
+    )
+
+    with patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.singbox.has_configured_inbound", return_value=True), \
+         patch("hydra.core.sni_router.is_active", return_value=True), \
+         patch("hydra.core.sni_router.audit_routes", return_value=report), \
+         patch("hydra.core.sni_router.probe_tls_route") as probe:
+        result = plugin.healthcheck_for_state(state)
+
+    assert result.healthy is False
+    assert result.detail == (
+        "VLESS XHTTP Caddy route is not active for xhttp.example.com"
+    )
+    probe.assert_not_called()
+
+
+def test_health_rejects_failed_tls_route_probe():
+    plugin = VlessXhttpPlugin()
+    state = _state(User("active@example.com", "uuid-active"))
+    report = SimpleNamespace(
+        ok=True,
+        missing=(),
+        certificate_errors=(),
+        errors=(),
+        actual=("xhttp.example.com",),
+    )
+
+    with patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.singbox.has_configured_inbound", return_value=True), \
+         patch("hydra.core.sni_router.is_active", return_value=True), \
+         patch("hydra.core.sni_router.audit_routes", return_value=report), \
+         patch(
+             "hydra.core.sni_router.probe_tls_route",
+             return_value=(False, "no certificate available"),
+         ):
+        result = plugin.healthcheck_for_state(state)
+
+    assert result.healthy is False
+    assert result.detail == "VLESS XHTTP TLS route failed: no certificate available"
+
+
+def test_health_accepts_applied_route_and_verified_tls():
+    plugin = VlessXhttpPlugin()
+    state = _state(User("active@example.com", "uuid-active"))
+    report = SimpleNamespace(
+        ok=True,
+        missing=(),
+        certificate_errors=(),
+        errors=(),
+        actual=("xhttp.example.com",),
+    )
+
+    with patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.singbox.has_configured_inbound", return_value=True), \
+         patch("hydra.core.sni_router.is_active", return_value=True), \
+         patch("hydra.core.sni_router.audit_routes", return_value=report), \
+         patch(
+             "hydra.core.sni_router.probe_tls_route",
+             return_value=(True, ""),
+         ):
+        result = plugin.healthcheck_for_state(state)
+
+    assert result.healthy is True
+    assert result.detail == ""
+    assert result.checks["caddy_route"] is True
+    assert result.checks["tls_handshake"] is True

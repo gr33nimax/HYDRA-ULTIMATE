@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import re
+import socket
+import ssl
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -65,6 +67,40 @@ def configured_loopback_ports(config_path: Path) -> set[int]:
 
     visit(document)
     return ports
+
+
+def probe_tls_route(
+    domain: str,
+    *,
+    address: str = "127.0.0.1",
+    port: int = 443,
+    timeout: float = 3.0,
+) -> tuple[bool, str]:
+    """Verify the active local TLS route, hostname and HTTP/2 negotiation."""
+    normalized = str(domain or "").strip().lower().rstrip(".")
+    if not normalized:
+        return False, "TLS route domain is missing"
+    context = ssl.create_default_context()
+    context.set_alpn_protocols(["h2"])
+    try:
+        with socket.create_connection(
+            (address, port),
+            timeout=timeout,
+        ) as connection:
+            with context.wrap_socket(
+                connection,
+                server_hostname=normalized,
+            ) as tls:
+                negotiated = tls.selected_alpn_protocol()
+    except (OSError, ValueError) as exc:
+        return False, f"TLS route probe failed for {normalized}: {exc}"
+    if negotiated != "h2":
+        return (
+            False,
+            "TLS route negotiated ALPN "
+            f"{negotiated or 'none'} instead of h2",
+        )
+    return True, ""
 
 
 def rebuild(
@@ -206,6 +242,7 @@ __all__ = [
     "config_had_quic_proxy",
     "configured_loopback_ports",
     "is_active",
+    "probe_tls_route",
     "rebuild",
     "stop",
     "uninstall_haproxy",

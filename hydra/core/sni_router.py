@@ -341,6 +341,10 @@ def is_active() -> bool:
     )
 
 
+def probe_tls_route(domain: str) -> tuple[bool, str]:
+    return _runtime.probe_tls_route(domain)
+
+
 def _caddy_config_had_quic_proxy() -> bool:
     return _runtime.config_had_quic_proxy(CADDY_CFG)
 
@@ -436,6 +440,7 @@ __all__ = [
     "is_active",
     "is_installed",
     "needs_mux",
+    "probe_tls_route",
     "rebuild",
     "stop",
     "uninstall_haproxy",

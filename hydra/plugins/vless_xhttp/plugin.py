@@ -315,12 +315,44 @@ class VlessXhttpPlugin(BasePlugin):
     ) -> HealthResult:
         from hydra.core import singbox, sni_router
 
+        protocol = state.protocols.get("vless")
+        config = protocol.config if protocol is not None else {}
+        domain = str(config.get("domain", "")).strip().lower().rstrip(".")
         service_active = singbox.is_running()
         inbound_configured = singbox.has_configured_inbound(
             "vless-xhttp-in",
         )
         caddy_active = sni_router.is_active()
-        healthy = service_active and inbound_configured and caddy_active
+        route = config.get(ROUTE_CONFIG_KEY)
+        route_declared = (
+            isinstance(route, dict)
+            and route.get("kind") == "http_path_proxy"
+        )
+        route_active = False
+        tls_healthy = False
+        tls_detail = ""
+        if (
+            service_active
+            and inbound_configured
+            and caddy_active
+            and route_declared
+        ):
+            audit = sni_router.audit_routes(state)
+            route_active = (
+                audit.ok
+                and bool(domain)
+                and domain in audit.actual
+            )
+            if route_active:
+                tls_healthy, tls_detail = sni_router.probe_tls_route(domain)
+        healthy = (
+            service_active
+            and inbound_configured
+            and caddy_active
+            and route_declared
+            and route_active
+            and tls_healthy
+        )
         detail = ""
         if not service_active:
             detail = "sing-box service is not active"
@@ -328,6 +360,15 @@ class VlessXhttpPlugin(BasePlugin):
             detail = "VLESS XHTTP inbound is missing from Sing-Box config"
         elif not caddy_active:
             detail = "Caddy L4 service is not active"
+        elif not route_declared:
+            detail = "VLESS XHTTP Caddy route metadata is missing"
+        elif not route_active:
+            detail = (
+                "VLESS XHTTP Caddy route is not active for "
+                f"{domain or 'configured domain'}"
+            )
+        elif not tls_healthy:
+            detail = f"VLESS XHTTP TLS route failed: {tls_detail}"
         return HealthResult(
             healthy,
             detail,
@@ -336,6 +377,8 @@ class VlessXhttpPlugin(BasePlugin):
                 "sing_box": service_active,
                 "vless_xhttp_inbound": inbound_configured,
                 "caddy_l4": caddy_active,
+                "caddy_route": route_active,
+                "tls_handshake": tls_healthy,
             },
         )
 

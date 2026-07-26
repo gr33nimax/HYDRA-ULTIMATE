@@ -280,6 +280,9 @@ sudo hydra plugin action dnscrypt apply_server_names \
 VPS, затем выполните `sudo hydra plugin enable vless`. Certificate preflight
 получит сертификат, а общий apply создаст XHTTP inbound, маршрут Caddy и
 заглушку. Поддерживаемые mode: `stream-up`, `packet-up`, `stream-one`.
+Команда вернёт успех только после проверки активного SNI-маршрута, загрузки
+сертификата в Caddy и локального TLS handshake с ALPN `h2`; при ошибке apply
+откатит состояние и runtime и вернёт точную причину.
 
 `plugins` является алиасом `plugin`.
 
