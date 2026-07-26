@@ -58,9 +58,43 @@ class SyncOperations:
         [AppState],
         list[CertificateStatus],
     ] = lambda state: []
+    renew_subscription_certificate: Callable[
+        [str],
+        tuple[bool, str],
+    ] = lambda domain: (False, "обновление сертификата подписок не подключено")
 
     def apply(self, state: AppState) -> bool:
         return bool(self.apply_config(state))
+
+
+class SubscriptionCertificateAdmin(Protocol):
+    """Admin capabilities needed to refresh the subscription certificate."""
+
+    def obtain_subscription_certificate(self, domain: str) -> Any: ...
+
+    def unit_active(self, unit: str) -> bool: ...
+
+    def restart_unit(self, unit: str) -> bool: ...
+
+
+def subscription_certificate_renewal(
+    admin: SubscriptionCertificateAdmin,
+) -> Callable[[str], tuple[bool, str]]:
+    """Renew the subscription certificate and reload the server that serves it.
+
+    The subscription endpoint is not a plugin, so the shared apply preflight
+    never reissues its certificate; this is the only automated path for it.
+    """
+
+    def renew(domain: str) -> tuple[bool, str]:
+        result = admin.obtain_subscription_certificate(domain)
+        ok = bool(getattr(result, "ok", False))
+        message = str(getattr(result, "message", "") or "")
+        if ok and admin.unit_active("hydra-sub"):
+            admin.restart_unit("hydra-sub")
+        return ok, message
+
+    return renew
 
 
 def _action_result(value: Any) -> tuple[bool, str]:
@@ -88,6 +122,7 @@ def default_sync_operations(
         [AppState],
         list[CertificateStatus],
     ],
+    renew_subscription_certificate: Callable[[str], tuple[bool, str]],
 ) -> SyncOperations:
     """Compose declared plugin maintenance without protocol-name branches."""
 
@@ -144,14 +179,17 @@ def default_sync_operations(
         check_traffic_limits=check_traffic_limits,
         run_maintenance=run_maintenance,
         inspect_certificates=inspect_certificates,
+        renew_subscription_certificate=renew_subscription_certificate,
     )
 
 
 __all__ = [
     "MaintenanceOutcome",
+    "SubscriptionCertificateAdmin",
     "SyncOperations",
     "SyncPluginActions",
     "SyncPluginQueries",
     "SyncProtocolAccess",
     "default_sync_operations",
+    "subscription_certificate_renewal",
 ]

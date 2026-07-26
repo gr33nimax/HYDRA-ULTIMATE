@@ -305,6 +305,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 | `sync_updates_enabled` | Проверять обновления Sing-Box |
 | `sync_certificates_enabled` | Проверять сроки TLS-сертификатов |
 | `sync_config_pending` | Отложенное применение конфигурации |
+| `sync_config_pending_source` | Фаза, поставившая отложенное применение (`certificates` снимается после первой неудачи) |
 | `singbox_last_update_check`, `singbox_update_available`, `singbox_latest_version` | Результат проверки обновлений |
 | `certificates_last_check` | Момент последней проверки сертификатов (UTC, ISO 8601) |
 | `certificates_report` | Результат проверки: домен, владелец, статус, дней до истечения |

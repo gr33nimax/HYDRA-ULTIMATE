@@ -28,6 +28,7 @@ def _run_sync(*, traffic_check=None, certificates=None, **kwargs):
         plugin_actions=PluginActionService(get_plugin=protocols.get),
         plugin_queries=PluginQueryService(get_plugin=protocols.get),
         inspect_certificates=certificates or (lambda state: []),
+        renew_subscription_certificate=lambda domain: (True, ""),
     )
     return sync_agent.run_sync(operations=operations, **kwargs)
 

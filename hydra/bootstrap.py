@@ -31,7 +31,10 @@ from hydra.services.protocols import ProtocolService
 from hydra.services.security_intel import notification_fields
 from hydra.services.security_notifications import notify_security_event
 from hydra.services.sync_agent import run_sync
-from hydra.services.sync_ports import default_sync_operations
+from hydra.services.sync_ports import (
+    default_sync_operations,
+    subscription_certificate_renewal,
+)
 from hydra.services.system_monitoring_infrastructure import HOST_MONITORING
 from hydra.services.system import SystemService
 from hydra.services.traffic import TrafficService
@@ -102,6 +105,11 @@ def production_application(
             apply_config=orchestration.apply_config,
             check_traffic_limits=traffic.check_limits,
             inspect_certificates=certificate_audit.inspect,
+            # Resolved on call: the renewal needs the admin adapter being
+            # assembled by this very statement.
+            renew_subscription_certificate=lambda domain: (
+                subscription_certificate_renewal(admin)(domain)
+            ),
         ),
         sync_runner=run_sync,
     )

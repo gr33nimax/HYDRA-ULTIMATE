@@ -312,3 +312,165 @@ def test_audit_failure_is_reported_without_stopping_the_cycle():
     assert ok is False
     assert "проверка сертификатов" in message
     assert any("audit failed" in line for line in logs)
+
+
+class _Admin:
+    """Admin adapter recording the subscription renewal calls it receives."""
+
+    def __init__(self, *, ok: bool = True, active: bool = True) -> None:
+        self.ok = ok
+        self.active = active
+        self.obtained: list[str] = []
+        self.restarted: list[str] = []
+
+    def obtain_subscription_certificate(self, domain: str):
+        self.obtained.append(domain)
+        return SimpleNamespace(
+            ok=self.ok,
+            message="already_valid" if self.ok else "certbot failed",
+        )
+
+    def unit_active(self, unit: str) -> bool:
+        return self.active
+
+    def restart_unit(self, unit: str) -> bool:
+        self.restarted.append(unit)
+        return True
+
+
+def _cycle_with_renewal(state, statuses, renew, *, applied=True):
+    logs: list[str] = []
+    applies: list[AppState] = []
+
+    def apply_config(latest: AppState) -> bool:
+        applies.append(latest)
+        return applied
+
+    operations = SyncOperations(
+        protocols=SimpleNamespace(
+            notify_user_block=lambda *_: [],
+            maintenance_jobs=list,
+        ),
+        apply_config=apply_config,
+        check_traffic_limits=lambda _state: [],
+        run_maintenance=lambda *_: [],
+        inspect_certificates=lambda _state: statuses,
+        renew_subscription_certificate=renew,
+    )
+    ok, message = run_sync_cycle(
+        state,
+        operations=operations,
+        update_state=lambda mutator: (state, mutator(state)),
+        log=logs.append,
+    )
+    return ok, message, logs, applies
+
+
+def test_subscription_certificate_is_renewed_and_the_server_restarted():
+    from hydra.services.sync_ports import subscription_certificate_renewal
+
+    admin = _Admin()
+    state = AppState()
+    statuses = [
+        CertificateStatus(
+            "subscriptions",
+            "sub.example.com",
+            "/sub.pem",
+            "expiring",
+            days_left=7,
+        ),
+    ]
+
+    ok, _message, logs, applies = _cycle_with_renewal(
+        state,
+        statuses,
+        subscription_certificate_renewal(admin),
+    )
+
+    assert ok is True
+    assert admin.obtained == ["sub.example.com"]
+    assert admin.restarted == ["hydra-sub"]
+    assert applies == []
+    assert any("renewed the subscription certificate" in line for line in logs)
+
+
+def test_failed_subscription_renewal_is_reported():
+    from hydra.services.sync_ports import subscription_certificate_renewal
+
+    admin = _Admin(ok=False)
+    statuses = [
+        CertificateStatus(
+            "subscriptions",
+            "sub.example.com",
+            "/sub.pem",
+            "expired",
+        ),
+    ]
+
+    ok, message, logs, _applies = _cycle_with_renewal(
+        AppState(),
+        statuses,
+        subscription_certificate_renewal(admin),
+    )
+
+    assert ok is False
+    assert "обновление сертификата подписок" in message
+    assert admin.restarted == []
+    assert any("subscription renewal failed" in line for line in logs)
+
+
+def test_failed_renewal_apply_waits_for_the_next_daily_check():
+    state = AppState()
+    statuses = [
+        CertificateStatus("vless", "x.example.com", "/x.pem", "expired"),
+    ]
+
+    ok, message, logs, applies = _cycle_with_renewal(
+        state,
+        statuses,
+        lambda domain: (True, ""),
+        applied=False,
+    )
+
+    assert ok is False
+    assert "не удалось обновить сертификаты" in message
+    assert len(applies) == 1
+    assert "sync_config_pending" not in state.install
+    assert "sync_config_pending_source" not in state.install
+    assert any("deferred to the next" in line for line in logs)
+
+
+def test_unrelated_pending_apply_still_retries_after_a_failure():
+    state = AppState()
+    state.install["sync_config_pending"] = True
+
+    ok, message, _logs, applies = _cycle_with_renewal(
+        state,
+        [],
+        lambda domain: (True, ""),
+        applied=False,
+    )
+
+    assert ok is False
+    assert "конфигурацию сервера" in message
+    assert len(applies) == 1
+    assert state.install["sync_config_pending"] is True
+
+
+def test_renewal_does_not_hijack_a_pending_apply_queued_elsewhere():
+    state = AppState()
+    state.install["sync_config_pending"] = True
+    statuses = [
+        CertificateStatus("vless", "x.example.com", "/x.pem", "expiring", days_left=3),
+    ]
+
+    _ok, _message, _logs, applies = _cycle_with_renewal(
+        state,
+        statuses,
+        lambda domain: (True, ""),
+        applied=False,
+    )
+
+    assert len(applies) == 1
+    assert state.install["sync_config_pending"] is True
+    assert "sync_config_pending_source" not in state.install

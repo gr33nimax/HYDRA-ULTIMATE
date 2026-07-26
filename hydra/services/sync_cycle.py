@@ -167,6 +167,18 @@ def _sync_certificates(
             log(f"Certificates: {status.describe()}")
     log(f"Certificates: {summarize(statuses)}")
 
+    # Protocol certificates are reissued by the shared apply preflight; the
+    # subscription endpoint is not a plugin and has to be renewed directly.
+    by_apply = [
+        status for status in renewable if status.owner != "subscriptions"
+    ]
+    failures = [
+        failure
+        for status in renewable
+        if status.owner == "subscriptions"
+        for failure in _renew_subscription(status, operations, log)
+    ]
+
     def record(latest: AppState) -> None:
         latest.install["certificates_last_check"] = (
             datetime.now(timezone.utc).isoformat()
@@ -174,16 +186,36 @@ def _sync_certificates(
         latest.install["certificates_report"] = [
             status.as_dict() for status in statuses
         ]
-        if renewable:
+        if by_apply and not latest.install.get("sync_config_pending"):
             latest.install["sync_config_pending"] = True
+            latest.install["sync_config_pending_source"] = "certificates"
 
     state, _ = update_state(record)
-    if renewable:
+    if by_apply:
         log(
             "Certificates: queued a config apply to renew "
-            + ", ".join(status.domain for status in renewable),
+            + ", ".join(status.domain for status in by_apply),
         )
-    return state, []
+    return state, failures
+
+
+def _renew_subscription(
+    status: object,
+    operations: SyncOperations,
+    log: Logger,
+) -> list[str]:
+    """Reissue the subscription certificate and report a failure once."""
+    domain = getattr(status, "domain", "")
+    try:
+        ok, message = operations.renew_subscription_certificate(domain)
+    except Exception as exc:
+        ok, message = False, str(exc) or exc.__class__.__name__
+    if ok:
+        log(f"Certificates: renewed the subscription certificate for {domain}")
+        return []
+    detail = message or "unknown error"
+    log(f"Certificates: subscription renewal failed for {domain}: {detail}")
+    return [f"обновление сертификата подписок: {detail}"]
 
 
 def _apply_pending_config(
@@ -201,12 +233,29 @@ def _apply_pending_config(
         applied = False
         log(f"Server config apply failed: {exc}")
     if not applied:
+        if state.install.get("sync_config_pending_source") == "certificates":
+            # Certbot stops the TLS front end on every attempt and Let's
+            # Encrypt rate-limits failed validations, so a failed renewal
+            # waits for tomorrow's audit instead of retrying every cycle.
+            def defer_renewal(latest: AppState) -> None:
+                latest.install.pop("sync_config_pending", None)
+                latest.install.pop("sync_config_pending_source", None)
+
+            state, _ = update_state(defer_renewal)
+            log(
+                "Certificate renewal apply failed; deferred to the next "
+                "daily check",
+            )
+            return state, [
+                "не удалось обновить сертификаты",
+            ]
         log("Server config apply failed; will retry on the next run")
         return state, [
             "не удалось применить конфигурацию сервера",
         ]
 
     def clear_pending(latest: AppState) -> bool:
+        latest.install.pop("sync_config_pending_source", None)
         return latest.install.pop("sync_config_pending", None) is not None
 
     state, _ = update_state(clear_pending)
