@@ -16,7 +16,26 @@ def public_user(user: User) -> dict:
     """Return user metadata without exposing protocol secrets."""
     payload = asdict(user)
     payload.pop("credentials", None)
-    payload["devices_registered"] = len(payload.pop("devices", {}))
+    devices = payload.pop("devices", {}) or {}
+    payload["devices_registered"] = len(devices)
+    # The identifier is a salted hash of what the client reported; a short
+    # prefix is enough to recognise a device without publishing the full id.
+    payload["devices"] = [
+        {
+            "id": str(device_id)[:12],
+            "source": str(record.get("source", "")),
+            "client": str(record.get("user_agent", "")),
+            "address": str(record.get("address", "")),
+            "first_seen": str(record.get("first_seen", "")),
+            "last_seen": str(record.get("last_seen", "")),
+        }
+        for device_id, record in sorted(
+            devices.items(),
+            key=lambda item: str(item[1].get("last_seen", "")),
+            reverse=True,
+        )
+        if isinstance(record, dict)
+    ]
     payload["protocols"] = sorted(user.credentials)
     return payload
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from hydra.core.state_models import AppState, PluginState
 from hydra.plugins.base import PluginStatus
@@ -78,12 +78,15 @@ def test_vless_uses_a_specialised_anytls_style_menu():
     labels = [row[1] for row in captured["options"]]
     assert labels[:4] == [
         "⏸️  Выключить",
-        "👥 Клиенты",
+        "📊 Трафик протокола",
         "🌐 Профиль транспорта",
         "⚙️  Настройки XHTTP",
     ]
     details = status_panel.call_args.kwargs["details"]
     assert ("Домен", "xhttp.example.com") in details
+    assert ("TLS-режим", ANY) not in details or any(
+        label == "TLS-режим" for label, _value in details
+    )
     assert ("Режим XHTTP", "stream-up") in details
     assert any(label == "Профиль XHTTP" for label, _value in details)
     app.plugin_query.assert_called_once_with(

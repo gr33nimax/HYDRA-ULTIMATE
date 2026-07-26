@@ -13,8 +13,10 @@ from hydra.services.subscriptions.client_configs import (
     generate_throne_sub,
 )
 from hydra.services.subscriptions.devices import (
+    DeviceFingerprint,
     register_subscription_device,
     subscription_device_id,
+    subscription_fingerprint,
 )
 from hydra.services.subscriptions.links import (
     generate_base64_sub,
@@ -72,7 +74,9 @@ __all__ = [
     "serialize_naive",
     "serialize_nekobox_config",
     "serialize_trusttunnel",
+    "DeviceFingerprint",
     "subscription_device_id",
+    "subscription_fingerprint",
 ]
 
 

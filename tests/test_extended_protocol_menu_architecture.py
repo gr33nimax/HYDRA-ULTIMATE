@@ -28,7 +28,7 @@ def test_extended_protocol_facade_is_thin_and_protocol_logic_is_partitioned():
             "_application",
             "_apply_error_text",
             "_desired_state",
-            "_show_plugin_clients",
+            "_show_plugin_traffic",
         },
         "extended_protocol_awg.py": {
             "_menu_amneziawg",

@@ -47,6 +47,8 @@ from hydra.ui.tui import (
 
 
 _TARGETS: dict[str, ModuleType] = {
+    "_show_plugin_traffic": extended_protocol_common,
+    # Historical name kept for adapters and tests that still import it.
     "_show_plugin_clients": extended_protocol_common,
     "_menu_amneziawg": extended_protocol_awg,
     "_manage_awg_profiles": extended_protocol_awg_profiles,

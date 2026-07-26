@@ -18,7 +18,7 @@ from hydra.services.subscriptions.client_configs import (
 )
 from hydra.services.subscriptions.devices import (
     register_subscription_device,
-    subscription_device_id,
+    subscription_fingerprint,
 )
 from hydra.services.subscriptions.links import generate_base64_sub
 from hydra.services.subscriptions.metadata import (
@@ -113,12 +113,15 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             self._send_error(404, "Not found")
             return
 
-        device_id = subscription_device_id(
+        fingerprint = subscription_fingerprint(
             self.headers,
             str(self.client_address[0] if self.client_address else ""),
             parameters,
         )
-        state, _, device_status = register_subscription_device(token, device_id)
+        state, _, device_status = register_subscription_device(
+            token,
+            fingerprint,
+        )
         if device_status == "limit":
             self._send_error(403, "Device limit reached")
             return

@@ -67,11 +67,37 @@ def migrate_v3_to_v4(data: dict) -> dict:
     return data
 
 
+def migrate_v4_to_v5(data: dict) -> dict:
+    """Turn device bindings into records describing what connected."""
+    for user in data.get("users", []):
+        devices = user.get("devices", {})
+        if not isinstance(devices, dict):
+            user["devices"] = {}
+            continue
+        user["devices"] = {
+            device_id: (
+                dict(record)
+                if isinstance(record, dict)
+                else {
+                    "first_seen": str(record),
+                    "last_seen": str(record),
+                    "source": "",
+                    "user_agent": "",
+                    "address": "",
+                }
+            )
+            for device_id, record in devices.items()
+        }
+    data["version"] = 5
+    return data
+
+
 MIGRATIONS: dict[int, Migration] = {
     0: migrate_v0_to_v1,
     1: migrate_v1_to_v2,
     2: migrate_v2_to_v3,
     3: migrate_v3_to_v4,
+    4: migrate_v4_to_v5,
 }
 
 

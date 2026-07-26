@@ -189,6 +189,9 @@ def test_summary_mentions_the_soonest_expiry():
 
 
 def _cycle(state: AppState, statuses: list[CertificateStatus], *, applied=True):
+    # The Sing-Box update phase reaches GitHub; these tests are about
+    # certificates, so they must not depend on the network.
+    state.install.setdefault("sync_updates_enabled", False)
     logs: list[str] = []
     applies: list[AppState] = []
 
@@ -292,6 +295,7 @@ def test_audit_failure_is_reported_without_stopping_the_cycle():
     def failing(_state):
         raise RuntimeError("openssl exploded")
 
+    state.install["sync_updates_enabled"] = False
     operations = SyncOperations(
         protocols=SimpleNamespace(
             notify_user_block=lambda *_: [],
@@ -339,6 +343,7 @@ class _Admin:
 
 
 def _cycle_with_renewal(state, statuses, renew, *, applied=True):
+    state.install.setdefault("sync_updates_enabled", False)
     logs: list[str] = []
     applies: list[AppState] = []
 

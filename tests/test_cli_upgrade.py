@@ -6,7 +6,7 @@ from hydra.core.state_models import AppState
 
 
 def test_upgrade_migrate_state_uses_atomic_storage_boundary():
-    result = {"from": 3, "to": 4, "changed": True}
+    result = {"from": 3, "to": 5, "changed": True}
     system = MagicMock()
     system.migrate_state.return_value = result
     application = SimpleNamespace(system=system)

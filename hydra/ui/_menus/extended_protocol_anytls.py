@@ -29,7 +29,7 @@ from hydra.ui._menus.extended_protocol_common import (
     _application,
     _apply_error_text,
     _desired_state,
-    _show_plugin_clients,
+    _show_plugin_traffic,
 )
 from hydra.ui._menus.decoy_theme import (
     choose_theme,
@@ -82,7 +82,7 @@ def _menu_anytls(
         else:
             if ps.enabled:
                 options.append(("1", "⏸️  Выключить", "Отключить протокол"))
-                options.append(("2", "👥 Клиенты", "Подключённые клиенты и трафик"))
+                options.append(("2", "📊 Трафик протокола", "Учтённые байты по пользователям"))
                 options.append(("3", "🔒 Обфускация трафика", f"Текущий режим: {preset_label}"))
             if decoy := decoy_option(p, ps):
                 options.append(("4", *decoy))
@@ -114,7 +114,7 @@ def _menu_anytls(
             )
 
         elif choice == "2" and ps.installed and ps.enabled:
-            _show_plugin_clients(state, p, app)
+            _show_plugin_traffic(state, p, app)
 
         elif choice == "3" and ps.installed and ps.enabled:
             _menu_anytls_obfuscation(state, p, app)

@@ -12,7 +12,7 @@ from hydra.services.application import ApplicationService
 from hydra.ui._menus.extended_protocol_common import (
     _application,
     _desired_state,
-    _show_plugin_clients,
+    _show_plugin_traffic,
 )
 from hydra.ui._menus.decoy_theme import choose_theme
 from hydra.ui._menus.protocol_activation import run_lifecycle_action
@@ -134,8 +134,8 @@ def _menu_vless(
                 options.append(
                     (
                         "2",
-                        "👥 Клиенты",
-                        "Подключённые клиенты и трафик",
+                        "📊 Трафик протокола",
+                        "Учтённые байты по пользователям",
                     ),
                 )
             options.extend(
@@ -185,7 +185,7 @@ def _menu_vless(
                 choose_decoy=choose_theme,
             )
         elif choice == "2" and desired.installed and desired.enabled:
-            _show_plugin_clients(state, plugin, app)
+            _show_plugin_traffic(state, plugin, app)
         elif choice == "3" and desired.installed:
             open_profiles_menu(state, app)
         elif choice == "4" and desired.installed:

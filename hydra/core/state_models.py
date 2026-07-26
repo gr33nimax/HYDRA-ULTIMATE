@@ -12,7 +12,10 @@ from typing import Optional
 from hydra.contracts import JsonValue, PluginConfig, validate_json_object
 
 
-SCHEMA_VERSION = 4
+from hydra.core.state_devices import validate_device_map
+
+
+SCHEMA_VERSION = 5
 
 
 class UnsupportedStateVersion(RuntimeError):
@@ -43,7 +46,8 @@ class User:
     telegram_id: Optional[int] = None
     credentials: dict[str, dict] = field(default_factory=dict)
     device_limit: int = 0
-    devices: dict[str, str] = field(default_factory=dict)
+    # device id -> {first_seen, last_seen, source, user_agent, address}
+    devices: dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass
@@ -123,12 +127,10 @@ def validate_raw_state(raw: object) -> None:
             device_limit = user.get("device_limit", 0)
             if type(device_limit) is not int or device_limit < 0:
                 raise ValueError("user device limit must be a non-negative integer")
-            devices = user.get("devices", {})
-            if not isinstance(devices, dict) or any(
-                not isinstance(device_id, str) or not isinstance(last_seen, str)
-                for device_id, last_seen in devices.items()
-            ):
-                raise ValueError("user device bindings must map strings to strings")
+            validate_device_map(
+                user.get("devices", {}),
+                legacy=int(raw.get("version", SCHEMA_VERSION)) < 5,
+            )
     if "protocols" in raw:
         for name, protocol in raw["protocols"].items():
             if not isinstance(name, str) or not isinstance(protocol, dict):
@@ -203,11 +205,12 @@ def validate_state(state: AppState) -> None:
             raise ValueError(
                 f"device limit must be a non-negative integer for {user.email}"
             )
-        if not isinstance(user.devices, dict) or any(
-            not isinstance(device_id, str) or not isinstance(last_seen, str)
-            for device_id, last_seen in user.devices.items()
-        ):
-            raise ValueError(f"device bindings are invalid for {user.email}")
+        try:
+            validate_device_map(user.devices, legacy=False)
+        except ValueError as exc:
+            raise ValueError(
+                f"device bindings are invalid for {user.email}: {exc}",
+            ) from None
     ports = {
         "network.tproxy_port": state.network.tproxy_port,
         "network.clash_api_port": state.network.clash_api_port,

@@ -29,7 +29,7 @@ from hydra.ui._menus.extended_protocol_common import (
     _application,
     _apply_error_text,
     _desired_state,
-    _show_plugin_clients,
+    _show_plugin_traffic,
 )
 from hydra.ui._menus.extended_protocol_awg_profiles import (
     _awg_generate_wizard_menu,
@@ -82,7 +82,7 @@ def _menu_amneziawg(
         else:
             if ps.enabled:
                 options.append(("1", "⏸️  Выключить", "Отключить протокол"))
-                options.append(("2", "👥 Клиенты", "Подключённые клиенты и трафик"))
+                options.append(("2", "📊 Трафик протокола", "Учтённые байты по пользователям"))
                 options.append(("3", "👤 Профили AWG", "Управление профилями (Desktop/Mobile)"))
                 options.append(("4", "🔄 Ротация обфускации", "Ротировать параметры обфускации без downtime"))
                 options.append(("5", "⚙️ Оптимизация VPS", "Hardware-aware sysctl/swap/NIC автотюнинг"))
@@ -131,7 +131,7 @@ def _menu_amneziawg(
             prompt("Нажмите Enter")
 
         elif choice == "2" and ps.installed and ps.enabled:
-            _show_plugin_clients(state, p, app)
+            _show_plugin_traffic(state, p, app)
 
         elif choice == "3" and ps.installed and ps.enabled:
             _manage_awg_profiles(state, p, app)

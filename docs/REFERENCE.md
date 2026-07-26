@@ -278,7 +278,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 
 ## Схема persisted state
 
-Актуальная версия схемы в 2.5.4 — **4**. Корень `state.json`:
+Актуальная версия схемы в 2.5.4 — **5**. Корень `state.json`:
 
 | Поле | Тип | Содержание |
 | :--- | :--- | :--- |
@@ -292,6 +292,11 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 
 `User`: `email`, `uuid`, `traffic_limit_gb`, `traffic_used_bytes`, `expiry_date`,
 `blocked`, `created_at`, `telegram_id`, `credentials`, `device_limit`, `devices`.
+
+`devices` — карта `id устройства → запись`. Идентификатор это соль плюс хеш
+того, чем клиент представился, поэтому исходный HWID в state не хранится.
+Запись содержит `first_seen`, `last_seen`, `source` (заголовок HWID или
+`network-client`, если клиент не назвался), `user_agent` и `address`.
 
 `network`: `domain`, `sub_domain`, `server_ip`, `dns_servers`, `dnscrypt_port`,
 `tproxy_enabled`, `tproxy_port`, `clash_api_enabled`, `clash_api_port`,
@@ -309,6 +314,8 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 | `singbox_last_update_check`, `singbox_update_available`, `singbox_latest_version` | Результат проверки обновлений |
 | `certificates_last_check` | Момент последней проверки сертификатов (UTC, ISO 8601) |
 | `certificates_report` | Результат проверки: домен, владелец, статус, дней до истечения |
+| `device_sessions` | Активные устройства по пользователям: адрес, соединения, байты, разрешено ли |
+| `traffic_connection_counters` | Счётчики соединений демона трафика, включая адрес источника |
 
 Ноль в `traffic_limit_gb` и `device_limit` означает «без ограничения». Пустой
 `expiry_date` означает «без срока»; значение разбирается как ISO-8601 и при

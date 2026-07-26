@@ -121,7 +121,12 @@ def test_admin_can_reset_devices_without_stale_save_restoring_them():
             email="alice",
             uuid="token",
             device_limit=2,
-            devices={"old-device": "2026-07-24T00:00:00+00:00"},
+            devices={
+                "old-device": {
+                    "first_seen": "2026-07-24T00:00:00+00:00",
+                    "last_seen": "2026-07-24T00:00:00+00:00",
+                },
+            },
         ),
     ])
     save_state(state)

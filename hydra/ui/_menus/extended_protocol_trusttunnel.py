@@ -29,7 +29,7 @@ from hydra.ui._menus.extended_protocol_common import (
     _application,
     _apply_error_text,
     _desired_state,
-    _show_plugin_clients,
+    _show_plugin_traffic,
 )
 from hydra.ui._menus.decoy_theme import (
     choose_theme,
@@ -81,7 +81,7 @@ def _menu_trusttunnel(
         else:
             if ps.enabled:
                 options.append(("1", "⏸️  Выключить", "Отключить протокол"))
-                options.append(("2", "👥 Клиенты", "Подключённые клиенты и трафик"))
+                options.append(("2", "📊 Трафик протокола", "Учтённые байты по пользователям"))
             else:
                 options.append(("1", "▶️  Включить", "Активировать протокол"))
 
@@ -113,7 +113,7 @@ def _menu_trusttunnel(
             )
 
         elif choice == "2" and ps.installed and ps.enabled:
-            _show_plugin_clients(state, p, app)
+            _show_plugin_traffic(state, p, app)
 
         elif choice == "4" and ps.installed:
             open_decoy_menu(state, p, app)

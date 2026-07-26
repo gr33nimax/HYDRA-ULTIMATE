@@ -22,11 +22,15 @@ def _desired_state(state: AppState, name: str) -> PluginState:
     return state.protocols.get(name) or PluginState()
 
 
-def _show_plugin_clients(
+def _show_plugin_traffic(
     state: AppState,
     p,
     app: ApplicationService,
 ):
-    from hydra.ui._menus.client_status import show_plugin_clients
+    from hydra.ui._menus.client_status import show_plugin_traffic
 
-    show_plugin_clients(state, p, app)
+    show_plugin_traffic(state, p, app)
+
+
+# Historical name kept for adapters that still import it.
+_show_plugin_clients = _show_plugin_traffic

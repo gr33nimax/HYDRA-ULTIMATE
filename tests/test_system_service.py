@@ -19,7 +19,7 @@ def test_system_service_owns_checks_and_atomic_migration():
 
     assert service.validate(state) == {
         "valid": True,
-        "schema_version": 4,
+        "schema_version": 5,
         "revision": 7,
     }
     assert service.doctor(state) == {"ok": True}

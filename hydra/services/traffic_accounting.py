@@ -58,6 +58,7 @@ def apply_connection_snapshot(
             if user and protocol != "unknown"
             else 0
         )
+        metadata = connection.get("metadata", {})
         active[connection_id] = {
             "user": user,
             "protocol": protocol,
@@ -67,6 +68,12 @@ def apply_connection_snapshot(
             "credited_total": total if delta else credited,
             "missed_polls": 0,
             "seen_at": timestamp,
+            # The source address is what a device looks like on the data path;
+            # device limits and the device view both read it from here.
+            "address": str(
+                (metadata or {}).get("sourceIP", "")
+                or previous.get("address", ""),
+            ),
         }
         if delta:
             key = (user, protocol)

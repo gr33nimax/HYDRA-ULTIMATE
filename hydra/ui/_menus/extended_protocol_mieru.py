@@ -29,7 +29,7 @@ from hydra.ui._menus.extended_protocol_common import (
     _application,
     _apply_error_text,
     _desired_state,
-    _show_plugin_clients,
+    _show_plugin_traffic,
 )
 
 def _menu_mieru(
@@ -71,7 +71,7 @@ def _menu_mieru(
         else:
             if ps.enabled:
                 options.append(("1", "⏸️  Выключить", "Отключить протокол"))
-                options.append(("2", "👥 Клиенты", "Подключённые клиенты и трафик"))
+                options.append(("2", "📊 Трафик протокола", "Учтённые байты по пользователям"))
                 options.append(("3", "🔒 Обфускация трафика", f"Текущий пресет: {current_preset}"))
             else:
                 options.append(("1", "▶️  Включить", "Активировать протокол"))
@@ -117,7 +117,7 @@ def _menu_mieru(
             prompt("Нажмите Enter")
 
         elif choice == "2" and ps.installed and ps.enabled:
-            _show_plugin_clients(state, p, app)
+            _show_plugin_traffic(state, p, app)
 
         elif choice == "3" and ps.installed and ps.enabled:
             _menu_mieru_obfuscation(state, p, app)
