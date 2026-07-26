@@ -544,6 +544,8 @@ def test_add_profile_rolls_back_with_application_transaction(tmp_path):
                  "preshared_key": "mobile-psk",
              },
          ), \
+         patch.object(p, "_is_up", return_value=False), \
+         patch.object(p, "_is_up_iface", return_value=False), \
          patch("hydra.plugins.amneziawg.plugin.HOST.run") as host_run:
         host_run.return_value.returncode = 0
         assert service.execute(
@@ -560,6 +562,28 @@ def test_add_profile_rolls_back_with_application_transaction(tmp_path):
     ]
     assert state == before
     assert saved[-1] == before
+
+
+def test_rollback_restores_each_interface_to_its_previous_activity(tmp_path):
+    p = AmneziaWGPlugin()
+    snapshot = {
+        "awg0": None,
+        "awg1": None,
+        "running0": True,
+        "running1": False,
+    }
+
+    with patch("hydra.plugins.amneziawg.plugin.AWG_CONF", tmp_path / "awg0.conf"), \
+         patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1", tmp_path / "awg1.conf"), \
+         patch("hydra.plugins.amneziawg.plugin.HOST.run") as host_run:
+        host_run.return_value.returncode = 0
+
+        assert p.rollback(AppState(), snapshot) is True
+
+    assert [item.args[0] for item in host_run.call_args_list] == [
+        ["systemctl", "restart", AWG_UNIT],
+        ["systemctl", "stop", AWG_UNIT_1],
+    ]
 
 
 def test_remove_profile_defers_runtime_cleanup_to_apply(tmp_path):

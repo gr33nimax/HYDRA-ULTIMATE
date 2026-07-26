@@ -204,6 +204,13 @@ def test_naive_internal_modules_never_import_the_facade():
 
 
 def test_naive_facade_constants_remain_patchable(monkeypatch, tmp_path):
-    replacement = tmp_path / "logs"
-    monkeypatch.setattr(facade, "LOG_DIR", replacement)
-    assert NaivePlugin._runtime_layout().log_dir == replacement
+    assert NaivePlugin._runtime_layout().data_dir == Path(
+        "/var/lib/caddy-naive",
+    )
+    log_dir = tmp_path / "logs"
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(facade, "LOG_DIR", log_dir)
+    monkeypatch.setattr(facade, "DATA_DIR", data_dir)
+    layout = NaivePlugin._runtime_layout()
+    assert layout.log_dir == log_dir
+    assert layout.data_dir == data_dir

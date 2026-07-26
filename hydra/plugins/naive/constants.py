@@ -27,6 +27,7 @@ class NaiveRuntimeLayout:
     config_dir: Path
     caddyfile: Path
     log_dir: Path
+    data_dir: Path
     fake_site_dir: Path
     service_file: Path
     service_name: str

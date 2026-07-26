@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import shutil
 
-from .constants import DATA_DIR, DOWNLOAD_DIR
+from .constants import DOWNLOAD_DIR
 
 
 class NaiveInstallationMixin:
@@ -37,7 +37,11 @@ class NaiveInstallationMixin:
 
         if layout.binary.exists():
             layout.binary.unlink()
-        for directory in (layout.config_dir, layout.log_dir, DATA_DIR):
+        for directory in (
+            layout.config_dir,
+            layout.log_dir,
+            layout.data_dir,
+        ):
             if directory.exists():
                 shutil.rmtree(directory, ignore_errors=True)
         return True
@@ -87,11 +91,11 @@ class NaiveInstallationMixin:
             "Restart=on-failure\n"
             "RestartSec=1\n"
             "TimeoutStopSec=5\n"
-            'Environment="XDG_DATA_HOME=/var/lib/caddy-naive"\n'
-            'Environment="XDG_CONFIG_HOME=/var/lib/caddy-naive"\n'
+            f'Environment="XDG_DATA_HOME={layout.data_dir}"\n'
+            f'Environment="XDG_CONFIG_HOME={layout.data_dir}"\n'
             "LimitNOFILE=1048576\n"
             f"ReadWritePaths={layout.config_dir} {layout.log_dir} "
-            f"{decoy_dir} /var/lib/caddy-naive\n"
+            f"{decoy_dir} {layout.data_dir}\n"
             "AmbientCapabilities=CAP_NET_BIND_SERVICE\n"
             "NoNewPrivileges=true\n"
             "\n"

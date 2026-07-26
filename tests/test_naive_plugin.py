@@ -498,21 +498,29 @@ def test_set_transport_only_updates_desired_state():
     assert state.protocols["naive"].config["network"] == "quic"
 
 
-def test_apply_reconciles_quic_firewall():
+def test_apply_reconciles_quic_firewall(tmp_path):
     p = NaivePlugin()
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
     state.protocols["naive"].config["network"] = "quic"
     p._pending_config = "test"
     p._pending_cfg = "test"
-    with patch("hydra.plugins.naive.plugin.CFG_DIR"), \
-         patch("hydra.plugins.naive.plugin.LOG_DIR"), \
-         patch("hydra.plugins.naive.plugin.CADDYFILE"), \
+    config_dir = tmp_path / "config"
+    log_dir = tmp_path / "logs"
+    data_dir = tmp_path / "data"
+    with patch("hydra.plugins.naive.plugin.CFG_DIR", config_dir), \
+         patch("hydra.plugins.naive.plugin.LOG_DIR", log_dir), \
+         patch(
+             "hydra.plugins.naive.plugin.CADDYFILE",
+             config_dir / "Caddyfile",
+         ), \
+         patch("hydra.plugins.naive.plugin.DATA_DIR", data_dir), \
          patch.object(p, "_create_fake_site"), \
          patch.object(p, "_validate_caddy", return_value=""), \
          patch("hydra.plugins.naive.plugin.HOST.run", return_value=MagicMock(returncode=0)), \
          patch("hydra.plugins.naive.plugin.time.sleep"), \
          patch.object(p, "_sync_transport_firewall") as reconcile:
         assert p.apply(state)
+    assert data_dir.is_dir()
     reconcile.assert_called_once_with("quic")
 
 

@@ -6,8 +6,6 @@ from pathlib import Path
 
 from hydra.plugins.context import PluginStateAccess
 
-from .constants import DATA_DIR
-
 
 def _accounting_rule(
     *,
@@ -101,7 +99,7 @@ class NaiveRuntimeMixin:
         layout = self._runtime_layout()
         layout.config_dir.mkdir(parents=True, exist_ok=True)
         layout.log_dir.mkdir(parents=True, exist_ok=True)
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        layout.data_dir.mkdir(parents=True, exist_ok=True)
         self._create_fake_site()
 
         pending = layout.caddyfile.with_suffix(".pending")
