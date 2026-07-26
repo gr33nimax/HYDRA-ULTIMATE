@@ -10,6 +10,7 @@ from hydra.services.certificates import CertificateProvisioner
 from hydra.services.protocol_setup import (
     ProtocolSetupService,
     normalize_protocol_config,
+    normalize_required_domain,
 )
 
 
@@ -112,6 +113,12 @@ def test_protocol_defaults_are_normalized_without_mutating_input():
     assert naive["network"] == "tcp"
     assert trusttunnel["transport"] == "tcp"
     assert source == {"options": {"values": []}}
+
+
+def test_required_domain_normalization_is_shared_with_interactive_adapters():
+    assert normalize_required_domain(" VPN.Example.COM. ") == "vpn.example.com"
+    with pytest.raises(ValueError, match="Некорректный домен"):
+        normalize_required_domain("https://vpn.example.com")
 
 
 def test_protocol_setup_persists_naive_default_before_lifecycle_hook():

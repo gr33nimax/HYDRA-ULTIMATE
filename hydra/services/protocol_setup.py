@@ -28,6 +28,18 @@ def normalize_protocol_config(
     return normalized
 
 
+def normalize_required_domain(value: object) -> str:
+    """Normalize a required TLS host or reject adapter input early."""
+    normalized = str(value or "").strip().lower().rstrip(".")
+    if (
+        not normalized
+        or "://" in normalized
+        or any(character.isspace() for character in normalized)
+    ):
+        raise ValueError("Некорректный домен")
+    return normalized
+
+
 @dataclass(frozen=True)
 class ProtocolSetupService:
     """Complete non-interactive prerequisites before a lifecycle hook runs."""
@@ -60,12 +72,9 @@ class ProtocolSetupService:
             if source == "network"
             else protocol.config.get("domain", "")
         )
-        normalized = str(domain or "").strip().lower().rstrip(".")
-        if (
-            not normalized
-            or "://" in normalized
-            or any(character.isspace() for character in normalized)
-        ):
+        try:
+            normalized = normalize_required_domain(domain)
+        except ValueError:
             raise ValueError(f"Корректный домен обязателен для {name}")
         cert, key = self.certificates.ensure(normalized, protocol.config)
         protocol.config.update(
@@ -82,4 +91,5 @@ __all__ = [
     "CertificateProvider",
     "ProtocolSetupService",
     "normalize_protocol_config",
+    "normalize_required_domain",
 ]

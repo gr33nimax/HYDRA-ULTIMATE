@@ -31,6 +31,7 @@ from hydra.ui._menus.extended_protocol_common import (
     _desired_state,
     _show_plugin_clients,
 )
+from hydra.ui._menus.protocol_activation import run_lifecycle_action
 
 def _menu_trusttunnel(
     state: AppState,
@@ -91,34 +92,17 @@ def _menu_trusttunnel(
             break
 
         elif choice == "1":
-            if not ps.installed:
-                info("Установка...")
-                ok = app.protocols.install(state, p.meta.name)
-                if ok:
-                    success("Установлено!")
-                    try:
-                        if app.protocols.enable(state, p.meta.name):
-                            success("Протокол включён и применён")
-                        else:
-                            error(_apply_error_text(app=app))
-                    except Exception as e:
-                        error(f"Ошибка активации протокола: {e}")
-                else:
-                    error("Ошибка установки")
-            elif ps.enabled:
-                if app.protocols.disable(state, p.meta.name):
-                    success("Протокол выключен")
-                else:
-                    error(_apply_error_text(app=app))
-            else:
-                try:
-                    if app.protocols.enable(state, p.meta.name):
-                        success("Протокол включён")
-                    else:
-                        error(_apply_error_text(app=app))
-                except Exception as e:
-                    error(f"Ошибка активации протокола: {e}")
-            prompt("Нажмите Enter")
+            run_lifecycle_action(
+                state,
+                p,
+                ps,
+                app,
+                ask=prompt,
+                report_error=error,
+                report_info=info,
+                report_success=success,
+                pause=prompt,
+            )
 
         elif choice == "2" and ps.installed and ps.enabled:
             _show_plugin_clients(state, p, app)

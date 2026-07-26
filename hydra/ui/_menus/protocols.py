@@ -5,6 +5,7 @@ from hydra.core.state_models import AppState, PluginState
 from hydra.plugins.base import PluginCategory
 from hydra.services.application import ApplicationService
 from hydra.ui._menus import plugin_settings
+from hydra.ui._menus.protocol_activation import run_lifecycle_action
 from hydra.ui._menus.plugin_dispatch import (
     open_plugin_settings,
     open_special_plugin_menu,
@@ -178,25 +179,17 @@ def _toggle_or_install(
     desired: PluginState,
     app: ApplicationService,
 ) -> None:
-    name = plugin.meta.name
-    if not desired.installed:
-        info("Установка...")
-        if not app.protocols.install(state, name):
-            error("Ошибка установки")
-        elif app.protocols.enable(state, name):
-            success("Протокол установлен, включён и применён")
-        else:
-            error(_apply_error_text(app=app))
-    elif desired.enabled:
-        if app.protocols.disable(state, name):
-            success("Протокол выключен")
-        else:
-            error(_apply_error_text(app=app))
-    elif app.protocols.enable(state, name):
-        success("Протокол включён")
-    else:
-        error(_apply_error_text(app=app))
-    prompt("Нажмите Enter")
+    run_lifecycle_action(
+        state,
+        plugin,
+        desired,
+        app,
+        ask=prompt,
+        report_error=error,
+        report_info=info,
+        report_success=success,
+        pause=prompt,
+    )
 
 
 def _reinstall_or_remove(
