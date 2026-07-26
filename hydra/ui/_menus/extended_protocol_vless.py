@@ -86,10 +86,13 @@ def _menu_vless(
                 ("Режим XHTTP", str(tuning_info.get("mode", "stream-up"))),
                 (
                     "Профиль XHTTP",
-                    f"{BOLD}{CYAN}{preset_display}{NC}",
+                    f"{BOLD}{CYAN}{presets.preset_title(preset_name)}{NC}",
                 ),
-                ("Параметры", tuning.summary(desired.config)),
             ]
+            if preset_name == presets.CUSTOM_PRESET:
+                details.append(
+                    ("Параметры", tuning.summary(desired.config)),
+                )
             protocol_status_panel(
                 plugin.meta.name,
                 installed=runtime.installed,
@@ -140,12 +143,14 @@ def _menu_vless(
                     (
                         "3",
                         "🌐 Профиль транспорта",
-                        f"Текущий профиль: {preset_display}",
+                        presets.PRESETS[preset_name].details
+                        if preset_name in presets.PRESETS
+                        else tuning.summary(desired.config),
                     ),
                     (
                         "4",
                         "⚙️  Настройки XHTTP",
-                        "Домен, путь, режим и тонкая настройка",
+                        "TLS-режим, домен, путь, uTLS и заглушка",
                     ),
                     (
                         "8",

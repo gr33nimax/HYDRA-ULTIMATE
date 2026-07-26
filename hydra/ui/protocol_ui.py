@@ -8,7 +8,18 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from hydra.ui.tui import BOLD, CYAN, DIM, GREEN, RED, YELLOW, NC, panel
+from hydra.ui.tui import (
+    BOLD,
+    CYAN,
+    DIM,
+    GREEN,
+    NC,
+    PANEL_W,
+    RED,
+    YELLOW,
+    panel,
+    visible_width,
+)
 
 
 PROTOCOL_LABELS = {
@@ -49,6 +60,36 @@ def _yes_no(value: bool) -> str:
     return f"{GREEN}Да{NC}" if value else f"{DIM}Нет{NC}"
 
 
+_LABEL_WIDTH = 16
+# Panel border, one space of padding on both sides, the label column and the
+# gap after it. What is left is what a value may occupy on one line.
+_VALUE_WIDTH = PANEL_W - 2 - 2 - _LABEL_WIDTH - 1
+
+
+def _detail_lines(label: str, value: str) -> list[str]:
+    """Lay out one status row, wrapping a long value under its own column."""
+    head = f"  {DIM}{label:<{_LABEL_WIDTH}}{NC} "
+    if "" in value or visible_width(value) <= _VALUE_WIDTH:
+        return [f"{head}{value}"]
+
+    lines: list[str] = []
+    current = ""
+    for word in value.split(" "):
+        candidate = f"{current} {word}".strip()
+        if current and visible_width(candidate) > _VALUE_WIDTH:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    continuation = f"  {' ' * _LABEL_WIDTH} "
+    return [
+        f"{head if index == 0 else continuation}{line}"
+        for index, line in enumerate(lines)
+    ]
+
+
 def protocol_status_panel(
     name: str,
     *,
@@ -70,7 +111,7 @@ def protocol_status_panel(
         lines.append(f"  {DIM}{'Порт':<16}{NC} {BOLD}{port}{NC}")
     for label, value in details:
         if value not in (None, ""):
-            lines.append(f"  {DIM}{str(label):<16}{NC} {value}")
+            lines.extend(_detail_lines(str(label), str(value)))
     if error:
         lines.extend(("", f"  {RED}Ошибка статуса:{NC} {error}"))
     panel(

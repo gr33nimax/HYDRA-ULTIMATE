@@ -44,3 +44,53 @@ def test_protocol_panel_has_canonical_field_order(capsys):
     assert output.index("Включён") < output.index("Порт")
     assert "AnyTLS" in output
     assert "vpn.example" in output
+
+
+def test_long_detail_wraps_under_its_column_instead_of_being_cut(capsys):
+    value = (
+        "padding 500-2000 Б · post 1000000 Б · буфер 30 · "
+        "сессия 30-120 с · заголовков 2"
+    )
+
+    protocol_status_panel(
+        "vless",
+        installed=True,
+        enabled=True,
+        running=True,
+        port=443,
+        details=[("Параметры", value)],
+    )
+
+    output = capsys.readouterr().out
+    assert "..." not in output
+    assert "заголовков 2" in output
+    body = [line for line in output.splitlines() if line.startswith("  ║")]
+    assert len({len(_visible(line)) for line in body}) == 1
+
+
+def test_every_panel_row_keeps_the_same_visible_width(capsys):
+    protocol_status_panel(
+        "vless",
+        installed=True,
+        enabled=True,
+        running=True,
+        port=443,
+        details=[
+            ("Профиль", "Максимальная маскировка"),
+            ("Домен", "heisenberg.example.com"),
+        ],
+    )
+
+    body = [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("  ║")
+    ]
+    assert body
+    assert len({len(_visible(line)) for line in body}) == 1
+
+
+def _visible(line: str) -> str:
+    from hydra.ui.tui import _strip
+
+    return _strip(line)

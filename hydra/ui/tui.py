@@ -87,7 +87,7 @@ def _char_width(char: str) -> int:
     }:
         return 2
     # Special cases: emojis that are rendered as 1 cell wide in standard monospace fonts/terminals
-    if code in (0x1f6e1, 0x1f6e0):  # 🛡 and 🛠
+    if code in (0x1f6e1, 0x1f6e0, 0x1f576):  # 🛡, 🛠 and 🕶
         return 1
     # Emojis > 0xffff are always 2 cells wide
     if code > 0xffff:
@@ -115,6 +115,11 @@ def _width(s: str) -> int:
     # Без корректировки 2 символа давали бы 2 + 2 = 4 ячейки. Вычитаем разницу.
     w -= (flags_count // 2) * 2
     return w
+
+
+def visible_width(text: str) -> int:
+    """Return the terminal width of a string, ignoring colour escapes."""
+    return _width(text)
 
 
 def _fit_line(line: str, max_w: int) -> tuple[str, int]:

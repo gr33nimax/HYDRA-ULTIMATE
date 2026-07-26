@@ -24,6 +24,11 @@ class Preset:
     values: dict[str, object]
 
     @property
+    def title(self) -> str:
+        """Return the label without decoration, for aligned status cards."""
+        return self.label.split(" ", 1)[-1].strip()
+
+    @property
     def details(self) -> str:
         """Return the exact values this profile writes."""
         return " · ".join(
@@ -123,6 +128,12 @@ def preset_label(name: str) -> str:
     return preset.label if preset else "🛠 Пользовательский"
 
 
+def preset_title(name: str) -> str:
+    """Return the undecorated preset name used in aligned status cards."""
+    preset = PRESETS.get(name)
+    return preset.title if preset else "пользовательский"
+
+
 __all__ = [
     "CUSTOM_PRESET",
     "PRESETS",
@@ -131,4 +142,5 @@ __all__ = [
     "current_preset",
     "get_preset",
     "preset_label",
+    "preset_title",
 ]
