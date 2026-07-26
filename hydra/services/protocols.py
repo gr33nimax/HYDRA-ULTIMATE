@@ -1,12 +1,13 @@
 """Application service boundary for protocol and plugin management."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Protocol
+from dataclasses import dataclass, field
+from typing import Any, Callable, Protocol
 
-from hydra.core.state import AppState
+from hydra.core.state_models import AppState, User
 from hydra.core.errors import ErrorCode, ServiceResult, failed_result
 from hydra.plugins.base import BasePlugin, PluginCategory
+from hydra.plugins.invoker import PluginInvoker
 from hydra.services.reconciliation import ReconciliationService
 
 
@@ -27,11 +28,26 @@ class ProtocolCatalog(Protocol):
 
 
 @dataclass(frozen=True)
+class MaintenanceJob:
+    """Adapter-neutral projection of one plugin-declared scheduled task."""
+
+    plugin_name: str
+    action: str
+    title: str
+    description: str
+    due_query: str
+    enabled_flag: str
+    apply_on_success: bool
+
+
+@dataclass(frozen=True)
 class ProtocolService:
     """Stable facade shared by CLI and future remote management transports."""
 
     operations: ProtocolOperations
     catalog: ProtocolCatalog
+    invoker: PluginInvoker = field(default_factory=PluginInvoker)
+    state_reader: Callable[[], AppState] | None = None
 
     def list(self, category: PluginCategory | None = None) -> list[BasePlugin]:
         if category == PluginCategory.TRANSPORT:
@@ -49,8 +65,218 @@ class ProtocolService:
     def get(self, name: str) -> BasePlugin | None:
         return self.catalog.get(name)
 
+    def require(self, name: str) -> BasePlugin:
+        plugin = self.get(name)
+        if plugin is None:
+            raise LookupError(f"unknown plugin: {name}")
+        return plugin
+
+    def display_name(self, name: str) -> str:
+        plugin = self.get(name)
+        if plugin is None:
+            return name
+        return plugin.meta.display_name or plugin.meta.name
+
+    def status(self, name: str, state: AppState | None = None):
+        """Read one plugin's runtime status through the contract boundary."""
+        if state is None and self.state_reader is not None:
+            state = self.state_reader()
+        return self.invoker.status(self.require(name), state)
+
+    def health(self, state: AppState, name: str):
+        """Read one plugin's state-aware health through the contract boundary."""
+        return self.invoker.health(self.require(name), state)
+
+    def apply_runtime(self, state: AppState, name: str) -> bool:
+        """Apply plugin-owned runtime artifacts without bypassing its contract."""
+        return self.invoker.apply(self.require(name), state)
+
+    def traffic(self, state: AppState, name: str) -> dict[str, int]:
+        return self.invoker.traffic(self.require(name), state)
+
+    def traffic_snapshot(
+        self,
+        state: AppState,
+        name: str,
+    ) -> dict[str, int] | None:
+        return self.invoker.traffic_snapshot(
+            self.require(name),
+            state,
+        )
+
+    def aggregate_traffic_snapshot(
+        self,
+        state: AppState,
+        name: str,
+    ) -> int | None:
+        return self.invoker.aggregate_traffic_snapshot(
+            self.require(name),
+            state,
+        )
+
+    def ingest_traffic(
+        self,
+        state: AppState,
+        name: str,
+        cursors: dict,
+    ) -> None:
+        self.invoker.ingest_traffic(
+            self.require(name),
+            state,
+            cursors,
+        )
+
+    def connected_clients(
+        self,
+        state: AppState,
+        name: str,
+    ) -> list[dict]:
+        return self.invoker.connected_clients(self.require(name), state)
+
+    def connection_activity(
+        self,
+        state: AppState,
+        name: str,
+    ) -> list[dict]:
+        """Read the plugin-declared active/recent connection projection."""
+        plugin = self.require(name)
+        source = plugin.meta.capabilities.connection_source
+        if source in {"tracked", "none"}:
+            return []
+        if source == "plugin":
+            return self.invoker.connected_clients(plugin, state)
+        return list(self.invoker.query(plugin, source, state=state) or [])
+
+    def client_config(
+        self,
+        state: AppState,
+        name: str,
+        user: User,
+        **parameters: object,
+    ) -> str:
+        return self.invoker.generate_client_config(
+            self.require(name),
+            user,
+            state,
+            **parameters,
+        )
+
+    def client_link(
+        self,
+        state: AppState,
+        name: str,
+        user: User,
+        **parameters: object,
+    ) -> str:
+        return self.invoker.client_link(
+            self.require(name),
+            user,
+            state,
+            **parameters,
+        )
+
+    def client_links(
+        self,
+        state: AppState,
+        name: str,
+        user: User,
+        **parameters: object,
+    ) -> list[str]:
+        return self.invoker.client_links(
+            self.require(name),
+            user,
+            state,
+            **parameters,
+        )
+
+    def client_profiles(
+        self,
+        state: AppState,
+        name: str,
+    ) -> list[dict[str, Any]]:
+        """Return optional named client profiles without leaking plugin objects."""
+        plugin = self.require(name)
+        query = plugin.meta.capabilities.subscription_profile_query
+        if not query:
+            return []
+        return list(self.invoker.query(plugin, query, state=state) or [])
+
+    def enabled(
+        self,
+        state: AppState,
+        category: PluginCategory | None = None,
+    ) -> list[BasePlugin]:
+        return [
+            plugin
+            for plugin in self.list(category)
+            if state.protocols.get(plugin.meta.name)
+            and state.protocols[plugin.meta.name].enabled
+        ]
+
+    def enabled_names(
+        self,
+        state: AppState,
+        category: PluginCategory | None = None,
+    ) -> set[str]:
+        """Return desired enabled plugin names without exposing the catalog."""
+        return {plugin.meta.name for plugin in self.enabled(state, category)}
+
+    def enabled_subscription_names(
+        self,
+        state: AppState,
+        category: PluginCategory | None = PluginCategory.TRANSPORT,
+    ) -> set[str]:
+        """Return enabled plugins that expose per-user client artifacts."""
+        return {
+            plugin.meta.name
+            for plugin in self.enabled(state, category)
+            if plugin.meta.capabilities.subscription_enabled
+        }
+
+    def maintenance_jobs(self) -> list[MaintenanceJob]:
+        """Expose scheduled plugin work without leaking plugin instances."""
+        return [
+            MaintenanceJob(
+                plugin_name=plugin.meta.name,
+                action=task.action,
+                title=task.title,
+                description=task.description,
+                due_query=task.due_query,
+                enabled_flag=task.enabled_flag,
+                apply_on_success=task.apply_on_success,
+            )
+            for plugin in self.list()
+            for task in plugin.meta.capabilities.maintenance_tasks
+        ]
+
+    def aggregate_traffic(self, state: AppState, name: str) -> int | None:
+        """Read an optional protocol-wide counter through the plugin boundary."""
+        plugin = self.require(name)
+        reader = getattr(plugin, "total_traffic", None)
+        if not callable(reader):
+            return None
+        value = self.invoker.query(plugin, "total_traffic", state=state)
+        return None if value is None else max(0, int(value))
+
+    def notify_user_block(self, state: AppState, user) -> list[str]:
+        failures: list[str] = []
+        for plugin in self.enabled(state):
+            try:
+                self.invoker.user_block(plugin, user, state)
+            except Exception as exc:
+                failures.append(
+                    f"{plugin.meta.name}: {str(exc) or exc.__class__.__name__}",
+                )
+        return failures
+
     def statuses(self, state: AppState | None = None) -> dict[str, dict[str, Any]]:
-        return self.catalog.status_all(state) if state is not None else self.catalog.status_all()
+        if state is None and self.state_reader is not None:
+            state = self.state_reader()
+        return (
+            self.catalog.status_all(state)
+            if state is not None
+            else self.catalog.status_all()
+        )
 
     def install(self, state: AppState, name: str) -> bool:
         return self.operations.install_plugin(state, name)

@@ -83,6 +83,7 @@ def test_on_enable_reports_service_diagnostics():
     p = HoneypotPlugin()
     p.last_error = "Address already in use"
     with patch.object(HoneypotPlugin, "_load_state", return_value={"port": 9999, "whitelist": []}), \
+         patch.object(HoneypotPlugin, "_save_state"), \
          patch.object(HoneypotPlugin, "_install_service", return_value=False):
         try:
             p.on_enable(_make_state())

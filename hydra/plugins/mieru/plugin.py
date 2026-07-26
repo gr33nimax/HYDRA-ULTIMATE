@@ -13,11 +13,12 @@ from hydra.core.host import HOST
 
 import json
 
+from hydra.plugins.context import PluginStateAccess
 from hydra.plugins.base import (
     BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment,
     HealthResult,
 )
-from hydra.core.state import AppState, User
+from hydra.core.state_models import User
 from hydra.utils.crypto import derive_key
 from hydra.utils.net import public_ip
 
@@ -34,6 +35,9 @@ class MieruPlugin(BasePlugin):
         category=PluginCategory.TRANSPORT,
         version="2.0.0",
         needs_domain=False,
+        commands=("set_preset",),
+        queries=("get_current_preset",),
+        connection_source="tracked",
     )
 
     # ═══════════════════════════════════════════════════════════════════
@@ -53,7 +57,7 @@ class MieruPlugin(BasePlugin):
     #  configure — генерит mieru inbound для sing-box config.json
     # ═══════════════════════════════════════════════════════════════════
 
-    def configure(self, state: AppState) -> ConfigFragment:
+    def configure(self, state: PluginStateAccess) -> ConfigFragment:
         users = []
         for user in state.users:
             if user.blocked:
@@ -83,11 +87,11 @@ class MieruPlugin(BasePlugin):
 
         return ConfigFragment(inbounds=[inbound])
 
-    def apply(self, state: AppState) -> bool:
+    def apply(self, state: PluginStateAccess) -> bool:
         """No-op: конфиг применяется через orchestrator.apply_config()."""
         return True
 
-    def healthcheck_for_state(self, state: AppState) -> HealthResult:
+    def healthcheck_for_state(self, state: PluginStateAccess) -> HealthResult:
         """Validate the candidate Mieru inbound without reloading state."""
         from hydra.core import singbox
 
@@ -110,22 +114,22 @@ class MieruPlugin(BasePlugin):
     #  Per-user
     # ═══════════════════════════════════════════════════════════════════
 
-    def on_user_add(self, user: User, state: AppState) -> None:
+    def on_user_add(self, user: User, state: PluginStateAccess) -> None:
         user.credentials.setdefault("mieru", {})
         user.credentials["mieru"]["username"] = self._derive_username(user)
         user.credentials["mieru"]["password"] = self._derive_password(user.uuid)
 
-    def on_user_remove(self, user: User, state: AppState) -> None:
+    def on_user_remove(self, user: User, state: PluginStateAccess) -> None:
         pass  # Оркестратор пересоберёт конфиг без этого юзера
 
-    def on_user_block(self, user: User, state: AppState) -> None:
+    def on_user_block(self, user: User, state: PluginStateAccess) -> None:
         pass  # Оркестратор пересоберёт конфиг без blocked юзера
 
     # ═══════════════════════════════════════════════════════════════════
     #  Клиентский конфиг
     # ═══════════════════════════════════════════════════════════════════
 
-    def generate_client_config(self, user: User, state: AppState) -> str:
+    def generate_client_config(self, user: User, state: PluginStateAccess) -> str:
         """Sing-box клиентский конфиг JSON."""
         username = self._derive_username(user)
         password = self._derive_password(user.uuid)
@@ -157,7 +161,7 @@ class MieruPlugin(BasePlugin):
         }
         return json.dumps(full, indent=2)
 
-    def client_link(self, user: User, state: AppState) -> str:
+    def client_link(self, user: User, state: PluginStateAccess) -> str:
         """mierus:// ссылка для Karing и Throne."""
         import urllib.parse
         username = urllib.parse.quote(self._derive_username(user), safe="")
@@ -195,18 +199,17 @@ class MieruPlugin(BasePlugin):
                         total_bytes += int(parts[1])
         return total_bytes
 
-    def status(self) -> PluginStatus:
+    def status(
+        self,
+        state: PluginStateAccess | None = None,
+    ) -> PluginStatus:
         from hydra.core.singbox import is_installed, is_running
-        from hydra.core.state import load_state
         installed = is_installed()
         enabled = False
-        try:
-            state = load_state()
+        if state is not None:
             ps = state.protocols.get("mieru")
             if ps:
                 enabled = ps.enabled
-        except Exception:
-            pass
 
         info = {}
         if installed and enabled:
@@ -232,7 +235,7 @@ class MieruPlugin(BasePlugin):
             info=info,
         )
 
-    def traffic(self, state: AppState) -> dict[str, int]:
+    def traffic(self, state: PluginStateAccess) -> dict[str, int]:
         res = {}
         for u in state.users:
             t = u.credentials.get("mieru", {}).get("traffic_used_bytes", 0)
@@ -240,7 +243,7 @@ class MieruPlugin(BasePlugin):
                 res[u.email] = t
         return res
 
-    def connected_clients(self, state: AppState | None = None) -> list[dict]:
+    def connected_clients(self, state: PluginStateAccess | None = None) -> list[dict]:
         """Получает список подключённых клиентов через утилиту ss с группировкой по IP."""
         import shutil
         import subprocess
@@ -310,7 +313,7 @@ class MieruPlugin(BasePlugin):
     #  Управление
     # ═══════════════════════════════════════════════════════════════════
 
-    def on_enable(self, state: AppState) -> None:
+    def on_enable(self, state: PluginStateAccess) -> None:
         from hydra.utils.firewall import open_range
         open_range("tcp", DEFAULT_PORT_START, DEFAULT_PORT_END, "mieru")
         
@@ -327,7 +330,7 @@ class MieruPlugin(BasePlugin):
                 "-m", "comment", "--comment", f"mieru-tx-{p}"
             ], capture_output=True)
 
-    def on_disable(self, state: AppState) -> None:
+    def on_disable(self, state: PluginStateAccess) -> None:
         from hydra.utils.firewall import close_range
         close_range("tcp", DEFAULT_PORT_START, DEFAULT_PORT_END, "mieru")
         self._remove_iptables_rules()
@@ -357,7 +360,7 @@ class MieruPlugin(BasePlugin):
     def _derive_password(uuid: str) -> str:
         return derive_key("mieru-pass", uuid)
 
-    def _get_traffic_pattern(self, state: AppState) -> str:
+    def _get_traffic_pattern(self, state: PluginStateAccess) -> str:
         """Возвращает base64 traffic_pattern для текущего пресета."""
         from hydra.plugins.mieru.presets import get_preset_base64
         ps = state.protocols.get("mieru")
@@ -366,7 +369,7 @@ class MieruPlugin(BasePlugin):
             preset_name = ps.config["traffic_preset"]
         return get_preset_base64(preset_name)
 
-    def get_current_preset(self, state: AppState) -> str:
+    def get_current_preset(self, state: PluginStateAccess) -> str:
         """Возвращает имя текущего пресета обфускации."""
         ps = state.protocols.get("mieru")
         if ps and ps.config and "traffic_preset" in ps.config:
@@ -374,16 +377,17 @@ class MieruPlugin(BasePlugin):
         return "basic"
 
 
-    def set_preset(self, state: AppState, preset_name: str) -> bool:
-        """Устанавливает пресет обфускации и применяет конфиг."""
+    def set_preset(
+        self,
+        state: PluginStateAccess,
+        preset_name: str,
+    ) -> bool:
+        """Validate and update the desired traffic preset."""
         from hydra.plugins.mieru.presets import PRESETS
         if preset_name not in PRESETS:
             return False
-        
-        from hydra.core.state import get_protocol, save_state
-        ps = get_protocol(state, "mieru")
+        ps = state.protocols.get("mieru")
+        if ps is None:
+            return False
         ps.config["traffic_preset"] = preset_name
-        save_state(state)
-        
-        from hydra.core import orchestrator
-        return orchestrator.apply_config(state)
+        return True

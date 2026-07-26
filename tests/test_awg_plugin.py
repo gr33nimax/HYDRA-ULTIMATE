@@ -1,13 +1,23 @@
 """tests/test_awg_plugin.py — Тесты для AmneziaWG plugin v2."""
+import copy
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import sys
 import time
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin, AWG_CONF, AWG_INTERFACE
+from hydra.plugins.amneziawg.plugin import (
+    AWG_CONF,
+    AWG_CONF_1,
+    AWG_INTERFACE,
+    AWG_INTERFACE_1,
+    AWG_UNIT,
+    AWG_UNIT_1,
+    AmneziaWGPlugin,
+)
 from hydra.plugins.base import PluginCategory, ConfigFragment
 from hydra.core.state import AppState, PluginState, User
+from hydra.services.plugin_commands import PluginCommandService
 
 
 FAKE_CONF = """[Interface]
@@ -32,6 +42,15 @@ def _make_state(users: list | None = None) -> AppState:
 
 def _make_user(email: str, uuid: str = "u1", blocked: bool = False) -> User:
     return User(email=email, uuid=uuid, blocked=blocked)
+
+
+def _set_keys(user: User, profile: str = "desktop", suffix: str = "d") -> None:
+    key = "amneziawg" if profile == "desktop" else f"amneziawg_{profile}"
+    user.credentials[key] = {
+        "private_key": f"private-{suffix}",
+        "public_key": f"public-{suffix}",
+        "preshared_key": f"psk-{suffix}",
+    }
 
 
 def test_plugin_meta():
@@ -74,10 +93,9 @@ def test_status_uses_persisted_lifecycle_instead_of_config_presence():
     })
 
     with patch.object(p, "_installed", return_value=True), \
-         patch("hydra.core.state.load_state", return_value=state), \
          patch("hydra.plugins.amneziawg.plugin.AWG_CONF") as config:
         config.exists.return_value = True
-        status = p.status()
+        status = p.status(state)
 
     assert status.installed is True
     assert status.enabled is False
@@ -86,7 +104,9 @@ def test_status_uses_persisted_lifecycle_instead_of_config_presence():
 
 def test_configure_returns_tproxy_ifaces():
     p = AmneziaWGPlugin()
-    state = _make_state([_make_user("a@x.com")])
+    user = _make_user("a@x.com")
+    _set_keys(user)
+    state = _make_state([user])
 
     with patch("hydra.plugins.amneziawg.plugin.AWG_CONF") as mock_conf, \
          patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1") as mock_conf_1, \
@@ -108,18 +128,23 @@ def test_configure_returns_tproxy_ifaces():
 
 def test_configure_no_side_effects():
     p = AmneziaWGPlugin()
-    state = _make_state([_make_user("a@x.com")])
+    user = _make_user("a@x.com")
+    _set_keys(user)
+    state = _make_state([user])
+    before = copy.deepcopy(state)
 
     with patch("hydra.plugins.amneziawg.plugin.AWG_CONF") as mock_conf, \
          patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1") as mock_conf_1, \
-         patch.object(p, "_awg") as mock_awg:
+         patch("hydra.plugins.amneziawg.plugin.HOST.run") as host_run:
         mock_conf.exists.return_value = True
         mock_conf.read_text.return_value = FAKE_CONF
         mock_conf_1.exists.return_value = False
-        mock_awg.return_value = MagicMock(stdout="mock_pubkey\n", returncode=0)
 
         p.configure(state)
         mock_conf.write_text.assert_not_called()
+        mock_conf_1.write_text.assert_not_called()
+        host_run.assert_not_called()
+        assert state == before
 
 
 def test_configure_empty_when_no_conf():
@@ -246,9 +271,10 @@ def test_resolve_network_avoids_conflicts():
     # Если awg0.conf не существует, должен выбрать первую свободную сеть (10.67.67.0/24)
     with patch("hydra.plugins.amneziawg.plugin.AWG_CONF") as mock_conf:
         mock_conf.exists.return_value = False
+        before = copy.deepcopy(state)
         net = p._resolve_network(state)
         assert net == "10.67.67.0/24"
-        assert state.protocols["amneziawg"].config["network"] == "10.67.67.0/24"
+        assert state == before
 
     # Если в awg0.conf прописана конфликтующая сеть (10.66.66.1/24), он должен проигнорировать её и выбрать свободную (10.67.67.0/24)
     with patch("hydra.plugins.amneziawg.plugin.AWG_CONF") as mock_conf:
@@ -295,7 +321,7 @@ def test_invalid_legacy_amnezia_network_falls_back_without_raising():
     assert result == ("10.67.67", "1", "10.67.67.0/24")
 
 
-def test_existing_profile_network_is_preserved_during_apply():
+def test_desired_profile_network_overlays_existing_runtime_network():
     p = AmneziaWGPlugin()
     state = AppState(protocols={
         "amneziawg": PluginState(
@@ -312,10 +338,10 @@ def test_existing_profile_network_is_preserved_during_apply():
         state, conf, "desktop", "10.67.67.0/24",
     )
 
-    assert (base, server_octet, network) == ("10.66.66", "1", "10.66.66.0/24")
+    assert (base, server_octet, network) == ("10.67.67", "1", "10.67.67.0/24")
 
 
-def test_configure_does_not_migrate_existing_interface_network(tmp_path):
+def test_configure_reconciles_existing_interface_to_desired_network(tmp_path):
     p = AmneziaWGPlugin()
     desktop_conf = tmp_path / "awg0.conf"
     desktop_conf.write_text(FAKE_CONF, encoding="utf-8")
@@ -332,8 +358,481 @@ def test_configure_does_not_migrate_existing_interface_network(tmp_path):
          patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1", mobile_conf):
         p.configure(state)
 
-    assert "Address = 10.66.66.1/24" in p._pending_conf
-    assert "Address = 10.67.67.1/24" not in p._pending_conf
+    assert "Address = 10.67.67.1/24" in p._pending_conf
+    assert "Address = 10.66.66.1/24" not in p._pending_conf
+
+
+def test_mobile_config_is_rendered_from_state_without_existing_file(tmp_path):
+    p = AmneziaWGPlugin()
+    user = _make_user("mobile@example.com")
+    _set_keys(user, "desktop", "d")
+    _set_keys(user, "mobile", "m")
+    state = AppState(
+        protocols={
+            "amneziawg": PluginState(
+                enabled=True,
+                config={
+                    "profiles": {
+                        "desktop": {
+                            "interface": AWG_INTERFACE,
+                            "port": 51820,
+                            "network": "10.67.67.0/24",
+                            "server_private_key": "server-desktop",
+                            "obfuscation": {"Jc": "4"},
+                        },
+                        "mobile": {
+                            "interface": AWG_INTERFACE_1,
+                            "port": 51999,
+                            "network": "10.88.0.0/24",
+                            "server_private_key": "server-mobile",
+                            "obfuscation": {"Jc": "3", "I1": "mobile.example"},
+                            "mtu": 1280,
+                        },
+                    },
+                },
+            ),
+        },
+        users=[user],
+    )
+    desktop_conf = tmp_path / "awg0.conf"
+    mobile_conf = tmp_path / "awg1.conf"
+    before = copy.deepcopy(state)
+
+    with patch("hydra.plugins.amneziawg.plugin.AWG_CONF", desktop_conf), \
+         patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1", mobile_conf), \
+         patch("hydra.plugins.amneziawg.plugin.HOST.run") as host_run:
+        fragment = p.configure(state)
+
+    assert state == before
+    host_run.assert_not_called()
+    assert fragment.nft_tproxy_ifaces == [AWG_INTERFACE, AWG_INTERFACE_1]
+    assert p._pending_conf_1 is not None
+    assert "PrivateKey = server-mobile" in p._pending_conf_1
+    assert "Address = 10.88.0.1/24" in p._pending_conf_1
+    assert "ListenPort = 51999" in p._pending_conf_1
+    assert "PublicKey = public-m" in p._pending_conf_1
+    assert not mobile_conf.exists()
+
+
+def test_desired_profile_overlays_existing_interface_fields(tmp_path):
+    p = AmneziaWGPlugin()
+    desktop_conf = tmp_path / "awg0.conf"
+    desktop_conf.write_text(
+        """[Interface]
+PrivateKey = old-key
+Address = 10.1.1.9/24
+ListenPort = 1111
+Jc = 9
+I1 = stale.example
+MTU = 1400
+""",
+        encoding="utf-8",
+    )
+    state = AppState(
+        protocols={
+            "amneziawg": PluginState(
+                enabled=True,
+                config={
+                    "profiles": {
+                        "desktop": {
+                            "interface": AWG_INTERFACE,
+                            "port": 52222,
+                            "network": "10.77.0.0/24",
+                            "server_private_key": "desired-key",
+                            "obfuscation": {"Jc": "3", "H1": "123"},
+                            "mtu": 1337,
+                        },
+                    },
+                },
+            ),
+        },
+    )
+
+    with patch("hydra.plugins.amneziawg.plugin.AWG_CONF", desktop_conf), \
+         patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1", tmp_path / "awg1.conf"):
+        p.configure(state)
+
+    rendered = p._pending_conf or ""
+    assert "PrivateKey = desired-key" in rendered
+    assert "Address = 10.77.0.1/24" in rendered
+    assert "ListenPort = 52222" in rendered
+    assert "MTU = 1337" in rendered
+    assert "Jc = 3" in rendered
+    assert "H1 = 123" in rendered
+    assert "old-key" not in rendered
+    assert "stale.example" not in rendered
+
+
+def test_add_profile_only_mutates_desired_state(tmp_path):
+    p = AmneziaWGPlugin()
+    desktop_conf = tmp_path / "awg0.conf"
+    desktop_conf.write_text(FAKE_CONF, encoding="utf-8")
+    mobile_conf = tmp_path / "awg1.conf"
+    user = _make_user("active@example.com")
+    _set_keys(user, "desktop", "d")
+    blocked = _make_user("blocked@example.com", uuid="u2", blocked=True)
+    state = AppState(
+        protocols={"amneziawg": PluginState(enabled=True, config={})},
+        users=[user, blocked],
+    )
+    original_file = desktop_conf.read_bytes()
+
+    with patch("hydra.plugins.amneziawg.plugin.AWG_CONF", desktop_conf), \
+         patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1", mobile_conf), \
+         patch.object(p, "_generate_private_key", return_value="mobile-server"), \
+             patch.object(
+                 p,
+                 "_generate_keys",
+             return_value={
+                 "private_key": "mobile-private",
+                 "public_key": "mobile-public",
+                 "preshared_key": "mobile-psk",
+             },
+         ), \
+         patch("hydra.plugins.amneziawg.plugin.HOST.run") as host_run:
+        assert p.add_profile("mobile", "mobile:tele2", state) is True
+
+    host_run.assert_not_called()
+    assert desktop_conf.read_bytes() == original_file
+    assert not mobile_conf.exists()
+    profiles = state.protocols["amneziawg"].config["profiles"]
+    assert profiles["desktop"]["server_private_key"] == "sFk7RkMx9J0XJ7WpP8mF0Q=="
+    assert profiles["mobile"]["server_private_key"] == "mobile-server"
+    assert user.credentials["amneziawg_mobile"]["public_key"] == "mobile-public"
+    assert "amneziawg_mobile" not in blocked.credentials
+
+
+def test_add_profile_rolls_back_with_application_transaction(tmp_path):
+    p = AmneziaWGPlugin()
+    user = _make_user("rollback@example.com")
+    _set_keys(user, "desktop", "d")
+    state = AppState(
+        protocols={
+            "amneziawg": PluginState(
+                enabled=True,
+                config={
+                    "profiles": {
+                        "desktop": {
+                            "interface": AWG_INTERFACE,
+                            "port": 51820,
+                            "network": "10.67.67.0/24",
+                            "server_private_key": "server-desktop",
+                            "obfuscation": {"Jc": "4"},
+                        },
+                    },
+                },
+            ),
+        },
+        users=[user],
+    )
+    before = copy.deepcopy(state)
+    saved: list[AppState] = []
+    service = PluginCommandService(
+        get_plugin=lambda name: p if name == "amneziawg" else None,
+        apply_config=lambda current: False,
+        save_state=lambda current: saved.append(copy.deepcopy(current)),
+    )
+
+    with patch("hydra.plugins.amneziawg.plugin.AWG_CONF", tmp_path / "awg0.conf"), \
+         patch.object(p, "_generate_private_key", return_value="mobile-server"), \
+         patch.object(
+             p,
+             "_generate_keys",
+             return_value={
+                 "private_key": "mobile-private",
+                 "public_key": "mobile-public",
+                 "preshared_key": "mobile-psk",
+             },
+         ), \
+         patch("hydra.plugins.amneziawg.plugin.HOST.run") as host_run:
+        host_run.return_value.returncode = 0
+        assert service.execute(
+            state,
+            "amneziawg",
+            "add_profile",
+            name="mobile",
+            preset="mobile:generic",
+        ) is False
+
+    assert [item.args[0] for item in host_run.call_args_list] == [
+        ["systemctl", "stop", AWG_UNIT],
+        ["systemctl", "stop", AWG_UNIT_1],
+    ]
+    assert state == before
+    assert saved[-1] == before
+
+
+def test_remove_profile_defers_runtime_cleanup_to_apply(tmp_path):
+    p = AmneziaWGPlugin()
+    desktop_conf = tmp_path / "awg0.conf"
+    mobile_conf = tmp_path / "awg1.conf"
+    mobile_conf.write_text("mobile-runtime", encoding="utf-8")
+    user = _make_user("active@example.com")
+    _set_keys(user, "desktop", "d")
+    _set_keys(user, "mobile", "m")
+    state = AppState(
+        protocols={
+            "amneziawg": PluginState(
+                enabled=True,
+                config={
+                    "profiles": {
+                        "desktop": {
+                            "interface": AWG_INTERFACE,
+                            "port": 51820,
+                            "network": "10.67.67.0/24",
+                            "server_private_key": "server-desktop",
+                            "obfuscation": {},
+                        },
+                        "mobile": {
+                            "interface": AWG_INTERFACE_1,
+                            "port": 51821,
+                            "network": "10.68.68.0/24",
+                            "server_private_key": "server-mobile",
+                            "obfuscation": {},
+                        },
+                    },
+                },
+            ),
+        },
+        users=[user],
+    )
+
+    with patch("hydra.plugins.amneziawg.plugin.AWG_CONF", desktop_conf), \
+         patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1", mobile_conf), \
+         patch("hydra.plugins.amneziawg.plugin.HOST.run") as host_run:
+        assert p.remove_profile("mobile", state) is True
+        host_run.assert_not_called()
+        assert mobile_conf.read_text(encoding="utf-8") == "mobile-runtime"
+
+        p.configure(state)
+        with patch.object(p, "_apply_iface", return_value=True):
+            assert p.apply(state) is True
+
+    assert not mobile_conf.exists()
+    assert "mobile" not in state.protocols["amneziawg"].config["profiles"]
+    assert "amneziawg_mobile" not in user.credentials
+    host_run.assert_any_call(
+        ["systemctl", "stop", AWG_UNIT_1],
+        capture_output=True,
+    )
+    host_run.assert_any_call(
+        ["systemctl", "disable", AWG_UNIT_1],
+        capture_output=True,
+    )
+
+
+def test_rotate_obfuscation_only_mutates_desired_state(tmp_path):
+    p = AmneziaWGPlugin()
+    desktop_conf = tmp_path / "awg0.conf"
+    desktop_conf.write_text(FAKE_CONF, encoding="utf-8")
+    state = AppState(
+        protocols={
+            "amneziawg": PluginState(
+                enabled=True,
+                config={
+                    "profiles": {
+                        "desktop": {
+                            "interface": AWG_INTERFACE,
+                            "port": 51820,
+                            "network": "10.67.67.0/24",
+                            "server_private_key": "server",
+                            "preset": "wired",
+                            "obfuscation": {"Jc": "4"},
+                        },
+                    },
+                },
+            ),
+        },
+    )
+    original_file = desktop_conf.read_bytes()
+    replacement = {"Jc": "7", "I1": ""}
+
+    with patch("hydra.plugins.amneziawg.plugin.AWG_CONF", desktop_conf), \
+         patch.object(p, "_generate_obfuscation", return_value=replacement), \
+         patch("hydra.plugins.amneziawg.plugin.HOST.run") as host_run:
+        assert p.rotate_obfuscation(
+            state,
+            profile="desktop",
+            preset="stealth",
+        ) is True
+
+    host_run.assert_not_called()
+    assert desktop_conf.read_bytes() == original_file
+    desktop = state.protocols["amneziawg"].config["profiles"]["desktop"]
+    assert desktop["preset"] == "stealth"
+    assert desktop["obfuscation"] == replacement
+
+
+def test_apply_writes_both_desired_profiles_after_configure(tmp_path):
+    p = AmneziaWGPlugin()
+    desktop_conf = tmp_path / "awg0.conf"
+    mobile_conf = tmp_path / "awg1.conf"
+    user = _make_user("both@example.com")
+    _set_keys(user, "desktop", "d")
+    _set_keys(user, "mobile", "m")
+    state = AppState(
+        protocols={
+            "amneziawg": PluginState(
+                enabled=True,
+                config={
+                    "profiles": {
+                        "desktop": {
+                            "interface": AWG_INTERFACE,
+                            "port": 51820,
+                            "network": "10.67.67.0/24",
+                            "server_private_key": "server-d",
+                            "obfuscation": {"Jc": "4"},
+                        },
+                        "mobile": {
+                            "interface": AWG_INTERFACE_1,
+                            "port": 51821,
+                            "network": "10.68.68.0/24",
+                            "server_private_key": "server-m",
+                            "obfuscation": {"Jc": "3"},
+                        },
+                    },
+                },
+            ),
+        },
+        users=[user],
+    )
+
+    with patch("hydra.plugins.amneziawg.plugin.AWG_CONF", desktop_conf), \
+         patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1", mobile_conf), \
+         patch.object(p, "_apply_iface", return_value=True) as apply_iface:
+        p.configure(state)
+        assert p.apply(state) is True
+
+    assert "PrivateKey = server-d" in desktop_conf.read_text(encoding="utf-8")
+    assert "PrivateKey = server-m" in mobile_conf.read_text(encoding="utf-8")
+    assert apply_iface.call_count == 2
+
+
+def test_client_config_and_amnezia_link_are_read_only(tmp_path):
+    p = AmneziaWGPlugin()
+    desktop_conf = tmp_path / "awg0.conf"
+    user = _make_user("reader@example.com")
+    _set_keys(user, "desktop", "d")
+    desktop_conf.write_text(
+        f"""{FAKE_CONF}
+### reader@example.com
+[Peer]
+PublicKey = public-d
+PresharedKey = psk-d
+AllowedIPs = 10.66.66.2/32
+""",
+        encoding="utf-8",
+    )
+    state = AppState(
+        protocols={"dnscrypt": PluginState(enabled=True)},
+        users=[user],
+    )
+    state.network.server_ip = "203.0.113.10"
+    before_state = copy.deepcopy(state)
+    before_file = desktop_conf.read_bytes()
+
+    with patch("hydra.plugins.amneziawg.plugin.AWG_CONF", desktop_conf), \
+         patch.object(p, "_server_pubkey_for_conf", return_value="server-public"), \
+         patch.object(p, "_current_port", return_value=51820), \
+         patch("hydra.plugins.amneziawg.plugin.HOST.run") as host_run:
+        config = p.generate_client_config(user, state)
+        link = p.amnezia_link(user, state)
+
+    host_run.assert_not_called()
+    assert "PrivateKey = private-d" in config
+    assert "DNS = 203.0.113.10" in config
+    assert link.startswith("vpn://")
+    assert state == before_state
+    assert desktop_conf.read_bytes() == before_file
+
+
+def test_on_user_add_provisions_active_profiles_only_in_lifecycle():
+    p = AmneziaWGPlugin()
+    user = _make_user("new@example.com")
+    state = AppState(
+        protocols={
+            "amneziawg": PluginState(
+                enabled=True,
+                config={
+                    "profiles": {
+                        "desktop": {},
+                        "mobile": {},
+                    },
+                },
+            ),
+        },
+        users=[user],
+    )
+    generated = [
+        {
+            "private_key": "desktop-private",
+            "public_key": "desktop-public",
+            "preshared_key": "desktop-psk",
+        },
+        {
+            "private_key": "mobile-private",
+            "public_key": "mobile-public",
+            "preshared_key": "mobile-psk",
+        },
+    ]
+
+    with patch.object(p, "_generate_keys", side_effect=generated):
+        p.on_user_add(user, state)
+
+    assert user.credentials["amneziawg"]["public_key"] == "desktop-public"
+    assert user.credentials["amneziawg_mobile"]["public_key"] == "mobile-public"
+
+
+def test_get_profiles_reads_desired_state_without_host_or_mutation():
+    p = AmneziaWGPlugin()
+    state = AppState(
+        protocols={
+            "amneziawg": PluginState(
+                enabled=True,
+                config={
+                    "profiles": {
+                        "desktop": {
+                            "interface": AWG_INTERFACE,
+                            "port": "51820",
+                            "network": "10.67.67.0/24",
+                            "preset": "wired",
+                            "obfuscation": {"Jc": "4"},
+                        },
+                    },
+                },
+            ),
+        },
+    )
+    before = copy.deepcopy(state)
+
+    with patch("hydra.plugins.amneziawg.plugin.HOST.run") as host_run:
+        profiles = p.get_profiles(state)
+
+    host_run.assert_not_called()
+    assert profiles[0]["port"] == 51820
+    assert profiles[0]["network"] == "10.67.67.0/24"
+    assert state == before
+
+
+def test_configure_rejects_unprovisioned_user_without_mutating_state(tmp_path):
+    p = AmneziaWGPlugin()
+    desktop_conf = tmp_path / "awg0.conf"
+    desktop_conf.write_text(FAKE_CONF, encoding="utf-8")
+    state = AppState(users=[_make_user("missing@example.com")])
+    before = copy.deepcopy(state)
+
+    with patch("hydra.plugins.amneziawg.plugin.AWG_CONF", desktop_conf), \
+         patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1", tmp_path / "awg1.conf"), \
+         patch("hydra.plugins.amneziawg.plugin.HOST.run") as host_run:
+        try:
+            p.configure(state)
+        except RuntimeError as exc:
+            assert "were not provisioned" in str(exc)
+        else:
+            raise AssertionError("configure accepted missing credentials")
+
+    host_run.assert_not_called()
+    assert state == before
 
 
 def test_presets_strategies_and_overrides():

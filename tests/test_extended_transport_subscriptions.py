@@ -3,7 +3,18 @@ from __future__ import annotations
 import json
 
 from hydra.core.state import AppState, PluginState, User
-from hydra.services.subscriptions.generator import generate_links, generate_singbox_config
+from hydra.plugins.registry import enabled, get
+from hydra.services.subscriptions.generator import (
+    SubscriptionPluginService,
+    generate_links,
+    generate_singbox_config,
+)
+
+
+PLUGINS = SubscriptionPluginService(
+    enabled_plugins=enabled,
+    get_plugin=get,
+)
 
 
 def _state() -> tuple[AppState, User]:
@@ -23,14 +34,14 @@ def _state() -> tuple[AppState, User]:
 
 def test_share_subscription_contains_both_extended_transports():
     state, user = _state()
-    links = generate_links(user, state)
+    links = generate_links(user, state, plugins=PLUGINS)
     assert any(link.startswith("hysteria2://") for link in links)
     assert any(link.startswith("snell://") for link in links)
 
 
 def test_singbox_subscription_contains_both_outbounds():
     state, user = _state()
-    config = generate_singbox_config(user, state)
+    config = generate_singbox_config(user, state, plugins=PLUGINS)
     outbound_types = {outbound["type"] for outbound in config["outbounds"]}
     assert {"hysteria2", "snell", "direct"} <= outbound_types
     assert config["route"]["final"].startswith("hysteria2-")
@@ -38,5 +49,5 @@ def test_singbox_subscription_contains_both_outbounds():
 
 def test_individual_client_payloads_are_json_serializable():
     state, user = _state()
-    config = generate_singbox_config(user, state)
+    config = generate_singbox_config(user, state, plugins=PLUGINS)
     assert json.loads(json.dumps(config))["outbounds"] == config["outbounds"]

@@ -5,18 +5,18 @@ from hydra.core.host import HOST
 
 import json
 import shutil
-import subprocess
 import time
 import urllib.parse
-from pathlib import Path
 
+from hydra.plugins.context import PluginStateAccess
 from hydra.plugins.base import (
     BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment,
     HealthResult,
 )
-from hydra.core.state import AppState, User
+from hydra.core.state_models import User
 from hydra.utils.crypto import derive_key, derive_hex_key
 from hydra.utils.net import public_ip
+from hydra.utils.tls import resolve_tls_material
 from hydra.plugins.anytls.presets import get_preset
 
 
@@ -40,6 +40,10 @@ class AnyTLSPlugin(BasePlugin):
         category=PluginCategory.TRANSPORT,
         version="2.0.0",
         needs_domain=True,
+        commands=("set_preset",),
+        queries=("get_current_preset",),
+        tls_domain_source="protocol",
+        connection_source="tracked",
     )
 
     # ═════════════════════════════════════════════════════════════════════
@@ -57,7 +61,7 @@ class AnyTLSPlugin(BasePlugin):
     #  configure — sing-box anytls inbound
     # ═════════════════════════════════════════════════════════════════════
 
-    def configure(self, state: AppState) -> ConfigFragment:
+    def configure(self, state: PluginStateAccess) -> ConfigFragment:
         ps = state.protocols.get("anytls")
         anytls_domain = (ps.config.get("domain", "") if ps and ps.config else "")
         
@@ -106,10 +110,10 @@ class AnyTLSPlugin(BasePlugin):
             }
         return ConfigFragment(inbounds=[inbound])
 
-    def apply(self, state: AppState) -> bool:
+    def apply(self, state: PluginStateAccess) -> bool:
         return True
 
-    def healthcheck_for_state(self, state: AppState) -> HealthResult:
+    def healthcheck_for_state(self, state: PluginStateAccess) -> HealthResult:
         """Validate the candidate AnyTLS inbound without reloading state."""
         from hydra.core import singbox
 
@@ -128,7 +132,7 @@ class AnyTLSPlugin(BasePlugin):
             {"sing_box": service_active, "anytls_inbound": inbound_configured},
         )
 
-    def _get_padding_scheme(self, state: AppState) -> list[str]:
+    def _get_padding_scheme(self, state: PluginStateAccess) -> list[str]:
         ps = state.protocols.get("anytls")
         preset_name = "web_browsing"
         if ps and ps.config and "padding_preset" in ps.config:
@@ -136,48 +140,49 @@ class AnyTLSPlugin(BasePlugin):
         preset = get_preset(preset_name)
         return preset["padding_scheme"]
 
-    def get_current_preset(self, state: AppState) -> str:
+    def get_current_preset(self, state: PluginStateAccess) -> str:
         """Возвращает имя текущего пресета обфускации."""
         ps = state.protocols.get("anytls")
         if ps and ps.config and "padding_preset" in ps.config:
             return ps.config["padding_preset"]
         return "web_browsing"
 
-    def set_preset(self, state: AppState, preset_name: str) -> bool:
-        """Устанавливает пресет обфускации и применяет конфиг."""
+    def set_preset(
+        self,
+        state: PluginStateAccess,
+        preset_name: str,
+    ) -> bool:
+        """Validate and update the desired padding preset."""
         from hydra.plugins.anytls.presets import PRESETS
         if preset_name not in PRESETS:
             return False
-        
-        from hydra.core.state import get_protocol, save_state
-        ps = get_protocol(state, "anytls")
+        ps = state.protocols.get("anytls")
+        if ps is None:
+            return False
         ps.config["padding_preset"] = preset_name
-        save_state(state)
-        
-        from hydra.core import orchestrator
-        return orchestrator.apply_config(state)
+        return True
 
 
     # ═════════════════════════════════════════════════════════════════════
     #  Per-user TRANSPORT-методы
     # ═════════════════════════════════════════════════════════════════════
 
-    def on_user_add(self, user: User, state: AppState) -> None:
+    def on_user_add(self, user: User, state: PluginStateAccess) -> None:
         user.credentials.setdefault("anytls", {})
         user.credentials["anytls"]["username"] = self._derive_username(user)
         user.credentials["anytls"]["password"] = self._derive_password(user.uuid)
 
-    def on_user_remove(self, user: User, state: AppState) -> None:
+    def on_user_remove(self, user: User, state: PluginStateAccess) -> None:
         pass
 
-    def on_user_block(self, user: User, state: AppState) -> None:
+    def on_user_block(self, user: User, state: PluginStateAccess) -> None:
         pass
 
     # ═════════════════════════════════════════════════════════════════════
     #  Клиентские конфиги
     # ═════════════════════════════════════════════════════════════════════
 
-    def generate_client_config(self, user: User, state: AppState) -> str:
+    def generate_client_config(self, user: User, state: PluginStateAccess) -> str:
         ps = state.protocols.get("anytls")
         anytls_domain = (ps.config.get("domain", "") if ps and ps.config else "")
         if not anytls_domain:
@@ -215,7 +220,7 @@ class AnyTLSPlugin(BasePlugin):
         }
         return json.dumps(full, indent=2)
 
-    def client_link(self, user: User, state: AppState) -> str:
+    def client_link(self, user: User, state: PluginStateAccess) -> str:
         ps = state.protocols.get("anytls")
         anytls_domain = (ps.config.get("domain", "") if ps and ps.config else "")
         if not anytls_domain:
@@ -229,56 +234,35 @@ class AnyTLSPlugin(BasePlugin):
     #  Управление сервисом
     # ═════════════════════════════════════════════════════════════════════
 
-    def on_enable(self, state: AppState) -> None:
+    def on_enable(self, state: PluginStateAccess) -> None:
         ps = state.protocols.get("anytls")
         if not ps:
-            from hydra.core.state import get_protocol
-            ps = get_protocol(state, "anytls")
+            raise ValueError("AnyTLS configuration is missing")
 
-        # 1. Визард: запросить ОТДЕЛЬНЫЙ домен для AnyTLS
-        anytls_domain = ps.config.get("domain", "") if ps and ps.config else ""
+        # Input belongs to adapters. Lifecycle hooks only validate the desired
+        # state and reconcile host resources, so CLI/Telegram calls never block.
+        anytls_domain = str(ps.config.get("domain", "")).strip()
         if not anytls_domain:
-            from hydra.ui.tui import prompt
-            anytls_domain = prompt(
-                "Введите домен для AnyTLS (ДОЛЖЕН ОТЛИЧАТЬСЯ от домена NaiveProxy!)"
+            raise ValueError(
+                "Домен AnyTLS не настроен; задайте protocols.anytls.config.domain "
+                "перед включением",
             )
-            if not anytls_domain:
-                raise ValueError("Домен обязателен для AnyTLS!")
-            
-            # Проверка: не совпадает ли с доменом naive
-            if anytls_domain == state.network.domain:
-                naive_ps = state.protocols.get("naive")
-                if naive_ps and naive_ps.enabled:
-                    raise ValueError(
-                        f"Домен {anytls_domain} уже используется NaiveProxy! "
-                        "AnyTLS требует отдельный домен."
-                    )
-            
-            ps.config["domain"] = anytls_domain
+
+        # Проверка: не совпадает ли с доменом naive
+        if anytls_domain == state.network.domain:
+            naive_ps = state.protocols.get("naive")
+            if naive_ps and naive_ps.enabled:
+                raise ValueError(
+                    f"Домен {anytls_domain} уже используется NaiveProxy! "
+                    "AnyTLS требует отдельный домен."
+                )
         
         # 2. Получить TLS-сертификат (автоматически или найти существующий)
         cert_file, key_file = self._resolve_certs(anytls_domain, ps)
         if not cert_file or not key_file:
-            # Автоматическое получение через certbot (HTTP-01 challenge, порт 80)
-            print(f"  Получаю TLS-сертификат для {anytls_domain}...")
-            ok = self._obtain_cert_certbot(anytls_domain)
-            if ok:
-                cert_file, key_file = self._find_existing_cert(anytls_domain)
-        
-        if not cert_file or not key_file:
-            # Fallback: ручной ввод
-            from hydra.ui.tui import prompt
-            cert_file = prompt("Путь к сертификату (fullchain.pem)", default="")
-            key_file = prompt("Путь к приватному ключу (privkey.pem)", default="")
-        
-        if not cert_file or not key_file:
             raise ValueError(
-                f"TLS-сертификат для домена {anytls_domain} не получен! "
-                "Проверьте DNS-записи и доступность порта 80."
+                f"TLS material for {anytls_domain} must be prepared by the application service"
             )
-        
-        ps.config["cert_file"] = cert_file
-        ps.config["key_file"] = key_file
         
         # 3. Firewall (порт 443 — если ещё не открыт naive)
         from hydra.utils.firewall import open_tcp
@@ -288,35 +272,26 @@ class AnyTLSPlugin(BasePlugin):
         self._remove_iptables_rules()
         self._add_iptables_rules()
         
-        # Выставляем enabled = True, чтобы rebuild знал, что AnyTLS включен
-        ps.enabled = True
-        
-    def on_disable(self, state: AppState) -> None:
+    def on_disable(self, state: PluginStateAccess) -> None:
         self._remove_iptables_rules()
-        
-        ps = state.protocols.get("anytls")
-        if ps:
-            ps.enabled = False
         
     # ═════════════════════════════════════════════════════════════════════
     #  Статус / подключенные клиенты
     # ═════════════════════════════════════════════════════════════════════
 
-    def status(self) -> PluginStatus:
+    def status(
+        self,
+        state: PluginStateAccess | None = None,
+    ) -> PluginStatus:
         from hydra.core.singbox import is_installed, is_running
-        from hydra.core.state import load_state
         runtime_installed = is_installed()
-        state = None
         installed = False
         enabled = False
-        try:
-            state = load_state()
+        if state is not None:
             ps = state.protocols.get("anytls")
             if ps:
                 installed = bool(ps.installed and runtime_installed)
                 enabled = bool(ps.enabled and installed)
-        except Exception:
-            pass
 
         info = {}
         if installed and enabled:
@@ -350,7 +325,7 @@ class AnyTLSPlugin(BasePlugin):
             info=info,
         )
 
-    def traffic(self, state: AppState) -> dict[str, int]:
+    def traffic(self, state: PluginStateAccess) -> dict[str, int]:
         res = {}
         for u in state.users:
             t = u.credentials.get("anytls", {}).get("traffic_used_bytes", 0)
@@ -358,17 +333,10 @@ class AnyTLSPlugin(BasePlugin):
                 res[u.email] = t
         return res
 
-    def connected_clients(self, state: AppState | None = None) -> list[dict]:
+    def connected_clients(self, state: PluginStateAccess | None = None) -> list[dict]:
         if not shutil.which("ss"):
             return []
         
-        if state is None:
-            from hydra.core.state import load_state
-            try:
-                state = load_state()
-            except Exception:
-                pass
-                
         from hydra.core.sni_router import get_effective_port
         effective_port = get_effective_port("anytls", state) if state else 443
         
@@ -450,82 +418,8 @@ class AnyTLSPlugin(BasePlugin):
         2. /etc/letsencrypt/live/{domain}/ (certbot)
         3. /etc/xray/{domain}.crt/.key
         """
-        cert = (ps.config.get("cert_file", "") if ps and ps.config else "")
-        key = (ps.config.get("key_file", "") if ps and ps.config else "")
-        if cert and key:
-            return cert, key
-        return self._find_existing_cert(domain)
-
-    def _find_existing_cert(self, domain: str) -> tuple[str, str]:
-        """Поиск сертификата в стандартных путях (аналогично naive)."""
-        paths = [
-            (f"/etc/letsencrypt/live/{domain}/fullchain.pem", f"/etc/letsencrypt/live/{domain}/privkey.pem"),
-            (f"/etc/xray/{domain}.crt", f"/etc/xray/{domain}.key"),
-            ("/etc/xray/xray.crt", "/etc/xray/xray.key"),
-        ]
-        for cert, key in paths:
-            cert_p, key_p = Path(cert), Path(key)
-            if cert_p.exists() and key_p.exists():
-                return cert, key
-        return "", ""
-
-    def _obtain_cert_certbot(self, domain: str) -> bool:
-        """Автоматическое получение сертификата через certbot.
-
-        Использует HTTP-01 challenge (порт 80).
-        Временно открывает порт 80 в UFW/iptables.
-        """
-        # Проверяем, есть ли уже валидный сертификат
-        from pathlib import Path
-        cert_path = Path(f"/etc/letsencrypt/live/{domain}/fullchain.pem")
-        key_path = Path(f"/etc/letsencrypt/live/{domain}/privkey.pem")
-        if cert_path.exists() and key_path.exists():
-            try:
-                r = HOST.run(
-                    ["openssl", "x509", "-checkend", "2592000", "-noout", "-in", str(cert_path)],
-                    capture_output=True
-                )
-                if r.returncode == 0:
-                    print(f"  Сертификат для {domain} уже существует и действителен.")
-                    return True
-            except Exception:
-                pass
-
-        import shutil
-        from hydra.utils.firewall import temporary_open_port
-
-        # 1. Проверяем/устанавливаем certbot
-        if not shutil.which("certbot"):
-            print("  Устанавливаю certbot...")
-            HOST.run(["apt-get", "update"], capture_output=True)
-            HOST.run(["apt-get", "install", "-y", "certbot"], capture_output=True)
-
-        # 2. Временно останавливаем конфликтующие веб-серверы на порту 80
-        services_to_stop = ["caddy-l4", "caddy-naive", "nginx", "apache2"]
-        was_running = []
-        for s in services_to_stop:
-            r = HOST.run(["systemctl", "is-active", s], capture_output=True, text=True)
-            if r.stdout.strip() == "active":
-                print(f"  Временно останавливаю {s}...")
-                HOST.run(["systemctl", "stop", s], capture_output=True)
-                was_running.append(s)
-
-        try:
-            with temporary_open_port("tcp", 80, "temp-certbot"):
-                r = HOST.run([
-                    "certbot", "certonly", "--standalone",
-                    "-d", domain,
-                    "--non-interactive", "--agree-tos",
-                    "--register-unsafely-without-email",
-                    "--keep-until-expiring",
-                ], capture_output=True, text=True)
-            if r.returncode != 0:
-                print(f"  [Ошибка certbot] Вывод:\n{r.stderr or r.stdout or ''}")
-            return r.returncode == 0
-        finally:
-            for s in was_running:
-                print(f"  Восстанавливаю {s}...")
-                HOST.run(["systemctl", "start", s], capture_output=True)
+        config = ps.config if ps and ps.config else {}
+        return resolve_tls_material(domain, config)
 
     def _remove_iptables_rules(self) -> None:
         """Удаляет правила anytls-rx / anytls-tx."""

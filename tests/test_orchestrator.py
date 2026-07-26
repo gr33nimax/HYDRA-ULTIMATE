@@ -24,7 +24,7 @@ class _MockTransport(BasePlugin):
 
     def install(self) -> bool: return True
     def uninstall(self) -> bool: return True
-    def status(self) -> PluginStatus:
+    def status(self, state=None) -> PluginStatus:
         return PluginStatus(installed=True, enabled=True, running=True)
 
     def configure(self, state: AppState) -> ConfigFragment:
@@ -346,6 +346,7 @@ def test_enable_trusttunnel_rolls_back_plugin_state_on_apply_failure():
 
     with patch("hydra.core.orchestrator.registry.get", return_value=plugin), \
          patch("hydra.core.orchestrator.apply_config", side_effect=[False, True]) as apply, \
+         patch("hydra.core.orchestrator._prepare_enable"), \
          patch("hydra.core.orchestrator.save_state"):
         result = orchestrator.enable(state, "trusttunnel")
 
@@ -395,6 +396,27 @@ def test_disable_rolls_back_hook_and_state_on_apply_failure():
     plugin.on_disable.assert_called_once_with(state)
     plugin.on_enable.assert_called_once_with(state)
     assert apply.call_count == 2
+
+
+def test_disable_preserves_apply_error_across_successful_rollback():
+    from hydra.core import orchestrator
+
+    state = AppState(protocols={"mock": PluginState(enabled=True, installed=True)})
+    plugin = MagicMock()
+
+    def apply(current_state):
+        if not current_state.protocols["mock"].enabled:
+            orchestrator._set_apply_error("disable rejected by service")
+            return False
+        orchestrator._set_apply_error("")
+        return True
+
+    with patch("hydra.core.orchestrator.registry.get", return_value=plugin), \
+         patch("hydra.core.orchestrator.apply_config", side_effect=apply), \
+         patch("hydra.core.orchestrator.save_state"):
+        assert orchestrator.disable(state, "mock") is False
+
+    assert orchestrator.last_apply_error() == "disable rejected by service"
 
 
 def test_apply_config_returns_false_when_caddy_rebuild_fails():
@@ -523,6 +545,31 @@ def test_rename_user_preserves_identity_and_refreshes_plugins():
     assert plugin.on_user_add.call_args.args[0].email == "new-name"
 
 
+def test_install_preserves_apply_error_across_successful_rollback():
+    from hydra.core import orchestrator
+
+    state = AppState(
+        protocols={"mock": PluginState(enabled=True, installed=False)},
+    )
+    plugin = MagicMock()
+    plugin.install.return_value = True
+    plugin.uninstall.return_value = True
+
+    def apply(current_state):
+        if current_state.protocols["mock"].installed:
+            orchestrator._set_apply_error("installed config is invalid")
+            return False
+        orchestrator._set_apply_error("")
+        return True
+
+    with patch("hydra.core.orchestrator.registry.get", return_value=plugin), \
+         patch("hydra.core.orchestrator.apply_config", side_effect=apply), \
+         patch("hydra.core.orchestrator.save_state"):
+        assert orchestrator.install_plugin(state, "mock") is False
+
+    assert orchestrator.last_apply_error() == "installed config is invalid"
+
+
 def test_install_plugin_removes_new_install_when_apply_fails():
     from hydra.core import orchestrator
 
@@ -569,3 +616,28 @@ def test_uninstall_plugin_reinstalls_and_restores_state_when_apply_fails():
     assert restored.enabled is True
     assert restored.port == 9443
     assert restored.config == {"domain": "vpn.example"}
+
+
+def test_uninstall_preserves_apply_error_across_successful_rollback():
+    from hydra.core import orchestrator
+
+    state = AppState(
+        protocols={"mock": PluginState(enabled=True, installed=True)},
+    )
+    plugin = MagicMock()
+    plugin.install.return_value = True
+    plugin.uninstall.return_value = True
+
+    def apply(current_state):
+        if not current_state.protocols["mock"].installed:
+            orchestrator._set_apply_error("removal would break routing")
+            return False
+        orchestrator._set_apply_error("")
+        return True
+
+    with patch("hydra.core.orchestrator.registry.get", return_value=plugin), \
+         patch("hydra.core.orchestrator.apply_config", side_effect=apply), \
+         patch("hydra.core.orchestrator.save_state"):
+        assert orchestrator.uninstall_plugin(state, "mock") is False
+
+    assert orchestrator.last_apply_error() == "removal would break routing"

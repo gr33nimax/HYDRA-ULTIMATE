@@ -9,16 +9,16 @@ def test_protocol_menu_refreshes_state_before_status_render():
     stale = AppState()
     fresh = AppState(protocols={"anytls": PluginState(installed=True, enabled=True)})
     app = MagicMock()
+    app.admin.load_state.return_value = fresh
     app.protocols.list.return_value = []
     app.protocols.statuses.return_value = {}
 
-    with patch.object(menus, "load_state", return_value=fresh) as load, \
-         patch.object(menus, "clear"), \
+    with patch.object(menus, "clear"), \
          patch.object(menus, "panel"), \
          patch.object(menus, "menu", return_value="0"):
         menus.menu_protocols(stale, app)
 
-    load.assert_called_once_with()
+    app.admin.load_state.assert_called_once_with()
     app.protocols.statuses.assert_called_once_with(fresh)
 
 
@@ -27,13 +27,22 @@ def test_anytls_menu_refreshes_state_before_choosing_action():
     fresh = AppState(protocols={"anytls": PluginState(installed=True, enabled=True)})
     plugin = MagicMock()
     plugin.meta.name = "anytls"
-    plugin.status.return_value = PluginStatus(True, True, True, 20444)
     plugin.get_current_preset.return_value = "web_browsing"
+    app = MagicMock()
+    app.admin.load_state.return_value = fresh
+    app.protocols.status.return_value = PluginStatus(True, True, True, 20444)
+    app.plugin_query.return_value = "web_browsing"
 
-    with patch.object(menus, "load_state", return_value=fresh) as load, \
-         patch.object(menus, "clear"), \
+    with patch.object(menus, "clear"), \
          patch.object(menus, "protocol_status_panel"), \
          patch.object(menus, "menu", return_value="0"):
-        menus._menu_anytls(stale, plugin)
+        menus._menu_anytls(stale, plugin, app)
 
-    load.assert_called_once_with()
+    app.admin.load_state.assert_called_once_with()
+    app.protocols.status.assert_called_once_with("anytls")
+    app.plugin_query.assert_called_once_with(
+        "anytls",
+        "get_current_preset",
+        state=fresh,
+    )
+    plugin.get_current_preset.assert_not_called()

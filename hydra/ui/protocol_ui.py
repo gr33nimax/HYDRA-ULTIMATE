@@ -25,13 +25,14 @@ PROTOCOL_LABELS = {
 }
 
 
-def protocol_label(name: str) -> str:
+def protocol_label(name: str, display_name: str = "") -> str:
     """Return the product-facing protocol name instead of an internal key."""
-    return PROTOCOL_LABELS.get(name, name)
+    label = display_name if isinstance(display_name, str) else ""
+    return label or PROTOCOL_LABELS.get(name, name)
 
 
-def protocol_menu_title(name: str) -> str:
-    return f"{protocol_label(name).upper()} · УПРАВЛЕНИЕ"
+def protocol_menu_title(name: str, display_name: str = "") -> str:
+    return f"{protocol_label(name, display_name).upper()} · УПРАВЛЕНИЕ"
 
 
 def protocol_state(installed: bool, enabled: bool, running: bool) -> str:
@@ -57,6 +58,7 @@ def protocol_status_panel(
     port: int | str | None = None,
     details: Iterable[tuple[str, Any]] = (),
     error: str = "",
+    display_name: str = "",
 ) -> None:
     """Render the canonical status card used by every transport protocol."""
     lines = [
@@ -71,7 +73,10 @@ def protocol_status_panel(
             lines.append(f"  {DIM}{str(label):<16}{NC} {value}")
     if error:
         lines.extend(("", f"  {RED}Ошибка статуса:{NC} {error}"))
-    panel(f"{CYAN}◈{NC} {protocol_label(name)}", lines)
+    panel(
+        f"{CYAN}◈{NC} {protocol_label(name, display_name)}",
+        lines,
+    )
 
 
 def status_badge(status: dict[str, Any]) -> str:

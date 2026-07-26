@@ -4,14 +4,27 @@ from __future__ import annotations
 import enum
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
-from hydra.core.state import AppState, User
-from hydra.plugins.config import ConfigFragment
+from hydra.contracts import BackupResource, ConfigFragment, JsonValue
+from hydra.core.state_models import User
+from hydra.plugins.context import PluginStateAccess
 
 
 class PluginCategory(enum.Enum):
     TRANSPORT = "transport"
     ENHANCEMENT = "enhancement"
     SECURITY = "security"
+
+
+@dataclass(frozen=True)
+class MaintenanceTask:
+    """One plugin-owned task executed by the shared background scheduler."""
+
+    action: str
+    title: str
+    description: str = ""
+    due_query: str = ""
+    enabled_flag: str = ""
+    apply_on_success: bool = False
 
 
 @dataclass(frozen=True)
@@ -22,6 +35,16 @@ class PluginCapabilities:
     required_commands: tuple[str, ...] = ()
     required_services: tuple[str, ...] = ()
     conflicts_with: tuple[str, ...] = ()
+    commands: tuple[str, ...] = ()
+    queries: tuple[str, ...] = ()
+    actions: tuple[str, ...] = ()
+    tls_domain_source: str = ""
+    config_defaults: tuple[tuple[str, JsonValue], ...] = ()
+    subscription_profile_query: str = ""
+    subscription_enabled: bool = True
+    connection_source: str = "plugin"
+    maintenance_tasks: tuple[MaintenanceTask, ...] = ()
+    backup_resources: tuple[BackupResource, ...] = ()
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -56,7 +79,11 @@ class HealthResult:
         return asdict(self)
 
 
-def lifecycle_result(plugin, operation: str, state: AppState | None = None) -> LifecycleResult:
+def lifecycle_result(
+    plugin,
+    operation: str,
+    state: PluginStateAccess | None = None,
+) -> LifecycleResult:
     """Invoke the typed lifecycle adapter while supporting legacy objects."""
     typed = getattr(type(plugin), f"{operation}_result", None)
     if callable(typed):
@@ -74,6 +101,7 @@ def lifecycle_result(plugin, operation: str, state: AppState | None = None) -> L
 class PluginMeta:
     name: str
     description: str
+    display_name: str = ""
     category: PluginCategory = PluginCategory.TRANSPORT
     version: str = "1.0.0"
     needs_domain: bool = False
@@ -81,6 +109,17 @@ class PluginMeta:
     required_commands: tuple[str, ...] = ()
     required_services: tuple[str, ...] = ()
     conflicts_with: tuple[str, ...] = ()
+    commands: tuple[str, ...] = ()
+    queries: tuple[str, ...] = ()
+    actions: tuple[str, ...] = ()
+    tls_domain_source: str = ""
+    config_defaults: tuple[tuple[str, JsonValue], ...] = ()
+    subscription_profile_query: str = ""
+    subscription_enabled: bool = True
+    connection_source: str = "plugin"
+    maintenance_tasks: tuple[MaintenanceTask, ...] = ()
+    backup_resources: tuple[BackupResource, ...] = ()
+    contract_version: int = 1
 
     @property
     def capabilities(self) -> PluginCapabilities:
@@ -89,6 +128,16 @@ class PluginMeta:
             required_commands=tuple(self.required_commands),
             required_services=tuple(self.required_services),
             conflicts_with=tuple(self.conflicts_with),
+            commands=tuple(self.commands),
+            queries=tuple(self.queries),
+            actions=tuple(self.actions),
+            tls_domain_source=self.tls_domain_source,
+            config_defaults=tuple(self.config_defaults),
+            subscription_profile_query=self.subscription_profile_query,
+            subscription_enabled=self.subscription_enabled,
+            connection_source=self.connection_source,
+            maintenance_tasks=tuple(self.maintenance_tasks),
+            backup_resources=tuple(self.backup_resources),
         )
 
 
@@ -111,12 +160,15 @@ class BasePlugin(ABC):
     def uninstall(self) -> bool: ...
 
     @abstractmethod
-    def status(self) -> PluginStatus: ...
+    def status(
+        self,
+        state: PluginStateAccess | None = None,
+    ) -> PluginStatus: ...
 
     @abstractmethod
-    def configure(self, state: AppState) -> ConfigFragment: ...
+    def configure(self, state: PluginStateAccess) -> ConfigFragment: ...
 
-    def apply(self, state: AppState) -> bool:
+    def apply(self, state: PluginStateAccess) -> bool:
         return True
 
     def install_result(self) -> LifecycleResult:
@@ -125,11 +177,11 @@ class BasePlugin(ABC):
     def uninstall_result(self) -> LifecycleResult:
         return LifecycleResult("uninstall", bool(self.uninstall()))
 
-    def enable_result(self, state: AppState) -> LifecycleResult:
+    def enable_result(self, state: PluginStateAccess) -> LifecycleResult:
         self.on_enable(state)
         return LifecycleResult("enable", True)
 
-    def disable_result(self, state: AppState) -> LifecycleResult:
+    def disable_result(self, state: PluginStateAccess) -> LifecycleResult:
         self.on_disable(state)
         return LifecycleResult("disable", True)
 
@@ -143,22 +195,40 @@ class BasePlugin(ABC):
         except Exception as exc:
             return HealthResult(False, str(exc) or exc.__class__.__name__, "unknown")
 
-    def healthcheck_for_state(self, state: AppState) -> HealthResult | tuple[bool, str]:
+    def healthcheck_for_state(
+        self,
+        state: PluginStateAccess,
+    ) -> HealthResult | tuple[bool, str]:
         """Check the runtime against the state currently being applied.
 
         Shared-runtime plugins can override this hook to avoid re-reading a
         stale persisted enablement flag during an apply transaction.
         """
-        return self.healthcheck()
+        if (
+            "healthcheck" in self.__dict__
+            or type(self).healthcheck is not BasePlugin.healthcheck
+        ):
+            return self.healthcheck()
+        try:
+            status = self.status(state)
+            if status.running:
+                return HealthResult(True)
+            return HealthResult(False, "service is not active", "error")
+        except Exception as exc:
+            return HealthResult(
+                False,
+                str(exc) or exc.__class__.__name__,
+                "unknown",
+            )
 
-    def health_result(self, state: AppState | None = None) -> HealthResult:
+    def health_result(self, state: PluginStateAccess | None = None) -> HealthResult:
         result = self.healthcheck() if state is None else self.healthcheck_for_state(state)
         if isinstance(result, HealthResult):
             return result
         healthy, detail = result
         return HealthResult(bool(healthy), str(detail or ""), "ok" if healthy else "error")
 
-    def snapshot(self, state: AppState):
+    def snapshot(self, state: PluginStateAccess):
         """Capture plugin-owned runtime state before apply.
 
         The default is intentionally a no-op for backwards compatibility.
@@ -166,25 +236,57 @@ class BasePlugin(ABC):
         """
         return None
 
-    def rollback(self, state: AppState, snapshot) -> bool:
+    def rollback(self, state: PluginStateAccess, snapshot) -> bool:
         """Restore a snapshot captured before ``apply``."""
         return True
 
-    def traffic(self, state: AppState) -> dict[str, int]:
+    def traffic(self, state: PluginStateAccess) -> dict[str, int]:
         return {}
 
-    def on_user_add(self, user: User, state: AppState) -> None: pass
-    def on_user_remove(self, user: User, state: AppState) -> None: pass
-    def on_user_block(self, user: User, state: AppState) -> None: pass
+    def traffic_snapshot(
+        self,
+        state: PluginStateAccess,
+    ) -> dict[str, int] | None:
+        """Return a resettable raw per-user counter, when available."""
+        return None
 
-    def generate_client_config(self, user: User, state: AppState) -> str:
+    def aggregate_traffic_snapshot(
+        self,
+        state: PluginStateAccess,
+    ) -> int | None:
+        """Return a resettable protocol-wide counter, when available."""
+        return None
+
+    def ingest_traffic(
+        self,
+        state: PluginStateAccess,
+        cursors: dict,
+    ) -> None:
+        """Merge plugin-owned event/log cursors into authoritative state."""
+
+    def on_user_add(self, user: User, state: PluginStateAccess) -> None: pass
+    def on_user_remove(self, user: User, state: PluginStateAccess) -> None: pass
+    def on_user_block(self, user: User, state: PluginStateAccess) -> None: pass
+
+    def generate_client_config(self, user: User, state: PluginStateAccess) -> str:
         return ""
 
-    def client_link(self, user: User, state: AppState) -> str:
+    def client_link(self, user: User, state: PluginStateAccess) -> str:
         return ""
 
-    def connected_clients(self) -> list[dict]:
+    def client_links(
+        self,
+        user: User,
+        state: PluginStateAccess,
+    ) -> list[str]:
+        link = self.client_link(user, state)
+        return [link] if link else []
+
+    def connected_clients(
+        self,
+        state: PluginStateAccess | None = None,
+    ) -> list[dict]:
         return []
 
-    def on_enable(self, state: AppState) -> None: pass
-    def on_disable(self, state: AppState) -> None: pass
+    def on_enable(self, state: PluginStateAccess) -> None: pass
+    def on_disable(self, state: PluginStateAccess) -> None: pass

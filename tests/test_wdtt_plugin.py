@@ -1,8 +1,10 @@
 """tests/test_wdtt_plugin.py — Тесты для qWDTT plugin v2."""
 import json
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import sys
+import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.plugins.wdtt.plugin import (
@@ -37,6 +39,74 @@ def test_plugin_meta():
     assert p.meta.name == "wdtt"
     assert p.meta.category == PluginCategory.TRANSPORT
     assert p.meta.needs_domain is False
+    assert p.meta.capabilities.actions == (
+        "hot_reload",
+        "save_client_link",
+        "save_password_registry",
+    )
+    assert p.meta.capabilities.queries == (
+        "observe_runtime",
+        "password_registry",
+        "public_server_ip",
+    )
+
+
+def test_password_registry_and_link_io_are_plugin_owned(tmp_path):
+    password_file = tmp_path / "passwords.json"
+    password_file.write_text(
+        json.dumps({"passwords": {"secret": {"max_devices": 1}}}),
+        encoding="utf-8",
+    )
+    host = MagicMock()
+
+    with (
+        patch("hydra.plugins.wdtt.plugin.CONFIG_DIR", tmp_path),
+        patch("hydra.plugins.wdtt.plugin.PASSWORDS_FILE", password_file),
+        patch("hydra.plugins.wdtt.plugin.HOST", host),
+    ):
+        assert WdttPlugin.password_registry()["passwords"] == {
+            "secret": {"max_devices": 1},
+        }
+        assert WdttPlugin.save_password_registry(
+            data={"passwords": {}},
+        ) is True
+        link_path = WdttPlugin.save_client_link(
+            link="qwdtt://config",
+            filename="qwdtt_link.txt",
+        )
+
+    assert host.atomic_write.call_args_list[0].args[0] == password_file
+    assert host.atomic_write.call_args_list[0].kwargs["mode"] == 0o600
+    assert link_path == str(tmp_path / "qwdtt_link.txt")
+
+
+def test_hot_reload_signals_every_running_wdtt_pid():
+    host = MagicMock()
+    host.run.side_effect = [
+        MagicMock(stdout="101 202\n", returncode=0),
+        MagicMock(returncode=0),
+    ]
+
+    with patch("hydra.plugins.wdtt.plugin.HOST", host):
+        assert WdttPlugin.hot_reload() is True
+
+    assert host.run.call_args_list[1].args[0] == [
+        "kill",
+        "-HUP",
+        "101",
+        "202",
+    ]
+
+
+def test_public_server_ip_uses_public_fallback():
+    with (
+        patch("hydra.plugins.wdtt.plugin.local_ip", return_value="127.0.0.1"),
+        patch(
+            "hydra.plugins.wdtt.plugin.public_ip",
+            return_value="203.0.113.10",
+        ),
+    ):
+        assert WdttPlugin.public_server_ip() == "203.0.113.10"
 
 
 def test_source_build_allows_empty_go_cache(tmp_path):
@@ -224,6 +294,45 @@ def test_status_returns_plugin_status():
         assert s.port == 56000
 
 
+def test_runtime_observation_is_immutable_and_does_not_accept_desired_state(
+    tmp_path,
+):
+    config_file = tmp_path / "config.json"
+    passwords_file = tmp_path / "passwords.json"
+    config_file.write_text(
+        json.dumps({"dtls_port": 56100, "wg_port": 56101}),
+        encoding="utf-8",
+    )
+    passwords_file.write_text(
+        json.dumps({
+            "main_password": "runtime-secret",
+            "admin_id": "42",
+            "bot_token": "token",
+        }),
+        encoding="utf-8",
+    )
+    plugin = WdttPlugin()
+
+    with (
+        patch.object(plugin, "_installed", return_value=True),
+        patch("hydra.plugins.wdtt.plugin.CONFIG_FILE", config_file),
+        patch("hydra.plugins.wdtt.plugin.PASSWORDS_FILE", passwords_file),
+        patch(
+            "hydra.plugins.wdtt.plugin.HOST.run",
+            return_value=MagicMock(stdout="active\n", returncode=0),
+        ),
+    ):
+        observation = plugin.observe_runtime()
+
+    assert observation.installed is True
+    assert observation.running is True
+    assert observation.dtls_port == 56100
+    assert observation.wg_port == 56101
+    assert observation.main_password == "runtime-secret"
+    with pytest.raises(FrozenInstanceError):
+        observation.running = False
+
+
 def test_status_returns_not_installed():
     p = WdttPlugin()
     s = p.status()
@@ -277,19 +386,13 @@ def test_install_service_with_custom_ports():
         assert "-wg-port 56002" in written
 
 
-def test_on_enable_starts_service_if_inactive():
+def test_on_enable_defers_runtime_start_to_central_apply():
     p = WdttPlugin()
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
-    with (
-        patch.object(p, "configure"),
-        patch.object(p, "apply"),
-        patch("subprocess.run", return_value=MagicMock(stdout="inactive\n",
-                                                        text=True, returncode=0)) as mock_run,
-    ):
+    with patch("hydra.plugins.wdtt.plugin.HOST.run") as run:
         p.on_enable(state)
-        enable_calls = [c for c in mock_run.call_args_list
-                        if "enable" in str(c.args)]
-        assert len(enable_calls) >= 1
+
+    run.assert_not_called()
 
 
 def test_on_disable_stops_service():

@@ -1,107 +1,60 @@
 """Reusable log and journal viewing primitives for TUI menus."""
 from __future__ import annotations
 
-from hydra.core.host import HOST
-
-import select
-import subprocess
-import time
-from collections import deque
 from datetime import datetime
-from pathlib import Path
 from typing import Callable
 
+from hydra.services.logs import LogOperations
+from hydra.services.system_monitoring_compatibility import (
+    legacy_system_monitoring,
+)
 from hydra.ui.tui import DIM, NC, PANEL_W, clear, error, menu, prompt, title, warn
 
 
-def unit_known(unit: str) -> bool:
-    try:
-        result = HOST.run(
-            ["systemctl", "show", "--property=LoadState", "--value", unit],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        return result.returncode == 0 and result.stdout.strip() == "loaded"
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
-
-def read_source(source_type: str, source: str, num_lines: int) -> tuple[list[str], str]:
-    if source_type == "file":
-        path = Path(source)
-        if not path.exists():
-            return [], "Файл ещё не создан."
-        try:
-            with path.open("r", encoding="utf-8", errors="replace") as handle:
-                return [line.rstrip("\n") for line in deque(handle, maxlen=num_lines)], ""
-        except OSError as exc:
-            return [], f"Ошибка чтения файла: {exc}"
-
-    try:
-        result = HOST.run(
-            [
-                "journalctl",
-                "-u",
-                source,
-                "-n",
-                str(num_lines),
-                "--no-pager",
-                "-o",
-                "short-iso",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return [], f"Не удалось прочитать journalctl: {exc}"
-
-    output = (result.stdout or "").strip()
-    if result.returncode != 0:
-        return [], (result.stderr or output or "journalctl завершился с ошибкой").strip()
-    lines = [
-        line
-        for line in output.splitlines()
-        if line.strip() and line.strip() != "-- No entries --"
-    ]
-    return lines, "" if lines else "В журнале пока нет записей."
+def read_source(
+    logs: LogOperations,
+    source_type: str,
+    source: str,
+    num_lines: int,
+) -> tuple[list[str], str]:
+    result = logs.read(source_type, source, num_lines)
+    return list(result.lines), result.message
 
 
 def source_status(
+    logs: LogOperations,
     source_type: str,
     source: str,
     *,
-    unit_active: Callable[[str], bool],
     bytes_auto: Callable[[int], str],
 ) -> str:
+    info = logs.source_info(source_type, source)
     if source_type == "file":
-        path = Path(source)
-        if not path.exists():
+        if not info.available:
             return "ещё не создан"
-        try:
-            return bytes_auto(path.stat().st_size)
-        except OSError:
+        if info.size_bytes is None:
             return "недоступен"
-    if unit_active(source):
+        return bytes_auto(info.size_bytes)
+    if info.active:
         return "активно"
-    return "остановлено" if unit_known(source) else "не установлено"
+    return "остановлено" if info.loaded else "не установлено"
 
 
 def sync_snapshot(
-    log_path: Path,
+    logs: LogOperations,
+    log_path: str,
     now_timestamp: float | None = None,
 ) -> tuple[str, str, bool]:
-    lines, message = read_source("file", str(log_path), 5)
+    lines, message = read_source(logs, "file", log_path, 5)
     last_line = next((line for line in reversed(lines) if line.strip()), "")
     if not last_line:
         return message or "нет логов", "нет данных", True
 
-    try:
-        current = datetime.now().timestamp() if now_timestamp is None else now_timestamp
-        age_seconds = max(0, int(current - log_path.stat().st_mtime))
-    except OSError:
+    source_info = logs.source_info("file", log_path)
+    if source_info.modified_at is None:
         return last_line, "время неизвестно", True
+    current = datetime.now().timestamp() if now_timestamp is None else now_timestamp
+    age_seconds = max(0, int(current - source_info.modified_at))
 
     if age_seconds < 60:
         freshness = "только что"
@@ -120,7 +73,9 @@ def show_source(
     source: str,
     num_lines: int,
     *,
+    logs: LogOperations,
     enter_pressed: Callable[[], bool],
+    sleep: Callable[[float], None] | None = None,
 ) -> None:
     source_label = source if source_type == "file" else f"journalctl -u {source}"
     while True:
@@ -128,7 +83,7 @@ def show_source(
         title(f"{title_text} ({num_lines} строк)")
         print(f"  {DIM}Источник: {source_label}{NC}\n")
 
-        lines, message = read_source(source_type, source, num_lines)
+        lines, message = read_source(logs, source_type, source, num_lines)
         for line in lines:
             print(f"  {DIM}{line}{NC}")
         if message:
@@ -147,9 +102,15 @@ def show_source(
             return
         if choice.upper() == "W":
             if source_type == "file":
-                watch_file(title_text, source, enter_pressed)
+                watch_file(title_text, source, logs, enter_pressed)
             else:
-                watch_journal(title_text, source, enter_pressed)
+                watch_journal(
+                    title_text,
+                    source,
+                    logs,
+                    enter_pressed,
+                    sleep=sleep,
+                )
 
 
 def show_file(
@@ -157,53 +118,64 @@ def show_file(
     path_str: str,
     num_lines: int,
     *,
+    logs: LogOperations,
     enter_pressed: Callable[[], bool],
+    sleep: Callable[[float], None] | None = None,
 ) -> None:
     show_source(
         title_text,
         "file",
         path_str,
         num_lines,
+        logs=logs,
         enter_pressed=enter_pressed,
+        sleep=sleep,
     )
 
 
 def watch_file(
     title_text: str,
     path_str: str,
+    logs: LogOperations,
     enter_pressed: Callable[[], bool],
 ) -> None:
-    path = Path(path_str)
     clear()
     title(f"👀 Слежение: {title_text}")
     print(f"  {DIM}Файл: {path_str}{NC}")
     print(f"  {DIM}Нажмите [Enter] для выхода из режима слежения.{NC}")
     print(f"  {DIM}{'─' * PANEL_W}{NC}\n")
 
-    if not path.exists():
+    if not logs.source_info("file", path_str).available:
         error("Файл лога не найден.")
         prompt("Нажмите Enter")
         return
 
     try:
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
-            handle.seek(0, 2)
-            while True:
-                if enter_pressed():
-                    return
-                line = handle.readline()
-                if line:
-                    print(f"  {DIM}{line.strip()}{NC}")
-                else:
-                    time.sleep(0.5)
+        stream = logs.open_stream("file", path_str)
+    except OSError as exc:
+        error(f"Не удалось следить за файлом: {exc}")
+        prompt("Нажмите Enter")
+        return
+
+    try:
+        while stream.running():
+            if enter_pressed():
+                return
+            if line := stream.read_line():
+                print(f"  {DIM}{line}{NC}")
     except KeyboardInterrupt:
         return
+    finally:
+        stream.close()
 
 
 def watch_journal(
     title_text: str,
     unit: str,
+    logs: LogOperations,
     enter_pressed: Callable[[], bool],
+    *,
+    sleep: Callable[[float], None] | None = None,
 ) -> None:
     clear()
     title(f"👀 Слежение: {title_text}")
@@ -212,49 +184,22 @@ def watch_journal(
     print(f"  {DIM}{'─' * PANEL_W}{NC}\n")
 
     try:
-        process = HOST.popen(
-            [
-                "journalctl",
-                "-u",
-                unit,
-                "-f",
-                "-n",
-                "0",
-                "--no-pager",
-                "-o",
-                "short-iso",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
+        stream = logs.open_stream("journal", unit)
     except OSError as exc:
         error(f"Не удалось запустить journalctl: {exc}")
         prompt("Нажмите Enter")
         return
 
     try:
-        while True:
+        while stream.running():
             if enter_pressed():
                 break
-            if process.stdout is not None:
-                ready, _, _ = select.select([process.stdout], [], [], 0.25)
-                if ready:
-                    line = process.stdout.readline()
-                    if line:
-                        print(f"  {DIM}{line.rstrip()}{NC}")
-                        continue
-            if process.poll() is not None:
-                warn("journalctl завершил работу.")
-                time.sleep(1)
-                break
+            if line := stream.read_line():
+                print(f"  {DIM}{line}{NC}")
+        if not stream.running():
+            warn("journalctl завершил работу.")
+            (sleep or legacy_system_monitoring().sleep)(1)
     except KeyboardInterrupt:
         pass
     finally:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
+        stream.close()

@@ -15,9 +15,12 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from hydra.plugins.base import ConfigFragment
-from hydra.core.state import AppState, PluginState, load_state, save_state
+from hydra.contracts import ConfigFragment
+from hydra.core.state import load_state, save_state
+from hydra.core.state_models import AppState, PluginState
 from hydra.core.host import HOST
+from hydra.core import singbox_config
+from hydra.core.singbox_upgrade import UpgradeOperations, upgrade_kernel
 from hydra.utils.commands import redact_text
 
 SINGBOX_BIN = Path("/usr/local/bin/sing-box")
@@ -56,6 +59,11 @@ def _log(level: str, msg: str) -> None:
         pass
 
 
+def log(level: str, message: str) -> None:
+    """Write a redacted Sing-Box lifecycle event through the public boundary."""
+    _log(level, message)
+
+
 def _run(cmd: list, capture: bool = True, timeout: int = 30) -> subprocess.CompletedProcess:
     import os
     kw = {"timeout": timeout}
@@ -67,6 +75,30 @@ def _run(cmd: list, capture: bool = True, timeout: int = 30) -> subprocess.Compl
     env["ENABLE_DEPRECATED_LEGACY_DNS_SERVERS"] = "true"
     env["ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER"] = "true"
     return HOST.run(cmd, env=env, **kw)
+
+
+def validate_current_config() -> tuple[bool | None, str]:
+    """Validate the installed config without exposing private process helpers."""
+    if not SINGBOX_CONFIG.exists():
+        return None, ""
+    binary = _find_singbox()
+    if binary is None:
+        return None, ""
+    try:
+        checked = _run(
+            [str(binary), "check", "-c", str(SINGBOX_CONFIG)],
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+    if checked.returncode == 0:
+        return True, ""
+    output = str(checked.stderr or checked.stdout or "unknown error").strip()
+    return False, output.splitlines()[-1] if output else "unknown error"
+
+
+def preflight_conflicts(config: dict) -> list[str]:
+    """Expose side-effect-free configuration conflict detection."""
+    return _preflight_conflicts(config)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -166,175 +198,62 @@ def install(force: bool = False) -> bool:
 #  Генерация конфига
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _base_config(state: AppState) -> dict:
-    config = {
-        "log": {"level": "info", "timestamp": True},
-        "inbounds": [
-            {
-                "type": "socks",
-                "tag": "socks-in",
-                "listen": "127.0.0.1",
-                "listen_port": 1080,
-            },
-        ],
-        "outbounds": [
-            {
-                "type": "direct",
-                "tag": "direct",
-            }
-        ],
-        "route": {
-            "rules": [],
-            "auto_detect_interface": True,
-            "default_mark": 255,
-            "final": "direct",
-        },
-    }
-    if state.network.tproxy_enabled:
-        config["inbounds"].append({
-            "type": "tproxy",
-            "tag": "tproxy-in",
-            "listen": "::",
-            "listen_port": state.network.tproxy_port,
-        })
-        # Предотвращение петель маршрутизации TPROXY
-        config["route"]["rules"].append({
-            "inbound": ["tproxy-in"],
-            "port": [state.network.tproxy_port],
-            "action": "reject"
-        })
-        config["route"]["rules"].append({
-            "action": "sniff",
-            "sniffer": ["http", "tls", "quic"],
-        })
-        
-    if getattr(state.network, "clash_api_enabled", False):
-        port = getattr(state.network, "clash_api_port", 9090)
-        secret = getattr(state.network, "clash_api_secret", "")
-        config["experimental"] = {
-            "clash_api": {
-                "external_controller": f"127.0.0.1:{port}",
-                "secret": secret
-            }
-        }
-        
-    return config
-
-
-def _dns_config(state: AppState) -> dict:
-    """DNS-конфиг по умолчанию (публичные DoH)."""
-    return {
-        "servers": [
-            {
-                "tag": "dns-remote",
-                "address": "https://dns.quad9.net/dns-query",
-                "address_resolver": "dns-direct",
-                "strategy": "ipv4_only",
-                "detour": "direct",
-            },
-            {
-                "tag": "dns-direct",
-                "address": "1.1.1.1",
-                "detour": "direct",
-            },
-        ],
-        "rules": [],
-    }
-
-
-def generate_config(state: AppState, fragments: dict[str, ConfigFragment]) -> dict:
-    config = _base_config(state)
-    
-    if "endpoints" not in config:
-        config["endpoints"] = []
-
-    for name, frag in fragments.items():
-        config["inbounds"].extend(frag.inbounds)
-        config["outbounds"].extend(frag.outbounds)
-        config["route"]["rules"].extend(frag.route_rules)
-        if hasattr(frag, "endpoints") and frag.endpoints:
-            config["endpoints"].extend(frag.endpoints)
-
-    if "endpoints" in config and not config["endpoints"]:
-        config.pop("endpoints")
-
-    # DNS-конфиг (DNSCrypt / публичные DoH)
-    dns_config = {}
-    for name, frag in fragments.items():
-        if hasattr(frag, "dns") and frag.dns:
-            dns_config = frag.dns
-            break
-    config["dns"] = dns_config if dns_config else _dns_config(state)
-
-    # Если плагины не дали ни одного inbound — добавляем fallback
-    if not config["inbounds"]:
-        config["inbounds"].append({
-            "type": "mixed", "tag": "mixed-in",
-            "listen": "127.0.0.1", "listen_port": 2080,
-        })
-    # Гарантируем direct outbound (нужен для DNS и как fallback)
-    has_direct = any(o.get("tag") == "direct" for o in config["outbounds"])
-    if not has_direct:
-        config["outbounds"].append({"type": "direct", "tag": "direct"})
-
-    return config
+def generate_config(
+    state: AppState,
+    fragments: dict[str, ConfigFragment],
+) -> dict:
+    """Compatibility facade for the pure configuration assembler."""
+    return singbox_config.generate_config(state, fragments)
 
 
 def _preflight_conflicts(config: dict) -> list[str]:
-    """Return human-readable conflicts that Sing-Box's schema check cannot catch."""
-    errors: list[str] = []
-    tags: dict[str, str] = {}
-    ports: dict[tuple[str, int], str] = {}
+    """Preserve released SNI semantics around the pure conflict validator.
+
+    The pure validator owns generic tag, listener-overlap, and port checks.
+    HYDRA 2.5.3 also permits one protocol's TCP/QUIC modes to share an SNI, so
+    SNI ownership is evaluated here by normalized protocol scope.
+    """
+    import copy
+
+    validation_config = copy.deepcopy(config)
+    for item in validation_config.get("inbounds", []) or []:
+        if not isinstance(item, dict):
+            continue
+        tls = item.get("tls")
+        if isinstance(tls, dict):
+            tls.pop("server_name", None)
+
+    errors = singbox_config.preflight_conflicts(validation_config)
     snis: dict[str, tuple[str, str]] = {}
 
-    for section in ("inbounds", "outbounds", "endpoints"):
-        for item in config.get(section, []) or []:
-            if not isinstance(item, dict):
-                continue
-            tag = item.get("tag")
-            if tag:
-                owner = f"{section}:{item.get('type', 'unknown')}"
-                if tag in tags:
-                    errors.append(f"дублирующийся tag '{tag}' ({tags[tag]} и {owner})")
-                else:
-                    tags[tag] = owner
+    for item in config.get("inbounds", []) or []:
+        if not isinstance(item, dict):
+            continue
+        tag = item.get("tag")
+        owner = str(tag or item.get("type", "inbound"))
+        sni_scope = owner.lower()
+        for suffix in ("-quic-in", "-tcp-in", "-udp-in", "-in"):
+            if sni_scope.endswith(suffix):
+                sni_scope = sni_scope.removesuffix(suffix)
+                break
 
-            if section != "inbounds":
+        tls = item.get("tls")
+        if not isinstance(tls, dict):
+            continue
+        server_name = tls.get("server_name")
+        names = server_name if isinstance(server_name, list) else [server_name]
+        for name in names:
+            normalized = str(name or "").strip().lower()
+            if not normalized:
                 continue
-            try:
-                port = int(item.get("listen_port", 0) or 0)
-            except (TypeError, ValueError):
-                continue
-            if port <= 0:
-                continue
-            listen = str(item.get("listen", "0.0.0.0"))
-            key = (listen, port)
-            owner = str(tag or item.get("type", "inbound"))
-            sni_scope = owner.lower()
-            for suffix in ("-quic-in", "-tcp-in", "-udp-in", "-in"):
-                if sni_scope.endswith(suffix):
-                    sni_scope = sni_scope.removesuffix(suffix)
-                    break
-            if key in ports:
-                errors.append(f"порт {port} на {listen} используется дважды ({ports[key]} и {owner})")
+            existing = snis.get(normalized)
+            if existing and existing[0] != sni_scope:
+                errors.append(
+                    f"SNI '{normalized}' назначен нескольким inbound "
+                    f"({existing[1]} и {owner})",
+                )
             else:
-                ports[key] = owner
-
-            tls = item.get("tls")
-            if isinstance(tls, dict):
-                server_name = tls.get("server_name")
-                names = server_name if isinstance(server_name, list) else [server_name]
-                for name in names:
-                    normalized = str(name or "").strip().lower()
-                    if not normalized:
-                        continue
-                    existing = snis.get(normalized)
-                    if existing and existing[0] != sni_scope:
-                        errors.append(
-                            f"SNI '{normalized}' назначен нескольким inbound ({existing[1]} и {owner})"
-                        )
-                    else:
-                        snis[normalized] = (sni_scope, owner)
+                snis[normalized] = (sni_scope, owner)
     return errors
 
 
@@ -574,103 +493,19 @@ def parse_version(v_str: Optional[str]) -> tuple[int, ...]:
 
 
 def update_kernel() -> tuple[bool, str]:
-    """
-    Обновляет ядро sing-box до последней версии с созданием резервной копии и автооткатом.
-    Возвращает (success, message).
-    """
-    installed_bin = _find_singbox()
-    if installed_bin is None and SINGBOX_BIN.exists():
-        installed_bin = SINGBOX_BIN
-    if installed_bin is None:
-        return False, "Sing-Box не установлен, обновление невозможно"
-
-    backup_bin = SINGBOX_BIN.with_suffix(".bak")
-    _log("INFO", f"Creating backup of sing-box binary to {backup_bin}")
-
-    # 1. Создаем резервную копию бинарника
-    try:
-        if backup_bin.exists():
-            backup_bin.unlink()
-        shutil.copy2(installed_bin, backup_bin)
-    except Exception as e:
-        _log("ERROR", f"Failed to create backup: {e}")
-        return False, f"Ошибка создания резервной копии: {e}"
-
-    # Запоминаем, был ли сервис запущен до обновления
-    was_running = is_running()
-
-    def rollback(reason: str) -> tuple[bool, str]:
-        """Restore the previous binary and verify the previous service state."""
-        _log("ERROR", f"{reason}; rolling back to backup...")
-        try:
-            stop()
-        except Exception:
-            pass
-        try:
-            if SINGBOX_BIN.exists():
-                SINGBOX_BIN.unlink()
-            shutil.copy2(backup_bin, SINGBOX_BIN)
-            SINGBOX_BIN.chmod(0o755)
-        except Exception as rb_err:
-            _log("CRITICAL", f"Rollback failed: {rb_err}")
-            return False, f"{reason}. Сбой восстановления старого ядра: {rb_err}"
-
-        if was_running:
-            try:
-                restored = start()
-            except Exception as rb_err:
-                restored = False
-                _log("CRITICAL", f"Restored service start failed: {rb_err}")
-            if not restored:
-                _log("CRITICAL", "Old binary was restored, but sing-box did not start")
-                return False, f"{reason}. Старое ядро восстановлено, но служба не запустилась."
-        return False, f"{reason}. Выполнен откат."
-
-    # 2. Скачиваем и устанавливаем обновление
-    success_install = False
-    try:
-        # install(force=True) выполняет скачивание, остановку и замену
-        success_install = install(force=True)
-    except Exception as e:
-        _log("ERROR", f"Installation failed during update: {e}")
-        success_install = False
-
-    if not success_install:
-        return rollback("Не удалось скачать или распаковать обновление")
-
-    # 3. Верифицируем новый бинарник
-    new_version = get_version()
-    if not new_version:
-        return rollback("Новый бинарник не запускается")
-
-    # 4. Проверяем валидность конфига
-    if SINGBOX_CONFIG.exists():
-        r = _run([str(SINGBOX_BIN), "check", "-c", str(SINGBOX_CONFIG)])
-        if r.returncode != 0:
-            _log("ERROR", f"New binary rejected existing config, rolling back. Stderr: {r.stderr}")
-            return rollback("Конфигурация несовместима с новым ядром")
-
-    # 5. Перезапуск и проверка службы
-    if was_running:
-        _log("INFO", "Restarting service and checking status...")
-        if not start():
-            return rollback("Служба не смогла запуститься с новым ядром")
-
-    # Очистка
-    try:
-        backup_bin.unlink(missing_ok=True)
-    except Exception as e:
-        _log("WARNING", f"Failed to remove backup file: {e}")
-
-    try:
-        from hydra.core.state import update_state
-        def reset_update_flag(latest):
-            latest.install.pop("singbox_update_available", None)
-            latest.install.pop("singbox_latest_version", None)
-            return True
-        update_state(reset_update_flag)
-    except Exception as e:
-        _log("WARNING", f"Failed to reset update flags in state: {e}")
-
-    return True, f"Ядро успешно обновлено до версии {new_version}"
+    """Update Sing-Box through the isolated transactional upgrade service."""
+    return upgrade_kernel(
+        target_binary=SINGBOX_BIN,
+        config_path=SINGBOX_CONFIG,
+        operations=UpgradeOperations(
+            find_binary=_find_singbox,
+            is_running=is_running,
+            install=install,
+            get_version=get_version,
+            run=_run,
+            start=start,
+            stop=stop,
+            log=_log,
+        ),
+    )
 

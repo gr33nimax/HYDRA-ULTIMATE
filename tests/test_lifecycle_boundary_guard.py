@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-def test_managers_delegate_plugin_lifecycle_to_orchestrator():
+def test_managers_delegate_plugin_lifecycle_to_application_services():
     root = Path(__file__).parents[1] / "hydra" / "plugins"
     violations: list[str] = []
     for path in root.rglob("manager.py"):
@@ -11,4 +11,4 @@ def test_managers_delegate_plugin_lifecycle_to_orchestrator():
                 "plugin.on_enable(", "plugin.on_disable(",
             )):
                 violations.append(f"{path}:{line_no}")
-    assert violations == [], "manager bypasses orchestrator lifecycle: " + ", ".join(violations)
+    assert violations == [], "manager bypasses application lifecycle: " + ", ".join(violations)

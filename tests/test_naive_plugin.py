@@ -7,7 +7,9 @@ from unittest.mock import patch, MagicMock
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from hydra.plugins.naive.access_logs import ingest_access_logs
 from hydra.plugins.naive.plugin import NaivePlugin, CADDYFILE
+from hydra.plugins.naive.profiles import derive_username
 from hydra.plugins.base import PluginCategory, ConfigFragment
 from hydra.core.state import AppState, User, PluginState
 
@@ -23,6 +25,19 @@ def _make_state(users: list | None = None, domain: str = "example.com") -> AppSt
 
 def _make_user(email: str, uuid: str = "u1", blocked: bool = False) -> User:
     return User(email=email, uuid=uuid, blocked=blocked)
+
+
+def _ingest_naive_access_logs(state: AppState, log_dir: Path) -> None:
+    cursors = state.install.setdefault(
+        "traffic_log_cursors",
+        {},
+    ).setdefault("naive", {})
+    ingest_access_logs(
+        state,
+        log_dir,
+        derive_username,
+        cursors,
+    )
 
 
 def test_plugin_meta():
@@ -237,20 +252,11 @@ def test_build_caddyfile_multiple_users():
     assert len(auth_lines) == 3
 
 
-def test_on_enable_opens_firewall():
-    """on_enable() открывает порт 443."""
+def test_on_enable_only_validates_prepared_tls():
     p = NaivePlugin()
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
-    with patch("hydra.utils.firewall.open_tcp") as mock_open, \
-         patch("subprocess.run") as mock_run, \
-         patch("hydra.ui.tui.prompt", side_effect=lambda text, default="": default), \
-             patch("hydra.ui.tui.confirm", return_value=False), \
-             patch("hydra.ui.tui.menu", return_value="1"), \
-             patch("hydra.core.state.save_state"), \
-             patch.object(p, "apply", return_value=True):
-        mock_run.return_value = MagicMock(stdout="active\n", returncode=0)
+    with patch.object(p, "_resolve_certs", return_value=("/cert", "/key")):
         p.on_enable(state)
-        mock_open.assert_called_once_with(443, "naive")
 
 
 def test_on_enable_raises_error_without_domain():
@@ -308,11 +314,10 @@ def test_status_shows_traffic():
             assert "1.00 MB" in s.info["Общий трафик"]
 
 
-def test_find_existing_cert_and_tls_config():
-    """_find_existing_cert находит сертификаты, а _build_caddyfile подставляет их в конфиг."""
+def test_tls_config_uses_central_resolver_and_builds_caddyfile():
     p = NaivePlugin()
     with patch("pathlib.Path.exists", return_value=True):
-        cert, key = p._find_existing_cert("my.example.com")
+        cert, key = p._resolve_certs("my.example.com", PluginState())
         assert cert == "/etc/letsencrypt/live/my.example.com/fullchain.pem"
         assert key == "/etc/letsencrypt/live/my.example.com/privkey.pem"
 
@@ -352,7 +357,7 @@ def test_traffic_parses_caddy_access_logs(tmp_path):
         assert traffic_data == {"user_email@example.com": 3200}
 
 
-def test_update_traffic_uses_log_cursor_without_double_counting(tmp_path):
+def test_traffic_service_uses_log_cursor_without_double_counting(tmp_path):
     p = NaivePlugin()
     user = _make_user("user_email@example.com", uuid="uuid-a")
     state = _make_state([user])
@@ -363,12 +368,13 @@ def test_update_traffic_uses_log_cursor_without_double_counting(tmp_path):
         encoding="utf-8",
     )
 
-    with patch("hydra.plugins.naive.plugin.LOG_DIR", tmp_path):
-        p.update_traffic(state)
-        p.update_traffic(state)
-        with log_file.open("a", encoding="utf-8") as handle:
-            handle.write(f'{{"user_id":"{username}","size":500,"bytes_read":100}}\n')
-        p.update_traffic(state)
+    _ingest_naive_access_logs(state, tmp_path)
+    _ingest_naive_access_logs(state, tmp_path)
+    with log_file.open("a", encoding="utf-8") as handle:
+        handle.write(
+            f'{{"user_id":"{username}","size":500,"bytes_read":100}}\n',
+        )
+    _ingest_naive_access_logs(state, tmp_path)
 
     assert user.credentials["naive"]["traffic_used_bytes"] == 1850
     assert user.credentials["naive"]["traffic_rx_bytes"] == 1500
@@ -479,87 +485,34 @@ def test_set_transport_rejects_trusttunnel_quic_conflict_without_mutation():
         config={"transport": "quic", "domain": "tt.example.com"},
     )
 
-    with patch("hydra.core.state.save_state") as mock_save, \
-         patch("hydra.core.orchestrator.apply_config") as mock_apply:
-        assert p.set_transport(state, "quic") is False
+    assert p.set_transport(state, "quic") is False
 
     assert state.protocols["naive"].config["network"] == "tcp"
-    mock_save.assert_not_called()
-    mock_apply.assert_not_called()
 
 
-def test_set_transport_rolls_back_state_and_runtime_when_apply_fails():
-    """Неуспешный apply восстанавливает прежний network и runtime."""
+def test_set_transport_only_updates_desired_state():
     p = NaivePlugin()
     state = _make_state_with_network([], network="tcp")
 
-    with patch("hydra.core.state.save_state") as mock_save, \
-         patch("hydra.core.orchestrator.apply_config", side_effect=[False, True]) as mock_apply, \
-         patch.object(p, "_sync_transport_firewall") as mock_firewall:
-        assert p.set_transport(state, "quic") is False
-
-    assert state.protocols["naive"].config["network"] == "tcp"
-    assert mock_apply.call_count == 2
-    mock_save.assert_called_once_with(state)
-    mock_firewall.assert_not_called()
-
-
-def test_set_transport_saves_only_after_successful_apply():
-    """Успешный режим сохраняется и только затем синхронизируется firewall."""
-    p = NaivePlugin()
-    state = _make_state_with_network([], network="tcp")
-
-    with patch("hydra.core.state.save_state") as mock_save, \
-         patch("hydra.core.orchestrator.apply_config", return_value=True) as mock_apply, \
-         patch.object(p, "_sync_transport_firewall") as mock_firewall:
-        assert p.set_transport(state, "quic") is True
-
+    assert p.set_transport(state, "quic") is True
     assert state.protocols["naive"].config["network"] == "quic"
-    mock_apply.assert_called_once_with(state)
-    mock_save.assert_called_once_with(state)
-    mock_firewall.assert_called_once_with("tcp", "quic")
 
 
-def test_on_enable_opens_udp_for_quic():
-    """on_enable() вызывает open_udp(443) при network=quic."""
+def test_apply_reconciles_quic_firewall():
     p = NaivePlugin()
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
     state.protocols["naive"].config["network"] = "quic"
-    with patch("hydra.utils.firewall.open_tcp") as mock_tcp, \
-         patch("hydra.utils.firewall.open_udp") as mock_udp, \
-         patch("subprocess.run") as mock_run, \
-         patch("hydra.ui.tui.prompt", side_effect=lambda text, default="": default), \
-         patch("hydra.ui.tui.confirm", return_value=False), \
-         patch("hydra.ui.tui.menu", return_value="2"), \
-         patch.object(p, "apply", return_value=True):
-        mock_run.return_value = MagicMock(stdout="active\n", returncode=0)
-        p.on_enable(state)
-        mock_tcp.assert_called_once_with(443, "naive")
-        mock_udp.assert_called_once_with(443, "naive-quic")
-
-
-def test_certbot_stops_and_restores_caddy_l4_on_exception():
-    p = NaivePlugin()
-    calls = []
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        result = MagicMock(returncode=0, stdout="", stderr="")
-        if command[:3] == ["systemctl", "is-active", "caddy-l4"]:
-            result.stdout = "active\n"
-        if command and command[0] == "certbot":
-            raise OSError("certbot crashed")
-        return result
-
-    with patch("pathlib.Path.exists", return_value=False), \
-         patch("hydra.plugins.naive.plugin.shutil.which", return_value="/usr/bin/certbot"), \
-         patch("hydra.utils.firewall.temporary_open_port", return_value=nullcontext()), \
-         patch("hydra.plugins.naive.plugin.HOST.run", side_effect=fake_run):
-        assert p._obtain_cert_certbot("naive.example.com") is False
-
-    stop_index = calls.index(["systemctl", "stop", "caddy-l4"])
-    certbot_index = next(index for index, command in enumerate(calls) if command[0] == "certbot")
-    start_index = calls.index(["systemctl", "start", "caddy-l4"])
-    assert stop_index < certbot_index < start_index
+    p._pending_config = "test"
+    p._pending_cfg = "test"
+    with patch("hydra.plugins.naive.plugin.CFG_DIR"), \
+         patch("hydra.plugins.naive.plugin.LOG_DIR"), \
+         patch("hydra.plugins.naive.plugin.CADDYFILE"), \
+         patch.object(p, "_create_fake_site"), \
+         patch.object(p, "_validate_caddy", return_value=""), \
+         patch("hydra.plugins.naive.plugin.HOST.run", return_value=MagicMock(returncode=0)), \
+         patch("hydra.plugins.naive.plugin.time.sleep"), \
+         patch.object(p, "_sync_transport_firewall") as reconcile:
+        assert p.apply(state)
+    reconcile.assert_called_once_with("quic")
 
 

@@ -5,6 +5,7 @@ from hydra.core.errors import (
     ErrorCode,
     HostOperationError,
     ServiceResult,
+    StateConflictError,
     normalize_error,
 )
 from hydra.core.state import AppState
@@ -16,6 +17,9 @@ def test_normalize_error_maps_domain_types_to_stable_codes():
     assert normalize_error(ValueError("bad input")).code is ErrorCode.INVALID_INPUT
     assert normalize_error(HostOperationError("systemd failed")).code is ErrorCode.HOST_OPERATION
     assert normalize_error(ConfigurationError("invalid config")).code is ErrorCode.CONFIGURATION
+    conflict = normalize_error(StateConflictError("stale state"))
+    assert conflict.code is ErrorCode.CONFLICT
+    assert conflict.retryable is True
 
 
 def test_service_result_keeps_bool_compatibility_and_serializes_error():
@@ -29,6 +33,7 @@ def test_application_apply_result_normalizes_legacy_false():
         users=SimpleNamespace(), protocols=SimpleNamespace(),
         apply_config=lambda state: False,
         last_apply_error=lambda: "sing-box rejected configuration",
+        plugin_statuses=lambda state: {},
     )
     result = app.apply_result(AppState())
     assert not result

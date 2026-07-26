@@ -15,6 +15,7 @@ def test_application_apply_result_maps_host_failure_to_retryable_error():
         users=SimpleNamespace(), protocols=SimpleNamespace(),
         apply_config=lambda state: (_ for _ in ()).throw(HostOperationError("systemd unavailable")),
         last_apply_error=lambda: "",
+        plugin_statuses=lambda state: {},
     )
 
     result = app.apply_result(AppState())
@@ -32,6 +33,7 @@ def test_application_user_result_does_not_hide_lifecycle_exception():
     app = ApplicationService(
         users=Users(), protocols=SimpleNamespace(),
         apply_config=lambda state: True, last_apply_error=lambda: "",
+        plugin_statuses=lambda state: {},
     )
 
     result = app.user_result("block", AppState(), "alice@example.com")
@@ -87,6 +89,7 @@ def test_result_payload_omits_success_error_details():
     app = ApplicationService(
         users=SimpleNamespace(), protocols=SimpleNamespace(),
         apply_config=lambda state: True, last_apply_error=lambda: "stale error",
+        plugin_statuses=lambda state: {},
     )
     result = app.apply_result(AppState())
 

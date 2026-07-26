@@ -21,6 +21,7 @@ from hydra.plugins.antidpi.plugin import (
     score_event,
 )
 from hydra.core.state import AppState, PluginState
+from hydra.plugins.base import HealthResult
 
 
 def test_notification_score_does_not_round_up_to_the_ban_threshold():
@@ -62,6 +63,25 @@ def test_enabled_udp_protocol_ports_are_discovered():
     }
 
 
+def test_state_aware_health_uses_supplied_mieru_state_without_reload():
+    plugin = AntiDPIPlugin()
+    state = AppState(
+        protocols={"mieru": PluginState(enabled=True)},
+    )
+    expected = HealthResult(True)
+
+    with (
+        patch.object(
+            plugin,
+            "_healthcheck",
+            return_value=expected,
+        ) as healthcheck,
+    ):
+        assert plugin.health_result(state) is expected
+
+    healthcheck.assert_called_once_with(mieru_enabled=True)
+
+
 def test_invalid_udp_ports_are_ignored_instead_of_breaking_rule_sync():
     state = AppState(protocols={
         "hysteria2": PluginState(enabled=True, config={"port": "invalid"}),
@@ -98,15 +118,15 @@ def test_mieru_probe_rule_requires_established_low_volume_close_and_never_drops(
 
 
 def test_obsolete_udp_probe_is_ignored_without_alert_or_score(tmp_path):
-    plugin = AntiDPIPlugin()
+    notify = MagicMock(return_value=True)
+    plugin = AntiDPIPlugin(notifier=notify)
     state_file = tmp_path / "udp-alert-only.json"
     event = {
         "protocol": "hysteria2", "kind": "udp_probe",
         "source": "kernel-udp-probe", "ban_eligible": False,
     }
     with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run") as firewall, \
-         patch("hydra.services.telegram.bot.send_admin_notification", return_value=True) as notify:
+         patch("hydra.plugins.antidpi.plugin._run") as firewall:
         assert plugin.observe_event("198.51.100.40", event, now=1000) is False
         assert plugin.observe_event("198.51.100.40", event, now=1001) is False
         assert plugin.observe_event("198.51.100.40", event, now=1002) is False
@@ -123,7 +143,7 @@ def test_udp_probe_sync_removes_legacy_rules_instead_of_recreating_them():
 
 
 def test_unverified_udp_score_cannot_preload_a_later_verified_ban(tmp_path):
-    plugin = AntiDPIPlugin()
+    plugin = AntiDPIPlugin(notifier=MagicMock(return_value=True))
     state_file = tmp_path / "separate-verified-score.json"
     udp = {
         "protocol": "amneziawg", "kind": "udp_probe",
@@ -133,8 +153,7 @@ def test_unverified_udp_score_cannot_preload_a_later_verified_ban(tmp_path):
         "protocol": "tls", "kind": "auth_failure", "source": "journal",
     }
     with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run") as firewall, \
-         patch("hydra.services.telegram.bot.send_admin_notification", return_value=True):
+         patch("hydra.plugins.antidpi.plugin._run") as firewall:
         plugin.observe_event("198.51.100.41", udp, now=1000)
         plugin.observe_event("198.51.100.41", udp, now=1001)
         assert plugin.observe_event("198.51.100.41", verified, now=1002) is False
@@ -146,7 +165,8 @@ def test_unverified_udp_score_cannot_preload_a_later_verified_ban(tmp_path):
 
 
 def test_single_port_tcp_burst_alerts_but_does_not_ban(tmp_path):
-    plugin = AntiDPIPlugin()
+    notify = MagicMock(return_value=True)
+    plugin = AntiDPIPlugin(notifier=notify)
     state_file = tmp_path / "verified-tcp-scan.json"
     event = {
         "protocol": "tcp", "kind": "port_scan",
@@ -154,20 +174,21 @@ def test_single_port_tcp_burst_alerts_but_does_not_ban(tmp_path):
     }
     result = MagicMock(returncode=0, stdout="", stderr="")
     with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run", return_value=result), \
-         patch("hydra.services.telegram.bot.send_admin_notification", return_value=True) as notify:
+         patch("hydra.plugins.antidpi.plugin._run", return_value=result):
         assert plugin.observe_event("198.51.100.45", event, now=1000) is False
         assert plugin.observe_event("198.51.100.45", event, now=1001) is False
         assert plugin.observe_event("198.51.100.45", event, now=1002) is False
     assert notify.call_count == 1
-    assert "AntiDPI · ALERT" in notify.call_args.args[0]
+    component, action, fields = notify.call_args.args[:3]
+    assert (component, action) == ("AntiDPI", "ALERT")
+    assert ("IP", "198.51.100.45") in fields
 
 
 def test_alert_cooldown_is_scoped_per_protocol(tmp_path):
-    plugin = AntiDPIPlugin()
+    notify = MagicMock(return_value=True)
+    plugin = AntiDPIPlugin(notifier=notify)
     state_file = tmp_path / "protocol-alert-cooldown.json"
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.services.telegram.bot.send_admin_notification", return_value=True) as notify:
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file):
         for protocol in ("hysteria2", "amneziawg"):
             event = {
                 "protocol": protocol, "kind": "udp_probe",
@@ -179,14 +200,13 @@ def test_alert_cooldown_is_scoped_per_protocol(tmp_path):
 
 
 def test_observed_score_is_capped_for_sustained_unverified_udp(tmp_path):
-    plugin = AntiDPIPlugin()
+    plugin = AntiDPIPlugin(notifier=MagicMock(return_value=True))
     state_file = tmp_path / "bounded-observed-score.json"
     event = {
         "protocol": "hysteria2", "kind": "udp_probe",
         "source": "native-udp", "ban_eligible": False,
     }
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.services.telegram.bot.send_admin_notification", return_value=True):
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file):
         for offset in range(100):
             plugin.observe_event("198.51.100.43", event, now=1000 + offset)
         state = plugin._load_state()
@@ -493,9 +513,8 @@ def test_vps_addresses_are_automatically_whitelisted(tmp_path):
     app_state = AppState()
     app_state.network.server_ip = "203.0.113.10"
     with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin.load_state", return_value=app_state), \
          patch("hydra.plugins.antidpi.plugin.host_ip_addresses", return_value=("203.0.113.10", "2001:db8::10")):
-        assert plugin.sync_host_whitelist() == ["203.0.113.10", "2001:db8::10"]
+        assert plugin.sync_host_whitelist(app_state) == ["203.0.113.10", "2001:db8::10"]
         data = plugin._load_state()
         assert plugin.observe_event(
             "203.0.113.10",
@@ -669,12 +688,12 @@ def test_event_source_and_signal_counters_are_persisted(tmp_path):
 
 
 def test_ban_notifications_are_throttled_and_delivery_is_counted(tmp_path):
-    plugin = AntiDPIPlugin()
+    notify = MagicMock(return_value=True)
+    plugin = AntiDPIPlugin(notifier=notify)
     state_file = tmp_path / "antidpi_notifications.json"
     result = MagicMock(returncode=0, stdout="", stderr="")
     with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run", return_value=result), \
-         patch("hydra.services.telegram.bot.send_admin_notification", return_value=True) as notify:
+         patch("hydra.plugins.antidpi.plugin._run", return_value=result):
         assert plugin.observe_event(
             "198.51.100.40", {"kind": "active_decoy_probe", "source": "test"}, now=1000,
         ) is True
@@ -684,17 +703,18 @@ def test_ban_notifications_are_throttled_and_delivery_is_counted(tmp_path):
         data = plugin._load_state()
 
     assert notify.call_count == 1
-    message = notify.call_args.args[0]
-    assert "AntiDPI · BAN" in message
-    assert "198.51.100.40" in message
-    assert "заблокировал источник" not in message
-    assert "Эффект" not in message
+    component, action, fields = notify.call_args.args[:3]
+    assert (component, action) == ("AntiDPI", "BAN")
+    assert ("IP", "198.51.100.40") in fields
+    assert all(label not in {"Эффект"} for label, _value in fields)
     assert data["notification_stats"]["delivered"] == 1
     assert data["suppressed_ban_notifications"] == 1
 
 
 def test_honeypot_owned_bans_are_removed_from_antidpi(tmp_path):
-    plugin = AntiDPIPlugin()
+    plugin = AntiDPIPlugin(
+        honeypot_bans=lambda: {"198.51.100.60"},
+    )
     state_file = tmp_path / "antidpi_honeypot_duplicates.json"
     state = {
         "banned": {
@@ -706,10 +726,7 @@ def test_honeypot_owned_bans_are_removed_from_antidpi(tmp_path):
     }
     result = MagicMock(returncode=0, stdout="", stderr="")
     with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run", return_value=result), \
-         patch("hydra.plugins.honeypot.plugin.HoneypotPlugin._load_state", return_value={
-             "banned": {"198.51.100.60": {}},
-         }):
+         patch("hydra.plugins.antidpi.plugin._run", return_value=result):
         plugin._save_state(state)
         assert plugin.cleanup_honeypot_duplicates() == 1
         remaining = plugin._load_state()["banned"]

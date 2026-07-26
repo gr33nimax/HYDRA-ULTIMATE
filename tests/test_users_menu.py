@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from hydra.core.state import AppState, User
 from hydra.ui import menus
@@ -6,29 +6,29 @@ from hydra.ui import menus
 
 def test_add_user_normalizes_email_and_rejects_case_insensitive_duplicate():
     state = AppState(users=[User(email="alice@example.com", uuid="existing")])
+    app = MagicMock()
 
     with patch.object(menus, "clear"), \
          patch.object(menus, "title"), \
          patch.object(menus, "prompt", side_effect=["  ALICE@EXAMPLE.COM  ", ""]), \
          patch.object(menus, "error") as show_error, \
-         patch("hydra.plugins.registry.enabled", return_value=[]), \
-         patch.object(menus.orchestrator, "add_user") as add_user:
-        menus._add_user(state)
+         patch("hydra.plugins.registry.enabled", return_value=[]):
+        menus._add_user(state, app)
 
-    add_user.assert_not_called()
+    app.add_user.assert_not_called()
     show_error.assert_called_once()
 
 
 def test_add_user_accepts_username_without_email_domain():
     state = AppState()
+    app = MagicMock()
     with patch.object(menus, "clear"), \
          patch.object(menus, "title"), \
          patch.object(menus, "prompt", side_effect=["testik", ""]), \
-         patch("hydra.plugins.registry.enabled", return_value=[]), \
-         patch.object(menus.orchestrator, "add_user") as add_user:
-        menus._add_user(state)
+         patch("hydra.plugins.registry.enabled", return_value=[]):
+        menus._add_user(state, app)
 
-    assert add_user.call_args.args[1].email == "testik"
+    assert app.add_user.call_args.args[1].email == "testik"
 
 
 def test_reconcile_blocks_user_immediately_when_quota_is_exhausted():
@@ -39,24 +39,24 @@ def test_reconcile_blocks_user_immediately_when_quota_is_exhausted():
         traffic_used_bytes=1073741824,
     )
     state = AppState(users=[user])
+    app = MagicMock()
 
-    with patch.object(menus.orchestrator, "block_user") as block_user, \
-         patch.object(menus, "warn"):
-        menus._reconcile_user_access(state, user)
+    with patch.object(menus, "warn"):
+        menus._reconcile_user_access(state, user, app)
 
-    block_user.assert_called_once_with(state, "alice@example.com")
+    app.block_user.assert_called_once_with(state, "alice@example.com")
 
 
 def test_reconcile_offers_unblock_after_limits_are_extended():
     user = User(email="alice@example.com", uuid="token", blocked=True)
     state = AppState(users=[user])
+    app = MagicMock()
 
     with patch.object(menus, "confirm", return_value=True), \
-         patch.object(menus, "success"), \
-         patch.object(menus.orchestrator, "unblock_user") as unblock_user:
-        menus._reconcile_user_access(state, user)
+         patch.object(menus, "success"):
+        menus._reconcile_user_access(state, user, app)
 
-    unblock_user.assert_called_once_with(state, "alice@example.com")
+    app.unblock_user.assert_called_once_with(state, "alice@example.com")
 
 
 def test_manual_unblock_is_rejected_while_subscription_is_expired():
@@ -67,11 +67,11 @@ def test_manual_unblock_is_rejected_while_subscription_is_expired():
         expiry_date="2000-01-01T00:00:00Z",
     )
     state = AppState(users=[user])
+    app = MagicMock()
 
     with patch.object(menus, "error") as show_error, \
-         patch.object(menus, "prompt", return_value=""), \
-         patch.object(menus.orchestrator, "unblock_user") as unblock_user:
-        menus._toggle_block(state, user)
+         patch.object(menus, "prompt", return_value=""):
+        menus._toggle_block(state, user, app)
 
-    unblock_user.assert_not_called()
+    app.unblock_user.assert_not_called()
     assert "срок истёк" in show_error.call_args.args[0]

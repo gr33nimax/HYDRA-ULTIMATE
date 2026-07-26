@@ -1,0 +1,92 @@
+{
+  "version": 3,
+  "install": {
+    "install_mode": "standard",
+    "server_country": "NL",
+    "private_runtime_value": "preserve-install-data"
+  },
+  "protocols": {
+    "warp": {
+      "enabled": false,
+      "port": 0,
+      "installed": true,
+      "config": {
+        "private_key": "preserve-warp-private-key",
+        "peer_public_key": "preserve-warp-peer-key"
+      }
+    },
+    "custom-transport": {
+      "enabled": true,
+      "port": 24443,
+      "installed": true,
+      "config": {
+        "password": "preserve-custom-secret",
+        "nested": {
+          "mode": "test"
+        }
+      }
+    }
+  },
+  "users": [
+    {
+      "email": "device-user@example.com",
+      "uuid": "schema-3-token",
+      "traffic_limit_gb": 100,
+      "traffic_used_bytes": 42,
+      "expiry_date": "",
+      "blocked": false,
+      "created_at": "2026-07-24T00:00:00+00:00",
+      "telegram_id": null,
+      "credentials": {
+        "naive": {
+          "username": "legacy",
+          "password": "preserve-me"
+        },
+        "custom-transport": {
+          "token": "preserve-user-token"
+        }
+      },
+      "device_limit": 2,
+      "devices": {
+        "cd1fe8030198a45df90f44a04cda869fbbf799d4e78294337cdee955e1203658": "2026-07-24T12:00:00+00:00"
+      }
+    }
+  ],
+  "telegram": {
+    "admin_token": "preserve-admin-token",
+    "admin_chat_id": "123456",
+    "bot_token": "preserve-user-bot-token",
+    "bot_enabled": true,
+    "admin_enabled": true,
+    "allowed_users": [
+      123456,
+      654321
+    ],
+    "notifications_enabled": true,
+    "notify_antidpi": true,
+    "notify_honeypot": false,
+    "notify_fail2ban": true,
+    "notify_unbans": true,
+    "notify_system": false
+  },
+  "network": {
+    "domain": "schema3.example.com",
+    "sub_domain": "",
+    "server_ip": "203.0.113.10",
+    "dns_servers": [],
+    "warp_enabled": true,
+    "dnscrypt_enabled": true,
+    "dnscrypt_port": 5300,
+    "tproxy_enabled": false,
+    "tproxy_port": 1081,
+    "clash_api_enabled": true,
+    "clash_api_port": 9090,
+    "clash_api_secret": "preserve-clash-secret"
+  },
+  "security": {
+    "fail2ban_enabled": true,
+    "honeypot_enabled": false,
+    "ipban_enabled": true,
+    "antidpi_enabled": true
+  }
+}

@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.core.state import (
-    AppState, PluginState, User, TelegramConfig, NetworkConfig, SecurityConfig,
+    AppState, PluginState, User, TelegramConfig, NetworkConfig, SCHEMA_VERSION,
     load_state, save_state, update_state, find_user, add_user, get_protocol,
     STATE_FILE,
 )
@@ -18,7 +18,7 @@ from hydra.core.state import (
 def test_app_state_defaults():
     """Пустое состояние имеет корректные значения по умолчанию."""
     state = AppState()
-    assert state.version == 3
+    assert state.version == SCHEMA_VERSION
     assert state.protocols == {}
     assert state.users == []
     assert isinstance(state.telegram, TelegramConfig)
@@ -28,7 +28,6 @@ def test_app_state_defaults():
     assert state.telegram.notify_fail2ban is True
     assert state.telegram.notify_unbans is False
     assert isinstance(state.network, NetworkConfig)
-    assert isinstance(state.security, SecurityConfig)
 
 
 def test_null_boolean_switches_use_dataclass_defaults(tmp_path, monkeypatch):
@@ -121,7 +120,7 @@ def test_save_and_load():
             save_state(state)
             loaded = load_state()
 
-            assert loaded.version == 3
+            assert loaded.version == SCHEMA_VERSION
             assert loaded.network.domain == "example.com"
             assert len(loaded.users) == 1
             assert loaded.users[0].email == "test@example.com"
@@ -142,11 +141,17 @@ def test_stale_settings_save_preserves_newer_traffic_counters(tmp_path):
         save_state(initial)
 
         stale = load_state()
-        latest = load_state()
-        latest.users[0].traffic_used_bytes = 500
-        latest.users[0].credentials["anytls"] = {"traffic_used_bytes": 500}
-        latest.install["traffic_connection_counters"] = {"c1": {"total": 500}}
-        save_state(latest)
+
+        def record_traffic(latest):
+            latest.users[0].traffic_used_bytes = 500
+            latest.users[0].credentials["anytls"] = {
+                "traffic_used_bytes": 500,
+            }
+            latest.install["traffic_connection_counters"] = {
+                "c1": {"total": 500},
+            }
+
+        update_state(record_traffic)
         update_state(lambda current: current.install.__setitem__("sync_config_pending", True))
 
         stale.network.domain = "changed.example"
@@ -246,8 +251,8 @@ def test_roundtrip_with_credentials():
     assert u.credentials == {"mieru": {"username": "u_abc", "password": "p_xyz"}}
 
 
-def test_migrate_v1_to_v2():
-    """Подать v1-словарь без credentials/tproxy → после load_state версия 2, поля есть."""
+def test_migrate_v1_to_current_schema():
+    """A v1 payload migrates through every released schema in order."""
     v1_data = {
         "version": 1,
         "install": {},
@@ -281,7 +286,7 @@ def test_migrate_v1_to_v2():
             state_mod.STATE_DIR = orig_dir
 
     # Версия должна мигрировать до актуальной схемы
-    assert loaded.version == 3
+    assert loaded.version == SCHEMA_VERSION
     assert loaded.users[0].device_limit == 0
     assert loaded.users[0].devices == {}
     # credentials добавлены каждому пользователю
@@ -289,6 +294,56 @@ def test_migrate_v1_to_v2():
     # tproxy-поля появились в NetworkConfig
     assert loaded.network.tproxy_enabled is False
     assert loaded.network.tproxy_port == 1081
+
+
+def test_migrate_v2_enablement_flags_to_canonical_protocol_state(
+    tmp_path,
+    monkeypatch,
+):
+    import hydra.core.state as state_mod
+
+    raw = {
+        "version": 2,
+        "protocols": {
+            "dnscrypt": {"enabled": False},
+            "warp": {"enabled": True},
+            "antidpi": {"enabled": True},
+        },
+        "network": {
+            "dnscrypt_enabled": True,
+            "warp_enabled": False,
+            "dnscrypt_port": 5300,
+        },
+        "security": {
+            "antidpi_enabled": False,
+            "fail2ban_enabled": True,
+            "honeypot_enabled": False,
+            "ipban_enabled": True,
+        },
+    }
+    state_file = tmp_path / "state.json"
+    state_file.write_text(json.dumps(raw), encoding="utf-8")
+    monkeypatch.setattr(state_mod, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(state_mod, "STATE_FILE", state_file)
+
+    state = load_state()
+
+    assert state.version == SCHEMA_VERSION
+    assert state.protocols["dnscrypt"].enabled is True
+    assert state.protocols["warp"].enabled is True
+    assert state.protocols["antidpi"].enabled is True
+    assert state.protocols["fail2ban"].enabled is True
+    assert state.protocols["ipban"].enabled is True
+    assert "honeypot" not in state.protocols
+    assert not hasattr(state.network, "dnscrypt_enabled")
+    assert not hasattr(state.network, "warp_enabled")
+    assert not hasattr(state, "security")
+
+    save_state(state)
+    persisted = json.loads(state_file.read_text(encoding="utf-8"))
+    assert "security" not in persisted
+    assert "dnscrypt_enabled" not in persisted["network"]
+    assert "warp_enabled" not in persisted["network"]
 
 
 def test_singbox_generate_config_tproxy_reject_rule():
@@ -321,7 +376,7 @@ def test_load_recovers_from_backup(tmp_path):
         first = AppState()
         first.network.domain = "backup.example"
         save_state(first)
-        second = AppState()
+        second = load_state()
         second.network.domain = "current.example"
         save_state(second)
         state_mod.STATE_FILE.write_text("{broken", encoding="utf-8")

@@ -1,0 +1,101 @@
+"""Ordered pure migrations for persisted HYDRA state."""
+from __future__ import annotations
+
+import copy
+from collections.abc import Callable, Mapping
+
+from hydra.core.state_models import SCHEMA_VERSION, validate_raw_state
+
+
+Migration = Callable[[dict], dict]
+
+
+def migrate_v0_to_v1(data: dict) -> dict:
+    data["version"] = 1
+    data.setdefault("install", {})
+    data.setdefault("protocols", {})
+    data.setdefault("telegram", {})
+    data.setdefault("network", {})
+    data.setdefault("security", {})
+    return data
+
+
+def migrate_v1_to_v2(data: dict) -> dict:
+    for user in data.get("users", []):
+        user.setdefault("credentials", {})
+    network = data.setdefault("network", {})
+    network.setdefault("tproxy_enabled", False)
+    network.setdefault("tproxy_port", 1081)
+    data["version"] = 2
+    return data
+
+
+def migrate_v2_to_v3(data: dict) -> dict:
+    """Add the device-binding fields released with persisted schema 3."""
+    for user in data.get("users", []):
+        user.setdefault("device_limit", 0)
+        user.setdefault("devices", {})
+    data["version"] = 3
+    return data
+
+
+def migrate_v3_to_v4(data: dict) -> dict:
+    """Canonicalize plugin flags and add optimistic concurrency metadata."""
+    protocols = data.setdefault("protocols", {})
+    network = data.setdefault("network", {})
+    security = data.pop("security", {})
+
+    legacy_flags = {
+        "warp": network.pop("warp_enabled", False),
+        "dnscrypt": network.pop("dnscrypt_enabled", False),
+        "fail2ban": security.get("fail2ban_enabled", False),
+        "honeypot": security.get("honeypot_enabled", False),
+        "ipban": security.get("ipban_enabled", False),
+        "antidpi": security.get("antidpi_enabled", False),
+    }
+    for name, legacy_enabled in legacy_flags.items():
+        current = protocols.get(name)
+        if current is None:
+            if not legacy_enabled:
+                continue
+            current = {}
+            protocols[name] = current
+        current["enabled"] = bool(current.get("enabled") or legacy_enabled)
+
+    data.setdefault("revision", 0)
+    data["version"] = 4
+    return data
+
+
+MIGRATIONS: dict[int, Migration] = {
+    0: migrate_v0_to_v1,
+    1: migrate_v1_to_v2,
+    2: migrate_v2_to_v3,
+    3: migrate_v3_to_v4,
+}
+
+
+def migrate_state(
+    data: dict,
+    from_version: int,
+    *,
+    migrations: Mapping[int, Migration] = MIGRATIONS,
+) -> dict:
+    """Run every schema migration exactly once without mutating the source."""
+    migrated = copy.deepcopy(data)
+    version = from_version
+    while version < SCHEMA_VERSION:
+        migration = migrations.get(version)
+        if migration is None:
+            raise RuntimeError(
+                f"missing state migration {version} -> {version + 1}"
+            )
+        migrated = migration(migrated)
+        expected = version + 1
+        if migrated.get("version") != expected:
+            raise RuntimeError(
+                f"state migration {version} did not produce schema {expected}"
+            )
+        validate_raw_state(migrated)
+        version = expected
+    return migrated

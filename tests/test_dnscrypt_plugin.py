@@ -1,12 +1,13 @@
 """tests/test_dnscrypt_plugin.py — Тесты для плагина DNSCrypt."""
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.plugins.dnscrypt.plugin import DNSCryptPlugin, DNSCRYPT_PORT
-from hydra.core.state import AppState, PluginState
+from hydra.core.state import AppState
 
 
 def test_dnscrypt_metadata():
@@ -106,18 +107,18 @@ def test_dnscrypt_on_enable_disable(mock_write_config, mock_host):
     p = DNSCryptPlugin()
     state = AppState()
     
-    assert state.network.dnscrypt_enabled is False
+    assert "dnscrypt" not in state.protocols
     mock_host.systemd.return_value = MagicMock(returncode=0)
     
     p.on_enable(state)
-    assert state.network.dnscrypt_enabled is True
+    assert "dnscrypt" not in state.protocols
     assert state.network.dnscrypt_port == DNSCRYPT_PORT
     mock_write_config.assert_called_once()
     mock_host.systemd.assert_any_call("enable", "dnscrypt-proxy")
     mock_host.systemd.assert_any_call("start", "dnscrypt-proxy")
 
     p.on_disable(state)
-    assert state.network.dnscrypt_enabled is False
+    assert "dnscrypt" not in state.protocols
     mock_host.systemd.assert_any_call("stop", "dnscrypt-proxy")
     mock_host.systemd.assert_any_call("disable", "dnscrypt-proxy")
 
@@ -200,8 +201,6 @@ def test_get_dnscrypt_bin():
 
 
 def test_apply_server_names_handles_multiline_toml_atomically(tmp_path):
-    from hydra.plugins.dnscrypt import manager
-
     config = tmp_path / "dnscrypt-proxy.toml"
     config.write_text(
         "listen_addresses = ['127.0.0.1:5300']\n"
@@ -212,8 +211,13 @@ def test_apply_server_names_handles_multiline_toml_atomically(tmp_path):
     host.run.return_value = MagicMock(returncode=0)
     host.systemd.return_value = MagicMock(returncode=0)
 
-    with patch.object(manager, "DNSCRYPT_CONF", config), patch.object(manager, "HOST", host):
-        assert manager._apply_server_names(["cloudflare", "quad9-dnscrypt-ip4-filter-pri"]) is True
+    with (
+        patch("hydra.plugins.dnscrypt.plugin.DNSCRYPT_CONF", config),
+        patch("hydra.plugins.dnscrypt.plugin.HOST", host),
+    ):
+        assert DNSCryptPlugin.apply_server_names(
+            names=["cloudflare", "quad9-dnscrypt-ip4-filter-pri"],
+        ) is True
 
     written = host.atomic_write.call_args_list[0].args[1]
     assert "server_names = ['cloudflare', 'quad9-dnscrypt-ip4-filter-pri']" in written
@@ -222,16 +226,19 @@ def test_apply_server_names_handles_multiline_toml_atomically(tmp_path):
 
 
 def test_apply_server_names_rolls_back_when_validation_fails(tmp_path):
-    from hydra.plugins.dnscrypt import manager
-
     config = tmp_path / "dnscrypt-proxy.toml"
     original = b"listen_addresses = ['127.0.0.1:5300']\nserver_names = ['old']\n"
     config.write_bytes(original)
     host = MagicMock()
     host.run.return_value = MagicMock(returncode=1)
 
-    with patch.object(manager, "DNSCRYPT_CONF", config), patch.object(manager, "HOST", host):
-        assert manager._apply_server_names(["cloudflare"]) is False
+    with (
+        patch("hydra.plugins.dnscrypt.plugin.DNSCRYPT_CONF", config),
+        patch("hydra.plugins.dnscrypt.plugin.HOST", host),
+    ):
+        assert DNSCryptPlugin.apply_server_names(
+            names=["cloudflare"],
+        ) is False
 
     assert host.atomic_write.call_args_list[-1].args[1] == original
     host.systemd.assert_not_called()

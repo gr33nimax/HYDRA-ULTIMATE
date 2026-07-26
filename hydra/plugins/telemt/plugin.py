@@ -1,40 +1,68 @@
-"""hydra/plugins/telemt/plugin.py — Telemt MTProxy: Rust MTProto proxy с multi-user secret.
+"""Telemt MTProxy plugin facade.
 
-Контракт v2 — TRANSPORT-плагин:
-  • configure() — генерит telemt.toml в памяти.
-  • apply() — пишет конфиг, systemctl reload-or-restart.
-  • per-user: детерминированный secret (32 hex) из uuid.
-  • traffic — чтение из stats.json.
-  • nft_tproxy_ports=[8443].
+Policy, installation, observation, profiles and runtime side effects live in
+focused sibling modules.  Constants and historical helper methods stay exposed
+here for callers and monkeypatch-based integrations.
 """
 from __future__ import annotations
 
-from hydra.core.host import HOST
-
-import hashlib
-import json
 import platform
 import shutil
-import subprocess
+import tempfile
 import time
 from pathlib import Path
 
-from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
-from hydra.core.state import AppState, User, PluginState
-from hydra.utils.crypto import derive_key
-from hydra.utils.downloader import latest_release, verify_elf
+from hydra.contracts import BackupResource
+from hydra.core.host import HOST
+from hydra.core.install_layout import project_root, python_executable
+from hydra.core.state_models import User
+from hydra.plugins.base import (
+    BasePlugin,
+    ConfigFragment,
+    PluginCategory,
+    PluginMeta,
+    PluginStatus,
+)
+from hydra.plugins.context import PluginStateAccess
+from hydra.utils.downloader import (
+    download_github_asset,
+    extract_tarball,
+    latest_release,
+    verify_elf,
+)
 from hydra.utils.net import public_ip
 
-BIN_PATH = Path("/usr/local/bin/telemt")
-CONFIG_DIR = Path("/etc/telemt")
-CONFIG_FILE = CONFIG_DIR / "telemt.toml"
-WORK_DIR = Path("/var/lib/telemt")
-SERVICE_FILE = Path("/etc/systemd/system/telemt.service")
-SERVICE_NAME = "telemt"
-LOG_FILE = Path("/var/log/telemt_install.log")
+from . import configuration, installation, observation, profiles, runtime
+from .constants import (
+    BIN_PATH,
+    CONFIG_DIR,
+    CONFIG_FILE,
+    DEFAULT_PORT,
+    GITHUB_REPO,
+    LOG_FILE,
+    PERFORMANCE_LIMITS_FILE,
+    PERFORMANCE_SYSCTL_FILE,
+    SERVICE_FILE,
+    SERVICE_NAME,
+    STATS_CRON_FILE,
+    WORK_DIR,
+)
+from .credentials import derive_secret, derive_username, make_tls_secret
 
-DEFAULT_PORT = 8443
-GITHUB_REPO = "telemt/telemt"
+
+class _RestartingHost:
+    """Translate Telemt's legacy reload request into a deterministic restart."""
+
+    def __init__(self, host) -> None:
+        self._host = host
+
+    def __getattr__(self, name):
+        return getattr(self._host, name)
+
+    def run(self, command: list[str], **options):
+        if command == ["systemctl", "reload-or-restart", SERVICE_NAME]:
+            command = ["systemctl", "restart", SERVICE_NAME]
+        return self._host.run(command, **options)
 
 
 class TelemtPlugin(BasePlugin):
@@ -45,14 +73,42 @@ class TelemtPlugin(BasePlugin):
         version="2.0.0",
         needs_domain=False,
         required_commands=("systemctl",),
+        actions=(
+            "apply_optimizations",
+            "remove_optimizations",
+            "update_binary",
+        ),
+        backup_resources=(
+            BackupResource(str(CONFIG_DIR), "tree"),
+            BackupResource(str(WORK_DIR), "tree"),
+            BackupResource(str(SERVICE_FILE), "file"),
+            BackupResource(str(STATS_CRON_FILE), "file"),
+            BackupResource(str(PERFORMANCE_SYSCTL_FILE), "file"),
+            BackupResource(str(PERFORMANCE_LIMITS_FILE), "file"),
+        ),
     )
 
     def __init__(self):
         self._pending_cfg: str | None = None
 
-    # ═════════════════════════════════════════════════════════════════════
-    #  Установка / удаление
-    # ═════════════════════════════════════════════════════════════════════
+    @staticmethod
+    def apply_optimizations() -> bool:
+        return runtime.apply_optimizations(
+            host=HOST,
+            sysctl_file=PERFORMANCE_SYSCTL_FILE,
+            limits_file=PERFORMANCE_LIMITS_FILE,
+        )
+
+    @staticmethod
+    def remove_optimizations() -> bool:
+        return runtime.remove_optimizations(
+            host=HOST,
+            paths=(
+                STATS_CRON_FILE,
+                PERFORMANCE_SYSCTL_FILE,
+                PERFORMANCE_LIMITS_FILE,
+            ),
+        )
 
     def install(self) -> bool:
         if not self._installed():
@@ -60,187 +116,79 @@ class TelemtPlugin(BasePlugin):
             if not self._download_binary():
                 print("  Не удалось установить telemt.")
                 return False
-
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         WORK_DIR.mkdir(parents=True, exist_ok=True)
-        # Repair partial installations where the binary survived a failed
-        # transaction but the unit file was never written.
+        # Repair partial installs where the binary survived but the unit did not.
         self._install_service()
         return self._installed() and SERVICE_FILE.exists()
 
     def uninstall(self) -> bool:
         try:
-            from hydra.plugins.telemt.telemt_ios_fix import disable_ios_fix
-            from hydra.plugins.telemt.telemt_syn_limiter import disable_syn_limiter
+            from .telemt_ios_fix import disable_ios_fix
+            from .telemt_syn_limiter import disable_syn_limiter
+
             disable_ios_fix()
             disable_syn_limiter()
         except Exception:
             pass
-        HOST.run(["systemctl", "stop", SERVICE_NAME], capture_output=True)
-        HOST.run(["systemctl", "disable", SERVICE_NAME], capture_output=True)
-        if SERVICE_FILE.exists():
-            SERVICE_FILE.unlink()
-        HOST.run(["systemctl", "daemon-reload"], capture_output=True)
-        HOST.run(["systemctl", "reset-failed"], capture_output=True)
-
-        if BIN_PATH.exists():
-            BIN_PATH.unlink()
-        for d in (CONFIG_DIR, WORK_DIR):
-            if d.exists():
-                shutil.rmtree(d, ignore_errors=True)
-        Path("/etc/cron.d/telemt-stats").unlink(missing_ok=True)
-        return True
-
-    # ═════════════════════════════════════════════════════════════════════
-    #  configure — чистая: генерит telemt.toml в памяти
-    # ═════════════════════════════════════════════════════════════════════
-
-    def configure(self, state: AppState) -> ConfigFragment:
-        ps = state.protocols.setdefault("telemt", state.protocols.get("telemt") or PluginState())
-        cfg = ps.config or {}
-
-        port = cfg.get("port", DEFAULT_PORT)
-        domain = cfg.get("tls_domain", state.network.domain or "google.com")
-        use_mp = cfg.get("use_middle_proxy", False)
-        client_mss = cfg.get("client_mss", "")
-        sb_int = cfg.get("singbox_integration_enabled", False)
-        sb_port = cfg.get("singbox_integration_port", 10811)
-
-        has_ipv4 = True
-        has_ipv6 = False
-        if state.network.server_ip:
-            if ":" in state.network.server_ip:
-                has_ipv4 = False
-                has_ipv6 = True
-
-        users = {}
-        for user in state.users:
-            if user.blocked:
-                continue
-            username = self._derive_username(user.uuid)
-            secret = self._derive_secret(user.uuid)
-            users[username] = secret
-
-        toml = self._build_toml(
-            port=port,
-            ipv4=has_ipv4,
-            ipv6=has_ipv6,
-            tls_domain=domain,
-            users=users,
-            use_middle_proxy=use_mp,
-            client_mss=client_mss
+        removed = installation.uninstall(
+            host=HOST,
+            service_name=SERVICE_NAME,
+            service_file=SERVICE_FILE,
+            bin_path=BIN_PATH,
+            directories=(CONFIG_DIR, WORK_DIR),
         )
+        STATS_CRON_FILE.unlink(missing_ok=True)
+        return removed
 
-        self._pending_cfg = toml
+    def configure(self, state: PluginStateAccess) -> ConfigFragment:
+        self._pending_cfg, fragment = configuration.plan_configuration(state)
+        return fragment
 
-        inbounds = []
-        route_rules = []
-        if sb_int:
-            inbounds.append({
-                "type": "redirect",
-                "tag": "redirect-telemt",
-                "listen": "127.0.0.1",
-                "listen_port": sb_port,
-            })
-            # Заворачиваем в WARP если варп активен
-            warp_enabled = state.protocols.get("warp") and state.protocols["warp"].enabled
-            if warp_enabled:
-                route_rules.append({
-                    "inbound": ["redirect-telemt"],
-                    "outbound": "warp"
-                })
-
-        return ConfigFragment(
-            inbounds=inbounds,
-            route_rules=route_rules,
-            nft_tproxy_ports=[port]
+    def apply(self, state: PluginStateAccess) -> bool:
+        runtime_root = project_root(Path(__file__).resolve().parents[3])
+        applied = runtime.apply(
+            self._pending_cfg,
+            state,
+            host=_RestartingHost(HOST),
+            config_dir=CONFIG_DIR,
+            work_dir=WORK_DIR,
+            config_file=CONFIG_FILE,
+            cron_file=STATS_CRON_FILE,
+            service_name=SERVICE_NAME,
+            project_root=runtime_root,
         )
-
-    def apply(self, state: AppState) -> bool:
-        if not self._pending_cfg:
+        if not applied:
             return False
-
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        WORK_DIR.mkdir(parents=True, exist_ok=True)
-        CONFIG_FILE.write_text(self._pending_cfg, encoding="utf-8")
-        CONFIG_FILE.chmod(0o640)
-
-        # 1. Fallback конфигурация
-        ps = state.protocols.setdefault("telemt", state.protocols.get("telemt") or PluginState())
-        cfg = ps.config or {}
-        port = cfg.get("port", DEFAULT_PORT)
-        fallback_cfg_dict = cfg.get("fallback_cfg")
-        if fallback_cfg_dict:
-            try:
-                from hydra.plugins.telemt.telemt_fallback import FallbackConfig, append_fallback_section
-                fb_cfg = FallbackConfig(**fallback_cfg_dict)
-                append_fallback_section(CONFIG_FILE, fb_cfg)
-            except Exception as e:
-                print(f"  [telemt] Ошибка записи fallback настроек: {e}")
-
-        # 2. Перезапуск службы
-        daemon_reload = HOST.run(["systemctl", "daemon-reload"], capture_output=True)
-        enable = HOST.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
-        # Telemt releases do not all handle SIGHUP consistently. A real restart
-        # is deterministic and avoids the observed active/inactive flapping.
-        restart = HOST.run(["systemctl", "restart", SERVICE_NAME], capture_output=True)
-        if any(result.returncode != 0 for result in (daemon_reload, enable, restart)):
-            return False
-
-        # 3. Интеграция с Sing-Box (Self-Route)
-        sb_int = cfg.get("singbox_integration_enabled", False)
-        sb_port = cfg.get("singbox_integration_port", 10811)
-        try:
-            from hydra.plugins.telemt import telemt_self_route as sr
-            if sb_int:
-                sr.enable(sb_port)
-            else:
-                sr.disable(sb_port)
-        except Exception as e:
-            print(f"  [telemt] Ошибка применения правил маршрутизации: {e}")
-
-        # 4. Установка фонового планировщика для сбора статистики (Cron)
-        cron_file = Path("/etc/cron.d/telemt-stats")
-        project_root = Path(__file__).resolve().parent.parent.parent.parent
-        try:
-            cron_file.write_text(
-                f"*/5 * * * * root PYTHONPATH={project_root} python3 -c "
-                "\"from hydra.plugins.telemt.mtproto_stats import _load_stats, _collect, _save_stats; "
-                "d = _load_stats(); d = _collect(d); _save_stats(d)\" >/dev/null 2>&1\n"
+        if STATS_CRON_FILE.exists():
+            cron = STATS_CRON_FILE.read_text(encoding="utf-8")
+            cron = cron.replace(
+                " python3 -c ",
+                f" {python_executable(runtime_root)} -c ",
             )
-            cron_file.chmod(0o644)
-            HOST.run(["systemctl", "restart", "cron"], capture_output=True)
-        except Exception as e:
-            print(f"  [telemt] Ошибка создания задания cron: {e}")
+            STATS_CRON_FILE.write_text(cron, encoding="utf-8")
 
-        # 5. Инициализация iptables-учёта трафика
+        # Optional firewall features can drift after reboot/backend refresh.
         try:
-            from hydra.plugins.telemt.mtproto_stats import setup_iptables_accounting
-            setup_iptables_accounting(port)
-        except Exception as e:
-            print(f"  [telemt] Ошибка настройки iptables-учёта: {e}")
+            from . import telemt_ios_fix as ios_fix
 
-        # Reconcile optional firewall features after every service apply. This
-        # repairs configured-but-inactive rules after reboot or an nftables /
-        # iptables backend refresh.
-        try:
-            from hydra.plugins.telemt import telemt_ios_fix as ios_fix
-            ios_cfg = ios_fix._load_state()
-            if ios_cfg.enabled:
-                ok, message = ios_fix._apply_rules(ios_cfg)
+            ios_config = ios_fix._load_state()
+            if ios_config.enabled:
+                ok, message = ios_fix._apply_rules(ios_config)
                 if not ok:
                     print(f"  [telemt] iOS-фикс не применён: {message}")
-        except Exception as e:
-            print(f"  [telemt] Ошибка восстановления iOS-фикса: {e}")
+        except Exception as exc:
+            print(f"  [telemt] Ошибка восстановления iOS-фикса: {exc}")
         try:
-            from hydra.plugins.telemt import telemt_syn_limiter as syn_limiter
-            syn_cfg = syn_limiter._load_state()
-            if syn_cfg.enabled:
-                ok, message = syn_limiter._apply_rules(syn_cfg)
+            from . import telemt_syn_limiter as syn_limiter
+
+            syn_config = syn_limiter._load_state()
+            if syn_config.enabled:
+                ok, message = syn_limiter._apply_rules(syn_config)
                 if not ok:
                     print(f"  [telemt] SYN-limiter не применён: {message}")
-        except Exception as e:
-            print(f"  [telemt] Ошибка восстановления SYN-limiter: {e}")
+        except Exception as exc:
+            print(f"  [telemt] Ошибка восстановления SYN-limiter: {exc}")
 
         for _ in range(5):
             active = HOST.run(
@@ -253,165 +201,106 @@ class TelemtPlugin(BasePlugin):
             time.sleep(0.5)
         return False
 
-    def snapshot(self, state: AppState):
-        cron = Path("/etc/cron.d/telemt-stats")
-        return {
-            "config": CONFIG_FILE.read_bytes() if CONFIG_FILE.exists() else None,
-            "service": SERVICE_FILE.read_bytes() if SERVICE_FILE.exists() else None,
-            "cron": cron.read_bytes() if cron.exists() else None,
-            "running": self.status().running,
-        }
-
-    def rollback(self, state: AppState, snapshot) -> bool:
-        previous = snapshot or {}
-        cron = Path("/etc/cron.d/telemt-stats")
-        for key, path in (("config", CONFIG_FILE), ("service", SERVICE_FILE), ("cron", cron)):
-            content = previous.get(key)
-            if content is None:
-                path.unlink(missing_ok=True)
-            else:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(content)
-        command = ["systemctl", "restart", SERVICE_NAME] if previous.get("running") else ["systemctl", "stop", SERVICE_NAME]
-        return HOST.run(command, capture_output=True).returncode == 0
-
-    # ═════════════════════════════════════════════════════════════════════
-    #  Per-user TRANSPORT-методы
-    # ═════════════════════════════════════════════════════════════════════
-
-    def on_user_add(self, user: User, state: AppState) -> None:
-        user.credentials.setdefault("telemt", {})
-        user.credentials["telemt"]["username"] = self._derive_username(user.uuid)
-        user.credentials["telemt"]["secret"] = self._derive_secret(user.uuid)
-
-    def on_user_remove(self, user: User, state: AppState) -> None:
-        pass
-
-    def on_user_block(self, user: User, state: AppState) -> None:
-        pass
-
-    # ═════════════════════════════════════════════════════════════════════
-    #  Клиентский конфиг
-    # ═════════════════════════════════════════════════════════════════════
-
-    def generate_client_config(self, user: User, state: AppState) -> str:
-        link = self.client_link(user, state)
-        if not link:
-            return ""
-        return json.dumps({"link": link, "protocol": "telemt"})
-
-    def client_link(self, user: User, state: AppState) -> str:
-        ps = state.protocols.setdefault("telemt", state.protocols.get("telemt") or PluginState())
-        cfg = ps.config or {}
-        port = cfg.get("port", DEFAULT_PORT)
-        
-        domain = cfg.get("tls_domain")
-        if domain is None:
-            domain = state.network.domain
-        
-        secret = self._derive_secret(user.uuid)
-        server_ip = state.network.server_ip or public_ip()
-        tls_secret = self._make_tls_secret(secret, domain) if domain else secret
-        
-        # Проверяем, активен ли iOS-фикс для ссылки
-        try:
-            from hydra.plugins.telemt.telemt_ios_fix import status as ios_status
-            ios_st = ios_status()
-            if ios_st.get("enabled"):
-                # Возвращаем ссылку с портом iOS-фикса
-                return f"tg://proxy?server={server_ip}&port={ios_st['ext_port']}&secret={tls_secret}"
-        except Exception:
-            pass
-
-        return f"tg://proxy?server={server_ip}&port={port}&secret={tls_secret}"
-
-    # ═════════════════════════════════════════════════════════════════════
-    #  Статус / трафик
-    # ═════════════════════════════════════════════════════════════════════
-
-    def status(self) -> PluginStatus:
-        installed = self._installed()
-        running = False
-        port = DEFAULT_PORT
-        
-        if installed:
-            r = HOST.run(
-                ["systemctl", "is-active", SERVICE_NAME],
-                capture_output=True, text=True,
-            )
-            running = r.stdout.strip() == "active"
-            
-            # Читаем порт из конфига на диске
-            if CONFIG_FILE.exists():
-                try:
-                    for line in CONFIG_FILE.read_text(encoding="utf-8").splitlines():
-                        if line.strip().startswith("port ="):
-                            port = int(line.split("=")[1].strip())
-                            break
-                except Exception:
-                    pass
-
-        return PluginStatus(
-            installed=installed,
-            enabled=CONFIG_FILE.exists(),
-            running=running,
-            port=port,
+    def snapshot(self, state: PluginStateAccess):
+        return runtime.snapshot(
+            config_file=CONFIG_FILE,
+            service_file=SERVICE_FILE,
+            cron_file=STATS_CRON_FILE,
+            running=self.status().running,
         )
 
-    def traffic(self, state: AppState) -> dict[str, int]:
-        stats_file = WORK_DIR / "stats.json"
-        if not stats_file.exists():
-            return {}
+    def rollback(self, state: PluginStateAccess, snapshot) -> bool:
+        return runtime.rollback(
+            snapshot,
+            host=HOST,
+            config_file=CONFIG_FILE,
+            service_file=SERVICE_FILE,
+            cron_file=STATS_CRON_FILE,
+            service_name=SERVICE_NAME,
+        )
 
-        try:
-            d = json.loads(stats_file.read_text(encoding="utf-8"))
-            users_data = d.get("users", {})
-        except Exception:
-            return {}
+    def on_user_add(self, user: User, state: PluginStateAccess) -> None:
+        user.credentials.setdefault("telemt", {})
+        user.credentials["telemt"]["username"] = self._derive_username(
+            user.uuid
+        )
+        user.credentials["telemt"]["secret"] = self._derive_secret(user.uuid)
 
-        result: dict[str, int] = {}
-        for u in state.users:
-            uname = self._derive_username(u.uuid)
-            if uname in users_data:
-                ud = users_data[uname]
-                rx = ud.get("rx", 0)
-                tx = ud.get("tx", 0)
-                result[u.email] = rx + tx
-        return result
+    def on_user_remove(self, user: User, state: PluginStateAccess) -> None:
+        pass
 
-    def connected_clients(self) -> list[dict]:
+    def on_user_block(self, user: User, state: PluginStateAccess) -> None:
+        pass
+
+    def generate_client_config(
+        self,
+        user: User,
+        state: PluginStateAccess,
+    ) -> str:
+        return profiles.generate_client_config(self.client_link(user, state))
+
+    def client_link(self, user: User, state: PluginStateAccess) -> str:
+        links = self.client_links(user, state)
+        return links[-1] if links else ""
+
+    def client_links(
+        self,
+        user: User,
+        state: PluginStateAccess,
+    ) -> list[str]:
+        from .telemt_ios_fix import status as ios_status
+
+        return profiles.client_links(
+            user,
+            state,
+            resolve_public_ip=public_ip,
+            ios_status=ios_status,
+        )
+
+    def status(
+        self,
+        state: PluginStateAccess | None = None,
+    ) -> PluginStatus:
+        return observation.status(
+            host=HOST,
+            bin_path=BIN_PATH,
+            config_file=CONFIG_FILE,
+            service_name=SERVICE_NAME,
+            default_port=DEFAULT_PORT,
+            is_installed=self._installed(),
+        )
+
+    def traffic(self, state: PluginStateAccess) -> dict[str, int]:
+        return observation.traffic(
+            state,
+            stats_file=WORK_DIR / "stats.json",
+            derive_username=self._derive_username,
+        )
+
+    def traffic_snapshot(
+        self,
+        state: PluginStateAccess,
+    ) -> dict[str, int] | None:
+        return self.traffic(state)
+
+    def connected_clients(
+        self,
+        state: PluginStateAccess | None = None,
+    ) -> list[dict]:
         return []
 
-    # ═════════════════════════════════════════════════════════════════════
-    #  Управление сервисом
-    # ═════════════════════════════════════════════════════════════════════
-
-    def on_enable(self, state: AppState) -> None:
+    def on_enable(self, state: PluginStateAccess) -> None:
         HOST.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
 
-    def on_disable(self, state: AppState) -> None:
-        # Stopping only the process left systemd autostart enabled and made
-        # runtime disagree with state.json.
+    def on_disable(self, state: PluginStateAccess) -> None:
         HOST.run(
             ["systemctl", "disable", "--now", SERVICE_NAME],
             capture_output=True,
         )
 
-    # ═════════════════════════════════════════════════════════════════════
-    #  Внутренние помощники
-    # ═════════════════════════════════════════════════════════════════════
-
-    @staticmethod
-    def _derive_username(uuid: str) -> str:
-        return "u" + derive_key("telemt-user", uuid)[:8]
-
-    @staticmethod
-    def _derive_secret(uuid: str) -> str:
-        return hashlib.sha256(f"telemt-secret|{uuid}".encode()).hexdigest()[:32]
-
-    @staticmethod
-    def _make_tls_secret(base_secret: str, domain: str) -> str:
-        return f"ee{base_secret}{domain.encode().hex()}"
+    _derive_username = staticmethod(derive_username)
+    _derive_secret = staticmethod(derive_secret)
+    _make_tls_secret = staticmethod(make_tls_secret)
 
     @staticmethod
     def _installed() -> bool:
@@ -421,167 +310,84 @@ class TelemtPlugin(BasePlugin):
         return bool(candidate and verify_elf(candidate))
 
     def _download_binary(self) -> bool:
-        arch = "aarch64" if platform.machine().lower() in ("aarch64", "arm64") else "x86_64"
-        libc = "gnu"
-        asset_pattern = f"telemt-{arch}-linux-{libc}.tar.gz"
-
-        import tempfile
-        dest = Path(tempfile.gettempdir()) / "telemt-install"
-        dest.mkdir(parents=True, exist_ok=True)
-        archive = dest / asset_pattern
-
-        if not latest_release(GITHUB_REPO) == "unknown":
-            if not self._download_and_extract(asset_pattern, dest, archive):
-                return False
-        else:
+        arch = (
+            "aarch64"
+            if platform.machine().lower() in ("aarch64", "arm64")
+            else "x86_64"
+        )
+        asset_pattern = f"telemt-{arch}-linux-gnu.tar.gz"
+        destination = Path(tempfile.gettempdir()) / "telemt-install"
+        destination.mkdir(parents=True, exist_ok=True)
+        if latest_release(GITHUB_REPO) == "unknown":
             return False
+        return self._download_and_extract(
+            asset_pattern,
+            destination,
+            destination / asset_pattern,
+        )
 
-        return True
+    def update_binary(self) -> bool:
+        return self._download_binary()
 
-    def _download_and_extract(self, asset_pattern: str, dest: Path, archive: Path) -> bool:
-        from hydra.utils.downloader import download_github_asset, extract_tarball
-
-        if not download_github_asset(GITHUB_REPO, asset_pattern, archive):
-            print(f"  Не удалось скачать {asset_pattern}")
-            return False
-
+    def _download_and_extract(
+        self,
+        asset_pattern: str,
+        dest: Path,
+        archive: Path,
+    ) -> bool:
         extract_dir = dest / "extracted"
         if extract_dir.exists():
             shutil.rmtree(extract_dir, ignore_errors=True)
-        extract_dir.mkdir(parents=True, exist_ok=True)
-
-        try:
-            extract_tarball(archive, extract_dir)
-
-            found = list(extract_dir.rglob("telemt"))
-            if not found:
-                print("  Бинарник telemt не найден в архиве")
-                return False
-
-            if BIN_PATH.exists():
-                try:
-                    BIN_PATH.unlink()
-                except Exception:
-                    pass
-
-            shutil.copy2(str(found[0]), str(BIN_PATH))
-            BIN_PATH.chmod(0o755)
-
-            if not verify_elf(BIN_PATH):
-                BIN_PATH.unlink(missing_ok=True)
-                print("  Скачанный файл не является ELF-бинарником")
-                return False
-
-            print(f"  telemt установлен: {BIN_PATH}")
-            return True
-        except Exception as e:
-            print(f"  Ошибка распаковки: {e}")
-            return False
+        installed = installation.download_and_extract(
+            asset_pattern,
+            dest,
+            archive,
+            repo=GITHUB_REPO,
+            bin_path=BIN_PATH,
+            download_asset=download_github_asset,
+            extract_archive=extract_tarball,
+            verify_binary=verify_elf,
+        )
+        if not installed and BIN_PATH.exists() and not verify_elf(BIN_PATH):
+            BIN_PATH.unlink(missing_ok=True)
+        return installed
 
     @staticmethod
     def _install_service() -> None:
-        WORK_DIR.mkdir(parents=True, exist_ok=True)
-        SERVICE_FILE.write_text(
-            "[Unit]\n"
-            "Description=Telemt MTProxy Server\n"
-            "After=network-online.target\n"
+        installation.write_service(
+            host=HOST,
+            work_dir=WORK_DIR,
+            service_file=SERVICE_FILE,
+            bin_path=BIN_PATH,
+            config_file=CONFIG_FILE,
+            service_name=SERVICE_NAME,
+        )
+        service = SERVICE_FILE.read_text(encoding="utf-8")
+        service = service.replace(
+            "Wants=network-online.target\n\n",
             "Wants=network-online.target\n"
             "StartLimitIntervalSec=60\n"
-            "StartLimitBurst=10\n"
-            "\n"
-            "[Service]\n"
-            "Type=simple\n"
-            "User=root\n"
-            f"WorkingDirectory={WORK_DIR}\n"
-            f"ExecStart={BIN_PATH} {CONFIG_FILE}\n"
-            "ExecReload=/bin/kill -HUP $MAINPID\n"
-            "Restart=on-failure\n"
-            "RestartSec=2\n"
-            "LimitNOFILE=1048576\n"
-            "\n"
-            "[Install]\n"
-            "WantedBy=multi-user.target\n"
-            "\n"
-        )
+            "StartLimitBurst=10\n\n",
+        ).replace("RestartSec=10\n", "RestartSec=2\n")
+        SERVICE_FILE.write_text(service, encoding="utf-8")
         HOST.run(["systemctl", "daemon-reload"], capture_output=True)
-        HOST.run(["systemctl", "enable", SERVICE_NAME], capture_output=True)
 
+    @staticmethod
     def _build_toml(
-        self,
         port: int,
         ipv4: bool,
         ipv6: bool,
         tls_domain: str,
         users: dict[str, str],
         use_middle_proxy: bool = False,
-        client_mss: str = ""
+        client_mss: str = "",
     ) -> str:
-        net_prefer = 6 if (ipv6 and not ipv4) else 4
-        arr = ", ".join(f'"{u}"' for u in users)
-
-        lines = [
-            "[general]",
-            "prefer_ipv6 = false",
-            "fast_mode = true",
-            f"use_middle_proxy = {str(use_middle_proxy).lower()}",
-        ]
-
-        if client_mss:
-            lines.append(f'client_mss = "{client_mss}"')
-
-        lines += [
-            "",
-            "[network]",
-            f"ipv4 = {str(ipv4).lower()}",
-            f"ipv6 = {str(ipv6).lower()}",
-            f"prefer = {net_prefer}",
-            "",
-            "[general.modes]",
-            "classic = false",
-            "secure = false",
-            "tls = true",
-            "",
-            "[general.links]",
-            f"show = [{arr}]",
-            "",
-            "[server]",
-            f"port = {port}",
-            "",
-        ]
-
-        if ipv4:
-            lines += ['[[server.listeners]]', 'ip = "0.0.0.0"', ""]
-        if ipv6:
-            lines += ['[[server.listeners]]', 'ip = "::"', ""]
-
-        lines += [
-            "[timeouts]",
-            "client_handshake = 300",
-            "client_keepalive = 60",
-            "client_ack = 300",
-            "",
-            "[censorship]",
-            f'tls_domain = "{tls_domain}"',
-            "mask = true",
-            "mask_port = 443",
-            "fake_cert_len = 2048",
-            "",
-            "[access]",
-            "replay_check_len = 65536",
-            "ignore_time_skew = false",
-            "",
-            "[access.users]",
-        ]
-
-        for name, secret in users.items():
-            lines.append(f'{name} = "{secret}"')
-
-        lines += [
-            "",
-            "[[upstreams]]",
-            'type = "direct"',
-            "enabled = true",
-            "weight = 10",
-        ]
-
-        return "\n".join(lines) + "\n"
+        return configuration.build_toml(
+            port,
+            ipv4,
+            ipv6,
+            tls_domain,
+            users,
+            use_middle_proxy,
+            client_mss,
+        )

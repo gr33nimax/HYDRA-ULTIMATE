@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from hydra.ui import network_info
+from hydra.services import network_info
 
 
 def test_private_ip_detection():

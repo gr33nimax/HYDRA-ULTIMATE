@@ -1,4 +1,5 @@
 """tests/test_warp_plugin.py — Тесты для плагина Cloudflare WARP."""
+import copy
 from pathlib import Path
 import sys
 from unittest.mock import patch, MagicMock
@@ -8,6 +9,46 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.plugins.warp.plugin import WarpPlugin, WGCF_PROFILE, WARP_EXTERNAL_CACHE
 from hydra.core.state import AppState, PluginState
+
+
+def test_runtime_actions_are_declared_public_capabilities():
+    assert set(WarpPlugin.meta.capabilities.actions) == {
+        "delete_local_profile",
+        "recreate_local_profile",
+        "remove_local_profile",
+        "restore_local_profile",
+        "snapshot_local_profile",
+        "update_external_rules",
+    }
+
+
+def test_manager_observation_and_profile_deletion_are_plugin_owned(tmp_path):
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir()
+    profile = profiles_dir / "russia.conf"
+    profile.write_text(
+        "[Interface]\nS1 = 0\nH4 = 300\n",
+        encoding="utf-8",
+    )
+    default_profile = tmp_path / "wgcf-profile.conf"
+    default_profile.write_text("[Interface]\n", encoding="utf-8")
+
+    with (
+        patch("hydra.plugins.warp.plugin.WARP_PROFILES_DIR", profiles_dir),
+        patch("hydra.plugins.warp.plugin.WGCF_PROFILE", default_profile),
+    ):
+        observation = WarpPlugin.manager_observation()
+        assert observation["default_profile_exists"] is True
+        assert observation["profiles"] == [
+            {
+                "name": "russia",
+                "is_amnezia": True,
+                "h4_warning": True,
+            },
+        ]
+        assert WarpPlugin.delete_local_profile(name="russia") is True
+
+    assert not profile.exists()
 
 
 def test_is_ip_or_cidr():
@@ -90,11 +131,35 @@ def test_configure(mock_cache, mock_load_config):
     assert set(ip_rule["ip_cidr"]) == {"8.8.8.8", "1.1.1.1/32"}
 
 
+@patch("hydra.plugins.warp.plugin.WarpPlugin._load_warp_config", return_value=None)
+@patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")
+def test_configure_normalizes_legacy_settings_without_mutating_state(
+    cache,
+    _load_config,
+):
+    cache.exists.return_value = False
+    state = AppState(
+        protocols={
+            "warp": PluginState(
+                enabled=True,
+                config={
+                    "domains": ["example.com"],
+                    "enabled_external_lists": ["russia"],
+                },
+            ),
+        },
+    )
+    before = copy.deepcopy(state)
+
+    WarpPlugin().configure(state)
+
+    assert state == before
+
+
 @patch("urllib.request.urlopen")
-@patch("hydra.core.state.load_state")
 @patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")
 @patch("hydra.plugins.warp.plugin.HOST")
-def test_update_external_rules(mock_host, mock_cache_path, mock_load_state, mock_urlopen):
+def test_update_external_rules(mock_host, mock_cache_path, mock_urlopen):
     # Мок ответа сервера
     mock_response = MagicMock()
     mock_response.read.return_value = b"""# Comments
@@ -114,8 +179,6 @@ invalid_domain_name
             "ext:russia": "warp"
         }
     }
-    mock_load_state.return_value = mock_state
-
     # Мок пути кэша
     mock_file = MagicMock()
     mock_cache_path.parent = mock_file
@@ -128,7 +191,6 @@ invalid_domain_name
     
     assert ok is True
     assert "Обновлено списков: 1/1" in msg
-    mock_load_state.assert_not_called()
     
     # Проверяем, что записан валидный JSON с нашими доменами и IP через mock_cache_path
     mock_host.atomic_write.assert_called_once()
@@ -139,15 +201,13 @@ invalid_domain_name
 
 
 @patch("urllib.request.urlopen")
-@patch("hydra.core.state.load_state")
 @patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")
 @patch("hydra.plugins.warp.plugin.HOST")
-def test_partial_external_update_is_not_marked_fresh(mock_host, mock_cache, mock_load_state, urlopen):
+def test_partial_external_update_is_not_marked_fresh(mock_host, mock_cache, urlopen):
     state = AppState()
     state.protocols["warp"] = PluginState(config={
         "list_targets": {"ext:russia": "warp", "ext:geoblock": "warp"},
     })
-    mock_load_state.return_value = state
     mock_cache.exists.return_value = False
 
     response = MagicMock()
@@ -155,7 +215,7 @@ def test_partial_external_update_is_not_marked_fresh(mock_host, mock_cache, mock
     response.__enter__.return_value = response
     urlopen.side_effect = [response, OSError("temporary failure")]
 
-    ok, _ = WarpPlugin().update_external_rules()
+    ok, _ = WarpPlugin().update_external_rules(state)
 
     assert ok is False
     written = json.loads(mock_host.atomic_write.call_args.args[1])

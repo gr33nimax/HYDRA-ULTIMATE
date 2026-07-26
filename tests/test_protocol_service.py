@@ -1,7 +1,8 @@
 from unittest.mock import Mock
 
-from hydra.core.state import AppState
+from hydra.core.state import AppState, PluginState
 from hydra.plugins.base import BasePlugin, PluginCategory, PluginMeta
+from hydra.plugins.invoker import PluginInvoker
 from hydra.services.protocols import ProtocolService
 
 
@@ -38,6 +39,27 @@ def test_get_and_statuses_delegate_to_catalog():
     assert service.statuses()["transport"]["running"] is True
 
 
+def test_status_queries_receive_state_from_the_injected_reader():
+    state = AppState()
+    plugin = _plugin("transport", PluginCategory.TRANSPORT)
+    plugin.status.return_value.running = True
+    operations = Mock()
+    catalog = Mock()
+    catalog.get.return_value = plugin
+    catalog.status_all.return_value = {"transport": {"running": True}}
+    service = ProtocolService(
+        operations,
+        catalog,
+        state_reader=lambda: state,
+    )
+
+    assert service.status("transport").running is True
+    assert service.statuses()["transport"]["running"] is True
+
+    plugin.status.assert_called_once_with(state)
+    catalog.status_all.assert_called_once_with(state)
+
+
 def test_lifecycle_delegates_to_orchestrator():
     service, operations, _ = _fixture()
     state = AppState()
@@ -58,3 +80,80 @@ def test_lifecycle_delegates_to_orchestrator():
     operations.uninstall_plugin.assert_called_once_with(state, "transport")
     operations.enable.assert_called_once_with(state, "transport")
     operations.disable.assert_called_once_with(state, "transport")
+
+
+def test_connection_activity_uses_the_declared_plugin_projection():
+    plugin = _plugin("transport", PluginCategory.TRANSPORT)
+    plugin.meta = PluginMeta(
+        name="transport",
+        description="transport",
+        queries=("recent_activity",),
+        connection_source="recent_activity",
+    )
+    catalog = Mock()
+    catalog.get.return_value = plugin
+    invoker = Mock(spec=PluginInvoker)
+    invoker.query.return_value = [{"email": "a@example.com"}]
+    service = ProtocolService(Mock(), catalog, invoker=invoker)
+    state = AppState()
+
+    assert service.connection_activity(state, "transport") == [
+        {"email": "a@example.com"},
+    ]
+    invoker.query.assert_called_once_with(
+        plugin,
+        "recent_activity",
+        state=state,
+    )
+
+
+def test_tracked_connection_source_does_not_duplicate_plugin_rows():
+    plugin = _plugin("transport", PluginCategory.TRANSPORT)
+    plugin.meta = PluginMeta(
+        name="transport",
+        description="transport",
+        connection_source="tracked",
+    )
+    catalog = Mock()
+    catalog.get.return_value = plugin
+    invoker = Mock(spec=PluginInvoker)
+    service = ProtocolService(Mock(), catalog, invoker=invoker)
+
+    assert service.connection_activity(AppState(), "transport") == []
+    invoker.connected_clients.assert_not_called()
+    invoker.query.assert_not_called()
+
+
+def test_client_profiles_and_subscription_names_are_descriptor_driven():
+    profiled = _plugin("profiled", PluginCategory.TRANSPORT)
+    profiled.meta = PluginMeta(
+        name="profiled",
+        description="profiled",
+        queries=("profiles",),
+        subscription_profile_query="profiles",
+    )
+    aggregate_only = _plugin("aggregate", PluginCategory.TRANSPORT)
+    aggregate_only.meta = PluginMeta(
+        name="aggregate",
+        description="aggregate",
+        subscription_enabled=False,
+    )
+    catalog = Mock()
+    catalog.get.return_value = profiled
+    catalog.transports.return_value = [profiled, aggregate_only]
+    catalog.enhancements.return_value = []
+    catalog.security.return_value = []
+    invoker = Mock(spec=PluginInvoker)
+    invoker.query.return_value = [{"name": "mobile", "label": "Mobile"}]
+    service = ProtocolService(Mock(), catalog, invoker=invoker)
+    state = AppState(
+        protocols={
+            "profiled": PluginState(enabled=True),
+            "aggregate": PluginState(enabled=True),
+        },
+    )
+
+    assert service.enabled_subscription_names(state) == {"profiled"}
+    assert service.client_profiles(state, "profiled") == [
+        {"name": "mobile", "label": "Mobile"},
+    ]

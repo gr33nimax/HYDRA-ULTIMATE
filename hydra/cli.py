@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import json
 import os
 import sys
@@ -10,10 +9,12 @@ import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
 
-from hydra.core.state import AppState, User, load_state, save_state, validate_state
+from hydra.core.state import load_state, save_state
+from hydra.core.state_models import AppState, User, validate_state
 from hydra.core.errors import ErrorCode, normalize_error
 from hydra.core.status import public_user
-from hydra.services.application import production_application
+from hydra.bootstrap import production_application
+from hydra.services.application import ApplicationService
 
 
 
@@ -27,41 +28,20 @@ def _require_root() -> None:
         raise PermissionError("Команда, изменяющая систему, требует root")
 
 
-def build_plan(state: AppState, app=None) -> dict:
+def build_plan(state: AppState, app: ApplicationService) -> dict:
     """Build and validate configuration on a copy without changing runtime state."""
-    from hydra.core import singbox
-    from hydra.plugins import registry
-
-    candidate = copy.deepcopy(state)
-    candidate.network.tproxy_enabled = True
-    fragments = registry.collect_fragments(candidate)
-    config = singbox.generate_config(candidate, fragments)
-    conflicts = singbox._preflight_conflicts(config)
-    app = app or production_application()
-    reconciliation = app.protocols.reconciliation().plan(state)
-    from hydra.core.sni_router import audit_routes
-    return {
-        "valid": not conflicts,
-        "conflicts": conflicts,
-        "plugins": sorted(fragments),
-        "requirements": registry.requirements(candidate),
-        "reconciliation": [asdict(action) for action in reconciliation],
-        "tls_mux": audit_routes(state).as_dict(),
-        "changes": {
-            "inbounds": len(config.get("inbounds", [])),
-            "outbounds": len(config.get("outbounds", [])),
-            "route_rules": len(config.get("route", {}).get("rules", [])),
-            "tproxy_ports": sorted({port for fragment in fragments.values() for port in fragment.nft_tproxy_ports}),
-        },
-    }
+    return app.plan(state)
 
 
-def _status(state: AppState, app=None) -> dict:
-    return (app or production_application()).status(state)
+def _status(state: AppState, app: ApplicationService) -> dict:
+    return app.status(state)
 
 
-def _user_command(args: argparse.Namespace, state: AppState, app=None) -> dict:
-    app = app or production_application()
+def _user_command(
+    args: argparse.Namespace,
+    state: AppState,
+    app: ApplicationService,
+) -> dict:
     if args.user_action == "list":
         return {"users": [public_user(user) for user in app.users.list(state)]}
     _require_root()
@@ -125,6 +105,10 @@ def parser() -> argparse.ArgumentParser:
     upgrade = commands.add_parser("upgrade", help="Check upgrade readiness")
     upgrade_commands = upgrade.add_subparsers(dest="upgrade_action", required=True)
     upgrade_commands.add_parser("check")
+    upgrade_commands.add_parser(
+        "migrate-state",
+        help="Atomically persist every pending state schema migration",
+    )
     apply = commands.add_parser("apply", help="Apply configuration")
     apply.add_argument("--dry-run", action="store_true")
     uninstall = commands.add_parser("uninstall", help="Completely remove HYDRA")
@@ -190,17 +174,18 @@ def main(argv: list[str] | None = None) -> int:
             payload = build_plan(state, app)
         elif args.command == "backup":
             _require_root()
-            from hydra.core.backup import create_backup
-            payload = create_backup(args.output or None)
+            payload = app.backups.create(args.output or None)
         elif args.command == "restore":
             _require_root()
             if not args.dry_run and not args.yes:
                 raise ValueError("restore requires --yes; use --dry-run to inspect the archive")
-            from hydra.core.backup import restore_backup
-            payload = restore_backup(args.archive, dry_run=args.dry_run)
+            payload = app.backups.restore(
+                args.archive,
+                dry_run=args.dry_run,
+            )
         elif args.command == "doctor":
             from hydra.core.doctor import run_doctor
-            payload = run_doctor(state)
+            payload = run_doctor(state, app.protocols)
         elif args.command == "reconcile":
             service = app.protocols.reconciliation()
             if args.apply:
@@ -218,6 +203,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "upgrade" and args.upgrade_action == "check":
             from hydra.core.upgrade import check_upgrade
             payload = check_upgrade(state)
+        elif args.command == "upgrade" and args.upgrade_action == "migrate-state":
+            _require_root()
+            from hydra.core.state import migrate_persisted_state
+
+            payload = migrate_persisted_state()
         elif args.command == "apply":
             _require_root()
             ok = app.apply(state)
@@ -233,8 +223,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if ok else 1
         elif args.command == "uninstall":
             _require_root()
-            from hydra.core.uninstall import uninstall_hydra
-            payload = uninstall_hydra(
+            payload = app.uninstall(
                 state,
                 confirmed=args.yes,
                 dry_run=args.dry_run,
@@ -242,21 +231,31 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "antidpi" and args.antidpi_action == "selftest":
             _require_root()
-            from hydra.plugins.antidpi.selftest import run_selftest
-            payload = run_selftest(state, args.output or None, args.wait, full=args.full)
+            payload = app.plugin_action(
+                "antidpi",
+                "run_selftest",
+                state=state,
+                output=args.output or None,
+                wait_seconds=args.wait,
+                full=args.full,
+                protocols=app.protocols,
+            )
         elif args.command == "antidpi" and args.antidpi_action == "capture":
             _require_root()
-            from hydra.plugins.antidpi.selftest import capture_external_tests
-            payload = capture_external_tests(state, args.output or None, args.seconds)
+            payload = app.plugin_action(
+                "antidpi",
+                "capture_external_tests",
+                state=state,
+                output=args.output or None,
+                seconds=args.seconds,
+            )
         elif args.command == "antidpi" and args.antidpi_action == "sync":
             _require_root()
-            from hydra.plugins.antidpi.plugin import AntiDPIPlugin
-            plugin = AntiDPIPlugin()
-            ok = plugin.install()
-            health = plugin.healthcheck()
+            ok = app.protocols.install(state, "antidpi")
+            health = app.protocols.health(state, "antidpi")
             payload = {
                 "ok": bool(ok and health.healthy),
-                "error": "" if ok else plugin.last_error,
+                "error": "" if ok else health.detail,
                 "health": health.as_dict(),
             }
             if not payload["ok"]:

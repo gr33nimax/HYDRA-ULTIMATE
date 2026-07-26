@@ -7,10 +7,11 @@ import queue
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from hydra.core.host import HOST
-from hydra.core.state import load_state
+from hydra.core.state_models import AppState
 from hydra.core.sni_router import DECOY_LOG, TRUSTTUNNEL_LOG
 from hydra.plugins.antidpi.adapters import (
     normalize_tls_auth_failure,
@@ -27,13 +28,16 @@ from hydra.plugins.antidpi.plugin import (
     normalize_trusttunnel_record,
     udp_protocol_ports,
 )
+from hydra.plugins.antidpi.paths import NAIVE_ACCESS_LOG
 
 Normalized = tuple[str, dict]
-NAIVE_ACCESS_LOG = Path("/var/log/caddy-naive/access.log")
 _udp_port_cache: tuple[float, dict[int, str]] = (0.0, {})
 
 
-def _attribute_udp_protocol(event: Normalized | None) -> Normalized | None:
+def _attribute_udp_protocol(
+    event: Normalized | None,
+    state_reader: Callable[[], AppState],
+) -> Normalized | None:
     global _udp_port_cache
     if not event:
         return event
@@ -43,7 +47,7 @@ def _attribute_udp_protocol(event: Normalized | None) -> Normalized | None:
     now = time.monotonic()
     if now - _udp_port_cache[0] > 10:
         try:
-            _udp_port_cache = (now, udp_protocol_ports(load_state()))
+            _udp_port_cache = (now, udp_protocol_ports(state_reader()))
         except Exception:
             _udp_port_cache = (now, {})
     try:
@@ -243,7 +247,11 @@ def _journal_worker(out: queue.Queue[Normalized], stop: threading.Event) -> None
             continue
 
 
-def _kernel_worker(out: queue.Queue[Normalized], stop: threading.Event) -> None:
+def _kernel_worker(
+    out: queue.Queue[Normalized],
+    stop: threading.Event,
+    state_reader: Callable[[], AppState],
+) -> None:
     command = ["journalctl", "-k", "-f", "-n", "0", "-o", "cat"]
     while not stop.is_set():
         process = None
@@ -257,7 +265,7 @@ def _kernel_worker(out: queue.Queue[Normalized], stop: threading.Event) -> None:
                 if stop.is_set():
                     break
                 event = parse_kernel_scan_line(line)
-                event = _attribute_udp_protocol(event)
+                event = _attribute_udp_protocol(event, state_reader)
                 if not event:
                     event = parse_protocol_line("kernel", line)
                 if event:
@@ -270,25 +278,32 @@ def _kernel_worker(out: queue.Queue[Normalized], stop: threading.Event) -> None:
         stop.wait(1)
 
 
-def run() -> None:
-    plugin = AntiDPIPlugin()
-    plugin.sync_host_whitelist()
-    plugin.cleanup_honeypot_duplicates()
-    plugin.sync_udp_probe_rules()
-    plugin.sync_mieru_probe_rules()
+def run(
+    plugin: AntiDPIPlugin,
+    *,
+    state_reader: Callable[[], AppState],
+) -> None:
+    """Run the collector with a plugin composed by an executable adapter."""
     try:
-        initial_state = load_state()
-        synced_udp_ports = udp_protocol_ports(initial_state)
-        initial_mieru = initial_state.protocols.get("mieru")
-        synced_mieru_enabled = bool(initial_mieru and initial_mieru.enabled)
+        initial_state = state_reader()
     except Exception:
-        synced_udp_ports = {}
-        synced_mieru_enabled = False
+        initial_state = AppState()
+    plugin.sync_host_whitelist(initial_state)
+    plugin.cleanup_honeypot_duplicates()
+    plugin.sync_udp_probe_rules(initial_state)
+    plugin.sync_mieru_probe_rules(initial_state)
+    synced_udp_ports = udp_protocol_ports(initial_state)
+    initial_mieru = initial_state.protocols.get("mieru")
+    synced_mieru_enabled = bool(initial_mieru and initial_mieru.enabled)
     events: queue.Queue[Normalized] = queue.Queue(maxsize=4096)
     stop = threading.Event()
     workers = (
         threading.Thread(target=_journal_worker, args=(events, stop), daemon=True),
-        threading.Thread(target=_kernel_worker, args=(events, stop), daemon=True),
+        threading.Thread(
+            target=_kernel_worker,
+            args=(events, stop, state_reader),
+            daemon=True,
+        ),
     )
     for worker in workers:
         worker.start()
@@ -303,7 +318,7 @@ def run() -> None:
         while True:
             if time.monotonic() - last_udp_sync >= 60:
                 try:
-                    current_state = load_state()
+                    current_state = state_reader()
                     current_udp_ports = udp_protocol_ports(current_state)
                     current_mieru = current_state.protocols.get("mieru")
                     current_mieru_enabled = bool(current_mieru and current_mieru.enabled)
@@ -335,7 +350,3 @@ def run() -> None:
             time.sleep(0.25)
     finally:
         stop.set()
-
-
-if __name__ == "__main__":
-    run()

@@ -1,10 +1,15 @@
+import pytest
+
 from hydra.plugins import registry
 from hydra.core.state import AppState
 from hydra.plugins.base import BasePlugin, ConfigFragment, HealthResult, LifecycleResult, PluginMeta, PluginStatus
+from hydra.plugins.context import PluginStateAccess
+from hydra.plugins.invoker import PluginInvoker
 
 
 class LegacyPlugin(BasePlugin):
     meta = PluginMeta("legacy", "test")
+    status_state = None
 
     def install(self) -> bool:
         return True
@@ -12,7 +17,11 @@ class LegacyPlugin(BasePlugin):
     def uninstall(self) -> bool:
         return True
 
-    def status(self) -> PluginStatus:
+    def status(
+        self,
+        state: PluginStateAccess | None = None,
+    ) -> PluginStatus:
+        self.status_state = state
         return PluginStatus(True, True, True)
 
     def configure(self, state: AppState) -> ConfigFragment:
@@ -41,3 +50,24 @@ def test_legacy_lifecycle_and_health_are_normalized():
     result = plugin.health_result()
     assert isinstance(result, HealthResult)
     assert result.healthy is True
+
+
+def test_app_state_satisfies_the_narrow_plugin_state_port():
+    assert isinstance(AppState(), PluginStateAccess)
+
+
+def test_invoker_rejects_an_unknown_contract_version_explicitly():
+    plugin = LegacyPlugin()
+    plugin.meta = PluginMeta("future", "test", contract_version=2)
+
+    with pytest.raises(ValueError, match="unsupported plugin contract v2"):
+        PluginInvoker().configure(plugin, AppState())
+
+
+def test_invoker_passes_explicit_state_to_status_contract():
+    plugin = LegacyPlugin()
+    state = AppState()
+
+    PluginInvoker().status(plugin, state)
+
+    assert plugin.status_state is state

@@ -91,10 +91,8 @@ def test_client_config_and_share_link_match_server():
 def test_enable_prepares_tls_and_opens_udp():
     plugin = Hysteria2Plugin()
     state = _state()
-    with patch("hydra.plugins.hysteria2.plugin.ensure_tls_material") as ensure, \
-         patch("hydra.utils.firewall.open_udp") as open_udp:
+    with patch("hydra.utils.firewall.open_udp") as open_udp:
         plugin.on_enable(state)
-    ensure.assert_called_once_with(state, "hysteria2")
     open_udp.assert_called_once_with(DEFAULT_PORT, "hysteria2")
 
 
@@ -123,27 +121,21 @@ def test_brutal_bandwidth_is_applied_to_server_and_client():
     assert "ignore_client_bandwidth" not in inbound
 
 
-def test_runtime_port_change_updates_firewall_and_applies():
+def test_port_command_only_updates_desired_state():
     plugin = Hysteria2Plugin()
     state = _state(User("a@example.com", "uuid-a"))
-    with patch("hydra.core.state.save_state"), \
-         patch("hydra.core.orchestrator.apply_config", return_value=True), \
-         patch("hydra.utils.firewall.open_udp") as open_udp, \
-         patch("hydra.utils.firewall.close_udp") as close_udp:
-        assert plugin.set_port(state, 9444) is True
+    assert plugin.set_port(state, 9444) is True
     assert state.protocols["hysteria2"].config["port"] == 9444
-    open_udp.assert_called_once_with(9444, "hysteria2")
-    close_udp.assert_called_once_with(DEFAULT_PORT, "hysteria2")
 
 
-def test_failed_obfs_change_restores_previous_value():
+def test_obfs_command_only_updates_desired_state():
     plugin = Hysteria2Plugin()
     state = _state(User("a@example.com", "uuid-a"))
-    old_password = state.protocols["hysteria2"].config["obfs_password"]
-    with patch("hydra.core.state.save_state"), \
-         patch("hydra.core.orchestrator.apply_config", side_effect=[False, True]):
-        assert plugin.set_obfs_password(state, "new-salamander-password") is False
-    assert state.protocols["hysteria2"].config["obfs_password"] == old_password
+    assert plugin.set_obfs_password(
+        state,
+        "new-salamander-password",
+    ) is True
+    assert state.protocols["hysteria2"].config["obfs_password"] == "new-salamander-password"
 
 
 def test_invalid_congestion_does_not_mutate_state():
@@ -151,7 +143,10 @@ def test_invalid_congestion_does_not_mutate_state():
     state = _state(User("a@example.com", "uuid-a"))
     before = dict(state.protocols["hysteria2"].config)
     with pytest.raises(ValueError, match="bbr or brutal"):
-        plugin.set_congestion(state, "invalid")
+        plugin.set_congestion(
+            state,
+            "invalid",
+        )
     assert state.protocols["hysteria2"].config == before
 
 
@@ -160,5 +155,8 @@ def test_invalid_runtime_port_does_not_mutate_state():
     state = _state(User("a@example.com", "uuid-a"))
     before = dict(state.protocols["hysteria2"].config)
     with pytest.raises(ValueError, match="between 1 and 65535"):
-        plugin.set_port(state, 70000)
+        plugin.set_port(
+            state,
+            70000,
+        )
     assert state.protocols["hysteria2"].config == before

@@ -16,3 +16,17 @@ def test_runtime_snapshot_is_not_persisted_in_state_json():
     persisted = _to_dict(state)
     assert "runtime" not in persisted
     assert "runtime_snapshot" not in persisted
+
+
+def test_runtime_snapshot_collects_through_injected_status_reader():
+    state = AppState()
+    calls = []
+
+    snapshot = RuntimeSnapshot.collect(
+        state,
+        lambda current: calls.append(current)
+        or {"demo": {"running": True, "drift": "none"}},
+    )
+
+    assert calls == [state]
+    assert snapshot.plugins["demo"].running is True

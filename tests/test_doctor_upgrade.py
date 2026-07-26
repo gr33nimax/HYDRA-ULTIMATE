@@ -1,9 +1,11 @@
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from hydra.core import doctor, upgrade
 from hydra.core.doctor import run_doctor
 from hydra.core.state import AppState
 from hydra.core.upgrade import check_upgrade
+from hydra.services.reconciliation import ReconcileAction
 
 
 def test_doctor_reports_required_failures():
@@ -16,8 +18,15 @@ def test_doctor_reports_required_failures():
 
 def test_doctor_exposes_runtime_reconciliation_plan():
     statuses = {"demo": {"drift": "stopped", "installed": True, "running": False}}
-    with patch("hydra.plugins.registry.status_all", return_value=statuses):
-        result = run_doctor(AppState())
+    protocols = SimpleNamespace(
+        statuses=lambda state: statuses,
+        reconciliation=lambda: SimpleNamespace(
+            plan=lambda state: [
+                ReconcileAction("demo", "stopped", "enable", "expected"),
+            ],
+        ),
+    )
+    result = run_doctor(AppState(), protocols)
     assert result["reconciliation"]["planned"][0]["plugin"] == "demo"
     assert result["reconciliation"]["planned"][0]["operation"] == "enable"
 

@@ -83,6 +83,45 @@ def test_preflight_ignores_ephemeral_ports():
     assert _preflight_conflicts(config) == []
 
 
+def test_preflight_detects_wildcard_listener_overlap():
+    config = {
+        "inbounds": [
+            {
+                "type": "x",
+                "tag": "wildcard",
+                "listen": "::",
+                "listen_port": 8443,
+            },
+            {
+                "type": "y",
+                "tag": "loopback",
+                "listen": "127.0.0.1",
+                "listen_port": 8443,
+            },
+        ],
+    }
+
+    errors = _preflight_conflicts(config)
+
+    assert any("пересекается" in error for error in errors)
+
+
+def test_preflight_rejects_boolean_port():
+    errors = _preflight_conflicts(
+        {
+            "inbounds": [
+                {
+                    "type": "x",
+                    "tag": "invalid",
+                    "listen_port": True,
+                },
+            ],
+        },
+    )
+
+    assert any("некорректный порт" in error for error in errors)
+
+
 def test_wait_until_stable_requires_consecutive_active_checks():
     with patch.object(singbox, "is_running", side_effect=[True, True, True]) as running, \
          patch.object(singbox.time, "sleep"):

@@ -1,12 +1,7 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from hydra.core.state import AppState, PluginState, User
 from hydra.ui import menus
-
-
-class _Plugin:
-    def __init__(self, name: str):
-        self.meta = type("Meta", (), {"name": name})()
 
 
 def test_monitoring_user_detail_contains_stats_but_no_secrets_or_system_plugins(capsys):
@@ -26,11 +21,12 @@ def test_monitoring_user_detail_contains_stats_but_no_secrets_or_system_plugins(
         },
     )
 
+    app = MagicMock()
+    app.protocols.enabled_names.return_value = {"anytls", "mieru"}
+
     with patch.object(menus, "clear"), \
-         patch.object(menus, "update_user_traffic"), \
-         patch.object(menus, "enabled", return_value=[_Plugin("anytls"), _Plugin("mieru")]), \
          patch.object(menus, "prompt", return_value=""):
-        menus._show_user_detail(state, user)
+        menus._show_user_detail(state, user, app)
 
     output = capsys.readouterr().out
     assert "AnyTLS" in output

@@ -13,8 +13,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+from hydra.plugins.context import PluginStateAccess
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
-from hydra.core.state import AppState, load_state
 from hydra.core.host import HOST
 from hydra.utils.net import host_ip_addresses
 
@@ -47,6 +47,13 @@ class IPBanPlugin(BasePlugin):
         category=PluginCategory.SECURITY,
         version="2.1.0",
         required_commands=("ipset", "iptables"),
+        commands=(
+            "add_ban",
+            "remove_ban",
+            "reset_bans",
+            "restore_bans",
+        ),
+        queries=("list_banned",),
     )
 
     def install(self) -> bool:
@@ -97,13 +104,18 @@ class IPBanPlugin(BasePlugin):
     def _installed(self) -> bool:
         return all(shutil.which(binary) is not None for binary in ("ipset", "iptables", "ip6tables"))
 
-    def configure(self, state: AppState) -> ConfigFragment:
+    def configure(self, state: PluginStateAccess) -> ConfigFragment:
         return ConfigFragment()
 
-    def apply(self, state: AppState) -> bool:
-        return self._ensure_sets() and self._ensure_iptables_rules() and self._restore_from_state()
+    def apply(self, state: PluginStateAccess) -> bool:
+        if not self._ensure_sets() or not self._ensure_iptables_rules():
+            return False
+        for name in (IPSET_V4, IPSET_V6):
+            if _run(["ipset", "flush", name]).returncode != 0:
+                return False
+        return self._restore_from_state()
 
-    def snapshot(self, state: AppState):
+    def snapshot(self, state: PluginStateAccess):
         saved_sets: list[str] = []
         for name in (IPSET_V4, IPSET_V6):
             result = _run(["ipset", "save", name], text=True)
@@ -115,7 +127,7 @@ class IPBanPlugin(BasePlugin):
             "state": STATE_FILE.read_bytes() if STATE_FILE.exists() else None,
         }
 
-    def rollback(self, state: AppState, snapshot) -> bool:
+    def rollback(self, state: PluginStateAccess, snapshot) -> bool:
         previous = snapshot or {}
         ok = self._remove_iptables_rules()
         for name in (IPSET_V4, IPSET_V6):
@@ -141,11 +153,14 @@ class IPBanPlugin(BasePlugin):
             ok = self._ensure_iptables_rules() and ok
         return ok
 
-    def status(self) -> PluginStatus:
+    def status(
+        self,
+        state: PluginStateAccess | None = None,
+    ) -> PluginStatus:
         if not self._installed():
             return PluginStatus(installed=False, enabled=False, running=False)
-        state = self._load_state()
-        entries = state.get("entries", [])
+        runtime_state = self._load_state()
+        entries = runtime_state.get("entries", [])
         v4, v6 = self._ipset_count()
         rules_present = self._iptables_rules_present()
         return PluginStatus(
@@ -155,17 +170,20 @@ class IPBanPlugin(BasePlugin):
             info={"entries": len(entries), "cidrs_v4": v4, "cidrs_v6": v6},
         )
 
-    def ban_ip(self, raw: str, comment: str = "") -> bool:
+    def ban_ip(
+        self,
+        raw: str,
+        comment: str = "",
+        *,
+        state: PluginStateAccess | None = None,
+    ) -> bool:
         if not self._ensure_sets() or not self._ensure_iptables_rules():
             return False
         try:
             display, kind, cidrs = self._resolve_to_cidrs(raw)
         except (ValueError, RuntimeError) as e:
             return False
-        try:
-            configured = load_state().network.server_ip
-        except Exception:
-            configured = ""
+        configured = state.network.server_ip if state is not None else ""
         owned = [ipaddress.ip_address(value) for value in host_ip_addresses((configured,))]
         if any(
             address.version == network.version and address in network
@@ -223,6 +241,61 @@ class IPBanPlugin(BasePlugin):
     def list_banned(self) -> list[dict]:
         state = self._load_state()
         return state.get("entries", [])
+
+    def add_ban(
+        self,
+        *,
+        state: PluginStateAccess,
+        raw: str,
+        comment: str = "",
+    ) -> bool:
+        """Persist a desired ban; application apply reconciles firewall sets."""
+        try:
+            display, kind, cidrs = self._resolve_to_cidrs(raw)
+        except (ValueError, RuntimeError):
+            return False
+        configured = state.network.server_ip
+        owned = [
+            ipaddress.ip_address(value)
+            for value in host_ip_addresses((configured,))
+        ]
+        if any(
+            address.version == network.version and address in network
+            for cidr in cidrs
+            for network in (ipaddress.ip_network(cidr, strict=False),)
+            for address in owned
+        ):
+            return False
+        self._state_add_entry(display, cidrs, kind, comment)
+        return True
+
+    def remove_ban(
+        self,
+        *,
+        state: PluginStateAccess,
+        display: str,
+    ) -> bool:
+        """Remove one desired entry; application apply reconciles exact sets."""
+        data = self._load_state()
+        entries = data.get("entries", [])
+        remaining = [
+            entry for entry in entries if entry.get("display") != display
+        ]
+        if len(remaining) == len(entries):
+            return False
+        data["entries"] = remaining
+        self._save_state(data)
+        return True
+
+    def reset_bans(self, *, state: PluginStateAccess) -> bool:
+        data = self._load_state()
+        data["entries"] = []
+        self._save_state(data)
+        return True
+
+    def restore_bans(self, *, state: PluginStateAccess) -> bool:
+        """Request an exact runtime reconciliation from persisted entries."""
+        return True
 
     def _resolve_to_cidrs(self, raw: str) -> tuple[str, str, list[str]]:
         raw = raw.strip()
@@ -384,14 +457,13 @@ class IPBanPlugin(BasePlugin):
                     return False
         return True
 
-    def traffic(self, state: AppState) -> dict[str, int]:
+    def traffic(self, state: PluginStateAccess) -> dict[str, int]:
         return {}
 
-    def on_enable(self, state: AppState) -> None:
-        if not self.apply(state):
-            raise RuntimeError("IPBan firewall rules could not be installed")
+    def on_enable(self, state: PluginStateAccess) -> None:
+        """Central apply reconciles sets, rules and persisted entries."""
 
-    def on_disable(self, state: AppState) -> None:
+    def on_disable(self, state: PluginStateAccess) -> None:
         if not self._installed():
             return
         if not self._remove_iptables_rules():

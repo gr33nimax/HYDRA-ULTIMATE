@@ -20,6 +20,54 @@ def test_plugin_meta():
     assert p.meta.name == "fail2ban"
     assert p.meta.category == PluginCategory.SECURITY
     assert p.meta.version == "2.3.0"
+    assert set(p.meta.capabilities.commands) == {
+        "add_whitelist",
+        "remove_whitelist",
+        "reset_jails",
+        "set_jail_enabled",
+        "set_jail_options",
+    }
+    assert set(p.meta.capabilities.queries) == {
+        "jail_options",
+        "recent_logs",
+    }
+
+
+def test_desired_state_commands_are_public_and_side_effect_free():
+    plugin = Fail2banPlugin()
+    state = _make_state()
+
+    assert plugin.add_whitelist(
+        state=state,
+        network="192.0.2.14/24",
+    ) is True
+    assert state.protocols["fail2ban"].config["whitelist"] == [
+        "192.0.2.0/24",
+    ]
+    assert plugin.set_jail_options(
+        state=state,
+        jail="hydra-sshd",
+        bantime="7200",
+        findtime="900",
+        maxretry="4",
+    ) is True
+    assert plugin.set_jail_enabled(
+        state=state,
+        jail="hydra-sshd",
+        enabled=False,
+    ) is True
+    assert state.protocols["fail2ban"].config["jails"]["hydra-sshd"] == {
+        "bantime": "7200",
+        "findtime": "900",
+        "maxretry": "4",
+        "enabled": False,
+    }
+    assert plugin.remove_whitelist(
+        state=state,
+        network="192.0.2.0/24",
+    ) is True
+    assert plugin.reset_jails(state=state) is True
+    assert "jails" not in state.protocols["fail2ban"].config
 
 
 def test_configure_returns_empty_fragment():
@@ -163,11 +211,13 @@ def test_invalid_generated_configuration_is_rolled_back(tmp_path):
     assert legacy_filter.read_text(encoding="utf-8") == "legacy filter"
 
 
-def test_current_ssh_client_is_persisted_in_whitelist():
+def test_current_ssh_client_is_effective_without_mutating_desired_whitelist():
     state = _make_state()
     with patch.dict("os.environ", {"SSH_CONNECTION": "203.0.113.7 50000 192.0.2.1 22"}):
-        Fail2banPlugin._remember_ssh_client(state)
-    assert state.protocols["fail2ban"].config["whitelist"] == ["203.0.113.7"]
+        whitelist = Fail2banPlugin._valid_whitelist(state)
+
+    assert "203.0.113.7" in whitelist
+    assert state.protocols["fail2ban"].config.get("whitelist") is None
 
 
 def test_effective_whitelist_includes_generated_ignoreip(tmp_path):

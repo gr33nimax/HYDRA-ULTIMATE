@@ -4,7 +4,9 @@ from unittest.mock import patch
 import pytest
 
 from hydra.core import state as state_module
+from hydra.core.errors import StateConflictError
 from hydra.core.state import AppState, UnsupportedStateVersion
+from hydra.core.state_models import User
 
 
 def _use_temp_state(monkeypatch, tmp_path):
@@ -53,3 +55,50 @@ def test_double_corruption_creates_quarantine_copy(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="State file is corrupt"):
         state_module.load_state()
     assert state_module.STATE_FILE.with_suffix(".json.corrupt").read_text(encoding="utf-8") == "{broken"
+
+
+def test_stale_desired_state_write_is_rejected(monkeypatch, tmp_path):
+    _use_temp_state(monkeypatch, tmp_path)
+    state_module.save_state(AppState())
+    first = state_module.load_state()
+    stale = state_module.load_state()
+
+    first.network.domain = "first.example"
+    state_module.save_state(first)
+
+    stale.network.domain = "stale.example"
+    with pytest.raises(StateConflictError, match="reload and retry"):
+        state_module.save_state(stale)
+
+    persisted = state_module.load_state()
+    assert persisted.network.domain == "first.example"
+    assert persisted.revision == first.revision
+
+
+def test_runtime_updates_do_not_conflict_with_stale_settings(
+    monkeypatch,
+    tmp_path,
+):
+    _use_temp_state(monkeypatch, tmp_path)
+    initial = AppState(users=[User(email="u@example.com", uuid="u1")])
+    state_module.save_state(initial)
+    stale = state_module.load_state()
+    initial_revision = stale.revision
+
+    def record_runtime(current):
+        current.users[0].traffic_used_bytes = 500
+        current.install["traffic_daemon_last_poll"] = "now"
+        current.install["singbox_latest_version"] = "2.0"
+
+    runtime, _ = state_module.update_state(record_runtime)
+    assert runtime.revision == initial_revision
+
+    stale.network.domain = "settings.example"
+    state_module.save_state(stale)
+    persisted = state_module.load_state()
+
+    assert persisted.revision == initial_revision + 1
+    assert persisted.network.domain == "settings.example"
+    assert persisted.users[0].traffic_used_bytes == 500
+    assert persisted.install["traffic_daemon_last_poll"] == "now"
+    assert persisted.install["singbox_latest_version"] == "2.0"

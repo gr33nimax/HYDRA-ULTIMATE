@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.plugins.mieru.plugin import MieruPlugin
 from hydra.plugins.base import PluginCategory, ConfigFragment
-from hydra.core.state import AppState, User
+from hydra.core.state import AppState, PluginState, User
 
 
 def _state(users=None):
@@ -171,13 +171,11 @@ def test_status_delegates_to_singbox():
     """status() проверяет sing-box, не mita."""
     p = MieruPlugin()
     with patch("hydra.core.singbox.is_installed", return_value=True), \
-         patch("hydra.core.singbox.is_running", return_value=True), \
-         patch("hydra.core.state.load_state") as mock_load:
+         patch("hydra.core.singbox.is_running", return_value=True):
         from hydra.core.state import PluginState
         state = _state()
         state.protocols["mieru"] = PluginState(enabled=True)
-        mock_load.return_value = state
-        s = p.status()
+        s = p.status(state)
         assert s.installed is True
         assert s.running is True
         assert s.port == 2012
@@ -231,18 +229,16 @@ def test_traffic_iptables():
         
     with patch("subprocess.run", side_effect=side_effect), \
          patch("hydra.core.singbox.is_installed", return_value=True), \
-         patch("hydra.core.singbox.is_running", return_value=True), \
-         patch("hydra.core.state.load_state") as mock_load:
+         patch("hydra.core.singbox.is_running", return_value=True):
         
         from hydra.core.state import PluginState
         state = _state([_user("a@x.com")])
         state.protocols["mieru"] = PluginState(enabled=True)
-        mock_load.return_value = state
         
         tr = p.traffic(state)
         assert tr == {}
         
-        st = p.status()
+        st = p.status(state)
         assert st.info == {"Общий трафик": "2.62 MB"}
 
 
@@ -264,19 +260,13 @@ def test_mieru_presets_change_configure():
     assert frag.inbounds[0]["traffic_pattern"] == "GgIIACoECAAQAA=="
 
 
-def test_mieru_set_preset_saves_and_applies():
-    """set_preset() сохраняет пресет в state и применяет конфиг."""
+def test_mieru_set_preset_only_updates_desired_state():
     p = MieruPlugin()
     state = _state([_user("a@x.com")])
-    
-    with patch("hydra.core.state.save_state") as mock_save, \
-         patch("hydra.core.orchestrator.apply_config", return_value=True) as mock_apply:
-        
-        ok = p.set_preset(state, "medium")
-        assert ok is True
-        assert state.protocols["mieru"].config["traffic_preset"] == "medium"
-        mock_save.assert_called_once_with(state)
-        mock_apply.assert_called_once_with(state)
+    state.protocols["mieru"] = PluginState(enabled=True)
+
+    assert p.set_preset(state, "medium") is True
+    assert state.protocols["mieru"].config["traffic_preset"] == "medium"
 
 
 def test_mieru_client_link_includes_preset():

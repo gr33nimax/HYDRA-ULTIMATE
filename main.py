@@ -45,6 +45,7 @@ def main() -> None:
     check_python()
 
     from hydra.core.state import load_state
+    from hydra.bootstrap import production_application
     from hydra.ui.menus import main_menu
 
     try:
@@ -53,18 +54,19 @@ def main() -> None:
         print(f"ERROR: Не удалось загрузить состояние: {e}", file=sys.stderr)
         sys.exit(1)
 
+    application = production_application()
+
     # A git/bootstrap update may replace daemon code without changing user
     # settings. Reconcile its revision-tagged unit once on TUI startup so the
     # new process is picked up without forcing restarts on every apply_config.
     if os.name != "nt":
         try:
-            from hydra.core.orchestrator import reconcile_traffic_daemon
-            reconcile_traffic_daemon(state)
+            application.reconcile_background_services(state)
         except Exception:
             pass
 
     try:
-        main_menu(state)
+        main_menu(state, application)
     except KeyboardInterrupt:
         print(f"\nДо свидания! 👋")
         sys.exit(0)

@@ -7,12 +7,86 @@ technically reliable (for example qWDTT).
 """
 from __future__ import annotations
 
-from hydra.core.state import AppState, load_state, update_state
-from hydra.plugins.registry import enabled, get
+from dataclasses import dataclass
+from typing import Protocol
+
+from hydra.core.state import update_state
+from hydra.core.state_models import AppState
+
+class TrafficProtocolAccess(Protocol):
+    """Runtime counter capabilities needed by traffic accounting."""
+
+    def enabled_names(self, state: AppState) -> set[str]: ...
+    def traffic(self, state: AppState, name: str) -> dict[str, int]: ...
+    def traffic_snapshot(
+        self,
+        state: AppState,
+        name: str,
+    ) -> dict[str, int] | None: ...
+    def aggregate_traffic_snapshot(
+        self,
+        state: AppState,
+        name: str,
+    ) -> int | None: ...
+    def ingest_traffic(
+        self,
+        state: AppState,
+        name: str,
+        cursors: dict,
+    ) -> None: ...
 
 
-_SNAPSHOT_PROTOCOLS = ("amneziawg", "telemt")
-_AGGREGATE_SNAPSHOT_PROTOCOLS = ("wdtt",)
+class TrafficOperations(Protocol):
+    def refresh(self, state: AppState) -> dict[str, int]: ...
+    def refresh_state(self) -> AppState: ...
+    def collect(self, state: AppState | None = None) -> dict[str, int]: ...
+    def protocol_totals(self, state: AppState) -> dict[str, int]: ...
+    def check_limits(self, state: AppState) -> list[str]: ...
+
+
+@dataclass(frozen=True)
+class UnavailableTrafficOperations:
+    """Fail clearly when a manually assembled application omits accounting."""
+
+    def _unavailable(self):
+        raise RuntimeError("traffic service is unavailable")
+
+    def refresh(self, state: AppState) -> dict[str, int]:
+        return self._unavailable()
+
+    def refresh_state(self) -> AppState:
+        return self._unavailable()
+
+    def collect(self, state: AppState | None = None) -> dict[str, int]:
+        return self._unavailable()
+
+    def protocol_totals(self, state: AppState) -> dict[str, int]:
+        return self._unavailable()
+
+    def check_limits(self, state: AppState) -> list[str]:
+        return self._unavailable()
+
+
+@dataclass(frozen=True)
+class TrafficService:
+    """Application service for monotonic traffic accounting."""
+
+    protocols: TrafficProtocolAccess
+
+    def refresh(self, state: AppState) -> dict[str, int]:
+        return refresh_user_traffic(state, protocols=self.protocols)
+
+    def refresh_state(self) -> AppState:
+        return refresh_traffic_state(protocols=self.protocols)
+
+    def collect(self, state: AppState | None = None) -> dict[str, int]:
+        return collect_traffic(state, protocols=self.protocols)
+
+    def protocol_totals(self, state: AppState) -> dict[str, int]:
+        return protocol_totals(state)
+
+    def check_limits(self, state: AppState) -> list[str]:
+        return check_traffic_limits(state, protocols=self.protocols)
 
 
 def _as_non_negative_int(value: object) -> int:
@@ -61,47 +135,42 @@ def _accumulate_protocol_total(state: AppState, protocol: str, raw_value: object
     stats["traffic_used_bytes"] = accumulated
 
 
-def refresh_user_traffic(state: AppState) -> dict[str, int]:
+def refresh_user_traffic(
+    state: AppState,
+    *,
+    protocols: TrafficProtocolAccess,
+) -> dict[str, int]:
     """Refresh resettable sources and rebuild authoritative user totals."""
-    enabled_names = {plugin.meta.name for plugin in enabled(state)}
-
-    for protocol in _SNAPSHOT_PROTOCOLS:
-        if protocol not in enabled_names:
-            continue
-        plugin = get(protocol)
-        if plugin is None:
-            continue
+    enabled_names = protocols.enabled_names(state)
+    cursor_root = state.install.setdefault("traffic_log_cursors", {})
+    for protocol in sorted(enabled_names):
         try:
-            _accumulate_snapshot(state, protocol, plugin.traffic(state))
+            protocols.ingest_traffic(
+                state,
+                protocol,
+                cursor_root.setdefault(protocol, {}),
+            )
+        except Exception:
+            # A plugin-owned event source must not block other accounting.
+            pass
+        try:
+            snapshot = protocols.traffic_snapshot(state, protocol)
+            if snapshot is not None:
+                _accumulate_snapshot(state, protocol, snapshot)
         except Exception:
             # Keep the last good totals when a runtime counter is unavailable.
-            continue
-
-    for protocol in _AGGREGATE_SNAPSHOT_PROTOCOLS:
-        if protocol not in enabled_names:
-            continue
-        plugin = get(protocol)
-        reader = getattr(plugin, "total_traffic", None) if plugin else None
-        if reader is None:
-            continue
+            pass
         try:
-            raw = reader(state)
+            raw = protocols.aggregate_traffic_snapshot(
+                state,
+                protocol,
+            )
             if raw is not None:
                 _accumulate_protocol_total(state, protocol, raw)
         except Exception:
             # Preserve the last good aggregate when the interface disappears
             # briefly during a service restart.
-            continue
-
-    # Naive uses an inode/offset cursor because its access log is rotated.
-    if "naive" in enabled_names:
-        plugin = get("naive")
-        updater = getattr(plugin, "update_traffic", None) if plugin else None
-        if updater:
-            try:
-                updater(state)
-            except Exception:
-                pass
+            pass
 
     totals: dict[str, int] = {}
     for user in state.users:
@@ -115,24 +184,34 @@ def refresh_user_traffic(state: AppState) -> dict[str, int]:
     return totals
 
 
-def refresh_traffic_state() -> AppState:
+def refresh_traffic_state(*, protocols: TrafficProtocolAccess) -> AppState:
     """Atomically refresh and persist traffic, returning the latest state."""
-    state, _ = update_state(refresh_user_traffic)
+    state, _ = update_state(
+        lambda latest: refresh_user_traffic(latest, protocols=protocols),
+    )
     return state
 
 
-def collect_traffic(state: AppState | None = None) -> dict[str, int]:
+def collect_traffic(
+    state: AppState | None = None,
+    *,
+    protocols: TrafficProtocolAccess,
+) -> dict[str, int]:
     """Return authoritative totals; persist a refresh when no state is passed."""
     if state is None:
-        state = refresh_traffic_state()
+        state = refresh_traffic_state(protocols=protocols)
     else:
-        refresh_user_traffic(state)
+        refresh_user_traffic(state, protocols=protocols)
     return {user.email: user.traffic_used_bytes for user in state.users}
 
 
-def update_user_traffic(state: AppState) -> None:
+def update_user_traffic(
+    state: AppState,
+    *,
+    protocols: TrafficProtocolAccess,
+) -> None:
     """Backward-compatible in-memory refresh."""
-    refresh_user_traffic(state)
+    refresh_user_traffic(state, protocols=protocols)
 
 
 def protocol_totals(state: AppState) -> dict[str, int]:
@@ -155,8 +234,12 @@ def protocol_totals(state: AppState) -> dict[str, int]:
     return totals
 
 
-def check_traffic_limits(state: AppState) -> list[str]:
-    refresh_user_traffic(state)
+def check_traffic_limits(
+    state: AppState,
+    *,
+    protocols: TrafficProtocolAccess,
+) -> list[str]:
+    refresh_user_traffic(state, protocols=protocols)
     exceeded: list[str] = []
     for user in state.users:
         if user.blocked:

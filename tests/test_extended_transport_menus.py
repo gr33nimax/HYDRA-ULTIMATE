@@ -12,13 +12,20 @@ def test_hysteria2_tui_changes_congestion_mode():
         "domain": "hy.example.com", "port": 8443, "congestion_mode": "bbr",
     })
     plugin = MagicMock()
-    plugin.set_congestion.return_value = True
+    app = MagicMock()
+    app.admin.load_state.return_value = state
+    app.plugin_command.return_value = True
 
     with patch("hydra.ui.menus.menu", side_effect=["3", "1", "0"]), \
          patch("hydra.ui.menus.prompt", return_value=""):
-        _menu_hysteria2_settings(state, plugin)
+        _menu_hysteria2_settings(state, plugin, app)
 
-    plugin.set_congestion.assert_called_once_with(state, "bbr")
+    app.plugin_command.assert_called_once_with(
+        state,
+        "hysteria2",
+        "set_congestion",
+        mode="bbr",
+    )
 
 
 def test_snell_tui_changes_obfs():
@@ -27,11 +34,20 @@ def test_snell_tui_changes_obfs():
         "version": 4, "obfs_mode": "http", "obfs_host": "www.bing.com",
     })
     plugin = MagicMock()
-    plugin._version.return_value = 4
-    plugin.set_settings.return_value = True
+    app = MagicMock()
+    app.admin.load_state.return_value = state
+    app.plugin_command.return_value = True
 
     with patch("hydra.ui.menus.menu", side_effect=["1", "2", "0"]), \
          patch("hydra.ui.menus.prompt", return_value=""):
-        _menu_snell_settings(state, plugin)
+        _menu_snell_settings(state, plugin, app)
 
-    plugin.set_settings.assert_called_once_with(state, 4, "", "www.bing.com")
+    app.plugin_command.assert_called_once_with(
+        state,
+        "snell",
+        "set_settings",
+        version=4,
+        obfs_mode="",
+        obfs_host="www.bing.com",
+    )
+    assert plugin.method_calls == []

@@ -1,0 +1,234 @@
+"""Pure Sing-Box configuration assembly and conflict validation."""
+from __future__ import annotations
+
+import ipaddress
+
+from hydra.contracts import ConfigFragment
+from hydra.core.state_models import AppState
+
+
+def base_config(state: AppState) -> dict:
+    """Build the application-owned baseline without touching the host."""
+    config = {
+        "log": {"level": "info", "timestamp": True},
+        "inbounds": [
+            {
+                "type": "socks",
+                "tag": "socks-in",
+                "listen": "127.0.0.1",
+                "listen_port": 1080,
+            },
+        ],
+        "outbounds": [{"type": "direct", "tag": "direct"}],
+        "route": {
+            "rules": [],
+            "auto_detect_interface": True,
+            "default_mark": 255,
+            "final": "direct",
+        },
+    }
+    if state.network.tproxy_enabled:
+        config["inbounds"].append(
+            {
+                "type": "tproxy",
+                "tag": "tproxy-in",
+                "listen": "::",
+                "listen_port": state.network.tproxy_port,
+            },
+        )
+        config["route"]["rules"].extend(
+            (
+                {
+                    "inbound": ["tproxy-in"],
+                    "port": [state.network.tproxy_port],
+                    "action": "reject",
+                },
+                {
+                    "action": "sniff",
+                    "sniffer": ["http", "tls", "quic"],
+                },
+            ),
+        )
+
+    if state.network.clash_api_enabled:
+        config["experimental"] = {
+            "clash_api": {
+                "external_controller": (
+                    f"127.0.0.1:{state.network.clash_api_port}"
+                ),
+                "secret": state.network.clash_api_secret,
+            },
+        }
+    return config
+
+
+def default_dns_config() -> dict:
+    """Return the dependency-free default DNS policy."""
+    return {
+        "servers": [
+            {
+                "tag": "dns-remote",
+                "address": "https://dns.quad9.net/dns-query",
+                "address_resolver": "dns-direct",
+                "strategy": "ipv4_only",
+                "detour": "direct",
+            },
+            {
+                "tag": "dns-direct",
+                "address": "1.1.1.1",
+                "detour": "direct",
+            },
+        ],
+        "rules": [],
+    }
+
+
+def generate_config(
+    state: AppState,
+    fragments: dict[str, ConfigFragment],
+) -> dict:
+    """Merge typed plugin fragments into one deterministic Sing-Box config."""
+    config = base_config(state)
+    config["endpoints"] = []
+
+    for fragment in fragments.values():
+        config["inbounds"].extend(fragment.inbounds)
+        config["outbounds"].extend(fragment.outbounds)
+        config["route"]["rules"].extend(fragment.route_rules)
+        config["endpoints"].extend(fragment.endpoints)
+
+    if not config["endpoints"]:
+        config.pop("endpoints")
+
+    dns_config = next(
+        (
+            fragment.dns
+            for fragment in fragments.values()
+            if fragment.dns
+        ),
+        None,
+    )
+    config["dns"] = dns_config or default_dns_config()
+
+    if not config["inbounds"]:
+        config["inbounds"].append(
+            {
+                "type": "mixed",
+                "tag": "mixed-in",
+                "listen": "127.0.0.1",
+                "listen_port": 2080,
+            },
+        )
+    if not any(
+        outbound.get("tag") == "direct"
+        for outbound in config["outbounds"]
+    ):
+        config["outbounds"].append({"type": "direct", "tag": "direct"})
+    return config
+
+
+def _listener_scope(value: object) -> tuple[str, str]:
+    listen = str(value or "0.0.0.0").strip().strip("[]").lower()
+    if listen in {"*", "::", "0:0:0:0:0:0:0:0"}:
+        return "any", ""
+    if listen == "0.0.0.0":
+        return "ipv4-any", ""
+    try:
+        address = ipaddress.ip_address(listen)
+        return f"ipv{address.version}", address.compressed
+    except ValueError:
+        return "name", listen
+
+
+def _listeners_overlap(first: object, second: object) -> bool:
+    first_scope, first_value = _listener_scope(first)
+    second_scope, second_value = _listener_scope(second)
+    if "any" in {first_scope, second_scope}:
+        return True
+    if first_scope == "ipv4-any":
+        return second_scope in {"ipv4-any", "ipv4"}
+    if second_scope == "ipv4-any":
+        return first_scope in {"ipv4-any", "ipv4"}
+    return (
+        first_scope == second_scope
+        and first_value == second_value
+    )
+
+
+def preflight_conflicts(config: dict) -> list[str]:
+    """Return conflicts that are not reliably caught by Sing-Box's schema."""
+    errors: list[str] = []
+    tags: dict[str, str] = {}
+    listeners: list[tuple[str, int, str]] = []
+    snis: dict[str, str] = {}
+
+    for section in ("inbounds", "outbounds", "endpoints"):
+        for item in config.get(section, []) or []:
+            if not isinstance(item, dict):
+                continue
+            tag = item.get("tag")
+            owner = f"{section}:{item.get('type', 'unknown')}"
+            if tag:
+                if tag in tags:
+                    errors.append(
+                        f"дублирующийся tag '{tag}' ({tags[tag]} и {owner})",
+                    )
+                else:
+                    tags[tag] = owner
+
+            if section != "inbounds":
+                continue
+            port_owner = str(tag or item.get("type", "inbound"))
+            raw_port = item.get("listen_port", 0)
+            if isinstance(raw_port, bool):
+                errors.append(f"некорректный порт у inbound {port_owner}")
+                continue
+            try:
+                port = int(raw_port or 0)
+            except (TypeError, ValueError):
+                errors.append(f"некорректный порт у inbound {port_owner}")
+                continue
+            if port <= 0:
+                continue
+
+            listen = str(item.get("listen", "0.0.0.0"))
+            for previous_listen, previous_port, previous_owner in listeners:
+                if (
+                    previous_port == port
+                    and _listeners_overlap(previous_listen, listen)
+                ):
+                    errors.append(
+                        f"порт {port} на {listen} пересекается с "
+                        f"{previous_listen} ({previous_owner} и {port_owner})",
+                    )
+            listeners.append((listen, port, port_owner))
+
+            tls = item.get("tls")
+            if not isinstance(tls, dict):
+                continue
+            server_name = tls.get("server_name")
+            names = (
+                server_name
+                if isinstance(server_name, list)
+                else [server_name]
+            )
+            for name in names:
+                normalized = str(name or "").strip().lower()
+                if not normalized:
+                    continue
+                if normalized in snis and snis[normalized] != port_owner:
+                    errors.append(
+                        f"SNI '{normalized}' назначен нескольким inbound "
+                        f"({snis[normalized]} и {port_owner})",
+                    )
+                else:
+                    snis[normalized] = port_owner
+    return errors
+
+
+__all__ = [
+    "base_config",
+    "default_dns_config",
+    "generate_config",
+    "preflight_conflicts",
+]

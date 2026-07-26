@@ -1,4 +1,4 @@
-from contextlib import nullcontext
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from hydra.core.state import AppState
@@ -11,48 +11,36 @@ def _state() -> AppState:
     return state
 
 
-def test_subscription_certbot_stops_and_restores_caddy_l4():
-    calls: list[list[str]] = []
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        result = MagicMock(returncode=0, stdout="", stderr="")
-        if command[:3] == ["systemctl", "is-active", "caddy-l4"]:
-            result.stdout = "active\n"
-        return result
-
-    with (
-        patch.object(menus.Path, "exists", return_value=False),
-        patch("shutil.which", return_value="/usr/bin/certbot"),
-        patch("hydra.utils.firewall.temporary_open_port", return_value=nullcontext()),
-        patch.object(menus.HOST, "run", side_effect=fake_run),
-    ):
-        assert menus._obtain_cert_for_sub(_state()) is True
-
-    stop_index = calls.index(["systemctl", "stop", "caddy-l4"])
-    certbot_index = next(i for i, command in enumerate(calls) if command[0] == "certbot")
-    start_index = calls.index(["systemctl", "start", "caddy-l4"])
-    assert stop_index < certbot_index < start_index
+def _application(result):
+    obtain = MagicMock(return_value=result)
+    return (
+        SimpleNamespace(
+            admin=SimpleNamespace(obtain_subscription_certificate=obtain),
+        ),
+        obtain,
+    )
 
 
-def test_subscription_certbot_restores_services_after_exception():
-    calls: list[list[str]] = []
+def test_subscription_certificate_uses_injected_admin_boundary():
+    result = SimpleNamespace(ok=True, code="issued", message="", detail="")
+    app, obtain = _application(result)
+    with patch.object(menus, "success") as success_message:
+        assert menus._obtain_cert_for_sub(_state(), app) is True
 
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        result = MagicMock(returncode=0, stdout="", stderr="")
-        if command[:3] == ["systemctl", "is-active", "caddy-l4"]:
-            result.stdout = "active\n"
-        if command and command[0] == "certbot":
-            raise OSError("certbot crashed")
-        return result
+    obtain.assert_called_once_with("sub.example.com")
+    success_message.assert_called_once_with("Сертификат успешно получен!")
 
-    with (
-        patch.object(menus.Path, "exists", return_value=False),
-        patch("shutil.which", return_value="/usr/bin/certbot"),
-        patch("hydra.utils.firewall.temporary_open_port", return_value=nullcontext()),
-        patch.object(menus.HOST, "run", side_effect=fake_run),
-    ):
-        assert menus._obtain_cert_for_sub(_state()) is False
 
-    assert ["systemctl", "start", "caddy-l4"] in calls
+def test_subscription_certificate_reports_normalized_admin_failure():
+    result = SimpleNamespace(
+        ok=False,
+        code="certbot_failed",
+        message="certbot failed",
+        detail="challenge rejected",
+    )
+    app, obtain = _application(result)
+    with patch.object(menus, "error") as error_message:
+        assert menus._obtain_cert_for_sub(_state(), app) is False
+
+    obtain.assert_called_once_with("sub.example.com")
+    error_message.assert_called_once_with("Ошибка работы certbot!")

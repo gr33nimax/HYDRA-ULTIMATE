@@ -10,6 +10,8 @@ from unittest.mock import MagicMock, call, mock_open, patch
 
 import pytest
 
+from hydra.core.state import AppState
+from hydra.services.admin import SingboxDiagnostics
 from hydra.ui import diagnostics
 
 
@@ -22,6 +24,12 @@ def response(body: bytes = b"", *, status: int = 200, headers=None):
     cm = MagicMock()
     cm.__enter__.return_value = resp
     return cm
+
+
+def diagnostic_app(admin: MagicMock | None = None) -> MagicMock:
+    app = MagicMock()
+    app.admin = admin or MagicMock()
+    return app
 
 
 @pytest.fixture(autouse=True)
@@ -66,28 +74,23 @@ class TestSocketAndPackageHelpers:
         socket_cm.__exit__.assert_called_once()
 
     def test_ensure_packages_skips_install_when_present(self):
-        with patch.object(diagnostics.shutil, "which", return_value="/usr/bin/tool"), patch.object(
-            diagnostics, "run_command"
-        ) as run:
-            assert diagnostics.ensure_packages(["dnsutils", "sysbench"]) is True
-        run.assert_not_called()
+        app = diagnostic_app()
+        with patch.object(diagnostics.shutil, "which", return_value="/usr/bin/tool"):
+            assert diagnostics.ensure_packages(["dnsutils", "sysbench"], app) is True
+        app.admin.install_packages.assert_not_called()
 
     @pytest.mark.parametrize(("confirm_install", "returncode", "expected"), [(False, 0, False), (True, 0, True), (True, 1, False)])
     def test_ensure_packages_install_outcomes(self, confirm_install, returncode, expected):
-        completed = MagicMock(returncode=returncode)
+        app = diagnostic_app()
+        app.admin.install_packages.return_value = returncode == 0
         with patch.object(diagnostics.shutil, "which", return_value=None), patch.object(
             diagnostics, "confirm", return_value=confirm_install
-        ), patch.object(diagnostics, "run_command", return_value=completed) as run, patch.object(
-            diagnostics, "prompt"
-        ):
-            assert diagnostics.ensure_packages(["dnsutils"]) is expected
+        ), patch.object(diagnostics, "prompt"):
+            assert diagnostics.ensure_packages(["dnsutils"], app) is expected
         if confirm_install:
-            assert run.call_args_list == [
-                call(["apt-get", "update"], timeout=300),
-                call(["apt-get", "install", "-y", "dnsutils"], timeout=300),
-            ]
+            app.admin.install_packages.assert_called_once_with(["dnsutils"])
         else:
-            run.assert_not_called()
+            app.admin.install_packages.assert_not_called()
 
     @pytest.mark.parametrize("bind_error, expected", [(None, False), (OSError("busy"), True)])
     def test_is_port_listening_closes_socket(self, bind_error, expected):
@@ -107,8 +110,10 @@ class TestCommandRunners:
         process = MagicMock(returncode=0)
         process.poll.return_value = 0
         process.communicate.return_value = ("result\n", None)
-        with patch.object(diagnostics.HOST, "popen", return_value=process) as popen:
-            assert diagnostics.run_with_spinner("work", "echo ok") == "result\n"
+        app = diagnostic_app()
+        app.admin.popen_command.return_value = process
+        assert diagnostics.run_with_spinner("work", "echo ok", app) == "result\n"
+        popen = app.admin.popen_command
         popen.assert_called_once_with(
             ["echo", "ok"],
             stdout=diagnostics.subprocess.PIPE,
@@ -120,9 +125,10 @@ class TestCommandRunners:
         process = MagicMock(returncode=7)
         process.poll.return_value = 7
         process.communicate.return_value = ("", None)
-        with patch.object(diagnostics.HOST, "popen", return_value=process):
-            with pytest.raises(Exception, match=r"ошибкой \(7\)"):
-                diagnostics.run_with_spinner("work", "false")
+        app = diagnostic_app()
+        app.admin.popen_command.return_value = process
+        with pytest.raises(Exception, match=r"ошибкой \(7\)"):
+            diagnostics.run_with_spinner("work", "false", app)
 
     def test_run_function_with_spinner_returns_value(self):
         assert diagnostics.run_function_with_spinner("sum", lambda a, b: a + b, 2, 3) == 5
@@ -135,8 +141,10 @@ class TestCommandRunners:
             diagnostics.run_function_with_spinner("fail", fail)
 
     def test_run_direct_cmd_uses_argv_without_shell(self):
-        with patch.object(diagnostics, "clear"), patch.object(diagnostics.HOST, "run") as run:
-            diagnostics.run_direct_cmd("title", "tool --flag")
+        app = diagnostic_app()
+        with patch.object(diagnostics, "clear"):
+            diagnostics.run_direct_cmd("title", "tool --flag", app)
+        run = app.admin.run_command
         run.assert_called_once_with(["tool", "--flag"], timeout=diagnostics.DEFAULT_TIMEOUT, check=False)
 
 
@@ -468,17 +476,22 @@ class TestRadarSpeedAndConfig:
     def test_run_parallel_pings_parses_average(self):
         completed = MagicMock(stdout="rtt min/avg/max/mdev = 1.0/12.34/20.0/1.0 ms\n")
         nodes = [{"url": "https://a.example/file"}, {"url": "https://b.example/file"}]
-        with patch.object(diagnostics.HOST, "run", return_value=completed) as run:
-            result = diagnostics.run_parallel_pings(nodes)
+        app = diagnostic_app()
+        app.admin.run_command.return_value = completed
+        result = diagnostics.run_parallel_pings(nodes, app)
         assert result == {
             "https://a.example/file": ("12.3 ms", 12.34),
             "https://b.example/file": ("12.3 ms", 12.34),
         }
-        assert run.call_count == 2
+        assert app.admin.run_command.call_count == 2
 
     def test_run_parallel_pings_marks_failure(self):
-        with patch.object(diagnostics.HOST, "run", side_effect=OSError("no ping")):
-            result = diagnostics.run_parallel_pings([{"url": "https://a.example/file"}])
+        app = diagnostic_app()
+        app.admin.run_command.side_effect = OSError("no ping")
+        result = diagnostics.run_parallel_pings(
+            [{"url": "https://a.example/file"}],
+            app,
+        )
         assert result["https://a.example/file"] == ("N/A", float("inf"))
 
     def test_run_http_speed_calculates_mbps(self):
@@ -502,17 +515,21 @@ class TestRadarSpeedAndConfig:
 class TestReportsAndMenus:
     def test_run_diagnostics_report_is_fully_offline(self):
         writer = mock_open()
-        service = MagicMock(stdout="active\n")
+        app = diagnostic_app()
+        app.admin.load_state.return_value = AppState()
+        app.admin.singbox_diagnostics.return_value = SingboxDiagnostics(False)
+        app.admin.read_text_lines.side_effect = FileNotFoundError
+        app.apply_error.return_value = ""
         with patch.object(diagnostics.os.path, "exists", return_value=False), patch.object(
             diagnostics, "get_ip_address", side_effect=["203.0.113.4", ""]
         ), patch.object(diagnostics, "check_system_ipv6", return_value=False), patch.object(
             diagnostics, "query_primary_geoip", return_value="DE"
         ) as geoip, patch.object(diagnostics, "check_custom_service", return_value="Yes") as custom, patch.object(
             diagnostics, "check_domain_censor", return_value=200
-        ) as censor, patch.object(diagnostics.HOST, "run", return_value=service) as run, patch.object(
-            diagnostics.os, "makedirs"
-        ) as makedirs, patch("builtins.open", writer):
-            result = diagnostics.run_diagnostics_report()
+        ) as censor, patch.object(diagnostics.os, "makedirs"), patch(
+            "builtins.open", writer
+        ):
+            result = diagnostics.run_diagnostics_report(app)
 
         assert "HYDRA" in result
         assert "СОСТОЯНИЕ HYDRA" in result
@@ -525,14 +542,17 @@ class TestReportsAndMenus:
         assert censor.call_count == 0
 
     def test_generate_report_success_contract(self):
+        app = diagnostic_app()
         with patch.object(diagnostics, "clear"), patch.object(diagnostics, "title"), patch.object(
             diagnostics, "run_function_with_spinner", return_value="HYDRA report"
         ) as spinner, patch("builtins.print") as output, patch.object(diagnostics, "prompt"):
-            diagnostics.test_generate_report()
+            diagnostics.test_generate_report(app)
         assert spinner.call_args.args[1] is diagnostics.run_diagnostics_report
+        assert spinner.call_args.args[2] is app
         assert output.call_args_list[-1].args == ("HYDRA report",)
 
     def test_cpu_sysbench_parses_metrics(self):
+        app = diagnostic_app()
         output = """
 events per second: 1234.50
 total time: 10.001s
@@ -547,14 +567,17 @@ Latency (ms):
         ), patch.object(diagnostics, "run_with_spinner", return_value=output), patch.object(
             diagnostics, "panel"
         ) as panel, patch.object(diagnostics, "prompt"):
-            diagnostics.test_cpu_sysbench()
+            diagnostics.test_cpu_sysbench(app)
         rendered = "\n".join(panel.call_args.args[1])
         for value in ("1234.50", "12346", "10.001s", "0.70", "0.81", "2.40"):
             assert value in rendered
 
     def test_global_speedtest_quick_mode_measures_five_fastest_nodes(self):
-        def spinner(_title, func, nodes):
+        app = diagnostic_app()
+
+        def spinner(_title, func, nodes, injected_app):
             assert func is diagnostics.run_parallel_pings
+            assert injected_app is app
             return {node["url"]: (f"{index + 1}.0 ms", float(index + 1)) for index, node in enumerate(nodes)}
 
         with patch.object(diagnostics, "clear"), patch.object(diagnostics, "title"), patch.object(
@@ -564,7 +587,7 @@ Latency (ms):
         ), patch.object(diagnostics, "run_http_speed", return_value=250.0) as speed, patch.object(
             diagnostics, "prompt"
         ):
-            diagnostics.test_bench_speedtest()
+            diagnostics.test_bench_speedtest(app)
         assert speed.call_count == 5
 
     def test_iperf3_ru_runs_download_and_upload_for_each_city(self):
@@ -581,14 +604,16 @@ Latency (ms):
                 )
             return completed
 
+        app = diagnostic_app()
+        app.admin.run_command.side_effect = run_command
         with patch.object(diagnostics, "clear"), patch.object(diagnostics, "title"), patch.object(
             diagnostics, "ensure_packages", return_value=True
         ), patch.object(diagnostics.socket, "socket", return_value=socket_cm), patch.object(
-            diagnostics.HOST, "run", side_effect=run_command
-        ) as run, patch.object(diagnostics, "prompt"):
-            diagnostics.test_iperf3_ru()
+            diagnostics, "prompt"
+        ):
+            diagnostics.test_iperf3_ru(app)
 
-        commands = [call.args[0] for call in run.call_args_list]
+        commands = [item.args[0] for item in app.admin.run_command.call_args_list]
         iperf_commands = [cmd for cmd in commands if cmd[0] == "iperf3"]
         ping_commands = [cmd for cmd in commands if cmd[0] == "ping"]
         assert len(iperf_commands) == 10
@@ -598,6 +623,7 @@ Latency (ms):
 
     def test_menu_diagnostics_dispatches_every_action(self):
         actions = ["1", "2", "3", "4", "5", "6", "7", "0"]
+        app = diagnostic_app()
         with patch.object(diagnostics, "clear"), patch.object(diagnostics, "panel"), patch.object(
             diagnostics, "menu", side_effect=actions
         ), patch.object(diagnostics, "test_ip_region") as ip_region, patch.object(
@@ -607,12 +633,12 @@ Latency (ms):
         ) as ru_speed, patch.object(diagnostics, "test_cpu_sysbench") as cpu, patch.object(
             diagnostics, "test_generate_report"
         ) as report:
-            diagnostics.menu_diagnostics(MagicMock())
+            diagnostics.menu_diagnostics(MagicMock(), app)
 
         ip_region.assert_called_once_with()
         assert censor.call_args_list[0].args == ("geoblock",)
         assert censor.call_args_list[1].args == ("dpi",)
-        global_speed.assert_called_once_with()
-        ru_speed.assert_called_once_with()
-        cpu.assert_called_once_with()
-        report.assert_called_once_with()
+        global_speed.assert_called_once_with(app)
+        ru_speed.assert_called_once_with(app)
+        cpu.assert_called_once_with(app)
+        report.assert_called_once_with(app)

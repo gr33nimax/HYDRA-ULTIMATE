@@ -4,13 +4,14 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
-import copy
 import urllib.parse
 
-from hydra.core.state import AppState, User, get_protocol
+from hydra.core.state_models import User
+from hydra.plugins.context import PluginStateAccess
 from hydra.plugins.base import BasePlugin, ConfigFragment, PluginCategory, PluginMeta, PluginStatus
 from hydra.utils.crypto import derive_hex_key
 from hydra.utils.net import public_ip
+from hydra.utils.plugin_identity import snell_user_tag
 
 
 PORT_START = 32000
@@ -27,6 +28,8 @@ class SnellPlugin(BasePlugin):
         category=PluginCategory.TRANSPORT,
         version="1.0.2",
         needs_domain=False,
+        commands=("set_settings",),
+        connection_source="tracked",
     )
 
     def install(self) -> bool:
@@ -36,7 +39,7 @@ class SnellPlugin(BasePlugin):
     def uninstall(self) -> bool:
         return True
 
-    def configure(self, state: AppState) -> ConfigFragment:
+    def configure(self, state: PluginStateAccess) -> ConfigFragment:
         ports = self._port_map(state)
         inbounds = []
         for user in state.users:
@@ -56,20 +59,20 @@ class SnellPlugin(BasePlugin):
                 inbounds[-1]["obfs"] = {"mode": mode}
         return ConfigFragment(inbounds=inbounds)
 
-    def apply(self, state: AppState) -> bool:
+    def apply(self, state: PluginStateAccess) -> bool:
         return True
 
-    def on_user_add(self, user: User, state: AppState) -> None:
+    def on_user_add(self, user: User, state: PluginStateAccess) -> None:
         creds = user.credentials.setdefault("snell", {})
         creds.update({"psk": self._psk(user.uuid), "port": self._port_for(user, state)})
 
-    def on_user_remove(self, user: User, state: AppState) -> None:
+    def on_user_remove(self, user: User, state: PluginStateAccess) -> None:
         pass
 
-    def on_user_block(self, user: User, state: AppState) -> None:
+    def on_user_block(self, user: User, state: PluginStateAccess) -> None:
         pass
 
-    def generate_client_config(self, user: User, state: AppState) -> str:
+    def generate_client_config(self, user: User, state: PluginStateAccess) -> str:
         server = self._server_ip(state)
         outbound = {
             "type": "snell",
@@ -89,7 +92,7 @@ class SnellPlugin(BasePlugin):
             "route": {"final": outbound["tag"]},
         }, indent=2)
 
-    def client_link(self, user: User, state: AppState) -> str:
+    def client_link(self, user: User, state: PluginStateAccess) -> str:
         server = self._url_host(self._server_ip(state))
         psk = urllib.parse.quote(self._psk(user.uuid), safe="")
         query_params = {
@@ -103,35 +106,37 @@ class SnellPlugin(BasePlugin):
         tag = urllib.parse.quote(f"{user.email} Snell", safe="")
         return f"snell://{psk}@{server}:{self._port_for(user, state)}?{query}#{tag}"
 
-    def on_enable(self, state: AppState) -> None:
-        ps = get_protocol(state, "snell")
-        # sing-box-extended accepts v5 on the inbound, but its outbound maps
-        # v5 to v4.  Keeping both ends on v4 avoids an incompatible handshake.
-        ps.config["version"] = self._version(state)
-        ps.config.setdefault("obfs_mode", OBFS_MODE)
-        ps.config.setdefault("obfs_host", OBFS_HOST)
+    def on_enable(self, state: PluginStateAccess) -> None:
+        if state.protocols.get("snell") is None:
+            raise ValueError("Snell configuration is missing")
+        self._version(state)
+        mode = self._obfs_mode(state)
+        if mode:
+            self._obfs_host(state)
         from hydra.utils.firewall import open_range
         open_range("tcp", PORT_START, PORT_END, "snell")
 
-    def on_disable(self, state: AppState) -> None:
+    def on_disable(self, state: PluginStateAccess) -> None:
         from hydra.utils.firewall import close_range
         close_range("tcp", PORT_START, PORT_END, "snell")
 
-    def status(self) -> PluginStatus:
+    def status(
+        self,
+        state: PluginStateAccess | None = None,
+    ) -> PluginStatus:
         from hydra.core.singbox import is_installed, is_running
-        from hydra.core.state import load_state
         installed = is_installed()
         enabled = False
         info = {"Диапазон": f"{PORT_START}-{PORT_END}"}
-        try:
-            state = load_state()
-            ps = state.protocols.get("snell")
-            enabled = bool(ps and ps.enabled)
-            info["Версия"] = f"v{self._version(state)}"
-            mode = self._obfs_mode(state)
-            info["Obfs"] = f"{mode.upper()} · {self._obfs_host(state)}" if mode else "выключен"
-        except Exception:
-            pass
+        if state is not None:
+            try:
+                ps = state.protocols.get("snell")
+                enabled = bool(ps and ps.enabled)
+                info["Версия"] = f"v{self._version(state)}"
+                mode = self._obfs_mode(state)
+                info["Obfs"] = f"{mode.upper()} · {self._obfs_host(state)}" if mode else "выключен"
+            except Exception:
+                pass
         return PluginStatus(installed, enabled, installed and enabled and is_running(), PORT_START,
                             info)
 
@@ -143,10 +148,11 @@ class SnellPlugin(BasePlugin):
 
     @staticmethod
     def _tag(user: User) -> str:
-        return f"snell-{hashlib.sha256(user.uuid.encode()).hexdigest()[:12]}-in"
+        """Compatibility wrapper for the former plugin-private helper."""
+        return snell_user_tag(user)
 
     @staticmethod
-    def _port_map(state: AppState) -> dict[str, int]:
+    def _port_map(state: PluginStateAccess) -> dict[str, int]:
         used: set[int] = set()
         result: dict[str, int] = {}
         size = PORT_END - PORT_START + 1
@@ -176,7 +182,7 @@ class SnellPlugin(BasePlugin):
             result[user.uuid] = port
         return result
 
-    def _port_for(self, user: User, state: AppState) -> int:
+    def _port_for(self, user: User, state: PluginStateAccess) -> int:
         port = self._port_map(state).get(user.uuid)
         if port is not None:
             return port
@@ -184,7 +190,7 @@ class SnellPlugin(BasePlugin):
         return PORT_START + int(hashlib.sha256(user.uuid.encode()).hexdigest()[:8], 16) % size
 
     @staticmethod
-    def _server_ip(state: AppState) -> str:
+    def _server_ip(state: PluginStateAccess) -> str:
         """Return the server IP without borrowing a domain from another plugin."""
         value = (state.network.server_ip or public_ip()).strip().strip("[]")
         try:
@@ -198,7 +204,7 @@ class SnellPlugin(BasePlugin):
         return f"[{address}]" if address.version == 6 else str(address)
 
     @staticmethod
-    def _version(state: AppState) -> int:
+    def _version(state: PluginStateAccess) -> int:
         ps = state.protocols.get("snell")
         version = int(ps.config.get("version", SNELL_VERSION)) if ps else SNELL_VERSION
         if version == 5:
@@ -210,7 +216,7 @@ class SnellPlugin(BasePlugin):
         return SNELL_VERSION
 
     @staticmethod
-    def _obfs_mode(state: AppState) -> str:
+    def _obfs_mode(state: PluginStateAccess) -> str:
         ps = state.protocols.get("snell")
         mode = str(ps.config.get("obfs_mode", OBFS_MODE)) if ps else OBFS_MODE
         if mode not in {"", "http"}:
@@ -218,44 +224,42 @@ class SnellPlugin(BasePlugin):
         return mode
 
     @staticmethod
-    def _obfs_host(state: AppState) -> str:
+    def _obfs_host(state: PluginStateAccess) -> str:
         ps = state.protocols.get("snell")
         host = str(ps.config.get("obfs_host", OBFS_HOST)).strip() if ps else OBFS_HOST
         if not host or "://" in host or any(ch.isspace() for ch in host):
             raise ValueError("Некорректный Snell obfs host")
         return host
 
-    def set_settings(self, state: AppState, version: int, obfs_mode: str,
-                     obfs_host: str = OBFS_HOST) -> bool:
-        from hydra.core.state import save_state
-        from hydra.core import orchestrator
-
-        ps = get_protocol(state, "snell")
-        previous = copy.deepcopy(ps.config)
-        ps.config.update({
-            "version": 4 if int(version) == 5 else int(version),
-            "obfs_mode": obfs_mode,
-            "obfs_host": obfs_host.strip(),
-        })
-        try:
-            self._version(state)
-            mode = self._obfs_mode(state)
-            if mode:
-                self._obfs_host(state)
-        except Exception:
-            ps.config = previous
-            raise
-        save_state(state)
-        try:
-            applied = not ps.enabled or orchestrator.apply_config(state)
-        except Exception:
-            applied = False
-        if applied:
-            return True
-        ps.config = previous
-        save_state(state)
-        try:
-            orchestrator.apply_config(state)
-        except Exception:
-            pass
-        return False
+    def set_settings(
+        self,
+        state: PluginStateAccess,
+        version: int,
+        obfs_mode: str,
+        obfs_host: str = OBFS_HOST,
+    ) -> bool:
+        """Validate and update desired Snell settings without I/O."""
+        normalized_version = 4 if int(version) == 5 else int(version)
+        normalized_mode = str(obfs_mode)
+        normalized_host = str(obfs_host).strip()
+        if normalized_version != SNELL_VERSION:
+            raise ValueError(f"Snell v{SNELL_VERSION} is the only supported version")
+        if normalized_mode not in {"", "http"}:
+            raise ValueError("Snell obfs mode must be empty or http")
+        if normalized_mode and (
+            not normalized_host
+            or "://" in normalized_host
+            or any(character.isspace() for character in normalized_host)
+        ):
+            raise ValueError("Invalid Snell obfs host")
+        ps = state.protocols.get("snell")
+        if ps is None:
+            return False
+        ps.config.update(
+            {
+                "version": normalized_version,
+                "obfs_mode": normalized_mode,
+                "obfs_host": normalized_host,
+            },
+        )
+        return True

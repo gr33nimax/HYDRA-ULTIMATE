@@ -3,12 +3,7 @@ from __future__ import annotations
 
 import time
 
-from hydra.core.state import AppState
-
-
-TRACKED_PROTOCOLS = frozenset({
-    "anytls", "mieru", "trusttunnel", "shadowtls", "hysteria2", "snell",
-})
+from hydra.core.state_models import AppState
 
 
 def traffic_daemon_fresh(state: AppState, max_age: float = 15.0) -> bool:
@@ -28,7 +23,7 @@ def tracked_active_connections(state: AppState) -> list[dict]:
             continue
         protocol = str(record.get("protocol", ""))
         user = str(record.get("user", ""))
-        if protocol not in TRACKED_PROTOCOLS or not user:
+        if protocol in {"", "unknown"} or not user:
             continue
         key = (protocol, user)
         item = grouped.setdefault(key, {

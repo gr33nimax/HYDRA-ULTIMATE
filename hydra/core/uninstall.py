@@ -1,11 +1,17 @@
-"""Complete, explicit HYDRA removal with a reviewable dry-run plan."""
+"""Dependency-neutral HYDRA removal policy and host mechanics.
+
+Plugin inventory and plugin-specific cleanup belong to the application
+service layer.  This module deliberately knows only the ordered plugin names
+included in a plan and any failures already collected by its caller.
+"""
 from __future__ import annotations
 
 import shutil
+from collections.abc import Iterable
 from pathlib import Path
 
 from hydra.core.host import HOST
-from hydra.core.state import AppState
+from hydra.core.state_models import AppState
 
 
 SYSTEM_SERVICES = (
@@ -46,14 +52,19 @@ CRON_PATHS = (
 )
 
 
-def uninstall_plan(state: AppState, *, keep_data: bool = False) -> dict:
-    from hydra.plugins import registry
-
+def uninstall_plan(
+    state: AppState,
+    *,
+    keep_data: bool = False,
+    plugin_names: Iterable[str] = (),
+) -> dict:
+    """Build a serializable plan from application-supplied plugin inventory."""
+    del state  # Retained for compatibility with the released public signature.
     paths = [*PROGRAM_PATHS, *CRON_PATHS]
     if not keep_data:
         paths.extend(DATA_PATHS)
     return {
-        "plugins": [plugin.meta.name for plugin in reversed(registry.all_plugins())],
+        "plugins": list(plugin_names),
         "services": list(SYSTEM_SERVICES),
         "paths": [str(path) for path in paths],
         "keep_data": keep_data,
@@ -73,36 +84,29 @@ def uninstall_hydra(
     confirmed: bool,
     dry_run: bool = False,
     keep_data: bool = False,
+    plugin_names: Iterable[str] = (),
+    initial_failures: Iterable[str] = (),
 ) -> dict:
-    """Remove plugins, services, program files and optionally persisted data."""
-    plan = uninstall_plan(state, keep_data=keep_data)
+    """Remove HYDRA host resources after application-level cleanup.
+
+    ``plugin_names`` and ``initial_failures`` are dependency-neutral extension
+    points for outer application orchestration. Existing callers may continue
+    using the released arguments; management adapters should use their
+    configured application boundary so plugin cleanup is composed.
+    """
+    plan = uninstall_plan(
+        state,
+        keep_data=keep_data,
+        plugin_names=plugin_names,
+    )
     if dry_run:
         return {"ok": True, "dry_run": True, **plan}
     if not confirmed:
-        raise ValueError("uninstall requires --yes; use --dry-run to inspect the plan")
+        raise ValueError(
+            "uninstall requires --yes; use --dry-run to inspect the plan",
+        )
 
-    failures: list[str] = []
-    from hydra.plugins import registry
-
-    # Auxiliary Telemt rules live outside the transport plugin itself.
-    try:
-        from hydra.plugins.telemt.telemt_ios_fix import disable_ios_fix
-        disable_ios_fix()
-    except Exception as exc:
-        failures.append(f"telemt-ios: {exc}")
-    try:
-        from hydra.plugins.telemt.telemt_syn_limiter import disable_syn_limiter
-        disable_syn_limiter()
-    except Exception as exc:
-        failures.append(f"telemt-syn: {exc}")
-
-    for plugin in reversed(registry.all_plugins()):
-        try:
-            if not plugin.uninstall():
-                failures.append(f"plugin {plugin.meta.name}: returned false")
-        except Exception as exc:
-            failures.append(f"plugin {plugin.meta.name}: {exc}")
-
+    failures = list(initial_failures)
     for service in SYSTEM_SERVICES:
         for action in ("stop", "disable", "reset-failed"):
             HOST.run(["systemctl", action, service], capture_output=True)
@@ -115,6 +119,7 @@ def uninstall_hydra(
 
     try:
         from hydra.core.network_tuning import rollback_network_tuning
+
         rollback_network_tuning()
     except Exception as exc:
         failures.append(f"network tuning: {exc}")
@@ -132,3 +137,13 @@ def uninstall_hydra(
         "removed": plan,
         "failures": failures,
     }
+
+
+__all__ = [
+    "CRON_PATHS",
+    "DATA_PATHS",
+    "PROGRAM_PATHS",
+    "SYSTEM_SERVICES",
+    "uninstall_hydra",
+    "uninstall_plan",
+]

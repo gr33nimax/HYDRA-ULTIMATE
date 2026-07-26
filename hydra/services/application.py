@@ -1,17 +1,56 @@
-"""Composition root for HYDRA application use-cases.
+"""Stable application facade for HYDRA use-cases.
 
 Transport adapters (CLI, TUI, Telegram and future HTTP handlers) should depend
-on this facade instead of assembling orchestrator and registry dependencies on
-their own. The lower-level services remain independently injectable for tests.
+on this facade. Production assembly belongs to :mod:`hydra.bootstrap`.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable
 
-from hydra.core.state import AppState, User
+from hydra.core.runtime_state import PluginStatusReader
+from hydra.core.state_models import AppState, User
 from hydra.core.errors import ErrorCode, ServiceResult, failed_result
 from hydra.services.protocols import ProtocolService
+from hydra.services.admin import AdminOperations, UnavailableAdminOperations
+from hydra.services.backups import (
+    BackupOperations,
+    UnavailableBackupOperations,
+)
+from hydra.services.plugin_commands import (
+    PluginCommands,
+    UnavailablePluginCommands,
+)
+from hydra.services.plugin_actions import (
+    PluginActions,
+    UnavailablePluginActions,
+)
+from hydra.services.plugin_queries import (
+    PluginQueries,
+    UnavailablePluginQueries,
+)
+from hydra.services.configuration_plan import (
+    ConfigurationPlanning,
+    UnavailableConfigurationPlanning,
+)
+from hydra.services.logs import LogOperations, UnavailableLogOperations
+from hydra.services.diagnostics import (
+    DiagnosticOperations,
+    UnavailableDiagnosticOperations,
+)
+from hydra.services.system_monitoring import (
+    SystemMonitoring,
+    UnavailableSystemMonitoring,
+)
+from hydra.services.traffic import (
+    TrafficOperations,
+    UnavailableTrafficOperations,
+)
+from hydra.services.uninstall import (
+    UnavailableUninstallOperations,
+    UninstallOperations,
+)
 from hydra.services.users import UserService
 
 
@@ -21,13 +60,45 @@ class ApplicationService:
 
     users: UserService
     protocols: ProtocolService
-    apply_config: Any
-    last_apply_error: Any
+    apply_config: Callable[[AppState], bool]
+    last_apply_error: Callable[[], str]
+    plugin_statuses: PluginStatusReader
+    reconcile_runtime: Callable[[AppState], None] = lambda state: None
+    apply_journal: Callable[[], Path] = lambda: Path("/var/log/hydra/apply.jsonl")
+    admin: AdminOperations = field(default_factory=UnavailableAdminOperations)
+    backups: BackupOperations = field(
+        default_factory=UnavailableBackupOperations,
+    )
+    logs: LogOperations = field(default_factory=UnavailableLogOperations)
+    diagnostics: DiagnosticOperations = field(
+        default_factory=UnavailableDiagnosticOperations,
+    )
+    monitoring: SystemMonitoring = field(
+        default_factory=UnavailableSystemMonitoring,
+    )
+    plugin_commands: PluginCommands = field(
+        default_factory=UnavailablePluginCommands,
+    )
+    plugin_queries: PluginQueries = field(
+        default_factory=UnavailablePluginQueries,
+    )
+    plugin_actions: PluginActions = field(
+        default_factory=UnavailablePluginActions,
+    )
+    traffic: TrafficOperations = field(
+        default_factory=UnavailableTrafficOperations,
+    )
+    planner: ConfigurationPlanning = field(
+        default_factory=UnavailableConfigurationPlanning,
+    )
+    uninstaller: UninstallOperations = field(
+        default_factory=UnavailableUninstallOperations,
+    )
 
     def status(self, state: AppState) -> dict[str, Any]:
         from hydra.core.status import build_status
 
-        return build_status(state)
+        return build_status(state, self.plugin_statuses)
 
     def apply(self, state: AppState) -> bool:
         return bool(self.apply_config(state))
@@ -46,6 +117,76 @@ class ApplicationService:
 
     def apply_error(self) -> str:
         return str(self.last_apply_error() or "")
+
+    def reconcile_background_services(self, state: AppState) -> None:
+        self.reconcile_runtime(state)
+
+    def plugin_command(
+        self,
+        state: AppState,
+        plugin_name: str,
+        command: str,
+        **parameters: object,
+    ) -> bool:
+        return self.plugin_commands.execute(
+            state,
+            plugin_name,
+            command,
+            **parameters,
+        )
+
+    def plugin_query(
+        self,
+        plugin_name: str,
+        query: str,
+        **parameters: object,
+    ) -> Any:
+        return self.plugin_queries.execute(
+            plugin_name,
+            query,
+            **parameters,
+        )
+
+    def plugin_action(
+        self,
+        plugin_name: str,
+        action: str,
+        **parameters: object,
+    ) -> Any:
+        return self.plugin_actions.execute(
+            plugin_name,
+            action,
+            **parameters,
+        )
+
+    def journal_path(self) -> Path:
+        return Path(self.apply_journal())
+
+    def plan(self, state: AppState) -> dict[str, Any]:
+        return self.planner.build(state)
+
+    def uninstall_plan(
+        self,
+        state: AppState,
+        *,
+        keep_data: bool = False,
+    ) -> dict:
+        return self.uninstaller.plan(state, keep_data=keep_data)
+
+    def uninstall(
+        self,
+        state: AppState,
+        *,
+        confirmed: bool,
+        dry_run: bool = False,
+        keep_data: bool = False,
+    ) -> dict:
+        return self.uninstaller.uninstall(
+            state,
+            confirmed=confirmed,
+            dry_run=dry_run,
+            keep_data=keep_data,
+        )
 
     def add_user(self, state: AppState, user: User) -> User:
         return self.users.add(state, user)
@@ -78,16 +219,3 @@ class ApplicationService:
             return ServiceResult(True, value=email)
         except Exception as exc:
             return failed_result(exc, fallback=ErrorCode.PLUGIN)
-
-
-def production_application() -> ApplicationService:
-    """Build the default composition once at an adapter boundary."""
-    from hydra.core import orchestrator
-    from hydra.plugins import registry
-
-    return ApplicationService(
-        users=UserService(orchestrator),
-        protocols=ProtocolService(orchestrator, registry),
-        apply_config=orchestrator.apply_config,
-        last_apply_error=orchestrator.last_apply_error,
-    )

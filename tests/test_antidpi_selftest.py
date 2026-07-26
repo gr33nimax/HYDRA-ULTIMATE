@@ -33,6 +33,10 @@ def test_udp_diagnostics_executes_inside_its_function(tmp_path):
 def test_external_capture_writes_redacted_bundle_without_probes(tmp_path):
     archive = tmp_path / "capture.tar.gz"
     state = AppState()
+    snapshots = iter([
+        {"events": 1, "notification_stats": {"delivered": 3}},
+        {"events": 2, "notification_stats": {"delivered": 4}},
+    ])
     with patch("hydra.plugins.antidpi.selftest._is_linux_host", return_value=True), \
          patch("hydra.plugins.antidpi.selftest._offsets", return_value={}), \
          patch("hydra.plugins.antidpi.selftest._all_journal", return_value=[]), \
@@ -40,12 +44,13 @@ def test_external_capture_writes_redacted_bundle_without_probes(tmp_path):
          patch("hydra.plugins.antidpi.selftest._environment", return_value={}), \
          patch("hydra.plugins.antidpi.selftest._udp_diagnostics", return_value={"ok": True}), \
          patch("hydra.plugins.antidpi.selftest.time.sleep"), \
-         patch("hydra.plugins.antidpi.selftest.time.time", side_effect=[100.0, 101.0, 102.0]), \
-         patch("hydra.plugins.antidpi.plugin.AntiDPIPlugin._load_state", side_effect=[
-             {"events": 1, "notification_stats": {"delivered": 3}},
-             {"events": 2, "notification_stats": {"delivered": 4}},
-         ]):
-        result = selftest.capture_external_tests(state, str(archive), 10)
+         patch("hydra.plugins.antidpi.selftest.time.time", side_effect=[100.0, 101.0, 102.0]):
+        result = selftest.capture_external_tests(
+            state,
+            str(archive),
+            10,
+            runtime_snapshot=lambda: next(snapshots),
+        )
     assert result["ok"] is True
     with tarfile.open(archive) as bundle:
         report = json.loads(bundle.extractfile("hydra-antidpi-capture/report.json").read())
@@ -179,9 +184,19 @@ def test_invalid_native_client_config_changes_only_ephemeral_copy():
         }],
         "route": {"final": "hy"},
     }
-    plugin = type("Plugin", (), {"generate_client_config": lambda self, user, app: json.dumps(generated)})()
-    with patch("hydra.plugins.registry.get", return_value=plugin):
-        config, status = selftest._invalid_client_config(state, "hysteria2", 12345)
+    protocols = type(
+        "Protocols",
+        (),
+        {
+            "client_config": lambda self, app, name, user: json.dumps(generated),
+        },
+    )()
+    config, status = selftest._invalid_client_config(
+        state,
+        "hysteria2",
+        12345,
+        protocols=protocols,
+    )
     assert status == "ready"
     assert config["outbounds"][0]["server"] == "127.0.0.1"
     assert config["outbounds"][0]["password"] == "HYDRA-INVALID-PASSWORD"

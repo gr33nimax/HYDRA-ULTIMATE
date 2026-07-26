@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from hydra.core.state import AppState
+from hydra.core.state_models import AppState
 
 
 class ReconciliationOperations(Protocol):

@@ -253,53 +253,18 @@ def test_legacy_state_without_transport_defaults_to_tcp():
     assert [inbound["tag"] for inbound in frag.inbounds] == ["trusttunnel-in"]
 
 
-def test_set_transport_rolls_back_after_apply_failure():
+def test_set_transport_only_updates_desired_state():
     p = TrustTunnelPlugin()
     state = _state([_user("a@x.com")], transport="tcp")
 
-    with patch.object(p, "_resolve_certs", return_value=("cert.pem", "key.pem")), \
-         patch("hydra.core.orchestrator.apply_config", side_effect=[False, True]) as apply, \
-         patch("hydra.core.state.save_state"):
-        changed = p.set_transport(state, "quic")
+    with patch.object(p, "_resolve_certs", return_value=("cert.pem", "key.pem")):
+        changed = p.set_transport(
+            state,
+            "quic",
+        )
 
-    assert changed is False
-    assert state.protocols["trusttunnel"].config["transport"] == "tcp"
-    assert apply.call_count == 2
-
-
-def test_certbot_restores_services_and_firewall_on_exception():
-    p = TrustTunnelPlugin()
-    calls = []
-    rule_added = False
-
-    def fake_run(cmd, **kwargs):
-        nonlocal rule_added
-        calls.append(cmd)
-        result = MagicMock(returncode=0, stdout="")
-        if cmd[:3] == ["systemctl", "is-active", "caddy-l4"]:
-            result.stdout = "active\n"
-        if cmd and cmd[0] == "certbot":
-            raise OSError("certbot crashed")
-        if cmd and cmd[0] == "iptables" and "-C" in cmd:
-            result.returncode = 0 if rule_added else 1
-        if cmd and cmd[0] == "iptables" and "-I" in cmd:
-            rule_added = True
-        if cmd and cmd[0] == "iptables" and "-D" in cmd:
-            rule_added = False
-        return result
-
-    with patch("pathlib.Path.exists", return_value=False), \
-         patch("shutil.which", return_value="/usr/bin/certbot"), \
-         patch("hydra.utils.firewall.is_ufw_active", return_value=False), \
-         patch("subprocess.run", side_effect=fake_run):
-        assert p._obtain_cert_certbot("tt.example.com") is False
-
-    assert ["systemctl", "start", "caddy-l4"] in calls
-    assert any(
-        cmd[:5] == ["iptables", "-t", "filter", "-D", "INPUT"]
-        and "temp-certbot" in cmd
-        for cmd in calls
-    )
+    assert changed is True
+    assert state.protocols["trusttunnel"].config["transport"] == "quic"
 
 
 

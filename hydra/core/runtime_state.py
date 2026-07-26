@@ -2,9 +2,18 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Mapping
+from typing import Any, Mapping, Protocol
 
-from hydra.core.state import AppState
+from hydra.core.state_models import AppState
+
+
+class PluginStatusReader(Protocol):
+    """Read-only port supplying runtime plugin facts to core projections."""
+
+    def __call__(
+        self,
+        state: AppState | None = None,
+    ) -> Mapping[str, Mapping[str, Any]]: ...
 
 
 @dataclass(frozen=True)
@@ -44,10 +53,12 @@ class RuntimeSnapshot:
         return cls({name: RuntimePluginState.from_status(status) for name, status in statuses.items()})
 
     @classmethod
-    def collect(cls, state: AppState) -> "RuntimeSnapshot":
-        from hydra.plugins.registry import status_all
-
-        return cls.from_statuses(status_all(state))
+    def collect(
+        cls,
+        state: AppState,
+        status_reader: PluginStatusReader,
+    ) -> "RuntimeSnapshot":
+        return cls.from_statuses(status_reader(state))
 
     def as_dict(self) -> dict[str, dict[str, Any]]:
         return {name: status.as_dict() for name, status in self.plugins.items()}

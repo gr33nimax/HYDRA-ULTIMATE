@@ -209,7 +209,7 @@ def test_antidpi_bans_are_enforced_only_by_dynamic_firewall():
 
 def test_antidpi_routes_native_backends_through_exact_source_relay():
     state = _state(anytls_enabled=True)
-    state.security.antidpi_enabled = True
+    state.protocols["antidpi"] = PluginState(enabled=True)
     state.protocols["shadowtls"] = PluginState(
         enabled=True, config={"domain": "shadow.example"},
     )
@@ -318,7 +318,7 @@ def test_hysteria2_has_browser_https_decoy_route():
 
 def test_trusttunnel_auth_proxy_has_bounded_response_and_dedicated_log():
     state = _state(trusttunnel_enabled=True)
-    state.security.antidpi_enabled = True
+    state.protocols["antidpi"] = PluginState(enabled=True)
     backend = {
         "name": "trusttunnel", "domain": "trusttunnel.com", "port": 20445,
         "cert_file": "cert.pem", "key_file": "key.pem", "network_mode": "tcp",
@@ -446,7 +446,7 @@ def test_naive_quic_remains_caddy_udp_owner():
 
 def test_antidpi_naive_quic_uses_proxy_v2_udp_relay():
     state = _state(naive_enabled=True, naive_network="quic")
-    state.security.antidpi_enabled = True
+    state.protocols["antidpi"] = PluginState(enabled=True)
     backends = [{
         "name": "naive", "domain": "naive.com", "port": 10443,
         "cert_file": "", "key_file": "", "network_mode": "quic",
@@ -459,7 +459,7 @@ def test_antidpi_naive_quic_uses_proxy_v2_udp_relay():
 
 def test_antidpi_trusttunnel_quic_uses_proxy_v2_udp_relay():
     state = _state(trusttunnel_enabled=True, trusttunnel_transport="quic")
-    state.security.antidpi_enabled = True
+    state.protocols["antidpi"] = PluginState(enabled=True)
     backends = [{
         "name": "trusttunnel", "domain": "trusttunnel.com", "port": 20445,
         "cert_file": "cert.pem", "key_file": "key.pem", "network_mode": "quic",

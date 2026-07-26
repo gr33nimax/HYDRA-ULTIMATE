@@ -81,7 +81,8 @@ def decode_log_message(value: object) -> str:
     return _ANSI_ESCAPE.sub("", text)
 
 
-def _remote_ip(value: object) -> str | None:
+def remote_ip(value: object) -> str | None:
+    """Return the canonical IP from a raw address or host:port endpoint."""
     raw = str(value or "").strip()
     if raw.startswith("[") and "]" in raw:
         raw = raw[1:raw.index("]")]
@@ -94,6 +95,10 @@ def _remote_ip(value: object) -> str | None:
         return ipaddress.ip_address(raw).compressed
     except ValueError:
         return None
+
+
+# Compatibility name for older parser tests and internal imports.
+_remote_ip = remote_ip
 
 
 
@@ -176,7 +181,7 @@ def normalize_tls_auth_failure(record: dict) -> tuple[str, dict] | None:
     remote = str(record.get("remote", record.get("remote_ip", record.get("client_ip", ""))))
     if not remote:
         return None
-    ip = _remote_ip(remote)
+    ip = remote_ip(remote)
     if ip is None:
         return None
     text = " ".join(str(record.get(k, "")) for k in ("msg", "error", "err", "reason")).lower()

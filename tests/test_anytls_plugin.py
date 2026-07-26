@@ -107,19 +107,17 @@ def test_preset_management():
     assert p.get_current_preset(state) == "web_browsing"
     
     # Меняем пресет
-    with patch("hydra.core.orchestrator.apply_config", return_value=True), \
-         patch("hydra.core.state.save_state") as mock_save:
-        assert p.set_preset(state, "streaming") is True
-        assert p.get_current_preset(state) == "streaming"
-        
-        # Проверяем, что в configure() используется новый пресет
-        with patch("pathlib.Path.exists", return_value=True):
-            frag = p.configure(state)
-        from hydra.plugins.anytls.presets import get_preset
-        assert frag.inbounds[0]["padding_scheme"] == get_preset("streaming")["padding_scheme"]
-        
-        # Невалидный пресет
-        assert p.set_preset(state, "invalid_preset") is False
+    assert p.set_preset(state, "streaming") is True
+    assert p.get_current_preset(state) == "streaming"
+
+    # Проверяем, что в configure() используется новый пресет
+    with patch("pathlib.Path.exists", return_value=True):
+        frag = p.configure(state)
+    from hydra.plugins.anytls.presets import get_preset
+    assert frag.inbounds[0]["padding_scheme"] == get_preset("streaming")["padding_scheme"]
+
+    # Невалидный пресет
+    assert p.set_preset(state, "invalid_preset") is False
 
 
 
@@ -159,7 +157,7 @@ def test_configure_empty_no_domain():
     """Без домена — пустой ConfigFragment."""
     p = AnyTLSPlugin()
     state = _state([_user("a@x.com")])
-    state.protocols["anytls"].config["domain"] = ""
+    state.protocols["anytls"].config["domain"] = "conflict.com"
     
     frag = p.configure(state)
     assert frag.inbounds == []
@@ -258,10 +256,9 @@ def test_domain_conflict_check():
     state = _state(naive_enabled=True, naive_domain="conflict.com")
     
     # Пытаемся включить anytls с тем же доменом conflict.com
-    state.protocols["anytls"].config["domain"] = ""
+    state.protocols["anytls"].config["domain"] = "conflict.com"
     
-    with patch("hydra.ui.tui.prompt", return_value="conflict.com"), \
-         patch("hydra.core.sni_router.rebuild") as mock_rebuild, \
+    with patch("hydra.core.sni_router.rebuild") as mock_rebuild, \
          patch("hydra.utils.firewall.open_tcp") as mock_open:
         with pytest.raises(ValueError) as excinfo:
             p.on_enable(state)
@@ -292,8 +289,8 @@ def test_on_disable_defers_rebuild_to_orchestrator():
          patch("subprocess.run") as mock_run:
         p.on_disable(state)
         mock_rebuild.assert_not_called()
-        # Проверяем, что disabled выставлен в False
-        assert state.protocols["anytls"].enabled is False
+        # Lifecycle state belongs to PluginLifecycleOperations.
+        assert state.protocols["anytls"].enabled is True
 
 
 def test_status_delegates_to_singbox():
@@ -301,13 +298,11 @@ def test_status_delegates_to_singbox():
     p = AnyTLSPlugin()
     with patch("hydra.core.singbox.is_installed", return_value=True), \
          patch("hydra.core.singbox.is_running", return_value=True), \
-        patch("hydra.core.state.load_state") as mock_load, \
         patch.object(p, "_get_total_traffic", return_value=1024):
         state = _state()
         state.protocols["anytls"].installed = True
-        mock_load.return_value = state
-        
-        status = p.status()
+
+        status = p.status(state)
         assert status.installed is True
         assert status.running is True
         assert status.enabled is True
@@ -323,9 +318,8 @@ def test_status_does_not_treat_shared_singbox_as_anytls_install():
     state.protocols["anytls"].enabled = False
 
     with patch("hydra.core.singbox.is_installed", return_value=True), \
-         patch("hydra.core.singbox.is_running", return_value=True), \
-         patch("hydra.core.state.load_state", return_value=state):
-        status = p.status()
+         patch("hydra.core.singbox.is_running", return_value=True):
+        status = p.status(state)
 
     assert status.installed is False
     assert status.enabled is False

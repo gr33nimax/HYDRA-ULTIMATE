@@ -62,10 +62,9 @@ def test_ban_ip_rejects_network_containing_vps_address():
     with patch.object(p, "_ensure_sets", return_value=True), \
          patch.object(p, "_ensure_iptables_rules", return_value=True), \
          patch.object(p, "_resolve_to_cidrs", return_value=("203.0.113.0/24", "cidr", ["203.0.113.0/24"])), \
-         patch("hydra.plugins.ipban.plugin.load_state", return_value=state), \
          patch("hydra.plugins.ipban.plugin.host_ip_addresses", return_value=("203.0.113.10",)), \
          patch("hydra.plugins.ipban.plugin._run") as run:
-        assert p.ban_ip("203.0.113.0/24") is False
+        assert p.ban_ip("203.0.113.0/24", state=state) is False
     run.assert_not_called()
 
 
@@ -110,6 +109,23 @@ def test_status():
 def test_traffic_returns_empty():
     p = IPBanPlugin()
     assert p.traffic(_make_state()) == {}
+
+
+def test_apply_reconciles_exact_ipsets_before_restoring_desired_entries():
+    plugin = IPBanPlugin()
+    with patch.object(plugin, "_ensure_sets", return_value=True), \
+         patch.object(plugin, "_ensure_iptables_rules", return_value=True), \
+         patch.object(plugin, "_restore_from_state", return_value=True) as restore, \
+         patch("hydra.plugins.ipban.plugin._run", return_value=MagicMock(returncode=0)) as run:
+        assert plugin.apply(_make_state()) is True
+
+    assert ["ipset", "flush", "hydra_manual_ban"] in [
+        call.args[0] for call in run.call_args_list
+    ]
+    assert ["ipset", "flush", "hydra_manual_ban6"] in [
+        call.args[0] for call in run.call_args_list
+    ]
+    restore.assert_called_once_with()
 
 
 def test_iptables_rules_are_exact_ordered_and_family_specific():

@@ -48,15 +48,19 @@ def test_menu_footer_is_stable_and_does_not_share_mutable_state():
 
 
 def test_render_protocol_status_falls_back_to_persisted_state_on_probe_error(monkeypatch):
-    plugin = SimpleNamespace(
-        meta=SimpleNamespace(name="vless"),
-        status=lambda: (_ for _ in ()).throw(RuntimeError("probe failed")),
+    plugin = SimpleNamespace(meta=SimpleNamespace(name="vless"))
+    app = SimpleNamespace(
+        protocols=SimpleNamespace(
+            status=lambda _name: (_ for _ in ()).throw(
+                RuntimeError("probe failed"),
+            ),
+        ),
     )
     persisted = SimpleNamespace(installed=True, enabled=True, running=True, port=443)
     captured = {}
     monkeypatch.setattr(protocol_menu, "protocol_status_panel", lambda *args, **kwargs: captured.update(kwargs))
 
-    protocol_menu.render_protocol_status(plugin, persisted)
+    protocol_menu.render_protocol_status(plugin, persisted, app)
 
     assert captured == {
         "installed": True,
@@ -64,4 +68,5 @@ def test_render_protocol_status_falls_back_to_persisted_state_on_probe_error(mon
         "running": False,
         "port": 443,
         "error": "probe failed",
+        "display_name": "",
     }

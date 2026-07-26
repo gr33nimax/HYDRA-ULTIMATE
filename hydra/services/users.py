@@ -8,7 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from hydra.core.state import AppState, User, find_user
+from hydra.core.state_models import AppState, User, find_user
+from hydra.services.user_access import access_status, entitlement_status
 
 
 class UserOperations(Protocol):
@@ -33,6 +34,12 @@ class UserService:
 
     def get(self, state: AppState, email: str) -> User | None:
         return find_user(state, email)
+
+    def access_status(self, user: User) -> tuple[bool, str]:
+        return access_status(user)
+
+    def entitlement_status(self, user: User) -> tuple[bool, str]:
+        return entitlement_status(user)
 
     def add(self, state: AppState, user: User) -> User:
         self.operations.add_user(state, user)

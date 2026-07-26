@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from hydra.services.application import ApplicationService
 from hydra.ui.protocol_ui import protocol_label, protocol_status_panel, status_badge
 from hydra.ui.tui import BOLD, DIM, GREEN, NC, RED, YELLOW
 
@@ -21,7 +22,8 @@ def transport_summary_lines(plugins: Iterable[Any], statuses: Mapping[str, Mappi
         status = statuses.get(plugin.meta.name, {})
         port = str(status["port"]) if status.get("port") else "—"
         lines.append(
-            f"  {status_badge(status)}  {protocol_label(plugin.meta.name):<16} "
+            f"  {status_badge(status)}  "
+            f"{protocol_label(plugin.meta.name, getattr(plugin.meta, 'display_name', '')):<16} "
             f"{DIM}порт {port}{NC}"
         )
     return lines
@@ -34,7 +36,8 @@ def transport_options(plugins: Iterable[Any], statuses: Mapping[str, Mapping[str
         status = statuses.get(plugin.meta.name, {})
         options.append((
             str(index),
-            f"{status_badge(status)}  {protocol_label(plugin.meta.name)}",
+            f"{status_badge(status)}  "
+            f"{protocol_label(plugin.meta.name, getattr(plugin.meta, 'display_name', ''))}",
             status.get("error") or plugin.meta.description,
         ))
     return options
@@ -75,14 +78,18 @@ def menu_footer() -> list[tuple[str, str, str]]:
     return [("-", "", ""), ("0", "↩ Назад", "")]
 
 
-def render_protocol_status(plugin: Any, persisted: Any) -> None:
+def render_protocol_status(
+    plugin: Any,
+    persisted: Any,
+    app: ApplicationService,
+) -> None:
     """Render a plugin status with a safe runtime-to-persisted fallback.
 
     A broken probe must not take down the menu: the persisted state remains
     useful context while the error is shown in the same status card.
     """
     try:
-        status = plugin.status()
+        status = app.protocols.status(plugin.meta.name)
         protocol_status_panel(
             plugin.meta.name,
             installed=status.installed,
@@ -90,6 +97,7 @@ def render_protocol_status(plugin: Any, persisted: Any) -> None:
             running=status.running,
             port=status.port,
             details=(status.info or {}).items(),
+            display_name=getattr(plugin.meta, "display_name", ""),
         )
     except Exception as exc:
         protocol_status_panel(
@@ -99,4 +107,5 @@ def render_protocol_status(plugin: Any, persisted: Any) -> None:
             running=False,
             port=persisted.port,
             error=str(exc) or exc.__class__.__name__,
+            display_name=getattr(plugin.meta, "display_name", ""),
         )

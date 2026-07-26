@@ -8,7 +8,7 @@ from hydra.utils.commands import DEFAULT_TIMEOUT
 from hydra.core.host import HOST
 
 if TYPE_CHECKING:
-    from hydra.plugins.base import ConfigFragment
+    from hydra.contracts import ConfigFragment
 
 NFT_TABLE = "hydra-tproxy"
 

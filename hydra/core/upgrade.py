@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from hydra import __version__
-from hydra.core.state import AppState, SCHEMA_VERSION, validate_state
+from hydra.core.state_models import AppState, SCHEMA_VERSION, validate_state
 from hydra.core.host import HOST
 from hydra.utils.commands import CommandError
 

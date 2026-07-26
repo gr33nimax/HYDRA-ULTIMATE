@@ -50,6 +50,25 @@ PANEL_W = min(TERM_WIDTH - 4, 78)
 INDENT = "  "
 
 
+def enter_pressed() -> bool:
+    """Poll Enter without blocking; terminal access is owned by this adapter."""
+
+    if os.name == "nt":
+        import msvcrt
+
+        if not msvcrt.kbhit():
+            return False
+        return msvcrt.getch() in (b"\r", b"\n")
+
+    import select
+
+    readable, _, _ = select.select([sys.stdin], [], [], 0.0)
+    if sys.stdin not in readable:
+        return False
+    sys.stdin.readline()
+    return True
+
+
 def _strip(s: str) -> str:
     return re.sub(r"\033\[[0-9;]*m", "", s)
 
@@ -155,7 +174,7 @@ BANNER = rf"""
 # ═════════════════════════════════════════════════════════════════════════════
 
 def clear():
-    os.system("clear" if os.name != "nt" else "cls")
+    print("\033[2J\033[H", end="", flush=True)
 
 
 def divider(char: str = "═", width: Optional[int] = None):

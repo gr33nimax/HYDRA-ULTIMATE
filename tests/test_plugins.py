@@ -29,7 +29,7 @@ class MockPlugin(BasePlugin):
             inbounds=[{"type": "http", "tag": "mock-in", "listen": "127.0.0.1", "listen_port": 9999}],
         )
 
-    def status(self) -> PluginStatus:
+    def status(self, state=None) -> PluginStatus:
         return PluginStatus(
             installed=True,
             enabled=True,
@@ -116,6 +116,7 @@ def test_status_all_separates_desired_state_from_runtime():
     assert result["desired_enabled"] is True
     assert result["actual_state"] == "stopped"
     assert result["drift"] == "stopped"
+    plugin.status.assert_called_once_with(state)
 
 
 def test_status_all_isolates_broken_plugin():

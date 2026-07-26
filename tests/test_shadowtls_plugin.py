@@ -10,6 +10,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.plugins.shadowtls.plugin import ShadowTLSPlugin, SHADOWTLS_SNI_PRESETS
+from hydra.ui.protocol_setup import choose_shadowtls_sni
 from hydra.plugins.base import PluginCategory, ConfigFragment
 from hydra.core.state import AppState, User, PluginState
 
@@ -49,17 +50,18 @@ def test_sni_presets_are_unique_hostnames():
 
 
 def test_choose_handshake_sni_supports_preset_and_custom_domain():
-    p = ShadowTLSPlugin()
-
-    with patch("hydra.ui.tui.menu", return_value="1"), \
-         patch("hydra.ui.tui.prompt") as mock_prompt:
-        assert p.choose_handshake_sni() == SHADOWTLS_SNI_PRESETS[0][0]
-        mock_prompt.assert_not_called()
+    mock_prompt = MagicMock()
+    assert choose_shadowtls_sni(
+        choose=lambda options, title: "1",
+        ask=mock_prompt,
+    ) == SHADOWTLS_SNI_PRESETS[0][0]
+    mock_prompt.assert_not_called()
 
     custom_key = str(len(SHADOWTLS_SNI_PRESETS) + 1)
-    with patch("hydra.ui.tui.menu", return_value=custom_key), \
-         patch("hydra.ui.tui.prompt", return_value=" custom.example.com "):
-        assert p.choose_handshake_sni() == "custom.example.com"
+    assert choose_shadowtls_sni(
+        choose=lambda options, title: custom_key,
+        ask=lambda message: " custom.example.com ",
+    ) == "custom.example.com"
 
 
 def test_configure_returns_inbound():
@@ -218,12 +220,9 @@ def test_domain_conflict_check():
     """A local handshake SNI is rejected before firewall changes."""
     p = ShadowTLSPlugin()
     state = _state(naive_enabled=False, naive_domain="conflict.com")
-    state.protocols["shadowtls"].config["handshake_sni"] = ""
+    state.protocols["shadowtls"].config["handshake_sni"] = "conflict.com"
 
-    custom_key = str(len(SHADOWTLS_SNI_PRESETS) + 1)
-    with patch("hydra.ui.tui.menu", return_value=custom_key), \
-         patch("hydra.ui.tui.prompt", return_value="conflict.com"), \
-         patch("hydra.utils.firewall.open_tcp") as mock_open, \
+    with patch("hydra.utils.firewall.open_tcp") as mock_open, \
          patch("subprocess.run") as mock_run:
         with pytest.raises(ValueError) as excinfo:
             p.on_enable(state)
@@ -231,34 +230,25 @@ def test_domain_conflict_check():
         mock_open.assert_not_called()
 
 
-def test_set_handshake_sni_saves_disabled_plugin_without_runtime_apply():
+def test_set_handshake_sni_only_updates_desired_state():
     p = ShadowTLSPlugin()
     state = _state(handshake_sni="old.example.com")
     state.protocols["shadowtls"].enabled = False
 
-    with patch.object(p, "_probe_handshake_sni") as mock_probe, \
-         patch("hydra.core.state.save_state") as mock_save, \
-         patch("hydra.core.orchestrator.apply_config") as mock_apply:
+    with patch.object(p, "_probe_handshake_sni") as mock_probe:
         assert p.set_handshake_sni(state, "YA.RU.") is True
 
     assert state.protocols["shadowtls"].config["handshake_sni"] == "ya.ru"
-    mock_save.assert_called_once_with(state)
-    mock_apply.assert_not_called()
     mock_probe.assert_called_once_with("ya.ru")
 
 
-def test_set_handshake_sni_rolls_back_enabled_plugin_on_apply_failure():
+def test_invalid_handshake_sni_does_not_mutate_state():
     p = ShadowTLSPlugin()
     state = _state(handshake_sni="old.example.com")
 
-    with patch.object(p, "_probe_handshake_sni"), \
-         patch("hydra.core.orchestrator.apply_config", side_effect=[False, True]) as mock_apply, \
-         patch("hydra.core.state.save_state") as mock_save:
-        assert p.set_handshake_sni(state, "ya.ru") is False
-
+    with pytest.raises(ValueError):
+        p.set_handshake_sni(state, state.network.domain)
     assert state.protocols["shadowtls"].config["handshake_sni"] == "old.example.com"
-    assert mock_apply.call_count == 2
-    mock_save.assert_not_called()
 
 
 def test_probe_handshake_sni_rejects_non_tls13_target():
@@ -317,7 +307,7 @@ def test_on_disable_defers_rebuild():
 
     with patch("subprocess.run") as mock_run:
         p.on_disable(state)
-        assert state.protocols["shadowtls"].enabled is False
+        assert state.protocols["shadowtls"].enabled is True
 
 
 def test_status_delegates_to_singbox():
@@ -325,12 +315,10 @@ def test_status_delegates_to_singbox():
     p = ShadowTLSPlugin()
     with patch("hydra.core.singbox.is_installed", return_value=True), \
          patch("hydra.core.singbox.is_running", return_value=True), \
-         patch("hydra.core.state.load_state") as mock_load, \
          patch.object(p, "_get_total_traffic", return_value=1024):
         state = _state(naive_enabled=True)
-        mock_load.return_value = state
 
-        status = p.status()
+        status = p.status(state)
         assert status.installed is True
         assert status.running is True
         assert status.enabled is True

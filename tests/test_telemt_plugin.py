@@ -1,7 +1,9 @@
 """tests/test_telemt_plugin.py — Тесты для Telemt MTProxy plugin v2."""
+import copy
 import json
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from types import SimpleNamespace
+from unittest.mock import Mock, patch, MagicMock
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -10,12 +12,14 @@ from hydra.plugins.base import PluginCategory, ConfigFragment
 from hydra.core.state import AppState, User, PluginState
 
 
-def test_manager_toggle_uses_transactional_orchestrator():
+def test_manager_toggle_uses_application_boundary():
     from hydra.plugins.telemt.manager import _set_telemt_enabled
 
     state = AppState(protocols={"telemt": PluginState(enabled=True, installed=True)})
-    with patch("hydra.plugins.telemt.manager.orchestrator.disable", return_value=True) as disable:
-        assert _set_telemt_enabled(state, False) is True
+    disable = Mock(return_value=True)
+    app = SimpleNamespace(protocols=SimpleNamespace(disable=disable))
+
+    assert _set_telemt_enabled(state, False, app) is True
     disable.assert_called_once_with(state, "telemt")
 
 
@@ -65,6 +69,48 @@ def test_plugin_meta():
     assert p.meta.name == "telemt"
     assert p.meta.category == PluginCategory.TRANSPORT
     assert p.meta.needs_domain is False
+    assert p.meta.capabilities.actions == (
+        "apply_optimizations",
+        "remove_optimizations",
+        "update_binary",
+    )
+
+
+def test_optimizations_are_plugin_owned_actions(tmp_path):
+    sysctl_file = tmp_path / "telemt.conf"
+    limits_file = tmp_path / "telemt-limits.conf"
+    cron_file = tmp_path / "telemt-stats"
+    for path in (sysctl_file, limits_file, cron_file):
+        path.write_text("legacy", encoding="utf-8")
+
+    host = MagicMock()
+    host.run.return_value = MagicMock(returncode=0)
+    with (
+        patch("hydra.plugins.telemt.plugin.HOST", host),
+        patch(
+            "hydra.plugins.telemt.plugin.PERFORMANCE_SYSCTL_FILE",
+            sysctl_file,
+        ),
+        patch(
+            "hydra.plugins.telemt.plugin.PERFORMANCE_LIMITS_FILE",
+            limits_file,
+        ),
+        patch("hydra.plugins.telemt.plugin.STATS_CRON_FILE", cron_file),
+    ):
+        assert TelemtPlugin.apply_optimizations() is True
+        assert host.atomic_write.call_count == 2
+        assert TelemtPlugin.remove_optimizations() is True
+
+    assert not sysctl_file.exists()
+    assert not limits_file.exists()
+    assert not cron_file.exists()
+
+
+def test_update_binary_exposes_public_runtime_action():
+    plugin = TelemtPlugin()
+    with patch.object(plugin, "_download_binary", return_value=True) as download:
+        assert plugin.update_binary() is True
+    download.assert_called_once_with()
 
 
 def test_configure_returns_fragment_with_port():
@@ -85,6 +131,23 @@ def test_configure_returns_fragment_even_without_users():
     state = _make_state([])
     frag = p.configure(state)
     assert frag.nft_tproxy_ports == [8443]
+
+
+def test_configure_and_client_link_do_not_create_or_mutate_protocol_state():
+    plugin = TelemtPlugin()
+    state = AppState()
+    state.network.server_ip = "1.2.3.4"
+    user = _make_user("a@x.com", uuid="uuid-a")
+    before = copy.deepcopy(state)
+
+    plugin.configure(state)
+    with patch(
+        "hydra.plugins.telemt.telemt_ios_fix.status",
+        return_value={"enabled": False},
+    ):
+        plugin.client_link(user, state)
+
+    assert state == before
 
 
 def test_configure_skips_blocked_users():

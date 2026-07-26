@@ -5,17 +5,33 @@ import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
+from typing import Protocol
 
 from hydra.core.host import HOST
-from hydra.core.state import AppState, STATE_DIR, validate_state
+from hydra.core.state import STATE_DIR
+from hydra.core.state_models import AppState, validate_state
 from hydra.core.runtime_state import RuntimeSnapshot
+
+
+class _ReconciliationPlanner(Protocol):
+    def plan(self, state: AppState) -> list[object]: ...
+
+
+class DoctorProtocolOperations(Protocol):
+    """Read-only protocol view supplied by an application adapter."""
+
+    def statuses(self, state: AppState | None = None) -> dict[str, dict]: ...
+    def reconciliation(self) -> _ReconciliationPlanner: ...
 
 
 def _check(name: str, ok: bool, detail: str, *, required: bool = True) -> dict:
     return {"name": name, "ok": bool(ok), "required": required, "detail": detail}
 
 
-def run_doctor(state: AppState) -> dict:
+def run_doctor(
+    state: AppState,
+    protocols: DoctorProtocolOperations | None = None,
+) -> dict:
     """Return JSON-safe diagnostics without changing host state."""
     checks: list[dict] = []
     try:
@@ -60,14 +76,18 @@ def run_doctor(state: AppState) -> dict:
     required_failures = [item["name"] for item in checks if item["required"] and not item["ok"]]
     warnings = [item["name"] for item in checks if not item["required"] and not item["ok"]]
     reconciliation: dict = {"planned": [], "drift": {}}
+    if protocols is None:
+        return {
+            "ok": not required_failures,
+            "required_failures": required_failures,
+            "warnings": warnings,
+            "checks": checks,
+            "reconciliation": reconciliation,
+        }
     try:
-        from hydra.core import orchestrator
-        from hydra.plugins import registry
-        from hydra.services.protocols import ProtocolService
-
-        statuses = registry.status_all(state)
+        statuses = protocols.statuses(state)
         runtime = RuntimeSnapshot.from_statuses(statuses)
-        service = ProtocolService(orchestrator, registry).reconciliation()
+        service = protocols.reconciliation()
         actions = service.plan(state)
         reconciliation = {
             "planned": [asdict(action) for action in actions],

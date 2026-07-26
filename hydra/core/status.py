@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from hydra.core.state import AppState, User
+from hydra.core.runtime_state import PluginStatusReader, RuntimeSnapshot
+from hydra.core.state_models import AppState, User
 
 
 def public_user(user: User) -> dict:
@@ -20,19 +21,24 @@ def public_user(user: User) -> dict:
     return payload
 
 
-def build_status(state: AppState) -> dict:
+def build_status(
+    state: AppState,
+    status_reader: PluginStatusReader,
+) -> dict:
     """Build a JSON-safe status snapshot with effective runtime flags."""
-    from hydra.plugins.registry import status_all
-
-    plugins = status_all(state)
-    from hydra.core.runtime_state import RuntimeSnapshot
+    plugins = status_reader(state)
     runtime = RuntimeSnapshot.from_statuses(plugins)
     network = asdict(state.network)
+    network["clash_api_auth_configured"] = bool(
+        network.pop("clash_api_secret", ""),
+    )
     dnscrypt = plugins.get("dnscrypt", {})
-    # Older state files may have a stale network flag while the dedicated
-    # dnscrypt-proxy service is enabled and healthy. Keep both values visible,
-    # but expose the effective state under the established field name.
-    network["configured_dnscrypt_enabled"] = network["dnscrypt_enabled"]
+    configured_dnscrypt = state.protocols.get("dnscrypt")
+    # Keep the established status fields while deriving desired and effective
+    # values from their respective single sources of truth.
+    network["configured_dnscrypt_enabled"] = bool(
+        configured_dnscrypt and configured_dnscrypt.enabled
+    )
     network["dnscrypt_enabled"] = bool(
         dnscrypt.get("enabled") or dnscrypt.get("running")
     )

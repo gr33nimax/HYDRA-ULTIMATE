@@ -4,17 +4,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-
-class HydraError(RuntimeError):
-    """Base class for expected HYDRA operational failures."""
+from hydra.contracts.errors import ConfigurationError, HydraError
 
 
 class HostOperationError(HydraError):
     """A bounded command or privileged host operation failed."""
-
-
-class ConfigurationError(HydraError):
-    """Configuration could not be generated, validated or applied."""
 
 
 class PluginError(ConfigurationError):
@@ -23,6 +17,10 @@ class PluginError(ConfigurationError):
 
 class RestoreError(HydraError):
     """A backup could not be validated or restored safely."""
+
+
+class StateConflictError(HydraError):
+    """A stale desired-state write was rejected."""
 
 
 class ErrorCode(str, Enum):
@@ -83,6 +81,8 @@ def normalize_error(exc: BaseException, *, fallback: ErrorCode = ErrorCode.INTER
         code = ErrorCode.PLUGIN
     elif isinstance(exc, RestoreError):
         code = ErrorCode.RESTORE
+    elif isinstance(exc, StateConflictError):
+        code = ErrorCode.CONFLICT
     elif isinstance(exc, ConfigurationError):
         code = ErrorCode.CONFIGURATION
     elif isinstance(exc, (ValueError, TypeError)):
@@ -92,7 +92,11 @@ def normalize_error(exc: BaseException, *, fallback: ErrorCode = ErrorCode.INTER
     return ApplicationError(
         code=code,
         message=str(exc) or exc.__class__.__name__,
-        retryable=code in {ErrorCode.HOST_OPERATION, ErrorCode.OPERATION_FAILED},
+        retryable=code in {
+            ErrorCode.CONFLICT,
+            ErrorCode.HOST_OPERATION,
+            ErrorCode.OPERATION_FAILED,
+        },
         exception_type=exc.__class__.__name__,
     )
 
