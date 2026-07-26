@@ -11,7 +11,7 @@
 [![Python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-green.svg?style=flat-square)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg?style=flat-square)](https://ubuntu.com/)
-[![CI](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml)
+[![CI](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml)
 
 [Протоколы](#протоколы-и-модули) ·
 [Установка](#быстрый-старт) ·
@@ -62,7 +62,7 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 | **Python** | 3.10 – 3.13 |
 
 > [!IMPORTANT]
-> `2.5.4` — текущая версия ветки `dev`. Проект в активном бета-тестировании.
+> `2.5.4` — текущая версия ветки `main`. Проект в активном бета-тестировании.
 > Для рабочей эксплуатации используйте чистый Ubuntu 20.04+ или Debian 11+ и
 > обязательно настройте резервное копирование.
 
@@ -187,15 +187,15 @@ read-only preflight, два уровня backup, атомарное перекл
 ### Установка
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash
 ```
 
 Установщик подготавливает зависимости, Sing-Box Extended, изолированное
 Python-окружение и команду `hydra`. Caddy L4 и конкретные протоколы активируются
 только при включении соответствующих модулей.
 
-Установщик из ветки `dev` по умолчанию ставит `dev`; updater из `dev` также
-обновляет до `dev`. Явно выбрать другую ветку можно переменной `HYDRA_REF`.
+Установщик из ветки `main` по умолчанию ставит `main`; updater из `main` также
+обновляет до `main`. Явно выбрать другую ветку можно переменной `HYDRA_REF`.
 Запуск из исходников описан в [docs/UPGRADE.md](docs/UPGRADE.md).
 
 ### Первые шаги
@@ -218,7 +218,7 @@ hydra check                # валидация и предпросмотр не
 > вручную через `git pull`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/updater.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/updater.sh | sudo bash
 ```
 
 Короткий `updater.sh` полностью скачивает транзакционный `upgrade.sh` во

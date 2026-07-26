@@ -34,7 +34,7 @@
 ## Чистая установка
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash
 ```
 
 Установщик проверяет права и систему, устанавливает зависимости и Sing-Box
@@ -42,7 +42,7 @@ Extended, разрешает точный commit выбранной ветки, 
 `/opt/hydra`, создаёт изолированное Python-окружение и регистрирует команду
 `hydra`. Журнал — `/var/log/hydra/install.log`.
 
-Dev-установщик по умолчанию устанавливает ветку `dev`, как и dev-updater.
+Main-установщик по умолчанию устанавливает ветку `main`, как и main-updater.
 Переменная `HYDRA_REF` нужна только для явного выбора другой ветки.
 
 Caddy L4 и конкретные протоколы активируются только при включении
@@ -54,7 +54,7 @@ Caddy L4 и конкретные протоколы активируются т�
 Режим для разработки и отладки:
 
 ```bash
-git clone -b dev https://github.com/gr33nimax/HYDRA-ULTIMATE /opt/hydra
+git clone -b main https://github.com/gr33nimax/HYDRA-ULTIMATE /opt/hydra
 cd /opt/hydra
 sudo apt-get install -y python3-venv
 sudo python3 -m venv .venv
@@ -156,7 +156,7 @@ sudo git -C /opt/hydra status --short
 ### Запуск
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/updater.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/updater.sh | sudo bash
 ```
 
 Публичный launcher проверяет права, имя ветки и наличие нужных команд, полностью
@@ -166,7 +166,7 @@ curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/update
 
 | Переменная | По умолчанию | Назначение |
 | :--- | :--- | :--- |
-| `HYDRA_REF` | `dev` | Ветка, чей точный SHA нужно установить |
+| `HYDRA_REF` | `main` | Ветка, чей точный SHA нужно установить |
 | `HYDRA_REPO_URL` | официальный репозиторий | Git remote |
 | `HYDRA_INSTALL_DIR` | `/opt/hydra` | Стабильная точка входа установки |
 | `HYDRA_RELEASES_DIR` | `/opt/hydra-releases` | Каталог изолированных release |

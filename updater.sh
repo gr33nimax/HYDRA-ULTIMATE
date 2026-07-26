@@ -2,13 +2,13 @@
 # One-command launcher for the transactional HYDRA updater.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/updater.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/updater.sh | sudo bash
 
 set -Eeuo pipefail
 umask 077
 
 RAW_BASE="https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE"
-HYDRA_REF="${HYDRA_REF:-dev}"
+HYDRA_REF="${HYDRA_REF:-main}"
 UPGRADE_SCRIPT=""
 
 title() {

@@ -13,7 +13,7 @@ BACKUP_ROOT="${HYDRA_UPGRADE_BACKUP_DIR:-/var/backups/hydra/upgrades}"
 LOCK_FILE="${HYDRA_UPGRADE_LOCK_FILE:-/run/lock/hydra-upgrade.lock}"
 WRAPPER="/usr/local/bin/hydra"
 REPO_URL="${HYDRA_REPO_URL:-https://github.com/gr33nimax/HYDRA-ULTIMATE}"
-HYDRA_REF="${HYDRA_REF:-dev}"
+HYDRA_REF="${HYDRA_REF:-main}"
 
 info() { printf '  -> %s\n' "$*"; }
 ok() { printf '  OK  %s\n' "$*"; }

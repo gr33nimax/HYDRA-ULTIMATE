@@ -12,9 +12,9 @@ def _source() -> str:
     return SCRIPT.read_text(encoding="utf-8")
 
 
-def test_existing_install_updater_is_transactional_and_dev_by_default():
+def test_existing_install_updater_is_transactional_and_main_by_default():
     source = _source()
-    assert 'HYDRA_REF="${HYDRA_REF:-dev}"' in source
+    assert 'HYDRA_REF="${HYDRA_REF:-main}"' in source
     assert "return 1; }" in source
     assert "exit 1; }" not in source
     assert "git ls-remote --exit-code" in source
@@ -183,7 +183,7 @@ def test_documented_updater_is_fully_downloaded_before_sudo_execution():
         documentation = path.read_text(encoding="utf-8")
         assert (
             "curl -fsSL https://raw.githubusercontent.com/gr33nimax/"
-            "HYDRA-ULTIMATE/dev/updater.sh | sudo bash"
+            "HYDRA-ULTIMATE/main/updater.sh | sudo bash"
         ) in documentation
         assert "upgrade_script=$(mktemp)" not in documentation
         assert '-o "$upgrade_script"' not in documentation
@@ -192,7 +192,7 @@ def test_documented_updater_is_fully_downloaded_before_sudo_execution():
 def test_one_command_launcher_downloads_engine_completely_before_execution():
     source = LAUNCHER.read_text(encoding="utf-8")
 
-    assert 'HYDRA_REF="${HYDRA_REF:-dev}"' in source
+    assert 'HYDRA_REF="${HYDRA_REF:-main}"' in source
     assert 'UPGRADE_SCRIPT=$(mktemp /tmp/hydra-updater.XXXXXX)' in source
     assert '"${RAW_BASE}/${HYDRA_REF}/upgrade.sh"' in source
     assert '-o "$UPGRADE_SCRIPT"' in source
@@ -217,11 +217,11 @@ def test_updater_has_numbered_progress_and_clear_terminal_states():
     assert 'result_error "Обновление не завершено' in engine
 
 
-def test_all_dev_install_and_update_entrypoints_default_to_dev():
+def test_all_main_install_and_update_entrypoints_default_to_main():
     bootstrap = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
     launcher = LAUNCHER.read_text(encoding="utf-8")
     engine = _source()
 
-    assert 'DEFAULT_BRANCH="dev"' in bootstrap
-    assert 'HYDRA_REF="${HYDRA_REF:-dev}"' in launcher
-    assert 'HYDRA_REF="${HYDRA_REF:-dev}"' in engine
+    assert 'DEFAULT_BRANCH="main"' in bootstrap
+    assert 'HYDRA_REF="${HYDRA_REF:-main}"' in launcher
+    assert 'HYDRA_REF="${HYDRA_REF:-main}"' in engine

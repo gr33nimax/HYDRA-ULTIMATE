@@ -292,7 +292,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 
 | Переменная | По умолчанию | Назначение |
 | :--- | :--- | :--- |
-| `HYDRA_REF` | `dev` | Ветка, чей точный SHA нужно установить |
+| `HYDRA_REF` | `main` | Ветка, чей точный SHA нужно установить |
 | `HYDRA_REPO_URL` | официальный репозиторий | Git remote |
 | `HYDRA_INSTALL_DIR` | `/opt/hydra` | Стабильная точка входа установки |
 | `HYDRA_RELEASES_DIR` | `/opt/hydra-releases` | Каталог изолированных release |
@@ -303,7 +303,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 
 | Переменная | По умолчанию | Назначение |
 | :--- | :--- | :--- |
-| `HYDRA_REF` | `dev` | Устанавливаемая ветка; имя проверяется `git check-ref-format` |
+| `HYDRA_REF` | `main` | Устанавливаемая ветка; имя проверяется `git check-ref-format` |
 
 Остальные `HYDRA_*` — внутренние значения, которые скрипты устанавливают сами:
 данные для откатa (`HYDRA_PREVIOUS_REV`, `HYDRA_BACKUP_DIR` и подобные) и
