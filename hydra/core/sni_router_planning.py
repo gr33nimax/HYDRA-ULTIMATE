@@ -5,12 +5,12 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from hydra.core.decoy_sites.registry import is_supported
 from hydra.core.state_models import AppState
 
 
 _DYNAMIC_ROUTE_KEY = "_tls_http_decoy_route"
 _DYNAMIC_ROUTE_KIND = "http_path_proxy"
-_DECOY_THEMES = frozenset({"landing", "blog", "docs", "media", "status"})
 
 
 @dataclass(frozen=True)
@@ -156,6 +156,9 @@ def collect_backends(
                     else ""
                 )
             ),
+            "decoy_theme": str(
+                proto.config.get("decoy_theme", ""),
+            ).strip().lower(),
         })
 
     occupied_ports = {
@@ -264,8 +267,11 @@ def _dynamic_backend(
         or any(part in {"", ".", ".."} for part in root_parts)
     ):
         raise _route_error(name, "decoy_root must be under /var/www/decoy-*")
-    theme = str(route.get("decoy_theme", ""))
-    if theme not in _DECOY_THEMES:
+    theme = str(
+        config.get("decoy_theme")
+        or route.get("decoy_theme", ""),
+    ).strip().lower()
+    if not is_supported(theme):
         raise _route_error(name, "decoy_theme is not supported")
     path_key = route.get("path_config")
     if not isinstance(path_key, str) or not path_key:

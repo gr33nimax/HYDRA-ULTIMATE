@@ -310,6 +310,8 @@ sudo hydra plugin command vless set_tuning --param padding=500-2000 \
   --param max_post_bytes=500000 --param no_sse_header=true
 sudo hydra plugin command vless set_tuning \
   --param 'headers={"X-Requested-With":"XMLHttpRequest"}'
+sudo hydra plugin command vless set_tuning --param utls_fingerprint=chrome
+sudo hydra plugin command anytls set_decoy_theme --param theme=cafe
 hydra plugin query vless get_tuning --with-state
 hydra plugin query warp external_sources --with-state
 sudo hydra plugin action dnscrypt apply_server_names \
@@ -348,6 +350,30 @@ VPS, затем выполните `sudo hydra plugin enable vless`. Certificate
 `get_tuning` возвращает действующие значения и имя профиля (`custom`, если набор
 не совпадает ни с одним профилем). Пользовательские заголовки не влияют на
 определение профиля.
+
+`utls_fingerprint` задаёт TLS-отпечаток клиента: `none` (по умолчанию — выбор
+остаётся за клиентом), `chrome`, `firefox`, `safari`, `edge`, `ios`, `android`,
+`random`, `randomized`. Значение попадает в клиентский профиль как блок
+`tls.utls` и в ссылку как `fp=`; сервер его не использует.
+
+### Сайт-заглушка
+
+Протоколы с собственным доменом — `naive`, `anytls`, `trusttunnel`, `hysteria2`
+и `vless` — объявляют команду `set_decoy_theme`. Она выбирает сайт, который
+отдаётся на домене всем, кто не является клиентом:
+
+```bash
+sudo hydra plugin command hysteria2 set_decoy_theme --param theme=gallery
+```
+
+Доступные темы: `landing`, `blog`, `docs`, `media`, `status`, `portfolio`,
+`shop`, `apidocs`, `conference`, `gallery`, `cafe`.
+
+Содержимое сайта выводится из домена: название бренда, палитра, шрифт, тексты и
+favicon у двух установок не совпадают, а повторная генерация того же домена
+воспроизводима. Смена темы перегенерирует сайт и атомарно подменит каталог;
+сайт, размещённый оператором вручную (без файла `.hydra-decoy.json`), не
+трогается.
 
 Клиентские ссылки получают параметр `extra` с изменёнными client-visible
 значениями (`xPaddingBytes`, `scMaxEachPostBytes`, `scMaxBufferedPosts`,

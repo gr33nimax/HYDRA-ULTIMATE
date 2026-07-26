@@ -43,7 +43,11 @@ def test_apply_ensures_hysteria2_decoy_site():
     with patch("hydra.core.decoy.ensure_decoy_site") as ensure, \
          patch("hydra.utils.firewall.open_tcp") as open_tcp:
         assert plugin.apply(_state()) is True
-    ensure.assert_called_once_with("hysteria2")
+    ensure.assert_called_once_with(
+        "hysteria2",
+        "status",
+        domain="hy.example.com",
+    )
     assert open_tcp.call_args_list == [
         ((80, "hysteria2-decoy-http"),),
         ((443, "hysteria2-decoy"),),

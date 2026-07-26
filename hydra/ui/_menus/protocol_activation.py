@@ -10,6 +10,7 @@ from hydra.services.protocol_setup import normalize_required_domain
 
 Message = Callable[[str], None]
 Prompt = Callable[..., str]
+ThemeChooser = Callable[[str], str]
 
 
 def _domain_source(plugin: object) -> str:
@@ -106,6 +107,35 @@ def _prepare_shadowtls_sni(
     return True
 
 
+def _prepare_decoy_theme(
+    state: AppState,
+    plugin: object,
+    app: ApplicationService,
+    choose: ThemeChooser | None,
+) -> bool:
+    """Record the decoy site once, asking only in interactive adapters."""
+    from hydra.plugins.decoy_support import (
+        DECOY_THEME_KEY,
+        supports_decoy_theme,
+    )
+
+    if choose is None or not supports_decoy_theme(plugin):
+        return True
+    name = plugin.meta.name
+    protocol = state.protocols.setdefault(name, PluginState())
+    if str(protocol.config.get(DECOY_THEME_KEY, "")).strip():
+        return True
+
+    from hydra.ui._menus.decoy_theme import current_theme
+
+    selected = choose(current_theme(plugin, protocol))
+    if not selected:
+        return True
+    protocol.config[DECOY_THEME_KEY] = selected
+    app.admin.save_state(state)
+    return True
+
+
 def prepare_interactive_activation(
     state: AppState,
     plugin: object,
@@ -113,6 +143,7 @@ def prepare_interactive_activation(
     *,
     ask: Prompt,
     report_error: Message,
+    choose_decoy: ThemeChooser | None = None,
 ) -> bool:
     """Collect every mandatory TLS value before lifecycle side effects."""
     if not _prepare_certificate_domain(
@@ -123,12 +154,14 @@ def prepare_interactive_activation(
         report_error=report_error,
     ):
         return False
-    return _prepare_shadowtls_sni(
+    if not _prepare_shadowtls_sni(
         state,
         plugin,
         app,
         report_error=report_error,
-    )
+    ):
+        return False
+    return _prepare_decoy_theme(state, plugin, app, choose_decoy)
 
 
 def run_lifecycle_action(
@@ -142,6 +175,7 @@ def run_lifecycle_action(
     report_info: Message,
     report_success: Message,
     pause: Prompt,
+    choose_decoy: ThemeChooser | None = None,
 ) -> None:
     """Install/enable/disable a protocol without leaking failures to the root."""
     name = plugin.meta.name
@@ -159,6 +193,7 @@ def run_lifecycle_action(
             app,
             ask=ask,
             report_error=report_error,
+            choose_decoy=choose_decoy,
         ):
             return
 

@@ -8,6 +8,7 @@ import shutil
 import time
 import urllib.parse
 
+from hydra.plugins.decoy_support import DecoyThemeSupport
 from hydra.plugins.context import PluginStateAccess
 from hydra.plugins.base import (
     BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment,
@@ -33,16 +34,19 @@ DEFAULT_PADDING_SCHEME = [
 ]
 
 
-class AnyTLSPlugin(BasePlugin):
+class AnyTLSPlugin(DecoyThemeSupport, BasePlugin):
+
+    decoy_default_theme = "blog"
     meta = PluginMeta(
         name="anytls",
         description="AnyTLS: TLS-shaped tunnel с padding scheme (sing-box inbound)",
         category=PluginCategory.TRANSPORT,
         version="2.0.0",
         needs_domain=True,
-        commands=("set_preset",),
+        commands=("set_preset", "set_decoy_theme"),
         queries=("get_current_preset",),
         tls_domain_source="protocol",
+        config_defaults=(("decoy_theme", "blog"),),
         connection_source="tracked",
     )
 

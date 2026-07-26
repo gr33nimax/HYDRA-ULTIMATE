@@ -256,6 +256,7 @@ def test_get_tuning_projects_effective_settings():
         "max_buffered_posts": 60,
         "stream_up_secs": "40-120",
         "max_header_bytes": 8192,
+        "utls_fingerprint": "none",
     }
 
 
@@ -423,4 +424,76 @@ def test_tuning_menu_removes_a_header():
         "vless",
         "set_tuning",
         headers={},
+    )
+
+
+def test_default_client_profile_carries_no_utls_hint():
+    plugin = VlessXhttpPlugin()
+    state = _state()
+
+    client = json.loads(
+        plugin.generate_client_config(state.users[0], state),
+    )["outbounds"][0]
+    query = parse_qs(urlsplit(plugin.client_link(state.users[0], state)).query)
+
+    assert "utls" not in client["tls"]
+    assert "fp" not in query
+
+
+def test_utls_fingerprint_reaches_the_client_profile_and_link():
+    plugin = VlessXhttpPlugin()
+    state = _state()
+
+    assert plugin.set_tuning(state, utls_fingerprint="Firefox")
+
+    client = json.loads(
+        plugin.generate_client_config(state.users[0], state),
+    )["outbounds"][0]
+    query = parse_qs(urlsplit(plugin.client_link(state.users[0], state)).query)
+
+    assert _config(state)["utls_fingerprint"] == "firefox"
+    assert client["tls"]["utls"] == {"enabled": True, "fingerprint": "firefox"}
+    assert query["fp"] == ["firefox"]
+    assert "extra" not in query
+
+
+def test_utls_fingerprint_never_reaches_the_server_inbound():
+    plugin = VlessXhttpPlugin()
+    state = _state()
+    plugin.set_tuning(state, utls_fingerprint="chrome")
+
+    inbound = plugin.configure(state).inbounds[0]
+
+    assert "utls" not in inbound["tls"]
+    assert "utls_fingerprint" not in inbound["transport"]
+    assert "fp" not in inbound["transport"]
+
+
+def test_unknown_fingerprint_does_not_mutate_state():
+    plugin = VlessXhttpPlugin()
+    state = _state()
+    before = dict(_config(state))
+
+    with pytest.raises(ValueError, match="utls_fingerprint must be one of"):
+        plugin.set_tuning(state, utls_fingerprint="netscape")
+
+    assert _config(state) == before
+
+
+def test_settings_menu_changes_the_fingerprint():
+    state = _state()
+    app = _app(state)
+
+    with patch.object(
+        vless_xhttp_settings,
+        "menu",
+        side_effect=["6", "2", "0"],
+    ), patch.object(vless_xhttp_settings, "prompt", return_value=""):
+        vless_xhttp_settings.open_menu(state, MagicMock(), app)
+
+    app.plugin_command.assert_called_once_with(
+        state,
+        "vless",
+        "set_tuning",
+        utls_fingerprint=tuning.UTLS_FINGERPRINTS[1],
     )

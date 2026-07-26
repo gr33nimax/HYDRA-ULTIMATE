@@ -49,6 +49,7 @@ def test_extended_protocol_facade_is_thin_and_protocol_logic_is_partitioned():
             "_menu_anytls_obfuscation",
         },
         "extended_protocol_trusttunnel.py": {"_menu_trusttunnel"},
+        "extended_protocol_vless.py": {"_menu_vless"},
     }
 
     facade = MENU_ROOT / "extended_protocols.py"
@@ -66,6 +67,7 @@ def test_protocol_controllers_do_not_depend_on_unrelated_protocol_menus():
         "extended_protocol_anytls.py": "extended_protocol_anytls",
         "extended_protocol_mieru.py": "extended_protocol_mieru",
         "extended_protocol_trusttunnel.py": "extended_protocol_trusttunnel",
+        "extended_protocol_vless.py": "extended_protocol_vless",
     }
     violations: list[str] = []
     for filename, own_module in protocol_modules.items():

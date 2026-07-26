@@ -1,231 +1,210 @@
-"""Documentation-theme decoy site renderer."""
+"""Product documentation renderer."""
 from __future__ import annotations
 
 from pathlib import Path
 
-
-def generate(site_dir: Path) -> None:
-    """Render every file in the documentation theme."""
-    _write_index(site_dir)
-    _write_getting_started(site_dir)
-    _write_api_reference(site_dir)
-    _write_styles(site_dir)
+from hydra.core.decoy_sites import kit
+from hydra.core.decoy_sites.identity import SiteIdentity
 
 
-def _write_index(site_dir: Path) -> None:
-    (site_dir / "index.html").write_text(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-        "  <meta charset=\"UTF-8\">\n"
-        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-        "  <title>HydraDB Docs | Ultimate Time-Series Storage</title>\n"
-        "  <link rel=\"stylesheet\" href=\"css/style.css\">\n"
-        "  <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono&display=swap\" rel=\"stylesheet\">\n"
-        "</head>\n<body>\n"
-        "  <div class=\"docs-layout\">\n"
-        "    <aside class=\"sidebar\">\n"
-        "      <div class=\"logo-area\">\n"
-        "        <a href=\"index.html\" class=\"brand\">HydraDB</a>\n"
-        "      </div>\n"
-        "      <nav class=\"docs-nav\">\n"
-        "        <span class=\"nav-title\">Introduction</span>\n"
-        "        <a href=\"index.html\" class=\"active\">What is HydraDB?</a>\n"
-        "        <a href=\"getting-started.html\">Getting Started</a>\n"
-        "        <span class=\"nav-title\">Reference</span>\n"
-        "        <a href=\"api-reference.html\">API Reference</a>\n"
-        "      </nav>\n"
-        "    </aside>\n"
-        "    <main class=\"docs-main\">\n"
-        "      <article class=\"docs-article\">\n"
-        "        <h1>What is HydraDB?</h1>\n"
-        "        <p>HydraDB is an open-source, distributed, transactional time-series database designed for high throughput writes and sub-millisecond query evaluation on billions of rows.</p>\n"
-        "        <p>It combines the architectural elegance of log-structured merge trees with modern vector processing engines to maximize hardware utilization.</p>\n"
-        "        <h2>Key Features</h2>\n"
-        "        <ul>\n"
-        "          <li><strong>Distributed Scaling:</strong> Multi-leader replication built on Raft consensus.</li>\n"
-        "          <li><strong>High Compressibility:</strong> Dynamic delta-of-delta and Gorilla encoding.</li>\n"
-        "          <li><strong>SQL Compatible:</strong> Native query compilation to machine code.</li>\n"
-        "        </ul>\n"
-        "      </article>\n"
-        "    </main>\n"
-        "  </div>\n"
-        "</body>\n</html>\n",
-        encoding="utf-8"
+PAGES = ("/", "/install.html", "/configuration.html")
+
+_NAV = (
+    ("/", "Overview"),
+    ("/install.html", "Installation"),
+    ("/configuration.html", "Configuration"),
+)
+
+
+def generate(site_dir: Path, identity: SiteIdentity) -> None:
+    """Generate a documentation site with sidebar navigation."""
+    _write_styles(site_dir, identity)
+    _write_overview(site_dir, identity)
+    _write_install(site_dir, identity)
+    _write_configuration(site_dir, identity)
+    kit.write_not_found(site_dir, identity)
+    kit.write_sitemap(site_dir, identity, PAGES)
+
+
+def _product(identity: SiteIdentity) -> str:
+    return identity.pick(
+        "docs-product",
+        (
+            f"{identity.slug.capitalize()}DB",
+            f"{identity.slug.capitalize()}Queue",
+            f"{identity.slug.capitalize()}Mesh",
+            f"{identity.slug.capitalize()}Store",
+        ),
     )
 
 
-
-def _write_getting_started(site_dir: Path) -> None:
-    (site_dir / "getting-started.html").write_text(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-        "  <meta charset=\"UTF-8\">\n"
-        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-        "  <title>Getting Started | HydraDB Docs</title>\n"
-        "  <link rel=\"stylesheet\" href=\"css/style.css\">\n"
-        "  <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono&display=swap\" rel=\"stylesheet\">\n"
-        "</head>\n<body>\n"
-        "  <div class=\"docs-layout\">\n"
-        "    <aside class=\"sidebar\">\n"
-        "      <div class=\"logo-area\">\n"
-        "        <a href=\"index.html\" class=\"brand\">HydraDB</a>\n"
-        "      </div>\n"
-        "      <nav class=\"docs-nav\">\n"
-        "        <span class=\"nav-title\">Introduction</span>\n"
-        "        <a href=\"index.html\">What is HydraDB?</a>\n"
-        "        <a href=\"getting-started.html\" class=\"active\">Getting Started</a>\n"
-        "        <span class=\"nav-title\">Reference</span>\n"
-        "        <a href=\"api-reference.html\">API Reference</a>\n"
-        "      </nav>\n"
-        "    </aside>\n"
-        "    <main class=\"docs-main\">\n"
-        "      <article class=\"docs-article\">\n"
-        "        <h1>Getting Started</h1>\n"
-        "        <p>Install HydraDB via our official package manager scripts or directly from source code.</p>\n"
-        "        <h2>Quick Start (CLI)</h2>\n"
-        "        <p>Run the following command to download and bootstrap a single-node cluster locally:</p>\n"
-        "        <pre><code>curl -fsSL https://get.hydradb.org | sh\nhydradb-server start --config /etc/hydradb.conf</code></pre>\n"
-        "        <h2>Running in Docker</h2>\n"
-        "        <p>Alternatively, spin up a node using Docker Compose:</p>\n"
-        "        <pre><code>docker run -d -p 8086:8086 hydradb/hydradb-server:latest</code></pre>\n"
-        "      </article>\n"
-        "    </main>\n"
-        "  </div>\n"
-        "</body>\n</html>\n",
-        encoding="utf-8"
+def _shell(identity: SiteIdentity, current: str, content: str) -> str:
+    product = _product(identity)
+    links = "".join(
+        "<a href=\"{href}\"{mark}>{label}</a>".format(
+            href=kit.esc(href),
+            mark=" class=\"current\"" if href == current else "",
+            label=kit.esc(label),
+        )
+        for href, label in _NAV
+    )
+    return (
+        "<div class=\"layout\">"
+        "<aside>"
+        f"<a class=\"product\" href=\"/\">{kit.esc(product)}</a>"
+        f"<span class=\"version\">v{identity.number('docs-major', 2, 6)}."
+        f"{identity.number('docs-minor', 0, 9)}</span>"
+        f"<nav>{links}</nav>"
+        f"<p class=\"vendor\">Maintained by {kit.esc(identity.brand)}</p>"
+        "</aside>"
+        f"<main>{content}</main>"
+        "</div>\n"
     )
 
 
-
-def _write_api_reference(site_dir: Path) -> None:
-    (site_dir / "api-reference.html").write_text(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-        "  <meta charset=\"UTF-8\">\n"
-        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-        "  <title>API Reference | HydraDB Docs</title>\n"
-        "  <link rel=\"stylesheet\" href=\"css/style.css\">\n"
-        "  <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono&display=swap\" rel=\"stylesheet\">\n"
-        "</head>\n<body>\n"
-        "  <div class=\"docs-layout\">\n"
-        "    <aside class=\"sidebar\">\n"
-        "      <div class=\"logo-area\">\n"
-        "        <a href=\"index.html\" class=\"brand\">HydraDB</a>\n"
-        "      </div>\n"
-        "      <nav class=\"docs-nav\">\n"
-        "        <span class=\"nav-title\">Introduction</span>\n"
-        "        <a href=\"index.html\">What is HydraDB?</a>\n"
-        "        <a href=\"getting-started.html\">Getting Started</a>\n"
-        "        <span class=\"nav-title\">Reference</span>\n"
-        "        <a href=\"api-reference.html\" class=\"active\">API Reference</a>\n"
-        "      </nav>\n"
-        "    </aside>\n"
-        "    <main class=\"docs-main\">\n"
-        "      <article class=\"docs-article\">\n"
-        "        <h1>API Reference</h1>\n"
-        "        <p>The HydraDB API exposes standard HTTP endpoints to write metrics, manage tables, and execute query expressions.</p>\n"
-        "        <h2>Write Metrics</h2>\n"
-        "        <p>Endpoint: <code>POST /api/v1/write</code></p>\n"
-        "        <pre><code>curl -i -XPOST \"http://localhost:8086/api/v1/write?db=metrics\" \\\n  --data-binary \"cpu_usage,host=server01 value=0.64\"</code></pre>\n"
-        "      </article>\n"
-        "    </main>\n"
-        "  </div>\n"
-        "</body>\n</html>\n",
-        encoding="utf-8"
+def _write_overview(site_dir: Path, identity: SiteIdentity) -> None:
+    product = _product(identity)
+    content = (
+        f"<h1>{kit.esc(product)} documentation</h1>"
+        f"<p class=\"lead\">{kit.esc(product)} stores append-only event "
+        "streams and serves them back with predictable latency. This "
+        "documentation covers self-hosted deployments.</p>"
+        "<h2>Where to start</h2>"
+        "<ul>"
+        "<li><a href=\"/install.html\">Install the server</a> on a single "
+        "node and confirm it accepts writes.</li>"
+        "<li><a href=\"/configuration.html\">Review the configuration</a> "
+        "before exposing the node to other services.</li>"
+        "</ul>"
+        "<h2>Supported platforms</h2>"
+        "<table><thead><tr><th>Platform</th><th>Status</th></tr></thead>"
+        "<tbody>"
+        "<tr><td>Linux x86-64</td><td>Supported</td></tr>"
+        "<tr><td>Linux arm64</td><td>Supported</td></tr>"
+        "<tr><td>macOS</td><td>Development only</td></tr>"
+        "</tbody></table>"
+    )
+    kit.write_text(
+        site_dir,
+        "index.html",
+        kit.page(
+            title=f"{product} documentation",
+            description=f"Self-hosting guide for {product}.",
+            body=_shell(identity, "/", content),
+        ),
     )
 
 
-
-def _write_styles(site_dir: Path) -> None:
-    (site_dir / "css" / "style.css").write_text(
-        "body {\n"
-        "  margin: 0;\n"
-        "  font-family: 'Inter', sans-serif;\n"
-        "  color: #334155;\n"
-        "  background: #ffffff;\n"
-        "  line-height: 1.6;\n"
-        "}\n"
-        ".docs-layout {\n"
-        "  display: flex;\n"
-        "  min-height: 100vh;\n"
-        "}\n"
-        ".sidebar {\n"
-        "  width: 280px;\n"
-        "  background: #f8fafc;\n"
-        "  border-right: 1px solid #e2e8f0;\n"
-        "  padding: 2rem;\n"
-        "  flex-shrink: 0;\n"
-        "}\n"
-        ".brand {\n"
-        "  font-size: 1.5rem;\n"
-        "  font-weight: 700;\n"
-        "  color: #0f172a;\n"
-        "  text-decoration: none;\n"
-        "}\n"
-        ".logo-area {\n"
-        "  margin-bottom: 2.5rem;\n"
-        "}\n"
-        ".docs-nav {\n"
-        "  display: flex;\n"
-        "  flex-direction: column;\n"
-        "}\n"
-        ".nav-title {\n"
-        "  font-size: 0.75rem;\n"
-        "  text-transform: uppercase;\n"
-        "  font-weight: 700;\n"
-        "  color: #94a3b8;\n"
-        "  margin: 1.5rem 0 0.5rem 0;\n"
-        "  letter-spacing: 0.5px;\n"
-        "}\n"
-        ".docs-nav a {\n"
-        "  text-decoration: none;\n"
-        "  color: #475569;\n"
-        "  padding: 0.4rem 0;\n"
-        "  font-size: 0.95rem;\n"
-        "  font-weight: 500;\n"
-        "  transition: color 0.15s;\n"
-        "}\n"
-        ".docs-nav a:hover, .docs-nav a.active {\n"
-        "  color: #0f172a;\n"
-        "  font-weight: 600;\n"
-        "}\n"
-        ".docs-main {\n"
-        "  flex-grow: 1;\n"
-        "  padding: 4rem 5rem;\n"
-        "  max-width: 800px;\n"
-        "}\n"
-        ".docs-article h1 {\n"
-        "  font-size: 2.5rem;\n"
-        "  font-weight: 800;\n"
-        "  color: #0f172a;\n"
-        "  margin: 0 0 1.5rem 0;\n"
-        "}\n"
-        ".docs-article h2 {\n"
-        "  font-size: 1.5rem;\n"
-        "  font-weight: 700;\n"
-        "  color: #1e293b;\n"
-        "  margin: 2.5rem 0 1rem 0;\n"
-        "}\n"
-        "code {\n"
-        "  font-family: 'JetBrains Mono', monospace;\n"
-        "  background: #f1f5f9;\n"
-        "  color: #0f172a;\n"
-        "  padding: 0.2rem 0.4rem;\n"
-        "  border-radius: 4px;\n"
-        "  font-size: 0.875rem;\n"
-        "}\n"
-        "pre {\n"
-        "  background: #0f172a;\n"
-        "  color: #f8fafc;\n"
-        "  padding: 1.5rem;\n"
-        "  border-radius: 8px;\n"
-        "  overflow-x: auto;\n"
-        "  margin: 1.5rem 0;\n"
-        "}\n"
-        "pre code {\n"
-        "  background: transparent;\n"
-        "  color: inherit;\n"
-        "  padding: 0;\n"
-        "}\n"
-        "strong {\n"
-        "  color: #0f172a;\n"
-        "}\n",
-        encoding="utf-8"
+def _write_install(site_dir: Path, identity: SiteIdentity) -> None:
+    product = _product(identity)
+    package = identity.slug
+    content = (
+        "<h1>Installation</h1>"
+        "<p class=\"lead\">Packages are published for Debian and RPM based "
+        "distributions. Every release is signed.</p>"
+        "<h2>Package repository</h2>"
+        "<pre><code>curl -fsSL https://"
+        f"{kit.esc(identity.domain)}/keys/release.asc | sudo tee \\\n"
+        f"  /etc/apt/keyrings/{kit.esc(package)}.asc &gt; /dev/null\n"
+        f"sudo apt-get update &amp;&amp; sudo apt-get install {kit.esc(package)}"
+        "</code></pre>"
+        "<h2>Verify the service</h2>"
+        f"<pre><code>systemctl status {kit.esc(package)}\n"
+        f"{kit.esc(package)}ctl health --wait 30s</code></pre>"
+        "<p>A healthy node answers within a second and reports the storage "
+        "directory it opened at startup.</p>"
+        "<div class=\"note\">Run the server as its own system user. "
+        f"{kit.esc(product)} never requires root after installation.</div>"
     )
+    kit.write_text(
+        site_dir,
+        "install.html",
+        kit.page(
+            title=f"Installation — {product}",
+            description=f"Install {product} from the package repository.",
+            body=_shell(identity, "/install.html", content),
+        ),
+    )
+
+
+def _write_configuration(site_dir: Path, identity: SiteIdentity) -> None:
+    product = _product(identity)
+    package = identity.slug
+    content = (
+        "<h1>Configuration</h1>"
+        f"<p class=\"lead\">Configuration lives in "
+        f"<code>/etc/{kit.esc(package)}/config.toml</code>. Changes are picked "
+        "up on reload; only listener changes require a restart.</p>"
+        "<pre><code>[server]\n"
+        "listen = \"127.0.0.1:7431\"\n"
+        "workers = 4\n\n"
+        "[storage]\n"
+        f"path = \"/var/lib/{kit.esc(package)}\"\n"
+        "retention = \"30d\"\n\n"
+        "[telemetry]\n"
+        "metrics = true</code></pre>"
+        "<h2>Options</h2>"
+        "<table><thead><tr><th>Key</th><th>Default</th><th>Notes</th></tr>"
+        "</thead><tbody>"
+        "<tr><td><code>server.workers</code></td><td>4</td>"
+        "<td>One per physical core is usually enough.</td></tr>"
+        "<tr><td><code>storage.retention</code></td><td>30d</td>"
+        "<td>Segments older than this are compacted away.</td></tr>"
+        "<tr><td><code>telemetry.metrics</code></td><td>true</td>"
+        "<td>Exposes Prometheus metrics on the admin port.</td></tr>"
+        "</tbody></table>"
+        "<div class=\"note\">Keep the listener on loopback and terminate TLS "
+        "in front of it.</div>"
+    )
+    kit.write_text(
+        site_dir,
+        "configuration.html",
+        kit.page(
+            title=f"Configuration — {product}",
+            description=f"Configuration reference for {product}.",
+            body=_shell(identity, "/configuration.html", content),
+        ),
+    )
+
+
+def _write_styles(site_dir: Path, identity: SiteIdentity) -> None:
+    kit.write_text(
+        site_dir,
+        "css/style.css",
+        kit.variables(identity)
+        + (
+            ".layout{display:grid;grid-template-columns:264px 1fr;min-height:100vh}"
+            "aside{background:#12161f;color:#c6ccd8;padding:32px 24px;"
+            "position:sticky;top:0;height:100vh}"
+            "aside .product{display:block;font-size:20px;font-weight:700;color:#fff}"
+            "aside .version{display:inline-block;margin:6px 0 22px;font-size:12px;"
+            "color:#8b93a5;border:1px solid #2a3140;border-radius:999px;padding:2px 10px}"
+            "aside nav{display:flex;flex-direction:column;gap:2px}"
+            "aside nav a{color:#aab2c2;padding:8px 10px;border-radius:6px;font-size:15px}"
+            "aside nav a:hover{background:#1b2231;color:#fff}"
+            "aside nav a.current{background:var(--accent);color:#fff;font-weight:600}"
+            "aside .vendor{margin-top:28px;font-size:13px;color:#6e768a}"
+            "main{background:var(--surface);padding:56px 48px;max-width:860px}"
+            "h1{font-size:34px;margin:0 0 14px}"
+            "h2{font-size:21px;margin:38px 0 12px;padding-top:8px}"
+            ".lead{font-size:18px;color:#4b5364}"
+            "p,li,td{color:#404a5c}"
+            "pre{background:#12161f;color:#e6e9f0;padding:18px 20px;overflow:auto;"
+            "border-radius:var(--radius);font-size:14px;line-height:1.55}"
+            "code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.94em}"
+            "main>p code,td code{background:var(--tint);color:var(--accent-dark);"
+            "padding:1px 6px;border-radius:4px}"
+            "table{border-collapse:collapse;width:100%;margin:14px 0;font-size:15px}"
+            "th,td{text-align:left;padding:11px 12px;border-bottom:1px solid #e6e8ef}"
+            "th{color:#69718a;font-size:13px;text-transform:uppercase;letter-spacing:.06em}"
+            ".note{border-left:3px solid var(--accent);background:var(--tint);"
+            "padding:14px 18px;margin:26px 0;border-radius:0 var(--radius) var(--radius) 0}"
+            ".notfound{padding:120px 20px;text-align:center}"
+            ".notfound h1{font-size:60px;color:var(--accent)}"
+            "@media(max-width:820px){.layout{grid-template-columns:1fr}"
+            "aside{position:static;height:auto}main{padding:36px 22px}}"
+        ),
+    )
+
+
+__all__ = ["PAGES", "generate"]

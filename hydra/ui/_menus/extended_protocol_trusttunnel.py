@@ -31,6 +31,11 @@ from hydra.ui._menus.extended_protocol_common import (
     _desired_state,
     _show_plugin_clients,
 )
+from hydra.ui._menus.decoy_theme import (
+    choose_theme,
+    decoy_option,
+    open_decoy_menu,
+)
 from hydra.ui._menus.protocol_activation import run_lifecycle_action
 
 def _menu_trusttunnel(
@@ -81,6 +86,8 @@ def _menu_trusttunnel(
                 options.append(("1", "▶️  Включить", "Активировать протокол"))
 
             options.append(("3", "🌐 Транспорт", "HTTP/2 TCP / QUIC UDP / оба"))
+            if decoy := decoy_option(p, ps):
+                options.append(("4", *decoy))
             options.append(("8", "🔄 Переустановить", "Переустановка протокола"))
             options.append(("9", "❌ Удалить", "Полное удаление"))
 
@@ -102,10 +109,14 @@ def _menu_trusttunnel(
                 report_info=info,
                 report_success=success,
                 pause=prompt,
+                choose_decoy=choose_theme,
             )
 
         elif choice == "2" and ps.installed and ps.enabled:
             _show_plugin_clients(state, p, app)
+
+        elif choice == "4" and ps.installed:
+            open_decoy_menu(state, p, app)
 
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):

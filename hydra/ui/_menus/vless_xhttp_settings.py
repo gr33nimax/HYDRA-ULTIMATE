@@ -4,6 +4,7 @@ from __future__ import annotations
 from hydra.core.state_models import AppState, PluginState
 from hydra.plugins.vless_xhttp import presets, tuning
 from hydra.services.application import ApplicationService
+from hydra.ui._menus.decoy_theme import open_decoy_menu, theme_label
 from hydra.ui._menus.vless_xhttp_tuning import open_menu as open_tuning_menu
 from hydra.ui.tui import error, menu, prompt, success
 
@@ -25,7 +26,7 @@ def _summary(config: dict) -> tuple[str, str]:
 
 def open_menu(
     state: AppState,
-    _plugin: object,
+    plugin: object,
     app: ApplicationService,
 ) -> None:
     while True:
@@ -35,6 +36,8 @@ def open_menu(
         path = str(desired.config.get("xhttp_path", "/xhttp"))
         mode = str(desired.config.get("xhttp_mode", "stream-up"))
         preset_label, tuning_summary = _summary(desired.config)
+        fingerprint = str(desired.config.get("utls_fingerprint", "none"))
+        decoy = str(desired.config.get("decoy_theme", "media"))
         choice = menu(
             [
                 ("1", "Домен", domain or "не настроен"),
@@ -42,6 +45,8 @@ def open_menu(
                 ("3", "XHTTP mode", mode),
                 ("4", "Профиль транспорта", preset_label),
                 ("5", "Тонкая настройка", tuning_summary),
+                ("6", "uTLS-отпечаток клиента", fingerprint),
+                ("7", "Сайт-заглушка", theme_label(decoy)),
                 ("0", "← Назад", ""),
             ],
             "НАСТРОЙКИ VLESS + XHTTP",
@@ -49,7 +54,7 @@ def open_menu(
         if choice == "0":
             return
         try:
-            changed = _change(choice, state, desired, app)
+            changed = _change(choice, state, desired, plugin, app)
             if changed is None:
                 continue
             if changed:
@@ -65,6 +70,7 @@ def _change(
     choice: str,
     state: AppState,
     desired: PluginState,
+    plugin: object,
     app: ApplicationService,
 ) -> bool | None:
     if choice == "1":
@@ -119,7 +125,45 @@ def _change(
     if choice == "5":
         open_tuning_menu(state, app)
         return None
+    if choice == "6":
+        return _change_fingerprint(state, desired, app)
+    if choice == "7":
+        open_decoy_menu(state, plugin, app)
+        return None
     return None
+
+
+def _change_fingerprint(
+    state: AppState,
+    desired: PluginState,
+    app: ApplicationService,
+) -> bool | None:
+    from hydra.plugins.vless_xhttp.tuning import UTLS_FINGERPRINTS
+
+    current = str(desired.config.get("utls_fingerprint", "none"))
+    options = [
+        (
+            str(index),
+            name + (" ·" if name == current else ""),
+            "как у браузера" if name not in {"random", "randomized"} else "случайный",
+        )
+        for index, name in enumerate(UTLS_FINGERPRINTS, start=1)
+    ]
+    selected = menu(
+        [*options, ("0", "Отмена", "")],
+        "uTLS-ОТПЕЧАТОК КЛИЕНТА",
+    )
+    if not selected.isdigit() or selected == "0":
+        return None
+    index = int(selected) - 1
+    if not 0 <= index < len(UTLS_FINGERPRINTS):
+        return None
+    return app.plugin_command(
+        state,
+        "vless",
+        "set_tuning",
+        utls_fingerprint=UTLS_FINGERPRINTS[index],
+    )
 
 
 def _change_preset(

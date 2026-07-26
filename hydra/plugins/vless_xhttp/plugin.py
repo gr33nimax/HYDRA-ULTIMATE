@@ -15,6 +15,7 @@ from hydra.plugins.base import (
     PluginStatus,
 )
 from hydra.plugins.context import PluginStateAccess
+from hydra.plugins.decoy_support import DecoyThemeSupport
 from hydra.plugins.vless_xhttp.presets import (
     apply_preset,
     current_preset,
@@ -27,8 +28,10 @@ from hydra.plugins.vless_xhttp.tuning import (
     TUNING_DEFAULTS,
     XHTTP_MODES,
     apply_settings,
+    client_tls,
     effective as effective_tuning,
     link_extra,
+    link_params,
     summary as tuning_summary,
     transport as build_transport,
     validate_mode as _validate_mode,
@@ -61,8 +64,10 @@ def _normalize_domain(value: object) -> str:
     return domain
 
 
-class VlessXhttpPlugin(BasePlugin):
+class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
     """Multi-user VLESS/XHTTP endpoint behind Caddy TLS routing."""
+
+    decoy_default_theme = "media"
 
     meta = PluginMeta(
         name="vless",
@@ -81,12 +86,14 @@ class VlessXhttpPlugin(BasePlugin):
             "set_mode",
             "set_tuning",
             "set_preset",
+            "set_decoy_theme",
         ),
         queries=("get_tuning",),
         tls_domain_source="protocol",
         config_defaults=(
             ("xhttp_mode", DEFAULT_MODE),
             ("xhttp_path", DEFAULT_PATH),
+            ("decoy_theme", "media"),
             *TUNING_DEFAULTS,
             (ROUTE_CONFIG_KEY, {
                 "kind": "http_path_proxy",
@@ -178,6 +185,7 @@ class VlessXhttpPlugin(BasePlugin):
                 "enabled": True,
                 "server_name": domain,
                 "alpn": ["h2"],
+                **client_tls(protocol.config),
             },
             "transport": self._transport(
                 protocol.config,
@@ -219,6 +227,7 @@ class VlessXhttpPlugin(BasePlugin):
                 protocol.config.get("xhttp_mode", DEFAULT_MODE),
             ),
         }
+        parameters.update(link_params(protocol.config))
         extra = link_extra(protocol.config)
         if extra:
             parameters["extra"] = json.dumps(

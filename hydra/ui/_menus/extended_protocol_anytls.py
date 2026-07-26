@@ -31,6 +31,11 @@ from hydra.ui._menus.extended_protocol_common import (
     _desired_state,
     _show_plugin_clients,
 )
+from hydra.ui._menus.decoy_theme import (
+    choose_theme,
+    decoy_option,
+    open_decoy_menu,
+)
 from hydra.ui._menus.protocol_activation import run_lifecycle_action
 
 def _menu_anytls(
@@ -79,6 +84,8 @@ def _menu_anytls(
                 options.append(("1", "⏸️  Выключить", "Отключить протокол"))
                 options.append(("2", "👥 Клиенты", "Подключённые клиенты и трафик"))
                 options.append(("3", "🔒 Обфускация трафика", f"Текущий режим: {preset_label}"))
+            if decoy := decoy_option(p, ps):
+                options.append(("4", *decoy))
             else:
                 options.append(("1", "▶️  Включить", "Активировать протокол"))
 
@@ -103,6 +110,7 @@ def _menu_anytls(
                 report_info=info,
                 report_success=success,
                 pause=prompt,
+                choose_decoy=choose_theme,
             )
 
         elif choice == "2" and ps.installed and ps.enabled:
@@ -110,6 +118,9 @@ def _menu_anytls(
 
         elif choice == "3" and ps.installed and ps.enabled:
             _menu_anytls_obfuscation(state, p, app)
+
+        elif choice == "4" and ps.installed:
+            open_decoy_menu(state, p, app)
 
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):

@@ -102,7 +102,11 @@ def test_dynamic_decoy_site_uses_plugin_owned_directory_and_theme():
     with patch("hydra.core.decoy.ensure_site") as ensure:
         _ensure_decoy_sites([backend])
 
-    ensure.assert_called_once_with(Path(DECOY_DIR), "media")
+    ensure.assert_called_once_with(
+        Path(DECOY_DIR),
+        "media",
+        domain="xhttp.example.com",
+    )
 
 
 @pytest.mark.parametrize(

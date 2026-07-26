@@ -37,6 +37,8 @@ from .constants import (
     SERVICE_NAME as SERVICE_NAME,
     NaiveRuntimeLayout,
 )
+from hydra.plugins.decoy_support import DecoyThemeSupport
+
 from .installation import NaiveInstallationMixin
 from .observation import NaiveObservationMixin
 from .profiles import NaiveProfilesMixin
@@ -44,6 +46,7 @@ from .runtime import NaiveRuntimeMixin
 
 
 class NaivePlugin(
+    DecoyThemeSupport,
     NaiveInstallationMixin,
     NaiveRuntimeMixin,
     NaiveConfigurationMixin,
@@ -54,6 +57,8 @@ class NaivePlugin(
 ):
     """Coordinate cohesive NaiveProxy capabilities behind the plugin API."""
 
+    decoy_default_theme = "landing"
+
     meta = PluginMeta(
         name="naive",
         description=(
@@ -63,10 +68,13 @@ class NaivePlugin(
         version="2.0.0",
         needs_domain=True,
         required_commands=("systemctl",),
-        commands=("set_transport",),
+        commands=("set_transport", "set_decoy_theme"),
         queries=("recent_connections",),
         tls_domain_source="network",
-        config_defaults=(("network", "tcp"),),
+        config_defaults=(
+            ("network", "tcp"),
+            ("decoy_theme", "landing"),
+        ),
         connection_source="recent_connections",
         backup_resources=(
             BackupResource(str(CFG_DIR), "tree"),

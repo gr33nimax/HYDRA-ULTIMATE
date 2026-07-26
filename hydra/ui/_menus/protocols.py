@@ -6,6 +6,11 @@ from hydra.plugins.base import PluginCategory
 from hydra.services.application import ApplicationService
 from hydra.ui._menus import plugin_settings
 from hydra.ui._menus.protocol_activation import run_lifecycle_action
+from hydra.ui._menus.decoy_theme import (
+    choose_theme,
+    decoy_option,
+    open_decoy_menu,
+)
 from hydra.ui._menus.plugin_dispatch import (
     open_plugin_settings,
     open_special_plugin_menu,
@@ -164,6 +169,8 @@ def _plugin_options(
         desired,
     ):
         options.append(("3", *settings))
+    if decoy := decoy_option(plugin, desired):
+        options.append(("4", *decoy))
     options.extend(
         [
             ("8", "🔄 Переустановить", "Переустановка протокола"),
@@ -189,6 +196,7 @@ def _toggle_or_install(
         report_info=info,
         report_success=success,
         pause=prompt,
+        choose_decoy=choose_theme,
     )
 
 
@@ -256,6 +264,8 @@ def menu_plugin(
             _show_plugin_clients(state, plugin, app)
         elif choice == "3":
             open_plugin_settings(state, plugin, app)
+        elif choice == "4" and decoy_option(plugin, desired):
+            open_decoy_menu(state, plugin, app)
         elif choice in {"8", "9"} and desired.installed:
             if _reinstall_or_remove(choice, state, plugin, app):
                 return

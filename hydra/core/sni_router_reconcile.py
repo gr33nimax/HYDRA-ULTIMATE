@@ -137,14 +137,20 @@ def _ensure_decoy_sites(backends: list[dict]) -> None:
     for backend in backends:
         if backend["name"] in ("sub_server", "shadowtls"):
             continue
+        domain = str(backend.get("domain", ""))
         if backend.get("route_kind") == "http_path_proxy":
             ensure_site(
                 Path(str(backend["decoy_root"])),
                 str(backend["decoy_theme"]),
+                domain=domain,
             )
             continue
         try:
-            ensure_decoy_site(backend["name"])
+            ensure_decoy_site(
+                backend["name"],
+                str(backend.get("decoy_theme", "")),
+                domain=domain,
+            )
         except Exception as exc:
             print(f"  Error generating decoy for {backend['name']}: {exc}")
 

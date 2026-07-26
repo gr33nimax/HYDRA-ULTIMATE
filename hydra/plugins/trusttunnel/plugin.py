@@ -15,6 +15,7 @@ from hydra.plugins.base import (
     PluginMeta,
     PluginStatus,
 )
+from hydra.plugins.decoy_support import DecoyThemeSupport
 from hydra.plugins.context import PluginStateAccess
 from hydra.utils.crypto import derive_hex_key
 from hydra.utils.tls import resolve_tls_material
@@ -28,7 +29,9 @@ _VALID_TRANSPORTS = VALID_TRANSPORTS
 _DEFAULT_TRANSPORT = DEFAULT_TRANSPORT
 
 
-class TrustTunnelPlugin(BasePlugin):
+class TrustTunnelPlugin(DecoyThemeSupport, BasePlugin):
+
+    decoy_default_theme = "docs"
     meta = PluginMeta(
         name="trusttunnel",
         description=(
@@ -38,9 +41,12 @@ class TrustTunnelPlugin(BasePlugin):
         category=PluginCategory.TRANSPORT,
         version="2.1.0",
         needs_domain=True,
-        commands=("set_transport",),
+        commands=("set_transport", "set_decoy_theme"),
         tls_domain_source="protocol",
-        config_defaults=(("transport", "tcp"),),
+        config_defaults=(
+            ("transport", "tcp"),
+            ("decoy_theme", "docs"),
+        ),
         connection_source="tracked",
     )
 

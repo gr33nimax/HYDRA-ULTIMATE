@@ -100,7 +100,7 @@ class NaiveRuntimeMixin:
         layout.config_dir.mkdir(parents=True, exist_ok=True)
         layout.log_dir.mkdir(parents=True, exist_ok=True)
         layout.data_dir.mkdir(parents=True, exist_ok=True)
-        self._create_fake_site()
+        self._create_fake_site(state)
 
         pending = layout.caddyfile.with_suffix(".pending")
         pending.write_text(self._pending_cfg)
@@ -197,11 +197,14 @@ class NaiveRuntimeMixin:
                         capture_output=True,
                     )
 
-    @staticmethod
-    def _create_fake_site() -> None:
+    def _create_fake_site(self, state: PluginStateAccess) -> None:
         from hydra.core.decoy import ensure_decoy_site
 
-        ensure_decoy_site("naive")
+        ensure_decoy_site(
+            "naive",
+            self.decoy_theme(state),
+            domain=str(getattr(state.network, "domain", "")),
+        )
 
     def _validate_caddy(
         self,

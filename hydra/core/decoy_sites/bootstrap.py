@@ -1,27 +1,56 @@
 """Shared filesystem bootstrap for decoy-site renderers."""
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 
-
-_FAVICON = (
-    b"\x00\x00\x01\x00\x01\x00\x01\x01\x00\x00\x01\x00\x18\x00"
-    b"\x30\x00\x00\x00\x16\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-    b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-    b"\x00\x00\x00\x00\xff\xff\xff\x00\x00\x00\x00\x00"
-)
+from hydra.core.decoy_sites.identity import SiteIdentity
 
 
-def prepare_site(site_dir: Path) -> None:
-    """Create the directory tree and files shared by every theme."""
+_ICON_SIZE = 16
+
+
+def _favicon(identity: SiteIdentity) -> bytes:
+    """Render a solid 16×16 icon in the site's accent colour."""
+    accent = identity.accent.lstrip("#")
+    red, green, blue = (int(accent[index:index + 2], 16) for index in (0, 2, 4))
+    pixels = bytes((blue, green, red, 255)) * (_ICON_SIZE * _ICON_SIZE)
+    mask = bytes(_ICON_SIZE * _ICON_SIZE // 8)
+    header = struct.pack("<3H", 0, 1, 1)
+    info = struct.pack(
+        "<3I2H6I",
+        40,
+        _ICON_SIZE,
+        _ICON_SIZE * 2,
+        1,
+        32,
+        0,
+        len(pixels) + len(mask),
+        0,
+        0,
+        0,
+        0,
+    )
+    entry = struct.pack(
+        "<4B2H2I",
+        _ICON_SIZE,
+        _ICON_SIZE,
+        0,
+        0,
+        1,
+        32,
+        len(info) + len(pixels) + len(mask),
+        len(header) + 16,
+    )
+    return header + entry + info + pixels + mask
+
+
+def prepare_site(site_dir: Path, identity: SiteIdentity) -> None:
+    """Create the directory tree and assets shared by every theme."""
     site_dir.mkdir(parents=True, exist_ok=True)
     for child in ("css", "js", "images"):
         (site_dir / child).mkdir(exist_ok=True)
+    (site_dir / "favicon.ico").write_bytes(_favicon(identity))
 
-    (site_dir / "robots.txt").write_text(
-        "User-agent: *\n"
-        "Allow: /\n"
-        "Sitemap: https://example.com/sitemap.xml\n",
-        encoding="utf-8",
-    )
-    (site_dir / "favicon.ico").write_bytes(_FAVICON)
+
+__all__ = ["prepare_site"]
