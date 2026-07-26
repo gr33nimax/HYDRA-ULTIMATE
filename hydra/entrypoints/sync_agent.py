@@ -15,6 +15,7 @@ def main() -> int:
             operations=default_sync_operations(
                 protocols=application.protocols,
                 plugin_actions=application.plugin_actions,
+                plugin_queries=application.plugin_queries,
                 apply_config=application.apply,
                 check_traffic_limits=application.traffic.check_limits,
             ),
