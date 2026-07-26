@@ -15,46 +15,32 @@ from hydra.plugins.base import (
     PluginStatus,
 )
 from hydra.plugins.context import PluginStateAccess
+from hydra.plugins.vless_xhttp.presets import (
+    apply_preset,
+    current_preset,
+    get_preset,
+)
+from hydra.plugins.vless_xhttp.tuning import (
+    DEFAULT_MODE,
+    DEFAULT_PATH,
+    FIELDS,
+    TUNING_DEFAULTS,
+    XHTTP_MODES,
+    apply_settings,
+    effective as effective_tuning,
+    link_extra,
+    summary as tuning_summary,
+    transport as build_transport,
+    validate_mode as _validate_mode,
+    validate_path as _validate_path,
+)
 from hydra.utils.tls import resolve_tls_material
 
 
 INTERNAL_PORT = 20448
 DECOY_HTTP_PORT = 10804
 DECOY_DIR = "/var/www/decoy-vless"
-DEFAULT_PATH = "/xhttp"
-DEFAULT_MODE = "stream-up"
 ROUTE_CONFIG_KEY = "_tls_http_decoy_route"
-XHTTP_MODES = frozenset({"stream-up", "packet-up", "stream-one"})
-
-
-def _validate_path(value: object) -> str:
-    path = str(value or "").strip()
-    segments = path.split("/")[1:]
-    if (
-        not path.startswith("/")
-        or path == "/"
-        or len(path) > 256
-        or any(character.isspace() for character in path)
-        or any(character in path for character in "?#*%\\")
-        or any(
-            segment in {"", ".", ".."}
-            or not re.fullmatch(r"[A-Za-z0-9._~-]+", segment)
-            for segment in segments
-        )
-    ):
-        raise ValueError(
-            "XHTTP path must start with '/', identify a non-root path, "
-            "and contain no whitespace, query, or fragment",
-        )
-    return path.rstrip("/")
-
-
-def _validate_mode(value: object) -> str:
-    mode = str(value or "").strip().lower()
-    if mode not in XHTTP_MODES:
-        allowed = ", ".join(sorted(XHTTP_MODES))
-        raise ValueError(f"XHTTP mode must be one of: {allowed}")
-    return mode
 
 
 def _normalize_domain(value: object) -> str:
@@ -89,11 +75,19 @@ class VlessXhttpPlugin(BasePlugin):
         version="1.0.0",
         needs_domain=True,
         required_commands=("sing-box",),
-        commands=("set_domain", "set_path", "set_mode"),
+        commands=(
+            "set_domain",
+            "set_path",
+            "set_mode",
+            "set_tuning",
+            "set_preset",
+        ),
+        queries=("get_tuning",),
         tls_domain_source="protocol",
         config_defaults=(
             ("xhttp_mode", DEFAULT_MODE),
             ("xhttp_path", DEFAULT_PATH),
+            *TUNING_DEFAULTS,
             (ROUTE_CONFIG_KEY, {
                 "kind": "http_path_proxy",
                 "internal_port": INTERNAL_PORT,
@@ -160,26 +154,7 @@ class VlessXhttpPlugin(BasePlugin):
         client: bool,
         domain: str = "",
     ) -> dict[str, object]:
-        transport: dict[str, object] = {
-            "type": "xhttp",
-            "mode": _validate_mode(
-                config.get("xhttp_mode", DEFAULT_MODE),
-            ),
-            "host": domain if client else "",
-            "path": _validate_path(
-                config.get("xhttp_path", DEFAULT_PATH),
-            ),
-            "headers": {},
-            "x_padding_bytes": "100-1000",
-            "no_sse_header": False,
-            "sc_max_each_post_bytes": 1_000_000,
-            "sc_max_buffered_posts": 30,
-            "sc_stream_up_server_secs": "20-80",
-            "server_max_header_bytes": 8192,
-        }
-        if not client:
-            transport["trusted_x_forwarded_for"] = []
-        return transport
+        return build_transport(config, client=client, domain=domain)
 
     def generate_client_config(
         self,
@@ -230,22 +205,28 @@ class VlessXhttpPlugin(BasePlugin):
         if not raw_domain:
             return ""
         domain = _normalize_domain(raw_domain)
-        query = urllib.parse.urlencode(
-            {
-                "encryption": "none",
-                "security": "tls",
-                "sni": domain,
-                "alpn": "h2",
-                "type": "xhttp",
-                "host": domain,
-                "path": _validate_path(
-                    protocol.config.get("xhttp_path", DEFAULT_PATH),
-                ),
-                "mode": _validate_mode(
-                    protocol.config.get("xhttp_mode", DEFAULT_MODE),
-                ),
-            },
-        )
+        parameters = {
+            "encryption": "none",
+            "security": "tls",
+            "sni": domain,
+            "alpn": "h2",
+            "type": "xhttp",
+            "host": domain,
+            "path": _validate_path(
+                protocol.config.get("xhttp_path", DEFAULT_PATH),
+            ),
+            "mode": _validate_mode(
+                protocol.config.get("xhttp_mode", DEFAULT_MODE),
+            ),
+        }
+        extra = link_extra(protocol.config)
+        if extra:
+            parameters["extra"] = json.dumps(
+                extra,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        query = urllib.parse.urlencode(parameters)
         uuid = urllib.parse.quote(user.uuid, safe="")
         tag = urllib.parse.quote(f"{user.email} VLESS XHTTP", safe="")
         return f"vless://{uuid}@{domain}:443?{query}#{tag}"
@@ -263,6 +244,7 @@ class VlessXhttpPlugin(BasePlugin):
             )
         _validate_path(protocol.config.get("xhttp_path", DEFAULT_PATH))
         _validate_mode(protocol.config.get("xhttp_mode", DEFAULT_MODE))
+        effective_tuning(protocol.config)
 
         from hydra.utils.firewall import open_tcp
 
@@ -296,6 +278,11 @@ class VlessXhttpPlugin(BasePlugin):
         )
         info = {}
         if protocol:
+            try:
+                preset = current_preset(protocol.config)
+                summary = tuning_summary(protocol.config)
+            except ValueError as exc:
+                preset, summary = "invalid", str(exc)
             info = {
                 "Domain": protocol.config.get("domain", ""),
                 "XHTTP path": protocol.config.get(
@@ -306,6 +293,8 @@ class VlessXhttpPlugin(BasePlugin):
                     "xhttp_mode",
                     DEFAULT_MODE,
                 ),
+                "XHTTP preset": preset,
+                "XHTTP tuning": summary,
             }
         return PluginStatus(installed, enabled, running, 443, info)
 
@@ -420,6 +409,46 @@ class VlessXhttpPlugin(BasePlugin):
             return False
         protocol.config["xhttp_mode"] = normalized
         return True
+
+    def set_tuning(
+        self,
+        state: PluginStateAccess,
+        **parameters: object,
+    ) -> bool:
+        """Update one or more XHTTP transport knobs atomically."""
+        protocol = state.protocols.get("vless")
+        if protocol is None:
+            return False
+        apply_settings(protocol.config, parameters)
+        return True
+
+    def set_preset(
+        self,
+        state: PluginStateAccess,
+        preset: str,
+    ) -> bool:
+        """Replace mode and tuning with one declared XHTTP profile."""
+        name = get_preset(preset).name
+        protocol = state.protocols.get("vless")
+        if protocol is None:
+            return False
+        apply_preset(protocol.config, name)
+        return True
+
+    def get_tuning(self, state: PluginStateAccess) -> dict[str, object]:
+        """Return the effective XHTTP transport settings for operators."""
+        protocol = state.protocols.get("vless")
+        config = protocol.config if protocol is not None else {}
+        values = effective_tuning(config)
+        return {
+            "preset": current_preset(config),
+            "mode": _validate_mode(config.get("xhttp_mode", DEFAULT_MODE)),
+            "path": _validate_path(config.get("xhttp_path", DEFAULT_PATH)),
+            **{
+                field.param: values[field.key]
+                for field in FIELDS
+            },
+        }
 
 
 __all__ = [

@@ -2,12 +2,25 @@
 from __future__ import annotations
 
 from hydra.core.state_models import AppState, PluginState
+from hydra.plugins.vless_xhttp import presets, tuning
 from hydra.services.application import ApplicationService
+from hydra.ui._menus.vless_xhttp_tuning import open_menu as open_tuning_menu
 from hydra.ui.tui import error, menu, prompt, success
 
 
 def option(_desired: PluginState) -> tuple[str, str]:
-    return "⚙️  Настройки", "Домен, путь и режим XHTTP"
+    return "⚙️  Настройки", "Домен, путь, режим и профиль XHTTP"
+
+
+def _summary(config: dict) -> tuple[str, str]:
+    """Return the preset label and tuning summary of a desired config."""
+    try:
+        return (
+            presets.preset_label(presets.current_preset(config)),
+            tuning.summary(config),
+        )
+    except ValueError as exc:
+        return "🛠 Пользовательский", str(exc)
 
 
 def open_menu(
@@ -21,11 +34,14 @@ def open_menu(
         domain = str(desired.config.get("domain", ""))
         path = str(desired.config.get("xhttp_path", "/xhttp"))
         mode = str(desired.config.get("xhttp_mode", "stream-up"))
+        preset_label, tuning_summary = _summary(desired.config)
         choice = menu(
             [
                 ("1", "Домен", domain or "не настроен"),
                 ("2", "XHTTP path", path),
                 ("3", "XHTTP mode", mode),
+                ("4", "Профиль транспорта", preset_label),
+                ("5", "Тонкая настройка", tuning_summary),
                 ("0", "← Назад", ""),
             ],
             "НАСТРОЙКИ VLESS + XHTTP",
@@ -98,7 +114,38 @@ def _change(
             "set_mode",
             mode=mode,
         )
+    if choice == "4":
+        return _change_preset(state, app)
+    if choice == "5":
+        open_tuning_menu(state, app)
+        return None
     return None
+
+
+def _change_preset(
+    state: AppState,
+    app: ApplicationService,
+) -> bool | None:
+    names = sorted(presets.PRESETS)
+    items = [
+        (str(index), presets.PRESETS[name].label, presets.PRESETS[name].description)
+        for index, name in enumerate(names, start=1)
+    ]
+    selected = menu(
+        [*items, ("0", "Отмена", "")],
+        "ПРОФИЛЬ ТРАНСПОРТА XHTTP",
+    )
+    if selected == "0" or not selected.isdigit():
+        return None
+    index = int(selected) - 1
+    if not 0 <= index < len(names):
+        return None
+    return app.plugin_command(
+        state,
+        "vless",
+        "set_preset",
+        preset=names[index],
+    )
 
 
 __all__ = ["open_menu", "option"]

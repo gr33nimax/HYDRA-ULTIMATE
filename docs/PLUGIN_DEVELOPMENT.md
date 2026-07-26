@@ -219,10 +219,21 @@ service и UI/API. При этом его исполнение должно по
 7. `ruff check .`, полный `pytest` и архитектурные тесты.
 
 ```bash
-python -m pytest -q
-python -m ruff check main.py hydra tests
-python verify.py
+python verify.py                            # compile + lint + полный pytest
+python -m pytest -q                         # только тесты
+python -m ruff check main.py hydra tests    # только линтер
+python -m compileall -q main.py hydra       # только компиляция
 ```
+
+Тесты являются частью архитектуры: помимо обычных проверок они удерживают
+направление зависимостей, отсутствие циклов в import graph, лимиты размеров
+модулей и функций и запрет обхода `ApplicationService` и `HostBackend`. Ослаблять
+архитектурный guard, чтобы «починить тест», нельзя — сначала должно измениться
+само решение.
+
+CI дополнительно проверяет Python 3.10–3.13, зависимости (`pip-audit`), миграции
+состояния, Linux-сценарий с root/systemd/nftables и транзакционное обновление
+`main → dev`.
 
 ## Чего делать нельзя
 

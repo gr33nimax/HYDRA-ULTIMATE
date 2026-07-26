@@ -206,6 +206,40 @@ sudo hydra backup restore /root/hydra.tar.gz --yes
 
 Симлинки, path traversal, дубликаты и файлы вне policy отклоняются.
 
+## Типовые сценарии
+
+### Безопасный порядок изменения
+
+```bash
+sudo hydra backup create --output /root/hydra-before-change.tar.gz
+hydra check
+sudo hydra apply
+hydra status
+```
+
+Команды чтения не требуют `root` и не меняют систему, поэтому `check` и `status`
+безопасно вызывать в любой момент, в том числе из мониторинга.
+
+### Если что-то сломалось
+
+```bash
+hydra status
+hydra check
+sudo journalctl -u sing-box -u caddy-l4 --no-pager -n 100
+sudo hydra apply                     # повторный запуск — штатный сценарий
+```
+
+`apply` идемпотентен: он приводит рантайм к желаемому состоянию и откатывает
+частичное изменение, поэтому повтор после устранённой причины — обычный ход.
+
+### Восстановление из архива
+
+```bash
+sudo hydra backup restore /root/hydra-before-change.tar.gz --dry-run
+sudo hydra backup restore /root/hydra-before-change.tar.gz --yes
+sudo hydra apply
+```
+
 ## Пользователи
 
 Команды чтения:
@@ -235,6 +269,10 @@ sudo hydra user ensure-default
 
 User lifecycle проходит через общий application service и откатывается вместе
 с plugin hooks, state и runtime apply.
+
+Лимит трафика и срок действия применяются независимо от ручной блокировки:
+исчерпанный лимит отключает доступ без `block`, а `unblock` не вернёт доступ,
+пока ограничение действует.
 
 `users` является алиасом `user`.
 
@@ -267,6 +305,12 @@ sudo hydra plugin command hysteria2 set_port --param port=8443
 sudo hydra plugin command vless set_domain --param domain=xhttp.example.com
 sudo hydra plugin command vless set_path --param path=/xhttp
 sudo hydra plugin command vless set_mode --param mode=stream-up
+sudo hydra plugin command vless set_preset --param preset=low_latency
+sudo hydra plugin command vless set_tuning --param padding=500-2000 \
+  --param max_post_bytes=500000 --param no_sse_header=true
+sudo hydra plugin command vless set_tuning \
+  --param 'headers={"X-Requested-With":"XMLHttpRequest"}'
+hydra plugin query vless get_tuning --with-state
 hydra plugin query warp external_sources --with-state
 sudo hydra plugin action dnscrypt apply_server_names \
   --param 'names=["cloudflare","quad9-dnscrypt-ip4-filter-pri"]'
@@ -283,6 +327,32 @@ VPS, затем выполните `sudo hydra plugin enable vless`. Certificate
 Команда вернёт успех только после проверки активного SNI-маршрута, загрузки
 сертификата в Caddy и локального TLS handshake с ALPN `h2`; при ошибке apply
 откатит состояние и runtime и вернёт точную причину.
+
+`set_tuning` принимает любое подмножество параметров транспорта XHTTP и
+применяет их одной транзакцией; неизвестный параметр или значение вне диапазона
+отклоняются до изменения состояния:
+
+| Параметр | Значение | По умолчанию |
+| :--- | :--- | :--- |
+| `padding` | диапазон байт `N` или `N-M`, 0–65535; `0` отключает паддинг | `100-1000` |
+| `max_post_bytes` | размер upload-пакета, 4096–16777216 | `1000000` |
+| `max_buffered_posts` | глубина буфера upload-пакетов, 1–1024 | `30` |
+| `stream_up_secs` | длительность stream-up, диапазон секунд 0–3600 | `20-80` |
+| `max_header_bytes` | лимит заголовков запроса на сервере, 1024–65536 | `8192` |
+| `no_sse_header` | не отправлять SSE-заголовок (CDN с буферизацией) | `false` |
+| `headers` | до 16 собственных HTTP-заголовков; `Host`, `Connection`, `Content-Length`, `Transfer-Encoding` и `Upgrade` запрещены | `{}` |
+
+`set_preset` выставляет режим и весь набор параметров согласованно:
+`balanced` (значения по умолчанию), `low_latency` (stream-one и малые буферы),
+`stealth` (крупный паддинг, длинные сессии), `cdn` (packet-up без SSE-заголовка).
+`get_tuning` возвращает действующие значения и имя профиля (`custom`, если набор
+не совпадает ни с одним профилем). Пользовательские заголовки не влияют на
+определение профиля.
+
+Клиентские ссылки получают параметр `extra` с изменёнными client-visible
+значениями (`xPaddingBytes`, `scMaxEachPostBytes`, `scMaxBufferedPosts`,
+`scStreamUpServerSecs`, `noSSEHeader`, `headers`); при значениях по умолчанию
+ссылка остаётся прежней. Серверный `max_header_bytes` в ссылку не попадает.
 
 `plugins` является алиасом `plugin`.
 
