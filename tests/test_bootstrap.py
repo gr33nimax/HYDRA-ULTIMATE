@@ -43,6 +43,12 @@ def test_readme_one_command_installs_dev():
     assert "sudo python3 main.py" not in README
 
 
+def test_readme_marks_legacy_main_as_unsupported():
+    assert "`legacy-main`" in README
+    assert "больше не поддерживается" in README
+    assert "Актуальная поддерживаемая ветка — `dev`" in README
+
+
 def test_installer_has_numbered_progress_and_unambiguous_result():
     assert 'title "УСТАНОВКА HYDRA"' in BOOTSTRAP
     assert 'step 1 5 "Проверка системы"' in BOOTSTRAP
