@@ -38,11 +38,11 @@ def _menu_mieru(
     app: ApplicationService | None = None,
 ):
     app = _application(app)
-    
+
     while True:
         clear()
         ps = _desired_state(state, p.meta.name)
-        
+
         # Статус
         try:
             st = app.protocols.status(p.meta.name)
@@ -51,7 +51,7 @@ def _menu_mieru(
                 "get_current_preset",
                 state=state,
             )
-            
+
             details = [("Обфускация", f"{BOLD}{CYAN}{current_preset}{NC}")]
             details.extend((st.info or {}).items())
             protocol_status_panel(
@@ -64,7 +64,7 @@ def _menu_mieru(
                 running=False, port=ps.port,
                 error=str(exc) or exc.__class__.__name__,
             )
-        
+
         options = []
         if not ps.installed:
             options.append(("1", "🔧 Установить", p.meta.description))
@@ -75,17 +75,17 @@ def _menu_mieru(
                 options.append(("3", "🔒 Обфускация трафика", f"Текущий пресет: {current_preset}"))
             else:
                 options.append(("1", "▶️  Включить", "Активировать протокол"))
-            
+
             options.append(("8", "🔄 Переустановить", "Переустановка протокола"))
             options.append(("9", "❌ Удалить", "Полное удаление"))
-        
+
         options.append(("0", "↩ Назад", ""))
-        
+
         choice = menu(options, protocol_menu_title(p.meta.name))
-        
+
         if choice == "0":
             break
-            
+
         elif choice == "1":
             if not ps.installed:
                 info("Установка...")
@@ -115,13 +115,13 @@ def _menu_mieru(
                 except Exception as e:
                     error(f"Ошибка активации протокола: {e}")
             prompt("Нажмите Enter")
-            
+
         elif choice == "2" and ps.installed and ps.enabled:
             _show_plugin_clients(state, p, app)
-            
+
         elif choice == "3" and ps.installed and ps.enabled:
             _menu_mieru_obfuscation(state, p, app)
-            
+
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):
                 ok = app.protocols.reinstall(state, p.meta.name)
@@ -130,7 +130,7 @@ def _menu_mieru(
                 else:
                     error("Ошибка установки")
                 prompt("Нажмите Enter")
-                
+
         elif choice == "9" and ps.installed:
             if confirm("Вы уверены, что хотите полностью удалить Mieru?", default=False):
                 app.protocols.uninstall(state, p.meta.name)
@@ -146,7 +146,7 @@ def _menu_mieru_obfuscation(
 ):
     app = _application(app)
     from hydra.plugins.mieru.presets import list_presets
-    
+
     while True:
         clear()
         current_preset = app.plugin_query(
@@ -155,7 +155,7 @@ def _menu_mieru_obfuscation(
             state=state,
         )
         presets = list_presets()
-        
+
         lines = [
             f"Текущий пресет обфускации: {BOLD}{CYAN}{current_preset}{NC}",
             "",
@@ -164,20 +164,20 @@ def _menu_mieru_obfuscation(
         ]
         panel("🔒 ОБФУСКАЦИЯ ТРАФИКА MIERU", lines)
         print()
-        
+
         options = []
         for idx, pr in enumerate(presets, 1):
             marker = "  "
             if pr["name"] == current_preset:
                 marker = "• "
             options.append((str(idx), f"{marker}{pr['label']}", pr["description"]))
-            
+
         options.append(("0", "↩ Назад", ""))
-        
+
         choice = menu(options, "ОБФУСКАЦИЯ MIERU")
         if choice == "0":
             break
-            
+
         if choice.isdigit():
             idx = int(choice) - 1
             if 0 <= idx < len(presets):

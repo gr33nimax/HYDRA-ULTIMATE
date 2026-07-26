@@ -190,4 +190,3 @@ def mieru_probe_rule(binary: str, close_flag: str) -> list[str]:
         "--log-level",
         "4",
     ]
-

@@ -82,4 +82,3 @@ def ban_ip_antidpi(ip: str, app: ApplicationService) -> dict:
         source="telegram-admin",
     )
     return _mapping_projection(result)
-

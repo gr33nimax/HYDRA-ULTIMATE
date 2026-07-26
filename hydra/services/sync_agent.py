@@ -100,6 +100,6 @@ def log_event(message: str) -> None:
 
 if __name__ == "__main__":
     # Compatibility for systemd units installed by HYDRA <= 2.5.3.
-    from hydra.entrypoints.sync_agent import main as _main
+    from importlib import import_module
 
-    raise SystemExit(_main())
+    raise SystemExit(import_module("hydra.entrypoints.sync_agent").main())

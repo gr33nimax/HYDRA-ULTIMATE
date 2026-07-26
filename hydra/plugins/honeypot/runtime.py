@@ -143,4 +143,3 @@ class HoneypotRuntimeMixin:
     def on_disable(self, state: PluginStateAccess) -> None:
         if not self._remove_service(close_port=True):
             raise RuntimeError('Honeypot не удалось остановить')
-

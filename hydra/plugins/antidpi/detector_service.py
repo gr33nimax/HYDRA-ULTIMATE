@@ -202,4 +202,3 @@ class AntiDPIDetectorMixin:
                     banned = True
             store.save(data)
             return banned
-

@@ -38,14 +38,14 @@ def _menu_anytls(
     app: ApplicationService | None = None,
 ):
     app = _application(app)
-    
+
     while True:
         # Keep the action label and subsequent save aligned with the state
         # committed by the preceding enable/disable transaction.
         state = app.admin.load_state()
         clear()
         ps = _desired_state(state, p.meta.name)
-        
+
         # Статус
         try:
             st = app.protocols.status(p.meta.name)
@@ -56,7 +56,7 @@ def _menu_anytls(
             )
             from hydra.plugins.anytls.presets import get_preset
             preset_label = get_preset(current_preset)["label"]
-            
+
             details = [("Обфускация", f"{BOLD}{CYAN}{preset_label}{NC}")]
             details.extend((st.info or {}).items())
             protocol_status_panel(
@@ -69,7 +69,7 @@ def _menu_anytls(
                 running=False, port=ps.port,
                 error=str(exc) or exc.__class__.__name__,
             )
-        
+
         options = []
         if not ps.installed:
             options.append(("1", "🔧 Установить", p.meta.description))
@@ -80,17 +80,17 @@ def _menu_anytls(
                 options.append(("3", "🔒 Обфускация трафика", f"Текущий режим: {preset_label}"))
             else:
                 options.append(("1", "▶️  Включить", "Активировать протокол"))
-            
+
             options.append(("8", "🔄 Переустановить", "Переустановка протокола"))
             options.append(("9", "❌ Удалить", "Полное удаление"))
-        
+
         options.append(("0", "↩ Назад", ""))
-        
+
         choice = menu(options, protocol_menu_title(p.meta.name))
-        
+
         if choice == "0":
             break
-            
+
         elif choice == "1":
             if not ps.installed:
                 info("Установка...")
@@ -120,13 +120,13 @@ def _menu_anytls(
                 except Exception as e:
                     error(f"Ошибка активации протокола: {e}")
             prompt("Нажмите Enter")
-            
+
         elif choice == "2" and ps.installed and ps.enabled:
             _show_plugin_clients(state, p, app)
-            
+
         elif choice == "3" and ps.installed and ps.enabled:
             _menu_anytls_obfuscation(state, p, app)
-            
+
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):
                 ok = app.protocols.reinstall(state, p.meta.name)
@@ -135,7 +135,7 @@ def _menu_anytls(
                 else:
                     error("Ошибка установки")
                 prompt("Нажмите Enter")
-                
+
         elif choice == "9" and ps.installed:
             if confirm("Вы уверены, что хотите полностью удалить AnyTLS?", default=False):
                 app.protocols.uninstall(state, p.meta.name)
@@ -151,7 +151,7 @@ def _menu_anytls_obfuscation(
 ):
     app = _application(app)
     from hydra.plugins.anytls.presets import list_presets, get_preset
-    
+
     while True:
         clear()
         current_preset = app.plugin_query(
@@ -161,7 +161,7 @@ def _menu_anytls_obfuscation(
         )
         presets = list_presets()
         preset_label = get_preset(current_preset)["label"]
-        
+
         lines = [
             f"Текущий режим обфускации: {BOLD}{CYAN}{preset_label}{NC}",
             "",
@@ -170,20 +170,20 @@ def _menu_anytls_obfuscation(
         ]
         panel("🔒 ОБФУСКАЦИЯ ТРАФИКА ANYTLS", lines)
         print()
-        
+
         options = []
         for idx, pr in enumerate(presets, 1):
             marker = "  "
             if pr["name"] == current_preset:
                 marker = "• "
             options.append((str(idx), f"{marker}{pr['label']}", pr["description"]))
-            
+
         options.append(("0", "↩ Назад", ""))
-        
+
         choice = menu(options, "ОБФУСКАЦИЯ ANYTLS")
         if choice == "0":
             break
-            
+
         if choice.isdigit():
             idx = int(choice) - 1
             if 0 <= idx < len(presets):

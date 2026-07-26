@@ -12,6 +12,7 @@ from hydra.services.user_access import (
     entitlement_status as get_user_entitlement_status,
 )
 from hydra.ui._menus.users_common import _application
+from hydra.ui._menus.users_detail import detail_menu_choices
 from hydra.ui._menus.users_links import _show_subscription_links, _user_configs
 from hydra.ui._menus.users_overview import _add_user, _select_user, _show_users
 from hydra.ui._menus.users_subscription import menu_subscription_server
@@ -195,47 +196,8 @@ def _user_detail_menu(
             warn("Нет включённых транспортных протоколов")
         print()
 
-        block_label = "Разблокировать" if user.blocked else "Заблокировать"
         choice = menu(
-            [
-                (
-                    "1",
-                    "🔗 Ссылки подписки",
-                    "Автоопределение клиента и специальные форматы",
-                ),
-                (
-                    "2",
-                    "📄 Ручные конфиги",
-                    "Ссылки и конфиги отдельных протоколов",
-                ),
-                (
-                    "3",
-                    f"🔒🔓 {block_label}",
-                    "Переключить статус блокировки",
-                ),
-                (
-                    "4",
-                    "📝 Изменить лимит трафика",
-                    "Задать квоту трафика в GiB",
-                ),
-                (
-                    "5",
-                    "⏳ Изменить срок действия",
-                    "Задать дату окончания подписки",
-                ),
-                ("6", "❌ Удалить", "Удалить пользователя"),
-                (
-                    "7",
-                    "✏️ Переименовать",
-                    "Изменить имя без смены UUID и ссылок",
-                ),
-                (
-                    "8",
-                    "📱 Лимит устройств",
-                    "Настроить HWID-ограничение и сбросить привязки",
-                ),
-                ("0", "↩ Назад", ""),
-            ],
+            detail_menu_choices(blocked=user.blocked),
             f"ПОЛЬЗОВАТЕЛЬ {user.email}",
         )
 

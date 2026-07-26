@@ -30,40 +30,40 @@ def _menu_external_sources_toggle(
         clear()
         list_targets = ps.config.setdefault("list_targets", {})
         external_sources = facade._external_sources(app)
-        
+
         status_lines = []
         for key, item in external_sources.items():
             target = list_targets.get(f"ext:{key}", "none")
             status_ico = "🟢" if target != "none" else "🔴"
             status_txt = f"Активен (→ {target})" if target != "none" else "Отключен"
             color = GREEN if target != "none" else RED
-            
+
             filename = item['url'].split('/')[-1]
             short_desc = item['desc'].split(' (')[0]
-            
+
             status_lines.append(f"  {status_ico}  {BOLD}{item['name']:<14}{NC} {DIM}({filename}){NC}")
             status_lines.append(f"     {color}{status_txt:<8}{NC}  {DIM}│{NC}  {short_desc}")
             status_lines.append("")
-            
+
         panel("🔗 ВНЕШНИЕ ИСТОЧНИКИ ПРАВИЛ (itdoginfo)", status_lines)
-        
+
         opts = []
         for idx, (key, item) in enumerate(external_sources.items(), start=1):
             target = list_targets.get(f"ext:{key}", "none")
             action = "Отключить" if target != "none" else "Включить"
             opts.append((str(idx), f"Toggle {item['name']}", f"{action} {item['name']}"))
-            
+
         opts.append(("0", "↩ Назад", ""))
-        
+
         choice = menu(opts, "ВНЕШНИЕ ИСТОЧНИКИ")
         if choice == "0":
             break
-            
+
         elif choice.isdigit() and 1 <= int(choice) <= len(external_sources):
             keys = list(external_sources.keys())
             key = keys[int(choice) - 1]
             target = list_targets.get(f"ext:{key}", "none")
-            
+
             if target != "none":
                 list_targets[f"ext:{key}"] = "none"
                 app.admin.save_state(state)
@@ -83,11 +83,11 @@ def _menu_external_sources_toggle(
                     destinations.append(f"warp_{p}")
                 if observation.get("default_profile_exists"):
                     destinations.append("warp")
-                
+
                 opts_dest = []
                 for i, d in enumerate(destinations, start=1):
                     opts_dest.append((str(i), d, f"Направить трафик на {d}"))
-                
+
                 d_choice = menu(opts_dest, f"ВЫБЕРИТЕ НАПРАВЛЕНИЕ ДЛЯ {external_sources[key]['name'].upper()}")
                 if d_choice.isdigit():
                     d_idx = int(d_choice) - 1
@@ -96,7 +96,7 @@ def _menu_external_sources_toggle(
                         list_targets[f"ext:{key}"] = chosen_dest
                         app.admin.save_state(state)
                         success(f"Список {external_sources[key]['name']} направлен на {chosen_dest}!")
-                        
+
                         info("Скачиваю список правил...")
                         ok, msg = app.plugin_action(
                             "warp",
@@ -107,11 +107,11 @@ def _menu_external_sources_toggle(
                             success(msg)
                         else:
                             warn(msg)
-                            
+
                         if ps.enabled:
                             info("Применяю конфигурацию в Sing-Box...")
                             app.apply(state)
-                            
+
             prompt("Нажмите Enter для продолжения")
 
 
@@ -127,56 +127,56 @@ def _menu_routing_rules(
         list_targets = ps.config.setdefault("list_targets", {})
         local_lists = ps.config.setdefault("local_lists", {})
         external_sources = facade._external_sources(app)
-        
+
         status_lines = [
             f"  {BOLD}Текущее сопоставление списков и точек выхода:{NC}",
             "  " + "─" * 60
         ]
-        
+
         active_rules = []
-        
+
         # 1. Локальные списки
         for name in local_lists.keys():
             key = f"local:{name}"
             target = list_targets.get(key, "none")
             active_rules.append((key, name + " (локал.)", target))
-            
+
         # 2. Внешние списки
         for name, item in external_sources.items():
             key = f"ext:{name}"
             target = list_targets.get(key, "none")
             active_rules.append((key, item["name"] + " (внешн.)", target))
-            
+
         for idx, (key, display_name, target) in enumerate(active_rules, 1):
             target_color = GREEN if target != "none" and target != "direct" else (YELLOW if target == "direct" else DIM)
             status_lines.append(f"  {idx:<3} {display_name:<25} → {target_color}{target}{NC}")
-            
+
         panel("🔀 МАРШРУТИЗАЦИЯ СПИСКОВ ПРАВИЛ", status_lines)
-        
+
         opts = []
         for idx, (key, display_name, target) in enumerate(active_rules, 1):
             opts.append((str(idx), display_name, f"Изменить направление (сейчас: {target})"))
         opts.append(("0", "↩ Назад", ""))
-        
+
         choice = menu(opts, "ВЫБЕРИТЕ МАРШРУТ ДЛЯ ИЗМЕНЕНИЯ")
         if choice == "0":
             break
-            
+
         if choice.isdigit():
             idx = int(choice) - 1
             if 0 <= idx < len(active_rules):
                 key, display_name, current_target = active_rules[idx]
-                
+
                 opts_dest = []
                 for i, d in enumerate(destinations, start=1):
                     opts_dest.append((str(i), d, f"Направить на {d}"))
                 opts_dest.append((str(len(destinations) + 1), "none (отключить)", "Отключить маршрутизацию этого списка"))
                 opts_dest.append(("0", "Отмена", ""))
-                
+
                 d_choice = menu(opts_dest, f"НАПРАВЛЕНИЕ ДЛЯ {display_name.upper()}")
                 if d_choice == "0":
                     continue
-                
+
                 if d_choice.isdigit():
                     d_idx = int(d_choice) - 1
                     if 0 <= d_idx < len(destinations):
@@ -214,5 +214,5 @@ def _menu_routing_rules(
                             error(msg)
                             if ps.enabled:
                                 facade._show_diagnostic_info(app)
-                            
+
                 prompt("Нажмите Enter для продолжения")

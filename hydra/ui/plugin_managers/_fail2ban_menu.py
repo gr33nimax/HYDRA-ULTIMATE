@@ -1,7 +1,7 @@
 """Small controller loop and views for the Fail2ban manager facade."""
 from __future__ import annotations
 
-from hydra.core.state_models import AppState, get_protocol
+from hydra.core.state_models import AppState
 from hydra.services.application import ApplicationService
 from hydra.ui.plugin_managers._facade_bridge import facade
 from hydra.ui.plugin_managers._fail2ban_bans import (
@@ -107,10 +107,7 @@ def _options(
             ),
         ]
     else:
-        whitelist = get_protocol(
-            state,
-            "fail2ban",
-        ).config.get("whitelist", [])
+        whitelist = facade._effective_whitelist(state)
         options = [
             (
                 "1",
@@ -160,7 +157,7 @@ def _options(
             (
                 "W",
                 f"⚪ Управление whitelist {DIM}({len(whitelist)} IP){NC}",
-                "Список IP-адресов/подсетей-исключений",
+                "Фактический ignoreip: ручные и автоматические адреса",
             ),
             ("-", "", ""),
             ("X", "🧹 Очистить лог Fail2ban", ""),

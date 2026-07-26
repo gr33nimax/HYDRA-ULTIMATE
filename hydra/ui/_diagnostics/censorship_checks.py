@@ -163,7 +163,7 @@ def run_censorcheck_python(mode: str) -> dict:
     """Запускает параллельные проверки доступности доменов в зависимости от выбранного режима."""
     domains = GEO_BLOCKED_SITES if mode == "geoblock" else DPI_BLOCKED_SITES
     results = []
-    
+
     def fetch_asn():
         try:
             response = current_diagnostic_operations().request(
@@ -178,7 +178,7 @@ def run_censorcheck_python(mode: str) -> dict:
         except Exception:
             pass
         return "—"
-        
+
     def worker(domain):
         http_status = check_domain_censor(domain, secure=False)
         https_status = check_domain_censor(domain, secure=True)
@@ -191,15 +191,15 @@ def run_censorcheck_python(mode: str) -> dict:
                 "ipv4": {"status": https_status}
             }
         }
-        
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
         asn_future = executor.submit(fetch_asn)
         futures = {executor.submit(worker, d): d for d in domains}
         for future in concurrent.futures.as_completed(futures):
             results.append(future.result())
-            
+
         asn = asn_future.result()
-            
+
     # Сортируем результаты по алфавиту для красоты
     results.sort(key=lambda x: x["service"])
     return {"results": results, "asn": asn}
@@ -282,33 +282,33 @@ def test_censorcheck(mode: str):
     mode_title = "Гео-блокировки с VPS" if mode == "geoblock" else "Исходящая доступность с VPS"
     title(f"Тестирование: {mode_title}")
     print()
-    
+
     try:
         data = run_function_with_spinner("Анализ доступности ресурсов", run_censorcheck_python, mode)
         results = data.get("results", [])
         asn = data.get("asn", "—")
-        
+
         def pad_ansi(s, width):
             clean_len = len(re.sub(r'\x1b\[[0-9;]*m', '', s))
             if clean_len >= width:
                 return s
             return s + " " * (width - clean_len)
-            
+
         print(f"  {BOLD}{'Domain':<28} │ {'Status':<14} │ Block Type{NC}")
         print("  " + "─" * 74)
-        
+
         ok_count = 0
         blocked_count = 0
         partial_count = 0
-        
+
         for item in results:
             domain = item.get("service", "")
             http = item.get("http", {})
             https = item.get("https", {})
-            
+
             http_status = http.get("ipv4", {}).get("status", 0)
             https_status = https.get("ipv4", {}).get("status", 0)
-            
+
             classification, reason = classify_censor_status(http_status, https_status)
             if classification == "ok":
                 status_str = f"{GREEN}OK{NC}"
@@ -322,16 +322,16 @@ def test_censorcheck(mode: str):
                 status_str = f"{RED}BLOCKED{NC}"
                 block_type_str = f"{RED}({reason}){NC}"
                 blocked_count += 1
-                    
+
             print(f"  {domain:<28} │ {pad_ansi(status_str, 14)} │ {block_type_str}")
-            
+
         print("  " + "─" * 74)
         summary = f"{GREEN}OK:{ok_count}{NC}  {RED}BLOCKED:{blocked_count}{NC}  {YELLOW}PARTIAL:{partial_count}{NC}  {DIM}Total:{len(results)}{NC}"
         if asn != "—":
             summary += f" {DIM}|{NC} {CYAN}{asn}{NC}"
         print(f"  {summary}")
         print("  " + "─" * 74)
-        
+
         if mode == "dpi":
             if not is_port_listening(443):
                 print()
@@ -342,14 +342,14 @@ def test_censorcheck(mode: str):
                 print(f"  {CYAN}Опрос сетей РФ: РТК, МТС, МГТС, Билайн, ТТК, РТК-Юг, Мегафон...{NC}")
                 target_ip = get_ip_address(4)
                 sni = get_reality_sni()
-                
+
                 radar_res = run_function_with_spinner("Запуск радара ТСПУ", run_tspu_radar, target_ip, sni)
                 print()
                 if radar_res.get("status") == "success":
                     total = radar_res["total"]
                     success_prbs = radar_res["success"]
                     blocked_prbs = radar_res["blocked"]
-                    
+
                     percent = (success_prbs * 100 // total) if total > 0 else 0
                     if percent == 100:
                         color = GREEN
@@ -360,10 +360,10 @@ def test_censorcheck(mode: str):
                     else:
                         color = RED
                         text = "КРИТИЧНАЯ БЛОКИРОВКА ТСПУ (IP недоступен)"
-                        
+
                     print(f"  Зондов ответило: {CYAN}{total}{NC} | Пробились: {GREEN}{success_prbs}{NC} | Заблокированы: {RED}{blocked_prbs}{NC}")
                     print(f"  ТСПУ Статус: {color}{percent}% {text}{NC}")
-                    
+
                     blocked_asns = radar_res.get("blocked_asns", {})
                     if blocked_asns:
                         asn_names = {
@@ -389,10 +389,10 @@ def test_censorcheck(mode: str):
                 else:
                     print(f"  {YELLOW}Не удалось запустить радар ТСПУ: {radar_res.get('message')}{NC}")
                     print()
-                    
+
     except KeyboardInterrupt:
         pass
     except Exception as e:
         error(f"Не удалось выполнить тест: {e}")
-        
+
     prompt("Нажмите Enter для возврата...")

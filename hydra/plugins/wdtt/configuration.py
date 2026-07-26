@@ -70,4 +70,3 @@ class WdttConfigurationMixin:
 
     def client_link(self, user: User, state: PluginStateAccess) -> str:
         return ''
-

@@ -111,4 +111,3 @@ def diagnostic_scope(
         yield operations
     finally:
         _ACTIVE_OPERATIONS.reset(token)
-

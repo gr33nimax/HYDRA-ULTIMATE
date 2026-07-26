@@ -116,4 +116,3 @@ class WdttLifecycleMixin:
                 break
             self._wdtt_env().host.run(['iptables', '-t', 'nat', '-D', 'POSTROUTING', '-s', self._wdtt_env().default_wg_subnet, '!', '-d', self._wdtt_env().default_wg_subnet, '-j', 'MASQUERADE'], capture_output=True)
         self._ipt_persist()
-

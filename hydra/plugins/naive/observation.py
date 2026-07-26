@@ -186,4 +186,3 @@ class NaiveObservationMixin:
             "OUTPUT",
             "naive-",
         )
-

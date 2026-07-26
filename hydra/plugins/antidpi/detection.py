@@ -315,4 +315,3 @@ def record_automatic_ban(data: dict, observation: Observation) -> dict:
     history.append({"ip": address, **metadata, "status": "active"})
     data["history"] = history[-1000:]
     return metadata
-

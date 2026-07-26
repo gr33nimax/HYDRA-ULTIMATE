@@ -51,8 +51,15 @@ curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/boots
 `main` 2.5.3 на `dev` 2.5.4 используйте транзакционный updater:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/upgrade.sh \
-  | sudo HYDRA_REF=dev bash
+(
+  set -e
+  upgrade_script=$(mktemp)
+  trap 'rm -f "$upgrade_script"' EXIT
+  curl -fsSL \
+    https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/upgrade.sh \
+    -o "$upgrade_script"
+  sudo env HYDRA_REF=dev bash "$upgrade_script"
+)
 ```
 
 Он проверяет точный commit ветки, собирает новую версию и виртуальное окружение

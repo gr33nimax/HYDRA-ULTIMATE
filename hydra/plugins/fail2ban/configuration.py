@@ -210,4 +210,3 @@ class Fail2banConfigurationMixin:
             if restart.returncode != 0:
                 return False
         return self.status().running
-

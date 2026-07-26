@@ -62,4 +62,3 @@ class Fail2banObservationMixin:
 
     def traffic(self, state: PluginStateAccess) -> dict[str, int]:
         return {}
-

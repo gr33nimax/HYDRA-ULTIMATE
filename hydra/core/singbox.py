@@ -20,7 +20,7 @@ from hydra.core.state import load_state, save_state
 from hydra.core.state_models import AppState, PluginState
 from hydra.core.host import HOST
 from hydra.core import singbox_config
-from hydra.core.singbox_upgrade import UpgradeOperations, upgrade_kernel
+from hydra.core.singbox_upgrade import UpgradeOperations, parse_version, upgrade_kernel
 from hydra.utils.commands import redact_text
 
 SINGBOX_BIN = Path("/usr/local/bin/sing-box")
@@ -476,20 +476,6 @@ def status_text() -> str:
         f"Sing-Box: {version or 'не установлен'}{update_suffix} | "
         f"{'✓ запущен' if running else '✗ остановлен'}"
     )
-
-
-def parse_version(v_str: Optional[str]) -> tuple[int, ...]:
-    """Парсит строку версии в кортеж чисел для сравнения."""
-    if not v_str:
-        return (0,)
-    import re
-    parts = re.findall(r'\d+', v_str)
-    if parts:
-        try:
-            return tuple(map(int, parts))
-        except ValueError:
-            pass
-    return (0,)
 
 
 def update_kernel() -> tuple[bool, str]:

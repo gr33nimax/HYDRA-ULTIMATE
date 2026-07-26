@@ -1,6 +1,7 @@
 """Transactional Sing-Box binary upgrade with rollback."""
 from __future__ import annotations
 
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,17 @@ class UpgradeOperations:
     start: Callable[[], bool]
     stop: Callable[[], bool]
     log: Callable[[str, str], None]
+
+
+def parse_version(value: str | None) -> tuple[int, ...]:
+    """Parse every numeric release component for upgrade comparisons."""
+    if not value:
+        return (0,)
+    parts = re.findall(r"\d+", value)
+    try:
+        return tuple(map(int, parts)) if parts else (0,)
+    except ValueError:
+        return (0,)
 
 
 def upgrade_kernel(
@@ -146,4 +158,4 @@ def _clear_update_flags(log: Callable[[str, str], None]) -> None:
         log("WARNING", f"Failed to reset update flags in state: {exc}")
 
 
-__all__ = ["UpgradeOperations", "upgrade_kernel"]
+__all__ = ["UpgradeOperations", "parse_version", "upgrade_kernel"]

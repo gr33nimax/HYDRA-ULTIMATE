@@ -78,6 +78,6 @@ __all__ = [
 
 if __name__ == "__main__":
     # Compatibility for systemd units installed by HYDRA <= 2.5.3.
-    from hydra.entrypoints.subscription_server import main as _main
+    from importlib import import_module
 
-    _main()
+    import_module("hydra.entrypoints.subscription_server").main()

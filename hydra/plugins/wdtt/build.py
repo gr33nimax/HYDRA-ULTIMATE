@@ -143,4 +143,3 @@ class WdttBuildMixin:
                 except Exception:
                     pass
         return self._check_go()
-

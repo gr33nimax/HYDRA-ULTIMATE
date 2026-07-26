@@ -237,4 +237,3 @@ def _toggle_fail2ban(app: ApplicationService) -> tuple[bool, str]:
         app=app,
     )
     return ok, "остановлен" if running else "запущен"
-

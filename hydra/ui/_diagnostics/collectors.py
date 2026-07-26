@@ -202,4 +202,3 @@ def run_http_speed(url):
 
 def test_bench_speedtest(app: ApplicationService):
     return _delegate("test_bench_speedtest", app)
-

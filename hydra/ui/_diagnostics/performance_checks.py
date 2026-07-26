@@ -39,10 +39,10 @@ def test_iperf3_ru(app: ApplicationService):
     clear()
     title("Тест скорости iPerf3 до серверов в РФ")
     print()
-    
+
     if not ensure_packages(["iperf3", "ping"], app):
         return
-        
+
     SERVERS = {
         "Москва": {"host": "spd-rudp.hostkey.ru", "fallback": "st.tver.ertelecom.ru"},
         "Санкт-Петербург": {"host": "st.spb.ertelecom.ru", "fallback": "st.yar.ertelecom.ru"},
@@ -50,9 +50,9 @@ def test_iperf3_ru(app: ApplicationService):
         "Челябинск": {"host": "st.chel.ertelecom.ru", "fallback": "st.mgn.ertelecom.ru"},
         "Тюмень": {"host": "st.tmn.ertelecom.ru", "fallback": "st.krsk.ertelecom.ru"},
     }
-    
+
     ports = [5201, 5202, 5203, 5204, 5205, 5206, 5207, 5208, 5209]
-    
+
     operations = operations_from_application(app)
 
     def check_port(host, port):
@@ -66,7 +66,7 @@ def test_iperf3_ru(app: ApplicationService):
                 if res is not None:
                     return res
         return None
-            
+
     def run_speed(host, port, reverse=False):
         cmd = ["iperf3", "-c", host, "-p", str(port), "-t", "4", "-P", "4", "-J"]
         if reverse:
@@ -81,7 +81,7 @@ def test_iperf3_ru(app: ApplicationService):
             return max(sent, recv) / 1_000_000
         except Exception:
             return 0.0
-            
+
     def get_ping(host):
         try:
             r = app.admin.run_command(["ping", "-c", "2", "-W", "1.5", host], capture_output=True, text=True, timeout=3.0)
@@ -96,15 +96,15 @@ def test_iperf3_ru(app: ApplicationService):
         val_down, col_down = down_tuple
         val_up, col_up = up_tuple
         val_ping, col_ping = ping_tuple
-        
+
         p_down = f"{val_down:<16}"
         p_up = f"{val_up:<16}"
         p_ping = f"{val_ping:<12}"
-        
+
         c_down = f"{col_down}{p_down}{NC}"
         c_up = f"{col_up}{p_up}{NC}"
         c_ping = f"{col_ping}{p_ping}{NC}"
-        
+
         line = f"  {city:<20} │ {c_down} │ {c_up} │ {c_ping} "
         sys.stdout.write(f"  {CYAN}║{NC}{line}{CYAN}║{NC}{end_char}")
         sys.stdout.flush()
@@ -112,46 +112,46 @@ def test_iperf3_ru(app: ApplicationService):
     print(f"  {CYAN}╔{'═' * 76}╗{NC}")
     print_row("Сервер", ("↓ Download", BOLD), ("↑ Upload", BOLD), ("Ping", BOLD))
     print(f"  {CYAN}╠{'═' * 76}╣{NC}")
-    
+
     try:
         for city, cfg in SERVERS.items():
             print_row(city, ("Connecting...", YELLOW), ("", ""), ("—", ""), end_char="\r")
-            
+
             def try_host(host):
                 target_port = find_active_port(host)
                 if not target_port:
                     return None
-                    
+
                 ping_val = get_ping(host)
                 print_row(city, ("Download...", CYAN), ("", ""), (ping_val, ""), end_char="\r")
                 down_speed = run_speed(host, target_port, reverse=True)
-                
+
                 if down_speed == 0.0:
                     return None
-                    
+
                 print_row(city, (f"{down_speed:.1f} Mbps", GREEN), ("Upload...", CYAN), (ping_val, ""), end_char="\r")
                 up_speed = run_speed(host, target_port, reverse=False)
-                
+
                 return down_speed, up_speed, ping_val
 
             res = try_host(cfg["host"])
             if res is None:
                 print_row(city, ("Fallback...", YELLOW), ("", ""), ("—", ""), end_char="\r")
                 res = try_host(cfg["fallback"])
-                
+
             if res is not None:
                 down_speed, up_speed, ping_val = res
                 print_row(city, (f"{down_speed:.1f} Mbps", GREEN), (f"{up_speed:.1f} Mbps", GREEN), (ping_val, ""), end_char="\n")
             else:
                 print_row(city, ("Unavailable", RED), ("Unavailable", RED), ("—", RED), end_char="\n")
-            
+
         print(f"  {CYAN}╚{'═' * 76}╝{NC}")
-        
+
     except KeyboardInterrupt:
         sys.stdout.write("\r" + " " * 80 + "\r")
         print(f"  {CYAN}╚{'═' * 76}╝{NC}")
         print(f"\n\n  {RED}[!] Тест скорости прерван.{NC}")
-        
+
     print()
     prompt("Нажмите Enter для возврата...")
 
@@ -161,20 +161,20 @@ def test_cpu_sysbench(app: ApplicationService):
     clear()
     title("Тестирование производительности процессора (sysbench)")
     print()
-    
+
     if not ensure_packages(["sysbench"], app):
         return
-        
+
     try:
         stdout = run_with_spinner("Вычисление производительности CPU", "sysbench cpu run --threads=1", app)
-        
+
         events_per_sec = re.search(r"events per second:\s+([\d\.]+)", stdout)
         total_time = re.search(r"total time:\s+([\d\.]+s?)", stdout)
         total_events = re.search(r"total number of events:\s+(\d+)", stdout)
         min_lat = re.search(r"min:\s+([\d\.]+)", stdout)
         avg_lat = re.search(r"avg:\s+([\d\.]+)", stdout)
         max_lat = re.search(r"max:\s+([\d\.]+)", stdout)
-        
+
         lines = []
         if events_per_sec:
             lines.append(kv("Производительность:", f"{GREEN}{events_per_sec.group(1)} событий/сек (однопоток){NC}"))
@@ -188,14 +188,14 @@ def test_cpu_sysbench(app: ApplicationService):
             lines.append(kv("Миним. пинг (min):", f"{min_lat.group(1)} ms"))
         if max_lat:
             lines.append(kv("Максим. пинг (max):", f"{max_lat.group(1)} ms"))
-            
+
         panel("💻  Результаты теста CPU (sysbench)", lines)
-        
+
     except KeyboardInterrupt:
         pass
     except Exception as e:
         error(f"Не удалось выполнить тест: {e}")
-        
+
     prompt("Нажмите Enter для возврата...")
 
 
@@ -212,13 +212,13 @@ def run_parallel_pings(nodes, app: ApplicationService):
         except Exception:
             pass
         return "N/A", float('inf')
-        
+
     results = {}
     def worker(node):
         host = operations.url_hostname(node["url"])
         ping_str, ping_val = get_ping_ms(host)
         return node["url"], (ping_str, ping_val)
-        
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         futures = {executor.submit(worker, node): node for node in nodes}
         for future in concurrent.futures.as_completed(futures):
@@ -237,23 +237,23 @@ def test_bench_speedtest(app: ApplicationService):
     clear()
     title("Тест скорости до зарубежных серверов (Global)")
     print()
-    
+
     if not ensure_packages(["ping"], app):
         return
-        
+
     choice = menu([
         ("1", "Быстрый тест (замер для 5 серверов с лучшим пингом)", "Экономит время"),
         ("2", "Полный тест (замер для всех доступных серверов)", "Занимает около 1 минуты"),
         ("0", "↩ Назад", "")
     ], "ВЫБОР РЕЖИМА ТЕСТА СКОРОСТИ")
-    
+
     if choice == "0":
         return
-        
+
     clear()
     title("Тест скорости до зарубежных серверов (Global)")
     print()
-    
+
     NODES = [
         {"city": "Atlanta, GA, US", "provider": "Linode", "url": "http://speedtest.atlanta.linode.com/100MB-atlanta.bin"},
         {"city": "Dallas, TX, US", "provider": "Enzu", "url": "https://speedtest.dfw1.enzu.com/100MB.bin"},
@@ -270,17 +270,17 @@ def test_bench_speedtest(app: ApplicationService):
         {"city": "Milan, Italy", "provider": "Linode", "url": "http://speedtest.milan.linode.com/100MB-milan.bin"},
         {"city": "Sydney, AU", "provider": "Datapacket", "url": "https://syd.download.datapacket.com/100mb.bin"},
     ]
-    
+
     def print_row(loc, prov, speed_tuple, ping_tuple, end_char="\n"):
         val_speed, col_speed = speed_tuple
         val_ping, col_ping = ping_tuple
-        
+
         p_speed = f"{val_speed:<14}"
         p_ping = f"{val_ping:<11}"
-        
+
         c_speed = f"{col_speed}{p_speed}{NC}"
         c_ping = f"{col_ping}{p_ping}{NC}"
-        
+
         line = f" {loc:<25} │ {prov:<14} │ {c_speed} │ {c_ping}  "
         sys.stdout.write(f"  {CYAN}║{NC}{line}{CYAN}║{NC}{end_char}")
         sys.stdout.flush()
@@ -292,34 +292,34 @@ def test_bench_speedtest(app: ApplicationService):
             NODES,
             app,
         )
-        
+
         # Сортируем ноды по пингу
         sorted_nodes = []
         for node in NODES:
             ping_str, ping_val = ping_results.get(node["url"], ("N/A", float('inf')))
             sorted_nodes.append((node, ping_str, ping_val))
         sorted_nodes.sort(key=lambda x: x[2])
-        
+
         # В зависимости от выбора пользователя определяем список нод для замера скорости
         if choice == "1":
             active_urls = {item[0]["url"] for item in sorted_nodes[:5]}
         else:
             active_urls = {item[0]["url"] for item in sorted_nodes if item[2] != float('inf')}
-        
+
         print(f"  {CYAN}╔{'═' * 76}╗{NC}")
         print_row("Локация", "Провайдер", ("↓ Speed", BOLD), ("Ping", BOLD))
         print(f"  {CYAN}╠{'═' * 76}╣{NC}")
-        
+
         for node in NODES:
             loc = node["city"]
             prov = node["provider"]
             url = node["url"]
             ping_str, ping_val = ping_results.get(url, ("N/A", float('inf')))
-            
+
             if url in active_urls and ping_val != float('inf'):
                 print_row(loc, prov, ("Download...", CYAN), (ping_str, ""), end_char="\r")
                 speed_mbps = run_http_speed(url)
-                
+
                 if speed_mbps > 0.0:
                     if speed_mbps >= 1000:
                         speed_str = f"{speed_mbps/1000:.1f} Gbps"
@@ -332,13 +332,13 @@ def test_bench_speedtest(app: ApplicationService):
                 # Нода пропущена
                 speed_str = "—" if ping_val == float('inf') else "Skipped"
                 print_row(loc, prov, (speed_str, DIM), (ping_str, ""), end_char="\n")
-                
+
         print(f"  {CYAN}╚{'═' * 76}╝{NC}")
-        
+
     except KeyboardInterrupt:
         sys.stdout.write("\r" + " " * 80 + "\r")
         print(f"  {CYAN}╚{'═' * 76}╝{NC}")
         print(f"\n  {RED}[!] Тест скорости прерван.{NC}")
-        
+
     print()
     prompt("Нажмите Enter для возврата...")

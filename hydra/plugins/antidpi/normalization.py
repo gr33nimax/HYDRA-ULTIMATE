@@ -142,4 +142,3 @@ def normalize_trusttunnel_record(record: dict) -> tuple[str, dict] | None:
         normalized[1]["source"] = "caddy-trusttunnel-decoy"
         return normalized
     return None
-

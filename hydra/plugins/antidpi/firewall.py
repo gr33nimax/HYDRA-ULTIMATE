@@ -337,4 +337,3 @@ class FirewallAdapter:
             == 0
             for flag in ("FIN", "RST")
         )
-

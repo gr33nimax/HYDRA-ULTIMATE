@@ -43,17 +43,17 @@ def menu_diagnostics(state: AppState, app: ApplicationService):
     monitoring = monitoring_from_application(app)
     while True:
         clear()
-        
+
         load_str = "—"
         averages = monitoring.load_averages()
         if averages is not None:
             load_str = f"{averages[0]:.2f}, {averages[1]:.2f}"
-                
+
         panel("🛠️  Тестирование и диагностика VPS", [
             kv("Загрузка CPU (LA):", load_str),
             kv("Текущее время:", monitoring.local_time("%Y-%m-%d %H:%M:%S")),
         ])
-        
+
         choice = menu([
             ("1", "🌍 Сетевая идентификация (GeoIP)", "Анализ IP-адресов, ASN и геолокации"),
             ("2", "🛡️ Доступ к медиа-сервисам (Geoblocks)", "Тест ограничений OTT и ИИ-платформ"),
@@ -64,7 +64,7 @@ def menu_diagnostics(state: AppState, app: ApplicationService):
             ("7", "🔎 Диагностика HYDRA", "Сервисы, плагины, state и последнее применение"),
             ("0", "↩ Назад", "Возврат в главное меню")
         ], "ВЫБОР ДИАГНОСТИЧЕСКОГО ТЕСТА")
-        
+
         if choice == "0":
             break
         elif choice == "1":

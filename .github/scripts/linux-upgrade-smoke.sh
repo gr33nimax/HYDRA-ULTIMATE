@@ -12,7 +12,10 @@ unit=/etc/systemd/system/hydra-ci-upgrade.service
 wrapper=/usr/local/bin/hydra
 tmp_dir=$(mktemp -d /tmp/hydra-upgrade-integration.XXXXXX)
 remote="$tmp_dir/remote.git"
+sentinel="$tmp_dir/upgrade-sentinel.sh"
+fail_next_start="$tmp_dir/fail-next-service-start"
 wrapper_backup="$tmp_dir/original-hydra-wrapper"
+wrapper_fixture="$tmp_dir/fixture-hydra-wrapper"
 wrapper_existed=0
 
 [[ ! -e "$install_dir" && ! -L "$install_dir" ]] || {
@@ -53,6 +56,9 @@ if [[ -e "$wrapper" || -L "$wrapper" ]]; then
     cp -a "$wrapper" "$wrapper_backup"
     wrapper_existed=1
 fi
+printf '#!/usr/bin/env bash\nexit 77\n' > "$wrapper_fixture"
+chmod 0755 "$wrapper_fixture"
+cp -a "$wrapper_fixture" "$wrapper"
 
 git config --global --add safe.directory "$workspace"
 git -C "$workspace" rev-parse --verify origin/main >/dev/null
@@ -86,12 +92,24 @@ for key in state["security"]:
 path.write_text(json.dumps(state, indent=2) + "\n")
 PY
 
-cat > "$unit" <<'EOF'
+cat > "$sentinel" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ -e "$fail_next_start" ]]; then
+    rm -f "$fail_next_start"
+    exit 1
+fi
+exit 0
+EOF
+chmod 0755 "$sentinel"
+
+cat > "$unit" <<EOF
 [Unit]
 Description=HYDRA upgrade transaction integration sentinel
 
 [Service]
 Type=simple
+ExecStartPre=$sentinel
 ExecStart=/bin/sleep infinity
 EOF
 systemctl daemon-reload
@@ -99,18 +117,55 @@ systemctl start hydra-ci-upgrade.service
 systemctl is-active --quiet hydra-ci-upgrade.service
 
 target_sha=$(git -C "$workspace" rev-parse HEAD)
-HYDRA_REPO_URL="$remote" \
-HYDRA_REF=dev \
-HYDRA_INSTALL_DIR="$install_dir" \
-HYDRA_RELEASES_DIR="$tmp_dir/releases" \
-HYDRA_UPGRADE_BACKUP_DIR="$tmp_dir/backups" \
-HYDRA_UPGRADE_LOCK_FILE="$tmp_dir/upgrade.lock" \
-    bash "$workspace/upgrade.sh"
+main_sha=$(git -C "$workspace" rev-parse origin/main)
+neutral_cwd="$tmp_dir/neutral-cwd"
+mkdir "$neutral_cwd"
+run_updater() {
+    (
+        cd "$neutral_cwd"
+        HYDRA_REPO_URL="$remote" \
+        HYDRA_REF=dev \
+        HYDRA_INSTALL_DIR="$install_dir" \
+        HYDRA_RELEASES_DIR="$tmp_dir/releases" \
+        HYDRA_UPGRADE_BACKUP_DIR="$tmp_dir/backups" \
+        HYDRA_UPGRADE_LOCK_FILE="$tmp_dir/upgrade.lock" \
+            bash "$workspace/upgrade.sh"
+    )
+}
+
+touch "$fail_next_start"
+if run_updater; then
+    echo "fault-injected upgrade unexpectedly succeeded" >&2
+    exit 1
+fi
+
+[[ -d "$install_dir" && ! -L "$install_dir" ]]
+[[ "$(git -C "$install_dir" rev-parse HEAD)" == "$main_sha" ]]
+cmp -s "$wrapper" "$wrapper_fixture"
+systemctl is-active --quiet hydra-ci-upgrade.service
+"$install_dir/.venv/bin/python" - <<'PY'
+import json
+from pathlib import Path
+
+state = json.loads(Path("/var/lib/hydra/state.json").read_text())
+assert state["version"] == 3
+assert state["users"][0]["credentials"]["naive"]["password"] == "preserve-me"
+assert state["telegram"]["admin_token"] == "preserve-admin-token"
+PY
+test "$(find "$tmp_dir/backups" -name SUCCESS -type f | wc -l)" = "0"
+test "$(find /var/lib -maxdepth 1 -name 'hydra.upgrade-rollback-*' | wc -l)" = "0"
+
+run_updater
 
 [[ -L "$install_dir" ]]
 [[ "$(git -C "$install_dir" rev-parse HEAD)" == "$target_sha" ]]
-[[ "$("$install_dir/.venv/bin/python" -c \
-    'from hydra import __version__; print(__version__)')" == "2.5.4" ]]
+! cmp -s "$wrapper" "$wrapper_fixture"
+installed_version=$(
+    cd "$neutral_cwd"
+    PYTHONPATH="$install_dir" "$install_dir/.venv/bin/python" -c \
+        'from hydra import __version__; print(__version__)'
+)
+[[ "$installed_version" == "2.5.4" ]]
 systemctl is-active --quiet hydra-ci-upgrade.service
 
 "$install_dir/.venv/bin/python" - <<'PY'
@@ -128,4 +183,5 @@ assert "fail2ban" not in state["protocols"]
 PY
 
 test "$(find "$tmp_dir/backups" -name SUCCESS -type f | wc -l)" = "1"
-test "$(find "$tmp_dir/backups" -name hydra-backup.tar.gz -type f | wc -l)" = "1"
+test "$(find "$tmp_dir/backups" -name hydra-backup.tar.gz -type f | wc -l)" = "2"
+test "$(find "$tmp_dir/backups" -name state-after-failed-upgrade -type d | wc -l)" = "1"

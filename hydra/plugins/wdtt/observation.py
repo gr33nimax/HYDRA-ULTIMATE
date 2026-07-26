@@ -108,4 +108,3 @@ class WdttObservationMixin:
 
     def connected_clients(self, state: PluginStateAccess | None=None) -> list[dict]:
         return []
-

@@ -34,18 +34,18 @@ def _awg_generate_wizard(state: AppState, p) -> tuple[str, str | None] | None:
     for idx, s in enumerate(strategies, 1):
         strat_opts.append((str(idx), s["label"], s["description"]))
     strat_opts.append(("0", "Отмена", ""))
-    
+
     choice = menu(strat_opts, "ШАГ 1: ВЫБЕРИТЕ СТРАТЕГИЮ (ТИП СЕТИ)")
     if choice == "0" or not choice.isdigit():
         return None
-        
+
     s_idx = int(choice) - 1
     if not (0 <= s_idx < len(strategies)):
         return None
-        
+
     strategy = strategies[s_idx]["name"]
     carrier = None
-    
+
     # Step 2: Select Carrier if mobile
     if strategy == "mobile":
         carriers = list_carriers(strategy)
@@ -53,15 +53,15 @@ def _awg_generate_wizard(state: AppState, p) -> tuple[str, str | None] | None:
         for idx, c in enumerate(carriers, 1):
             carrier_opts.append((str(idx), c["label"], c["description"]))
         carrier_opts.append(("0", "Отмена", ""))
-        
+
         c_choice = menu(carrier_opts, "ШАГ 2: ВЫБЕРИТЕ ОПЕРАТОРА СВЯЗИ")
         if c_choice == "0" or not c_choice.isdigit():
             return None
-            
+
         c_idx = int(c_choice) - 1
         if not (0 <= c_idx < len(carriers)):
             return None
-            
+
         carrier = carriers[c_idx]["name"]
         if carrier == "generic":
             carrier = None
@@ -69,14 +69,14 @@ def _awg_generate_wizard(state: AppState, p) -> tuple[str, str | None] | None:
     # Step 3: Loop for Preview & Regeneration
     while True:
         params = generate_params(strategy=strategy, carrier=carrier)
-        
+
         strat_label = STRATEGIES[strategy].label
         carrier_label = "Универсальный мобильный"
         if carrier:
             carrier_label = CARRIER_OVERRIDES[carrier].label
         elif strategy != "mobile":
             carrier_label = "Не требуется (проводной/stealth)"
-            
+
         lines = [
             f"  Стратегия:  {strat_label}",
             f"  Оператор:   {carrier_label}",
@@ -91,16 +91,16 @@ def _awg_generate_wizard(state: AppState, p) -> tuple[str, str | None] | None:
             f"  {GREEN}ⓘ{NC}  S1({params['S1']}) + 56 = {int(params['S1'])+56} != S2({params['S2']}) — сигнатура WireGuard устранена",
             f"  {GREEN}ⓘ{NC}  Заголовки H1-H4 полностью уникальны и рандомизированы",
         ]
-        
+
         clear()
         panel("🎲 СГЕНЕРИРОВАННЫЕ ПАРАМЕТРЫ ОБФУСКАЦИИ", lines)
-        
+
         confirm_opts = [
             ("1", "✅ Применить эти параметры", "Сохранить и перезапустить туннель с ними"),
             ("2", "🔄 Перегенерировать", "Сгенерировать другие случайные значения"),
             ("0", "❌ Отмена", "Выйти без сохранения"),
         ]
-        
+
         ans = menu(confirm_opts, "ПОДТВЕРЖДЕНИЕ ГЕНЕРАЦИИ")
         if ans == "1":
             return strategy, carrier

@@ -48,7 +48,7 @@ def _menu_geo_profiles(
             f"  Для добавления нового релея загрузите .conf файл в этот каталог.",
             "  " + "─" * 60
         ]
-        
+
         if not profiles:
             status_lines.append(f"  {YELLOW}Нет обнаруженных профилей релеев.{NC}")
             status_lines.append("  Доступен только стандартный дефолтный WARP.")
@@ -57,45 +57,45 @@ def _menu_geo_profiles(
                 name = str(row["name"])
                 is_amnezia = bool(row.get("is_amnezia"))
                 h4_warning = bool(row.get("h4_warning"))
-                
+
                 type_str = f"{CYAN}AmneziaWG{NC}" if is_amnezia else f"{BLUE}WireGuard{NC}"
                 warn_str = f" {RED}(⚠ H4 > 255){NC}" if h4_warning else ""
-                
+
                 mapped_lists = []
                 for k, target in list_targets.items():
                     if target == f"warp_{name}":
                         list_name = k.split(":", 1)[1]
                         mapped_lists.append(list_name)
-                
+
                 routes_str = f"Направлены списки: {', '.join(mapped_lists)}" if mapped_lists else "Нет привязанных списков"
-                
+
                 status_lines.append(
                     f"  {idx}. {BOLD}warp_{name:<12}{NC} [{type_str}]{warn_str} "
                     f"│ {DIM}{routes_str}{NC}"
                 )
-                
+
         panel("⚙️ УПРАВЛЕНИЕ ПРОФИЛЯМИ РЕЛЕЕВ", status_lines)
-        
+
         options = []
         if profiles:
             options.append(("1", "🗑️  Удалить файл профиля релея", "Удалить .conf файл с диска"))
         options.append(("2", "💡 Показать инструкцию по установке", "Как получить конфиг и скопировать на сервер"))
         options.append(("0", "↩ Назад", ""))
-        
+
         choice = menu(options, "ПРОФИЛИ РЕЛЕЕВ")
         if choice == "0":
             break
-            
+
         elif choice == "1" and profiles:
             opts_prof = []
             for i, name in enumerate(profiles, start=1):
                 opts_prof.append((str(i), name, f"УДАЛИТЬ {name}.conf"))
             opts_prof.append(("0", "Назад", ""))
-            
+
             p_choice = menu(opts_prof, "ВЫБЕРИТЕ ПРОФИЛЬ ДЛЯ УДАЛЕНИЯ")
             if p_choice == "0" or not p_choice.isdigit():
                 continue
-                
+
             idx = int(p_choice) - 1
             if 0 <= idx < len(profiles):
                 name = profiles[idx]
@@ -116,7 +116,7 @@ def _menu_geo_profiles(
                             error("Ошибка применения нового конфига.")
                             facade._show_diagnostic_info(app)
                 prompt("Нажмите Enter для продолжения")
-                    
+
         elif choice == "2":
             clear()
             lines = [

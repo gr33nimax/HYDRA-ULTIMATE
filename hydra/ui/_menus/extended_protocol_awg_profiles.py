@@ -50,20 +50,20 @@ def _manage_awg_profiles(
             lines.append(f"     Preset: {prof['preset']}")
             lines.append(f"     Network: {prof['network']}")
         panel("📁 УПРАВЛЕНИЕ ПРОФИЛЯМИ AWG", lines)
-        
+
         options = []
         has_mobile = any(prof["name"] == "mobile" for prof in profiles)
         if not has_mobile:
             options.append(("1", "➕ Добавить мобильный профиль", "Создать профиль с мобильным пресетом"))
         else:
             options.append(("2", "❌ Удалить мобильный профиль", "Удалить профиль с мобильным пресетом"))
-            
+
         options.append(("0", "↩ Назад", ""))
-        
+
         choice = menu(options, "AWG PROFILES")
         if choice == "0":
             break
-            
+
         elif choice == "1" and not has_mobile:
             res = _awg_generate_wizard(state, p)
             if res:
@@ -82,7 +82,7 @@ def _manage_awg_profiles(
                 else:
                     error("Не удалось создать мобильный профиль")
                 prompt("Нажмите Enter")
-                
+
         elif choice == "2" and has_mobile:
             if confirm("Удалить мобильный профиль?", default=False):
                 info("Удаление...")
@@ -113,15 +113,15 @@ def _rotate_awg_obfuscation(
     for idx, prof in enumerate(profiles, 1):
         options.append((str(idx), f"Ротировать {prof['label']} ({prof['interface']})", f"Текущий пресет: {prof['preset']}"))
     options.append(("0", "Отмена", ""))
-    
+
     choice = menu(options, "РОТАЦИЯ ОБФУСКАЦИИ")
     if choice == "0" or not choice.isdigit():
         return
-        
+
     p_idx = int(choice) - 1
     if 0 <= p_idx < len(profiles):
         prof = profiles[p_idx]
-        
+
         res = _awg_generate_wizard(state, p)
         if res:
             strategy, carrier = res
@@ -157,11 +157,11 @@ def _awg_generate_wizard_menu(
     for idx, prof in enumerate(profiles, 1):
         options.append((str(idx), f"Применить к {prof['label']} ({prof['interface']})", f"Текущий пресет: {prof['preset']}"))
     options.append(("0", "Отмена", ""))
-    
+
     choice = menu(options, "ВЫБЕРИТЕ ПРОФИЛЬ ДЛЯ ГЕНЕРАЦИИ")
     if choice == "0" or not choice.isdigit():
         return
-        
+
     p_idx = int(choice) - 1
     if 0 <= p_idx < len(profiles):
         prof = profiles[p_idx]

@@ -48,12 +48,12 @@ def _get_last_install_error(app: ApplicationService) -> str:
 
 def _show_diagnostic_info(app: ApplicationService) -> None:
     print(f"\n  {YELLOW}═══════════════ ДИАГНОСТИКА ОШИБКИ ═══════════════{NC}")
-    
+
     install_err = _get_last_install_error(app)
     if install_err:
         warn("Последняя ошибка из /var/log/hydra/install.log:")
         print(f"  {RED}{install_err}{NC}")
-    
+
     debug_path = "/var/log/hydra/warp_debug_config.json"
     if app.diagnostics.path_exists(debug_path):
         warn("Секции outbounds и route из сгенерированного конфига:")
@@ -73,7 +73,7 @@ def _show_diagnostic_info(app: ApplicationService) -> None:
     )
     if r.returncode != 0:
         warn("Служба sing-box неактивна или сообщает об ошибке.")
-    
+
     r2 = app.admin.run_command(
         ["journalctl", "-u", "sing-box", "-n", "10", "--no-pager"],
         capture_output=True,
@@ -83,7 +83,7 @@ def _show_diagnostic_info(app: ApplicationService) -> None:
         warn("Последние 10 строк логов sing-box из journalctl:")
         for line in r2.stdout.splitlines():
             print(f"  {DIM}{line}{NC}")
-            
+
     print(f"  {YELLOW}══════════════════════════════════════════════════{NC}\n")
 
 

@@ -41,4 +41,3 @@ def _toggle_notification(field: str) -> bool:
 
     _, value = update_state(mutate)
     return value
-

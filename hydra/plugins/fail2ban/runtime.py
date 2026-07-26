@@ -127,4 +127,3 @@ class Fail2banRuntimeMixin:
         stopped = self._fail2ban_env().run(['systemctl', 'stop', 'fail2ban'])
         if stopped.returncode != 0:
             raise RuntimeError('Fail2ban could not be stopped')
-

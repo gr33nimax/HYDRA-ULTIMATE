@@ -5,8 +5,10 @@ import ipaddress
 
 from hydra.core.state_models import AppState, get_protocol
 from hydra.services.application import ApplicationService
+from hydra.ui.plugin_managers._facade_bridge import facade
 from hydra.ui.tui import (
     CYAN,
+    DIM,
     NC,
     clear,
     error,
@@ -107,12 +109,19 @@ def manage(
             state,
             "fail2ban",
         ).config.setdefault("whitelist", [])
+        effective_whitelist = facade._effective_whitelist(state)
         lines = [
-            f"  {CYAN}{index:>2}.{NC} {network}"
+            f"  {CYAN}{index:>2}.{NC} {network} {DIM}(ручной){NC}"
             for index, network in enumerate(whitelist, 1)
         ]
+        lines.extend(
+            f"      {network} {DIM}"
+            f"(автоматический / из ignoreip){NC}"
+            for network in effective_whitelist
+            if network not in whitelist
+        )
         panel(
-            "Доверенные IP / подсети (Whitelist)",
+            "Фактический Fail2ban ignoreip",
             lines if lines else ["  Список пуст"],
         )
         choice = menu([

@@ -53,4 +53,3 @@ class HoneypotObservationMixin:
 
     def traffic(self, state: PluginStateAccess) -> dict[str, int]:
         return {}
-

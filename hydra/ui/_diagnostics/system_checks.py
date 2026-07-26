@@ -102,7 +102,7 @@ def run_with_spinner(
         stderr=operations.devnull,
         text=True,
     )
-    
+
     spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
     idx = 0
     deadline = operations.monotonic() + DEFAULT_TIMEOUT
@@ -126,10 +126,10 @@ def run_with_spinner(
     stdout, _ = process.communicate()
     sys.stdout.write("\r" + " " * 80 + "\r")  # Очистка строки
     sys.stdout.flush()
-    
+
     if process.returncode != 0:
         raise Exception(f"Команда завершилась с ошибкой ({process.returncode})")
-        
+
     return stdout
 
 
@@ -138,16 +138,16 @@ def run_function_with_spinner(title_text: str, func, *args, **kwargs):
     operations = current_diagnostic_operations()
     result = []
     error_container = []
-    
+
     def target():
         try:
             result.append(func(*args, **kwargs))
         except Exception as e:
             error_container.append(e)
-            
+
     t = threading.Thread(target=target)
     t.start()
-    
+
     spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
     idx = 0
     try:
@@ -160,13 +160,13 @@ def run_function_with_spinner(title_text: str, func, *args, **kwargs):
         sys.stdout.write(f"\r  {RED}✗{NC} {title_text}: выполнение прервано.\n")
         sys.stdout.flush()
         raise KeyboardInterrupt
-        
+
     sys.stdout.write("\r" + " " * 80 + "\r")  # Очистка строки
     sys.stdout.flush()
-    
+
     if error_container:
         raise error_container[0]
-        
+
     return result[0]
 
 
@@ -179,7 +179,7 @@ def run_streaming_cmd(
     print(f"\n  {CYAN}╔{'═' * 76}╗{NC}")
     print(f"  {CYAN}║{NC} {BOLD}{title_text:<74}{NC} {CYAN}║{NC}")
     print(f"  {CYAN}╠{'═' * 76}╣{NC}")
-    
+
     operations = operations_from_application(app)
     process = app.admin.popen_command(
         _command_argv(cmd),
@@ -188,7 +188,7 @@ def run_streaming_cmd(
         text=True,
         bufsize=1
     )
-    
+
     skip_patterns = [
         r"Performing IPv\d iperf3",
         r"Preparing system for disk tests",
@@ -200,7 +200,7 @@ def run_streaming_cmd(
         r"wget -qO- bench.sh",
         r"Speedtest by Ookla"
     ]
-    
+
     try:
         for line in process.stdout:
             cleaned = line.strip()
@@ -208,7 +208,7 @@ def run_streaming_cmd(
                 sys.stdout.write(f"  {CYAN}║{NC}{' ' * 76}{CYAN}║{NC}\n")
                 sys.stdout.flush()
                 continue
-                
+
             should_skip = False
             for pat in skip_patterns:
                 if re.search(pat, cleaned):
@@ -216,24 +216,24 @@ def run_streaming_cmd(
                     break
             if should_skip:
                 continue
-                
+
             if all(c in "- ─" for c in cleaned) and len(cleaned) > 10:
                 sys.stdout.write(f"  {CYAN}║{NC}{DIM}{'─' * 76}{NC}{CYAN}║{NC}\n")
                 sys.stdout.flush()
                 continue
-                
+
             line_val = line.rstrip("\r\n").replace("\t", "    ")
             plain = re.sub(r"\033\[[0-9;]*m", "", line_val)
             visible_w = len(plain)
-            
+
             if visible_w > 76:
                 padded_line = line_val[:76]
             else:
                 padded_line = line_val + " " * (76 - visible_w)
-                
+
             sys.stdout.write(f"  {CYAN}║{NC}{padded_line}{CYAN}║{NC}\n")
             sys.stdout.flush()
-            
+
     except KeyboardInterrupt:
         process.terminate()
         process.wait()
@@ -241,7 +241,7 @@ def run_streaming_cmd(
         print(f"  {CYAN}╚{'═' * 76}╝{NC}")
         print(f"\n  {RED}[!] Выполнение прервано.{NC}")
         raise KeyboardInterrupt
-        
+
     process.wait(timeout=DEFAULT_TIMEOUT)
     print(f"  {CYAN}╚{'═' * 76}╝{NC}")
     print()
@@ -258,7 +258,7 @@ def run_direct_cmd(
     print(f"\n  {CYAN}╔{'═' * 76}╗{NC}")
     print(f"  {CYAN}║{NC} {BOLD}{title_text:<74}{NC} {CYAN}║{NC}")
     print(f"  {CYAN}╚{'═' * 76}╝{NC}\n")
-    
+
     try:
         app.admin.run_command(_command_argv(cmd), timeout=DEFAULT_TIMEOUT, check=False)
     except KeyboardInterrupt:

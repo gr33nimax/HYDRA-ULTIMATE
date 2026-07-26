@@ -25,4 +25,3 @@ def prepare_site(site_dir: Path) -> None:
         encoding="utf-8",
     )
     (site_dir / "favicon.ico").write_bytes(_FAVICON)
-

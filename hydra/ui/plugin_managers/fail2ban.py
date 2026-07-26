@@ -21,6 +21,13 @@ _PROTOCOL_JAILS: list[str] = []
 _SYSTEM_JAILS = ["hydra-sshd", "hydra-recidive"]
 
 
+def _effective_whitelist(state: AppState) -> list[str]:
+    """Return every manual, automatic, and persisted ``ignoreip`` entry."""
+    from hydra.plugins.fail2ban.plugin import Fail2banPlugin
+
+    return Fail2banPlugin.effective_whitelist(state)
+
+
 def _implementation_scope():
     return bind_facade(sys.modules[__name__])
 
@@ -213,12 +220,12 @@ def _fetch_asn_prefixes(
             if attempt == 3:
                 raise RuntimeError(f"RIPE Stat недоступен: {exc}")
             app.monitoring.sleep(2 ** attempt)
-            
+
     try:
         data = json.loads(raw)
     except Exception as exc:
         raise RuntimeError(f"Неверный JSON от RIPE Stat: {exc}")
-        
+
     prefixes = data.get("data", {}).get("prefixes", [])
     result = []
     for item in prefixes:
@@ -228,7 +235,7 @@ def _fetch_asn_prefixes(
             result.append(str(net))
         except ValueError:
             continue
-            
+
     if not result:
         raise RuntimeError(f"0 префиксов для {asn}")
     return result
@@ -244,15 +251,15 @@ def _resolve_to_cidrs(
         asn = _asn_normalize(raw)
         cidrs = _fetch_asn_prefixes(asn, app)
         return asn, "asn", cidrs
-        
+
     if "/" in raw:
         net = ipaddress.ip_network(raw, strict=False)
         return str(net), "cidr", [str(net)]
-        
+
     if "-" in raw and ":" not in raw:
         cidrs = _parse_range(raw)
         return raw, "range", cidrs
-        
+
     net = ipaddress.ip_address(raw)
     bits = 32 if net.version == 4 else 128
     return str(net), "ip", [f"{net}/{bits}"]

@@ -74,4 +74,3 @@ class AntiDPIStateStore:
         import copy
 
         return copy.deepcopy(self.load())
-

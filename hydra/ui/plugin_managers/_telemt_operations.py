@@ -110,6 +110,25 @@ def _save_install_settings(
     app.admin.save_state(state)
 
 
+def _install_or_repair(
+    state: facade.AppState,
+    app: facade.ApplicationService,
+) -> bool:
+    """Install TeleMT once, or repair an already installed service."""
+    protocol = state.protocols.get("telemt")
+    if protocol is None:
+        return app.protocols.install(state, "telemt")
+
+    was_installed = protocol.installed
+    # Avoid applying the pending configuration twice.  The explicit enable
+    # immediately after this operation owns the centralized apply.
+    protocol.enabled = False
+    app.admin.save_state(state)
+    if was_installed:
+        return app.protocols.reinstall(state, "telemt")
+    return app.protocols.install(state, "telemt")
+
+
 def run_install(
     state: facade.AppState,
     app: facade.ApplicationService,
@@ -148,7 +167,7 @@ def run_install(
 
     facade.info("Скачиваю зависимости и бинарник telemt...")
     if not (
-        app.protocols.install(state, "telemt")
+        _install_or_repair(state, app)
         and app.protocols.enable(state, "telemt")
     ):
         facade.error("Установка бинарника провалилась.")

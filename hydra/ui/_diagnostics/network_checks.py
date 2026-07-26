@@ -72,7 +72,7 @@ def query_primary_geoip(ip: str, service: str) -> str:
     """Запрашивает код страны IP-адреса из выбранной базы GeoIP."""
     if not ip or ip == "—":
         return "—"
-        
+
     # Определяем версию IP для подключения к сервису
     is_target_ipv6 = ":" in ip
     if is_target_ipv6 and service in ("MAXMIND", "CLOUDFLARE"):
@@ -102,11 +102,11 @@ def query_primary_geoip(ip: str, service: str) -> str:
         "IP2LOCATION_IO": f"https://api.ip2location.io/?ip={ip}",
         "RIPE": f"https://stat.ripe.net/data/rir-geo/data.json?resource={ip}"
     }
-    
+
     url = urls.get(service)
     if not url:
         return "—"
-        
+
     _thread_local.ip_version = conn_ip_version
     try:
         response = current_diagnostic_operations().request(
@@ -152,7 +152,7 @@ def query_primary_geoip(ip: str, service: str) -> str:
         pass
     finally:
         _thread_local.ip_version = None
-        
+
     # Fallback to ip-api.com (which is IPv4-only) to avoid N/A on rate-limits/blocks/ssl errors
     _thread_local.ip_version = 4
     try:
@@ -169,7 +169,7 @@ def query_primary_geoip(ip: str, service: str) -> str:
         pass
     finally:
         _thread_local.ip_version = None
-        
+
     return "—"
 
 
@@ -178,7 +178,7 @@ def check_custom_service(service_name: str, ip_version: int, system_has_ipv6: bo
     if ip_version == 6 and not system_has_ipv6:
         return "—"
     _thread_local.ip_version = ip_version
-        
+
     try:
         if service_name == "Google":
             response = make_http_request("https://accounts.google.com/v3/signin/identifier?flowName=GlifSetupAndroid")
@@ -245,9 +245,9 @@ def test_ip_region():
     clear()
     title("Тестирование: IP region")
     print()
-    
+
     system_has_ipv6 = check_system_ipv6()
-    
+
     try:
         data = run_function_with_spinner(
             "Запрос геоданных IP",
@@ -257,7 +257,7 @@ def test_ip_region():
             query_primary_geoip=query_primary_geoip,
             check_custom_service=check_custom_service,
         )
-        
+
         lines = [
             f"  {BOLD}Основная информация:{NC}",
             "────────────────────────────────────────────────────────"
@@ -267,7 +267,7 @@ def test_ip_region():
             lines.append(kv("  Провайдер/ISP:", data["v4_detail"]["isp"]))
             lines.append(kv("  ASN:", data["v4_detail"]["asn"]))
             lines.append(kv("  Геолокация:", data["v4_detail"]["location"]))
-            
+
         if data.get("ipv6") and data["ipv6"] != "—":
             if data.get("ipv4") and data["ipv4"] != "—":
                 lines.append("")
@@ -275,9 +275,9 @@ def test_ip_region():
             lines.append(kv("  Провайдер/ISP:", data["v6_detail"]["isp"]))
             lines.append(kv("  ASN:", data["v6_detail"]["asn"]))
             lines.append(kv("  Геолокация:", data["v6_detail"]["location"]))
-            
+
         res = data.get("results", {})
-        
+
         if res.get("custom"):
             lines.append("")
             lines.append(f"  {BOLD}Доступ к популярным сервисам:{NC}")
@@ -286,11 +286,11 @@ def test_ip_region():
                 service = item.get("service", "")
                 v4 = item.get("ipv4") or "—"
                 v6 = item.get("ipv6") or "—"
-                
+
                 v4_str = f"{GREEN}{v4}{NC}" if v4 not in ("—", "No", "N/A") else f"{RED}{v4}{NC}"
                 v6_str = f"{GREEN}{v6}{NC}" if v6 not in ("—", "No", "N/A") else f"{RED}{v6}{NC}"
                 lines.append(kv(f"{service}:", f"v4: {v4_str:<18} │ v6: {v6_str}"))
-                
+
         if res.get("primary"):
             lines.append("")
             lines.append(f"  {BOLD}Базы GeoIP:{NC}")
@@ -302,12 +302,12 @@ def test_ip_region():
                 v4_str = f"{GREEN}{v4}{NC}" if v4 != "—" else f"{DIM}N/A{NC}"
                 v6_str = f"{GREEN}{v6}{NC}" if v6 != "—" else f"{DIM}N/A{NC}"
                 lines.append(kv(f"{service}:", f"v4: {v4_str:<18} │ v6: {v6_str}"))
-                
+
         panel("🌍  Результаты IP Region", lines)
-        
+
     except KeyboardInterrupt:
         pass
     except Exception as e:
         error(f"Не удалось выполнить тест: {e}")
-        
+
     prompt("Нажмите Enter для возврата...")

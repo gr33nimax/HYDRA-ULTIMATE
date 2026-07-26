@@ -150,4 +150,3 @@ def _honeypot_monitor_worker(
             notify=notify,
         ),
     )
-

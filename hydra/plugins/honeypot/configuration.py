@@ -101,4 +101,3 @@ class HoneypotConfigurationMixin:
 
     def unban_address(self, *, state: PluginStateAccess, address: str) -> bool:
         return self.unban(address)
-

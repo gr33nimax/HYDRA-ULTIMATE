@@ -51,8 +51,15 @@ sudo git -C /opt/hydra status --short
 ## Запуск
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/upgrade.sh \
-  | sudo HYDRA_REF=dev bash
+(
+  set -e
+  upgrade_script=$(mktemp)
+  trap 'rm -f "$upgrade_script"' EXIT
+  curl -fsSL \
+    https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/upgrade.sh \
+    -o "$upgrade_script"
+  sudo env HYDRA_REF=dev bash "$upgrade_script"
+)
 ```
 
 Updater разрешает SHA ветки один раз и устанавливает именно этот commit, даже

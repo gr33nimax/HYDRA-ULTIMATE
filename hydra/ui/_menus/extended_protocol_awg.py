@@ -43,12 +43,12 @@ def _menu_amneziawg(
     app: ApplicationService | None = None,
 ):
     app = _application(app)
-    
+
     while True:
         state = app.admin.load_state()
         clear()
         ps = _desired_state(state, p.meta.name)
-        
+
         try:
             st = app.protocols.status(p.meta.name)
             profiles = (
@@ -75,7 +75,7 @@ def _menu_amneziawg(
                 running=False, port=ps.port,
                 error=str(exc) or exc.__class__.__name__,
             )
-        
+
         options = []
         if not ps.installed:
             options.append(("1", "🔧 Установить", p.meta.description))
@@ -89,17 +89,17 @@ def _menu_amneziawg(
                 options.append(("6", "🎲 Генератор обфускации", "Пошаговый мастер генерации обфускации"))
             else:
                 options.append(("1", "▶️  Включить", "Активировать протокол"))
-            
+
             options.append(("8", "🔄 Переустановить", "Переустановка протокола"))
             options.append(("9", "❌ Удалить", "Полное удаление"))
-            
+
         options.append(("0", "↩ Назад", ""))
-        
+
         choice = menu(options, protocol_menu_title(p.meta.name))
-        
+
         if choice == "0":
             break
-            
+
         elif choice == "1":
             if not ps.installed:
                 info("Установка...")
@@ -129,22 +129,22 @@ def _menu_amneziawg(
                 except Exception as e:
                     error(f"Ошибка активации протокола: {e}")
             prompt("Нажмите Enter")
-            
+
         elif choice == "2" and ps.installed and ps.enabled:
             _show_plugin_clients(state, p, app)
-            
+
         elif choice == "3" and ps.installed and ps.enabled:
             _manage_awg_profiles(state, p, app)
-            
+
         elif choice == "4" and ps.installed and ps.enabled:
             _rotate_awg_obfuscation(state, p, app)
-            
+
         elif choice == "5" and ps.installed and ps.enabled:
             _tune_awg_hardware(state, p, app)
-            
+
         elif choice == "6" and ps.installed and ps.enabled:
             _awg_generate_wizard_menu(state, p, app)
-            
+
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):
                 ok = app.protocols.reinstall(state, p.meta.name)
@@ -153,7 +153,7 @@ def _menu_amneziawg(
                 else:
                     error("Ошибка установки")
                 prompt("Нажмите Enter")
-                
+
         elif choice == "9" and ps.installed:
             if confirm("Вы уверены, что хотите полностью удалить AmneziaWG?", default=False):
                 app.protocols.uninstall(state, p.meta.name)
@@ -170,9 +170,9 @@ def _tune_awg_hardware(
     app = _application(app)
     info("Анализ и оптимизация VPS...")
     report = app.admin.apply_network_tuning()
-    
+
     lines = []
-    
+
     # sysctl
     sysctl_changed = sum(1 for v in report["sysctl"].values() if v.get("changed"))
     lines.append("🎛️  Параметры sysctl:")
@@ -180,13 +180,13 @@ def _tune_awg_hardware(
         lines.append(f"     Применено {sysctl_changed} новых оптимизаций.")
     else:
         lines.append("     Все параметры sysctl уже оптимальны.")
-        
+
     lines.append(
         "🚀 BBR: "
         + ("доступен" if report["bbr_available"] else "не поддерживается"),
     )
     lines.append(f"💾 Постоянный профиль: {report['config_path']}")
     lines.extend(f"⚠ {message}" for message in report["errors"][:5])
-        
+
     panel("✅ VPS TUNING REPORT", lines)
     prompt("Нажмите Enter")

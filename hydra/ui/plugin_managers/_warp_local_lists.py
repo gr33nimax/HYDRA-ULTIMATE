@@ -32,11 +32,11 @@ def _menu_rules_lists(
         local_lists = ps.config.setdefault("local_lists", {})
         list_targets = ps.config.setdefault("list_targets", {})
         external_sources = facade._external_sources(app)
-        
+
         status_lines = [
             f"  {BOLD}Пользовательские локальные списки:{NC}",
         ]
-        
+
         if not local_lists:
             status_lines.append(f"  {DIM}Нет созданных локальных списков.{NC}")
         else:
@@ -79,7 +79,7 @@ def _menu_rules_lists(
                 error("Список с таким именем уже существует.")
                 prompt("Нажмите Enter")
                 continue
-            
+
             local_lists[name] = {"domains": [], "ips": []}
             list_targets[f"local:{name}"] = "none"
             app.admin.save_state(state)
@@ -91,7 +91,7 @@ def _menu_rules_lists(
                 error("Нет доступных списков.")
                 prompt("Нажмите Enter")
                 continue
-            
+
             opts_l = []
             for i, name in enumerate(local_lists.keys(), 1):
                 opts_l.append((str(i), name, f"Редактировать список {name}"))
@@ -100,7 +100,7 @@ def _menu_rules_lists(
             l_choice = menu(opts_l, "ВЫБЕРИТЕ СПИСОК")
             if l_choice == "0" or not l_choice.isdigit():
                 continue
-            
+
             idx = int(l_choice) - 1
             keys = list(local_lists.keys())
             if 0 <= idx < len(keys):
@@ -111,7 +111,7 @@ def _menu_rules_lists(
                 error("Нет доступных списков.")
                 prompt("Нажмите Enter")
                 continue
-            
+
             opts_l = []
             for i, name in enumerate(local_lists.keys(), 1):
                 opts_l.append((str(i), name, f"УДАЛИТЬ список {name}"))
@@ -120,7 +120,7 @@ def _menu_rules_lists(
             l_choice = menu(opts_l, "ВЫБЕРИТЕ СПИСОК ДЛЯ УДАЛЕНИЯ")
             if l_choice == "0" or not l_choice.isdigit():
                 continue
-            
+
             idx = int(l_choice) - 1
             keys = list(local_lists.keys())
             if 0 <= idx < len(keys):
@@ -151,12 +151,12 @@ def _menu_manage_local_list_items(
 ) -> None:
     local_lists = ps.config.setdefault("local_lists", {})
     route = local_lists.setdefault(list_name, {"domains": [], "ips": []})
-    
+
     while True:
         clear()
         domains = route.setdefault("domains", [])
         ips = route.setdefault("ips", [])
-        
+
         status_lines = [
             f"  Локальный список: {GREEN}{list_name}{NC}",
             "  " + "─" * 50,
@@ -164,7 +164,7 @@ def _menu_manage_local_list_items(
             f"  IP/подсетей:  {CYAN}{len(ips)}{NC}",
         ]
         panel(f"📝 РЕДАКТИРОВАНИЕ СПИСКА: {list_name.upper()}", status_lines)
-        
+
         options = [
             ("1", "➕ Добавить домен(ы)", "Добавить домены в эту группу"),
             ("2", "🗑️  Удалить домен(ы)", "Показать список и удалить домены"),
@@ -172,16 +172,16 @@ def _menu_manage_local_list_items(
             ("4", "🗑️  Удалить IP/подсеть(и)", "Показать список и удалить IP/CIDR"),
             ("0", "↩ Назад", "")
         ]
-        
+
         choice = menu(options, f"СПИСОК {list_name.upper()}")
         if choice == "0":
             break
-            
+
         elif choice == "1":
             raw = prompt("Введите домен(ы) (через пробел или запятую)").strip()
             if not raw:
                 continue
-            
+
             tokens = [t.strip().lower() for t in raw.replace(",", " ").split() if t.strip()]
             added = 0
             for t in tokens:
@@ -191,7 +191,7 @@ def _menu_manage_local_list_items(
                 if t not in domains:
                     domains.append(t)
                     added += 1
-            
+
             if added:
                 route["domains"] = domains
                 app.admin.save_state(state)
@@ -201,21 +201,21 @@ def _menu_manage_local_list_items(
             else:
                 warn("Новых доменов не добавлено.")
             prompt("Нажмите Enter для продолжения")
-            
+
         elif choice == "2":
             if not domains:
                 error("Список доменов пуст.")
                 prompt("Нажмите Enter")
                 continue
-                
+
             clear()
             lines = [f"  {idx}. {d}" for idx, d in enumerate(domains, 1)]
             panel(f"СПИСОК ДОМЕНОВ ({list_name})", lines)
-            
+
             raw = prompt("Введите домен или его порядковый номер для удаления").strip()
             if not raw:
                 continue
-                
+
             tokens = [t.strip().lower() for t in raw.replace(",", " ").split() if t.strip()]
             removed = 0
             for t in tokens:
@@ -228,7 +228,7 @@ def _menu_manage_local_list_items(
                     if t in domains:
                         domains.remove(t)
                         removed += 1
-            
+
             if removed:
                 route["domains"] = domains
                 app.admin.save_state(state)
@@ -238,12 +238,12 @@ def _menu_manage_local_list_items(
             else:
                 error("Ничего не удалено.")
             prompt("Нажмите Enter для продолжения")
-            
+
         elif choice == "3":
             raw = prompt("Введите IP/подсеть(и) (через пробел или запятую)").strip()
             if not raw:
                 continue
-                
+
             tokens = [t.strip().lower() for t in raw.replace(",", " ").split() if t.strip()]
             added = 0
             for t in tokens:
@@ -253,7 +253,7 @@ def _menu_manage_local_list_items(
                 if t not in ips:
                     ips.append(t)
                     added += 1
-                    
+
             if added:
                 route["ips"] = ips
                 app.admin.save_state(state)
@@ -263,21 +263,21 @@ def _menu_manage_local_list_items(
             else:
                 warn("Новых записей не добавлено.")
             prompt("Нажмите Enter для продолжения")
-            
+
         elif choice == "4":
             if not ips:
                 error("Список IP пуст.")
                 prompt("Нажмите Enter")
                 continue
-                
+
             clear()
             lines = [f"  {idx}. {ip}" for idx, ip in enumerate(ips, 1)]
             panel(f"СПИСОК IP/ПОДСЕТЕЙ ({list_name})", lines)
-            
+
             raw = prompt("Введите IP/CIDR или порядковый номер для удаления").strip()
             if not raw:
                 continue
-                
+
             tokens = [t.strip().lower() for t in raw.replace(",", " ").split() if t.strip()]
             removed = 0
             for t in tokens:
@@ -290,7 +290,7 @@ def _menu_manage_local_list_items(
                     if t in ips:
                         ips.remove(t)
                         removed += 1
-                        
+
             if removed:
                 route["ips"] = ips
                 app.admin.save_state(state)
@@ -300,4 +300,3 @@ def _menu_manage_local_list_items(
             else:
                 error("Ничего не удалено.")
             prompt("Нажмите Enter для продолжения")
-                            
