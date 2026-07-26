@@ -2,7 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from hydra.core import doctor, upgrade
-from hydra.core.doctor import run_doctor
+from hydra.core.doctor import run_doctor, run_host_preflight
 from hydra.core.state import AppState
 from hydra.core.upgrade import check_upgrade
 from hydra.services.reconciliation import ReconcileAction
@@ -14,6 +14,21 @@ def test_doctor_reports_required_failures():
         result = run_doctor(AppState())
     assert result["ok"] is False
     assert "state_directory" in result["required_failures"]
+
+
+def test_host_preflight_does_not_require_state_directory_write_access():
+    with patch.object(
+        doctor.HOST,
+        "which",
+        side_effect=lambda command: f"/usr/bin/{command}",
+    ), patch("hydra.core.doctor.os.access", return_value=False):
+        result = run_host_preflight(AppState())
+
+    assert result["ok"] is True
+    assert all(
+        check["name"] != "state_directory"
+        for check in result["checks"]
+    )
 
 
 def test_doctor_exposes_runtime_reconciliation_plan():

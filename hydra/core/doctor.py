@@ -47,8 +47,21 @@ def _summary(checks: list[dict]) -> dict:
     }
 
 
+def _state_directory_check() -> dict:
+    state_dir = Path(STATE_DIR)
+    writable = state_dir.exists() and os.access(
+        state_dir,
+        os.R_OK | os.W_OK,
+    )
+    return _check(
+        "state_directory",
+        writable,
+        f"{state_dir} ({'read/write' if writable else 'unavailable'})",
+    )
+
+
 def run_host_preflight(state: AppState) -> dict:
-    """Check host prerequisites not covered by configuration planning."""
+    """Check read-only prerequisites not covered by configuration planning."""
     del state
     checks: list[dict] = []
     checks.append(_check(
@@ -72,16 +85,6 @@ def run_host_preflight(state: AppState) -> dict:
             ),
         )
 
-    state_dir = Path(STATE_DIR)
-    writable = state_dir.exists() and os.access(
-        state_dir,
-        os.R_OK | os.W_OK,
-    )
-    checks.append(_check(
-        "state_directory",
-        writable,
-        f"{state_dir} ({'read/write' if writable else 'unavailable'})",
-    ))
     return _summary(checks)
 
 
@@ -98,6 +101,9 @@ def run_doctor(
         checks.append(_check("state", False, str(exc)))
 
     checks.extend(run_host_preflight(state)["checks"])
+    # Preserve the historical doctor report. The operator-facing check does
+    # not require write access because it is intentionally non-root/read-only.
+    checks.append(_state_directory_check())
     try:
         from hydra.core.sni_router import audit_routes
 
