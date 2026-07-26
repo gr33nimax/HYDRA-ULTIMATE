@@ -224,3 +224,88 @@ def test_tracked_traffic_is_reported_without_a_per_plugin_override():
     ]
 
     assert VlessXhttpPlugin().traffic(state) == {"alice@example.com": 4096}
+
+
+def test_device_session_writes_do_not_touch_the_desired_revision():
+    """A background poll must not make an operator's state stale."""
+    from hydra.core.state import load_state, save_state, update_state
+    from hydra.services.device_sessions import update_sessions as refresh
+
+    state = AppState()
+    state.users = [User("alice@example.com", "uuid-a", device_limit=1)]
+    save_state(state)
+    revision = load_state().revision
+
+    def poll(latest: AppState) -> None:
+        latest.install[COUNTERS_KEY] = {
+            "c1": {
+                "user": "alice@example.com",
+                "address": "198.51.100.1",
+                "total": 10,
+                "missed_polls": 0,
+            },
+        }
+        latest.install["traffic_daemon_last_poll"] = 1.0
+        refresh(latest)
+
+    update_state(poll)
+    update_state(poll)
+
+    assert load_state().revision == revision
+    assert load_state().install["device_sessions"]
+
+
+def test_rollback_lands_after_a_background_write():
+    """A failed command restores its snapshot even if the revision moved."""
+    from hydra.core.state import (
+        load_state,
+        restore_desired_state,
+        save_state,
+        update_state,
+    )
+    from hydra.services.plugin_commands import PluginCommandService
+
+    state = AppState()
+    state.users = [User("alice@example.com", "uuid-a")]
+    from hydra.core.state import PluginState
+
+    state.protocols["vless"] = PluginState(
+        enabled=True,
+        config={"xhttp_path": "/xhttp"},
+    )
+    save_state(state)
+
+    from hydra.plugins.base import PluginMeta
+
+    class _Plugin:
+        meta = PluginMeta(
+            name="vless",
+            description="test double",
+            commands=("set_path",),
+        )
+
+        def set_path(self, state, path):
+            state.protocols["vless"].config["xhttp_path"] = path
+            return True
+
+        def snapshot(self, state):
+            return None
+
+        def rollback(self, state, snapshot):
+            return True
+
+    def background(latest: AppState) -> None:
+        latest.install["traffic_daemon_last_poll"] = 42.0
+
+    update_state(background)
+    service = PluginCommandService(
+        get_plugin=lambda name: _Plugin(),
+        apply_config=lambda _state: False,
+        save_state=save_state,
+        restore_state=restore_desired_state,
+    )
+    working = load_state()
+    update_state(background)
+
+    assert service.execute(working, "vless", "set_path", path="/other") is False
+    assert load_state().protocols["vless"].config["xhttp_path"] == "/xhttp"

@@ -74,6 +74,7 @@ def test_state_storage_imports_never_smuggle_domain_types() -> None:
         "load_state",
         "migrate_persisted_state",
         "persist_state_migration",
+        "restore_desired_state",
         "save_state",
         "update_state",
     }

@@ -1,6 +1,7 @@
 """TUI adapter for VLESS/XHTTP desired settings."""
 from __future__ import annotations
 
+from hydra.core.errors import StateConflictError
 from hydra.core.state_models import AppState, PluginState
 from hydra.plugins.vless_xhttp import presets, tuning
 from hydra.plugins.vless_xhttp.security import (
@@ -111,7 +112,7 @@ def open_menu(
                 ),
                 ("0", "← Назад", ""),
             ],
-            "НАСТРОЙКИ VLESS + XHTTP",
+            "НАСТРОЙКИ VLESS",
         )
         if choice == "0":
             return
@@ -120,9 +121,17 @@ def open_menu(
             if changed is None:
                 continue
             if changed:
-                success("Настройки VLESS + XHTTP обновлены")
+                success("Настройки VLESS обновлены")
             else:
-                error("Не удалось применить настройки VLESS + XHTTP")
+                error(
+                    app.apply_error()
+                    or "Не удалось применить настройки VLESS",
+                )
+        except StateConflictError:
+            error(
+                "Состояние изменилось в другом процессе; "
+                "откройте меню заново и повторите",
+            )
         except (TypeError, ValueError) as exc:
             error(str(exc))
         prompt("Нажмите Enter")
@@ -139,7 +148,7 @@ def _change(
         return _change_security(state, desired, app)
     if choice == "2":
         value = prompt(
-            "Новый домен VLESS + XHTTP",
+            "Новый домен VLESS",
             default=str(desired.config.get("domain", "")),
         )
         if not value:

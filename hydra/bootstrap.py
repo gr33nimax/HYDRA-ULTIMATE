@@ -9,7 +9,12 @@ from hydra.core import nft, singbox
 from hydra.core.doctor import run_host_preflight
 from hydra.core.host import HOST
 from hydra.core.sni_router import audit_routes
-from hydra.core.state import load_state, migrate_persisted_state, save_state
+from hydra.core.state import (
+    load_state,
+    migrate_persisted_state,
+    restore_desired_state,
+    save_state,
+)
 from hydra.core.state_models import get_protocol, validate_state
 from hydra.core.upgrade import check_upgrade
 from hydra.plugins.container import PluginContainer
@@ -144,6 +149,7 @@ def production_application(
             get_plugin=plugins.get,
             apply_config=orchestration.apply_config,
             save_state=save_state,
+            restore_state=restore_desired_state,
             prepare_apply=ProtocolSetupService(
                 certificates,
                 plugins.get,

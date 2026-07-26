@@ -24,6 +24,11 @@ from hydra.core.state_migrations import (
     migrate_v2_to_v3,
     migrate_v3_to_v4,
 )
+from hydra.core.state_runtime import (
+    _RUNTIME_INSTALL_KEYS,
+    desired_payload as _desired_payload,
+    merge_runtime_state as _merge_runtime_state,
+)
 from hydra.core.state_models import (
     SCHEMA_VERSION,
     AppState,
@@ -229,45 +234,6 @@ def migrate_persisted_state() -> dict[str, int | bool]:
 persist_state_migration = migrate_persisted_state
 
 
-_RUNTIME_INSTALL_KEYS = frozenset(
-    {
-        "protocol_traffic_totals",
-        "singbox_last_update_check",
-        "singbox_latest_version",
-        "singbox_update_available",
-        "sync_config_pending",
-        "traffic_connection_counters",
-        "traffic_daemon_last_poll",
-        "traffic_log_cursors",
-    },
-)
-
-
-def _desired_payload(state: AppState) -> dict:
-    """Return persisted configuration without volatile accounting fields."""
-    data = _to_dict(state)
-    data.pop("revision", None)
-    install = data.get("install", {})
-    for key in _RUNTIME_INSTALL_KEYS:
-        install.pop(key, None)
-    for user in data.get("users", []):
-        user.pop("traffic_used_bytes", None)
-        # Device bindings are observed request metadata. They are updated
-        # atomically by the subscription service and merged into stale
-        # long-lived state before a settings save.
-        user.pop("devices", None)
-        credentials = user.get("credentials", {})
-        for protocol, values in list(credentials.items()):
-            if not isinstance(values, dict):
-                continue
-            for key in list(values):
-                if key.startswith("traffic_"):
-                    values.pop(key, None)
-            if not values:
-                credentials.pop(protocol, None)
-    return data
-
-
 def _save_state_unlocked(
     state: AppState,
     *,
@@ -313,47 +279,29 @@ def save_state(state: AppState) -> None:
     """Сохраняет состояние в state.json (атомарно через temp-файл)."""
     with _state_lock():
         device_resets = set(state.install.pop("_device_binding_resets", []))
-        # Long-running menus hold an older AppState while the traffic daemon
-        # updates counters in another process. Preserve the monotonic runtime
-        # accounting fields instead of letting an unrelated settings save roll
-        # them back.
         latest = None
         if STATE_FILE.exists():
             latest = _load_state_unlocked()
-            latest_users = {user.email: user for user in latest.users}
-            for user in state.users:
-                current = latest_users.get(user.email)
-                if current is None:
-                    continue
-                user.traffic_used_bytes = max(
-                    int(user.traffic_used_bytes), int(current.traffic_used_bytes),
-                )
-                # Subscription requests can register a device while a long-lived
-                # TUI process still holds an older copy of AppState. Never erase
-                # those bindings during an unrelated settings save.
-                if user.uuid not in device_resets:
-                    user.devices = {**current.devices, **user.devices}
-                for protocol, current_stats in current.credentials.items():
-                    if not isinstance(current_stats, dict):
-                        continue
-                    target_stats = user.credentials.setdefault(protocol, {})
-                    current_total = int(current_stats.get("traffic_used_bytes", 0))
-                    target_total = int(target_stats.get("traffic_used_bytes", 0))
-                    if current_total >= target_total:
-                        target_stats["traffic_used_bytes"] = current_total
-                        if "traffic_last_raw_bytes" in current_stats:
-                            target_stats["traffic_last_raw_bytes"] = current_stats["traffic_last_raw_bytes"]
-                        for stat_key, stat_value in current_stats.items():
-                            if stat_key.startswith("traffic_") and stat_key not in {
-                                "traffic_used_bytes", "traffic_last_raw_bytes",
-                            }:
-                                target_stats[stat_key] = copy.deepcopy(stat_value)
-            for key in _RUNTIME_INSTALL_KEYS:
-                if key in latest.install:
-                    state.install[key] = copy.deepcopy(latest.install[key])
-                else:
-                    state.install.pop(key, None)
+            _merge_runtime_state(state, latest, device_resets)
         _save_state_unlocked(state, current=latest)
+
+
+def restore_desired_state(snapshot: AppState) -> AppState:
+    """Write a snapshot's desired configuration over the current state.
+
+    A rollback must succeed even when a background writer advanced the
+    revision meanwhile: the snapshot is the configuration that was already
+    persisted, so it is restored against whatever is on disk now.
+    """
+    with _state_lock():
+        restored = copy.deepcopy(snapshot)
+        device_resets = set(restored.install.pop("_device_binding_resets", []))
+        latest = _load_state_unlocked() if STATE_FILE.exists() else None
+        if latest is not None:
+            _merge_runtime_state(restored, latest, device_resets)
+            restored.revision = latest.revision
+        _save_state_unlocked(restored, current=latest)
+        return restored
 
 
 def update_state(mutator: Callable[[AppState], T]) -> tuple[AppState, T]:
