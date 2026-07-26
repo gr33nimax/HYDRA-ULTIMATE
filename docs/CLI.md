@@ -123,6 +123,24 @@ sudo hydra upgrade check
 Проверяются схема state, версия Python, локальные изменения в Git и текущая
 версия HYDRA. Поле `backup_required` напоминает о необходимости резервной копии.
 
+Для обновления уже работающей VPS не выполняйте вручную `git pull` и не
+запускайте повторно `bootstrap.sh`. Используйте транзакционный `upgrade.sh` по
+инструкции [DEV_UPGRADE.md](DEV_UPGRADE.md).
+
+### `upgrade migrate-state`
+
+Атомарно записывает текущую схему state после выполнения всех последовательных
+миграций:
+
+```bash
+sudo hydra upgrade migrate-state
+```
+
+Команда требует `root` и предназначена для `upgrade.sh` или аварийной процедуры
+с уже созданным и проверенным backup. На актуальной схеме она идемпотентна и
+возвращает `changed: false`, не переписывая файл. Не запускайте её параллельно
+с TUI, subscription server, traffic daemon или sync agent.
+
 ## 🔧 Применение и восстановление
 
 ### `apply`

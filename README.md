@@ -1,10 +1,10 @@
-# 🐉 HYDRA v2.5.3 — Multi-Protocol Proxy & Routing Orchestrator
+# 🐉 HYDRA v2.5.4 — Multi-Protocol Proxy & Routing Orchestrator
 
-[![Version](https://img.shields.io/badge/version-2.5.3-blue.svg?style=flat-square)](https://github.com/gr33nimax/HYDRA-ULTIMATE)
+[![Version](https://img.shields.io/badge/version-2.5.4-blue.svg?style=flat-square)](https://github.com/gr33nimax/HYDRA-ULTIMATE)
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg?style=flat-square)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg?style=flat-square)](https://ubuntu.com/)
-[![Tests](https://img.shields.io/badge/tests-784%20passed-brightgreen.svg?style=flat-square)](tests/)
+[![CI](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml)
 
 **HYDRA** — модульная платформа для развёртывания и администрирования
 многопротокольных прокси-серверов на базе Sing-Box. Она объединяет транспорты,
@@ -12,7 +12,7 @@
 в единый управляемый контур.
 
 > [!IMPORTANT]
-> `2.5.3` — текущий релиз. Проект всё ещё находится
+> `2.5.4` — текущая версия. Проект всё ещё находится
 > в активном бета-тестировании; для рабочей эксплуатации используйте чистый Ubuntu 20.04+
 > или Debian 11+ и обязательно настройте резервное копирование.
 
@@ -20,6 +20,8 @@
 
 - [Архитектура и ключевые механизмы](docs/ARCHITECTURE.md)
 - [Полное руководство Headless CLI](docs/CLI.md)
+- [Безопасное обновление установленной VPS на `dev`](docs/DEV_UPGRADE.md)
+- [Разработка внешних плагинов](docs/PLUGIN_DEVELOPMENT.md)
 - [История изменений](CHANGELOG.md)
 
 Остальная техническая документация находится в каталоге [`docs`](docs/).
@@ -42,6 +44,24 @@ curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/boots
 Установщик подготавливает зависимости, Sing-Box Extended, изолированное Python-
 окружение и команду `hydra`. Caddy L4 и протоколы активируются только при
 включении соответствующих модулей.
+
+### Обновление существующей VPS на `dev`
+
+Не запускайте `bootstrap.sh` поверх рабочей установки. Для перехода с
+`main` 2.5.3 на `dev` 2.5.4 используйте транзакционный updater:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/upgrade.sh \
+  | sudo HYDRA_REF=dev bash
+```
+
+Он проверяет точный commit ветки, собирает новую версию и виртуальное окружение
+в отдельном каталоге, выполняет read-only preflight, останавливает только
+HYDRA-службы, сохраняет проверенный backup и исходный state, мигрирует схему,
+переключает release и проверяет запуск. При любой ошибке state, код, wrapper и
+ранее активные службы восстанавливаются автоматически. Полный порядок,
+артефакты отката и проверки описаны в
+[docs/DEV_UPGRADE.md](docs/DEV_UPGRADE.md).
 
 ### Запуск из исходников
 
@@ -119,15 +139,16 @@ python -m ruff check main.py hydra tests .github/scripts/release_notes.py
 python -m compileall -q hydra
 ```
 
-Полный локальный набор содержит 630 тестов. CI дополнительно проверяет Python
-3.10–3.13, зависимости и Linux-проверки на реальной системе.
+CI проверяет Python 3.10–3.13, зависимости, миграции состояния, архитектурные
+границы и Linux-сценарий обновления с systemd.
 
 ## 📂 Структура проекта
 
 ```text
 HYDRA-ULTIMATE/
 ├── main.py                  # точка входа в интерактивный TUI
-├── bootstrap.sh             # установка и подготовка VPS
+├── bootstrap.sh             # установка и подготовка новой VPS
+├── upgrade.sh               # транзакционное обновление существующей VPS
 ├── hydra/core/              # state, оркестратор, Sing-Box, nftables, Caddy
 ├── hydra/plugins/           # транспортные, сетевые и защитные плагины
 ├── hydra/services/          # прикладные службы, учёт, синхронизация, подписки

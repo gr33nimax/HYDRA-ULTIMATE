@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HYDRA v2.5.3 — Multi-Protocol Proxy Manager
+HYDRA v2.5.4 — Multi-Protocol Proxy Manager
 ====================================================
 
 Точка входа. Запуск: sudo python3 main.py

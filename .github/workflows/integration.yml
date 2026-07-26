@@ -2,7 +2,7 @@ name: Linux integration
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
   workflow_dispatch:
 
@@ -12,9 +12,11 @@ permissions:
 jobs:
   linux-host-smoke:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -29,3 +31,6 @@ jobs:
         run: python -m pytest -q
       - name: Exercise root, systemd, nftables and backup lifecycle
         run: sudo --preserve-env=PATH bash .github/scripts/linux-integration-smoke.sh
+      - name: Exercise transactional main-to-dev upgrade
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        run: sudo --preserve-env=PATH,GITHUB_WORKSPACE bash .github/scripts/linux-upgrade-smoke.sh

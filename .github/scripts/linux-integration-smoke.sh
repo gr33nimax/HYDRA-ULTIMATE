@@ -10,14 +10,17 @@ cleanup() {
     rm -f "$unit"
     systemctl daemon-reload >/dev/null 2>&1 || true
     rm -rf "$tmp_dir"
-    rm -f /var/lib/hydra/state.json
+    rm -f \
+        /var/lib/hydra/state.json \
+        /var/lib/hydra/state.json.bak \
+        /var/lib/hydra/state.json.corrupt \
+        /var/lib/hydra/state.lock
     rmdir /var/lib/hydra >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 install -d -m 0700 /var/lib/hydra
-printf '%s\n' '{"version":2,"users":[],"protocols":{},"install":{}}' > /var/lib/hydra/state.json
-chmod 0600 /var/lib/hydra/state.json
+install -m 0600 tests/fixtures/state-2.5.3.json /var/lib/hydra/state.json
 
 cat > "$unit" <<'EOF'
 [Unit]
@@ -44,6 +47,8 @@ export HYDRA_BACKUP_DIR="$tmp_dir/backups"
 python -m hydra.cli validate
 python -m hydra.cli doctor
 python -m hydra.cli upgrade check
+python -m hydra.cli upgrade migrate-state
+test "$(python -c 'import json; print(json.load(open("/var/lib/hydra/state.json"))["version"])')" = "4"
 python -m hydra.cli backup > "$tmp_dir/backup.json"
 archive=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["archive"])' "$tmp_dir/backup.json")
 python -m hydra.cli restore "$archive" --dry-run

@@ -3,6 +3,52 @@
 Все заметные изменения HYDRA собраны в этом файле. Даты указаны по календарю
 релиза; старые записи не переписываются задним числом.
 
+## [2.5.4] — 26 июля 2026
+
+### Архитектура
+
+- Монолитные composition/lifecycle/UI-модули разделены на application services,
+  инфраструктурные адаптеры, нейтральные contracts и тонкие compatibility
+  facade. Добавлены автоматические границы зависимостей, лимиты размеров
+  модулей и функций и графовые проверки связности.
+- Удалены process-global service locator и прямые вызовы concrete plugins из
+  UI, Telegram и manager-слоя. Плагины подключаются через instance-scoped
+  `PluginContainer`, явные порты и единый транзакционный lifecycle.
+- Backup inventory расширяется декларациями плагинов без импорта registry из
+  core. Удаление HYDRA также проходит через application boundary.
+- Долгоживущие systemd units используют стабильный `/opt/hydra` и его `.venv`,
+  поэтому release-каталоги можно атомарно переключать без закрепления старого
+  физического пути.
+
+### Совместимость и состояние
+
+- Версия persisted state поднята с 3 до 4. Миграция 2→3 сохранена в точности как
+  выпущенная в 2.5.3; миграция 3→4 переносит legacy-флаги WARP, DNSCrypt и
+  security plugins в канонический `protocols` и добавляет revision.
+- Миграция проверена на полном fixture 2.5.3: сохраняются лимиты и отпечатки
+  устройств, credentials, Telegram-настройки, сетевые секреты и plugin config.
+- Регистрация устройств подписки выполняется атомарно; stale TUI/daemon saves
+  не стирают новые bindings, а явный reset остаётся авторитетным.
+- Старые module entrypoints subscription server и sync agent сохранены как
+  исполняемые compatibility facade для уже установленных systemd units.
+
+### Обновление рабочей VPS
+
+- Добавлен `upgrade.sh` для транзакционного перехода существующей установки на
+  точный SHA ветки `dev`: отдельный release и `.venv`, read-only preflight,
+  quiesce HYDRA-служб, два уровня backup, атомарная миграция state, проверка
+  systemd и автоматический откат state/code/wrapper/services.
+- Добавлены `hydra upgrade migrate-state`, Linux integration-сценарий
+  main→dev и руководство [`docs/DEV_UPGRADE.md`](docs/DEV_UPGRADE.md).
+- `bootstrap.sh` остаётся установщиком новой VPS и больше не является
+  рекомендуемым способом обновления действующей установки.
+
+### Сохранённая функциональность 2.5.3
+
+- Перенесены без потерь device limits, rename/default user, uninstall, SNI
+  preflight, WARP RU/IDN lists, Fail2ban whitelist, AntiDPI alert-only probes и
+  транзакционные исправления Telemt.
+
 ## [2.5.3] — 24 июля 2026
 
 ### Пользователи и обслуживание
