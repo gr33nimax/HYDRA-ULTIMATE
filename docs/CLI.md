@@ -325,8 +325,36 @@ sudo hydra plugin action dnscrypt apply_server_names \
 `PluginMeta.commands`, `queries` или `actions`; произвольные методы вызвать
 нельзя. Command/action требуют root, query является read-only.
 
-Для `vless` сначала задайте отдельный домен, DNS-запись которого указывает на
-VPS, затем выполните `sudo hydra plugin enable vless`. Certificate preflight
+### Режимы TLS у `vless`
+
+Транспорт работает в одном из двух режимов, команда `set_security` переключает
+их вместе со всеми зависимостями:
+
+```bash
+sudo hydra plugin command vless set_security --param mode=tls
+sudo hydra plugin command vless set_security --param mode=reality   --param handshake=www.samsung.com
+```
+
+| | `tls` | `reality` |
+| :--- | :--- | :--- |
+| Домен и сертификат | обязательны, выпускает certbot | не нужны |
+| Кто завершает TLS | Caddy L4 | сам Sing-Box, повторяя чужое рукопожатие |
+| Порт 443 | делится по SNI с другими транспортами | свой, либо SNI-проброс через Caddy |
+| Сайт-заглушка | обслуживает остальные URL домена | не используется |
+| Клиент подключается к | домену | публичному IP сервера |
+| Ссылка | `security=tls&sni=<домен>` | `security=reality&pbk=&sid=&fp=` |
+
+При переключении в `reality` пара ключей создаётся через
+`sing-box generate reality-keypair`, а `short_id` — случайные 8 hex-символов.
+Приватный ключ остаётся в state и не попадает ни в статус, ни в ссылки. Обратное
+переключение в `tls` возвращает маршрут заглушки и требует домен; ключи Reality
+сохраняются, поэтому повторное включение не меняет ссылки.
+
+Хост для рукопожатия должен поддерживать TLS 1.3 и HTTP/2, не находиться в РФ и
+не быть уже занятым CDN вашего сервера.
+
+Для `vless` в режиме `tls` сначала задайте отдельный домен, DNS-запись которого
+указывает на VPS, затем выполните `sudo hydra plugin enable vless`. Certificate preflight
 получит сертификат, а общий apply создаст XHTTP inbound, маршрут Caddy и
 заглушку. Поддерживаемые mode: `stream-up`, `packet-up`, `stream-one`.
 Команда вернёт успех только после проверки активного SNI-маршрута, загрузки
@@ -348,8 +376,12 @@ VPS, затем выполните `sudo hydra plugin enable vless`. Certificate
 | `headers` | до 16 собственных HTTP-заголовков; `Host`, `Connection`, `Content-Length`, `Transfer-Encoding` и `Upgrade` запрещены | `{}` |
 
 `set_preset` выставляет режим и весь набор параметров согласованно:
-`balanced` (значения по умолчанию), `low_latency` (stream-one и малые буферы),
-`stealth` (крупный паддинг, длинные сессии), `cdn` (packet-up без SSE-заголовка).
+
+| Профиль | Режим | padding | post | буфер | сессия |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `balanced` | `stream-up` | `100-1000` | 1000000 | 30 | `20-80` |
+| `low_latency` | `stream-one` | `1-64` | 262144 | 10 | `10-30` |
+| `stealth` | `stream-up` | `500-2000` | 1000000 | 30 | `30-120` |
 `get_tuning` возвращает действующие значения и имя профиля (`custom`, если набор
 не совпадает ни с одним профилем). Пользовательские заголовки не влияют на
 определение профиля.

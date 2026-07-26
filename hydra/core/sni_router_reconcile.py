@@ -137,6 +137,8 @@ def _ensure_decoy_sites(backends: list[dict]) -> None:
     for backend in backends:
         if backend["name"] in ("sub_server", "shadowtls"):
             continue
+        if backend.get("route_kind") == "tls_passthrough":
+            continue
         domain = str(backend.get("domain", ""))
         if backend.get("route_kind") == "http_path_proxy":
             ensure_site(

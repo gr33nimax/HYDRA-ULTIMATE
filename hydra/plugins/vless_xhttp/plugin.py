@@ -1,10 +1,6 @@
 """VLESS over XHTTP for the shtorm-7 sing-box-extended core."""
 from __future__ import annotations
 
-import json
-import re
-import urllib.parse
-
 from hydra.core.state_models import User
 from hydra.plugins.base import (
     BasePlugin,
@@ -16,6 +12,28 @@ from hydra.plugins.base import (
 )
 from hydra.plugins.context import PluginStateAccess
 from hydra.plugins.decoy_support import DecoyThemeSupport
+from hydra.plugins.vless_xhttp.client import (
+    PUBLIC_PORT,
+    profile as client_profile,
+    share_link as client_share_link,
+)
+from hydra.plugins.vless_xhttp.health import INBOUND_TAG, check as health_check
+from hydra.plugins.vless_xhttp.security import (
+    DECOY_ROUTE_KEY,
+    DEFAULT_HANDSHAKE,
+    HANDSHAKE_CONFIG_KEY,
+    MODE_TLS,
+    apply_reality_mode,
+    apply_tls_mode,
+    handshake_target,
+    is_reality,
+    normalize_domain,
+    security_mode,
+    server_tls,
+    validate_handshake,
+    validate_security,
+    validate_short_id,
+)
 from hydra.plugins.vless_xhttp.presets import (
     apply_preset,
     current_preset,
@@ -28,10 +46,7 @@ from hydra.plugins.vless_xhttp.tuning import (
     TUNING_DEFAULTS,
     XHTTP_MODES,
     apply_settings,
-    client_tls,
     effective as effective_tuning,
-    link_extra,
-    link_params,
     summary as tuning_summary,
     transport as build_transport,
     validate_mode as _validate_mode,
@@ -43,29 +58,13 @@ from hydra.utils.tls import resolve_tls_material
 INTERNAL_PORT = 20448
 DECOY_HTTP_PORT = 10804
 DECOY_DIR = "/var/www/decoy-vless"
-ROUTE_CONFIG_KEY = "_tls_http_decoy_route"
+ROUTE_CONFIG_KEY = DECOY_ROUTE_KEY
 
-
-def _normalize_domain(value: object) -> str:
-    domain = str(value or "").strip().lower().rstrip(".")
-    labels = domain.split(".")
-    if (
-        not domain
-        or len(domain) > 253
-        or "://" in domain
-        or any(character.isspace() for character in domain)
-        or len(labels) < 2
-        or any(
-            not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
-            for label in labels
-        )
-    ):
-        raise ValueError("VLESS XHTTP domain is invalid")
-    return domain
+_normalize_domain = normalize_domain
 
 
 class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
-    """Multi-user VLESS/XHTTP endpoint behind Caddy TLS routing."""
+    """Multi-user VLESS/XHTTP endpoint in certificate or Reality mode."""
 
     decoy_default_theme = "media"
 
@@ -73,11 +72,12 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
         name="vless",
         display_name="VLESS + XHTTP",
         description=(
-            "VLESS over XHTTP from sing-box-extended with a dedicated "
-            "TLS domain and decoy website"
+            "VLESS over XHTTP from sing-box-extended, served either behind a "
+            "certificate on your own domain or with a borrowed Reality "
+            "handshake"
         ),
         category=PluginCategory.TRANSPORT,
-        version="1.0.0",
+        version="1.1.0",
         needs_domain=True,
         required_commands=("sing-box",),
         commands=(
@@ -87,10 +87,12 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
             "set_tuning",
             "set_preset",
             "set_decoy_theme",
+            "set_security",
         ),
         queries=("get_tuning",),
         tls_domain_source="protocol",
         config_defaults=(
+            ("security", MODE_TLS),
             ("xhttp_mode", DEFAULT_MODE),
             ("xhttp_path", DEFAULT_PATH),
             ("decoy_theme", "media"),
@@ -120,26 +122,43 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
     def uninstall(self) -> bool:
         return True
 
+    def needs_tls_domain(self, state: PluginStateAccess) -> bool:
+        """Reality borrows a handshake, so it owns neither domain nor cert."""
+        protocol = state.protocols.get("vless")
+        return not is_reality(protocol.config if protocol else {})
+
     def configure(self, state: PluginStateAccess) -> ConfigFragment:
         protocol = state.protocols.get("vless")
         if protocol is None:
             return ConfigFragment()
-        raw_domain = str(protocol.config.get("domain", "")).strip()
-        if not raw_domain:
-            return ConfigFragment()
-        domain = _normalize_domain(raw_domain)
-        cert, key = resolve_tls_material(domain, protocol.config)
         users = [
             {"name": user.email, "uuid": user.uuid}
             for user in state.users
             if not user.blocked
         ]
-        if not cert or not key or not users:
+        if not users:
             return ConfigFragment()
+        if is_reality(protocol.config):
+            inbound = self._reality_inbound(state, protocol.config, users)
+        else:
+            inbound = self._certificate_inbound(protocol.config, users)
+        return ConfigFragment(inbounds=[inbound]) if inbound else ConfigFragment()
 
-        inbound = {
+    def _certificate_inbound(
+        self,
+        config: dict,
+        users: list[dict],
+    ) -> dict[str, object] | None:
+        raw_domain = str(config.get("domain", "")).strip()
+        if not raw_domain:
+            return None
+        domain = _normalize_domain(raw_domain)
+        cert, key = resolve_tls_material(domain, config)
+        if not cert or not key:
+            return None
+        return {
             "type": "vless",
-            "tag": "vless-xhttp-in",
+            "tag": INBOUND_TAG,
             "listen": "127.0.0.1",
             "listen_port": INTERNAL_PORT,
             "users": users,
@@ -150,9 +169,31 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
                 "certificate_path": cert,
                 "key_path": key,
             },
-            "transport": self._transport(protocol.config, client=False),
+            "transport": self._transport(config, client=False),
         }
-        return ConfigFragment(inbounds=[inbound])
+
+    def _reality_inbound(
+        self,
+        state: PluginStateAccess,
+        config: dict,
+        users: list[dict],
+    ) -> dict[str, object] | None:
+        from hydra.core.sni_router import needs_mux
+
+        try:
+            tls = server_tls(config)
+        except ValueError:
+            return None
+        behind_mux = needs_mux(state)
+        return {
+            "type": "vless",
+            "tag": INBOUND_TAG,
+            "listen": "127.0.0.1" if behind_mux else "::",
+            "listen_port": INTERNAL_PORT if behind_mux else PUBLIC_PORT,
+            "users": users,
+            "tls": tls,
+            "transport": self._transport(config, client=False),
+        }
 
     @staticmethod
     def _transport(
@@ -163,6 +204,23 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
     ) -> dict[str, object]:
         return build_transport(config, client=client, domain=domain)
 
+    def _endpoint(
+        self,
+        state: PluginStateAccess,
+        config: dict,
+    ) -> tuple[str, str]:
+        """Return the (server, host) pair a client should dial."""
+        if is_reality(config):
+            server = str(getattr(state.network, "server_ip", "") or "").strip()
+            if not server:
+                return "", ""
+            return server, handshake_target(config)
+        raw_domain = str(config.get("domain", "")).strip()
+        if not raw_domain:
+            return "", ""
+        domain = _normalize_domain(raw_domain)
+        return domain, domain
+
     def generate_client_config(
         self,
         user: User,
@@ -171,92 +229,58 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
         protocol = state.protocols.get("vless")
         if protocol is None:
             return ""
-        raw_domain = str(protocol.config.get("domain", "")).strip()
-        if not raw_domain:
+        server, host = self._endpoint(state, protocol.config)
+        if not server:
             return ""
-        domain = _normalize_domain(raw_domain)
-        outbound = {
-            "type": "vless",
-            "tag": f"vless-xhttp-{user.email}",
-            "server": domain,
-            "server_port": 443,
-            "uuid": user.uuid,
-            "tls": {
-                "enabled": True,
-                "server_name": domain,
-                "alpn": ["h2"],
-                **client_tls(protocol.config),
-            },
-            "transport": self._transport(
-                protocol.config,
-                client=True,
-                domain=domain,
-            ),
-        }
-        return json.dumps(
-            {
-                "log": {"level": "info"},
-                "outbounds": [
-                    outbound,
-                    {"type": "direct", "tag": "direct"},
-                ],
-                "route": {"final": outbound["tag"]},
-            },
-            indent=2,
+        return client_profile(
+            user,
+            protocol.config,
+            server=server,
+            host=host,
         )
 
     def client_link(self, user: User, state: PluginStateAccess) -> str:
         protocol = state.protocols.get("vless")
         if protocol is None:
             return ""
-        raw_domain = str(protocol.config.get("domain", "")).strip()
-        if not raw_domain:
+        server, host = self._endpoint(state, protocol.config)
+        if not server:
             return ""
-        domain = _normalize_domain(raw_domain)
-        parameters = {
-            "encryption": "none",
-            "security": "tls",
-            "sni": domain,
-            "alpn": "h2",
-            "type": "xhttp",
-            "host": domain,
-            "path": _validate_path(
-                protocol.config.get("xhttp_path", DEFAULT_PATH),
-            ),
-            "mode": _validate_mode(
-                protocol.config.get("xhttp_mode", DEFAULT_MODE),
-            ),
-        }
-        parameters.update(link_params(protocol.config))
-        extra = link_extra(protocol.config)
-        if extra:
-            parameters["extra"] = json.dumps(
-                extra,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
-        query = urllib.parse.urlencode(parameters)
-        uuid = urllib.parse.quote(user.uuid, safe="")
-        tag = urllib.parse.quote(f"{user.email} VLESS XHTTP", safe="")
-        return f"vless://{uuid}@{domain}:443?{query}#{tag}"
+        return client_share_link(
+            user,
+            protocol.config,
+            server=server,
+            host=host,
+        )
 
     def on_enable(self, state: PluginStateAccess) -> None:
         protocol = state.protocols.get("vless")
         if protocol is None:
             raise ValueError("VLESS XHTTP configuration is missing")
-        domain = _normalize_domain(protocol.config.get("domain"))
-        cert, key = resolve_tls_material(domain, protocol.config)
+        config = protocol.config
+        _validate_path(config.get("xhttp_path", DEFAULT_PATH))
+        _validate_mode(config.get("xhttp_mode", DEFAULT_MODE))
+        effective_tuning(config)
+
+        from hydra.utils.firewall import open_tcp
+
+        if is_reality(config):
+            server_tls(config)
+            if not str(getattr(state.network, "server_ip", "") or "").strip():
+                raise ValueError(
+                    "Публичный IP сервера неизвестен: клиентам Reality "
+                    "некуда подключаться",
+                )
+            open_tcp(443, "vless-xhttp")
+            return
+
+        domain = _normalize_domain(config.get("domain"))
+        cert, key = resolve_tls_material(domain, config)
         if not cert or not key:
             raise ValueError(
                 f"TLS material for {domain} must be prepared "
                 "by the application service",
             )
-        _validate_path(protocol.config.get("xhttp_path", DEFAULT_PATH))
-        _validate_mode(protocol.config.get("xhttp_mode", DEFAULT_MODE))
-        effective_tuning(protocol.config)
-
-        from hydra.utils.firewall import open_tcp
-
         open_tcp(80, "vless-xhttp-http")
         open_tcp(443, "vless-xhttp")
 
@@ -279,11 +303,12 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
             else None
         )
         enabled = bool(protocol and protocol.enabled)
+        reality = bool(protocol and is_reality(protocol.config))
         running = (
             installed
             and enabled
             and singbox.is_running()
-            and sni_router.is_active()
+            and (reality or sni_router.is_active())
         )
         info = {}
         if protocol:
@@ -293,15 +318,14 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
             except ValueError as exc:
                 preset, summary = "invalid", str(exc)
             info = {
-                "Domain": protocol.config.get("domain", ""),
-                "XHTTP path": protocol.config.get(
-                    "xhttp_path",
-                    DEFAULT_PATH,
+                "Security": security_mode(protocol.config),
+                "Domain": (
+                    handshake_target(protocol.config)
+                    if reality
+                    else protocol.config.get("domain", "")
                 ),
-                "XHTTP mode": protocol.config.get(
-                    "xhttp_mode",
-                    DEFAULT_MODE,
-                ),
+                "XHTTP path": protocol.config.get("xhttp_path", DEFAULT_PATH),
+                "XHTTP mode": protocol.config.get("xhttp_mode", DEFAULT_MODE),
                 "XHTTP preset": preset,
                 "XHTTP tuning": summary,
             }
@@ -311,74 +335,7 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
         self,
         state: PluginStateAccess,
     ) -> HealthResult:
-        from hydra.core import singbox, sni_router
-
-        protocol = state.protocols.get("vless")
-        config = protocol.config if protocol is not None else {}
-        domain = str(config.get("domain", "")).strip().lower().rstrip(".")
-        service_active = singbox.is_running()
-        inbound_configured = singbox.has_configured_inbound(
-            "vless-xhttp-in",
-        )
-        caddy_active = sni_router.is_active()
-        route = config.get(ROUTE_CONFIG_KEY)
-        route_declared = (
-            isinstance(route, dict)
-            and route.get("kind") == "http_path_proxy"
-        )
-        route_active = False
-        tls_healthy = False
-        tls_detail = ""
-        if (
-            service_active
-            and inbound_configured
-            and caddy_active
-            and route_declared
-        ):
-            audit = sni_router.audit_routes(state)
-            route_active = (
-                audit.ok
-                and bool(domain)
-                and domain in audit.actual
-            )
-            if route_active:
-                tls_healthy, tls_detail = sni_router.probe_tls_route(domain)
-        healthy = (
-            service_active
-            and inbound_configured
-            and caddy_active
-            and route_declared
-            and route_active
-            and tls_healthy
-        )
-        detail = ""
-        if not service_active:
-            detail = "sing-box service is not active"
-        elif not inbound_configured:
-            detail = "VLESS XHTTP inbound is missing from Sing-Box config"
-        elif not caddy_active:
-            detail = "Caddy L4 service is not active"
-        elif not route_declared:
-            detail = "VLESS XHTTP Caddy route metadata is missing"
-        elif not route_active:
-            detail = (
-                "VLESS XHTTP Caddy route is not active for "
-                f"{domain or 'configured domain'}"
-            )
-        elif not tls_healthy:
-            detail = f"VLESS XHTTP TLS route failed: {tls_detail}"
-        return HealthResult(
-            healthy,
-            detail,
-            "ok" if healthy else "error",
-            {
-                "sing_box": service_active,
-                "vless_xhttp_inbound": inbound_configured,
-                "caddy_l4": caddy_active,
-                "caddy_route": route_active,
-                "tls_handshake": tls_healthy,
-            },
-        )
+        return health_check(state)
 
     def set_domain(
         self,
@@ -388,6 +345,11 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
         protocol = state.protocols.get("vless")
         if protocol is None:
             return False
+        if is_reality(protocol.config):
+            raise ValueError(
+                "В режиме Reality домен не используется; сначала переключите "
+                "security на tls",
+            )
         normalized = _normalize_domain(domain)
         if normalized != protocol.config.get("domain"):
             protocol.config["domain"] = normalized
@@ -444,12 +406,60 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
         apply_preset(protocol.config, name)
         return True
 
+    def set_security(
+        self,
+        state: PluginStateAccess,
+        mode: str,
+        handshake: str = "",
+        short_id: str = "",
+    ) -> bool:
+        """Switch between a certificate on your domain and a Reality handshake."""
+        normalized = validate_security(mode)
+        protocol = state.protocols.get("vless")
+        if protocol is None:
+            return False
+        if normalized == MODE_TLS:
+            apply_tls_mode(
+                protocol.config,
+                decoy_route=self.route_config(),
+            )
+            return True
+
+        import secrets
+
+        from hydra.core.singbox_keys import generate_reality_keypair
+
+        config = protocol.config
+        target = validate_handshake(
+            handshake or config.get(HANDSHAKE_CONFIG_KEY)
+            or DEFAULT_HANDSHAKE,
+        )
+        private_key = str(config.get("reality_private_key", "")).strip()
+        public_key = str(config.get("reality_public_key", "")).strip()
+        if not private_key or not public_key:
+            private_key, public_key = generate_reality_keypair()
+        identifier = validate_short_id(
+            short_id
+            or config.get("reality_short_id")
+            or secrets.token_hex(4),
+        )
+        apply_reality_mode(
+            config,
+            handshake=target,
+            private_key=private_key,
+            public_key=public_key,
+            short_id=identifier,
+            internal_port=INTERNAL_PORT,
+        )
+        return True
+
     def get_tuning(self, state: PluginStateAccess) -> dict[str, object]:
         """Return the effective XHTTP transport settings for operators."""
         protocol = state.protocols.get("vless")
         config = protocol.config if protocol is not None else {}
         values = effective_tuning(config)
         return {
+            "security": security_mode(config),
             "preset": current_preset(config),
             "mode": _validate_mode(config.get("xhttp_mode", DEFAULT_MODE)),
             "path": _validate_path(config.get("xhttp_path", DEFAULT_PATH)),
@@ -467,5 +477,6 @@ __all__ = [
     "DECOY_HTTP_PORT",
     "INTERNAL_PORT",
     "ROUTE_CONFIG_KEY",
+    "XHTTP_MODES",
     "VlessXhttpPlugin",
 ]

@@ -49,7 +49,10 @@ def test_extended_protocol_facade_is_thin_and_protocol_logic_is_partitioned():
             "_menu_anytls_obfuscation",
         },
         "extended_protocol_trusttunnel.py": {"_menu_trusttunnel"},
-        "extended_protocol_vless.py": {"_menu_vless"},
+        "extended_protocol_vless.py": {
+            "_endpoint_details",
+            "_menu_vless",
+        },
     }
 
     facade = MENU_ROOT / "extended_protocols.py"

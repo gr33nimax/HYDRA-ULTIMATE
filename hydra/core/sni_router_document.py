@@ -138,6 +138,13 @@ def _tls_route(
     port = backend["port"]
     match = [{"tls": {"sni": [domain]}}]
 
+    if backend.get("route_kind") == "tls_passthrough":
+        # Reality terminates TLS itself: the multiplexer only reads the SNI.
+        return {
+            "match": match,
+            "handle": [proxy_factory(f"127.0.0.1:{port}")],
+        }
+
     if backend.get("route_kind") == "http_path_proxy":
         handlers = [
             _tls_handler(backend),

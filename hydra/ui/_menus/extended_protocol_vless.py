@@ -3,6 +3,11 @@ from __future__ import annotations
 
 from hydra.core.state_models import AppState
 from hydra.plugins.vless_xhttp import presets, tuning
+from hydra.plugins.vless_xhttp.security import (
+    handshake_target,
+    is_reality,
+    security_mode,
+)
 from hydra.services.application import ApplicationService
 from hydra.ui._menus.extended_protocol_common import (
     _application,
@@ -30,6 +35,19 @@ from hydra.ui.tui import (
     prompt,
     success,
 )
+
+
+def _endpoint_details(config: dict) -> list[tuple[str, str]]:
+    """Show what a client actually needs for the configured security mode."""
+    if not is_reality(config):
+        return [
+            ("Домен", str(config.get("domain", "")) or "не настроен"),
+        ]
+    return [
+        ("Чужое рукопожатие", handshake_target(config)),
+        ("Reality pbk", str(config.get("reality_public_key", "")) or "нет"),
+        ("Reality sid", str(config.get("reality_short_id", "")) or "нет"),
+    ]
 
 
 def _menu_vless(
@@ -60,9 +78,10 @@ def _menu_vless(
             preset_display = presets.preset_label(preset_name)
             details = [
                 (
-                    "Домен",
-                    str(desired.config.get("domain", "")) or "не настроен",
+                    "TLS-режим",
+                    f"{BOLD}{CYAN}{security_mode(desired.config)}{NC}",
                 ),
+                *_endpoint_details(desired.config),
                 ("XHTTP path", str(tuning_info.get("path", "/xhttp"))),
                 ("Режим XHTTP", str(tuning_info.get("mode", "stream-up"))),
                 (

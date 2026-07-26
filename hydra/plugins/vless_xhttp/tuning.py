@@ -171,8 +171,8 @@ FIELDS: tuple[TuningField, ...] = (
         "xhttp_headers",
         "headers",
         "headers",
-        "HTTP-заголовки",
-        f"до {_MAX_HEADERS} пар, имена транспорта запрещены",
+        "Заголовки запроса",
+        f"headers: до {_MAX_HEADERS} пар; Host, Connection, Content-Length, Transfer-Encoding и Upgrade запрещены",
         {},
         validate_headers,
     ),
@@ -182,7 +182,7 @@ FIELDS: tuple[TuningField, ...] = (
         "x_padding_bytes",
         "xPaddingBytes",
         "Паддинг запросов",
-        "диапазон байт 0-65535, '0' отключает",
+        "x_padding_bytes: N или N-M байт в пределах 0-65535; 0 отключает добавление мусорных байт",
         "100-1000",
         lambda value: _validate_range(
             value,
@@ -196,7 +196,7 @@ FIELDS: tuple[TuningField, ...] = (
         "no_sse_header",
         "noSSEHeader",
         "Без SSE-заголовка",
-        "для CDN и посредников с буферизацией",
+        "no_sse_header: не отправлять Content-Type text/event-stream в download-потоке",
         False,
         lambda value: _validate_bool(value, field="XHTTP no_sse_header"),
     ),
@@ -205,8 +205,8 @@ FIELDS: tuple[TuningField, ...] = (
         "xhttp_max_post_bytes",
         "sc_max_each_post_bytes",
         "scMaxEachPostBytes",
-        "Размер upload-пакета",
-        "4096-16777216 байт",
+        "Размер upload-запроса",
+        "sc_max_each_post_bytes: 4096-16777216 байт в одном POST",
         1_000_000,
         lambda value: _validate_int(
             value,
@@ -220,8 +220,8 @@ FIELDS: tuple[TuningField, ...] = (
         "xhttp_max_buffered_posts",
         "sc_max_buffered_posts",
         "scMaxBufferedPosts",
-        "Буфер upload-пакетов",
-        "1-1024 пакетов",
+        "Буфер upload-запросов",
+        "sc_max_buffered_posts: 1-1024 запросов, которые сервер держит до сборки потока",
         30,
         lambda value: _validate_int(
             value,
@@ -235,8 +235,8 @@ FIELDS: tuple[TuningField, ...] = (
         "xhttp_stream_up_secs",
         "sc_stream_up_server_secs",
         "scStreamUpServerSecs",
-        "Длительность stream-up",
-        "диапазон секунд 0-3600",
+        "Время жизни stream-up",
+        "sc_stream_up_server_secs: N или N-M секунд в пределах 0-3600 до переоткрытия потока",
         "20-80",
         lambda value: _validate_range(
             value,
@@ -250,7 +250,7 @@ FIELDS: tuple[TuningField, ...] = (
         "server_max_header_bytes",
         "",
         "Лимит заголовков запроса",
-        "1024-65536 байт, только сервер",
+        "server_max_header_bytes: 1024-65536 байт, применяется только на сервере",
         8192,
         lambda value: _validate_int(
             value,
@@ -265,7 +265,7 @@ FIELDS: tuple[TuningField, ...] = (
         "",
         "fp",
         "uTLS-отпечаток клиента",
-        "TLS ClientHello клиента; none оставляет выбор клиенту",
+        "fp в ссылке и tls.utls в профиле: чей ClientHello имитирует клиент; none оставляет выбор клиенту",
         "none",
         validate_fingerprint,
         scope="tls",
@@ -348,15 +348,20 @@ def summary(config: Mapping[str, object]) -> str:
     """Return a compact operator-facing description of the tuning."""
     values = effective(config)
     headers = values["xhttp_headers"]
-    return " · ".join(
-        [
-            f"padding {values['xhttp_padding']}",
-            f"post {values['xhttp_max_post_bytes']}B",
-            f"buffer {values['xhttp_max_buffered_posts']}",
-            f"stream-up {values['xhttp_stream_up_secs']}s",
-            f"headers {len(headers)}" if headers else "headers нет",
-        ],
-    )
+    fingerprint = values["utls_fingerprint"]
+    parts = [
+        f"padding {values['xhttp_padding']} Б",
+        f"post {values['xhttp_max_post_bytes']} Б",
+        f"буфер {values['xhttp_max_buffered_posts']}",
+        f"сессия {values['xhttp_stream_up_secs']} с",
+    ]
+    if values["xhttp_no_sse_header"]:
+        parts.append("без SSE")
+    if fingerprint != "none":
+        parts.append(f"uTLS {fingerprint}")
+    if headers:
+        parts.append(f"заголовков {len(headers)}")
+    return " · ".join(parts)
 
 
 def client_tls(config: Mapping[str, object]) -> dict[str, object]:

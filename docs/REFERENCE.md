@@ -34,7 +34,7 @@
 | `anytls` | AnyTLS | TLS-подобный обфусцированный туннель |
 | `trusttunnel` | TrustTunnel | TLS-транспорт с режимами TCP/QUIC и сайтом-заглушкой |
 | `hysteria2` | Hysteria2 | QUIC-транспорт с Salamander и браузерной заглушкой |
-| `vless` | VLESS + XHTTP | XHTTP-транспорт Sing-Box Extended с отдельным доменом и заглушкой |
+| `vless` | VLESS + XHTTP | XHTTP-транспорт Sing-Box Extended: свой домен с сертификатом либо Reality с чужим рукопожатием |
 | `shadowtls` | ShadowTLS | ShadowTLS v3 с Trojan detour |
 | `snell` | Snell v4 | TCP/UDP-прокси из Sing-Box Extended |
 | `telemt` | MTProto / Telemt | Telegram MTProxy с управлением пользователями |

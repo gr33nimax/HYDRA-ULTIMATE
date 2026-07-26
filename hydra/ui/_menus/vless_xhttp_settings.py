@@ -3,14 +3,45 @@ from __future__ import annotations
 
 from hydra.core.state_models import AppState, PluginState
 from hydra.plugins.vless_xhttp import presets, tuning
+from hydra.plugins.vless_xhttp.security import (
+    DEFAULT_HANDSHAKE,
+    MODE_REALITY,
+    MODE_TLS,
+    handshake_target,
+    is_reality,
+    security_mode,
+)
 from hydra.services.application import ApplicationService
 from hydra.ui._menus.decoy_theme import open_decoy_menu, theme_label
 from hydra.ui._menus.vless_xhttp_tuning import open_menu as open_tuning_menu
 from hydra.ui.tui import error, menu, prompt, success
 
 
+_MODE_HINTS = {
+    "stream-up": "загрузка одним потоком, скачивание отдельными запросами",
+    "packet-up": "загрузка отдельными POST, устойчиво к посредникам",
+    "stream-one": "один поток в обе стороны, минимальная задержка",
+}
+
+
 def option(_desired: PluginState) -> tuple[str, str]:
-    return "⚙️  Настройки", "Домен, путь, режим и профиль XHTTP"
+    return "⚙️  Настройки", "TLS-режим, домен, путь, XHTTP, uTLS и заглушка"
+
+
+def _security_row(config: dict) -> tuple[str, str]:
+    """Describe how the endpoint obtains its TLS handshake."""
+    try:
+        if is_reality(config):
+            return (
+                "reality",
+                f"чужое рукопожатие {handshake_target(config)}, сертификат не нужен",
+            )
+        return (
+            "tls",
+            "свой сертификат на домене, TLS завершает Caddy",
+        )
+    except ValueError as exc:
+        return "invalid", str(exc)
 
 
 def _summary(config: dict) -> tuple[str, str]:
@@ -35,18 +66,49 @@ def open_menu(
         domain = str(desired.config.get("domain", ""))
         path = str(desired.config.get("xhttp_path", "/xhttp"))
         mode = str(desired.config.get("xhttp_mode", "stream-up"))
-        preset_label, tuning_summary = _summary(desired.config)
+        _preset_label, tuning_summary = _summary(desired.config)
         fingerprint = str(desired.config.get("utls_fingerprint", "none"))
         decoy = str(desired.config.get("decoy_theme", "media"))
+        mode_name, mode_hint = _security_row(desired.config)
+        reality = mode_name == MODE_REALITY
         choice = menu(
             [
-                ("1", "Домен", domain or "не настроен"),
-                ("2", "XHTTP path", path),
-                ("3", "XHTTP mode", mode),
-                ("4", "Профиль транспорта", preset_label),
+                ("1", "TLS-режим", f"{mode_name} — {mode_hint}"),
+                (
+                    "2",
+                    "Домен" if not reality else "Домен (не используется)",
+                    domain or "не настроен",
+                ),
+                (
+                    "3",
+                    "Путь XHTTP",
+                    f"{path} — "
+                    + (
+                        "путь внутри чужого имени"
+                        if reality
+                        else "этот путь Caddy отдаёт в Sing-Box"
+                    ),
+                ),
+                ("4", "Режим XHTTP", f"{mode} — {_MODE_HINTS.get(mode, '')}"),
                 ("5", "Тонкая настройка", tuning_summary),
-                ("6", "uTLS-отпечаток клиента", fingerprint),
-                ("7", "Сайт-заглушка", theme_label(decoy)),
+                (
+                    "6",
+                    "uTLS-отпечаток клиента",
+                    fingerprint
+                    if fingerprint != "none"
+                    else (
+                        "none — в Reality клиент получит chrome"
+                        if reality
+                        else "none — клиент решает сам"
+                    ),
+                ),
+                (
+                    "7",
+                    "Сайт-заглушка",
+                    f"{theme_label(decoy)} — остальные URL домена"
+                    if not reality
+                    else "не используется в режиме reality",
+                ),
                 ("0", "← Назад", ""),
             ],
             "НАСТРОЙКИ VLESS + XHTTP",
@@ -74,6 +136,8 @@ def _change(
     app: ApplicationService,
 ) -> bool | None:
     if choice == "1":
+        return _change_security(state, desired, app)
+    if choice == "2":
         value = prompt(
             "Новый домен VLESS + XHTTP",
             default=str(desired.config.get("domain", "")),
@@ -86,7 +150,7 @@ def _change(
             "set_domain",
             domain=value,
         )
-    if choice == "2":
+    if choice == "3":
         value = prompt(
             "Новый XHTTP path",
             default=str(desired.config.get("xhttp_path", "/xhttp")),
@@ -97,12 +161,12 @@ def _change(
             "set_path",
             path=value,
         )
-    if choice == "3":
+    if choice == "4":
         selected = menu(
             [
-                ("1", "stream-up", "рекомендуемый"),
-                ("2", "packet-up", "пакетная загрузка"),
-                ("3", "stream-one", "один поток"),
+                ("1", "stream-up", _MODE_HINTS["stream-up"]),
+                ("2", "packet-up", _MODE_HINTS["packet-up"]),
+                ("3", "stream-one", _MODE_HINTS["stream-one"]),
                 ("0", "Отмена", ""),
             ],
             "РЕЖИМ XHTTP",
@@ -120,8 +184,6 @@ def _change(
             "set_mode",
             mode=mode,
         )
-    if choice == "4":
-        return _change_preset(state, app)
     if choice == "5":
         open_tuning_menu(state, app)
         return None
@@ -131,6 +193,53 @@ def _change(
         open_decoy_menu(state, plugin, app)
         return None
     return None
+
+
+def _change_security(
+    state: AppState,
+    desired: PluginState,
+    app: ApplicationService,
+) -> bool | None:
+    """Switch between an own certificate and a borrowed Reality handshake."""
+    current = security_mode(desired.config)
+    selected = menu(
+        [
+            (
+                "1",
+                "tls — свой сертификат" + (" ·" if current == MODE_TLS else ""),
+                "Нужен домен с A-записью на сервер; TLS завершает Caddy, "
+                "остальные URL отдаёт заглушка",
+            ),
+            (
+                "2",
+                "reality — чужое рукопожатие"
+                + (" ·" if current == MODE_REALITY else ""),
+                "Домен и сертификат не нужны; сервер повторяет TLS чужого "
+                "сайта, клиенты подключаются по IP",
+            ),
+            ("0", "Отмена", ""),
+        ],
+        "TLS-РЕЖИМ VLESS",
+    )
+    if selected == "1":
+        return app.plugin_command(state, "vless", "set_security", mode=MODE_TLS)
+    if selected != "2":
+        return None
+    handshake = prompt(
+        "Чужой хост для рукопожатия (TLS 1.3, HTTP/2, не из РФ)",
+        default=str(
+            desired.config.get("reality_handshake") or DEFAULT_HANDSHAKE,
+        ),
+    ).strip()
+    if not handshake:
+        return None
+    return app.plugin_command(
+        state,
+        "vless",
+        "set_security",
+        mode=MODE_REALITY,
+        handshake=handshake,
+    )
 
 
 def _change_fingerprint(
@@ -163,32 +272,6 @@ def _change_fingerprint(
         "vless",
         "set_tuning",
         utls_fingerprint=UTLS_FINGERPRINTS[index],
-    )
-
-
-def _change_preset(
-    state: AppState,
-    app: ApplicationService,
-) -> bool | None:
-    names = sorted(presets.PRESETS)
-    items = [
-        (str(index), presets.PRESETS[name].label, presets.PRESETS[name].description)
-        for index, name in enumerate(names, start=1)
-    ]
-    selected = menu(
-        [*items, ("0", "Отмена", "")],
-        "ПРОФИЛЬ ТРАНСПОРТА XHTTP",
-    )
-    if selected == "0" or not selected.isdigit():
-        return None
-    index = int(selected) - 1
-    if not 0 <= index < len(names):
-        return None
-    return app.plugin_command(
-        state,
-        "vless",
-        "set_preset",
-        preset=names[index],
     )
 
 

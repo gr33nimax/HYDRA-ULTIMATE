@@ -76,9 +76,16 @@ def collect_domains(state: AppState) -> list[tuple[str, str, dict]]:
         if not protocol.enabled:
             continue
         config = dict(protocol.config)
+        owns_material = bool(
+            str(config.get("cert_file", "")).strip()
+            or str(config.get("key_file", "")).strip(),
+        )
+        # A protocol without its own domain audits the network domain only
+        # when it actually stores certificate material for it; a transport
+        # serving a borrowed handshake owns no certificate at all.
         domain = str(
             config.get("domain")
-            or getattr(state.network, "domain", "")
+            or (getattr(state.network, "domain", "") if owns_material else "")
             or "",
         ).strip().lower().rstrip(".")
         if not domain:

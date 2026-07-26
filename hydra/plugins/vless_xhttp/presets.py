@@ -20,15 +20,33 @@ class Preset:
 
     name: str
     label: str
-    description: str
+    purpose: str
     values: dict[str, object]
+
+    @property
+    def details(self) -> str:
+        """Return the exact values this profile writes."""
+        return " · ".join(
+            (
+                str(self.values["xhttp_mode"]),
+                f"padding {self.values['xhttp_padding']} Б",
+                f"post {self.values['xhttp_max_post_bytes']} Б",
+                f"буфер {self.values['xhttp_max_buffered_posts']}",
+                f"сессия {self.values['xhttp_stream_up_secs']} с",
+            ),
+        )
+
+    @property
+    def description(self) -> str:
+        """Return the operator-facing line: why, then what exactly."""
+        return f"{self.purpose} — {self.details}"
 
 
 PRESETS: dict[str, Preset] = {
     "balanced": Preset(
         "balanced",
         "⚖️  Сбалансированный",
-        "Значения по умолчанию: устойчивый stream-up",
+        "Значения по умолчанию sing-box, устойчивы на нестабильном канале",
         {
             "xhttp_mode": "stream-up",
             "xhttp_padding": "100-1000",
@@ -42,7 +60,7 @@ PRESETS: dict[str, Preset] = {
     "low_latency": Preset(
         "low_latency",
         "🚀 Низкая задержка",
-        "stream-one и малые буферы для игр, SSH и голоса",
+        "Один поток и малые буферы: меньше задержка, выше накладные расходы",
         {
             "xhttp_mode": "stream-one",
             "xhttp_padding": "1-64",
@@ -56,7 +74,7 @@ PRESETS: dict[str, Preset] = {
     "stealth": Preset(
         "stealth",
         "🕶️  Максимальная маскировка",
-        "Крупный паддинг и длинные сессии против анализа трафика",
+        "Крупный паддинг и длинные сессии против анализа размеров и частоты",
         {
             "xhttp_mode": "stream-up",
             "xhttp_padding": "500-2000",
@@ -65,20 +83,6 @@ PRESETS: dict[str, Preset] = {
             "xhttp_max_buffered_posts": 30,
             "xhttp_stream_up_secs": "30-120",
             "xhttp_max_header_bytes": 16384,
-        },
-    ),
-    "cdn": Preset(
-        "cdn",
-        "🌐 Через CDN и посредников",
-        "packet-up без SSE-заголовка для буферизующих прокси",
-        {
-            "xhttp_mode": "packet-up",
-            "xhttp_padding": "100-1000",
-            "xhttp_no_sse_header": True,
-            "xhttp_max_post_bytes": 500_000,
-            "xhttp_max_buffered_posts": 60,
-            "xhttp_stream_up_secs": "40-120",
-            "xhttp_max_header_bytes": 8192,
         },
     ),
 }

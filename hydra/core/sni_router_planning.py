@@ -11,6 +11,8 @@ from hydra.core.state_models import AppState
 
 _DYNAMIC_ROUTE_KEY = "_tls_http_decoy_route"
 _DYNAMIC_ROUTE_KIND = "http_path_proxy"
+_PASSTHROUGH_ROUTE_KEY = "_tls_passthrough_route"
+_PASSTHROUGH_ROUTE_KIND = "tls_passthrough"
 
 
 @dataclass(frozen=True)
@@ -169,18 +171,29 @@ def collect_backends(
         if name in internal_ports or not proto.enabled:
             continue
         route = proto.config.get(_DYNAMIC_ROUTE_KEY)
-        if route is None:
+        if route is not None:
+            backend = _dynamic_backend(
+                name,
+                proto.config,
+                route,
+                occupied_ports,
+            )
+            backends.append(backend)
+            occupied_ports.update(
+                (int(backend["port"]), int(backend["decoy_port"])),
+            )
             continue
-        backend = _dynamic_backend(
+        passthrough = proto.config.get(_PASSTHROUGH_ROUTE_KEY)
+        if passthrough is None:
+            continue
+        backend = _passthrough_backend(
             name,
             proto.config,
-            route,
+            passthrough,
             occupied_ports,
         )
         backends.append(backend)
-        occupied_ports.update(
-            (int(backend["port"]), int(backend["decoy_port"])),
-        )
+        occupied_ports.add(int(backend["port"]))
 
     sub_domain = getattr(state.network, "sub_domain", "")
     if sub_domain:
@@ -231,6 +244,46 @@ def _route_port(
     if port in occupied_ports:
         raise _route_error(name, f"{field} conflicts with port {port}")
     return port
+
+
+def _passthrough_backend(
+    name: str,
+    config: Mapping[str, Any],
+    route: object,
+    occupied_ports: set[int],
+) -> dict[str, Any]:
+    """Project a plugin-owned TLS passthrough route, e.g. Reality."""
+    if (
+        not isinstance(route, Mapping)
+        or route.get("kind") != _PASSTHROUGH_ROUTE_KIND
+    ):
+        raise _route_error(name, f"kind must be {_PASSTHROUGH_ROUTE_KIND}")
+    internal_port = _route_port(
+        name,
+        route.get("internal_port"),
+        "internal_port",
+        occupied_ports,
+    )
+    sni_key = route.get("sni_config")
+    if not isinstance(sni_key, str) or not sni_key:
+        raise _route_error(name, "sni_config must name a config field")
+    sni = str(config.get(sni_key, "")).strip().lower().rstrip(".")
+    if (
+        not sni
+        or "://" in sni
+        or "." not in sni
+        or any(character.isspace() for character in sni)
+    ):
+        raise _route_error(name, f"{sni_key} is not a valid SNI")
+    return {
+        "name": name,
+        "domain": sni,
+        "port": internal_port,
+        "cert_file": "",
+        "key_file": "",
+        "network_mode": "",
+        "route_kind": _PASSTHROUGH_ROUTE_KIND,
+    }
 
 
 def _dynamic_backend(

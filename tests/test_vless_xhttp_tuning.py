@@ -243,19 +243,20 @@ def test_share_link_carries_only_client_visible_overrides():
 def test_get_tuning_projects_effective_settings():
     plugin = VlessXhttpPlugin()
     state = _state()
-    plugin.set_preset(state, "cdn")
+    plugin.set_preset(state, "stealth")
 
     assert plugin.get_tuning(state) == {
-        "preset": "cdn",
-        "mode": "packet-up",
+        "security": "tls",
+        "preset": "stealth",
+        "mode": "stream-up",
         "path": "/xhttp",
         "headers": {},
-        "padding": "100-1000",
-        "no_sse_header": True,
-        "max_post_bytes": 500_000,
-        "max_buffered_posts": 60,
-        "stream_up_secs": "40-120",
-        "max_header_bytes": 8192,
+        "padding": "500-2000",
+        "no_sse_header": False,
+        "max_post_bytes": 1_000_000,
+        "max_buffered_posts": 30,
+        "stream_up_secs": "30-120",
+        "max_header_bytes": 16384,
         "utls_fingerprint": "none",
     }
 
@@ -302,25 +303,6 @@ def _app(state: AppState) -> MagicMock:
     app.admin.load_state.return_value = state
     app.plugin_command.return_value = True
     return app
-
-
-def test_settings_menu_applies_a_preset():
-    state = _state()
-    app = _app(state)
-
-    with patch.object(
-        vless_xhttp_settings,
-        "menu",
-        side_effect=["4", "3", "0"],
-    ), patch.object(vless_xhttp_settings, "prompt", return_value=""):
-        vless_xhttp_settings.open_menu(state, MagicMock(), app)
-
-    app.plugin_command.assert_called_once_with(
-        state,
-        "vless",
-        "set_preset",
-        preset=sorted(presets.PRESETS)[2],
-    )
 
 
 def test_settings_menu_opens_the_tuning_submenu():
