@@ -107,21 +107,15 @@ hydra check                # валидация и предпросмотр не
 > вручную через `git pull`.
 
 ```bash
-(
-  set -e
-  upgrade_script=$(mktemp)
-  trap 'rm -f "$upgrade_script"' EXIT
-  curl -fsSL \
-    https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/upgrade.sh \
-    -o "$upgrade_script"
-  sudo env HYDRA_REF=dev bash "$upgrade_script"
-)
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/updater.sh | sudo bash
 ```
 
-Updater фиксирует точный commit ветки, собирает новую версию и `.venv` отдельно,
-выполняет read-only preflight, останавливает только службы HYDRA, сохраняет
-проверенный backup и исходный state, мигрирует схему, переключает release и
-проверяет запуск. При любой ошибке state, код, wrapper и ранее активные службы
+Короткий `updater.sh` полностью скачивает транзакционный `upgrade.sh` во
+временный файл и только после успешной загрузки запускает его. Updater фиксирует
+точный commit ветки, собирает новую версию и `.venv` отдельно, выполняет
+read-only preflight, останавливает только службы HYDRA, сохраняет проверенный
+backup и исходный state, мигрирует схему, переключает release и проверяет
+запуск. При любой ошибке state, код, wrapper и ранее активные службы
 восстанавливаются автоматически.
 
 Требования, состав снимка отката и процедура ручного восстановления —
@@ -357,7 +351,8 @@ Linux-сценарий с root/systemd/nftables и транзакционное 
 HYDRA-ULTIMATE/
 ├── main.py                 # точка входа в интерактивный TUI
 ├── bootstrap.sh            # установка и подготовка новой VPS
-├── upgrade.sh              # транзакционное обновление существующей VPS
+├── updater.sh              # однокомандный запуск обновления
+├── upgrade.sh              # транзакционное ядро updater
 ├── verify.py               # локальная проверка: compile, lint, тесты
 ├── hydra/
 │   ├── contracts/          # нейтральные типизированные контракты

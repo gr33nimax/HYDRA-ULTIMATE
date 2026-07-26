@@ -95,7 +95,8 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 > [!NOTE]
 > Долгоживущие units ссылаются на стабильный `/opt/hydra` и интерпретатор
 > `/opt/hydra/.venv/bin/python`, а не на физический release-каталог. Поэтому
-> `upgrade.sh` может атомарно переключать release без правки unit-файлов.
+> транзакционное ядро `upgrade.sh` может атомарно переключать release без правки
+> unit-файлов; публичный запуск выполняется через `updater.sh`.
 
 ## Каталоги и файлы
 
@@ -105,7 +106,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | :--- | :--- |
 | `/opt/hydra` | Стабильная точка входа установки (символьная ссылка на release) |
 | `/opt/hydra/.venv` | Изолированное Python-окружение |
-| `/opt/hydra-releases` | Каталог изолированных release для `upgrade.sh` |
+| `/opt/hydra-releases` | Каталог изолированных release для updater |
 | `/usr/local/bin/hydra` | Wrapper команды `hydra` |
 | `/usr/local/bin/sing-box` | Бинарник Sing-Box Extended |
 | `/usr/local/bin/caddy-l4` | Бинарник Caddy с модулем layer4 |
@@ -169,7 +170,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | Путь | Содержание |
 | :--- | :--- |
 | `/var/log/hydra/install.log` | Журнал `bootstrap.sh` |
-| `/var/log/hydra/upgrade.log` | Журнал `upgrade.sh` (права `0600`) |
+| `/var/log/hydra/upgrade.log` | Журнал updater (права `0600`) |
 | `/var/log/hydra/apply.jsonl` | Структурированный журнал транзакций применения |
 | `/var/log/hydra/traffic-daemon.log` | Демон учёта трафика |
 | `/var/log/hydra/sync-agent.log` | Агент периодического обслуживания |
@@ -265,7 +266,12 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 
 ## Переменные окружения
 
-### `upgrade.sh`
+### `updater.sh` и `upgrade.sh`
+
+`updater.sh` — публичный однокомандный launcher. Он использует `HYDRA_REF`,
+полностью скачивает соответствующий `upgrade.sh` во временный файл, проверяет
+тип содержимого и только затем запускает транзакцию. `upgrade.sh` — внутреннее
+транзакционное ядро и compatibility entrypoint для интеграционных процедур.
 
 | Переменная | По умолчанию | Назначение |
 | :--- | :--- | :--- |

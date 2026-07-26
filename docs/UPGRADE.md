@@ -5,7 +5,7 @@
 | Сценарий | Инструмент | Когда применять |
 | :--- | :--- | :--- |
 | Чистая установка | `bootstrap.sh` | На VPS ещё нет HYDRA |
-| Обновление рабочей установки | `upgrade.sh` | HYDRA уже установлена и обслуживает трафик |
+| Обновление рабочей установки | `updater.sh` | HYDRA уже установлена и обслуживает трафик |
 
 > [!CAUTION]
 > Не запускайте `bootstrap.sh` поверх работающей установки и не обновляйтесь
@@ -83,8 +83,9 @@ hydra check
 
 ## Обновление рабочей VPS
 
-`upgrade.sh` выполняет переход на точный SHA указанной ветки как единую
-транзакцию.
+`updater.sh` даёт одну публичную команду обновления. Он полностью загружает
+`upgrade.sh` во временный файл и только после этого запускает транзакционное
+ядро, которое выполняет переход на точный SHA указанной ветки.
 
 ### Что гарантирует updater
 
@@ -128,19 +129,13 @@ sudo git -C /opt/hydra status --short
 ### Запуск
 
 ```bash
-(
-  set -e
-  upgrade_script=$(mktemp)
-  trap 'rm -f "$upgrade_script"' EXIT
-  curl -fsSL \
-    https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/upgrade.sh \
-    -o "$upgrade_script"
-  sudo env HYDRA_REF=dev bash "$upgrade_script"
-)
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/updater.sh | sudo bash
 ```
 
-Updater разрешает SHA ветки один раз и устанавливает именно этот commit, даже
-если ветка сдвинется во время загрузки.
+Публичный launcher проверяет права, имя ветки и наличие нужных команд, полностью
+скачивает updater engine и передаёт ему управление. Транзакционное ядро
+разрешает SHA ветки один раз и устанавливает именно этот commit, даже если ветка
+сдвинется во время загрузки.
 
 | Переменная | По умолчанию | Назначение |
 | :--- | :--- | :--- |

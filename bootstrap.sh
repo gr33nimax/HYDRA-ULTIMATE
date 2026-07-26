@@ -1,18 +1,10 @@
 #!/usr/bin/env bash
-# ═══════════════════════════════════════════════════════════════════════════════
-# HYDRA v2.5.4 — Bootstrap Installer
-
-# ═══════════════════════════════════════════════════════════════════════════════
+# HYDRA — installer for a new Ubuntu/Debian VPS.
+#
 # Установка:
 #   curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash
 #
-# Что делает:
-#   1. Проверяет root, ОС (Ubuntu/Debian), Python 3.10+
-#   2. Устанавливает системные зависимости (curl, git, iptables, etc.)
-#   3. Устанавливает Sing-Box (из официального репозитория)
-#   4. Клонирует/обновляет репозиторий HYDRA
-#   5. Запускает main.py
-# ═══════════════════════════════════════════════════════════════════════════════
+# Для обновления рабочей установки используйте updater.sh, а не этот файл.
 
 set -Eeuo pipefail
 
@@ -28,7 +20,41 @@ ok()    { echo -e "  ${GREEN}✓${NC} $*"; }
 warn()  { echo -e "  ${YELLOW}⚠${NC} $*"; }
 err()   { echo -e "  ${RED}✗${NC} $*"; }
 
-step()  { echo -e "\n${BOLD}${CYAN}━━ $* ━━${NC}"; }
+title() {
+    echo -e "${BOLD}${CYAN}HYDRA · $*${NC}"
+    echo -e "${DIM}────────────────────────────────────────${NC}"
+}
+
+step() {
+    local current=$1
+    local total=$2
+    shift 2
+    echo -e "\n${BOLD}[${current}/${total}] $*${NC}"
+}
+
+result_ok() {
+    echo -e "\n${GREEN}${BOLD}ГОТОВО: $*${NC}"
+}
+
+result_error() {
+    echo -e "\n${RED}${BOLD}ОШИБКА: $*${NC}" >&2
+}
+
+INSTALL_COMPLETED=0
+ERROR_REPORTED=0
+
+on_exit() {
+    local code=$?
+    trap - EXIT
+    if ((code != 0 && ! INSTALL_COMPLETED && ! ERROR_REPORTED)); then
+        result_error "Установка не завершена (код ${code})."
+        err "Исправьте указанную выше ошибку и запустите ту же команду ещё раз."
+        if [[ -f /var/log/hydra/install.log ]]; then
+            err "Подробный лог: /var/log/hydra/install.log"
+        fi
+    fi
+    exit "$code"
+}
 
 on_error() {
     local code=$?
@@ -47,32 +73,22 @@ on_error() {
         fi
         mv "$HYDRA_BACKUP_DIR/old" "$INSTALL_DIR" || true
     fi
-    err "Установка прервана (строка ${BASH_LINENO[0]}, код ${code})."
+    ERROR_REPORTED=1
+    result_error "Установка не завершена (строка ${BASH_LINENO[0]}, код ${code})."
     err "Подробный лог: /var/log/hydra/install.log"
     exit "$code"
 }
 trap on_error ERR
+trap on_exit EXIT
 
-echo -e "${GREEN}${BOLD}"
-cat << 'BANNER'
-  ██╗  ██╗██╗   ██╗██████╗ ██████╗  █████╗
-  ██║  ██║╚██╗ ██╔╝██╔══██╗██╔══██╗██╔══██╗
-  ███████║ ╚████╔╝ ██║  ██║██████╔╝███████║
-  ██╔══██║  ╚██╔╝  ██║  ██║██╔══██╗██╔══██║
-  ██║  ██║   ██║   ██████╔╝██║  ██║██║  ██║
-  ╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
-           SING-BOX MULTI-PROXY MANAGER v1.0
-BANNER
-echo -e "${NC}"
-
-# ── [1/5] Root check ────────────────────────────────────────────────────────
-echo -e "${BOLD}[1/5] Проверка прав${NC}"
+title "УСТАНОВКА HYDRA"
+step 1 5 "Проверка системы"
 if [[ $EUID -ne 0 ]]; then
     err "Требуются права root"
-    echo -e "     sudo bash bootstrap.sh"
+    err "Запустите установочную команду с sudo."
     exit 1
 fi
-ok "root: OK"
+ok "Права root"
 
 LOG_DIR=/var/log/hydra
 LOG_FILE=${LOG_DIR}/install.log
@@ -82,8 +98,6 @@ chmod 600 "$LOG_FILE"
 # Keep output visible while also making the advertised install log real.
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-# ── [2/5] Система ───────────────────────────────────────────────────────────
-step "[2/5] Система"
 if [[ -f /etc/os-release ]]; then
     . /etc/os-release
     OS=$ID
@@ -105,8 +119,7 @@ case "$OS" in
 esac
 command -v apt-get >/dev/null || { err "apt-get не найден"; exit 1; }
 
-# ── [3/5] Зависимости ───────────────────────────────────────────────────────
-step "[3/5] Зависимости"
+step 2 5 "Системные зависимости"
 
 apt-get update -qq
 
@@ -148,8 +161,7 @@ fi
 # Дополнительные пакеты
 $PKG_INSTALL iptables iproute2 gnupg ca-certificates ufw
 
-# ── Sing-Box Extended ──────────────────────────────────────────────────────
-step "Sing-Box Extended"
+step 3 5 "Sing-Box Extended"
 if ! command -v sing-box &> /dev/null || ! sing-box version 2>/dev/null | head -1 | grep -q "extended"; then
     info "Установка sing-box-extended..."
     ARCH=$(uname -m)
@@ -198,8 +210,7 @@ else
     ok "Sing-Box: $(sing-box version 2>/dev/null | head -1)"
 fi
 
-# ── [4/5] Клонирование / обновление ─────────────────────────────────────────
-step "[4/5] Загрузка HYDRA"
+step 4 5 "Загрузка и проверка HYDRA"
 INSTALL_DIR="/opt/hydra"
 REPO_URL="https://github.com/gr33nimax/HYDRA-ULTIMATE"
 DEFAULT_BRANCH="main"
@@ -308,17 +319,15 @@ if [[ "$HYDRA_FRESH_INSTALL" == "1" ]]; then
     ok "Создан первый пользователь: default"
 fi
 
-# ── [5/5] Запуск ────────────────────────────────────────────────────────────
-step "[5/5] Готово"
-echo ""
-echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+step 5 5 "Завершение"
 HYDRA_VERSION=$("$VENV_DIR/bin/python" -c "from hydra import __version__; print(__version__)" 2>/dev/null || echo unknown)
-echo -e "${GREEN}${BOLD}     🐉 HYDRA v${HYDRA_VERSION} установлена!${NC}"
-echo -e "${GREEN}${BOLD}     Запуск: sudo hydra${NC}"
-echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "  ${DIM}Лог: ${LOG_FILE}${NC}"
+result_ok "HYDRA v${HYDRA_VERSION} установлена"
+echo -e "  Запуск: ${BOLD}sudo hydra${NC}"
+echo -e "  Проверка: ${BOLD}hydra check${NC}"
+echo -e "  Лог: ${DIM}${LOG_FILE}${NC}"
 echo ""
 
+INSTALL_COMPLETED=1
 if [[ -t 0 && -t 1 ]]; then
     exec "$VENV_DIR/bin/python" "$INSTALL_DIR/main.py" "$@"
 fi

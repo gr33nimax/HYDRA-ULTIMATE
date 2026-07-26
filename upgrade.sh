@@ -16,8 +16,33 @@ REPO_URL="${HYDRA_REPO_URL:-https://github.com/gr33nimax/HYDRA-ULTIMATE}"
 HYDRA_REF="${HYDRA_REF:-dev}"
 
 info() { printf '  -> %s\n' "$*"; }
-ok() { printf '  OK %s\n' "$*"; }
-fail() { printf '  ERROR %s\n' "$*" >&2; return 1; }
+ok() { printf '  OK  %s\n' "$*"; }
+fail() { printf '  ОШИБКА  %s\n' "$*" >&2; return 1; }
+
+title() {
+    printf 'HYDRA · %s\n' "$*"
+    printf '%s\n' '────────────────────────────────────────'
+}
+
+step() {
+    local current=$1
+    local total=$2
+    shift 2
+    printf '\n[%s/%s] %s\n' "$current" "$total" "$*"
+}
+
+result_ok() {
+    printf '\nГОТОВО: %s\n' "$*"
+}
+
+result_error() {
+    printf '\nОШИБКА: %s\n' "$*" >&2
+}
+
+if [[ "${HYDRA_UPDATER_LAUNCHED:-0}" != "1" ]]; then
+    title "ОБНОВЛЕНИЕ HYDRA"
+fi
+step 1 7 "Проверка установленной версии"
 
 require_absolute_safe_path() {
     local name=$1
@@ -288,7 +313,7 @@ rollback() {
     trap - ERR
     trap '' HUP INT TERM
     set +e
-    printf '\nUpgrade failed at line %s (exit %s); rolling back.\n' "$line" "$code" >&2
+    result_error "Обновление не завершено (строка ${line}, код ${code}). Запускаю откат."
     if ((SERVICES_QUIESCED)); then
         stop_managed_units || stop_ok=0
     fi
@@ -309,12 +334,13 @@ rollback() {
             || critical_restore_ok=0
     fi
     if ((!critical_restore_ok)); then
-        printf 'automatic rollback was incomplete; inspect HYDRA units before restarting\n' >&2
+        printf 'Автоматический откат завершён не полностью; проверьте службы HYDRA перед запуском.\n' >&2
     fi
     if [[ -n "$STAGE_DIR" && -d "$STAGE_DIR" && -n "$ROLLBACK_DIR" ]]; then
         mv "$STAGE_DIR" "$ROLLBACK_DIR/failed-staged-release"
     fi
-    printf 'Rollback artifacts: %s\n' "${ROLLBACK_DIR:-not created}" >&2
+    printf 'Диагностика и снимок отката: %s\n' "${ROLLBACK_DIR:-не создан}" >&2
+    printf 'Подробный лог: /var/log/hydra/upgrade.log\n' >&2
     exit "$code"
 }
 
@@ -343,7 +369,8 @@ trap 'handle_signal 129 $LINENO' HUP
 trap 'handle_signal 130 $LINENO' INT
 trap 'handle_signal 143 $LINENO' TERM
 
-info "Resolving $HYDRA_REF from $REPO_URL"
+step 2 7 "Определение целевой версии"
+info "Ветка: $HYDRA_REF"
 TARGET_SHA=$(
     git ls-remote --exit-code "$REPO_URL" "refs/heads/$HYDRA_REF" \
         | awk 'NR == 1 {print $1}'
@@ -362,7 +389,8 @@ fi
     fail "cannot identify the currently installed revision"
 }
 [[ "$CURRENT_SHA" != "$TARGET_SHA" ]] || {
-    ok "already running ${TARGET_SHA:0:12}; nothing to upgrade"
+    result_ok "Обновление не требуется: уже установлен ${TARGET_SHA:0:12}."
+    printf 'Лог: /var/log/hydra/upgrade.log\n'
     exit 0
 }
 
@@ -381,7 +409,8 @@ HYDRA_INSTALL_DIR=$INSTALL_DIR
 EOF
 chmod 0600 "$ROLLBACK_DIR/metadata.env"
 
-info "Staging exact commit ${TARGET_SHA:0:12}"
+step 3 7 "Подготовка нового release"
+info "Commit: ${TARGET_SHA:0:12}"
 git init --quiet "$STAGE_DIR"
 git -C "$STAGE_DIR" remote add origin "$REPO_URL"
 git -C "$STAGE_DIR" fetch --quiet --depth 1 origin "$TARGET_SHA"
@@ -399,7 +428,8 @@ run_stage_python \
     -c 'from hydra import __version__; print(__version__)' \
     > "$ROLLBACK_DIR/target-version.txt"
 
-info "Running read-only target preflight against the live state"
+step 4 7 "Безопасная проверка перед обновлением"
+info "Проверяю новый код без изменения рабочего state"
 run_stage_python -m hydra.cli --json upgrade check \
     > "$ROLLBACK_DIR/preflight-upgrade.json"
 run_stage_python -m hydra.cli --json check \
@@ -420,7 +450,8 @@ PY
 
 discover_units
 capture_active_units
-info "Quiescing ${#ACTIVE_UNITS[@]} active HYDRA unit(s)"
+step 5 7 "Резервная копия и миграция state"
+info "Останавливаю активные службы HYDRA: ${#ACTIVE_UNITS[@]}"
 SERVICES_QUIESCED=1
 stop_managed_units
 
@@ -442,7 +473,7 @@ if [[ -e "$WRAPPER" || -L "$WRAPPER" ]]; then
 fi
 WRAPPER_SNAPSHOT_READY=1
 
-info "Creating and verifying an application-level backup"
+info "Создаю и проверяю резервную копию"
 run_stage_python \
     -m hydra.cli --json backup create \
     --output "$ROLLBACK_DIR/hydra-backup.tar.gz" \
@@ -452,7 +483,7 @@ run_stage_python \
     "$ROLLBACK_DIR/hydra-backup.tar.gz" --dry-run \
     > "$ROLLBACK_DIR/backup-verification.json"
 
-info "Persisting the target state schema while writers are stopped"
+info "Мигрирую state при остановленных службах"
 STATE_MUTATION_STARTED=1
 run_stage_python \
     -m hydra.cli --json upgrade migrate-state \
@@ -464,7 +495,8 @@ run_stage_python \
 mv "$STAGE_DIR" "$RELEASE_DIR"
 STAGE_DIR=""
 
-info "Switching /opt entrypoint to the staged release"
+step 6 7 "Переключение на новый release"
+info "Атомарно переключаю $INSTALL_DIR"
 if [[ -L "$INSTALL_DIR" ]]; then
     PREVIOUS_KIND="symlink"
     PREVIOUS_TARGET=$(readlink "$INSTALL_DIR")
@@ -491,7 +523,8 @@ WRAPPER_TMP=""
 
 start_previous_units
 
-info "Running post-cutover validation"
+step 7 7 "Итоговая проверка"
+info "Проверяю state, статус и systemd"
 run_install_python \
     -m hydra.cli --json check > "$ROLLBACK_DIR/post-check.json"
 run_install_python \
@@ -523,5 +556,6 @@ WRAPPER_MUTATION_STARTED=0
 cleanup_transient_paths
 trap - ERR HUP INT TERM
 
-ok "HYDRA upgraded ${CURRENT_SHA:0:12} -> ${TARGET_SHA:0:12} from $HYDRA_REF"
-ok "Rollback snapshot retained at $ROLLBACK_DIR"
+result_ok "HYDRA обновлена ${CURRENT_SHA:0:12} -> ${TARGET_SHA:0:12} (ветка $HYDRA_REF)."
+printf 'Снимок отката: %s\n' "$ROLLBACK_DIR"
+printf 'Лог: /var/log/hydra/upgrade.log\n'

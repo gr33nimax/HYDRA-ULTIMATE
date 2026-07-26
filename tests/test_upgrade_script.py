@@ -4,6 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "upgrade.sh"
+LAUNCHER = ROOT / "updater.sh"
 UPGRADE_DOCS = (ROOT / "README.md", ROOT / "docs" / "UPGRADE.md")
 
 
@@ -62,13 +63,13 @@ def test_target_commands_do_not_depend_on_the_updater_working_directory():
 
 def test_upgrade_orders_preflight_backup_migration_and_cutover_safely():
     source = _source()
-    preflight = source.index('info "Running read-only target preflight')
-    quiesce = source.index('info "Quiescing')
+    preflight = source.index('step 4 7 "Безопасная проверка перед обновлением"')
+    quiesce = source.index('info "Останавливаю активные службы HYDRA')
     snapshot = source.index('cp -a "$STATE_DIR" "$STATE_ROLLBACK_DIR"')
-    backup = source.index('info "Creating and verifying an application-level backup"')
-    migration = source.index('info "Persisting the target state schema')
+    backup = source.index('info "Создаю и проверяю резервную копию"')
+    migration = source.index('info "Мигрирую state при остановленных службах"')
     mutation = source.index("STATE_MUTATION_STARTED=1", migration)
-    cutover = source.index('info "Switching /opt entrypoint')
+    cutover = source.index('step 6 7 "Переключение на новый release"')
 
     assert preflight < quiesce < snapshot < backup < migration < mutation < cutover
 
@@ -181,11 +182,36 @@ def test_documented_updater_is_fully_downloaded_before_sudo_execution():
     for path in UPGRADE_DOCS:
         documentation = path.read_text(encoding="utf-8")
         assert (
-            re.search(
-                r"upgrade\.sh[^\n]*\n\s*\|\s*sudo",
-                documentation,
-            )
-            is None
-        )
-        assert '-o "$upgrade_script"' in documentation
-        assert 'sudo env HYDRA_REF=dev bash "$upgrade_script"' in documentation
+            "curl -fsSL https://raw.githubusercontent.com/gr33nimax/"
+            "HYDRA-ULTIMATE/dev/updater.sh | sudo bash"
+        ) in documentation
+        assert "upgrade_script=$(mktemp)" not in documentation
+        assert '-o "$upgrade_script"' not in documentation
+
+
+def test_one_command_launcher_downloads_engine_completely_before_execution():
+    source = LAUNCHER.read_text(encoding="utf-8")
+
+    assert 'HYDRA_REF="${HYDRA_REF:-dev}"' in source
+    assert 'UPGRADE_SCRIPT=$(mktemp /tmp/hydra-updater.XXXXXX)' in source
+    assert '"${RAW_BASE}/${HYDRA_REF}/upgrade.sh"' in source
+    assert '-o "$UPGRADE_SCRIPT"' in source
+    assert source.index('-o "$UPGRADE_SCRIPT"') < source.index(
+        'env HYDRA_REF="$HYDRA_REF" HYDRA_UPDATER_LAUNCHED=1',
+    )
+    assert "git check-ref-format --branch" in source
+    assert 'trap cleanup EXIT HUP INT TERM' in source
+
+
+def test_updater_has_numbered_progress_and_clear_terminal_states():
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+    engine = _source()
+
+    assert 'title "ОБНОВЛЕНИЕ HYDRA"' in launcher
+    assert 'step 1 3 "Проверка запуска"' in launcher
+    assert 'step 3 3 "Транзакционное обновление"' in launcher
+    assert 'step 1 7 "Проверка установленной версии"' in engine
+    assert 'step 7 7 "Итоговая проверка"' in engine
+    assert 'result_ok "HYDRA обновлена' in engine
+    assert 'result_ok "Обновление не требуется' in engine
+    assert 'result_error "Обновление не завершено' in engine

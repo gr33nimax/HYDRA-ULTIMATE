@@ -49,5 +49,5 @@ sudo journalctl -u sing-box -u caddy-l4 --no-pager -n 50
 - ОС: (Ubuntu 22.04 / Debian 12 / ...)
 - Python: (`python3 --version`)
 - Версия HYDRA: (`hydra status` → поле `version`, или ветка и commit)
-- Способ установки: (bootstrap.sh / upgrade.sh / запуск из исходников)
+- Способ установки: (bootstrap.sh / updater.sh / upgrade.sh напрямую / запуск из исходников)
 - Затронутый модуль: (AmneziaWG / AnyTLS / Hysteria2 / AntiDPI / ...)

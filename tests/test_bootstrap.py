@@ -42,6 +42,15 @@ def test_readme_one_command_installs_main():
     assert "sudo python3 main.py" not in README
 
 
+def test_installer_has_numbered_progress_and_unambiguous_result():
+    assert 'title "УСТАНОВКА HYDRA"' in BOOTSTRAP
+    assert 'step 1 5 "Проверка системы"' in BOOTSTRAP
+    assert 'step 5 5 "Завершение"' in BOOTSTRAP
+    assert 'result_ok "HYDRA v${HYDRA_VERSION} установлена"' in BOOTSTRAP
+    assert 'result_error "Установка не завершена (' in BOOTSTRAP
+    assert "SING-BOX MULTI-PROXY MANAGER v1.0" not in BOOTSTRAP
+
+
 def test_install_guide_runs_sources_through_the_isolated_environment():
     assert "git clone -b main" in INSTALL_GUIDE
     assert ".venv/bin/python -m pip install -r requirements.lock" in INSTALL_GUIDE
