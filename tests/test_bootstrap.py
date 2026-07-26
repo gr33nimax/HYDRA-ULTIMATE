@@ -8,11 +8,11 @@ README = (ROOT / "README.md").read_text(encoding="utf-8")
 INSTALL_GUIDE = (ROOT / "docs" / "UPGRADE.md").read_text(encoding="utf-8")
 
 
-def test_bootstrap_download_and_install_default_to_main():
-    assert "HYDRA-ULTIMATE/main/bootstrap.sh" in BOOTSTRAP
-    assert 'DEFAULT_BRANCH="main"' in BOOTSTRAP
+def test_dev_bootstrap_download_and_install_default_to_dev():
+    assert "HYDRA-ULTIMATE/dev/bootstrap.sh" in BOOTSTRAP
+    assert 'DEFAULT_BRANCH="dev"' in BOOTSTRAP
     assert 'HYDRA_REF="${HYDRA_REF:-$DEFAULT_BRANCH}"' in BOOTSTRAP
-    assert 'DEFAULT_BRANCH="dev"' not in BOOTSTRAP
+    assert 'DEFAULT_BRANCH="main"' not in BOOTSTRAP
 
 
 def test_every_fresh_install_path_uses_selected_ref():
@@ -34,11 +34,12 @@ def test_bootstrap_verifies_exact_remote_commit_before_dependencies():
     )
 
 
-def test_readme_one_command_installs_main():
+def test_readme_one_command_installs_dev():
     assert (
         "curl -fsSL https://raw.githubusercontent.com/gr33nimax/"
-        "HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash"
+        "HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash"
     ) in README
+    assert "HYDRA-ULTIMATE/main/bootstrap.sh" not in README
     assert "sudo python3 main.py" not in README
 
 
@@ -52,6 +53,7 @@ def test_installer_has_numbered_progress_and_unambiguous_result():
 
 
 def test_install_guide_runs_sources_through_the_isolated_environment():
-    assert "git clone -b main" in INSTALL_GUIDE
+    assert "git clone -b dev" in INSTALL_GUIDE
+    assert "git clone -b main" not in INSTALL_GUIDE
     assert ".venv/bin/python -m pip install -r requirements.lock" in INSTALL_GUIDE
     assert "sudo python3 main.py" not in INSTALL_GUIDE

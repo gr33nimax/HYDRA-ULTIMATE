@@ -100,15 +100,17 @@ Fail2ban, systemd-units и скрипты учёта трафика. Пробл�
 ### Установка
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash
 ```
 
 Установщик подготавливает зависимости, Sing-Box Extended, изолированное
 Python-окружение и команду `hydra`. Caddy L4 и конкретные протоколы активируются
 только при включении соответствующих модулей.
 
-Ветку можно выбрать переменной `HYDRA_REF`. Запуск из исходников для разработки
-описан в [docs/UPGRADE.md](docs/UPGRADE.md).
+Установщик из ветки `dev` по умолчанию устанавливает `dev`; updater из `dev`
+также обновляет до `dev`. Явно выбрать другую ветку можно переменной
+`HYDRA_REF`. Запуск из исходников для разработки описан в
+[docs/UPGRADE.md](docs/UPGRADE.md).
 
 ### Первые шаги
 

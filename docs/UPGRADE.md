@@ -34,7 +34,7 @@
 ## Чистая установка
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash
 ```
 
 Установщик проверяет права и систему, устанавливает зависимости и Sing-Box
@@ -42,12 +42,8 @@ Extended, разрешает точный commit выбранной ветки, 
 `/opt/hydra`, создаёт изолированное Python-окружение и регистрирует команду
 `hydra`. Журнал — `/var/log/hydra/install.log`.
 
-Ветку можно выбрать переменной `HYDRA_REF` (по умолчанию `main`):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh \
-  | sudo env HYDRA_REF=dev bash
-```
+Dev-установщик по умолчанию устанавливает ветку `dev`, как и dev-updater.
+Переменная `HYDRA_REF` нужна только для явного выбора другой ветки.
 
 Caddy L4 и конкретные протоколы активируются только при включении
 соответствующих модулей. При ошибке установщик возвращает предыдущий checkout и
@@ -58,7 +54,7 @@ Caddy L4 и конкретные протоколы активируются т�
 Режим для разработки и отладки:
 
 ```bash
-git clone -b main https://github.com/gr33nimax/HYDRA-ULTIMATE /opt/hydra
+git clone -b dev https://github.com/gr33nimax/HYDRA-ULTIMATE /opt/hydra
 cd /opt/hydra
 sudo apt-get install -y python3-venv
 sudo python3 -m venv .venv

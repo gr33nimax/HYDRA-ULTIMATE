@@ -215,3 +215,13 @@ def test_updater_has_numbered_progress_and_clear_terminal_states():
     assert 'result_ok "HYDRA обновлена' in engine
     assert 'result_ok "Обновление не требуется' in engine
     assert 'result_error "Обновление не завершено' in engine
+
+
+def test_all_dev_install_and_update_entrypoints_default_to_dev():
+    bootstrap = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+    engine = _source()
+
+    assert 'DEFAULT_BRANCH="dev"' in bootstrap
+    assert 'HYDRA_REF="${HYDRA_REF:-dev}"' in launcher
+    assert 'HYDRA_REF="${HYDRA_REF:-dev}"' in engine
