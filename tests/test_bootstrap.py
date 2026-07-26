@@ -6,6 +6,8 @@ ROOT = Path(__file__).parent.parent
 BOOTSTRAP = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
 README = (ROOT / "README.md").read_text(encoding="utf-8")
 INSTALL_GUIDE = (ROOT / "docs" / "UPGRADE.md").read_text(encoding="utf-8")
+DOCS_INDEX = (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+CHANGELOG = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
 
 def test_dev_bootstrap_download_and_install_default_to_dev():
@@ -43,10 +45,12 @@ def test_readme_one_command_installs_dev():
     assert "sudo python3 main.py" not in README
 
 
-def test_readme_marks_legacy_main_as_unsupported():
-    assert "`legacy-main`" in README
-    assert "больше не поддерживается" in README
-    assert "Актуальная поддерживаемая ветка — `dev`" in README
+def test_public_docs_do_not_reference_retired_branch():
+    retired_branch = "legacy" + "-main"
+    assert all(
+        retired_branch not in document
+        for document in (README, INSTALL_GUIDE, DOCS_INDEX, CHANGELOG)
+    )
 
 
 def test_installer_has_numbered_progress_and_unambiguous_result():
