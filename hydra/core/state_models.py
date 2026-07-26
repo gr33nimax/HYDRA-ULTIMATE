@@ -62,6 +62,10 @@ class TelegramConfig:
     notify_fail2ban: bool = True
     notify_unbans: bool = False
     notify_system: bool = True
+    notify_only_blocks: bool = False
+    quiet_hours_enabled: bool = False
+    quiet_hours_start: int = 23
+    quiet_hours_end: int = 8
 
 
 @dataclass

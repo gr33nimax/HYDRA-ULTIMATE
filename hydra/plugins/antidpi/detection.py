@@ -6,13 +6,22 @@ notifications, locking, and persistence remain explicit caller decisions.
 from __future__ import annotations
 
 import ipaddress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from hydra.plugins.antidpi.correlation import (
+    active_families,
+    block_reason,
+    event_weight,
+    record_families,
+    record_subnet_activity,
+    required_score,
+)
 from hydra.plugins.antidpi.model import (
     ALERT_COOLDOWN,
     ALERT_THRESHOLD,
     AUTH_ALERT_THRESHOLD,
     BAN_THRESHOLD,
+    MAX_HISTORY_ENTRIES,
     MAX_OBSERVED_SCORE,
     active_bans,
     ban_duration,
@@ -39,6 +48,10 @@ class Observation:
     active_ban: bool
     should_alert: bool
     should_ban: bool
+    families: tuple[str, ...] = ()
+    required_score: float = float(BAN_THRESHOLD)
+    block_reason: str = ""
+    coordinated: dict = field(default_factory=dict)
 
 
 def _kernel_context(entry: dict, event: dict, timestamp: float) -> None:
@@ -71,7 +84,7 @@ def _update_score(
     event: dict,
     timestamp: float,
 ) -> tuple[tuple[str, ...], bool]:
-    score, signals = score_event(event)
+    _raw_score, signals = score_event(event)
     evidence_can_ban = event.get("ban_eligible") is not False
     source = str(event.get("source", "unknown"))[:80]
     if (
@@ -87,11 +100,16 @@ def _update_score(
     previous_verified = float(entry.get("verified_score", 0))
     previous_at = float(entry.get("updated", timestamp) or timestamp)
     last_unknown_sni = float(entry.get("last_unknown_sni_at", 0) or 0)
+    # Repeated evidence of one kind saturates: the tenth identical handshake
+    # error carries far less information than the first.
+    score = event_weight(entry, signals, timestamp=timestamp)
     if signals and set(signals) <= {"unknown_sni", "handshake_failure"}:
         if timestamp - last_unknown_sni < 0.5:
             score = 0.0
         else:
             entry["last_unknown_sni_at"] = timestamp
+    if signals and evidence_can_ban:
+        record_families(entry, signals, timestamp=timestamp)
 
     elapsed = timestamp - previous_at
     entry["score"] = round(
@@ -263,9 +281,20 @@ def observe_state(
         active_ban=active_ban,
         evidence_can_ban=evidence_can_ban,
     )
+    coordinated = (
+        record_subnet_activity(data, address, timestamp=timestamp)
+        if signals and evidence_can_ban
+        else {}
+    )
+    families = active_families(entry, timestamp=timestamp)
+    threshold = required_score(
+        families=families,
+        signals=signals,
+        offense_count=_offense_count(data, address),
+    )
     should_ban = (
         not active_ban
-        and entry["verified_score"] >= BAN_THRESHOLD
+        and entry["verified_score"] >= threshold
         and evidence_can_ban
     )
     return Observation(
@@ -280,7 +309,31 @@ def observe_state(
         active_ban=active_ban,
         should_alert=should_alert,
         should_ban=should_ban,
+        families=families,
+        required_score=threshold,
+        block_reason=(
+            ""
+            if should_ban or active_ban
+            else block_reason(
+                score=float(entry["verified_score"]),
+                required=threshold,
+                families=families,
+                evidence_can_ban=evidence_can_ban,
+            )
+        ),
+        coordinated=coordinated,
     )
+
+
+def _offense_count(data: dict, address: str) -> int:
+    """Return how many times this address was banned before."""
+    counts = data.get("ban_counts", {}) if isinstance(data, dict) else {}
+    if not isinstance(counts, dict):
+        return 0
+    try:
+        return max(0, int(counts.get(address, 0) or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def record_automatic_ban(data: dict, observation: Observation) -> dict:
@@ -313,5 +366,5 @@ def record_automatic_ban(data: dict, observation: Observation) -> dict:
     if not isinstance(history, list):
         history = []
     history.append({"ip": address, **metadata, "status": "active"})
-    data["history"] = history[-1000:]
+    data["history"] = history[-MAX_HISTORY_ENTRIES:]
     return metadata

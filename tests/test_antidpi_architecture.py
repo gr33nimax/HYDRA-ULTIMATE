@@ -47,10 +47,12 @@ def test_antidpi_facades_delegate_to_focused_modules():
         "detector_service.py",
         "firewall.py",
         "firewall_rules.py",
+        "labels.py",
         "lifecycle.py",
         "management.py",
         "model.py",
         "normalization.py",
+        "projection.py",
         "runtime.py",
         "selftest_capture.py",
         "selftest_probes.py",
@@ -78,7 +80,13 @@ def test_antidpi_pure_model_has_no_host_or_persistence_dependencies():
         "subprocess",
     }
     violations = []
-    for name in ("detection.py", "model.py", "normalization.py"):
+    for name in (
+        "detection.py",
+        "labels.py",
+        "model.py",
+        "normalization.py",
+        "projection.py",
+    ):
         path = PACKAGE / name
         imported = _imports(
             ast.parse(path.read_text(encoding="utf-8")),

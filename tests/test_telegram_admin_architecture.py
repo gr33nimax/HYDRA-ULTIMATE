@@ -18,12 +18,16 @@ FACADES = {
 COMPANIONS = {
     "controller_callbacks.py",
     "controller_runtime.py",
+    "controller_screens.py",
     "controller_views.py",
     "dashboard_antidpi.py",
     "dashboard_common.py",
     "dashboard_fail2ban.py",
     "dashboard_honeypot.py",
+    "dashboard_lists.py",
     "dashboard_system.py",
+    "navigation.py",
+    "security_chrome.py",
     "security_ip_actions.py",
     "security_keyboards.py",
     "security_monitors.py",
@@ -162,7 +166,12 @@ def test_security_facade_keeps_historical_symbol_surface() -> None:
         "_toggle_fail2ban",
         "_toggle_honeypot",
         "_toggle_notification",
+        "address_keyboard",
+        "antidpi_list_keyboard",
         "ban_ip_antidpi",
+        "quiet_hours_keyboard",
+        "quiet_hours_text",
+        "shift_quiet_hour",
         "unban_ip_everywhere",
     }
     assert set(security_actions.__all__) == expected
@@ -188,7 +197,18 @@ def test_security_facade_keeps_historical_signatures() -> None:
         "_toggle_fail2ban": ["app"],
         "_toggle_honeypot": ["app"],
         "_toggle_notification": ["field"],
+        "address_keyboard": ["address", "origin"],
+        "antidpi_list_keyboard": [
+            "app",
+            "screen",
+            "page",
+            "pages",
+            "addresses",
+        ],
         "ban_ip_antidpi": ["ip", "app"],
+        "quiet_hours_keyboard": ["name"],
+        "quiet_hours_text": [],
+        "shift_quiet_hour": ["field", "delta"],
         "unban_ip_everywhere": ["ip", "app"],
     }
     for name, parameters in expected.items():

@@ -32,6 +32,13 @@ PATTERNS: tuple[tuple[str, str, str], ...] = (
         r"extract server name: tls: handshake message .* exceeds maximum)",
         "malformed_tls",
     ),
+    (
+        "vless",
+        r"inbound/vless\[[^\]]*\][^\n]*?"
+        r"(?:authentication failed|authenticate: |unknown user|"
+        r"invalid request|bad request|unknown uuid)",
+        "auth_failure",
+    ),
     ("hysteria2", r"(?:handshake failed|invalid packet|authentication failed|failed to parse QUIC)", "invalid_first_packet"),
     ("mieru", r"(?:handshake failed|authentication failed|invalid credentials)", "auth_failure"),
     ("snell", r"(?:process connection .*: malformed HTTP request)", "invalid_first_packet"),
@@ -147,7 +154,7 @@ def parse_protocol_line(service: str, line: object) -> tuple[str, dict] | None:
             event["ban_eligible"] = False
         if (
             peer_port is not None
-            and owner in {"anytls", "trusttunnel", "shadowtls"}
+            and owner in {"anytls", "trusttunnel", "shadowtls", "vless"}
             and ipaddress.ip_address(ip).is_loopback
         ):
             event["peer_port"] = peer_port

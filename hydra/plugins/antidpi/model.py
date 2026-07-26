@@ -38,6 +38,8 @@ MAX_OBSERVED_SCORE = BAN_THRESHOLD * 2
 BAN_NOTIFICATION_COOLDOWN = 5.0
 SCORE_RETENTION = 86400.0
 MAX_SCORE_ENTRIES = 20000
+WATCHLIST_MIN_SCORE = 0.5
+MAX_HISTORY_ENTRIES = 1000
 DEFAULT_TRUSTED_NETWORKS = tuple(
     ipaddress.ip_network(value)
     for value in (
@@ -182,6 +184,52 @@ def expire_bans(data: dict, *, now: float | None = None) -> bool:
     return changed
 
 
+def prune_ban_counts(data: dict, *, now: float | None = None) -> None:
+    """Bound escalation memory to addresses with a live ban or ban history.
+
+    ``ban_counts`` drives progressive ban durations, so it used to grow for
+    every address ever banned and never shrank.  Escalation memory now lives
+    exactly as long as the history record that explains it.
+    """
+    counts = data.get("ban_counts", {}) if isinstance(data, dict) else {}
+    if not isinstance(counts, dict):
+        data["ban_counts"] = {}
+        return
+    if not counts:
+        return
+    timestamp = time.time() if now is None else now
+    known = set(active_bans(data, now=timestamp))
+    history = data.get("history", [])
+    if isinstance(history, list):
+        known.update(
+            str(item.get("ip"))
+            for item in history
+            if isinstance(item, dict) and item.get("ip")
+        )
+    data["ban_counts"] = {
+        address: value
+        for address, value in counts.items()
+        if address in known
+    }
+
+
+def record_ban_failure(data: dict, address: str, *, now: float) -> None:
+    """Persist firewall enforcement failures observed by the detector service.
+
+    The detector runs in its own systemd unit, so an in-memory ``last_error``
+    is invisible to operators.  Persisting the failure lets the TUI and the
+    Telegram dashboards show that evidence crossed the threshold while the
+    firewall refused the ban.
+    """
+    stats = data.setdefault("ban_failures", {})
+    if not isinstance(stats, dict):
+        stats = {}
+        data["ban_failures"] = stats
+    stats["count"] = int(stats.get("count", 0) or 0) + 1
+    stats["last_at"] = now
+    stats["last_ip"] = str(address)[:64]
+
+
 def prune_runtime_state(
     data: dict,
     *,
@@ -189,6 +237,7 @@ def prune_runtime_state(
     max_entries: int = MAX_SCORE_ENTRIES,
 ) -> None:
     """Bound per-address evidence while retaining active bans and recent scores."""
+    prune_ban_counts(data, now=now)
     scores = data.get("scores", {})
     if not isinstance(scores, dict):
         data["scores"] = {}
@@ -364,5 +413,5 @@ def record_manual_ban(
                 break
     if not promoted:
         history.append({"ip": address, **metadata, "status": "active"})
-    data["history"] = history[-1000:]
+    data["history"] = history[-MAX_HISTORY_ENTRIES:]
     return metadata
