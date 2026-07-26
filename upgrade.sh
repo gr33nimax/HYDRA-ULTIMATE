@@ -108,6 +108,8 @@ SERVICES_QUIESCED=0
 CUTOVER_STARTED=0
 declare -a MANAGED_UNITS=()
 declare -a ACTIVE_UNITS=()
+CURRENT_OPERATION=""
+CURRENT_REPORT=""
 
 run_stage_python() {
     (
@@ -131,13 +133,16 @@ discover_units() {
     local state unit unit_files
     MANAGED_UNITS=()
     if ! unit_files=$(
-        systemctl list-unit-files 'hydra-*' --no-legend --no-pager 2>/dev/null
+        systemctl list-unit-files \
+            'hydra-*' 'caddy-l4.service' \
+            --no-legend --no-pager 2>/dev/null
     ); then
         fail "cannot enumerate HYDRA systemd units"
         return 1
     fi
     while read -r unit state _; do
-        [[ "$unit" =~ ^hydra-.*\.(service|timer)$ ]] || continue
+        [[ "$unit" =~ ^hydra-.*\.(service|timer)$ \
+            || "$unit" == "caddy-l4.service" ]] || continue
         MANAGED_UNITS+=("$unit")
     done <<< "$unit_files"
 }
@@ -314,6 +319,12 @@ rollback() {
     trap '' HUP INT TERM
     set +e
     result_error "Обновление не завершено (строка ${line}, код ${code}). Запускаю откат."
+    if [[ -n "$CURRENT_OPERATION" ]]; then
+        printf 'Сбой операции: %s\n' "$CURRENT_OPERATION" >&2
+    fi
+    if [[ -n "$CURRENT_REPORT" ]]; then
+        printf 'Отчёт операции: %s\n' "$CURRENT_REPORT" >&2
+    fi
     if ((SERVICES_QUIESCED)); then
         stop_managed_units || stop_ok=0
     fi
@@ -430,10 +441,16 @@ run_stage_python \
 
 step 4 7 "Безопасная проверка перед обновлением"
 info "Проверяю новый код без изменения рабочего state"
+CURRENT_OPERATION="Проверка готовности state к обновлению"
+CURRENT_REPORT="$ROLLBACK_DIR/preflight-upgrade.json"
 run_stage_python -m hydra.cli --json upgrade check \
-    > "$ROLLBACK_DIR/preflight-upgrade.json"
+    > "$CURRENT_REPORT"
+CURRENT_OPERATION="Полная проверка целевой версии"
+CURRENT_REPORT="$ROLLBACK_DIR/preflight-check.json"
 run_stage_python -m hydra.cli --json check \
-    > "$ROLLBACK_DIR/preflight-check.json"
+    > "$CURRENT_REPORT"
+CURRENT_OPERATION="Проверка результатов preflight"
+CURRENT_REPORT="$ROLLBACK_DIR/preflight-check.json"
 run_stage_python - "$ROLLBACK_DIR" <<'PY'
 import json
 import pathlib
@@ -447,6 +464,8 @@ if not upgrade.get("ready"):
 if not check.get("ok"):
     raise SystemExit("target preflight failed")
 PY
+CURRENT_OPERATION=""
+CURRENT_REPORT=""
 
 discover_units
 capture_active_units
@@ -474,23 +493,33 @@ fi
 WRAPPER_SNAPSHOT_READY=1
 
 info "Создаю и проверяю резервную копию"
+CURRENT_OPERATION="Создание резервной копии"
+CURRENT_REPORT="$ROLLBACK_DIR/backup.json"
 run_stage_python \
     -m hydra.cli --json backup create \
     --output "$ROLLBACK_DIR/hydra-backup.tar.gz" \
-    > "$ROLLBACK_DIR/backup.json"
+    > "$CURRENT_REPORT"
+CURRENT_OPERATION="Проверка резервной копии"
+CURRENT_REPORT="$ROLLBACK_DIR/backup-verification.json"
 run_stage_python \
     -m hydra.cli --json backup restore \
     "$ROLLBACK_DIR/hydra-backup.tar.gz" --dry-run \
-    > "$ROLLBACK_DIR/backup-verification.json"
+    > "$CURRENT_REPORT"
 
 info "Мигрирую state при остановленных службах"
 STATE_MUTATION_STARTED=1
+CURRENT_OPERATION="Миграция state"
+CURRENT_REPORT="$ROLLBACK_DIR/state-migration.json"
 run_stage_python \
     -m hydra.cli --json upgrade migrate-state \
-    > "$ROLLBACK_DIR/state-migration.json"
+    > "$CURRENT_REPORT"
+CURRENT_OPERATION="Проверка state после миграции"
+CURRENT_REPORT="$ROLLBACK_DIR/state-check.json"
 run_stage_python \
-    -m hydra.cli --json check \
-    > "$ROLLBACK_DIR/state-check.json"
+    -m hydra.cli --json upgrade check \
+    > "$CURRENT_REPORT"
+CURRENT_OPERATION=""
+CURRENT_REPORT=""
 
 mv "$STAGE_DIR" "$RELEASE_DIR"
 STAGE_DIR=""
@@ -525,10 +554,16 @@ start_previous_units
 
 step 7 7 "Итоговая проверка"
 info "Проверяю state, статус и systemd"
+CURRENT_OPERATION="Проверка новой версии"
+CURRENT_REPORT="$ROLLBACK_DIR/post-check.json"
 run_install_python \
-    -m hydra.cli --json check > "$ROLLBACK_DIR/post-check.json"
+    -m hydra.cli --json check > "$CURRENT_REPORT"
+CURRENT_OPERATION="Проверка статуса новой версии"
+CURRENT_REPORT="$ROLLBACK_DIR/post-status.json"
 run_install_python \
-    -m hydra.cli --json status > "$ROLLBACK_DIR/post-status.json"
+    -m hydra.cli --json status > "$CURRENT_REPORT"
+CURRENT_OPERATION="Проверка результата обновления"
+CURRENT_REPORT="$ROLLBACK_DIR/post-check.json"
 run_install_python \
     - "$ROLLBACK_DIR/post-check.json" <<'PY'
 import json
@@ -539,6 +574,8 @@ check = json.loads(pathlib.Path(sys.argv[1]).read_text())
 if not check.get("ok"):
     raise SystemExit("post-cutover check failed")
 PY
+CURRENT_OPERATION=""
+CURRENT_REPORT=""
 wait_for_previous_units
 
 [[ "$(git -C "$INSTALL_DIR" rev-parse HEAD)" == "$TARGET_SHA" ]] || {

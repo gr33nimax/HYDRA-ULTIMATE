@@ -65,6 +65,11 @@
   точный SHA ветки `dev`: отдельный release и `.venv`, read-only preflight,
   quiesce HYDRA-служб, два уровня backup, атомарная миграция state, проверка
   systemd и автоматический откат state/code/wrapper/services.
+- Исправлен откат updater для TLS/SNI-установок: активный `caddy-l4.service`
+  теперь входит в quiesce-снимок и гарантированно запускается после переключения
+  либо отката. Проверка state при остановленных службах больше не зависит от
+  runtime health, а сообщение об ошибке указывает конкретную операцию и её
+  JSON-отчёт.
 - Добавлены `hydra upgrade migrate-state`, Linux integration-сценарий
   main→dev и руководство [`docs/UPGRADE.md`](docs/UPGRADE.md).
 - `bootstrap.sh` остаётся установщиком новой VPS и больше не является

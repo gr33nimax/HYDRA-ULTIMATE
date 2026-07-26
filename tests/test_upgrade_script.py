@@ -74,6 +74,51 @@ def test_upgrade_orders_preflight_backup_migration_and_cutover_safely():
     assert preflight < quiesce < snapshot < backup < migration < mutation < cutover
 
 
+def test_quiesced_state_validation_does_not_depend_on_runtime_health():
+    source = _source()
+    migration = source.index('info "Мигрирую state при остановленных службах"')
+    restart = source.index("start_previous_units", migration)
+    quiesced_validation = source[migration:restart]
+
+    assert "-m hydra.cli --json upgrade migrate-state" in quiesced_validation
+    assert "-m hydra.cli --json upgrade check" in quiesced_validation
+    assert "-m hydra.cli --json check" not in quiesced_validation
+
+
+def test_caddy_l4_is_restored_when_quiescing_helpers_stops_it_transitively():
+    source = _source()
+    discovery = source[
+        source.index("discover_units() {") : source.index(
+            "\n}\n",
+            source.index("discover_units() {"),
+        )
+    ]
+
+    assert "'caddy-l4.service'" in discovery
+    assert '"$unit" == "caddy-l4.service"' in discovery
+    assert source.index("\ncapture_active_units\n") < source.index(
+        "stop_managed_units",
+        source.index('step 5 7 "Резервная копия и миграция state"'),
+    )
+    assert "printf '%s\\n' \"${ACTIVE_UNITS[@]}\"" in source
+
+
+def test_failure_reports_name_the_operation_and_its_json_artifact():
+    source = _source()
+    rollback = source[
+        source.index("rollback() {") : source.index(
+            "handle_error() {",
+            source.index("rollback() {"),
+        )
+    ]
+
+    assert 'CURRENT_OPERATION=""' in source
+    assert 'CURRENT_REPORT=""' in source
+    assert "Сбой операции:" in rollback
+    assert "Отчёт операции:" in rollback
+    assert 'CURRENT_REPORT="$ROLLBACK_DIR/state-check.json"' in source
+
+
 def test_rollback_restores_state_before_old_code_and_services():
     source = _source()
     rollback_start = source.index("rollback() {")
