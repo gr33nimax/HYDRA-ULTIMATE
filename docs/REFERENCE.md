@@ -194,6 +194,23 @@ journalctl -u hydra-antidpi -u hydra-source-relay -u hydra-tg-admin -n 150 --no-
 state (`protocols[*].port`, `network.*`) и настраиваются через TUI; проверяйте их
 командой `hydra status`.
 
+```text
+   ИНТЕРНЕТ                                     LOOPBACK (127.0.0.1)
+   ─────────────────────────────────────        ──────────────────────────────
+   443/tcp    Caddy L4 · SNI-мультиплексор      2021  admin API caddy-l4
+   443/udp    один QUIC-транспорт               5300  DNSCrypt
+   8443/udp   Hysteria2                         9000  локальный TUN qWDTT
+   8443/tcp   Telemt (MTProto)                  9090  Clash API (если включён)
+   9443/tcp   сервер подписок                   1081  TPROXY (если включён)
+   9999/tcp   Honeypot
+   51820/udp  AmneziaWG                         + динамические порты
+   51821/udp  AmneziaWG                           source-relay
+   56000/udp  qWDTT · DTLS/TURN
+   56001/udp  qWDTT · WireGuard
+   2012–2022/tcp    Mieru
+   32000–32999/tcp  Snell
+```
+
 ### Внешние (публикуются в интернет)
 
 | Порт | Транспорт | Владелец |
@@ -288,9 +305,14 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 | :--- | :--- | :--- |
 | `HYDRA_REF` | `main` | Устанавливаемая ветка; имя проверяется `git check-ref-format` |
 
-Остальные `HYDRA_*` в обоих скриптах — внутренние значения, которые
-устанавливаются самими скриптами для отката и не предназначены для внешнего
-переопределения.
+Остальные `HYDRA_*` — внутренние значения, которые скрипты устанавливают сами:
+данные для откатa (`HYDRA_PREVIOUS_REV`, `HYDRA_BACKUP_DIR` и подобные) и
+передача состояния от launcher к транзакционному ядру
+(`HYDRA_UPDATER_LAUNCHED`). Переопределять их извне не следует.
+
+Отдельно `HYDRA_INSTALL_DIR` читает и сам Python-код: он задаёт стабильный
+корень установки, от которого вычисляется интерпретатор
+`<root>/.venv/bin/python` для генерируемых systemd-units.
 
 ## Быстрая диагностика
 

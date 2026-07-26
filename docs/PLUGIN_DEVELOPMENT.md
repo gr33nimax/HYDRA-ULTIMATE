@@ -84,6 +84,37 @@ class ExamplePlugin(BasePlugin):
 создаёт `PluginContainer`. Контейнер проверяет уникальность имён и весь контракт
 до запуска приложения.
 
+### Жизненный цикл
+
+```text
+   не установлен
+        │
+        │  plugin install ──▶ install()
+        ▼
+   установлен, выключен
+        │
+        │  plugin enable ───▶ config_defaults, tls_domain_source
+        ▼
+   включён ──────────────────────────────────────────────┐
+        │                                               │
+        │  общий apply:                                  │  plugin disable
+        │     configure() ──▶ ConfigFragment             │       │
+        │     apply()     ──▶ применение на хосте        │       ▼
+        │     health()    ──▶ подтверждение              │  установлен,
+        │                                                │  выключен
+        │  сбой любого шага ──▶ rollback к предыдущему    │       │
+        │                      состоянию                 │       │
+        └────────────────────────────────────────────────┘       │
+                                                                 │
+   plugin uninstall ──▶ uninstall() ◀────────────────────────────┘
+        │
+        ▼
+   не установлен
+```
+
+Каждый переход выполняется прикладной службой в транзакции: плагин сообщает
+результат, но не решает, сохранять ли state.
+
 ### Разделение обязанностей внутри плагина
 
 | Механизм | Что делает | Чего не делает |
@@ -105,6 +136,7 @@ class ExamplePlugin(BasePlugin):
 
 | Поле | Назначение |
 | :--- | :--- |
+| `category` | `transport`, `enhancement` или `security` — группировка в инвентаре |
 | `commands` | Изменяющие persisted-конфигурацию команды |
 | `queries` | Безопасные проекции и клиентские профили |
 | `actions` | Runtime-операции, не требующие общего `apply` |
@@ -115,6 +147,8 @@ class ExamplePlugin(BasePlugin):
 | `maintenance_tasks` | Фоновые задачи общего scheduler без ветвлений по имени плагина |
 | `backup_resources` | Точные файлы и каталоги, которые разрешено включать в backup/restore |
 | `required_commands`, `required_services`, `conflicts_with` | Preflight |
+| `needs_domain` | Плагину требуется домен; включение запрашивает его и участвует в TLS-preflight |
+| `central_apply` | `False` исключает плагин из общего `apply` — он владеет своим жизненным циклом (так работает Honeypot) |
 | `contract_version` | Явная версия контракта, проверяемая `PluginInvoker` |
 
 ## Новый или кастомный inbound
