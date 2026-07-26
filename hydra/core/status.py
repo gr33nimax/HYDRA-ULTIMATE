@@ -51,4 +51,8 @@ def build_status(
         "plugins": plugins,
         "runtime": runtime.as_dict(),
         "tls_mux": tls_mux,
+        "certificates": {
+            "checked_at": str(state.install.get("certificates_last_check", "")),
+            "entries": list(state.install.get("certificates_report", []) or []),
+        },
     }

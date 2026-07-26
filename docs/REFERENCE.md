@@ -91,7 +91,7 @@ NaiveProxy и VLESS + XHTTP. VLESS требует отдельный домен:
 | `hydra-caddy-source.service` | Обработчик source-транспарентности Caddy |
 | `hydra-sub.service` | Сервер подписок |
 | `hydra-traffic-daemon.service` | Учёт трафика и применение лимитов/сроков |
-| `hydra-sync-agent.service` | Периодические задачи обслуживания плагинов |
+| `hydra-sync-agent.service` | Периодические задачи: лимиты пользователей, обслуживание плагинов, суточная проверка TLS-сертификатов, обновление Sing-Box |
 | `hydra-sync-agent.timer` | Расписание sync agent |
 | `hydra-tg-admin.service` | Telegram Admin Bot |
 
@@ -296,6 +296,18 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 `network`: `domain`, `sub_domain`, `server_ip`, `dns_servers`, `dnscrypt_port`,
 `tproxy_enabled`, `tproxy_port`, `clash_api_enabled`, `clash_api_port`,
 `clash_api_secret`.
+
+`install` хранит служебные отметки фоновых проверок:
+
+| Ключ | Содержание |
+| :--- | :--- |
+| `sync_limits_enabled` | Проверять лимиты и сроки пользователей |
+| `sync_updates_enabled` | Проверять обновления Sing-Box |
+| `sync_certificates_enabled` | Проверять сроки TLS-сертификатов |
+| `sync_config_pending` | Отложенное применение конфигурации |
+| `singbox_last_update_check`, `singbox_update_available`, `singbox_latest_version` | Результат проверки обновлений |
+| `certificates_last_check` | Момент последней проверки сертификатов (UTC, ISO 8601) |
+| `certificates_report` | Результат проверки: домен, владелец, статус, дней до истечения |
 
 Ноль в `traffic_limit_gb` и `device_limit` означает «без ограничения». Пустой
 `expiry_date` означает «без срока»; значение разбирается как ISO-8601 и при

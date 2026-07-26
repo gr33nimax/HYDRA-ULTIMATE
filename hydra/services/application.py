@@ -34,6 +34,10 @@ from hydra.services.configuration_plan import (
     ConfigurationPlanning,
     UnavailableConfigurationPlanning,
 )
+from hydra.services.certificate_audit import (
+    CertificateInspection,
+    UnavailableCertificateInspection,
+)
 from hydra.services.logs import LogOperations, UnavailableLogOperations
 from hydra.services.diagnostics import (
     DiagnosticOperations,
@@ -100,6 +104,9 @@ class ApplicationService:
     )
     uninstaller: UninstallOperations = field(
         default_factory=UnavailableUninstallOperations,
+    )
+    certificates: CertificateInspection = field(
+        default_factory=UnavailableCertificateInspection,
     )
 
     def status(self, state: AppState) -> dict[str, Any]:

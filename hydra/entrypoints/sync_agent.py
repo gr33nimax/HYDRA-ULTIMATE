@@ -18,6 +18,7 @@ def main() -> int:
                 plugin_queries=application.plugin_queries,
                 apply_config=application.apply,
                 check_traffic_limits=application.traffic.check_limits,
+                inspect_certificates=application.certificates.inspect,
             ),
         )
     except Exception as exc:

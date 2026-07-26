@@ -224,6 +224,7 @@ def test_descriptor_drives_background_maintenance_without_scheduler_edits() -> N
         plugin_queries=PluginQueryService(get_plugin=container.get),
         apply_config=lambda state: True,
         check_traffic_limits=lambda state: [],
+        inspect_certificates=lambda state: [],
     )
     state = AppState(
         protocols={"extension": PluginState(enabled=True)},

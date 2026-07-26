@@ -17,6 +17,7 @@ from hydra.plugins.defaults import PluginFactory, default_plugins
 from hydra.services.admin_infrastructure import AdminInfrastructure
 from hydra.services.application import ApplicationService
 from hydra.services.backups import BackupService, compose_backup_policy
+from hydra.services.certificate_audit import CertificateInspector
 from hydra.services.certificates import CertificateProvisioner
 from hydra.services.configuration_plan import ConfigurationPlanner
 from hydra.services.diagnostic_infrastructure import HOST_DIAGNOSTICS
@@ -92,6 +93,7 @@ def production_application(
     traffic = TrafficService(protocols)
     plugin_actions = PluginActionService(get_plugin=plugins.get)
     plugin_queries = PluginQueryService(get_plugin=plugins.get)
+    certificate_audit = CertificateInspector(HOST)
     admin = AdminInfrastructure(
         sync_operations=default_sync_operations(
             protocols=protocols,
@@ -99,6 +101,7 @@ def production_application(
             plugin_queries=plugin_queries,
             apply_config=orchestration.apply_config,
             check_traffic_limits=traffic.check_limits,
+            inspect_certificates=certificate_audit.inspect,
         ),
         sync_runner=run_sync,
     )
@@ -156,6 +159,7 @@ def production_application(
                 CleanupStep("telemt-syn", _disable_telemt_syn_limiter),
             ),
         ),
+        certificates=certificate_audit,
     )
 
 

@@ -126,6 +126,66 @@ def _sync_plugin_maintenance(
     return state, failures
 
 
+def _certificates_due(state: AppState, *, forced: bool) -> bool:
+    if forced:
+        return True
+    last_check = state.install.get("certificates_last_check")
+    if not last_check:
+        return True
+    try:
+        return _elapsed_seconds(str(last_check)) >= 86400
+    except (TypeError, ValueError):
+        return True
+
+
+def _sync_certificates(
+    state: AppState,
+    *,
+    enabled: bool,
+    forced: bool,
+    operations: SyncOperations,
+    update_state: StateUpdater,
+    log: Logger,
+) -> tuple[AppState, list[str]]:
+    """Audit every TLS certificate once a day and queue renewals."""
+    from hydra.services.certificate_audit import summarize
+
+    if not enabled and not forced:
+        log("Sync: Certificate check is disabled by settings")
+        return state, []
+    if not _certificates_due(state, forced=forced):
+        return state, []
+    try:
+        statuses = list(operations.inspect_certificates(state))
+    except Exception as exc:
+        log(f"Certificates: audit failed: {exc}")
+        return state, [f"проверка сертификатов: {exc}"]
+
+    renewable = [status for status in statuses if status.needs_renewal]
+    for status in statuses:
+        if status.status != "ok":
+            log(f"Certificates: {status.describe()}")
+    log(f"Certificates: {summarize(statuses)}")
+
+    def record(latest: AppState) -> None:
+        latest.install["certificates_last_check"] = (
+            datetime.now(timezone.utc).isoformat()
+        )
+        latest.install["certificates_report"] = [
+            status.as_dict() for status in statuses
+        ]
+        if renewable:
+            latest.install["sync_config_pending"] = True
+
+    state, _ = update_state(record)
+    if renewable:
+        log(
+            "Certificates: queued a config apply to renew "
+            + ", ".join(status.domain for status in renewable),
+        )
+    return state, []
+
+
 def _apply_pending_config(
     state: AppState,
     *,
@@ -247,6 +307,10 @@ def run_sync_cycle(
         "sync_updates_enabled",
         True,
     )
+    certificates_enabled = force_all_checks or state.install.get(
+        "sync_certificates_enabled",
+        True,
+    )
     log(
         "Sync started"
         + (" (manual full check)" if force_all_checks else ""),
@@ -261,6 +325,15 @@ def run_sync_cycle(
     )
     state, phase_failures = _sync_plugin_maintenance(
         state,
+        forced=force_all_checks,
+        operations=operations,
+        update_state=update_state,
+        log=log,
+    )
+    failures.extend(phase_failures)
+    state, phase_failures = _sync_certificates(
+        state,
+        enabled=certificates_enabled,
         forced=force_all_checks,
         operations=operations,
         update_state=update_state,

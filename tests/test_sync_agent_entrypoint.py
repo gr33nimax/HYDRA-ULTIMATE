@@ -28,5 +28,6 @@ def test_main_composes_every_sync_dependency():
         plugin_queries=application.plugin_queries,
         apply_config=application.apply,
         check_traffic_limits=application.traffic.check_limits,
+        inspect_certificates=application.certificates.inspect,
     )
     run.assert_called_once_with(operations=operations)

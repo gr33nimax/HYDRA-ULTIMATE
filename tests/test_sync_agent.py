@@ -19,7 +19,7 @@ def _state_updater(state: AppState):
     return update
 
 
-def _run_sync(*, traffic_check=None, **kwargs):
+def _run_sync(*, traffic_check=None, certificates=None, **kwargs):
     protocols = ProtocolService(orchestrator, registry)
     operations = default_sync_operations(
         protocols=protocols,
@@ -27,6 +27,7 @@ def _run_sync(*, traffic_check=None, **kwargs):
         check_traffic_limits=traffic_check or (lambda state: []),
         plugin_actions=PluginActionService(get_plugin=protocols.get),
         plugin_queries=PluginQueryService(get_plugin=protocols.get),
+        inspect_certificates=certificates or (lambda state: []),
     )
     return sync_agent.run_sync(operations=operations, **kwargs)
 

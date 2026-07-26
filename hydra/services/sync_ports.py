@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 from hydra.core.state_models import AppState
+from hydra.services.certificate_audit import CertificateStatus
 from hydra.services.protocols import MaintenanceJob
 
 
@@ -52,6 +53,11 @@ class SyncOperations:
         [AppState, bool],
         list[MaintenanceOutcome],
     ]
+    # Facades assembled by hand audit nothing until they wire an inspector.
+    inspect_certificates: Callable[
+        [AppState],
+        list[CertificateStatus],
+    ] = lambda state: []
 
     def apply(self, state: AppState) -> bool:
         return bool(self.apply_config(state))
@@ -78,6 +84,10 @@ def default_sync_operations(
     plugin_queries: SyncPluginQueries,
     apply_config: Callable[[AppState], bool],
     check_traffic_limits: Callable[[AppState], list[str]],
+    inspect_certificates: Callable[
+        [AppState],
+        list[CertificateStatus],
+    ],
 ) -> SyncOperations:
     """Compose declared plugin maintenance without protocol-name branches."""
 
@@ -133,6 +143,7 @@ def default_sync_operations(
         apply_config=apply_config,
         check_traffic_limits=check_traffic_limits,
         run_maintenance=run_maintenance,
+        inspect_certificates=inspect_certificates,
     )
 
 
