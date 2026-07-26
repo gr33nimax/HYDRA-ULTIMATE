@@ -13,6 +13,7 @@ from .constants import (
     AWG_INTERFACE,
     AWG_INTERFACE_1,
     AWG_UNIT,
+    DEFAULT_NETWORK,
     DEFAULT_OBFUSCATION,
     DEFAULT_PORT,
     DEFAULT_PORT_1,
@@ -174,7 +175,7 @@ class AwgProfileMixin:
             state,
             conf_path,
             "desktop",
-            "10.67.67.0/24",
+            DEFAULT_NETWORK,
         )
         configured_network = self._normalize_profile_network(
             desired.get("network") or protocol.config.get("network")
@@ -239,7 +240,7 @@ class AwgProfileMixin:
                 default_interface = AWG_INTERFACE_1 if mobile else AWG_INTERFACE
                 default_port = DEFAULT_PORT_1 if mobile else DEFAULT_PORT
                 default_network = (
-                    "10.68.68.0/24" if mobile else "10.67.67.0/24"
+                    "10.68.68.0/24" if mobile else DEFAULT_NETWORK
                 )
                 obfuscation = profile.get("obfuscation")
                 result.append(

@@ -10,7 +10,11 @@ from pathlib import Path
 from hydra.core.state_models import User
 from hydra.plugins.context import PluginStateAccess
 
-from .constants import DEFAULT_PORT_1, OBFUSCATION_KEYS_EXTENDED
+from .constants import (
+    DEFAULT_NETWORK,
+    DEFAULT_PORT_1,
+    OBFUSCATION_KEYS_EXTENDED,
+)
 
 
 @dataclass(frozen=True)
@@ -50,7 +54,7 @@ class AwgClientLinksMixin:
         default_network = (
             "10.68.68.0/24"
             if profile_name == "mobile"
-            else "10.67.67.0/24"
+            else DEFAULT_NETWORK
         )
         address_base, _, _ = self._network_for_profile(
             state,

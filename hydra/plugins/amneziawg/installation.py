@@ -13,6 +13,7 @@ from .constants import (
     AWG_INSTALL_DIR,
     AWG_UNIT,
     AWG_UNIT_1,
+    DEFAULT_SERVER_IPV4,
 )
 
 
@@ -52,6 +53,7 @@ class AwgInstallationMixin:
             environment["AUTO_INSTALL"] = "y"
             environment["ENABLE_IPV6"] = "n"
             environment["SERVER_PUB_IP"] = self._public_ip()
+            environment["SERVER_AWG_IPV4"] = DEFAULT_SERVER_IPV4
             HOST.run(
                 ["bash", "amneziawg-install.sh"],
                 cwd=str(AWG_INSTALL_DIR),

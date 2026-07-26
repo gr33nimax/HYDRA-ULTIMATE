@@ -11,6 +11,7 @@ from hydra.plugins.context import PluginStateAccess
 from .constants import (
     AWG_INTERFACE,
     AWG_INTERFACE_1,
+    DEFAULT_NETWORK,
     DEFAULT_OBFUSCATION,
     DEFAULT_PORT,
     DEFAULT_PORT_1,
@@ -50,7 +51,7 @@ class AwgConfigurationMixin:
                 state,
                 conf_path=desktop_conf,
                 profile_name="desktop",
-                default_network="10.67.67.0/24",
+                default_network=DEFAULT_NETWORK,
                 profile=desktop,
                 peer_map=peer_map,
             )
@@ -308,7 +309,7 @@ class AwgConfigurationMixin:
             state,
             self._conf_path("desktop"),
             "desktop",
-            "10.67.67.0/24",
+            DEFAULT_NETWORK,
         )
 
     def _resolve_network(self, state: PluginStateAccess) -> str:

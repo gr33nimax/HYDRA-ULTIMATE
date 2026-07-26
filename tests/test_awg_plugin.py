@@ -86,6 +86,37 @@ def test_kernel_module_reports_reboot_when_dkms_targets_newer_kernel():
     assert "Перезагрузите" in detail
 
 
+def test_fresh_install_uses_non_conflicting_default_server_address():
+    p = AmneziaWGPlugin()
+
+    def run(command, **kwargs):
+        if command[:2] == ["rm", "-rf"]:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        if command[:3] == ["git", "clone", "--depth"]:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        if command == ["bash", "amneziawg-install.sh"]:
+            assert kwargs["env"]["SERVER_AWG_IPV4"] == "10.67.67.1"
+            return MagicMock(returncode=0, stdout="", stderr="")
+        raise AssertionError(command)
+
+    with patch.object(p, "_installed", side_effect=[False, True]), \
+         patch.object(p, "_ensure_kernel_module", return_value=(True, "")), \
+         patch.object(p, "_public_ip", return_value="203.0.113.10"), \
+         patch("hydra.plugins.amneziawg.plugin.HOST.run", side_effect=run):
+        assert p.install() is True
+
+
+def test_existing_install_does_not_reconfigure_legacy_network():
+    p = AmneziaWGPlugin()
+
+    with patch.object(p, "_installed", return_value=True), \
+         patch.object(p, "_ensure_kernel_module", return_value=(True, "")), \
+         patch("hydra.plugins.amneziawg.plugin.HOST.run") as host_run:
+        assert p.install() is True
+
+    host_run.assert_not_called()
+
+
 def test_status_uses_persisted_lifecycle_instead_of_config_presence():
     p = AmneziaWGPlugin()
     state = AppState(protocols={
