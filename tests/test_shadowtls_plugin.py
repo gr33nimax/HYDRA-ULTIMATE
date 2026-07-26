@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from hydra.plugins.shadowtls.plugin import ShadowTLSPlugin, SHADOWTLS_SNI_PRESETS
 from hydra.ui.protocol_setup import choose_shadowtls_sni
 from hydra.plugins.base import PluginCategory, ConfigFragment
+from hydra.contracts.plugin_config import validate_fragment
 from hydra.core.state import AppState, User, PluginState
 
 
@@ -86,8 +87,9 @@ def test_configure_returns_inbound():
     assert stls["handshake"]["server"] == "google.com"
 
     assert trojan["tag"] == "shadowtls-trojan-in"
-    assert trojan["listen"] == "127.0.0.1"
-    assert trojan["listen_port"] == 0
+    assert "listen" not in trojan
+    assert "listen_port" not in trojan
+    validate_fragment(frag)
 
 
 def test_configure_users_in_inbounds():

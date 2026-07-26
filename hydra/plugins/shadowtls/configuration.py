@@ -57,8 +57,6 @@ def configure(
     trojan_inbound = {
         "type": "trojan",
         "tag": "shadowtls-trojan-in",
-        "listen": "127.0.0.1",
-        "listen_port": 0,
         "users": trojan_users,
     }
     return ConfigFragment(
