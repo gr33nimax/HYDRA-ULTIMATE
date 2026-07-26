@@ -6,7 +6,20 @@ set -Eeuo pipefail
     exit 1
 }
 
-workspace="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel)}"
+report_error() {
+    local status=$1
+    local line=$2
+    local command=$3
+    printf 'upgrade smoke failed at line %s (exit %s): %s\n' \
+        "$line" "$status" "$command" >&2
+    exit "$status"
+}
+trap 'report_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
+
+workspace="${GITHUB_WORKSPACE:-$PWD}"
+git_workspace() {
+    git -c safe.directory="$workspace" -C "$workspace" "$@"
+}
 install_dir=/opt/hydra
 unit=/etc/systemd/system/hydra-ci-upgrade.service
 wrapper=/usr/local/bin/hydra
@@ -60,12 +73,17 @@ printf '#!/usr/bin/env bash\nexit 77\n' > "$wrapper_fixture"
 chmod 0755 "$wrapper_fixture"
 cp -a "$wrapper_fixture" "$wrapper"
 
-git config --global --add safe.directory "$workspace"
-git -C "$workspace" rev-parse --verify origin/main >/dev/null
+if [[ "$(git_workspace rev-parse --is-shallow-repository)" == "true" ]]; then
+    git_workspace fetch --quiet --unshallow origin
+fi
+git_workspace fetch --quiet --no-tags origin \
+    +refs/heads/main:refs/remotes/origin/main
+target_sha=$(git_workspace rev-parse HEAD)
+main_sha=$(git_workspace rev-parse refs/remotes/origin/main)
 git init --bare --quiet "$remote"
-git -C "$workspace" push --quiet "$remote" \
-    origin/main:refs/heads/main \
-    HEAD:refs/heads/dev
+git_workspace push --quiet "$remote" \
+    "$main_sha":refs/heads/main \
+    "$target_sha":refs/heads/dev
 
 git clone --quiet --branch main "$remote" "$install_dir"
 python3 -m venv "$install_dir/.venv"
@@ -116,8 +134,6 @@ systemctl daemon-reload
 systemctl start hydra-ci-upgrade.service
 systemctl is-active --quiet hydra-ci-upgrade.service
 
-target_sha=$(git -C "$workspace" rev-parse HEAD)
-main_sha=$(git -C "$workspace" rev-parse origin/main)
 neutral_cwd="$tmp_dir/neutral-cwd"
 mkdir "$neutral_cwd"
 run_updater() {
