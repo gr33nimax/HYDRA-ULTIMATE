@@ -56,18 +56,24 @@ class ConnectionIdentity:
     user: str = ""
 
 
-def parse_anytls_users(lines: Sequence[str]) -> dict[str, str]:
+def _parse_context_port_users(
+    lines: Sequence[str],
+    *,
+    inbound_type: str,
+) -> dict[str, str]:
     context_ports: dict[str, str] = {}
     context_users: dict[str, str] = {}
+    marker = f"inbound/{inbound_type}"
     for line in lines:
-        if "inbound/anytls" not in line.lower():
+        if marker not in line.lower():
             continue
         context = _CONTEXT_RE.search(line)
         if not context:
             continue
         context_id = context.group(1)
         source = re.search(
-            r"inbound connection from 127\.0\.0\.1:(\d+)",
+            r"inbound connection from\s+"
+            r"(?:\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9._:-]+):(\d+)",
             line,
             re.IGNORECASE,
         )
@@ -75,7 +81,8 @@ def parse_anytls_users(lines: Sequence[str]) -> dict[str, str]:
             context_ports[context_id] = source.group(1)
             continue
         user = re.search(
-            r"inbound/anytls\[[^\]]+\]:\s+\[([^\]]+)\]\s+"
+            rf"inbound/{re.escape(inbound_type)}\[[^\]]+\]:\s+"
+            r"\[([^\]]+)\]\s+"
             r"inbound connection to",
             line,
             re.IGNORECASE,
@@ -87,6 +94,15 @@ def parse_anytls_users(lines: Sequence[str]) -> dict[str, str]:
         for context_id, user in context_users.items()
         if context_id in context_ports
     }
+
+
+def parse_anytls_users(lines: Sequence[str]) -> dict[str, str]:
+    return _parse_context_port_users(lines, inbound_type="anytls")
+
+
+def parse_vless_users(lines: Sequence[str]) -> dict[str, str]:
+    """Correlate VLESS auth logs with Clash source-port metadata."""
+    return _parse_context_port_users(lines, inbound_type="vless")
 
 
 def _record_destination(
@@ -246,7 +262,10 @@ def evidence_from_journal(lines: Sequence[str]) -> TrafficEvidence:
         protocol="shadowtls",
     )
     return TrafficEvidence(
-        source_ports={"anytls": parse_anytls_users(lines)},
+        source_ports={
+            "anytls": parse_anytls_users(lines),
+            "vless": parse_vless_users(lines),
+        },
         sources={
             "mieru": parse_mieru_users(lines),
             "hysteria2": parse_hysteria2_users(lines),
@@ -390,4 +409,5 @@ __all__ = [
     "parse_destination_users",
     "parse_hysteria2_users",
     "parse_mieru_users",
+    "parse_vless_users",
 ]
