@@ -16,6 +16,7 @@ from hydra.services.subscriptions.client_configs import (
     generate_singbox_config,
     generate_throne_sub,
 )
+from hydra.services.subscriptions.proxy_protocol import read_source_address
 from hydra.services.subscriptions.devices import (
     register_subscription_device,
     subscription_fingerprint,
@@ -33,6 +34,21 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
     """HTTP handler with explicitly configured plugin access."""
 
     plugins: SubscriptionPluginAccess | None = None
+
+    def setup(self) -> None:
+        """Recover the original peer when Caddy fronts this listener."""
+        super().setup()
+        self.forwarded_for = ""
+        peer = str(self.client_address[0] if self.client_address else "")
+        if peer not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            return
+        try:
+            source = read_source_address(self.connection)
+        except OSError:
+            source = None
+        if source:
+            self.forwarded_for = source[0]
+            self.client_address = source
 
     def log_message(self, format, *args):
         del format, args

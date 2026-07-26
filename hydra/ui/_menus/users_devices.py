@@ -38,7 +38,8 @@ def _ago(moment: float) -> str:
         return f"{seconds // 60} мин. назад"
     if seconds < 86400:
         return f"{seconds // 3600} ч. назад"
-    return f"{seconds // 86400} дн. назад"
+    days = seconds // 86400
+    return f"{days} дн. назад" if days < 100 else "давно"
 
 
 def _timestamp(value: str) -> str:
@@ -47,6 +48,20 @@ def _timestamp(value: str) -> str:
         return datetime.fromisoformat(value).strftime("%d.%m %H:%M")
     except (TypeError, ValueError):
         return value[:16] if value else "—"
+
+
+_ADDRESS_WIDTH = 30
+
+
+def _address_label(address: str) -> str:
+    """Explain a loopback address instead of showing it as the device."""
+    if address in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+        return "адрес скрыт мультиплексором"
+    if not address:
+        return "адрес неизвестен"
+    if len(address) <= _ADDRESS_WIDTH:
+        return address
+    return f"{address[:_ADDRESS_WIDTH - 1]}…"
 
 
 def _source_label(source: str) -> str:
@@ -79,13 +94,13 @@ def device_lines(state: AppState, user: User) -> list[str]:
     ):
         client = str(record.get("user_agent", "")).strip() or "клиент не назвался"
         lines.append(
-            f"  {CYAN}{device_id[:12]}{NC}  {client[:28]:<28} "
+            f"  {CYAN}{device_id[:12]}{NC}  {client[:24]:<24} "
             f"{_timestamp(str(record.get('last_seen', '')))}",
         )
         lines.append(
-            f"  {DIM}    {_source_label(str(record.get('source', '')))} · "
-            f"адрес {record.get('address') or '—'} · "
-            f"впервые {_timestamp(str(record.get('first_seen', '')))}{NC}",
+            f"  {DIM}    {_source_label(str(record.get('source', '')))[:22]} · "
+            f"{_address_label(str(record.get('address', '')))} · с "
+            f"{_timestamp(str(record.get('first_seen', '')))}{NC}",
         )
 
     sessions = user_sessions(state, user.email)
@@ -100,8 +115,8 @@ def device_lines(state: AppState, user: User) -> list[str]:
             else f"{session.connections} соед."
         )
         lines.append(
-            f"  {marker} {session.address:<24} {state_text:<22} "
-            f"{_bytes_auto(session.bytes_total)}  {_ago(session.last_seen)}",
+            f"  {marker} {_address_label(session.address)[:24]:<24} {state_text:<18} "
+            f"{_bytes_auto(session.bytes_total):>9}  {_ago(session.last_seen)}",
         )
     if any(not session.allowed for session in sessions):
         lines.extend(

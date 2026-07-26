@@ -70,7 +70,7 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
 
     meta = PluginMeta(
         name="vless",
-        display_name="VLESS + XHTTP",
+        display_name="VLESS",
         description=(
             "VLESS over XHTTP from sing-box-extended, served either behind a "
             "certificate on your own domain or with a borrowed Reality "

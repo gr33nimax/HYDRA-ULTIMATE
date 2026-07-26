@@ -210,7 +210,9 @@ def _tls_route(
             ),
         ]
     elif name == "sub_server":
-        handlers = [proxy_factory(f"127.0.0.1:{port}")]
+        # The subscription server records which device asked for a config, so
+        # it needs the real peer rather than the multiplexer's loopback address.
+        handlers = [proxy_factory(f"127.0.0.1:{port}", proxy_protocol=True)]
     else:
         return None
     return {"match": match, "handle": handlers}

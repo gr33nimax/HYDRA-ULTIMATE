@@ -241,7 +241,21 @@ class BasePlugin(ABC):
         return True
 
     def traffic(self, state: PluginStateAccess) -> dict[str, int]:
-        return {}
+        """Return per-user bytes recorded for this plugin by the daemon.
+
+        Shared traffic accounting stores attributed bytes under the plugin's
+        own name, so a transport that does not keep its own counters still
+        reports what users moved through it.
+        """
+        name = self.meta.name
+        totals = {
+            user.email: int(
+                user.credentials.get(name, {}).get("traffic_used_bytes", 0)
+                or 0,
+            )
+            for user in state.users
+        }
+        return {email: total for email, total in totals.items() if total > 0}
 
     def traffic_snapshot(
         self,

@@ -202,3 +202,25 @@ def test_nothing_is_closed_while_every_user_is_within_the_limit():
         ) == 0
 
     close.assert_not_called()
+
+
+def test_tracked_traffic_is_reported_without_a_per_plugin_override():
+    from hydra.core.state import AppState, User
+    from hydra.plugins.vless_xhttp.plugin import VlessXhttpPlugin
+
+    state = AppState()
+    state.users = [
+        User(
+            "alice@example.com",
+            "uuid-a",
+            credentials={"vless": {"traffic_used_bytes": 4096}},
+        ),
+        User(
+            "bob@example.com",
+            "uuid-b",
+            credentials={"vless": {"traffic_used_bytes": 0}},
+        ),
+        User("carol@example.com", "uuid-c"),
+    ]
+
+    assert VlessXhttpPlugin().traffic(state) == {"alice@example.com": 4096}

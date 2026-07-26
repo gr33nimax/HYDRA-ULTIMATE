@@ -219,3 +219,87 @@ def test_subscription_registration_stores_the_full_record():
     assert record["user_agent"] == "hydra-client/2"
     assert record["address"] == "198.51.100.7"
     assert record["first_seen"] == record["last_seen"]
+
+
+def test_device_lines_stay_inside_the_panel():
+    from hydra.ui.tui import PANEL_W, visible_width
+
+    user = _user(
+        **{
+            "c" * 64: {
+                "first_seen": "2026-07-01T10:00:00+00:00",
+                "last_seen": "2026-07-20T12:00:00+00:00",
+                "source": "x-hydra-hwid",
+                "user_agent": "v2rayNG/1.9.11 (Android 14; SM-G998B)",
+                "address": "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+            },
+        },
+    )
+    state = _state(
+        user,
+        c1={"address": "2001:0db8:85a3:0000:0000:8a2e:0370:7334"},
+        c2={"address": "198.51.100.4", "total": 900_000},
+        c3={"address": "203.0.113.9"},
+    )
+
+    for line in users_devices.device_lines(state, user):
+        assert visible_width(line) <= PANEL_W - 4, line
+
+
+def test_loopback_address_is_explained_not_shown_as_the_device():
+    user = _user(
+        **{
+            "d" * 64: {
+                "first_seen": "2026-07-01T10:00:00+00:00",
+                "last_seen": "2026-07-20T12:00:00+00:00",
+                "source": "network-client",
+                "user_agent": "Throne/1.2.0",
+                "address": "127.0.0.1",
+            },
+        },
+    )
+
+    text = "\n".join(users_devices.device_lines(_state(user), user))
+
+    assert "адрес скрыт мультиплексором" in text
+    assert "127.0.0.1" not in text
+
+
+def test_subscription_handler_recovers_the_peer_behind_the_multiplexer():
+    import socket
+    import struct
+
+    from hydra.services.subscriptions.proxy_protocol import (
+        SIGNATURE,
+        read_source_address,
+    )
+
+    payload = (
+        socket.inet_aton("198.51.100.7")
+        + socket.inet_aton("10.0.0.1")
+        + struct.pack("!HH", 54321, 443)
+    )
+    header = SIGNATURE + bytes([0x21, 0x11]) + struct.pack("!H", len(payload))
+    listener, client = socket.socketpair()
+    try:
+        client.sendall(header + payload + b"GET / HTTP/1.1\r\n\r\n")
+        assert read_source_address(listener) == ("198.51.100.7", 54321)
+        assert listener.recv(16).startswith(b"GET / HTTP/1.1")
+    finally:
+        listener.close()
+        client.close()
+
+
+def test_a_direct_request_is_left_alone():
+    import socket
+
+    from hydra.services.subscriptions.proxy_protocol import read_source_address
+
+    listener, client = socket.socketpair()
+    try:
+        client.sendall(b"GET /sub/token HTTP/1.1\r\n\r\n")
+        assert read_source_address(listener) is None
+        assert listener.recv(5) == b"GET /"
+    finally:
+        listener.close()
+        client.close()

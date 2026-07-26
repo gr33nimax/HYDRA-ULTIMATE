@@ -31,6 +31,7 @@ PROTOCOL_LABELS = {
     "snell": "Snell",
     "mieru": "Mieru",
     "naive": "NaiveProxy",
+    "vless": "VLESS",
     "telemt": "Telemt",
     "wdtt": "qWDTT",
 }
