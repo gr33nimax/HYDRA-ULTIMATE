@@ -58,6 +58,7 @@ _SOURCE_RELAY_PORTS = {
     "anytls": 21444,
     "trusttunnel": 21445,
     "shadowtls": 21446,
+    "vless": 21448,
 }
 _UDP_SOURCE_RELAY_PORTS = {
     "naive": 21443,

@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from hydra.core.sni_router import _collect_backends, _generate_config, needs_mux
+from hydra.core.sni_router import _relay_routes
 from hydra.core.state import AppState, PluginState, User
 from hydra.plugins.vless_xhttp.plugin import (
     INTERNAL_PORT,
@@ -193,7 +194,11 @@ def test_multiplexer_routes_the_borrowed_sni_without_terminating_tls():
     )
     assert [handler["handler"] for handler in route["handle"]] == ["proxy"]
     assert route["handle"][0]["upstreams"][0]["dial"] == [
-        f"127.0.0.1:{INTERNAL_PORT}",
+        "127.0.0.1:21448",
+    ]
+    assert route["handle"][0]["proxy_protocol"] == "v2"
+    assert _relay_routes(backends, state) == [
+        ("vless", 21448, INTERNAL_PORT),
     ]
     loaded = config["apps"].get("tls", {}).get("certificates", {})
     assert HANDSHAKE not in json.dumps(loaded)

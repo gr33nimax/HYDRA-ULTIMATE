@@ -162,12 +162,18 @@ def test_vless_xhttp_real_clash_metadata_is_attributed_from_logs():
         ],
     )
 
-    assert apply_connection_snapshot(state, [connection], evidence) is True
+    with patch(
+        "hydra.services.traffic_accounting.resolve_mapping",
+        return_value="198.51.100.42",
+    ) as resolve:
+        assert apply_connection_snapshot(state, [connection], evidence) is True
     assert state.users[0].traffic_used_bytes == 1000
     assert state.users[0].credentials["vless"]["traffic_used_bytes"] == 1000
     record = state.install["traffic_connection_counters"]["clash-generated-uuid"]
     assert record["protocol"] == "vless"
     assert record["user"] == "vless@example.com"
+    assert record["address"] == "198.51.100.42"
+    resolve.assert_called_once_with("vless", 43123)
 
 
 def test_vless_xhttp_does_not_cross_attribute_unrelated_log_contexts():

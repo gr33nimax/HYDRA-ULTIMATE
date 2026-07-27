@@ -140,9 +140,16 @@ def _tls_route(
 
     if backend.get("route_kind") == "tls_passthrough":
         # Reality terminates TLS itself: the multiplexer only reads the SNI.
+        exact_source = name in settings.relay_ports
+        target_port = settings.relay_ports[name] if exact_source else port
         return {
             "match": match,
-            "handle": [proxy_factory(f"127.0.0.1:{port}")],
+            "handle": [
+                proxy_factory(
+                    f"127.0.0.1:{target_port}",
+                    proxy_protocol=exact_source,
+                ),
+            ],
         }
 
     if backend.get("route_kind") == "http_path_proxy":

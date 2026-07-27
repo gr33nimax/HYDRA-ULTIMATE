@@ -76,7 +76,9 @@ NaiveProxy и VLESS + XHTTP. VLESS требует отдельный домен:
 принадлежит ядру и плагином не является.
 Для VLESS + XHTTP демон сопоставляет `sourcePort` активного соединения Clash API
 с аутентифицированным именем пользователя из того же journal context Sing-Box,
-поскольку сам Clash API не возвращает `metadata.user`.
+поскольку сам Clash API не возвращает `metadata.user`. Если VLESS работает за
+Caddy, тот же source port используется для точного поиска внешнего IP в
+`hydra-source-relay`; в сессии сохраняется клиентский адрес, а не loopback-хоп.
 
 ## Systemd-службы
 
@@ -264,6 +266,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 | `127.0.0.1:9090` | Clash API Sing-Box, если включён (`network.clash_api_port`) |
 | `127.0.0.1:20448` | Внутренний VLESS + XHTTP inbound Sing-Box |
 | `127.0.0.1:10804` | HTTP-router и сайт-заглушка домена VLESS + XHTTP |
+| `127.0.0.1:21448` | PROXY v2 source-relay для VLESS за Caddy |
 | `1081` | TPROXY Sing-Box, если включён (`network.tproxy_port`) |
 
 Порты source-relay назначаются динамически на loopback и сопоставляются с
@@ -293,10 +296,13 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 `User`: `email`, `uuid`, `traffic_limit_gb`, `traffic_used_bytes`, `expiry_date`,
 `blocked`, `created_at`, `telegram_id`, `credentials`, `device_limit`, `devices`.
 
-`devices` — карта `id устройства → запись`. Идентификатор это соль плюс хеш
-того, чем клиент представился, поэтому исходный HWID в state не хранится.
-Запись содержит `first_seen`, `last_seen`, `source` (заголовок HWID или
-`network-client`, если клиент не назвался), `user_agent` и `address`.
+`devices` — карта `id устройства → запись`. Идентификатор — хеш того, чем
+клиент представился, поэтому исходный HWID в state не хранится. При отсутствии
+HWID используется нормализованный `User-Agent`, чтобы смена адреса не создавала
+новое устройство; если нет и него, последним сигналом остаётся адрес. Несколько
+старых записей `network-client` с одним `User-Agent` объединяются при следующем
+запросе подписки. Запись содержит `first_seen`, `last_seen`, `source`,
+`user_agent` и последний известный `address`.
 
 `network`: `domain`, `sub_domain`, `server_ip`, `dns_servers`, `dnscrypt_port`,
 `tproxy_enabled`, `tproxy_port`, `clash_api_enabled`, `clash_api_port`,

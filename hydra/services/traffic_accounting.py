@@ -5,6 +5,7 @@ import time
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from hydra.core.source_relay import resolve_mapping
 from hydra.core.state_models import AppState
 from hydra.services.traffic_attribution import (
     DEFAULT_ATTRIBUTOR,
@@ -70,10 +71,7 @@ def apply_connection_snapshot(
             "seen_at": timestamp,
             # The source address is what a device looks like on the data path;
             # device limits and the device view both read it from here.
-            "address": str(
-                (metadata or {}).get("sourceIP", "")
-                or previous.get("address", ""),
-            ),
+            "address": _source_address(metadata or {}, protocol, previous),
         }
         if delta:
             key = (user, protocol)
@@ -98,6 +96,36 @@ def apply_connection_snapshot(
             int(protocol_stats.get("traffic_used_bytes", 0)) + delta
         )
     return bool(deltas)
+
+
+def _source_address(
+    metadata: dict[str, Any],
+    protocol: str,
+    previous: dict[str, Any],
+) -> str:
+    """Recover a Caddy-proxied peer through the exact source relay mapping."""
+    address = str(metadata.get("sourceIP", "") or "")
+    previous_address = str(previous.get("address", "") or "")
+    if address not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+        return address or previous_address
+    try:
+        source_port = int(metadata.get("sourcePort", 0) or 0)
+    except (TypeError, ValueError):
+        source_port = 0
+    mapped = (
+        resolve_mapping(protocol, source_port)
+        if protocol != "unknown" and source_port
+        else None
+    )
+    if mapped:
+        return mapped
+    if previous_address and previous_address not in (
+        "127.0.0.1",
+        "::1",
+        "::ffff:127.0.0.1",
+    ):
+        return previous_address
+    return address or previous_address
 
 
 __all__ = ["apply_connection_snapshot"]

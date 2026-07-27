@@ -48,6 +48,11 @@ class DeviceFingerprint:
         }
 
 
+def _normalized_agent(value: object) -> str:
+    """Normalize harmless User-Agent spacing without changing its identity."""
+    return " ".join(str(value or "").split())[:_MAX_AGENT]
+
+
 def subscription_fingerprint(
     headers: Mapping[str, str],
     client_ip: str,
@@ -68,11 +73,12 @@ def subscription_fingerprint(
             if raw:
                 source = name
                 break
-    agent = str(headers.get("User-Agent", "") or "").strip()
+    agent = _normalized_agent(headers.get("User-Agent", ""))
     if not raw:
-        # Without a reported id the address and client are the only signal, so
-        # the same phone on a new network counts as a new device.
-        raw = f"{client_ip}|{agent}"
+        # A client name is less precise than HWID, but unlike an address it
+        # survives normal mobile/Wi-Fi network changes.  If the client does not
+        # identify itself at all, the peer address remains the last signal.
+        raw = f"client:{agent}" if agent else f"address:{client_ip}"
         source = NETWORK_SOURCE
     return DeviceFingerprint(
         device_id=hashlib.sha256(f"{source}:{raw}".encode()).hexdigest(),
@@ -108,13 +114,37 @@ def register_subscription_device(
         user = next((item for item in state.users if item.uuid == token), None)
         if user is None:
             return "missing", ""
-        known = device_id in user.devices
+        legacy_ids = [
+            known_id
+            for known_id, record in user.devices.items()
+            if (
+                known_id != device_id
+                and fingerprint.source == NETWORK_SOURCE
+                and bool(fingerprint.user_agent)
+                and str(record.get("source", "")) == NETWORK_SOURCE
+                and _normalized_agent(record.get("user_agent", ""))
+                == fingerprint.user_agent
+            )
+        ]
+        known = device_id in user.devices or bool(legacy_ids)
         if user.device_limit > 0 and not known:
             if len(user.devices) >= user.device_limit:
                 return "limit", user.email
+        previous_records = [
+            user.devices[known_id]
+            for known_id in (device_id, *legacy_ids)
+            if known_id in user.devices
+        ]
+        previous = min(
+            previous_records,
+            key=lambda record: str(record.get("first_seen", "")) or now,
+            default=None,
+        )
+        for known_id in legacy_ids:
+            user.devices.pop(known_id, None)
         user.devices[device_id] = fingerprint.record(
             now,
-            user.devices.get(device_id),
+            previous,
         )
         return "allowed", user.email
 

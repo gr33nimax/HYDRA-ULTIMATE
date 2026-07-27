@@ -397,12 +397,14 @@ def relay_routes(
     relay_ports: Mapping[str, int],
 ) -> list[tuple[str, int, int]]:
     """Plan TCP exact-source relay routes."""
-    if not antidpi_enabled(state):
-        return []
+    antidpi = antidpi_enabled(state)
     return [
         (str(backend["name"]), relay_ports[str(backend["name"])], int(backend["port"]))
         for backend in backends
-        if backend["name"] in relay_ports
+        if (
+            backend["name"] in relay_ports
+            and (backend["name"] == "vless" or antidpi)
+        )
     ]
 
 

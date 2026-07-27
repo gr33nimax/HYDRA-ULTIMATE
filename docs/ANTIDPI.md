@@ -160,10 +160,11 @@ v2 в `hydra-source-relay`. Relay:
 точный IP по паре `protocol + relay-port`. Mapping живёт 300 секунд и ограничен
 по размеру.
 
-Для VLESS + XHTTP source relay не используется: Caddy терминирует TLS домена и
-проксирует HTTP-запрос в локальный сайт по PROXY v2, поэтому реальный адрес
-клиента уже присутствует в access-логе decoy. Он и служит источником улик, а
-журнал sing-box для этого inbound видит только loopback-хоп.
+Для VLESS + XHTTP Caddy передаёт PROXY v2 в source relay как при TLS-терминации
+своего домена, так и при passthrough Reality. Relay снимает заголовок перед
+Sing-Box и записывает точное соответствие loopback source port внешнему
+endpoint. Access-лог decoy по-прежнему содержит реальный адрес для AntiDPI, а
+демон трафика использует relay mapping для сессий и лимитов устройств.
 
 ### 4.3 Ошибка без endpoint
 

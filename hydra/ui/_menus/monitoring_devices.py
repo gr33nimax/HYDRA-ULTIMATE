@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from hydra.core.state_models import AppState
 from hydra.services.application import ApplicationService
 from hydra.services.device_sessions import user_sessions
+from hydra.ui._menus.device_formatting import address_label
 from hydra.ui._menus.monitoring_support import _application
 from hydra.ui.tui import (
     BOLD,
@@ -89,7 +90,7 @@ def _user_lines(state: AppState, user) -> list[str]:
     for session in active[:4]:
         flag = "" if session.allowed else f"  {RED}сверх лимита{NC}"
         lines.append(
-            f"      {session.address:<26} "
+            f"      {address_label(session.address):<30} "
             f"{session.connections} соед.  "
             f"{_bytes_auto(session.bytes_total)}{flag}",
         )

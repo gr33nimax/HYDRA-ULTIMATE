@@ -1,6 +1,7 @@
 """Operator views of user devices and the fingerprints behind them."""
 from __future__ import annotations
 
+import hashlib
 from unittest.mock import MagicMock, patch
 
 from hydra.core.state import AppState, User
@@ -56,6 +57,30 @@ def test_reported_hwid_is_preferred_over_the_network_guess():
     assert reported.device_id != guessed.device_id
 
 
+def test_network_fingerprint_survives_an_address_change_for_the_same_client():
+    first = subscription_fingerprint(
+        {"User-Agent": "  NekoBox/Android/1.4.2a  "},
+        "198.51.100.7",
+        {},
+    )
+    later = subscription_fingerprint(
+        {"User-Agent": "NekoBox/Android/1.4.2a"},
+        "203.0.113.9",
+        {},
+    )
+
+    assert first.device_id == later.device_id
+    assert first.user_agent == "NekoBox/Android/1.4.2a"
+    assert later.address == "203.0.113.9"
+
+
+def test_network_fingerprint_uses_the_address_when_client_is_unknown():
+    first = subscription_fingerprint({}, "198.51.100.7", {})
+    later = subscription_fingerprint({}, "203.0.113.9", {})
+
+    assert first.device_id != later.device_id
+
+
 def test_registration_keeps_the_first_sighting_and_updates_the_rest():
     first = subscription_fingerprint(
         {"X-HWID": "device-42", "User-Agent": "old-client"},
@@ -75,6 +100,57 @@ def test_registration_keeps_the_first_sighting_and_updates_the_rest():
     assert updated["last_seen"] == "2026-07-20T12:00:00+00:00"
     assert updated["user_agent"] == "new-client"
     assert updated["address"] == "203.0.113.9"
+
+
+def test_registration_collapses_legacy_address_and_client_duplicates():
+    from hydra.core.state import save_state
+
+    agent = "Throne/1.2.0"
+    first_id = hashlib.sha256(
+        f"{NETWORK_SOURCE}:198.51.100.7|{agent}".encode(),
+    ).hexdigest()
+    second_id = hashlib.sha256(
+        f"{NETWORK_SOURCE}:203.0.113.9|{agent}".encode(),
+    ).hexdigest()
+    user = User(
+        "alice@example.com",
+        "token",
+        device_limit=1,
+        devices={
+            first_id: {
+                "first_seen": "2026-07-01T10:00:00+00:00",
+                "last_seen": "2026-07-20T10:00:00+00:00",
+                "source": NETWORK_SOURCE,
+                "user_agent": agent,
+                "address": "198.51.100.7",
+            },
+            second_id: {
+                "first_seen": "2026-07-10T10:00:00+00:00",
+                "last_seen": "2026-07-21T10:00:00+00:00",
+                "source": NETWORK_SOURCE,
+                "user_agent": agent,
+                "address": "203.0.113.9",
+            },
+        },
+    )
+    save_state(AppState(users=[user]))
+    current = subscription_fingerprint(
+        {"User-Agent": agent},
+        "192.0.2.44",
+        {},
+    )
+
+    _state_after, updated, status = register_subscription_device(
+        "token",
+        current,
+    )
+
+    assert status == "allowed"
+    assert updated is not None
+    assert list(updated.devices) == [current.device_id]
+    record = updated.devices[current.device_id]
+    assert record["first_seen"] == "2026-07-01T10:00:00+00:00"
+    assert record["address"] == "192.0.2.44"
 
 
 def test_public_user_publishes_devices_without_the_full_identifier():
@@ -263,6 +339,35 @@ def test_loopback_address_is_explained_not_shown_as_the_device():
 
     assert "адрес скрыт мультиплексором" in text
     assert "127.0.0.1" not in text
+
+
+def test_monitoring_overview_never_calls_loopback_a_device():
+    user = _user()
+    state = _state(user, c1={"address": "127.0.0.1"})
+
+    text = "\n".join(monitoring_devices._user_lines(state, user))
+
+    assert "адрес скрыт мультиплексором" in text
+    assert "127.0.0.1" not in text
+
+
+def test_guessed_device_label_explains_that_hwid_is_unavailable():
+    user = _user(
+        **{
+            "d" * 64: {
+                "first_seen": "2026-07-01T10:00:00+00:00",
+                "last_seen": "2026-07-20T12:00:00+00:00",
+                "source": NETWORK_SOURCE,
+                "user_agent": "Throne/1.2.0",
+                "address": "198.51.100.7",
+            },
+        },
+    )
+
+    text = "\n".join(users_devices.device_lines(_state(user), user))
+
+    assert "по клиенту (без HWID)" in text
+    assert "по адресу и клиенту" not in text
 
 
 def test_subscription_handler_recovers_the_peer_behind_the_multiplexer():

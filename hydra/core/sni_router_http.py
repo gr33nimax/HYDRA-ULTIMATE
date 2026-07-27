@@ -157,10 +157,28 @@ def _trusttunnel_server(
 
 def _path_proxy_decoy_server(
     backend: Backend,
+    settings: RenderSettings,
     *,
     listener_wrappers: Callable[[], list[dict[str, Any]]],
 ) -> dict[str, Any]:
     path = str(backend["proxy_path"]).rstrip("/")
+    exact_source = str(backend["name"]) in settings.relay_ports
+    upstream_port = (
+        settings.relay_ports[str(backend["name"])]
+        if exact_source
+        else int(backend["port"])
+    )
+    transport: dict[str, Any] = {
+        "protocol": "http",
+        "versions": ["2"],
+        "response_header_timeout": "30s",
+        "tls": {"server_name": str(backend["domain"])},
+    }
+    if exact_source:
+        # A PROXY header describes one downstream TCP peer.  Prevent HTTP/2
+        # connection reuse from mixing several clients behind one header.
+        transport["proxy_protocol"] = "v2"
+        transport["keep_alive"] = {"enabled": False}
     decoy_handler = {
         "handler": "file_server",
         "root": str(backend["decoy_root"]),
@@ -168,15 +186,10 @@ def _path_proxy_decoy_server(
     proxy = {
         "handler": "reverse_proxy",
         "upstreams": [
-            {"dial": f"127.0.0.1:{int(backend['port'])}"},
+            {"dial": f"127.0.0.1:{upstream_port}"},
         ],
         "flush_interval": -1,
-        "transport": {
-            "protocol": "http",
-            "versions": ["2"],
-            "response_header_timeout": "30s",
-            "tls": {"server_name": str(backend["domain"])},
-        },
+        "transport": transport,
         "headers": {
             "request": {
                 "set": {
@@ -256,6 +269,7 @@ def http_servers(
             continue
         servers[f"{backend['name']}_decoy"] = _path_proxy_decoy_server(
             backend,
+            settings,
             listener_wrappers=listener_wrappers,
         )
     return servers

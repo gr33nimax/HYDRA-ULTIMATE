@@ -86,8 +86,10 @@ def test_caddy_terminates_tls_and_routes_only_xhttp_path_to_singbox():
     ]
     proxy = xhttp_route["handle"][0]
     assert proxy["handler"] == "reverse_proxy"
-    assert proxy["upstreams"] == [{"dial": f"127.0.0.1:{INTERNAL_PORT}"}]
+    assert proxy["upstreams"] == [{"dial": "127.0.0.1:21448"}]
     assert proxy["transport"]["versions"] == ["2"]
+    assert proxy["transport"]["proxy_protocol"] == "v2"
+    assert proxy["transport"]["keep_alive"] == {"enabled": False}
     assert proxy["transport"]["tls"] == {
         "server_name": "xhttp.example.com",
     }

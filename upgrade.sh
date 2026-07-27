@@ -15,28 +15,70 @@ WRAPPER="/usr/local/bin/hydra"
 REPO_URL="${HYDRA_REPO_URL:-https://github.com/gr33nimax/HYDRA-ULTIMATE}"
 HYDRA_REF="${HYDRA_REF:-dev}"
 
-info() { printf '  -> %s\n' "$*"; }
-ok() { printf '  OK  %s\n' "$*"; }
-fail() { printf '  ОШИБКА  %s\n' "$*" >&2; return 1; }
+configure_utf8_locale() {
+    local candidate
+    command -v locale >/dev/null 2>&1 || return 0
+    command -v awk >/dev/null 2>&1 || return 0
+    candidate=$(
+        locale -a 2>/dev/null \
+            | awk 'tolower($0) ~ /^(c|en_us)\.utf-?8$/ {print; exit}'
+    )
+    if [[ -n "$candidate" ]]; then
+        export LANG="$candidate"
+        export LC_ALL="$candidate"
+    fi
+}
+
+configure_utf8_locale
+
+UI_RESET=""
+UI_CYAN=""
+UI_GREEN=""
+UI_RED=""
+UI_DIM=""
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    UI_RESET=$'\033[0m'
+    UI_CYAN=$'\033[1;36m'
+    UI_GREEN=$'\033[1;32m'
+    UI_RED=$'\033[1;31m'
+    UI_DIM=$'\033[2m'
+fi
+
+info() { printf '    %s•%s %s\n' "$UI_DIM" "$UI_RESET" "$*"; }
+ok() { printf '  %s✓%s %s\n' "$UI_GREEN" "$UI_RESET" "$*"; }
+fail() {
+    printf '  %s✗ Ошибка:%s %s\n' "$UI_RED" "$UI_RESET" "$*" >&2
+    return 1
+}
 
 title() {
-    printf 'HYDRA · %s\n' "$*"
-    printf '%s\n' '────────────────────────────────────────'
+    printf '\n%s%s%s\n' "$UI_CYAN" \
+        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' "$UI_RESET"
+    printf '  %sHYDRA · ОБНОВЛЕНИЕ%s\n' "$UI_CYAN" "$UI_RESET"
+    printf '%s%s%s\n' "$UI_CYAN" \
+        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' "$UI_RESET"
 }
 
 step() {
     local current=$1
     local total=$2
     shift 2
-    printf '\n[%s/%s] %s\n' "$current" "$total" "$*"
+    printf '\n%s[%s/%s]%s %s\n' \
+        "$UI_CYAN" "$current" "$total" "$UI_RESET" "$*"
 }
 
 result_ok() {
-    printf '\nГОТОВО: %s\n' "$*"
+    printf '\n%s✓ ГОТОВО%s  %s\n' "$UI_GREEN" "$UI_RESET" "$*"
 }
 
 result_error() {
-    printf '\nОШИБКА: %s\n' "$*" >&2
+    printf '\n%s✗ ОБНОВЛЕНИЕ НЕ ЗАВЕРШЕНО%s\n' \
+        "$UI_RED" "$UI_RESET" >&2
+    printf '  %s\n' "$*" >&2
+}
+
+summary_row() {
+    printf '  %-18s %s\n' "$1:" "$2"
 }
 
 if [[ "${HYDRA_UPDATER_LAUNCHED:-0}" != "1" ]]; then
@@ -48,7 +90,7 @@ require_absolute_safe_path() {
     local name=$1
     local value=$2
     [[ "$value" == /* && "$value" != "/" ]] || {
-        fail "$name must be an absolute path other than /"
+        fail "$name должен быть абсолютным путём, отличным от /"
     }
 }
 
@@ -57,17 +99,21 @@ require_absolute_safe_path HYDRA_RELEASES_DIR "$RELEASES_DIR"
 require_absolute_safe_path HYDRA_UPGRADE_BACKUP_DIR "$BACKUP_ROOT"
 require_absolute_safe_path HYDRA_UPGRADE_LOCK_FILE "$LOCK_FILE"
 
-[[ ${EUID:-$(id -u)} -eq 0 ]] || fail "run this updater as root"
+[[ ${EUID:-$(id -u)} -eq 0 ]] || fail "Запустите обновление с правами root."
 [[ -d "$INSTALL_DIR" || -L "$INSTALL_DIR" ]] || {
-    fail "existing HYDRA installation was not found at $INSTALL_DIR"
+    fail "Установка HYDRA не найдена: $INSTALL_DIR"
 }
-[[ -f "$INSTALL_DIR/main.py" ]] || fail "$INSTALL_DIR is not a HYDRA installation"
+[[ -f "$INSTALL_DIR/main.py" ]] || {
+    fail "Каталог не похож на установку HYDRA: $INSTALL_DIR"
+}
 git check-ref-format --branch "$HYDRA_REF" >/dev/null 2>&1 || {
-    fail "invalid HYDRA_REF: $HYDRA_REF"
+    fail "Некорректное имя ветки HYDRA_REF: $HYDRA_REF"
 }
 
-for command in git python3 systemctl flock cp mv readlink stat tee; do
-    command -v "$command" >/dev/null 2>&1 || fail "required command is missing: $command"
+for command in awk git python3 systemctl flock cp mv readlink stat tee; do
+    command -v "$command" >/dev/null 2>&1 || {
+        fail "Не найдена обязательная команда: $command"
+    }
 done
 
 mkdir -p "$(dirname "$LOCK_FILE")" "$BACKUP_ROOT" "$RELEASES_DIR" /var/log/hydra
@@ -75,7 +121,7 @@ chmod 0700 "$BACKUP_ROOT"
 chmod 0755 "$RELEASES_DIR"
 if [[ ! -L "$INSTALL_DIR" ]]; then
     [[ "$(stat -c %d -- "$INSTALL_DIR")" == "$(stat -c %d -- "$RELEASES_DIR")" ]] || {
-        fail "HYDRA_INSTALL_DIR and HYDRA_RELEASES_DIR must share a filesystem"
+        fail "HYDRA_INSTALL_DIR и HYDRA_RELEASES_DIR должны быть на одной файловой системе"
     }
 fi
 touch /var/log/hydra/upgrade.log
@@ -83,7 +129,7 @@ chmod 0600 /var/log/hydra/upgrade.log
 exec > >(tee -a /var/log/hydra/upgrade.log) 2>&1
 
 exec 9>"$LOCK_FILE"
-flock -n 9 || fail "another HYDRA upgrade is already running"
+flock -n 9 || fail "Другое обновление HYDRA уже выполняется."
 
 STAMP=$(date -u +%Y%m%d-%H%M%SZ)
 UPDATER_BASHPID=$BASHPID
@@ -137,7 +183,7 @@ discover_units() {
             'hydra-*' 'caddy-l4.service' \
             --no-legend --no-pager 2>/dev/null
     ); then
-        fail "cannot enumerate HYDRA systemd units"
+        fail "Не удалось получить список служб HYDRA в systemd."
         return 1
     fi
     while read -r unit state _; do
@@ -156,7 +202,7 @@ capture_active_units() {
                 --property=ActiveState,Type,RemainAfterExit \
                 --no-pager 2>/dev/null
         ); then
-            fail "cannot inspect systemd unit: $unit"
+            fail "Не удалось проверить службу systemd: $unit"
             return 1
         fi
         active_state=""
@@ -170,7 +216,7 @@ capture_active_units() {
             esac
         done <<< "$properties"
         [[ -n "$active_state" ]] || {
-            fail "systemd returned incomplete state for unit: $unit"
+            fail "Systemd вернул неполное состояние службы: $unit"
             return 1
         }
         case "$active_state" in
@@ -229,7 +275,7 @@ wait_for_previous_units() {
     done
     for unit in "${ACTIVE_UNITS[@]}"; do
         systemctl is-active --quiet "$unit" || {
-            printf 'unit did not recover: %s\n' "$unit" >&2
+            printf 'Служба не восстановилась: %s\n' "$unit" >&2
         }
     done
     return 1
@@ -241,7 +287,7 @@ restore_state_snapshot() {
     local archived_state="$ROLLBACK_DIR/state-after-failed-upgrade"
     local failed_state="${STATE_DIR}.failed-upgrade-${STAMP}-${UPDATER_BASHPID}"
     if ((STATE_EXISTED)) && [[ ! -d "$STATE_ROLLBACK_DIR" ]]; then
-        printf 'same-filesystem state rollback copy is missing: %s\n' \
+        printf 'Не найдена локальная копия состояния для отката: %s\n' \
             "$STATE_ROLLBACK_DIR" >&2
         return 1
     fi
@@ -256,7 +302,7 @@ restore_state_snapshot() {
         fi
     fi
     if [[ -e "$failed_state" ]] && ! mv "$failed_state" "$archived_state"; then
-        printf 'failed state retained at %s\n' "$failed_state" >&2
+        printf 'Состояние после сбоя сохранено: %s\n' "$failed_state" >&2
     fi
     return 0
 }
@@ -303,7 +349,7 @@ cleanup_transient_paths() {
         && [[ "$STATE_ROLLBACK_DIR" == "${STATE_DIR}.upgrade-rollback-"* ]] \
         && [[ -d "$STATE_ROLLBACK_DIR" ]]; then
         rm -rf -- "$STATE_ROLLBACK_DIR" || {
-            printf 'stale rollback copy retained at %s\n' \
+            printf 'Неиспользованная копия отката сохранена: %s\n' \
                 "$STATE_ROLLBACK_DIR" >&2
         }
     fi
@@ -318,7 +364,7 @@ rollback() {
     trap - ERR
     trap '' HUP INT TERM
     set +e
-    result_error "Обновление не завершено (строка ${line}, код ${code}). Запускаю откат."
+    result_error "Сбой на строке ${line} (код ${code}). Запускаю откат."
     if [[ -n "$CURRENT_OPERATION" ]]; then
         printf 'Сбой операции: %s\n' "$CURRENT_OPERATION" >&2
     fi
@@ -332,11 +378,11 @@ rollback() {
         restore_state_snapshot || critical_restore_ok=0
         restore_installation || critical_restore_ok=0
         restore_wrapper || {
-            printf 'command wrapper restoration failed\n' >&2
+            printf 'Не удалось восстановить команду hydra.\n' >&2
         }
     elif ((STATE_MUTATION_STARTED || CUTOVER_STARTED)); then
         critical_restore_ok=0
-        printf 'services could not be quiesced; state/code restore was skipped\n' >&2
+        printf 'Не удалось остановить службы; восстановление состояния и кода пропущено.\n' >&2
     fi
     cleanup_transient_paths
     if ((SERVICES_QUIESCED && critical_restore_ok)); then
@@ -386,22 +432,26 @@ TARGET_SHA=$(
     git ls-remote --exit-code "$REPO_URL" "refs/heads/$HYDRA_REF" \
         | awk 'NR == 1 {print $1}'
 )
-[[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "could not resolve the target commit"
+[[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+    fail "Не удалось определить целевой commit ветки."
+}
 
 if [[ -d "$INSTALL_DIR/.git" ]]; then
     [[ -z "$(git -C "$INSTALL_DIR" status --porcelain --untracked-files=all)" ]] || {
-        fail "local changes exist in $INSTALL_DIR; preserve or remove them before upgrading"
+        fail "В $INSTALL_DIR есть локальные изменения; сохраните их перед обновлением."
     }
     CURRENT_SHA=$(git -C "$INSTALL_DIR" rev-parse HEAD)
 else
     CURRENT_SHA=$(tr -d '[:space:]' < "$INSTALL_DIR/.hydra-source-revision" 2>/dev/null || true)
 fi
 [[ "$CURRENT_SHA" =~ ^[0-9a-f]{40}$ ]] || {
-    fail "cannot identify the currently installed revision"
+    fail "Не удалось определить commit установленной версии."
 }
 [[ "$CURRENT_SHA" != "$TARGET_SHA" ]] || {
     result_ok "Обновление не требуется: уже установлен ${TARGET_SHA:0:12}."
-    printf 'Лог: /var/log/hydra/upgrade.log\n'
+    summary_row "Ветка" "$HYDRA_REF"
+    summary_row "Commit" "${TARGET_SHA:0:12}"
+    summary_row "Подробный лог" "/var/log/hydra/upgrade.log"
     exit 0
 }
 
@@ -426,7 +476,7 @@ git init --quiet "$STAGE_DIR"
 git -C "$STAGE_DIR" remote add origin "$REPO_URL"
 git -C "$STAGE_DIR" fetch --quiet --depth 1 origin "$TARGET_SHA"
 [[ "$(git -C "$STAGE_DIR" rev-parse FETCH_HEAD)" == "$TARGET_SHA" ]] || {
-    fail "downloaded commit does not match the resolved branch tip"
+    fail "Загруженный commit не совпадает с целевой версией ветки."
 }
 git -C "$STAGE_DIR" checkout --quiet --detach "$TARGET_SHA"
 
@@ -460,9 +510,11 @@ root = pathlib.Path(sys.argv[1])
 upgrade = json.loads((root / "preflight-upgrade.json").read_text())
 check = json.loads((root / "preflight-check.json").read_text())
 if not upgrade.get("ready"):
-    raise SystemExit(f"upgrade preflight failed: {upgrade.get('failures', [])}")
+    raise SystemExit(
+        f"Состояние не готово к обновлению: {upgrade.get('failures', [])}"
+    )
 if not check.get("ok"):
-    raise SystemExit("target preflight failed")
+    raise SystemExit("Предварительная проверка новой версии не пройдена")
 PY
 CURRENT_OPERATION=""
 CURRENT_REPORT=""
@@ -476,7 +528,7 @@ stop_managed_units
 
 if [[ -d "$STATE_DIR" ]]; then
     [[ ! -e "$STATE_ROLLBACK_DIR" ]] || {
-        fail "temporary state rollback path already exists: $STATE_ROLLBACK_DIR"
+        fail "Временный каталог отката уже существует: $STATE_ROLLBACK_DIR"
     }
     cp -a "$STATE_DIR" "$STATE_ROLLBACK_DIR"
     STATE_EXISTED=1
@@ -572,14 +624,14 @@ import sys
 
 check = json.loads(pathlib.Path(sys.argv[1]).read_text())
 if not check.get("ok"):
-    raise SystemExit("post-cutover check failed")
+    raise SystemExit("Итоговая проверка новой версии не пройдена")
 PY
 CURRENT_OPERATION=""
 CURRENT_REPORT=""
 wait_for_previous_units
 
 [[ "$(git -C "$INSTALL_DIR" rev-parse HEAD)" == "$TARGET_SHA" ]] || {
-    fail "installed revision changed during cutover"
+    fail "Commit установки неожиданно изменился во время переключения."
 }
 
 printf '%s\n' "$TARGET_SHA" > "$ROLLBACK_DIR/SUCCESS"
@@ -593,6 +645,8 @@ WRAPPER_MUTATION_STARTED=0
 cleanup_transient_paths
 trap - ERR HUP INT TERM
 
-result_ok "HYDRA обновлена ${CURRENT_SHA:0:12} -> ${TARGET_SHA:0:12} (ветка $HYDRA_REF)."
-printf 'Снимок отката: %s\n' "$ROLLBACK_DIR"
-printf 'Лог: /var/log/hydra/upgrade.log\n'
+result_ok "Новая версия HYDRA установлена и проверена."
+summary_row "Ветка" "$HYDRA_REF"
+summary_row "Переход" "${CURRENT_SHA:0:12} → ${TARGET_SHA:0:12}"
+summary_row "Снимок отката" "$ROLLBACK_DIR"
+summary_row "Подробный лог" "/var/log/hydra/upgrade.log"

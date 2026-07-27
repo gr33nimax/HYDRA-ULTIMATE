@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from hydra.core.state_models import AppState, User
 from hydra.services.application import ApplicationService
 from hydra.services.device_sessions import user_sessions
-from hydra.services.subscriptions.devices import NETWORK_SOURCE
+from hydra.ui._menus.device_formatting import address_label, source_label
 from hydra.ui.tui import (
     BOLD,
     CYAN,
@@ -50,28 +50,6 @@ def _timestamp(value: str) -> str:
         return value[:16] if value else "—"
 
 
-_ADDRESS_WIDTH = 30
-
-
-def _address_label(address: str) -> str:
-    """Explain a loopback address instead of showing it as the device."""
-    if address in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
-        return "адрес скрыт мультиплексором"
-    if not address:
-        return "адрес неизвестен"
-    if len(address) <= _ADDRESS_WIDTH:
-        return address
-    return f"{address[:_ADDRESS_WIDTH - 1]}…"
-
-
-def _source_label(source: str) -> str:
-    if not source:
-        return "неизвестно"
-    if source == NETWORK_SOURCE:
-        return "по адресу и клиенту"
-    return source
-
-
 def device_lines(state: AppState, user: User) -> list[str]:
     """Build the device report shown in the user's device screen."""
     limit = user.device_limit
@@ -98,8 +76,8 @@ def device_lines(state: AppState, user: User) -> list[str]:
             f"{_timestamp(str(record.get('last_seen', '')))}",
         )
         lines.append(
-            f"  {DIM}    {_source_label(str(record.get('source', '')))[:22]} · "
-            f"{_address_label(str(record.get('address', '')))} · с "
+            f"  {DIM}    {source_label(str(record.get('source', '')), client)[:22]} · "
+            f"{address_label(str(record.get('address', '')))} · с "
             f"{_timestamp(str(record.get('first_seen', '')))}{NC}",
         )
 
@@ -115,7 +93,7 @@ def device_lines(state: AppState, user: User) -> list[str]:
             else f"{session.connections} соед."
         )
         lines.append(
-            f"  {marker} {_address_label(session.address)[:24]:<24} {state_text:<18} "
+            f"  {marker} {address_label(session.address)[:24]:<24} {state_text:<18} "
             f"{_bytes_auto(session.bytes_total):>9}  {_ago(session.last_seen)}",
         )
     if any(not session.allowed for session in sessions):
