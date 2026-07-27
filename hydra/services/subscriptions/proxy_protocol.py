@@ -24,7 +24,7 @@ def looks_like_proxy_header(connection: socket.socket) -> bool:
         prefix = connection.recv(len(SIGNATURE), socket.MSG_PEEK)
     except (OSError, ValueError):
         return False
-    return prefix == SIGNATURE
+    return bool(prefix) and SIGNATURE.startswith(prefix)
 
 
 def _read_exactly(connection: socket.socket, count: int) -> bytes:
