@@ -427,8 +427,7 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
         self,
         state: PluginStateAccess,
         mode: str,
-        handshake: str = "",
-        short_id: str = "",
+        handshake: str = "", domain: str = "", short_id: str = "",
     ) -> bool:
         """Switch between a certificate on your domain and a Reality handshake."""
         normalized = validate_security(mode)
@@ -438,6 +437,7 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
         if normalized == MODE_TLS:
             apply_tls_mode(
                 protocol.config,
+                domain=domain or protocol.config.get("domain", ""),
                 decoy_route=self.route_config(),
             )
             return True
