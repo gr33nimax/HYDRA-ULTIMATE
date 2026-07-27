@@ -115,7 +115,10 @@ hydra status
 - желаемые и фактические флаги сети;
 - состояние плагинов;
 - runtime drift;
-- аудит TLS/SNI-маршрутов.
+- аудит TLS/SNI-маршрутов;
+- блок `certificates`: момент последней суточной проверки сертификатов и срок
+  каждого из них в днях. Значения берутся из state и не требуют обращения к
+  хосту, поэтому `status` остаётся мгновенным.
 
 `status` предназначен для наблюдения. Он не отвечает, безопасно ли сейчас
 применять конфигурацию — для этого есть `check`.
@@ -206,6 +209,40 @@ sudo hydra backup restore /root/hydra.tar.gz --yes
 
 Симлинки, path traversal, дубликаты и файлы вне policy отклоняются.
 
+## Типовые сценарии
+
+### Безопасный порядок изменения
+
+```bash
+sudo hydra backup create --output /root/hydra-before-change.tar.gz
+hydra check
+sudo hydra apply
+hydra status
+```
+
+Команды чтения не требуют `root` и не меняют систему, поэтому `check` и `status`
+безопасно вызывать в любой момент, в том числе из мониторинга.
+
+### Если что-то сломалось
+
+```bash
+hydra status
+hydra check
+sudo journalctl -u sing-box -u caddy-l4 --no-pager -n 100
+sudo hydra apply                     # повторный запуск — штатный сценарий
+```
+
+`apply` идемпотентен: он приводит рантайм к желаемому состоянию и откатывает
+частичное изменение, поэтому повтор после устранённой причины — обычный ход.
+
+### Восстановление из архива
+
+```bash
+sudo hydra backup restore /root/hydra-before-change.tar.gz --dry-run
+sudo hydra backup restore /root/hydra-before-change.tar.gz --yes
+sudo hydra apply
+```
+
 ## Пользователи
 
 Команды чтения:
@@ -236,6 +273,23 @@ sudo hydra user ensure-default
 User lifecycle проходит через общий application service и откатывается вместе
 с plugin hooks, state и runtime apply.
 
+Лимит трафика и срок действия применяются независимо от ручной блокировки:
+исчерпанный лимит отключает доступ без `block`, а `unblock` не вернёт доступ,
+пока ограничение действует.
+
+`set-device-limit` ограничивает число **одновременно подключённых** устройств.
+Устройством на канале данных считается адрес источника: демон трафика группирует
+активные соединения по адресу и закрывает те, что принадлежат устройствам сверх
+лимита. Приоритет у подключившихся раньше — установленное соединение не рвётся
+из-за нового устройства. `--reset` дополнительно забывает зарегистрированные
+привязки, и следующий запрос подписки создаст их заново.
+
+`hydra user show` возвращает список устройств: префикс идентификатора, источник
+(заголовок HWID или `network-client`), клиент из `User-Agent`, адрес и время
+первого и последнего обращения за подпиской. Без HWID стабильным резервным
+идентификатором служит `User-Agent`: смена IP обновляет адрес существующей
+записи, а старые дубли того же клиента объединяются при следующем запросе.
+
 `users` является алиасом `user`.
 
 ## Плагины
@@ -264,6 +318,17 @@ Metadata-declared extension API:
 
 ```bash
 sudo hydra plugin command hysteria2 set_port --param port=8443
+sudo hydra plugin command vless set_domain --param domain=xhttp.example.com
+sudo hydra plugin command vless set_path --param path=/xhttp
+sudo hydra plugin command vless set_mode --param mode=stream-up
+sudo hydra plugin command vless set_preset --param preset=low_latency
+sudo hydra plugin command vless set_tuning --param padding=500-2000 \
+  --param max_post_bytes=500000 --param no_sse_header=true
+sudo hydra plugin command vless set_tuning \
+  --param 'headers={"X-Requested-With":"XMLHttpRequest"}'
+sudo hydra plugin command vless set_tuning --param utls_fingerprint=chrome
+sudo hydra plugin command anytls set_decoy_theme --param theme=cafe
+hydra plugin query vless get_tuning --with-state
 hydra plugin query warp external_sources --with-state
 sudo hydra plugin action dnscrypt apply_server_names \
   --param 'names=["cloudflare","quad9-dnscrypt-ip4-filter-pri"]'
@@ -272,6 +337,96 @@ sudo hydra plugin action dnscrypt apply_server_names \
 `--param NAME=JSON` можно повторять. Операция должна быть объявлена в
 `PluginMeta.commands`, `queries` или `actions`; произвольные методы вызвать
 нельзя. Command/action требуют root, query является read-only.
+
+### Режимы TLS у `vless`
+
+Транспорт работает в одном из двух режимов, команда `set_security` переключает
+их вместе со всеми зависимостями:
+
+```bash
+sudo hydra plugin command vless set_security --param mode=tls
+sudo hydra plugin command vless set_security --param mode=reality   --param handshake=www.samsung.com
+```
+
+| | `tls` | `reality` |
+| :--- | :--- | :--- |
+| Домен и сертификат | обязательны, выпускает certbot | не нужны |
+| Кто завершает TLS | Caddy L4 | сам Sing-Box, повторяя чужое рукопожатие |
+| Порт 443 | делится по SNI с другими транспортами | свой, либо SNI-проброс через Caddy |
+| Сайт-заглушка | обслуживает остальные URL домена | не используется |
+| Клиент подключается к | домену | публичному IP сервера |
+| Ссылка | `security=tls&sni=<домен>` | `security=reality&pbk=&sid=&fp=` |
+
+При переключении в `reality` пара ключей создаётся через
+`sing-box generate reality-keypair`, а `short_id` — случайные 8 hex-символов.
+Приватный ключ остаётся в state и не попадает ни в статус, ни в ссылки. Обратное
+переключение в `tls` возвращает маршрут заглушки и требует домен; ключи Reality
+сохраняются, поэтому повторное включение не меняет ссылки.
+
+Хост для рукопожатия должен поддерживать TLS 1.3 и HTTP/2, не находиться в РФ и
+не быть уже занятым CDN вашего сервера.
+
+Для `vless` в режиме `tls` сначала задайте отдельный домен, DNS-запись которого
+указывает на VPS, затем выполните `sudo hydra plugin enable vless`. Certificate preflight
+получит сертификат, а общий apply создаст XHTTP inbound, маршрут Caddy и
+заглушку. Поддерживаемые mode: `stream-up`, `packet-up`, `stream-one`.
+Команда вернёт успех только после проверки активного SNI-маршрута, загрузки
+сертификата в Caddy и локального TLS handshake с ALPN `h2`; при ошибке apply
+откатит состояние и runtime и вернёт точную причину.
+
+`set_tuning` принимает любое подмножество параметров транспорта XHTTP и
+применяет их одной транзакцией; неизвестный параметр или значение вне диапазона
+отклоняются до изменения состояния:
+
+| Параметр | Значение | По умолчанию |
+| :--- | :--- | :--- |
+| `padding` | диапазон байт `N` или `N-M`, 0–65535; `0` отключает паддинг | `100-1000` |
+| `max_post_bytes` | размер upload-пакета, 4096–16777216 | `1000000` |
+| `max_buffered_posts` | глубина буфера upload-пакетов, 1–1024 | `30` |
+| `stream_up_secs` | длительность stream-up, диапазон секунд 0–3600 | `20-80` |
+| `max_header_bytes` | лимит заголовков запроса на сервере, 1024–65536 | `8192` |
+| `no_sse_header` | не отправлять SSE-заголовок (CDN с буферизацией) | `false` |
+| `headers` | до 16 собственных HTTP-заголовков; `Host`, `Connection`, `Content-Length`, `Transfer-Encoding` и `Upgrade` запрещены | `{}` |
+
+`set_preset` выставляет режим и весь набор параметров согласованно:
+
+| Профиль | Режим | padding | post | буфер | сессия |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `balanced` | `stream-up` | `100-1000` | 1000000 | 30 | `20-80` |
+| `low_latency` | `stream-one` | `1-64` | 262144 | 10 | `10-30` |
+| `stealth` | `stream-up` | `500-2000` | 1000000 | 30 | `30-120` |
+`get_tuning` возвращает действующие значения и имя профиля (`custom`, если набор
+не совпадает ни с одним профилем). Пользовательские заголовки не влияют на
+определение профиля.
+
+`utls_fingerprint` задаёт TLS-отпечаток клиента: `none` (по умолчанию — выбор
+остаётся за клиентом), `chrome`, `firefox`, `safari`, `edge`, `ios`, `android`,
+`random`, `randomized`. Значение попадает в клиентский профиль как блок
+`tls.utls` и в ссылку как `fp=`; сервер его не использует.
+
+### Сайт-заглушка
+
+Протоколы с собственным доменом — `naive`, `anytls`, `trusttunnel`, `hysteria2`
+и `vless` — объявляют команду `set_decoy_theme`. Она выбирает сайт, который
+отдаётся на домене всем, кто не является клиентом:
+
+```bash
+sudo hydra plugin command hysteria2 set_decoy_theme --param theme=gallery
+```
+
+Доступные темы: `landing`, `blog`, `docs`, `media`, `status`, `portfolio`,
+`shop`, `apidocs`, `conference`, `gallery`, `cafe`.
+
+Содержимое сайта выводится из домена: название бренда, палитра, шрифт, тексты и
+favicon у двух установок не совпадают, а повторная генерация того же домена
+воспроизводима. Смена темы перегенерирует сайт и атомарно подменит каталог;
+сайт, размещённый оператором вручную (без файла `.hydra-decoy.json`), не
+трогается.
+
+Клиентские ссылки получают параметр `extra` с изменёнными client-visible
+значениями (`xPaddingBytes`, `scMaxEachPostBytes`, `scMaxBufferedPosts`,
+`scStreamUpServerSecs`, `noSSEHeader`, `headers`); при значениях по умолчанию
+ссылка остаётся прежней. Серверный `max_header_bytes` в ссылку не попадает.
 
 `plugins` является алиасом `plugin`.
 

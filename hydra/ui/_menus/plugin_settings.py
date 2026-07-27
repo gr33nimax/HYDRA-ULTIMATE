@@ -6,6 +6,10 @@ from dataclasses import dataclass
 
 from hydra.core.state_models import AppState, PluginState
 from hydra.services.application import ApplicationService
+from hydra.ui._menus.vless_xhttp_settings import (
+    open_menu as _menu_vless_xhttp,
+    option as _vless_xhttp_option,
+)
 from hydra.ui.tui import error, menu, prompt, success
 from hydra.utils.crypto import gen_token
 
@@ -342,6 +346,10 @@ SETTINGS_ADAPTERS: dict[str, SettingsAdapter] = {
     "snell": SettingsAdapter(
         _standard_settings_option,
         menu_snell_settings,
+    ),
+    "vless": SettingsAdapter(
+        _vless_xhttp_option,
+        _menu_vless_xhttp,
     ),
 }
 

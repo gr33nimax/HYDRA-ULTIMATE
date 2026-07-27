@@ -6,6 +6,11 @@ from hydra.plugins.base import PluginCategory
 from hydra.services.application import ApplicationService
 from hydra.ui._menus import plugin_settings
 from hydra.ui._menus.protocol_activation import run_lifecycle_action
+from hydra.ui._menus.decoy_theme import (
+    choose_theme,
+    decoy_option,
+    open_decoy_menu,
+)
 from hydra.ui._menus.plugin_dispatch import (
     open_plugin_settings,
     open_special_plugin_menu,
@@ -155,8 +160,8 @@ def _plugin_options(
         options.append(
             (
                 "2",
-                "👥 Клиенты",
-                "Подключённые клиенты и трафик",
+                "📊 Трафик протокола",
+                "Учтённые байты по пользователям",
             ),
         )
     if settings := plugin_settings_option(
@@ -164,6 +169,8 @@ def _plugin_options(
         desired,
     ):
         options.append(("3", *settings))
+    if decoy := decoy_option(plugin, desired):
+        options.append(("4", *decoy))
     options.extend(
         [
             ("8", "🔄 Переустановить", "Переустановка протокола"),
@@ -189,6 +196,7 @@ def _toggle_or_install(
         report_info=info,
         report_success=success,
         pause=prompt,
+        choose_decoy=choose_theme,
     )
 
 
@@ -253,9 +261,11 @@ def menu_plugin(
             and desired.installed
             and desired.enabled
         ):
-            _show_plugin_clients(state, plugin, app)
+            _show_plugin_traffic(state, plugin, app)
         elif choice == "3":
             open_plugin_settings(state, plugin, app)
+        elif choice == "4" and decoy_option(plugin, desired):
+            open_decoy_menu(state, plugin, app)
         elif choice in {"8", "9"} and desired.installed:
             if _reinstall_or_remove(choice, state, plugin, app):
                 return
@@ -279,13 +289,13 @@ def _menu_snell_settings(
     plugin_settings.menu_snell_settings(state, plugin, app)
 
 
-def _show_plugin_clients(
+def _show_plugin_traffic(
     state: AppState,
     plugin,
     app: ApplicationService,
 ) -> None:
     from hydra.ui._menus.extended_protocols import (
-        _show_plugin_clients as show,
+        _show_plugin_traffic as show,
     )
 
     show(state, plugin, app)
@@ -294,7 +304,7 @@ def _show_plugin_clients(
 __all__ = [
     "_menu_hysteria2_settings",
     "_menu_snell_settings",
-    "_show_plugin_clients",
+    "_show_plugin_traffic",
     "menu_network_services",
     "menu_plugin",
     "menu_protocols",

@@ -29,6 +29,17 @@ def _state() -> tuple[AppState, User]:
         "obfs_password": "obfs-secret",
     })
     state.protocols["snell"] = PluginState(enabled=True, installed=True)
+    state.protocols["vless"] = PluginState(
+        enabled=True,
+        installed=True,
+        config={
+            "domain": "xhttp.example.com",
+            "cert_file": "/cert.pem",
+            "key_file": "/key.pem",
+            "xhttp_mode": "stream-up",
+            "xhttp_path": "/xhttp",
+        },
+    )
     return state, user
 
 
@@ -37,13 +48,14 @@ def test_share_subscription_contains_both_extended_transports():
     links = generate_links(user, state, plugins=PLUGINS)
     assert any(link.startswith("hysteria2://") for link in links)
     assert any(link.startswith("snell://") for link in links)
+    assert any(link.startswith("vless://") for link in links)
 
 
 def test_singbox_subscription_contains_both_outbounds():
     state, user = _state()
     config = generate_singbox_config(user, state, plugins=PLUGINS)
     outbound_types = {outbound["type"] for outbound in config["outbounds"]}
-    assert {"hysteria2", "snell", "direct"} <= outbound_types
+    assert {"hysteria2", "snell", "vless", "direct"} <= outbound_types
     assert config["route"]["final"].startswith("hysteria2-")
 
 

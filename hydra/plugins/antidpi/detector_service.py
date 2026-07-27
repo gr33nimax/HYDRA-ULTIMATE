@@ -12,6 +12,7 @@ from hydra.plugins.antidpi.model import (
     BAN_NOTIFICATION_COOLDOWN,
     format_score,
     get_ban_duration,
+    record_ban_failure,
     track_notification,
 )
 
@@ -36,8 +37,32 @@ class AntiDPIDetectorMixin:
             ("Protocol", str(event.get("protocol", "L4"))),
             ("Source", observation.source),
             ("Signals", ", ".join(observation.signals)),
-            ("Score", format_score(observation.entry["score"])),
+            (
+                "Score",
+                format_score(
+                    observation.entry["score"],
+                    threshold=observation.required_score,
+                ),
+            ),
         ]
+        if observation.families:
+            fields.append(("Evidence", ", ".join(observation.families)))
+        if observation.block_reason == "single_family":
+            fields.append(
+                (
+                    "Policy",
+                    "alert-only / улики одного типа, для бана нужен "
+                    "второй независимый признак",
+                ),
+            )
+        if observation.coordinated:
+            fields.append(
+                (
+                    "Coordinated",
+                    f"{observation.coordinated.get('prefix', '—')} "
+                    f"({observation.coordinated.get('members', 0)} адресов)",
+                ),
+            )
         if not observation.evidence_can_ban:
             fields.append(
                 (
@@ -126,6 +151,33 @@ class AntiDPIDetectorMixin:
         except Exception:
             return False
 
+    def _notify_coordination(self, observation: Observation) -> bool:
+        report = observation.coordinated
+        try:
+            return bool(
+                self._notify_security_event(
+                    "AntiDPI",
+                    "COORDINATED",
+                    [
+                        ("Subnet", report.get("prefix", "—")),
+                        ("Addresses", report.get("members", 0)),
+                        (
+                            "Seen",
+                            ", ".join(report.get("addresses", ())[:5]),
+                        ),
+                        ("Window", "10m"),
+                        (
+                            "Policy",
+                            "alert-only / распределённое сканирование, "
+                            "адреса банятся только по собственным уликам",
+                        ),
+                    ],
+                    category="antidpi",
+                ),
+            )
+        except Exception:
+            return False
+
     def _record_alert(self, data: dict, observation: Observation) -> None:
         delivered = self._notify_alert(observation)
         track_notification(
@@ -133,6 +185,16 @@ class AntiDPIDetectorMixin:
             delivered,
             now=observation.timestamp,
         )
+
+    def _record_coordination(
+        self,
+        data: dict,
+        observation: Observation,
+    ) -> None:
+        if not observation.coordinated.get("first_report"):
+            return
+        delivered = self._notify_coordination(observation)
+        track_notification(data, delivered, now=observation.timestamp)
 
     def _record_ban_notice(
         self,
@@ -181,6 +243,7 @@ class AntiDPIDetectorMixin:
             )
             if observation.should_alert:
                 self._record_alert(data, observation)
+            self._record_coordination(data, observation)
             if observation.active_ban:
                 store.save(data)
                 return True
@@ -200,5 +263,11 @@ class AntiDPIDetectorMixin:
                     metadata = record_automatic_ban(data, observation)
                     self._record_ban_notice(data, observation, metadata)
                     banned = True
+                else:
+                    record_ban_failure(
+                        data,
+                        observation.address,
+                        now=timestamp,
+                    )
             store.save(data)
             return banned

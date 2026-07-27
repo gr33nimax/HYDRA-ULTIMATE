@@ -8,6 +8,10 @@ from hydra.services.system_monitoring_compatibility import (
     monitoring_from_application,
 )
 from hydra.ui._menus.monitoring_connections import _show_connections
+from hydra.ui._menus.monitoring_devices import (
+    _show_devices,
+    summarize as _device_summary,
+)
 from hydra.ui._menus.monitoring_logs import _menu_logs
 from hydra.ui._menus.monitoring_realtime import _show_realtime_sys_monitor
 from hydra.ui._menus.monitoring_services import (
@@ -69,6 +73,7 @@ def menu_monitoring(
             f"  🔌 {BOLD}Протоколы:{NC} {GREEN}{running_count} работают{NC} / {len(enabled_names)} включено",
             f"  👥 {BOLD}Пользователи:{NC} {CYAN}{active_users} активны{NC} / {users_count} всего",
             f"  🖥️  {BOLD}Система:{NC} Load Avg {YELLOW}{load_str}{NC}  │  RAM {YELLOW}{ram_str}{NC}",
+            f"  📱 {BOLD}Устройства:{NC} {_device_summary(state).headline}",
             f"  ⚙️  {BOLD}Фоновые службы:{NC} Sync Agent "
             f"{f'{GREEN}●{NC}' if sync_active else f'{DIM}○{NC}'}  Clash API "
             f"{f'{GREEN}●{NC}' if traffic_active else f'{DIM}○{NC}'}",
@@ -80,7 +85,8 @@ def menu_monitoring(
                 ("1", "📊 Потребление трафика", "Сводная статистика по протоколам и пользователям"),
                 ("2", "🔌 Подключения и активность", "Активные сессии и недавние запросы пользователей"),
                 ("3", "📈 Живой монитор CPU/RAM", "Нагрузка системы, скорость сети и метрики"),
-                ("4", "⚙️ Фоновые службы и логи", "Учёт трафика, синхронизация и системные журналы"),
+                ("4", "📱 Устройства и сессии", "Кто подключён, с каких адресов и кто вне лимита"),
+                ("5", "⚙️ Фоновые службы и логи", "Учёт трафика, синхронизация и системные журналы"),
                 ("0", "↩ Назад", ""),
             ],
             "МОНИТОРИНГ",
@@ -94,6 +100,8 @@ def menu_monitoring(
         elif choice == "3":
             _show_realtime_sys_monitor(app)
         elif choice == "4":
+            _show_devices(state, app)
+        elif choice == "5":
             _menu_service_settings(state, app)
 
 

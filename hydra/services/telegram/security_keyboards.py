@@ -5,10 +5,35 @@ from collections.abc import Mapping
 
 from hydra.core.state_models import AppState
 from hydra.services.application import ApplicationService
+from hydra.services.telegram import navigation
+from hydra.services.telegram.security_chrome import (
+    _back_keyboard,
+    address_keyboard,
+    antidpi_list_keyboard,
+    navigation_rows,
+    quiet_hours_keyboard,
+)
 from hydra.services.telegram.sdk import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
+
+__all__ = [
+    "_antidpi_keyboard",
+    "_back_keyboard",
+    "_fail2ban_keyboard",
+    "_honeypot_keyboard",
+    "_main_keyboard",
+    "_notification_keyboard",
+    "_set_plugin_running",
+    "_toggle_antidpi",
+    "_toggle_fail2ban",
+    "_toggle_honeypot",
+    "address_keyboard",
+    "antidpi_list_keyboard",
+    "navigation_rows",
+    "quiet_hours_keyboard",
+]
 
 def _mapping_projection(value: object) -> dict:
     return dict(value) if isinstance(value, Mapping) else {}
@@ -51,22 +76,6 @@ def _main_keyboard():
         ],
     )
 
-def _back_keyboard(*, refresh: str = "home", extra: list | None = None):
-    rows = list(extra or [])
-    rows.append(
-        [
-            InlineKeyboardButton(
-                "🔄 Обновить",
-                callback_data=f"view:{refresh}",
-            ),
-            InlineKeyboardButton(
-                "⬅️ Меню",
-                callback_data="view:home",
-            ),
-        ],
-    )
-    return InlineKeyboardMarkup(rows)
-
 def _notification_keyboard():
     return InlineKeyboardMarkup(
         [
@@ -99,11 +108,18 @@ def _notification_keyboard():
                     "Системные",
                     callback_data="notify:notify_system",
                 ),
+            ],
+            [
                 InlineKeyboardButton(
-                    "⬅️ Меню",
-                    callback_data="view:home",
+                    "🌙 Тихие часы",
+                    callback_data=navigation.view_callback("quiet"),
+                ),
+                InlineKeyboardButton(
+                    "🔕 Только блокировки",
+                    callback_data="notify:notify_only_blocks",
                 ),
             ],
+            *navigation_rows("notifications"),
         ],
     )
 
@@ -116,32 +132,22 @@ def _antidpi_keyboard(app: ApplicationService):
                 action,
                 callback_data="ask:antidpi_toggle",
             ),
+            InlineKeyboardButton(
+                "🧾 Подробнее",
+                callback_data=navigation.view_callback("antidpi_details"),
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🚫 Блокировки",
+                callback_data=navigation.view_callback("antidpi_bans"),
+            ),
+            InlineKeyboardButton(
+                "👁 Наблюдение",
+                callback_data=navigation.view_callback("antidpi_watch"),
+            ),
         ],
     ]
-    try:
-        data = _mapping_projection(
-            app.plugin_query("antidpi", "management_snapshot"),
-        )
-        banned = _mapping_projection(data.get("banned"))
-        addresses = [
-            address
-            for address, _metadata in sorted(
-                banned.items(),
-                key=lambda item: float(item[1].get("at", 0) or 0),
-                reverse=True,
-            )[:5]
-        ]
-    except Exception:
-        addresses = []
-    for address in addresses:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    f"🔓 {address}",
-                    callback_data=f"ask-unban:{address}",
-                ),
-            ],
-        )
     return _back_keyboard(refresh="antidpi", extra=rows)
 
 def _set_plugin_running(

@@ -6,6 +6,7 @@ import urllib.parse
 
 from hydra.core.state_models import User
 from hydra.plugins.context import PluginStateAccess
+from hydra.plugins.decoy_support import DecoyThemeSupport
 from hydra.plugins.base import BasePlugin, ConfigFragment, PluginCategory, PluginMeta, PluginStatus
 from hydra.utils.crypto import derive_hex_key
 from hydra.utils.net import public_ip
@@ -16,7 +17,9 @@ DEFAULT_PORT = 8443
 DECOY_DIR = "/var/www/decoy-hysteria2"
 
 
-class Hysteria2Plugin(BasePlugin):
+class Hysteria2Plugin(DecoyThemeSupport, BasePlugin):
+
+    decoy_default_theme = "status"
     meta = PluginMeta(
         name="hysteria2",
         description="Hysteria2: QUIC-транспорт с Salamander obfuscation",
@@ -28,8 +31,10 @@ class Hysteria2Plugin(BasePlugin):
             "set_port",
             "set_congestion",
             "set_obfs_password",
+            "set_decoy_theme",
         ),
         tls_domain_source="protocol",
+        config_defaults=(("decoy_theme", "status"),),
         connection_source="tracked",
     )
 
@@ -85,7 +90,12 @@ class Hysteria2Plugin(BasePlugin):
     def apply(self, state: PluginStateAccess) -> bool:
         from hydra.core.decoy import ensure_decoy_site
         from hydra.utils.firewall import open_tcp
-        ensure_decoy_site("hysteria2")
+        protocol = state.protocols.get("hysteria2")
+        ensure_decoy_site(
+            "hysteria2",
+            self.decoy_theme(state),
+            domain=str(protocol.config.get("domain", "")) if protocol else "",
+        )
         open_tcp(80, "hysteria2-decoy-http")
         open_tcp(443, "hysteria2-decoy")
         return True

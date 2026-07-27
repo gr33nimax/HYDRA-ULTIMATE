@@ -48,7 +48,15 @@ python -m hydra.cli validate
 python -m hydra.cli doctor
 python -m hydra.cli upgrade check
 python -m hydra.cli upgrade migrate-state
-test "$(python -c 'import json; print(json.load(open("/var/lib/hydra/state.json"))["version"])')" = "4"
+python - <<'PY'
+import json
+from pathlib import Path
+
+from hydra.core.state_models import SCHEMA_VERSION
+
+state = json.loads(Path("/var/lib/hydra/state.json").read_text(encoding="utf-8"))
+assert state["version"] == SCHEMA_VERSION
+PY
 python -m hydra.cli backup > "$tmp_dir/backup.json"
 archive=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["archive"])' "$tmp_dir/backup.json")
 python -m hydra.cli restore "$archive" --dry-run

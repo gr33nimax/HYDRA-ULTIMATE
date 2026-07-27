@@ -28,6 +28,7 @@ from hydra.core.sni_router import (
     _official_go_digest,
     _run_caddy_build,
 )
+from hydra.core.sni_router_runtime import probe_tls_route
 from hydra.core.state import AppState, PluginState
 
 
@@ -116,16 +117,99 @@ def test_audit_routes_accepts_matching_config_and_certificates(tmp_path):
     state.protocols["anytls"].config.update(cert_file=str(cert), key_file=str(key))
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({
-        "apps": {"layer4": {"servers": {"tls_mux": {"routes": [
-            {"match": [{"tls": {"sni": ["anytls.com"]}}]}
-        ]}}}}}
-    ))
+        "apps": {
+            "layer4": {"servers": {"tls_mux": {"routes": [
+                {"match": [{"tls": {"sni": ["anytls.com"]}}]}
+            ]}}},
+            "tls": {"certificates": {"load_files": [{
+                "certificate": str(cert),
+                "key": str(key),
+            }]}},
+        },
+    }))
     with patch("hydra.core.sni_router.CADDY_CFG", config_path), \
          patch("hydra.core.sni_router.is_active", return_value=True):
         report = audit_routes(state)
     assert report.ok is True
     assert report.missing == ()
     assert report.actual == ("anytls.com",)
+
+
+def test_audit_routes_rejects_certificate_missing_from_active_config(tmp_path):
+    state = _state(anytls_enabled=True)
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    cert.write_text("cert")
+    key.write_text("key")
+    state.protocols["anytls"].config.update(
+        cert_file=str(cert),
+        key_file=str(key),
+    )
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "apps": {"layer4": {"servers": {"tls_mux": {"routes": [
+            {"match": [{"tls": {"sni": ["anytls.com"]}}]},
+        ]}}}},
+    }))
+
+    with patch("hydra.core.sni_router.CADDY_CFG", config_path), \
+         patch("hydra.core.sni_router.is_active", return_value=True):
+        report = audit_routes(state)
+
+    assert report.ok is False
+    assert report.certificate_errors == (
+        "anytls.com: certificate pair is not loaded by Caddy",
+    )
+
+
+def test_tls_route_probe_requires_verified_h2_handshake():
+    raw = MagicMock()
+    raw.__enter__.return_value = raw
+    tls = MagicMock()
+    tls.__enter__.return_value = tls
+    tls.selected_alpn_protocol.return_value = "h2"
+    context = MagicMock()
+    context.wrap_socket.return_value = tls
+
+    with patch(
+        "hydra.core.sni_router_runtime.socket.create_connection",
+        return_value=raw,
+    ) as connect, patch(
+        "hydra.core.sni_router_runtime.ssl.create_default_context",
+        return_value=context,
+    ):
+        healthy, detail = probe_tls_route("xhttp.example.com")
+
+    assert healthy is True
+    assert detail == ""
+    connect.assert_called_once_with(("127.0.0.1", 443), timeout=3.0)
+    context.set_alpn_protocols.assert_called_once_with(["h2"])
+    context.wrap_socket.assert_called_once_with(
+        raw,
+        server_hostname="xhttp.example.com",
+    )
+
+
+def test_tls_route_probe_rejects_wrong_alpn():
+    raw = MagicMock()
+    raw.__enter__.return_value = raw
+    tls = MagicMock()
+    tls.__enter__.return_value = tls
+    tls.selected_alpn_protocol.return_value = "http/1.1"
+    context = MagicMock()
+    context.wrap_socket.return_value = tls
+
+    with patch(
+        "hydra.core.sni_router_runtime.socket.create_connection",
+        return_value=raw,
+    ), patch(
+        "hydra.core.sni_router_runtime.ssl.create_default_context",
+        return_value=context,
+    ):
+        healthy, detail = probe_tls_route("xhttp.example.com")
+
+    assert healthy is False
+    assert detail == "TLS route negotiated ALPN http/1.1 instead of h2"
 
 
 def test_audit_routes_reports_stale_and_missing_domains(tmp_path):

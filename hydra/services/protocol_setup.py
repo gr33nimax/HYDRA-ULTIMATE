@@ -24,8 +24,16 @@ def normalize_protocol_config(
     """Return normalized desired config without mutating the caller's value."""
     normalized = copy.deepcopy(dict(config))
     for key, value in defaults:
-        normalized.setdefault(key, value)
+        normalized.setdefault(key, copy.deepcopy(value))
     return normalized
+
+
+def _requires_tls_domain(plugin: BasePlugin, state: AppState) -> bool:
+    """Ask the plugin whether this desired state still needs a certificate."""
+    hook = getattr(plugin, "needs_tls_domain", None)
+    if not callable(hook):
+        return True
+    return bool(hook(state))
 
 
 def normalize_required_domain(value: object) -> str:
@@ -58,6 +66,10 @@ class ProtocolSetupService:
         defaults = capabilities.config_defaults
         if not source and not defaults:
             return
+        if source and not _requires_tls_domain(plugin, state):
+            # A plugin may serve TLS without owning a certificate, for example
+            # with a borrowed Reality handshake.
+            source = ""
         protocol = state.protocols.get(name)
         if protocol is None:
             raise ValueError(f"Конфигурация {name} отсутствует")

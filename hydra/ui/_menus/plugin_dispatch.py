@@ -6,7 +6,7 @@ from types import ModuleType
 
 from hydra.core.state_models import AppState, PluginState
 from hydra.services.application import ApplicationService
-from hydra.ui._menus import extended_protocols, plugin_settings
+from hydra.ui._menus import extended_protocol_vless, extended_protocols, plugin_settings
 from hydra.ui.plugin_managers import (
     antidpi,
     dnscrypt,
@@ -51,10 +51,8 @@ SPECIAL_PLUGIN_MENUS: dict[str, MenuHandler] = {
     ),
     "anytls": _plugin_handler(extended_protocols, "_menu_anytls"),
     "mieru": _plugin_handler(extended_protocols, "_menu_mieru"),
-    "trusttunnel": _plugin_handler(
-        extended_protocols,
-        "_menu_trusttunnel",
-    ),
+    "trusttunnel": _plugin_handler(extended_protocols, "_menu_trusttunnel"),
+    "vless": _plugin_handler(extended_protocol_vless, "_menu_vless"),
     "antidpi": _application_handler(antidpi, "menu_antidpi"),
     "dnscrypt": _application_handler(dnscrypt, "menu_dnscrypt"),
     "fail2ban": _application_handler(fail2ban, "menu_fail2ban"),

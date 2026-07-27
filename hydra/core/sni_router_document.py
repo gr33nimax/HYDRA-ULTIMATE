@@ -100,8 +100,11 @@ def _tls_app(backends: list[Backend]) -> dict[str, Any]:
         }
         for backend in backends
         if (
-            backend["name"]
-            in ("anytls", "trusttunnel", "hysteria2")
+            (
+                backend["name"]
+                in ("anytls", "trusttunnel", "hysteria2")
+                or backend.get("route_kind") == "http_path_proxy"
+            )
             and backend["cert_file"]
             and backend["key_file"]
         )
@@ -135,7 +138,29 @@ def _tls_route(
     port = backend["port"]
     match = [{"tls": {"sni": [domain]}}]
 
-    if name == "naive":
+    if backend.get("route_kind") == "tls_passthrough":
+        # Reality terminates TLS itself: the multiplexer only reads the SNI.
+        exact_source = name in settings.relay_ports
+        target_port = settings.relay_ports[name] if exact_source else port
+        return {
+            "match": match,
+            "handle": [
+                proxy_factory(
+                    f"127.0.0.1:{target_port}",
+                    proxy_protocol=exact_source,
+                ),
+            ],
+        }
+
+    if backend.get("route_kind") == "http_path_proxy":
+        handlers = [
+            _tls_handler(backend),
+            proxy_factory(
+                f"127.0.0.1:{backend['decoy_port']}",
+                proxy_protocol=True,
+            ),
+        ]
+    elif name == "naive":
         handlers = [
             proxy_factory(f"127.0.0.1:{port}", proxy_protocol=True),
         ]
@@ -192,7 +217,9 @@ def _tls_route(
             ),
         ]
     elif name == "sub_server":
-        handlers = [proxy_factory(f"127.0.0.1:{port}")]
+        # The subscription server records which device asked for a config, so
+        # it needs the real peer rather than the multiplexer's loopback address.
+        handlers = [proxy_factory(f"127.0.0.1:{port}", proxy_protocol=True)]
     else:
         return None
     return {"match": match, "handle": handlers}

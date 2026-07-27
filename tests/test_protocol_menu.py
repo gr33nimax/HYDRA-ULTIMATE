@@ -24,7 +24,7 @@ def test_transport_rows_keep_registry_order_and_status_details():
     lines = transport_summary_lines(plugins, statuses)
     options = transport_options(plugins, statuses)
 
-    assert "vless" in lines[0] and "443" in lines[0]
+    assert "VLESS" in lines[0] and "443" in lines[0]
     assert [row[0] for row in options] == ["1", "2"]
     assert options[1][2] == "broken"
 

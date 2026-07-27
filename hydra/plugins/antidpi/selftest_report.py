@@ -12,7 +12,10 @@ from pathlib import Path
 
 from hydra.core.state_models import AppState
 from hydra.plugins.antidpi.adapters import decode_log_message, parse_protocol_line
-from hydra.plugins.antidpi.normalization import normalize_naive_decoy_record
+from hydra.plugins.antidpi.normalization import (
+    normalize_naive_decoy_record,
+    vless_normalizer,
+)
 
 
 def environment(
@@ -277,21 +280,50 @@ def record_summary(protocol: str, records: list[dict]) -> dict:
 def log_filter_matches(
     protocol: str,
     logs: dict[str, list[str]],
+    *,
+    vless_endpoint: tuple[str, tuple[str, ...]] = ("", ()),
 ) -> list[dict]:
+    """Replay captured access-log lines through the protocol's own filter."""
+    normalizer = _access_log_normalizer(protocol, vless_endpoint)
+    if normalizer is None:
+        return []
     matches = []
-    if protocol != "naive":
-        return matches
     for path, lines in logs.items():
         for line in lines:
             try:
                 record = json.loads(line)
             except (TypeError, ValueError):
                 continue
-            if match := normalize_naive_decoy_record(record):
+            if match := normalizer(record):
                 matches.append(
                     {"unit": path, "ip": match[0], "event": match[1]},
                 )
     return matches
+
+
+def _access_log_normalizer(
+    protocol: str,
+    vless_endpoint: tuple[str, tuple[str, ...]],
+):
+    if protocol == "naive":
+        return normalize_naive_decoy_record
+    if protocol == "vless":
+        domain, paths = vless_endpoint
+        return vless_normalizer(domain, paths)
+    return None
+
+
+def archive_path(output: str | None, *, kind: str, stamp: str) -> Path:
+    """Resolve where a diagnostic bundle is written, creating its parent."""
+    archive = (
+        Path(output)
+        if output
+        else Path(f"/tmp/hydra-antidpi-{kind}-{stamp}.tar.gz")
+    )
+    if archive.is_dir():
+        archive = archive / f"hydra-antidpi-{kind}-{stamp}.tar.gz"
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    return archive
 
 
 def write_selftest_archive(

@@ -13,6 +13,7 @@ from hydra.services.user_access import (
 )
 from hydra.ui._menus.users_common import _application
 from hydra.ui._menus.users_detail import detail_menu_choices
+from hydra.ui._menus.users_devices import open_menu as open_device_menu
 from hydra.ui._menus.users_links import _show_subscription_links, _user_configs
 from hydra.ui._menus.users_overview import _add_user, _select_user, _show_users
 from hydra.ui._menus.users_subscription import menu_subscription_server
@@ -175,9 +176,12 @@ def _user_detail_menu(
                 kv("Создан:", user.created_at[:10] if user.created_at else "—"),
                 kv(
                     "Устройства:",
-                    f"{len(user.devices)} / {user.device_limit}"
-                    if user.device_limit
-                    else f"{len(user.devices)} / ∞",
+                    f"{len(user.devices)} зарегистрировано / "
+                    + (
+                        f"{user.device_limit} одновременно"
+                        if user.device_limit
+                        else "без ограничения"
+                    ),
                 ),
             ],
         )
@@ -232,32 +236,7 @@ def _user_detail_menu(
                 error(str(exc))
             prompt("Нажмите Enter")
         elif choice == "8":
-            raw_limit = prompt(
-                "Максимум устройств (0 = без ограничений)",
-                default=str(user.device_limit),
-            )
-            try:
-                device_limit = int(raw_limit)
-                if device_limit < 0:
-                    raise ValueError
-                reset = confirm(
-                    "Сбросить текущие HWID-привязки?",
-                    default=False,
-                )
-                app.set_user_device_limit(
-                    state,
-                    user.email,
-                    device_limit,
-                    reset=reset,
-                )
-                success(
-                    "Лимит устройств: "
-                    f"{device_limit if device_limit else 'без ограничений'}"
-                    + ("; привязки сброшены" if reset else ""),
-                )
-            except ValueError:
-                error("Лимит должен быть целым неотрицательным числом.")
-            prompt("Нажмите Enter")
+            open_device_menu(state, user, app)
         elif choice == "0":
             return
 

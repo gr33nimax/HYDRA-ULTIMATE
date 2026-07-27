@@ -38,6 +38,7 @@ SINGBOX_CLIENT_PROTOCOLS = {
     "mieru",
     "naive",
     "snell",
+    "vless",
 }
 
 
@@ -173,7 +174,7 @@ def _invalidate_outbounds(config: dict, protocol: str) -> bool:
         ):
             continue
         outbound["server"] = "127.0.0.1"
-        for field in ("password", "username", "psk"):
+        for field in ("password", "username", "psk", "uuid"):
             if field in outbound:
                 outbound[field] = f"HYDRA-INVALID-{field.upper()}"
                 changed = True

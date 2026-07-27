@@ -19,6 +19,10 @@ from hydra.plugins.antidpi.adapters import (
     parse_protocol_line,
     parse_unattributed_protocol_line,
 )
+from hydra.plugins.antidpi.normalization import (
+    vless_endpoint,
+    vless_normalizer,
+)
 from hydra.plugins.antidpi.plugin import (
     LOG_FILE,
     AntiDPIPlugin,
@@ -278,6 +282,24 @@ def _kernel_worker(
         stop.wait(1)
 
 
+def _bind_vless_normalizer(
+    tail: JsonTail,
+    endpoint: tuple[str, tuple[str, ...]],
+) -> None:
+    """Point the shared decoy tail at the current VLESS domain and path.
+
+    The XHTTP path lives in plugin config, so the normalizer is rebound when an
+    operator changes the domain, the path, or disables the transport.
+    """
+    domain, paths = endpoint
+    normalizer = vless_normalizer(domain, paths)
+    tail.normalizers = (
+        (normalizer, normalize_decoy_record)
+        if normalizer is not None
+        else (normalize_decoy_record,)
+    )
+
+
 def run(
     plugin: AntiDPIPlugin,
     *,
@@ -307,9 +329,12 @@ def run(
     )
     for worker in workers:
         worker.start()
+    decoy_tail = JsonTail(DECOY_LOG, (normalize_decoy_record,))
+    synced_vless = vless_endpoint(initial_state)
+    _bind_vless_normalizer(decoy_tail, synced_vless)
     tails = (
         JsonTail(LOG_FILE, (normalize_caddy_record, normalize_tls_auth_failure)),
-        JsonTail(DECOY_LOG, (normalize_decoy_record,)),
+        decoy_tail,
         JsonTail(NAIVE_ACCESS_LOG, (normalize_naive_decoy_record,), create=False),
         JsonTail(TRUSTTUNNEL_LOG, (normalize_trusttunnel_record,)),
     )
@@ -322,9 +347,14 @@ def run(
                     current_udp_ports = udp_protocol_ports(current_state)
                     current_mieru = current_state.protocols.get("mieru")
                     current_mieru_enabled = bool(current_mieru and current_mieru.enabled)
+                    current_vless = vless_endpoint(current_state)
                 except Exception:
                     current_udp_ports = synced_udp_ports
                     current_mieru_enabled = synced_mieru_enabled
+                    current_vless = synced_vless
+                if current_vless != synced_vless:
+                    _bind_vless_normalizer(decoy_tail, current_vless)
+                    synced_vless = current_vless
                 # Recreating hashlimit rules clears their counters. Refresh
                 # only when listener ports changed so sustained silent UDP
                 # rejects can cross the telemetry threshold.

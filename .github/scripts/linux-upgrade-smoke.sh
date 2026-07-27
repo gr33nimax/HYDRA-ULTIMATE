@@ -159,7 +159,7 @@ fi
 [[ "$(git -C "$install_dir" rev-parse HEAD)" == "$main_sha" ]]
 cmp -s "$wrapper" "$wrapper_fixture"
 systemctl is-active --quiet hydra-ci-upgrade.service
-"$install_dir/.venv/bin/python" - <<'PY'
+PYTHONPATH="$install_dir" "$install_dir/.venv/bin/python" - <<'PY'
 import json
 from pathlib import Path
 
@@ -181,15 +181,17 @@ installed_version=$(
     PYTHONPATH="$install_dir" "$install_dir/.venv/bin/python" -c \
         'from hydra import __version__; print(__version__)'
 )
-[[ "$installed_version" == "2.5.4" ]]
+[[ "$installed_version" == "2.5.5" ]]
 systemctl is-active --quiet hydra-ci-upgrade.service
 
-"$install_dir/.venv/bin/python" - <<'PY'
+PYTHONPATH="$install_dir" "$install_dir/.venv/bin/python" - <<'PY'
 import json
 from pathlib import Path
 
+from hydra.core.state_models import SCHEMA_VERSION
+
 state = json.loads(Path("/var/lib/hydra/state.json").read_text())
-assert state["version"] == 4
+assert state["version"] == SCHEMA_VERSION
 assert state["users"][0]["device_limit"] == 2
 assert state["users"][0]["credentials"]["naive"]["password"] == "preserve-me"
 assert state["telegram"]["admin_token"] == "preserve-admin-token"

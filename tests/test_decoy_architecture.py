@@ -10,10 +10,21 @@ FACADE = ROOT / "hydra" / "core" / "decoy.py"
 THEME_PACKAGE = ROOT / "hydra" / "core" / "decoy_sites"
 IMPLEMENTATION_MODULES = {
     "__init__.py",
+    "apidocs.py",
     "blog.py",
     "bootstrap.py",
+    "builder.py",
+    "cafe.py",
+    "conference.py",
     "docs.py",
+    "gallery.py",
+    "identity.py",
+    "kit.py",
     "landing.py",
+    "media.py",
+    "portfolio.py",
+    "registry.py",
+    "shop.py",
     "status.py",
 }
 

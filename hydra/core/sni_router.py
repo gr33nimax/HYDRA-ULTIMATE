@@ -58,6 +58,7 @@ _SOURCE_RELAY_PORTS = {
     "anytls": 21444,
     "trusttunnel": 21445,
     "shadowtls": 21446,
+    "vless": 21448,
 }
 _UDP_SOURCE_RELAY_PORTS = {
     "naive": 21443,
@@ -212,7 +213,17 @@ def _has_sub_domain(state: AppState) -> bool:
 
 
 def _collect_backends(state: AppState) -> list[dict]:
-    return _planning.collect_backends(state, _INTERNAL_PORTS)
+    reserved_ports = {
+        *_DECOY_HTTP_PORTS.values(),
+        *_SOURCE_RELAY_PORTS.values(),
+        *_UDP_SOURCE_RELAY_PORTS.values(),
+        2021,
+    }
+    return _planning.collect_backends(
+        state,
+        _INTERNAL_PORTS,
+        reserved_ports=reserved_ports,
+    )
 
 
 def audit_routes(state: AppState) -> CaddyRouteAudit:
@@ -331,6 +342,10 @@ def is_active() -> bool:
     )
 
 
+def probe_tls_route(domain: str) -> tuple[bool, str]:
+    return _runtime.probe_tls_route(domain)
+
+
 def _caddy_config_had_quic_proxy() -> bool:
     return _runtime.config_had_quic_proxy(CADDY_CFG)
 
@@ -426,6 +441,7 @@ __all__ = [
     "is_active",
     "is_installed",
     "needs_mux",
+    "probe_tls_route",
     "rebuild",
     "stop",
     "uninstall_haproxy",

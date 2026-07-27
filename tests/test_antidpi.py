@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hydra.plugins.antidpi.model import ALERT_THRESHOLD, BAN_THRESHOLD
 from hydra.plugins.antidpi.plugin import (
     AntiDPIPlugin,
     active_bans,
@@ -194,8 +195,14 @@ def test_alert_cooldown_is_scoped_per_protocol(tmp_path):
                 "protocol": protocol, "kind": "udp_probe",
                 "source": "native-udp", "ban_eligible": False,
             }
-            plugin.observe_event("198.51.100.42", event, now=1000)
-            plugin.observe_event("198.51.100.42", event, now=1001)
+            # Repeats of one signal saturate, so a single-signal probe needs a
+            # third event to reach the alert threshold.
+            for offset in range(3):
+                plugin.observe_event(
+                    "198.51.100.42",
+                    event,
+                    now=1000 + offset,
+                )
     assert notify.call_count == 2
 
 
@@ -404,7 +411,10 @@ def test_unknown_sni_handshake_probe_is_alert_only(tmp_path):
         assert plugin.observe_event("203.0.113.50", event, now=1002) is False
         data = plugin._load_state()
     entry = data["scores"]["203.0.113.50"]
-    assert entry["score"] >= 8
+    # The probe still crosses the alert threshold, but repeats of one evidence
+    # family saturate instead of inflating towards the ban threshold.
+    assert entry["score"] >= ALERT_THRESHOLD
+    assert entry["score"] < BAN_THRESHOLD
     assert entry["verified_score"] == 0
     assert data.get("banned", {}) == {}
     firewall.assert_not_called()
@@ -505,6 +515,51 @@ def test_manual_ban_rejects_invalid_and_whitelisted_addresses(tmp_path):
         assert plugin.manual_ban("--help")["error"] == "invalid_ip"
         assert plugin.manual_ban("127.0.0.1")["error"] == "whitelisted"
     firewall.assert_not_called()
+
+
+def test_whitelisting_a_network_releases_the_bans_it_now_covers(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "antidpi-whitelist-release.json"
+    state = {
+        "banned": {
+            "198.51.100.5": {"at": 9999999000, "duration": 86400},
+            "198.51.100.200": {"at": 9999999000, "duration": 86400},
+            "203.0.113.9": {"at": 9999999000, "duration": 86400},
+            "2001:db8::5": {"at": 9999999000, "duration": 86400},
+        },
+        "scores": {"198.51.100.5": {"score": 9, "updated": 9999999000}},
+        "history": [],
+    }
+    result = MagicMock(returncode=0, stdout="", stderr="")
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch("hydra.plugins.antidpi.plugin._run", return_value=result):
+        plugin._save_state(state)
+        assert plugin.add_whitelist(state=None, network="198.51.100.0/24") is True
+        data = plugin._load_state()
+
+    assert data["whitelist"] == ["198.51.100.0/24"]
+    assert set(data["banned"]) == {"203.0.113.9", "2001:db8::5"}
+    assert data["scores"] == {}
+
+
+def test_whitelisting_an_existing_entry_still_releases_stale_bans(tmp_path):
+    plugin = AntiDPIPlugin()
+    state_file = tmp_path / "antidpi-whitelist-existing.json"
+    state = {
+        "whitelist": ["203.0.113.0/24"],
+        "banned": {"203.0.113.9": {"at": 9999999000, "duration": 86400}},
+        "scores": {},
+        "history": [],
+    }
+    result = MagicMock(returncode=0, stdout="", stderr="")
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
+         patch("hydra.plugins.antidpi.plugin._run", return_value=result):
+        plugin._save_state(state)
+        assert plugin.add_whitelist(state=None, network="203.0.113.0/24") is False
+        data = plugin._load_state()
+
+    assert data["whitelist"] == ["203.0.113.0/24"]
+    assert data["banned"] == {}
 
 
 def test_vps_addresses_are_automatically_whitelisted(tmp_path):

@@ -10,6 +10,7 @@ import html
 import json
 import sys
 import urllib.request
+from datetime import datetime
 from typing import Iterable
 
 from hydra.core.state import load_state
@@ -24,13 +25,55 @@ _NOTIFICATION_FIELDS = {
     "system": "notify_system",
 }
 
+# Actions that describe an enforced block or a broken guard. They are the only
+# events delivered when the operator asks for blocks only or is asleep.
+BLOCKING_ACTIONS = frozenset({"BAN", "UNBAN", "BLOCK", "ERROR", "FAILURE"})
 
-def notification_allowed(state: AppState, category: str) -> bool:
+
+def _is_blocking(action: object) -> bool:
+    return str(action or "").strip().upper() in BLOCKING_ACTIONS
+
+
+def in_quiet_hours(state: AppState, *, hour: int) -> bool:
+    """Return whether the given local hour falls inside the quiet window."""
+    telegram = state.telegram
+    if not getattr(telegram, "quiet_hours_enabled", False):
+        return False
+    try:
+        start = int(getattr(telegram, "quiet_hours_start", 23)) % 24
+        end = int(getattr(telegram, "quiet_hours_end", 8)) % 24
+        current = int(hour) % 24
+    except (TypeError, ValueError):
+        return False
+    if start == end:
+        return False
+    if start < end:
+        return start <= current < end
+    return current >= start or current < end
+
+
+def notification_allowed(
+    state: AppState,
+    category: str,
+    *,
+    action: object = "",
+    hour: int | None = None,
+) -> bool:
+    """Decide whether one event may be delivered right now."""
     telegram = state.telegram
     if not getattr(telegram, "notifications_enabled", True):
         return False
     field = _NOTIFICATION_FIELDS.get(category, "notify_system")
-    return bool(getattr(telegram, field, True))
+    if not bool(getattr(telegram, field, True)):
+        return False
+    if _is_blocking(action):
+        return True
+    if bool(getattr(telegram, "notify_only_blocks", False)):
+        return False
+    current_hour = (
+        datetime.now().hour if hour is None else int(hour)
+    )
+    return not in_quiet_hours(state, hour=current_hour)
 
 
 def send_admin_notification(
@@ -40,6 +83,7 @@ def send_admin_notification(
     category: str = "system",
     force: bool = False,
     reply_markup: dict | None = None,
+    action: str = "",
 ) -> bool:
     """Send a categorized message through Telegram's direct HTTP API."""
     try:
@@ -47,7 +91,8 @@ def send_admin_notification(
         token = getattr(current.telegram, "admin_token", "").strip()
         chat_id = getattr(current.telegram, "admin_chat_id", "").strip()
         if not token or not chat_id or (
-            not force and not notification_allowed(current, category)
+            not force
+            and not notification_allowed(current, category, action=action)
         ):
             return False
 
@@ -107,11 +152,14 @@ def notify_security_event(
         state=state,
         category=category,
         reply_markup=reply_markup,
+        action=action,
     )
 
 
 __all__ = [
+    "BLOCKING_ACTIONS",
     "format_security_event",
+    "in_quiet_hours",
     "notification_allowed",
     "notify_security_event",
     "send_admin_notification",

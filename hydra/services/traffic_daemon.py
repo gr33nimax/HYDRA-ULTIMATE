@@ -10,6 +10,7 @@ import json
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,10 @@ from typing import Any
 from hydra.core.host import HOST
 from hydra.core.state import load_state, update_state
 from hydra.core.state_models import AppState
+from hydra.services.device_sessions import (
+    connections_to_close,
+    update_sessions,
+)
 from hydra.services.traffic_accounting import apply_connection_snapshot
 from hydra.services.traffic_attribution import (
     TrafficEvidence,
@@ -133,6 +138,50 @@ def _fetch_connections(port: int, secret: str) -> list[dict[str, Any]]:
     return connections if isinstance(connections, list) else []
 
 
+def _close_connection(port: int, secret: str, connection_id: str) -> bool:
+    """Ask Sing-Box to drop one connection through the Clash API."""
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/connections/{urllib.parse.quote(connection_id)}",
+        method="DELETE",
+    )
+    if secret:
+        request.add_header("Authorization", f"Bearer {secret}")
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return 200 <= int(response.status or 0) < 300
+    except urllib.error.HTTPError as exc:
+        return exc.code in (204, 404)
+    except Exception:
+        return False
+
+
+def _enforce_device_limits(
+    state: AppState,
+    *,
+    port: int,
+    secret: str,
+) -> int:
+    """Close connections from devices beyond a user's simultaneous limit."""
+    refused = update_sessions(state)
+    if not refused:
+        return 0
+    closed = 0
+    for connection_id in connections_to_close(state, refused):
+        if _close_connection(port, secret, connection_id):
+            closed += 1
+    for user, addresses in sorted(refused.items()):
+        _write_log(
+            f"Device limit for {user}: refusing "
+            + ", ".join(sorted(addresses)),
+        )
+    if not closed:
+        _write_log(
+            "Device limit enforcement could not close connections; "
+            "check that the Clash API allows DELETE /connections",
+        )
+    return closed
+
+
 def _log_summary(
     state: AppState,
     *,
@@ -190,13 +239,21 @@ def run_daemon() -> None:
                 continue
 
             evidence = collect_traffic_evidence(HOST)
-            state, counters_updated = update_state(
-                lambda latest: apply_connection_snapshot(
+
+            def account(latest: AppState) -> bool:
+                updated = apply_connection_snapshot(
                     latest,
                     connections,
                     evidence,
-                ),
-            )
+                )
+                _enforce_device_limits(
+                    latest,
+                    port=latest.network.clash_api_port,
+                    secret=latest.network.clash_api_secret,
+                )
+                return updated
+
+            state, counters_updated = update_state(account)
             current = time.monotonic()
             if current - last_summary_at >= 300:
                 _log_summary(

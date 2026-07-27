@@ -45,6 +45,7 @@ def _process_fail2ban_log_line(
     notify(
         format_security_event("Fail2ban", action, fields),
         category=category,
+        action=action,
     )
 
 def _process_honeypot_log_line(
@@ -87,6 +88,7 @@ def _process_honeypot_log_line(
             ],
         ),
         category="honeypot",
+        action="BAN",
     )
 
 def _projected_lines(value: object) -> list[str]:
@@ -101,18 +103,39 @@ def _log_overlap(previous: list[str], current: list[str]) -> int:
             return size
     return 0
 
+IDLE_BACKOFF = (2.0, 5.0, 15.0)
+BUSY_INTERVAL = 2.0
+IDLE_CYCLES_BEFORE_BACKOFF = 5
+
+
+def _poll_interval(idle_cycles: int) -> float:
+    """Return how long to sleep after ``idle_cycles`` quiet polls."""
+    step = min(
+        len(IDLE_BACKOFF) - 1,
+        max(0, idle_cycles // IDLE_CYCLES_BEFORE_BACKOFF),
+    )
+    return IDLE_BACKOFF[step]
+
+
 def _follow_plugin_log(
     stop_event: threading.Event,
     fetch: Callable[[], object],
     process: Callable[[str], None],
 ) -> None:
-    """Poll an allowlisted plugin projection without exposing its log path."""
+    """Poll an allowlisted plugin projection without exposing its log path.
+
+    Each poll spawns a journal read, so a quiet host backs off instead of
+    running two subprocesses per second forever. Any new line resets the
+    cadence, keeping reaction time short exactly when something is happening.
+    """
     previous: list[str] | None = None
+    idle_cycles = 0
     while not stop_event.is_set():
         try:
             current = _projected_lines(fetch())
         except Exception:
-            stop_event.wait(0.5)
+            stop_event.wait(_poll_interval(idle_cycles))
+            idle_cycles += 1
             continue
         if previous is None:
             previous = current
@@ -121,7 +144,11 @@ def _follow_plugin_log(
             for line in current[overlap:]:
                 process(line)
             previous = current
-        stop_event.wait(0.5)
+            idle_cycles = 0
+            stop_event.wait(BUSY_INTERVAL)
+            continue
+        idle_cycles += 1
+        stop_event.wait(_poll_interval(idle_cycles))
 
 def _fail2ban_monitor_worker(
     stop_event: threading.Event,

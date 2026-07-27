@@ -5,6 +5,10 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "upgrade.sh"
 LAUNCHER = ROOT / "updater.sh"
+LINUX_INTEGRATION_SMOKE = (
+    ROOT / ".github" / "scripts" / "linux-integration-smoke.sh"
+)
+LINUX_UPGRADE_SMOKE = ROOT / ".github" / "scripts" / "linux-upgrade-smoke.sh"
 UPGRADE_DOCS = (ROOT / "README.md", ROOT / "docs" / "UPGRADE.md")
 
 
@@ -15,7 +19,9 @@ def _source() -> str:
 def test_existing_install_updater_is_transactional_and_main_by_default():
     source = _source()
     assert 'HYDRA_REF="${HYDRA_REF:-main}"' in source
-    assert "return 1; }" in source
+    fail_start = source.index("fail() {")
+    fail_helper = source[fail_start : source.index("\n}\n", fail_start)]
+    assert "return 1" in fail_helper
     assert "exit 1; }" not in source
     assert "git ls-remote --exit-code" in source
     assert 'flock -n 9' in source
@@ -26,6 +32,15 @@ def test_existing_install_updater_is_transactional_and_main_by_default():
     assert "-m hydra.cli --json upgrade migrate-state" in source
     assert "hydra-backup.tar.gz" in source
     assert "wait_for_previous_units" in source
+
+
+def test_linux_integration_smoke_uses_the_canonical_state_schema_version():
+    for script in (LINUX_INTEGRATION_SMOKE, LINUX_UPGRADE_SMOKE):
+        source = script.read_text(encoding="utf-8")
+
+        assert "from hydra.core.state_models import SCHEMA_VERSION" in source
+        assert 'state["version"] == SCHEMA_VERSION' in source
+        assert '= "4"' not in source
 
 
 def test_target_commands_do_not_depend_on_the_updater_working_directory():
@@ -164,7 +179,7 @@ def test_directory_cutover_attempt_is_recoverable_before_and_after_the_move():
         )
     )
     assert '[[ -e "$PREVIOUS_DIR" ]] || return 0' in source
-    assert "must share a filesystem" in source
+    assert "должны быть на одной файловой системе" in source
 
 
 def test_symlink_cutover_is_marked_before_atomic_replacement():
@@ -191,7 +206,7 @@ def test_transient_oneshot_services_are_not_expected_to_remain_active():
     ]
 
     assert "--property=ActiveState,Type,RemainAfterExit" in capture
-    assert "cannot inspect systemd unit" in capture
+    assert "Не удалось проверить службу systemd" in capture
     assert '"$unit_type" == "oneshot"' in capture
     assert "continue" in capture
 
@@ -257,9 +272,41 @@ def test_updater_has_numbered_progress_and_clear_terminal_states():
     assert 'step 3 3 "Транзакционное обновление"' in launcher
     assert 'step 1 7 "Проверка установленной версии"' in engine
     assert 'step 7 7 "Итоговая проверка"' in engine
-    assert 'result_ok "HYDRA обновлена' in engine
+    assert 'result_ok "Новая версия HYDRA установлена и проверена."' in engine
     assert 'result_ok "Обновление не требуется' in engine
     assert 'result_error "Обновление не завершено' in engine
+
+
+def test_updater_uses_utf8_and_one_consistent_human_readable_style():
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+    engine = _source()
+
+    for source in (launcher, engine):
+        assert "configure_utf8_locale" in source
+        assert "HYDRA · ОБНОВЛЕНИЕ" in source
+        assert "✓" in source
+        assert "✗" in source
+    assert "summary_row" in engine
+    assert 'summary_row "Ветка"' in engine
+    assert 'summary_row "Переход"' in engine
+    assert 'summary_row "Снимок отката"' in engine
+    assert 'summary_row "Подробный лог"' in engine
+
+
+def test_updater_does_not_mix_english_operator_errors_into_russian_output():
+    source = _source()
+    broken_messages = (
+        "run this updater as root",
+        "required command is missing",
+        "another HYDRA upgrade is already running",
+        "local changes exist",
+        "cannot identify the currently installed revision",
+        "unit did not recover",
+        "command wrapper restoration failed",
+        "services could not be quiesced",
+    )
+
+    assert all(message not in source for message in broken_messages)
 
 
 def test_all_main_install_and_update_entrypoints_default_to_main():

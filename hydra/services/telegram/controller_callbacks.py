@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import html
 
-from hydra.services.telegram import dashboards, security_actions
+from hydra.services.telegram import dashboards, navigation, security_actions
 from hydra.services.telegram.sdk import (
     ContextTypes,
     InlineKeyboardButton,
@@ -22,18 +22,19 @@ class AdminBotCallbackMixin:
         if not await self._check_admin(update):
             return
         data = str(update.callback_query.data or "")
-        if data == "view:home":
-            await self.cmd_start(update, context)
-        elif data == "view:system":
-            await self.cmd_system(update, context)
-        elif data == "view:antidpi":
-            await self.cmd_antidpi(update, context)
-        elif data == "view:honeypot":
-            await self.cmd_honeypot(update, context)
-        elif data == "view:fail2ban":
-            await self.cmd_fail2ban(update, context)
-        elif data == "view:notifications":
-            await self.cmd_notifications(update, context)
+        screen, page = navigation.parse_view(data)
+        address, origin = navigation.parse_address(data)
+        if screen:
+            await self.cmd_screen(update, context, name=screen, page=page)
+        elif address:
+            await self.cmd_address(
+                update,
+                context,
+                address=address,
+                origin=origin,
+            )
+        elif data.startswith("quiet:"):
+            await self._shift_quiet_hours(update, context, data)
         elif data.startswith("notify:"):
             await self._toggle_notification(update, data)
         elif data == "ask:antidpi_toggle":
@@ -78,6 +79,27 @@ class AdminBotCallbackMixin:
                 "Неизвестное действие",
                 show_alert=True,
             )
+
+    async def _shift_quiet_hours(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        data: str,
+    ) -> None:
+        parts = data.split(":")
+        try:
+            await asyncio.to_thread(
+                security_actions.shift_quiet_hour,
+                parts[1],
+                int(parts[2]),
+            )
+        except (IndexError, ValueError):
+            await update.callback_query.answer(
+                "Некорректная настройка",
+                show_alert=True,
+            )
+            return
+        await self.cmd_screen(update, context, name="quiet")
 
     async def _toggle_notification(self, update: Update, data: str) -> None:
         field = data.split(":", 1)[1]

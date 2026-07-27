@@ -5,7 +5,10 @@ import sys
 
 from hydra.bootstrap import production_application
 from hydra.services.sync_agent import log_event, run_sync
-from hydra.services.sync_ports import default_sync_operations
+from hydra.services.sync_ports import (
+    default_sync_operations,
+    subscription_certificate_renewal,
+)
 
 
 def main() -> int:
@@ -18,6 +21,10 @@ def main() -> int:
                 plugin_queries=application.plugin_queries,
                 apply_config=application.apply,
                 check_traffic_limits=application.traffic.check_limits,
+                inspect_certificates=application.certificates.inspect,
+                renew_subscription_certificate=(
+                    subscription_certificate_renewal(application.admin)
+                ),
             ),
         )
     except Exception as exc:

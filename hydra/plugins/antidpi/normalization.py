@@ -2,8 +2,16 @@
 from __future__ import annotations
 
 import ipaddress
+from collections.abc import Callable
 
 from hydra.plugins.antidpi.adapters import remote_ip
+from hydra.plugins.context import PluginStateAccess
+
+Normalizer = Callable[[dict], "tuple[str, dict] | None"]
+
+# Statuses that mean the endpoint refused the caller. Upstream failures (5xx)
+# are excluded: a restarting backend must not look like a probe.
+VLESS_PROBE_STATUSES = frozenset({400, 401, 403, 404, 405, 407, 421, 426})
 
 
 def normalize_caddy_record(record: dict) -> tuple[str, dict] | None:
@@ -114,6 +122,91 @@ def normalize_naive_decoy_record(record: dict) -> tuple[str, dict] | None:
     if status in {401, 407}:
         return _naive_auth_event(address, request)
     return None
+
+
+def vless_endpoint(
+    state: PluginStateAccess | None,
+) -> tuple[str, tuple[str, ...]]:
+    """Return the enabled VLESS domain and its XHTTP paths, if any."""
+    protocol = state.protocols.get("vless") if state is not None else None
+    if not protocol or not protocol.enabled:
+        return "", ()
+    config = protocol.config if isinstance(protocol.config, dict) else {}
+    domain = str(config.get("domain", "")).strip().lower().rstrip(".")
+    path = str(config.get("xhttp_path", "") or "").strip().rstrip("/")
+    if not domain or not path.startswith("/"):
+        return "", ()
+    return domain, (path,)
+
+
+def _request_path(request: dict) -> str:
+    raw = str(request.get("uri", request.get("path", "")))
+    return raw.split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
+
+
+def _covers(paths: tuple[str, ...], value: str) -> bool:
+    return any(
+        value == path or value.startswith(f"{path}/")
+        for path in paths
+        if path
+    )
+
+
+def normalize_vless_record(
+    record: dict,
+    *,
+    domain: str = "",
+    paths: tuple[str, ...] = (),
+) -> tuple[str, dict] | None:
+    """Recognize probing of the VLESS XHTTP endpoint and its decoy site.
+
+    Caddy terminates TLS for the VLESS domain and forwards the request to the
+    local HTTP server over PROXY v2, so this access record carries the real
+    client address — unlike the sing-box journal, which only ever sees the
+    loopback hop.
+    """
+    request = record.get("request", {}) if isinstance(record, dict) else {}
+    if not isinstance(request, dict) or not domain:
+        return None
+    host = str(request.get("host", "")).strip().lower().split(":", 1)[0]
+    if host.rstrip(".") != domain:
+        return None
+    address = remote_ip(
+        request.get("remote_ip", request.get("remote_addr", "")),
+    )
+    if address is None:
+        return None
+    try:
+        status = int(record.get("status", 0))
+    except (TypeError, ValueError):
+        status = 0
+    if _covers(paths, _request_path(request)):
+        if status not in VLESS_PROBE_STATUSES:
+            return None
+        return address, {
+            "protocol": "vless",
+            "kind": "auth_failure",
+            "source": "caddy-vless",
+        }
+    normalized = normalize_decoy_record(record)
+    if normalized is None:
+        return None
+    normalized[1]["source"] = "caddy-vless-decoy"
+    return normalized
+
+
+def vless_normalizer(
+    domain: str,
+    paths: tuple[str, ...],
+) -> Normalizer | None:
+    """Bind the VLESS normalizer to one deployment, or disable it."""
+    if not domain or not paths:
+        return None
+
+    def normalize(record: dict) -> tuple[str, dict] | None:
+        return normalize_vless_record(record, domain=domain, paths=paths)
+
+    return normalize
 
 
 def normalize_trusttunnel_record(record: dict) -> tuple[str, dict] | None:

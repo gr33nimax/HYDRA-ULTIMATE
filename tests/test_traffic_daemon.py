@@ -8,6 +8,8 @@ from hydra.core.state import AppState, User
 from hydra.services.traffic_daemon import (
     _apply_connection_snapshot, _parse_hysteria2_users, _write_log, run_daemon,
 )
+from hydra.services.traffic_accounting import apply_connection_snapshot
+from hydra.services.traffic_attribution import evidence_from_journal
 
 
 def test_custom_log_is_bounded_and_keeps_recent_tail(tmp_path):
@@ -137,6 +139,69 @@ def test_hysteria2_real_clash_metadata_is_attributed_from_logs():
     record = state.install["traffic_connection_counters"]["clash-generated-uuid"]
     assert record["protocol"] == "hysteria2"
     assert record["user"] == "hy2@example.com"
+
+
+def test_vless_xhttp_real_clash_metadata_is_attributed_from_logs():
+    state = AppState(users=[User(email="vless@example.com", uuid="vless-user")])
+    connection = {
+        "id": "clash-generated-uuid",
+        "metadata": {
+            "type": "vless/vless-xhttp-in",
+            "sourceIP": "127.0.0.1",
+            "sourcePort": "43123",
+        },
+        "upload": 300,
+        "download": 700,
+    }
+    evidence = evidence_from_journal(
+        [
+            "INFO [123456 0ms] inbound/vless[vless-xhttp-in]: "
+            "inbound connection from 127.0.0.1:43123",
+            "INFO [123456 1ms] inbound/vless[vless-xhttp-in]: "
+            "[vless@example.com] inbound connection to cp.cloudflare.com:80",
+        ],
+    )
+
+    with patch(
+        "hydra.services.traffic_accounting.resolve_mapping",
+        return_value="198.51.100.42",
+    ) as resolve:
+        assert apply_connection_snapshot(state, [connection], evidence) is True
+    assert state.users[0].traffic_used_bytes == 1000
+    assert state.users[0].credentials["vless"]["traffic_used_bytes"] == 1000
+    record = state.install["traffic_connection_counters"]["clash-generated-uuid"]
+    assert record["protocol"] == "vless"
+    assert record["user"] == "vless@example.com"
+    assert record["address"] == "198.51.100.42"
+    resolve.assert_called_once_with("vless", 43123)
+
+
+def test_vless_xhttp_does_not_cross_attribute_unrelated_log_contexts():
+    state = AppState(users=[User(email="vless@example.com", uuid="vless-user")])
+    connection = {
+        "id": "clash-generated-uuid",
+        "metadata": {
+            "type": "vless/vless-xhttp-in",
+            "sourceIP": "127.0.0.1",
+            "sourcePort": "43123",
+        },
+        "upload": 300,
+        "download": 700,
+    }
+    evidence = evidence_from_journal(
+        [
+            "INFO [123456 0ms] inbound/vless[vless-xhttp-in]: "
+            "inbound connection from 127.0.0.1:43123",
+            "INFO [654321 1ms] inbound/vless[vless-xhttp-in]: "
+            "[vless@example.com] inbound connection to cp.cloudflare.com:80",
+        ],
+    )
+
+    assert apply_connection_snapshot(state, [connection], evidence) is False
+    assert state.users[0].traffic_used_bytes == 0
+    record = state.install["traffic_connection_counters"]["clash-generated-uuid"]
+    assert record["protocol"] == "vless"
+    assert record["user"] == ""
 
 
 def test_parse_hysteria2_users_correlates_tcp_and_udp_log_contexts():

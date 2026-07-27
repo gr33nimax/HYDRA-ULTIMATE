@@ -90,6 +90,7 @@ def test_targets_cover_enabled_protocol_shapes():
             "wdtt": PluginState(enabled=True, config={"dtls_port": 56009}),
             "snell": PluginState(enabled=True),
             "amneziawg": PluginState(enabled=True, config={"profiles": {"desktop": {"port": 51830}}}),
+            "vless": PluginState(enabled=True, config={"domain": "vless.example"}),
         },
         users=[User(email="u", uuid="id", credentials={"snell": {"port": 32123}})],
     )
@@ -99,6 +100,9 @@ def test_targets_cover_enabled_protocol_shapes():
     assert selftest._targets(state, "wdtt") == [selftest.Target("udp", 56009)]
     assert selftest._targets(state, "snell") == [selftest.Target("tcp", 32123)]
     assert selftest._targets(state, "amneziawg") == [selftest.Target("udp", 51830)]
+    assert selftest._targets(state, "vless") == [
+        selftest.Target("tls", 443, sni="vless.example"),
+    ]
 
 
 def test_mieru_journal_is_collected_from_sing_box_unit():
@@ -204,6 +208,42 @@ def test_invalid_native_client_config_changes_only_ephemeral_copy():
     assert config["inbounds"][0]["listen_port"] == 12345
     assert config["dns"] == generated["dns"]
     assert generated["outbounds"][0]["password"] == "real-password"
+
+
+def test_vless_native_probe_invalidates_uuid_in_ephemeral_copy():
+    state = AppState(
+        protocols={"vless": PluginState(enabled=True)},
+        users=[User(email="u", uuid="real-uuid")],
+    )
+    generated = {
+        "outbounds": [{
+            "type": "vless",
+            "server": "vless.example",
+            "server_port": 443,
+            "uuid": "real-uuid",
+            "tls": {"enabled": True, "server_name": "vless.example"},
+        }],
+    }
+    protocols = type(
+        "Protocols",
+        (),
+        {
+            "client_config": lambda self, app, name, user: json.dumps(
+                generated,
+            ),
+        },
+    )()
+
+    config, status = selftest._invalid_client_config(
+        state,
+        "vless",
+        12345,
+        protocols=protocols,
+    )
+
+    assert status == "ready"
+    assert config["outbounds"][0]["uuid"] == "HYDRA-INVALID-UUID"
+    assert generated["outbounds"][0]["uuid"] == "real-uuid"
 
 
 def test_awg_handshake_payload_uses_profile_header_and_padding():

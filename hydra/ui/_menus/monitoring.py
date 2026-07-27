@@ -8,6 +8,7 @@ from typing import Callable
 from hydra.ui import log_viewer, system_monitor
 from hydra.ui._menus import (
     monitoring_connections,
+    monitoring_devices,
     monitoring_logs,
     monitoring_overview,
     monitoring_realtime,
@@ -44,6 +45,7 @@ _CONTROLLERS: tuple[ModuleType, ...] = (
     monitoring_overview,
     monitoring_traffic,
     monitoring_connections,
+    monitoring_devices,
     monitoring_realtime,
     monitoring_logs,
     monitoring_services,
@@ -59,6 +61,7 @@ _IMPLEMENTATIONS: dict[str, ModuleType] = {
     "_menu_service_settings": monitoring_overview,
     "_show_traffic_combined": monitoring_traffic,
     "_show_connections": monitoring_connections,
+    "_show_devices": monitoring_devices,
     "_show_status": monitoring_realtime,
     "_read_proc_cpu": monitoring_realtime,
     "_read_proc_mem": monitoring_realtime,

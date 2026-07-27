@@ -13,6 +13,15 @@ from hydra.services.telegram import (
     security_monitors,
     security_settings,
 )
+from hydra.services.telegram.security_chrome import (
+    address_keyboard,
+    antidpi_list_keyboard,
+    quiet_hours_keyboard,
+)
+from hydra.services.telegram.security_settings import (
+    quiet_hours_text,
+    shift_quiet_hour,
+)
 
 
 NotificationSender = Callable[..., bool]
@@ -169,6 +178,11 @@ __all__ = [
     "_toggle_fail2ban",
     "_toggle_honeypot",
     "_toggle_notification",
+    "address_keyboard",
+    "antidpi_list_keyboard",
     "ban_ip_antidpi",
+    "quiet_hours_keyboard",
+    "quiet_hours_text",
+    "shift_quiet_hour",
     "unban_ip_everywhere",
 ]

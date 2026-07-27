@@ -1,299 +1,219 @@
-"""Blog-theme decoy site renderer."""
+"""Personal engineering blog renderer."""
 from __future__ import annotations
 
 from pathlib import Path
 
-
-def generate(site_dir: Path) -> None:
-    """Render every file in the blog theme."""
-    _write_index(site_dir)
-    _write_about(site_dir)
-    _write_post_one(site_dir)
-    _write_post_two(site_dir)
-    _write_styles(site_dir)
+from hydra.core.decoy_sites import kit
+from hydra.core.decoy_sites.identity import SiteIdentity
 
 
-def _write_index(site_dir: Path) -> None:
-    (site_dir / "index.html").write_text(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-        "  <meta charset=\"UTF-8\">\n"
-        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-        "  <title>TechBits | Insights on Modern Software</title>\n"
-        "  <link rel=\"stylesheet\" href=\"css/style.css\">\n"
-        "  <link href=\"https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono&display=swap\" rel=\"stylesheet\">\n"
-        "</head>\n<body>\n"
-        "  <header class=\"blog-header\">\n"
-        "    <div class=\"container\">\n"
-        "      <a href=\"index.html\" class=\"blog-logo\">Tech<span>Bits</span></a>\n"
-        "      <nav class=\"blog-nav\">\n"
-        "        <a href=\"index.html\" class=\"active\">Stories</a>\n"
-        "        <a href=\"about.html\">Author</a>\n"
-        "      </nav>\n"
-        "    </div>\n"
-        "  </header>\n"
-        "  <main class=\"container main-content\">\n"
-        "    <section class=\"hero-post\">\n"
-        "      <div class=\"meta\">Featured &bull; July 2026</div>\n"
-        "      <h2><a href=\"post-1.html\">The Evolution of WebAssembly in the Cloud Native Stack</a></h2>\n"
-        "      <p>How WebAssembly (Wasm) is evolving from a browser optimization tool into a lightweight, fast, and secure alternative for containerized workloads in production environments.</p>\n"
-        "    </section>\n"
-        "    <section class=\"recent-posts\">\n"
-        "      <h3>Recent Articles</h3>\n"
-        "      <div class=\"post-list\">\n"
-        "        <article class=\"post-item\">\n"
-        "          <div class=\"meta\">Design &bull; July 2, 2026</div>\n"
-        "          <h4><a href=\"post-2.html\">Refining Micro-interactions in Clean Design Systems</a></h4>\n"
-        "          <p>A deep dive into how subtle animations can delight users and drastically improve conversion and accessibility.</p>\n"
-        "        </article>\n"
-        "      </div>\n"
-        "    </section>\n"
-        "  </main>\n"
-        "  <footer>\n"
-        "    <p>&copy; 2026 TechBits. Built with absolute focus.</p>\n"
-        "  </footer>\n"
-        "</body>\n</html>\n",
-        encoding="utf-8"
-    )
+PAGES = ("/", "/about.html", "/posts/queues.html", "/posts/migrations.html")
 
-
-
-def _write_about(site_dir: Path) -> None:
-    (site_dir / "about.html").write_text(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-        "  <meta charset=\"UTF-8\">\n"
-        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-        "  <title>About the Author | TechBits</title>\n"
-        "  <link rel=\"stylesheet\" href=\"css/style.css\">\n"
-        "  <link href=\"https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap\" rel=\"stylesheet\">\n"
-        "</head>\n<body>\n"
-        "  <header class=\"blog-header\">\n"
-        "    <div class=\"container\">\n"
-        "      <a href=\"index.html\" class=\"blog-logo\">Tech<span>Bits</span></a>\n"
-        "      <nav class=\"blog-nav\">\n"
-        "        <a href=\"index.html\">Stories</a>\n"
-        "        <a href=\"about.html\" class=\"active\">Author</a>\n"
-        "      </nav>\n"
-        "    </div>\n"
-        "  </header>\n"
-        "  <main class=\"container main-content\">\n"
-        "    <section class=\"about-section\">\n"
-        "      <h1>Alexander Green</h1>\n"
-        "      <p>I am a systems architect and web enthusiast who loves analyzing networking protocols, browser performance, and compiler technology.</p>\n"
-        "      <p>This blog serves as my notebook where I document interesting discoveries, performance benchmarks, and thoughts on the future of programming.</p>\n"
-        "    </section>\n"
-        "  </main>\n"
-        "  <footer>\n"
-        "    <p>&copy; 2026 TechBits. Built with absolute focus.</p>\n"
-        "  </footer>\n"
-        "</body>\n</html>\n",
-        encoding="utf-8"
-    )
-
-
-
-def _write_post_one(site_dir: Path) -> None:
-    (site_dir / "post-1.html").write_text(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-        "  <meta charset=\"UTF-8\">\n"
-        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-        "  <title>WebAssembly in Cloud Native Stack | TechBits</title>\n"
-        "  <link rel=\"stylesheet\" href=\"css/style.css\">\n"
-        "  <link href=\"https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono&display=swap\" rel=\"stylesheet\">\n"
-        "</head>\n<body>\n"
-        "  <header class=\"blog-header\">\n"
-        "    <div class=\"container\">\n"
-        "      <a href=\"index.html\" class=\"blog-logo\">Tech<span>Bits</span></a>\n"
-        "      <nav class=\"blog-nav\">\n"
-        "        <a href=\"index.html\">Stories</a>\n"
-        "        <a href=\"about.html\">Author</a>\n"
-        "      </nav>\n"
-        "    </div>\n"
-        "  </header>\n"
-        "  <main class=\"container main-content article-container\">\n"
-        "    <article class=\"full-post\">\n"
-        "      <div class=\"meta\">July 8, 2026 &bull; Systems</div>\n"
-        "      <h1>The Evolution of WebAssembly in the Cloud Native Stack</h1>\n"
-        "      <p>WebAssembly (Wasm) is no longer confined to the browser. As microservices look for ways to cut startup latency and decrease memory consumption, Wasm provides an attractive runtime. It compiles fast, isolates memory fully, and loads in milliseconds.</p>\n"
-        "      <p>In this post, we explore how platforms like Spin and tools like Wasmtime are changing the architecture of cloud native apps.</p>\n"
-        "      <pre><code>// Example Wasm component logic in Rust\n#[plugin_fn]\npub fn hello(input: String) -> FnResult&lt;String&gt; {\n    Ok(format!(\"Hello, Cloud Native! Output: {}\", input))\n}</code></pre>\n"
-        "    </article>\n"
-        "  </main>\n"
-        "  <footer>\n"
-        "    <p>&copy; 2026 TechBits. Built with absolute focus.</p>\n"
-        "  </footer>\n"
-        "</body>\n</html>\n",
-        encoding="utf-8"
-    )
-
-
-
-def _write_post_two(site_dir: Path) -> None:
-    (site_dir / "post-2.html").write_text(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-        "  <meta charset=\"UTF-8\">\n"
-        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-        "  <title>Refining Micro-interactions | TechBits</title>\n"
-        "  <link rel=\"stylesheet\" href=\"css/style.css\">\n"
-        "  <link href=\"https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap\" rel=\"stylesheet\">\n"
-        "</head>\n<body>\n"
-        "  <header class=\"blog-header\">\n"
-        "    <div class=\"container\">\n"
-        "      <a href=\"index.html\" class=\"blog-logo\">Tech<span>Bits</span></a>\n"
-        "      <nav class=\"blog-nav\">\n"
-        "        <a href=\"index.html\">Stories</a>\n"
-        "        <a href=\"about.html\">Author</a>\n"
-        "      </nav>\n"
-        "    </div>\n"
-        "  </header>\n"
-        "  <main class=\"container main-content article-container\">\n"
-        "    <article class=\"full-post\">\n"
-        "      <div class=\"meta\">July 2, 2026 &bull; UI/UX</div>\n"
-        "      <h1>Refining Micro-interactions in Clean Design Systems</h1>\n"
-        "      <p>Good interface design is about context and response. A button shouldn't just change state; it should morph smoothly. Subtle spring physics on hovers indicate responsiveness without causing clutter.</p>\n"
-        "      <p>We detail CSS transitions and JS requestAnimationFrame examples that keep frame rates locked at 60fps or higher.</p>\n"
-        "    </article>\n"
-        "  </main>\n"
-        "  <footer>\n"
-        "    <p>&copy; 2026 TechBits. Built with absolute focus.</p>\n"
-        "  </footer>\n"
-        "</body>\n</html>\n",
-        encoding="utf-8"
-    )
-
-
-
-def _write_styles(site_dir: Path) -> None:
-    (site_dir / "css" / "style.css").write_text(_STYLES, encoding="utf-8")
-
-
-_STYLES = (
-        "body {\n"
-        "  margin: 0;\n"
-        "  font-family: 'Outfit', sans-serif;\n"
-        "  color: #1a1a1a;\n"
-        "  background: #fafaf9;\n"
-        "  line-height: 1.7;\n"
-        "}\n"
-        ".container {\n"
-        "  width: 90%;\n"
-        "  max-width: 900px;\n"
-        "  margin: 0 auto;\n"
-        "}\n"
-        ".blog-header {\n"
-        "  padding: 2rem 0;\n"
-        "  background: #fff;\n"
-        "  border-bottom: 1px solid #e7e5e4;\n"
-        "}\n"
-        ".blog-header .container {\n"
-        "  display: flex;\n"
-        "  justify-content: space-between;\n"
-        "  align-items: center;\n"
-        "}\n"
-        ".blog-logo {\n"
-        "  font-size: 1.75rem;\n"
-        "  font-weight: 800;\n"
-        "  color: #111;\n"
-        "  text-decoration: none;\n"
-        "  letter-spacing: -0.5px;\n"
-        "}\n"
-        ".blog-logo span {\n"
-        "  color: #e11d48;\n"
-        "}\n"
-        ".blog-nav a {\n"
-        "  margin-left: 1.5rem;\n"
-        "  text-decoration: none;\n"
-        "  color: #78716c;\n"
-        "  font-weight: 600;\n"
-        "  transition: color 0.15s;\n"
-        "}\n"
-        ".blog-nav a:hover, .blog-nav a.active {\n"
-        "  color: #e11d48;\n"
-        "}\n"
-        ".main-content {\n"
-        "  padding: 4rem 0;\n"
-        "}\n"
-        ".hero-post {\n"
-        "  background: #fff;\n"
-        "  border: 1px solid #e7e5e4;\n"
-        "  border-radius: 12px;\n"
-        "  padding: 3rem;\n"
-        "  margin-bottom: 4rem;\n"
-        "  box-shadow: 0 4px 12px rgba(0,0,0,0.01);\n"
-        "}\n"
-        ".hero-post h2 {\n"
-        "  font-size: 2.25rem;\n"
-        "  margin: 0.5rem 0 1.5rem 0;\n"
-        "  font-weight: 800;\n"
-        "  line-height: 1.3;\n"
-        "}\n"
-        ".hero-post h2 a {\n"
-        "  color: inherit;\n"
-        "  text-decoration: none;\n"
-        "}\n"
-        ".hero-post h2 a:hover {\n"
-        "  color: #e11d48;\n"
-        "}\n"
-        ".meta {\n"
-        "  text-transform: uppercase;\n"
-        "  font-size: 0.8rem;\n"
-        "  color: #a8a29e;\n"
-        "  font-weight: 600;\n"
-        "  letter-spacing: 1px;\n"
-        "}\n"
-        ".hero-post p {\n"
-        "  font-size: 1.15rem;\n"
-        "  color: #57534e;\n"
-        "  margin: 0;\n"
-        "}\n"
-        ".recent-posts h3 {\n"
-        "  font-size: 1.5rem;\n"
-        "  font-weight: 800;\n"
-        "  margin-bottom: 2rem;\n"
-        "}\n"
-        ".post-list {\n"
-        "  display: grid;\n"
-        "  grid-template-columns: 1fr;\n"
-        "  gap: 2rem;\n"
-        "}\n"
-        ".post-item {\n"
-        "  background: #fff;\n"
-        "  border: 1px solid #e7e5e4;\n"
-        "  padding: 2rem;\n"
-        "  border-radius: 8px;\n"
-        "}\n"
-        ".post-item h4 {\n"
-        "  font-size: 1.35rem;\n"
-        "  margin: 0.5rem 0 1rem 0;\n"
-        "}\n"
-        ".post-item h4 a {\n"
-        "  color: inherit;\n"
-        "  text-decoration: none;\n"
-        "}\n"
-        ".post-item h4 a:hover {\n"
-        "  color: #e11d48;\n"
-        "}\n"
-        "footer {\n"
-        "  background: #1c1917;\n"
-        "  color: #a8a29e;\n"
-        "  text-align: center;\n"
-        "  padding: 3rem 0;\n"
-        "  margin-top: 6rem;\n"
-        "}\n"
-        ".article-container {\n"
-        "  max-width: 750px;\n"
-        "}\n"
-        ".full-post h1 {\n"
-        "  font-size: 2.5rem;\n"
-        "  line-height: 1.25;\n"
-        "  margin: 0.5rem 0 2rem 0;\n"
-        "}\n"
-        "pre {\n"
-        "  background: #1c1917;\n"
-        "  color: #f5f5f4;\n"
-        "  padding: 1.5rem;\n"
-        "  border-radius: 8px;\n"
-        "  overflow-x: auto;\n"
-        "  font-family: 'JetBrains Mono', monospace;\n"
-        "  font-size: 0.9rem;\n"
-        "}\n"
+_POSTS = (
+    (
+        "posts/queues.html",
+        "What I learned running a queue nobody owned",
+        "March 4",
+        (
+            "The queue had been in production for six years and had no owner. "
+            "Every team pushed into it, nobody watched it, and the retry policy "
+            "was whatever the first client had configured in 2019.",
+            "The fix was not a rewrite. We added a dashboard, named an owner, "
+            "and wrote down which messages were allowed to be lost. Two of "
+            "those three cost nothing.",
+            "A year later the queue is still the same software. It is simply "
+            "no longer a mystery, which turns out to be most of the value.",
+        ),
+    ),
+    (
+        "posts/migrations.html",
+        "Migrations that can be stopped halfway",
+        "January 22",
+        (
+            "A migration you cannot abort is a deployment with a hostage. The "
+            "useful question is not how long it takes, but what happens if you "
+            "stop it at minute three.",
+            "Writing the rollback first changes the design. Suddenly you want "
+            "the new column to be nullable, the backfill to be idempotent and "
+            "the switch to be one small commit.",
+            "None of this is clever. It is just the difference between a "
+            "Tuesday and an incident review.",
+        ),
+    ),
 )
+
+
+def generate(site_dir: Path, identity: SiteIdentity) -> None:
+    """Generate a personal blog with two posts and an about page."""
+    _write_styles(site_dir, identity)
+    _write_index(site_dir, identity)
+    _write_about(site_dir, identity)
+    for relative, title, date, paragraphs in _POSTS:
+        _write_post(site_dir, identity, relative, title, date, paragraphs)
+    kit.write_not_found(site_dir, identity)
+    kit.write_sitemap(site_dir, identity, PAGES)
+
+
+def _masthead(identity: SiteIdentity) -> str:
+    subtitle = identity.pick(
+        "blog-subtitle",
+        (
+            "notes on backend systems and the teams that run them",
+            "writing about software that has to stay up",
+            "field notes from distributed systems work",
+        ),
+    )
+    return (
+        "<header class=\"masthead\">"
+        f"<a class=\"title\" href=\"/\">{kit.esc(identity.person)}</a>"
+        f"<p>{kit.esc(subtitle)}</p>"
+        "<nav><a href=\"/\">Posts</a><a href=\"/about.html\">About</a>"
+        f"<a href=\"mailto:{kit.esc(identity.email)}\">Email</a></nav>"
+        "</header>\n"
+    )
+
+
+def _footer(identity: SiteIdentity) -> str:
+    return (
+        "<footer class=\"foot\">"
+        f"<span>{kit.esc(identity.person)} · {kit.esc(identity.city)}</span>"
+        f"<span>© {identity.founded}–{identity.founded + 6}</span>"
+        "</footer>\n"
+    )
+
+
+def _write_index(site_dir: Path, identity: SiteIdentity) -> None:
+    entries = "".join(
+        "<article class=\"entry\">"
+        f"<time>{kit.esc(date)}</time>"
+        f"<h2><a href=\"/{kit.esc(relative)}\">{kit.esc(title)}</a></h2>"
+        f"<p>{kit.esc(paragraphs[0])}</p>"
+        f"<a class=\"more\" href=\"/{kit.esc(relative)}\">Read the post →</a>"
+        "</article>"
+        for relative, title, date, paragraphs in _POSTS
+    )
+    body = (
+        f"{_masthead(identity)}"
+        f"<main class=\"feed\">{entries}</main>\n"
+        f"{_footer(identity)}"
+    )
+    kit.write_text(
+        site_dir,
+        "index.html",
+        kit.page(
+            title=f"{identity.person} — notes",
+            description=f"Writing by {identity.person} about backend systems.",
+            body=body,
+        ),
+    )
+
+
+def _write_post(
+    site_dir: Path,
+    identity: SiteIdentity,
+    relative: str,
+    title: str,
+    date: str,
+    paragraphs: tuple[str, ...],
+) -> None:
+    text = "".join(f"<p>{kit.esc(item)}</p>" for item in paragraphs)
+    body = (
+        "<header class=\"masthead compact\">"
+        f"<a class=\"title\" href=\"/\">{kit.esc(identity.person)}</a>"
+        "</header>\n"
+        "<main class=\"post\">"
+        f"<time>{kit.esc(date)}</time>"
+        f"<h1>{kit.esc(title)}</h1>"
+        f"{text}"
+        "<p class=\"back\"><a href=\"/\">← All posts</a></p>"
+        "</main>\n"
+        f"{_footer(identity)}"
+    )
+    kit.write_text(
+        site_dir,
+        relative,
+        kit.page(
+            title=f"{title} — {identity.person}",
+            description=paragraphs[0][:150],
+            body=body,
+            stylesheet="css/style.css",
+        ),
+    )
+
+
+def _write_about(site_dir: Path, identity: SiteIdentity) -> None:
+    role = identity.pick(
+        "blog-role",
+        (
+            "platform engineer",
+            "backend engineer",
+            "site reliability engineer",
+        ),
+    )
+    body = (
+        f"{_masthead(identity)}"
+        "<main class=\"post\">"
+        "<h1>About</h1>"
+        f"<p>I am {kit.esc(identity.person)}, a {kit.esc(role)} based in "
+        f"{kit.esc(identity.city)}. I have spent the last "
+        f"{identity.number('blog-years', 6, 14)} years on systems that were "
+        "already in production when I arrived.</p>"
+        "<p>This site is where I write things down so I stop explaining them "
+        "twice. No newsletter, no comments — replies by email are welcome.</p>"
+        f"<p><a href=\"mailto:{kit.esc(identity.email)}\">"
+        f"{kit.esc(identity.email)}</a></p>"
+        "</main>\n"
+        f"{_footer(identity)}"
+    )
+    kit.write_text(
+        site_dir,
+        "about.html",
+        kit.page(
+            title=f"About — {identity.person}",
+            description=f"About {identity.person}.",
+            body=body,
+        ),
+    )
+
+
+def _write_styles(site_dir: Path, identity: SiteIdentity) -> None:
+    kit.write_text(
+        site_dir,
+        "css/style.css",
+        kit.variables(identity)
+        + (
+            "body{background:var(--backdrop)}"
+            ".masthead,.feed,.post,.foot{width:min(680px,calc(100% - 40px));"
+            "margin:0 auto}"
+            ".masthead{padding:64px 0 34px;border-bottom:1px solid #e2e0dc}"
+            ".masthead.compact{padding:34px 0 24px}"
+            ".masthead .title{font-size:30px;font-weight:700;color:#1c1a17;"
+            "letter-spacing:-.02em}"
+            ".masthead p{margin:8px 0 18px;color:#6f6a63}"
+            ".masthead nav a{margin-right:20px;font-size:15px}"
+            ".feed{padding:12px 0 40px}"
+            ".entry{padding:34px 0;border-bottom:1px solid #e9e7e3}"
+            ".entry time,.post time{display:block;font-size:13px;"
+            "text-transform:uppercase;letter-spacing:.08em;color:#9a938a}"
+            ".entry h2{margin:8px 0 12px;font-size:25px;line-height:1.25}"
+            ".entry h2 a{color:#1c1a17}"
+            ".entry h2 a:hover{color:var(--accent)}"
+            ".entry p{margin:0 0 14px;color:#544e47}"
+            ".more{font-size:15px;font-weight:600}"
+            ".post{padding:24px 0 56px}"
+            ".post h1{font-size:33px;line-height:1.2;margin:10px 0 22px}"
+            ".post p{color:#3f3a34;font-size:17px;margin:0 0 20px}"
+            ".post .back{margin-top:34px;font-size:15px}"
+            ".foot{display:flex;justify-content:space-between;gap:12px;"
+            "padding:24px 0 48px;border-top:1px solid #e2e0dc;color:#8d8780;"
+            "font-size:14px}"
+            ".notfound{text-align:center;padding:110px 20px}"
+            ".notfound h1{font-size:58px;margin:0;color:var(--accent)}"
+            "@media(max-width:620px){.masthead{padding:40px 0 26px}"
+            ".masthead .title{font-size:26px}.entry h2{font-size:22px}"
+            ".post h1{font-size:28px}.post p{font-size:16px}}"
+        ),
+    )
+
+
+__all__ = ["PAGES", "generate"]

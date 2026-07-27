@@ -34,10 +34,27 @@
 | `anytls` | AnyTLS | TLS-подобный обфусцированный туннель |
 | `trusttunnel` | TrustTunnel | TLS-транспорт с режимами TCP/QUIC и сайтом-заглушкой |
 | `hysteria2` | Hysteria2 | QUIC-транспорт с Salamander и браузерной заглушкой |
+| `vless` | VLESS + XHTTP | XHTTP-транспорт Sing-Box Extended: свой домен с сертификатом либо Reality с чужим рукопожатием |
 | `shadowtls` | ShadowTLS | ShadowTLS v3 с Trojan detour |
 | `snell` | Snell v4 | TCP/UDP-прокси из Sing-Box Extended |
 | `telemt` | MTProto / Telemt | Telegram MTProxy с управлением пользователями |
 | `wdtt` | qWDTT | WireGuard-туннелирование поверх TURN |
+
+Сайт-заглушка на собственном домене есть у AnyTLS, TrustTunnel, Hysteria2,
+NaiveProxy и VLESS + XHTTP. VLESS требует отдельный домен: XHTTP занимает
+настроенный путь (`/xhttp` по умолчанию), а остальные URL этого домена
+обслуживает сайт из `/var/www/decoy-vless`. Транспорт XHTTP настраивается
+поштучно или готовым профилем, см. [CLI.md](CLI.md#плагины).
+
+Тема заглушки выбирается оператором из 11 вариантов (`landing`, `blog`, `docs`,
+`media`, `status`, `portfolio`, `shop`, `apidocs`, `conference`, `gallery`,
+`cafe`) при включении протокола и позже в его меню. Бренд, палитра, шрифт и
+тексты выводятся из домена, поэтому одинаковых установок не бывает. Каталог
+сайта содержит `.hydra-decoy.json` с темой, доменом и отпечатком идентичности —
+по нему определяется необходимость перегенерации.
+
+Клиентские ссылки и профили выдаются через сервер подписок и TUI; Mieru
+использует схему `mierus://`.
 
 ### `enhancement` — сетевые расширения
 
@@ -57,6 +74,11 @@
 
 Учёт трафика и применение лимитов выполняет служба `hydra-traffic-daemon` — она
 принадлежит ядру и плагином не является.
+Для VLESS + XHTTP демон сопоставляет `sourcePort` активного соединения Clash API
+с аутентифицированным именем пользователя из того же journal context Sing-Box,
+поскольку сам Clash API не возвращает `metadata.user`. Если VLESS работает за
+Caddy, тот же source port используется для точного поиска внешнего IP в
+`hydra-source-relay`; в сессии сохраняется клиентский адрес, а не loopback-хоп.
 
 ## Systemd-службы
 
@@ -71,7 +93,7 @@
 | `hydra-caddy-source.service` | Обработчик source-транспарентности Caddy |
 | `hydra-sub.service` | Сервер подписок |
 | `hydra-traffic-daemon.service` | Учёт трафика и применение лимитов/сроков |
-| `hydra-sync-agent.service` | Периодические задачи обслуживания плагинов |
+| `hydra-sync-agent.service` | Периодические задачи: лимиты пользователей, обслуживание плагинов, суточная проверка TLS-сертификатов, обновление Sing-Box |
 | `hydra-sync-agent.timer` | Расписание sync agent |
 | `hydra-tg-admin.service` | Telegram Admin Bot |
 
@@ -131,6 +153,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | :--- | :--- |
 | `/var/www/decoy-a`, `/var/www/decoy-b`, `/var/www/decoy-c` | Общие decoy-сайты Caddy L4 |
 | `/var/www/decoy-hysteria2` | Браузерная заглушка Hysteria2 |
+| `/var/www/decoy-vless` | Отдельная media-заглушка VLESS + XHTTP |
 | `/var/www/naive-fake` | Заглушка NaiveProxy |
 
 ### Резервные копии
@@ -215,7 +238,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 
 | Порт | Транспорт | Владелец |
 | ---: | :--- | :--- |
-| `443/tcp` | TCP | Caddy L4 — общий SNI-мультиплексор; напрямую NaiveProxy, AnyTLS, TrustTunnel или ShadowTLS |
+| `443/tcp` | TCP | Caddy L4 — общий SNI-мультиплексор для NaiveProxy, AnyTLS, TrustTunnel, ShadowTLS и VLESS + XHTTP |
 | `443/udp` | UDP | Один QUIC-транспорт: NaiveProxy **или** TrustTunnel |
 | `8443/udp` | UDP | Hysteria2 |
 | `8443/tcp` | TCP | Telemt (MTProto) |
@@ -241,6 +264,9 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 | `127.0.0.1:5300` | DNSCrypt-резолвер (`network.dnscrypt_port`) |
 | `127.0.0.1:9000` | Локальный TUN-порт qWDTT |
 | `127.0.0.1:9090` | Clash API Sing-Box, если включён (`network.clash_api_port`) |
+| `127.0.0.1:20448` | Внутренний VLESS + XHTTP inbound Sing-Box |
+| `127.0.0.1:10804` | HTTP-router и сайт-заглушка домена VLESS + XHTTP |
+| `127.0.0.1:21448` | PROXY v2 source-relay для VLESS за Caddy |
 | `1081` | TPROXY Sing-Box, если включён (`network.tproxy_port`) |
 
 Порты source-relay назначаются динамически на loopback и сопоставляются с
@@ -255,7 +281,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 
 ## Схема persisted state
 
-Актуальная версия схемы в 2.5.4 — **4**. Корень `state.json`:
+Актуальная версия схемы в 2.5.5 — **5**. Корень `state.json`:
 
 | Поле | Тип | Содержание |
 | :--- | :--- | :--- |
@@ -270,9 +296,32 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 `User`: `email`, `uuid`, `traffic_limit_gb`, `traffic_used_bytes`, `expiry_date`,
 `blocked`, `created_at`, `telegram_id`, `credentials`, `device_limit`, `devices`.
 
+`devices` — карта `id устройства → запись`. Идентификатор — хеш того, чем
+клиент представился, поэтому исходный HWID в state не хранится. При отсутствии
+HWID используется нормализованный `User-Agent`, чтобы смена адреса не создавала
+новое устройство; если нет и него, последним сигналом остаётся адрес. Несколько
+старых записей `network-client` с одним `User-Agent` объединяются при следующем
+запросе подписки. Запись содержит `first_seen`, `last_seen`, `source`,
+`user_agent` и последний известный `address`.
+
 `network`: `domain`, `sub_domain`, `server_ip`, `dns_servers`, `dnscrypt_port`,
 `tproxy_enabled`, `tproxy_port`, `clash_api_enabled`, `clash_api_port`,
 `clash_api_secret`.
+
+`install` хранит служебные отметки фоновых проверок:
+
+| Ключ | Содержание |
+| :--- | :--- |
+| `sync_limits_enabled` | Проверять лимиты и сроки пользователей |
+| `sync_updates_enabled` | Проверять обновления Sing-Box |
+| `sync_certificates_enabled` | Проверять сроки TLS-сертификатов |
+| `sync_config_pending` | Отложенное применение конфигурации |
+| `sync_config_pending_source` | Фаза, поставившая отложенное применение (`certificates` снимается после первой неудачи) |
+| `singbox_last_update_check`, `singbox_update_available`, `singbox_latest_version` | Результат проверки обновлений |
+| `certificates_last_check` | Момент последней проверки сертификатов (UTC, ISO 8601) |
+| `certificates_report` | Результат проверки: домен, владелец, статус, дней до истечения |
+| `device_sessions` | Активные устройства по пользователям: адрес, соединения, байты, разрешено ли |
+| `traffic_connection_counters` | Счётчики соединений демона трафика, включая адрес источника |
 
 Ноль в `traffic_limit_gb` и `device_limit` означает «без ограничения». Пустой
 `expiry_date` означает «без срока»; значение разбирается как ISO-8601 и при

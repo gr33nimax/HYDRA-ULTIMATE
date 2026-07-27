@@ -1,312 +1,210 @@
-"""Landing-theme decoy site renderer."""
+"""Digital agency landing page renderer."""
 from __future__ import annotations
 
 from pathlib import Path
 
-
-def generate(site_dir: Path) -> None:
-    """Render every file in the landing theme."""
-    _write_index(site_dir)
-    _write_about(site_dir)
-    _write_contact(site_dir)
-    _write_styles(site_dir)
+from hydra.core.decoy_sites import kit
+from hydra.core.decoy_sites.identity import SiteIdentity
 
 
-def _write_index(site_dir: Path) -> None:
-    (site_dir / "index.html").write_text(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-        "  <meta charset=\"UTF-8\">\n"
-        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-        "  <title>Apex Digital Agency | Home</title>\n"
-        "  <link rel=\"stylesheet\" href=\"css/style.css\">\n"
-        "  <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap\" rel=\"stylesheet\">\n"
-        "</head>\n<body>\n"
-        "  <header class=\"navbar\">\n"
-        "    <div class=\"container\">\n"
-        "      <a href=\"index.html\" class=\"logo\">Apex<span>Digital</span></a>\n"
-        "      <nav class=\"nav-links\">\n"
-        "        <a href=\"index.html\" class=\"active\">Home</a>\n"
-        "        <a href=\"about.html\">About Us</a>\n"
-        "        <a href=\"contact.html\">Contact</a>\n"
-        "      </nav>\n"
-        "    </div>\n"
-        "  </header>\n"
-        "  <section class=\"hero\">\n"
-        "    <div class=\"container\">\n"
-        "      <h1>We Build Premium Digital Products</h1>\n"
-        "      <p>Innovative web development, elegant UI/UX design, and result-oriented digital marketing strategies.</p>\n"
-        "      <a href=\"contact.html\" class=\"btn\">Get In Touch</a>\n"
-        "    </div>\n"
-        "  </section>\n"
-        "  <section class=\"services\">\n"
-        "    <div class=\"container\">\n"
-        "      <h2>Our Core Services</h2>\n"
-        "      <div class=\"grid\">\n"
-        "        <div class=\"card\">\n"
-        "          <h3>Web Engineering</h3>\n"
-        "          <p>Highly scalable, secure, and blazing fast web architectures tailored to your enterprise goals.</p>\n"
-        "        </div>\n"
-        "        <div class=\"card\">\n"
-        "          <h3>UX/UI Design</h3>\n"
-        "          <p>Beautiful, modern design interfaces crafted to maximize customer interaction and joy.</p>\n"
-        "        </div>\n"
-        "        <div class=\"card\">\n"
-        "          <h3>Digital Growth</h3>\n"
-        "          <p>Data-driven marketing and SEO optimization to boost your organic reach and conversion.</p>\n"
-        "        </div>\n"
-        "      </div>\n"
-        "    </div>\n"
-        "  </section>\n"
-        "  <footer>\n"
-        "    <p>&copy; 2026 Apex Digital Agency. All rights reserved.</p>\n"
-        "  </footer>\n"
-        "</body>\n</html>\n",
-        encoding="utf-8"
+PAGES = ("/", "/about.html", "/contact.html")
+
+
+def generate(site_dir: Path, identity: SiteIdentity) -> None:
+    """Generate a small agency site with home, about and contact pages."""
+    _write_styles(site_dir, identity)
+    _write_index(site_dir, identity)
+    _write_about(site_dir, identity)
+    _write_contact(site_dir, identity)
+    kit.write_not_found(site_dir, identity)
+    kit.write_sitemap(site_dir, identity, PAGES)
+
+
+def _header(identity: SiteIdentity, current: str) -> str:
+    links = kit.nav(
+        (
+            ("/", "Home"),
+            ("/about.html", "About"),
+            ("/contact.html", "Contact"),
+        ),
+        current=current,
+    )
+    return (
+        "<header class=\"top\"><div class=\"wrap\">"
+        f"<a class=\"brand\" href=\"/\">{kit.esc(identity.brand)}</a>"
+        f"{links}"
+        "</div></header>\n"
     )
 
 
-
-def _write_about(site_dir: Path) -> None:
-    (site_dir / "about.html").write_text(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-        "  <meta charset=\"UTF-8\">\n"
-        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-        "  <title>About Us | Apex Digital Agency</title>\n"
-        "  <link rel=\"stylesheet\" href=\"css/style.css\">\n"
-        "  <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap\" rel=\"stylesheet\">\n"
-        "</head>\n<body>\n"
-        "  <header class=\"navbar\">\n"
-        "    <div class=\"container\">\n"
-        "      <a href=\"index.html\" class=\"logo\">Apex<span>Digital</span></a>\n"
-        "      <nav class=\"nav-links\">\n"
-        "        <a href=\"index.html\">Home</a>\n"
-        "        <a href=\"about.html\" class=\"active\">About Us</a>\n"
-        "        <a href=\"contact.html\">Contact</a>\n"
-        "      </nav>\n"
-        "    </div>\n"
-        "  </header>\n"
-        "  <section class=\"page-header\">\n"
-        "    <div class=\"container\">\n"
-        "      <h1>Who We Are</h1>\n"
-        "      <p>A collective of designers, software engineers, and digital visionaries.</p>\n"
-        "    </div>\n"
-        "  </section>\n"
-        "  <section class=\"content\">\n"
-        "    <div class=\"container\">\n"
-        "      <p>Founded in 2020, Apex Digital has quickly established itself as a premier agency for high-growth tech startups and established enterprises alike.</p>\n"
-        "      <p>We pride ourselves on our meticulous approach, robust engineering guidelines, and absolute commitment to visual and technical quality.</p>\n"
-        "    </div>\n"
-        "  </section>\n"
-        "  <footer>\n"
-        "    <p>&copy; 2026 Apex Digital Agency. All rights reserved.</p>\n"
-        "  </footer>\n"
-        "</body>\n</html>\n",
-        encoding="utf-8"
+def _footer(identity: SiteIdentity) -> str:
+    return (
+        "<footer class=\"foot\"><div class=\"wrap\">"
+        f"<span>© {identity.founded} {kit.esc(identity.brand)}</span>"
+        f"<span>{kit.esc(identity.city)} · "
+        f"<a href=\"mailto:{kit.esc(identity.email)}\">{kit.esc(identity.email)}</a>"
+        "</span>"
+        "</div></footer>\n"
     )
 
 
-
-def _write_contact(site_dir: Path) -> None:
-    (site_dir / "contact.html").write_text(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-        "  <meta charset=\"UTF-8\">\n"
-        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-        "  <title>Contact Us | Apex Digital Agency</title>\n"
-        "  <link rel=\"stylesheet\" href=\"css/style.css\">\n"
-        "  <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap\" rel=\"stylesheet\">\n"
-        "</head>\n<body>\n"
-        "  <header class=\"navbar\">\n"
-        "    <div class=\"container\">\n"
-        "      <a href=\"index.html\" class=\"logo\">Apex<span>Digital</span></a>\n"
-        "      <nav class=\"nav-links\">\n"
-        "        <a href=\"index.html\">Home</a>\n"
-        "        <a href=\"about.html\">About Us</a>\n"
-        "        <a href=\"contact.html\" class=\"active\">Contact</a>\n"
-        "      </nav>\n"
-        "    </div>\n"
-        "  </header>\n"
-        "  <section class=\"page-header\">\n"
-        "    <div class=\"container\">\n"
-        "      <h1>Let's Connect</h1>\n"
-        "      <p>Ready to start your next premium digital experience? Get in touch.</p>\n"
-        "    </div>\n"
-        "  </section>\n"
-        "  <section class=\"contact-form-section\">\n"
-        "    <div class=\"container\">\n"
-        "      <form class=\"contact-form\" action=\"#\" method=\"POST\">\n"
-        "        <label for=\"name\">Full Name</label>\n"
-        "        <input type=\"text\" id=\"name\" name=\"name\" required placeholder=\"Jane Doe\">\n"
-        "        \n"
-        "        <label for=\"email\">Email Address</label>\n"
-        "        <input type=\"email\" id=\"email\" name=\"email\" required placeholder=\"jane@example.com\">\n"
-        "        \n"
-        "        <label for=\"msg\">Project Scope</label>\n"
-        "        <textarea id=\"msg\" name=\"msg\" rows=\"5\" placeholder=\"Tell us about your project...\"></textarea>\n"
-        "        \n"
-        "        <button type=\"submit\" class=\"btn\">Send Message</button>\n"
-        "      </form>\n"
-        "    </div>\n"
-        "  </section>\n"
-        "  <footer>\n"
-        "    <p>&copy; 2026 Apex Digital Agency. All rights reserved.</p>\n"
-        "  </footer>\n"
-        "</body>\n</html>\n",
-        encoding="utf-8"
+def _write_index(site_dir: Path, identity: SiteIdentity) -> None:
+    promise = identity.pick(
+        "landing-hero",
+        (
+            "Digital products that earn their keep",
+            "Strategy, design and delivery under one roof",
+            "We build the software behind growing businesses",
+            "Product teams that ship, not slide decks",
+        ),
+    )
+    services = (
+        ("Product strategy", "Discovery workshops, roadmaps and measurable scope."),
+        ("Design systems", "Interfaces that stay consistent as the team grows."),
+        ("Platform engineering", "Reliable delivery pipelines and cloud foundations."),
+    )
+    cards = "".join(
+        f"<article><h3>{kit.esc(title)}</h3><p>{kit.esc(text)}</p></article>"
+        for title, text in services
+    )
+    delivered = identity.number("landing-projects", 40, 120)
+    body = (
+        f"{_header(identity, '/')}"
+        "<main>"
+        "<section class=\"hero\"><div class=\"wrap\">"
+        f"<h1>{kit.esc(promise)}</h1>"
+        f"<p>{kit.esc(identity.brand)} is an independent studio in "
+        f"{kit.esc(identity.city)} working with founders and in-house teams "
+        "from first sketch to production.</p>"
+        "<a class=\"cta\" href=\"/contact.html\">Start a project</a>"
+        "</div></section>"
+        f"<section class=\"services\"><div class=\"wrap\">{cards}</div></section>"
+        "<section class=\"proof\"><div class=\"wrap\">"
+        f"<strong>{delivered}+</strong>"
+        f"<span>projects delivered since {identity.founded}</span>"
+        "</div></section>"
+        "</main>\n"
+        f"{_footer(identity)}"
+    )
+    kit.write_text(
+        site_dir,
+        "index.html",
+        kit.page(
+            title=f"{identity.brand} — digital studio",
+            description=(
+                f"{identity.brand} builds digital products in {identity.city}."
+            ),
+            body=body,
+        ),
     )
 
 
+def _write_about(site_dir: Path, identity: SiteIdentity) -> None:
+    body = (
+        f"{_header(identity, '/about.html')}"
+        "<main class=\"page\"><div class=\"wrap\">"
+        "<h1>About the studio</h1>"
+        f"<p>{kit.esc(identity.brand)} started in {identity.founded} as a "
+        "two-person consultancy and now works as a small senior team. We take "
+        "a limited number of engagements so every project keeps the people who "
+        "scoped it.</p>"
+        "<h2>How we work</h2>"
+        "<ul>"
+        "<li>A fixed discovery phase before any estimate.</li>"
+        "<li>Weekly demos instead of status reports.</li>"
+        "<li>Handover with documentation, not a support contract.</li>"
+        "</ul>"
+        f"<p>The studio is based in {kit.esc(identity.city)} and collaborates "
+        "remotely across European time zones.</p>"
+        "</div></main>\n"
+        f"{_footer(identity)}"
+    )
+    kit.write_text(
+        site_dir,
+        "about.html",
+        kit.page(
+            title=f"About — {identity.brand}",
+            description=f"How {identity.brand} runs projects.",
+            body=body,
+        ),
+    )
 
-def _write_styles(site_dir: Path) -> None:
-    (site_dir / "css" / "style.css").write_text(_STYLES, encoding="utf-8")
+
+def _write_contact(site_dir: Path, identity: SiteIdentity) -> None:
+    body = (
+        f"{_header(identity, '/contact.html')}"
+        "<main class=\"page\"><div class=\"wrap\">"
+        "<h1>Contact</h1>"
+        "<p>Tell us what you are building and when it needs to be live. "
+        "We reply within two working days.</p>"
+        "<dl class=\"contact\">"
+        f"<dt>Email</dt><dd><a href=\"mailto:{kit.esc(identity.email)}\">"
+        f"{kit.esc(identity.email)}</a></dd>"
+        f"<dt>Studio</dt><dd>{kit.esc(identity.city)}</dd>"
+        "<dt>Hours</dt><dd>Monday to Friday, 09:00–18:00 CET</dd>"
+        "</dl>"
+        "</div></main>\n"
+        f"{_footer(identity)}"
+    )
+    kit.write_text(
+        site_dir,
+        "contact.html",
+        kit.page(
+            title=f"Contact — {identity.brand}",
+            description=f"Get in touch with {identity.brand}.",
+            body=body,
+        ),
+    )
 
 
-_STYLES = (
-        "body {\n"
-        "  margin: 0;\n"
-        "  font-family: 'Inter', sans-serif;\n"
-        "  color: #333;\n"
-        "  background: #fdfdfd;\n"
-        "  line-height: 1.6;\n"
-        "}\n"
-        ".container {\n"
-        "  width: 90%;\n"
-        "  max-width: 1100px;\n"
-        "  margin: 0 auto;\n"
-        "}\n"
-        ".navbar {\n"
-        "  background: #fff;\n"
-        "  border-bottom: 1px solid #eee;\n"
-        "  padding: 1rem 0;\n"
-        "}\n"
-        ".navbar .container {\n"
-        "  display: flex;\n"
-        "  justify-content: space-between;\n"
-        "  align-items: center;\n"
-        "}\n"
-        ".logo {\n"
-        "  font-size: 1.5rem;\n"
-        "  font-weight: 800;\n"
-        "  color: #111;\n"
-        "  text-decoration: none;\n"
-        "}\n"
-        ".logo span {\n"
-        "  color: #0070f3;\n"
-        "}\n"
-        ".nav-links a {\n"
-        "  margin-left: 1.5rem;\n"
-        "  text-decoration: none;\n"
-        "  color: #666;\n"
-        "  font-weight: 600;\n"
-        "  transition: color 0.2s;\n"
-        "}\n"
-        ".nav-links a:hover, .nav-links a.active {\n"
-        "  color: #0070f3;\n"
-        "}\n"
-        ".hero {\n"
-        "  padding: 8rem 0;\n"
-        "  background: radial-gradient(circle at top right, #e3f2fd, #fff);\n"
-        "  text-align: center;\n"
-        "}\n"
-        ".hero h1 {\n"
-        "  font-size: 3rem;\n"
-        "  margin: 0 0 1.5rem 0;\n"
-        "  font-weight: 800;\n"
-        "  color: #111;\n"
-        "}\n"
-        ".hero p {\n"
-        "  font-size: 1.25rem;\n"
-        "  color: #666;\n"
-        "  max-width: 600px;\n"
-        "  margin: 0 auto 2rem auto;\n"
-        "}\n"
-        ".btn {\n"
-        "  background: #0070f3;\n"
-        "  color: #fff;\n"
-        "  padding: 0.75rem 1.5rem;\n"
-        "  border-radius: 5px;\n"
-        "  text-decoration: none;\n"
-        "  font-weight: 600;\n"
-        "  display: inline-block;\n"
-        "  border: none;\n"
-        "  cursor: pointer;\n"
-        "  transition: background 0.2s;\n"
-        "}\n"
-        ".btn:hover {\n"
-        "  background: #0051a8;\n"
-        "}\n"
-        ".services {\n"
-        "  padding: 5rem 0;\n"
-        "}\n"
-        ".services h2 {\n"
-        "  text-align: center;\n"
-        "  margin-bottom: 3rem;\n"
-        "  font-size: 2rem;\n"
-        "}\n"
-        ".grid {\n"
-        "  display: grid;\n"
-        "  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));\n"
-        "  gap: 2rem;\n"
-        "}\n"
-        ".card {\n"
-        "  background: #fff;\n"
-        "  border: 1px solid #eee;\n"
-        "  padding: 2rem;\n"
-        "  border-radius: 8px;\n"
-        "  box-shadow: 0 4px 6px rgba(0,0,0,0.02);\n"
-        "  transition: transform 0.2s, box-shadow 0.2s;\n"
-        "}\n"
-        ".card:hover {\n"
-        "  transform: translateY(-5px);\n"
-        "  box-shadow: 0 10px 15px rgba(0,0,0,0.05);\n"
-        "}\n"
-        "footer {\n"
-        "  background: #111;\n"
-        "  color: #888;\n"
-        "  padding: 3rem 0;\n"
-        "  text-align: center;\n"
-        "  margin-top: 5rem;\n"
-        "}\n"
-        ".page-header {\n"
-        "  background: #fafafa;\n"
-        "  border-bottom: 1px solid #eee;\n"
-        "  padding: 4rem 0;\n"
-        "  text-align: center;\n"
-        "}\n"
-        ".page-header h1 {\n"
-        "  margin: 0 0 1rem 0;\n"
-        "}\n"
-        ".page-header p {\n"
-        "  color: #666;\n"
-        "  margin: 0;\n"
-        "}\n"
-        ".content {\n"
-        "  padding: 4rem 0;\n"
-        "  max-width: 800px;\n"
-        "  margin: 0 auto;\n"
-        "}\n"
-        ".contact-form-section {\n"
-        "  padding: 4rem 0;\n"
-        "}\n"
-        ".contact-form {\n"
-        "  max-width: 500px;\n"
-        "  margin: 0 auto;\n"
-        "  background: #fff;\n"
-        "  padding: 2.5rem;\n"
-        "  border: 1px solid #eee;\n"
-        "  border-radius: 8px;\n"
-        "}\n"
-        ".contact-form label {\n"
-        "  display: block;\n"
-        "  margin-bottom: 0.5rem;\n"
-        "  font-weight: 600;\n"
-        "}\n"
-        ".contact-form input, .contact-form textarea {\n"
-        "  width: 100%;\n"
-        "  padding: 0.75rem;\n"
-        "  border: 1px solid #ccc;\n"
-        "  border-radius: 4px;\n"
-        "  margin-bottom: 1.5rem;\n"
-        "  box-sizing: border-box;\n"
-        "  font-family: inherit;\n"
-        "}\n"
-)
+def _write_styles(site_dir: Path, identity: SiteIdentity) -> None:
+    kit.write_text(
+        site_dir,
+        "css/style.css",
+        kit.variables(identity)
+        + (
+            ".wrap{width:min(1080px,calc(100% - 40px));margin:0 auto}"
+            ".top{background:var(--surface);border-bottom:1px solid #e6e8ef;"
+            "position:sticky;top:0}"
+            ".top .wrap{display:flex;align-items:center;justify-content:space-between;"
+            "height:72px}"
+            ".brand{font-weight:700;font-size:19px;color:#141a26;letter-spacing:-.01em}"
+            "nav a{margin-left:26px;color:#5b6478;font-size:15px}"
+            "nav a.current{color:var(--accent);font-weight:600}"
+            ".hero{padding:96px 0 72px;"
+            "background:linear-gradient(180deg,var(--tint),var(--backdrop))}"
+            ".hero h1{font-size:clamp(32px,5vw,52px);line-height:1.1;margin:0 0 20px;"
+            "max-width:16ch}"
+            ".hero p{font-size:19px;color:#4a5364;max-width:60ch;margin:0 0 32px}"
+            ".cta{display:inline-block;background:var(--accent);color:#fff;"
+            "padding:14px 28px;border-radius:var(--radius);font-weight:600}"
+            ".cta:hover{background:var(--accent-dark);color:#fff}"
+            ".services .wrap{display:grid;gap:24px;"
+            "grid-template-columns:repeat(auto-fit,minmax(260px,1fr));padding:64px 0}"
+            ".services article{background:var(--surface);border:1px solid #e6e8ef;"
+            "border-radius:var(--radius);padding:28px}"
+            ".services h3{margin:0 0 10px;font-size:18px}"
+            ".services p{margin:0;color:#5b6478}"
+            ".proof{background:#141a26;color:#fff;padding:48px 0}"
+            ".proof .wrap{display:flex;align-items:baseline;gap:16px}"
+            ".proof strong{font-size:40px;color:var(--accent)}"
+            ".proof span{color:#aeb6c6}"
+            ".page{padding:64px 0}.page h1{font-size:36px;margin:0 0 18px}"
+            ".page h2{font-size:22px;margin:32px 0 12px}"
+            ".page p,.page li{color:#4a5364;max-width:70ch}"
+            ".contact dt{font-weight:600;margin-top:16px}"
+            ".contact dd{margin:4px 0 0;color:#4a5364}"
+            ".foot{border-top:1px solid #e6e8ef;background:var(--surface);"
+            "padding:28px 0;margin-top:40px}"
+            ".foot .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;"
+            "gap:12px;color:#7a8296;font-size:14px}"
+            ".notfound{padding:120px 20px;text-align:center}"
+            ".notfound h1{font-size:64px;margin:0;color:var(--accent)}"
+            "@media(max-width:640px){.top .wrap{height:auto;padding:16px 0;"
+            "flex-direction:column;gap:12px}nav a{margin:0 14px 0 0}"
+            ".hero{padding:56px 0 44px}}"
+        ),
+    )
+
+
+__all__ = ["PAGES", "generate"]

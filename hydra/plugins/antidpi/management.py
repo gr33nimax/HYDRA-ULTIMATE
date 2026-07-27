@@ -1,7 +1,6 @@
 """Administrative AntiDPI operations over explicit state/runtime ports."""
 from __future__ import annotations
 
-import copy
 import ipaddress
 
 from hydra.plugins.antidpi.model import (
@@ -11,6 +10,7 @@ from hydra.plugins.antidpi.model import (
     record_unban,
 )
 from hydra.plugins.antidpi.firewall_rules import SET_V4, SET_V6
+from hydra.plugins.antidpi.projection import management_projection
 from hydra.plugins.context import PluginStateAccess
 
 
@@ -25,12 +25,10 @@ class AntiDPIManagementMixin:
         self._state_store().save(data)
 
     def management_snapshot(self) -> dict:
-        """Return active detector evidence without mutating runtime state."""
+        """Return bounded detector evidence without mutating runtime state."""
         with self._state_lock():
             data = self._state_store().load()
-            projection = copy.deepcopy(data)
-            projection["banned"] = copy.deepcopy(active_bans(data))
-            return projection
+        return management_projection(data, now=self._clock())
 
     def recent_logs(self, *, limit: int = 50) -> list[str]:
         result = self._command(
@@ -60,18 +58,42 @@ class AntiDPIManagementMixin:
         network: str,
     ) -> bool:
         del state
-        normalized = str(ipaddress.ip_network(network, strict=False))
+        parsed = ipaddress.ip_network(network, strict=False)
+        normalized = str(parsed)
         with self._state_lock():
             data = self._state_store().load()
             values = data.get("whitelist", [])
             if not isinstance(values, list):
                 values = []
-            if normalized in values:
-                return False
-            values.append(normalized)
-            data["whitelist"] = values
-            self._state_store().save(data)
-        return True
+            already_present = normalized in values
+            if not already_present:
+                values.append(normalized)
+                data["whitelist"] = values
+                self._state_store().save(data)
+            covered = self._banned_inside(data, parsed, now=self._clock())
+        # Releasing runs outside the state lock: ``unban`` acquires it again
+        # and flock is not reentrant across file descriptors.
+        for address in covered:
+            self.unban(address)
+        return not already_present
+
+    @staticmethod
+    def _banned_inside(
+        data: dict,
+        network: ipaddress.IPv4Network | ipaddress.IPv6Network,
+        *,
+        now: float,
+    ) -> list[str]:
+        """Return active bans that a newly trusted network now covers."""
+        matches = []
+        for address in active_bans(data, now=now):
+            try:
+                parsed = ipaddress.ip_address(address)
+            except ValueError:
+                continue
+            if parsed.version == network.version and parsed in network:
+                matches.append(address)
+        return sorted(matches)
 
     def remove_whitelist(
         self,

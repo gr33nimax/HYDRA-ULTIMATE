@@ -42,9 +42,21 @@ class PluginCommandService:
     get_plugin: Callable[[str], BasePlugin | None]
     apply_config: Callable[[AppState], bool]
     save_state: Callable[[AppState], None]
+    # A rollback must land even when a background writer moved the revision;
+    # facades without the dedicated restore fall back to a plain save.
+    restore_state: Callable[[AppState], object] | None = None
     invoker: PluginInvoker = field(default_factory=PluginInvoker)
     prepare_apply: Callable[[AppState, str], None] = lambda state, name: None
     commands: Mapping[str, frozenset[str]] | None = None
+
+    def _persist_rollback(self, state: AppState) -> None:
+        """Persist a restored snapshot without failing on a stale revision."""
+        if self.restore_state is None:
+            self.save_state(state)
+            return
+        restored = self.restore_state(state)
+        if isinstance(restored, AppState):
+            state.revision = restored.revision
 
     def execute(
         self,
@@ -83,7 +95,7 @@ class PluginCommandService:
                     plugin_snapshot,
                 )
             finally:
-                self.save_state(state)
+                self._persist_rollback(state)
             if not plugin_rolled_back:
                 raise RuntimeError(
                     f"plugin command rollback failed: {plugin_name}.{command}",

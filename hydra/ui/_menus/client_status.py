@@ -1,7 +1,5 @@
-"""Protocol client and traffic status projection."""
+"""Per-protocol traffic projection for protocol screens."""
 from __future__ import annotations
-
-from datetime import datetime
 
 from hydra.core.state_models import AppState
 from hydra.services.application import ApplicationService
@@ -9,10 +7,8 @@ from hydra.ui.tui import (
     BOLD,
     CYAN,
     DIM,
-    GREEN,
     NC,
     PANEL_W,
-    RED,
     WHITE,
     YELLOW,
     _bytes_auto,
@@ -23,74 +19,46 @@ from hydra.ui.tui import (
 )
 
 
-def show_plugin_clients(
+def show_plugin_traffic(
     state: AppState,
     plugin,
     app: ApplicationService,
 ) -> None:
+    """Show what each user has moved through this protocol."""
     clear()
     name = plugin.meta.name
     try:
-        clients = app.protocols.connected_clients(state, name)
         traffic = app.protocols.traffic(state, name)
         lines: list[str] = []
-        if not clients and not traffic:
-            lines.append(f"{YELLOW}Нет активных клиентов или трафика{NC}")
-        elif clients:
-            lines.append(f"{BOLD}{WHITE}Активные сессии:{NC}")
-            now = int(datetime.now().timestamp())
-            for client in clients:
-                marker = (
-                    f"{GREEN}🟢{NC}" if client.get("online") else f"{RED}🔴{NC}"
-                )
-                handshake = int(client.get("last_handshake", 0))
-                age = max(0, now - handshake) if handshake else None
-                if age is None:
-                    activity = f"{DIM}не активен{NC}"
-                elif age < 60:
-                    activity = f"{GREEN}только что{NC}"
-                elif age < 3600:
-                    activity = f"{GREEN}{age // 60} мин. назад{NC}"
-                elif age < 86400:
-                    activity = f"{DIM}{age // 3600} ч. назад{NC}"
-                else:
-                    activity = f"{DIM}{age // 86400} дн. назад{NC}"
-                lines.append(
-                    f"  {marker} {BOLD}{client.get('email', '?'):<18}{NC}  "
-                    f"↓{_bytes_auto(client.get('rx', 0)):<9} "
-                    f"↑{_bytes_auto(client.get('tx', 0)):<9}  {activity}",
-                )
+        if not traffic:
+            lines.append(f"{YELLOW}Трафик по протоколу ещё не учтён{NC}")
         else:
-            lines.append(f"{BOLD}{WHITE}Статистика трафика:{NC}")
+            lines.append(f"{BOLD}{WHITE}Трафик по пользователям:{NC}")
             lines.extend(
-                f"  {BOLD}{email:<20}{NC}  {_bytes_auto(total)}"
-                for email, total in traffic.items()
+                f"  {BOLD}{email:<24}{NC}  {_bytes_auto(total)}"
+                for email, total in sorted(
+                    traffic.items(),
+                    key=lambda item: int(item[1]),
+                    reverse=True,
+                )
             )
-
-        lines.extend(
-            [
-                f"{DIM}{'─' * (PANEL_W - 4)}{NC}",
-                f"{BOLD}{WHITE}СВОДНАЯ СТАТИСТИКА ПОТОКА:{NC}",
-                f"  Всего клиентов:  {len(clients) if clients else len(traffic)}",
-            ],
-        )
-        if clients:
-            online = sum(1 for client in clients if client.get("online"))
-            received = sum(int(client.get("rx", 0)) for client in clients)
-            sent = sum(int(client.get("tx", 0)) for client in clients)
             lines.extend(
                 [
-                    f"  В сети (online): {GREEN}{online}{NC}",
-                    f"  Получено (RX):   {GREEN}{_bytes_auto(received)}{NC}",
-                    f"  Отправлено (TX): {GREEN}{_bytes_auto(sent)}{NC}",
-                    f"  Общий трафик:    {CYAN}{_bytes_auto(received + sent)}{NC}",
+                    f"{DIM}{'─' * (PANEL_W - 4)}{NC}",
+                    f"  Пользователей:  {len(traffic)}",
+                    "  Всего:          "
+                    f"{CYAN}{_bytes_auto(sum(int(value) for value in traffic.values()))}{NC}",
                 ],
             )
-        panel(f"👥  КЛИЕНТЫ: {name.upper()}", lines)
+        panel(f"📊  ТРАФИК: {name.upper()}", lines)
     except Exception as exc:
-        error(f"Ошибка получения клиентов: {exc}")
+        error(f"Ошибка получения трафика: {exc}")
     print()
     prompt("Нажмите Enter")
 
 
-__all__ = ["show_plugin_clients"]
+# Historical name kept for adapters that still import it.
+show_plugin_clients = show_plugin_traffic
+
+
+__all__ = ["show_plugin_clients", "show_plugin_traffic"]

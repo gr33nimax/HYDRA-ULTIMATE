@@ -17,6 +17,7 @@ from hydra.core.sni_router import (
 )
 from hydra.core.source_relay import MAP_FILE
 from hydra.core.state_models import AppState
+from hydra.plugins.antidpi.normalization import vless_endpoint
 from hydra.plugins.antidpi.paths import NAIVE_ACCESS_LOG
 from hydra.plugins.antidpi.selftest_capture import (
     all_journal,
@@ -39,6 +40,7 @@ from hydra.plugins.antidpi.selftest_probes import (
     socks_trigger,
 )
 from hydra.plugins.antidpi.selftest_report import (
+    archive_path,
     environment,
     journal,
     log_filter_matches,
@@ -200,8 +202,13 @@ def _record_summary(protocol: str, records: list[dict]) -> dict:
 def _log_filter_matches(
     protocol: str,
     logs: dict[str, list[str]],
+    state: AppState | None = None,
 ) -> list[dict]:
-    return log_filter_matches(protocol, logs)
+    return log_filter_matches(
+        protocol,
+        logs,
+        vless_endpoint=vless_endpoint(state),
+    )
 
 
 def _protocol_report(enabled: bool) -> dict[str, object]:
@@ -271,7 +278,7 @@ def _exercise_protocol(
     logs = _new_log_lines(before)
     item.update(_record_summary(protocol, records))
     item["current_filter_matches"].extend(
-        _log_filter_matches(protocol, logs),
+        _log_filter_matches(protocol, logs, state),
     )
     item["logs"] = {path: len(lines) for path, lines in logs.items()}
     coverage["native_log_observed"] = bool(records or logs)
@@ -337,18 +344,6 @@ def _coverage_summary(report: dict) -> dict:
     }
 
 
-def _archive_path(output: str | None, *, kind: str, stamp: str) -> Path:
-    archive = (
-        Path(output)
-        if output
-        else Path(f"/tmp/hydra-antidpi-{kind}-{stamp}.tar.gz")
-    )
-    if archive.is_dir():
-        archive = archive / f"hydra-antidpi-{kind}-{stamp}.tar.gz"
-    archive.parent.mkdir(parents=True, exist_ok=True)
-    return archive
-
-
 def run_selftest(
     state: AppState,
     output: str | None = None,
@@ -361,7 +356,7 @@ def run_selftest(
     if not _is_linux_host():
         raise RuntimeError("AntiDPI selftest must run on the HYDRA Linux host")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    archive = _archive_path(output, kind="selftest", stamp=stamp)
+    archive = archive_path(output, kind="selftest", stamp=stamp)
     redact = _redactor(state)
     report = {
         "schema": 2,
@@ -454,7 +449,7 @@ def capture_external_tests(
         raise ValueError("runtime_snapshot is required")
     duration = max(10.0, min(float(seconds), 600.0))
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    archive = _archive_path(output, kind="capture", stamp=stamp)
+    archive = archive_path(output, kind="capture", stamp=stamp)
     redact = _redactor(state)
     before = _offsets()
     runtime_before = runtime_snapshot()

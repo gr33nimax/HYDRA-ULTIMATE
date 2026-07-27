@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import re
 import ssl
 import urllib.parse
@@ -16,9 +17,10 @@ from hydra.services.subscriptions.client_configs import (
     generate_singbox_config,
     generate_throne_sub,
 )
+from hydra.services.subscriptions.proxy_protocol import read_source_address
 from hydra.services.subscriptions.devices import (
     register_subscription_device,
-    subscription_device_id,
+    subscription_fingerprint,
 )
 from hydra.services.subscriptions.links import generate_base64_sub
 from hydra.services.subscriptions.metadata import (
@@ -113,12 +115,15 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             self._send_error(404, "Not found")
             return
 
-        device_id = subscription_device_id(
+        fingerprint = subscription_fingerprint(
             self.headers,
             str(self.client_address[0] if self.client_address else ""),
             parameters,
         )
-        state, _, device_status = register_subscription_device(token, device_id)
+        state, _, device_status = register_subscription_device(
+            token,
+            fingerprint,
+        )
         if device_status == "limit":
             self._send_error(403, "Device limit reached")
             return
@@ -161,6 +166,43 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         self.wfile.write(content.encode())
 
 
+def _is_loopback(address: tuple[object, ...]) -> bool:
+    try:
+        return ipaddress.ip_address(str(address[0])).is_loopback
+    except ValueError:
+        return False
+
+
+class _ProxyTLSHTTPServer(HTTPServer):
+    """Consume a trusted PROXY preamble before starting the TLS handshake."""
+
+    def __init__(
+        self,
+        server_address,
+        handler_class,
+        tls_context: ssl.SSLContext,
+    ) -> None:
+        self.tls_context = tls_context
+        super().__init__(server_address, handler_class)
+
+    def get_request(self):
+        connection, address = super().get_request()
+        try:
+            source = (
+                read_source_address(connection)
+                if _is_loopback(address)
+                else None
+            )
+            tls_connection = self.tls_context.wrap_socket(
+                connection,
+                server_side=True,
+            )
+        except Exception:
+            connection.close()
+            raise
+        return tls_connection, source or address
+
+
 def run_standalone(
     plugins: SubscriptionPluginAccess,
     host: str = "0.0.0.0",
@@ -169,11 +211,6 @@ def run_standalone(
     """Run the HTTPS subscription adapter with explicit plugin access."""
     state = load_state()
     SubscriptionHandler.plugins = plugins
-    try:
-        server = HTTPServer((host, port), SubscriptionHandler)
-    except OSError as exc:
-        print(f"Failed to bind subscription server to {host}:{port}: {exc}")
-        return
 
     certificate, key = find_any_cert(state)
     if not certificate or not key:
@@ -181,19 +218,26 @@ def run_standalone(
             "ERROR: SSL certificates not found! "
             "Subscription server requires HTTPS/TLS.",
         )
-        server.server_close()
         return
 
     try:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(certfile=certificate, keyfile=key)
-        server.socket = context.wrap_socket(server.socket, server_side=True)
-        print(f"SSL/HTTPS enabled using cert: {certificate}")
     except Exception as exc:
         print(f"Failed to wrap socket with SSL: {exc}")
-        server.server_close()
         return
 
+    try:
+        server = _ProxyTLSHTTPServer(
+            (host, port),
+            SubscriptionHandler,
+            context,
+        )
+    except OSError as exc:
+        print(f"Failed to bind subscription server to {host}:{port}: {exc}")
+        return
+
+    print(f"SSL/HTTPS enabled using cert: {certificate}")
     print(f"Starting subscription server on https://{host}:{port}")
     try:
         server.serve_forever()

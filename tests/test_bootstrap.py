@@ -45,6 +45,11 @@ def test_readme_one_command_installs_main():
     assert "sudo python3 main.py" not in README
 
 
+def test_readme_overview_table_has_no_empty_header_row():
+    assert "| | |" not in README
+    assert '<tr><th scope="row">Транспорты</th><td>11</td></tr>' in README
+
+
 def test_public_docs_do_not_reference_retired_branch():
     retired_branch = "legacy" + "-main"
     assert all(
