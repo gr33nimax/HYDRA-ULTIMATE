@@ -19,6 +19,7 @@ from hydra.ui._menus.protocol_activation import run_lifecycle_action
 from hydra.ui._menus.vless_xhttp_profiles import (
     open_menu as open_profiles_menu,
 )
+from hydra.ui._menus.vless_xhttp_lifecycle import reinstall as reinstall_vless
 from hydra.ui._menus.vless_xhttp_settings import (
     open_menu as open_settings_menu,
 )
@@ -191,12 +192,10 @@ def _menu_vless(
         elif choice == "4" and desired.installed:
             open_settings_menu(state, plugin, app)
         elif choice == "8" and desired.installed:
-            if confirm("Переустановить VLESS + XHTTP?", default=False):
-                if app.protocols.reinstall(state, plugin.meta.name):
-                    success("Переустановлено!")
-                else:
-                    error("Ошибка переустановки")
-                prompt("Нажмите Enter")
+            reinstall_vless(
+                state, plugin, app, ask=confirm, report_error=error,
+                report_success=success, pause=prompt,
+            )
         elif choice == "9" and desired.installed:
             if not confirm(
                 "Полностью удалить VLESS + XHTTP?",

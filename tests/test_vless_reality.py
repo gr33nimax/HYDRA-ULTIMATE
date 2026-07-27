@@ -238,6 +238,24 @@ def test_reality_link_and_profile_carry_the_public_key():
     assert outbound["transport"]["host"] == HANDSHAKE
 
 
+def test_reality_link_and_profile_fall_back_to_detected_public_ip():
+    state = _reality_state()
+    state.network.server_ip = ""
+    plugin = VlessXhttpPlugin()
+
+    with patch(
+        "hydra.utils.net.public_ip",
+        return_value="198.51.100.8",
+    ):
+        link = plugin.client_link(state.users[0], state)
+        outbound = json.loads(
+            plugin.generate_client_config(state.users[0], state),
+        )["outbounds"][0]
+
+    assert urlsplit(link).hostname == "198.51.100.8"
+    assert outbound["server"] == "198.51.100.8"
+
+
 def test_configured_fingerprint_wins_over_the_reality_default():
     state = _reality_state()
     VlessXhttpPlugin().set_tuning(state, utls_fingerprint="firefox")
@@ -267,7 +285,7 @@ def test_reality_never_publishes_the_private_key():
     assert info["Security"] == MODE_REALITY
 
 
-def test_enabling_reality_needs_no_certificate_but_needs_a_public_ip():
+def test_enabling_reality_uses_a_detected_public_ip_without_a_certificate():
     state = _reality_state()
     plugin = VlessXhttpPlugin()
 
@@ -276,7 +294,17 @@ def test_enabling_reality_needs_no_certificate_but_needs_a_public_ip():
     assert open_tcp.call_args_list == [((443, "vless-xhttp"),)]
 
     state.network.server_ip = ""
-    with patch("hydra.utils.firewall.open_tcp") as open_tcp:
+    with patch(
+        "hydra.utils.net.public_ip",
+        return_value="198.51.100.8",
+    ), patch("hydra.utils.firewall.open_tcp") as open_tcp:
+        plugin.on_enable(state)
+    assert open_tcp.call_args_list == [((443, "vless-xhttp"),)]
+
+    with patch(
+        "hydra.utils.net.public_ip",
+        return_value="127.0.0.1",
+    ), patch("hydra.utils.firewall.open_tcp") as open_tcp:
         with pytest.raises(ValueError, match="Публичный IP"):
             plugin.on_enable(state)
     open_tcp.assert_not_called()

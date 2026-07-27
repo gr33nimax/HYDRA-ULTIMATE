@@ -200,3 +200,36 @@ def test_vless_specialised_menu_keeps_advanced_settings_available():
         extended_protocol_vless._menu_vless(state, plugin, app)
 
     open_settings.assert_called_once_with(state, plugin, app)
+
+
+def test_vless_reinstall_failure_is_reported_without_leaving_the_tui():
+    state = _state()
+    app = _app(state)
+    app.protocols.reinstall.side_effect = ValueError("public IP is unknown")
+
+    with patch.object(
+        extended_protocol_vless,
+        "clear",
+    ), patch.object(
+        extended_protocol_vless,
+        "protocol_status_panel",
+    ), patch.object(
+        extended_protocol_vless,
+        "menu",
+        side_effect=["8", "0"],
+    ), patch.object(
+        extended_protocol_vless,
+        "confirm",
+        return_value=True,
+    ), patch.object(
+        extended_protocol_vless,
+        "prompt",
+    ), patch.object(
+        extended_protocol_vless,
+        "error",
+    ) as report_error:
+        extended_protocol_vless._menu_vless(state, _plugin(), app)
+
+    report_error.assert_called_once_with(
+        "Ошибка переустановки VLESS: public IP is unknown",
+    )

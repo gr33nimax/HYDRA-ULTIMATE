@@ -1,6 +1,8 @@
 """VLESS over XHTTP for the shtorm-7 sing-box-extended core."""
 from __future__ import annotations
 
+import ipaddress
+
 from hydra.core.state_models import User
 from hydra.plugins.base import (
     BasePlugin,
@@ -211,7 +213,7 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
     ) -> tuple[str, str]:
         """Return the (server, host) pair a client should dial."""
         if is_reality(config):
-            server = str(getattr(state.network, "server_ip", "") or "").strip()
+            server = self._reality_server(state)
             if not server:
                 return "", ""
             return server, handshake_target(config)
@@ -220,6 +222,21 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
             return "", ""
         domain = _normalize_domain(raw_domain)
         return domain, domain
+
+    @staticmethod
+    def _reality_server(state: PluginStateAccess) -> str:
+        """Resolve the public IP used by Reality clients without persisting it."""
+        from hydra.utils.net import public_ip
+
+        configured = str(getattr(state.network, "server_ip", "") or "").strip()
+        value = (configured or public_ip()).strip().strip("[]")
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError:
+            return ""
+        if address.is_loopback or address.is_unspecified or address.is_multicast:
+            return ""
+        return address.compressed
 
     def generate_client_config(
         self,
@@ -266,7 +283,7 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
 
         if is_reality(config):
             server_tls(config)
-            if not str(getattr(state.network, "server_ip", "") or "").strip():
+            if not self._reality_server(state):
                 raise ValueError(
                     "Публичный IP сервера неизвестен: клиентам Reality "
                     "некуда подключаться",
