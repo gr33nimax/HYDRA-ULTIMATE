@@ -6,6 +6,7 @@ from typing import Callable
 
 from hydra.plugins.base import ConfigFragment
 from hydra.plugins.context import PluginStateAccess
+from hydra.plugins.warp.route_validation import validate_route_targets
 
 ParsedProfile = dict[str, dict[str, str]]
 EndpointParser = Callable[[str], tuple[str, int] | None]
@@ -219,8 +220,9 @@ def render_route_rules(
     outbound_domains: dict[str, list] = {}
     outbound_ips: dict[str, list] = {}
     local_lists = config.get("local_lists", {})
+    validate_route_targets(config.get("list_targets", {}), destinations)
     for list_key, target in config.get("list_targets", {}).items():
-        if not target or target == "none" or target not in destinations:
+        if not target or target == "none":
             continue
         domains, ips = _list_entries(
             list_key,

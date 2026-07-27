@@ -1,6 +1,7 @@
 """VLESS Reality over XHTTP: configuration, routing, links and health."""
 from __future__ import annotations
 
+import copy
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -22,6 +23,7 @@ from hydra.plugins.vless_xhttp.security import (
     PASSTHROUGH_ROUTE_KEY,
     is_reality,
 )
+from hydra.services.plugin_commands import PluginCommandService
 from hydra.services.protocol_setup import ProtocolSetupService
 from hydra.ui._menus import vless_xhttp_settings
 
@@ -85,14 +87,85 @@ def test_switching_back_to_tls_restores_the_decoy_route():
     state = _reality_state()
     plugin = VlessXhttpPlugin()
 
-    assert plugin.set_security(state, MODE_TLS)
+    assert plugin.set_security(
+        state,
+        MODE_TLS,
+        domain="XHTTP.Example.COM.",
+    )
 
     config = _config(state)
     assert not is_reality(config)
+    assert config["domain"] == "xhttp.example.com"
     assert PASSTHROUGH_ROUTE_KEY not in config
     assert config[ROUTE_CONFIG_KEY]["kind"] == "http_path_proxy"
     # Keys survive the round trip so switching back needs no new handshake.
     assert config["reality_public_key"] == KEYPAIR[1]
+
+
+def test_switching_back_to_tls_requires_a_domain_without_mutating_reality():
+    state = _reality_state()
+    before = copy.deepcopy(_config(state))
+
+    with pytest.raises(ValueError, match="domain is invalid"):
+        VlessXhttpPlugin().set_security(state, MODE_TLS)
+
+    assert _config(state) == before
+
+
+def test_enabled_command_switches_reality_to_tls_in_one_apply():
+    state = _reality_state()
+    plugin = VlessXhttpPlugin()
+    certificates = MagicMock()
+    certificates.ensure.return_value = ("/cert.pem", "/key.pem")
+    setup = ProtocolSetupService(certificates, lambda _name: plugin)
+    applied = []
+    service = PluginCommandService(
+        get_plugin=lambda _name: plugin,
+        apply_config=lambda current: applied.append(copy.deepcopy(current)) or True,
+        save_state=lambda _state: None,
+        prepare_apply=setup.prepare_enable,
+    )
+
+    assert service.execute(
+        state,
+        "vless",
+        "set_security",
+        mode=MODE_TLS,
+        domain="XHTTP.Example.COM.",
+    )
+
+    config = _config(state)
+    assert config["security"] == MODE_TLS
+    assert config["domain"] == "xhttp.example.com"
+    assert config["cert_file"] == "/cert.pem"
+    assert config["key_file"] == "/key.pem"
+    assert len(applied) == 1
+
+
+def test_failed_tls_preflight_rolls_the_whole_transition_back_to_reality():
+    state = _reality_state()
+    before = copy.deepcopy(state)
+    plugin = VlessXhttpPlugin()
+    certificates = MagicMock()
+    certificates.ensure.side_effect = RuntimeError("certificate unavailable")
+    setup = ProtocolSetupService(certificates, lambda _name: plugin)
+    service = PluginCommandService(
+        get_plugin=lambda _name: plugin,
+        apply_config=lambda _state: True,
+        save_state=lambda _state: None,
+        prepare_apply=setup.prepare_enable,
+    )
+
+    with pytest.raises(RuntimeError, match="certificate unavailable"):
+        service.execute(
+            state,
+            "vless",
+            "set_security",
+            mode=MODE_TLS,
+            domain="xhttp.example.com",
+        )
+
+    assert state == before
 
 
 def test_existing_keys_are_reused_instead_of_regenerated():
@@ -415,4 +488,30 @@ def test_settings_menu_switches_to_reality_with_a_chosen_handshake():
         "set_security",
         mode=MODE_REALITY,
         handshake="www.icloud.com",
+    )
+
+
+def test_settings_menu_requests_a_domain_when_switching_reality_to_tls():
+    state = _reality_state()
+    app = MagicMock()
+    app.admin.load_state.return_value = state
+    app.plugin_command.return_value = True
+
+    with patch.object(
+        vless_xhttp_settings,
+        "menu",
+        side_effect=["1", "1", "0"],
+    ), patch.object(
+        vless_xhttp_settings,
+        "prompt",
+        side_effect=["XHTTP.Example.COM.", ""],
+    ):
+        vless_xhttp_settings.open_menu(state, MagicMock(), app)
+
+    app.plugin_command.assert_called_once_with(
+        state,
+        "vless",
+        "set_security",
+        mode=MODE_TLS,
+        domain="XHTTP.Example.COM.",
     )

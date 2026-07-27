@@ -109,9 +109,15 @@ def passthrough_route(internal_port: int) -> dict[str, object]:
 def apply_tls_mode(
     config: dict[str, object],
     *,
+    domain: object,
     decoy_route: dict[str, object],
 ) -> None:
     """Switch the endpoint to a certificate served through Caddy."""
+    normalized = normalize_domain(domain)
+    if normalized != config.get("domain"):
+        config.pop("cert_file", None)
+        config.pop("key_file", None)
+    config["domain"] = normalized
     config["security"] = MODE_TLS
     config.pop(PASSTHROUGH_ROUTE_KEY, None)
     config[DECOY_ROUTE_KEY] = dict(decoy_route)

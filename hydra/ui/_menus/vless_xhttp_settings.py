@@ -231,7 +231,19 @@ def _change_security(
         "TLS-РЕЖИМ VLESS",
     )
     if selected == "1":
-        return app.plugin_command(state, "vless", "set_security", mode=MODE_TLS)
+        domain = prompt(
+            "Домен VLESS с A-записью на этот сервер",
+            default=str(desired.config.get("domain", "")),
+        ).strip()
+        if not domain:
+            return None
+        return app.plugin_command(
+            state,
+            "vless",
+            "set_security",
+            mode=MODE_TLS,
+            domain=domain,
+        )
     if selected != "2":
         return None
     handshake = prompt(

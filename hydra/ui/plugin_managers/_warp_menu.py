@@ -24,6 +24,29 @@ from hydra.ui.tui import (
 )
 
 
+def _wgcf_failure_message(
+    app: ApplicationService,
+    summary: str,
+) -> str:
+    """Return a bounded, operator-visible WGCF failure without exposing files."""
+    try:
+        result = app.logs.read(
+            "file",
+            "/var/log/hydra/warp_install.log",
+            8,
+        )
+    except Exception:
+        return summary
+    details = [
+        str(line).strip()
+        for line in result.lines
+        if str(line).strip()
+    ]
+    if not details:
+        return summary
+    return f"{summary}\n  Детали: {' | '.join(details[-8:])}"
+
+
 def _runtime(app: ApplicationService):
     status = app.protocols.status("warp")
     observation = facade._warp_observation(app)
@@ -91,23 +114,37 @@ def _status_lines(
         ),
     ]
     lines.extend(
-        f"  • warp_{profile}:       {CYAN}активен (релей){NC}"
+        f"  • warp_{profile}:       {CYAN}"
+        f"{'активен (релей)' if status.enabled else 'настроен (не активен)'}{NC}"
         for profile in profiles
     )
     lines.extend([
         "  " + "─" * 45,
         f"  {BOLD}Маршруты списков правил:{NC}",
     ])
+    if not status.enabled:
+        lines.append(
+            f"  {YELLOW}WARP выключен: маршруты WARP сейчас не применяются.{NC}",
+        )
     active = [
         (key, target)
         for key, target in list_targets.items()
         if target and target != "none"
     ]
-    lines.extend(
-        f"  • {_route_name(key, external_sources):<22} → "
-        f"{GREEN if target != 'direct' else YELLOW}{target}{NC}"
-        for key, target in active
-    )
+    for key, target in active:
+        if target not in destinations:
+            rendered_target = f"{target} (недоступен)"
+            color = RED
+        elif not status.enabled:
+            rendered_target = f"{target} (не применяется)"
+            color = DIM
+        else:
+            rendered_target = target
+            color = GREEN if target != "direct" else YELLOW
+        lines.append(
+            f"  • {_route_name(key, external_sources):<22} → "
+            f"{color}{rendered_target}{NC}",
+        )
     if not active:
         lines.append(
             f"  {YELLOW}Нет активных маршрутов. Настройте их ниже.{NC}",
@@ -254,10 +291,31 @@ def _recreate_or_install_profile(
 ) -> None:
     if not default_exists:
         info("Устанавливаю локальный WGCF...")
-        if app.protocols.install(state, "warp"):
+        result = app.protocols.lifecycle_result(
+            state,
+            "install",
+            "warp",
+        )
+        if result:
             success("Локальный WGCF профиль успешно создан!")
             if plugin_state.enabled:
-                app.apply(state)
+                if not app.apply(state):
+                    detail = app.apply_error() or "неизвестная ошибка применения"
+                    error(
+                        f"WGCF создан, но конфигурация не применена: {detail}",
+                    )
+        else:
+            detail = (
+                result.error.message
+                if result.error is not None
+                else "неизвестная ошибка установки"
+            )
+            error(
+                _wgcf_failure_message(
+                    app,
+                    f"Не удалось установить локальный WGCF: {detail}",
+                ),
+            )
         prompt("Нажмите Enter для продолжения")
         return
     warn("ПЕРЕУСТАНОВКА WGCF!")
@@ -280,7 +338,12 @@ def _recreate_or_install_profile(
                     "пересоздан и применён!",
                 )
         else:
-            error("Не удалось пересоздать локальный WGCF профиль.")
+            error(
+                _wgcf_failure_message(
+                    app,
+                    "Не удалось пересоздать локальный WGCF профиль.",
+                ),
+            )
     prompt("Нажмите Enter для продолжения")
 
 
