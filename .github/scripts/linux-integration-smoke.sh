@@ -5,10 +5,13 @@ set -Eeuo pipefail
 
 tmp_dir=$(mktemp -d /tmp/hydra-integration.XXXXXX)
 unit=/etc/systemd/system/hydra-ci-smoke.service
+wgcf_profile=/etc/wireguard/wgcf-profile.conf
+wgcf_profile_created=0
 cleanup() {
     systemctl stop hydra-ci-smoke.service >/dev/null 2>&1 || true
     rm -f "$unit"
     systemctl daemon-reload >/dev/null 2>&1 || true
+    ((wgcf_profile_created)) && rm -f "$wgcf_profile"
     rm -rf "$tmp_dir"
     rm -f \
         /var/lib/hydra/state.json \
@@ -21,6 +24,24 @@ trap cleanup EXIT
 
 install -d -m 0700 /var/lib/hydra
 install -m 0600 tests/fixtures/state-2.5.3.json /var/lib/hydra/state.json
+install -d -m 0700 /etc/wireguard
+[[ ! -e "$wgcf_profile" ]] || {
+    echo "integration smoke refuses to overwrite $wgcf_profile" >&2
+    exit 1
+}
+cat > "$wgcf_profile" <<'EOF'
+[Interface]
+PrivateKey = ci-warp-private-key
+Address = 172.16.0.2/32, 2606:4700:110::2/128
+MTU = 1280
+
+[Peer]
+PublicKey = ci-warp-public-key
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = 162.159.193.10:2408
+EOF
+chmod 0600 "$wgcf_profile"
+wgcf_profile_created=1
 
 cat > "$unit" <<'EOF'
 [Unit]
