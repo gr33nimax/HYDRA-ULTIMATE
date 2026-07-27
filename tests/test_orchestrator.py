@@ -448,6 +448,72 @@ def test_apply_config_returns_false_when_caddy_rebuild_fails():
     plugin.rollback.assert_called_once_with(state, plugin_snapshot)
 
 
+def test_apply_config_rolls_back_when_caddy_rebuild_raises(tmp_path):
+    from hydra.core import orchestrator
+
+    state = AppState()
+    fake_socket = MagicMock()
+    fake_socket.__enter__.return_value.connect_ex.return_value = 1
+    config_path = tmp_path / "config.json"
+    config_path.write_bytes(b'{"previous": true}')
+
+    plugin = MagicMock()
+    plugin.meta.name = "vless"
+    plugin_snapshot = {"old": True}
+    nft_snapshot = MagicMock()
+
+    def write_config(_config):
+        config_path.write_bytes(b'{"reality": true}')
+        return True
+
+    with patch(
+        "hydra.core.orchestrator.registry.collect_fragments",
+        return_value={},
+    ), patch(
+        "hydra.core.orchestrator.registry.apply_enabled",
+        return_value=[(plugin, plugin_snapshot)],
+    ), patch(
+        "hydra.core.orchestrator.singbox.SINGBOX_CONFIG",
+        config_path,
+    ), patch(
+        "hydra.core.orchestrator.singbox.generate_config",
+        return_value={},
+    ), patch(
+        "hydra.core.orchestrator.singbox.write_config",
+        side_effect=write_config,
+    ), patch(
+        "hydra.core.orchestrator.singbox.reload",
+        return_value=True,
+    ) as reload_singbox, patch(
+        "hydra.core.orchestrator.nft.snapshot_tproxy",
+        return_value=nft_snapshot,
+    ), patch(
+        "hydra.core.orchestrator.nft.apply_tproxy",
+    ), patch(
+        "hydra.core.orchestrator.nft.restore_tproxy",
+    ) as restore_nft, patch(
+        "hydra.core.orchestrator.save_state",
+    ), patch(
+        "hydra.core.sni_router.needs_mux",
+        return_value=True,
+    ), patch(
+        "hydra.core.sni_router.rebuild",
+        side_effect=ValueError(
+            "Invalid plugin-owned TLS route for vless: domain is required",
+        ),
+    ), patch(
+        "socket.socket",
+        return_value=fake_socket,
+    ):
+        assert orchestrator.apply_config(state) is False
+
+    assert config_path.read_bytes() == b'{"previous": true}'
+    assert reload_singbox.call_count == 2
+    restore_nft.assert_called_once_with(nft_snapshot)
+    plugin.rollback.assert_called_once_with(state, plugin_snapshot)
+    assert "domain is required" in orchestrator.last_apply_error()
+
+
 def test_apply_config_rolls_back_when_vless_route_health_fails():
     from hydra.core import orchestrator
 

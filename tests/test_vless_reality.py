@@ -71,7 +71,7 @@ def test_switching_to_reality_replaces_the_certificate_contract():
     assert config["reality_private_key"] == KEYPAIR[0]
     assert config["reality_public_key"] == KEYPAIR[1]
     assert len(config["reality_short_id"]) == 8
-    assert ROUTE_CONFIG_KEY not in config
+    assert config[ROUTE_CONFIG_KEY] is None
     assert config[PASSTHROUGH_ROUTE_KEY] == {
         "kind": "tls_passthrough",
         "internal_port": INTERNAL_PORT,
@@ -292,6 +292,8 @@ def test_certificate_preflight_skips_a_reality_endpoint():
 
     certificates.ensure.assert_not_called()
     assert "cert_file" not in _config(state)
+    assert _config(state)[ROUTE_CONFIG_KEY] is None
+    assert _collect_backends(state)[0]["route_kind"] == "tls_passthrough"
 
 
 def test_certificate_preflight_still_runs_in_tls_mode():

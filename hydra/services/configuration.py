@@ -102,7 +102,6 @@ class ConfigurationApplier:
 
         from hydra.core.sni_router import (
             needs_mux,
-            rebuild as rebuild_mux,
             stop as stop_mux,
         )
 
@@ -135,11 +134,12 @@ class ConfigurationApplier:
                 priority=30 + plugin_count - index,
             )
 
-        singbox_ok = self.singbox.reload()
-        mux_ok = True
-        if mux_active:
-            self._wait_for_port_release()
-            mux_ok = rebuild_mux(state)
+        singbox_ok, mux_ok, stage, runtime_error = self._reload_runtime(
+            state,
+            mux_active,
+        )
+        if runtime_error:
+            return fail(stage, runtime_error, reload_restored=True)
 
         try:
             self.manage_traffic_daemon(state)
@@ -191,6 +191,37 @@ class ConfigurationApplier:
         self.set_apply_error("")
         self.journal("started")
         return ApplyTransaction()
+
+    def _reload_runtime(
+        self,
+        state: AppState,
+        mux_active: bool,
+    ) -> tuple[bool, bool, str, str]:
+        """Reload Sing-Box and bound failures from the optional Caddy rebuild."""
+        try:
+            singbox_ok = self.singbox.reload()
+        except Exception as exc:
+            return (
+                False,
+                True,
+                "singbox_reload",
+                f"Не удалось перезагрузить Sing-Box: {exc}",
+            )
+        if not mux_active:
+            return singbox_ok, True, "", ""
+
+        from hydra.core.sni_router import rebuild
+
+        self._wait_for_port_release()
+        try:
+            return singbox_ok, rebuild(state), "", ""
+        except Exception as exc:
+            return (
+                singbox_ok,
+                False,
+                "sni_router",
+                f"Не удалось перестроить SNI-маршрутизатор: {exc}",
+            )
 
     def _run_preflight(self, state: AppState) -> bool:
         try:

@@ -133,8 +133,11 @@ def apply_reality_mode(
     config["reality_public_key"] = str(public_key)
     config["reality_short_id"] = validate_short_id(short_id)
     config[PASSTHROUGH_ROUTE_KEY] = passthrough_route(internal_port)
+    # Keep an explicit tombstone so generic config-default normalization does
+    # not resurrect the mutually exclusive certificate/decoy route.
+    config[DECOY_ROUTE_KEY] = None
     # A borrowed handshake owns no domain and no certificate of its own.
-    for key in (DECOY_ROUTE_KEY, "domain", "cert_file", "key_file"):
+    for key in ("domain", "cert_file", "key_file"):
         config.pop(key, None)
 
 
