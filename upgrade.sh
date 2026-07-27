@@ -13,7 +13,7 @@ BACKUP_ROOT="${HYDRA_UPGRADE_BACKUP_DIR:-/var/backups/hydra/upgrades}"
 LOCK_FILE="${HYDRA_UPGRADE_LOCK_FILE:-/run/lock/hydra-upgrade.lock}"
 WRAPPER="/usr/local/bin/hydra"
 REPO_URL="${HYDRA_REPO_URL:-https://github.com/gr33nimax/HYDRA-ULTIMATE}"
-HYDRA_REF="${HYDRA_REF:-dev}"
+HYDRA_REF="${HYDRA_REF:-main}"
 
 configure_utf8_locale() {
     local candidate
@@ -364,7 +364,7 @@ rollback() {
     trap - ERR
     trap '' HUP INT TERM
     set +e
-    result_error "Сбой на строке ${line} (код ${code}). Запускаю откат."
+    result_error "Обновление не завершено (строка ${line}, код ${code}). Запускаю откат."
     if [[ -n "$CURRENT_OPERATION" ]]; then
         printf 'Сбой операции: %s\n' "$CURRENT_OPERATION" >&2
     fi

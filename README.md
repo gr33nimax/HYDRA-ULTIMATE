@@ -7,11 +7,11 @@
 
 **Оркестратор многопротокольных прокси-серверов на базе Sing-Box**
 
-[![Version](https://img.shields.io/badge/version-2.5.4-blue.svg?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.5.5-blue.svg?style=flat-square)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-green.svg?style=flat-square)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg?style=flat-square)](https://ubuntu.com/)
-[![CI](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml)
+[![CI](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml)
 
 [Что вы получаете](#что-вы-получаете) ·
 [Протоколы](#протоколы-и-модули) ·
@@ -53,16 +53,18 @@ Caddy L4 и nftables. Применение — транзакционное, с 
                  учёт трафика · подписки · Telegram-бот
 ```
 
-| | |
-| :--- | :--- |
-| **Транспорты** | 11 |
-| **Модули сети и защиты** | 6 |
-| **Интерфейсы** | TUI, headless JSON-CLI, Telegram Admin Bot |
-| **Платформа** | Ubuntu 20.04+ / Debian 11+ |
-| **Python** | 3.10 – 3.13 |
+<table>
+  <tbody>
+    <tr><th scope="row">Транспорты</th><td>11</td></tr>
+    <tr><th scope="row">Модули сети и защиты</th><td>6</td></tr>
+    <tr><th scope="row">Интерфейсы</th><td>TUI, headless JSON-CLI, Telegram Admin Bot</td></tr>
+    <tr><th scope="row">Платформа</th><td>Ubuntu 20.04+ / Debian 11+</td></tr>
+    <tr><th scope="row">Python</th><td>3.10 – 3.13</td></tr>
+  </tbody>
+</table>
 
 > [!IMPORTANT]
-> `2.5.4` — текущая версия ветки `dev`. Проект в активном бета-тестировании.
+> `2.5.5` — текущая версия ветки `main`. Проект в активном бета-тестировании.
 > Для рабочей эксплуатации используйте чистый Ubuntu 20.04+ или Debian 11+ и
 > обязательно настройте резервное копирование.
 
@@ -127,7 +129,7 @@ Cloudflare).
 диска, внешний IPv4 и права `root`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash
 ```
 
 Установщик готовит зависимости, Sing-Box Extended, изолированное
@@ -154,7 +156,7 @@ hydra check                # валидация и предпросмотр из
 > вручную через `git pull`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/updater.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/updater.sh | sudo bash
 ```
 
 Updater фиксирует точный commit ветки, собирает новую версию и `.venv` отдельно

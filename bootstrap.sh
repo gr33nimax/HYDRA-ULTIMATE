@@ -2,7 +2,7 @@
 # HYDRA — installer for a new Ubuntu/Debian VPS.
 #
 # Установка:
-#   curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash
 #
 # Для обновления рабочей установки используйте updater.sh, а не этот файл.
 
@@ -213,7 +213,7 @@ fi
 step 4 5 "Загрузка и проверка HYDRA"
 INSTALL_DIR="/opt/hydra"
 REPO_URL="https://github.com/gr33nimax/HYDRA-ULTIMATE"
-DEFAULT_BRANCH="dev"
+DEFAULT_BRANCH="main"
 HYDRA_REF="${HYDRA_REF:-$DEFAULT_BRANCH}"
 if ! git check-ref-format --branch "$HYDRA_REF" >/dev/null 2>&1; then
     err "Некорректное имя ветки HYDRA_REF: $HYDRA_REF"

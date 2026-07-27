@@ -181,7 +181,7 @@ installed_version=$(
     PYTHONPATH="$install_dir" "$install_dir/.venv/bin/python" -c \
         'from hydra import __version__; print(__version__)'
 )
-[[ "$installed_version" == "2.5.4" ]]
+[[ "$installed_version" == "2.5.5" ]]
 systemctl is-active --quiet hydra-ci-upgrade.service
 
 PYTHONPATH="$install_dir" "$install_dir/.venv/bin/python" - <<'PY'
