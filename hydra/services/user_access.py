@@ -10,7 +10,10 @@ def entitlement_status(user: User) -> tuple[bool, str]:
     """Check expiry and quota independently from manual blocking."""
     if user.expiry_date:
         try:
-            expiry = datetime.fromisoformat(user.expiry_date)
+            expiry_value = user.expiry_date
+            if expiry_value.endswith("Z"):
+                expiry_value = f"{expiry_value[:-1]}+00:00"
+            expiry = datetime.fromisoformat(expiry_value)
             if expiry.tzinfo is None:
                 expiry = expiry.replace(tzinfo=timezone.utc)
             if expiry <= datetime.now(timezone.utc):
