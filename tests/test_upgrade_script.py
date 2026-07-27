@@ -239,12 +239,19 @@ def test_state_rollback_copy_is_local_and_only_restored_after_mutation():
 
 
 def test_documented_updater_is_fully_downloaded_before_sudo_execution():
-    for path in UPGRADE_DOCS:
-        documentation = path.read_text(encoding="utf-8")
-        assert (
+    expected_commands = {
+        ROOT / "README.md": (
+            "curl -fsSL https://raw.githubusercontent.com/gr33nimax/"
+            "HYDRA-ULTIMATE/dev/updater.sh | sudo env HYDRA_REF=dev bash"
+        ),
+        ROOT / "docs" / "UPGRADE.md": (
             "curl -fsSL https://raw.githubusercontent.com/gr33nimax/"
             "HYDRA-ULTIMATE/main/updater.sh | sudo bash"
-        ) in documentation
+        ),
+    }
+    for path in UPGRADE_DOCS:
+        documentation = path.read_text(encoding="utf-8")
+        assert expected_commands[path] in documentation
         assert "upgrade_script=$(mktemp)" not in documentation
         assert '-o "$upgrade_script"' not in documentation
 

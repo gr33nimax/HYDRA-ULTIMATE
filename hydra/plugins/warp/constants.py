@@ -8,6 +8,7 @@ WGCF_ACCOUNT = Path("/etc/wireguard/wgcf-account.toml")
 WARP_INTERFACE = "wgcf"
 WARP_EXTERNAL_CACHE = Path("/var/lib/hydra/warp_external.json")
 WARP_PROFILES_DIR = Path("/etc/hydra/warp_profiles")
+WARP_INSTALL_LOG = Path("/var/log/hydra/warp_install.log")
 RUSSIA_TLD_SUFFIXES = [".ru", ".su"]
 
 DEFAULT_WARP_DOMAINS = [
@@ -56,6 +57,7 @@ __all__ = [
     "RUSSIA_TLD_SUFFIXES",
     "WARP_EXTERNAL_CACHE",
     "WARP_INTERFACE",
+    "WARP_INSTALL_LOG",
     "WARP_PROFILES_DIR",
     "WGCF_ACCOUNT",
     "WGCF_BIN",

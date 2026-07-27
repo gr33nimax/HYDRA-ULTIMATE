@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 from unittest.mock import patch, MagicMock
 import json
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -82,6 +83,27 @@ def test_install_preloads_all_external_lists_when_profile_exists():
     preload.assert_called_once_with()
 
 
+def test_install_keeps_valid_profile_when_external_list_preload_fails(tmp_path):
+    plugin = WarpPlugin()
+    log_path = tmp_path / "warp_install.log"
+    with (
+        patch("hydra.plugins.warp.plugin.WGCF_PROFILE") as profile,
+        patch("hydra.plugins.warp.plugin.WGCF_BIN") as binary,
+        patch("hydra.plugins.warp.plugin.runtime.install", return_value=True),
+        patch.object(
+            plugin,
+            "preload_external_rules",
+            return_value=(False, "github timeout"),
+        ),
+        patch("hydra.plugins.warp.plugin.WARP_INSTALL_LOG", log_path),
+    ):
+        profile.exists.return_value = False
+        binary.exists.return_value = False
+        assert plugin.install() is True
+
+    assert "github timeout" in log_path.read_text(encoding="utf-8")
+
+
 @patch("hydra.plugins.warp.plugin.WarpPlugin._load_warp_config")
 @patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")
 def test_configure(mock_cache, mock_load_config):
@@ -131,7 +153,13 @@ def test_configure(mock_cache, mock_load_config):
     assert set(ip_rule["ip_cidr"]) == {"8.8.8.8", "1.1.1.1/32"}
 
 
-@patch("hydra.plugins.warp.plugin.WarpPlugin._load_warp_config", return_value=None)
+@patch(
+    "hydra.plugins.warp.plugin.WarpPlugin._load_warp_config",
+    return_value={
+        "private_key": "private",
+        "addresses": ["172.16.0.2/32"],
+    },
+)
 @patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")
 def test_configure_normalizes_legacy_settings_without_mutating_state(
     cache,
@@ -345,6 +373,28 @@ def test_russia_external_list_always_includes_all_russian_tlds(mock_cache, _mock
         "domain_suffix": [".ru", ".su", ".xn--p1ai", ".рф"],
         "outbound": "direct",
     }]
+
+
+@patch("hydra.plugins.warp.plugin.WarpPlugin._load_warp_config", return_value=None)
+@patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")
+def test_configure_rejects_route_to_missing_warp_outbound(mock_cache, _mock_profile):
+    mock_cache.exists.return_value = False
+    state = AppState()
+    state.protocols["warp"] = PluginState(
+        enabled=True,
+        config={
+            "local_lists": {
+                "google": {"domains": ["gemini.google.com"], "ips": []},
+            },
+            "list_targets": {"local:google": "warp"},
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"local:google.*warp.*not configured",
+    ):
+        WarpPlugin().configure(state)
 
 
 def test_parse_endpoint_supports_ipv6_and_rejects_invalid_ports():

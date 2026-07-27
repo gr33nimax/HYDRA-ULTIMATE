@@ -7,6 +7,17 @@ from typing import Any, Callable
 
 from hydra.plugins.base import PluginStatus
 from hydra.plugins.context import PluginStateAccess
+from hydra.utils.commands import redact_text
+
+
+def append_install_log(log_path: Path, message: str) -> None:
+    """Append one redacted diagnostic without changing installation outcome."""
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as log:
+            log.write(redact_text(message).rstrip() + "\n")
+    except OSError:
+        pass
 
 
 def install(
@@ -60,7 +71,8 @@ def install(
             if result.returncode != 0:
                 log_path.write_text(
                     f"wgcf register failed with code {result.returncode}\n"
-                    f"Stdout: {result.stdout}\nStderr: {result.stderr}\n",
+                    f"Stdout: {redact_text(result.stdout or '')}\n"
+                    f"Stderr: {redact_text(result.stderr or '')}\n",
                     encoding="utf-8",
                 )
                 return False
@@ -76,13 +88,17 @@ def install(
             with log_path.open("a", encoding="utf-8") as log:
                 log.write(
                     f"wgcf generate failed with code {result.returncode}\n"
-                    f"Stdout: {result.stdout}\nStderr: {result.stderr}\n"
+                    f"Stdout: {redact_text(result.stdout or '')}\n"
+                    f"Stderr: {redact_text(result.stderr or '')}\n"
                 )
             return False
         return profile.exists()
     except Exception as exc:
         try:
-            log_path.write_text(f"Installation exception: {exc}\n", encoding="utf-8")
+            log_path.write_text(
+                f"Installation exception: {redact_text(str(exc))}\n",
+                encoding="utf-8",
+            )
         except Exception:
             pass
         return False
@@ -157,6 +173,7 @@ def status(
 
 __all__ = [
     "install",
+    "append_install_log",
     "remove_local_profile",
     "restore_local_profile",
     "snapshot_local_profile",

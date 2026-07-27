@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import re
 import socket
-from pathlib import Path
 from hydra.core.host import HOST
 from hydra.core.state_models import AppState, PluginState
 from hydra.plugins.base import (
@@ -16,6 +15,7 @@ from hydra.plugins.warp.constants import (
     EXTERNAL_LISTS,
     WARP_EXTERNAL_CACHE,
     WARP_INTERFACE,
+    WARP_INSTALL_LOG,
     WARP_PROFILES_DIR,
     WGCF_ACCOUNT,
     WGCF_BIN,
@@ -60,20 +60,20 @@ class WarpPlugin(WarpMaintenanceMixin, BasePlugin):
     def delete_local_profile(*, name: str) -> bool:
         return observation.delete_local_profile(WARP_PROFILES_DIR, name=name)
     def install(self) -> bool:
-        existing = WGCF_PROFILE.exists() and WGCF_BIN.exists()
         installed = runtime.install(
             host=HOST, binary=WGCF_BIN, profile=WGCF_PROFILE,
             account=WGCF_ACCOUNT,
+            log_path=WARP_INSTALL_LOG,
         )
         if not installed:
             return False
         lists_ok, message = self.preload_external_rules()
         if not lists_ok:
             print(f"  Не удалось заранее загрузить списки WARP: {message}")
-            if not existing:
-                with Path("/var/log/hydra/warp_install.log").open("a", encoding="utf-8") as log:
-                    log.write(f"External lists preload failed: {message}\n")
-        return lists_ok
+            runtime.append_install_log(
+                WARP_INSTALL_LOG, f"External lists preload failed: {message}",
+            )
+        return True
     def uninstall(self) -> bool:
         return runtime.uninstall(
             host=HOST, binary=WGCF_BIN, profile=WGCF_PROFILE,
