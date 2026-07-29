@@ -64,8 +64,7 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 </table>
 
 > [!IMPORTANT]
-> `2.5.5` — текущая версия ветки `dev`. Это канал разработки и
-> активного бета-тестирования.
+> `2.5.5` — текущая версия ветки `main`.
 > Для рабочей эксплуатации используйте чистый Ubuntu 20.04+ или Debian 11+ и
 > обязательно настройте резервное копирование.
 
@@ -130,7 +129,7 @@ Cloudflare).
 диска, внешний IPv4 и права `root`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo env HYDRA_REF=dev bash
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo env HYDRA_REF=dev bash
 ```
 
 Установщик готовит зависимости, Sing-Box Extended, изолированное
@@ -157,7 +156,7 @@ hydra check                # валидация и предпросмотр из
 > вручную через `git pull`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/updater.sh | sudo env HYDRA_REF=dev bash
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/updater.sh | sudo env HYDRA_REF=dev bash
 ```
 
 Updater фиксирует точный commit ветки, собирает новую версию и `.venv` отдельно
