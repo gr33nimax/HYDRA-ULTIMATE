@@ -259,7 +259,7 @@ def test_documented_updater_is_fully_downloaded_before_sudo_execution():
     expected_commands = {
         ROOT / "README.md": (
             "curl -fsSL https://raw.githubusercontent.com/gr33nimax/"
-            "HYDRA-ULTIMATE/dev/updater.sh | sudo env HYDRA_REF=dev bash"
+            "HYDRA-ULTIMATE/main/updater.sh | sudo bash"
         ),
         ROOT / "docs" / "UPGRADE.md": (
             "curl -fsSL https://raw.githubusercontent.com/gr33nimax/"

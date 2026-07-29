@@ -36,12 +36,13 @@ def test_bootstrap_verifies_exact_remote_commit_before_dependencies():
     )
 
 
-def test_development_readme_one_command_installs_dev():
+def test_main_readme_one_command_installs_main():
     assert (
         "curl -fsSL https://raw.githubusercontent.com/gr33nimax/"
-        "HYDRA-ULTIMATE/dev/bootstrap.sh | sudo env HYDRA_REF=dev bash"
+        "HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash"
     ) in README
-    assert "HYDRA-ULTIMATE/main/bootstrap.sh" not in README
+    assert "HYDRA-ULTIMATE/dev/bootstrap.sh" not in README
+    assert "sudo env HYDRA_REF=dev bash" not in README
     assert "sudo python3 main.py" not in README
 
 

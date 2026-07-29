@@ -11,7 +11,7 @@
 [![Python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-green.svg?style=flat-square)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg?style=flat-square)](https://ubuntu.com/)
-[![CI](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml)
+[![CI](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml)
 
 [Что вы получаете](#что-вы-получаете) ·
 [Протоколы](#протоколы-и-модули) ·
@@ -129,7 +129,7 @@ Cloudflare).
 диска, внешний IPv4 и права `root`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo env HYDRA_REF=dev bash
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash
 ```
 
 Установщик готовит зависимости, Sing-Box Extended, изолированное
@@ -156,7 +156,7 @@ hydra check                # валидация и предпросмотр из
 > вручную через `git pull`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/updater.sh | sudo env HYDRA_REF=dev bash
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/updater.sh | sudo bash
 ```
 
 Updater фиксирует точный commit ветки, собирает новую версию и `.venv` отдельно
