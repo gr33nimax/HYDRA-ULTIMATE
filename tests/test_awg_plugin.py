@@ -1,5 +1,6 @@
 """tests/test_awg_plugin.py — Тесты для AmneziaWG plugin v2."""
 import copy
+import json
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import sys
@@ -799,6 +800,127 @@ AllowedIPs = 10.66.66.2/32
     assert link.startswith("vpn://")
     assert state == before_state
     assert desktop_conf.read_bytes() == before_file
+
+
+def test_singbox_config_uses_extended_wireguard_endpoint(tmp_path):
+    p = AmneziaWGPlugin()
+    desktop_conf = tmp_path / "awg0.conf"
+    mobile_conf = tmp_path / "awg1.conf"
+    user = _make_user("singbox@example.com")
+    _set_keys(user, "desktop", "d")
+    _set_keys(user, "mobile", "m")
+    desktop_conf.write_text(
+        """[Interface]
+PrivateKey = server-private
+Address = 10.67.67.1/24
+ListenPort = 51820
+Jc = 4
+Jmin = 40
+Jmax = 70
+S1 = 8
+S2 = 72
+S3 = 0
+S4 = 4
+H1 = 10001
+H2 = 10002
+H3 = 10003
+H4 = 10004
+I1 = aabbccdd
+MTU = 1280
+
+[Peer]
+PublicKey = public-d
+PresharedKey = psk-d
+AllowedIPs = 10.67.67.2/32
+        """,
+        encoding="utf-8",
+    )
+    mobile_conf.write_text(
+        """[Interface]
+PrivateKey = server-mobile
+Address = 10.68.68.1/24
+ListenPort = 51821
+Jc = 3
+Jmin = 30
+Jmax = 60
+S1 = 9
+S2 = 73
+S3 = 0
+S4 = 5
+H1 = 20001
+H2 = 20002
+H3 = 20003
+H4 = 20004
+MTU = 1376
+
+[Peer]
+PublicKey = public-m
+PresharedKey = psk-m
+AllowedIPs = 10.68.68.3/32
+""",
+        encoding="utf-8",
+    )
+    state = AppState(
+        protocols={
+            "amneziawg": PluginState(
+                enabled=True,
+                config={
+                    "profiles": {
+                        "desktop": {
+                            "network": "10.67.67.0/24",
+                            "port": 51820,
+                        },
+                        "mobile": {
+                            "network": "10.68.68.0/24",
+                            "port": 51821,
+                        },
+                    },
+                },
+            ),
+        },
+        users=[user],
+    )
+    state.network.server_ip = "203.0.113.10"
+
+    with patch("hydra.plugins.amneziawg.plugin.AWG_CONF", desktop_conf), \
+         patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1", mobile_conf), \
+         patch.object(
+             p,
+             "_server_pubkey_for_conf",
+             side_effect=lambda path: (
+                 "server-mobile-public"
+                 if path == mobile_conf
+                 else "server-public"
+             ),
+         ), \
+         patch.object(p, "_current_port", return_value=51820):
+        config = json.loads(p.generate_singbox_config(user, state))
+
+    assert len(config["endpoints"]) == 2
+    endpoint = config["endpoints"][0]
+    assert endpoint["type"] == "wireguard"
+    assert endpoint["tag"] == "amneziawg-desktop"
+    assert endpoint["address"] == ["10.67.67.2/32"]
+    assert endpoint["private_key"] == "private-d"
+    assert endpoint["peers"] == [{
+        "address": "203.0.113.10",
+        "port": 51820,
+        "public_key": "server-public",
+        "pre_shared_key": "psk-d",
+        "allowed_ips": ["0.0.0.0/0"],
+        "persistent_keepalive_interval": 25,
+    }]
+    assert endpoint["amnezia"]["jc"] == 4
+    assert endpoint["amnezia"]["h4"] == 10004
+    assert endpoint["amnezia"]["i1"] == "aabbccdd"
+    mobile = config["endpoints"][1]
+    assert mobile["tag"] == "amneziawg-mobile"
+    assert mobile["address"] == ["10.68.68.3/32"]
+    assert mobile["private_key"] == "private-m"
+    assert mobile["peers"][0]["port"] == 51821
+    assert mobile["peers"][0]["public_key"] == "server-mobile-public"
+    assert mobile["amnezia"]["jc"] == 3
+    assert config["route"]["final"] == "amneziawg-desktop"
 
 
 def test_on_user_add_provisions_active_profiles_only_in_lifecycle():

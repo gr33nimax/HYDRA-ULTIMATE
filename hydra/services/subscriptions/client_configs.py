@@ -260,7 +260,7 @@ def generate_singbox_config(
     plugins: SubscriptionPluginAccess,
 ) -> dict:
     """Build a personal sing-box configuration from enabled transports."""
-    config: dict = {
+    base_config: dict = {
         "log": {"level": "info"},
         "inbounds": [
             {
@@ -273,29 +273,69 @@ def generate_singbox_config(
         "outbounds": [],
         "route": {"rules": [], "auto_detect_interface": True},
     }
-    outbound_tags: set[str] = set()
-    selected_outbound = ""
+    plugin_configs: list[dict] = []
     for plugin in plugins.enabled_transports(state):
         if not plugin.meta.capabilities.subscription_enabled:
             continue
         try:
-            payload = plugins.client_config(plugin, user, state)
+            payload = plugins.singbox_config(plugin, user, state)
             if not payload:
                 continue
             plugin_config = json.loads(payload)
-            for outbound in plugin_config.get("outbounds", []):
-                tag = outbound.get("tag", "")
-                if tag and tag in outbound_tags:
-                    continue
-                config["outbounds"].append(outbound)
-                if tag:
-                    outbound_tags.add(tag)
-                if not selected_outbound and outbound.get("type") != "direct":
-                    selected_outbound = tag
-            route = plugin_config.get("route", {})
-            config["route"]["rules"].extend(route.get("rules", []))
+            if isinstance(plugin_config, dict):
+                plugin_configs.append(plugin_config)
         except Exception:
             continue
+
+    if len(plugin_configs) == 1:
+        config = plugin_configs[0]
+        config.setdefault("log", base_config["log"])
+        config.setdefault("inbounds", base_config["inbounds"])
+        outbounds = config.setdefault("outbounds", [])
+        outbound_tags = {
+            outbound.get("tag", "")
+            for outbound in outbounds
+            if isinstance(outbound, dict)
+        }
+        if "direct" not in outbound_tags:
+            outbounds.append({"type": "direct", "tag": "direct"})
+        route = config.setdefault("route", {})
+        if not route.get("final"):
+            route["final"] = next(
+                (
+                    outbound.get("tag", "")
+                    for outbound in outbounds
+                    if outbound.get("type") != "direct"
+                ),
+                "",
+            )
+        return config
+
+    config = base_config
+    outbound_tags: set[str] = set()
+    endpoint_tags: set[str] = set()
+    selected_outbound = ""
+    for plugin_config in plugin_configs:
+        route = plugin_config.get("route", {})
+        if not selected_outbound and route.get("final"):
+            selected_outbound = route["final"]
+        for endpoint in plugin_config.get("endpoints", []):
+            tag = endpoint.get("tag", "")
+            if tag and tag in endpoint_tags:
+                continue
+            config.setdefault("endpoints", []).append(endpoint)
+            if tag:
+                endpoint_tags.add(tag)
+        for outbound in plugin_config.get("outbounds", []):
+            tag = outbound.get("tag", "")
+            if tag and tag in outbound_tags:
+                continue
+            config["outbounds"].append(outbound)
+            if tag:
+                outbound_tags.add(tag)
+            if not selected_outbound and outbound.get("type") != "direct":
+                selected_outbound = tag
+        config["route"]["rules"].extend(route.get("rules", []))
 
     if "direct" not in outbound_tags:
         config["outbounds"].append({"type": "direct", "tag": "direct"})

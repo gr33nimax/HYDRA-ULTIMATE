@@ -21,8 +21,9 @@ from hydra.services.subscriptions.generator import (
     get_subscription_urls,
     get_user_access_status,
 )
-from hydra.core.state import AppState, User
+from hydra.core.state import AppState, PluginState, User
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
+from hydra.plugins.shadowtls.plugin import ShadowTLSPlugin
 
 
 class MockTransport(BasePlugin):
@@ -233,6 +234,72 @@ def test_generate_singbox_config_deduplicates_direct_outbound():
 
     assert [o["tag"] for o in config["outbounds"]].count("direct") == 1
     assert config["route"]["final"] == "trojan-out"
+
+
+def test_generate_singbox_config_keeps_shadowtls_profile_atomic():
+    user = _make_user("gr33nimax", uuid="shadowtls-user")
+    state = _make_state([user])
+    state.network.server_ip = "203.0.113.66"
+    state.protocols["shadowtls"] = PluginState(
+        enabled=True,
+        installed=True,
+        config={"handshake_sni": "max.ru"},
+    )
+
+    config = generate_singbox_config(
+        user,
+        state,
+        plugins=_plugins(ShadowTLSPlugin()),
+    )
+
+    trojan = next(
+        outbound
+        for outbound in config["outbounds"]
+        if outbound["type"] == "trojan"
+    )
+    shadowtls = next(
+        outbound
+        for outbound in config["outbounds"]
+        if outbound["type"] == "shadowtls"
+    )
+    assert config["dns"]["servers"][1] == {
+        "tag": "local",
+        "address": "1.1.1.1",
+        "detour": "direct",
+    }
+    assert trojan["detour"] == shadowtls["tag"]
+    assert config["route"] == {"final": trojan["tag"]}
+    assert config["inbounds"][0]["type"] == "mixed"
+
+
+def test_generate_singbox_config_uses_plugin_singbox_profile_for_awg():
+    user = _make_user("awg@example.com")
+    state = _make_state([user])
+    plugin = MockTransport()
+    plugin.meta = PluginMeta(
+        name="amneziawg",
+        description="AmneziaWG",
+        category=PluginCategory.TRANSPORT,
+    )
+    plugin.generate_client_config = MagicMock(
+        return_value="[Interface]\nPrivateKey = native",
+    )
+    plugin.generate_singbox_config = MagicMock(return_value=json.dumps({
+        "endpoints": [{
+            "type": "wireguard",
+            "tag": "amneziawg-desktop",
+            "address": ["10.67.67.2/32"],
+        }],
+        "outbounds": [{"type": "direct", "tag": "direct"}],
+        "route": {"final": "amneziawg-desktop"},
+    }))
+
+    config = generate_singbox_config(user, state, plugins=_plugins(plugin))
+
+    assert config["endpoints"][0]["type"] == "wireguard"
+    assert config["route"]["final"] == "amneziawg-desktop"
+    plugin.generate_singbox_config.assert_called_once_with(user, state)
+    plugin.generate_client_config.assert_not_called()
 
 
 def test_generate_singbox_config_base_structure():

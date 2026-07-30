@@ -158,6 +158,69 @@ class AwgClientLinksMixin:
         data = self._client_profile(user, state, profile or "desktop")
         return self._render_client_config(data, state) if data else ""
 
+    @staticmethod
+    def _singbox_amnezia_options(profile: _ClientProfile) -> dict:
+        numeric = {
+            "Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4",
+            "H1", "H2", "H3", "H4",
+        }
+        options = {}
+        for key, value in profile.obfuscation.items():
+            if value in (None, ""):
+                continue
+            options[key.lower()] = int(value) if key in numeric else str(value)
+        return options
+
+    def _singbox_endpoint(self, profile: _ClientProfile) -> dict | None:
+        if not profile.server_public_key or not profile.endpoint:
+            return None
+        peer = {
+            "address": profile.endpoint.strip("[]"),
+            "port": profile.port,
+            "public_key": profile.server_public_key,
+            "pre_shared_key": profile.keys["preshared_key"],
+            "allowed_ips": ["0.0.0.0/0"],
+            "persistent_keepalive_interval": 25,
+        }
+        return {
+            "type": "wireguard",
+            "tag": f"amneziawg-{profile.name}",
+            "mtu": int(profile.mtu),
+            "address": [
+                f"{profile.address_base}.{profile.address_octet}/32",
+            ],
+            "private_key": profile.keys["private_key"],
+            "peers": [peer],
+            "amnezia": self._singbox_amnezia_options(profile),
+        }
+
+    def generate_singbox_config(
+        self,
+        user: User,
+        state: PluginStateAccess,
+    ) -> str:
+        """Render all provisioned profiles for sing-box-extended."""
+        endpoints = []
+        for profile in self.get_profiles(state):
+            data = self._client_profile(user, state, profile["name"])
+            if data is None:
+                continue
+            endpoint = self._singbox_endpoint(data)
+            if endpoint is not None:
+                endpoints.append(endpoint)
+        if not endpoints:
+            return ""
+        config = {
+            "log": {"level": "info"},
+            "endpoints": endpoints,
+            "outbounds": [{"type": "direct", "tag": "direct"}],
+            "route": {
+                "final": endpoints[0]["tag"],
+                "auto_detect_interface": True,
+            },
+        }
+        return json.dumps(config, ensure_ascii=False, separators=(",", ":"))
+
     def client_link(
         self,
         user: User,

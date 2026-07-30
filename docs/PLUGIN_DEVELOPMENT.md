@@ -121,6 +121,8 @@ class ExamplePlugin(BasePlugin):
 | :--- | :--- | :--- |
 | `command` | Изменяет желаемую конфигурацию плагина | Не сохраняет state и не выполняет общий `apply` — это делает прикладная служба |
 | `query` | Read-only проекция, клиентский профиль | Не мутирует state и не меняет runtime |
+| `generate_client_config` | Нативный клиентский артефакт транспорта | Не обязан быть JSON |
+| `generate_singbox_config` | Полный клиентский JSON-профиль Sing-Box | По умолчанию делегирует `generate_client_config`; плагин переопределяет метод, если нативный формат отличается |
 | `action` | Явная runtime-операция | Не требует общего `apply` |
 | `lifecycle` | `install` / `uninstall` / `enable` / `disable` | Не вызывает цепочкой другие lifecycle hooks |
 | `configure` | Готовит `ConfigFragment` | Не редактирует итоговый `config.json` Sing-Box |

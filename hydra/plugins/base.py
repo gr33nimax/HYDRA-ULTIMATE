@@ -285,6 +285,14 @@ class BasePlugin(ABC):
     def generate_client_config(self, user: User, state: PluginStateAccess) -> str:
         return ""
 
+    def generate_singbox_config(
+        self,
+        user: User,
+        state: PluginStateAccess,
+    ) -> str:
+        """Return a complete sing-box client profile."""
+        return self.generate_client_config(user, state)
+
     def client_link(self, user: User, state: PluginStateAccess) -> str:
         return ""
 
