@@ -116,6 +116,40 @@ def test_published_site_is_current_until_theme_or_domain_changes(tmp_path):
     )
 
 
+def test_published_site_is_stale_when_renderer_sources_change(tmp_path):
+    site_dir = tmp_path / "decoy-renderer"
+    sources = tmp_path / "renderer-sources"
+    sources.mkdir()
+    source = sources / "theme.py"
+    source.write_text("VERSION = 1\n", encoding="utf-8")
+    identity = build_identity("renderer.example.com")
+
+    with patch.object(builder, "SOURCE_ROOT", sources):
+        _render(site_dir, "landing", "renderer.example.com")
+        assert builder.is_current(site_dir, "landing", identity)
+
+        source.write_text("VERSION = 2\n", encoding="utf-8")
+
+        assert not builder.is_current(site_dir, "landing", identity)
+
+
+def test_legacy_generated_marker_is_rebuilt_once(tmp_path):
+    site_dir = tmp_path / "decoy-legacy"
+    identity = build_identity("legacy.example.com")
+    _render(site_dir, "blog", "legacy.example.com")
+    marker = site_dir / ".hydra-decoy.json"
+    marker.write_text(
+        '{\n'
+        '  "theme": "blog",\n'
+        f'  "identity": "{identity.fingerprint}",\n'
+        '  "domain": "legacy.example.com"\n'
+        '}\n',
+        encoding="utf-8",
+    )
+
+    assert not builder.is_current(site_dir, "blog", identity)
+
+
 def test_operator_managed_site_is_never_replaced(tmp_path):
     site_dir = tmp_path / "decoy-c"
     site_dir.mkdir()
@@ -141,6 +175,22 @@ def test_failed_render_keeps_the_previous_site(tmp_path):
         )
 
     assert (site_dir / "index.html").read_text(encoding="utf-8") == published
+    assert not site_dir.with_name(f"{site_dir.name}.staging").exists()
+
+
+def test_renderer_fingerprint_failure_keeps_the_previous_site(tmp_path):
+    site_dir = tmp_path / "decoy-fingerprint-failure"
+    _render(site_dir, "status", "fingerprint.example.com")
+    published = (site_dir / "index.html").read_bytes()
+
+    with patch.object(
+        builder,
+        "_renderer_revision",
+        side_effect=OSError("source read failed"),
+    ), pytest.raises(OSError, match="source read failed"):
+        _render(site_dir, "status", "fingerprint.example.com")
+
+    assert (site_dir / "index.html").read_bytes() == published
     assert not site_dir.with_name(f"{site_dir.name}.staging").exists()
 
 
@@ -173,6 +223,7 @@ def test_publishing_records_theme_domain_and_identity(tmp_path):
     assert '"theme": "gallery"' in marker
     assert '"domain": "hy.example.com"' in marker
     assert build_identity("hy.example.com").fingerprint in marker
+    assert '"renderer_revision": "' in marker
 
 
 def test_unknown_plugin_and_theme_are_rejected(tmp_path):
