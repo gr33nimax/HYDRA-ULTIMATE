@@ -308,7 +308,7 @@ def test_generate_singbox_config_uses_plugin_singbox_profile_for_awg():
     plugin.generate_client_config.assert_not_called()
 
 
-def test_generate_singbox_config_combines_shadowtls_and_awg_without_data_loss():
+def test_generate_singbox_config_keeps_shadowtls_atomic_with_awg():
     user = _make_user("combined@example.com", uuid="combined-user")
     state = _make_state([user])
     state.network.server_ip = "203.0.113.66"
@@ -358,6 +358,7 @@ def test_generate_singbox_config_combines_shadowtls_and_awg_without_data_loss():
         if outbound["type"] == "shadowtls"
     )
     endpoint = config["endpoints"][0]
+    assert config["outbounds"][:2] == [trojan, shadowtls]
     assert trojan["detour"] == shadowtls["tag"]
     assert config["route"]["final"] == trojan["tag"]
     assert config["outbounds"][-1] == {"type": "direct", "tag": "direct"}

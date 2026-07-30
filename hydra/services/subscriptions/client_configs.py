@@ -280,6 +280,13 @@ def generate_singbox_config(
         except Exception:
             continue
 
+    plugin_configs.sort(
+        key=lambda config: not any(
+            outbound.get("detour")
+            for outbound in config.get("outbounds", [])
+        ),
+    )
+
     if len(plugin_configs) == 1:
         config = plugin_configs[0]
         config.setdefault("log", base_config["log"])
