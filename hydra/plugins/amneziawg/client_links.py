@@ -12,6 +12,7 @@ from hydra.plugins.context import PluginStateAccess
 
 from .constants import (
     DEFAULT_NETWORK,
+    DEFAULT_PORT,
     DEFAULT_PORT_1,
     OBFUSCATION_KEYS_EXTENDED,
 )
@@ -98,12 +99,19 @@ class AwgClientLinksMixin:
         state: PluginStateAccess,
         profile_name: str,
     ) -> int:
-        if profile_name != "mobile":
-            return self._current_port()
-        profile = self._profile_config(state, "mobile")
-        if profile is None:
-            return DEFAULT_PORT_1
-        return profile.get("port", DEFAULT_PORT_1)
+        profile = self._profile_config(state, profile_name)
+        default_port = DEFAULT_PORT_1 if profile_name == "mobile" else DEFAULT_PORT
+        if profile is not None and profile.get("port") is not None:
+            try:
+                port = int(profile["port"])
+                if 1 <= port <= 65535:
+                    return port
+            except (TypeError, ValueError):
+                pass
+        conf_path = self._conf_path(profile_name)
+        text = conf_path.read_text(encoding="utf-8") if conf_path.exists() else ""
+        match = re.search(r"^ListenPort\s*=\s*(\d+)", text, re.M)
+        return int(match.group(1)) if match else default_port
 
     def _render_client_config(
         self,
@@ -157,6 +165,84 @@ class AwgClientLinksMixin:
         """Render a client config from existing desired/runtime material."""
         data = self._client_profile(user, state, profile or "desktop")
         return self._render_client_config(data, state) if data else ""
+
+    @staticmethod
+    def _singbox_amnezia_options(profile: _ClientProfile) -> dict:
+        options = {}
+        for key in OBFUSCATION_KEYS_EXTENDED:
+            value = profile.obfuscation.get(key)
+            if value in (None, ""):
+                continue
+            normalized = key.lower()
+            if key.startswith("I"):
+                options[normalized] = str(value)
+                continue
+            try:
+                options[normalized] = int(value)
+            except (TypeError, ValueError):
+                options[normalized] = str(value)
+        return options
+
+    def _singbox_endpoint(
+        self,
+        profile: _ClientProfile,
+        user: User,
+    ) -> dict:
+        peer = {
+            "address": profile.endpoint,
+            "port": profile.port,
+            "public_key": profile.server_public_key,
+            "allowed_ips": ["0.0.0.0/0"],
+            "persistent_keepalive_interval": 25,
+        }
+        preshared_key = profile.keys.get("preshared_key")
+        if preshared_key:
+            peer["pre_shared_key"] = preshared_key
+        return {
+            "type": "wireguard",
+            "tag": f"amneziawg-{profile.name}-{user.email}",
+            "mtu": int(profile.mtu),
+            "address": [
+                f"{profile.address_base}.{profile.address_octet}/32",
+            ],
+            "private_key": profile.keys["private_key"],
+            "peers": [peer],
+            "amnezia": self._singbox_amnezia_options(profile),
+        }
+
+    def generate_singbox_client_config(
+        self,
+        user: User,
+        state: PluginStateAccess,
+    ) -> str:
+        """Render every active profile as a sing-box-extended endpoint."""
+        protocol = state.protocols.get("amneziawg")
+        configured = protocol.config.get("profiles") if protocol else None
+        active_names = (
+            {
+                name
+                for name, value in configured.items()
+                if name in {"desktop", "mobile"} and isinstance(value, dict)
+            }
+            if isinstance(configured, dict) and configured
+            else {"desktop"}
+        )
+        endpoints = []
+        for profile_name in ("desktop", "mobile"):
+            if profile_name not in active_names:
+                continue
+            profile = self._client_profile(user, state, profile_name)
+            if profile is not None:
+                endpoints.append(self._singbox_endpoint(profile, user))
+        if not endpoints:
+            return ""
+        return json.dumps(
+            {
+                "endpoints": endpoints,
+                "route": {"final": endpoints[0]["tag"]},
+            },
+            ensure_ascii=False,
+        )
 
     def client_link(
         self,

@@ -87,6 +87,26 @@ class MockNoLink(BasePlugin):
         return ""
 
 
+class MockEndpointTransport(MockTransport):
+    """Transport with a plugin-owned sing-box endpoint projection."""
+
+    def generate_client_config(self, user: User, state: AppState) -> str:
+        return "[Interface]\nPrivateKey = not-json"
+
+    def generate_singbox_client_config(
+        self,
+        user: User,
+        state: AppState,
+    ) -> str:
+        return json.dumps({
+            "endpoints": [{
+                "type": "wireguard",
+                "tag": f"endpoint-{user.email}",
+            }],
+            "route": {"final": f"endpoint-{user.email}"},
+        })
+
+
 def _make_state(users: list | None = None) -> AppState:
     state = AppState()
     if users:
@@ -244,6 +264,21 @@ def test_generate_singbox_config_base_structure():
     assert "inbounds" in config
     assert "outbounds" in config
     assert "route" in config
+    assert config["outbounds"] == [{"type": "direct", "tag": "direct"}]
+
+
+def test_generate_singbox_config_includes_plugin_owned_endpoints():
+    plugin = MockEndpointTransport()
+    user = _make_user("a@x.com")
+    state = _make_state([user])
+
+    config = generate_singbox_config(user, state, plugins=_plugins(plugin))
+
+    assert config["endpoints"] == [{
+        "type": "wireguard",
+        "tag": "endpoint-a@x.com",
+    }]
+    assert config["route"]["final"] == "endpoint-a@x.com"
     assert config["outbounds"] == [{"type": "direct", "tag": "direct"}]
 
 

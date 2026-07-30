@@ -13,6 +13,7 @@ QUERY_HOOKS = {
     "configure",
     "connected_clients",
     "generate_client_config",
+    "generate_singbox_client_config",
     "healthcheck",
     "healthcheck_for_state",
     "status",
