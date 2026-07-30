@@ -270,19 +270,30 @@ def generate_singbox_config(
                 "listen_port": 2080,
             },
         ],
+        "endpoints": [],
         "outbounds": [],
         "route": {"rules": [], "auto_detect_interface": True},
     }
+    endpoint_tags: set[str] = set()
     outbound_tags: set[str] = set()
     selected_outbound = ""
     for plugin in plugins.enabled_transports(state):
         if not plugin.meta.capabilities.subscription_enabled:
             continue
         try:
-            payload = plugins.client_config(plugin, user, state)
+            payload = plugins.singbox_client_config(plugin, user, state)
             if not payload:
                 continue
             plugin_config = json.loads(payload)
+            for endpoint in plugin_config.get("endpoints", []):
+                tag = endpoint.get("tag", "")
+                if tag and tag in endpoint_tags:
+                    continue
+                config["endpoints"].append(endpoint)
+                if tag:
+                    endpoint_tags.add(tag)
+                if not selected_outbound:
+                    selected_outbound = tag
             for outbound in plugin_config.get("outbounds", []):
                 tag = outbound.get("tag", "")
                 if tag and tag in outbound_tags:
@@ -297,6 +308,8 @@ def generate_singbox_config(
         except Exception:
             continue
 
+    if not config["endpoints"]:
+        config.pop("endpoints")
     if "direct" not in outbound_tags:
         config["outbounds"].append({"type": "direct", "tag": "direct"})
     if selected_outbound:

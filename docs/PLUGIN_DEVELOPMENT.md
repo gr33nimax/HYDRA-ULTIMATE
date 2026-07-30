@@ -151,6 +151,14 @@ class ExamplePlugin(BasePlugin):
 | `central_apply` | `False` исключает плагин из общего `apply` — он владеет своим жизненным циклом (так работает Honeypot) |
 | `contract_version` | Явная версия контракта, проверяемая `PluginInvoker` |
 
+`generate_client_config(user, state)` сохраняет нативный клиентский формат
+плагина. Если он не является полным Sing-Box JSON, плагин переопределяет
+`generate_singbox_client_config(user, state)` и возвращает отдельную
+JSON-проекцию для `?format=singbox`. По умолчанию новый hook делегирует
+`generate_client_config`, поэтому существующие JSON-плагины совместимы без
+изменений. Проекция может содержать `outbounds`, `endpoints` и `route`; общий
+subscription service объединяет их без ветвлений по имени плагина.
+
 ## Новый или кастомный inbound
 
 Inbound принадлежит плагину и возвращается из `configure()` внутри

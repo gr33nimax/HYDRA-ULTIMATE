@@ -150,12 +150,108 @@ def test_legacy_generated_marker_is_rebuilt_once(tmp_path):
     assert not builder.is_current(site_dir, "blog", identity)
 
 
+@pytest.mark.parametrize(
+    "legacy_index",
+    (
+        (
+            "<title>Apex Digital Agency | Home</title>"
+            "Apex<span>Digital</span>"
+            "We Build Premium Digital Products"
+        ),
+        (
+            "<title>TechBits | Insights on Modern Software</title>"
+            "Tech<span>Bits</span>"
+            "The Evolution of WebAssembly in the Cloud Native Stack"
+        ),
+        (
+            "<title>HydraDB Docs | Ultimate Time-Series Storage</title>"
+            '<a class="brand">HydraDB</a>'
+            "<h1>What is HydraDB?</h1>"
+        ),
+        (
+            "<title>Independent news and ideas | Meridian Daily</title>"
+            "Meridian <b>Daily</b>"
+            "How public spaces are being redesigned for a warmer world"
+        ),
+        (
+            "<title>Northstar Cloud Status</title>"
+            "Northstar Cloud infrastructure status"
+            "All systems operational"
+        ),
+    ),
+)
+def test_legacy_generated_site_without_marker_is_rebuilt(
+    tmp_path,
+    legacy_index,
+):
+    site_dir = tmp_path / "decoy-c"
+    site_dir.mkdir()
+    (site_dir / "index.html").write_text(
+        f"<!DOCTYPE html><html>{legacy_index}</html>",
+        encoding="utf-8",
+    )
+    identity = build_identity("trusttunnel.example.com")
+
+    assert not builder.is_current(site_dir, "gallery", identity)
+
+    builder.build(
+        site_dir,
+        "gallery",
+        THEMES["gallery"].render,
+        identity,
+    )
+
+    assert builder.is_current(site_dir, "gallery", identity)
+    marker = (site_dir / ".hydra-decoy.json").read_text(encoding="utf-8")
+    assert '"theme": "gallery"' in marker
+    assert legacy_index not in (site_dir / "index.html").read_text(
+        encoding="utf-8",
+    )
+
+
 def test_operator_managed_site_is_never_replaced(tmp_path):
     site_dir = tmp_path / "decoy-c"
     site_dir.mkdir()
     (site_dir / "index.html").write_text("operator content", encoding="utf-8")
 
     assert builder.is_current(site_dir, "blog", build_identity("x.example.com"))
+
+
+def test_operator_site_is_not_adopted_from_one_legacy_phrase(tmp_path):
+    site_dir = tmp_path / "decoy-operator"
+    site_dir.mkdir()
+    (site_dir / "index.html").write_text(
+        "<h1>What is HydraDB?</h1><p>Operator content</p>",
+        encoding="utf-8",
+    )
+
+    assert builder.is_current(
+        site_dir,
+        "gallery",
+        build_identity("operator.example.com"),
+    )
+
+
+def test_failed_legacy_rebuild_keeps_the_unmarked_site(tmp_path):
+    site_dir = tmp_path / "decoy-legacy-failure"
+    site_dir.mkdir()
+    legacy = (
+        "<title>HydraDB Docs | Ultimate Time-Series Storage</title>"
+        '<a class="brand">HydraDB</a>'
+        "<h1>What is HydraDB?</h1>"
+    )
+    (site_dir / "index.html").write_text(legacy, encoding="utf-8")
+    identity = build_identity("trusttunnel.example.com")
+
+    def broken(_site_dir, _identity):
+        raise RuntimeError("renderer failed")
+
+    assert not builder.is_current(site_dir, "cafe", identity)
+    with pytest.raises(RuntimeError, match="renderer failed"):
+        builder.build(site_dir, "cafe", broken, identity)
+
+    assert (site_dir / "index.html").read_text(encoding="utf-8") == legacy
+    assert not (site_dir / ".hydra-decoy.json").exists()
 
 
 def test_failed_render_keeps_the_previous_site(tmp_path):

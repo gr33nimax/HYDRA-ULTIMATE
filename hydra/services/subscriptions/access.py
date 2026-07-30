@@ -47,6 +47,13 @@ class SubscriptionPluginAccess(Protocol):
         **parameters: Any,
     ) -> str: ...
 
+    def singbox_client_config(
+        self,
+        plugin: BasePlugin,
+        user: User,
+        state: AppState,
+    ) -> str: ...
+
     def profiles(
         self,
         plugin: BasePlugin,
@@ -108,6 +115,18 @@ class SubscriptionPluginService:
             user,
             state,
             **parameters,
+        )
+
+    def singbox_client_config(
+        self,
+        plugin: BasePlugin,
+        user: User,
+        state: AppState,
+    ) -> str:
+        return self.invoker.generate_singbox_client_config(
+            plugin,
+            user,
+            state,
         )
 
     def profiles(
