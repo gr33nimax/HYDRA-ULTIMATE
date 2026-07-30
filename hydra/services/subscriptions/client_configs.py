@@ -308,10 +308,25 @@ def generate_singbox_config(
     outbound_tags: set[str] = set()
     endpoint_tags: set[str] = set()
     selected_outbound = ""
+    selected_outbound_is_chain = False
     for plugin_config in plugin_configs:
         route = plugin_config.get("route", {})
-        if not selected_outbound and route.get("final"):
-            selected_outbound = route["final"]
+        route_final = route.get("final", "")
+        route_outbound = next(
+            (
+                outbound
+                for outbound in plugin_config.get("outbounds", [])
+                if outbound.get("tag") == route_final
+            ),
+            None,
+        )
+        route_is_chain = bool(route_outbound and route_outbound.get("detour"))
+        if route_final and (
+            not selected_outbound
+            or (route_is_chain and not selected_outbound_is_chain)
+        ):
+            selected_outbound = route_final
+            selected_outbound_is_chain = route_is_chain
         if "dns" not in config and isinstance(plugin_config.get("dns"), dict):
             config["dns"] = plugin_config["dns"]
         for endpoint in plugin_config.get("endpoints", []):
@@ -323,12 +338,14 @@ def generate_singbox_config(
                 endpoint_tags.add(tag)
         for outbound in plugin_config.get("outbounds", []):
             tag = outbound.get("tag", "")
+            if outbound.get("type") == "direct" or tag == "direct":
+                continue
             if tag and tag in outbound_tags:
                 continue
             config["outbounds"].append(outbound)
             if tag:
                 outbound_tags.add(tag)
-            if not selected_outbound and outbound.get("type") != "direct":
+            if not selected_outbound:
                 selected_outbound = tag
         config["route"]["rules"].extend(route.get("rules", []))
 

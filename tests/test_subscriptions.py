@@ -359,6 +359,8 @@ def test_generate_singbox_config_combines_shadowtls_and_awg_without_data_loss():
     )
     endpoint = config["endpoints"][0]
     assert trojan["detour"] == shadowtls["tag"]
+    assert config["route"]["final"] == trojan["tag"]
+    assert config["outbounds"][-1] == {"type": "direct", "tag": "direct"}
     assert config["dns"]["servers"][1]["detour"] == "direct"
     assert [inbound["type"] for inbound in config["inbounds"]] == [
         "tun",
