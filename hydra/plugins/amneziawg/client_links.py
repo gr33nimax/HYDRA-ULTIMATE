@@ -171,7 +171,11 @@ class AwgClientLinksMixin:
             options[key.lower()] = int(value) if key in numeric else str(value)
         return options
 
-    def _singbox_endpoint(self, profile: _ClientProfile) -> dict | None:
+    def _singbox_endpoint(
+        self,
+        profile: _ClientProfile,
+        tag: str,
+    ) -> dict | None:
         if not profile.server_public_key or not profile.endpoint:
             return None
         peer = {
@@ -184,7 +188,7 @@ class AwgClientLinksMixin:
         }
         return {
             "type": "wireguard",
-            "tag": f"amneziawg-{profile.name}",
+            "tag": tag,
             "mtu": int(profile.mtu),
             "address": [
                 f"{profile.address_base}.{profile.address_octet}/32",
@@ -205,7 +209,10 @@ class AwgClientLinksMixin:
             data = self._client_profile(user, state, profile["name"])
             if data is None:
                 continue
-            endpoint = self._singbox_endpoint(data)
+            endpoint = self._singbox_endpoint(
+                data,
+                f"{user.email} AWG {profile['label']}",
+            )
             if endpoint is not None:
                 endpoints.append(endpoint)
         if not endpoints:

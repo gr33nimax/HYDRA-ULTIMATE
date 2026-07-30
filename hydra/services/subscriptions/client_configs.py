@@ -262,17 +262,10 @@ def generate_singbox_config(
     """Build a personal sing-box configuration from enabled transports."""
     base_config: dict = {
         "log": {"level": "info"},
-        "inbounds": [
-            {
-                "type": "mixed",
-                "tag": "mixed-in",
-                "listen": "127.0.0.1",
-                "listen_port": 2080,
-            },
-        ],
         "outbounds": [],
         "route": {"rules": [], "auto_detect_interface": True},
     }
+    _add_nekobox_inbounds(base_config)
     plugin_configs: list[dict] = []
     for plugin in plugins.enabled_transports(state):
         if not plugin.meta.capabilities.subscription_enabled:
@@ -290,7 +283,7 @@ def generate_singbox_config(
     if len(plugin_configs) == 1:
         config = plugin_configs[0]
         config.setdefault("log", base_config["log"])
-        config.setdefault("inbounds", base_config["inbounds"])
+        _add_nekobox_inbounds(config)
         outbounds = config.setdefault("outbounds", [])
         outbound_tags = {
             outbound.get("tag", "")
@@ -319,6 +312,8 @@ def generate_singbox_config(
         route = plugin_config.get("route", {})
         if not selected_outbound and route.get("final"):
             selected_outbound = route["final"]
+        if "dns" not in config and isinstance(plugin_config.get("dns"), dict):
+            config["dns"] = plugin_config["dns"]
         for endpoint in plugin_config.get("endpoints", []):
             tag = endpoint.get("tag", "")
             if tag and tag in endpoint_tags:

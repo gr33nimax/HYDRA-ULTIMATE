@@ -899,7 +899,7 @@ AllowedIPs = 10.68.68.3/32
     assert len(config["endpoints"]) == 2
     endpoint = config["endpoints"][0]
     assert endpoint["type"] == "wireguard"
-    assert endpoint["tag"] == "amneziawg-desktop"
+    assert endpoint["tag"] == "singbox@example.com AWG Desktop"
     assert endpoint["address"] == ["10.67.67.2/32"]
     assert endpoint["private_key"] == "private-d"
     assert endpoint["peers"] == [{
@@ -914,13 +914,13 @@ AllowedIPs = 10.68.68.3/32
     assert endpoint["amnezia"]["h4"] == 10004
     assert endpoint["amnezia"]["i1"] == "aabbccdd"
     mobile = config["endpoints"][1]
-    assert mobile["tag"] == "amneziawg-mobile"
+    assert mobile["tag"] == "singbox@example.com AWG Mobile"
     assert mobile["address"] == ["10.68.68.3/32"]
     assert mobile["private_key"] == "private-m"
     assert mobile["peers"][0]["port"] == 51821
     assert mobile["peers"][0]["public_key"] == "server-mobile-public"
     assert mobile["amnezia"]["jc"] == 3
-    assert config["route"]["final"] == "amneziawg-desktop"
+    assert config["route"]["final"] == "singbox@example.com AWG Desktop"
 
 
 def test_on_user_add_provisions_active_profiles_only_in_lifecycle():
