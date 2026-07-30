@@ -261,7 +261,6 @@ def test_render_and_query_hooks_do_not_provision_or_persist():
         "configure",
         "_generate_config_for_iface",
         "generate_client_config",
-        "generate_singbox_config",
         "client_link",
         "amnezia_link",
         "get_profiles",
@@ -275,7 +274,6 @@ def test_render_queries_and_commands_are_transitively_runtime_pure():
     for method_name in (
         "configure",
         "generate_client_config",
-        "generate_singbox_config",
         "client_link",
         "amnezia_link",
         "get_profiles",

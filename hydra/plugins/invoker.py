@@ -127,15 +127,6 @@ class PluginInvoker:
         self._validate_version(plugin)
         return plugin.generate_client_config(user, state, **kwargs)
 
-    def generate_singbox_config(
-        self,
-        plugin: BasePlugin,
-        user: User,
-        state: PluginStateAccess,
-    ) -> str:
-        self._validate_version(plugin)
-        return plugin.generate_singbox_config(user, state)
-
     def client_link(
         self,
         plugin: BasePlugin,

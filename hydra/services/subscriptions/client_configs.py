@@ -260,101 +260,42 @@ def generate_singbox_config(
     plugins: SubscriptionPluginAccess,
 ) -> dict:
     """Build a personal sing-box configuration from enabled transports."""
-    base_config: dict = {
+    config: dict = {
         "log": {"level": "info"},
+        "inbounds": [
+            {
+                "type": "mixed",
+                "tag": "mixed-in",
+                "listen": "127.0.0.1",
+                "listen_port": 2080,
+            },
+        ],
         "outbounds": [],
         "route": {"rules": [], "auto_detect_interface": True},
     }
-    _add_nekobox_inbounds(base_config)
-    plugin_configs: list[dict] = []
+    outbound_tags: set[str] = set()
+    selected_outbound = ""
     for plugin in plugins.enabled_transports(state):
         if not plugin.meta.capabilities.subscription_enabled:
             continue
         try:
-            payload = plugins.singbox_config(plugin, user, state)
+            payload = plugins.client_config(plugin, user, state)
             if not payload:
                 continue
             plugin_config = json.loads(payload)
-            if isinstance(plugin_config, dict):
-                plugin_configs.append(plugin_config)
+            for outbound in plugin_config.get("outbounds", []):
+                tag = outbound.get("tag", "")
+                if tag and tag in outbound_tags:
+                    continue
+                config["outbounds"].append(outbound)
+                if tag:
+                    outbound_tags.add(tag)
+                if not selected_outbound and outbound.get("type") != "direct":
+                    selected_outbound = tag
+            route = plugin_config.get("route", {})
+            config["route"]["rules"].extend(route.get("rules", []))
         except Exception:
             continue
-
-    plugin_configs.sort(
-        key=lambda config: not any(
-            outbound.get("detour")
-            for outbound in config.get("outbounds", [])
-        ),
-    )
-
-    if len(plugin_configs) == 1:
-        config = plugin_configs[0]
-        config.setdefault("log", base_config["log"])
-        _add_nekobox_inbounds(config)
-        outbounds = config.setdefault("outbounds", [])
-        outbound_tags = {
-            outbound.get("tag", "")
-            for outbound in outbounds
-            if isinstance(outbound, dict)
-        }
-        if "direct" not in outbound_tags:
-            outbounds.append({"type": "direct", "tag": "direct"})
-        route = config.setdefault("route", {})
-        if not route.get("final"):
-            route["final"] = next(
-                (
-                    outbound.get("tag", "")
-                    for outbound in outbounds
-                    if outbound.get("type") != "direct"
-                ),
-                "",
-            )
-        return config
-
-    config = base_config
-    outbound_tags: set[str] = set()
-    endpoint_tags: set[str] = set()
-    selected_outbound = ""
-    selected_outbound_is_chain = False
-    for plugin_config in plugin_configs:
-        route = plugin_config.get("route", {})
-        route_final = route.get("final", "")
-        route_outbound = next(
-            (
-                outbound
-                for outbound in plugin_config.get("outbounds", [])
-                if outbound.get("tag") == route_final
-            ),
-            None,
-        )
-        route_is_chain = bool(route_outbound and route_outbound.get("detour"))
-        if route_final and (
-            not selected_outbound
-            or (route_is_chain and not selected_outbound_is_chain)
-        ):
-            selected_outbound = route_final
-            selected_outbound_is_chain = route_is_chain
-        if "dns" not in config and isinstance(plugin_config.get("dns"), dict):
-            config["dns"] = plugin_config["dns"]
-        for endpoint in plugin_config.get("endpoints", []):
-            tag = endpoint.get("tag", "")
-            if tag and tag in endpoint_tags:
-                continue
-            config.setdefault("endpoints", []).append(endpoint)
-            if tag:
-                endpoint_tags.add(tag)
-        for outbound in plugin_config.get("outbounds", []):
-            tag = outbound.get("tag", "")
-            if outbound.get("type") == "direct" or tag == "direct":
-                continue
-            if tag and tag in outbound_tags:
-                continue
-            config["outbounds"].append(outbound)
-            if tag:
-                outbound_tags.add(tag)
-            if not selected_outbound:
-                selected_outbound = tag
-        config["route"]["rules"].extend(route.get("rules", []))
 
     if "direct" not in outbound_tags:
         config["outbounds"].append({"type": "direct", "tag": "direct"})

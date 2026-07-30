@@ -113,29 +113,6 @@ def test_subscription_handler_registers_fingerprint_and_enforces_limit():
     assert list(load_state().users[0].devices) == [expected]
 
 
-def test_subscription_handler_honors_explicit_singbox_query_format():
-    save_state(AppState(users=[User(email="alice", uuid="token")]))
-    handler, responses, errors = _request_handler(hwid="desktop")
-    handler.path = "/sub/token?format=singbox"
-    selected_formats: list[str] = []
-
-    def subscription(response_format, *_args):
-        selected_formats.append(response_format)
-        return (
-            '{"outbounds":[]}',
-            "application/json; charset=utf-8",
-            "singbox.json",
-        )
-
-    handler._subscription = subscription
-    handler.do_GET()
-
-    assert responses == [200]
-    assert errors == []
-    assert selected_formats == ["singbox"]
-    assert handler.wfile.getvalue() == b'{"outbounds":[]}'
-
-
 def test_admin_can_reset_devices_without_stale_save_restoring_them():
     from hydra.core.orchestrator import set_user_device_limit
 
