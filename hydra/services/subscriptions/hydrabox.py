@@ -38,7 +38,7 @@ _LOCAL_AUTHORITY_FIELDS = frozenset({
     "working_directory",
 })
 _QWDT_FIELDS = frozenset({
-    "i1", "i2", "i3", "i4", "i5", "j1", "j2", "j3", "itime",
+    "i2", "i3", "i4", "i5", "j1", "j2", "j3", "itime",
 })
 
 

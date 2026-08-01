@@ -71,9 +71,11 @@ AmneziaWG при этом не изменяется.
 identity tuple `(issuer, subscription_id, stable)` и использует revision state
 как монотонный `sequence`. В `runtime.document` попадают только разрешённые
 remote policy v1 `outbounds` и userspace `wireguard` endpoints: локальные
-inbounds/DNS/route, `direct`, executable-поля, зарезервированные теги и qWDTT
-параметры отбрасываются либо блокируют выдачу fail-closed. Detour-зависимости
-сохраняются с исходными тегами, а `profiles` явно указывает только на корневые
+inbounds/DNS/route, `direct`, executable-поля, зарезервированные теги и поля
+других локальных транспортов отбрасываются либо блокируют выдачу fail-closed.
+AmneziaWG-параметр `I1` сохраняется в endpoint как `amnezia.i1` вместе с
+`Jc`/`Jmin`/`Jmax`, `S1`–`S4` и `H1`–`H4`. Detour-зависимости сохраняются с
+исходными тегами, а `profiles` явно указывает только на корневые
 selectable entrypoints. Ответ не кодируется в Base64, ограничен 16 MiB и
 публикуется с `Cache-Control: private, no-store`.
 
