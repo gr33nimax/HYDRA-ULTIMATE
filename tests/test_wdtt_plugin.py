@@ -45,6 +45,13 @@ def test_plugin_meta():
         "save_password_registry",
         "setup_headless_creator",
         "refresh_headless_creator",
+        "stop_headless_creator",
+    )
+    assert p.meta.capabilities.commands == (
+        "set_headless_refresh_interval",
+    )
+    assert p.meta.capabilities.persist_only_commands == (
+        "set_headless_refresh_interval",
     )
     assert p.meta.capabilities.queries == (
         "observe_runtime",
@@ -65,6 +72,26 @@ def test_plugin_meta():
     assert maintenance[0].due_query == "headless_creator_due"
     assert maintenance[0].enabled_flag == "sync_wdtt_headless_enabled"
     assert maintenance[0].apply_on_success is False
+
+
+def test_headless_refresh_interval_command_validates_and_updates_state():
+    plugin = WdttPlugin()
+    state = _make_state()
+
+    assert plugin.set_headless_refresh_interval(
+        state=state,
+        seconds=6 * 3600,
+    ) is True
+    assert state.protocols["wdtt"].config[
+        "headless_refresh_interval_seconds"
+    ] == 6 * 3600
+    assert plugin.set_headless_refresh_interval(
+        state=state,
+        seconds=6 * 3600,
+    ) is False
+
+    with pytest.raises(ValueError, match="between 1 and 24 hours"):
+        plugin.set_headless_refresh_interval(state=state, seconds=60)
 
 
 def test_password_registry_and_link_io_are_plugin_owned(tmp_path):

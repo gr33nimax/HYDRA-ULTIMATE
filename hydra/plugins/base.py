@@ -36,6 +36,7 @@ class PluginCapabilities:
     required_services: tuple[str, ...] = ()
     conflicts_with: tuple[str, ...] = ()
     commands: tuple[str, ...] = ()
+    persist_only_commands: tuple[str, ...] = ()
     queries: tuple[str, ...] = ()
     actions: tuple[str, ...] = ()
     tls_domain_source: str = ""
@@ -111,6 +112,7 @@ class PluginMeta:
     required_services: tuple[str, ...] = ()
     conflicts_with: tuple[str, ...] = ()
     commands: tuple[str, ...] = ()
+    persist_only_commands: tuple[str, ...] = ()
     queries: tuple[str, ...] = ()
     actions: tuple[str, ...] = ()
     tls_domain_source: str = ""
@@ -131,6 +133,7 @@ class PluginMeta:
             required_services=tuple(self.required_services),
             conflicts_with=tuple(self.conflicts_with),
             commands=tuple(self.commands),
+            persist_only_commands=tuple(self.persist_only_commands),
             queries=tuple(self.queries),
             actions=tuple(self.actions),
             tls_domain_source=self.tls_domain_source,

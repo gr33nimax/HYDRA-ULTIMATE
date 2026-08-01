@@ -22,6 +22,18 @@ def test_host_backend_ensures_managed_directory(tmp_path):
     assert target.is_dir()
 
 
+def test_host_backend_removes_managed_file(tmp_path):
+    host = HostBackend()
+    target = tmp_path / "runtime" / "stale.txt"
+    target.parent.mkdir()
+    target.write_text("stale", encoding="utf-8")
+
+    host.remove_file(target)
+    host.remove_file(target)
+
+    assert target.exists() is False
+
+
 def test_host_backend_firewall_persistence_is_injectable(tmp_path):
     rules = tmp_path / "rules.v4"
     host = HostBackend(HostPaths(iptables_rules=rules))

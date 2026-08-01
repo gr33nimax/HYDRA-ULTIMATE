@@ -113,7 +113,18 @@ class PluginCommandService:
                 return False
 
             protocol = state.protocols.get(plugin_name)
-            if protocol is not None and protocol.enabled:
+            persist_only = frozenset(
+                getattr(
+                    plugin.meta.capabilities,
+                    "persist_only_commands",
+                    (),
+                ),
+            )
+            if (
+                protocol is not None
+                and protocol.enabled
+                and command not in persist_only
+            ):
                 self.prepare_apply(state, plugin_name)
                 capabilities = getattr(plugin.meta, "capabilities", None)
                 central_apply = getattr(

@@ -13,6 +13,8 @@ ROOT = Path(__file__).parents[1] / "hydra" / "plugins" / "wdtt"
 MODULES = {
     "build.py",
     "configuration.py",
+    "headless_control.py",
+    "headless_schedule.py",
     "lifecycle.py",
     "model.py",
     "observation.py",

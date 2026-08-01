@@ -10,6 +10,19 @@ from urllib.parse import quote
 
 from hydra.plugins.base import MaintenanceTask
 from hydra.plugins.context import PluginStateAccess
+from hydra.plugins.wdtt.headless_control import (
+    call_files as _call_files,
+    service_names as _service_names,
+    stop,
+)
+from hydra.plugins.wdtt.headless_schedule import (
+    MAX_REFRESH_INTERVAL,
+    MIN_REFRESH_INTERVAL,
+    REFRESH_INTERVAL,
+    REFRESH_INTERVAL_KEY,
+    refresh_interval as _refresh_interval,
+    set_refresh_interval,
+)
 from hydra.plugins.wdtt.model import WdttEnvironment
 from hydra.utils.downloader import (
     download_github_asset_filtered,
@@ -17,7 +30,6 @@ from hydra.utils.downloader import (
 )
 
 
-REFRESH_INTERVAL = 86_400
 _HASH_RE = re.compile(r"(?:/join/|join/)([^/?#\s]+)")
 _COOKIE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _MAX_CREATOR_BINARY_SIZE = 128 * 1024 * 1024
@@ -219,13 +231,6 @@ def _write_unit(env: WdttEnvironment, binary: Path) -> None:
     env.host.atomic_write(env.headless_service_file, content, mode=0o644)
 
 
-def _service_names(env: WdttEnvironment) -> list[str]:
-    return [
-        f"wdtt-headless-creator@{index}.service"
-        for index in range(1, env.headless_call_count + 1)
-    ]
-
-
 def _restart_services(env: WdttEnvironment) -> bool:
     if env.host.run(
         ["systemctl", "daemon-reload"], capture_output=True,
@@ -243,13 +248,6 @@ def _restart_services(env: WdttEnvironment) -> bool:
         if restarted.returncode != 0:
             return False
     return True
-
-
-def _call_files(env: WdttEnvironment) -> list[Path]:
-    return [
-        env.headless_dir / f"{index}.call.txt"
-        for index in range(1, env.headless_call_count + 1)
-    ]
 
 
 def _read_hashes(env: WdttEnvironment) -> list[str]:
@@ -313,7 +311,7 @@ def _master_link(env: WdttEnvironment) -> str:
 
 def status(env: WdttEnvironment, state: PluginStateAccess | None = None) -> dict:
     metadata = _metadata(env)
-    hashes = list(metadata.get("hashes", []))
+    hashes = _read_hashes(env)
     return {
         "configured": _configured(state),
         "call_count": (
@@ -322,6 +320,7 @@ def status(env: WdttEnvironment, state: PluginStateAccess | None = None) -> dict
             else 0
         ),
         "refreshed_at": str(metadata.get("refreshed_at", "")),
+        "refresh_interval_seconds": _refresh_interval(state),
         "link_ready": bool(_master_link(env)),
     }
 
@@ -348,7 +347,9 @@ def due(
         refreshed = datetime.fromisoformat(str(value))
         if refreshed.tzinfo is None:
             refreshed = refreshed.replace(tzinfo=timezone.utc)
-        return (datetime.now(timezone.utc) - refreshed).total_seconds() >= REFRESH_INTERVAL
+        return (
+            datetime.now(timezone.utc) - refreshed
+        ).total_seconds() >= _refresh_interval(state)
     except (TypeError, ValueError):
         return True
 
@@ -432,6 +433,17 @@ class WdttHeadlessMixin:
     def refresh_headless_creator(self, *, state: PluginStateAccess) -> tuple[bool, str]:
         return _refresh(self._wdtt_env(), state)
 
+    def stop_headless_creator(self) -> tuple[bool, str]:
+        return stop(self._wdtt_env())
+
+    @staticmethod
+    def set_headless_refresh_interval(
+        *,
+        state: PluginStateAccess,
+        seconds: int,
+    ) -> bool:
+        return set_refresh_interval(state, seconds)
+
     def headless_creator_status(self, *, state: PluginStateAccess | None = None) -> dict:
         return status(self._wdtt_env(), state)
 
@@ -468,10 +480,14 @@ class WdttHeadlessMixin:
 
 __all__ = [
     "HEADLESS_MAINTENANCE_TASKS",
+    "MAX_REFRESH_INTERVAL",
+    "MIN_REFRESH_INTERVAL",
     "REFRESH_INTERVAL",
+    "REFRESH_INTERVAL_KEY",
     "WdttHeadlessMixin",
     "build_qwdtt_link",
     "extract_hash",
     "normalize_cookies",
+    "stop",
     "uninstall",
 ]

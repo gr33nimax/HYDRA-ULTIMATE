@@ -138,6 +138,7 @@ class ExamplePlugin(BasePlugin):
 | :--- | :--- |
 | `category` | `transport`, `enhancement` или `security` — группировка в инвентаре |
 | `commands` | Изменяющие persisted-конфигурацию команды |
+| `persist_only_commands` | Подмножество `commands`, которому нужна атомарная запись state без runtime `apply` |
 | `queries` | Безопасные проекции и клиентские профили |
 | `actions` | Runtime-операции, не требующие общего `apply` |
 | `tls_domain_source`, `config_defaults` | Подготовка при включении |

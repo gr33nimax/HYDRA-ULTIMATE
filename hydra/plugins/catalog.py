@@ -73,6 +73,7 @@ class PluginCatalog:
             "required_services",
             "conflicts_with",
             "commands",
+            "persist_only_commands",
             "queries",
             "actions",
         ):
@@ -98,6 +99,13 @@ class PluginCatalog:
                             f"meta.{field_name} declares "
                             f"missing method {value}()",
                         )
+        if any(
+            command not in capabilities.commands
+            for command in capabilities.persist_only_commands
+        ):
+            errors.append(
+                "meta.persist_only_commands must be declared in commands",
+            )
         if capabilities.tls_domain_source not in {
             "",
             "network",

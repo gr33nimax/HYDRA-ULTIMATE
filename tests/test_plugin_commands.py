@@ -88,6 +88,38 @@ def test_enabled_plugin_command_runs_preflight_then_atomic_apply():
     assert events == ["prepare:naive", "apply"]
 
 
+def test_persist_only_command_saves_enabled_state_without_runtime_apply():
+    plugin = _Plugin()
+    plugin.meta = SimpleNamespace(
+        name="naive",
+        contract_version=1,
+        capabilities=SimpleNamespace(
+            commands=("set_transport",),
+            central_apply=True,
+            persist_only_commands=("set_transport",),
+        ),
+    )
+    state = _state(enabled=True)
+    events = []
+    saved = []
+    service = _service(
+        plugin,
+        apply=lambda current: events.append("apply") or True,
+        saves=saved,
+        prepare=lambda current, name: events.append(f"prepare:{name}"),
+    )
+
+    assert service.execute(
+        state,
+        "naive",
+        "set_transport",
+        network="quic",
+    )
+    assert state.protocols["naive"].config["network"] == "quic"
+    assert saved == ["quic"]
+    assert events == []
+
+
 def test_failed_apply_restores_and_persists_previous_desired_state():
     state = _state(enabled=True)
     saved = []

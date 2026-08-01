@@ -66,6 +66,7 @@ def test_inventory_is_json_safe_and_filters_by_public_category():
                 "required_services": (),
                 "conflicts_with": (),
                 "commands": (),
+                "persist_only_commands": (),
                 "queries": (),
                 "actions": (),
                 "tls_domain_source": "",

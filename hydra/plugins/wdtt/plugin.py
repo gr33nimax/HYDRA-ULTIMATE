@@ -126,12 +126,15 @@ class WdttPlugin(
         needs_domain=False,
         central_apply=True,
         required_commands=("systemctl", "iptables"),
+        commands=("set_headless_refresh_interval",),
+        persist_only_commands=("set_headless_refresh_interval",),
         actions=(
             "hot_reload",
             "save_client_link",
             "save_password_registry",
             "setup_headless_creator",
             "refresh_headless_creator",
+            "stop_headless_creator",
         ),
         queries=(
             "observe_runtime",
@@ -143,6 +146,7 @@ class WdttPlugin(
             "headless_creator_due",
         ),
         manual_artifacts_query="manual_client_artifacts",
+        config_defaults=(("headless_refresh_interval_seconds", 86_400),),
         maintenance_tasks=HEADLESS_MAINTENANCE_TASKS,
         subscription_enabled=False,
         backup_resources=(

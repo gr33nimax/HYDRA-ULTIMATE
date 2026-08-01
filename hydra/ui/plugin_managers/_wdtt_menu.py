@@ -84,8 +84,8 @@ def _options(installed: bool) -> list[tuple[str, str, str]]:
                 ),
                 (
                     "6",
-                    "🤖 Настроить VK headless creator",
-                    "Установить creator, создать четыре звонка и включить суточное обновление",
+                    "🤖 VK headless creator",
+                    "Статус, master-ссылка, обновление и настройка",
                 ),
                 (
                     "9",

@@ -180,6 +180,19 @@ def test_manual_artifacts_capability_requires_a_declared_query() -> None:
     ]
 
 
+def test_persist_only_capability_requires_a_declared_command() -> None:
+    plugin = ExtensionPlugin()
+    plugin.meta = PluginMeta(
+        name="extension",
+        description="test extension",
+        persist_only_commands=("missing_command",),
+    )
+
+    assert PluginCatalog([plugin]).contract_errors(plugin) == [
+        "meta.persist_only_commands must be declared in commands",
+    ]
+
+
 def test_production_bootstrap_accepts_an_outer_plugin_factory() -> None:
     application = production_application(
         extra_plugin_factories=(ExtensionPlugin,),

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import zipfile
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -21,6 +22,7 @@ class _Host:
     def __init__(self) -> None:
         self.writes: list[tuple[Path, int]] = []
         self.directories: list[tuple[Path, int]] = []
+        self.commands: list[list[object]] = []
 
     def atomic_write(self, path: Path, content: str | bytes, *, mode: int) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -36,10 +38,15 @@ class _Host:
         path.chmod(mode)
         self.directories.append((path, mode))
 
+    @staticmethod
+    def remove_file(path: Path, *, missing_ok: bool = True) -> None:
+        path.unlink(missing_ok=missing_ok)
+
     def which(self, value: str) -> str | None:
         return value if Path(value).exists() else None
 
-    def run(self, *_args, **_kwargs):
+    def run(self, args, **_kwargs):
+        self.commands.append(list(args))
         return SimpleNamespace(returncode=0)
 
 
@@ -318,6 +325,69 @@ def test_due_detects_creator_restart_before_daily_deadline(tmp_path: Path) -> No
     assert headless.due(env, state=state) is True
 
 
+def test_due_uses_configured_refresh_interval(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    state = _state()
+    refreshed = datetime.now(timezone.utc) - timedelta(hours=2)
+    env.headless_state_file.parent.mkdir(parents=True)
+    env.headless_state_file.write_text(
+        headless._json(env, {"refreshed_at": refreshed.isoformat()}),
+        encoding="utf-8",
+    )
+
+    state.protocols["wdtt"].config["headless_refresh_interval_seconds"] = 3600
+    assert headless.due(env, state=state) is True
+
+    state.protocols["wdtt"].config["headless_refresh_interval_seconds"] = 21600
+    assert headless.due(env, state=state) is False
+
+
+def test_stop_ends_all_calls_and_removes_stale_master_link(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    env.headless_dir.mkdir(parents=True)
+    for index in range(1, 5):
+        (env.headless_dir / f"{index}.call.txt").write_text(
+            f"https://vk.com/call/join/hash-{index}\n",
+            encoding="utf-8",
+        )
+    env.headless_link_file.write_text("qwdtt://master\n", encoding="utf-8")
+    env.headless_state_file.write_text(
+        '{"hashes": ["a", "b", "c", "d"], "refreshed_at": "2099-01-01T00:00:00+00:00"}',
+        encoding="utf-8",
+    )
+
+    ok, message = headless.stop(env)
+
+    assert ok is True
+    assert "stopped" in message
+    assert env.headless_link_file.exists() is False
+    assert env.headless_state_file.exists() is True
+    assert not list(env.headless_dir.glob("*.call.txt"))
+    assert headless.status(env, _state())["call_count"] == 0
+    for index in range(1, 5):
+        unit = f"wdtt-headless-creator@{index}.service"
+        assert ["systemctl", "stop", unit] in env.host.commands
+        assert ["systemctl", "disable", unit] in env.host.commands
+
+
+def test_stop_reports_partial_systemd_failure_and_invalidates_link(
+    tmp_path: Path,
+) -> None:
+    env = _env(tmp_path)
+    env.headless_link_file.write_text("qwdtt://stale\n", encoding="utf-8")
+    results = [SimpleNamespace(returncode=1)] + [
+        SimpleNamespace(returncode=0)
+        for _ in range(7)
+    ]
+    env.host.run = MagicMock(side_effect=results)
+
+    ok, message = headless.stop(env)
+
+    assert ok is False
+    assert "failed to stop all creator services" in message
+    assert env.headless_link_file.exists() is False
+
+
 def test_refresh_failure_keeps_previous_master_link(tmp_path: Path) -> None:
     env = _env(tmp_path)
     state = _state()
@@ -422,3 +492,150 @@ def test_tui_setup_rolls_back_flag_on_runtime_failure() -> None:
     assert app.admin.save_state.call_count == 2
     app.plugin_query.assert_not_called()
     prompt.assert_called_once_with("Нажмите Enter...")
+
+
+def test_tui_opening_configured_headless_does_not_restart_or_reinstall() -> None:
+    state = _state()
+
+    def plugin_query(_plugin: str, query: str, **_parameters):
+        if query == "headless_creator_status":
+            return {
+                "configured": True,
+                "call_count": 4,
+                "refreshed_at": "2026-08-01T12:00:00+00:00",
+                "link_ready": True,
+            }
+        if query == "headless_creator_link":
+            return "qwdtt://master-link"
+        raise AssertionError(query)
+
+    app = SimpleNamespace(
+        admin=SimpleNamespace(save_state=MagicMock()),
+        plugin_action=MagicMock(),
+        plugin_query=MagicMock(side_effect=plugin_query),
+    )
+    with (
+        patch.object(wdtt_facade, "clear"),
+        patch.object(wdtt_facade, "title"),
+        patch.object(wdtt_facade, "panel"),
+        patch.object(wdtt_facade, "menu", return_value="0") as menu,
+    ):
+        wdtt_facade._setup_headless_creator(state, app)
+
+    app.plugin_action.assert_not_called()
+    app.admin.save_state.assert_not_called()
+    menu.assert_called_once()
+
+
+def test_tui_refreshes_configured_headless_only_after_explicit_choice() -> None:
+    state = _state()
+
+    def plugin_query(_plugin: str, query: str, **_parameters):
+        if query == "headless_creator_status":
+            return {
+                "configured": True,
+                "call_count": 4,
+                "refreshed_at": "2026-08-01T12:00:00+00:00",
+                "link_ready": True,
+            }
+        if query == "headless_creator_link":
+            return "qwdtt://master-link"
+        raise AssertionError(query)
+
+    app = SimpleNamespace(
+        admin=SimpleNamespace(save_state=MagicMock()),
+        plugin_action=MagicMock(return_value=(True, "updated")),
+        plugin_query=MagicMock(side_effect=plugin_query),
+    )
+    with (
+        patch.object(wdtt_facade, "clear"),
+        patch.object(wdtt_facade, "title"),
+        patch.object(wdtt_facade, "panel"),
+        patch.object(wdtt_facade, "menu", return_value="1"),
+        patch.object(wdtt_facade, "info"),
+        patch.object(wdtt_facade, "success"),
+        patch.object(wdtt_facade, "prompt"),
+        patch.object(wdtt_facade, "_save_link_to_file"),
+    ):
+        wdtt_facade._setup_headless_creator(state, app)
+
+    app.plugin_action.assert_called_once_with(
+        "wdtt",
+        "refresh_headless_creator",
+        state=state,
+    )
+    app.admin.save_state.assert_not_called()
+
+
+def test_tui_stops_all_calls_only_after_explicit_confirmation() -> None:
+    state = _state()
+    app = SimpleNamespace(
+        admin=SimpleNamespace(save_state=MagicMock()),
+        plugin_action=MagicMock(return_value=(True, "stopped")),
+        plugin_query=MagicMock(
+            side_effect=[
+                {
+                    "configured": True,
+                    "call_count": 4,
+                    "refreshed_at": "2026-08-01T12:00:00+00:00",
+                    "refresh_interval_seconds": 86400,
+                    "link_ready": True,
+                },
+                "qwdtt://master-link",
+            ],
+        ),
+    )
+    with (
+        patch.object(wdtt_facade, "clear"),
+        patch.object(wdtt_facade, "title"),
+        patch.object(wdtt_facade, "panel"),
+        patch.object(wdtt_facade, "menu", return_value="2"),
+        patch.object(wdtt_facade, "confirm", return_value=True),
+        patch.object(wdtt_facade, "success"),
+        patch.object(wdtt_facade, "prompt"),
+    ):
+        wdtt_facade._setup_headless_creator(state, app)
+
+    app.plugin_action.assert_called_once_with(
+        "wdtt",
+        "stop_headless_creator",
+    )
+    app.admin.save_state.assert_not_called()
+
+
+def test_tui_updates_refresh_timer_through_persist_only_command() -> None:
+    state = _state()
+    app = SimpleNamespace(
+        admin=SimpleNamespace(save_state=MagicMock()),
+        plugin_action=MagicMock(),
+        plugin_command=MagicMock(return_value=True),
+        plugin_query=MagicMock(
+            side_effect=[
+                {
+                    "configured": True,
+                    "call_count": 4,
+                    "refreshed_at": "2026-08-01T12:00:00+00:00",
+                    "refresh_interval_seconds": 86400,
+                    "link_ready": True,
+                },
+                "qwdtt://master-link",
+            ],
+        ),
+    )
+    with (
+        patch.object(wdtt_facade, "clear"),
+        patch.object(wdtt_facade, "title"),
+        patch.object(wdtt_facade, "panel"),
+        patch.object(wdtt_facade, "menu", side_effect=["3", "2"]),
+        patch.object(wdtt_facade, "success"),
+        patch.object(wdtt_facade, "prompt"),
+    ):
+        wdtt_facade._setup_headless_creator(state, app)
+
+    app.plugin_command.assert_called_once_with(
+        state,
+        "wdtt",
+        "set_headless_refresh_interval",
+        seconds=12 * 3600,
+    )
+    app.plugin_action.assert_not_called()

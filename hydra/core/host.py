@@ -75,6 +75,11 @@ class HostBackend:
         path.mkdir(parents=True, exist_ok=True)
         path.chmod(mode)
 
+    @staticmethod
+    def remove_file(path: Path, *, missing_ok: bool = True) -> None:
+        """Remove one explicitly scoped managed file."""
+        path.unlink(missing_ok=missing_ok)
+
     def systemd(self, action: str, unit: str, *, timeout: float = commands.DEFAULT_TIMEOUT) -> CompletedProcess:
         return self.run(["systemctl", action, unit], timeout=timeout)
 
