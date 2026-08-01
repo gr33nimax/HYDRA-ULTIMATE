@@ -167,6 +167,19 @@ def test_default_composition_accepts_an_outer_plugin_factory() -> None:
     PluginCatalog(plugins).validate_contracts()
 
 
+def test_manual_artifacts_capability_requires_a_declared_query() -> None:
+    plugin = ExtensionPlugin()
+    plugin.meta = PluginMeta(
+        name="extension",
+        description="test extension",
+        manual_artifacts_query="missing_query",
+    )
+
+    assert PluginCatalog([plugin]).contract_errors(plugin) == [
+        "meta.manual_artifacts_query must be a declared query",
+    ]
+
+
 def test_production_bootstrap_accepts_an_outer_plugin_factory() -> None:
     application = production_application(
         extra_plugin_factories=(ExtensionPlugin,),

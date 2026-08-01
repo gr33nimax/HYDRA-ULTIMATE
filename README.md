@@ -115,10 +115,12 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 | **MTProto / Telemt** | `8443/tcp` | Telegram MTProxy |
 | **qWDTT** | `56000/udp`, `56001/udp` | WireGuard поверх TURN |
 
-qWDTT можно дополнить VK headless creator из TUI: после ввода cookies HYDRA скачает проверенный
-GitHub release под архитектуру VPS, создаст закрытый каталог для cookies,
+qWDTT можно дополнить VK headless creator из TUI: положите экспортированный
+`cookies-vk.json` в `/etc/hydra/cookiesvk/`, после чего HYDRA скачает проверенный
+GitHub release под архитектуру VPS, защитит каталог и cookies-файл,
 поднимет четыре звонка и будет раз в сутки обновлять единственную master-ссылку
-`qwdtt://` с четырьмя актуальными хешами.
+`qwdtt://` с четырьмя актуальными хешами. Актуальная ссылка отображается в TUI
+на экране пользователя «Ручные конфиги» и не добавляется в его подписку.
 
 **Сеть:** DNSCrypt (шифрованный резолвер) · WARP (выборочная маршрутизация через
 Cloudflare).

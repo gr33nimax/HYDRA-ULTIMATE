@@ -383,8 +383,14 @@ def _refresh(env: WdttEnvironment, state: PluginStateAccess) -> tuple[bool, str]
     return True, "qWDTT master link updated"
 
 
-def setup(env: WdttEnvironment, state: PluginStateAccess, cookies: str) -> tuple[bool, str]:
-    normalized = normalize_cookies(cookies, env)
+def setup(env: WdttEnvironment, state: PluginStateAccess) -> tuple[bool, str]:
+    env.host.ensure_directory(env.headless_cookies_file.parent, mode=0o700)
+    if not env.headless_cookies_file.is_file():
+        return False, f"VK cookies file is missing: {env.headless_cookies_file}"
+    try:
+        normalized = normalize_cookies(str(env.headless_cookies_file), env)
+    except (OSError, TypeError, ValueError) as exc:
+        return False, f"invalid VK cookies file: {exc}"
     installed, message = install(env)
     if not installed:
         return False, message
@@ -408,14 +414,20 @@ def uninstall(env: WdttEnvironment) -> None:
         env.headless_service_file.unlink()
     if env.headless_bin_path.exists():
         env.headless_bin_path.unlink()
+    if env.headless_cookies_file.exists():
+        env.headless_cookies_file.unlink()
+    try:
+        env.headless_cookies_file.parent.rmdir()
+    except OSError:
+        pass
     env.host.run(["systemctl", "daemon-reload"], capture_output=True)
 
 
 class WdttHeadlessMixin:
     """Expose headless creator through the plugin contract."""
 
-    def setup_headless_creator(self, *, cookies: str, state: PluginStateAccess) -> tuple[bool, str]:
-        return setup(self._wdtt_env(), state, cookies)
+    def setup_headless_creator(self, *, state: PluginStateAccess) -> tuple[bool, str]:
+        return setup(self._wdtt_env(), state)
 
     def refresh_headless_creator(self, *, state: PluginStateAccess) -> tuple[bool, str]:
         return _refresh(self._wdtt_env(), state)
@@ -426,6 +438,24 @@ class WdttHeadlessMixin:
     def headless_creator_link(self) -> str:
         """Return the secret-bearing link only through an explicit query."""
         return _master_link(self._wdtt_env())
+
+    def manual_client_artifacts(
+        self,
+        *,
+        state: PluginStateAccess | None = None,
+    ) -> list[dict]:
+        """Expose the global master link to admin-only manual config views."""
+        del state
+        link = _master_link(self._wdtt_env())
+        if not link:
+            return []
+        return [
+            {
+                "profile_name": "master",
+                "profile_label": "Master · общая для всех пользователей",
+                "links": [link],
+            },
+        ]
 
     def headless_creator_due(
         self,

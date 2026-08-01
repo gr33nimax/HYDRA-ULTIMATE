@@ -52,8 +52,13 @@ def test_plugin_meta():
         "public_server_ip",
         "headless_creator_status",
         "headless_creator_link",
+        "manual_client_artifacts",
         "headless_creator_due",
     )
+    assert p.meta.capabilities.manual_artifacts_query == (
+        "manual_client_artifacts"
+    )
+    assert p.meta.capabilities.subscription_enabled is False
     maintenance = p.meta.capabilities.maintenance_tasks
     assert len(maintenance) == 1
     assert maintenance[0].action == "refresh_headless_creator"

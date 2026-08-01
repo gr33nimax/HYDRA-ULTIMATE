@@ -122,6 +122,24 @@ def _client_artifacts(
                         links,
                     ),
                 )
+    try:
+        manual_artifacts = app.protocols.manual_client_artifacts(
+            state,
+            PluginCategory.TRANSPORT,
+        )
+    except Exception:
+        manual_artifacts = []
+    artifacts.extend(
+        _ClientArtifact(
+            artifact.plugin_name,
+            artifact.display_name,
+            artifact.profile_name,
+            artifact.profile_label,
+            artifact.config,
+            artifact.links,
+        )
+        for artifact in manual_artifacts
+    )
     return artifacts
 
 
@@ -149,6 +167,8 @@ def _render_qr(value: str, *, invert: bool = False) -> None:
 
 
 def _link_caption(link: str) -> str:
+    if link.startswith("qwdtt://"):
+        return "qWDTT master URL"
     if link.startswith("vpn://"):
         return "Импорт в AmneziaVPN"
     if link.startswith("wg://"):

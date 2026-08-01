@@ -42,6 +42,7 @@ class PluginCapabilities:
     config_defaults: tuple[tuple[str, JsonValue], ...] = ()
     subscription_profile_query: str = ""
     subscription_enabled: bool = True
+    manual_artifacts_query: str = ""
     connection_source: str = "plugin"
     maintenance_tasks: tuple[MaintenanceTask, ...] = ()
     backup_resources: tuple[BackupResource, ...] = ()
@@ -116,6 +117,7 @@ class PluginMeta:
     config_defaults: tuple[tuple[str, JsonValue], ...] = ()
     subscription_profile_query: str = ""
     subscription_enabled: bool = True
+    manual_artifacts_query: str = ""
     connection_source: str = "plugin"
     maintenance_tasks: tuple[MaintenanceTask, ...] = ()
     backup_resources: tuple[BackupResource, ...] = ()
@@ -135,6 +137,7 @@ class PluginMeta:
             config_defaults=tuple(self.config_defaults),
             subscription_profile_query=self.subscription_profile_query,
             subscription_enabled=self.subscription_enabled,
+            manual_artifacts_query=self.manual_artifacts_query,
             connection_source=self.connection_source,
             maintenance_tasks=tuple(self.maintenance_tasks),
             backup_resources=tuple(self.backup_resources),

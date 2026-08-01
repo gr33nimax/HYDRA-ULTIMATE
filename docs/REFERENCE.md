@@ -41,7 +41,9 @@
 | `wdtt` | qWDTT | WireGuard-туннелирование поверх TURN |
 
 Для qWDTT TUI предлагает пункт «Настроить VK headless creator». Оператор
-вставляет экспортированные VK cookies (JSON, `name=value; ...` или путь к файлу), после чего
+помещает экспортированный многострочный Creator JSON в фиксированный файл
+`/etc/hydra/cookiesvk/cookies-vk.json`; ручного ввода cookies в TUI нет. При
+отсутствии файла setup создаёт каталог `cookiesvk` и сообщает ожидаемый путь. Затем
 HYDRA выбирает последний `whitelist-bypass-cli-linux-*.zip` по архитектуре VPS,
 проверяет опубликованный GitHub Release SHA-256, извлекает и атомарно устанавливает
 `/usr/local/bin/headless-vk-creator`, затем запускает четыре экземпляра и ждёт
@@ -51,8 +53,11 @@ HYDRA выбирает последний `whitelist-bypass-cli-linux-*.zip` п�
 необходимости перезапускает четыре инстанса и атомарно заменяет ссылку. Если
 systemd восстановил упавший creator и его live-хеш изменился раньше срока,
 следующий цикл sync-agent немедленно согласует все четыре звонка и master-ссылку.
-Каталог `/etc/wdtt/headless` создаётся с правами `0700`, а cookies-файл — `0600`;
-cookies не передаются через аргументы процесса.
+Административный экран пользователя «Ручные конфиги» читает эту master-ссылку
+через объявленный плагином manual-artifact query. Она общая для всех пользователей
+и намеренно не включается в пользовательские subscription endpoints.
+Каталоги `/etc/hydra/cookiesvk` и `/etc/wdtt/headless` создаются с правами `0700`,
+а cookies-файл атомарно получает `0600`; cookies не передаются через аргументы процесса.
 
 Сайт-заглушка на собственном домене есть у AnyTLS, TrustTunnel, Hysteria2,
 NaiveProxy и VLESS + XHTTP. VLESS требует отдельный домен: XHTTP занимает
@@ -196,7 +201,8 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/etc/iptables/rules.v4` | Сохранённые правила iptables (телеметрия AntiDPI) |
 | `/etc/dnscrypt-proxy/dnscrypt-proxy.toml` | Конфигурация DNSCrypt |
 | `/etc/telemt/telemt.toml` | Конфигурация MTProto-прокси |
-| `/etc/wdtt/headless/cookies-vk.json` | VK cookies headless creator; файл `0600`, не входит в state |
+| `/etc/hydra/cookiesvk/` | Фиксированный каталог VK cookies; права `0700` |
+| `/etc/hydra/cookiesvk/cookies-vk.json` | Экспортированный Creator JSON; файл `0600`, не входит в state |
 | `/etc/wdtt/headless/` | Закрытый runtime-каталог VK creator с правами `0700` |
 | `/etc/wdtt/headless/state.json` | Четыре последних call-хеша и время обновления |
 | `/etc/wdtt/qwdtt_link.txt` | Единственная master qWDTT-ссылка с актуальными четырьмя хешами |

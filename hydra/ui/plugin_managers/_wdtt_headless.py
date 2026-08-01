@@ -21,13 +21,11 @@ def setup_headless_creator(
         [
             "HYDRA скачает подходящий verified release и установит headless-vk-creator.",
             "Будут запущены четыре независимых VK-звонка.",
-            "Вставьте cookies из Creator: JSON, строка name=value; ... или путь к файлу",
-            "Cookies сохраняются только на сервере с правами 0600 и не попадают в state.",
+            "Файл VK cookies: /etc/hydra/cookiesvk/cookies-vk.json",
+            "Поддерживается экспортированный Creator JSON, в том числе многострочный.",
+            "Файл защищается правами 0600 и не попадает в state.",
         ],
     )
-    cookies = facade.prompt("VK cookies / путь к файлу (пусто — отмена)").strip()
-    if not cookies:
-        return
     protocol = facade.get_protocol(state, "wdtt")
     was_enabled = bool(protocol.config.get("headless_enabled", False))
     protocol.config["headless_enabled"] = True
@@ -41,7 +39,6 @@ def setup_headless_creator(
             "wdtt",
             "setup_headless_creator",
             state=state,
-            cookies=cookies,
         )
         ok, message = _result(result)
     except Exception as exc:

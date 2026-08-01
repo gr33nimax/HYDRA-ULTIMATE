@@ -41,6 +41,49 @@ class MaintenanceJob:
 
 
 @dataclass(frozen=True)
+class ManualClientArtifact:
+    """Admin-only client artifact declared by a plugin query."""
+
+    plugin_name: str
+    display_name: str
+    profile_name: str
+    profile_label: str
+    config: str
+    links: tuple[str, ...]
+
+
+def _manual_client_artifact(
+    plugin: BasePlugin,
+    value: object,
+) -> ManualClientArtifact | None:
+    if not isinstance(value, dict):
+        return None
+    raw_links = value.get("links", ())
+    if isinstance(raw_links, str):
+        raw_links = (raw_links,)
+    if not isinstance(raw_links, (list, tuple)):
+        return None
+    links = tuple(
+        dict.fromkeys(
+            link.strip()
+            for link in raw_links
+            if isinstance(link, str) and link.strip()
+        ),
+    )
+    config = str(value.get("config", "") or "")
+    if not config and not links:
+        return None
+    return ManualClientArtifact(
+        plugin_name=plugin.meta.name,
+        display_name=plugin.meta.display_name or plugin.meta.name,
+        profile_name=str(value.get("profile_name", "") or ""),
+        profile_label=str(value.get("profile_label", "") or ""),
+        config=config,
+        links=links,
+    )
+
+
+@dataclass(frozen=True)
 class ProtocolService:
     """Stable facade shared by CLI and future remote management transports."""
 
@@ -232,6 +275,27 @@ class ProtocolService:
             for plugin in self.enabled(state, category)
             if plugin.meta.capabilities.subscription_enabled
         }
+
+    def manual_client_artifacts(
+        self,
+        state: AppState,
+        category: PluginCategory | None = PluginCategory.TRANSPORT,
+    ) -> list[ManualClientArtifact]:
+        """Return admin-only artifacts independently from subscriptions."""
+        artifacts: list[ManualClientArtifact] = []
+        for plugin in self.enabled(state, category):
+            query = plugin.meta.capabilities.manual_artifacts_query
+            if not query:
+                continue
+            try:
+                values = self.invoker.query(plugin, query, state=state) or []
+            except Exception:
+                continue
+            for value in values if isinstance(values, (list, tuple)) else ():
+                artifact = _manual_client_artifact(plugin, value)
+                if artifact is not None:
+                    artifacts.append(artifact)
+        return artifacts
 
     def maintenance_jobs(self) -> list[MaintenanceJob]:
         """Expose scheduled plugin work without leaking plugin instances."""

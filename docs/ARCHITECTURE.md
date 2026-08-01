@@ -563,17 +563,25 @@ journalctl -u sing-box -u caddy-l4 --no-pager -n 100
 проверки: certbot на каждой попытке останавливает TLS-фронт, а Let's Encrypt
 ограничивает число неуспешных валидаций.
 
-qWDTT headless creator — plugin-owned maintenance task. После ввода VK
-cookies TUI выбирает release asset по CPU, скачивает его через общий downloader
+qWDTT headless creator — plugin-owned maintenance task. TUI не принимает секрет
+через terminal input: плагин создаёт `/etc/hydra/cookiesvk` с правами `0700` и
+читает только `/etc/hydra/cookiesvk/cookies-vk.json`. После валидации
+многострочного Creator JSON он выбирает release asset по CPU через общий downloader
 с обязательной проверкой опубликованного GitHub SHA-256, извлекает только
 ожидаемый ELF и атомарно устанавливает `/usr/local/bin/headless-vk-creator`.
-Каталог `/etc/wdtt/headless` создаётся через `HostBackend` с правами `0700`,
-а cookies сохраняются вне state с правами `0600`. Затем плагин запускает четыре
+Runtime-каталог `/etc/wdtt/headless` также создаётся через `HostBackend` с правами
+`0700`, а cookies-файл атомарно получает права `0600` и не попадает в state.
+Затем плагин запускает четыре
 `wdtt-headless-creator@N` через `HostBackend`, извлекает четыре уникальных
 call-хеша и атомарно записывает единственную master-ссылку. Due-query запускает
 плановый refresh раз в сутки либо раньше при обнаружении изменившегося live-хеша
 после аварийного рестарта creator; сбой оставляет предыдущую ссылку и возвращает
 failure в общий журнал sync-agent.
+
+`PluginMeta.manual_artifacts_query` отделяет административные ручные артефакты
+от per-user подписок. qWDTT объявляет через него единственную master-ссылку для
+экрана «Ручные конфиги», сохраняя `subscription_enabled=False`: ссылка содержит
+главный пароль, является общей и не должна попадать в subscription API.
 
 ## 10. Границы текущей версии
 

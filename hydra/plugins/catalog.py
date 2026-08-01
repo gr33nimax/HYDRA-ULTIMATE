@@ -126,6 +126,11 @@ class PluginCatalog:
             errors.append(
                 "meta.subscription_profile_query must be a declared query",
             )
+        manual_query = capabilities.manual_artifacts_query
+        if manual_query and manual_query not in capabilities.queries:
+            errors.append(
+                "meta.manual_artifacts_query must be a declared query",
+            )
         connection_source = capabilities.connection_source
         if connection_source not in {"plugin", "tracked", "none"} and (
             connection_source not in capabilities.queries

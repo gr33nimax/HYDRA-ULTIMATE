@@ -74,7 +74,7 @@ def _environment() -> WdttEnvironment:
         config_file=CONFIG_FILE,
         passwords_file=PASSWORDS_FILE,
         headless_dir=CONFIG_DIR / "headless",
-        headless_cookies_file=CONFIG_DIR / "headless" / HEADLESS_COOKIES_FILE.name,
+        headless_cookies_file=HEADLESS_COOKIES_FILE,
         headless_link_file=CONFIG_DIR / HEADLESS_LINK_FILE.name,
         headless_state_file=CONFIG_DIR / "headless" / HEADLESS_STATE_FILE.name,
         headless_bin_path=HEADLESS_BIN_PATH,
@@ -139,8 +139,10 @@ class WdttPlugin(
             "public_server_ip",
             "headless_creator_status",
             "headless_creator_link",
+            "manual_client_artifacts",
             "headless_creator_due",
         ),
+        manual_artifacts_query="manual_client_artifacts",
         maintenance_tasks=HEADLESS_MAINTENANCE_TASKS,
         subscription_enabled=False,
         backup_resources=(
@@ -148,6 +150,7 @@ class WdttPlugin(
             BackupResource(str(SERVICE_FILE), "file"),
             BackupResource("/etc/sysctl.d/99-wdtt.conf", "file"),
             BackupResource(str(HEADLESS_SERVICE_FILE), "file"),
+            BackupResource(str(HEADLESS_COOKIES_FILE), "file"),
         ),
     )
 

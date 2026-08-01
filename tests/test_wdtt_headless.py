@@ -11,7 +11,7 @@ import pytest
 
 from hydra.core.state_models import AppState, PluginState
 from hydra.plugins.wdtt import headless
-from hydra.plugins.wdtt.model import WdttEnvironment
+from hydra.plugins.wdtt.model import HEADLESS_COOKIES_FILE, WdttEnvironment
 from hydra.ui.plugin_managers._wdtt_install import _client_link
 from hydra.ui.plugin_managers import wdtt as wdtt_facade
 from hydra.ui.plugin_managers._facade_bridge import bind_facade
@@ -115,6 +115,33 @@ def _state() -> AppState:
     )
 
 
+def test_default_cookie_file_uses_fixed_hydra_directory() -> None:
+    assert HEADLESS_COOKIES_FILE.as_posix() == "/etc/hydra/cookiesvk/cookies-vk.json"
+
+
+def test_manual_artifact_query_returns_only_the_current_master_link(
+    tmp_path: Path,
+) -> None:
+    env = _env(tmp_path)
+    env.headless_link_file.write_text(
+        "qwdtt://config?pass=master\n",
+        encoding="utf-8",
+    )
+
+    class Plugin(headless.WdttHeadlessMixin):
+        @staticmethod
+        def _wdtt_env() -> WdttEnvironment:
+            return env
+
+    assert Plugin().manual_client_artifacts(state=_state()) == [
+        {
+            "profile_name": "master",
+            "profile_label": "Master · общая для всех пользователей",
+            "links": ["qwdtt://config?pass=master"],
+        },
+    ]
+
+
 def test_build_link_requires_four_unique_hashes() -> None:
     link = headless.build_qwdtt_link(
         "203.0.113.10", 56000, "master", ["a", "b", "c", "d"],
@@ -209,11 +236,14 @@ def test_uninstall_removes_tui_installed_binary(tmp_path: Path) -> None:
     env = _env(tmp_path)
     env.headless_bin_path.write_bytes(b"\x7fELFcreator")
     env.headless_service_file.write_text("unit", encoding="utf-8")
+    env.headless_cookies_file.parent.mkdir(parents=True)
+    env.headless_cookies_file.write_text("[]", encoding="utf-8")
 
     headless.uninstall(env)
 
     assert env.headless_bin_path.exists() is False
     assert env.headless_service_file.exists() is False
+    assert env.headless_cookies_file.exists() is False
 
 
 def test_normalize_cookies_accepts_exported_cookie_file(tmp_path: Path) -> None:
@@ -229,8 +259,13 @@ def test_setup_writes_cookies_securely_and_updates_one_master_link(tmp_path: Pat
     state = _state()
     binary = env.headless_bin_path
     binary.write_bytes(b"\x7fELFcreator")
+    env.headless_cookies_file.parent.mkdir(parents=True)
+    env.headless_cookies_file.write_text(
+        '[\n  {"name": "remixsid", "value": "secret"}\n]\n',
+        encoding="utf-8",
+    )
     with patch.object(headless, "_wait_hashes", return_value=["a", "b", "c", "d"]):
-        ok, message = headless.setup(env, state, "remixsid=secret")
+        ok, message = headless.setup(env, state)
 
     assert ok is True
     assert "master link" in message
@@ -239,6 +274,16 @@ def test_setup_writes_cookies_securely_and_updates_one_master_link(tmp_path: Pat
     assert "secret" not in env.headless_link_file.read_text(encoding="utf-8")
     assert env.headless_link_file.read_text(encoding="utf-8").endswith("pass=master\n")
     assert env.headless_state_file.exists()
+
+
+def test_setup_creates_default_cookie_dir_and_reports_missing_file(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+
+    ok, message = headless.setup(env, _state())
+
+    assert ok is False
+    assert message == f"VK cookies file is missing: {env.headless_cookies_file}"
+    assert (env.headless_cookies_file.parent, 0o700) in env.host.directories
 
 
 def test_due_is_daily_and_disabled_without_setup(tmp_path: Path) -> None:
@@ -312,15 +357,16 @@ def test_setup_failure_restores_previous_cookies(tmp_path: Path) -> None:
     env = _env(tmp_path)
     state = _state()
     env.headless_cookies_file.parent.mkdir(parents=True)
-    env.headless_cookies_file.write_text("old-cookies\n", encoding="utf-8")
+    original = '[\n  {"name": "remixsid", "value": "old-secret"}\n]\n'
+    env.headless_cookies_file.write_text(original, encoding="utf-8")
     with (
         patch.object(headless, "install", return_value=(True, "installed")),
         patch.object(headless, "_refresh", return_value=(False, "failed")),
     ):
-        ok, _message = headless.setup(env, state, "remixsid=new-secret")
+        ok, _message = headless.setup(env, state)
 
     assert ok is False
-    assert env.headless_cookies_file.read_text(encoding="utf-8") == "old-cookies\n"
+    assert env.headless_cookies_file.read_text(encoding="utf-8") == original
 
 
 def test_tui_setup_persists_flag_and_uses_application_ports() -> None:
@@ -337,7 +383,7 @@ def test_tui_setup_persists_flag_and_uses_application_ports() -> None:
         patch.object(wdtt_facade, "panel"),
         patch.object(wdtt_facade, "info"),
         patch.object(wdtt_facade, "success"),
-        patch.object(wdtt_facade, "prompt", side_effect=["remixsid=secret", ""]),
+        patch.object(wdtt_facade, "prompt", return_value="") as prompt,
         patch.object(wdtt_facade, "_save_link_to_file") as save_link,
     ):
         wdtt_facade._setup_headless_creator(state, app)
@@ -348,10 +394,10 @@ def test_tui_setup_persists_flag_and_uses_application_ports() -> None:
         "wdtt",
         "setup_headless_creator",
         state=state,
-        cookies="remixsid=secret",
     )
     app.plugin_query.assert_called_once_with("wdtt", "headless_creator_link")
     save_link.assert_called_once_with("qwdtt://master-link", "qwdtt_link.txt", app)
+    prompt.assert_called_once_with("Нажмите Enter...")
 
 
 def test_tui_setup_rolls_back_flag_on_runtime_failure() -> None:
@@ -368,10 +414,11 @@ def test_tui_setup_rolls_back_flag_on_runtime_failure() -> None:
         patch.object(wdtt_facade, "panel"),
         patch.object(wdtt_facade, "info"),
         patch.object(wdtt_facade, "error"),
-        patch.object(wdtt_facade, "prompt", side_effect=["remixsid=secret", ""]),
+        patch.object(wdtt_facade, "prompt", return_value="") as prompt,
     ):
         wdtt_facade._setup_headless_creator(state, app)
 
     assert state.protocols["wdtt"].config["headless_enabled"] is False
     assert app.admin.save_state.call_count == 2
     app.plugin_query.assert_not_called()
+    prompt.assert_called_once_with("Нажмите Enter...")
