@@ -23,8 +23,9 @@
   с точным vendor media type, монотонным state revision в `sequence`, явными
   профилями и remote-safe native Sing-Box `outbounds`/`endpoints`. Генерация
   fail-closed отклоняет duplicate JSON/native tags, циклические или внешние
-  ссылки, локальные executable-поля, system WireGuard и поля других локальных
-  транспортов; AmneziaWG `I1` сохраняется как `amnezia.i1`. HTTP-ошибка не
+  ссылки, локальные executable-поля и system WireGuard; расширенные AmneziaWG
+  `I1`–`I5`, `J1`–`J3` и `Itime` сохраняются как одноимённые lowercase-поля
+  объекта `amnezia`. HTTP-ошибка не
   оставляет частичный ответ.
 
 ## [2.5.5] — 27 июля 2026

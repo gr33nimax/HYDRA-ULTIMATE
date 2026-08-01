@@ -129,6 +129,17 @@ def test_hydrabox_subscription_builds_strict_remote_runtime_and_profiles():
 
 def test_hydrabox_subscription_exports_wireguard_as_userspace_endpoint():
     state, user = _state()
+    extended_amnezia = {
+        "i1": "value-i1",
+        "i2": "value-i2",
+        "i3": "value-i3",
+        "i4": "value-i4",
+        "i5": "value-i5",
+        "j1": "value-j1",
+        "j2": "value-j2",
+        "j3": "value-j3",
+        "itime": 1234,
+    }
     endpoint = {
         "type": "wireguard",
         "tag": "provider-wg",
@@ -138,7 +149,7 @@ def test_hydrabox_subscription_exports_wireguard_as_userspace_endpoint():
             "jc": 4,
             "jmin": 40,
             "jmax": 120,
-            "i1": "aabbccdd",
+            **extended_amnezia,
         },
         "peers": [{
             "address": "wg.example.com",
@@ -166,7 +177,9 @@ def test_hydrabox_subscription_exports_wireguard_as_userspace_endpoint():
     exported = subscription["runtime"]["document"]["endpoints"][0]
     assert exported["tag"] == "provider-wg"
     assert exported["system"] is False
-    assert exported["amnezia"]["i1"] == "aabbccdd"
+    assert {
+        key: exported["amnezia"][key] for key in extended_amnezia
+    } == extended_amnezia
     assert subscription["profiles"][0]["entrypoint"] == {
         "section": "endpoints",
         "tag": "provider-wg",
@@ -298,7 +311,6 @@ def test_hydrabox_subscription_rejects_invalid_runtime_graph(
     ("extra", "message"),
     [
         ({"system": True}, "system WireGuard"),
-        ({"amnezia": {"i2": "unsupported"}}, "qWDTT field"),
     ],
 )
 def test_hydrabox_subscription_rejects_unsafe_wireguard_options(

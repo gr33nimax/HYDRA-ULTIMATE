@@ -37,9 +37,6 @@ _LOCAL_AUTHORITY_FIELDS = frozenset({
     "private_key_path", "socket_path", "state_dir", "state_directory",
     "working_directory",
 })
-_QWDT_FIELDS = frozenset({
-    "i2", "i3", "i4", "i5", "j1", "j2", "j3", "itime",
-})
 
 
 def _reject_constant(value: str) -> None:
@@ -88,8 +85,6 @@ def _validate_remote_values(value: Any, path: tuple[str, ...] = ()) -> None:
             normalized = key.lower()
             if normalized in _LOCAL_AUTHORITY_FIELDS:
                 raise ValueError(f"local authority field is forbidden: {key}")
-            if normalized in _QWDT_FIELDS:
-                raise ValueError(f"qWDTT field is forbidden: {key}")
             _validate_remote_values(nested, (*path, key))
     elif isinstance(value, list):
         for index, nested in enumerate(value):
