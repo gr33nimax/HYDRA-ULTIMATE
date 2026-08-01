@@ -204,6 +204,16 @@ def _show_status_logs(app: ApplicationService) -> None:
         show_status_logs(app)
 
 
+def _setup_headless_creator(
+    state: AppState,
+    app: ApplicationService,
+) -> None:
+    from hydra.ui.plugin_managers._wdtt_headless import setup_headless_creator
+
+    with _implementation_scope():
+        setup_headless_creator(state, app)
+
+
 def _uninstall_wdtt(
     state: AppState,
     app: ApplicationService,

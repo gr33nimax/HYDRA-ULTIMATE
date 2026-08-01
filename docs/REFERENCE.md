@@ -40,6 +40,20 @@
 | `telemt` | MTProto / Telemt | Telegram MTProxy с управлением пользователями |
 | `wdtt` | qWDTT | WireGuard-туннелирование поверх TURN |
 
+Для qWDTT TUI предлагает пункт «Настроить VK headless creator». Оператор
+вставляет экспортированные VK cookies (JSON, `name=value; ...` или путь к файлу), после чего
+HYDRA выбирает последний `whitelist-bypass-cli-linux-*.zip` по архитектуре VPS,
+проверяет опубликованный GitHub Release SHA-256, извлекает и атомарно устанавливает
+`/usr/local/bin/headless-vk-creator`, затем запускает четыре экземпляра и ждёт
+четыре разных `vk.com/call/join/...` хеша. В `/etc/wdtt/qwdtt_link.txt`
+сохраняется одна ссылка `qwdtt://` с главным паролем; временные пароли в неё не
+подставляются. Maintenance task sync-agent проверяет срок раз в 24 часа и при
+необходимости перезапускает четыре инстанса и атомарно заменяет ссылку. Если
+systemd восстановил упавший creator и его live-хеш изменился раньше срока,
+следующий цикл sync-agent немедленно согласует все четыре звонка и master-ссылку.
+Каталог `/etc/wdtt/headless` создаётся с правами `0700`, а cookies-файл — `0600`;
+cookies не передаются через аргументы процесса.
+
 Сайт-заглушка на собственном домене есть у AnyTLS, TrustTunnel, Hysteria2,
 NaiveProxy и VLESS + XHTTP. VLESS требует отдельный домен: XHTTP занимает
 настроенный путь (`/xhttp` по умолчанию), а остальные URL этого домена
@@ -149,6 +163,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `caddy-naive.service` | Caddy forward-proxy для NaiveProxy |
 | `telemt.service` | Демон MTProto-прокси |
 | `wdtt.service` | Демон qWDTT |
+| `wdtt-headless-creator@.service` | Четыре VK headless creator-инстанса для суточного обновления qWDTT-хешей |
 | `fail2ban.service` | SSH и auth jails |
 
 > [!NOTE]
@@ -181,6 +196,10 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/etc/iptables/rules.v4` | Сохранённые правила iptables (телеметрия AntiDPI) |
 | `/etc/dnscrypt-proxy/dnscrypt-proxy.toml` | Конфигурация DNSCrypt |
 | `/etc/telemt/telemt.toml` | Конфигурация MTProto-прокси |
+| `/etc/wdtt/headless/cookies-vk.json` | VK cookies headless creator; файл `0600`, не входит в state |
+| `/etc/wdtt/headless/` | Закрытый runtime-каталог VK creator с правами `0700` |
+| `/etc/wdtt/headless/state.json` | Четыре последних call-хеша и время обновления |
+| `/etc/wdtt/qwdtt_link.txt` | Единственная master qWDTT-ссылка с актуальными четырьмя хешами |
 | `/etc/cron.d/hydra-traffic` | Задание учёта трафика |
 | `/etc/cron.d/telemt-stats` | Задание статистики Telemt |
 

@@ -17,6 +17,18 @@
 
 ## [Unreleased]
 
+### qWDTT
+
+- В TUI добавлена настройка VK headless creator: cookies хранятся в защищённом
+  файле, запускаются четыре независимых creator-инстанса, а единственная
+  master-ссылка `qwdtt://` получает четыре актуальных хеша звонков.
+- TUI автоматически выбирает CLI bundle whitelist-bypass для архитектуры VPS,
+  проверяет SHA-256 из GitHub Release, извлекает ELF `headless-vk-creator`,
+  атомарно устанавливает его с правами `0755` и создаёт каталог cookies `0700`.
+- Sync Agent раз в 24 часа пересоздаёт звонки (срок жизни — сутки) и атомарно
+  обновляет `/etc/wdtt/qwdtt_link.txt`; при ошибке прежняя ссылка не
+  перезаписывается.
+
 ### Подписки
 
 - Добавлен `?format=hydrabox`: сервер отдаёт plaintext HydraBox Subscription v1

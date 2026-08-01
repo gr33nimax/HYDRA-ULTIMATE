@@ -563,6 +563,18 @@ journalctl -u sing-box -u caddy-l4 --no-pager -n 100
 проверки: certbot на каждой попытке останавливает TLS-фронт, а Let's Encrypt
 ограничивает число неуспешных валидаций.
 
+qWDTT headless creator — plugin-owned maintenance task. После ввода VK
+cookies TUI выбирает release asset по CPU, скачивает его через общий downloader
+с обязательной проверкой опубликованного GitHub SHA-256, извлекает только
+ожидаемый ELF и атомарно устанавливает `/usr/local/bin/headless-vk-creator`.
+Каталог `/etc/wdtt/headless` создаётся через `HostBackend` с правами `0700`,
+а cookies сохраняются вне state с правами `0600`. Затем плагин запускает четыре
+`wdtt-headless-creator@N` через `HostBackend`, извлекает четыре уникальных
+call-хеша и атомарно записывает единственную master-ссылку. Due-query запускает
+плановый refresh раз в сутки либо раньше при обнаружении изменившегося live-хеша
+после аварийного рестарта creator; сбой оставляет предыдущую ссылку и возвращает
+failure в общий журнал sync-agent.
+
 ## 10. Границы текущей версии
 
 REST API и web-панель не входят в 2.5.5. Telegram Admin Bot является

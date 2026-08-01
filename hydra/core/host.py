@@ -70,6 +70,11 @@ class HostBackend:
         pending.chmod(mode)
         pending.replace(path)
 
+    def ensure_directory(self, path: Path, *, mode: int = 0o755) -> None:
+        """Create a managed host directory and enforce its permissions."""
+        path.mkdir(parents=True, exist_ok=True)
+        path.chmod(mode)
+
     def systemd(self, action: str, unit: str, *, timeout: float = commands.DEFAULT_TIMEOUT) -> CompletedProcess:
         return self.run(["systemctl", action, unit], timeout=timeout)
 

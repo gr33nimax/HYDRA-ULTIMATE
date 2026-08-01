@@ -10,7 +10,6 @@ import subprocess
 import tempfile
 import time
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
 
 from hydra.contracts import BackupResource
@@ -25,6 +24,10 @@ from hydra.plugins.base import (
 )
 from hydra.plugins.context import PluginStateAccess
 from hydra.plugins.wdtt import build, lifecycle, observation
+from hydra.plugins.wdtt.headless import (
+    HEADLESS_MAINTENANCE_TASKS,
+    WdttHeadlessMixin,
+)
 from hydra.plugins.wdtt.build import WdttBuildMixin
 from hydra.plugins.wdtt.configuration import WdttConfigurationMixin
 from hydra.plugins.wdtt.lifecycle import WdttLifecycleMixin
@@ -39,6 +42,13 @@ from hydra.plugins.wdtt.model import (
     GO_BUILD_TIMEOUT,
     GO_DL_URL,
     GO_MODULE_TIMEOUT,
+    HEADLESS_BIN_PATH,
+    HEADLESS_CALL_COUNT,
+    HEADLESS_COOKIES_FILE,
+    HEADLESS_GITHUB_REPO,
+    HEADLESS_LINK_FILE,
+    HEADLESS_SERVICE_FILE,
+    HEADLESS_STATE_FILE,
     LOCAL_TUN_PORT,
     PASSWORDS_FILE,
     SERVICE_FILE,
@@ -63,6 +73,14 @@ def _environment() -> WdttEnvironment:
         config_dir=CONFIG_DIR,
         config_file=CONFIG_FILE,
         passwords_file=PASSWORDS_FILE,
+        headless_dir=CONFIG_DIR / "headless",
+        headless_cookies_file=CONFIG_DIR / "headless" / HEADLESS_COOKIES_FILE.name,
+        headless_link_file=CONFIG_DIR / HEADLESS_LINK_FILE.name,
+        headless_state_file=CONFIG_DIR / "headless" / HEADLESS_STATE_FILE.name,
+        headless_bin_path=HEADLESS_BIN_PATH,
+        headless_service_file=HEADLESS_SERVICE_FILE,
+        headless_call_count=HEADLESS_CALL_COUNT,
+        headless_github_repo=HEADLESS_GITHUB_REPO,
         service_file=SERVICE_FILE,
         service_name=SERVICE_NAME,
         default_dtls_port=DEFAULT_DTLS_PORT,
@@ -93,6 +111,7 @@ def _environment() -> WdttEnvironment:
 
 
 class WdttPlugin(
+    WdttHeadlessMixin,
     WdttObservationMixin,
     WdttConfigurationMixin,
     WdttLifecycleMixin,
@@ -111,17 +130,24 @@ class WdttPlugin(
             "hot_reload",
             "save_client_link",
             "save_password_registry",
+            "setup_headless_creator",
+            "refresh_headless_creator",
         ),
         queries=(
             "observe_runtime",
             "password_registry",
             "public_server_ip",
+            "headless_creator_status",
+            "headless_creator_link",
+            "headless_creator_due",
         ),
+        maintenance_tasks=HEADLESS_MAINTENANCE_TASKS,
         subscription_enabled=False,
         backup_resources=(
             BackupResource(str(CONFIG_DIR), "tree"),
             BackupResource(str(SERVICE_FILE), "file"),
             BackupResource("/etc/sysctl.d/99-wdtt.conf", "file"),
+            BackupResource(str(HEADLESS_SERVICE_FILE), "file"),
         ),
     )
 

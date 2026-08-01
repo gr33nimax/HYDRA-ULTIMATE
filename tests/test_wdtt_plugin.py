@@ -43,12 +43,23 @@ def test_plugin_meta():
         "hot_reload",
         "save_client_link",
         "save_password_registry",
+        "setup_headless_creator",
+        "refresh_headless_creator",
     )
     assert p.meta.capabilities.queries == (
         "observe_runtime",
         "password_registry",
         "public_server_ip",
+        "headless_creator_status",
+        "headless_creator_link",
+        "headless_creator_due",
     )
+    maintenance = p.meta.capabilities.maintenance_tasks
+    assert len(maintenance) == 1
+    assert maintenance[0].action == "refresh_headless_creator"
+    assert maintenance[0].due_query == "headless_creator_due"
+    assert maintenance[0].enabled_flag == "sync_wdtt_headless_enabled"
+    assert maintenance[0].apply_on_success is False
 
 
 def test_password_registry_and_link_io_are_plugin_owned(tmp_path):

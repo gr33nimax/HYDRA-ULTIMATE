@@ -10,8 +10,18 @@ BIN_PATH = Path("/usr/local/bin/wdtt-server")
 CONFIG_DIR = Path("/etc/wdtt")
 CONFIG_FILE = CONFIG_DIR / "config.json"
 PASSWORDS_FILE = CONFIG_DIR / "passwords.json"
+HEADLESS_DIR = CONFIG_DIR / "headless"
+HEADLESS_COOKIES_FILE = HEADLESS_DIR / "cookies-vk.json"
+HEADLESS_LINK_FILE = CONFIG_DIR / "qwdtt_link.txt"
+HEADLESS_STATE_FILE = HEADLESS_DIR / "state.json"
+HEADLESS_BIN_PATH = Path("/usr/local/bin/headless-vk-creator")
 SERVICE_FILE = Path("/etc/systemd/system/wdtt.service")
+HEADLESS_SERVICE_FILE = Path(
+    "/etc/systemd/system/wdtt-headless-creator@.service"
+)
 SERVICE_NAME = "wdtt"
+HEADLESS_CALL_COUNT = 4
+HEADLESS_GITHUB_REPO = "kulikov0/whitelist-bypass"
 
 DEFAULT_DTLS_PORT = 56000
 DEFAULT_WG_PORT = 56001
@@ -54,6 +64,14 @@ class WdttEnvironment:
     config_dir: Path
     config_file: Path
     passwords_file: Path
+    headless_dir: Path
+    headless_cookies_file: Path
+    headless_link_file: Path
+    headless_state_file: Path
+    headless_bin_path: Path
+    headless_service_file: Path
+    headless_call_count: int
+    headless_github_repo: str
     service_file: Path
     service_name: str
     default_dtls_port: int
