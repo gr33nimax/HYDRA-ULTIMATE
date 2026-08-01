@@ -22,6 +22,9 @@ from hydra.services.subscriptions.links import (
     generate_base64_sub,
     generate_links,
 )
+from hydra.services.subscriptions.hydrabox import (
+    generate_hydrabox_subscription,
+)
 from hydra.services.subscriptions.metadata import (
     SUPPORTED_SUBSCRIPTION_FORMATS,
     generate_userinfo_header,
@@ -56,6 +59,7 @@ __all__ = [
     "generate_awg_sn_link",
     "generate_base64_sub",
     "generate_client_config",
+    "generate_hydrabox_subscription",
     "generate_links",
     "generate_mieru_nekobox_link",
     "generate_nekobox_sub",

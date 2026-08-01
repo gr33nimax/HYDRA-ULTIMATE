@@ -15,6 +15,17 @@
 [2.3.4](#234--11-июля-2026) · [2.3.3](#233--9-июля-2026) ·
 [2.3.2](#232--9-июля-2026) · [2.0.0](#200--базовый-публичный-релиз)
 
+## [Unreleased]
+
+### Подписки
+
+- Добавлен `?format=hydrabox`: сервер отдаёт plaintext HydraBox Subscription v1
+  с точным vendor media type, монотонным state revision в `sequence`, явными
+  профилями и remote-safe native Sing-Box `outbounds`/`endpoints`. Генерация
+  fail-closed отклоняет duplicate JSON/native tags, циклические или внешние
+  ссылки, локальные executable-поля, system WireGuard и qWDTT-параметры; HTTP
+  ошибка не оставляет частичный ответ.
+
 ## [2.5.5] — 27 июля 2026
 
 ### Транспорты

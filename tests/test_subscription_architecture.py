@@ -15,6 +15,7 @@ GENERATION_FUNCTIONS = (
     generator.generate_throne_sub,
     generator.generate_nekobox_sub,
     generator.generate_singbox_config,
+    generator.generate_hydrabox_subscription,
     generator.generate_client_config,
 )
 

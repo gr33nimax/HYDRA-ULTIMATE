@@ -6,6 +6,7 @@ from hydra.core.state import AppState, PluginState, User
 from hydra.plugins.registry import enabled, get
 from hydra.services.subscriptions.generator import (
     SubscriptionPluginService,
+    generate_hydrabox_subscription,
     generate_links,
     generate_singbox_config,
 )
@@ -63,3 +64,24 @@ def test_individual_client_payloads_are_json_serializable():
     state, user = _state()
     config = generate_singbox_config(user, state, plugins=PLUGINS)
     assert json.loads(json.dumps(config))["outbounds"] == config["outbounds"]
+
+
+def test_hydrabox_subscription_contains_remote_safe_extended_transports():
+    state, user = _state()
+    subscription = generate_hydrabox_subscription(
+        user,
+        state,
+        plugins=PLUGINS,
+    )
+
+    document = subscription["runtime"]["document"]
+    assert set(document) == {"outbounds"}
+    assert {item["type"] for item in document["outbounds"]} >= {
+        "hysteria2",
+        "snell",
+        "vless",
+    }
+    assert "direct" not in {item["tag"] for item in document["outbounds"]}
+    assert {profile["entrypoint"]["tag"] for profile in subscription["profiles"]} == {
+        item["tag"] for item in document["outbounds"]
+    }

@@ -65,6 +65,18 @@ Extended для каждого доступного desktop/mobile профил�
 `route.final` ссылается на первый AWG endpoint. Нативная INI-конфигурация
 AmneziaWG при этом не изменяется.
 
+`?format=hydrabox` отдаёт сырой UTF-8 JSON с media type
+`application/vnd.hydrabox.subscription+json`. Envelope имеет точные
+`api_version=hydrabox.io/subscription/v1` и `kind=SubscriptionData`, стабильную
+identity tuple `(issuer, subscription_id, stable)` и использует revision state
+как монотонный `sequence`. В `runtime.document` попадают только разрешённые
+remote policy v1 `outbounds` и userspace `wireguard` endpoints: локальные
+inbounds/DNS/route, `direct`, executable-поля, зарезервированные теги и qWDTT
+параметры отбрасываются либо блокируют выдачу fail-closed. Detour-зависимости
+сохраняются с исходными тегами, а `profiles` явно указывает только на корневые
+selectable entrypoints. Ответ не кодируется в Base64, ограничен 16 MiB и
+публикуется с `Cache-Control: private, no-store`.
+
 ### `enhancement` — сетевые расширения
 
 | Ключ | Модуль | Назначение |

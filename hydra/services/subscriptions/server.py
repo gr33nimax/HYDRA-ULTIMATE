@@ -23,6 +23,11 @@ from hydra.services.subscriptions.devices import (
     subscription_fingerprint,
 )
 from hydra.services.subscriptions.links import generate_base64_sub
+from hydra.services.subscriptions.hydrabox import (
+    HYDRABOX_MEDIA_TYPE,
+    generate_hydrabox_subscription,
+    serialize_hydrabox_subscription,
+)
 from hydra.services.subscriptions.metadata import (
     SUPPORTED_SUBSCRIPTION_FORMATS,
     generate_userinfo_header,
@@ -84,6 +89,19 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
                 separators=(",", ":"),
             )
             return content, "application/json; charset=utf-8", "singbox.json"
+        if response_format == "hydrabox":
+            content = serialize_hydrabox_subscription(
+                generate_hydrabox_subscription(
+                    user,
+                    state,
+                    plugins=plugins,
+                ),
+            )
+            return (
+                content,
+                f"{HYDRABOX_MEDIA_TYPE}; charset=utf-8",
+                "subscription.hbx.json",
+            )
         return (
             generate_base64_sub(user, state, plugins=plugins),
             "text/plain; charset=utf-8",
@@ -97,8 +115,14 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             return
         request = urllib.parse.urlparse(self.path)
         parameters = urllib.parse.parse_qs(request.query)
+        requested_format = parameters.get("format", [None])[0]
+        if not requested_format and HYDRABOX_MEDIA_TYPE in self.headers.get(
+            "Accept",
+            "",
+        ).lower():
+            requested_format = "hydrabox"
         response_format = resolve_subscription_format(
-            parameters.get("format", [None])[0],
+            requested_format,
             self.headers.get("User-Agent", ""),
         )
         if response_format not in SUPPORTED_SUBSCRIPTION_FORMATS:
@@ -140,18 +164,24 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             self._send_error(403, "Invalid, expired or blocked token")
             return
 
-        content, content_type, suffix = self._subscription(
-            response_format,
-            user,
-            state,
-            plugins,
-        )
+        try:
+            content, content_type, suffix = self._subscription(
+                response_format,
+                user,
+                state,
+                plugins,
+            )
+        except Exception:
+            self._send_error(500, "Subscription generation failed")
+            return
         safe_email = (
             re.sub(r"[^A-Za-z0-9._@+-]+", "_", user.email).strip("._")
             or "user"
         )
         self.send_response(200)
         self.send_header("Content-Type", content_type)
+        if response_format == "hydrabox":
+            self.send_header("Cache-Control", "private, no-store")
         self.send_header(
             "Content-Disposition",
             f'attachment; filename="hydra-{safe_email}-{suffix}"',
@@ -163,7 +193,7 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         self.send_header("Profile-Update-Interval", "6")
         self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(content.encode())
+        self.wfile.write(content.encode("utf-8"))
 
 
 def _is_loopback(address: tuple[object, ...]) -> bool:

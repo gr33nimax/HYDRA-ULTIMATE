@@ -18,6 +18,7 @@ SUPPORTED_SUBSCRIPTION_FORMATS = {
     "singbox",
     "sing-box",
     "json",
+    "hydrabox",
 }
 
 
@@ -83,6 +84,7 @@ def get_subscription_urls(user: User, state: AppState) -> dict[str, str]:
         "nekobox": with_format("nekobox"),
         "throne": with_format("throne"),
         "singbox": with_format("singbox"),
+        "hydrabox": with_format("hydrabox"),
     }
 
 
