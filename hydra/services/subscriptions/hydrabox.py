@@ -274,7 +274,7 @@ def generate_hydrabox_subscription(
         _validate_depth(projection)
         objects = _runtime_objects(projection)
         entrypoints = _entrypoints(projection, objects)
-        label = plugin.meta.display_name or plugin.meta.description or plugin.meta.name
+        label = plugin.meta.display_name or plugin.meta.name
         multiple = len(entrypoints) > 1
         for section, item in objects:
             tag = item["tag"]

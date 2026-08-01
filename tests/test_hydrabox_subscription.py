@@ -127,6 +127,26 @@ def test_hydrabox_subscription_builds_strict_remote_runtime_and_profiles():
     json.dumps(subscription, allow_nan=False)
 
 
+def test_hydrabox_subscription_does_not_publish_plugin_description():
+    state, user = _state()
+    description = "AnyTLS: TLS-shaped tunnel с padding scheme (sing-box inbound)"
+    plugin = _HydraBoxTransport(_shadowtls_payload())
+    plugin.meta = PluginMeta(
+        name="anytls",
+        description=description,
+        category=PluginCategory.TRANSPORT,
+    )
+
+    subscription = generate_hydrabox_subscription(
+        user,
+        state,
+        plugins=_plugins(plugin),
+    )
+
+    assert subscription["profiles"][0]["name"] == "anytls"
+    assert description not in json.dumps(subscription, ensure_ascii=False)
+
+
 def test_hydrabox_subscription_exports_wireguard_as_userspace_endpoint():
     state, user = _state()
     extended_amnezia = {

@@ -77,7 +77,10 @@ AmneziaWG-параметры `I1`–`I5`, `J1`–`J3` и `Itime` сохраня�
 `amnezia.i1`–`amnezia.i5`, `amnezia.j1`–`amnezia.j3` и `amnezia.itime` вместе с
 `Jc`/`Jmin`/`Jmax`, `S1`–`S4` и `H1`–`H4`. Detour-зависимости сохраняются с
 исходными тегами, а `profiles` явно указывает только на корневые
-selectable entrypoints. Ответ не кодируется в Base64, ограничен 16 MiB и
+selectable entrypoints. Пользовательское имя профиля берётся из
+`PluginMeta.display_name`, с fallback на короткий `PluginMeta.name`;
+операторское `PluginMeta.description` в подписку не публикуется. Ответ не
+кодируется в Base64, ограничен 16 MiB и
 публикуется с `Cache-Control: private, no-store`.
 
 ### `enhancement` — сетевые расширения
