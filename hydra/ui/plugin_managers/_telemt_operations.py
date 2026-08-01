@@ -201,7 +201,7 @@ def view_links(
             prefix = f"{facade.DIM}└─ iOS:{facade.NC}" if index else ""
             lines.append(f"  {prefix} {facade.YELLOW}{link}{facade.NC}")
         lines.append("")
-    facade.panel("🔗 ССЫЛКИ ДЛЯ ПОДКЛЮЧЕНИЯ TELEGRAM", lines)
+    facade.panel("🔗 ССЫЛКИ ДЛЯ ПОДКЛЮЧЕНИЯ TELEGRAM", lines, wrap=True)
     facade._pause()
 
 

@@ -156,6 +156,44 @@ def _fit_line(line: str, max_w: int) -> tuple[str, int]:
     return "".join(new_parts), accum_w
 
 
+def _wrap_line(line: str, max_w: int) -> list[tuple[str, int]]:
+    """Split an ANSI-coloured line without dropping visible characters."""
+    if max_w < 1:
+        raise ValueError("max_w must be positive")
+    line_w = _width(line)
+    if line_w <= max_w:
+        return [(line, line_w)]
+
+    wrapped: list[tuple[str, int]] = []
+    current: list[str] = []
+    current_w = 0
+    active_sgr: list[str] = []
+    for part in re.split(r"(\033\[[0-9;]*m)", line):
+        if not part:
+            continue
+        if part.startswith("\033["):
+            current.append(part)
+            codes = part[2:-1].split(";")
+            if not codes or "0" in codes or "" in codes:
+                active_sgr.clear()
+            if any(code not in {"", "0"} for code in codes):
+                active_sgr.append(part)
+            continue
+        for char in part:
+            char_w = _char_width(char)
+            if current_w and current_w + char_w > max_w:
+                if active_sgr:
+                    current.append("\033[0m")
+                wrapped.append(("".join(current), current_w))
+                current = list(active_sgr)
+                current_w = 0
+            current.append(char)
+            current_w += char_w
+    if current or not wrapped:
+        wrapped.append(("".join(current), current_w))
+    return wrapped
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  Баннер
 # ═════════════════════════════════════════════════════════════════════════════
@@ -196,8 +234,8 @@ def kv(label: str, value: str, label_w: int = 16) -> str:
     return f"  {DIM}{label:<{label_w}}{NC} {value}"
 
 
-def panel(title_text: str, lines: list[str]):
-    """Панель состояния с двойными рамками."""
+def panel(title_text: str, lines: list[str], *, wrap: bool = False):
+    """Панель состояния; wrap сохраняет длинные строки, перенося их."""
     inner = PANEL_W
     
     # Центрируем заголовок
@@ -214,11 +252,16 @@ def panel(title_text: str, lines: list[str]):
         if plain_line and all(c in "─-" for c in plain_line):
             line_fit = f"{DIM}{'─' * (inner - 2)}{NC}"
             line_w = inner - 2
-            pad = 0
+            fitted_lines = [(line_fit, line_w)]
         else:
-            line_fit, line_w = _fit_line(line, inner - 2)
+            fitted_lines = (
+                _wrap_line(line, inner - 2)
+                if wrap
+                else [_fit_line(line, inner - 2)]
+            )
+        for line_fit, line_w in fitted_lines:
             pad = inner - 2 - line_w
-        print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * pad} {CYAN}║{NC}")
+            print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * pad} {CYAN}║{NC}")
     print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
 
 

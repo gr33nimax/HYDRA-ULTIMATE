@@ -28,6 +28,7 @@ def _show_master_link(
     facade.panel(
         "ЕДИНАЯ МАСТЕР-ССЫЛКА",
         ["Используйте эту ссылку для qWDTT-конфигурации:", link],
+        wrap=True,
     )
     if save:
         facade._save_link_to_file(link, "qwdtt_link.txt", app)
