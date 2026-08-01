@@ -108,7 +108,7 @@ def test_hydrabox_subscription_builds_strict_remote_runtime_and_profiles():
     assert subscription["issuer"] == "https://subscriptions.example.com"
     assert subscription["subscription_id"] == "customer-main"
     assert subscription["channel"] == "stable"
-    assert subscription["sequence"] == 7
+    assert subscription["sequence"] == (7 << 16) | 1
     assert subscription["issued_at"] == "2026-08-01T00:00:00Z"
     assert set(subscription["runtime"]["document"]) == {"outbounds"}
     assert [
@@ -145,6 +145,27 @@ def test_hydrabox_subscription_does_not_publish_plugin_description():
 
     assert subscription["profiles"][0]["name"] == "anytls"
     assert description not in json.dumps(subscription, ensure_ascii=False)
+
+
+def test_hydrabox_sequence_advances_after_publisher_payload_change():
+    state, user = _state()
+    legacy_sequence = state.revision
+
+    subscription = generate_hydrabox_subscription(
+        user,
+        state,
+        plugins=_plugins(_HydraBoxTransport(_shadowtls_payload())),
+    )
+
+    assert subscription["sequence"] > legacy_sequence
+
+    state.revision += 1
+    updated = generate_hydrabox_subscription(
+        user,
+        state,
+        plugins=_plugins(_HydraBoxTransport(_shadowtls_payload())),
+    )
+    assert updated["sequence"] > subscription["sequence"]
 
 
 def test_hydrabox_subscription_exports_wireguard_as_userspace_endpoint():

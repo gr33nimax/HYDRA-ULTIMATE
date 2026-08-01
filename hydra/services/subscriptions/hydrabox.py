@@ -19,6 +19,10 @@ HYDRABOX_MEDIA_TYPE = "application/vnd.hydrabox.subscription+json"
 HYDRABOX_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
 _MAX_SEQUENCE = 9_007_199_254_740_991
+_PAYLOAD_REVISION_BITS = 16
+# Increment whenever renderer code can change JSON for unchanged persisted state.
+_HYDRABOX_PAYLOAD_REVISION = 1
+_MAX_STATE_REVISION = _MAX_SEQUENCE >> _PAYLOAD_REVISION_BITS
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _ALLOWED_OUTBOUND_TYPES = frozenset({
     "socks", "http", "vmess", "trojan", "naive", "shadowtls", "vless",
@@ -236,11 +240,17 @@ def _issuer(user: User, state: AppState) -> str:
     return f"https://{parsed.netloc}"
 
 
-def _validate_envelope_identity(user: User, state: AppState) -> None:
+def _validate_envelope_identity(user: User, state: AppState) -> int:
     if not _ID_PATTERN.fullmatch(user.uuid) or len(user.uuid) > 128:
         raise ValueError("invalid HydraBox subscription_id")
-    if type(state.revision) is not int or not 0 <= state.revision <= _MAX_SEQUENCE:
+    if (
+        type(state.revision) is not int
+        or not 0 <= state.revision <= _MAX_STATE_REVISION
+    ):
         raise ValueError("invalid HydraBox sequence")
+    return (
+        state.revision << _PAYLOAD_REVISION_BITS
+    ) | _HYDRABOX_PAYLOAD_REVISION
 
 
 def generate_hydrabox_subscription(
@@ -250,7 +260,7 @@ def generate_hydrabox_subscription(
     plugins: SubscriptionPluginAccess,
 ) -> dict[str, Any]:
     """Build an activatable plaintext HydraBox SubscriptionData v1 document."""
-    _validate_envelope_identity(user, state)
+    sequence = _validate_envelope_identity(user, state)
     document: dict[str, list[dict[str, Any]]] = {
         "outbounds": [],
         "endpoints": [],
@@ -311,7 +321,7 @@ def generate_hydrabox_subscription(
         "issuer": _issuer(user, state),
         "subscription_id": user.uuid,
         "channel": "stable",
-        "sequence": state.revision,
+        "sequence": sequence,
         "issued_at": issued_at,
         "default_profile_id": profiles[0]["id"],
         "metadata": {"name": {"default": f"HYDRA — {user.email}"}},

@@ -69,7 +69,10 @@ AmneziaWG при этом не изменяется.
 `application/vnd.hydrabox.subscription+json`. Envelope имеет точные
 `api_version=hydrabox.io/subscription/v1` и `kind=SubscriptionData`, стабильную
 identity tuple `(issuer, subscription_id, stable)` и использует revision state
-как монотонный `sequence`. В `runtime.document` попадают только разрешённые
+как старшую часть монотонного `sequence`; младшая часть содержит ревизию
+HydraBox-renderer и повышается при изменении выдаваемого JSON без изменения
+state. Поэтому обновление кода не создаёт запрещённую комбинацию «прежний
+sequence + новый payload». В `runtime.document` попадают только разрешённые
 remote policy v1 `outbounds` и userspace `wireguard` endpoints: локальные
 inbounds/DNS/route и `direct` отбрасываются, а executable-поля,
 зарезервированные теги и system WireGuard блокируют выдачу fail-closed.

@@ -20,14 +20,17 @@
 ### Подписки
 
 - Добавлен `?format=hydrabox`: сервер отдаёт plaintext HydraBox Subscription v1
-  с точным vendor media type, монотонным state revision в `sequence`, явными
+  с точным vendor media type, монотонным составным `sequence`, явными
   профилями и remote-safe native Sing-Box `outbounds`/`endpoints`. Генерация
   fail-closed отклоняет duplicate JSON/native tags, циклические или внешние
   ссылки, локальные executable-поля и system WireGuard; расширенные AmneziaWG
   `I1`–`I5`, `J1`–`J3` и `Itime` сохраняются как одноимённые lowercase-поля
   объекта `amnezia`. Технические `PluginMeta.description` больше не попадают в
   имена пользовательских профилей: используются только короткие `display_name`
-  или `name`. HTTP-ошибка не оставляет частичный ответ.
+  или `name`. Renderer revision в младшей части `sequence` гарантирует его
+  увеличение при изменении выдаваемого JSON после обновления HYDRA; клиент
+  больше не отклоняет такой refresh как same-sequence/different-payload.
+  HTTP-ошибка не оставляет частичный ответ.
 
 ## [2.5.5] — 27 июля 2026
 
