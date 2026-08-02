@@ -397,6 +397,7 @@ def test_rollback_restores_legacy_binary_after_failed_apply(tmp_path):
         return MagicMock(stdout="", returncode=0)
 
     host.atomic_write.side_effect = atomic_write
+    host.remove_file.side_effect = lambda path, **_kwargs: path.unlink(missing_ok=True)
     host.run.side_effect = run
     snapshot = WdttApplySnapshot(
         access_state=b"legacy access",
