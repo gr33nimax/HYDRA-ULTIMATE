@@ -6,6 +6,7 @@ from pathlib import Path
 from hydra.core.state_models import User
 from hydra.plugins.base import ConfigFragment
 from hydra.plugins.context import PluginStateAccess
+from hydra.plugins.wdtt import subscriptions
 
 
 class WdttConfigurationMixin:
@@ -25,7 +26,16 @@ class WdttConfigurationMixin:
         bot_token = cfg.get('bot_token', existing_data.get('bot_token', ''))
         passwords = existing_data.get('passwords', {})
         devices = existing_data.get('devices', {})
-        self._pending_cfg = {'dtls_port': dtls_port, 'wg_port': wg_port, 'main_password': main_password, 'admin_id': admin_id, 'bot_token': bot_token, 'passwords': passwords, 'devices': devices}
+        self._pending_cfg = {
+            'dtls_port': dtls_port,
+            'wg_port': wg_port,
+            'main_password': main_password,
+            'admin_id': admin_id,
+            'bot_token': bot_token,
+            'passwords': passwords,
+            'devices': devices,
+            'access_state': subscriptions.build_access_state(state),
+        }
         return ConfigFragment(nft_tproxy_ifaces=[self._wdtt_env().wg_interface])
 
     def apply(self, state: PluginStateAccess) -> bool:
@@ -39,12 +49,24 @@ class WdttConfigurationMixin:
         bot_token = self._pending_cfg['bot_token']
         passwords = self._pending_cfg['passwords']
         devices = self._pending_cfg['devices']
+        access_state = self._pending_cfg['access_state']
         pw_data = {'main_password': main_password, 'admin_id': admin_id, 'bot_token': bot_token, 'passwords': passwords, 'devices': devices}
         self._wdtt_env().passwords_file.write_text(self._wdtt_env().json_module.dumps(pw_data, indent=2, ensure_ascii=False))
         self._wdtt_env().passwords_file.chmod(384)
         cfg = {'dtls_port': dtls_port, 'wg_port': wg_port, 'wg_subnet': self._wdtt_env().default_wg_subnet}
         self._wdtt_env().config_file.write_text(self._wdtt_env().json_module.dumps(cfg, indent=2))
         self._wdtt_env().config_file.chmod(384)
+        access_content = self._wdtt_env().json_module.dumps(
+            access_state,
+            ensure_ascii=True,
+            indent=2,
+            sort_keys=True,
+        ) + '\n'
+        self._wdtt_env().host.atomic_write(
+            self._wdtt_env().access_file,
+            access_content,
+            mode=0o600,
+        )
         self._install_service(dtls_port, wg_port, main_password, admin_id, bot_token)
         self._wdtt_env().host.run(['sysctl', '-w', 'net.ipv4.ip_forward=1'], capture_output=True)
         sysctl = Path('/etc/sysctl.d/99-wdtt.conf')
@@ -55,6 +77,19 @@ class WdttConfigurationMixin:
         self._wdtt_env().host.run(['systemctl', 'reload-or-restart', self._wdtt_env().service_name], capture_output=True)
         self._wdtt_env().time_module.sleep(2)
         return True
+
+    def snapshot(self, state: PluginStateAccess) -> bytes | None:
+        return subscriptions.access_snapshot(self._wdtt_env())
+
+    def rollback(
+        self,
+        state: PluginStateAccess,
+        snapshot: bytes | None,
+    ) -> bool:
+        return subscriptions.restore_access_snapshot(
+            self._wdtt_env(),
+            snapshot,
+        )
 
     def on_user_add(self, user: User, state: PluginStateAccess) -> None:
         pass

@@ -60,6 +60,14 @@ class SubscriptionPluginAccess(Protocol):
         state: AppState,
     ) -> list[dict[str, Any]]: ...
 
+    def hydrabox_material(
+        self,
+        plugin: BasePlugin,
+        user: User,
+        state: AppState,
+        device_id: str,
+    ) -> dict[str, Any]: ...
+
 
 @dataclass(frozen=True)
 class SubscriptionPluginService:
@@ -139,3 +147,26 @@ class SubscriptionPluginService:
             return []
         profiles = self.invoker.query(plugin, query, state=state)
         return list(profiles or [])
+
+    def hydrabox_material(
+        self,
+        plugin: BasePlugin,
+        user: User,
+        state: AppState,
+        device_id: str,
+    ) -> dict[str, Any]:
+        action = plugin.meta.capabilities.hydrabox_subscription_action
+        if not action:
+            return {}
+        material = self.invoker.action(
+            plugin,
+            action,
+            user=user,
+            state=state,
+            device_id=device_id,
+        )
+        if not isinstance(material, dict):
+            raise ValueError(
+                f"plugin {plugin.meta.name} returned invalid HydraBox material",
+            )
+        return material

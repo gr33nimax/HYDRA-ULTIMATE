@@ -58,6 +58,7 @@ def _env(tmp_path: Path) -> WdttEnvironment:
         config_dir=tmp_path,
         config_file=tmp_path / "config.json",
         passwords_file=tmp_path / "passwords.json",
+        access_file=tmp_path / "hydra-access.json",
         headless_dir=headless_dir,
         headless_cookies_file=headless_dir / "cookies-vk.json",
         headless_link_file=tmp_path / "qwdtt_link.txt",

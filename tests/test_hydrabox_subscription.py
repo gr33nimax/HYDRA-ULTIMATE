@@ -1,7 +1,8 @@
-"""HydraBox Subscription v1 generation and HTTP adapter contracts."""
+"""HydraBox Subscription v2 generation and HTTP adapter contracts."""
 from __future__ import annotations
 
 from io import BytesIO
+import hashlib
 import json
 from unittest.mock import patch
 
@@ -52,6 +53,44 @@ class _HydraBoxTransport(BasePlugin):
 
     def generate_singbox_client_config(self, user, state) -> str:
         return self.payload
+
+
+class _HydraBoxWdtt(_HydraBoxTransport):
+    meta = PluginMeta(
+        name="wdtt",
+        display_name="WDTT",
+        description="Hydra WDTT test transport",
+        category=PluginCategory.TRANSPORT,
+        actions=("activate_subscription",),
+        subscription_enabled=False,
+        hydrabox_subscription_action="activate_subscription",
+    )
+
+    def __init__(self) -> None:
+        super().__init__("")
+
+    def activate_subscription(self, *, user, state, device_id):
+        credential_ref = f"wdtt:{user.uuid}:{device_id}"
+        return {
+            "projection": {"endpoints": [{
+                "type": "wdtt",
+                "tag": "wdtt-provider",
+                "server": "wdtt.example.com",
+                "server_port": 56000,
+                "credential_ref": credential_ref,
+                "vk_hashes": ["hash-a", "hash-b", "hash-c", "hash-d"],
+                "workers": 18,
+                "obfs": "audio",
+                "vk_auth": "auto",
+                "vk_anon_path": "vkcalls",
+            }]},
+            "credentials": [{
+                "kind": "wdtt_device_grant",
+                "credential_ref": credential_ref,
+                "device_id": device_id,
+                "device_grant": "hwdtt1_" + "A" * 43,
+            }],
+        }
 
 
 def _plugins(*items: BasePlugin) -> SubscriptionPluginService:
@@ -112,12 +151,12 @@ def test_hydrabox_subscription_builds_strict_remote_runtime_and_profiles():
         plugins=_plugins(_HydraBoxTransport(_shadowtls_payload())),
     )
 
-    assert subscription["api_version"] == "hydrabox.io/subscription/v1"
+    assert subscription["api_version"] == "hydrabox.io/subscription/v2"
     assert subscription["kind"] == "SubscriptionData"
     assert subscription["issuer"] == "https://subscriptions.example.com"
     assert subscription["subscription_id"] == "customer-main"
     assert subscription["channel"] == "stable"
-    assert subscription["sequence"] == (7 << 16) | 1
+    assert subscription["sequence"] == (7 << 16) | 2
     assert subscription["issued_at"] == "2026-08-01T00:00:00Z"
     assert set(subscription["runtime"]["document"]) == {"outbounds"}
     assert [
@@ -234,6 +273,27 @@ def test_hydrabox_subscription_exports_wireguard_as_userspace_endpoint():
         "section": "endpoints",
         "tag": "provider-wg",
     }
+
+
+def test_hydrabox_subscription_keeps_wdtt_grant_only_in_encrypted_document():
+    state, user = _state()
+    device_id = "a" * 64
+
+    subscription = generate_hydrabox_subscription(
+        user,
+        state,
+        plugins=_plugins(_HydraBoxWdtt()),
+        device_id=device_id,
+    )
+
+    endpoint = subscription["runtime"]["document"]["endpoints"][0]
+    credential = subscription["credentials"][0]
+    assert endpoint["type"] == "wdtt"
+    assert endpoint["workers"] == 18
+    assert endpoint["credential_ref"] == credential["credential_ref"]
+    assert "password" not in endpoint
+    assert credential["device_id"] == device_id
+    assert credential["device_grant"].startswith("hwdtt1_")
 
 
 def test_hydrabox_subscription_compares_fractional_expiry_as_time():
@@ -402,7 +462,7 @@ def test_hydrabox_http_response_is_flattened_jwe_only():
     assert suffix == "subscription.hbx.jwe.json"
     assert set(json.loads(content)) == {"protected", "iv", "ciphertext", "tag"}
     assert decrypt_hydrabox_subscription(content, TEST_JWE_KEY)["api_version"] == (
-        "hydrabox.io/subscription/v1"
+        "hydrabox.io/subscription/v2"
     )
 
 
@@ -424,9 +484,13 @@ def test_hydrabox_format_is_public_and_generation_failure_is_fail_closed():
     handler.wfile = BytesIO()
     errors: list[tuple[int, str]] = []
     handler._send_error = lambda code, message: errors.append((code, message))
-    handler._subscription = lambda *_args: (_ for _ in ()).throw(
-        ValueError("unsafe runtime"),
-    )
+    received_device_ids: list[str] = []
+
+    def fail_subscription(*args):
+        received_device_ids.append(args[4])
+        raise ValueError("unsafe runtime")
+
+    handler._subscription = fail_subscription
 
     with patch(
         "hydra.services.subscriptions.server.register_subscription_device",
@@ -436,6 +500,11 @@ def test_hydrabox_format_is_public_and_generation_failure_is_fail_closed():
 
     assert errors == [(500, "Subscription generation failed")]
     assert handler.wfile.getvalue() == b""
+    assert received_device_ids == [
+        hashlib.sha256(
+            handler.headers["X-Hydra-HWID"].encode("ascii"),
+        ).hexdigest(),
+    ]
 
 
 def test_hydrabox_jwe_uses_unique_ivs_and_rejects_tampering():

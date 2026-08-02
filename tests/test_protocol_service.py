@@ -73,6 +73,7 @@ def test_inventory_is_json_safe_and_filters_by_public_category():
                 "config_defaults": (),
                 "subscription_profile_query": "",
                 "subscription_enabled": True,
+                "hydrabox_subscription_action": "",
                 "manual_artifacts_query": "",
                 "connection_source": "plugin",
                 "maintenance_tasks": (),

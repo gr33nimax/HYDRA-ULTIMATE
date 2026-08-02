@@ -43,6 +43,7 @@ def test_plugin_meta():
         "hot_reload",
         "save_client_link",
         "save_password_registry",
+        "activate_subscription",
         "setup_headless_creator",
         "refresh_headless_creator",
         "stop_headless_creator",
@@ -66,6 +67,9 @@ def test_plugin_meta():
         "manual_client_artifacts"
     )
     assert p.meta.capabilities.subscription_enabled is False
+    assert p.meta.capabilities.hydrabox_subscription_action == (
+        "activate_subscription"
+    )
     maintenance = p.meta.capabilities.maintenance_tasks
     assert len(maintenance) == 1
     assert maintenance[0].action == "refresh_headless_creator"
@@ -155,9 +159,10 @@ def test_public_server_ip_uses_public_fallback():
 def test_source_build_allows_empty_go_cache(tmp_path):
     p = WdttPlugin()
     work_dir = tmp_path / "work"
-    src_dir = work_dir / "proxy-turn-vk-android-master"
+    src_dir = work_dir / "hydra-wdtt-pinned-revision"
     src_dir.mkdir(parents=True)
     (src_dir / "go.mod").write_text("go 1.25\n")
+    (src_dir / "server.go").write_text("package main\n")
     installed_binary = tmp_path / "installed" / "wdtt-server"
 
     def fake_run(command, **kwargs):
@@ -236,6 +241,7 @@ def test_apply_writes_configs_and_restarts():
         patch.object(Path, "chmod"),
         patch.object(WdttPlugin, "_install_service") as mock_svc,
         patch("subprocess.run") as mock_run,
+        patch("hydra.plugins.wdtt.plugin.HOST.atomic_write") as atomic_write,
     ):
         result = p.apply(state)
 
@@ -255,6 +261,13 @@ def test_apply_writes_configs_and_restarts():
     assert cfg_data["wg_port"] == DEFAULT_WG_PORT
 
     assert mock_svc.called
+    access_call = next(
+        call
+        for call in atomic_write.call_args_list
+        if call.args[0].name == "hydra-access.json"
+    )
+    assert json.loads(access_call.args[1])["max_total_workers"] == 27
+    assert access_call.kwargs["mode"] == 0o600
     reload_calls = [c for c in mock_run.call_args_list
                     if "reload-or-restart" in str(c.args)]
     assert len(reload_calls) >= 1

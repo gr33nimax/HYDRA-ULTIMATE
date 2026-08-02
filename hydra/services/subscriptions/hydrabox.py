@@ -1,4 +1,4 @@
-"""HydraBox SubscriptionData v1 envelope generation."""
+"""HydraBox SubscriptionData v2 envelope generation."""
 from __future__ import annotations
 
 import hashlib
@@ -10,10 +10,15 @@ from urllib.parse import urlsplit
 
 from hydra.core.state_models import AppState, User
 from hydra.services.subscriptions.access import SubscriptionPluginAccess
+from hydra.services.subscriptions.hydrabox_material import (
+    parse_hydrabox_material,
+    validate_material_binding,
+    validate_wdtt_endpoint,
+)
 from hydra.services.subscriptions.metadata import get_subscription_url
 
 
-HYDRABOX_API_VERSION = "hydrabox.io/subscription/v1"
+HYDRABOX_API_VERSION = "hydrabox.io/subscription/v2"
 HYDRABOX_KIND = "SubscriptionData"
 HYDRABOX_MEDIA_TYPE = "application/vnd.hydrabox.subscription+json"
 HYDRABOX_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
@@ -21,7 +26,7 @@ HYDRABOX_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 _MAX_SEQUENCE = 9_007_199_254_740_991
 _PAYLOAD_REVISION_BITS = 16
 # Increment whenever renderer code can change JSON for unchanged persisted state.
-_HYDRABOX_PAYLOAD_REVISION = 1
+_HYDRABOX_PAYLOAD_REVISION = 2
 _MAX_STATE_REVISION = _MAX_SEQUENCE >> _PAYLOAD_REVISION_BITS
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _ALLOWED_OUTBOUND_TYPES = frozenset({
@@ -120,17 +125,19 @@ def _runtime_objects(
             allowed = (
                 object_type in _ALLOWED_OUTBOUND_TYPES
                 if section == "outbounds"
-                else object_type == "wireguard"
+                else object_type in {"wireguard", "wdtt"}
             )
             if not allowed:
                 continue
             item = dict(raw)
             _validate_tag(item.get("tag"))
             _validate_remote_values(item, (section,))
-            if section == "endpoints":
+            if section == "endpoints" and object_type == "wireguard":
                 if item.get("system", False) is not False:
                     raise ValueError("system WireGuard is forbidden")
                 item["system"] = False
+            elif section == "endpoints" and object_type == "wdtt":
+                validate_wdtt_endpoint(item)
             result.append((section, item))
     return result
 
@@ -253,36 +260,78 @@ def _validate_envelope_identity(user: User, state: AppState) -> int:
     ) | _HYDRABOX_PAYLOAD_REVISION
 
 
+def _plugin_projection(
+    plugin: Any,
+    user: User,
+    state: AppState,
+    plugins: SubscriptionPluginAccess,
+    device_id: str,
+) -> tuple[dict[str, Any], list[dict[str, str]]] | None:
+    capabilities = plugin.meta.capabilities
+    try:
+        if capabilities.hydrabox_subscription_action:
+            if not device_id:
+                raise ValueError("HydraBox device identity is required")
+            material = plugins.hydrabox_material(
+                plugin,
+                user,
+                state,
+                device_id,
+            )
+            return parse_hydrabox_material(material)
+        if not capabilities.subscription_enabled:
+            return None
+        payload = plugins.singbox_client_config(plugin, user, state)
+    except Exception as exc:
+        raise ValueError(
+            f"failed to generate {plugin.meta.name} HydraBox projection",
+        ) from exc
+    if not payload:
+        return None
+    return _strict_loads(payload), []
+
+
 def generate_hydrabox_subscription(
     user: User,
     state: AppState,
     *,
     plugins: SubscriptionPluginAccess,
+    device_id: str = "",
 ) -> dict[str, Any]:
-    """Build an activatable plaintext HydraBox SubscriptionData v1 document."""
+    """Build an activatable plaintext HydraBox SubscriptionData v2 document."""
     sequence = _validate_envelope_identity(user, state)
     document: dict[str, list[dict[str, Any]]] = {
         "outbounds": [],
         "endpoints": [],
     }
     profiles: list[dict[str, Any]] = []
+    credentials: list[dict[str, str]] = []
     native_tags: set[str] = set()
     profile_ids: set[str] = set()
 
     for plugin in plugins.enabled_transports(state):
-        if not plugin.meta.capabilities.subscription_enabled:
+        material = _plugin_projection(
+            plugin,
+            user,
+            state,
+            plugins,
+            device_id,
+        )
+        if material is None:
             continue
-        try:
-            payload = plugins.singbox_client_config(plugin, user, state)
-        except Exception as exc:
-            raise ValueError(
-                f"failed to generate {plugin.meta.name} HydraBox projection",
-            ) from exc
-        if not payload:
-            continue
-        projection = _strict_loads(payload)
+        projection, plugin_credentials = material
         _validate_depth(projection)
         objects = _runtime_objects(projection)
+        validate_material_binding(plugin_credentials, objects)
+        existing_refs = {item["credential_ref"] for item in credentials}
+        duplicate_refs = existing_refs & {
+            item["credential_ref"] for item in plugin_credentials
+        }
+        if duplicate_refs:
+            raise ValueError(
+                f"duplicate HydraBox credential_ref: {sorted(duplicate_refs)[0]}",
+            )
+        credentials.extend(plugin_credentials)
         entrypoints = _entrypoints(projection, objects)
         label = plugin.meta.display_name or plugin.meta.name
         multiple = len(entrypoints) > 1
@@ -328,6 +377,8 @@ def generate_hydrabox_subscription(
         "runtime": {"format": "sing-box-json", "document": runtime_document},
         "profiles": profiles,
     }
+    if credentials:
+        envelope["credentials"] = credentials
     if user.expiry_date:
         expires_at = _timestamp(user.expiry_date, "expires_at")
         if _parse_timestamp(expires_at, "expires_at") <= _parse_timestamp(

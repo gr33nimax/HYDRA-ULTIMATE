@@ -134,6 +134,11 @@ class PluginCatalog:
             errors.append(
                 "meta.subscription_profile_query must be a declared query",
             )
+        hydrabox_action = capabilities.hydrabox_subscription_action
+        if hydrabox_action and hydrabox_action not in capabilities.actions:
+            errors.append(
+                "meta.hydrabox_subscription_action must be a declared action",
+            )
         manual_query = capabilities.manual_artifacts_query
         if manual_query and manual_query not in capabilities.queries:
             errors.append(

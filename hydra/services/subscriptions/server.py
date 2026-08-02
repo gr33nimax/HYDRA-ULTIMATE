@@ -73,6 +73,7 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         user,
         state: AppState,
         plugins: SubscriptionPluginAccess,
+        device_id: str = "",
     ) -> tuple[str, str, str]:
         if response_format == "nekobox":
             return (
@@ -99,6 +100,7 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
                     user,
                     state,
                     plugins=plugins,
+                    device_id=device_id,
                 ),
                 user.hydrabox_jwe_key,
             )
@@ -184,6 +186,7 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
                 user,
                 state,
                 plugins,
+                fingerprint.device_id if response_format == "hydrabox" else "",
             )
         except Exception:
             self._send_error(500, "Subscription generation failed")

@@ -23,7 +23,7 @@ from hydra.plugins.base import (
     PluginStatus,
 )
 from hydra.plugins.context import PluginStateAccess
-from hydra.plugins.wdtt import build, lifecycle, observation
+from hydra.plugins.wdtt import build, lifecycle, observation, subscriptions
 from hydra.plugins.wdtt.headless import (
     HEADLESS_MAINTENANCE_TASKS,
     WdttHeadlessMixin,
@@ -32,6 +32,7 @@ from hydra.plugins.wdtt.build import WdttBuildMixin
 from hydra.plugins.wdtt.configuration import WdttConfigurationMixin
 from hydra.plugins.wdtt.lifecycle import WdttLifecycleMixin
 from hydra.plugins.wdtt.model import (
+    ACCESS_FILE,
     BIN_PATH,
     CONFIG_DIR,
     CONFIG_FILE,
@@ -73,6 +74,7 @@ def _environment() -> WdttEnvironment:
         config_dir=CONFIG_DIR,
         config_file=CONFIG_FILE,
         passwords_file=PASSWORDS_FILE,
+        access_file=ACCESS_FILE,
         headless_dir=CONFIG_DIR / "headless",
         headless_cookies_file=HEADLESS_COOKIES_FILE,
         headless_link_file=CONFIG_DIR / HEADLESS_LINK_FILE.name,
@@ -122,7 +124,7 @@ class WdttPlugin(
         name="wdtt",
         description="qWDTT: WireGuard-over-VK-TURN туннель через DTLS",
         category=PluginCategory.TRANSPORT,
-        version="2.0.0",
+        version="3.0.0",
         needs_domain=False,
         central_apply=True,
         required_commands=("systemctl", "iptables"),
@@ -132,6 +134,7 @@ class WdttPlugin(
             "hot_reload",
             "save_client_link",
             "save_password_registry",
+            "activate_subscription",
             "setup_headless_creator",
             "refresh_headless_creator",
             "stop_headless_creator",
@@ -146,9 +149,15 @@ class WdttPlugin(
             "headless_creator_due",
         ),
         manual_artifacts_query="manual_client_artifacts",
-        config_defaults=(("headless_refresh_interval_seconds", 86_400),),
+        config_defaults=(
+            ("headless_refresh_interval_seconds", 86_400),
+            ("subscription_workers", 18),
+            ("subscription_max_total_workers", 0),
+            ("legacy_scan_limit", 16),
+        ),
         maintenance_tasks=HEADLESS_MAINTENANCE_TASKS,
         subscription_enabled=False,
+        hydrabox_subscription_action="activate_subscription",
         backup_resources=(
             BackupResource(str(CONFIG_DIR), "tree"),
             BackupResource(str(SERVICE_FILE), "file"),
@@ -189,6 +198,20 @@ class WdttPlugin(
             _environment(),
             link=link,
             filename=filename,
+        )
+
+    @staticmethod
+    def activate_subscription(
+        *,
+        user: User,
+        state: PluginStateAccess,
+        device_id: str,
+    ) -> dict:
+        return subscriptions.activate_subscription(
+            _environment(),
+            user=user,
+            state=state,
+            device_id=device_id,
         )
 
     @staticmethod

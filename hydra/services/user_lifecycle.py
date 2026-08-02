@@ -196,26 +196,26 @@ class UserLifecycleOperations:
         if not isinstance(limit, int) or limit < 0:
             raise ValueError("Device limit must be a non-negative integer")
 
+        snapshot = copy.deepcopy(state)
         user.device_limit = limit
-        if reset:
-            user.devices.clear()
-            state.install.setdefault("_device_binding_resets", []).append(
-                user.uuid,
-            )
-        self.save_state(state)
+        if not reset:
+            self.save_state(state)
+            return
+        user.devices.clear()
+        state.install.setdefault("_device_binding_resets", []).append(
+            user.uuid,
+        )
+        self._commit(state, self._new_transaction(state, snapshot))
+        self._restart_subscriptions()
 
     def rotate_hydrabox_key(self, state: AppState, email: str) -> None:
         """Atomically replace the private key, invalidating every old link."""
         user = find_user(state, email)
         if not user:
             raise ValueError(f"User {email} not found")
-        previous = user.hydrabox_jwe_key
+        snapshot = copy.deepcopy(state)
         user.hydrabox_jwe_key = generate_hydrabox_jwe_key()
-        try:
-            self.save_state(state)
-        except Exception:
-            user.hydrabox_jwe_key = previous
-            raise
+        self._commit(state, self._new_transaction(state, snapshot))
         self._restart_subscriptions()
 
     def _enabled_transports(

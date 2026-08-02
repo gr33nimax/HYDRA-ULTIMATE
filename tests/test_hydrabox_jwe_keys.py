@@ -20,10 +20,10 @@ from hydra.services.subscriptions.jwe import (
 )
 
 
-def _operations(save_state):
+def _operations(save_state, apply_config=lambda state: True):
     return UserLifecycleOperations(
         transports=lambda: [],
-        apply_config=lambda state: True,
+        apply_config=apply_config,
         save_state=save_state,
         last_apply_error=lambda: "",
         log_rollback_error=lambda message: None,
@@ -87,3 +87,49 @@ def test_key_rotation_restores_in_memory_key_when_persistence_fails():
         _operations(fail).rotate_hydrabox_key(state, "alice")
 
     assert user.hydrabox_jwe_key == old_key
+
+
+def test_key_rotation_rebuilds_runtime_access_and_rolls_back_apply_failure():
+    old_key = generate_hydrabox_jwe_key()
+    user = User("alice", "token", hydrabox_jwe_key=old_key)
+    state = AppState(users=[user])
+    persisted: list[str] = []
+    applies: list[str] = []
+
+    def apply(current):
+        applies.append(current.users[0].hydrabox_jwe_key)
+        return len(applies) > 1
+
+    with pytest.raises(RuntimeError, match="Configuration apply failed"):
+        _operations(
+            lambda current: persisted.append(
+                current.users[0].hydrabox_jwe_key,
+            ),
+            apply,
+        ).rotate_hydrabox_key(state, "alice")
+
+    assert state.users[0].hydrabox_jwe_key == old_key
+    assert persisted[-1] == old_key
+    assert applies[-1] == old_key
+
+
+def test_device_reset_rebuilds_runtime_access_before_subscription_restart():
+    user = User(
+        "alice",
+        "token",
+        devices={"a" * 64: {"source": "hydrabox"}},
+    )
+    state = AppState(users=[user])
+    persisted: list[int] = []
+    applied: list[int] = []
+    operations = _operations(
+        lambda current: persisted.append(len(current.users[0].devices)),
+        lambda current: applied.append(len(current.users[0].devices)) or True,
+    )
+
+    with patch.object(UserLifecycleOperations, "_restart_subscriptions"):
+        operations.set_device_limit(state, "alice", 2, reset=True)
+
+    assert persisted == [0]
+    assert applied == [0]
+    assert user.devices == {}

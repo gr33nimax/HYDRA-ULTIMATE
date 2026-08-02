@@ -40,7 +40,13 @@ class WdttBuildMixin:
             self._wdtt_env().urllib_module.request.urlretrieve(self._wdtt_env().source_url, str(archive))
             print(f'  Распаковываю...')
             self._wdtt_env().host.run(['tar', '-xzf', str(archive), '-C', str(tmp)], capture_output=True, check=True, timeout=self._wdtt_env().source_extract_timeout)
-            src_dirs = list(tmp.glob('proxy-turn-vk-android-*'))
+            src_dirs = [
+                candidate
+                for candidate in tmp.iterdir()
+                if candidate.is_dir()
+                and (candidate / 'go.mod').is_file()
+                and (candidate / 'server.go').is_file()
+            ]
             if not src_dirs:
                 print(f'  Не найдена директория с исходниками.')
                 return False

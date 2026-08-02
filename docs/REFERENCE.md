@@ -104,13 +104,14 @@ HTTP 400, превышение device limit — HTTP 403. Ответ всегд�
 идентификатором ключа. Plaintext HydraBox fallback отсутствует.
 
 После расшифровки envelope имеет точные
-`api_version=hydrabox.io/subscription/v1` и `kind=SubscriptionData`, стабильную
+`api_version=hydrabox.io/subscription/v2` и `kind=SubscriptionData`, стабильную
 identity tuple `(issuer, subscription_id, stable)` и использует revision state
 как старшую часть монотонного `sequence`; младшая часть содержит ревизию
 HydraBox-renderer и повышается при изменении выдаваемого JSON без изменения
 state. Поэтому обновление кода не создаёт запрещённую комбинацию «прежний
 sequence + новый payload». В `runtime.document` попадают только разрешённые
-remote policy v1 `outbounds` и userspace `wireguard` endpoints: локальные
+remote policy v2 `outbounds`, userspace `wireguard` и нативные `wdtt` endpoints:
+локальные
 inbounds/DNS/route и `direct` отбрасываются, а executable-поля,
 зарезервированные теги и system WireGuard блокируют выдачу fail-closed.
 AmneziaWG-параметры `I1`–`I5`, `J1`–`J3` и `Itime` сохраняются в endpoint как
@@ -124,11 +125,25 @@ selectable entrypoints. Пользовательское имя профиля �
 12-байтовый IV и 16-байтовый authentication tag и публикуется с
 `Cache-Control: private, no-store`.
 
+WDTT публикуется только через HydraBox-подписку. Нативный endpoint содержит
+`credential_ref`, четыре VK call-хеша и политику воркеров, но не пароль и не
+grant. Привязанный `wdtt_device_grant` находится только внутри зашифрованного
+JWE-поля `credentials`; на сервере `/etc/wdtt/hydra-access.json` хранит лишь
+SHA-256 verifier, производный WRAP-ключ, O(1) key hint, срок действия и квоты.
+Минимум — 9 воркеров, рекомендуемое и значение по умолчанию — 18, максимум —
+36; на горячую ротацию резервируется ещё одна группа из 9. Session lease живёт
+15 минут и обновляется после 10 минут через уже доступный WDTT/VK relay.
+Глобальная автоматическая квота растёт вместе с числом активных привязок
+устройств, поэтому фиксированного лимита пользователей нет; предел задают
+ресурсы VPS/relay либо явный `subscription_max_total_workers`.
+
 TUI и генератор выдают ссылку
 `https://<origin>/sub/<id>?format=hydrabox#hbx-key=<base64url-key>`. Fragment не
 передаётся HTTP-серверу. Per-user 256-битный ключ хранится только в private
 state; `status`, логи и публичный JSON показывают максимум производный `kid`.
-Ротация немедленно инвалидирует все ранее выданные HydraBox-ссылки.
+Ротация немедленно инвалидирует все ранее выданные HydraBox-ссылки и WDTT device
+grants; сброс привязок устройств так же транзакционно перестраивает verifier
+registry.
 
 ### `enhancement` — сетевые расширения
 
@@ -233,6 +248,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/etc/wdtt/headless/` | Закрытый runtime-каталог VK creator с правами `0700` |
 | `/etc/wdtt/headless/state.json` | Четыре последних call-хеша и время обновления |
 | `/etc/wdtt/qwdtt_link.txt` | Единственная master qWDTT-ссылка с актуальными четырьмя хешами |
+| `/etc/wdtt/hydra-access.json` | Verifier-only registry HydraBox WDTT grants, leases и worker quotas (`0600`) |
 | `/etc/cron.d/hydra-traffic` | Задание учёта трафика |
 | `/etc/cron.d/telemt-stats` | Задание статистики Telemt |
 

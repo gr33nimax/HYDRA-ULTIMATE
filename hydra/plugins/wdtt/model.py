@@ -10,6 +10,7 @@ BIN_PATH = Path("/usr/local/bin/wdtt-server")
 CONFIG_DIR = Path("/etc/wdtt")
 CONFIG_FILE = CONFIG_DIR / "config.json"
 PASSWORDS_FILE = CONFIG_DIR / "passwords.json"
+ACCESS_FILE = CONFIG_DIR / "hydra-access.json"
 HEADLESS_DIR = CONFIG_DIR / "headless"
 HEADLESS_COOKIES_DIR = Path("/etc/hydra/cookiesvk")
 HEADLESS_COOKIES_FILE = HEADLESS_COOKIES_DIR / "cookies-vk.json"
@@ -32,10 +33,9 @@ WG_STATS_DIR = Path(f"/sys/class/net/{WG_INTERFACE}/statistics")
 LOCAL_TUN_PORT = 9000
 SYSTEM_PASSWORD = "hydra-system-wdtt"
 
-GITHUB_REPO = "SpaceNeuroX/proxy-turn-vk-android"
-SOURCE_URL = (
-    f"https://github.com/{GITHUB_REPO}/archive/refs/heads/master.tar.gz"
-)
+GITHUB_REPO = "gr33nimax/hydra-wdtt"
+SOURCE_REVISION = "69ca964cfa2f6dd81d86d45b2159ffdb04469c8c"
+SOURCE_URL = f"https://github.com/{GITHUB_REPO}/archive/{SOURCE_REVISION}.tar.gz"
 GO_DL_URL = "https://go.dev/dl/"
 
 SOURCE_EXTRACT_TIMEOUT = 120
@@ -65,6 +65,7 @@ class WdttEnvironment:
     config_dir: Path
     config_file: Path
     passwords_file: Path
+    access_file: Path
     headless_dir: Path
     headless_cookies_file: Path
     headless_link_file: Path
