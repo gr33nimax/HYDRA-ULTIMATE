@@ -14,6 +14,9 @@ from hydra.plugins.wdtt.plugin import DEFAULT_DTLS_PORT as DEFAULT_DTLS_PORT
 from hydra.plugins.wdtt.plugin import DEFAULT_WG_PORT as DEFAULT_WG_PORT
 from hydra.plugins.wdtt.plugin import LOCAL_TUN_PORT as LOCAL_TUN_PORT
 from hydra.plugins.wdtt.plugin import SERVICE_NAME as SERVICE_NAME
+from hydra.plugins.wdtt.headless_schedule import (
+    AUTO_MANAGEMENT_FLAG as HEADLESS_AUTO_MANAGEMENT_FLAG,
+)
 from hydra.services.application import (
     ApplicationService as ApplicationService,
 )

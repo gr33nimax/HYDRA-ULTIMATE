@@ -602,6 +602,10 @@ WRAPPER_MUTATION_STARTED=1
 mv -f "$WRAPPER_TMP" "$WRAPPER"
 WRAPPER_TMP=""
 
+if ! bash "$INSTALL_DIR/deploy/apply-resource-defaults.sh"; then
+    warn "Не удалось обновить стандартные ограничения RAM/журналов; обновление продолжено"
+fi
+
 start_previous_units
 
 step 7 7 "Итоговая проверка"

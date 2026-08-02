@@ -87,8 +87,8 @@ kernel iptables LOG ────────┘                         v
 Основной процесс — `hydra-antidpi`. Сборщики работают независимо:
 
 - JSONL-tails переживают truncate и rotation;
-- journal worker читает Caddy, Sing-Box и protocol units;
-- kernel worker читает firewall и AmneziaWG messages;
+- один фильтрованный journal worker читает Caddy, Sing-Box, protocol units,
+  firewall и AmneziaWG kernel messages без второго процесса `journalctl -f`;
 - очередь ограничена и при переполнении сохраняет наиболее свежие события;
 - state обновляется под file lock и записывается атомарно.
 

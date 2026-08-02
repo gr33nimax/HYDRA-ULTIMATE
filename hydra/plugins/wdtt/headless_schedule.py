@@ -8,6 +8,7 @@ REFRESH_INTERVAL = 86_400
 MIN_REFRESH_INTERVAL = 3_600
 MAX_REFRESH_INTERVAL = 86_400
 REFRESH_INTERVAL_KEY = "headless_refresh_interval_seconds"
+AUTO_MANAGEMENT_FLAG = "sync_wdtt_headless_enabled"
 
 
 def refresh_interval(state: PluginStateAccess | None) -> int:
@@ -55,6 +56,7 @@ def set_refresh_interval(
 
 
 __all__ = [
+    "AUTO_MANAGEMENT_FLAG",
     "MAX_REFRESH_INTERVAL",
     "MIN_REFRESH_INTERVAL",
     "REFRESH_INTERVAL",

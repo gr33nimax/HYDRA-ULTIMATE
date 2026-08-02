@@ -16,6 +16,7 @@ from hydra.plugins.wdtt.headless_control import (
     stop,
 )
 from hydra.plugins.wdtt.headless_schedule import (
+    AUTO_MANAGEMENT_FLAG,
     MAX_REFRESH_INTERVAL,
     MIN_REFRESH_INTERVAL,
     REFRESH_INTERVAL,
@@ -40,7 +41,7 @@ HEADLESS_MAINTENANCE_TASKS = (
         title="🔄 Обновление qWDTT-звонков",
         description="Раз в 24 часа пересоздавать четыре VK-звонка и ссылку",
         due_query="headless_creator_due",
-        enabled_flag="sync_wdtt_headless_enabled",
+        enabled_flag=AUTO_MANAGEMENT_FLAG,
         apply_on_success=False,
     ),
 )

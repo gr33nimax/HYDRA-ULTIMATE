@@ -639,3 +639,124 @@ def test_tui_updates_refresh_timer_through_persist_only_command() -> None:
         seconds=12 * 3600,
     )
     app.plugin_action.assert_not_called()
+
+
+def test_tui_can_disable_automatic_headless_call_creation() -> None:
+    state = _state()
+    state.install["sync_wdtt_headless_enabled"] = True
+    app = SimpleNamespace(
+        admin=SimpleNamespace(save_state=MagicMock()),
+        plugin_action=MagicMock(),
+        plugin_query=MagicMock(
+            side_effect=[
+                {
+                    "configured": True,
+                    "call_count": 4,
+                    "refreshed_at": "2026-08-01T12:00:00+00:00",
+                    "refresh_interval_seconds": 86400,
+                    "link_ready": True,
+                },
+                "qwdtt://master-link",
+            ],
+        ),
+    )
+    with (
+        patch.object(wdtt_facade, "clear"),
+        patch.object(wdtt_facade, "title"),
+        patch.object(wdtt_facade, "panel"),
+        patch.object(wdtt_facade, "menu", return_value="4"),
+        patch.object(wdtt_facade, "success"),
+        patch.object(wdtt_facade, "prompt"),
+    ):
+        wdtt_facade._setup_headless_creator(state, app)
+
+    app.admin.save_state.assert_called_once_with(state)
+    assert state.install["sync_wdtt_headless_enabled"] is False
+    app.plugin_action.assert_not_called()
+
+
+def test_tui_keeps_automatic_creation_enabled_when_persistence_fails() -> None:
+    state = _state()
+    state.install["sync_wdtt_headless_enabled"] = True
+    app = SimpleNamespace(
+        admin=SimpleNamespace(
+            save_state=MagicMock(side_effect=RuntimeError("save failed")),
+        ),
+        plugin_action=MagicMock(),
+        plugin_query=MagicMock(
+            side_effect=[
+                {
+                    "configured": True,
+                    "call_count": 4,
+                    "refreshed_at": "2026-08-01T12:00:00+00:00",
+                    "refresh_interval_seconds": 86400,
+                    "link_ready": True,
+                },
+                "qwdtt://master-link",
+            ],
+        ),
+    )
+    with (
+        patch.object(wdtt_facade, "clear"),
+        patch.object(wdtt_facade, "title"),
+        patch.object(wdtt_facade, "panel"),
+        patch.object(wdtt_facade, "menu", return_value="4"),
+        patch.object(wdtt_facade, "error") as report,
+        patch.object(wdtt_facade, "prompt"),
+    ):
+        wdtt_facade._setup_headless_creator(state, app)
+
+    assert state.install["sync_wdtt_headless_enabled"] is True
+    report.assert_called_once_with("save failed")
+    app.plugin_action.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("automatic", "mode_text", "action_text"),
+    [
+        (
+            True,
+            "Режим: АВТОМАТИЧЕСКИЙ — Sync Agent управляет звонками",
+            "Перейти в ручной режим",
+        ),
+        (
+            False,
+            "Режим: РУЧНОЙ — Sync Agent не управляет звонками",
+            "Включить автоматический режим",
+        ),
+    ],
+)
+def test_tui_explains_who_owns_headless_calls_in_each_mode(
+    automatic: bool,
+    mode_text: str,
+    action_text: str,
+) -> None:
+    state = _state()
+    state.install["sync_wdtt_headless_enabled"] = automatic
+    app = SimpleNamespace(
+        admin=SimpleNamespace(save_state=MagicMock()),
+        plugin_query=MagicMock(
+            side_effect=[
+                {
+                    "configured": True,
+                    "call_count": 4,
+                    "refreshed_at": "2026-08-01T12:00:00+00:00",
+                    "refresh_interval_seconds": 86400,
+                    "link_ready": True,
+                },
+                "qwdtt://master-link",
+            ],
+        ),
+    )
+    with (
+        patch.object(wdtt_facade, "clear"),
+        patch.object(wdtt_facade, "title"),
+        patch.object(wdtt_facade, "panel") as panel,
+        patch.object(wdtt_facade, "menu", return_value="0") as menu,
+    ):
+        wdtt_facade._setup_headless_creator(state, app)
+
+    configured_lines = panel.call_args_list[0].args[1]
+    assert mode_text in configured_lines
+    menu_items = menu.call_args.args[0]
+    assert any(action_text in item[1] for item in menu_items)

@@ -210,13 +210,69 @@ class TextTail(JsonTail):
                 result.append(event)
         return result
 
-def _journal_worker(out: queue.Queue[Normalized], stop: threading.Event) -> None:
-    command = [
-        "journalctl", "-f", "-n", "0", "-o", "json",
-        "-u", "caddy-l4", "-u", "sing-box", "-u", "amneziawg",
-        "-u", "hysteria2", "-u", "mieru", "-u", "snell", "-u", "telemt",
-        "-u", "caddy-naive", "-u", "wdtt",
+def _journal_follow_command() -> list[str]:
+    units = (
+        "caddy-l4",
+        "sing-box",
+        "amneziawg",
+        "hysteria2",
+        "mieru",
+        "snell",
+        "telemt",
+        "caddy-naive",
+        "wdtt",
+    )
+    return [
+        "journalctl",
+        "-f",
+        "-n",
+        "0",
+        "-o",
+        "json",
+        *(f"_SYSTEMD_UNIT={unit}.service" for unit in units),
+        "+",
+        "_TRANSPORT=kernel",
     ]
+
+
+def _normalize_journal_record(
+    record: dict,
+    state_reader: Callable[[], AppState],
+) -> Normalized | None:
+    message = str(record.get("MESSAGE", ""))
+    if record.get("_TRANSPORT") == "kernel":
+        event = parse_kernel_scan_line(message)
+        event = _attribute_udp_protocol(event, state_reader)
+        return event or parse_protocol_line("kernel", message)
+
+    unit = str(record.get("_SYSTEMD_UNIT", ""))
+    event = parse_protocol_line(unit, message)
+    if not event:
+        event = normalize_tls_auth_failure(record)
+    event = _resolve_relay_source(event)
+    if not event:
+        details = parse_unattributed_protocol_line(unit, message)
+        event = _resolve_unattributed_relay_source(details)
+    return event
+
+
+def _stop_journal_process(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=2)
+
+
+def _journal_worker(
+    out: queue.Queue[Normalized],
+    stop: threading.Event,
+    state_reader: Callable[[], AppState],
+) -> None:
+    command = _journal_follow_command()
     while not stop.is_set():
         process = None
         try:
@@ -231,55 +287,16 @@ def _journal_worker(out: queue.Queue[Normalized], stop: threading.Event) -> None
                     continue
                 if not isinstance(record, dict):
                     continue
-                event = parse_protocol_line(record.get("_SYSTEMD_UNIT", ""), record.get("MESSAGE", ""))
-                if not event:
-                    event = normalize_tls_auth_failure(record)
-                event = _resolve_relay_source(event)
-                if not event:
-                    details = parse_unattributed_protocol_line(
-                        record.get("_SYSTEMD_UNIT", ""), record.get("MESSAGE", ""),
-                    )
-                    event = _resolve_unattributed_relay_source(details)
+                event = _normalize_journal_record(record, state_reader)
                 if event:
                     _offer_event(out, event)
         except (OSError, RuntimeError):
             pass
         finally:
-            if process is not None and process.poll() is None:
-                process.terminate()
+            if process is not None:
+                _stop_journal_process(process)
         if not stop.wait(1):
             continue
-
-
-def _kernel_worker(
-    out: queue.Queue[Normalized],
-    stop: threading.Event,
-    state_reader: Callable[[], AppState],
-) -> None:
-    command = ["journalctl", "-k", "-f", "-n", "0", "-o", "cat"]
-    while not stop.is_set():
-        process = None
-        try:
-            process = HOST.popen(
-                command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                text=True, bufsize=1, timeout=86400,
-            )
-            assert process.stdout is not None
-            for line in process.stdout:
-                if stop.is_set():
-                    break
-                event = parse_kernel_scan_line(line)
-                event = _attribute_udp_protocol(event, state_reader)
-                if not event:
-                    event = parse_protocol_line("kernel", line)
-                if event:
-                    _offer_event(out, event)
-        except (OSError, RuntimeError):
-            pass
-        finally:
-            if process is not None and process.poll() is None:
-                process.terminate()
-        stop.wait(1)
 
 
 def _bind_vless_normalizer(
@@ -320,9 +337,8 @@ def run(
     events: queue.Queue[Normalized] = queue.Queue(maxsize=4096)
     stop = threading.Event()
     workers = (
-        threading.Thread(target=_journal_worker, args=(events, stop), daemon=True),
         threading.Thread(
-            target=_kernel_worker,
+            target=_journal_worker,
             args=(events, stop, state_reader),
             daemon=True,
         ),

@@ -54,14 +54,18 @@ HYDRA выбирает последний `whitelist-bypass-cli-linux-*.zip` п�
 перезапускает четыре инстанса и атомарно заменяет ссылку. Если
 systemd восстановил упавший creator и его live-хеш изменился раньше срока,
 следующий цикл sync-agent немедленно согласует все четыре звонка и master-ссылку.
+Экран явно показывает владельца операций. В автоматическом режиме звонками
+управляет Sync Agent; в ручном он пропускает creator, а звонки меняются только
+командами меню. Переключение режима не завершает текущие звонки.
 Административный экран пользователя «Ручные конфиги» читает эту master-ссылку
 через объявленный плагином manual-artifact query. Она общая для всех пользователей
 и намеренно не включается в пользовательские subscription endpoints.
 После первичной настройки пункт «VK headless creator» работает как экран
 управления: обычный вход не меняет runtime. Отдельные пункты немедленно
 пересоздают четыре звонка, завершают и отключают все creator-инстансы, меняют
-общий таймер либо проверяют установку. При завершении звонков недействительная
-master-ссылка удаляется; Sync Agent создаст новую по выбранному таймеру.
+общий таймер, выбирают автоматический или ручной режим либо проверяют установку.
+При завершении звонков недействительная master-ссылка удаляется; автоматически
+новую создаёт только Sync Agent в автоматическом режиме.
 Каталоги `/etc/hydra/cookiesvk` и `/etc/wdtt/headless` создаются с правами `0700`,
 а cookies-файл атомарно получает `0600`; cookies не передаются через аргументы процесса.
 
@@ -217,6 +221,8 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | :--- | :--- |
 | `/etc/hydra` | Служебные конфигурации HYDRA |
 | `/etc/sing-box/config.json` | Сгенерированная конфигурация Sing-Box |
+| `/etc/systemd/system/sing-box.service.d/90-hydra-memory.conf` | Общий `GOGC=50` без жёсткого memory cap |
+| `/etc/systemd/journald.conf.d/90-hydra-journald.conf` | Бюджеты постоянного и runtime-журнала |
 | `/etc/caddy-l4/config.json` | Сгенерированная конфигурация TLS-мультиплексора |
 | `/etc/nftables.conf` | Правила nftables, включая TPROXY |
 | `/etc/iptables/rules.v4` | Сохранённые правила iptables (телеметрия AntiDPI) |
@@ -300,6 +306,11 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 journalctl -u sing-box -u caddy-l4 --no-pager -n 100
 journalctl -u hydra-antidpi -u hydra-source-relay -u hydra-tg-admin -n 150 --no-pager
 ```
+
+Bootstrap и updater поддерживают общий журнал в пределах 128 MiB, runtime-журнал
+в пределах 64 MiB и файлы журнала не крупнее 16 MiB. При установке policy текущий
+journal сначала ротируется, затем архивы очищаются до 128 MiB; это ограничивает
+рост на всех VPS без отдельного resource-профиля.
 
 ## Сетевые порты
 
@@ -406,6 +417,7 @@ HWID используется нормализованный `User-Agent`, чт�
 | `sync_limits_enabled` | Проверять лимиты и сроки пользователей |
 | `sync_updates_enabled` | Проверять обновления Sing-Box |
 | `sync_certificates_enabled` | Проверять сроки TLS-сертификатов |
+| `sync_wdtt_headless_enabled` | Автоматически создавать и обновлять VK-звонки qWDTT |
 | `sync_config_pending` | Отложенное применение конфигурации |
 | `sync_config_pending_source` | Фаза, поставившая отложенное применение (`certificates` снимается после первой неудачи) |
 | `singbox_last_update_check`, `singbox_update_available`, `singbox_latest_version` | Результат проверки обновлений |

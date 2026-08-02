@@ -107,7 +107,10 @@ def _refresh_calls(
     facade.prompt("Нажмите Enter...")
 
 
-def _stop_calls(app: facade.ApplicationService) -> None:
+def _stop_calls(
+    state: facade.AppState,
+    app: facade.ApplicationService,
+) -> None:
     if not facade.confirm(
         "Завершить все четыре звонка и удалить текущую master-ссылку?",
     ):
@@ -122,11 +125,57 @@ def _stop_calls(app: facade.ApplicationService) -> None:
     except Exception as exc:
         ok, message = False, str(exc)
     if ok:
-        facade.success(
-            "Все звонки завершены; Sync Agent пересоздаст их по таймеру.",
-        )
+        if _automatic_management_enabled(state):
+            facade.success(
+                "Все звонки завершены. Режим АВТО включён: "
+                "Sync Agent пересоздаст их по таймеру.",
+            )
+        else:
+            facade.success(
+                "Все звонки завершены. Режим РУЧНОЙ: "
+                "Sync Agent не будет создавать новые.",
+            )
     else:
         facade.error(message or "Не удалось завершить все VK-звонки")
+    facade.prompt("Нажмите Enter...")
+
+
+def _automatic_management_enabled(state: facade.AppState) -> bool:
+    return bool(
+        state.install.get(facade.HEADLESS_AUTO_MANAGEMENT_FLAG, True),
+    )
+
+
+def _toggle_management_mode(
+    state: facade.AppState,
+    app: facade.ApplicationService,
+    enabled: bool,
+) -> None:
+    target = not enabled
+    flag = facade.HEADLESS_AUTO_MANAGEMENT_FLAG
+    had_value = flag in state.install
+    previous = state.install.get(flag)
+    state.install[flag] = target
+    try:
+        app.admin.save_state(state)
+    except Exception as exc:
+        if had_value:
+            state.install[flag] = previous
+        else:
+            state.install.pop(flag, None)
+        facade.error(str(exc) or "Не удалось сохранить режим управления звонками")
+        facade.prompt("Нажмите Enter...")
+        return
+    if target:
+        facade.success(
+            "Включён режим АВТО: Sync Agent будет проверять таймер "
+            "и при необходимости пересоздавать VK-звонки.",
+        )
+    else:
+        facade.success(
+            "Включён режим РУЧНОЙ: Sync Agent больше не управляет VK-звонками; "
+            "текущие звонки продолжат работать.",
+        )
     facade.prompt("Нажмите Enter...")
 
 
@@ -204,13 +253,27 @@ def _configured_menu(
         status.get("refresh_interval_seconds", 86_400) or 86_400,
     )
     interval_hours = max(1, interval_seconds // 3600)
+    automatic_management = _automatic_management_enabled(state)
+    if automatic_management:
+        mode_line = "Режим: АВТОМАТИЧЕСКИЙ — Sync Agent управляет звонками"
+        ownership_line = (
+            f"Каждые {interval_hours} ч. Sync Agent проверяет таймер и при "
+            "необходимости пересоздаёт 4 звонка."
+        )
+    else:
+        mode_line = "Режим: РУЧНОЙ — Sync Agent не управляет звонками"
+        ownership_line = (
+            "Звонки меняются только командами этого меню; "
+            "текущие продолжают работать."
+        )
     link = _master_link(app)
     facade.panel(
         "HEADLESS CREATOR · НАСТРОЕН",
         [
             f"Активные звонки: {call_count}/4",
             f"Последнее обновление: {refreshed_at}",
-            f"Автообновление: каждые {interval_hours} ч. через Sync Agent.",
+            mode_line,
+            ownership_line,
             "Открытие этого экрана не перезапускает creator.",
         ],
     )
@@ -225,7 +288,7 @@ def _configured_menu(
             (
                 "2",
                 "⏹ Завершить все звонки",
-                "Остановить четыре звонка до следующего запуска по таймеру",
+                "Остановить четыре звонка и удалить текущую master-ссылку",
             ),
             (
                 "3",
@@ -234,6 +297,19 @@ def _configured_menu(
             ),
             (
                 "4",
+                (
+                    "⏸ Перейти в ручной режим"
+                    if automatic_management
+                    else "▶ Включить автоматический режим"
+                ),
+                (
+                    "Sync Agent перестанет управлять qWDTT; текущие звонки останутся активны"
+                    if automatic_management
+                    else "Передать Sync Agent управление созданием и обновлением звонков"
+                ),
+            ),
+            (
+                "5",
                 "🛠 Проверить / восстановить установку",
                 "Проверить cookies и binary, затем пересоздать звонки",
             ),
@@ -244,10 +320,12 @@ def _configured_menu(
     if choice == "1":
         _refresh_calls(state, app)
     elif choice == "2":
-        _stop_calls(app)
+        _stop_calls(state, app)
     elif choice == "3":
         _configure_refresh_timer(state, app, interval_seconds)
-    elif choice == "4" and facade.confirm(
+    elif choice == "4":
+        _toggle_management_mode(state, app, automatic_management)
+    elif choice == "5" and facade.confirm(
         "Проверить установку и пересоздать четыре звонка?",
     ):
         _run_setup(state, app)

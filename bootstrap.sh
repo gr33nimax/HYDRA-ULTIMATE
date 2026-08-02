@@ -302,6 +302,10 @@ if [[ -n "${HYDRA_BACKUP_DIR:-}" ]]; then
     HYDRA_BACKUP_DIR=""
 fi
 
+if ! bash "$INSTALL_DIR/deploy/apply-resource-defaults.sh"; then
+    warn "Не удалось применить стандартные ограничения RAM/журналов; установка продолжена"
+fi
+
 # ── Symlink ──────────────────────────────────────────────────────────────────
 chmod +x "${INSTALL_DIR}/main.py"
 # Older releases created /usr/local/bin/hydra as a symlink to main.py.  Remove

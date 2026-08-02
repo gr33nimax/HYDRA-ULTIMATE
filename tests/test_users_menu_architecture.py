@@ -10,6 +10,7 @@ from hydra.ui import menus
 from hydra.ui._menus import (
     facade_contract,
     users,
+    users_detail,
     users_links,
     users_management,
     users_overview,
@@ -96,3 +97,14 @@ def test_facade_monkeypatch_reaches_cross_controller_calls(monkeypatch) -> None:
     menus.menu_users(AppState(), MagicMock())
 
     show_users.assert_called_once()
+
+
+def test_user_detail_hydrabox_action_is_valid_utf8() -> None:
+    choices = users_detail.detail_menu_choices(blocked=False)
+    action = next(item for item in choices if item[0] == "9")
+
+    assert action == (
+        "9",
+        "🔑 Сменить HydraBox JWE-ключ",
+        "Немедленно отозвать все старые HydraBox-ссылки",
+    )

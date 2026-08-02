@@ -239,12 +239,15 @@ def _user_detail_menu(
             open_device_menu(state, user, app)
         elif choice == "9":
             if confirm(
-                "РЎРјРµРЅРёС‚СЊ JWE-РєР»СЋС‡? РЎС‚Р°СЂС‹Рµ HydraBox-СЃСЃС‹Р»РєРё СЃСЂР°Р·Сѓ РїРµСЂРµСЃС‚Р°РЅСѓС‚ СЂР°Р±РѕС‚Р°С‚СЊ.",
+                "Сменить JWE-ключ? Старые HydraBox-ссылки сразу "
+                "перестанут работать.",
                 default=False,
             ):
                 app.rotate_user_hydrabox_key(state, user.email)
-                success("HydraBox JWE-РєР»СЋС‡ РѕР±РЅРѕРІР»С‘РЅ; РІС‹РґР°Р№С‚Рµ РЅРѕРІСѓСЋ СЃСЃС‹Р»РєСѓ.")
-                prompt("РќР°Р¶РјРёС‚Рµ Enter")
+                success(
+                    "HydraBox JWE-ключ обновлён; выдайте новую ссылку.",
+                )
+                prompt("Нажмите Enter")
         elif choice == "0":
             return
 
