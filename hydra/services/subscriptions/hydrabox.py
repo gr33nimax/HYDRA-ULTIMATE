@@ -110,9 +110,7 @@ def _validate_tag(tag: object) -> str:
     return tag
 
 
-def _runtime_objects(
-    projection: dict[str, Any],
-) -> list[tuple[str, dict[str, Any]]]:
+def _runtime_objects(projection: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     result: list[tuple[str, dict[str, Any]]] = []
     for section in ("outbounds", "endpoints"):
         values = projection.get(section, [])
@@ -255,9 +253,7 @@ def _validate_envelope_identity(user: User, state: AppState) -> int:
         or not 0 <= state.revision <= _MAX_STATE_REVISION
     ):
         raise ValueError("invalid HydraBox sequence")
-    return (
-        state.revision << _PAYLOAD_REVISION_BITS
-    ) | _HYDRABOX_PAYLOAD_REVISION
+    return (state.revision << _PAYLOAD_REVISION_BITS) | _HYDRABOX_PAYLOAD_REVISION
 
 
 def _plugin_projection(
