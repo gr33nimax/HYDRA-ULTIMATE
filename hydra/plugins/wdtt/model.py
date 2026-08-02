@@ -34,7 +34,7 @@ LOCAL_TUN_PORT = 9000
 SYSTEM_PASSWORD = "hydra-system-wdtt"
 
 GITHUB_REPO = "gr33nimax/hydra-wdtt"
-SOURCE_REVISION = "69ca964cfa2f6dd81d86d45b2159ffdb04469c8c"
+SOURCE_REVISION = "ecea643c2c14fcb9328fbe8836c6f711d3af6147"
 SOURCE_URL = f"https://github.com/{GITHUB_REPO}/archive/{SOURCE_REVISION}.tar.gz"
 GO_DL_URL = "https://go.dev/dl/"
 

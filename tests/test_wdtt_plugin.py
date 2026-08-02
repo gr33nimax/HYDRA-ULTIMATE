@@ -18,6 +18,10 @@ from hydra.plugins.base import PluginCategory, ConfigFragment
 from hydra.core.state import AppState, User, PluginState
 
 
+def test_source_revision_includes_worker_takeover_runtime() -> None:
+    assert SOURCE_REVISION == "ecea643c2c14fcb9328fbe8836c6f711d3af6147"
+
+
 def _make_state(users: list | None = None, server_ip: str = "1.2.3.4",
                 dtls_port: int = DEFAULT_DTLS_PORT, wg_port: int = DEFAULT_WG_PORT) -> AppState:
     state = AppState()
