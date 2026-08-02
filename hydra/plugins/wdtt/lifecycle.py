@@ -14,6 +14,33 @@ def _derive_password(uuid: str) -> str:
 def _installed(env: WdttEnvironment) -> bool:
     return env.bin_path.exists()
 
+
+def _server_revision_file(env: WdttEnvironment) -> Path:
+    return env.config_dir / "server-revision"
+
+
+def _server_revision_current(env: WdttEnvironment) -> bool:
+    if not _installed(env):
+        return False
+    try:
+        return (
+            _server_revision_file(env).read_text(encoding="ascii").strip()
+            == env.source_revision
+        )
+    except (OSError, UnicodeError):
+        # Existing installations predate revision tracking and may still run
+        # the legacy WDTT binary, which cannot decrypt Hydra device grants.
+        return False
+
+
+def _record_server_revision(env: WdttEnvironment) -> None:
+    env.config_dir.mkdir(parents=True, exist_ok=True)
+    env.host.atomic_write(
+        _server_revision_file(env),
+        f"{env.source_revision}\n",
+        mode=0o600,
+    )
+
 def _install_service(
     env: WdttEnvironment,
     dtls_port: int,
@@ -44,14 +71,18 @@ def _ipt_persist(env: WdttEnvironment, self=None) -> None:
 
 class WdttLifecycleMixin:
     def install(self) -> bool:
-        if self._installed():
+        env = self._wdtt_env()
+        if _server_revision_current(env):
             return True
-        print('  Сборка wdtt-server из исходников...')
+        if self._installed():
+            print('  Обновление legacy wdtt-server до Hydra-ревизии...')
+        else:
+            print('  Сборка wdtt-server из исходников...')
         if not self._build_wdtt_server():
             print('  Не удалось собрать wdtt-server.')
             return False
-        self._wdtt_env().config_dir.mkdir(parents=True, exist_ok=True)
-        return self._installed()
+        _record_server_revision(env)
+        return _server_revision_current(env)
 
     def uninstall(self) -> bool:
         headless.uninstall(self._wdtt_env())

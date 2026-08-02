@@ -34,6 +34,9 @@ def _ver_tuple(env: WdttEnvironment, s: str) -> tuple:
 class WdttBuildMixin:
     def _build_wdtt_server(self) -> bool:
         tmp = Path(self._wdtt_env().tempfile_module.mkdtemp())
+        staged_binary = self._wdtt_env().bin_path.with_name(
+            f".{self._wdtt_env().bin_path.name}.new",
+        )
         try:
             archive = tmp / 'master.tar.gz'
             print(f'  Скачиваю исходники qWDTT...')
@@ -73,19 +76,22 @@ class WdttBuildMixin:
                 print(f'  Бинарник не создан.')
                 return False
             self._wdtt_env().bin_path.parent.mkdir(parents=True, exist_ok=True)
-            if self._wdtt_env().bin_path.exists():
-                try:
-                    self._wdtt_env().bin_path.unlink()
-                except Exception:
-                    pass
-            self._wdtt_env().shutil_module.copy2(str(built), str(self._wdtt_env().bin_path))
-            self._wdtt_env().bin_path.chmod(493)
+            if staged_binary.exists():
+                staged_binary.unlink()
+            self._wdtt_env().shutil_module.copy2(str(built), str(staged_binary))
+            staged_binary.chmod(0o755)
+            self._wdtt_env().os_module.replace(
+                str(staged_binary),
+                str(self._wdtt_env().bin_path),
+            )
             print(f'  wdtt-server установлен: {self._wdtt_env().bin_path}')
             return True
         except Exception as e:
             print(f'  Ошибка: {e}')
             return False
         finally:
+            if staged_binary.exists():
+                staged_binary.unlink()
             self._wdtt_env().shutil_module.rmtree(tmp, ignore_errors=True)
 
     def _check_go(self) -> str | None:

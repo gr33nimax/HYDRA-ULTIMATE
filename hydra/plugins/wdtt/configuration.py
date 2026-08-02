@@ -1,12 +1,31 @@
 """Desired configuration and user-facing contract methods for WDTT."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from hydra.core.state_models import User
 from hydra.plugins.base import ConfigFragment
 from hydra.plugins.context import PluginStateAccess
-from hydra.plugins.wdtt import subscriptions
+from hydra.plugins.wdtt import lifecycle, subscriptions
+
+
+_MAX_SERVER_BINARY_SNAPSHOT = 64 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class WdttApplySnapshot:
+    access_state: bytes | None
+    server_binary: bytes | None
+    server_revision: bytes | None
+
+
+def _read_optional(path: Path, *, maximum_size: int | None = None) -> bytes | None:
+    if not path.exists():
+        return None
+    if maximum_size is not None and path.stat().st_size > maximum_size:
+        raise ValueError(f"WDTT runtime artifact is too large to snapshot: {path}")
+    return path.read_bytes()
 
 
 class WdttConfigurationMixin:
@@ -40,6 +59,11 @@ class WdttConfigurationMixin:
 
     def apply(self, state: PluginStateAccess) -> bool:
         if not self._pending_cfg:
+            return False
+        # A pre-Hydra installation can leave a perfectly executable but
+        # protocol-incompatible legacy binary in place. Revision-aware install
+        # upgrades it before the service is restarted with subscription state.
+        if not self.install():
             return False
         self._wdtt_env().config_dir.mkdir(parents=True, exist_ok=True)
         dtls_port = self._pending_cfg['dtls_port']
@@ -78,18 +102,56 @@ class WdttConfigurationMixin:
         self._wdtt_env().time_module.sleep(2)
         return True
 
-    def snapshot(self, state: PluginStateAccess) -> bytes | None:
-        return subscriptions.access_snapshot(self._wdtt_env())
+    def snapshot(self, state: PluginStateAccess) -> WdttApplySnapshot:
+        env = self._wdtt_env()
+        return WdttApplySnapshot(
+            access_state=subscriptions.access_snapshot(env),
+            server_binary=_read_optional(
+                env.bin_path,
+                maximum_size=_MAX_SERVER_BINARY_SNAPSHOT,
+            ),
+            server_revision=_read_optional(lifecycle._server_revision_file(env)),
+        )
 
     def rollback(
         self,
         state: PluginStateAccess,
-        snapshot: bytes | None,
+        snapshot: WdttApplySnapshot,
     ) -> bool:
-        return subscriptions.restore_access_snapshot(
-            self._wdtt_env(),
-            snapshot,
+        env = self._wdtt_env()
+        revision_file = lifecycle._server_revision_file(env)
+        current_revision = _read_optional(revision_file)
+        binary_restored = True
+        if current_revision != snapshot.server_revision:
+            try:
+                if snapshot.server_binary is None:
+                    env.host.remove_file(env.bin_path)
+                else:
+                    env.host.atomic_write(
+                        env.bin_path,
+                        snapshot.server_binary,
+                        mode=0o755,
+                    )
+                if snapshot.server_revision is None:
+                    env.host.remove_file(revision_file)
+                else:
+                    env.host.atomic_write(
+                        revision_file,
+                        snapshot.server_revision,
+                        mode=0o600,
+                    )
+                action = "restart" if snapshot.server_binary is not None else "stop"
+                binary_restored = env.host.run(
+                    ["systemctl", action, env.service_name],
+                    capture_output=True,
+                ).returncode == 0
+            except OSError:
+                binary_restored = False
+        access_restored = subscriptions.restore_access_snapshot(
+            env,
+            snapshot.access_state,
         )
+        return binary_restored and access_restored
 
     def on_user_add(self, user: User, state: PluginStateAccess) -> None:
         pass

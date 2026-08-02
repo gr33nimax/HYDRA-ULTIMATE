@@ -100,3 +100,4 @@ class WdttEnvironment:
     firewall_module: Any
     local_ip: Callable[[], str]
     public_ip: Callable[[], str]
+    source_revision: str = SOURCE_REVISION

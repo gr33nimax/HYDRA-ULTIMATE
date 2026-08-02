@@ -11,7 +11,9 @@ from hydra.plugins.wdtt.plugin import (
     WdttPlugin, BIN_PATH, SERVICE_FILE, CONFIG_DIR, CONFIG_FILE, PASSWORDS_FILE,
     DEFAULT_DTLS_PORT, DEFAULT_WG_PORT, DEFAULT_WG_SUBNET, SYSTEM_PASSWORD,
     WG_INTERFACE, SOURCE_EXTRACT_TIMEOUT, GO_MODULE_TIMEOUT, GO_BUILD_TIMEOUT,
+    SOURCE_REVISION,
 )
+from hydra.plugins.wdtt.configuration import WdttApplySnapshot
 from hydra.plugins.base import PluginCategory, ConfigFragment
 from hydra.core.state import AppState, User, PluginState
 
@@ -189,6 +191,83 @@ def test_source_build_allows_empty_go_cache(tmp_path):
     assert GO_BUILD_TIMEOUT >= 600
 
 
+def test_install_replaces_untracked_legacy_wdtt_binary(tmp_path):
+    plugin = WdttPlugin()
+    binary = tmp_path / "bin" / "wdtt-server"
+    binary.parent.mkdir()
+    binary.write_bytes(b"legacy")
+    config_dir = tmp_path / "wdtt"
+    host = MagicMock()
+
+    def atomic_write(path, content, *, mode):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            path.write_bytes(content)
+        else:
+            path.write_text(content, encoding="utf-8")
+        path.chmod(mode)
+
+    def build_current():
+        binary.write_bytes(b"hydra")
+        return True
+
+    host.atomic_write.side_effect = atomic_write
+    with (
+        patch("hydra.plugins.wdtt.plugin.BIN_PATH", binary),
+        patch("hydra.plugins.wdtt.plugin.CONFIG_DIR", config_dir),
+        patch("hydra.plugins.wdtt.plugin.HOST", host),
+        patch.object(plugin, "_build_wdtt_server", side_effect=build_current) as build,
+    ):
+        assert plugin.install() is True
+
+    build.assert_called_once_with()
+    assert binary.read_bytes() == b"hydra"
+    assert (config_dir / "server-revision").read_text().strip() == SOURCE_REVISION
+
+
+def test_install_skips_binary_at_pinned_revision(tmp_path):
+    plugin = WdttPlugin()
+    binary = tmp_path / "bin" / "wdtt-server"
+    binary.parent.mkdir()
+    binary.write_bytes(b"hydra")
+    config_dir = tmp_path / "wdtt"
+    config_dir.mkdir()
+    (config_dir / "server-revision").write_text(
+        f"{SOURCE_REVISION}\n",
+        encoding="ascii",
+    )
+
+    with (
+        patch("hydra.plugins.wdtt.plugin.BIN_PATH", binary),
+        patch("hydra.plugins.wdtt.plugin.CONFIG_DIR", config_dir),
+        patch.object(plugin, "_build_wdtt_server") as build,
+    ):
+        assert plugin.install() is True
+
+    build.assert_not_called()
+
+
+def test_install_failure_preserves_legacy_binary_and_revision(tmp_path):
+    plugin = WdttPlugin()
+    binary = tmp_path / "bin" / "wdtt-server"
+    binary.parent.mkdir()
+    binary.write_bytes(b"legacy")
+    config_dir = tmp_path / "wdtt"
+    config_dir.mkdir()
+    revision_file = config_dir / "server-revision"
+    revision_file.write_text("legacy\n", encoding="ascii")
+
+    with (
+        patch("hydra.plugins.wdtt.plugin.BIN_PATH", binary),
+        patch("hydra.plugins.wdtt.plugin.CONFIG_DIR", config_dir),
+        patch.object(plugin, "_build_wdtt_server", return_value=False),
+    ):
+        assert plugin.install() is False
+
+    assert binary.read_bytes() == b"legacy"
+    assert revision_file.read_text(encoding="ascii") == "legacy\n"
+
+
 def test_configure_connects_wdtt_interface_to_common_tproxy():
     p = WdttPlugin()
     user = _make_user("a@x.com", uuid="uuid-a")
@@ -239,6 +318,7 @@ def test_apply_writes_configs_and_restarts():
         patch.object(Path, "mkdir"),
         patch.object(Path, "write_text") as mock_write,
         patch.object(Path, "chmod"),
+        patch.object(p, "install", return_value=True) as install,
         patch.object(WdttPlugin, "_install_service") as mock_svc,
         patch("subprocess.run") as mock_run,
         patch("hydra.plugins.wdtt.plugin.HOST.atomic_write") as atomic_write,
@@ -246,6 +326,7 @@ def test_apply_writes_configs_and_restarts():
         result = p.apply(state)
 
     assert result is True
+    install.assert_called_once_with()
 
     write_calls = [c for c in mock_write.call_args_list if c.args]
     passwords_text = write_calls[0].args[0]
@@ -271,6 +352,72 @@ def test_apply_writes_configs_and_restarts():
     reload_calls = [c for c in mock_run.call_args_list
                     if "reload-or-restart" in str(c.args)]
     assert len(reload_calls) >= 1
+
+
+def test_apply_stops_before_mutation_when_server_upgrade_fails():
+    plugin = WdttPlugin()
+    state = _make_state()
+    plugin.configure(state)
+
+    with (
+        patch.object(plugin, "install", return_value=False),
+        patch.object(Path, "write_text") as write_text,
+        patch.object(WdttPlugin, "_install_service") as install_service,
+    ):
+        assert plugin.apply(state) is False
+
+    write_text.assert_not_called()
+    install_service.assert_not_called()
+
+
+def test_rollback_restores_legacy_binary_after_failed_apply(tmp_path):
+    plugin = WdttPlugin()
+    binary = tmp_path / "bin" / "wdtt-server"
+    binary.parent.mkdir()
+    binary.write_bytes(b"hydra")
+    config_dir = tmp_path / "wdtt"
+    config_dir.mkdir()
+    revision_file = config_dir / "server-revision"
+    revision_file.write_text(f"{SOURCE_REVISION}\n", encoding="ascii")
+    access_file = config_dir / "hydra-access.json"
+    access_file.write_bytes(b"new access")
+    host = MagicMock()
+
+    def atomic_write(path, content, *, mode):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            path.write_bytes(content)
+        else:
+            path.write_text(content, encoding="utf-8")
+        path.chmod(mode)
+
+    def run(command, **_kwargs):
+        if command[:2] == ["pidof", "wdtt-server"]:
+            return MagicMock(stdout="101\n", returncode=0)
+        return MagicMock(stdout="", returncode=0)
+
+    host.atomic_write.side_effect = atomic_write
+    host.run.side_effect = run
+    snapshot = WdttApplySnapshot(
+        access_state=b"legacy access",
+        server_binary=b"legacy",
+        server_revision=None,
+    )
+
+    with (
+        patch("hydra.plugins.wdtt.plugin.BIN_PATH", binary),
+        patch("hydra.plugins.wdtt.plugin.CONFIG_DIR", config_dir),
+        patch("hydra.plugins.wdtt.plugin.ACCESS_FILE", access_file),
+        patch("hydra.plugins.wdtt.plugin.HOST", host),
+    ):
+        assert plugin.rollback(_make_state(), snapshot) is True
+
+    assert binary.read_bytes() == b"legacy"
+    assert revision_file.exists() is False
+    assert access_file.read_bytes() == b"legacy access"
+    assert ["systemctl", "restart", "wdtt"] in [
+        call.args[0] for call in host.run.call_args_list
+    ]
 
 
 def test_apply_returns_false_without_pending():
