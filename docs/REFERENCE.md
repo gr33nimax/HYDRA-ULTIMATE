@@ -371,7 +371,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 
 ## Схема persisted state
 
-Актуальная версия схемы в 2.5.5 — **5**. Корень `state.json`:
+В текущей ветке `dev` актуальна схема **6**. Корень `state.json`:
 
 | Поле | Тип | Содержание |
 | :--- | :--- | :--- |
@@ -384,7 +384,8 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 | `network` | `object` | Сетевые настройки, не принадлежащие плагину |
 
 `User`: `email`, `uuid`, `traffic_limit_gb`, `traffic_used_bytes`, `expiry_date`,
-`blocked`, `created_at`, `telegram_id`, `credentials`, `device_limit`, `devices`.
+`blocked`, `created_at`, `telegram_id`, `credentials`, `device_limit`, `devices`,
+`hydrabox_jwe_key`.
 
 `devices` — карта `id устройства → запись`. Идентификатор — хеш того, чем
 клиент представился, поэтому исходный HWID в state не хранится. При отсутствии

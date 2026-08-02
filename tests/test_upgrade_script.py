@@ -45,6 +45,17 @@ def test_linux_integration_smoke_uses_the_canonical_state_schema_version():
         assert '= "4"' not in source
 
 
+def test_linux_upgrade_smoke_uses_the_target_checkout_version():
+    source = LINUX_UPGRADE_SMOKE.read_text(encoding="utf-8")
+
+    assert 'PYTHONPATH="$workspace"' in source
+    assert '[[ "$installed_version" == "$target_version" ]]' in source
+    assert not re.search(
+        r'\[\[ "\$installed_version" == "\d+\.\d+\.\d+" \]\]',
+        source,
+    )
+
+
 def test_linux_integration_smoke_provisions_the_migrated_warp_runtime():
     source = LINUX_INTEGRATION_SMOKE.read_text(encoding="utf-8")
     marker = 'cat > "$wgcf_profile" <<\'EOF\'\n'

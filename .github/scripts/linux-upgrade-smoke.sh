@@ -136,6 +136,11 @@ systemctl is-active --quiet hydra-ci-upgrade.service
 
 neutral_cwd="$tmp_dir/neutral-cwd"
 mkdir "$neutral_cwd"
+target_version=$(
+    cd "$neutral_cwd"
+    PYTHONPATH="$workspace" python3 -c \
+        'from hydra import __version__; print(__version__)'
+)
 run_updater() {
     (
         cd "$neutral_cwd"
@@ -181,7 +186,7 @@ installed_version=$(
     PYTHONPATH="$install_dir" "$install_dir/.venv/bin/python" -c \
         'from hydra import __version__; print(__version__)'
 )
-[[ "$installed_version" == "2.5.5" ]]
+[[ "$installed_version" == "$target_version" ]]
 systemctl is-active --quiet hydra-ci-upgrade.service
 
 PYTHONPATH="$install_dir" "$install_dir/.venv/bin/python" - <<'PY'
