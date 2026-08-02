@@ -196,13 +196,17 @@ class UserLifecycleOperations:
         if not isinstance(limit, int) or limit < 0:
             raise ValueError("Device limit must be a non-negative integer")
 
+        snapshot = copy.deepcopy(state)
         user.device_limit = limit
         if reset:
             user.devices.clear()
             state.install.setdefault("_device_binding_resets", []).append(
                 user.uuid,
             )
-        self.save_state(state)
+        if reset and self._has_subscription_access_transport(state):
+            self._commit(state, self._new_transaction(state, snapshot))
+        else:
+            self.save_state(state)
         if reset:
             self._restart_subscriptions()
 
@@ -231,6 +235,13 @@ class UserLifecycleOperations:
             protocol = state.protocols.get(plugin.meta.name)
             if protocol and protocol.enabled:
                 yield index, plugin
+
+    def _has_subscription_access_transport(self, state: AppState) -> bool:
+        for _, plugin in self._enabled_transports(state):
+            capabilities = getattr(plugin.meta, "capabilities", None)
+            if getattr(capabilities, "hydrabox_subscription_action", ""):
+                return True
+        return False
 
     def _new_transaction(
         self,

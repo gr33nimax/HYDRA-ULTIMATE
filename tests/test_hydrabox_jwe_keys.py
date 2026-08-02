@@ -127,7 +127,14 @@ def test_device_reset_rebuilds_runtime_access_before_subscription_restart():
         lambda current: applied.append(len(current.users[0].devices)) or True,
     )
 
-    with patch.object(UserLifecycleOperations, "_restart_subscriptions"):
+    with (
+        patch.object(
+            UserLifecycleOperations,
+            "_has_subscription_access_transport",
+            return_value=True,
+        ),
+        patch.object(UserLifecycleOperations, "_restart_subscriptions"),
+    ):
         operations.set_device_limit(state, "alice", 2, reset=True)
 
     assert persisted == [0]
