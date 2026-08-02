@@ -11,8 +11,8 @@ from hydra.plugins.wdtt.plugin import (
     WdttPlugin, BIN_PATH, SERVICE_FILE, CONFIG_DIR, CONFIG_FILE, PASSWORDS_FILE,
     DEFAULT_DTLS_PORT, DEFAULT_WG_PORT, DEFAULT_WG_SUBNET, SYSTEM_PASSWORD,
     WG_INTERFACE, SOURCE_EXTRACT_TIMEOUT, GO_MODULE_TIMEOUT, GO_BUILD_TIMEOUT,
-    SOURCE_REVISION,
 )
+from hydra.plugins.wdtt.model import SOURCE_REVISION
 from hydra.plugins.wdtt.configuration import WdttApplySnapshot
 from hydra.plugins.base import PluginCategory, ConfigFragment
 from hydra.core.state import AppState, User, PluginState
