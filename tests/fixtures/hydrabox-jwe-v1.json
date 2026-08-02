@@ -1,0 +1,8 @@
+{
+  "name": "HydraBox flattened JWE v1 / A256GCM interoperability",
+  "key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "iv_hex": "000102030405060708090a0b",
+  "kid": "hbx-630dcd2966c43366",
+  "plaintext": {"api_version":"hydrabox.io/subscription/v1","kind":"SubscriptionData","metadata":{"issuer":"https://hydra.example","subscription_id":"vector","channel":"stable","sequence":1},"profiles":[],"runtime":{"document":{"outbounds":[]}}},
+  "jwe": {"protected":"eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiaGJ4K2p3ZSIsImN0eSI6ImFwcGxpY2F0aW9uL3ZuZC5oeWRyYWJveC5zdWJzY3JpcHRpb24ranNvbiIsImtpZCI6ImhieC02MzBkY2QyOTY2YzQzMzY2In0","iv":"AAECAwQFBgcICQoL","ciphertext":"PCC3a6y6tH7_Mv7k38tCT-uv40aRGTAEFg6Kqm4cYsFiYseM26h99lvSTs-kpUNRgD1Ct3iF1rhM9FhwaJecgZ54pw6y8wpDcTHeD4vueokasLJAHxAgHZiPvPZamM35u4tjyYspsX7sfRDXMBRMD9YCQIfBtlD4PpwlpPKSB2HVDWmilu3pJW2CPM5P-GDgVZyCW1t0_2i2fZsDm7CFi7G7vGaMjrkbyQC42OWx-5e_vrhN7cIf2Rb9-pws6ZWBZiL-k2C49PNMdLeJ2TS04Y8K2kxGItWEBfP1si8s_Nh5eInSm10","tag":"R5T-xaOKxaqNQiKghp_uow"}
+}

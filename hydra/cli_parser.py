@@ -142,6 +142,13 @@ def _add_user(root: argparse._SubParsersAction) -> None:
     limit.add_argument("email")
     limit.add_argument("limit", type=int)
     limit.add_argument("--reset", action="store_true")
+    rotate = _command(
+        commands,
+        "rotate-hydrabox-key",
+        "Rotate the HydraBox JWE key and invalidate old links",
+        "user.rotate-hydrabox-key",
+    )
+    rotate.add_argument("email")
     for action in ("block", "unblock", "remove"):
         command = _command(
             commands,

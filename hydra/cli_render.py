@@ -32,6 +32,7 @@ COMMAND_TITLES = {
     "user.ensure-default": "Default user",
     "user.rename": "Rename user",
     "user.set-device-limit": "Update device limit",
+    "user.rotate-hydrabox-key": "Rotate HydraBox JWE key",
     "user.block": "Block user",
     "user.unblock": "Unblock user",
     "user.remove": "Remove user",

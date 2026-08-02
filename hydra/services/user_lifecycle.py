@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterable, Protocol
 
 from hydra.core.apply_transaction import ApplyTransaction
+from hydra.core.hydrabox_keys import generate_hydrabox_jwe_key
 from hydra.core.state_models import (
     AppState,
     User,
@@ -202,6 +203,20 @@ class UserLifecycleOperations:
                 user.uuid,
             )
         self.save_state(state)
+
+    def rotate_hydrabox_key(self, state: AppState, email: str) -> None:
+        """Atomically replace the private key, invalidating every old link."""
+        user = find_user(state, email)
+        if not user:
+            raise ValueError(f"User {email} not found")
+        previous = user.hydrabox_jwe_key
+        user.hydrabox_jwe_key = generate_hydrabox_jwe_key()
+        try:
+            self.save_state(state)
+        except Exception:
+            user.hydrabox_jwe_key = previous
+            raise
+        self._restart_subscriptions()
 
     def _enabled_transports(
         self,

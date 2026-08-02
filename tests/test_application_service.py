@@ -84,7 +84,7 @@ def test_application_check_combines_validation_host_and_change_preview():
 
     assert app.check(AppState()) == {
         "ok": True,
-        "configuration": {"valid": True, "schema_version": 5},
+        "configuration": {"valid": True, "schema_version": 6},
         "host": {"ok": True, "required_failures": []},
         "changes": {
             "valid": True,

@@ -17,6 +17,14 @@ from hydra.services.subscriptions.generator import (
     get_subscription_urls,
 )
 from hydra.services.subscriptions.server import SubscriptionHandler
+from hydra.services.subscriptions.jwe import (
+    JWE_MEDIA_TYPE,
+    decrypt_hydrabox_subscription,
+    encrypt_hydrabox_subscription,
+)
+
+
+TEST_JWE_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 
 
 class _HydraBoxTransport(BasePlugin):
@@ -61,6 +69,7 @@ def _state() -> tuple[AppState, User]:
         email="alice@example.com",
         uuid="customer-main",
         created_at="2026-08-01T00:00:00+00:00",
+        hydrabox_jwe_key=TEST_JWE_KEY,
     )
     state = AppState(revision=7, users=[user])
     state.network.sub_domain = "subscriptions.example.com"
@@ -378,7 +387,7 @@ def test_hydrabox_subscription_rejects_unsafe_wireguard_options(
         )
 
 
-def test_hydrabox_http_response_uses_native_media_type_and_raw_json():
+def test_hydrabox_http_response_is_flattened_jwe_only():
     state, user = _state()
     handler = object.__new__(SubscriptionHandler)
 
@@ -389,25 +398,28 @@ def test_hydrabox_http_response_uses_native_media_type_and_raw_json():
         _plugins(_HydraBoxTransport(_shadowtls_payload())),
     )
 
-    assert content_type == (
-        "application/vnd.hydrabox.subscription+json; charset=utf-8"
+    assert content_type == JWE_MEDIA_TYPE
+    assert suffix == "subscription.hbx.jwe.json"
+    assert set(json.loads(content)) == {"protected", "iv", "ciphertext", "tag"}
+    assert decrypt_hydrabox_subscription(content, TEST_JWE_KEY)["api_version"] == (
+        "hydrabox.io/subscription/v1"
     )
-    assert suffix == "subscription.hbx.json"
-    assert json.loads(content)["api_version"] == "hydrabox.io/subscription/v1"
-    assert not content.startswith("ey")
 
 
 def test_hydrabox_format_is_public_and_generation_failure_is_fail_closed():
     state, user = _state()
     assert "hydrabox" in SUPPORTED_SUBSCRIPTION_FORMATS
     assert get_subscription_urls(user, state)["hydrabox"].endswith(
-        "?format=hydrabox",
+        f"?format=hydrabox#hbx-key={TEST_JWE_KEY}",
     )
 
     handler = object.__new__(SubscriptionHandler)
     handler.plugins = _plugins()
     handler.path = "/sub/customer-main?format=hydrabox"
-    handler.headers = {"User-Agent": "HydraBox/1.0"}
+    handler.headers = {
+        "User-Agent": "HydraBox/1.0",
+        "X-Hydra-HWID": "hbx1_" + "A" * 43,
+    }
     handler.client_address = ("203.0.113.10", 12345)
     handler.wfile = BytesIO()
     errors: list[tuple[int, str]] = []
@@ -424,3 +436,71 @@ def test_hydrabox_format_is_public_and_generation_failure_is_fail_closed():
 
     assert errors == [(500, "Subscription generation failed")]
     assert handler.wfile.getvalue() == b""
+
+
+def test_hydrabox_jwe_uses_unique_ivs_and_rejects_tampering():
+    state, user = _state()
+    subscription = generate_hydrabox_subscription(
+        user,
+        state,
+        plugins=_plugins(_HydraBoxTransport(_shadowtls_payload())),
+    )
+
+    first = encrypt_hydrabox_subscription(subscription, TEST_JWE_KEY)
+    second = encrypt_hydrabox_subscription(subscription, TEST_JWE_KEY)
+
+    assert json.loads(first)["iv"] != json.loads(second)["iv"]
+    tampered = json.loads(first)
+    tampered["tag"] = ("A" if tampered["tag"][0] != "A" else "B") + tampered["tag"][1:]
+    with pytest.raises(Exception):
+        decrypt_hydrabox_subscription(
+            json.dumps(tampered, separators=(",", ":")),
+            TEST_JWE_KEY,
+        )
+
+
+def test_hydrabox_jwe_rejects_wrong_key_and_kid():
+    state, user = _state()
+    subscription = generate_hydrabox_subscription(
+        user,
+        state,
+        plugins=_plugins(_HydraBoxTransport(_shadowtls_payload())),
+    )
+    payload = encrypt_hydrabox_subscription(
+        subscription,
+        TEST_JWE_KEY,
+        iv=bytes(range(12)),
+    )
+
+    with pytest.raises(ValueError, match="kid mismatch"):
+        decrypt_hydrabox_subscription(payload, TEST_JWE_KEY, expected_kid="wrong")
+    wrong_key = "_" * 43
+    with pytest.raises(Exception):
+        decrypt_hydrabox_subscription(payload, wrong_key)
+
+
+@pytest.mark.parametrize(
+    ("headers", "message"),
+    [
+        ({"X-Hydra-HWID": "hbx1_" + "A" * 43}, "HydraBox User-Agent"),
+        ({"User-Agent": "HydraBox/0.3.0"}, "X-Hydra-HWID"),
+        (
+            {"User-Agent": "HydraBox/0.3.0", "X-Hydra-HWID": "android-id"},
+            "X-Hydra-HWID",
+        ),
+    ],
+)
+def test_hydrabox_http_rejects_missing_or_invalid_identity(headers, message):
+    handler = object.__new__(SubscriptionHandler)
+    handler.plugins = _plugins(_HydraBoxTransport(_shadowtls_payload()))
+    handler.path = "/sub/customer-main?format=hydrabox"
+    handler.headers = headers
+    handler.client_address = ("203.0.113.10", 12345)
+    errors: list[tuple[int, str]] = []
+    handler._send_error = lambda code, detail: errors.append((code, detail))
+
+    handler.do_GET()
+
+    assert len(errors) == 1
+    assert errors[0][0] == 400
+    assert message in errors[0][1]

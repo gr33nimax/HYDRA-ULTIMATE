@@ -92,12 +92,22 @@ def migrate_v4_to_v5(data: dict) -> dict:
     return data
 
 
+def migrate_v5_to_v6(data: dict) -> dict:
+    """Reserve keys; the persistence adapter injects randomness atomically."""
+    migrated = copy.deepcopy(data)
+    for user in migrated.get("users", []):
+        user.setdefault("hydrabox_jwe_key", "")
+    migrated["version"] = 6
+    return migrated
+
+
 MIGRATIONS: dict[int, Migration] = {
     0: migrate_v0_to_v1,
     1: migrate_v1_to_v2,
     2: migrate_v2_to_v3,
     3: migrate_v3_to_v4,
     4: migrate_v4_to_v5,
+    5: migrate_v5_to_v6,
 }
 
 

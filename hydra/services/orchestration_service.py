@@ -270,6 +270,13 @@ class OrchestrationService:
             reset=reset,
         )
 
+    def rotate_user_hydrabox_key(
+        self,
+        state: AppState,
+        email: str,
+    ) -> None:
+        self._user_lifecycle().rotate_hydrabox_key(state, email)
+
     def sync_user_configs(
         self,
         state: AppState,

@@ -46,6 +46,7 @@ hydra
 │   ├── add · remove              транзакция по всем транспортам
 │   ├── rename                    UUID и секреты сохраняются
 │   ├── set-device-limit [--reset]
+│   ├── rotate-hydrabox-key       немедленно отозвать старые JWE-ссылки
 │   ├── block · unblock
 │   └── ensure-default
 ├── plugin (plugins)
@@ -264,6 +265,7 @@ sudo hydra user add alice@example.com \
   --device-limit 3
 sudo hydra user rename alice@example.com alice-new@example.com
 sudo hydra user set-device-limit alice-new@example.com 5 --reset
+sudo hydra user rotate-hydrabox-key alice-new@example.com
 sudo hydra user block alice-new@example.com
 sudo hydra user unblock alice-new@example.com
 sudo hydra user remove alice-new@example.com
@@ -283,6 +285,11 @@ User lifecycle проходит через общий application service и о�
 лимита. Приоритет у подключившихся раньше — установленное соединение не рвётся
 из-за нового устройства. `--reset` дополнительно забывает зарегистрированные
 привязки, и следующий запрос подписки создаст их заново.
+
+`rotate-hydrabox-key` атомарно создаёт новый per-user A256GCM key и
+перезапускает сервер подписок. Все старые HydraBox-ссылки перестают
+расшифровываться немедленно; периода совместимости нет. Сам ключ не попадает в
+JSON-вывод или логи — новую ссылку получают через штатный генератор/TUI.
 
 `hydra user show` возвращает список устройств: префикс идентификатора, источник
 (заголовок HWID или `network-client`), клиент из `User-Agent`, адрес и время

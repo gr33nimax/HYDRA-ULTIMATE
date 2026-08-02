@@ -50,8 +50,8 @@ def test_253_schema_fixture_survives_v4_migration_and_round_trip(
     migrated_bytes = state_file.read_bytes()
     second_migration = state_module.migrate_persisted_state()
 
-    assert first_migration == {"from": 3, "to": 5, "changed": True}
-    assert second_migration == {"from": 5, "to": 5, "changed": False}
+    assert first_migration == {"from": 3, "to": 6, "changed": True}
+    assert second_migration == {"from": 6, "to": 6, "changed": False}
     assert state_file.read_bytes() == migrated_bytes
 
     loaded = state_module.load_state()
@@ -59,6 +59,7 @@ def test_253_schema_fixture_survives_v4_migration_and_round_trip(
     assert loaded.version == state_module.SCHEMA_VERSION
     assert loaded.revision == 0
     assert loaded.users[0].device_limit == 2
+    assert len(loaded.users[0].hydrabox_jwe_key) == 43
     assert loaded.users[0].devices == {
         "cd1fe8030198a45df90f44a04cda869fbbf799d4e78294337cdee955e1203658": {
             "first_seen": "2026-07-24T12:00:00+00:00",

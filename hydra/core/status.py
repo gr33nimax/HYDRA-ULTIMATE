@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
+from hydra.core.hydrabox_keys import hydrabox_jwe_kid
 from hydra.core.runtime_state import PluginStatusReader, RuntimeSnapshot
 from hydra.core.state_models import AppState, User
 
@@ -16,6 +17,10 @@ def public_user(user: User) -> dict:
     """Return user metadata without exposing protocol secrets."""
     payload = asdict(user)
     payload.pop("credentials", None)
+    private_key = str(payload.pop("hydrabox_jwe_key", "") or "")
+    payload["hydrabox_jwe_kid"] = (
+        hydrabox_jwe_kid(private_key) if private_key else ""
+    )
     devices = payload.pop("devices", {}) or {}
     payload["devices_registered"] = len(devices)
     # The identifier is a salted hash of what the client reported; a short

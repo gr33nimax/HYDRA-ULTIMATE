@@ -245,6 +245,13 @@ class ApplicationService:
     ) -> User:
         return self.users.set_device_limit(state, email, limit, reset=reset)
 
+    def rotate_user_hydrabox_key(
+        self,
+        state: AppState,
+        email: str,
+    ) -> User:
+        return self.users.rotate_hydrabox_key(state, email)
+
     def user_result(self, operation: str, state: AppState, email: str, user: User | None = None) -> ServiceResult:
         """Run a user operation and normalize expected failures for adapters."""
         try:

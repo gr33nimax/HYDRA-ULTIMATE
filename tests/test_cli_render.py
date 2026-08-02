@@ -26,6 +26,7 @@ PUBLIC_COMMAND_IDS = {
     "user.ensure-default",
     "user.rename",
     "user.set-device-limit",
+    "user.rotate-hydrabox-key",
     "user.block",
     "user.unblock",
     "user.remove",

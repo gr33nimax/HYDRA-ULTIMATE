@@ -21,6 +21,7 @@ class UserOperations(Protocol):
     def set_user_device_limit(
         self, state: AppState, email: str, limit: int, *, reset: bool = False,
     ) -> None: ...
+    def rotate_user_hydrabox_key(self, state: AppState, email: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,13 @@ class UserService:
         self, state: AppState, email: str, limit: int, *, reset: bool = False,
     ) -> User:
         self.operations.set_user_device_limit(state, email, limit, reset=reset)
+        user = find_user(state, email)
+        if user is None:
+            raise RuntimeError("user was not found")
+        return user
+
+    def rotate_hydrabox_key(self, state: AppState, email: str) -> User:
+        self.operations.rotate_user_hydrabox_key(state, email)
         user = find_user(state, email)
         if user is None:
             raise RuntimeError("user was not found")

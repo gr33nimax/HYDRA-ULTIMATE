@@ -19,6 +19,7 @@ from hydra.services.subscriptions.client_configs import (
 )
 from hydra.services.subscriptions.proxy_protocol import read_source_address
 from hydra.services.subscriptions.devices import (
+    hydrabox_client_fingerprint,
     register_subscription_device,
     subscription_fingerprint,
 )
@@ -26,7 +27,10 @@ from hydra.services.subscriptions.links import generate_base64_sub
 from hydra.services.subscriptions.hydrabox import (
     HYDRABOX_MEDIA_TYPE,
     generate_hydrabox_subscription,
-    serialize_hydrabox_subscription,
+)
+from hydra.services.subscriptions.jwe import (
+    JWE_MEDIA_TYPE,
+    encrypt_hydrabox_subscription,
 )
 from hydra.services.subscriptions.metadata import (
     SUPPORTED_SUBSCRIPTION_FORMATS,
@@ -90,17 +94,18 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             )
             return content, "application/json; charset=utf-8", "singbox.json"
         if response_format == "hydrabox":
-            content = serialize_hydrabox_subscription(
+            content = encrypt_hydrabox_subscription(
                 generate_hydrabox_subscription(
                     user,
                     state,
                     plugins=plugins,
                 ),
+                user.hydrabox_jwe_key,
             )
             return (
                 content,
-                f"{HYDRABOX_MEDIA_TYPE}; charset=utf-8",
-                "subscription.hbx.json",
+                JWE_MEDIA_TYPE,
+                "subscription.hbx.jwe.json",
             )
         return (
             generate_base64_sub(user, state, plugins=plugins),
@@ -139,11 +144,20 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             self._send_error(404, "Not found")
             return
 
-        fingerprint = subscription_fingerprint(
-            self.headers,
-            str(self.client_address[0] if self.client_address else ""),
-            parameters,
-        )
+        client_ip = str(self.client_address[0] if self.client_address else "")
+        try:
+            fingerprint = (
+                hydrabox_client_fingerprint(self.headers, client_ip)
+                if response_format == "hydrabox"
+                else subscription_fingerprint(
+                    self.headers,
+                    client_ip,
+                    parameters,
+                )
+            )
+        except ValueError as exc:
+            self._send_error(400, str(exc))
+            return
         state, _, device_status = register_subscription_device(
             token,
             fingerprint,

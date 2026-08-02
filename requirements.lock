@@ -1,5 +1,6 @@
 # Runtime dependencies used by bootstrap.sh. Keep this file intentionally
 # small: transitive resolution remains platform-specific, while direct
 # dependencies are pinned for reproducible HYDRA behavior.
+cryptography==49.0.0
 python-telegram-bot[job-queue]==22.8
 qrcode==8.2

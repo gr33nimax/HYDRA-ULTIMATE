@@ -90,8 +90,16 @@ Extended для каждого доступного desktop/mobile профил�
 `route.final` ссылается на первый AWG endpoint. Нативная INI-конфигурация
 AmneziaWG при этом не изменяется.
 
-`?format=hydrabox` отдаёт сырой UTF-8 JSON с media type
-`application/vnd.hydrabox.subscription+json`. Envelope имеет точные
+`?format=hydrabox` принимает только `User-Agent: HydraBox/<version>` и
+`X-Hydra-HWID: hbx1_<base64url-sha256>`. Неверная идентификация возвращает
+HTTP 400, превышение device limit — HTTP 403. Ответ всегда имеет media type
+`application/jose+json` и представляет flattened JWE с единственными полями
+`protected`, `iv`, `ciphertext`, `tag`. Protected header фиксирован:
+`alg=dir`, `enc=A256GCM`, `typ=hbx+jwe`,
+`cty=application/vnd.hydrabox.subscription+json`; `kid` является безопасным
+идентификатором ключа. Plaintext HydraBox fallback отсутствует.
+
+После расшифровки envelope имеет точные
 `api_version=hydrabox.io/subscription/v1` и `kind=SubscriptionData`, стабильную
 identity tuple `(issuer, subscription_id, stable)` и использует revision state
 как старшую часть монотонного `sequence`; младшая часть содержит ревизию
@@ -107,9 +115,16 @@ AmneziaWG-параметры `I1`–`I5`, `J1`–`J3` и `Itime` сохраня�
 исходными тегами, а `profiles` явно указывает только на корневые
 selectable entrypoints. Пользовательское имя профиля берётся из
 `PluginMeta.display_name`, с fallback на короткий `PluginMeta.name`;
-операторское `PluginMeta.description` в подписку не публикуется. Ответ не
-кодируется в Base64, ограничен 16 MiB и
-публикуется с `Cache-Control: private, no-store`.
+операторское `PluginMeta.description` в подписку не публикуется. Plaintext
+ограничен 12 MiB, внешний JWE — 16 MiB; каждый ответ получает случайный
+12-байтовый IV и 16-байтовый authentication tag и публикуется с
+`Cache-Control: private, no-store`.
+
+TUI и генератор выдают ссылку
+`https://<origin>/sub/<id>?format=hydrabox#hbx-key=<base64url-key>`. Fragment не
+передаётся HTTP-серверу. Per-user 256-битный ключ хранится только в private
+state; `status`, логи и публичный JSON показывают максимум производный `kid`.
+Ротация немедленно инвалидирует все ранее выданные HydraBox-ссылки.
 
 ### `enhancement` — сетевые расширения
 

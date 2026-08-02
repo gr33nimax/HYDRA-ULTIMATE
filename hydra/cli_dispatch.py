@@ -181,6 +181,9 @@ def _user_command(
             reset=args.reset,
         )
         return {"ok": True, "user": public_user(user)}
+    if action == "rotate-hydrabox-key":
+        user = app.rotate_user_hydrabox_key(state, args.email)
+        return {"ok": True, "user": public_user(user)}
     operations = {
         "block": app.block_user,
         "unblock": app.unblock_user,

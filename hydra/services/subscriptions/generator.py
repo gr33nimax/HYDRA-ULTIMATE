@@ -14,6 +14,7 @@ from hydra.services.subscriptions.client_configs import (
 )
 from hydra.services.subscriptions.devices import (
     DeviceFingerprint,
+    hydrabox_client_fingerprint,
     register_subscription_device,
     subscription_device_id,
     subscription_fingerprint,
@@ -60,6 +61,7 @@ __all__ = [
     "generate_base64_sub",
     "generate_client_config",
     "generate_hydrabox_subscription",
+    "hydrabox_client_fingerprint",
     "generate_links",
     "generate_mieru_nekobox_link",
     "generate_nekobox_sub",

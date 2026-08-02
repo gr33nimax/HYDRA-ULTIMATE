@@ -23,7 +23,10 @@ from hydra.core.state_migrations import (
     migrate_v1_to_v2,
     migrate_v2_to_v3,
     migrate_v3_to_v4,
+    migrate_v4_to_v5,
+    migrate_v5_to_v6,
 )
+from hydra.core.hydrabox_keys import generate_hydrabox_jwe_key
 from hydra.core.state_runtime import (
     _RUNTIME_INSTALL_KEYS,
     desired_payload as _desired_payload,
@@ -223,6 +226,9 @@ def migrate_persisted_state() -> dict[str, int | bool]:
         migrated = _migrate(raw, from_version)
         _validate_raw_state(migrated)
         state = _from_dict(AppState, migrated)
+        for user in state.users:
+            if not user.hydrabox_jwe_key:
+                user.hydrabox_jwe_key = generate_hydrabox_jwe_key()
         _save_state_unlocked(state, current=copy.deepcopy(state))
         return {
             "from": from_version,
@@ -239,6 +245,9 @@ def _save_state_unlocked(
     *,
     current: AppState | None = None,
 ) -> None:
+    for user in state.users:
+        if not user.hydrabox_jwe_key:
+            user.hydrabox_jwe_key = generate_hydrabox_jwe_key()
     if current is None:
         state.revision = max(1, int(state.revision))
     elif _desired_payload(state) != _desired_payload(current):

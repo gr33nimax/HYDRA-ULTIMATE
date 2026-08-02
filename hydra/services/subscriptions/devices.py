@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,6 +21,8 @@ HWID_HEADERS = (
 HWID_PARAMS = ("hwid", "device_id")
 NETWORK_SOURCE = "network-client"
 _MAX_AGENT = 120
+_HYDRABOX_HWID = re.compile(r"^hbx1_[A-Za-z0-9_-]{43}$")
+_HYDRABOX_AGENT = re.compile(r"^HydraBox/[^\s/]+(?:\s|$)")
 
 
 @dataclass(frozen=True)
@@ -83,6 +86,25 @@ def subscription_fingerprint(
     return DeviceFingerprint(
         device_id=hashlib.sha256(f"{source}:{raw}".encode()).hexdigest(),
         source=source,
+        user_agent=agent,
+        address=str(client_ip or ""),
+    )
+
+
+def hydrabox_client_fingerprint(
+    headers: Mapping[str, str],
+    client_ip: str,
+) -> DeviceFingerprint:
+    """Validate the strict HydraBox identity contract and hash its HWID."""
+    agent = _normalized_agent(headers.get("User-Agent", ""))
+    if not _HYDRABOX_AGENT.match(agent):
+        raise ValueError("HydraBox User-Agent is required")
+    raw_hwid = str(headers.get("X-Hydra-HWID", "") or "").strip()
+    if not _HYDRABOX_HWID.fullmatch(raw_hwid):
+        raise ValueError("Valid X-Hydra-HWID is required")
+    return DeviceFingerprint(
+        device_id=hashlib.sha256(raw_hwid.encode("ascii")).hexdigest(),
+        source="x-hydra-hwid",
         user_agent=agent,
         address=str(client_ip or ""),
     )
@@ -158,6 +180,7 @@ __all__ = [
     "HWID_PARAMS",
     "NETWORK_SOURCE",
     "DeviceFingerprint",
+    "hydrabox_client_fingerprint",
     "register_subscription_device",
     "subscription_device_id",
     "subscription_fingerprint",

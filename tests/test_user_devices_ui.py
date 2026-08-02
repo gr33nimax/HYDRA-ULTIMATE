@@ -4,11 +4,14 @@ from __future__ import annotations
 import hashlib
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from hydra.core.state import AppState, User
 from hydra.core.status import public_user
 from hydra.services.device_sessions import COUNTERS_KEY, update_sessions
 from hydra.services.subscriptions.devices import (
     NETWORK_SOURCE,
+    hydrabox_client_fingerprint,
     register_subscription_device,
     subscription_fingerprint,
 )
@@ -55,6 +58,21 @@ def test_reported_hwid_is_preferred_over_the_network_guess():
     assert guessed.source == NETWORK_SOURCE
     assert guessed.reported_hwid is False
     assert reported.device_id != guessed.device_id
+
+
+def test_hydrabox_identity_requires_strict_user_agent_and_hwid():
+    hwid = "hbx1_" + "a" * 43
+    fingerprint = hydrabox_client_fingerprint(
+        {"User-Agent": "HydraBox/0.3.0", "X-Hydra-HWID": hwid},
+        "198.51.100.7",
+    )
+
+    assert fingerprint.device_id == hashlib.sha256(hwid.encode()).hexdigest()
+    assert fingerprint.source == "x-hydra-hwid"
+    with pytest.raises(ValueError, match="User-Agent"):
+        hydrabox_client_fingerprint({"X-Hydra-HWID": hwid}, "")
+    with pytest.raises(ValueError, match="X-Hydra-HWID"):
+        hydrabox_client_fingerprint({"User-Agent": "HydraBox/0.3.0"}, "")
 
 
 def test_network_fingerprint_survives_an_address_change_for_the_same_client():

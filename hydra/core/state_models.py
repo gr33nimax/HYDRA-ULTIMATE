@@ -1,8 +1,7 @@
 """Pure persisted-state schema and semantic validation.
 
 This module deliberately has no filesystem, locking, or process concerns.
-Domain and plugin code can depend on these types without depending on the
-state-storage adapter exposed by :mod:`hydra.core.state`.
+Domain and plugin code can depend on these types without the storage adapter.
 """
 from __future__ import annotations
 
@@ -10,12 +9,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from hydra.contracts import JsonValue, PluginConfig, validate_json_object
-
-
+from hydra.core.hydrabox_keys import validate_optional_hydrabox_jwe_key
 from hydra.core.state_devices import validate_device_map
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class UnsupportedStateVersion(RuntimeError):
@@ -48,6 +46,7 @@ class User:
     device_limit: int = 0
     # device id -> {first_seen, last_seen, source, user_agent, address}
     devices: dict[str, dict] = field(default_factory=dict)
+    hydrabox_jwe_key: str = ""
 
 
 @dataclass
@@ -127,6 +126,9 @@ def validate_raw_state(raw: object) -> None:
             device_limit = user.get("device_limit", 0)
             if type(device_limit) is not int or device_limit < 0:
                 raise ValueError("user device limit must be a non-negative integer")
+            validate_optional_hydrabox_jwe_key(
+                user.get("hydrabox_jwe_key", ""),
+            )
             validate_device_map(
                 user.get("devices", {}),
                 legacy=int(raw.get("version", SCHEMA_VERSION)) < 5,
@@ -211,6 +213,10 @@ def validate_state(state: AppState) -> None:
             raise ValueError(
                 f"device bindings are invalid for {user.email}: {exc}",
             ) from None
+        validate_optional_hydrabox_jwe_key(
+            user.hydrabox_jwe_key,
+            owner=user.email,
+        )
     ports = {
         "network.tproxy_port": state.network.tproxy_port,
         "network.clash_api_port": state.network.clash_api_port,

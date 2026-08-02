@@ -79,12 +79,15 @@ def get_subscription_urls(user: User, state: AppState) -> dict[str, str]:
         encoded = urllib.parse.quote(value, safe="")
         return f"{base}{separator}format={encoded}"
 
+    hydrabox_url = with_format("hydrabox")
+    if user.hydrabox_jwe_key:
+        hydrabox_url = f"{hydrabox_url}#hbx-key={user.hydrabox_jwe_key}"
     return {
         "auto": base,
         "nekobox": with_format("nekobox"),
         "throne": with_format("throne"),
         "singbox": with_format("singbox"),
-        "hydrabox": with_format("hydrabox"),
+        "hydrabox": hydrabox_url,
     }
 
 

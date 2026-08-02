@@ -241,7 +241,7 @@ def _show_subscription_links(
     print(f"  NekoBox:       {CYAN}{urls['nekobox']}{NC}")
     print(f"  Throne:        {CYAN}{urls['throne']}{NC}")
     print(f"  Sing-Box JSON: {CYAN}{urls['singbox']}{NC}")
-    print(f"  HydraBox v1:   {CYAN}{urls['hydrabox']}{NC}")
+    print(f"  HydraBox JWE:  {CYAN}{urls['hydrabox']}{NC}")
     print(
         f"\n  {DIM}Ссылка содержит секретный токен — "
         f"передавайте её только владельцу.{NC}",
