@@ -1,4 +1,4 @@
-"""Share-link and base64 subscription generation."""
+"""Share-link and client-specific base64 subscription generation."""
 from __future__ import annotations
 
 import base64
@@ -9,6 +9,9 @@ from hydra.services.subscriptions.access import SubscriptionPluginAccess
 from hydra.services.subscriptions.serialization import (
     clean_link_to_sn,
     generate_awg_sn_link,
+)
+from hydra.services.subscriptions.shadowrocket import (
+    build_shadowrocket_https_link,
 )
 
 
@@ -126,13 +129,12 @@ def _awg_links(
         return []
 
 
-def generate_base64_sub(
+def _base_subscription_links(
     user: User,
     state: AppState,
     *,
     plugins: SubscriptionPluginAccess,
-) -> str:
-    """Build a base64 subscription, including native NekoBox variants."""
+) -> list[str]:
     formatted = [
         _tag_link(link, user)
         for link in generate_links(user, state, plugins=plugins)
@@ -144,5 +146,41 @@ def generate_base64_sub(
         if (converted := clean_link_to_sn(link, user))
     )
     links.extend(_awg_links(user, state, plugins))
+    return links
+
+
+def generate_base64_sub(
+    user: User,
+    state: AppState,
+    *,
+    plugins: SubscriptionPluginAccess,
+) -> str:
+    """Build a generic base64 subscription with native NekoBox variants."""
+    links = _base_subscription_links(user, state, plugins=plugins)
     payload = "\n".join(links) + "\n"
     return base64.b64encode(payload.encode()).decode()
+
+
+def generate_shadowrocket_sub(
+    user: User,
+    state: AppState,
+    *,
+    plugins: SubscriptionPluginAccess,
+) -> str:
+    """Build a base64 list with Naive TCP links native to Shadowrocket."""
+    links: list[str] = []
+    for link in _base_subscription_links(user, state, plugins=plugins):
+        try:
+            scheme = urllib.parse.urlsplit(link).scheme.lower()
+        except ValueError:
+            links.append(link)
+            continue
+        if scheme == "naive+quic":
+            continue
+        links.append(
+            build_shadowrocket_https_link(link)
+            if scheme == "naive+https"
+            else link
+        )
+    payload = "\n".join(links) + "\n"
+    return base64.b64encode(payload.encode()).decode("ascii")

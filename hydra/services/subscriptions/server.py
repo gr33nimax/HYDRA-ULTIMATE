@@ -22,7 +22,10 @@ from hydra.services.subscriptions.devices import (
     register_subscription_device,
     subscription_fingerprint,
 )
-from hydra.services.subscriptions.links import generate_base64_sub
+from hydra.services.subscriptions.links import (
+    generate_base64_sub,
+    generate_shadowrocket_sub,
+)
 from hydra.services.subscriptions.metadata import (
     SUPPORTED_SUBSCRIPTION_FORMATS,
     generate_userinfo_header,
@@ -76,6 +79,12 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
                 generate_throne_sub(user, state, plugins=plugins),
                 "text/plain; charset=utf-8",
                 "throne.txt",
+            )
+        if response_format == "shadowrocket":
+            return (
+                generate_shadowrocket_sub(user, state, plugins=plugins),
+                "text/plain; charset=utf-8",
+                "shadowrocket.txt",
             )
         if response_format in ("singbox", "sing-box", "json"):
             content = json.dumps(

@@ -145,6 +145,25 @@ class NaiveConfigurationMixin:
         protocol.config["network"] = network
         return True
 
+    def set_domain(
+        self,
+        state: PluginStateAccess,
+        domain: str,
+    ) -> bool:
+        """Validate and update the shared NaiveProxy TLS domain."""
+        normalized = str(domain or "").strip().lower().rstrip(".")
+        if (
+            not normalized
+            or "://" in normalized
+            or any(character.isspace() for character in normalized)
+        ):
+            raise ValueError(
+                "Некорректный домен NaiveProxy: укажите имя без схемы "
+                "и пробелов",
+            )
+        state.network.domain = normalized
+        return True
+
     def on_enable(self, state: PluginStateAccess) -> None:
         protocol = state.protocols.get("naive")
         if protocol is None:

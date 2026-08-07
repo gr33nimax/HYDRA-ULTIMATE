@@ -68,7 +68,7 @@ class NaivePlugin(
         version="2.0.0",
         needs_domain=True,
         required_commands=("systemctl",),
-        commands=("set_transport", "set_decoy_theme"),
+        commands=("set_domain", "set_transport", "set_decoy_theme"),
         queries=("recent_connections",),
         tls_domain_source="network",
         config_defaults=(

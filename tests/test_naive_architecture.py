@@ -34,6 +34,7 @@ OPERATIONAL_METHODS = {
     "on_enable",
     "recent_connections",
     "rollback",
+    "set_domain",
     "set_transport",
     "snapshot",
     "status",
@@ -109,6 +110,7 @@ def test_naive_facade_contains_composition_and_compatibility_only():
 def test_naive_capabilities_have_single_cohesive_owners():
     expected = {
         "configure": "hydra.plugins.naive.configuration",
+        "set_domain": "hydra.plugins.naive.configuration",
         "set_transport": "hydra.plugins.naive.configuration",
         "generate_client_config": "hydra.plugins.naive.profiles",
         "client_links": "hydra.plugins.naive.profiles",

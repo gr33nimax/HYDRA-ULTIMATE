@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -66,6 +67,91 @@ def test_plugin_lifecycle_uses_the_service_owned_container(tmp_path):
     assert service.enable(state, "local") is True
     assert state.protocols["local"].enabled is True
     assert plugin.enabled == 1
+
+
+def test_failed_tls_activation_restores_domain_but_keeps_new_install(tmp_path):
+    service, plugin = _service(tmp_path)
+    plugin.meta = PluginMeta(
+        name="local",
+        description="local TLS test plugin",
+        tls_domain_source="protocol",
+    )
+    saved: list[AppState] = []
+    service.save_state = lambda current: saved.append(copy.deepcopy(current))
+    service.certificates = SimpleNamespace(
+        ensure=lambda *_args: (_ for _ in ()).throw(
+            RuntimeError("certificate failed"),
+        ),
+    )
+    service.apply_config = lambda _state: True
+    state = AppState(protocols={"local": PluginState()})
+
+    try:
+        service.activate_plugin(
+            state,
+            "local",
+            domain="vpn.example.com",
+        )
+        assert False, "certificate failure must be reported"
+    except RuntimeError as exc:
+        assert str(exc) == "certificate failed"
+
+    assert state.protocols["local"].installed is True
+    assert state.protocols["local"].enabled is False
+    assert "domain" not in state.protocols["local"].config
+    assert "domain" not in saved[-1].protocols["local"].config
+
+
+def test_successful_tls_activation_commits_staged_domain(tmp_path):
+    service, plugin = _service(tmp_path)
+    plugin.meta = PluginMeta(
+        name="local",
+        description="local TLS test plugin",
+        tls_domain_source="protocol",
+    )
+    service.apply_config = lambda _state: True
+    state = AppState(protocols={"local": PluginState()})
+
+    assert service.activate_plugin(
+        state,
+        "local",
+        domain="VPN.Example.COM.",
+    )
+
+    assert state.protocols["local"].installed is True
+    assert state.protocols["local"].enabled is True
+    assert state.protocols["local"].config["domain"] == "vpn.example.com"
+
+
+def test_failed_network_domain_activation_restores_previous_domain(tmp_path):
+    service, plugin = _service(tmp_path)
+    plugin.meta = PluginMeta(
+        name="local",
+        description="local network TLS test plugin",
+        tls_domain_source="network",
+    )
+    service.certificates = SimpleNamespace(
+        ensure=lambda *_args: (_ for _ in ()).throw(
+            RuntimeError("certificate failed"),
+        ),
+    )
+    service.apply_config = lambda _state: True
+    state = AppState(protocols={"local": PluginState()})
+    state.network.domain = "old.example.com"
+
+    try:
+        service.activate_plugin(
+            state,
+            "local",
+            domain="new.example.com",
+        )
+        assert False, "certificate failure must be reported"
+    except RuntimeError:
+        pass
+
+    assert state.network.domain == "old.example.com"
+    assert state.protocols["local"].installed is True
+    assert state.protocols["local"].enabled is False
 
 
 def test_instance_orchestrator_does_not_import_global_registry():

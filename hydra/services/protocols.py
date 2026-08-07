@@ -15,6 +15,13 @@ class ProtocolOperations(Protocol):
     def install_plugin(self, state: AppState, name: str) -> bool: ...
     def reinstall_plugin(self, state: AppState, name: str) -> bool: ...
     def uninstall_plugin(self, state: AppState, name: str) -> bool: ...
+    def activate_plugin(
+        self,
+        state: AppState,
+        name: str,
+        *,
+        domain: str | None = None,
+    ) -> bool: ...
     def enable(self, state: AppState, name: str) -> bool: ...
     def disable(self, state: AppState, name: str) -> bool: ...
 
@@ -331,6 +338,20 @@ class ProtocolService:
 
     def uninstall(self, state: AppState, name: str) -> bool:
         return self.operations.uninstall_plugin(state, name)
+
+    def activate(
+        self,
+        state: AppState,
+        name: str,
+        *,
+        domain: str | None = None,
+    ) -> bool:
+        """Install and enable a protocol with staged activation input."""
+        return self.operations.activate_plugin(
+            state,
+            name,
+            domain=domain,
+        )
 
     def enable(self, state: AppState, name: str) -> bool:
         return self.operations.enable(state, name)

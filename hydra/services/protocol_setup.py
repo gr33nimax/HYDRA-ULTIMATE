@@ -55,6 +55,29 @@ class ProtocolSetupService:
     certificates: CertificateProvider
     get_plugin: Callable[[str], BasePlugin | None]
 
+    def stage_domain(self, state: AppState, name: str, domain: object) -> str:
+        """Validate and stage an explicit TLS domain in desired state."""
+        plugin = self.get_plugin(name)
+        if plugin is None:
+            raise LookupError(f"Неизвестный протокол: {name}")
+        capabilities = getattr(plugin.meta, "capabilities", None)
+        if not isinstance(capabilities, PluginCapabilities):
+            raise ValueError(f"Протокол {name} не поддерживает TLS-домен")
+        source = capabilities.tls_domain_source
+        if source not in {"network", "protocol"}:
+            raise ValueError(f"Протокол {name} не поддерживает TLS-домен")
+
+        normalized = normalize_required_domain(domain)
+        if source == "network":
+            state.network.domain = normalized
+            return normalized
+
+        protocol = state.protocols.get(name)
+        if protocol is None:
+            raise ValueError(f"Конфигурация {name} отсутствует")
+        protocol.config["domain"] = normalized
+        return normalized
+
     def prepare_enable(self, state: AppState, name: str) -> None:
         plugin = self.get_plugin(name)
         if plugin is None:

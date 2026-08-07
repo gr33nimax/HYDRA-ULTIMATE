@@ -53,18 +53,21 @@ class CertificateProvisioner:
         return cert, key
 
     def _obtain(self, domain: str) -> bool:
-        if not self.host.which("certbot"):
-            update = self.host.run(["apt-get", "update", "-qq"], timeout=120)
-            install = self.host.run(
-                ["apt-get", "install", "-y", "-qq", "certbot"],
-                timeout=180,
-            )
-            if update.returncode != 0 or install.returncode != 0:
-                return False
-
         stopped: list[str] = []
         services = ("caddy-l4", "caddy-naive", "nginx", "apache2")
         try:
+            if not self.host.which("certbot"):
+                update = self.host.run(
+                    ["apt-get", "update", "-qq"],
+                    timeout=120,
+                )
+                install = self.host.run(
+                    ["apt-get", "install", "-y", "-qq", "certbot"],
+                    timeout=180,
+                )
+                if update.returncode != 0 or install.returncode != 0:
+                    return False
+
             for service in services:
                 status = self.host.run(
                     ["systemctl", "is-active", service],
@@ -102,10 +105,13 @@ class CertificateProvisioner:
             return False
         finally:
             for service in stopped:
-                self.host.run(
-                    ["systemctl", "start", service],
-                    capture_output=True,
-                )
+                try:
+                    self.host.run(
+                        ["systemctl", "start", service],
+                        capture_output=True,
+                    )
+                except (OSError, HostOperationError):
+                    pass
 
     def _existing(self, domain: str, config: dict) -> tuple[str, str]:
         cert, key = resolve_tls_material(domain, config)

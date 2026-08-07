@@ -60,6 +60,7 @@ PURE_COMMAND_HELPERS = (
     (Hysteria2Plugin, "set_congestion"),
     (Hysteria2Plugin, "set_obfs_password"),
     (MieruPlugin, "set_preset"),
+    (NaivePlugin, "set_domain"),
     (NaivePlugin, "set_transport"),
     (ShadowTLSPlugin, "set_handshake_sni"),
     (SnellPlugin, "set_settings"),

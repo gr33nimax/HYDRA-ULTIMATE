@@ -40,7 +40,8 @@ curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/boots
 Установщик проверяет права и систему, устанавливает зависимости и Sing-Box
 Extended, разрешает точный commit выбранной ветки, разворачивает код в
 `/opt/hydra`, создаёт изолированное Python-окружение и регистрирует команду
-`hydra`. Журнал — `/var/log/hydra/install.log`.
+`hydra`. Системный `certbot` устанавливается заранее, до первой активации
+TLS-транспорта. Журнал — `/var/log/hydra/install.log`.
 
 Main-установщик по умолчанию устанавливает ветку `main`, как и main-updater.
 Переменная `HYDRA_REF` нужна только для явного выбора другой ветки.

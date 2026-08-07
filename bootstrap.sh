@@ -159,7 +159,7 @@ if [[ ! -f /var/lib/hydra/state.json && ! -f /var/lib/hydra/master.key ]]; then
 fi
 
 # Дополнительные пакеты
-$PKG_INSTALL iptables iproute2 gnupg ca-certificates ufw
+$PKG_INSTALL iptables iproute2 gnupg ca-certificates certbot ufw
 
 step 3 5 "Sing-Box Extended"
 if ! command -v sing-box &> /dev/null || ! sing-box version 2>/dev/null | head -1 | grep -q "extended"; then

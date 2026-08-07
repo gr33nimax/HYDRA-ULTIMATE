@@ -4,13 +4,16 @@ from unittest.mock import patch, MagicMock
 import base64
 import json
 import sys
+import urllib.parse
 import zlib
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.services.subscriptions.generator import (
     SubscriptionPluginService,
+    build_shadowrocket_https_link,
     generate_links,
     generate_base64_sub,
+    generate_shadowrocket_sub,
     generate_singbox_config,
     generate_nekobox_sub,
     generate_throne_sub,
@@ -21,6 +24,7 @@ from hydra.services.subscriptions.generator import (
     get_subscription_urls,
     get_user_access_status,
 )
+from hydra.services.subscriptions.server import SubscriptionHandler
 from hydra.core.state import AppState, User
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
 
@@ -189,6 +193,7 @@ def test_subscription_urls_escape_token_and_offer_canonical_formats():
 
     assert urls["auto"] == "https://sub.example.com/sub/token%2Fwith%20space"
     assert urls["nekobox"].endswith("?format=nekobox")
+    assert urls["shadowrocket"].endswith("?format=shadowrocket")
     assert urls["throne"].endswith("?format=throne")
     assert urls["singbox"].endswith("?format=singbox")
 
@@ -219,6 +224,83 @@ def test_generate_base64_sub():
     encoded = generate_base64_sub(user, state, plugins=_plugins(p))
     decoded = base64.b64decode(encoded).decode()
     assert "mock://a@x.com@example.com" in decoded
+
+
+def test_build_shadowrocket_https_link_uses_unpadded_urlsafe_credentials():
+    link = build_shadowrocket_https_link(
+        "naive+https://user:p%40ss@example.com:443"
+        "?security=tls&sni=example.com#Alice%20NaiveProxy",
+    )
+
+    parsed = urllib.parse.urlsplit(link)
+    encoded = parsed.netloc
+    padded = encoded + "=" * (-len(encoded) % 4)
+
+    assert parsed.scheme == "https"
+    assert base64.urlsafe_b64decode(padded).decode() == (
+        "user:p@ss@example.com:443"
+    )
+    assert not {"+", "/", "="} & set(encoded)
+    assert urllib.parse.parse_qs(parsed.query)["remarks"] == [
+        "Alice NaiveProxy",
+    ]
+
+
+def test_generate_shadowrocket_sub_replaces_naive_https_link():
+    plugin = MockTransport()
+    plugin.client_links = MagicMock(return_value=[
+        "naive+https://user:password@example.com:443"
+        "?security=tls&sni=example.com#ignored",
+        "naive+quic://user:password@example.com:443#ignored-quic",
+        "vless://token@example.com:443#preserved",
+    ])
+    user = _make_user("alice@example.com")
+    state = _make_state([user])
+
+    encoded = generate_shadowrocket_sub(
+        user,
+        state,
+        plugins=_plugins(plugin),
+    )
+    links = base64.b64decode(encoded).decode().splitlines()
+
+    assert not any(link.startswith("naive+https://") for link in links)
+    assert not any(link.startswith("naive+quic://") for link in links)
+    assert any(link.startswith("vless://") for link in links)
+    native = next(link for link in links if link.startswith("https://"))
+    parsed = urllib.parse.urlsplit(native)
+    padded = parsed.netloc + "=" * (-len(parsed.netloc) % 4)
+    assert base64.urlsafe_b64decode(padded).decode() == (
+        "user:password@example.com:443"
+    )
+    assert urllib.parse.parse_qs(parsed.query)["remarks"] == [
+        "alice@example.com NaiveProxy",
+    ]
+
+
+def test_subscription_handler_routes_shadowrocket_format_to_native_builder():
+    user = _make_user("alice@example.com")
+    state = _make_state([user])
+    plugins = _plugins(MockTransport())
+    handler = object.__new__(SubscriptionHandler)
+
+    with patch(
+        "hydra.services.subscriptions.server.generate_shadowrocket_sub",
+        return_value="encoded-subscription",
+    ) as generate:
+        result = handler._subscription(
+            "shadowrocket",
+            user,
+            state,
+            plugins,
+        )
+
+    assert result == (
+        "encoded-subscription",
+        "text/plain; charset=utf-8",
+        "shadowrocket.txt",
+    )
+    generate.assert_called_once_with(user, state, plugins=plugins)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -509,6 +591,9 @@ def test_resolve_subscription_format_uses_explicit_override_then_user_agent():
     assert resolve_subscription_format("base64", "NekoBox/Android/1.4.2") == "base64"
     assert resolve_subscription_format(None, "NekoBox/Android/1.4.2") == "nekobox"
     assert resolve_subscription_format("auto", "Throne/1.0") == "throne"
+    assert resolve_subscription_format(None, "Shadowrocket/2.2.68") == (
+        "shadowrocket"
+    )
     assert resolve_subscription_format(None, "curl/8") == "base64"
 
 
