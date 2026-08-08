@@ -9,6 +9,7 @@ from hydra.core.errors import ErrorCode, ServiceResult, failed_result
 from hydra.plugins.base import BasePlugin, PluginCategory
 from hydra.plugins.invoker import PluginInvoker
 from hydra.services.reconciliation import ReconciliationService
+from hydra.services.maintenance import MaintenanceJob
 
 
 class ProtocolOperations(Protocol):
@@ -32,19 +33,6 @@ class ProtocolCatalog(Protocol):
     def enhancements(self) -> list[BasePlugin]: ...
     def security(self) -> list[BasePlugin]: ...
     def status_all(self, state: AppState | None = None) -> dict[str, dict[str, Any]]: ...
-
-
-@dataclass(frozen=True)
-class MaintenanceJob:
-    """Adapter-neutral projection of one plugin-declared scheduled task."""
-
-    plugin_name: str
-    action: str
-    title: str
-    description: str
-    due_query: str
-    enabled_flag: str
-    apply_on_success: bool
 
 
 @dataclass(frozen=True)

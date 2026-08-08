@@ -71,33 +71,34 @@
   `journalctl -f`, сохраняя прежнюю атрибуцию и убирая второй долгоживущий
   процесс чтения журнала.
 
-### qWDTT
+### Calls / qWDTT
 
 - Сборка `wdtt-server` теперь охватывает весь корневой Go-пакет upstream, включая
   вынесенный `admin_api.go`; установка больше не падает с
   `undefined: registerAdminAPIRoutes`.
-- В TUI добавлена настройка VK headless creator: cookies хранятся в защищённом
-  файле, запускаются четыре независимых creator-инстанса, а единственная
-  master-ссылка `qwdtt://` получает четыре актуальных хеша звонков.
-- TUI автоматически выбирает CLI bundle whitelist-bypass для архитектуры VPS,
-  проверяет SHA-256 из GitHub Release, извлекает ELF `headless-vk-creator`,
-  атомарно устанавливает его с правами `0755` и создаёт каталог cookies `0700`.
-- Ручной ввод cookies удалён: headless setup читает многострочный Creator JSON
-  только из `/etc/hydra/cookiesvk/cookies-vk.json` и приводит файл к правам `0600`.
-- Sync Agent пересоздаёт звонки по настраиваемому интервалу от 1 до 24 часов
-  (по умолчанию раз в сутки) и атомарно обновляет `/etc/wdtt/qwdtt_link.txt`;
-  при ошибке прежняя ссылка не перезаписывается.
+- Добавлен экспериментальный транспорт `calls`: native VK `call` inbound для
+  Sing-Box Extended, feature-probe без автоматического обновления ядра,
+  транзакционное создание/ротация комнаты и admin-only SOCKS joiner profile.
+- `ApplicationService.calls` стал единым владельцем VK cookies, join-link,
+  creator lifecycle и maintenance. WDTT больше не объявляет install/stop/
+  uninstall/timer actions и отвечает только за `qwdtt://`-артефакт.
+- В TUI появился отдельный экран `Calls · VK` для native Calls и четырёх
+  qWDTT-комнат. Cookies читаются из `/etc/hydra/calls/vk/cookies-vk.json`;
+  native link и pool runtime находятся в `/var/lib/hydra/calls/vk/`.
+- qWDTT rotation стала blue/green: новое поколение
+  `hydra-vk-call-creator@.service` запускается параллельно старому, поэтому
+  прежняя master-ссылка остаётся рабочей при timeout или rollback.
+- Sync Agent и его TUI читают owner-neutral maintenance facade. Автоматическая
+  задача Calls управляется `sync_calls_qwdtt_pool_enabled` и интервалом 1–24 ч.
+- Schema state поднята до 7. `v6 → v7` переносит legacy WDTT creator keys, но
+  не включает native Calls и не меняет старые units/файлы. Их удаляет только
+  явный fresh setup со snapshot/restore при ошибке.
 - Актуальная qWDTT master-ссылка отображается в TUI в «Ручных конфигах» с явной
   пометкой, что она общая для всех пользователей; в пользовательские подписки
   ссылка с главным паролем не включается.
-- Повторный вход в пункт VK headless creator больше не перезапускает инстансы и
-  не пересоздаёт звонки: TUI показывает текущий статус и master-ссылку, а ручное
-  обновление и восстановление установки запускаются только явным выбором.
-- В управление creator добавлены отдельные действия «Пересоздать звонки сейчас»,
-  «Завершить все звонки», «Интервал пересоздания» и явный выбор режима. В режиме
-  АВТОМАТИЧЕСКИЙ звонками владеет Sync Agent; в режиме РУЧНОЙ он их не меняет,
-  а текущие звонки продолжают работать. Stop-action отключает четыре unit и
-  удаляет ставшую недействительной master-ссылку.
+- VK join-link и полный профиль считаются shared secrets: HYDRA редактирует их
+  в status/log projections. Сырой journald остаётся чувствительным, поскольку
+  upstream Sing-Box пишет join-link на уровне INFO.
 
 ### Подписки
 

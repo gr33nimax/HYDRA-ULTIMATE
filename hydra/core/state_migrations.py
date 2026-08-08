@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Callable, Mapping
 
+from hydra.core.state_migration_calls import migrate_v6_to_v7
 from hydra.core.state_models import SCHEMA_VERSION, validate_raw_state
 
 
@@ -108,6 +109,7 @@ MIGRATIONS: dict[int, Migration] = {
     3: migrate_v3_to_v4,
     4: migrate_v4_to_v5,
     5: migrate_v5_to_v6,
+    6: migrate_v6_to_v7,
 }
 
 

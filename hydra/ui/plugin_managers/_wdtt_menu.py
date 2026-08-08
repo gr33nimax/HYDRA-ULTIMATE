@@ -23,16 +23,6 @@ def _render_status(
         telegram = "✓ настроен" if passwords.get("bot_token") else "не настроен"
         color = facade.GREEN if passwords.get("bot_token") else facade.DIM
         details.append(("Telegram", f"{color}{telegram}{facade.NC}"))
-        headless = app.plugin_query(
-            "wdtt",
-            "headless_creator_status",
-            state=state,
-        )
-        if isinstance(headless, dict) and headless.get("configured"):
-            calls = int(headless.get("call_count", 0))
-            refreshed = headless.get("refreshed_at") or "ожидает запуска"
-            details.append(("Headless creator", f"{calls}/4 звонка"))
-            details.append(("Обновлено", refreshed))
     facade.protocol_status_panel(
         "wdtt",
         installed=runtime.installed,
@@ -83,11 +73,6 @@ def _options(installed: bool) -> list[tuple[str, str, str]]:
                     "Просмотр логов systemd и journalctl",
                 ),
                 (
-                    "6",
-                    "🤖 VK headless creator",
-                    "Статус, master-ссылка, обновление и настройка",
-                ),
-                (
                     "9",
                     "❌ Удалить qWDTT",
                     "Полное удаление бинарников, конфигов и правил",
@@ -126,8 +111,6 @@ def _dispatch(
         facade._restart_service(app)
     elif choice == "5" and installed:
         facade._show_status_logs(app)
-    elif choice == "6" and installed:
-        facade._setup_headless_creator(state, app)
     elif choice == "9" and installed:
         facade._uninstall_wdtt(state, app)
     elif choice.upper() == "G":

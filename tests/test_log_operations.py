@@ -68,6 +68,32 @@ def test_journal_read_uses_injected_command_runner() -> None:
     assert "25" in command
 
 
+def test_journal_projection_redacts_upstream_vk_join_link() -> None:
+    run_command = Mock(
+        return_value=CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="INFO https://vk.com/call/join/shared-room\n",
+            stderr="",
+        ),
+    )
+    result = _operations(run_command=run_command).read("journal", "sing-box", 10)
+    assert result.lines == ("INFO https://vk.com/call/join/<redacted>",)
+
+
+def test_journal_failure_message_redacts_upstream_vk_join_link() -> None:
+    run_command = Mock(
+        return_value=CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr="failed https://vk.com/call/join/shared-room\n",
+        ),
+    )
+    result = _operations(run_command=run_command).read("journal", "sing-box", 10)
+    assert result.message == "failed https://vk.com/call/join/<redacted>"
+
+
 def test_journal_info_uses_injected_unit_queries() -> None:
     active = Mock(return_value=True)
     known = Mock(return_value=True)

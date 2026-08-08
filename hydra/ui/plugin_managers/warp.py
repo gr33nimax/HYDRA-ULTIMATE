@@ -74,14 +74,10 @@ def _show_diagnostic_info(app: ApplicationService) -> None:
     if r.returncode != 0:
         warn("Служба sing-box неактивна или сообщает об ошибке.")
 
-    r2 = app.admin.run_command(
-        ["journalctl", "-u", "sing-box", "-n", "10", "--no-pager"],
-        capture_output=True,
-        text=True,
-    )
-    if r2.stdout:
+    journal = app.logs.read("journal", "sing-box", 10)
+    if journal.lines:
         warn("Последние 10 строк логов sing-box из journalctl:")
-        for line in r2.stdout.splitlines():
+        for line in journal.lines:
             print(f"  {DIM}{line}{NC}")
 
     print(f"  {YELLOW}══════════════════════════════════════════════════{NC}\n")

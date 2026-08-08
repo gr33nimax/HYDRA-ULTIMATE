@@ -24,9 +24,12 @@ from hydra.services.application import ApplicationService
 from hydra.services.backups import BackupService, compose_backup_policy
 from hydra.services.certificate_audit import CertificateInspector
 from hydra.services.certificates import CertificateProvisioner
+from hydra.services.calls import CallsService
+from hydra.services.calls_infrastructure import CallsInfrastructure
 from hydra.services.configuration_plan import ConfigurationPlanner
 from hydra.services.diagnostic_infrastructure import HOST_DIAGNOSTICS
 from hydra.services.log_infrastructure import HostLogOperations
+from hydra.services.maintenance import MaintenanceService
 from hydra.services.orchestration_service import OrchestrationService
 from hydra.services.plugin_actions import PluginActionService
 from hydra.services.plugin_commands import PluginCommandService
@@ -64,11 +67,13 @@ def production_application(
     extra_plugin_factories: Iterable[PluginFactory] = (),
 ) -> ApplicationService:
     """Build a fresh, instance-scoped production application."""
+    calls_runtime = CallsInfrastructure(HOST)
     plugins = PluginContainer(
         default_plugins(
             notifier=notify_security_event,
             security_context=notification_fields,
             extra_factories=extra_plugin_factories,
+            call_config_source=calls_runtime,
         ),
         host=HOST,
         log_error=lambda message: singbox.log("ERROR", message),
@@ -101,6 +106,20 @@ def production_application(
     traffic = TrafficService(protocols)
     plugin_actions = PluginActionService(get_plugin=plugins.get)
     plugin_queries = PluginQueryService(get_plugin=plugins.get)
+    calls = CallsService(
+        runtime=calls_runtime,
+        protocols=protocols,
+        plugin_actions=plugin_actions,
+        save_state=save_state,
+        apply_config=orchestration.apply_config,
+        last_apply_error=orchestration.last_apply_error,
+    )
+    maintenance = MaintenanceService(
+        protocols=protocols,
+        plugin_actions=plugin_actions,
+        plugin_queries=plugin_queries,
+        calls=calls,
+    )
     certificate_audit = CertificateInspector(HOST)
     admin = AdminInfrastructure(
         sync_operations=default_sync_operations(
@@ -115,6 +134,7 @@ def production_application(
             renew_subscription_certificate=lambda domain: (
                 subscription_certificate_renewal(admin)(domain)
             ),
+            maintenance=maintenance,
         ),
         sync_runner=run_sync,
     )
@@ -174,6 +194,8 @@ def production_application(
             ),
         ),
         certificates=certificate_audit,
+        calls=calls,
+        maintenance=maintenance,
     )
 
 

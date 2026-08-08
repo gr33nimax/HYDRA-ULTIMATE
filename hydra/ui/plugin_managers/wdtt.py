@@ -14,9 +14,7 @@ from hydra.plugins.wdtt.plugin import DEFAULT_DTLS_PORT as DEFAULT_DTLS_PORT
 from hydra.plugins.wdtt.plugin import DEFAULT_WG_PORT as DEFAULT_WG_PORT
 from hydra.plugins.wdtt.plugin import LOCAL_TUN_PORT as LOCAL_TUN_PORT
 from hydra.plugins.wdtt.plugin import SERVICE_NAME as SERVICE_NAME
-from hydra.plugins.wdtt.headless_schedule import (
-    AUTO_MANAGEMENT_FLAG as HEADLESS_AUTO_MANAGEMENT_FLAG,
-)
+from hydra.services.calls import QWDTT_AUTO_FLAG as HEADLESS_AUTO_MANAGEMENT_FLAG
 from hydra.services.application import (
     ApplicationService as ApplicationService,
 )
@@ -211,10 +209,10 @@ def _setup_headless_creator(
     state: AppState,
     app: ApplicationService,
 ) -> None:
-    from hydra.ui.plugin_managers._wdtt_headless import setup_headless_creator
+    """Compatibility forwarder to the Calls-owned controller."""
+    from hydra.ui.plugin_managers.calls import menu_calls
 
-    with _implementation_scope():
-        setup_headless_creator(state, app)
+    menu_calls(state, app)
 
 
 def _uninstall_wdtt(

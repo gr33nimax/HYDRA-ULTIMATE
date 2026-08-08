@@ -250,8 +250,16 @@ hydra check
 
 ## Схема state и миграции
 
-В текущей ветке `dev` актуальна схема **6**. Миграция `v5 → v6` резервирует приватный
-per-user JWE key и атомарно генерирует недостающие ключи при загрузке state.
+В текущей ветке `dev` актуальна схема **7**. Миграция `v5 → v6` резервирует приватный
+per-user JWE key. Следующая ступень `v6 → v7` переносит настройки VK creator из
+`wdtt.config.headless_*` в `calls.config.qwdtt_*` и maintenance-флаг в
+`sync_calls_qwdtt_pool_enabled`, не включая native Calls автоматически.
+
+Миграция state намеренно не останавливает старые creator units и не переносит
+`/etc/wdtt/headless`. Если creator был настроен, TUI Calls покажет
+`legacy_creator_reinstall_required`. Только явный `Fresh setup` делает snapshot
+старой установки, поднимает новое поколение и после успеха удаляет legacy-файлы;
+при сбое прежние units и файлы восстанавливаются.
 Отдельно миграцию выполняет:
 
 ```bash

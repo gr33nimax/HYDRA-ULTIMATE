@@ -17,11 +17,15 @@ _SECRET_ARG = re.compile(r"(?i)(token|password|secret|private[_-]?key|authorizat
 _SECRET_TEXT = re.compile(
     r"(?i)(token|password|secret|private[_-]?key|authorization)(\s*[:=]\s*)([^\s,;]+)"
 )
+_VK_CALL_LINK = re.compile(r"https://vk\.com/call/join/[A-Za-z0-9._~%-]+")
+_QWDTT_LINK = re.compile(r"qwdtt://[^\s]+")
 
 
 def redact_text(value: str) -> str:
     """Remove common credential forms from human-readable log messages."""
-    return _SECRET_TEXT.sub(r"\1\2<redacted>", str(value))
+    redacted = _SECRET_TEXT.sub(r"\1\2<redacted>", str(value))
+    redacted = _VK_CALL_LINK.sub("https://vk.com/call/join/<redacted>", redacted)
+    return _QWDTT_LINK.sub("qwdtt://<redacted>", redacted)
 
 
 def redact_command(args: Sequence[object]) -> str:

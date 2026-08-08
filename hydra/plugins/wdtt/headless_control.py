@@ -21,21 +21,9 @@ def call_files(env: WdttEnvironment) -> list[Path]:
 
 
 def stop(env: WdttEnvironment) -> tuple[bool, str]:
-    """End all creator calls and invalidate the now-stale master link."""
-    failures: list[str] = []
-    for unit in service_names(env):
-        for action in ("stop", "disable"):
-            result = env.host.run(
-                ["systemctl", action, unit],
-                capture_output=True,
-            )
-            if result.returncode != 0:
-                failures.append(f"{action} {unit}")
-    for path in (*call_files(env), env.headless_link_file):
-        env.host.remove_file(path, missing_ok=True)
-    if failures:
-        return False, "failed to stop all creator services: " + ", ".join(failures)
-    return True, "all VK creator calls stopped"
+    """Retain the legacy signature without performing host mutations."""
+    del env
+    return False, "VK creator management moved to ApplicationService.calls"
 
 
 __all__ = ["call_files", "service_names", "stop"]

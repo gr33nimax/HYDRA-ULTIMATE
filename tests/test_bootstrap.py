@@ -47,7 +47,7 @@ def test_development_readme_one_command_installs_dev():
 
 def test_readme_overview_table_has_no_empty_header_row():
     assert "| | |" not in README
-    assert '<tr><th scope="row">Транспорты</th><td>11</td></tr>' in README
+    assert '<tr><th scope="row">Транспорты</th><td>12</td></tr>' in README
 
 
 def test_public_docs_do_not_reference_retired_branch():

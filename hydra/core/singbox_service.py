@@ -4,6 +4,8 @@ from __future__ import annotations
 import subprocess
 from typing import Any, Callable
 
+from hydra.utils.commands import redact_text
+
 
 def failure_detail(run: Callable[..., Any]) -> str:
     """Return a short systemd journal detail suitable for TUI and logs."""
@@ -15,7 +17,7 @@ def failure_detail(run: Callable[..., Any]) -> str:
         output = result.stdout or result.stderr or ""
         lines = [line.strip() for line in output.splitlines() if line.strip()]
         if lines:
-            return lines[-1]
+            return redact_text(lines[-1])
     except (OSError, subprocess.SubprocessError):
         pass
     return "служба не перешла в стабильное состояние"

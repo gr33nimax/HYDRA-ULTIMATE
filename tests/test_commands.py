@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hydra.utils.commands import CommandError, redact_command, run
+from hydra.utils.commands import CommandError, redact_command, redact_text, run
 
 
 def test_run_uses_argv_timeout_and_no_shell():
@@ -37,3 +37,14 @@ def test_command_redaction_masks_inline_secrets():
     assert "value" not in rendered
     assert "hunter2" not in rendered
     assert "<redacted>" in rendered
+
+
+def test_log_redaction_masks_vk_call_and_qwdtt_shared_links():
+    rendered = redact_text(
+        "created https://vk.com/call/join/shared-room qwdtt://config?pass=secret",
+    )
+    assert "shared-room" not in rendered
+    assert "config?" not in rendered
+    assert rendered == (
+        "created https://vk.com/call/join/<redacted> qwdtt://<redacted>"
+    )

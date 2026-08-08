@@ -55,7 +55,7 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 
 <table>
   <tbody>
-    <tr><th scope="row">Транспорты</th><td>11</td></tr>
+    <tr><th scope="row">Транспорты</th><td>12</td></tr>
     <tr><th scope="row">Модули сети и защиты</th><td>6</td></tr>
     <tr><th scope="row">Интерфейсы</th><td>TUI, headless JSON-CLI, Telegram Admin Bot</td></tr>
     <tr><th scope="row">Платформа</th><td>Ubuntu 20.04+ / Debian 11+</td></tr>
@@ -116,20 +116,31 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 | **Mieru** | `2012–2022/tcp` | обфусцированный mTLS |
 | **Snell v4** | `32000–32999/tcp` | TCP/UDP-прокси |
 | **MTProto / Telemt** | `8443/tcp` | Telegram MTProxy |
+| **Calls · VK** | без внешнего порта | Экспериментальный native `call` transport Sing-Box Extended |
 | **qWDTT** | `56000/udp`, `56001/udp` | WireGuard поверх TURN |
 
-qWDTT можно дополнить VK headless creator из TUI: положите экспортированный
-`cookies-vk.json` в `/etc/hydra/cookiesvk/`, после чего HYDRA скачает проверенный
-GitHub release под архитектуру VPS, защитит каталог и cookies-файл,
-поднимет четыре звонка и будет раз в сутки обновлять единственную master-ссылку
-`qwdtt://` с четырьмя актуальными хешами. Актуальная ссылка отображается в TUI
-на экране пользователя «Ручные конфиги» и не добавляется в его подписку.
-Повторный вход в меню creator только показывает статус и ссылку; пересоздание
-звонков, завершение всех звонков либо восстановление установки запускается
-отдельным действием. В автоматическом режиме Sync Agent управляет звонками и
-проверяет таймер от 1 до 24 часов (по умолчанию — 24 часа). В ручном режиме
-Sync Agent не меняет звонки: текущие продолжают работать, а создание, остановка
-и пересоздание выполняются только командами этого меню.
+Экспериментальный транспорт **Calls · VK** использует native `call` inbound из
+[Sing-Box Extended 2.6.0+](https://github.com/shtorm-7/sing-box-extended/releases/tag/v1.13.16-extended-2.6.0).
+Конфигурации следуют официальным примерам [creator](https://github.com/shtorm-7/sing-box-extended/blob/v1.13.16-extended-2.6.1/examples/call/vk/creator.json),
+[joiner](https://github.com/shtorm-7/sing-box-extended/blob/v1.13.16-extended-2.6.1/examples/call/vk/joiner.json)
+и [Call options](https://github.com/shtorm-7/sing-box-extended/blob/v1.13.16-extended-2.6.1/option/call.go).
+Перед включением HYDRA выполняет feature-probe, создаёт
+VK-комнату временным процессом, атомарно фиксирует join-link и переключает общий
+Sing-Box только после подтверждённого handoff. Клиентский SOCKS-профиль доступен
+только явным административным запросом в TUI и не входит в подписки или учёт
+пользовательского трафика.
+
+Меню `Calls · VK` также владеет четырьмя VK-комнатами qWDTT. Cookies кладутся в
+`/etc/hydra/calls/vk/cookies-vk.json`; ротация использует два поколения creator,
+поэтому прежняя master-ссылка остаётся рабочей до успешной публикации новой.
+WDTT отвечает только за сервер, пароли и формирование `qwdtt://` из четырёх
+хэшей. Старую установку creator HYDRA не мигрирует автоматически: после
+обновления нужен явный `Fresh setup` в меню Calls.
+
+> [!WARNING]
+> VK join-link и полный клиентский профиль — shared secret. HYDRA редактирует
+> ссылку в своих log-проекциях, но upstream Sing-Box сейчас пишет её в INFO
+> journald; доступ к сырому `journalctl -u sing-box` должен быть ограничен.
 
 **Сеть:** DNSCrypt (шифрованный резолвер) · WARP (выборочная маршрутизация через
 Cloudflare).

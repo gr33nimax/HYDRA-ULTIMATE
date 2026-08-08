@@ -61,7 +61,7 @@ def _menu_sync_agent(state: AppState, app: ApplicationService):
 
         maintenance_choices: dict[str, tuple[str, bool]] = {}
         maintenance_items: list[tuple[str, str, str]] = []
-        for index, job in enumerate(app.protocols.maintenance_jobs(), start=4):
+        for index, job in enumerate(app.maintenance.jobs(), start=4):
             enabled = bool(state.install.get(job.enabled_flag, True))
             key = str(index)
             maintenance_choices[key] = (job.enabled_flag, enabled)

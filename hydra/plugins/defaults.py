@@ -4,10 +4,12 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from hydra.contracts import CallConfigSource
 from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
 from hydra.plugins.antidpi.plugin import AntiDPIPlugin
 from hydra.plugins.anytls.plugin import AnyTLSPlugin
 from hydra.plugins.base import BasePlugin
+from hydra.plugins.calls.plugin import CallsPlugin
 from hydra.plugins.dnscrypt.plugin import DNSCryptPlugin
 from hydra.plugins.fail2ban.plugin import Fail2banPlugin
 from hydra.plugins.honeypot.plugin import HoneypotPlugin
@@ -27,6 +29,7 @@ from hydra.plugins.wdtt.plugin import WdttPlugin
 PluginFactory = Callable[[], BasePlugin]
 
 BUILTIN_PLUGIN_FACTORIES: tuple[PluginFactory, ...] = (
+    CallsPlugin,
     AmneziaWGPlugin,
     AnyTLSPlugin,
     TrustTunnelPlugin,
@@ -51,9 +54,13 @@ def default_plugins(
     notifier: Any = None,
     security_context: Any = None,
     extra_factories: Iterable[PluginFactory] = (),
+    call_config_source: CallConfigSource | None = None,
 ) -> list[BasePlugin]:
     """Compose built-ins while allowing an outer composition root to extend."""
-    plugins = [factory() for factory in BUILTIN_PLUGIN_FACTORIES]
+    plugins = [
+        CallsPlugin(call_config_source) if factory is CallsPlugin else factory()
+        for factory in BUILTIN_PLUGIN_FACTORIES
+    ]
     honeypot = next(
         plugin
         for plugin in plugins
@@ -75,6 +82,7 @@ __all__ = [
     "AntiDPIPlugin",
     "AnyTLSPlugin",
     "BUILTIN_PLUGIN_FACTORIES",
+    "CallsPlugin",
     "DNSCryptPlugin",
     "Fail2banPlugin",
     "HoneypotPlugin",

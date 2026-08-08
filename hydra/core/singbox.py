@@ -19,6 +19,7 @@ from hydra.contracts import ConfigFragment
 from hydra.core.state import load_state
 from hydra.core.state_models import AppState, PluginState
 from hydra.core.host import HOST
+from hydra.core.singbox_config_security import redacted_debug_config
 from hydra.core import singbox_config, singbox_units
 from hydra.core.singbox_upgrade import (
     UpgradeOperations,
@@ -99,7 +100,7 @@ def validate_current_config() -> tuple[bool | None, str]:
     if checked.returncode == 0:
         return True, ""
     output = str(checked.stderr or checked.stdout or "unknown error").strip()
-    return False, output.splitlines()[-1] if output else "unknown error"
+    return False, redact_text(output.splitlines()[-1] if output else "unknown error")
 
 
 def preflight_conflicts(config: dict) -> list[str]:
@@ -296,16 +297,20 @@ def write_config(config: dict) -> bool:
         # Сохраним невалидный конфиг для отладки
         debug_path = Path("/var/log/hydra/warp_debug_config.json")
         try:
-            debug_path.parent.mkdir(parents=True, exist_ok=True)
-            debug_path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+            HOST.atomic_write(
+                debug_path,
+                json.dumps(redacted_debug_config(config), indent=2, ensure_ascii=False),
+                mode=0o600,
+            )
         except Exception:
             pass
-        message = f"Некорректная конфигурация Sing-Box: {r.stderr or r.stdout or 'неизвестная ошибка'}"
+        message = redact_text(
+            f"Некорректная конфигурация Sing-Box: {r.stderr or r.stdout or 'неизвестная ошибка'}",
+        )
         _set_error(message)
         _log("ERROR", message)
         tmp.unlink(missing_ok=True)
         return False
-
     tmp.replace(SINGBOX_CONFIG)
     _set_error("")
     if os.name != "nt":

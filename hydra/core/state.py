@@ -25,6 +25,7 @@ from hydra.core.state_migrations import (
     migrate_v3_to_v4,
     migrate_v4_to_v5,
     migrate_v5_to_v6,
+    migrate_v6_to_v7,
 )
 from hydra.core.hydrabox_keys import generate_hydrabox_jwe_key
 from hydra.core.state_runtime import (

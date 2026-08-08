@@ -407,15 +407,15 @@ TLS-маршруты проверяются отдельно, потому чт�
 
 ### Цепочка миграций
 
-В текущей ветке `dev` актуальна схема 6. Миграция — последовательность чистых функций; каждая
+В текущей ветке `dev` актуальна схема 7. Миграция — последовательность чистых функций; каждая
 ступень проверяется отдельно, а запись всей цепочки выполняется атомарно.
 
 ```text
-   v0 ──▶ v1 ──▶ v2 ──▶ v3 ──▶ v4 ──▶ v5 ──▶ v6+
-                         │      │      │
+   v0 ──▶ v1 ──▶ v2 ──▶ v3 ──▶ v4 ──▶ v5 ──▶ v6 ──▶ v7+
+                         │      │      │      │
+                         │      │      │      └─ Calls владеет VK creator state;
+                         │      │      │         v8+ — явная ошибка совместимости
                          │      │      └─ private per-user HydraBox JWE key
-                         │      │         (добавлено после релиза 2.5.5); v7+ — явная
-                         │      │         ошибка совместимости, НЕ откат
                          │      │
                          │      └─ device_limit, devices        (выпущено в 2.5.3)
                          └──────── legacy-флаги WARP, DNSCrypt,
@@ -563,32 +563,35 @@ journalctl -u sing-box -u caddy-l4 --no-pager -n 100
 проверки: certbot на каждой попытке останавливает TLS-фронт, а Let's Encrypt
 ограничивает число неуспешных валидаций.
 
-qWDTT headless creator — plugin-owned maintenance task. TUI не принимает секрет
-через terminal input: плагин создаёт `/etc/hydra/cookiesvk` с правами `0700` и
-читает только `/etc/hydra/cookiesvk/cookies-vk.json`. После валидации
-многострочного Creator JSON он выбирает release asset по CPU через общий downloader
-с обязательной проверкой опубликованного GitHub SHA-256, извлекает только
-ожидаемый ELF и атомарно устанавливает `/usr/local/bin/headless-vk-creator`.
-Runtime-каталог `/etc/wdtt/headless` также создаётся через `HostBackend` с правами
-`0700`, а cookies-файл атомарно получает права `0600` и не попадает в state.
-Затем плагин запускает четыре
-`wdtt-headless-creator@N` через `HostBackend`, извлекает четыре уникальных
-call-хеша и атомарно записывает единственную master-ссылку. Due-query запускает
-плановый refresh через настроенный в plugin state интервал от 1 до 24 часов
-(по умолчанию раз в сутки) либо раньше при обнаружении изменившегося live-хеша
-после аварийного рестарта creator; сбой оставляет предыдущую ссылку и возвращает
-failure в общий журнал sync-agent. Декларативный maintenance-флаг
-`install.sync_wdtt_headless_enabled` атомарно выбирает владельца операций: в
-режиме АВТОМАТИЧЕСКИЙ звонками управляет Sync Agent, а в режиме РУЧНОЙ он не
-создаёт и не пересоздаёт их. Смена режима не останавливает уже активные звонки;
-ручные runtime actions остаются доступны в обоих режимах.
+VK Calls — application-owned use-case. `ApplicationService.calls` координирует
+защищённые файлы, временный bootstrap-процесс, lifecycle плагина `calls`, общий
+apply и handoff. Плагин не знает о systemd и комнатах: через внедрённый
+`CallConfigSource` он читает cookies и зафиксированный join-link и возвращает
+единственный native `call` inbound. Профиль admin joiner не является plugin
+connection source, подпиской или источником traffic accounting.
 
-Ручное пересоздание вызывает runtime action без установки binary. Отдельный
-stop-action завершает и отключает четыре creator unit, удаляет call-файлы и
-ставшую недействительной master-ссылку. В автоматическом режиме Sync Agent может
-создать звонки заново на следующем due-cycle; в ручном они остаются остановленными
-до явной команды. Интервал меняется persist-only plugin command: state сохраняется
-атомарно без ненужного общего runtime apply.
+Перед enable выполняется feature-probe минимальным `sing-box check`. Bootstrap
+запускает временный Sing-Box с пустым `join_link`, строго принимает только
+`https://vk.com/call/join/...`, пишет ссылку атомарно с `0600`, применяет
+desired state и ждёт подтверждения той же комнаты в основном service. Временный
+процесс живёт до handoff. Любой сбой восстанавливает прежние link, state и
+runtime; автоматического обновления Sing-Box нет.
+
+qWDTT creator также принадлежит Calls. Два поколения
+`hydra-vk-call-creator@{a,b}-N` позволяют создать четыре новые комнаты, пока
+старые продолжают обслуживать master-ссылку. Только после атомарной публикации
+WDTT-артефакта и сохранения state старое поколение останавливается. WDTT
+объявляет лишь action преобразования четырёх хэшей в `qwdtt://` и не содержит
+lifecycle, timer или systemd creator. Owner-neutral maintenance-фасад объединяет
+plugin tasks и `calls.qwdtt_pool`; его читают Sync Agent и TUI.
+
+Миграция schema 7 переносит legacy desired keys, но не меняет host runtime.
+Явный Fresh setup делает snapshot старых units/файлов, устанавливает новый пул и
+только затем удаляет legacy creator; failure восстанавливает snapshot.
+
+Cookies и join-link не хранятся в state и не попадают в status/apply journal.
+Лог-проекции HYDRA редактируют VK и qWDTT links. Upstream Sing-Box выводит
+join-link на уровне INFO, поэтому сырой journald остаётся секретным источником.
 
 `PluginMeta.manual_artifacts_query` отделяет административные ручные артефакты
 от per-user подписок. qWDTT объявляет через него единственную master-ссылку для

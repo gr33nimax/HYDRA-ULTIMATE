@@ -13,6 +13,7 @@ from hydra.services.logs import (
     LogSourceInfo,
     LogStream,
 )
+from hydra.utils.commands import redact_text
 
 
 class ProcessLogStream(LogStream):
@@ -29,7 +30,7 @@ class ProcessLogStream(LogStream):
         if not ready:
             return None
         line = output.readline()
-        return line.rstrip("\n") if line else None
+        return redact_text(line.rstrip("\n")) if line else None
 
     def running(self) -> bool:
         return self._process.poll() is None
@@ -81,7 +82,7 @@ class HostLogOperations(LogOperations):
         try:
             with path.open("r", encoding="utf-8", errors="replace") as handle:
                 lines = tuple(
-                    line.rstrip("\n")
+                    redact_text(line.rstrip("\n"))
                     for line in deque(handle, maxlen=num_lines)
                 )
         except OSError as exc:
@@ -117,9 +118,9 @@ class HostLogOperations(LogOperations):
                 or output
                 or "journalctl завершился с ошибкой",
             ).strip()
-            return LogReadResult(message=message)
+            return LogReadResult(message=redact_text(message))
         lines = tuple(
-            line
+            redact_text(line)
             for line in output.splitlines()
             if line.strip() and line.strip() != "-- No entries --"
         )

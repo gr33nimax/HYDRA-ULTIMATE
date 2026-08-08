@@ -13,7 +13,7 @@ from hydra.core.hydrabox_keys import validate_optional_hydrabox_jwe_key
 from hydra.core.state_devices import validate_device_map
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class UnsupportedStateVersion(RuntimeError):

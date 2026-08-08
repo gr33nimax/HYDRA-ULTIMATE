@@ -24,10 +24,7 @@ from hydra.plugins.base import (
 )
 from hydra.plugins.context import PluginStateAccess
 from hydra.plugins.wdtt import build, lifecycle, observation
-from hydra.plugins.wdtt.headless import (
-    HEADLESS_MAINTENANCE_TASKS,
-    WdttHeadlessMixin,
-)
+from hydra.plugins.wdtt.call_pool import WdttCallPoolMixin
 from hydra.plugins.wdtt.build import WdttBuildMixin
 from hydra.plugins.wdtt.configuration import WdttConfigurationMixin
 from hydra.plugins.wdtt.lifecycle import WdttLifecycleMixin
@@ -111,7 +108,7 @@ def _environment() -> WdttEnvironment:
 
 
 class WdttPlugin(
-    WdttHeadlessMixin,
+    WdttCallPoolMixin,
     WdttObservationMixin,
     WdttConfigurationMixin,
     WdttLifecycleMixin,
@@ -126,35 +123,26 @@ class WdttPlugin(
         needs_domain=False,
         central_apply=True,
         required_commands=("systemctl", "iptables"),
-        commands=("set_headless_refresh_interval",),
-        persist_only_commands=("set_headless_refresh_interval",),
         actions=(
             "hot_reload",
             "save_client_link",
             "save_password_registry",
-            "setup_headless_creator",
-            "refresh_headless_creator",
-            "stop_headless_creator",
+            "update_call_pool_artifact",
+            "clear_call_pool_artifact",
         ),
         queries=(
             "observe_runtime",
             "password_registry",
             "public_server_ip",
-            "headless_creator_status",
-            "headless_creator_link",
+            "qwdtt_call_pool_link",
             "manual_client_artifacts",
-            "headless_creator_due",
         ),
         manual_artifacts_query="manual_client_artifacts",
-        config_defaults=(("headless_refresh_interval_seconds", 86_400),),
-        maintenance_tasks=HEADLESS_MAINTENANCE_TASKS,
         subscription_enabled=False,
         backup_resources=(
             BackupResource(str(CONFIG_DIR), "tree"),
             BackupResource(str(SERVICE_FILE), "file"),
             BackupResource("/etc/sysctl.d/99-wdtt.conf", "file"),
-            BackupResource(str(HEADLESS_SERVICE_FILE), "file"),
-            BackupResource(str(HEADLESS_COOKIES_FILE), "file"),
         ),
     )
 

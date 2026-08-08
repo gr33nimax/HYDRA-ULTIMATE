@@ -4,7 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from hydra.plugins.context import PluginStateAccess
-from hydra.plugins.wdtt import headless
 from hydra.plugins.wdtt.model import WdttEnvironment
 
 def _derive_password(uuid: str) -> str:
@@ -54,7 +53,6 @@ class WdttLifecycleMixin:
         return self._installed()
 
     def uninstall(self) -> bool:
-        headless.uninstall(self._wdtt_env())
         dtls_port = self._wdtt_env().default_dtls_port
         if self._wdtt_env().config_file.exists():
             try:

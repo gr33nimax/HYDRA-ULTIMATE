@@ -60,6 +60,11 @@ from hydra.services.uninstall import (
     UninstallOperations,
 )
 from hydra.services.users import UserService
+from hydra.services.calls import CallOperations, UnavailableCallOperations
+from hydra.services.maintenance import (
+    MaintenanceOperations,
+    UnavailableMaintenanceOperations,
+)
 
 
 @dataclass(frozen=True)
@@ -107,6 +112,10 @@ class ApplicationService:
     )
     certificates: CertificateInspection = field(
         default_factory=UnavailableCertificateInspection,
+    )
+    calls: CallOperations = field(default_factory=UnavailableCallOperations)
+    maintenance: MaintenanceOperations = field(
+        default_factory=UnavailableMaintenanceOperations,
     )
 
     def status(self, state: AppState) -> dict[str, Any]:
