@@ -5,7 +5,12 @@ import json
 
 import pytest
 
-from hydra.core.state_migrations import migrate_state, migrate_v6_to_v7, migrate_v7_to_v8
+from hydra.core.state_migrations import (
+    migrate_state,
+    migrate_v6_to_v7,
+    migrate_v7_to_v8,
+    migrate_v8_to_v9,
+)
 from hydra.core.state_models import UnsupportedStateVersion, validate_supported_version
 
 
@@ -58,7 +63,7 @@ def test_v6_to_v7_moves_creator_desired_state_without_native_auto_enable() -> No
 def test_v6_to_v7_is_idempotent() -> None:
     once = migrate_v6_to_v7(_v6())
     assert migrate_v6_to_v7(once) == once
-    assert migrate_state(_v6(), 6) == migrate_v7_to_v8(once)
+    assert migrate_state(_v6(), 6) == migrate_v8_to_v9(migrate_v7_to_v8(once))
 
 
 def test_v6_disabled_creator_becomes_disabled_calls_pool() -> None:
@@ -85,9 +90,25 @@ def test_v7_to_v8_extracts_creator_from_calls() -> None:
     assert migrate_v7_to_v8(migrated) == migrated
 
 
-def test_future_schema_is_rejected_after_v8() -> None:
+def test_v8_to_v9_separates_qwdtt_consumer_from_vk_provider() -> None:
+    source = migrate_v7_to_v8(migrate_v6_to_v7(_v6()))
+    migrated = migrate_v8_to_v9(source)
+
+    assert migrated["version"] == 9
+    assert migrated["headless_creator"]["providers"] == {}
+    assert migrated["headless_creator"]["consumers"]["qwdtt"] == {
+        "provider": "vk",
+        "pool_enabled": True,
+        "refresh_interval_seconds": 7200,
+        "legacy_creator_reinstall_required": True,
+        "room_count": 4,
+    }
+    assert migrate_v8_to_v9(migrated) == migrated
+
+
+def test_future_schema_is_rejected_after_v9() -> None:
     with pytest.raises(UnsupportedStateVersion):
-        validate_supported_version({"version": 9})
+        validate_supported_version({"version": 10})
 
 
 def test_migrated_state_is_json_serializable_without_secret_artifacts() -> None:

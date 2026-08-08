@@ -26,11 +26,14 @@ from hydra.services.certificate_audit import CertificateInspector
 from hydra.services.certificates import CertificateProvisioner
 from hydra.services.calls import CallsService
 from hydra.services.calls_infrastructure import CallsInfrastructure
+from hydra.services.creator_sessions import CreatorSessionManager
+from hydra.services.creator_lock_infrastructure import CreatorFileLock
 from hydra.services.headless_creator import (
     HEADLESS_CREATOR_BACKUP_RESOURCES,
     HeadlessCreatorService,
 )
 from hydra.services.headless_creator_infrastructure import HeadlessCreatorInfrastructure
+from hydra.services.qwdtt_creator import QwdttCreatorService
 from hydra.services.configuration_plan import ConfigurationPlanner
 from hydra.services.diagnostic_infrastructure import HOST_DIAGNOSTICS
 from hydra.services.log_infrastructure import HostLogOperations
@@ -112,14 +115,27 @@ def production_application(
     traffic = TrafficService(protocols)
     plugin_actions = PluginActionService(get_plugin=plugins.get)
     plugin_queries = PluginQueryService(get_plugin=plugins.get)
-    headless_creator = HeadlessCreatorService(
+    creator_sessions = CreatorSessionManager({"vk": creator_runtime})
+    qwdtt_creator = QwdttCreatorService(
+        sessions=creator_sessions,
         runtime=creator_runtime,
         plugin_actions=plugin_actions,
         save_state=save_state,
+        operation_lock=CreatorFileLock(
+            HOST,
+            Path(os.environ.get(
+                "HYDRA_CREATOR_LOCK_FILE",
+                "/run/lock/hydra-creator.lock",
+            )),
+        ),
+    )
+    headless_creator = HeadlessCreatorService(
+        providers={"vk": creator_runtime},
+        qwdtt=qwdtt_creator,
     )
     calls = CallsService(
         runtime=calls_runtime,
-        creator=headless_creator,
+        creator=creator_sessions,
         protocols=protocols,
         save_state=save_state,
         apply_config=orchestration.apply_config,
@@ -129,7 +145,7 @@ def production_application(
         protocols=protocols,
         plugin_actions=plugin_actions,
         plugin_queries=plugin_queries,
-        headless_creator=headless_creator,
+        headless_creator=qwdtt_creator,
     )
     certificate_audit = CertificateInspector(HOST)
     admin = AdminInfrastructure(

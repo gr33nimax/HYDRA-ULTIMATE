@@ -1,6 +1,8 @@
 """Compatibility tests for the retired WDTT-owned creator surface."""
 from __future__ import annotations
 
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
 
 from hydra.core.state_models import AppState, PluginState
@@ -51,3 +53,26 @@ def test_qwdtt_link_builder_still_has_compatibility_import() -> None:
     )
     assert link.startswith("qwdtt://config?")
     assert "hashes=a,b,c,d" in link
+
+
+def test_qwdtt_link_preserves_variable_hash_count_order_and_encoding() -> None:
+    hashes = ["room+one==", "room%2Ftwo", "room&three"]
+
+    link = headless.build_qwdtt_link(
+        "2001:db8::10",
+        56000,
+        "p+a&s=s",
+        hashes,
+    )
+
+    query = parse_qs(urlsplit(link).query, strict_parsing=True)
+    assert query["hashes"] == [",".join(hashes)]
+    assert query["hashes"][0].split(",") == hashes
+    assert query["pass"] == ["p+a&s=s"]
+    assert query["peer"] == ["[2001:db8::10]:56000"]
+
+
+@pytest.mark.parametrize("hashes", [[], ["same", "same"], ["bad,separator"]])
+def test_qwdtt_link_rejects_hash_lists_that_cannot_round_trip(hashes) -> None:
+    with pytest.raises(ValueError):
+        headless.build_qwdtt_link("203.0.113.10", 56000, "secret", hashes)

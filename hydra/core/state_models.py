@@ -14,7 +14,7 @@ from hydra.core.state_creator_models import HeadlessCreatorConfig
 from hydra.core.state_creator_models import validate_headless_creator
 from hydra.core.state_creator_models import validate_raw_headless_creator
 from hydra.core.state_devices import validate_device_map
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 class UnsupportedStateVersion(RuntimeError):

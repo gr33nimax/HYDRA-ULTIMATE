@@ -582,16 +582,27 @@ accounting.
 Creator живёт до handoff. Любой сбой восстанавливает прежние link, state и
 runtime; автоматического обновления Sing-Box нет.
 
+Оба потребителя используют `CreatorSessionManager`. Запрос содержит provider,
+consumer, lifetime и количество сессий; manager валидирует его и делегирует
+provider driver. Calls запрашивает одну `transient`-сессию и закрывает её после
+handoff. qWDTT запрашивает `managed`-группу, сам владеет desired state,
+публикацией артефакта, commit/finalize и rollback. Добавление WB Stream требует
+нового driver и consumer use-case, но не ветвления в Calls или qWDTT.
+qWDTT-транзакции дополнительно сериализуются между TUI и Sync Agent через
+`/run/lock/hydra-creator.lock`.
+
 qWDTT использует того же standalone creator. Два поколения
-`hydra-headless-creator-vk@{a,b}-N` позволяют создать четыре новые комнаты, пока
+`hydra-headless-creator-vk@{a,b}-N` позволяют создать от 1 до 16 новых комнат, пока
 старые продолжают обслуживать master-ссылку. Только после атомарной публикации
 WDTT-артефакта и сохранения state старое поколение останавливается. WDTT
-объявляет лишь action преобразования четырёх хэшей в `qwdtt://` и не содержит
+объявляет лишь action преобразования упорядоченного списка уникальных хэшей в
+`qwdtt://` и не содержит
 lifecycle, timer или systemd creator. Owner-neutral maintenance-фасад объединяет
-plugin tasks и `headless_creator.vk.qwdtt_pool`; его читают Sync Agent и TUI.
+plugin tasks и `headless_creator.consumers.qwdtt`; его читают Sync Agent и TUI.
 
-Миграция schema 8 извлекает creator desired state из `calls.config` в
-`headless_creator.providers.vk`, но не меняет host runtime. Явное действие
+Миграция schema 8 извлекает legacy creator desired state из `calls.config`, а
+schema 9 отделяет qWDTT consumer state в `headless_creator.consumers.qwdtt` от
+provider configuration. Миграции не меняют host runtime. Явное действие
 `Создать комнаты` в qWDTT-подменю Creator делает snapshot старых units/файлов,
 устанавливает новый пул и только затем удаляет legacy creator; failure
 восстанавливает snapshot. Общие VK cookies при этом не удаляются.

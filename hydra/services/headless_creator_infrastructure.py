@@ -22,6 +22,13 @@ from hydra.services.headless_creator_pool_infrastructure import (
     QWDTT_POOL_STATE,
     CreatorPoolStage,
     HeadlessCreatorPoolInfrastructureMixin,
+    extract_call_hash,
+)
+from hydra.services.creator_sessions import (
+    CreatorEndpoint,
+    CreatorProviderAvailability,
+    CreatorSessionGroup,
+    CreatorSessionRequest,
 )
 
 
@@ -118,6 +125,12 @@ class HeadlessCreatorInfrastructure(HeadlessCreatorPoolInfrastructureMixin):
     def creator_installed(self) -> bool:
         return bool(self.host.which(str(self.creator_binary)))
 
+    def creator_credentials_path(self) -> str:
+        return str(self.cookies_file)
+
+    def creator_credentials_ready(self) -> bool:
+        return bool(self.load_vk_cookies())
+
     def load_vk_cookies(self) -> list[dict[str, str]]:
         try:
             raw = json.loads(self.cookies_file.read_text(encoding="utf-8"))
@@ -174,6 +187,65 @@ class HeadlessCreatorInfrastructure(HeadlessCreatorPoolInfrastructureMixin):
     def close_vk_room(self, bootstrap: CreatorBootstrap) -> None:
         self._close_process(bootstrap.process)
         self._remove_bootstrap_dir(bootstrap.directory)
+
+    def create_sessions(
+        self,
+        request: CreatorSessionRequest,
+    ) -> CreatorSessionGroup:
+        """Implement the VK driver of the provider-neutral session contract."""
+        if request.provider != "vk":
+            raise ValueError(f"VK creator cannot serve provider {request.provider}")
+        if request.lifetime == "managed":
+            if request.consumer != "qwdtt":
+                raise ValueError("managed VK creator sessions require a known consumer")
+            hashes = self.refresh_creator_pool(
+                previous=list(request.previous_tokens),
+                count=request.count,
+            )
+            endpoints = tuple(CreatorEndpoint("", token) for token in hashes)
+            return CreatorSessionGroup(request, endpoints)
+        bootstrap = self.start_vk_room()
+        endpoint = CreatorEndpoint(
+            uri=bootstrap.join_link,
+            token=extract_call_hash(bootstrap.join_link),
+        )
+        return CreatorSessionGroup(request, (endpoint,), handle=bootstrap)
+
+    def creator_availability(self) -> CreatorProviderAvailability:
+        return CreatorProviderAvailability(
+            installed=self.creator_installed(),
+            credentials_ready=bool(self.load_vk_cookies()),
+        )
+
+    def commit_sessions(self, group: CreatorSessionGroup) -> None:
+        if group.request.lifetime == "managed":
+            self.commit_pool(
+                [endpoint.token for endpoint in group.endpoints],
+                count=group.request.count,
+            )
+
+    def finalize_sessions(self, group: CreatorSessionGroup) -> None:
+        if group.request.lifetime == "managed":
+            self.finalize_creator_pool()
+
+    def rollback_sessions(self, group: CreatorSessionGroup) -> None:
+        if group.request.lifetime == "managed":
+            self.rollback_creator_pool()
+        elif isinstance(group.handle, CreatorBootstrap):
+            self.close_vk_room(group.handle)
+
+    def close_sessions(self, group: CreatorSessionGroup) -> None:
+        if group.request.lifetime == "managed":
+            ok, message = self.stop_creator_pool()
+            if not ok:
+                raise RuntimeError(message)
+        elif isinstance(group.handle, CreatorBootstrap):
+            self.close_vk_room(group.handle)
+
+    def stop_managed_sessions(self, consumer: str) -> tuple[bool, str]:
+        if consumer != "qwdtt":
+            return False, f"VK creator does not know managed consumer {consumer}"
+        return self.stop_creator_pool()
 
     @staticmethod
     def _wait_for_join_file(process: Any, path: Path, *, timeout: float) -> str:

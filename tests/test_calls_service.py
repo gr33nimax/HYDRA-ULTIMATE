@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 
 from hydra.core.state_creator_models import HeadlessCreatorConfig
 from hydra.core.state_models import AppState, PluginState
 from hydra.services.calls import CallsService
+from hydra.services.creator_sessions import (
+    CreatorEndpoint,
+    CreatorProviderAvailability,
+    CreatorSessionGroup,
+)
 
 
 class Runtime:
@@ -43,13 +47,17 @@ class Creator:
         self.runtime = runtime
         self.closed = False
 
-    def status(self, state):
-        return SimpleNamespace(installed=True, cookies_ready=True)
+    def availability(self, provider):
+        assert provider == "vk"
+        return CreatorProviderAvailability(True, True)
 
-    def start_vk_room(self):
-        return SimpleNamespace(join_link=self.runtime.new_link)
+    def create(self, request):
+        return CreatorSessionGroup(
+            request,
+            (CreatorEndpoint(self.runtime.new_link, "new-room"),),
+        )
 
-    def close_vk_room(self, bootstrap):
+    def close(self, group):
         self.closed = True
 
 
@@ -210,7 +218,7 @@ def test_uninstall_removes_calls_and_link_but_preserves_shared_creator_state() -
     state = AppState(
         protocols={"calls": PluginState(installed=True, enabled=True)},
         headless_creator=HeadlessCreatorConfig(
-            providers={"vk": {"qwdtt_pool_enabled": True}},
+            consumers={"qwdtt": {"provider": "vk", "pool_enabled": True}},
         ),
     )
     service, _ = _service(runtime, protocols)
@@ -221,7 +229,7 @@ def test_uninstall_removes_calls_and_link_but_preserves_shared_creator_state() -
     assert protocols.operations == ["uninstall"]
     assert state.protocols["calls"].installed is False
     assert runtime.link == ""
-    assert state.headless_creator.providers["vk"]["qwdtt_pool_enabled"] is True
+    assert state.headless_creator.consumers["qwdtt"]["pool_enabled"] is True
 
 
 def test_uninstall_apply_failure_preserves_state_and_link() -> None:

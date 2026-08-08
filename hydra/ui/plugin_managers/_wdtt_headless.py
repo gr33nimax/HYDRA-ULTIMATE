@@ -14,7 +14,7 @@ def _show_master_link(
     facade.panel(
         "qWDTT MASTER LINK",
         [
-            "Ссылка содержит четыре VK-хэша и общий пароль.",
+            "Ссылка содержит актуальные VK-хэши и общий пароль.",
             str(link),
         ],
         wrap=True,

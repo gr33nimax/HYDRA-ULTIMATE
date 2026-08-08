@@ -1,4 +1,4 @@
-"""Runtime controls for the four qWDTT creator instances."""
+"""Compatibility controls for the retired WDTT-owned creator runtime."""
 from __future__ import annotations
 
 from pathlib import Path

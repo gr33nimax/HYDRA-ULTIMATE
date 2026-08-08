@@ -3,7 +3,39 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
+from hydra.core.state_creator_models import (
+    MAX_QWDTT_ROOM_COUNT,
+    MIN_QWDTT_ROOM_COUNT,
+)
 from hydra.plugins.context import PluginStateAccess
+
+
+def normalize_qwdtt_hashes(
+    hashes: list[str],
+    *,
+    expected_count: int | None = None,
+) -> list[str]:
+    """Validate the comma-separated hash field without changing token order."""
+    if not isinstance(hashes, list):
+        raise ValueError("qWDTT hashes must be a list")
+    clean_hashes: list[str] = []
+    for item in hashes:
+        if not isinstance(item, str):
+            raise ValueError("qWDTT hashes must be strings")
+        token = item.strip()
+        if not token or "," in token or any(char.isspace() for char in token):
+            raise ValueError("qWDTT hashes must be non-empty comma-free tokens")
+        clean_hashes.append(token)
+    if len(set(clean_hashes)) != len(clean_hashes):
+        raise ValueError("qWDTT hashes must be unique")
+    if expected_count is not None and len(clean_hashes) != expected_count:
+        raise ValueError(f"exactly {expected_count} unique VK call hashes are required")
+    if not MIN_QWDTT_ROOM_COUNT <= len(clean_hashes) <= MAX_QWDTT_ROOM_COUNT:
+        raise ValueError(
+            f"between {MIN_QWDTT_ROOM_COUNT} and {MAX_QWDTT_ROOM_COUNT} "
+            "VK call hashes are required",
+        )
+    return clean_hashes
 
 
 def build_qwdtt_link(
@@ -15,12 +47,14 @@ def build_qwdtt_link(
     workers: int = 16,
     local_port: int = 9000,
 ) -> str:
-    clean_hashes = [str(item).strip() for item in hashes if str(item).strip()]
-    if len(clean_hashes) != 4 or len(set(clean_hashes)) != 4:
-        raise ValueError("exactly four unique VK call hashes are required")
+    clean_hashes = normalize_qwdtt_hashes(hashes)
     name = quote(f"qWDTT-{server_ip}", safe="-._~")
-    peer = quote(f"{server_ip}:{int(dtls_port)}", safe=":[]-._~")
-    encoded_hashes = quote(",".join(clean_hashes), safe=",-._~")
+    peer_host = f"[{server_ip}]" if ":" in server_ip and not server_ip.startswith("[") else server_ip
+    peer = quote(f"{peer_host}:{int(dtls_port)}", safe=":[]-._~")
+    encoded_hashes = ",".join(
+        quote(token, safe="-._~")
+        for token in clean_hashes
+    )
     encoded_password = quote(str(password), safe="-._~")
     return (
         f"qwdtt://config?name={name}&peer={peer}&hashes={encoded_hashes}"
@@ -54,7 +88,7 @@ class WdttCallPoolMixin:
                 env.host.remove_file(env.headless_link_file, missing_ok=True)
             return {"ok": True, "previous_link": previous}
         if state is None or hashes is None:
-            raise ValueError("state and four VK call hashes are required")
+            raise ValueError("state and VK call hashes are required")
         desired = state.protocols.get("wdtt")
         if desired is None or not desired.enabled:
             raise ValueError("qWDTT is disabled")
@@ -82,12 +116,14 @@ class WdttCallPoolMixin:
         env.host.atomic_write(env.headless_link_file, link + "\n", mode=0o600)
         return {"ok": True, "previous_link": previous}
 
-    def clear_call_pool_artifact(self) -> bool:
-        self._wdtt_env().host.remove_file(
-            self._wdtt_env().headless_link_file,
+    def clear_call_pool_artifact(self) -> dict[str, object]:
+        env = self._wdtt_env()
+        previous = self.qwdtt_call_pool_link()
+        env.host.remove_file(
+            env.headless_link_file,
             missing_ok=True,
         )
-        return True
+        return {"ok": True, "previous_link": previous}
 
     def qwdtt_call_pool_link(self) -> str:
         path = self._wdtt_env().headless_link_file
@@ -112,4 +148,4 @@ class WdttCallPoolMixin:
         }]
 
 
-__all__ = ["WdttCallPoolMixin", "build_qwdtt_link"]
+__all__ = ["WdttCallPoolMixin", "build_qwdtt_link", "normalize_qwdtt_hashes"]

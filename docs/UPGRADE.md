@@ -250,12 +250,13 @@ hydra check
 
 ## Схема state и миграции
 
-В текущей ветке `dev` актуальна схема **8**. Миграция `v5 → v6` резервирует
+В текущей ветке `dev` актуальна схема **9**. Миграция `v5 → v6` резервирует
 приватный per-user JWE key. Ступень `v6 → v7` сохраняет совместимость legacy VK
 creator через промежуточный Calls layout, а `v7 → v8` переносит его desired
 state в `headless_creator.providers.vk` и maintenance-флаг в
 `sync_headless_creator_vk_qwdtt_enabled`. Native Calls автоматически не
-включается.
+включается. Ступень `v8 → v9` переносит qWDTT-настройки из provider-конфига в
+`headless_creator.consumers.qwdtt` и задаёт совместимый размер пула 4 комнаты.
 
 Миграция state намеренно не останавливает старые creator units и не переносит
 `/etc/wdtt/headless` или промежуточный Calls runtime. Если creator был настроен,

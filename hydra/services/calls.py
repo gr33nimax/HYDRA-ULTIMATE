@@ -10,7 +10,11 @@ from typing import Callable, Protocol
 from hydra.core.errors import ErrorCode, ServiceResult, failed_result
 from hydra.core.state_models import AppState, get_protocol
 from hydra.services.configuration import restore_state_in_place
-from hydra.services.headless_creator import HeadlessCreatorOperations
+from hydra.services.creator_sessions import (
+    CreatorSessionGroup,
+    CreatorSessionRequest,
+    CreatorSessions,
+)
 from hydra.services.protocols import ProtocolService
 
 
@@ -53,12 +57,21 @@ class UnavailableCallOperations:
         raise RuntimeError(f"Calls operation is not configured: {name}")
 
 
+class CallsRuntime(Protocol):
+    def feature_supported(self) -> bool: ...
+    def load_native_join_link(self) -> str: ...
+    def write_native_join_link(self, link: str) -> None: ...
+    def remove_native_join_link(self) -> None: ...
+    def singbox_running(self) -> bool: ...
+    def wait_main_join(self, link: str) -> bool: ...
+
+
 @dataclass
 class CallsService:
     """Coordinate native Call lifecycle using the shared headless creator."""
 
-    runtime: object
-    creator: HeadlessCreatorOperations
+    runtime: CallsRuntime
+    creator: CreatorSessions
     protocols: ProtocolService
     save_state: Callable[[AppState], None]
     apply_config: Callable[[AppState], bool]
@@ -69,11 +82,11 @@ class CallsService:
         desired = state.protocols.get("calls")
         link_ready = bool(self.runtime.load_native_join_link())
         enabled = bool(desired and desired.enabled)
-        creator_status = self.creator.status(state)
+        creator_status = self.creator.availability("vk")
         return CallsStatus(
             feature_supported=self.runtime.feature_supported(),
             creator_installed=creator_status.installed,
-            cookies_ready=creator_status.cookies_ready,
+            cookies_ready=creator_status.credentials_ready,
             native_enabled=enabled,
             native_link_ready=link_ready,
             native_running=bool(enabled and link_ready and self.runtime.singbox_running()),
@@ -102,14 +115,22 @@ class CallsService:
             )
         snapshot = copy.deepcopy(state)
         previous_link = self.runtime.load_native_join_link()
-        bootstrap = None
+        session_group: CreatorSessionGroup | None = None
+        close_error = ""
         try:
             if not self.runtime.feature_supported():
                 raise RuntimeError(
                     "installed Sing-Box does not support Call; update Sing-Box Extended to 2.6.0 or newer",
                 )
-            bootstrap = self.creator.start_vk_room()
-            self.runtime.write_native_join_link(bootstrap.join_link)
+            session_group = self.creator.create(CreatorSessionRequest(
+                provider="vk",
+                consumer="calls",
+                lifetime="transient",
+            ))
+            join_link = session_group.endpoints[0].uri
+            if not join_link:
+                raise RuntimeError("VK creator returned no join link")
+            self.runtime.write_native_join_link(join_link)
             desired = get_protocol(state, "calls")
             if not desired.installed:
                 applied = self.protocols.activate(state, "calls")
@@ -121,19 +142,28 @@ class CallsService:
                 raise RuntimeError(
                     self.last_apply_error() or "failed to apply native VK Calls configuration",
                 )
-            if not self.runtime.wait_main_join(bootstrap.join_link):
+            if not self.runtime.wait_main_join(join_link):
                 raise TimeoutError("main Sing-Box did not join the new VK call")
-            return ServiceResult(
+            result = ServiceResult(
                 True,
                 value={"operation": "rotate" if rotate else "enable", "profile": "admin"},
             )
         except Exception as exc:
             self._restore_native_transition(state, snapshot, previous_link)
-            return failed_result(exc, fallback=ErrorCode.OPERATION_FAILED)
+            result = failed_result(exc, fallback=ErrorCode.OPERATION_FAILED)
         finally:
-            if bootstrap is not None:
-                self.creator.close_vk_room(bootstrap)
-            self._lock.release()
+            try:
+                if session_group is not None:
+                    self.creator.close(session_group)
+            except Exception as exc:
+                close_error = str(exc) or exc.__class__.__name__
+            finally:
+                self._lock.release()
+        if result and close_error:
+            value = dict(result.value or {})
+            value["cleanup_warning"] = close_error
+            return ServiceResult(True, value=value)
+        return result
 
     def _restore_native_transition(
         self,
@@ -246,6 +276,7 @@ class CallsService:
 __all__ = [
     "CallClientProfile",
     "CallOperations",
+    "CallsRuntime",
     "CallsService",
     "CallsStatus",
     "UnavailableCallOperations",

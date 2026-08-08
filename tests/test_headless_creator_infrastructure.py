@@ -164,7 +164,11 @@ def _pool_runtime(tmp_path, monkeypatch):
         pool_state_file=state_file,
         creator_unit=tmp_path / "creator@.service",
     )
-    monkeypatch.setattr(runtime, "_read_hashes_for", lambda generation: ["n1", "n2", "n3", "n4"])
+    monkeypatch.setattr(
+        runtime,
+        "_read_hashes_for",
+        lambda generation, *, count=None: [f"n{index}" for index in range(1, count + 1)],
+    )
     return runtime, host
 
 
@@ -200,6 +204,36 @@ def test_qwdtt_rotation_rollback_restores_metadata(tmp_path, monkeypatch) -> Non
         and "hydra-headless-creator-vk@b-1.service" in cmd
         for cmd in host.commands
     )
+
+
+def test_qwdtt_rotation_uses_requested_room_count(tmp_path, monkeypatch) -> None:
+    runtime, host = _pool_runtime(tmp_path, monkeypatch)
+
+    hashes = runtime.refresh_creator_pool(previous=[], count=2)
+    runtime.commit_pool(hashes, count=2)
+
+    assert hashes == ["n1", "n2"]
+    metadata = json.loads(runtime.pool_state_file.read_text(encoding="utf-8"))
+    assert metadata["room_count"] == 2
+    restarted = [cmd for cmd in host.commands if "restart" in cmd]
+    assert any(any("@b-1.service" in arg for arg in cmd) for cmd in restarted)
+    assert any(any("@b-2.service" in arg for arg in cmd) for cmd in restarted)
+    assert not any(any("@b-3.service" in arg for arg in cmd) for cmd in restarted)
+
+
+def test_stop_covers_larger_previous_generation_while_cleanup_is_pending(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime, host = _pool_runtime(tmp_path, monkeypatch)
+    hashes = runtime.refresh_creator_pool(previous=[], count=2)
+    runtime.commit_pool(hashes, count=2)
+
+    ok, _message = runtime.stop_creator_pool()
+
+    assert ok is True
+    stopped = [cmd for cmd in host.commands if cmd[:2] == ["systemctl", "stop"]]
+    assert any(any("@a-4.service" in arg for arg in cmd) for cmd in stopped)
 
 
 def test_room_count_accepts_only_unique_valid_room_files(tmp_path) -> None:

@@ -50,7 +50,7 @@ class QueryAccess(Protocol):
     def execute(self, plugin_name: str, query: str, **parameters: object) -> Any: ...
 
 
-class HeadlessCreatorMaintenanceAccess(Protocol):
+class QwdttCreatorMaintenanceAccess(Protocol):
     def qwdtt_pool_due(self, state: AppState, *, forced: bool = False) -> bool: ...
     def refresh_qwdtt_pool(
         self,
@@ -86,7 +86,7 @@ class MaintenanceService:
     protocols: ProtocolMaintenanceAccess
     plugin_actions: ActionAccess
     plugin_queries: QueryAccess
-    headless_creator: HeadlessCreatorMaintenanceAccess
+    headless_creator: QwdttCreatorMaintenanceAccess
 
     def jobs(self) -> list[MaintenanceJob]:
         return [
@@ -95,19 +95,19 @@ class MaintenanceService:
                 plugin_name="",
                 action="refresh_qwdtt_pool",
                 title="Обновление VK-комнат qWDTT",
-                description="Переоткрывает четыре VK-комнаты и публикует qwdtt:// ссылку",
+                description="Переоткрывает настроенное число комнат и публикует qwdtt:// ссылку",
                 due_query="qwdtt_pool_due",
                 enabled_flag="sync_headless_creator_vk_qwdtt_enabled",
                 apply_on_success=False,
-                owner="headless_creator",
-                key="headless_creator.vk.qwdtt_pool",
+                owner="creator_consumer",
+                key="headless_creator.consumers.qwdtt",
             ),
         ]
 
     def run(self, state: AppState, forced: bool) -> list[MaintenanceOutcome]:
         outcomes: list[MaintenanceOutcome] = []
         for job in self.jobs():
-            if job.owner == "headless_creator":
+            if job.owner == "creator_consumer":
                 outcomes.append(self._run_creator_job(state, job, forced))
             else:
                 outcomes.append(self._run_plugin_job(state, job, forced))
@@ -119,8 +119,8 @@ class MaintenanceService:
         job: MaintenanceJob,
         forced: bool,
     ) -> MaintenanceOutcome:
-        vk = state.headless_creator.providers.get("vk", {})
-        if not vk.get("qwdtt_pool_enabled", False):
+        qwdtt = state.headless_creator.consumers.get("qwdtt", {})
+        if not qwdtt.get("pool_enabled", False):
             return MaintenanceOutcome(job, "consumer_disabled")
         if not forced and not state.install.get(job.enabled_flag, True):
             return MaintenanceOutcome(job, "disabled")

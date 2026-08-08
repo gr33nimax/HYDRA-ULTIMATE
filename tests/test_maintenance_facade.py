@@ -34,12 +34,12 @@ def test_owner_neutral_facade_declares_and_runs_creator_job() -> None:
     service = MaintenanceService(Protocols(), Plugins(), Plugins(), creator)
     state = AppState(
         headless_creator=HeadlessCreatorConfig(
-            providers={"vk": {"qwdtt_pool_enabled": True}},
+            consumers={"qwdtt": {"pool_enabled": True}},
         ),
     )
 
     jobs = service.jobs()
-    assert jobs[-1].owner == "headless_creator"
+    assert jobs[-1].owner == "creator_consumer"
     assert jobs[-1].enabled_flag == "sync_headless_creator_vk_qwdtt_enabled"
     outcomes = service.run(state, forced=False)
 
@@ -52,12 +52,12 @@ def test_creator_maintenance_respects_owner_flag_and_consumer_state() -> None:
     service = MaintenanceService(Protocols(), Plugins(), Plugins(), creator)
     state = AppState(
         headless_creator=HeadlessCreatorConfig(
-            providers={"vk": {"qwdtt_pool_enabled": True}},
+            consumers={"qwdtt": {"pool_enabled": True}},
         ),
         install={"sync_headless_creator_vk_qwdtt_enabled": False},
     )
 
     assert service.run(state, forced=False)[-1].status == "disabled"
-    state.headless_creator.providers["vk"]["qwdtt_pool_enabled"] = False
+    state.headless_creator.consumers["qwdtt"]["pool_enabled"] = False
     assert service.run(state, forced=True)[-1].status == "consumer_disabled"
     assert creator.refreshes == 0

@@ -11,6 +11,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from hydra.core.state_creator_models import (
+    DEFAULT_QWDTT_ROOM_COUNT,
+    MAX_QWDTT_ROOM_COUNT,
+    normalize_qwdtt_room_count,
+)
+from hydra.services.headless_creator_pool_snapshot import (
+    CreatorPoolRuntimeSnapshot,
+    capture_creator_pool,
+    managed_unit_actions,
+    restore_creator_pool_snapshot,
+)
 from hydra.utils.downloader import download_github_asset_filtered, verify_elf
 
 
@@ -19,7 +30,7 @@ QWDTT_POOL_STATE = QWDTT_POOL_DIR / "state.json"
 CREATOR_BINARY = Path("/usr/local/bin/headless-vk-creator")
 CREATOR_UNIT = Path("/etc/systemd/system/hydra-headless-creator-vk@.service")
 CREATOR_REPO = "kulikov0/whitelist-bypass"
-CREATOR_COUNT = 4
+CREATOR_COUNT = DEFAULT_QWDTT_ROOM_COUNT
 LEGACY_UNIT = Path("/etc/systemd/system/wdtt-headless-creator@.service")
 LEGACY_POOL_DIR = Path("/etc/wdtt/headless")
 LEGACY_COOKIES_FILE = Path("/etc/hydra/cookiesvk/cookies-vk.json")
@@ -28,8 +39,6 @@ INTERMEDIATE_POOL_DIR = Path("/var/lib/hydra/calls/vk/qwdtt")
 LEGACY_LINK_FILE = Path("/etc/wdtt/qwdtt_link.txt")
 _HASH_RE = re.compile(r"(?:/join/|join/)([^/?#\s]+)")
 _MAX_CREATOR_BINARY_SIZE = 128 * 1024 * 1024
-
-
 @dataclass(frozen=True)
 class LegacyCreatorSnapshot:
     files: dict[Path, tuple[bytes, int]]
@@ -42,6 +51,8 @@ class CreatorPoolStage:
     generation: str
     previous_generation: str
     previous_metadata: dict[str, object]
+    room_count: int
+    previous_room_count: int
 
 
 def extract_call_hash(value: str) -> str:
@@ -122,26 +133,44 @@ class HeadlessCreatorPoolInfrastructureMixin:
         *,
         generation: str | None = None,
         legacy: bool = False,
+        count: int | None = None,
     ) -> list[str]:
         prefix = "wdtt-headless-creator" if legacy else "hydra-headless-creator-vk"
         if legacy:
             generation = ""
         elif generation is None:
             generation = str(self.pool_metadata().get("generation", ""))
+        count = self._room_count(count)
         instances = [
             f"{generation}-{index}" if generation else str(index)
-            for index in range(1, self.creator_count + 1)
+            for index in range(1, count + 1)
         ]
         return [f"{prefix}@{instance}.service" for instance in instances]
 
-    def call_files(self, *, generation: str | None = None) -> list[Path]:
+    def call_files(
+        self,
+        *,
+        generation: str | None = None,
+        count: int | None = None,
+    ) -> list[Path]:
         if generation is None:
             generation = str(self.pool_metadata().get("generation", ""))
+        count = self._room_count(count)
         prefix = f"{generation}-" if generation else ""
         return [
             self.pool_dir / f"{prefix}{index}.call.txt"
-            for index in range(1, self.creator_count + 1)
+            for index in range(1, count + 1)
         ]
+
+    def _room_count(self, count: int | None = None) -> int:
+        if count is None:
+            metadata = self.pool_metadata()
+            count = metadata.get("room_count")
+            if count is None and isinstance(metadata.get("hashes"), list):
+                count = len(metadata["hashes"])
+            if not count:
+                count = self.creator_count
+        return normalize_qwdtt_room_count(count)
 
     def _write_creator_unit(self) -> None:
         command = (
@@ -158,7 +187,15 @@ class HeadlessCreatorPoolInfrastructureMixin:
         )
         self.host.atomic_write(self.creator_unit, content, mode=0o644)
 
-    def refresh_creator_pool(self, *, previous: list[str] | None = None) -> list[str]:
+    def refresh_creator_pool(
+        self,
+        *,
+        previous: list[str] | None = None,
+        count: int | None = None,
+    ) -> list[str]:
+        count = self._room_count(count)
+        if self._pool_stage is not None:
+            self.finalize_creator_pool()
         self.validate_credentials()
         self.host.ensure_directory(self.pool_dir, mode=0o700)
         self._write_creator_unit()
@@ -166,34 +203,51 @@ class HeadlessCreatorPoolInfrastructureMixin:
             raise RuntimeError("systemd daemon-reload failed")
         metadata = self.pool_metadata()
         active = str(metadata.get("generation", ""))
+        previous_count = self._room_count_from_metadata(metadata)
         target = "b" if active == "a" else "a"
-        self._stop_generation(target)
-        self._pool_stage = CreatorPoolStage(target, active, metadata)
+        self._stop_generation(target, count=MAX_QWDTT_ROOM_COUNT, probe=True)
+        self._pool_stage = CreatorPoolStage(
+            target,
+            active,
+            metadata,
+            count,
+            previous_count,
+        )
         try:
-            for unit in self.creator_units(generation=target):
+            for unit in self.creator_units(generation=target, count=count):
                 if self.host.run(["systemctl", "enable", unit]).returncode != 0:
                     raise RuntimeError(f"failed to enable {unit}")
                 if self.host.run(["systemctl", "restart", unit]).returncode != 0:
                     raise RuntimeError(f"failed to restart {unit}")
             for _ in range(60):
-                hashes = self._read_hashes_for(target)
+                hashes = self._read_hashes_for(target, count=count)
                 if hashes and (not previous or hashes != previous):
                     return hashes
                 time.sleep(1)
-            raise TimeoutError("headless creator did not return four VK call links")
+            raise TimeoutError(
+                f"headless creator did not return {count} unique VK call links",
+            )
         except Exception:
             self.rollback_creator_pool()
             raise
 
     def read_creator_hashes(self) -> list[str]:
-        generation = str(self.pool_metadata().get("generation", ""))
-        return self._read_hashes_for(generation)
+        metadata = self.pool_metadata()
+        generation = str(metadata.get("generation", ""))
+        return self._read_hashes_for(
+            generation,
+            count=self._room_count_from_metadata(metadata),
+        )
 
     def count_valid_creator_rooms(self) -> int:
         """Count unique valid room files without exposing their hashes."""
-        generation = str(self.pool_metadata().get("generation", ""))
+        metadata = self.pool_metadata()
+        generation = str(metadata.get("generation", ""))
         hashes: set[str] = set()
-        for path in self.call_files(generation=generation):
+        for path in self.call_files(
+            generation=generation,
+            count=self._room_count_from_metadata(metadata),
+        ):
             try:
                 lines = [
                     line
@@ -205,9 +259,15 @@ class HeadlessCreatorPoolInfrastructureMixin:
                 continue
         return len(hashes)
 
-    def _read_hashes_for(self, generation: str) -> list[str]:
+    def _read_hashes_for(
+        self,
+        generation: str,
+        *,
+        count: int | None = None,
+    ) -> list[str]:
+        count = self._room_count(count)
         hashes: list[str] = []
-        for path in self.call_files(generation=generation):
+        for path in self.call_files(generation=generation, count=count):
             try:
                 lines = [
                     line
@@ -218,7 +278,13 @@ class HeadlessCreatorPoolInfrastructureMixin:
             except (OSError, ValueError, IndexError):
                 return []
         unique = len(set(hashes)) == len(hashes)
-        return hashes if len(hashes) == self.creator_count and unique else []
+        return hashes if len(hashes) == count and unique else []
+
+    def _room_count_from_metadata(self, metadata: dict[str, object]) -> int:
+        count = metadata.get("room_count")
+        if count is None and isinstance(metadata.get("hashes"), list):
+            count = len(metadata["hashes"])
+        return self._room_count(count if count else self.creator_count)
 
     def pool_metadata(self) -> dict[str, object]:
         try:
@@ -227,14 +293,16 @@ class HeadlessCreatorPoolInfrastructureMixin:
         except (OSError, ValueError, json.JSONDecodeError):
             return {}
 
-    def commit_pool(self, hashes: list[str]) -> None:
-        if len(hashes) != self.creator_count or len(set(hashes)) != len(hashes):
-            raise ValueError("exactly four unique VK call hashes are required")
+    def commit_pool(self, hashes: list[str], *, count: int | None = None) -> None:
+        count = self._room_count(count)
+        if len(hashes) != count or len(set(hashes)) != len(hashes):
+            raise ValueError(f"exactly {count} unique VK call hashes are required")
         self.host.ensure_directory(self.pool_dir, mode=0o700)
         payload = {
             "hashes": hashes,
             "refreshed_at": datetime.now(timezone.utc).isoformat(),
             "generation": self._pool_stage.generation if self._pool_stage else "",
+            "room_count": count,
         }
         self.host.atomic_write(
             self.pool_state_file,
@@ -247,14 +315,21 @@ class HeadlessCreatorPoolInfrastructureMixin:
         if stage is None:
             return
         if stage.previous_generation != stage.generation:
-            self._stop_generation(stage.previous_generation)
+            failures = self._stop_generation(
+                stage.previous_generation,
+                count=stage.previous_room_count,
+            )
+            if failures:
+                raise RuntimeError(
+                    "failed to stop previous creator generation: " + ", ".join(failures),
+                )
         self._pool_stage = None
 
     def rollback_creator_pool(self) -> None:
         stage = self._pool_stage
         if stage is None:
             return
-        self._stop_generation(stage.generation)
+        failures = self._stop_generation(stage.generation, count=stage.room_count)
         if stage.previous_metadata:
             self.host.atomic_write(
                 self.pool_state_file,
@@ -263,26 +338,56 @@ class HeadlessCreatorPoolInfrastructureMixin:
             )
         else:
             self.host.remove_file(self.pool_state_file, missing_ok=True)
+        if failures:
+            raise RuntimeError(
+                "failed to roll back creator generation: " + ", ".join(failures),
+            )
         self._pool_stage = None
 
-    def _stop_generation(self, generation: str) -> list[str]:
+    def _stop_generation(
+        self,
+        generation: str,
+        *,
+        count: int | None = None,
+        probe: bool = False,
+    ) -> list[str]:
         failures: list[str] = []
-        for unit in self.creator_units(generation=generation):
-            for action in ("stop", "disable"):
+        for unit in self.creator_units(generation=generation, count=count):
+            actions = managed_unit_actions(self.host, unit) if probe else ("stop", "disable")
+            for action in actions:
                 if self.host.run(["systemctl", action, unit]).returncode != 0:
                     failures.append(f"{action} {unit}")
-        for path in self.call_files(generation=generation):
+        for path in self.call_files(generation=generation, count=count):
             self.host.remove_file(path, missing_ok=True)
         return failures
 
     def stop_creator_pool(self) -> tuple[bool, str]:
         failures: list[str] = []
+        count = max(
+            self._room_count_from_metadata(self.pool_metadata()),
+            self._pool_stage.room_count if self._pool_stage else 0,
+            self._pool_stage.previous_room_count if self._pool_stage else 0,
+        )
         for generation in ("", "a", "b"):
-            failures.extend(self._stop_generation(generation))
-        self._pool_stage = None
+            failures.extend(self._stop_generation(generation, count=count, probe=True))
+        if not failures:
+            self._pool_stage = None
         if failures:
             return False, "failed to stop all creator services: " + ", ".join(failures)
         return True, "all VK creator calls stopped"
+
+    def snapshot_creator_pool(self) -> CreatorPoolRuntimeSnapshot:
+        """Capture files and service state needed to roll back a stop."""
+        metadata = self.pool_metadata()
+        count = max(
+            self._room_count_from_metadata(metadata),
+            self._pool_stage.room_count if self._pool_stage else 0,
+            self._pool_stage.previous_room_count if self._pool_stage else 0,
+        )
+        return capture_creator_pool(self, count=count)
+
+    def restore_creator_pool(self, snapshot: CreatorPoolRuntimeSnapshot) -> None:
+        restore_creator_pool_snapshot(self, snapshot)
 
     def uninstall_creator_pool(self) -> tuple[bool, str]:
         ok, message = self.stop_creator_pool()
@@ -386,6 +491,7 @@ __all__ = [
     "CREATOR_UNIT",
     "CallsCreatorInfrastructureMixin",
     "CreatorPoolStage",
+    "CreatorPoolRuntimeSnapshot",
     "LegacyCreatorSnapshot",
     "HeadlessCreatorPoolInfrastructureMixin",
     "QWDTT_POOL_DIR",

@@ -178,6 +178,7 @@ def test_creator_status_shows_provider_marks_real_path_and_room_count(capsys) ->
         cookies_ready=True,
         cookies_path="/etc/hydra/cookiesvk/cookies-vk.json",
         vk_qwdtt_call_count=3,
+        vk_qwdtt_room_count=6,
         legacy_reinstall_required=False,
     )
 
@@ -187,7 +188,7 @@ def test_creator_status_shows_provider_marks_real_path_and_room_count(capsys) ->
     assert "✓ Установлен" in output
     assert "✓ VK" in output and "❌ WB" in output
     assert "/etc/hydra/cookiesvk/cookies-vk.json" in output
-    assert "qWDTT rooms: 3/4" in output
+    assert "qWDTT rooms: 3/6" in output
 
 
 def test_creator_status_shows_uninstalled_and_invalid_vk_cookies(capsys) -> None:
@@ -196,6 +197,7 @@ def test_creator_status_shows_uninstalled_and_invalid_vk_cookies(capsys) -> None
         cookies_ready=False,
         cookies_path="/etc/hydra/cookiesvk/cookies-vk.json",
         vk_qwdtt_call_count=0,
+        vk_qwdtt_room_count=4,
         legacy_reinstall_required=False,
     )
 
@@ -207,10 +209,11 @@ def test_creator_status_shows_uninstalled_and_invalid_vk_cookies(capsys) -> None
     assert "qWDTT rooms: 0/4" in output
 
 
-def test_qwdtt_menu_contains_exactly_four_actions_and_back() -> None:
+def test_qwdtt_menu_contains_room_count_action() -> None:
     assert [option[1] for option in headless_creator._qwdtt_options()] == [
         "🎬 Создать комнаты",
         "⏹ Остановить комнаты",
+        "🔢 Изменить число комнат",
         "🔄 Включить / выключить автообновление",
         "⏱ Изменить интервал",
         "↩ Назад",
@@ -226,10 +229,12 @@ def test_create_rooms_uses_setup_then_blue_green_refresh() -> None:
     app = SimpleNamespace(headless_creator=operations)
     fresh = SimpleNamespace(
         vk_qwdtt_pool_enabled=False,
+        vk_qwdtt_room_count=2,
         legacy_reinstall_required=False,
     )
     running = SimpleNamespace(
         vk_qwdtt_pool_enabled=True,
+        vk_qwdtt_room_count=2,
         legacy_reinstall_required=False,
     )
 
@@ -256,13 +261,16 @@ def test_qwdtt_dispatch_stops_toggles_and_changes_interval() -> None:
         patch.object(headless_creator, "confirm", return_value=True),
         patch.object(headless_creator, "_show_result"),
         patch.object(headless_creator, "_toggle_auto") as toggle,
+        patch.object(headless_creator, "_set_room_count") as room_count,
         patch.object(headless_creator, "_set_interval") as interval,
     ):
         headless_creator._dispatch_qwdtt("2", state, app, status)
         headless_creator._dispatch_qwdtt("3", state, app, status)
         headless_creator._dispatch_qwdtt("4", state, app, status)
+        headless_creator._dispatch_qwdtt("5", state, app, status)
 
     operations.stop_qwdtt_pool.assert_called_once_with(state)
+    room_count.assert_called_once_with(state, app)
     toggle.assert_called_once_with(state, app)
     interval.assert_called_once_with(state, app)
 

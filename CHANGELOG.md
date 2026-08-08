@@ -80,7 +80,14 @@
 - TUI Headless Creator сведён к установке, qWDTT-подменю и удалению. Статус
   показывает установленность, готовность VK/WB cookies, реальный путь общего
   cookie-файла и число корректных уникальных qWDTT-комнат. В qWDTT-подменю
-  остались создание, остановка, автообновление и интервал.
+  доступны создание, остановка, размер пула 1–16, автообновление и интервал.
+- Calls и qWDTT переведены на единый typed `CreatorSessionManager`: Calls
+  использует одну transient-сессию до handoff, qWDTT владеет managed-группой из
+  N сессий, blue/green commit и rollback. Новый provider подключается отдельным
+  driver без ветвления в consumer-сервисах.
+- qWDTT-ссылка формируется из любого настроенного числа уникальных хэшей с
+  сохранением порядка и корректным percent-encoding query-параметра; токены с
+  `+`, `=`, `%` и `&` больше не искажаются.
 - Меню `Calls · VK` использует общий renderer протоколов и оставляет установку,
   атомарную переустановку с пересозданием комнаты, admin-профиль и удаление;
   отдельные enable/disable и cookie-статусы из него убраны.
@@ -104,9 +111,11 @@
   прежняя master-ссылка остаётся рабочей при timeout или rollback.
 - Sync Agent и его TUI читают owner-neutral maintenance facade. Задача creator
   управляется `sync_headless_creator_vk_qwdtt_enabled` и интервалом 1–24 ч.
-- Schema state поднята до 8. `v6 → v7` сохраняет совместимость прежнего Calls
+- Schema state поднята до 9. `v6 → v7` сохраняет совместимость прежнего Calls
   layout, а `v7 → v8` переносит creator state в
-  `headless_creator.providers.vk`. Native Calls не включается автоматически;
+  `headless_creator.providers.vk`; `v8 → v9` отделяет qWDTT desired state в
+  `headless_creator.consumers.qwdtt` и сохраняет прежний default 4 комнаты.
+  Native Calls не включается автоматически;
   старые units/файлы удаляет только явное `Создать комнаты` в qWDTT-подменю со
   snapshot/restore.
 - Актуальная qWDTT master-ссылка отображается в TUI в «Ручных конфигах» с явной
