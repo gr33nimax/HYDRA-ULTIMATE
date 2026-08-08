@@ -142,7 +142,8 @@ class ExamplePlugin(BasePlugin):
 | `queries` | Безопасные проекции и клиентские профили |
 | `actions` | Runtime-операции, не требующие общего `apply` |
 | `tls_domain_source`, `config_defaults` | Подготовка при включении |
-| `subscription_profile_query`, `subscription_enabled` | Участие в подписках |
+| `subscription_profile_query`, `subscription_enabled` | Участие в legacy/обычных подписках |
+| `hydra_v2_subscription_enabled` | Отдельное участие в Hydra Subscription v2; при `None` наследует `subscription_enabled` |
 | `display_name` | Человекочитаемое имя во всех общих адаптерах |
 | `connection_source` | Источник активных подключений: общий tracker, plugin query или отсутствие проекции |
 | `maintenance_tasks` | Фоновые задачи общего scheduler без ветвлений по имени плагина |

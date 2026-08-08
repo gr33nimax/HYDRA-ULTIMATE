@@ -104,24 +104,33 @@ Extended для каждого доступного desktop/mobile профил�
 AmneziaWG при этом не изменяется.
 
 `?format=hydrabox` принимает только `User-Agent: HydraBox/<version>` и
-`X-Hydra-HWID: hbx1_<base64url-sha256>`. Неверная идентификация возвращает
+reported HWID. HydraBox 0.4 отправляет `X-HWID`; прежний
+`X-Hydra-HWID: hbx1_<base64url-sha256>` остаётся совместимым. Сервер немедленно
+хеширует значение и не сохраняет сырой HWID. Неверная идентификация возвращает
 HTTP 400, превышение device limit — HTTP 403. Ответ всегда имеет media type
-`application/jose+json` и представляет flattened JWE с единственными полями
-`protected`, `iv`, `ciphertext`, `tag`. Protected header фиксирован:
-`alg=dir`, `enc=A256GCM`, `typ=hbx+jwe`,
-`cty=application/vnd.hydrabox.subscription+json`; `kid` является безопасным
-идентификатором ключа. Plaintext HydraBox fallback отсутствует.
+`application/jose+json` и представляет strict flattened JWE с единственными
+полями `protected`, `encrypted_key`, `iv`, `ciphertext`, `tag`;
+`encrypted_key` обязано быть пустой строкой. Protected header не допускает
+дополнительных полей и фиксирован как `alg=dir`, `enc=A256GCM`,
+`typ=hydra-subscription+jwe`,
+`cty=application/vnd.hydra.subscription+json`. Plaintext fallback отсутствует.
 
 После расшифровки envelope имеет точные
-`api_version=hydrabox.io/subscription/v1` и `kind=SubscriptionData`, стабильную
-identity tuple `(issuer, subscription_id, stable)` и использует revision state
-как старшую часть монотонного `sequence`; младшая часть содержит ревизию
-HydraBox-renderer и повышается при изменении выдаваемого JSON без изменения
-state. Поэтому обновление кода не создаёт запрещённую комбинацию «прежний
-sequence + новый payload». В `runtime.document` попадают только разрешённые
-remote policy v1 `outbounds` и userspace `wireguard` endpoints: локальные
-inbounds/DNS/route и `direct` отбрасываются, а executable-поля,
-зарезервированные теги и system WireGuard блокируют выдачу fail-closed.
+`api_version=hydra.io/subscription/v2` и `kind=Subscription`. Вложенная
+`identity` хранит tuple `(issuer, id, stable)` и использует revision state как
+старшую часть монотонного `sequence`; младшая часть содержит ревизию renderer и
+повышается при изменении выдаваемого JSON без изменения state. Поэтому
+обновление кода не создаёт запрещённую комбинацию «прежний sequence + новый
+payload».
+
+Каждый plugin-owned клиентский граф публикуется отдельным элементом
+`resources[]` с `format=sing-box-json` и точным `requested_permissions`.
+Профиль содержит `resource` и ссылается только на entrypoint этого resource;
+одинаковые native tags в разных resources допустимы и не объединяются.
+Remote policy v2 пропускает только разрешённые `outbounds` и userspace
+`wireguard` endpoints: локальные DNS/route и `direct` отбрасываются, а
+executable-поля, зарезервированные теги и system WireGuard блокируют выдачу
+fail-closed.
 AmneziaWG-параметры `I1`–`I5`, `J1`–`J3` и `Itime` сохраняются в endpoint как
 `amnezia.i1`–`amnezia.i5`, `amnezia.j1`–`amnezia.j3` и `amnezia.itime` вместе с
 `Jc`/`Jmin`/`Jmax`, `S1`–`S4` и `H1`–`H4`. Detour-зависимости сохраняются с
@@ -133,8 +142,16 @@ selectable entrypoints. Пользовательское имя профиля �
 12-байтовый IV и 16-байтовый authentication tag и публикуется с
 `Cache-Control: private, no-store`.
 
+Если native `calls` включён и join-link готов, плагин добавляет отдельный
+resource с outbound `type=call`, `platform=vk`, `read_buffer` и `join_link`.
+Resource запрашивает ровно `network.outbound`, объявляет core feature `call` и
+не публикует серверные VK cookies. Отсутствующий join-link завершает генерацию
+fail-closed, а не создаёт неполный профиль. qWDTT при этом исключён отдельно:
+его общий master-артефакт и главный пароль никогда не читаются Hydra v2
+renderer и не попадают в per-user подписку.
+
 TUI и генератор выдают ссылку
-`https://<origin>/sub/<id>?format=hydrabox#hbx-key=<base64url-key>`. Fragment не
+`https://<origin>/sub/<id>?format=hydrabox#hydra-key=<base64url-key>`. Fragment не
 передаётся HTTP-серверу. Per-user 256-битный ключ хранится только в private
 state; `status`, логи и публичный JSON показывают максимум производный `kid`.
 Ротация немедленно инвалидирует все ранее выданные HydraBox-ссылки.

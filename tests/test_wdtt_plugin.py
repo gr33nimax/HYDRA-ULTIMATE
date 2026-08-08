@@ -59,6 +59,7 @@ def test_plugin_meta():
         "manual_client_artifacts"
     )
     assert p.meta.capabilities.subscription_enabled is False
+    assert p.meta.capabilities.hydra_v2_subscription_enabled is False
     assert p.meta.capabilities.maintenance_tasks == ()
 
 

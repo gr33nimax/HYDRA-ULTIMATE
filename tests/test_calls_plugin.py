@@ -53,6 +53,7 @@ def test_calls_plugin_contract_and_native_fragment() -> None:
     assert plugin.meta.category is PluginCategory.TRANSPORT
     assert plugin.meta.capabilities.central_apply is True
     assert plugin.meta.capabilities.subscription_enabled is False
+    assert plugin.meta.capabilities.hydra_v2_subscription_enabled is True
     assert plugin.meta.capabilities.connection_source == "none"
     fragment = plugin.configure(_state())
     assert fragment.inbounds == [
@@ -99,7 +100,7 @@ class SubscriptionPlugins:
         return ["call://must-not-leak"]
 
 
-def test_calls_profile_never_enters_user_subscriptions() -> None:
+def test_calls_profile_never_enters_legacy_user_subscriptions() -> None:
     plugin = CallsPlugin(Source([], ""))
     access = SubscriptionPlugins(plugin)
     links = generate_links(User(email="u@example.com", uuid="u"), _state(), plugins=access)

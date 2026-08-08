@@ -1,6 +1,8 @@
 """Sing-Box Extended native Calls transport configuration."""
 from __future__ import annotations
 
+import json
+
 from hydra.contracts import (
     BackupResource,
     CallConfigSource,
@@ -29,6 +31,7 @@ class CallsPlugin(BasePlugin):
         central_apply=True,
         required_commands=("sing-box",),
         subscription_enabled=False,
+        hydra_v2_subscription_enabled=True,
         connection_source="none",
         config_defaults=(("read_buffer", 32768),),
         backup_resources=(
@@ -89,6 +92,31 @@ class CallsPlugin(BasePlugin):
                 },
             ],
         )
+
+    def generate_client_config(self, user, state: PluginStateAccess) -> str:
+        """Return the remote-safe VK Calls joiner used by subscriptions."""
+        del user
+        desired = state.protocols.get(self.meta.name)
+        if desired is None or not desired.enabled:
+            return ""
+        join_link = self._source.load_native_join_link()
+        if not join_link:
+            raise ValueError("native VK call join link is not configured")
+        read_buffer = int(desired.config.get("read_buffer", 32768))
+        if not 4096 <= read_buffer <= 4 * 1024 * 1024:
+            raise ValueError(
+                "Calls read_buffer must be between 4096 and 4194304",
+            )
+        return json.dumps({
+            "outbounds": [{
+                "type": "call",
+                "tag": "call-vk-out",
+                "platform": "vk",
+                "read_buffer": read_buffer,
+                "join_link": join_link,
+            }],
+            "route": {"final": "call-vk-out"},
+        }, ensure_ascii=False, separators=(",", ":"))
 
     def healthcheck_for_state(self, state: PluginStateAccess) -> HealthResult:
         desired = state.protocols.get(self.meta.name)

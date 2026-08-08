@@ -40,17 +40,29 @@
 
 ### HydraBox
 
-- `?format=hydrabox` переведён на JWE-only: flattened `dir`/`A256GCM`, strict
-  protected header, случайный IV, лимиты 12/16 MiB и отсутствие plaintext
-  fallback.
+- `?format=hydrabox` переведён с исторического HydraBox Subscription v1 на
+  клиент-независимый Hydra Subscription v2: `hydra.io/subscription/v2`,
+  `resources[]`, resource-scoped profiles, точные `requested_permissions` и
+  требования HydraCore API/remote policy v2. Одинаковые native tags в разных
+  resources больше не конфликтуют.
+- Flattened `dir`/`A256GCM` JWE приведён к HydraCore v2: обязательный пустой
+  `encrypted_key`, `typ=hydra-subscription+jwe`,
+  `cty=application/vnd.hydra.subscription+json`, без `kid` в protected header.
+  Случайный IV, лимиты 12/16 MiB и отсутствие plaintext fallback сохранены.
 - Схема state v6 хранит отдельный приватный 256-битный ключ на пользователя;
   миграция заполняет ключи атомарно, а CLI/TUI умеют немедленно их ротировать.
-- HydraBox-запрос требует `HydraBox/<version>` и origin-scoped
-  `X-Hydra-HWID: hbx1_…`; backend сохраняет только хеш идентификатора и
-  редактированные audit-поля. Ошибка контракта — HTTP 400, device limit — 403.
-- Генератор выдаёт ключ только во fragment `#hbx-key=…`. Status, логи и
+- HydraBox-запрос требует `HydraBox/<version>` и reported HWID: новый клиент
+  использует `X-HWID`, legacy `X-Hydra-HWID: hbx1_…` остаётся совместимым.
+  Backend сохраняет только хеш идентификатора и редактированные audit-поля.
+  Ошибка контракта — HTTP 400, device limit — 403.
+- Генератор выдаёт ключ только во fragment `#hydra-key=…`. Status, логи и
   публичные JSON никогда не содержат ключ или полный HWID.
-- Backend и Android-клиент используют общий deterministic AES-GCM test vector.
+- Включённый native VK Calls теперь добавляет в подписку отдельный remote-safe
+  `call` outbound/profile с join-link и core feature `call`, но без VK cookies;
+  отсутствие join-link отклоняет выдачу fail-closed. qWDTT остаётся только
+  ручным общим master-артефактом: Hydra v2 renderer не вызывает его client hook
+  и не может опубликовать главный пароль.
+- Backend и HydraCore используют общий deterministic AES-GCM test vector v2.
 
 ### TUI
 

@@ -258,6 +258,12 @@ state в `headless_creator.providers.vk` и maintenance-флаг в
 включается. Ступень `v8 → v9` переносит qWDTT-настройки из provider-конфига в
 `headless_creator.consumers.qwdtt` и задаёт совместимый размер пула 4 комнаты.
 
+Обновление подписочного renderer не меняет state schema и повторно использует
+существующий per-user A256GCM key, но wire contract несовместим с HydraBox v1.
+После обновления выдавайте ссылку заново: клиент HydraBox должен быть не ниже
+`0.4.0-beta.1`, а fragment теперь называется `#hydra-key=…`. Сервер публикует
+только Hydra Subscription v2; downgrade к v1 или plaintext fallback отсутствует.
+
 Миграция state намеренно не останавливает старые creator units и не переносит
 `/etc/wdtt/headless` или промежуточный Calls runtime. Если creator был настроен,
 верхнеуровневый TUI `Headless Creator` покажет

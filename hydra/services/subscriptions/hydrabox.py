@@ -1,4 +1,4 @@
-"""HydraBox SubscriptionData v1 envelope generation."""
+"""Hydra Subscription v2 generation for the HydraBox delivery format."""
 from __future__ import annotations
 
 import hashlib
@@ -13,21 +13,21 @@ from hydra.services.subscriptions.access import SubscriptionPluginAccess
 from hydra.services.subscriptions.metadata import get_subscription_url
 
 
-HYDRABOX_API_VERSION = "hydrabox.io/subscription/v1"
-HYDRABOX_KIND = "SubscriptionData"
-HYDRABOX_MEDIA_TYPE = "application/vnd.hydrabox.subscription+json"
+HYDRABOX_API_VERSION = "hydra.io/subscription/v2"
+HYDRABOX_KIND = "Subscription"
+HYDRABOX_MEDIA_TYPE = "application/vnd.hydra.subscription+json"
 HYDRABOX_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
 _MAX_SEQUENCE = 9_007_199_254_740_991
 _PAYLOAD_REVISION_BITS = 16
 # Increment whenever renderer code can change JSON for unchanged persisted state.
-_HYDRABOX_PAYLOAD_REVISION = 1
+_HYDRABOX_PAYLOAD_REVISION = 2
 _MAX_STATE_REVISION = _MAX_SEQUENCE >> _PAYLOAD_REVISION_BITS
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _ALLOWED_OUTBOUND_TYPES = frozenset({
     "socks", "http", "vmess", "trojan", "naive", "shadowtls", "vless",
     "mieru", "anytls", "trusttunnel", "hysteria", "hysteria2", "tuic",
-    "sudoku", "snell",
+    "sudoku", "snell", "call",
 })
 _RESERVED_TAGS = frozenset({
     "select", "direct", "lowest", "lowest-open", "lowest-free", "mixed",
@@ -100,8 +100,8 @@ def _validate_tag(tag: object) -> str:
         raise ValueError("native tag must contain 1..512 characters")
     if tag != tag.strip() or any(ord(character) < 32 for character in tag):
         raise ValueError(f"invalid native tag: {tag!r}")
-    if tag.startswith("__hydrabox.") or tag in _RESERVED_TAGS:
-        raise ValueError(f"reserved HydraBox tag: {tag}")
+    if tag.startswith("__hydra.") or tag in _RESERVED_TAGS:
+        raise ValueError(f"reserved Hydra tag: {tag}")
     return tag
 
 
@@ -208,6 +208,25 @@ def _profile_id(plugin_name: str, section: str, tag: str) -> str:
     return f"{prefix[:110]}-{digest}"
 
 
+def _resource_id(plugin_name: str) -> str:
+    prefix = re.sub(r"[^A-Za-z0-9._:-]+", "-", plugin_name).strip("-._:")
+    prefix = prefix or "transport"
+    digest = hashlib.sha256(plugin_name.encode()).hexdigest()[:12]
+    return f"resource-{prefix[:106]}-{digest}"
+
+
+def _requested_permissions(
+    objects: list[tuple[str, dict[str, Any]]],
+) -> list[str]:
+    sections = {section for section, _ in objects}
+    permissions: list[str] = []
+    if "outbounds" in sections:
+        permissions.append("network.outbound")
+    if "endpoints" in sections:
+        permissions.append("network.endpoint.wireguard")
+    return permissions
+
+
 def _parse_timestamp(value: str, field: str) -> datetime:
     source = value.strip()
     if "T" not in source:
@@ -259,18 +278,15 @@ def generate_hydrabox_subscription(
     *,
     plugins: SubscriptionPluginAccess,
 ) -> dict[str, Any]:
-    """Build an activatable plaintext HydraBox SubscriptionData v1 document."""
+    """Build an activatable plaintext Hydra Subscription v2 document."""
     sequence = _validate_envelope_identity(user, state)
-    document: dict[str, list[dict[str, Any]]] = {
-        "outbounds": [],
-        "endpoints": [],
-    }
+    resources: list[dict[str, Any]] = []
     profiles: list[dict[str, Any]] = []
-    native_tags: set[str] = set()
     profile_ids: set[str] = set()
+    required_core_features: set[str] = set()
 
     for plugin in plugins.enabled_transports(state):
-        if not plugin.meta.capabilities.subscription_enabled:
+        if not plugin.meta.capabilities.hydra_v2_subscription_enabled:
             continue
         try:
             payload = plugins.singbox_client_config(plugin, user, state)
@@ -284,14 +300,22 @@ def generate_hydrabox_subscription(
         _validate_depth(projection)
         objects = _runtime_objects(projection)
         entrypoints = _entrypoints(projection, objects)
+        if not entrypoints:
+            continue
         label = plugin.meta.display_name or plugin.meta.name
         multiple = len(entrypoints) > 1
+        resource_id = _resource_id(plugin.meta.name)
+        document: dict[str, list[dict[str, Any]]] = {}
         for section, item in objects:
-            tag = item["tag"]
-            if tag in native_tags:
-                raise ValueError(f"duplicate native tag: {tag}")
-            native_tags.add(tag)
-            document[section].append(item)
+            document.setdefault(section, []).append(item)
+            if item.get("type") == "call":
+                required_core_features.add("call")
+        resources.append({
+            "id": resource_id,
+            "format": "sing-box-json",
+            "requested_permissions": _requested_permissions(objects),
+            "document": document,
+        })
         for section, tag in entrypoints:
             profile_id = _profile_id(plugin.meta.name, section, tag)
             if profile_id in profile_ids:
@@ -299,6 +323,7 @@ def generate_hydrabox_subscription(
             profile_ids.add(profile_id)
             profiles.append({
                 "id": profile_id,
+                "resource": resource_id,
                 "name": f"{label} — {tag}" if multiple else label,
                 "entrypoint": {"section": section, "tag": tag},
                 "enabled": True,
@@ -308,9 +333,6 @@ def generate_hydrabox_subscription(
         raise ValueError("HydraBox subscription requires an enabled profile")
     if len(profiles) > 4096:
         raise ValueError("HydraBox subscription exceeds the profile limit")
-    runtime_document = {
-        section: values for section, values in document.items() if values
-    }
     issued_at = _timestamp(
         user.created_at or "1970-01-01T00:00:00Z",
         "issued_at",
@@ -318,15 +340,35 @@ def generate_hydrabox_subscription(
     envelope: dict[str, Any] = {
         "api_version": HYDRABOX_API_VERSION,
         "kind": HYDRABOX_KIND,
-        "issuer": _issuer(user, state),
-        "subscription_id": user.uuid,
-        "channel": "stable",
-        "sequence": sequence,
-        "issued_at": issued_at,
-        "default_profile_id": profiles[0]["id"],
-        "metadata": {"name": {"default": f"HYDRA — {user.email}"}},
-        "runtime": {"format": "sing-box-json", "document": runtime_document},
+        "identity": {
+            "issuer": _issuer(user, state),
+            "id": user.uuid,
+            "channel": "stable",
+            "sequence": sequence,
+        },
+        "validity": {"issued_at": issued_at},
+        "display": {"name": {"default": f"HYDRA — {user.email}"}},
+        "requirements": {
+            "core": {
+                "id": "io.hydrabox.hydracore",
+                "api_version": 2,
+                "remote_policy": 2,
+                "features": sorted(required_core_features),
+            },
+            "client": {
+                "subscription_contract": 2,
+                "min_version": "0.4.0-beta.1",
+                "features": [
+                    "automatic-permissions",
+                    "multi-resource",
+                    "secure-storage",
+                    "subscription-jwe",
+                ],
+            },
+        },
+        "resources": resources,
         "profiles": profiles,
+        "default_profile": profiles[0]["id"],
     }
     if user.expiry_date:
         expires_at = _timestamp(user.expiry_date, "expires_at")
@@ -335,7 +377,7 @@ def generate_hydrabox_subscription(
             "issued_at",
         ):
             raise ValueError("HydraBox expires_at must be later than issued_at")
-        envelope["expires_at"] = expires_at
+        envelope["validity"]["expires_at"] = expires_at
     _validate_remote_values(envelope)
     return envelope
 

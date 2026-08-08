@@ -95,16 +95,34 @@ def hydrabox_client_fingerprint(
     headers: Mapping[str, str],
     client_ip: str,
 ) -> DeviceFingerprint:
-    """Validate the strict HydraBox identity contract and hash its HWID."""
+    """Validate the HydraBox identity contract and hash its reported HWID."""
     agent = _normalized_agent(headers.get("User-Agent", ""))
     if not _HYDRABOX_AGENT.match(agent):
         raise ValueError("HydraBox User-Agent is required")
-    raw_hwid = str(headers.get("X-Hydra-HWID", "") or "").strip()
-    if not _HYDRABOX_HWID.fullmatch(raw_hwid):
-        raise ValueError("Valid X-Hydra-HWID is required")
+    raw_hwid = ""
+    source = ""
+    for name in HWID_HEADERS:
+        candidate = str(headers.get(name, "") or "").strip()
+        if candidate:
+            raw_hwid = candidate
+            source = name.lower()
+            break
+    if not raw_hwid:
+        raise ValueError("HydraBox HWID header is required")
+    if source == "x-hydra-hwid":
+        if not _HYDRABOX_HWID.fullmatch(raw_hwid):
+            raise ValueError("Valid X-Hydra-HWID is required")
+        identity = raw_hwid.encode("ascii")
+    else:
+        if len(raw_hwid) > 512 or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in raw_hwid
+        ):
+            raise ValueError("Valid HydraBox HWID header is required")
+        identity = f"{source}:{raw_hwid}".encode()
     return DeviceFingerprint(
-        device_id=hashlib.sha256(raw_hwid.encode("ascii")).hexdigest(),
-        source="x-hydra-hwid",
+        device_id=hashlib.sha256(identity).hexdigest(),
+        source=source,
         user_agent=agent,
         address=str(client_ip or ""),
     )

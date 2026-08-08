@@ -43,6 +43,7 @@ class PluginCapabilities:
     config_defaults: tuple[tuple[str, JsonValue], ...] = ()
     subscription_profile_query: str = ""
     subscription_enabled: bool = True
+    hydra_v2_subscription_enabled: bool = True
     manual_artifacts_query: str = ""
     connection_source: str = "plugin"
     maintenance_tasks: tuple[MaintenanceTask, ...] = ()
@@ -119,6 +120,7 @@ class PluginMeta:
     config_defaults: tuple[tuple[str, JsonValue], ...] = ()
     subscription_profile_query: str = ""
     subscription_enabled: bool = True
+    hydra_v2_subscription_enabled: bool | None = None
     manual_artifacts_query: str = ""
     connection_source: str = "plugin"
     maintenance_tasks: tuple[MaintenanceTask, ...] = ()
@@ -140,6 +142,11 @@ class PluginMeta:
             config_defaults=tuple(self.config_defaults),
             subscription_profile_query=self.subscription_profile_query,
             subscription_enabled=self.subscription_enabled,
+            hydra_v2_subscription_enabled=(
+                self.subscription_enabled
+                if self.hydra_v2_subscription_enabled is None
+                else self.hydra_v2_subscription_enabled
+            ),
             manual_artifacts_query=self.manual_artifacts_query,
             connection_source=self.connection_source,
             maintenance_tasks=tuple(self.maintenance_tasks),

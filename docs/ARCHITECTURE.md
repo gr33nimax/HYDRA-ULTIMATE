@@ -572,8 +572,12 @@ handoff. Установка creator и credentials не принадлежат �
 единственным VK cookie-файлом `/etc/hydra/cookiesvk/cookies-vk.json`. Через
 внедрённый `CallConfigSource` плагин читает cookies у этого владельца и native
 join-link у Calls, затем возвращает единственный `call` inbound. Профиль admin
-joiner не является plugin connection source, подпиской или источником traffic
-accounting.
+joiner остаётся application-owned ручным артефактом. Отдельно плагин владеет
+remote-safe joiner-проекцией: при включённом Calls она попадает в Hydra
+Subscription v2 как изолированный `call` outbound с `platform=vk` и
+`network.outbound`, но без серверных cookies. Join-link обязателен и считается
+секретом; неполная проекция отклоняет всю выдачу fail-closed. Клиентский joiner
+не становится источником server-side traffic accounting.
 
 Перед enable выполняется feature-probe минимальным `sing-box check`. Bootstrap
 запускает общий `headless-vk-creator`, строго принимает из закрытого временного
@@ -615,6 +619,10 @@ join-link на уровне INFO, поэтому сырой journald остаё�
 от per-user подписок. qWDTT объявляет через него единственную master-ссылку для
 экрана «Ручные конфиги», сохраняя `subscription_enabled=False`: ссылка содержит
 главный пароль, является общей и не должна попадать в subscription API.
+`hydra_v2_subscription_enabled` также остаётся `False`, поэтому Hydra v2
+renderer не вызывает qWDTT client hook даже при включённом протоколе. Native
+Calls задаёт обратную комбинацию: legacy subscriptions выключены, а только
+Hydra v2 projection включена.
 
 ## 10. Границы текущей версии
 

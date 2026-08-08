@@ -114,7 +114,7 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             return (
                 content,
                 JWE_MEDIA_TYPE,
-                "subscription.hbx.jwe.json",
+                "subscription.hydra.jwe.json",
             )
         return (
             generate_base64_sub(user, state, plugins=plugins),
@@ -130,10 +130,10 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         request = urllib.parse.urlparse(self.path)
         parameters = urllib.parse.parse_qs(request.query)
         requested_format = parameters.get("format", [None])[0]
-        if not requested_format and HYDRABOX_MEDIA_TYPE in self.headers.get(
-            "Accept",
-            "",
-        ).lower():
+        accepted = self.headers.get("Accept", "").lower()
+        if not requested_format and (
+            HYDRABOX_MEDIA_TYPE in accepted or JWE_MEDIA_TYPE in accepted
+        ):
             requested_format = "hydrabox"
         response_format = resolve_subscription_format(
             requested_format,

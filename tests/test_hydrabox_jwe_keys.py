@@ -43,7 +43,7 @@ def test_v5_to_v6_is_pure_and_reserves_private_key_field():
 
 def test_shared_hydrabox_jwe_interoperability_vector():
     vector = json.loads(
-        (Path(__file__).parent / "fixtures" / "hydrabox-jwe-v1.json").read_text(
+        (Path(__file__).parent / "fixtures" / "hydra-jwe-v2.json").read_text(
             encoding="utf-8",
         ),
     )

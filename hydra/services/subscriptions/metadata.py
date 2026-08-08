@@ -84,7 +84,7 @@ def get_subscription_urls(user: User, state: AppState) -> dict[str, str]:
 
     hydrabox_url = with_format("hydrabox")
     if user.hydrabox_jwe_key:
-        hydrabox_url = f"{hydrabox_url}#hbx-key={user.hydrabox_jwe_key}"
+        hydrabox_url = f"{hydrabox_url}#hydra-key={user.hydrabox_jwe_key}"
     return {
         "auto": base,
         "nekobox": with_format("nekobox"),

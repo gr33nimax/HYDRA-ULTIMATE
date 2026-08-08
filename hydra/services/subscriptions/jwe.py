@@ -1,4 +1,4 @@
-"""Strict flattened JWE for HydraBox SubscriptionData documents."""
+"""Strict flattened JWE for Hydra Subscription v2 documents."""
 from __future__ import annotations
 
 import base64
@@ -19,11 +19,13 @@ from hydra.services.subscriptions.hydrabox import (
 
 
 JWE_MEDIA_TYPE = "application/jose+json"
-JWE_TYPE = "hbx+jwe"
+JWE_TYPE = "hydra-subscription+jwe"
 HYDRABOX_MAX_PLAINTEXT_BYTES = 12 * 1024 * 1024
 HYDRABOX_MAX_JWE_BYTES = 16 * 1024 * 1024
-_OUTER_FIELDS = frozenset({"protected", "iv", "ciphertext", "tag"})
-_HEADER_FIELDS = frozenset({"alg", "enc", "typ", "cty", "kid"})
+_OUTER_FIELDS = frozenset({
+    "protected", "encrypted_key", "iv", "ciphertext", "tag",
+})
+_HEADER_FIELDS = frozenset({"alg", "enc", "typ", "cty"})
 
 
 def _b64url(value: bytes) -> str:
@@ -43,13 +45,12 @@ def _decode(value: object, field: str) -> bytes:
         raise ValueError(f"invalid JWE {field}") from exc
 
 
-def _protected_header(key: str) -> dict[str, str]:
+def _protected_header() -> dict[str, str]:
     return {
         "alg": "dir",
         "enc": "A256GCM",
         "typ": JWE_TYPE,
         "cty": HYDRABOX_MEDIA_TYPE,
-        "kid": hydrabox_jwe_kid(key),
     }
 
 
@@ -67,7 +68,7 @@ def encrypt_hydrabox_subscription(
     if len(nonce) != 12:
         raise ValueError("HydraBox JWE IV must contain 12 bytes")
     protected = _b64url(json.dumps(
-        _protected_header(key),
+        _protected_header(),
         ensure_ascii=True,
         separators=(",", ":"),
     ).encode("ascii"))
@@ -78,6 +79,7 @@ def encrypt_hydrabox_subscription(
     )
     outer = {
         "protected": protected,
+        "encrypted_key": "",
         "iv": _b64url(nonce),
         "ciphertext": _b64url(encrypted[:-16]),
         "tag": _b64url(encrypted[-16:]),
@@ -103,23 +105,20 @@ def decrypt_hydrabox_subscription(
         raise ValueError("invalid HydraBox JWE JSON") from exc
     if not isinstance(outer, dict) or set(outer) != _OUTER_FIELDS:
         raise ValueError("invalid flattened HydraBox JWE fields")
+    if outer["encrypted_key"] != "":
+        raise ValueError("invalid flattened HydraBox JWE fields")
     protected_value = outer["protected"]
     protected_bytes = _decode(protected_value, "protected")
     try:
         header = json.loads(protected_bytes)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("invalid HydraBox JWE protected header") from exc
-    expected = _protected_header(key)
+    expected = _protected_header()
     if not isinstance(header, dict) or set(header) != _HEADER_FIELDS:
         raise ValueError("invalid HydraBox JWE protected header")
-    if any(
-        header.get(name) != value
-        for name, value in expected.items()
-        if name != "kid"
-    ):
+    if any(header.get(name) != value for name, value in expected.items()):
         raise ValueError("unsupported HydraBox JWE protected header")
-    wanted_kid = expected_kid or expected["kid"]
-    if header.get("kid") != wanted_kid:
+    if expected_kid is not None and hydrabox_jwe_kid(key) != expected_kid:
         raise ValueError("HydraBox JWE kid mismatch")
     nonce = _decode(outer["iv"], "iv")
     tag = _decode(outer["tag"], "tag")

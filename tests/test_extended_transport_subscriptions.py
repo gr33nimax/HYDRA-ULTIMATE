@@ -74,14 +74,20 @@ def test_hydrabox_subscription_contains_remote_safe_extended_transports():
         plugins=PLUGINS,
     )
 
-    document = subscription["runtime"]["document"]
-    assert set(document) == {"outbounds"}
-    assert {item["type"] for item in document["outbounds"]} >= {
+    resources = subscription["resources"]
+    documents = [resource["document"] for resource in resources]
+    assert all(set(document) == {"outbounds"} for document in documents)
+    outbounds = [
+        item
+        for document in documents
+        for item in document["outbounds"]
+    ]
+    assert {item["type"] for item in outbounds} >= {
         "hysteria2",
         "snell",
         "vless",
     }
-    assert "direct" not in {item["tag"] for item in document["outbounds"]}
+    assert "direct" not in {item["tag"] for item in outbounds}
     assert {profile["entrypoint"]["tag"] for profile in subscription["profiles"]} == {
-        item["tag"] for item in document["outbounds"]
+        item["tag"] for item in outbounds
     }

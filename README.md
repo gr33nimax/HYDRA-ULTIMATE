@@ -84,8 +84,9 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 - 👥 **Пользователь — одна транзакция.** Добавление, блокировка, лимиты трафика и
   сроки действуют сразу во всех включённых транспортах.
 - 🔐 **Защищённая подписка HydraBox.** `?format=hydrabox` отдаёт только flattened
-  JWE (`dir` + `A256GCM`) с device binding; ключ находится исключительно в
-  fragment `#hbx-key=…`. Plaintext HydraBox backend не публикует.
+  JWE Hydra Subscription v2 (`dir` + `A256GCM`) с device binding; ключ находится
+  исключительно во fragment `#hydra-key=…`. Каждый транспорт изолирован в
+  собственном resource, а включённый VK Calls публикует готовый joiner-профиль.
 - 🤖 **Управление откуда угодно.** TUI для настройки, `--json` CLI для cron и
   автоматизации, Telegram-бот для повседневного администрирования.
 - 🛡 **Защитный контур из коробки.** AntiDPI, Honeypot, Fail2ban и IPBan с
