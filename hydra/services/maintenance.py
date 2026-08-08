@@ -50,7 +50,7 @@ class QueryAccess(Protocol):
     def execute(self, plugin_name: str, query: str, **parameters: object) -> Any: ...
 
 
-class CallsMaintenanceAccess(Protocol):
+class HeadlessCreatorMaintenanceAccess(Protocol):
     def qwdtt_pool_due(self, state: AppState, *, forced: bool = False) -> bool: ...
     def refresh_qwdtt_pool(
         self,
@@ -81,12 +81,12 @@ def _action_result(value: Any) -> tuple[bool, str]:
 
 @dataclass(frozen=True)
 class MaintenanceService:
-    """Combine plugin-declared tasks with application-owned Calls work."""
+    """Combine plugin tasks with owner-neutral application maintenance."""
 
     protocols: ProtocolMaintenanceAccess
     plugin_actions: ActionAccess
     plugin_queries: QueryAccess
-    calls: CallsMaintenanceAccess
+    headless_creator: HeadlessCreatorMaintenanceAccess
 
     def jobs(self) -> list[MaintenanceJob]:
         return [
@@ -97,37 +97,37 @@ class MaintenanceService:
                 title="Обновление VK-комнат qWDTT",
                 description="Переоткрывает четыре VK-комнаты и публикует qwdtt:// ссылку",
                 due_query="qwdtt_pool_due",
-                enabled_flag="sync_calls_qwdtt_pool_enabled",
+                enabled_flag="sync_headless_creator_vk_qwdtt_enabled",
                 apply_on_success=False,
-                owner="calls",
-                key="calls.qwdtt_pool",
+                owner="headless_creator",
+                key="headless_creator.vk.qwdtt_pool",
             ),
         ]
 
     def run(self, state: AppState, forced: bool) -> list[MaintenanceOutcome]:
         outcomes: list[MaintenanceOutcome] = []
         for job in self.jobs():
-            if job.owner == "calls":
-                outcomes.append(self._run_calls_job(state, job, forced))
+            if job.owner == "headless_creator":
+                outcomes.append(self._run_creator_job(state, job, forced))
             else:
                 outcomes.append(self._run_plugin_job(state, job, forced))
         return outcomes
 
-    def _run_calls_job(
+    def _run_creator_job(
         self,
         state: AppState,
         job: MaintenanceJob,
         forced: bool,
     ) -> MaintenanceOutcome:
-        calls = state.protocols.get("calls")
-        if not (calls and calls.config.get("qwdtt_pool_enabled", False)):
+        vk = state.headless_creator.providers.get("vk", {})
+        if not vk.get("qwdtt_pool_enabled", False):
             return MaintenanceOutcome(job, "consumer_disabled")
         if not forced and not state.install.get(job.enabled_flag, True):
             return MaintenanceOutcome(job, "disabled")
         try:
-            if not forced and not self.calls.qwdtt_pool_due(state):
+            if not forced and not self.headless_creator.qwdtt_pool_due(state):
                 return MaintenanceOutcome(job, "fresh")
-            result = self.calls.refresh_qwdtt_pool(state, forced=True)
+            result = self.headless_creator.refresh_qwdtt_pool(state, forced=True)
             message = result.error.message if result.error else ""
             return MaintenanceOutcome(
                 job,

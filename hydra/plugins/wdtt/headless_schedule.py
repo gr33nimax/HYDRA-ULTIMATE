@@ -8,16 +8,11 @@ REFRESH_INTERVAL = 86_400
 MIN_REFRESH_INTERVAL = 3_600
 MAX_REFRESH_INTERVAL = 86_400
 REFRESH_INTERVAL_KEY = "qwdtt_refresh_interval_seconds"
-AUTO_MANAGEMENT_FLAG = "sync_calls_qwdtt_pool_enabled"
+AUTO_MANAGEMENT_FLAG = "sync_headless_creator_vk_qwdtt_enabled"
 
 
 def refresh_interval(state: PluginStateAccess | None) -> int:
-    protocol = state.protocols.get("calls") if state is not None else None
-    value = (
-        protocol.config.get(REFRESH_INTERVAL_KEY, REFRESH_INTERVAL)
-        if protocol is not None
-        else REFRESH_INTERVAL
-    )
+    value = REFRESH_INTERVAL
     try:
         seconds = int(value)
     except (TypeError, ValueError):
@@ -45,14 +40,9 @@ def set_refresh_interval(
         raise ValueError(
             "headless refresh interval must be between 1 and 24 hours",
         )
-    protocol = state.protocols.get("calls")
-    if protocol is None:
-        raise ValueError("Calls protocol state is missing")
-    previous = refresh_interval(state)
-    if previous == normalized and REFRESH_INTERVAL_KEY in protocol.config:
-        return False
-    protocol.config[REFRESH_INTERVAL_KEY] = normalized
-    return True
+    raise RuntimeError(
+        "VK creator schedule moved to ApplicationService.headless_creator",
+    )
 
 
 __all__ = [

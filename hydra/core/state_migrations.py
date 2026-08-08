@@ -5,11 +5,9 @@ import copy
 from collections.abc import Callable, Mapping
 
 from hydra.core.state_migration_calls import migrate_v6_to_v7
+from hydra.core.state_migration_headless_creator import migrate_v7_to_v8
 from hydra.core.state_models import SCHEMA_VERSION, validate_raw_state
-
-
 Migration = Callable[[dict], dict]
-
 
 def migrate_v0_to_v1(data: dict) -> dict:
     data["version"] = 1
@@ -110,6 +108,7 @@ MIGRATIONS: dict[int, Migration] = {
     4: migrate_v4_to_v5,
     5: migrate_v5_to_v6,
     6: migrate_v6_to_v7,
+    7: migrate_v7_to_v8,
 }
 
 

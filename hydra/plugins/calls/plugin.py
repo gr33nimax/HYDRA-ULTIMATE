@@ -32,13 +32,7 @@ class CallsPlugin(BasePlugin):
         connection_source="none",
         config_defaults=(("read_buffer", 32768),),
         backup_resources=(
-            BackupResource("/etc/hydra/calls/vk", "tree", owner="calls"),
             BackupResource("/var/lib/hydra/calls/vk", "tree", owner="calls"),
-            BackupResource(
-                "/etc/systemd/system/hydra-vk-call-creator@.service",
-                "file",
-                owner="calls",
-            ),
         ),
     )
 

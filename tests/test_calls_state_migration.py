@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from hydra.core.state_migrations import migrate_state, migrate_v6_to_v7
+from hydra.core.state_migrations import migrate_state, migrate_v6_to_v7, migrate_v7_to_v8
 from hydra.core.state_models import UnsupportedStateVersion, validate_supported_version
 
 
@@ -58,7 +58,7 @@ def test_v6_to_v7_moves_creator_desired_state_without_native_auto_enable() -> No
 def test_v6_to_v7_is_idempotent() -> None:
     once = migrate_v6_to_v7(_v6())
     assert migrate_v6_to_v7(once) == once
-    assert migrate_state(_v6(), 6) == once
+    assert migrate_state(_v6(), 6) == migrate_v7_to_v8(once)
 
 
 def test_v6_disabled_creator_becomes_disabled_calls_pool() -> None:
@@ -69,12 +69,28 @@ def test_v6_disabled_creator_becomes_disabled_calls_pool() -> None:
     assert "legacy_creator_reinstall_required" not in migrated["protocols"]["calls"]["config"]
 
 
-def test_future_schema_is_rejected_after_v7() -> None:
+def test_v7_to_v8_extracts_creator_from_calls() -> None:
+    source = migrate_v6_to_v7(_v6())
+    migrated = migrate_v7_to_v8(source)
+
+    assert migrated["version"] == 8
+    assert migrated["protocols"]["calls"]["config"] == {}
+    assert migrated["headless_creator"]["providers"]["vk"] == {
+        "qwdtt_pool_enabled": True,
+        "qwdtt_refresh_interval_seconds": 7200,
+        "legacy_creator_reinstall_required": True,
+    }
+    assert migrated["install"]["sync_headless_creator_vk_qwdtt_enabled"] is False
+    assert "sync_calls_qwdtt_pool_enabled" not in migrated["install"]
+    assert migrate_v7_to_v8(migrated) == migrated
+
+
+def test_future_schema_is_rejected_after_v8() -> None:
     with pytest.raises(UnsupportedStateVersion):
-        validate_supported_version({"version": 8})
+        validate_supported_version({"version": 9})
 
 
 def test_migrated_state_is_json_serializable_without_secret_artifacts() -> None:
-    payload = json.dumps(migrate_v6_to_v7(_v6()))
+    payload = json.dumps(migrate_state(_v6(), 6))
     assert "cookies-vk" not in payload
     assert "vk.com/call/join" not in payload

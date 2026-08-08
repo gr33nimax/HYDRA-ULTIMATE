@@ -1,6 +1,6 @@
 """Deprecated compatibility surface for the former WDTT-owned creator.
 
-Runtime ownership moved to ``ApplicationService.calls`` in state schema 7.
+Runtime ownership moved to ``ApplicationService.headless_creator`` in schema 8.
 The WDTT plugin deliberately does not inherit this mixin or advertise these
 methods as commands, queries, actions, or maintenance tasks.
 """
@@ -17,7 +17,7 @@ MIN_REFRESH_INTERVAL = 3_600
 MAX_REFRESH_INTERVAL = 86_400
 REFRESH_INTERVAL_KEY = "qwdtt_refresh_interval_seconds"
 HEADLESS_MAINTENANCE_TASKS: tuple[()] = ()
-_MOVED = "VK creator management moved to ApplicationService.calls"
+_MOVED = "VK creator management moved to ApplicationService.headless_creator"
 
 
 def extract_hash(value: str) -> str:
@@ -71,16 +71,11 @@ class WdttHeadlessMixin:
     ) -> bool:
         if isinstance(seconds, bool) or not MIN_REFRESH_INTERVAL <= int(seconds) <= MAX_REFRESH_INTERVAL:
             raise ValueError("refresh interval must be between 1 and 24 hours")
-        calls = state.protocols.get("calls")
-        if calls is None:
-            raise ValueError("Calls protocol state is missing")
-        previous = calls.config.get(REFRESH_INTERVAL_KEY)
-        calls.config[REFRESH_INTERVAL_KEY] = int(seconds)
-        return previous != int(seconds)
+        raise RuntimeError(_MOVED)
 
     @staticmethod
     def headless_creator_status(**_kwargs) -> dict:
-        return {"configured": False, "moved_to": "ApplicationService.calls"}
+        return {"configured": False, "moved_to": "ApplicationService.headless_creator"}
 
     @staticmethod
     def headless_creator_link() -> str:

@@ -79,20 +79,24 @@
 - Добавлен экспериментальный транспорт `calls`: native VK `call` inbound для
   Sing-Box Extended, feature-probe без автоматического обновления ядра,
   транзакционное создание/ротация комнаты и admin-only SOCKS joiner profile.
-- `ApplicationService.calls` стал единым владельцем VK cookies, join-link,
-  creator lifecycle и maintenance. WDTT больше не объявляет install/stop/
-  uninstall/timer actions и отвечает только за `qwdtt://`-артефакт.
-- В TUI появился отдельный экран `Calls · VK` для native Calls и четырёх
-  qWDTT-комнат. Cookies читаются из `/etc/hydra/calls/vk/cookies-vk.json`;
-  native link и pool runtime находятся в `/var/lib/hydra/calls/vk/`.
+- `ApplicationService.headless_creator` стал независимым владельцем binary,
+  provider credentials и creator maintenance. Один `headless-vk-creator`
+  создаёт комнаты для native Calls и qWDTT; WDTT отвечает только за
+  `qwdtt://`-артефакт.
+- В корневом TUI появился отдельный provider-ready экран `Headless Creator`;
+  `Calls · VK` теперь управляет только native транспортом. Единственный VK
+  cookie-файл — `/etc/hydra/cookiesvk/cookies-vk.json`; native join-link остаётся
+  в `/var/lib/hydra/calls/vk/`, creator runtime вынесен в
+  `/var/lib/hydra/headless-creator/`.
 - qWDTT rotation стала blue/green: новое поколение
-  `hydra-vk-call-creator@.service` запускается параллельно старому, поэтому
+  `hydra-headless-creator-vk@.service` запускается параллельно старому, поэтому
   прежняя master-ссылка остаётся рабочей при timeout или rollback.
-- Sync Agent и его TUI читают owner-neutral maintenance facade. Автоматическая
-  задача Calls управляется `sync_calls_qwdtt_pool_enabled` и интервалом 1–24 ч.
-- Schema state поднята до 7. `v6 → v7` переносит legacy WDTT creator keys, но
-  не включает native Calls и не меняет старые units/файлы. Их удаляет только
-  явный fresh setup со snapshot/restore при ошибке.
+- Sync Agent и его TUI читают owner-neutral maintenance facade. Задача creator
+  управляется `sync_headless_creator_vk_qwdtt_enabled` и интервалом 1–24 ч.
+- Schema state поднята до 8. `v6 → v7` сохраняет совместимость прежнего Calls
+  layout, а `v7 → v8` переносит creator state в
+  `headless_creator.providers.vk`. Native Calls не включается автоматически;
+  старые units/файлы удаляет только явный Fresh setup со snapshot/restore.
 - Актуальная qWDTT master-ссылка отображается в TUI в «Ручных конфигах» с явной
   пометкой, что она общая для всех пользователей; в пользовательские подписки
   ссылка с главным паролем не включается.

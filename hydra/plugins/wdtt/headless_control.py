@@ -23,7 +23,7 @@ def call_files(env: WdttEnvironment) -> list[Path]:
 def stop(env: WdttEnvironment) -> tuple[bool, str]:
     """Retain the legacy signature without performing host mutations."""
     del env
-    return False, "VK creator management moved to ApplicationService.calls"
+    return False, "VK creator management moved to ApplicationService.headless_creator"
 
 
 __all__ = ["call_files", "service_names", "stop"]

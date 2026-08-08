@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 from hydra.core.errors import ServiceResult
 from hydra.core.state_models import AppState
 from hydra.ui.plugin_managers import calls
+from hydra.ui._menus import headless_creator
 
 
 def test_calls_menu_dispatch_uses_injected_application_service() -> None:
@@ -60,3 +61,29 @@ def test_calls_tui_has_no_host_or_plugin_runtime_dependencies() -> None:
     assert not any(module.startswith("hydra.plugins") for module in imported)
     assert "HOST" not in names
     assert "subprocess" not in names
+
+
+def test_creator_menu_dispatch_uses_independent_application_port() -> None:
+    state = AppState()
+    operations = SimpleNamespace(
+        install=Mock(return_value=ServiceResult(True)),
+    )
+    app = SimpleNamespace(headless_creator=operations)
+
+    with patch.object(headless_creator, "_show_result") as show:
+        assert headless_creator._dispatch("1", state, app) is True
+
+    operations.install.assert_called_once_with(state)
+    show.assert_called_once()
+
+
+def test_creator_tui_has_no_host_or_protocol_plugin_dependency() -> None:
+    path = Path(headless_creator.__file__)
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imported = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    assert "hydra.core.host" not in imported
+    assert not any(module.startswith("hydra.plugins") for module in imported)

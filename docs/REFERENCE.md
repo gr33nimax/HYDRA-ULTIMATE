@@ -41,19 +41,20 @@
 | `calls` | Calls · VK | Экспериментальный native `call` transport Sing-Box Extended |
 | `wdtt` | qWDTT | WireGuard-туннелирование поверх TURN |
 
-`ApplicationService.calls` владеет VK cookies, native-комнатой, клиентским
-профилем и четырьмя комнатами qWDTT. Экспортированный Creator JSON помещается в
-`/etc/hydra/calls/vk/cookies-vk.json` (`0600`). Native Calls сначала проходит
-`sing-box check` feature-probe, затем временный Sing-Box создаёт комнату с пустым
-`join_link`; основной `sing-box.service` получает уже фиксированную ссылку через
-общий транзакционный apply. При ротации прежний link и runtime сохраняются до
-подтверждения handoff.
+`ApplicationService.headless_creator` владеет установкой creator, VK cookies и
+четырьмя комнатами qWDTT. Единственный Creator JSON помещается в
+`/etc/hydra/cookiesvk/cookies-vk.json` (`0600`). `ApplicationService.calls`
+владеет только native join-link, клиентским профилем и lifecycle транспорта.
+Native Calls сначала проходит `sing-box check` feature-probe, затем общий
+`headless-vk-creator` создаёт комнату; основной `sing-box.service` получает уже
+фиксированную ссылку через транзакционный apply. При ротации прежний link и
+runtime сохраняются до подтверждения handoff.
 
 Creator-пул qWDTT работает двумя поколениями systemd-инстансов: новое поколение
 публикуется только после получения четырёх уникальных хэшей, затем старое
 останавливается. WDTT не управляет creator и только формирует master-ссылку
-`/etc/wdtt/qwdtt_link.txt`. Sync Agent запускает Calls-задачу через общий
-owner-neutral maintenance-фасад и флаг `sync_calls_qwdtt_pool_enabled`.
+`/etc/wdtt/qwdtt_link.txt`. Sync Agent запускает owner-neutral задачу creator с
+флагом `sync_headless_creator_vk_qwdtt_enabled`.
 
 Профиль native Calls и qWDTT master-link являются административными shared
 secrets и не включаются в пользовательские subscription endpoints. HYDRA
@@ -200,7 +201,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `caddy-naive.service` | Caddy forward-proxy для NaiveProxy |
 | `telemt.service` | Демон MTProto-прокси |
 | `wdtt.service` | Демон qWDTT |
-| `hydra-vk-call-creator@.service` | Два поколения по четыре VK creator-инстанса для безопасной ротации qWDTT-хэшей |
+| `hydra-headless-creator-vk@.service` | Два поколения по четыре VK creator-инстанса для безопасной ротации qWDTT-хэшей |
 | `fail2ban.service` | SSH и auth jails |
 
 > [!NOTE]
@@ -229,17 +230,17 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/etc/hydra` | Служебные конфигурации HYDRA |
 | `/etc/sing-box/config.json` | Сгенерированная конфигурация Sing-Box |
 | `/etc/systemd/system/sing-box.service.d/90-hydra-memory.conf` | Общий `GOGC=50` без жёсткого memory cap |
-| `/etc/systemd/system/hydra-vk-call-creator@.service` | Template unit Calls для blue/green qWDTT-пула |
+| `/etc/systemd/system/hydra-headless-creator-vk@.service` | Provider-owned template unit для blue/green qWDTT-пула |
 | `/etc/systemd/journald.conf.d/90-hydra-journald.conf` | Бюджеты постоянного и runtime-журнала |
 | `/etc/caddy-l4/config.json` | Сгенерированная конфигурация TLS-мультиплексора |
 | `/etc/nftables.conf` | Правила nftables, включая TPROXY |
 | `/etc/iptables/rules.v4` | Сохранённые правила iptables (телеметрия AntiDPI) |
 | `/etc/dnscrypt-proxy/dnscrypt-proxy.toml` | Конфигурация DNSCrypt |
 | `/etc/telemt/telemt.toml` | Конфигурация MTProto-прокси |
-| `/etc/hydra/calls/vk/` | Общий закрытый каталог VK Calls; права `0700` |
-| `/etc/hydra/calls/vk/cookies-vk.json` | Общий VK Creator JSON для native Calls и qWDTT; файл `0600`, не входит в state |
+| `/etc/hydra/cookiesvk/` | Единый закрытый каталог провайдера VK; права `0700` |
+| `/etc/hydra/cookiesvk/cookies-vk.json` | Общий VK Creator JSON для native Calls и qWDTT; файл `0600`, не входит в state |
 | `/var/lib/hydra/calls/vk/native.join` | Зафиксированный native VK join-link; файл `0600`, не входит в state |
-| `/var/lib/hydra/calls/vk/qwdtt/` | Закрытый runtime-каталог поколений creator и `state.json`; права `0700` |
+| `/var/lib/hydra/headless-creator/vk/qwdtt/` | Закрытый runtime-каталог поколений creator и `state.json`; права `0700` |
 | `/etc/wdtt/qwdtt_link.txt` | Единственная master qWDTT-ссылка с актуальными четырьмя хешами |
 | `/etc/cron.d/hydra-traffic` | Задание учёта трафика |
 | `/etc/cron.d/telemt-stats` | Задание статистики Telemt |
@@ -403,7 +404,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 
 ## Схема persisted state
 
-В текущей ветке `dev` актуальна схема **7**. Корень `state.json`:
+В текущей ветке `dev` актуальна схема **8**. Корень `state.json`:
 
 | Поле | Тип | Содержание |
 | :--- | :--- | :--- |
@@ -414,6 +415,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 | `users` | `list[User]` | Пользователи и их credentials |
 | `telegram` | `object` | Настройки Telegram-адаптера и категорий уведомлений |
 | `network` | `object` | Сетевые настройки, не принадлежащие плагину |
+| `headless_creator` | `object` | Provider-neutral desired state независимого creator |
 
 `User`: `email`, `uuid`, `traffic_limit_gb`, `traffic_used_bytes`, `expiry_date`,
 `blocked`, `created_at`, `telegram_id`, `credentials`, `device_limit`, `devices`,
@@ -431,12 +433,18 @@ HWID используется нормализованный `User-Agent`, чт�
 `tproxy_enabled`, `tproxy_port`, `clash_api_enabled`, `clash_api_port`,
 `clash_api_secret`.
 
-Миграция `v6 → v7` переносит `wdtt.config.headless_*` в
-`calls.config.qwdtt_*` и maintenance-флаг в
-`sync_calls_qwdtt_pool_enabled`. Native Calls автоматически не включается.
-Если legacy creator ранее был настроен, state получает
-`legacy_creator_reinstall_required`; старые units и `/etc/wdtt/headless` не
-изменяются до явного `Fresh setup` в TUI Calls.
+`headless_creator.providers`: provider-neutral desired state независимого
+creator. На первом этапе ключ `vk` содержит состояние qWDTT-пула, интервал
+ротации и отметку необходимости явной переустановки legacy runtime. Cookies и
+join-links в state не хранятся.
+
+Миграция `v6 → v7` сохраняет совместимость с промежуточным Calls layout;
+`v7 → v8` переносит `calls.config.qwdtt_*` в
+`headless_creator.providers.vk` и переименовывает maintenance-флаг в
+`sync_headless_creator_vk_qwdtt_enabled`. Native Calls автоматически не
+включается. Если старый creator был настроен, state получает
+`legacy_creator_reinstall_required`; старые units и runtime не изменяются до
+явного `Fresh setup` в верхнеуровневом TUI `Headless Creator`.
 
 `install` хранит служебные отметки фоновых проверок:
 
@@ -445,7 +453,7 @@ HWID используется нормализованный `User-Agent`, чт�
 | `sync_limits_enabled` | Проверять лимиты и сроки пользователей |
 | `sync_updates_enabled` | Проверять обновления Sing-Box |
 | `sync_certificates_enabled` | Проверять сроки TLS-сертификатов |
-| `sync_calls_qwdtt_pool_enabled` | Автоматически обновлять VK-комнаты qWDTT через Calls |
+| `sync_headless_creator_vk_qwdtt_enabled` | Автоматически обновлять VK-комнаты qWDTT через Headless Creator |
 | `sync_config_pending` | Отложенное применение конфигурации |
 | `sync_config_pending_source` | Фаза, поставившая отложенное применение (`certificates` снимается после первой неудачи) |
 | `singbox_last_update_check`, `singbox_update_available`, `singbox_latest_version` | Результат проверки обновлений |

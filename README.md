@@ -124,18 +124,21 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 Конфигурации следуют официальным примерам [creator](https://github.com/shtorm-7/sing-box-extended/blob/v1.13.16-extended-2.6.1/examples/call/vk/creator.json),
 [joiner](https://github.com/shtorm-7/sing-box-extended/blob/v1.13.16-extended-2.6.1/examples/call/vk/joiner.json)
 и [Call options](https://github.com/shtorm-7/sing-box-extended/blob/v1.13.16-extended-2.6.1/option/call.go).
-Перед включением HYDRA выполняет feature-probe, создаёт
-VK-комнату временным процессом, атомарно фиксирует join-link и переключает общий
-Sing-Box только после подтверждённого handoff. Клиентский SOCKS-профиль доступен
+Перед включением HYDRA выполняет feature-probe, создаёт VK-комнату общим
+`headless-vk-creator`, атомарно фиксирует join-link и переключает Sing-Box
+только после подтверждённого handoff. Клиентский SOCKS-профиль доступен
 только явным административным запросом в TUI и не входит в подписки или учёт
 пользовательского трафика.
 
-Меню `Calls · VK` также владеет четырьмя VK-комнатами qWDTT. Cookies кладутся в
-`/etc/hydra/calls/vk/cookies-vk.json`; ротация использует два поколения creator,
-поэтому прежняя master-ссылка остаётся рабочей до успешной публикации новой.
-WDTT отвечает только за сервер, пароли и формирование `qwdtt://` из четырёх
-хэшей. Старую установку creator HYDRA не мигрирует автоматически: после
-обновления нужен явный `Fresh setup` в меню Calls.
+Независимый пункт главного TUI `Headless Creator` владеет установкой creator,
+провайдерами и их общими credentials; позже сюда можно добавить WB Stream без
+привязки к протоколам. Единственный VK cookie-файл —
+`/etc/hydra/cookiesvk/cookies-vk.json`. Native Calls и четыре комнаты qWDTT
+используют его совместно. qWDTT-ротация использует два поколения creator,
+поэтому прежняя master-ссылка остаётся рабочей до публикации новой. WDTT отвечает
+только за сервер, пароли и формирование `qwdtt://` из четырёх хэшей. Старую
+установку creator HYDRA не мигрирует автоматически: после обновления нужен
+явный `Fresh setup` в меню `Headless Creator`.
 
 > [!WARNING]
 > VK join-link и полный клиентский профиль — shared secret. HYDRA редактирует

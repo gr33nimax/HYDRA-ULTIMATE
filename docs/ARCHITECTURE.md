@@ -407,14 +407,16 @@ TLS-маршруты проверяются отдельно, потому чт�
 
 ### Цепочка миграций
 
-В текущей ветке `dev` актуальна схема 7. Миграция — последовательность чистых функций; каждая
+В текущей ветке `dev` актуальна схема 8. Миграция — последовательность чистых функций; каждая
 ступень проверяется отдельно, а запись всей цепочки выполняется атомарно.
 
 ```text
-   v0 ──▶ v1 ──▶ v2 ──▶ v3 ──▶ v4 ──▶ v5 ──▶ v6 ──▶ v7+
-                         │      │      │      │
-                         │      │      │      └─ Calls владеет VK creator state;
-                         │      │      │         v8+ — явная ошибка совместимости
+   v0 ──▶ v1 ──▶ v2 ──▶ v3 ──▶ v4 ──▶ v5 ──▶ v6 ──▶ v7 ──▶ v8+
+                         │      │      │      │      │
+                         │      │      │      │      └─ Headless Creator получает
+                         │      │      │      │         provider-neutral state;
+                         │      │      │      │         v9+ — ошибка совместимости
+                         │      │      │      └─ legacy VK creator state через Calls
                          │      │      └─ private per-user HydraBox JWE key
                          │      │
                          │      └─ device_limit, devices        (выпущено в 2.5.3)
@@ -564,30 +566,35 @@ journalctl -u sing-box -u caddy-l4 --no-pager -n 100
 ограничивает число неуспешных валидаций.
 
 VK Calls — application-owned use-case. `ApplicationService.calls` координирует
-защищённые файлы, временный bootstrap-процесс, lifecycle плагина `calls`, общий
-apply и handoff. Плагин не знает о systemd и комнатах: через внедрённый
-`CallConfigSource` он читает cookies и зафиксированный join-link и возвращает
-единственный native `call` inbound. Профиль admin joiner не является plugin
-connection source, подпиской или источником traffic accounting.
+зафиксированный native join-link, lifecycle плагина `calls`, общий apply и
+handoff. Установка creator и credentials не принадлежат протоколу:
+`ApplicationService.headless_creator` владеет provider-neutral lifecycle и
+единственным VK cookie-файлом `/etc/hydra/cookiesvk/cookies-vk.json`. Через
+внедрённый `CallConfigSource` плагин читает cookies у этого владельца и native
+join-link у Calls, затем возвращает единственный `call` inbound. Профиль admin
+joiner не является plugin connection source, подпиской или источником traffic
+accounting.
 
 Перед enable выполняется feature-probe минимальным `sing-box check`. Bootstrap
-запускает временный Sing-Box с пустым `join_link`, строго принимает только
-`https://vk.com/call/join/...`, пишет ссылку атомарно с `0600`, применяет
-desired state и ждёт подтверждения той же комнаты в основном service. Временный
-процесс живёт до handoff. Любой сбой восстанавливает прежние link, state и
+запускает общий `headless-vk-creator`, строго принимает из закрытого временного
+файла только `https://vk.com/call/join/...`, пишет ссылку атомарно с `0600`,
+применяет desired state и ждёт подтверждения той же комнаты в основном service.
+Creator живёт до handoff. Любой сбой восстанавливает прежние link, state и
 runtime; автоматического обновления Sing-Box нет.
 
-qWDTT creator также принадлежит Calls. Два поколения
-`hydra-vk-call-creator@{a,b}-N` позволяют создать четыре новые комнаты, пока
+qWDTT использует того же standalone creator. Два поколения
+`hydra-headless-creator-vk@{a,b}-N` позволяют создать четыре новые комнаты, пока
 старые продолжают обслуживать master-ссылку. Только после атомарной публикации
 WDTT-артефакта и сохранения state старое поколение останавливается. WDTT
 объявляет лишь action преобразования четырёх хэшей в `qwdtt://` и не содержит
 lifecycle, timer или systemd creator. Owner-neutral maintenance-фасад объединяет
-plugin tasks и `calls.qwdtt_pool`; его читают Sync Agent и TUI.
+plugin tasks и `headless_creator.vk.qwdtt_pool`; его читают Sync Agent и TUI.
 
-Миграция schema 7 переносит legacy desired keys, но не меняет host runtime.
-Явный Fresh setup делает snapshot старых units/файлов, устанавливает новый пул и
-только затем удаляет legacy creator; failure восстанавливает snapshot.
+Миграция schema 8 извлекает creator desired state из `calls.config` в
+`headless_creator.providers.vk`, но не меняет host runtime. Явный Fresh setup в
+верхнеуровневом меню Creator делает snapshot старых units/файлов, устанавливает
+новый пул и только затем удаляет legacy creator; failure восстанавливает
+snapshot. Общие VK cookies при этом не удаляются.
 
 Cookies и join-link не хранятся в state и не попадают в status/apply journal.
 Лог-проекции HYDRA редактируют VK и qWDTT links. Upstream Sing-Box выводит

@@ -26,6 +26,11 @@ from hydra.services.certificate_audit import CertificateInspector
 from hydra.services.certificates import CertificateProvisioner
 from hydra.services.calls import CallsService
 from hydra.services.calls_infrastructure import CallsInfrastructure
+from hydra.services.headless_creator import (
+    HEADLESS_CREATOR_BACKUP_RESOURCES,
+    HeadlessCreatorService,
+)
+from hydra.services.headless_creator_infrastructure import HeadlessCreatorInfrastructure
 from hydra.services.configuration_plan import ConfigurationPlanner
 from hydra.services.diagnostic_infrastructure import HOST_DIAGNOSTICS
 from hydra.services.log_infrastructure import HostLogOperations
@@ -67,7 +72,8 @@ def production_application(
     extra_plugin_factories: Iterable[PluginFactory] = (),
 ) -> ApplicationService:
     """Build a fresh, instance-scoped production application."""
-    calls_runtime = CallsInfrastructure(HOST)
+    creator_runtime = HeadlessCreatorInfrastructure(HOST)
+    calls_runtime = CallsInfrastructure(HOST, credentials_source=creator_runtime)
     plugins = PluginContainer(
         default_plugins(
             notifier=notify_security_event,
@@ -106,10 +112,15 @@ def production_application(
     traffic = TrafficService(protocols)
     plugin_actions = PluginActionService(get_plugin=plugins.get)
     plugin_queries = PluginQueryService(get_plugin=plugins.get)
+    headless_creator = HeadlessCreatorService(
+        runtime=creator_runtime,
+        plugin_actions=plugin_actions,
+        save_state=save_state,
+    )
     calls = CallsService(
         runtime=calls_runtime,
+        creator=headless_creator,
         protocols=protocols,
-        plugin_actions=plugin_actions,
         save_state=save_state,
         apply_config=orchestration.apply_config,
         last_apply_error=orchestration.last_apply_error,
@@ -118,7 +129,7 @@ def production_application(
         protocols=protocols,
         plugin_actions=plugin_actions,
         plugin_queries=plugin_queries,
-        calls=calls,
+        headless_creator=headless_creator,
     )
     certificate_audit = CertificateInspector(HOST)
     admin = AdminInfrastructure(
@@ -149,7 +160,9 @@ def production_application(
         apply_journal=lambda: orchestration.apply_journal,
         admin=admin,
         backups=BackupService(
-            compose_backup_policy(plugins.backup_resources()),
+            compose_backup_policy(
+                (*plugins.backup_resources(), *HEADLESS_CREATOR_BACKUP_RESOURCES),
+            ),
         ),
         logs=HostLogOperations(
             run_command=admin.run_command,
@@ -195,6 +208,7 @@ def production_application(
         ),
         certificates=certificate_audit,
         calls=calls,
+        headless_creator=headless_creator,
         maintenance=maintenance,
     )
 

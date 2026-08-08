@@ -50,8 +50,8 @@ def test_253_schema_fixture_survives_v4_migration_and_round_trip(
     migrated_bytes = state_file.read_bytes()
     second_migration = state_module.migrate_persisted_state()
 
-    assert first_migration == {"from": 3, "to": 7, "changed": True}
-    assert second_migration == {"from": 7, "to": 7, "changed": False}
+    assert first_migration == {"from": 3, "to": 8, "changed": True}
+    assert second_migration == {"from": 8, "to": 8, "changed": False}
     assert state_file.read_bytes() == migrated_bytes
 
     loaded = state_module.load_state()

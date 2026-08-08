@@ -13,7 +13,7 @@ def test_legacy_headless_imports_are_non_mutating_forwarders() -> None:
     assert headless.install()[0] is False
     assert headless.setup()[0] is False
     assert headless.stop()[0] is False
-    with pytest.raises(RuntimeError, match="ApplicationService.calls"):
+    with pytest.raises(RuntimeError, match="ApplicationService.headless_creator"):
         headless.uninstall()
 
 
@@ -27,7 +27,7 @@ def test_legacy_mixin_is_not_part_of_wdtt_plugin_contract() -> None:
     assert "set_headless_refresh_interval" not in capabilities.commands
 
 
-def test_legacy_refresh_setter_targets_calls_state_only() -> None:
+def test_legacy_refresh_setter_is_a_non_mutating_error_shim() -> None:
     state = AppState(
         protocols={
             "wdtt": PluginState(enabled=True),
@@ -36,8 +36,9 @@ def test_legacy_refresh_setter_targets_calls_state_only() -> None:
     )
     mixin = headless.WdttHeadlessMixin()
 
-    assert mixin.set_headless_refresh_interval(state=state, seconds=7200)
-    assert state.protocols["calls"].config["qwdtt_refresh_interval_seconds"] == 7200
+    with pytest.raises(RuntimeError, match="ApplicationService.headless_creator"):
+        mixin.set_headless_refresh_interval(state=state, seconds=7200)
+    assert state.protocols["calls"].config == {}
     assert state.protocols["wdtt"].config == {}
 
 

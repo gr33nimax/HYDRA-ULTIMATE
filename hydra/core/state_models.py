@@ -10,15 +10,15 @@ from typing import Optional
 
 from hydra.contracts import JsonValue, PluginConfig, validate_json_object
 from hydra.core.hydrabox_keys import validate_optional_hydrabox_jwe_key
+from hydra.core.state_creator_models import HeadlessCreatorConfig
+from hydra.core.state_creator_models import validate_headless_creator
+from hydra.core.state_creator_models import validate_raw_headless_creator
 from hydra.core.state_devices import validate_device_map
-
-
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class UnsupportedStateVersion(RuntimeError):
     """Persisted state was produced by a newer HYDRA schema."""
-
 
 @dataclass
 class PluginState:
@@ -28,7 +28,6 @@ class PluginState:
     port: int = 0
     installed: bool = False
     config: PluginConfig = field(default_factory=dict)
-
 
 @dataclass
 class User:
@@ -47,7 +46,6 @@ class User:
     # device id -> {first_seen, last_seen, source, user_agent, address}
     devices: dict[str, dict] = field(default_factory=dict)
     hydrabox_jwe_key: str = ""
-
 
 @dataclass
 class TelegramConfig:
@@ -70,7 +68,6 @@ class TelegramConfig:
     quiet_hours_start: int = 23
     quiet_hours_end: int = 8
 
-
 @dataclass
 class NetworkConfig:
     """Persisted network settings that are not owned by a plugin."""
@@ -86,7 +83,6 @@ class NetworkConfig:
     clash_api_port: int = 9090
     clash_api_secret: str = ""
 
-
 @dataclass
 class AppState:
     """Persisted aggregate root."""
@@ -98,6 +94,7 @@ class AppState:
     users: list[User] = field(default_factory=list)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
+    headless_creator: HeadlessCreatorConfig = field(default_factory=HeadlessCreatorConfig)
 
 
 def validate_raw_state(raw: object) -> None:
@@ -113,6 +110,8 @@ def validate_raw_state(raw: object) -> None:
     for key in ("protocols", "install", "telegram", "network", "security"):
         if key in raw and not isinstance(raw[key], dict):
             raise ValueError(f"state field '{key}' must be an object")
+    if "headless_creator" in raw:
+        validate_raw_headless_creator(raw["headless_creator"])
     if "users" in raw:
         users = raw["users"]
         if not isinstance(users, list) or any(not isinstance(user, dict) for user in users):
@@ -190,6 +189,7 @@ def validate_state(state: AppState) -> None:
             f"state schema {state.version} is newer than supported schema "
             f"{SCHEMA_VERSION}"
         )
+    validate_headless_creator(state.headless_creator)
     for user in state.users:
         if (
             not isinstance(user.email, str)

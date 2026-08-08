@@ -147,6 +147,7 @@ def main_menu(
 ) -> None:
     """Compose production once, then delegate to the dependency-clean root."""
     application = app if app is not None else production_application()
+    from hydra.ui._menus.headless_creator import menu_headless_creator
     from hydra.ui._menus.root import RootMenuDependencies
 
     globals()["_root_menus"]().run_main_menu(
@@ -161,6 +162,7 @@ def main_menu(
             security=globals()["menu_security"],
             network_services=globals()["menu_network_services"],
             diagnostics=_open_diagnostics,
+            headless_creator=menu_headless_creator,
         ),
     )
 

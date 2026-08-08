@@ -250,16 +250,20 @@ hydra check
 
 ## Схема state и миграции
 
-В текущей ветке `dev` актуальна схема **7**. Миграция `v5 → v6` резервирует приватный
-per-user JWE key. Следующая ступень `v6 → v7` переносит настройки VK creator из
-`wdtt.config.headless_*` в `calls.config.qwdtt_*` и maintenance-флаг в
-`sync_calls_qwdtt_pool_enabled`, не включая native Calls автоматически.
+В текущей ветке `dev` актуальна схема **8**. Миграция `v5 → v6` резервирует
+приватный per-user JWE key. Ступень `v6 → v7` сохраняет совместимость legacy VK
+creator через промежуточный Calls layout, а `v7 → v8` переносит его desired
+state в `headless_creator.providers.vk` и maintenance-флаг в
+`sync_headless_creator_vk_qwdtt_enabled`. Native Calls автоматически не
+включается.
 
 Миграция state намеренно не останавливает старые creator units и не переносит
-`/etc/wdtt/headless`. Если creator был настроен, TUI Calls покажет
+`/etc/wdtt/headless` или промежуточный Calls runtime. Если creator был настроен,
+верхнеуровневый TUI `Headless Creator` покажет
 `legacy_creator_reinstall_required`. Только явный `Fresh setup` делает snapshot
 старой установки, поднимает новое поколение и после успеха удаляет legacy-файлы;
-при сбое прежние units и файлы восстанавливаются.
+при сбое прежние units и файлы восстанавливаются, а единый VK cookie-файл
+`/etc/hydra/cookiesvk/cookies-vk.json` сохраняется.
 Отдельно миграцию выполняет:
 
 ```bash

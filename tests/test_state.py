@@ -28,6 +28,7 @@ def test_app_state_defaults():
     assert state.telegram.notify_fail2ban is True
     assert state.telegram.notify_unbans is False
     assert isinstance(state.network, NetworkConfig)
+    assert state.headless_creator.providers == {}
 
 
 def test_null_boolean_switches_use_dataclass_defaults(tmp_path, monkeypatch):
