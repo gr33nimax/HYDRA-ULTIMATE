@@ -20,7 +20,13 @@ from hydra.core.state import load_state
 from hydra.core.state_models import AppState, PluginState
 from hydra.core.host import HOST
 from hydra.core import singbox_config
-from hydra.core.singbox_upgrade import UpgradeOperations, parse_version, upgrade_kernel
+from hydra.core.singbox_upgrade import (
+    UpgradeOperations,
+    migrate_runtime_dns_config,
+    parse_version,
+    upgrade_kernel,
+)
+from hydra.core.singbox_service import failure_detail
 from hydra.utils.commands import redact_text
 
 SINGBOX_BIN = Path("/usr/local/bin/sing-box")
@@ -393,17 +399,7 @@ def stop() -> bool:
 
 def _service_failure_detail() -> str:
     """Return a short systemd journal detail suitable for TUI and logs."""
-    try:
-        result = _run(
-            ["journalctl", "-u", "sing-box", "-n", "8", "--no-pager"],
-            timeout=5,
-        )
-        lines = [line.strip() for line in (result.stdout or result.stderr or "").splitlines() if line.strip()]
-        if lines:
-            return lines[-1]
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return "служба не перешла в стабильное состояние"
+    return failure_detail(_run)
 
 
 def wait_until_stable(checks: int = 3, interval: float = 0.5) -> bool:
@@ -494,6 +490,7 @@ def update_kernel() -> tuple[bool, str]:
             stop=stop,
             log=_log,
             install_error=last_error,
+            migrate_config=migrate_runtime_dns_config,
         ),
     )
 

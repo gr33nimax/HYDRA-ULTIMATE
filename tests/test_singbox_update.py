@@ -1,3 +1,4 @@
+import json
 import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -6,6 +7,28 @@ import pytest
 
 from hydra.core.singbox import parse_version, update_kernel, SINGBOX_BIN, SINGBOX_CONFIG
 from hydra.core.state import AppState
+
+
+def _legacy_dns_config() -> dict:
+    return {
+        "dns": {
+            "servers": [
+                {
+                    "tag": "dns-remote",
+                    "address": "https://dns.quad9.net/dns-query",
+                    "address_resolver": "dns-direct",
+                    "strategy": "ipv4_only",
+                    "detour": "direct",
+                },
+                {
+                    "tag": "dns-direct",
+                    "address": "1.1.1.1",
+                    "detour": "direct",
+                },
+            ],
+            "rules": [],
+        },
+    }
 
 
 def test_parse_version():
@@ -64,6 +87,98 @@ def test_update_kernel_success(mock_singbox_paths):
         # backup is removed
         assert not bin_path.with_suffix(".bak").exists()
         assert state.install.get("singbox_update_available") is None
+
+
+def test_update_kernel_migrates_legacy_dns_before_config_check(
+    mock_singbox_paths,
+):
+    bin_path, config_path = mock_singbox_paths
+    config_path.write_text(json.dumps(_legacy_dns_config()), encoding="utf-8")
+
+    def mock_install_success(force=False):
+        bin_path.write_text("new binary content")
+        return True
+
+    def check_migrated_config(_command):
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        assert config["dns"]["strategy"] == "ipv4_only"
+        assert config["dns"]["servers"][0] == {
+            "type": "https",
+            "tag": "dns-remote",
+            "server": "dns.quad9.net",
+            "domain_resolver": "dns-direct",
+        }
+        assert config["dns"]["servers"][1] == {
+            "type": "udp",
+            "tag": "dns-direct",
+            "server": "1.1.1.1",
+        }
+        return MagicMock(returncode=0)
+
+    with patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.singbox.install", side_effect=mock_install_success), \
+         patch("hydra.core.singbox.get_version", return_value="1.13.16-extended-2.6.1"), \
+         patch("hydra.core.singbox._run", side_effect=check_migrated_config), \
+         patch("hydra.core.singbox.start", return_value=True):
+        success, message = update_kernel()
+
+    assert success is True
+    assert "2.6.1" in message
+    assert not config_path.with_name(f"{config_path.name}.upgrade.bak").exists()
+
+
+def test_update_kernel_restores_legacy_dns_when_new_config_is_rejected(
+    mock_singbox_paths,
+):
+    bin_path, config_path = mock_singbox_paths
+    original = _legacy_dns_config()
+    config_path.write_text(json.dumps(original), encoding="utf-8")
+
+    def mock_install_success(force=False):
+        bin_path.write_text("new binary content")
+        return True
+
+    rejected = MagicMock(returncode=1, stderr="dns transport rejected")
+    with patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.singbox.install", side_effect=mock_install_success), \
+         patch("hydra.core.singbox.get_version", return_value="1.13.16-extended-2.6.1"), \
+         patch("hydra.core.singbox._run", return_value=rejected), \
+         patch("hydra.core.singbox.stop"), \
+         patch("hydra.core.singbox.start", return_value=True):
+        success, message = update_kernel()
+
+    assert success is False
+    assert "dns transport rejected" in message
+    assert bin_path.read_text() == "original binary content"
+    assert json.loads(config_path.read_text(encoding="utf-8")) == original
+    assert not config_path.with_name(f"{config_path.name}.upgrade.bak").exists()
+
+
+def test_update_kernel_rolls_back_when_dns_migration_cannot_read_config(
+    mock_singbox_paths,
+):
+    bin_path, config_path = mock_singbox_paths
+    config_path.write_text("{broken", encoding="utf-8")
+
+    def mock_install_success(force=False):
+        bin_path.write_text("new binary content")
+        return True
+
+    with patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.singbox.install", side_effect=mock_install_success), \
+         patch("hydra.core.singbox.get_version", return_value="1.13.16-extended-2.6.1"), \
+         patch("hydra.core.singbox._run") as mock_run, \
+         patch("hydra.core.singbox.stop"), \
+         patch("hydra.core.singbox.start", return_value=True):
+        success, message = update_kernel()
+
+    assert success is False
+    assert "Не удалось мигрировать DNS-конфигурацию" in message
+    assert "Выполнен откат" in message
+    assert bin_path.read_text() == "original binary content"
+    assert config_path.read_text(encoding="utf-8") == "{broken"
+    assert not config_path.with_name(f"{config_path.name}.upgrade.bak").exists()
+    mock_run.assert_not_called()
 
 
 def test_update_kernel_fail_installation(mock_singbox_paths):
