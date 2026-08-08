@@ -113,18 +113,25 @@ def test_lifecycle_delegates_to_orchestrator():
     service, operations, _ = _fixture()
     state = AppState()
     operations.install_plugin.return_value = True
+    operations.activate_plugin.return_value = True
     operations.reinstall_plugin.return_value = True
     operations.uninstall_plugin.return_value = True
     operations.enable.return_value = True
     operations.disable.return_value = True
 
     assert service.install(state, "transport") is True
+    assert service.activate(state, "transport", domain="vpn.example.com") is True
     assert service.reinstall(state, "transport") is True
     assert service.uninstall(state, "transport") is True
     assert service.enable(state, "transport") is True
     assert service.disable(state, "transport") is True
 
     operations.install_plugin.assert_called_once_with(state, "transport")
+    operations.activate_plugin.assert_called_once_with(
+        state,
+        "transport",
+        domain="vpn.example.com",
+    )
     operations.reinstall_plugin.assert_called_once_with(state, "transport")
     operations.uninstall_plugin.assert_called_once_with(state, "transport")
     operations.enable.assert_called_once_with(state, "transport")

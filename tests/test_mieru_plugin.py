@@ -1,5 +1,6 @@
 """tests/test_mieru_plugin.py — Тесты для Mieru plugin v2 (sing-box inbound)."""
 import json
+import urllib.parse
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import sys
@@ -47,7 +48,7 @@ def test_configure_returns_inbound():
     assert len(frag.inbounds) == 1
     assert frag.inbounds[0]["type"] == "mieru"
     assert frag.inbounds[0]["tag"] == "mieru-in"
-    assert frag.inbounds[0]["listen_port"] == 2012
+    assert "listen_port" not in frag.inbounds[0]
     assert frag.inbounds[0]["transport"] == "TCP"
     assert frag.inbounds[0]["traffic_pattern"] == "GgQIARAK"
     assert len(frag.inbounds[0]["users"]) == 1
@@ -132,7 +133,10 @@ def test_client_link_valid():
     p = MieruPlugin()
     link = p.client_link(_user("a@x.com", uuid="uuid-a"), _state())
     assert link.startswith("mierus://")
-    assert "port=2012" in link
+    ports = urllib.parse.parse_qs(
+        urllib.parse.urlsplit(link).query,
+    )["port"]
+    assert ports == ["2012-2022"]
     assert "protocol=TCP" in link
     assert "multiplexing=MULTIPLEXING_HIGH" in link
 

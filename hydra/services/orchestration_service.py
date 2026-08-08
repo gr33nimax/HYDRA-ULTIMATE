@@ -195,10 +195,13 @@ class OrchestrationService:
         self.singbox.log("ERROR", message)
 
     def _prepare_enable(self, state: AppState, name: str) -> None:
-        ProtocolSetupService(
+        self._protocol_setup().prepare_enable(state, name)
+
+    def _protocol_setup(self) -> ProtocolSetupService:
+        return ProtocolSetupService(
             self.certificates,
             self.plugins.get,
-        ).prepare_enable(state, name)
+        )
 
     def _plugin_lifecycle(self) -> PluginLifecycleOperations:
         invoker = PluginInvoker()
@@ -233,6 +236,78 @@ class OrchestrationService:
 
     def reinstall_plugin(self, state: AppState, name: str) -> bool:
         return self._plugin_lifecycle().reinstall(state, name)
+
+    def activate_plugin(
+        self,
+        state: AppState,
+        name: str,
+        *,
+        domain: str | None = None,
+    ) -> bool:
+        """Install and enable a protocol while committing input atomically."""
+        snapshot = copy.deepcopy(state)
+        lifecycle = self._plugin_lifecycle()
+        was_installed = self.get_protocol(snapshot, name).installed
+        try:
+            if domain is not None:
+                self._protocol_setup().stage_domain(state, name, domain)
+            if not self.get_protocol(state, name).installed:
+                if not lifecycle.install(state, name):
+                    self._restore_failed_activation(
+                        state,
+                        snapshot,
+                        name,
+                        keep_installed=False,
+                    )
+                    return False
+            if lifecycle.enable(state, name):
+                return True
+        except Exception:
+            keep_installed = (
+                not was_installed
+                and self.get_protocol(state, name).installed
+            )
+            self._restore_failed_activation(
+                state,
+                snapshot,
+                name,
+                keep_installed=keep_installed,
+            )
+            raise
+
+        keep_installed = (
+            not was_installed
+            and self.get_protocol(state, name).installed
+        )
+        self._restore_failed_activation(
+            state,
+            snapshot,
+            name,
+            keep_installed=keep_installed,
+        )
+        return False
+
+    def _restore_failed_activation(
+        self,
+        state: AppState,
+        snapshot: AppState,
+        name: str,
+        *,
+        keep_installed: bool,
+    ) -> None:
+        """Restore activation input while retaining a completed install."""
+        restore_state_in_place(state, snapshot)
+        if keep_installed:
+            protocol = self.get_protocol(state, name)
+            protocol.installed = True
+            protocol.enabled = False
+        try:
+            self.save_state(state)
+        except Exception as exc:
+            self._log_rollback_error(
+                "Не удалось сохранить откат активации "
+                f"{name}: {exc}",
+            )
 
     def enable(self, state: AppState, name: str) -> bool:
         return self._plugin_lifecycle().enable(state, name)

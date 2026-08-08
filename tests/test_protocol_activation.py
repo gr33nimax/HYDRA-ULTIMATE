@@ -16,6 +16,7 @@ from hydra.ui._menus.protocol_activation import (
     prepare_interactive_activation,
     run_lifecycle_action,
 )
+from hydra.ui._menus.plugin_settings import _naive_option
 
 
 DOMAIN_TLS_PLUGINS = (
@@ -34,8 +35,9 @@ def _activation_app(*, calls: list[str] | None = None):
             save_state=lambda _state: events.append("save"),
         ),
         protocols=SimpleNamespace(
-            install=lambda _state, _name: events.append("install") or True,
-            enable=lambda _state, _name: events.append("enable") or True,
+            activate=lambda _state, _name, *, domain=None: (
+                events.append(f"activate:{domain}") or True
+            ),
             disable=lambda _state, _name: events.append("disable") or True,
         ),
         plugin_command=Mock(return_value=True),
@@ -55,7 +57,7 @@ def test_all_certificate_domain_transports_collect_domain_before_activation(
     app = _activation_app(calls=calls)
     ask = Mock(return_value=f"{name}.Example.COM.")
 
-    assert prepare_interactive_activation(
+    preparation = prepare_interactive_activation(
         state,
         plugin,
         app,
@@ -63,14 +65,14 @@ def test_all_certificate_domain_transports_collect_domain_before_activation(
         report_error=Mock(),
     )
 
+    assert preparation
     assert plugin.meta.needs_domain is True
     assert plugin.meta.capabilities.tls_domain_source == source
     expected = f"{name}.example.com"
-    if source == "network":
-        assert state.network.domain == expected
-    else:
-        assert state.protocols[name].config["domain"] == expected
-    assert calls == ["save"]
+    assert preparation.domain == expected
+    assert state.network.domain == ""
+    assert state.protocols[name].config.get("domain", "") == ""
+    assert calls == []
 
 
 @pytest.mark.parametrize(("plugin_type", "_source"), DOMAIN_TLS_PLUGINS)
@@ -95,7 +97,7 @@ def test_domain_setup_runs_before_install_and_enable(plugin_type, _source):
         pause=pause,
     )
 
-    assert calls == ["save", "install", "enable"]
+    assert calls == [f"activate:{name}.example.com"]
     assert errors == []
     pause.assert_called_once_with("Нажмите Enter")
 
@@ -126,7 +128,7 @@ def test_invalid_domain_stops_before_install():
 def test_activation_error_is_reported_inside_tui_instead_of_reaching_root():
     state = AppState(protocols={"naive": PluginState()})
     app = _activation_app()
-    app.protocols.enable = Mock(side_effect=ValueError("certificate failed"))
+    app.protocols.activate = Mock(side_effect=ValueError("certificate failed"))
     errors: list[str] = []
 
     run_lifecycle_action(
@@ -168,3 +170,12 @@ def test_shadowtls_collects_mandatory_handshake_sni_before_activation():
         "set_handshake_sni",
         value="www.example.com",
     )
+
+
+def test_naive_settings_remain_available_while_installed_but_disabled():
+    option = _naive_option(
+        PluginState(installed=True, enabled=False, config={"network": "tcp"}),
+    )
+
+    assert option is not None
+    assert "Домен" in option[0]

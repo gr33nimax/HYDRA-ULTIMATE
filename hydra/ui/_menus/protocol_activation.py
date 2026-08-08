@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from hydra.core.state_models import AppState, PluginState
 from hydra.services.application import ApplicationService
@@ -11,6 +12,13 @@ from hydra.services.protocol_setup import normalize_required_domain
 Message = Callable[[str], None]
 Prompt = Callable[..., str]
 ThemeChooser = Callable[[str], str]
+
+
+@dataclass(frozen=True)
+class ActivationPreparation:
+    """Validated values staged for one atomic lifecycle activation."""
+
+    domain: str | None = None
 
 
 def _domain_source(plugin: object) -> str:
@@ -29,19 +37,6 @@ def _configured_domain(
     return protocol.config.get("domain", "") if protocol else ""
 
 
-def _save_domain(
-    state: AppState,
-    plugin_name: str,
-    source: str,
-    domain: str,
-) -> None:
-    if source == "network":
-        state.network.domain = domain
-        return
-    protocol = state.protocols.setdefault(plugin_name, PluginState())
-    protocol.config["domain"] = domain
-
-
 def _prepare_certificate_domain(
     state: AppState,
     plugin: object,
@@ -49,10 +44,10 @@ def _prepare_certificate_domain(
     *,
     ask: Prompt,
     report_error: Message,
-) -> bool:
+) -> ActivationPreparation | None:
     source = _domain_source(plugin)
     if not source:
-        return True
+        return ActivationPreparation()
 
     name = plugin.meta.name
     current = _configured_domain(state, name, source)
@@ -70,11 +65,9 @@ def _prepare_certificate_domain(
             report_error(
                 f"Для {label} нужен корректный домен без схемы и пробелов",
             )
-            return False
+            return None
 
-    _save_domain(state, name, source, normalized)
-    app.admin.save_state(state)
-    return True
+    return ActivationPreparation(domain=normalized)
 
 
 def _prepare_shadowtls_sni(
@@ -144,24 +137,27 @@ def prepare_interactive_activation(
     ask: Prompt,
     report_error: Message,
     choose_decoy: ThemeChooser | None = None,
-) -> bool:
+) -> ActivationPreparation | None:
     """Collect every mandatory TLS value before lifecycle side effects."""
-    if not _prepare_certificate_domain(
+    preparation = _prepare_certificate_domain(
         state,
         plugin,
         app,
         ask=ask,
         report_error=report_error,
-    ):
-        return False
+    )
+    if preparation is None:
+        return None
     if not _prepare_shadowtls_sni(
         state,
         plugin,
         app,
         report_error=report_error,
     ):
-        return False
-    return _prepare_decoy_theme(state, plugin, app, choose_decoy)
+        return None
+    if not _prepare_decoy_theme(state, plugin, app, choose_decoy):
+        return None
+    return preparation
 
 
 def run_lifecycle_action(
@@ -187,26 +183,29 @@ def run_lifecycle_action(
                 report_error(app.apply_error() or "Ошибка выключения протокола")
             return
 
-        if not prepare_interactive_activation(
+        preparation = prepare_interactive_activation(
             state,
             plugin,
             app,
             ask=ask,
             report_error=report_error,
             choose_decoy=choose_decoy,
-        ):
+        )
+        if preparation is None:
             return
 
-        if not desired.installed:
+        was_installed = desired.installed
+        if not was_installed:
             report_info("Установка...")
-            if not app.protocols.install(state, name):
-                report_error("Ошибка установки")
-                return
 
-        if app.protocols.enable(state, name):
+        if app.protocols.activate(
+            state,
+            name,
+            domain=preparation.domain,
+        ):
             message = (
                 "Протокол установлен, включён и применён"
-                if not desired.installed
+                if not was_installed
                 else "Протокол включён"
             )
             report_success(message)
@@ -219,6 +218,7 @@ def run_lifecycle_action(
 
 
 __all__ = [
+    "ActivationPreparation",
     "prepare_interactive_activation",
     "run_lifecycle_action",
 ]

@@ -67,6 +67,15 @@ def test_installer_has_numbered_progress_and_unambiguous_result():
     assert "SING-BOX MULTI-PROXY MANAGER v1.0" not in BOOTSTRAP
 
 
+def test_fresh_install_includes_certbot_before_tls_protocol_activation():
+    package_line = next(
+        line for line in BOOTSTRAP.splitlines()
+        if line.startswith("$PKG_INSTALL iptables")
+    )
+
+    assert "certbot" in package_line.split()
+
+
 def test_install_guide_runs_sources_through_the_isolated_environment():
     assert "git clone -b main" in INSTALL_GUIDE
     assert "git clone -b dev" not in INSTALL_GUIDE

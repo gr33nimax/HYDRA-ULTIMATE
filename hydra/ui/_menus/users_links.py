@@ -18,9 +18,7 @@ from hydra.ui.tui import (
     NC,
     PANEL_W,
     RED,
-    YELLOW,
     clear,
-    info,
     kv,
     panel,
     prompt,
@@ -184,12 +182,13 @@ def _render_inline_artifact(artifact: _ClientArtifact) -> None:
         f"{CYAN}{'─' * fill}{NC}",
     )
     for link in artifact.links:
-        print(f"  {GREEN}{_link_caption(link)}:{NC}  {link}")
+        print(f"  {GREEN}{_link_caption(link)}:{NC}")
+        print(link)
     if artifact.config:
         _render_qr(artifact.config)
         print(f"  {DIM}{'─' * PANEL_W}{NC}")
         for line in artifact.config.splitlines():
-            print(f"  {DIM}{line}{NC}")
+            print(line)
         print(f"  {DIM}{'─' * PANEL_W}{NC}")
     print()
 
@@ -219,9 +218,23 @@ def _show_subscription_links(
     app: ApplicationService | None = None,
 ) -> None:
     """Show canonical subscription endpoints separately from raw artifacts."""
-    _application(app)
+    app = _application(app)
     clear()
     title(f"Подписка: {user.email}")
+    if not app.admin.unit_active("hydra-sub"):
+        warn(
+            "Сервер подписок не запущен. Включите его в меню "
+            "«Сервер подписок», затем повторите попытку.",
+        )
+        prompt("Нажмите Enter")
+        return
+    cert_file, key_file = app.admin.subscription_certificate(state)
+    if not cert_file or not key_file:
+        warn(
+            "Сервер подписок не готов: HTTPS-сертификат отсутствует.",
+        )
+        prompt("Нажмите Enter")
+        return
     urls = get_subscription_urls(user, state)
     available, reason = get_user_access_status(user)
     panel(
@@ -234,50 +247,26 @@ def _show_subscription_links(
     print()
     print(f"  {BOLD}Основная ссылка (рекомендуется){NC}")
     print(
-        f"  {DIM}NekoBox и Throne определяются автоматически по приложению.{NC}",
+        f"  {DIM}NekoBox, Shadowrocket и Throne определяются "
+        f"автоматически по приложению.{NC}",
     )
-    print(f"  {CYAN}{urls['auto']}{NC}\n")
+    print(urls["auto"])
+    print()
     print(f"  {BOLD}Ручной выбор формата{NC}")
-    print(f"  NekoBox:       {CYAN}{urls['nekobox']}{NC}")
-    print(f"  Throne:        {CYAN}{urls['throne']}{NC}")
-    print(f"  Sing-Box JSON: {CYAN}{urls['singbox']}{NC}")
-    print(f"  HydraBox JWE:  {CYAN}{urls['hydrabox']}{NC}")
+    for label, key in (
+        ("NekoBox", "nekobox"),
+        ("Shadowrocket", "shadowrocket"),
+        ("Throne", "throne"),
+        ("Sing-Box JSON", "singbox"),
+        ("HydraBox JWE", "hydrabox"),
+    ):
+        print(f"  {label}:")
+        print(urls[key])
     print(
         f"\n  {DIM}Ссылка содержит секретный токен — "
         f"передавайте её только владельцу.{NC}",
     )
     prompt("Нажмите Enter")
-
-
-def _wrapped_lines(value: str, width: int) -> list[str]:
-    return [
-        value[index : index + width]
-        for index in range(0, len(value), width)
-    ]
-
-
-def _artifact_panel_lines(artifact: _ClientArtifact) -> list[str]:
-    lines: list[str] = []
-    width = PANEL_W - 6
-    for index, link in enumerate(artifact.links):
-        if index:
-            lines.append(f"{DIM}{'─' * (PANEL_W - 4)}{NC}")
-        lines.append(f"{YELLOW}{BOLD}{_link_caption(link)}:{NC}")
-        lines.extend(
-            f"  {CYAN}{chunk}{NC}"
-            for chunk in _wrapped_lines(link, width)
-        )
-    if artifact.config:
-        if lines:
-            lines.append(f"{DIM}{'─' * (PANEL_W - 4)}{NC}")
-        lines.append(
-            f"{GREEN}{BOLD}Файл клиентской конфигурации:{NC}",
-        )
-        lines.extend(
-            f"  {DIM}{line.rstrip()}{NC}"
-            for line in artifact.config.splitlines()
-        )
-    return lines
 
 
 def _user_configs(
@@ -295,12 +284,8 @@ def _user_configs(
         prompt("Нажмите Enter")
         return
     for artifact in artifacts:
-        panel(
-            f"🔧  {_artifact_title(artifact).upper()} CONFIG",
-            _artifact_panel_lines(artifact),
-        )
+        _render_inline_artifact(artifact)
         if artifact.config:
-            info(f"QR-код · {_artifact_title(artifact)}")
             _render_qr(artifact.config, invert=True)
     print()
     prompt("Нажмите Enter")

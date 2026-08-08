@@ -73,14 +73,14 @@ class MieruPlugin(BasePlugin):
         inbound = {
             "type": "mieru",
             "tag": "mieru-in",
-            "listen_port": DEFAULT_PORT_START,
             "transport": DEFAULT_PROTOCOL,
             "users": users,
             "traffic_pattern": self._get_traffic_pattern(state),
         }
 
-        # Диапазон портов
-        if DEFAULT_PORT_START != DEFAULT_PORT_END:
+        if DEFAULT_PORT_START == DEFAULT_PORT_END:
+            inbound["listen_port"] = DEFAULT_PORT_START
+        else:
             inbound["listen_ports"] = [
                 f"{DEFAULT_PORT_START}-{DEFAULT_PORT_END}"
             ]
@@ -168,11 +168,15 @@ class MieruPlugin(BasePlugin):
         password = urllib.parse.quote(self._derive_password(user.uuid), safe="")
         server_ip = state.network.server_ip or public_ip()
         pattern = self._get_traffic_pattern(state)
+        port = (
+            str(DEFAULT_PORT_START)
+            if DEFAULT_PORT_START == DEFAULT_PORT_END
+            else f"{DEFAULT_PORT_START}-{DEFAULT_PORT_END}"
+        )
 
         return (
             f"mierus://{username}:{password}@{server_ip}"
-            f"?profile=default&port={DEFAULT_PORT_START}&protocol={DEFAULT_PROTOCOL}"
-            f"&port={DEFAULT_PORT_START}-{DEFAULT_PORT_END}&protocol={DEFAULT_PROTOCOL}"
+            f"?profile=default&port={port}&protocol={DEFAULT_PROTOCOL}"
             f"&multiplexing=MULTIPLEXING_HIGH"
             f"&traffic-pattern={urllib.parse.quote(pattern, safe='')}"
         )

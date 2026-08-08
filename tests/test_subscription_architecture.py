@@ -12,6 +12,7 @@ PACKAGE = Path("hydra/services/subscriptions")
 GENERATION_FUNCTIONS = (
     generator.generate_links,
     generator.generate_base64_sub,
+    generator.generate_shadowrocket_sub,
     generator.generate_throne_sub,
     generator.generate_nekobox_sub,
     generator.generate_singbox_config,

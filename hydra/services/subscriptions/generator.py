@@ -22,6 +22,7 @@ from hydra.services.subscriptions.devices import (
 from hydra.services.subscriptions.links import (
     generate_base64_sub,
     generate_links,
+    generate_shadowrocket_sub,
 )
 from hydra.services.subscriptions.hydrabox import (
     generate_hydrabox_subscription,
@@ -45,6 +46,9 @@ from hydra.services.subscriptions.serialization import (
     serialize_nekobox_config,
     serialize_trusttunnel,
 )
+from hydra.services.subscriptions.shadowrocket import (
+    build_shadowrocket_https_link,
+)
 from hydra.services.subscriptions.server import (
     SubscriptionHandler,
     run_standalone,
@@ -55,6 +59,7 @@ __all__ = [
     "SubscriptionHandler",
     "SubscriptionPluginAccess",
     "SubscriptionPluginService",
+    "build_shadowrocket_https_link",
     "clean_link_to_sn",
     "find_any_cert",
     "generate_awg_sn_link",
@@ -63,6 +68,7 @@ __all__ = [
     "generate_hydrabox_subscription",
     "hydrabox_client_fingerprint",
     "generate_links",
+    "generate_shadowrocket_sub",
     "generate_mieru_nekobox_link",
     "generate_nekobox_sub",
     "generate_singbox_config",

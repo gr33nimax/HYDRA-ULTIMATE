@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from hydra.core.state import AppState, PluginState
+from hydra.core.errors import HostOperationError
 from hydra.plugins.base import PluginMeta
 from hydra.services.certificates import CertificateProvisioner
 from hydra.services.protocol_setup import (
@@ -124,6 +125,19 @@ def test_certbot_failure_restores_every_service_that_was_stopped():
 
     assert ["systemctl", "stop", "caddy-l4"] in host.calls
     assert ["systemctl", "start", "caddy-l4"] in host.calls
+
+
+def test_certbot_package_install_timeout_is_normalized_to_failure():
+    class MissingCertbotHost:
+        def which(self, _executable):
+            return None
+
+        def run(self, command, **_kwargs):
+            raise HostOperationError(f"timeout: {command}")
+
+    assert CertificateProvisioner(MissingCertbotHost())._obtain(
+        "vpn.example.com",
+    ) is False
 
 
 def test_protocol_setup_updates_only_desired_tls_material():

@@ -498,6 +498,27 @@ def test_set_transport_only_updates_desired_state():
     assert state.protocols["naive"].config["network"] == "quic"
 
 
+def test_set_domain_normalizes_network_domain_without_runtime_side_effects():
+    plugin = NaivePlugin()
+    state = _make_state_with_network([], domain="old.example.com")
+
+    assert plugin.set_domain(state, "  VPN.Example.COM. ") is True
+    assert state.network.domain == "vpn.example.com"
+
+
+def test_set_domain_rejects_invalid_value_without_mutation():
+    plugin = NaivePlugin()
+    state = _make_state_with_network([], domain="old.example.com")
+
+    try:
+        plugin.set_domain(state, "https://bad domain")
+        assert False, "invalid domain must be rejected"
+    except ValueError:
+        pass
+
+    assert state.network.domain == "old.example.com"
+
+
 def test_apply_reconciles_quic_firewall(tmp_path):
     p = NaivePlugin()
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")])

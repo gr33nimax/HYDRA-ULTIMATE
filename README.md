@@ -237,6 +237,10 @@ python verify.py     # compile + lint + полный pytest
 `ApplicationService` и `HostBackend`. Правила расширения и обязательный набор
 проверок — [PLUGIN_DEVELOPMENT.md](docs/PLUGIN_DEVELOPMENT.md).
 
+## Поддержать проект
+
+[Поддержать разработку HYDRA на Boosty](https://boosty.to/gr33nimax/donate).
+
 ## Связанный проект
 
 [VLESS Ultimate](https://github.com/inferno1978/VLESS-Ultimate-Installer) —

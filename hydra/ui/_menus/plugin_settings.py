@@ -40,15 +40,13 @@ def _report_change(changed: bool, success_text: str) -> None:
 
 
 def _naive_option(desired: PluginState) -> SettingsOption | None:
-    if not desired.enabled:
-        return None
     current = str(desired.config.get("network", "tcp"))
     label = {
         "tcp": "HTTP/2",
         "quic": "QUIC",
         "both": "HTTP/2+QUIC",
     }.get(current, current)
-    return "🔀 Сменить транспорт", f"Текущий: {label}"
+    return "⚙️ Домен и транспорт", f"Транспорт: {label}"
 
 
 def _menu_naive(
@@ -58,14 +56,37 @@ def _menu_naive(
 ) -> None:
     selected = menu(
         [
-            ("1", "HTTP/2 (TCP)", "Максимальная совместимость"),
-            ("2", "QUIC (UDP)", "HTTP/3 через UDP"),
-            ("3", "HTTP/2 + QUIC", "Оба транспорта"),
+            (
+                "1",
+                "Сменить домен",
+                state.network.domain or "Не настроен",
+            ),
+            ("2", "HTTP/2 (TCP)", "Максимальная совместимость"),
+            ("3", "QUIC (UDP)", "HTTP/3 через UDP"),
+            ("4", "HTTP/2 + QUIC", "Оба транспорта"),
             ("0", "↩ Отмена", ""),
         ],
-        "Транспорт NaiveProxy",
+        "Настройки NaiveProxy",
     )
-    network = {"1": "tcp", "2": "quic", "3": "both"}.get(selected)
+    if selected == "1":
+        domain = prompt(
+            "Введите домен NaiveProxy",
+            default=state.network.domain,
+        )
+        try:
+            changed = app.plugin_command(
+                state,
+                "naive",
+                "set_domain",
+                domain=domain,
+            )
+            _report_change(changed, f"Домен изменён на {domain}")
+        except ValueError as exc:
+            error(str(exc))
+        prompt("Нажмите Enter")
+        return
+
+    network = {"2": "tcp", "3": "quic", "4": "both"}.get(selected)
     if network is None:
         return
     changed = app.plugin_command(

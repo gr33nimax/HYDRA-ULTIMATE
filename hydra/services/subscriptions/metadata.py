@@ -14,6 +14,7 @@ from hydra.services.user_access import (
 SUPPORTED_SUBSCRIPTION_FORMATS = {
     "base64",
     "nekobox",
+    "shadowrocket",
     "throne",
     "singbox",
     "sing-box",
@@ -35,6 +36,8 @@ def resolve_subscription_format(
     ua = user_agent.lower()
     if "nekobox/android" in ua or "nekobox" in ua:
         return "nekobox"
+    if "shadowrocket" in ua:
+        return "shadowrocket"
     if "throne" in ua:
         return "throne"
     return "base64"
@@ -85,6 +88,7 @@ def get_subscription_urls(user: User, state: AppState) -> dict[str, str]:
     return {
         "auto": base,
         "nekobox": with_format("nekobox"),
+        "shadowrocket": with_format("shadowrocket"),
         "throne": with_format("throne"),
         "singbox": with_format("singbox"),
         "hydrabox": hydrabox_url,
