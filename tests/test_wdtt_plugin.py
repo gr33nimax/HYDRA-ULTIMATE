@@ -152,7 +152,7 @@ def test_public_server_ip_uses_public_fallback():
         assert WdttPlugin.public_server_ip() == "203.0.113.10"
 
 
-def test_source_build_allows_empty_go_cache(tmp_path):
+def test_source_build_targets_whole_go_package_and_allows_empty_go_cache(tmp_path):
     p = WdttPlugin()
     work_dir = tmp_path / "work"
     src_dir = work_dir / "proxy-turn-vk-android-master"
@@ -180,6 +180,8 @@ def test_source_build_allows_empty_go_cache(tmp_path):
     assert tar_call.kwargs["timeout"] == SOURCE_EXTRACT_TIMEOUT
     assert mod_call.kwargs["timeout"] == GO_MODULE_TIMEOUT
     assert build_call.kwargs["timeout"] == GO_BUILD_TIMEOUT
+    assert build_call.args[0][-1] == "."
+    assert "./server.go" not in build_call.args[0]
     assert GO_MODULE_TIMEOUT >= 600
     assert GO_BUILD_TIMEOUT >= 600
 
