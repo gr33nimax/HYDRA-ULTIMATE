@@ -9,6 +9,7 @@ from subprocess import CompletedProcess
 from hydra.core.host import HostBackend
 from hydra.services.headless_creator_infrastructure import (
     HeadlessCreatorInfrastructure,
+    extract_vk_join_link,
     validate_vk_join_link,
 )
 from hydra.services.headless_creator_pool_infrastructure import extract_call_hash
@@ -101,6 +102,48 @@ def test_join_link_and_hash_validation_are_strict() -> None:
     link = "https://vk.com/call/join/room_token-1"
     assert validate_vk_join_link(link) == link
     assert extract_call_hash(link) == "room_token-1"
+
+
+def test_join_link_accepts_vk_path_token_characters_and_official_ru_host() -> None:
+    link = "https://vk.ru/call/join/room+token=="
+
+    assert validate_vk_join_link(link) == link
+    assert extract_call_hash(link) == "room+token=="
+
+
+def test_join_link_is_extracted_from_creator_prefixed_output() -> None:
+    link = "https://vk.com/call/join/room+token=="
+
+    assert extract_vk_join_link(f"join_link: {link}") == link
+
+
+def test_join_file_reader_ignores_partial_content_until_link_is_complete(monkeypatch) -> None:
+    class ChangingPath:
+        values = iter([
+            "https://vk.com/call/join/",
+            "https://vk.com/call/join/room+token==\n",
+        ])
+
+        def read_text(self, *, encoding: str) -> str:
+            assert encoding == "utf-8"
+            return next(self.values)
+
+    process = Process()
+    clock = iter([0.0, 0.1, 0.2])
+    monkeypatch.setattr(
+        "hydra.services.headless_creator_infrastructure.time.monotonic",
+        lambda: next(clock),
+    )
+    monkeypatch.setattr(
+        "hydra.services.headless_creator_infrastructure.time.sleep",
+        lambda _seconds: None,
+    )
+
+    assert HeadlessCreatorInfrastructure._wait_for_join_file(
+        process,
+        ChangingPath(),
+        timeout=1,
+    ) == "https://vk.com/call/join/room+token=="
 
 
 def _pool_runtime(tmp_path, monkeypatch):

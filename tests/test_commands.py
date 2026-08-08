@@ -48,3 +48,10 @@ def test_log_redaction_masks_vk_call_and_qwdtt_shared_links():
     assert rendered == (
         "created https://vk.com/call/join/<redacted> qwdtt://<redacted>"
     )
+
+
+def test_log_redaction_masks_extended_vk_token_and_ru_host():
+    rendered = redact_text("created https://vk.ru/call/join/shared+room==")
+
+    assert "shared+room" not in rendered
+    assert rendered == "created https://vk.com/call/join/<redacted>"

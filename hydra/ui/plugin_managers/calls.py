@@ -1,4 +1,4 @@
-"""TUI controller for the native Sing-Box Calls transport."""
+"""Compact TUI controller for native Sing-Box Calls."""
 from __future__ import annotations
 
 from hydra.core.state_models import AppState
@@ -19,50 +19,72 @@ def _show_result(result, success_message: str) -> None:
     _pause()
 
 
+def _native_enabled(state: AppState) -> bool:
+    desired = state.protocols.get("calls")
+    return bool(desired and desired.enabled)
+
+
 def _status_panel(state: AppState, app: ApplicationService) -> None:
     status = app.calls.status(state)
     ready = status.feature_supported and status.creator_installed and status.cookies_ready
+    if status.native_running:
+        transport = "работает"
+    elif status.native_enabled:
+        transport = "не запущен"
+    else:
+        transport = "выключен"
     panel(
-        "Calls · VK (экспериментально)",
+        "Calls · VK",
         [
-            f"Транспорт: {'работает' if status.native_running else 'выключен'}",
-            f"Sing-Box Call: {'поддерживается' if status.feature_supported else 'не поддерживается'}",
-            f"Headless Creator: {'установлен' if status.creator_installed else 'не установлен'}",
-            f"VK cookies: {'готовы' if status.cookies_ready else 'не настроены'}",
-            f"Join-link: {'сохранён' if status.native_link_ready else 'отсутствует'}",
-            (
-                "Готовность: можно включать Calls"
-                if ready
-                else "Готовность: сначала откройте главное меню → Headless Creator"
-            ),
+            f"Native Calls: {transport}",
+            f"Sing-Box Call: {'доступен' if status.feature_supported else 'не поддерживается'}",
+            f"Creator и cookies: {'готовы' if status.creator_installed and status.cookies_ready else 'не готовы'}",
         ],
     )
+    if not ready:
+        warn("Подготовьте Creator и VK cookies в меню Headless Creator.")
 
 
 def _show_profile(state: AppState, app: ApplicationService) -> None:
-    if not confirm("Показать admin-профиль? Join-link является общим секретом"):
+    if not confirm("Показать секретный admin-профиль?"):
         return
     try:
         profile = app.calls.native_client_profile(state)
     except Exception as exc:
         error(str(exc))
     else:
-        warn("Не публикуйте профиль: владелец ссылки может войти в VK-комнату.")
+        warn("Не публикуйте профиль: join-link даёт доступ к VK-комнате.")
         print(f"\n{profile.config}\n")
     _pause()
+
+
+def _menu_options(*, enabled: bool) -> list[tuple[str, str, str]]:
+    if not enabled:
+        return [
+            ("1", "Включить", "Создать VK-комнату"),
+            ("0", "Назад", ""),
+        ]
+    return [
+        ("1", "Обновить комнату", "Переключиться без потери старой ссылки"),
+        ("2", "Показать профиль", "Секретный admin JSON"),
+        ("3", "Отключить", "Остановить native Calls"),
+        ("0", "Назад", ""),
+    ]
 
 
 def _dispatch(choice: str, state: AppState, app: ApplicationService) -> bool:
     if choice == "0":
         return False
-    if choice == "1":
-        _show_result(app.calls.enable_native_vk(state), "Native VK Calls включён")
-    elif choice == "2" and confirm("Создать новую VK-комнату и переключить сервер?"):
-        _show_result(app.calls.rotate_native_vk(state), "VK-комната успешно заменена")
-    elif choice == "3":
+    if not _native_enabled(state):
+        if choice == "1":
+            _show_result(app.calls.enable_native_vk(state), "Native VK Calls включён")
+        return True
+    if choice == "1" and confirm("Создать новую VK-комнату?"):
+        _show_result(app.calls.rotate_native_vk(state), "VK-комната обновлена")
+    elif choice == "2":
         _show_profile(state, app)
-    elif choice == "4" and confirm("Отключить native VK Calls?"):
-        purge = confirm("Удалить сохранённый join-link после отключения?")
+    elif choice == "3" and confirm("Отключить native VK Calls?"):
+        purge = confirm("Удалить сохранённый join-link?")
         _show_result(
             app.calls.disable_native_vk(state, purge_link=purge),
             "Native VK Calls отключён",
@@ -76,13 +98,7 @@ def menu_calls(state: AppState, app: ApplicationService) -> None:
         state = app.admin.load_state()
         _status_panel(state, app)
         choice = menu(
-            [
-                ("1", "Включить", "Создать комнату через общий Headless Creator"),
-                ("2", "Ротация комнаты", "Сохранить старую ссылку до успешного handoff"),
-                ("3", "Клиентский профиль", "Явно показать секретный admin JSON"),
-                ("4", "Отключить", "Отключить native call inbound"),
-                ("0", "Назад", ""),
-            ],
+            _menu_options(enabled=_native_enabled(state)),
             "CALLS · VK",
         )
         if not _dispatch(choice, state, app):

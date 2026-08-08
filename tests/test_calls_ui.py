@@ -71,10 +71,34 @@ def test_creator_menu_dispatch_uses_independent_application_port() -> None:
     app = SimpleNamespace(headless_creator=operations)
 
     with patch.object(headless_creator, "_show_result") as show:
-        assert headless_creator._dispatch("1", state, app) is True
+        assert headless_creator._dispatch_core("1", state, app) is True
 
     operations.install.assert_called_once_with(state)
     show.assert_called_once()
+
+
+def test_creator_root_menu_contains_only_logical_sections() -> None:
+    options = headless_creator._root_options()
+
+    assert [option[1] for option in options] == [
+        "Creator",
+        "VK cookies",
+        "qWDTT-комнаты",
+        "Назад",
+    ]
+
+
+def test_calls_menu_only_shows_actions_valid_for_current_state() -> None:
+    assert [option[1] for option in calls._menu_options(enabled=False)] == [
+        "Включить",
+        "Назад",
+    ]
+    assert [option[1] for option in calls._menu_options(enabled=True)] == [
+        "Обновить комнату",
+        "Показать профиль",
+        "Отключить",
+        "Назад",
+    ]
 
 
 def test_creator_tui_has_no_host_or_protocol_plugin_dependency() -> None:

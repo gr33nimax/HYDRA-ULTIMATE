@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from hydra.core.host import HostBackend
 from hydra.services.headless_creator_pool_infrastructure import (
@@ -27,7 +28,9 @@ from hydra.services.headless_creator_pool_infrastructure import (
 CREATOR_CONFIG_DIR = Path("/etc/hydra/cookiesvk")
 VK_COOKIES_FILE = CREATOR_CONFIG_DIR / "cookies-vk.json"
 CREATOR_RUNTIME_DIR = Path("/var/lib/hydra/headless-creator")
-_JOIN_RE = re.compile(r"https://vk\.com/call/join/[A-Za-z0-9._~-]+")
+_JOIN_CANDIDATE_RE = re.compile(r"https://[^\s\"'<>]+", re.IGNORECASE)
+_JOIN_TOKEN_RE = re.compile(r"[A-Za-z0-9._~!$&'()*+,;=:@%-]+")
+_VK_JOIN_HOSTS = frozenset({"vk.com", "vk.ru"})
 
 
 @dataclass(frozen=True)
@@ -57,10 +60,44 @@ def normalize_vk_cookies(value: object) -> list[dict[str, str]]:
 
 def validate_vk_join_link(value: str) -> str:
     link = str(value or "").strip()
-    match = _JOIN_RE.fullmatch(link)
-    if match is None:
+    try:
+        parsed = urlsplit(link)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("creator returned an invalid VK join link") from exc
+    prefix = "/call/join/"
+    token = parsed.path[len(prefix):] if parsed.path.startswith(prefix) else ""
+    valid = (
+        parsed.scheme.lower() == "https"
+        and parsed.hostname in _VK_JOIN_HOSTS
+        and parsed.username is None
+        and parsed.password is None
+        and port is None
+        and not parsed.query
+        and not parsed.fragment
+        and bool(token)
+        and "/" not in token
+        and _JOIN_TOKEN_RE.fullmatch(token) is not None
+        and re.search(r"%(?![0-9A-Fa-f]{2})", token) is None
+    )
+    if not valid:
         raise ValueError("creator returned an invalid VK join link")
-    return match.group(0)
+    return link
+
+
+def extract_vk_join_link(value: str) -> str:
+    """Extract one strict VK join URL from creator file output."""
+    raw = str(value or "").strip()
+    try:
+        return validate_vk_join_link(raw)
+    except ValueError:
+        pass
+    for match in reversed(list(_JOIN_CANDIDATE_RE.finditer(raw))):
+        try:
+            return validate_vk_join_link(match.group(0))
+        except ValueError:
+            continue
+    raise ValueError("creator returned an invalid VK join link")
 
 
 @dataclass
@@ -141,16 +178,28 @@ class HeadlessCreatorInfrastructure(HeadlessCreatorPoolInfrastructureMixin):
     @staticmethod
     def _wait_for_join_file(process: Any, path: Path, *, timeout: float) -> str:
         deadline = time.monotonic() + timeout
+        invalid_content_seen = False
         while time.monotonic() < deadline:
             try:
-                lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()]
-                if lines:
-                    return validate_vk_join_link(lines[-1])
+                lines = [
+                    line.strip()
+                    for line in path.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+                for line in reversed(lines):
+                    try:
+                        return extract_vk_join_link(line)
+                    except ValueError:
+                        invalid_content_seen = True
             except OSError:
                 pass
             if process.poll() is not None:
                 break
             time.sleep(0.25)
+        if invalid_content_seen:
+            raise ValueError("creator returned an invalid VK join link")
+        if process.poll() is not None:
+            raise RuntimeError("headless creator exited before creating a VK room")
         raise TimeoutError("headless creator did not create a VK room within 60 seconds")
 
     @staticmethod
@@ -182,6 +231,7 @@ __all__ = [
     "CreatorBootstrap",
     "HeadlessCreatorInfrastructure",
     "VK_COOKIES_FILE",
+    "extract_vk_join_link",
     "normalize_vk_cookies",
     "validate_vk_join_link",
 ]

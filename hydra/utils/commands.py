@@ -17,7 +17,10 @@ _SECRET_ARG = re.compile(r"(?i)(token|password|secret|private[_-]?key|authorizat
 _SECRET_TEXT = re.compile(
     r"(?i)(token|password|secret|private[_-]?key|authorization)(\s*[:=]\s*)([^\s,;]+)"
 )
-_VK_CALL_LINK = re.compile(r"https://vk\.com/call/join/[A-Za-z0-9._~%-]+")
+_VK_CALL_LINK = re.compile(
+    r"https://(?:www\.)?vk\.(?:com|ru)/call/join/[^\s\"'<>]+",
+    re.IGNORECASE,
+)
 _QWDTT_LINK = re.compile(r"qwdtt://[^\s]+")
 
 
