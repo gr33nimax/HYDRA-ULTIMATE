@@ -260,9 +260,10 @@ state в `headless_creator.providers.vk` и maintenance-флаг в
 Миграция state намеренно не останавливает старые creator units и не переносит
 `/etc/wdtt/headless` или промежуточный Calls runtime. Если creator был настроен,
 верхнеуровневый TUI `Headless Creator` покажет
-`legacy_creator_reinstall_required`. Только явный `Fresh setup` делает snapshot
-старой установки, поднимает новое поколение и после успеха удаляет legacy-файлы;
-при сбое прежние units и файлы восстанавливаются, а единый VK cookie-файл
+`legacy_creator_reinstall_required`. Только явное действие `Создать комнаты` в
+qWDTT-подменю делает snapshot старой установки, поднимает новое поколение и
+после успеха удаляет legacy-файлы; при сбое прежние units и файлы
+восстанавливаются, а единый VK cookie-файл
 `/etc/hydra/cookiesvk/cookies-vk.json` сохраняется.
 Отдельно миграцию выполняет:
 

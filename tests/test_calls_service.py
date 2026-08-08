@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+from hydra.core.state_creator_models import HeadlessCreatorConfig
 from hydra.core.state_models import AppState, PluginState
 from hydra.services.calls import CallsService
 
@@ -13,6 +14,7 @@ class Runtime:
         self.link = "https://vk.com/call/join/old-room"
         self.new_link = "https://vk.com/call/join/new-room"
         self.handoff = True
+        self.remove_error: Exception | None = None
 
     def feature_supported(self):
         return self.supported
@@ -25,6 +27,8 @@ class Runtime:
 
     def remove_native_join_link(self):
         self.link = ""
+        if self.remove_error:
+            raise self.remove_error
 
     def singbox_running(self):
         return True
@@ -50,8 +54,9 @@ class Creator:
 
 
 class Protocols:
-    def __init__(self, *, outcome: bool = True) -> None:
+    def __init__(self, *, outcome: bool = True, uninstall_outcome: bool = True) -> None:
         self.outcome = outcome
+        self.uninstall_outcome = uninstall_outcome
         self.operations: list[str] = []
 
     def activate(self, state, name):
@@ -70,6 +75,17 @@ class Protocols:
         self.operations.append("disable")
         state.protocols[name].enabled = False
         return self.outcome
+
+    def uninstall(self, state, name):
+        self.operations.append("uninstall")
+        if not self.uninstall_outcome:
+            return False
+        desired = state.protocols[name]
+        desired.installed = False
+        desired.enabled = False
+        desired.config = {}
+        desired.port = 0
+        return True
 
 
 def _service(runtime, protocols=None, *, apply=None, saves=None):
@@ -145,6 +161,23 @@ def test_rotation_timeout_restores_old_working_link_and_runtime() -> None:
     assert applies == [runtime.new_link, "https://vk.com/call/join/old-room"]
 
 
+def test_reinstall_recreates_room_and_enables_legacy_disabled_state() -> None:
+    runtime = Runtime()
+    protocols = Protocols()
+    state = AppState(
+        protocols={"calls": PluginState(installed=True, enabled=False)},
+    )
+    service, creator = _service(runtime, protocols)
+
+    result = service.reinstall_native_vk(state)
+
+    assert result
+    assert protocols.operations == ["enable"]
+    assert state.protocols["calls"].enabled is True
+    assert runtime.link == runtime.new_link
+    assert creator.closed is True
+
+
 def test_admin_client_profile_is_fixed_joiner_json() -> None:
     runtime = Runtime()
     state = AppState(protocols={
@@ -169,3 +202,62 @@ def test_admin_client_profile_is_fixed_joiner_json() -> None:
         "join_link": runtime.link,
     }]
     assert config["route"]["final"] == "call-vk-out"
+
+
+def test_uninstall_removes_calls_and_link_but_preserves_shared_creator_state() -> None:
+    runtime = Runtime()
+    protocols = Protocols()
+    state = AppState(
+        protocols={"calls": PluginState(installed=True, enabled=True)},
+        headless_creator=HeadlessCreatorConfig(
+            providers={"vk": {"qwdtt_pool_enabled": True}},
+        ),
+    )
+    service, _ = _service(runtime, protocols)
+
+    result = service.uninstall_native_vk(state)
+
+    assert result
+    assert protocols.operations == ["uninstall"]
+    assert state.protocols["calls"].installed is False
+    assert runtime.link == ""
+    assert state.headless_creator.providers["vk"]["qwdtt_pool_enabled"] is True
+
+
+def test_uninstall_apply_failure_preserves_state_and_link() -> None:
+    runtime = Runtime()
+    protocols = Protocols(uninstall_outcome=False)
+    state = AppState(
+        protocols={"calls": PluginState(installed=True, enabled=True)},
+    )
+    service, _ = _service(runtime, protocols)
+
+    result = service.uninstall_native_vk(state)
+
+    assert not result
+    assert state.protocols["calls"].installed is True
+    assert state.protocols["calls"].enabled is True
+    assert runtime.link == "https://vk.com/call/join/old-room"
+
+
+def test_uninstall_link_cleanup_failure_rolls_back_state_link_and_runtime() -> None:
+    runtime = Runtime()
+    runtime.remove_error = OSError("link cleanup failed")
+    protocols = Protocols()
+    applies: list[str] = []
+    state = AppState(
+        protocols={"calls": PluginState(installed=True, enabled=True)},
+    )
+    service, _ = _service(
+        runtime,
+        protocols,
+        apply=lambda current: applies.append(runtime.link) or True,
+    )
+
+    result = service.uninstall_native_vk(state)
+
+    assert not result
+    assert state.protocols["calls"].installed is True
+    assert state.protocols["calls"].enabled is True
+    assert runtime.link == "https://vk.com/call/join/old-room"
+    assert applies == ["https://vk.com/call/join/old-room"]

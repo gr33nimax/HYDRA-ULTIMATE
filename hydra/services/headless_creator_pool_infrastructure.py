@@ -189,6 +189,22 @@ class HeadlessCreatorPoolInfrastructureMixin:
         generation = str(self.pool_metadata().get("generation", ""))
         return self._read_hashes_for(generation)
 
+    def count_valid_creator_rooms(self) -> int:
+        """Count unique valid room files without exposing their hashes."""
+        generation = str(self.pool_metadata().get("generation", ""))
+        hashes: set[str] = set()
+        for path in self.call_files(generation=generation):
+            try:
+                lines = [
+                    line
+                    for line in path.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+                hashes.add(extract_call_hash(lines[-1]))
+            except (OSError, ValueError, IndexError):
+                continue
+        return len(hashes)
+
     def _read_hashes_for(self, generation: str) -> list[str]:
         hashes: list[str] = []
         for path in self.call_files(generation=generation):

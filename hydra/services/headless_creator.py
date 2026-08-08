@@ -83,7 +83,7 @@ class HeadlessCreatorService:
             cookies_ready=bool(self.runtime.load_vk_cookies()),
             providers=("vk",),
             vk_qwdtt_pool_enabled=bool(config.get("qwdtt_pool_enabled", False)),
-            vk_qwdtt_call_count=len(self.runtime.read_creator_hashes()),
+            vk_qwdtt_call_count=self.runtime.count_valid_creator_rooms(),
             vk_qwdtt_refreshed_at=str(metadata.get("refreshed_at", "")),
             vk_qwdtt_refresh_interval_seconds=self._refresh_interval(state),
             legacy_reinstall_required=bool(

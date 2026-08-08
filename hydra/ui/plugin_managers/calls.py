@@ -1,48 +1,43 @@
-"""Compact TUI controller for native Sing-Box Calls."""
+"""Protocol-style TUI controller for native Sing-Box Calls."""
 from __future__ import annotations
 
-from hydra.core.state_models import AppState
+from hydra.core.state_models import AppState, PluginState
 from hydra.services.application import ApplicationService
-from hydra.ui.tui import clear, confirm, error, menu, panel, prompt, success, warn
+from hydra.ui.protocol_ui import protocol_menu_title, protocol_status_panel
+from hydra.ui.tui import clear, confirm, error, menu, prompt, success, warn
 
 
 def _pause() -> None:
     prompt("Нажмите Enter")
 
 
-def _show_result(result, success_message: str) -> None:
+def _show_result(result, success_message: str) -> bool:
     if result:
         success(success_message)
     else:
         message = result.error.message if result.error else "операция не выполнена"
         error(message)
     _pause()
+    return bool(result)
 
 
-def _native_enabled(state: AppState) -> bool:
-    desired = state.protocols.get("calls")
-    return bool(desired and desired.enabled)
+def _desired(state: AppState) -> PluginState:
+    return state.protocols.get("calls", PluginState())
 
 
 def _status_panel(state: AppState, app: ApplicationService) -> None:
+    desired = _desired(state)
     status = app.calls.status(state)
-    ready = status.feature_supported and status.creator_installed and status.cookies_ready
-    if status.native_running:
-        transport = "работает"
-    elif status.native_enabled:
-        transport = "не запущен"
-    else:
-        transport = "выключен"
-    panel(
-        "Calls · VK",
-        [
-            f"Native Calls: {transport}",
-            f"Sing-Box Call: {'доступен' if status.feature_supported else 'не поддерживается'}",
-            f"Creator и cookies: {'готовы' if status.creator_installed and status.cookies_ready else 'не готовы'}",
+    protocol_status_panel(
+        "calls",
+        installed=desired.installed,
+        enabled=desired.enabled,
+        running=status.native_running,
+        details=[
+            ("Платформа", "VK"),
+            ("Комната", "создана" if status.native_link_ready else "отсутствует"),
         ],
     )
-    if not ready:
-        warn("Подготовьте Creator и VK cookies в меню Headless Creator.")
 
 
 def _show_profile(state: AppState, app: ApplicationService) -> None:
@@ -58,37 +53,38 @@ def _show_profile(state: AppState, app: ApplicationService) -> None:
     _pause()
 
 
-def _menu_options(*, enabled: bool) -> list[tuple[str, str, str]]:
-    if not enabled:
+def _menu_options(*, installed: bool) -> list[tuple[str, str, str]]:
+    if not installed:
         return [
-            ("1", "Включить", "Создать VK-комнату"),
-            ("0", "Назад", ""),
+            ("1", "🔧 Установить", "Создать VK-комнату и запустить Calls"),
+            ("0", "↩ Назад", ""),
         ]
     return [
-        ("1", "Обновить комнату", "Переключиться без потери старой ссылки"),
-        ("2", "Показать профиль", "Секретный admin JSON"),
-        ("3", "Отключить", "Остановить native Calls"),
-        ("0", "Назад", ""),
+        ("1", "🔄 Переустановить", "Пересоздать VK-комнату с rollback"),
+        ("2", "📄 Показать admin-профиль", "Секретный клиентский JSON"),
+        ("9", "❌ Удалить", "Удалить Calls и сохранённый join-link"),
+        ("0", "↩ Назад", ""),
     ]
 
 
 def _dispatch(choice: str, state: AppState, app: ApplicationService) -> bool:
+    desired = _desired(state)
     if choice == "0":
         return False
-    if not _native_enabled(state):
-        if choice == "1":
-            _show_result(app.calls.enable_native_vk(state), "Native VK Calls включён")
-        return True
-    if choice == "1" and confirm("Создать новую VK-комнату?"):
-        _show_result(app.calls.rotate_native_vk(state), "VK-комната обновлена")
-    elif choice == "2":
+    if choice == "1" and not desired.installed:
+        _show_result(app.calls.enable_native_vk(state), "Calls · VK установлен")
+    elif choice == "1" and confirm("Переустановить Calls и пересоздать VK-комнату?"):
+        _show_result(app.calls.reinstall_native_vk(state), "Calls · VK переустановлен")
+    elif choice == "2" and desired.installed:
         _show_profile(state, app)
-    elif choice == "3" and confirm("Отключить native VK Calls?"):
-        purge = confirm("Удалить сохранённый join-link?")
-        _show_result(
-            app.calls.disable_native_vk(state, purge_link=purge),
-            "Native VK Calls отключён",
-        )
+    elif choice == "9" and desired.installed:
+        if confirm("Удалить Calls и сохранённый join-link?"):
+            removed = _show_result(
+                app.calls.uninstall_native_vk(state),
+                "Calls · VK удалён",
+            )
+            if removed:
+                return False
     return True
 
 
@@ -96,10 +92,11 @@ def menu_calls(state: AppState, app: ApplicationService) -> None:
     while True:
         clear()
         state = app.admin.load_state()
+        desired = _desired(state)
         _status_panel(state, app)
         choice = menu(
-            _menu_options(enabled=_native_enabled(state)),
-            "CALLS · VK",
+            _menu_options(installed=desired.installed),
+            protocol_menu_title("calls"),
         )
         if not _dispatch(choice, state, app):
             return

@@ -11,14 +11,16 @@ class Runtime:
         self.cookies = [{"name": "remixsid", "value": "secret"}]
         self.hashes = ["one", "two", "three", "four"]
         self.metadata: dict[str, object] = {}
+        self.installed = True
         self.commit_error: Exception | None = None
         self.forgotten = False
         self.legacy_restored = False
         self.legacy_cleanup_ok = True
         self.pool_rolled_back = False
 
-    def creator_installed(self): return True
+    def creator_installed(self): return self.installed
     def load_vk_cookies(self): return list(self.cookies)
+    def count_valid_creator_rooms(self): return len(set(self.hashes))
     def validate_credentials(self): return list(self.cookies)
     def install_creator(self): return True, "installed"
     def refresh_creator_pool(self, *, previous=None): return list(self.hashes)
@@ -143,3 +145,77 @@ def test_status_is_read_only_for_empty_creator_state() -> None:
     state = AppState()
     _service(Runtime()).status(state)
     assert state.headless_creator.providers == {}
+
+
+def test_status_reports_cookie_path_and_partial_room_count() -> None:
+    runtime = Runtime()
+    runtime.hashes = ["one", "two", "two"]
+
+    status = _service(runtime).status(AppState())
+
+    assert status.installed is True
+    assert status.cookies_ready is True
+    assert status.cookies_path == "/etc/hydra/cookiesvk/cookies-vk.json"
+    assert status.vk_qwdtt_call_count == 2
+
+
+def test_status_marks_vk_cookies_not_ready_when_file_is_invalid_or_missing() -> None:
+    runtime = Runtime()
+    runtime.cookies = []
+
+    status = _service(runtime).status(AppState())
+
+    assert status.cookies_ready is False
+
+
+def test_status_reports_uninstalled_creator_from_runtime() -> None:
+    runtime = Runtime()
+    runtime.installed = False
+
+    status = _service(runtime).status(AppState())
+
+    assert status.installed is False
+
+
+def test_qwdtt_refresh_replaces_the_existing_pool() -> None:
+    runtime = Runtime()
+    actions = Actions()
+    state = AppState(
+        protocols={"wdtt": PluginState(enabled=True)},
+        headless_creator=HeadlessCreatorConfig(
+            providers={"vk": {"qwdtt_pool_enabled": True}},
+        ),
+    )
+
+    result = _service(runtime, actions).refresh_qwdtt_pool(state, forced=True)
+
+    assert result
+    assert actions.calls[0][0] == "update_call_pool_artifact"
+    assert runtime.metadata["hashes"] == runtime.hashes
+
+
+def test_qwdtt_stop_clears_artifact_and_persisted_pool_flag() -> None:
+    runtime = Runtime()
+    actions = Actions()
+    saves: list[AppState] = []
+    state = AppState(
+        headless_creator=HeadlessCreatorConfig(
+            providers={"vk": {"qwdtt_pool_enabled": True}},
+        ),
+    )
+
+    result = _service(runtime, actions, saves).stop_qwdtt_pool(state)
+
+    assert result
+    assert actions.link == ""
+    assert state.headless_creator.providers["vk"]["qwdtt_pool_enabled"] is False
+    assert saves
+
+
+def test_qwdtt_interval_accepts_only_one_to_twenty_four_hours() -> None:
+    state = AppState()
+    service = _service(Runtime())
+
+    assert service.set_qwdtt_refresh_interval(state, 3600)
+    assert state.headless_creator.providers["vk"]["qwdtt_refresh_interval_seconds"] == 3600
+    assert not service.set_qwdtt_refresh_interval(state, 25 * 3600)

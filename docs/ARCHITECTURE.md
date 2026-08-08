@@ -591,10 +591,10 @@ lifecycle, timer или systemd creator. Owner-neutral maintenance-фасад о
 plugin tasks и `headless_creator.vk.qwdtt_pool`; его читают Sync Agent и TUI.
 
 Миграция schema 8 извлекает creator desired state из `calls.config` в
-`headless_creator.providers.vk`, но не меняет host runtime. Явный Fresh setup в
-верхнеуровневом меню Creator делает snapshot старых units/файлов, устанавливает
-новый пул и только затем удаляет legacy creator; failure восстанавливает
-snapshot. Общие VK cookies при этом не удаляются.
+`headless_creator.providers.vk`, но не меняет host runtime. Явное действие
+`Создать комнаты` в qWDTT-подменю Creator делает snapshot старых units/файлов,
+устанавливает новый пул и только затем удаляет legacy creator; failure
+восстанавливает snapshot. Общие VK cookies при этом не удаляются.
 
 Cookies и join-link не хранятся в state и не попадают в status/apply journal.
 Лог-проекции HYDRA редактируют VK и qWDTT links. Upstream Sing-Box выводит

@@ -41,8 +41,10 @@ class CallClientProfile:
 class CallOperations(Protocol):
     def status(self, state: AppState) -> CallsStatus: ...
     def enable_native_vk(self, state: AppState) -> ServiceResult: ...
+    def reinstall_native_vk(self, state: AppState) -> ServiceResult: ...
     def rotate_native_vk(self, state: AppState) -> ServiceResult: ...
     def disable_native_vk(self, state: AppState, *, purge_link: bool = False) -> ServiceResult: ...
+    def uninstall_native_vk(self, state: AppState) -> ServiceResult: ...
     def native_client_profile(self, state: AppState) -> CallClientProfile: ...
 
 
@@ -79,6 +81,12 @@ class CallsService:
 
     def enable_native_vk(self, state: AppState) -> ServiceResult:
         return self._native_transition(state, rotate=False)
+
+    def reinstall_native_vk(self, state: AppState) -> ServiceResult:
+        desired = state.protocols.get("calls")
+        if desired is None or not desired.installed:
+            return failed_result(ValueError("native VK Calls are not installed"))
+        return self._native_transition(state, rotate=True)
 
     def rotate_native_vk(self, state: AppState) -> ServiceResult:
         desired = state.protocols.get("calls")
@@ -138,8 +146,14 @@ class CallsService:
                 self.runtime.write_native_join_link(previous_link)
             else:
                 self.runtime.remove_native_join_link()
-            restore_state_in_place(state, snapshot)
+        except Exception:
+            pass
+        restore_state_in_place(state, snapshot)
+        try:
             self.save_state(state)
+        except Exception:
+            pass
+        try:
             self.apply_config(state)
         except Exception:
             pass
@@ -165,6 +179,32 @@ class CallsService:
             return ServiceResult(True, value={"changed": True})
         except Exception as exc:
             return failed_result(exc, fallback=ErrorCode.OPERATION_FAILED)
+
+    def uninstall_native_vk(self, state: AppState) -> ServiceResult:
+        if not self._lock.acquire(blocking=False):
+            return failed_result(
+                RuntimeError("another Calls operation is already running"),
+                fallback=ErrorCode.CONFLICT,
+            )
+        snapshot = copy.deepcopy(state)
+        previous_link = self.runtime.load_native_join_link()
+        desired = state.protocols.get("calls")
+        was_installed = bool(desired and desired.installed)
+        try:
+            if was_installed and not self.protocols.uninstall(state, "calls"):
+                raise RuntimeError(
+                    self.last_apply_error() or "failed to uninstall native VK Calls",
+                )
+            self.runtime.remove_native_join_link()
+            return ServiceResult(
+                True,
+                value={"changed": bool(was_installed or previous_link)},
+            )
+        except Exception as exc:
+            self._restore_native_transition(state, snapshot, previous_link)
+            return failed_result(exc, fallback=ErrorCode.OPERATION_FAILED)
+        finally:
+            self._lock.release()
 
     def native_client_profile(self, state: AppState) -> CallClientProfile:
         desired = state.protocols.get("calls")

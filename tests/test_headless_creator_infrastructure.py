@@ -200,3 +200,30 @@ def test_qwdtt_rotation_rollback_restores_metadata(tmp_path, monkeypatch) -> Non
         and "hydra-headless-creator-vk@b-1.service" in cmd
         for cmd in host.commands
     )
+
+
+def test_room_count_accepts_only_unique_valid_room_files(tmp_path) -> None:
+    pool = tmp_path / "pool"
+    pool.mkdir()
+    state_file = pool / "state.json"
+    state_file.write_text(json.dumps({"generation": "a"}), encoding="utf-8")
+    (pool / "a-1.call.txt").write_text(
+        "https://vk.com/call/join/room-1\n",
+        encoding="utf-8",
+    )
+    (pool / "a-2.call.txt").write_text(
+        "https://vk.com/call/join/room-2\n",
+        encoding="utf-8",
+    )
+    (pool / "a-3.call.txt").write_text(
+        "https://vk.com/call/join/room-2\n",
+        encoding="utf-8",
+    )
+    (pool / "a-4.call.txt").write_text("invalid", encoding="utf-8")
+    runtime = HeadlessCreatorInfrastructure(
+        HostBackend(),
+        pool_dir=pool,
+        pool_state_file=state_file,
+    )
+
+    assert runtime.count_valid_creator_rooms() == 2

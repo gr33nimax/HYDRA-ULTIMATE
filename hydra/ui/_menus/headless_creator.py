@@ -1,4 +1,4 @@
-"""Compact TUI for the provider-neutral headless creator."""
+"""Minimal TUI for the shared provider-neutral headless creator."""
 from __future__ import annotations
 
 from hydra.core.state_models import AppState
@@ -23,95 +23,31 @@ def _status(state: AppState, app: ApplicationService):
     return app.headless_creator.status(state)
 
 
-def _root_status_panel(state: AppState, app: ApplicationService) -> None:
-    status = _status(state, app)
-    auto = bool(state.install.get(QWDTT_AUTO_FLAG, True))
+def _root_status_panel(status) -> None:
+    installed = "✓ Установлен" if status.installed else "❌ Не установлен"
+    vk = "✓ VK" if status.cookies_ready else "❌ VK"
     panel(
-        "Headless Creator",
+        "🎬 Headless Creator",
         [
-            f"Creator: {'установлен' if status.installed else 'не установлен'}",
-            f"VK cookies: {'готовы' if status.cookies_ready else 'не настроены'}",
-            (
-                f"qWDTT: {'включён' if status.vk_qwdtt_pool_enabled else 'выключен'}"
-                f" · {status.vk_qwdtt_call_count}/4 · auto {'on' if auto else 'off'}"
-            ),
+            f"Состояние: {installed}",
+            f"Cookies: {vk}  ❌ WB",
+            f"Путь cookies: {status.cookies_path}",
+            f"qWDTT rooms: {status.vk_qwdtt_call_count}/4",
         ],
     )
     if status.legacy_reinstall_required:
-        warn("Для старого qWDTT creator требуется Fresh setup.")
+        warn("Команда «Создать комнаты» перенесёт старую установку qWDTT.")
 
 
-def _root_options() -> list[tuple[str, str, str]]:
-    return [
-        ("1", "Creator", "Установка и удаление"),
-        ("2", "VK cookies", "Проверка credentials"),
-        ("3", "qWDTT-комнаты", "Пул из четырёх комнат"),
-        ("0", "Назад", ""),
-    ]
-
-
-def _dispatch_core(choice: str, state: AppState, app: ApplicationService) -> bool:
-    creator = app.headless_creator
-    if choice == "0":
-        return False
-    if choice == "1":
-        _show_result(creator.install(state), "Headless Creator установлен")
-    elif choice == "2" and confirm("Удалить Headless Creator?"):
-        _show_result(creator.uninstall(state), "Headless Creator удалён")
-    return True
-
-
-def _menu_core(state: AppState, app: ApplicationService) -> None:
-    while True:
-        clear()
-        state = app.admin.load_state()
-        status = _status(state, app)
-        panel("Creator", [f"Состояние: {'установлен' if status.installed else 'не установлен'}"])
-        choice = menu(
-            [
-                ("1", "Установить / проверить", ""),
-                ("2", "Удалить", "Calls и qWDTT должны быть отключены"),
-                ("0", "Назад", ""),
-            ],
-            "CREATOR",
-        )
-        if not _dispatch_core(choice, state, app):
-            return
-
-
-def _dispatch_vk(choice: str, state: AppState, app: ApplicationService) -> bool:
-    creator = app.headless_creator
-    if choice == "0":
-        return False
-    if choice == "1":
-        _show_result(creator.validate_vk_credentials(state), "VK cookies корректны")
-    elif choice == "2" and confirm("Удалить общие VK cookies?"):
-        _show_result(creator.forget_vk_credentials(state), "VK cookies удалены")
-    return True
-
-
-def _menu_vk(state: AppState, app: ApplicationService) -> None:
-    while True:
-        clear()
-        state = app.admin.load_state()
-        status = _status(state, app)
-        panel(
-            "VK cookies",
-            [
-                f"Состояние: {'готовы' if status.cookies_ready else 'не настроены'}",
-                status.cookies_path,
-            ],
-        )
-        choice = menu(
-            [
-                ("1", "Проверить", ""),
-                ("2", "Удалить", "Calls и qWDTT должны быть отключены"),
-                ("0", "Назад", ""),
-            ],
-            "VK COOKIES",
-        )
-        if not _dispatch_vk(choice, state, app):
-            return
+def _root_options(*, installed: bool) -> list[tuple[str, str, str]]:
+    options: list[tuple[str, str, str]] = []
+    if not installed:
+        options.append(("1", "🔧 Установить", "Установить headless-vk-creator"))
+    options.append(("2", "🎥 qWDTT", "Управление четырьмя VK-комнатами"))
+    if installed:
+        options.append(("9", "❌ Удалить", "Удалить creator и qWDTT runtime"))
+    options.append(("0", "↩ Назад", ""))
+    return options
 
 
 def _set_interval(state: AppState, app: ApplicationService) -> None:
@@ -135,50 +71,46 @@ def _toggle_auto(state: AppState, app: ApplicationService) -> None:
     _pause()
 
 
-def _menu_auto(state: AppState, app: ApplicationService) -> None:
-    while True:
-        clear()
-        state = app.admin.load_state()
-        status = _status(state, app)
-        enabled = bool(state.install.get(QWDTT_AUTO_FLAG, True))
-        panel(
-            "Автообновление qWDTT",
-            [
-                f"Режим: {'включён' if enabled else 'выключен'}",
-                f"Интервал: {status.vk_qwdtt_refresh_interval_seconds // 3600} ч",
-            ],
-        )
-        choice = menu(
-            [
-                ("1", "Включить / выключить", ""),
-                ("2", "Изменить интервал", ""),
-                ("0", "Назад", ""),
-            ],
-            "АВТООБНОВЛЕНИЕ",
-        )
-        if choice == "0":
-            return
-        if choice == "1":
-            _toggle_auto(state, app)
-        elif choice == "2":
-            _set_interval(state, app)
+def _create_rooms(state: AppState, app: ApplicationService, status) -> None:
+    if not confirm("Создать четыре новые VK-комнаты для qWDTT?"):
+        return
+    if status.vk_qwdtt_pool_enabled and not status.legacy_reinstall_required:
+        result = app.headless_creator.refresh_qwdtt_pool(state, forced=True)
+    else:
+        result = app.headless_creator.setup_qwdtt_pool(state)
+    _show_result(result, "Четыре qWDTT-комнаты созданы")
 
 
-def _dispatch_qwdtt(choice: str, state: AppState, app: ApplicationService) -> bool:
-    creator = app.headless_creator
+def _dispatch_qwdtt(
+    choice: str,
+    state: AppState,
+    app: ApplicationService,
+    status,
+) -> bool:
     if choice == "0":
         return False
-    if choice == "1" and confirm("Создать заново четыре VK-комнаты для qWDTT?"):
-        _show_result(creator.setup_qwdtt_pool(state), "qWDTT-пул настроен")
-    elif choice == "2":
-        _show_result(creator.refresh_qwdtt_pool(state, forced=True), "qWDTT-пул обновлён")
+    if choice == "1":
+        _create_rooms(state, app, status)
+    elif choice == "2" and confirm("Остановить qWDTT-комнаты?"):
+        _show_result(
+            app.headless_creator.stop_qwdtt_pool(state),
+            "qWDTT-комнаты остановлены",
+        )
     elif choice == "3":
-        _menu_auto(state, app)
-    elif choice == "4" and confirm("Остановить qWDTT-комнаты?"):
-        _show_result(creator.stop_qwdtt_pool(state), "qWDTT-пул остановлен")
-    elif choice == "5" and confirm("Удалить qWDTT units и runtime?"):
-        _show_result(creator.uninstall_qwdtt_pool(state), "qWDTT-пул удалён")
+        _toggle_auto(state, app)
+    elif choice == "4":
+        _set_interval(state, app)
     return True
+
+
+def _qwdtt_options() -> list[tuple[str, str, str]]:
+    return [
+        ("1", "🎬 Создать комнаты", "Создать новый комплект 4/4"),
+        ("2", "⏹ Остановить комнаты", "Creator и cookies сохранятся"),
+        ("3", "🔄 Включить / выключить автообновление", ""),
+        ("4", "⏱ Изменить интервал", "От 1 до 24 часов"),
+        ("0", "↩ Назад", ""),
+    ]
 
 
 def _menu_qwdtt(state: AppState, app: ApplicationService) -> None:
@@ -188,30 +120,18 @@ def _menu_qwdtt(state: AppState, app: ApplicationService) -> None:
         status = _status(state, app)
         auto = bool(state.install.get(QWDTT_AUTO_FLAG, True))
         panel(
-            "qWDTT-комнаты",
+            "🎥 qWDTT · VK-комнаты",
             [
-                f"Пул: {'включён' if status.vk_qwdtt_pool_enabled else 'выключен'}",
                 f"Комнаты: {status.vk_qwdtt_call_count}/4",
-                (
-                    f"Автообновление: {'on' if auto else 'off'}"
-                    f" · {status.vk_qwdtt_refresh_interval_seconds // 3600} ч"
-                ),
+                f"Автообновление: {'✓ Включено' if auto else '❌ Выключено'}",
+                f"Интервал: {status.vk_qwdtt_refresh_interval_seconds // 3600} ч",
             ],
         )
-        if status.legacy_reinstall_required:
-            warn("Старая установка будет заменена только через Fresh setup.")
         choice = menu(
-            [
-                ("1", "Fresh setup", "Создать четыре комнаты"),
-                ("2", "Обновить комнаты", "Без потери старой ссылки при ошибке"),
-                ("3", "Автообновление", "Режим и интервал"),
-                ("4", "Остановить", "Сохранить creator и cookies"),
-                ("5", "Удалить пул", "Удалить только qWDTT runtime"),
-                ("0", "Назад", ""),
-            ],
-            "QWDTT-КОМНАТЫ",
+            _qwdtt_options(),
+            "QWDTT · VK-КОМНАТЫ",
         )
-        if not _dispatch_qwdtt(choice, state, app):
+        if not _dispatch_qwdtt(choice, state, app, status):
             return
 
 
@@ -219,21 +139,25 @@ def _dispatch_root(choice: str, state: AppState, app: ApplicationService) -> boo
     if choice == "0":
         return False
     if choice == "1":
-        _menu_core(state, app)
+        _show_result(app.headless_creator.install(state), "Headless Creator установлен")
     elif choice == "2":
-        _menu_vk(state, app)
-    elif choice == "3":
         _menu_qwdtt(state, app)
+    elif choice == "9" and confirm("Удалить Headless Creator и qWDTT runtime?"):
+        _show_result(app.headless_creator.uninstall(state), "Headless Creator удалён")
     return True
 
 
 def menu_headless_creator(state: AppState, app: ApplicationService) -> None:
-    """Manage creator core, provider credentials and consumers separately."""
+    """Manage creator installation and its qWDTT consumer."""
     while True:
         clear()
         state = app.admin.load_state()
-        _root_status_panel(state, app)
-        choice = menu(_root_options(), "HEADLESS CREATOR")
+        status = _status(state, app)
+        _root_status_panel(status)
+        choice = menu(
+            _root_options(installed=status.installed),
+            "HEADLESS CREATOR",
+        )
         if not _dispatch_root(choice, state, app):
             return
 

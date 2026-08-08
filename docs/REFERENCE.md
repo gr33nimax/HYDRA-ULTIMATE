@@ -444,7 +444,7 @@ join-links в state не хранятся.
 `sync_headless_creator_vk_qwdtt_enabled`. Native Calls автоматически не
 включается. Если старый creator был настроен, state получает
 `legacy_creator_reinstall_required`; старые units и runtime не изменяются до
-явного `Fresh setup` в верхнеуровневом TUI `Headless Creator`.
+явного `Создать комнаты` в qWDTT-подменю TUI `Headless Creator`.
 
 `install` хранит служебные отметки фоновых проверок:
 
