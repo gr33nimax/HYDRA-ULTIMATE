@@ -19,7 +19,7 @@ from hydra.contracts import ConfigFragment
 from hydra.core.state import load_state
 from hydra.core.state_models import AppState, PluginState
 from hydra.core.host import HOST
-from hydra.core import singbox_config
+from hydra.core import singbox_config, singbox_units
 from hydra.core.singbox_upgrade import (
     UpgradeOperations,
     migrate_runtime_dns_config,
@@ -320,6 +320,23 @@ def write_config(config: dict) -> bool:
 #  Управление службой
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _render_service_unit(bin_path: Path) -> str:
+    """Compatibility wrapper for the managed Sing-Box unit renderer."""
+    return singbox_units.render_service_unit(bin_path, SINGBOX_CONFIG)
+
+
+def _service_unit_needs_update() -> bool:
+    """Compatibility wrapper for managed unit drift detection."""
+    bin_path = _find_singbox()
+    if not bin_path:
+        return False
+    return singbox_units.service_unit_needs_update(
+        SINGBOX_SERVICE,
+        bin_path,
+        SINGBOX_CONFIG,
+    )
+
+
 def _install_service() -> bool:
     """Создаёт systemd-юнит для sing-box."""
     bin_path = _find_singbox()
@@ -327,35 +344,12 @@ def _install_service() -> bool:
         return False
 
     # Создаём рабочую директорию (нужна для sing-box run)
-    work_dir = Path("/var/lib/sing-box")
-    work_dir.mkdir(parents=True, exist_ok=True)
-
-    unit = f"""[Unit]
-Description=sing-box service
-Documentation=https://sing-box.sagernet.org
-After=network.target nss-lookup.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/var/lib/sing-box
-Environment=LEGACY_DNS_SERVERS=true ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER=true
-ExecStart={bin_path} run -c {SINGBOX_CONFIG}
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=on-failure
-RestartSec=30
-LimitNPROC=500
-LimitNOFILE=1000000
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_PTRACE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SYS_PTRACE
-
-[Install]
-WantedBy=multi-user.target
-"""
-    SINGBOX_SERVICE.parent.mkdir(parents=True, exist_ok=True)
-    SINGBOX_SERVICE.write_text(unit)
-    HOST.run(["systemctl", "daemon-reload"])
-    return True
+    return singbox_units.install_service_unit(
+        SINGBOX_SERVICE,
+        bin_path,
+        SINGBOX_CONFIG,
+        HOST,
+    )
 
 
 def start() -> bool:
@@ -376,7 +370,11 @@ def start() -> bool:
         }
         write_config(minimal)
 
-    _install_service()
+    if not _install_service():
+        message = "Не удалось установить systemd-unit Sing-Box"
+        _set_error(message)
+        _log("ERROR", message)
+        return False
     r = _run(["systemctl", "start", "sing-box"], capture=False)
     if r.returncode != 0:
         _set_error("Не удалось запустить Sing-Box: ошибка systemd")
@@ -414,7 +412,7 @@ def wait_until_stable(checks: int = 3, interval: float = 0.5) -> bool:
 
 def reload() -> bool:
     """Перезагружает конфиг sing-box (graceful)."""
-    if not is_running():
+    if not is_running() or _service_unit_needs_update():
         return start()
     r = _run(["systemctl", "reload", "sing-box"])
     if r.returncode != 0:

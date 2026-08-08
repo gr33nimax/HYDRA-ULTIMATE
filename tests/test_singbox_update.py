@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hydra.core import singbox, singbox_units
 from hydra.core.singbox import parse_version, update_kernel, SINGBOX_BIN, SINGBOX_CONFIG
 from hydra.core.state import AppState
 
@@ -39,6 +40,66 @@ def test_parse_version():
     assert parse_version("v1.13.14-extended-2.5.2") == (1, 13, 14, 2, 5, 2)
     assert parse_version(None) == (0,)
     assert parse_version("invalid") == (0,)
+
+
+def test_install_service_grants_cap_net_raw_for_udp_interface_rebind(tmp_path):
+    service_path = tmp_path / "sing-box.service"
+    binary_path = tmp_path / "sing-box"
+    binary_path.write_text("binary", encoding="utf-8")
+
+    with patch("hydra.core.singbox.SINGBOX_SERVICE", service_path), \
+         patch("hydra.core.singbox._find_singbox", return_value=binary_path), \
+         patch.object(Path, "mkdir"), \
+         patch("hydra.core.singbox.HOST.run") as run:
+        run.return_value = MagicMock(returncode=0)
+        assert singbox._install_service() is True
+
+    unit = service_path.read_text(encoding="utf-8")
+    capability_set = (
+        "CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_PTRACE"
+    )
+    assert f"CapabilityBoundingSet={capability_set}" in unit
+    assert f"AmbientCapabilities={capability_set}" in unit
+    run.assert_called_once_with(["systemctl", "daemon-reload"])
+
+
+def test_install_service_reports_daemon_reload_failure(tmp_path):
+    service_path = tmp_path / "sing-box.service"
+    binary_path = tmp_path / "sing-box"
+    binary_path.write_text("binary", encoding="utf-8")
+
+    with patch("hydra.core.singbox.SINGBOX_SERVICE", service_path), \
+         patch("hydra.core.singbox._find_singbox", return_value=binary_path), \
+         patch.object(Path, "mkdir"), \
+         patch(
+             "hydra.core.singbox.HOST.run",
+             return_value=MagicMock(returncode=1),
+         ):
+        assert singbox._install_service() is False
+
+
+def test_service_unit_drift_detects_legacy_capability_set(tmp_path):
+    service_path = tmp_path / "sing-box.service"
+    binary_path = tmp_path / "sing-box"
+    config_path = tmp_path / "config.json"
+    current = singbox_units.render_service_unit(binary_path, config_path)
+
+    service_path.write_text(current, encoding="utf-8")
+    assert singbox_units.service_unit_needs_update(
+        service_path,
+        binary_path,
+        config_path,
+    ) is False
+
+    service_path.write_text(
+        current.replace(" CAP_NET_RAW", ""),
+        encoding="utf-8",
+    )
+    assert singbox_units.service_unit_needs_update(
+        service_path,
+        binary_path,
+        config_path,
+    ) is True
 
 
 @pytest.fixture
@@ -87,6 +148,8 @@ def test_update_kernel_success(mock_singbox_paths):
         # backup is removed
         assert not bin_path.with_suffix(".bak").exists()
         assert state.install.get("singbox_update_available") is None
+        # start() rewrites the systemd unit before launching the new core.
+        mock_start.assert_called_once_with()
 
 
 def test_update_kernel_migrates_legacy_dns_before_config_check(
