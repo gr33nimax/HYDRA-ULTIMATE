@@ -8,6 +8,7 @@ import io
 import os
 import tarfile
 import tempfile
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -155,6 +156,52 @@ def test_github_asset_fails_closed_without_digest(tmp_path):
          patch.object(downloader, "download") as download:
         assert downloader.download_github_asset("owner/repo", "tool-linux", tmp_path / "tool") is False
     download.assert_not_called()
+
+
+def test_github_asset_reports_http_failure(tmp_path):
+    from hydra.utils import downloader
+
+    errors = []
+    failure = urllib.error.HTTPError(
+        "https://api.github.com/repos/owner/repo/releases/latest",
+        403,
+        "rate limit exceeded",
+        {},
+        None,
+    )
+    with patch.object(downloader.urllib.request, "urlopen", side_effect=failure):
+        ok = downloader.download_github_asset_filtered(
+            "owner/repo",
+            lambda name: name.endswith("linux-amd64.tar.gz"),
+            tmp_path / "tool.tar.gz",
+            on_error=errors.append,
+        )
+
+    assert ok is False
+    assert errors == [
+        "Не удалось получить последний релиз owner/repo: "
+        "GitHub API вернул HTTP 403: rate limit exceeded",
+    ]
+
+
+def test_github_asset_reports_missing_matching_asset(tmp_path):
+    from hydra.utils import downloader
+
+    response = MagicMock()
+    response.__enter__.return_value.read.return_value = b'{"assets":[]}'
+    errors = []
+    with patch.object(downloader.urllib.request, "urlopen", return_value=response):
+        ok = downloader.download_github_asset_filtered(
+            "owner/repo",
+            lambda name: name.endswith("linux-amd64.tar.gz"),
+            tmp_path / "tool.tar.gz",
+            on_error=errors.append,
+        )
+
+    assert ok is False
+    assert errors == [
+        "В последнем релизе owner/repo не найден подходящий файл",
+    ]
 
 
 def test_download_closes_mkstemp_descriptor(tmp_path):

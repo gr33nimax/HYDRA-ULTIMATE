@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from hydra.utils.commands import redact_text
+
 
 @dataclass(frozen=True)
 class UpgradeOperations:
@@ -20,6 +22,7 @@ class UpgradeOperations:
     start: Callable[[], bool]
     stop: Callable[[], bool]
     log: Callable[[str, str], None]
+    install_error: Callable[[], str] | None = None
 
 
 def parse_version(value: str | None) -> tuple[int, ...]:
@@ -33,6 +36,20 @@ def parse_version(value: str | None) -> tuple[int, ...]:
         return (0,)
 
 
+def _exception_text(exc: Exception) -> str:
+    detail = str(exc).strip() or type(exc).__name__
+    return redact_text(detail)
+
+
+def _result_detail(result: Any) -> str:
+    output = str(
+        getattr(result, "stderr", "")
+        or getattr(result, "stdout", "")
+        or ""
+    ).strip()
+    return redact_text(output.splitlines()[-1]) if output else ""
+
+
 def upgrade_kernel(
     *,
     target_binary: Path,
@@ -40,11 +57,23 @@ def upgrade_kernel(
     operations: UpgradeOperations,
 ) -> tuple[bool, str]:
     """Replace the binary and restore the previous one on any failed check."""
-    installed_binary = operations.find_binary()
+    try:
+        installed_binary = operations.find_binary()
+    except Exception as exc:
+        detail = _exception_text(exc)
+        operations.log("ERROR", f"Failed to locate sing-box binary: {detail}")
+        return False, f"Не удалось найти установленное ядро: {detail}"
     if installed_binary is None and target_binary.exists():
         installed_binary = target_binary
     if installed_binary is None:
         return False, "Sing-Box не установлен, обновление невозможно"
+
+    try:
+        was_running = operations.is_running()
+    except Exception as exc:
+        detail = _exception_text(exc)
+        operations.log("ERROR", f"Failed to inspect sing-box status: {detail}")
+        return False, f"Не удалось проверить состояние Sing-Box: {detail}"
 
     backup_binary = target_binary.with_suffix(".bak")
     operations.log(
@@ -57,8 +86,6 @@ def upgrade_kernel(
     except Exception as exc:
         operations.log("ERROR", f"Failed to create backup: {exc}")
         return False, f"Ошибка создания резервной копии: {exc}"
-
-    was_running = operations.is_running()
 
     def rollback(reason: str) -> tuple[bool, str]:
         operations.log("ERROR", f"{reason}; rolling back to backup...")
@@ -98,36 +125,71 @@ def upgrade_kernel(
                 )
         return False, f"{reason}. Выполнен откат."
 
+    install_detail = ""
     try:
         installed = operations.install(force=True)
     except Exception as exc:
+        install_detail = _exception_text(exc)
         operations.log(
             "ERROR",
-            f"Installation failed during update: {exc}",
+            f"Installation failed during update: {install_detail}",
         )
         installed = False
     if not installed:
-        return rollback("Не удалось скачать или распаковать обновление")
+        if not install_detail and operations.install_error is not None:
+            try:
+                install_detail = redact_text(operations.install_error().strip())
+            except Exception as exc:
+                operations.log(
+                    "WARNING",
+                    f"Failed to read installation error: {_exception_text(exc)}",
+                )
+        reason = "Не удалось скачать или распаковать обновление"
+        if install_detail:
+            reason = f"{reason}: {install_detail}"
+        return rollback(reason)
 
-    new_version = operations.get_version()
+    try:
+        new_version = operations.get_version()
+    except Exception as exc:
+        return rollback(
+            f"Не удалось проверить новый бинарник: {_exception_text(exc)}",
+        )
     if not new_version:
         return rollback("Новый бинарник не запускается")
 
     if config_path.exists():
-        result = operations.run(
-            [str(target_binary), "check", "-c", str(config_path)],
-        )
+        try:
+            result = operations.run(
+                [str(target_binary), "check", "-c", str(config_path)],
+            )
+        except Exception as exc:
+            return rollback(
+                "Не удалось проверить конфигурацию новым ядром: "
+                f"{_exception_text(exc)}",
+            )
         if result.returncode != 0:
+            detail = _result_detail(result)
             operations.log(
                 "ERROR",
                 "New binary rejected existing config, rolling back. "
-                f"Stderr: {result.stderr}",
+                f"Detail: {detail or 'unknown error'}",
             )
-            return rollback("Конфигурация несовместима с новым ядром")
+            reason = "Конфигурация несовместима с новым ядром"
+            if detail:
+                reason = f"{reason}: {detail}"
+            return rollback(reason)
 
     if was_running:
         operations.log("INFO", "Restarting service and checking status...")
-        if not operations.start():
+        try:
+            started = operations.start()
+        except Exception as exc:
+            return rollback(
+                "Служба не смогла запуститься с новым ядром: "
+                f"{_exception_text(exc)}",
+            )
+        if not started:
             return rollback(
                 "Служба не смогла запуститься с новым ядром",
             )

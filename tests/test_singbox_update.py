@@ -87,6 +87,27 @@ def test_update_kernel_fail_installation(mock_singbox_paths):
         mock_start.assert_called_once()
 
 
+def test_update_kernel_reports_install_failure_detail(mock_singbox_paths):
+    bin_path, _ = mock_singbox_paths
+
+    def mock_install_fail(force=False):
+        bin_path.write_text("corrupted content")
+        from hydra.core import singbox
+
+        singbox._set_error("GitHub API вернул HTTP 403: rate limit")
+        return False
+
+    with patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.singbox.install", side_effect=mock_install_fail), \
+         patch("hydra.core.singbox.stop"), \
+         patch("hydra.core.singbox.start", return_value=True):
+        success, msg = update_kernel()
+
+    assert success is False
+    assert "HTTP 403" in msg
+    assert bin_path.read_text() == "original binary content"
+
+
 def test_update_kernel_fail_verification(mock_singbox_paths):
     bin_path, config_path = mock_singbox_paths
     
@@ -105,6 +126,29 @@ def test_update_kernel_fail_verification(mock_singbox_paths):
         assert "Новый бинарник не запускается" in msg
         assert bin_path.read_text() == "original binary content"
         mock_start.assert_called_once()
+
+
+def test_update_kernel_rolls_back_when_version_probe_raises(mock_singbox_paths):
+    bin_path, _ = mock_singbox_paths
+
+    def mock_install_success(force=False):
+        bin_path.write_text("new binary content")
+        return True
+
+    with patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.singbox.install", side_effect=mock_install_success), \
+         patch(
+             "hydra.core.singbox.get_version",
+             side_effect=RuntimeError("exec format error"),
+         ), \
+         patch("hydra.core.singbox.stop"), \
+         patch("hydra.core.singbox.start", return_value=True):
+        success, msg = update_kernel()
+
+    assert success is False
+    assert "exec format error" in msg
+    assert "Выполнен откат" in msg
+    assert bin_path.read_text() == "original binary content"
 
 
 def test_update_kernel_fail_config_check(mock_singbox_paths):
@@ -132,6 +176,29 @@ def test_update_kernel_fail_config_check(mock_singbox_paths):
         mock_start.assert_called_once()
 
 
+def test_update_kernel_rolls_back_when_config_check_raises(mock_singbox_paths):
+    bin_path, _ = mock_singbox_paths
+
+    def mock_install_success(force=False):
+        bin_path.write_text("new binary content")
+        return True
+
+    with patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.singbox.install", side_effect=mock_install_success), \
+         patch("hydra.core.singbox.get_version", return_value="1.19.0"), \
+         patch(
+             "hydra.core.singbox._run",
+             side_effect=RuntimeError("config check timed out"),
+         ), \
+         patch("hydra.core.singbox.stop"), \
+         patch("hydra.core.singbox.start", return_value=True):
+        success, msg = update_kernel()
+
+    assert success is False
+    assert "config check timed out" in msg
+    assert bin_path.read_text() == "original binary content"
+
+
 def test_update_kernel_fail_service_start(mock_singbox_paths):
     bin_path, config_path = mock_singbox_paths
     
@@ -155,6 +222,31 @@ def test_update_kernel_fail_service_start(mock_singbox_paths):
         assert "Служба не смогла запуститься" in msg
         assert bin_path.read_text() == "original binary content"
         assert mock_start.call_count == 2
+
+
+def test_update_kernel_rolls_back_when_service_start_raises(mock_singbox_paths):
+    bin_path, _ = mock_singbox_paths
+
+    def mock_install_success(force=False):
+        bin_path.write_text("new binary content")
+        return True
+
+    run_result = MagicMock(returncode=0)
+    with patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.singbox.install", side_effect=mock_install_success), \
+         patch("hydra.core.singbox.get_version", return_value="1.19.0"), \
+         patch("hydra.core.singbox._run", return_value=run_result), \
+         patch("hydra.core.singbox.stop"), \
+         patch(
+             "hydra.core.singbox.start",
+             side_effect=[RuntimeError("systemd timeout"), True],
+         ) as mock_start:
+        success, msg = update_kernel()
+
+    assert success is False
+    assert "systemd timeout" in msg
+    assert bin_path.read_text() == "original binary content"
+    assert mock_start.call_count == 2
 
 
 def test_update_kernel_reports_failed_service_restore(mock_singbox_paths):

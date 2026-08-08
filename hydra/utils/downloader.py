@@ -12,8 +12,31 @@ import os
 import shutil
 import tarfile
 import tempfile
+import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
+
+
+ErrorReporter = Callable[[str], None]
+
+
+def _fail(message: str, on_error: ErrorReporter | None) -> bool:
+    if on_error is not None:
+        try:
+            on_error(message)
+        except Exception:
+            pass
+    return False
+
+
+def _network_error(exc: Exception) -> str:
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"GitHub API вернул HTTP {exc.code}: {exc.reason}"
+    if isinstance(exc, urllib.error.URLError):
+        return f"сетевая ошибка: {exc.reason}"
+    detail = str(exc).strip()
+    return detail or type(exc).__name__
 
 
 def latest_release(repo: str, timeout: int = 10) -> str:
@@ -52,12 +75,19 @@ def secrets_compare(left: str, right: str) -> bool:
     return hmac.compare_digest(left, right)
 
 
-def download(url: str, dest: Path, timeout: int = 120, *, sha256: str | None = None) -> bool:
+def download(
+    url: str,
+    dest: Path,
+    timeout: int = 120,
+    *,
+    sha256: str | None = None,
+    on_error: ErrorReporter | None = None,
+) -> bool:
     """Скачивает файл по URL в dest. Возвращает True при успехе."""
     if not sha256 and not _allow_unverified():
         # Direct URLs cannot be trusted without an out-of-band digest. Keep an
         # explicit escape hatch for development and emergency recovery.
-        return False
+        return _fail("Скачивание без SHA-256 запрещено", on_error)
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
         # Скачиваем во временный файл, затем атомарно перемещаем
@@ -73,14 +103,17 @@ def download(url: str, dest: Path, timeout: int = 120, *, sha256: str | None = N
                 shutil.copyfileobj(response, output)
             if sha256 and not verify_sha256(Path(tmp), sha256):
                 Path(tmp).unlink(missing_ok=True)
-                return False
+                return _fail(
+                    "SHA-256 загруженного файла не совпадает с release metadata",
+                    on_error,
+                )
             shutil.move(tmp, str(dest))
             return True
-        except Exception:
+        except Exception as exc:
             Path(tmp).unlink(missing_ok=True)
-            return False
-    except Exception:
-        return False
+            return _fail(f"Не удалось скачать файл: {_network_error(exc)}", on_error)
+    except Exception as exc:
+        return _fail(f"Не удалось подготовить загрузку: {_network_error(exc)}", on_error)
 
 
 def _asset_digest(asset: dict) -> str | None:
@@ -94,7 +127,13 @@ def _allow_unverified() -> bool:
     return os.environ.get("HYDRA_ALLOW_UNVERIFIED_DOWNLOADS") == "1"
 
 
-def download_github_asset(repo: str, asset_pattern: str, dest: Path) -> bool:
+def download_github_asset(
+    repo: str,
+    asset_pattern: str,
+    dest: Path,
+    *,
+    on_error: ErrorReporter | None = None,
+) -> bool:
     """Ищет asset по имени (substring) в latest release, скачивает в dest.
 
     asset_pattern — подстрока имени, напр. 'linux-amd64.deb'.
@@ -110,15 +149,35 @@ def download_github_asset(repo: str, asset_pattern: str, dest: Path) -> bool:
             if asset_pattern in asset["name"]:
                 digest = _asset_digest(asset)
                 if not digest and not _allow_unverified():
-                    return False
-                return download(asset["browser_download_url"], dest, sha256=digest)
+                    return _fail(
+                        f"Файл {asset['name']} не содержит SHA-256 digest",
+                        on_error,
+                    )
+                return download(
+                    asset["browser_download_url"],
+                    dest,
+                    sha256=digest,
+                    on_error=on_error,
+                )
 
-        return False
-    except Exception:
-        return False
+        return _fail(
+            f"В последнем релизе {repo} не найден файл {asset_pattern}",
+            on_error,
+        )
+    except Exception as exc:
+        return _fail(
+            f"Не удалось получить последний релиз {repo}: {_network_error(exc)}",
+            on_error,
+        )
 
 
-def download_github_asset_filtered(repo: str, name_filter: callable, dest: Path) -> bool:
+def download_github_asset_filtered(
+    repo: str,
+    name_filter: Callable[[str], bool],
+    dest: Path,
+    *,
+    on_error: ErrorReporter | None = None,
+) -> bool:
     """Скачивает ассет из latest release, фильтруя через callable.
 
     name_filter принимает имя ассета (str) и возвращает True если подходит.
@@ -140,11 +199,25 @@ def download_github_asset_filtered(repo: str, name_filter: callable, dest: Path)
             if name_filter(asset["name"]):
                 digest = _asset_digest(asset)
                 if not digest and not _allow_unverified():
-                    return False
-                return download(asset["browser_download_url"], dest, sha256=digest)
-        return False
-    except Exception:
-        return False
+                    return _fail(
+                        f"Файл {asset['name']} не содержит SHA-256 digest",
+                        on_error,
+                    )
+                return download(
+                    asset["browser_download_url"],
+                    dest,
+                    sha256=digest,
+                    on_error=on_error,
+                )
+        return _fail(
+            f"В последнем релизе {repo} не найден подходящий файл",
+            on_error,
+        )
+    except Exception as exc:
+        return _fail(
+            f"Не удалось получить последний релиз {repo}: {_network_error(exc)}",
+            on_error,
+        )
 
 
 def verify_elf(path: Path) -> bool:

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from hydra.contracts import ConfigFragment
-from hydra.core.state import load_state, save_state
+from hydra.core.state import load_state
 from hydra.core.state_models import AppState, PluginState
 from hydra.core.host import HOST
 from hydra.core import singbox_config
@@ -130,6 +130,7 @@ EXTENDED_REPO = "shtorm-7/sing-box-extended"
 
 def install(force: bool = False) -> bool:
     """Устанавливает sing-box-extended из GitHub releases."""
+    _set_error("")
     if not force and is_installed() and "extended" in (get_version() or "").lower():
         return True
 
@@ -160,8 +161,8 @@ def install(force: bool = False) -> bool:
     dest.mkdir(parents=True, exist_ok=True)
     tarball = dest / "sing-box.tar.gz"
 
-    if not download_github_asset_filtered(EXTENDED_REPO, _match, tarball):
-        _log("ERROR", "Failed to download sing-box-extended")
+    if not download_github_asset_filtered(EXTENDED_REPO, _match, tarball, on_error=_set_error):
+        _log("ERROR", last_error() or "Failed to download sing-box-extended")
         return False
 
     extract_tarball(tarball, dest)
@@ -492,6 +493,7 @@ def update_kernel() -> tuple[bool, str]:
             start=start,
             stop=stop,
             log=_log,
+            install_error=last_error,
         ),
     )
 
