@@ -39,7 +39,6 @@ class CoreMenuDependencies:
     warn: Callable[[str], None]
     prompt: Callable[[str], str]
     error: Callable[[str], None]
-    confirm: Callable[..., bool]
     apply_error_text: Callable[[str, ApplicationService], str]
     apply_network_tuning: Callable[[ApplicationService], None]
     rollback_network_tuning: Callable[[ApplicationService], None]
@@ -186,6 +185,7 @@ def _handle_core_choice(
         deps,
         installed=installed,
         update_available=update_available,
+        confirm_action=confirm,
     ):
         return
     if choice == "2":
@@ -299,7 +299,6 @@ def menu_core(state: AppState, app: ApplicationService) -> None:
             warn=warn,
             prompt=prompt,
             error=error,
-            confirm=confirm,
             apply_error_text=_apply_error_text,
             apply_network_tuning=_apply_network_tuning_menu,
             rollback_network_tuning=_rollback_network_tuning_menu,

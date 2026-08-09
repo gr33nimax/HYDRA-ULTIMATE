@@ -1,7 +1,7 @@
 """Provider-aware Sing-Box kernel menu actions."""
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Callable, Protocol
 
 from hydra.core.state_models import AppState
 from hydra.services.application import ApplicationService
@@ -18,8 +18,6 @@ class KernelMenuDependencies(Protocol):
 
     def error(self, message: str) -> None: ...
 
-    def confirm(self, message: str, *, default: bool = False) -> bool: ...
-
     def apply_error_text(
         self,
         message: str,
@@ -35,6 +33,7 @@ def handle_kernel_choice(
     *,
     installed: bool,
     update_available: bool,
+    confirm_action: Callable[..., bool],
 ) -> bool:
     """Handle provider install/update/switch choices and report consumption."""
     if choice == "1":
@@ -103,7 +102,7 @@ def handle_kernel_choice(
             if state.kernel.provider == "sing-box-extended"
             else "sing-box-extended"
         )
-        if not deps.confirm(
+        if not confirm_action(
             f"Переключить рабочее ядро на {provider}?",
             default=False,
         ):
