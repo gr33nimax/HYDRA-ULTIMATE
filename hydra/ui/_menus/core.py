@@ -6,6 +6,7 @@ from typing import Callable
 
 from hydra.core.state_models import AppState
 from hydra.services.application import ApplicationService
+from hydra.ui._menus.kernel import handle_kernel_choice
 from hydra.ui.tui import (
     DIM,
     GREEN,
@@ -38,6 +39,7 @@ class CoreMenuDependencies:
     warn: Callable[[str], None]
     prompt: Callable[[str], str]
     error: Callable[[str], None]
+    confirm: Callable[..., bool]
     apply_error_text: Callable[[str, ApplicationService], str]
     apply_network_tuning: Callable[[ApplicationService], None]
     rollback_network_tuning: Callable[[ApplicationService], None]
@@ -177,87 +179,16 @@ def _handle_core_choice(
     running: bool,
     update_available: bool,
 ) -> None:
-    if choice == "1":
-        deps.info(f"Устанавливаю {state.kernel.provider}...")
-        try:
-            result = app.kernel.switch(
-                state,
-                state.kernel.provider,
-                channel=state.kernel.channel,
-                force=installed,
-            )
-        except Exception as exc:
-            deps.error(str(exc) or exc.__class__.__name__)
-            deps.prompt("Нажмите Enter")
-            return
-        if result.ok:
-            deps.success(
-                f"Sing-Box {app.admin.singbox_diagnostics().version} установлен",
-            )
-            if app.apply(state):
-                deps.success("Конфигурация пересобрана и применена")
-            else:
-                deps.warn(
-                    deps.apply_error_text(
-                        "Не удалось автоматически применить конфигурацию",
-                        app,
-                    ),
-                )
-        else:
-            deps.error("Не удалось установить")
-        deps.prompt("Нажмите Enter")
-    elif choice == "6" and installed and update_available:
-        deps.info("Устанавливаю обновление Sing-Box...")
-        try:
-            result = app.kernel.switch(
-                state,
-                state.kernel.provider,
-                channel=state.kernel.channel,
-                force=True,
-            )
-        except Exception as exc:
-            deps.error(str(exc) or exc.__class__.__name__)
-            deps.prompt("Нажмите Enter")
-            return
-        ok, message = result.ok, result.message
-        if ok:
-            deps.success(message)
-            if app.apply(state):
-                deps.success("Конфигурация пересобрана и применена")
-            else:
-                deps.warn(
-                    deps.apply_error_text(
-                        "Не удалось автоматически применить конфигурацию",
-                        app,
-                    ),
-                )
-        else:
-            deps.error(message)
-        deps.prompt("Нажмите Enter")
-    elif choice == "7":
-        provider = (
-            "hydracore"
-            if state.kernel.provider == "sing-box-extended"
-            else "sing-box-extended"
-        )
-        if not confirm(
-            f"Переключить рабочее ядро на {provider}?",
-            default=False,
-        ):
-            return
-        deps.info(f"Проверяю и устанавливаю {provider}...")
-        try:
-            result = app.kernel.switch(state, provider, channel="stable")
-        except Exception as exc:
-            deps.error(str(exc) or exc.__class__.__name__)
-            deps.prompt("Нажмите Enter")
-            return
-        if result.ok:
-            deps.success(result.message)
-        else:
-            deps.error(result.message or "Не удалось переключить ядро")
-        deps.prompt("Нажмите Enter")
-    elif choice == "2":
+    if handle_kernel_choice(
+        choice,
+        state,
+        app,
+        deps,
+        installed=installed,
+        update_available=update_available,
+    ):
+        return
+    if choice == "2":
         if running:
             app.admin.stop_singbox()
             deps.success("Остановлен")
@@ -368,6 +299,7 @@ def menu_core(state: AppState, app: ApplicationService) -> None:
             warn=warn,
             prompt=prompt,
             error=error,
+            confirm=confirm,
             apply_error_text=_apply_error_text,
             apply_network_tuning=_apply_network_tuning_menu,
             rollback_network_tuning=_rollback_network_tuning_menu,

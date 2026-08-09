@@ -16,7 +16,6 @@ from hydra.plugins.base import (
     PluginMeta,
     PluginStatus,
 )
-from hydra.plugins.context import PluginStateAccess
 from hydra.plugins.calls.configuration import (
     CALL_MODE_MULTI_USER,
     CALL_MODE_P2P,
@@ -25,6 +24,7 @@ from hydra.plugins.calls.configuration import (
     multi_user_inbound,
     multi_user_outbound,
 )
+from hydra.plugins.context import PluginStateAccess
 
 
 class CallsPlugin(BasePlugin):

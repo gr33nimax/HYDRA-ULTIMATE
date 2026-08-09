@@ -19,6 +19,7 @@ from hydra.core.state_kernel_models import (
     validate_kernel_config,
     validate_raw_kernel_config,
 )
+from hydra.core.state_network_models import NetworkConfig
 SCHEMA_VERSION = 10
 
 
@@ -72,21 +73,6 @@ class TelegramConfig:
     quiet_hours_enabled: bool = False
     quiet_hours_start: int = 23
     quiet_hours_end: int = 8
-
-@dataclass
-class NetworkConfig:
-    """Persisted network settings that are not owned by a plugin."""
-
-    domain: str = ""
-    sub_domain: str = ""
-    server_ip: str = ""
-    dns_servers: list[str] = field(default_factory=list)
-    dnscrypt_port: int = 5300
-    tproxy_enabled: bool = False
-    tproxy_port: int = 1081
-    clash_api_enabled: bool = False
-    clash_api_port: int = 9090
-    clash_api_secret: str = ""
 
 @dataclass
 class AppState:

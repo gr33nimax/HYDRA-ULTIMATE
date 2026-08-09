@@ -121,7 +121,11 @@ EXTENDED_REPO = "shtorm-7/sing-box-extended"
 
 def _custom_kernel_selected() -> bool:
     """Keep legacy install/update entrypoints from replacing a custom core."""
-    return singbox_service.custom_kernel_selected(get_version(), load_state)
+    try:
+        version = get_version()
+    except Exception:
+        version = None
+    return singbox_service.custom_kernel_selected(version, load_state)
 
 
 def install(force: bool = False) -> bool:

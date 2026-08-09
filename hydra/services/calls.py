@@ -7,6 +7,16 @@ import threading
 from dataclasses import dataclass, field
 from typing import Callable
 
+from hydra.contracts.calls_configuration import (
+    CALL_MODE_MULTI_USER,
+    CALL_MODE_P2P,
+    DEFAULT_CALL_PORT,
+    DEFAULT_ROOM_COUNT,
+    MAX_JOIN_LINKS,
+    call_mode,
+    multi_user_outbound,
+)
+from hydra.core.calls_credentials import user_password
 from hydra.core.errors import ErrorCode, ServiceResult, failed_result
 from hydra.core.state_kernel_models import KERNEL_HYDRACORE
 from hydra.core.state_models import AppState, get_protocol
@@ -27,15 +37,6 @@ from hydra.services.creator_sessions import (
     CreatorSessions,
 )
 from hydra.services.protocols import ProtocolService
-from hydra.plugins.calls.configuration import (
-    CALL_MODE_MULTI_USER,
-    CALL_MODE_P2P,
-    DEFAULT_CALL_PORT,
-    DEFAULT_ROOM_COUNT,
-    MAX_JOIN_LINKS,
-    call_mode,
-    multi_user_outbound,
-)
 from hydra.utils.crypto import gen_token
 
 
@@ -390,7 +391,7 @@ class CallsService:
             user = next((item for item in state.users if not item.blocked), None)
             if user is None:
                 raise ValueError("native VK Calls have no active user")
-            outbound = multi_user_outbound(user, state, links)
+            outbound = multi_user_outbound(user, state, links, user_password)
             profile_name = f"HYDRA Calls · VK · {user.email}"
         else:
             outbound = {
