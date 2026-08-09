@@ -70,6 +70,25 @@ class HostBackend:
         pending.chmod(mode)
         pending.replace(path)
 
+    def atomic_copy(
+        self,
+        source: Path,
+        target: Path,
+        *,
+        mode: int | None = None,
+    ) -> None:
+        """Copy one verified artifact into place without exposing a partial file."""
+        target.parent.mkdir(parents=True, exist_ok=True)
+        pending = target.with_name(f".{target.name}.{os.getpid()}.pending")
+        pending.unlink(missing_ok=True)
+        try:
+            shutil.copy2(source, pending)
+            if mode is not None:
+                pending.chmod(mode)
+            pending.replace(target)
+        finally:
+            pending.unlink(missing_ok=True)
+
     def ensure_directory(self, path: Path, *, mode: int = 0o755) -> None:
         """Create a managed host directory and enforce its permissions."""
         path.mkdir(parents=True, exist_ok=True)

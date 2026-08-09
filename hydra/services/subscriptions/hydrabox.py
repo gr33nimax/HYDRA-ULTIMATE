@@ -310,6 +310,8 @@ def generate_hydrabox_subscription(
             document.setdefault(section, []).append(item)
             if item.get("type") == "call":
                 required_core_features.add("call")
+                if item.get("platform") == "vk" and item.get("mode") == "multi_user":
+                    required_core_features.add("call_vk_multi_user")
         resources.append({
             "id": resource_id,
             "format": "sing-box-json",

@@ -6,6 +6,7 @@ from typing import Callable
 
 from hydra.core.state_models import AppState
 from hydra.services.application import ApplicationService
+from hydra.ui._menus.kernel import handle_kernel_choice
 from hydra.ui.tui import (
     DIM,
     GREEN,
@@ -55,6 +56,7 @@ def run_core_menu(
         state = app.admin.load_state()
         deps.clear()
         diagnostics = app.admin.singbox_diagnostics()
+        kernel_status = app.kernel.status(state)
         installed = diagnostics.installed
         running = diagnostics.running
         version = diagnostics.version
@@ -78,6 +80,8 @@ def run_core_menu(
                     f"{'запущен' if running else 'остановлен'}",
                 ),
                 deps.kv("Версия:", version_text),
+                deps.kv("Провайдер:", kernel_status.runtime.provider),
+                deps.kv("Канал:", state.kernel.channel),
                 deps.kv(
                     "Конфиг:",
                     f"{deps.dim}/etc/sing-box/config.json{deps.reset}",
@@ -92,10 +96,10 @@ def run_core_menu(
         items = [
             (
                 "1",
-                "📦 Установить Sing-Box Extended"
+                "📦 Установить выбранное ядро"
                 if not installed
                 else "🔄 Переустановить",
-                "shtorm-7/sing-box-extended",
+                state.kernel.provider,
             ),
             (
                 "2",
@@ -119,6 +123,17 @@ def run_core_menu(
             ),
         ]
 
+        other_provider = (
+            "hydracore"
+            if state.kernel.provider == "sing-box-extended"
+            else "sing-box-extended"
+        )
+        items.append((
+            "7",
+            f"⇄ Переключить ядро на {other_provider}",
+            "Проверка digest, config-check, health и автоматический rollback",
+        ))
+
         if installed:
             if update_available:
                 items.append(
@@ -126,7 +141,7 @@ def run_core_menu(
                         "6",
                         "🆙 Установить обновление",
                         "Доступна версия "
-                        f"sing-box-extended {latest_version}",
+                        f"{state.kernel.provider} {latest_version}",
                     ),
                 )
             else:
@@ -134,7 +149,7 @@ def run_core_menu(
                     (
                         "X",
                         "🆙 Установить обновления",
-                        "Установлена последняя версия sing-box-extended",
+                        f"Установлена последняя версия {state.kernel.provider}",
                     ),
                 )
         items.append(("0", "↩ Назад", ""))
@@ -163,42 +178,17 @@ def _handle_core_choice(
     running: bool,
     update_available: bool,
 ) -> None:
-    if choice == "1":
-        deps.info("Устанавливаю Sing-Box...")
-        if app.admin.install_singbox(force=installed):
-            deps.success(
-                f"Sing-Box {app.admin.singbox_diagnostics().version} установлен",
-            )
-            if app.apply(state):
-                deps.success("Конфигурация пересобрана и применена")
-            else:
-                deps.warn(
-                    deps.apply_error_text(
-                        "Не удалось автоматически применить конфигурацию",
-                        app,
-                    ),
-                )
-        else:
-            deps.error("Не удалось установить")
-        deps.prompt("Нажмите Enter")
-    elif choice == "6" and installed and update_available:
-        deps.info("Устанавливаю обновление Sing-Box...")
-        ok, message = app.admin.update_singbox()
-        if ok:
-            deps.success(message)
-            if app.apply(state):
-                deps.success("Конфигурация пересобрана и применена")
-            else:
-                deps.warn(
-                    deps.apply_error_text(
-                        "Не удалось автоматически применить конфигурацию",
-                        app,
-                    ),
-                )
-        else:
-            deps.error(message)
-        deps.prompt("Нажмите Enter")
-    elif choice == "2":
+    if handle_kernel_choice(
+        choice,
+        state,
+        app,
+        deps,
+        installed=installed,
+        update_available=update_available,
+        confirm_action=confirm,
+    ):
+        return
+    if choice == "2":
         if running:
             app.admin.stop_singbox()
             deps.success("Остановлен")

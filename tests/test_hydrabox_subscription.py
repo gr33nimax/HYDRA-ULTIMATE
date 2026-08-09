@@ -58,11 +58,15 @@ class _HydraBoxTransport(BasePlugin):
 
 
 class _CallsSource:
-    def __init__(self, link: str) -> None:
+    def __init__(self, link: str, links: list[str] | None = None) -> None:
         self.link = link
+        self.links = links or []
 
     def load_native_join_link(self) -> str:
         return self.link
+
+    def load_native_join_links(self) -> list[str]:
+        return list(self.links)
 
 
 def _plugins(*items: BasePlugin) -> SubscriptionPluginService:
@@ -592,6 +596,40 @@ def test_hydra_v2_calls_projection_fails_closed_without_join_link():
             state,
             plugins=_plugins(CallsPlugin(_CallsSource(""))),
         )
+
+
+def test_hydra_v2_calls_multi_user_requires_exact_hydracore_feature():
+    state, user = _state()
+    state.network.server_ip = "203.0.113.10"
+    state.protocols["calls"] = PluginState(
+        installed=True,
+        enabled=True,
+        config={
+            "mode": "multi_user",
+            "listen_port": 56002,
+            "obfs_password": "o" * 43,
+            "workers": 2,
+            "max_workers_per_session": 4,
+        },
+    )
+    links = [
+        "https://vk.com/call/join/one",
+        "https://vk.com/call/join/two",
+    ]
+    subscription = generate_hydrabox_subscription(
+        user,
+        state,
+        plugins=_plugins(CallsPlugin(_CallsSource("", links))),
+    )
+
+    outbound = subscription["resources"][0]["document"]["outbounds"][0]
+    assert outbound["mode"] == "multi_user"
+    assert outbound["join_links"] == links
+    assert outbound["user"] == user.email
+    assert subscription["requirements"]["core"]["features"] == [
+        "call",
+        "call_vk_multi_user",
+    ]
 
 
 def test_hydra_v2_never_reads_or_publishes_qwdtt_artifacts():

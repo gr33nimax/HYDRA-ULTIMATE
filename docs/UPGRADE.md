@@ -250,13 +250,18 @@ hydra check
 
 ## Схема state и миграции
 
-В текущей ветке `dev` актуальна схема **9**. Миграция `v5 → v6` резервирует
+В текущей ветке `dev` актуальна схема **10**. Миграция `v5 → v6` резервирует
 приватный per-user JWE key. Ступень `v6 → v7` сохраняет совместимость legacy VK
 creator через промежуточный Calls layout, а `v7 → v8` переносит его desired
 state в `headless_creator.providers.vk` и maintenance-флаг в
 `sync_headless_creator_vk_qwdtt_enabled`. Native Calls автоматически не
 включается. Ступень `v8 → v9` переносит qWDTT-настройки из provider-конфига в
 `headless_creator.consumers.qwdtt` и задаёт совместимый размер пула 4 комнаты.
+Ступень `v9 → v10` добавляет `kernel.provider/channel`, оставляет существующие
+инсталляции на `sing-box-extended/stable`, фиксирует прежний Calls как `p2p` и
+материализует канонические qWDTT-порты `56000/56001` для conflict preflight.
+Она не заменяет бинарник: переход на Hydracore выполняется только явной
+`sudo hydra kernel switch hydracore` после backup.
 
 Обновление подписочного renderer не меняет state schema и повторно использует
 существующий per-user A256GCM key, но wire contract несовместим с HydraBox v1.

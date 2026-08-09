@@ -1,0 +1,218 @@
+"""Validated legacy and Hydracore multi-user VK Calls projections."""
+from __future__ import annotations
+
+import re
+from typing import Callable, Mapping, Protocol, Sequence
+
+
+CALL_MODE_P2P = "p2p"
+CALL_MODE_MULTI_USER = "multi_user"
+DEFAULT_CALL_PORT = 56002
+DEFAULT_ROOM_COUNT = 4
+MAX_JOIN_LINKS = 4
+MAX_WORKERS_PER_JOIN_LINK = 27
+MAX_WORKERS = 108
+
+
+class CallsProtocolState(Protocol):
+    enabled: bool
+    port: int
+    config: dict
+
+
+class CallsUser(Protocol):
+    email: str
+    uuid: str
+    blocked: bool
+
+
+class CallsNetworkState(Protocol):
+    server_ip: str
+    domain: str
+
+
+class CallsStateAccess(Protocol):
+    protocols: Mapping[str, CallsProtocolState]
+    users: Sequence[CallsUser]
+    network: CallsNetworkState
+
+
+def call_mode(state: CallsStateAccess) -> str:
+    desired = state.protocols.get("calls")
+    value = str(desired.config.get("mode", CALL_MODE_P2P)) if desired else CALL_MODE_P2P
+    if value not in {CALL_MODE_P2P, CALL_MODE_MULTI_USER}:
+        raise ValueError("Calls mode must be p2p or multi_user")
+    return value
+
+
+def _integer(config: dict, name: str, default: int, minimum: int, maximum: int) -> int:
+    value = config.get(name, default)
+    if type(value) is not int or not minimum <= value <= maximum:
+        raise ValueError(f"Calls {name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _duration(config: dict, name: str, default: str) -> str:
+    value = str(config.get(name, default)).strip()
+    if len(value) > 32 or re.fullmatch(r"(?:[1-9][0-9]*(?:ms|s|m|h)){1,4}", value) is None:
+        raise ValueError(f"Calls {name} must be a bounded duration")
+    return value
+
+
+def _listen_port(state: CallsStateAccess, config: dict) -> int:
+    port = _integer(config, "listen_port", DEFAULT_CALL_PORT, 1, 65535)
+    for name, protocol in state.protocols.items():
+        if name == "calls" or not protocol.enabled:
+            continue
+        for field_name in ("dtls_port", "wg_port", "udp_port"):
+            value = protocol.config.get(field_name)
+            if type(value) is int and value == port:
+                raise ValueError(
+                    f"Calls listen_port conflicts with enabled {name}.{field_name}",
+                )
+        if name == "amneziawg":
+            awg_ports: list[tuple[str, object]] = []
+            if protocol.port:
+                awg_ports.append(("port", protocol.port))
+            profiles = protocol.config.get("profiles", {})
+            if isinstance(profiles, dict):
+                awg_ports.extend(
+                    (f"profiles.{profile_name}.port", profile.get("port"))
+                    for profile_name, profile in profiles.items()
+                    if isinstance(profile, dict) and profile.get("port")
+                )
+            if not awg_ports:
+                awg_ports.append(("port", 51820))
+            for field_name, value in awg_ports:
+                if type(value) is int and value == port:
+                    raise ValueError(
+                        f"Calls listen_port conflicts with enabled {name}.{field_name}",
+                    )
+    return port
+
+
+def _join_links(values: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for value in values:
+        link = str(value).strip()
+        if not link or len(link) > 2048:
+            raise ValueError("Calls multi_user contains an invalid VK join link")
+        if link in normalized:
+            raise ValueError("Calls multi_user requires unique VK join links")
+        normalized.append(link)
+    if not 1 <= len(normalized) <= MAX_JOIN_LINKS:
+        raise ValueError("Calls multi_user requires 1..4 unique VK join links")
+    return normalized
+
+
+def _obfs_password(config: dict) -> str:
+    password = str(config.get("obfs_password", "")).strip()
+    if not 32 <= len(password.encode("utf-8")) <= 256:
+        raise ValueError("Calls obfs_password must contain 32..256 bytes")
+    return password
+
+
+def multi_user_inbound(
+    state: CallsStateAccess,
+    user_password: Callable[[CallsUser], str],
+) -> dict:
+    desired = state.protocols["calls"]
+    config = desired.config
+    password = _obfs_password(config)
+    users = [
+        {
+            "name": user.email,
+            "password": user_password(user),
+            "max_sessions": _integer(config, "max_sessions_per_user", 1, 1, 16),
+        }
+        for user in state.users
+        if not user.blocked
+    ]
+    if not users:
+        raise ValueError("Calls multi_user requires at least one active user")
+    return {
+        "type": "call",
+        "tag": "calls-vk-in",
+        "platform": "vk",
+        "mode": CALL_MODE_MULTI_USER,
+        "listen": "0.0.0.0",
+        "listen_port": _listen_port(state, config),
+        "obfs_password": password,
+        "users": users,
+        "max_sessions": _integer(config, "max_sessions", 128, 1, 4096),
+        "max_workers_per_session": _integer(
+            config,
+            "max_workers_per_session",
+            4,
+            1,
+            MAX_WORKERS,
+        ),
+        "max_pending_handshakes": _integer(
+            config,
+            "max_pending_handshakes",
+            256,
+            1,
+            4096,
+        ),
+        "handshake_timeout": _duration(config, "handshake_timeout", "10s"),
+        "session_idle_timeout": _duration(config, "session_idle_timeout", "5m"),
+    }
+
+
+def multi_user_outbound(
+    user: CallsUser,
+    state: CallsStateAccess,
+    join_links: list[str],
+    user_password: Callable[[CallsUser], str],
+) -> dict:
+    desired = state.protocols["calls"]
+    config = desired.config
+    join_links = _join_links(join_links)
+    server = str(state.network.server_ip or state.network.domain).strip()
+    if not server:
+        raise ValueError("Calls multi_user server address is not configured")
+    max_workers = _integer(config, "max_workers_per_session", 4, 1, MAX_WORKERS)
+    worker_limit = min(
+        MAX_WORKERS,
+        max_workers,
+        MAX_WORKERS_PER_JOIN_LINK * len(join_links),
+    )
+    workers = _integer(
+        config,
+        "workers",
+        min(len(join_links), worker_limit),
+        1,
+        worker_limit,
+    )
+    return {
+        "type": "call",
+        "tag": "call-vk-out",
+        "platform": "vk",
+        "mode": CALL_MODE_MULTI_USER,
+        "server": server,
+        "server_port": _listen_port(state, config),
+        "join_links": join_links,
+        "user": user.email,
+        "password": user_password(user),
+        "obfs_password": _obfs_password(config),
+        "workers": workers,
+        "worker_connect_timeout": _duration(
+            config,
+            "worker_connect_timeout",
+            "15s",
+        ),
+    }
+
+
+__all__ = [
+    "CALL_MODE_MULTI_USER",
+    "CALL_MODE_P2P",
+    "DEFAULT_CALL_PORT",
+    "DEFAULT_ROOM_COUNT",
+    "MAX_JOIN_LINKS",
+    "MAX_WORKERS",
+    "MAX_WORKERS_PER_JOIN_LINK",
+    "call_mode",
+    "multi_user_inbound",
+    "multi_user_outbound",
+]

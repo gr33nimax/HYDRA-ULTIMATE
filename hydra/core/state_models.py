@@ -14,7 +14,13 @@ from hydra.core.state_creator_models import HeadlessCreatorConfig
 from hydra.core.state_creator_models import validate_headless_creator
 from hydra.core.state_creator_models import validate_raw_headless_creator
 from hydra.core.state_devices import validate_device_map
-SCHEMA_VERSION = 9
+from hydra.core.state_kernel_models import (
+    KernelConfig,
+    validate_kernel_config,
+    validate_raw_kernel_config,
+)
+from hydra.core.state_network_models import NetworkConfig
+SCHEMA_VERSION = 10
 
 
 class UnsupportedStateVersion(RuntimeError):
@@ -69,21 +75,6 @@ class TelegramConfig:
     quiet_hours_end: int = 8
 
 @dataclass
-class NetworkConfig:
-    """Persisted network settings that are not owned by a plugin."""
-
-    domain: str = ""
-    sub_domain: str = ""
-    server_ip: str = ""
-    dns_servers: list[str] = field(default_factory=list)
-    dnscrypt_port: int = 5300
-    tproxy_enabled: bool = False
-    tproxy_port: int = 1081
-    clash_api_enabled: bool = False
-    clash_api_port: int = 9090
-    clash_api_secret: str = ""
-
-@dataclass
 class AppState:
     """Persisted aggregate root."""
 
@@ -95,6 +86,7 @@ class AppState:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
     headless_creator: HeadlessCreatorConfig = field(default_factory=HeadlessCreatorConfig)
+    kernel: KernelConfig = field(default_factory=KernelConfig)
 
 
 def validate_raw_state(raw: object) -> None:
@@ -112,6 +104,8 @@ def validate_raw_state(raw: object) -> None:
             raise ValueError(f"state field '{key}' must be an object")
     if "headless_creator" in raw:
         validate_raw_headless_creator(raw["headless_creator"])
+    if "kernel" in raw:
+        validate_raw_kernel_config(raw["kernel"])
     if "users" in raw:
         users = raw["users"]
         if not isinstance(users, list) or any(not isinstance(user, dict) for user in users):
@@ -190,6 +184,7 @@ def validate_state(state: AppState) -> None:
             f"{SCHEMA_VERSION}"
         )
     validate_headless_creator(state.headless_creator)
+    validate_kernel_config(state.kernel)
     for user in state.users:
         if (
             not isinstance(user.email, str)

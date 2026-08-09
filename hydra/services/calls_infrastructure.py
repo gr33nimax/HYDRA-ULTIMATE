@@ -13,6 +13,11 @@ from hydra.services.headless_creator_infrastructure import validate_vk_join_link
 
 CALLS_RUNTIME_DIR = Path("/var/lib/hydra/calls/vk")
 NATIVE_JOIN_FILE = CALLS_RUNTIME_DIR / "native.join"
+CALLS_POOL_DIR = CALLS_RUNTIME_DIR / "pool"
+CALLS_POOL_STATE = CALLS_POOL_DIR / "state.json"
+CALLS_CREATOR_UNIT = Path(
+    "/etc/systemd/system/hydra-headless-creator-vk-calls@.service",
+)
 
 
 validate_join_link = validate_vk_join_link
@@ -24,6 +29,7 @@ class CallsInfrastructure:
 
     host: HostBackend
     credentials_source: object | None = None
+    pool_source: object | None = None
     native_join_file: Path = NATIVE_JOIN_FILE
 
     def load_vk_cookies(self) -> list[dict[str, str]]:
@@ -46,7 +52,90 @@ class CallsInfrastructure:
     def remove_native_join_link(self) -> None:
         self.host.remove_file(self.native_join_file, missing_ok=True)
 
+    def load_native_join_links(self) -> list[str]:
+        source = self.pool_source
+        if source is None:
+            return []
+        try:
+            links = [validate_join_link(value) for value in source.read_creator_links()]
+        except (AttributeError, OSError, TypeError, ValueError):
+            return []
+        return links if 1 <= len(links) <= 4 and len(set(links)) == len(links) else []
+
+    def load_native_join_tokens(self) -> list[str]:
+        source = self.pool_source
+        if source is None:
+            return []
+        try:
+            tokens = [str(value) for value in source.read_creator_hashes()]
+        except (AttributeError, OSError, TypeError, ValueError):
+            return []
+        return tokens if len(tokens) <= 4 and len(set(tokens)) == len(tokens) else []
+
+    def ensure_creator_installed(self) -> tuple[bool, str]:
+        source = self.pool_source or self.credentials_source
+        if source is None:
+            return False, "VK creator runtime is not configured"
+        try:
+            return source.install_creator()
+        except (AttributeError, OSError, RuntimeError, ValueError) as exc:
+            return False, str(exc) or exc.__class__.__name__
+
+    def snapshot_native_pool(self) -> object:
+        source = self.pool_source
+        if source is None:
+            return None
+        return source.snapshot_creator_pool()
+
+    def restore_native_pool(self, snapshot: object) -> None:
+        source = self.pool_source
+        if source is None or snapshot is None:
+            return
+        source.restore_creator_pool(snapshot)
+
+    def uninstall_native_pool(self) -> tuple[bool, str]:
+        source = self.pool_source
+        if source is None:
+            return True, "Calls creator pool is not configured"
+        return source.uninstall_creator_pool()
+
+    def _capabilities(self) -> dict:
+        binary = self.host.which("sing-box")
+        if not binary:
+            return {}
+        try:
+            result = self.host.run(
+                [binary, "hydra", "capabilities", "--json"],
+                timeout=10,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                return {}
+            payload = json.loads(str(result.stdout or ""))
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    def multi_user_supported(self) -> bool:
+        payload = self._capabilities()
+        features = payload.get("features", {})
+        protocols = payload.get("protocols", {})
+        modes = protocols.get("call_modes", []) if isinstance(protocols, dict) else []
+        return bool(
+            isinstance(features, dict)
+            and features.get("call_vk_multi_user") is True
+            and isinstance(modes, list)
+            and all(isinstance(mode, str) for mode in modes)
+            and {"p2p", "multi_user"}.issubset(modes)
+        )
+
     def feature_supported(self) -> bool:
+        payload = self._capabilities()
+        protocols = payload.get("protocols", {})
+        modes = protocols.get("call_modes", ()) if isinstance(protocols, dict) else ()
+        if isinstance(modes, list) and "p2p" in modes:
+            return True
         binary = self.host.which("sing-box")
         if not binary:
             return False
@@ -96,6 +185,9 @@ class CallsInfrastructure:
 
 __all__ = [
     "CALLS_RUNTIME_DIR",
+    "CALLS_CREATOR_UNIT",
+    "CALLS_POOL_DIR",
+    "CALLS_POOL_STATE",
     "CallsInfrastructure",
     "NATIVE_JOIN_FILE",
     "validate_join_link",

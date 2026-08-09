@@ -117,28 +117,55 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 | **Mieru** | `2012–2022/tcp` | обфусцированный mTLS |
 | **Snell v4** | `32000–32999/tcp` | TCP/UDP-прокси |
 | **MTProto / Telemt** | `8443/tcp` | Telegram MTProxy |
-| **Calls · VK** | без внешнего порта | Экспериментальный native `call` transport Sing-Box Extended |
+| **Calls · VK** | `56002/udp` в multi-user | Native `call`: legacy P2P или Hydracore multi-user |
 | **qWDTT** | `56000/udp`, `56001/udp` | WireGuard поверх TURN |
 
-Экспериментальный транспорт **Calls · VK** использует native `call` inbound из
-[Sing-Box Extended 2.6.0+](https://github.com/shtorm-7/sing-box-extended/releases/tag/v1.13.16-extended-2.6.0).
-Конфигурации следуют официальным примерам [creator](https://github.com/shtorm-7/sing-box-extended/blob/v1.13.16-extended-2.6.1/examples/call/vk/creator.json),
-[joiner](https://github.com/shtorm-7/sing-box-extended/blob/v1.13.16-extended-2.6.1/examples/call/vk/joiner.json)
-и [Call options](https://github.com/shtorm-7/sing-box-extended/blob/v1.13.16-extended-2.6.1/option/call.go).
-Перед включением HYDRA выполняет feature-probe, создаёт VK-комнату общим
-`headless-vk-creator`, атомарно фиксирует join-link и переключает Sing-Box
-только после подтверждённого handoff. Клиентский SOCKS-профиль доступен
-только явным административным запросом в TUI и не входит в подписки или учёт
-пользовательского трафика. Меню Calls оставляет только установку,
-переустановку с пересозданием комнаты, показ admin-профиля и удаление.
+Транспорт **Calls · VK** имеет два совместимых режима. Sing-Box Extended
+сохраняет legacy `p2p`: сервер сам входит в одну комнату. Выбранный Hydracore
+включает `multi_user`: сервер слушает обычный UDP endpoint, а отдельный
+аутентифицированный поток каждого пользователя распределяется по пулу из 1–4
+VK-комнат (4 по умолчанию). Общий obfs key снимает O(N)-перебор паролей с
+каждого пакета; после O(1) unwrap проверяется только найденный пользователь.
+Один worker создаётся на комнату по умолчанию; явное значение ограничено
+минимумом из server session cap, 27 workers на каждую уникальную join-link и
+общего потолка 108. Конфигурации legacy пути следуют официальным примерам
+[creator](https://github.com/shtorm-7/sing-box-extended/blob/v1.13.16-extended-2.6.2/examples/call/vk/creator.json),
+[joiner](https://github.com/shtorm-7/sing-box-extended/blob/v1.13.16-extended-2.6.2/examples/call/vk/joiner.json)
+и [Call options](https://github.com/shtorm-7/sing-box-extended/blob/v1.13.16-extended-2.6.2/option/call.go).
+Перед включением HYDRA читает `sing-box hydra capabilities --json`. Legacy path
+создаёт transient-комнату и ждёт handoff. Multi-user path поднимает отдельный
+blue/green creator-пул `hydra-headless-creator-vk-calls@{a,b}-N`, фиксирует
+его до apply и при любой ошибке восстанавливает прежние комнаты, state и
+runtime. После переключения ядра уже установленный legacy Calls остаётся в
+`p2p` до явной переустановки Calls — kernel switch сам не создаёт VK-комнаты.
+Per-user outbound входит только в зашифрованную Hydra Subscription v2;
+legacy subscriptions по-прежнему его не публикуют.
+
+Ядро выбирается явно и транзакционно:
+
+```bash
+hydra kernel status
+sudo hydra kernel switch hydracore
+sudo hydra kernel switch sing-box-extended
+```
+
+Перед возвратом на stock core отключите или удалите активный Calls
+`multi_user`; несовместимый active config будет отклонён до замены бинарника.
+
+HYDRA доверяет только release assets фиксированных репозиториев, требует
+GitHub `asset.digest`, проверяет ELF, identity/capabilities и активный config,
+затем делает bounded health-check. Ошибка запуска или записи state возвращает
+старый бинарник и ранее работавшую службу. Legacy installer/update не
+перезаписывает Hydracore, пока он выбран в state.
 
 Независимый пункт главного TUI `Headless Creator` владеет установкой creator,
 провайдерами и их общими credentials; позже сюда можно добавить WB Stream без
 привязки к протоколам. Единственный VK cookie-файл —
 `/etc/hydra/cookiesvk/cookies-vk.json`. Native Calls и qWDTT используют его
 совместно; размер qWDTT-пула настраивается от 1 до 16 комнат (по умолчанию 4).
-Общий `CreatorSessionManager` выдаёт Calls одну transient-сессию до handoff, а
-qWDTT — managed-группу из N сессий. qWDTT-ротация использует два поколения creator,
+Общий контракт `CreatorSessionManager` выдаёт legacy Calls одну
+transient-сессию, Hydracore Calls — отдельную managed-группу до 4 сессий, а
+qWDTT — свою managed-группу из N сессий. Ротация использует два поколения creator,
 поэтому прежняя master-ссылка остаётся рабочей до публикации новой. WDTT отвечает
 только за сервер, пароли и формирование `qwdtt://` из упорядоченного списка
 хэшей. Старую

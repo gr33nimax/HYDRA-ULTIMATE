@@ -204,6 +204,44 @@ def test_github_asset_reports_missing_matching_asset(tmp_path):
     ]
 
 
+def test_trusted_asset_digest_cannot_be_bypassed_by_emergency_flag(tmp_path):
+    from hydra.utils import downloader
+
+    response = MagicMock()
+    response.__enter__.return_value.read.return_value = (
+        b'{"assets":[{"name":"hydracore-linux-amd64.tar.gz",'
+        b'"browser_download_url":"https://example.invalid/core"}]}'
+    )
+    with patch.object(downloader.urllib.request, "urlopen", return_value=response), \
+         patch.object(downloader, "_allow_unverified", return_value=True), \
+         patch.object(downloader, "download") as download:
+        ok = downloader.download_github_asset_filtered(
+            "gr33nimax/hydracore",
+            lambda name: name == "hydracore-linux-amd64.tar.gz",
+            tmp_path / "core.tar.gz",
+            require_digest=True,
+        )
+
+    assert ok is False
+    download.assert_not_called()
+
+
+def test_preview_release_selection_skips_stable_and_draft_entries():
+    from hydra.utils import downloader
+
+    response = MagicMock()
+    response.__enter__.return_value.read.return_value = (
+        b'[{"tag_name":"v3","draft":true,"prerelease":true},'
+        b'{"tag_name":"v2","draft":false,"prerelease":false},'
+        b'{"tag_name":"v2-rc1","draft":false,"prerelease":true}]'
+    )
+    with patch.object(downloader.urllib.request, "urlopen", return_value=response):
+        assert downloader.latest_release(
+            "gr33nimax/hydracore",
+            include_prerelease=True,
+        ) == "v2-rc1"
+
+
 def test_download_closes_mkstemp_descriptor(tmp_path):
     from hydra.utils import downloader
 
@@ -227,6 +265,29 @@ def test_download_closes_mkstemp_descriptor(tmp_path):
     assert len(descriptors) == 1
     with pytest.raises(OSError):
         os.fstat(descriptors[0])
+
+
+def test_download_never_sends_github_token_to_generic_host(tmp_path):
+    from hydra.utils import downloader
+
+    requests = []
+    response = MagicMock()
+    response.__enter__.return_value = io.BytesIO(b"verified payload")
+
+    def capture(request, **_kwargs):
+        requests.append(request)
+        return response
+
+    with patch.dict(os.environ, {"HYDRA_GITHUB_TOKEN": "do-not-leak"}), \
+         patch.object(downloader.urllib.request, "urlopen", side_effect=capture), \
+         patch.object(downloader, "_allow_unverified", return_value=True):
+        assert downloader.download(
+            "https://go.dev/dl/toolchain.tar.gz",
+            tmp_path / "toolchain.tar.gz",
+        ) is True
+
+    assert len(requests) == 1
+    assert requests[0].get_header("Authorization") is None
 
 
 def test_extract_tarball_rejects_parent_traversal(tmp_path):

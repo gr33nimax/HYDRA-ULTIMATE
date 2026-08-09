@@ -42,6 +42,14 @@ def test_parse_version():
     assert parse_version("invalid") == (0,)
 
 
+def test_legacy_kernel_paths_fail_closed_for_detected_hydracore() -> None:
+    with patch(
+        "hydra.core.singbox.get_version",
+        return_value="1.13.16-extended-hydracore.4",
+    ), patch("hydra.core.singbox.load_state", side_effect=OSError("unavailable")):
+        assert singbox._custom_kernel_selected() is True
+
+
 def test_install_service_grants_cap_net_raw_for_udp_interface_rebind(tmp_path):
     service_path = tmp_path / "sing-box.service"
     binary_path = tmp_path / "sing-box"

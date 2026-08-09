@@ -122,6 +122,10 @@ class WdttPlugin(
         version="2.0.0",
         needs_domain=False,
         central_apply=True,
+        config_defaults=(
+            ("dtls_port", DEFAULT_DTLS_PORT),
+            ("wg_port", DEFAULT_WG_PORT),
+        ),
         required_commands=("systemctl", "iptables"),
         actions=(
             "hot_reload",

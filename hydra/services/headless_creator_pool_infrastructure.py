@@ -3,10 +3,8 @@ from __future__ import annotations
 
 import json
 import platform
-import re
 import tempfile
 import time
-import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +19,11 @@ from hydra.services.headless_creator_pool_snapshot import (
     capture_creator_pool,
     managed_unit_actions,
     restore_creator_pool_snapshot,
+)
+from hydra.services.headless_creator_release import (
+    creator_payload,
+    extract_call_hash,
+    release_layout,
 )
 from hydra.utils.downloader import download_github_asset_filtered, verify_elf
 
@@ -37,8 +40,8 @@ LEGACY_COOKIES_FILE = Path("/etc/hydra/cookiesvk/cookies-vk.json")
 INTERMEDIATE_UNIT = Path("/etc/systemd/system/hydra-vk-call-creator@.service")
 INTERMEDIATE_POOL_DIR = Path("/var/lib/hydra/calls/vk/qwdtt")
 LEGACY_LINK_FILE = Path("/etc/wdtt/qwdtt_link.txt")
-_HASH_RE = re.compile(r"(?:/join/|join/)([^/?#\s]+)")
-_MAX_CREATOR_BINARY_SIZE = 128 * 1024 * 1024
+
+
 @dataclass(frozen=True)
 class LegacyCreatorSnapshot:
     files: dict[Path, tuple[bytes, int]]
@@ -55,52 +58,6 @@ class CreatorPoolStage:
     previous_room_count: int
 
 
-def extract_call_hash(value: str) -> str:
-    match = _HASH_RE.search(str(value or "").strip())
-    if match is None:
-        raise ValueError("creator returned an invalid VK call link")
-    return match.group(1)
-
-
-def _release_layout(machine: str) -> tuple[str, str]:
-    layouts = {
-        "x86_64": ("x64", "headless-vk-creator"),
-        "amd64": ("x64", "headless-vk-creator"),
-        "i386": ("ia32", "headless-vk-creator"),
-        "i686": ("ia32", "headless-vk-creator"),
-        "x86": ("ia32", "headless-vk-creator"),
-        "aarch64": ("arm", "arm64/headless-vk-creator"),
-        "arm64": ("arm", "arm64/headless-vk-creator"),
-        "armv7l": ("arm", "arm/headless-vk-creator"),
-        "armv6l": ("arm", "arm/headless-vk-creator"),
-        "mips": ("mips", "mips/headless-vk-creator"),
-        "mipsle": ("mips", "mipsle/headless-vk-creator"),
-        "mips64": ("mips", "mips64/headless-vk-creator"),
-        "mips64le": ("mips", "mips64le/headless-vk-creator"),
-    }
-    normalized = str(machine or "").strip().lower()
-    if normalized not in layouts:
-        raise ValueError(
-            f"unsupported headless creator architecture: {normalized or 'unknown'}",
-        )
-    return layouts[normalized]
-
-
-def _creator_payload(archive: Path, member_name: str) -> bytes:
-    try:
-        with zipfile.ZipFile(archive) as bundle:
-            member = bundle.getinfo(member_name)
-            if member.is_dir() or not 0 < member.file_size <= _MAX_CREATOR_BINARY_SIZE:
-                raise ValueError("invalid headless creator binary size")
-            with bundle.open(member) as source:
-                payload = source.read(_MAX_CREATOR_BINARY_SIZE + 1)
-    except (KeyError, OSError, zipfile.BadZipFile) as exc:
-        raise ValueError("headless creator is missing from release archive") from exc
-    if len(payload) != member.file_size or len(payload) > _MAX_CREATOR_BINARY_SIZE:
-        raise ValueError("invalid headless creator binary size")
-    return payload
-
-
 class HeadlessCreatorPoolInfrastructureMixin:
     """Blue/green VK creator lifecycle owned outside protocol plugins."""
 
@@ -110,7 +67,7 @@ class HeadlessCreatorPoolInfrastructureMixin:
             return True, "headless creator is already installed"
         if existing:
             return False, "existing headless creator is not a valid ELF binary"
-        asset_arch, member_name = _release_layout(platform.machine())
+        asset_arch, member_name = release_layout(platform.machine())
         asset_name = f"whitelist-bypass-cli-linux-{asset_arch}.zip"
         with tempfile.TemporaryDirectory(prefix="hydra-headless-creator-") as work:
             archive = Path(work) / asset_name
@@ -120,7 +77,7 @@ class HeadlessCreatorPoolInfrastructureMixin:
                 archive,
             ):
                 return False, f"failed to download verified release asset: {asset_name}"
-            payload = _creator_payload(archive, member_name)
+            payload = creator_payload(archive, member_name)
             candidate = Path(work) / "headless-vk-creator"
             candidate.write_bytes(payload)
             if not verify_elf(candidate):
@@ -135,7 +92,11 @@ class HeadlessCreatorPoolInfrastructureMixin:
         legacy: bool = False,
         count: int | None = None,
     ) -> list[str]:
-        prefix = "wdtt-headless-creator" if legacy else "hydra-headless-creator-vk"
+        prefix = (
+            "wdtt-headless-creator"
+            if legacy
+            else getattr(self, "managed_unit_prefix", "hydra-headless-creator-vk")
+        )
         if legacy:
             generation = ""
         elif generation is None:
@@ -178,7 +139,7 @@ class HeadlessCreatorPoolInfrastructureMixin:
             f"--resources default --write-file {self.pool_dir}/%i.call.txt"
         )
         content = (
-            "[Unit]\nDescription=HYDRA VK call creator %i\n"
+            f"[Unit]\nDescription=HYDRA VK call creator ({getattr(self, 'managed_consumer', 'qwdtt')}) %i\n"
             "After=network-online.target\nWants=network-online.target\n\n"
             "[Service]\nType=simple\n"
             f"ExecStart={command}\nRestart=on-failure\nRestartSec=5\n"

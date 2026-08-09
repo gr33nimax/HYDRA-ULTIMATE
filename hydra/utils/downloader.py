@@ -21,6 +21,23 @@ from pathlib import Path
 ErrorReporter = Callable[[str], None]
 
 
+def _github_headers() -> dict[str, str]:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "HYDRA-Installer",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = os.environ.get("HYDRA_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _download_headers() -> dict[str, str]:
+    """Never attach API credentials to generic or redirected asset hosts."""
+    return {"User-Agent": "HYDRA-Installer"}
+
+
 def _fail(message: str, on_error: ErrorReporter | None) -> bool:
     if on_error is not None:
         try:
@@ -39,17 +56,57 @@ def _network_error(exc: Exception) -> str:
     return detail or type(exc).__name__
 
 
-def latest_release(repo: str, timeout: int = 10) -> str:
+def _release_metadata(
+    repo: str,
+    *,
+    timeout: int,
+    include_prerelease: bool = False,
+) -> dict:
+    endpoint = "releases?per_page=20" if include_prerelease else "releases/latest"
+    url = f"https://api.github.com/repos/{repo}/{endpoint}"
+    request = urllib.request.Request(
+        url,
+        headers=_github_headers(),
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        payload = json.loads(response.read())
+    if not include_prerelease:
+        if not isinstance(payload, dict):
+            raise ValueError("GitHub latest release response must be an object")
+        return payload
+    if not isinstance(payload, list):
+        raise ValueError("GitHub releases response must be a list")
+    release = next(
+        (
+            item
+            for item in payload
+            if isinstance(item, dict)
+            and not item.get("draft")
+            and item.get("prerelease") is True
+        ),
+        None,
+    )
+    if release is None:
+        raise ValueError(f"repository {repo} has no published preview releases")
+    return release
+
+
+def latest_release(
+    repo: str,
+    timeout: int = 10,
+    *,
+    include_prerelease: bool = False,
+) -> str:
     """Возвращает tag_name (с 'v') последнего релиза. 'unknown' при ошибке.
 
     repo = 'owner/repo', напр. 'enfein/mieru'.
     """
-    url = f"https://api.github.com/repos/{repo}/releases/latest"
     try:
-        req = urllib.request.Request(
-            url, headers={"User-Agent": "HYDRA-Installer"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read()).get("tag_name", "unknown")
+        return str(_release_metadata(
+            repo,
+            timeout=timeout,
+            include_prerelease=include_prerelease,
+        ).get("tag_name", "unknown"))
     except Exception:
         return "unknown"
 
@@ -98,7 +155,7 @@ def download(
         # ETXTBSY: "Text file busy").
         os.close(fd)
         try:
-            request = urllib.request.Request(url, headers={"User-Agent": "HYDRA-Installer"})
+            request = urllib.request.Request(url, headers=_download_headers())
             with urllib.request.urlopen(request, timeout=timeout) as response, open(tmp, "wb") as output:
                 shutil.copyfileobj(response, output)
             if sha256 and not verify_sha256(Path(tmp), sha256):
@@ -176,6 +233,9 @@ def download_github_asset_filtered(
     name_filter: Callable[[str], bool],
     dest: Path,
     *,
+    include_prerelease: bool = False,
+    require_unique: bool = False,
+    require_digest: bool = False,
     on_error: ErrorReporter | None = None,
 ) -> bool:
     """Скачивает ассет из latest release, фильтруя через callable.
@@ -189,26 +249,38 @@ def download_github_asset_filtered(
             lambda n: "linux-amd64.tar.gz" in n and "compressed" not in n,
             Path("/tmp/file.tar.gz"))
     """
-    url = f"https://api.github.com/repos/{repo}/releases/latest"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "HYDRA-Installer"})
-        with urllib.request.urlopen(req, timeout=15) as r:
-            data = json.loads(r.read())
+        data = _release_metadata(
+            repo,
+            timeout=15,
+            include_prerelease=include_prerelease,
+        )
 
-        for asset in data.get("assets", []):
-            if name_filter(asset["name"]):
-                digest = _asset_digest(asset)
-                if not digest and not _allow_unverified():
-                    return _fail(
-                        f"Файл {asset['name']} не содержит SHA-256 digest",
-                        on_error,
-                    )
-                return download(
-                    asset["browser_download_url"],
-                    dest,
-                    sha256=digest,
-                    on_error=on_error,
+        matches = [
+            asset
+            for asset in data.get("assets", [])
+            if isinstance(asset, dict)
+            and isinstance(asset.get("name"), str)
+            and name_filter(asset["name"])
+        ]
+        if require_unique and len(matches) != 1:
+            return _fail(
+                f"Release {repo} contains {len(matches)} matching assets; expected one",
+                on_error,
+            )
+        for asset in matches:
+            digest = _asset_digest(asset)
+            if not digest and (require_digest or not _allow_unverified()):
+                return _fail(
+                    f"Файл {asset['name']} не содержит SHA-256 digest",
+                    on_error,
                 )
+            return download(
+                asset["browser_download_url"],
+                dest,
+                sha256=digest,
+                on_error=on_error,
+            )
         return _fail(
             f"В последнем релизе {repo} не найден подходящий файл",
             on_error,

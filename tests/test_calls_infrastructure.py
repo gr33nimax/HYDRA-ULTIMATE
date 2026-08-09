@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from subprocess import CompletedProcess
+import json
 
 import pytest
 
@@ -31,7 +32,7 @@ class FailingProbeHost(ProbeHost):
 def test_feature_probe_uses_singbox_check_with_minimal_call_config() -> None:
     host = ProbeHost()
     assert CallsInfrastructure(host).feature_supported() is True
-    assert host.commands[0][0:3] == ["/usr/bin/sing-box", "check", "-c"]
+    assert any(command[0:3] == ["/usr/bin/sing-box", "check", "-c"] for command in host.commands)
 
 
 def test_feature_probe_blocks_unsupported_or_failed_singbox() -> None:
@@ -66,3 +67,48 @@ def test_calls_reads_credentials_only_through_injected_creator(tmp_path) -> None
     assert runtime.load_vk_cookies() == [{"name": "remixsid", "value": "token"}]
     runtime.write_native_join_link("https://vk.com/call/join/room-token")
     assert runtime.load_native_join_link() == "https://vk.com/call/join/room-token"
+
+
+class CapabilityHost(ProbeHost):
+    def run(self, args, **kwargs):
+        command = [str(value) for value in args]
+        self.commands.append(command)
+        return CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps({
+                "features": {"call_vk_multi_user": True},
+                "protocols": {"call_modes": ["p2p", "multi_user"]},
+            }),
+            stderr="",
+        )
+
+
+def test_multi_user_support_requires_feature_and_mode_capability() -> None:
+    runtime = CallsInfrastructure(CapabilityHost())
+    assert runtime.feature_supported() is True
+    assert runtime.multi_user_supported() is True
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "features": {"call_vk_multiuser": True},
+            "protocols": {"call_modes": ["p2p", "multi_user"]},
+        },
+        {
+            "features": {"call_vk_multi_user": True},
+            "protocols": {"call_modes": ["multi_user"]},
+        },
+    ],
+)
+def test_multi_user_support_rejects_alias_or_incomplete_modes(payload) -> None:
+    host = CapabilityHost()
+    host.run = lambda args, **kwargs: CompletedProcess(
+        args,
+        0,
+        stdout=json.dumps(payload),
+        stderr="",
+    )
+    assert CallsInfrastructure(host).multi_user_supported() is False

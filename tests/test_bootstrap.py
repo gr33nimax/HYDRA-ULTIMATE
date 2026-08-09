@@ -81,3 +81,9 @@ def test_install_guide_runs_sources_through_the_isolated_environment():
     assert "git clone -b dev" not in INSTALL_GUIDE
     assert ".venv/bin/python -m pip install -r requirements.lock" in INSTALL_GUIDE
     assert "sudo python3 main.py" not in INSTALL_GUIDE
+
+
+def test_bootstrap_never_overwrites_selected_or_detected_hydracore():
+    assert 'HYDRA_SELECTED_KERNEL" == "hydracore"' in BOOTSTRAP
+    assert 'grep -qi "hydracore"' in BOOTSTRAP
+    assert "bootstrap не заменяет custom core" in BOOTSTRAP

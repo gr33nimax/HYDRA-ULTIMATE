@@ -26,6 +26,8 @@ COMMAND_TITLES = {
     "backup.restore": "Backup restore",
     "upgrade.check": "Upgrade readiness",
     "upgrade.migrate-state": "State migration",
+    "kernel.status": "Kernel status",
+    "kernel.switch": "Kernel switch",
     "user.list": "Users",
     "user.show": "User details",
     "user.add": "Add user",

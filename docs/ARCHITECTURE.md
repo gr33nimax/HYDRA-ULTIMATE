@@ -579,6 +579,27 @@ Subscription v2 как изолированный `call` outbound с `platform=v
 секретом; неполная проекция отклоняет всю выдачу fail-closed. Клиентский joiner
 не становится источником server-side traffic accounting.
 
+Calls имеет два пути. Capability только с `p2p` сохраняет transient
+creator/handoff. Если Hydracore объявляет `features.call_vk_multi_user=true` и
+`protocols.call_modes` содержит `multi_user`, service создаёт отдельную
+managed-группу 1–4 комнат. Plugin возвращает server inbound с
+`listen/listen_port`, общим `obfs_password`, per-user credentials и bounded
+session/worker/handshake limits; cookies и join-links в server config
+отсутствуют. Per-user Hydra v2 projection содержит `server/server_port`,
+`join_links`, user/password, общий obfs key и worker policy и требует core
+feature `call_vk_multi_user`. Worker policy по умолчанию создаёт один worker
+на ссылку и ограничивает явное значение как
+`min(max_workers_per_session, 27 × unique_join_links, 108)`. IPv4 listener по
+умолчанию использует свободный `56002/udp`; совпадение с внешними UDP-портами
+enabled transport отклоняется до apply (в частности, qWDTT сохраняет
+`56001/udp` для WireGuard).
+
+Managed Calls использует собственные
+`hydra-headless-creator-vk-calls@{a,b}-N`, поэтому lifecycle qWDTT его не
+затрагивает. Новое поколение создаётся до metadata commit, затем общий apply
+проверяет server inbound, и только finalize останавливает прежние units. Ошибка
+до finalize откатывает pool, state и Sing-Box runtime.
+
 Перед enable выполняется feature-probe минимальным `sing-box check`. Bootstrap
 запускает общий `headless-vk-creator`, строго принимает из закрытого временного
 файла только `https://vk.com/call/join/...`, пишет ссылку атомарно с `0600`,
@@ -610,6 +631,15 @@ provider configuration. Миграции не меняют host runtime. Явн�
 `Создать комнаты` в qWDTT-подменю Creator делает snapshot старых units/файлов,
 устанавливает новый пул и только затем удаляет legacy creator; failure
 восстанавливает snapshot. Общие VK cookies при этом не удаляются.
+
+Schema 10 добавляет desired `kernel.provider/channel`, оставляет прежний Calls
+в `p2p` и материализует qWDTT port defaults для межсервисного preflight.
+`ApplicationService.kernel` — единственный use-case замены core:
+trusted release metadata и обязательный SHA-256 digest проверяются до ELF,
+identity/capabilities и active-config probe; затем binary меняется атомарно,
+служба проходит bounded health, и только после этого сохраняется state. Ошибка
+копирования, старта или persistence восстанавливает прежний binary и состояние
+службы. Legacy stock installer не перезаписывает выбранный Hydracore.
 
 Cookies и join-link не хранятся в state и не попадают в status/apply journal.
 Лог-проекции HYDRA редактируют VK и qWDTT links. Upstream Sing-Box выводит

@@ -39,6 +39,10 @@ def test_plugin_meta():
     assert p.meta.name == "wdtt"
     assert p.meta.category == PluginCategory.TRANSPORT
     assert p.meta.needs_domain is False
+    assert p.meta.capabilities.config_defaults == (
+        ("dtls_port", DEFAULT_DTLS_PORT),
+        ("wg_port", DEFAULT_WG_PORT),
+    )
     assert p.meta.capabilities.actions == (
         "hot_reload",
         "save_client_link",

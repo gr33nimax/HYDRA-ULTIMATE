@@ -6,6 +6,8 @@ from collections.abc import Callable, Mapping
 from hydra.core.state_migration_calls import migrate_v6_to_v7
 from hydra.core.state_migration_creator_consumers import migrate_v8_to_v9
 from hydra.core.state_migration_headless_creator import migrate_v7_to_v8
+from hydra.core.state_migration_hydrabox import migrate_v5_to_v6
+from hydra.core.state_migration_kernel import migrate_v9_to_v10
 from hydra.core.state_models import SCHEMA_VERSION, validate_raw_state
 Migration = Callable[[dict], dict]
 
@@ -91,15 +93,6 @@ def migrate_v4_to_v5(data: dict) -> dict:
     return data
 
 
-def migrate_v5_to_v6(data: dict) -> dict:
-    """Reserve keys; the persistence adapter injects randomness atomically."""
-    migrated = copy.deepcopy(data)
-    for user in migrated.get("users", []):
-        user.setdefault("hydrabox_jwe_key", "")
-    migrated["version"] = 6
-    return migrated
-
-
 MIGRATIONS: dict[int, Migration] = {
     0: migrate_v0_to_v1,
     1: migrate_v1_to_v2,
@@ -110,6 +103,7 @@ MIGRATIONS: dict[int, Migration] = {
     6: migrate_v6_to_v7,
     7: migrate_v7_to_v8,
     8: migrate_v8_to_v9,
+    9: migrate_v9_to_v10,
 }
 
 
