@@ -233,9 +233,11 @@ stable-релизом. Команда принимает только asset до
 До замены выполняются identity/capability и config-check. После запуска служба
 должна пройти bounded stability check; state сохраняется последним. Любой сбой
 до commit возвращает прежний бинарник и исходное состояние службы.
-Активный Calls `multi_user` несовместим со stock core: перед обратным switch на
-`sing-box-extended` отключите или удалите Calls, иначе config-check намеренно
-завершит операцию без замены бинарника.
+Calls поддерживает только Hydracore `multi_user`. Его включение fail-closed
+требует exact capability `call_vk_multi_user` и режима `multi_user`; stock core
+не запускает creator и не получает P2P fallback. Перед обратным switch на
+`sing-box-extended` отключите или удалите Calls: application preflight завершит
+операцию до загрузки и замены бинарника.
 
 ### Безопасный порядок изменения
 

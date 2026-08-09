@@ -1,0 +1,22 @@
+"""Semantic desired-state invariants for native multi-user Calls."""
+from __future__ import annotations
+
+from hydra.core.state_kernel_models import KERNEL_HYDRACORE
+
+
+def validate_calls_protocol(
+    name: str,
+    *,
+    enabled: bool,
+    config: dict,
+    kernel_provider: str,
+) -> None:
+    if name != "calls":
+        return
+    if config.get("mode", "multi_user") != "multi_user":
+        raise ValueError("Calls mode must be multi_user")
+    if enabled and kernel_provider != KERNEL_HYDRACORE:
+        raise ValueError("enabled Calls requires the Hydracore kernel")
+
+
+__all__ = ["validate_calls_protocol"]

@@ -99,7 +99,6 @@ def _creator_runtimes() -> tuple[
     )
     runtime = CallsInfrastructure(
         HOST,
-        credentials_source=provider,
         pool_source=calls_provider,
     )
     return provider, calls_provider, runtime

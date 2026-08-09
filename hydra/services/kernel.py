@@ -5,7 +5,11 @@ import copy
 from dataclasses import asdict, dataclass
 from typing import Protocol
 
-from hydra.core.state_kernel_models import KernelConfig, validate_kernel_config
+from hydra.core.state_kernel_models import (
+    KERNEL_HYDRACORE,
+    KernelConfig,
+    validate_kernel_config,
+)
 from hydra.core.state_models import AppState
 from hydra.services.configuration import restore_state_in_place
 
@@ -105,6 +109,9 @@ class KernelService:
     ) -> KernelSwitchResult:
         desired = KernelConfig(provider=provider, channel=channel)
         validate_kernel_config(desired)
+        calls = state.protocols.get("calls")
+        if provider != KERNEL_HYDRACORE and calls is not None and calls.enabled:
+            raise ValueError("disable or uninstall Calls before switching away from Hydracore")
         before = copy.deepcopy(state)
         current = self.status(state)
         if (

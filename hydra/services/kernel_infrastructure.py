@@ -217,7 +217,7 @@ class KernelInfrastructure:
             and features.get("call_vk_multi_user") is True
             and isinstance(modes, list)
             and all(isinstance(mode, str) for mode in modes)
-            and {"p2p", "multi_user"}.issubset(modes)
+            and "multi_user" in modes
         )
 
     def _inspect_binary(self, binary: Path, *, running: bool) -> KernelRuntimeStatus:
@@ -232,8 +232,6 @@ class KernelInfrastructure:
         else:
             provider = "unknown"
         capabilities = self._normalized_capabilities(capability_payload)
-        if provider == KERNEL_SINGBOX_EXTENDED:
-            capabilities = tuple(sorted({*capabilities, "call_vk_p2p"}))
         version_line = version_output.splitlines()[0] if version_output else ""
         return KernelRuntimeStatus(
             True,
@@ -301,7 +299,7 @@ class KernelInfrastructure:
             if not self._has_hydracore_contract(payload):
                 raise RuntimeError(
                     "Hydracore must expose exact identity, "
-                    "features.call_vk_multi_user and p2p/multi_user call modes",
+                    "features.call_vk_multi_user and the multi_user call mode",
                 )
         if self._config_path.exists():
             checked = self._run(candidate, "check", "-c", str(self._config_path))

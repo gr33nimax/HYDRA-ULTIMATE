@@ -566,28 +566,33 @@ journalctl -u sing-box -u caddy-l4 --no-pager -n 100
 ограничивает число неуспешных валидаций.
 
 VK Calls — application-owned use-case. `ApplicationService.calls` координирует
-зафиксированный native join-link, lifecycle плагина `calls`, общий apply и
-handoff. Установка creator и credentials не принадлежат протоколу:
+lifecycle плагина `calls`, отдельный managed creator-пул и общий apply.
+Установка creator и credentials не принадлежат протоколу:
 `ApplicationService.headless_creator` владеет provider-neutral lifecycle и
 единственным VK cookie-файлом `/etc/hydra/cookiesvk/cookies-vk.json`. Через
-внедрённый `CallConfigSource` плагин читает cookies у этого владельца и native
-join-link у Calls, затем возвращает единственный `call` inbound. Профиль admin
-joiner остаётся application-owned ручным артефактом. Отдельно плагин владеет
+внедрённый `CallConfigSource` плагин читает только готовность точного Hydracore
+контракта и join-links managed-пула. Профиль admin joiner остаётся
+application-owned ручным артефактом. Отдельно плагин владеет
 remote-safe joiner-проекцией: при включённом Calls она попадает в Hydra
 Subscription v2 как изолированный `call` outbound с `platform=vk` и
-`network.outbound`, но без серверных cookies. Join-link обязателен и считается
-секретом; неполная проекция отклоняет всю выдачу fail-closed. Клиентский joiner
+`network.outbound`, но без серверных cookies. Пул join-links обязателен и
+считается секретом; неполная проекция отклоняет всю выдачу fail-closed.
+Клиентский joiner
 не становится источником server-side traffic accounting.
 
-Calls имеет два пути. Capability только с `p2p` сохраняет transient
-creator/handoff. Если Hydracore объявляет `features.call_vk_multi_user=true` и
-`protocols.call_modes` содержит `multi_user`, service создаёт отдельную
-managed-группу 1–4 комнат. Plugin возвращает server inbound с
+Calls имеет только режим `multi_user`. До любых host-мутаций service требует
+desired `kernel.provider=hydracore`, exact identity
+`io.hydrabox.hydracore`, `features.call_vk_multi_user=true` и наличие
+`multi_user` в `protocols.call_modes`; stock core, capability aliases и `p2p`
+отклоняются fail-closed. Затем service создаёт отдельную managed-группу 1–4
+комнат. Plugin возвращает server inbound с
 `listen/listen_port`, общим `obfs_password`, per-user credentials и bounded
 session/worker/handshake limits; cookies и join-links в server config
 отсутствуют. Per-user Hydra v2 projection содержит `server/server_port`,
 `join_links`, user/password, общий obfs key и worker policy и требует core
-feature `call_vk_multi_user`. Worker policy по умолчанию создаёт один worker
+feature `call_vk_multi_user`; singular `join_link` не генерируется в outbound.
+Admin DTO сохраняет первый link под старым именем только как compatibility alias. Worker policy
+по умолчанию создаёт один worker
 на ссылку и ограничивает явное значение как
 `min(max_workers_per_session, 27 × unique_join_links, 108)`. IPv4 listener по
 умолчанию использует свободный `56002/udp`; совпадение с внешними UDP-портами
@@ -600,17 +605,10 @@ Managed Calls использует собственные
 проверяет server inbound, и только finalize останавливает прежние units. Ошибка
 до finalize откатывает pool, state и Sing-Box runtime.
 
-Перед enable выполняется feature-probe минимальным `sing-box check`. Bootstrap
-запускает общий `headless-vk-creator`, строго принимает из закрытого временного
-файла только `https://vk.com/call/join/...`, пишет ссылку атомарно с `0600`,
-применяет desired state и ждёт подтверждения той же комнаты в основном service.
-Creator живёт до handoff. Любой сбой восстанавливает прежние link, state и
-runtime; автоматического обновления Sing-Box нет.
-
 Оба потребителя используют `CreatorSessionManager`. Запрос содержит provider,
 consumer, lifetime и количество сессий; manager валидирует его и делегирует
-provider driver. Calls запрашивает одну `transient`-сессию и закрывает её после
-handoff. qWDTT запрашивает `managed`-группу, сам владеет desired state,
+provider driver. Calls и qWDTT запрашивают изолированные `managed`-группы и
+самостоятельно владеют desired state,
 публикацией артефакта, commit/finalize и rollback. Добавление WB Stream требует
 нового driver и consumer use-case, но не ветвления в Calls или qWDTT.
 qWDTT-транзакции дополнительно сериализуются между TUI и Sync Agent через
@@ -633,7 +631,11 @@ provider configuration. Миграции не меняют host runtime. Явн�
 восстанавливает snapshot. Общие VK cookies при этом не удаляются.
 
 Schema 10 добавляет desired `kernel.provider/channel`, оставляет прежний Calls
-в `p2p` и материализует qWDTT port defaults для межсервисного preflight.
+в историческом `p2p` и материализует qWDTT port defaults для межсервисного
+preflight. Schema 11 нормализует любой legacy/unknown Calls mode в `multi_user`;
+несовместимый enabled Calls (включая stock core) выключается без удаления
+installed state, поэтому upgrade/apply остальных протоколов остаётся доступен.
+Повторная установка после switch на Hydracore создаёт новый managed-пул.
 `ApplicationService.kernel` — единственный use-case замены core:
 trusted release metadata и обязательный SHA-256 digest проверяются до ELF,
 identity/capabilities и active-config probe; затем binary меняется атомарно,
@@ -641,9 +643,9 @@ identity/capabilities и active-config probe; затем binary меняется
 копирования, старта или persistence восстанавливает прежний binary и состояние
 службы. Legacy stock installer не перезаписывает выбранный Hydracore.
 
-Cookies и join-link не хранятся в state и не попадают в status/apply journal.
+Cookies и join-links не хранятся в state и не попадают в status/apply journal.
 Лог-проекции HYDRA редактируют VK и qWDTT links. Upstream Sing-Box выводит
-join-link на уровне INFO, поэтому сырой journald остаётся секретным источником.
+join-links на уровне INFO, поэтому сырой journald остаётся секретным источником.
 
 `PluginMeta.manual_artifacts_query` отделяет административные ручные артефакты
 от per-user подписок. qWDTT объявляет через него единственную master-ссылку для

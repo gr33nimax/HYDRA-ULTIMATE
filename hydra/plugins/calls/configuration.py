@@ -1,7 +1,6 @@
 """Compatibility exports for the dependency-neutral Calls configuration."""
 from hydra.contracts.calls_configuration import (
     CALL_MODE_MULTI_USER,
-    CALL_MODE_P2P,
     DEFAULT_CALL_PORT,
     DEFAULT_ROOM_COUNT,
     MAX_JOIN_LINKS,
@@ -30,7 +29,6 @@ def multi_user_outbound(
 
 __all__ = [
     "CALL_MODE_MULTI_USER",
-    "CALL_MODE_P2P",
     "DEFAULT_CALL_PORT",
     "DEFAULT_ROOM_COUNT",
     "MAX_JOIN_LINKS",

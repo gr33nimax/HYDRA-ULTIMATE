@@ -8,6 +8,7 @@ from hydra.core.state_kernel_models import (
     validate_raw_kernel_config,
 )
 from hydra.core.state_migration_kernel import migrate_v9_to_v10
+from hydra.core.state_models import AppState, PluginState, validate_state
 
 
 def test_v9_to_v10_preserves_stock_core_and_legacy_calls() -> None:
@@ -51,3 +52,25 @@ def test_kernel_selection_rejects_unknown_provider_or_channel() -> None:
         validate_raw_kernel_config("hydracore")
     with pytest.raises(ValueError, match="provider"):
         validate_raw_kernel_config({"provider": "unknown"})
+
+
+def test_current_state_rejects_legacy_calls_mode() -> None:
+    state = AppState(protocols={
+        "calls": PluginState(config={"mode": "p2p"}),
+    })
+
+    with pytest.raises(ValueError, match="must be multi_user"):
+        validate_state(state)
+
+
+def test_current_state_rejects_enabled_calls_on_stock_core() -> None:
+    state = AppState(protocols={
+        "calls": PluginState(
+            installed=True,
+            enabled=True,
+            config={"mode": "multi_user"},
+        ),
+    })
+
+    with pytest.raises(ValueError, match="requires the Hydracore kernel"):
+        validate_state(state)

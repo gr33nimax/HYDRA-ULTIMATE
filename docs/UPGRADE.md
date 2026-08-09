@@ -250,7 +250,7 @@ hydra check
 
 ## Схема state и миграции
 
-В текущей ветке `dev` актуальна схема **10**. Миграция `v5 → v6` резервирует
+В текущей ветке `dev` актуальна схема **11**. Миграция `v5 → v6` резервирует
 приватный per-user JWE key. Ступень `v6 → v7` сохраняет совместимость legacy VK
 creator через промежуточный Calls layout, а `v7 → v8` переносит его desired
 state в `headless_creator.providers.vk` и maintenance-флаг в
@@ -258,10 +258,14 @@ state в `headless_creator.providers.vk` и maintenance-флаг в
 включается. Ступень `v8 → v9` переносит qWDTT-настройки из provider-конфига в
 `headless_creator.consumers.qwdtt` и задаёт совместимый размер пула 4 комнаты.
 Ступень `v9 → v10` добавляет `kernel.provider/channel`, оставляет существующие
-инсталляции на `sing-box-extended/stable`, фиксирует прежний Calls как `p2p` и
-материализует канонические qWDTT-порты `56000/56001` для conflict preflight.
-Она не заменяет бинарник: переход на Hydracore выполняется только явной
-`sudo hydra kernel switch hydracore` после backup.
+инсталляции на `sing-box-extended/stable`, исторически фиксирует прежний Calls
+как `p2p` и материализует канонические qWDTT-порты `56000/56001` для conflict
+preflight. Ступень `v10 → v11` сразу нормализует Calls в единственный
+поддерживаемый `multi_user`: несовместимый enabled Calls выключается, но
+installed-флаг, остальные протоколы и host runtime сохраняются. Благодаря этому
+первый общий apply после upgrade не требует отсутствующего room pool. Переход
+на Hydracore выполняется только явной `sudo hydra kernel switch hydracore` после
+backup; последующая переустановка Calls создаёт managed-пул 1–4 комнат.
 
 Обновление подписочного renderer не меняет state schema и повторно использует
 существующий per-user A256GCM key, но wire contract несовместим с HydraBox v1.

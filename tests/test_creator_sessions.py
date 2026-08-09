@@ -40,10 +40,10 @@ def test_manager_dispatches_calls_and_qwdtt_through_the_same_provider() -> None:
     driver = Driver()
     manager = CreatorSessionManager({"vk": driver})
 
-    calls = manager.create(CreatorSessionRequest("vk", "calls", "transient"))
+    calls = manager.create(CreatorSessionRequest("vk", "calls", "managed", count=4))
     qwdtt = manager.create(CreatorSessionRequest("vk", "qwdtt", "managed", count=3))
 
-    assert len(calls.endpoints) == 1
+    assert len(calls.endpoints) == 4
     assert [endpoint.token for endpoint in qwdtt.endpoints] == [
         "token-0",
         "token-1",
@@ -57,7 +57,7 @@ def test_manager_rejects_multi_session_transient_request_before_driver_call() ->
     manager = CreatorSessionManager({"vk": driver})
 
     with pytest.raises(ValueError, match="one session"):
-        manager.create(CreatorSessionRequest("vk", "calls", "transient", count=2))
+        manager.create(CreatorSessionRequest("vk", "preview", "transient", count=2))
 
     assert driver.requests == []
 

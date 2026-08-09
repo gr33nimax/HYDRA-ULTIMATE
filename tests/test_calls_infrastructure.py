@@ -24,22 +24,6 @@ class ProbeHost(HostBackend):
         return CompletedProcess(command, self.returncode, stdout="", stderr="")
 
 
-class FailingProbeHost(ProbeHost):
-    def run(self, args, **kwargs):
-        raise TimeoutError
-
-
-def test_feature_probe_uses_singbox_check_with_minimal_call_config() -> None:
-    host = ProbeHost()
-    assert CallsInfrastructure(host).feature_supported() is True
-    assert any(command[0:3] == ["/usr/bin/sing-box", "check", "-c"] for command in host.commands)
-
-
-def test_feature_probe_blocks_unsupported_or_failed_singbox() -> None:
-    assert CallsInfrastructure(ProbeHost(returncode=1)).feature_supported() is False
-    assert CallsInfrastructure(FailingProbeHost()).feature_supported() is False
-
-
 @pytest.mark.parametrize(
     "value",
     [
@@ -54,19 +38,22 @@ def test_join_link_validation_is_strict(value: str) -> None:
         validate_join_link(value)
 
 
-def test_calls_reads_credentials_only_through_injected_creator(tmp_path) -> None:
-    source = type("Source", (), {
-        "load_vk_cookies": lambda self: [{"name": "remixsid", "value": "token"}],
-    })()
-    runtime = CallsInfrastructure(
-        HostBackend(),
-        credentials_source=source,
-        native_join_file=tmp_path / "native.join",
-    )
+def test_calls_can_remove_a_stale_legacy_join_file(tmp_path) -> None:
+    legacy = tmp_path / "native.join"
+    legacy.write_text("stale", encoding="utf-8")
+    runtime = CallsInfrastructure(HostBackend(), native_join_file=legacy)
 
-    assert runtime.load_vk_cookies() == [{"name": "remixsid", "value": "token"}]
-    runtime.write_native_join_link("https://vk.com/call/join/room-token")
-    assert runtime.load_native_join_link() == "https://vk.com/call/join/room-token"
+    runtime.remove_native_join_link()
+
+    assert not legacy.exists()
+
+
+def test_legacy_credentials_constructor_slot_is_ignored() -> None:
+    credentials = object()
+    runtime = CallsInfrastructure(HostBackend(), credentials)
+
+    assert runtime.credentials_source is credentials
+    assert not hasattr(runtime, "load_vk_cookies")
 
 
 class CapabilityHost(ProbeHost):
@@ -77,8 +64,9 @@ class CapabilityHost(ProbeHost):
             command,
             0,
             stdout=json.dumps({
+                "identity": {"core_id": "io.hydrabox.hydracore"},
                 "features": {"call_vk_multi_user": True},
-                "protocols": {"call_modes": ["p2p", "multi_user"]},
+                "protocols": {"call_modes": ["multi_user"]},
             }),
             stderr="",
         )
@@ -86,7 +74,6 @@ class CapabilityHost(ProbeHost):
 
 def test_multi_user_support_requires_feature_and_mode_capability() -> None:
     runtime = CallsInfrastructure(CapabilityHost())
-    assert runtime.feature_supported() is True
     assert runtime.multi_user_supported() is True
 
 
@@ -94,10 +81,17 @@ def test_multi_user_support_requires_feature_and_mode_capability() -> None:
     "payload",
     [
         {
+            "identity": {"core_id": "io.hydrabox.hydracore"},
             "features": {"call_vk_multiuser": True},
-            "protocols": {"call_modes": ["p2p", "multi_user"]},
+            "protocols": {"call_modes": ["multi_user"]},
         },
         {
+            "identity": {"core_id": "io.hydrabox.hydracore"},
+            "features": {"call_vk_multi_user": True},
+            "protocols": {"call_modes": ["p2p"]},
+        },
+        {
+            "identity": {"core_id": "third.party.core"},
             "features": {"call_vk_multi_user": True},
             "protocols": {"call_modes": ["multi_user"]},
         },

@@ -26,7 +26,7 @@
   транзакция возвращает прежнюю работающую службу при любом сбое.
 - Legacy install/update Sing-Box Extended больше не может затереть выбранный
   Hydracore; фоновая проверка обновлений следует provider и channel из state.
-- Native VK Calls сохраняет legacy `p2p`, а при capability
+- Native VK Calls теперь поддерживает только Hydracore `multi_user`: exact
   `call_vk_multi_user` создаёт отдельный blue/green пул из 1–4 VK-комнат и
   публикует per-user Hydracore outbound через Hydra Subscription v2. Серверный
   inbound содержит общий obfs key, bounded session/worker/handshake limits и
@@ -34,8 +34,10 @@
 - Multi-user listener использует `56002/udp`, не конфликтуя с qWDTT WireGuard
   на `56001/udp`; worker count ограничен server cap, 27 workers на join-link и
   общим потолком 108.
-- Schema state поднята до 10; `v9 → v10` совместимо оставляет stock core и
-  существующий Calls в `p2p` до явного переключения.
+- Schema state поднята до 11. Чистая `v10 → v11` миграция переводит legacy
+  Calls в `multi_user`, выключает несовместимый enabled state без удаления
+  installed-флага и сохраняет доступность apply для остальных протоколов.
+  Повторная установка после явного switch на Hydracore создаёт managed-пул.
 
 ### Sing-Box
 
@@ -78,8 +80,9 @@
 - Генератор выдаёт ключ только во fragment `#hydra-key=…`. Status, логи и
   публичные JSON никогда не содержат ключ или полный HWID.
 - Включённый native VK Calls теперь добавляет в подписку отдельный remote-safe
-  `call` outbound/profile с join-link и core feature `call`, но без VK cookies;
-  отсутствие join-link отклоняет выдачу fail-closed. qWDTT остаётся только
+  `call` outbound/profile с `mode=multi_user`, `join_links` и core features
+  `call`/`call_vk_multi_user`, но без VK cookies и singular `join_link` в outbound;
+  отсутствие managed-пула отклоняет выдачу fail-closed. qWDTT остаётся только
   ручным общим master-артефактом: Hydra v2 renderer не вызывает его client hook
   и не может опубликовать главный пароль.
 - Backend и HydraCore используют общий deterministic AES-GCM test vector v2.
@@ -114,29 +117,29 @@
   cookie-файла и число корректных уникальных qWDTT-комнат. В qWDTT-подменю
   доступны создание, остановка, размер пула 1–16, автообновление и интервал.
 - Calls и qWDTT переведены на единый typed `CreatorSessionManager`: Calls
-  использует одну transient-сессию до handoff, qWDTT владеет managed-группой из
-  N сессий, blue/green commit и rollback. Новый provider подключается отдельным
+  и qWDTT владеют отдельными managed-группами из N сессий, blue/green commit и
+  rollback. Новый provider подключается отдельным
   driver без ветвления в consumer-сервисах.
 - qWDTT-ссылка формируется из любого настроенного числа уникальных хэшей с
   сохранением порядка и корректным percent-encoding query-параметра; токены с
   `+`, `=`, `%` и `&` больше не искажаются.
 - Меню `Calls · VK` использует общий renderer протоколов и оставляет установку,
-  атомарную переустановку с пересозданием комнаты, admin-профиль и удаление;
+  атомарную переустановку с пересозданием пула, admin-профиль и удаление;
   отдельные enable/disable и cookie-статусы из него убраны.
 - Сборка `wdtt-server` теперь охватывает весь корневой Go-пакет upstream, включая
   вынесенный `admin_api.go`; установка больше не падает с
   `undefined: registerAdminAPIRoutes`.
 - Добавлен экспериментальный транспорт `calls`: native VK `call` inbound для
-  Sing-Box Extended, feature-probe без автоматического обновления ядра,
-  транзакционное создание/ротация комнаты и admin-only SOCKS joiner profile.
+  Hydracore с exact capability gate, транзакционным созданием/ротацией
+  managed-пула и admin-only SOCKS joiner profile; stock/P2P fallback отсутствует.
 - `ApplicationService.headless_creator` стал независимым владельцем binary,
   provider credentials и creator maintenance. Один `headless-vk-creator`
   создаёт комнаты для native Calls и qWDTT; WDTT отвечает только за
   `qwdtt://`-артефакт.
 - В корневом TUI появился отдельный provider-ready экран `Headless Creator`;
   `Calls · VK` теперь управляет только native транспортом. Единственный VK
-  cookie-файл — `/etc/hydra/cookiesvk/cookies-vk.json`; native join-link остаётся
-  в `/var/lib/hydra/calls/vk/`, creator runtime вынесен в
+  cookie-файл — `/etc/hydra/cookiesvk/cookies-vk.json`; native Calls pool хранится
+  в `/var/lib/hydra/calls/vk/pool/`, creator runtime вынесен в
   `/var/lib/hydra/headless-creator/`.
 - qWDTT rotation стала blue/green: новое поколение
   `hydra-headless-creator-vk@.service` запускается параллельно старому, поэтому
@@ -153,9 +156,9 @@
 - Актуальная qWDTT master-ссылка отображается в TUI в «Ручных конфигах» с явной
   пометкой, что она общая для всех пользователей; в пользовательские подписки
   ссылка с главным паролем не включается.
-- VK join-link и полный профиль считаются shared secrets: HYDRA редактирует их
+- VK join-links и полный профиль считаются shared secrets: HYDRA редактирует их
   в status/log projections. Сырой journald остаётся чувствительным, поскольку
-  upstream Sing-Box пишет join-link на уровне INFO.
+  upstream runtime может писать join-links на уровне INFO.
 
 ### Подписки
 
