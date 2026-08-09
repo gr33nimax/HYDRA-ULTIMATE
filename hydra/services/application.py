@@ -69,6 +69,10 @@ from hydra.services.maintenance import (
     MaintenanceOperations,
     UnavailableMaintenanceOperations,
 )
+from hydra.services.kernel import (
+    KernelOperations,
+    UnavailableKernelOperations,
+)
 
 
 @dataclass(frozen=True)
@@ -124,6 +128,7 @@ class ApplicationService:
     maintenance: MaintenanceOperations = field(
         default_factory=UnavailableMaintenanceOperations,
     )
+    kernel: KernelOperations = field(default_factory=UnavailableKernelOperations)
 
     def status(self, state: AppState) -> dict[str, Any]:
         from hydra.core.status import build_status

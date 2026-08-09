@@ -38,18 +38,20 @@
 | `shadowtls` | ShadowTLS | ShadowTLS v3 с Trojan detour |
 | `snell` | Snell v4 | TCP/UDP-прокси из Sing-Box Extended |
 | `telemt` | MTProto / Telemt | Telegram MTProxy с управлением пользователями |
-| `calls` | Calls · VK | Экспериментальный native `call` transport Sing-Box Extended |
+| `calls` | Calls · VK | Native `call`: Sing-Box Extended P2P или Hydracore multi-user |
 | `wdtt` | qWDTT | WireGuard-туннелирование поверх TURN |
 
 `ApplicationService.headless_creator` владеет установкой provider drivers и их
 credentials. qWDTT отдельно владеет managed-пулом от 1 до 16 комнат (4 по
 умолчанию). Единственный Creator JSON помещается в
 `/etc/hydra/cookiesvk/cookies-vk.json` (`0600`). `ApplicationService.calls`
-владеет только native join-link, клиентским профилем и lifecycle транспорта.
-Native Calls сначала проходит `sing-box check` feature-probe, затем общий
-`headless-vk-creator` создаёт комнату; основной `sing-box.service` получает уже
-фиксированную ссылку через транзакционный apply. При ротации прежний link и
-runtime сохраняются до подтверждения handoff.
+владеет native link/pool, клиентскими профилями и lifecycle транспорта.
+Capability probe `sing-box hydra capabilities --json` выбирает путь. P2P
+фиксирует transient-ссылку и ждёт handoff. Multi-user Hydracore поднимает 1–4
+комнаты отдельными blue/green units, а `sing-box.service` сам в VK не входит:
+он принимает workers на `56002/udp`, делает O(1) lookup пользователя и
+агрегирует их в одну сессию. Failure восстанавливает старое поколение, desired
+state и runtime.
 
 Creator-пул qWDTT работает двумя поколениями systemd-инстансов: новое поколение
 публикуется только после получения заданного числа уникальных хэшей, затем старое
@@ -220,6 +222,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `telemt.service` | Демон MTProto-прокси |
 | `wdtt.service` | Демон qWDTT |
 | `hydra-headless-creator-vk@.service` | Два поколения по N VK creator-инстансов (N=1–16) для безопасной ротации qWDTT-хэшей |
+| `hydra-headless-creator-vk-calls@.service` | Отдельные поколения 1–4 VK-комнат Hydracore Calls |
 | `fail2ban.service` | SSH и auth jails |
 
 > [!NOTE]
@@ -238,7 +241,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/opt/hydra/.venv` | Изолированное Python-окружение |
 | `/opt/hydra-releases` | Каталог изолированных release для updater |
 | `/usr/local/bin/hydra` | Wrapper команды `hydra` |
-| `/usr/local/bin/sing-box` | Бинарник Sing-Box Extended |
+| `/usr/local/bin/sing-box` | Выбранный совместимый core: Sing-Box Extended или Hydracore |
 | `/usr/local/bin/caddy-l4` | Бинарник Caddy с модулем layer4 |
 
 ### Конфигурации
@@ -249,6 +252,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/etc/sing-box/config.json` | Сгенерированная конфигурация Sing-Box |
 | `/etc/systemd/system/sing-box.service.d/90-hydra-memory.conf` | Общий `GOGC=50` без жёсткого memory cap |
 | `/etc/systemd/system/hydra-headless-creator-vk@.service` | Provider-owned template unit для blue/green qWDTT-пула |
+| `/etc/systemd/system/hydra-headless-creator-vk-calls@.service` | Template unit отдельного multi-user Calls-пула |
 | `/etc/systemd/journald.conf.d/90-hydra-journald.conf` | Бюджеты постоянного и runtime-журнала |
 | `/etc/caddy-l4/config.json` | Сгенерированная конфигурация TLS-мультиплексора |
 | `/etc/nftables.conf` | Правила nftables, включая TPROXY |
@@ -258,9 +262,11 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/etc/hydra/cookiesvk/` | Единый закрытый каталог провайдера VK; права `0700` |
 | `/etc/hydra/cookiesvk/cookies-vk.json` | Общий VK Creator JSON для native Calls и qWDTT; файл `0600`, не входит в state |
 | `/var/lib/hydra/calls/vk/native.join` | Зафиксированный native VK join-link; файл `0600`, не входит в state |
+| `/var/lib/hydra/calls/vk/pool/` | Multi-user Calls metadata и join-links двух поколений; `0700/0600` |
 | `/var/lib/hydra/headless-creator/vk/qwdtt/` | Закрытый runtime-каталог поколений creator и `state.json`; права `0700` |
 | `/etc/wdtt/qwdtt_link.txt` | Единственная master qWDTT-ссылка с актуальным упорядоченным списком хешей |
 | `/run/lock/hydra-creator.lock` | Межпроцессная сериализация qWDTT creator-транзакций TUI и Sync Agent |
+| `/run/lock/hydra-calls.lock` | Межпроцессная сериализация Calls room-pool/lifecycle транзакций |
 | `/etc/cron.d/hydra-traffic` | Задание учёта трафика |
 | `/etc/cron.d/telemt-stats` | Задание статистики Telemt |
 
@@ -372,6 +378,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
    51821/udp  AmneziaWG                           source-relay
    56000/udp  qWDTT · DTLS/TURN
    56001/udp  qWDTT · WireGuard
+   56002/udp  Calls · VK multi-user
    2012–2022/tcp    Mieru
    32000–32999/tcp  Snell
 ```
@@ -387,6 +394,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 | `51820/udp`, `51821/udp` | UDP | AmneziaWG |
 | `56000/udp` | UDP | qWDTT — DTLS/TURN |
 | `56001/udp` | UDP | qWDTT — WireGuard |
+| `56002/udp` | UDP | Calls · VK — Hydracore multi-user listener |
 | `2012–2022/tcp` | TCP | Mieru (диапазон) |
 | `32000–32999/tcp` | TCP | Snell (диапазон) |
 | `9443/tcp` | TCP | Сервер подписок (обычно за Caddy L4 по домену) |
@@ -423,7 +431,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 
 ## Схема persisted state
 
-В текущей ветке `dev` актуальна схема **9**. Корень `state.json`:
+В текущей ветке `dev` актуальна схема **10**. Корень `state.json`:
 
 | Поле | Тип | Содержание |
 | :--- | :--- | :--- |
@@ -435,6 +443,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 | `telegram` | `object` | Настройки Telegram-адаптера и категорий уведомлений |
 | `network` | `object` | Сетевые настройки, не принадлежащие плагину |
 | `headless_creator` | `object` | Provider-neutral desired state независимого creator |
+| `kernel` | `object` | Desired core provider (`sing-box-extended`/`hydracore`) и release channel |
 
 `User`: `email`, `uuid`, `traffic_limit_gb`, `traffic_used_bytes`, `expiry_date`,
 `blocked`, `created_at`, `telegram_id`, `credentials`, `device_limit`, `devices`,
@@ -467,6 +476,9 @@ state не хранятся.
 старый creator был настроен, state получает
 `legacy_creator_reinstall_required`; старые units и runtime не изменяются до
 явного `Создать комнаты` в qWDTT-подменю TUI `Headless Creator`.
+`v9 → v10` добавляет `kernel={provider:sing-box-extended,channel:stable}` и
+фиксирует отсутствующий `calls.config.mode` как `p2p`; host binary и units эта
+чистая миграция не меняет.
 
 `install` хранит служебные отметки фоновых проверок:
 
@@ -523,6 +535,17 @@ state не хранятся.
 Отдельно `HYDRA_INSTALL_DIR` читает и сам Python-код: он задаёт стабильный
 корень установки, от которого вычисляется интерпретатор
 `<root>/.venv/bin/python` для генерируемых systemd-units.
+
+### Runtime management
+
+| Переменная | По умолчанию | Назначение |
+| :--- | :--- | :--- |
+| `HYDRA_GITHUB_TOKEN` / `GITHUB_TOKEN` | пусто | Bearer token для GitHub release API; значение не логируется |
+| `HYDRA_CALLS_LOCK_FILE` | `/run/lock/hydra-calls.lock` | Calls multi-process operation lock |
+| `HYDRA_APPLY_LOCK_FILE` | `/run/lock/hydra-apply.lock` | Общий apply lock |
+
+`HYDRA_ALLOW_UNVERIFIED_DOWNLOADS=1` остаётся аварийным escape hatch старых
+downloaders, но намеренно не отключает обязательный digest при `kernel switch`.
 
 ## Быстрая диагностика
 

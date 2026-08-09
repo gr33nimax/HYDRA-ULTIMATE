@@ -102,7 +102,12 @@ def test_calls_status_uses_minimal_protocol_panel(monkeypatch) -> None:
         "installed": True,
         "enabled": True,
         "running": True,
-        "details": [("Платформа", "VK"), ("Комната", "создана")],
+        "details": [
+            ("Платформа", "VK"),
+            ("Режим", "p2p"),
+            ("Комната", "создана"),
+            ("Комнат в пуле", "0"),
+        ],
     }
 
 
@@ -114,6 +119,7 @@ def test_calls_menu_contains_only_install_or_reinstall_profile_uninstall() -> No
     assert [option[1] for option in calls._menu_options(installed=True)] == [
         "🔄 Переустановить",
         "📄 Показать admin-профиль",
+        "🔢 Число VK-комнат",
         "❌ Удалить",
         "↩ Назад",
     ]

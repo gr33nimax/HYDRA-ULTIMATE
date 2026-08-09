@@ -120,6 +120,8 @@ class HeadlessCreatorInfrastructure(HeadlessCreatorPoolInfrastructureMixin):
     creator_unit: Path = CREATOR_UNIT
     creator_count: int = CREATOR_COUNT
     creator_repo: str = CREATOR_REPO
+    managed_consumer: str = "qwdtt"
+    managed_unit_prefix: str = "hydra-headless-creator-vk"
     _pool_stage: CreatorPoolStage | None = field(default=None, init=False, repr=False)
 
     def creator_installed(self) -> bool:
@@ -196,13 +198,20 @@ class HeadlessCreatorInfrastructure(HeadlessCreatorPoolInfrastructureMixin):
         if request.provider != "vk":
             raise ValueError(f"VK creator cannot serve provider {request.provider}")
         if request.lifetime == "managed":
-            if request.consumer != "qwdtt":
+            if request.consumer != self.managed_consumer:
                 raise ValueError("managed VK creator sessions require a known consumer")
             hashes = self.refresh_creator_pool(
                 previous=list(request.previous_tokens),
                 count=request.count,
             )
-            endpoints = tuple(CreatorEndpoint("", token) for token in hashes)
+            links = self.read_creator_links()
+            if len(links) != len(hashes):
+                self.rollback_creator_pool()
+                raise RuntimeError("managed VK creator returned an incomplete link pool")
+            endpoints = tuple(
+                CreatorEndpoint(link, token)
+                for link, token in zip(links, hashes, strict=True)
+            )
             return CreatorSessionGroup(request, endpoints)
         bootstrap = self.start_vk_room()
         endpoint = CreatorEndpoint(
@@ -243,9 +252,35 @@ class HeadlessCreatorInfrastructure(HeadlessCreatorPoolInfrastructureMixin):
             self.close_vk_room(group.handle)
 
     def stop_managed_sessions(self, consumer: str) -> tuple[bool, str]:
-        if consumer != "qwdtt":
+        if consumer != self.managed_consumer:
             return False, f"VK creator does not know managed consumer {consumer}"
         return self.stop_creator_pool()
+
+    def read_creator_links(self) -> list[str]:
+        """Read strict full join links from the staged or committed generation."""
+        metadata = self.pool_metadata()
+        generation = (
+            self._pool_stage.generation
+            if self._pool_stage is not None
+            else str(metadata.get("generation", ""))
+        )
+        count = (
+            self._pool_stage.room_count
+            if self._pool_stage is not None
+            else self._room_count_from_metadata(metadata)
+        )
+        links: list[str] = []
+        for path in self.call_files(generation=generation, count=count):
+            try:
+                lines = [
+                    line.strip()
+                    for line in path.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+                links.append(extract_vk_join_link(lines[-1]))
+            except (OSError, ValueError, IndexError):
+                return []
+        return links if len(links) == count and len(set(links)) == count else []
 
     @staticmethod
     def _wait_for_join_file(process: Any, path: Path, *, timeout: float) -> str:

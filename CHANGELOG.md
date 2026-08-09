@@ -17,6 +17,26 @@
 
 ## [Unreleased]
 
+### Hydracore / Calls
+
+- Добавлен vendor-neutral desired state ядра и команды `hydra kernel status`
+  / `kernel switch`. Hydracore и Sing-Box Extended загружаются только из
+  фиксированных репозиториев с обязательным GitHub `asset.digest`, ELF,
+  identity/capability, active-config и post-start проверками; binary/state
+  транзакция возвращает прежнюю работающую службу при любом сбое.
+- Legacy install/update Sing-Box Extended больше не может затереть выбранный
+  Hydracore; фоновая проверка обновлений следует provider и channel из state.
+- Native VK Calls сохраняет legacy `p2p`, а при capability
+  `call_vk_multi_user` создаёт отдельный blue/green пул из 1–4 VK-комнат и
+  публикует per-user Hydracore outbound через Hydra Subscription v2. Серверный
+  inbound содержит общий obfs key, bounded session/worker/handshake limits и
+  O(1) user lookup вместо перебора всех паролей на каждом пакете.
+- Multi-user listener использует `56002/udp`, не конфликтуя с qWDTT WireGuard
+  на `56001/udp`; worker count ограничен server cap, 27 workers на join-link и
+  общим потолком 108.
+- Schema state поднята до 10; `v9 → v10` совместимо оставляет stock core и
+  существующий Calls в `p2p` до явного переключения.
+
 ### Sing-Box
 
 - Systemd-unit Sing-Box теперь выдаёт `CAP_NET_RAW`, необходимую ядру

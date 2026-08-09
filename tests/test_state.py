@@ -30,6 +30,8 @@ def test_app_state_defaults():
     assert isinstance(state.network, NetworkConfig)
     assert state.headless_creator.providers == {}
     assert state.headless_creator.consumers == {}
+    assert state.kernel.provider == "sing-box-extended"
+    assert state.kernel.channel == "stable"
 
 
 def test_null_boolean_switches_use_dataclass_defaults(tmp_path, monkeypatch):

@@ -35,7 +35,9 @@ def _status_panel(state: AppState, app: ApplicationService) -> None:
         running=status.native_running,
         details=[
             ("Платформа", "VK"),
+            ("Режим", getattr(status, "native_mode", "p2p")),
             ("Комната", "создана" if status.native_link_ready else "отсутствует"),
+            ("Комнат в пуле", str(getattr(status, "room_count", 0))),
         ],
     )
 
@@ -48,7 +50,7 @@ def _show_profile(state: AppState, app: ApplicationService) -> None:
     except Exception as exc:
         error(str(exc))
     else:
-        warn("Не публикуйте профиль: join-link даёт доступ к VK-комнате.")
+        warn("Не публикуйте профиль: он содержит join-links и credentials.")
         print(f"\n{profile.config}\n")
     _pause()
 
@@ -62,6 +64,7 @@ def _menu_options(*, installed: bool) -> list[tuple[str, str, str]]:
     return [
         ("1", "🔄 Переустановить", "Пересоздать VK-комнату с rollback"),
         ("2", "📄 Показать admin-профиль", "Секретный клиентский JSON"),
+        ("3", "🔢 Число VK-комнат", "От 1 до 4; применяется при переустановке"),
         ("9", "❌ Удалить", "Удалить Calls и сохранённый join-link"),
         ("0", "↩ Назад", ""),
     ]
@@ -77,6 +80,17 @@ def _dispatch(choice: str, state: AppState, app: ApplicationService) -> bool:
         _show_result(app.calls.reinstall_native_vk(state), "Calls · VK переустановлен")
     elif choice == "2" and desired.installed:
         _show_profile(state, app)
+    elif choice == "3" and desired.installed:
+        try:
+            count = int(prompt("Число VK-комнат [1-4]: ").strip())
+        except ValueError:
+            error("Введите целое число от 1 до 4")
+            _pause()
+        else:
+            _show_result(
+                app.calls.set_room_count(state, count),
+                "Число комнат сохранено; переустановите Calls для ротации пула",
+            )
     elif choice == "9" and desired.installed:
         if confirm("Удалить Calls и сохранённый join-link?"):
             removed = _show_result(

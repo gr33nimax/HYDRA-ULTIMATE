@@ -291,17 +291,22 @@ def _sync_singbox_update(
         log("Sync: Sing-Box update check is disabled by settings")
         return state, []
     try:
-        from hydra.core.singbox import (
-            EXTENDED_REPO,
-            get_version,
-            parse_version,
-        )
+        from hydra.core.singbox import EXTENDED_REPO, get_version, parse_version
+        from hydra.core.state_kernel_models import KERNEL_HYDRACORE
         from hydra.utils.downloader import latest_release
 
         if not _singbox_update_due(state, forced=forced):
             return state, []
         log("Sing-Box Update: Checking for updates...")
-        latest_version = latest_release(EXTENDED_REPO)
+        repository = (
+            "gr33nimax/hydracore"
+            if state.kernel.provider == KERNEL_HYDRACORE
+            else EXTENDED_REPO
+        )
+        latest_version = latest_release(
+            repository,
+            include_prerelease=state.kernel.channel == "preview",
+        )
         if not latest_version or latest_version == "unknown":
             log(
                 "Sing-Box Update: Failed to get latest version from GitHub",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from hydra.core.state_creator_models import HeadlessCreatorConfig
-from hydra.core.state_models import AppState, PluginState
+from hydra.core.state_models import AppState, PluginState, User
 from hydra.services.calls import CallsService
 from hydra.services.creator_sessions import (
     CreatorEndpoint,
@@ -19,12 +19,38 @@ class Runtime:
         self.new_link = "https://vk.com/call/join/new-room"
         self.handoff = True
         self.remove_error: Exception | None = None
+        self.multi = False
+        self.links: list[str] = []
+        self.tokens: list[str] = []
 
     def feature_supported(self):
         return self.supported
 
+    def multi_user_supported(self):
+        return self.multi
+
+    def ensure_creator_installed(self):
+        return True, "installed"
+
     def load_native_join_link(self):
         return self.link
+
+    def load_native_join_links(self):
+        return list(self.links)
+
+    def load_native_join_tokens(self):
+        return list(self.tokens)
+
+    def snapshot_native_pool(self):
+        return (list(self.links), list(self.tokens))
+
+    def restore_native_pool(self, snapshot):
+        self.links, self.tokens = snapshot
+
+    def uninstall_native_pool(self):
+        self.links = []
+        self.tokens = []
+        return True, "removed"
 
     def write_native_join_link(self, link):
         self.link = link
@@ -46,12 +72,26 @@ class Creator:
     def __init__(self, runtime: Runtime) -> None:
         self.runtime = runtime
         self.closed = False
+        self.committed = False
+        self.finalized = False
+        self.rolled_back = False
 
     def availability(self, provider):
         assert provider == "vk"
         return CreatorProviderAvailability(True, True)
 
     def create(self, request):
+        if request.lifetime == "managed":
+            endpoints = tuple(
+                CreatorEndpoint(
+                    f"https://vk.com/call/join/room-{index}",
+                    f"room-{index}",
+                )
+                for index in range(1, request.count + 1)
+            )
+            self.runtime.links = [endpoint.uri for endpoint in endpoints]
+            self.runtime.tokens = [endpoint.token for endpoint in endpoints]
+            return CreatorSessionGroup(request, endpoints)
         return CreatorSessionGroup(
             request,
             (CreatorEndpoint(self.runtime.new_link, "new-room"),),
@@ -59,6 +99,21 @@ class Creator:
 
     def close(self, group):
         self.closed = True
+
+    def commit(self, group):
+        self.committed = True
+
+    def finalize(self, group):
+        self.finalized = True
+
+    def rollback(self, group):
+        self.rolled_back = True
+
+    def stop_managed(self, provider, consumer):
+        assert (provider, consumer) == ("vk", "calls")
+        self.runtime.links = []
+        self.runtime.tokens = []
+        return True, "stopped"
 
 
 class Protocols:
@@ -210,6 +265,79 @@ def test_admin_client_profile_is_fixed_joiner_json() -> None:
         "join_link": runtime.link,
     }]
     assert config["route"]["final"] == "call-vk-out"
+
+
+def test_hydracore_enable_creates_managed_pool_and_multi_user_state() -> None:
+    runtime = Runtime()
+    runtime.multi = True
+    state = AppState(
+        users=[User(email="alice@example.com", uuid="alice")],
+    )
+    state.network.server_ip = "203.0.113.10"
+    state.kernel.provider = "hydracore"
+    protocols = Protocols()
+    service, creator = _service(runtime, protocols)
+
+    result = service.enable_native_vk(state)
+
+    assert result
+    assert result.value["mode"] == "multi_user"
+    assert result.value["rooms"] == 4
+    assert state.protocols["calls"].config["mode"] == "multi_user"
+    assert state.protocols["calls"].config["listen_port"] == 56002
+    assert len(state.protocols["calls"].config["obfs_password"]) >= 32
+    assert creator.committed is True
+    assert creator.finalized is True
+    assert creator.closed is False
+
+
+def test_hydracore_enable_rejects_duplicate_managed_rooms() -> None:
+    runtime = Runtime()
+    runtime.multi = True
+    state = AppState(users=[User(email="alice@example.com", uuid="alice")])
+    state.kernel.provider = "hydracore"
+    service, creator = _service(runtime)
+
+    def duplicate_pool(request):
+        endpoint = CreatorEndpoint(
+            "https://vk.com/call/join/duplicate",
+            "duplicate",
+        )
+        endpoints = tuple(endpoint for _ in range(request.count))
+        runtime.links = [item.uri for item in endpoints]
+        return CreatorSessionGroup(request, endpoints)
+
+    creator.create = duplicate_pool
+
+    result = service.enable_native_vk(state)
+
+    assert not result
+    assert "incomplete Calls room pool" in result.error.message
+    assert creator.committed is False
+    assert creator.rolled_back is True
+    assert "calls" not in state.protocols
+
+
+def test_selected_hydracore_fails_closed_without_exact_multi_user_contract() -> None:
+    runtime = Runtime()
+    state = AppState()
+    state.kernel.provider = "hydracore"
+    saves: list[AppState] = []
+    applies: list[AppState] = []
+    service, creator = _service(
+        runtime,
+        saves=saves,
+        apply=lambda current: applies.append(current) or True,
+    )
+
+    result = service.enable_native_vk(state)
+
+    assert not result
+    assert "exact call_vk_multi_user" in result.error.message
+    assert creator.committed is False
+    assert "calls" not in state.protocols
+    assert saves == []
+    assert applies == []
 
 
 def test_uninstall_removes_calls_and_link_but_preserves_shared_creator_state() -> None:

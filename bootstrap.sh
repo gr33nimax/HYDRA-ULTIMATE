@@ -161,8 +161,28 @@ fi
 # Дополнительные пакеты
 $PKG_INSTALL iptables iproute2 gnupg ca-certificates certbot ufw
 
-step 3 5 "Sing-Box Extended"
-if ! command -v sing-box &> /dev/null || ! sing-box version 2>/dev/null | head -1 | grep -q "extended"; then
+step 3 5 "Совместимое ядро"
+HYDRA_SELECTED_KERNEL=$(python3 - <<'PY'
+import json
+try:
+    with open("/var/lib/hydra/state.json", encoding="utf-8") as source:
+        print(json.load(source).get("kernel", {}).get("provider", ""))
+except (OSError, TypeError, ValueError):
+    print("")
+PY
+)
+if [[ "$HYDRA_SELECTED_KERNEL" == "hydracore" ]]; then
+    command -v sing-box &> /dev/null || {
+        err "State выбирает Hydracore, но binary отсутствует; используйте hydra kernel switch hydracore"
+        exit 1
+    }
+    info "Hydracore выбран в state; bootstrap не заменяет custom core"
+    ok "Ядро сохранено: $(sing-box version 2>/dev/null | head -1)"
+elif command -v sing-box &> /dev/null \
+    && sing-box version 2>/dev/null | head -1 | grep -qi "hydracore"; then
+    info "Обнаружен Hydracore; bootstrap не заменяет custom core"
+    ok "Ядро сохранено: $(sing-box version 2>/dev/null | head -1)"
+elif ! command -v sing-box &> /dev/null || ! sing-box version 2>/dev/null | head -1 | grep -q "extended"; then
     info "Установка sing-box-extended..."
     ARCH=$(uname -m)
     case "$ARCH" in

@@ -112,6 +112,24 @@ def _add_upgrade(root: argparse._SubParsersAction) -> None:
     )
 
 
+def _add_kernel(root: argparse._SubParsersAction) -> None:
+    kernel = root.add_parser("kernel", help="Inspect or switch the managed core")
+    commands = _subcommands(kernel, dest="kernel_action", title="kernel")
+    _command(commands, "status", "Show desired and active core", "kernel.status")
+    switch = _command(
+        commands,
+        "switch",
+        "Download, verify and transactionally activate a core",
+        "kernel.switch",
+    )
+    switch.add_argument(
+        "provider",
+        choices=("sing-box-extended", "hydracore"),
+    )
+    switch.add_argument("--channel", choices=("stable", "preview"), default="stable")
+    switch.add_argument("--force", action="store_true")
+
+
 def _add_user(root: argparse._SubParsersAction) -> None:
     user = root.add_parser("user", aliases=["users"], help="Manage users")
     commands = _subcommands(user, dest="user_action", title="users")
@@ -291,6 +309,7 @@ def parser() -> CliArgumentParser:
     _add_user(commands)
     _add_plugin(commands)
     _add_upgrade(commands)
+    _add_kernel(commands)
     uninstall = _command(
         commands,
         "uninstall",

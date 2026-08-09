@@ -20,6 +20,8 @@ PUBLIC_COMMAND_IDS = {
     "backup.restore",
     "upgrade.check",
     "upgrade.migrate-state",
+    "kernel.status",
+    "kernel.switch",
     "user.list",
     "user.show",
     "user.add",

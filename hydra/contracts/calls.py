@@ -11,7 +11,11 @@ class CallConfigSource(Protocol):
 
     def load_native_join_link(self) -> str: ...
 
+    def load_native_join_links(self) -> list[str]: ...
+
     def feature_supported(self) -> bool: ...
+
+    def multi_user_supported(self) -> bool: ...
 
     def singbox_running(self) -> bool: ...
 
@@ -25,7 +29,13 @@ class UnavailableCallConfigSource:
     def load_native_join_link(self) -> str:
         return ""
 
+    def load_native_join_links(self) -> list[str]:
+        return []
+
     def feature_supported(self) -> bool:
+        return False
+
+    def multi_user_supported(self) -> bool:
         return False
 
     def singbox_running(self) -> bool:

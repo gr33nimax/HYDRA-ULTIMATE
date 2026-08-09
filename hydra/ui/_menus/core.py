@@ -55,6 +55,7 @@ def run_core_menu(
         state = app.admin.load_state()
         deps.clear()
         diagnostics = app.admin.singbox_diagnostics()
+        kernel_status = app.kernel.status(state)
         installed = diagnostics.installed
         running = diagnostics.running
         version = diagnostics.version
@@ -78,6 +79,8 @@ def run_core_menu(
                     f"{'запущен' if running else 'остановлен'}",
                 ),
                 deps.kv("Версия:", version_text),
+                deps.kv("Провайдер:", kernel_status.runtime.provider),
+                deps.kv("Канал:", state.kernel.channel),
                 deps.kv(
                     "Конфиг:",
                     f"{deps.dim}/etc/sing-box/config.json{deps.reset}",
@@ -92,10 +95,10 @@ def run_core_menu(
         items = [
             (
                 "1",
-                "📦 Установить Sing-Box Extended"
+                "📦 Установить выбранное ядро"
                 if not installed
                 else "🔄 Переустановить",
-                "shtorm-7/sing-box-extended",
+                state.kernel.provider,
             ),
             (
                 "2",
@@ -119,6 +122,17 @@ def run_core_menu(
             ),
         ]
 
+        other_provider = (
+            "hydracore"
+            if state.kernel.provider == "sing-box-extended"
+            else "sing-box-extended"
+        )
+        items.append((
+            "7",
+            f"⇄ Переключить ядро на {other_provider}",
+            "Проверка digest, config-check, health и автоматический rollback",
+        ))
+
         if installed:
             if update_available:
                 items.append(
@@ -126,7 +140,7 @@ def run_core_menu(
                         "6",
                         "🆙 Установить обновление",
                         "Доступна версия "
-                        f"sing-box-extended {latest_version}",
+                        f"{state.kernel.provider} {latest_version}",
                     ),
                 )
             else:
@@ -134,7 +148,7 @@ def run_core_menu(
                     (
                         "X",
                         "🆙 Установить обновления",
-                        "Установлена последняя версия sing-box-extended",
+                        f"Установлена последняя версия {state.kernel.provider}",
                     ),
                 )
         items.append(("0", "↩ Назад", ""))
@@ -164,8 +178,19 @@ def _handle_core_choice(
     update_available: bool,
 ) -> None:
     if choice == "1":
-        deps.info("Устанавливаю Sing-Box...")
-        if app.admin.install_singbox(force=installed):
+        deps.info(f"Устанавливаю {state.kernel.provider}...")
+        try:
+            result = app.kernel.switch(
+                state,
+                state.kernel.provider,
+                channel=state.kernel.channel,
+                force=installed,
+            )
+        except Exception as exc:
+            deps.error(str(exc) or exc.__class__.__name__)
+            deps.prompt("Нажмите Enter")
+            return
+        if result.ok:
             deps.success(
                 f"Sing-Box {app.admin.singbox_diagnostics().version} установлен",
             )
@@ -183,7 +208,18 @@ def _handle_core_choice(
         deps.prompt("Нажмите Enter")
     elif choice == "6" and installed and update_available:
         deps.info("Устанавливаю обновление Sing-Box...")
-        ok, message = app.admin.update_singbox()
+        try:
+            result = app.kernel.switch(
+                state,
+                state.kernel.provider,
+                channel=state.kernel.channel,
+                force=True,
+            )
+        except Exception as exc:
+            deps.error(str(exc) or exc.__class__.__name__)
+            deps.prompt("Нажмите Enter")
+            return
+        ok, message = result.ok, result.message
         if ok:
             deps.success(message)
             if app.apply(state):
@@ -197,6 +233,29 @@ def _handle_core_choice(
                 )
         else:
             deps.error(message)
+        deps.prompt("Нажмите Enter")
+    elif choice == "7":
+        provider = (
+            "hydracore"
+            if state.kernel.provider == "sing-box-extended"
+            else "sing-box-extended"
+        )
+        if not confirm(
+            f"Переключить рабочее ядро на {provider}?",
+            default=False,
+        ):
+            return
+        deps.info(f"Проверяю и устанавливаю {provider}...")
+        try:
+            result = app.kernel.switch(state, provider, channel="stable")
+        except Exception as exc:
+            deps.error(str(exc) or exc.__class__.__name__)
+            deps.prompt("Нажмите Enter")
+            return
+        if result.ok:
+            deps.success(result.message)
+        else:
+            deps.error(result.message or "Не удалось переключить ядро")
         deps.prompt("Нажмите Enter")
     elif choice == "2":
         if running:

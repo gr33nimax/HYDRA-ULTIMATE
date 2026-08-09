@@ -20,14 +20,13 @@ from hydra.core.state import load_state
 from hydra.core.state_models import AppState, PluginState
 from hydra.core.host import HOST
 from hydra.core.singbox_config_security import redacted_debug_config
-from hydra.core import singbox_config, singbox_units
+from hydra.core import singbox_config, singbox_service, singbox_units
 from hydra.core.singbox_upgrade import (
     UpgradeOperations,
     migrate_runtime_dns_config,
     parse_version,
     upgrade_kernel,
 )
-from hydra.core.singbox_service import failure_detail
 from hydra.utils.commands import redact_text
 
 SINGBOX_BIN = Path("/usr/local/bin/sing-box")
@@ -85,22 +84,7 @@ def _run(cmd: list, capture: bool = True, timeout: int = 30) -> subprocess.Compl
 
 
 def validate_current_config() -> tuple[bool | None, str]:
-    """Validate the installed config without exposing private process helpers."""
-    if not SINGBOX_CONFIG.exists():
-        return None, ""
-    binary = _find_singbox()
-    if binary is None:
-        return None, ""
-    try:
-        checked = _run(
-            [str(binary), "check", "-c", str(SINGBOX_CONFIG)],
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return False, str(exc)
-    if checked.returncode == 0:
-        return True, ""
-    output = str(checked.stderr or checked.stdout or "unknown error").strip()
-    return False, redact_text(output.splitlines()[-1] if output else "unknown error")
+    return singbox_service.inspect_current_config(SINGBOX_CONFIG, _find_singbox, _run)
 
 
 def preflight_conflicts(config: dict) -> list[str]:
@@ -135,9 +119,24 @@ def get_version() -> Optional[str]:
 EXTENDED_REPO = "shtorm-7/sing-box-extended"
 
 
+def _custom_kernel_selected() -> bool:
+    """Keep legacy install/update entrypoints from replacing a custom core."""
+    return singbox_service.custom_kernel_selected(get_version(), load_state)
+
+
 def install(force: bool = False) -> bool:
     """Устанавливает sing-box-extended из GitHub releases."""
     _set_error("")
+    if _custom_kernel_selected():
+        if is_installed():
+            return True
+        message = (
+            "Hydracore is selected; use the kernel switch service instead of "
+            "the legacy Sing-Box Extended installer"
+        )
+        _set_error(message)
+        _log("WARNING", message)
+        return False
     if not force and is_installed() and "extended" in (get_version() or "").lower():
         return True
 
@@ -402,7 +401,7 @@ def stop() -> bool:
 
 def _service_failure_detail() -> str:
     """Return a short systemd journal detail suitable for TUI and logs."""
-    return failure_detail(_run)
+    return singbox_service.failure_detail(_run)
 
 
 def wait_until_stable(checks: int = 3, interval: float = 0.5) -> bool:
@@ -448,15 +447,7 @@ def is_running() -> bool:
 
 
 def has_configured_inbound(tag: str) -> bool:
-    """Return whether the applied Sing-Box artifact contains an inbound tag."""
-    try:
-        config = json.loads(SINGBOX_CONFIG.read_text(encoding="utf-8"))
-    except (OSError, TypeError, ValueError):
-        return False
-    return any(
-        isinstance(inbound, dict) and inbound.get("tag") == tag
-        for inbound in config.get("inbounds", [])
-    )
+    return singbox_service.configured_inbound_exists(SINGBOX_CONFIG, tag)
 
 
 def enable_autostart() -> None:
@@ -480,6 +471,11 @@ def status_text() -> str:
 
 def update_kernel() -> tuple[bool, str]:
     """Update Sing-Box through the isolated transactional upgrade service."""
+    if _custom_kernel_selected():
+        return (
+            False,
+            "Hydracore is selected; update it through the provider-aware kernel switch",
+        )
     return upgrade_kernel(
         target_binary=SINGBOX_BIN,
         config_path=SINGBOX_CONFIG,
