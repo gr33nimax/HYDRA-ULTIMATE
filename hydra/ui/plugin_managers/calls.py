@@ -35,8 +35,8 @@ def _status_panel(state: AppState, app: ApplicationService) -> None:
         running=status.native_running,
         details=[
             ("Платформа", "VK"),
-            ("Режим", getattr(status, "native_mode", "p2p")),
-            ("Комната", "создана" if status.native_link_ready else "отсутствует"),
+            ("Режим", getattr(status, "native_mode", "multi_user")),
+            ("Пул", "готов" if status.native_pool_ready else "отсутствует"),
             ("Комнат в пуле", str(getattr(status, "room_count", 0))),
         ],
     )
@@ -58,14 +58,14 @@ def _show_profile(state: AppState, app: ApplicationService) -> None:
 def _menu_options(*, installed: bool) -> list[tuple[str, str, str]]:
     if not installed:
         return [
-            ("1", "🔧 Установить", "Создать VK-комнату и запустить Calls"),
+            ("1", "🔧 Установить", "Создать пул из 1–4 VK-комнат и запустить Calls"),
             ("0", "↩ Назад", ""),
         ]
     return [
-        ("1", "🔄 Переустановить", "Пересоздать VK-комнату с rollback"),
+        ("1", "🔄 Переустановить", "Пересоздать VK-пул с rollback"),
         ("2", "📄 Показать admin-профиль", "Секретный клиентский JSON"),
         ("3", "🔢 Число VK-комнат", "От 1 до 4; применяется при переустановке"),
-        ("9", "❌ Удалить", "Удалить Calls и сохранённый join-link"),
+        ("9", "❌ Удалить", "Удалить Calls и сохранённые join-links"),
         ("0", "↩ Назад", ""),
     ]
 
@@ -76,7 +76,7 @@ def _dispatch(choice: str, state: AppState, app: ApplicationService) -> bool:
         return False
     if choice == "1" and not desired.installed:
         _show_result(app.calls.enable_native_vk(state), "Calls · VK установлен")
-    elif choice == "1" and confirm("Переустановить Calls и пересоздать VK-комнату?"):
+    elif choice == "1" and confirm("Переустановить Calls и пересоздать VK-пул?"):
         _show_result(app.calls.reinstall_native_vk(state), "Calls · VK переустановлен")
     elif choice == "2" and desired.installed:
         _show_profile(state, app)
@@ -92,7 +92,7 @@ def _dispatch(choice: str, state: AppState, app: ApplicationService) -> bool:
                 "Число комнат сохранено; переустановите Calls для ротации пула",
             )
     elif choice == "9" and desired.installed:
-        if confirm("Удалить Calls и сохранённый join-link?"):
+        if confirm("Удалить Calls и сохранённые join-links?"):
             removed = _show_result(
                 app.calls.uninstall_native_vk(state),
                 "Calls · VK удалён",

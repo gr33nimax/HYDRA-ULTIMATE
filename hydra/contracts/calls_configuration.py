@@ -1,11 +1,10 @@
-"""Validated legacy and Hydracore multi-user VK Calls projections."""
+"""Validated Hydracore multi-user VK Calls projections."""
 from __future__ import annotations
 
 import re
 from typing import Callable, Mapping, Protocol, Sequence
 
 
-CALL_MODE_P2P = "p2p"
 CALL_MODE_MULTI_USER = "multi_user"
 DEFAULT_CALL_PORT = 56002
 DEFAULT_ROOM_COUNT = 4
@@ -39,9 +38,13 @@ class CallsStateAccess(Protocol):
 
 def call_mode(state: CallsStateAccess) -> str:
     desired = state.protocols.get("calls")
-    value = str(desired.config.get("mode", CALL_MODE_P2P)) if desired else CALL_MODE_P2P
-    if value not in {CALL_MODE_P2P, CALL_MODE_MULTI_USER}:
-        raise ValueError("Calls mode must be p2p or multi_user")
+    value = (
+        str(desired.config.get("mode", CALL_MODE_MULTI_USER))
+        if desired
+        else CALL_MODE_MULTI_USER
+    )
+    if value != CALL_MODE_MULTI_USER:
+        raise ValueError("Calls mode must be multi_user")
     return value
 
 
@@ -206,7 +209,6 @@ def multi_user_outbound(
 
 __all__ = [
     "CALL_MODE_MULTI_USER",
-    "CALL_MODE_P2P",
     "DEFAULT_CALL_PORT",
     "DEFAULT_ROOM_COUNT",
     "MAX_JOIN_LINKS",

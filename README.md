@@ -117,29 +117,29 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 | **Mieru** | `2012–2022/tcp` | обфусцированный mTLS |
 | **Snell v4** | `32000–32999/tcp` | TCP/UDP-прокси |
 | **MTProto / Telemt** | `8443/tcp` | Telegram MTProxy |
-| **Calls · VK** | `56002/udp` в multi-user | Native `call`: legacy P2P или Hydracore multi-user |
+| **Calls · VK** | `56002/udp` | Native Hydracore `call` в режиме multi-user |
 | **qWDTT** | `56000/udp`, `56001/udp` | WireGuard поверх TURN |
 
-Транспорт **Calls · VK** имеет два совместимых режима. Sing-Box Extended
-сохраняет legacy `p2p`: сервер сам входит в одну комнату. Выбранный Hydracore
-включает `multi_user`: сервер слушает обычный UDP endpoint, а отдельный
+Транспорт **Calls · VK** поддерживает только Hydracore `multi_user`. Сервер
+слушает обычный UDP endpoint, а отдельный
 аутентифицированный поток каждого пользователя распределяется по пулу из 1–4
 VK-комнат (4 по умолчанию). Общий obfs key снимает O(N)-перебор паролей с
 каждого пакета; после O(1) unwrap проверяется только найденный пользователь.
 Один worker создаётся на комнату по умолчанию; явное значение ограничено
 минимумом из server session cap, 27 workers на каждую уникальную join-link и
-общего потолка 108. Конфигурации legacy пути следуют официальным примерам
-[creator](https://github.com/shtorm-7/sing-box-extended/blob/v1.13.16-extended-2.6.2/examples/call/vk/creator.json),
-[joiner](https://github.com/shtorm-7/sing-box-extended/blob/v1.13.16-extended-2.6.2/examples/call/vk/joiner.json)
-и [Call options](https://github.com/shtorm-7/sing-box-extended/blob/v1.13.16-extended-2.6.2/option/call.go).
-Перед включением HYDRA читает `sing-box hydra capabilities --json`. Legacy path
-создаёт transient-комнату и ждёт handoff. Multi-user path поднимает отдельный
+общего потолка 108. Перед включением HYDRA требует выбранный Hydracore и точный
+контракт `sing-box hydra capabilities --json` с `call_vk_multi_user=true` и
+режимом `multi_user`. Stock core и legacy `p2p` отклоняются до запуска creator.
+Calls поднимает отдельный
 blue/green creator-пул `hydra-headless-creator-vk-calls@{a,b}-N`, фиксирует
 его до apply и при любой ошибке восстанавливает прежние комнаты, state и
-runtime. После переключения ядра уже установленный legacy Calls остаётся в
-`p2p` до явной переустановки Calls — kernel switch сам не создаёт VK-комнаты.
-Per-user outbound входит только в зашифрованную Hydra Subscription v2;
-legacy subscriptions по-прежнему его не публикуют.
+runtime. Per-user outbound входит только в зашифрованную Hydra Subscription v2;
+его Sing-Box outbound содержит `join_links`, но никогда legacy-поле `join_link`.
+Admin DTO сохраняет singular alias первого элемента только для API-совместимости.
+При обновлении schema 10 → 11 legacy Calls безопасно остаётся установленным,
+но выключается и нормализуется в `multi_user`, чтобы общий apply продолжил
+обслуживать остальные протоколы. После switch на Hydracore переустановка Calls
+создаёт новый managed-пул.
 
 Ядро выбирается явно и транзакционно:
 
@@ -163,8 +163,8 @@ GitHub `asset.digest`, проверяет ELF, identity/capabilities и акти
 привязки к протоколам. Единственный VK cookie-файл —
 `/etc/hydra/cookiesvk/cookies-vk.json`. Native Calls и qWDTT используют его
 совместно; размер qWDTT-пула настраивается от 1 до 16 комнат (по умолчанию 4).
-Общий контракт `CreatorSessionManager` выдаёт legacy Calls одну
-transient-сессию, Hydracore Calls — отдельную managed-группу до 4 сессий, а
+Общий контракт `CreatorSessionManager` выдаёт Calls отдельную managed-группу
+до 4 сессий, а
 qWDTT — свою managed-группу из N сессий. Ротация использует два поколения creator,
 поэтому прежняя master-ссылка остаётся рабочей до публикации новой. WDTT отвечает
 только за сервер, пароли и формирование `qwdtt://` из упорядоченного списка
@@ -175,7 +175,7 @@ Creator содержит только установку, переход к qWDT
 создание/остановку комнат, размер пула, автообновление и его интервал.
 
 > [!WARNING]
-> VK join-link и полный клиентский профиль — shared secret. HYDRA редактирует
+> VK join-links и полный клиентский профиль — shared secret. HYDRA редактирует
 > ссылку в своих log-проекциях, но upstream Sing-Box сейчас пишет её в INFO
 > journald; доступ к сырому `journalctl -u sing-box` должен быть ограничен.
 

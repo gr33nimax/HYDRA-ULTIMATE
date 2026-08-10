@@ -85,18 +85,39 @@ def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
     valid = {
         "identity": {"core_id": "io.hydrabox.hydracore"},
         "features": {"call_vk_multi_user": True},
-        "protocols": {"call_modes": ["p2p", "multi_user"]},
+        "protocols": {"call_modes": ["multi_user"]},
     }
     alias = {
         "identity": {"core_id": "io.hydrabox.hydracore"},
         "features": {"call_vk_multiuser": True},
-        "protocols": {"call_modes": ["p2p", "multi_user"]},
+        "protocols": {"call_modes": ["multi_user"]},
+    }
+    p2p_only = {
+        "identity": {"core_id": "io.hydrabox.hydracore"},
+        "features": {"call_vk_multi_user": True},
+        "protocols": {"call_modes": ["p2p"]},
     }
 
     assert KernelInfrastructure._has_hydracore_contract(valid) is True
     assert KernelInfrastructure._has_hydracore_contract(alias) is False
+    assert KernelInfrastructure._has_hydracore_contract(p2p_only) is False
     assert "call_vk_multi_user" in KernelInfrastructure._normalized_capabilities(valid)
     assert "call_vk_multi_user" not in KernelInfrastructure._normalized_capabilities(alias)
+
+
+def test_kernel_service_rejects_stock_switch_before_mutating_active_calls() -> None:
+    runtime = Runtime()
+    state = AppState(protocols={
+        "calls": SimpleNamespace(enabled=True),
+    })
+    state.kernel.provider = KERNEL_HYDRACORE
+    service = KernelService(runtime, save_state=lambda _state: None)
+
+    with pytest.raises(ValueError, match="disable or uninstall Calls"):
+        service.switch(state, KERNEL_SINGBOX_EXTENDED)
+
+    assert runtime.prepared is None
+    assert state.kernel.provider == KERNEL_HYDRACORE
 
 
 def test_kernel_probe_uses_runtime_legacy_dns_environment(tmp_path) -> None:

@@ -38,17 +38,18 @@
 | `shadowtls` | ShadowTLS | ShadowTLS v3 с Trojan detour |
 | `snell` | Snell v4 | TCP/UDP-прокси из Sing-Box Extended |
 | `telemt` | MTProto / Telemt | Telegram MTProxy с управлением пользователями |
-| `calls` | Calls · VK | Native `call`: Sing-Box Extended P2P или Hydracore multi-user |
+| `calls` | Calls · VK | Native `call`: только Hydracore multi-user |
 | `wdtt` | qWDTT | WireGuard-туннелирование поверх TURN |
 
 `ApplicationService.headless_creator` владеет установкой provider drivers и их
 credentials. qWDTT отдельно владеет managed-пулом от 1 до 16 комнат (4 по
 умолчанию). Единственный Creator JSON помещается в
 `/etc/hydra/cookiesvk/cookies-vk.json` (`0600`). `ApplicationService.calls`
-владеет native link/pool, клиентскими профилями и lifecycle транспорта.
-Capability probe `sing-box hydra capabilities --json` выбирает путь. P2P
-фиксирует transient-ссылку и ждёт handoff. Multi-user Hydracore поднимает 1–4
-комнаты отдельными blue/green units, а `sing-box.service` сам в VK не входит:
+владеет отдельным pool, клиентскими профилями и lifecycle транспорта.
+Capability probe `sing-box hydra capabilities --json` обязан подтвердить exact
+Hydracore identity, `call_vk_multi_user` и режим `multi_user`; stock/P2P не
+имеют operational fallback. Calls поднимает 1–4 комнаты отдельными blue/green
+units, а `sing-box.service` сам в VK не входит:
 он принимает workers на `56002/udp`, делает O(1) lookup пользователя и
 агрегирует их в одну сессию. Failure восстанавливает старое поколение, desired
 state и runtime.
@@ -144,11 +145,15 @@ selectable entrypoints. Пользовательское имя профиля �
 12-байтовый IV и 16-байтовый authentication tag и публикуется с
 `Cache-Control: private, no-store`.
 
-Если native `calls` включён и join-link готов, плагин добавляет отдельный
-resource с outbound `type=call`, `platform=vk`, `read_buffer` и `join_link`.
-Resource запрашивает ровно `network.outbound`, объявляет core feature `call` и
-не публикует серверные VK cookies. Отсутствующий join-link завершает генерацию
-fail-closed, а не создаёт неполный профиль. qWDTT при этом исключён отдельно:
+Если native `calls` включён и managed-пул готов, плагин добавляет отдельный
+resource с outbound `type=call`, `platform=vk`, `mode=multi_user`, endpoint,
+per-user credentials и `join_links`. Singular `join_link` не генерируется в
+resource/outbound; admin DTO сохраняет первый link под старым именем только как
+compatibility metadata.
+Resource запрашивает ровно `network.outbound`, объявляет core features `call`
+и `call_vk_multi_user` и не публикует серверные VK cookies. Отсутствующий пул
+завершает генерацию fail-closed, а не создаёт неполный профиль. qWDTT при этом
+исключён отдельно:
 его общий master-артефакт и главный пароль никогда не читаются Hydra v2
 renderer и не попадают в per-user подписку.
 
@@ -261,7 +266,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/etc/telemt/telemt.toml` | Конфигурация MTProto-прокси |
 | `/etc/hydra/cookiesvk/` | Единый закрытый каталог провайдера VK; права `0700` |
 | `/etc/hydra/cookiesvk/cookies-vk.json` | Общий VK Creator JSON для native Calls и qWDTT; файл `0600`, не входит в state |
-| `/var/lib/hydra/calls/vk/native.join` | Зафиксированный native VK join-link; файл `0600`, не входит в state |
+| `/var/lib/hydra/calls/vk/native.join` | Только legacy-артефакт для cleanup при uninstall; новый Calls его не создаёт и не читает |
 | `/var/lib/hydra/calls/vk/pool/` | Multi-user Calls metadata и join-links двух поколений; `0700/0600` |
 | `/var/lib/hydra/headless-creator/vk/qwdtt/` | Закрытый runtime-каталог поколений creator и `state.json`; права `0700` |
 | `/etc/wdtt/qwdtt_link.txt` | Единственная master qWDTT-ссылка с актуальным упорядоченным списком хешей |
@@ -431,7 +436,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 
 ## Схема persisted state
 
-В текущей ветке `dev` актуальна схема **10**. Корень `state.json`:
+В текущей ветке `dev` актуальна схема **11**. Корень `state.json`:
 
 | Поле | Тип | Содержание |
 | :--- | :--- | :--- |
@@ -477,8 +482,11 @@ state не хранятся.
 `legacy_creator_reinstall_required`; старые units и runtime не изменяются до
 явного `Создать комнаты` в qWDTT-подменю TUI `Headless Creator`.
 `v9 → v10` добавляет `kernel={provider:sing-box-extended,channel:stable}` и
-фиксирует отсутствующий `calls.config.mode` как `p2p`; host binary и units эта
-чистая миграция не меняет.
+исторически фиксирует отсутствующий `calls.config.mode` как `p2p`. Следующая
+чистая миграция `v10 → v11` переводит Calls в `multi_user`, удаляет legacy
+`read_buffer` и выключает несовместимый enabled state, сохраняя installed-флаг
+и все остальные протоколы. Host binary, units и creator-пул миграция не меняет;
+после явного switch на Hydracore переустановка Calls создаёт managed-пул.
 
 `install` хранит служебные отметки фоновых проверок:
 

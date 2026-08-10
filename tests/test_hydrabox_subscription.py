@@ -58,15 +58,18 @@ class _HydraBoxTransport(BasePlugin):
 
 
 class _CallsSource:
-    def __init__(self, link: str, links: list[str] | None = None) -> None:
-        self.link = link
-        self.links = links or []
-
-    def load_native_join_link(self) -> str:
-        return self.link
+    def __init__(self, links: list[str], *, supported: bool = True) -> None:
+        self.links = links
+        self.supported = supported
 
     def load_native_join_links(self) -> list[str]:
         return list(self.links)
+
+    def multi_user_supported(self) -> bool:
+        return self.supported
+
+    def singbox_running(self) -> bool:
+        return True
 
 
 def _plugins(*items: BasePlugin) -> SubscriptionPluginService:
@@ -550,55 +553,7 @@ def test_hydrabox_jwe_rejects_wrong_key_and_kid():
         decrypt_hydrabox_subscription(payload, wrong_key)
 
 
-def test_hydra_v2_subscription_includes_vk_calls_joiner_config():
-    state, user = _state()
-    state.protocols["calls"] = PluginState(
-        installed=True,
-        enabled=True,
-        config={"read_buffer": 65536},
-    )
-    plugin = CallsPlugin(_CallsSource("https://calls.example/join/secret"))
-
-    subscription = generate_hydrabox_subscription(
-        user,
-        state,
-        plugins=_plugins(plugin),
-    )
-
-    resource = subscription["resources"][0]
-    outbound = resource["document"]["outbounds"][0]
-    assert resource["requested_permissions"] == ["network.outbound"]
-    assert outbound == {
-        "type": "call",
-        "tag": "call-vk-out",
-        "platform": "vk",
-        "read_buffer": 65536,
-        "join_link": "https://calls.example/join/secret",
-    }
-    assert subscription["requirements"]["core"]["features"] == ["call"]
-    assert subscription["profiles"][0] == {
-        "id": subscription["default_profile"],
-        "resource": resource["id"],
-        "name": "Calls · VK",
-        "entrypoint": {"section": "outbounds", "tag": "call-vk-out"},
-        "enabled": True,
-    }
-    assert "cookies" not in json.dumps(subscription)
-
-
-def test_hydra_v2_calls_projection_fails_closed_without_join_link():
-    state, user = _state()
-    state.protocols["calls"] = PluginState(installed=True, enabled=True)
-
-    with pytest.raises(ValueError, match="failed to generate calls"):
-        generate_hydrabox_subscription(
-            user,
-            state,
-            plugins=_plugins(CallsPlugin(_CallsSource(""))),
-        )
-
-
-def test_hydra_v2_calls_multi_user_requires_exact_hydracore_feature():
+def test_hydra_v2_subscription_includes_only_multi_user_calls_config():
     state, user = _state()
     state.network.server_ip = "203.0.113.10"
     state.protocols["calls"] = PluginState(
@@ -616,27 +571,88 @@ def test_hydra_v2_calls_multi_user_requires_exact_hydracore_feature():
         "https://vk.com/call/join/one",
         "https://vk.com/call/join/two",
     ]
+    plugin = CallsPlugin(_CallsSource(links))
+
     subscription = generate_hydrabox_subscription(
         user,
         state,
-        plugins=_plugins(CallsPlugin(_CallsSource("", links))),
+        plugins=_plugins(plugin),
     )
 
-    outbound = subscription["resources"][0]["document"]["outbounds"][0]
+    resource = subscription["resources"][0]
+    outbound = resource["document"]["outbounds"][0]
+    assert resource["requested_permissions"] == ["network.outbound"]
     assert outbound["mode"] == "multi_user"
     assert outbound["join_links"] == links
     assert outbound["user"] == user.email
+    assert "join_link" not in outbound
     assert subscription["requirements"]["core"]["features"] == [
         "call",
         "call_vk_multi_user",
     ]
+    assert subscription["profiles"][0] == {
+        "id": subscription["default_profile"],
+        "resource": resource["id"],
+        "name": "Calls · VK",
+        "entrypoint": {"section": "outbounds", "tag": "call-vk-out"},
+        "enabled": True,
+    }
+    assert "cookies" not in json.dumps(subscription)
+
+
+def test_hydra_v2_calls_projection_fails_closed_without_room_pool():
+    state, user = _state()
+    state.network.server_ip = "203.0.113.10"
+    state.protocols["calls"] = PluginState(
+        installed=True,
+        enabled=True,
+        config={"mode": "multi_user", "obfs_password": "o" * 43},
+    )
+
+    with pytest.raises(ValueError, match="failed to generate calls"):
+        generate_hydrabox_subscription(
+            user,
+            state,
+            plugins=_plugins(CallsPlugin(_CallsSource([]))),
+        )
+
+
+def test_hydra_v2_calls_requires_exact_hydracore_feature():
+    state, user = _state()
+    state.network.server_ip = "203.0.113.10"
+    state.protocols["calls"] = PluginState(
+        installed=True,
+        enabled=True,
+        config={
+            "mode": "multi_user",
+            "listen_port": 56002,
+            "obfs_password": "o" * 43,
+            "workers": 2,
+            "max_workers_per_session": 4,
+        },
+    )
+    links = [
+        "https://vk.com/call/join/one",
+        "https://vk.com/call/join/two",
+    ]
+    with pytest.raises(ValueError, match="failed to generate calls"):
+        generate_hydrabox_subscription(
+            user,
+            state,
+            plugins=_plugins(CallsPlugin(_CallsSource(links, supported=False))),
+        )
 
 
 def test_hydra_v2_never_reads_or_publishes_qwdtt_artifacts():
     state, user = _state()
-    state.protocols["calls"] = PluginState(installed=True, enabled=True)
+    state.network.server_ip = "203.0.113.10"
+    state.protocols["calls"] = PluginState(
+        installed=True,
+        enabled=True,
+        config={"mode": "multi_user", "obfs_password": "o" * 43},
+    )
     state.protocols["wdtt"] = PluginState(installed=True, enabled=True)
-    calls = CallsPlugin(_CallsSource("https://calls.example/join/native"))
+    calls = CallsPlugin(_CallsSource(["https://vk.com/call/join/native"]))
     qwdtt = WdttPlugin()
     qwdtt.generate_singbox_client_config = MagicMock(
         side_effect=AssertionError("qWDTT must not enter Hydra v2"),

@@ -1,4 +1,4 @@
-"""Sing-Box Extended native Calls transport configuration."""
+"""Hydracore native multi-user Calls transport configuration."""
 from __future__ import annotations
 
 import json
@@ -18,8 +18,8 @@ from hydra.plugins.base import (
 )
 from hydra.plugins.calls.configuration import (
     CALL_MODE_MULTI_USER,
-    CALL_MODE_P2P,
     DEFAULT_CALL_PORT,
+    DEFAULT_ROOM_COUNT,
     call_mode,
     multi_user_inbound,
     multi_user_outbound,
@@ -28,7 +28,7 @@ from hydra.plugins.context import PluginStateAccess
 
 
 class CallsPlugin(BasePlugin):
-    """Contribute one fixed VK call inbound to the shared Sing-Box runtime."""
+    """Contribute the authenticated VK Calls listener to Hydracore."""
 
     meta = PluginMeta(
         name="calls",
@@ -41,7 +41,11 @@ class CallsPlugin(BasePlugin):
         subscription_enabled=False,
         hydra_v2_subscription_enabled=True,
         connection_source="none",
-        config_defaults=(("mode", CALL_MODE_P2P), ("read_buffer", 32768)),
+        config_defaults=(
+            ("mode", CALL_MODE_MULTI_USER),
+            ("room_count", DEFAULT_ROOM_COUNT),
+            ("listen_port", DEFAULT_CALL_PORT),
+        ),
         backup_resources=(
             BackupResource("/var/lib/hydra/calls/vk", "tree", owner="calls"),
             BackupResource(
@@ -56,14 +60,13 @@ class CallsPlugin(BasePlugin):
         self._source = source or UnavailableCallConfigSource()
 
     def install(self) -> bool:
-        return self._source.feature_supported()
+        return self._source.multi_user_supported()
 
     def uninstall(self) -> bool:
         return True
 
     def on_enable(self, state: PluginStateAccess) -> None:
-        if call_mode(state) != CALL_MODE_MULTI_USER:
-            return
+        call_mode(state)
         inbound = multi_user_inbound(state)
         from hydra.utils.firewall import open_udp, port_is_open
 
@@ -72,8 +75,7 @@ class CallsPlugin(BasePlugin):
             open_udp(port, "hydra-calls-vk")
 
     def on_disable(self, state: PluginStateAccess) -> None:
-        if call_mode(state) != CALL_MODE_MULTI_USER:
-            return
+        call_mode(state)
         desired = state.protocols.get(self.meta.name)
         if desired is None:
             return
@@ -88,14 +90,8 @@ class CallsPlugin(BasePlugin):
         desired = state.protocols.get(self.meta.name)
         if desired is None:
             return None
-        mode = call_mode(state)
-        raw_port = desired.config.get("listen_port")
-        if mode == CALL_MODE_MULTI_USER:
-            port = int(multi_user_inbound(state)["listen_port"])
-        elif type(raw_port) is int and 1 <= raw_port <= 65535:
-            port = raw_port
-        else:
-            return None
+        call_mode(state)
+        port = int(multi_user_inbound(state)["listen_port"])
         from hydra.utils.firewall import port_is_open
 
         return {"port": port, "was_open": port_is_open("udp", port)}
@@ -106,7 +102,8 @@ class CallsPlugin(BasePlugin):
             return True
         from hydra.utils.firewall import close_udp, open_udp, port_is_open
 
-        if call_mode(state) == CALL_MODE_MULTI_USER:
+        call_mode(state)
+        if desired.enabled:
             port = int(multi_user_inbound(state)["listen_port"])
             if not port_is_open("udp", port):
                 open_udp(port, "hydra-calls-vk")
@@ -139,16 +136,11 @@ class CallsPlugin(BasePlugin):
     ) -> PluginStatus:
         desired = state.protocols.get(self.meta.name) if state is not None else None
         enabled = bool(desired and desired.enabled)
-        supported = self._source.feature_supported()
-        mode = call_mode(state) if state is not None else CALL_MODE_P2P
+        supported = self._source.multi_user_supported()
+        mode = call_mode(state) if state is not None else CALL_MODE_MULTI_USER
         ready = (
             bool(self._source.load_native_join_links())
-            and self._source.multi_user_supported()
-            if mode == CALL_MODE_MULTI_USER
-            else bool(
-                self._source.load_native_join_link()
-                and self._source.load_vk_cookies()
-            )
+            and supported
         )
         running = bool(enabled and ready and self._source.singbox_running())
         return PluginStatus(
@@ -162,96 +154,43 @@ class CallsPlugin(BasePlugin):
         desired = state.protocols.get(self.meta.name)
         if desired is None or not desired.enabled:
             return ConfigFragment()
-        mode = call_mode(state)
-        if mode == CALL_MODE_MULTI_USER:
-            if not self._source.multi_user_supported():
-                raise ValueError("installed core does not support VK Calls multi_user")
-            return ConfigFragment(inbounds=[multi_user_inbound(state)])
-        cookies = self._source.load_vk_cookies()
-        join_link = self._source.load_native_join_link()
-        if not cookies:
-            raise ValueError("VK cookies are not configured")
-        if not join_link:
-            raise ValueError("native VK call join link is not configured")
-        read_buffer = int(desired.config.get("read_buffer", 32768))
-        if not 4096 <= read_buffer <= 4 * 1024 * 1024:
-            raise ValueError("Calls read_buffer must be between 4096 and 4194304")
-        return ConfigFragment(
-            inbounds=[
-                {
-                    "type": "call",
-                    "tag": "calls-vk-in",
-                    "platform": "vk",
-                    "read_buffer": read_buffer,
-                    "cookies": cookies,
-                    "join_link": join_link,
-                },
-            ],
-        )
+        call_mode(state)
+        if not self._source.multi_user_supported():
+            raise ValueError("installed core does not support VK Calls multi_user")
+        return ConfigFragment(inbounds=[multi_user_inbound(state)])
 
     def generate_client_config(self, user, state: PluginStateAccess) -> str:
         """Return the remote-safe VK Calls joiner used by subscriptions."""
         desired = state.protocols.get(self.meta.name)
         if desired is None or not desired.enabled:
             return ""
-        mode = call_mode(state)
-        if mode == CALL_MODE_MULTI_USER:
-            outbound = multi_user_outbound(
-                user,
-                state,
-                self._source.load_native_join_links(),
-            )
-            return json.dumps({
-                "outbounds": [outbound],
-                "route": {"final": outbound["tag"]},
-            }, ensure_ascii=False, separators=(",", ":"))
-        join_link = self._source.load_native_join_link()
-        if not join_link:
-            raise ValueError("native VK call join link is not configured")
-        read_buffer = int(desired.config.get("read_buffer", 32768))
-        if not 4096 <= read_buffer <= 4 * 1024 * 1024:
-            raise ValueError(
-                "Calls read_buffer must be between 4096 and 4194304",
-            )
+        call_mode(state)
+        if not self._source.multi_user_supported():
+            raise ValueError("installed core does not support VK Calls multi_user")
+        outbound = multi_user_outbound(
+            user,
+            state,
+            self._source.load_native_join_links(),
+        )
         return json.dumps({
-            "outbounds": [{
-                "type": "call",
-                "tag": "call-vk-out",
-                "platform": "vk",
-                "read_buffer": read_buffer,
-                "join_link": join_link,
-            }],
-            "route": {"final": "call-vk-out"},
+            "outbounds": [outbound],
+            "route": {"final": outbound["tag"]},
         }, ensure_ascii=False, separators=(",", ":"))
 
     def healthcheck_for_state(self, state: PluginStateAccess) -> HealthResult:
         desired = state.protocols.get(self.meta.name)
         if desired is None or not desired.enabled:
             return HealthResult(True)
-        mode = call_mode(state)
-        if mode == CALL_MODE_MULTI_USER:
-            checks = {
-                "feature_supported": self._source.multi_user_supported(),
-                "join_links_ready": bool(self._source.load_native_join_links()),
-                "singbox_running": self._source.singbox_running(),
-            }
-            healthy = all(checks.values())
-            return HealthResult(
-                healthy,
-                "" if healthy else "native VK Calls multi-user prerequisites are not ready",
-                "ok" if healthy else "error",
-                checks,
-            )
+        call_mode(state)
         checks = {
-            "feature_supported": self._source.feature_supported(),
-            "cookies_ready": bool(self._source.load_vk_cookies()),
-            "join_link_ready": bool(self._source.load_native_join_link()),
+            "feature_supported": self._source.multi_user_supported(),
+            "join_links_ready": bool(self._source.load_native_join_links()),
             "singbox_running": self._source.singbox_running(),
         }
         healthy = all(checks.values())
         return HealthResult(
             healthy,
-            "" if healthy else "native VK Calls prerequisites are not ready",
+            "" if healthy else "native VK Calls multi-user prerequisites are not ready",
             "ok" if healthy else "error",
             checks,
         )

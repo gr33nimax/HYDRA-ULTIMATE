@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
+from pathlib import Path
 
 import pytest
 
+from hydra.core import state as state_module
 from hydra.core.state_migrations import (
     migrate_state,
     migrate_v6_to_v7,
     migrate_v7_to_v8,
     migrate_v8_to_v9,
     migrate_v9_to_v10,
+    migrate_v10_to_v11,
 )
 from hydra.core.state_models import UnsupportedStateVersion, validate_supported_version
 
@@ -64,8 +68,8 @@ def test_v6_to_v7_moves_creator_desired_state_without_native_auto_enable() -> No
 def test_v6_to_v7_is_idempotent() -> None:
     once = migrate_v6_to_v7(_v6())
     assert migrate_v6_to_v7(once) == once
-    assert migrate_state(_v6(), 6) == migrate_v9_to_v10(
-        migrate_v8_to_v9(migrate_v7_to_v8(once)),
+    assert migrate_state(_v6(), 6) == migrate_v10_to_v11(
+        migrate_v9_to_v10(migrate_v8_to_v9(migrate_v7_to_v8(once))),
     )
 
 
@@ -109,9 +113,84 @@ def test_v8_to_v9_separates_qwdtt_consumer_from_vk_provider() -> None:
     assert migrate_v8_to_v9(migrated) == migrated
 
 
-def test_future_schema_is_rejected_after_v10() -> None:
+def test_v10_to_v11_disables_legacy_calls_without_touching_other_protocols() -> None:
+    source = {
+        "version": 10,
+        "kernel": {"provider": "sing-box-extended", "channel": "stable"},
+        "protocols": {
+            "calls": {
+                "installed": True,
+                "enabled": True,
+                "config": {"mode": "p2p", "read_buffer": 65536},
+            },
+            "vless": {"installed": True, "enabled": True, "config": {}},
+        },
+    }
+    original = copy.deepcopy(source)
+
+    migrated = migrate_v10_to_v11(source)
+
+    assert source == original
+    assert migrated["version"] == 11
+    assert migrated["protocols"]["calls"] == {
+        "installed": True,
+        "enabled": False,
+        "config": {"mode": "multi_user"},
+    }
+    assert migrated["protocols"]["vless"] == original["protocols"]["vless"]
+    assert migrate_v10_to_v11(migrated) == migrated
+
+
+def test_v10_to_v11_preserves_active_multi_user_calls_on_hydracore() -> None:
+    migrated = migrate_v10_to_v11({
+        "version": 10,
+        "kernel": {"provider": "hydracore", "channel": "stable"},
+        "protocols": {
+            "calls": {
+                "installed": True,
+                "enabled": True,
+                "config": {"mode": "multi_user", "room_count": 4},
+            },
+        },
+    })
+
+    assert migrated["protocols"]["calls"]["enabled"] is True
+    assert migrated["protocols"]["calls"]["config"] == {
+        "mode": "multi_user",
+        "room_count": 4,
+    }
+
+
+def test_v10_calls_fixture_is_atomically_disabled_and_idempotent(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    fixture = Path(__file__).parent / "fixtures" / "state-schema-10-calls-p2p.json"
+    state_file = tmp_path / "state.json"
+    shutil.copy2(fixture, state_file)
+    monkeypatch.setattr(state_module, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(state_module, "STATE_FILE", state_file)
+
+    first = state_module.migrate_persisted_state()
+    migrated_bytes = state_file.read_bytes()
+    second = state_module.migrate_persisted_state()
+    loaded = state_module.load_state()
+
+    assert first == {"from": 10, "to": 11, "changed": True}
+    assert second == {"from": 11, "to": 11, "changed": False}
+    assert state_file.read_bytes() == migrated_bytes
+    assert loaded.revision == 42
+    assert loaded.protocols["calls"].installed is True
+    assert loaded.protocols["calls"].enabled is False
+    assert loaded.protocols["calls"].config == {"mode": "multi_user"}
+    assert loaded.protocols["vless"].enabled is True
+    assert loaded.install["preserved_upgrade_marker"] == "keep"
+    assert state_file.with_suffix(".json.bak").is_file()
+
+
+def test_future_schema_is_rejected_after_v11() -> None:
     with pytest.raises(UnsupportedStateVersion):
-        validate_supported_version({"version": 11})
+        validate_supported_version({"version": 12})
 
 
 def test_migrated_state_is_json_serializable_without_secret_artifacts() -> None:

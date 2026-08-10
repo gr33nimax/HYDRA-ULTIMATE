@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from hydra.contracts import JsonValue, PluginConfig, validate_json_object
+from hydra.core.state_calls_models import validate_calls_protocol
 from hydra.core.hydrabox_keys import validate_optional_hydrabox_jwe_key
 from hydra.core.state_creator_models import HeadlessCreatorConfig
 from hydra.core.state_creator_models import validate_headless_creator
@@ -20,7 +21,7 @@ from hydra.core.state_kernel_models import (
     validate_raw_kernel_config,
 )
 from hydra.core.state_network_models import NetworkConfig
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 class UnsupportedStateVersion(RuntimeError):
@@ -232,3 +233,7 @@ def validate_state(state: AppState) -> None:
             raise ValueError(str(exc)) from exc
         if not isinstance(protocol.port, int) or not 0 <= protocol.port <= 65535:
             raise ValueError(f"protocol {name} has an invalid port")
+        validate_calls_protocol(
+            name, enabled=protocol.enabled, config=protocol.config,
+            kernel_provider=state.kernel.provider,
+        )

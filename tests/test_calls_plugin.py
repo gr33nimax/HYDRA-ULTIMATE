@@ -41,21 +41,29 @@ class Source:
 
 
 def _state(*, enabled: bool = True) -> AppState:
-    return AppState(
+    state = AppState(
+        users=[User(email="alice@example.com", uuid="alice")],
         protocols={
             "calls": PluginState(
                 installed=True,
                 enabled=enabled,
-                config={"read_buffer": 32768},
+                config={
+                    "mode": "multi_user",
+                    "obfs_password": "o" * 43,
+                },
             ),
         },
     )
+    state.network.server_ip = "203.0.113.10"
+    return state
 
 
 def test_calls_plugin_contract_and_native_fragment() -> None:
     source = Source(
-        cookies=[{"name": "remixsid", "value": "secret"}],
-        link="https://vk.com/call/join/room-token",
+        cookies=[],
+        link="",
+        links=["https://vk.com/call/join/room-token"],
+        multi=True,
     )
     plugin = CallsPlugin(source)
 
@@ -65,35 +73,31 @@ def test_calls_plugin_contract_and_native_fragment() -> None:
     assert plugin.meta.capabilities.subscription_enabled is False
     assert plugin.meta.capabilities.hydra_v2_subscription_enabled is True
     assert plugin.meta.capabilities.connection_source == "none"
+    assert plugin.meta.capabilities.config_defaults == (
+        ("mode", "multi_user"),
+        ("room_count", 4),
+        ("listen_port", 56002),
+    )
+    inbound = plugin.configure(_state()).inbounds[0]
+    assert inbound["mode"] == "multi_user"
+    assert "join_link" not in inbound
+    assert "cookies" not in inbound
     fragment = plugin.configure(_state())
-    assert fragment.inbounds == [
-        {
-            "type": "call",
-            "tag": "calls-vk-in",
-            "platform": "vk",
-            "read_buffer": 32768,
-            "cookies": source.cookies,
-            "join_link": source.link,
-        },
-    ]
     assert fragment.outbounds == []
 
 
 def test_calls_plugin_disabled_is_empty_and_enabled_requires_secrets() -> None:
     plugin = CallsPlugin(Source([], ""))
     assert plugin.configure(_state(enabled=False)).inbounds == []
-    with pytest.raises(ValueError, match="cookies"):
+    with pytest.raises(ValueError, match="multi_user"):
         plugin.configure(_state())
 
 
-def test_calls_plugin_rejects_invalid_read_buffer() -> None:
+def test_calls_plugin_rejects_legacy_p2p_mode() -> None:
     state = _state()
-    state.protocols["calls"].config["read_buffer"] = 1
-    source = Source(
-        [{"name": "remixsid", "value": "secret"}],
-        "https://vk.com/call/join/room-token",
-    )
-    with pytest.raises(ValueError, match="read_buffer"):
+    state.protocols["calls"].config["mode"] = "p2p"
+    source = Source([], "", multi=True)
+    with pytest.raises(ValueError, match="must be multi_user"):
         CallsPlugin(source).configure(state)
 
 
@@ -146,6 +150,7 @@ def test_calls_plugin_emits_exact_hydracore_multi_user_contract() -> None:
     assert outbound["workers"] == 4
     assert outbound["worker_connect_timeout"] == "15s"
     assert "cookies" not in inbound and "join_link" not in inbound
+    assert "join_link" not in outbound
 
 
 def test_calls_multi_user_normalizes_links_and_enforces_worker_budget() -> None:
