@@ -302,7 +302,9 @@ def generate_hydrabox_subscription(
         entrypoints = _entrypoints(projection, objects)
         if not entrypoints:
             continue
-        label = plugin.meta.display_name or plugin.meta.name
+        label = plugin.meta.subscription_profile_name or (
+            plugin.meta.display_name or plugin.meta.name
+        )
         multiple = len(entrypoints) > 1
         resource_id = _resource_id(plugin.meta.name)
         document: dict[str, list[dict[str, Any]]] = {}

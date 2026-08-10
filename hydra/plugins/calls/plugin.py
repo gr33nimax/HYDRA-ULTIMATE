@@ -32,8 +32,9 @@ class CallsPlugin(BasePlugin):
 
     meta = PluginMeta(
         name="calls",
-        display_name="Обход БС",
+        display_name="Hydra VK Tunnel",
         description="Экспериментальный TCP/UDP-прокси через VK Calls",
+        subscription_profile_name="Обход БС",
         category=PluginCategory.TRANSPORT,
         version="1.0.0",
         central_apply=True,

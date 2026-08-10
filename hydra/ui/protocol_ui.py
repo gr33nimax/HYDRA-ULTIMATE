@@ -34,7 +34,7 @@ PROTOCOL_LABELS = {
     "vless": "VLESS",
     "telemt": "Telemt",
     "wdtt": "qWDTT",
-    "calls": "Обход БС",
+    "calls": "Hydra VK Tunnel",
 }
 
 

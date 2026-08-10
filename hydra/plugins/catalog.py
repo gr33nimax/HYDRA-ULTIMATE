@@ -63,6 +63,8 @@ class PluginCatalog:
             errors.append("meta.description must be a string")
         if not isinstance(meta.display_name, str):
             errors.append("meta.display_name must be a string")
+        if not isinstance(meta.subscription_profile_name, str):
+            errors.append("meta.subscription_profile_name must be a string")
         if not isinstance(meta.version, str) or not meta.version.strip():
             errors.append("meta.version must be a non-empty string")
         if not isinstance(meta.contract_version, int) or meta.contract_version < 1:

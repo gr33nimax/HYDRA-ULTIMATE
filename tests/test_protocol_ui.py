@@ -10,6 +10,7 @@ from hydra.ui.protocol_ui import (
 def test_protocol_names_are_product_facing():
     assert protocol_label("amneziawg") == "AmneziaWG"
     assert protocol_label("naive") == "NaiveProxy"
+    assert protocol_label("calls") == "Hydra VK Tunnel"
     assert protocol_menu_title("wdtt") == "QWDTT · УПРАВЛЕНИЕ"
 
 

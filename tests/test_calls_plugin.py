@@ -69,6 +69,8 @@ def test_calls_plugin_contract_and_native_fragment() -> None:
     plugin = CallsPlugin(source)
 
     assert plugin.meta.name == "calls"
+    assert plugin.meta.display_name == "Hydra VK Tunnel"
+    assert plugin.meta.subscription_profile_name == "Обход БС"
     assert plugin.meta.category is PluginCategory.TRANSPORT
     assert plugin.meta.capabilities.central_apply is True
     assert plugin.meta.capabilities.subscription_enabled is False

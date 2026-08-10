@@ -364,7 +364,7 @@ class CallsService:
             user_password,
             server_address=server_address,
         )
-        profile_name = "Обход БС"
+        profile_name = "Hydra VK Tunnel"
         config = {
             "log": {"level": "info", "timestamp": True},
             "dns": {"servers": [{"type": "local", "tag": "default"}]},

@@ -119,6 +119,7 @@ class PluginMeta:
     tls_domain_source: str = ""
     config_defaults: tuple[tuple[str, JsonValue], ...] = ()
     subscription_profile_query: str = ""
+    subscription_profile_name: str = ""
     subscription_enabled: bool = True
     hydra_v2_subscription_enabled: bool | None = None
     manual_artifacts_query: str = ""

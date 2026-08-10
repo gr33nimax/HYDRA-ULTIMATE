@@ -302,7 +302,7 @@ def test_admin_client_profile_uses_multi_user_and_keeps_metadata_alias() -> None
     config = json.loads(profile.config)
     outbound = config["outbounds"][0]
 
-    assert profile.name == "Обход БС"
+    assert profile.name == "Hydra VK Tunnel"
     assert outbound["mode"] == "multi_user"
     assert outbound["join_links"] == runtime.links
     assert "join_link" not in outbound

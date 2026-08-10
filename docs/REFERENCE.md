@@ -38,7 +38,7 @@
 | `shadowtls` | ShadowTLS | ShadowTLS v3 с Trojan detour |
 | `snell` | Snell v4 | TCP/UDP-прокси из Sing-Box Extended |
 | `telemt` | MTProto / Telemt | Telegram MTProxy с управлением пользователями |
-| `calls` | Обход БС | Native `call`: только Hydracore multi-user |
+| `calls` | Hydra VK Tunnel | Native `call`: только Hydracore multi-user; профиль подписки «Обход БС» |
 | `wdtt` | qWDTT | WireGuard-туннелирование поверх TURN |
 
 `ApplicationService.headless_creator` владеет установкой provider drivers и их
@@ -386,7 +386,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
    51821/udp  AmneziaWG                           source-relay
    56000/udp  qWDTT · DTLS/TURN
    56001/udp  qWDTT · WireGuard
-   56002/udp  Обход БС (VK Calls multi-user)
+   56002/udp  Hydra VK Tunnel (VK Calls multi-user)
    2012–2022/tcp    Mieru
    32000–32999/tcp  Snell
 ```
@@ -402,7 +402,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 | `51820/udp`, `51821/udp` | UDP | AmneziaWG |
 | `56000/udp` | UDP | qWDTT — DTLS/TURN |
 | `56001/udp` | UDP | qWDTT — WireGuard |
-| `56002/udp` | UDP | Обход БС — Hydracore VK Calls multi-user listener |
+| `56002/udp` | UDP | Hydra VK Tunnel — Hydracore VK Calls multi-user listener |
 | `2012–2022/tcp` | TCP | Mieru (диапазон) |
 | `32000–32999/tcp` | TCP | Snell (диапазон) |
 | `9443/tcp` | TCP | Сервер подписок (обычно за Caddy L4 по домену) |
