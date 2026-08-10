@@ -13,6 +13,7 @@ from hydra.contracts.calls_configuration import (
     multi_user_outbound as _multi_user_outbound,
 )
 from hydra.core.calls_credentials import user_password
+from hydra.utils.net import public_ip
 
 
 def multi_user_inbound(state: CallsStateAccess) -> dict:
@@ -24,7 +25,14 @@ def multi_user_outbound(
     state: CallsStateAccess,
     join_links: list[str],
 ) -> dict:
-    return _multi_user_outbound(user, state, join_links, user_password)
+    server_address = str(state.network.server_ip or "").strip() or public_ip()
+    return _multi_user_outbound(
+        user,
+        state,
+        join_links,
+        user_password,
+        server_address=server_address,
+    )
 
 
 __all__ = [

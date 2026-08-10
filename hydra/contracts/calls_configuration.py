@@ -27,7 +27,6 @@ class CallsUser(Protocol):
 
 class CallsNetworkState(Protocol):
     server_ip: str
-    domain: str
 
 
 class CallsStateAccess(Protocol):
@@ -167,11 +166,13 @@ def multi_user_outbound(
     state: CallsStateAccess,
     join_links: list[str],
     user_password: Callable[[CallsUser], str],
+    *,
+    server_address: str,
 ) -> dict:
     desired = state.protocols["calls"]
     config = desired.config
     join_links = _join_links(join_links)
-    server = str(state.network.server_ip or state.network.domain).strip()
+    server = str(server_address).strip().strip("[]")
     if not server:
         raise ValueError("Calls multi_user server address is not configured")
     max_workers = _integer(config, "max_workers_per_session", 4, 1, MAX_WORKERS)

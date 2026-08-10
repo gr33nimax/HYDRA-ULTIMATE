@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
 from hydra.core.state_creator_models import HeadlessCreatorConfig
 from hydra.core.state_models import AppState, PluginState, User
@@ -306,6 +307,22 @@ def test_admin_client_profile_uses_multi_user_and_keeps_metadata_alias() -> None
     assert profile.join_link == runtime.links[0]
     assert payload["join_link"] == runtime.links[0]
     assert payload["join_links"] == tuple(runtime.links)
+
+
+def test_admin_client_profile_uses_public_ip_instead_of_transport_sni() -> None:
+    runtime = Runtime()
+    runtime.links = ["https://vk.com/call/join/one"]
+    state = _state(installed=True, enabled=True)
+    state.network.server_ip = ""
+    state.network.domain = "transport-sni.example"
+    service, _ = _service(runtime)
+
+    with patch("hydra.services.calls.public_ip", return_value="203.0.113.42"):
+        profile = service.native_client_profile(state)
+
+    outbound = json.loads(profile.config)["outbounds"][0]
+    assert outbound["server"] == "203.0.113.42"
+    assert outbound["server"] != state.network.domain
 
 
 def test_status_keeps_native_link_ready_wire_key_with_pool_alias() -> None:

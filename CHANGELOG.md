@@ -19,6 +19,10 @@
 
 ### Hydracore / Calls
 
+- Клиентские outbounds Calls теперь используют только явно настроенный IP сервера
+  или определённый публичный IPv4 VPS; TLS/SNI-домен транспорта больше никогда не
+  подставляется как native multi-user endpoint.
+
 - Добавлен vendor-neutral desired state ядра и команды `hydra kernel status`
   / `kernel switch`. Hydracore и Sing-Box Extended загружаются только из
   фиксированных репозиториев с обязательным GitHub `asset.digest`, ELF,
