@@ -32,7 +32,7 @@ class CallsPlugin(BasePlugin):
 
     meta = PluginMeta(
         name="calls",
-        display_name="Calls · VK",
+        display_name="Обход БС",
         description="Экспериментальный TCP/UDP-прокси через VK Calls",
         category=PluginCategory.TRANSPORT,
         version="1.0.0",

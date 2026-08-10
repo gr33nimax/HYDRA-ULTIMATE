@@ -582,8 +582,9 @@ Subscription v2 как изолированный `call` outbound с `platform=v
 
 Calls имеет только режим `multi_user`. До любых host-мутаций service требует
 desired `kernel.provider=hydracore`, exact identity
-`io.hydrabox.hydracore`, `features.call_vk_multi_user=true` и наличие
-`multi_user` в `protocols.call_modes`; stock core, capability aliases и `p2p`
+`io.hydrabox.hydracore`, role `vps`, server feature
+`call_vk_multi_user_server=true`, `protocols.call_modes=["multi_user"]` и wire
+compatibility v1..2; stock core, client artifact, capability aliases и `p2p`
 отклоняются fail-closed. Затем service создаёт отдельную managed-группу 1–4
 комнат. Plugin возвращает server inbound с
 `listen/listen_port`, общим `obfs_password`, per-user credentials и bounded
@@ -591,6 +592,9 @@ session/worker/handshake limits; cookies и join-links в server config
 отсутствуют. Per-user Hydra v2 projection содержит `server/server_port`,
 `join_links`, user/password, общий obfs key и worker policy и требует core
 feature `call_vk_multi_user`; singular `join_link` не генерируется в outbound.
+`server` берётся из persisted `calls.config.public_endpoint`, который
+материализуется при enable/reinstall из явного `network.server_ip` либо
+наблюдаемого публичного IP VPS и никогда не наследует transport SNI.
 Admin DTO сохраняет первый link под старым именем только как compatibility alias. Worker policy
 по умолчанию создаёт один worker
 на ссылку и ограничивает явное значение как

@@ -183,6 +183,7 @@ def test_native_enable_is_hydracore_multi_user_only() -> None:
     assert state.protocols["calls"].enabled is True
     assert state.protocols["calls"].config["mode"] == "multi_user"
     assert state.protocols["calls"].config["listen_port"] == 56002
+    assert state.protocols["calls"].config["public_endpoint"] == "203.0.113.10"
     assert len(state.protocols["calls"].config["obfs_password"]) >= 32
     assert creator.committed and creator.finalized
 
@@ -301,6 +302,7 @@ def test_admin_client_profile_uses_multi_user_and_keeps_metadata_alias() -> None
     config = json.loads(profile.config)
     outbound = config["outbounds"][0]
 
+    assert profile.name == "Обход БС"
     assert outbound["mode"] == "multi_user"
     assert outbound["join_links"] == runtime.links
     assert "join_link" not in outbound
@@ -323,6 +325,22 @@ def test_admin_client_profile_uses_public_ip_instead_of_transport_sni() -> None:
     outbound = json.loads(profile.config)["outbounds"][0]
     assert outbound["server"] == "203.0.113.42"
     assert outbound["server"] != state.network.domain
+
+
+def test_admin_client_profile_prefers_persisted_calls_endpoint() -> None:
+    runtime = Runtime()
+    runtime.links = ["https://vk.com/call/join/one"]
+    state = _state(installed=True, enabled=True)
+    state.protocols["calls"].config["public_endpoint"] = "198.51.100.77"
+    state.network.server_ip = "203.0.113.10"
+    service, _ = _service(runtime)
+
+    with patch("hydra.services.calls.public_ip") as probe:
+        profile = service.native_client_profile(state)
+
+    outbound = json.loads(profile.config)["outbounds"][0]
+    assert outbound["server"] == "198.51.100.77"
+    probe.assert_not_called()
 
 
 def test_status_keeps_native_link_ready_wire_key_with_pool_alias() -> None:

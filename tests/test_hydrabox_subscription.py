@@ -593,7 +593,7 @@ def test_hydra_v2_subscription_includes_only_multi_user_calls_config():
     assert subscription["profiles"][0] == {
         "id": subscription["default_profile"],
         "resource": resource["id"],
-        "name": "Calls · VK",
+        "name": "Обход БС",
         "entrypoint": {"section": "outbounds", "tag": "call-vk-out"},
         "enabled": True,
     }
@@ -669,7 +669,7 @@ def test_hydra_v2_never_reads_or_publishes_qwdtt_artifacts():
     assert "qwdtt" not in encoded.lower()
     assert "main_password" not in encoded
     assert [profile["name"] for profile in subscription["profiles"]] == [
-        "Calls · VK",
+        "Обход БС",
     ]
 
 

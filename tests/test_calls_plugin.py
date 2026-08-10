@@ -176,6 +176,20 @@ def test_calls_client_uses_public_ip_instead_of_transport_sni() -> None:
     assert outbound["server"] != state.network.domain
 
 
+def test_calls_client_rejects_a_url_as_public_endpoint() -> None:
+    source = Source(
+        [],
+        "",
+        links=["https://vk.com/call/join/one"],
+        multi=True,
+    )
+    state = _state()
+    state.protocols["calls"].config["public_endpoint"] = "https://sni.example"
+
+    with pytest.raises(ValueError, match="scheme, port, or path"):
+        CallsPlugin(source).generate_client_config(state.users[0], state)
+
+
 def test_calls_multi_user_normalizes_links_and_enforces_worker_budget() -> None:
     source = Source(
         [],

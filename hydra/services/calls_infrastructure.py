@@ -105,14 +105,24 @@ class CallsInfrastructure:
         features = payload.get("features", {})
         protocols = payload.get("protocols", {})
         modes = protocols.get("call_modes", []) if isinstance(protocols, dict) else []
+        wire = (
+            protocols.get("call_vk_multi_user_wire", {})
+            if isinstance(protocols, dict)
+            else {}
+        )
         return bool(
             isinstance(identity, dict)
             and identity.get("core_id") == _HYDRACORE_CORE_ID
+            and identity.get("role") == "vps"
             and isinstance(features, dict)
             and features.get("call_vk_multi_user") is True
+            and features.get("call_vk_multi_user_server") is True
+            and features.get("call_vk_multi_user_client") is False
             and isinstance(modes, list)
-            and all(isinstance(mode, str) for mode in modes)
-            and "multi_user" in modes
+            and modes == ["multi_user"]
+            and isinstance(wire, dict)
+            and wire.get("min") == 1
+            and wire.get("max") == 2
         )
 
     def singbox_running(self) -> bool:

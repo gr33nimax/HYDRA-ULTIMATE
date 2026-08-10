@@ -107,7 +107,7 @@ def run_main_menu(
         clear()
         print(BANNER)
 
-        singbox = app.admin.singbox_diagnostics()
+        singbox = app.kernel.status(state).runtime
         statuses = app.protocols.statuses(state)
         counts: dict[PluginCategory, tuple[int, int]] = {}
         for category in (
@@ -131,11 +131,13 @@ def run_main_menu(
         active_t, total_t = counts[PluginCategory.TRANSPORT]
         active_e, total_e = counts[PluginCategory.ENHANCEMENT]
         active_s, total_s = counts[PluginCategory.SECURITY]
+        singbox_version = singbox.version or (
+            "версия неизвестна" if singbox.installed else "не установлен"
+        )
         lines = [
             kv(
                 "Sing-Box:",
-                f"{_ok(singbox.installed and singbox.running)}  "
-                f"{singbox.version or 'не установлен'}",
+                f"{_ok(singbox.installed and singbox.running)}  {singbox_version}",
             ),
             kv("Протоколы:", f"{GREEN}{active_t}{NC}/{total_t} активны"),
             kv("Сетевые службы:", f"{GREEN}{active_e}{NC}/{total_e} активны"),

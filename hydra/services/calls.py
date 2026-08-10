@@ -14,6 +14,7 @@ from hydra.contracts.calls_configuration import (
     MAX_JOIN_LINKS,
     call_mode,
     multi_user_outbound,
+    public_endpoint,
 )
 from hydra.core.calls_credentials import user_password
 from hydra.core.errors import ErrorCode, ServiceResult, failed_result
@@ -186,6 +187,7 @@ class CallsService:
                     "max_workers_per_session",
                     max(4, count),
                 ),
+                "public_endpoint": public_endpoint(state, public_ip),
             })
             desired.config.pop("read_buffer", None)
             desired.config.setdefault("obfs_password", gen_token(32))
@@ -354,7 +356,7 @@ class CallsService:
         user = next((item for item in state.users if not item.blocked), None)
         if user is None:
             raise ValueError("native VK Calls have no active user")
-        server_address = str(state.network.server_ip or "").strip() or public_ip()
+        server_address = public_endpoint(state, public_ip)
         outbound = multi_user_outbound(
             user,
             state,
@@ -362,7 +364,7 @@ class CallsService:
             user_password,
             server_address=server_address,
         )
-        profile_name = f"HYDRA Calls · VK · {user.email}"
+        profile_name = "Обход БС"
         config = {
             "log": {"level": "info", "timestamp": True},
             "dns": {"servers": [{"type": "local", "tag": "default"}]},

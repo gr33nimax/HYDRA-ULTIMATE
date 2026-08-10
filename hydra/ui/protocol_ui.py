@@ -34,7 +34,7 @@ PROTOCOL_LABELS = {
     "vless": "VLESS",
     "telemt": "Telemt",
     "wdtt": "qWDTT",
-    "calls": "Calls · VK",
+    "calls": "Обход БС",
 }
 
 

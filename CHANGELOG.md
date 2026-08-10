@@ -19,6 +19,16 @@
 
 ### Hydracore / Calls
 
+- Release-контракт Hydracore разделён по ролям: Ultimate загружает только
+  `hydracore-vps-linux-{arch}.tar.gz` и проверяет VPS identity, server feature,
+  multi-user-only режим и wire v1..2. Android client artifact на VPS
+  fail-closed не принимается.
+- Calls сохраняет отдельный `public_endpoint`, а пользовательский профиль и
+  UI теперь называются «Обход БС». Endpoint не зависит от transport SNI.
+- Provider-aware kernel status стал единственным источником версии/наличия
+  ядра для главного экрана и экрана Sing-Box, поэтому Hydracore больше не
+  отображается как «не установлен».
+
 - Клиентские outbounds Calls теперь используют только явно настроенный IP сервера
   или определённый публичный IPv4 VPS; TLS/SNI-домен транспорта больше никогда не
   подставляется как native multi-user endpoint.
