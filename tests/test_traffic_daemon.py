@@ -119,6 +119,20 @@ def test_hysteria2_uses_authenticated_clash_metadata():
     assert state.users[0].credentials["hysteria2"]["traffic_used_bytes"] == 700
 
 
+def test_calls_uses_authenticated_clash_metadata_with_runtime_type():
+    state = AppState(users=[User(email="calls@example.com", uuid="calls-user")])
+    connection = {
+        "id": "calls-connection",
+        "metadata": {"type": "call", "user": "calls@example.com"},
+        "upload": 300,
+        "download": 700,
+    }
+
+    assert _apply_connection_snapshot(state, [connection], {}, {}, {}) is True
+    assert state.users[0].traffic_used_bytes == 1000
+    assert state.users[0].credentials["calls"]["traffic_used_bytes"] == 1000
+
+
 def test_hysteria2_real_clash_metadata_is_attributed_from_logs():
     state = AppState(users=[User(email="hy2@example.com", uuid="hy2-user")])
     connection = {

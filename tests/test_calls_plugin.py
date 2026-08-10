@@ -75,7 +75,7 @@ def test_calls_plugin_contract_and_native_fragment() -> None:
     assert plugin.meta.capabilities.central_apply is True
     assert plugin.meta.capabilities.subscription_enabled is False
     assert plugin.meta.capabilities.hydra_v2_subscription_enabled is True
-    assert plugin.meta.capabilities.connection_source == "none"
+    assert plugin.meta.capabilities.connection_source == "tracked"
     assert plugin.meta.capabilities.config_defaults == (
         ("mode", "multi_user"),
         ("room_count", 4),
