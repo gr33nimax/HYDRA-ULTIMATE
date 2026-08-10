@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -151,6 +152,28 @@ def test_calls_plugin_emits_exact_hydracore_multi_user_contract() -> None:
     assert outbound["worker_connect_timeout"] == "15s"
     assert "cookies" not in inbound and "join_link" not in inbound
     assert "join_link" not in outbound
+
+
+def test_calls_client_uses_public_ip_instead_of_transport_sni() -> None:
+    source = Source(
+        [],
+        "",
+        links=["https://vk.com/call/join/one"],
+        multi=True,
+    )
+    state = _state()
+    state.network.server_ip = ""
+    state.network.domain = "transport-sni.example"
+
+    with patch(
+        "hydra.plugins.calls.configuration.public_ip",
+        return_value="203.0.113.42",
+    ):
+        payload = CallsPlugin(source).generate_client_config(state.users[0], state)
+
+    outbound = json.loads(payload)["outbounds"][0]
+    assert outbound["server"] == "203.0.113.42"
+    assert outbound["server"] != state.network.domain
 
 
 def test_calls_multi_user_normalizes_links_and_enforces_worker_budget() -> None:

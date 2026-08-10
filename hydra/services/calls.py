@@ -37,6 +37,7 @@ from hydra.services.creator_sessions import (
 )
 from hydra.services.protocols import ProtocolService
 from hydra.utils.crypto import gen_token
+from hydra.utils.net import public_ip
 
 
 @dataclass
@@ -353,7 +354,14 @@ class CallsService:
         user = next((item for item in state.users if not item.blocked), None)
         if user is None:
             raise ValueError("native VK Calls have no active user")
-        outbound = multi_user_outbound(user, state, links, user_password)
+        server_address = str(state.network.server_ip or "").strip() or public_ip()
+        outbound = multi_user_outbound(
+            user,
+            state,
+            links,
+            user_password,
+            server_address=server_address,
+        )
         profile_name = f"HYDRA Calls · VK · {user.email}"
         config = {
             "log": {"level": "info", "timestamp": True},
