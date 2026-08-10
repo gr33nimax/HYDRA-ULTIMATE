@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from hydra.core.singbox_upgrade import newer_release_available
 from hydra.core.state_models import AppState
 from hydra.services.application import ApplicationService
 from hydra.ui._menus.kernel import handle_kernel_choice
@@ -60,11 +61,11 @@ def run_core_menu(
         running = kernel_status.runtime.running
         version = kernel_status.runtime.version
 
-        update_available = state.install.get(
-            "singbox_update_available",
-            False,
-        )
         latest_version = state.install.get("singbox_latest_version", "")
+        update_available = bool(
+            state.install.get("singbox_update_available", False)
+            and newer_release_available(version, latest_version)
+        )
 
         version_text = version or "—"
         if installed and update_available:

@@ -129,6 +129,9 @@ class KernelService:
 
         prepared = self._runtime.prepare_switch(provider, channel)
         state.kernel = desired
+        state.install.pop("singbox_last_update_check", None)
+        state.install.pop("singbox_update_available", None)
+        state.install.pop("singbox_latest_version", None)
         try:
             self._save_state(state)
         except Exception as persist_error:

@@ -109,10 +109,10 @@ def get_version() -> Optional[str]:
     r = _run([str(bin_path), "version"])
     if r.returncode == 0:
         first_line = r.stdout.strip().split("\n")[0]
-        parts = first_line.split()
-        for p in parts:
-            if p[0].isdigit():
-                return p
+        for token in first_line.split():
+            candidate = token.removeprefix("v")
+            if candidate[:1].isdigit():
+                return candidate
     return None
 
 

@@ -149,6 +149,23 @@ def test_manual_run_reports_update_check_failure():
     assert "Sing-Box" in message
 
 
+def test_manual_run_does_not_report_update_when_installed_version_is_unknown():
+    state = AppState()
+    state.install["sync_warp_enabled"] = False
+
+    with patch("hydra.core.state.load_state", return_value=state), \
+         patch.object(sync_agent, "update_state", side_effect=_state_updater(state)), \
+         patch.object(sync_agent, "_log"), \
+         patch("hydra.utils.downloader.latest_release", return_value="v1.13.16-extended-hydracore.7"), \
+         patch("hydra.core.singbox.get_version", return_value=None):
+        ok, message = _run_sync(force_update_check=True)
+
+    assert ok is False
+    assert "установленную версию Sing-Box" in message
+    assert "singbox_update_available" not in state.install
+    assert "singbox_latest_version" not in state.install
+
+
 def test_stale_warp_cache_is_refreshed(tmp_path):
     cache = tmp_path / "warp.json"
     cache.write_text(

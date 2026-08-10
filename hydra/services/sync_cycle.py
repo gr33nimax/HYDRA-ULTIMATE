@@ -291,7 +291,8 @@ def _sync_singbox_update(
         log("Sync: Sing-Box update check is disabled by settings")
         return state, []
     try:
-        from hydra.core.singbox import EXTENDED_REPO, get_version, parse_version
+        from hydra.core.singbox import EXTENDED_REPO, get_version
+        from hydra.core.singbox_upgrade import newer_release_available
         from hydra.core.state_kernel_models import KERNEL_HYDRACORE
         from hydra.utils.downloader import latest_release
 
@@ -316,8 +317,14 @@ def _sync_singbox_update(
             ]
 
         current_version = get_version()
-        update_available = (
-            parse_version(latest_version) > parse_version(current_version)
+        if not current_version:
+            log("Sing-Box Update: Failed to determine installed version")
+            return state, [
+                "не удалось определить установленную версию Sing-Box",
+            ]
+        update_available = newer_release_available(
+            current_version,
+            latest_version,
         )
         log(
             "Sing-Box Update: "

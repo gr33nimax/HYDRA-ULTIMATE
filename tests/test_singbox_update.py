@@ -6,7 +6,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from hydra.core import singbox, singbox_units
-from hydra.core.singbox import parse_version, update_kernel, SINGBOX_BIN, SINGBOX_CONFIG
+from hydra.core.singbox import (
+    parse_version,
+    update_kernel,
+    SINGBOX_BIN,
+    SINGBOX_CONFIG,
+)
+from hydra.core.singbox_upgrade import newer_release_available
 from hydra.core.state import AppState
 
 
@@ -40,6 +46,24 @@ def test_parse_version():
     assert parse_version("v1.13.14-extended-2.5.2") == (1, 13, 14, 2, 5, 2)
     assert parse_version(None) == (0,)
     assert parse_version("invalid") == (0,)
+    assert newer_release_available(
+        "sing-box version v1.13.16-extended-hydracore.7",
+        "v1.13.16-extended-hydracore.7",
+    ) is False
+    assert newer_release_available(None, "v1.13.16-extended-hydracore.7") is False
+
+
+def test_get_version_accepts_hydracore_v_prefixed_token(tmp_path) -> None:
+    binary = tmp_path / "sing-box"
+    binary.write_bytes(b"binary")
+    result = MagicMock(
+        returncode=0,
+        stdout="sing-box version v1.13.16-extended-hydracore.7\n",
+    )
+
+    with patch("hydra.core.singbox._find_singbox", return_value=binary), \
+         patch("hydra.core.singbox._run", return_value=result):
+        assert singbox.get_version() == "1.13.16-extended-hydracore.7"
 
 
 def test_legacy_kernel_paths_fail_closed_for_detected_hydracore() -> None:

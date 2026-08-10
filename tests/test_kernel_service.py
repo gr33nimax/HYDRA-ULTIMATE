@@ -53,6 +53,11 @@ def test_kernel_service_persists_only_after_verified_runtime() -> None:
     runtime = Runtime()
     saved: list[str] = []
     state = AppState()
+    state.install.update({
+        "singbox_last_update_check": "2026-08-10T00:00:00+00:00",
+        "singbox_update_available": True,
+        "singbox_latest_version": "v1.13.16-extended-hydracore.6",
+    })
     service = KernelService(runtime, save_state=lambda current: saved.append(current.kernel.provider))
 
     result = service.switch(state, KERNEL_HYDRACORE)
@@ -61,11 +66,15 @@ def test_kernel_service_persists_only_after_verified_runtime() -> None:
     assert state.kernel.provider == KERNEL_HYDRACORE
     assert saved == [KERNEL_HYDRACORE]
     assert runtime.prepared is not None and runtime.prepared.committed is True
+    assert "singbox_last_update_check" not in state.install
+    assert "singbox_update_available" not in state.install
+    assert "singbox_latest_version" not in state.install
 
 
 def test_kernel_service_rolls_runtime_back_when_state_save_fails() -> None:
     runtime = Runtime()
     state = AppState()
+    state.install["singbox_update_available"] = True
 
     def fail_save(_state: AppState) -> None:
         _state.revision += 1
@@ -78,6 +87,7 @@ def test_kernel_service_rolls_runtime_back_when_state_save_fails() -> None:
 
     assert state.kernel.provider == KERNEL_SINGBOX_EXTENDED
     assert state.revision == 7
+    assert state.install["singbox_update_available"] is True
     assert runtime.prepared is not None and runtime.prepared.rolled_back is True
 
 

@@ -45,6 +45,15 @@ def parse_version(value: str | None) -> tuple[int, ...]:
         return (0,)
 
 
+def newer_release_available(current: str | None, latest: str | None) -> bool:
+    """Return true only when both versions are known and latest is newer."""
+    return bool(
+        current
+        and latest
+        and parse_version(latest) > parse_version(current)
+    )
+
+
 def _exception_text(exc: Exception) -> str:
     detail = str(exc).strip() or type(exc).__name__
     return redact_text(detail)
@@ -338,6 +347,7 @@ def _clear_update_flags(log: Callable[[str, str], None]) -> None:
 __all__ = [
     "UpgradeOperations",
     "migrate_runtime_dns_config",
+    "newer_release_available",
     "parse_version",
     "upgrade_kernel",
 ]
