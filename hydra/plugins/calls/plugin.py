@@ -41,7 +41,7 @@ class CallsPlugin(BasePlugin):
         required_commands=("sing-box",),
         subscription_enabled=False,
         hydra_v2_subscription_enabled=True,
-        connection_source="none",
+        connection_source="tracked",
         config_defaults=(
             ("mode", CALL_MODE_MULTI_USER),
             ("room_count", DEFAULT_ROOM_COUNT),

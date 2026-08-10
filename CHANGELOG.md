@@ -19,6 +19,10 @@
 
 ### Hydracore / Calls
 
+- Демон трафика распознаёт runtime inbound `call/...` как протокол `calls`, а
+  Hydra VK Tunnel использует общий tracked-источник соединений. Если Hydracore
+  передаёт аутентифицированного пользователя в Clash `metadata.user`, байты
+  монотонно начисляются общему и per-protocol счётчику этого пользователя.
 - Release-контракт Hydracore разделён по ролям: Ultimate загружает только
   `hydracore-vps-linux-{arch}.tar.gz` и проверяет VPS identity, server feature,
   multi-user-only режим и wire v1..2. Android client artifact на VPS

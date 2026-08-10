@@ -393,6 +393,10 @@ class ConnectionAttributor:
 DEFAULT_ATTRIBUTOR = ConnectionAttributor(
     aliases={
         "amneziawg": ("awg",),
+        # Hydracore exposes the Hydra VK Tunnel inbound as type ``call`` in
+        # the Clash connections API, while the persisted plugin name is
+        # ``calls``.
+        "calls": ("call",),
         "snell": ("snell-",),
     },
 )
