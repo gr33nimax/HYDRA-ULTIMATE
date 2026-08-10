@@ -37,7 +37,7 @@ _TRUSTED_RELEASES = {
     ),
     KERNEL_HYDRACORE: _ReleaseSpec(
         "gr33nimax/hydracore",
-        lambda arch: rf"^hydracore-linux-{re.escape(arch)}\.tar\.gz$",
+        lambda arch: rf"^hydracore-vps-linux-{re.escape(arch)}\.tar\.gz$",
     ),
 }
 
@@ -210,14 +210,24 @@ class KernelInfrastructure:
         features = payload.get("features", {})
         protocols = payload.get("protocols", {})
         modes = protocols.get("call_modes", ()) if isinstance(protocols, dict) else ()
+        wire = (
+            protocols.get("call_vk_multi_user_wire", {})
+            if isinstance(protocols, dict)
+            else {}
+        )
         return bool(
             isinstance(identity, dict)
             and identity.get("core_id") == _HYDRACORE_CORE_ID
+            and identity.get("role") == "vps"
             and isinstance(features, dict)
             and features.get("call_vk_multi_user") is True
+            and features.get("call_vk_multi_user_server") is True
+            and features.get("call_vk_multi_user_client") is False
             and isinstance(modes, list)
-            and all(isinstance(mode, str) for mode in modes)
-            and "multi_user" in modes
+            and modes == ["multi_user"]
+            and isinstance(wire, dict)
+            and wire.get("min") == 1
+            and wire.get("max") == 2
         )
 
     def _inspect_binary(self, binary: Path, *, running: bool) -> KernelRuntimeStatus:
@@ -299,7 +309,7 @@ class KernelInfrastructure:
             if not self._has_hydracore_contract(payload):
                 raise RuntimeError(
                     "Hydracore must expose exact identity, "
-                    "features.call_vk_multi_user and the multi_user call mode",
+                    "the VPS Calls role, multi_user-only mode, and wire v1..2",
                 )
         if self._config_path.exists():
             checked = self._run(candidate, "check", "-c", str(self._config_path))

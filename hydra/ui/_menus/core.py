@@ -55,11 +55,10 @@ def run_core_menu(
     while True:
         state = app.admin.load_state()
         deps.clear()
-        diagnostics = app.admin.singbox_diagnostics()
         kernel_status = app.kernel.status(state)
-        installed = diagnostics.installed
-        running = diagnostics.running
-        version = diagnostics.version
+        installed = kernel_status.runtime.installed
+        running = kernel_status.runtime.running
+        version = kernel_status.runtime.version
 
         update_available = state.install.get(
             "singbox_update_available",

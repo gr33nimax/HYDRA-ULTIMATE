@@ -209,7 +209,7 @@ def test_trusted_asset_digest_cannot_be_bypassed_by_emergency_flag(tmp_path):
 
     response = MagicMock()
     response.__enter__.return_value.read.return_value = (
-        b'{"assets":[{"name":"hydracore-linux-amd64.tar.gz",'
+        b'{"assets":[{"name":"hydracore-vps-linux-amd64.tar.gz",'
         b'"browser_download_url":"https://example.invalid/core"}]}'
     )
     with patch.object(downloader.urllib.request, "urlopen", return_value=response), \
@@ -217,7 +217,7 @@ def test_trusted_asset_digest_cannot_be_bypassed_by_emergency_flag(tmp_path):
          patch.object(downloader, "download") as download:
         ok = downloader.download_github_asset_filtered(
             "gr33nimax/hydracore",
-            lambda name: name == "hydracore-linux-amd64.tar.gz",
+            lambda name: name == "hydracore-vps-linux-amd64.tar.gz",
             tmp_path / "core.tar.gz",
             require_digest=True,
         )

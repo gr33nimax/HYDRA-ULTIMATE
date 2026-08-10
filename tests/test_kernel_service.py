@@ -83,19 +83,33 @@ def test_kernel_service_rolls_runtime_back_when_state_save_fails() -> None:
 
 def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
     valid = {
-        "identity": {"core_id": "io.hydrabox.hydracore"},
-        "features": {"call_vk_multi_user": True},
-        "protocols": {"call_modes": ["multi_user"]},
+        "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
+        "features": {
+            "call_vk_multi_user": True,
+            "call_vk_multi_user_client": False,
+            "call_vk_multi_user_server": True,
+        },
+        "protocols": {
+            "call_modes": ["multi_user"],
+            "call_vk_multi_user_wire": {"min": 1, "max": 2},
+        },
     }
     alias = {
-        "identity": {"core_id": "io.hydrabox.hydracore"},
+        "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
         "features": {"call_vk_multiuser": True},
         "protocols": {"call_modes": ["multi_user"]},
     }
     p2p_only = {
-        "identity": {"core_id": "io.hydrabox.hydracore"},
-        "features": {"call_vk_multi_user": True},
-        "protocols": {"call_modes": ["p2p"]},
+        "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
+        "features": {
+            "call_vk_multi_user": True,
+            "call_vk_multi_user_client": False,
+            "call_vk_multi_user_server": True,
+        },
+        "protocols": {
+            "call_modes": ["p2p"],
+            "call_vk_multi_user_wire": {"min": 1, "max": 2},
+        },
     }
 
     assert KernelInfrastructure._has_hydracore_contract(valid) is True

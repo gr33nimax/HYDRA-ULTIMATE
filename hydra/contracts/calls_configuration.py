@@ -35,6 +35,28 @@ class CallsStateAccess(Protocol):
     network: CallsNetworkState
 
 
+def public_endpoint(
+    state: CallsStateAccess,
+    observed: str | Callable[[], str] = "",
+) -> str:
+    """Return the explicit Calls endpoint without borrowing a transport SNI."""
+    desired = state.protocols.get("calls")
+    configured = desired.config.get("public_endpoint", "") if desired else ""
+    fallback = (
+        observed()
+        if callable(observed) and not configured and not state.network.server_ip
+        else observed
+    )
+    endpoint = str(configured or state.network.server_ip or fallback).strip().strip("[]")
+    if not endpoint or len(endpoint) > 253 or any(char.isspace() for char in endpoint):
+        raise ValueError("Calls public_endpoint must be an IP address or DNS name")
+    if endpoint.startswith(("http://", "https://")) or "/" in endpoint or ":" in endpoint:
+        raise ValueError("Calls public_endpoint must not contain a scheme, port, or path")
+    if not re.fullmatch(r"[A-Za-z0-9.-]+", endpoint):
+        raise ValueError("Calls public_endpoint must be an IP address or DNS name")
+    return endpoint
+
+
 def call_mode(state: CallsStateAccess) -> str:
     desired = state.protocols.get("calls")
     value = (
@@ -218,4 +240,5 @@ __all__ = [
     "call_mode",
     "multi_user_inbound",
     "multi_user_outbound",
+    "public_endpoint",
 ]

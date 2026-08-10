@@ -75,9 +75,9 @@ def _dispatch(choice: str, state: AppState, app: ApplicationService) -> bool:
     if choice == "0":
         return False
     if choice == "1" and not desired.installed:
-        _show_result(app.calls.enable_native_vk(state), "Calls · VK установлен")
+        _show_result(app.calls.enable_native_vk(state), "Обход БС установлен")
     elif choice == "1" and confirm("Переустановить Calls и пересоздать VK-пул?"):
-        _show_result(app.calls.reinstall_native_vk(state), "Calls · VK переустановлен")
+        _show_result(app.calls.reinstall_native_vk(state), "Обход БС переустановлен")
     elif choice == "2" and desired.installed:
         _show_profile(state, app)
     elif choice == "3" and desired.installed:
@@ -95,7 +95,7 @@ def _dispatch(choice: str, state: AppState, app: ApplicationService) -> bool:
         if confirm("Удалить Calls и сохранённые join-links?"):
             removed = _show_result(
                 app.calls.uninstall_native_vk(state),
-                "Calls · VK удалён",
+                "Обход БС удалён",
             )
             if removed:
                 return False

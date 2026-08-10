@@ -64,9 +64,19 @@ class CapabilityHost(ProbeHost):
             command,
             0,
             stdout=json.dumps({
-                "identity": {"core_id": "io.hydrabox.hydracore"},
-                "features": {"call_vk_multi_user": True},
-                "protocols": {"call_modes": ["multi_user"]},
+                "identity": {
+                    "core_id": "io.hydrabox.hydracore",
+                    "role": "vps",
+                },
+                "features": {
+                    "call_vk_multi_user": True,
+                    "call_vk_multi_user_client": False,
+                    "call_vk_multi_user_server": True,
+                },
+                "protocols": {
+                    "call_modes": ["multi_user"],
+                    "call_vk_multi_user_wire": {"min": 1, "max": 2},
+                },
             }),
             stderr="",
         )
@@ -81,13 +91,17 @@ def test_multi_user_support_requires_feature_and_mode_capability() -> None:
     "payload",
     [
         {
-            "identity": {"core_id": "io.hydrabox.hydracore"},
+            "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
             "features": {"call_vk_multiuser": True},
             "protocols": {"call_modes": ["multi_user"]},
         },
         {
-            "identity": {"core_id": "io.hydrabox.hydracore"},
-            "features": {"call_vk_multi_user": True},
+            "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
+            "features": {
+                "call_vk_multi_user": True,
+                "call_vk_multi_user_server": True,
+                "call_vk_multi_user_client": False,
+            },
             "protocols": {"call_modes": ["p2p"]},
         },
         {

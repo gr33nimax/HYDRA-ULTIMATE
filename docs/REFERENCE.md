@@ -38,7 +38,7 @@
 | `shadowtls` | ShadowTLS | ShadowTLS v3 с Trojan detour |
 | `snell` | Snell v4 | TCP/UDP-прокси из Sing-Box Extended |
 | `telemt` | MTProto / Telemt | Telegram MTProxy с управлением пользователями |
-| `calls` | Calls · VK | Native `call`: только Hydracore multi-user |
+| `calls` | Обход БС | Native `call`: только Hydracore multi-user |
 | `wdtt` | qWDTT | WireGuard-туннелирование поверх TURN |
 
 `ApplicationService.headless_creator` владеет установкой provider drivers и их
@@ -150,6 +150,9 @@ resource с outbound `type=call`, `platform=vk`, `mode=multi_user`, endpoint,
 per-user credentials и `join_links`. Singular `join_link` не генерируется в
 resource/outbound; admin DTO сохраняет первый link под старым именем только как
 compatibility metadata.
+Endpoint берётся из persisted `calls.config.public_endpoint`; при первой
+установке он фиксируется из `network.server_ip` либо наблюдаемого публичного IP
+VPS. SNI/transport domain в это поле не подставляется.
 Resource запрашивает ровно `network.outbound`, объявляет core features `call`
 и `call_vk_multi_user` и не публикует серверные VK cookies. Отсутствующий пул
 завершает генерацию fail-closed, а не создаёт неполный профиль. qWDTT при этом
@@ -383,7 +386,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
    51821/udp  AmneziaWG                           source-relay
    56000/udp  qWDTT · DTLS/TURN
    56001/udp  qWDTT · WireGuard
-   56002/udp  Calls · VK multi-user
+   56002/udp  Обход БС (VK Calls multi-user)
    2012–2022/tcp    Mieru
    32000–32999/tcp  Snell
 ```
@@ -399,7 +402,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 | `51820/udp`, `51821/udp` | UDP | AmneziaWG |
 | `56000/udp` | UDP | qWDTT — DTLS/TURN |
 | `56001/udp` | UDP | qWDTT — WireGuard |
-| `56002/udp` | UDP | Calls · VK — Hydracore multi-user listener |
+| `56002/udp` | UDP | Обход БС — Hydracore VK Calls multi-user listener |
 | `2012–2022/tcp` | TCP | Mieru (диапазон) |
 | `32000–32999/tcp` | TCP | Snell (диапазон) |
 | `9443/tcp` | TCP | Сервер подписок (обычно за Caddy L4 по домену) |
