@@ -239,6 +239,29 @@ def test_transient_oneshot_services_are_not_expected_to_remain_active():
     assert "continue" in capture
 
 
+def test_template_units_are_replaced_with_loaded_instances_before_capture():
+    source = _source()
+    discovery = source[
+        source.index("discover_units() {") : source.index(
+            "\n}\n",
+            source.index("discover_units() {"),
+        )
+    ]
+
+    assert "systemctl list-unit-files" in discovery
+    assert "systemctl list-units" in discovery
+    assert '[[ "$unit" =~ @\\.(service|timer)$ ]] && continue' in discovery
+    assert 'MANAGED_UNITS+=("$unit")' in discovery
+
+
+def test_linux_upgrade_smoke_covers_active_template_instances():
+    source = LINUX_UPGRADE_SMOKE.read_text(encoding="utf-8")
+
+    assert "hydra-headless-creator-vk-calls@.service" in source
+    assert "hydra-headless-creator-vk-calls@a-1.service" in source
+    assert source.count('systemctl is-active --quiet "$calls_instance"') >= 3
+
+
 def test_error_and_disconnect_handlers_only_roll_back_in_the_root_shell():
     source = _source()
 

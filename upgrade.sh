@@ -176,7 +176,8 @@ run_install_python() {
 }
 
 discover_units() {
-    local state unit unit_files
+    local loaded_units state unit unit_files
+    local -A seen_units=()
     MANAGED_UNITS=()
     if ! unit_files=$(
         systemctl list-unit-files \
@@ -189,8 +190,27 @@ discover_units() {
     while read -r unit state _; do
         [[ "$unit" =~ ^hydra-.*\.(service|timer)$ \
             || "$unit" == "caddy-l4.service" ]] || continue
+        [[ "$unit" =~ @\.(service|timer)$ ]] && continue
+        [[ -z "${seen_units[$unit]+present}" ]] || continue
+        seen_units["$unit"]=1
         MANAGED_UNITS+=("$unit")
     done <<< "$unit_files"
+    if ! loaded_units=$(
+        systemctl list-units \
+            'hydra-*' 'caddy-l4.service' \
+            --all --plain --no-legend --no-pager 2>/dev/null
+    ); then
+        fail "Не удалось получить список загруженных служб HYDRA в systemd."
+        return 1
+    fi
+    while read -r unit _; do
+        [[ "$unit" =~ ^hydra-.*\.(service|timer)$ \
+            || "$unit" == "caddy-l4.service" ]] || continue
+        [[ "$unit" =~ @\.(service|timer)$ ]] && continue
+        [[ -z "${seen_units[$unit]+present}" ]] || continue
+        seen_units["$unit"]=1
+        MANAGED_UNITS+=("$unit")
+    done <<< "$loaded_units"
 }
 
 capture_active_units() {

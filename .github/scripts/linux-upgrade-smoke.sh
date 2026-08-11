@@ -22,6 +22,8 @@ git_workspace() {
 }
 install_dir=/opt/hydra
 unit=/etc/systemd/system/hydra-ci-upgrade.service
+calls_unit=/etc/systemd/system/hydra-headless-creator-vk-calls@.service
+calls_instance=hydra-headless-creator-vk-calls@a-1.service
 wrapper=/usr/local/bin/hydra
 tmp_dir=$(mktemp -d /tmp/hydra-upgrade-integration.XXXXXX)
 remote="$tmp_dir/remote.git"
@@ -42,7 +44,8 @@ wrapper_existed=0
 
 cleanup() {
     systemctl stop hydra-ci-upgrade.service >/dev/null 2>&1 || true
-    rm -f "$unit"
+    systemctl stop "$calls_instance" >/dev/null 2>&1 || true
+    rm -f "$unit" "$calls_unit"
     systemctl daemon-reload >/dev/null 2>&1 || true
     if [[ -L "$install_dir" ]]; then
         rm -f "$install_dir"
@@ -130,9 +133,19 @@ Type=simple
 ExecStartPre=$sentinel
 ExecStart=/bin/sleep infinity
 EOF
+cat > "$calls_unit" <<'EOF'
+[Unit]
+Description=HYDRA Calls template upgrade sentinel %i
+
+[Service]
+Type=simple
+ExecStart=/bin/sleep infinity
+EOF
 systemctl daemon-reload
 systemctl start hydra-ci-upgrade.service
+systemctl start "$calls_instance"
 systemctl is-active --quiet hydra-ci-upgrade.service
+systemctl is-active --quiet "$calls_instance"
 
 neutral_cwd="$tmp_dir/neutral-cwd"
 mkdir "$neutral_cwd"
@@ -164,6 +177,7 @@ fi
 [[ "$(git -C "$install_dir" rev-parse HEAD)" == "$main_sha" ]]
 cmp -s "$wrapper" "$wrapper_fixture"
 systemctl is-active --quiet hydra-ci-upgrade.service
+systemctl is-active --quiet "$calls_instance"
 PYTHONPATH="$install_dir" "$install_dir/.venv/bin/python" - <<'PY'
 import json
 from pathlib import Path
@@ -188,6 +202,7 @@ installed_version=$(
 )
 [[ "$installed_version" == "$target_version" ]]
 systemctl is-active --quiet hydra-ci-upgrade.service
+systemctl is-active --quiet "$calls_instance"
 
 PYTHONPATH="$install_dir" "$install_dir/.venv/bin/python" - <<'PY'
 import json
