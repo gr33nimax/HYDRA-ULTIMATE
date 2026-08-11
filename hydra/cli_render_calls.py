@@ -26,6 +26,13 @@ def render_calls_telemetry(payload: Mapping[str, object]) -> list[str]:
     testers = payload.get("testers")
     if isinstance(testers, Sequence) and testers:
         _append_testers(lines, testers)
+    native = payload.get("native")
+    if isinstance(native, Mapping):
+        _append_native_diagnostics(
+            lines,
+            native,
+            detailed="analysis_input" in payload,
+        )
     _append_findings_and_paths(lines, payload)
     records = payload.get("records")
     if isinstance(records, Sequence) and records:
@@ -49,11 +56,19 @@ def _append_session_details(
             f"  Storage: {_bytes(payload.get('data_bytes'))} / "
             f"{_bytes(payload.get('max_data_bytes'))}",
         )
+        raw_bytes = payload.get("raw_data_bytes")
+        if raw_bytes and float(raw_bytes) > float(payload.get("data_bytes", 0) or 0):
+            lines.append(
+                f"  Raw retained: {_bytes(raw_bytes)}"
+                f"  |  saved {_percent(1 - float(payload.get('compression_ratio', 1) or 1))}"
+                f"  |  segments {scalar(payload.get('timeline_segments', 0))}",
+            )
     native = payload.get("native")
     native_map = native if isinstance(native, Mapping) else {}
     native_level = native_map.get("diagnostic_level")
     if native_level:
-        lines.append(f"  Native coverage: {scalar(native_level)}")
+        if "continuity" not in native_map:
+            lines.append(f"  Native coverage: {scalar(native_level)}")
     elif "native_available" in payload:
         lines.append(
             "  Native coverage: "
@@ -96,6 +111,147 @@ def _append_testers(lines: list[str], testers: Sequence[object]) -> None:
     lines.extend(["", "Testers", *table(("ID", "Traffic", "p95"), rows)])
 
 
+def _append_native_diagnostics(
+    lines: list[str],
+    native: Mapping[str, object],
+    *,
+    detailed: bool,
+) -> None:
+    coverage = native.get("tester_coverage")
+    coverage_map = coverage if isinstance(coverage, Mapping) else {}
+    missing = native.get("missing_entities")
+    missing_items = [str(value) for value in missing] if isinstance(missing, Sequence) else []
+    missing_groups = native.get("missing_groups")
+    group_items = (
+        [str(value) for value in missing_groups]
+        if isinstance(missing_groups, Sequence)
+        else []
+    )
+    continuity = native.get("continuity")
+    continuity_map = continuity if isinstance(continuity, Mapping) else {}
+    lines.extend([
+        "",
+        "Native diagnostics",
+        (
+            f"  Coverage: {scalar(native.get('diagnostic_level', 'unavailable'))}"
+            f"  |  records {scalar(native.get('records', 0))}"
+            f"  |  testers {scalar(len(coverage_map))}"
+        ),
+        (
+            "  Continuity: "
+            f"gaps={scalar(continuity_map.get('gap_count', 0))}, "
+            f"missing_seq={scalar(continuity_map.get('missing_sequences', 0))}, "
+            f"control_drop={scalar(continuity_map.get('control_drops', 0))}, "
+            f"client_drop={scalar(continuity_map.get('client_record_drops', 0))}, "
+            f"server_drop={scalar(continuity_map.get('server_record_drops', 0))}, "
+            f"lease_expiry={scalar(continuity_map.get('lease_expirations', 0))}"
+        ),
+    ])
+    missing_all = [*missing_items, *group_items]
+    if missing_all:
+        shown = missing_all if detailed else missing_all[:8]
+        lines.append("  Missing: " + ", ".join(shown))
+        if len(shown) < len(missing_all):
+            lines.append(f"    ... and {len(missing_all) - len(shown)} more; run telemetry report")
+    _append_native_sessions(lines, native)
+    _append_native_workers(lines, native, detailed=detailed)
+
+
+def _append_native_sessions(
+    lines: list[str],
+    native: Mapping[str, object],
+) -> None:
+    rows = []
+    first_report: Mapping[str, object] | None = None
+    for side, key in (("server", "server_sessions"), ("client", "client_sessions")):
+        raw_reports = native.get(key)
+        if not isinstance(raw_reports, Sequence):
+            continue
+        for report in raw_reports:
+            if not isinstance(report, Mapping):
+                continue
+            if first_report is None:
+                first_report = report
+            rows.append((
+                side,
+                report.get("tester_id", "-"),
+                _short_id(report.get("native_session_id")),
+                _bitrate(report.get("wire_bps")),
+                _percent(report.get("kcp_retransmission_ratio")),
+                scalar(round(_gauge(report, "kcp_wait_snd", "p95"), 1)),
+                f"{_gauge(report, 'kcp_rtt_ms', 'p95'):.0f} ms",
+                _percent(_gauge(report, "network_loss_ratio", "p95")),
+            ))
+    if rows:
+        if first_report is not None:
+            lines.extend([
+                "",
+                (
+                    "Transport config: "
+                    f"MTU={_gauge(first_report, 'kcp_mtu_bytes', 'max'):.0f}, "
+                    f"window={_gauge(first_report, 'kcp_send_window_segments', 'max'):.0f}, "
+                    f"pending={_gauge(first_report, 'kcp_max_pending_segments', 'max'):.0f}, "
+                    f"update={_gauge(first_report, 'kcp_update_interval_ms', 'max'):.0f} ms, "
+                    f"fast-resend={_gauge(first_report, 'kcp_fast_resend', 'max'):.0f}, "
+                    f"congestion={_gauge(first_report, 'kcp_congestion_control', 'max'):.0f}"
+                ),
+            ])
+        lines.extend([
+            "Transport sessions",
+            *table(
+                ("Side", "Tester", "Session", "Wire avg", "KCP retx", "Wait p95", "RTT p95", "Loss p95"),
+                rows,
+            ),
+        ])
+
+
+def _append_native_workers(
+    lines: list[str],
+    native: Mapping[str, object],
+    *,
+    detailed: bool,
+) -> None:
+    candidates: list[tuple[float, tuple[object, ...]]] = []
+    for side, key in (("server", "server_workers"), ("client", "client_workers")):
+        raw_reports = native.get(key)
+        if not isinstance(raw_reports, Sequence):
+            continue
+        for report in raw_reports:
+            if not isinstance(report, Mapping):
+                continue
+            drops = _counter(report, "worker_send_queue_drops_total") + _counter(
+                report,
+                "peer_read_queue_drops_total",
+            )
+            reconnects = _counter(report, "worker_reconnect_total")
+            loss = _gauge(report, "network_loss_ratio", "p95")
+            active = _gauge(report, "worker_active", "max")
+            score = drops * 1000 + reconnects * 100 + loss * 100 + (0 if active else 1)
+            candidates.append((score, (
+                side,
+                report.get("tester_id", "-"),
+                scalar(report.get("worker_id", "-")),
+                "yes" if active else "no",
+                _bitrate(report.get("wire_bps")),
+                _percent(loss),
+                scalar(round(drops, 1)),
+                scalar(round(reconnects, 1)),
+                scalar(round(_gauge(report, "turn_selected_endpoint_ordinal", "p95"), 1)),
+            )))
+    if not candidates:
+        return
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    shown = candidates if detailed else candidates[:12]
+    lines.extend([
+        "",
+        "Workers" + ("" if detailed else f" (top {len(shown)} of {len(candidates)})"),
+        *table(
+            ("Side", "Tester", "ID", "Active", "Wire avg", "Loss p95", "Drops", "Reconnect", "TURN #"),
+            [row for _, row in shown],
+        ),
+    ])
+
+
 def _append_findings_and_paths(
     lines: list[str],
     payload: Mapping[str, object],
@@ -134,13 +290,35 @@ def render_calls_telemetry_record(
     if kind == "native":
         metrics = record.get("metrics")
         metric_map = metrics if isinstance(metrics, Mapping) else {}
+        important = (
+            "worker_active",
+            "kcp_wait_snd",
+            "kcp_rtt_ms",
+            "kcp_retrans_segments_total",
+            "network_loss_ratio",
+            "outer_bytes_in_total",
+            "outer_bytes_out_total",
+            "worker_send_queue_drops_total",
+            "telemetry_record_drops_total",
+        )
         preview = ", ".join(
-            f"{key}={scalar(value)}"
-            for key, value in list(metric_map.items())[:8]
+            f"{key}={scalar(metric_map[key])}"
+            for key in important
+            if key in metric_map
         )
         identity = record.get("tester_id") or "server"
+        entity = record.get("native_entity") or record.get("native_scope") or "native"
+        worker = (
+            f" worker={record['worker_id']}"
+            if record.get("worker_id") is not None
+            else ""
+        )
+        session = _short_id(record.get("native_session_id"))
         event = f" event={record['event']}" if record.get("event") else ""
-        return f"{timestamp} NATIVE {identity}{event} {preview}".rstrip()
+        return (
+            f"{timestamp} NATIVE {entity} {identity} session={session}"
+            f"{worker}{event} {preview}"
+        ).rstrip()
     return _sample_record(timestamp, record)
 
 
@@ -195,6 +373,29 @@ def _bitrate(value: object) -> str:
 
 def _percent(value: object) -> str:
     return f"{float(value or 0) * 100:.1f}%"
+
+
+def _gauge(
+    report: Mapping[str, object],
+    metric: str,
+    statistic: str,
+) -> float:
+    gauges = report.get("gauges")
+    gauge_map = gauges if isinstance(gauges, Mapping) else {}
+    value = gauge_map.get(metric)
+    value_map = value if isinstance(value, Mapping) else {}
+    return float(value_map.get(statistic, 0) or 0)
+
+
+def _counter(report: Mapping[str, object], metric: str) -> float:
+    counters = report.get("counters")
+    counter_map = counters if isinstance(counters, Mapping) else {}
+    return float(counter_map.get(metric, 0) or 0)
+
+
+def _short_id(value: object) -> str:
+    text = str(value or "-")
+    return text if len(text) <= 12 else text[-12:]
 
 
 __all__ = ["render_calls_telemetry", "render_calls_telemetry_record"]

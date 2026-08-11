@@ -518,6 +518,12 @@ sudo hydra calls telemetry export --output hydra-vk-tunnel.tar.gz
 sudo hydra calls telemetry stop
 ```
 
+`status` анализирует последние 5000 записей и прямо в CLI показывает
+process/session/worker coverage, telemetry gaps, направления KCP, RTT/loss,
+очереди и проблемные TURN workers. `stop` возвращает ту же итоговую сводку уже
+по всей сессии; отдельный ручной просмотр JSONL для первичного вывода не нужен.
+Полный `report` и машинный `--json` остаются для сравнения прогонов.
+
 `start` требует включённые Hydra VK Tunnel и Clash API, не допускает
 параллельную активную сессию и принимает только существующих уникальных
 пользователей. Допустимый interval — 2–300 секунд, лимит — 16–65536 MiB.
@@ -534,6 +540,8 @@ sudo hydra calls telemetry tail --lines 100 --follow
 
 Manifest находится в `/var/lib/hydra/calls/vk/telemetry/`, timeline — в
 `/var/log/hydra/calls-telemetry/`; каталоги имеют режим `0700`, файлы — `0600`.
+Активный JSONL остаётся доступным для `tail --follow`, старые 8 MiB-сегменты
+сжимаются без удаления записей, а `export` объединяет их обратно.
 Предыдущие сессии не перезаписываются: `report --session ID` позволяет сравнить
 повторные тесты. Ни manifest, ни JSONL не содержат email, IP, destination,
 join-link/token/password или raw connection ID. Порядок аргументов `--tester`

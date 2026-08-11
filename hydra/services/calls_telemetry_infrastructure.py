@@ -129,6 +129,9 @@ class CallsTelemetryInfrastructure:
                 "sample_interval_seconds": sample_interval_seconds,
                 "max_data_bytes": max_data_bytes,
                 "data_bytes": 0,
+                "raw_data_bytes": 0,
+                "compressed_bytes": 0,
+                "timeline_segments": 0,
                 "tester_ids": tester_ids,
                 "tester_hashes": tester_hashes,
                 "salt": salt,
@@ -166,16 +169,31 @@ class CallsTelemetryInfrastructure:
             }
 
     def status(self) -> dict[str, object]:
-        session = self.store.active_session(required=False)
-        if session is None:
-            return {"ok": True, "active": False, "session_id": "", "samples": 0}
-        return {"ok": True} | self._public_status(session, now=self.clock())
+        store = self.store
+        with store.locked():
+            session = store.active_session(required=False)
+            if session is None:
+                return {"ok": True, "active": False, "session_id": "", "samples": 0}
+            now = self.clock()
+            status = {"ok": True} | self._public_status(session, now=now)
+            recent = (
+                store.tail(str(session["session_id"]), limit=5000)
+                if _integer(session.get("native_record_count"))
+                else []
+            )
+        if recent:
+            status |= _report_projection(
+                build_calls_telemetry_report(session, recent, now=now),
+                recent_records=len(recent),
+            )
+        return status
 
     def report(self, session_id: str = "") -> dict[str, object]:
         store = self.store
         session = store.read_session(session_id) if session_id else store.active_session(required=True)
         records, analysis_input = store.analysis_records(str(session["session_id"]))
         report = build_calls_telemetry_report(session, records, now=self.clock())
+        report |= _storage_projection(session)
         report["analysis_input"] = analysis_input
         report["timeline_path"] = str(store.timeline_path(str(session["session_id"])))
         return report
@@ -224,10 +242,11 @@ class CallsTelemetryInfrastructure:
         store = self.store
         with store.locked():
             session = store.read_session(session_id) if session_id else store.active_session(required=True)
-            records, analysis_input = store.analysis_records(str(session["session_id"]))
-            report = build_calls_telemetry_report(session, records, now=self.clock())
-            report["analysis_input"] = analysis_input
-            target = store.export(session, report, output)
+        records, analysis_input = store.analysis_records(str(session["session_id"]))
+        report = build_calls_telemetry_report(session, records, now=self.clock())
+        report |= _storage_projection(session)
+        report["analysis_input"] = analysis_input
+        target = store.export(session, report, output)
         return {
             "ok": True,
             "session_id": str(session["session_id"]),
@@ -253,10 +272,15 @@ class CallsTelemetryInfrastructure:
                 session["stopped_at"] = now
                 session["stop_reason"] = "operator"
                 store.write_session(session)
-            return {"ok": True, "stopped": stopped} | self._public_status(
+            result = {"ok": True, "stopped": stopped} | self._public_status(
                 session,
                 now=now,
             )
+        records, analysis_input = store.analysis_records(str(session["session_id"]))
+        report = build_calls_telemetry_report(session, records, now=now)
+        result |= _report_projection(report, recent_records=len(records))
+        result["analysis_input"] = analysis_input
+        return result
 
     def record(self, state: AppState) -> bool:
         """Update high-frequency cursors and periodically append a full sample."""
@@ -386,6 +410,7 @@ class CallsTelemetryInfrastructure:
         expected = max(0, math.floor(max(0.0, observed_until - started_at) / interval))
         samples = _integer(session.get("sample_count"))
         data_bytes = _integer(session.get("data_bytes"))
+        raw_data_bytes = _integer(session.get("raw_data_bytes")) or data_bytes
         max_bytes = _integer(session.get("max_data_bytes"))
         return {
             "session_id": str(session.get("session_id", "")),
@@ -404,6 +429,9 @@ class CallsTelemetryInfrastructure:
             "native_records": _integer(session.get("native_record_count")),
             "native_available": bool(session.get("native_record_count")),
             "data_bytes": data_bytes,
+            "raw_data_bytes": raw_data_bytes,
+            "compression_ratio": round(data_bytes / raw_data_bytes, 6) if raw_data_bytes else 1.0,
+            "timeline_segments": _integer(session.get("timeline_segments")),
             "max_data_bytes": max_bytes,
             "storage_ratio": round(data_bytes / max_bytes, 6) if max_bytes else 0.0,
         }
@@ -436,6 +464,36 @@ def _number(value: object) -> float:
         return result if math.isfinite(result) else 0.0
     except (TypeError, ValueError):
         return 0.0
+
+
+def _report_projection(
+    report: Mapping[str, object],
+    *,
+    recent_records: int,
+) -> dict[str, object]:
+    return {
+        "window": report.get("window", {}),
+        "calls": report.get("calls", {}),
+        "testers": report.get("testers", []),
+        "native": report.get("native", {}),
+        "resources": report.get("resources", {}),
+        "findings": report.get("findings", []),
+        "recent_records_analyzed": recent_records,
+    }
+
+
+def _storage_projection(session: Mapping[str, object]) -> dict[str, object]:
+    data_bytes = _integer(session.get("data_bytes"))
+    raw_data_bytes = _integer(session.get("raw_data_bytes")) or data_bytes
+    return {
+        "data_bytes": data_bytes,
+        "raw_data_bytes": raw_data_bytes,
+        "compression_ratio": (
+            round(data_bytes / raw_data_bytes, 6) if raw_data_bytes else 1.0
+        ),
+        "timeline_segments": _integer(session.get("timeline_segments")),
+        "max_data_bytes": _integer(session.get("max_data_bytes")),
+    }
 
 
 __all__ = [

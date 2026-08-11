@@ -287,7 +287,8 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/var/lib/hydra/calls/vk/native.join` | Только legacy-артефакт для cleanup при uninstall; новый Calls его не создаёт и не читает |
 | `/var/lib/hydra/calls/vk/pool/` | Multi-user Calls metadata и join-links двух поколений; `0700/0600` |
 | `/var/lib/hydra/calls/vk/telemetry/` | Закрытые manifest/cursors Calls telemetry sessions; без raw identity, `0700/0600` |
-| `/var/log/hydra/calls-telemetry/*.jsonl` | Append-only timeline Calls: samples/events/marks/native; `tester-N` вместо email, файл `0600` |
+| `/var/log/hydra/calls-telemetry/*.jsonl` | Активный хвост timeline Calls для realtime follow; `tester-N` вместо email, файл `0600` |
+| `/var/log/hydra/calls-telemetry/*.part-*.jsonl.gz` | Неизменяемые сжатые сегменты полного timeline; автоматически объединяются при report/export |
 | `/var/log/hydra/calls-telemetry/*.tar.gz` | Очищенные export bundles с timeline, manifest и report |
 | `/run/hydra/calls-telemetry.jsonl` | Опциональный ограниченный native JSONL от инструментированного Hydracore |
 | `/var/lib/hydra/headless-creator/vk/qwdtt/` | Закрытый runtime-каталог поколений creator и `state.json`; права `0700` |

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from hydra.services.calls_telemetry_findings import extended_native_findings
 from hydra.services.calls_telemetry_protocol_analysis import (
-    CLIENT_REQUIRED,
-    SERVER_REQUIRED,
+    CLIENT_SESSION_REQUIRED,
+    CLIENT_WORKER_REQUIRED,
+    SERVER_PROCESS_REQUIRED,
+    SERVER_SESSION_REQUIRED,
+    SERVER_WORKER_REQUIRED,
     analyze_native,
 )
 
@@ -22,14 +25,46 @@ def test_full_diagnostic_level_requires_every_server_and_tester_group() -> None:
             "kind": "native",
             "native_scope": "server",
             "native_kind": "snapshot",
-            "metrics": _metrics(SERVER_REQUIRED),
+            "native_entity": "server_process",
+            "metrics": _metrics(SERVER_PROCESS_REQUIRED),
+        },
+        {
+            "kind": "native",
+            "native_scope": "server",
+            "native_kind": "snapshot",
+            "native_entity": "server_session",
+            "tester_id": "tester-1",
+            "native_session_id": "native-session",
+            "metrics": _metrics(SERVER_SESSION_REQUIRED),
+        },
+        {
+            "kind": "native",
+            "native_scope": "server",
+            "native_kind": "snapshot",
+            "native_entity": "server_worker",
+            "tester_id": "tester-1",
+            "native_session_id": "native-session",
+            "worker_id": 0,
+            "metrics": _metrics(SERVER_WORKER_REQUIRED),
         },
         {
             "kind": "native",
             "native_scope": "client",
             "native_kind": "snapshot",
+            "native_entity": "client_session",
             "tester_id": "tester-1",
-            "metrics": _metrics(CLIENT_REQUIRED),
+            "native_session_id": "native-session",
+            "metrics": _metrics(CLIENT_SESSION_REQUIRED),
+        },
+        {
+            "kind": "native",
+            "native_scope": "client",
+            "native_kind": "snapshot",
+            "native_entity": "client_worker",
+            "tester_id": "tester-1",
+            "native_session_id": "native-session",
+            "worker_id": 0,
+            "metrics": _metrics(CLIENT_WORKER_REQUIRED),
         },
     ]
 

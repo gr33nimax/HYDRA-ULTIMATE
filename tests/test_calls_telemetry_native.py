@@ -23,6 +23,7 @@ def _record() -> str:
         "timestamp": 1001.0,
         "scope": "server",
         "kind": "snapshot",
+        "session_id": "server",
         "metrics": {"worker_active": 3},
     })
 
@@ -41,6 +42,7 @@ def test_incomplete_native_line_is_retried_after_writer_finishes(tmp_path: Path)
     records, invalid = ingest_native_records(session, path, now=1002.0)
     assert invalid == 0
     assert len(records) == 1
+    assert records[0]["native_entity"] == "server_process"
 
 
 def test_oversized_native_line_does_not_consume_the_next_record(tmp_path: Path) -> None:
@@ -51,6 +53,32 @@ def test_oversized_native_line_does_not_consume_the_next_record(tmp_path: Path) 
 
     assert invalid == 1
     assert len(records) == 1
+
+
+def test_native_rotation_handoff_is_drained_before_the_new_runtime_file(tmp_path: Path) -> None:
+    path = tmp_path / "native.jsonl"
+    path.write_text(_record() + "\n", encoding="utf-8")
+    session = _session() | {"session_id": "20260811T120000Z-deadbeef"}
+
+    first, invalid = ingest_native_records(session, path, now=1002.0)
+    assert invalid == 0
+    assert len(first) == 1
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(_record() + "\n")
+    segment = Path(
+        f"{path}.{session['session_id']}.part-00001.jsonl",
+    )
+    path.replace(segment)
+    path.write_text(_record() + "\n", encoding="utf-8")
+
+    old_tail, invalid = ingest_native_records(session, path, now=1003.0)
+    assert invalid == 0
+    assert len(old_tail) == 1
+    assert segment.exists()
+    new_head, invalid = ingest_native_records(session, path, now=1004.0)
+    assert invalid == 0
+    assert len(new_head) == 1
+    assert not segment.exists()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows symlink creation is privileged")

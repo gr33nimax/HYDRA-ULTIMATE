@@ -14,6 +14,7 @@ from hydra.core.state_models import AppState, PluginState, User
 from hydra.services.calls_telemetry import CallsTelemetryService
 from hydra.services.calls_telemetry_correlations import throughput_correlations
 from hydra.services.calls_telemetry_infrastructure import CallsTelemetryInfrastructure
+from hydra.services.calls_telemetry_storage import CallsTelemetryStore
 from hydra.services.system_monitoring import SystemMetrics
 
 
@@ -314,6 +315,50 @@ def test_storage_limit_stops_without_rotating_existing_timeline(tmp_path) -> Non
     assert service.status()["active"] is False
     assert service.status()["stop_reason"] == "storage_limit"
     assert runtime._samples_path(str(started["session_id"])).read_bytes() == before
+
+
+def test_timeline_segments_compress_without_losing_tail_report_or_export(tmp_path) -> None:
+    clock = _Clock()
+    store = CallsTelemetryStore(
+        HostBackend(),
+        tmp_path / "state",
+        tmp_path / "data",
+        clock,
+        segment_bytes=1024,
+    )
+    session = {
+        "schema": 2,
+        "session_id": "20260811T120000Z-deadbeef",
+        "started_at": clock.value,
+        "stopped_at": 0.0,
+        "max_data_bytes": 1024 * 1024,
+        "data_bytes": 0,
+        "raw_data_bytes": 0,
+        "compressed_bytes": 0,
+        "timeline_segments": 0,
+        "sequence": 0,
+        "sample_count": 0,
+    }
+    store.publish(session)
+    for index in range(40):
+        assert store.append_record(
+            session,
+            {
+                "kind": "sample",
+                "timestamp": clock.value + index,
+                "payload": "same-technical-payload-" * 8,
+            },
+            counter="sample_count",
+        )
+
+    assert store.segment_paths(str(session["session_id"]))
+    assert int(session["data_bytes"]) < int(session["raw_data_bytes"])
+    assert len(store.records(str(session["session_id"]))) == 40
+    assert [record["sequence"] for record in store.tail(str(session["session_id"]), limit=3)] == [38, 39, 40]
+    target = store.export(session, {"ok": True}, str(tmp_path / "segmented.tar.gz"))
+    with tarfile.open(target, "r:gz") as archive:
+        timeline = archive.extractfile("timeline.jsonl").read().decode("utf-8")
+    assert len(timeline.splitlines()) == 40
 
 
 def test_mark_tail_follow_and_live_export_share_one_timeline(tmp_path) -> None:

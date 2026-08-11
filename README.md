@@ -157,6 +157,11 @@ sudo hydra calls telemetry export --output hydra-vk-tunnel.tar.gz
 sudo hydra calls telemetry stop
 ```
 
+`status` показывает живую техническую диагностику по тестерам, сессиям и
+VK/TURN-воркерам; `stop` сразу формирует итоговые findings. Timeline хранится
+полностью, но старые 8 MiB-сегменты сжимаются, а `export` собирает их обратно в
+единый `timeline.jsonl`.
+
 Traffic daemon собирает goodput и жизненный цикл соединений, per-user
 атрибуцию, процесс Hydracore, VPS, PSI/softnet/NIC/UDP/conntrack и безопасные
 категории ошибок journald. Полная диагностика VK auth → TURN → DTLS → workers →
