@@ -19,6 +19,14 @@
 
 ### Hydracore / Calls
 
+- Добавлена управляемая оператором техническая телеметрия Hydra VK Tunnel:
+  `start/status/tail/mark/report/export/stop`. Таймера завершения нет; сессия
+  работает до `stop` либо до защитного лимита данных. Единый append-only timeline
+  содержит goodput/lifecycle соединений, ресурсы Hydracore и VPS,
+  PSI/softnet/NIC/UDP/conntrack, категории runtime-событий и нативный контракт
+  VK/TURN/DTLS/worker/KCP. Отчёт строит p50/p95/p99, фазы, корреляции и findings,
+  а export создаёт очищенный `.tar.gz`. Email, IP, destination, token и raw
+  connection ID в timeline не пишутся.
 - Демон трафика распознаёт runtime inbound `call/...` как протокол `calls`, а
   Hydra VK Tunnel использует общий tracked-источник соединений. Если Hydracore
   передаёт аутентифицированного пользователя в Clash `metadata.user`, байты

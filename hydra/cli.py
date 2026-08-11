@@ -17,7 +17,7 @@ from hydra.cli_parser import (
     normalize_legacy_argv,
     parser as build_parser,
 )
-from hydra.cli_render import render_human
+from hydra.cli_render import render_calls_telemetry_record, render_human
 from hydra.core.errors import normalize_error
 from hydra.core.state import load_state, save_state  # compatibility patch seam
 from hydra.core.state_models import AppState
@@ -109,6 +109,33 @@ def _emit(
         )
 
 
+def _follow_calls_telemetry(
+    args: argparse.Namespace,
+    app: ApplicationService,
+) -> int:
+    """Stream the application-owned timeline as human lines or NDJSON."""
+    _require_root()
+    try:
+        records = app.calls_telemetry.follow(
+            args.session,
+            limit=args.lines,
+        )
+        for record in records:
+            if args.compact or args.json or not _stdout_is_tty():
+                _print(record, compact=True)
+            else:
+                print(
+                    render_calls_telemetry_record(
+                        record,
+                        color=_color_enabled(),
+                    ),
+                    flush=True,
+                )
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     normalized = normalize_legacy_argv(raw_argv)
@@ -144,6 +171,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         app = production_application()
         state = load_state()
+        if args.command_id == "calls.telemetry.tail" and args.follow:
+            return _follow_calls_telemetry(args, app)
         result = dispatch(args, state, app, _require_root)
         _emit(
             result.payload,

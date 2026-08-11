@@ -15,6 +15,10 @@ from hydra.cli_format import (
     section as _section,
     table as _table,
 )
+from hydra.cli_render_calls import (
+    render_calls_telemetry,
+    render_calls_telemetry_record,
+)
 
 
 COMMAND_TITLES = {
@@ -54,6 +58,13 @@ COMMAND_TITLES = {
     "antidpi.selftest": "AntiDPI self-test",
     "antidpi.capture": "AntiDPI capture",
     "antidpi.sync": "AntiDPI synchronization",
+    "calls.telemetry.start": "Hydra VK Tunnel telemetry",
+    "calls.telemetry.status": "Hydra VK Tunnel telemetry status",
+    "calls.telemetry.report": "Hydra VK Tunnel telemetry report",
+    "calls.telemetry.tail": "Hydra VK Tunnel live telemetry",
+    "calls.telemetry.mark": "Mark Hydra VK Tunnel telemetry",
+    "calls.telemetry.export": "Export Hydra VK Tunnel telemetry",
+    "calls.telemetry.stop": "Stop Hydra VK Tunnel telemetry",
     "version": "HYDRA version",
 }
 
@@ -345,6 +356,8 @@ def render_human(
         lines.extend(_render_users(mapping))
     elif command_id == "plugin.list":
         lines.extend(_render_plugins(mapping))
+    elif command_id.startswith("calls.telemetry."):
+        lines.extend(render_calls_telemetry(mapping))
     elif command_id == "version":
         lines.append(_scalar(mapping.get("version")))
     else:
@@ -374,4 +387,4 @@ def render_human(
     return "\n".join(lines).rstrip()
 
 
-__all__ = ["COMMAND_TITLES", "render_human"]
+__all__ = ["COMMAND_TITLES", "render_calls_telemetry_record", "render_human"]

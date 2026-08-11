@@ -48,6 +48,13 @@ PUBLIC_COMMAND_IDS = {
     "antidpi.selftest",
     "antidpi.capture",
     "antidpi.sync",
+    "calls.telemetry.start",
+    "calls.telemetry.status",
+    "calls.telemetry.report",
+    "calls.telemetry.tail",
+    "calls.telemetry.mark",
+    "calls.telemetry.export",
+    "calls.telemetry.stop",
     "version",
 }
 
@@ -220,6 +227,55 @@ def test_human_error_contains_actionable_code_and_usage():
     assert "host_operation" in output
     assert "hydra plugin enable NAME" in output
     assert "error_details" not in output
+
+
+def test_calls_telemetry_report_renderer_highlights_capacity_and_findings():
+    output = render_human(
+        "calls.telemetry.report",
+        {
+            "ok": True,
+            "session_id": "20260811T120000Z-1234abcd",
+            "active": False,
+            "window": {
+                "samples": 100,
+                "expected_samples": 100,
+                "coverage_ratio": 1.0,
+                "elapsed_seconds": 200,
+            },
+            "calls": {
+                "total_bytes": 1024 * 1024,
+                "average_bps": 2_000_000,
+                "throughput_bps": {"p95": 4_000_000, "max": 8_000_000},
+                "active_connections": {"max": 3},
+                "attribution_ratio": 1.0,
+            },
+            "testers": [
+                {
+                    "tester_id": "tester-1",
+                    "total_bytes": 1024,
+                    "throughput_bps": {"p95": 1000},
+                },
+            ],
+            "native": {"diagnostic_level": "full"},
+            "findings": [
+                {
+                    "severity": "warning",
+                    "message": "UDP drops detected",
+                    "next_step": "Inspect socket buffers",
+                },
+            ],
+        },
+        color=False,
+    )
+
+    assert "Hydra VK Tunnel telemetry report" in output
+    assert "coverage 100.0%" in output
+    assert "2.0 Mbit/s" in output
+    assert "tester-1" in output
+    assert "Elapsed: 200 s" in output
+    assert "Native coverage: full" in output
+    assert "UDP drops detected" in output
+    assert "Inspect socket buffers" in output
 
 
 def test_tty_uses_human_output_while_json_flag_is_machine_stable(capsys):

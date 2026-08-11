@@ -141,6 +141,30 @@ Admin DTO сохраняет singular alias первого элемента то
 обслуживать остальные протоколы. После switch на Hydracore переустановка Calls
 создаёт новый managed-пул.
 
+Для контролируемого теста Hydra VK Tunnel можно запустить отдельную техническую
+сессию для существующих пользователей. Она не имеет таймера и работает до
+явного `stop` либо до защитного лимита данных:
+
+```bash
+sudo hydra calls telemetry start \
+  --tester alpha@example.com \
+  --tester bravo@example.com \
+  --tester charlie@example.com
+sudo hydra calls telemetry status
+sudo hydra calls telemetry mark wifi_speedtest
+sudo hydra calls telemetry tail --follow
+sudo hydra calls telemetry export --output hydra-vk-tunnel.tar.gz
+sudo hydra calls telemetry stop
+```
+
+Traffic daemon собирает goodput и жизненный цикл соединений, per-user
+атрибуцию, процесс Hydracore, VPS, PSI/softnet/NIC/UDP/conntrack и безопасные
+категории ошибок journald. Полная диагностика VK auth → TURN → DTLS → workers →
+KCP требует нативных записей Hydracore; уровень покрытия явно указан в отчёте.
+На диске тестеры обозначены только как `tester-1..N`; email, IP, назначения,
+токены и connection ID не сохраняются. Полный контракт и порядок эксперимента:
+[`docs/CALLS_TELEMETRY.md`](docs/CALLS_TELEMETRY.md).
+
 Ядро выбирается явно и транзакционно:
 
 ```bash

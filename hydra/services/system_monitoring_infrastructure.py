@@ -151,7 +151,7 @@ class HostSystemMonitoring(SystemMonitoring):
         time.sleep(seconds)
 
     def maintain_traffic_log(self) -> None:
-        from hydra.services.traffic_daemon import maintain_traffic_log
+        from hydra.services.traffic_log import maintain_traffic_log
 
         maintain_traffic_log()
 

@@ -62,6 +62,15 @@ hydra
 ├── kernel
 │   ├── status                    выбранное и фактическое ядро
 │   └── switch PROVIDER [--channel stable|preview] [--force]
+├── calls
+│   └── telemetry
+│       ├── start --tester EMAIL… [--interval 2] [--max-mib 2048]
+│       ├── status
+│       ├── tail [--session ID] [--lines N] [--follow]
+│       ├── mark LABEL
+│       ├── report [--session ID]
+│       ├── export [--session ID] [--output FILE.tar.gz]
+│       └── stop
 ├── uninstall [--yes] [--dry-run] [--keep-data]
 └── antidpi
     ├── sync                      установить/обновить телеметрию
@@ -85,6 +94,7 @@ hydra
 | `upgrade ...` | зависит | Проверить или мигрировать установку |
 | `kernel status` | — | Показать desired provider, runtime identity и capabilities |
 | `kernel switch ...` | ✔ | Проверенно и транзакционно заменить совместимое ядро |
+| `calls telemetry ...` | ✔ | Управлять закрытой технической сессией Hydra VK Tunnel |
 | `uninstall` | ✔ | Удалить HYDRA |
 | `antidpi ...` | ✔ | Расширенная диагностика AntiDPI |
 
@@ -483,6 +493,62 @@ sudo hydra uninstall --yes --keep-data
 
 `uninstall` требует явного `--yes`; `--keep-data` сохраняет state и журналы.
 Перед удалением создайте backup и вынесите его за пределы VPS.
+
+## Hydra VK Tunnel telemetry
+
+Сессия для трёх заранее созданных пользователей запускается без таймера:
+
+```bash
+sudo hydra calls telemetry start \
+  --tester alpha@example.com \
+  --tester bravo@example.com \
+  --tester charlie@example.com \
+  --interval 2 \
+  --max-mib 2048
+
+sudo hydra calls telemetry status
+sudo hydra calls telemetry mark wifi_baseline
+sudo hydra calls telemetry tail --follow
+sudo hydra calls telemetry export --output hydra-vk-tunnel.tar.gz
+sudo hydra calls telemetry stop
+```
+
+`start` требует включённые Hydra VK Tunnel и Clash API, не допускает
+параллельную активную сессию и принимает только существующих уникальных
+пользователей. Допустимый interval — 2–300 секунд, лимит — 16–65536 MiB.
+Лимит является fail-safe: старые записи не удаляются, а запись останавливается
+с `stop_reason=storage_limit`. Оператор может выгружать промежуточные snapshots,
+не останавливая сессию.
+
+Для разметки смены сети/нагрузки и просмотра в реальном времени:
+
+```bash
+sudo hydra calls telemetry mark mobile_handover
+sudo hydra calls telemetry tail --lines 100 --follow
+```
+
+Manifest находится в `/var/lib/hydra/calls/vk/telemetry/`, timeline — в
+`/var/log/hydra/calls-telemetry/`; каталоги имеют режим `0700`, файлы — `0600`.
+Предыдущие сессии не перезаписываются: `report --session ID` позволяет сравнить
+повторные тесты. Ни manifest, ни JSONL не содержат email, IP, destination,
+join-link/token/password или raw connection ID. Порядок аргументов `--tester`
+задаёт соответствие `tester-1`, `tester-2`, `tester-3`.
+
+Report включает:
+
+- upload/download и p50/p95/p99/peak throughput для Calls и каждого тестера;
+- p50/p95/p99/max concurrency и долю аутентифицированной атрибуции;
+- coverage, пропущенные samples и максимальный gap;
+- CPU/RAM/network VPS, CPU/RSS/restarts Hydracore;
+- PSI, softnet, NIC, conntrack, host-wide UDP errors и Calls listener queue/drops;
+- события VK/TURN/DTLS/worker/session/relay без сырого текста journald;
+- отмеченные оператором фазы и корреляции goodput с CPU/очередями/RTT/loss;
+- findings с техническим следующим шагом и уровень нативного покрытия.
+
+RTT, jitter, packet loss, KCP retransmit/window и внутренние queue drops не
+вычисляются косвенно. Они доступны только при нативном экспорте Hydracore по
+контракту из [CALLS_TELEMETRY.md](CALLS_TELEMETRY.md); иначе отчёт честно имеет
+уровень `server_observation_only`.
 
 ## AntiDPI
 

@@ -61,6 +61,10 @@ from hydra.services.uninstall import (
 )
 from hydra.services.users import UserService
 from hydra.services.calls import CallOperations, UnavailableCallOperations
+from hydra.services.calls_telemetry import (
+    CallsTelemetryOperations,
+    UnavailableCallsTelemetryOperations,
+)
 from hydra.services.headless_creator import (
     HeadlessCreatorOperations,
     UnavailableHeadlessCreatorOperations,
@@ -122,6 +126,9 @@ class ApplicationService:
         default_factory=UnavailableCertificateInspection,
     )
     calls: CallOperations = field(default_factory=UnavailableCallOperations)
+    calls_telemetry: CallsTelemetryOperations = field(
+        default_factory=UnavailableCallsTelemetryOperations,
+    )
     headless_creator: HeadlessCreatorOperations = field(
         default_factory=UnavailableHeadlessCreatorOperations,
     )

@@ -386,6 +386,36 @@ def _antidpi_command(
     return _result(payload)
 
 
+def _calls_command(
+    args: argparse.Namespace,
+    state: AppState,
+    app: ApplicationService,
+    require_root: Callable[[], None],
+) -> CommandResult:
+    action = args.calls_telemetry_action
+    require_root()
+    if action == "status":
+        return _result(app.calls_telemetry.status())
+    if action == "report":
+        return _result(app.calls_telemetry.report(args.session))
+    if action == "tail":
+        return _result(app.calls_telemetry.tail(args.session, limit=args.lines))
+    if action == "mark":
+        return _result(app.calls_telemetry.mark(args.label))
+    if action == "export":
+        return _result(app.calls_telemetry.export(args.session, args.output))
+    if action == "start":
+        return _result(
+            app.calls_telemetry.start(
+                state,
+                args.tester,
+                sample_interval_seconds=args.interval,
+                max_data_mib=args.max_mib,
+            ),
+        )
+    return _result(app.calls_telemetry.stop())
+
+
 def dispatch(
     args: argparse.Namespace,
     state: AppState,
@@ -409,6 +439,8 @@ def dispatch(
         return _uninstall_command(args, state, app, require_root)
     if domain == "antidpi":
         return _antidpi_command(args, state, app, require_root)
+    if domain == "calls":
+        return _calls_command(args, state, app, require_root)
     raise ValueError(f"unsupported command: {args.command_id}")
 
 
