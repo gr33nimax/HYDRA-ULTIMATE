@@ -1,0 +1,195 @@
+"""Required metric groups for HydraCore VK tunnel telemetry."""
+from __future__ import annotations
+
+SERVER_PROCESS_REQUIRED = {
+    "auth": ("auth_success_total", "auth_failure_total"),
+    "dtls": (
+        "dtls_handshake_success_total",
+        "dtls_handshake_failure_total",
+        "dtls_handshake_latency_ms",
+    ),
+    "handshake": (
+        "handshake_pending",
+        "handshake_rejected_total",
+        "handshake_timeout_total",
+        "handshake_latency_ms",
+    ),
+    "runtime": (
+        "runtime_goroutines",
+        "runtime_heap_bytes",
+        "runtime_gc_pause_seconds_total",
+    ),
+    "session": ("session_active", "session_created_total", "session_closed_total"),
+    "telemetry": (
+        "telemetry_sequence",
+        "telemetry_control_drops_total",
+        "telemetry_record_drops_total",
+        "telemetry_sink_rotations_total",
+    ),
+}
+SERVER_SESSION_REQUIRED = {
+    "kcp": (
+        "kcp_wait_snd",
+        "kcp_out_segments_total",
+        "kcp_retrans_segments_total",
+        "kcp_rtt_ms",
+        "kcp_rto_ms",
+        "kcp_send_blocked_seconds_total",
+        "kcp_mtu_bytes",
+        "kcp_send_window_segments",
+        "kcp_receive_window_segments",
+        "kcp_max_pending_segments",
+        "kcp_update_interval_ms",
+        "kcp_fast_resend",
+        "kcp_congestion_control",
+    ),
+    "outer": (
+        "outer_packets_in_total",
+        "outer_packets_out_total",
+        "outer_bytes_in_total",
+        "outer_bytes_out_total",
+        "outer_auth_failures_total",
+        "outer_wrap_failures_total",
+    ),
+    "relay": (
+        "relay_tcp_active",
+        "relay_udp_active",
+        "relay_bytes_total",
+        "relay_queue_depth",
+        "relay_queue_drops_total",
+        "relay_connect_failure_total",
+    ),
+    "session": ("session_active", "session_age_seconds", "session_idle_seconds"),
+    "worker": (
+        "worker_desired",
+        "worker_active",
+        "worker_send_queue_depth",
+        "worker_send_queue_drops_total",
+        "worker_no_available_drops_total",
+        "worker_liveness_expired_total",
+        "worker_send_queue_capacity",
+        "worker_heartbeat_interval_ms",
+        "worker_liveness_timeout_ms",
+    ),
+    "telemetry": ("telemetry_sequence", "telemetry_control_drops_total"),
+}
+SERVER_WORKER_REQUIRED = {
+    "outer": (
+        "outer_packets_in_total",
+        "outer_packets_out_total",
+        "outer_bytes_in_total",
+        "outer_bytes_out_total",
+        "outer_auth_failures_total",
+        "outer_wrap_failures_total",
+    ),
+    "peer": ("peer_read_queue_depth", "peer_read_queue_drops_total"),
+    "worker": (
+        "worker_active",
+        "worker_send_queue_depth",
+        "worker_send_queue_drops_total",
+        "worker_liveness_expired_total",
+    ),
+    "telemetry": ("telemetry_sequence",),
+}
+CLIENT_WORKER_REQUIRED = {
+    "vk": (
+        "vk_auth_success_total",
+        "vk_auth_failure_total",
+        "vk_auth_latency_ms",
+        "vk_auth_anonym_token_latency_ms",
+        "vk_call_preview_latency_ms",
+        "vk_anonym_call_token_latency_ms",
+        "vk_anonym_login_latency_ms",
+        "vk_join_conversation_latency_ms",
+        "vk_credential_request_total",
+        "vk_credential_fetch_total",
+        "vk_credential_cache_hit_total",
+    ),
+    "turn": (
+        "turn_allocate_success_total",
+        "turn_allocate_failure_total",
+        "turn_allocate_latency_ms",
+        "turn_endpoints_tried_total",
+        "turn_endpoint_count",
+        "turn_selected_endpoint_ordinal",
+    ),
+    "dtls": (
+        "dtls_handshake_success_total",
+        "dtls_handshake_failure_total",
+        "dtls_handshake_latency_ms",
+    ),
+    "inner_auth": (
+        "inner_auth_success_total",
+        "inner_auth_failure_total",
+        "inner_auth_latency_ms",
+    ),
+    "worker": (
+        "worker_active",
+        "worker_reconnect_total",
+        "worker_reconnect_backoff_ms",
+        "worker_send_queue_depth",
+        "worker_send_queue_drops_total",
+        "worker_liveness_expired_total",
+    ),
+    "outer": (
+        "outer_packets_in_total",
+        "outer_packets_out_total",
+        "outer_bytes_in_total",
+        "outer_bytes_out_total",
+        "outer_auth_failures_total",
+        "outer_wrap_failures_total",
+    ),
+    "telemetry": ("telemetry_sequence",),
+}
+CLIENT_SESSION_REQUIRED = {
+    "worker": (
+        "worker_desired",
+        "worker_active",
+        "worker_reconnect_total",
+        "worker_send_queue_capacity",
+        "worker_heartbeat_interval_ms",
+        "worker_liveness_timeout_ms",
+    ),
+    "kcp": (
+        "kcp_wait_snd",
+        "kcp_out_segments_total",
+        "kcp_retrans_segments_total",
+        "kcp_rtt_ms",
+        "kcp_rto_ms",
+        "kcp_send_blocked_seconds_total",
+        "kcp_mtu_bytes",
+        "kcp_send_window_segments",
+        "kcp_receive_window_segments",
+        "kcp_max_pending_segments",
+        "kcp_update_interval_ms",
+        "kcp_fast_resend",
+        "kcp_congestion_control",
+    ),
+    "network": (
+        "network_loss_ratio",
+        "network_jitter_ms",
+        "network_handover_total",
+        "network_change_total",
+    ),
+    "runtime": ("runtime_cpu_percent", "runtime_rss_bytes", "runtime_thermal_state"),
+    "telemetry": (
+        "telemetry_sequence",
+        "telemetry_record_drops_total",
+        "telemetry_lease_expired_total",
+    ),
+}
+
+# Compatibility unions for callers that need the complete metric vocabulary.
+SERVER_REQUIRED = SERVER_PROCESS_REQUIRED | SERVER_SESSION_REQUIRED
+CLIENT_REQUIRED = CLIENT_SESSION_REQUIRED | CLIENT_WORKER_REQUIRED
+
+
+__all__ = [
+    "CLIENT_REQUIRED",
+    "CLIENT_SESSION_REQUIRED",
+    "CLIENT_WORKER_REQUIRED",
+    "SERVER_PROCESS_REQUIRED",
+    "SERVER_REQUIRED",
+    "SERVER_SESSION_REQUIRED",
+    "SERVER_WORKER_REQUIRED",
+]
