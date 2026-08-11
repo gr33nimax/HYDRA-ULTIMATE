@@ -170,8 +170,15 @@ KCP требует нативных записей Hydracore; уровень п�
 ```bash
 hydra kernel status
 sudo hydra kernel switch hydracore
+sudo hydra kernel switch hydracore --channel debug --force
 sudo hydra kernel switch sing-box-extended
 ```
+
+Канал `debug` доступен только для Hydracore. Он выбирает отдельный prerelease
+с маркером `-debug.`, требует нативную телеметрию VK Calls и проходит те же
+проверки digest, ELF, identity/capabilities, активного конфига и health-check.
+Для возврата выполните `sudo hydra kernel switch hydracore --channel stable
+--force`.
 
 Перед возвратом на stock core отключите или удалите активный Calls
 `multi_user`; несовместимый active config будет отклонён до замены бинарника.

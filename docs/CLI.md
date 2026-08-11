@@ -61,7 +61,7 @@ hydra
 │   └── migrate-state             атомарная запись миграций схемы
 ├── kernel
 │   ├── status                    выбранное и фактическое ядро
-│   └── switch PROVIDER [--channel stable|preview] [--force]
+│   └── switch PROVIDER [--channel stable|preview|debug] [--force]
 ├── calls
 │   └── telemetry
 │       ├── start --tester EMAIL… [--interval 2] [--max-mib 2048]
@@ -232,17 +232,22 @@ sudo hydra backup restore /root/hydra.tar.gz --yes
 ```bash
 hydra kernel status
 sudo hydra kernel switch hydracore
+sudo hydra kernel switch hydracore --channel debug --force
 sudo hydra kernel switch sing-box-extended
 ```
 
-Допустимые provider: `sing-box-extended` и `hydracore`; каналы: `stable` и
-`preview`. `stable` использует GitHub latest release без prerelease, а
-`preview` требует последний опубликованный prerelease и не подменяет его
-stable-релизом. Команда принимает только asset доверенного GitHub-репозитория с
+Допустимые provider: `sing-box-extended` и `hydracore`; каналы: `stable`,
+`preview` и `debug`. `stable` использует GitHub latest release без prerelease,
+а `preview` требует последний опубликованный prerelease, исключая отладочные
+релизы Hydracore. `debug` доступен только для Hydracore и выбирает prerelease,
+в теге которого есть `-debug.`. Такой бинарник дополнительно обязан объявить
+нативную телеметрию VK Calls. Команда принимает только asset доверенного GitHub-репозитория с
 единственным точным именем для архитектуры и обязательным `asset.digest`.
 До замены выполняются identity/capability и config-check. После запуска служба
 должна пройти bounded stability check; state сохраняется последним. Любой сбой
 до commit возвращает прежний бинарник и исходное состояние службы.
+Вернуться на стабильное Hydracore можно штатно: `sudo hydra kernel switch
+hydracore --channel stable --force`.
 Calls поддерживает только Hydracore `multi_user`. Его включение fail-closed
 требует exact capability `call_vk_multi_user` и режима `multi_user`; stock core
 не запускает creator и не получает P2P fallback. Перед обратным switch на

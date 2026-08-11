@@ -61,6 +61,8 @@ def _release_metadata(
     *,
     timeout: int,
     include_prerelease: bool = False,
+    prerelease_tag_marker: str = "",
+    prerelease_exclude_marker: str = "",
 ) -> dict:
     endpoint = "releases?per_page=20" if include_prerelease else "releases/latest"
     url = f"https://api.github.com/repos/{repo}/{endpoint}"
@@ -83,11 +85,22 @@ def _release_metadata(
             if isinstance(item, dict)
             and not item.get("draft")
             and item.get("prerelease") is True
+            and isinstance(item.get("tag_name"), str)
+            and (
+                not prerelease_tag_marker
+                or prerelease_tag_marker in item["tag_name"]
+            )
+            and (
+                not prerelease_exclude_marker
+                or prerelease_exclude_marker not in item["tag_name"]
+            )
         ),
         None,
     )
     if release is None:
-        raise ValueError(f"repository {repo} has no published preview releases")
+        raise ValueError(
+            f"repository {repo} has no published matching prerelease",
+        )
     return release
 
 
@@ -96,6 +109,8 @@ def latest_release(
     timeout: int = 10,
     *,
     include_prerelease: bool = False,
+    prerelease_tag_marker: str = "",
+    prerelease_exclude_marker: str = "",
 ) -> str:
     """Возвращает tag_name (с 'v') последнего релиза. 'unknown' при ошибке.
 
@@ -106,6 +121,8 @@ def latest_release(
             repo,
             timeout=timeout,
             include_prerelease=include_prerelease,
+            prerelease_tag_marker=prerelease_tag_marker,
+            prerelease_exclude_marker=prerelease_exclude_marker,
         ).get("tag_name", "unknown"))
     except Exception:
         return "unknown"
@@ -234,6 +251,8 @@ def download_github_asset_filtered(
     dest: Path,
     *,
     include_prerelease: bool = False,
+    prerelease_tag_marker: str = "",
+    prerelease_exclude_marker: str = "",
     require_unique: bool = False,
     require_digest: bool = False,
     on_error: ErrorReporter | None = None,
@@ -254,6 +273,8 @@ def download_github_asset_filtered(
             repo,
             timeout=15,
             include_prerelease=include_prerelease,
+            prerelease_tag_marker=prerelease_tag_marker,
+            prerelease_exclude_marker=prerelease_exclude_marker,
         )
 
         matches = [

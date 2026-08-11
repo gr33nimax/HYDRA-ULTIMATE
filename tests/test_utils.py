@@ -242,6 +242,29 @@ def test_preview_release_selection_skips_stable_and_draft_entries():
         ) == "v2-rc1"
 
 
+def test_prerelease_selection_separates_debug_from_preview():
+    from hydra.utils import downloader
+
+    response = MagicMock()
+    response.__enter__.return_value.read.return_value = (
+        b'[{"tag_name":"v2-debug.3","draft":false,"prerelease":true},'
+        b'{"tag_name":"v2-rc1","draft":false,"prerelease":true}]'
+    )
+    with patch.object(downloader.urllib.request, "urlopen", return_value=response):
+        assert downloader.latest_release(
+            "gr33nimax/hydracore",
+            include_prerelease=True,
+            prerelease_exclude_marker="-debug.",
+        ) == "v2-rc1"
+
+    with patch.object(downloader.urllib.request, "urlopen", return_value=response):
+        assert downloader.latest_release(
+            "gr33nimax/hydracore",
+            include_prerelease=True,
+            prerelease_tag_marker="-debug.",
+        ) == "v2-debug.3"
+
+
 def test_download_closes_mkstemp_descriptor(tmp_path):
     from hydra.utils import downloader
 

@@ -186,13 +186,13 @@ def test_kernel_switch_dispatches_through_application_port(capsys):
          patch.object(cli, "production_application", return_value=app), \
          patch.object(cli, "_require_root") as require_root:
         assert cli.main([
-            "kernel", "switch", "hydracore", "--channel", "stable",
+            "kernel", "switch", "hydracore", "--channel", "debug",
         ]) == 0
     require_root.assert_called_once()
     app.kernel.switch.assert_called_once_with(
         state,
         "hydracore",
-        channel="stable",
+        channel="debug",
         force=False,
     )
 

@@ -133,6 +133,15 @@ def run_core_menu(
             f"⇄ Переключить ядро на {other_provider}",
             "Проверка digest, config-check, health и автоматический rollback",
         ))
+        if state.kernel.provider == "hydracore":
+            target_channel = (
+                "stable" if state.kernel.channel == "debug" else "debug"
+            )
+            items.append((
+                "8",
+                f"🧪 Переключить Hydracore на канал {target_channel}",
+                "Штатная проверка релиза, конфигурации и автоматический rollback",
+            ))
 
         if installed:
             if update_available:

@@ -27,6 +27,10 @@
 
 ### Hydracore / Calls
 
+- Добавлен изолированный канал ядра `debug`, доступный только для Hydracore.
+  CLI и TUI выбирают только prerelease с маркером `-debug.`, не смешивают его
+  с `preview`, требуют нативный контракт телеметрии и сохраняют существующие
+  digest/config/health проверки с автоматическим rollback.
 - Добавлена управляемая оператором техническая телеметрия Hydra VK Tunnel:
   `start/status/tail/mark/report/export/stop`. Таймера завершения нет; сессия
   работает до `stop` либо до защитного лимита данных. Единый append-only timeline

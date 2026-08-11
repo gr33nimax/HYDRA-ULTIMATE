@@ -121,6 +121,41 @@ def handle_kernel_choice(
         deps.prompt("Нажмите Enter")
         return True
 
+    if choice == "8" and state.kernel.provider == "hydracore":
+        channel = "stable" if state.kernel.channel == "debug" else "debug"
+        if not confirm_action(
+            f"Переключить Hydracore на канал {channel}?",
+            default=False,
+        ):
+            return True
+        deps.info(f"Проверяю и устанавливаю Hydracore {channel}...")
+        try:
+            result = app.kernel.switch(
+                state,
+                "hydracore",
+                channel=channel,
+                force=True,
+            )
+        except Exception as exc:
+            deps.error(str(exc) or exc.__class__.__name__)
+            deps.prompt("Нажмите Enter")
+            return True
+        if result.ok:
+            deps.success(result.message)
+            if app.apply(state):
+                deps.success("Конфигурация пересобрана и применена")
+            else:
+                deps.warn(
+                    deps.apply_error_text(
+                        "Не удалось автоматически применить конфигурацию",
+                        app,
+                    ),
+                )
+        else:
+            deps.error(result.message or "Не удалось переключить канал Hydracore")
+        deps.prompt("Нажмите Enter")
+        return True
+
     return False
 
 

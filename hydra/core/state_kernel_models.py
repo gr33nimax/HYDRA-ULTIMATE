@@ -10,7 +10,7 @@ SUPPORTED_KERNEL_PROVIDERS = frozenset({
     KERNEL_SINGBOX_EXTENDED,
     KERNEL_HYDRACORE,
 })
-SUPPORTED_KERNEL_CHANNELS = frozenset({"stable", "preview"})
+SUPPORTED_KERNEL_CHANNELS = frozenset({"stable", "preview", "debug"})
 
 
 @dataclass
@@ -38,6 +38,8 @@ def _validate_values(provider: object, channel: object) -> None:
     if not isinstance(channel, str) or channel not in SUPPORTED_KERNEL_CHANNELS:
         choices = ", ".join(sorted(SUPPORTED_KERNEL_CHANNELS))
         raise ValueError(f"kernel channel must be one of: {choices}")
+    if channel == "debug" and provider != KERNEL_HYDRACORE:
+        raise ValueError("kernel debug channel is available only for hydracore")
 
 
 __all__ = [

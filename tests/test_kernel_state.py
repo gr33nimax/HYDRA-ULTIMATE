@@ -54,6 +54,16 @@ def test_kernel_selection_rejects_unknown_provider_or_channel() -> None:
         validate_raw_kernel_config({"provider": "unknown"})
 
 
+def test_debug_channel_is_reserved_for_hydracore() -> None:
+    validate_kernel_config(KernelConfig(provider="hydracore", channel="debug"))
+
+    with pytest.raises(ValueError, match="only for hydracore"):
+        validate_kernel_config(KernelConfig(
+            provider="sing-box-extended",
+            channel="debug",
+        ))
+
+
 def test_current_state_rejects_legacy_calls_mode() -> None:
     state = AppState(protocols={
         "calls": PluginState(config={"mode": "p2p"}),

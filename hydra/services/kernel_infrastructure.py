@@ -16,6 +16,7 @@ from hydra.core.state_kernel_models import (
     KERNEL_SINGBOX_EXTENDED,
 )
 from hydra.services.kernel import KernelRuntimeStatus
+from hydra.services.kernel_release_channels import kernel_release_selection
 from hydra.utils.downloader import (
     download_github_asset_filtered,
     extract_tarball,
@@ -230,6 +231,15 @@ class KernelInfrastructure:
             and wire.get("max") == 2
         )
 
+    @classmethod
+    def _has_hydracore_debug_contract(cls, payload: dict) -> bool:
+        features = payload.get("features", {})
+        return bool(
+            cls._has_hydracore_contract(payload)
+            and isinstance(features, dict)
+            and features.get("call_vk_telemetry") is True
+        )
+
     def _inspect_binary(self, binary: Path, *, running: bool) -> KernelRuntimeStatus:
         version_output = self._version_output(binary)
         capability_payload = self._capability_payload(binary)
@@ -275,11 +285,14 @@ class KernelInfrastructure:
         pattern = re.compile(spec.asset_name(arch))
         archive = directory / "kernel.tar.gz"
         errors: list[str] = []
+        selection = kernel_release_selection(provider, channel)
         downloaded = self._download(
             spec.repository,
             lambda name: pattern.fullmatch(name) is not None,
             archive,
-            include_prerelease=channel == "preview",
+            include_prerelease=selection.include_prerelease,
+            prerelease_tag_marker=selection.prerelease_tag_marker,
+            prerelease_exclude_marker=selection.prerelease_exclude_marker,
             require_unique=True,
             require_digest=True,
             on_error=errors.append,
@@ -298,7 +311,12 @@ class KernelInfrastructure:
         candidates[0].chmod(0o755)
         return candidates[0]
 
-    def _validate_candidate(self, candidate: Path, provider: str) -> KernelRuntimeStatus:
+    def _validate_candidate(
+        self,
+        candidate: Path,
+        provider: str,
+        channel: str = "stable",
+    ) -> KernelRuntimeStatus:
         status = self._inspect_binary(candidate, running=False)
         if status.provider != provider:
             raise RuntimeError(
@@ -311,6 +329,10 @@ class KernelInfrastructure:
                     "Hydracore must expose exact identity, "
                     "the VPS Calls role, multi_user-only mode, and wire v1..2",
                 )
+            if channel == "debug" and not self._has_hydracore_debug_contract(payload):
+                raise RuntimeError(
+                    "Hydracore debug must expose native VK Calls telemetry",
+                )
         if self._config_path.exists():
             checked = self._run(candidate, "check", "-c", str(self._config_path))
             if checked.returncode != 0:
@@ -320,8 +342,7 @@ class KernelInfrastructure:
     def prepare_switch(self, provider: str, channel: str) -> _PreparedSwitch:
         if provider not in _TRUSTED_RELEASES:
             raise ValueError(f"unsupported kernel provider: {provider}")
-        if channel not in {"stable", "preview"}:
-            raise ValueError(f"unsupported kernel channel: {channel}")
+        kernel_release_selection(provider, channel)
         lease = _KernelLease.acquire(self._lock_path)
         backup = self._binary_path.with_name(f".{self._binary_path.name}.kernel.bak")
         singbox = self._singbox()
@@ -352,7 +373,7 @@ class KernelInfrastructure:
             cleanup()
             with tempfile.TemporaryDirectory(prefix="hydra-kernel-") as temp:
                 candidate = self._download_candidate(provider, channel, Path(temp))
-                candidate_status = self._validate_candidate(candidate, provider)
+                candidate_status = self._validate_candidate(candidate, provider, channel)
                 if target_existed:
                     self._host.atomic_copy(self._binary_path, backup, mode=0o700)
                 if was_running:

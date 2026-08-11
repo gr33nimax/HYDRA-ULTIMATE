@@ -98,6 +98,7 @@ def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
             "call_vk_multi_user": True,
             "call_vk_multi_user_client": False,
             "call_vk_multi_user_server": True,
+            "call_vk_telemetry": True,
         },
         "protocols": {
             "call_modes": ["multi_user"],
@@ -123,10 +124,30 @@ def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
     }
 
     assert KernelInfrastructure._has_hydracore_contract(valid) is True
+    assert KernelInfrastructure._has_hydracore_debug_contract(valid) is True
     assert KernelInfrastructure._has_hydracore_contract(alias) is False
     assert KernelInfrastructure._has_hydracore_contract(p2p_only) is False
     assert "call_vk_multi_user" in KernelInfrastructure._normalized_capabilities(valid)
     assert "call_vk_multi_user" not in KernelInfrastructure._normalized_capabilities(alias)
+
+
+def test_hydracore_debug_contract_requires_native_telemetry() -> None:
+    payload = {
+        "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
+        "features": {
+            "call_vk_multi_user": True,
+            "call_vk_multi_user_client": False,
+            "call_vk_multi_user_server": True,
+            "call_vk_telemetry": False,
+        },
+        "protocols": {
+            "call_modes": ["multi_user"],
+            "call_vk_multi_user_wire": {"min": 1, "max": 2},
+        },
+    }
+
+    assert KernelInfrastructure._has_hydracore_contract(payload) is True
+    assert KernelInfrastructure._has_hydracore_debug_contract(payload) is False
 
 
 def test_kernel_service_rejects_stock_switch_before_mutating_active_calls() -> None:
