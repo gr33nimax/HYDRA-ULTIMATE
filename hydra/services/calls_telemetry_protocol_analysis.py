@@ -10,7 +10,10 @@ from hydra.services.calls_telemetry_analysis_common import (
     _monotonic_series_delta,
     _number,
 )
-from hydra.services.calls_telemetry_native_analysis import analyze_native
+from hydra.services.calls_telemetry_native_analysis import (
+    analyze_native,
+    worker_path_retry_ratios,
+)
 from hydra.services.calls_telemetry_native_contract import (
     CLIENT_REQUIRED,
     CLIENT_SESSION_REQUIRED,
@@ -287,12 +290,7 @@ def _multipath_findings(
             "The run used packet-striped legacy multipath while KCP retransmissions were high.",
             "Repeat the same marked workload with the adaptive profile; compare goodput, stalls, retransmissions and WaitSnd.",
         )]
-    retry_ratios = [
-        ratio
-        for entity in ("server_workers", "client_workers")
-        for ratio in _entity_path_retry_values(native, entity)
-    ]
-    retry_pressure = max(retry_ratios, default=0.0)
+    retry_pressure = max(worker_path_retry_ratios(native), default=0.0)
     if adaptive and retry_pressure >= 0.1:
         return [_finding(
             "warning",
@@ -452,29 +450,6 @@ def _entity_gauge_peak(
         ),
         default=0.0,
     )
-
-
-def _entity_path_retry_values(
-    native: Mapping[str, object],
-    entity: str,
-) -> list[float]:
-    records = native.get(entity, [])
-    if not isinstance(records, Sequence):
-        return []
-    values: list[float] = []
-    for record in records:
-        if not isinstance(record, Mapping) or not _current_or_unclassified(record):
-            continue
-        exact = record.get("worker_path_retransmission_ratio")
-        if exact is not None:
-            values.append(_number(exact))
-            continue
-        gauges = _mapping(record.get("gauges"))
-        metric = "worker_path_retry_ratio"
-        if metric not in gauges:
-            metric = "worker_path_loss_ratio"
-        values.append(_number(_mapping(gauges.get(metric)).get("p95")))
-    return values
 
 
 def _worker_path_imbalance(native: Mapping[str, object]) -> bool:

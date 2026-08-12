@@ -333,6 +333,29 @@ def _entity_reports(
     return reports
 
 
+def worker_path_retry_ratios(native: Mapping[str, object]) -> list[float]:
+    values: list[float] = []
+    for entity in ("server_workers", "client_workers"):
+        records = native.get(entity, [])
+        if not isinstance(records, Sequence):
+            continue
+        for record in records:
+            if not isinstance(record, Mapping) or (
+                "current" in record and not record.get("current")
+            ):
+                continue
+            exact = record.get("worker_path_retransmission_ratio")
+            if exact is not None:
+                values.append(_number(exact))
+                continue
+            gauges = _mapping(record.get("gauges"))
+            metric = "worker_path_retry_ratio"
+            if metric not in gauges:
+                metric = "worker_path_loss_ratio"
+            values.append(_number(_mapping(gauges.get(metric)).get("p95")))
+    return values
+
+
 def _native_continuity(
     entities: Mapping[str, Sequence[Mapping[str, object]]],
 ) -> dict[str, object]:
@@ -460,4 +483,4 @@ def _summary_counter_total(
     )
 
 
-__all__ = ["analyze_native"]
+__all__ = ["analyze_native", "worker_path_retry_ratios"]
