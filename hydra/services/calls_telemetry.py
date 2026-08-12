@@ -168,6 +168,19 @@ class CallsTelemetryService:
                 "session_idle_timeout": str(
                     config.get("session_idle_timeout", "5m"),
                 ),
+                "udp_receive_buffer_bytes": _safe_int(
+                    config.get("udp_receive_buffer_bytes", 4 * 1024 * 1024),
+                ),
+                "udp_send_buffer_bytes": _safe_int(
+                    config.get("udp_send_buffer_bytes", 4 * 1024 * 1024),
+                ),
+                "ingress_workers": _safe_int(config.get("ingress_workers", 0)),
+                "ingress_queue_packets": _safe_int(
+                    config.get("ingress_queue_packets", 4096),
+                ),
+                "peer_read_queue_packets": _safe_int(
+                    config.get("peer_read_queue_packets", 128),
+                ),
             },
         }
         return self.runtime.start(

@@ -39,6 +39,7 @@ _METRIC_PREFIXES = (
     "server_",
     "session_",
     "turn_",
+    "udp_",
     "telemetry_",
     "vk_",
     "wire_",
@@ -50,11 +51,26 @@ _LIVE_METRICS = {
     "kcp_wait_snd",
     "kcp_out_segments_total",
     "kcp_retrans_segments_total",
+    "kcp_out_bytes_total",
+    "kcp_retrans_bytes_total",
     "kcp_rtt_ms",
     "kcp_rto_ms",
     "kcp_send_blocked_seconds_total",
     "outer_bytes_in_total",
     "outer_bytes_out_total",
+    "outer_payload_bytes_in_total",
+    "outer_payload_bytes_out_total",
+    "outer_overhead_bytes_in_total",
+    "outer_overhead_bytes_out_total",
+    "peer_read_queue_depth",
+    "peer_read_queue_capacity",
+    "peer_read_queue_drops_total",
+    "udp_ingress_queue_depth",
+    "udp_ingress_queue_capacity",
+    "udp_ingress_queue_drops_total",
+    "udp_ingress_workers",
+    "udp_socket_receive_buffer_bytes",
+    "udp_socket_send_buffer_bytes",
     "relay_bytes_total",
     "worker_desired",
     "worker_active",
@@ -293,7 +309,7 @@ def _native_entity(
     if scope == "server":
         if worker_id is not None:
             return "server_worker"
-        if not user and session_id == "server":
+        if not user:
             return "server_process"
         return "server_session"
     return "client_worker" if worker_id is not None else "client_session"

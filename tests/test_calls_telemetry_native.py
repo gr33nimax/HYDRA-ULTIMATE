@@ -23,7 +23,7 @@ def _record() -> str:
         "timestamp": 1001.0,
         "scope": "server",
         "kind": "snapshot",
-        "session_id": "server",
+        "session_id": "server-0123456789abcdef",
         "metrics": {"worker_active": 3},
     })
 

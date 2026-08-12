@@ -139,6 +139,15 @@ def protocol_findings(
             "Use per-tester continuity counters before comparing rates; "
             "repeat phases whose client sequence has gaps.",
         ))
+    if _integer(continuity.get("sequence_resets")) or _integer(
+        continuity.get("server_generations"),
+    ) > 1:
+        findings.append(_finding(
+            "warning",
+            "native_source_restarted",
+            "The Calls inbound telemetry producer changed generation or reset its sequence during the run.",
+            "Correlate the generation boundary with configuration apply, service logs and transport recovery time.",
+        ))
     server = _mapping(native.get("server"))
     counters = _combined_counters(native)
     gauges = _mapping(server.get("gauges"))
@@ -146,8 +155,8 @@ def protocol_findings(
         findings.append(_finding(
             "critical",
             "internal_queue_loss",
-            "Hydracore dropped records because an internal worker or peer queue was full.",
-            "Profile the single UDP unwrap path and worker queues; compare larger queues against latency and RSS.",
+            "Hydracore dropped packets in a UDP-ingress, peer-read or worker-send queue.",
+            "Compare the individual queue counters and occupancy percentiles before changing their capacities.",
         ))
     retrans = _sum_matching(counters, ("kcp_retrans", "kcp_fast_retrans", "kcp_lost"))
     out_segments = _sum_matching(counters, ("kcp_out_segments",))
@@ -252,7 +261,6 @@ def protocol_findings(
         for key in (
             "softnet_drops",
             "interface_rx_drops",
-            "interface_tx_drops",
             "interface_rx_errors",
             "interface_tx_errors",
         )
@@ -262,6 +270,13 @@ def protocol_findings(
             "kernel_network_loss",
             "The kernel or network interface dropped packets during the experiment.",
             "Remove host/NIC loss before attributing retransmissions to VK TURN or the tunnel protocol.",
+        ))
+    elif _integer(kernel.get("interface_tx_drops")):
+        findings.append(_finding(
+            "warning",
+            "host_interface_tx_drops",
+            "A host-wide network interface TX-drop counter increased during the experiment.",
+            "Correlate it with the Calls listener and native UDP-ingress counters before attributing it to this tunnel.",
         ))
     return findings
 
@@ -336,11 +351,6 @@ def _combined_counters(native: Mapping[str, object]) -> dict[str, float]:
     summaries.extend(
         _mapping(summary)
         for summary in _mapping(native.get("clients")).values()
-    )
-    summaries.extend(
-        _mapping(summary)
-        for summary in native.get("server_sessions", [])
-        if isinstance(summary, Mapping)
     )
     for summary in summaries:
         for key, value in _mapping(summary.get("counters")).items():

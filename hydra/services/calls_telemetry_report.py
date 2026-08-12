@@ -84,6 +84,29 @@ def build_calls_telemetry_report(
     wire_bytes = _number(server_counters.get("outer_bytes_in_total")) + _number(
         server_counters.get("outer_bytes_out_total"),
     )
+    outer_payload_bytes = _number(
+        server_counters.get("outer_payload_bytes_in_total"),
+    ) + _number(server_counters.get("outer_payload_bytes_out_total"))
+    outer_overhead_bytes = _number(
+        server_counters.get("outer_overhead_bytes_in_total"),
+    ) + _number(server_counters.get("outer_overhead_bytes_out_total"))
+    native["wire_breakdown"] = {
+        "outer_bytes": round(wire_bytes, 3),
+        "outer_payload_bytes": round(outer_payload_bytes, 3),
+        "outer_overhead_bytes": round(outer_overhead_bytes, 3),
+        "kcp_output_bytes": round(
+            _number(server_counters.get("kcp_out_bytes_total")),
+            3,
+        ),
+        "kcp_retransmit_bytes": round(
+            _number(server_counters.get("kcp_retrans_bytes_total")),
+            3,
+        ),
+        "relay_goodput_bytes": round(
+            _number(server_counters.get("relay_bytes_total")),
+            3,
+        ),
+    }
     native["goodput_wire_efficiency_ratio"] = (
         round(total / wire_bytes, 6) if wire_bytes else None
     )

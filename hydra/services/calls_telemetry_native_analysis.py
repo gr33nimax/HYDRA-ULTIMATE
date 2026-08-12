@@ -154,21 +154,19 @@ def analyze_native(
         "missing_entities": missing_entities,
         "missing_groups": missing_groups,
         "tester_coverage": tester_coverage,
-        "server": _metric_summary(server_process),
+        "server": _process_metric_summary(server_process),
         "clients": {
             tester_id: _metric_summary(
                 [
                     record
-                    for entity in ("client_session", "client_worker")
-                    for record in entities[entity]
+                    for record in entities["client_session"]
                     if (str(record.get("tester_id", "")) or "unattributed")
                     == tester_id
                 ],
             )
             for tester_id in sorted({
                 str(record.get("tester_id", "")) or "unattributed"
-                for entity in ("client_session", "client_worker")
-                for record in entities[entity]
+                for record in entities["client_session"]
             })
         },
         "server_sessions": _entity_reports(server_sessions),
@@ -301,6 +299,8 @@ def _native_continuity(
     gap_count = 0
     max_gap = 0.0
     sequence_gaps = 0
+    sequence_resets = 0
+    counter_resets = 0
     summaries_by_entity: dict[str, list[Mapping[str, object]]] = {}
     for entity, records in entities.items():
         for grouped in _group_entities(records).values():
@@ -332,6 +332,17 @@ def _native_continuity(
                 ))
                 if previous and current > previous + stride:
                     sequence_gaps += current - previous - stride
+                if previous and current and current < previous:
+                    sequence_resets += 1
+                previous_metrics = _mapping(previous_record.get("metrics"))
+                current_metrics = _mapping(current_record.get("metrics"))
+                if any(
+                    name.endswith("_total")
+                    and name in current_metrics
+                    and _number(current_metrics.get(name)) < _number(value)
+                    for name, value in previous_metrics.items()
+                ):
+                    counter_resets += 1
             summaries_by_entity.setdefault(entity, []).append(
                 _metric_summary(ordered),
             )
@@ -341,6 +352,9 @@ def _native_continuity(
         "gap_count": gap_count,
         "max_gap_seconds": round(max_gap, 3),
         "missing_sequences": sequence_gaps,
+        "sequence_resets": sequence_resets,
+        "counter_resets": counter_resets,
+        "server_generations": len(_group_entities(entities.get("server_process", []))),
         "control_drops": int(_summary_counter_total(
             server_process,
             "telemetry_control_drops_total",
@@ -362,6 +376,38 @@ def _native_continuity(
             "telemetry_sink_rotations_total",
         )),
     }
+
+
+def _process_metric_summary(
+    records: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    summary = _metric_summary(records)
+    counters: dict[str, float] = {}
+    groups = _group_entities(records)
+    ordered_groups = sorted(
+        groups.values(),
+        key=lambda grouped: min(
+            (_number(record.get("timestamp")) for record in grouped),
+            default=0.0,
+        ),
+    )
+    for index, grouped in enumerate(ordered_groups):
+        grouped_counters = _mapping(_metric_summary(grouped).get("counters"))
+        for name, value in grouped_counters.items():
+            key = str(name)
+            counters[key] = counters.get(key, 0.0) + _number(value)
+        if index:
+            first = min(grouped, key=lambda record: _number(record.get("timestamp")))
+            for name, value in _mapping(first.get("metrics")).items():
+                if str(name).endswith("_total"):
+                    key = str(name)
+                    counters[key] = counters.get(key, 0.0) + _number(value)
+    summary["counters"] = {
+        name: round(value, 3)
+        for name, value in sorted(counters.items())
+    }
+    summary["generations"] = len(groups)
+    return summary
 
 
 def _summary_counter_total(

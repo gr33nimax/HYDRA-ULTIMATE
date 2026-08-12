@@ -141,12 +141,38 @@ def _append_native_diagnostics(
             "  Continuity: "
             f"gaps={scalar(continuity_map.get('gap_count', 0))}, "
             f"missing_seq={scalar(continuity_map.get('missing_sequences', 0))}, "
+            f"seq_reset={scalar(continuity_map.get('sequence_resets', 0))}, "
+            f"generations={scalar(continuity_map.get('server_generations', 0))}, "
             f"control_drop={scalar(continuity_map.get('control_drops', 0))}, "
             f"client_drop={scalar(continuity_map.get('client_record_drops', 0))}, "
             f"server_drop={scalar(continuity_map.get('server_record_drops', 0))}, "
             f"lease_expiry={scalar(continuity_map.get('lease_expirations', 0))}"
         ),
     ])
+    server = native.get("server")
+    server_map = server if isinstance(server, Mapping) else {}
+    server_counters = server_map.get("counters")
+    counter_map = server_counters if isinstance(server_counters, Mapping) else {}
+    lines.append(
+        "  UDP ingress: "
+        f"queue p95={_gauge(server_map, 'udp_ingress_queue_depth', 'p95'):.0f}/"
+        f"{_gauge(server_map, 'udp_ingress_queue_capacity', 'max'):.0f}, "
+        f"drops={scalar(counter_map.get('udp_ingress_queue_drops_total', 0))}, "
+        f"workers={_gauge(server_map, 'udp_ingress_workers', 'max'):.0f}, "
+        f"socket rcv/snd={_bytes(_gauge(server_map, 'udp_socket_receive_buffer_bytes', 'max'))}/"
+        f"{_bytes(_gauge(server_map, 'udp_socket_send_buffer_bytes', 'max'))}"
+    )
+    wire = native.get("wire_breakdown")
+    wire_map = wire if isinstance(wire, Mapping) else {}
+    if wire_map:
+        lines.append(
+            "  Wire: "
+            f"outer={_bytes(wire_map.get('outer_bytes'))}, "
+            f"payload={_bytes(wire_map.get('outer_payload_bytes'))}, "
+            f"wrapper={_bytes(wire_map.get('outer_overhead_bytes'))}, "
+            f"KCP retx={_bytes(wire_map.get('kcp_retransmit_bytes'))}, "
+            f"goodput={_bytes(wire_map.get('relay_goodput_bytes'))}"
+        )
     missing_all = [*missing_items, *group_items]
     if missing_all:
         shown = missing_all if detailed else missing_all[:8]

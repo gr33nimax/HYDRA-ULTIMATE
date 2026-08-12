@@ -21,7 +21,16 @@ def extended_native_findings(
             "Workers expired their liveness window or repeatedly reconnected.",
             "Split by tester/network and compare TURN RTT, heartbeat delivery, rebind and reconnect backoff.",
         ))
-    if _sum(counters, "outer_auth_failures", "outer_wrap_failures"):
+    outer_failures = _sum(
+        counters,
+        "outer_auth_failures",
+        "outer_wrap_failures",
+    )
+    outer_packets = _sum(counters, "outer_packets_in", "outer_packets_out")
+    outer_failure_ratio = outer_failures / max(1.0, outer_packets)
+    if outer_failures >= 10 and (
+        outer_failure_ratio >= 0.001 or outer_failures >= 1000
+    ):
         findings.append(_finding(
             "critical", "outer_packet_authentication_failures",
             "The RTP-shaped ChaCha20-Poly1305 layer rejected or failed to wrap packets.",
@@ -50,7 +59,7 @@ def extended_native_findings(
         findings.append(_finding(
             "warning", "low_wire_efficiency",
             "Less than 60% of measured outer bytes became application goodput.",
-            "Break wire bytes into padding, heartbeat, retransmit and control traffic before changing MTU.",
+            "Use outer payload/overhead and KCP retransmit bytes to locate the excess before changing MTU.",
         ))
     return findings
 

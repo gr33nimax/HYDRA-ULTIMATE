@@ -8,9 +8,8 @@
 Автоматического таймера нет. Защитный лимит диска только прекращает добавление
 новых данных; существующий timeline никогда не ротируется и не удаляется.
 
-Реализация сверена с Hydracore
-[`06c48894`](https://github.com/gr33nimax/hydracore/tree/06c48894c61a88b0ed72156010d239c81f14dec5),
-tag `v1.13.16-extended-hydracore.9`. В режиме `multi_user` сервер является
+Реализация рассчитана на инструментированный Hydracore из совместимой ветки
+`debug`. В режиме `multi_user` сервер является
 UDP/DTLS endpoint, а клиент получает TURN credentials через VK Calls, создаёт
 несколько workers и полосует одну KCP-сессию через них. Поэтому Clash API на
 VPS видит соединения и goodput, но сам по себе не видит latency VK auth/TURN,
@@ -114,10 +113,11 @@ boolean metrics и slug-поля `event/stage/reason`. Максимальная 
 - runtime: CPU, RSS и thermal state.
 
 Точные metric keys зафиксированы в
-`hydra/services/calls_telemetry_protocol_analysis.py`. Текущий изученный
-Hydracore `.9` этот JSONL ещё не производит. До добавления instrumentation в
-client и VPS core Ultimate собирает полный server-observation слой, но честно
-выдаёт critical finding `native_coverage_incomplete`.
+`hydra/services/calls_telemetry_native_contract.py`. Совместимый Hydracore
+производит process/session/worker snapshots на сервере и передаёт клиентские
+snapshots через аутентифицированный control path. Смешивание старого клиента
+или сервера с новым контрактом явно понижает coverage и выдаёт
+`native_coverage_incomplete`.
 
 ## Как читать направления улучшения
 
@@ -147,7 +147,10 @@ raw connection/session IDs и сырой journald не сохраняются.
 
 Полный timeline всегда входит в export. Чтобы анализ очень длинной сессии не
 исчерпал RAM VPS, report равномерно ограничивает рабочий набор 100000 samples,
-100000 native records и 50000 events, сохраняя первый и последний record.
+100000 высокочастотных native worker/session records и 50000 events. Для каждого
+native source сохраняются первый/последний snapshot и обе стороны каждого reset,
+а native events не прореживаются. Поэтому итоговые counter deltas и границы
+поколений остаются точными при ограниченном использовании RAM.
 `analysis_input.strides` показывает применённый шаг; исходные данные при этом
 не изменяются и доступны для внешнего offline-анализа.
 
@@ -175,3 +178,26 @@ raw connection/session IDs и сырой journald не сохраняются.
 Отчёт ограничивает RAM стратифицированной выборкой отдельно для каждой
 сессии/worker; поэтому периодические записи одной сущности не могут вытеснить
 другую и не создают ложные telemetry gaps при прореживании анализа.
+
+## Контроль второго прогона
+
+Совместимая версия Hydracore для второго прогона меняет именно измеренные в
+первом прогоне узкие места:
+
+- уже заблокированный DTLS read немедленно замечает изменение deadline, поэтому
+  timeout освобождает handshake slot и не оставляет `handshake_pending=256`;
+- UDP receive/send socket buffers запрашиваются по 4 MiB, а их фактический
+  Linux-размер публикуется как `udp_socket_*_buffer_bytes`;
+- чтение UDP отделено от unwrap/dispatch bounded ingress-очередью на 4096
+  пакетов с автоматическим числом workers и отдельными depth/capacity/drop
+  метриками; порядок пакетов одного peer сохраняется;
+- peer-read queue увеличена до 128 пакетов, worker-send queue — до 512;
+  `worker_send_queue_drops_total` теперь означает один реально потерянный KCP
+  segment, а не число проверенных заполненных worker queues;
+- `outer_payload`, `outer_overhead`, KCP output/retransmit bytes и generation
+  процесса позволяют разложить wire overhead и отличить перезапуск inbound от
+  потери telemetry records.
+
+Для промежуточной проверки достаточно `status`; непрерывный поток доступен через
+`tail --follow`, полный итог — через `report` или `export`. Ни одна из этих команд
+не останавливает запись и не привязана к продолжительности эксперимента.

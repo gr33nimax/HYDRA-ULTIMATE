@@ -180,6 +180,35 @@ def multi_user_inbound(
         ),
         "handshake_timeout": _duration(config, "handshake_timeout", "10s"),
         "session_idle_timeout": _duration(config, "session_idle_timeout", "5m"),
+        "udp_receive_buffer_bytes": _integer(
+            config,
+            "udp_receive_buffer_bytes",
+            4 * 1024 * 1024,
+            256 * 1024,
+            64 * 1024 * 1024,
+        ),
+        "udp_send_buffer_bytes": _integer(
+            config,
+            "udp_send_buffer_bytes",
+            4 * 1024 * 1024,
+            256 * 1024,
+            64 * 1024 * 1024,
+        ),
+        "ingress_workers": _integer(config, "ingress_workers", 0, 0, 32),
+        "ingress_queue_packets": _integer(
+            config,
+            "ingress_queue_packets",
+            4096,
+            1,
+            65536,
+        ),
+        "peer_read_queue_packets": _integer(
+            config,
+            "peer_read_queue_packets",
+            128,
+            16,
+            4096,
+        ),
     }
 
 

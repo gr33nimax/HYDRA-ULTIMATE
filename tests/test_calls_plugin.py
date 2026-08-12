@@ -145,6 +145,11 @@ def test_calls_plugin_emits_exact_hydracore_multi_user_contract() -> None:
         "max_pending_handshakes": 256,
         "handshake_timeout": "10s",
         "session_idle_timeout": "5m",
+        "udp_receive_buffer_bytes": 4 * 1024 * 1024,
+        "udp_send_buffer_bytes": 4 * 1024 * 1024,
+        "ingress_workers": 0,
+        "ingress_queue_packets": 4096,
+        "peer_read_queue_packets": 128,
     }
     outbound = json.loads(plugin.generate_client_config(state.users[0], state))["outbounds"][0]
     assert outbound["join_links"] == source.links

@@ -78,26 +78,44 @@ def _analysis_bucket(record: Mapping[str, object]) -> str:
 
 def _sample_analysis_records(
     records: Callable[[], Iterator[dict[str, object]]],
+    *,
+    native_budget: int = 100_000,
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     """Uniformly sample two passes over one immutable timeline snapshot."""
     limits = {"sample": 100_000, "event": 50_000}
     counts: dict[str, int] = {}
     bucket_counts: dict[str, int] = {}
+    previous_native: dict[str, tuple[int, Mapping[str, object]]] = {}
+    reset_positions: dict[str, set[int]] = {}
     for record in records():
         kind = str(record.get("kind", "event"))
         counts[kind] = counts.get(kind, 0) + 1
         bucket = _analysis_bucket(record)
         bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+        if bucket.startswith("native|") and record.get("native_kind") == "snapshot":
+            position = bucket_counts[bucket]
+            metrics = record.get("metrics")
+            metric_map = metrics if isinstance(metrics, Mapping) else {}
+            previous = previous_native.get(bucket)
+            if previous is not None and _counter_reset(previous[1], metric_map):
+                reset_positions.setdefault(bucket, set()).update(
+                    (previous[0], position),
+                )
+            previous_native[bucket] = (position, metric_map)
     native_buckets = [
-        bucket for bucket in bucket_counts if bucket.startswith("native|")
+        bucket
+        for bucket in bucket_counts
+        if bucket.startswith("native|") and not _lossless_native_bucket(bucket)
     ]
-    native_limit = max(32, 100_000 // max(1, len(native_buckets)))
+    native_limit = max(32, native_budget // max(1, len(native_buckets)))
     strides = {
         bucket: max(1, (count + limit - 1) // limit)
         for bucket, count in bucket_counts.items()
         if (
             limit := (
-                native_limit
+                count
+                if _lossless_native_bucket(bucket)
+                else native_limit
                 if bucket.startswith("native|")
                 else limits.get(bucket, count)
             )
@@ -111,7 +129,8 @@ def _sample_analysis_records(
         stride = strides.get(bucket, 1)
         if (
             seen[bucket] == 1
-            or seen[bucket] == bucket_counts[bucket]
+            or seen[bucket] == bucket_counts.get(bucket, seen[bucket])
+            or seen[bucket] in reset_positions.get(bucket, set())
             or (seen[bucket] - 1) % stride == 0
         ):
             if stride > 1:
@@ -124,6 +143,31 @@ def _sample_analysis_records(
         "counts": counts,
         "strides": strides,
     }
+
+
+def _lossless_native_bucket(bucket: str) -> bool:
+    if not bucket.startswith("native|"):
+        return False
+    parts = bucket.split("|")
+    native_kind = parts[5] if len(parts) > 5 else ""
+    # Native events are sparse and must never be sampled away. Snapshot series
+    # remain bounded, while first/last and both sides of every counter reset
+    # are retained so monotonic deltas stay exact.
+    return native_kind == "event"
+
+
+def _counter_reset(
+    previous: Mapping[str, object],
+    current: Mapping[str, object],
+) -> bool:
+    return any(
+        str(name).endswith("_total")
+        and name in current
+        and type(value) in {int, float}
+        and type(current.get(name)) in {int, float}
+        and float(current[name]) < float(value)
+        for name, value in previous.items()
+    )
 
 
 __all__ = [

@@ -15,6 +15,7 @@ from hydra.services.calls_telemetry import CallsTelemetryService
 from hydra.services.calls_telemetry_correlations import throughput_correlations
 from hydra.services.calls_telemetry_infrastructure import CallsTelemetryInfrastructure
 from hydra.services.calls_telemetry_storage import CallsTelemetryStore
+from hydra.services.calls_telemetry_storage_readers import _sample_analysis_records
 from hydra.services.system_monitoring import SystemMetrics
 
 
@@ -75,6 +76,11 @@ def test_service_validates_experiment_and_passes_only_safe_metadata() -> None:
         "max_pending_handshakes": 256,
         "handshake_timeout": "10s",
         "session_idle_timeout": "5m",
+        "udp_receive_buffer_bytes": 4 * 1024 * 1024,
+        "udp_send_buffer_bytes": 4 * 1024 * 1024,
+        "ingress_workers": 0,
+        "ingress_queue_packets": 4096,
+        "peer_read_queue_packets": 128,
     }
     assert "tester" not in kwargs["metadata"]
 
@@ -414,6 +420,35 @@ def test_live_analysis_uses_one_immutable_timeline_snapshot(
     assert [record["native_kind"] for record in records] == ["snapshot"]
     assert analysis["timeline_records"] == 1
     assert len(store.records(str(session["session_id"]))) == 2
+
+
+def test_analysis_sampling_keeps_both_sides_of_native_counter_resets() -> None:
+    def records():
+        for sequence in range(100):
+            counter = sequence if sequence < 50 else sequence - 50
+            yield {
+                "kind": "native",
+                "native_kind": "snapshot",
+                "native_scope": "client",
+                "native_entity": "client_session",
+                "tester_id": "tester-1",
+                "native_session_id": "client-session",
+                "timestamp": float(sequence),
+                "metrics": {
+                    "telemetry_sequence": sequence + 1,
+                    "outer_bytes_out_total": counter,
+                },
+            }
+
+    retained, analysis = _sample_analysis_records(
+        lambda: iter(records()),
+        native_budget=32,
+    )
+
+    retained_timestamps = {record["timestamp"] for record in retained}
+    assert {49.0, 50.0} <= retained_timestamps
+    assert analysis["timeline_records"] == 100
+    assert analysis["analyzed_records"] < analysis["timeline_records"]
 
 
 def test_mark_tail_follow_and_live_export_share_one_timeline(tmp_path) -> None:

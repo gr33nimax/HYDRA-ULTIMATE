@@ -81,7 +81,8 @@ def test_native_findings_separate_transport_host_and_relay_directions() -> None:
         "server": {
             "counters": {
                 "handshake_timeout_total": 2,
-                "outer_auth_failures_total": 1,
+                "outer_auth_failures_total": 10,
+                "outer_packets_in_total": 1000,
                 "relay_connect_failure_total": 3,
             },
             "gauges": {"kcp_rtt_ms": {"p95": 350}},
@@ -105,3 +106,72 @@ def test_native_findings_separate_transport_host_and_relay_directions() -> None:
         "high_kcp_rtt",
         "low_wire_efficiency",
     }
+
+
+def test_client_summary_does_not_multiply_session_counters_by_workers() -> None:
+    records = []
+    for value in (100, 140):
+        records.append({
+            "kind": "native",
+            "native_scope": "client",
+            "native_kind": "snapshot",
+            "native_entity": "client_session",
+            "tester_id": "tester-1",
+            "native_session_id": "session-1",
+            "metrics": {"worker_reconnect_total": value},
+        })
+        for worker_id in range(4):
+            records.append({
+                "kind": "native",
+                "native_scope": "client",
+                "native_kind": "snapshot",
+                "native_entity": "client_worker",
+                "tester_id": "tester-1",
+                "native_session_id": "session-1",
+                "worker_id": worker_id,
+                "metrics": {"worker_reconnect_total": value},
+            })
+
+    result = analyze_native(records, ["tester-1"])
+
+    assert result["clients"]["tester-1"]["counters"]["worker_reconnect_total"] == 40
+
+
+def test_server_process_generations_are_aggregated_without_cross_series_resets() -> None:
+    records = []
+    for generation in ("generation-1", "generation-2"):
+        for sequence, value in ((1, 10), (2, 25)):
+            records.append({
+                "kind": "native",
+                "native_scope": "server",
+                "native_kind": "snapshot",
+                "native_entity": "server_process",
+                "native_session_id": generation,
+                "metrics": {
+                    "telemetry_sequence": sequence,
+                    "handshake_rejected_total": value,
+                },
+            })
+
+    result = analyze_native(records, [])
+
+    assert result["server"]["generations"] == 2
+    assert result["server"]["counters"]["handshake_rejected_total"] == 40
+    assert result["continuity"]["server_generations"] == 2
+
+
+def test_negligible_outer_auth_noise_is_not_reported_as_critical() -> None:
+    native = {
+        "server": {
+            "counters": {
+                "outer_auth_failures_total": 16,
+                "outer_packets_in_total": 3_000_000,
+            },
+            "gauges": {},
+        },
+        "clients": {},
+    }
+
+    codes = {finding["code"] for finding in extended_native_findings(native)}
+
+    assert "outer_packet_authentication_failures" not in codes
