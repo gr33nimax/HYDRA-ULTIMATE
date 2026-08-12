@@ -265,12 +265,7 @@ def _add_antidpi(root: argparse._SubParsersAction) -> None:
 def _add_calls(root: argparse._SubParsersAction) -> None:
     calls = root.add_parser("calls", help="Operate Hydra VK Tunnel")
     calls_commands = _subcommands(calls, dest="calls_action", title="calls")
-    profile = _command(
-        calls_commands,
-        "profile",
-        "Switch the VK multipath scheduler for controlled A/B tests",
-        "calls.profile",
-    )
+    profile = _command(calls_commands, "profile", "Switch VK multipath A/B profile", "calls.profile")
     profile.add_argument("profile", choices=("adaptive", "legacy"))
     telemetry = calls_commands.add_parser(
         "telemetry",

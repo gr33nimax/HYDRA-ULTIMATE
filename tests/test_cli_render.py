@@ -48,6 +48,7 @@ PUBLIC_COMMAND_IDS = {
     "antidpi.selftest",
     "antidpi.capture",
     "antidpi.sync",
+    "calls.profile",
     "calls.telemetry.start",
     "calls.telemetry.status",
     "calls.telemetry.report",
