@@ -182,10 +182,45 @@ def test_native_enable_is_hydracore_multi_user_only() -> None:
     }
     assert state.protocols["calls"].enabled is True
     assert state.protocols["calls"].config["mode"] == "multi_user"
+    assert state.protocols["calls"].config["multipath_profile"] == "adaptive"
     assert state.protocols["calls"].config["listen_port"] == 56002
     assert state.protocols["calls"].config["public_endpoint"] == "203.0.113.10"
     assert len(state.protocols["calls"].config["obfs_password"]) >= 32
     assert creator.committed and creator.finalized
+
+
+def test_multipath_profile_switch_applies_and_requires_subscription_refresh() -> None:
+    runtime = Runtime()
+    state = _state(installed=True, enabled=True)
+    applied: list[str] = []
+    service, _ = _service(
+        runtime,
+        apply=lambda current: applied.append(
+            current.protocols["calls"].config["multipath_profile"],
+        ) or True,
+    )
+
+    result = service.set_multipath_profile(state, "legacy")
+
+    assert result
+    assert result.value == {
+        "multipath_profile": "legacy",
+        "subscriptions_must_refresh": True,
+    }
+    assert applied == ["legacy"]
+
+
+def test_multipath_profile_switch_rolls_back_failed_apply() -> None:
+    runtime = Runtime()
+    state = _state(installed=True, enabled=True)
+    state.protocols["calls"].config["multipath_profile"] = "adaptive"
+    outcomes = iter((False, True))
+    service, _ = _service(runtime, apply=lambda _state: next(outcomes))
+
+    result = service.set_multipath_profile(state, "legacy")
+
+    assert not result
+    assert state.protocols["calls"].config["multipath_profile"] == "adaptive"
 
 
 def test_stock_core_is_rejected_without_starting_creator() -> None:
@@ -354,6 +389,7 @@ def test_status_keeps_native_link_ready_wire_key_with_pool_alias() -> None:
     assert status.native_link_ready is True
     assert status.native_pool_ready is True
     assert status.as_dict()["native_link_ready"] is True
+    assert status.as_dict()["multipath_profile"] == "adaptive"
     assert "native_pool_ready" not in status.as_dict()
 
 

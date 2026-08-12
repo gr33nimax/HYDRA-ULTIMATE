@@ -6,6 +6,9 @@ from typing import Callable, Mapping, Protocol, Sequence
 
 
 CALL_MODE_MULTI_USER = "multi_user"
+CALL_MULTIPATH_LEGACY = "legacy"
+CALL_MULTIPATH_ADAPTIVE = "adaptive"
+DEFAULT_MULTIPATH_PROFILE = CALL_MULTIPATH_ADAPTIVE
 DEFAULT_CALL_PORT = 56002
 DEFAULT_ROOM_COUNT = 4
 MAX_JOIN_LINKS = 4
@@ -66,6 +69,13 @@ def call_mode(state: CallsStateAccess) -> str:
     )
     if value != CALL_MODE_MULTI_USER:
         raise ValueError("Calls mode must be multi_user")
+    return value
+
+
+def multipath_profile(config: Mapping[str, object]) -> str:
+    value = str(config.get("multipath_profile", DEFAULT_MULTIPATH_PROFILE)).strip()
+    if value not in {CALL_MULTIPATH_LEGACY, CALL_MULTIPATH_ADAPTIVE}:
+        raise ValueError("Calls multipath_profile must be legacy or adaptive")
     return value
 
 
@@ -159,6 +169,7 @@ def multi_user_inbound(
         "tag": "calls-vk-in",
         "platform": "vk",
         "mode": CALL_MODE_MULTI_USER,
+        "multipath_profile": multipath_profile(config),
         "listen": "0.0.0.0",
         "listen_port": _listen_port(state, config),
         "obfs_password": password,
@@ -244,6 +255,7 @@ def multi_user_outbound(
         "tag": "call-vk-out",
         "platform": "vk",
         "mode": CALL_MODE_MULTI_USER,
+        "multipath_profile": multipath_profile(config),
         "server": server,
         "server_port": _listen_port(state, config),
         "join_links": join_links,
@@ -261,6 +273,9 @@ def multi_user_outbound(
 
 __all__ = [
     "CALL_MODE_MULTI_USER",
+    "CALL_MULTIPATH_ADAPTIVE",
+    "CALL_MULTIPATH_LEGACY",
+    "DEFAULT_MULTIPATH_PROFILE",
     "DEFAULT_CALL_PORT",
     "DEFAULT_ROOM_COUNT",
     "MAX_JOIN_LINKS",
@@ -269,5 +284,6 @@ __all__ = [
     "call_mode",
     "multi_user_inbound",
     "multi_user_outbound",
+    "multipath_profile",
     "public_endpoint",
 ]

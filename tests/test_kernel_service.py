@@ -96,6 +96,7 @@ def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
         "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
         "features": {
             "call_vk_multi_user": True,
+            "call_vk_adaptive_multipath": True,
             "call_vk_multi_user_client": False,
             "call_vk_multi_user_server": True,
             "call_vk_telemetry": True,
@@ -136,6 +137,7 @@ def test_hydracore_debug_contract_requires_native_telemetry() -> None:
         "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
         "features": {
             "call_vk_multi_user": True,
+            "call_vk_adaptive_multipath": True,
             "call_vk_multi_user_client": False,
             "call_vk_multi_user_server": True,
             "call_vk_telemetry": False,

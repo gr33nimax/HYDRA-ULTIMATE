@@ -17,6 +17,7 @@ class CallsStatus:
     native_link_ready: bool
     native_running: bool
     native_mode: str = "multi_user"
+    multipath_profile: str = "adaptive"
     room_count: int = 0
 
     @property
@@ -49,6 +50,7 @@ class CallOperations(Protocol):
     def uninstall_native_vk(self, state: AppState) -> ServiceResult: ...
     def native_client_profile(self, state: AppState) -> CallClientProfile: ...
     def set_room_count(self, state: AppState, count: int) -> ServiceResult: ...
+    def set_multipath_profile(self, state: AppState, profile: str) -> ServiceResult: ...
 
 
 class UnavailableCallOperations:

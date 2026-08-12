@@ -583,11 +583,13 @@ def test_hydra_v2_subscription_includes_only_multi_user_calls_config():
     outbound = resource["document"]["outbounds"][0]
     assert resource["requested_permissions"] == ["network.outbound"]
     assert outbound["mode"] == "multi_user"
+    assert outbound["multipath_profile"] == "adaptive"
     assert outbound["join_links"] == links
     assert outbound["user"] == user.email
     assert "join_link" not in outbound
     assert subscription["requirements"]["core"]["features"] == [
         "call",
+        "call_vk_adaptive_multipath",
         "call_vk_multi_user",
     ]
     assert subscription["profiles"][0] == {

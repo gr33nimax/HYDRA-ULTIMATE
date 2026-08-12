@@ -61,6 +61,7 @@ COMMAND_TITLES = {
     "calls.telemetry.start": "Hydra VK Tunnel telemetry",
     "calls.telemetry.status": "Hydra VK Tunnel telemetry status",
     "calls.telemetry.report": "Hydra VK Tunnel telemetry report",
+    "calls.profile": "Hydra VK Tunnel multipath profile",
     "calls.telemetry.tail": "Hydra VK Tunnel live telemetry",
     "calls.telemetry.mark": "Mark Hydra VK Tunnel telemetry",
     "calls.telemetry.export": "Export Hydra VK Tunnel telemetry",

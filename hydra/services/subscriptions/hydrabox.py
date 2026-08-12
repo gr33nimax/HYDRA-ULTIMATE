@@ -314,6 +314,7 @@ def generate_hydrabox_subscription(
                 required_core_features.add("call")
                 if item.get("platform") == "vk" and item.get("mode") == "multi_user":
                     required_core_features.add("call_vk_multi_user")
+                    required_core_features.add("call_vk_adaptive_multipath")
         resources.append({
             "id": resource_id,
             "format": "sing-box-json",

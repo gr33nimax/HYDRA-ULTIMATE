@@ -392,8 +392,10 @@ def _calls_command(
     app: ApplicationService,
     require_root: Callable[[], None],
 ) -> CommandResult:
-    action = args.calls_telemetry_action
     require_root()
+    if args.calls_action == "profile":
+        return _result(app.calls.set_multipath_profile(state, args.profile))
+    action = args.calls_telemetry_action
     if action == "status":
         return _result(app.calls_telemetry.status())
     if action == "report":

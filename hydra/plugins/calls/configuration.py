@@ -1,6 +1,9 @@
 """Compatibility exports for the dependency-neutral Calls configuration."""
 from hydra.contracts.calls_configuration import (
     CALL_MODE_MULTI_USER,
+    CALL_MULTIPATH_ADAPTIVE,
+    CALL_MULTIPATH_LEGACY,
+    DEFAULT_MULTIPATH_PROFILE,
     DEFAULT_CALL_PORT,
     DEFAULT_ROOM_COUNT,
     MAX_JOIN_LINKS,
@@ -11,6 +14,7 @@ from hydra.contracts.calls_configuration import (
     call_mode,
     multi_user_inbound as _multi_user_inbound,
     multi_user_outbound as _multi_user_outbound,
+    multipath_profile,
     public_endpoint,
 )
 from hydra.core.calls_credentials import user_password
@@ -38,6 +42,9 @@ def multi_user_outbound(
 
 __all__ = [
     "CALL_MODE_MULTI_USER",
+    "CALL_MULTIPATH_ADAPTIVE",
+    "CALL_MULTIPATH_LEGACY",
+    "DEFAULT_MULTIPATH_PROFILE",
     "DEFAULT_CALL_PORT",
     "DEFAULT_ROOM_COUNT",
     "MAX_JOIN_LINKS",
@@ -46,6 +53,7 @@ __all__ = [
     "call_mode",
     "multi_user_inbound",
     "multi_user_outbound",
+    "multipath_profile",
     "public_endpoint",
     "user_password",
 ]

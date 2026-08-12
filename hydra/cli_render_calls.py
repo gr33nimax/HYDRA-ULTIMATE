@@ -210,16 +210,24 @@ def _append_native_sessions(
             ))
     if rows:
         if first_report is not None:
+            profile = (
+                "adaptive"
+                if _gauge(first_report, "multipath_profile", "max") >= 0.5
+                else "legacy"
+            )
             lines.extend([
                 "",
                 (
                     "Transport config: "
+                    f"profile={profile}, "
                     f"MTU={_gauge(first_report, 'kcp_mtu_bytes', 'max'):.0f}, "
                     f"window={_gauge(first_report, 'kcp_send_window_segments', 'max'):.0f}, "
                     f"pending={_gauge(first_report, 'kcp_max_pending_segments', 'max'):.0f}, "
                     f"update={_gauge(first_report, 'kcp_update_interval_ms', 'max'):.0f} ms, "
                     f"fast-resend={_gauge(first_report, 'kcp_fast_resend', 'max'):.0f}, "
-                    f"congestion={_gauge(first_report, 'kcp_congestion_control', 'max'):.0f}"
+                    f"congestion={_gauge(first_report, 'kcp_congestion_control', 'max'):.0f}, "
+                    f"chunk={_gauge(first_report, 'multipath_chunk_packets', 'max'):.0f}/"
+                    f"{_gauge(first_report, 'multipath_chunk_dwell_ms', 'max'):.0f} ms"
                 ),
             ])
         lines.extend([
@@ -251,8 +259,16 @@ def _append_native_workers(
             )
             reconnects = _counter(report, "worker_reconnect_total")
             loss = _gauge(report, "network_loss_ratio", "p95")
+            path_loss = _gauge(report, "worker_path_loss_ratio", "p95")
+            path_rtt = _gauge(report, "worker_path_rtt_ms", "p95")
+            pacing_rate = _gauge(report, "worker_pacing_rate_bps", "p95")
             active = _gauge(report, "worker_active", "max")
-            score = drops * 1000 + reconnects * 100 + loss * 100 + (0 if active else 1)
+            score = (
+                drops * 1000
+                + reconnects * 100
+                + max(loss, path_loss) * 100
+                + (0 if active else 1)
+            )
             candidates.append((score, (
                 side,
                 report.get("tester_id", "-"),
@@ -260,6 +276,9 @@ def _append_native_workers(
                 "yes" if active else "no",
                 _bitrate(report.get("wire_bps")),
                 _percent(loss),
+                _percent(path_loss),
+                _bitrate(pacing_rate),
+                f"{path_rtt:.0f} ms",
                 scalar(round(drops, 1)),
                 scalar(round(reconnects, 1)),
                 scalar(round(_gauge(report, "turn_selected_endpoint_ordinal", "p95"), 1)),
@@ -272,7 +291,10 @@ def _append_native_workers(
         "",
         "Workers" + ("" if detailed else f" (top {len(shown)} of {len(candidates)})"),
         *table(
-            ("Side", "Tester", "ID", "Active", "Wire avg", "Loss p95", "Drops", "Reconnect", "TURN #"),
+            (
+                "Side", "Tester", "ID", "Active", "Wire avg", "Net loss",
+                "Path loss", "Pace", "Path RTT", "Drops", "Reconnect", "TURN #",
+            ),
             [row for _, row in shown],
         ),
     ])

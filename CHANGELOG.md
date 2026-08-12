@@ -30,6 +30,12 @@
 
 ### Hydracore / Calls
 
+- Added `adaptive`/`legacy` VK multipath profiles and the atomic
+  `hydra calls profile PROFILE` A/B switch. Adaptive is the default for newly
+  generated server configs and subscriptions; profile/chunk/pacing/path
+  metrics are visible in telemetry reports. The exact
+  `call_vk_adaptive_multipath` capability is required before activation.
+
 - Нативная Calls-телеметрия разделена на process/session/worker и больше не
   смешивает активного тестера со stale session. CLI `status`, `stop` и `report`
   показывают покрытие, непрерывность, направления KCP, RTT/loss/queues и

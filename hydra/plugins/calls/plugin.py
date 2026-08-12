@@ -18,6 +18,7 @@ from hydra.plugins.base import (
 )
 from hydra.plugins.calls.configuration import (
     CALL_MODE_MULTI_USER,
+    DEFAULT_MULTIPATH_PROFILE,
     DEFAULT_CALL_PORT,
     DEFAULT_ROOM_COUNT,
     call_mode,
@@ -44,6 +45,7 @@ class CallsPlugin(BasePlugin):
         connection_source="tracked",
         config_defaults=(
             ("mode", CALL_MODE_MULTI_USER),
+            ("multipath_profile", DEFAULT_MULTIPATH_PROFILE),
             ("room_count", DEFAULT_ROOM_COUNT),
             ("listen_port", DEFAULT_CALL_PORT),
         ),
@@ -148,7 +150,16 @@ class CallsPlugin(BasePlugin):
             installed=supported,
             enabled=enabled,
             running=running,
-            info={"platform": "vk", "mode": mode, "configured": ready},
+            info={
+                "platform": "vk",
+                "mode": mode,
+                "multipath_profile": str(
+                    desired.config.get("multipath_profile", DEFAULT_MULTIPATH_PROFILE)
+                    if desired
+                    else DEFAULT_MULTIPATH_PROFILE
+                ),
+                "configured": ready,
+            },
         )
 
     def configure(self, state: PluginStateAccess) -> ConfigFragment:

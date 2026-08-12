@@ -116,6 +116,7 @@ class CallsInfrastructure:
             and identity.get("role") == "vps"
             and isinstance(features, dict)
             and features.get("call_vk_multi_user") is True
+            and features.get("call_vk_adaptive_multipath") is True
             and features.get("call_vk_multi_user_server") is True
             and features.get("call_vk_multi_user_client") is False
             and isinstance(modes, list)

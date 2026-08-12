@@ -8,6 +8,7 @@ from hydra.services.calls_telemetry_protocol_analysis import (
     SERVER_SESSION_REQUIRED,
     SERVER_WORKER_REQUIRED,
     analyze_native,
+    protocol_findings,
 )
 
 
@@ -175,3 +176,39 @@ def test_negligible_outer_auth_noise_is_not_reported_as_critical() -> None:
     codes = {finding["code"] for finding in extended_native_findings(native)}
 
     assert "outer_packet_authentication_failures" not in codes
+
+
+def test_protocol_findings_distinguish_legacy_reordering_from_adaptive_path_loss() -> None:
+    legacy = {
+        "server": {
+            "counters": {
+                "kcp_out_segments_total": 1000,
+                "kcp_retrans_segments_total": 400,
+            },
+            "gauges": {},
+        },
+        "clients": {},
+        "server_sessions": [{
+            "gauges": {"multipath_profile": {"max": 0}},
+        }],
+        "client_sessions": [],
+    }
+    legacy_codes = {
+        finding["code"] for finding in protocol_findings(legacy, {})
+    }
+    assert "legacy_multipath_reordering" in legacy_codes
+
+    adaptive = {
+        **legacy,
+        "server_sessions": [{
+            "gauges": {"multipath_profile": {"max": 1}},
+        }],
+        "server_workers": [{
+            "gauges": {"worker_path_loss_ratio": {"p95": 0.2}},
+        }],
+    }
+    adaptive_codes = {
+        finding["code"] for finding in protocol_findings(adaptive, {})
+    }
+    assert "legacy_multipath_reordering" not in adaptive_codes
+    assert "adaptive_path_pressure" in adaptive_codes

@@ -70,6 +70,7 @@ class CapabilityHost(ProbeHost):
                 },
                 "features": {
                     "call_vk_multi_user": True,
+                    "call_vk_adaptive_multipath": True,
                     "call_vk_multi_user_client": False,
                     "call_vk_multi_user_server": True,
                 },

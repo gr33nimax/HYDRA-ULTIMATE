@@ -67,6 +67,7 @@ def test_service_validates_experiment_and_passes_only_safe_metadata() -> None:
     assert kwargs["max_data_bytes"] == 2048 * 1024 * 1024
     assert kwargs["metadata"]["calls"] == {
         "mode": "multi_user",
+        "multipath_profile": "adaptive",
         "room_count": 4,
         "workers": 16,
         "listen_port": 56002,

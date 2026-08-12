@@ -126,7 +126,10 @@ def protocol_findings(
         ))
     retrans = _sum_matching(counters, ("kcp_retrans", "kcp_fast_retrans", "kcp_lost"))
     out_segments = _sum_matching(counters, ("kcp_out_segments",))
-    if retrans and (not out_segments or retrans / max(1, out_segments) >= 0.1):
+    retransmission_pressure = bool(
+        retrans and (not out_segments or retrans / max(1, out_segments) >= 0.1)
+    )
+    if retransmission_pressure:
         findings.append(_finding(
             "warning",
             "kcp_retransmission_pressure",
@@ -143,6 +146,29 @@ def protocol_findings(
         for report in native.get("client_sessions", [])
         if isinstance(report, Mapping)
     ]
+    adaptive_multipath = any(
+        _number(
+            _mapping(_mapping(report.get("gauges")).get("multipath_profile")).get("max"),
+        ) >= 0.5
+        for report in (*server_paths, *client_paths)
+    )
+    if retransmission_pressure and not adaptive_multipath:
+        findings.append(_finding(
+            "warning",
+            "legacy_multipath_reordering",
+            "The run used packet-striped legacy multipath while KCP retransmissions were high.",
+            "Repeat the same marked workload with the adaptive profile; compare goodput, stalls, retransmissions and WaitSnd.",
+        ))
+    if adaptive_multipath and max(
+        _entity_gauge_peak(native, "server_workers", "worker_path_loss_ratio"),
+        _entity_gauge_peak(native, "client_workers", "worker_path_loss_ratio"),
+    ) >= 0.1:
+        findings.append(_finding(
+            "warning",
+            "adaptive_path_pressure",
+            "The adaptive scheduler identified at least one persistently lossy TURN path.",
+            "Compare pacing rate and path RTT by worker; replace or reduce weak paths before raising aggregate rate.",
+        ))
     downstream_pressure = any(
         _number(report.get("kcp_retransmission_ratio")) >= 0.1
         for report in server_paths

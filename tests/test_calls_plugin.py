@@ -78,6 +78,7 @@ def test_calls_plugin_contract_and_native_fragment() -> None:
     assert plugin.meta.capabilities.connection_source == "tracked"
     assert plugin.meta.capabilities.config_defaults == (
         ("mode", "multi_user"),
+        ("multipath_profile", "adaptive"),
         ("room_count", 4),
         ("listen_port", 56002),
     )
@@ -132,6 +133,7 @@ def test_calls_plugin_emits_exact_hydracore_multi_user_contract() -> None:
         "tag": "calls-vk-in",
         "platform": "vk",
         "mode": "multi_user",
+        "multipath_profile": "adaptive",
         "listen": "0.0.0.0",
         "listen_port": 56002,
         "obfs_password": "o" * 43,
@@ -156,9 +158,31 @@ def test_calls_plugin_emits_exact_hydracore_multi_user_contract() -> None:
     assert outbound["server"] == "203.0.113.10"
     assert outbound["server_port"] == 56002
     assert outbound["workers"] == 4
+    assert outbound["multipath_profile"] == "adaptive"
     assert outbound["worker_connect_timeout"] == "15s"
     assert "cookies" not in inbound and "join_link" not in inbound
     assert "join_link" not in outbound
+
+
+def test_calls_multi_user_supports_explicit_legacy_ab_profile() -> None:
+    source = Source([], "", links=["https://vk.com/call/join/one"], multi=True)
+    state = _state()
+    state.protocols["calls"].config["multipath_profile"] = "legacy"
+
+    inbound = CallsPlugin(source).configure(state).inbounds[0]
+    outbound = json.loads(
+        CallsPlugin(source).generate_client_config(state.users[0], state),
+    )["outbounds"][0]
+
+    assert inbound["multipath_profile"] == "legacy"
+    assert outbound["multipath_profile"] == "legacy"
+
+
+def test_calls_multi_user_rejects_unknown_multipath_profile() -> None:
+    state = _state()
+    state.protocols["calls"].config["multipath_profile"] = "raw"
+    with pytest.raises(ValueError, match="legacy or adaptive"):
+        CallsPlugin(Source([], "", multi=True)).configure(state)
 
 
 def test_calls_client_uses_public_ip_instead_of_transport_sni() -> None:

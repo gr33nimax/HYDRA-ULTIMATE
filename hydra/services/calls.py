@@ -9,12 +9,16 @@ from typing import Callable
 
 from hydra.contracts.calls_configuration import (
     CALL_MODE_MULTI_USER,
+    CALL_MULTIPATH_ADAPTIVE,
+    CALL_MULTIPATH_LEGACY,
+    DEFAULT_MULTIPATH_PROFILE,
     DEFAULT_CALL_PORT,
     DEFAULT_ROOM_COUNT,
     MAX_JOIN_LINKS,
     call_mode,
     multi_user_outbound,
     public_endpoint,
+    multipath_profile,
 )
 from hydra.core.calls_credentials import user_password
 from hydra.core.errors import ErrorCode, ServiceResult, failed_result
@@ -98,6 +102,11 @@ class CallsService:
             native_link_ready=pool_ready,
             native_running=bool(enabled and pool_ready and self.runtime.singbox_running()),
             native_mode=mode,
+            multipath_profile=str(
+                desired.config.get("multipath_profile", DEFAULT_MULTIPATH_PROFILE)
+                if desired
+                else DEFAULT_MULTIPATH_PROFILE
+            ),
             room_count=len(links),
         )
 
@@ -134,6 +143,40 @@ class CallsService:
             return ServiceResult(True, value={"room_count": count})
         except Exception as exc:
             return failed_result(exc)
+        finally:
+            self._end_operation(lease)
+
+    def set_multipath_profile(self, state: AppState, profile: str) -> ServiceResult:
+        """Atomically switch the wire-compatible scheduler for controlled A/B tests."""
+        lease, failure = self._begin_operation()
+        if failure is not None:
+            return failure
+        try:
+            desired = state.protocols.get("calls")
+            if desired is None or not desired.enabled:
+                raise ValueError("native VK Calls are not enabled")
+            normalized = str(profile).strip().lower()
+            if normalized not in {CALL_MULTIPATH_LEGACY, CALL_MULTIPATH_ADAPTIVE}:
+                raise ValueError("Calls multipath_profile must be legacy or adaptive")
+            before = copy.deepcopy(state)
+            desired.config["multipath_profile"] = normalized
+            multipath_profile(desired.config)
+            try:
+                self.save_state(state)
+                if not self.apply_config(state):
+                    raise RuntimeError(
+                        self.last_apply_error()
+                        or "failed to apply Calls multipath profile",
+                    )
+            except Exception:
+                self._restore_native_transition(state, before)
+                raise
+            return ServiceResult(True, value={
+                "multipath_profile": normalized,
+                "subscriptions_must_refresh": True,
+            })
+        except Exception as exc:
+            return failed_result(exc, fallback=ErrorCode.OPERATION_FAILED)
         finally:
             self._end_operation(lease)
 
@@ -180,6 +223,10 @@ class CallsService:
                 raise ValueError("Calls room_count must be between 1 and 4")
             desired.config.update({
                 "mode": CALL_MODE_MULTI_USER,
+                "multipath_profile": desired.config.get(
+                    "multipath_profile",
+                    DEFAULT_MULTIPATH_PROFILE,
+                ),
                 "room_count": count,
                 "listen_port": desired.config.get("listen_port", DEFAULT_CALL_PORT),
                 "max_sessions_per_user": desired.config.get("max_sessions_per_user", 1),

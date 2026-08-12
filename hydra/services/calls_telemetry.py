@@ -151,6 +151,9 @@ class CallsTelemetryService:
             "kernel_provider": state.kernel.provider,
             "calls": {
                 "mode": str(config.get("mode", "multi_user")),
+                "multipath_profile": str(
+                    config.get("multipath_profile", "adaptive"),
+                ),
                 "room_count": _safe_int(config.get("room_count", 0)),
                 "workers": _safe_int(config.get("workers", 0)),
                 "listen_port": _safe_int(config.get("listen_port", 0)),
