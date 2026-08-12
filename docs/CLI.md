@@ -501,6 +501,16 @@ sudo hydra uninstall --yes --keep-data
 
 ## Hydra VK Tunnel telemetry
 
+With the adaptive debug core, `status` shows only currently reporting transport
+sessions/workers and reports `Retry` separately from authenticated `Net loss`.
+`Queue/late` is output-queue p95 delay plus the number of packets that waited at
+least two KCP update intervals. It exposes any regression that delays packets
+after KCP has started retransmission timing. `report` retains every historical
+session and adds its pseudonymous session ID so reconnects and profile switches
+remain auditable without cluttering the live view. The legacy core field
+`worker_path_loss_ratio` is accepted as a compatibility alias for retry
+pressure; it must not be interpreted as physical TURN loss.
+
 Сессия для трёх заранее созданных пользователей запускается без таймера:
 
 ```bash

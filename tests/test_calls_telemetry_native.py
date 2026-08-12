@@ -55,6 +55,37 @@ def test_oversized_native_line_does_not_consume_the_next_record(tmp_path: Path) 
     assert len(records) == 1
 
 
+def test_adaptive_session_metrics_are_accepted_as_one_complete_record(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "native.jsonl"
+    payload = {
+        "schema": 1,
+        "timestamp": 1001.0,
+        "scope": "server",
+        "kind": "snapshot",
+        "user": "tester-user",
+        "session_id": "session-0123456789abcdef",
+        "metrics": {
+            "multipath_profile": 1,
+            "multipath_chunk_packets": 16,
+            "multipath_chunk_dwell_ms": 16,
+            "worker_path_retry_ratio": 0.125,
+            "worker_output_queue_delay_ms": 2.5,
+            "worker_output_queue_late_total": 0,
+            "kcp_congestion_control": 1,
+        },
+    }
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    records, invalid = ingest_native_records(_session(), path, now=1002.0)
+
+    assert invalid == 0
+    assert len(records) == 1
+    assert records[0]["native_entity"] == "server_session"
+    assert records[0]["metrics"] == payload["metrics"]
+
+
 def test_native_rotation_handoff_is_drained_before_the_new_runtime_file(tmp_path: Path) -> None:
     path = tmp_path / "native.jsonl"
     path.write_text(_record() + "\n", encoding="utf-8")

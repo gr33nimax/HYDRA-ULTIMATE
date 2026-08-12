@@ -43,6 +43,15 @@ sudo hydra calls telemetry export --output hydra-vk-tunnel.tar.gz
 sudo hydra calls telemetry stop
 ```
 
+Adaptive diagnostics separate three signals that must not be conflated:
+`network_loss_ratio` is authenticated outer RTP loss,
+`worker_path_retry_ratio` is KCP retry pressure assigned to a worker, and
+`worker_output_queue_delay_ms` is local residence after KCP output. The
+`worker_path_loss_ratio` field from the first adaptive build remains accepted
+only as a compatibility alias for retry pressure. Live `status` hides
+historical sessions; `report` keeps them and prints the pseudonymous native
+session ID for each worker.
+
 `tail --follow` завершается по `Ctrl+C` или после остановки сессии. `mark`
 принимает короткий ASCII slug и формирует независимые фазы отчёта. `report` и
 `export` не останавливают активную запись. Для старого эксперимента указывается

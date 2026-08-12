@@ -161,6 +161,40 @@ def test_server_process_generations_are_aggregated_without_cross_series_resets()
     assert result["continuity"]["server_generations"] == 2
 
 
+def test_entity_reports_mark_only_recent_live_session_as_current() -> None:
+    records = [
+        {
+            "kind": "native",
+            "timestamp": 10.0,
+            "native_scope": "server",
+            "native_kind": "snapshot",
+            "native_entity": "server_worker",
+            "tester_id": "tester-1",
+            "native_session_id": "old-session",
+            "worker_id": 0,
+            "metrics": {"worker_active": 1},
+        },
+        {
+            "kind": "native",
+            "timestamp": 30.0,
+            "native_scope": "server",
+            "native_kind": "snapshot",
+            "native_entity": "server_worker",
+            "tester_id": "tester-1",
+            "native_session_id": "current-session",
+            "worker_id": 0,
+            "metrics": {"worker_active": 1},
+        },
+    ]
+
+    result = analyze_native(records, ["tester-1"])
+    reports = {item["native_session_id"]: item for item in result["server_workers"]}
+
+    assert reports["old-session"]["active"] is True
+    assert reports["old-session"]["current"] is False
+    assert reports["current-session"]["current"] is True
+
+
 def test_negligible_outer_auth_noise_is_not_reported_as_critical() -> None:
     native = {
         "server": {
@@ -178,7 +212,7 @@ def test_negligible_outer_auth_noise_is_not_reported_as_critical() -> None:
     assert "outer_packet_authentication_failures" not in codes
 
 
-def test_protocol_findings_distinguish_legacy_reordering_from_adaptive_path_loss() -> None:
+def test_protocol_findings_distinguish_legacy_reordering_from_adaptive_retries() -> None:
     legacy = {
         "server": {
             "counters": {
@@ -204,7 +238,7 @@ def test_protocol_findings_distinguish_legacy_reordering_from_adaptive_path_loss
             "gauges": {"multipath_profile": {"max": 1}},
         }],
         "server_workers": [{
-            "gauges": {"worker_path_loss_ratio": {"p95": 0.2}},
+            "gauges": {"worker_path_retry_ratio": {"p95": 0.2}},
         }],
     }
     adaptive_codes = {
@@ -212,3 +246,23 @@ def test_protocol_findings_distinguish_legacy_reordering_from_adaptive_path_loss
     }
     assert "legacy_multipath_reordering" not in adaptive_codes
     assert "adaptive_path_pressure" in adaptive_codes
+
+
+def test_protocol_findings_detect_post_kcp_output_queue_delay() -> None:
+    native = {
+        "diagnostic_level": "full",
+        "server": {
+            "counters": {"worker_output_queue_late_total": 4},
+            "gauges": {},
+        },
+        "clients": {},
+        "server_sessions": [],
+        "client_sessions": [],
+        "server_workers": [{
+            "gauges": {"worker_output_queue_delay_ms": {"p95": 35}},
+        }],
+    }
+
+    codes = {finding["code"] for finding in protocol_findings(native, {})}
+
+    assert "post_kcp_output_queue_delay" in codes

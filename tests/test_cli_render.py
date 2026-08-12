@@ -279,6 +279,57 @@ def test_calls_telemetry_report_renderer_highlights_capacity_and_findings():
     assert "Inspect socket buffers" in output
 
 
+def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
+    workers = [
+        {
+            "tester_id": "tester-1",
+            "native_session_id": "native-old-session",
+            "worker_id": 0,
+            "active": True,
+            "current": False,
+            "wire_bps": 1_000_000,
+            "gauges": {"worker_active": {"max": 1}},
+            "counters": {},
+        },
+        {
+            "tester_id": "tester-1",
+            "native_session_id": "native-new-session",
+            "worker_id": 0,
+            "active": True,
+            "current": True,
+            "wire_bps": 2_000_000,
+            "gauges": {
+                "worker_active": {"max": 1},
+                "worker_path_retry_ratio": {"p95": 0.05},
+            },
+            "counters": {},
+        },
+    ]
+    payload = {
+        "ok": True,
+        "session_id": "20260812T193016Z-d0973e0e",
+        "active": True,
+        "native": {
+            "diagnostic_level": "full",
+            "server_workers": workers,
+            "client_workers": [],
+        },
+    }
+
+    status = render_human("calls.telemetry.status", payload, color=False)
+    report = render_human(
+        "calls.telemetry.report",
+        payload | {"analysis_input": {}},
+        color=False,
+    )
+
+    assert "top 1 of 1" in status
+    assert "Historical/inactive workers hidden: 1" in status
+    assert "new-session" not in status
+    assert "new-session" in report
+    assert "old-session" in report
+
+
 def test_tty_uses_human_output_while_json_flag_is_machine_stable(capsys):
     app = MagicMock()
     app.status.return_value = {"version": 4, "users": 0}

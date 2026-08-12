@@ -266,6 +266,14 @@ def _entity_reports(
     ],
 ) -> list[dict[str, object]]:
     reports: list[dict[str, object]] = []
+    newest_timestamp = max(
+        (
+            _number(record.get("timestamp"))
+            for records in groups.values()
+            for record in records
+        ),
+        default=0.0,
+    )
     for (tester_id, session_id, worker_id), records in sorted(
         groups.items(),
         key=lambda item: item[0],
@@ -273,10 +281,18 @@ def _entity_reports(
         summary = _metric_summary(records)
         counters = _mapping(summary.get("counters"))
         ordered = sorted(records, key=lambda record: _number(record.get("timestamp")))
+        first_timestamp = _number(ordered[0].get("timestamp"))
+        last_timestamp = _number(ordered[-1].get("timestamp"))
+        latest_metrics = _mapping(ordered[-1].get("metrics"))
+        active_metric = (
+            "worker_active"
+            if worker_id is not None or "session_active" not in latest_metrics
+            else "session_active"
+        )
+        active = _number(latest_metrics.get(active_metric)) > 0
         duration = max(
             0.0,
-            _number(ordered[-1].get("timestamp"))
-            - _number(ordered[0].get("timestamp")),
+            last_timestamp - first_timestamp,
         ) if len(ordered) > 1 else 0.0
         wire_bytes = _number(counters.get("outer_bytes_in_total")) + _number(
             counters.get("outer_bytes_out_total"),
@@ -290,6 +306,11 @@ def _entity_reports(
             "tester_id": tester_id,
             "native_session_id": session_id,
             "worker_id": worker_id,
+            "active": active,
+            "current": active and last_timestamp >= newest_timestamp - 10,
+            "first_timestamp": first_timestamp,
+            "last_timestamp": last_timestamp,
+            "samples": len(ordered),
             **summary,
             "duration_seconds": round(duration, 3),
             "wire_bytes": round(wire_bytes, 3),

@@ -1,5 +1,10 @@
 # Changelog
 
+- Fixed adaptive VK telemetry ingestion: `multipath_*` session/process records
+  are no longer rejected, so wire accounting and native coverage remain
+  complete. Live status now hides historical sessions while the full report
+  identifies them explicitly. Worker diagnostics distinguish authenticated
+  network loss, KCP retry pressure, and post-KCP output-queue delay.
 - Fixed live VK telemetry reports racing with newly appended native worker/event
   buckets by analyzing an immutable snapshot of the active timeline tail.
 

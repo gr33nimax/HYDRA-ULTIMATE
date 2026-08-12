@@ -139,12 +139,12 @@ def protocol_findings(
     server_paths = [
         report
         for report in native.get("server_sessions", [])
-        if isinstance(report, Mapping)
+        if isinstance(report, Mapping) and _current_or_unclassified(report)
     ]
     client_paths = [
         report
         for report in native.get("client_sessions", [])
-        if isinstance(report, Mapping)
+        if isinstance(report, Mapping) and _current_or_unclassified(report)
     ]
     findings.extend(_multipath_findings(
         native,
@@ -176,14 +176,14 @@ def protocol_findings(
             "downstream_transport_bottleneck",
             "Server-to-client KCP retransmission or client receive loss dominates the reverse direction.",
             "Compare client workers by TURN ordinal, wire rate and loss; "
-            "then A/B downstream pacing, congestion control and KCP windows.",
+            "then A/B KCP congestion control, fast-resend and send windows.",
         ))
     elif uplink_pressure and not downstream_pressure:
         findings.append(_finding(
             "critical",
             "uplink_transport_bottleneck",
             "Client-to-server KCP retransmission or server receive loss dominates the reverse direction.",
-            "Compare server worker ingress and client TURN paths before tuning client-side pacing and send windows.",
+            "Compare server worker ingress and client TURN paths before tuning KCP congestion control and send windows.",
         ))
     wait_p95 = _number(_mapping(gauges.get("kcp_wait_snd")).get("p95"))
     wait_p95 = max(
@@ -231,6 +231,18 @@ def protocol_findings(
             "Parallel VK/TURN workers carried materially different wire rates.",
             "Compare TURN ordinal, loss, queue drops and reconnects per worker; deprioritize persistently weak paths.",
         ))
+    output_queue_delay = max(
+        _entity_gauge_peak(native, "server_workers", "worker_output_queue_delay_ms"),
+        _entity_gauge_peak(native, "client_workers", "worker_output_queue_delay_ms"),
+    )
+    late_output_writes = _sum_matching(counters, ("output_queue_late",))
+    if output_queue_delay >= 20 or late_output_writes >= 32:
+        findings.append(_finding(
+            "critical",
+            "post_kcp_output_queue_delay",
+            "Packets waited in a worker output queue after KCP started retransmission timing.",
+            "Correlate output queue delay with KCP retries; do not add a post-KCP rate limiter.",
+        ))
     if any(
         _integer(kernel.get(key))
         for key in (
@@ -275,15 +287,21 @@ def _multipath_findings(
             "The run used packet-striped legacy multipath while KCP retransmissions were high.",
             "Repeat the same marked workload with the adaptive profile; compare goodput, stalls, retransmissions and WaitSnd.",
         )]
-    if adaptive and max(
-        _entity_gauge_peak(native, "server_workers", "worker_path_loss_ratio"),
-        _entity_gauge_peak(native, "client_workers", "worker_path_loss_ratio"),
-    ) >= 0.1:
+    retry_pressure = max(
+        _entity_gauge_peak(native, "server_workers", "worker_path_retry_ratio"),
+        _entity_gauge_peak(native, "client_workers", "worker_path_retry_ratio"),
+    )
+    if not retry_pressure:
+        retry_pressure = max(
+            _entity_gauge_peak(native, "server_workers", "worker_path_loss_ratio"),
+            _entity_gauge_peak(native, "client_workers", "worker_path_loss_ratio"),
+        )
+    if adaptive and retry_pressure >= 0.1:
         return [_finding(
             "warning",
             "adaptive_path_pressure",
-            "The adaptive scheduler identified at least one persistently lossy TURN path.",
-            "Compare pacing rate and path RTT by worker; replace or reduce weak paths before raising aggregate rate.",
+            "The adaptive scheduler observed sustained KCP retry pressure on at least one TURN path.",
+            "Compare network loss, path RTT and output queue delay before replacing or deprioritizing that path.",
         )]
     return []
 
@@ -433,7 +451,7 @@ def _entity_gauge_peak(
                 _mapping(_mapping(record.get("gauges")).get(key)).get("p95"),
             )
             for record in records
-            if isinstance(record, Mapping)
+            if isinstance(record, Mapping) and _current_or_unclassified(record)
         ),
         default=0.0,
     )
@@ -447,6 +465,8 @@ def _worker_path_imbalance(native: Mapping[str, object]) -> bool:
     for report in reports:
         if not isinstance(report, Mapping):
             continue
+        if not _current_or_unclassified(report):
+            continue
         rate = _number(report.get("wire_bps"))
         if rate > 0:
             tester_id = str(report.get("tester_id", "")) or "unattributed"
@@ -457,6 +477,10 @@ def _worker_path_imbalance(native: Mapping[str, object]) -> bool:
         and max(rates) / max(1, min(rates)) >= 2
         for rates in rates_by_tester.values()
     )
+
+
+def _current_or_unclassified(report: Mapping[str, object]) -> bool:
+    return "current" not in report or bool(report.get("current"))
 
 
 def _finding(severity: str, code: str, message: str, next_step: str) -> dict[str, str]:

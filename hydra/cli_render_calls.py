@@ -179,22 +179,28 @@ def _append_native_diagnostics(
         lines.append("  Missing: " + ", ".join(shown))
         if len(shown) < len(missing_all):
             lines.append(f"    ... and {len(missing_all) - len(shown)} more; run telemetry report")
-    _append_native_sessions(lines, native)
+    _append_native_sessions(lines, native, detailed=detailed)
     _append_native_workers(lines, native, detailed=detailed)
 
 
 def _append_native_sessions(
     lines: list[str],
     native: Mapping[str, object],
+    *,
+    detailed: bool,
 ) -> None:
     rows = []
     first_report: Mapping[str, object] | None = None
+    hidden = 0
     for side, key in (("server", "server_sessions"), ("client", "client_sessions")):
         raw_reports = native.get(key)
         if not isinstance(raw_reports, Sequence):
             continue
         for report in raw_reports:
             if not isinstance(report, Mapping):
+                continue
+            if not detailed and not report.get("current"):
+                hidden += 1
                 continue
             if first_report is None:
                 first_report = report
@@ -237,6 +243,8 @@ def _append_native_sessions(
                 rows,
             ),
         ])
+    if hidden:
+        lines.append(f"  Historical/inactive sessions hidden: {hidden}; run telemetry report")
 
 
 def _append_native_workers(
@@ -246,6 +254,7 @@ def _append_native_workers(
     detailed: bool,
 ) -> None:
     candidates: list[tuple[float, tuple[object, ...]]] = []
+    hidden = 0
     for side, key in (("server", "server_workers"), ("client", "client_workers")):
         raw_reports = native.get(key)
         if not isinstance(raw_reports, Sequence):
@@ -253,51 +262,69 @@ def _append_native_workers(
         for report in raw_reports:
             if not isinstance(report, Mapping):
                 continue
+            if not detailed and not report.get("current"):
+                hidden += 1
+                continue
             drops = _counter(report, "worker_send_queue_drops_total") + _counter(
                 report,
                 "peer_read_queue_drops_total",
             )
             reconnects = _counter(report, "worker_reconnect_total")
             loss = _gauge(report, "network_loss_ratio", "p95")
-            path_loss = _gauge(report, "worker_path_loss_ratio", "p95")
+            retry_pressure = _gauge(report, "worker_path_retry_ratio", "p95")
+            if not _has_gauge(report, "worker_path_retry_ratio"):
+                retry_pressure = _gauge(report, "worker_path_loss_ratio", "p95")
             path_rtt = _gauge(report, "worker_path_rtt_ms", "p95")
-            pacing_rate = _gauge(report, "worker_pacing_rate_bps", "p95")
-            active = _gauge(report, "worker_active", "max")
+            queue_delay = _gauge(report, "worker_output_queue_delay_ms", "p95")
+            queue_late = _counter(report, "worker_output_queue_late_total")
+            active = bool(report.get("active"))
             score = (
                 drops * 1000
                 + reconnects * 100
-                + max(loss, path_loss) * 100
+                + max(loss, retry_pressure) * 100
+                + queue_late
                 + (0 if active else 1)
             )
-            candidates.append((score, (
+            row: list[object] = [
                 side,
                 report.get("tester_id", "-"),
+            ]
+            if detailed:
+                row.append(_short_id(report.get("native_session_id")))
+            row.extend((
                 scalar(report.get("worker_id", "-")),
                 "yes" if active else "no",
                 _bitrate(report.get("wire_bps")),
                 _percent(loss),
-                _percent(path_loss),
-                _bitrate(pacing_rate),
+                _percent(retry_pressure),
                 f"{path_rtt:.0f} ms",
+                f"{queue_delay:.0f} ms/{scalar(round(queue_late, 1))}",
                 scalar(round(drops, 1)),
                 scalar(round(reconnects, 1)),
                 scalar(round(_gauge(report, "turn_selected_endpoint_ordinal", "p95"), 1)),
-            )))
+            ))
+            candidates.append((score, tuple(row)))
     if not candidates:
         return
     candidates.sort(key=lambda item: item[0], reverse=True)
     shown = candidates if detailed else candidates[:12]
+    headers = ["Side", "Tester"]
+    if detailed:
+        headers.append("Session")
+    headers.extend((
+        "ID", "Active", "Wire avg", "Net loss", "Retry", "Path RTT",
+        "Queue/late", "Drops", "Reconnect", "TURN #",
+    ))
     lines.extend([
         "",
         "Workers" + ("" if detailed else f" (top {len(shown)} of {len(candidates)})"),
         *table(
-            (
-                "Side", "Tester", "ID", "Active", "Wire avg", "Net loss",
-                "Path loss", "Pace", "Path RTT", "Drops", "Reconnect", "TURN #",
-            ),
+            tuple(headers),
             [row for _, row in shown],
         ),
     ])
+    if hidden:
+        lines.append(f"  Historical/inactive workers hidden: {hidden}; run telemetry report")
 
 
 def _append_findings_and_paths(
@@ -439,6 +466,11 @@ def _counter(report: Mapping[str, object], metric: str) -> float:
     counters = report.get("counters")
     counter_map = counters if isinstance(counters, Mapping) else {}
     return float(counter_map.get(metric, 0) or 0)
+
+
+def _has_gauge(report: Mapping[str, object], metric: str) -> bool:
+    gauges = report.get("gauges")
+    return isinstance(gauges, Mapping) and metric in gauges
 
 
 def _short_id(value: object) -> str:
