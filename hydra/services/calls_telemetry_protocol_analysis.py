@@ -146,29 +146,12 @@ def protocol_findings(
         for report in native.get("client_sessions", [])
         if isinstance(report, Mapping)
     ]
-    adaptive_multipath = any(
-        _number(
-            _mapping(_mapping(report.get("gauges")).get("multipath_profile")).get("max"),
-        ) >= 0.5
-        for report in (*server_paths, *client_paths)
-    )
-    if retransmission_pressure and not adaptive_multipath:
-        findings.append(_finding(
-            "warning",
-            "legacy_multipath_reordering",
-            "The run used packet-striped legacy multipath while KCP retransmissions were high.",
-            "Repeat the same marked workload with the adaptive profile; compare goodput, stalls, retransmissions and WaitSnd.",
-        ))
-    if adaptive_multipath and max(
-        _entity_gauge_peak(native, "server_workers", "worker_path_loss_ratio"),
-        _entity_gauge_peak(native, "client_workers", "worker_path_loss_ratio"),
-    ) >= 0.1:
-        findings.append(_finding(
-            "warning",
-            "adaptive_path_pressure",
-            "The adaptive scheduler identified at least one persistently lossy TURN path.",
-            "Compare pacing rate and path RTT by worker; replace or reduce weak paths before raising aggregate rate.",
-        ))
+    findings.extend(_multipath_findings(
+        native,
+        retransmission_pressure,
+        server_paths,
+        client_paths,
+    ))
     downstream_pressure = any(
         _number(report.get("kcp_retransmission_ratio")) >= 0.1
         for report in server_paths
@@ -271,6 +254,38 @@ def protocol_findings(
             "Correlate it with the Calls listener and native UDP-ingress counters before attributing it to this tunnel.",
         ))
     return findings
+
+
+def _multipath_findings(
+    native: Mapping[str, object],
+    retransmission_pressure: bool,
+    server_paths: Sequence[Mapping[str, object]],
+    client_paths: Sequence[Mapping[str, object]],
+) -> list[dict[str, str]]:
+    adaptive = any(
+        _number(
+            _mapping(_mapping(report.get("gauges")).get("multipath_profile")).get("max"),
+        ) >= 0.5
+        for report in (*server_paths, *client_paths)
+    )
+    if retransmission_pressure and not adaptive:
+        return [_finding(
+            "warning",
+            "legacy_multipath_reordering",
+            "The run used packet-striped legacy multipath while KCP retransmissions were high.",
+            "Repeat the same marked workload with the adaptive profile; compare goodput, stalls, retransmissions and WaitSnd.",
+        )]
+    if adaptive and max(
+        _entity_gauge_peak(native, "server_workers", "worker_path_loss_ratio"),
+        _entity_gauge_peak(native, "client_workers", "worker_path_loss_ratio"),
+    ) >= 0.1:
+        return [_finding(
+            "warning",
+            "adaptive_path_pressure",
+            "The adaptive scheduler identified at least one persistently lossy TURN path.",
+            "Compare pacing rate and path RTT by worker; replace or reduce weak paths before raising aggregate rate.",
+        )]
+    return []
 
 
 def _continuity_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
