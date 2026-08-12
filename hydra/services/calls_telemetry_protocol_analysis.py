@@ -113,41 +113,7 @@ def protocol_findings(
     native: Mapping[str, object],
     kernel: Mapping[str, object],
 ) -> list[dict[str, str]]:
-    findings: list[dict[str, str]] = []
-    if native.get("diagnostic_level") != "full":
-        findings.append(_finding(
-            "critical",
-            "native_coverage_incomplete",
-            "Native client/server metrics do not cover every diagnostic stage.",
-            "Use an instrumented Hydracore build for all testers before drawing a protocol-level conclusion.",
-        ))
-    continuity = _mapping(native.get("continuity"))
-    if _sum_matching(
-        continuity,
-        (
-            "control_drops",
-            "server_record_drops",
-            "client_record_drops",
-            "lease_expirations",
-            "missing_sequences",
-        ),
-    ):
-        findings.append(_finding(
-            "critical",
-            "native_telemetry_discontinuity",
-            "Native control or snapshot records were lost during the measurement window.",
-            "Use per-tester continuity counters before comparing rates; "
-            "repeat phases whose client sequence has gaps.",
-        ))
-    if _integer(continuity.get("sequence_resets")) or _integer(
-        continuity.get("server_generations"),
-    ) > 1:
-        findings.append(_finding(
-            "warning",
-            "native_source_restarted",
-            "The Calls inbound telemetry producer changed generation or reset its sequence during the run.",
-            "Correlate the generation boundary with configuration apply, service logs and transport recovery time.",
-        ))
+    findings = _continuity_findings(native)
     server = _mapping(native.get("server"))
     counters = _combined_counters(native)
     gauges = _mapping(server.get("gauges"))
@@ -277,6 +243,45 @@ def protocol_findings(
             "host_interface_tx_drops",
             "A host-wide network interface TX-drop counter increased during the experiment.",
             "Correlate it with the Calls listener and native UDP-ingress counters before attributing it to this tunnel.",
+        ))
+    return findings
+
+
+def _continuity_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    if native.get("diagnostic_level") != "full":
+        findings.append(_finding(
+            "critical",
+            "native_coverage_incomplete",
+            "Native client/server metrics do not cover every diagnostic stage.",
+            "Use an instrumented Hydracore build for all testers before drawing a protocol-level conclusion.",
+        ))
+    continuity = _mapping(native.get("continuity"))
+    if _sum_matching(
+        continuity,
+        (
+            "control_drops",
+            "server_record_drops",
+            "client_record_drops",
+            "lease_expirations",
+            "missing_sequences",
+        ),
+    ):
+        findings.append(_finding(
+            "critical",
+            "native_telemetry_discontinuity",
+            "Native control or snapshot records were lost during the measurement window.",
+            "Use per-tester continuity counters before comparing rates; "
+            "repeat phases whose client sequence has gaps.",
+        ))
+    if _integer(continuity.get("sequence_resets")) or _integer(
+        continuity.get("server_generations"),
+    ) > 1:
+        findings.append(_finding(
+            "warning",
+            "native_source_restarted",
+            "The Calls inbound telemetry producer changed generation or reset its sequence during the run.",
+            "Correlate the generation boundary with configuration apply, service logs and transport recovery time.",
         ))
     return findings
 

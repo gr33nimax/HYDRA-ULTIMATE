@@ -81,32 +81,9 @@ def build_calls_telemetry_report(
     native["analyzed_records"] = native["records"]
     native["records"] = _integer(session.get("native_record_count")) or native["records"]
     server_counters = _mapping(_mapping(native.get("server")).get("counters"))
-    wire_bytes = _number(server_counters.get("outer_bytes_in_total")) + _number(
-        server_counters.get("outer_bytes_out_total"),
-    )
-    outer_payload_bytes = _number(
-        server_counters.get("outer_payload_bytes_in_total"),
-    ) + _number(server_counters.get("outer_payload_bytes_out_total"))
-    outer_overhead_bytes = _number(
-        server_counters.get("outer_overhead_bytes_in_total"),
-    ) + _number(server_counters.get("outer_overhead_bytes_out_total"))
-    native["wire_breakdown"] = {
-        "outer_bytes": round(wire_bytes, 3),
-        "outer_payload_bytes": round(outer_payload_bytes, 3),
-        "outer_overhead_bytes": round(outer_overhead_bytes, 3),
-        "kcp_output_bytes": round(
-            _number(server_counters.get("kcp_out_bytes_total")),
-            3,
-        ),
-        "kcp_retransmit_bytes": round(
-            _number(server_counters.get("kcp_retrans_bytes_total")),
-            3,
-        ),
-        "relay_goodput_bytes": round(
-            _number(server_counters.get("relay_bytes_total")),
-            3,
-        ),
-    }
+    wire_breakdown = _native_wire_breakdown(server_counters)
+    native["wire_breakdown"] = wire_breakdown
+    wire_bytes = _number(wire_breakdown.get("outer_bytes"))
     native["goodput_wire_efficiency_ratio"] = (
         round(total / wire_bytes, 6) if wire_bytes else None
     )
@@ -194,6 +171,31 @@ def build_calls_telemetry_report(
             "UDP kernel counters are host-wide; listener queue drops are Calls-specific.",
             "Connections shorter than the traffic-daemon polling interval may be absent.",
         ],
+    }
+
+
+def _native_wire_breakdown(
+    counters: Mapping[str, object],
+) -> dict[str, float]:
+    def combined(left: str, right: str) -> float:
+        return _number(counters.get(left)) + _number(counters.get(right))
+
+    return {
+        "outer_bytes": round(combined("outer_bytes_in_total", "outer_bytes_out_total"), 3),
+        "outer_payload_bytes": round(
+            combined("outer_payload_bytes_in_total", "outer_payload_bytes_out_total"),
+            3,
+        ),
+        "outer_overhead_bytes": round(
+            combined("outer_overhead_bytes_in_total", "outer_overhead_bytes_out_total"),
+            3,
+        ),
+        "kcp_output_bytes": round(_number(counters.get("kcp_out_bytes_total")), 3),
+        "kcp_retransmit_bytes": round(
+            _number(counters.get("kcp_retrans_bytes_total")),
+            3,
+        ),
+        "relay_goodput_bytes": round(_number(counters.get("relay_bytes_total")), 3),
     }
 
 

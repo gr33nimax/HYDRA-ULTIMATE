@@ -155,20 +155,7 @@ def analyze_native(
         "missing_groups": missing_groups,
         "tester_coverage": tester_coverage,
         "server": _process_metric_summary(server_process),
-        "clients": {
-            tester_id: _metric_summary(
-                [
-                    record
-                    for record in entities["client_session"]
-                    if (str(record.get("tester_id", "")) or "unattributed")
-                    == tester_id
-                ],
-            )
-            for tester_id in sorted({
-                str(record.get("tester_id", "")) or "unattributed"
-                for record in entities["client_session"]
-            })
-        },
+        "clients": _client_metric_summaries(entities),
         "server_sessions": _entity_reports(server_sessions),
         "server_workers": _entity_reports(server_workers),
         "client_sessions": _entity_reports(client_sessions),
@@ -190,6 +177,33 @@ def _record_entity(record: Mapping[str, object]) -> str:
     if scope == "client":
         return "client_worker" if record.get("worker_id") is not None else "client_session"
     return ""
+
+
+def _client_metric_summaries(
+    entities: Mapping[str, Sequence[Mapping[str, object]]],
+) -> dict[str, dict[str, object]]:
+    sessions = entities.get("client_session", [])
+    workers = entities.get("client_worker", [])
+    tester_ids = sorted({
+        str(record.get("tester_id", "")) or "unattributed"
+        for record in (*sessions, *workers)
+    })
+    summaries: dict[str, dict[str, object]] = {}
+    for tester_id in tester_ids:
+        session_records = [
+            record
+            for record in sessions
+            if (str(record.get("tester_id", "")) or "unattributed") == tester_id
+        ]
+        # Old producers may emit only worker snapshots. Never combine the two
+        # levels: worker counters duplicate the canonical session accumulator.
+        source = session_records or [
+            record
+            for record in workers
+            if (str(record.get("tester_id", "")) or "unattributed") == tester_id
+        ]
+        summaries[tester_id] = _metric_summary(source)
+    return summaries
 
 
 def _entity_key(record: Mapping[str, object]) -> tuple[str, str, int | None]:
