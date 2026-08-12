@@ -1,5 +1,8 @@
 # Changelog
 
+- Fixed live VK telemetry reports racing with newly appended native worker/event
+  buckets by analyzing an immutable snapshot of the active timeline tail.
+
 Все заметные изменения HYDRA собраны в этом файле. Даты указаны по календарю
 релиза; факты старых записей не переписываются задним числом.
 

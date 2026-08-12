@@ -4,7 +4,7 @@ from __future__ import annotations
 import gzip
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 
 from hydra.services.calls_telemetry_analysis_common import _integer
@@ -76,4 +76,59 @@ def _analysis_bucket(record: Mapping[str, object]) -> str:
     ))
 
 
-__all__ = ["_analysis_bucket", "_decode_record", "_tail_path"]
+def _sample_analysis_records(
+    records: Callable[[], Iterator[dict[str, object]]],
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    """Uniformly sample two passes over one immutable timeline snapshot."""
+    limits = {"sample": 100_000, "event": 50_000}
+    counts: dict[str, int] = {}
+    bucket_counts: dict[str, int] = {}
+    for record in records():
+        kind = str(record.get("kind", "event"))
+        counts[kind] = counts.get(kind, 0) + 1
+        bucket = _analysis_bucket(record)
+        bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+    native_buckets = [
+        bucket for bucket in bucket_counts if bucket.startswith("native|")
+    ]
+    native_limit = max(32, 100_000 // max(1, len(native_buckets)))
+    strides = {
+        bucket: max(1, (count + limit - 1) // limit)
+        for bucket, count in bucket_counts.items()
+        if (
+            limit := (
+                native_limit
+                if bucket.startswith("native|")
+                else limits.get(bucket, count)
+            )
+        )
+    }
+    seen: dict[str, int] = {}
+    retained: list[dict[str, object]] = []
+    for record in records():
+        bucket = _analysis_bucket(record)
+        seen[bucket] = seen.get(bucket, 0) + 1
+        stride = strides.get(bucket, 1)
+        if (
+            seen[bucket] == 1
+            or seen[bucket] == bucket_counts[bucket]
+            or (seen[bucket] - 1) % stride == 0
+        ):
+            if stride > 1:
+                record = dict(record)
+                record["analysis_stride"] = stride
+            retained.append(record)
+    return retained, {
+        "timeline_records": sum(counts.values()),
+        "analyzed_records": len(retained),
+        "counts": counts,
+        "strides": strides,
+    }
+
+
+__all__ = [
+    "_analysis_bucket",
+    "_decode_record",
+    "_sample_analysis_records",
+    "_tail_path",
+]

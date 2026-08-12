@@ -361,6 +361,61 @@ def test_timeline_segments_compress_without_losing_tail_report_or_export(tmp_pat
     assert len(timeline.splitlines()) == 40
 
 
+def test_live_analysis_uses_one_immutable_timeline_snapshot(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    clock = _Clock()
+    store = CallsTelemetryStore(
+        HostBackend(),
+        tmp_path / "state",
+        tmp_path / "data",
+        clock,
+    )
+    session = {
+        "schema": 2,
+        "session_id": "20260811T120000Z-feedface",
+        "started_at": clock.value,
+        "stopped_at": 0.0,
+        "max_data_bytes": 1024 * 1024,
+        "sequence": 0,
+    }
+    store.publish(session)
+    worker = {
+        "kind": "native",
+        "native_kind": "snapshot",
+        "native_entity": "server_worker",
+        "tester_id": "tester-2",
+        "native_session_id": "native-session",
+        "worker_id": 0,
+        "timestamp": clock.value,
+        "metrics": {"telemetry_sequence": 1},
+    }
+    assert store.append_record(session, worker)
+
+    original = store._iter_sources
+    passes = 0
+
+    def grow_after_first_pass(sources):
+        nonlocal passes
+        passes += 1
+        yield from original(sources)
+        if passes == 1:
+            assert store.append_record(session, worker | {
+                "native_kind": "event",
+                "event": "worker_reconnect",
+                "timestamp": clock.value + 1,
+            })
+
+    monkeypatch.setattr(store, "_iter_sources", grow_after_first_pass)
+    records, analysis = store.analysis_records(str(session["session_id"]))
+
+    assert passes == 2
+    assert [record["native_kind"] for record in records] == ["snapshot"]
+    assert analysis["timeline_records"] == 1
+    assert len(store.records(str(session["session_id"]))) == 2
+
+
 def test_mark_tail_follow_and_live_export_share_one_timeline(tmp_path) -> None:
     clock = _Clock()
     runtime = _runtime(tmp_path, clock)

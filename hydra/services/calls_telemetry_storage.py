@@ -17,8 +17,8 @@ from typing import Callable, Iterator, Mapping
 
 from hydra.core.host import HostBackend
 from hydra.services.calls_telemetry_storage_readers import (
-    _analysis_bucket,
     _decode_record,
+    _sample_analysis_records,
     _tail_path,
 )
 
@@ -208,54 +208,28 @@ class CallsTelemetryStore:
         session_id: str,
     ) -> tuple[list[dict[str, object]], dict[str, object]]:
         """Load a uniform bounded analysis set while retaining the full timeline."""
-        limits = {"sample": 100_000, "event": 50_000}
-        counts: dict[str, int] = {}
-        bucket_counts: dict[str, int] = {}
-        for record in self._iter_records(session_id):
-            kind = str(record.get("kind", "event"))
-            counts[kind] = counts.get(kind, 0) + 1
-            bucket = _analysis_bucket(record)
-            bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
-        native_buckets = [
-            bucket for bucket in bucket_counts if bucket.startswith("native|")
-        ]
-        native_limit = max(32, 100_000 // max(1, len(native_buckets)))
-        strides = {
-            bucket: max(
-                1,
-                (count + limit - 1) // limit,
-            )
-            for bucket, count in bucket_counts.items()
-            if (
-                limit := (
-                    native_limit
-                    if bucket.startswith("native|")
-                    else limits.get(bucket, count)
+        snapshot: Path | None = None
+        try:
+            with self.locked():
+                sources = self.segment_paths(session_id)
+                current = self.timeline_path(session_id)
+                temporary = tempfile.NamedTemporaryFile(
+                    prefix=f".{session_id}.analysis-",
+                    suffix=".jsonl",
+                    dir=self.data_dir,
+                    delete=False,
                 )
-            )
-        }
-        seen: dict[str, int] = {}
-        retained: list[dict[str, object]] = []
-        for record in self._iter_records(session_id):
-            kind = str(record.get("kind", "event"))
-            bucket = _analysis_bucket(record)
-            seen[bucket] = seen.get(bucket, 0) + 1
-            stride = strides.get(bucket, 1)
-            if (
-                seen[bucket] == 1
-                or seen[bucket] == bucket_counts[bucket]
-                or (seen[bucket] - 1) % stride == 0
-            ):
-                if stride > 1:
-                    record = dict(record)
-                    record["analysis_stride"] = stride
-                retained.append(record)
-        return retained, {
-            "timeline_records": sum(counts.values()),
-            "analyzed_records": len(retained),
-            "counts": counts,
-            "strides": strides,
-        }
+                snapshot = Path(temporary.name)
+                with temporary:
+                    if current.exists():
+                        with current.open("rb") as source:
+                            shutil.copyfileobj(source, temporary, length=1024 * 1024)
+                snapshot.chmod(0o600)
+                sources.append(snapshot)
+            return _sample_analysis_records(lambda: self._iter_sources(sources))
+        finally:
+            if snapshot is not None:
+                snapshot.unlink(missing_ok=True)
 
     def tail(self, session_id: str, *, limit: int) -> list[dict[str, object]]:
         if limit <= 0:
@@ -404,8 +378,11 @@ class CallsTelemetryStore:
         return int(match.group(1)) + 1 if match else len(paths) + 1
 
     def _iter_records(self, session_id: str) -> Iterator[dict[str, object]]:
+        yield from self._iter_sources(self.timeline_sources(session_id))
+
+    def _iter_sources(self, sources: list[Path]) -> Iterator[dict[str, object]]:
         seen_sequences: set[int] = set()
-        for path in self.timeline_sources(session_id):
+        for path in sources:
             try:
                 opener = gzip.open if path.suffix == ".gz" else open
                 with opener(path, "rt", encoding="utf-8") as handle:
