@@ -124,8 +124,8 @@ def protocol_findings(
             "Hydracore dropped packets in a UDP-ingress, peer-read or worker-send queue.",
             "Compare the individual queue counters and occupancy percentiles before changing their capacities.",
         ))
-    retrans = _sum_matching(counters, ("kcp_retrans", "kcp_fast_retrans", "kcp_lost"))
-    out_segments = _sum_matching(counters, ("kcp_out_segments",))
+    retrans = _number(counters.get("kcp_retrans_segments_total"))
+    out_segments = _number(counters.get("kcp_out_segments_total"))
     retransmission_pressure = bool(
         retrans and (not out_segments or retrans / max(1, out_segments) >= 0.1)
     )
@@ -287,15 +287,12 @@ def _multipath_findings(
             "The run used packet-striped legacy multipath while KCP retransmissions were high.",
             "Repeat the same marked workload with the adaptive profile; compare goodput, stalls, retransmissions and WaitSnd.",
         )]
-    retry_pressure = max(
-        _entity_gauge_peak(native, "server_workers", "worker_path_retry_ratio"),
-        _entity_gauge_peak(native, "client_workers", "worker_path_retry_ratio"),
-    )
-    if not retry_pressure:
-        retry_pressure = max(
-            _entity_gauge_peak(native, "server_workers", "worker_path_loss_ratio"),
-            _entity_gauge_peak(native, "client_workers", "worker_path_loss_ratio"),
-        )
+    retry_ratios = [
+        ratio
+        for entity in ("server_workers", "client_workers")
+        for ratio in _entity_path_retry_values(native, entity)
+    ]
+    retry_pressure = max(retry_ratios, default=0.0)
     if adaptive and retry_pressure >= 0.1:
         return [_finding(
             "warning",
@@ -455,6 +452,29 @@ def _entity_gauge_peak(
         ),
         default=0.0,
     )
+
+
+def _entity_path_retry_values(
+    native: Mapping[str, object],
+    entity: str,
+) -> list[float]:
+    records = native.get(entity, [])
+    if not isinstance(records, Sequence):
+        return []
+    values: list[float] = []
+    for record in records:
+        if not isinstance(record, Mapping) or not _current_or_unclassified(record):
+            continue
+        exact = record.get("worker_path_retransmission_ratio")
+        if exact is not None:
+            values.append(_number(exact))
+            continue
+        gauges = _mapping(record.get("gauges"))
+        metric = "worker_path_retry_ratio"
+        if metric not in gauges:
+            metric = "worker_path_loss_ratio"
+        values.append(_number(_mapping(gauges.get(metric)).get("p95")))
+    return values
 
 
 def _worker_path_imbalance(native: Mapping[str, object]) -> bool:

@@ -302,6 +302,8 @@ def _entity_reports(
         relay_bytes = _number(counters.get("relay_bytes_total"))
         out_segments = _number(counters.get("kcp_out_segments_total"))
         retrans = _number(counters.get("kcp_retrans_segments_total"))
+        path_attempts = _number(counters.get("worker_path_attempt_segments_total"))
+        path_retrans = _number(counters.get("worker_path_retrans_segments_total"))
         reports.append({
             "tester_id": tester_id,
             "native_session_id": session_id,
@@ -323,6 +325,9 @@ def _entity_reports(
             ),
             "kcp_retransmission_ratio": (
                 round(retrans / out_segments, 6) if out_segments else None
+            ),
+            "worker_path_retransmission_ratio": (
+                round(path_retrans / path_attempts, 6) if path_attempts else None
             ),
         })
     return reports

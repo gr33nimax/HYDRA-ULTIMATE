@@ -81,7 +81,7 @@ def test_service_validates_experiment_and_passes_only_safe_metadata() -> None:
         "udp_send_buffer_bytes": 4 * 1024 * 1024,
         "ingress_workers": 0,
         "ingress_queue_packets": 4096,
-        "peer_read_queue_packets": 128,
+        "peer_read_queue_packets": 256,
     }
     assert "tester" not in kwargs["metadata"]
 

@@ -45,10 +45,13 @@ sudo hydra calls telemetry stop
 
 Adaptive diagnostics separate three signals that must not be conflated:
 `network_loss_ratio` is authenticated outer RTP loss,
-`worker_path_retry_ratio` is KCP retry pressure assigned to a worker, and
+the displayed `Path retry` is the cumulative ratio of failed path attempts,
+and
 `worker_output_queue_delay_ms` is local residence after KCP output. The
+short-lived `worker_path_retry_ratio` EWMA remains available to the scheduler;
+older cores without exact attempt counters fall back to that value. The
 `worker_path_loss_ratio` field from the first adaptive build remains accepted
-only as a compatibility alias for retry pressure. Live `status` hides
+only as a compatibility alias for the EWMA. Live `status` hides
 historical sessions; `report` keeps them and prints the pseudonymous native
 session ID for each worker.
 
@@ -134,7 +137,7 @@ snapshots через аутентифицированный control path. Сме
 | :--- | :--- | :--- |
 | kernel/NIC/UDP drops растут | VPS, socket buffers, NIC/CPU scheduling | Устранить host loss, затем повторить тот же workload |
 | KCP retransmit высокий при высоком loss/RTT | путь client ↔ VK TURN | Сравнить сети/регионы/TURN и только затем KCP policy |
-| `kcp_wait_snd` около 2048 | KCP backpressure/window | A/B окна и congestion strategy с контролем latency/RSS |
+| `kcp_wait_snd` около 2048 | KCP backpressure/window | Проверить dynamic-cwnd flag, RTT/retry и только затем A/B размера окна с контролем latency/RSS |
 | worker queue drops/no-worker | striping и внутренние очереди | Профилировать send path, менять workers/queue depth |
 | VK/TURN/DTLS latency/failures | control plane/handshake | Разнести p95 по stage, worker и tester |
 | goodput растёт вместе с Hydracore CPU до насыщения | CPU/crypto/single UDP loop | Go profile, crypto/alloc/GC и multi-core dispatch A/B |
@@ -200,12 +203,24 @@ native source сохраняются первый/последний snapshot и
 - чтение UDP отделено от unwrap/dispatch bounded ingress-очередью на 4096
   пакетов с автоматическим числом workers и отдельными depth/capacity/drop
   метриками; порядок пакетов одного peer сохраняется;
-- peer-read queue увеличена до 128 пакетов, worker-send queue — до 512;
+- peer-read queue составляет 128 пакетов для неизменённого legacy и 256 для
+  adaptive, чтобы переживать измеренный краткий burst; worker-send queue — 512;
   `worker_send_queue_drops_total` теперь означает один реально потерянный KCP
   segment, а не число проверенных заполненных worker queues;
 - `outer_payload`, `outer_overhead`, KCP output/retransmit bytes и generation
   процесса позволяют разложить wire overhead и отличить перезапуск inbound от
   потери telemetry records.
+
+Полный 1440p-прогон adaptive debug.5 показал следующий независимый предел:
+VPS CPU, UDP ingress и socket buffers не были насыщены, но один стандартный
+dynamic KCP congestion window управлял четырьмя самостоятельными TURN-путями.
+Межпутевая перестановка/потеря уменьшала общее окно, заполняла `WaitSnd` и
+ограничивала видео примерно 2–3 Mbit/s. Совместимый debug.6 сохраняет adaptive
+chunk affinity и перенос повторов на другой TURN, но использует bounded
+local/remote KCP windows без единого dynamic cwnd. Точный
+`worker_path_attempt_segments_total` устраняет ложную интерпретацию EWMA, а
+анализ KCP retransmit сравнивает только сегменты с сегментами, не байты с
+сегментами.
 
 Для промежуточной проверки достаточно `status`; непрерывный поток доступен через
 `tail --follow`, полный итог — через `report` или `export`. Ни одна из этих команд

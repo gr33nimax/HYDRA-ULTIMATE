@@ -78,6 +78,8 @@ _LIVE_METRICS = {
     "worker_send_queue_depth",
     "worker_output_queue_delay_ms",
     "worker_output_queue_late_total",
+    "worker_path_attempt_segments_total",
+    "worker_path_retrans_segments_total",
     "worker_path_retry_ratio",
     "network_loss_ratio",
     "network_jitter_ms",

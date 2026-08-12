@@ -298,9 +298,10 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
             "active": True,
             "current": True,
             "wire_bps": 2_000_000,
+            "worker_path_retransmission_ratio": 0.02,
             "gauges": {
                 "worker_active": {"max": 1},
-                "worker_path_retry_ratio": {"p95": 0.05},
+                "worker_path_retry_ratio": {"p95": 0.5},
             },
             "counters": {},
         },
@@ -324,6 +325,9 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
     )
 
     assert "top 1 of 1" in status
+    assert "Path retry" in status
+    assert "2.0%" in status
+    assert "50.0%" not in status
     assert "Historical/inactive workers hidden: 1" in status
     assert "new-session" not in status
     assert "new-session" in report

@@ -11,6 +11,8 @@ CALL_MULTIPATH_ADAPTIVE = "adaptive"
 DEFAULT_MULTIPATH_PROFILE = CALL_MULTIPATH_ADAPTIVE
 DEFAULT_CALL_PORT = 56002
 DEFAULT_ROOM_COUNT = 4
+DEFAULT_ADAPTIVE_PEER_READ_QUEUE_PACKETS = 256
+DEFAULT_LEGACY_PEER_READ_QUEUE_PACKETS = 128
 MAX_JOIN_LINKS = 4
 MAX_WORKERS_PER_JOIN_LINK = 27
 MAX_WORKERS = 108
@@ -77,6 +79,15 @@ def multipath_profile(config: Mapping[str, object]) -> str:
     if value not in {CALL_MULTIPATH_LEGACY, CALL_MULTIPATH_ADAPTIVE}:
         raise ValueError("Calls multipath_profile must be legacy or adaptive")
     return value
+
+
+def peer_read_queue_packets(config: dict) -> int:
+    default = (
+        DEFAULT_ADAPTIVE_PEER_READ_QUEUE_PACKETS
+        if multipath_profile(config) == CALL_MULTIPATH_ADAPTIVE
+        else DEFAULT_LEGACY_PEER_READ_QUEUE_PACKETS
+    )
+    return _integer(config, "peer_read_queue_packets", default, 16, 4096)
 
 
 def _integer(config: dict, name: str, default: int, minimum: int, maximum: int) -> int:
@@ -153,6 +164,7 @@ def multi_user_inbound(
     desired = state.protocols["calls"]
     config = desired.config
     password = _obfs_password(config)
+    profile = multipath_profile(config)
     users = [
         {
             "name": user.email,
@@ -169,7 +181,7 @@ def multi_user_inbound(
         "tag": "calls-vk-in",
         "platform": "vk",
         "mode": CALL_MODE_MULTI_USER,
-        "multipath_profile": multipath_profile(config),
+        "multipath_profile": profile,
         "listen": "0.0.0.0",
         "listen_port": _listen_port(state, config),
         "obfs_password": password,
@@ -213,13 +225,7 @@ def multi_user_inbound(
             1,
             65536,
         ),
-        "peer_read_queue_packets": _integer(
-            config,
-            "peer_read_queue_packets",
-            128,
-            16,
-            4096,
-        ),
+        "peer_read_queue_packets": peer_read_queue_packets(config),
     }
 
 
@@ -278,6 +284,8 @@ __all__ = [
     "DEFAULT_MULTIPATH_PROFILE",
     "DEFAULT_CALL_PORT",
     "DEFAULT_ROOM_COUNT",
+    "DEFAULT_ADAPTIVE_PEER_READ_QUEUE_PACKETS",
+    "DEFAULT_LEGACY_PEER_READ_QUEUE_PACKETS",
     "MAX_JOIN_LINKS",
     "MAX_WORKERS",
     "MAX_WORKERS_PER_JOIN_LINK",
@@ -285,5 +293,6 @@ __all__ = [
     "multi_user_inbound",
     "multi_user_outbound",
     "multipath_profile",
+    "peer_read_queue_packets",
     "public_endpoint",
 ]

@@ -151,7 +151,7 @@ def test_calls_plugin_emits_exact_hydracore_multi_user_contract() -> None:
         "udp_send_buffer_bytes": 4 * 1024 * 1024,
         "ingress_workers": 0,
         "ingress_queue_packets": 4096,
-        "peer_read_queue_packets": 128,
+        "peer_read_queue_packets": 256,
     }
     outbound = json.loads(plugin.generate_client_config(state.users[0], state))["outbounds"][0]
     assert outbound["join_links"] == source.links
@@ -175,7 +175,18 @@ def test_calls_multi_user_supports_explicit_legacy_ab_profile() -> None:
     )["outbounds"][0]
 
     assert inbound["multipath_profile"] == "legacy"
+    assert inbound["peer_read_queue_packets"] == 128
     assert outbound["multipath_profile"] == "legacy"
+
+
+def test_calls_multi_user_preserves_explicit_peer_read_queue_capacity() -> None:
+    state = _state()
+    state.protocols["calls"].config["peer_read_queue_packets"] = 384
+
+    inbound = CallsPlugin(Source([], "", multi=True)).configure(state).inbounds[0]
+
+    assert inbound["multipath_profile"] == "adaptive"
+    assert inbound["peer_read_queue_packets"] == 384
 
 
 def test_calls_multi_user_rejects_unknown_multipath_profile() -> None:

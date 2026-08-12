@@ -73,7 +73,7 @@ def test_adaptive_session_metrics_are_accepted_as_one_complete_record(
             "worker_path_retry_ratio": 0.125,
             "worker_output_queue_delay_ms": 2.5,
             "worker_output_queue_late_total": 0,
-            "kcp_congestion_control": 1,
+            "kcp_congestion_control": 0,
         },
     }
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")

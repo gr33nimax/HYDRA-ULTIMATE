@@ -7,6 +7,14 @@
   network loss, KCP retry pressure, and post-KCP output-queue delay.
 - Fixed live VK telemetry reports racing with newly appended native worker/event
   buckets by analyzing an immutable snapshot of the active timeline tail.
+- Fixed the adaptive VK debug.5 throughput regression: the adaptive scheduler
+  keeps chunk affinity, alternate-path retries and control priority but no
+  longer enables one dynamic KCP congestion window across four independent
+  TURN paths. Adaptive server peer queues default to 256 packets while exact
+  legacy behavior keeps 128.
+- Path retry now uses cumulative attempt/retransmission counters when available.
+  KCP retransmission findings compare segment counters only; retransmitted byte
+  totals can no longer create a false high-retransmission warning.
 
 Все заметные изменения HYDRA собраны в этом файле. Даты указаны по календарю
 релиза; факты старых записей не переписываются задним числом.

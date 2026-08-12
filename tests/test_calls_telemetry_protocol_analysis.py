@@ -195,6 +195,30 @@ def test_entity_reports_mark_only_recent_live_session_as_current() -> None:
     assert reports["current-session"]["current"] is True
 
 
+def test_worker_report_uses_cumulative_attempts_for_exact_path_retry_ratio() -> None:
+    records = []
+    for timestamp, attempts, retransmissions in ((10.0, 100, 10), (20.0, 200, 30)):
+        records.append({
+            "kind": "native",
+            "timestamp": timestamp,
+            "native_scope": "server",
+            "native_kind": "snapshot",
+            "native_entity": "server_worker",
+            "tester_id": "tester-1",
+            "native_session_id": "session-1",
+            "worker_id": 0,
+            "metrics": {
+                "worker_active": 1,
+                "worker_path_attempt_segments_total": attempts,
+                "worker_path_retrans_segments_total": retransmissions,
+            },
+        })
+
+    result = analyze_native(records, ["tester-1"])
+
+    assert result["server_workers"][0]["worker_path_retransmission_ratio"] == 0.2
+
+
 def test_negligible_outer_auth_noise_is_not_reported_as_critical() -> None:
     native = {
         "server": {
@@ -246,6 +270,73 @@ def test_protocol_findings_distinguish_legacy_reordering_from_adaptive_retries()
     }
     assert "legacy_multipath_reordering" not in adaptive_codes
     assert "adaptive_path_pressure" in adaptive_codes
+
+
+def test_protocol_findings_do_not_mix_retransmit_bytes_with_segment_ratio() -> None:
+    native = {
+        "server": {
+            "counters": {
+                "kcp_out_segments_total": 1000,
+                "kcp_retrans_segments_total": 20,
+                "kcp_retrans_bytes_total": 50_000_000,
+            },
+            "gauges": {},
+        },
+        "clients": {},
+        "server_sessions": [],
+        "client_sessions": [],
+    }
+
+    codes = {finding["code"] for finding in protocol_findings(native, {})}
+
+    assert "kcp_retransmission_pressure" not in codes
+
+
+def test_exact_path_retry_ratio_overrides_short_lived_retry_ewma() -> None:
+    native = {
+        "server": {"counters": {}, "gauges": {}},
+        "clients": {},
+        "server_sessions": [{
+            "current": True,
+            "gauges": {"multipath_profile": {"max": 1}},
+        }],
+        "client_sessions": [],
+        "server_workers": [{
+            "current": True,
+            "worker_path_retransmission_ratio": 0.02,
+            "gauges": {"worker_path_retry_ratio": {"p95": 0.8}},
+        }],
+        "client_workers": [],
+    }
+
+    codes = {finding["code"] for finding in protocol_findings(native, {})}
+
+    assert "adaptive_path_pressure" not in codes
+
+
+def test_mixed_core_workers_keep_retry_ewma_fallback() -> None:
+    native = {
+        "server": {"counters": {}, "gauges": {}},
+        "clients": {},
+        "server_sessions": [{
+            "current": True,
+            "gauges": {"multipath_profile": {"max": 1}},
+        }],
+        "client_sessions": [],
+        "server_workers": [{
+            "current": True,
+            "worker_path_retransmission_ratio": 0.02,
+            "gauges": {"worker_path_retry_ratio": {"p95": 0.8}},
+        }],
+        "client_workers": [{
+            "current": True,
+            "gauges": {"worker_path_retry_ratio": {"p95": 0.2}},
+        }],
+    }
+
+    codes = {finding["code"] for finding in protocol_findings(native, {})}
+
+    assert "adaptive_path_pressure" in codes
 
 
 def test_protocol_findings_detect_post_kcp_output_queue_delay() -> None:

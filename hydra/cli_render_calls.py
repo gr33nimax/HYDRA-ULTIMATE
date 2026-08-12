@@ -271,9 +271,13 @@ def _append_native_workers(
             )
             reconnects = _counter(report, "worker_reconnect_total")
             loss = _gauge(report, "network_loss_ratio", "p95")
-            retry_pressure = _gauge(report, "worker_path_retry_ratio", "p95")
-            if not _has_gauge(report, "worker_path_retry_ratio"):
-                retry_pressure = _gauge(report, "worker_path_loss_ratio", "p95")
+            exact_retry = report.get("worker_path_retransmission_ratio")
+            if isinstance(exact_retry, (int, float)) and not isinstance(exact_retry, bool):
+                retry_pressure = float(exact_retry)
+            else:
+                retry_pressure = _gauge(report, "worker_path_retry_ratio", "p95")
+                if not _has_gauge(report, "worker_path_retry_ratio"):
+                    retry_pressure = _gauge(report, "worker_path_loss_ratio", "p95")
             path_rtt = _gauge(report, "worker_path_rtt_ms", "p95")
             queue_delay = _gauge(report, "worker_output_queue_delay_ms", "p95")
             queue_late = _counter(report, "worker_output_queue_late_total")
@@ -312,7 +316,7 @@ def _append_native_workers(
     if detailed:
         headers.append("Session")
     headers.extend((
-        "ID", "Active", "Wire avg", "Net loss", "Retry", "Path RTT",
+        "ID", "Active", "Wire avg", "Net loss", "Path retry", "Path RTT",
         "Queue/late", "Drops", "Reconnect", "TURN #",
     ))
     lines.extend([
