@@ -72,7 +72,6 @@ def test_v6_to_v7_is_idempotent() -> None:
     assert migrate_state(_v6(), 6) == migrate_v11_to_v12(migrate_v10_to_v11(
         migrate_v9_to_v10(migrate_v8_to_v9(migrate_v7_to_v8(once))),
     ))
-    )
 
 
 def test_v6_disabled_creator_becomes_disabled_calls_pool() -> None:
