@@ -78,24 +78,34 @@ def _release_metadata(
         return payload
     if not isinstance(payload, list):
         raise ValueError("GitHub releases response must be a list")
-    release = next(
-        (
-            item
-            for item in payload
-            if isinstance(item, dict)
-            and not item.get("draft")
-            and item.get("prerelease") is True
-            and isinstance(item.get("tag_name"), str)
-            and (
-                not prerelease_tag_marker
-                or prerelease_tag_marker in item["tag_name"]
-            )
-            and (
-                not prerelease_exclude_marker
-                or prerelease_exclude_marker not in item["tag_name"]
-            )
+    candidates = [
+        item
+        for item in payload
+        if isinstance(item, dict)
+        and not item.get("draft")
+        and item.get("prerelease") is True
+        and isinstance(item.get("tag_name"), str)
+        and (
+            not prerelease_tag_marker
+            or prerelease_tag_marker in item["tag_name"]
+        )
+        and (
+            not prerelease_exclude_marker
+            or prerelease_exclude_marker not in item["tag_name"]
+        )
+    ]
+    # The GitHub releases endpoint does not guarantee that the first matching
+    # entry is the most recently published one. In particular, a newer debug
+    # release may be returned after several older prereleases. Select by the
+    # immutable publication timestamp instead of trusting response order.
+    release = max(
+        candidates,
+        key=lambda item: (
+            str(item.get("published_at") or ""),
+            str(item.get("created_at") or ""),
+            str(item.get("tag_name") or ""),
         ),
-        None,
+        default=None,
     )
     if release is None:
         raise ValueError(

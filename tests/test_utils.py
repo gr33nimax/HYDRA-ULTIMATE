@@ -265,6 +265,29 @@ def test_prerelease_selection_separates_debug_from_preview():
         ) == "v2-debug.3"
 
 
+def test_prerelease_selection_uses_publication_time_not_api_order():
+    from hydra.utils import downloader
+
+    response = MagicMock()
+    response.__enter__.return_value.read.return_value = (
+        b'[{"tag_name":"v2-debug.9","draft":false,"prerelease":true,'
+        b'"created_at":"2026-08-13T18:26:36Z",'
+        b'"published_at":"2026-08-13T18:41:38Z"},'
+        b'{"tag_name":"v2-debug.8","draft":false,"prerelease":true,'
+        b'"created_at":"2026-08-13T16:40:51Z",'
+        b'"published_at":"2026-08-13T16:56:34Z"},'
+        b'{"tag_name":"v2-debug.10","draft":false,"prerelease":true,'
+        b'"created_at":"2026-08-13T18:54:56Z",'
+        b'"published_at":"2026-08-13T19:09:45Z"}]'
+    )
+    with patch.object(downloader.urllib.request, "urlopen", return_value=response):
+        assert downloader.latest_release(
+            "gr33nimax/hydracore",
+            include_prerelease=True,
+            prerelease_tag_marker="-debug.",
+        ) == "v2-debug.10"
+
+
 def test_download_closes_mkstemp_descriptor(tmp_path):
     from hydra.utils import downloader
 

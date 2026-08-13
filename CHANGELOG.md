@@ -1,5 +1,9 @@
 # Changelog
 
+- Fixed `debug` kernel selection when GitHub returns prereleases out of
+  publication order. Hydra Ultimate now chooses the newest matching published
+  release instead of the first API entry, preventing an older wire-v2 VPS
+  binary from being selected ahead of Hydracore debug.10.
 - Added the paired Hydracore debug.10 four-call adaptive transport contract.
   Every physical VK/TURN packet now has same-path selective feedback; path
   loss, KCP retry, feedback freshness and control copies are reported as
