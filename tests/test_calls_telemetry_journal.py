@@ -33,7 +33,7 @@ def _entry(message: str, cursor: str, timestamp: int) -> str:
 def test_journal_collector_keeps_only_categories_and_cursor() -> None:
     host = _Host([
         _entry(
-            "call multi_user: all VK TURN endpoints failed: secret.example:3478",
+            "call vk_parasite: all VK TURN endpoints failed: secret.example:3478",
             "cursor-1",
             101,
         ),

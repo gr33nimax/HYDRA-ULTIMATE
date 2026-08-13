@@ -9,9 +9,11 @@
 новых данных; существующий timeline никогда не ротируется и не удаляется.
 
 Реализация рассчитана на инструментированный Hydracore из совместимой ветки
-`debug`. В режиме `multi_user` сервер является
+`debug`. В режиме `vk_parasite` сервер является
 UDP/DTLS endpoint, а клиент получает TURN credentials через VK Calls, создаёт
-несколько workers и полосует одну KCP-сессию через них. Поэтому Clash API на
+четыре VK/TURN worker и отдельную KCP-сессию на каждой линии. Готовые relay
+frames одного потока распределяются между линиями и упорядочиваются над KCP.
+Поэтому Clash API на
 VPS видит соединения и goodput, но сам по себе не видит latency VK auth/TURN,
 DTLS handshake, KCP RTT/retransmit/window и потери внутренних очередей.
 
@@ -43,27 +45,18 @@ sudo hydra calls telemetry export --output hydra-vk-tunnel.tar.gz
 sudo hydra calls telemetry stop
 ```
 
-Adaptive diagnostics separate four signals that must not be conflated:
-`network_loss_ratio` is authenticated outer RTP loss;
-`worker_path_loss_ratio` is physical datagram loss measured by selective
-feedback through that exact VK/TURN call; displayed `KCP retry` is the shared
-conversation's cumulative retransmission ratio; and
-`worker_output_queue_delay_ms` is local residence after KCP output.
-`worker_path_feedback_age_ms` plus acknowledged/lost packet counters show
-whether the path signal is fresh. Live `status` uses only current entities and
-the last ten seconds of path counters; `report` keeps the full historical
-session and its pseudonymous native session ID.
+Hydracore debug.11 exposes four independent KCP lanes, one for every VK/TURN
+call. `status` and `report` show per-lane wire rate, active flow count,
+`kcp_wait_snd`, RTT/RTO, cumulative KCP retransmission ratio, network loss,
+output-queue delay/drops, reconnects and TURN ordinal. Session rows contain the
+bounded aggregate of the four lane windows and pending limits.
 
-Hydracore debug.10 also reports `worker_path_delivery_rate_bps`,
-`worker_path_window_segments`, `worker_path_inflight_segments` and
-`worker_path_backoff_total`. Live status renders delivered rate plus
-`Win/flight`; the detailed report adds the cumulative backoff count. These
-values show whether one of the four VK calls is carrying useful delivery, is
-full, or is being reduced by direct physical loss. Ordinary KCP ACKs cannot
-change a path window. ACK/control segments follow their receiving call and are
-copied once to a second live call; data is not duplicated. The reported
-`kcp_max_pending_segments` is dynamic, so saturation is evaluated against the
-limit active during that run rather than a fixed 2048-segment assumption.
+The signals are deliberately separated: `network_loss_ratio` describes the
+authenticated outer stream, KCP retransmission belongs only to that lane, and
+`worker_output_queue_delay_ms` measures local residence after KCP output. This
+allows a weak TURN call to be diagnosed and later reduced or quarantined
+without penalising the other three. Live `status` uses only current entities;
+`report` retains historical sessions under pseudonymous native session IDs.
 
 `tail --follow` завершается по `Ctrl+C` или после остановки сессии. `mark`
 принимает короткий ASCII slug и формирует независимые фазы отчёта. `report` и
@@ -203,8 +196,7 @@ native source сохраняются первый/последний snapshot и
 
 ## Контроль второго прогона
 
-Совместимая версия Hydracore для второго прогона меняет именно измеренные в
-первом прогоне узкие места:
+Hydracore debug.11 меняет именно подтверждённое измерениями узкое место:
 
 - уже заблокированный DTLS read немедленно замечает изменение deadline, поэтому
   timeout освобождает handshake slot и не оставляет `handshake_pending=256`;
@@ -213,35 +205,23 @@ native source сохраняются первый/последний snapshot и
 - чтение UDP отделено от unwrap/dispatch bounded ingress-очередью на 4096
   пакетов с автоматическим числом workers и отдельными depth/capacity/drop
   метриками; порядок пакетов одного peer сохраняется;
-- peer-read queue составляет 128 пакетов для неизменённого legacy и 512 для
-  adaptive, чтобы переживать измеренный краткий burst; worker-send queue — 512;
+- peer-read queue составляет 512 пакетов, worker-send queue — 256 на каждую
+  независимую линию;
   `worker_send_queue_drops_total` теперь означает один реально потерянный KCP
   segment, а не число проверенных заполненных worker queues;
 - `outer_payload`, `outer_overhead`, KCP output/retransmit bytes и generation
   процесса позволяют разложить wire overhead и отличить перезапуск inbound от
   потери telemetry records.
 
-Полный 1440p-прогон adaptive debug.5 показал следующий независимый предел:
-VPS CPU, UDP ingress и socket buffers не были насыщены, но один стандартный
-dynamic KCP congestion window управлял четырьмя самостоятельными TURN-путями.
-Межпутевая перестановка/потеря уменьшала общее окно, заполняла `WaitSnd` и
-ограничивала видео примерно 2–3 Mbit/s. Совместимый debug.6 сохраняет adaptive
-chunk affinity и перенос повторов на другой TURN, но использует bounded
-local/remote KCP windows без единого dynamic cwnd. Точный
-`worker_path_attempt_segments_total` устраняет ложную интерпретацию EWMA, а
-анализ KCP retransmit сравнивает только сегменты с сегментами, не байты с
-сегментами.
-
-Прогон debug.6 подтвердил, что снятие общего dynamic cwnd повышает пиковую
-скорость, но выявил следующий предел: KCP по-прежнему мог одновременно выпустить
-до 512 сегментов и накопить 2048 ожидающих, хотя четыре VK/TURN-пути не сообщали
-абсолютную доступную ёмкость. В debug.7 каждый звонок получает независимое окно
-доставки; чистые ACK увеличивают только его, а устойчивые повторы или локальная
-очередь уменьшают только проблемный путь. Общее KCP-окно и pending limit равны
-ограниченной сумме окон живых путей. Для четырёх звонков старт — 160 сегментов в
-полёте и 640 ожидающих; при здоровом канале окно растёт. Это целевой контроллер
-для повышения стабильности и движения к 20 Mbit/s, а не гарантия пропускной
-способности со стороны VK TURN.
+Предыдущие прогоны показали, что один KCP поверх четырёх TURN-вызовов создавал
+общий head-of-line и смешивал RTT/RTO разных каналов. В debug.11 у линий 0..3
+раздельные conversation, ACK, retransmission, окно, pending queue и reconnect.
+Готовые relay frames одного TCP/UDP flow распределяются между линиями, получают
+общую последовательность над KCP и восстанавливаются bounded reorder-буфером на
+приёме. Поэтому один тяжёлый поток способен агрегировать четыре звонка, а потеря
+на одном из них не запускает восстановление на остальных. Это база для будущей
+per-lane регулировки; пропускная способность самого VK TURN по-прежнему не
+гарантируется.
 
 Для промежуточной проверки достаточно `status`; непрерывный поток доступен через
 `tail --follow`, полный итог — через `report` или `export`. Ни одна из этих команд

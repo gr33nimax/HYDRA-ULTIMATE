@@ -1,5 +1,9 @@
 # Changelog
 
+- Added the Hydracore debug.11 `vk_parasite` wire-v4 contract: exactly four
+  independent KCP lanes, per-flow distribution with bounded receive reordering,
+  and per-lane RTT/RTO, WaitSnd, retransmission, queue and flow telemetry. The
+  obsolete transport profile switch was removed from CLI and generated config.
 - Fixed `debug` kernel selection when GitHub returns prereleases out of
   publication order. Hydra Ultimate now chooses the newest matching published
   release instead of the first API entry, preventing an older wire-v2 VPS
@@ -61,11 +65,10 @@
 
 ### Hydracore / Calls
 
-- Added `adaptive`/`legacy` VK multipath profiles and the atomic
-  `hydra calls profile PROFILE` A/B switch. Adaptive is the default for newly
-  generated server configs and subscriptions; profile/chunk/pacing/path
-  metrics are visible in telemetry reports. The exact
-  `call_vk_adaptive_multipath` capability is required before activation.
+- Calls now generates only the `vk_parasite` wire-v4 contract with exactly four
+  independent KCP lanes. The CLI no longer exposes an A/B transport-profile
+  switch; telemetry renders and analyses each lane directly. The exact
+  `call_vk_four_lane_kcp` capability is required before activation.
 
 - Нативная Calls-телеметрия разделена на process/session/worker и больше не
   смешивает активного тестера со stale session. CLI `status`, `stop` и `report`
@@ -92,7 +95,7 @@
   монотонно начисляются общему и per-protocol счётчику этого пользователя.
 - Release-контракт Hydracore разделён по ролям: Ultimate загружает только
   `hydracore-vps-linux-{arch}.tar.gz` и проверяет VPS identity, server feature,
-  multi-user-only режим и wire v3. Android client artifact на VPS
+  VK-parasite-only режим и wire v4. Android client artifact на VPS
   fail-closed не принимается.
 - Calls сохраняет отдельный `public_endpoint`. В административном TUI транспорт
   называется `Hydra VK Tunnel`, а только пользовательский профиль в подписке —
@@ -103,7 +106,7 @@
 
 - Клиентские outbounds Calls теперь используют только явно настроенный IP сервера
   или определённый публичный IPv4 VPS; TLS/SNI-домен транспорта больше никогда не
-  подставляется как native multi-user endpoint.
+  подставляется как native VK-parasite endpoint.
 
 - Добавлен vendor-neutral desired state ядра и команды `hydra kernel status`
   / `kernel switch`. Hydracore и Sing-Box Extended загружаются только из
@@ -112,8 +115,8 @@
   транзакция возвращает прежнюю работающую службу при любом сбое.
 - Legacy install/update Sing-Box Extended больше не может затереть выбранный
   Hydracore; фоновая проверка обновлений следует provider и channel из state.
-- Native VK Calls теперь поддерживает только Hydracore `multi_user`: exact
-  `call_vk_multi_user` создаёт отдельный blue/green пул из 1–4 VK-комнат и
+- Native VK Calls теперь поддерживает только Hydracore `vk_parasite`: exact
+  `call_vk_parasite` создаёт отдельный blue/green пул из 1–4 VK-комнат и
   публикует per-user Hydracore outbound через Hydra Subscription v2. Серверный
   inbound содержит общий obfs key, bounded session/worker/handshake limits и
   O(1) user lookup вместо перебора всех паролей на каждом пакете.
@@ -121,7 +124,7 @@
   на `56001/udp`; worker count ограничен server cap, 27 workers на join-link и
   общим потолком 108.
 - Schema state поднята до 11. Чистая `v10 → v11` миграция переводит legacy
-  Calls в `multi_user`, выключает несовместимый enabled state без удаления
+  Calls в `vk_parasite`, выключает несовместимый enabled state без удаления
   installed-флага и сохраняет доступность apply для остальных протоколов.
   Повторная установка после явного switch на Hydracore создаёт managed-пул.
 
@@ -166,8 +169,8 @@
 - Генератор выдаёт ключ только во fragment `#hydra-key=…`. Status, логи и
   публичные JSON никогда не содержат ключ или полный HWID.
 - Включённый native VK Calls теперь добавляет в подписку отдельный remote-safe
-  `call` outbound/profile с `mode=multi_user`, `join_links` и core features
-  `call`/`call_vk_multi_user`, но без VK cookies и singular `join_link` в outbound;
+  `call` outbound/profile с `mode=vk_parasite`, `join_links` и core features
+  `call`/`call_vk_parasite`, но без VK cookies и singular `join_link` в outbound;
   отсутствие managed-пула отклоняет выдачу fail-closed. qWDTT остаётся только
   ручным общим master-артефактом: Hydra v2 renderer не вызывает его client hook
   и не может опубликовать главный пароль.
@@ -356,7 +359,7 @@
 ### Транспорты
 
 - Добавлен встроенный `vless` transport на базе VLESS + XHTTP из
-  `shtorm-7/sing-box-extended`: multi-user inbound, Sing-Box client config,
+  `shtorm-7/sing-box-extended`: VK-parasite inbound, Sing-Box client config,
   `vless://` ссылки и выдача через общие подписки.
 - VLESS + XHTTP требует отдельный TLS-домен. Caddy L4 направляет настроенный
   XHTTP-путь во внутренний Sing-Box, а остальные URL обслуживает собственный

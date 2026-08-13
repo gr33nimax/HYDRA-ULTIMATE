@@ -30,6 +30,7 @@ from hydra.core.state_migrations import (
     migrate_v8_to_v9,
     migrate_v9_to_v10,
     migrate_v10_to_v11,
+    migrate_v11_to_v12,
 )
 from hydra.core.hydrabox_keys import generate_hydrabox_jwe_key
 from hydra.core.state_runtime import (

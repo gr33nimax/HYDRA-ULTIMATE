@@ -248,8 +248,8 @@ sudo hydra kernel switch sing-box-extended
 до commit возвращает прежний бинарник и исходное состояние службы.
 Вернуться на стабильное Hydracore можно штатно: `sudo hydra kernel switch
 hydracore --channel stable --force`.
-Calls поддерживает только Hydracore `multi_user`. Его включение fail-closed
-требует exact capability `call_vk_multi_user` и режима `multi_user`; stock core
+Calls поддерживает только Hydracore `vk_parasite`. Его включение fail-closed
+требует exact capability `call_vk_parasite` и режима `vk_parasite`; stock core
 не запускает creator и не получает P2P fallback. Перед обратным switch на
 `sing-box-extended` отключите или удалите Calls: application preflight завершит
 операцию до загрузки и замены бинарника.
@@ -501,16 +501,12 @@ sudo hydra uninstall --yes --keep-data
 
 ## Hydra VK Tunnel telemetry
 
-With the paired adaptive debug core, `status` shows only currently reporting
-transport sessions/workers. `Path loss` is measured from physical packet
-feedback returned through the same VK/TURN call, `KCP retry` is the independent
-shared-KCP retransmission ratio, and `Net loss` is authenticated outer RTP loss.
-`Queue/late` is output-queue p95 delay plus the number of packets that waited at
-least two KCP update intervals. It exposes any regression that delays packets
-after KCP has started retransmission timing. `report` retains every historical
-session and adds its pseudonymous session ID so reconnects and profile switches
-remain auditable without cluttering the live view. Adaptive debug.10 must run on
-both the VPS and client; its physical feedback is a mandatory transport feature.
+With the paired debug.11 core, `status` shows only currently reporting
+transport sessions and the four independent KCP lanes. Each lane row contains
+wire rate, active flows, retransmission ratio, WaitSnd, RTT, network loss,
+output-queue delay/drops, reconnects and TURN ordinal. `report` retains every
+historical session and adds its pseudonymous session ID. The wire-v4 core must
+run on both the VPS and client; mixed old/new deployments intentionally fail.
 
 Сессия для трёх заранее созданных пользователей запускается без таймера:
 

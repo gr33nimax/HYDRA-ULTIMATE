@@ -65,7 +65,7 @@ class _CallsSource:
     def load_native_join_links(self) -> list[str]:
         return list(self.links)
 
-    def multi_user_supported(self) -> bool:
+    def vk_parasite_supported(self) -> bool:
         return self.supported
 
     def singbox_running(self) -> bool:
@@ -553,17 +553,17 @@ def test_hydrabox_jwe_rejects_wrong_key_and_kid():
         decrypt_hydrabox_subscription(payload, wrong_key)
 
 
-def test_hydra_v2_subscription_includes_only_multi_user_calls_config():
+def test_hydra_v2_subscription_includes_only_vk_parasite_calls_config():
     state, user = _state()
     state.network.server_ip = "203.0.113.10"
     state.protocols["calls"] = PluginState(
         installed=True,
         enabled=True,
         config={
-            "mode": "multi_user",
+            "mode": "vk_parasite",
             "listen_port": 56002,
             "obfs_password": "o" * 43,
-            "workers": 2,
+            "workers": 4,
             "max_workers_per_session": 4,
         },
     )
@@ -582,15 +582,14 @@ def test_hydra_v2_subscription_includes_only_multi_user_calls_config():
     resource = subscription["resources"][0]
     outbound = resource["document"]["outbounds"][0]
     assert resource["requested_permissions"] == ["network.outbound"]
-    assert outbound["mode"] == "multi_user"
-    assert outbound["multipath_profile"] == "adaptive"
+    assert outbound["mode"] == "vk_parasite"
     assert outbound["join_links"] == links
     assert outbound["user"] == user.email
     assert "join_link" not in outbound
     assert subscription["requirements"]["core"]["features"] == [
         "call",
-        "call_vk_adaptive_multipath",
-        "call_vk_multi_user",
+        "call_vk_four_lane_kcp",
+        "call_vk_parasite",
     ]
     assert subscription["profiles"][0] == {
         "id": subscription["default_profile"],
@@ -608,7 +607,7 @@ def test_hydra_v2_calls_projection_fails_closed_without_room_pool():
     state.protocols["calls"] = PluginState(
         installed=True,
         enabled=True,
-        config={"mode": "multi_user", "obfs_password": "o" * 43},
+        config={"mode": "vk_parasite", "obfs_password": "o" * 43},
     )
 
     with pytest.raises(ValueError, match="failed to generate calls"):
@@ -626,7 +625,7 @@ def test_hydra_v2_calls_requires_exact_hydracore_feature():
         installed=True,
         enabled=True,
         config={
-            "mode": "multi_user",
+            "mode": "vk_parasite",
             "listen_port": 56002,
             "obfs_password": "o" * 43,
             "workers": 2,
@@ -651,7 +650,7 @@ def test_hydra_v2_never_reads_or_publishes_qwdtt_artifacts():
     state.protocols["calls"] = PluginState(
         installed=True,
         enabled=True,
-        config={"mode": "multi_user", "obfs_password": "o" * 43},
+        config={"mode": "vk_parasite", "obfs_password": "o" * 43},
     )
     state.protocols["wdtt"] = PluginState(installed=True, enabled=True)
     calls = CallsPlugin(_CallsSource(["https://vk.com/call/join/native"]))

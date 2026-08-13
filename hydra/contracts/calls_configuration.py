@@ -1,21 +1,16 @@
-"""Validated Hydracore multi-user VK Calls projections."""
+"""Validated Hydracore VK parasite Calls projections."""
 from __future__ import annotations
 
 import re
 from typing import Callable, Mapping, Protocol, Sequence
 
 
-CALL_MODE_MULTI_USER = "multi_user"
-CALL_MULTIPATH_LEGACY = "legacy"
-CALL_MULTIPATH_ADAPTIVE = "adaptive"
-DEFAULT_MULTIPATH_PROFILE = CALL_MULTIPATH_ADAPTIVE
+CALL_MODE_VK_PARASITE = "vk_parasite"
 DEFAULT_CALL_PORT = 56002
 DEFAULT_ROOM_COUNT = 4
-DEFAULT_ADAPTIVE_PEER_READ_QUEUE_PACKETS = 512
-DEFAULT_LEGACY_PEER_READ_QUEUE_PACKETS = 128
+DEFAULT_PEER_READ_QUEUE_PACKETS = 512
 MAX_JOIN_LINKS = 4
-MAX_WORKERS_PER_JOIN_LINK = 27
-MAX_WORKERS = 108
+MAX_WORKERS = 4
 
 
 class CallsProtocolState(Protocol):
@@ -65,29 +60,23 @@ def public_endpoint(
 def call_mode(state: CallsStateAccess) -> str:
     desired = state.protocols.get("calls")
     value = (
-        str(desired.config.get("mode", CALL_MODE_MULTI_USER))
+        str(desired.config.get("mode", CALL_MODE_VK_PARASITE))
         if desired
-        else CALL_MODE_MULTI_USER
+        else CALL_MODE_VK_PARASITE
     )
-    if value != CALL_MODE_MULTI_USER:
-        raise ValueError("Calls mode must be multi_user")
-    return value
-
-
-def multipath_profile(config: Mapping[str, object]) -> str:
-    value = str(config.get("multipath_profile", DEFAULT_MULTIPATH_PROFILE)).strip()
-    if value not in {CALL_MULTIPATH_LEGACY, CALL_MULTIPATH_ADAPTIVE}:
-        raise ValueError("Calls multipath_profile must be legacy or adaptive")
+    if value != CALL_MODE_VK_PARASITE:
+        raise ValueError("Calls mode must be vk_parasite")
     return value
 
 
 def peer_read_queue_packets(config: dict) -> int:
-    default = (
-        DEFAULT_ADAPTIVE_PEER_READ_QUEUE_PACKETS
-        if multipath_profile(config) == CALL_MULTIPATH_ADAPTIVE
-        else DEFAULT_LEGACY_PEER_READ_QUEUE_PACKETS
+    return _integer(
+        config,
+        "peer_read_queue_packets",
+        DEFAULT_PEER_READ_QUEUE_PACKETS,
+        16,
+        4096,
     )
-    return _integer(config, "peer_read_queue_packets", default, 16, 4096)
 
 
 def _integer(config: dict, name: str, default: int, minimum: int, maximum: int) -> int:
@@ -141,12 +130,12 @@ def _join_links(values: list[str]) -> list[str]:
     for value in values:
         link = str(value).strip()
         if not link or len(link) > 2048:
-            raise ValueError("Calls multi_user contains an invalid VK join link")
+            raise ValueError("Calls vk_parasite contains an invalid VK join link")
         if link in normalized:
-            raise ValueError("Calls multi_user requires unique VK join links")
+            raise ValueError("Calls vk_parasite requires unique VK join links")
         normalized.append(link)
     if not 1 <= len(normalized) <= MAX_JOIN_LINKS:
-        raise ValueError("Calls multi_user requires 1..4 unique VK join links")
+        raise ValueError("Calls vk_parasite requires 1..4 unique VK join links")
     return normalized
 
 
@@ -157,14 +146,13 @@ def _obfs_password(config: dict) -> str:
     return password
 
 
-def multi_user_inbound(
+def vk_parasite_inbound(
     state: CallsStateAccess,
     user_password: Callable[[CallsUser], str],
 ) -> dict:
     desired = state.protocols["calls"]
     config = desired.config
     password = _obfs_password(config)
-    profile = multipath_profile(config)
     users = [
         {
             "name": user.email,
@@ -175,13 +163,12 @@ def multi_user_inbound(
         if not user.blocked
     ]
     if not users:
-        raise ValueError("Calls multi_user requires at least one active user")
+        raise ValueError("Calls vk_parasite requires at least one active user")
     return {
         "type": "call",
         "tag": "calls-vk-in",
         "platform": "vk",
-        "mode": CALL_MODE_MULTI_USER,
-        "multipath_profile": profile,
+        "mode": CALL_MODE_VK_PARASITE,
         "listen": "0.0.0.0",
         "listen_port": _listen_port(state, config),
         "obfs_password": password,
@@ -191,7 +178,7 @@ def multi_user_inbound(
             config,
             "max_workers_per_session",
             4,
-            1,
+            MAX_WORKERS,
             MAX_WORKERS,
         ),
         "max_pending_handshakes": _integer(
@@ -229,7 +216,7 @@ def multi_user_inbound(
     }
 
 
-def multi_user_outbound(
+def vk_parasite_outbound(
     user: CallsUser,
     state: CallsStateAccess,
     join_links: list[str],
@@ -242,26 +229,14 @@ def multi_user_outbound(
     join_links = _join_links(join_links)
     server = str(server_address).strip().strip("[]")
     if not server:
-        raise ValueError("Calls multi_user server address is not configured")
-    max_workers = _integer(config, "max_workers_per_session", 4, 1, MAX_WORKERS)
-    worker_limit = min(
-        MAX_WORKERS,
-        max_workers,
-        MAX_WORKERS_PER_JOIN_LINK * len(join_links),
-    )
-    workers = _integer(
-        config,
-        "workers",
-        min(len(join_links), worker_limit),
-        1,
-        worker_limit,
-    )
+        raise ValueError("Calls vk_parasite server address is not configured")
+    _integer(config, "max_workers_per_session", MAX_WORKERS, MAX_WORKERS, MAX_WORKERS)
+    workers = _integer(config, "workers", MAX_WORKERS, MAX_WORKERS, MAX_WORKERS)
     return {
         "type": "call",
         "tag": "call-vk-out",
         "platform": "vk",
-        "mode": CALL_MODE_MULTI_USER,
-        "multipath_profile": multipath_profile(config),
+        "mode": CALL_MODE_VK_PARASITE,
         "server": server,
         "server_port": _listen_port(state, config),
         "join_links": join_links,
@@ -278,21 +253,15 @@ def multi_user_outbound(
 
 
 __all__ = [
-    "CALL_MODE_MULTI_USER",
-    "CALL_MULTIPATH_ADAPTIVE",
-    "CALL_MULTIPATH_LEGACY",
-    "DEFAULT_MULTIPATH_PROFILE",
+    "CALL_MODE_VK_PARASITE",
     "DEFAULT_CALL_PORT",
     "DEFAULT_ROOM_COUNT",
-    "DEFAULT_ADAPTIVE_PEER_READ_QUEUE_PACKETS",
-    "DEFAULT_LEGACY_PEER_READ_QUEUE_PACKETS",
+    "DEFAULT_PEER_READ_QUEUE_PACKETS",
     "MAX_JOIN_LINKS",
     "MAX_WORKERS",
-    "MAX_WORKERS_PER_JOIN_LINK",
     "call_mode",
-    "multi_user_inbound",
-    "multi_user_outbound",
-    "multipath_profile",
+    "vk_parasite_inbound",
+    "vk_parasite_outbound",
     "peer_read_queue_packets",
     "public_endpoint",
 ]

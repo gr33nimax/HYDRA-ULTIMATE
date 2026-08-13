@@ -15,6 +15,7 @@ from hydra.core.state_migrations import (
     migrate_v8_to_v9,
     migrate_v9_to_v10,
     migrate_v10_to_v11,
+    migrate_v11_to_v12,
 )
 from hydra.core.state_models import UnsupportedStateVersion, validate_supported_version
 
@@ -68,8 +69,9 @@ def test_v6_to_v7_moves_creator_desired_state_without_native_auto_enable() -> No
 def test_v6_to_v7_is_idempotent() -> None:
     once = migrate_v6_to_v7(_v6())
     assert migrate_v6_to_v7(once) == once
-    assert migrate_state(_v6(), 6) == migrate_v10_to_v11(
+    assert migrate_state(_v6(), 6) == migrate_v11_to_v12(migrate_v10_to_v11(
         migrate_v9_to_v10(migrate_v8_to_v9(migrate_v7_to_v8(once))),
+    ))
     )
 
 
@@ -135,13 +137,13 @@ def test_v10_to_v11_disables_legacy_calls_without_touching_other_protocols() -> 
     assert migrated["protocols"]["calls"] == {
         "installed": True,
         "enabled": False,
-        "config": {"mode": "multi_user"},
+        "config": {"mode": "vk_parasite"},
     }
     assert migrated["protocols"]["vless"] == original["protocols"]["vless"]
     assert migrate_v10_to_v11(migrated) == migrated
 
 
-def test_v10_to_v11_preserves_active_multi_user_calls_on_hydracore() -> None:
+def test_v10_to_v11_preserves_active_vk_parasite_calls_on_hydracore() -> None:
     migrated = migrate_v10_to_v11({
         "version": 10,
         "kernel": {"provider": "hydracore", "channel": "stable"},
@@ -149,16 +151,45 @@ def test_v10_to_v11_preserves_active_multi_user_calls_on_hydracore() -> None:
             "calls": {
                 "installed": True,
                 "enabled": True,
-                "config": {"mode": "multi_user", "room_count": 4},
+                "config": {"mode": "vk_parasite", "room_count": 4},
             },
         },
     })
 
     assert migrated["protocols"]["calls"]["enabled"] is True
     assert migrated["protocols"]["calls"]["config"] == {
-        "mode": "multi_user",
+        "mode": "vk_parasite",
         "room_count": 4,
     }
+
+
+def test_v11_to_v12_selects_exact_four_lane_contract() -> None:
+    source = {
+        "version": 11,
+        "protocols": {
+            "calls": {
+                "installed": True,
+                "enabled": True,
+                "config": {
+                    "mode": "vk_parasite",
+                    "multipath_profile": "adaptive",
+                    "workers": 16,
+                    "max_workers_per_session": 16,
+                },
+            },
+        },
+    }
+
+    migrated = migrate_v11_to_v12(source)
+
+    assert migrated["version"] == 12
+    assert migrated["protocols"]["calls"]["enabled"] is True
+    assert migrated["protocols"]["calls"]["config"] == {
+        "mode": "vk_parasite",
+        "workers": 4,
+        "max_workers_per_session": 4,
+    }
+    assert migrate_v11_to_v12(migrated) == migrated
 
 
 def test_v10_calls_fixture_is_atomically_disabled_and_idempotent(
@@ -176,21 +207,25 @@ def test_v10_calls_fixture_is_atomically_disabled_and_idempotent(
     second = state_module.migrate_persisted_state()
     loaded = state_module.load_state()
 
-    assert first == {"from": 10, "to": 11, "changed": True}
-    assert second == {"from": 11, "to": 11, "changed": False}
+    assert first == {"from": 10, "to": 12, "changed": True}
+    assert second == {"from": 12, "to": 12, "changed": False}
     assert state_file.read_bytes() == migrated_bytes
     assert loaded.revision == 42
     assert loaded.protocols["calls"].installed is True
     assert loaded.protocols["calls"].enabled is False
-    assert loaded.protocols["calls"].config == {"mode": "multi_user"}
+    assert loaded.protocols["calls"].config == {
+        "mode": "vk_parasite",
+        "workers": 4,
+        "max_workers_per_session": 4,
+    }
     assert loaded.protocols["vless"].enabled is True
     assert loaded.install["preserved_upgrade_marker"] == "keep"
     assert state_file.with_suffix(".json.bak").is_file()
 
 
-def test_future_schema_is_rejected_after_v11() -> None:
+def test_future_schema_is_rejected_after_v12() -> None:
     with pytest.raises(UnsupportedStateVersion):
-        validate_supported_version({"version": 12})
+        validate_supported_version({"version": 13})
 
 
 def test_migrated_state_is_json_serializable_without_secret_artifacts() -> None:

@@ -4,7 +4,10 @@ import copy
 from collections.abc import Callable, Mapping
 
 from hydra.core.state_migration_calls import migrate_v6_to_v7
-from hydra.core.state_migration_calls_multi_user import migrate_v10_to_v11
+from hydra.core.state_migration_calls_vk_parasite import (
+    migrate_v10_to_v11,
+    migrate_v11_to_v12,
+)
 from hydra.core.state_migration_creator_consumers import migrate_v8_to_v9
 from hydra.core.state_migration_headless_creator import migrate_v7_to_v8
 from hydra.core.state_migration_hydrabox import migrate_v5_to_v6
@@ -106,6 +109,7 @@ MIGRATIONS: dict[int, Migration] = {
     8: migrate_v8_to_v9,
     9: migrate_v9_to_v10,
     10: migrate_v10_to_v11,
+    11: migrate_v11_to_v12,
 }
 
 

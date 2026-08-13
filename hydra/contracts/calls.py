@@ -9,7 +9,7 @@ class CallConfigSource(Protocol):
 
     def load_native_join_links(self) -> list[str]: ...
 
-    def multi_user_supported(self) -> bool: ...
+    def vk_parasite_supported(self) -> bool: ...
 
     def singbox_running(self) -> bool: ...
 
@@ -20,7 +20,7 @@ class UnavailableCallConfigSource:
     def load_native_join_links(self) -> list[str]:
         return []
 
-    def multi_user_supported(self) -> bool:
+    def vk_parasite_supported(self) -> bool:
         return False
 
     def singbox_running(self) -> bool:

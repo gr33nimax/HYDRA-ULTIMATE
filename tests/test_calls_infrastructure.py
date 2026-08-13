@@ -69,23 +69,23 @@ class CapabilityHost(ProbeHost):
                     "role": "vps",
                 },
                 "features": {
-                    "call_vk_multi_user": True,
-                    "call_vk_adaptive_multipath": True,
-                    "call_vk_multi_user_client": False,
-                    "call_vk_multi_user_server": True,
+                    "call_vk_parasite": True,
+                    "call_vk_four_lane_kcp": True,
+                    "call_vk_parasite_client": False,
+                    "call_vk_parasite_server": True,
                 },
                 "protocols": {
-                    "call_modes": ["multi_user"],
-                    "call_vk_multi_user_wire": {"min": 3, "max": 3},
+                    "call_modes": ["vk_parasite"],
+                    "call_vk_parasite_wire": {"min": 4, "max": 4},
                 },
             }),
             stderr="",
         )
 
 
-def test_multi_user_support_requires_feature_and_mode_capability() -> None:
+def test_vk_parasite_support_requires_feature_and_mode_capability() -> None:
     runtime = CallsInfrastructure(CapabilityHost())
-    assert runtime.multi_user_supported() is True
+    assert runtime.vk_parasite_supported() is True
 
 
 @pytest.mark.parametrize(
@@ -94,25 +94,25 @@ def test_multi_user_support_requires_feature_and_mode_capability() -> None:
         {
             "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
             "features": {"call_vk_multiuser": True},
-            "protocols": {"call_modes": ["multi_user"]},
+            "protocols": {"call_modes": ["vk_parasite"]},
         },
         {
             "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
             "features": {
-                "call_vk_multi_user": True,
-                "call_vk_multi_user_server": True,
-                "call_vk_multi_user_client": False,
+                "call_vk_parasite": True,
+                "call_vk_parasite_server": True,
+                "call_vk_parasite_client": False,
             },
             "protocols": {"call_modes": ["p2p"]},
         },
         {
             "identity": {"core_id": "third.party.core"},
-            "features": {"call_vk_multi_user": True},
-            "protocols": {"call_modes": ["multi_user"]},
+            "features": {"call_vk_parasite": True},
+            "protocols": {"call_modes": ["vk_parasite"]},
         },
     ],
 )
-def test_multi_user_support_rejects_alias_or_incomplete_modes(payload) -> None:
+def test_vk_parasite_support_rejects_alias_or_incomplete_modes(payload) -> None:
     host = CapabilityHost()
     host.run = lambda args, **kwargs: CompletedProcess(
         args,
@@ -120,4 +120,4 @@ def test_multi_user_support_rejects_alias_or_incomplete_modes(payload) -> None:
         stdout=json.dumps(payload),
         stderr="",
     )
-    assert CallsInfrastructure(host).multi_user_supported() is False
+    assert CallsInfrastructure(host).vk_parasite_supported() is False

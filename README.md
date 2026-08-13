@@ -117,29 +117,29 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 | **Mieru** | `2012–2022/tcp` | обфусцированный mTLS |
 | **Snell v4** | `32000–32999/tcp` | TCP/UDP-прокси |
 | **MTProto / Telemt** | `8443/tcp` | Telegram MTProxy |
-| **Calls · VK** | `56002/udp` | Native Hydracore `call` в режиме multi-user |
+| **Calls · VK** | `56002/udp` | Native Hydracore `call` в режиме VK-parasite |
 | **qWDTT** | `56000/udp`, `56001/udp` | WireGuard поверх TURN |
 
-Транспорт **Calls · VK** поддерживает только Hydracore `multi_user`. Сервер
+Транспорт **Calls · VK** поддерживает только Hydracore `vk_parasite`. Сервер
 слушает обычный UDP endpoint, а отдельный
 аутентифицированный поток каждого пользователя распределяется по пулу из 1–4
 VK-комнат (4 по умолчанию). Общий obfs key снимает O(N)-перебор паролей с
 каждого пакета; после O(1) unwrap проверяется только найденный пользователь.
-Один worker создаётся на комнату по умолчанию; явное значение ограничено
-минимумом из server session cap, 27 workers на каждую уникальную join-link и
-общего потолка 108. Перед включением HYDRA требует выбранный Hydracore и точный
-контракт `sing-box hydra capabilities --json` с `call_vk_multi_user=true` и
-режимом `multi_user`. Stock core и legacy `p2p` отклоняются до запуска creator.
+Каждая сессия создаёт ровно четыре VK/TURN worker и четыре независимые KCP
+линии. Перед включением HYDRA требует выбранный Hydracore и точный
+контракт `sing-box hydra capabilities --json` с `call_vk_parasite=true` и
+режимом `vk_parasite`. Stock core и legacy `p2p` отклоняются до запуска creator.
 Calls поднимает отдельный
 blue/green creator-пул `hydra-headless-creator-vk-calls@{a,b}-N`, фиксирует
 его до apply и при любой ошибке восстанавливает прежние комнаты, state и
 runtime. Per-user outbound входит только в зашифрованную Hydra Subscription v2;
 его Sing-Box outbound содержит `join_links`, но никогда legacy-поле `join_link`.
 Admin DTO сохраняет singular alias первого элемента только для API-совместимости.
-При обновлении schema 10 → 11 legacy Calls безопасно остаётся установленным,
-но выключается и нормализуется в `multi_user`, чтобы общий apply продолжил
-обслуживать остальные протоколы. После switch на Hydracore переустановка Calls
-создаёт новый managed-пул.
+При обновлении schema 10 → 12 прежний Calls безопасно остаётся установленным,
+но выключается и нормализуется в `vk_parasite`, чтобы общий apply продолжил
+обслуживать остальные протоколы. Ступень 11 → 12 фиксирует четыре worker,
+удаляет старый профиль транспорта и выбирает wire v4. После switch на Hydracore
+переустановка Calls создаёт новый managed-пул.
 
 Для контролируемого теста Hydra VK Tunnel можно запустить отдельную техническую
 сессию для существующих пользователей. Она не имеет таймера и работает до
@@ -186,7 +186,7 @@ sudo hydra kernel switch sing-box-extended
 --force`.
 
 Перед возвратом на stock core отключите или удалите активный Calls
-`multi_user`; несовместимый active config будет отклонён до замены бинарника.
+`vk_parasite`; несовместимый active config будет отклонён до замены бинарника.
 
 HYDRA доверяет только release assets фиксированных репозиториев, требует
 GitHub `asset.digest`, проверяет ELF, identity/capabilities и активный config,

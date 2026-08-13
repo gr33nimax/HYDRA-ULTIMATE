@@ -298,16 +298,16 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
             "active": True,
             "current": True,
             "wire_bps": 2_000_000,
-            "worker_path_retransmission_ratio": 0.02,
+            "kcp_retransmission_ratio": 0.02,
             "gauges": {
                 "worker_active": {"max": 1},
-                "worker_path_retry_ratio": {"p95": 0.5},
-                "worker_path_loss_ratio": {"p95": 0.01},
-                "worker_path_delivery_rate_bps": {"p95": 900_000},
-                "worker_path_window_segments": {"p50": 40},
-                "worker_path_inflight_segments": {"p95": 32},
+                "lane_count": {"max": 1},
+                "lane_flow_count": {"max": 12},
+                "kcp_wait_snd": {"p95": 8},
+                "kcp_rtt_ms": {"p95": 55},
+                "network_loss_ratio": {"p95": 0.01},
             },
-            "counters": {"worker_path_backoff_total": 2},
+            "counters": {},
         },
     ]
     payload = {
@@ -329,18 +329,16 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
     )
 
     assert "top 1 of 1" in status
-    assert "KCP retry" in status
-    assert "Path loss" in status
+    assert "KCP retx" in status
+    assert "Flows" in status
     assert "2.0%" in status
-    assert "50.0%" not in status
-    assert "Delivered" in status
-    assert "900.0 Kbit/s" in status
-    assert "40/32" in status
+    assert "12" in status
+    assert "55 ms" in status
     assert "Historical/inactive workers hidden: 1" in status
     assert "new-session" not in status
     assert "new-session" in report
     assert "old-session" in report
-    assert "Backoff" in report
+    assert "Queue/late" in report
 
 
 def test_tty_uses_human_output_while_json_flag_is_machine_stable(capsys):

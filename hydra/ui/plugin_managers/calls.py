@@ -35,7 +35,7 @@ def _status_panel(state: AppState, app: ApplicationService) -> None:
         running=status.native_running,
         details=[
             ("Платформа", "VK"),
-            ("Режим", getattr(status, "native_mode", "multi_user")),
+            ("Режим", getattr(status, "native_mode", "vk_parasite")),
             ("Пул", "готов" if status.native_pool_ready else "отсутствует"),
             ("Комнат в пуле", str(getattr(status, "room_count", 0))),
         ],

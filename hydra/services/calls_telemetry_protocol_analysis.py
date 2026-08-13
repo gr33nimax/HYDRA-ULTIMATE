@@ -20,11 +20,11 @@ from hydra.services.calls_telemetry_native_contract import (
     SERVER_SESSION_REQUIRED,
     SERVER_WORKER_REQUIRED,
 )
-from hydra.services.calls_telemetry_path_analysis import (
+from hydra.services.calls_telemetry_lane_analysis import (
     client_gauge_peak,
     current_reports,
     entity_gauge_peak,
-    multipath_findings,
+    lane_findings,
     server_process_gauge_peak,
 )
 
@@ -151,12 +151,7 @@ def protocol_findings(
         for report in native.get("client_sessions", [])
         if isinstance(report, Mapping) and _current_or_unclassified(report)
     ]
-    findings.extend(multipath_findings(
-        native,
-        retransmission_pressure,
-        server_paths,
-        client_paths,
-    ))
+    findings.extend(lane_findings(native))
     downstream_pressure = any(
         _number(report.get("kcp_retransmission_ratio")) >= 0.1
         for report in server_paths
@@ -208,7 +203,7 @@ def protocol_findings(
             "warning",
             "kcp_send_window_saturated",
             f"KCP pending-send depth spent time near the current {pending_cap:.0f}-segment backpressure cap.",
-            "Compare per-path delivered rate, window/flight occupancy and backoffs before increasing the adaptive ceiling.",
+            "Compare per-lane WaitSnd, retransmissions, RTT and output queues before increasing the aggregate ceiling.",
         ))
     findings.extend(_stale_server_session_findings(native))
     if _sum_matching(counters, ("dtls_handshake_failure", "turn_failure", "vk_auth_failure")):
@@ -218,12 +213,12 @@ def protocol_findings(
             "VK authentication, TURN allocation or DTLS worker setup failed during the run.",
             "Use stage latency/failure distributions to isolate VK control plane, TURN endpoint or DTLS.",
         ))
-    if _worker_path_imbalance(native):
+    if _lane_rate_imbalance(native):
         findings.append(_finding(
             "warning",
-            "worker_path_imbalance",
-            "Parallel VK/TURN workers carried materially different wire rates.",
-            "Compare TURN ordinal, loss, queue drops and reconnects per worker; deprioritize persistently weak paths.",
+            "lane_rate_imbalance",
+            "The four VK/TURN lanes carried materially different wire rates.",
+            "Compare TURN ordinal, KCP retries, RTT, queue drops and reconnects per lane; reduce only the weak lane.",
         ))
     output_queue_delay = max(
         entity_gauge_peak(native, "server_workers", "worker_output_queue_delay_ms"),
@@ -419,7 +414,7 @@ def _combined_counters(native: Mapping[str, object]) -> dict[str, float]:
     return combined
 
 
-def _worker_path_imbalance(native: Mapping[str, object]) -> bool:
+def _lane_rate_imbalance(native: Mapping[str, object]) -> bool:
     reports = native.get("client_workers", [])
     if not isinstance(reports, Sequence):
         return False

@@ -55,7 +55,7 @@ def test_oversized_native_line_does_not_consume_the_next_record(tmp_path: Path) 
     assert len(records) == 1
 
 
-def test_adaptive_session_metrics_are_accepted_as_one_complete_record(
+def test_four_lane_session_metrics_are_accepted_as_one_complete_record(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "native.jsonl"
@@ -67,14 +67,11 @@ def test_adaptive_session_metrics_are_accepted_as_one_complete_record(
         "user": "tester-user",
         "session_id": "session-0123456789abcdef",
         "metrics": {
-            "multipath_profile": 1,
-            "multipath_chunk_packets": 16,
-            "multipath_chunk_dwell_ms": 16,
-            "worker_path_retry_ratio": 0.125,
-            "worker_path_delivery_rate_bps": 5_000_000,
-            "worker_path_window_segments": 40,
-            "worker_path_inflight_segments": 32,
-            "worker_path_backoff_total": 2,
+            "lane_count": 4,
+            "lane_flow_count": 12,
+            "kcp_wait_snd": 8,
+            "kcp_rtt_ms": 55,
+            "kcp_rto_ms": 120,
             "worker_output_queue_delay_ms": 2.5,
             "worker_output_queue_late_total": 0,
             "kcp_congestion_control": 0,

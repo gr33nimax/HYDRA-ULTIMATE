@@ -580,10 +580,10 @@ Subscription v2 как изолированный `call` outbound с `platform=v
 Клиентский joiner
 не становится источником server-side traffic accounting.
 
-Calls имеет только режим `multi_user`. До любых host-мутаций service требует
+Calls имеет только режим `vk_parasite`. До любых host-мутаций service требует
 desired `kernel.provider=hydracore`, exact identity
 `io.hydrabox.hydracore`, role `vps`, server feature
-`call_vk_multi_user_server=true`, `protocols.call_modes=["multi_user"]` и wire
+`call_vk_parasite_server=true`, `protocols.call_modes=["vk_parasite"]` и wire
 compatibility v1..2; stock core, client artifact, capability aliases и `p2p`
 отклоняются fail-closed. Затем service создаёт отдельную managed-группу 1–4
 комнат. Plugin возвращает server inbound с
@@ -591,7 +591,7 @@ compatibility v1..2; stock core, client artifact, capability aliases и `p2p`
 session/worker/handshake limits; cookies и join-links в server config
 отсутствуют. Per-user Hydra v2 projection содержит `server/server_port`,
 `join_links`, user/password, общий obfs key и worker policy и требует core
-feature `call_vk_multi_user`; singular `join_link` не генерируется в outbound.
+feature `call_vk_parasite`; singular `join_link` не генерируется в outbound.
 `server` берётся из persisted `calls.config.public_endpoint`, который
 материализуется при enable/reinstall из явного `network.server_ip` либо
 наблюдаемого публичного IP VPS и никогда не наследует transport SNI.
@@ -659,9 +659,10 @@ provider configuration. Миграции не меняют host runtime. Явн�
 
 Schema 10 добавляет desired `kernel.provider/channel`, оставляет прежний Calls
 в историческом `p2p` и материализует qWDTT port defaults для межсервисного
-preflight. Schema 11 нормализует любой legacy/unknown Calls mode в `multi_user`;
+preflight. Schema 11 нормализует любой legacy/unknown Calls mode в `vk_parasite`;
 несовместимый enabled Calls (включая stock core) выключается без удаления
 installed state, поэтому upgrade/apply остальных протоколов остаётся доступен.
+Schema 12 фиксирует четыре worker и wire v4, удаляя старый профиль транспорта.
 Повторная установка после switch на Hydracore создаёт новый managed-пул.
 `ApplicationService.kernel` — единственный use-case замены core:
 trusted release metadata и обязательный SHA-256 digest проверяются до ELF,

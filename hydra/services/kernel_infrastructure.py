@@ -212,7 +212,7 @@ class KernelInfrastructure:
         protocols = payload.get("protocols", {})
         modes = protocols.get("call_modes", ()) if isinstance(protocols, dict) else ()
         wire = (
-            protocols.get("call_vk_multi_user_wire", {})
+            protocols.get("call_vk_parasite_wire", {})
             if isinstance(protocols, dict)
             else {}
         )
@@ -221,15 +221,15 @@ class KernelInfrastructure:
             and identity.get("core_id") == _HYDRACORE_CORE_ID
             and identity.get("role") == "vps"
             and isinstance(features, dict)
-            and features.get("call_vk_multi_user") is True
-            and features.get("call_vk_adaptive_multipath") is True
-            and features.get("call_vk_multi_user_server") is True
-            and features.get("call_vk_multi_user_client") is False
+            and features.get("call_vk_parasite") is True
+            and features.get("call_vk_four_lane_kcp") is True
+            and features.get("call_vk_parasite_server") is True
+            and features.get("call_vk_parasite_client") is False
             and isinstance(modes, list)
-            and modes == ["multi_user"]
+            and modes == ["vk_parasite"]
             and isinstance(wire, dict)
-            and wire.get("min") == 3
-            and wire.get("max") == 3
+            and wire.get("min") == 4
+            and wire.get("max") == 4
         )
 
     @classmethod
@@ -328,7 +328,7 @@ class KernelInfrastructure:
             if not self._has_hydracore_contract(payload):
                 raise RuntimeError(
                     "Hydracore must expose exact identity, "
-                    "the VPS Calls role, multi_user-only mode, and wire v3",
+                    "the VPS Calls role, vk_parasite-only mode, and wire v4",
                 )
             if channel == "debug" and not self._has_hydracore_debug_contract(payload):
                 raise RuntimeError(

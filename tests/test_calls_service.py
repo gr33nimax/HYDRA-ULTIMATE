@@ -22,7 +22,7 @@ class Runtime:
         self.remove_error: Exception | None = None
         self.legacy_join_removed = False
 
-    def multi_user_supported(self):
+    def vk_parasite_supported(self):
         return self.multi
 
     def ensure_creator_installed(self):
@@ -146,7 +146,7 @@ def _state(*, installed: bool = False, enabled: bool = False) -> AppState:
         state.protocols["calls"] = PluginState(
             installed=installed,
             enabled=enabled,
-            config={"mode": "multi_user", "obfs_password": "o" * 43},
+            config={"mode": "vk_parasite", "obfs_password": "o" * 43},
         )
     return state
 
@@ -164,7 +164,7 @@ def _service(runtime, protocols=None, *, apply=None, saves=None):
     return service, creator
 
 
-def test_native_enable_is_hydracore_multi_user_only() -> None:
+def test_native_enable_is_hydracore_vk_parasite_only() -> None:
     runtime = Runtime()
     protocols = Protocols()
     state = _state()
@@ -177,50 +177,17 @@ def test_native_enable_is_hydracore_multi_user_only() -> None:
     assert result.value == {
         "operation": "enable",
         "profile": "admin",
-        "mode": "multi_user",
+        "mode": "vk_parasite",
         "rooms": 4,
     }
     assert state.protocols["calls"].enabled is True
-    assert state.protocols["calls"].config["mode"] == "multi_user"
-    assert state.protocols["calls"].config["multipath_profile"] == "adaptive"
+    assert state.protocols["calls"].config["mode"] == "vk_parasite"
+    assert state.protocols["calls"].config["workers"] == 4
+    assert state.protocols["calls"].config["max_workers_per_session"] == 4
     assert state.protocols["calls"].config["listen_port"] == 56002
     assert state.protocols["calls"].config["public_endpoint"] == "203.0.113.10"
     assert len(state.protocols["calls"].config["obfs_password"]) >= 32
     assert creator.committed and creator.finalized
-
-
-def test_multipath_profile_switch_applies_and_requires_subscription_refresh() -> None:
-    runtime = Runtime()
-    state = _state(installed=True, enabled=True)
-    applied: list[str] = []
-    service, _ = _service(
-        runtime,
-        apply=lambda current: applied.append(
-            current.protocols["calls"].config["multipath_profile"],
-        ) or True,
-    )
-
-    result = service.set_multipath_profile(state, "legacy")
-
-    assert result
-    assert result.value == {
-        "multipath_profile": "legacy",
-        "subscriptions_must_refresh": True,
-    }
-    assert applied == ["legacy"]
-
-
-def test_multipath_profile_switch_rolls_back_failed_apply() -> None:
-    runtime = Runtime()
-    state = _state(installed=True, enabled=True)
-    state.protocols["calls"].config["multipath_profile"] = "adaptive"
-    outcomes = iter((False, True))
-    service, _ = _service(runtime, apply=lambda _state: next(outcomes))
-
-    result = service.set_multipath_profile(state, "legacy")
-
-    assert not result
-    assert state.protocols["calls"].config["multipath_profile"] == "adaptive"
 
 
 def test_stock_core_is_rejected_without_starting_creator() -> None:
@@ -237,7 +204,7 @@ def test_stock_core_is_rejected_without_starting_creator() -> None:
     assert "calls" not in state.protocols
 
 
-def test_hydracore_without_exact_multi_user_contract_fails_closed() -> None:
+def test_hydracore_without_exact_vk_parasite_contract_fails_closed() -> None:
     runtime = Runtime()
     runtime.multi = False
     state = _state()
@@ -246,7 +213,7 @@ def test_hydracore_without_exact_multi_user_contract_fails_closed() -> None:
     result = service.enable_native_vk(state)
 
     assert not result
-    assert "exact call_vk_multi_user" in result.error.message
+    assert "exact call_vk_parasite" in result.error.message
     assert creator.created is False
     assert "calls" not in state.protocols
 
@@ -260,7 +227,7 @@ def test_explicit_legacy_p2p_state_is_rejected_before_creator() -> None:
     result = service.reinstall_native_vk(state)
 
     assert not result
-    assert "must be multi_user" in result.error.message
+    assert "must be vk_parasite" in result.error.message
     assert creator.created is False
 
 
@@ -323,7 +290,7 @@ def test_reinstall_of_migrated_disabled_calls_creates_managed_pool() -> None:
     assert creator.created and creator.finalized
 
 
-def test_admin_client_profile_uses_multi_user_and_keeps_metadata_alias() -> None:
+def test_admin_client_profile_uses_vk_parasite_and_keeps_metadata_alias() -> None:
     runtime = Runtime()
     runtime.links = [
         "https://vk.com/call/join/one",
@@ -338,7 +305,7 @@ def test_admin_client_profile_uses_multi_user_and_keeps_metadata_alias() -> None
     outbound = config["outbounds"][0]
 
     assert profile.name == "Hydra VK Tunnel"
-    assert outbound["mode"] == "multi_user"
+    assert outbound["mode"] == "vk_parasite"
     assert outbound["join_links"] == runtime.links
     assert "join_link" not in outbound
     assert profile.join_link == runtime.links[0]
@@ -389,7 +356,7 @@ def test_status_keeps_native_link_ready_wire_key_with_pool_alias() -> None:
     assert status.native_link_ready is True
     assert status.native_pool_ready is True
     assert status.as_dict()["native_link_ready"] is True
-    assert status.as_dict()["multipath_profile"] == "adaptive"
+    assert status.as_dict()["native_mode"] == "vk_parasite"
     assert "native_pool_ready" not in status.as_dict()
 
 

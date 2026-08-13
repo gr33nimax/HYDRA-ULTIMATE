@@ -1,22 +1,16 @@
 """Compatibility exports for the dependency-neutral Calls configuration."""
 from hydra.contracts.calls_configuration import (
-    CALL_MODE_MULTI_USER,
-    CALL_MULTIPATH_ADAPTIVE,
-    CALL_MULTIPATH_LEGACY,
-    DEFAULT_ADAPTIVE_PEER_READ_QUEUE_PACKETS,
+    CALL_MODE_VK_PARASITE,
     DEFAULT_CALL_PORT,
-    DEFAULT_LEGACY_PEER_READ_QUEUE_PACKETS,
-    DEFAULT_MULTIPATH_PROFILE,
+    DEFAULT_PEER_READ_QUEUE_PACKETS,
     DEFAULT_ROOM_COUNT,
     MAX_JOIN_LINKS,
     MAX_WORKERS,
-    MAX_WORKERS_PER_JOIN_LINK,
     CallsStateAccess,
     CallsUser,
     call_mode,
-    multi_user_inbound as _multi_user_inbound,
-    multi_user_outbound as _multi_user_outbound,
-    multipath_profile,
+    vk_parasite_inbound as _vk_parasite_inbound,
+    vk_parasite_outbound as _vk_parasite_outbound,
     peer_read_queue_packets,
     public_endpoint,
 )
@@ -24,17 +18,17 @@ from hydra.core.calls_credentials import user_password
 from hydra.utils.net import public_ip
 
 
-def multi_user_inbound(state: CallsStateAccess) -> dict:
-    return _multi_user_inbound(state, user_password)
+def vk_parasite_inbound(state: CallsStateAccess) -> dict:
+    return _vk_parasite_inbound(state, user_password)
 
 
-def multi_user_outbound(
+def vk_parasite_outbound(
     user: CallsUser,
     state: CallsStateAccess,
     join_links: list[str],
 ) -> dict:
     server_address = public_endpoint(state, public_ip)
-    return _multi_user_outbound(
+    return _vk_parasite_outbound(
         user,
         state,
         join_links,
@@ -44,21 +38,15 @@ def multi_user_outbound(
 
 
 __all__ = [
-    "CALL_MODE_MULTI_USER",
-    "CALL_MULTIPATH_ADAPTIVE",
-    "CALL_MULTIPATH_LEGACY",
-    "DEFAULT_ADAPTIVE_PEER_READ_QUEUE_PACKETS",
+    "CALL_MODE_VK_PARASITE",
     "DEFAULT_CALL_PORT",
-    "DEFAULT_LEGACY_PEER_READ_QUEUE_PACKETS",
-    "DEFAULT_MULTIPATH_PROFILE",
+    "DEFAULT_PEER_READ_QUEUE_PACKETS",
     "DEFAULT_ROOM_COUNT",
     "MAX_JOIN_LINKS",
     "MAX_WORKERS",
-    "MAX_WORKERS_PER_JOIN_LINK",
     "call_mode",
-    "multi_user_inbound",
-    "multi_user_outbound",
-    "multipath_profile",
+    "vk_parasite_inbound",
+    "vk_parasite_outbound",
     "peer_read_queue_packets",
     "public_endpoint",
     "user_password",

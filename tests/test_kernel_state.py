@@ -69,7 +69,7 @@ def test_current_state_rejects_legacy_calls_mode() -> None:
         "calls": PluginState(config={"mode": "p2p"}),
     })
 
-    with pytest.raises(ValueError, match="must be multi_user"):
+    with pytest.raises(ValueError, match="must be vk_parasite"):
         validate_state(state)
 
 
@@ -78,7 +78,7 @@ def test_current_state_rejects_enabled_calls_on_stock_core() -> None:
         "calls": PluginState(
             installed=True,
             enabled=True,
-            config={"mode": "multi_user"},
+            config={"mode": "vk_parasite"},
         ),
     })
 

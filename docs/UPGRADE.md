@@ -264,7 +264,7 @@ state в `headless_creator.providers.vk` и maintenance-флаг в
 инсталляции на `sing-box-extended/stable`, исторически фиксирует прежний Calls
 как `p2p` и материализует канонические qWDTT-порты `56000/56001` для conflict
 preflight. Ступень `v10 → v11` сразу нормализует Calls в единственный
-поддерживаемый `multi_user`: несовместимый enabled Calls выключается, но
+поддерживаемый `vk_parasite`: несовместимый enabled Calls выключается, но
 installed-флаг, остальные протоколы и host runtime сохраняются. Благодаря этому
 первый общий apply после upgrade не требует отсутствующего room pool. Переход
 на Hydracore выполняется только явной `sudo hydra kernel switch hydracore` после

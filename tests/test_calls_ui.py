@@ -104,7 +104,7 @@ def test_calls_status_uses_minimal_protocol_panel(monkeypatch) -> None:
         "running": True,
         "details": [
             ("Платформа", "VK"),
-            ("Режим", "multi_user"),
+            ("Режим", "vk_parasite"),
             ("Пул", "готов"),
             ("Комнат в пуле", "0"),
         ],

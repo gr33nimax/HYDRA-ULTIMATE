@@ -227,25 +227,6 @@ def test_calls_telemetry_start_dispatches_three_testers_and_requires_root(capsys
     assert '"session_id": "20260811T120000Z-1234abcd"' in capsys.readouterr().out
 
 
-def test_calls_profile_dispatches_atomic_ab_switch_and_requires_root(capsys):
-    app = MagicMock()
-    app.calls.set_multipath_profile.return_value = {
-        "ok": True,
-        "multipath_profile": "legacy",
-    }
-    state = AppState()
-    with patch.object(cli, "load_state", return_value=state), patch.object(
-        cli,
-        "production_application",
-        return_value=app,
-    ), patch.object(cli, "_require_root") as require_root:
-        assert cli.main(["calls", "profile", "legacy"]) == 0
-
-    require_root.assert_called_once()
-    app.calls.set_multipath_profile.assert_called_once_with(state, "legacy")
-    assert '"multipath_profile": "legacy"' in capsys.readouterr().out
-
-
 def test_calls_telemetry_status_and_report_use_the_protected_root_boundary(capsys):
     app = MagicMock()
     app.calls_telemetry.status.return_value = {"ok": True, "active": True}

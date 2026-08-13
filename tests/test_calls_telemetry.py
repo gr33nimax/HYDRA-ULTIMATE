@@ -31,9 +31,9 @@ def _state() -> AppState:
                 installed=True,
                 enabled=True,
                 config={
-                    "mode": "multi_user",
+                    "mode": "vk_parasite",
                     "room_count": 4,
-                    "workers": 16,
+                    "workers": 4,
                     "listen_port": 56002,
                 },
             ),
@@ -66,10 +66,11 @@ def test_service_validates_experiment_and_passes_only_safe_metadata() -> None:
     assert kwargs["sample_interval_seconds"] == 2
     assert kwargs["max_data_bytes"] == 2048 * 1024 * 1024
     assert kwargs["metadata"]["calls"] == {
-        "mode": "multi_user",
-        "multipath_profile": "adaptive",
+        "mode": "vk_parasite",
+        "transport": "four_lane_kcp",
+        "lane_count": 4,
         "room_count": 4,
-        "workers": 16,
+        "workers": 4,
         "listen_port": 56002,
         "max_sessions": 128,
         "max_sessions_per_user": 1,

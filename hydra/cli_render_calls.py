@@ -9,7 +9,6 @@ from hydra.cli_render_calls_common import (
     bytes_value as _bytes,
     counter as _counter,
     gauge as _gauge,
-    has_gauge as _has_gauge,
     percent as _percent,
     short_id as _short_id,
     timestamp as _timestamp,
@@ -225,24 +224,18 @@ def _append_native_sessions(
             ))
     if rows:
         if first_report is not None:
-            profile = (
-                "adaptive"
-                if _gauge(first_report, "multipath_profile", "max") >= 0.5
-                else "legacy"
-            )
             lines.extend([
                 "",
                 (
                     "Transport config: "
-                    f"profile={profile}, "
+                    "four independent KCP lanes, "
+                    f"lanes={_gauge(first_report, 'lane_count', 'max'):.0f}, "
                     f"MTU={_gauge(first_report, 'kcp_mtu_bytes', 'max'):.0f}, "
-                    f"window={_gauge(first_report, 'kcp_send_window_segments', 'max'):.0f}, "
-                    f"pending={_gauge(first_report, 'kcp_max_pending_segments', 'max'):.0f}, "
+                    f"aggregate-window={_gauge(first_report, 'kcp_send_window_segments', 'max'):.0f}, "
+                    f"aggregate-pending={_gauge(first_report, 'kcp_max_pending_segments', 'max'):.0f}, "
                     f"update={_gauge(first_report, 'kcp_update_interval_ms', 'max'):.0f} ms, "
                     f"fast-resend={_gauge(first_report, 'kcp_fast_resend', 'max'):.0f}, "
-                    f"congestion={_gauge(first_report, 'kcp_congestion_control', 'max'):.0f}, "
-                    f"chunk={_gauge(first_report, 'multipath_chunk_packets', 'max'):.0f}/"
-                    f"{_gauge(first_report, 'multipath_chunk_dwell_ms', 'max'):.0f} ms"
+                    f"congestion={_gauge(first_report, 'kcp_congestion_control', 'max'):.0f}"
                 ),
             ])
         lines.extend([
@@ -280,37 +273,23 @@ def _append_native_workers(
             )
             reconnects = _counter(report, "worker_reconnect_total")
             loss = _gauge(report, "network_loss_ratio", "p95")
-            path_loss = _gauge(report, "worker_path_loss_ratio", "p95")
-            exact_retry = report.get("worker_path_retransmission_ratio")
+            exact_retry = report.get("kcp_retransmission_ratio")
             if isinstance(exact_retry, (int, float)) and not isinstance(exact_retry, bool):
                 retry_pressure = float(exact_retry)
             else:
-                retry_pressure = _gauge(report, "worker_path_retry_ratio", "p95")
-            path_rtt = _gauge(report, "worker_path_rtt_ms", "p95")
-            delivery = _gauge(report, "worker_path_delivery_rate_bps", "p95")
-            path_window = _gauge(report, "worker_path_window_segments", "p50")
-            path_flight = _gauge(report, "worker_path_inflight_segments", "p95")
-            backoffs = _counter(report, "worker_path_backoff_total")
-            delivery_text = (
-                _bitrate(delivery)
-                if _has_gauge(report, "worker_path_delivery_rate_bps")
-                else "-"
-            )
-            window_text = (
-                f"{path_window:.0f}/{path_flight:.0f}"
-                if _has_gauge(report, "worker_path_window_segments")
-                and _has_gauge(report, "worker_path_inflight_segments")
-                else "-"
-            )
+                retry_pressure = 0.0
+            lane_rtt = _gauge(report, "kcp_rtt_ms", "p95")
+            wait_snd = _gauge(report, "kcp_wait_snd", "p95")
+            flow_count = _gauge(report, "lane_flow_count", "max")
             queue_delay = _gauge(report, "worker_output_queue_delay_ms", "p95")
             queue_late = _counter(report, "worker_output_queue_late_total")
             active = bool(report.get("active"))
             score = (
                 drops * 1000
                 + reconnects * 100
-                + max(loss, path_loss, retry_pressure) * 100
+                + max(loss, retry_pressure) * 100
                 + queue_late
-                + backoffs * 10
+                + wait_snd
                 + (0 if active else 1)
             )
             row: list[object] = [
@@ -328,14 +307,12 @@ def _append_native_workers(
                     (
                         *common,
                         _bitrate(report.get("wire_bps")),
-                        delivery_text,
-                        _percent(loss),
-                        _percent(path_loss),
+                        scalar(round(flow_count, 1)),
                         _percent(retry_pressure),
-                        window_text,
-                        f"{path_rtt:.0f} ms",
+                        scalar(round(wait_snd, 1)),
+                        f"{lane_rtt:.0f} ms",
+                        _percent(loss),
                         f"{queue_delay:.0f} ms/{scalar(round(queue_late, 1))}",
-                        scalar(round(backoffs, 1)),
                         scalar(round(drops, 1)),
                         scalar(round(reconnects, 1)),
                         scalar(round(
@@ -348,11 +325,11 @@ def _append_native_workers(
                 row.extend(
                     (
                         *common,
-                        delivery_text,
-                        _percent(path_loss),
+                        _bitrate(report.get("wire_bps")),
+                        scalar(round(flow_count, 1)),
                         _percent(retry_pressure),
-                        window_text,
-                        f"{path_rtt:.0f} ms",
+                        scalar(round(wait_snd, 1)),
+                        f"{lane_rtt:.0f} ms",
                         scalar(round(drops, 1)),
                         scalar(round(
                             _gauge(report, "turn_selected_endpoint_ordinal", "p95"),
@@ -369,19 +346,18 @@ def _append_native_workers(
     if detailed:
         headers.append("Session")
         headers.extend((
-            "ID", "Active", "Wire avg", "Delivered", "Net loss", "Path loss",
-            "KCP retry",
-            "Win/flight", "Path RTT", "Queue/late", "Backoff", "Drops",
+            "Lane", "Active", "Wire avg", "Flows", "KCP retx", "Wait p95",
+            "RTT p95", "Net loss", "Queue/late", "Drops",
             "Reconnect", "TURN #",
         ))
     else:
         headers.extend((
-            "ID", "Active", "Delivered", "Path loss", "KCP retry", "Win/flight", "Path RTT",
-            "Drops", "TURN #",
+            "Lane", "Active", "Wire avg", "Flows", "KCP retx", "Wait p95",
+            "RTT p95", "Drops", "TURN #",
         ))
     lines.extend([
         "",
-        "Workers" + ("" if detailed else f" (top {len(shown)} of {len(candidates)})"),
+        "KCP lanes" + ("" if detailed else f" (top {len(shown)} of {len(candidates)})"),
         *table(
             tuple(headers),
             [row for _, row in shown],
@@ -431,15 +407,18 @@ def render_calls_telemetry_record(
         metric_map = metrics if isinstance(metrics, Mapping) else {}
         important = (
             "worker_active",
+            "lane_count",
+            "lane_flow_count",
             "kcp_wait_snd",
             "kcp_rtt_ms",
+            "kcp_rto_ms",
             "kcp_retrans_segments_total",
             "network_loss_ratio",
             "outer_bytes_in_total",
             "outer_bytes_out_total",
             "worker_send_queue_drops_total",
-            "worker_path_loss_ratio",
-            "worker_path_feedback_age_ms",
+            "worker_output_queue_delay_ms",
+            "worker_output_queue_late_total",
             "telemetry_record_drops_total",
         )
         preview = ", ".join(

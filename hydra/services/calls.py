@@ -8,17 +8,13 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from hydra.contracts.calls_configuration import (
-    CALL_MODE_MULTI_USER,
-    CALL_MULTIPATH_ADAPTIVE,
-    CALL_MULTIPATH_LEGACY,
-    DEFAULT_MULTIPATH_PROFILE,
+    CALL_MODE_VK_PARASITE,
     DEFAULT_CALL_PORT,
     DEFAULT_ROOM_COUNT,
     MAX_JOIN_LINKS,
     call_mode,
-    multi_user_outbound,
+    vk_parasite_outbound,
     public_endpoint,
-    multipath_profile,
 )
 from hydra.core.calls_credentials import user_password
 from hydra.core.errors import ErrorCode, ServiceResult, failed_result
@@ -58,8 +54,8 @@ class CallsService:
     last_apply_error: Callable[[], str] = lambda: ""
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
-    def _multi_user_supported(self) -> bool:
-        probe = getattr(self.runtime, "multi_user_supported", None)
+    def _vk_parasite_supported(self) -> bool:
+        probe = getattr(self.runtime, "vk_parasite_supported", None)
         return bool(probe()) if callable(probe) else False
 
     def _begin_operation(self) -> tuple[CallOperationLease | None, ServiceResult | None]:
@@ -95,18 +91,13 @@ class CallsService:
         pool_ready = bool(links)
         creator_status = self.creator.availability("vk")
         return CallsStatus(
-            feature_supported=self._multi_user_supported(),
+            feature_supported=self._vk_parasite_supported(),
             creator_installed=creator_status.installed,
             cookies_ready=creator_status.credentials_ready,
             native_enabled=enabled,
             native_link_ready=pool_ready,
             native_running=bool(enabled and pool_ready and self.runtime.singbox_running()),
             native_mode=mode,
-            multipath_profile=str(
-                desired.config.get("multipath_profile", DEFAULT_MULTIPATH_PROFILE)
-                if desired
-                else DEFAULT_MULTIPATH_PROFILE
-            ),
             room_count=len(links),
         )
 
@@ -146,40 +137,6 @@ class CallsService:
         finally:
             self._end_operation(lease)
 
-    def set_multipath_profile(self, state: AppState, profile: str) -> ServiceResult:
-        """Atomically switch the wire-compatible scheduler for controlled A/B tests."""
-        lease, failure = self._begin_operation()
-        if failure is not None:
-            return failure
-        try:
-            desired = state.protocols.get("calls")
-            if desired is None or not desired.enabled:
-                raise ValueError("native VK Calls are not enabled")
-            normalized = str(profile).strip().lower()
-            if normalized not in {CALL_MULTIPATH_LEGACY, CALL_MULTIPATH_ADAPTIVE}:
-                raise ValueError("Calls multipath_profile must be legacy or adaptive")
-            before = copy.deepcopy(state)
-            desired.config["multipath_profile"] = normalized
-            multipath_profile(desired.config)
-            try:
-                self.save_state(state)
-                if not self.apply_config(state):
-                    raise RuntimeError(
-                        self.last_apply_error()
-                        or "failed to apply Calls multipath profile",
-                    )
-            except Exception:
-                self._restore_native_transition(state, before)
-                raise
-            return ServiceResult(True, value={
-                "multipath_profile": normalized,
-                "subscriptions_must_refresh": True,
-            })
-        except Exception as exc:
-            return failed_result(exc, fallback=ErrorCode.OPERATION_FAILED)
-        finally:
-            self._end_operation(lease)
-
     def _native_transition(self, state: AppState, *, rotate: bool) -> ServiceResult:
         lease, failure = self._begin_operation()
         if failure is not None:
@@ -193,12 +150,12 @@ class CallsService:
                 ),
                 fallback=ErrorCode.OPERATION_FAILED,
             )
-        if not self._multi_user_supported():
+        if not self._vk_parasite_supported():
             self._end_operation(lease)
             return failed_result(
                 RuntimeError(
                     "installed Hydracore does not expose the exact "
-                    "call_vk_multi_user capability contract"
+                    "call_vk_parasite wire-v4 capability contract"
                 ),
                 fallback=ErrorCode.OPERATION_FAILED,
             )
@@ -222,18 +179,12 @@ class CallsService:
             if type(count) is not int or not 1 <= count <= MAX_JOIN_LINKS:
                 raise ValueError("Calls room_count must be between 1 and 4")
             desired.config.update({
-                "mode": CALL_MODE_MULTI_USER,
-                "multipath_profile": desired.config.get(
-                    "multipath_profile",
-                    DEFAULT_MULTIPATH_PROFILE,
-                ),
+                "mode": CALL_MODE_VK_PARASITE,
                 "room_count": count,
                 "listen_port": desired.config.get("listen_port", DEFAULT_CALL_PORT),
                 "max_sessions_per_user": desired.config.get("max_sessions_per_user", 1),
-                "max_workers_per_session": desired.config.get(
-                    "max_workers_per_session",
-                    max(4, count),
-                ),
+                "max_workers_per_session": 4,
+                "workers": 4,
                 "public_endpoint": public_endpoint(state, public_ip),
             })
             desired.config.pop("read_buffer", None)
@@ -264,7 +215,7 @@ class CallsService:
                     self.last_apply_error() or "failed to apply native VK Calls configuration",
                 )
             if not self.runtime.singbox_running():
-                raise RuntimeError("Hydracore multi-user listener is not running")
+                raise RuntimeError("Hydracore VK parasite listener is not running")
             try:
                 self.creator.finalize(session_group)
                 finalized = True
@@ -275,7 +226,7 @@ class CallsService:
                 value={
                     "operation": "rotate" if rotate else "enable",
                     "profile": "admin",
-                    "mode": CALL_MODE_MULTI_USER,
+                    "mode": CALL_MODE_VK_PARASITE,
                     "rooms": len(session_group.endpoints),
                 },
             )
@@ -395,8 +346,8 @@ class CallsService:
         if desired is None or not desired.enabled:
             raise ValueError("native VK Calls are not enabled")
         call_mode(state)
-        if state.kernel.provider != KERNEL_HYDRACORE or not self._multi_user_supported():
-            raise RuntimeError("native VK Calls require exact Hydracore multi-user support")
+        if state.kernel.provider != KERNEL_HYDRACORE or not self._vk_parasite_supported():
+            raise RuntimeError("native VK Calls require exact Hydracore VK parasite support")
         links = self.runtime.load_native_join_links()
         if not links:
             raise RuntimeError("native VK Calls room pool is unavailable")
@@ -404,7 +355,7 @@ class CallsService:
         if user is None:
             raise ValueError("native VK Calls have no active user")
         server_address = public_endpoint(state, public_ip)
-        outbound = multi_user_outbound(
+        outbound = vk_parasite_outbound(
             user,
             state,
             links,

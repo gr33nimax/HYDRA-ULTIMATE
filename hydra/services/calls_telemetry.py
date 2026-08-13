@@ -7,7 +7,8 @@ from typing import Protocol, Sequence
 
 from hydra import __version__
 from hydra.contracts.calls_configuration import (
-    multipath_profile,
+    CALL_MODE_VK_PARASITE,
+    MAX_WORKERS,
     peer_read_queue_packets,
 )
 from hydra.core.state_models import AppState
@@ -149,23 +150,23 @@ class CallsTelemetryService:
             raise ValueError(f"select between 1 and {MAX_TESTERS} testers")
 
         config = calls.config
-        profile = multipath_profile(config)
         metadata: dict[str, object] = {
             "hydra_version": __version__,
             "state_schema": state.version,
             "kernel_provider": state.kernel.provider,
             "calls": {
-                "mode": str(config.get("mode", "multi_user")),
-                "multipath_profile": profile,
+                "mode": CALL_MODE_VK_PARASITE,
+                "transport": "four_lane_kcp",
+                "lane_count": MAX_WORKERS,
                 "room_count": _safe_int(config.get("room_count", 0)),
-                "workers": _safe_int(config.get("workers", 0)),
+                "workers": MAX_WORKERS,
                 "listen_port": _safe_int(config.get("listen_port", 0)),
                 "max_sessions": _safe_int(config.get("max_sessions", 128)),
                 "max_sessions_per_user": _safe_int(
                     config.get("max_sessions_per_user", 1),
                 ),
                 "max_workers_per_session": _safe_int(
-                    config.get("max_workers_per_session", 4),
+                    MAX_WORKERS,
                 ),
                 "max_pending_handshakes": _safe_int(
                     config.get("max_pending_handshakes", 256),

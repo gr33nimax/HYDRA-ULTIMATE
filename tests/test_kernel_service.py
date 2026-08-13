@@ -43,7 +43,7 @@ class Runtime:
             True,
             running=True,
             provider=provider,
-            capabilities=("hydracore", "call_vk_multi_user"),
+            capabilities=("hydracore", "call_vk_parasite"),
         )
         self.prepared = Prepared(self.status)
         return self.prepared
@@ -95,32 +95,32 @@ def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
     valid = {
         "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
         "features": {
-            "call_vk_multi_user": True,
-            "call_vk_adaptive_multipath": True,
-            "call_vk_multi_user_client": False,
-            "call_vk_multi_user_server": True,
+            "call_vk_parasite": True,
+            "call_vk_four_lane_kcp": True,
+            "call_vk_parasite_client": False,
+            "call_vk_parasite_server": True,
             "call_vk_telemetry": True,
         },
         "protocols": {
-            "call_modes": ["multi_user"],
-            "call_vk_multi_user_wire": {"min": 3, "max": 3},
+            "call_modes": ["vk_parasite"],
+            "call_vk_parasite_wire": {"min": 4, "max": 4},
         },
     }
     alias = {
         "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
         "features": {"call_vk_multiuser": True},
-        "protocols": {"call_modes": ["multi_user"]},
+        "protocols": {"call_modes": ["vk_parasite"]},
     }
     p2p_only = {
         "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
         "features": {
-            "call_vk_multi_user": True,
-            "call_vk_multi_user_client": False,
-            "call_vk_multi_user_server": True,
+            "call_vk_parasite": True,
+            "call_vk_parasite_client": False,
+            "call_vk_parasite_server": True,
         },
         "protocols": {
             "call_modes": ["p2p"],
-            "call_vk_multi_user_wire": {"min": 3, "max": 3},
+            "call_vk_parasite_wire": {"min": 4, "max": 4},
         },
     }
 
@@ -128,23 +128,23 @@ def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
     assert KernelInfrastructure._has_hydracore_debug_contract(valid) is True
     assert KernelInfrastructure._has_hydracore_contract(alias) is False
     assert KernelInfrastructure._has_hydracore_contract(p2p_only) is False
-    assert "call_vk_multi_user" in KernelInfrastructure._normalized_capabilities(valid)
-    assert "call_vk_multi_user" not in KernelInfrastructure._normalized_capabilities(alias)
+    assert "call_vk_parasite" in KernelInfrastructure._normalized_capabilities(valid)
+    assert "call_vk_parasite" not in KernelInfrastructure._normalized_capabilities(alias)
 
 
 def test_hydracore_debug_contract_requires_native_telemetry() -> None:
     payload = {
         "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
         "features": {
-            "call_vk_multi_user": True,
-            "call_vk_adaptive_multipath": True,
-            "call_vk_multi_user_client": False,
-            "call_vk_multi_user_server": True,
+            "call_vk_parasite": True,
+            "call_vk_four_lane_kcp": True,
+            "call_vk_parasite_client": False,
+            "call_vk_parasite_server": True,
             "call_vk_telemetry": False,
         },
         "protocols": {
-            "call_modes": ["multi_user"],
-            "call_vk_multi_user_wire": {"min": 3, "max": 3},
+            "call_modes": ["vk_parasite"],
+            "call_vk_parasite_wire": {"min": 4, "max": 4},
         },
     }
 
@@ -282,7 +282,7 @@ def test_kernel_stop_failure_still_restarts_previous_running_service(tmp_path) -
     runtime._validate_candidate = lambda *_args: KernelRuntimeStatus(
         True,
         provider=KERNEL_HYDRACORE,
-        capabilities=("hydracore", "call_vk_multi_user"),
+        capabilities=("hydracore", "call_vk_parasite"),
     )
 
     with pytest.raises(RuntimeError, match="failed to stop"):

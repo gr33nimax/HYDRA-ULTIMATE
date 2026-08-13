@@ -34,7 +34,7 @@ class Source:
     def feature_supported(self) -> bool:
         return self.supported
 
-    def multi_user_supported(self) -> bool:
+    def vk_parasite_supported(self) -> bool:
         return self.multi
 
     def singbox_running(self) -> bool:
@@ -49,7 +49,7 @@ def _state(*, enabled: bool = True) -> AppState:
                 installed=True,
                 enabled=enabled,
                 config={
-                    "mode": "multi_user",
+                    "mode": "vk_parasite",
                     "obfs_password": "o" * 43,
                 },
             ),
@@ -77,13 +77,12 @@ def test_calls_plugin_contract_and_native_fragment() -> None:
     assert plugin.meta.capabilities.hydra_v2_subscription_enabled is True
     assert plugin.meta.capabilities.connection_source == "tracked"
     assert plugin.meta.capabilities.config_defaults == (
-        ("mode", "multi_user"),
-        ("multipath_profile", "adaptive"),
+        ("mode", "vk_parasite"),
         ("room_count", 4),
         ("listen_port", 56002),
     )
     inbound = plugin.configure(_state()).inbounds[0]
-    assert inbound["mode"] == "multi_user"
+    assert inbound["mode"] == "vk_parasite"
     assert "join_link" not in inbound
     assert "cookies" not in inbound
     fragment = plugin.configure(_state())
@@ -93,7 +92,7 @@ def test_calls_plugin_contract_and_native_fragment() -> None:
 def test_calls_plugin_disabled_is_empty_and_enabled_requires_secrets() -> None:
     plugin = CallsPlugin(Source([], ""))
     assert plugin.configure(_state(enabled=False)).inbounds == []
-    with pytest.raises(ValueError, match="multi_user"):
+    with pytest.raises(ValueError, match="vk_parasite"):
         plugin.configure(_state())
 
 
@@ -101,11 +100,11 @@ def test_calls_plugin_rejects_legacy_p2p_mode() -> None:
     state = _state()
     state.protocols["calls"].config["mode"] = "p2p"
     source = Source([], "", multi=True)
-    with pytest.raises(ValueError, match="must be multi_user"):
+    with pytest.raises(ValueError, match="must be vk_parasite"):
         CallsPlugin(source).configure(state)
 
 
-def test_calls_plugin_emits_exact_hydracore_multi_user_contract() -> None:
+def test_calls_plugin_emits_exact_hydracore_vk_parasite_contract() -> None:
     source = Source(
         [],
         "",
@@ -118,7 +117,7 @@ def test_calls_plugin_emits_exact_hydracore_multi_user_contract() -> None:
     state = AppState(
         users=[User(email="alice@example.com", uuid="alice")],
         protocols={"calls": PluginState(installed=True, enabled=True, config={
-            "mode": "multi_user",
+            "mode": "vk_parasite",
             "listen_port": 56002,
             "obfs_password": "o" * 43,
             "workers": 4,
@@ -132,8 +131,7 @@ def test_calls_plugin_emits_exact_hydracore_multi_user_contract() -> None:
         "type": "call",
         "tag": "calls-vk-in",
         "platform": "vk",
-        "mode": "multi_user",
-        "multipath_profile": "adaptive",
+        "mode": "vk_parasite",
         "listen": "0.0.0.0",
         "listen_port": 56002,
         "obfs_password": "o" * 43,
@@ -158,42 +156,18 @@ def test_calls_plugin_emits_exact_hydracore_multi_user_contract() -> None:
     assert outbound["server"] == "203.0.113.10"
     assert outbound["server_port"] == 56002
     assert outbound["workers"] == 4
-    assert outbound["multipath_profile"] == "adaptive"
     assert outbound["worker_connect_timeout"] == "15s"
     assert "cookies" not in inbound and "join_link" not in inbound
     assert "join_link" not in outbound
 
 
-def test_calls_multi_user_supports_explicit_legacy_ab_profile() -> None:
-    source = Source([], "", links=["https://vk.com/call/join/one"], multi=True)
-    state = _state()
-    state.protocols["calls"].config["multipath_profile"] = "legacy"
-
-    inbound = CallsPlugin(source).configure(state).inbounds[0]
-    outbound = json.loads(
-        CallsPlugin(source).generate_client_config(state.users[0], state),
-    )["outbounds"][0]
-
-    assert inbound["multipath_profile"] == "legacy"
-    assert inbound["peer_read_queue_packets"] == 128
-    assert outbound["multipath_profile"] == "legacy"
-
-
-def test_calls_multi_user_preserves_explicit_peer_read_queue_capacity() -> None:
+def test_calls_vk_parasite_preserves_explicit_peer_read_queue_capacity() -> None:
     state = _state()
     state.protocols["calls"].config["peer_read_queue_packets"] = 384
 
     inbound = CallsPlugin(Source([], "", multi=True)).configure(state).inbounds[0]
 
-    assert inbound["multipath_profile"] == "adaptive"
     assert inbound["peer_read_queue_packets"] == 384
-
-
-def test_calls_multi_user_rejects_unknown_multipath_profile() -> None:
-    state = _state()
-    state.protocols["calls"].config["multipath_profile"] = "raw"
-    with pytest.raises(ValueError, match="legacy or adaptive"):
-        CallsPlugin(Source([], "", multi=True)).configure(state)
 
 
 def test_calls_client_uses_public_ip_instead_of_transport_sni() -> None:
@@ -232,7 +206,7 @@ def test_calls_client_rejects_a_url_as_public_endpoint() -> None:
         CallsPlugin(source).generate_client_config(state.users[0], state)
 
 
-def test_calls_multi_user_normalizes_links_and_enforces_worker_budget() -> None:
+def test_calls_vk_parasite_normalizes_links_and_requires_four_workers() -> None:
     source = Source(
         [],
         "",
@@ -242,32 +216,32 @@ def test_calls_multi_user_normalizes_links_and_enforces_worker_budget() -> None:
     state = AppState(
         users=[User(email="alice@example.com", uuid="alice")],
         protocols={"calls": PluginState(installed=True, enabled=True, config={
-            "mode": "multi_user",
+            "mode": "vk_parasite",
             "obfs_password": "o" * 43,
-            "workers": 28,
-            "max_workers_per_session": 108,
+            "workers": 3,
+            "max_workers_per_session": 4,
         })},
     )
     state.network.server_ip = "203.0.113.10"
 
-    with pytest.raises(ValueError, match="workers.*between 1 and 27"):
+    with pytest.raises(ValueError, match="workers.*between 4 and 4"):
         CallsPlugin(source).generate_client_config(state.users[0], state)
 
     del state.protocols["calls"].config["workers"]
     default_outbound = json.loads(
         CallsPlugin(source).generate_client_config(state.users[0], state),
     )["outbounds"][0]
-    assert default_outbound["workers"] == 1
+    assert default_outbound["workers"] == 4
 
-    state.protocols["calls"].config["workers"] = 27
+    state.protocols["calls"].config["workers"] = 4
     outbound = json.loads(
         CallsPlugin(source).generate_client_config(state.users[0], state),
     )["outbounds"][0]
     assert outbound["join_links"] == ["https://vk.com/call/join/one"]
-    assert outbound["workers"] == 27
+    assert outbound["workers"] == 4
 
 
-def test_calls_multi_user_rejects_duplicate_links() -> None:
+def test_calls_vk_parasite_rejects_duplicate_links() -> None:
     source = Source(
         [],
         "",
@@ -280,7 +254,7 @@ def test_calls_multi_user_rejects_duplicate_links() -> None:
     state = AppState(
         users=[User(email="alice@example.com", uuid="alice")],
         protocols={"calls": PluginState(installed=True, enabled=True, config={
-            "mode": "multi_user",
+            "mode": "vk_parasite",
             "obfs_password": "o" * 43,
         })},
     )
@@ -290,7 +264,7 @@ def test_calls_multi_user_rejects_duplicate_links() -> None:
         CallsPlugin(source).generate_client_config(state.users[0], state)
 
 
-def test_calls_multi_user_rejects_enabled_external_udp_port_collision() -> None:
+def test_calls_vk_parasite_rejects_enabled_external_udp_port_collision() -> None:
     source = Source(
         [],
         "",
@@ -301,7 +275,7 @@ def test_calls_multi_user_rejects_enabled_external_udp_port_collision() -> None:
         users=[User(email="alice@example.com", uuid="alice")],
         protocols={
             "calls": PluginState(installed=True, enabled=True, config={
-                "mode": "multi_user",
+                "mode": "vk_parasite",
                 "listen_port": 56001,
                 "obfs_password": "o" * 43,
             }),
@@ -326,13 +300,13 @@ def test_calls_multi_user_rejects_enabled_external_udp_port_collision() -> None:
         ),
     ],
 )
-def test_calls_multi_user_rejects_amneziawg_udp_collision(awg, field) -> None:
+def test_calls_vk_parasite_rejects_amneziawg_udp_collision(awg, field) -> None:
     source = Source([], "", links=["https://vk.com/call/join/one"], multi=True)
     state = AppState(
         users=[User(email="alice@example.com", uuid="alice")],
         protocols={
             "calls": PluginState(installed=True, enabled=True, config={
-                "mode": "multi_user",
+                "mode": "vk_parasite",
                 "listen_port": 51820,
                 "obfs_password": "o" * 43,
             }),
@@ -344,12 +318,12 @@ def test_calls_multi_user_rejects_amneziawg_udp_collision(awg, field) -> None:
         CallsPlugin(source).configure(state)
 
 
-def test_calls_multi_user_normalizes_shared_obfs_password() -> None:
+def test_calls_vk_parasite_normalizes_shared_obfs_password() -> None:
     source = Source([], "", links=["https://vk.com/call/join/one"], multi=True)
     state = AppState(
         users=[User(email="alice@example.com", uuid="alice")],
         protocols={"calls": PluginState(installed=True, enabled=True, config={
-            "mode": "multi_user",
+            "mode": "vk_parasite",
             "obfs_password": f"  {'o' * 43}  ",
         })},
     )
@@ -365,7 +339,7 @@ def test_calls_multi_user_normalizes_shared_obfs_password() -> None:
     assert outbound["obfs_password"] == inbound["obfs_password"]
 
 
-def test_calls_multi_user_default_workers_respects_session_cap() -> None:
+def test_calls_vk_parasite_rejects_session_cap_below_four() -> None:
     source = Source(
         [],
         "",
@@ -375,18 +349,15 @@ def test_calls_multi_user_default_workers_respects_session_cap() -> None:
     state = AppState(
         users=[User(email="alice@example.com", uuid="alice")],
         protocols={"calls": PluginState(installed=True, enabled=True, config={
-            "mode": "multi_user",
+            "mode": "vk_parasite",
             "obfs_password": "o" * 43,
             "max_workers_per_session": 1,
         })},
     )
     state.network.server_ip = "203.0.113.10"
 
-    outbound = json.loads(
-        CallsPlugin(source).generate_client_config(state.users[0], state),
-    )["outbounds"][0]
-
-    assert outbound["workers"] == 1
+    with pytest.raises(ValueError, match="max_workers_per_session.*between 4 and 4"):
+        CallsPlugin(source).generate_client_config(state.users[0], state)
 
 
 def test_calls_apply_opens_listener_and_rollback_restores_firewall(monkeypatch) -> None:
@@ -399,7 +370,7 @@ def test_calls_apply_opens_listener_and_rollback_restores_firewall(monkeypatch) 
     state = AppState(
         users=[User(email="alice@example.com", uuid="alice")],
         protocols={"calls": PluginState(installed=True, enabled=True, config={
-            "mode": "multi_user",
+            "mode": "vk_parasite",
             "obfs_password": "o" * 43,
         })},
     )
