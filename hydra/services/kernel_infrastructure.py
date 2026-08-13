@@ -228,8 +228,8 @@ class KernelInfrastructure:
             and isinstance(modes, list)
             and modes == ["multi_user"]
             and isinstance(wire, dict)
-            and wire.get("min") == 1
-            and wire.get("max") == 2
+            and wire.get("min") == 3
+            and wire.get("max") == 3
         )
 
     @classmethod
@@ -328,7 +328,7 @@ class KernelInfrastructure:
             if not self._has_hydracore_contract(payload):
                 raise RuntimeError(
                     "Hydracore must expose exact identity, "
-                    "the VPS Calls role, multi_user-only mode, and wire v1..2",
+                    "the VPS Calls role, multi_user-only mode, and wire v3",
                 )
             if channel == "debug" and not self._has_hydracore_debug_contract(payload):
                 raise RuntimeError(

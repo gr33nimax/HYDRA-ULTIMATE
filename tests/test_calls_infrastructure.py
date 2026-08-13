@@ -76,7 +76,7 @@ class CapabilityHost(ProbeHost):
                 },
                 "protocols": {
                     "call_modes": ["multi_user"],
-                    "call_vk_multi_user_wire": {"min": 1, "max": 2},
+                    "call_vk_multi_user_wire": {"min": 3, "max": 3},
                 },
             }),
             stderr="",

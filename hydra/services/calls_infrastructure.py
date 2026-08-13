@@ -122,8 +122,8 @@ class CallsInfrastructure:
             and isinstance(modes, list)
             and modes == ["multi_user"]
             and isinstance(wire, dict)
-            and wire.get("min") == 1
-            and wire.get("max") == 2
+            and wire.get("min") == 3
+            and wire.get("max") == 3
         )
 
     def singbox_running(self) -> bool:

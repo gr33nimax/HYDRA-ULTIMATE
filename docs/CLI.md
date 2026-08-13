@@ -509,7 +509,7 @@ shared-KCP retransmission ratio, and `Net loss` is authenticated outer RTP loss.
 least two KCP update intervals. It exposes any regression that delays packets
 after KCP has started retransmission timing. `report` retains every historical
 session and adds its pseudonymous session ID so reconnects and profile switches
-remain auditable without cluttering the live view. Adaptive debug.9 must run on
+remain auditable without cluttering the live view. Adaptive debug.10 must run on
 both the VPS and client; its physical feedback is a mandatory transport feature.
 
 Сессия для трёх заранее созданных пользователей запускается без таймера:

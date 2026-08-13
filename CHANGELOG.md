@@ -1,11 +1,13 @@
 # Changelog
 
-- Added the paired Hydracore debug.9 four-call adaptive transport contract.
+- Added the paired Hydracore debug.10 four-call adaptive transport contract.
   Every physical VK/TURN packet now has same-path selective feedback; path
   loss, KCP retry, feedback freshness and control copies are reported as
   separate signals. Live findings use current entities and recent counters,
   so queue drops and backoffs from replaced sessions no longer contaminate the
   active diagnosis. Adaptive peer-read queues default to 512 packets.
+  Client and VPS capabilities now require wire v3 exactly, so mixed old/new
+  deployments fail closed during the worker handshake.
 - Added adaptive VK path-controller telemetry and analysis for Hydracore
   debug.7: per-worker delivered rate, window/in-flight occupancy and backoff
   totals. Live `telemetry status` now shows a compact delivery/window view;
@@ -86,7 +88,7 @@
   монотонно начисляются общему и per-protocol счётчику этого пользователя.
 - Release-контракт Hydracore разделён по ролям: Ultimate загружает только
   `hydracore-vps-linux-{arch}.tar.gz` и проверяет VPS identity, server feature,
-  multi-user-only режим и wire v1..2. Android client artifact на VPS
+  multi-user-only режим и wire v3. Android client artifact на VPS
   fail-closed не принимается.
 - Calls сохраняет отдельный `public_endpoint`. В административном TUI транспорт
   называется `Hydra VK Tunnel`, а только пользовательский профиль в подписке —

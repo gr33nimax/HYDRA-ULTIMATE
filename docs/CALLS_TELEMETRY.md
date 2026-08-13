@@ -54,7 +54,7 @@ whether the path signal is fresh. Live `status` uses only current entities and
 the last ten seconds of path counters; `report` keeps the full historical
 session and its pseudonymous native session ID.
 
-Hydracore debug.9 also reports `worker_path_delivery_rate_bps`,
+Hydracore debug.10 also reports `worker_path_delivery_rate_bps`,
 `worker_path_window_segments`, `worker_path_inflight_segments` and
 `worker_path_backoff_total`. Live status renders delivered rate plus
 `Win/flight`; the detailed report adds the cumulative backoff count. These
