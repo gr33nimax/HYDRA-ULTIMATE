@@ -20,7 +20,13 @@ from hydra.services.calls_telemetry_native_contract import (
     SERVER_SESSION_REQUIRED,
     SERVER_WORKER_REQUIRED,
 )
-from hydra.services.calls_telemetry_path_analysis import multipath_findings
+from hydra.services.calls_telemetry_path_analysis import (
+    client_gauge_peak,
+    current_reports,
+    entity_gauge_peak,
+    multipath_findings,
+    server_process_gauge_peak,
+)
 
 def analyze_kernel(samples: Sequence[Mapping[str, object]]) -> dict[str, object]:
     return {
@@ -185,16 +191,16 @@ def protocol_findings(
             "Compare server worker ingress and client TURN paths before tuning KCP congestion control and send windows.",
         ))
     wait_p95 = max(
-        _server_process_gauge_peak(native, "kcp_wait_snd"),
-        _entity_gauge_peak(native, "server_sessions", "kcp_wait_snd"),
-        _client_gauge_peak(native, "kcp_wait_snd"),
+        server_process_gauge_peak(native, "kcp_wait_snd"),
+        entity_gauge_peak(native, "server_sessions", "kcp_wait_snd"),
+        client_gauge_peak(native, "kcp_wait_snd"),
     )
     pending_cap = max(
-        _server_process_gauge_peak(native, "kcp_max_pending_segments"),
-        _entity_gauge_peak(
+        server_process_gauge_peak(native, "kcp_max_pending_segments"),
+        entity_gauge_peak(
             native, "server_sessions", "kcp_max_pending_segments",
         ),
-        _client_gauge_peak(native, "kcp_max_pending_segments"),
+        client_gauge_peak(native, "kcp_max_pending_segments"),
     )
     pending_cap = pending_cap or 2048
     if wait_p95 >= 0.75 * pending_cap:
@@ -220,8 +226,8 @@ def protocol_findings(
             "Compare TURN ordinal, loss, queue drops and reconnects per worker; deprioritize persistently weak paths.",
         ))
     output_queue_delay = max(
-        _entity_gauge_peak(native, "server_workers", "worker_output_queue_delay_ms"),
-        _entity_gauge_peak(native, "client_workers", "worker_output_queue_delay_ms"),
+        entity_gauge_peak(native, "server_workers", "worker_output_queue_delay_ms"),
+        entity_gauge_peak(native, "client_workers", "worker_output_queue_delay_ms"),
     )
     late_output_writes = _sum_matching(counters, ("output_queue_late",))
     if output_queue_delay >= 20 or late_output_writes >= 32:
@@ -398,7 +404,7 @@ def _combined_counters(native: Mapping[str, object]) -> dict[str, float]:
                 "server_sessions",
                 "client_sessions",
             )
-            for report in _current_reports(native, entity)
+            for report in current_reports(native, entity)
         ]
     else:
         summaries = [_mapping(native.get("server"))]
@@ -411,69 +417,6 @@ def _combined_counters(native: Mapping[str, object]) -> dict[str, float]:
             name = str(key)
             combined[name] = combined.get(name, 0.0) + _number(value)
     return combined
-
-
-def _client_gauge_peak(native: Mapping[str, object], key: str) -> float:
-    if "server_processes" in native:
-        return _entity_gauge_peak(native, "client_sessions", key)
-    return max(
-        (
-            _number(
-                _mapping(
-                    _mapping(_mapping(summary).get("gauges")).get(key),
-                ).get("p95"),
-            )
-            for summary in _mapping(native.get("clients")).values()
-        ),
-        default=0.0,
-    )
-
-
-def _server_process_gauge_peak(
-    native: Mapping[str, object],
-    key: str,
-) -> float:
-    if "server_processes" in native:
-        return _entity_gauge_peak(native, "server_processes", key)
-    return _number(
-        _mapping(
-            _mapping(_mapping(native.get("server")).get("gauges")).get(key),
-        ).get("p95"),
-    )
-
-
-def _current_reports(
-    native: Mapping[str, object],
-    entity: str,
-) -> list[Mapping[str, object]]:
-    records = native.get(entity, [])
-    if not isinstance(records, Sequence):
-        return []
-    return [
-        record
-        for record in records
-        if isinstance(record, Mapping) and _current_or_unclassified(record)
-    ]
-
-
-def _entity_gauge_peak(
-    native: Mapping[str, object],
-    entity: str,
-    key: str,
-) -> float:
-    records = native.get(entity, [])
-    if not isinstance(records, Sequence):
-        return 0.0
-    return max(
-        (
-            _number(
-                _mapping(_mapping(record.get("gauges")).get(key)).get("p95"),
-            )
-            for record in records
-            if isinstance(record, Mapping) and _current_or_unclassified(record)
-        ),
-        default=0.0,
-    )
 
 
 def _worker_path_imbalance(native: Mapping[str, object]) -> bool:

@@ -90,6 +90,61 @@ def multipath_findings(
     return findings
 
 
+def current_reports(
+    native: Mapping[str, object],
+    entity: str,
+) -> list[Mapping[str, object]]:
+    records = native.get(entity, [])
+    if not isinstance(records, Sequence):
+        return []
+    return [
+        record
+        for record in records
+        if isinstance(record, Mapping)
+        and ("current" not in record or bool(record.get("current")))
+    ]
+
+
+def entity_gauge_peak(
+    native: Mapping[str, object],
+    entity: str,
+    key: str,
+) -> float:
+    return max(
+        (_gauge(report, key, "p95") for report in current_reports(native, entity)),
+        default=0.0,
+    )
+
+
+def client_gauge_peak(native: Mapping[str, object], key: str) -> float:
+    if "server_processes" in native:
+        return entity_gauge_peak(native, "client_sessions", key)
+    return max(
+        (
+            _number(
+                _mapping(
+                    _mapping(_mapping(summary).get("gauges")).get(key),
+                ).get("p95"),
+            )
+            for summary in _mapping(native.get("clients")).values()
+        ),
+        default=0.0,
+    )
+
+
+def server_process_gauge_peak(
+    native: Mapping[str, object],
+    key: str,
+) -> float:
+    if "server_processes" in native:
+        return entity_gauge_peak(native, "server_processes", key)
+    return _number(
+        _mapping(
+            _mapping(_mapping(native.get("server")).get("gauges")).get(key),
+        ).get("p95"),
+    )
+
+
 def _current_workers(
     native: Mapping[str, object],
 ) -> list[Mapping[str, object]]:
@@ -157,4 +212,10 @@ def _finding(
     }
 
 
-__all__ = ["multipath_findings"]
+__all__ = [
+    "client_gauge_peak",
+    "current_reports",
+    "entity_gauge_peak",
+    "multipath_findings",
+    "server_process_gauge_peak",
+]
