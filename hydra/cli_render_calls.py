@@ -2,9 +2,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
 
 from hydra.cli_format import scalar, table
+from hydra.cli_render_calls_common import (
+    bitrate as _bitrate,
+    bytes_value as _bytes,
+    counter as _counter,
+    gauge as _gauge,
+    has_gauge as _has_gauge,
+    percent as _percent,
+    short_id as _short_id,
+    timestamp as _timestamp,
+)
 
 
 def render_calls_telemetry(payload: Mapping[str, object]) -> list[str]:
@@ -468,67 +477,6 @@ def _sample_record(timestamp: str, record: Mapping[str, object]) -> str:
         f"cpu={float(host_map.get('cpu_percent', 0) or 0):.1f}% "
         f"udp_drops={udp_map.get('listener_drops', 0)}"
     )
-
-
-def _timestamp(value: object) -> str:
-    try:
-        return datetime.fromtimestamp(float(value), timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ",
-        )
-    except (OSError, TypeError, ValueError):
-        return "unknown-time"
-
-
-def _bytes(value: object) -> str:
-    amount = float(value or 0)
-    units = ("B", "KiB", "MiB", "GiB", "TiB")
-    for unit in units:
-        if abs(amount) < 1024 or unit == units[-1]:
-            return f"{amount:.1f} {unit}"
-        amount /= 1024
-    return "0.0 B"
-
-
-def _bitrate(value: object) -> str:
-    amount = float(value or 0)
-    units = ("bit/s", "Kbit/s", "Mbit/s", "Gbit/s")
-    for unit in units:
-        if abs(amount) < 1000 or unit == units[-1]:
-            return f"{amount:.1f} {unit}"
-        amount /= 1000
-    return "0.0 bit/s"
-
-
-def _percent(value: object) -> str:
-    return f"{float(value or 0) * 100:.1f}%"
-
-
-def _gauge(
-    report: Mapping[str, object],
-    metric: str,
-    statistic: str,
-) -> float:
-    gauges = report.get("gauges")
-    gauge_map = gauges if isinstance(gauges, Mapping) else {}
-    value = gauge_map.get(metric)
-    value_map = value if isinstance(value, Mapping) else {}
-    return float(value_map.get(statistic, 0) or 0)
-
-
-def _counter(report: Mapping[str, object], metric: str) -> float:
-    counters = report.get("counters")
-    counter_map = counters if isinstance(counters, Mapping) else {}
-    return float(counter_map.get(metric, 0) or 0)
-
-
-def _has_gauge(report: Mapping[str, object], metric: str) -> bool:
-    gauges = report.get("gauges")
-    return isinstance(gauges, Mapping) and metric in gauges
-
-
-def _short_id(value: object) -> str:
-    text = str(value or "-")
-    return text if len(text) <= 12 else text[-12:]
 
 
 __all__ = ["render_calls_telemetry", "render_calls_telemetry_record"]

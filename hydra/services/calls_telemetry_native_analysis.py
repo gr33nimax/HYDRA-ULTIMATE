@@ -356,6 +356,21 @@ def worker_path_retry_ratios(native: Mapping[str, object]) -> list[float]:
     return values
 
 
+def worker_path_backoffs(native: Mapping[str, object]) -> float:
+    total = 0.0
+    for entity in ("server_workers", "client_workers"):
+        records = native.get(entity, [])
+        if not isinstance(records, Sequence):
+            continue
+        total += sum(
+            _number(_mapping(record.get("counters")).get("worker_path_backoff_total"))
+            for record in records
+            if isinstance(record, Mapping)
+            and ("current" not in record or record.get("current"))
+        )
+    return total
+
+
 def _native_continuity(
     entities: Mapping[str, Sequence[Mapping[str, object]]],
 ) -> dict[str, object]:
@@ -482,5 +497,4 @@ def _summary_counter_total(
         for summary in summaries
     )
 
-
-__all__ = ["analyze_native", "worker_path_retry_ratios"]
+__all__ = ["analyze_native", "worker_path_backoffs", "worker_path_retry_ratios"]

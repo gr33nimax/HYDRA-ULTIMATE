@@ -12,6 +12,7 @@ from hydra.services.calls_telemetry_analysis_common import (
 )
 from hydra.services.calls_telemetry_native_analysis import (
     analyze_native,
+    worker_path_backoffs,
     worker_path_retry_ratios,
 )
 from hydra.services.calls_telemetry_native_contract import (
@@ -299,13 +300,7 @@ def _multipath_findings(
         )]
     retry_pressure = max(worker_path_retry_ratios(native), default=0.0)
     if adaptive and retry_pressure >= 0.1:
-        backoffs = sum(
-            _number(
-                _mapping(report.get("counters")).get("worker_path_backoff_total"),
-            )
-            for report in (*server_paths, *client_paths)
-        )
-        if backoffs > 0:
+        if worker_path_backoffs(native) > 0:
             return [_finding(
                 "warning",
                 "adaptive_path_pressure",
