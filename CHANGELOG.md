@@ -1,5 +1,11 @@
 # Changelog
 
+- Added adaptive VK path-controller telemetry and analysis for Hydracore
+  debug.7: per-worker delivered rate, window/in-flight occupancy and backoff
+  totals. Live `telemetry status` now shows a compact delivery/window view;
+  the detailed report retains wire, network, queue, reconnect and TURN data.
+  KCP pending saturation is evaluated against the runtime-reported adaptive
+  limit instead of a hard-coded 2048 segments.
 - Fixed adaptive VK telemetry ingestion: `multipath_*` session/process records
   are no longer rejected, so wire accounting and native coverage remain
   complete. Live status now hides historical sessions while the full report

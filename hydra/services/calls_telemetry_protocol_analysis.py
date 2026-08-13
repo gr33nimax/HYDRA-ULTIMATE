@@ -194,12 +194,19 @@ def protocol_findings(
         _entity_gauge_peak(native, "server_sessions", "kcp_wait_snd"),
     )
     wait_p95 = max(wait_p95, _client_gauge_peak(native, "kcp_wait_snd"))
-    if wait_p95 >= 1536:
+    pending_cap = max(
+        _number(_mapping(gauges.get("kcp_max_pending_segments")).get("p95")),
+        _entity_gauge_peak(native, "server_sessions", "kcp_max_pending_segments"),
+        _client_gauge_peak(native, "kcp_max_pending_segments"),
+    )
+    if pending_cap <= 0:
+        pending_cap = 2048
+    if wait_p95 >= 0.75 * pending_cap:
         findings.append(_finding(
             "warning",
             "kcp_send_window_saturated",
-            "KCP pending-send depth spent time near the current 2048-segment backpressure cap.",
-            "Measure RTT and retransmissions, then test a larger adaptive window or congestion-control strategy.",
+            f"KCP pending-send depth spent time near the current {pending_cap:.0f}-segment backpressure cap.",
+            "Compare per-path delivered rate, window/flight occupancy and backoffs before increasing the adaptive ceiling.",
         ))
     stale_sessions = [
         report
@@ -292,6 +299,19 @@ def _multipath_findings(
         )]
     retry_pressure = max(worker_path_retry_ratios(native), default=0.0)
     if adaptive and retry_pressure >= 0.1:
+        backoffs = sum(
+            _number(
+                _mapping(report.get("counters")).get("worker_path_backoff_total"),
+            )
+            for report in (*server_paths, *client_paths)
+        )
+        if backoffs > 0:
+            return [_finding(
+                "warning",
+                "adaptive_path_pressure",
+                "The adaptive controller reduced one or more VK path windows under sustained retry or queue pressure.",
+                "Compare delivered rate, window/flight occupancy and backoffs by side and TURN ordinal before changing the ceiling.",
+            )]
         return [_finding(
             "warning",
             "adaptive_path_pressure",

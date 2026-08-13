@@ -279,6 +279,21 @@ def _append_native_workers(
                 if not _has_gauge(report, "worker_path_retry_ratio"):
                     retry_pressure = _gauge(report, "worker_path_loss_ratio", "p95")
             path_rtt = _gauge(report, "worker_path_rtt_ms", "p95")
+            delivery = _gauge(report, "worker_path_delivery_rate_bps", "p95")
+            path_window = _gauge(report, "worker_path_window_segments", "p50")
+            path_flight = _gauge(report, "worker_path_inflight_segments", "p95")
+            backoffs = _counter(report, "worker_path_backoff_total")
+            delivery_text = (
+                _bitrate(delivery)
+                if _has_gauge(report, "worker_path_delivery_rate_bps")
+                else "-"
+            )
+            window_text = (
+                f"{path_window:.0f}/{path_flight:.0f}"
+                if _has_gauge(report, "worker_path_window_segments")
+                and _has_gauge(report, "worker_path_inflight_segments")
+                else "-"
+            )
             queue_delay = _gauge(report, "worker_output_queue_delay_ms", "p95")
             queue_late = _counter(report, "worker_output_queue_late_total")
             active = bool(report.get("active"))
@@ -287,6 +302,7 @@ def _append_native_workers(
                 + reconnects * 100
                 + max(loss, retry_pressure) * 100
                 + queue_late
+                + backoffs * 10
                 + (0 if active else 1)
             )
             row: list[object] = [
@@ -295,18 +311,45 @@ def _append_native_workers(
             ]
             if detailed:
                 row.append(_short_id(report.get("native_session_id")))
-            row.extend((
+            common = (
                 scalar(report.get("worker_id", "-")),
                 "yes" if active else "no",
-                _bitrate(report.get("wire_bps")),
-                _percent(loss),
-                _percent(retry_pressure),
-                f"{path_rtt:.0f} ms",
-                f"{queue_delay:.0f} ms/{scalar(round(queue_late, 1))}",
-                scalar(round(drops, 1)),
-                scalar(round(reconnects, 1)),
-                scalar(round(_gauge(report, "turn_selected_endpoint_ordinal", "p95"), 1)),
-            ))
+            )
+            if detailed:
+                row.extend(
+                    (
+                        *common,
+                        _bitrate(report.get("wire_bps")),
+                        delivery_text,
+                        _percent(loss),
+                        _percent(retry_pressure),
+                        window_text,
+                        f"{path_rtt:.0f} ms",
+                        f"{queue_delay:.0f} ms/{scalar(round(queue_late, 1))}",
+                        scalar(round(backoffs, 1)),
+                        scalar(round(drops, 1)),
+                        scalar(round(reconnects, 1)),
+                        scalar(round(
+                            _gauge(report, "turn_selected_endpoint_ordinal", "p95"),
+                            1,
+                        )),
+                    ),
+                )
+            else:
+                row.extend(
+                    (
+                        *common,
+                        delivery_text,
+                        _percent(retry_pressure),
+                        window_text,
+                        f"{path_rtt:.0f} ms",
+                        scalar(round(drops, 1)),
+                        scalar(round(
+                            _gauge(report, "turn_selected_endpoint_ordinal", "p95"),
+                            1,
+                        )),
+                    ),
+                )
             candidates.append((score, tuple(row)))
     if not candidates:
         return
@@ -315,10 +358,16 @@ def _append_native_workers(
     headers = ["Side", "Tester"]
     if detailed:
         headers.append("Session")
-    headers.extend((
-        "ID", "Active", "Wire avg", "Net loss", "Path retry", "Path RTT",
-        "Queue/late", "Drops", "Reconnect", "TURN #",
-    ))
+        headers.extend((
+            "ID", "Active", "Wire avg", "Delivered", "Net loss", "Path retry",
+            "Win/flight", "Path RTT", "Queue/late", "Backoff", "Drops",
+            "Reconnect", "TURN #",
+        ))
+    else:
+        headers.extend((
+            "ID", "Active", "Delivered", "Path retry", "Win/flight", "Path RTT",
+            "Drops", "TURN #",
+        ))
     lines.extend([
         "",
         "Workers" + ("" if detailed else f" (top {len(shown)} of {len(candidates)})"),

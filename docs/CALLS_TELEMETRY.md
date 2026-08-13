@@ -55,6 +55,15 @@ only as a compatibility alias for the EWMA. Live `status` hides
 historical sessions; `report` keeps them and prints the pseudonymous native
 session ID for each worker.
 
+Hydracore debug.7 also reports `worker_path_delivery_rate_bps`,
+`worker_path_window_segments`, `worker_path_inflight_segments` and
+`worker_path_backoff_total`. Live status renders delivered rate plus
+`Win/flight`; the detailed report adds the cumulative backoff count. These
+values show whether a particular VK call is carrying useful delivery, is full,
+or is being reduced by the controller. The reported `kcp_max_pending_segments`
+is dynamic in adaptive mode, so saturation is always evaluated against the
+limit active during that run rather than a fixed 2048-segment assumption.
+
 `tail --follow` завершается по `Ctrl+C` или после остановки сессии. `mark`
 принимает короткий ASCII slug и формирует независимые фазы отчёта. `report` и
 `export` не останавливают активную запись. Для старого эксперимента указывается
@@ -221,6 +230,17 @@ local/remote KCP windows без единого dynamic cwnd. Точный
 `worker_path_attempt_segments_total` устраняет ложную интерпретацию EWMA, а
 анализ KCP retransmit сравнивает только сегменты с сегментами, не байты с
 сегментами.
+
+Прогон debug.6 подтвердил, что снятие общего dynamic cwnd повышает пиковую
+скорость, но выявил следующий предел: KCP по-прежнему мог одновременно выпустить
+до 512 сегментов и накопить 2048 ожидающих, хотя четыре VK/TURN-пути не сообщали
+абсолютную доступную ёмкость. В debug.7 каждый звонок получает независимое окно
+доставки; чистые ACK увеличивают только его, а устойчивые повторы или локальная
+очередь уменьшают только проблемный путь. Общее KCP-окно и pending limit равны
+ограниченной сумме окон живых путей. Для четырёх звонков старт — 160 сегментов в
+полёте и 640 ожидающих; при здоровом канале окно растёт. Это целевой контроллер
+для повышения стабильности и движения к 20 Mbit/s, а не гарантия пропускной
+способности со стороны VK TURN.
 
 Для промежуточной проверки достаточно `status`; непрерывный поток доступен через
 `tail --follow`, полный итог — через `report` или `export`. Ни одна из этих команд

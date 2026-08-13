@@ -272,6 +272,52 @@ def test_protocol_findings_distinguish_legacy_reordering_from_adaptive_retries()
     assert "adaptive_path_pressure" in adaptive_codes
 
 
+def test_adaptive_findings_report_active_path_window_backoff() -> None:
+    native = {
+        "server": {"counters": {}, "gauges": {}},
+        "clients": {},
+        "server_sessions": [{
+            "current": True,
+            "gauges": {"multipath_profile": {"max": 1}},
+        }],
+        "client_sessions": [],
+        "server_workers": [{
+            "current": True,
+            "worker_path_retransmission_ratio": 0.2,
+            "gauges": {},
+            "counters": {"worker_path_backoff_total": 3},
+        }],
+        "client_workers": [],
+    }
+
+    findings = protocol_findings(native, {})
+    finding = next(item for item in findings if item["code"] == "adaptive_path_pressure")
+
+    assert "controller reduced" in finding["message"]
+    assert "window/flight" in finding["next_step"]
+
+
+def test_kcp_pending_saturation_uses_reported_adaptive_cap() -> None:
+    native = {
+        "server": {
+            "counters": {},
+            "gauges": {
+                "kcp_wait_snd": {"p95": 500},
+                "kcp_max_pending_segments": {"p95": 640},
+            },
+        },
+        "clients": {},
+        "server_sessions": [],
+        "client_sessions": [],
+    }
+
+    findings = protocol_findings(native, {})
+    finding = next(item for item in findings if item["code"] == "kcp_send_window_saturated")
+
+    assert "640-segment" in finding["message"]
+    assert "delivered rate" in finding["next_step"]
+
+
 def test_protocol_findings_do_not_mix_retransmit_bytes_with_segment_ratio() -> None:
     native = {
         "server": {

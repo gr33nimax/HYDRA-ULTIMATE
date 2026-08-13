@@ -302,8 +302,11 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
             "gauges": {
                 "worker_active": {"max": 1},
                 "worker_path_retry_ratio": {"p95": 0.5},
+                "worker_path_delivery_rate_bps": {"p95": 900_000},
+                "worker_path_window_segments": {"p50": 40},
+                "worker_path_inflight_segments": {"p95": 32},
             },
-            "counters": {},
+            "counters": {"worker_path_backoff_total": 2},
         },
     ]
     payload = {
@@ -328,10 +331,14 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
     assert "Path retry" in status
     assert "2.0%" in status
     assert "50.0%" not in status
+    assert "Delivered" in status
+    assert "900.0 Kbit/s" in status
+    assert "40/32" in status
     assert "Historical/inactive workers hidden: 1" in status
     assert "new-session" not in status
     assert "new-session" in report
     assert "old-session" in report
+    assert "Backoff" in report
 
 
 def test_tty_uses_human_output_while_json_flag_is_machine_stable(capsys):
