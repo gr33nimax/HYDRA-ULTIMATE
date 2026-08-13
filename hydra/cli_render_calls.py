@@ -280,13 +280,12 @@ def _append_native_workers(
             )
             reconnects = _counter(report, "worker_reconnect_total")
             loss = _gauge(report, "network_loss_ratio", "p95")
+            path_loss = _gauge(report, "worker_path_loss_ratio", "p95")
             exact_retry = report.get("worker_path_retransmission_ratio")
             if isinstance(exact_retry, (int, float)) and not isinstance(exact_retry, bool):
                 retry_pressure = float(exact_retry)
             else:
                 retry_pressure = _gauge(report, "worker_path_retry_ratio", "p95")
-                if not _has_gauge(report, "worker_path_retry_ratio"):
-                    retry_pressure = _gauge(report, "worker_path_loss_ratio", "p95")
             path_rtt = _gauge(report, "worker_path_rtt_ms", "p95")
             delivery = _gauge(report, "worker_path_delivery_rate_bps", "p95")
             path_window = _gauge(report, "worker_path_window_segments", "p50")
@@ -309,7 +308,7 @@ def _append_native_workers(
             score = (
                 drops * 1000
                 + reconnects * 100
-                + max(loss, retry_pressure) * 100
+                + max(loss, path_loss, retry_pressure) * 100
                 + queue_late
                 + backoffs * 10
                 + (0 if active else 1)
@@ -331,6 +330,7 @@ def _append_native_workers(
                         _bitrate(report.get("wire_bps")),
                         delivery_text,
                         _percent(loss),
+                        _percent(path_loss),
                         _percent(retry_pressure),
                         window_text,
                         f"{path_rtt:.0f} ms",
@@ -349,6 +349,7 @@ def _append_native_workers(
                     (
                         *common,
                         delivery_text,
+                        _percent(path_loss),
                         _percent(retry_pressure),
                         window_text,
                         f"{path_rtt:.0f} ms",
@@ -368,13 +369,14 @@ def _append_native_workers(
     if detailed:
         headers.append("Session")
         headers.extend((
-            "ID", "Active", "Wire avg", "Delivered", "Net loss", "Path retry",
+            "ID", "Active", "Wire avg", "Delivered", "Net loss", "Path loss",
+            "KCP retry",
             "Win/flight", "Path RTT", "Queue/late", "Backoff", "Drops",
             "Reconnect", "TURN #",
         ))
     else:
         headers.extend((
-            "ID", "Active", "Delivered", "Path retry", "Win/flight", "Path RTT",
+            "ID", "Active", "Delivered", "Path loss", "KCP retry", "Win/flight", "Path RTT",
             "Drops", "TURN #",
         ))
     lines.extend([
@@ -436,6 +438,8 @@ def render_calls_telemetry_record(
             "outer_bytes_in_total",
             "outer_bytes_out_total",
             "worker_send_queue_drops_total",
+            "worker_path_loss_ratio",
+            "worker_path_feedback_age_ms",
             "telemetry_record_drops_total",
         )
         preview = ", ".join(

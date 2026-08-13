@@ -42,6 +42,7 @@ def analyze_native(
             entities[entity].append(record)
 
     server_process = entities["server_process"]
+    server_processes = _group_entities(server_process)
     server_sessions = _group_entities(entities["server_session"])
     server_workers = _group_entities(entities["server_worker"])
     client_sessions = _group_entities(entities["client_session"])
@@ -155,6 +156,10 @@ def analyze_native(
         "missing_groups": missing_groups,
         "tester_coverage": tester_coverage,
         "server": _process_metric_summary(server_process),
+        "server_processes": _entity_reports(
+            server_processes,
+            require_active=False,
+        ),
         "clients": _client_metric_summaries(entities),
         "server_sessions": _entity_reports(server_sessions),
         "server_workers": _entity_reports(server_workers),
@@ -264,6 +269,8 @@ def _entity_reports(
         tuple[str, str, int | None],
         Sequence[Mapping[str, object]],
     ],
+    *,
+    require_active: bool = True,
 ) -> list[dict[str, object]]:
     reports: list[dict[str, object]] = []
     newest_timestamp = max(
@@ -284,12 +291,18 @@ def _entity_reports(
         first_timestamp = _number(ordered[0].get("timestamp"))
         last_timestamp = _number(ordered[-1].get("timestamp"))
         latest_metrics = _mapping(ordered[-1].get("metrics"))
+        recent_records = [
+            record
+            for record in ordered
+            if _number(record.get("timestamp")) >= last_timestamp - 10
+        ]
         active_metric = (
             "worker_active"
             if worker_id is not None or "session_active" not in latest_metrics
             else "session_active"
         )
         active = _number(latest_metrics.get(active_metric)) > 0
+        recent = last_timestamp >= newest_timestamp - 10
         duration = max(
             0.0,
             last_timestamp - first_timestamp,
@@ -309,10 +322,15 @@ def _entity_reports(
             "native_session_id": session_id,
             "worker_id": worker_id,
             "active": active,
-            "current": active and last_timestamp >= newest_timestamp - 10,
+            "recent": recent,
+            "current": recent and (active or not require_active),
             "first_timestamp": first_timestamp,
             "last_timestamp": last_timestamp,
             "samples": len(ordered),
+            "latest": dict(latest_metrics),
+            "recent_counters": dict(
+                _mapping(_metric_summary(recent_records).get("counters")),
+            ),
             **summary,
             "duration_seconds": round(duration, 3),
             "wire_bytes": round(wire_bytes, 3),
@@ -331,44 +349,6 @@ def _entity_reports(
             ),
         })
     return reports
-
-
-def worker_path_retry_ratios(native: Mapping[str, object]) -> list[float]:
-    values: list[float] = []
-    for entity in ("server_workers", "client_workers"):
-        records = native.get(entity, [])
-        if not isinstance(records, Sequence):
-            continue
-        for record in records:
-            if not isinstance(record, Mapping) or (
-                "current" in record and not record.get("current")
-            ):
-                continue
-            exact = record.get("worker_path_retransmission_ratio")
-            if exact is not None:
-                values.append(_number(exact))
-                continue
-            gauges = _mapping(record.get("gauges"))
-            metric = "worker_path_retry_ratio"
-            if metric not in gauges:
-                metric = "worker_path_loss_ratio"
-            values.append(_number(_mapping(gauges.get(metric)).get("p95")))
-    return values
-
-
-def worker_path_backoffs(native: Mapping[str, object]) -> float:
-    total = 0.0
-    for entity in ("server_workers", "client_workers"):
-        records = native.get(entity, [])
-        if not isinstance(records, Sequence):
-            continue
-        total += sum(
-            _number(_mapping(record.get("counters")).get("worker_path_backoff_total"))
-            for record in records
-            if isinstance(record, Mapping)
-            and ("current" not in record or record.get("current"))
-        )
-    return total
 
 
 def _native_continuity(
@@ -497,4 +477,4 @@ def _summary_counter_total(
         for summary in summaries
     )
 
-__all__ = ["analyze_native", "worker_path_backoffs", "worker_path_retry_ratios"]
+__all__ = ["analyze_native"]

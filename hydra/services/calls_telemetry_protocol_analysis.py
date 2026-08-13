@@ -10,11 +10,7 @@ from hydra.services.calls_telemetry_analysis_common import (
     _monotonic_series_delta,
     _number,
 )
-from hydra.services.calls_telemetry_native_analysis import (
-    analyze_native,
-    worker_path_backoffs,
-    worker_path_retry_ratios,
-)
+from hydra.services.calls_telemetry_native_analysis import analyze_native
 from hydra.services.calls_telemetry_native_contract import (
     CLIENT_REQUIRED,
     CLIENT_SESSION_REQUIRED,
@@ -24,6 +20,7 @@ from hydra.services.calls_telemetry_native_contract import (
     SERVER_SESSION_REQUIRED,
     SERVER_WORKER_REQUIRED,
 )
+from hydra.services.calls_telemetry_path_analysis import multipath_findings
 
 def analyze_kernel(samples: Sequence[Mapping[str, object]]) -> dict[str, object]:
     return {
@@ -118,9 +115,7 @@ def protocol_findings(
     kernel: Mapping[str, object],
 ) -> list[dict[str, str]]:
     findings = _continuity_findings(native)
-    server = _mapping(native.get("server"))
     counters = _combined_counters(native)
-    gauges = _mapping(server.get("gauges"))
     if _sum_matching(counters, ("queue_drops", "no_worker", "peer_queue")):
         findings.append(_finding(
             "critical",
@@ -150,7 +145,7 @@ def protocol_findings(
         for report in native.get("client_sessions", [])
         if isinstance(report, Mapping) and _current_or_unclassified(report)
     ]
-    findings.extend(_multipath_findings(
+    findings.extend(multipath_findings(
         native,
         retransmission_pressure,
         server_paths,
@@ -189,9 +184,14 @@ def protocol_findings(
             "Client-to-server KCP retransmission or server receive loss dominates the reverse direction.",
             "Compare server worker ingress and client TURN paths before tuning KCP congestion control and send windows.",
         ))
-    wait_p95 = max(_number(_mapping(gauges.get("kcp_wait_snd")).get("p95")), _entity_gauge_peak(native, "server_sessions", "kcp_wait_snd"), _client_gauge_peak(native, "kcp_wait_snd"))
+    wait_p95 = max(
+        _server_process_gauge_peak(native, "kcp_wait_snd"),
+        _entity_gauge_peak(native, "server_sessions", "kcp_wait_snd"),
+        _client_gauge_peak(native, "kcp_wait_snd"),
+    )
     pending_cap = max(
-        _number(_mapping(gauges.get("kcp_max_pending_segments")).get("p95")), _entity_gauge_peak(
+        _server_process_gauge_peak(native, "kcp_max_pending_segments"),
+        _entity_gauge_peak(
             native, "server_sessions", "kcp_max_pending_segments",
         ),
         _client_gauge_peak(native, "kcp_max_pending_segments"),
@@ -208,6 +208,7 @@ def protocol_findings(
         report
         for report in native.get("server_sessions", [])
         if isinstance(report, Mapping)
+        and ("recent" not in report or report.get("recent"))
         and _number(
             _mapping(_mapping(report.get("gauges")).get("worker_active")).get("max"),
         ) == 0
@@ -272,43 +273,6 @@ def protocol_findings(
             "Correlate it with the Calls listener and native UDP-ingress counters before attributing it to this tunnel.",
         ))
     return findings
-
-
-def _multipath_findings(
-    native: Mapping[str, object],
-    retransmission_pressure: bool,
-    server_paths: Sequence[Mapping[str, object]],
-    client_paths: Sequence[Mapping[str, object]],
-) -> list[dict[str, str]]:
-    adaptive = any(
-        _number(
-            _mapping(_mapping(report.get("gauges")).get("multipath_profile")).get("max"),
-        ) >= 0.5
-        for report in (*server_paths, *client_paths)
-    )
-    if retransmission_pressure and not adaptive:
-        return [_finding(
-            "warning",
-            "legacy_multipath_reordering",
-            "The run used packet-striped legacy multipath while KCP retransmissions were high.",
-            "Repeat the same marked workload with the adaptive profile; compare goodput, stalls, retransmissions and WaitSnd.",
-        )]
-    retry_pressure = max(worker_path_retry_ratios(native), default=0.0)
-    if adaptive and retry_pressure >= 0.1:
-        if worker_path_backoffs(native) > 0:
-            return [_finding(
-                "warning",
-                "adaptive_path_pressure",
-                "The adaptive controller reduced one or more VK path windows under sustained retry or queue pressure.",
-                "Compare delivered rate, window/flight occupancy and backoffs by side and TURN ordinal before changing the ceiling.",
-            )]
-        return [_finding(
-            "warning",
-            "adaptive_path_pressure",
-            "The adaptive scheduler observed sustained KCP retry pressure on at least one TURN path.",
-            "Compare network loss, path RTT and output queue delay before replacing or deprioritizing that path.",
-        )]
-    return []
 
 
 def _continuity_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
@@ -416,11 +380,23 @@ def _sum_matching(values: Mapping[str, object], fragments: Sequence[str]) -> flo
 
 def _combined_counters(native: Mapping[str, object]) -> dict[str, float]:
     combined: dict[str, float] = {}
-    summaries = [_mapping(native.get("server"))]
-    summaries.extend(
-        _mapping(summary)
-        for summary in _mapping(native.get("clients")).values()
-    )
+    modern = "server_processes" in native
+    if modern:
+        summaries = [
+            report
+            for entity in (
+                "server_processes",
+                "server_sessions",
+                "client_sessions",
+            )
+            for report in _current_reports(native, entity)
+        ]
+    else:
+        summaries = [_mapping(native.get("server"))]
+        summaries.extend(
+            _mapping(summary)
+            for summary in _mapping(native.get("clients")).values()
+        )
     for summary in summaries:
         for key, value in _mapping(summary.get("counters")).items():
             name = str(key)
@@ -429,6 +405,8 @@ def _combined_counters(native: Mapping[str, object]) -> dict[str, float]:
 
 
 def _client_gauge_peak(native: Mapping[str, object], key: str) -> float:
+    if "server_processes" in native:
+        return _entity_gauge_peak(native, "client_sessions", key)
     return max(
         (
             _number(
@@ -440,6 +418,33 @@ def _client_gauge_peak(native: Mapping[str, object], key: str) -> float:
         ),
         default=0.0,
     )
+
+
+def _server_process_gauge_peak(
+    native: Mapping[str, object],
+    key: str,
+) -> float:
+    if "server_processes" in native:
+        return _entity_gauge_peak(native, "server_processes", key)
+    return _number(
+        _mapping(
+            _mapping(_mapping(native.get("server")).get("gauges")).get(key),
+        ).get("p95"),
+    )
+
+
+def _current_reports(
+    native: Mapping[str, object],
+    entity: str,
+) -> list[Mapping[str, object]]:
+    records = native.get(entity, [])
+    if not isinstance(records, Sequence):
+        return []
+    return [
+        record
+        for record in records
+        if isinstance(record, Mapping) and _current_or_unclassified(record)
+    ]
 
 
 def _entity_gauge_peak(

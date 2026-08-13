@@ -501,17 +501,16 @@ sudo hydra uninstall --yes --keep-data
 
 ## Hydra VK Tunnel telemetry
 
-With the adaptive debug core, `status` shows only currently reporting transport
-sessions/workers and reports cumulative `Path retry` separately from
-authenticated `Net loss`. New cores derive it from path-attempt and
-retransmission counters; older cores fall back to the short-lived retry EWMA.
+With the paired adaptive debug core, `status` shows only currently reporting
+transport sessions/workers. `Path loss` is measured from physical packet
+feedback returned through the same VK/TURN call, `KCP retry` is the independent
+shared-KCP retransmission ratio, and `Net loss` is authenticated outer RTP loss.
 `Queue/late` is output-queue p95 delay plus the number of packets that waited at
 least two KCP update intervals. It exposes any regression that delays packets
 after KCP has started retransmission timing. `report` retains every historical
 session and adds its pseudonymous session ID so reconnects and profile switches
-remain auditable without cluttering the live view. The legacy core field
-`worker_path_loss_ratio` is accepted as a compatibility alias for retry EWMA;
-it must not be interpreted as physical TURN loss.
+remain auditable without cluttering the live view. Adaptive debug.9 must run on
+both the VPS and client; its physical feedback is a mandatory transport feature.
 
 Сессия для трёх заранее созданных пользователей запускается без таймера:
 

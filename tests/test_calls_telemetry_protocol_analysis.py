@@ -262,17 +262,28 @@ def test_protocol_findings_distinguish_legacy_reordering_from_adaptive_retries()
             "gauges": {"multipath_profile": {"max": 1}},
         }],
         "server_workers": [{
+            "latest": {
+                "worker_path_feedback_capable": 1,
+                "worker_path_feedback_age_ms": 10,
+                "worker_path_loss_ratio": 0.02,
+            },
+            "recent_counters": {
+                "worker_path_attempt_segments_total": 100,
+                "worker_path_retrans_segments_total": 20,
+                "worker_path_feedback_acked_packets_total": 90,
+            },
             "gauges": {"worker_path_retry_ratio": {"p95": 0.2}},
+            "counters": {},
         }],
     }
     adaptive_codes = {
         finding["code"] for finding in protocol_findings(adaptive, {})
     }
     assert "legacy_multipath_reordering" not in adaptive_codes
-    assert "adaptive_path_pressure" in adaptive_codes
+    assert "adaptive_kcp_retry_without_path_loss" in adaptive_codes
 
 
-def test_adaptive_findings_report_active_path_window_backoff() -> None:
+def test_adaptive_findings_report_measured_physical_path_backoff() -> None:
     native = {
         "server": {"counters": {}, "gauges": {}},
         "clients": {},
@@ -284,16 +295,32 @@ def test_adaptive_findings_report_active_path_window_backoff() -> None:
         "server_workers": [{
             "current": True,
             "worker_path_retransmission_ratio": 0.2,
-            "gauges": {},
+            "latest": {
+                "worker_path_feedback_capable": 1,
+                "worker_path_feedback_age_ms": 10,
+                "worker_path_loss_ratio": 0.2,
+            },
+            "recent_counters": {
+                "worker_path_attempt_segments_total": 100,
+                "worker_path_retrans_segments_total": 20,
+                "worker_path_feedback_acked_packets_total": 80,
+                "worker_path_feedback_lost_packets_total": 20,
+                "worker_path_backoff_total": 3,
+            },
+            "gauges": {"worker_path_loss_ratio": {"p95": 0.2}},
             "counters": {"worker_path_backoff_total": 3},
         }],
         "client_workers": [],
     }
 
     findings = protocol_findings(native, {})
-    finding = next(item for item in findings if item["code"] == "adaptive_path_pressure")
+    finding = next(
+        item
+        for item in findings
+        if item["code"] == "adaptive_physical_path_loss"
+    )
 
-    assert "controller reduced" in finding["message"]
+    assert "physical packet loss" in finding["message"]
     assert "window/flight" in finding["next_step"]
 
 
@@ -350,14 +377,25 @@ def test_exact_path_retry_ratio_overrides_short_lived_retry_ewma() -> None:
         "server_workers": [{
             "current": True,
             "worker_path_retransmission_ratio": 0.02,
+            "latest": {
+                "worker_path_feedback_capable": 1,
+                "worker_path_feedback_age_ms": 10,
+                "worker_path_loss_ratio": 0.01,
+            },
+            "recent_counters": {
+                "worker_path_attempt_segments_total": 100,
+                "worker_path_retrans_segments_total": 2,
+                "worker_path_feedback_acked_packets_total": 100,
+            },
             "gauges": {"worker_path_retry_ratio": {"p95": 0.8}},
+            "counters": {},
         }],
         "client_workers": [],
     }
 
     codes = {finding["code"] for finding in protocol_findings(native, {})}
 
-    assert "adaptive_path_pressure" not in codes
+    assert "adaptive_kcp_retry_without_path_loss" not in codes
 
 
 def test_mixed_core_workers_keep_retry_ewma_fallback() -> None:
@@ -372,17 +410,106 @@ def test_mixed_core_workers_keep_retry_ewma_fallback() -> None:
         "server_workers": [{
             "current": True,
             "worker_path_retransmission_ratio": 0.02,
+            "latest": {
+                "worker_path_feedback_capable": 1,
+                "worker_path_feedback_age_ms": 10,
+                "worker_path_loss_ratio": 0.01,
+            },
+            "recent_counters": {
+                "worker_path_attempt_segments_total": 100,
+                "worker_path_retrans_segments_total": 2,
+                "worker_path_feedback_acked_packets_total": 100,
+            },
             "gauges": {"worker_path_retry_ratio": {"p95": 0.8}},
+            "counters": {},
         }],
         "client_workers": [{
             "current": True,
+            "latest": {
+                "worker_path_feedback_capable": 1,
+                "worker_path_feedback_age_ms": 10,
+                "worker_path_loss_ratio": 0.01,
+            },
+            "recent_counters": {
+                "worker_path_attempt_segments_total": 100,
+                "worker_path_retrans_segments_total": 20,
+                "worker_path_feedback_acked_packets_total": 90,
+            },
             "gauges": {"worker_path_retry_ratio": {"p95": 0.2}},
+            "counters": {},
         }],
     }
 
     codes = {finding["code"] for finding in protocol_findings(native, {})}
 
-    assert "adaptive_path_pressure" in codes
+    assert "adaptive_kcp_retry_without_path_loss" in codes
+
+
+def test_adaptive_findings_require_fresh_physical_feedback() -> None:
+    native = {
+        "server": {"counters": {}, "gauges": {}},
+        "clients": {},
+        "server_sessions": [{
+            "current": True,
+            "gauges": {"multipath_profile": {"max": 1}},
+        }],
+        "client_sessions": [],
+        "server_workers": [{
+            "current": True,
+            "latest": {
+                "worker_path_feedback_capable": 1,
+                "worker_path_feedback_age_ms": 2_500,
+            },
+            "gauges": {},
+            "recent_counters": {
+                "worker_path_attempt_segments_total": 100,
+                "worker_path_feedback_acked_packets_total": 50,
+            },
+            "counters": {
+                "worker_path_attempt_segments_total": 100,
+                "worker_path_feedback_acked_packets_total": 50,
+            },
+        }],
+        "client_workers": [],
+    }
+
+    codes = {finding["code"] for finding in protocol_findings(native, {})}
+
+    assert "adaptive_path_feedback_missing" in codes
+
+
+def test_current_findings_ignore_historical_queue_drops() -> None:
+    native = {
+        "server": {
+            "counters": {
+                "worker_send_queue_drops_total": 100,
+                "worker_reconnect_total": 100,
+            },
+            "gauges": {},
+        },
+        "clients": {},
+        "server_processes": [{
+            "current": True,
+            "counters": {"udp_ingress_queue_drops_total": 0},
+            "gauges": {},
+        }],
+        "server_sessions": [{
+            "current": True,
+            "counters": {"worker_send_queue_drops_total": 0},
+            "gauges": {},
+        }],
+        "client_sessions": [],
+        "server_workers": [],
+        "client_workers": [],
+    }
+
+    codes = {finding["code"] for finding in protocol_findings(native, {})}
+    extended_codes = {
+        finding["code"] for finding in extended_native_findings(native)
+    }
+
+    assert "internal_queue_loss" not in codes
+    assert "worker_transport_instability" not in extended_codes
 
 
 def test_protocol_findings_detect_post_kcp_output_queue_delay() -> None:

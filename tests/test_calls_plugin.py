@@ -151,7 +151,7 @@ def test_calls_plugin_emits_exact_hydracore_multi_user_contract() -> None:
         "udp_send_buffer_bytes": 4 * 1024 * 1024,
         "ingress_workers": 0,
         "ingress_queue_packets": 4096,
-        "peer_read_queue_packets": 256,
+        "peer_read_queue_packets": 512,
     }
     outbound = json.loads(plugin.generate_client_config(state.users[0], state))["outbounds"][0]
     assert outbound["join_links"] == source.links

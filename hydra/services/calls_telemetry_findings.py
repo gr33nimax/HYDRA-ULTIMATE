@@ -1,7 +1,7 @@
 """Additional evidence-driven findings for the Hydracore Calls pipeline."""
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 
 def extended_native_findings(
@@ -65,10 +65,21 @@ def extended_native_findings(
 
 
 def _combined_counters(native: Mapping[str, object]) -> dict[str, float]:
-    summaries = [_mapping(native.get("server"))]
-    summaries.extend(
-        _mapping(value) for value in _mapping(native.get("clients")).values()
-    )
+    if "server_processes" in native:
+        summaries = [
+            report
+            for entity in (
+                "server_processes",
+                "server_sessions",
+                "client_sessions",
+            )
+            for report in _current_reports(native, entity)
+        ]
+    else:
+        summaries = [_mapping(native.get("server"))]
+        summaries.extend(
+            _mapping(value) for value in _mapping(native.get("clients")).values()
+        )
     counters: dict[str, float] = {}
     for summary in summaries:
         for key, value in _mapping(summary.get("counters")).items():
@@ -77,10 +88,21 @@ def _combined_counters(native: Mapping[str, object]) -> dict[str, float]:
 
 
 def _gauge_peak(native: Mapping[str, object], key: str) -> float:
-    summaries = [_mapping(native.get("server"))]
-    summaries.extend(
-        _mapping(value) for value in _mapping(native.get("clients")).values()
-    )
+    if "server_processes" in native:
+        summaries = [
+            report
+            for entity in (
+                "server_processes",
+                "server_sessions",
+                "client_sessions",
+            )
+            for report in _current_reports(native, entity)
+        ]
+    else:
+        summaries = [_mapping(native.get("server"))]
+        summaries.extend(
+            _mapping(value) for value in _mapping(native.get("clients")).values()
+        )
     return max(
         (
             _number(
@@ -90,6 +112,21 @@ def _gauge_peak(native: Mapping[str, object], key: str) -> float:
         ),
         default=0.0,
     )
+
+
+def _current_reports(
+    native: Mapping[str, object],
+    entity: str,
+) -> list[Mapping[str, object]]:
+    records = native.get(entity, [])
+    if not isinstance(records, Sequence):
+        return []
+    return [
+        record
+        for record in records
+        if isinstance(record, Mapping)
+        and ("current" not in record or bool(record.get("current")))
+    ]
 
 
 def _sum(counters: Mapping[str, object], *fragments: str) -> float:

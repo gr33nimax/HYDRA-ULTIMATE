@@ -1,6 +1,15 @@
 """Required metric groups for HydraCore VK tunnel telemetry."""
 from __future__ import annotations
 
+PATH_FEEDBACK_REQUIRED = (
+    "worker_path_feedback_capable",
+    "worker_path_feedback_age_ms",
+    "worker_path_feedback_records_total",
+    "worker_path_feedback_acked_packets_total",
+    "worker_path_feedback_lost_packets_total",
+    "worker_path_control_copies_total",
+)
+
 SERVER_PROCESS_REQUIRED = {
     "auth": ("auth_success_total", "auth_failure_total"),
     "dtls": (
@@ -109,6 +118,7 @@ SERVER_SESSION_REQUIRED = {
         "worker_path_retrans_segments_total",
         "worker_path_switches_total",
         "worker_path_backoff_total",
+        *PATH_FEEDBACK_REQUIRED,
         "worker_output_queue_delay_ms",
         "worker_output_queue_late_total",
     ),
@@ -153,6 +163,7 @@ SERVER_WORKER_REQUIRED = {
         "worker_path_retrans_segments_total",
         "worker_path_switches_total",
         "worker_path_backoff_total",
+        *PATH_FEEDBACK_REQUIRED,
         "worker_output_queue_delay_ms",
         "worker_output_queue_late_total",
     ),
@@ -213,6 +224,7 @@ CLIENT_WORKER_REQUIRED = {
         "worker_path_retrans_segments_total",
         "worker_path_switches_total",
         "worker_path_backoff_total",
+        *PATH_FEEDBACK_REQUIRED,
         "worker_output_queue_delay_ms",
         "worker_output_queue_late_total",
     ),
@@ -274,6 +286,7 @@ CLIENT_SESSION_REQUIRED = {
         "worker_path_retrans_segments_total",
         "worker_path_switches_total",
         "worker_path_backoff_total",
+        *PATH_FEEDBACK_REQUIRED,
         "worker_output_queue_delay_ms",
         "worker_output_queue_late_total",
     ),

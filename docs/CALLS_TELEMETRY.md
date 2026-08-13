@@ -43,25 +43,26 @@ sudo hydra calls telemetry export --output hydra-vk-tunnel.tar.gz
 sudo hydra calls telemetry stop
 ```
 
-Adaptive diagnostics separate three signals that must not be conflated:
-`network_loss_ratio` is authenticated outer RTP loss,
-the displayed `Path retry` is the cumulative ratio of failed path attempts,
-and
-`worker_output_queue_delay_ms` is local residence after KCP output. The
-short-lived `worker_path_retry_ratio` EWMA remains available to the scheduler;
-older cores without exact attempt counters fall back to that value. The
-`worker_path_loss_ratio` field from the first adaptive build remains accepted
-only as a compatibility alias for the EWMA. Live `status` hides
-historical sessions; `report` keeps them and prints the pseudonymous native
-session ID for each worker.
+Adaptive diagnostics separate four signals that must not be conflated:
+`network_loss_ratio` is authenticated outer RTP loss;
+`worker_path_loss_ratio` is physical datagram loss measured by selective
+feedback through that exact VK/TURN call; displayed `KCP retry` is the shared
+conversation's cumulative retransmission ratio; and
+`worker_output_queue_delay_ms` is local residence after KCP output.
+`worker_path_feedback_age_ms` plus acknowledged/lost packet counters show
+whether the path signal is fresh. Live `status` uses only current entities and
+the last ten seconds of path counters; `report` keeps the full historical
+session and its pseudonymous native session ID.
 
-Hydracore debug.7 also reports `worker_path_delivery_rate_bps`,
+Hydracore debug.9 also reports `worker_path_delivery_rate_bps`,
 `worker_path_window_segments`, `worker_path_inflight_segments` and
 `worker_path_backoff_total`. Live status renders delivered rate plus
 `Win/flight`; the detailed report adds the cumulative backoff count. These
-values show whether a particular VK call is carrying useful delivery, is full,
-or is being reduced by the controller. The reported `kcp_max_pending_segments`
-is dynamic in adaptive mode, so saturation is always evaluated against the
+values show whether one of the four VK calls is carrying useful delivery, is
+full, or is being reduced by direct physical loss. Ordinary KCP ACKs cannot
+change a path window. ACK/control segments follow their receiving call and are
+copied once to a second live call; data is not duplicated. The reported
+`kcp_max_pending_segments` is dynamic, so saturation is evaluated against the
 limit active during that run rather than a fixed 2048-segment assumption.
 
 `tail --follow` завершается по `Ctrl+C` или после остановки сессии. `mark`
@@ -212,7 +213,7 @@ native source сохраняются первый/последний snapshot и
 - чтение UDP отделено от unwrap/dispatch bounded ingress-очередью на 4096
   пакетов с автоматическим числом workers и отдельными depth/capacity/drop
   метриками; порядок пакетов одного peer сохраняется;
-- peer-read queue составляет 128 пакетов для неизменённого legacy и 256 для
+- peer-read queue составляет 128 пакетов для неизменённого legacy и 512 для
   adaptive, чтобы переживать измеренный краткий burst; worker-send queue — 512;
   `worker_send_queue_drops_total` теперь означает один реально потерянный KCP
   segment, а не число проверенных заполненных worker queues;

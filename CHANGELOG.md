@@ -1,5 +1,11 @@
 # Changelog
 
+- Added the paired Hydracore debug.9 four-call adaptive transport contract.
+  Every physical VK/TURN packet now has same-path selective feedback; path
+  loss, KCP retry, feedback freshness and control copies are reported as
+  separate signals. Live findings use current entities and recent counters,
+  so queue drops and backoffs from replaced sessions no longer contaminate the
+  active diagnosis. Adaptive peer-read queues default to 512 packets.
 - Added adaptive VK path-controller telemetry and analysis for Hydracore
   debug.7: per-worker delivered rate, window/in-flight occupancy and backoff
   totals. Live `telemetry status` now shows a compact delivery/window view;
