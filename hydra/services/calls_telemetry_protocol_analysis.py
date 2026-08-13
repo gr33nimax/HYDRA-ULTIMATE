@@ -204,26 +204,7 @@ def protocol_findings(
             f"KCP pending-send depth spent time near the current {pending_cap:.0f}-segment backpressure cap.",
             "Compare per-path delivered rate, window/flight occupancy and backoffs before increasing the adaptive ceiling.",
         ))
-    stale_sessions = [
-        report
-        for report in native.get("server_sessions", [])
-        if isinstance(report, Mapping)
-        and ("recent" not in report or report.get("recent"))
-        and _number(
-            _mapping(_mapping(report.get("gauges")).get("worker_active")).get("max"),
-        ) == 0
-        and _number(
-            _mapping(_mapping(report.get("gauges")).get("session_idle_seconds")).get("max"),
-        ) >= 30
-    ]
-    if stale_sessions:
-        findings.append(_finding(
-            "warning",
-            "stale_server_sessions",
-            "The server retained one or more sessions with no live worker for at least 30 seconds.",
-            "Use session IDs to verify idle reaping and exclude stale "
-            "sessions from transport comparisons.",
-        ))
+    findings.extend(_stale_server_session_findings(native))
     if _sum_matching(counters, ("dtls_handshake_failure", "turn_failure", "vk_auth_failure")):
         findings.append(_finding(
             "warning",
@@ -273,6 +254,34 @@ def protocol_findings(
             "Correlate it with the Calls listener and native UDP-ingress counters before attributing it to this tunnel.",
         ))
     return findings
+
+
+def _stale_server_session_findings(
+    native: Mapping[str, object],
+) -> list[dict[str, str]]:
+    stale = any(
+        isinstance(report, Mapping)
+        and ("recent" not in report or report.get("recent"))
+        and _number(
+            _mapping(_mapping(report.get("gauges")).get("worker_active")).get("max"),
+        ) == 0
+        and _number(
+            _mapping(
+                _mapping(report.get("gauges")).get("session_idle_seconds"),
+            ).get("max"),
+        ) >= 30
+        for report in native.get("server_sessions", [])
+    )
+    if not stale:
+        return []
+    return [_finding(
+        "warning",
+        "stale_server_sessions",
+        "The server retained one or more sessions with no live worker for at "
+        "least 30 seconds.",
+        "Use session IDs to verify idle reaping and exclude stale sessions "
+        "from transport comparisons.",
+    )]
 
 
 def _continuity_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
