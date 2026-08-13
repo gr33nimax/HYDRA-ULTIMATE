@@ -189,11 +189,7 @@ def protocol_findings(
             "Client-to-server KCP retransmission or server receive loss dominates the reverse direction.",
             "Compare server worker ingress and client TURN paths before tuning KCP congestion control and send windows.",
         ))
-    wait_p95 = max(
-        _number(_mapping(gauges.get("kcp_wait_snd")).get("p95")),
-        _entity_gauge_peak(native, "server_sessions", "kcp_wait_snd"),
-        _client_gauge_peak(native, "kcp_wait_snd"),
-    )
+    wait_p95 = max(_number(_mapping(gauges.get("kcp_wait_snd")).get("p95")), _entity_gauge_peak(native, "server_sessions", "kcp_wait_snd"), _client_gauge_peak(native, "kcp_wait_snd"))
     pending_cap = max(
         _number(_mapping(gauges.get("kcp_max_pending_segments")).get("p95")), _entity_gauge_peak(
             native, "server_sessions", "kcp_max_pending_segments",
