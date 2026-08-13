@@ -92,7 +92,7 @@ def test_calls_plugin_contract_and_native_fragment() -> None:
 def test_calls_plugin_disabled_is_empty_and_enabled_requires_secrets() -> None:
     plugin = CallsPlugin(Source([], ""))
     assert plugin.configure(_state(enabled=False)).inbounds == []
-    with pytest.raises(ValueError, match="vk_parasite"):
+    with pytest.raises(ValueError, match="parasite wire v4"):
         plugin.configure(_state())
 
 
