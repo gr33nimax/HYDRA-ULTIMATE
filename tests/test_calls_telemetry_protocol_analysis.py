@@ -264,6 +264,20 @@ def test_lane_findings_require_all_four_independent_kcp_lanes() -> None:
     assert "four_lane_session_incomplete" in codes
 
 
+def test_lane_findings_report_bounded_session_recovery_events() -> None:
+    native = {
+        "events": {
+            "lane_send_stalled": 1,
+            "lane_reorder_timeout": 1,
+        },
+    }
+
+    codes = {finding["code"] for finding in protocol_findings(native, {})}
+
+    assert "lane_send_stall_recovery" in codes
+    assert "lane_reorder_timeout_recovery" in codes
+
+
 def test_lane_findings_isolate_retransmission_imbalance() -> None:
     native = {
         "server": {"counters": {}, "gauges": {}},

@@ -9,6 +9,22 @@ from hydra.services.calls_telemetry_analysis_common import _mapping, _number
 def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
     workers = _current_workers(native)
     findings: list[dict[str, str]] = []
+    events = _mapping(native.get("events"))
+
+    if _number(events.get("lane_send_stalled")):
+        findings.append(_finding(
+            "critical",
+            "lane_send_stall_recovery",
+            "Hydracore closed a logical session after all four KCP lanes stopped accepting sends.",
+            "Compare the preceding per-lane WaitSnd, output queues, retransmissions and worker reconnects; verify that a fresh session resumed traffic.",
+        ))
+    if _number(events.get("lane_reorder_timeout")):
+        findings.append(_finding(
+            "critical",
+            "lane_reorder_timeout_recovery",
+            "Hydracore closed a logical session because a per-flow lane sequence gap did not recover.",
+            "Inspect the missing flow's lane loss and reconnect boundary, then verify that the replacement session resumed without an application restart.",
+        ))
 
     active_by_session: dict[tuple[str, str, str], set[int]] = {}
     for side, entity in (("server", "server_workers"), ("client", "client_workers")):
