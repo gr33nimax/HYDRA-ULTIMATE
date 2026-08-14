@@ -3,7 +3,8 @@
 - Added the intentionally incompatible Hydracore debug.13 wire-v5 contract:
   eight independent KCP lanes, per-lane pre-KCP admission, bounded relay byte
   credit and video-class RTP payload type 96. Calls state schema 13 migrates
-  existing four-lane configuration to eight lanes.
+  existing four-lane configuration to eight lanes and quiesces enabled Calls
+  until the operator switches both sides to the incompatible wire v5 runtime.
 - Telemetry now requires and displays each lane's admission pace and RTP
   payload type, reports incomplete lane sets against IDs 0..7, and keeps all
   current client/server lanes visible in live status.

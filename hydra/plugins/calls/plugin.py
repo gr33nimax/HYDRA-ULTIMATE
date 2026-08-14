@@ -197,7 +197,7 @@ class CallsPlugin(BasePlugin):
         healthy = all(checks.values())
         return HealthResult(
             healthy,
-            "" if healthy else "native VK Calls four-lane prerequisites are not ready",
+            "" if healthy else "native VK Calls eight-lane prerequisites are not ready",
             "ok" if healthy else "error",
             checks,
         )

@@ -253,7 +253,7 @@ hydra check
 
 ## Схема state и миграции
 
-В текущей ветке `dev` актуальна схема **11**. Миграция `v5 → v6` резервирует
+В текущей ветке `debug` актуальна схема **13**. Миграция `v5 → v6` резервирует
 приватный per-user JWE key. Ступень `v6 → v7` сохраняет совместимость legacy VK
 creator через промежуточный Calls layout, а `v7 → v8` переносит его desired
 state в `headless_creator.providers.vk` и maintenance-флаг в
@@ -269,6 +269,10 @@ installed-флаг, остальные протоколы и host runtime сох
 первый общий apply после upgrade не требует отсутствующего room pool. Переход
 на Hydracore выполняется только явной `sudo hydra kernel switch hydracore` после
 backup; последующая переустановка Calls создаёт managed-пул 1–4 комнат.
+Ступень `v11 → v12` фиксирует четыре lane и wire v4. Несовместимая ступень
+`v12 → v13` сохраняет комнаты и installed state, но выключает активный Calls
+перед общим apply, затем выбирает восемь lane и wire v5. После upgrade оператор
+явно переключает Hydracore debug.13 и повторно включает сохранённый Calls.
 
 Обновление подписочного renderer не меняет state schema и повторно использует
 существующий per-user A256GCM key, но wire contract несовместим с HydraBox v1.

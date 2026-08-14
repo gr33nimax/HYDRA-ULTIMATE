@@ -407,7 +407,7 @@ TLS-маршруты проверяются отдельно, потому чт�
 
 ### Цепочка миграций
 
-В текущей ветке `dev` актуальна схема 8. Миграция — последовательность чистых функций; каждая
+В текущей ветке `debug` актуальна схема 13. Миграция — последовательность чистых функций; каждая
 ступень проверяется отдельно, а запись всей цепочки выполняется атомарно.
 
 ```text
@@ -663,8 +663,10 @@ preflight. Schema 11 нормализует любой legacy/unknown Calls mode
 несовместимый enabled Calls (включая stock core) выключается без удаления
 installed state, поэтому upgrade/apply остальных протоколов остаётся доступен.
 Schema 12 фиксирует четыре worker и wire v4, удаляя старый профиль транспорта.
-Schema 13 выбирает восемь независимых KCP lane и строгий wire v5 с admission
-до KCP и flow-credit на TCP relay.
+Schema 13 выключает активный wire-v4 Calls перед общим apply, выбирает восемь
+независимых KCP lane и строгий wire v5 с admission до KCP и flow-credit на TCP
+relay. Комнаты и installed state сохраняются для явного переключения ядра и
+повторного включения Calls.
 Повторная установка после switch на Hydracore создаёт новый managed-пул.
 `ApplicationService.kernel` — единственный use-case замены core:
 trusted release metadata и обязательный SHA-256 digest проверяются до ELF,

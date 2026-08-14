@@ -213,7 +213,7 @@ def test_v12_to_v13_selects_exact_eight_lane_contract() -> None:
     migrated = migrate_v12_to_v13(source)
 
     assert migrated["version"] == 13
-    assert migrated["protocols"]["calls"]["enabled"] is True
+    assert migrated["protocols"]["calls"]["enabled"] is False
     assert migrated["protocols"]["calls"]["config"] == {
         "mode": "vk_parasite",
         "workers": 8,
