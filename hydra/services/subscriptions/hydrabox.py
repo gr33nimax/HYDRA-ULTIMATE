@@ -267,9 +267,7 @@ def _validate_envelope_identity(user: User, state: AppState) -> int:
         or not 0 <= state.revision <= _MAX_STATE_REVISION
     ):
         raise ValueError("invalid HydraBox sequence")
-    return (
-        state.revision << _PAYLOAD_REVISION_BITS
-    ) | _HYDRABOX_PAYLOAD_REVISION
+    return (state.revision << _PAYLOAD_REVISION_BITS) | _HYDRABOX_PAYLOAD_REVISION
 
 
 def generate_hydrabox_subscription(
