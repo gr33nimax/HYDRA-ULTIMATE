@@ -12,6 +12,7 @@ from hydra.contracts.calls_configuration import (
     DEFAULT_CALL_PORT,
     DEFAULT_ROOM_COUNT,
     MAX_JOIN_LINKS,
+    MAX_WORKERS,
     call_mode,
     vk_parasite_outbound,
     public_endpoint,
@@ -155,7 +156,7 @@ class CallsService:
             return failed_result(
                 RuntimeError(
                     "installed Hydracore does not expose the exact "
-                    "call_vk_parasite wire-v4 capability contract"
+                    "call_vk_parasite wire-v5 capability contract"
                 ),
                 fallback=ErrorCode.OPERATION_FAILED,
             )
@@ -183,8 +184,8 @@ class CallsService:
                 "room_count": count,
                 "listen_port": desired.config.get("listen_port", DEFAULT_CALL_PORT),
                 "max_sessions_per_user": desired.config.get("max_sessions_per_user", 1),
-                "max_workers_per_session": 4,
-                "workers": 4,
+                "max_workers_per_session": MAX_WORKERS,
+                "workers": MAX_WORKERS,
                 "public_endpoint": public_endpoint(state, public_ip),
             })
             desired.config.pop("read_buffer", None)

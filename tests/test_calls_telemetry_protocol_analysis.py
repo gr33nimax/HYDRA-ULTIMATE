@@ -236,7 +236,7 @@ def test_negligible_outer_auth_noise_is_not_reported_as_critical() -> None:
     assert "outer_packet_authentication_failures" not in codes
 
 
-def test_lane_findings_require_all_four_independent_kcp_lanes() -> None:
+def test_lane_findings_require_all_eight_independent_kcp_lanes() -> None:
     native = {
         "server": {"counters": {}, "gauges": {}},
         "clients": {},
@@ -254,14 +254,14 @@ def test_lane_findings_require_all_four_independent_kcp_lanes() -> None:
                 "gauges": {"kcp_rtt_ms": {"p95": 50}},
                 "counters": {},
             }
-            for lane in range(3)
+            for lane in range(7)
         ],
         "client_workers": [],
     }
 
     codes = {finding["code"] for finding in protocol_findings(native, {})}
 
-    assert "four_lane_session_incomplete" in codes
+    assert "eight_lane_session_incomplete" in codes
 
 
 def test_lane_findings_report_bounded_session_recovery_events() -> None:

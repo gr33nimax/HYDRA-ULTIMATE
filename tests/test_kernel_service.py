@@ -96,14 +96,16 @@ def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
         "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
         "features": {
             "call_vk_parasite": True,
-            "call_vk_four_lane_kcp": True,
+            "call_vk_eight_lane_kcp": True,
+            "call_vk_pre_kcp_admission": True,
+            "call_vk_relay_flow_control": True,
             "call_vk_parasite_client": False,
             "call_vk_parasite_server": True,
             "call_vk_telemetry": True,
         },
         "protocols": {
             "call_modes": ["vk_parasite"],
-            "call_vk_parasite_wire": {"min": 4, "max": 4},
+            "call_vk_parasite_wire": {"min": 5, "max": 5},
         },
     }
     alias = {
@@ -120,7 +122,7 @@ def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
         },
         "protocols": {
             "call_modes": ["p2p"],
-            "call_vk_parasite_wire": {"min": 4, "max": 4},
+            "call_vk_parasite_wire": {"min": 5, "max": 5},
         },
     }
 
@@ -137,14 +139,16 @@ def test_hydracore_debug_contract_requires_native_telemetry() -> None:
         "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
         "features": {
             "call_vk_parasite": True,
-            "call_vk_four_lane_kcp": True,
+            "call_vk_eight_lane_kcp": True,
+            "call_vk_pre_kcp_admission": True,
+            "call_vk_relay_flow_control": True,
             "call_vk_parasite_client": False,
             "call_vk_parasite_server": True,
             "call_vk_telemetry": False,
         },
         "protocols": {
             "call_modes": ["vk_parasite"],
-            "call_vk_parasite_wire": {"min": 4, "max": 4},
+            "call_vk_parasite_wire": {"min": 5, "max": 5},
         },
     }
 

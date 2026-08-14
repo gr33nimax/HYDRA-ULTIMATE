@@ -16,6 +16,7 @@ from hydra.core.state_migrations import (
     migrate_v9_to_v10,
     migrate_v10_to_v11,
     migrate_v11_to_v12,
+    migrate_v12_to_v13,
 )
 from hydra.core.state_models import UnsupportedStateVersion, validate_supported_version
 
@@ -69,8 +70,10 @@ def test_v6_to_v7_moves_creator_desired_state_without_native_auto_enable() -> No
 def test_v6_to_v7_is_idempotent() -> None:
     once = migrate_v6_to_v7(_v6())
     assert migrate_v6_to_v7(once) == once
-    assert migrate_state(_v6(), 6) == migrate_v11_to_v12(migrate_v10_to_v11(
-        migrate_v9_to_v10(migrate_v8_to_v9(migrate_v7_to_v8(once))),
+    assert migrate_state(_v6(), 6) == migrate_v12_to_v13(migrate_v11_to_v12(
+        migrate_v10_to_v11(
+            migrate_v9_to_v10(migrate_v8_to_v9(migrate_v7_to_v8(once))),
+        ),
     ))
 
 
@@ -191,6 +194,34 @@ def test_v11_to_v12_selects_exact_four_lane_contract() -> None:
     assert migrate_v11_to_v12(migrated) == migrated
 
 
+def test_v12_to_v13_selects_exact_eight_lane_contract() -> None:
+    source = {
+        "version": 12,
+        "protocols": {
+            "calls": {
+                "installed": True,
+                "enabled": True,
+                "config": {
+                    "mode": "vk_parasite",
+                    "workers": 4,
+                    "max_workers_per_session": 4,
+                },
+            },
+        },
+    }
+
+    migrated = migrate_v12_to_v13(source)
+
+    assert migrated["version"] == 13
+    assert migrated["protocols"]["calls"]["enabled"] is True
+    assert migrated["protocols"]["calls"]["config"] == {
+        "mode": "vk_parasite",
+        "workers": 8,
+        "max_workers_per_session": 8,
+    }
+    assert migrate_v12_to_v13(migrated) == migrated
+
+
 def test_v10_calls_fixture_is_atomically_disabled_and_idempotent(
     tmp_path,
     monkeypatch,
@@ -206,25 +237,25 @@ def test_v10_calls_fixture_is_atomically_disabled_and_idempotent(
     second = state_module.migrate_persisted_state()
     loaded = state_module.load_state()
 
-    assert first == {"from": 10, "to": 12, "changed": True}
-    assert second == {"from": 12, "to": 12, "changed": False}
+    assert first == {"from": 10, "to": 13, "changed": True}
+    assert second == {"from": 13, "to": 13, "changed": False}
     assert state_file.read_bytes() == migrated_bytes
     assert loaded.revision == 42
     assert loaded.protocols["calls"].installed is True
     assert loaded.protocols["calls"].enabled is False
     assert loaded.protocols["calls"].config == {
         "mode": "vk_parasite",
-        "workers": 4,
-        "max_workers_per_session": 4,
+        "workers": 8,
+        "max_workers_per_session": 8,
     }
     assert loaded.protocols["vless"].enabled is True
     assert loaded.install["preserved_upgrade_marker"] == "keep"
     assert state_file.with_suffix(".json.bak").is_file()
 
 
-def test_future_schema_is_rejected_after_v12() -> None:
+def test_future_schema_is_rejected_after_v13() -> None:
     with pytest.raises(UnsupportedStateVersion):
-        validate_supported_version({"version": 13})
+        validate_supported_version({"version": 14})
 
 
 def test_migrated_state_is_json_serializable_without_secret_artifacts() -> None:

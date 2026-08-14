@@ -92,7 +92,7 @@ def test_calls_plugin_contract_and_native_fragment() -> None:
 def test_calls_plugin_disabled_is_empty_and_enabled_requires_secrets() -> None:
     plugin = CallsPlugin(Source([], ""))
     assert plugin.configure(_state(enabled=False)).inbounds == []
-    with pytest.raises(ValueError, match="parasite wire v4"):
+    with pytest.raises(ValueError, match="parasite wire v5"):
         plugin.configure(_state())
 
 
@@ -120,7 +120,7 @@ def test_calls_plugin_emits_exact_hydracore_vk_parasite_contract() -> None:
             "mode": "vk_parasite",
             "listen_port": 56002,
             "obfs_password": "o" * 43,
-            "workers": 4,
+            "workers": 8,
         })},
     )
     state.network.server_ip = "203.0.113.10"
@@ -141,7 +141,7 @@ def test_calls_plugin_emits_exact_hydracore_vk_parasite_contract() -> None:
             "max_sessions": 1,
         }],
         "max_sessions": 128,
-        "max_workers_per_session": 4,
+        "max_workers_per_session": 8,
         "max_pending_handshakes": 256,
         "handshake_timeout": "10s",
         "session_idle_timeout": "5m",
@@ -155,7 +155,7 @@ def test_calls_plugin_emits_exact_hydracore_vk_parasite_contract() -> None:
     assert outbound["join_links"] == source.links
     assert outbound["server"] == "203.0.113.10"
     assert outbound["server_port"] == 56002
-    assert outbound["workers"] == 4
+    assert outbound["workers"] == 8
     assert outbound["worker_connect_timeout"] == "15s"
     assert "cookies" not in inbound and "join_link" not in inbound
     assert "join_link" not in outbound
@@ -206,7 +206,7 @@ def test_calls_client_rejects_a_url_as_public_endpoint() -> None:
         CallsPlugin(source).generate_client_config(state.users[0], state)
 
 
-def test_calls_vk_parasite_normalizes_links_and_requires_four_workers() -> None:
+def test_calls_vk_parasite_normalizes_links_and_requires_eight_workers() -> None:
     source = Source(
         [],
         "",
@@ -219,26 +219,26 @@ def test_calls_vk_parasite_normalizes_links_and_requires_four_workers() -> None:
             "mode": "vk_parasite",
             "obfs_password": "o" * 43,
             "workers": 3,
-            "max_workers_per_session": 4,
+            "max_workers_per_session": 8,
         })},
     )
     state.network.server_ip = "203.0.113.10"
 
-    with pytest.raises(ValueError, match="workers.*between 4 and 4"):
+    with pytest.raises(ValueError, match="workers.*between 8 and 8"):
         CallsPlugin(source).generate_client_config(state.users[0], state)
 
     del state.protocols["calls"].config["workers"]
     default_outbound = json.loads(
         CallsPlugin(source).generate_client_config(state.users[0], state),
     )["outbounds"][0]
-    assert default_outbound["workers"] == 4
+    assert default_outbound["workers"] == 8
 
-    state.protocols["calls"].config["workers"] = 4
+    state.protocols["calls"].config["workers"] = 8
     outbound = json.loads(
         CallsPlugin(source).generate_client_config(state.users[0], state),
     )["outbounds"][0]
     assert outbound["join_links"] == ["https://vk.com/call/join/one"]
-    assert outbound["workers"] == 4
+    assert outbound["workers"] == 8
 
 
 def test_calls_vk_parasite_rejects_duplicate_links() -> None:
@@ -339,7 +339,7 @@ def test_calls_vk_parasite_normalizes_shared_obfs_password() -> None:
     assert outbound["obfs_password"] == inbound["obfs_password"]
 
 
-def test_calls_vk_parasite_rejects_session_cap_below_four() -> None:
+def test_calls_vk_parasite_rejects_session_cap_below_eight() -> None:
     source = Source(
         [],
         "",
@@ -356,7 +356,7 @@ def test_calls_vk_parasite_rejects_session_cap_below_four() -> None:
     )
     state.network.server_ip = "203.0.113.10"
 
-    with pytest.raises(ValueError, match="max_workers_per_session.*between 4 and 4"):
+    with pytest.raises(ValueError, match="max_workers_per_session.*between 8 and 8"):
         CallsPlugin(source).generate_client_config(state.users[0], state)
 
 

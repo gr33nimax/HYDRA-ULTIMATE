@@ -46,4 +46,21 @@ def migrate_v11_to_v12(data: dict) -> dict:
     return migrated
 
 
-__all__ = ["migrate_v10_to_v11", "migrate_v11_to_v12"]
+def migrate_v12_to_v13(data: dict) -> dict:
+    """Select the eight-lane wire-v5 Calls contract in persisted state."""
+    migrated = copy.deepcopy(data)
+    protocols = migrated.get("protocols", {})
+    calls = protocols.get("calls", {}) if isinstance(protocols, dict) else {}
+    if isinstance(calls, dict):
+        config = calls.setdefault("config", {})
+        if isinstance(config, dict):
+            config["mode"] = "vk_parasite"
+            config["workers"] = 8
+            config["max_workers_per_session"] = 8
+            config.pop("multipath_profile", None)
+            config.pop("read_buffer", None)
+    migrated["version"] = 13
+    return migrated
+
+
+__all__ = ["migrate_v10_to_v11", "migrate_v11_to_v12", "migrate_v12_to_v13"]

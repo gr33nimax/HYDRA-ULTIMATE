@@ -1,5 +1,13 @@
 # Changelog
 
+- Added the intentionally incompatible Hydracore debug.13 wire-v5 contract:
+  eight independent KCP lanes, per-lane pre-KCP admission, bounded relay byte
+  credit and video-class RTP payload type 96. Calls state schema 13 migrates
+  existing four-lane configuration to eight lanes.
+- Telemetry now requires and displays each lane's admission pace and RTP
+  payload type, reports incomplete lane sets against IDs 0..7, and keeps all
+  current client/server lanes visible in live status.
+
 - Added the Hydracore debug.11 `vk_parasite` wire-v4 contract: exactly four
   independent KCP lanes, per-flow distribution with bounded receive reordering,
   and per-lane RTT/RTO, WaitSnd, retransmission, queue and flow telemetry. The

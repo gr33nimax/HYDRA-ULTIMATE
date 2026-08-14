@@ -10,7 +10,7 @@ DEFAULT_CALL_PORT = 56002
 DEFAULT_ROOM_COUNT = 4
 DEFAULT_PEER_READ_QUEUE_PACKETS = 512
 MAX_JOIN_LINKS = 4
-MAX_WORKERS = 4
+MAX_WORKERS = 8
 
 
 class CallsProtocolState(Protocol):
@@ -177,7 +177,7 @@ def vk_parasite_inbound(
         "max_workers_per_session": _integer(
             config,
             "max_workers_per_session",
-            4,
+            MAX_WORKERS,
             MAX_WORKERS,
             MAX_WORKERS,
         ),

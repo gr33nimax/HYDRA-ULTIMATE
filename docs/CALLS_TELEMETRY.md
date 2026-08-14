@@ -45,17 +45,17 @@ sudo hydra calls telemetry export --output hydra-vk-tunnel.tar.gz
 sudo hydra calls telemetry stop
 ```
 
-Hydracore debug.11 exposes four independent KCP lanes, one for every VK/TURN
+Hydracore debug.13 exposes eight independent KCP lanes, one for every VK/TURN
 call. `status` and `report` show per-lane wire rate, active flow count,
 `kcp_wait_snd`, RTT/RTO, cumulative KCP retransmission ratio, network loss,
 output-queue delay/drops, reconnects and TURN ordinal. Session rows contain the
-bounded aggregate of the four lane windows and pending limits.
+bounded aggregate of the eight lane windows and pending limits.
 
 The signals are deliberately separated: `network_loss_ratio` describes the
 authenticated outer stream, KCP retransmission belongs only to that lane, and
 `worker_output_queue_delay_ms` measures local residence after KCP output. This
 allows a weak TURN call to be diagnosed and later reduced or quarantined
-without penalising the other three. Live `status` uses only current entities;
+without penalising the other seven. Live `status` uses only current entities;
 `report` retains historical sessions under pseudonymous native session IDs.
 
 `tail --follow` завершается по `Ctrl+C` или после остановки сессии. `mark`

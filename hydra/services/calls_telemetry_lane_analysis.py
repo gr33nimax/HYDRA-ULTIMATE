@@ -1,4 +1,4 @@
-"""Findings for the four independent VK parasite KCP lanes."""
+"""Findings for the eight independent VK parasite KCP lanes."""
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -15,15 +15,20 @@ def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
         findings.append(_finding(
             "critical",
             "lane_send_stall_recovery",
-            "Hydracore closed a logical session after all four KCP lanes stopped accepting sends.",
-            "Compare the preceding per-lane WaitSnd, output queues, retransmissions and worker reconnects; verify that a fresh session resumed traffic.",
+            "Hydracore closed a logical session after all eight KCP lanes stopped accepting sends.",
+            "Compare the preceding per-lane WaitSnd, output queues, "
+            "retransmissions and worker reconnects; verify that a fresh "
+            "session resumed traffic.",
         ))
     if _number(events.get("lane_reorder_timeout")):
         findings.append(_finding(
             "critical",
             "lane_reorder_timeout_recovery",
-            "Hydracore closed a logical session because a per-flow lane sequence gap did not recover.",
-            "Inspect the missing flow's lane loss and reconnect boundary, then verify that the replacement session resumed without an application restart.",
+            "Hydracore closed a logical session because a per-flow lane "
+            "sequence gap did not recover.",
+            "Inspect the missing flow's lane loss and reconnect boundary, "
+            "then verify that the replacement session resumed without an "
+            "application restart.",
         ))
 
     active_by_session: dict[tuple[str, str, str], set[int]] = {}
@@ -45,14 +50,15 @@ def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
             active_by_session.setdefault(key, set()).add(worker_id)
     incomplete = [
         key for key, lane_ids in active_by_session.items()
-        if lane_ids != {0, 1, 2, 3}
+        if lane_ids != set(range(8))
     ]
     if incomplete:
         findings.append(_finding(
             "critical",
-            "four_lane_session_incomplete",
-            "An active VK parasite session did not have all four independent KCP lanes.",
-            "Compare worker attach/reconnect events by tester and lane; do not tune KCP until lanes 0..3 stay active.",
+            "eight_lane_session_incomplete",
+            "An active VK parasite session did not have all eight independent KCP lanes.",
+            "Compare worker attach/reconnect events by tester and lane; do "
+            "not tune KCP until lanes 0..7 stay active.",
         ))
 
     carrying = [
@@ -69,7 +75,8 @@ def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
             "warning",
             "lane_kcp_imbalance",
             "One independent KCP lane retransmitted materially more than the other VK calls.",
-            "Compare that lane's TURN ordinal, RTT, WaitSnd and output queue; quarantine or reduce only the degraded lane.",
+            "Compare that lane's TURN ordinal, RTT, WaitSnd and output "
+            "queue; quarantine or reduce only the degraded lane.",
         ))
 
     rtts = [
@@ -81,8 +88,28 @@ def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
         findings.append(_finding(
             "warning",
             "lane_rtt_imbalance",
-            "The four VK/TURN lanes had materially different KCP RTT.",
-            "Prefer low-RTT lanes for new frames and keep the slow lane as reduced-capacity or standby.",
+            "The eight VK/TURN lanes had materially different KCP RTT.",
+            "Prefer low-RTT lanes for new frames and keep the slow lane as "
+            "reduced-capacity or standby.",
+        ))
+    admission_rates = [
+        _gauge(report, "lane_admission_bytes_per_second", "p95")
+        for report in carrying
+        if _gauge(report, "lane_admission_bytes_per_second", "p95") > 0
+    ]
+    if (
+        admission_rates
+        and min(admission_rates) <= 110_000
+        and ratios
+        and max(ratios) >= 0.1
+    ):
+        findings.append(_finding(
+            "warning",
+            "lane_admission_backoff",
+            "The pre-KCP controller reduced at least one lane close to its "
+            "minimum rate under retry pressure.",
+            "Compare that lane's TURN ordinal, physical loss and KCP retries; "
+            "replace the path instead of increasing its KCP window.",
         ))
     return findings
 

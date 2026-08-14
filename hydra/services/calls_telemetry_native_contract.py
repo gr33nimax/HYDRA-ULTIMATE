@@ -24,6 +24,8 @@ KCP_CONFIG_REQUIRED = (
 LANE_REQUIRED = (
     "lane_count",
     "lane_flow_count",
+    "lane_admission_bytes_per_second",
+    "outer_rtp_payload_type",
     "worker_output_queue_delay_ms",
     "worker_output_queue_late_total",
 )

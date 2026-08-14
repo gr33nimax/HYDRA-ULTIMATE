@@ -7,6 +7,7 @@ from hydra.core.state_migration_calls import migrate_v6_to_v7
 from hydra.core.state_migration_calls_vk_parasite import (
     migrate_v10_to_v11,
     migrate_v11_to_v12,
+    migrate_v12_to_v13,
 )
 from hydra.core.state_migration_creator_consumers import migrate_v8_to_v9
 from hydra.core.state_migration_headless_creator import migrate_v7_to_v8
@@ -110,6 +111,7 @@ MIGRATIONS: dict[int, Migration] = {
     9: migrate_v9_to_v10,
     10: migrate_v10_to_v11,
     11: migrate_v11_to_v12,
+    12: migrate_v12_to_v13,
 }
 
 

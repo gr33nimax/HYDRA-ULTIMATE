@@ -228,20 +228,26 @@ def _append_native_sessions(
                 "",
                 (
                     "Transport config: "
-                    "four independent KCP lanes, "
+                    "eight independent KCP lanes (wire v5), "
                     f"lanes={_gauge(first_report, 'lane_count', 'max'):.0f}, "
                     f"MTU={_gauge(first_report, 'kcp_mtu_bytes', 'max'):.0f}, "
-                    f"aggregate-window={_gauge(first_report, 'kcp_send_window_segments', 'max'):.0f}, "
-                    f"aggregate-pending={_gauge(first_report, 'kcp_max_pending_segments', 'max'):.0f}, "
+                    "aggregate-window="
+                    f"{_gauge(first_report, 'kcp_send_window_segments', 'max'):.0f}, "
+                    "aggregate-pending="
+                    f"{_gauge(first_report, 'kcp_max_pending_segments', 'max'):.0f}, "
                     f"update={_gauge(first_report, 'kcp_update_interval_ms', 'max'):.0f} ms, "
                     f"fast-resend={_gauge(first_report, 'kcp_fast_resend', 'max'):.0f}, "
-                    f"congestion={_gauge(first_report, 'kcp_congestion_control', 'max'):.0f}"
+                    f"congestion={_gauge(first_report, 'kcp_congestion_control', 'max'):.0f}, "
+                    f"RTP PT={_gauge(first_report, 'outer_rtp_payload_type', 'max'):.0f}"
                 ),
             ])
         lines.extend([
             "Transport sessions",
             *table(
-                ("Side", "Tester", "Session", "Wire avg", "KCP retx", "Wait p95", "RTT p95", "Loss p95"),
+                (
+                    "Side", "Tester", "Session", "Wire avg", "KCP retx",
+                    "Wait p95", "RTT p95", "Loss p95",
+                ),
                 rows,
             ),
         ])
@@ -281,6 +287,11 @@ def _append_native_workers(
             lane_rtt = _gauge(report, "kcp_rtt_ms", "p95")
             wait_snd = _gauge(report, "kcp_wait_snd", "p95")
             flow_count = _gauge(report, "lane_flow_count", "max")
+            admission_rate = _gauge(
+                report,
+                "lane_admission_bytes_per_second",
+                "p95",
+            )
             queue_delay = _gauge(report, "worker_output_queue_delay_ms", "p95")
             queue_late = _counter(report, "worker_output_queue_late_total")
             active = bool(report.get("active"))
@@ -307,6 +318,7 @@ def _append_native_workers(
                     (
                         *common,
                         _bitrate(report.get("wire_bps")),
+                        _bitrate(admission_rate * 8),
                         scalar(round(flow_count, 1)),
                         _percent(retry_pressure),
                         scalar(round(wait_snd, 1)),
@@ -326,6 +338,7 @@ def _append_native_workers(
                     (
                         *common,
                         _bitrate(report.get("wire_bps")),
+                        _bitrate(admission_rate * 8),
                         scalar(round(flow_count, 1)),
                         _percent(retry_pressure),
                         scalar(round(wait_snd, 1)),
@@ -341,18 +354,18 @@ def _append_native_workers(
     if not candidates:
         return
     candidates.sort(key=lambda item: item[0], reverse=True)
-    shown = candidates if detailed else candidates[:12]
+    shown = candidates if detailed else candidates[:16]
     headers = ["Side", "Tester"]
     if detailed:
         headers.append("Session")
         headers.extend((
-            "Lane", "Active", "Wire avg", "Flows", "KCP retx", "Wait p95",
+            "Lane", "Active", "Wire avg", "Pace", "Flows", "KCP retx", "Wait p95",
             "RTT p95", "Net loss", "Queue/late", "Drops",
             "Reconnect", "TURN #",
         ))
     else:
         headers.extend((
-            "Lane", "Active", "Wire avg", "Flows", "KCP retx", "Wait p95",
+            "Lane", "Active", "Wire avg", "Pace", "Flows", "KCP retx", "Wait p95",
             "RTT p95", "Drops", "TURN #",
         ))
     lines.extend([

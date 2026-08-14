@@ -116,14 +116,16 @@ class CallsInfrastructure:
             and identity.get("role") == "vps"
             and isinstance(features, dict)
             and features.get("call_vk_parasite") is True
-            and features.get("call_vk_four_lane_kcp") is True
+            and features.get("call_vk_eight_lane_kcp") is True
+            and features.get("call_vk_pre_kcp_admission") is True
+            and features.get("call_vk_relay_flow_control") is True
             and features.get("call_vk_parasite_server") is True
             and features.get("call_vk_parasite_client") is False
             and isinstance(modes, list)
             and modes == ["vk_parasite"]
             and isinstance(wire, dict)
-            and wire.get("min") == 4
-            and wire.get("max") == 4
+            and wire.get("min") == 5
+            and wire.get("max") == 5
         )
 
     def singbox_running(self) -> bool:

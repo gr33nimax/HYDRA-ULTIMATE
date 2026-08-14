@@ -563,8 +563,8 @@ def test_hydra_v2_subscription_includes_only_vk_parasite_calls_config():
             "mode": "vk_parasite",
             "listen_port": 56002,
             "obfs_password": "o" * 43,
-            "workers": 4,
-            "max_workers_per_session": 4,
+            "workers": 8,
+            "max_workers_per_session": 8,
         },
     )
     links = [
@@ -588,8 +588,10 @@ def test_hydra_v2_subscription_includes_only_vk_parasite_calls_config():
     assert "join_link" not in outbound
     assert subscription["requirements"]["core"]["features"] == [
         "call",
-        "call_vk_four_lane_kcp",
+        "call_vk_eight_lane_kcp",
         "call_vk_parasite",
+        "call_vk_pre_kcp_admission",
+        "call_vk_relay_flow_control",
     ]
     assert subscription["profiles"][0] == {
         "id": subscription["default_profile"],
@@ -629,7 +631,7 @@ def test_hydra_v2_calls_requires_exact_hydracore_feature():
             "listen_port": 56002,
             "obfs_password": "o" * 43,
             "workers": 2,
-            "max_workers_per_session": 4,
+            "max_workers_per_session": 8,
         },
     )
     links = [

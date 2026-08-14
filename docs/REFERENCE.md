@@ -511,6 +511,8 @@ state не хранятся.
 и все остальные протоколы. `v11 → v12` фиксирует четыре worker, удаляет старый
 профиль транспорта и выбирает wire v4. Host binary, units и creator-пул
 миграция не меняет;
+`v12 → v13` выбирает восемь worker и wire v5; admission выполняется до KCP,
+а TCP relay ограничивает входной backlog через flow-credit.
 после явного switch на Hydracore переустановка Calls создаёт managed-пул.
 
 `install` хранит служебные отметки фоновых проверок:

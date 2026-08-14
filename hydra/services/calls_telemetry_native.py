@@ -80,6 +80,8 @@ _LIVE_METRICS = {
     "worker_output_queue_late_total",
     "lane_count",
     "lane_flow_count",
+    "lane_admission_bytes_per_second",
+    "outer_rtp_payload_type",
     "network_loss_ratio",
     "network_jitter_ms",
     "runtime_cpu_percent",

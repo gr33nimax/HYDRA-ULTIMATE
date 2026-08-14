@@ -501,11 +501,11 @@ sudo hydra uninstall --yes --keep-data
 
 ## Hydra VK Tunnel telemetry
 
-With the paired debug.11 core, `status` shows only currently reporting
-transport sessions and the four independent KCP lanes. Each lane row contains
+With the paired debug.13 core, `status` shows only currently reporting
+transport sessions and the eight independent KCP lanes. Each lane row contains
 wire rate, active flows, retransmission ratio, WaitSnd, RTT, network loss,
 output-queue delay/drops, reconnects and TURN ordinal. `report` retains every
-historical session and adds its pseudonymous session ID. The wire-v4 core must
+historical session and adds its pseudonymous session ID. The wire-v5 core must
 run on both the VPS and client; mixed old/new deployments intentionally fail.
 
 Сессия для трёх заранее созданных пользователей запускается без таймера:

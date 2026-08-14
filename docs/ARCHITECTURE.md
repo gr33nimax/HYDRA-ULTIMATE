@@ -663,6 +663,8 @@ preflight. Schema 11 нормализует любой legacy/unknown Calls mode
 несовместимый enabled Calls (включая stock core) выключается без удаления
 installed state, поэтому upgrade/apply остальных протоколов остаётся доступен.
 Schema 12 фиксирует четыре worker и wire v4, удаляя старый профиль транспорта.
+Schema 13 выбирает восемь независимых KCP lane и строгий wire v5 с admission
+до KCP и flow-credit на TCP relay.
 Повторная установка после switch на Hydracore создаёт новый managed-пул.
 `ApplicationService.kernel` — единственный use-case замены core:
 trusted release metadata и обязательный SHA-256 digest проверяются до ELF,
