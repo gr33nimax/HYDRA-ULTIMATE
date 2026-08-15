@@ -7,7 +7,13 @@ from hydra.services.calls_telemetry_analysis_common import _mapping, _number
 
 
 def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
-    workers = _current_workers(native)
+    return [
+        *_recovery_findings(native),
+        *_worker_findings(native),
+    ]
+
+
+def _recovery_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
     findings: list[dict[str, str]] = []
     events = _mapping(native.get("events"))
 
@@ -89,7 +95,12 @@ def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
             "Inspect that lane's VK authentication, TURN allocation and DTLS "
             "events; the remaining lanes were intentionally kept alive.",
         ))
+    return findings
 
+
+def _worker_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
+    workers = _current_workers(native)
+    findings: list[dict[str, str]] = []
     for report in workers:
         counters = _mapping(report.get("counters"))
         out_segments = _number(counters.get("kcp_out_segments_total"))
