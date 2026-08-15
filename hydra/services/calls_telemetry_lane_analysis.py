@@ -15,6 +15,8 @@ def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
     attempts = _number(recovery.get("attempts"))
     unresolved = _number(recovery.get("unresolved"))
     matched = _number(recovery.get("matched_recoveries"))
+    failed = _number(recovery.get("failed"))
+    escalated = _number(recovery.get("escalated"))
     if attempts and unresolved:
         findings.append(_finding(
             "critical",
@@ -24,7 +26,25 @@ def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
             "Correlate the affected lane with TURN allocation, DTLS and "
             "worker-attach events; the other three lanes must remain active.",
         ))
-    elif attempts and matched:
+    if failed:
+        findings.append(_finding(
+            "critical",
+            "lane_recovery_failed",
+            "Hydracore could not restore a stalled VK lane before its "
+            "bounded recovery deadline.",
+            "Correlate the failed lane with TURN allocation, DTLS and worker "
+            "attach events; verify that session replacement restored traffic.",
+        ))
+    if escalated:
+        findings.append(_finding(
+            "warning",
+            "lane_recovery_escalated",
+            "A stalled VK lane escalated to a complete logical-session "
+            "replacement instead of remaining unresolved.",
+            "Measure the replacement interruption and verify that all four "
+            "lanes resumed without restarting the client application.",
+        ))
+    if attempts and matched:
         findings.append(_finding(
             "warning",
             "lane_recovery_succeeded",
@@ -33,7 +53,7 @@ def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
             "Use recovery p95 and per-lane WaitSnd/loss to decide whether the "
             "path needs earlier replacement or only lower send pressure.",
         ))
-    elif _number(events.get("lane_send_stalled")):
+    if _number(events.get("lane_send_stalled")) and not attempts:
         findings.append(_finding(
             "critical",
             "lane_send_stall_terminal",
@@ -69,6 +89,36 @@ def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
             "Inspect that lane's VK authentication, TURN allocation and DTLS "
             "events; the remaining lanes were intentionally kept alive.",
         ))
+
+    for report in workers:
+        counters = _mapping(report.get("counters"))
+        out_segments = _number(counters.get("kcp_out_segments_total"))
+        ack_ratio = report.get("kcp_ack_progress_ratio")
+        rtt_coverage = report.get("kcp_rtt_sample_coverage_ratio")
+        if out_segments >= 100 and ack_ratio and rtt_coverage == 0:
+            findings.append(_finding(
+                "critical",
+                "lane_rtt_sampling_missing",
+                "KCP made ACK progress but produced no timestamp-matched RTT "
+                "samples.",
+                "Verify that both client and VPS run Hydracore debug.22 "
+                "before interpreting RTO or path latency.",
+            ))
+            break
+        if (
+            out_segments >= 100
+            and isinstance(ack_ratio, (int, float))
+            and ack_ratio < 0.5
+        ):
+            findings.append(_finding(
+                "warning",
+                "lane_ack_progress_deficit",
+                "A VK lane acknowledged fewer than half of its observed KCP "
+                "output segments.",
+                "Compare ACK progress, in-flight depth, RTO share and TURN "
+                "loss on that lane before changing its window.",
+            ))
+            break
 
     active_by_session: dict[tuple[str, str, str], set[int]] = {}
     for side, entity in (("server", "server_workers"), ("client", "client_workers")):

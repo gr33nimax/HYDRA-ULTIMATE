@@ -14,6 +14,11 @@ KCP_LIVE_REQUIRED = (
     "kcp_rto_retrans_estimate_bytes_total",
     "kcp_rtt_ms",
     "kcp_rto_ms",
+    "kcp_rttvar_ms",
+    "kcp_rtt_samples_total",
+    "kcp_ack_segments_total",
+    "kcp_ack_progress_segments_total",
+    "kcp_inflight_segments",
 )
 KCP_CONFIG_REQUIRED = (
     "kcp_send_blocked_seconds_total",
@@ -25,14 +30,17 @@ KCP_CONFIG_REQUIRED = (
     "kcp_fast_resend",
     "kcp_congestion_control",
 )
-LANE_REQUIRED = (
+LANE_LIVE_REQUIRED = (
     "lane_count",
     "lane_flow_count",
-    "lane_admission_bytes_per_second",
-    "outer_rtp_payload_type",
     "worker_output_queue_delay_ms",
     "worker_output_queue_late_total",
 )
+LANE_CONFIG_REQUIRED = (
+    "lane_admission_bytes_per_second",
+    "outer_rtp_payload_type",
+)
+LANE_SESSION_REQUIRED = (*LANE_LIVE_REQUIRED, *LANE_CONFIG_REQUIRED)
 OUTER_REQUIRED = (
     "outer_packets_in_total",
     "outer_packets_out_total",
@@ -111,7 +119,7 @@ SERVER_SESSION_REQUIRED = {
         "worker_heartbeat_interval_ms",
         "worker_liveness_timeout_ms",
     ),
-    "lanes": LANE_REQUIRED,
+    "lanes": LANE_SESSION_REQUIRED,
     "network": ("network_loss_ratio", "network_jitter_ms"),
     "telemetry": (
         "telemetry_sequence",
@@ -136,7 +144,7 @@ SERVER_WORKER_REQUIRED = {
         "worker_send_queue_drops_total",
         "worker_liveness_expired_total",
     ),
-    "lanes": LANE_REQUIRED,
+    "lanes": LANE_LIVE_REQUIRED,
     "network": ("network_loss_ratio", "network_jitter_ms"),
     "telemetry": ("telemetry_sequence",),
 }
@@ -181,7 +189,7 @@ CLIENT_WORKER_REQUIRED = {
         "worker_send_queue_drops_total",
         "worker_liveness_expired_total",
     ),
-    "lanes": LANE_REQUIRED,
+    "lanes": LANE_LIVE_REQUIRED,
     "kcp": KCP_LIVE_REQUIRED,
     "outer": (*OUTER_REQUIRED, "outer_wrap_failures_total"),
     "network": ("network_loss_ratio", "network_jitter_ms"),
@@ -197,7 +205,7 @@ CLIENT_SESSION_REQUIRED = {
         "worker_heartbeat_interval_ms",
         "worker_liveness_timeout_ms",
     ),
-    "lanes": LANE_REQUIRED,
+    "lanes": LANE_SESSION_REQUIRED,
     "kcp": (*KCP_LIVE_REQUIRED, *KCP_CONFIG_REQUIRED),
     "outer": OUTER_REQUIRED,
     "network": (

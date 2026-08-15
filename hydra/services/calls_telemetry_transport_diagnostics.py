@@ -5,7 +5,6 @@ from collections.abc import Mapping, Sequence
 
 from hydra.services.calls_telemetry_analysis_common import (
     _distribution,
-    _mapping,
     _number,
 )
 
@@ -22,6 +21,8 @@ def lane_recovery_summary(
                 "lane_send_stalled",
                 "lane_send_recovery",
                 "lane_send_recovered",
+                "lane_send_recovery_failed",
+                "lane_send_recovery_escalated",
             }
         ),
         key=lambda record: _number(record.get("timestamp")),
@@ -31,6 +32,8 @@ def lane_recovery_summary(
     stalls = 0
     attempts = 0
     recovered = 0
+    failed = 0
+    escalated = 0
     for record in events:
         event = str(record.get("event", ""))
         if event == "lane_send_stalled":
@@ -52,12 +55,22 @@ def lane_recovery_summary(
             starts = pending.get(key)
             if starts:
                 durations.append(max(0.0, timestamp - starts.pop(0)))
+        elif event in {"lane_send_recovery_failed", "lane_send_recovery_escalated"}:
+            if event == "lane_send_recovery_failed":
+                failed += 1
+            else:
+                escalated += 1
+            starts = pending.get(key)
+            if starts:
+                starts.pop(0)
     unresolved = sum(len(starts) for starts in pending.values())
     matched = len(durations)
     return {
         "stalls": stalls,
         "attempts": attempts,
         "recovered": recovered,
+        "failed": failed,
+        "escalated": escalated,
         "matched_recoveries": matched,
         "orphan_recovered": max(0, recovered - matched),
         "unresolved": unresolved,
@@ -105,22 +118,6 @@ def retransmission_findings(
             "fast-resend; verify against outer loss because this reason split "
             "is explicitly an estimate.",
         ))
-    congestion_values = [
-        _number(_mapping(report.get("latest")).get("kcp_congestion_control"))
-        for entity in ("server_sessions", "client_sessions")
-        for report in native.get(entity, [])
-        if isinstance(report, Mapping)
-        and ("current" not in report or bool(report.get("current")))
-        and "kcp_congestion_control" in _mapping(report.get("latest"))
-    ]
-    if congestion_values and min(congestion_values) < 1:
-        findings.append(_finding(
-            "critical",
-            "kcp_congestion_control_disabled_under_loss",
-            "An active transport side disabled KCP congestion control while retransmissions were high.",
-            "Verify that the client and VPS both run Hydracore debug.21 or "
-            "newer before interpreting the fast/RTO split.",
-        ))
     return findings
 
 
@@ -135,6 +132,10 @@ def retransmission_report(
     rto_available = rto_name in counters
     fast = _number(counters.get(fast_name))
     rto = _number(counters.get(rto_name))
+    ack_progress_name = "kcp_ack_progress_segments_total"
+    rtt_samples_name = "kcp_rtt_samples_total"
+    ack_progress = _number(counters.get(ack_progress_name))
+    rtt_samples = _number(counters.get(rtt_samples_name))
     return {
         "kcp_retransmission_ratio": (
             round(retrans / out_segments, 6) if out_segments else None
@@ -152,6 +153,14 @@ def retransmission_report(
         ),
         "kcp_rto_retransmission_share": (
             round(rto / retrans, 6) if retrans and rto_available else None
+        ),
+        "kcp_ack_progress_ratio": (
+            round(ack_progress / out_segments, 6)
+            if out_segments and ack_progress_name in counters else None
+        ),
+        "kcp_rtt_sample_coverage_ratio": (
+            round(rtt_samples / ack_progress, 6)
+            if ack_progress and rtt_samples_name in counters else None
         ),
     }
 

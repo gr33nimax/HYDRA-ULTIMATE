@@ -203,6 +203,18 @@ def _native_wire_breakdown(
             round(_number(counters.get("kcp_rto_retrans_estimate_bytes_total")), 3)
             if "kcp_rto_retrans_estimate_bytes_total" in counters else None
         ),
+        "kcp_ack_segments": (
+            round(_number(counters.get("kcp_ack_segments_total")), 3)
+            if "kcp_ack_segments_total" in counters else None
+        ),
+        "kcp_ack_progress_segments": (
+            round(_number(counters.get("kcp_ack_progress_segments_total")), 3)
+            if "kcp_ack_progress_segments_total" in counters else None
+        ),
+        "kcp_rtt_samples": (
+            round(_number(counters.get("kcp_rtt_samples_total")), 3)
+            if "kcp_rtt_samples_total" in counters else None
+        ),
         "relay_goodput_bytes": round(_number(counters.get("relay_bytes_total")), 3),
     }
 

@@ -76,6 +76,13 @@ def test_full_diagnostic_level_requires_every_server_and_tester_group() -> None:
     assert all(result["client_groups"]["tester-1"].values())
 
 
+def test_worker_lane_coverage_does_not_require_session_config_metrics() -> None:
+    assert "lane_admission_bytes_per_second" not in SERVER_WORKER_REQUIRED["lanes"]
+    assert "outer_rtp_payload_type" not in CLIENT_WORKER_REQUIRED["lanes"]
+    assert "lane_admission_bytes_per_second" in SERVER_SESSION_REQUIRED["lanes"]
+    assert "outer_rtp_payload_type" in CLIENT_SESSION_REQUIRED["lanes"]
+
+
 def test_native_findings_separate_transport_host_and_relay_directions() -> None:
     native = {
         "goodput_wire_efficiency_ratio": 0.5,
@@ -324,6 +331,56 @@ def test_native_analysis_pairs_session_wide_lane_recovery_duration() -> None:
     assert recovery["matched_recoveries"] == 1
     assert recovery["unresolved"] == 0
     assert recovery["duration_seconds"]["p95"] == 1.5
+
+
+def test_native_analysis_resolves_recovery_escalated_to_session_replace() -> None:
+    records = [
+        {
+            "kind": "native",
+            "timestamp": timestamp,
+            "native_scope": "server",
+            "native_kind": "event",
+            "native_entity": "server_worker",
+            "tester_id": "tester-1",
+            "native_session_id": "session-1",
+            "worker_id": 2,
+            "event": event,
+            "metrics": {},
+        }
+        for timestamp, event in (
+            (10.0, "lane_send_recovery"),
+            (12.0, "lane_send_recovery_escalated"),
+        )
+    ]
+
+    recovery = analyze_native(records, ["tester-1"])["lane_recovery"]
+
+    assert recovery["escalated"] == 1
+    assert recovery["unresolved"] == 0
+
+
+def test_lane_findings_use_ack_progress_and_rtt_sample_coverage() -> None:
+    worker = {
+        "current": True,
+        "active": True,
+        "wire_bps": 1_000_000,
+        "kcp_ack_progress_ratio": 0.8,
+        "kcp_rtt_sample_coverage_ratio": 0.0,
+        "counters": {"kcp_out_segments_total": 1000},
+        "gauges": {},
+    }
+    native = {
+        "events": {},
+        "lane_recovery": {},
+        "server_workers": [worker],
+        "client_workers": [],
+        "server_sessions": [],
+        "client_sessions": [],
+    }
+
+    codes = {finding["code"] for finding in protocol_findings(native, {})}
+
+    assert "lane_rtt_sampling_missing" in codes
 
 
 def test_protocol_findings_distinguish_rto_dominated_retransmissions() -> None:

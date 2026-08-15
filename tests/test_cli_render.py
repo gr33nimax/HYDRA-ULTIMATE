@@ -326,6 +326,9 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
                 "kcp_retransmit_bytes": 300_000,
                 "kcp_fast_retransmit_estimate_bytes": 120_000,
                 "kcp_rto_retransmit_estimate_bytes": 180_000,
+                "kcp_ack_segments": 900,
+                "kcp_ack_progress_segments": 800,
+                "kcp_rtt_samples": 700,
                 "relay_goodput_bytes": 1_000_000,
             },
             "lane_recovery": {
@@ -352,7 +355,11 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
     assert "2.0%" in status
     assert "1.2%/0.8%" in status
     assert "fast/RTO est=" in status
-    assert "Lane recovery: stalls=1, started=1, recovered=1, unresolved=0, p95=1.5 s" in status
+    assert "KCP ACK: observed=900, progress=800, RTT samples=700" in status
+    assert (
+        "Lane recovery: stalls=1, started=1, recovered=1, failed=0, "
+        "escalated=0, unresolved=0, p95=1.5 s"
+    ) in status
     assert "12" in status
     assert "55 ms" in status
     assert "Historical/inactive workers hidden: 1" in status
@@ -360,6 +367,8 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
     assert "new-session" in report
     assert "old-session" in report
     assert "Queue/late" in report
+    assert "ACK/flight" in report
+    assert "RTT/var" in report
 
 
 def test_tty_uses_human_output_while_json_flag_is_machine_stable(capsys):

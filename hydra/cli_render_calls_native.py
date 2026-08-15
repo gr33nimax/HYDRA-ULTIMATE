@@ -116,6 +116,20 @@ def _append_wire_and_recovery(
             f"{reason_bytes}, "
             f"goodput={_bytes(wire_map.get('relay_goodput_bytes'))}"
         )
+        if any(
+            wire_map.get(name) is not None
+            for name in (
+                "kcp_ack_segments",
+                "kcp_ack_progress_segments",
+                "kcp_rtt_samples",
+            )
+        ):
+            lines.append(
+                "  KCP ACK: "
+                f"observed={scalar(wire_map.get('kcp_ack_segments', 0))}, "
+                f"progress={scalar(wire_map.get('kcp_ack_progress_segments', 0))}, "
+                f"RTT samples={scalar(wire_map.get('kcp_rtt_samples', 0))}"
+            )
     recovery = native.get("lane_recovery")
     recovery_map = recovery if isinstance(recovery, Mapping) else {}
     if recovery_map and (
@@ -129,6 +143,8 @@ def _append_wire_and_recovery(
             f"stalls={scalar(recovery_map.get('stalls', 0))}, "
             f"started={scalar(recovery_map.get('attempts', 0))}, "
             f"recovered={scalar(recovery_map.get('matched_recoveries', 0))}, "
+            f"failed={scalar(recovery_map.get('failed', 0))}, "
+            f"escalated={scalar(recovery_map.get('escalated', 0))}, "
             f"unresolved={scalar(recovery_map.get('unresolved', 0))}, "
             f"p95={scalar(round(float(duration_map.get('p95', 0) or 0), 3))} s"
         )
@@ -266,7 +282,8 @@ def _append_native_workers(
         headers.append("Session")
         headers.extend((
             "Lane", "Active", "Wire avg", "Flows", "KCP retx", "Fast/RTO", "Wait p95",
-            "RTT p95", "Net loss", "Queue/late", "Drops", "Reconnect", "TURN #",
+            "ACK/flight", "RTT/var", "Net loss", "Queue/late", "Drops",
+            "Reconnect", "TURN #",
         ))
     else:
         headers.extend((
@@ -309,8 +326,14 @@ def _worker_row(
     turn = scalar(round(_gauge(report, "turn_selected_endpoint_ordinal", "p95"), 1))
     if not detailed:
         return (*base, scalar(round(drops, 1)), turn)
+    ack_ratio = report.get("kcp_ack_progress_ratio")
+    ack = _percent(float(ack_ratio)) if isinstance(ack_ratio, (int, float)) else "-"
+    inflight = _gauge(report, "kcp_inflight_segments", "p95")
+    rtt_var = _gauge(report, "kcp_rttvar_ms", "p95")
     return (
-        *base,
+        *base[:-1],
+        f"{ack}/{scalar(round(inflight, 1))}",
+        f"{lane_rtt:.0f}/{rtt_var:.0f} ms",
         _percent(loss),
         f"{queue_delay:.0f} ms/{scalar(round(queue_late, 1))}",
         scalar(round(drops, 1)),

@@ -1,5 +1,15 @@
 # Changelog
 
+- Added the Hydracore debug.22 KCP ACK-progress contract: timestamp-matched
+  RTT samples, RTT variance, observed ACKs, acknowledged progress and
+  in-flight depth are retained, analyzed and shown in detailed lane reports.
+- Recovery timeout and full-session escalation are now terminal outcomes
+  instead of unresolved lane recoveries. Worker coverage no longer requires
+  session-only lane configuration fields, removing the false `partial` result.
+- Removed the obsolete debug.21 finding that treated disabled Reno congestion
+  control as a fault; debug.22 intentionally uses bounded per-lane queues and
+  windows because TURN delay/duplication is not a reliable congestion signal.
+
 - Hydra VK telemetry now ingests Hydracore debug.21's estimated fast-resend
   and RTO retransmission counters, reports their segment/byte split per
   session and per lane, and distinguishes timeout-dominated path pressure from
