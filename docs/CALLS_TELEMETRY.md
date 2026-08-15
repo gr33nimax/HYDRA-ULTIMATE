@@ -46,7 +46,7 @@ sudo hydra calls telemetry export --output hydra-vk-tunnel.tar.gz
 sudo hydra calls telemetry stop
 ```
 
-Hydracore debug.25 exposes wire v7 with four independent KCP lanes, one for every VK/TURN
+Hydracore debug.26 exposes wire v7 with four independent KCP lanes, one for every VK/TURN
 call. `status` and `report` show per-lane wire rate, active flow count,
 `kcp_wait_snd`, RTT/RTO, cumulative KCP retransmission ratio, estimated
 fast-resend/RTO split, network loss, output-queue delay/drops, reconnects and

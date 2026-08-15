@@ -1,6 +1,6 @@
 # Changelog
 
-- Added the incompatible Hydracore debug.25 wire-v7 contract. Ultimate now
+- Added the incompatible Hydracore debug.26 wire-v7 contract. Ultimate now
   requires wire 7 on both endpoints and ingests per-lane generation/state,
   ACK-clocked pacing, delivery, minRTT/inflight, reset/probe and stale-frame
   metrics plus aggregate no-progress and full-session replacement signals.
