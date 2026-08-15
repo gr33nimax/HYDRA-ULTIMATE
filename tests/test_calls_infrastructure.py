@@ -78,7 +78,7 @@ class CapabilityHost(ProbeHost):
                 },
                 "protocols": {
                     "call_modes": ["vk_parasite"],
-                    "call_vk_parasite_wire": {"min": 6, "max": 6},
+                    "call_vk_parasite_wire": {"min": 7, "max": 7},
                 },
             }),
             stderr="",

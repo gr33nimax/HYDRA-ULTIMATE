@@ -82,6 +82,10 @@ def test_worker_lane_coverage_does_not_require_session_config_metrics() -> None:
     assert "outer_rtp_payload_type" not in CLIENT_WORKER_REQUIRED["lanes"]
     assert "lane_admission_bytes_per_second" in SERVER_SESSION_REQUIRED["lanes"]
     assert "outer_rtp_payload_type" in CLIENT_SESSION_REQUIRED["lanes"]
+    assert "lane_generation" in SERVER_WORKER_REQUIRED["lanes"]
+    assert "lane_pacing_bytes_per_second" in CLIENT_WORKER_REQUIRED["lanes"]
+    assert "lane_reset_commit_total" in SERVER_WORKER_REQUIRED["lanes"]
+    assert "aggregate_progress_age_seconds" in CLIENT_SESSION_REQUIRED["lanes"]
 
 
 def test_native_findings_separate_transport_host_and_relay_directions() -> None:
@@ -302,6 +306,69 @@ def test_lane_findings_report_bounded_session_recovery_events() -> None:
     assert "lane_reorder_timeout_recovery" in codes
     assert "lane_udp_reorder_timeout" in codes
     assert "network_rebind_lane_failed" in codes
+
+
+def test_wire_v7_findings_identify_four_call_capacity_ceiling() -> None:
+    native = {
+        "events": {},
+        "server_sessions": [],
+        "client_sessions": [],
+        "server_workers": [
+            {
+                "current": True,
+                "worker_id": lane,
+                "tester_id": "tester-1",
+                "native_session_id": "session-1",
+                "wire_bps": 1_600_000,
+                "kcp_retransmission_ratio": 0.04,
+                "gauges": {
+                    "lane_pacing_bytes_per_second": {
+                        "p50": 200_000,
+                        "p95": 200_000,
+                    },
+                    "lane_delivered_bytes_per_second": {"p95": 180_000},
+                },
+                "counters": {"lane_token_starvation_total": 0},
+            }
+            for lane in range(4)
+        ],
+        "client_workers": [],
+    }
+
+    codes = {finding["code"] for finding in protocol_findings(native, {})}
+
+    assert "physical_capacity_ceiling" in codes
+    assert "congestion_pacing_collapse" not in codes
+
+
+def test_wire_v7_findings_report_reset_and_session_failure_categories() -> None:
+    native = {
+        "events": {"session_replacement": 1},
+        "server_sessions": [],
+        "client_sessions": [],
+        "server_workers": [{
+            "current": True,
+            "wire_bps": 1_000_000,
+            "kcp_retransmission_ratio": 0.2,
+            "gauges": {
+                "lane_pacing_bytes_per_second": {"p50": 32_000, "p95": 40_000},
+                "lane_delivered_bytes_per_second": {"p95": 20_000},
+                "lane_probe_result": {"p95": 0},
+            },
+            "counters": {
+                "lane_token_starvation_total": 2,
+                "lane_reset_request_total": 2,
+                "lane_reset_commit_total": 1,
+            },
+        }],
+        "client_workers": [],
+    }
+
+    codes = {finding["code"] for finding in protocol_findings(native, {})}
+
+    assert "congestion_pacing_collapse" in codes
+    assert "lane_reset_failed" in codes
+    assert "full_session_replacement" in codes
 
 
 def test_native_analysis_pairs_session_wide_lane_recovery_duration() -> None:

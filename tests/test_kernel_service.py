@@ -105,7 +105,7 @@ def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
         },
         "protocols": {
             "call_modes": ["vk_parasite"],
-            "call_vk_parasite_wire": {"min": 6, "max": 6},
+            "call_vk_parasite_wire": {"min": 7, "max": 7},
         },
     }
     alias = {
@@ -122,7 +122,7 @@ def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
         },
         "protocols": {
             "call_modes": ["p2p"],
-            "call_vk_parasite_wire": {"min": 6, "max": 6},
+            "call_vk_parasite_wire": {"min": 7, "max": 7},
         },
     }
 
@@ -148,7 +148,7 @@ def test_hydracore_debug_contract_requires_native_telemetry() -> None:
         },
         "protocols": {
             "call_modes": ["vk_parasite"],
-            "call_vk_parasite_wire": {"min": 6, "max": 6},
+            "call_vk_parasite_wire": {"min": 7, "max": 7},
         },
     }
 

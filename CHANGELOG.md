@@ -1,5 +1,13 @@
 # Changelog
 
+- Added the incompatible Hydracore debug.25 wire-v7 contract. Ultimate now
+  requires wire 7 on both endpoints and ingests per-lane generation/state,
+  ACK-clocked pacing, delivery, minRTT/inflight, reset/probe and stale-frame
+  metrics plus aggregate no-progress and full-session replacement signals.
+- Detailed Calls diagnostics show the wire-v7 lane controller and reset state.
+  Findings now separate a four-call physical capacity ceiling, congestion
+  pacing collapse, failed generation reset and complete session replacement.
+
 - Added the Hydracore debug.23 staged-output contract end to end. Native
   ingestion now accepts `flow_*` records and retains admission-window, KCP
   output depth/capacity, update-backpressure, mutex-wait, physical-write and

@@ -213,7 +213,7 @@ def _append_native_sessions(
             lines.extend([
                 "",
                 (
-                    "Transport config: four independent KCP lanes (wire v6), "
+                    "Transport config: four independent KCP lanes (wire v7), "
                     f"lanes={_gauge(first_report, 'lane_count', 'max'):.0f}, "
                     f"MTU={_gauge(first_report, 'kcp_mtu_bytes', 'max'):.0f}, "
                     f"aggregate-window={_gauge(first_report, 'kcp_send_window_segments', 'max'):.0f}, "
@@ -375,6 +375,17 @@ def _append_lane_internals(
     rows: list[tuple[object, ...]] = []
     metric_names = {
         "lane_admission_window_segments",
+        "lane_generation",
+        "lane_state",
+        "lane_pacing_bytes_per_second",
+        "lane_delivered_bytes_per_second",
+        "lane_inflight_limit_segments",
+        "lane_ack_age_seconds",
+        "lane_reset_request_total",
+        "lane_reset_ack_total",
+        "lane_reset_commit_total",
+        "lane_stale_generation_drops_total",
+        "lane_probe_result",
         "kcp_output_queue_depth",
         "kcp_output_queue_capacity",
         "kcp_update_backpressure_total",
@@ -400,6 +411,25 @@ def _append_lane_internals(
                 _short_id(report.get("native_session_id")),
                 scalar(report.get("worker_id", "-")),
                 (
+                    f"{_gauge(report, 'lane_generation', 'max'):.0f}/"
+                    f"{_gauge(report, 'lane_state', 'max'):.0f}"
+                ),
+                (
+                    f"{_bitrate(_gauge(report, 'lane_pacing_bytes_per_second', 'p50') * 8)}/"
+                    f"{_bitrate(_gauge(report, 'lane_delivered_bytes_per_second', 'p50') * 8)}"
+                ),
+                f"{_gauge(report, 'lane_inflight_limit_segments', 'p95'):.0f}",
+                f"{_gauge(report, 'lane_ack_age_seconds', 'p95'):.2f} s",
+                (
+                    f"{_counter(report, 'lane_reset_request_total'):.0f}/"
+                    f"{_counter(report, 'lane_reset_ack_total'):.0f}/"
+                    f"{_counter(report, 'lane_reset_commit_total'):.0f}"
+                ),
+                (
+                    f"{_gauge(report, 'lane_probe_result', 'max'):.0f}/"
+                    f"{_counter(report, 'lane_stale_generation_drops_total'):.0f}"
+                ),
+                (
                     f"{_gauge(report, 'lane_admission_window_segments', 'p50'):.0f}/"
                     f"{_gauge(report, 'lane_admission_window_segments', 'p95'):.0f}"
                 ),
@@ -418,7 +448,9 @@ def _append_lane_internals(
         "Lane internals",
         *table(
             (
-                "Side", "Tester", "Session", "Lane", "Admission p50/p95",
+                "Side", "Tester", "Session", "Lane", "Gen/state",
+                "Pace/deliver", "Inflight", "ACK age", "Reset r/a/c",
+                "Probe/stale", "Admission p50/p95",
                 "Output p95/cap", "Update pause", "Mutex wait", "Write p95",
             ),
             rows,

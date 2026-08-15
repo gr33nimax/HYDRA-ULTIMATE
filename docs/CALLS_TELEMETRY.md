@@ -12,7 +12,7 @@
 `debug`. В режиме `vk_parasite` сервер является
 UDP/DTLS endpoint, а клиент получает TURN credentials через VK Calls, создаёт
 четыре VK/TURN worker и отдельную KCP-сессию на каждой линии. Готовые relay
-frames TCP-потока сохраняют affinity к линии с возможностью spillover, а
+frames TCP-потока сохраняют строгую affinity к одной линии, а
 неупорядоченные UDP/QUIC frames используют все четыре линии.
 Поэтому Clash API на
 VPS видит соединения и goodput, но сам по себе не видит latency VK auth/TURN,
@@ -46,7 +46,7 @@ sudo hydra calls telemetry export --output hydra-vk-tunnel.tar.gz
 sudo hydra calls telemetry stop
 ```
 
-Hydracore debug.23 exposes four independent KCP lanes, one for every VK/TURN
+Hydracore debug.25 exposes wire v7 with four independent KCP lanes, one for every VK/TURN
 call. `status` and `report` show per-lane wire rate, active flow count,
 `kcp_wait_snd`, RTT/RTO, cumulative KCP retransmission ratio, estimated
 fast-resend/RTO split, network loss, output-queue delay/drops, reconnects and
@@ -55,7 +55,18 @@ depth/capacity, paused-update count, KCP mutex wait, physical worker-write
 latency and flow-local reorder aborts. Session rows contain the bounded
 aggregate of the four lane windows and pending limits. Recovery diagnostics
 pair `lane_send_recovery` with `lane_send_recovered` per side/session/lane and
-report unresolved attempts and recovery p95.
+report unresolved attempts and recovery p95. Wire v7 additionally records each
+lane generation and state, ACK-clocked pacing/delivered rates, minRTT, inflight
+limit, ACK age, token starvation, RESET request/retry/ACK/commit counters,
+reset duration, stale-generation drops and bidirectional probe result. Session
+rows expose aggregate progress age, quarantined lanes and full-session
+replacement count.
+
+Findings distinguish a measured four-call physical capacity ceiling from a
+congestion/pacing collapse, an incomplete lane-generation reset, and a full
+logical-session replacement. These categories are derived only when the wire-v7
+metrics are present, so older archived experiments retain their previous
+analysis semantics.
 
 The signals are deliberately separated: `network_loss_ratio` describes the
 authenticated outer stream, KCP retransmission belongs only to that lane, and

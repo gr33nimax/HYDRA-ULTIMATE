@@ -515,7 +515,7 @@ state не хранятся.
 комнаты и installed state, затем выбирает восемь worker и wire v5; admission
 выполняется до KCP, а TCP relay ограничивает входной backlog через flow-credit.
 `v13 → v14` выключает несовместимый wire-v5 runtime, возвращает четыре worker
-и выбирает wire v6 с TCP flow affinity, UDP/QUIC striping, физическим
+и выбирает wire v7 с TCP flow affinity, UDP/QUIC striping, физическим
 backpressure и поэтапным rebind.
 после явного switch на Hydracore переустановка Calls создаёт managed-пул.
 

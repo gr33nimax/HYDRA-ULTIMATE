@@ -8,10 +8,139 @@ from hydra.services.calls_telemetry_analysis_common import _mapping, _number
 
 def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
     return [
+        *_wire_v7_findings(native),
         *_recovery_findings(native),
         *_worker_findings(native),
         *_pipeline_findings(native),
     ]
+
+
+def _wire_v7_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
+    workers = _current_workers(native)
+    sessions = [
+        *current_reports(native, "server_sessions"),
+        *current_reports(native, "client_sessions"),
+    ]
+    if not any(
+        "lane_pacing_bytes_per_second" in _mapping(report.get("gauges"))
+        for report in workers
+    ):
+        return []
+    findings: list[dict[str, str]] = []
+    carrying = [report for report in workers if _number(report.get("wire_bps")) > 0]
+    retry_ratios = [
+        _number(report.get("kcp_retransmission_ratio"))
+        for report in carrying
+        if report.get("kcp_retransmission_ratio") is not None
+    ]
+    token_starvation = _counter_total(workers, "lane_token_starvation_total")
+    capacity_ceiling = any(_is_capacity_ceiling(group) for group in _wire_v7_groups(native))
+    if capacity_ceiling:
+        findings.append(_finding(
+            "info",
+            "physical_capacity_ceiling",
+            "All four VK lanes delivered close to their paced rates without "
+            "material retransmission or token starvation.",
+            "Treat the measured aggregate as the current four-call physical "
+            "capacity ceiling; further growth needs a different media/path model.",
+        ))
+    minimum_pacing = min(
+        (
+            _gauge(report, "lane_pacing_bytes_per_second", "p50")
+            for report in carrying
+            if _gauge(report, "lane_pacing_bytes_per_second", "p50") > 0
+        ),
+        default=0.0,
+    )
+    if token_starvation or (
+        minimum_pacing and minimum_pacing <= 40_000
+        and max(retry_ratios, default=0.0) >= 0.10
+    ):
+        findings.append(_finding(
+            "critical",
+            "congestion_pacing_collapse",
+            "The wire-v7 lane controller reached sustained token starvation or "
+            "backed a lane down close to its minimum under retransmission pressure.",
+            "Compare pacing versus delivered rate, minRTT inflation and output "
+            "queue growth; replace the degraded path before raising its limit.",
+        ))
+    events = _mapping(native.get("events"))
+    reset_requests = _counter_total(workers, "lane_reset_request_total")
+    reset_commits = _counter_total(workers, "lane_reset_commit_total")
+    failed_probe = any(
+        _gauge(report, "lane_probe_result", "p95") == 0
+        and _counter_total([report], "lane_reset_request_total") > 0
+        for report in workers
+    )
+    if _number(events.get("lane_reset_failed")) or (
+        reset_requests > reset_commits and failed_probe
+    ):
+        findings.append(_finding(
+            "critical",
+            "lane_reset_failed",
+            "A generation reset did not reach commit and a successful "
+            "bidirectional KCP probe within the observation window.",
+            "Inspect RESET retry/ACK/commit counters, stale-generation drops "
+            "and TURN reconnect latency for the affected lane.",
+        ))
+    replacements = _counter_total(sessions, "session_replacement_total")
+    if _number(events.get("session_replacement")) or replacements:
+        findings.append(_finding(
+            "critical",
+            "full_session_replacement",
+            "Hydracore replaced the complete logical VK session after aggregate "
+            "no-progress or multi-lane quarantine.",
+            "Confirm that a new native session appeared within ten seconds and "
+            "traffic resumed without restarting the application.",
+        ))
+    return findings
+
+
+def _wire_v7_groups(
+    native: Mapping[str, object],
+) -> list[list[Mapping[str, object]]]:
+    complete: list[list[Mapping[str, object]]] = []
+    for entity in ("server_workers", "client_workers"):
+        grouped: dict[tuple[str, str], list[Mapping[str, object]]] = {}
+        for report in current_reports(native, entity):
+            key = (
+                str(report.get("tester_id", "")),
+                str(report.get("native_session_id", "")),
+            )
+            grouped.setdefault(key, []).append(report)
+        for reports in grouped.values():
+            lane_ids = {
+                int(worker_id)
+                for report in reports
+                if isinstance(worker_id := report.get("worker_id"), (int, float))
+            }
+            if lane_ids == set(range(4)):
+                complete.append(reports)
+    return complete
+
+
+def _is_capacity_ceiling(reports: Sequence[Mapping[str, object]]) -> bool:
+    carrying = [report for report in reports if _number(report.get("wire_bps")) > 0]
+    pacing = sum(
+        _gauge(report, "lane_pacing_bytes_per_second", "p95")
+        for report in carrying
+    )
+    delivered = sum(
+        _gauge(report, "lane_delivered_bytes_per_second", "p95")
+        for report in carrying
+    )
+    retry_ratios = [
+        _number(report.get("kcp_retransmission_ratio"))
+        for report in carrying
+        if report.get("kcp_retransmission_ratio") is not None
+    ]
+    return bool(
+        len(carrying) == 4
+        and pacing > 0
+        and delivered >= 0.8 * pacing
+        and max(retry_ratios, default=0.0) < 0.15
+        and not _counter_total(carrying, "lane_token_starvation_total")
+    )
 
 
 def lane_pipeline_summary(native: Mapping[str, object]) -> dict[str, object]:

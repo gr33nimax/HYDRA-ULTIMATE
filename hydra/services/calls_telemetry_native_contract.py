@@ -41,13 +41,34 @@ LANE_LIVE_REQUIRED = (
     "worker_output_queue_late_total",
     "worker_write_latency_ms",
     "lane_admission_window_segments",
+    "lane_generation",
+    "lane_state",
+    "lane_pacing_bytes_per_second",
+    "lane_delivered_bytes_per_second",
+    "lane_min_rtt_ms",
+    "lane_inflight_limit_segments",
+    "lane_token_starvation_total",
+    "lane_ack_age_seconds",
+    "lane_reset_request_total",
+    "lane_reset_retry_total",
+    "lane_reset_ack_total",
+    "lane_reset_commit_total",
+    "lane_reset_duration_ms",
+    "lane_stale_generation_drops_total",
+    "lane_probe_result",
     "flow_reorder_abort_total",
 )
 LANE_CONFIG_REQUIRED = (
     "lane_admission_bytes_per_second",
     "outer_rtp_payload_type",
 )
-LANE_SESSION_REQUIRED = (*LANE_LIVE_REQUIRED, *LANE_CONFIG_REQUIRED)
+LANE_SESSION_REQUIRED = (
+    *LANE_LIVE_REQUIRED,
+    *LANE_CONFIG_REQUIRED,
+    "aggregate_progress_age_seconds",
+    "quarantined_lanes",
+    "session_replacement_total",
+)
 OUTER_REQUIRED = (
     "outer_packets_in_total",
     "outer_packets_out_total",
