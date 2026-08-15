@@ -1,5 +1,14 @@
 # Changelog
 
+- Added the Hydracore debug.23 staged-output contract end to end. Native
+  ingestion now accepts `flow_*` records and retains admission-window, KCP
+  output depth/capacity, update-backpressure, mutex-wait, physical-write and
+  flow-local abort metrics instead of rejecting the complete snapshot.
+- Live status now gives one compact KCP-pipeline summary. The full report adds
+  per-lane internals, goodput correlations and separate findings for staged
+  output saturation, KCP lock contention, slow TURN/DTLS writes and isolated
+  ordered-flow aborts.
+
 - Added the Hydracore debug.22 KCP ACK-progress contract: timestamp-matched
   RTT samples, RTT variance, observed ACKs, acknowledged progress and
   in-flight depth are retained, analyzed and shown in detailed lane reports.

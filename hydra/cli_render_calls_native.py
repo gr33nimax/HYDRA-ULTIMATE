@@ -81,6 +81,7 @@ def append_native_diagnostics(
             f"{peer_capacity:.0f}, "
             f"drops={scalar(counter_map.get('peer_read_queue_drops_total', 0))}"
         )
+    _append_lane_pipeline(lines, native)
     _append_wire_and_recovery(lines, native)
     missing_all = [*missing_items, *group_items]
     if missing_all:
@@ -90,6 +91,31 @@ def append_native_diagnostics(
             lines.append(f"    ... and {len(missing_all) - len(shown)} more; run telemetry report")
     _append_native_sessions(lines, native, detailed=detailed)
     _append_native_workers(lines, native, detailed=detailed)
+    if detailed:
+        _append_lane_internals(lines, native)
+
+
+def _append_lane_pipeline(
+    lines: list[str],
+    native: Mapping[str, object],
+) -> None:
+    raw = native.get("lane_pipeline")
+    pipeline = raw if isinstance(raw, Mapping) else {}
+    if not pipeline.get("available"):
+        return
+    utilization = pipeline.get("output_queue_utilization_ratio")
+    utilization_text = _percent(utilization) if utilization is not None else "-"
+    lines.append(
+        "  KCP pipeline: "
+        f"output p95={scalar(pipeline.get('output_queue_depth_p95', 0))}/"
+        f"{scalar(pipeline.get('output_queue_capacity', 0))} ({utilization_text}), "
+        f"admission p50/p95={scalar(pipeline.get('admission_window_p50_min', 0))}/"
+        f"{scalar(pipeline.get('admission_window_p95_max', 0))} seg, "
+        f"write p95={scalar(pipeline.get('worker_write_latency_p95_ms', 0))} ms, "
+        f"update_pause={scalar(pipeline.get('update_backpressure_total', 0))}, "
+        f"mutex_wait={scalar(pipeline.get('mutex_blocked_seconds_total', 0))} s, "
+        f"flow_abort={scalar(pipeline.get('flow_reorder_abort_total', 0))}"
+    )
 
 
 def _append_wire_and_recovery(
@@ -340,6 +366,64 @@ def _worker_row(
         scalar(round(reconnects, 1)),
         turn,
     )
+
+
+def _append_lane_internals(
+    lines: list[str],
+    native: Mapping[str, object],
+) -> None:
+    rows: list[tuple[object, ...]] = []
+    metric_names = {
+        "lane_admission_window_segments",
+        "kcp_output_queue_depth",
+        "kcp_output_queue_capacity",
+        "kcp_update_backpressure_total",
+        "kcp_mutex_blocked_seconds_total",
+        "worker_write_latency_ms",
+    }
+    for side, key in (("server", "server_workers"), ("client", "client_workers")):
+        reports = native.get(key)
+        if not isinstance(reports, Sequence):
+            continue
+        for report in reports:
+            if not isinstance(report, Mapping):
+                continue
+            gauges = report.get("gauges")
+            gauge_map = gauges if isinstance(gauges, Mapping) else {}
+            counters = report.get("counters")
+            counter_map = counters if isinstance(counters, Mapping) else {}
+            if not metric_names.intersection((*gauge_map, *counter_map)):
+                continue
+            rows.append((
+                side,
+                report.get("tester_id", "-"),
+                _short_id(report.get("native_session_id")),
+                scalar(report.get("worker_id", "-")),
+                (
+                    f"{_gauge(report, 'lane_admission_window_segments', 'p50'):.0f}/"
+                    f"{_gauge(report, 'lane_admission_window_segments', 'p95'):.0f}"
+                ),
+                (
+                    f"{_gauge(report, 'kcp_output_queue_depth', 'p95'):.0f}/"
+                    f"{_gauge(report, 'kcp_output_queue_capacity', 'max'):.0f}"
+                ),
+                scalar(round(_counter(report, "kcp_update_backpressure_total"), 3)),
+                f"{_counter(report, 'kcp_mutex_blocked_seconds_total'):.3f} s",
+                f"{_gauge(report, 'worker_write_latency_ms', 'p95'):.1f} ms",
+            ))
+    if not rows:
+        return
+    lines.extend([
+        "",
+        "Lane internals",
+        *table(
+            (
+                "Side", "Tester", "Session", "Lane", "Admission p50/p95",
+                "Output p95/cap", "Update pause", "Mutex wait", "Write p95",
+            ),
+            rows,
+        ),
+    ])
 
 
 __all__ = ["append_native_diagnostics"]

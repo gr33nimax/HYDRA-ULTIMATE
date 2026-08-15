@@ -16,6 +16,9 @@ def throughput_correlations(
         "listener_rx_queue_bytes": [],
         "kcp_wait_snd": [],
         "kcp_rtt_ms": [],
+        "kcp_output_queue_depth": [],
+        "lane_admission_window_segments": [],
+        "worker_write_latency_ms": [],
         "network_loss_ratio": [],
     }
     previous: Mapping[str, object] | None = None
@@ -46,6 +49,24 @@ def throughput_correlations(
         server = _mapping(latest.get("server"))
         _add(pairs, "kcp_wait_snd", goodput, server.get("kcp_wait_snd"))
         _add(pairs, "kcp_rtt_ms", goodput, server.get("kcp_rtt_ms"))
+        _add(
+            pairs,
+            "kcp_output_queue_depth",
+            goodput,
+            server.get("kcp_output_queue_depth"),
+        )
+        _add(
+            pairs,
+            "lane_admission_window_segments",
+            goodput,
+            server.get("lane_admission_window_segments"),
+        )
+        _add(
+            pairs,
+            "worker_write_latency_ms",
+            goodput,
+            server.get("worker_write_latency_ms"),
+        )
         clients = _mapping(latest.get("clients"))
         losses = [
             _number(_mapping(metrics).get("network_loss_ratio"))

@@ -17,6 +17,7 @@ from hydra.services.calls_telemetry_native_contract import (
     SERVER_SESSION_REQUIRED,
     SERVER_WORKER_REQUIRED,
 )
+from hydra.services.calls_telemetry_lane_analysis import lane_pipeline_summary
 from hydra.services.calls_telemetry_transport_diagnostics import (
     lane_recovery_summary,
     retransmission_report,
@@ -130,7 +131,7 @@ def analyze_native(
         if native
         else "server_observation_only"
     )
-    return {
+    result = {
         "available": bool(native),
         "diagnostic_level": diagnostic_level,
         "records": len(native),
@@ -173,6 +174,8 @@ def analyze_native(
         "events": events,
         "lane_recovery": lane_recovery_summary(native),
     }
+    result["lane_pipeline"] = lane_pipeline_summary(result)
+    return result
 
 
 def _record_entity(record: Mapping[str, object]) -> str:

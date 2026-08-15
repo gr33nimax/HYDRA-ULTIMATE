@@ -10,7 +10,128 @@ def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
     return [
         *_recovery_findings(native),
         *_worker_findings(native),
+        *_pipeline_findings(native),
     ]
+
+
+def lane_pipeline_summary(native: Mapping[str, object]) -> dict[str, object]:
+    """Summarize the debug.23 KCP-to-TURN pipeline without double counting."""
+    workers = _current_workers(native)
+    sessions = [
+        *current_reports(native, "server_sessions"),
+        *current_reports(native, "client_sessions"),
+    ]
+    gauge_names = (
+        "kcp_output_queue_depth",
+        "kcp_output_queue_capacity",
+        "lane_admission_window_segments",
+        "worker_write_latency_ms",
+    )
+    counter_names = (
+        "kcp_update_backpressure_total",
+        "kcp_mutex_blocked_seconds_total",
+    )
+    available = any(
+        any(name in _mapping(report.get("gauges")) for name in gauge_names)
+        or any(name in _mapping(report.get("counters")) for name in counter_names)
+        for report in workers
+    ) or any(
+        "flow_reorder_abort_total" in _mapping(report.get("counters"))
+        for report in sessions
+    )
+    output_depth = max(
+        (_gauge(report, "kcp_output_queue_depth", "p95") for report in workers),
+        default=0.0,
+    )
+    output_capacity = max(
+        (_gauge(report, "kcp_output_queue_capacity", "max") for report in workers),
+        default=0.0,
+    )
+    admission_p50 = [
+        _gauge(report, "lane_admission_window_segments", "p50")
+        for report in workers
+        if "lane_admission_window_segments" in _mapping(report.get("gauges"))
+    ]
+    admission_p95 = [
+        _gauge(report, "lane_admission_window_segments", "p95")
+        for report in workers
+        if "lane_admission_window_segments" in _mapping(report.get("gauges"))
+    ]
+    return {
+        "available": available,
+        "output_queue_depth_p95": round(output_depth, 3),
+        "output_queue_capacity": round(output_capacity, 3),
+        "output_queue_utilization_ratio": (
+            round(output_depth / output_capacity, 6) if output_capacity else None
+        ),
+        "admission_window_p50_min": round(min(admission_p50, default=0.0), 3),
+        "admission_window_p95_max": round(max(admission_p95, default=0.0), 3),
+        "worker_write_latency_p95_ms": round(max(
+            (_gauge(report, "worker_write_latency_ms", "p95") for report in workers),
+            default=0.0,
+        ), 3),
+        "update_backpressure_total": round(_counter_total(
+            workers,
+            "kcp_update_backpressure_total",
+        ), 3),
+        "mutex_blocked_seconds_total": round(_counter_total(
+            workers,
+            "kcp_mutex_blocked_seconds_total",
+        ), 6),
+        "flow_reorder_abort_total": round(_counter_total(
+            sessions,
+            "flow_reorder_abort_total",
+        ), 3),
+    }
+
+
+def _pipeline_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
+    raw = native.get("lane_pipeline")
+    pipeline = (
+        raw if isinstance(raw, Mapping) and raw.get("available")
+        else lane_pipeline_summary(native)
+    )
+    if not pipeline.get("available"):
+        return []
+    findings: list[dict[str, str]] = []
+    utilization = _number(pipeline.get("output_queue_utilization_ratio"))
+    update_backpressure = _number(pipeline.get("update_backpressure_total"))
+    if update_backpressure or utilization >= 0.75:
+        findings.append(_finding(
+            "critical" if update_backpressure else "warning",
+            "kcp_output_staging_backpressure",
+            "The staged KCP output queue filled far enough to delay or pause "
+            "KCP updates on at least one VK lane.",
+            "Compare output queue occupancy with physical write latency and "
+            "ACK progress; fix the writer or path before increasing KCP windows.",
+        ))
+    mutex_blocked = _number(pipeline.get("mutex_blocked_seconds_total"))
+    if mutex_blocked >= 0.05:
+        findings.append(_finding(
+            "warning",
+            "kcp_mutex_contention",
+            "KCP input or update work accumulated measurable waits on a lane mutex.",
+            "Correlate mutex-blocked time with output staging and CPU pressure; "
+            "profile the remaining work performed while the lane lock is held.",
+        ))
+    write_latency = _number(pipeline.get("worker_write_latency_p95_ms"))
+    if write_latency >= 20:
+        findings.append(_finding(
+            "warning",
+            "worker_physical_write_latency",
+            "Physical TURN/DTLS writes reached at least twice the 10 ms KCP update interval.",
+            "Split by side and lane, then compare TURN endpoint, socket pressure "
+            "and scheduler latency before changing KCP retransmission settings.",
+        ))
+    if _number(pipeline.get("flow_reorder_abort_total")):
+        findings.append(_finding(
+            "warning",
+            "ordered_flow_reorder_abort",
+            "Hydracore isolated one or more ordered flows after an unrecoverable sequence gap.",
+            "Correlate each abort with its lane reconnect and loss boundary; "
+            "verify that unrelated flows and the logical tunnel remained alive.",
+        ))
+    return findings
 
 
 def _recovery_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
@@ -281,6 +402,16 @@ def _gauge(report: Mapping[str, object], name: str, field: str) -> float:
     return _number(_mapping(_mapping(report.get("gauges")).get(name)).get(field))
 
 
+def _counter_total(
+    reports: Sequence[Mapping[str, object]],
+    name: str,
+) -> float:
+    return sum(
+        _number(_mapping(report.get("counters")).get(name))
+        for report in reports
+    )
+
+
 def _finding(
     severity: str,
     code: str,
@@ -300,5 +431,6 @@ __all__ = [
     "current_reports",
     "entity_gauge_peak",
     "lane_findings",
+    "lane_pipeline_summary",
     "server_process_gauge_peak",
 ]

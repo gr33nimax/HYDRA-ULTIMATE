@@ -501,14 +501,16 @@ sudo hydra uninstall --yes --keep-data
 
 ## Hydra VK Tunnel telemetry
 
-With the paired debug.21 core, `status` shows only currently reporting
+With the paired debug.23 core, `status` shows only currently reporting
 transport sessions and the four independent KCP lanes. Each lane row contains
 wire rate, active flows, total retransmission ratio, estimated fast-resend/RTO
 split, WaitSnd, RTT, network loss, output-queue delay/drops, reconnects and TURN
-ordinal. The native summary also shows bounded peer ingress and matched or
-unresolved session-wide lane recoveries. `report` retains every historical
-session and adds its pseudonymous session ID. The wire-v6 core must run on both
-the VPS and client; mixed old/new deployments intentionally fail.
+ordinal. The native summary also shows staged KCP output occupancy, ACK-clocked
+admission, physical write latency, update pauses, mutex waits, bounded peer
+ingress and matched or unresolved session-wide lane recoveries. `report`
+retains every historical session, adds its pseudonymous session ID and prints a
+separate per-lane internal-pipeline table. The wire-v6 core must run on both the
+VPS and client; mixed old/new deployments intentionally fail.
 
 Сессия для трёх заранее созданных пользователей запускается без таймера:
 
@@ -564,7 +566,8 @@ Report включает:
 - CPU/RAM/network VPS, CPU/RSS/restarts Hydracore;
 - PSI, softnet, NIC, conntrack, host-wide UDP errors и Calls listener queue/drops;
 - события VK/TURN/DTLS/worker/session/relay без сырого текста journald;
-- отмеченные оператором фазы и корреляции goodput с CPU/очередями/RTT/loss;
+- отмеченные оператором фазы и корреляции goodput с CPU/очередями/RTT/loss,
+  staged KCP output, admission window и физической задержкой TURN/DTLS write;
 - findings с техническим следующим шагом и уровень нативного покрытия.
 
 RTT, jitter, packet loss, KCP retransmit/window и внутренние queue drops не

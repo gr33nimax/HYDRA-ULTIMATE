@@ -19,6 +19,10 @@ KCP_LIVE_REQUIRED = (
     "kcp_ack_segments_total",
     "kcp_ack_progress_segments_total",
     "kcp_inflight_segments",
+    "kcp_output_queue_depth",
+    "kcp_output_queue_capacity",
+    "kcp_update_backpressure_total",
+    "kcp_mutex_blocked_seconds_total",
 )
 KCP_CONFIG_REQUIRED = (
     "kcp_send_blocked_seconds_total",
@@ -35,6 +39,9 @@ LANE_LIVE_REQUIRED = (
     "lane_flow_count",
     "worker_output_queue_delay_ms",
     "worker_output_queue_late_total",
+    "worker_write_latency_ms",
+    "lane_admission_window_segments",
+    "flow_reorder_abort_total",
 )
 LANE_CONFIG_REQUIRED = (
     "lane_admission_bytes_per_second",

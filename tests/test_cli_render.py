@@ -307,8 +307,15 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
                 "kcp_wait_snd": {"p95": 8},
                 "kcp_rtt_ms": {"p95": 55},
                 "network_loss_ratio": {"p95": 0.01},
+                "lane_admission_window_segments": {"p50": 64, "p95": 96},
+                "kcp_output_queue_depth": {"p95": 12},
+                "kcp_output_queue_capacity": {"max": 128},
+                "worker_write_latency_ms": {"p95": 3.5},
             },
-            "counters": {},
+            "counters": {
+                "kcp_update_backpressure_total": 2,
+                "kcp_mutex_blocked_seconds_total": 0.025,
+            },
         },
     ]
     payload = {
@@ -339,6 +346,18 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
                 "unresolved": 0,
                 "duration_seconds": {"p95": 1.5},
             },
+            "lane_pipeline": {
+                "available": True,
+                "output_queue_depth_p95": 12,
+                "output_queue_capacity": 128,
+                "output_queue_utilization_ratio": 0.09375,
+                "admission_window_p50_min": 64,
+                "admission_window_p95_max": 96,
+                "worker_write_latency_p95_ms": 3.5,
+                "update_backpressure_total": 2,
+                "mutex_blocked_seconds_total": 0.025,
+                "flow_reorder_abort_total": 1,
+            },
         },
     }
 
@@ -356,6 +375,7 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
     assert "1.2%/0.8%" in status
     assert "fast/RTO est=" in status
     assert "KCP ACK: observed=900, progress=800, RTT samples=700" in status
+    assert "KCP pipeline: output p95=12/128 (9.4%)" in status
     assert (
         "Lane recovery: stalls=1, started=1, recovered=1, failed=0, "
         "escalated=0, unresolved=0, p95=1.5 s"
@@ -369,6 +389,9 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
     assert "Queue/late" in report
     assert "ACK/flight" in report
     assert "RTT/var" in report
+    assert "Lane internals" in report
+    assert "Admission p50/p95" in report
+    assert "Output p95/cap" in report
 
 
 def test_tty_uses_human_output_while_json_flag_is_machine_stable(capsys):

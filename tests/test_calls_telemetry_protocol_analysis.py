@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hydra.services.calls_telemetry_findings import extended_native_findings
+from hydra.services.calls_telemetry_lane_analysis import lane_pipeline_summary
 from hydra.services.calls_telemetry_protocol_analysis import (
     CLIENT_SESSION_REQUIRED,
     CLIENT_WORKER_REQUIRED,
@@ -527,3 +528,58 @@ def test_protocol_findings_detect_post_kcp_output_queue_delay() -> None:
     codes = {finding["code"] for finding in protocol_findings(native, {})}
 
     assert "post_kcp_output_queue_delay" in codes
+
+
+def test_debug23_pipeline_metrics_identify_internal_and_physical_pressure() -> None:
+    worker = {
+        "current": True,
+        "active": True,
+        "gauges": {
+            "kcp_output_queue_depth": {"p95": 128},
+            "kcp_output_queue_capacity": {"max": 128},
+            "lane_admission_window_segments": {"p50": 48, "p95": 64},
+            "worker_write_latency_ms": {"p95": 25},
+        },
+        "counters": {
+            "kcp_update_backpressure_total": 3,
+            "kcp_mutex_blocked_seconds_total": 0.075,
+        },
+    }
+    native = {
+        "diagnostic_level": "full",
+        "server": {"counters": {}, "gauges": {}},
+        "clients": {},
+        "events": {},
+        "lane_recovery": {},
+        "server_workers": [worker],
+        "client_workers": [],
+        "server_sessions": [{
+            "current": True,
+            "counters": {"flow_reorder_abort_total": 1},
+            "gauges": {},
+        }],
+        "client_sessions": [],
+    }
+
+    pipeline = lane_pipeline_summary(native)
+    native["lane_pipeline"] = pipeline
+    codes = {finding["code"] for finding in protocol_findings(native, {})}
+
+    assert pipeline == {
+        "available": True,
+        "output_queue_depth_p95": 128.0,
+        "output_queue_capacity": 128.0,
+        "output_queue_utilization_ratio": 1.0,
+        "admission_window_p50_min": 48.0,
+        "admission_window_p95_max": 64.0,
+        "worker_write_latency_p95_ms": 25.0,
+        "update_backpressure_total": 3.0,
+        "mutex_blocked_seconds_total": 0.075,
+        "flow_reorder_abort_total": 1.0,
+    }
+    assert {
+        "kcp_output_staging_backpressure",
+        "kcp_mutex_contention",
+        "worker_physical_write_latency",
+        "ordered_flow_reorder_abort",
+    } <= codes

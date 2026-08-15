@@ -85,6 +85,13 @@ def test_four_lane_session_metrics_are_accepted_as_one_complete_record(
             "kcp_rto_retrans_estimate_bytes_total": 5_000,
             "worker_output_queue_delay_ms": 2.5,
             "worker_output_queue_late_total": 0,
+            "worker_write_latency_ms": 1.5,
+            "lane_admission_window_segments": 64,
+            "kcp_output_queue_depth": 3,
+            "kcp_output_queue_capacity": 128,
+            "kcp_update_backpressure_total": 0,
+            "kcp_mutex_blocked_seconds_total": 0.0,
+            "flow_reorder_abort_total": 0,
             "kcp_congestion_control": 0,
         },
     }

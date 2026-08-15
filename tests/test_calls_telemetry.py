@@ -610,7 +610,13 @@ def test_goodput_correlations_cover_process_queue_kcp_and_client_loss() -> None:
             },
             "udp": {"listener_rx_queue_bytes": index * 10},
             "native": {"latest": {
-                "server": {"kcp_wait_snd": index * 10, "kcp_rtt_ms": index * 10},
+                "server": {
+                    "kcp_wait_snd": index * 10,
+                    "kcp_rtt_ms": index * 10,
+                    "kcp_output_queue_depth": index * 10,
+                    "lane_admission_window_segments": index * 10,
+                    "worker_write_latency_ms": index * 10,
+                },
                 "clients": {"tester-1": {"network_loss_ratio": index / 10}},
             }},
         })
@@ -622,4 +628,7 @@ def test_goodput_correlations_cover_process_queue_kcp_and_client_loss() -> None:
         "samples": 4,
     }
     assert correlations["kcp_wait_snd"]["pearson_r"] == 1.0
+    assert correlations["kcp_output_queue_depth"]["pearson_r"] == 1.0
+    assert correlations["lane_admission_window_segments"]["samples"] == 4
+    assert correlations["worker_write_latency_ms"]["samples"] == 4
     assert correlations["network_loss_ratio"]["samples"] == 4

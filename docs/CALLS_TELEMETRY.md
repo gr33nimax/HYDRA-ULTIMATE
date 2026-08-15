@@ -46,14 +46,16 @@ sudo hydra calls telemetry export --output hydra-vk-tunnel.tar.gz
 sudo hydra calls telemetry stop
 ```
 
-Hydracore debug.21 exposes four independent KCP lanes, one for every VK/TURN
+Hydracore debug.23 exposes four independent KCP lanes, one for every VK/TURN
 call. `status` and `report` show per-lane wire rate, active flow count,
 `kcp_wait_snd`, RTT/RTO, cumulative KCP retransmission ratio, estimated
 fast-resend/RTO split, network loss, output-queue delay/drops, reconnects and
-TURN ordinal. Session rows contain the bounded aggregate of the four lane
-windows and pending limits. Recovery diagnostics pair `lane_send_recovery`
-with `lane_send_recovered` per side/session/lane and report unresolved attempts
-and recovery p95.
+TURN ordinal. The debug.23 pipeline adds admission-window, staged KCP output
+depth/capacity, paused-update count, KCP mutex wait, physical worker-write
+latency and flow-local reorder aborts. Session rows contain the bounded
+aggregate of the four lane windows and pending limits. Recovery diagnostics
+pair `lane_send_recovery` with `lane_send_recovered` per side/session/lane and
+report unresolved attempts and recovery p95.
 
 The signals are deliberately separated: `network_loss_ratio` describes the
 authenticated outer stream, KCP retransmission belongs only to that lane, and
@@ -86,8 +88,9 @@ without penalising the other three. Live `status` uses only current entities;
 
 Report вычисляет distribution min/p50/p95/p99/max, throughput и lifetime,
 coverage/gaps, различия фаз, goodput/wire efficiency, а также Pearson correlation
-goodput с CPU, concurrency, UDP receive queue, KCP `wait_snd`, KCP RTT и
-клиентским loss. Корреляция является указателем для следующего A/B-теста, а не
+goodput с CPU, concurrency, UDP receive queue, KCP `wait_snd`, KCP RTT,
+staged-output depth, admission window, physical write latency и клиентским
+loss. Корреляция является указателем для следующего A/B-теста, а не
 доказательством причинности.
 
 ## Нативный JSONL-контракт Hydracore
@@ -147,6 +150,9 @@ snapshots через аутентифицированный control path. Сме
 | `kcp_wait_snd` около runtime pending cap | KCP backpressure/window | Проверить congestion flag, RTT/retry и только затем A/B размера окна с контролем latency/RSS |
 | RTO estimate доминирует в KCP retransmit | physical loss/RTT/TURN writer | Сопоставить по линии с outer loss, RTT и output queue delay |
 | fast-resend estimate доминирует | burst loss/ACK progression | Проверить outer loss и ACK/retry pressure до изменения fast-resend |
+| staged output близок к capacity или update pause растёт | KCP-to-TURN writer backpressure | Сопоставить queue occupancy, physical write p95 и ACK progress; не увеличивать KCP window |
+| KCP mutex wait растёт при пустом staged output | внутренняя критическая секция lane | Профилировать работу под lane lock и CPU scheduling |
+| flow reorder abort растёт без смерти tunnel | потеря/reconnect одной ordered lane | Сопоставить abort с lane boundary и проверить сохранность остальных flows |
 | lane recovery started без recovered | TURN/DTLS reattach | Сопоставить worker ID с TURN allocate, DTLS и attach events |
 | worker queue drops/no-worker | striping и внутренние очереди | Профилировать send path, менять workers/queue depth |
 | VK/TURN/DTLS latency/failures | control plane/handshake | Разнести p95 по stage, worker и tester |
