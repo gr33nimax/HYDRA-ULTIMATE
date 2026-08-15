@@ -14,6 +14,7 @@ from hydra.services.calls_telemetry_protocol_analysis import (
     protocol_findings,
 )
 from hydra.services.calls_telemetry_resource_report import build_resource_report
+from hydra.services.calls_telemetry_wire import native_wire_breakdown
 
 
 def build_calls_telemetry_report(
@@ -81,7 +82,7 @@ def build_calls_telemetry_report(
     native["analyzed_records"] = native["records"]
     native["records"] = _integer(session.get("native_record_count")) or native["records"]
     server_counters = _mapping(_mapping(native.get("server")).get("counters"))
-    wire_breakdown = _native_wire_breakdown(server_counters)
+    wire_breakdown = native_wire_breakdown(server_counters)
     native["wire_breakdown"] = wire_breakdown
     wire_bytes = _number(wire_breakdown.get("outer_bytes"))
     native["goodput_wire_efficiency_ratio"] = (
@@ -171,51 +172,6 @@ def build_calls_telemetry_report(
             "UDP kernel counters are host-wide; listener queue drops are Calls-specific.",
             "Connections shorter than the traffic-daemon polling interval may be absent.",
         ],
-    }
-
-
-def _native_wire_breakdown(
-    counters: Mapping[str, object],
-) -> dict[str, float]:
-    def combined(left: str, right: str) -> float:
-        return _number(counters.get(left)) + _number(counters.get(right))
-
-    return {
-        "outer_bytes": round(combined("outer_bytes_in_total", "outer_bytes_out_total"), 3),
-        "outer_payload_bytes": round(
-            combined("outer_payload_bytes_in_total", "outer_payload_bytes_out_total"),
-            3,
-        ),
-        "outer_overhead_bytes": round(
-            combined("outer_overhead_bytes_in_total", "outer_overhead_bytes_out_total"),
-            3,
-        ),
-        "kcp_output_bytes": round(_number(counters.get("kcp_out_bytes_total")), 3),
-        "kcp_retransmit_bytes": round(
-            _number(counters.get("kcp_retrans_bytes_total")),
-            3,
-        ),
-        "kcp_fast_retransmit_estimate_bytes": (
-            round(_number(counters.get("kcp_fast_retrans_estimate_bytes_total")), 3)
-            if "kcp_fast_retrans_estimate_bytes_total" in counters else None
-        ),
-        "kcp_rto_retransmit_estimate_bytes": (
-            round(_number(counters.get("kcp_rto_retrans_estimate_bytes_total")), 3)
-            if "kcp_rto_retrans_estimate_bytes_total" in counters else None
-        ),
-        "kcp_ack_segments": (
-            round(_number(counters.get("kcp_ack_segments_total")), 3)
-            if "kcp_ack_segments_total" in counters else None
-        ),
-        "kcp_ack_progress_segments": (
-            round(_number(counters.get("kcp_ack_progress_segments_total")), 3)
-            if "kcp_ack_progress_segments_total" in counters else None
-        ),
-        "kcp_rtt_samples": (
-            round(_number(counters.get("kcp_rtt_samples_total")), 3)
-            if "kcp_rtt_samples_total" in counters else None
-        ),
-        "relay_goodput_bytes": round(_number(counters.get("relay_bytes_total")), 3),
     }
 
 
