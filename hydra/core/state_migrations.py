@@ -11,6 +11,10 @@ from hydra.core.state_migration_hydrabox import migrate_v5_to_v6
 from hydra.core.state_migration_kernel import migrate_v9_to_v10
 from hydra.core.state_models import SCHEMA_VERSION, validate_raw_state
 Migration = Callable[[dict], dict]
+migrate_v10_to_v11 = calls_vk.migrate_v10_to_v11
+migrate_v11_to_v12 = calls_vk.migrate_v11_to_v12
+migrate_v12_to_v13 = calls_vk.migrate_v12_to_v13
+migrate_v13_to_v14 = calls_vk.migrate_v13_to_v14
 
 def migrate_v0_to_v1(data: dict) -> dict:
     data["version"] = 1
@@ -95,10 +99,8 @@ def migrate_v4_to_v5(data: dict) -> dict:
 
 
 MIGRATIONS: dict[int, Migration] = {
-    0: migrate_v0_to_v1,
-    1: migrate_v1_to_v2,
-    2: migrate_v2_to_v3,
-    3: migrate_v3_to_v4,
+    0: migrate_v0_to_v1, 1: migrate_v1_to_v2,
+    2: migrate_v2_to_v3, 3: migrate_v3_to_v4,
     4: migrate_v4_to_v5,
     5: migrate_v5_to_v6,
     6: migrate_v6_to_v7,
@@ -124,9 +126,7 @@ def migrate_state(
     while version < SCHEMA_VERSION:
         migration = migrations.get(version)
         if migration is None:
-            raise RuntimeError(
-                f"missing state migration {version} -> {version + 1}"
-            )
+            raise RuntimeError(f"missing state migration {version} -> {version + 1}")
         migrated = migration(migrated)
         expected = version + 1
         if migrated.get("version") != expected:
