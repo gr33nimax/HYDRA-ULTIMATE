@@ -1,4 +1,4 @@
-"""Findings for the eight independent VK parasite KCP lanes."""
+"""Findings for the four independent VK parasite KCP lanes."""
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -15,8 +15,8 @@ def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
         findings.append(_finding(
             "critical",
             "lane_send_stall_recovery",
-            "Hydracore closed a logical session after all eight KCP lanes stopped accepting sends.",
-            "Compare the preceding per-lane WaitSnd, output queues, "
+            "Hydracore closed a logical session after its selected KCP lane stopped accepting sends.",
+            "Compare that flow's pinned lane WaitSnd, output queue, "
             "retransmissions and worker reconnects; verify that a fresh "
             "session resumed traffic.",
         ))
@@ -29,6 +29,24 @@ def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
             "Inspect the missing flow's lane loss and reconnect boundary, "
             "then verify that the replacement session resumed without an "
             "application restart.",
+        ))
+    if _number(events.get("lane_udp_reorder_timeout")):
+        findings.append(_finding(
+            "warning",
+            "lane_udp_reorder_timeout",
+            "One striped UDP/QUIC flow had a sequence gap that outlived the "
+            "bounded cleanup window.",
+            "Compare physical loss and reconnects on the four lanes; the gap "
+            "was isolated to that flow and did not close the logical tunnel.",
+        ))
+    if _number(events.get("network_rebind_lane_failed")):
+        findings.append(_finding(
+            "warning",
+            "network_rebind_lane_failed",
+            "A staged Android network handover could not replace one VK/TURN "
+            "lane in time.",
+            "Inspect that lane's VK authentication, TURN allocation and DTLS "
+            "events; the remaining lanes were intentionally kept alive.",
         ))
 
     active_by_session: dict[tuple[str, str, str], set[int]] = {}
@@ -50,15 +68,15 @@ def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
             active_by_session.setdefault(key, set()).add(worker_id)
     incomplete = [
         key for key, lane_ids in active_by_session.items()
-        if lane_ids != set(range(8))
+        if lane_ids != set(range(4))
     ]
     if incomplete:
         findings.append(_finding(
             "critical",
-            "eight_lane_session_incomplete",
-            "An active VK parasite session did not have all eight independent KCP lanes.",
+            "four_lane_session_incomplete",
+            "An active VK parasite session did not have all four independent KCP lanes.",
             "Compare worker attach/reconnect events by tester and lane; do "
-            "not tune KCP until lanes 0..7 stay active.",
+            "not tune KCP until lanes 0..3 stay active.",
         ))
 
     carrying = [
@@ -88,7 +106,7 @@ def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
         findings.append(_finding(
             "warning",
             "lane_rtt_imbalance",
-            "The eight VK/TURN lanes had materially different KCP RTT.",
+            "The four VK/TURN lanes had materially different KCP RTT.",
             "Prefer low-RTT lanes for new frames and keep the slow lane as "
             "reduced-capacity or standby.",
         ))

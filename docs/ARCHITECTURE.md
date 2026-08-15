@@ -667,6 +667,10 @@ Schema 13 выключает активный wire-v4 Calls перед общи�
 независимых KCP lane и строгий wire v5 с admission до KCP и flow-credit на TCP
 relay. Комнаты и installed state сохраняются для явного переключения ядра и
 повторного включения Calls.
+Schema 14 выключает несовместимый wire-v5 Calls, возвращает ровно четыре worker
+и выбирает wire v6: TCP-поток закрепляется за одним KCP lane, UDP/QUIC
+распределяется по четырём, физическая очередь создаёт backpressure без локальных
+drop, а смена сети заменяет TURN/DTLS worker по одному.
 Повторная установка после switch на Hydracore создаёт новый managed-пул.
 `ApplicationService.kernel` — единственный use-case замены core:
 trusted release metadata и обязательный SHA-256 digest проверяются до ELF,

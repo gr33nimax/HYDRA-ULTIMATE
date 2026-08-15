@@ -1,5 +1,14 @@
 # Changelog
 
+- Added the incompatible Hydracore debug.19 wire-v6 contract: exactly four
+  physical VK/TURN calls, TCP flow affinity, aggregate UDP/QUIC striping,
+  lossless KCP-to-worker backpressure and staged Android network handover.
+  Calls state schema 14 converts the obsolete eight-worker fields back to four
+  and quiesces Calls until both endpoints have switched to wire v6.
+- Telemetry metadata, CLI rendering and findings now validate IDs 0..3 and the
+  `call_vk_four_lane_kcp` capability. The former false "missing lanes 4..7"
+  critical and all eight-lane wording were removed.
+
 - Added the intentionally incompatible Hydracore debug.13 wire-v5 contract:
   eight independent KCP lanes, per-lane pre-KCP admission, bounded relay byte
   credit and video-class RTP payload type 96. Calls state schema 13 migrates

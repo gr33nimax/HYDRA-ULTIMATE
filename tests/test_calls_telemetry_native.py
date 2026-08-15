@@ -55,7 +55,7 @@ def test_oversized_native_line_does_not_consume_the_next_record(tmp_path: Path) 
     assert len(records) == 1
 
 
-def test_eight_lane_session_metrics_are_accepted_as_one_complete_record(
+def test_four_lane_session_metrics_are_accepted_as_one_complete_record(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "native.jsonl"
@@ -67,7 +67,7 @@ def test_eight_lane_session_metrics_are_accepted_as_one_complete_record(
         "user": "tester-user",
         "session_id": "session-0123456789abcdef",
         "metrics": {
-            "lane_count": 8,
+            "lane_count": 4,
             "lane_flow_count": 12,
             "lane_admission_bytes_per_second": 190_000,
             "outer_rtp_payload_type": 96,

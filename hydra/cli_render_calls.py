@@ -228,7 +228,7 @@ def _append_native_sessions(
                 "",
                 (
                     "Transport config: "
-                    "eight independent KCP lanes (wire v5), "
+                    "four independent KCP lanes (wire v6), "
                     f"lanes={_gauge(first_report, 'lane_count', 'max'):.0f}, "
                     f"MTU={_gauge(first_report, 'kcp_mtu_bytes', 'max'):.0f}, "
                     "aggregate-window="

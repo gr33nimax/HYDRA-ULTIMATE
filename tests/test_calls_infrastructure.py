@@ -70,7 +70,7 @@ class CapabilityHost(ProbeHost):
                 },
                 "features": {
                     "call_vk_parasite": True,
-                    "call_vk_eight_lane_kcp": True,
+                    "call_vk_four_lane_kcp": True,
                     "call_vk_pre_kcp_admission": True,
                     "call_vk_relay_flow_control": True,
                     "call_vk_parasite_client": False,
@@ -78,7 +78,7 @@ class CapabilityHost(ProbeHost):
                 },
                 "protocols": {
                     "call_modes": ["vk_parasite"],
-                    "call_vk_parasite_wire": {"min": 5, "max": 5},
+                    "call_vk_parasite_wire": {"min": 6, "max": 6},
                 },
             }),
             stderr="",

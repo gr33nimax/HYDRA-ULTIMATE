@@ -222,7 +222,7 @@ class KernelInfrastructure:
             and identity.get("role") == "vps"
             and isinstance(features, dict)
             and features.get("call_vk_parasite") is True
-            and features.get("call_vk_eight_lane_kcp") is True
+            and features.get("call_vk_four_lane_kcp") is True
             and features.get("call_vk_pre_kcp_admission") is True
             and features.get("call_vk_relay_flow_control") is True
             and features.get("call_vk_parasite_server") is True
@@ -230,8 +230,8 @@ class KernelInfrastructure:
             and isinstance(modes, list)
             and modes == ["vk_parasite"]
             and isinstance(wire, dict)
-            and wire.get("min") == 5
-            and wire.get("max") == 5
+            and wire.get("min") == 6
+            and wire.get("max") == 6
         )
 
     @classmethod
@@ -330,7 +330,7 @@ class KernelInfrastructure:
             if not self._has_hydracore_contract(payload):
                 raise RuntimeError(
                     "Hydracore must expose exact identity, "
-                    "the VPS Calls role, vk_parasite-only mode, and wire v5",
+                    "the VPS Calls role, vk_parasite-only mode, and wire v6",
                 )
             if channel == "debug" and not self._has_hydracore_debug_contract(payload):
                 raise RuntimeError(

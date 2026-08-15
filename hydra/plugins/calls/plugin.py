@@ -151,8 +151,8 @@ class CallsPlugin(BasePlugin):
             info={
                 "platform": "vk",
                 "mode": mode,
-                "transport": "eight_lane_kcp_v5",
-                "lanes": 8,
+                "transport": "four_lane_kcp_v6",
+                "lanes": 4,
                 "configured": ready,
             },
         )
@@ -163,7 +163,7 @@ class CallsPlugin(BasePlugin):
             return ConfigFragment()
         call_mode(state)
         if not self._source.vk_parasite_supported():
-            raise ValueError("installed core does not support VK Calls parasite wire v5")
+            raise ValueError("installed core does not support VK Calls parasite wire v6")
         return ConfigFragment(inbounds=[vk_parasite_inbound(state)])
 
     def generate_client_config(self, user, state: PluginStateAccess) -> str:
@@ -173,7 +173,7 @@ class CallsPlugin(BasePlugin):
             return ""
         call_mode(state)
         if not self._source.vk_parasite_supported():
-            raise ValueError("installed core does not support VK Calls parasite wire v5")
+            raise ValueError("installed core does not support VK Calls parasite wire v6")
         outbound = vk_parasite_outbound(
             user,
             state,
@@ -197,7 +197,7 @@ class CallsPlugin(BasePlugin):
         healthy = all(checks.values())
         return HealthResult(
             healthy,
-            "" if healthy else "native VK Calls eight-lane prerequisites are not ready",
+            "" if healthy else "native VK Calls four-lane prerequisites are not ready",
             "ok" if healthy else "error",
             checks,
         )

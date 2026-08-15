@@ -182,8 +182,8 @@ def test_native_enable_is_hydracore_vk_parasite_only() -> None:
     }
     assert state.protocols["calls"].enabled is True
     assert state.protocols["calls"].config["mode"] == "vk_parasite"
-    assert state.protocols["calls"].config["workers"] == 8
-    assert state.protocols["calls"].config["max_workers_per_session"] == 8
+    assert state.protocols["calls"].config["workers"] == 4
+    assert state.protocols["calls"].config["max_workers_per_session"] == 4
     assert state.protocols["calls"].config["listen_port"] == 56002
     assert state.protocols["calls"].config["public_endpoint"] == "203.0.113.10"
     assert len(state.protocols["calls"].config["obfs_password"]) >= 32

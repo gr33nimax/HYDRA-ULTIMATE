@@ -21,7 +21,7 @@ from hydra.core.state_kernel_models import (
     validate_raw_kernel_config,
 )
 from hydra.core.state_network_models import NetworkConfig
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 class UnsupportedStateVersion(RuntimeError):

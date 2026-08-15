@@ -217,7 +217,7 @@ def protocol_findings(
         findings.append(_finding(
             "warning",
             "lane_rate_imbalance",
-            "The eight VK/TURN lanes carried materially different wire rates.",
+            "The four VK/TURN lanes carried materially different wire rates.",
             "Compare TURN ordinal, KCP retries, RTT, queue drops and reconnects per lane; reduce only the weak lane.",
         ))
     output_queue_delay = max(

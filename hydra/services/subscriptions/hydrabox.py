@@ -312,7 +312,7 @@ def generate_hydrabox_subscription(
                 required_core_features.add("call")
                 if item.get("platform") == "vk" and item.get("mode") == "vk_parasite":
                     required_core_features.add("call_vk_parasite")
-                    required_core_features.add("call_vk_eight_lane_kcp")
+                    required_core_features.add("call_vk_four_lane_kcp")
                     required_core_features.add("call_vk_pre_kcp_admission")
                     required_core_features.add("call_vk_relay_flow_control")
         resources.append({

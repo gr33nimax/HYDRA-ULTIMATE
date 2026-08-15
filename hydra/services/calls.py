@@ -156,7 +156,7 @@ class CallsService:
             return failed_result(
                 RuntimeError(
                     "installed Hydracore does not expose the exact "
-                    "call_vk_parasite wire-v5 capability contract"
+                    "call_vk_parasite wire-v6 capability contract"
                 ),
                 fallback=ErrorCode.OPERATION_FAILED,
             )

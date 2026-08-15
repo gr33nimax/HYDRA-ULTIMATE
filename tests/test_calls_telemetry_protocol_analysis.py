@@ -236,7 +236,7 @@ def test_negligible_outer_auth_noise_is_not_reported_as_critical() -> None:
     assert "outer_packet_authentication_failures" not in codes
 
 
-def test_lane_findings_require_all_eight_independent_kcp_lanes() -> None:
+def test_lane_findings_require_all_four_independent_kcp_lanes() -> None:
     native = {
         "server": {"counters": {}, "gauges": {}},
         "clients": {},
@@ -254,14 +254,14 @@ def test_lane_findings_require_all_eight_independent_kcp_lanes() -> None:
                 "gauges": {"kcp_rtt_ms": {"p95": 50}},
                 "counters": {},
             }
-            for lane in range(7)
+            for lane in range(3)
         ],
         "client_workers": [],
     }
 
     codes = {finding["code"] for finding in protocol_findings(native, {})}
 
-    assert "eight_lane_session_incomplete" in codes
+    assert "four_lane_session_incomplete" in codes
 
 
 def test_lane_findings_report_bounded_session_recovery_events() -> None:
@@ -269,6 +269,8 @@ def test_lane_findings_report_bounded_session_recovery_events() -> None:
         "events": {
             "lane_send_stalled": 1,
             "lane_reorder_timeout": 1,
+            "lane_udp_reorder_timeout": 1,
+            "network_rebind_lane_failed": 1,
         },
     }
 
@@ -276,6 +278,8 @@ def test_lane_findings_report_bounded_session_recovery_events() -> None:
 
     assert "lane_send_stall_recovery" in codes
     assert "lane_reorder_timeout_recovery" in codes
+    assert "lane_udp_reorder_timeout" in codes
+    assert "network_rebind_lane_failed" in codes
 
 
 def test_lane_findings_isolate_retransmission_imbalance() -> None:

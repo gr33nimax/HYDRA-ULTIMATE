@@ -33,7 +33,7 @@ def _state() -> AppState:
                 config={
                     "mode": "vk_parasite",
                     "room_count": 4,
-                    "workers": 8,
+                    "workers": 4,
                     "listen_port": 56002,
                 },
             ),
@@ -67,14 +67,14 @@ def test_service_validates_experiment_and_passes_only_safe_metadata() -> None:
     assert kwargs["max_data_bytes"] == 2048 * 1024 * 1024
     assert kwargs["metadata"]["calls"] == {
         "mode": "vk_parasite",
-        "transport": "eight_lane_kcp_v5",
-        "lane_count": 8,
+        "transport": "four_lane_kcp_v6",
+        "lane_count": 4,
         "room_count": 4,
-        "workers": 8,
+        "workers": 4,
         "listen_port": 56002,
         "max_sessions": 128,
         "max_sessions_per_user": 1,
-        "max_workers_per_session": 8,
+        "max_workers_per_session": 4,
         "max_pending_handshakes": 256,
         "handshake_timeout": "10s",
         "session_idle_timeout": "5m",
