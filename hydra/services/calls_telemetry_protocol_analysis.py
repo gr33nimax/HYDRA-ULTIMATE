@@ -27,6 +27,9 @@ from hydra.services.calls_telemetry_lane_analysis import (
     lane_findings,
     server_process_gauge_peak,
 )
+from hydra.services.calls_telemetry_transport_diagnostics import (
+    retransmission_findings,
+)
 
 def analyze_kernel(samples: Sequence[Mapping[str, object]]) -> dict[str, object]:
     return {
@@ -134,13 +137,11 @@ def protocol_findings(
     retransmission_pressure = bool(
         retrans and (not out_segments or retrans / max(1, out_segments) >= 0.1)
     )
-    if retransmission_pressure:
-        findings.append(_finding(
-            "warning",
-            "kcp_retransmission_pressure",
-            "KCP retransmission/loss counters are high relative to transmitted segments.",
-            "Compare by tester, room and worker; tune KCP/window only after separating RTT from packet loss.",
-        ))
+    findings.extend(retransmission_findings(
+        native,
+        counters,
+        pressure=retransmission_pressure,
+    ))
     server_paths = [
         report
         for report in native.get("server_sessions", [])

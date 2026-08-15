@@ -298,6 +298,8 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
             "current": True,
             "wire_bps": 2_000_000,
             "kcp_retransmission_ratio": 0.02,
+            "kcp_fast_retransmission_ratio": 0.012,
+            "kcp_rto_retransmission_ratio": 0.008,
             "gauges": {
                 "worker_active": {"max": 1},
                 "lane_count": {"max": 1},
@@ -317,6 +319,23 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
             "diagnostic_level": "full",
             "server_workers": workers,
             "client_workers": [],
+            "wire_breakdown": {
+                "outer_bytes": 2_000_000,
+                "outer_payload_bytes": 1_800_000,
+                "outer_overhead_bytes": 200_000,
+                "kcp_retransmit_bytes": 300_000,
+                "kcp_fast_retransmit_estimate_bytes": 120_000,
+                "kcp_rto_retransmit_estimate_bytes": 180_000,
+                "relay_goodput_bytes": 1_000_000,
+            },
+            "lane_recovery": {
+                "stalls": 1,
+                "attempts": 1,
+                "recovered": 1,
+                "matched_recoveries": 1,
+                "unresolved": 0,
+                "duration_seconds": {"p95": 1.5},
+            },
         },
     }
 
@@ -331,6 +350,9 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
     assert "KCP retx" in status
     assert "Flows" in status
     assert "2.0%" in status
+    assert "1.2%/0.8%" in status
+    assert "fast/RTO est=" in status
+    assert "Lane recovery: stalls=1, started=1, recovered=1, unresolved=0, p95=1.5 s" in status
     assert "12" in status
     assert "55 ms" in status
     assert "Historical/inactive workers hidden: 1" in status

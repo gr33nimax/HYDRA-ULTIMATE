@@ -195,9 +195,12 @@ def test_entity_reports_mark_only_recent_live_session_as_current() -> None:
     assert reports["current-session"]["current"] is True
 
 
-def test_worker_report_uses_cumulative_kcp_segments_for_exact_retry_ratio() -> None:
+def test_worker_report_splits_fast_and_rto_retransmission_estimates() -> None:
     records = []
-    for timestamp, segments, retransmissions in ((10.0, 100, 10), (20.0, 200, 30)):
+    for timestamp, segments, retransmissions, fast, rto in (
+        (10.0, 100, 10, 6, 4),
+        (20.0, 200, 30, 18, 12),
+    ):
         records.append({
             "kind": "native",
             "timestamp": timestamp,
@@ -211,12 +214,18 @@ def test_worker_report_uses_cumulative_kcp_segments_for_exact_retry_ratio() -> N
                 "worker_active": 1,
                 "kcp_out_segments_total": segments,
                 "kcp_retrans_segments_total": retransmissions,
+                "kcp_fast_retrans_estimate_segments_total": fast,
+                "kcp_rto_retrans_estimate_segments_total": rto,
             },
         })
 
     result = analyze_native(records, ["tester-1"])
 
     assert result["server_workers"][0]["kcp_retransmission_ratio"] == 0.2
+    assert result["server_workers"][0]["kcp_fast_retransmission_ratio"] == 0.12
+    assert result["server_workers"][0]["kcp_rto_retransmission_ratio"] == 0.08
+    assert result["server_workers"][0]["kcp_fast_retransmission_share"] == 0.6
+    assert result["server_workers"][0]["kcp_rto_retransmission_share"] == 0.4
 
 
 def test_negligible_outer_auth_noise_is_not_reported_as_critical() -> None:
@@ -272,14 +281,72 @@ def test_lane_findings_report_bounded_session_recovery_events() -> None:
             "lane_udp_reorder_timeout": 1,
             "network_rebind_lane_failed": 1,
         },
+        "lane_recovery": {
+            "attempts": 1,
+            "matched_recoveries": 1,
+            "unresolved": 0,
+        },
     }
 
     codes = {finding["code"] for finding in protocol_findings(native, {})}
 
-    assert "lane_send_stall_recovery" in codes
+    assert "lane_recovery_succeeded" in codes
     assert "lane_reorder_timeout_recovery" in codes
     assert "lane_udp_reorder_timeout" in codes
     assert "network_rebind_lane_failed" in codes
+
+
+def test_native_analysis_pairs_session_wide_lane_recovery_duration() -> None:
+    records = [
+        {
+            "kind": "native",
+            "timestamp": timestamp,
+            "native_scope": "server",
+            "native_kind": "event",
+            "native_entity": "server_worker",
+            "tester_id": "tester-1",
+            "native_session_id": "session-1",
+            "worker_id": 2,
+            "event": event,
+            "metrics": {},
+        }
+        for timestamp, event in (
+            (10.0, "lane_send_stalled"),
+            (10.1, "lane_send_recovery"),
+            (11.6, "lane_send_recovered"),
+        )
+    ]
+
+    recovery = analyze_native(records, ["tester-1"])["lane_recovery"]
+
+    assert recovery["stalls"] == 1
+    assert recovery["attempts"] == 1
+    assert recovery["matched_recoveries"] == 1
+    assert recovery["unresolved"] == 0
+    assert recovery["duration_seconds"]["p95"] == 1.5
+
+
+def test_protocol_findings_distinguish_rto_dominated_retransmissions() -> None:
+    native = {
+        "server": {
+            "counters": {
+                "kcp_out_segments_total": 1000,
+                "kcp_retrans_segments_total": 300,
+                "kcp_fast_retrans_estimate_segments_total": 60,
+                "kcp_rto_retrans_estimate_segments_total": 240,
+            },
+            "gauges": {},
+        },
+        "clients": {},
+        "server_sessions": [],
+        "client_sessions": [],
+    }
+
+    codes = {finding["code"] for finding in protocol_findings(native, {})}
+
+    assert "kcp_retransmission_pressure" in codes
+    assert "kcp_rto_retransmission_dominant" in codes
+    assert "kcp_fast_retransmission_dominant" not in codes
 
 
 def test_lane_findings_isolate_retransmission_imbalance() -> None:

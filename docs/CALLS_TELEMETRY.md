@@ -12,7 +12,8 @@
 `debug`. В режиме `vk_parasite` сервер является
 UDP/DTLS endpoint, а клиент получает TURN credentials через VK Calls, создаёт
 четыре VK/TURN worker и отдельную KCP-сессию на каждой линии. Готовые relay
-frames одного потока распределяются между линиями и упорядочиваются над KCP.
+frames TCP-потока сохраняют affinity к линии с возможностью spillover, а
+неупорядоченные UDP/QUIC frames используют все четыре линии.
 Поэтому Clash API на
 VPS видит соединения и goodput, но сам по себе не видит latency VK auth/TURN,
 DTLS handshake, KCP RTT/retransmit/window и потери внутренних очередей.
@@ -45,11 +46,14 @@ sudo hydra calls telemetry export --output hydra-vk-tunnel.tar.gz
 sudo hydra calls telemetry stop
 ```
 
-Hydracore debug.19 exposes four independent KCP lanes, one for every VK/TURN
+Hydracore debug.21 exposes four independent KCP lanes, one for every VK/TURN
 call. `status` and `report` show per-lane wire rate, active flow count,
-`kcp_wait_snd`, RTT/RTO, cumulative KCP retransmission ratio, network loss,
-output-queue delay/drops, reconnects and TURN ordinal. Session rows contain the
-bounded aggregate of the four lane windows and pending limits.
+`kcp_wait_snd`, RTT/RTO, cumulative KCP retransmission ratio, estimated
+fast-resend/RTO split, network loss, output-queue delay/drops, reconnects and
+TURN ordinal. Session rows contain the bounded aggregate of the four lane
+windows and pending limits. Recovery diagnostics pair `lane_send_recovery`
+with `lane_send_recovered` per side/session/lane and report unresolved attempts
+and recovery p95.
 
 The signals are deliberately separated: `network_loss_ratio` describes the
 authenticated outer stream, KCP retransmission belongs only to that lane, and
@@ -91,7 +95,7 @@ goodput с CPU, concurrency, UDP receive queue, KCP `wait_snd`, KCP RTT и
 VPS core пишет append-only файл `/run/hydra/calls-telemetry.jsonl`. Строка:
 
 ```json
-{"schema":1,"timestamp":1786400000.25,"scope":"server","kind":"snapshot","session_id":"internal-id","metrics":{"worker_active":12,"kcp_wait_snd":37,"kcp_rtt_ms":82.4}}
+{"schema":1,"timestamp":1786400000.25,"scope":"server","kind":"snapshot","session_id":"internal-id","metrics":{"worker_active":4,"kcp_wait_snd":37,"kcp_rtt_ms":82.4}}
 ```
 
 Client-событие, доставленное на VPS через аутентифицированный control path:
@@ -110,7 +114,7 @@ boolean metrics и slug-поля `event/stage/reason`. Максимальная 
 Обязательные server groups:
 
 - DTLS: success/failure totals и handshake latency;
-- KCP: `wait_snd`, out/retrans segments и RTT;
+- KCP: `wait_snd`, out/retrans segments, estimated fast/RTO retransmit и RTT;
 - outer: in/out packets и bytes, authentication failures;
 - worker: active, attach success, send-queue drops;
 - relay: active TCP/UDP и queue drops;
@@ -123,7 +127,7 @@ boolean metrics и slug-поля `event/stage/reason`. Максимальная 
 - TURN allocate: success/failure и latency;
 - DTLS: success/failure и handshake latency;
 - workers: desired/active/reconnect;
-- KCP: `wait_snd`, retrans segments и RTT;
+- KCP: `wait_snd`, retrans segments, estimated fast/RTO retransmit и RTT;
 - network: loss ratio, jitter и handover;
 - runtime: CPU, RSS и thermal state.
 
@@ -140,7 +144,10 @@ snapshots через аутентифицированный control path. Сме
 | :--- | :--- | :--- |
 | kernel/NIC/UDP drops растут | VPS, socket buffers, NIC/CPU scheduling | Устранить host loss, затем повторить тот же workload |
 | KCP retransmit высокий при высоком loss/RTT | путь client ↔ VK TURN | Сравнить сети/регионы/TURN и только затем KCP policy |
-| `kcp_wait_snd` около 2048 | KCP backpressure/window | Проверить dynamic-cwnd flag, RTT/retry и только затем A/B размера окна с контролем latency/RSS |
+| `kcp_wait_snd` около runtime pending cap | KCP backpressure/window | Проверить congestion flag, RTT/retry и только затем A/B размера окна с контролем latency/RSS |
+| RTO estimate доминирует в KCP retransmit | physical loss/RTT/TURN writer | Сопоставить по линии с outer loss, RTT и output queue delay |
+| fast-resend estimate доминирует | burst loss/ACK progression | Проверить outer loss и ACK/retry pressure до изменения fast-resend |
+| lane recovery started без recovered | TURN/DTLS reattach | Сопоставить worker ID с TURN allocate, DTLS и attach events |
 | worker queue drops/no-worker | striping и внутренние очереди | Профилировать send path, менять workers/queue depth |
 | VK/TURN/DTLS latency/failures | control plane/handshake | Разнести p95 по stage, worker и tester |
 | goodput растёт вместе с Hydracore CPU до насыщения | CPU/crypto/single UDP loop | Go profile, crypto/alloc/GC и multi-core dispatch A/B |

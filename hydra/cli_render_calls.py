@@ -119,6 +119,14 @@ def _append_testers(lines: list[str], testers: Sequence[object]) -> None:
     lines.extend(["", "Testers", *table(("ID", "Traffic", "p95"), rows)])
 
 
+def _retrans_reason(report: Mapping[str, object]) -> str:
+    fast = report.get("kcp_fast_retransmission_ratio")
+    rto = report.get("kcp_rto_retransmission_ratio")
+    if fast is None and rto is None:
+        return "-"
+    return f"{_percent(fast)}/{_percent(rto)}"
+
+
 def _append_native_diagnostics(
     lines: list[str],
     native: Mapping[str, object],
@@ -170,16 +178,49 @@ def _append_native_diagnostics(
         f"socket rcv/snd={_bytes(_gauge(server_map, 'udp_socket_receive_buffer_bytes', 'max'))}/"
         f"{_bytes(_gauge(server_map, 'udp_socket_send_buffer_bytes', 'max'))}"
     )
+    peer_capacity = _gauge(server_map, "peer_read_queue_capacity", "max")
+    if peer_capacity:
+        lines.append(
+            "  Peer ingress: "
+            f"queue p95={_gauge(server_map, 'peer_read_queue_depth', 'p95'):.0f}/"
+            f"{peer_capacity:.0f}, "
+            f"drops={scalar(counter_map.get('peer_read_queue_drops_total', 0))}"
+        )
     wire = native.get("wire_breakdown")
     wire_map = wire if isinstance(wire, Mapping) else {}
     if wire_map:
+        fast_bytes = wire_map.get("kcp_fast_retransmit_estimate_bytes")
+        rto_bytes = wire_map.get("kcp_rto_retransmit_estimate_bytes")
+        reason_bytes = (
+            " (fast/RTO est="
+            f"{_bytes(fast_bytes)}/{_bytes(rto_bytes)})"
+            if fast_bytes is not None or rto_bytes is not None
+            else ""
+        )
         lines.append(
             "  Wire: "
             f"outer={_bytes(wire_map.get('outer_bytes'))}, "
             f"payload={_bytes(wire_map.get('outer_payload_bytes'))}, "
             f"wrapper={_bytes(wire_map.get('outer_overhead_bytes'))}, "
-            f"KCP retx={_bytes(wire_map.get('kcp_retransmit_bytes'))}, "
+            f"KCP retx={_bytes(wire_map.get('kcp_retransmit_bytes'))}"
+            f"{reason_bytes}, "
             f"goodput={_bytes(wire_map.get('relay_goodput_bytes'))}"
+        )
+    recovery = native.get("lane_recovery")
+    recovery_map = recovery if isinstance(recovery, Mapping) else {}
+    if recovery_map and (
+        recovery_map.get("stalls") or recovery_map.get("attempts")
+        or recovery_map.get("recovered")
+    ):
+        duration = recovery_map.get("duration_seconds")
+        duration_map = duration if isinstance(duration, Mapping) else {}
+        lines.append(
+            "  Lane recovery: "
+            f"stalls={scalar(recovery_map.get('stalls', 0))}, "
+            f"started={scalar(recovery_map.get('attempts', 0))}, "
+            f"recovered={scalar(recovery_map.get('matched_recoveries', 0))}, "
+            f"unresolved={scalar(recovery_map.get('unresolved', 0))}, "
+            f"p95={scalar(round(float(duration_map.get('p95', 0) or 0), 3))} s"
         )
     missing_all = [*missing_items, *group_items]
     if missing_all:
@@ -218,6 +259,7 @@ def _append_native_sessions(
                 _short_id(report.get("native_session_id")),
                 _bitrate(report.get("wire_bps")),
                 _percent(report.get("kcp_retransmission_ratio")),
+                _retrans_reason(report),
                 scalar(round(_gauge(report, "kcp_wait_snd", "p95"), 1)),
                 f"{_gauge(report, 'kcp_rtt_ms', 'p95'):.0f} ms",
                 _percent(_gauge(report, "network_loss_ratio", "p95")),
@@ -246,7 +288,7 @@ def _append_native_sessions(
             *table(
                 (
                     "Side", "Tester", "Session", "Wire avg", "KCP retx",
-                    "Wait p95", "RTT p95", "Loss p95",
+                    "Fast/RTO", "Wait p95", "RTT p95", "Loss p95",
                 ),
                 rows,
             ),
@@ -287,11 +329,6 @@ def _append_native_workers(
             lane_rtt = _gauge(report, "kcp_rtt_ms", "p95")
             wait_snd = _gauge(report, "kcp_wait_snd", "p95")
             flow_count = _gauge(report, "lane_flow_count", "max")
-            admission_rate = _gauge(
-                report,
-                "lane_admission_bytes_per_second",
-                "p95",
-            )
             queue_delay = _gauge(report, "worker_output_queue_delay_ms", "p95")
             queue_late = _counter(report, "worker_output_queue_late_total")
             active = bool(report.get("active"))
@@ -318,9 +355,9 @@ def _append_native_workers(
                     (
                         *common,
                         _bitrate(report.get("wire_bps")),
-                        _bitrate(admission_rate * 8),
                         scalar(round(flow_count, 1)),
                         _percent(retry_pressure),
+                        _retrans_reason(report),
                         scalar(round(wait_snd, 1)),
                         f"{lane_rtt:.0f} ms",
                         _percent(loss),
@@ -338,9 +375,9 @@ def _append_native_workers(
                     (
                         *common,
                         _bitrate(report.get("wire_bps")),
-                        _bitrate(admission_rate * 8),
                         scalar(round(flow_count, 1)),
                         _percent(retry_pressure),
+                        _retrans_reason(report),
                         scalar(round(wait_snd, 1)),
                         f"{lane_rtt:.0f} ms",
                         scalar(round(drops, 1)),
@@ -359,13 +396,13 @@ def _append_native_workers(
     if detailed:
         headers.append("Session")
         headers.extend((
-            "Lane", "Active", "Wire avg", "Pace", "Flows", "KCP retx", "Wait p95",
+            "Lane", "Active", "Wire avg", "Flows", "KCP retx", "Fast/RTO", "Wait p95",
             "RTT p95", "Net loss", "Queue/late", "Drops",
             "Reconnect", "TURN #",
         ))
     else:
         headers.extend((
-            "Lane", "Active", "Wire avg", "Pace", "Flows", "KCP retx", "Wait p95",
+            "Lane", "Active", "Wire avg", "Flows", "KCP retx", "Fast/RTO", "Wait p95",
             "RTT p95", "Drops", "TURN #",
         ))
     lines.extend([
@@ -426,6 +463,8 @@ def render_calls_telemetry_record(
             "kcp_rtt_ms",
             "kcp_rto_ms",
             "kcp_retrans_segments_total",
+            "kcp_fast_retrans_estimate_segments_total",
+            "kcp_rto_retrans_estimate_segments_total",
             "network_loss_ratio",
             "outer_bytes_in_total",
             "outer_bytes_out_total",

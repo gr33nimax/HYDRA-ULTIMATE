@@ -11,14 +11,35 @@ def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
     findings: list[dict[str, str]] = []
     events = _mapping(native.get("events"))
 
-    if _number(events.get("lane_send_stalled")):
+    recovery = _mapping(native.get("lane_recovery"))
+    attempts = _number(recovery.get("attempts"))
+    unresolved = _number(recovery.get("unresolved"))
+    matched = _number(recovery.get("matched_recoveries"))
+    if attempts and unresolved:
         findings.append(_finding(
             "critical",
-            "lane_send_stall_recovery",
-            "Hydracore closed a logical session after its selected KCP lane stopped accepting sends.",
-            "Compare that flow's pinned lane WaitSnd, output queue, "
-            "retransmissions and worker reconnects; verify that a fresh "
-            "session resumed traffic.",
+            "lane_recovery_incomplete",
+            "A session-wide VK lane recovery started but no matching worker "
+            "reattached before the telemetry window ended.",
+            "Correlate the affected lane with TURN allocation, DTLS and "
+            "worker-attach events; the other three lanes must remain active.",
+        ))
+    elif attempts and matched:
+        findings.append(_finding(
+            "warning",
+            "lane_recovery_succeeded",
+            "Hydracore recovered a saturated VK lane without recycling the "
+            "other three calls.",
+            "Use recovery p95 and per-lane WaitSnd/loss to decide whether the "
+            "path needs earlier replacement or only lower send pressure.",
+        ))
+    elif _number(events.get("lane_send_stalled")):
+        findings.append(_finding(
+            "critical",
+            "lane_send_stall_terminal",
+            "A KCP send stall had no observed matching lane-recovery attempt.",
+            "Check telemetry continuity and whether all four physical workers "
+            "were already absent when the logical session closed.",
         ))
     if _number(events.get("lane_reorder_timeout")):
         findings.append(_finding(

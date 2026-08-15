@@ -8,6 +8,10 @@ KCP_LIVE_REQUIRED = (
     "kcp_retrans_segments_total",
     "kcp_out_bytes_total",
     "kcp_retrans_bytes_total",
+    "kcp_fast_retrans_estimate_segments_total",
+    "kcp_fast_retrans_estimate_bytes_total",
+    "kcp_rto_retrans_estimate_segments_total",
+    "kcp_rto_retrans_estimate_bytes_total",
     "kcp_rtt_ms",
     "kcp_rto_ms",
 )

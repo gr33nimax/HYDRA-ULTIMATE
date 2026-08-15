@@ -17,6 +17,10 @@ from hydra.services.calls_telemetry_native_contract import (
     SERVER_SESSION_REQUIRED,
     SERVER_WORKER_REQUIRED,
 )
+from hydra.services.calls_telemetry_transport_diagnostics import (
+    lane_recovery_summary,
+    retransmission_report,
+)
 
 def analyze_native(
     records: Sequence[Mapping[str, object]],
@@ -167,6 +171,7 @@ def analyze_native(
         "client_workers": _entity_reports(client_workers),
         "continuity": _native_continuity(entities),
         "events": events,
+        "lane_recovery": lane_recovery_summary(native),
     }
 
 
@@ -313,8 +318,6 @@ def _entity_reports(
         wire_in = _number(counters.get("outer_bytes_in_total"))
         wire_out = _number(counters.get("outer_bytes_out_total"))
         relay_bytes = _number(counters.get("relay_bytes_total"))
-        out_segments = _number(counters.get("kcp_out_segments_total"))
-        retrans = _number(counters.get("kcp_retrans_segments_total"))
         reports.append({
             "tester_id": tester_id,
             "native_session_id": session_id,
@@ -339,9 +342,7 @@ def _entity_reports(
             "relay_wire_efficiency_ratio": (
                 round(relay_bytes / wire_bytes, 6) if wire_bytes else None
             ),
-            "kcp_retransmission_ratio": (
-                round(retrans / out_segments, 6) if out_segments else None
-            ),
+            **retransmission_report(counters),
         })
     return reports
 

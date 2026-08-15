@@ -1,5 +1,14 @@
 # Changelog
 
+- Hydra VK telemetry now ingests Hydracore debug.21's estimated fast-resend
+  and RTO retransmission counters, reports their segment/byte split per
+  session and per lane, and distinguishes timeout-dominated path pressure from
+  fast-resend pressure in findings.
+- Live status and full reports now summarize session-wide lane recovery
+  attempts, matched reattachments, unresolved recoveries and recovery p95.
+  The obsolete zero-valued `Pace` column was replaced with the actionable
+  `Fast/RTO` split without adding another wide CLI scenario.
+
 - Added the incompatible Hydracore debug.19 wire-v6 contract: exactly four
   physical VK/TURN calls, TCP flow affinity, aggregate UDP/QUIC striping,
   lossless KCP-to-worker backpressure and staged Android network handover.

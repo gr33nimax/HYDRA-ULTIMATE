@@ -195,6 +195,14 @@ def _native_wire_breakdown(
             _number(counters.get("kcp_retrans_bytes_total")),
             3,
         ),
+        "kcp_fast_retransmit_estimate_bytes": (
+            round(_number(counters.get("kcp_fast_retrans_estimate_bytes_total")), 3)
+            if "kcp_fast_retrans_estimate_bytes_total" in counters else None
+        ),
+        "kcp_rto_retransmit_estimate_bytes": (
+            round(_number(counters.get("kcp_rto_retrans_estimate_bytes_total")), 3)
+            if "kcp_rto_retrans_estimate_bytes_total" in counters else None
+        ),
         "relay_goodput_bytes": round(_number(counters.get("relay_bytes_total")), 3),
     }
 
