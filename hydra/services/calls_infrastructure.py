@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from hydra.contracts.hydracore_calls import supports_exact_vps_calls
 from hydra.core.host import HostBackend
 from hydra.services.headless_creator_infrastructure import validate_vk_join_link
 
@@ -16,9 +17,6 @@ CALLS_POOL_STATE = CALLS_POOL_DIR / "state.json"
 CALLS_CREATOR_UNIT = Path(
     "/etc/systemd/system/hydra-headless-creator-vk-calls@.service",
 )
-_HYDRACORE_CORE_ID = "io.hydrabox.hydracore"
-
-
 validate_join_link = validate_vk_join_link
 
 
@@ -100,33 +98,7 @@ class CallsInfrastructure:
             return {}
 
     def vk_parasite_supported(self) -> bool:
-        payload = self._capabilities()
-        identity = payload.get("identity", {})
-        features = payload.get("features", {})
-        protocols = payload.get("protocols", {})
-        modes = protocols.get("call_modes", []) if isinstance(protocols, dict) else []
-        wire = (
-            protocols.get("call_vk_parasite_wire", {})
-            if isinstance(protocols, dict)
-            else {}
-        )
-        return bool(
-            isinstance(identity, dict)
-            and identity.get("core_id") == _HYDRACORE_CORE_ID
-            and identity.get("role") == "vps"
-            and isinstance(features, dict)
-            and features.get("call_vk_parasite") is True
-            and features.get("call_vk_four_lane_kcp") is True
-            and features.get("call_vk_pre_kcp_admission") is True
-            and features.get("call_vk_relay_flow_control") is True
-            and features.get("call_vk_parasite_server") is True
-            and features.get("call_vk_parasite_client") is False
-            and isinstance(modes, list)
-            and modes == ["vk_parasite"]
-            and isinstance(wire, dict)
-            and wire.get("min") == 8
-            and wire.get("max") == 8
-        )
+        return supports_exact_vps_calls(self._capabilities())
 
     def singbox_running(self) -> bool:
         try:

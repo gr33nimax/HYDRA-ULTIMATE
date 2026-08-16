@@ -253,7 +253,7 @@ hydra check
 
 ## Схема state и миграции
 
-В текущей ветке `debug` актуальна схема **13**. Миграция `v5 → v6` резервирует
+В текущей ветке `debug` актуальна схема **15**. Миграция `v5 → v6` резервирует
 приватный per-user JWE key. Ступень `v6 → v7` сохраняет совместимость legacy VK
 creator через промежуточный Calls layout, а `v7 → v8` переносит его desired
 state в `headless_creator.providers.vk` и maintenance-флаг в
@@ -274,8 +274,12 @@ backup; последующая переустановка Calls создаёт m
 перед общим apply, затем выбирает восемь lane и wire v5. После upgrade оператор
 явно переключает Hydracore debug.13 и повторно включает сохранённый Calls.
 Ступень `v13 → v14` снова выключает несовместимый активный Calls, возвращает
-ровно четыре worker и выбирает wire v6. После upgrade оператор переключает VPS
-и клиент на Hydracore debug.19, затем повторно включает Calls.
+ровно четыре worker и сохраняет исторический профиль предыдущего поколения.
+Ступень `v14 → v15` ещё раз quiesce-ит активный Calls, не удаляя комнаты и
+installed state. После upgrade оператор одновременно переводит VPS и клиент на
+Hydracore debug.33 и только затем включает Calls: принимаются точный wire v9,
+worker hot swap, flow migration, TURN TCP fallback и structured transport
+health; смешанные поколения отклоняются до изменения runtime.
 
 Обновление подписочного renderer не меняет state schema и повторно использует
 существующий per-user A256GCM key, но wire contract несовместим с HydraBox v1.

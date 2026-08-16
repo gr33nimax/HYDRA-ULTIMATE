@@ -459,7 +459,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 
 ## Схема persisted state
 
-В текущей ветке `debug` актуальна схема **13**. Корень `state.json`:
+В текущей ветке `debug` актуальна схема **15**. Корень `state.json`:
 
 | Поле | Тип | Содержание |
 | :--- | :--- | :--- |
@@ -517,8 +517,10 @@ state не хранятся.
 `v13 → v14` выключает несовместимый wire-v5 runtime, возвращает четыре worker
 и выбирает wire v7 с TCP flow affinity, UDP/QUIC striping, физическим
 backpressure и поэтапным rebind.
-Текущий Hydracore debug.30 и HYDRA Calls требуют точный несовместимый wire v8;
-wire v7 сохраняется здесь только как историческое состояние миграции schema 14.
+`v14 → v15` выключает несовместимый wire-v8 runtime, сохраняя четыре worker,
+комнаты и installed state. Hydracore debug.33 и HYDRA Calls требуют точный
+несовместимый wire v9 и полный recovery capability contract; wire v7/v8
+сохраняются здесь только как исторические состояния миграций.
 после явного switch на Hydracore переустановка Calls создаёт managed-пул.
 
 `install` хранит служебные отметки фоновых проверок:

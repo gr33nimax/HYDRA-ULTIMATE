@@ -407,7 +407,7 @@ TLS-маршруты проверяются отдельно, потому чт�
 
 ### Цепочка миграций
 
-В текущей ветке `debug` актуальна схема 13. Миграция — последовательность чистых функций; каждая
+В текущей ветке `debug` актуальна схема 15. Миграция — последовательность чистых функций; каждая
 ступень проверяется отдельно, а запись всей цепочки выполняется атомарно.
 
 ```text
@@ -671,8 +671,11 @@ Schema 14 выключает несовместимый wire-v5 Calls, возв�
 и выбирает wire v7: TCP-поток закрепляется за одним KCP lane, UDP/QUIC
 распределяется по четырём, физическая очередь создаёт backpressure без локальных
 drop, а смена сети заменяет TURN/DTLS worker по одному.
-Текущий Hydracore debug.30 использует несовместимый wire v8; kernel switch и
-Calls runtime принимают только точный диапазон `{min: 8, max: 8}`.
+Schema 15 выключает активный wire-v8 Calls перед общим apply, сохраняя комнаты,
+installed state и четыре worker. Текущий Hydracore debug.33 использует
+несовместимый wire v9; kernel switch и Calls runtime принимают только точный
+диапазон `{min: 9, max: 9}` и полный recovery contract: worker hot swap,
+flow migration, TURN TCP fallback и структурированное transport health.
 Повторная установка после switch на Hydracore создаёт новый managed-пул.
 `ApplicationService.kernel` — единственный use-case замены core:
 trusted release metadata и обязательный SHA-256 digest проверяются до ELF,

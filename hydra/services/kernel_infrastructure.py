@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from hydra.contracts.hydracore_calls import supports_exact_vps_calls
 from hydra.core.host import HostBackend
 from hydra.core.state_kernel_models import (
     KERNEL_HYDRACORE,
@@ -207,32 +208,7 @@ class KernelInfrastructure:
 
     @staticmethod
     def _has_hydracore_contract(payload: dict) -> bool:
-        identity = payload.get("identity", {})
-        features = payload.get("features", {})
-        protocols = payload.get("protocols", {})
-        modes = protocols.get("call_modes", ()) if isinstance(protocols, dict) else ()
-        wire = (
-            protocols.get("call_vk_parasite_wire", {})
-            if isinstance(protocols, dict)
-            else {}
-        )
-        return bool(
-            isinstance(identity, dict)
-            and identity.get("core_id") == _HYDRACORE_CORE_ID
-            and identity.get("role") == "vps"
-            and isinstance(features, dict)
-            and features.get("call_vk_parasite") is True
-            and features.get("call_vk_four_lane_kcp") is True
-            and features.get("call_vk_pre_kcp_admission") is True
-            and features.get("call_vk_relay_flow_control") is True
-            and features.get("call_vk_parasite_server") is True
-            and features.get("call_vk_parasite_client") is False
-            and isinstance(modes, list)
-            and modes == ["vk_parasite"]
-            and isinstance(wire, dict)
-            and wire.get("min") == 8
-            and wire.get("max") == 8
-        )
+        return supports_exact_vps_calls(payload)
 
     @classmethod
     def _has_hydracore_debug_contract(cls, payload: dict) -> bool:
@@ -330,7 +306,8 @@ class KernelInfrastructure:
             if not self._has_hydracore_contract(payload):
                 raise RuntimeError(
                     "Hydracore must expose exact identity, "
-                    "the VPS Calls role, vk_parasite-only mode, and wire v8",
+                    "the VPS Calls role, coordinated recovery features, "
+                    "vk_parasite-only mode, and exact wire v9",
                 )
             if channel == "debug" and not self._has_hydracore_debug_contract(payload):
                 raise RuntimeError(

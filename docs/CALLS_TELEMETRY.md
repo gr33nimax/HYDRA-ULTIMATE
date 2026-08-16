@@ -46,7 +46,7 @@ sudo hydra calls telemetry export --output hydra-vk-tunnel.tar.gz
 sudo hydra calls telemetry stop
 ```
 
-Hydracore debug.30 exposes wire v8 with four independent KCP lanes, one for every VK/TURN
+Hydracore debug.33 exposes wire v9 with four independent KCP lanes, one for every VK/TURN
 call. `status` and `report` show per-lane wire rate, active flow count,
 `kcp_wait_snd`, RTT/RTO, cumulative KCP retransmission ratio, estimated
 fast-resend/RTO split, network loss, output-queue delay/drops, reconnects and
@@ -67,7 +67,7 @@ at its current EOF, so earlier kernel runs cannot contaminate a new experiment.
 
 Findings distinguish a measured four-call physical capacity ceiling from a
 congestion/pacing collapse, an incomplete lane-generation reset, and a full
-logical-session replacement. These categories are derived only when the wire-v8
+logical-session replacement. These categories are derived only when the wire-v9
 metrics are present, so older archived experiments retain their previous
 analysis semantics.
 

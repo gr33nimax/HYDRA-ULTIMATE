@@ -1,8 +1,9 @@
 # Changelog
 
-- Updated the exact Hydracore contract to incompatible VK parasite wire 8.
-  Kernel switch, Calls enablement, status and telemetry now agree with
-  Hydracore debug.30 and continue to reject mixed wire generations.
+- Added schema 15 and the exact Hydracore debug.33 VK parasite wire 9
+  contract. Upgrade quiesces active wire-8 Calls before apply; kernel switch
+  and Calls enablement require hot swap, flow migration, TURN TCP fallback
+  and structured transport health, and continue to reject mixed generations.
 
 - Added the Hydracore debug.27 telemetry contract for application-limited
   pacing, deferred lane recovery and buffered client telemetry backlog.

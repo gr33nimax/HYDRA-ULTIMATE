@@ -213,7 +213,7 @@ def _append_native_sessions(
             lines.extend([
                 "",
                 (
-                    "Transport config: four independent KCP lanes (wire v8), "
+                    "Transport config: four independent KCP lanes (wire v9), "
                     f"lanes={_gauge(first_report, 'lane_count', 'max'):.0f}, "
                     f"MTU={_gauge(first_report, 'kcp_mtu_bytes', 'max'):.0f}, "
                     f"aggregate-window={_gauge(first_report, 'kcp_send_window_segments', 'max'):.0f}, "

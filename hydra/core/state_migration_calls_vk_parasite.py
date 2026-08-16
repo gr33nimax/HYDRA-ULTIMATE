@@ -82,9 +82,28 @@ def migrate_v13_to_v14(data: dict) -> dict:
     return migrated
 
 
+def migrate_v14_to_v15(data: dict) -> dict:
+    """Quiesce wire v8 before enabling the incompatible wire-v9 contract."""
+    migrated = copy.deepcopy(data)
+    protocols = migrated.get("protocols", {})
+    calls = protocols.get("calls", {}) if isinstance(protocols, dict) else {}
+    if isinstance(calls, dict):
+        calls["enabled"] = False
+        config = calls.setdefault("config", {})
+        if isinstance(config, dict):
+            config["mode"] = "vk_parasite"
+            config["workers"] = 4
+            config["max_workers_per_session"] = 4
+            config.pop("multipath_profile", None)
+            config.pop("read_buffer", None)
+    migrated["version"] = 15
+    return migrated
+
+
 __all__ = [
     "migrate_v10_to_v11",
     "migrate_v11_to_v12",
     "migrate_v12_to_v13",
     "migrate_v13_to_v14",
+    "migrate_v14_to_v15",
 ]

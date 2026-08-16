@@ -67,7 +67,7 @@ def test_service_validates_experiment_and_passes_only_safe_metadata() -> None:
     assert kwargs["max_data_bytes"] == 2048 * 1024 * 1024
     assert kwargs["metadata"]["calls"] == {
         "mode": "vk_parasite",
-        "transport": "four_lane_kcp_v8",
+        "transport": "four_lane_kcp_v9",
         "lane_count": 4,
         "room_count": 4,
         "workers": 4,
