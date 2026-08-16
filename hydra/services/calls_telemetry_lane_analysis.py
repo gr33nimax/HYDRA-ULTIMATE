@@ -33,14 +33,13 @@ def _wire_v7_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
         for report in carrying
         if report.get("kcp_retransmission_ratio") is not None
     ]
-    token_starvation = _counter_total(workers, "lane_token_starvation_total")
     capacity_ceiling = any(_is_capacity_ceiling(group) for group in _wire_v7_groups(native))
     if capacity_ceiling:
         findings.append(_finding(
             "info",
             "physical_capacity_ceiling",
-            "All four VK lanes delivered close to their paced rates without "
-            "material retransmission or token starvation.",
+            "All four demand-limited VK lanes delivered close to their paced "
+            "rates without material retransmission.",
             "Treat the measured aggregate as the current four-call physical "
             "capacity ceiling; further growth needs a different media/path model.",
         ))
@@ -52,15 +51,16 @@ def _wire_v7_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
         ),
         default=0.0,
     )
-    if token_starvation or (
+    demand_limited = any(not _application_limited(report) for report in carrying)
+    if demand_limited and (
         minimum_pacing and minimum_pacing <= 40_000
         and max(retry_ratios, default=0.0) >= 0.10
     ):
         findings.append(_finding(
             "critical",
             "congestion_pacing_collapse",
-            "The wire-v7 lane controller reached sustained token starvation or "
-            "backed a lane down close to its minimum under retransmission pressure.",
+            "The wire-v7 lane controller backed a demand-limited lane down "
+            "close to its minimum under retransmission pressure.",
             "Compare pacing versus delivered rate, minRTT inflation and output "
             "queue growth; replace the degraded path before raising its limit.",
         ))
@@ -139,8 +139,12 @@ def _is_capacity_ceiling(reports: Sequence[Mapping[str, object]]) -> bool:
         and pacing > 0
         and delivered >= 0.8 * pacing
         and max(retry_ratios, default=0.0) < 0.15
-        and not _counter_total(carrying, "lane_token_starvation_total")
+        and not any(_application_limited(report) for report in carrying)
     )
+
+
+def _application_limited(report: Mapping[str, object]) -> bool:
+    return _gauge(report, "lane_application_limited", "p50") >= 0.5
 
 
 def lane_pipeline_summary(native: Mapping[str, object]) -> dict[str, object]:
@@ -274,11 +278,27 @@ def _recovery_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
     failed = _number(recovery.get("failed"))
     escalated = _number(recovery.get("escalated"))
     if attempts and unresolved:
+        continuity = _mapping(native.get("continuity"))
+        incomplete_telemetry = any(
+            _number(continuity.get(name))
+            for name in (
+                "missing_sequences",
+                "server_record_drops",
+                "client_record_drops",
+            )
+        )
         findings.append(_finding(
-            "critical",
-            "lane_recovery_incomplete",
+            "warning" if incomplete_telemetry else "critical",
+            "lane_recovery_indeterminate" if incomplete_telemetry else "lane_recovery_incomplete",
+            "A VK lane recovery has no matching terminal observation, and "
+            "telemetry continuity is incomplete."
+            if incomplete_telemetry else
             "A session-wide VK lane recovery started but no matching worker "
             "reattached before the telemetry window ended.",
+            "Correlate the affected lane with TURN allocation, DTLS and "
+            "worker-attach events; verify telemetry continuity before treating "
+            "a missing terminal event as a transport failure."
+            if incomplete_telemetry else
             "Correlate the affected lane with TURN allocation, DTLS and "
             "worker-attach events; the other three lanes must remain active.",
         ))

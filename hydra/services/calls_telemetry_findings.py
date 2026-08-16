@@ -9,11 +9,17 @@ def extended_native_findings(
 ) -> list[dict[str, str]]:
     findings: list[dict[str, str]] = []
     counters = _combined_counters(native)
-    if _sum(counters, "handshake_rejected", "handshake_timeout"):
+    if _sum(counters, "handshake_rejected"):
         findings.append(_finding(
             "critical", "handshake_capacity_pressure",
-            "The VPS rejected or timed out native worker handshakes.",
+            "The VPS rejected native worker handshakes.",
             "Correlate pending handshakes with CPU and UDP queues; then A/B the accept path and limit.",
+        ))
+    if _sum(counters, "handshake_timeout"):
+        findings.append(_finding(
+            "warning", "handshake_path_instability",
+            "Native worker handshakes timed out without evidence that the VPS rejected capacity.",
+            "Compare TURN/DTLS latency, packet loss and endpoint choice before changing the accept limit.",
         ))
     if _sum(counters, "worker_liveness_expired", "worker_reconnect"):
         findings.append(_finding(

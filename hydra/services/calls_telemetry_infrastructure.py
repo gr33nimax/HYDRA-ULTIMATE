@@ -30,6 +30,7 @@ from hydra.services.calls_telemetry_journal import collect_calls_journal_events
 from hydra.services.calls_telemetry_native import (
     NATIVE_TELEMETRY_PATH,
     ingest_native_records,
+    initial_native_cursor,
     native_sample,
 )
 from hydra.services.calls_telemetry_projection import (
@@ -145,6 +146,7 @@ class CallsTelemetryInfrastructure:
                 "event_count": 0,
                 "native_record_count": 0,
                 "native_invalid_count": 0,
+                "native_cursor": initial_native_cursor(self.native_path),
                 "mark_count": 0,
                 "last_sample_at": now,
                 "last_poll_at": 0.0,

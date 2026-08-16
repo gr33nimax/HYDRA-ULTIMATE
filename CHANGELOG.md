@@ -1,5 +1,15 @@
 # Changelog
 
+- Added the Hydracore debug.27 telemetry contract for application-limited
+  pacing, deferred lane recovery and buffered client telemetry backlog.
+- New operator sessions begin native ingestion at the current file boundary;
+  stale and out-of-window records are rejected instead of being mapped into
+  the active test timeline.
+- Recovery analysis prefers the server lifecycle, deduplicates mirrored client
+  events and can infer a completed reset from a healthy probed worker snapshot.
+- Findings no longer classify application-limited token starvation or a bare
+  handshake timeout as physical-capacity failure.
+
 - Added the incompatible Hydracore debug.26 wire-v7 contract. Ultimate now
   requires wire 7 on both endpoints and ingests per-lane generation/state,
   ACK-clocked pacing, delivery, minRTT/inflight, reset/probe and stale-frame

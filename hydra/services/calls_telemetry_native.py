@@ -105,6 +105,7 @@ _LIVE_METRICS = {
     "lane_delivered_bytes_per_second",
     "lane_min_rtt_ms",
     "lane_inflight_limit_segments",
+    "lane_application_limited",
     "lane_token_starvation_total",
     "lane_ack_age_seconds",
     "lane_reset_request_total",
@@ -114,6 +115,7 @@ _LIVE_METRICS = {
     "lane_reset_duration_ms",
     "lane_stale_generation_drops_total",
     "lane_probe_result",
+    "lane_recovery_deferred_total",
     "aggregate_progress_age_seconds",
     "quarantined_lanes",
     "session_replacement_total",
@@ -127,8 +129,29 @@ _LIVE_METRICS = {
     "telemetry_sequence",
     "telemetry_control_drops_total",
     "telemetry_record_drops_total",
+    "telemetry_pending_records",
     "telemetry_lease_expired_total",
 }
+
+
+def initial_native_cursor(path: Path) -> dict[str, object]:
+    """Return an EOF cursor so a new operator session cannot ingest old records."""
+    descriptor = -1
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode) or path.is_symlink():
+            return {}
+        return {
+            "inode": int(getattr(file_stat, "st_ino", 0)),
+            "offset": int(file_stat.st_size),
+            "source": path.name,
+        }
+    except OSError:
+        return {}
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def ingest_native_records(
@@ -281,7 +304,7 @@ def _normalize_native_record(
     timestamp = _number(payload.get("timestamp"))
     started_at = _number(session.get("started_at"))
     if not started_at - 300 <= timestamp <= now + 300:
-        timestamp = now
+        return None
     tester_id = _tester_id(session, str(payload.get("user", "")))
     native_session = str(payload.get("session_id", ""))
     native_session_id = (
@@ -418,4 +441,9 @@ def _number(value: object) -> float:
         return 0.0
 
 
-__all__ = ["NATIVE_TELEMETRY_PATH", "ingest_native_records", "native_sample"]
+__all__ = [
+    "NATIVE_TELEMETRY_PATH",
+    "ingest_native_records",
+    "initial_native_cursor",
+    "native_sample",
+]

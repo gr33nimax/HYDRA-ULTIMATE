@@ -47,6 +47,7 @@ LANE_LIVE_REQUIRED = (
     "lane_delivered_bytes_per_second",
     "lane_min_rtt_ms",
     "lane_inflight_limit_segments",
+    "lane_application_limited",
     "lane_token_starvation_total",
     "lane_ack_age_seconds",
     "lane_reset_request_total",
@@ -56,6 +57,7 @@ LANE_LIVE_REQUIRED = (
     "lane_reset_duration_ms",
     "lane_stale_generation_drops_total",
     "lane_probe_result",
+    "lane_recovery_deferred_total",
     "flow_reorder_abort_total",
 )
 LANE_CONFIG_REQUIRED = (
@@ -246,6 +248,7 @@ CLIENT_SESSION_REQUIRED = {
     "telemetry": (
         "telemetry_sequence",
         "telemetry_record_drops_total",
+        "telemetry_pending_records",
         "telemetry_lease_expired_total",
     ),
 }

@@ -12,22 +12,36 @@ from hydra.services.calls_telemetry_analysis_common import (
 def lane_recovery_summary(
     records: Sequence[Mapping[str, object]],
 ) -> dict[str, object]:
-    events = sorted(
-        (
-            record
-            for record in records
-            if record.get("native_kind") == "event"
-            and record.get("event") in {
-                "lane_send_stalled",
-                "lane_send_recovery",
-                "lane_send_recovered",
-                "lane_send_recovery_failed",
-                "lane_send_recovery_escalated",
-            }
-        ),
-        key=lambda record: _number(record.get("timestamp")),
-    )
-    pending: dict[tuple[str, str, str, int | None], list[float]] = {}
+    relevant = {
+        "lane_send_stalled",
+        "lane_send_recovery",
+        "lane_send_recovered",
+        "lane_send_recovery_failed",
+        "lane_send_recovery_escalated",
+    }
+    grouped: dict[tuple[str, str, int | None], list[Mapping[str, object]]] = {}
+    for record in records:
+        if record.get("native_kind") != "event" or record.get("event") not in relevant:
+            continue
+        worker = record.get("worker_id")
+        key = (
+            str(record.get("tester_id", "")),
+            str(record.get("native_session_id", "")),
+            int(worker) if type(worker) is int else None,
+        )
+        grouped.setdefault(key, []).append(record)
+    events: list[Mapping[str, object]] = []
+    authoritative_scope: dict[tuple[str, str, int | None], str] = {}
+    for key, candidates in grouped.items():
+        scope = "server" if any(
+            record.get("native_scope") == "server" for record in candidates
+        ) else "client"
+        authoritative_scope[key] = scope
+        events.extend(
+            record for record in candidates if record.get("native_scope") == scope
+        )
+    events.sort(key=lambda record: _number(record.get("timestamp")))
+    pending: dict[tuple[str, str, int | None], list[float]] = {}
     durations: list[float] = []
     stalls = 0
     attempts = 0
@@ -41,7 +55,6 @@ def lane_recovery_summary(
             continue
         worker = record.get("worker_id")
         key = (
-            str(record.get("native_scope", "")),
             str(record.get("tester_id", "")),
             str(record.get("native_session_id", "")),
             int(worker) if type(worker) is int else None,
@@ -63,8 +76,37 @@ def lane_recovery_summary(
             starts = pending.get(key)
             if starts:
                 starts.pop(0)
+    inferred = 0
+    for key, starts in pending.items():
+        if not starts:
+            continue
+        scope = authoritative_scope.get(key, "server")
+        tester_id, native_session_id, worker_id = key
+        snapshots = sorted(
+            (
+                record for record in records
+                if record.get("native_kind") == "snapshot"
+                and record.get("native_scope") == scope
+                and str(record.get("tester_id", "")) == tester_id
+                and str(record.get("native_session_id", "")) == native_session_id
+                and record.get("worker_id") == worker_id
+            ),
+            key=lambda record: _number(record.get("timestamp")),
+        )
+        remaining: list[float] = []
+        for started_at in starts:
+            restored = any(
+                _number(snapshot.get("timestamp")) >= started_at
+                and _worker_snapshot_restored(snapshot)
+                for snapshot in snapshots
+            )
+            if restored:
+                inferred += 1
+            else:
+                remaining.append(started_at)
+        starts[:] = remaining
     unresolved = sum(len(starts) for starts in pending.values())
-    matched = len(durations)
+    matched = len(durations) + inferred
     return {
         "stalls": stalls,
         "attempts": attempts,
@@ -72,11 +114,23 @@ def lane_recovery_summary(
         "failed": failed,
         "escalated": escalated,
         "matched_recoveries": matched,
-        "orphan_recovered": max(0, recovered - matched),
+        "inferred_recoveries": inferred,
+        "orphan_recovered": max(0, recovered - len(durations)),
         "unresolved": unresolved,
         "success_ratio": round(matched / attempts, 6) if attempts else None,
         "duration_seconds": _distribution(durations),
     }
+
+
+def _worker_snapshot_restored(record: Mapping[str, object]) -> bool:
+    metrics = record.get("metrics")
+    if not isinstance(metrics, Mapping):
+        return False
+    return bool(
+        _number(metrics.get("worker_active")) > 0
+        and _number(metrics.get("lane_state")) == 0
+        and _number(metrics.get("lane_probe_result")) > 0
+    )
 
 
 def retransmission_findings(

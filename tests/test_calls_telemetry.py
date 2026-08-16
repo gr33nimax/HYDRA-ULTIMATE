@@ -255,6 +255,33 @@ def test_runtime_collects_anonymized_directional_metrics_and_report(tmp_path) ->
     assert stopped["active"] is False
 
 
+def test_runtime_ignores_native_history_before_operator_start(tmp_path) -> None:
+    clock = _Clock()
+    runtime = _runtime(tmp_path, clock)
+    payload = {
+        "schema": 1,
+        "timestamp": clock.value,
+        "scope": "server",
+        "kind": "snapshot",
+        "session_id": "server-0123456789abcdef",
+        "metrics": {"worker_active": 1},
+    }
+    runtime.native_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    service = CallsTelemetryService(runtime)
+    service.start(_state(), ["alpha@example.com"])
+
+    runtime.record(_state())
+    assert runtime.store.active_session(required=True)["native_record_count"] == 0
+
+    clock.value += 1
+    payload["timestamp"] = clock.value
+    with runtime.native_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload) + "\n")
+    runtime.record(_state())
+
+    assert runtime.store.active_session(required=True)["native_record_count"] == 1
+
+
 class _FailActivePointerHost(HostBackend):
     def atomic_write(self, path: Path, content, *, mode: int = 0o644) -> None:
         if path.name == "active.json":

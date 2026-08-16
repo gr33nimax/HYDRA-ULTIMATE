@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from hydra.services.calls_telemetry_native import ingest_native_records
+from hydra.services.calls_telemetry_native import (
+    ingest_native_records,
+    initial_native_cursor,
+)
 
 
 def _session() -> dict[str, object]:
@@ -43,6 +46,30 @@ def test_incomplete_native_line_is_retried_after_writer_finishes(tmp_path: Path)
     assert invalid == 0
     assert len(records) == 1
     assert records[0]["native_entity"] == "server_process"
+
+
+def test_new_operator_session_starts_at_native_eof(tmp_path: Path) -> None:
+    path = tmp_path / "native.jsonl"
+    path.write_text(_record() + "\n", encoding="utf-8")
+    session = _session() | {"native_cursor": initial_native_cursor(path)}
+
+    assert ingest_native_records(session, path, now=1002.0) == ([], 0)
+
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(_record() + "\n")
+    records, invalid = ingest_native_records(session, path, now=1003.0)
+
+    assert invalid == 0
+    assert len(records) == 1
+
+
+def test_out_of_window_native_timestamp_is_rejected_not_rewritten(tmp_path: Path) -> None:
+    path = tmp_path / "native.jsonl"
+    payload = json.loads(_record())
+    payload["timestamp"] = 10.0
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    assert ingest_native_records(_session(), path, now=1002.0) == ([], 1)
 
 
 def test_oversized_native_line_does_not_consume_the_next_record(tmp_path: Path) -> None:

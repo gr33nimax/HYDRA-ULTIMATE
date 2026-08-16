@@ -85,7 +85,10 @@ def test_worker_lane_coverage_does_not_require_session_config_metrics() -> None:
     assert "lane_generation" in SERVER_WORKER_REQUIRED["lanes"]
     assert "lane_pacing_bytes_per_second" in CLIENT_WORKER_REQUIRED["lanes"]
     assert "lane_reset_commit_total" in SERVER_WORKER_REQUIRED["lanes"]
+    assert "lane_application_limited" in SERVER_WORKER_REQUIRED["lanes"]
+    assert "lane_recovery_deferred_total" in CLIENT_WORKER_REQUIRED["lanes"]
     assert "aggregate_progress_age_seconds" in CLIENT_SESSION_REQUIRED["lanes"]
+    assert "telemetry_pending_records" in CLIENT_SESSION_REQUIRED["telemetry"]
 
 
 def test_native_findings_separate_transport_host_and_relay_directions() -> None:
@@ -111,7 +114,7 @@ def test_native_findings_separate_transport_host_and_relay_directions() -> None:
     codes = {finding["code"] for finding in extended_native_findings(native)}
 
     assert codes == {
-        "handshake_capacity_pressure",
+        "handshake_path_instability",
         "worker_transport_instability",
         "outer_packet_authentication_failures",
         "relay_connect_failures",
@@ -119,6 +122,21 @@ def test_native_findings_separate_transport_host_and_relay_directions() -> None:
         "high_kcp_rtt",
         "low_wire_efficiency",
     }
+
+
+def test_native_findings_reserve_capacity_pressure_for_rejections() -> None:
+    native = {
+        "server": {
+            "counters": {"handshake_rejected_total": 1},
+            "gauges": {},
+        },
+        "clients": {},
+    }
+
+    codes = {finding["code"] for finding in extended_native_findings(native)}
+
+    assert "handshake_capacity_pressure" in codes
+    assert "handshake_path_instability" not in codes
 
 
 def test_client_summary_does_not_multiply_session_counters_by_workers() -> None:
@@ -371,6 +389,30 @@ def test_wire_v7_findings_report_reset_and_session_failure_categories() -> None:
     assert "full_session_replacement" in codes
 
 
+def test_wire_v7_application_limited_lane_does_not_report_pacing_collapse() -> None:
+    worker = {
+        "current": True,
+        "wire_bps": 1_000_000,
+        "kcp_retransmission_ratio": 0.2,
+        "gauges": {
+            "lane_pacing_bytes_per_second": {"p50": 32_000, "p95": 40_000},
+            "lane_application_limited": {"p50": 1},
+        },
+        "counters": {"lane_token_starvation_total": 20},
+    }
+    native = {
+        "events": {},
+        "server_sessions": [],
+        "client_sessions": [],
+        "server_workers": [worker],
+        "client_workers": [],
+    }
+
+    codes = {finding["code"] for finding in protocol_findings(native, {})}
+
+    assert "congestion_pacing_collapse" not in codes
+
+
 def test_native_analysis_pairs_session_wide_lane_recovery_duration() -> None:
     records = [
         {
@@ -424,6 +466,68 @@ def test_native_analysis_resolves_recovery_escalated_to_session_replace() -> Non
     recovery = analyze_native(records, ["tester-1"])["lane_recovery"]
 
     assert recovery["escalated"] == 1
+    assert recovery["unresolved"] == 0
+
+
+def test_native_analysis_deduplicates_client_recovery_mirror() -> None:
+    records = []
+    for scope in ("server", "client"):
+        for timestamp, event in (
+            (10.0, "lane_send_recovery"),
+            (11.0, "lane_send_recovered"),
+        ):
+            records.append({
+                "kind": "native",
+                "timestamp": timestamp,
+                "native_scope": scope,
+                "native_kind": "event",
+                "native_entity": f"{scope}_worker",
+                "tester_id": "tester-1",
+                "native_session_id": "session-1",
+                "worker_id": 2,
+                "event": event,
+                "metrics": {},
+            })
+
+    recovery = analyze_native(records, ["tester-1"])["lane_recovery"]
+
+    assert recovery["attempts"] == 1
+    assert recovery["matched_recoveries"] == 1
+    assert recovery["unresolved"] == 0
+
+
+def test_native_analysis_infers_recovery_from_active_probed_snapshot() -> None:
+    records = [{
+        "kind": "native",
+        "timestamp": 10.0,
+        "native_scope": "server",
+        "native_kind": "event",
+        "native_entity": "server_worker",
+        "tester_id": "tester-1",
+        "native_session_id": "session-1",
+        "worker_id": 2,
+        "event": "lane_send_recovery",
+        "metrics": {},
+    }, {
+        "kind": "native",
+        "timestamp": 12.0,
+        "native_scope": "server",
+        "native_kind": "snapshot",
+        "native_entity": "server_worker",
+        "tester_id": "tester-1",
+        "native_session_id": "session-1",
+        "worker_id": 2,
+        "metrics": {
+            "worker_active": 1,
+            "lane_state": 0,
+            "lane_probe_result": 1,
+        },
+    }]
+
+    recovery = analyze_native(records, ["tester-1"])["lane_recovery"]
+
+    assert recovery["inferred_recoveries"] == 1
+    assert recovery["matched_recoveries"] == 1
     assert recovery["unresolved"] == 0
 
 
