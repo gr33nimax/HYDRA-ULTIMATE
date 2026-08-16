@@ -671,6 +671,8 @@ Schema 14 выключает несовместимый wire-v5 Calls, возв�
 и выбирает wire v7: TCP-поток закрепляется за одним KCP lane, UDP/QUIC
 распределяется по четырём, физическая очередь создаёт backpressure без локальных
 drop, а смена сети заменяет TURN/DTLS worker по одному.
+Текущий Hydracore debug.30 использует несовместимый wire v8; kernel switch и
+Calls runtime принимают только точный диапазон `{min: 8, max: 8}`.
 Повторная установка после switch на Hydracore создаёт новый managed-пул.
 `ApplicationService.kernel` — единственный use-case замены core:
 trusted release metadata и обязательный SHA-256 digest проверяются до ELF,

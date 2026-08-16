@@ -78,7 +78,7 @@ class CapabilityHost(ProbeHost):
                 },
                 "protocols": {
                     "call_modes": ["vk_parasite"],
-                    "call_vk_parasite_wire": {"min": 7, "max": 7},
+                    "call_vk_parasite_wire": {"min": 8, "max": 8},
                 },
             }),
             stderr="",
@@ -111,6 +111,21 @@ def test_vk_parasite_support_requires_feature_and_mode_capability() -> None:
             "identity": {"core_id": "third.party.core"},
             "features": {"call_vk_parasite": True},
             "protocols": {"call_modes": ["vk_parasite"]},
+        },
+        {
+            "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
+            "features": {
+                "call_vk_parasite": True,
+                "call_vk_four_lane_kcp": True,
+                "call_vk_pre_kcp_admission": True,
+                "call_vk_relay_flow_control": True,
+                "call_vk_parasite_server": True,
+                "call_vk_parasite_client": False,
+            },
+            "protocols": {
+                "call_modes": ["vk_parasite"],
+                "call_vk_parasite_wire": {"min": 7, "max": 7},
+            },
         },
     ],
 )

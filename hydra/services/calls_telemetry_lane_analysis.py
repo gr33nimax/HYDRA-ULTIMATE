@@ -60,7 +60,7 @@ def _wire_v7_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
         findings.append(_finding(
             "critical",
             "congestion_pacing_collapse",
-            "The wire-v7 lane controller backed a demand-limited lane down "
+            "The wire-v8 lane controller backed a demand-limited lane down "
             "close to its minimum under retransmission pressure.",
             "Compare pacing versus delivered rate, minRTT inflation and output "
             "queue growth; replace the degraded path before raising its limit.",

@@ -124,8 +124,8 @@ class CallsInfrastructure:
             and isinstance(modes, list)
             and modes == ["vk_parasite"]
             and isinstance(wire, dict)
-            and wire.get("min") == 7
-            and wire.get("max") == 7
+            and wire.get("min") == 8
+            and wire.get("max") == 8
         )
 
     def singbox_running(self) -> bool:

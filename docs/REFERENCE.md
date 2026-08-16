@@ -517,6 +517,8 @@ state не хранятся.
 `v13 → v14` выключает несовместимый wire-v5 runtime, возвращает четыре worker
 и выбирает wire v7 с TCP flow affinity, UDP/QUIC striping, физическим
 backpressure и поэтапным rebind.
+Текущий Hydracore debug.30 и HYDRA Calls требуют точный несовместимый wire v8;
+wire v7 сохраняется здесь только как историческое состояние миграции schema 14.
 после явного switch на Hydracore переустановка Calls создаёт managed-пул.
 
 `install` хранит служебные отметки фоновых проверок:

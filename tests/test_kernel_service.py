@@ -105,7 +105,7 @@ def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
         },
         "protocols": {
             "call_modes": ["vk_parasite"],
-            "call_vk_parasite_wire": {"min": 7, "max": 7},
+            "call_vk_parasite_wire": {"min": 8, "max": 8},
         },
     }
     alias = {
@@ -122,6 +122,13 @@ def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
         },
         "protocols": {
             "call_modes": ["p2p"],
+            "call_vk_parasite_wire": {"min": 8, "max": 8},
+        },
+    }
+    previous_wire = {
+        **valid,
+        "protocols": {
+            "call_modes": ["vk_parasite"],
             "call_vk_parasite_wire": {"min": 7, "max": 7},
         },
     }
@@ -130,6 +137,7 @@ def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
     assert KernelInfrastructure._has_hydracore_debug_contract(valid) is True
     assert KernelInfrastructure._has_hydracore_contract(alias) is False
     assert KernelInfrastructure._has_hydracore_contract(p2p_only) is False
+    assert KernelInfrastructure._has_hydracore_contract(previous_wire) is False
     assert "call_vk_parasite" in KernelInfrastructure._normalized_capabilities(valid)
     assert "call_vk_parasite" not in KernelInfrastructure._normalized_capabilities(alias)
 
@@ -148,7 +156,7 @@ def test_hydracore_debug_contract_requires_native_telemetry() -> None:
         },
         "protocols": {
             "call_modes": ["vk_parasite"],
-            "call_vk_parasite_wire": {"min": 7, "max": 7},
+            "call_vk_parasite_wire": {"min": 8, "max": 8},
         },
     }
 

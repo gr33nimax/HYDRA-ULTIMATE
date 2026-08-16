@@ -509,7 +509,7 @@ ordinal. The native summary also shows staged KCP output occupancy, ACK-clocked
 admission, physical write latency, update pauses, mutex waits, bounded peer
 ingress and matched or unresolved session-wide lane recoveries. `report`
 retains every historical session, adds its pseudonymous session ID and prints a
-separate per-lane internal-pipeline table. The wire-v7 core must run on both the
+separate per-lane internal-pipeline table. The wire-v8 core must run on both the
 VPS and client; mixed old/new deployments intentionally fail.
 
 Сессия для трёх заранее созданных пользователей запускается без таймера:

@@ -1,5 +1,9 @@
 # Changelog
 
+- Updated the exact Hydracore contract to incompatible VK parasite wire 8.
+  Kernel switch, Calls enablement, status and telemetry now agree with
+  Hydracore debug.30 and continue to reject mixed wire generations.
+
 - Added the Hydracore debug.27 telemetry contract for application-limited
   pacing, deferred lane recovery and buffered client telemetry backlog.
 - New operator sessions begin native ingestion at the current file boundary;

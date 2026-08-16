@@ -151,7 +151,7 @@ class CallsPlugin(BasePlugin):
             info={
                 "platform": "vk",
                 "mode": mode,
-                "transport": "four_lane_kcp_v7",
+                "transport": "four_lane_kcp_v8",
                 "lanes": 4,
                 "configured": ready,
             },
@@ -163,7 +163,7 @@ class CallsPlugin(BasePlugin):
             return ConfigFragment()
         call_mode(state)
         if not self._source.vk_parasite_supported():
-            raise ValueError("installed core does not support VK Calls parasite wire v7")
+            raise ValueError("installed core does not support VK Calls parasite wire v8")
         return ConfigFragment(inbounds=[vk_parasite_inbound(state)])
 
     def generate_client_config(self, user, state: PluginStateAccess) -> str:
@@ -173,7 +173,7 @@ class CallsPlugin(BasePlugin):
             return ""
         call_mode(state)
         if not self._source.vk_parasite_supported():
-            raise ValueError("installed core does not support VK Calls parasite wire v7")
+            raise ValueError("installed core does not support VK Calls parasite wire v8")
         outbound = vk_parasite_outbound(
             user,
             state,

@@ -156,7 +156,7 @@ class CallsTelemetryService:
             "kernel_provider": state.kernel.provider,
             "calls": {
                 "mode": CALL_MODE_VK_PARASITE,
-                "transport": "four_lane_kcp_v7",
+                "transport": "four_lane_kcp_v8",
                 "lane_count": MAX_WORKERS,
                 "room_count": _safe_int(config.get("room_count", 0)),
                 "workers": MAX_WORKERS,
