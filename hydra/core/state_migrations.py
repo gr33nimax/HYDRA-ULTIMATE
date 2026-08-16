@@ -16,7 +16,6 @@ migrate_v11_to_v12 = calls_vk.migrate_v11_to_v12
 migrate_v12_to_v13 = calls_vk.migrate_v12_to_v13
 migrate_v13_to_v14 = calls_vk.migrate_v13_to_v14
 migrate_v14_to_v15 = calls_vk.migrate_v14_to_v15
-
 def migrate_v0_to_v1(data: dict) -> dict:
     data["version"] = 1
     data.setdefault("install", {})
