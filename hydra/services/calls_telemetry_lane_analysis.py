@@ -4,12 +4,13 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from hydra.services.calls_telemetry_analysis_common import _mapping, _number
+from hydra.services.calls_telemetry_transport_diagnostics import recovery_findings
 
 
 def lane_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
     return [
         *_wire_v7_findings(native),
-        *_recovery_findings(native),
+        *recovery_findings(native),
         *_worker_findings(native),
         *_pipeline_findings(native),
     ]
@@ -263,107 +264,6 @@ def _pipeline_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
             "Hydracore isolated one or more ordered flows after an unrecoverable sequence gap.",
             "Correlate each abort with its lane reconnect and loss boundary; "
             "verify that unrelated flows and the logical tunnel remained alive.",
-        ))
-    return findings
-
-
-def _recovery_findings(native: Mapping[str, object]) -> list[dict[str, str]]:
-    findings: list[dict[str, str]] = []
-    events = _mapping(native.get("events"))
-
-    recovery = _mapping(native.get("lane_recovery"))
-    attempts = _number(recovery.get("attempts"))
-    unresolved = _number(recovery.get("unresolved"))
-    matched = _number(recovery.get("matched_recoveries"))
-    failed = _number(recovery.get("failed"))
-    escalated = _number(recovery.get("escalated"))
-    if attempts and unresolved:
-        continuity = _mapping(native.get("continuity"))
-        incomplete_telemetry = any(
-            _number(continuity.get(name))
-            for name in (
-                "missing_sequences",
-                "server_record_drops",
-                "client_record_drops",
-            )
-        )
-        findings.append(_finding(
-            "warning" if incomplete_telemetry else "critical",
-            "lane_recovery_indeterminate" if incomplete_telemetry else "lane_recovery_incomplete",
-            "A VK lane recovery has no matching terminal observation, and "
-            "telemetry continuity is incomplete."
-            if incomplete_telemetry else
-            "A session-wide VK lane recovery started but no matching worker "
-            "reattached before the telemetry window ended.",
-            "Correlate the affected lane with TURN allocation, DTLS and "
-            "worker-attach events; verify telemetry continuity before treating "
-            "a missing terminal event as a transport failure."
-            if incomplete_telemetry else
-            "Correlate the affected lane with TURN allocation, DTLS and "
-            "worker-attach events; the other three lanes must remain active.",
-        ))
-    if failed:
-        findings.append(_finding(
-            "critical",
-            "lane_recovery_failed",
-            "Hydracore could not restore a stalled VK lane before its "
-            "bounded recovery deadline.",
-            "Correlate the failed lane with TURN allocation, DTLS and worker "
-            "attach events; verify that session replacement restored traffic.",
-        ))
-    if escalated:
-        findings.append(_finding(
-            "warning",
-            "lane_recovery_escalated",
-            "A stalled VK lane escalated to a complete logical-session "
-            "replacement instead of remaining unresolved.",
-            "Measure the replacement interruption and verify that all four "
-            "lanes resumed without restarting the client application.",
-        ))
-    if attempts and matched:
-        findings.append(_finding(
-            "warning",
-            "lane_recovery_succeeded",
-            "Hydracore recovered a saturated VK lane without recycling the "
-            "other three calls.",
-            "Use recovery p95 and per-lane WaitSnd/loss to decide whether the "
-            "path needs earlier replacement or only lower send pressure.",
-        ))
-    if _number(events.get("lane_send_stalled")) and not attempts:
-        findings.append(_finding(
-            "critical",
-            "lane_send_stall_terminal",
-            "A KCP send stall had no observed matching lane-recovery attempt.",
-            "Check telemetry continuity and whether all four physical workers "
-            "were already absent when the logical session closed.",
-        ))
-    if _number(events.get("lane_reorder_timeout")):
-        findings.append(_finding(
-            "critical",
-            "lane_reorder_timeout_recovery",
-            "Hydracore closed a logical session because a per-flow lane "
-            "sequence gap did not recover.",
-            "Inspect the missing flow's lane loss and reconnect boundary, "
-            "then verify that the replacement session resumed without an "
-            "application restart.",
-        ))
-    if _number(events.get("lane_udp_reorder_timeout")):
-        findings.append(_finding(
-            "warning",
-            "lane_udp_reorder_timeout",
-            "One striped UDP/QUIC flow had a sequence gap that outlived the "
-            "bounded cleanup window.",
-            "Compare physical loss and reconnects on the four lanes; the gap "
-            "was isolated to that flow and did not close the logical tunnel.",
-        ))
-    if _number(events.get("network_rebind_lane_failed")):
-        findings.append(_finding(
-            "warning",
-            "network_rebind_lane_failed",
-            "A staged Android network handover could not replace one VK/TURN "
-            "lane in time.",
-            "Inspect that lane's VK authentication, TURN allocation and DTLS "
-            "events; the remaining lanes were intentionally kept alive.",
         ))
     return findings
 
