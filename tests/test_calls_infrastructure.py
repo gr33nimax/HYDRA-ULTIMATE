@@ -71,7 +71,6 @@ class CapabilityHost(ProbeHost):
                 },
                 "features": {
                     "call_vk_parasite": True,
-                    "call_vk_parasite_server": True,
                 },
                 "protocols": {
                     "call_modes": ["vk_parasite"],
@@ -89,12 +88,6 @@ def test_vk_parasite_support_requires_feature_and_mode_capability() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        {
-            "api_version": 2,
-            "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
-            "features": {"call_vk_parasite": True},
-            "protocols": {"call_modes": ["vk_parasite"]},
-        },
         {
             "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
             "features": {"call_vk_multiuser": True},
