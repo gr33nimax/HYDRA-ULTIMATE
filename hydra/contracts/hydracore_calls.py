@@ -18,7 +18,6 @@ def supports_vps_calls(payload: object) -> bool:
         and identity.get("role") == "vps"
         and isinstance(features, dict)
         and features.get("call_vk_parasite") is True
-        and features.get("call_vk_parasite_server") is True
         and isinstance(modes, list)
         and "vk_parasite" in modes
     )

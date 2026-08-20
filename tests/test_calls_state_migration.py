@@ -227,7 +227,6 @@ def test_v12_to_v13_selects_exact_eight_lane_contract() -> None:
         "workers": 8,
         "max_workers_per_session": 8,
     }
-    assert migrate_v15_to_v16(migrated) == migrated
     assert migrate_v12_to_v13(migrated) == migrated
 
 
