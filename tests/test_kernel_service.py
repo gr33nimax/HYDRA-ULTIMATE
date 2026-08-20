@@ -96,27 +96,23 @@ def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
         "api_version": 2,
         "identity": {
             "core_id": "io.hydrabox.hydracore",
-            "core_name": "HydraCore",
             "role": "vps",
         },
         "features": {
             "call_vk_parasite": True,
-            "call_vk_four_lane_kcp": True,
-            "call_vk_pre_kcp_admission": True,
-            "call_vk_relay_flow_control": True,
-            "call_vk_worker_hot_swap": True,
-            "call_vk_flow_migration": True,
-            "call_vk_turn_tcp_fallback": True,
-            "call_vk_transport_health": True,
-            "call_vk_eight_lane_kcp": False,
-            "call_vk_parasite_client": False,
-            "call_vk_parasite_server": True,
             "call_vk_telemetry": True,
         },
         "protocols": {
             "call_modes": ["vk_parasite"],
-            "call_vk_parasite_wire": {"min": 9, "max": 9},
         },
+    }
+    wrong_api_version = {
+        **valid,
+        "api_version": 1,
+    }
+    wrong_role = {
+        **valid,
+        "identity": {"core_id": "io.hydrabox.hydracore", "role": "client"},
     }
     alias = {
         "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
@@ -124,30 +120,22 @@ def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
         "protocols": {"call_modes": ["vk_parasite"]},
     }
     p2p_only = {
+        "api_version": 2,
         "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
         "features": {
             "call_vk_parasite": True,
-            "call_vk_parasite_client": False,
-            "call_vk_parasite_server": True,
         },
         "protocols": {
             "call_modes": ["p2p"],
-            "call_vk_parasite_wire": {"min": 9, "max": 9},
-        },
-    }
-    previous_wire = {
-        **valid,
-        "protocols": {
-            "call_modes": ["vk_parasite"],
-            "call_vk_parasite_wire": {"min": 8, "max": 8},
         },
     }
 
     assert KernelInfrastructure._has_hydracore_contract(valid) is True
     assert KernelInfrastructure._has_hydracore_debug_contract(valid) is True
+    assert KernelInfrastructure._has_hydracore_contract(wrong_api_version) is False
+    assert KernelInfrastructure._has_hydracore_contract(wrong_role) is False
     assert KernelInfrastructure._has_hydracore_contract(alias) is False
     assert KernelInfrastructure._has_hydracore_contract(p2p_only) is False
-    assert KernelInfrastructure._has_hydracore_contract(previous_wire) is False
     assert "call_vk_parasite" in KernelInfrastructure._normalized_capabilities(valid)
     assert "call_vk_parasite" not in KernelInfrastructure._normalized_capabilities(alias)
 
@@ -157,26 +145,14 @@ def test_hydracore_debug_contract_requires_native_telemetry() -> None:
         "api_version": 2,
         "identity": {
             "core_id": "io.hydrabox.hydracore",
-            "core_name": "HydraCore",
             "role": "vps",
         },
         "features": {
             "call_vk_parasite": True,
-            "call_vk_four_lane_kcp": True,
-            "call_vk_pre_kcp_admission": True,
-            "call_vk_relay_flow_control": True,
-            "call_vk_worker_hot_swap": True,
-            "call_vk_flow_migration": True,
-            "call_vk_turn_tcp_fallback": True,
-            "call_vk_transport_health": True,
-            "call_vk_eight_lane_kcp": False,
-            "call_vk_parasite_client": False,
-            "call_vk_parasite_server": True,
             "call_vk_telemetry": False,
         },
         "protocols": {
             "call_modes": ["vk_parasite"],
-            "call_vk_parasite_wire": {"min": 9, "max": 9},
         },
     }
 

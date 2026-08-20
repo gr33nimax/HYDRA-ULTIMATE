@@ -280,6 +280,12 @@ installed state. После upgrade оператор одновременно п
 Hydracore debug.33 и только затем включает Calls: принимаются точный wire v9,
 worker hot swap, flow migration, TURN TCP fallback и structured transport
 health; смешанные поколения отклоняются до изменения runtime.
+Ступень `v15 → v16` заменяет managed server default
+`max_workers_per_session=4` на `16` и удаляет только прежний managed client
+default `workers=4`. Неизвестные значения сохраняются, чтобы следующий validate
+завершился явной ошибкой, а не молча переписал состояние. После миграции VPS
+принимает только сессии с 4 или 16 lanes; rollback выполняется восстановлением
+`state-before-upgrade`, а не обратной записью schema 15 новым кодом.
 
 Обновление подписочного renderer не меняет state schema и повторно использует
 существующий per-user A256GCM key, но wire contract несовместим с HydraBox v1.

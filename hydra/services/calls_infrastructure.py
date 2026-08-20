@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from hydra.contracts.hydracore_calls import supports_exact_vps_calls
+from hydra.contracts.hydracore_calls import supports_vps_calls
 from hydra.core.host import HostBackend
 from hydra.services.headless_creator_infrastructure import validate_vk_join_link
 
@@ -98,7 +98,7 @@ class CallsInfrastructure:
             return {}
 
     def vk_parasite_supported(self) -> bool:
-        return supports_exact_vps_calls(self._capabilities())
+        return supports_vps_calls(self._capabilities())
 
     def singbox_running(self) -> bool:
         try:

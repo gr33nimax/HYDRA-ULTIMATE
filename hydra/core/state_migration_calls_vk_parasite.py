@@ -100,10 +100,28 @@ def migrate_v14_to_v15(data: dict) -> dict:
     return migrated
 
 
+def migrate_v15_to_v16(data: dict) -> dict:
+    """Migrate server max_workers_per_session to 16 and strip client workers topology."""
+    migrated = copy.deepcopy(data)
+    protocols = migrated.get("protocols", {})
+    calls = protocols.get("calls", {}) if isinstance(protocols, dict) else {}
+    if isinstance(calls, dict):
+        config = calls.setdefault("config", {})
+        if isinstance(config, dict):
+            if config.get("mode") == "vk_parasite":
+                if config.get("max_workers_per_session") == 4:
+                    config["max_workers_per_session"] = 16
+                if config.get("workers") == 4:
+                    config.pop("workers")
+    migrated["version"] = 16
+    return migrated
+
+
 __all__ = [
     "migrate_v10_to_v11",
     "migrate_v11_to_v12",
     "migrate_v12_to_v13",
     "migrate_v13_to_v14",
     "migrate_v14_to_v15",
+    "migrate_v15_to_v16",
 ]

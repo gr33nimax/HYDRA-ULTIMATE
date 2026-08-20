@@ -1,5 +1,9 @@
 # Changelog
 
+- Added state schema 16 for the staged 4-to-16 lane rollout. The VPS accepts
+  only 4- or 16-lane sessions, subscriptions no longer own the client `workers`
+  field, and reduced capabilities require the real VPS server feature.
+
 - Added schema 15 and the exact Hydracore debug.33 VK parasite wire 9
   contract. Upgrade quiesces active wire-8 Calls before apply; kernel switch
   and Calls enablement require hot swap, flow migration, TURN TCP fallback

@@ -583,22 +583,21 @@ Subscription v2 как изолированный `call` outbound с `platform=v
 Calls имеет только режим `vk_parasite`. До любых host-мутаций service требует
 desired `kernel.provider=hydracore`, exact identity
 `io.hydrabox.hydracore`, role `vps`, server feature
-`call_vk_parasite_server=true`, `protocols.call_modes=["vk_parasite"]` и wire
-compatibility v1..2; stock core, client artifact, capability aliases и `p2p`
+`call_vk_parasite_server=true` и `protocols.call_modes=["vk_parasite"]`;
+stock core, client artifact, capability aliases и `p2p`
 отклоняются fail-closed. Затем service создаёт отдельную managed-группу 1–4
 комнат. Plugin возвращает server inbound с
 `listen/listen_port`, общим `obfs_password`, per-user credentials и bounded
 session/worker/handshake limits; cookies и join-links в server config
 отсутствуют. Per-user Hydra v2 projection содержит `server/server_port`,
-`join_links`, user/password, общий obfs key и worker policy и требует core
+`join_links`, user/password и общий obfs key и требует core
 feature `call_vk_parasite`; singular `join_link` не генерируется в outbound.
 `server` берётся из persisted `calls.config.public_endpoint`, который
 материализуется при enable/reinstall из явного `network.server_ip` либо
 наблюдаемого публичного IP VPS и никогда не наследует transport SNI.
-Admin DTO сохраняет первый link под старым именем только как compatibility alias. Worker policy
-по умолчанию создаёт один worker
-на ссылку и ограничивает явное значение как
-`min(max_workers_per_session, 27 × unique_join_links, 108)`. IPv4 listener по
+Admin DTO сохраняет первый link под старым именем только как compatibility alias.
+Клиент сам выбирает поддерживаемую topology; серверный
+`max_workers_per_session` допускает только 4 или 16. IPv4 listener по
 умолчанию использует свободный `56002/udp`; совпадение с внешними UDP-портами
 enabled transport отклоняется до apply (в частности, qWDTT сохраняет
 `56001/udp` для WireGuard).

@@ -10,7 +10,7 @@ DEFAULT_CALL_PORT = 56002
 DEFAULT_ROOM_COUNT = 4
 DEFAULT_PEER_READ_QUEUE_PACKETS = 512
 MAX_JOIN_LINKS = 4
-MAX_WORKERS = 4
+MAX_WORKERS = 16
 
 
 class CallsProtocolState(Protocol):
@@ -164,6 +164,15 @@ def vk_parasite_inbound(
     ]
     if not users:
         raise ValueError("Calls vk_parasite requires at least one active user")
+    max_workers_per_session = _integer(
+        config,
+        "max_workers_per_session",
+        MAX_WORKERS,
+        4,
+        16,
+    )
+    if max_workers_per_session not in (4, 16):
+        raise ValueError("Calls max_workers_per_session must be 4 or 16")
     return {
         "type": "call",
         "tag": "calls-vk-in",
@@ -174,13 +183,7 @@ def vk_parasite_inbound(
         "obfs_password": password,
         "users": users,
         "max_sessions": _integer(config, "max_sessions", 128, 1, 4096),
-        "max_workers_per_session": _integer(
-            config,
-            "max_workers_per_session",
-            MAX_WORKERS,
-            MAX_WORKERS,
-            MAX_WORKERS,
-        ),
+        "max_workers_per_session": max_workers_per_session,
         "max_pending_handshakes": _integer(
             config,
             "max_pending_handshakes",
@@ -230,8 +233,6 @@ def vk_parasite_outbound(
     server = str(server_address).strip().strip("[]")
     if not server:
         raise ValueError("Calls vk_parasite server address is not configured")
-    _integer(config, "max_workers_per_session", MAX_WORKERS, MAX_WORKERS, MAX_WORKERS)
-    workers = _integer(config, "workers", MAX_WORKERS, MAX_WORKERS, MAX_WORKERS)
     return {
         "type": "call",
         "tag": "call-vk-out",
@@ -243,7 +244,6 @@ def vk_parasite_outbound(
         "user": user.email,
         "password": user_password(user),
         "obfs_password": _obfs_password(config),
-        "workers": workers,
         "worker_connect_timeout": _duration(
             config,
             "worker_connect_timeout",

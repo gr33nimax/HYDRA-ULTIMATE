@@ -185,7 +185,6 @@ class CallsService:
                 "listen_port": desired.config.get("listen_port", DEFAULT_CALL_PORT),
                 "max_sessions_per_user": desired.config.get("max_sessions_per_user", 1),
                 "max_workers_per_session": MAX_WORKERS,
-                "workers": MAX_WORKERS,
                 "public_endpoint": public_endpoint(state, public_ip),
             })
             desired.config.pop("read_buffer", None)

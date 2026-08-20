@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from hydra.contracts.hydracore_calls import supports_exact_vps_calls
+from hydra.contracts.hydracore_calls import supports_vps_calls
 from hydra.core.host import HostBackend
 from hydra.core.state_kernel_models import (
     KERNEL_HYDRACORE,
@@ -208,7 +208,7 @@ class KernelInfrastructure:
 
     @staticmethod
     def _has_hydracore_contract(payload: dict) -> bool:
-        return supports_exact_vps_calls(payload)
+        return supports_vps_calls(payload)
 
     @classmethod
     def _has_hydracore_debug_contract(cls, payload: dict) -> bool:
@@ -305,9 +305,7 @@ class KernelInfrastructure:
             payload = self._capability_payload(candidate)
             if not self._has_hydracore_contract(payload):
                 raise RuntimeError(
-                    "Hydracore must expose exact identity, "
-                    "the VPS Calls role, coordinated recovery features, "
-                    "vk_parasite-only mode, and exact wire v9",
+                    "Hydracore must expose identity, the VPS Calls role, and vk_parasite mode",
                 )
             if channel == "debug" and not self._has_hydracore_debug_contract(payload):
                 raise RuntimeError(
