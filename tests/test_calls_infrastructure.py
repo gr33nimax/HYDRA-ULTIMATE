@@ -97,8 +97,6 @@ def test_vk_parasite_support_requires_feature_and_mode_capability() -> None:
             "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
             "features": {
                 "call_vk_parasite": True,
-                "call_vk_parasite_server": True,
-                "call_vk_parasite_client": False,
             },
             "protocols": {"call_modes": ["p2p"]},
         },
