@@ -229,7 +229,7 @@ def test_human_error_contains_actionable_code_and_usage():
     assert "error_details" not in output
 
 
-def test_calls_telemetry_report_renderer_highlights_capacity_and_findings():
+def test_calls_telemetry_report_renderer_shows_capacity_without_findings():
     output = render_human(
         "calls.telemetry.report",
         {
@@ -274,8 +274,10 @@ def test_calls_telemetry_report_renderer_highlights_capacity_and_findings():
     assert "tester-1" in output
     assert "Elapsed: 200 s" in output
     assert "Native coverage: full" in output
-    assert "UDP drops detected" in output
-    assert "Inspect socket buffers" in output
+    # Findings остаются в JSON, но в текстовый отчёт не идут.
+    assert "UDP drops detected" not in output
+    assert "Inspect socket buffers" not in output
+    assert "Findings" not in output
 
 
 def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
@@ -297,24 +299,19 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
             "active": True,
             "current": True,
             "wire_bps": 2_000_000,
-            "kcp_retransmission_ratio": 0.02,
-            "kcp_fast_retransmission_ratio": 0.012,
-            "kcp_rto_retransmission_ratio": 0.008,
             "gauges": {
                 "worker_active": {"max": 1},
-                "lane_count": {"max": 1},
-                "lane_flow_count": {"max": 12},
-                "kcp_wait_snd": {"p95": 8},
-                "kcp_rtt_ms": {"p95": 55},
+                "quic_conn_count": {"max": 4},
+                "quic_streams_active": {"max": 12},
+                "quic_rtt_ms": {"p95": 55},
+                "quic_rtt_var_ms": {"p95": 7},
+                "quic_congestion_window_bytes": {"p95": 65536},
                 "network_loss_ratio": {"p95": 0.01},
-                "lane_admission_window_segments": {"p50": 64, "p95": 96},
-                "kcp_output_queue_depth": {"p95": 12},
-                "kcp_output_queue_capacity": {"max": 128},
                 "worker_write_latency_ms": {"p95": 3.5},
             },
             "counters": {
-                "kcp_update_backpressure_total": 2,
-                "kcp_mutex_blocked_seconds_total": 0.025,
+                "quic_packets_lost_total": 9,
+                "path_replacements_total": 1,
             },
         },
     ]
@@ -330,33 +327,11 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
                 "outer_bytes": 2_000_000,
                 "outer_payload_bytes": 1_800_000,
                 "outer_overhead_bytes": 200_000,
-                "kcp_retransmit_bytes": 300_000,
-                "kcp_fast_retransmit_estimate_bytes": 120_000,
-                "kcp_rto_retransmit_estimate_bytes": 180_000,
-                "kcp_ack_segments": 900,
-                "kcp_ack_progress_segments": 800,
-                "kcp_rtt_samples": 700,
+                "quic_retransmit_bytes": 300_000,
+                "quic_packets_lost": 9,
+                "quic_datagrams_sent": 900,
+                "quic_datagrams_dropped": 3,
                 "relay_goodput_bytes": 1_000_000,
-            },
-            "lane_recovery": {
-                "stalls": 1,
-                "attempts": 1,
-                "recovered": 1,
-                "matched_recoveries": 1,
-                "unresolved": 0,
-                "duration_seconds": {"p95": 1.5},
-            },
-            "lane_pipeline": {
-                "available": True,
-                "output_queue_depth_p95": 12,
-                "output_queue_capacity": 128,
-                "output_queue_utilization_ratio": 0.09375,
-                "admission_window_p50_min": 64,
-                "admission_window_p95_max": 96,
-                "worker_write_latency_p95_ms": 3.5,
-                "update_backpressure_total": 2,
-                "mutex_blocked_seconds_total": 0.025,
-                "flow_reorder_abort_total": 1,
             },
         },
     }
@@ -369,29 +344,21 @@ def test_calls_status_hides_historical_workers_but_report_identifies_sessions():
     )
 
     assert "top 1 of 1" in status
-    assert "KCP retx" in status
-    assert "Flows" in status
-    assert "2.0%" in status
-    assert "1.2%/0.8%" in status
-    assert "fast/RTO est=" in status
-    assert "KCP ACK: observed=900, progress=800, RTT samples=700" in status
-    assert "KCP pipeline: output p95=12/128 (9.4%)" in status
-    assert (
-        "Lane recovery: stalls=1, started=1, recovered=1, failed=0, "
-        "escalated=0, unresolved=0, p95=1.5 s"
-    ) in status
-    assert "12" in status
+    assert "QUIC paths" in status
+    assert "Streams" in status
+    assert "CWND p95" in status
     assert "55 ms" in status
+    assert "QUIC datagrams: sent=900, dropped=3, packets lost=9" in status
     assert "Historical/inactive workers hidden: 1" in status
     assert "new-session" not in status
+    # Разбор возможных причин больше не печатается: телеметрия даёт числа.
+    assert "KCP" not in status
+    assert "Lane recovery" not in status
+    assert "Lane internals" not in report
     assert "new-session" in report
     assert "old-session" in report
     assert "Queue/late" in report
-    assert "ACK/flight" in report
     assert "RTT/var" in report
-    assert "Lane internals" in report
-    assert "Admission p50/p95" in report
-    assert "Output p95/cap" in report
 
 
 def test_tty_uses_human_output_while_json_flag_is_machine_stable(capsys):

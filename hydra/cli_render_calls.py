@@ -42,7 +42,7 @@ def render_calls_telemetry(payload: Mapping[str, object]) -> list[str]:
             native,
             detailed="analysis_input" in payload,
         )
-    _append_findings_and_paths(lines, payload)
+    _append_data_paths(lines, payload)
     records = payload.get("records")
     if isinstance(records, Sequence) and records:
         lines.extend(["", "Timeline"])
@@ -120,20 +120,17 @@ def _append_testers(lines: list[str], testers: Sequence[object]) -> None:
     lines.extend(["", "Testers", *table(("ID", "Traffic", "p95"), rows)])
 
 
-def _append_findings_and_paths(
+def _append_data_paths(
     lines: list[str],
     payload: Mapping[str, object],
 ) -> None:
-    findings = payload.get("findings")
-    if isinstance(findings, Sequence) and findings:
-        lines.extend(["", "Findings"])
-        for raw in findings:
-            if isinstance(raw, Mapping):
-                lines.append(
-                    f"  [{raw.get('severity', 'info')}] {raw.get('message', '')}",
-                )
-                if raw.get("next_step"):
-                    lines.append(f"    Next: {raw['next_step']}")
+    """Печатает только пути к данным.
+
+    Раздел Findings убран намеренно: телеметрия показывает числа, а разбор
+    возможных причин остаётся человеку. Сами findings по-прежнему лежат в
+    JSON-выводе для внешних потребителей, но в текстовый отчёт не идут -
+    двадцать заключений по два абзаца делали вывод нечитаемым.
+    """
     if payload.get("samples_path"):
         lines.extend(["", f"  Data: {payload['samples_path']}"])
     if payload.get("timeline_path"):
