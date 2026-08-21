@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 
-QUIC_LIVE_REQUIRED = (
-    "quic_conn_count",
+# Метрики уровня одного QUIC-пути: их отдаёт каждое соединение пула.
+QUIC_PATH_REQUIRED = (
     "quic_streams_active",
     "quic_streams_opened_total",
     "quic_rtt_ms",
@@ -13,8 +13,17 @@ QUIC_LIVE_REQUIRED = (
     "quic_congestion_window_bytes",
     "quic_datagrams_sent_total",
     "quic_datagrams_dropped_total",
+)
+
+# Метрики уровня пула: существуют только там, где виден весь набор путей.
+# Требовать их от отдельного воркера нельзя - он о пуле ничего не знает,
+# и покрытие воркера ложно считалось бы неполным.
+QUIC_POOL_REQUIRED = (
+    "quic_conn_count",
     "path_replacements_total",
 )
+
+QUIC_LIVE_REQUIRED = QUIC_PATH_REQUIRED + QUIC_POOL_REQUIRED
 
 OUTER_REQUIRED = (
     "outer_packets_in_total",
@@ -95,7 +104,7 @@ SERVER_SESSION_REQUIRED = {
 }
 
 SERVER_WORKER_REQUIRED = {
-    "quic": QUIC_LIVE_REQUIRED,
+    "quic": QUIC_PATH_REQUIRED,
     "outer": (*OUTER_REQUIRED, "outer_wrap_failures_total"),
     "peer": (
         "peer_read_queue_depth",
@@ -147,7 +156,7 @@ CLIENT_WORKER_REQUIRED = {
         "worker_reconnect_total",
         "worker_reconnect_backoff_ms",
     ),
-    "quic": QUIC_LIVE_REQUIRED,
+    "quic": QUIC_PATH_REQUIRED,
     "outer": (*OUTER_REQUIRED, "outer_wrap_failures_total"),
     "telemetry": ("telemetry_sequence",),
 }
@@ -185,6 +194,9 @@ CLIENT_REQUIRED = CLIENT_SESSION_REQUIRED | CLIENT_WORKER_REQUIRED
 
 __all__ = [
     "CLIENT_REQUIRED",
+    "QUIC_LIVE_REQUIRED",
+    "QUIC_PATH_REQUIRED",
+    "QUIC_POOL_REQUIRED",
     "CLIENT_SESSION_REQUIRED",
     "CLIENT_WORKER_REQUIRED",
     "SERVER_PROCESS_REQUIRED",

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from hydra.services.calls_telemetry_findings import extended_native_findings
 from hydra.services.calls_telemetry_lane_analysis import lane_pipeline_summary
+from hydra.services.calls_telemetry_native_contract import (
+    QUIC_PATH_REQUIRED,
+    QUIC_POOL_REQUIRED,
+)
 from hydra.services.calls_telemetry_protocol_analysis import (
     CLIENT_SESSION_REQUIRED,
     CLIENT_WORKER_REQUIRED,
@@ -77,17 +81,35 @@ def test_full_diagnostic_level_requires_every_server_and_tester_group() -> None:
     assert all(result["client_groups"]["tester-1"].values())
 
 
-def test_worker_lane_coverage_does_not_require_session_config_metrics() -> None:
-    assert "lane_admission_bytes_per_second" not in SERVER_WORKER_REQUIRED["lanes"]
-    assert "outer_rtp_payload_type" not in CLIENT_WORKER_REQUIRED["lanes"]
-    assert "lane_admission_bytes_per_second" in SERVER_SESSION_REQUIRED["lanes"]
-    assert "outer_rtp_payload_type" in CLIENT_SESSION_REQUIRED["lanes"]
-    assert "lane_generation" in SERVER_WORKER_REQUIRED["lanes"]
-    assert "lane_pacing_bytes_per_second" in CLIENT_WORKER_REQUIRED["lanes"]
-    assert "lane_reset_commit_total" in SERVER_WORKER_REQUIRED["lanes"]
-    assert "lane_application_limited" in SERVER_WORKER_REQUIRED["lanes"]
-    assert "lane_recovery_deferred_total" in CLIENT_WORKER_REQUIRED["lanes"]
-    assert "aggregate_progress_age_seconds" in CLIENT_SESSION_REQUIRED["lanes"]
+def test_worker_quic_coverage_does_not_require_pool_scoped_metrics() -> None:
+    """Покрытие воркера не должно требовать метрик уровня пула и сессии.
+
+    До перехода на QUIC тот же инвариант проверялся для группы "lanes".
+    Пул QUIC-путей знает число соединений и число замен пути, отдельный
+    путь - нет, поэтому требовать их от воркера значит объявлять его
+    покрытие неполным на корректных данных.
+    """
+    for pool_metric in QUIC_POOL_REQUIRED:
+        assert pool_metric not in SERVER_WORKER_REQUIRED["quic"]
+        assert pool_metric not in CLIENT_WORKER_REQUIRED["quic"]
+        assert pool_metric in SERVER_SESSION_REQUIRED["quic"]
+        assert pool_metric in CLIENT_SESSION_REQUIRED["quic"]
+
+    for path_metric in QUIC_PATH_REQUIRED:
+        assert path_metric in SERVER_WORKER_REQUIRED["quic"]
+        assert path_metric in CLIENT_WORKER_REQUIRED["quic"]
+        assert path_metric in SERVER_SESSION_REQUIRED["quic"]
+        assert path_metric in CLIENT_SESSION_REQUIRED["quic"]
+
+    # Конфигурация RTP-обёртки снимается на уровне сессии, не воркера.
+    assert "outer_rtp_payload_type" not in CLIENT_WORKER_REQUIRED["outer"]
+    assert "outer_rtp_payload_type" in CLIENT_SESSION_REQUIRED["outer"]
+    assert "outer_rtp_payload_type" not in SERVER_WORKER_REQUIRED["outer"]
+    assert "outer_rtp_payload_type" in SERVER_SESSION_REQUIRED["outer"]
+
+    # Агрегатное продвижение и замена сессии - тоже уровень сессии.
+    assert "aggregate_progress_age_seconds" in CLIENT_SESSION_REQUIRED["session"]
+    assert "aggregate_progress_age_seconds" in SERVER_SESSION_REQUIRED["session"]
     assert "telemetry_pending_records" in CLIENT_SESSION_REQUIRED["telemetry"]
 
 
