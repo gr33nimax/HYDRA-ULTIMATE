@@ -1,76 +1,21 @@
-"""Required metric groups for HydraCore VK parasite telemetry."""
+"""Required metric groups for HydraCore VK parasite QUIC telemetry."""
 from __future__ import annotations
 
 
-KCP_LIVE_REQUIRED = (
-    "kcp_wait_snd",
-    "kcp_out_segments_total",
-    "kcp_retrans_segments_total",
-    "kcp_out_bytes_total",
-    "kcp_retrans_bytes_total",
-    "kcp_fast_retrans_estimate_segments_total",
-    "kcp_fast_retrans_estimate_bytes_total",
-    "kcp_rto_retrans_estimate_segments_total",
-    "kcp_rto_retrans_estimate_bytes_total",
-    "kcp_rtt_ms",
-    "kcp_rto_ms",
-    "kcp_rttvar_ms",
-    "kcp_rtt_samples_total",
-    "kcp_ack_segments_total",
-    "kcp_ack_progress_segments_total",
-    "kcp_inflight_segments",
-    "kcp_output_queue_depth",
-    "kcp_output_queue_capacity",
-    "kcp_update_backpressure_total",
-    "kcp_mutex_blocked_seconds_total",
+QUIC_LIVE_REQUIRED = (
+    "quic_conn_count",
+    "quic_streams_active",
+    "quic_streams_opened_total",
+    "quic_rtt_ms",
+    "quic_rtt_var_ms",
+    "quic_packets_lost_total",
+    "quic_bytes_retrans_total",
+    "quic_congestion_window_bytes",
+    "quic_datagrams_sent_total",
+    "quic_datagrams_dropped_total",
+    "path_replacements_total",
 )
-KCP_CONFIG_REQUIRED = (
-    "kcp_send_blocked_seconds_total",
-    "kcp_mtu_bytes",
-    "kcp_send_window_segments",
-    "kcp_receive_window_segments",
-    "kcp_max_pending_segments",
-    "kcp_update_interval_ms",
-    "kcp_fast_resend",
-    "kcp_congestion_control",
-)
-LANE_LIVE_REQUIRED = (
-    "lane_count",
-    "lane_flow_count",
-    "worker_output_queue_delay_ms",
-    "worker_output_queue_late_total",
-    "worker_write_latency_ms",
-    "lane_admission_window_segments",
-    "lane_generation",
-    "lane_state",
-    "lane_pacing_bytes_per_second",
-    "lane_delivered_bytes_per_second",
-    "lane_min_rtt_ms",
-    "lane_inflight_limit_segments",
-    "lane_application_limited",
-    "lane_token_starvation_total",
-    "lane_ack_age_seconds",
-    "lane_reset_request_total",
-    "lane_reset_retry_total",
-    "lane_reset_ack_total",
-    "lane_reset_commit_total",
-    "lane_reset_duration_ms",
-    "lane_stale_generation_drops_total",
-    "lane_probe_result",
-    "lane_recovery_deferred_total",
-    "flow_reorder_abort_total",
-)
-LANE_CONFIG_REQUIRED = (
-    "lane_admission_bytes_per_second",
-    "outer_rtp_payload_type",
-)
-LANE_SESSION_REQUIRED = (
-    *LANE_LIVE_REQUIRED,
-    *LANE_CONFIG_REQUIRED,
-    "aggregate_progress_age_seconds",
-    "quarantined_lanes",
-    "session_replacement_total",
-)
+
 OUTER_REQUIRED = (
     "outer_packets_in_total",
     "outer_packets_out_total",
@@ -120,8 +65,8 @@ SERVER_PROCESS_REQUIRED = {
 }
 
 SERVER_SESSION_REQUIRED = {
-    "kcp": (*KCP_LIVE_REQUIRED, *KCP_CONFIG_REQUIRED),
-    "outer": (*OUTER_REQUIRED, "outer_wrap_failures_total"),
+    "quic": QUIC_LIVE_REQUIRED,
+    "outer": (*OUTER_REQUIRED, "outer_wrap_failures_total", "outer_rtp_payload_type"),
     "peer": (
         "peer_read_queue_depth",
         "peer_read_queue_capacity",
@@ -135,31 +80,22 @@ SERVER_SESSION_REQUIRED = {
         "relay_queue_drops_total",
         "relay_connect_failure_total",
     ),
-    "session": ("session_active", "session_age_seconds", "session_idle_seconds"),
+    "session": ("session_active", "aggregate_progress_age_seconds", "session_replacement_total"),
     "worker": (
-        "worker_desired",
         "worker_active",
         "worker_attach_success_total",
         "worker_attach_failure_total",
-        "worker_send_queue_depth",
-        "worker_send_queue_drops_total",
-        "worker_no_available_drops_total",
-        "worker_liveness_expired_total",
-        "worker_send_queue_capacity",
-        "worker_heartbeat_interval_ms",
-        "worker_liveness_timeout_ms",
     ),
-    "lanes": LANE_SESSION_REQUIRED,
-    "network": ("network_loss_ratio", "network_jitter_ms"),
     "telemetry": (
         "telemetry_sequence",
         "telemetry_control_drops_total",
         "telemetry_record_drops_total",
+        "telemetry_sink_rotations_total",
     ),
 }
 
 SERVER_WORKER_REQUIRED = {
-    "kcp": KCP_LIVE_REQUIRED,
+    "quic": QUIC_LIVE_REQUIRED,
     "outer": (*OUTER_REQUIRED, "outer_wrap_failures_total"),
     "peer": (
         "peer_read_queue_depth",
@@ -170,12 +106,7 @@ SERVER_WORKER_REQUIRED = {
         "worker_active",
         "worker_attach_success_total",
         "worker_attach_failure_total",
-        "worker_send_queue_depth",
-        "worker_send_queue_drops_total",
-        "worker_liveness_expired_total",
     ),
-    "lanes": LANE_LIVE_REQUIRED,
-    "network": ("network_loss_ratio", "network_jitter_ms"),
     "telemetry": ("telemetry_sequence",),
 }
 
@@ -215,14 +146,9 @@ CLIENT_WORKER_REQUIRED = {
         "worker_active",
         "worker_reconnect_total",
         "worker_reconnect_backoff_ms",
-        "worker_send_queue_depth",
-        "worker_send_queue_drops_total",
-        "worker_liveness_expired_total",
     ),
-    "lanes": LANE_LIVE_REQUIRED,
-    "kcp": KCP_LIVE_REQUIRED,
+    "quic": QUIC_LIVE_REQUIRED,
     "outer": (*OUTER_REQUIRED, "outer_wrap_failures_total"),
-    "network": ("network_loss_ratio", "network_jitter_ms"),
     "telemetry": ("telemetry_sequence",),
 }
 
@@ -231,13 +157,11 @@ CLIENT_SESSION_REQUIRED = {
         "worker_desired",
         "worker_active",
         "worker_reconnect_total",
-        "worker_send_queue_capacity",
-        "worker_heartbeat_interval_ms",
-        "worker_liveness_timeout_ms",
+        "worker_reconnect_backoff_ms",
     ),
-    "lanes": LANE_SESSION_REQUIRED,
-    "kcp": (*KCP_LIVE_REQUIRED, *KCP_CONFIG_REQUIRED),
-    "outer": OUTER_REQUIRED,
+    "quic": QUIC_LIVE_REQUIRED,
+    "outer": (*OUTER_REQUIRED, "outer_rtp_payload_type"),
+    "session": ("aggregate_progress_age_seconds", "session_replacement_total"),
     "network": (
         "network_loss_ratio",
         "network_jitter_ms",
@@ -250,6 +174,7 @@ CLIENT_SESSION_REQUIRED = {
         "telemetry_record_drops_total",
         "telemetry_pending_records",
         "telemetry_lease_expired_total",
+        "telemetry_snapshot_coalesced_total",
     ),
 }
 
