@@ -117,6 +117,36 @@ def migrate_v15_to_v16(data: dict) -> dict:
     return migrated
 
 
+def migrate_v16_to_v17(data: dict) -> dict:
+    """Fix native Calls at four rooms and sixteen workers."""
+    migrated = copy.deepcopy(data)
+    protocols = migrated.get("protocols", {})
+    calls = protocols.get("calls", {}) if isinstance(protocols, dict) else {}
+    if isinstance(calls, dict):
+        config = calls.setdefault("config", {})
+        if isinstance(config, dict) and config.get("mode") == "vk_parasite":
+            config.pop("room_count", None)
+            config["max_workers_per_session"] = 16
+    migrated["version"] = 17
+    return migrated
+
+
+def migrate_v17_to_v18(data: dict) -> dict:
+    """Move the Calls worker setting to its single client/server source."""
+    migrated = copy.deepcopy(data)
+    protocols = migrated.get("protocols", {})
+    calls = protocols.get("calls", {}) if isinstance(protocols, dict) else {}
+    if isinstance(calls, dict):
+        config = calls.setdefault("config", {})
+        if isinstance(config, dict) and config.get("mode") == "vk_parasite":
+            workers = config.get("workers", 4)
+            config["workers"] = workers if workers in (4, 8, 12, 16, 20) else 4
+            config.pop("room_count", None)
+            config.pop("max_workers_per_session", None)
+    migrated["version"] = 18
+    return migrated
+
+
 __all__ = [
     "migrate_v10_to_v11",
     "migrate_v11_to_v12",
@@ -124,4 +154,6 @@ __all__ = [
     "migrate_v13_to_v14",
     "migrate_v14_to_v15",
     "migrate_v15_to_v16",
+    "migrate_v16_to_v17",
+    "migrate_v17_to_v18",
 ]

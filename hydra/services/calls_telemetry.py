@@ -8,7 +8,8 @@ from typing import Protocol, Sequence
 from hydra import __version__
 from hydra.contracts.calls_configuration import (
     CALL_MODE_VK_PARASITE,
-    MAX_WORKERS,
+    CALL_COUNT,
+    DEFAULT_WORKERS,
     peer_read_queue_packets,
 )
 from hydra.core.state_models import AppState
@@ -157,16 +158,16 @@ class CallsTelemetryService:
             "calls": {
                 "mode": CALL_MODE_VK_PARASITE,
                 "transport": "four_lane_kcp_v9",
-                "lane_count": MAX_WORKERS,
-                "room_count": _safe_int(config.get("room_count", 0)),
-                "workers": MAX_WORKERS,
+                "lane_count": _safe_int(config.get("workers", DEFAULT_WORKERS)),
+                "room_count": CALL_COUNT,
+                "workers": _safe_int(config.get("workers", DEFAULT_WORKERS)),
                 "listen_port": _safe_int(config.get("listen_port", 0)),
                 "max_sessions": _safe_int(config.get("max_sessions", 128)),
                 "max_sessions_per_user": _safe_int(
                     config.get("max_sessions_per_user", 1),
                 ),
                 "max_workers_per_session": _safe_int(
-                    MAX_WORKERS,
+                    _safe_int(config.get("workers", DEFAULT_WORKERS)),
                 ),
                 "max_pending_handshakes": _safe_int(
                     config.get("max_pending_handshakes", 256),

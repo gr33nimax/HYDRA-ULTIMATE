@@ -1,5 +1,8 @@
 # Changelog
 
+- Added state schema 18: native Calls always creates four VK rooms; `workers`
+  is the shared configurable session topology (default 4; 4/8/12/16/20).
+
 - Added state schema 16 for the staged 4-to-16 lane rollout. The VPS accepts
   only 4- or 16-lane sessions, subscriptions no longer own the client `workers`
   field, and reduced capabilities require the real VPS server feature.

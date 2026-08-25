@@ -37,7 +37,7 @@ def _status_panel(state: AppState, app: ApplicationService) -> None:
             ("Платформа", "VK"),
             ("Режим", getattr(status, "native_mode", "vk_parasite")),
             ("Пул", "готов" if status.native_pool_ready else "отсутствует"),
-            ("Комнат в пуле", str(getattr(status, "room_count", 0))),
+            ("VK-звонков", "4"),
         ],
     )
 
@@ -58,13 +58,13 @@ def _show_profile(state: AppState, app: ApplicationService) -> None:
 def _menu_options(*, installed: bool) -> list[tuple[str, str, str]]:
     if not installed:
         return [
-            ("1", "🔧 Установить", "Создать пул из 1–4 VK-комнат и запустить Calls"),
+            ("1", "🔧 Установить", "Создать пул из 4 VK-комнат и запустить Calls"),
             ("0", "↩ Назад", ""),
         ]
     return [
         ("1", "🔄 Переустановить", "Пересоздать VK-пул с rollback"),
         ("2", "📄 Показать admin-профиль", "Секретный клиентский JSON"),
-        ("3", "🔢 Число VK-комнат", "От 1 до 4; применяется при переустановке"),
+        ("3", "🔢 Число workers", "4 / 8 / 12 / 16 / 20"),
         ("9", "❌ Удалить", "Удалить Calls и сохранённые join-links"),
         ("0", "↩ Назад", ""),
     ]
@@ -82,15 +82,12 @@ def _dispatch(choice: str, state: AppState, app: ApplicationService) -> bool:
         _show_profile(state, app)
     elif choice == "3" and desired.installed:
         try:
-            count = int(prompt("Число VK-комнат [1-4]: ").strip())
+            count = int(prompt("Число workers [4/8/12/16/20]: ").strip())
         except ValueError:
-            error("Введите целое число от 1 до 4")
+            error("Введите 4, 8, 12, 16 или 20")
             _pause()
         else:
-            _show_result(
-                app.calls.set_room_count(state, count),
-                "Число комнат сохранено; переустановите Calls для ротации пула",
-            )
+            _show_result(app.calls.set_workers(state, count), "Число workers применено")
     elif choice == "9" and desired.installed:
         if confirm("Удалить Calls и сохранённые join-links?"):
             removed = _show_result(

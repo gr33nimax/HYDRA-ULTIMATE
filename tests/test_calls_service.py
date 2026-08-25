@@ -182,11 +182,29 @@ def test_native_enable_is_hydracore_vk_parasite_only() -> None:
     }
     assert state.protocols["calls"].enabled is True
     assert state.protocols["calls"].config["mode"] == "vk_parasite"
-    assert state.protocols["calls"].config["max_workers_per_session"] == 16
+    assert state.protocols["calls"].config["workers"] == 4
     assert state.protocols["calls"].config["listen_port"] == 56002
     assert state.protocols["calls"].config["public_endpoint"] == "203.0.113.10"
     assert len(state.protocols["calls"].config["obfs_password"]) >= 32
     assert creator.committed and creator.finalized
+
+
+def test_set_workers_updates_the_single_calls_configuration_value() -> None:
+    runtime = Runtime()
+    state = _state(installed=True, enabled=True)
+    applied: list[int] = []
+    service, _ = _service(
+        runtime,
+        apply=lambda current: applied.append(current.protocols["calls"].config["workers"])
+        or True,
+    )
+
+    result = service.set_workers(state, 12)
+
+    assert result.value == {"workers": 12}
+    assert state.protocols["calls"].config["workers"] == 12
+    assert "max_workers_per_session" not in state.protocols["calls"].config
+    assert applied == [12]
 
 
 def test_stock_core_is_rejected_without_starting_creator() -> None:
@@ -294,6 +312,8 @@ def test_admin_client_profile_uses_vk_parasite_and_keeps_metadata_alias() -> Non
     runtime.links = [
         "https://vk.com/call/join/one",
         "https://vk.com/call/join/two",
+        "https://vk.com/call/join/three",
+        "https://vk.com/call/join/four",
     ]
     state = _state(installed=True, enabled=True)
     service, _ = _service(runtime)
@@ -314,7 +334,7 @@ def test_admin_client_profile_uses_vk_parasite_and_keeps_metadata_alias() -> Non
 
 def test_admin_client_profile_uses_public_ip_instead_of_transport_sni() -> None:
     runtime = Runtime()
-    runtime.links = ["https://vk.com/call/join/one"]
+    runtime.links = [f"https://vk.com/call/join/{index}" for index in range(4)]
     state = _state(installed=True, enabled=True)
     state.network.server_ip = ""
     state.network.domain = "transport-sni.example"
@@ -330,7 +350,7 @@ def test_admin_client_profile_uses_public_ip_instead_of_transport_sni() -> None:
 
 def test_admin_client_profile_prefers_persisted_calls_endpoint() -> None:
     runtime = Runtime()
-    runtime.links = ["https://vk.com/call/join/one"]
+    runtime.links = [f"https://vk.com/call/join/{index}" for index in range(4)]
     state = _state(installed=True, enabled=True)
     state.protocols["calls"].config["public_endpoint"] = "198.51.100.77"
     state.network.server_ip = "203.0.113.10"

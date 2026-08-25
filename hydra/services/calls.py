@@ -9,11 +9,10 @@ from typing import Callable
 
 from hydra.contracts.calls_configuration import (
     CALL_MODE_VK_PARASITE,
+    CALL_COUNT,
     DEFAULT_CALL_PORT,
-    DEFAULT_ROOM_COUNT,
-    MAX_JOIN_LINKS,
-    MAX_WORKERS,
     call_mode,
+    workers as configured_workers,
     vk_parasite_outbound,
     public_endpoint,
 )
@@ -117,23 +116,26 @@ class CallsService:
             return failed_result(ValueError("native VK Calls are not enabled"))
         return self._native_transition(state, rotate=True)
 
-    def set_room_count(self, state: AppState, count: int) -> ServiceResult:
+    def set_workers(self, state: AppState, count: int) -> ServiceResult:
         lease, failure = self._begin_operation()
         if failure is not None:
             return failure
+        desired = get_protocol(state, "calls")
+        before = copy.deepcopy(desired.config)
         try:
-            if type(count) is not int or not 1 <= count <= MAX_JOIN_LINKS:
-                raise ValueError("Calls room_count must be between 1 and 4")
-            desired = get_protocol(state, "calls")
-            before = copy.deepcopy(desired.config)
-            desired.config["room_count"] = count
+            desired.config["workers"] = count
+            desired.config.pop("max_workers_per_session", None)
+            count = configured_workers(desired.config)
+            self.save_state(state)
+            if desired.enabled and not self.apply_config(state):
+                raise RuntimeError(self.last_apply_error() or "failed to apply Calls workers")
+            return ServiceResult(True, value={"workers": count})
+        except Exception as exc:
+            desired.config = before
             try:
                 self.save_state(state)
             except Exception:
-                desired.config = before
-                raise
-            return ServiceResult(True, value={"room_count": count})
-        except Exception as exc:
+                pass
             return failed_result(exc)
         finally:
             self._end_operation(lease)
@@ -176,31 +178,30 @@ class CallsService:
                 if not installed:
                     raise RuntimeError(install_message)
             desired = get_protocol(state, "calls")
-            count = desired.config.get("room_count", DEFAULT_ROOM_COUNT)
-            if type(count) is not int or not 1 <= count <= MAX_JOIN_LINKS:
-                raise ValueError("Calls room_count must be between 1 and 4")
+            count = configured_workers(desired.config)
             desired.config.update({
                 "mode": CALL_MODE_VK_PARASITE,
-                "room_count": count,
                 "listen_port": desired.config.get("listen_port", DEFAULT_CALL_PORT),
                 "max_sessions_per_user": desired.config.get("max_sessions_per_user", 1),
-                "max_workers_per_session": MAX_WORKERS,
+                "workers": count,
                 "public_endpoint": public_endpoint(state, public_ip),
             })
+            desired.config.pop("room_count", None)
+            desired.config.pop("max_workers_per_session", None)
             desired.config.pop("read_buffer", None)
             desired.config.setdefault("obfs_password", gen_token(32))
             session_group = self.creator.create(CreatorSessionRequest(
                 provider="vk",
                 consumer="calls",
                 lifetime="managed",
-                count=count,
+                count=CALL_COUNT,
                 previous_tokens=tuple(self.runtime.load_native_join_tokens()),
             ))
             room_links = [endpoint.uri.strip() for endpoint in session_group.endpoints]
             if (
-                len(room_links) != count
+                len(room_links) != CALL_COUNT
                 or any(not link or len(link) > 2048 for link in room_links)
-                or len(set(room_links)) != count
+                or len(set(room_links)) != CALL_COUNT
             ):
                 raise RuntimeError("VK creator returned an incomplete Calls room pool")
             self.creator.commit(session_group)

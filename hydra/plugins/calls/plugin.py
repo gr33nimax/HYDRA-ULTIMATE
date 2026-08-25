@@ -19,7 +19,7 @@ from hydra.plugins.base import (
 from hydra.plugins.calls.configuration import (
     CALL_MODE_VK_PARASITE,
     DEFAULT_CALL_PORT,
-    DEFAULT_ROOM_COUNT,
+    DEFAULT_WORKERS,
     call_mode,
     vk_parasite_inbound,
     vk_parasite_outbound,
@@ -44,7 +44,7 @@ class CallsPlugin(BasePlugin):
         connection_source="tracked",
         config_defaults=(
             ("mode", CALL_MODE_VK_PARASITE),
-            ("room_count", DEFAULT_ROOM_COUNT),
+            ("workers", DEFAULT_WORKERS),
             ("listen_port", DEFAULT_CALL_PORT),
         ),
         backup_resources=(

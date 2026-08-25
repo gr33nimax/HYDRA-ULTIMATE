@@ -20,6 +20,8 @@ from hydra.core.state_migrations import (
     migrate_v13_to_v14,
     migrate_v14_to_v15,
     migrate_v15_to_v16,
+    migrate_v16_to_v17,
+    migrate_v17_to_v18,
 )
 from hydra.core.state_models import UnsupportedStateVersion, validate_supported_version
 
@@ -82,6 +84,8 @@ def test_v6_to_v7_is_idempotent() -> None:
     expected = migrate_v13_to_v14(expected)
     expected = migrate_v14_to_v15(expected)
     expected = migrate_v15_to_v16(expected)
+    expected = migrate_v16_to_v17(expected)
+    expected = migrate_v17_to_v18(expected)
     assert migrate_state(_v6(), 6) == expected
 
 
@@ -337,6 +341,47 @@ def test_v15_to_v16_preserves_unknown_workers_for_validation() -> None:
     }
 
 
+def test_v16_to_v17_fixes_calls_topology_and_removes_room_setting() -> None:
+    source = {
+        "version": 16,
+        "protocols": {"calls": {"config": {
+            "mode": "vk_parasite",
+            "room_count": 1,
+            "max_workers_per_session": 4,
+        }}},
+    }
+
+    migrated = migrate_v16_to_v17(source)
+
+    assert source["protocols"]["calls"]["config"]["room_count"] == 1
+    assert migrated["version"] == 17
+    assert migrated["protocols"]["calls"]["config"] == {
+        "mode": "vk_parasite",
+        "max_workers_per_session": 16,
+    }
+    assert migrate_v16_to_v17(migrated) == migrated
+
+
+def test_v17_to_v18_moves_workers_to_the_shared_configuration() -> None:
+    source = {
+        "version": 17,
+        "protocols": {"calls": {"config": {
+            "mode": "vk_parasite",
+            "room_count": 4,
+            "max_workers_per_session": 16,
+        }}},
+    }
+
+    migrated = migrate_v17_to_v18(source)
+
+    assert migrated["version"] == 18
+    assert migrated["protocols"]["calls"]["config"] == {
+        "mode": "vk_parasite",
+        "workers": 4,
+    }
+    assert migrate_v17_to_v18(migrated) == migrated
+
+
 def test_v10_calls_fixture_is_atomically_disabled_and_idempotent(
     tmp_path,
     monkeypatch,
@@ -352,24 +397,24 @@ def test_v10_calls_fixture_is_atomically_disabled_and_idempotent(
     second = state_module.migrate_persisted_state()
     loaded = state_module.load_state()
 
-    assert first == {"from": 10, "to": 16, "changed": True}
-    assert second == {"from": 16, "to": 16, "changed": False}
+    assert first == {"from": 10, "to": 18, "changed": True}
+    assert second == {"from": 18, "to": 18, "changed": False}
     assert state_file.read_bytes() == migrated_bytes
     assert loaded.revision == 42
     assert loaded.protocols["calls"].installed is True
     assert loaded.protocols["calls"].enabled is False
     assert loaded.protocols["calls"].config == {
         "mode": "vk_parasite",
-        "max_workers_per_session": 16,
+        "workers": 4,
     }
     assert loaded.protocols["vless"].enabled is True
     assert loaded.install["preserved_upgrade_marker"] == "keep"
     assert state_file.with_suffix(".json.bak").is_file()
 
 
-def test_future_schema_is_rejected_after_v16() -> None:
+def test_future_schema_is_rejected_after_v18() -> None:
     with pytest.raises(UnsupportedStateVersion):
-        validate_supported_version({"version": 17})
+        validate_supported_version({"version": 19})
 
 
 def test_migrated_state_is_json_serializable_without_secret_artifacts() -> None:

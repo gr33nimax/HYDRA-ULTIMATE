@@ -563,12 +563,14 @@ def test_hydra_v2_subscription_includes_only_vk_parasite_calls_config():
             "mode": "vk_parasite",
             "listen_port": 56002,
             "obfs_password": "o" * 43,
-            "max_workers_per_session": 16,
+            "workers": 12,
         },
     )
     links = [
         "https://vk.com/call/join/one",
         "https://vk.com/call/join/two",
+        "https://vk.com/call/join/three",
+        "https://vk.com/call/join/four",
     ]
     plugin = CallsPlugin(_CallsSource(links))
 
@@ -584,7 +586,7 @@ def test_hydra_v2_subscription_includes_only_vk_parasite_calls_config():
     assert outbound["mode"] == "vk_parasite"
     assert outbound["join_links"] == links
     assert outbound["user"] == user.email
-    assert "workers" not in outbound
+    assert outbound["workers"] == 12
     assert "join_link" not in outbound
     assert subscription["requirements"]["core"]["features"] == [
         "call",
@@ -627,7 +629,7 @@ def test_hydra_v2_calls_requires_exact_hydracore_feature():
             "mode": "vk_parasite",
             "listen_port": 56002,
             "obfs_password": "o" * 43,
-            "max_workers_per_session": 16,
+            "workers": 4,
         },
     )
     links = [
@@ -651,7 +653,9 @@ def test_hydra_v2_never_reads_or_publishes_qwdtt_artifacts():
         config={"mode": "vk_parasite", "obfs_password": "o" * 43},
     )
     state.protocols["wdtt"] = PluginState(installed=True, enabled=True)
-    calls = CallsPlugin(_CallsSource(["https://vk.com/call/join/native"]))
+    calls = CallsPlugin(_CallsSource([
+        f"https://vk.com/call/join/native-{index}" for index in range(4)
+    ]))
     qwdtt = WdttPlugin()
     qwdtt.generate_singbox_client_config = MagicMock(
         side_effect=AssertionError("qWDTT must not enter Hydra v2"),

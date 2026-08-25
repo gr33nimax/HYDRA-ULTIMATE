@@ -7,10 +7,10 @@ from typing import Callable, Mapping, Protocol, Sequence
 
 CALL_MODE_VK_PARASITE = "vk_parasite"
 DEFAULT_CALL_PORT = 56002
-DEFAULT_ROOM_COUNT = 4
+CALL_COUNT = 4
+DEFAULT_WORKERS = 4
+WORKER_COUNTS = (4, 8, 12, 16, 20)
 DEFAULT_PEER_READ_QUEUE_PACKETS = 512
-MAX_JOIN_LINKS = 4
-MAX_WORKERS = 16
 
 
 class CallsProtocolState(Protocol):
@@ -134,8 +134,8 @@ def _join_links(values: list[str]) -> list[str]:
         if link in normalized:
             raise ValueError("Calls vk_parasite requires unique VK join links")
         normalized.append(link)
-    if not 1 <= len(normalized) <= MAX_JOIN_LINKS:
-        raise ValueError("Calls vk_parasite requires 1..4 unique VK join links")
+    if len(normalized) != CALL_COUNT:
+        raise ValueError("Calls vk_parasite requires exactly 4 unique VK join links")
     return normalized
 
 
@@ -144,6 +144,13 @@ def _obfs_password(config: dict) -> str:
     if not 32 <= len(password.encode("utf-8")) <= 256:
         raise ValueError("Calls obfs_password must contain 32..256 bytes")
     return password
+
+
+def workers(config: dict) -> int:
+    value = _integer(config, "workers", DEFAULT_WORKERS, 4, 20)
+    if value not in WORKER_COUNTS:
+        raise ValueError("Calls workers must be one of 4, 8, 12, 16, 20")
+    return value
 
 
 def vk_parasite_inbound(
@@ -164,15 +171,7 @@ def vk_parasite_inbound(
     ]
     if not users:
         raise ValueError("Calls vk_parasite requires at least one active user")
-    max_workers_per_session = _integer(
-        config,
-        "max_workers_per_session",
-        MAX_WORKERS,
-        4,
-        16,
-    )
-    if max_workers_per_session not in (4, 16):
-        raise ValueError("Calls max_workers_per_session must be 4 or 16")
+    configured_workers = workers(config)
     return {
         "type": "call",
         "tag": "calls-vk-in",
@@ -183,7 +182,7 @@ def vk_parasite_inbound(
         "obfs_password": password,
         "users": users,
         "max_sessions": _integer(config, "max_sessions", 128, 1, 4096),
-        "max_workers_per_session": max_workers_per_session,
+        "max_workers_per_session": configured_workers,
         "max_pending_handshakes": _integer(
             config,
             "max_pending_handshakes",
@@ -244,6 +243,7 @@ def vk_parasite_outbound(
         "user": user.email,
         "password": user_password(user),
         "obfs_password": _obfs_password(config),
+        "workers": workers(config),
         "worker_connect_timeout": _duration(
             config,
             "worker_connect_timeout",
@@ -254,12 +254,13 @@ def vk_parasite_outbound(
 
 __all__ = [
     "CALL_MODE_VK_PARASITE",
+    "CALL_COUNT",
     "DEFAULT_CALL_PORT",
-    "DEFAULT_ROOM_COUNT",
+    "DEFAULT_WORKERS",
     "DEFAULT_PEER_READ_QUEUE_PACKETS",
-    "MAX_JOIN_LINKS",
-    "MAX_WORKERS",
+    "WORKER_COUNTS",
     "call_mode",
+    "workers",
     "vk_parasite_inbound",
     "vk_parasite_outbound",
     "peer_read_queue_packets",
