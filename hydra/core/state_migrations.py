@@ -27,8 +27,6 @@ def migrate_v0_to_v1(data: dict) -> dict:
     data.setdefault("network", {})
     data.setdefault("security", {})
     return data
-
-
 def migrate_v1_to_v2(data: dict) -> dict:
     for user in data.get("users", []):
         user.setdefault("credentials", {})
@@ -37,8 +35,6 @@ def migrate_v1_to_v2(data: dict) -> dict:
     network.setdefault("tproxy_port", 1081)
     data["version"] = 2
     return data
-
-
 def migrate_v2_to_v3(data: dict) -> dict:
     """Add the device-binding fields released with persisted schema 3."""
     for user in data.get("users", []):
