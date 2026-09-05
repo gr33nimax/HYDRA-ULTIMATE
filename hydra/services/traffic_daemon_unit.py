@@ -98,7 +98,6 @@ class TrafficDaemonUnitManager:
         service_root = project_root / "hydra" / "services"
         sources = sorted({
             *service_root.glob("traffic*.py"),
-            *service_root.glob("calls_telemetry*.py"),
         })
         if not sources:
             return "unknown"

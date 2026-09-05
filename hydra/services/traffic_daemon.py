@@ -31,17 +31,12 @@ from hydra.services.traffic_daemon_infrastructure import (
     collect_traffic_evidence,
 )
 from hydra.services.traffic_log import maintain_traffic_log as _maintain_traffic_log
-from hydra.services.calls_telemetry_infrastructure import (
-    CallsTelemetryInfrastructure,
-)
-from hydra.services.system_monitoring_infrastructure import HOST_MONITORING
 from hydra.utils.commands import redact_text
 
 
 TRAFFIC_LOG = Path("/var/log/hydra/traffic-daemon.log")
 TRAFFIC_LOG_BACKUP = Path("/var/log/hydra/traffic-daemon.log.1")
 TRAFFIC_LOG_MAX_BYTES = 5 * 1024 * 1024
-CALLS_TELEMETRY = CallsTelemetryInfrastructure(HOST, HOST_MONITORING)
 
 # Historical private import retained for callers and tests.
 _parse_hysteria2_users = parse_hysteria2_users
@@ -199,13 +194,6 @@ def _log_summary(
     )
 
 
-def _record_telemetry_event(code: str) -> None:
-    try:
-        CALLS_TELEMETRY.record_event(code)
-    except Exception:
-        pass
-
-
 def run_daemon() -> None:
     """Poll Clash API forever, persisting only monotonic traffic deltas."""
     last_summary_at = 0.0
@@ -215,7 +203,6 @@ def run_daemon() -> None:
         try:
             state = load_state()
             if not state.network.clash_api_enabled:
-                _record_telemetry_event("clash_api_disabled")
                 time.sleep(15)
                 continue
             try:
@@ -224,7 +211,6 @@ def run_daemon() -> None:
                     state.network.clash_api_secret,
                 )
             except urllib.error.URLError as exc:
-                _record_telemetry_event("clash_api_unavailable")
                 current = time.monotonic()
                 if current - last_api_error_at >= 60:
                     _write_log(f"Clash API unavailable: {exc}")
@@ -232,7 +218,6 @@ def run_daemon() -> None:
                 time.sleep(10)
                 continue
             except Exception as exc:
-                _record_telemetry_event("clash_api_error")
                 _write_log(f"API query error: {exc}")
                 time.sleep(10)
                 continue
@@ -253,11 +238,6 @@ def run_daemon() -> None:
                 return updated
 
             state, counters_updated = update_state(account)
-            try:
-                CALLS_TELEMETRY.record(state)
-            except Exception:
-                _record_telemetry_event("sample_error")
-                _write_log("Calls telemetry sample failed")
             current = time.monotonic()
             if current - last_summary_at >= 300:
                 _log_summary(
@@ -266,7 +246,6 @@ def run_daemon() -> None:
                 )
                 last_summary_at = current
         except Exception as exc:
-            _record_telemetry_event("traffic_daemon_error")
             _write_log(f"General error: {exc}")
         time.sleep(2)
 

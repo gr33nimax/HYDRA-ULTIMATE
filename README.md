@@ -142,35 +142,6 @@ Admin DTO сохраняет singular alias первого элемента то
 VPS и клиента на Hydracore debug.33 повторное включение требует точный wire v9
 и полный recovery-контракт; смешанные поколения отклоняются до apply.
 
-Для контролируемого теста Hydra VK Tunnel можно запустить отдельную техническую
-сессию для существующих пользователей. Она не имеет таймера и работает до
-явного `stop` либо до защитного лимита данных:
-
-```bash
-sudo hydra calls telemetry start \
-  --tester alpha@example.com \
-  --tester bravo@example.com \
-  --tester charlie@example.com
-sudo hydra calls telemetry status
-sudo hydra calls telemetry mark wifi_speedtest
-sudo hydra calls telemetry tail --follow
-sudo hydra calls telemetry export --output hydra-vk-tunnel.tar.gz
-sudo hydra calls telemetry stop
-```
-
-`status` показывает живую техническую диагностику по тестерам, сессиям и
-VK/TURN-воркерам; `stop` сразу формирует итоговые findings. Timeline хранится
-полностью, но старые 8 MiB-сегменты сжимаются, а `export` собирает их обратно в
-единый `timeline.jsonl`.
-
-Traffic daemon собирает goodput и жизненный цикл соединений, per-user
-атрибуцию, процесс Hydracore, VPS, PSI/softnet/NIC/UDP/conntrack и безопасные
-категории ошибок journald. Полная диагностика VK auth → TURN → DTLS → workers →
-KCP требует нативных записей Hydracore; уровень покрытия явно указан в отчёте.
-На диске тестеры обозначены только как `tester-1..N`; email, IP, назначения,
-токены и connection ID не сохраняются. Полный контракт и порядок эксперимента:
-[`docs/CALLS_TELEMETRY.md`](docs/CALLS_TELEMETRY.md).
-
 Ядро выбирается явно и транзакционно:
 
 ```bash

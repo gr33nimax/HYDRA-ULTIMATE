@@ -202,16 +202,6 @@ Caddy, тот же source port используется для точного п
 аутентифицированное имя Calls-пользователя как `metadata.user`; демон не
 угадывает владельца соединения по общему UDP-порту или IP-адресу.
 
-Опциональная Calls-телеметрия использует тот же poll и не обращается к Clash API
-повторно. Сессия не имеет срока и завершается оператором; sample interval по
-умолчанию — 2 секунды. Защитный лимит timeline по умолчанию — 2048 MiB.
-Сохраняются goodput/lifecycle соединений, CPU/RSS/I/O/faults/FD Hydracore,
-CPU/RAM/network/PSI/softnet/NIC/conntrack хоста, UDP SNMP и Calls listener
-queue/drops, безопасные категории journald и нативные transport-события.
-Email тестеров заменяются salted-идентификаторами `tester-N`; IP, destinations,
-connection IDs и секреты не записываются. Полный формат описан в
-[`CALLS_TELEMETRY.md`](CALLS_TELEMETRY.md).
-
 ## Systemd-службы
 
 ### Службы HYDRA
@@ -224,7 +214,7 @@ connection IDs и секреты не записываются. Полный ф�
 | `hydra-udp-source-relay.service` | UDP source-relay для QUIC-маршрутов |
 | `hydra-caddy-source.service` | Обработчик source-транспарентности Caddy |
 | `hydra-sub.service` | Сервер подписок |
-| `hydra-traffic-daemon.service` | Учёт трафика, применение лимитов/сроков и sampler активной Calls-телеметрии |
+| `hydra-traffic-daemon.service` | Учёт трафика и применение лимитов/сроков |
 | `hydra-sync-agent.service` | Периодические задачи: лимиты пользователей, обслуживание плагинов, суточная проверка TLS-сертификатов, обновление Sing-Box |
 | `hydra-sync-agent.timer` | Расписание sync agent |
 | `hydra-tg-admin.service` | Telegram Admin Bot |
@@ -286,11 +276,6 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/etc/hydra/cookiesvk/cookies-vk.json` | Общий VK Creator JSON для native Calls и qWDTT; файл `0600`, не входит в state |
 | `/var/lib/hydra/calls/vk/native.join` | Только legacy-артефакт для cleanup при uninstall; новый Calls его не создаёт и не читает |
 | `/var/lib/hydra/calls/vk/pool/` | Multi-user Calls metadata и join-links двух поколений; `0700/0600` |
-| `/var/lib/hydra/calls/vk/telemetry/` | Закрытые manifest/cursors Calls telemetry sessions; без raw identity, `0700/0600` |
-| `/var/log/hydra/calls-telemetry/*.jsonl` | Активный хвост timeline Calls для realtime follow; `tester-N` вместо email, файл `0600` |
-| `/var/log/hydra/calls-telemetry/*.part-*.jsonl.gz` | Неизменяемые сжатые сегменты полного timeline; автоматически объединяются при report/export |
-| `/var/log/hydra/calls-telemetry/*.tar.gz` | Очищенные export bundles с timeline, manifest и report |
-| `/run/hydra/calls-telemetry.jsonl` | Опциональный ограниченный native JSONL от инструментированного Hydracore |
 | `/var/lib/hydra/headless-creator/vk/qwdtt/` | Закрытый runtime-каталог поколений creator и `state.json`; права `0700` |
 | `/etc/wdtt/qwdtt_link.txt` | Единственная master qWDTT-ссылка с актуальным упорядоченным списком хешей |
 | `/run/lock/hydra-creator.lock` | Межпроцессная сериализация qWDTT creator-транзакций TUI и Sync Agent |
@@ -585,9 +570,6 @@ backpressure и поэтапным rebind.
 | :--- | :--- | :--- |
 | `HYDRA_GITHUB_TOKEN` / `GITHUB_TOKEN` | пусто | Bearer token для GitHub release API; значение не логируется |
 | `HYDRA_CALLS_LOCK_FILE` | `/run/lock/hydra-calls.lock` | Calls multi-process operation lock |
-| `HYDRA_CALLS_TELEMETRY_STATE_DIR` | `/var/lib/hydra/calls/vk/telemetry` | Закрытые manifests/cursors технических сессий Calls |
-| `HYDRA_CALLS_TELEMETRY_DATA_DIR` | `/var/log/hydra/calls-telemetry` | Закрытые timeline JSONL и export bundles Calls |
-| `HYDRA_CALLS_NATIVE_TELEMETRY_FILE` | `/run/hydra/calls-telemetry.jsonl` | Native server/client records инструментированного Hydracore |
 | `HYDRA_APPLY_LOCK_FILE` | `/run/lock/hydra-apply.lock` | Общий apply lock |
 
 `HYDRA_ALLOW_UNVERIFIED_DOWNLOADS=1` остаётся аварийным escape hatch старых

@@ -262,102 +262,6 @@ def _add_antidpi(root: argparse._SubParsersAction) -> None:
     )
 
 
-def _add_calls(root: argparse._SubParsersAction) -> None:
-    calls = root.add_parser("calls", help="Operate Hydra VK Tunnel")
-    calls_commands = _subcommands(calls, dest="calls_action", title="calls")
-    telemetry = calls_commands.add_parser(
-        "telemetry",
-        help="Run an operator-controlled technical telemetry session",
-    )
-    commands = _subcommands(
-        telemetry,
-        dest="calls_telemetry_action",
-        title="calls telemetry",
-    )
-    start = _command(
-        commands,
-        "start",
-        "Start an anonymized Calls experiment",
-        "calls.telemetry.start",
-    )
-    start.add_argument(
-        "--tester",
-        action="append",
-        required=True,
-        metavar="EMAIL",
-        help="Existing HYDRA user; repeat once per tester",
-    )
-    start.add_argument(
-        "--interval",
-        type=int,
-        default=2,
-        metavar="SECONDS",
-        help="Server metrics sample interval (default: 2)",
-    )
-    start.add_argument(
-        "--max-mib",
-        type=int,
-        default=2048,
-        metavar="MIB",
-        help="Stop before the timeline exceeds this size (default: 2048)",
-    )
-    _command(
-        commands,
-        "status",
-        "Show telemetry progress and coverage",
-        "calls.telemetry.status",
-    )
-    report = _command(
-        commands,
-        "report",
-        "Build the technical telemetry report",
-        "calls.telemetry.report",
-    )
-    report.add_argument(
-        "--session",
-        default="",
-        help="Session id; defaults to the latest session",
-    )
-    tail = _command(
-        commands,
-        "tail",
-        "Read or follow the live telemetry timeline",
-        "calls.telemetry.tail",
-    )
-    tail.add_argument("--session", default="", help="Session id; defaults to latest")
-    tail.add_argument("--lines", type=int, default=20, help="Initial timeline records")
-    tail.add_argument(
-        "--follow",
-        action="store_true",
-        help="Continue streaming records until Ctrl+C or session stop",
-    )
-    mark = _command(
-        commands,
-        "mark",
-        "Mark a workload or network phase",
-        "calls.telemetry.mark",
-    )
-    mark.add_argument("label", help="Short phase slug, for example wifi_speedtest")
-    export = _command(
-        commands,
-        "export",
-        "Export a sanitized analysis bundle",
-        "calls.telemetry.export",
-    )
-    export.add_argument("--session", default="", help="Session id; defaults to latest")
-    export.add_argument(
-        "--output",
-        default="",
-        help="Destination .tar.gz; defaults to the telemetry data directory",
-    )
-    _command(
-        commands,
-        "stop",
-        "Stop the active telemetry session",
-        "calls.telemetry.stop",
-    )
-
-
 def parser() -> CliArgumentParser:
     root = CliArgumentParser(
         prog="hydra",
@@ -419,7 +323,6 @@ def parser() -> CliArgumentParser:
     uninstall.add_argument("--yes", action="store_true", help="Confirm removal")
     uninstall.add_argument("--dry-run", action="store_true", help="Show removal plan")
     uninstall.add_argument("--keep-data", action="store_true", help="Keep state and logs")
-    _add_calls(commands)
     _add_antidpi(commands)
     return root
 

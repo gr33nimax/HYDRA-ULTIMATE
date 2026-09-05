@@ -25,10 +25,6 @@ from hydra.services.backups import BackupService, compose_backup_policy
 from hydra.services.certificate_audit import CertificateInspector
 from hydra.services.certificates import CertificateProvisioner
 from hydra.services.calls import CallsService
-from hydra.services.calls_telemetry import CallsTelemetryService
-from hydra.services.calls_telemetry_infrastructure import (
-    CallsTelemetryInfrastructure,
-)
 from hydra.services.calls_infrastructure import (
     CALLS_CREATOR_UNIT,
     CALLS_POOL_DIR,
@@ -298,9 +294,6 @@ def production_application(
         ),
         certificates=certificate_audit,
         calls=calls,
-        calls_telemetry=CallsTelemetryService(
-            CallsTelemetryInfrastructure(HOST, HOST_MONITORING),
-        ),
         headless_creator=headless_creator,
         maintenance=maintenance,
         kernel=kernel,

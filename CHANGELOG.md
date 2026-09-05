@@ -1,5 +1,8 @@
 # Changelog
 
+- Removed the obsolete Hydra VK Tunnel experiment telemetry framework, its CLI,
+  collectors, reports, storage, and native telemetry capability requirement.
+
 - Added state schema 18: native Calls always creates four VK rooms; `workers`
   is the shared configurable session topology (default 4; 4/8/12/16/20).
 

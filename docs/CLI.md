@@ -94,7 +94,6 @@ hydra
 | `upgrade ...` | зависит | Проверить или мигрировать установку |
 | `kernel status` | — | Показать desired provider, runtime identity и capabilities |
 | `kernel switch ...` | ✔ | Проверенно и транзакционно заменить совместимое ядро |
-| `calls telemetry ...` | ✔ | Управлять закрытой технической сессией Hydra VK Tunnel |
 | `uninstall` | ✔ | Удалить HYDRA |
 | `antidpi ...` | ✔ | Расширенная диагностика AntiDPI |
 
@@ -498,82 +497,6 @@ sudo hydra uninstall --yes --keep-data
 
 `uninstall` требует явного `--yes`; `--keep-data` сохраняет state и журналы.
 Перед удалением создайте backup и вынесите его за пределы VPS.
-
-## Hydra VK Tunnel telemetry
-
-With the paired debug.23 core, `status` shows only currently reporting
-transport sessions and the four independent KCP lanes. Each lane row contains
-wire rate, active flows, total retransmission ratio, estimated fast-resend/RTO
-split, WaitSnd, RTT, network loss, output-queue delay/drops, reconnects and TURN
-ordinal. The native summary also shows staged KCP output occupancy, ACK-clocked
-admission, physical write latency, update pauses, mutex waits, bounded peer
-ingress and matched or unresolved session-wide lane recoveries. `report`
-retains every historical session, adds its pseudonymous session ID and prints a
-separate per-lane internal-pipeline table. The wire-v9 core must run on both the
-VPS and client; mixed old/new deployments intentionally fail.
-
-Сессия для трёх заранее созданных пользователей запускается без таймера:
-
-```bash
-sudo hydra calls telemetry start \
-  --tester alpha@example.com \
-  --tester bravo@example.com \
-  --tester charlie@example.com \
-  --interval 2 \
-  --max-mib 2048
-
-sudo hydra calls telemetry status
-sudo hydra calls telemetry mark wifi_baseline
-sudo hydra calls telemetry tail --follow
-sudo hydra calls telemetry export --output hydra-vk-tunnel.tar.gz
-sudo hydra calls telemetry stop
-```
-
-`status` анализирует последние 5000 записей и прямо в CLI показывает
-process/session/worker coverage, telemetry gaps, направления KCP, RTT/loss,
-очереди и проблемные TURN workers. `stop` возвращает ту же итоговую сводку уже
-по всей сессии; отдельный ручной просмотр JSONL для первичного вывода не нужен.
-Полный `report` и машинный `--json` остаются для сравнения прогонов.
-
-`start` требует включённые Hydra VK Tunnel и Clash API, не допускает
-параллельную активную сессию и принимает только существующих уникальных
-пользователей. Допустимый interval — 2–300 секунд, лимит — 16–65536 MiB.
-Лимит является fail-safe: старые записи не удаляются, а запись останавливается
-с `stop_reason=storage_limit`. Оператор может выгружать промежуточные snapshots,
-не останавливая сессию.
-
-Для разметки смены сети/нагрузки и просмотра в реальном времени:
-
-```bash
-sudo hydra calls telemetry mark mobile_handover
-sudo hydra calls telemetry tail --lines 100 --follow
-```
-
-Manifest находится в `/var/lib/hydra/calls/vk/telemetry/`, timeline — в
-`/var/log/hydra/calls-telemetry/`; каталоги имеют режим `0700`, файлы — `0600`.
-Активный JSONL остаётся доступным для `tail --follow`, старые 8 MiB-сегменты
-сжимаются без удаления записей, а `export` объединяет их обратно.
-Предыдущие сессии не перезаписываются: `report --session ID` позволяет сравнить
-повторные тесты. Ни manifest, ни JSONL не содержат email, IP, destination,
-join-link/token/password или raw connection ID. Порядок аргументов `--tester`
-задаёт соответствие `tester-1`, `tester-2`, `tester-3`.
-
-Report включает:
-
-- upload/download и p50/p95/p99/peak throughput для Calls и каждого тестера;
-- p50/p95/p99/max concurrency и долю аутентифицированной атрибуции;
-- coverage, пропущенные samples и максимальный gap;
-- CPU/RAM/network VPS, CPU/RSS/restarts Hydracore;
-- PSI, softnet, NIC, conntrack, host-wide UDP errors и Calls listener queue/drops;
-- события VK/TURN/DTLS/worker/session/relay без сырого текста journald;
-- отмеченные оператором фазы и корреляции goodput с CPU/очередями/RTT/loss,
-  staged KCP output, admission window и физической задержкой TURN/DTLS write;
-- findings с техническим следующим шагом и уровень нативного покрытия.
-
-RTT, jitter, packet loss, KCP retransmit/window и внутренние queue drops не
-вычисляются косвенно. Они доступны только при нативном экспорте Hydracore по
-контракту из [CALLS_TELEMETRY.md](CALLS_TELEMETRY.md); иначе отчёт честно имеет
-уровень `server_observation_only`.
 
 ## AntiDPI
 

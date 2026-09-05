@@ -123,17 +123,3 @@ def test_daemon_revision_covers_extracted_component_modules(tmp_path):
     second = TrafficDaemonUnitManager._daemon_revision(tmp_path)
 
     assert first != second
-
-
-def test_daemon_revision_covers_calls_telemetry_components(tmp_path):
-    services = tmp_path / "hydra" / "services"
-    services.mkdir(parents=True)
-    (services / "traffic_daemon.py").write_text("facade", encoding="utf-8")
-    dependency = services / "calls_telemetry_report.py"
-    dependency.write_text("first", encoding="utf-8")
-
-    first = TrafficDaemonUnitManager._daemon_revision(tmp_path)
-    dependency.write_text("second", encoding="utf-8")
-    second = TrafficDaemonUnitManager._daemon_revision(tmp_path)
-
-    assert first != second

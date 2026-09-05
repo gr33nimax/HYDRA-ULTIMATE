@@ -210,15 +210,6 @@ class KernelInfrastructure:
     def _has_hydracore_contract(payload: dict) -> bool:
         return supports_vps_calls(payload)
 
-    @classmethod
-    def _has_hydracore_debug_contract(cls, payload: dict) -> bool:
-        features = payload.get("features", {})
-        return bool(
-            cls._has_hydracore_contract(payload)
-            and isinstance(features, dict)
-            and features.get("call_vk_telemetry") is True
-        )
-
     def _inspect_binary(self, binary: Path, *, running: bool) -> KernelRuntimeStatus:
         version_output = self._version_output(binary)
         capability_payload = self._capability_payload(binary)
@@ -306,10 +297,6 @@ class KernelInfrastructure:
             if not self._has_hydracore_contract(payload):
                 raise RuntimeError(
                     "Hydracore must expose identity, the VPS Calls role, and vk_parasite mode",
-                )
-            if channel == "debug" and not self._has_hydracore_debug_contract(payload):
-                raise RuntimeError(
-                    "Hydracore debug must expose native VK Calls telemetry",
                 )
         if self._config_path.exists():
             checked = self._run(candidate, "check", "-c", str(self._config_path))

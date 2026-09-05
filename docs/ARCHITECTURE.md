@@ -608,29 +608,6 @@ Managed Calls использует собственные
 проверяет server inbound, и только finalize останавливает прежние units. Ошибка
 до finalize откатывает pool, state и Sing-Box runtime.
 
-Технический эксперимент Calls принадлежит отдельному application-порту
-`ApplicationService.calls_telemetry`, а не plugin lifecycle и не `AppState`.
-CLI валидирует, что Calls и Clash API включены, выбранные тестеры существуют,
-а interval и защитный лимит размера допустимы. Срока сессии нет: её завершает
-оператор либо fail-safe лимита данных. Host-adapter атомарно публикует закрытый
-manifest сессии, хеширует identity с солью и пишет единый append-only JSONL. Traffic
-daemon передаёт sampler уже нормализованные `calls` connection counters после
-общего accounting; второй запрос к Clash API и ветвление по пользователю не
-нужны. Manifest содержит только cursor/cumulative runtime state и не увеличивает
-desired `revision`.
-
-Timeline объединяет samples, операторские marks, нормализованные events и
-опциональные native records. На sample сохраняются goodput/lifecycle по
-`tester-N`, ресурсы хоста и `sing-box`, PSI/softnet/NIC/conntrack, UDP SNMP и
-queue/drop Calls listener. Report — чистая проекция p50/p95/p99,
-coverage/gaps, фаз, корреляций и findings. Native ingestion читает только
-ограниченный JSONL `/run/hydra/calls-telemetry.jsonl`, отклоняет symlink,
-нечисловые metrics и неразрешённые имена. Полная причинная локализация требует
-server+client метрик VK auth/TURN/DTLS/worker/KCP/network; без них вывод помечен
-`server_observation_only`, а не реконструирует RTT/loss косвенно. Email, IP,
-destination, join-link, token, obfs/password и raw connection ID не входят ни в
-timeline, ни в публичный status/report/export.
-
 Оба потребителя используют `CreatorSessionManager`. Запрос содержит provider,
 consumer, lifetime и количество сессий; manager валидирует его и делегирует
 provider driver. Calls и qWDTT запрашивают изолированные `managed`-группы и
