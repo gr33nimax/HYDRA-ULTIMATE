@@ -104,7 +104,7 @@ Fail2ban, systemd-units и скрипты учёта трафика. Сложн�
 | Правка применилась наполовину: Sing-Box перезапущен, nftables нет | Каждый изменяющий шаг имеет снимок и rollback: возвращаются state, конфигурации, firewall и плагины |
 | Два QUIC-транспорта незаметно заняли UDP/443 | Конфликт слушателей отклоняется на preflight, а не проявляется отказом в рантайме |
 | Служба показана «включённой», хотя не работает | Желаемое и фактическое разделены: `hydra status` показывает оба и расхождение между ними |
-| Обновление сводится к `git pull`, старый код получает state новой схемы | Транзакционный updater: сборка рядом с рабочей, read-only preflight, два уровня backup, атомарное переключение, откат |
+| Обновление сводится к `git pull`, старый код получает state нового формата | Транзакционный updater: сборка рядом с рабочей, read-only preflight, два уровня backup, атомарное переключение, откат |
 | Пользователь добавлен в один транспорт и забыт в остальных | Добавление пользователя — транзакция по всем включённым транспортам сразу |
 | Сканирование ловится разрозненно, ложные баны блокируют своих | Единый контур корреляции с двухуровневым scoring; подделываемые UDP-сигналы не дают автоматического бана |
 
@@ -394,9 +394,10 @@ TLS-маршруты проверяются отдельно, потому чт�
 
 Хранилище использует:
 
-- последовательные миграции схемы `vN → vN+1`;
+- стабильный State Format v1 с envelope `core` / `features`;
+- прямой одноразовый импорт исторических schema 0–18 без цепочки миграций;
 - атомарную замену и синхронизацию каталогов;
-- безопасный отказ при неизвестной будущей схеме;
+- безопасный отказ при неизвестной будущей версии формата;
 - резервные и изолированные копии при повреждении;
 - проверку данных до записи;
 - монотонную `revision` и optimistic concurrency: устаревшая запись желаемой
@@ -405,28 +406,25 @@ TLS-маршруты проверяются отдельно, потому чт�
 - откат желаемого состояния с сохранением текущей ревизии, чтобы rollback не мог
   затереть более новое изменение другого процесса.
 
-### Цепочка миграций
+### Стабильный формат и legacy import
 
-В текущей ветке `debug` актуальна схема 15. Миграция — последовательность чистых функций; каждая
-ступень проверяется отдельно, а запись всей цепочки выполняется атомарно.
+На диске `state.json` имеет один стабильный envelope:
 
 ```text
-   v0 ──▶ v1 ──▶ v2 ──▶ v3 ──▶ v4 ──▶ v5 ──▶ v6 ──▶ v7 ──▶ v8+
-                         │      │      │      │      │
-                         │      │      │      │      └─ Headless Creator получает
-                         │      │      │      │         provider-neutral state;
-                         │      │      │      │         v9+ — ошибка совместимости
-                         │      │      │      └─ legacy VK creator state через Calls
-                         │      │      └─ private per-user HydraBox JWE key
-                         │      │
-                         │      └─ device_limit, devices        (выпущено в 2.5.3)
-                         └──────── legacy-флаги WARP, DNSCrypt,
-                                   Fail2ban, Honeypot, IPBan, AntiDPI
-                                   ──▶ protocols[*].enabled, + revision
+format_version: 1
+revision: N
+core:      install, users, telegram, network, ...unknown
+features:  protocols, headless_creator, kernel, ...unknown
 ```
 
-Старый код не должен увидеть state новой схемы — поэтому откат обновления
-возвращает схему прежде, чем вернуть код (см. [§8](#8-release-и-обновление)).
+Обычные изменения полей feature не повышают `format_version`: владелец feature
+задаёт defaults и semantic validation. Неизвестные namespaces сохраняются при
+load/save, поэтому разные ветки не вырезают чужой state. Формат повышается только
+при несовместимой смене самого envelope.
+
+Старые плоские schema 0–18 принимает один чистый importer и сразу создаёт State
+Format v1. Поштучных `vN → vN+1` функций больше нет. Запись результата выполняется
+атомарно; повторный импорт актуального документа ничего не переписывает.
 
 ### Конкурентная запись
 
@@ -513,7 +511,7 @@ Rollback восстанавливает содержимое снимка, но 
    ─────────────────────────────  точка невозврата  ─────────────────────────
    4  quiesce HYDRA writers          службы и таймеры остановлены
    5  backup raw state + архив       два независимых уровня отката
-   6  migrate state                  схема поднята до целевой
+   6  import legacy state            только если state ещё в старой схеме
    7  switch /opt/hydra              атомарная замена симлинка
    8  restart + validate             ранее активные units подняты и проверены
 ```
@@ -524,14 +522,14 @@ Rollback восстанавливает содержимое снимка, но 
 ```text
    остановить новый runtime
         ▼
-   вернуть state в старую схему        ◀── обязательно раньше кода
+   вернуть сырой state snapshot         ◀── обязательно раньше кода
         ▼
    вернуть код и wrapper
         ▼
    запустить ранее активные units из active-units.txt
 ```
 
-Порядок принципиален: старый код не должен получить state новой схемы. Обратная
+Порядок принципиален: старый код не должен получить state нового формата. Обратная
 последовательность привела бы к загрузке несовместимого состояния прежним
 runtime.
 
@@ -626,33 +624,19 @@ WDTT-артефакта и сохранения state старое поколе�
 lifecycle, timer или systemd creator. Owner-neutral maintenance-фасад объединяет
 plugin tasks и `headless_creator.consumers.qwdtt`; его читают Sync Agent и TUI.
 
-Миграция schema 8 извлекает legacy creator desired state из `calls.config`, а
-schema 9 отделяет qWDTT consumer state в `headless_creator.consumers.qwdtt` от
-provider configuration. Миграции не меняют host runtime. Явное действие
+Legacy importer извлекает прежний creator desired state и отделяет qWDTT
+consumer state в `headless_creator.consumers.qwdtt` от provider configuration.
+Импорт не меняет host runtime. Явное действие
 `Создать комнаты` в qWDTT-подменю Creator делает snapshot старых units/файлов,
 устанавливает новый пул и только затем удаляет legacy creator; failure
 восстанавливает snapshot. Общие VK cookies при этом не удаляются.
 
-Schema 10 добавляет desired `kernel.provider/channel`, оставляет прежний Calls
-в историческом `p2p` и материализует qWDTT port defaults для межсервисного
-preflight. Schema 11 нормализует любой legacy/unknown Calls mode в `vk_parasite`;
-несовместимый enabled Calls (включая stock core) выключается без удаления
-installed state, поэтому upgrade/apply остальных протоколов остаётся доступен.
-Schema 12 фиксирует четыре worker и wire v4, удаляя старый профиль транспорта.
-Schema 13 выключает активный wire-v4 Calls перед общим apply, выбирает восемь
-независимых KCP lane и строгий wire v5 с admission до KCP и flow-credit на TCP
-relay. Комнаты и installed state сохраняются для явного переключения ядра и
-повторного включения Calls.
-Schema 14 выключает несовместимый wire-v5 Calls, возвращает ровно четыре worker
-и выбирает wire v7: TCP-поток закрепляется за одним KCP lane, UDP/QUIC
-распределяется по четырём, физическая очередь создаёт backpressure без локальных
-drop, а смена сети заменяет TURN/DTLS worker по одному.
-Schema 15 выключает активный wire-v8 Calls перед общим apply, сохраняя комнаты,
-installed state и четыре worker. Текущий Hydracore debug.33 использует
-несовместимый wire v9; kernel switch и Calls runtime принимают только точный
-диапазон `{min: 9, max: 9}` и полный recovery contract: worker hot swap,
-flow migration, TURN TCP fallback и структурированное transport health.
-Повторная установка после switch на Hydracore создаёт новый managed-пул.
+Legacy Calls importer материализует qWDTT port defaults и нормализует config в
+актуальный `vk_parasite`; несовместимый enabled Calls (включая stock core)
+выключается без удаления installed state. Число workers сохраняется, если оно
+поддерживается текущим контрактом. Transport compatibility не хранится в state:
+kernel switch и Calls runtime проверяют capabilities фактического Hydracore.
+Повторная установка после switch создаёт новый managed-пул.
 `ApplicationService.kernel` — единственный use-case замены core:
 trusted release metadata и обязательный SHA-256 digest проверяются до ELF,
 identity/capabilities и active-config probe; затем binary меняется атомарно,

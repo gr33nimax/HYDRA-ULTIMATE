@@ -58,7 +58,7 @@ hydra
 │   └── query                     allowlisted read-only projection
 ├── upgrade
 │   ├── check                     готовность к обновлению
-│   └── migrate-state             атомарная запись миграций схемы
+│   └── migrate-state             атомарный импорт legacy state
 ├── kernel
 │   ├── status                    выбранное и фактическое ядро
 │   └── switch PROVIDER [--channel stable|preview|debug] [--force]
@@ -492,8 +492,9 @@ sudo hydra uninstall --yes
 sudo hydra uninstall --yes --keep-data
 ```
 
-`upgrade migrate-state` атомарно записывает pending state migrations и
-идемпотентен на актуальной схеме.
+`upgrade migrate-state` атомарно импортирует legacy schema 0–18 в State Format
+v1 и идемпотентен на уже актуальном документе. Имя команды сохранено для
+совместимости upgrade-скриптов.
 
 `uninstall` требует явного `--yes`; `--keep-data` сохраняет state и журналы.
 Перед удалением создайте backup и вынесите его за пределы VPS.

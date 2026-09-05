@@ -2,7 +2,7 @@
 hydra/core/state.py — Типизированное состояние приложения.
 
 Все данные хранятся в /var/lib/hydra/state.json.
-Поддерживается версионирование схемы и миграции между версиями.
+На диске используется стабильный State Format v1; старые схемы импортируются.
 """
 from __future__ import annotations
 
@@ -16,24 +16,14 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, TypeVar, get_type_hints
-from hydra.core.state_migrations import (
-    MIGRATIONS as _DEFAULT_MIGRATIONS,
-    migrate_state,
-    migrate_v0_to_v1,
-    migrate_v1_to_v2,
-    migrate_v2_to_v3,
-    migrate_v3_to_v4,
-    migrate_v4_to_v5,
-    migrate_v5_to_v6,
-    migrate_v6_to_v7,
-    migrate_v7_to_v8,
-    migrate_v8_to_v9,
-    migrate_v9_to_v10,
-    migrate_v10_to_v11,
-    migrate_v11_to_v12,
-    migrate_v12_to_v13,
-    migrate_v13_to_v14,
+from hydra.core.state_format import (
+    STATE_FORMAT_VERSION,
+    is_state_document,
+    pack_state_document,
+    unpack_state_document,
+    validate_state_document,
 )
+from hydra.core.state_migrations import import_legacy_state
 from hydra.core.hydrabox_keys import generate_hydrabox_jwe_key
 from hydra.core.state_runtime import (
     _RUNTIME_INSTALL_KEYS,
@@ -174,14 +164,12 @@ def _read_raw_state_unlocked() -> dict:
     """Read and structurally validate the primary state or its backup."""
     try:
         raw = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        _validate_raw_state(raw)
-        _validate_supported_version(raw)
+        _validate_serialized_state(raw)
     except (json.JSONDecodeError, OSError, TypeError, ValueError):
         backup = STATE_FILE.with_suffix(".json.bak")
         try:
             raw = json.loads(backup.read_text(encoding="utf-8"))
-            _validate_raw_state(raw)
-            _validate_supported_version(raw)
+            _validate_serialized_state(raw)
         except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
             quarantine = STATE_FILE.with_suffix(".json.corrupt")
             try:
@@ -194,16 +182,26 @@ def _read_raw_state_unlocked() -> dict:
     return raw
 
 
+def _validate_serialized_state(raw: object) -> None:
+    if is_state_document(raw):
+        validate_state_document(raw)
+        _validate_raw_state(unpack_state_document(raw))
+    else:
+        _validate_raw_state(raw)
+        _validate_supported_version(raw)
+
+
+def _decode_serialized_state(raw: dict) -> dict:
+    document = raw if is_state_document(raw) else import_legacy_state(raw)
+    decoded = unpack_state_document(document)
+    _validate_raw_state(decoded)
+    return decoded
+
+
 def _load_state_unlocked() -> AppState:
     if not STATE_FILE.exists():
         return AppState()
-    raw = _read_raw_state_unlocked()
-
-    version = raw.get("version", 0)
-    if version < SCHEMA_VERSION:
-        raw = _migrate(raw, version)
-    _validate_raw_state(raw)
-    return _from_dict(AppState, raw)
+    return _from_dict(AppState, _decode_serialized_state(_read_raw_state_unlocked()))
 
 
 def load_state() -> AppState:
@@ -213,34 +211,32 @@ def load_state() -> AppState:
 
 
 def migrate_persisted_state() -> dict[str, int | bool]:
-    """Atomically migrate an existing state file to the current schema."""
+    """Atomically import an old state into the stable on-disk format."""
     with _state_lock():
         if not STATE_FILE.exists():
             return {
-                "from": SCHEMA_VERSION,
-                "to": SCHEMA_VERSION,
+                "from": STATE_FORMAT_VERSION,
+                "to": STATE_FORMAT_VERSION,
                 "changed": False,
             }
 
         raw = _read_raw_state_unlocked()
-        from_version = int(raw.get("version", 0))
-        if from_version == SCHEMA_VERSION:
+        if is_state_document(raw):
             return {
-                "from": from_version,
-                "to": SCHEMA_VERSION,
+                "from": STATE_FORMAT_VERSION,
+                "to": STATE_FORMAT_VERSION,
                 "changed": False,
             }
 
-        migrated = _migrate(raw, from_version)
-        _validate_raw_state(migrated)
-        state = _from_dict(AppState, migrated)
+        from_version = int(raw.get("version", 0))
+        state = _from_dict(AppState, _decode_serialized_state(raw))
         for user in state.users:
             if not user.hydrabox_jwe_key:
                 user.hydrabox_jwe_key = generate_hydrabox_jwe_key()
         _save_state_unlocked(state, current=copy.deepcopy(state))
         return {
             "from": from_version,
-            "to": SCHEMA_VERSION,
+            "to": STATE_FORMAT_VERSION,
             "changed": True,
         }
 
@@ -267,7 +263,7 @@ def _save_state_unlocked(
     else:
         state.revision = current.revision
     validate_state(state)
-    data = _to_dict(state)
+    data = pack_state_document(_to_dict(state))
     if STATE_FILE.exists():
         backup = STATE_FILE.with_suffix(".json.bak")
         backup_pending = backup.with_suffix(".bak.pending")
@@ -329,19 +325,3 @@ def update_state(mutator: Callable[[AppState], T]) -> tuple[AppState, T]:
         result = mutator(state)
         _save_state_unlocked(state, current=before)
         return state, result
-
-
-_migrate_v0_to_v1 = migrate_v0_to_v1
-_migrate_v1_to_v2 = migrate_v1_to_v2
-_migrate_v2_to_v3 = migrate_v2_to_v3
-_migrate_v3_to_v4 = migrate_v3_to_v4
-_MIGRATIONS = dict(_DEFAULT_MIGRATIONS)
-
-
-def _migrate(data: dict, from_version: int) -> dict:
-    """Compatibility facade over the pure ordered migration engine."""
-    return migrate_state(
-        data,
-        from_version,
-        migrations=_MIGRATIONS,
-    )

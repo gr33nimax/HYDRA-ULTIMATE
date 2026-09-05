@@ -10,7 +10,8 @@ from hydra.core.hydrabox_keys import (
     generate_hydrabox_jwe_key,
     hydrabox_jwe_kid,
 )
-from hydra.core.state_migrations import migrate_v5_to_v6
+from hydra.core.state_format import unpack_state_document
+from hydra.core.state_migrations import import_legacy_state
 from hydra.core.state_models import AppState, User
 from hydra.plugins.invoker import PluginInvoker
 from hydra.services.user_lifecycle import UserLifecycleOperations
@@ -31,13 +32,13 @@ def _operations(save_state):
     )
 
 
-def test_v5_to_v6_is_pure_and_reserves_private_key_field():
+def test_legacy_import_is_pure_and_reserves_private_key_field():
     source = {"version": 5, "users": [{"email": "a", "uuid": "token"}]}
 
-    migrated = migrate_v5_to_v6(source)
+    migrated = unpack_state_document(import_legacy_state(source))
 
     assert source == {"version": 5, "users": [{"email": "a", "uuid": "token"}]}
-    assert migrated["version"] == 6
+    assert migrated["format_version"] == 1
     assert migrated["users"][0]["hydrabox_jwe_key"] == ""
 
 

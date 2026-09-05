@@ -13,19 +13,20 @@ from hydra.core.state_calls_models import validate_calls_protocol
 from hydra.core.hydrabox_keys import validate_optional_hydrabox_jwe_key
 from hydra.core.state_creator_models import HeadlessCreatorConfig
 from hydra.core.state_creator_models import validate_headless_creator
-from hydra.core.state_creator_models import validate_raw_headless_creator
 from hydra.core.state_devices import validate_device_map
+from hydra.core.state_format import STATE_FORMAT_VERSION, UnsupportedStateVersion
 from hydra.core.state_kernel_models import (
     KernelConfig,
     validate_kernel_config,
-    validate_raw_kernel_config,
 )
 from hydra.core.state_network_models import NetworkConfig
-SCHEMA_VERSION = 18
+from hydra.core.state_validation import validate_raw_state, validate_supported_version
 
 
-class UnsupportedStateVersion(RuntimeError):
-    """Persisted state was produced by a newer HYDRA schema."""
+# Compatibility alias for public status/CLI code. This is the stable document
+# format, not a product or feature version.
+SCHEMA_VERSION = STATE_FORMAT_VERSION
+
 
 @dataclass
 class PluginState:
@@ -77,9 +78,9 @@ class TelegramConfig:
 
 @dataclass
 class AppState:
-    """Persisted aggregate root."""
+    """Runtime aggregate projected from the stable persisted document."""
 
-    version: int = SCHEMA_VERSION
+    format_version: int = STATE_FORMAT_VERSION
     revision: int = 0
     install: dict = field(default_factory=dict)
     protocols: dict[str, PluginState] = field(default_factory=dict)
@@ -88,59 +89,13 @@ class AppState:
     network: NetworkConfig = field(default_factory=NetworkConfig)
     headless_creator: HeadlessCreatorConfig = field(default_factory=HeadlessCreatorConfig)
     kernel: KernelConfig = field(default_factory=KernelConfig)
+    core_extensions: dict[str, JsonValue] = field(default_factory=dict)
+    feature_extensions: dict[str, JsonValue] = field(default_factory=dict)
 
-
-def validate_raw_state(raw: object) -> None:
-    """Reject structurally invalid serialized state before construction."""
-    if not isinstance(raw, dict):
-        raise ValueError("state root must be an object")
-    version = raw.get("version", 0)
-    if isinstance(version, bool) or not isinstance(version, int) or version < 0:
-        raise ValueError("state version must be a non-negative integer")
-    revision = raw.get("revision", 0)
-    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
-        raise ValueError("state revision must be a non-negative integer")
-    for key in ("protocols", "install", "telegram", "network", "security"):
-        if key in raw and not isinstance(raw[key], dict):
-            raise ValueError(f"state field '{key}' must be an object")
-    if "headless_creator" in raw:
-        validate_raw_headless_creator(raw["headless_creator"])
-    if "kernel" in raw:
-        validate_raw_kernel_config(raw["kernel"])
-    if "users" in raw:
-        users = raw["users"]
-        if not isinstance(users, list) or any(not isinstance(user, dict) for user in users):
-            raise ValueError("state field 'users' must be a list of objects")
-        for user in users:
-            if (
-                not isinstance(user.get("email", ""), str)
-                or not isinstance(user.get("uuid", ""), str)
-            ):
-                raise ValueError("user email and uuid must be strings")
-            device_limit = user.get("device_limit", 0)
-            if type(device_limit) is not int or device_limit < 0:
-                raise ValueError("user device limit must be a non-negative integer")
-            validate_optional_hydrabox_jwe_key(
-                user.get("hydrabox_jwe_key", ""),
-            )
-            validate_device_map(
-                user.get("devices", {}),
-                legacy=int(raw.get("version", SCHEMA_VERSION)) < 5,
-            )
-    if "protocols" in raw:
-        for name, protocol in raw["protocols"].items():
-            if not isinstance(name, str) or not isinstance(protocol, dict):
-                raise ValueError("protocol entries must be named objects")
-
-
-def validate_supported_version(raw: dict) -> None:
-    """Reject future schemas instead of silently dropping their fields."""
-    version = raw.get("version", 0)
-    if version > SCHEMA_VERSION:
-        raise UnsupportedStateVersion(
-            f"state schema {version} is newer than supported schema "
-            f"{SCHEMA_VERSION}"
-        )
+    @property
+    def version(self) -> int:
+        """Compatibility name used by existing status and service DTOs."""
+        return self.format_version
 
 
 def get_protocol(state: AppState, name: str) -> PluginState:
@@ -175,14 +130,14 @@ def add_user(state: AppState, user: User) -> None:
 
 def validate_state(state: AppState) -> None:
     """Validate semantic invariants before persisting or applying state."""
-    if type(state.version) is not int or state.version < 0:
-        raise ValueError("state version must be non-negative")
+    if type(state.format_version) is not int or state.format_version < 1:
+        raise ValueError("state format_version must be positive")
     if type(state.revision) is not int or state.revision < 0:
         raise ValueError("state revision must be non-negative")
-    if state.version > SCHEMA_VERSION:
+    if state.format_version != STATE_FORMAT_VERSION:
         raise UnsupportedStateVersion(
-            f"state schema {state.version} is newer than supported schema "
-            f"{SCHEMA_VERSION}"
+            f"state format {state.format_version} is not supported; expected "
+            f"{STATE_FORMAT_VERSION}"
         )
     validate_headless_creator(state.headless_creator)
     validate_kernel_config(state.kernel)

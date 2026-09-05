@@ -36,12 +36,12 @@ def test_existing_install_updater_is_transactional_and_main_by_default():
     assert "wait_for_previous_units" in source
 
 
-def test_linux_integration_smoke_uses_the_canonical_state_schema_version():
+def test_linux_integration_smoke_uses_the_canonical_state_format_version():
     for script in (LINUX_INTEGRATION_SMOKE, LINUX_UPGRADE_SMOKE):
         source = script.read_text(encoding="utf-8")
 
-        assert "from hydra.core.state_models import SCHEMA_VERSION" in source
-        assert 'state["version"] == SCHEMA_VERSION' in source
+        assert "from hydra.core.state_format import STATE_FORMAT_VERSION" in source
+        assert 'state["format_version"] == STATE_FORMAT_VERSION' in source
         assert '= "4"' not in source
 
 
@@ -110,7 +110,7 @@ def test_upgrade_orders_preflight_backup_migration_and_cutover_safely():
     quiesce = source.index('info "Останавливаю активные службы HYDRA')
     snapshot = source.index('cp -a "$STATE_DIR" "$STATE_ROLLBACK_DIR"')
     backup = source.index('info "Создаю и проверяю резервную копию"')
-    migration = source.index('info "Мигрирую state при остановленных службах"')
+    migration = source.index('info "Импортирую legacy state при остановленных службах"')
     mutation = source.index("STATE_MUTATION_STARTED=1", migration)
     cutover = source.index('step 6 7 "Переключение на новый release"')
 
@@ -119,7 +119,7 @@ def test_upgrade_orders_preflight_backup_migration_and_cutover_safely():
 
 def test_quiesced_state_validation_does_not_depend_on_runtime_health():
     source = _source()
-    migration = source.index('info "Мигрирую state при остановленных службах"')
+    migration = source.index('info "Импортирую legacy state при остановленных службах"')
     restart = source.index("start_previous_units", migration)
     quiesced_validation = source[migration:restart]
 
@@ -141,7 +141,7 @@ def test_caddy_l4_is_restored_when_quiescing_helpers_stops_it_transitively():
     assert '"$unit" == "caddy-l4.service"' in discovery
     assert source.index("\ncapture_active_units\n") < source.index(
         "stop_managed_units",
-        source.index('step 5 7 "Резервная копия и миграция state"'),
+        source.index('step 5 7 "Резервная копия и импорт legacy state"'),
     )
     assert "printf '%s\\n' \"${ACTIVE_UNITS[@]}\"" in source
 

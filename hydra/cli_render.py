@@ -25,7 +25,7 @@ COMMAND_TITLES = {
     "backup.inspect": "Backup inspection",
     "backup.restore": "Backup restore",
     "upgrade.check": "Upgrade readiness",
-    "upgrade.migrate-state": "State migration",
+    "upgrade.migrate-state": "Legacy state import",
     "kernel.status": "Kernel status",
     "kernel.switch": "Kernel switch",
     "user.list": "Users",
@@ -111,7 +111,7 @@ def _render_status(payload: Mapping[str, object], *, color: bool) -> list[str]:
     users = int(payload.get("users", 0) or 0)
     lines = [
         (
-            f"State schema v{_scalar(payload.get('version'))}"
+            f"State format v{_scalar(payload.get('version'))}"
             f"  |  {users} user{'s' if users != 1 else ''}"
         ),
     ]

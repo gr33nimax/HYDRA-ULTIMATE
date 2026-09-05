@@ -107,7 +107,7 @@ def _add_upgrade(root: argparse._SubParsersAction) -> None:
     _command(
         commands,
         "migrate-state",
-        "Atomically persist pending state migrations",
+        "Atomically import legacy state into the current format",
         "upgrade.migrate-state",
     )
 

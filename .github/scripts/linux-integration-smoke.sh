@@ -73,10 +73,10 @@ python - <<'PY'
 import json
 from pathlib import Path
 
-from hydra.core.state_models import SCHEMA_VERSION
+from hydra.core.state_format import STATE_FORMAT_VERSION
 
 state = json.loads(Path("/var/lib/hydra/state.json").read_text(encoding="utf-8"))
-assert state["version"] == SCHEMA_VERSION
+assert state["format_version"] == STATE_FORMAT_VERSION
 PY
 python -m hydra.cli backup > "$tmp_dir/backup.json"
 archive=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["archive"])' "$tmp_dir/backup.json")

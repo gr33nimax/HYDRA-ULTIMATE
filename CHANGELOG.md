@@ -6,14 +6,10 @@
 - Added state schema 18: native Calls always creates four VK rooms; `workers`
   is the shared configurable session topology (default 4; 4/8/12/16/20).
 
-- Added state schema 16 for the staged 4-to-16 lane rollout. The VPS accepts
-  only 4- or 16-lane sessions, subscriptions no longer own the client `workers`
-  field, and reduced capabilities require the real VPS server feature.
-
-- Added schema 15 and the exact Hydracore debug.33 VK parasite wire 9
-  contract. Upgrade quiesces active wire-8 Calls before apply; kernel switch
-  and Calls enablement require hot swap, flow migration, TURN TCP fallback
-  and structured transport health, and continue to reject mixed generations.
+- Replaced the release-coupled state schemas and 18-step migration chain with
+  stable State Format v1. Legacy schemas 0–18 are imported directly once;
+  feature changes, including Calls transport changes, no longer bump the state
+  format or add migration scripts. Unknown feature namespaces survive load/save.
 
 - Added the Hydracore debug.27 telemetry contract for application-limited
   pacing, deferred lane recovery and buffered client telemetry backlog.
@@ -64,17 +60,13 @@
 - Added the incompatible Hydracore debug.19 wire-v6 contract: exactly four
   physical VK/TURN calls, TCP flow affinity, aggregate UDP/QUIC striping,
   lossless KCP-to-worker backpressure and staged Android network handover.
-  Calls state schema 14 converts the obsolete eight-worker fields back to four
-  and quiesces Calls until both endpoints have switched to wire v6.
 - Telemetry metadata, CLI rendering and findings now validate IDs 0..3 and the
   `call_vk_four_lane_kcp` capability. The former false "missing lanes 4..7"
   critical and all eight-lane wording were removed.
 
 - Added the intentionally incompatible Hydracore debug.13 wire-v5 contract:
   eight independent KCP lanes, per-lane pre-KCP admission, bounded relay byte
-  credit and video-class RTP payload type 96. Calls state schema 13 migrates
-  existing four-lane configuration to eight lanes and quiesces enabled Calls
-  until the operator switches both sides to the incompatible wire v5 runtime.
+  credit and video-class RTP payload type 96.
 - Telemetry now requires and displays each lane's admission pace and RTP
   payload type, reports incomplete lane sets against IDs 0..7, and keeps all
   current client/server lanes visible in live status.
@@ -202,10 +194,9 @@
 - Multi-user listener использует `56002/udp`, не конфликтуя с qWDTT WireGuard
   на `56001/udp`; worker count ограничен server cap, 27 workers на join-link и
   общим потолком 108.
-- Schema state поднята до 11. Чистая `v10 → v11` миграция переводит legacy
-  Calls в `vk_parasite`, выключает несовместимый enabled state без удаления
-  installed-флага и сохраняет доступность apply для остальных протоколов.
-  Повторная установка после явного switch на Hydracore создаёт managed-пул.
+- Legacy Calls при первом импорте нормализуется в `vk_parasite`; несовместимый
+  enabled state выключается без удаления installed-флага. Повторная установка
+  после явного switch на Hydracore создаёт managed-пул.
 
 ### Sing-Box
 

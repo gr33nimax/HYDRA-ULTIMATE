@@ -1,6 +1,7 @@
 """Deprecated compatibility surface for the former WDTT-owned creator.
 
-Runtime ownership moved to ``ApplicationService.headless_creator`` in schema 8.
+Runtime ownership lives in ``ApplicationService.headless_creator``. Legacy
+layouts are converted by the one-time state importer.
 The WDTT plugin deliberately does not inherit this mixin or advertise these
 methods as commands, queries, actions, or maintenance tasks.
 """

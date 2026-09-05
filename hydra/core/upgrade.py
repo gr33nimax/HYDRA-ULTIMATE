@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 
 from hydra import __version__
-from hydra.core.state_models import AppState, SCHEMA_VERSION, validate_state
+from hydra.core.state_format import STATE_FORMAT_VERSION
+from hydra.core.state_models import AppState, validate_state
 from hydra.core.host import HOST
 from hydra.utils.commands import CommandError
 
@@ -20,7 +21,11 @@ def check_upgrade(state: AppState, project_dir: Path | None = None) -> dict:
 
     try:
         validate_state(state)
-        record("state", state.version <= SCHEMA_VERSION, f"schema {state.version}, supported {SCHEMA_VERSION}")
+        record(
+            "state",
+            state.format_version == STATE_FORMAT_VERSION,
+            f"format {state.format_version}, supported {STATE_FORMAT_VERSION}",
+        )
     except Exception as exc:
         record("state", False, str(exc))
     record("python", sys.version_info >= (3, 10), sys.version.split()[0])
@@ -45,7 +50,8 @@ def check_upgrade(state: AppState, project_dir: Path | None = None) -> dict:
     return {
         "ready": not failures,
         "current_version": __version__,
-        "state_schema": state.version,
+        # Kept for compatibility with existing machine-readable CLI consumers.
+        "state_schema": state.format_version,
         "backup_required": True,
         "failures": failures,
         "checks": checks,

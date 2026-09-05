@@ -9,9 +9,9 @@
 
 > [!CAUTION]
 > Не запускайте `bootstrap.sh` поверх работающей установки и не обновляйтесь
-> вручную через `git pull`. Установщик не выполняет миграцию state под
+> вручную через `git pull`. Установщик не выполняет legacy import state под
 > блокировкой, не квиесцирует фоновые процессы и не создаёт точку отката, а
-> ручной `git pull` может дать старому коду state новой схемы.
+> ручной `git pull` может дать старому коду state нового формата.
 
 ## Содержание
 
@@ -20,7 +20,7 @@
 - [Обновление рабочей VPS](#обновление-рабочей-vps)
 - [Проверка результата](#проверка-результата)
 - [Если обновление завершилось ошибкой](#если-обновление-завершилось-ошибкой)
-- [Схема state и миграции](#схема-state-и-миграции)
+- [State Format и legacy import](#state-format-и-legacy-import)
 
 ## Требования
 
@@ -97,7 +97,7 @@ hydra check
    остановить процессы HYDRA           связанный Caddy L4 временно остановлен
 5  снимок сырого state + wrapper,      state writers остановлены
    проверенный backup-архив
-6  миграция схемы state                state writers остановлены
+6  импорт legacy state                 state writers остановлены
 7  переключение симлинка /opt/hydra    state writers остановлены
 8  общие resource defaults + запуск    работает на новой версии
    units + повторные проверки
@@ -112,14 +112,14 @@ hydra check
 
         остановить новый runtime
              ▼
-        вернуть state в старую схему      ◀── обязательно раньше кода
+        вернуть сырой state snapshot      ◀── обязательно раньше кода
              ▼
         вернуть код и wrapper
              ▼
         запустить units из active-units.txt
 ```
 
-Порядок принципиален: старый код не должен увидеть state новой схемы.
+Порядок принципиален: старый код не должен увидеть state нового формата.
 
 ### Что гарантирует updater
 
@@ -135,9 +135,9 @@ hydra check
    подобные).
 5. Сохраняются сырой `/var/lib/hydra`, wrapper команды `hydra` и проверенный
    backup с манифестом и SHA-256.
-6. State атомарно мигрирует на актуальную схему. Лимиты и отпечатки устройств,
-   credentials пользователей, Telegram-токены, сетевые секреты и настройки
-   плагинов сохраняются.
+6. Legacy state атомарно импортируется в актуальный формат. Лимиты и отпечатки
+   устройств, credentials пользователей, Telegram-токены, сетевые секреты и
+   настройки плагинов сохраняются.
 7. `/opt/hydra` переключается на подготовленный release. Общие resource defaults
    обновляют drop-ins Sing-Box и journald, ротируют journal и ограничивают его
    архивы 128 MiB; отдельный профиль VPS не выбирается.
@@ -194,7 +194,7 @@ curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/updat
 `hydra-caddy-source` или `hydra-source-relay`, updater также запоминает,
 останавливает и затем восстанавливает `caddy-l4.service`. Sing-Box и независимые
 прокси-процессы updater не заменяет. Для TLS-транспортов за Caddy возможна
-короткая пауза на время миграции state и переключения release.
+короткая пауза на время legacy import state и переключения release.
 
 Это возможно потому, что постоянные systemd units ссылаются на стабильный
 `/opt/hydra` и интерпретатор `/opt/hydra/.venv/bin/python`, а не на физический
@@ -217,7 +217,7 @@ readlink -f /opt/hydra
 | `metadata.env` | Исходный и целевой SHA |
 | `state-before-upgrade/` | Сырой `/var/lib/hydra` до обновления |
 | `hydra-backup.tar.gz` | Проверенный backup и результат его проверки |
-| JSON-отчёты | Preflight, миграция state и post-cutover проверки |
+| JSON-отчёты | Preflight, legacy import state и post-cutover проверки |
 | `active-units.txt` | Службы и таймеры, активные до обновления |
 | `SUCCESS` | Маркер полного завершения |
 
@@ -251,75 +251,47 @@ hydra check
 
 Не удаляйте артефакты снимка до успешного восстановления.
 
-## Схема state и миграции
+## State Format и legacy import
 
-В текущей ветке `debug` актуальна схема **15**. Миграция `v5 → v6` резервирует
-приватный per-user JWE key. Ступень `v6 → v7` сохраняет совместимость legacy VK
-creator через промежуточный Calls layout, а `v7 → v8` переносит его desired
-state в `headless_creator.providers.vk` и maintenance-флаг в
-`sync_headless_creator_vk_qwdtt_enabled`. Native Calls автоматически не
-включается. Ступень `v8 → v9` переносит qWDTT-настройки из provider-конфига в
-`headless_creator.consumers.qwdtt` и задаёт совместимый размер пула 4 комнаты.
-Ступень `v9 → v10` добавляет `kernel.provider/channel`, оставляет существующие
-инсталляции на `sing-box-extended/stable`, исторически фиксирует прежний Calls
-как `p2p` и материализует канонические qWDTT-порты `56000/56001` для conflict
-preflight. Ступень `v10 → v11` сразу нормализует Calls в единственный
-поддерживаемый `vk_parasite`: несовместимый enabled Calls выключается, но
-installed-флаг, остальные протоколы и host runtime сохраняются. Благодаря этому
-первый общий apply после upgrade не требует отсутствующего room pool. Переход
-на Hydracore выполняется только явной `sudo hydra kernel switch hydracore` после
-backup; последующая переустановка Calls создаёт managed-пул 1–4 комнат.
-Ступень `v11 → v12` фиксирует четыре lane и wire v4. Несовместимая ступень
-`v12 → v13` сохраняет комнаты и installed state, но выключает активный Calls
-перед общим apply, затем выбирает восемь lane и wire v5. После upgrade оператор
-явно переключает Hydracore debug.13 и повторно включает сохранённый Calls.
-Ступень `v13 → v14` снова выключает несовместимый активный Calls, возвращает
-ровно четыре worker и сохраняет исторический профиль предыдущего поколения.
-Ступень `v14 → v15` ещё раз quiesce-ит активный Calls, не удаляя комнаты и
-installed state. После upgrade оператор одновременно переводит VPS и клиент на
-Hydracore debug.33 и только затем включает Calls: принимаются точный wire v9,
-worker hot swap, flow migration, TURN TCP fallback и structured transport
-health; смешанные поколения отклоняются до изменения runtime.
-Ступень `v15 → v16` заменяет managed server default
-`max_workers_per_session=4` на `16` и удаляет только прежний managed client
-default `workers=4`. Неизвестные значения сохраняются, чтобы следующий validate
-завершился явной ошибкой, а не молча переписал состояние. После миграции VPS
-принимает только сессии с 4 или 16 lanes; rollback выполняется восстановлением
-`state-before-upgrade`, а не обратной записью schema 15 новым кодом. Ступень
-`v16 → v17` удаляет настраиваемый `room_count`: Calls всегда создаёт четыре
-VK-комнаты. Ступень `v17 → v18` переносит настраиваемый `workers` в единый
-Calls-config (default `4`, допустимы `4/8/12/16/20`) и публикует это же число
-клиенту и серверу.
+В ветке `debug` используется стабильный State Format **v1**. Обычное изменение
+Calls или другой feature не повышает `format_version` и не добавляет migration
+script. State хранит только desired config; совместимость transport/wire
+проверяется по runtime capabilities перед apply.
 
-Обновление подписочного renderer не меняет state schema и повторно использует
+Один importer принимает любую историческую плоскую schema 0–18 и сразу создаёт
+State Format v1. Он сохраняет пользователей, credentials, Telegram-токены,
+сетевые секреты, plugin state, kernel и creator desired state; Calls
+нормализуется в актуальный `vk_parasite`. Импорт не останавливает старые creator
+units и не меняет `/etc/wdtt/headless` или иной host runtime.
+
+Обновление подписочного renderer не меняет State Format и повторно использует
 существующий per-user A256GCM key, но wire contract несовместим с HydraBox v1.
 После обновления выдавайте ссылку заново: клиент HydraBox должен быть не ниже
 `0.4.0-beta.1`, а fragment теперь называется `#hydra-key=…`. Сервер публикует
 только Hydra Subscription v2; downgrade к v1 или plaintext fallback отсутствует.
 
-Миграция state намеренно не останавливает старые creator units и не переносит
-`/etc/wdtt/headless` или промежуточный Calls runtime. Если creator был настроен,
+Если legacy creator был настроен,
 верхнеуровневый TUI `Headless Creator` покажет
 `legacy_creator_reinstall_required`. Только явное действие `Создать комнаты` в
 qWDTT-подменю делает snapshot старой установки, поднимает новое поколение и
 после успеха удаляет legacy-файлы; при сбое прежние units и файлы
 восстанавливаются, а единый VK cookie-файл
 `/etc/hydra/cookiesvk/cookies-vk.json` сохраняется.
-Отдельно миграцию выполняет:
+Отдельно импорт выполняет совместимая команда:
 
 ```bash
 sudo hydra upgrade migrate-state
 ```
 
-Команда предназначена для `upgrade.sh` и аварийных процедур. В обычной
+Имя `migrate-state` сохранено для upgrade-скриптов. Команда предназначена для
+`upgrade.sh` и аварийных процедур. В обычной
 эксплуатации вызывайте её только при остановленных процессах HYDRA и наличии
-проверенного backup. Миграция идемпотентна: повторный вызов на актуальной схеме
+проверенного backup. Импорт идемпотентен: повторный вызов на актуальном формате
 не переписывает state.
 
-Каждая ступень `vN → vN+1` — чистая функция, проверяемая отдельно; запись всей
-цепочки выполняется атомарно. Неизвестная будущая версия схемы не считается
-повреждением и не заменяется старым backup: загрузка завершается явной ошибкой
-совместимости.
+Запись импортированного документа выполняется атомарно. Неизвестная будущая
+версия формата не считается повреждением и не заменяется старым backup: загрузка
+завершается явной ошибкой совместимости.
 
 Инварианты state и правила конкурентности — в
 [ARCHITECTURE.md](ARCHITECTURE.md#6-state-и-рабочее-состояние).

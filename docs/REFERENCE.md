@@ -442,21 +442,22 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 | `hydra_antidpi` | Активные баны AntiDPI, IPv4 |
 | `hydra_antidpi6` | Активные баны AntiDPI, IPv6 |
 
-## Схема persisted state
+## Формат persisted state
 
-В текущей ветке `debug` актуальна схема **15**. Корень `state.json`:
+В ветке `debug` используется стабильный State Format **v1**. Корень
+`state.json`:
 
 | Поле | Тип | Содержание |
 | :--- | :--- | :--- |
-| `version` | `int` | Версия схемы |
+| `format_version` | `int` | Версия envelope, не версия приложения или feature |
 | `revision` | `int` | Монотонная ревизия желаемой конфигурации |
-| `install` | `object` | Метаданные установки |
-| `protocols` | `map[str, PluginState]` | Состояние плагинов по каноническому имени |
-| `users` | `list[User]` | Пользователи и их credentials |
-| `telegram` | `object` | Настройки Telegram-адаптера и категорий уведомлений |
-| `network` | `object` | Сетевые настройки, не принадлежащие плагину |
-| `headless_creator` | `object` | Provider-neutral desired state независимого creator |
-| `kernel` | `object` | Desired core provider (`sing-box-extended`/`hydracore`) и release channel |
+| `core` | `object` | `install`, `users`, `telegram`, `network` |
+| `features` | `object` | `protocols`, `headless_creator`, `kernel` и независимые feature namespaces |
+
+Неизвестные namespaces внутри `core` и `features` сохраняются при load/save.
+Добавление поля feature не меняет `format_version`: defaults и semantic
+validation принадлежат самой feature. Формат повышается только при несовместимой
+смене envelope.
 
 `User`: `email`, `uuid`, `traffic_limit_gb`, `traffic_used_bytes`, `expiry_date`,
 `blocked`, `created_at`, `telegram_id`, `credentials`, `device_limit`, `devices`,
@@ -474,39 +475,17 @@ HWID используется нормализованный `User-Agent`, чт�
 `tproxy_enabled`, `tproxy_port`, `clash_api_enabled`, `clash_api_port`,
 `clash_api_secret`.
 
-`headless_creator.providers`: provider-specific desired configuration без
+`features.headless_creator.providers`: provider-specific desired configuration без
 consumer lifecycle. `headless_creator.consumers.qwdtt` хранит `provider`,
 `pool_enabled`, `room_count` (1–16), `refresh_interval_seconds` и отметку
 необходимости явной переустановки legacy runtime. Cookies, join-links и хэши в
 state не хранятся.
 
-Миграция `v6 → v7` сохраняет совместимость с промежуточным Calls layout;
-`v7 → v8` переносит `calls.config.qwdtt_*` в
-`headless_creator.providers.vk` и переименовывает maintenance-флаг в
-`sync_headless_creator_vk_qwdtt_enabled`. Native Calls автоматически не
-включается. `v8 → v9` отделяет qWDTT consumer state в
-`headless_creator.consumers.qwdtt` и сохраняет прежний размер пула 4. Если
-старый creator был настроен, state получает
-`legacy_creator_reinstall_required`; старые units и runtime не изменяются до
-явного `Создать комнаты` в qWDTT-подменю TUI `Headless Creator`.
-`v9 → v10` добавляет `kernel={provider:sing-box-extended,channel:stable}` и
-исторически фиксирует отсутствующий `calls.config.mode` как `p2p`. Следующая
-чистая миграция `v10 → v11` переводит Calls в `vk_parasite`, удаляет legacy
-`read_buffer` и выключает несовместимый enabled state, сохраняя installed-флаг
-и все остальные протоколы. `v11 → v12` фиксирует четыре worker, удаляет старый
-профиль транспорта и выбирает wire v4. Host binary, units и creator-пул
-миграция не меняет;
-`v12 → v13` сначала выключает несовместимый активный wire-v4 Calls, сохраняя
-комнаты и installed state, затем выбирает восемь worker и wire v5; admission
-выполняется до KCP, а TCP relay ограничивает входной backlog через flow-credit.
-`v13 → v14` выключает несовместимый wire-v5 runtime, возвращает четыре worker
-и выбирает wire v7 с TCP flow affinity, UDP/QUIC striping, физическим
-backpressure и поэтапным rebind.
-`v14 → v15` выключает несовместимый wire-v8 runtime, сохраняя четыре worker,
-комнаты и installed state. Hydracore debug.33 и HYDRA Calls требуют точный
-несовместимый wire v9 и полный recovery capability contract; wire v7/v8
-сохраняются здесь только как исторические состояния миграций.
-после явного switch на Hydracore переустановка Calls создаёт managed-пул.
+Старые плоские schema 0–18 поддерживает один importer: он сразу создаёт State
+Format v1, нормализует Calls в актуальный `vk_parasite` и переносит прежний
+creator desired state. Поштучных migration modules нет. Импорт не меняет host
+binary, units или creator runtime. Совместимость Calls с Hydracore определяется
+runtime capabilities, а не номером persisted state или wire-полем в нём.
 
 `install` хранит служебные отметки фоновых проверок:
 

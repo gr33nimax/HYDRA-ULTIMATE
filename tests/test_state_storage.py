@@ -6,6 +6,7 @@ import pytest
 from hydra.core import state as state_module
 from hydra.core.errors import StateConflictError
 from hydra.core.state import AppState, UnsupportedStateVersion
+from hydra.core.state_migrations import import_legacy_state
 from hydra.core.state_models import User
 
 
@@ -14,28 +15,57 @@ def _use_temp_state(monkeypatch, tmp_path):
     monkeypatch.setattr(state_module, "STATE_FILE", tmp_path / "state.json")
 
 
-def test_future_schema_is_never_silently_downgraded(monkeypatch, tmp_path):
+def test_future_format_is_never_silently_downgraded(monkeypatch, tmp_path):
     _use_temp_state(monkeypatch, tmp_path)
-    state_module.STATE_FILE.write_text(json.dumps({"version": 999}), encoding="utf-8")
+    state_module.STATE_FILE.write_text(json.dumps({
+        "format_version": 999,
+        "revision": 0,
+        "core": {},
+        "features": {},
+    }), encoding="utf-8")
     state_module.STATE_FILE.with_suffix(".json.bak").write_text(
-        json.dumps({"version": state_module.SCHEMA_VERSION}), encoding="utf-8"
+        json.dumps({
+            "format_version": state_module.SCHEMA_VERSION,
+            "revision": 0,
+            "core": {},
+            "features": {},
+        }), encoding="utf-8"
     )
-    with pytest.raises(UnsupportedStateVersion, match="newer than supported"):
+    with pytest.raises(UnsupportedStateVersion, match="newer than supported format"):
         state_module.load_state()
 
 
-def test_migration_registry_runs_in_order_without_mutating_source():
+def test_legacy_importer_converts_directly_without_mutating_source():
     source = {"version": 0, "users": [{"email": "u", "uuid": "id"}]}
-    migrated = state_module._migrate(source, 0)
+    migrated = import_legacy_state(source)
     assert source["version"] == 0
-    assert migrated["version"] == state_module.SCHEMA_VERSION
-    assert migrated["users"][0]["credentials"] == {}
+    assert migrated["format_version"] == state_module.SCHEMA_VERSION
+    assert migrated["core"]["users"][0]["credentials"] == {}
 
 
-def test_missing_migration_fails_closed(monkeypatch):
-    monkeypatch.setattr(state_module, "_MIGRATIONS", {0: state_module._migrate_v0_to_v1})
-    with pytest.raises(RuntimeError, match="missing state migration 1 -> 2"):
-        state_module._migrate({"version": 0, "users": []}, 0)
+def test_legacy_importer_rejects_unknown_future_schema():
+    with pytest.raises(UnsupportedStateVersion, match="legacy state schema 19"):
+        import_legacy_state({"version": 19})
+
+
+def test_unknown_feature_namespace_survives_round_trip(monkeypatch, tmp_path):
+    _use_temp_state(monkeypatch, tmp_path)
+    state_module.STATE_FILE.write_text(json.dumps({
+        "format_version": 1,
+        "revision": 7,
+        "core": {},
+        "features": {"future-feature": {"secret": "preserve", "enabled": True}},
+    }), encoding="utf-8")
+
+    loaded = state_module.load_state()
+    loaded.network.domain = "changed.example"
+    state_module.save_state(loaded)
+
+    persisted = json.loads(state_module.STATE_FILE.read_text(encoding="utf-8"))
+    assert persisted["features"]["future-feature"] == {
+        "secret": "preserve",
+        "enabled": True,
+    }
 
 
 def test_save_atomically_replaces_backup_and_syncs_directory(monkeypatch, tmp_path):

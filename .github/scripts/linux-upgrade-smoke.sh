@@ -208,16 +208,16 @@ PYTHONPATH="$install_dir" "$install_dir/.venv/bin/python" - <<'PY'
 import json
 from pathlib import Path
 
-from hydra.core.state_models import SCHEMA_VERSION
+from hydra.core.state_format import STATE_FORMAT_VERSION
 
 state = json.loads(Path("/var/lib/hydra/state.json").read_text())
-assert state["version"] == SCHEMA_VERSION
-assert state["users"][0]["device_limit"] == 2
-assert state["users"][0]["credentials"]["naive"]["password"] == "preserve-me"
-assert state["telegram"]["admin_token"] == "preserve-admin-token"
-assert state["network"]["clash_api_secret"] == "preserve-clash-secret"
-assert state["protocols"]["warp"]["enabled"] is False
-assert "fail2ban" not in state["protocols"]
+assert state["format_version"] == STATE_FORMAT_VERSION
+assert state["core"]["users"][0]["device_limit"] == 2
+assert state["core"]["users"][0]["credentials"]["naive"]["password"] == "preserve-me"
+assert state["core"]["telegram"]["admin_token"] == "preserve-admin-token"
+assert state["core"]["network"]["clash_api_secret"] == "preserve-clash-secret"
+assert state["features"]["protocols"]["warp"]["enabled"] is False
+assert "fail2ban" not in state["features"]["protocols"]
 PY
 
 test "$(find "$tmp_dir/backups" -name SUCCESS -type f | wc -l)" = "1"

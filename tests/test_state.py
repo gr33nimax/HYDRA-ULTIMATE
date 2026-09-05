@@ -345,9 +345,9 @@ def test_migrate_v2_enablement_flags_to_canonical_protocol_state(
 
     save_state(state)
     persisted = json.loads(state_file.read_text(encoding="utf-8"))
-    assert "security" not in persisted
-    assert "dnscrypt_enabled" not in persisted["network"]
-    assert "warp_enabled" not in persisted["network"]
+    assert "security" not in persisted["core"]
+    assert "dnscrypt_enabled" not in persisted["core"]["network"]
+    assert "warp_enabled" not in persisted["core"]["network"]
 
 
 def test_singbox_generate_config_tproxy_reject_rule():

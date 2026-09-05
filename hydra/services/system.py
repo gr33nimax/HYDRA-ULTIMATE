@@ -1,7 +1,7 @@
 """Transport-neutral system maintenance use-cases.
 
 CLI, TUI and future remote adapters should not import host diagnostics,
-upgrade checks or state migration storage directly.  This port keeps those
+upgrade checks or legacy state import storage directly.  This port keeps those
 operations behind the application composition root.
 """
 from __future__ import annotations
@@ -39,7 +39,7 @@ class UnavailableSystemOperations:
 
 @dataclass(frozen=True)
 class SystemService:
-    """Application owner for read-only checks and explicit state migration."""
+    """Application owner for read-only checks and explicit legacy state import."""
 
     validate_state: Callable[[AppState], None]
     doctor_check: Callable[[AppState], dict]
@@ -50,7 +50,8 @@ class SystemService:
         self.validate_state(state)
         return {
             "valid": True,
-            "schema_version": state.version,
+            # Compatibility name in the public CLI payload; value is format v1.
+            "schema_version": state.format_version,
             "revision": state.revision,
         }
 

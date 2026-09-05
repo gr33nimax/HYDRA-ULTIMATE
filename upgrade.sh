@@ -541,7 +541,7 @@ CURRENT_REPORT=""
 
 discover_units
 capture_active_units
-step 5 7 "Резервная копия и миграция state"
+step 5 7 "Резервная копия и импорт legacy state"
 info "Останавливаю активные службы HYDRA: ${#ACTIVE_UNITS[@]}"
 SERVICES_QUIESCED=1
 stop_managed_units
@@ -578,14 +578,14 @@ run_stage_python \
     "$ROLLBACK_DIR/hydra-backup.tar.gz" --dry-run \
     > "$CURRENT_REPORT"
 
-info "Мигрирую state при остановленных службах"
+info "Импортирую legacy state при остановленных службах"
 STATE_MUTATION_STARTED=1
-CURRENT_OPERATION="Миграция state"
-CURRENT_REPORT="$ROLLBACK_DIR/state-migration.json"
+CURRENT_OPERATION="Импорт legacy state"
+CURRENT_REPORT="$ROLLBACK_DIR/state-import.json"
 run_stage_python \
     -m hydra.cli --json upgrade migrate-state \
     > "$CURRENT_REPORT"
-CURRENT_OPERATION="Проверка state после миграции"
+CURRENT_OPERATION="Проверка state после импорта"
 CURRENT_REPORT="$ROLLBACK_DIR/state-check.json"
 run_stage_python \
     -m hydra.cli --json upgrade check \

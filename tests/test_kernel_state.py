@@ -7,11 +7,12 @@ from hydra.core.state_kernel_models import (
     validate_kernel_config,
     validate_raw_kernel_config,
 )
-from hydra.core.state_migration_kernel import migrate_v9_to_v10
+from hydra.core.state_format import unpack_state_document
+from hydra.core.state_migrations import import_legacy_state
 from hydra.core.state_models import AppState, PluginState, validate_state
 
 
-def test_v9_to_v10_preserves_stock_core_and_legacy_calls() -> None:
+def test_legacy_importer_preserves_stock_core_and_normalizes_calls() -> None:
     original = {
         "version": 9,
         "protocols": {
@@ -20,14 +21,18 @@ def test_v9_to_v10_preserves_stock_core_and_legacy_calls() -> None:
         },
     }
 
-    migrated = migrate_v9_to_v10(original)
+    migrated = unpack_state_document(import_legacy_state(original))
 
-    assert migrated["version"] == 10
+    assert migrated["format_version"] == 1
     assert migrated["kernel"] == {
         "provider": "sing-box-extended",
         "channel": "stable",
     }
-    assert migrated["protocols"]["calls"]["config"]["mode"] == "p2p"
+    assert migrated["protocols"]["calls"]["enabled"] is False
+    assert migrated["protocols"]["calls"]["config"] == {
+        "mode": "vk_parasite",
+        "workers": 4,
+    }
     assert migrated["protocols"]["wdtt"]["config"] == {
         "dtls_port": 56000,
         "wg_port": 56001,
@@ -35,12 +40,12 @@ def test_v9_to_v10_preserves_stock_core_and_legacy_calls() -> None:
     assert "kernel" not in original
 
 
-def test_v9_to_v10_is_idempotent_for_explicit_selection() -> None:
-    migrated = migrate_v9_to_v10({
+def test_legacy_importer_preserves_explicit_kernel_selection() -> None:
+    migrated = unpack_state_document(import_legacy_state({
         "version": 9,
         "kernel": {"provider": "hydracore", "channel": "preview"},
-    })
-    assert migrate_v9_to_v10(migrated) == migrated
+    }))
+    assert migrated["kernel"] == {"provider": "hydracore", "channel": "preview"}
 
 
 def test_kernel_selection_rejects_unknown_provider_or_channel() -> None:

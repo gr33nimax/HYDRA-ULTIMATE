@@ -1,4 +1,4 @@
-"""Architecture guards for the state schema, migrations, and storage adapter."""
+"""Architecture guards for the state format, importer, and storage adapter."""
 from __future__ import annotations
 
 import ast
@@ -16,7 +16,7 @@ def _tree(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"))
 
 
-def test_state_schema_and_migrations_are_infrastructure_free() -> None:
+def test_state_schema_format_and_legacy_import_are_infrastructure_free() -> None:
     forbidden_roots = {
         "fcntl",
         "json",
@@ -27,7 +27,12 @@ def test_state_schema_and_migrations_are_infrastructure_free() -> None:
         "threading",
     }
     violations: list[str] = []
-    for name in ("state_models.py", "state_migrations.py"):
+    for name in (
+        "state_models.py",
+        "state_format.py",
+        "state_migrations.py",
+        "state_validation.py",
+    ):
         for node in ast.walk(_tree(CORE / name)):
             modules: list[str] = []
             if isinstance(node, ast.Import):
@@ -56,14 +61,20 @@ def test_state_storage_facade_reexports_the_pure_schema() -> None:
         )
         < 240
     )
-    assert (
-        len(
-            (CORE / "state_migrations.py")
-            .read_text(encoding="utf-8")
-            .splitlines()
-        )
-        < 140
-    )
+    budgets = {
+        "state_format.py": 100,
+        "state_migrations.py": 200,
+        "state_validation.py": 100,
+    }
+    for name, limit in budgets.items():
+        assert len((CORE / name).read_text(encoding="utf-8").splitlines()) < limit
+
+
+def test_version_by_version_state_migrations_do_not_return() -> None:
+    assert list(CORE.glob("state_migration_*.py")) == []
+    source = (CORE / "state_migrations.py").read_text(encoding="utf-8")
+    assert "MIGRATIONS" not in source
+    assert "def migrate_v" not in source
 
 
 def test_state_storage_imports_never_smuggle_domain_types() -> None:
