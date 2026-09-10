@@ -4,7 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from hydra.core.errors import ServiceResult
 from hydra.core.state_models import AppState
 
 
@@ -50,16 +49,6 @@ class QueryAccess(Protocol):
     def execute(self, plugin_name: str, query: str, **parameters: object) -> Any: ...
 
 
-class QwdttCreatorMaintenanceAccess(Protocol):
-    def qwdtt_pool_due(self, state: AppState, *, forced: bool = False) -> bool: ...
-    def refresh_qwdtt_pool(
-        self,
-        state: AppState,
-        *,
-        forced: bool = False,
-    ) -> ServiceResult: ...
-
-
 @dataclass(frozen=True)
 class UnavailableMaintenanceOperations:
     def jobs(self) -> list[MaintenanceJob]:
@@ -86,56 +75,15 @@ class MaintenanceService:
     protocols: ProtocolMaintenanceAccess
     plugin_actions: ActionAccess
     plugin_queries: QueryAccess
-    headless_creator: QwdttCreatorMaintenanceAccess
 
     def jobs(self) -> list[MaintenanceJob]:
-        return [
-            *self.protocols.maintenance_jobs(),
-            MaintenanceJob(
-                plugin_name="",
-                action="refresh_qwdtt_pool",
-                title="Обновление VK-комнат qWDTT",
-                description="Переоткрывает настроенное число комнат и публикует qwdtt:// ссылку",
-                due_query="qwdtt_pool_due",
-                enabled_flag="sync_headless_creator_vk_qwdtt_enabled",
-                apply_on_success=False,
-                owner="creator_consumer",
-                key="headless_creator.consumers.qwdtt",
-            ),
-        ]
+        return self.protocols.maintenance_jobs()
 
     def run(self, state: AppState, forced: bool) -> list[MaintenanceOutcome]:
         outcomes: list[MaintenanceOutcome] = []
         for job in self.jobs():
-            if job.owner == "creator_consumer":
-                outcomes.append(self._run_creator_job(state, job, forced))
-            else:
-                outcomes.append(self._run_plugin_job(state, job, forced))
+            outcomes.append(self._run_plugin_job(state, job, forced))
         return outcomes
-
-    def _run_creator_job(
-        self,
-        state: AppState,
-        job: MaintenanceJob,
-        forced: bool,
-    ) -> MaintenanceOutcome:
-        qwdtt = state.headless_creator.consumers.get("qwdtt", {})
-        if not qwdtt.get("pool_enabled", False):
-            return MaintenanceOutcome(job, "consumer_disabled")
-        if not forced and not state.install.get(job.enabled_flag, True):
-            return MaintenanceOutcome(job, "disabled")
-        try:
-            if not forced and not self.headless_creator.qwdtt_pool_due(state):
-                return MaintenanceOutcome(job, "fresh")
-            result = self.headless_creator.refresh_qwdtt_pool(state, forced=True)
-            message = result.error.message if result.error else ""
-            return MaintenanceOutcome(
-                job,
-                "success" if result else "failed",
-                message,
-            )
-        except Exception as exc:
-            return MaintenanceOutcome(job, "failed", str(exc) or exc.__class__.__name__)
 
     def _run_plugin_job(
         self,

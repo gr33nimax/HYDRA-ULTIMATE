@@ -33,12 +33,7 @@ from hydra.services.calls_infrastructure import (
 )
 from hydra.services.creator_sessions import CreatorSessionManager
 from hydra.services.creator_lock_infrastructure import CreatorFileLock
-from hydra.services.headless_creator import (
-    HEADLESS_CREATOR_BACKUP_RESOURCES,
-    HeadlessCreatorService,
-)
 from hydra.services.headless_creator_infrastructure import HeadlessCreatorInfrastructure
-from hydra.services.qwdtt_creator import QwdttCreatorService
 from hydra.services.configuration_plan import ConfigurationPlanner
 from hydra.services.diagnostic_infrastructure import HOST_DIAGNOSTICS
 from hydra.services.log_infrastructure import HostLogOperations
@@ -83,12 +78,7 @@ def _require_cleanup_result(operation) -> None:
         raise RuntimeError(message)
 
 
-def _creator_runtimes() -> tuple[
-    HeadlessCreatorInfrastructure,
-    HeadlessCreatorInfrastructure,
-    CallsInfrastructure,
-]:
-    provider = HeadlessCreatorInfrastructure(HOST)
+def _creator_runtimes() -> tuple[HeadlessCreatorInfrastructure, CallsInfrastructure]:
     calls_provider = HeadlessCreatorInfrastructure(
         HOST,
         pool_dir=CALLS_POOL_DIR,
@@ -101,36 +91,16 @@ def _creator_runtimes() -> tuple[
         HOST,
         pool_source=calls_provider,
     )
-    return provider, calls_provider, runtime
+    return calls_provider, runtime
 
 
 def _creator_services(
-    creator_runtime,
     calls_creator_runtime,
     calls_runtime,
     protocols,
-    plugin_actions,
     orchestration,
 ):
-    creator_sessions = CreatorSessionManager({"vk": creator_runtime})
     calls_creator_sessions = CreatorSessionManager({"vk": calls_creator_runtime})
-    qwdtt_creator = QwdttCreatorService(
-        sessions=creator_sessions,
-        runtime=creator_runtime,
-        plugin_actions=plugin_actions,
-        save_state=save_state,
-        operation_lock=CreatorFileLock(
-            HOST,
-            Path(os.environ.get(
-                "HYDRA_CREATOR_LOCK_FILE",
-                "/run/lock/hydra-creator.lock",
-            )),
-        ),
-    )
-    headless_creator = HeadlessCreatorService(
-        providers={"vk": creator_runtime},
-        qwdtt=qwdtt_creator,
-    )
     calls = CallsService(
         runtime=calls_runtime,
         creator=calls_creator_sessions,
@@ -146,7 +116,7 @@ def _creator_services(
         ),
         last_apply_error=orchestration.last_apply_error,
     )
-    return qwdtt_creator, headless_creator, calls
+    return calls
 
 
 def production_application(
@@ -154,7 +124,7 @@ def production_application(
     extra_plugin_factories: Iterable[PluginFactory] = (),
 ) -> ApplicationService:
     """Build a fresh, instance-scoped production application."""
-    creator_runtime, calls_creator_runtime, calls_runtime = _creator_runtimes()
+    calls_creator_runtime, calls_runtime = _creator_runtimes()
     plugins = PluginContainer(
         default_plugins(
             notifier=notify_security_event,
@@ -193,19 +163,16 @@ def production_application(
     traffic = TrafficService(protocols)
     plugin_actions = PluginActionService(get_plugin=plugins.get)
     plugin_queries = PluginQueryService(get_plugin=plugins.get)
-    qwdtt_creator, headless_creator, calls = _creator_services(
-        creator_runtime,
+    calls = _creator_services(
         calls_creator_runtime,
         calls_runtime,
         protocols,
-        plugin_actions,
         orchestration,
     )
     maintenance = MaintenanceService(
         protocols=protocols,
         plugin_actions=plugin_actions,
         plugin_queries=plugin_queries,
-        headless_creator=qwdtt_creator,
     )
     kernel = KernelService(
         KernelInfrastructure(HOST),
@@ -241,7 +208,7 @@ def production_application(
         admin=admin,
         backups=BackupService(
             compose_backup_policy(
-                (*plugins.backup_resources(), *HEADLESS_CREATOR_BACKUP_RESOURCES),
+                plugins.backup_resources(),
             ),
         ),
         logs=HostLogOperations(
@@ -294,7 +261,6 @@ def production_application(
         ),
         certificates=certificate_audit,
         calls=calls,
-        headless_creator=headless_creator,
         maintenance=maintenance,
         kernel=kernel,
     )
