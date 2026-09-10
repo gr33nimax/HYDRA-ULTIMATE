@@ -87,6 +87,9 @@ def test_calls_status_uses_minimal_protocol_panel(monkeypatch) -> None:
     app = SimpleNamespace(calls=SimpleNamespace(status=lambda _state: SimpleNamespace(
         native_running=True,
         native_pool_ready=True,
+        creator_installed=True,
+        cookies_ready=True,
+        room_count=4,
     )))
     captured = {}
     monkeypatch.setattr(
@@ -107,6 +110,8 @@ def test_calls_status_uses_minimal_protocol_panel(monkeypatch) -> None:
             ("Режим", "vk_parasite"),
             ("Пул", "готов"),
             ("VK-звонков", "4"),
+            ("Creator", "установлен"),
+            ("VK cookies", "готовы"),
         ],
     }
 
@@ -124,7 +129,6 @@ def test_calls_menu_contains_only_install_or_reinstall_profile_uninstall() -> No
         "↩ Назад",
     ]
     source = Path(calls.__file__).read_text(encoding="utf-8")
-    assert "VK cookies" not in source
     assert "Включить" not in source
     assert "Выключить" not in source
 

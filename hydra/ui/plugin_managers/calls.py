@@ -37,7 +37,9 @@ def _status_panel(state: AppState, app: ApplicationService) -> None:
             ("Платформа", "VK"),
             ("Режим", getattr(status, "native_mode", "vk_parasite")),
             ("Пул", "готов" if status.native_pool_ready else "отсутствует"),
-            ("VK-звонков", "4"),
+            ("VK-звонков", str(getattr(status, "room_count", 0))),
+            ("Creator", "установлен" if getattr(status, "creator_installed", False) else "не установлен"),
+            ("VK cookies", "готовы" if getattr(status, "cookies_ready", False) else "нужны"),
         ],
     )
 

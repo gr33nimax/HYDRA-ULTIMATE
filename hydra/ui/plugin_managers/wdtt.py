@@ -208,10 +208,10 @@ def _setup_headless_creator(
     state: AppState,
     app: ApplicationService,
 ) -> None:
-    """Compatibility forwarder to the standalone creator controller."""
-    from hydra.ui._menus.headless_creator import menu_headless_creator
+    """Forward legacy entrypoints to the Calls-owned creator flow."""
+    from hydra.ui.plugin_managers.calls import menu_calls
 
-    menu_headless_creator(state, app)
+    menu_calls(state, app)
 
 
 def _uninstall_wdtt(
