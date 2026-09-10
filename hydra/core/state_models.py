@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from hydra.contracts import JsonValue, PluginConfig, validate_json_object
+from hydra.core.configuration_names import validate_configuration_names
 from hydra.core.state_calls_models import validate_calls_protocol
 from hydra.core.hydrabox_keys import validate_optional_hydrabox_jwe_key
 from hydra.core.state_creator_models import HeadlessCreatorConfig
@@ -54,6 +55,7 @@ class User:
     # device id -> {first_seen, last_seen, source, user_agent, address}
     devices: dict[str, dict] = field(default_factory=dict)
     hydrabox_jwe_key: str = ""
+    configuration_name_overrides: dict[str, str] = field(default_factory=dict)
 
 @dataclass
 class TelegramConfig:
@@ -83,6 +85,7 @@ class AppState:
     format_version: int = STATE_FORMAT_VERSION
     revision: int = 0
     install: dict = field(default_factory=dict)
+    configuration_names: dict[str, str] = field(default_factory=dict)
     protocols: dict[str, PluginState] = field(default_factory=dict)
     users: list[User] = field(default_factory=list)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
@@ -141,6 +144,10 @@ def validate_state(state: AppState) -> None:
         )
     validate_headless_creator(state.headless_creator)
     validate_kernel_config(state.kernel)
+    validate_configuration_names(
+        state.configuration_names,
+        path="configuration_names",
+    )
     for user in state.users:
         if (
             not isinstance(user.email, str)
@@ -167,6 +174,10 @@ def validate_state(state: AppState) -> None:
         validate_optional_hydrabox_jwe_key(
             user.hydrabox_jwe_key,
             owner=user.email,
+        )
+        validate_configuration_names(
+            user.configuration_name_overrides,
+            path=f"users.{user.email}.configuration_name_overrides",
         )
     ports = {
         "network.tproxy_port": state.network.tproxy_port,

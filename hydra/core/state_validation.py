@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from hydra.core.hydrabox_keys import validate_optional_hydrabox_jwe_key
+from hydra.core.configuration_names import validate_configuration_names
 from hydra.core.state_creator_models import validate_raw_headless_creator
 from hydra.core.state_devices import validate_device_map
 from hydra.core.state_format import STATE_FORMAT_VERSION, UnsupportedStateVersion
@@ -23,12 +24,15 @@ def validate_raw_state(raw: object) -> None:
         raise ValueError("state revision must be a non-negative integer")
     for key in (
         "protocols", "install", "telegram", "network", "security",
+        "configuration_names",
         "core_extensions", "feature_extensions",
     ):
         if key in raw and not isinstance(raw[key], dict):
             raise ValueError(f"state field '{key}' must be an object")
     if "headless_creator" in raw:
         validate_raw_headless_creator(raw["headless_creator"])
+    if "configuration_names" in raw:
+        validate_configuration_names(raw["configuration_names"], path="configuration_names")
     if "kernel" in raw:
         validate_raw_kernel_config(raw["kernel"])
     if "users" in raw:
@@ -44,6 +48,11 @@ def validate_raw_state(raw: object) -> None:
             if type(device_limit) is not int or device_limit < 0:
                 raise ValueError("user device limit must be a non-negative integer")
             validate_optional_hydrabox_jwe_key(user.get("hydrabox_jwe_key", ""))
+            if "configuration_name_overrides" in user:
+                validate_configuration_names(
+                    user["configuration_name_overrides"],
+                    path="user.configuration_name_overrides",
+                )
             validate_device_map(
                 user.get("devices", {}),
                 legacy="format_version" not in raw and int(raw.get("version", 0)) < 5,

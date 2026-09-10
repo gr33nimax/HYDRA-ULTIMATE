@@ -4,7 +4,10 @@ from hydra.core.state import AppState, PluginState, User
 from hydra.services.active_connections import tracked_active_connections
 from hydra.services.traffic import (
     refresh_user_traffic, check_traffic_limits, protocol_totals,
+    reset_global_report_traffic, reset_user_traffic,
 )
+from hydra.services.traffic_accounting import apply_connection_snapshot
+from hydra.services.traffic_attribution import TrafficEvidence
 
 
 class FakeTrafficProtocols:
@@ -119,6 +122,94 @@ def test_limit_is_reached_at_exact_boundary():
         state,
         protocols=FakeTrafficProtocols(),
     ) == [user.email]
+
+
+def test_global_reset_starts_new_report_without_resetting_user_quota():
+    user = User(email="u@example.com", uuid="u1", traffic_limit_gb=1)
+    state = AppState(
+        users=[user],
+        protocols={"naive": PluginState(enabled=True)},
+    )
+    user.traffic_used_bytes = 300
+    user.credentials["naive"] = {
+        "traffic_used_bytes": 300,
+        "traffic_last_raw_bytes": 300,
+    }
+
+    reset_global_report_traffic(state)
+
+    assert protocol_totals(state) == {"naive": 0}
+    assert user.traffic_used_bytes == 300
+    assert user.credentials["naive"]["traffic_used_bytes"] == 300
+    plugin = MagicMock()
+    plugin.meta.name = "naive"
+    plugin.traffic_snapshot.return_value = {user.email: 350}
+    plugin.aggregate_traffic_snapshot.return_value = None
+    refresh_user_traffic(state, protocols=FakeTrafficProtocols([plugin]))
+    assert user.traffic_used_bytes == 350
+    assert protocol_totals(state) == {"naive": 50}
+
+
+def test_user_reset_retains_baselines_and_does_not_resurrect_active_bytes():
+    user = User(
+        email="u@example.com",
+        uuid="u1",
+        traffic_limit_gb=1,
+        expiry_date="2030-01-01T00:00:00+00:00",
+        blocked=True,
+        credentials={"anytls": {"password": "secret"}},
+    )
+    state = AppState(
+        users=[user],
+        protocols={"anytls": PluginState(enabled=True)},
+    )
+    connection = {
+        "id": "c1",
+        "metadata": {"user": user.email, "inboundTag": "anytls-in"},
+        "upload": 100,
+        "download": 200,
+    }
+    assert apply_connection_snapshot(state, [connection], TrafficEvidence())
+    state.install["traffic_log_cursors"] = {"naive": {"inode:1": 42}}
+
+    reset_user_traffic(state, user.email)
+
+    assert user.traffic_limit_gb == 1
+    assert user.blocked
+    assert user.expiry_date == "2030-01-01T00:00:00+00:00"
+    assert user.credentials["anytls"]["password"] == "secret"
+    assert state.install["traffic_log_cursors"] == {"naive": {"inode:1": 42}}
+    assert apply_connection_snapshot(state, [connection], TrafficEvidence()) is False
+    assert user.traffic_used_bytes == 0
+    connection["download"] = 250
+    assert apply_connection_snapshot(state, [connection], TrafficEvidence())
+    assert user.traffic_used_bytes == 50
+
+
+def test_user_reset_keeps_snapshot_baseline_and_global_report():
+    user = User(email="u@example.com", uuid="u1")
+    state = AppState(
+        users=[user],
+        protocols={"amneziawg": PluginState(enabled=True)},
+    )
+    plugin = MagicMock()
+    plugin.meta.name = "amneziawg"
+    plugin.traffic_snapshot.side_effect = [{user.email: 300}] * 2 + [
+        {user.email: 350},
+    ]
+    plugin.aggregate_traffic_snapshot.return_value = None
+    protocols = FakeTrafficProtocols([plugin])
+
+    refresh_user_traffic(state, protocols=protocols)
+    report_before_reset = protocol_totals(state).copy()
+    reset_user_traffic(state, user.email)
+    refresh_user_traffic(state, protocols=protocols)
+
+    assert user.traffic_used_bytes == 0
+    assert protocol_totals(state) == report_before_reset
+    refresh_user_traffic(state, protocols=protocols)
+    assert user.traffic_used_bytes == 50
+    assert protocol_totals(state)["amneziawg"] == 350
 
 
 def test_active_connections_group_only_current_attributed_sessions():

@@ -55,6 +55,7 @@ from hydra.services.traffic import (
     TrafficOperations,
     UnavailableTrafficOperations,
 )
+from hydra.services.configuration_names import ConfigurationNameService
 from hydra.services.uninstall import (
     UnavailableUninstallOperations,
     UninstallOperations,
@@ -111,6 +112,9 @@ class ApplicationService:
     )
     traffic: TrafficOperations = field(
         default_factory=UnavailableTrafficOperations,
+    )
+    configuration_names: ConfigurationNameService = field(
+        default_factory=ConfigurationNameService,
     )
     planner: ConfigurationPlanning = field(
         default_factory=UnavailableConfigurationPlanning,

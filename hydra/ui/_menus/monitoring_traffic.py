@@ -20,9 +20,12 @@ from hydra.ui.tui import (
     YELLOW,
     _bytes_auto,
     clear,
+    confirm,
     kv,
     menu,
     panel,
+    prompt,
+    success,
     title,
 )
 
@@ -242,6 +245,7 @@ def _traffic_choice(
         ("4", f"{'✓ ' if sort_by == 'expiry' else ''}Сортировать по сроку", ""),
         ("Z", "Показать всех пользователей" if not show_zero_users else "Скрыть пользователей без трафика", ""),
         ("D", "🔍 Статистика пользователя", ""),
+        ("R", "♻️ Сбросить общую статистику", "Не меняет квоты пользователей"),
         ("0", "↩ Назад", ""),
     ], f"УПРАВЛЕНИЕ · {sort_labels[sort_by].upper()}")
     if choice in {"1", "2", "3", "4"}:
@@ -258,6 +262,14 @@ def _traffic_choice(
         )
         if user:
             _show_user_detail(state, user, app)
+    elif choice.upper() == "R":
+        if confirm(
+            "Сбросить общую статистику трафика? Квоты пользователей сохранятся.",
+            default=False,
+        ):
+            app.traffic.reset_global_report_state()
+            success("Общая статистика трафика обнулена.")
+            prompt("Нажмите Enter")
     return sort_by, show_zero_users, choice == "0"
 
 

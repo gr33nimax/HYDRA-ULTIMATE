@@ -11,7 +11,11 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from hydra.core.state import update_state
-from hydra.core.state_models import AppState
+from hydra.core.state_models import AppState, User, find_user
+from hydra.services.traffic_accounting import (
+    ensure_report_totals,
+    record_report_delta,
+)
 
 class TrafficProtocolAccess(Protocol):
     """Runtime counter capabilities needed by traffic accounting."""
@@ -42,6 +46,8 @@ class TrafficOperations(Protocol):
     def collect(self, state: AppState | None = None) -> dict[str, int]: ...
     def protocol_totals(self, state: AppState) -> dict[str, int]: ...
     def check_limits(self, state: AppState) -> list[str]: ...
+    def reset_global_report_state(self) -> AppState: ...
+    def reset_user_traffic_state(self, email: str) -> AppState: ...
 
 
 @dataclass(frozen=True)
@@ -66,6 +72,12 @@ class UnavailableTrafficOperations:
     def check_limits(self, state: AppState) -> list[str]:
         return self._unavailable()
 
+    def reset_global_report_state(self) -> AppState:
+        return self._unavailable()
+
+    def reset_user_traffic_state(self, email: str) -> AppState:
+        return self._unavailable()
+
 
 @dataclass(frozen=True)
 class TrafficService:
@@ -87,6 +99,12 @@ class TrafficService:
 
     def check_limits(self, state: AppState) -> list[str]:
         return check_traffic_limits(state, protocols=self.protocols)
+
+    def reset_global_report_state(self) -> AppState:
+        return reset_global_report_state()
+
+    def reset_user_traffic_state(self, email: str) -> AppState:
+        return reset_user_traffic_state(email)
 
 
 def _as_non_negative_int(value: object) -> int:
@@ -142,8 +160,10 @@ def refresh_user_traffic(
 ) -> dict[str, int]:
     """Refresh resettable sources and rebuild authoritative user totals."""
     enabled_names = protocols.enabled_names(state)
+    ensure_report_totals(state)
     cursor_root = state.install.setdefault("traffic_log_cursors", {})
     for protocol in sorted(enabled_names):
+        before = _protocol_total(state, protocol)
         try:
             protocols.ingest_traffic(
                 state,
@@ -171,6 +191,11 @@ def refresh_user_traffic(
             # Preserve the last good aggregate when the interface disappears
             # briefly during a service restart.
             pass
+        record_report_delta(
+            state,
+            protocol,
+            max(0, _protocol_total(state, protocol) - before),
+        )
 
     totals: dict[str, int] = {}
     for user in state.users:
@@ -215,6 +240,16 @@ def update_user_traffic(
 
 
 def protocol_totals(state: AppState) -> dict[str, int]:
+    reports = state.install.get("traffic_report_totals")
+    if isinstance(reports, dict):
+        return {
+            str(protocol): _as_non_negative_int(used)
+            for protocol, used in reports.items()
+        }
+    return _legacy_protocol_totals(state)
+
+
+def _legacy_protocol_totals(state: AppState) -> dict[str, int]:
     totals: dict[str, int] = {}
     for user in state.users:
         for protocol, stats in user.credentials.items():
@@ -232,6 +267,51 @@ def protocol_totals(state: AppState) -> dict[str, int]:
             # gains reliable per-user attribution in the future.
             totals[protocol] = max(totals.get(protocol, 0), used)
     return totals
+
+
+def _protocol_total(state: AppState, protocol: str) -> int:
+    return _legacy_protocol_totals(state).get(protocol, 0)
+
+
+def reset_global_report_traffic(state: AppState) -> None:
+    """Start a new global reporting period without touching user quotas."""
+    reports = ensure_report_totals(state)
+    protocols = set(reports) | set(state.install.get("protocol_traffic_totals", {}))
+    for protocol in protocols:
+        reports[protocol] = 0
+        stats = state.install.get("protocol_traffic_totals", {}).get(protocol)
+        if isinstance(stats, dict):
+            stats["traffic_used_bytes"] = 0
+
+
+def reset_global_report_state() -> AppState:
+    """Atomically persist a global reporting-period reset."""
+    state, _ = update_state(reset_global_report_traffic)
+    return state
+
+
+def reset_user_traffic(state: AppState, email: str) -> User:
+    """Start a user's quota period while retaining counter baselines."""
+    user = find_user(state, email)
+    if user is None:
+        raise ValueError(f"user not found: {email}")
+    user.traffic_used_bytes = 0
+    for stats in user.credentials.values():
+        if not isinstance(stats, dict):
+            continue
+        for key in tuple(stats):
+            if key.startswith("traffic_") and key != "traffic_last_raw_bytes":
+                stats.pop(key, None)
+        stats["traffic_used_bytes"] = 0
+    resets = state.install.setdefault("traffic_user_reset_epochs", {})
+    resets[email] = _as_non_negative_int(resets.get(email, 0)) + 1
+    return user
+
+
+def reset_user_traffic_state(email: str) -> AppState:
+    """Atomically persist a user's quota-period reset."""
+    state, _ = update_state(lambda latest: reset_user_traffic(latest, email))
+    return state
 
 
 def check_traffic_limits(

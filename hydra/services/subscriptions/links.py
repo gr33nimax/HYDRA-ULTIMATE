@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import urllib.parse
 
+from hydra.core.configuration_names import resolve_configuration_name
 from hydra.core.state_models import AppState, User
 from hydra.services.subscriptions.access import SubscriptionPluginAccess
 from hydra.services.subscriptions.serialization import (
@@ -83,15 +84,42 @@ def _protocol_suffix(link: str) -> str:
     return ""
 
 
-def _tag_link(link: str, user: User) -> str:
+def _configuration_name_key(link: str) -> str:
+    scheme = urllib.parse.urlparse(link).scheme.lower()
+    return {
+        "naive": "naive",
+        "naive+https": "naive",
+        "naive+quic": "naive",
+        "tt": "trusttunnel",
+        "trusttunnel": "trusttunnel",
+        "mierus": "mieru",
+        "hysteria2": "hysteria2",
+        "hy2": "hysteria2",
+        "vless": "vless",
+        "snell": "snell",
+        "trojan": "trojan",
+    }.get(scheme, "")
+
+
+def tag_client_link(link: str, user: User, state: AppState) -> str:
+    """Apply the resolved display name where the URI supports a fragment."""
     try:
         suffix = _protocol_suffix(link)
-        if not suffix:
+        key = _configuration_name_key(link)
+        if not suffix or not key:
             return link
         parsed = urllib.parse.urlparse(link)
+        if parsed.scheme.lower() in {"tt", "trusttunnel"}:
+            return link
+        label = resolve_configuration_name(
+            key=key,
+            default=f"{user.email} {suffix}",
+            global_names=state.configuration_names,
+            user_names=user.configuration_name_overrides,
+        )
         return urllib.parse.urlunparse(
             parsed._replace(
-                fragment=urllib.parse.quote(f"{user.email} {suffix}"),
+                fragment=urllib.parse.quote(label),
             ),
         )
     except Exception:
@@ -120,7 +148,12 @@ def _awg_links(
             if config:
                 link = generate_awg_sn_link(
                     config,
-                    f"{user.email} AWG {profile['label']}",
+                    resolve_configuration_name(
+                        key=f"amneziawg:{profile['name']}",
+                        default=f"{user.email} AWG {profile['label']}",
+                        global_names=state.configuration_names,
+                        user_names=user.configuration_name_overrides,
+                    ),
                 )
                 if link:
                     links.append(link)
@@ -136,7 +169,7 @@ def _base_subscription_links(
     plugins: SubscriptionPluginAccess,
 ) -> list[str]:
     formatted = [
-        _tag_link(link, user)
+        tag_client_link(link, user, state)
         for link in generate_links(user, state, plugins=plugins)
     ]
     links = [*formatted]

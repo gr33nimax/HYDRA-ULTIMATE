@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from hydra.core.state_models import AppState, User
 from hydra.plugins.base import PluginCategory
 from hydra.services.application import ApplicationService
+from hydra.services.subscriptions.links import tag_client_link
 from hydra.services.subscriptions.generator import get_subscription_urls
 from hydra.services.user_access import access_status as get_user_access_status
 from hydra.ui._menus.users_common import _application
@@ -141,13 +142,33 @@ def _client_artifacts(
     return artifacts
 
 
-def _artifact_title(artifact: _ClientArtifact) -> str:
+def _artifact_name_key(artifact: _ClientArtifact) -> str:
+    return (
+        f"{artifact.plugin_name}:{artifact.profile_name}"
+        if artifact.profile_name
+        else artifact.plugin_name
+    )
+
+
+def _artifact_title(
+    artifact: _ClientArtifact,
+    state: AppState | None = None,
+    user: User | None = None,
+    app: ApplicationService | None = None,
+) -> str:
     label = protocol_label(
         artifact.plugin_name,
         artifact.display_name,
     )
     if artifact.profile_label:
-        return f"{label} ({artifact.profile_label})"
+        label = f"{label} ({artifact.profile_label})"
+    if state is not None and user is not None and app is not None:
+        return app.configuration_names.resolve(
+            state,
+            user,
+            _artifact_name_key(artifact),
+            label,
+        )
     return label
 
 
@@ -174,8 +195,13 @@ def _link_caption(link: str) -> str:
     return "Ссылка"
 
 
-def _render_inline_artifact(artifact: _ClientArtifact) -> None:
-    heading = _artifact_title(artifact)
+def _render_inline_artifact(
+    artifact: _ClientArtifact,
+    state: AppState | None = None,
+    user: User | None = None,
+    app: ApplicationService | None = None,
+) -> None:
+    heading = _artifact_title(artifact, state, user, app)
     fill = max(0, PANEL_W - 10 - len(heading))
     print(
         f"  {CYAN}── {BOLD}{heading}{NC}"
@@ -183,7 +209,7 @@ def _render_inline_artifact(artifact: _ClientArtifact) -> None:
     )
     for link in artifact.links:
         print(f"  {GREEN}{_link_caption(link)}:{NC}")
-        print(link)
+        print(tag_client_link(link, user, state) if user and state else link)
     if artifact.config:
         _render_qr(artifact.config)
         print(f"  {DIM}{'─' * PANEL_W}{NC}")
@@ -208,7 +234,7 @@ def _user_links(
     if not artifacts:
         warn("Нет доступных клиентских конфигураций.")
     for artifact in artifacts:
-        _render_inline_artifact(artifact)
+        _render_inline_artifact(artifact, state, user, app)
     prompt("Нажмите Enter")
 
 
@@ -284,7 +310,7 @@ def _user_configs(
         prompt("Нажмите Enter")
         return
     for artifact in artifacts:
-        _render_inline_artifact(artifact)
+        _render_inline_artifact(artifact, state, user, app)
         if artifact.config:
             _render_qr(artifact.config, invert=True)
     print()

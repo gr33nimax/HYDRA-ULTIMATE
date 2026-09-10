@@ -6,13 +6,14 @@ import copy
 
 STATE_FORMAT_VERSION = 1
 
-_CORE_KEYS = ("install", "users", "telegram", "network")
+_CORE_KEYS = ("install", "users", "telegram", "network", "configuration_names")
 _FEATURE_KEYS = ("protocols", "headless_creator", "kernel")
 _DEFAULTS = {
     "install": {},
     "users": [],
     "telegram": {},
     "network": {},
+    "configuration_names": {},
     "protocols": {},
     "headless_creator": {},
     "kernel": {},
@@ -71,8 +72,12 @@ def pack_state_document(payload: dict) -> dict:
     revision = data.pop("revision", 0)
     core = data.pop("core_extensions", {})
     features = data.pop("feature_extensions", {})
-    core.update({key: data.pop(key) for key in _CORE_KEYS})
-    features.update({key: data.pop(key) for key in _FEATURE_KEYS})
+    core.update({
+        key: data.pop(key, copy.deepcopy(_DEFAULTS[key])) for key in _CORE_KEYS
+    })
+    features.update({
+        key: data.pop(key, copy.deepcopy(_DEFAULTS[key])) for key in _FEATURE_KEYS
+    })
     features.update(data)
     document = {
         "format_version": version,

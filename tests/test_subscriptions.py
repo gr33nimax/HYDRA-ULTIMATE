@@ -226,6 +226,29 @@ def test_generate_base64_sub():
     assert "mock://a@x.com@example.com" in decoded
 
 
+def test_shadowrocket_name_prefers_user_override_then_global_name():
+    plugin = MockTransport()
+    plugin.client_links = MagicMock(return_value=[
+        "naive+https://user:password@example.com:443#ignored",
+    ])
+    user = _make_user("alice@example.com")
+    state = _make_state([user])
+    state.configuration_names["naive"] = "Общее имя"
+
+    encoded = generate_shadowrocket_sub(user, state, plugins=_plugins(plugin))
+    link = base64.b64decode(encoded).decode().strip()
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(link).query)["remarks"] == [
+        "Общее имя",
+    ]
+
+    user.configuration_name_overrides["naive"] = "Личное имя"
+    encoded = generate_shadowrocket_sub(user, state, plugins=_plugins(plugin))
+    link = base64.b64decode(encoded).decode().strip()
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(link).query)["remarks"] == [
+        "Личное имя",
+    ]
+
+
 def test_build_shadowrocket_https_link_uses_unpadded_urlsafe_credentials():
     link = build_shadowrocket_https_link(
         "naive+https://user:p%40ss@example.com:443"
