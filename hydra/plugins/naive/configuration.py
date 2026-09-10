@@ -34,7 +34,6 @@ def render_caddyfile(
     listener_wrappers = ""
     if accept_proxy_protocol:
         listener_wrappers = """\
-    servers {
         listener_wrappers {
             proxy_protocol {
                 timeout 1s
@@ -43,14 +42,16 @@ def render_caddyfile(
             }
             tls
         }
-    }
 """
 
     return f"""\
 {{
     http_port 0
     auto_https disable_redirects
-{listener_wrappers}    order forward_proxy before file_server
+    servers {{
+        protocols h1 h2 h3
+{listener_wrappers}    }}
+    order forward_proxy before file_server
 }}
 
 :{port}, {domain}:{port} {{
