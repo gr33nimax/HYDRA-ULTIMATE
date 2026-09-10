@@ -124,7 +124,7 @@ def _add_kernel(root: argparse._SubParsersAction) -> None:
     )
     switch.add_argument(
         "provider",
-        choices=("sing-box-extended", "hydracore"),
+        choices=("hydracore",),
     )
     switch.add_argument(
         "--channel",

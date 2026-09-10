@@ -12,7 +12,7 @@ from hydra.core.state_migrations import import_legacy_state
 from hydra.core.state_models import AppState, PluginState, validate_state
 
 
-def test_legacy_importer_preserves_stock_core_and_normalizes_calls() -> None:
+def test_legacy_importer_moves_stock_core_to_hydracore_debug() -> None:
     original = {
         "version": 9,
         "protocols": {
@@ -25,8 +25,8 @@ def test_legacy_importer_preserves_stock_core_and_normalizes_calls() -> None:
 
     assert migrated["format_version"] == 1
     assert migrated["kernel"] == {
-        "provider": "sing-box-extended",
-        "channel": "stable",
+        "provider": "hydracore",
+        "channel": "debug",
     }
     assert migrated["protocols"]["calls"]["enabled"] is False
     assert migrated["protocols"]["calls"]["config"] == {
@@ -59,10 +59,10 @@ def test_kernel_selection_rejects_unknown_provider_or_channel() -> None:
         validate_raw_kernel_config({"provider": "unknown"})
 
 
-def test_debug_channel_is_reserved_for_hydracore() -> None:
+def test_only_hydracore_is_a_supported_kernel() -> None:
     validate_kernel_config(KernelConfig(provider="hydracore", channel="debug"))
 
-    with pytest.raises(ValueError, match="only for hydracore"):
+    with pytest.raises(ValueError, match="provider"):
         validate_kernel_config(KernelConfig(
             provider="sing-box-extended",
             channel="debug",
@@ -78,7 +78,7 @@ def test_current_state_rejects_legacy_calls_mode() -> None:
         validate_state(state)
 
 
-def test_current_state_rejects_enabled_calls_on_stock_core() -> None:
+def test_current_state_accepts_enabled_calls_on_hydracore() -> None:
     state = AppState(protocols={
         "calls": PluginState(
             installed=True,
@@ -87,5 +87,4 @@ def test_current_state_rejects_enabled_calls_on_stock_core() -> None:
         ),
     })
 
-    with pytest.raises(ValueError, match="requires the Hydracore kernel"):
-        validate_state(state)
+    validate_state(state)

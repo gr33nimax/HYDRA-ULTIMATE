@@ -14,7 +14,6 @@ from hydra.contracts.hydracore_calls import supports_vps_calls
 from hydra.core.host import HostBackend
 from hydra.core.state_kernel_models import (
     KERNEL_HYDRACORE,
-    KERNEL_SINGBOX_EXTENDED,
 )
 from hydra.services.kernel import KernelRuntimeStatus
 from hydra.services.kernel_release_channels import kernel_release_selection
@@ -33,10 +32,6 @@ class _ReleaseSpec:
 
 
 _TRUSTED_RELEASES = {
-    KERNEL_SINGBOX_EXTENDED: _ReleaseSpec(
-        "shtorm-7/sing-box-extended",
-        lambda arch: rf"^sing-box-.+-linux-{re.escape(arch)}\.tar\.gz$",
-    ),
     KERNEL_HYDRACORE: _ReleaseSpec(
         "gr33nimax/hydracore",
         lambda arch: rf"^hydracore-vps-linux-{re.escape(arch)}\.tar\.gz$",
@@ -218,7 +213,7 @@ class KernelInfrastructure:
         if core_id == _HYDRACORE_CORE_ID or "hydracore" in version_output.lower():
             provider = KERNEL_HYDRACORE
         elif "extended" in version_output.lower():
-            provider = KERNEL_SINGBOX_EXTENDED
+            provider = "legacy"
         else:
             provider = "unknown"
         capabilities = self._normalized_capabilities(capability_payload)

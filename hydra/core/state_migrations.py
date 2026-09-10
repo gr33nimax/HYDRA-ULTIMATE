@@ -155,8 +155,12 @@ def import_legacy_state(data: dict) -> dict:
     _normalize_plugin_flags(raw)
     _normalize_creator(raw)
     kernel = raw.setdefault("kernel", {})
-    kernel.setdefault("provider", "sing-box-extended")
-    kernel.setdefault("channel", "stable")
+    if kernel.get("provider") == "sing-box-extended":
+        kernel["provider"] = KERNEL_HYDRACORE
+        kernel["channel"] = "debug"
+    else:
+        kernel.setdefault("provider", KERNEL_HYDRACORE)
+        kernel.setdefault("channel", "debug")
     wdtt = raw["protocols"].get("wdtt")
     if isinstance(wdtt, dict):
         config = wdtt.setdefault("config", {})

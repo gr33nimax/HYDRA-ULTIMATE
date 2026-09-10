@@ -75,7 +75,7 @@ class KernelOperations(Protocol):
         state: AppState,
         provider: str,
         *,
-        channel: str = "stable",
+        channel: str = "debug",
         force: bool = False,
     ) -> KernelSwitchResult: ...
 
@@ -104,7 +104,7 @@ class KernelService:
         state: AppState,
         provider: str,
         *,
-        channel: str = "stable",
+        channel: str = "debug",
         force: bool = False,
     ) -> KernelSwitchResult:
         desired = KernelConfig(provider=provider, channel=channel)

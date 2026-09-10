@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from hydra.core.host import HostBackend
-from hydra.core.state_kernel_models import KERNEL_HYDRACORE, KERNEL_SINGBOX_EXTENDED
+from hydra.core.state_kernel_models import KERNEL_HYDRACORE
 from hydra.core.state_models import AppState
 from hydra.services.kernel import KernelRuntimeStatus, KernelService
 from hydra.services.kernel_infrastructure import KernelInfrastructure
@@ -30,7 +30,7 @@ class Runtime:
         self.status = KernelRuntimeStatus(
             True,
             running=True,
-            provider=KERNEL_SINGBOX_EXTENDED,
+            provider="legacy",
         )
         self.prepared: Prepared | None = None
 
@@ -38,7 +38,7 @@ class Runtime:
         return self.status
 
     def prepare_switch(self, provider: str, channel: str) -> Prepared:
-        assert (provider, channel) == (KERNEL_HYDRACORE, "stable")
+        assert (provider, channel) == (KERNEL_HYDRACORE, "debug")
         self.status = KernelRuntimeStatus(
             True,
             running=True,
@@ -85,7 +85,7 @@ def test_kernel_service_rolls_runtime_back_when_state_save_fails() -> None:
     with pytest.raises(OSError, match="disk full"):
         service.switch(state, KERNEL_HYDRACORE)
 
-    assert state.kernel.provider == KERNEL_SINGBOX_EXTENDED
+    assert state.kernel.provider == KERNEL_HYDRACORE
     assert state.revision == 7
     assert state.install["singbox_update_available"] is True
     assert runtime.prepared is not None and runtime.prepared.rolled_back is True
@@ -138,7 +138,7 @@ def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
     assert "call_vk_parasite" not in KernelInfrastructure._normalized_capabilities(alias)
 
 
-def test_kernel_service_rejects_stock_switch_before_mutating_active_calls() -> None:
+def test_kernel_service_rejects_removed_provider_before_mutating_calls() -> None:
     runtime = Runtime()
     state = AppState(protocols={
         "calls": SimpleNamespace(enabled=True),
@@ -146,8 +146,8 @@ def test_kernel_service_rejects_stock_switch_before_mutating_active_calls() -> N
     state.kernel.provider = KERNEL_HYDRACORE
     service = KernelService(runtime, save_state=lambda _state: None)
 
-    with pytest.raises(ValueError, match="disable or uninstall Calls"):
-        service.switch(state, KERNEL_SINGBOX_EXTENDED)
+    with pytest.raises(ValueError, match="provider"):
+        service.switch(state, "sing-box-extended")
 
     assert runtime.prepared is None
     assert state.kernel.provider == KERNEL_HYDRACORE
@@ -184,8 +184,14 @@ def test_kernel_candidate_error_redacts_secret_detail(tmp_path) -> None:
     )
     runtime._inspect_binary = lambda *_args, **_kwargs: KernelRuntimeStatus(
         True,
-        provider=KERNEL_SINGBOX_EXTENDED,
+        provider=KERNEL_HYDRACORE,
     )
+    runtime._capability_payload = lambda *_args: {
+        "api_version": 2,
+        "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
+        "features": {"call_vk_parasite": True},
+        "protocols": {"call_modes": ["vk_parasite"]},
+    }
     runtime._run = lambda *_args: SimpleNamespace(
         returncode=1,
         stdout="",
@@ -193,7 +199,7 @@ def test_kernel_candidate_error_redacts_secret_detail(tmp_path) -> None:
     )
 
     with pytest.raises(RuntimeError) as failure:
-        runtime._validate_candidate(tmp_path / "sing-box", KERNEL_SINGBOX_EXTENDED)
+        runtime._validate_candidate(tmp_path / "sing-box", KERNEL_HYDRACORE)
 
     assert "hunter2" not in str(failure.value)
     assert str(failure.value) == "candidate rejected the active configuration"
