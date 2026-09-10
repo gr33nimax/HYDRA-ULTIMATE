@@ -301,6 +301,36 @@ def test_generate_shadowrocket_sub_replaces_naive_https_link():
     ]
 
 
+def test_shadowrocket_subscription_converts_only_snell_to_cipher_password():
+    plugin = MockTransport()
+    plugin.client_links = MagicMock(return_value=[
+        "snell://secret@example.com:32000?version=5&udp-relay=true#Snell",
+    ])
+    user = _make_user("alice@example.com")
+    state = _make_state([user])
+
+    generic = base64.b64decode(
+        generate_base64_sub(user, state, plugins=_plugins(plugin)),
+    ).decode().strip()
+    shadowrocket = base64.b64decode(
+        generate_shadowrocket_sub(user, state, plugins=_plugins(plugin)),
+    ).decode().strip()
+    parsed = urllib.parse.urlsplit(shadowrocket)
+
+    assert generic == (
+        "snell://secret@example.com:32000?version=5&udp-relay=true"
+        "#alice%40example.com%20Snell"
+    )
+    assert base64.b64decode(parsed.netloc).decode() == (
+        "chacha20-ietf-poly1305:secret@example.com:32000"
+    )
+    assert urllib.parse.parse_qs(parsed.query) == {
+        "version": ["4"],
+        "udp-relay": ["1"],
+    }
+    assert urllib.parse.unquote(parsed.fragment) == "alice@example.com Snell"
+
+
 def test_subscription_handler_routes_shadowrocket_format_to_native_builder():
     user = _make_user("alice@example.com")
     state = _make_state([user])

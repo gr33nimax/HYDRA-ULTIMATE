@@ -1,6 +1,7 @@
 """Client profiles and subscription links for TrustTunnel."""
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
 
 from hydra.core.state_models import PluginState, User
@@ -96,6 +97,62 @@ def build_client_outbound(
     return outbound
 
 
+def _varint(value: int) -> bytes:
+    if not 0 <= value < 2**62:
+        raise ValueError("TrustTunnel TLV integer is out of range")
+    for size, limit, prefix in ((1, 2**6, 0), (2, 2**14, 0x4000),
+                                (4, 2**30, 0x80000000), (8, 2**62, 0xC000000000000000)):
+        if value < limit:
+            return (prefix | value).to_bytes(size, "big")
+    raise AssertionError("unreachable")
+
+
+def _tlv(tag: int, value: bytes) -> bytes:
+    return _varint(tag) + _varint(len(value)) + value
+
+
+def deep_link(
+    *,
+    hostname: str,
+    address: str,
+    username: str,
+    password: str,
+    upstream_protocol: str,
+    name: str,
+) -> str:
+    """Encode the official ``tt://?<base64url-TLV>`` endpoint URI."""
+    protocol = {"h2": 1, "h3": 2}[upstream_protocol]
+    fields = (
+        (0x00, _varint(1)),
+        (0x01, hostname.encode("utf-8")),
+        (0x05, username.encode("utf-8")),
+        (0x06, password.encode("utf-8")),
+        (0x02, address.encode("utf-8")),
+        (0x09, _varint(protocol)),
+        (0x0C, name.encode("utf-8")),
+    )
+    payload = b"".join(_tlv(tag, value) for tag, value in fields)
+    return "tt://?" + base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _link_for_transport(
+    *,
+    domain: str,
+    username: str,
+    password: str,
+    quic: bool,
+) -> str:
+    suffix = " TrustTunnel QUIC" if quic else " TrustTunnel"
+    return deep_link(
+        hostname=domain,
+        address=f"{domain}:443",
+        username=username,
+        password=password,
+        upstream_protocol="h3" if quic else "h2",
+        name=f"{username}{suffix}",
+    )
+
+
 def client_link(
     user: User,
     state: PluginStateAccess,
@@ -103,28 +160,17 @@ def client_link(
     derive_username: Callable[[User], str],
     derive_password: Callable[[str], str],
     transport_of: Callable[[PluginState | None], str],
-    quote: Callable[..., str],
 ) -> str:
-    """Return the primary link; TCP remains primary for ``both``."""
+    """Return the primary deep link; TCP remains primary for ``both``."""
     protocol = state.protocols.get("trusttunnel")
-    domain = (
-        protocol.config.get("domain", "")
-        if protocol and protocol.config
-        else ""
-    )
+    domain = protocol.config.get("domain", "") if protocol and protocol.config else ""
     if not domain:
         return ""
-
-    raw_username = derive_username(user)
-    username = quote(raw_username, safe="")
-    password = quote(derive_password(user.uuid), safe="")
-    transport = transport_of(protocol)
-    alpn = "h3" if transport == "quic" else "h2"
-    suffix = " TrustTunnel QUIC" if transport == "quic" else ""
-    tag = quote(f"{raw_username}{suffix}", safe="")
-    return (
-        f"tt://{username}:{password}@{domain}:443"
-        f"?security=tls&sni={domain}&alpn={alpn}#{tag}"
+    return _link_for_transport(
+        domain=domain,
+        username=derive_username(user),
+        password=derive_password(user.uuid),
+        quic=transport_of(protocol) == "quic",
     )
 
 
@@ -135,7 +181,6 @@ def client_links(
     derive_username: Callable[[User], str],
     derive_password: Callable[[str], str],
     transport_of: Callable[[PluginState | None], str],
-    quote: Callable[..., str],
 ) -> list[str]:
     protocol = state.protocols.get("trusttunnel")
     domain = (
@@ -146,21 +191,16 @@ def client_links(
     if not domain:
         return []
 
-    raw_username = derive_username(user)
-    username = quote(raw_username, safe="")
-    password = quote(derive_password(user.uuid), safe="")
+    username = derive_username(user)
+    password = derive_password(user.uuid)
     transport = transport_of(protocol)
     links = []
     if transport in ("tcp", "both"):
-        tag = quote(raw_username, safe="")
-        links.append(
-            f"tt://{username}:{password}@{domain}:443"
-            f"?security=tls&sni={domain}&alpn=h2#{tag}"
-        )
+        links.append(_link_for_transport(
+            domain=domain, username=username, password=password, quic=False,
+        ))
     if transport in ("quic", "both"):
-        tag = quote(f"{raw_username} TrustTunnel QUIC", safe="")
-        links.append(
-            f"tt://{username}:{password}@{domain}:443"
-            f"?security=tls&sni={domain}&alpn=h3#{tag}"
-        )
+        links.append(_link_for_transport(
+            domain=domain, username=username, password=password, quic=True,
+        ))
     return links

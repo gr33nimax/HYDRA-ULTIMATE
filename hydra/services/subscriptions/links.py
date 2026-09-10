@@ -13,6 +13,7 @@ from hydra.services.subscriptions.serialization import (
 )
 from hydra.services.subscriptions.shadowrocket import (
     build_shadowrocket_https_link,
+    build_shadowrocket_snell_link,
 )
 
 
@@ -213,6 +214,8 @@ def generate_shadowrocket_sub(
         links.append(
             build_shadowrocket_https_link(link)
             if scheme == "naive+https"
+            else build_shadowrocket_snell_link(link)
+            if scheme == "snell"
             else link
         )
     payload = "\n".join(links) + "\n"

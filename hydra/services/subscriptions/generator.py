@@ -48,6 +48,7 @@ from hydra.services.subscriptions.serialization import (
 )
 from hydra.services.subscriptions.shadowrocket import (
     build_shadowrocket_https_link,
+    build_shadowrocket_snell_link,
 )
 from hydra.services.subscriptions.server import (
     SubscriptionHandler,
@@ -60,6 +61,7 @@ __all__ = [
     "SubscriptionPluginAccess",
     "SubscriptionPluginService",
     "build_shadowrocket_https_link",
+    "build_shadowrocket_snell_link",
     "clean_link_to_sn",
     "find_any_cert",
     "generate_awg_sn_link",
