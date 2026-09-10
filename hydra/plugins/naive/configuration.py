@@ -59,6 +59,7 @@ def render_caddyfile(
 {auth_lines}            hide_ip
             hide_via
 {probe_line}            upstream socks5://127.0.0.1:1080
+            passthrough_uot
     }}
     file_server {{
         root {decoy_dir.as_posix()}

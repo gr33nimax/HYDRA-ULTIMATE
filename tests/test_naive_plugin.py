@@ -207,6 +207,7 @@ def test_build_caddyfile_basic():
     assert "auto_https disable_redirects" in caddyfile
     assert "protocols h1 h2 h3" in caddyfile
     assert "upstream socks5://127.0.0.1:1080" in caddyfile
+    assert "passthrough_uot" in caddyfile
 
 
 def test_build_caddyfile_fake_site():

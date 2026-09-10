@@ -258,7 +258,7 @@ def install(
             "--with",
             (
                 "github.com/caddyserver/forwardproxy@caddy2="
-                "github.com/Michaol/forwardproxy-naive@caddy2"
+                "github.com/aUsernameWoW/forwardproxy@naive"
             ),
         ]
     build_args += ["--output", str(pending_binary)]
@@ -266,26 +266,6 @@ def install(
     result = build(build_args, env)
     if result is None:
         return False
-    if result.returncode != 0 and need_naive_forward_proxy:
-        result = build(
-            [
-                *base_build,
-                "--with",
-                "github.com/caddyserver/forwardproxy@caddy2",
-                "--output",
-                str(pending_binary),
-            ],
-            env,
-        )
-        if result is None:
-            return False
-    if result.returncode != 0 and need_naive_forward_proxy:
-        result = build(
-            [*base_build, "--output", str(pending_binary)],
-            env,
-        )
-        if result is None:
-            return False
     if result.returncode != 0:
         print(f"  [Caddy L4 build error] return code: {result.returncode}")
         print(f"  Error output:\n{result.stderr or result.stdout or ''}")
