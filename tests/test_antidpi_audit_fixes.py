@@ -759,9 +759,9 @@ def test_address_details_query_answers_for_any_tracked_address(tmp_path):
          patch.object(plugin, "_clock", return_value=10000.0):
         plugin._save_state(_watch_state())
         details = plugin.address_details("198.51.100.26")
-    assert details["watch"]["ip"] == "198.51.100.26"
-    assert plugin.address_details("203.0.113.1")["tracked"] is False
-    assert plugin.address_details("not-an-ip") == {"valid": False}
+        assert details["watch"]["ip"] == "198.51.100.26"
+        assert plugin.address_details("203.0.113.1")["tracked"] is False
+        assert plugin.address_details("not-an-ip") == {"valid": False}
 
 
 def test_card_does_not_claim_no_evidence_beyond_the_list_limit():
