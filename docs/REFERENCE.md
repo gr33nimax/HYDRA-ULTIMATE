@@ -90,6 +90,7 @@ Auto endpoint распознаёт NekoBox, Shadowrocket и Throne по `User-Ag
 ручного выбора доступны `format=nekobox`, `format=shadowrocket`,
 `format=throne` и `format=singbox`. Shadowrocket получает Naive TCP как
 `https://` с `alpn=http/1.1` и `http2://` с `alpn=h2`, Naive QUIC как `http3://` с `alpn=h3`,
+TCP-варианты включают `uot=2` и `tfo=1`, а все три варианта — `padding=1`,
 TrustTunnel с official TLV, а Snell сохраняет собственный `obfs` без
 перезаписи формата подписки.
 

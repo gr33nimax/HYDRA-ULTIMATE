@@ -37,6 +37,7 @@ def test_naive_http3_keeps_custom_tls_name_and_unicode_credentials():
     assert parsed.scheme == "http3"
     assert parse_qs(parsed.query) == {
         "peer": ["proxy.example.com"], "alpn": ["h3"], "remarks": ["QUIC"],
+        "padding": ["1"],
     }
     assert base64.urlsafe_b64decode(parsed.netloc + "=" * (-len(parsed.netloc) % 4)).decode() == (
         "user:пароль@[2001:db8::1]:8443"

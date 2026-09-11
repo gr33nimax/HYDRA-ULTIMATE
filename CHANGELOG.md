@@ -9,6 +9,7 @@
   cookies.
 - Shadowrocket subscription output now preserves each transport's real shape:
   Naive TCP uses HTTPS with `http/1.1` and `h2`, Naive QUIC uses HTTP/3 `h3`,
+  TCP variants enable UoT v2 and TCP Fast Open, and all variants enable padding.
   TrustTunnel uses official TLV, and Snell keeps its `obfs`. Naive is built
   from the pinned Caddy fork; replacement validates the actual binary and
   keeps a backup. The new `naive-caddy.yml` CI workflow covers real-binary

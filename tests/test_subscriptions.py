@@ -303,6 +303,13 @@ def test_generate_shadowrocket_sub_replaces_naive_https_link():
         query = urllib.parse.parse_qs(parsed_variant.query)
         assert query["alpn"] == [alpn]
         assert query["peer"] == ["example.com"]
+        assert query["padding"] == ["1"]
+        if scheme == "http3":
+            assert "uot" not in query
+            assert "tfo" not in query
+        else:
+            assert query["uot"] == ["2"]
+            assert query["tfo"] == ["1"]
         encoded_auth = parsed_variant.netloc
         assert base64.urlsafe_b64decode(encoded_auth + "=" * (-len(encoded_auth) % 4)).decode() == (
             "user:password@example.com:443"

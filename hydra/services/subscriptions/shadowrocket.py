@@ -43,9 +43,16 @@ def _http_link(link: str, scheme: str, alpn: str, suffix: str = "") -> str:
         ).decode("ascii").rstrip("=")
         remarks = urllib.parse.unquote(parsed.fragment) or "NaiveProxy"
         source_query = urllib.parse.parse_qs(parsed.query)
+        parameters = {
+            "remarks": remarks + suffix,
+            "alpn": alpn,
+            "peer": source_query.get("sni", [hostname])[0],
+            "padding": "1",
+        }
+        if scheme != "http3":
+            parameters.update({"uot": "2", "tfo": "1"})
         query = urllib.parse.urlencode(
-            {"remarks": remarks + suffix, "alpn": alpn,
-             "peer": source_query.get("sni", [hostname])[0]},
+            parameters,
             quote_via=urllib.parse.quote,
         )
         return f"{scheme}://{encoded}?{query}"
