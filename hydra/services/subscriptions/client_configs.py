@@ -20,6 +20,8 @@ def _links_without_custom_configs(
     user: User,
     state: AppState,
     plugins: SubscriptionPluginAccess,
+    *,
+    for_nekobox: bool = False,
 ) -> list[str]:
     payload = base64.b64decode(
         generate_base64_sub(user, state, plugins=plugins),
@@ -36,8 +38,24 @@ def _links_without_custom_configs(
             parsed.scheme in ("tt", "trusttunnel")
             and query.get("alpn", ["h2"])[0] == "h3"
         )
-        if link and not shadowtls_trojan and not trusttunnel_quic:
-            links.append(link)
+        legacy_awg = (
+            for_nekobox
+            and parsed.scheme == "sn"
+            and parsed.netloc == "awg"
+        )
+        if legacy_awg or not link or shadowtls_trojan or trusttunnel_quic:
+            continue
+        if for_nekobox and parsed.scheme == "wg":
+            query_parts = [
+                "peer_public_key=" + part.removeprefix("public_key=")
+                if part.startswith("public_key=")
+                else part
+                for part in parsed.query.split("&")
+            ]
+            link = urllib.parse.urlunparse(
+                parsed._replace(query="&".join(query_parts)),
+            )
+        links.append(link)
     return links
 
 
@@ -57,7 +75,10 @@ def _transport_config(
     )
     if plugin is None:
         return None
-    return json.loads(plugins.client_config(plugin, user, state))
+    try:
+        return json.loads(plugins.client_config(plugin, user, state))
+    except (json.JSONDecodeError, TypeError):
+        return None
 
 
 def _shadowtls_client_config(
@@ -81,7 +102,7 @@ def _trusttunnel_quic_client_config(
             outbound
             for outbound in source.get("outbounds", [])
             if outbound.get("type") == "trusttunnel"
-            and outbound.get("quic") is True
+            and bool(outbound.get("quic"))
         ),
         None,
     )
@@ -124,7 +145,7 @@ def _pin_trusttunnel_quic_endpoint(
             item
             for item in config.get("outbounds", [])
             if item.get("type") == "trusttunnel"
-            and item.get("quic") is True
+            and bool(item.get("quic"))
         ),
         None,
     )
@@ -241,7 +262,12 @@ def generate_nekobox_sub(
     plugins: SubscriptionPluginAccess,
 ) -> str:
     """Build a NekoBox subscription with complex transports kept atomic."""
-    links = _links_without_custom_configs(user, state, plugins)
+    links = _links_without_custom_configs(
+        user,
+        state,
+        plugins,
+        for_nekobox=True,
+    )
     for name, label in (
         ("shadowtls", "ShadowTLS"),
         ("trusttunnel", "TrustTunnel QUIC"),
