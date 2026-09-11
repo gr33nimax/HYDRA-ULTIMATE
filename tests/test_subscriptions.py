@@ -705,6 +705,15 @@ def test_generate_client_config_mock():
     assert parsed["outbounds"][0]["type"] == "mock"
 
 
+def test_kryo_length_prefixed_string_encoding():
+    from hydra.services.subscriptions.serialization import _serialize_string_len
+
+    assert _serialize_string_len("") == b"\x81"
+    assert _serialize_string_len("abc") == b"\x84abc"
+    assert _serialize_string_len("ä") == b"\x82\xc3\xa4"
+    assert _serialize_string_len("😀") == bytes.fromhex("83eda0bdedb880")
+
+
 def test_generate_awg_sn_link():
     conf = """[Interface]
 PrivateKey = MOaSN+H5tfDmpWIGmv2nXBZwV5NEezzjoDu6mZyvqXI=
@@ -737,7 +746,14 @@ PersistentKeepalive = 25
 
     name = "🇫🇮 AWG 2.0"
     link = generate_awg_sn_link(conf, name)
-    encoded = link.split("?", 1)[1] + "=" * (-len(link.split("?", 1)[1]) % 4)
+    assert link is not None
+    payload = link.split("?", 1)[1]
+    encoded = payload + "=" * (-len(payload) % 4)
     data = zlib.decompress(base64.urlsafe_b64decode(encoded))
-    assert data.endswith(b"\x8d" + name.encode() + b"\x81\x81")
+    # Kryo writes each Java UTF-16 char separately, including surrogate pairs.
+    kryo_name = bytes.fromhex(
+        "eda0bcedb7abeda0bcedb7ae2041574720322e30"
+    )
+    assert data.endswith(b"\x8d" + kryo_name + b"\x81\x81")
+    assert name.encode() not in data
 
