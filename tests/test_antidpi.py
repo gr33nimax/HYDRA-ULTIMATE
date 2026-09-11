@@ -387,7 +387,7 @@ def test_sync_runtime_restarts_enabled_detector_and_reconciles():
     reconcile.assert_called_once_with(state)
 
 
-def test_antidpi_service_allows_outbound_telegram_sockets(tmp_path):
+def test_antidpi_service_allows_xtables_lock_and_outbound_telegram(tmp_path):
     script = tmp_path / "hydra-antidpi.py"
     service = tmp_path / "hydra-antidpi.service"
     with patch("hydra.plugins.antidpi.plugin.SCRIPT_FILE", script), \
@@ -395,6 +395,7 @@ def test_antidpi_service_allows_outbound_telegram_sockets(tmp_path):
         AntiDPIPlugin()._write_service()
 
     unit = service.read_text(encoding="utf-8")
+    assert "ReadWritePaths=/var/lib/hydra /var/log/caddy-l4 /run" in unit
     assert "RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6" in unit
 
 

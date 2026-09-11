@@ -1,5 +1,8 @@
 # Changelog
 
+- AntiDPI's hardened systemd unit now permits the shared xtables lock under
+  `/run`, so its background reconciliation can inspect and restore INPUT rules
+  while `ProtectSystem=strict` remains enabled.
 - Hydra VK Tunnel can recreate its four-link blue/green pool without a full
   reinstall and can schedule pool recreation every 1–24 hours through Sync
   Agent; automatic recreation is opt-in. Global configuration names now have

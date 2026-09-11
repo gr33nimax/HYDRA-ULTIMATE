@@ -227,7 +227,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/hydra /var/log/caddy-l4
+# iptables serializes host-wide updates through /run/xtables.lock.
+ReadWritePaths=/var/lib/hydra /var/log/caddy-l4 /run
 # AF_INET/AF_INET6 are required for outbound Telegram HTTPS notifications.
 RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
 CapabilityBoundingSet=CAP_NET_ADMIN
