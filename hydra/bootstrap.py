@@ -173,6 +173,7 @@ def production_application(
         protocols=protocols,
         plugin_actions=plugin_actions,
         plugin_queries=plugin_queries,
+        calls=calls,
     )
     kernel = KernelService(
         KernelInfrastructure(HOST),

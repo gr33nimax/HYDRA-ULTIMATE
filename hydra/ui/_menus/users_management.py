@@ -14,12 +14,10 @@ from hydra.services.user_access import (
 from hydra.ui._menus.users_common import _application
 from hydra.ui._menus.users_detail import detail_menu_choices
 from hydra.ui._menus.users_devices import open_menu as open_device_menu
-from hydra.ui._menus.users_links import (
-    _artifact_name_key,
-    _artifact_title,
-    _client_artifacts,
-    _show_subscription_links,
-    _user_configs,
+from hydra.ui._menus.users_links import _show_subscription_links, _user_configs
+from hydra.ui._menus.users_names import (
+    edit_configuration_name,
+    edit_global_configuration_names,
 )
 from hydra.ui._menus.users_overview import _add_user, _select_user, _show_users
 from hydra.ui._menus.users_subscription import menu_subscription_server
@@ -78,6 +76,11 @@ def menu_users(state: AppState, app: ApplicationService | None = None):
                     "🔗 Сервер подписок",
                     "Управление фоновым сервисом подписок",
                 ),
+                (
+                    "5",
+                    "✏️ Общие названия конфигураций",
+                    "Названия для всех пользователей",
+                ),
                 ("0", "↩ Назад", ""),
             ],
             "ПОЛЬЗОВАТЕЛИ",
@@ -93,6 +96,8 @@ def menu_users(state: AppState, app: ApplicationService | None = None):
                 _user_detail_menu(state, user, app)
         elif choice == "4":
             menu_subscription_server(state, app)
+        elif choice == "5":
+            edit_global_configuration_names(state, app)
         elif choice == "0":
             return
 def _change_traffic_limit(
@@ -146,41 +151,6 @@ def _change_expiry(
             f"установлен до {new_expiry.strip()}"
         )
     _reconcile_user_access(state, user, app)
-    prompt("Нажмите Enter")
-
-
-def _edit_configuration_name(state: AppState, user: User, app: ApplicationService) -> None:
-    artifacts = _client_artifacts(state, user, app)
-    if not artifacts:
-        warn("Нет доступных конфигураций.")
-        prompt("Нажмите Enter")
-        return
-    choices = [(str(index), _artifact_title(artifact), "")
-               for index, artifact in enumerate(artifacts, start=1)] + [("0", "↩ Назад", "")]
-    selected = menu(choices, "НАЗВАНИЕ КОНФИГУРАЦИИ")
-    if selected == "0":
-        return
-    try:
-        artifact = artifacts[int(selected) - 1]
-    except (ValueError, IndexError):
-        return
-    key = _artifact_name_key(artifact)
-    scope = menu([("1", "Для этого пользователя", "Имеет приоритет над общим названием"),
-                  ("2", "Общее для всех", "Применяется, если нет личного названия"),
-                  ("0", "↩ Назад", "")], "ГДЕ ПРИМЕНИТЬ НАЗВАНИЕ")
-    if scope == "0":
-        return
-    names = user.configuration_name_overrides if scope == "1" else state.configuration_names
-    value = prompt("Новое название (пусто — вернуть стандартное)", default=names.get(key, ""))
-    try:
-        if scope == "1":
-            app.configuration_names.set_user(state, user.email, key, value)
-        else:
-            app.configuration_names.set_global(state, key, value)
-        app.admin.save_state(state)
-        success("Название конфигурации сохранено.")
-    except ValueError as exc:
-        error(str(exc))
     prompt("Нажмите Enter")
 
 
@@ -297,7 +267,7 @@ def _user_detail_menu(
                 success("Счётчик трафика пользователя обнулён.")
                 prompt("Нажмите Enter")
         elif choice.upper() == "N":
-            _edit_configuration_name(state, user, app)
+            edit_configuration_name(state, user, app)
         elif choice == "0":
             return
 

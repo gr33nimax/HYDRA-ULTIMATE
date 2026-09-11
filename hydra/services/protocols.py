@@ -294,7 +294,10 @@ class ProtocolService:
         return {
             plugin.meta.name
             for plugin in self.enabled(state, category)
-            if plugin.meta.capabilities.subscription_enabled
+            if (
+                plugin.meta.capabilities.subscription_enabled
+                or plugin.meta.capabilities.hydra_v2_subscription_enabled
+            )
         }
 
     def manual_client_artifacts(

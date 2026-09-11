@@ -38,6 +38,14 @@ def _status_panel(state: AppState, app: ApplicationService) -> None:
             ("Режим", getattr(status, "native_mode", "vk_parasite")),
             ("Пул", "готов" if status.native_pool_ready else "отсутствует"),
             ("VK-звонков", str(getattr(status, "room_count", 0))),
+            (
+                "Автопересоздание",
+                "включено" if getattr(status, "pool_auto_refresh", False) else "выключено",
+            ),
+            (
+                "Интервал пула",
+                f"{getattr(status, 'pool_refresh_interval_seconds', 86_400) // 3600} ч",
+            ),
             ("Creator", "установлен" if getattr(status, "creator_installed", False) else "не установлен"),
             ("VK cookies", "готовы" if getattr(status, "cookies_ready", False) else "нужны"),
         ],
@@ -69,6 +77,28 @@ def _import_cookies(state: AppState, app: ApplicationService) -> None:
     )
 
 
+def _set_pool_interval(state: AppState, app: ApplicationService) -> None:
+    raw = prompt("Интервал автопересоздания пула, часов (1–24): ").strip()
+    try:
+        hours = int(raw)
+    except ValueError:
+        error("Введите целое число от 1 до 24")
+        _pause()
+        return
+    _show_result(
+        app.calls.set_pool_refresh_interval(state, hours * 3600),
+        f"Интервал автопересоздания: {hours} ч",
+    )
+
+
+def _toggle_pool_auto(state: AppState, app: ApplicationService) -> None:
+    enabled = bool(app.calls.status(state).pool_auto_refresh)
+    _show_result(
+        app.calls.set_pool_auto_refresh(state, not enabled),
+        f"Автопересоздание {'выключено' if enabled else 'включено'}",
+    )
+
+
 def _menu_options(*, installed: bool) -> list[tuple[str, str, str]]:
     if not installed:
         return [
@@ -81,6 +111,9 @@ def _menu_options(*, installed: bool) -> list[tuple[str, str, str]]:
         ("2", "📥 Импортировать VK cookies", "Загрузить локальный JSON для Hydra VK Tunnel"),
         ("3", "📄 Показать admin-профиль", "Секретный клиентский JSON"),
         ("4", "🔢 Число workers", "4 / 8 / 12 / 16 / 20"),
+        ("5", "♻️ Пересоздать VK-пул", "Blue/green замена с rollback"),
+        ("6", "🔄 Переключить автопересоздание", "Проверка каждые 5 минут"),
+        ("7", "⏱ Интервал автопересоздания", "От 1 до 24 часов"),
         ("9", "❌ Удалить", "Удалить Calls и сохранённые join-links"),
         ("0", "↩ Назад", ""),
     ]
@@ -106,6 +139,16 @@ def _dispatch(choice: str, state: AppState, app: ApplicationService) -> bool:
             _pause()
         else:
             _show_result(app.calls.set_workers(state, count), "Число workers применено")
+    elif choice == "5" and desired.installed:
+        if confirm("Пересоздать VK-пул без переустановки Hydra VK Tunnel?"):
+            _show_result(
+                app.calls.rotate_native_vk(state),
+                "VK-пул пересоздан",
+            )
+    elif choice == "6" and desired.installed:
+        _toggle_pool_auto(state, app)
+    elif choice == "7" and desired.installed:
+        _set_pool_interval(state, app)
     elif choice == "9" and desired.installed:
         if confirm("Удалить Calls и сохранённые join-links?"):
             removed = _show_result(

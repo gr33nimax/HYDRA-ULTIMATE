@@ -7,7 +7,7 @@ import urllib.parse
 
 def build_shadowrocket_https_link(link: str) -> str:
     """Convert a Naive HTTPS URI to Shadowrocket's HTTPS proxy scheme."""
-    return _http_link(link, "https", "http/1.1")
+    return _http_link(link, "https")
 
 
 def build_shadowrocket_naive_links(link: str) -> list[str]:
@@ -16,14 +16,14 @@ def build_shadowrocket_naive_links(link: str) -> list[str]:
     if scheme == "naive+https":
         return [
             build_shadowrocket_https_link(link),
-            _http_link(link, "http2", "h2", " HTTP/2"),
+            _http_link(link, "http2", " HTTP/2"),
         ]
     if scheme == "naive+quic":
-        return [_http_link(link, "http3", "h3")]
+        return [_http_link(link, "http3")]
     return [link]
 
 
-def _http_link(link: str, scheme: str, alpn: str, suffix: str = "") -> str:
+def _http_link(link: str, scheme: str, suffix: str = "") -> str:
     try:
         parsed = urllib.parse.urlsplit(link)
         source_scheme = "naive+quic" if scheme == "http3" else "naive+https"
@@ -42,11 +42,8 @@ def _http_link(link: str, scheme: str, alpn: str, suffix: str = "") -> str:
             credentials.encode("utf-8"),
         ).decode("ascii").rstrip("=")
         remarks = urllib.parse.unquote(parsed.fragment) or "NaiveProxy"
-        source_query = urllib.parse.parse_qs(parsed.query)
         parameters = {
             "remarks": remarks + suffix,
-            "alpn": alpn,
-            "peer": source_query.get("sni", [hostname])[0],
             "padding": "1",
         }
         if scheme != "http3":

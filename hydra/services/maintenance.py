@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from hydra.core.state_models import AppState
+from hydra.services.calls_contracts import CALLS_POOL_AUTO_FLAG, CallOperations
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,7 @@ class MaintenanceJob:
     apply_on_success: bool
     owner: str = "plugin"
     key: str = ""
+    enabled_by_default: bool = True
 
 
 @dataclass(frozen=True)
@@ -75,15 +77,67 @@ class MaintenanceService:
     protocols: ProtocolMaintenanceAccess
     plugin_actions: ActionAccess
     plugin_queries: QueryAccess
+    calls: CallOperations | None = None
 
     def jobs(self) -> list[MaintenanceJob]:
-        return self.protocols.maintenance_jobs()
+        jobs = self.protocols.maintenance_jobs()
+        if self.calls is not None:
+            jobs.append(MaintenanceJob(
+                plugin_name="calls",
+                action="rotate_native_vk",
+                title="Hydra VK Tunnel: автопересоздание пула",
+                description="Создавать новый blue/green VK-пул по интервалу",
+                due_query="pool_rotation_due",
+                enabled_flag=CALLS_POOL_AUTO_FLAG,
+                apply_on_success=False,
+                owner="application",
+                key="calls.pool",
+                enabled_by_default=False,
+            ))
+        return jobs
 
     def run(self, state: AppState, forced: bool) -> list[MaintenanceOutcome]:
         outcomes: list[MaintenanceOutcome] = []
         for job in self.jobs():
-            outcomes.append(self._run_plugin_job(state, job, forced))
+            outcomes.append(
+                self._run_calls_job(state, job, forced)
+                if job.owner == "application" and job.key == "calls.pool"
+                else self._run_plugin_job(state, job, forced)
+            )
         return outcomes
+
+    def _run_calls_job(
+        self,
+        state: AppState,
+        job: MaintenanceJob,
+        forced: bool,
+    ) -> MaintenanceOutcome:
+        desired = state.protocols.get("calls")
+        if not (desired and desired.enabled):
+            return MaintenanceOutcome(job, "plugin_disabled")
+        if not forced and not state.install.get(
+            job.enabled_flag,
+            job.enabled_by_default,
+        ):
+            return MaintenanceOutcome(job, "disabled")
+        try:
+            if not self.calls or not self.calls.pool_rotation_due(
+                state,
+                forced=forced,
+            ):
+                return MaintenanceOutcome(job, "fresh")
+            result = self.calls.rotate_native_vk(state)
+            return MaintenanceOutcome(
+                job,
+                "success" if result else "failed",
+                "" if result or not result.error else result.error.message,
+            )
+        except Exception as exc:
+            return MaintenanceOutcome(
+                job,
+                "failed",
+                str(exc) or exc.__class__.__name__,
+            )
 
     def _run_plugin_job(
         self,
@@ -94,7 +148,10 @@ class MaintenanceService:
         desired = state.protocols.get(job.plugin_name)
         if not (desired and desired.enabled):
             return MaintenanceOutcome(job, "plugin_disabled")
-        if not forced and not state.install.get(job.enabled_flag, True):
+        if not forced and not state.install.get(
+            job.enabled_flag,
+            job.enabled_by_default,
+        ):
             return MaintenanceOutcome(job, "disabled")
         try:
             if job.due_query and not self.plugin_queries.execute(

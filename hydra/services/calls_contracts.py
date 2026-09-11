@@ -9,6 +9,9 @@ from hydra.core.errors import ServiceResult
 from hydra.core.state_models import AppState
 
 
+CALLS_POOL_AUTO_FLAG = "sync_calls_vk_pool_enabled"
+
+
 @dataclass(frozen=True)
 class CallsStatus:
     feature_supported: bool
@@ -19,6 +22,9 @@ class CallsStatus:
     native_running: bool
     native_mode: str = "vk_parasite"
     room_count: int = 0
+    pool_auto_refresh: bool = False
+    pool_refresh_interval_seconds: int = 86_400
+    pool_refreshed_at: str = ""
 
     @property
     def native_pool_ready(self) -> bool:
@@ -51,6 +57,9 @@ class CallOperations(Protocol):
     def native_client_profile(self, state: AppState) -> CallClientProfile: ...
     def set_workers(self, state: AppState, count: int) -> ServiceResult: ...
     def import_vk_cookies(self, state: AppState, source_path: str) -> ServiceResult: ...
+    def set_pool_auto_refresh(self, state: AppState, enabled: bool) -> ServiceResult: ...
+    def set_pool_refresh_interval(self, state: AppState, seconds: int) -> ServiceResult: ...
+    def pool_rotation_due(self, state: AppState, *, forced: bool = False) -> bool: ...
 
 
 class UnavailableCallOperations:
@@ -62,6 +71,7 @@ class CallsRuntime(Protocol):
     def vk_parasite_supported(self) -> bool: ...
     def load_native_join_links(self) -> list[str]: ...
     def load_native_join_tokens(self) -> list[str]: ...
+    def pool_metadata(self) -> dict[str, object]: ...
     def snapshot_native_pool(self) -> object: ...
     def restore_native_pool(self, snapshot: object) -> None: ...
     def ensure_creator_installed(self) -> tuple[bool, str]: ...
@@ -88,6 +98,7 @@ class NoopCallOperationLock:
 
 
 __all__ = [
+    "CALLS_POOL_AUTO_FLAG",
     "CallClientProfile",
     "CallOperationLease",
     "CallOperationLock",

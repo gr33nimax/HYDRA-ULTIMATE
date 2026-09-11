@@ -35,3 +35,22 @@ def test_manual_configs_include_global_plugin_artifacts() -> None:
         state,
         PluginCategory.TRANSPORT,
     )
+
+
+def test_manual_configs_include_hydra_vk_tunnel() -> None:
+    protocols = MagicMock()
+    protocols.enabled_subscription_names.return_value = {"calls"}
+    protocols.client_profiles.return_value = []
+    protocols.client_config.return_value = '{"outbounds":[{"type":"call"}]}'
+    protocols.client_links.return_value = []
+    protocols.display_name.return_value = "Hydra VK Tunnel"
+    protocols.manual_client_artifacts.return_value = []
+    app = SimpleNamespace(protocols=protocols)
+    state = AppState()
+    user = User(email="user@example.com", uuid="user-uuid")
+
+    artifacts = _client_artifacts(state, user, app)
+
+    assert [(item.plugin_name, item.display_name) for item in artifacts] == [
+        ("calls", "Hydra VK Tunnel"),
+    ]

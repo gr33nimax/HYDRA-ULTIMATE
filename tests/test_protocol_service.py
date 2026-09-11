@@ -195,9 +195,16 @@ def test_client_profiles_and_subscription_names_are_descriptor_driven():
         description="aggregate",
         subscription_enabled=False,
     )
+    hydra_only = _plugin("hydra-only", PluginCategory.TRANSPORT)
+    hydra_only.meta = PluginMeta(
+        name="hydra-only",
+        description="Hydra v2 only",
+        subscription_enabled=False,
+        hydra_v2_subscription_enabled=True,
+    )
     catalog = Mock()
     catalog.get.return_value = profiled
-    catalog.transports.return_value = [profiled, aggregate_only]
+    catalog.transports.return_value = [profiled, aggregate_only, hydra_only]
     catalog.enhancements.return_value = []
     catalog.security.return_value = []
     invoker = Mock(spec=PluginInvoker)
@@ -207,10 +214,14 @@ def test_client_profiles_and_subscription_names_are_descriptor_driven():
         protocols={
             "profiled": PluginState(enabled=True),
             "aggregate": PluginState(enabled=True),
+            "hydra-only": PluginState(enabled=True),
         },
     )
 
-    assert service.enabled_subscription_names(state) == {"profiled"}
+    assert service.enabled_subscription_names(state) == {
+        "profiled",
+        "hydra-only",
+    }
     assert service.client_profiles(state, "profiled") == [
         {"name": "mobile", "label": "Mobile"},
     ]

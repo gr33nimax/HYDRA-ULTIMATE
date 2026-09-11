@@ -296,13 +296,13 @@ def test_generate_shadowrocket_sub_replaces_naive_https_link():
     assert not any(link.startswith("naive+https://") for link in links)
     assert not any(link.startswith("naive+quic://") for link in links)
     assert any(link.startswith("vless://") for link in links)
-    for scheme, alpn in (("https", "http/1.1"), ("http2", "h2"), ("http3", "h3")):
+    for scheme in ("https", "http2", "http3"):
         parsed_variant = urllib.parse.urlsplit(next(
             link for link in links if link.startswith(f"{scheme}://")
         ))
         query = urllib.parse.parse_qs(parsed_variant.query)
-        assert query["alpn"] == [alpn]
-        assert query["peer"] == ["example.com"]
+        assert "alpn" not in query
+        assert "peer" not in query
         assert query["padding"] == ["1"]
         if scheme == "http3":
             assert "uot" not in query

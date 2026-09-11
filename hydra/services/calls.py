@@ -5,6 +5,7 @@ import copy
 import json
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -13,6 +14,7 @@ from hydra.contracts.calls_configuration import (
     CALL_COUNT,
     DEFAULT_CALL_PORT,
     call_mode,
+    pool_refresh_interval,
     workers as configured_workers,
     vk_parasite_outbound,
     public_endpoint,
@@ -23,6 +25,7 @@ from hydra.core.state_kernel_models import KERNEL_HYDRACORE
 from hydra.core.state_models import AppState, get_protocol
 from hydra.services.configuration import restore_state_in_place
 from hydra.services.calls_contracts import (
+    CALLS_POOL_AUTO_FLAG,
     CallClientProfile,
     CallOperationLease,
     CallOperationLock,
@@ -91,6 +94,7 @@ class CallsService:
         links = self.runtime.load_native_join_links()
         pool_ready = bool(links)
         creator_status = self.creator.availability("vk")
+        metadata = self.runtime.pool_metadata()
         return CallsStatus(
             feature_supported=self._vk_parasite_supported(),
             creator_installed=creator_status.installed,
@@ -100,6 +104,13 @@ class CallsService:
             native_running=bool(enabled and pool_ready and self.runtime.singbox_running()),
             native_mode=mode,
             room_count=len(links),
+            pool_auto_refresh=bool(
+                state.install.get(CALLS_POOL_AUTO_FLAG, False),
+            ),
+            pool_refresh_interval_seconds=pool_refresh_interval(
+                desired.config if desired else {},
+            ),
+            pool_refreshed_at=str(metadata.get("refreshed_at", "")),
         )
 
     def enable_native_vk(self, state: AppState) -> ServiceResult:
@@ -116,6 +127,69 @@ class CallsService:
         if desired is None or not desired.enabled:
             return failed_result(ValueError("native VK Calls are not enabled"))
         return self._native_transition(state, rotate=True)
+
+    def set_pool_auto_refresh(
+        self,
+        state: AppState,
+        enabled: bool,
+    ) -> ServiceResult:
+        if type(enabled) is not bool:
+            return failed_result(
+                ValueError("pool auto refresh flag must be boolean"),
+            )
+        before = state.install.get(CALLS_POOL_AUTO_FLAG)
+        try:
+            state.install[CALLS_POOL_AUTO_FLAG] = enabled
+            self.save_state(state)
+            return ServiceResult(True, value={"enabled": enabled})
+        except Exception as exc:
+            if before is None:
+                state.install.pop(CALLS_POOL_AUTO_FLAG, None)
+            else:
+                state.install[CALLS_POOL_AUTO_FLAG] = before
+            return failed_result(exc)
+
+    def set_pool_refresh_interval(
+        self,
+        state: AppState,
+        seconds: int,
+    ) -> ServiceResult:
+        desired = state.protocols.get("calls")
+        if desired is None or not desired.installed:
+            return failed_result(ValueError("native VK Calls are not installed"))
+        before = copy.deepcopy(desired.config)
+        try:
+            desired.config["pool_refresh_interval_seconds"] = seconds
+            normalized = pool_refresh_interval(desired.config)
+            self.save_state(state)
+            return ServiceResult(True, value={"seconds": normalized})
+        except Exception as exc:
+            desired.config = before
+            return failed_result(exc)
+
+    def pool_rotation_due(
+        self,
+        state: AppState,
+        *,
+        forced: bool = False,
+    ) -> bool:
+        desired = state.protocols.get("calls")
+        if desired is None or not desired.enabled:
+            return False
+        if forced or len(self.runtime.load_native_join_links()) != CALL_COUNT:
+            return True
+        refreshed_at = self.runtime.pool_metadata().get("refreshed_at")
+        if not refreshed_at:
+            return True
+        try:
+            refreshed = datetime.fromisoformat(str(refreshed_at))
+            if refreshed.tzinfo is None:
+                refreshed = refreshed.replace(tzinfo=timezone.utc)
+            return (
+                datetime.now(timezone.utc) - refreshed
+            ).total_seconds() >= pool_refresh_interval(desired.config)
+        except (TypeError, ValueError):
+            return True
 
     def set_workers(self, state: AppState, count: int) -> ServiceResult:
         lease, failure = self._begin_operation()
@@ -403,6 +477,7 @@ class CallsService:
 
 
 __all__ = [
+    "CALLS_POOL_AUTO_FLAG",
     "CallClientProfile",
     "CallOperationLock",
     "CallOperations",

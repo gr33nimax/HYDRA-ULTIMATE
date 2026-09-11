@@ -52,6 +52,16 @@ class CallsInfrastructure:
             return []
         return tokens if len(tokens) <= 4 and len(set(tokens)) == len(tokens) else []
 
+    def pool_metadata(self) -> dict[str, object]:
+        source = self.pool_source
+        if source is None:
+            return {}
+        try:
+            value = source.pool_metadata()
+            return value if isinstance(value, dict) else {}
+        except (AttributeError, OSError, TypeError, ValueError):
+            return {}
+
     def ensure_creator_installed(self) -> tuple[bool, str]:
         source = self.pool_source
         if source is None:

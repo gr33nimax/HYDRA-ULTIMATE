@@ -1,5 +1,12 @@
 # Changelog
 
+- Hydra VK Tunnel can recreate its four-link blue/green pool without a full
+  reinstall and can schedule pool recreation every 1–24 hours through Sync
+  Agent; automatic recreation is opt-in. Global configuration names now have
+  their own TUI screen, personal names stay in the user card, and Hydra VK
+  Tunnel appears in both lists. Shadowrocket Naive `https://`, `http2://` and
+  `http3://` links omit the redundant `peer` and `alpn` query parameters that
+  prevented its HTTPS parser from importing the profile.
 - Kernel / Calls / qWDTT consolidation: HYDRA now uses only the Hydracore VPS
   debug channel; Sing-Box Extended selection and installation are removed.
   Hydra VK Tunnel owns the Creator runtime and its fixed four-room pool. Its

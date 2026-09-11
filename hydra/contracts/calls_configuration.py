@@ -11,6 +11,9 @@ CALL_COUNT = 4
 DEFAULT_WORKERS = 4
 WORKER_COUNTS = (4, 8, 12, 16, 20)
 DEFAULT_PEER_READ_QUEUE_PACKETS = 512
+DEFAULT_POOL_REFRESH_INTERVAL = 86_400
+MIN_POOL_REFRESH_INTERVAL = 3_600
+MAX_POOL_REFRESH_INTERVAL = 86_400
 
 
 class CallsProtocolState(Protocol):
@@ -153,6 +156,16 @@ def workers(config: dict) -> int:
     return value
 
 
+def pool_refresh_interval(config: dict) -> int:
+    return _integer(
+        config,
+        "pool_refresh_interval_seconds",
+        DEFAULT_POOL_REFRESH_INTERVAL,
+        MIN_POOL_REFRESH_INTERVAL,
+        MAX_POOL_REFRESH_INTERVAL,
+    )
+
+
 def vk_parasite_inbound(
     state: CallsStateAccess,
     user_password: Callable[[CallsUser], str],
@@ -256,13 +269,17 @@ __all__ = [
     "CALL_MODE_VK_PARASITE",
     "CALL_COUNT",
     "DEFAULT_CALL_PORT",
+    "DEFAULT_POOL_REFRESH_INTERVAL",
     "DEFAULT_WORKERS",
     "DEFAULT_PEER_READ_QUEUE_PACKETS",
+    "MAX_POOL_REFRESH_INTERVAL",
+    "MIN_POOL_REFRESH_INTERVAL",
     "WORKER_COUNTS",
     "call_mode",
     "workers",
     "vk_parasite_inbound",
     "vk_parasite_outbound",
     "peer_read_queue_packets",
+    "pool_refresh_interval",
     "public_endpoint",
 ]

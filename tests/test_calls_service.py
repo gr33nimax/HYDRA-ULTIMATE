@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -24,6 +25,7 @@ class Runtime:
         self.cookie_import_error: Exception | None = None
         self.imported_cookie_path: Path | None = None
         self.legacy_join_removed = False
+        self.metadata: dict[str, object] = {}
 
     def vk_parasite_supported(self):
         return self.multi
@@ -41,6 +43,9 @@ class Runtime:
 
     def load_native_join_tokens(self):
         return list(self.tokens)
+
+    def pool_metadata(self):
+        return dict(self.metadata)
 
     def snapshot_native_pool(self):
         return (list(self.links), list(self.tokens))
@@ -213,6 +218,32 @@ def test_set_workers_updates_the_single_calls_configuration_value() -> None:
     assert state.protocols["calls"].config["workers"] == 12
     assert "max_workers_per_session" not in state.protocols["calls"].config
     assert applied == [12]
+
+
+def test_pool_rotation_schedule_is_persisted_and_uses_runtime_timestamp() -> None:
+    runtime = Runtime()
+    runtime.links = [f"https://vk.com/call/join/{index}" for index in range(4)]
+    runtime.metadata["refreshed_at"] = (
+        datetime.now(timezone.utc) - timedelta(hours=2)
+    ).isoformat()
+    state = _state(installed=True, enabled=True)
+    service, _ = _service(runtime)
+
+    assert service.set_pool_refresh_interval(state, 3600)
+    assert service.set_pool_auto_refresh(state, True)
+    assert service.pool_rotation_due(state) is True
+    assert service.status(state).pool_auto_refresh is True
+    assert service.status(state).pool_refresh_interval_seconds == 3600
+
+
+def test_pool_refresh_interval_rejects_values_outside_one_to_24_hours() -> None:
+    runtime = Runtime()
+    state = _state(installed=True, enabled=True)
+    service, _ = _service(runtime)
+
+    assert not service.set_pool_refresh_interval(state, 3599)
+    assert not service.set_pool_refresh_interval(state, 86_401)
+    assert "pool_refresh_interval_seconds" not in state.protocols["calls"].config
 
 
 def test_cookie_import_is_available_before_calls_installation() -> None:

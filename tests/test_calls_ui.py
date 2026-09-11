@@ -138,6 +138,8 @@ def test_calls_status_uses_minimal_protocol_panel(monkeypatch) -> None:
             ("Режим", "vk_parasite"),
             ("Пул", "готов"),
             ("VK-звонков", "4"),
+            ("Автопересоздание", "выключено"),
+            ("Интервал пула", "24 ч"),
             ("Creator", "установлен"),
             ("VK cookies", "готовы"),
         ],
@@ -155,6 +157,9 @@ def test_calls_menu_contains_cookie_import_before_calls_installation() -> None:
         "📥 Импортировать VK cookies",
         "📄 Показать admin-профиль",
         "🔢 Число workers",
+        "♻️ Пересоздать VK-пул",
+        "🔄 Переключить автопересоздание",
+        "⏱ Интервал автопересоздания",
         "❌ Удалить",
         "↩ Назад",
     ]
@@ -180,6 +185,30 @@ def test_calls_tui_has_no_host_or_plugin_runtime_dependencies() -> None:
     assert not any(module.startswith("hydra.plugins") for module in imported)
     assert "HOST" not in names
     assert "subprocess" not in names
+
+
+def test_calls_pool_actions_use_calls_application_service() -> None:
+    state = AppState(
+        protocols={"calls": PluginState(installed=True, enabled=True)},
+    )
+    operations = SimpleNamespace(
+        rotate_native_vk=Mock(return_value=ServiceResult(True)),
+    )
+    app = SimpleNamespace(calls=operations)
+
+    with (
+        patch.object(calls, "confirm", return_value=True),
+        patch.object(calls, "_show_result"),
+        patch.object(calls, "_toggle_pool_auto") as toggle,
+        patch.object(calls, "_set_pool_interval") as interval,
+    ):
+        calls._dispatch("5", state, app)
+        calls._dispatch("6", state, app)
+        calls._dispatch("7", state, app)
+
+    operations.rotate_native_vk.assert_called_once_with(state)
+    toggle.assert_called_once_with(state, app)
+    interval.assert_called_once_with(state, app)
 
 
 def test_creator_install_dispatch_uses_independent_application_port() -> None:
