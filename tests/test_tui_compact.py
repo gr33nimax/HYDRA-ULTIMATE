@@ -9,5 +9,6 @@ def test_menu_is_compact_by_default(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "Действие" in output
     assert "Длинное пояснение" not in output
+    assert "╭" in output
     assert "╔" not in output
-    assert tui.BANNER.count("\n") == 1
+    assert "ULTIMATE" in tui.BANNER

@@ -194,13 +194,48 @@ def _wrap_line(line: str, max_w: int) -> list[tuple[str, int]]:
     return wrapped
 
 
+def _frame_top(title_text: str = "") -> str:
+    if not title_text:
+        return f"{INDENT}{CYAN}╭{'─' * PANEL_W}╮{NC}"
+    title_fit, title_w = _fit_line(title_text, PANEL_W - 3)
+    return (
+        f"{INDENT}{CYAN}╭─ {BOLD}{WHITE}{title_fit}{NC}{CYAN} "
+        f"{'─' * (PANEL_W - title_w - 3)}╮{NC}"
+    )
+
+
+def _frame_row(line: str, *, wrap: bool = False) -> list[str]:
+    width = PANEL_W - 2
+    fitted = _wrap_line(line, width) if wrap else [_fit_line(line, width)]
+    return [
+        f"{INDENT}{CYAN}│{NC} {value}{' ' * (width - line_w)} {CYAN}│{NC}"
+        for value, line_w in fitted
+    ]
+
+
+def _frame_rule() -> str:
+    return f"{INDENT}{CYAN}├{'─' * PANEL_W}┤{NC}"
+
+
+def _frame_bottom() -> str:
+    return f"{INDENT}{CYAN}╰{'─' * PANEL_W}╯{NC}"
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  Баннер
 # ═════════════════════════════════════════════════════════════════════════════
 
-BANNER = (
-    f"\n{INDENT}{BOLD}{CYAN}HYDRA{NC} "
-    f"{DIM}v{__version__} · Multi-Protocol Proxy Manager{NC}"
+_banner_left = f"{BOLD}{CYAN}HYDRA{NC} {DIM}v{__version__}{NC}"
+_banner_right = f"{MAGENTA}{BOLD}ULTIMATE{NC}"
+_banner_gap = max(1, PANEL_W - _width(_banner_left) - _width(_banner_right) - 2)
+BANNER = "\n".join(
+    (
+        "",
+        _frame_top(),
+        f"{INDENT}{CYAN}│{NC} {_banner_left}{' ' * _banner_gap}{_banner_right} {CYAN}│{NC}",
+        _frame_row(f"{DIM}Multi-Protocol Proxy Manager{NC}")[0],
+        _frame_bottom(),
+    ),
 )
 
 
@@ -228,47 +263,28 @@ def kv(label: str, value: str, label_w: int = 16) -> str:
 
 
 def panel(title_text: str, lines: list[str], *, wrap: bool = False):
-    """Компактная панель состояния; wrap сохраняет длинные строки."""
-    inner = PANEL_W - 2
-    title_fit, _ = _fit_line(title_text, inner)
+    """Компактная панель состояния в тонкой рамке."""
     print()
-    print(f"{INDENT}{BOLD}{CYAN}{title_fit}{NC}")
-    print(f"{INDENT}{DIM}{'─' * inner}{NC}")
+    print(_frame_top(title_text))
     for line in lines:
         plain_line = _strip(line).strip()
         if plain_line and all(c in "─-" for c in plain_line):
-            fitted_lines = [(f"{DIM}{'─' * inner}{NC}", inner)]
-        else:
-            fitted_lines = (
-                _wrap_line(line, inner)
-                if wrap
-                else [_fit_line(line, inner)]
-            )
-        for line_fit, _ in fitted_lines:
-            print(f"{INDENT}{line_fit}")
+            print(_frame_rule())
+            continue
+        print(*_frame_row(line, wrap=wrap), sep="\n")
+    print(_frame_bottom())
 
 
 def box(content: str, header: str = ""):
-    """Рисует рамку вокруг текста с двойными границами."""
-    inner = PANEL_W
-    print(f"{INDENT}{CYAN}╔{'═' * inner}╗{NC}")
-    if header:
-        h_fit, h_w = _fit_line(header, inner - 2)
-        pad_left = (inner - h_w) // 2
-        pad_right = inner - h_w - pad_left
-        print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{h_fit}{NC}{' ' * pad_right}{CYAN}║{NC}")
-        print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+    """Рисует компактную рамку вокруг текста."""
+    print(_frame_top(header))
     for line in content.split("\n"):
         plain_line = _strip(line).strip()
         if plain_line and all(c in "─-" for c in plain_line):
-            line_fit = f"{DIM}{'─' * (inner - 2)}{NC}"
-            line_w = inner - 2
-            pad = 0
+            print(_frame_rule())
         else:
-            line_fit, line_w = _fit_line(line, inner - 2)
-            pad = inner - 2 - line_w
-        print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * pad} {CYAN}║{NC}")
-    print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
+            print(*_frame_row(line), sep="\n")
+    print(_frame_bottom())
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -304,21 +320,17 @@ def _menu_key(key: str) -> str:
 
 
 def menu(options: list[tuple[str, str, str]], header: str = "") -> str:
-    """Отображает компактное меню без пояснений под каждым пунктом."""
-    inner = PANEL_W - 2
+    """Отображает компактное меню в тонкой рамке."""
     print()
-    if header:
-        h_fit, _ = _fit_line(header, inner)
-        print(f"{INDENT}{BOLD}{CYAN}{h_fit}{NC}")
-        print(f"{INDENT}{DIM}{'─' * inner}{NC}")
+    print(_frame_top(header))
 
     for key, label, _desc in options:
         if key == "-":
-            print()
+            print(_frame_rule())
             continue
         key_col = _menu_key(key)
-        line_fit, _ = _fit_line(f"{key_col}  {label}", inner)
-        print(f"{INDENT}{line_fit}")
+        print(*_frame_row(f"{key_col}  {label}"), sep="\n")
+    print(_frame_bottom())
     print()
 
     keys = [k for k, _, _ in options if k not in ("-", "")]

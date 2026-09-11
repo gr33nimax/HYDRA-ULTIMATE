@@ -67,10 +67,10 @@ def test_long_detail_wraps_under_its_column_instead_of_being_cut(capsys):
     assert "..." not in output
     assert "заголовков 2" in output
     body = [line for line in output.splitlines() if line.strip()]
-    assert all(len(_visible(line)) <= PANEL_W for line in body)
+    assert all(len(_visible(line)) <= PANEL_W + 4 for line in body)
 
 
-def test_panel_uses_a_compact_header_without_box_sides(capsys):
+def test_panel_uses_a_compact_rounded_frame(capsys):
     protocol_status_panel(
         "vless",
         installed=True,
@@ -86,6 +86,8 @@ def test_panel_uses_a_compact_header_without_box_sides(capsys):
     output = capsys.readouterr().out
     assert "VLESS" in output
     assert "Максимальная маскировка" in output
+    assert "╭" in output
+    assert "│" in output
     assert "║" not in output
 
 
