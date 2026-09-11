@@ -1,5 +1,7 @@
 # Changelog
 
+- NekoBox `sn://awg` links now encode emoji and other non-BMP profile names
+  with Java-compatible UTF-16 lengths, preventing corrupted AWG profiles.
 - Configuration display names now stay separate from HydraBox runtime tags,
   distinguish Naive TCP and QUIC profiles, and apply to AmneziaWG desktop and
   mobile links in NekoBox-compatible subscriptions.

@@ -735,3 +735,9 @@ PersistentKeepalive = 25
     expected = "sn://awg?eNpFjrFSg0AYhE8dH8JnYAbv-MNxFBRGiCFCDJOoTDoOjqjxkIABQhfeh8bC1t6nEhvd2Z1vq509RQgBUQ1D1TCo9FN-I0SwStmv4RI-ev8uWs6Vqf6e2jJ_dG9kpWXheF0_6HNHtO3Lm72ncn2odqFr9de4EE54Fedl4gXVvf20365mXqxt9OcdDhaQOxuoV2W-zbDVF1N-6zdLpWqUVxFLf-IUdlYvDkpUme1swseyDPMm8LLMtS6Gn-gcoePZQDKkQP_qSKf9dehGX4ZgIgUjBX1EeGpygRMwRWwyCjqPKTGx0KhghKUpFzoXiSAczAgo0WJGjoNOhqkBP0NhUSE"
     assert generate_awg_sn_link(conf, "") == expected
 
+    name = "🇫🇮 AWG 2.0"
+    link = generate_awg_sn_link(conf, name)
+    encoded = link.split("?", 1)[1] + "=" * (-len(link.split("?", 1)[1]) % 4)
+    data = zlib.decompress(base64.urlsafe_b64decode(encoded))
+    assert data.endswith(b"\x8d" + name.encode() + b"\x81\x81")
+

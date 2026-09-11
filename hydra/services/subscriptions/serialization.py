@@ -33,7 +33,7 @@ def _serialize_len(length: int) -> bytes:
 
 
 def _serialize_string_len(value: str) -> bytes:
-    return _serialize_len(len(value)) + value.encode()
+    return _serialize_len(len(value.encode("utf-16-le")) // 2) + value.encode()
 
 
 def serialize_nekobox_config(config: str, name: str) -> str:
