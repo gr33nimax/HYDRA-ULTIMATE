@@ -360,8 +360,31 @@ def test_firewall_rule_insert_has_a_valid_iptables_operation():
         assert AntiDPIPlugin()._ensure_rules() is True
 
     inserts = [command for command in calls if "-I" in command]
-    assert inserts[0][:4] == ["iptables", "-I", "INPUT", "1"]
-    assert inserts[1][:4] == ["ip6tables", "-I", "INPUT", "1"]
+    assert inserts[0][:6] == ["iptables", "-w", "10", "-I", "INPUT", "1"]
+    assert inserts[1][:6] == ["ip6tables", "-w", "10", "-I", "INPUT", "1"]
+
+
+def test_sync_runtime_restarts_enabled_detector_and_reconciles():
+    plugin = AntiDPIPlugin()
+    state = AppState(
+        protocols={"antidpi": PluginState(installed=True, enabled=True)},
+    )
+    with patch.object(
+        plugin,
+        "_command",
+        return_value=MagicMock(returncode=0),
+    ) as command, patch.object(
+        plugin,
+        "reconcile_enforcement",
+        return_value=True,
+    ) as reconcile:
+        assert plugin.sync_runtime(state) is True
+
+    command.assert_called_once_with(
+        ["systemctl", "restart", "hydra-antidpi"],
+        text=True,
+    )
+    reconcile.assert_called_once_with(state)
 
 
 def test_antidpi_service_allows_outbound_telegram_sockets(tmp_path):

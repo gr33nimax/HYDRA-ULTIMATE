@@ -114,6 +114,20 @@ class AntiDPILifecycleMixin:
         self.last_error = ""
         return True
 
+    def sync_runtime(self, state: PluginStateAccess) -> bool:
+        """Restart an enabled detector and reconcile its firewall runtime."""
+        protocol = state.protocols.get("antidpi")
+        if protocol and protocol.enabled:
+            result = self._command(
+                ["systemctl", "restart", "hydra-antidpi"],
+                text=True,
+            )
+            if getattr(result, "returncode", 1) != 0:
+                return self._fail(
+                    self._result_error(result, "restart hydra-antidpi"),
+                )
+        return self.reconcile_enforcement(state)
+
     def status(
         self,
         state: PluginStateAccess | None = None,

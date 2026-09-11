@@ -224,11 +224,15 @@ def test_antidpi_sync_reinstalls_and_reports_health(capsys):
     protocols.install.return_value = True
     protocols.health.return_value = health
     app = MagicMock(protocols=protocols)
+    app.plugin_action.return_value = True
     with patch.object(cli, "load_state", return_value=AppState()), \
          patch.object(cli, "_require_root"), \
          patch.object(cli, "production_application", return_value=app):
         assert cli.main(["antidpi", "sync"]) == 0
     protocols.install.assert_called_once_with(AppState(), "antidpi")
+    app.plugin_action.assert_called_once_with(
+        "antidpi", "sync_runtime", state=AppState(),
+    )
     protocols.health.assert_called_once_with(AppState(), "antidpi")
     output = capsys.readouterr().out
     assert '"ok": true' in output

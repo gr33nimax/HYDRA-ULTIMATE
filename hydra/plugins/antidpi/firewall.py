@@ -27,8 +27,13 @@ class FirewallAdapter:
         run: CommandRunner,
         fail: FailureReporter,
     ) -> None:
-        self.run = run
+        self._run = run
         self.fail = fail
+
+    def run(self, command: list[str], **options: object) -> object:
+        if command and command[0] in {"iptables", "ip6tables"}:
+            command = [command[0], "-w", "10", *command[1:]]
+        return self._run(command, **options)
 
     @staticmethod
     def result_error(result: object, action: str) -> str:

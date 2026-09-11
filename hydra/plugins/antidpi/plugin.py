@@ -205,6 +205,7 @@ class AntiDPIPlugin(
             "capture_external_tests",
             "manual_ban",
             "run_selftest",
+            "sync_runtime",
             "unban",
         ),
         backup_resources=(

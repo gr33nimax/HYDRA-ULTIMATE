@@ -147,5 +147,6 @@ def test_antidpi_management_capabilities_are_declared():
         "capture_external_tests",
         "manual_ban",
         "run_selftest",
+        "sync_runtime",
         "unban",
     )
