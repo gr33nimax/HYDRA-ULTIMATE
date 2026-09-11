@@ -47,6 +47,32 @@ class FakeTrafficProtocols:
         self.plugins[name].ingest_traffic(state, cursors)
 
 
+def test_first_connection_poll_initializes_report_before_crediting_bytes():
+    user = User(email="u@example.com", uuid="u1")
+    state = AppState(users=[user], protocols={"anytls": PluginState(enabled=True)})
+    connection = {
+        "id": "first",
+        "metadata": {"user": user.email, "inboundTag": "anytls-in"},
+        "upload": 100,
+        "download": 200,
+    }
+    apply_connection_snapshot(state, [connection], TrafficEvidence())
+    assert user.traffic_used_bytes == 300
+    assert protocol_totals(state) == {"anytls": 300}
+    connection["download"] = 250
+    apply_connection_snapshot(state, [connection], TrafficEvidence())
+    assert protocol_totals(state) == {"anytls": 350}
+
+
+def test_reset_user_preserves_legacy_global_total_before_first_poll():
+    user = User(email="u@example.com", uuid="u1", traffic_used_bytes=300,
+                credentials={"anytls": {"traffic_used_bytes": 300}})
+    state = AppState(users=[user])
+    reset_user_traffic(state, user.email)
+    assert user.traffic_used_bytes == 0
+    assert protocol_totals(state) == {"anytls": 300}
+
+
 def test_resettable_snapshot_is_accumulated_monotonically():
     user = User(email="u@example.com", uuid="u1")
     state = AppState(

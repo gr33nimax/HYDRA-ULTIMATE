@@ -62,15 +62,6 @@ hydra
 ├── kernel
 │   ├── status                    выбранное и фактическое ядро
 │   └── switch PROVIDER [--channel stable|preview|debug] [--force]
-├── calls
-│   └── telemetry
-│       ├── start --tester EMAIL… [--interval 2] [--max-mib 2048]
-│       ├── status
-│       ├── tail [--session ID] [--lines N] [--follow]
-│       ├── mark LABEL
-│       ├── report [--session ID]
-│       ├── export [--session ID] [--output FILE.tar.gz]
-│       └── stop
 ├── uninstall [--yes] [--dry-run] [--keep-data]
 └── antidpi
     ├── sync                      установить/обновить телеметрию

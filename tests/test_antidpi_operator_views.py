@@ -235,7 +235,17 @@ def _tui_patches(manager, **extra):
     with ExitStack() as stack:
         mocks = {
             name: stack.enter_context(patch.object(manager, name))
-            for name in ("clear", "panel", "info", "success", "warn", "error")
+            for name in (
+                "clear",
+                "panel",
+                "info",
+                "success",
+                "warn",
+                "error",
+                # Destructive confirmations default to "yes" in tests that
+                # do not care; tests that do pass their own side effect.
+                "confirm",
+            )
         }
         for name, value in extra.items():
             mocks[name] = stack.enter_context(

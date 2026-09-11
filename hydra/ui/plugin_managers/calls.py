@@ -57,16 +57,30 @@ def _show_profile(state: AppState, app: ApplicationService) -> None:
     _pause()
 
 
+def _import_cookies(state: AppState, app: ApplicationService) -> None:
+    source_path = prompt("Путь к JSON с VK cookies: ").strip()
+    if not source_path:
+        error("Укажите путь к JSON с VK cookies")
+        _pause()
+        return
+    _show_result(
+        app.calls.import_vk_cookies(state, source_path),
+        "VK cookies импортированы",
+    )
+
+
 def _menu_options(*, installed: bool) -> list[tuple[str, str, str]]:
     if not installed:
         return [
             ("1", "🔧 Установить", "Создать пул из 4 VK-комнат и запустить Calls"),
+            ("2", "📥 Импортировать VK cookies", "Загрузить локальный JSON для Hydra VK Tunnel"),
             ("0", "↩ Назад", ""),
         ]
     return [
         ("1", "🔄 Переустановить", "Пересоздать VK-пул с rollback"),
-        ("2", "📄 Показать admin-профиль", "Секретный клиентский JSON"),
-        ("3", "🔢 Число workers", "4 / 8 / 12 / 16 / 20"),
+        ("2", "📥 Импортировать VK cookies", "Загрузить локальный JSON для Hydra VK Tunnel"),
+        ("3", "📄 Показать admin-профиль", "Секретный клиентский JSON"),
+        ("4", "🔢 Число workers", "4 / 8 / 12 / 16 / 20"),
         ("9", "❌ Удалить", "Удалить Calls и сохранённые join-links"),
         ("0", "↩ Назад", ""),
     ]
@@ -80,9 +94,11 @@ def _dispatch(choice: str, state: AppState, app: ApplicationService) -> bool:
         _show_result(app.calls.enable_native_vk(state), "Hydra VK Tunnel установлен")
     elif choice == "1" and confirm("Переустановить Calls и пересоздать VK-пул?"):
         _show_result(app.calls.reinstall_native_vk(state), "Hydra VK Tunnel переустановлен")
-    elif choice == "2" and desired.installed:
-        _show_profile(state, app)
+    elif choice == "2":
+        _import_cookies(state, app)
     elif choice == "3" and desired.installed:
+        _show_profile(state, app)
+    elif choice == "4" and desired.installed:
         try:
             count = int(prompt("Число workers [4/8/12/16/20]: ").strip())
         except ValueError:

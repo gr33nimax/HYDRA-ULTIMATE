@@ -132,7 +132,12 @@ def test_manual_full_check_ignores_automatic_check_toggles():
     assert ok is True
     check_limits.assert_called_once_with(state)
     warp_update.assert_called_once()
-    latest.assert_called_once()
+    latest.assert_called_once_with(
+        "gr33nimax/hydracore",
+        include_prerelease=True,
+        prerelease_tag_marker="-debug.",
+        prerelease_exclude_marker="",
+    )
 
 
 def test_manual_run_reports_update_check_failure():

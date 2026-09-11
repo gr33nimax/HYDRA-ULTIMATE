@@ -73,6 +73,7 @@ HEALTH_LABELS: dict[str, str] = {
     "scan_telemetry": "телеметрия сканирования",
     "udp_probe_telemetry_removed": "устаревшие UDP-правила удалены",
     "mieru_probe_telemetry": "телеметрия Mieru",
+    "collector_heartbeat": "живость сборщика событий",
 }
 
 

@@ -6,6 +6,10 @@ import json
 import socket
 import urllib.parse
 
+from hydra.core.configuration_names import (
+    _replace_profile_reference,
+    resolve_configuration_name,
+)
 from hydra.core.state_models import AppState, User
 from hydra.services.subscriptions.access import SubscriptionPluginAccess
 from hydra.services.subscriptions.links import generate_base64_sub
@@ -176,6 +180,20 @@ def _throne_custom_link(config: dict, name: str, link_type: str) -> str:
     return f"json://{link_type}#{encoded}"
 
 
+def _profile_name(user: User, state: AppState, key: str, default: str) -> str:
+    return resolve_configuration_name(
+        key=key, default=default, global_names=state.configuration_names,
+        user_names=user.configuration_name_overrides,
+    )
+
+
+def _quic_profile_name(config: dict, user: User, state: AppState) -> str:
+    keys = {"trusttunnel", "trusttunnel:quic"}
+    if keys.intersection(state.configuration_names) or keys.intersection(user.configuration_name_overrides):
+        return config["route"]["final"]
+    return f"{user.email} TrustTunnel QUIC"
+
+
 def generate_throne_sub(
     user: User,
     state: AppState,
@@ -191,7 +209,7 @@ def generate_throne_sub(
             links.append(
                 _throne_custom_link(
                     config,
-                    f"{user.email} ShadowTLS",
+                    _profile_name(user, state, "shadowtls", f"{user.email} ShadowTLS"),
                     "shadowtls",
                 ),
             )
@@ -206,7 +224,7 @@ def generate_throne_sub(
             links.append(
                 _throne_custom_link(
                     config,
-                    f"{user.email} TrustTunnel QUIC",
+                    _quic_profile_name(config, user, state),
                     "trusttunnel-quic",
                 ),
             )
@@ -244,13 +262,34 @@ def generate_nekobox_sub(
                 links.append(
                     serialize_nekobox_config(
                         compact,
-                        f"{user.email} {label}",
+                        _profile_name(user, state, name, f"{user.email} {label}")
+                        if name == "shadowtls" else _quic_profile_name(config, user, state),
                     ),
                 )
         except Exception:
             continue
     payload = "\n".join(links) + "\n"
     return base64.b64encode(payload.encode()).decode("ascii")
+
+
+def _avoid_tag_collisions(document: dict, existing: set[str]) -> None:
+    """Keep separate protocols with equal display names and their detours."""
+    objects = [*document.get("outbounds", []), *document.get("endpoints", [])]
+    reserved = existing | {item.get("tag", "") for item in objects} | {"direct"}
+    changes = []
+    for item in objects:
+        old = item.get("tag", "")
+        if not old or old not in existing or item == {"type": "direct", "tag": "direct"}:
+            continue
+        number = 2
+        while f"{old} ({number})" in reserved:
+            number += 1
+        new = f"{old} ({number})"
+        reserved.add(new)
+        changes.append((old, new))
+        item["tag"] = new
+    for old, new in changes:
+        _replace_profile_reference(document, old, new)
 
 
 def generate_singbox_config(
@@ -285,6 +324,7 @@ def generate_singbox_config(
             if not payload:
                 continue
             plugin_config = json.loads(payload)
+            _avoid_tag_collisions(plugin_config, outbound_tags | endpoint_tags)
             for endpoint in plugin_config.get("endpoints", []):
                 tag = endpoint.get("tag", "")
                 if tag and tag in endpoint_tags:

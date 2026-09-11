@@ -26,7 +26,7 @@ def test_naive_build_uses_the_uot_fork_without_fallback(tmp_path: Path) -> None:
     state = SimpleNamespace(
         protocols={"naive": SimpleNamespace(enabled=True)},
     )
-    with patch(
+    with patch("hydra.core.sni_router_install.os.makedirs"), patch(
         "hydra.core.sni_router_install._ensure_xcaddy_binary",
         return_value="xcaddy",
     ):
@@ -38,10 +38,13 @@ def test_naive_build_uses_the_uot_fork_without_fallback(tmp_path: Path) -> None:
             installed=lambda: False,
             ensure_go=lambda: True,
             build=build,
+            forward_proxy=True,
+            layer4=False,
         )
 
     assert len(builds) == 1
+    assert not any("caddy-l4" in argument for argument in builds[0][:-2])
     assert (
         "github.com/caddyserver/forwardproxy@caddy2="
-        "github.com/aUsernameWoW/forwardproxy@naive"
+        "github.com/aUsernameWoW/forwardproxy@c55724423ecd39402624538071f198036be79c25"
     ) in builds[0]

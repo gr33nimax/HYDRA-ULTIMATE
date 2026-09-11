@@ -179,6 +179,7 @@ def test_single_port_tcp_burst_alerts_but_does_not_ban(tmp_path):
         assert plugin.observe_event("198.51.100.45", event, now=1000) is False
         assert plugin.observe_event("198.51.100.45", event, now=1001) is False
         assert plugin.observe_event("198.51.100.45", event, now=1002) is False
+        plugin._drain_notifications()
     assert notify.call_count == 1
     component, action, fields = notify.call_args.args[:3]
     assert (component, action) == ("AntiDPI", "ALERT")
@@ -203,6 +204,7 @@ def test_alert_cooldown_is_scoped_per_protocol(tmp_path):
                     event,
                     now=1000 + offset,
                 )
+        plugin._drain_notifications()
     assert notify.call_count == 2
 
 
@@ -315,14 +317,30 @@ def test_naive_quic_auth_failure_keeps_udp_relay_source_port():
 
 
 def test_trusttunnel_dedicated_log_recognizes_failed_connect():
-    record = {
+    # Contract change (audit D05): only an explicit proxy auth rejection is
+    # client evidence. Backend 5xx and destination errors are server-side
+    # trouble, and a successful CONNECT is never scanner behaviour.
+    assert normalize_trusttunnel_record({
         "status": 502,
         "request": {
             "remote_ip": "203.0.113.21", "method": "CONNECT",
             "uri": "example.com:443",
         },
-    }
-    assert normalize_trusttunnel_record(record) == (
+    }) is None
+    assert normalize_trusttunnel_record({
+        "status": 200,
+        "request": {
+            "remote_ip": "203.0.113.21", "method": "CONNECT",
+            "uri": "example.com:443",
+        },
+    }) is None
+    assert normalize_trusttunnel_record({
+        "status": 407,
+        "request": {
+            "remote_ip": "203.0.113.21", "method": "CONNECT",
+            "uri": "example.com:443",
+        },
+    }) == (
         "203.0.113.21",
         {
             "protocol": "trusttunnel", "kind": "auth_failure",
@@ -721,7 +739,7 @@ def test_event_source_and_signal_counters_are_persisted(tmp_path):
     plugin = AntiDPIPlugin()
     state_file = tmp_path / "antidpi_sources.json"
     with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run", return_value=MagicMock(returncode=0, stdout="", stderr="")):
+         patch("hydra.plugins.antidpi.plugin._run", return_value=MagicMock(returncode=0, stdout="", stderr="")) as firewall:
         results = []
         for offset, port in enumerate((22, 80, 443, 3389)):
             results.append(plugin.observe_event(
@@ -736,7 +754,13 @@ def test_event_source_and_signal_counters_are_persisted(tmp_path):
                 now=1000 + offset,
             ))
         data = plugin._load_state()
-    assert results == [False, False, False, True]
+    # Contract change (audit D01): kernel SYN/NEW telemetry proves a packet
+    # was seen, not source ownership, so a multi-port burst stays alert-only
+    # and can never buy ban eligibility by accumulating distinct ports.
+    assert results == [False, False, False, False]
+    assert data.get("banned", {}) == {}
+    assert data["scores"]["198.51.100.44"]["verified_score"] == 0
+    firewall.assert_not_called()
     assert data["source_counts"]["kernel-firewall"] == 4
     assert data["signal_counts"]["port_scan"] == 4
     assert data["signal_counts"]["port_sweep"] == 1
@@ -755,6 +779,7 @@ def test_ban_notifications_are_throttled_and_delivery_is_counted(tmp_path):
         assert plugin.observe_event(
             "198.51.100.41", {"kind": "active_decoy_probe", "source": "test"}, now=1001,
         ) is True
+        plugin._drain_notifications()
         data = plugin._load_state()
 
     assert notify.call_count == 1

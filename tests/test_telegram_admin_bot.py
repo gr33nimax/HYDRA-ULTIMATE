@@ -250,6 +250,7 @@ def test_antidpi_observe_event_notification(tmp_path):
         with patch.object(plugin, "_load_state", return_value={"scores": {}, "banned": {}, "whitelist": []}):
             with patch.object(plugin, "_save_state"):
                 plugin.observe_event("198.51.100.22", event)
+                plugin._drain_notifications()
                 mock_notify.assert_called()
                 component, action, fields = mock_notify.call_args.args[:3]
                 assert mock_notify.call_args.kwargs["category"] == "antidpi"
@@ -369,6 +370,7 @@ def test_single_native_auth_failure_sends_alert_without_banning(tmp_path):
             {"kind": "auth_failure", "protocol": "naive", "source": "caddy-naive"},
             now=1000,
         )
+        plugin._drain_notifications()
     assert banned is False
     notify.assert_called_once()
     component, action, fields = notify.call_args.args[:3]

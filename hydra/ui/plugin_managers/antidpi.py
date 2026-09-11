@@ -38,6 +38,8 @@ BAN_ERRORS = {
     "firewall_error": "Firewall не принял правило блокировки",
 }
 
+BAN_PAGE_SIZE = 10
+
 
 def _snapshot(app: ApplicationService) -> dict:
     data = app.plugin_query("antidpi", "management_snapshot")
@@ -71,6 +73,7 @@ def _resolve_targets(raw: str, addresses: list[str]) -> list[str]:
 
 
 def _bans(state: AppState, app: ApplicationService) -> None:
+    page = 1
     while True:
         data = _snapshot(app)
         ordered = [
@@ -78,19 +81,38 @@ def _bans(state: AppState, app: ApplicationService) -> None:
             for row in views_rows(data, "ban_rows")
             if row.get("ip")
         ]
+        total_pages = max(1, -(-len(ordered) // BAN_PAGE_SIZE))
+        page = min(max(1, page), total_pages)
+        # Numbers can only select what is actually on screen: an invisible
+        # row must never be the target of a bare number.
+        visible = ordered[(page - 1) * BAN_PAGE_SIZE : page * BAN_PAGE_SIZE]
         clear()
         panel(
-            f"🚫 АКТИВНЫЕ БЛОКИРОВКИ ({len(ordered)})",
-            ban_table(data),
+            f"🚫 АКТИВНЫЕ БЛОКИРОВКИ ({len(ordered)}) — "
+            f"стр. {page}/{total_pages}",
+            ban_table(
+                data,
+                limit=BAN_PAGE_SIZE,
+                offset=(page - 1) * BAN_PAGE_SIZE,
+            ),
         )
         panel("📜 ЗАВЕРШЁННЫЕ ЗАПИСИ", history_table(data))
         if not ordered:
             prompt("Enter для возврата")
             return
-        raw = prompt("Номера или IP для разбана (Enter — назад)").strip()
+        raw = prompt(
+            "Номера с текущей страницы или IP для разбана "
+            "(Enter — назад, > — вперёд, < — назад по страницам)",
+        ).strip()
         if not raw:
             return
-        _unban_targets(state, app, _resolve_targets(raw, ordered))
+        if raw == ">" and page < total_pages:
+            page += 1
+            continue
+        if raw == "<" and page > 1:
+            page -= 1
+            continue
+        _unban_targets(state, app, _resolve_targets(raw, visible))
         prompt("Enter для продолжения")
 
 
@@ -101,6 +123,14 @@ def _unban_targets(
 ) -> None:
     if not targets:
         error("Не указано ни одного корректного адреса.")
+        return
+    if len(targets) > 1 and not confirm(
+        "Снять блокировки с адресов?\n"
+        + "\n".join(f"  · {target}" for target in targets[:10])
+        + (f"\n  …и ещё {len(targets) - 10}" if len(targets) > 10 else ""),
+        default=False,
+    ):
+        info("Разбан отменён")
         return
     for address in targets:
         if app.plugin_command(
@@ -141,6 +171,12 @@ def _manual_ban(app: ApplicationService) -> None:
     ])
     raw = prompt("IP для блокировки (Enter — отмена)").strip()
     if not raw:
+        return
+    if not confirm(
+        f"Заблокировать {raw} бессрочно, до снятия вручную?",
+        default=False,
+    ):
+        info("Блокировка отменена")
         return
     result = app.plugin_action("antidpi", "manual_ban", raw=raw, source="tui")
     result = result if isinstance(result, dict) else {}
@@ -227,8 +263,10 @@ def _show_log(app: ApplicationService) -> None:
     clear()
     lines = app.plugin_query("antidpi", "recent_logs", limit=50)
     lines = lines if isinstance(lines, list) else []
+    # Full lines only: the reason of a journal entry often lives at its end,
+    # and a fixed-width clip would hide exactly the diagnostic part.
     rendered = [
-        f"  {_log_color(line)}{str(line)[:104]}{NC}"
+        f"  {_log_color(line)}{str(line)}{NC}"
         for line in lines
     ] or [f"  {DIM}Журнал пуст или служба ещё не запускалась{NC}"]
     panel("📋 ЖУРНАЛ ANTI-DPI — ПОСЛЕДНИЕ 50 СТРОК", rendered)

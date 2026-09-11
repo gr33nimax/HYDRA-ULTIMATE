@@ -15,7 +15,6 @@ PATTERNS: tuple[tuple[str, str, str], ...] = (
         r"(?:Invalid MAC(?: of handshake)?|Invalid handshake|unknown peer)",
         "handshake_failure",
     ),
-    ("sing-box", r"(?:handshake failed|invalid handshake|protocol error)", "handshake_failure"),
     ("anytls", r"(?:authentication failed|invalid password|unknown user password|unauthorized|auth error)", "auth_failure"),
     ("anytls", r"(?:process connection.*?EOF: fallback disabled)", "invalid_first_packet"),
     ("trusttunnel", r"(?:authentication failed|authorization failed|invalid token|unauthorized|auth error)", "auth_failure"),
@@ -46,6 +45,10 @@ PATTERNS: tuple[tuple[str, str, str], ...] = (
     ("telemt", r"(?:handshake failed|invalid)", "handshake_failure"),
     ("naive", r"(?:authentication failed|invalid credentials|malformed request|protocol error)", "auth_failure"),
     ("wdtt", r"(?:invalid handshake|handshake failed|authentication failed|auth failed|invalid packet)", "handshake_failure"),
+    # The generic sing-box matcher runs last: a protocol-specific line from the
+    # shared sing-box journal must keep its own protocol and attribution
+    # instead of collapsing into a generic "sing-box" event.
+    ("sing-box", r"(?:handshake failed|invalid handshake|protocol error)", "handshake_failure"),
 )
 
 _KERNEL_SCAN = re.compile(

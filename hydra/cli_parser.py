@@ -129,7 +129,7 @@ def _add_kernel(root: argparse._SubParsersAction) -> None:
     switch.add_argument(
         "--channel",
         choices=("stable", "preview", "debug"),
-        default="stable",
+        default="debug",
     )
     switch.add_argument("--force", action="store_true")
 

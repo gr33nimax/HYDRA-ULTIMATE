@@ -3,7 +3,7 @@
 # 🐉 HYDRA
 
 <img src="docs/assets/banner.png" width="760"
-     alt="HYDRA — Multi-Protocol Proxy &amp; Routing Orchestrator, powered by sing-box extended">
+     alt="HYDRA — Multi-Protocol Proxy &amp; Routing Orchestrator, powered by Hydracore">
 
 **Оркестратор многопротокольных прокси-серверов на базе Sing-Box**
 
@@ -113,7 +113,7 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 | **ShadowTLS** | `443/tcp` | ShadowTLS v3 + Trojan detour |
 | **NaiveProxy** | `443/tcp`, `443/udp` | HTTP/2 forward-proxy |
 | **Hysteria2** | `8443/udp` | QUIC + Salamander |
-| **VLESS + XHTTP** | `443/tcp` | XHTTP через Sing-Box Extended и Caddy L4 |
+| **VLESS + XHTTP** | `443/tcp` | XHTTP через Hydracore и Caddy L4 |
 | **Mieru** | `2012–2022/tcp` | обфусцированный mTLS |
 | **Snell v4** | `32000–32999/tcp` | TCP/UDP-прокси |
 | **MTProto / Telemt** | `8443/tcp` | Telegram MTProxy |
@@ -140,45 +140,27 @@ Calls больше не привязан к версии persisted state или 
 проверяется по capabilities перед изменением runtime. Старые state schema 0–18
 однократно импортируются напрямую в стабильный State Format v1.
 
-Ядро выбирается явно и транзакционно:
+HYDRA использует только Hydracore VPS из debug-канала. Обновление проверяет
+digest, ELF, identity/capabilities, активный config и health-check; при ошибке
+до замены сохраняются предыдущий бинарник и backup. Отдельного выбора
+Другого kernel provider больше нет.
 
 ```bash
 hydra kernel status
-sudo hydra kernel switch hydracore
 sudo hydra kernel switch hydracore --channel debug --force
-sudo hydra kernel switch sing-box-extended
 ```
 
-Канал `debug` доступен только для Hydracore. Он выбирает отдельный prerelease
+Канал `debug` — стандартный канал Hydracore. Он выбирает отдельный prerelease
 с маркером `-debug.`, требует нативную телеметрию VK Calls и проходит те же
 проверки digest, ELF, identity/capabilities, активного конфига и health-check.
-Для возврата выполните `sudo hydra kernel switch hydracore --channel stable
---force`.
 
-Перед возвратом на stock core отключите или удалите активный Calls
-`vk_parasite`; несовместимый active config будет отклонён до замены бинарника.
-
-HYDRA доверяет только release assets фиксированных репозиториев, требует
-GitHub `asset.digest`, проверяет ELF, identity/capabilities и активный config,
-затем делает bounded health-check. Ошибка запуска или записи state возвращает
-старый бинарник и ранее работавшую службу. Legacy installer/update не
-перезаписывает Hydracore, пока он выбран в state.
-
-Независимый пункт главного TUI `Headless Creator` владеет установкой creator,
-провайдерами и их общими credentials; позже сюда можно добавить WB Stream без
-привязки к протоколам. Единственный VK cookie-файл —
-`/etc/hydra/cookiesvk/cookies-vk.json`. Native Calls и qWDTT используют его
-совместно; размер qWDTT-пула настраивается от 1 до 16 комнат (по умолчанию 4).
-Общий контракт `CreatorSessionManager` выдаёт Calls отдельную managed-группу
-до 4 сессий, а
-qWDTT — свою managed-группу из N сессий. Ротация использует два поколения creator,
-поэтому прежняя master-ссылка остаётся рабочей до публикации новой. WDTT отвечает
-только за сервер, пароли и формирование `qwdtt://` из упорядоченного списка
-хэшей. Старую
-установку creator HYDRA не мигрирует автоматически: после обновления нужен
-явный пункт `Создать комнаты` в qWDTT-подменю `Headless Creator`. Основной экран
-Creator содержит только установку, переход к qWDTT и удаление; qWDTT-подменю —
-создание/остановку комнат, размер пула, автообновление и его интервал.
+Creator принадлежит только `Calls · VK` (Hydra VK Tunnel). В меню Calls можно
+до установки транспорта указать путь к локальному JSON с VK cookies; файл
+нормализуется, проверяется и атомарно заменяет
+`/etc/hydra/cookiesvk/cookies-vk.json` с правами `0600`. После установки Calls
+владеет своим blue/green-пулом ровно из 4 VK-комнат. qWDTT не создаёт и не
+обновляет creator-пул, не использует cookies и продолжает владеть только своим
+сервером и `qwdtt://` master-артефактом.
 
 > [!WARNING]
 > VK join-links и полный клиентский профиль — shared secret. HYDRA редактирует
@@ -208,7 +190,7 @@ TUI. Полная карта модулей, портов, служб и фай�
 curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo env HYDRA_REF=dev bash
 ```
 
-Установщик готовит зависимости, Sing-Box Extended, изолированное
+Установщик готовит зависимости, Hydracore VPS debug, изолированное
 Python-окружение и команду `hydra`. Caddy L4 и конкретные протоколы включаются
 позже — только те, что вам нужны.
 

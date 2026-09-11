@@ -4,8 +4,13 @@ from __future__ import annotations
 import copy
 
 from hydra.core.state_creator_models import DEFAULT_QWDTT_ROOM_COUNT
-from hydra.core.state_format import STATE_FORMAT_VERSION, pack_state_document
-from hydra.core.state_kernel_models import KERNEL_HYDRACORE
+from hydra.core.state_format import (
+    STATE_FORMAT_VERSION,
+    is_state_document,
+    pack_state_document,
+    unpack_state_document,
+)
+from hydra.core.state_kernel_models import KERNEL_HYDRACORE, normalize_legacy_kernel
 from hydra.core.state_validation import (
     LEGACY_SCHEMA_VERSION,
     validate_raw_state,
@@ -154,13 +159,7 @@ def import_legacy_state(data: dict) -> dict:
     _normalize_users(raw)
     _normalize_plugin_flags(raw)
     _normalize_creator(raw)
-    kernel = raw.setdefault("kernel", {})
-    if kernel.get("provider") == "sing-box-extended":
-        kernel["provider"] = KERNEL_HYDRACORE
-        kernel["channel"] = "debug"
-    else:
-        kernel.setdefault("provider", KERNEL_HYDRACORE)
-        kernel.setdefault("channel", "debug")
+    normalize_legacy_kernel(raw)
     wdtt = raw["protocols"].get("wdtt")
     if isinstance(wdtt, dict):
         config = wdtt.setdefault("config", {})
@@ -178,4 +177,16 @@ def import_legacy_state(data: dict) -> dict:
     })
 
 
-__all__ = ["LEGACY_SCHEMA_VERSION", "import_legacy_state"]
+def normalize_state_document(data: dict) -> dict:
+    """Return a canonical State Format v1 document without mutating input."""
+    if not is_state_document(data):
+        return import_legacy_state(data)
+
+    raw = unpack_state_document(data)
+    validate_raw_state(raw)
+    normalize_legacy_kernel(raw)
+    _normalize_calls(raw)
+    return pack_state_document(raw)
+
+
+__all__ = ["LEGACY_SCHEMA_VERSION", "import_legacy_state", "normalize_state_document"]

@@ -31,17 +31,30 @@ class PagedView:
     extra: dict = field(default_factory=dict)
 
 
-def _snapshot(app: ApplicationService, plugin: str) -> dict:
+def _snapshot(app: ApplicationService, plugin: str) -> dict | None:
+    """Return the projection, or ``None`` when the source is unavailable.
+
+    A failed query must never render as an empty, healthy list: "no data"
+    and "nothing found" are different operator statements.
+    """
     try:
         return _mapping_projection(
             app.plugin_query(plugin, "management_snapshot"),
         )
     except Exception:
-        return {}
+        return None
 
 
-def _rows(data: dict, key: str) -> list[dict]:
-    values = data.get(key, [])
+def _unavailable(name: str, total: int, noun: tuple[str, str, str]) -> PagedView:
+    return PagedView(
+        text=_header(name, total, noun)
+        + "\n\n<i>⚠️ Нет данных: источник недоступен</i>",
+        empty=True,
+    )
+
+
+def _rows(data: dict | None, key: str) -> list[dict]:
+    values = data.get(key, []) if isinstance(data, dict) else []
     if not isinstance(values, list):
         return []
     return [item for item in values if isinstance(item, dict)]
@@ -57,6 +70,12 @@ def _header(name: str, total: int, noun: tuple[str, str, str]) -> str:
 def antidpi_bans_view(app: ApplicationService, page: int = 1) -> PagedView:
     """Render every active AntiDPI ban, one page at a time."""
     data = _snapshot(app, "antidpi")
+    if data is None:
+        return _unavailable(
+            "antidpi_bans",
+            0,
+            ("блокировка", "блокировки", "блокировок"),
+        )
     bans = _rows(data, "ban_rows")
     rows, current, pages = navigation.page_slice(bans, page)
     if not bans:
@@ -92,6 +111,12 @@ def antidpi_bans_view(app: ApplicationService, page: int = 1) -> PagedView:
 def antidpi_watch_view(app: ApplicationService, page: int = 1) -> PagedView:
     """Render addresses whose evidence has not reached the ban bar."""
     data = _snapshot(app, "antidpi")
+    if data is None:
+        return _unavailable(
+            "antidpi_watch",
+            0,
+            ("адрес", "адреса", "адресов"),
+        )
     watch = _rows(data, "watchlist")
     rows, current, pages = navigation.page_slice(watch, page)
     header = _header("antidpi_watch", len(watch), ("адрес", "адреса", "адресов"))
@@ -127,6 +152,12 @@ def antidpi_watch_view(app: ApplicationService, page: int = 1) -> PagedView:
 def honeypot_bans_view(app: ApplicationService, page: int = 1) -> PagedView:
     """Render every address the honeypot trap has caught."""
     data = _snapshot(app, "honeypot")
+    if data is None:
+        return _unavailable(
+            "honeypot_bans",
+            0,
+            ("адрес", "адреса", "адресов"),
+        )
     banned = _mapping_projection(data.get("banned"))
     ordered = sorted(
         banned.items(),
@@ -154,18 +185,66 @@ def honeypot_bans_view(app: ApplicationService, page: int = 1) -> PagedView:
     )
 
 
-def _ban_record(app: ApplicationService, address: str) -> dict:
-    for row in _rows(_snapshot(app, "antidpi"), "ban_rows"):
+def _ban_record(data: dict | None, address: str) -> dict:
+    for row in _rows(data, "ban_rows"):
         if str(row.get("ip", "")) == address:
             return row
     return {}
 
 
-def _watch_record(app: ApplicationService, address: str) -> dict:
-    for row in _rows(_snapshot(app, "antidpi"), "watchlist"):
+def _watch_record(data: dict | None, address: str) -> dict:
+    for row in _rows(data, "watchlist"):
         if str(row.get("ip", "")) == address:
             return row
     return {}
+
+
+def _address_details(app: ApplicationService, address: str) -> dict | None:
+    """Fetch the exact record for one address, tolerating old deployments.
+
+    The exact query answers regardless of list truncation. When it is
+    unavailable (older install), the bounded snapshot lists are the honest
+    fallback; when even they fail, ``None`` means "no data", never "safe".
+    """
+    try:
+        details = app.plugin_query(
+            "antidpi",
+            "address_details",
+            address=address,
+        )
+    except Exception:
+        details = None
+    if isinstance(details, dict) and details.get("degraded"):
+        return None
+    if isinstance(details, dict) and details.get("valid") is not False:
+        if "ban_rows" in details or "watchlist" in details:
+            # Legacy deployment answered with a management snapshot.
+            ban = next(
+                (
+                    row
+                    for row in _rows(details, "ban_rows")
+                    if str(row.get("ip", "")) == address
+                ),
+                {},
+            )
+            watch = next(
+                (
+                    row
+                    for row in _rows(details, "watchlist")
+                    if str(row.get("ip", "")) == address
+                ),
+                {},
+            )
+            return {"ban": ban or None, "watch": watch or None}
+        if "tracked" in details:
+            # Exact response of the current plugin, found or not.
+            return details
+    snapshot = _snapshot(app, "antidpi")
+    if snapshot is None or snapshot.get("degraded"):
+        return None
+    ban = _ban_record(snapshot, address)
+    watch = _watch_record(snapshot, address)
+    return {"ban": ban or None, "watch": watch or None}
 
 
 def address_card_text(
@@ -203,8 +282,11 @@ def _intel_line(intel: dict) -> str:
 
 
 def _antidpi_line(app: ApplicationService, address: str) -> str:
-    ban = _ban_record(app, address)
-    if ban:
+    details = _address_details(app, address)
+    if details is None:
+        return "<b>AntiDPI:</b> ⚠️ нет данных (источник недоступен)"
+    ban = details.get("ban")
+    if isinstance(ban, dict):
         return (
             "<b>AntiDPI:</b> 🔴 заблокирован\n"
             f"Осталось: {html.escape(str(ban.get('remaining_label', '—')))} · "
@@ -212,8 +294,8 @@ def _antidpi_line(app: ApplicationService, address: str) -> str:
             f"нарушение #{int(ban.get('offense', 1) or 1)}\n"
             f"Причина: {html.escape(str(ban.get('reason', '—')))}"
         )
-    watch = _watch_record(app, address)
-    if watch:
+    watch = details.get("watch")
+    if isinstance(watch, dict):
         score = float(watch.get("score", 0) or 0)
         threshold = float(watch.get("threshold", 8) or 8)
         blocked = str(watch.get("block_label", "") or "").strip()
@@ -227,7 +309,10 @@ def _antidpi_line(app: ApplicationService, address: str) -> str:
 
 
 def _honeypot_line(app: ApplicationService, address: str) -> str:
-    banned = _mapping_projection(_snapshot(app, "honeypot").get("banned"))
+    data = _snapshot(app, "honeypot")
+    if data is None:
+        return "<b>Honeypot:</b> ⚠️ нет данных (источник недоступен)"
+    banned = _mapping_projection(data.get("banned"))
     record = banned.get(address)
     if not isinstance(record, dict):
         return "<b>Honeypot:</b> ✅ не срабатывал"

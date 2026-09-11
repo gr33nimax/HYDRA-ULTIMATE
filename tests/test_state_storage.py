@@ -35,6 +35,30 @@ def test_future_format_is_never_silently_downgraded(monkeypatch, tmp_path):
         state_module.load_state()
 
 
+def test_current_format_kernel_migration_is_persisted_once(monkeypatch, tmp_path):
+    _use_temp_state(monkeypatch, tmp_path)
+    state_module.STATE_FILE.write_text(json.dumps({
+        "format_version": 1,
+        "revision": 7,
+        "core": {},
+        "features": {
+            "kernel": {"provider": "sing-box-extended", "channel": "stable"},
+        },
+    }), encoding="utf-8")
+
+    loaded = state_module.load_state()
+    first = state_module.migrate_persisted_state()
+    migrated_bytes = state_module.STATE_FILE.read_bytes()
+    second = state_module.migrate_persisted_state()
+
+    assert loaded.kernel.provider == "hydracore"
+    assert loaded.kernel.channel == "debug"
+    assert first == {"from": 1, "to": 1, "changed": True}
+    assert second == {"from": 1, "to": 1, "changed": False}
+    assert state_module.STATE_FILE.read_bytes() == migrated_bytes
+    assert state_module.load_state().revision == 7
+
+
 def test_legacy_importer_converts_directly_without_mutating_source():
     source = {"version": 0, "users": [{"email": "u", "uuid": "id"}]}
     migrated = import_legacy_state(source)

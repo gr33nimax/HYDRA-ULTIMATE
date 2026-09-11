@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
+from hydra.core.configuration_names import resolve_configuration_name
 from hydra.core.state_models import AppState, User
 from hydra.services.subscriptions.access import SubscriptionPluginAccess
 from hydra.services.subscriptions.metadata import get_subscription_url
@@ -219,12 +220,10 @@ def _requested_permissions(
     objects: list[tuple[str, dict[str, Any]]],
 ) -> list[str]:
     sections = {section for section, _ in objects}
-    permissions: list[str] = []
-    if "outbounds" in sections:
-        permissions.append("network.outbound")
-    if "endpoints" in sections:
-        permissions.append("network.endpoint.wireguard")
-    return permissions
+    return [permission for section, permission in (
+        ("outbounds", "network.outbound"),
+        ("endpoints", "network.endpoint.wireguard"),
+    ) if section in sections]
 
 
 def _parse_timestamp(value: str, field: str) -> datetime:
@@ -300,8 +299,11 @@ def generate_hydrabox_subscription(
         entrypoints = _entrypoints(projection, objects)
         if not entrypoints:
             continue
-        label = plugin.meta.subscription_profile_name or (
-            plugin.meta.display_name or plugin.meta.name
+        label = resolve_configuration_name(
+            key=plugin.meta.name,
+            default=plugin.meta.subscription_profile_name or plugin.meta.display_name or plugin.meta.name,
+            global_names=state.configuration_names,
+            user_names=user.configuration_name_overrides,
         )
         multiple = len(entrypoints) > 1
         resource_id = _resource_id(plugin.meta.name)

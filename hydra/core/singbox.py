@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional
@@ -116,7 +117,7 @@ def get_version() -> Optional[str]:
     return None
 
 
-EXTENDED_REPO = "shtorm-7/sing-box-extended"
+HYDRACORE_REPO = "gr33nimax/hydracore"
 
 
 def _custom_kernel_selected() -> bool:
@@ -129,80 +130,83 @@ def _custom_kernel_selected() -> bool:
 
 
 def install(force: bool = False) -> bool:
-    """Устанавливает sing-box-extended из GitHub releases."""
+    """Install the verified Hydracore VPS debug release."""
     _set_error("")
-    if _custom_kernel_selected():
-        if is_installed():
-            return True
-        message = (
-            "Hydracore is selected; use the kernel switch service instead of "
-            "the legacy Sing-Box Extended installer"
-        )
-        _set_error(message)
-        _log("WARNING", message)
-        return False
-    if not force and is_installed() and "extended" in (get_version() or "").lower():
+    if not force and "hydracore" in (get_version() or "").lower():
         return True
 
-    _log("INFO", "Installing sing-box-extended...")
-
-    # Останавливаем службу перед заменой бинарника, чтобы не было конфликтов
-    try:
-        stop()
-    except Exception as e:
-        _log("WARNING", f"Failed to stop sing-box: {e}")
+    _log("INFO", "Installing Hydracore VPS debug release...")
 
     from hydra.utils.net import detect_arch
-    from hydra.utils.downloader import download_github_asset_filtered, extract_tarball
+    from hydra.utils.downloader import (
+        download_github_asset_filtered,
+        extract_tarball,
+        verify_elf,
+    )
 
     arch = detect_arch()  # "amd64" | "arm64"
 
     def _match(name: str) -> bool:
-        """Точный фильтр: linux-{arch}.tar.gz без суффиксов."""
-        return (
-            f"linux-{arch}.tar.gz" in name
-            and "compressed" not in name
-            and "musl" not in name
-            and "glibc" not in name
-            and "purego" not in name
-        )
+        return name == f"hydracore-vps-linux-{arch}.tar.gz"
 
-    dest = Path("/tmp/singbox-install")
-    dest.mkdir(parents=True, exist_ok=True)
-    tarball = dest / "sing-box.tar.gz"
+    with tempfile.TemporaryDirectory(prefix="hydra-kernel-") as directory:
+        dest = Path(directory)
+        tarball = dest / "kernel.tar.gz"
+        if not download_github_asset_filtered(
+            HYDRACORE_REPO,
+            _match,
+            tarball,
+            include_prerelease=True,
+            prerelease_tag_marker="-debug.",
+            require_unique=True,
+            require_digest=True,
+            on_error=_set_error,
+        ):
+            _log("ERROR", last_error() or "Failed to download Hydracore")
+            return False
 
-    if not download_github_asset_filtered(EXTENDED_REPO, _match, tarball, on_error=_set_error):
-        _log("ERROR", last_error() or "Failed to download sing-box-extended")
-        return False
-
-    extract_tarball(tarball, dest)
-
-    # Найти бинарник sing-box в распакованном каталоге
-    candidate = None
-    for p in dest.rglob("sing-box"):
-        if p.is_file() and p.stat().st_size > 1_000_000:  # >1MB = бинарник
-            candidate = p
-            break
-
-    if not candidate:
-        _log("ERROR", "sing-box binary not found in archive")
-        shutil.rmtree(str(dest), ignore_errors=True)
-        return False
-
-    # Удаляем старый бинарник, если он существует, для исключения "Text file busy"
-    if SINGBOX_BIN.exists():
+        extracted = dest / "extracted"
+        extract_tarball(tarball, extracted)
+        candidates = [
+            path
+            for path in extracted.rglob("sing-box")
+            if path.is_file() and path.stat().st_size > 1_000_000
+        ]
+        if len(candidates) != 1 or not verify_elf(candidates[0]):
+            _set_error("Hydracore release must contain exactly one ELF sing-box binary")
+            _log("ERROR", last_error())
+            return False
+        candidates[0].chmod(0o755)
+        probe = _run([str(candidates[0]), "version"])
+        if probe.returncode != 0 or "hydracore" not in str(probe.stdout or "").lower():
+            _set_error("Hydracore release identity check failed")
+            _log("ERROR", last_error())
+            return False
+        was_running = is_running()
+        if was_running:
+            try:
+                stopped = stop()
+            except Exception as exc:
+                _set_error(f"Failed to stop sing-box before Hydracore replacement: {exc}")
+                _log("ERROR", last_error())
+                return False
+            if not stopped:
+                _set_error("Failed to stop sing-box before Hydracore replacement")
+                _log("ERROR", last_error())
+                start()
+                return False
         try:
-            SINGBOX_BIN.unlink()
-        except Exception as e:
-            _log("WARNING", f"Failed to unlink {SINGBOX_BIN}: {e}")
+            HOST.atomic_copy(candidates[0], SINGBOX_BIN, mode=0o755)
+        except Exception as copy_error:
+            if was_running:
+                try:
+                    start()
+                except Exception as restart_error:
+                    _log("CRITICAL", f"Failed to restore sing-box service: {restart_error}")
+            raise copy_error
 
-    import shutil as _sh
-    _sh.move(str(candidate), str(SINGBOX_BIN))
-    SINGBOX_BIN.chmod(0o755)
-    _sh.rmtree(str(dest), ignore_errors=True)
-
-    _log("INFO", f"sing-box-extended installed: {get_version()}")
-    return is_installed()
+    _log("INFO", f"Hydracore installed: {get_version()}")
+    return True
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -475,11 +479,6 @@ def status_text() -> str:
 
 def update_kernel() -> tuple[bool, str]:
     """Update Sing-Box through the isolated transactional upgrade service."""
-    if _custom_kernel_selected():
-        return (
-            False,
-            "Hydracore is selected; update it through the provider-aware kernel switch",
-        )
     return upgrade_kernel(
         target_binary=SINGBOX_BIN,
         config_path=SINGBOX_CONFIG,

@@ -5,6 +5,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from hydra.core.configuration_names import (
+    apply_json_configuration_name,
+    configuration_name_key,
+    user_with_configuration_names,
+)
 from hydra.core.state_models import AppState, User
 from hydra.plugins.base import BasePlugin, PluginCategory, PluginStatus
 from hydra.plugins.invoker import PluginInvoker
@@ -92,7 +97,16 @@ class SubscriptionPluginService:
         state: AppState,
         **parameters: Any,
     ) -> str:
-        return self.invoker.client_link(plugin, user, state, **parameters)
+        named_user = user_with_configuration_names(
+            user,
+            state.configuration_names,
+        )
+        return self.invoker.client_link(
+            plugin,
+            named_user if plugin.meta.name == "trusttunnel" else user,
+            state,
+            **parameters,
+        )
 
     def client_links(
         self,
@@ -101,7 +115,16 @@ class SubscriptionPluginService:
         state: AppState,
         **parameters: Any,
     ) -> list[str]:
-        return self.invoker.client_links(plugin, user, state, **parameters)
+        named_user = user_with_configuration_names(
+            user,
+            state.configuration_names,
+        )
+        return self.invoker.client_links(
+            plugin,
+            named_user if plugin.meta.name == "trusttunnel" else user,
+            state,
+            **parameters,
+        )
 
     def client_config(
         self,
@@ -110,12 +133,22 @@ class SubscriptionPluginService:
         state: AppState,
         **parameters: Any,
     ) -> str:
-        return self.invoker.generate_client_config(
-            plugin,
+        named_user = user_with_configuration_names(
             user,
+            state.configuration_names,
+        )
+        payload = self.invoker.generate_client_config(
+            plugin,
+            named_user if plugin.meta.name == "trusttunnel" else user,
             state,
             **parameters,
         )
+        return apply_json_configuration_name(
+            payload,
+            key=configuration_name_key(plugin.meta.name, parameters),
+            global_names=state.configuration_names,
+            user_names=user.configuration_name_overrides,
+        ) if plugin.meta.name != "trusttunnel" else payload
 
     def singbox_client_config(
         self,
@@ -123,11 +156,21 @@ class SubscriptionPluginService:
         user: User,
         state: AppState,
     ) -> str:
-        return self.invoker.generate_singbox_client_config(
-            plugin,
+        named_user = user_with_configuration_names(
             user,
+            state.configuration_names,
+        )
+        payload = self.invoker.generate_singbox_client_config(
+            plugin,
+            named_user if plugin.meta.name == "trusttunnel" else user,
             state,
         )
+        return apply_json_configuration_name(
+            payload,
+            key=plugin.meta.name,
+            global_names=state.configuration_names,
+            user_names=user.configuration_name_overrides,
+        ) if plugin.meta.name != "trusttunnel" else payload
 
     def profiles(
         self,

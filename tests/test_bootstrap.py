@@ -83,7 +83,17 @@ def test_install_guide_runs_sources_through_the_isolated_environment():
     assert "sudo python3 main.py" not in INSTALL_GUIDE
 
 
-def test_bootstrap_never_overwrites_selected_or_detected_hydracore():
-    assert 'HYDRA_SELECTED_KERNEL" == "hydracore"' in BOOTSTRAP
+def test_bootstrap_never_overwrites_detected_hydracore():
     assert 'grep -qi "hydracore"' in BOOTSTRAP
     assert "bootstrap не заменяет custom core" in BOOTSTRAP
+
+
+def test_clean_bootstrap_installs_only_verified_hydracore_debug_vps_asset():
+    assert "gr33nimax/hydracore/releases?per_page=100" in BOOTSTRAP
+    assert "hydracore-vps-linux-${HC_ARCH}.tar.gz" in BOOTSTRAP
+    assert "'-debug.' not in tag" in BOOTSTRAP
+    assert '[[ "$HC_DIGEST" == sha256:* ]]' in BOOTSTRAP
+    assert "file \"$HC_BIN\" | grep -q 'ELF .* executable'" in BOOTSTRAP
+    assert "Hydracore identity не подтверждена" in BOOTSTRAP
+    assert "shtorm-7/sing-box-extended" not in BOOTSTRAP
+    assert "Установка sing-box-extended" not in BOOTSTRAP

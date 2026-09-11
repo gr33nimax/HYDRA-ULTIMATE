@@ -85,11 +85,16 @@ def test_agent_resolves_endpoint_free_native_error_only_when_unique():
     details = {"protocol": "shadowtls", "kind": "auth_failure", "source": "journal"}
     with patch("hydra.core.source_relay.resolve_recent_unique_source", return_value="203.0.113.10"):
         resolved = _resolve_unattributed_relay_source(details)
+    # Contract change (audit D02): a time-window guess is a hint for
+    # observability, never verified attribution, so it stays alert-only.
     assert resolved == (
         "203.0.113.10",
         {
             "protocol": "shadowtls", "kind": "auth_failure",
-            "source": "caddy-source-relay", "attribution": "unique-recent-source",
+            "source": "caddy-source-relay",
+            "attribution": "unique-recent-source",
+            "ban_eligible": False,
+            "policy": "alert-only / time-correlated attribution",
         },
     )
 

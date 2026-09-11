@@ -129,6 +129,7 @@ command -v curl    &>/dev/null || MISSING+=("curl")
 command -v git     &>/dev/null || MISSING+=("git")
 command -v tar     &>/dev/null || MISSING+=("tar")
 command -v sha256sum &>/dev/null || MISSING+=("coreutils")
+command -v file    &>/dev/null || MISSING+=("file")
 python3 -c 'import ensurepip' &>/dev/null || MISSING+=("python3-venv")
 
 for pkg in "${MISSING[@]}"; do
@@ -162,72 +163,63 @@ fi
 $PKG_INSTALL iptables iproute2 gnupg ca-certificates certbot ufw
 
 step 3 5 "Совместимое ядро"
-HYDRA_SELECTED_KERNEL=$(python3 - <<'PY'
-import json
-try:
-    with open("/var/lib/hydra/state.json", encoding="utf-8") as source:
-        print(json.load(source).get("kernel", {}).get("provider", ""))
-except (OSError, TypeError, ValueError):
-    print("")
-PY
-)
-if [[ "$HYDRA_SELECTED_KERNEL" == "hydracore" ]]; then
-    command -v sing-box &> /dev/null || {
-        err "State выбирает Hydracore, но binary отсутствует; используйте hydra kernel switch hydracore"
-        exit 1
-    }
-    info "Hydracore выбран в state; bootstrap не заменяет custom core"
-    ok "Ядро сохранено: $(sing-box version 2>/dev/null | head -1)"
-elif command -v sing-box &> /dev/null \
+if command -v sing-box &> /dev/null \
     && sing-box version 2>/dev/null | head -1 | grep -qi "hydracore"; then
     info "Обнаружен Hydracore; bootstrap не заменяет custom core"
     ok "Ядро сохранено: $(sing-box version 2>/dev/null | head -1)"
-elif ! command -v sing-box &> /dev/null || ! sing-box version 2>/dev/null | head -1 | grep -q "extended"; then
-    info "Установка sing-box-extended..."
+else
+    info "Установка проверенного Hydracore VPS debug..."
     ARCH=$(uname -m)
     case "$ARCH" in
-        x86_64|amd64) SB_ARCH="amd64" ;;
-        aarch64|arm64) SB_ARCH="arm64" ;;
+        x86_64|amd64) HC_ARCH="amd64" ;;
+        aarch64|arm64) HC_ARCH="arm64" ;;
         *) err "Неподдерживаемая архитектура: $ARCH"; exit 1 ;;
     esac
 
-    SB_META=$(curl -fsSL --connect-timeout 30 --retry 3 https://api.github.com/repos/shtorm-7/sing-box-extended/releases/latest \
+    HC_META=$(curl -fsSL --connect-timeout 30 --retry 3 "https://api.github.com/repos/gr33nimax/hydracore/releases?per_page=100" \
         | python3 -c "
 import sys, json
-data = json.load(sys.stdin)
-for a in data.get('assets', []):
-    n = a['name']
-    if 'linux-${SB_ARCH}.tar.gz' in n \
-       and 'compressed' not in n and 'musl' not in n \
-       and 'glibc' not in n and 'purego' not in n:
-        print(a['browser_download_url'], a.get('digest') or ''); break
+for release in json.load(sys.stdin):
+    tag = str(release.get('tag_name') or '')
+    if not release.get('prerelease') or '-debug.' not in tag:
+        continue
+    for asset in release.get('assets', []):
+        if asset.get('name') == 'hydracore-vps-linux-${HC_ARCH}.tar.gz':
+            print(asset.get('browser_download_url', ''), asset.get('digest', ''), tag)
+            raise SystemExit
 ")
 
-    read -r SB_URL SB_DIGEST <<< "$SB_META"
-    [[ -n "$SB_URL" ]] || { err "Не удалось определить URL для sing-box-extended"; exit 1; }
-    SB_TMP=$(mktemp -d /tmp/hydra-singbox.XXXXXX)
-    curl -fsSL --connect-timeout 30 --retry 3 "$SB_URL" -o "$SB_TMP/sing-box.tar.gz"
-    if [[ "$SB_DIGEST" == sha256:* ]]; then
-        EXPECTED_SHA=${SB_DIGEST#sha256:}
-        ACTUAL_SHA=$(sha256sum "$SB_TMP/sing-box.tar.gz" | awk '{print $1}')
+    read -r HC_URL HC_DIGEST HC_TAG <<< "$HC_META"
+    [[ -n "$HC_URL" && "$HC_TAG" == *-debug.* ]] || {
+        err "Не удалось определить Hydracore VPS debug release"; exit 1;
+    }
+    HC_TMP=$(mktemp -d /tmp/hydra-hydracore.XXXXXX)
+    curl -fsSL --connect-timeout 30 --retry 3 "$HC_URL" -o "$HC_TMP/hydracore.tar.gz"
+    if [[ "$HC_DIGEST" == sha256:* ]]; then
+        EXPECTED_SHA=${HC_DIGEST#sha256:}
+        ACTUAL_SHA=$(sha256sum "$HC_TMP/hydracore.tar.gz" | awk '{print $1}')
         [[ "$ACTUAL_SHA" == "$EXPECTED_SHA" ]] || {
-            err "Проверка целостности Sing-Box не пройдена"; exit 1;
+            err "Проверка целостности Hydracore не пройдена"; exit 1;
         }
-        ok "Проверка целостности Sing-Box: OK"
+        ok "Проверка целостности Hydracore: OK"
     else
-        err "GitHub не предоставил SHA-256 для Sing-Box; установка остановлена"
+        err "GitHub не предоставил SHA-256 для Hydracore; установка остановлена"
         exit 1
     fi
-    tar -xzf "$SB_TMP/sing-box.tar.gz" -C "$SB_TMP"
-    SB_BIN=$(find "$SB_TMP" -type f -name sing-box -size +1M -print -quit)
-    [[ -n "$SB_BIN" ]] || { err "В архиве нет корректного бинарника sing-box"; exit 1; }
-    install -m 0755 "$SB_BIN" /usr/local/bin/sing-box.new
+    tar -xzf "$HC_TMP/hydracore.tar.gz" -C "$HC_TMP"
+    HC_BIN=$(find "$HC_TMP" -type f -name sing-box -size +1M -print -quit)
+    [[ -n "$HC_BIN" ]] || { err "В архиве нет корректного Hydracore binary"; exit 1; }
+    file "$HC_BIN" | grep -q 'ELF .* executable' || {
+        err "Hydracore binary не является ELF executable"; exit 1;
+    }
+    install -m 0755 "$HC_BIN" /usr/local/bin/sing-box.new
     /usr/local/bin/sing-box.new version >/dev/null
+    /usr/local/bin/sing-box.new version | head -1 | grep -qi "hydracore" || {
+        err "Hydracore identity не подтверждена"; exit 1;
+    }
     mv -f /usr/local/bin/sing-box.new /usr/local/bin/sing-box
-    rm -rf "$SB_TMP"
-    ok "Sing-Box Extended: $(sing-box version 2>/dev/null | head -1)"
-else
-    ok "Sing-Box: $(sing-box version 2>/dev/null | head -1)"
+    rm -rf "$HC_TMP"
+    ok "Hydracore: $(sing-box version 2>/dev/null | head -1)"
 fi
 
 step 4 5 "Загрузка и проверка HYDRA"

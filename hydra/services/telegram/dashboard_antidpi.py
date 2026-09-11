@@ -78,18 +78,32 @@ def _headline(app: ApplicationService, data: dict) -> list[str]:
         f"{html.escape(format_age(data.get('last_event_at'), now=now))}"
         + (f" ({html.escape(source)})" if source else ""),
     ]
+    if data.get("degraded"):
+        lines.append(
+            "⚠️ <b>State повреждён:</b> автоматические блокировки приостановлены",
+        )
+    reconciliation = _mapping_projection(data.get("reconciliation"))
+    if reconciliation.get("ok") is False:
+        failed = ", ".join(str(value) for value in reconciliation.get("failed", []))
+        lines.append(
+            "⚠️ <b>Reconciliation:</b> " + html.escape(failed or "ошибка"),
+        )
     lines.extend(_delivery_lines(data))
     return lines
 
 
 def _delivery_lines(data: dict) -> list[str]:
     stats = _mapping_projection(data.get("notification_stats"))
-    grouped = int(data.get("suppressed_ban_notifications", 0) or 0)
+    suppressed = int(data.get("suppressed_ban_notifications", 0) or 0)
     lines = [
         f"<b>Уведомления:</b> доставлено "
         f"{int(stats.get('delivered', 0) or 0)}, ошибок "
-        f"{int(stats.get('failed', 0) or 0)}, сгруппировано {grouped}",
+        f"{int(stats.get('failed', 0) or 0)}, пропущено по cooldown "
+        f"{suppressed}",
     ]
+    dropped = int(stats.get("dropped", 0) or 0)
+    if dropped:
+        lines.append(f"⚠️ <b>Очередь уведомлений переполнена:</b> {dropped}")
     failures = _mapping_projection(data.get("ban_failures"))
     count = int(failures.get("count", 0) or 0)
     if count:

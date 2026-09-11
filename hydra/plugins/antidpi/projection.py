@@ -152,6 +152,52 @@ def _display_families(
     return tuple(sorted({signal_family(signal) for signal in signals if signal}))
 
 
+def address_details(data: dict, address: str, *, now: float) -> dict:
+    """Return the exact evidence projection for one address.
+
+    List views are bounded by design, so an operator card must never infer
+    "no evidence" from a truncated watchlist: the lookup here is exact.
+    """
+    source = data if isinstance(data, dict) else {}
+    result: dict = {"ip": address, "now": float(now)}
+    metadata = active_bans(source, now=now).get(address)
+    if isinstance(metadata, dict):
+        result["ban"] = ban_view(address, metadata, now=now)
+    scores = source.get("scores", {})
+    entry = scores.get(address) if isinstance(scores, dict) else None
+    if isinstance(entry, dict):
+        counts = source.get("ban_counts", {})
+        try:
+            offenses = (
+                max(0, int(counts.get(address, 0) or 0))
+                if isinstance(counts, dict)
+                else 0
+            )
+        except (TypeError, ValueError):
+            offenses = 0
+        row = _watchlist_row(
+            address,
+            entry,
+            now,
+            float(WATCHLIST_MIN_SCORE),
+            offenses,
+        )
+        if row is not None:
+            result["watch"] = row
+    history = source.get("history", [])
+    matches = [
+        copy.deepcopy(item)
+        for item in (history if isinstance(history, list) else [])
+        if isinstance(item, dict) and item.get("ip") == address
+    ]
+    if matches:
+        result["history"] = matches[-20:]
+    result["tracked"] = bool(
+        result.get("ban") or result.get("watch") or matches,
+    )
+    return result
+
+
 def ban_rows(data: dict, *, now: float) -> list[dict]:
     """Return active bans, newest first, with adapter-ready labels."""
     banned = data.get("banned", {}) if isinstance(data, dict) else {}
@@ -227,6 +273,7 @@ __all__ = [
     "COUNTER_LIMIT",
     "HISTORY_LIMIT",
     "WATCHLIST_LIMIT",
+    "address_details",
     "ban_rows",
     "counters",
     "management_projection",

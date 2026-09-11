@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 from hydra.core.state_creator_models import HeadlessCreatorConfig
@@ -20,6 +21,8 @@ class Runtime:
         self.tokens: list[str] = []
         self.running = True
         self.remove_error: Exception | None = None
+        self.cookie_import_error: Exception | None = None
+        self.imported_cookie_path: Path | None = None
         self.legacy_join_removed = False
 
     def vk_parasite_supported(self):
@@ -27,6 +30,11 @@ class Runtime:
 
     def ensure_creator_installed(self):
         return True, "installed"
+
+    def import_vk_cookies(self, source_path: Path):
+        if self.cookie_import_error:
+            raise self.cookie_import_error
+        self.imported_cookie_path = source_path
 
     def load_native_join_links(self):
         return list(self.links)
@@ -205,6 +213,19 @@ def test_set_workers_updates_the_single_calls_configuration_value() -> None:
     assert state.protocols["calls"].config["workers"] == 12
     assert "max_workers_per_session" not in state.protocols["calls"].config
     assert applied == [12]
+
+
+def test_cookie_import_is_available_before_calls_installation() -> None:
+    runtime = Runtime()
+    state = _state()
+    service, _ = _service(runtime)
+    source_path = "/tmp/vk-cookies.json"
+
+    result = service.import_vk_cookies(state, source_path)
+
+    assert result.value == {"imported": True}
+    assert runtime.imported_cookie_path == Path(source_path)
+    assert "calls" not in state.protocols
 
 
 def test_stock_core_is_rejected_without_starting_creator() -> None:

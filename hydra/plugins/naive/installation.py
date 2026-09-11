@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import shutil
-
-from .constants import DOWNLOAD_DIR
+import tempfile
+from dataclasses import replace
+from pathlib import Path
 
 
 class NaiveInstallationMixin:
@@ -12,7 +13,7 @@ class NaiveInstallationMixin:
     def install(self) -> bool:
         if self._installed():
             return True
-        print("  Скачиваю caddy-naive...")
+        print("  Устанавливаю caddy-naive с поддержкой UoT...")
         if not self._download_binary():
             print("  Не удалось установить caddy-naive.")
             return False
@@ -46,30 +47,40 @@ class NaiveInstallationMixin:
                 shutil.rmtree(directory, ignore_errors=True)
         return True
 
-    def _download_binary(self) -> bool:
-        from hydra.utils.net import detect_arch
+    def _download_binary(self, config_path: Path | None = None) -> bool:
+        from hydra.core import sni_router, sni_router_install
 
+        host = self._host_backend()
         layout = self._runtime_layout()
-        architecture = detect_arch()
-        DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        binary = DOWNLOAD_DIR / f"caddy-linux-{architecture}"
-        if not self._download_asset(
-            layout.github_repo,
-            f"caddy-linux-{architecture}",
-            binary,
-        ):
-            return False
-        if not self._verify_binary(binary):
-            return False
-
-        if layout.binary.exists():
-            try:
-                layout.binary.unlink()
-            except Exception:
-                pass
-        shutil.copy2(str(binary), str(layout.binary))
-        layout.binary.chmod(0o755)
-        return True
+        settings = replace(
+            sni_router._install_settings(), binary=layout.binary,
+            caddy_version="v2.10.2",
+        )
+        existed = layout.binary.exists()
+        layout.binary.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="hydra-naive-") as directory:
+            probe = Path(directory) / "Caddyfile"
+            probe.write_text(
+                ":8080 {\n forward_proxy {\n"
+                "  upstream socks5://127.0.0.1:1080\n  passthrough_uot\n }\n}\n",
+                encoding="utf-8",
+            )
+            success = sni_router_install.install(
+                None, settings, host, force=True, installed=lambda: False,
+                forward_proxy=True, layer4=False,
+                ensure_go=lambda: sni_router_install.ensure_modern_go(
+                    settings, host, official_digest=sni_router._official_go_digest,
+                ),
+                build=lambda args, env: sni_router_install.run_caddy_build(
+                    args, env, host=host, timeout=settings.build_timeout,
+                ),
+                validate=lambda binary: not self._validate_caddy(
+                    config_path or probe, binary=binary,
+                ),
+            )
+        if success and existed:
+            self._binary_replaced = True
+        return success
 
     def _install_service(self) -> None:
         from hydra.core.decoy import DECOY_DIRS

@@ -236,16 +236,22 @@ def test_shadowrocket_name_prefers_user_override_then_global_name():
     state.configuration_names["naive"] = "Общее имя"
 
     encoded = generate_shadowrocket_sub(user, state, plugins=_plugins(plugin))
-    link = base64.b64decode(encoded).decode().strip()
+    link, http2_link = base64.b64decode(encoded).decode().splitlines()
     assert urllib.parse.parse_qs(urllib.parse.urlsplit(link).query)["remarks"] == [
         "Общее имя",
+    ]
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(http2_link).query)["remarks"] == [
+        "Общее имя HTTP/2",
     ]
 
     user.configuration_name_overrides["naive"] = "Личное имя"
     encoded = generate_shadowrocket_sub(user, state, plugins=_plugins(plugin))
-    link = base64.b64decode(encoded).decode().strip()
+    link, http2_link = base64.b64decode(encoded).decode().splitlines()
     assert urllib.parse.parse_qs(urllib.parse.urlsplit(link).query)["remarks"] == [
         "Личное имя",
+    ]
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(http2_link).query)["remarks"] == [
+        "Личное имя HTTP/2",
     ]
 
 
@@ -290,6 +296,17 @@ def test_generate_shadowrocket_sub_replaces_naive_https_link():
     assert not any(link.startswith("naive+https://") for link in links)
     assert not any(link.startswith("naive+quic://") for link in links)
     assert any(link.startswith("vless://") for link in links)
+    for scheme, alpn in (("https", "http/1.1"), ("http2", "h2"), ("http3", "h3")):
+        parsed_variant = urllib.parse.urlsplit(next(
+            link for link in links if link.startswith(f"{scheme}://")
+        ))
+        query = urllib.parse.parse_qs(parsed_variant.query)
+        assert query["alpn"] == [alpn]
+        assert query["peer"] == ["example.com"]
+        encoded_auth = parsed_variant.netloc
+        assert base64.urlsafe_b64decode(encoded_auth + "=" * (-len(encoded_auth) % 4)).decode() == (
+            "user:password@example.com:443"
+        )
     native = next(link for link in links if link.startswith("https://"))
     parsed = urllib.parse.urlsplit(native)
     padded = parsed.netloc + "=" * (-len(parsed.netloc) % 4)

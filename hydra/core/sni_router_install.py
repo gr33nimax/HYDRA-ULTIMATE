@@ -13,6 +13,11 @@ from typing import Any
 
 from hydra.core.state_models import AppState
 
+NAIVE_FORWARD_PROXY_MODULE = (
+    "github.com/caddyserver/forwardproxy@caddy2="
+    "github.com/aUsernameWoW/forwardproxy@c55724423ecd39402624538071f198036be79c25"
+)
+
 
 @dataclass(frozen=True)
 class InstallSettings:
@@ -23,6 +28,7 @@ class InstallSettings:
     go_version: str
     go_releases_url: str
     build_timeout: int
+    caddy_version: str = "v2.11.4"
 
 
 def is_installed(binary: Path) -> bool:
@@ -213,15 +219,15 @@ def install(
     installed: Callable[[], bool],
     ensure_go: Callable[[], bool],
     build: Callable[[list[str], dict[str, str]], Any | None],
+    forward_proxy: bool = False,
+    layer4: bool = True,
+    validate: Callable[[Path], bool] | None = None,
 ) -> bool:
     """Build and atomically install Caddy L4 with required Hydra modules."""
     if installed() and not force:
         return True
 
-    need_naive_forward_proxy = False
-    if state:
-        naive = state.protocols.get("naive")
-        need_naive_forward_proxy = bool(naive and naive.enabled)
+    del state  # Naive runs in its own binary, independently of the L4 router.
 
     print("  Installing Go compiler...")
     if not ensure_go():
@@ -233,7 +239,7 @@ def install(
             timeout=300,
         )
 
-    print("  Installing xcaddy and building caddy-l4...")
+    print(f"  Installing xcaddy and building {settings.binary.name}...")
     go_path = "/usr/local/share/go"
     os.makedirs(go_path, exist_ok=True)
     env = {**os.environ, "GOPATH": go_path, "GOBIN": f"{go_path}/bin"}
@@ -244,23 +250,18 @@ def install(
     base_build = [
         xcaddy_binary,
         "build",
-        "--with",
-        f"github.com/mholt/caddy-l4@{settings.caddy_l4_version}",
-        "--with",
-        (
-            "github.com/mholt/caddy-l4/modules/l4close@"
-            f"{settings.caddy_l4_version}"
-        ),
+        settings.caddy_version,
     ]
-    build_args = list(base_build)
-    if need_naive_forward_proxy:
-        build_args += [
+    if layer4:
+        base_build += [
             "--with",
-            (
-                "github.com/caddyserver/forwardproxy@caddy2="
-                "github.com/aUsernameWoW/forwardproxy@naive"
-            ),
+            f"github.com/mholt/caddy-l4@{settings.caddy_l4_version}",
+            "--with",
+            f"github.com/mholt/caddy-l4/modules/l4close@{settings.caddy_l4_version}",
         ]
+    build_args = list(base_build)
+    if forward_proxy:
+        build_args += ["--with", NAIVE_FORWARD_PROXY_MODULE]
     build_args += ["--output", str(pending_binary)]
 
     result = build(build_args, env)
@@ -278,8 +279,8 @@ def install(
         capture_output=True,
         text=True,
     )
-    required = ["layer4.handlers.proxy", "layer4.handlers.close"]
-    if need_naive_forward_proxy:
+    required = ["layer4.handlers.proxy", "layer4.handlers.close"] if layer4 else []
+    if forward_proxy:
         required.append("http.handlers.forward_proxy")
     if (
         modules.returncode != 0
@@ -290,6 +291,9 @@ def install(
         return False
 
     pending_binary.chmod(0o755)
+    if validate is not None and not validate(pending_binary):
+        pending_binary.unlink(missing_ok=True)
+        return False
     if settings.binary.exists():
         shutil.copy2(settings.binary, settings.binary.with_suffix(".previous"))
     pending_binary.replace(settings.binary)

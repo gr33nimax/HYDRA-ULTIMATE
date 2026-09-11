@@ -8,7 +8,7 @@ from hydra.core.state_kernel_models import (
     validate_raw_kernel_config,
 )
 from hydra.core.state_format import unpack_state_document
-from hydra.core.state_migrations import import_legacy_state
+from hydra.core.state_migrations import import_legacy_state, normalize_state_document
 from hydra.core.state_models import AppState, PluginState, validate_state
 
 
@@ -46,6 +46,25 @@ def test_legacy_importer_preserves_explicit_kernel_selection() -> None:
         "kernel": {"provider": "hydracore", "channel": "preview"},
     }))
     assert migrated["kernel"] == {"provider": "hydracore", "channel": "preview"}
+
+
+def test_current_document_normalizes_removed_kernel_without_mutating_source() -> None:
+    source = {
+        "format_version": 1,
+        "revision": 7,
+        "core": {},
+        "features": {
+            "kernel": {"provider": "sing-box-extended", "channel": "stable"},
+        },
+    }
+
+    migrated = unpack_state_document(normalize_state_document(source))
+
+    assert source["features"]["kernel"] == {
+        "provider": "sing-box-extended",
+        "channel": "stable",
+    }
+    assert migrated["kernel"] == {"provider": "hydracore", "channel": "debug"}
 
 
 def test_kernel_selection_rejects_unknown_provider_or_channel() -> None:

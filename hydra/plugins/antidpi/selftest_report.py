@@ -198,7 +198,8 @@ def new_log_lines(before: dict[Path, int]) -> dict[str, list[str]]:
 def secret_values(state: AppState) -> set[str]:
     secrets: set[str] = set()
     sensitive = re.compile(
-        r"pass|token|secret|private|psk|uuid|key",
+        r"pass|token|secret|private|psk|uuid|key"
+        r"|authorization|cookie|credential",
         re.IGNORECASE,
     )
 
@@ -220,17 +221,56 @@ def secret_values(state: AppState) -> set[str]:
     return secrets
 
 
+# Keys whose values are removed wholesale: known state secrets cover most of
+# them, but forwarded credentials can appear in logs under keys AntiDPI has
+# never seen in AppState.
+SENSITIVE_KEY = re.compile(
+    r"pass|token|secret|private|psk|uuid|key"
+    r"|authorization|cookie|credential",
+    re.IGNORECASE,
+)
+
+
+def _scrub(node: object) -> object:
+    """Structurally remove values of sensitive keys from parsed JSON."""
+    if isinstance(node, dict):
+        return {
+            str(key): "[REDACTED]"
+            if SENSITIVE_KEY.search(str(key))
+            else _scrub(value)
+            for key, value in node.items()
+        }
+    if isinstance(node, list):
+        return [_scrub(item) for item in node]
+    return node
+
+
+def _redact_json_text(text: str) -> str | None:
+    """Return the structurally scrubbed serialization, if text is JSON."""
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    return json.dumps(_scrub(parsed), ensure_ascii=False)
+
+
 def redactor(state: AppState) -> Callable[[str], str]:
     secrets = sorted(secret_values(state), key=len, reverse=True)
     substitutions = (
+        # A header value is removed whole: replacing only the first word
+        # after the scheme used to leak the credential itself.
         (
-            re.compile(r"(?i)(authorization\s*[:=]\s*)(\S+)"),
+            re.compile(
+                r"(?i)(authorization\s*[:=]\s*)(?!\"?\[REDACTED\])[^\r\n\"]+",
+            ),
             r"\1[REDACTED]",
         ),
         (
             re.compile(
-                r"(?i)((?:password|passwd|token|secret|private_key|psk)"
-                r"\s*[:=]\s*)[^\s,}\]]+",
+                r"(?i)((?:password|passwd|token|secret|private_key|psk"
+                r"|cookie)\s*[\"']?\s*[:=]\s*)"
+                r"(?!\"?\[REDACTED\])"
+                r"(?:\"[^\"]*\"|'[^']*'|[^\s,}\]]+)",
             ),
             r"\1[REDACTED]",
         ),
@@ -242,6 +282,16 @@ def redactor(state: AppState) -> Callable[[str], str]:
 
     def redact(text: str) -> str:
         result = str(text)
+        structured = _redact_json_text(result)
+        if structured is None:
+            # JSONL and mixed logs are scrubbed line by line so one bad
+            # line cannot disable redaction for the rest of the file.
+            result = "\n".join(
+                _redact_json_text(line) or line
+                for line in result.split("\n")
+            )
+        else:
+            result = structured
         for secret in secrets:
             result = result.replace(secret, "[REDACTED]")
         for pattern, replacement in substitutions:

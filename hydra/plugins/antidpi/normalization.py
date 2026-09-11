@@ -13,6 +13,20 @@ Normalizer = Callable[[dict], "tuple[str, dict] | None"]
 # are excluded: a restarting backend must not look like a probe.
 VLESS_PROBE_STATUSES = frozenset({400, 401, 403, 404, 405, 407, 421, 426})
 
+# A CONNECT that the proxy itself refused with an auth demand. Backend (5xx)
+# and destination errors are server-side trouble, not client abuse.
+PROXY_AUTH_STATUSES = frozenset({401, 407})
+
+# Scanner path prefixes checked against the normalized request path only.
+DECOY_PATH_TOKENS = (
+    "/.env",
+    "/wp-login",
+    "/xmlrpc.php",
+    "/actuator",
+    "/cgi-bin/",
+    "/server-status",
+)
+
 
 def normalize_caddy_record(record: dict) -> tuple[str, dict] | None:
     """Convert a caddy-l4 JSON log record into ``(ip, event)``."""
@@ -45,6 +59,26 @@ def normalize_caddy_record(record: dict) -> tuple[str, dict] | None:
     return address, event
 
 
+def _request_path(request: dict) -> str:
+    raw = str(request.get("uri", request.get("path", "")))
+    return raw.split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
+
+
+def _decoy_path_is_suspicious(path: str) -> bool:
+    """Match scanner paths against the normalized path, never the query.
+
+    ``/?next=/.env`` is a regular link with a scanner-looking parameter, not
+    a probe of the credential file itself.
+    """
+    if any(path.startswith(token) for token in DECOY_PATH_TOKENS):
+        return True
+    # Credential files are probed at any depth: /.env, /backup/.env.bak.
+    return any(
+        part == ".env" or part.startswith(".env.")
+        for part in path.split("/")
+    )
+
+
 def normalize_decoy_record(record: dict) -> tuple[str, dict] | None:
     """Recognize active scanner behaviour in a Caddy HTTP access record."""
     request = record.get("request", {}) if isinstance(record, dict) else {}
@@ -56,17 +90,9 @@ def normalize_decoy_record(record: dict) -> tuple[str, dict] | None:
     if address is None:
         return None
     method = str(request.get("method", "GET")).upper()
-    uri = str(request.get("uri", request.get("path", ""))).lower()
-    suspicious = method in {"CONNECT", "TRACE", "TRACK"} or any(
-        token in uri
-        for token in (
-            "/.env",
-            "/wp-login",
-            "/xmlrpc.php",
-            "/actuator",
-            "/cgi-bin/",
-            "/server-status",
-        )
+    path = _request_path(request).lower()
+    suspicious = method in {"CONNECT", "TRACE", "TRACK"} or (
+        _decoy_path_is_suspicious(path)
     )
     if not suspicious:
         return None
@@ -137,11 +163,6 @@ def vless_endpoint(
     if not domain or not path.startswith("/"):
         return "", ()
     return domain, (path,)
-
-
-def _request_path(request: dict) -> str:
-    raw = str(request.get("uri", request.get("path", "")))
-    return raw.split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
 
 
 def _covers(paths: tuple[str, ...], value: str) -> bool:
@@ -224,12 +245,17 @@ def normalize_trusttunnel_record(record: dict) -> tuple[str, dict] | None:
         status = int(record.get("status", 0))
     except (TypeError, ValueError):
         status = 0
-    if method == "CONNECT" and status >= 400:
-        return address, {
-            "protocol": "trusttunnel",
-            "kind": "auth_failure",
-            "source": "caddy-trusttunnel",
-        }
+    if method == "CONNECT":
+        if status in PROXY_AUTH_STATUSES:
+            return address, {
+                "protocol": "trusttunnel",
+                "kind": "auth_failure",
+                "source": "caddy-trusttunnel",
+            }
+        # Successful tunnels, backend 5xx, and destination errors are not
+        # client auth evidence, and a valid CONNECT must never fall through
+        # to the decoy scanner rule.
+        return None
     normalized = normalize_decoy_record(record)
     if normalized is not None:
         normalized[1]["source"] = "caddy-trusttunnel-decoy"

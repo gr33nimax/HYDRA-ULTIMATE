@@ -5,6 +5,7 @@ import copy
 import json
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 from hydra.contracts.calls_configuration import (
@@ -136,6 +137,18 @@ class CallsService:
                 self.save_state(state)
             except Exception:
                 pass
+            return failed_result(exc)
+        finally:
+            self._end_operation(lease)
+
+    def import_vk_cookies(self, state: AppState, source_path: str) -> ServiceResult:
+        lease, failure = self._begin_operation()
+        if failure is not None:
+            return failure
+        try:
+            self.runtime.import_vk_cookies(Path(source_path).expanduser())
+            return ServiceResult(True, value={"imported": True})
+        except Exception as exc:
             return failed_result(exc)
         finally:
             self._end_operation(lease)

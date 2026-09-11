@@ -295,6 +295,7 @@ def reset_user_traffic(state: AppState, email: str) -> User:
     user = find_user(state, email)
     if user is None:
         raise ValueError(f"user not found: {email}")
+    ensure_report_totals(state)
     user.traffic_used_bytes = 0
     for stats in user.credentials.values():
         if not isinstance(stats, dict):

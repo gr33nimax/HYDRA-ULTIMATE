@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Callable
 
+from hydra.core.configuration_names import _unique_configuration_tag, resolve_configuration_name
 from hydra.core.state_models import PluginState, User
 from hydra.plugins.context import PluginStateAccess
 
@@ -32,26 +33,32 @@ def generate_client_config(
     transport = transport_of(protocol)
     outbounds = []
     if transport in ("tcp", "both"):
-        outbounds.append(
-            build_outbound(
-                domain,
-                domain,
-                username,
-                password,
-                False,
-            )
+        outbound = build_outbound(
+            domain, domain, username, password, False,
         )
+        outbound["tag"] = resolve_configuration_name(
+            key="trusttunnel:tcp",
+            default=outbound["tag"],
+            global_names={},
+            user_names=user.configuration_name_overrides,
+        )
+        outbounds.append(outbound)
     if transport in ("quic", "both"):
-        outbounds.append(
-            build_outbound(
-                domain,
-                domain,
-                username,
-                password,
-                True,
-            )
+        outbound = build_outbound(
+            domain, domain, username, password, True,
         )
+        outbound["tag"] = resolve_configuration_name(
+            key="trusttunnel:quic",
+            default=outbound["tag"],
+            global_names={},
+            user_names=user.configuration_name_overrides,
+        )
+        outbounds.append(outbound)
 
+    tags = {"direct"}
+    for outbound in outbounds:
+        outbound["tag"] = _unique_configuration_tag(outbound["tag"], tags)
+        tags.add(outbound["tag"])
     direct_out = {"type": "direct", "tag": "direct"}
     final_tag = outbounds[0]["tag"] if outbounds else "direct"
     profile = {
@@ -137,6 +144,8 @@ def deep_link(
 
 def _link_for_transport(
     *,
+    user: User,
+    state: PluginStateAccess,
     domain: str,
     username: str,
     password: str,
@@ -149,7 +158,12 @@ def _link_for_transport(
         username=username,
         password=password,
         upstream_protocol="h3" if quic else "h2",
-        name=f"{username}{suffix}",
+        name=resolve_configuration_name(
+            key=f"trusttunnel:{'quic' if quic else 'tcp'}",
+            default=f"{username}{suffix}",
+            global_names={},
+            user_names=user.configuration_name_overrides,
+        ),
     )
 
 
@@ -167,6 +181,8 @@ def client_link(
     if not domain:
         return ""
     return _link_for_transport(
+        user=user,
+        state=state,
         domain=domain,
         username=derive_username(user),
         password=derive_password(user.uuid),
@@ -197,10 +213,12 @@ def client_links(
     links = []
     if transport in ("tcp", "both"):
         links.append(_link_for_transport(
+            user=user, state=state,
             domain=domain, username=username, password=password, quic=False,
         ))
     if transport in ("quic", "both"):
         links.append(_link_for_transport(
+            user=user, state=state,
             domain=domain, username=username, password=password, quic=True,
         ))
     return links

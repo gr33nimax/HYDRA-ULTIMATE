@@ -74,6 +74,68 @@ def test_legacy_kernel_paths_fail_closed_for_detected_hydracore() -> None:
         assert singbox._custom_kernel_selected() is True
 
 
+def test_install_downloads_verified_hydracore_vps_debug_asset(tmp_path) -> None:
+    target = tmp_path / "sing-box"
+    download_args = {}
+
+    def download(repo, name_filter, destination, **kwargs):
+        download_args.update(repo=repo, kwargs=kwargs)
+        assert name_filter("hydracore-vps-linux-amd64.tar.gz") is True
+        assert name_filter("hydracore-client-linux-amd64.tar.gz") is False
+        destination.write_bytes(b"archive")
+        return True
+
+    def extract(_archive, destination):
+        destination.mkdir()
+        (destination / "sing-box").write_bytes(b"x" * 1_000_001)
+
+    def atomic_copy(source, destination, *, mode=None):
+        assert mode == 0o755
+        shutil.copy2(source, destination)
+
+    with patch("hydra.core.singbox.SINGBOX_BIN", target), \
+         patch("hydra.core.singbox.is_running", return_value=True), \
+         patch("hydra.core.singbox.stop", return_value=True) as stop, \
+         patch("hydra.core.singbox.get_version", return_value=None), \
+         patch("hydra.core.singbox._run", return_value=MagicMock(
+             returncode=0,
+             stdout="sing-box version v1.13.16-extended-hydracore-debug.8",
+         )), \
+         patch("hydra.core.singbox.HOST.atomic_copy", side_effect=atomic_copy), \
+         patch("hydra.utils.net.detect_arch", return_value="amd64"), \
+         patch("hydra.utils.downloader.download_github_asset_filtered", side_effect=download), \
+         patch("hydra.utils.downloader.extract_tarball", side_effect=extract), \
+         patch("hydra.utils.downloader.verify_elf", return_value=True):
+        assert singbox.install() is True
+
+    assert target.is_file()
+    stop.assert_called_once_with()
+    assert download_args == {
+        "repo": "gr33nimax/hydracore",
+        "kwargs": {
+            "include_prerelease": True,
+            "prerelease_tag_marker": "-debug.",
+            "require_unique": True,
+            "require_digest": True,
+            "on_error": singbox._set_error,
+        },
+    }
+
+
+def test_install_download_failure_keeps_running_kernel_active(tmp_path) -> None:
+    with patch("hydra.core.singbox.SINGBOX_BIN", tmp_path / "sing-box"), \
+         patch("hydra.core.singbox.get_version", return_value=None), \
+         patch("hydra.core.singbox.stop") as stop, \
+         patch("hydra.utils.net.detect_arch", return_value="amd64"), \
+         patch(
+             "hydra.utils.downloader.download_github_asset_filtered",
+             return_value=False,
+         ):
+        assert singbox.install() is False
+
+    stop.assert_not_called()
+
+
 def test_install_service_grants_cap_net_raw_for_udp_interface_rebind(tmp_path):
     service_path = tmp_path / "sing-box.service"
     binary_path = tmp_path / "sing-box"

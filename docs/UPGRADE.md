@@ -260,9 +260,8 @@ script. State хранит только desired config; совместимост
 
 Один importer принимает любую историческую плоскую schema 0–18 и сразу создаёт
 State Format v1. Он сохраняет пользователей, credentials, Telegram-токены,
-сетевые секреты, plugin state, kernel и creator desired state; Calls
-нормализуется в актуальный `vk_parasite`. Импорт не останавливает старые creator
-units и не меняет `/etc/wdtt/headless` или иной host runtime.
+сетевые секреты, plugin state и kernel; Calls нормализуется в актуальный
+`vk_parasite`. Импорт не меняет host binary, units или runtime.
 
 Обновление подписочного renderer не меняет State Format и повторно использует
 существующий per-user A256GCM key, но wire contract несовместим с HydraBox v1.
@@ -270,13 +269,12 @@ units и не меняет `/etc/wdtt/headless` или иной host runtime.
 `0.4.0-beta.1`, а fragment теперь называется `#hydra-key=…`. Сервер публикует
 только Hydra Subscription v2; downgrade к v1 или plaintext fallback отсутствует.
 
-Если legacy creator был настроен,
-верхнеуровневый TUI `Headless Creator` покажет
-`legacy_creator_reinstall_required`. Только явное действие `Создать комнаты` в
-qWDTT-подменю делает snapshot старой установки, поднимает новое поколение и
-после успеха удаляет legacy-файлы; при сбое прежние units и файлы
-восстанавливаются, а единый VK cookie-файл
-`/etc/hydra/cookiesvk/cookies-vk.json` сохраняется.
+Legacy qWDTT creator units и Sync Agent больше не обслуживаются. Удалите их
+после проверки работающего qWDTT: новый qWDTT не создаёт creator-комнаты и не
+использует VK cookies. Для Hydra VK Tunnel импортируйте локальный JSON cookies
+в меню `Calls · VK` — это доступно до установки Calls; JSON валидируется до
+атомарной замены `/etc/hydra/cookiesvk/cookies-vk.json` (`0600`). Затем Calls
+сам создаёт и обслуживает пул ровно из 4 VK-комнат.
 Отдельно импорт выполняет совместимая команда:
 
 ```bash

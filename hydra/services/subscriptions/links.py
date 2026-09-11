@@ -12,7 +12,7 @@ from hydra.services.subscriptions.serialization import (
     generate_awg_sn_link,
 )
 from hydra.services.subscriptions.shadowrocket import (
-    build_shadowrocket_https_link,
+    build_shadowrocket_naive_links,
     build_shadowrocket_snell_link,
 )
 
@@ -86,11 +86,16 @@ def _protocol_suffix(link: str) -> str:
 
 
 def _configuration_name_key(link: str) -> str:
-    scheme = urllib.parse.urlparse(link).scheme.lower()
+    parsed = urllib.parse.urlparse(link)
+    scheme = parsed.scheme.lower()
+    query = urllib.parse.parse_qs(parsed.query)
+    if scheme == "trojan" and "shadow-tls" in query.get("plugin", []):
+        return "shadowtls"
     return {
         "naive": "naive",
         "naive+https": "naive",
         "naive+quic": "naive",
+        "anytls": "anytls",
         "tt": "trusttunnel",
         "trusttunnel": "trusttunnel",
         "mierus": "mieru",
@@ -201,7 +206,7 @@ def generate_shadowrocket_sub(
     *,
     plugins: SubscriptionPluginAccess,
 ) -> str:
-    """Build a base64 list with Naive TCP links native to Shadowrocket."""
+    """Build a base64 list with native Shadowrocket transport variants."""
     links: list[str] = []
     for link in _base_subscription_links(user, state, plugins=plugins):
         try:
@@ -209,12 +214,11 @@ def generate_shadowrocket_sub(
         except ValueError:
             links.append(link)
             continue
-        if scheme == "naive+quic":
+        if scheme in {"naive+https", "naive+quic"}:
+            links.extend(build_shadowrocket_naive_links(link))
             continue
         links.append(
-            build_shadowrocket_https_link(link)
-            if scheme == "naive+https"
-            else build_shadowrocket_snell_link(link)
+            build_shadowrocket_snell_link(link)
             if scheme == "snell"
             else link
         )

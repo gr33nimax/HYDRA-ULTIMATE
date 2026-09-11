@@ -39,6 +39,7 @@ class NaiveRuntimeMixin:
 
     def snapshot(self, state: PluginStateAccess):
         del state
+        self._binary_replaced = False
         layout = self._runtime_layout()
         runtime = self._host_backend().run(
             ["systemctl", "is-active", layout.service_name],
@@ -70,6 +71,12 @@ class NaiveRuntimeMixin:
         del state
         layout = self._runtime_layout()
         previous = snapshot or {}
+        if getattr(self, "_binary_replaced", False):
+            from hydra.core.sni_router_install import restore_previous_binary
+
+            if not restore_previous_binary(layout.binary):
+                return False
+            self._binary_replaced = False
         for key, path in (
             ("config", layout.caddyfile),
             ("service", layout.service_file),
@@ -106,6 +113,8 @@ class NaiveRuntimeMixin:
         pending.write_text(self._pending_cfg)
         pending.chmod(0o640)
         error = self._validate_caddy(pending)
+        if error and self._download_binary(pending):
+            error = self._validate_caddy(pending)
         if error:
             pending.unlink(missing_ok=True)
             print(f"  Caddyfile validation error: {error}")
@@ -118,7 +127,8 @@ class NaiveRuntimeMixin:
             capture_output=True,
         )
         restarted = host.run(
-            ["systemctl", "reload-or-restart", layout.service_name],
+            ["systemctl", "restart" if getattr(self, "_binary_replaced", False)
+             else "reload-or-restart", layout.service_name],
             capture_output=True,
         )
         if enabled.returncode != 0 or restarted.returncode != 0:
@@ -209,11 +219,13 @@ class NaiveRuntimeMixin:
     def _validate_caddy(
         self,
         config_path: Path | None = None,
+        *,
+        binary: Path | None = None,
     ) -> str | None:
         layout = self._runtime_layout()
         result = self._host_backend().run(
             [
-                str(layout.binary),
+                str(binary or layout.binary),
                 "validate",
                 "--config",
                 str(config_path or layout.caddyfile),
@@ -224,5 +236,6 @@ class NaiveRuntimeMixin:
             text=True,
         )
         if result.returncode != 0:
-            return (result.stderr or result.stdout or "")[:4000]
+            return (result.stderr or result.stdout or
+                    f"Caddy exited with code {result.returncode}")[:4000]
         return None

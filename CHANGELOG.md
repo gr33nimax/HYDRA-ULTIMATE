@@ -1,10 +1,58 @@
 # Changelog
 
+- Kernel / Calls / qWDTT consolidation: HYDRA now uses only the Hydracore VPS
+  debug channel; Sing-Box Extended selection and installation are removed.
+  Hydra VK Tunnel owns the Creator runtime and its fixed four-room pool. Its
+  TUI imports a local VK cookies JSON before Calls is installed, normalizes it,
+  validates it before atomic replacement and writes the managed file as `0600`.
+  qWDTT no longer creates or synchronizes a Creator pool and never consumes VK
+  cookies.
+- Shadowrocket subscription output now preserves each transport's real shape:
+  Naive TCP uses HTTPS with `http/1.1` and `h2`, Naive QUIC uses HTTP/3 `h3`,
+  TrustTunnel uses official TLV, and Snell keeps its `obfs`. Naive is built
+  from the pinned Caddy fork; replacement validates the actual binary and
+  keeps a backup. The new `naive-caddy.yml` CI workflow covers real-binary
+  validation plus HTTP/1 CONNECT and UoT magic passthrough; it has not yet
+  run for this change.
+- Traffic accounting records a first-poll baseline before charging bytes, so
+  starting the collector cannot double-count aggregate or per-user traffic.
+
+- AntiDPI hardening (September 2026 audit): kernel SYN/NEW and UDP telemetry can
+  never raise ban eligibility, so multi-port bursts stay alert-only; ShadowTLS
+  errors attributed only by a time window are alert-only hints; TrustTunnel
+  CONNECT counts as auth evidence only on explicit 401/407 (backend 5xx and
+  valid tunnels are never client evidence); decoy scanner paths match the
+  normalized request path, not the raw URI with query; protocol-specific
+  Sing-Box patterns win over the generic matcher.
+- AntiDPI enforcement reliability: the ban intent is persisted before the
+  ipset effect and reverted on refusal; unban serializes the firewall delete
+  with the state update; manual bans follow the same intent-first order;
+  Telegram delivery moved outside the state lock; the collector restores
+  ipsets, rules and stored bans on start and every 10 minutes, releases
+  whitelisted bans, persists a liveness heartbeat checked by health, survives
+  log rotation without losing written events, preserves partial lines, resumes
+  journald from a saved cursor and scores events by their own timestamps;
+  journal cursors advance only after durable processing and replay is
+  deduplicated; old events decay at event time and receive at most the
+  remaining original ban TTL; corrupt state files are quarantined and pause
+  automatic enforcement in a visible degraded mode instead of silently using
+  a blank whitelist; whitelist addition reports addresses it failed to unban.
+- AntiDPI operator views: the Telegram address card uses a new exact
+  `address_details` query (the 26th watched address no longer reports "no
+  evidence") and distinguishes "no data" from "clean"; the TUI ban list is
+  paged with visible-row-only numbers and confirmation for mass unban and
+  manual ban; journal lines render in full; skipped ban notifications are
+  labelled as cooldown skips, not grouping; self-test archives remove
+  `Authorization`/`Proxy-Authorization`/`Cookie`/`password` values structurally,
+  including JSON objects and arrays.
+- AntiDPI reconciliation now restores the full firewall surface and records
+  failed steps for health/operator views; whitelist-covered bans are never
+  restored. Telegram delivery uses a bounded background queue with delivered,
+  failed and dropped outcomes. Failed promotion of a timed manual ban restores
+  its original metadata, history and offense count.
+
 - Removed the obsolete Hydra VK Tunnel experiment telemetry framework, its CLI,
   collectors, reports, storage, and native telemetry capability requirement.
-
-- Added state schema 18: native Calls always creates four VK rooms; `workers`
-  is the shared configurable session topology (default 4; 4/8/12/16/20).
 
 - Replaced the release-coupled state schemas and 18-step migration chain with
   stable State Format v1. Legacy schemas 0–18 are imported directly once;
@@ -271,14 +319,8 @@
   символов URL-сегмента и официальными доменами `vk.com`/`vk.ru`; частично
   записанная строка creator больше не вызывает преждевременную ошибку. Все
   поддержанные варианты ссылки редактируются в HYDRA-логах.
-- TUI Headless Creator сведён к установке, qWDTT-подменю и удалению. Статус
-  показывает установленность, готовность VK/WB cookies, реальный путь общего
-  cookie-файла и число корректных уникальных qWDTT-комнат. В qWDTT-подменю
-  доступны создание, остановка, размер пула 1–16, автообновление и интервал.
-- Calls и qWDTT переведены на единый typed `CreatorSessionManager`: Calls
-  и qWDTT владеют отдельными managed-группами из N сессий, blue/green commit и
-  rollback. Новый provider подключается отдельным
-  driver без ветвления в consumer-сервисах.
+- Исторический экран Headless Creator и qWDTT Creator pool заменены текущей
+  моделью из верхней записи: Creator и VK cookies принадлежат только Calls.
 - qWDTT-ссылка формируется из любого настроенного числа уникальных хэшей с
   сохранением порядка и корректным percent-encoding query-параметра; токены с
   `+`, `=`, `%` и `&` больше не искажаются.
@@ -291,20 +333,9 @@
 - Добавлен экспериментальный транспорт `calls`: native VK `call` inbound для
   Hydracore с exact capability gate, транзакционным созданием/ротацией
   managed-пула и admin-only SOCKS joiner profile; stock/P2P fallback отсутствует.
-- `ApplicationService.headless_creator` стал независимым владельцем binary,
-  provider credentials и creator maintenance. Один `headless-vk-creator`
-  создаёт комнаты для native Calls и qWDTT; WDTT отвечает только за
-  `qwdtt://`-артефакт.
-- В корневом TUI появился отдельный provider-ready экран `Headless Creator`;
-  `Calls · VK` теперь управляет только native транспортом. Единственный VK
-  cookie-файл — `/etc/hydra/cookiesvk/cookies-vk.json`; native Calls pool хранится
-  в `/var/lib/hydra/calls/vk/pool/`, creator runtime вынесен в
-  `/var/lib/hydra/headless-creator/`.
-- qWDTT rotation стала blue/green: новое поколение
-  `hydra-headless-creator-vk@.service` запускается параллельно старому, поэтому
-  прежняя master-ссылка остаётся рабочей при timeout или rollback.
-- Sync Agent и его TUI читают owner-neutral maintenance facade. Задача creator
-  управляется `sync_headless_creator_vk_qwdtt_enabled` и интервалом 1–24 ч.
+- Историческая интеграция qWDTT с Headless Creator, его blue/green rotation и
+  Sync Agent удалены; qWDTT не создаёт Creator-комнаты и не использует VK
+  cookies.
 - Schema state поднята до 9. `v6 → v7` сохраняет совместимость прежнего Calls
   layout, а `v7 → v8` переносит creator state в
   `headless_creator.providers.vk`; `v8 → v9` отделяет qWDTT desired state в

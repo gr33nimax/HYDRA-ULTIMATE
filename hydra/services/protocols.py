@@ -4,6 +4,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
+from hydra.core.configuration_names import (
+    apply_json_configuration_name,
+    configuration_name_key,
+    user_with_configuration_names,
+)
 from hydra.core.state_models import AppState, User
 from hydra.core.errors import ErrorCode, ServiceResult, failed_result
 from hydra.plugins.base import BasePlugin, PluginCategory
@@ -192,12 +197,23 @@ class ProtocolService:
         user: User,
         **parameters: object,
     ) -> str:
-        return self.invoker.generate_client_config(
-            self.require(name),
+        plugin = self.require(name)
+        named_user = user_with_configuration_names(
             user,
+            state.configuration_names,
+        )
+        payload = self.invoker.generate_client_config(
+            plugin,
+            named_user if plugin.meta.name == "trusttunnel" else user,
             state,
             **parameters,
         )
+        return apply_json_configuration_name(
+            payload,
+            key=configuration_name_key(plugin.meta.name, parameters),
+            global_names=state.configuration_names,
+            user_names=user.configuration_name_overrides,
+        ) if plugin.meta.name != "trusttunnel" else payload
 
     def client_link(
         self,
@@ -206,9 +222,14 @@ class ProtocolService:
         user: User,
         **parameters: object,
     ) -> str:
-        return self.invoker.client_link(
-            self.require(name),
+        plugin = self.require(name)
+        named_user = user_with_configuration_names(
             user,
+            state.configuration_names,
+        )
+        return self.invoker.client_link(
+            plugin,
+            named_user if plugin.meta.name == "trusttunnel" else user,
             state,
             **parameters,
         )
@@ -220,9 +241,14 @@ class ProtocolService:
         user: User,
         **parameters: object,
     ) -> list[str]:
-        return self.invoker.client_links(
-            self.require(name),
+        plugin = self.require(name)
+        named_user = user_with_configuration_names(
             user,
+            state.configuration_names,
+        )
+        return self.invoker.client_links(
+            plugin,
+            named_user if plugin.meta.name == "trusttunnel" else user,
             state,
             **parameters,
         )

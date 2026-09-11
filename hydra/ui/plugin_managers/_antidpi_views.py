@@ -113,6 +113,18 @@ def status_lines(*, running: bool, health, data: dict) -> list[str]:
         *_notification_lines(data),
         *_failure_lines(data, now=now),
     ]
+    if data.get("degraded"):
+        lines.extend(
+            wrapped(
+                "State:      ",
+                "повреждён; автоматические блокировки приостановлены",
+            ),
+        )
+    reconciliation = data.get("reconciliation", {})
+    if isinstance(reconciliation, dict) and reconciliation.get("ok") is False:
+        failed = reconciliation.get("failed", [])
+        detail = ", ".join(str(value) for value in failed)
+        lines.extend(wrapped("Reconcile:  ", detail or "ошибка"))
     error = str(data.get("last_error") or "").strip()
     if error:
         lines.append(kv("Ошибка", f"{RED}{error[:52]}{NC}"))
@@ -140,13 +152,16 @@ def _notification_lines(data: dict) -> list[str]:
     stats = stats if isinstance(stats, dict) else {}
     delivered = int(stats.get("delivered", 0) or 0)
     failed = int(stats.get("failed", 0) or 0)
-    grouped = int(data.get("suppressed_ban_notifications", 0) or 0)
+    dropped = int(stats.get("dropped", 0) or 0)
+    # Ban notices inside the cooldown window are skipped, not merged into a
+    # digest; the label must not promise a summary that is never sent.
+    suppressed = int(data.get("suppressed_ban_notifications", 0) or 0)
     return [
         kv(
             "Telegram",
             f"{GREEN}доставлено {delivered}{NC} {DIM}·{NC} "
             f"{RED if failed else DIM}ошибок {failed}{NC} {DIM}· "
-            f"сгруппировано {grouped}{NC}",
+            f"пропущено по cooldown {suppressed} · очередь {dropped}{NC}",
         ),
     ]
 
@@ -175,16 +190,26 @@ def rows(data: dict, key: str) -> list[dict]:
     return [item for item in values if isinstance(item, dict)]
 
 
-def ban_table(data: dict, *, limit: int = 20) -> list[str]:
-    """Render active bans with their remaining time and evidence."""
+def ban_table(
+    data: dict,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[str]:
+    """Render one page of active bans with their remaining time and evidence.
+
+    Row numbers always refer to the rendered page, so an operator can never
+    type the number of a row that is not on screen.
+    """
     ordered = rows(data, "ban_rows")
     if not ordered:
         return [f"  {DIM}Активных блокировок нет{NC}"]
+    window = ordered[max(0, int(offset)) : max(0, int(offset)) + max(0, int(limit))]
     lines = [
         f"  {BOLD}{'#':<4}{'IP':<{ADDRESS_WIDTH}}{'Баллы':<9}Осталось{NC}",
         rule(),
     ]
-    for index, view in enumerate(ordered[:limit], 1):
+    for index, view in enumerate(window, 1):
         lines.extend(_ban_rows(index, str(view.get("ip", "—")), view))
         lines.extend(wrapped("Причина:   ", str(view.get("reason", "—"))))
         lines.extend(
@@ -197,8 +222,8 @@ def ban_table(data: dict, *, limit: int = 20) -> list[str]:
             ),
         )
         lines.append("")
-    if len(ordered) > limit:
-        hidden = len(ordered) - limit
+    hidden = len(ordered) - (max(0, int(offset)) + len(window))
+    if hidden > 0:
         lines.append(
             f"  {DIM}…и ещё {plural(hidden, ('адрес', 'адреса', 'адресов'))}"
             f"{NC}",
@@ -268,8 +293,9 @@ def watchlist_table(data: dict) -> list[str]:
     if not items:
         return [
             f"  {DIM}Под наблюдением никого нет.{NC}",
-            f"  {DIM}Здесь появляются адреса с накопленными баллами "
-            f"ниже порога бана ({BAN_THRESHOLD}).{NC}",
+            f"  {DIM}Здесь появляются адреса с уликами ниже порога "
+            f"блокировки: {BAN_THRESHOLD} при двух семействах улик, "
+            f"{round(BAN_THRESHOLD * 1.5)} — при одном.{NC}",
         ]
     lines = [
         f"  {BOLD}{'#':<4}{'IP':<{ADDRESS_WIDTH}}{'Баллы':<20}"

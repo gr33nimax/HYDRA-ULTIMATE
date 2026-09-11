@@ -61,6 +61,15 @@ class CallsInfrastructure:
         except (AttributeError, OSError, RuntimeError, ValueError) as exc:
             return False, str(exc) or exc.__class__.__name__
 
+    def import_vk_cookies(self, source_path: Path) -> None:
+        source = self.credentials_source or self.pool_source
+        if source is None:
+            raise RuntimeError("VK creator runtime is not configured")
+        importer = getattr(source, "import_vk_cookies", None)
+        if not callable(importer):
+            raise RuntimeError("VK creator runtime cannot import cookies")
+        importer(source_path)
+
     def snapshot_native_pool(self) -> object:
         source = self.pool_source
         if source is None:

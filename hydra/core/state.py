@@ -23,7 +23,7 @@ from hydra.core.state_format import (
     unpack_state_document,
     validate_state_document,
 )
-from hydra.core.state_migrations import import_legacy_state
+from hydra.core.state_migrations import normalize_state_document
 from hydra.core.hydrabox_keys import generate_hydrabox_jwe_key
 from hydra.core.state_runtime import (
     _RUNTIME_INSTALL_KEYS,
@@ -192,7 +192,7 @@ def _validate_serialized_state(raw: object) -> None:
 
 
 def _decode_serialized_state(raw: dict) -> dict:
-    document = raw if is_state_document(raw) else import_legacy_state(raw)
+    document = normalize_state_document(raw)
     decoded = unpack_state_document(document)
     _validate_raw_state(decoded)
     return decoded
@@ -221,18 +221,23 @@ def migrate_persisted_state() -> dict[str, int | bool]:
             }
 
         raw = _read_raw_state_unlocked()
-        if is_state_document(raw):
-            return {
-                "from": STATE_FORMAT_VERSION,
-                "to": STATE_FORMAT_VERSION,
-                "changed": False,
-            }
-
-        from_version = int(raw.get("version", 0))
-        state = _from_dict(AppState, _decode_serialized_state(raw))
+        from_version = int(raw.get(
+            "format_version" if is_state_document(raw) else "version",
+            0,
+        ))
+        document = normalize_state_document(raw)
+        state = _from_dict(AppState, unpack_state_document(document))
+        changed = document != raw
         for user in state.users:
             if not user.hydrabox_jwe_key:
                 user.hydrabox_jwe_key = generate_hydrabox_jwe_key()
+                changed = True
+        if not changed:
+            return {
+                "from": from_version,
+                "to": STATE_FORMAT_VERSION,
+                "changed": False,
+            }
         _save_state_unlocked(state, current=copy.deepcopy(state))
         return {
             "from": from_version,

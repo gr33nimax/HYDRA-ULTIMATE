@@ -48,12 +48,21 @@ def test_calls_can_remove_a_stale_legacy_join_file(tmp_path) -> None:
     assert not legacy.exists()
 
 
-def test_legacy_credentials_constructor_slot_is_ignored() -> None:
-    credentials = object()
-    runtime = CallsInfrastructure(HostBackend(), credentials)
+def test_calls_runtime_delegates_cookie_import_to_existing_credentials_source(tmp_path) -> None:
+    class Credentials:
+        def __init__(self) -> None:
+            self.source_path = None
 
-    assert runtime.credentials_source is credentials
-    assert not hasattr(runtime, "load_vk_cookies")
+        def import_vk_cookies(self, source_path) -> None:
+            self.source_path = source_path
+
+    credentials = Credentials()
+    runtime = CallsInfrastructure(HostBackend(), credentials)
+    source = tmp_path / "cookies.json"
+
+    runtime.import_vk_cookies(source)
+
+    assert credentials.source_path == source
 
 
 class CapabilityHost(ProbeHost):

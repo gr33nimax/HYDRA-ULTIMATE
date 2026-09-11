@@ -18,6 +18,17 @@ class KernelConfig:
     channel: str = "debug"
 
 
+def normalize_legacy_kernel(raw: dict) -> None:
+    """Normalize the retired provider in a validated legacy state projection."""
+    kernel = raw.setdefault("kernel", {})
+    if kernel.get("provider") == KERNEL_SINGBOX_EXTENDED:
+        kernel["provider"] = KERNEL_HYDRACORE
+        kernel["channel"] = "debug"
+    else:
+        kernel.setdefault("provider", KERNEL_HYDRACORE)
+        kernel.setdefault("channel", "debug")
+
+
 def validate_raw_kernel_config(raw: object) -> None:
     if not isinstance(raw, dict):
         raise ValueError("state field 'kernel' must be an object")
@@ -46,6 +57,7 @@ __all__ = [
     "KernelConfig",
     "SUPPORTED_KERNEL_CHANNELS",
     "SUPPORTED_KERNEL_PROVIDERS",
+    "normalize_legacy_kernel",
     "validate_kernel_config",
     "validate_raw_kernel_config",
 ]

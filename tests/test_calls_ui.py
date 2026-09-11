@@ -80,6 +80,34 @@ def test_calls_profile_is_only_rendered_after_explicit_confirmation() -> None:
     output.assert_not_called()
 
 
+def test_calls_cookie_import_dispatch_is_available_before_installation() -> None:
+    state = AppState()
+    app = SimpleNamespace(calls=SimpleNamespace())
+
+    with patch.object(calls, "_import_cookies") as imported:
+        assert calls._dispatch("2", state, app) is True
+
+    imported.assert_called_once_with(state, app)
+
+
+def test_calls_cookie_import_passes_local_path_without_rendering_contents() -> None:
+    state = AppState()
+    operations = SimpleNamespace(import_vk_cookies=Mock(return_value=ServiceResult(True)))
+    app = SimpleNamespace(calls=operations)
+
+    with (
+        patch.object(calls, "prompt", return_value="~/vk-cookies.json"),
+        patch.object(calls, "_show_result") as show,
+    ):
+        calls._import_cookies(state, app)
+
+    operations.import_vk_cookies.assert_called_once_with(
+        state,
+        "~/vk-cookies.json",
+    )
+    show.assert_called_once()
+
+
 def test_calls_status_uses_minimal_protocol_panel(monkeypatch) -> None:
     state = AppState(
         protocols={"calls": PluginState(installed=True, enabled=True)},
@@ -116,13 +144,15 @@ def test_calls_status_uses_minimal_protocol_panel(monkeypatch) -> None:
     }
 
 
-def test_calls_menu_contains_only_install_or_reinstall_profile_uninstall() -> None:
+def test_calls_menu_contains_cookie_import_before_calls_installation() -> None:
     assert [option[1] for option in calls._menu_options(installed=False)] == [
         "🔧 Установить",
+        "📥 Импортировать VK cookies",
         "↩ Назад",
     ]
     assert [option[1] for option in calls._menu_options(installed=True)] == [
         "🔄 Переустановить",
+        "📥 Импортировать VK cookies",
         "📄 Показать admin-профиль",
         "🔢 Число workers",
         "❌ Удалить",

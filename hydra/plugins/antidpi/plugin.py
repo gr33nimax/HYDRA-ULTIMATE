@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import ipaddress
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Iterable
+from contextlib import contextmanager
 from pathlib import Path
 
 from hydra.contracts import BackupResource
@@ -99,6 +101,7 @@ AWG_DEBUG_PATHS = (
 )
 PROJECT_ROOT = project_root(Path(__file__).resolve().parents[3])
 LOCK_FILE = STATE_FILE.with_suffix(".lock")
+CURSOR_FILE = STATE_FILE.with_suffix(".cursor")
 
 SecurityNotifier = Callable[..., bool]
 BanAddressProvider = Callable[[], Iterable[str]]
@@ -197,7 +200,7 @@ class AntiDPIPlugin(
             "remove_whitelist",
             "unban_address",
         ),
-        queries=("management_snapshot", "recent_logs"),
+        queries=("management_snapshot", "recent_logs", "address_details"),
         actions=(
             "capture_external_tests",
             "manual_ban",
@@ -222,6 +225,8 @@ class AntiDPIPlugin(
         self._security_context = (
             security_context or _security_context_disabled
         )
+        self._init_notification_delivery()
+        self._thread_state_lock = threading.RLock()
 
     def bind_security_adapters(
         self,
@@ -284,23 +289,6 @@ class AntiDPIPlugin(
             paths=self._runtime_paths(),
         )
 
-    def observe_event(
-        self,
-        ip: str,
-        event: dict,
-        *,
-        now: float | None = None,
-    ) -> bool:
-        """Treat short unknown-SNI TLS failures as compatibility telemetry."""
-        normalized_event = dict(event) if isinstance(event, dict) else {}
-        _, signals = score_event(normalized_event)
-        if signals and set(signals) <= {"unknown_sni", "handshake_failure"}:
-            normalized_event["ban_eligible"] = False
-            normalized_event["policy"] = (
-                "alert-only / TLS compatibility or latency probe"
-            )
-        return super().observe_event(ip, normalized_event, now=now)
-
     @staticmethod
     def _host_command():
         return HOST
@@ -325,9 +313,10 @@ class AntiDPIPlugin(
     def _state_store() -> AntiDPIStateStore:
         return AntiDPIStateStore(STATE_FILE)
 
-    @staticmethod
-    def _state_lock():
-        return lock_state_file(STATE_FILE)
+    @contextmanager
+    def _state_lock(self):
+        with self._thread_state_lock, lock_state_file(STATE_FILE):
+            yield
 
     @staticmethod
     def _is_whitelisted(

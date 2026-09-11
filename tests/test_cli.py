@@ -197,6 +197,23 @@ def test_kernel_switch_dispatches_through_application_port(capsys):
     )
 
 
+def test_kernel_switch_defaults_to_available_debug_channel(capsys):
+    app = MagicMock()
+    app.kernel.switch.return_value.as_dict.return_value = {"ok": True}
+    state = AppState()
+    with patch.object(cli, "load_state", return_value=state), \
+         patch.object(cli, "production_application", return_value=app), \
+         patch.object(cli, "_require_root"):
+        assert cli.main(["kernel", "switch", "hydracore"]) == 0
+
+    app.kernel.switch.assert_called_once_with(
+        state,
+        "hydracore",
+        channel="debug",
+        force=False,
+    )
+
+
 
 def test_antidpi_sync_reinstalls_and_reports_health(capsys):
     health = type("Health", (), {

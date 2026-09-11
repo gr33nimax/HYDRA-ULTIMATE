@@ -64,6 +64,7 @@ def apply_connection_snapshot(
     now: Callable[[], float] = time.time,
 ) -> bool:
     """Apply monotonic deltas while retaining a short tombstone window."""
+    ensure_report_totals(state)
     timestamp = now()
     state.install["traffic_daemon_last_poll"] = timestamp
     active = state.install.setdefault("traffic_connection_counters", {})

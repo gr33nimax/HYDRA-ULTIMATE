@@ -6,8 +6,13 @@ import ipaddress
 from hydra.plugins.antidpi.model import active_bans
 from hydra.plugins.antidpi.firewall_rules import SET_V4, SET_V6
 from hydra.plugins.antidpi.runtime import AntiDPIRuntime
+from hydra.plugins.antidpi.state_store import AntiDPIStateCorruptError
 from hydra.plugins.base import HealthResult, PluginStatus
 from hydra.plugins.context import PluginStateAccess
+
+# The collector writes its heartbeat once a minute; ten missed beats mean
+# the worker is stuck even though systemd still reports the unit active.
+COLLECTOR_HEARTBEAT_STALE = 600.0
 
 
 class AntiDPILifecycleMixin:
@@ -66,6 +71,49 @@ class AntiDPILifecycleMixin:
     def _restore_bans(self) -> bool:
         return self._runtime().restore_bans(self._state_store())
 
+    def reconcile_enforcement(self, state: PluginStateAccess) -> bool:
+        """Restore every AntiDPI firewall object and expose failed steps."""
+        if self.management_snapshot().get("degraded") is True:
+            return self._fail(
+                "AntiDPI state is degraded; automatic enforcement is paused",
+            )
+        failed = []
+        steps = (
+            ("ipset sets", self._ensure_sets),
+            ("INPUT rules", self._ensure_rules),
+            ("scan telemetry", self._ensure_scan_rules),
+            (
+                "obsolete UDP telemetry cleanup",
+                lambda: self.sync_udp_probe_rules(state),
+            ),
+            ("Mieru telemetry", lambda: self.sync_mieru_probe_rules(state)),
+        )
+        for label, action in steps:
+            try:
+                if not action():
+                    failed.append(label)
+            except Exception:
+                failed.append(label)
+        try:
+            self.release_whitelisted_bans()
+            covered = self.whitelisted_bans()
+        except Exception:
+            covered = ["state read failed"]
+        if covered:
+            failed.append("whitelist-covered bans")
+        else:
+            try:
+                if not self._restore_bans():
+                    failed.append("stored bans")
+            except Exception:
+                failed.append("stored bans")
+        if not self.record_reconciliation(failed):
+            return self._fail("Could not persist reconciliation outcome")
+        if failed:
+            return self._fail("Reconciliation failed: " + ", ".join(failed))
+        self.last_error = ""
+        return True
+
     def status(
         self,
         state: PluginStateAccess | None = None,
@@ -79,7 +127,13 @@ class AntiDPILifecycleMixin:
             getattr(active, "returncode", 1) == 0
             and str(getattr(active, "stdout", "")).strip() == "active"
         )
-        data = self._state_store().load()
+        degraded = False
+        try:
+            data = self._state_store().load()
+        except AntiDPIStateCorruptError as exc:
+            data = {}
+            degraded = True
+            self._fail(str(exc))
         paths = self._runtime_paths()
         return PluginStatus(
             installed=paths.script.exists() or paths.service.exists(),
@@ -89,6 +143,8 @@ class AntiDPILifecycleMixin:
                 "banned_ips": len(active_bans(data)),
                 "events": data.get("events", 0),
                 "last_error": self.last_error,
+                "state_degraded": degraded,
+                "reconciliation": data.get("reconciliation", {}),
             },
         )
 
@@ -107,6 +163,8 @@ class AntiDPILifecycleMixin:
             running=self.status().running,
             mieru_enabled=mieru_enabled,
         )
+        checks["collector_heartbeat"] = self._collector_heartbeat_ok()
+        checks.update(self._persisted_health_checks())
         healthy = all(checks.values())
         return HealthResult(
             healthy,
@@ -115,6 +173,38 @@ class AntiDPILifecycleMixin:
             checks,
         )
 
+    def _collector_heartbeat_ok(self) -> bool:
+        """Fail health when the collector is running but has gone silent.
+
+        A missing heartbeat (pre-upgrade state) is not a failure: only a
+        recorded heartbeat that has gone stale proves a stuck collector.
+        """
+        try:
+            data = self._state_store().load()
+        except AntiDPIStateCorruptError:
+            return False
+        except Exception:
+            return True
+        try:
+            heartbeat = float(data.get("collector_heartbeat_at", 0) or 0)
+        except (TypeError, ValueError):
+            return True
+        if heartbeat <= 0:
+            return True
+        return self._clock() - heartbeat <= COLLECTOR_HEARTBEAT_STALE
+
+    def _persisted_health_checks(self) -> dict[str, bool]:
+        try:
+            data = self._state_store().load()
+        except AntiDPIStateCorruptError:
+            return {"state": False, "reconciliation": False}
+        reconciliation = data.get("reconciliation", {})
+        return {
+            "state": True,
+            "reconciliation": not isinstance(reconciliation, dict)
+            or reconciliation.get("ok") is not False,
+        }
+
     def on_enable(self, state: PluginStateAccess) -> None:
         prepared = (
             self._ensure_sets()
@@ -122,6 +212,8 @@ class AntiDPILifecycleMixin:
             and self._ensure_scan_rules()
             and self.sync_udp_probe_rules(state)
             and self.sync_mieru_probe_rules(state)
+            and self.release_whitelisted_bans() >= 0
+            and not self.whitelisted_bans()
             and self._restore_bans()
             and self._sync_awg_debug(True)
         )
