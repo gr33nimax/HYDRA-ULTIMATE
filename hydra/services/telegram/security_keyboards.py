@@ -1,8 +1,6 @@
 """Inline keyboards and lifecycle toggles for security dashboards."""
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 from hydra.core.state_models import AppState
 from hydra.services.application import ApplicationService
 from hydra.services.telegram import navigation
@@ -34,9 +32,6 @@ __all__ = [
     "navigation_rows",
     "quiet_hours_keyboard",
 ]
-
-def _mapping_projection(value: object) -> dict:
-    return dict(value) if isinstance(value, Mapping) else {}
 
 def _main_keyboard():
     return InlineKeyboardMarkup(
@@ -181,30 +176,12 @@ def _honeypot_keyboard(app: ApplicationService):
                 "⏹ Остановить" if status.running else "▶️ Запустить",
                 callback_data="ask:honeypot_toggle",
             ),
+            InlineKeyboardButton(
+                "🚫 Блокировки",
+                callback_data=navigation.view_callback("honeypot_bans"),
+            ),
         ],
     ]
-    data = _mapping_projection(
-        app.plugin_query("honeypot", "management_snapshot"),
-    )
-    banned = (
-        data.get("banned", {})
-        if isinstance(data.get("banned"), dict)
-        else {}
-    )
-    ordered = sorted(
-        banned.items(),
-        key=lambda item: str(item[1].get("banned_at", "")),
-        reverse=True,
-    )
-    for address, _metadata in ordered[:5]:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    f"🔓 {address}",
-                    callback_data=f"ask-hp-unban:{address}",
-                ),
-            ],
-        )
     return _back_keyboard(refresh="honeypot", extra=rows)
 
 def _toggle_honeypot(app: ApplicationService) -> tuple[bool, str]:

@@ -178,7 +178,7 @@ def run_main_menu(
                 ("8", "🛠️  Тестирование и отладка", "Диагностика VPS"),
                 ("0", "🚪 Выход", ""),
             ],
-            "HYDRA MULTI-PROXY MANAGER",
+            "ГЛАВНОЕ МЕНЮ",
         )
         if choice == "0":
             print(f"\n{GREEN}До свидания! 👋{NC}")

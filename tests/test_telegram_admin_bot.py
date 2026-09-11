@@ -160,12 +160,12 @@ def test_send_admin_notification_does_not_log_token(capsys):
 
 def test_get_system_info_text(application):
     info = get_system_info_text(application)
-    assert "HYDRA System Information" in info
+    assert "Система" in info
     assert "hydra-test" in info
-    assert "Load Average" in info
+    assert "Load" in info
     assert "RAM" in info
     assert "Диск" in info
-    assert "Статус сервисов" in info
+    assert "Сервисы" in info
     application.admin.system_overview.assert_called_once_with(
         application.admin.load_state.return_value,
     )
@@ -173,8 +173,8 @@ def test_get_system_info_text(application):
 
 def test_get_antidpi_status_text(application):
     text = get_antidpi_status_text(application)
-    assert "AntiDPI Status" in text
-    assert "Заблокировано IP" in text
+    assert "AntiDPI · подробно" in text
+    assert "<b>0</b> блокировок" in text
 
 
 def test_get_fail2ban_status_text(application):
@@ -545,7 +545,7 @@ def test_fail2ban_jail_parser_extracts_full_status():
     }
 
 
-def test_compact_fail2ban_dashboard_includes_policy_and_latest_geoip(
+def test_compact_fail2ban_dashboard_includes_policy_and_latest_ban(
     application,
 ):
     overall = MagicMock(returncode=0, stdout="Jail list: hydra-sshd")
@@ -594,7 +594,7 @@ def test_compact_fail2ban_dashboard_includes_policy_and_latest_geoip(
     assert "198.51.100.9" in text
     assert "🇷🇺" in text
     assert "21.07.2026 11:42" in text
-    assert "AS64500 Example Net" in text
+    assert "AS64500 Example Net" not in text
     assert "Всего ошибок" not in text
     assert "Всего банов" not in text
     application.plugin_query.assert_called_once_with(
@@ -620,7 +620,7 @@ def test_recent_fail2ban_parser_returns_five_unique_latest_bans():
     assert parsed[-1]["ip"] == "198.51.100.2"
 
 
-def test_compact_honeypot_dashboard_limits_rows_and_adds_geoip(application):
+def test_compact_honeypot_dashboard_keeps_ip_rows_in_the_list(application):
     banned = {
         f"198.51.100.{index}": {
             "banned_at": f"2026-07-21T10:0{index}:00", "backend": "iptables",
@@ -650,13 +650,8 @@ def test_compact_honeypot_dashboard_limits_rows_and_adds_geoip(application):
     ):
         text = get_honeypot_status_text(application)
     assert "<b>🍯 Honeypot</b>" in text
-    assert "Активных блокировок:</b> 6" in text
-    assert text.count("<code>198.51.100.") == 5
-    assert "198.51.100.1" not in text
-    assert "🇩🇪" in text
-    assert "21.07.2026 10:06" in text
-    assert "AS64501 Test Network" in text
-    assert "…и ещё" not in text
+    assert "<b>6</b> блокировок" in text
+    assert "198.51.100." not in text
     application.plugin_query.assert_called_once_with(
         "honeypot",
         "management_snapshot",

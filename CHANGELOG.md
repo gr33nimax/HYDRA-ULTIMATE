@@ -1,5 +1,8 @@
 # Changelog
 
+- TUI menus now use compact headers and one-line actions instead of ASCII art,
+  nested boxes and repeated descriptions. Telegram security dashboards show a
+  short summary first and keep IP lists on their existing drill-down screens.
 - AntiDPI's hardened systemd unit now permits the shared xtables lock under
   `/run`, so its background reconciliation can inspect and restore INPUT rules
   while `ProtectSystem=strict` remains enabled.

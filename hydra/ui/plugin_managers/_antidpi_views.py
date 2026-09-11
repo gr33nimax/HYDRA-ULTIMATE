@@ -74,103 +74,65 @@ def wrapped(label: str, text: str, *, width: int = 56) -> list[str]:
 
 
 def status_lines(*, running: bool, health, data: dict) -> list[str]:
-    """Render the header panel of the Anti-DPI controller."""
+    """Render the compact AntiDPI summary."""
     now = data.get("now", 0)
     bans = rows(data, "ban_rows")
     watch = rows(data, "watchlist")
     whitelist = data.get("whitelist", [])
     whitelist = whitelist if isinstance(whitelist, list) else []
-    permanent = sum(1 for row in bans if row.get("permanent") is True)
+    healthy = bool(getattr(health, "healthy", False))
+    service = f"{GREEN}● работает{NC}" if running else f"{RED}○ остановлен{NC}"
+    condition = f"{GREEN}✓ исправен{NC}" if healthy else f"{RED}✗ требует внимания{NC}"
     lines = [
+        kv("Статус", f"{service} {DIM}·{NC} {condition}"),
         kv(
-            "Служба",
-            f"{GREEN}● активна{NC}" if running else f"{RED}○ остановлена{NC}",
+            "Защита",
+            f"{RED if bans else GREEN}{len(bans)} банов{NC} {DIM}·{NC} "
+            f"{YELLOW if watch else DIM}{len(watch)} наблюдается{NC} {DIM}· "
+            f"whitelist {len(whitelist)}{NC}",
         ),
-        *_health_lines(health),
         kv(
             "События",
             f"{WHITE}{format_count(data.get('events'))}{NC} "
             f"{DIM}· последнее {format_age(data.get('last_event_at'), now=now)}"
             f" ({source_label(data.get('last_event_source'))}){NC}",
         ),
-        kv(
-            "Блокировки",
-            f"{RED if bans else GREEN}"
-            f"{plural(len(bans), ('активная', 'активные', 'активных'))}{NC} "
-            f"{DIM}· бессрочных {permanent}{NC}",
-        ),
-        kv(
-            "Наблюдение",
-            f"{YELLOW if watch else DIM}"
-            f"{plural(len(watch), ('адрес', 'адреса', 'адресов'))}{NC} "
-            f"{DIM}· всего под учётом "
-            f"{format_count(data.get('tracked_addresses'))}{NC}",
-        ),
-        kv(
-            "Whitelist",
-            plural(len(whitelist), ("запись", "записи", "записей")),
-        ),
-        *_notification_lines(data),
-        *_failure_lines(data, now=now),
+    ]
+    reconciliation = data.get("reconciliation", {})
+    reconciliation_failed = (
+        isinstance(reconciliation, dict)
+        and reconciliation.get("ok") is False
+    )
+    failed = [
+        health_label(name)
+        for name, value in (getattr(health, "checks", {}) or {}).items()
+        if not value and not (name == "reconciliation" and reconciliation_failed)
     ]
     if data.get("degraded"):
-        lines.extend(
-            wrapped(
-                "State:      ",
-                "повреждён; автоматические блокировки приостановлены",
-            ),
-        )
-    reconciliation = data.get("reconciliation", {})
-    if isinstance(reconciliation, dict) and reconciliation.get("ok") is False:
-        failed = reconciliation.get("failed", [])
-        detail = ", ".join(str(value) for value in failed)
-        lines.extend(wrapped("Reconcile:  ", detail or "ошибка"))
+        failed.append("state повреждён; автоблокировки остановлены")
+    if reconciliation_failed:
+        steps = reconciliation.get("failed", [])
+        detail = ", ".join(str(value) for value in steps) or "ошибка синхронизации"
+        failed.append("firewall: " + detail)
+    if failed:
+        lines.extend(wrapped("Проблема:  ", ", ".join(dict.fromkeys(failed))))
+    lines.extend(_failure_lines(data, now=now))
     error = str(data.get("last_error") or "").strip()
     if error:
         lines.append(kv("Ошибка", f"{RED}{error[:52]}{NC}"))
     return lines
 
 
-def _health_lines(health) -> list[str]:
-    healthy = bool(getattr(health, "healthy", False))
-    checks = getattr(health, "checks", {}) or {}
-    if healthy:
-        return [kv("Состояние", f"{GREEN}✓ исправна{NC}")]
-    failed = [
-        health_label(name)
-        for name, value in checks.items()
-        if not value
-    ]
-    lines = [kv("Состояние", f"{RED}✗ требует внимания{NC}")]
-    if failed:
-        lines.extend(wrapped("Проблемы:  ", ", ".join(failed)))
-    return lines
-
-
-def _notification_lines(data: dict) -> list[str]:
-    stats = data.get("notification_stats", {})
-    stats = stats if isinstance(stats, dict) else {}
-    delivered = int(stats.get("delivered", 0) or 0)
-    failed = int(stats.get("failed", 0) or 0)
-    dropped = int(stats.get("dropped", 0) or 0)
-    # Ban notices inside the cooldown window are skipped, not merged into a
-    # digest; the label must not promise a summary that is never sent.
-    suppressed = int(data.get("suppressed_ban_notifications", 0) or 0)
-    return [
-        kv(
-            "Telegram",
-            f"{GREEN}доставлено {delivered}{NC} {DIM}·{NC} "
-            f"{RED if failed else DIM}ошибок {failed}{NC} {DIM}· "
-            f"пропущено по cooldown {suppressed} · очередь {dropped}{NC}",
-        ),
-    ]
-
-
 def _failure_lines(data: dict, *, now: float) -> list[str]:
     failures = data.get("ban_failures", {})
     failures = failures if isinstance(failures, dict) else {}
     count = int(failures.get("count", 0) or 0)
-    if count <= 0:
+    try:
+        last_at = float(failures.get("last_at", 0) or 0)
+        recent = last_at > 0 and float(now) - last_at <= 86400
+    except (TypeError, ValueError):
+        recent = False
+    if count <= 0 or not recent:
         return []
     return [
         kv(

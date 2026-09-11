@@ -395,7 +395,7 @@ def menu_antidpi(state: AppState, app: ApplicationService) -> None:
         payload["last_error"] = status.info.get("last_error", "")
         clear()
         panel(
-            "🛡 ANTI-DPI — ЗАЩИТА ОТ АКТИВНЫХ ЗОНДОВ",
+            "🛡 AntiDPI",
             status_lines(
                 running=status.running,
                 health=health,
@@ -409,7 +409,7 @@ def menu_antidpi(state: AppState, app: ApplicationService) -> None:
                 watching=len(views_rows(data, "watchlist")),
                 whitelist=len(whitelist),
             ),
-            "УПРАВЛЕНИЕ ANTI-DPI",
+            "ДЕЙСТВИЯ",
         )
         if choice == "0":
             return

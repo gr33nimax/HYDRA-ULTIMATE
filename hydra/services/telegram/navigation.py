@@ -29,7 +29,7 @@ class Screen:
 SCREENS: dict[str, Screen] = {
     screen.name: screen
     for screen in (
-        Screen("home", "Control Center"),
+        Screen("home", "HYDRA"),
         Screen("system", "Система", "home"),
         Screen("antidpi", "AntiDPI", "home"),
         Screen("antidpi_details", "Подробно", "antidpi"),

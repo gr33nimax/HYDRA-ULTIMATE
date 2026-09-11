@@ -198,17 +198,10 @@ def _wrap_line(line: str, max_w: int) -> list[tuple[str, int]]:
 #  Баннер
 # ═════════════════════════════════════════════════════════════════════════════
 
-BANNER = rf"""
-{CYAN}        ██╗  ██╗{GREEN}██╗   ██╗{CYAN}██████╗ {GREEN}██████╗ {CYAN} █████╗
-         ██║  ██║{GREEN}╚██╗ ██╔╝{CYAN}██╔══██╗{GREEN}██╔══██╗{CYAN}██╔══██╗
-         ███████║{GREEN} ╚████╔╝ {CYAN}██║  ██║{GREEN}██████╔╝{CYAN}███████║
-         ██╔══██║{GREEN}  ╚██╔╝  {CYAN}██║  ██║{GREEN}██╔══██╗{CYAN}██╔══██║
-         ██║  ██║{GREEN}   ██║   {CYAN}██████╔╝{GREEN}██║  ██║{CYAN}██║  ██║
-         ╚═╝  ╚═╝{GREEN}   ╚═╝   {CYAN}╚═════╝ {GREEN}╚═╝  ╚═╝{CYAN}╚═╝  ╚═╝{NC}
-{DIM}        ─────────────────────────────────────────────────{NC}
-{MAGENTA}              🐉  Multi-Protocol Proxy Manager{NC}
-{DIM}                        v{__version__}{NC}
-"""
+BANNER = (
+    f"\n{INDENT}{BOLD}{CYAN}HYDRA{NC} "
+    f"{DIM}v{__version__} · Multi-Protocol Proxy Manager{NC}"
+)
 
 
 
@@ -235,34 +228,24 @@ def kv(label: str, value: str, label_w: int = 16) -> str:
 
 
 def panel(title_text: str, lines: list[str], *, wrap: bool = False):
-    """Панель состояния; wrap сохраняет длинные строки, перенося их."""
-    inner = PANEL_W
-    
-    # Центрируем заголовок
-    title_fit, title_w = _fit_line(title_text, inner - 2)
-    pad_left = (inner - title_w) // 2
-    pad_right = inner - title_w - pad_left
-    
+    """Компактная панель состояния; wrap сохраняет длинные строки."""
+    inner = PANEL_W - 2
+    title_fit, _ = _fit_line(title_text, inner)
     print()
-    print(f"{INDENT}{CYAN}╔{'═' * inner}╗{NC}")
-    print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{WHITE}{title_fit}{NC}{' ' * pad_right}{CYAN}║{NC}")
-    print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+    print(f"{INDENT}{BOLD}{CYAN}{title_fit}{NC}")
+    print(f"{INDENT}{DIM}{'─' * inner}{NC}")
     for line in lines:
         plain_line = _strip(line).strip()
         if plain_line and all(c in "─-" for c in plain_line):
-            line_fit = f"{DIM}{'─' * (inner - 2)}{NC}"
-            line_w = inner - 2
-            fitted_lines = [(line_fit, line_w)]
+            fitted_lines = [(f"{DIM}{'─' * inner}{NC}", inner)]
         else:
             fitted_lines = (
-                _wrap_line(line, inner - 2)
+                _wrap_line(line, inner)
                 if wrap
-                else [_fit_line(line, inner - 2)]
+                else [_fit_line(line, inner)]
             )
-        for line_fit, line_w in fitted_lines:
-            pad = inner - 2 - line_w
-            print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * pad} {CYAN}║{NC}")
-    print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
+        for line_fit, _ in fitted_lines:
+            print(f"{INDENT}{line_fit}")
 
 
 def box(content: str, header: str = ""):
@@ -293,19 +276,19 @@ def box(content: str, header: str = ""):
 # ═════════════════════════════════════════════════════════════════════════════
 
 def info(msg: str):
-    print(f"{INDENT}{CYAN}●{NC} {DIM}INFO{NC}  {msg}")
+    print(f"{INDENT}{CYAN}●{NC} {msg}")
 
 
 def success(msg: str):
-    print(f"{INDENT}{GREEN}✓{NC} {GREEN}{BOLD}OK{NC}    {msg}")
+    print(f"{INDENT}{GREEN}✓{NC} {msg}")
 
 
 def warn(msg: str):
-    print(f"{INDENT}{YELLOW}⚠{NC} {YELLOW}WARN{NC}  {msg}")
+    print(f"{INDENT}{YELLOW}⚠{NC} {msg}")
 
 
 def error(msg: str):
-    print(f"{INDENT}{RED}✗{NC} {RED}{BOLD}ERR{NC}   {msg}")
+    print(f"{INDENT}{RED}✗{NC} {msg}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -321,55 +304,21 @@ def _menu_key(key: str) -> str:
 
 
 def menu(options: list[tuple[str, str, str]], header: str = "") -> str:
-    """Отображает меню с двойными рамками."""
-    inner = PANEL_W
+    """Отображает компактное меню без пояснений под каждым пунктом."""
+    inner = PANEL_W - 2
     print()
-    print(f"{INDENT}{CYAN}╔{'═' * inner}╗{NC}")
-
     if header:
-        h_fit, h_w = _fit_line(header, inner - 2)
-        pad_left = (inner - h_w) // 2
-        pad_right = inner - h_w - pad_left
-        print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{WHITE}{h_fit}{NC}{' ' * pad_right}{CYAN}║{NC}")
-        print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+        h_fit, _ = _fit_line(header, inner)
+        print(f"{INDENT}{BOLD}{CYAN}{h_fit}{NC}")
+        print(f"{INDENT}{DIM}{'─' * inner}{NC}")
 
-    for key, label, desc in options:
+    for key, label, _desc in options:
         if key == "-":
-            print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+            print()
             continue
         key_col = _menu_key(key)
-        line = f"  {key_col}  {label}"
-        
-        plain_line = _strip(line).strip()
-        if plain_line and all(c in "─-" for c in plain_line):
-            line_fit = f"{DIM}{'─' * (inner - 2)}{NC}"
-            line_w = inner - 2
-            pad = 0
-        else:
-            line_fit, line_w = _fit_line(line, inner - 2)
-            pad = inner - 2 - line_w
-            
-        print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * pad} {CYAN}║{NC}")
-        if desc:
-            import textwrap
-            desc_width = max(20, inner - 9)
-            for paragraph in desc.split("\n"):
-                wrapped_lines = textwrap.wrap(paragraph, width=desc_width) if paragraph.strip() else [""]
-                for w_line in wrapped_lines:
-                    dline = f"       {DIM}{w_line}{NC}"
-                    
-                    plain_dline = _strip(dline).strip()
-                    if plain_dline and all(c in "─-" for c in plain_dline):
-                        dline_fit = f"{DIM}{'─' * (inner - 2)}{NC}"
-                        dline_w = inner - 2
-                        dpad = 0
-                    else:
-                        dline_fit, dline_w = _fit_line(dline, inner - 2)
-                        dpad = inner - 2 - dline_w
-                        
-                    print(f"{INDENT}{CYAN}║{NC} {dline_fit}{' ' * dpad} {CYAN}║{NC}")
-
-    print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
+        line_fit, _ = _fit_line(f"{key_col}  {label}", inner)
+        print(f"{INDENT}{line_fit}")
     print()
 
     keys = [k for k, _, _ in options if k not in ("-", "")]

@@ -23,9 +23,8 @@ Renderer = Callable[[ApplicationService, str, int], Rendered]
 def _home(app: ApplicationService, name: str, page: int) -> Rendered:
     del app, name, page
     return (
-        "<b>🛡️ HYDRA Control Center</b>\n\n"
-        "Управление защитой и мониторингом VPS.\n"
-        "Пришлите IP-адрес сообщением, чтобы открыть карточку адреса.",
+        "<b>🛡 HYDRA</b>\n\n"
+        "Выберите раздел или отправьте IP-адрес.",
         security_actions._main_keyboard(),
     )
 

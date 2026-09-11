@@ -122,10 +122,10 @@ def test_every_screen_in_the_graph_has_a_renderer():
 
 def test_breadcrumbs_follow_the_screen_graph():
     assert navigation.breadcrumb("antidpi_bans") == (
-        "Control Center › AntiDPI › Блокировки"
+        "HYDRA › AntiDPI › Блокировки"
     )
-    assert navigation.breadcrumb("home") == "Control Center"
-    assert navigation.breadcrumb("unknown") == "Control Center"
+    assert navigation.breadcrumb("home") == "HYDRA"
+    assert navigation.breadcrumb("unknown") == "HYDRA"
 
 
 def test_address_payloads_survive_ipv6_colons_and_carry_their_origin():
@@ -178,6 +178,17 @@ def test_back_button_returns_to_the_parent_not_the_main_menu(application):
     assert labels["⬅️ AntiDPI"] == "view:antidpi"
     assert labels["🔄 Обновить"] == "view:antidpi_details"
     assert labels["🏠 Меню"] == "view:home"
+
+
+def test_honeypot_summary_links_to_the_paged_ban_list(application):
+    callbacks = [
+        button.callback_data
+        for row in security_actions._honeypot_keyboard(application).inline_keyboard
+        for button in row
+    ]
+
+    assert "view:honeypot_bans" in callbacks
+    assert not any(value.startswith("ask-hp-unban:") for value in callbacks)
 
 
 def test_paged_callback_routes_to_the_requested_page(application):
