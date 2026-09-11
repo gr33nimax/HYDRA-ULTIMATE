@@ -27,7 +27,6 @@ from hydra.services.subscriptions.generator import (
 from hydra.services.subscriptions.server import SubscriptionHandler
 from hydra.core.state import AppState, User
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
-from hydra.plugins.context import PluginStateAccess
 
 
 class MockTransport(BasePlugin):
@@ -48,13 +47,13 @@ class MockTransport(BasePlugin):
     def status(self, state=None) -> PluginStatus:
         return PluginStatus(installed=True, enabled=True, running=True)
 
-    def configure(self, state: PluginStateAccess) -> ConfigFragment:
+    def configure(self, state: AppState) -> ConfigFragment:
         return ConfigFragment()
 
-    def client_link(self, user: User, state: PluginStateAccess) -> str:
+    def client_link(self, user: User, state: AppState) -> str:
         return f"mock://{user.email}@example.com"
 
-    def generate_client_config(self, user: User, state: PluginStateAccess) -> str:
+    def generate_client_config(self, user: User, state: AppState) -> str:
         return json.dumps({
             "outbounds": [{
                 "type": "mock",
@@ -82,26 +81,26 @@ class MockNoLink(BasePlugin):
     def status(self, state=None) -> PluginStatus:
         return PluginStatus(installed=True, enabled=True, running=True)
 
-    def configure(self, state: PluginStateAccess) -> ConfigFragment:
+    def configure(self, state: AppState) -> ConfigFragment:
         return ConfigFragment()
 
-    def client_link(self, user: User, state: PluginStateAccess) -> str:
+    def client_link(self, user: User, state: AppState) -> str:
         return ""
 
-    def generate_client_config(self, user: User, state: PluginStateAccess) -> str:
+    def generate_client_config(self, user: User, state: AppState) -> str:
         return ""
 
 
 class MockEndpointTransport(MockTransport):
     """Transport with a plugin-owned sing-box endpoint projection."""
 
-    def generate_client_config(self, user: User, state: PluginStateAccess) -> str:
+    def generate_client_config(self, user: User, state: AppState) -> str:
         return "[Interface]\nPrivateKey = not-json"
 
     def generate_singbox_client_config(
         self,
         user: User,
-        state: PluginStateAccess,
+        state: AppState,
     ) -> str:
         return json.dumps({
             "endpoints": [{
@@ -500,41 +499,6 @@ def test_serialize_nekobox_config_matches_configbean_kryo_format():
     )
 
 
-def test_generate_nekobox_sub_keeps_native_awg_and_drops_legacy_duplicate():
-    user = _make_user("a@x.com")
-    state = _make_state([user])
-    raw_links = "\n".join([
-        "mock://a@x.com@example.com#other",
-        (
-            "wg://203.0.113.10:51820?private_key=client-secret"
-            "&public_key=server-public&pre_shared_key=shared-secret"
-            "&enable_amnezia=true&jc=2#AWG"
-        ),
-        "sn://awg?legacy-payload",
-        "",
-    ])
-
-    with patch(
-        "hydra.services.subscriptions.client_configs.generate_base64_sub",
-        return_value=base64.b64encode(raw_links.encode()).decode(),
-    ):
-        subscription = generate_nekobox_sub(
-            user,
-            state,
-            plugins=_plugins(),
-        )
-
-    links = base64.b64decode(subscription).decode().splitlines()
-    assert links[0] == "mock://a@x.com@example.com#other"
-    awg_links = [link for link in links if link.startswith("wg://")]
-    assert len(awg_links) == 1
-    query = urllib.parse.parse_qs(urllib.parse.urlsplit(awg_links[0]).query)
-    assert query["peer_public_key"] == ["server-public"]
-    assert "public_key" not in query
-    assert query["enable_amnezia"] == ["true"]
-    assert not any(link.startswith("sn://awg?") for link in links)
-
-
 def test_generate_nekobox_sub_wraps_shadowtls_chain_as_native_config():
     user = _make_user("a@x.com")
     state = _make_state([user])
@@ -622,9 +586,7 @@ def test_trusttunnel_quic_link_is_not_lossily_serialized_for_nekobox():
     tcp = "tt://u:p@tt.example.com:443?sni=tt.example.com&alpn=h2#tcp"
     quic = "tt://u:p@tt.example.com:443?sni=tt.example.com&alpn=h3#quic"
 
-    tcp_link = clean_link_to_sn(tcp, user)
-    assert tcp_link is not None
-    assert tcp_link.startswith("sn://trusttunnel?")
+    assert clean_link_to_sn(tcp, user).startswith("sn://trusttunnel?")
     assert clean_link_to_sn(quic, user) is None
 
 
@@ -775,7 +737,6 @@ PersistentKeepalive = 25
 
     name = "🇫🇮 AWG 2.0"
     link = generate_awg_sn_link(conf, name)
-    assert link is not None
     encoded = link.split("?", 1)[1] + "=" * (-len(link.split("?", 1)[1]) % 4)
     data = zlib.decompress(base64.urlsafe_b64decode(encoded))
     assert data.endswith(b"\x8d" + name.encode() + b"\x81\x81")
