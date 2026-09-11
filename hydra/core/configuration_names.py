@@ -50,10 +50,17 @@ def resolve_configuration_name(
     default: str,
     global_names: dict[str, str],
     user_names: dict[str, str],
+    base_key: str = "",
+    base_suffix: str = "",
 ) -> str:
     """Resolve user override, then global override, then the built-in default."""
     validate_configuration_key(key)
-    return user_names.get(key) or global_names.get(key) or default
+    for names in (user_names, global_names):
+        if names.get(key):
+            return names[key]
+        if base_key and names.get(base_key):
+            return names[base_key] + base_suffix
+    return default
 
 
 def configuration_name_key(

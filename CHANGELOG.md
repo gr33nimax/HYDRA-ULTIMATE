@@ -1,5 +1,8 @@
 # Changelog
 
+- Configuration display names now stay separate from HydraBox runtime tags,
+  distinguish Naive TCP and QUIC profiles, and apply to AmneziaWG desktop and
+  mobile links in NekoBox-compatible subscriptions.
 - TUI menus now use compact headers and one-line actions instead of ASCII art,
   nested boxes and repeated descriptions. Telegram security dashboards show a
   short summary first and keep IP lists on their existing drill-down screens.

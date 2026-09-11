@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import urllib.parse
 
 import pytest
 
@@ -192,3 +193,21 @@ def test_subscription_configs_and_links_use_protocol_specific_names() -> None:
     ]
     assert "Общий TT TCP".encode() in raw_links[0]
     assert "Личный TT QUIC".encode() in raw_links[1]
+
+
+def test_native_links_keep_variant_names_distinct_and_rename_awg() -> None:
+    state, user = _named_state()
+    state.configuration_names.update({
+        "naive": "Домашний Naive",
+        "amneziawg:desktop": "Домашний AWG",
+    })
+    links = [
+        "naive+https://u:p@example.com:443#old",
+        "naive+quic://u:p@example.com:443#old",
+        "wg://example.com:51820?private_key=x#alice%40example.com%20AWG%20Desktop",
+    ]
+
+    assert [
+        urllib.parse.unquote(urllib.parse.urlsplit(tag_client_link(link, user, state)).fragment)
+        for link in links
+    ] == ["Домашний Naive", "Домашний Naive QUIC", "Домашний AWG"]

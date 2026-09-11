@@ -57,6 +57,8 @@ class SubscriptionPluginAccess(Protocol):
         plugin: BasePlugin,
         user: User,
         state: AppState,
+        *,
+        apply_name: bool = True,
     ) -> str: ...
 
     def profiles(
@@ -155,6 +157,8 @@ class SubscriptionPluginService:
         plugin: BasePlugin,
         user: User,
         state: AppState,
+        *,
+        apply_name: bool = True,
     ) -> str:
         named_user = user_with_configuration_names(
             user,
@@ -162,7 +166,7 @@ class SubscriptionPluginService:
         )
         payload = self.invoker.generate_singbox_client_config(
             plugin,
-            named_user if plugin.meta.name == "trusttunnel" else user,
+            named_user if apply_name and plugin.meta.name == "trusttunnel" else user,
             state,
         )
         return apply_json_configuration_name(
@@ -170,7 +174,7 @@ class SubscriptionPluginService:
             key=plugin.meta.name,
             global_names=state.configuration_names,
             user_names=user.configuration_name_overrides,
-        ) if plugin.meta.name != "trusttunnel" else payload
+        ) if apply_name and plugin.meta.name != "trusttunnel" else payload
 
     def profiles(
         self,

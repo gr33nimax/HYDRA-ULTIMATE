@@ -78,6 +78,12 @@ def _protocol_suffix(link: str) -> str:
         return "VLESS"
     if scheme == "snell":
         return "Snell"
+    if scheme == "wg":
+        return (
+            "AWG Mobile"
+            if urllib.parse.unquote(parsed.fragment).endswith("AWG Mobile")
+            else "AWG Desktop"
+        )
     if scheme == "trojan":
         query = urllib.parse.parse_qs(parsed.query)
         if "shadow-tls" in query.get("plugin", []):
@@ -92,9 +98,9 @@ def _configuration_name_key(link: str) -> str:
     if scheme == "trojan" and "shadow-tls" in query.get("plugin", []):
         return "shadowtls"
     return {
-        "naive": "naive",
-        "naive+https": "naive",
-        "naive+quic": "naive",
+        "naive": "naive:https",
+        "naive+https": "naive:https",
+        "naive+quic": "naive:quic",
         "anytls": "anytls",
         "tt": "trusttunnel",
         "trusttunnel": "trusttunnel",
@@ -104,6 +110,11 @@ def _configuration_name_key(link: str) -> str:
         "vless": "vless",
         "snell": "snell",
         "trojan": "trojan",
+        "wg": (
+            "amneziawg:mobile"
+            if urllib.parse.unquote(parsed.fragment).endswith("AWG Mobile")
+            else "amneziawg:desktop"
+        ),
     }.get(scheme, "")
 
 
@@ -122,6 +133,12 @@ def tag_client_link(link: str, user: User, state: AppState) -> str:
             default=f"{user.email} {suffix}",
             global_names=state.configuration_names,
             user_names=user.configuration_name_overrides,
+            base_key=key.partition(":")[0] if ":" in key else "",
+            base_suffix={
+                "naive:quic": " QUIC",
+                "amneziawg:desktop": " Desktop",
+                "amneziawg:mobile": " Mobile",
+            }.get(key, ""),
         )
         return urllib.parse.urlunparse(
             parsed._replace(

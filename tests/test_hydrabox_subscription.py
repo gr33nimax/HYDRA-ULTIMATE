@@ -136,7 +136,7 @@ def test_hydrabox_subscription_builds_strict_remote_runtime_and_profiles():
         "issuer": "https://subscriptions.example.com",
         "id": "customer-main",
         "channel": "stable",
-        "sequence": (7 << 16) | 2,
+        "sequence": (7 << 16) | 3,
     }
     assert subscription["validity"] == {
         "issued_at": "2026-08-01T00:00:00Z",
@@ -226,6 +226,7 @@ def test_hydrabox_sequence_advances_after_publisher_payload_change():
 
 def test_hydrabox_subscription_exports_wireguard_as_userspace_endpoint():
     state, user = _state()
+    user.configuration_name_overrides["amneziawg:mobile"] = "Телефон AWG"
     extended_amnezia = {
         "i1": "value-i1",
         "i2": "value-i2",
@@ -239,7 +240,7 @@ def test_hydrabox_subscription_exports_wireguard_as_userspace_endpoint():
     }
     endpoint = {
         "type": "wireguard",
-        "tag": "provider-wg",
+        "tag": "amneziawg-mobile-alice@example.com",
         "address": ["10.0.0.2/32"],
         "private_key": "private",
         "amnezia": {
@@ -257,7 +258,7 @@ def test_hydrabox_subscription_exports_wireguard_as_userspace_endpoint():
     }
     plugin = _HydraBoxTransport(json.dumps({
         "endpoints": [endpoint],
-        "route": {"final": "provider-wg"},
+        "route": {"final": "amneziawg-mobile-alice@example.com"},
     }))
     plugin.meta = PluginMeta(
         name="amneziawg",
@@ -273,17 +274,51 @@ def test_hydrabox_subscription_exports_wireguard_as_userspace_endpoint():
 
     resource = subscription["resources"][0]
     exported = resource["document"]["endpoints"][0]
-    assert exported["tag"] == "provider-wg"
+    assert exported["tag"] == "amneziawg-mobile-alice@example.com"
     assert exported["system"] is False
     assert {
         key: exported["amnezia"][key] for key in extended_amnezia
     } == extended_amnezia
     assert subscription["profiles"][0]["entrypoint"] == {
         "section": "endpoints",
-        "tag": "provider-wg",
+        "tag": "amneziawg-mobile-alice@example.com",
     }
+    assert subscription["profiles"][0]["name"] == "Телефон AWG"
     assert resource["requested_permissions"] == [
         "network.endpoint.wireguard",
+    ]
+
+
+def test_hydrabox_names_naive_variants_without_changing_runtime_tags():
+    state, user = _state()
+    state.configuration_names["naive"] = "Домашний Naive"
+    payload = json.dumps({
+        "outbounds": [
+            {"type": "naive", "tag": "naive-tcp-alice", "quic": False},
+            {"type": "naive", "tag": "naive-quic-alice", "quic": True},
+        ],
+        "route": {"final": "naive-tcp-alice"},
+    })
+    plugin = _HydraBoxTransport(payload)
+    plugin.meta = PluginMeta(
+        name="naive",
+        display_name="NaiveProxy",
+        description="Naive test transport",
+    )
+
+    subscription = generate_hydrabox_subscription(
+        user,
+        state,
+        plugins=_plugins(plugin),
+    )
+
+    assert [profile["name"] for profile in subscription["profiles"]] == [
+        "Домашний Naive",
+        "Домашний Naive QUIC",
+    ]
+    assert [profile["entrypoint"]["tag"] for profile in subscription["profiles"]] == [
+        "naive-tcp-alice",
+        "naive-quic-alice",
     ]
 
 
