@@ -1,7 +1,7 @@
 """Thin compatibility facade for the modular NaiveProxy plugin."""
 from __future__ import annotations
 
-import shutil as shutil  # compatibility monkeypatch seam
+import shutil as shutil  # noqa: F401 - compatibility monkeypatch seam
 import time as time  # compatibility monkeypatch seam
 from pathlib import Path
 
@@ -105,12 +105,12 @@ class NaivePlugin(
     def _host_backend():
         return HOST
 
-    @staticmethod
-    def _installed() -> bool:
-        return (
-            BIN_PATH.exists()
-            or shutil.which("caddy-naive") is not None
-        )
+    def _installed(self) -> bool:
+        layout = self._runtime_layout()
+        return all((
+            layout.binary.is_file(),
+            layout.service_file.is_file(),
+        ))
 
     @staticmethod
     def _download_asset(

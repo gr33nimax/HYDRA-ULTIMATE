@@ -5,18 +5,36 @@ import shutil
 import tempfile
 from dataclasses import replace
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable
+
+from .constants import NaiveRuntimeLayout
+
+
+if TYPE_CHECKING:
+    _RuntimeLayout = Callable[[], NaiveRuntimeLayout]
+    _HostBackend = Callable[[], Any]
+    _Installed = Callable[[], bool]
+    _ValidateCaddy = Callable[..., str | None]
 
 
 class NaiveInstallationMixin:
     """Install or remove host assets without owning runtime reconciliation."""
 
+    if TYPE_CHECKING:
+        _runtime_layout: _RuntimeLayout
+        _host_backend: _HostBackend
+        _installed: _Installed
+        _validate_caddy: _ValidateCaddy
+
     def install(self) -> bool:
+        layout = self._runtime_layout()
         if self._installed():
             return True
-        print("  Устанавливаю caddy-naive с поддержкой UoT...")
-        if not self._download_binary():
-            print("  Не удалось установить caddy-naive.")
-            return False
+        if not layout.binary.is_file():
+            print("  Устанавливаю caddy-naive с поддержкой UoT...")
+            if not self._download_binary():
+                print("  Не удалось установить caddy-naive.")
+                return False
         self._install_service()
         return self._installed()
 
@@ -44,7 +62,10 @@ class NaiveInstallationMixin:
             layout.data_dir,
         ):
             if directory.exists():
-                shutil.rmtree(directory, ignore_errors=True)
+                try:
+                    shutil.rmtree(directory, ignore_errors=True)
+                except OSError:
+                    continue
         return True
 
     def _download_binary(self, config_path: Path | None = None) -> bool:

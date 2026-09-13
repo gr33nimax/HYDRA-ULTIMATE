@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
+from typing import Any, cast
 
+from hydra.core.state_models import AppState
 from hydra.plugins.base import ConfigFragment
 from hydra.plugins.context import PluginStateAccess
 
@@ -79,15 +81,18 @@ class NaiveConfigurationMixin:
 
     _pending_cfg: str | None
 
-    def configure(self, state: PluginStateAccess) -> ConfigFragment:
+    def configure(self: Any, state: PluginStateAccess) -> ConfigFragment:
         from hydra.core.sni_router import (
             get_effective_port,
             get_internal_port,
         )
 
         domain = state.network.domain
+        protocol = state.protocols.get("naive")
         if not domain:
             self._pending_cfg = None
+            if protocol is not None and protocol.enabled:
+                raise ValueError("TLS-сертификат NaiveProxy требует домен")
             return ConfigFragment()
 
         users = [
@@ -98,14 +103,17 @@ class NaiveConfigurationMixin:
             for user in state.users
             if not user.blocked
         ]
-        protocol = state.protocols.get("naive")
         config = protocol.config if protocol and protocol.config else {}
         cert_file, key_file = self._resolve_certs(domain, protocol)
         if not cert_file or not key_file:
             self._pending_cfg = None
+            if protocol is not None and protocol.enabled:
+                raise ValueError(
+                    f"TLS-сертификат для NaiveProxy {domain} не подготовлен",
+                )
             return ConfigFragment()
 
-        port = get_effective_port("naive", state)
+        port = get_effective_port("naive", cast(AppState, state))
         self._pending_cfg = self._build_caddyfile(
             domain=domain,
             port=port,
@@ -141,7 +149,7 @@ class NaiveConfigurationMixin:
                 prospective_state.protocols["naive"].config[
                     "network"
                 ] = network
-                get_quic_owner(prospective_state)
+                get_quic_owner(cast(AppState, prospective_state))
             except ValueError:
                 return False
         protocol.config["network"] = network
@@ -166,7 +174,7 @@ class NaiveConfigurationMixin:
         state.network.domain = normalized
         return True
 
-    def on_enable(self, state: PluginStateAccess) -> None:
+    def on_enable(self: Any, state: PluginStateAccess) -> None:
         protocol = state.protocols.get("naive")
         if protocol is None:
             raise ValueError("NaiveProxy configuration is missing")
@@ -187,9 +195,9 @@ class NaiveConfigurationMixin:
         if network in ("quic", "both"):
             from hydra.core.sni_router import get_quic_owner
 
-            get_quic_owner(state, prospective="naive")
+            get_quic_owner(cast(AppState, state), prospective="naive")
 
-    def _resolve_certs(self, domain: str, protocol) -> tuple[str, str]:
+    def _resolve_certs(self: Any, domain: str, protocol) -> tuple[str, str]:
         config = (
             protocol.config
             if protocol is not None and protocol.config
@@ -198,7 +206,7 @@ class NaiveConfigurationMixin:
         return self._resolve_tls_material(domain, config)
 
     def _build_caddyfile(
-        self,
+        self: Any,
         domain: str,
         port: int,
         users: list[dict],

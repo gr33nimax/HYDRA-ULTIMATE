@@ -39,6 +39,13 @@ def _report_change(changed: bool, success_text: str) -> None:
         )
 
 
+def _parse_int(value: object, label: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label}: требуется целое число") from exc
+
+
 def _naive_option(desired: PluginState) -> SettingsOption | None:
     current = str(desired.config.get("network", "tcp"))
     label = {
@@ -80,7 +87,16 @@ def _menu_naive(
                 "set_domain",
                 domain=domain,
             )
-            _report_change(changed, f"Домен изменён на {domain}")
+            enabled = bool(state.protocols.get("naive", PluginState()).enabled)
+            message = (
+                f"Домен изменён на {domain}"
+                if enabled
+                else (
+                    f"Домен сохранён: {domain}. TLS-сертификат будет "
+                    "получен при включении NaiveProxy"
+                )
+            )
+            _report_change(changed, message)
         except ValueError as exc:
             error(str(exc))
         prompt("Нажмите Enter")
@@ -214,11 +230,12 @@ def _change_hysteria2(
             domain=domain,
         )
     if choice == "2":
-        port = int(
+        port = _parse_int(
             prompt(
                 "Новый UDP-порт",
                 default=str(desired.config.get("port", 8443)),
             ),
+            "UDP-порт",
         )
         return app.plugin_command(
             state,
@@ -265,17 +282,19 @@ def _change_hysteria2_congestion(
     }
     if selected == "2":
         parameters.update(
-            up_mbps=int(
+            up_mbps=_parse_int(
                 prompt(
                     "Upload Mbps",
                     default=str(desired.config.get("up_mbps", 100)),
                 ),
+                "Upload Mbps",
             ),
-            down_mbps=int(
+            down_mbps=_parse_int(
                 prompt(
                     "Download Mbps",
                     default=str(desired.config.get("down_mbps", 100)),
                 ),
+                "Download Mbps",
             ),
         )
     return app.plugin_command(
@@ -295,7 +314,10 @@ def menu_snell_settings(
     while True:
         state = app.admin.load_state()
         desired = _desired_state(state, "snell")
-        configured_version = int(desired.config.get("version", 4))
+        configured_version = _parse_int(
+            desired.config.get("version", 4),
+            "Версия Snell",
+        )
         if configured_version not in {4, 5}:
             raise ValueError("Hydra Snell supports version 4")
         mode = str(desired.config.get("obfs_mode", "http"))

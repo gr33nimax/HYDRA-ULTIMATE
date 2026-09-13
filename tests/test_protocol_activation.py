@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import Mock, patch
 
 import pytest
@@ -12,11 +13,12 @@ from hydra.plugins.naive.plugin import NaivePlugin
 from hydra.plugins.shadowtls.plugin import ShadowTLSPlugin
 from hydra.plugins.trusttunnel.plugin import TrustTunnelPlugin
 from hydra.plugins.vless_xhttp.plugin import VlessXhttpPlugin
+from hydra.services.application import ApplicationService
 from hydra.ui._menus.protocol_activation import (
     prepare_interactive_activation,
     run_lifecycle_action,
 )
-from hydra.ui._menus.plugin_settings import _naive_option
+from hydra.ui._menus.plugin_settings import _menu_naive, _naive_option
 
 
 DOMAIN_TLS_PLUGINS = (
@@ -28,9 +30,12 @@ DOMAIN_TLS_PLUGINS = (
 )
 
 
-def _activation_app(*, calls: list[str] | None = None):
+def _activation_app(
+    *,
+    calls: list[str] | None = None,
+) -> ApplicationService:
     events = calls if calls is not None else []
-    return SimpleNamespace(
+    return cast(ApplicationService, SimpleNamespace(
         admin=SimpleNamespace(
             save_state=lambda _state: events.append("save"),
         ),
@@ -42,7 +47,7 @@ def _activation_app(*, calls: list[str] | None = None):
         ),
         plugin_command=Mock(return_value=True),
         apply_error=lambda: "",
-    )
+    ))
 
 
 @pytest.mark.parametrize(("plugin_type", "source"), DOMAIN_TLS_PLUGINS)
@@ -128,7 +133,9 @@ def test_invalid_domain_stops_before_install():
 def test_activation_error_is_reported_inside_tui_instead_of_reaching_root():
     state = AppState(protocols={"naive": PluginState()})
     app = _activation_app()
-    app.protocols.activate = Mock(side_effect=ValueError("certificate failed"))
+    cast(SimpleNamespace, app.protocols).activate = Mock(
+        side_effect=ValueError("certificate failed"),
+    )
     errors: list[str] = []
 
     run_lifecycle_action(
@@ -164,7 +171,7 @@ def test_shadowtls_collects_mandatory_handshake_sni_before_activation():
             report_error=Mock(),
         )
 
-    app.plugin_command.assert_called_once_with(
+    cast(Mock, app.plugin_command).assert_called_once_with(
         state,
         "shadowtls",
         "set_handshake_sni",
@@ -179,3 +186,22 @@ def test_naive_settings_remain_available_while_installed_but_disabled():
 
     assert option is not None
     assert "Домен" in option[0]
+
+
+def test_disabled_naive_domain_change_explains_deferred_certificate():
+    state = AppState(protocols={"naive": PluginState(enabled=False)})
+    app = _activation_app()
+
+    with (
+        patch("hydra.ui._menus.plugin_settings.menu", return_value="1"),
+        patch("hydra.ui._menus.plugin_settings.prompt", side_effect=(
+            "vpn.example.com", "",
+        )),
+        patch("hydra.ui._menus.plugin_settings.success") as report_success,
+    ):
+        _menu_naive(state, object(), app)
+
+    report_success.assert_called_once_with(
+        "Домен сохранён: vpn.example.com. TLS-сертификат будет получен "
+        "при включении NaiveProxy",
+    )

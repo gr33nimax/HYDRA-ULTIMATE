@@ -3,8 +3,18 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable
 
 from hydra.plugins.context import PluginStateAccess
+
+from .constants import NaiveRuntimeLayout
+
+
+if TYPE_CHECKING:
+    _RuntimeLayout = Callable[[], NaiveRuntimeLayout]
+    _HostBackend = Callable[[], Any]
+    _DownloadBinary = Callable[..., bool]
+    _DecoyTheme = Callable[[PluginStateAccess], str]
 
 
 def _accounting_rule(
@@ -37,7 +47,13 @@ class NaiveRuntimeMixin:
 
     _pending_cfg: str | None
 
-    def snapshot(self, state: PluginStateAccess):
+    if TYPE_CHECKING:
+        _runtime_layout: _RuntimeLayout
+        _host_backend: _HostBackend
+        _download_binary: _DownloadBinary
+        decoy_theme: _DecoyTheme
+
+    def snapshot(self, state: PluginStateAccess) -> dict[str, Any]:
         del state
         self._binary_replaced = False
         layout = self._runtime_layout()
@@ -135,10 +151,10 @@ class NaiveRuntimeMixin:
             return False
 
         protocol = state.protocols.get("naive")
-        network = (
+        network = str(
             protocol.config.get("network", "tcp")
             if protocol is not None
-            else "tcp"
+            else "tcp",
         )
         self._sync_transport_firewall(network)
         time.sleep(2)

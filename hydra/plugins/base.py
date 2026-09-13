@@ -4,6 +4,7 @@ from __future__ import annotations
 import enum
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
+from typing import Any
 from hydra.contracts import BackupResource, ConfigFragment, JsonValue
 from hydra.core.state_models import User
 from hydra.plugins.context import PluginStateAccess
@@ -97,7 +98,10 @@ def lifecycle_result(
     }[operation]
     callback = getattr(plugin, callback_name)
     value = callback() if state is None else callback(state)
-    return LifecycleResult(operation, value is not False)
+    return LifecycleResult(
+        operation,
+        value if isinstance(value, bool) else True,
+    )
 
 
 @dataclass
@@ -131,7 +135,7 @@ class PluginMeta:
     @property
     def capabilities(self) -> PluginCapabilities:
         return PluginCapabilities(
-            central_apply=self.central_apply is not False,
+            central_apply=self.central_apply != False,
             required_commands=tuple(self.required_commands),
             required_services=tuple(self.required_services),
             conflicts_with=tuple(self.conflicts_with),
@@ -206,8 +210,13 @@ class BasePlugin(ABC):
             if status.running:
                 return HealthResult(True)
             return HealthResult(False, "service is not active", "error")
-        except Exception as exc:
-            return HealthResult(False, str(exc) or exc.__class__.__name__, "unknown")
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            detail = str(exc)
+            return HealthResult(
+                False,
+                detail if detail else exc.__class__.__name__,
+                "unknown",
+            )
 
     def healthcheck_for_state(
         self,
@@ -228,10 +237,11 @@ class BasePlugin(ABC):
             if status.running:
                 return HealthResult(True)
             return HealthResult(False, "service is not active", "error")
-        except Exception as exc:
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            detail = str(exc)
             return HealthResult(
                 False,
-                str(exc) or exc.__class__.__name__,
+                detail if detail else exc.__class__.__name__,
                 "unknown",
             )
 
@@ -242,13 +252,13 @@ class BasePlugin(ABC):
         healthy, detail = result
         return HealthResult(bool(healthy), str(detail or ""), "ok" if healthy else "error")
 
-    def snapshot(self, state: PluginStateAccess):
+    def snapshot(self, state: PluginStateAccess) -> dict[str, Any]:
         """Capture plugin-owned runtime state before apply.
 
-        The default is intentionally a no-op for backwards compatibility.
-        Plugins that write external files or units can override this hook.
+        The default is an empty snapshot; plugins that own runtime files or
+        units override it with the resources needed for rollback.
         """
-        return None
+        return {}
 
     def rollback(self, state: PluginStateAccess, snapshot) -> bool:
         """Restore a snapshot captured before ``apply``."""
@@ -262,13 +272,15 @@ class BasePlugin(ABC):
         reports what users moved through it.
         """
         name = self.meta.name
-        totals = {
-            user.email: int(
-                user.credentials.get(name, {}).get("traffic_used_bytes", 0)
-                or 0,
+        totals: dict[str, int] = {}
+        for user in state.users:
+            value = user.credentials.get(name, {}).get(
+                "traffic_used_bytes", 0,
             )
-            for user in state.users
-        }
+            try:
+                totals[user.email] = int(value or 0)
+            except (TypeError, ValueError):
+                totals[user.email] = 0
         return {email: total for email, total in totals.items() if total > 0}
 
     def traffic_snapshot(

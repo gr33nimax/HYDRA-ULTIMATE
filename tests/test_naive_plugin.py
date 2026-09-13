@@ -5,6 +5,9 @@ from pathlib import Path
 from contextlib import nullcontext
 from unittest.mock import patch, MagicMock
 import sys
+
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.plugins.naive.access_logs import ingest_access_logs
@@ -47,7 +50,12 @@ def test_plugin_meta():
     assert p.meta.needs_domain is True
 
 
-def test_configure_returns_fragment_empty_tproxy():
+@patch.object(
+    NaivePlugin,
+    "_resolve_certs",
+    return_value=("/cert.pem", "/key.pem"),
+)
+def test_configure_returns_fragment_empty_tproxy(_resolve_certs):
     """configure() возвращает ConfigFragment с nft_tproxy_ports=[] (TPROXY не используется)."""
     p = NaivePlugin()
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
@@ -59,7 +67,12 @@ def test_configure_returns_fragment_empty_tproxy():
     assert frag.outbounds == []
 
 
-def test_configure_returns_fragment_even_without_users():
+@patch.object(
+    NaivePlugin,
+    "_resolve_certs",
+    return_value=("/cert.pem", "/key.pem"),
+)
+def test_configure_returns_fragment_even_without_users(_resolve_certs):
     """Без юзеров configure всё равно возвращает пустой nft_tproxy_ports."""
     p = NaivePlugin()
     state = _make_state([])
@@ -78,18 +91,29 @@ def test_configure_skips_blocked_users(mock_resolve):
     frag = p.configure(state)
     assert frag.nft_tproxy_ports == []
     # В Caddyfile только один пользователь
-    assert "uuid-a" not in p._pending_cfg or True
+    assert p._pending_cfg is not None
     lines = p._pending_cfg.splitlines()
     basic_auth_lines = [l for l in lines if "basic_auth" in l]
     assert len(basic_auth_lines) == 1
 
 
-def test_configure_empty_when_no_domain():
-    """Без домена configure возвращает пустой фрагмент."""
+def test_configure_rejects_enabled_naive_without_domain():
     p = NaivePlugin()
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")], domain="")
-    frag = p.configure(state)
-    assert frag.nft_tproxy_ports == []
+
+    with pytest.raises(ValueError, match="TLS-сертификат"):
+        p.configure(state)
+
+
+def test_configure_rejects_enabled_naive_without_tls_material():
+    p = NaivePlugin()
+    state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
+
+    with (
+        patch.object(p, "_resolve_certs", return_value=("", "")),
+        pytest.raises(ValueError, match="TLS-сертификат"),
+    ):
+        p.configure(state)
 
 
 def test_client_link_valid_uri():
@@ -525,7 +549,6 @@ def test_apply_reconciles_quic_firewall(tmp_path):
     p = NaivePlugin()
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
     state.protocols["naive"].config["network"] = "quic"
-    p._pending_config = "test"
     p._pending_cfg = "test"
     config_dir = tmp_path / "config"
     log_dir = tmp_path / "logs"
