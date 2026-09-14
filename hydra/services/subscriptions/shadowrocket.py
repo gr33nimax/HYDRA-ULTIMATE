@@ -1,4 +1,5 @@
 """Shadowrocket-native proxy link serialization."""
+
 from __future__ import annotations
 
 import base64
@@ -38,9 +39,13 @@ def _http_link(link: str, scheme: str, suffix: str = "") -> str:
         port = parsed.port or 443
         host = f"[{hostname}]" if ":" in hostname else hostname
         credentials = f"{username}:{password}@{host}:{port}"
-        encoded = base64.urlsafe_b64encode(
-            credentials.encode("utf-8"),
-        ).decode("ascii").rstrip("=")
+        encoded = (
+            base64.urlsafe_b64encode(
+                credentials.encode("utf-8"),
+            )
+            .decode("ascii")
+            .rstrip("=")
+        )
         remarks = urllib.parse.unquote(parsed.fragment) or "NaiveProxy"
         parameters = {
             "remarks": remarks + suffix,

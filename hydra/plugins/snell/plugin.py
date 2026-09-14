@@ -1,4 +1,5 @@
 """Per-user Snell 5/6 inbounds via sing-box-extended."""
+
 from __future__ import annotations
 
 import hashlib
@@ -55,6 +56,7 @@ class SnellPlugin(BasePlugin):
 
     def install(self) -> bool:
         from hydra.core.singbox import is_installed
+
         return is_installed()
 
     def uninstall(self) -> bool:
@@ -121,11 +123,14 @@ class SnellPlugin(BasePlugin):
                 outbound["obfs_host"] = self._obfs_host(state)
         else:
             outbound["mode"] = self._v6_mode(state)
-        return json.dumps({
-            "log": {"level": "info"},
-            "outbounds": [outbound, {"type": "direct", "tag": "direct"}],
-            "route": {"final": outbound["tag"]},
-        }, indent=2)
+        return json.dumps(
+            {
+                "log": {"level": "info"},
+                "outbounds": [outbound, {"type": "direct", "tag": "direct"}],
+                "route": {"final": outbound["tag"]},
+            },
+            indent=2,
+        )
 
     def client_link(self, user: User, state: PluginStateAccess) -> str:
         server = self._url_host(self._server_ip(state))
@@ -155,10 +160,12 @@ class SnellPlugin(BasePlugin):
             self._obfs_host(state)
         self._v6_mode(state)
         from hydra.utils.firewall import open_range
+
         open_range("tcp", PORT_START, PORT_END, "snell")
 
     def on_disable(self, state: PluginStateAccess) -> None:
         from hydra.utils.firewall import close_range
+
         close_range("tcp", PORT_START, PORT_END, "snell")
 
     def status(
@@ -166,6 +173,7 @@ class SnellPlugin(BasePlugin):
         state: PluginStateAccess | None = None,
     ) -> PluginStatus:
         from hydra.core.singbox import is_installed, is_running
+
         installed = is_installed()
         enabled = False
         info = {"Диапазон": f"{PORT_START}-{PORT_END}"}
@@ -177,17 +185,14 @@ class SnellPlugin(BasePlugin):
                 info["Версия"] = f"v{generation}"
                 if generation == 5:
                     mode = self._obfs_mode(state)
-                    info["Obfs"] = (
-                        f"{mode.upper()} · {self._obfs_host(state)}" if mode != "none" else "выключен"
-                    )
+                    info["Obfs"] = f"{mode.upper()} · {self._obfs_host(state)}" if mode != "none" else "выключен"
                 else:
                     info["Режим"] = self._v6_mode(state)
                     info["Obfs"] = "не применимо"
                     info["Клиенты"] = "только v6"
             except Exception:
                 pass
-        return PluginStatus(installed, enabled, installed and enabled and is_running(), PORT_START,
-                            info)
+        return PluginStatus(installed, enabled, installed and enabled and is_running(), PORT_START, info)
 
     @staticmethod
     def _psk(seed: str) -> str:
@@ -290,8 +295,7 @@ class SnellPlugin(BasePlugin):
     def _require_generation_support() -> None:
         if not kernel_supports_snell():
             raise ValueError(
-                "Snell 5/6 requires a HydraCore with the upstream Snell implementation "
-                f"({MIN_SNELL_CORE} or newer)"
+                f"Snell 5/6 requires a HydraCore with the upstream Snell implementation ({MIN_SNELL_CORE} or newer)"
             )
 
     @staticmethod
@@ -332,9 +336,7 @@ class SnellPlugin(BasePlugin):
             raise ValueError("Snell v6 mode applies to generation 6 only")
         normalized_host = str(obfs_host).strip()
         if normalized_mode in ("http", "tls") and (
-            not normalized_host
-            or "://" in normalized_host
-            or any(character.isspace() for character in normalized_host)
+            not normalized_host or "://" in normalized_host or any(character.isspace() for character in normalized_host)
         ):
             raise ValueError("Invalid Snell obfs host")
         ps = state.protocols.get("snell")

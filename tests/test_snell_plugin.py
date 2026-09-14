@@ -117,8 +117,7 @@ def test_http_obfs_is_configurable_on_the_classic_generation():
     )
     inbound = plugin.configure(state).inbounds[0]
     outbound = next(
-        item for item in json.loads(plugin.generate_client_config(user, state))["outbounds"]
-        if item["type"] == "snell"
+        item for item in json.loads(plugin.generate_client_config(user, state))["outbounds"] if item["type"] == "snell"
     )
 
     assert inbound["version"] == 5
@@ -145,8 +144,7 @@ def test_tls_obfs_is_configurable_on_the_classic_generation():
     )
     inbound = plugin.configure(state).inbounds[0]
     outbound = next(
-        item for item in json.loads(plugin.generate_client_config(user, state))["outbounds"]
-        if item["type"] == "snell"
+        item for item in json.loads(plugin.generate_client_config(user, state))["outbounds"] if item["type"] == "snell"
     )
 
     assert inbound["obfs_mode"] == "tls"
@@ -163,8 +161,7 @@ def test_generation_six_uses_its_own_mode_on_both_ends():
 
     inbound = plugin.configure(state).inbounds[0]
     outbound = next(
-        item for item in json.loads(plugin.generate_client_config(user, state))["outbounds"]
-        if item["type"] == "snell"
+        item for item in json.loads(plugin.generate_client_config(user, state))["outbounds"] if item["type"] == "snell"
     )
 
     assert inbound["version"] == outbound["version"] == 6
@@ -178,12 +175,15 @@ def test_generation_six_uses_its_own_mode_on_both_ends():
 def test_settings_command_only_updates_desired_state():
     plugin = SnellPlugin()
     state = _state(User("a@example.com", "uuid-a"))
-    assert plugin.set_settings(
-        state,
-        5,
-        "http",
-        "cdn.example.com",
-    ) is True
+    assert (
+        plugin.set_settings(
+            state,
+            5,
+            "http",
+            "cdn.example.com",
+        )
+        is True
+    )
     assert state.protocols["snell"].config == {
         "version": 5,
         "obfs_mode": "http",
@@ -191,13 +191,16 @@ def test_settings_command_only_updates_desired_state():
         "mode": "default",
     }
 
-    assert plugin.set_settings(
-        state,
-        6,
-        "none",
-        "cdn.example.com",
-        "unshaped",
-    ) is True
+    assert (
+        plugin.set_settings(
+            state,
+            6,
+            "none",
+            "cdn.example.com",
+            "unshaped",
+        )
+        is True
+    )
     assert state.protocols["snell"].config == {
         "version": 6,
         "obfs_mode": "none",
@@ -246,8 +249,7 @@ def test_a_state_written_for_the_previous_core_is_served_as_generation_five():
 
     inbound = plugin.configure(state).inbounds[0]
     outbound = next(
-        item for item in json.loads(plugin.generate_client_config(user, state))["outbounds"]
-        if item["type"] == "snell"
+        item for item in json.loads(plugin.generate_client_config(user, state))["outbounds"] if item["type"] == "snell"
     )
 
     assert inbound["version"] == 5
