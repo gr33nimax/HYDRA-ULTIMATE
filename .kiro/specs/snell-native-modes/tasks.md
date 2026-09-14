@@ -14,8 +14,8 @@ TSK-006 (HydraCore fence) is independent and closes R2.4
 
 | State | Count | Evidence |
 | --- | ---: | --- |
-| Not started | 1 | TSK-007 |
-| Complete | 6 | TSK-001 … TSK-006 |
+| Not started | 0 | — |
+| Complete | 7 | TSK-001 … TSK-007 |
 
 ## Tasks
 
@@ -69,7 +69,8 @@ TSK-006 (HydraCore fence) is independent and closes R2.4
   - **Acceptance:** `go test ./option` covers the four accepted shapes and the two refusals.
   - **Dependency:** none (HydraCore repo). _Requirements: R2.4._
 
-- [ ] **TSK-007 — docs and spec cascade**
+- [x] **TSK-007 — docs and spec cascade**
+  - **Факт:** `docs/REFERENCE.md` (transport row + the Shadowrocket paragraph), `docs/CLI.md` (both `set_settings` examples), `README.md` (transport row) and `CHANGELOG.md` describe the two generations, the 5↔4 pairing and the gate; the meta-spec task points at this spec. `verify.py` → `1995 passed` + compileall + ruff. Commits `6996a18` (code/docs) and `9917d32` (tests) on `debug`.
   - Update `docs/REFERENCE.md`, `docs/CLI.md`, `README.md`, `CHANGELOG.md`; point the
     meta-spec task (`D:/dev/.kiro/specs/awg31-end-to-end` TSK-011) at this spec.
   - **Acceptance:** docs name the two generations, the 5↔4 pairing and the gate; `verify.py`
