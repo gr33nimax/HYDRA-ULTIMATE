@@ -48,9 +48,8 @@ lifecycle транспорта. В меню `Calls · VK` JSON с VK cookies и�
 `/etc/hydra/cookiesvk/cookies-vk.json` (`0600`). qWDTT не создаёт и не
 обслуживает Creator pool, не использует cookies и владеет только сервером и
 master-артефактом.
-Capability probe `sing-box hydra capabilities --json` обязан подтвердить exact
-Hydracore identity, `call_vk_parasite` и режим `vk_parasite`; stock/P2P не
-имеют operational fallback. Calls поднимает 1–4 комнаты отдельными blue/green
+`sing-box hydra contract --json` обязан подтвердить exact HydraCore identity,
+роль `vps` и режим `vk_parasite`; stock/P2P не имеют operational fallback. Calls поднимает 1–4 комнаты отдельными blue/green
 units, а `sing-box.service` сам в VK не входит:
 он принимает workers на `56002/udp`, делает O(1) lookup пользователя и
 агрегирует их в одну сессию. Failure восстанавливает старое поколение, desired

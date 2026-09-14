@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from hydra.contracts.calls_configuration import CALL_COUNT
-from hydra.contracts.hydracore_calls import supports_vps_calls
+from hydra.contracts.hydracore_calls import supports_vps_contract
 from hydra.core.host import HostBackend
 from hydra.services.calls_slot_replacement import CallsSlotReplacement, stage_calls_slot_replacement
 from hydra.services.headless_creator_infrastructure import validate_vk_join_link
@@ -157,13 +157,13 @@ class CallsInfrastructure:
             return True, "Calls creator pool is not configured"
         return source.uninstall_creator_pool()
 
-    def _capabilities(self) -> dict:
+    def _contract(self) -> dict:
         binary = self.host.which("sing-box")
         if not binary:
             return {}
         try:
             result = self.host.run(
-                [binary, "hydra", "capabilities", "--json"],
+                [binary, "hydra", "contract", "--json"],
                 timeout=10,
                 capture_output=True,
                 text=True,
@@ -176,7 +176,7 @@ class CallsInfrastructure:
             return {}
 
     def vk_parasite_supported(self) -> bool:
-        return supports_vps_calls(self._capabilities())
+        return supports_vps_contract(self._contract())
 
     def singbox_running(self) -> bool:
         try:

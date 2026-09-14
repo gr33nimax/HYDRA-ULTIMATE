@@ -1,4 +1,5 @@
 """Trusted release and host adapter for transactional kernel replacement."""
+
 from __future__ import annotations
 
 import json
@@ -10,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from hydra.contracts.hydracore_calls import supports_vps_calls
+from hydra.contracts.hydracore_calls import supports_vps_contract
 from hydra.core.host import HostBackend
 from hydra.core.state_kernel_models import (
     KERNEL_HYDRACORE,
@@ -154,11 +155,13 @@ class KernelInfrastructure:
 
     def _run(self, binary: Path, *arguments: str):
         env = os.environ.copy()
-        env.update({
-            "LEGACY_DNS_SERVERS": "true",
-            "ENABLE_DEPRECATED_LEGACY_DNS_SERVERS": "true",
-            "ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER": "true",
-        })
+        env.update(
+            {
+                "LEGACY_DNS_SERVERS": "true",
+                "ENABLE_DEPRECATED_LEGACY_DNS_SERVERS": "true",
+                "ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER": "true",
+            }
+        )
         return self._host.run(
             [str(binary), *arguments],
             capture_output=True,
@@ -173,8 +176,8 @@ class KernelInfrastructure:
             raise RuntimeError("kernel candidate failed its version probe")
         return str(result.stdout or "").strip()
 
-    def _capability_payload(self, binary: Path) -> dict:
-        result = self._run(binary, "hydra", "capabilities", "--json")
+    def _contract_payload(self, binary: Path) -> dict:
+        result = self._run(binary, "hydra", "contract", "--json")
         if result.returncode != 0:
             return {}
         try:
@@ -184,46 +187,24 @@ class KernelInfrastructure:
         return payload if isinstance(payload, dict) else {}
 
     @staticmethod
-    def _normalized_capabilities(payload: dict) -> tuple[str, ...]:
-        values: set[str] = set()
-        raw = payload.get("capabilities", ())
-        if isinstance(raw, list):
-            values.update(str(item) for item in raw if isinstance(item, str))
-        features = payload.get("features", {})
-        if isinstance(features, dict):
-            values.update(
-                str(name)
-                for name, enabled in features.items()
-                if enabled is True
-            )
-        identity = payload.get("identity", {})
-        if isinstance(identity, dict) and identity.get("core_id") == _HYDRACORE_CORE_ID:
-            values.add("hydracore")
-        return tuple(sorted(values))
-
-    @staticmethod
     def _has_hydracore_contract(payload: dict) -> bool:
-        return supports_vps_calls(payload)
+        return supports_vps_contract(payload)
 
     def _inspect_binary(self, binary: Path, *, running: bool) -> KernelRuntimeStatus:
         version_output = self._version_output(binary)
-        capability_payload = self._capability_payload(binary)
-        identity = capability_payload.get("identity", {})
-        core_id = identity.get("core_id") if isinstance(identity, dict) else ""
-        if core_id == _HYDRACORE_CORE_ID or "hydracore" in version_output.lower():
+        contract_payload = self._contract_payload(binary)
+        if contract_payload.get("core_id") == _HYDRACORE_CORE_ID or "hydracore" in version_output.lower():
             provider = KERNEL_HYDRACORE
         elif "extended" in version_output.lower():
             provider = "legacy"
         else:
             provider = "unknown"
-        capabilities = self._normalized_capabilities(capability_payload)
         version_line = version_output.splitlines()[0] if version_output else ""
         return KernelRuntimeStatus(
             True,
             running=running,
             provider=provider,
             version=version_line,
-            capabilities=capabilities,
             binary_path=str(binary),
         )
 
@@ -267,9 +248,7 @@ class KernelInfrastructure:
         extracted = directory / "extracted"
         extract_tarball(archive, extracted)
         candidates = [
-            path
-            for path in extracted.rglob("sing-box")
-            if path.is_file() and path.stat().st_size > 1_000_000
+            path for path in extracted.rglob("sing-box") if path.is_file() and path.stat().st_size > 1_000_000
         ]
         if len(candidates) != 1 or not verify_elf(candidates[0]):
             raise RuntimeError("release must contain exactly one ELF sing-box binary")
@@ -288,7 +267,7 @@ class KernelInfrastructure:
                 f"release identity mismatch: expected {provider}, got {status.provider}",
             )
         if provider == KERNEL_HYDRACORE:
-            payload = self._capability_payload(candidate)
+            payload = self._contract_payload(candidate)
             if not self._has_hydracore_contract(payload):
                 raise RuntimeError(
                     "Hydracore must expose identity, the VPS Calls role, and vk_parasite mode",

@@ -53,11 +53,13 @@ def test_kernel_service_persists_only_after_verified_runtime() -> None:
     runtime = Runtime()
     saved: list[str] = []
     state = AppState()
-    state.install.update({
-        "singbox_last_update_check": "2026-08-10T00:00:00+00:00",
-        "singbox_update_available": True,
-        "singbox_latest_version": "v1.13.16-extended-hydracore.6",
-    })
+    state.install.update(
+        {
+            "singbox_last_update_check": "2026-08-10T00:00:00+00:00",
+            "singbox_update_available": True,
+            "singbox_latest_version": "v1.13.16-extended-hydracore.6",
+        }
+    )
     service = KernelService(runtime, save_state=lambda current: saved.append(current.kernel.provider))
 
     result = service.switch(state, KERNEL_HYDRACORE)
@@ -93,56 +95,33 @@ def test_kernel_service_rolls_runtime_back_when_state_save_fails() -> None:
 
 def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
     valid = {
-        "api_version": 2,
-        "identity": {
-            "core_id": "io.hydrabox.hydracore",
-            "role": "vps",
-        },
-        "features": {
-            "call_vk_parasite": True,
-        },
-        "protocols": {
-            "call_modes": ["vk_parasite"],
-        },
+        "contract_version": 1,
+        "core_id": "io.hydrabox.hydracore",
+        "role": "vps",
+        "calls_mode": "vk_parasite",
     }
-    wrong_api_version = {
-        **valid,
-        "api_version": 1,
-    }
-    wrong_role = {
-        **valid,
-        "identity": {"core_id": "io.hydrabox.hydracore", "role": "client"},
-    }
+    wrong_version = {**valid, "contract_version": 2}
+    wrong_role = {**valid, "role": "client"}
     alias = {
-        "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
-        "features": {"call_vk_multiuser": True},
-        "protocols": {"call_modes": ["vk_parasite"]},
-    }
-    p2p_only = {
-        "api_version": 2,
-        "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
-        "features": {
-            "call_vk_parasite": True,
-        },
-        "protocols": {
-            "call_modes": ["p2p"],
-        },
+        "contract_version": 1,
+        "core_id": "io.hydrabox.hydracore",
+        "role": "vps",
+        "calls_mode": "multi_user",
     }
 
     assert KernelInfrastructure._has_hydracore_contract(valid) is True
-    assert KernelInfrastructure._has_hydracore_contract(wrong_api_version) is False
+    assert KernelInfrastructure._has_hydracore_contract(wrong_version) is False
     assert KernelInfrastructure._has_hydracore_contract(wrong_role) is False
     assert KernelInfrastructure._has_hydracore_contract(alias) is False
-    assert KernelInfrastructure._has_hydracore_contract(p2p_only) is False
-    assert "call_vk_parasite" in KernelInfrastructure._normalized_capabilities(valid)
-    assert "call_vk_parasite" not in KernelInfrastructure._normalized_capabilities(alias)
 
 
 def test_kernel_service_rejects_removed_provider_before_mutating_calls() -> None:
     runtime = Runtime()
-    state = AppState(protocols={
-        "calls": SimpleNamespace(enabled=True),
-    })
+    state = AppState(
+        protocols={
+            "calls": SimpleNamespace(enabled=True),
+        }
+    )
     state.kernel.provider = KERNEL_HYDRACORE
     service = KernelService(runtime, save_state=lambda _state: None)
 
@@ -186,11 +165,11 @@ def test_kernel_candidate_error_redacts_secret_detail(tmp_path) -> None:
         True,
         provider=KERNEL_HYDRACORE,
     )
-    runtime._capability_payload = lambda *_args: {
-        "api_version": 2,
-        "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
-        "features": {"call_vk_parasite": True},
-        "protocols": {"call_modes": ["vk_parasite"]},
+    runtime._contract_payload = lambda *_args: {
+        "contract_version": 1,
+        "core_id": "io.hydrabox.hydracore",
+        "role": "vps",
+        "calls_mode": "vk_parasite",
     }
     runtime._run = lambda *_args: SimpleNamespace(
         returncode=1,

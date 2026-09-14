@@ -105,24 +105,17 @@ class CapabilityHost(ProbeHost):
             0,
             stdout=json.dumps(
                 {
-                    "api_version": 2,
-                    "identity": {
-                        "core_id": "io.hydrabox.hydracore",
-                        "role": "vps",
-                    },
-                    "features": {
-                        "call_vk_parasite": True,
-                    },
-                    "protocols": {
-                        "call_modes": ["vk_parasite"],
-                    },
+                    "contract_version": 1,
+                    "core_id": "io.hydrabox.hydracore",
+                    "role": "vps",
+                    "calls_mode": "vk_parasite",
                 }
             ),
             stderr="",
         )
 
 
-def test_vk_parasite_support_requires_feature_and_mode_capability() -> None:
+def test_vk_parasite_support_requires_vps_contract() -> None:
     runtime = CallsInfrastructure(CapabilityHost())
     assert runtime.vk_parasite_supported() is True
 
@@ -130,52 +123,34 @@ def test_vk_parasite_support_requires_feature_and_mode_capability() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
+        {},
         {
-            "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
-            "features": {"call_vk_multiuser": True},
-            "protocols": {"call_modes": ["vk_parasite"]},
+            "contract_version": 2,
+            "core_id": "io.hydrabox.hydracore",
+            "role": "vps",
+            "calls_mode": "vk_parasite",
         },
         {
-            "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
-            "features": {
-                "call_vk_parasite": True,
-            },
-            "protocols": {"call_modes": ["p2p"]},
+            "contract_version": 1,
+            "core_id": "third.party.core",
+            "role": "vps",
+            "calls_mode": "vk_parasite",
         },
         {
-            "identity": {"core_id": "third.party.core"},
-            "features": {"call_vk_parasite": True},
-            "protocols": {"call_modes": ["vk_parasite"]},
+            "contract_version": 1,
+            "core_id": "io.hydrabox.hydracore",
+            "role": "client",
+            "calls_mode": "vk_parasite",
         },
         {
-            "api_version": 1,
-            "identity": {
-                "core_id": "io.hydrabox.hydracore",
-                "role": "vps",
-            },
-            "features": {
-                "call_vk_parasite": True,
-            },
-            "protocols": {
-                "call_modes": ["vk_parasite"],
-            },
-        },
-        {
-            "api_version": 2,
-            "identity": {
-                "core_id": "io.hydrabox.hydracore",
-                "role": "client",
-            },
-            "features": {
-                "call_vk_parasite": True,
-            },
-            "protocols": {
-                "call_modes": ["vk_parasite"],
-            },
+            "contract_version": 1,
+            "core_id": "io.hydrabox.hydracore",
+            "role": "vps",
+            "calls_mode": "p2p",
         },
     ],
 )
-def test_vk_parasite_support_rejects_alias_or_incomplete_modes(payload) -> None:
+def test_vk_parasite_support_rejects_incompatible_contract(payload) -> None:
     host = CapabilityHost()
     host.run = lambda args, **kwargs: CompletedProcess(
         args,

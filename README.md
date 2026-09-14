@@ -127,8 +127,8 @@ VK-комнат (4 по умолчанию). Общий obfs key снимает 
 каждого пакета; после O(1) unwrap проверяется только найденный пользователь.
 Каждая сессия создаёт ровно четыре VK/TURN worker и четыре независимые KCP
 линии. Перед включением HYDRA требует выбранный Hydracore и точный
-контракт `sing-box hydra capabilities --json` с `call_vk_parasite=true` и
-режимом `vk_parasite`. Stock core и legacy `p2p` отклоняются до запуска creator.
+контракт `sing-box hydra contract --json`: `core_id`, роль `vps` и режим
+`vk_parasite`. Stock core и legacy `p2p` отклоняются до запуска creator.
 Calls поднимает отдельный
 blue/green creator-пул `hydra-headless-creator-vk-calls@{a,b}-N`, фиксирует
 его до apply и при любой ошибке восстанавливает прежние комнаты, state и
@@ -137,11 +137,11 @@ runtime. Per-user outbound входит только в зашифрованну
 Admin DTO сохраняет singular alias первого элемента только для API-совместимости.
 Calls больше не привязан к версии persisted state или номеру wire. State хранит
 только актуальный desired config `vk_parasite`; совместимость бинарника
-проверяется по capabilities перед изменением runtime. Старые state schema 0–18
+проверяется по contract перед изменением runtime. Старые state schema 0–18
 однократно импортируются напрямую в стабильный State Format v1.
 
 HYDRA использует только Hydracore VPS из debug-канала. Обновление проверяет
-digest, ELF, identity/capabilities, активный config и health-check; при ошибке
+digest, ELF, identity/contract, активный config и health-check; при ошибке
 до замены сохраняются предыдущий бинарник и backup. Отдельного выбора
 Другого kernel provider больше нет.
 
@@ -152,7 +152,7 @@ sudo hydra kernel switch hydracore --channel debug --force
 
 Канал `debug` — стандартный канал Hydracore. Он выбирает отдельный prerelease
 с маркером `-debug.`, требует нативную телеметрию VK Calls и проходит те же
-проверки digest, ELF, identity/capabilities, активного конфига и health-check.
+проверки digest, ELF, identity/contract, активного конфига и health-check.
 
 Creator принадлежит только `Calls · VK` (Hydra VK Tunnel). В меню Calls можно
 до установки транспорта указать путь к локальному JSON с VK cookies; файл

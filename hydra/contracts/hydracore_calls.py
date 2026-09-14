@@ -1,29 +1,24 @@
-"""Minimal Hydracore VPS capability contract for native VK Calls."""
+"""Minimal HydraCore VPS contract for native VK Calls."""
+
 from __future__ import annotations
 
 HYDRACORE_CORE_ID = "io.hydrabox.hydracore"
+HYDRACORE_VPS_CONTRACT_VERSION = 1
 
 
-def supports_vps_calls(payload: object) -> bool:
-    """Accept any valid Hydracore VPS build providing the native vk_parasite transport."""
-    if not isinstance(payload, dict) or payload.get("api_version") != 2:
-        return False
-    identity = payload.get("identity", {})
-    features = payload.get("features", {})
-    protocols = payload.get("protocols", {})
-    modes = protocols.get("call_modes", ()) if isinstance(protocols, dict) else ()
+def supports_vps_contract(payload: object) -> bool:
+    """Accept the one VPS runtime shape that can run native vk_parasite Calls."""
     return bool(
-        isinstance(identity, dict)
-        and identity.get("core_id") == HYDRACORE_CORE_ID
-        and identity.get("role") == "vps"
-        and isinstance(features, dict)
-        and features.get("call_vk_parasite") is True
-        and isinstance(modes, list)
-        and "vk_parasite" in modes
+        isinstance(payload, dict)
+        and payload.get("contract_version") == HYDRACORE_VPS_CONTRACT_VERSION
+        and payload.get("core_id") == HYDRACORE_CORE_ID
+        and payload.get("role") == "vps"
+        and payload.get("calls_mode") == "vk_parasite"
     )
 
 
 __all__ = [
     "HYDRACORE_CORE_ID",
-    "supports_vps_calls",
+    "HYDRACORE_VPS_CONTRACT_VERSION",
+    "supports_vps_contract",
 ]
