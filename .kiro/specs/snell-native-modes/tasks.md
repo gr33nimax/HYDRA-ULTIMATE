@@ -15,7 +15,7 @@ TSK-006 (HydraCore fence) is independent and closes R2.4
 | State | Count | Evidence |
 | --- | ---: | --- |
 | Not started | 0 | — |
-| Complete | 7 | TSK-001 … TSK-007 |
+| Complete | 8 | TSK-001 … TSK-008 |
 
 ## Tasks
 
@@ -68,6 +68,10 @@ TSK-006 (HydraCore fence) is independent and closes R2.4
     `version: 4` on the server and the nested `obfs` object are refused.
   - **Acceptance:** `go test ./option` covers the four accepted shapes and the two refusals.
   - **Dependency:** none (HydraCore repo). _Requirements: R2.4._
+
+- [x] **TSK-008 — the TUI settings screen follows the generations**
+  - **Факт:** `hydra/ui/_menus/plugin_settings.py` renders the screen from the generation contract: «Поколение» switches 5/6 (switching to 6 asks for confirmation because issued v4 links stop working), the transport entry offers `none|http|tls` plus the obfuscation host for generation 5 and `default|unshaped|unsafe-raw` for generation 6, and a stored `4` reads as `5` — the screen no longer sends `version=4`. Evidence: `tests/test_extended_transport_menus.py` (tls on the classic pair, the switch with its warning, a cancelled warning, a v6 mode) → `77 passed` together with the plugin, generation and subscription suites.
+  - **Dependency:** TSK-001 … TSK-004. _Requirements: R1, R3._
 
 - [x] **TSK-007 — docs and spec cascade**
   - **Факт:** `docs/REFERENCE.md` (transport row + the Shadowrocket paragraph), `docs/CLI.md` (both `set_settings` examples), `README.md` (transport row) and `CHANGELOG.md` describe the two generations, the 5↔4 pairing and the gate; the meta-spec task points at this spec. `verify.py` → `1995 passed` + compileall + ruff. Commits `6996a18` (code/docs) and `9917d32` (tests) on `debug`.

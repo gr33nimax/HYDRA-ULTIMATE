@@ -305,29 +305,29 @@ def menu_snell_settings(
     while True:
         state = app.admin.load_state()
         desired = _desired_state(state, "snell")
-        configured_version = _parse_int(
-            desired.config.get("version", 4),
-            "Версия Snell",
-        )
-        if configured_version not in {4, 5}:
-            raise ValueError("Hydra Snell supports version 4")
-        mode = str(desired.config.get("obfs_mode", "http"))
-        host = str(desired.config.get("obfs_host", "www.bing.com"))
+        generation = _snell_generation(desired)
+        if generation == 5:
+            obfs_mode = str(desired.config.get("obfs_mode", "none"))
+            host = str(desired.config.get("obfs_host", "www.bing.com"))
+            transport_label = "🎭 Маскировка"
+            transport_value = f"{obfs_mode.upper()} · {host}" if obfs_mode not in {"", "none"} else "выключена"
+        else:
+            transport_label = "🧩 Режим v6"
+            transport_value = str(desired.config.get("mode", "default"))
         choice = menu(
             [
-                (
-                    "1",
-                    "🎭 Simple obfs",
-                    f"{mode.upper()} · {host}" if mode else "выключен",
-                ),
+                ("1", "🔢 Поколение", f"v{generation}"),
+                ("2", transport_label, transport_value),
                 ("0", "↩ Назад", ""),
             ],
-            "НАСТРОЙКИ SNELL v4",
+            f"НАСТРОЙКИ SNELL v{generation}",
         )
         if choice == "0":
             return
         try:
-            changed = _change_snell(state, host, app)
+            changed = (
+                _change_snell_generation(state, app) if choice == "1" else _change_snell_transport(state, desired, app)
+            )
             if changed is None:
                 continue
             _report_change(changed, "Настройки Snell обновлены")
@@ -336,30 +336,101 @@ def menu_snell_settings(
         prompt("Нажмите Enter")
 
 
-def _change_snell(
+def _snell_generation(desired: PluginState) -> int:
+    """Read the stored generation the way the plugin does, legacy 4 included."""
+    generation = _parse_int(desired.config.get("version", 5), "Поколение Snell")
+    if generation == 4:
+        return 5
+    if generation not in {5, 6}:
+        raise ValueError("Snell поддерживает поколения 5 и 6")
+    return generation
+
+
+def _change_snell_generation(
     state: AppState,
-    host: str,
     app: ApplicationService,
 ) -> bool | None:
     selected = menu(
         [
-            ("1", "HTTP obfs", "Имитация HTTP-трафика"),
-            ("2", "Выключить", "Чистый Snell"),
+            ("1", "Snell 5", "Классика: маскировка http/tls; клиенты v4"),
+            ("2", "Snell 6", "Новое поколение: свой режим; только клиенты v6"),
             ("0", "Отмена", ""),
         ],
-        "SIMPLE OBFS SNELL",
+        "ПОКОЛЕНИЕ SNELL",
     )
-    new_mode = {"1": "http", "2": ""}.get(selected)
-    if new_mode is None:
+    generation = {"1": 5, "2": 6}.get(selected)
+    if generation is None:
         return None
-    new_host = prompt("Маскировочный host", default=host) if new_mode else host
+    if generation == 6:
+        # A generation 6 server speaks v6 only: every issued v4 link stops working.
+        confirmed = menu(
+            [
+                ("1", "Переключить", "Выданные ссылки (v4) перестанут подключаться"),
+                ("0", "Отмена", ""),
+            ],
+            "ТОЛЬКО КЛИЕНТЫ V6",
+        )
+        if confirmed != "1":
+            return None
     return app.plugin_command(
         state,
         "snell",
         "set_settings",
-        version=4,
+        version=generation,
+        obfs_mode="none",
+        mode="default",
+    )
+
+
+def _change_snell_transport(
+    state: AppState,
+    desired: PluginState,
+    app: ApplicationService,
+) -> bool | None:
+    if _snell_generation(desired) == 6:
+        selected = menu(
+            [
+                ("1", "default", "Упаковка по умолчанию"),
+                ("2", "unshaped", "Без shaping"),
+                ("3", "unsafe-raw", "Самый сырой поток"),
+                ("0", "Отмена", ""),
+            ],
+            "РЕЖИМ SNELL 6",
+        )
+        mode = {"1": "default", "2": "unshaped", "3": "unsafe-raw"}.get(selected)
+        if mode is None:
+            return None
+        return app.plugin_command(
+            state,
+            "snell",
+            "set_settings",
+            version=6,
+            obfs_mode="none",
+            mode=mode,
+        )
+    obfs_mode = str(desired.config.get("obfs_mode", "none"))
+    host = str(desired.config.get("obfs_host", "www.bing.com"))
+    selected = menu(
+        [
+            ("1", "HTTP", "Имитация HTTP-трафика"),
+            ("2", "TLS", "Имитация HTTPS"),
+            ("3", "Выключить", "Без маскировки"),
+            ("0", "Отмена", ""),
+        ],
+        f"МАСКИРОВКА SNELL 5 · сейчас {obfs_mode.upper() or 'NONE'}",
+    )
+    new_mode = {"1": "http", "2": "tls", "3": "none"}.get(selected)
+    if new_mode is None:
+        return None
+    new_host = prompt("Маскировочный host", default=host) if new_mode != "none" else host
+    return app.plugin_command(
+        state,
+        "snell",
+        "set_settings",
+        version=5,
         obfs_mode=new_mode,
         obfs_host=new_host,
+        mode="default",
     )
 
 
