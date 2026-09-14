@@ -1,4 +1,5 @@
 """Installation and kernel readiness checks for AmneziaWG."""
+
 from __future__ import annotations
 
 import os
@@ -15,6 +16,7 @@ from .constants import (
     AWG_UNIT_1,
     DEFAULT_SERVER_IPV4,
 )
+from .directives import AwgDirectiveError, canonical_mode
 
 
 class AwgInstallationMixin:
@@ -45,10 +47,7 @@ class AwgInstallationMixin:
                 print(f"  git clone: {clone.stderr[:300]}")
                 return False
 
-            print(
-                "  Авто-установка AmneziaWG "
-                "(компиляция модуля, это долго)..."
-            )
+            print("  Авто-установка AmneziaWG (компиляция модуля, это долго)...")
             environment = os.environ.copy()
             environment["AUTO_INSTALL"] = "y"
             environment["ENABLE_IPV6"] = "n"
@@ -68,6 +67,66 @@ class AwgInstallationMixin:
         except Exception as exc:
             print(f"  install error: {exc}")
             return False
+
+    def installer_identity(self) -> str:
+        """Return the pinned managed installer revision without mutating it."""
+        script = AWG_INSTALL_DIR / "amneziawg-install.sh"
+        if not script.is_file() or not (AWG_INSTALL_DIR / ".git").exists():
+            raise RuntimeError("managed AmneziaWG installer is unavailable")
+        remote = HOST.run(
+            ["git", "-C", str(AWG_INSTALL_DIR), "config", "--get", "remote.origin.url"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        revision = HOST.run(
+            ["git", "-C", str(AWG_INSTALL_DIR), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if remote.returncode != 0 or revision.returncode != 0 or "wiresock/amneziawg-install" not in remote.stdout:
+            raise RuntimeError("managed AmneziaWG installer identity is invalid")
+        return revision.stdout.strip()
+
+    def _managed_installer(self) -> str:
+        self.installer_identity()
+        return str(AWG_INSTALL_DIR / "amneziawg-install.sh")
+
+    def observed_protocol_mode(self) -> str:
+        """Read the upstream protocol status without changing the host."""
+        script = self._managed_installer()
+        result = HOST.run(
+            ["bash", script, "--protocol-status"],
+            cwd=str(AWG_INSTALL_DIR),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("failed to read AmneziaWG protocol status")
+        try:
+            return canonical_mode(result.stdout.strip(), from_upstream=True)
+        except AwgDirectiveError as exc:
+            raise RuntimeError("invalid protocol status from managed installer") from exc
+
+    def migrate_protocol_mode(self, mode: object) -> None:
+        """Invoke exactly one upstream capability-checked migration command."""
+        command = {
+            "2.0": "--disable-awg3",
+            "3.0": "--enable-awg3",
+            "3.1": "--enable-awg31",
+        }[canonical_mode(mode)]
+        script = self._managed_installer()
+        result = HOST.run(
+            ["bash", script, command],
+            cwd=str(AWG_INSTALL_DIR),
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("AmneziaWG protocol migration failed")
 
     def uninstall(self) -> bool:
         for unit in (AWG_UNIT, AWG_UNIT_1):
@@ -119,19 +178,11 @@ class AwgInstallationMixin:
             return True, ""
 
         running_kernel = platform.release()
-        dkms = (
-            HOST.run(["dkms", "status"], capture_output=True, text=True)
-            if HOST.which("dkms")
-            else None
-        )
+        dkms = HOST.run(["dkms", "status"], capture_output=True, text=True) if HOST.which("dkms") else None
         other_kernels = []
         if dkms is not None and dkms.returncode == 0:
             for line in dkms.stdout.splitlines():
-                if (
-                    "amneziawg" in line
-                    and ": installed" in line
-                    and running_kernel not in line
-                ):
+                if "amneziawg" in line and ": installed" in line and running_kernel not in line:
                     parts = [part.strip() for part in line.split(",")]
                     if len(parts) >= 2:
                         other_kernels.append(parts[1])
@@ -142,12 +193,8 @@ class AwgInstallationMixin:
                 f"запущено {running_kernel}. Перезагрузите сервер и повторите "
                 "включение."
             )
-        error = (
-            result.stderr or result.stdout or "module is unavailable"
-        ).strip()
-        return False, (
-            f"Модуль AmneziaWG недоступен для ядра {running_kernel}: {error}"
-        )
+        error = (result.stderr or result.stdout or "module is unavailable").strip()
+        return False, (f"Модуль AmneziaWG недоступен для ядра {running_kernel}: {error}")
 
     @staticmethod
     def _public_ip() -> str:

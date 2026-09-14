@@ -1,4 +1,5 @@
 """Host lifecycle and runtime reconciliation for AmneziaWG."""
+
 from __future__ import annotations
 
 import platform
@@ -6,6 +7,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from hydra.core.host import HOST
 from hydra.plugins.context import PluginStateAccess
@@ -23,6 +25,26 @@ from .constants import (
 
 class AwgRuntimeMixin:
     """Own all AmneziaWG writes, process control, and firewall mutations."""
+
+    if TYPE_CHECKING:
+        _pending_conf: str | None
+        _pending_conf_1: str | None
+
+        def _conf_path(self, profile_name: str) -> Path: ...
+
+        def _profile_config(self, state: PluginStateAccess, profile_name: str) -> dict | None: ...
+
+        def _ensure_kernel_module(self) -> tuple[bool, str]: ...
+
+        def _network(self, state: PluginStateAccess) -> tuple[str, str, str]: ...
+
+        def _interface_block(self) -> str: ...
+
+        def observed_protocol_mode(self) -> str: ...
+
+        def migrate_protocol_mode(self, mode: object) -> None: ...
+
+        def installer_identity(self) -> str: ...
 
     def apply(self, state: PluginStateAccess) -> bool:
         """Persist the completed render and reconcile both interfaces."""
@@ -62,11 +84,22 @@ class AwgRuntimeMixin:
         def read(path: Path):
             return path.read_bytes() if path.exists() else None
 
+        try:
+            protocol_mode = self.observed_protocol_mode()
+            installer_identity = self.installer_identity()
+        except RuntimeError:
+            protocol_mode = None
+            installer_identity = None
         return {
+            "protocol_mode": protocol_mode,
+            "installer_identity": installer_identity,
             "awg0": read(self._conf_path("desktop")),
             "awg1": read(self._conf_path("mobile")),
+            "params": read(AWG_PARAMS),
             "running0": self._is_up(),
             "running1": self._is_up_iface(AWG_INTERFACE_1),
+            "enabled0": self._unit_enabled(AWG_UNIT),
+            "enabled1": self._unit_enabled(AWG_UNIT_1),
         }
 
     def rollback(self, state: PluginStateAccess, snapshot) -> bool:
@@ -74,6 +107,7 @@ class AwgRuntimeMixin:
         paths = (
             ("awg0", self._conf_path("desktop")),
             ("awg1", self._conf_path("mobile")),
+            ("params", AWG_PARAMS),
         )
         for key, path in paths:
             content = previous.get(key)
@@ -84,18 +118,29 @@ class AwgRuntimeMixin:
                 path.write_bytes(content)
                 path.chmod(0o600)
         ok = True
+        protocol_mode = previous.get("protocol_mode")
+        if isinstance(protocol_mode, str):
+            try:
+                if self.observed_protocol_mode() != protocol_mode:
+                    self.migrate_protocol_mode(protocol_mode)
+            except RuntimeError:
+                ok = False
         units = (
             (AWG_UNIT, previous.get("running0")),
             (AWG_UNIT_1, previous.get("running1")),
         )
-        for unit, running in units:
-            command = (
-                ["systemctl", "restart", unit]
-                if running
-                else ["systemctl", "stop", unit]
-            )
+        for index, (unit, running) in enumerate(units):
+            enabled = previous.get(f"enabled{index}")
+            if enabled is not None:
+                desired = "enable" if enabled else "disable"
+                ok = HOST.run(["systemctl", desired, unit], capture_output=True).returncode == 0 and ok
+            command = ["systemctl", "restart", unit] if running else ["systemctl", "stop", unit]
             ok = HOST.run(command, capture_output=True).returncode == 0 and ok
         return ok
+
+    @staticmethod
+    def _unit_enabled(unit: str) -> bool:
+        return not bool(HOST.run(["systemctl", "is-enabled", unit], capture_output=True).returncode)
 
     def _apply_iface(
         self,
@@ -127,7 +172,7 @@ class AwgRuntimeMixin:
                 capture_output=True,
                 text=True,
             )
-            return result.returncode == 0
+            return result.returncode == 0 and self._is_up_iface(interface)
 
         result = HOST.run(
             ["systemctl", "start", unit],
@@ -142,15 +187,11 @@ class AwgRuntimeMixin:
             )
             if fallback.returncode != 0:
                 detail = (
-                    fallback.stderr
-                    or fallback.stdout
-                    or result.stderr
-                    or result.stdout
-                    or "unknown error"
+                    fallback.stderr or fallback.stdout or result.stderr or result.stdout or "unknown error"
                 ).strip()
                 raise RuntimeError(f"failed to start {interface}: {detail}")
             result = fallback
-        return result.returncode == 0
+        return result.returncode == 0 and self._is_up_iface(interface)
 
     @staticmethod
     def _active_ip_iface(interface: str) -> str | None:
@@ -225,8 +266,7 @@ class AwgRuntimeMixin:
             [
                 "sh",
                 "-c",
-                "grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf || "
-                "echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf",
+                "grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf",
             ],
             capture_output=True,
         )

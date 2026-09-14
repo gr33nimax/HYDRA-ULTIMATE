@@ -4,9 +4,12 @@ Mutable test seams for the two configuration paths intentionally live in
 ``plugin.py``.  Production helpers obtain those paths from the plugin instance
 so callers that historically patched ``plugin.AWG_CONF`` keep working.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
+
+from .directives import LEGACY_DIRECTIVE_KEYS
 
 
 AWG_INSTALL_DIR = Path("/opt/awg-install")
@@ -41,17 +44,5 @@ DEFAULT_OBFUSCATION = {
     "H3": "49182736",
     "H4": "129384756",
 }
-OBFUSCATION_KEYS = (
-    "Jc",
-    "Jmin",
-    "Jmax",
-    "S1",
-    "S2",
-    "S3",
-    "S4",
-    "H1",
-    "H2",
-    "H3",
-    "H4",
-)
-OBFUSCATION_KEYS_EXTENDED = (*OBFUSCATION_KEYS, "I1")
+OBFUSCATION_KEYS = LEGACY_DIRECTIVE_KEYS[:-1]
+OBFUSCATION_KEYS_EXTENDED = LEGACY_DIRECTIVE_KEYS

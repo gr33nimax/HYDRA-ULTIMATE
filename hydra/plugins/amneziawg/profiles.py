@@ -1,8 +1,10 @@
 """AmneziaWG credentials and desired-state profile commands."""
+
 from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any, TYPE_CHECKING
 
 from hydra.core.host import HOST
 from hydra.core.state_models import User
@@ -22,6 +24,12 @@ from .constants import (
 
 class AwgProfileMixin:
     """Own key material and profile mutations, never host reconciliation."""
+
+    if TYPE_CHECKING:
+
+        def __getattr__(self, name: str) -> Any:
+            """Static dependency seam for desired profile operations."""
+            ...
 
     def _generate_keys(self) -> dict[str, str]:
         """Generate one complete key bundle without mutating desired state."""
@@ -74,18 +82,13 @@ class AwgProfileMixin:
         if existing is not None:
             return existing
         credentials = self._generate_keys()
-        credential_name = (
-            "amneziawg" if profile == "desktop" else f"amneziawg_{profile}"
-        )
+        credential_name = "amneziawg" if profile == "desktop" else f"amneziawg_{profile}"
         user.credentials[credential_name] = credentials
         return credentials
 
-    @staticmethod
-    def _existing_keys(user: User, profile: str = "desktop") -> dict | None:
+    def _existing_keys(self, user: User, profile: str = "desktop") -> dict | None:
         """Read fully provisioned credentials without mutating query state."""
-        credential_name = (
-            "amneziawg" if profile == "desktop" else f"amneziawg_{profile}"
-        )
+        credential_name = "amneziawg" if profile == "desktop" else f"amneziawg_{profile}"
         credentials = user.credentials.get(credential_name)
         required = {"private_key", "public_key", "preshared_key"}
         if not isinstance(credentials, dict) or not required <= credentials.keys():
@@ -160,7 +163,10 @@ class AwgProfileMixin:
         )
         if not match:
             return default
-        port = int(match.group(1))
+        try:
+            port = int(match.group(1))
+        except ValueError:
+            return default
         return port if 1 <= port <= 65535 else default
 
     def _materialize_desktop_profile(
@@ -177,24 +183,14 @@ class AwgProfileMixin:
             "desktop",
             DEFAULT_NETWORK,
         )
-        configured_network = self._normalize_profile_network(
-            desired.get("network") or protocol.config.get("network")
-        )
-        resolved_network = (
-            runtime_network
-            if conf_path.exists()
-            else self._resolve_network(state)
-        )
+        configured_network = self._normalize_profile_network(desired.get("network") or protocol.config.get("network"))
+        resolved_network = runtime_network if conf_path.exists() else self._resolve_network(state)
         configured_obfuscation = (
             desired.get("obfuscation")
             if isinstance(desired.get("obfuscation"), dict)
             else protocol.config.get("obfuscation")
         )
-        obfuscation = (
-            dict(configured_obfuscation)
-            if isinstance(configured_obfuscation, dict)
-            else self._obfuscation()
-        )
+        obfuscation = dict(configured_obfuscation) if isinstance(configured_obfuscation, dict) else self._obfuscation()
         if not obfuscation:
             obfuscation = dict(DEFAULT_OBFUSCATION)
         private_key = str(
@@ -206,19 +202,13 @@ class AwgProfileMixin:
         if not private_key:
             private_key = self._generate_private_key()
         port = self._normalize_port(
-            desired.get("port")
-            or protocol.port
-            or self._port_from_conf(conf_path, DEFAULT_PORT),
+            desired.get("port") or protocol.port or self._port_from_conf(conf_path, DEFAULT_PORT),
             DEFAULT_PORT,
         )
         materialized = {
             "interface": str(desired.get("interface") or AWG_INTERFACE),
             "port": port,
-            "preset": str(
-                desired.get("preset")
-                or protocol.config.get("preset")
-                or "default"
-            ),
+            "preset": str(desired.get("preset") or protocol.config.get("preset") or "default"),
             "network": configured_network or resolved_network,
             "server_private_key": private_key,
             "obfuscation": obfuscation,
@@ -239,37 +229,21 @@ class AwgProfileMixin:
                 mobile = name == "mobile"
                 default_interface = AWG_INTERFACE_1 if mobile else AWG_INTERFACE
                 default_port = DEFAULT_PORT_1 if mobile else DEFAULT_PORT
-                default_network = (
-                    "10.68.68.0/24" if mobile else DEFAULT_NETWORK
-                )
+                default_network = "10.68.68.0/24" if mobile else DEFAULT_NETWORK
                 obfuscation = profile.get("obfuscation")
                 result.append(
                     {
                         "name": name,
                         "label": "Mobile" if mobile else "Desktop",
-                        "interface": str(
-                            profile.get("interface") or default_interface
-                        ),
-                        "unit": (
-                            f"awg-quick@"
-                            f"{profile.get('interface') or default_interface}"
-                        ),
+                        "interface": str(profile.get("interface") or default_interface),
+                        "unit": (f"awg-quick@{profile.get('interface') or default_interface}"),
                         "port": self._normalize_port(
                             profile.get("port"),
                             default_port,
                         ),
                         "preset": str(profile.get("preset") or "default"),
-                        "network": (
-                            self._normalize_profile_network(
-                                profile.get("network")
-                            )
-                            or default_network
-                        ),
-                        "obfuscation": (
-                            dict(obfuscation)
-                            if isinstance(obfuscation, dict)
-                            else {}
-                        ),
+                        "network": (self._normalize_profile_network(profile.get("network")) or default_network),
+                        "obfuscation": (dict(obfuscation) if isinstance(obfuscation, dict) else {}),
                     }
                 )
             if result:
@@ -332,11 +306,7 @@ class AwgProfileMixin:
     def _copied_profiles(raw_profiles: object) -> dict[str, dict]:
         if not isinstance(raw_profiles, dict):
             return {}
-        return {
-            key: dict(value)
-            for key, value in raw_profiles.items()
-            if isinstance(value, dict)
-        }
+        return {key: dict(value) for key, value in raw_profiles.items() if isinstance(value, dict)}
 
     def _mobile_network(
         self,
@@ -368,9 +338,7 @@ class AwgProfileMixin:
             if self._existing_keys(user, "desktop") is None:
                 pending.append((user, "amneziawg", self._generate_keys()))
             if self._existing_keys(user, "mobile") is None:
-                pending.append(
-                    (user, "amneziawg_mobile", self._generate_keys())
-                )
+                pending.append((user, "amneziawg_mobile", self._generate_keys()))
         return pending
 
     def remove_profile(
@@ -417,25 +385,18 @@ class AwgProfileMixin:
         selected_preset = preset or str(current.get("preset") or "default")
         new_params = self._generate_obfuscation(
             selected_preset,
-            default_strategy=(
-                "wired" if profile_name == "desktop" else "mobile"
-            ),
+            default_strategy=("wired" if profile_name == "desktop" else "mobile"),
         )
         pending_credentials = [
             (user, self._generate_keys())
             for user in state.users
-            if not user.blocked
-            and self._existing_keys(user, profile_name) is None
+            if not user.blocked and self._existing_keys(user, profile_name) is None
         ]
         current["preset"] = selected_preset
         current["obfuscation"] = new_params
         profiles[profile_name] = current
         protocol.config["profiles"] = profiles
-        credential_name = (
-            "amneziawg"
-            if profile_name == "desktop"
-            else f"amneziawg_{profile_name}"
-        )
+        credential_name = "amneziawg" if profile_name == "desktop" else f"amneziawg_{profile_name}"
         for user, credentials in pending_credentials:
             user.credentials[credential_name] = credentials
         return True

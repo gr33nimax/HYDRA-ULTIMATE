@@ -4,6 +4,7 @@ The public plugin API remains on this class while cohesive production mixins
 own configuration rendering, desired profiles, client serialization, host
 installation, runtime reconciliation, and observation.
 """
+
 from __future__ import annotations
 
 import subprocess as subprocess  # compatibility monkeypatch seam
@@ -37,6 +38,7 @@ from .constants import (
 from .installation import AwgInstallationMixin
 from .observation import AwgObservationMixin
 from .profiles import AwgProfileMixin
+from .protocol_mode import AwgProtocolModeMixin
 from .runtime import AwgRuntimeMixin
 
 
@@ -52,6 +54,7 @@ class AmneziaWGPlugin(
     AwgInstallationMixin,
     AwgConfigurationMixin,
     AwgProfileMixin,
+    AwgProtocolModeMixin,
     AwgClientLinksMixin,
     AwgObservationMixin,
     AwgRuntimeMixin,
@@ -61,9 +64,7 @@ class AmneziaWGPlugin(
 
     meta = PluginMeta(
         name="amneziawg",
-        description=(
-            "AmneziaWG 2.0: WireGuard с обфускацией (kernel-модуль)"
-        ),
+        description=("AmneziaWG 2.0: WireGuard с обфускацией (kernel-модуль)"),
         category=PluginCategory.TRANSPORT,
         version="2.1.0",
         needs_domain=False,
@@ -71,24 +72,22 @@ class AmneziaWGPlugin(
             "add_profile",
             "remove_profile",
             "rotate_obfuscation",
+            "set_protocol_mode",
         ),
-        queries=("amnezia_link", "get_profiles"),
+        queries=("amnezia_link", "get_profiles", "protocol_mode_status"),
         subscription_profile_query="get_profiles",
-        backup_resources=(
-            BackupResource(str(AWG_CONF_DIR), "tree"),
-        ),
+        backup_resources=(BackupResource(str(AWG_CONF_DIR), "tree"),),
     )
 
     def __init__(self) -> None:
         self._pending_conf: str | None = None
         self._pending_conf_1: str | None = None
-        self._peer_map: dict[str, tuple[str, str]] = {}
+        self._peer_map: dict[str, str | tuple[str, str]] = {}
 
     def traffic_snapshot(self, state):
         """Expose raw interface counters to generic accounting."""
         return self.traffic(state)
 
-    @staticmethod
-    def _conf_path(profile_name: str) -> Path:
+    def _conf_path(self, profile_name: str) -> Path:
         """Resolve legacy patchable path seams at the façade boundary."""
         return AWG_CONF_1 if profile_name == "mobile" else AWG_CONF

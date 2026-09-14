@@ -218,10 +218,7 @@ def test_hydrabox_sequence_advances_after_publisher_payload_change():
         state,
         plugins=_plugins(_HydraBoxTransport(_shadowtls_payload())),
     )
-    assert (
-        updated["identity"]["sequence"]
-        > subscription["identity"]["sequence"]
-    )
+    assert updated["identity"]["sequence"] > subscription["identity"]["sequence"]
 
 
 def test_hydrabox_subscription_exports_wireguard_as_userspace_endpoint():

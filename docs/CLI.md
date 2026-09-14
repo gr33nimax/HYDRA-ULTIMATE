@@ -367,6 +367,8 @@ sudo hydra plugin command vless set_tuning \
   --param 'headers={"X-Requested-With":"XMLHttpRequest"}'
 sudo hydra plugin command vless set_tuning --param utls_fingerprint=chrome
 sudo hydra plugin command anytls set_decoy_theme --param theme=cafe
+sudo hydra plugin command amneziawg set_protocol_mode --param mode=3.1
+hydra plugin query amneziawg protocol_mode_status --with-state
 hydra plugin query vless get_tuning --with-state
 hydra plugin query warp external_sources --with-state
 sudo hydra plugin action dnscrypt apply_server_names \
@@ -376,6 +378,26 @@ sudo hydra plugin action dnscrypt apply_server_names \
 `--param NAME=JSON` можно повторять. Операция должна быть объявлена в
 `PluginMeta.commands`, `queries` или `actions`; произвольные методы вызвать
 нельзя. Command/action требуют root, query является read-only.
+
+### Версия `amneziawg`
+
+`set_protocol_mode` принимает только `2.0`, `3.0` и `3.1`. Команда проверяет
+закреплённый upstream installer, меняет режим через его non-interactive argv,
+повторно наблюдает режим и применяет конфигурацию одной транзакцией. При ошибке
+восстанавливаются desired state, оба AWG-конфига и состояния systemd. Статус
+показывает desired/observed режим и причины пропуска экспортов, но не ключи или
+значения директив.
+
+```bash
+sudo hydra plugin command amneziawg set_protocol_mode --param mode=3.1
+hydra plugin query amneziawg protocol_mode_status --with-state
+```
+
+AWG 3.0/3.1 выдаёт нативный `.conf`, а также complete `wg://` для Throne
+`1.3.0-beta.3` и Qt-compressed `vpn://` для официального Amnezia: оба формата
+получают все директивы активного поколения. Sing-Box Extended/HydraBox выдаются
+только для 3.0; AWG 3.1 и `sn://awg` остаются fail-closed. Возврат на `2.0`
+снова включает все проверенные legacy-экспорты.
 
 ### Режимы TLS у `vless`
 

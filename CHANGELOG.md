@@ -1,5 +1,12 @@
 # Changelog
 
+- AmneziaWG can switch server protocol mode transactionally between 2.0, 3.0
+  and 3.1 through the pinned upstream installer. HYDRA preserves unknown
+  interface keys and restores configuration plus both AWG systemd states on
+  rollback. AWG 3.x now emits source-proven Throne `wg://` and official
+  Qt-compressed Amnezia `vpn://` artifacts; Sing-Box Extended/HydraBox is
+  enabled for 3.0 only, while 3.1 and NekoBox `sn://awg` remain fail-closed.
+
 - NekoBox `sn://awg` links now encode emoji and other non-BMP profile names
   as Kryo-compatible Java UTF-16 characters, preventing corrupted AWG profiles.
 - Configuration display names now stay separate from HydraBox runtime tags,

@@ -1,0 +1,174 @@
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from hydra.core.state import AppState, PluginState
+from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
+from hydra.services.plugin_commands import PluginCommandService
+
+
+def _result(code=0, stdout="", stderr=""):
+    return MagicMock(returncode=code, stdout=stdout, stderr=stderr)
+
+
+def test_protocol_mode_uses_only_upstream_noninteractive_commands(tmp_path):
+    script = tmp_path / "amneziawg-install.sh"
+    script.write_text("#!/bin/bash", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    plugin = AmneziaWGPlugin()
+
+    with (
+        patch("hydra.plugins.amneziawg.installation.AWG_INSTALL_DIR", tmp_path),
+        patch(
+            "hydra.plugins.amneziawg.installation.HOST.run",
+            side_effect=[
+                _result(stdout="https://github.com/wiresock/amneziawg-install.git\n"),
+                _result(stdout="abc\n"),
+                _result(stdout="3.1\n"),
+                _result(stdout="https://github.com/wiresock/amneziawg-install.git\n"),
+                _result(stdout="abc\n"),
+                _result(),
+            ],
+        ) as run,
+    ):
+        assert plugin.observed_protocol_mode() == "3.1"
+        plugin.migrate_protocol_mode("3.0")
+
+    assert run.call_args_list[2].args[0] == ["bash", str(script), "--protocol-status"]
+    assert run.call_args_list[5].args[0] == ["bash", str(script), "--enable-awg3"]
+
+
+def test_protocol_mode_rejects_missing_or_invalid_upstream_status(tmp_path):
+    plugin = AmneziaWGPlugin()
+    with patch("hydra.plugins.amneziawg.installation.AWG_INSTALL_DIR", tmp_path):
+        with pytest.raises(RuntimeError, match="installer"):
+            plugin.observed_protocol_mode()
+
+    script = tmp_path / "amneziawg-install.sh"
+    script.write_text("#!/bin/bash", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    with (
+        patch("hydra.plugins.amneziawg.installation.AWG_INSTALL_DIR", tmp_path),
+        patch(
+            "hydra.plugins.amneziawg.installation.HOST.run",
+            side_effect=[
+                _result(stdout="https://github.com/wiresock/amneziawg-install.git\n"),
+                _result(stdout="abc\n"),
+                _result(stdout="bad"),
+            ],
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="invalid protocol status"):
+            plugin.observed_protocol_mode()
+
+
+def test_protocol_mode_status_reports_all_unsupported_awg3_exports():
+    plugin = AmneziaWGPlugin()
+    state = AppState(protocols={"amneziawg": PluginState(installed=True, config={"protocol_mode": "3.1"})})
+
+    with patch.object(plugin, "observed_protocol_mode", return_value="3.1"):
+        status = plugin.protocol_mode_status(state)
+
+    assert status["desired"] == "3.1"
+    assert status["observed"] == "3.1"
+    exports = status["exports"]
+    assert isinstance(exports, dict)
+    assert exports["native_conf"] == "ready"
+    assert exports["wg_uri"] == "ready"
+    assert exports["vpn_uri"] == "ready"
+    assert all(
+        exports[key] == "unsupported: AWG 3.1 importer compatibility is unverified"
+        for key in ("sn_awg", "singbox", "hydrabox_subscription")
+    )
+
+
+def test_protocol_mode_status_allows_only_source_proven_awg30_sbe_exports():
+    plugin = AmneziaWGPlugin()
+    state = AppState(protocols={"amneziawg": PluginState(installed=True, config={"protocol_mode": "3.0"})})
+
+    with patch.object(plugin, "observed_protocol_mode", return_value="3.0"):
+        exports = plugin.protocol_mode_status(state)["exports"]
+
+    assert isinstance(exports, dict)
+    assert exports["singbox"] == "ready"
+    assert exports["hydrabox_subscription"] == "ready"
+    assert exports["sn_awg"] == "unsupported: AWG 3.0 importer compatibility is unverified"
+
+
+def test_set_protocol_mode_migrates_then_persists_only_verified_mode(tmp_path):
+    conf = tmp_path / "awg0.conf"
+    conf.write_text(
+        "[Interface]\nHeaderProtectionKey = header\nContentPaddingAddition = 1\n"
+        "RekeyAfterTime = 1\nRekeyTimeout = 1\nRejectAfterTime = 1\nKeepaliveTimeout = 1\n",
+        encoding="utf-8",
+    )
+    plugin = AmneziaWGPlugin()
+    state = AppState(protocols={"amneziawg": PluginState(installed=True, config={})})
+
+    with (
+        patch.object(plugin, "_conf_path", return_value=conf),
+        patch.object(plugin, "observed_protocol_mode", side_effect=["2.0", "3.0"]),
+        patch.object(plugin, "migrate_protocol_mode") as migrate,
+    ):
+        assert plugin.set_protocol_mode(state, "3.0") is True
+
+    migrate.assert_called_once_with("3.0")
+    assert state.protocols["amneziawg"].config["protocol_mode"] == "3.0"
+
+
+def test_protocol_mode_rolls_back_upstream_when_apply_fails(tmp_path):
+    conf = tmp_path / "awg0.conf"
+    conf.write_text(
+        "[Interface]\nHeaderProtectionKey = header\nContentPaddingAddition = 1\n"
+        "RekeyAfterTime = 1\nRekeyTimeout = 1\nRejectAfterTime = 1\nKeepaliveTimeout = 1\n",
+        encoding="utf-8",
+    )
+    plugin = AmneziaWGPlugin()
+    state = AppState(protocols={"amneziawg": PluginState(installed=True, enabled=True, config={})})
+    service = PluginCommandService(
+        get_plugin=lambda name: plugin if name == "amneziawg" else None,
+        apply_config=lambda current: False,
+        save_state=lambda current: None,
+    )
+
+    with (
+        patch.object(plugin, "_conf_path", return_value=conf),
+        patch.object(plugin, "_is_up", return_value=False),
+        patch.object(plugin, "_is_up_iface", return_value=False),
+        patch.object(plugin, "installer_identity", return_value="abc"),
+        patch.object(plugin, "observed_protocol_mode", side_effect=["2.0", "2.0", "3.0", "3.0"]),
+        patch.object(plugin, "migrate_protocol_mode") as migrate,
+        patch("hydra.plugins.amneziawg.runtime.HOST.run", return_value=_result()),
+    ):
+        # noqa: S608 - PluginCommandService allowlists this literal plugin command.
+        assert service.execute(state, "amneziawg", "set_protocol_mode", mode="3.0") is False
+
+    assert migrate.call_args_list == [(("3.0",), {}), (("2.0",), {})]
+    assert "protocol_mode" not in state.protocols["amneziawg"].config
+
+
+def test_snapshot_includes_params_and_rollback_restores_them(tmp_path):
+    desktop = tmp_path / "awg0.conf"
+    mobile = tmp_path / "awg1.conf"
+    params = tmp_path / "params"
+    desktop.write_text("desktop-old", encoding="utf-8")
+    mobile.write_text("mobile-old", encoding="utf-8")
+    params.write_text("params-old", encoding="utf-8")
+    plugin = AmneziaWGPlugin()
+
+    with (
+        patch("hydra.plugins.amneziawg.plugin.AWG_CONF", desktop),
+        patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1", mobile),
+        patch("hydra.plugins.amneziawg.runtime.AWG_PARAMS", params),
+        patch.object(plugin, "_is_up", return_value=True),
+        patch.object(plugin, "_is_up_iface", return_value=False),
+        patch("hydra.plugins.amneziawg.runtime.HOST.run", return_value=_result()),
+    ):
+        state = AppState()
+        snapshot = plugin.snapshot(state)
+        params.write_text("changed", encoding="utf-8")
+        assert plugin.rollback(state, snapshot) is True
+
+    assert params.read_text(encoding="utf-8") == "params-old"
+    # Windows ACLs do not expose POSIX chmod bits; Linux smoke checks 0600.

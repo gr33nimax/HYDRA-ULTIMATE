@@ -1,9 +1,11 @@
 """Pure desired-state rendering and network selection for AmneziaWG."""
+
 from __future__ import annotations
 
 import ipaddress
 import re
 from pathlib import Path
+from typing import Any, TYPE_CHECKING
 
 from hydra.plugins.base import ConfigFragment
 from hydra.plugins.context import PluginStateAccess
@@ -19,6 +21,7 @@ from .constants import (
     OBFUSCATION_KEYS_EXTENDED,
     PREFERRED_SUBNETS,
 )
+from .directives import AwgInterfaceDirectives, canonical_mode
 
 
 def interface_prefix(text: str) -> str:
@@ -34,14 +37,18 @@ def interface_prefix(text: str) -> str:
 class AwgConfigurationMixin:
     """Render server configs without touching host runtime or desired state."""
 
+    if TYPE_CHECKING:
+
+        def __getattr__(self, name: str) -> Any:
+            """Static dependency seam for configuration rendering."""
+            ...
+
     def configure(self, state: PluginStateAccess) -> ConfigFragment:
         desktop_conf = self._conf_path("desktop")
         mobile_conf = self._conf_path("mobile")
         desktop = self._profile_config(state, "desktop")
         mobile = self._profile_config(state, "mobile")
-        has_desktop_source = desktop_conf.exists() or bool(
-            desktop and desktop.get("server_private_key")
-        )
+        has_desktop_source = desktop_conf.exists() or bool(desktop and desktop.get("server_private_key"))
 
         pending_desktop = None
         pending_mobile = None
@@ -64,6 +71,17 @@ class AwgConfigurationMixin:
                 profile=mobile,
                 peer_map=peer_map,
             )
+
+        if pending_desktop:
+            protocol = state.protocols.get("amneziawg")
+            mode = canonical_mode(
+                protocol.config.get("protocol_mode", "2.0") if protocol else "2.0",
+            )
+            directives = AwgInterfaceDirectives.parse(pending_desktop).for_mode(mode)
+            if pending_mobile:
+                pending_mobile = directives.replace_generation_directives(
+                    pending_mobile,
+                )
 
         # Publish only a complete render, so one failing profile cannot leave
         # another profile pending from a half-completed configure pass.
@@ -176,13 +194,9 @@ class AwgConfigurationMixin:
 
         existing_private = re.search(r"^PrivateKey\s*=\s*(\S+)", block, re.M)
         desired_private = str((profile or {}).get("server_private_key") or "").strip()
-        private_key = desired_private or (
-            existing_private.group(1) if existing_private else ""
-        )
+        private_key = desired_private or (existing_private.group(1) if existing_private else "")
         if not private_key:
-            raise RuntimeError(
-                f"AmneziaWG {profile_name} server key was not provisioned"
-            )
+            raise RuntimeError(f"AmneziaWG {profile_name} server key was not provisioned")
 
         default_port = DEFAULT_PORT_1 if profile_name == "mobile" else DEFAULT_PORT
         port = self._normalize_port((profile or {}).get("port"), default_port)
@@ -205,9 +219,7 @@ class AwgConfigurationMixin:
             )
 
         desired_obfuscation = (
-            (profile or {}).get("obfuscation")
-            if isinstance((profile or {}).get("obfuscation"), dict)
-            else None
+            (profile or {}).get("obfuscation") if isinstance((profile or {}).get("obfuscation"), dict) else None
         )
         if desired_obfuscation is not None:
             for key in OBFUSCATION_KEYS_EXTENDED:
@@ -287,9 +299,7 @@ class AwgConfigurationMixin:
                 conf_path.read_text(encoding="utf-8"),
             )
             if match:
-                network = (
-                    f"{match.group(1)}.{match.group(2)}.{match.group(3)}.0/24"
-                )
+                network = f"{match.group(1)}.{match.group(2)}.{match.group(3)}.0/24"
         if not network:
             network = default_network
 
@@ -317,9 +327,7 @@ class AwgConfigurationMixin:
         protocol = state.protocols.get("amneziawg")
         used = self._used_networks(state)
         if protocol:
-            configured = self._normalize_profile_network(
-                protocol.config.get("network")
-            )
+            configured = self._normalize_profile_network(protocol.config.get("network"))
             if configured and self._is_network_free(configured, used):
                 return configured
 
@@ -330,9 +338,7 @@ class AwgConfigurationMixin:
                 conf_path.read_text(encoding="utf-8"),
             )
             if match:
-                network = (
-                    f"{match.group(1)}.{match.group(2)}.{match.group(3)}.0/24"
-                )
+                network = f"{match.group(1)}.{match.group(2)}.{match.group(3)}.0/24"
                 if self._is_network_free(network, used):
                     return network
         for network in PREFERRED_SUBNETS:
@@ -361,7 +367,7 @@ class AwgConfigurationMixin:
     @staticmethod
     def _normalize_port(port: object, default: int) -> int:
         try:
-            parsed = int(port)
+            parsed = int(str(port))
         except (TypeError, ValueError):
             return default
         return parsed if 1 <= parsed <= 65535 else default

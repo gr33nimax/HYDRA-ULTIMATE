@@ -28,7 +28,7 @@
 
 | Ключ | Модуль | Назначение |
 | :--- | :--- | :--- |
-| `amneziawg` | AmneziaWG 2.0 | WireGuard-транспорт с расширенной обфускацией и TPROXY |
+| `amneziawg` | AmneziaWG 2.0 / 3.0 / 3.1 | WireGuard-транспорт с upstream-managed protocol mode и TPROXY |
 | `mieru` | Mieru | Обфусцированный mTLS-транспорт с ссылками `mierus://` |
 | `naive` | NaiveProxy | HTTP/2-прокси на базе Caddy forward-proxy |
 | `anytls` | AnyTLS | TLS-подобный обфусцированный туннель |
@@ -108,11 +108,14 @@ Hysteria2 по умолчанию использует `8443/udp`. Если пр
 исправить серверной конфигурацией.
 
 Формат подписки `?format=singbox` собирается из plugin-owned клиентских
-проекций. Для AmneziaWG он содержит отдельный `wireguard` endpoint Sing-Box
+проекций. Для AmneziaWG 2.0 он содержит отдельный `wireguard` endpoint Sing-Box
 Extended для каждого доступного desktop/mobile профиля. Параметры `Jc`, `Jmin`,
 `Jmax`, `S1`–`S4`, `H1`–`H4` и `I1` находятся во вложенном объекте `amnezia`;
-`route.final` ссылается на первый AWG endpoint. Нативная INI-конфигурация
-AmneziaWG при этом не изменяется.
+`route.final` ссылается на первый AWG endpoint. Для AWG 3.0 Sing-Box Extended
+и HydraBox получают source-proven `amnezia` поля; AWG 3.1 там не выдаётся.
+Throne `1.3.0-beta.3` получает complete `wg://`, а официальный Amnezia —
+Qt-compressed `vpn://` с полным `last_config`. Нативный `.conf` остаётся
+доступен для всех поколений.
 
 `?format=hydrabox` принимает только `User-Agent: HydraBox/<version>` и
 reported HWID. HydraBox 0.4 отправляет `X-HWID`; прежний
@@ -142,11 +145,13 @@ Remote policy v2 пропускает только разрешённые `outbo
 `wireguard` endpoints: локальные DNS/route и `direct` отбрасываются, а
 executable-поля, зарезервированные теги и system WireGuard блокируют выдачу
 fail-closed.
-AmneziaWG-параметры `I1`–`I5`, `J1`–`J3` и `Itime` сохраняются в endpoint как
+В AWG 2.0 параметры `I1`–`I5`, `J1`–`J3` и `Itime` сохраняются в endpoint как
 `amnezia.i1`–`amnezia.i5`, `amnezia.j1`–`amnezia.j3` и `amnezia.itime` вместе с
-`Jc`/`Jmin`/`Jmax`, `S1`–`S4` и `H1`–`H4`. Detour-зависимости сохраняются с
-исходными тегами, а `profiles` явно указывает только на корневые
-selectable entrypoints. Пользовательское имя профиля берётся из
+`Jc`/`Jmin`/`Jmax`, `S1`–`S4` и `H1`–`H4`. Для AWG 3.0 к ним добавляются
+source-proven `header_protection_key`, `content_padding_addition`, rekey/timeout
+и `max_handshake_attempts`; AWG 3.1 endpoint намеренно не рендерится. Detour-
+зависимости сохраняются с исходными тегами, а `profiles` явно указывает только
+на корневые selectable entrypoints. Пользовательское имя профиля берётся из
 `PluginMeta.display_name`, с fallback на короткий `PluginMeta.name`;
 операторское `PluginMeta.description` в подписку не публикуется. Plaintext
 ограничен 12 MiB, внешний JWE — 16 MiB; каждый ответ получает случайный
