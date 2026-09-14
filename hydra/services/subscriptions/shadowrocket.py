@@ -72,7 +72,12 @@ def build_shadowrocket_snell_link(link: str) -> str:
         credentials = f"chacha20-ietf-poly1305:{password}@{host}:{port}"
         encoded = base64.b64encode(credentials.encode("utf-8")).decode("ascii")
         query = urllib.parse.parse_qs(parsed.query)
-        version = "4"
+        version = query.get("version", ["4"])[0]
+        if version != "4":
+            # Shadowrocket imports the classic pair only — a client-side 4 against a
+            # version 5 server. A generation 6 profile belongs to sing-box, so the link
+            # is passed through instead of being rewritten into one the client cannot use.
+            return link
         relay = {"true": "1", "false": "0"}.get(
             query.get("udp-relay", ["1"])[0].lower(),
             query.get("udp-relay", ["1"])[0],

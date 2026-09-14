@@ -115,7 +115,7 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 | **Hysteria2** | `8443/udp` | QUIC + Salamander |
 | **VLESS + XHTTP** | `443/tcp` | XHTTP через Hydracore и Caddy L4 |
 | **Mieru** | `2012–2022/tcp` | обфусцированный mTLS |
-| **Snell v4** | `32000–32999/tcp` | TCP/UDP-прокси |
+| **Snell 5 / 6** | `32000–32999/tcp` | TCP/UDP-прокси Hydracore |
 | **MTProto / Telemt** | `8443/tcp` | Telegram MTProxy |
 | **Calls · VK** | `56002/udp` | Native Hydracore `call` в режиме VK-parasite |
 | **qWDTT** | `56000/udp`, `56001/udp` | WireGuard поверх TURN |

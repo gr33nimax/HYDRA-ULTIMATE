@@ -36,7 +36,7 @@
 | `hysteria2` | Hysteria2 | QUIC-транспорт с Salamander и браузерной заглушкой |
 | `vless` | VLESS + XHTTP | XHTTP-транспорт Hydracore: свой домен с сертификатом либо Reality с чужим рукопожатием |
 | `shadowtls` | ShadowTLS | ShadowTLS v3 с Trojan detour |
-| `snell` | Snell v4 | TCP/UDP-прокси Hydracore |
+| `snell` | Snell 5/6 | TCP/UDP-прокси Hydracore: поколение 5 с `obfs_mode` `none`/`http`/`tls` или поколение 6 с `mode` `default`/`unshaped`/`unsafe-raw` |
 | `telemt` | MTProto / Telemt | Telegram MTProxy с управлением пользователями |
 | `calls` | Hydra VK Tunnel | Native `call`: только Hydracore VK-parasite; профиль подписки «Обход БС» |
 | `wdtt` | qWDTT | WireGuard-туннелирование поверх TURN |
@@ -90,8 +90,8 @@ Auto endpoint распознаёт NekoBox, Shadowrocket и Throne по `User-Ag
 `format=throne` и `format=singbox`. Shadowrocket получает Naive TCP как
 `https://` с `alpn=http/1.1` и `http2://` с `alpn=h2`, Naive QUIC как `http3://` с `alpn=h3`,
 TCP-варианты включают `uot=2` и `tfo=1`, а все три варианта — `padding=1`,
-TrustTunnel с official TLV, а Snell сохраняет собственный `obfs` без
-перезаписи формата подписки.
+TrustTunnel с official TLV, а Snell сохраняет `obfs-mode`/`obfs-host` классической
+пары и пропускает профиль поколения 6 без перезаписи формата подписки.
 
 Naive собирается из закреплённого fork Caddy и устанавливается только после
 валидации фактического бинарника; замена выполняется с backup предыдущего

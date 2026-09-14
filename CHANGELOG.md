@@ -1,5 +1,14 @@
 # Changelog
 
+- Snell now renders the generations the migrated HydraCore serves: generation 5 (server
+  `version: 5` with a flat `obfs_mode` of `none`/`http`/`tls`) or generation 6 (its own
+  `mode` of `default`/`unshaped`/`unsafe-raw`). The plugin used to emit a server-side
+  `version: 4` and a nested `obfs` object, both of which the upstream Snell implementation
+  refuses — enabling Snell would have stopped the core. The classic pair is server 5 with
+  client 4 (the core's library has no client-side 5), links carry the real client version,
+  the Shadowrocket form is produced for the classic pair only, and both generations require
+  a HydraCore that carries the upstream Snell implementation.
+
 - AmneziaWG 3.1 exports to Sing-Box Extended and HydraBox now require a
   HydraCore carrying the generation's two-field contract (`random_trailers`,
   `disable_cookies`). The gate reads the installed core version; an older core

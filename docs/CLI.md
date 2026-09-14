@@ -368,6 +368,8 @@ sudo hydra plugin command vless set_tuning \
 sudo hydra plugin command vless set_tuning --param utls_fingerprint=chrome
 sudo hydra plugin command anytls set_decoy_theme --param theme=cafe
 sudo hydra plugin command amneziawg set_protocol_mode --param mode=3.1
+sudo hydra plugin command snell set_settings --param version=5 --param obfs_mode=tls
+sudo hydra plugin command snell set_settings --param version=6 --param mode=unshaped
 hydra plugin query amneziawg protocol_mode_status --with-state
 hydra plugin query vless get_tuning --with-state
 hydra plugin query warp external_sources --with-state
