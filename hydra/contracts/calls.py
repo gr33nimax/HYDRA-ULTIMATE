@@ -1,4 +1,5 @@
 """Dependency-neutral contracts for native call transports."""
+
 from __future__ import annotations
 
 from typing import Protocol

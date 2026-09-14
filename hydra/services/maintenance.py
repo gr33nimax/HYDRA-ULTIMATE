@@ -1,4 +1,5 @@
 """Owner-neutral maintenance projection and execution facade."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -60,6 +61,13 @@ class UnavailableMaintenanceOperations:
         return []
 
 
+def _exception_message(exc: Exception) -> str:
+    message = str(exc)
+    if message:
+        return message
+    return exc.__class__.__name__
+
+
 def _action_result(value: Any) -> tuple[bool, str]:
     if isinstance(value, bool):
         return value, ""
@@ -82,18 +90,20 @@ class MaintenanceService:
     def jobs(self) -> list[MaintenanceJob]:
         jobs = self.protocols.maintenance_jobs()
         if self.calls is not None:
-            jobs.append(MaintenanceJob(
-                plugin_name="calls",
-                action="rotate_native_vk",
-                title="Hydra VK Tunnel: автопересоздание пула",
-                description="Создавать новый blue/green VK-пул по интервалу",
-                due_query="pool_rotation_due",
-                enabled_flag=CALLS_POOL_AUTO_FLAG,
-                apply_on_success=False,
-                owner="application",
-                key="calls.pool",
-                enabled_by_default=False,
-            ))
+            jobs.append(
+                MaintenanceJob(
+                    plugin_name="calls",
+                    action="rotate_native_vk",
+                    title="Hydra VK Tunnel: автопересоздание пула",
+                    description="Создавать новый blue/green VK-пул по интервалу",
+                    due_query="pool_rotation_due",
+                    enabled_flag=CALLS_POOL_AUTO_FLAG,
+                    apply_on_success=False,
+                    owner="application",
+                    key="calls.pool",
+                    enabled_by_default=False,
+                )
+            )
         return jobs
 
     def run(self, state: AppState, forced: bool) -> list[MaintenanceOutcome]:
@@ -115,29 +125,17 @@ class MaintenanceService:
         desired = state.protocols.get("calls")
         if not (desired and desired.enabled):
             return MaintenanceOutcome(job, "plugin_disabled")
-        if not forced and not state.install.get(
-            job.enabled_flag,
-            job.enabled_by_default,
-        ):
-            return MaintenanceOutcome(job, "disabled")
+        if self.calls is None:
+            return MaintenanceOutcome(job, "failed", "Calls service is unavailable")
         try:
-            if not self.calls or not self.calls.pool_rotation_due(
-                state,
-                forced=forced,
-            ):
-                return MaintenanceOutcome(job, "fresh")
-            result = self.calls.rotate_native_vk(state)
+            result = self.calls.run_health(state, forced=forced)
             return MaintenanceOutcome(
                 job,
                 "success" if result else "failed",
                 "" if result or not result.error else result.error.message,
             )
-        except Exception as exc:
-            return MaintenanceOutcome(
-                job,
-                "failed",
-                str(exc) or exc.__class__.__name__,
-            )
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            return MaintenanceOutcome(job, "failed", _exception_message(exc))
 
     def _run_plugin_job(
         self,
@@ -174,8 +172,8 @@ class MaintenanceService:
                 message,
                 apply_required=ok and job.apply_on_success,
             )
-        except Exception as exc:
-            return MaintenanceOutcome(job, "failed", str(exc) or exc.__class__.__name__)
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            return MaintenanceOutcome(job, "failed", _exception_message(exc))
 
 
 __all__ = [

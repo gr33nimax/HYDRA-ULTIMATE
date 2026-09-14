@@ -118,12 +118,18 @@ def test_calls_plugin_emits_exact_hydracore_vk_parasite_contract() -> None:
     )
     state = AppState(
         users=[User(email="alice@example.com", uuid="alice")],
-        protocols={"calls": PluginState(installed=True, enabled=True, config={
-            "mode": "vk_parasite",
-            "listen_port": 56002,
-            "obfs_password": "o" * 43,
-            "workers": 12,
-        })},
+        protocols={
+            "calls": PluginState(
+                installed=True,
+                enabled=True,
+                config={
+                    "mode": "vk_parasite",
+                    "listen_port": 56002,
+                    "obfs_password": "o" * 43,
+                    "workers": 12,
+                },
+            )
+        },
     )
     state.network.server_ip = "203.0.113.10"
     plugin = CallsPlugin(source)
@@ -137,11 +143,13 @@ def test_calls_plugin_emits_exact_hydracore_vk_parasite_contract() -> None:
         "listen": "0.0.0.0",
         "listen_port": 56002,
         "obfs_password": "o" * 43,
-        "users": [{
-            "name": "alice@example.com",
-            "password": user_password(state.users[0]),
-            "max_sessions": 1,
-        }],
+        "users": [
+            {
+                "name": "alice@example.com",
+                "password": user_password(state.users[0]),
+                "max_sessions": 1,
+            }
+        ],
         "max_sessions": 128,
         "max_workers_per_session": 12,
         "max_pending_handshakes": 256,
@@ -217,11 +225,17 @@ def test_calls_vk_parasite_normalizes_links_and_sets_workers_default() -> None:
     )
     state = AppState(
         users=[User(email="alice@example.com", uuid="alice")],
-        protocols={"calls": PluginState(installed=True, enabled=True, config={
-            "mode": "vk_parasite",
-            "obfs_password": "o" * 43,
-            "workers": 8,
-        })},
+        protocols={
+            "calls": PluginState(
+                installed=True,
+                enabled=True,
+                config={
+                    "mode": "vk_parasite",
+                    "obfs_password": "o" * 43,
+                    "workers": 8,
+                },
+            )
+        },
     )
     state.network.server_ip = "203.0.113.10"
 
@@ -244,10 +258,16 @@ def test_calls_vk_parasite_rejects_duplicate_links() -> None:
     )
     state = AppState(
         users=[User(email="alice@example.com", uuid="alice")],
-        protocols={"calls": PluginState(installed=True, enabled=True, config={
-            "mode": "vk_parasite",
-            "obfs_password": "o" * 43,
-        })},
+        protocols={
+            "calls": PluginState(
+                installed=True,
+                enabled=True,
+                config={
+                    "mode": "vk_parasite",
+                    "obfs_password": "o" * 43,
+                },
+            )
+        },
     )
     state.network.server_ip = "203.0.113.10"
 
@@ -265,11 +285,15 @@ def test_calls_vk_parasite_rejects_enabled_external_udp_port_collision() -> None
     state = AppState(
         users=[User(email="alice@example.com", uuid="alice")],
         protocols={
-            "calls": PluginState(installed=True, enabled=True, config={
-                "mode": "vk_parasite",
-                "listen_port": 56001,
-                "obfs_password": "o" * 43,
-            }),
+            "calls": PluginState(
+                installed=True,
+                enabled=True,
+                config={
+                    "mode": "vk_parasite",
+                    "listen_port": 56001,
+                    "obfs_password": "o" * 43,
+                },
+            ),
             "wdtt": PluginState(enabled=True, config={"wg_port": 56001}),
         },
     )
@@ -296,11 +320,15 @@ def test_calls_vk_parasite_rejects_amneziawg_udp_collision(awg, field) -> None:
     state = AppState(
         users=[User(email="alice@example.com", uuid="alice")],
         protocols={
-            "calls": PluginState(installed=True, enabled=True, config={
-                "mode": "vk_parasite",
-                "listen_port": 51820,
-                "obfs_password": "o" * 43,
-            }),
+            "calls": PluginState(
+                installed=True,
+                enabled=True,
+                config={
+                    "mode": "vk_parasite",
+                    "listen_port": 51820,
+                    "obfs_password": "o" * 43,
+                },
+            ),
             "amneziawg": awg,
         },
     )
@@ -313,10 +341,16 @@ def test_calls_vk_parasite_normalizes_shared_obfs_password() -> None:
     source = Source([], "", links=[f"https://vk.com/call/join/{index}" for index in range(4)], multi=True)
     state = AppState(
         users=[User(email="alice@example.com", uuid="alice")],
-        protocols={"calls": PluginState(installed=True, enabled=True, config={
-            "mode": "vk_parasite",
-            "obfs_password": f"  {'o' * 43}  ",
-        })},
+        protocols={
+            "calls": PluginState(
+                installed=True,
+                enabled=True,
+                config={
+                    "mode": "vk_parasite",
+                    "obfs_password": f"  {'o' * 43}  ",
+                },
+            )
+        },
     )
     state.network.server_ip = "203.0.113.10"
     plugin = CallsPlugin(source)
@@ -340,11 +374,17 @@ def test_calls_vk_parasite_rejects_unsupported_session_cap(worker_limit: int) ->
     )
     state = AppState(
         users=[User(email="alice@example.com", uuid="alice")],
-        protocols={"calls": PluginState(installed=True, enabled=True, config={
-            "mode": "vk_parasite",
-            "obfs_password": "o" * 43,
-            "workers": worker_limit,
-        })},
+        protocols={
+            "calls": PluginState(
+                installed=True,
+                enabled=True,
+                config={
+                    "mode": "vk_parasite",
+                    "obfs_password": "o" * 43,
+                    "workers": worker_limit,
+                },
+            )
+        },
     )
     state.network.server_ip = "203.0.113.10"
 
@@ -361,10 +401,16 @@ def test_calls_apply_opens_listener_and_rollback_restores_firewall(monkeypatch) 
     )
     state = AppState(
         users=[User(email="alice@example.com", uuid="alice")],
-        protocols={"calls": PluginState(installed=True, enabled=True, config={
-            "mode": "vk_parasite",
-            "obfs_password": "o" * 43,
-        })},
+        protocols={
+            "calls": PluginState(
+                installed=True,
+                enabled=True,
+                config={
+                    "mode": "vk_parasite",
+                    "obfs_password": "o" * 43,
+                },
+            )
+        },
     )
     opened: set[int] = set()
     monkeypatch.setattr(

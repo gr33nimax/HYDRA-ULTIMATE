@@ -5,9 +5,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from hydra.core.host import HostBackend
 from hydra.core.state_creator_models import HeadlessCreatorConfig
 from hydra.core.state_models import AppState, PluginState, User
 from hydra.services.calls import CallsService
+from hydra.services.calls_health import CallsProbeStore, ProbeDecision
 from hydra.services.creator_sessions import (
     CreatorEndpoint,
     CreatorProviderAvailability,
@@ -26,6 +28,22 @@ class Runtime:
         self.imported_cookie_path: Path | None = None
         self.legacy_join_removed = False
         self.metadata: dict[str, object] = {}
+        self.slot_snapshot: list[str] | None = None
+        self.replaced_slot: int | None = None
+        self.slot_finalized = False
+
+    def stage_native_slot(self, slot: int):
+        self.slot_snapshot = list(self.links)
+        self.replaced_slot = slot
+        self.links[slot - 1] = f"https://vk.com/call/join/replacement-{slot}"
+        return list(self.links)
+
+    def finalize_native_slot(self):
+        self.slot_finalized = True
+
+    def rollback_native_slot(self):
+        if self.slot_snapshot is not None:
+            self.links = self.slot_snapshot
 
     def vk_parasite_supported(self):
         return self.multi
@@ -106,6 +124,9 @@ class Creator:
         self.rolled_back = True
         if self._previous_pool is not None:
             self.runtime.restore_native_pool(self._previous_pool)
+
+    def close(self, group):
+        return None
 
     def stop_managed(self, provider, consumer):
         assert (provider, consumer) == ("vk", "calls")
@@ -198,8 +219,101 @@ def test_native_enable_is_hydracore_vk_parasite_only() -> None:
     assert state.protocols["calls"].config["workers"] == 4
     assert state.protocols["calls"].config["listen_port"] == 56002
     assert state.protocols["calls"].config["public_endpoint"] == "203.0.113.10"
-    assert len(state.protocols["calls"].config["obfs_password"]) >= 32
+    password = state.protocols["calls"].config["obfs_password"]
+    assert isinstance(password, str)
+    assert len(password) >= 32
     assert creator.committed and creator.finalized
+
+
+def test_confirmed_room_replacement_keeps_other_rooms_and_applies_config() -> None:
+    runtime = Runtime()
+    runtime.links = [f"https://vk.com/call/join/room-{index}" for index in range(1, 5)]
+    state = _state(installed=True, enabled=True)
+    service, _creator = _service(runtime)
+
+    result = service.replace_native_vk_slot(state, 2)
+
+    assert result
+    assert runtime.links == [
+        "https://vk.com/call/join/room-1",
+        "https://vk.com/call/join/replacement-2",
+        "https://vk.com/call/join/room-3",
+        "https://vk.com/call/join/room-4",
+    ]
+    assert runtime.slot_finalized is True
+
+
+def test_failed_room_replacement_restores_the_prior_pool() -> None:
+    runtime = Runtime()
+    runtime.links = [f"https://vk.com/call/join/room-{index}" for index in range(1, 5)]
+    state = _state(installed=True, enabled=True)
+    service, _creator = _service(runtime, apply=lambda _state: False)
+
+    result = service.replace_native_vk_slot(state, 3)
+
+    assert not result
+    assert runtime.links == [f"https://vk.com/call/join/room-{index}" for index in range(1, 5)]
+    assert runtime.slot_finalized is False
+
+
+def test_calls_status_exposes_redacted_probe_state(tmp_path) -> None:
+    runtime = Runtime()
+    runtime.links = [f"https://vk.com/call/join/room-{index}" for index in range(1, 5)]
+    state = _state(installed=True, enabled=True)
+    store = CallsProbeStore(HostBackend(), tmp_path / "probe-state.json")
+    now = datetime.now(timezone.utc)
+    decision = store.claim_due(runtime.links, now=now)
+    assert decision is not None
+    store.record(runtime.links, decision, "dead", now=now)
+    service, _creator = _service(runtime)
+    service.probe_store = store
+
+    status = service.status(state)
+
+    assert status.external_probe_outcome == "dead"
+    assert status.external_probe_confirmation_pending is True
+    assert "room-1" not in str(status.as_dict())
+
+
+def test_full_rotation_resets_runtime_probe_history(tmp_path) -> None:
+    runtime = Runtime()
+    runtime.links = [f"https://vk.com/call/join/room-{index}" for index in range(1, 5)]
+    runtime.tokens = [f"room-{index}" for index in range(1, 5)]
+    state = _state(installed=True, enabled=True)
+    store = CallsProbeStore(HostBackend(), tmp_path / "probe-state.json")
+    decision = store.claim_due(runtime.links, now=datetime.now(timezone.utc))
+    assert decision is not None
+    store.record(runtime.links, decision, "healthy", now=datetime.now(timezone.utc))
+    service, _creator = _service(runtime)
+    service.probe_store = store
+
+    assert service.rotate_native_vk(state)
+    assert not store.path.exists()
+
+
+def test_confirmed_dead_probe_replaces_only_the_failed_room(tmp_path) -> None:
+    class DeadProbe:
+        def verify(self, _link):
+            return type("Result", (), {"outcome": "dead"})()
+
+    runtime = Runtime()
+    runtime.links = [f"https://vk.com/call/join/room-{index}" for index in range(1, 5)]
+    state = _state(installed=True, enabled=True)
+    store = CallsProbeStore(HostBackend(), tmp_path / "probe-state.json")
+    started = datetime.now(timezone.utc) - timedelta(minutes=16)
+    decision = store.claim_due(runtime.links, now=started)
+    assert decision == ProbeDecision(1, False)
+    assert decision is not None
+    store.record(runtime.links, decision, "dead", now=started)
+    service, _creator = _service(runtime)
+    service.probe_store = store
+    service.turn_probe = DeadProbe()
+
+    result = service.run_health(state)
+
+    assert result.value == {"operation": "replace", "slot": 1}
+    assert runtime.replaced_slot == 1
+    assert runtime.links[1:] == [f"https://vk.com/call/join/room-{index}" for index in range(2, 5)]
 
 
 def test_set_workers_updates_the_single_calls_configuration_value() -> None:
@@ -208,8 +322,7 @@ def test_set_workers_updates_the_single_calls_configuration_value() -> None:
     applied: list[int] = []
     service, _ = _service(
         runtime,
-        apply=lambda current: applied.append(current.protocols["calls"].config["workers"])
-        or True,
+        apply=lambda current: applied.append(current.protocols["calls"].config["workers"]) or True,
     )
 
     result = service.set_workers(state, 12)
@@ -223,9 +336,7 @@ def test_set_workers_updates_the_single_calls_configuration_value() -> None:
 def test_pool_rotation_schedule_is_persisted_and_uses_runtime_timestamp() -> None:
     runtime = Runtime()
     runtime.links = [f"https://vk.com/call/join/{index}" for index in range(4)]
-    runtime.metadata["refreshed_at"] = (
-        datetime.now(timezone.utc) - timedelta(hours=2)
-    ).isoformat()
+    runtime.metadata["refreshed_at"] = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     state = _state(installed=True, enabled=True)
     service, _ = _service(runtime)
 
@@ -268,6 +379,7 @@ def test_stock_core_is_rejected_without_starting_creator() -> None:
     result = service.enable_native_vk(state)
 
     assert not result
+    assert result.error is not None
     assert "require the Hydracore kernel" in result.error.message
     assert creator.created is False
     assert "calls" not in state.protocols
@@ -282,6 +394,7 @@ def test_hydracore_without_exact_vk_parasite_contract_fails_closed() -> None:
     result = service.enable_native_vk(state)
 
     assert not result
+    assert result.error is not None
     assert "exact call_vk_parasite" in result.error.message
     assert creator.created is False
     assert "calls" not in state.protocols
@@ -296,6 +409,7 @@ def test_explicit_legacy_p2p_state_is_rejected_before_creator() -> None:
     result = service.reinstall_native_vk(state)
 
     assert not result
+    assert result.error is not None
     assert "must be vk_parasite" in result.error.message
     assert creator.created is False
 
@@ -338,6 +452,7 @@ def test_enable_rejects_duplicate_managed_rooms_and_rolls_back() -> None:
     result = service.enable_native_vk(state)
 
     assert not result
+    assert result.error is not None
     assert "incomplete Calls room pool" in result.error.message
     assert creator.committed is False
     assert creator.rolled_back is True
@@ -418,7 +533,7 @@ def test_admin_client_profile_prefers_persisted_calls_endpoint() -> None:
 
 def test_status_keeps_native_link_ready_wire_key_with_pool_alias() -> None:
     runtime = Runtime()
-    runtime.links = ["https://vk.com/call/join/working"]
+    runtime.links = [f"https://vk.com/call/join/{index}" for index in range(4)]
     state = _state(installed=True, enabled=True)
     service, _ = _service(runtime)
 

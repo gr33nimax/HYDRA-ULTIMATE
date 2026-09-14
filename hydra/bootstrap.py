@@ -1,4 +1,5 @@
 """Production composition root for all executable adapters."""
+
 from __future__ import annotations
 
 import os
@@ -25,13 +26,16 @@ from hydra.services.backups import BackupService, compose_backup_policy
 from hydra.services.certificate_audit import CertificateInspector
 from hydra.services.certificates import CertificateProvisioner
 from hydra.services.calls import CallsService
+from hydra.services.calls_health import CallsProbeStore
 from hydra.services.calls_infrastructure import (
     CALLS_CREATOR_UNIT,
     CALLS_POOL_DIR,
     CALLS_POOL_STATE,
+    CALLS_PROBE_STATE,
     CallsInfrastructure,
 )
 from hydra.services.creator_sessions import CreatorSessionManager
+from hydra.services.vk_turn_probe import VkTurnProbe
 from hydra.services.creator_lock_infrastructure import CreatorFileLock
 from hydra.services.headless_creator_infrastructure import HeadlessCreatorInfrastructure
 from hydra.services.configuration_plan import ConfigurationPlanner
@@ -61,13 +65,13 @@ from hydra.services.users import UserService
 
 
 def _disable_telemt_ios_fix() -> None:
-    from hydra.plugins.telemt.telemt_ios_fix import disable_ios_fix
+    from hydra.plugins.telemt.telemt_ios_fix_console import disable_ios_fix
 
     disable_ios_fix()
 
 
 def _disable_telemt_syn_limiter() -> None:
-    from hydra.plugins.telemt.telemt_syn_limiter import disable_syn_limiter
+    from hydra.plugins.telemt.telemt_syn_limiter_console import disable_syn_limiter
 
     disable_syn_limiter()
 
@@ -109,12 +113,16 @@ def _creator_services(
         apply_config=orchestration.apply_config,
         operation_lock=CreatorFileLock(
             HOST,
-            Path(os.environ.get(
-                "HYDRA_CALLS_LOCK_FILE",
-                "/run/lock/hydra-calls.lock",
-            )),
+            Path(
+                os.environ.get(
+                    "HYDRA_CALLS_LOCK_FILE",
+                    "/run/lock/hydra-calls.lock",
+                )
+            ),
         ),
         last_apply_error=orchestration.last_apply_error,
+        probe_store=CallsProbeStore(HOST, CALLS_PROBE_STATE),
+        turn_probe=VkTurnProbe(),
     )
     return calls
 
@@ -190,9 +198,7 @@ def production_application(
             inspect_certificates=certificate_audit.inspect,
             # Resolved on call: the renewal needs the admin adapter being
             # assembled by this very statement.
-            renew_subscription_certificate=lambda domain: (
-                subscription_certificate_renewal(admin)(domain)
-            ),
+            renew_subscription_certificate=lambda domain: subscription_certificate_renewal(admin)(domain),
             maintenance=maintenance,
         ),
         sync_runner=run_sync,

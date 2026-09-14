@@ -1,4 +1,5 @@
 """Hydracore native VK-parasite Calls transport configuration."""
+
 from __future__ import annotations
 
 import json
@@ -139,10 +140,7 @@ class CallsPlugin(BasePlugin):
         enabled = bool(desired and desired.enabled)
         supported = self._source.vk_parasite_supported()
         mode = call_mode(state) if state is not None else CALL_MODE_VK_PARASITE
-        ready = (
-            bool(self._source.load_native_join_links())
-            and supported
-        )
+        ready = bool(self._source.load_native_join_links()) and supported
         running = bool(enabled and ready and self._source.singbox_running())
         return PluginStatus(
             installed=supported,
@@ -179,10 +177,14 @@ class CallsPlugin(BasePlugin):
             state,
             self._source.load_native_join_links(),
         )
-        return json.dumps({
-            "outbounds": [outbound],
-            "route": {"final": outbound["tag"]},
-        }, ensure_ascii=False, separators=(",", ":"))
+        return json.dumps(
+            {
+                "outbounds": [outbound],
+                "route": {"final": outbound["tag"]},
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
     def healthcheck_for_state(self, state: PluginStateAccess) -> HealthResult:
         desired = state.protocols.get(self.meta.name)

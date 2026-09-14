@@ -24,6 +24,19 @@ class ProbeHost(HostBackend):
         return CompletedProcess(command, self.returncode, stdout="", stderr="")
 
 
+class PoolSource:
+    def __init__(self, links: list[str], units: list[str]) -> None:
+        self.links = links
+        self.units = units
+
+    def read_creator_links(self) -> list[str]:
+        return list(self.links)
+
+    def creator_units(self, *, count: int) -> list[str]:
+        assert count == 4
+        return list(self.units)
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -36,6 +49,24 @@ class ProbeHost(HostBackend):
 def test_join_link_validation_is_strict(value: str) -> None:
     with pytest.raises(ValueError):
         validate_join_link(value)
+
+
+def test_calls_pool_read_requires_four_links_and_active_units() -> None:
+    host = ProbeHost()
+    source = PoolSource(
+        ["https://vk.com/call/join/one"],
+        [f"hydra-headless-creator-vk-calls@a-{index}.service" for index in range(1, 5)],
+    )
+    runtime = CallsInfrastructure(host, pool_source=source)
+
+    assert runtime.load_native_join_links() == []
+    source.links = [f"https://vk.com/call/join/{index}" for index in range(4)]
+    assert runtime.load_native_join_links() == source.links
+    source.units.pop()
+    assert runtime.load_native_join_links() == []
+    source.units.append("hydra-headless-creator-vk-calls@a-4.service")
+    host.returncode = 1
+    assert runtime.load_native_join_links() == []
 
 
 def test_calls_can_remove_a_stale_legacy_join_file(tmp_path) -> None:
@@ -72,19 +103,21 @@ class CapabilityHost(ProbeHost):
         return CompletedProcess(
             command,
             0,
-            stdout=json.dumps({
-                "api_version": 2,
-                "identity": {
-                    "core_id": "io.hydrabox.hydracore",
-                    "role": "vps",
-                },
-                "features": {
-                    "call_vk_parasite": True,
-                },
-                "protocols": {
-                    "call_modes": ["vk_parasite"],
-                },
-            }),
+            stdout=json.dumps(
+                {
+                    "api_version": 2,
+                    "identity": {
+                        "core_id": "io.hydrabox.hydracore",
+                        "role": "vps",
+                    },
+                    "features": {
+                        "call_vk_parasite": True,
+                    },
+                    "protocols": {
+                        "call_modes": ["vk_parasite"],
+                    },
+                }
+            ),
             stderr="",
         )
 
