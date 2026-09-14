@@ -373,9 +373,40 @@ def test_shadowrocket_subscription_converts_only_snell_to_cipher_password():
     assert base64.b64decode(parsed.netloc).decode() == ("chacha20-ietf-poly1305:secret@example.com:32000")
     assert urllib.parse.parse_qs(parsed.query) == {
         "version": ["4"],
-        "udp-relay": ["1"],
+        "udp": ["1"],
     }
     assert urllib.parse.unquote(parsed.fragment) == "alice@example.com Snell"
+
+
+def test_shadowrocket_subscription_maps_awg_and_skips_other_awg_formats():
+    plugin = MockTransport()
+    plugin.client_links = MagicMock(
+        return_value=[
+            "wg://203.0.113.10:52017?private_key=private&local_address=10.67.67.11/32"
+            "&enable_amnezia=true&jc=2&public_key=public&pre_shared_key=shared"
+            "&persistent_keepalive_interval=25#AWG",
+            "vpn://official-amnezia",
+            "sn://awg?nekobox-payload",
+        ]
+    )
+    user = _make_user("alice@example.com")
+    state = _make_state([user])
+
+    links = (
+        base64.b64decode(
+            generate_shadowrocket_sub(user, state, plugins=_plugins(plugin)),
+        )
+        .decode()
+        .splitlines()
+    )
+    awg = next(link for link in links if link.startswith("wg://"))
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(awg).query)
+
+    assert query["obfs"] == ["amneziawg"]
+    assert query["obfsParam"]
+    assert len([link for link in links if link.startswith("wg://")]) == 1
+    assert not any(link.startswith("vpn://") for link in links)
+    assert not any(link.startswith("sn://awg") for link in links)
 
 
 def test_shadowrocket_subscription_passes_a_generation_six_snell_link_through():

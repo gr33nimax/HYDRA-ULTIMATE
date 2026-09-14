@@ -18,8 +18,11 @@
 - **D5 — Generation `6` is exclusive.** It serves v6 clients only. The plugin says so in
   `status()` and in the docs instead of silently breaking v4 clients.
 - **D6 — Shadowrocket form only for the `5` pair.** The converter keeps the real client
-  version (`4`) and forwards `obfs-mode`/`obfs-host`; for generation `6` it returns the link
-  unchanged rather than inventing a form the client cannot import.
+  version (`4`) and emits Shadowrocket's own grammar: `udp=0|1`; no-obfuscation uses the full
+  base64 credential payload, while `http`/`tls` use a credential-only base64 user part followed
+  by literal `@host:port` and `plugin=obfs-local;...`. TLS places the host in the client-exported
+  `{"Host":"<host>"}` inner object. For generation `6` it returns the link unchanged rather
+  than inventing a form the client cannot import.
 
 ## State
 
@@ -38,9 +41,9 @@ A stored `version: 4` is read as `5`; any other value is refused.
 
 | Generation / obfs | server `inbound` | client `outbound` | `snell://` |
 | --- | --- | --- | --- |
-| `5`, `none` | `version: 5` | `version: 4` | `version=4` |
-| `5`, `http` | `version: 5`, `obfs_mode: http` | `version: 4`, `obfs_mode: http`, `obfs_host: <host>` | `version=4`, `obfs-mode=http`, `obfs-host=<host>` |
-| `5`, `tls` | `version: 5`, `obfs_mode: tls` | `version: 4`, `obfs_mode: tls`, `obfs_host: <host>` | `version=4`, `obfs-mode=tls`, `obfs-host=<host>` |
+| `5`, `none` | `version: 5` | `version: 4` | full credential base64, `version=4`, `udp=1` |
+| `5`, `http` | `version: 5`, `obfs_mode: http` | `version: 4`, `obfs_mode: http`, `obfs_host: <host>` | credential-only base64 + `@host:port`, `plugin=obfs-local;obfs=http;obfs-host=<host>;obfs-uri=/`, `version=4`, `udp=1` |
+| `5`, `tls` | `version: 5`, `obfs_mode: tls` | `version: 4`, `obfs_mode: tls`, `obfs_host: <host>` | credential-only base64 + `@host:port`, TLS `plugin` host `{"Host":"<host>"}`, `version=4`, `udp=1` |
 | `6`, any | `version: 6`, `mode: <mode>` | `version: 6`, `mode: <mode>` | `version=6`, `mode=<mode>` |
 
 Everything else in the fragment (tags, ports, `network: [tcp, udp]`, `psk`, `listen`) stays as

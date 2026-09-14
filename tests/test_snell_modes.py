@@ -114,8 +114,18 @@ def test_shadowrocket_keeps_the_classic_pair_and_skips_generation_six():
         "snell://secret@example.com:32000?version=4&obfs-mode=tls&obfs-host=www.bing.com#tag"
     )
     assert "version=4" in classic
-    assert "obfs-mode=tls" in classic
-    assert "obfs-host=www.bing.com" in classic
+    # Shadowrocket reads Snell obfuscation from the Shadowsocks-style `plugin` parameter.
+    # TLS specifically serializes its host as the client-exported JSON Host object.
+    assert "plugin=obfs-local;obfs%3Dtls;obfs-host%3D%7B%22Host%22:%22www.bing.com%22%7D;obfs-uri%3D/" in classic
+    assert "obfs-mode=" not in classic
+
+    http = build_shadowrocket_snell_link(
+        "snell://secret@example.com:32000?version=4&obfs-mode=http&obfs-host=cdn.example.com#tag"
+    )
+    assert "plugin=obfs-local;obfs%3Dhttp;obfs-host%3Dcdn.example.com;obfs-uri%3D/" in http
+
+    plain = build_shadowrocket_snell_link("snell://secret@example.com:32000?version=4#tag")
+    assert "plugin=" not in plain
 
     modern = "snell://secret@example.com:32000?version=6&mode=unshaped#tag"
     assert build_shadowrocket_snell_link(modern) == modern

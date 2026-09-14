@@ -15,7 +15,7 @@ TSK-006 (HydraCore fence) is independent and closes R2.4
 | State | Count | Evidence |
 | --- | ---: | --- |
 | Not started | 0 | — |
-| Complete | 8 | TSK-001 … TSK-008 |
+| Complete | 9 | TSK-001 … TSK-009 |
 
 ## Tasks
 
@@ -80,3 +80,7 @@ TSK-006 (HydraCore fence) is independent and closes R2.4
   - **Acceptance:** docs name the two generations, the 5↔4 pairing and the gate; `verify.py`
     passes.
   - **Dependency:** TSK-005. _Requirements: NFR docs._
+
+- [x] **TSK-009 — Shadowrocket takes the obfuscation from its own parameter**
+  - **Факт:** live Shadowrocket exports corrected the provisional URI grammar: `none` keeps the full credential base64 with `version=4&udp=1`; `http`/`tls` use credential-only base64 followed by literal `@host:port`, plus `plugin=obfs-local;...`; TLS serializes `obfs-host={"Host":"<host>"}` inside that plugin. Generation 6 still passes through untouched. The cross-protocol target contract lives in `.kiro/specs/shadowrocket-imports/requirements.md`; regression coverage is in `tests/test_shadowrocket_links.py`, `tests/test_snell_modes.py` and `tests/test_subscriptions.py`.
+  - **Dependency:** TSK-003. _Requirements: R3.4._

@@ -76,9 +76,12 @@ tunnel connects on the first attempt.
    requires (server `5` → client `4`, generation `6` → `6`) together with the obfuscation
    parameters the pair needs, and the operator-visible generation SHALL stay truthful in
    status and documentation.
-4. WHEN the Shadowrocket form of a Snell link is produced THEN it SHALL derive the version and
-   obfuscation from the active generation instead of substituting a fixed value, and it SHALL
-   refuse (leave the link untouched) for a generation Shadowrocket cannot import.
+4. WHEN the Shadowrocket form of a classic Snell link is produced THEN it SHALL use `version=4`
+   plus `udp=0|1`; an un-obfuscated profile SHALL retain the full credential payload, while
+   `http`/`tls` SHALL use Shadowrocket's `plugin=obfs-local;...` form with a credential-only
+   payload followed by literal `@host:port`. The TLS plugin host SHALL be the client-exported
+   `{"Host":"<host>"}` object. HYDRA SHALL derive that form from the active generation and
+   SHALL leave a generation 6 link untouched rather than fabricating an unsupported profile.
 5. WHEN credentials are regenerated after a generation change THEN PSK, port and tag SHALL be
    identical to the pre-change values.
 

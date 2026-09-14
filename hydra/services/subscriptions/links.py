@@ -1,4 +1,5 @@
 """Share-link and client-specific base64 subscription generation."""
+
 from __future__ import annotations
 
 import base64
@@ -12,6 +13,7 @@ from hydra.services.subscriptions.serialization import (
     generate_awg_sn_link,
 )
 from hydra.services.subscriptions.shadowrocket import (
+    build_shadowrocket_awg_link,
     build_shadowrocket_naive_links,
     build_shadowrocket_snell_link,
 )
@@ -41,11 +43,7 @@ def generate_links(
                     if link:
                         links.append(link)
             else:
-                links.extend(
-                    link
-                    for link in plugins.client_links(plugin, user, state)
-                    if link
-                )
+                links.extend(link for link in plugins.client_links(plugin, user, state) if link)
         except Exception:
             continue
     return list(dict.fromkeys(links))
@@ -62,11 +60,7 @@ def _protocol_suffix(link: str) -> str:
         return "AnyTLS"
     if scheme in ("tt", "trusttunnel"):
         query = urllib.parse.parse_qs(parsed.query)
-        return (
-            "TrustTunnel QUIC"
-            if query.get("alpn", ["h2"])[0] == "h3"
-            else "TrustTunnel"
-        )
+        return "TrustTunnel QUIC" if query.get("alpn", ["h2"])[0] == "h3" else "TrustTunnel"
     if scheme == "mierus":
         return "Mieru"
     if scheme in ("hysteria2", "hy2"):
@@ -79,11 +73,7 @@ def _protocol_suffix(link: str) -> str:
     if scheme == "snell":
         return "Snell"
     if scheme == "wg":
-        return (
-            "AWG Mobile"
-            if urllib.parse.unquote(parsed.fragment).endswith("AWG Mobile")
-            else "AWG Desktop"
-        )
+        return "AWG Mobile" if urllib.parse.unquote(parsed.fragment).endswith("AWG Mobile") else "AWG Desktop"
     if scheme == "trojan":
         query = urllib.parse.parse_qs(parsed.query)
         if "shadow-tls" in query.get("plugin", []):
@@ -111,9 +101,7 @@ def _configuration_name_key(link: str) -> str:
         "snell": "snell",
         "trojan": "trojan",
         "wg": (
-            "amneziawg:mobile"
-            if urllib.parse.unquote(parsed.fragment).endswith("AWG Mobile")
-            else "amneziawg:desktop"
+            "amneziawg:mobile" if urllib.parse.unquote(parsed.fragment).endswith("AWG Mobile") else "amneziawg:desktop"
         ),
     }.get(scheme, "")
 
@@ -191,16 +179,9 @@ def _base_subscription_links(
     *,
     plugins: SubscriptionPluginAccess,
 ) -> list[str]:
-    formatted = [
-        tag_client_link(link, user, state)
-        for link in generate_links(user, state, plugins=plugins)
-    ]
+    formatted = [tag_client_link(link, user, state) for link in generate_links(user, state, plugins=plugins)]
     links = [*formatted]
-    links.extend(
-        converted
-        for link in formatted
-        if (converted := clean_link_to_sn(link, user))
-    )
+    links.extend(converted for link in formatted if (converted := clean_link_to_sn(link, user)))
     links.extend(_awg_links(user, state, plugins))
     return links
 
@@ -227,17 +208,21 @@ def generate_shadowrocket_sub(
     links: list[str] = []
     for link in _base_subscription_links(user, state, plugins=plugins):
         try:
-            scheme = urllib.parse.urlsplit(link).scheme.lower()
+            parsed = urllib.parse.urlsplit(link)
+            scheme = parsed.scheme.lower()
         except ValueError:
             links.append(link)
             continue
         if scheme in {"naive+https", "naive+quic"}:
             links.extend(build_shadowrocket_naive_links(link))
             continue
-        links.append(
-            build_shadowrocket_snell_link(link)
-            if scheme == "snell"
-            else link
-        )
+        if scheme == "wg":
+            links.append(build_shadowrocket_awg_link(link))
+            continue
+        if scheme == "vpn" or (scheme == "sn" and parsed.netloc.lower() == "awg"):
+            # Official Amnezia and NekoBox-only AWG containers do not belong in a
+            # Shadowrocket subscription alongside its complete ``wg://`` form.
+            continue
+        links.append(build_shadowrocket_snell_link(link) if scheme == "snell" else link)
     payload = "\n".join(links) + "\n"
     return base64.b64encode(payload.encode()).decode("ascii")
