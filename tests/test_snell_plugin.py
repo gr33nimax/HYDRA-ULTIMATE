@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import json
+from typing import cast
 from unittest.mock import patch
 import pytest
 
 from hydra.core.state import AppState, PluginState, User
 from hydra.plugins.snell.plugin import PORT_END, PORT_START, SNELL_VERSION, SnellPlugin
+
+
+@pytest.fixture(autouse=True)
+def _core_with_the_upstream_snell():
+    """The renderers assert the core gate; these tests exercise rendering itself."""
+    with patch("hydra.plugins.snell.plugin.kernel_supports_snell", return_value=True):
+        yield
 
 
 def _state(*users: User) -> AppState:
@@ -26,9 +34,11 @@ def test_each_user_gets_an_isolated_inbound():
     assert all(item["type"] == "snell" for item in inbounds)
     assert all(item["version"] == SNELL_VERSION for item in inbounds)
     assert all(item["network"] == ["tcp", "udp"] for item in inbounds)
-    assert len({item["listen_port"] for item in inbounds}) == 2
-    assert len({item["psk"] for item in inbounds}) == 2
-    assert all(PORT_START <= item["listen_port"] <= PORT_END for item in inbounds)
+    ports = [cast(int, item["listen_port"]) for item in inbounds]
+    keys = [cast(str, item["psk"]) for item in inbounds]
+    assert len(set(ports)) == 2
+    assert len(set(keys)) == 2
+    assert all(PORT_START <= port <= PORT_END for port in ports)
 
 
 def test_port_assignment_is_order_independent():
@@ -67,6 +77,9 @@ def test_client_material_matches_inbound():
 
     assert outbound["psk"] == inbound["psk"]
     assert outbound["server_port"] == inbound["listen_port"]
+    # The classic generation is server 5 against client 4; the core has no outbound 5.
+    assert inbound["version"] == 5
+    assert outbound["version"] == 4
     assert "obfs" not in inbound
     assert "obfs" not in outbound
     assert "obfs-mode=" not in plugin.client_link(user, state)
@@ -81,33 +94,85 @@ def test_firewall_uses_dedicated_tcp_range():
     open_range.assert_called_once_with("tcp", PORT_START, PORT_END, "snell")
 
 
-def test_enable_accepts_legacy_v5_without_mutating_desired_state():
+def test_enable_accepts_a_state_written_for_the_previous_core():
     plugin = SnellPlugin()
     state = _state()
-    state.protocols["snell"].config["version"] = 5
+    state.protocols["snell"].config["version"] = 4
     with patch("hydra.utils.firewall.open_range"):
         plugin.on_enable(state)
-    assert plugin._version(state) == 4
-    assert state.protocols["snell"].config["version"] == 5
+    assert plugin._version(state) == 5
+    assert state.protocols["snell"].config["version"] == 4
 
 
-def test_http_obfs_is_configurable():
+def test_http_obfs_is_configurable_on_the_classic_generation():
     plugin = SnellPlugin()
     user = User("a@example.com", "uuid-a")
     state = _state(user)
-    state.protocols["snell"].config.update({
-        "version": 4, "obfs_mode": "http", "obfs_host": "www.example.com",
-    })
+    state.protocols["snell"].config.update(
+        {
+            "version": 5,
+            "obfs_mode": "http",
+            "obfs_host": "www.example.com",
+        }
+    )
     inbound = plugin.configure(state).inbounds[0]
     outbound = next(
         item for item in json.loads(plugin.generate_client_config(user, state))["outbounds"]
         if item["type"] == "snell"
     )
-    assert inbound["version"] == outbound["version"] == 4
-    assert inbound["obfs"] == {"mode": "http"}
-    assert outbound["obfs"] == {"mode": "http", "host": "www.example.com"}
+
+    assert inbound["version"] == 5
+    assert outbound["version"] == 4
+    assert inbound["obfs_mode"] == "http"
+    assert outbound["obfs_mode"] == "http"
+    assert outbound["obfs_host"] == "www.example.com"
+    assert "obfs" not in inbound
+    assert "obfs" not in outbound
     assert "obfs-mode=http" in plugin.client_link(user, state)
     assert "udp-relay=true" in plugin.client_link(user, state)
+
+
+def test_tls_obfs_is_configurable_on_the_classic_generation():
+    plugin = SnellPlugin()
+    user = User("a@example.com", "uuid-a")
+    state = _state(user)
+    state.protocols["snell"].config.update(
+        {
+            "version": 5,
+            "obfs_mode": "tls",
+            "obfs_host": "cdn.example.com",
+        }
+    )
+    inbound = plugin.configure(state).inbounds[0]
+    outbound = next(
+        item for item in json.loads(plugin.generate_client_config(user, state))["outbounds"]
+        if item["type"] == "snell"
+    )
+
+    assert inbound["obfs_mode"] == "tls"
+    assert outbound["obfs_mode"] == "tls"
+    assert outbound["obfs_host"] == "cdn.example.com"
+    assert "obfs-mode=tls" in plugin.client_link(user, state)
+
+
+def test_generation_six_uses_its_own_mode_on_both_ends():
+    plugin = SnellPlugin()
+    user = User("a@example.com", "uuid-a")
+    state = _state(user)
+    state.protocols["snell"].config.update({"version": 6, "mode": "unshaped"})
+
+    inbound = plugin.configure(state).inbounds[0]
+    outbound = next(
+        item for item in json.loads(plugin.generate_client_config(user, state))["outbounds"]
+        if item["type"] == "snell"
+    )
+
+    assert inbound["version"] == outbound["version"] == 6
+    assert inbound["mode"] == outbound["mode"] == "unshaped"
+    assert "obfs_mode" not in inbound
+    assert "obfs_mode" not in outbound
+    assert "version=6" in plugin.client_link(user, state)
+    assert "mode=unshaped" in plugin.client_link(user, state)
 
 
 def test_settings_command_only_updates_desired_state():
@@ -115,22 +180,29 @@ def test_settings_command_only_updates_desired_state():
     state = _state(User("a@example.com", "uuid-a"))
     assert plugin.set_settings(
         state,
-        4,
+        5,
         "http",
         "cdn.example.com",
     ) is True
     assert state.protocols["snell"].config == {
-        "version": 4, "obfs_mode": "http", "obfs_host": "cdn.example.com",
+        "version": 5,
+        "obfs_mode": "http",
+        "obfs_host": "cdn.example.com",
+        "mode": "default",
     }
 
     assert plugin.set_settings(
         state,
-        5,
-        "http",
-        "new.example.com",
+        6,
+        "none",
+        "cdn.example.com",
+        "unshaped",
     ) is True
     assert state.protocols["snell"].config == {
-        "version": 4, "obfs_mode": "http", "obfs_host": "new.example.com",
+        "version": 6,
+        "obfs_mode": "none",
+        "obfs_host": "cdn.example.com",
+        "mode": "unshaped",
     }
 
 
@@ -138,7 +210,7 @@ def test_invalid_runtime_settings_do_not_mutate_state():
     plugin = SnellPlugin()
     state = _state(User("a@example.com", "uuid-a"))
     before = dict(state.protocols["snell"].config)
-    with pytest.raises(ValueError, match="v4"):
+    with pytest.raises(ValueError, match="generations 5 and 6"):
         plugin.set_settings(
             state,
             3,
@@ -150,18 +222,27 @@ def test_invalid_runtime_settings_do_not_mutate_state():
     with pytest.raises(ValueError, match="Snell obfs mode"):
         plugin.set_settings(
             state,
-            4,
+            5,
+            "quic",
+            "cdn.example.com",
+        )
+    assert state.protocols["snell"].config == before
+
+    with pytest.raises(ValueError, match="replaces obfuscation"):
+        plugin.set_settings(
+            state,
+            6,
             "tls",
             "cdn.example.com",
         )
     assert state.protocols["snell"].config == before
 
 
-def test_legacy_v5_is_normalized_to_v4_on_both_ends():
+def test_a_state_written_for_the_previous_core_is_served_as_generation_five():
     plugin = SnellPlugin()
     user = User("a@example.com", "uuid-a")
     state = _state(user)
-    state.protocols["snell"].config["version"] = 5
+    state.protocols["snell"].config["version"] = 4
 
     inbound = plugin.configure(state).inbounds[0]
     outbound = next(
@@ -169,7 +250,8 @@ def test_legacy_v5_is_normalized_to_v4_on_both_ends():
         if item["type"] == "snell"
     )
 
-    assert inbound["version"] == outbound["version"] == 4
+    assert inbound["version"] == 5
+    assert outbound["version"] == 4
     assert "version=4" in plugin.client_link(user, state)
 
 

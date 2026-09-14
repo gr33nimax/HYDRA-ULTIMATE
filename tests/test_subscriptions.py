@@ -28,7 +28,14 @@ from hydra.services.subscriptions.generator import (
 )
 from hydra.services.subscriptions.server import SubscriptionHandler
 from hydra.core.state import AppState, User
-from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
+from hydra.plugins.base import (
+    BasePlugin,
+    ConfigFragment,
+    PluginCategory,
+    PluginMeta,
+    PluginStateAccess,
+    PluginStatus,
+)
 
 
 class MockTransport(BasePlugin):
@@ -50,13 +57,13 @@ class MockTransport(BasePlugin):
     def status(self, state=None) -> PluginStatus:
         return PluginStatus(installed=True, enabled=True, running=True)
 
-    def configure(self, state: AppState) -> ConfigFragment:
+    def configure(self, state: PluginStateAccess) -> ConfigFragment:
         return ConfigFragment()
 
-    def client_link(self, user: User, state: AppState) -> str:
+    def client_link(self, user: User, state: PluginStateAccess) -> str:
         return f"mock://{user.email}@example.com"
 
-    def generate_client_config(self, user: User, state: AppState) -> str:
+    def generate_client_config(self, user: User, state: PluginStateAccess) -> str:
         return json.dumps(
             {
                 "outbounds": [
@@ -89,26 +96,26 @@ class MockNoLink(BasePlugin):
     def status(self, state=None) -> PluginStatus:
         return PluginStatus(installed=True, enabled=True, running=True)
 
-    def configure(self, state: AppState) -> ConfigFragment:
+    def configure(self, state: PluginStateAccess) -> ConfigFragment:
         return ConfigFragment()
 
-    def client_link(self, user: User, state: AppState) -> str:
+    def client_link(self, user: User, state: PluginStateAccess) -> str:
         return ""
 
-    def generate_client_config(self, user: User, state: AppState) -> str:
+    def generate_client_config(self, user: User, state: PluginStateAccess) -> str:
         return ""
 
 
 class MockEndpointTransport(MockTransport):
     """Transport with a plugin-owned sing-box endpoint projection."""
 
-    def generate_client_config(self, user: User, state: AppState) -> str:
+    def generate_client_config(self, user: User, state: PluginStateAccess) -> str:
         return "[Interface]\nPrivateKey = not-json"
 
     def generate_singbox_client_config(
         self,
         user: User,
-        state: AppState,
+        state: PluginStateAccess,
     ) -> str:
         return json.dumps(
             {
@@ -340,7 +347,7 @@ def test_shadowrocket_subscription_converts_only_snell_to_cipher_password():
     plugin = MockTransport()
     plugin.client_links = MagicMock(
         return_value=[
-            "snell://secret@example.com:32000?version=5&udp-relay=true#Snell",
+            "snell://secret@example.com:32000?version=4&udp-relay=true#Snell",
         ]
     )
     user = _make_user("alice@example.com")
@@ -362,13 +369,38 @@ def test_shadowrocket_subscription_converts_only_snell_to_cipher_password():
     )
     parsed = urllib.parse.urlsplit(shadowrocket)
 
-    assert generic == ("snell://secret@example.com:32000?version=5&udp-relay=true#alice%40example.com%20Snell")
+    assert generic == ("snell://secret@example.com:32000?version=4&udp-relay=true#alice%40example.com%20Snell")
     assert base64.b64decode(parsed.netloc).decode() == ("chacha20-ietf-poly1305:secret@example.com:32000")
     assert urllib.parse.parse_qs(parsed.query) == {
         "version": ["4"],
         "udp-relay": ["1"],
     }
     assert urllib.parse.unquote(parsed.fragment) == "alice@example.com Snell"
+
+
+def test_shadowrocket_subscription_passes_a_generation_six_snell_link_through():
+    plugin = MockTransport()
+    plugin.client_links = MagicMock(
+        return_value=[
+            "snell://secret@example.com:32000?version=6&mode=unshaped&udp-relay=true#Snell",
+        ]
+    )
+    user = _make_user("alice@example.com")
+    state = _make_state([user])
+
+    shadowrocket = (
+        base64.b64decode(
+            generate_shadowrocket_sub(user, state, plugins=_plugins(plugin)),
+        )
+        .decode()
+        .strip()
+    )
+
+    # Shadowrocket imports the classic pair only, so a generation 6 profile keeps its
+    # own shape instead of becoming a link the client would misread.
+    assert "version=6" in shadowrocket
+    assert "mode=unshaped" in shadowrocket
+    assert "chacha20-ietf-poly1305" not in shadowrocket
 
 
 def test_subscription_handler_routes_shadowrocket_format_to_native_builder():
@@ -627,7 +659,9 @@ def test_trusttunnel_quic_link_is_not_lossily_serialized_for_nekobox():
     tcp = "tt://u:p@tt.example.com:443?sni=tt.example.com&alpn=h2#tcp"
     quic = "tt://u:p@tt.example.com:443?sni=tt.example.com&alpn=h3#quic"
 
-    assert clean_link_to_sn(tcp, user).startswith("sn://trusttunnel?")
+    tcp_link = clean_link_to_sn(tcp, user)
+    assert tcp_link is not None
+    assert tcp_link.startswith("sn://trusttunnel?")
     assert clean_link_to_sn(quic, user) is None
 
 
