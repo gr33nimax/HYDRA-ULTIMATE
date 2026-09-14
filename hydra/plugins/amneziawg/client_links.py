@@ -281,10 +281,7 @@ class AwgClientLinksMixin:
                 capabilities["singbox"] = "ready"
                 capabilities["hydrabox_subscription"] = "ready"
             else:
-                reason = (
-                    "unsupported: AWG 3.1 requires a HydraCore with the 3.1 fields "
-                    f"({MIN_AWG31_CORE} or newer)"
-                )
+                reason = f"unsupported: AWG 3.1 requires a HydraCore with the 3.1 fields ({MIN_AWG31_CORE} or newer)"
                 capabilities["singbox"] = reason
                 capabilities["hydrabox_subscription"] = reason
         return capabilities

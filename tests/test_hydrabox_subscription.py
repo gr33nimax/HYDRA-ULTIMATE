@@ -329,9 +329,7 @@ def test_hydrabox_subscription_carries_the_awg31_field_set():
             }
         ],
     }
-    plugin = _HydraBoxTransport(
-        json.dumps({"endpoints": [endpoint], "route": {"final": endpoint["tag"]}})
-    )
+    plugin = _HydraBoxTransport(json.dumps({"endpoints": [endpoint], "route": {"final": endpoint["tag"]}}))
     plugin.meta = PluginMeta(name="amneziawg", display_name="AmneziaWG", description="AWG 3.1")
 
     exported = generate_hydrabox_subscription(user, state, plugins=_plugins(plugin))["resources"][0]
