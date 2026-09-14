@@ -1,4 +1,5 @@
 """tests/test_subscriptions.py — Тесты для генератора подписок v2."""
+
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import base64
@@ -6,6 +7,7 @@ import json
 import sys
 import urllib.parse
 import zlib
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.services.subscriptions.generator import (
@@ -31,6 +33,7 @@ from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCateg
 
 class MockTransport(BasePlugin):
     """Тестовый TRANSPORT-плагин."""
+
     meta = PluginMeta(
         name="mock-transport",
         description="Mock transport",
@@ -54,17 +57,22 @@ class MockTransport(BasePlugin):
         return f"mock://{user.email}@example.com"
 
     def generate_client_config(self, user: User, state: AppState) -> str:
-        return json.dumps({
-            "outbounds": [{
-                "type": "mock",
-                "tag": f"mock-{user.email}",
-                "server": "example.com",
-            }],
-        })
+        return json.dumps(
+            {
+                "outbounds": [
+                    {
+                        "type": "mock",
+                        "tag": f"mock-{user.email}",
+                        "server": "example.com",
+                    }
+                ],
+            }
+        )
 
 
 class MockNoLink(BasePlugin):
     """Транспорт без client_link."""
+
     meta = PluginMeta(
         name="mock-no-link",
         description="No link transport",
@@ -102,13 +110,17 @@ class MockEndpointTransport(MockTransport):
         user: User,
         state: AppState,
     ) -> str:
-        return json.dumps({
-            "endpoints": [{
-                "type": "wireguard",
-                "tag": f"endpoint-{user.email}",
-            }],
-            "route": {"final": f"endpoint-{user.email}"},
-        })
+        return json.dumps(
+            {
+                "endpoints": [
+                    {
+                        "type": "wireguard",
+                        "tag": f"endpoint-{user.email}",
+                    }
+                ],
+                "route": {"final": f"endpoint-{user.email}"},
+            }
+        )
 
 
 def _make_state(users: list | None = None) -> AppState:
@@ -135,6 +147,7 @@ def _plugins(*items: BasePlugin) -> SubscriptionPluginService:
 # ═════════════════════════════════════════════════════════════════════════════
 #  generate_links
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 def test_generate_links_with_enabled_plugin():
     p = MockTransport()
@@ -215,8 +228,10 @@ def test_user_access_status_reports_real_restriction_reason():
 #  generate_base64_sub
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def test_generate_base64_sub():
     import base64
+
     p = MockTransport()
     user = _make_user("a@x.com")
     state = _make_state([user])
@@ -228,9 +243,11 @@ def test_generate_base64_sub():
 
 def test_shadowrocket_name_prefers_user_override_then_global_name():
     plugin = MockTransport()
-    plugin.client_links = MagicMock(return_value=[
-        "naive+https://user:password@example.com:443#ignored",
-    ])
+    plugin.client_links = MagicMock(
+        return_value=[
+            "naive+https://user:password@example.com:443#ignored",
+        ]
+    )
     user = _make_user("alice@example.com")
     state = _make_state([user])
     state.configuration_names["naive"] = "Общее имя"
@@ -257,8 +274,7 @@ def test_shadowrocket_name_prefers_user_override_then_global_name():
 
 def test_build_shadowrocket_https_link_uses_unpadded_urlsafe_credentials():
     link = build_shadowrocket_https_link(
-        "naive+https://user:p%40ss@example.com:443"
-        "?security=tls&sni=example.com#Alice%20NaiveProxy",
+        "naive+https://user:p%40ss@example.com:443?security=tls&sni=example.com#Alice%20NaiveProxy",
     )
 
     parsed = urllib.parse.urlsplit(link)
@@ -266,9 +282,7 @@ def test_build_shadowrocket_https_link_uses_unpadded_urlsafe_credentials():
     padded = encoded + "=" * (-len(encoded) % 4)
 
     assert parsed.scheme == "https"
-    assert base64.urlsafe_b64decode(padded).decode() == (
-        "user:p@ss@example.com:443"
-    )
+    assert base64.urlsafe_b64decode(padded).decode() == ("user:p@ss@example.com:443")
     assert not {"+", "/", "="} & set(encoded)
     assert urllib.parse.parse_qs(parsed.query)["remarks"] == [
         "Alice NaiveProxy",
@@ -277,12 +291,13 @@ def test_build_shadowrocket_https_link_uses_unpadded_urlsafe_credentials():
 
 def test_generate_shadowrocket_sub_replaces_naive_https_link():
     plugin = MockTransport()
-    plugin.client_links = MagicMock(return_value=[
-        "naive+https://user:password@example.com:443"
-        "?security=tls&sni=example.com#ignored",
-        "naive+quic://user:password@example.com:443#ignored-quic",
-        "vless://token@example.com:443#preserved",
-    ])
+    plugin.client_links = MagicMock(
+        return_value=[
+            "naive+https://user:password@example.com:443?security=tls&sni=example.com#ignored",
+            "naive+quic://user:password@example.com:443#ignored-quic",
+            "vless://token@example.com:443#preserved",
+        ]
+    )
     user = _make_user("alice@example.com")
     state = _make_state([user])
 
@@ -297,9 +312,7 @@ def test_generate_shadowrocket_sub_replaces_naive_https_link():
     assert not any(link.startswith("naive+quic://") for link in links)
     assert any(link.startswith("vless://") for link in links)
     for scheme in ("https", "http2", "http3"):
-        parsed_variant = urllib.parse.urlsplit(next(
-            link for link in links if link.startswith(f"{scheme}://")
-        ))
+        parsed_variant = urllib.parse.urlsplit(next(link for link in links if link.startswith(f"{scheme}://")))
         query = urllib.parse.parse_qs(parsed_variant.query)
         assert "alpn" not in query
         assert "peer" not in query
@@ -317,9 +330,7 @@ def test_generate_shadowrocket_sub_replaces_naive_https_link():
     native = next(link for link in links if link.startswith("https://"))
     parsed = urllib.parse.urlsplit(native)
     padded = parsed.netloc + "=" * (-len(parsed.netloc) % 4)
-    assert base64.urlsafe_b64decode(padded).decode() == (
-        "user:password@example.com:443"
-    )
+    assert base64.urlsafe_b64decode(padded).decode() == ("user:password@example.com:443")
     assert urllib.parse.parse_qs(parsed.query)["remarks"] == [
         "alice@example.com NaiveProxy",
     ]
@@ -327,27 +338,32 @@ def test_generate_shadowrocket_sub_replaces_naive_https_link():
 
 def test_shadowrocket_subscription_converts_only_snell_to_cipher_password():
     plugin = MockTransport()
-    plugin.client_links = MagicMock(return_value=[
-        "snell://secret@example.com:32000?version=5&udp-relay=true#Snell",
-    ])
+    plugin.client_links = MagicMock(
+        return_value=[
+            "snell://secret@example.com:32000?version=5&udp-relay=true#Snell",
+        ]
+    )
     user = _make_user("alice@example.com")
     state = _make_state([user])
 
-    generic = base64.b64decode(
-        generate_base64_sub(user, state, plugins=_plugins(plugin)),
-    ).decode().strip()
-    shadowrocket = base64.b64decode(
-        generate_shadowrocket_sub(user, state, plugins=_plugins(plugin)),
-    ).decode().strip()
+    generic = (
+        base64.b64decode(
+            generate_base64_sub(user, state, plugins=_plugins(plugin)),
+        )
+        .decode()
+        .strip()
+    )
+    shadowrocket = (
+        base64.b64decode(
+            generate_shadowrocket_sub(user, state, plugins=_plugins(plugin)),
+        )
+        .decode()
+        .strip()
+    )
     parsed = urllib.parse.urlsplit(shadowrocket)
 
-    assert generic == (
-        "snell://secret@example.com:32000?version=5&udp-relay=true"
-        "#alice%40example.com%20Snell"
-    )
-    assert base64.b64decode(parsed.netloc).decode() == (
-        "chacha20-ietf-poly1305:secret@example.com:32000"
-    )
+    assert generic == ("snell://secret@example.com:32000?version=5&udp-relay=true#alice%40example.com%20Snell")
+    assert base64.b64decode(parsed.netloc).decode() == ("chacha20-ietf-poly1305:secret@example.com:32000")
     assert urllib.parse.parse_qs(parsed.query) == {
         "version": ["4"],
         "udp-relay": ["1"],
@@ -384,6 +400,7 @@ def test_subscription_handler_routes_shadowrocket_format_to_native_builder():
 #  generate_singbox_config
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def test_generate_singbox_config_includes_outbounds():
     p = MockTransport()
     user = _make_user("a@x.com")
@@ -401,12 +418,16 @@ def test_generate_singbox_config_deduplicates_direct_outbound():
     p = MockTransport()
     user = _make_user("a@x.com")
     state = _make_state([user])
-    p.generate_client_config = MagicMock(return_value=json.dumps({
-        "outbounds": [
-            {"type": "trojan", "tag": "trojan-out"},
-            {"type": "direct", "tag": "direct"},
-        ],
-    }))
+    p.generate_client_config = MagicMock(
+        return_value=json.dumps(
+            {
+                "outbounds": [
+                    {"type": "trojan", "tag": "trojan-out"},
+                    {"type": "direct", "tag": "direct"},
+                ],
+            }
+        )
+    )
 
     config = generate_singbox_config(user, state, plugins=_plugins(p))
 
@@ -433,10 +454,12 @@ def test_generate_singbox_config_includes_plugin_owned_endpoints():
 
     config = generate_singbox_config(user, state, plugins=_plugins(plugin))
 
-    assert config["endpoints"] == [{
-        "type": "wireguard",
-        "tag": "endpoint-a@x.com",
-    }]
+    assert config["endpoints"] == [
+        {
+            "type": "wireguard",
+            "tag": "endpoint-a@x.com",
+        }
+    ]
     assert config["route"]["final"] == "endpoint-a@x.com"
     assert config["outbounds"] == [{"type": "direct", "tag": "direct"}]
 
@@ -451,18 +474,24 @@ def test_generate_throne_sub_wraps_shadowtls_chain_as_custom_config():
         category=PluginCategory.TRANSPORT,
         version="1.0.0",
     )
-    p.generate_client_config = MagicMock(return_value=json.dumps({
-        "outbounds": [
-            {"type": "trojan", "tag": "trojan-out", "detour": "shadowtls-out"},
-            {"type": "shadowtls", "tag": "shadowtls-out"},
-        ],
-        "route": {"final": "trojan-out"},
-    }))
-    raw_links = "\n".join([
-        "naive+https://u:p@example.com:443#naive",
-        "trojan://inner@203.0.113.10:443?plugin=shadow-tls&plugin-opts=x#shadow",
-        "",
-    ])
+    p.generate_client_config = MagicMock(
+        return_value=json.dumps(
+            {
+                "outbounds": [
+                    {"type": "trojan", "tag": "trojan-out", "detour": "shadowtls-out"},
+                    {"type": "shadowtls", "tag": "shadowtls-out"},
+                ],
+                "route": {"final": "trojan-out"},
+            }
+        )
+    )
+    raw_links = "\n".join(
+        [
+            "naive+https://u:p@example.com:443#naive",
+            "trojan://inner@203.0.113.10:443?plugin=shadow-tls&plugin-opts=x#shadow",
+            "",
+        ]
+    )
 
     with patch(
         "hydra.services.subscriptions.client_configs.generate_base64_sub",
@@ -509,18 +538,24 @@ def test_generate_nekobox_sub_wraps_shadowtls_chain_as_native_config():
         category=PluginCategory.TRANSPORT,
         version="1.0.0",
     )
-    p.generate_client_config = MagicMock(return_value=json.dumps({
-        "outbounds": [
-            {"type": "trojan", "tag": "trojan-out", "detour": "shadowtls-out"},
-            {"type": "shadowtls", "tag": "shadowtls-out"},
-        ],
-        "route": {"final": "trojan-out"},
-    }))
-    raw_links = "\n".join([
-        "naive+https://u:p@example.com:443#naive",
-        "trojan://inner@203.0.113.10:443?plugin=shadow-tls&plugin-opts=x#shadow",
-        "",
-    ])
+    p.generate_client_config = MagicMock(
+        return_value=json.dumps(
+            {
+                "outbounds": [
+                    {"type": "trojan", "tag": "trojan-out", "detour": "shadowtls-out"},
+                    {"type": "shadowtls", "tag": "shadowtls-out"},
+                ],
+                "route": {"final": "trojan-out"},
+            }
+        )
+    )
+    raw_links = "\n".join(
+        [
+            "naive+https://u:p@example.com:443#naive",
+            "trojan://inner@203.0.113.10:443?plugin=shadow-tls&plugin-opts=x#shadow",
+            "",
+        ]
+    )
 
     with patch(
         "hydra.services.subscriptions.client_configs.generate_base64_sub",
@@ -543,9 +578,9 @@ def test_generate_nekobox_sub_wraps_shadowtls_chain_as_native_config():
     assert b'"auto_detect_interface":true' in data
     assert b'"type":"tun"' in data
     assert b'"address":["172.19.0.1/30"]' in data
-    assert b'fdfe:dcba:9876' not in data
-    assert b'inet4_address' not in data
-    assert b'inet6_address' not in data
+    assert b"fdfe:dcba:9876" not in data
+    assert b"inet4_address" not in data
+    assert b"inet6_address" not in data
 
 
 def _trusttunnel_plugin_with_tcp_and_quic() -> MockTransport:
@@ -556,28 +591,34 @@ def _trusttunnel_plugin_with_tcp_and_quic() -> MockTransport:
         category=PluginCategory.TRANSPORT,
         version="1.0.0",
     )
-    plugin.generate_client_config = MagicMock(return_value=json.dumps({
-        "log": {"level": "info"},
-        "dns": {"servers": [
-            {"tag": "local", "address": "1.1.1.1", "detour": "direct"},
-        ]},
-        "outbounds": [
-            {"type": "trusttunnel", "tag": "tt-tcp"},
+    plugin.generate_client_config = MagicMock(
+        return_value=json.dumps(
             {
-                "type": "trusttunnel",
-                "tag": "tt-quic",
-                "server": "tt.example.com",
-                "quic": True,
-                "tls": {
-                    "enabled": True,
-                    "server_name": "tt.example.com",
-                    "alpn": ["h3"],
+                "log": {"level": "info"},
+                "dns": {
+                    "servers": [
+                        {"tag": "local", "address": "1.1.1.1", "detour": "direct"},
+                    ]
                 },
-            },
-            {"type": "direct", "tag": "direct"},
-        ],
-        "route": {"final": "tt-tcp"},
-    }))
+                "outbounds": [
+                    {"type": "trusttunnel", "tag": "tt-tcp"},
+                    {
+                        "type": "trusttunnel",
+                        "tag": "tt-quic",
+                        "server": "tt.example.com",
+                        "quic": True,
+                        "tls": {
+                            "enabled": True,
+                            "server_name": "tt.example.com",
+                            "alpn": ["h3"],
+                        },
+                    },
+                    {"type": "direct", "tag": "direct"},
+                ],
+                "route": {"final": "tt-tcp"},
+            }
+        )
+    )
     return plugin
 
 
@@ -595,11 +636,13 @@ def test_generate_throne_sub_wraps_only_trusttunnel_quic_as_custom_config():
     state = _make_state([user])
     state.network.server_ip = "203.0.113.10"
     plugin = _trusttunnel_plugin_with_tcp_and_quic()
-    raw_links = "\n".join([
-        "tt://u:p@tt.example.com:443?sni=tt.example.com&alpn=h2#tcp",
-        "tt://u:p@tt.example.com:443?sni=tt.example.com&alpn=h3#quic",
-        "",
-    ])
+    raw_links = "\n".join(
+        [
+            "tt://u:p@tt.example.com:443?sni=tt.example.com&alpn=h2#tcp",
+            "tt://u:p@tt.example.com:443?sni=tt.example.com&alpn=h3#quic",
+            "",
+        ]
+    )
 
     with patch(
         "hydra.services.subscriptions.client_configs.generate_base64_sub",
@@ -633,11 +676,13 @@ def test_generate_nekobox_sub_wraps_trusttunnel_quic_as_native_config():
     user = _make_user("a@x.com")
     state = _make_state([user])
     plugin = _trusttunnel_plugin_with_tcp_and_quic()
-    raw_links = "\n".join([
-        "sn://trusttunnel?tcp-profile",
-        "tt://u:p@tt.example.com:443?sni=tt.example.com&alpn=h3#quic",
-        "",
-    ])
+    raw_links = "\n".join(
+        [
+            "sn://trusttunnel?tcp-profile",
+            "tt://u:p@tt.example.com:443?sni=tt.example.com&alpn=h3#quic",
+            "",
+        ]
+    )
 
     with patch(
         "hydra.services.subscriptions.client_configs.generate_base64_sub",
@@ -668,15 +713,14 @@ def test_resolve_subscription_format_uses_explicit_override_then_user_agent():
     assert resolve_subscription_format("base64", "NekoBox/Android/1.4.2") == "base64"
     assert resolve_subscription_format(None, "NekoBox/Android/1.4.2") == "nekobox"
     assert resolve_subscription_format("auto", "Throne/1.0") == "throne"
-    assert resolve_subscription_format(None, "Shadowrocket/2.2.68") == (
-        "shadowrocket"
-    )
+    assert resolve_subscription_format(None, "Shadowrocket/2.2.68") == ("shadowrocket")
     assert resolve_subscription_format(None, "curl/8") == "base64"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  generate_client_config
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 def test_generate_client_config_unknown_protocol():
     user = _make_user("a@x.com")
@@ -741,6 +785,7 @@ AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 """
     from hydra.services.subscriptions.generator import generate_awg_sn_link
+
     expected = "sn://awg?eNpFjrFSg0AYhE8dH8JnYAbv-MNxFBRGiCFCDJOoTDoOjqjxkIABQhfeh8bC1t6nEhvd2Z1vq509RQgBUQ1D1TCo9FN-I0SwStmv4RI-ev8uWs6Vqf6e2jJ_dG9kpWXheF0_6HNHtO3Lm72ncn2odqFr9de4EE54Fedl4gXVvf20365mXqxt9OcdDhaQOxuoV2W-zbDVF1N-6zdLpWqUVxFLf-IUdlYvDkpUme1swseyDPMm8LLMtS6Gn-gcoePZQDKkQP_qSKf9dehGX4ZgIgUjBX1EeGpygRMwRWwyCjqPKTGx0KhghKUpFzoXiSAczAgo0WJGjoNOhqkBP0NhUSE"
     assert generate_awg_sn_link(conf, "") == expected
 
@@ -751,9 +796,6 @@ PersistentKeepalive = 25
     encoded = payload + "=" * (-len(payload) % 4)
     data = zlib.decompress(base64.urlsafe_b64decode(encoded))
     # Kryo writes each Java UTF-16 char separately, including surrogate pairs.
-    kryo_name = bytes.fromhex(
-        "eda0bcedb7abeda0bcedb7ae2041574720322e30"
-    )
+    kryo_name = bytes.fromhex("eda0bcedb7abeda0bcedb7ae2041574720322e30")
     assert data.endswith(b"\x8d" + kryo_name + b"\x81\x81")
     assert name.encode() not in data
-

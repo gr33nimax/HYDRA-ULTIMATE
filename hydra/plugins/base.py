@@ -1,4 +1,5 @@
 """hydra/plugins/base.py — Абстрактный интерфейс плагина v2."""
+
 from __future__ import annotations
 
 import enum
@@ -93,8 +94,10 @@ def lifecycle_result(
     if callable(typed):
         return typed(plugin) if state is None else typed(plugin, state)
     callback_name = {
-        "install": "install", "uninstall": "uninstall",
-        "enable": "on_enable", "disable": "on_disable",
+        "install": "install",
+        "uninstall": "uninstall",
+        "enable": "on_enable",
+        "disable": "on_disable",
     }[operation]
     callback = getattr(plugin, callback_name)
     value = callback() if state is None else callback(state)
@@ -227,10 +230,7 @@ class BasePlugin(ABC):
         Shared-runtime plugins can override this hook to avoid re-reading a
         stale persisted enablement flag during an apply transaction.
         """
-        if (
-            "healthcheck" in self.__dict__
-            or type(self).healthcheck is not BasePlugin.healthcheck
-        ):
+        if "healthcheck" in self.__dict__ or type(self).healthcheck is not BasePlugin.healthcheck:
             return self.healthcheck()
         try:
             status = self.status(state)
@@ -275,7 +275,8 @@ class BasePlugin(ABC):
         totals: dict[str, int] = {}
         for user in state.users:
             value = user.credentials.get(name, {}).get(
-                "traffic_used_bytes", 0,
+                "traffic_used_bytes",
+                0,
             )
             try:
                 totals[user.email] = int(value or 0)
@@ -304,9 +305,14 @@ class BasePlugin(ABC):
     ) -> None:
         """Merge plugin-owned event/log cursors into authoritative state."""
 
-    def on_user_add(self, user: User, state: PluginStateAccess) -> None: pass
-    def on_user_remove(self, user: User, state: PluginStateAccess) -> None: pass
-    def on_user_block(self, user: User, state: PluginStateAccess) -> None: pass
+    def on_user_add(self, user: User, state: PluginStateAccess) -> None:
+        pass
+
+    def on_user_remove(self, user: User, state: PluginStateAccess) -> None:
+        pass
+
+    def on_user_block(self, user: User, state: PluginStateAccess) -> None:
+        pass
 
     def generate_client_config(self, user: User, state: PluginStateAccess) -> str:
         return ""
@@ -336,5 +342,8 @@ class BasePlugin(ABC):
     ) -> list[dict]:
         return []
 
-    def on_enable(self, state: PluginStateAccess) -> None: pass
-    def on_disable(self, state: PluginStateAccess) -> None: pass
+    def on_enable(self, state: PluginStateAccess) -> None:
+        pass
+
+    def on_disable(self, state: PluginStateAccess) -> None:
+        pass

@@ -1,4 +1,5 @@
 """Hydra Subscription v2 generation and HTTP adapter contracts."""
+
 from __future__ import annotations
 
 import base64
@@ -10,7 +11,7 @@ import pytest
 
 from hydra.contracts import ConfigFragment
 from hydra.core.state_models import AppState, PluginState, User
-from hydra.plugins.base import BasePlugin, PluginCategory, PluginMeta, PluginStatus
+from hydra.plugins.base import BasePlugin, PluginCategory, PluginMeta, PluginStateAccess, PluginStatus
 from hydra.plugins.calls.plugin import CallsPlugin
 from hydra.plugins.wdtt.plugin import WdttPlugin
 from hydra.services.subscriptions.generator import (
@@ -50,7 +51,7 @@ class _HydraBoxTransport(BasePlugin):
     def status(self, state=None) -> PluginStatus:
         return PluginStatus(installed=True, enabled=True, running=True)
 
-    def configure(self, state: AppState) -> ConfigFragment:
+    def configure(self, state: PluginStateAccess) -> ConfigFragment:
         return ConfigFragment()
 
     def generate_singbox_client_config(self, user, state) -> str:
@@ -95,30 +96,32 @@ def _state() -> tuple[AppState, User]:
 
 
 def _shadowtls_payload(*, tag: str = "provider-main") -> str:
-    return json.dumps({
-        "log": {"level": "info"},
-        "inbounds": [{"type": "mixed", "tag": "mixed-in"}],
-        "outbounds": [
-            {
-                "type": "trojan",
-                "tag": tag,
-                "server": "vpn.example.com",
-                "server_port": 443,
-                "password": "secret",
-                "detour": "provider-shadowtls",
-            },
-            {
-                "type": "shadowtls",
-                "tag": "provider-shadowtls",
-                "server": "transport.example.com",
-                "server_port": 443,
-                "version": 3,
-                "password": "transport-secret",
-            },
-            {"type": "direct", "tag": "direct"},
-        ],
-        "route": {"final": tag},
-    })
+    return json.dumps(
+        {
+            "log": {"level": "info"},
+            "inbounds": [{"type": "mixed", "tag": "mixed-in"}],
+            "outbounds": [
+                {
+                    "type": "trojan",
+                    "tag": tag,
+                    "server": "vpn.example.com",
+                    "server_port": 443,
+                    "password": "secret",
+                    "detour": "provider-shadowtls",
+                },
+                {
+                    "type": "shadowtls",
+                    "tag": "provider-shadowtls",
+                    "server": "transport.example.com",
+                    "server_port": 443,
+                    "version": 3,
+                    "password": "transport-secret",
+                },
+                {"type": "direct", "tag": "direct"},
+            ],
+            "route": {"final": tag},
+        }
+    )
 
 
 def test_hydrabox_subscription_builds_strict_remote_runtime_and_profiles():
@@ -163,20 +166,22 @@ def test_hydrabox_subscription_builds_strict_remote_runtime_and_profiles():
     assert resource["format"] == "sing-box-json"
     assert resource["requested_permissions"] == ["network.outbound"]
     assert set(resource["document"]) == {"outbounds"}
-    assert [
-        outbound["tag"]
-        for outbound in resource["document"]["outbounds"]
-    ] == ["provider-main", "provider-shadowtls"]
-    assert subscription["profiles"] == [{
-        "id": subscription["default_profile"],
-        "resource": resource["id"],
-        "name": "ShadowTLS",
-        "entrypoint": {
-            "section": "outbounds",
-            "tag": "provider-main",
-        },
-        "enabled": True,
-    }]
+    assert [outbound["tag"] for outbound in resource["document"]["outbounds"]] == [
+        "provider-main",
+        "provider-shadowtls",
+    ]
+    assert subscription["profiles"] == [
+        {
+            "id": subscription["default_profile"],
+            "resource": resource["id"],
+            "name": "ShadowTLS",
+            "entrypoint": {
+                "section": "outbounds",
+                "tag": "provider-main",
+            },
+            "enabled": True,
+        }
+    ]
     json.dumps(subscription, allow_nan=False)
 
 
@@ -234,6 +239,13 @@ def test_hydrabox_subscription_exports_wireguard_as_userspace_endpoint():
         "j2": "value-j2",
         "j3": "value-j3",
         "itime": 1234,
+        "header_protection_key": "header",
+        "content_padding_addition": "50-100",
+        "rekey_after_time": "100-140",
+        "rekey_timeout": "4-6",
+        "reject_after_time": "160-200",
+        "keepalive_timeout": "8-12",
+        "max_handshake_attempts": "7",
     }
     endpoint = {
         "type": "wireguard",
@@ -246,17 +258,23 @@ def test_hydrabox_subscription_exports_wireguard_as_userspace_endpoint():
             "jmax": 120,
             **extended_amnezia,
         },
-        "peers": [{
-            "address": "wg.example.com",
-            "port": 51820,
-            "public_key": "public",
-            "allowed_ips": ["0.0.0.0/0", "::/0"],
-        }],
+        "peers": [
+            {
+                "address": "wg.example.com",
+                "port": 51820,
+                "public_key": "public",
+                "allowed_ips": ["0.0.0.0/0", "::/0"],
+            }
+        ],
     }
-    plugin = _HydraBoxTransport(json.dumps({
-        "endpoints": [endpoint],
-        "route": {"final": "amneziawg-mobile-alice@example.com"},
-    }))
+    plugin = _HydraBoxTransport(
+        json.dumps(
+            {
+                "endpoints": [endpoint],
+                "route": {"final": "amneziawg-mobile-alice@example.com"},
+            }
+        )
+    )
     plugin.meta = PluginMeta(
         name="amneziawg",
         display_name="AmneziaWG",
@@ -273,9 +291,7 @@ def test_hydrabox_subscription_exports_wireguard_as_userspace_endpoint():
     exported = resource["document"]["endpoints"][0]
     assert exported["tag"] == "amneziawg-mobile-alice@example.com"
     assert exported["system"] is False
-    assert {
-        key: exported["amnezia"][key] for key in extended_amnezia
-    } == extended_amnezia
+    assert {key: exported["amnezia"][key] for key in extended_amnezia} == extended_amnezia
     assert subscription["profiles"][0]["entrypoint"] == {
         "section": "endpoints",
         "tag": "amneziawg-mobile-alice@example.com",
@@ -289,13 +305,15 @@ def test_hydrabox_subscription_exports_wireguard_as_userspace_endpoint():
 def test_hydrabox_names_naive_variants_without_changing_runtime_tags():
     state, user = _state()
     state.configuration_names["naive"] = "Домашний Naive"
-    payload = json.dumps({
-        "outbounds": [
-            {"type": "naive", "tag": "naive-tcp-alice", "quic": False},
-            {"type": "naive", "tag": "naive-quic-alice", "quic": True},
-        ],
-        "route": {"final": "naive-tcp-alice"},
-    })
+    payload = json.dumps(
+        {
+            "outbounds": [
+                {"type": "naive", "tag": "naive-tcp-alice", "quic": False},
+                {"type": "naive", "tag": "naive-quic-alice", "quic": True},
+            ],
+            "route": {"final": "naive-tcp-alice"},
+        }
+    )
     plugin = _HydraBoxTransport(payload)
     plugin.meta = PluginMeta(
         name="naive",
@@ -329,9 +347,7 @@ def test_hydrabox_subscription_compares_fractional_expiry_as_time():
         plugins=_plugins(_HydraBoxTransport(_shadowtls_payload())),
     )
 
-    assert subscription["validity"]["expires_at"] == (
-        "2026-08-01T00:00:00.500000Z"
-    )
+    assert subscription["validity"]["expires_at"] == ("2026-08-01T00:00:00.500000Z")
 
 
 def test_hydrabox_subscription_normalizes_date_only_expiry():
@@ -351,16 +367,21 @@ def test_hydrabox_subscription_normalizes_date_only_expiry():
     ("payload", "message"),
     [
         (
-            '{"outbounds":[{"type":"trojan","tag":"first",'
-            '"tag":"second"}]}',
+            '{"outbounds":[{"type":"trojan","tag":"first","tag":"second"}]}',
             "duplicate JSON key",
         ),
         (
-            json.dumps({"outbounds": [{
-                "type": "trojan",
-                "tag": "provider-main",
-                "command": "/usr/bin/unsafe",
-            }]}),
+            json.dumps(
+                {
+                    "outbounds": [
+                        {
+                            "type": "trojan",
+                            "tag": "provider-main",
+                            "command": "/usr/bin/unsafe",
+                        }
+                    ]
+                }
+            ),
             "local authority field",
         ),
     ],
@@ -382,16 +403,22 @@ def test_hydrabox_subscription_rejects_unsafe_plugin_projection(
 def test_hydra_v2_keeps_equal_native_tags_isolated_by_resource():
     state, user = _state()
     first = _HydraBoxTransport(_shadowtls_payload())
-    second = _HydraBoxTransport(json.dumps({
-        "outbounds": [{
-            "type": "vless",
-            "tag": "provider-main",
-            "server": "vless.example.com",
-            "server_port": 443,
-            "uuid": user.uuid,
-        }],
-        "route": {"final": "provider-main"},
-    }))
+    second = _HydraBoxTransport(
+        json.dumps(
+            {
+                "outbounds": [
+                    {
+                        "type": "vless",
+                        "tag": "provider-main",
+                        "server": "vless.example.com",
+                        "server_port": 443,
+                        "uuid": user.uuid,
+                    }
+                ],
+                "route": {"final": "provider-main"},
+            }
+        )
+    )
     second.meta = PluginMeta(
         name="vless",
         display_name="VLESS",
@@ -405,10 +432,7 @@ def test_hydra_v2_keeps_equal_native_tags_isolated_by_resource():
     )
 
     assert len(subscription["resources"]) == 2
-    assert {
-        resource["document"]["outbounds"][0]["tag"]
-        for resource in subscription["resources"]
-    } == {"provider-main"}
+    assert {resource["document"]["outbounds"][0]["tag"] for resource in subscription["resources"]} == {"provider-main"}
     assert {profile["resource"] for profile in subscription["profiles"]} == {
         resource["id"] for resource in subscription["resources"]
     }
@@ -444,9 +468,15 @@ def test_hydrabox_subscription_rejects_invalid_runtime_graph(
         generate_hydrabox_subscription(
             user,
             state,
-            plugins=_plugins(_HydraBoxTransport(json.dumps({
-                "outbounds": outbounds,
-            }))),
+            plugins=_plugins(
+                _HydraBoxTransport(
+                    json.dumps(
+                        {
+                            "outbounds": outbounds,
+                        }
+                    )
+                )
+            ),
         )
 
 
@@ -474,9 +504,15 @@ def test_hydrabox_subscription_rejects_unsafe_wireguard_options(
         generate_hydrabox_subscription(
             user,
             state,
-            plugins=_plugins(_HydraBoxTransport(json.dumps({
-                "endpoints": [endpoint],
-            }))),
+            plugins=_plugins(
+                _HydraBoxTransport(
+                    json.dumps(
+                        {
+                            "endpoints": [endpoint],
+                        }
+                    )
+                )
+            ),
         )
 
 
@@ -495,21 +531,25 @@ def test_hydrabox_http_response_is_flattened_jwe_only():
     assert suffix == "subscription.hydra.jwe.json"
     envelope = json.loads(content)
     assert set(envelope) == {
-        "protected", "encrypted_key", "iv", "ciphertext", "tag",
+        "protected",
+        "encrypted_key",
+        "iv",
+        "ciphertext",
+        "tag",
     }
     assert envelope["encrypted_key"] == ""
-    protected = json.loads(base64.urlsafe_b64decode(
-        envelope["protected"] + "=" * (-len(envelope["protected"]) % 4),
-    ))
+    protected = json.loads(
+        base64.urlsafe_b64decode(
+            envelope["protected"] + "=" * (-len(envelope["protected"]) % 4),
+        )
+    )
     assert protected == {
         "alg": "dir",
         "enc": "A256GCM",
         "typ": "hydra-subscription+jwe",
         "cty": "application/vnd.hydra.subscription+json",
     }
-    assert decrypt_hydrabox_subscription(content, TEST_JWE_KEY)["api_version"] == (
-        "hydra.io/subscription/v2"
-    )
+    assert decrypt_hydrabox_subscription(content, TEST_JWE_KEY)["api_version"] == ("hydra.io/subscription/v2")
 
 
 def test_hydrabox_format_is_public_and_generation_failure_is_fail_closed():
@@ -522,7 +562,7 @@ def test_hydrabox_format_is_public_and_generation_failure_is_fail_closed():
     handler = object.__new__(SubscriptionHandler)
     handler.plugins = _plugins()
     handler.path = "/sub/customer-main?format=hydrabox"
-    handler.headers = {
+    handler.headers = {  # pyright: ignore[reportAttributeAccessIssue]
         "User-Agent": "HydraBox/0.4.0-beta.1",
         "X-Hydra-HWID": "hbx1_" + "A" * 43,
     }
@@ -530,7 +570,7 @@ def test_hydrabox_format_is_public_and_generation_failure_is_fail_closed():
     handler.wfile = BytesIO()
     errors: list[tuple[int, str]] = []
     handler._send_error = lambda code, message: errors.append((code, message))
-    handler._subscription = lambda *_args: (_ for _ in ()).throw(
+    handler._subscription = lambda *_args: (_ for _ in ()).throw(  # pyright: ignore[reportAttributeAccessIssue]
         ValueError("unsafe runtime"),
     )
 
@@ -685,9 +725,7 @@ def test_hydra_v2_never_reads_or_publishes_qwdtt_artifacts():
         config={"mode": "vk_parasite", "obfs_password": "o" * 43},
     )
     state.protocols["wdtt"] = PluginState(installed=True, enabled=True)
-    calls = CallsPlugin(_CallsSource([
-        f"https://vk.com/call/join/native-{index}" for index in range(4)
-    ]))
+    calls = CallsPlugin(_CallsSource([f"https://vk.com/call/join/native-{index}" for index in range(4)]))
     qwdtt = WdttPlugin()
     qwdtt.generate_singbox_client_config = MagicMock(
         side_effect=AssertionError("qWDTT must not enter Hydra v2"),
@@ -723,10 +761,10 @@ def test_hydrabox_http_rejects_missing_or_invalid_identity(headers, message):
     handler = object.__new__(SubscriptionHandler)
     handler.plugins = _plugins(_HydraBoxTransport(_shadowtls_payload()))
     handler.path = "/sub/customer-main?format=hydrabox"
-    handler.headers = headers
+    handler.headers = headers  # pyright: ignore[reportAttributeAccessIssue]
     handler.client_address = ("203.0.113.10", 12345)
     errors: list[tuple[int, str]] = []
-    handler._send_error = lambda code, detail: errors.append((code, detail))
+    handler._send_error = lambda code, message: errors.append((code, message))
 
     handler.do_GET()
 
