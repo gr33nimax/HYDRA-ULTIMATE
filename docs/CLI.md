@@ -395,9 +395,11 @@ hydra plugin query amneziawg protocol_mode_status --with-state
 
 AWG 3.0/3.1 выдаёт нативный `.conf`, а также complete `wg://` для Throne
 `1.3.0-beta.3` и Qt-compressed `vpn://` для официального Amnezia: оба формата
-получают все директивы активного поколения. Sing-Box Extended/HydraBox выдаются
-только для 3.0; AWG 3.1 и `sn://awg` остаются fail-closed. Возврат на `2.0`
-снова включает все проверенные legacy-экспорты.
+получают все директивы активного поколения. Sing-Box Extended/HydraBox
+выдаются для 3.0 и для 3.1 — второй требует ядра HydraCore
+`v1.14.0-extended-2.7.1-hydracore.12` или новее; `sn://awg` остаётся
+fail-closed. На старом ядре 3.1 отклоняется с причиной, называющей нужный
+релиз. Возврат на `2.0` снова включает все проверенные legacy-экспорты.
 
 ### Режимы TLS у `vless`
 

@@ -1,11 +1,19 @@
 # Changelog
 
+- AmneziaWG 3.1 exports to Sing-Box Extended and HydraBox now require a
+  HydraCore carrying the generation's two-field contract (`random_trailers`,
+  `disable_cookies`). The gate reads the installed core version; an older core
+  keeps the 3.1 export fail-closed with a reason naming the required release.
+  `random_trailers` is emitted as a JSON boolean, matching the core's strict
+  configuration parser.
+
 - AmneziaWG can switch server protocol mode transactionally between 2.0, 3.0
   and 3.1 through the pinned upstream installer. HYDRA preserves unknown
   interface keys and restores configuration plus both AWG systemd states on
   rollback. AWG 3.x now emits source-proven Throne `wg://` and official
   Qt-compressed Amnezia `vpn://` artifacts; Sing-Box Extended/HydraBox is
-  enabled for 3.0 only, while 3.1 and NekoBox `sn://awg` remain fail-closed.
+  enabled for 3.0 and, on a HydraCore with the 3.1 field contract, for 3.1,
+  while NekoBox `sn://awg` remains fail-closed.
 
 - NekoBox `sn://awg` links now encode emoji and other non-BMP profile names
   as Kryo-compatible Java UTF-16 characters, preventing corrupted AWG profiles.

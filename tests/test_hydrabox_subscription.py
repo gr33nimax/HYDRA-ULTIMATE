@@ -302,6 +302,48 @@ def test_hydrabox_subscription_exports_wireguard_as_userspace_endpoint():
     ]
 
 
+def test_hydrabox_subscription_carries_the_awg31_field_set():
+    state, user = _state()
+    generation = {
+        "header_protection_key": "header",
+        "content_padding_addition": "50-100",
+        "rekey_after_time": "100-140",
+        "rekey_timeout": "4-6",
+        "reject_after_time": "160-200",
+        "keepalive_timeout": "8-12",
+        "max_handshake_attempts": "7",
+        "random_trailers": True,
+    }
+    endpoint = {
+        "type": "wireguard",
+        "tag": "amneziawg-mobile-alice@example.com",
+        "address": ["10.0.0.2/32"],
+        "private_key": "private",
+        "amnezia": {"jc": 4, "jmin": 40, "jmax": 120, "i1": "aabbccdd", **generation},
+        "peers": [
+            {
+                "address": "wg.example.com",
+                "port": 51820,
+                "public_key": "public",
+                "allowed_ips": ["0.0.0.0/0", "::/0"],
+            }
+        ],
+    }
+    plugin = _HydraBoxTransport(
+        json.dumps({"endpoints": [endpoint], "route": {"final": endpoint["tag"]}})
+    )
+    plugin.meta = PluginMeta(name="amneziawg", display_name="AmneziaWG", description="AWG 3.1")
+
+    exported = generate_hydrabox_subscription(user, state, plugins=_plugins(plugin))["resources"][0]
+    amnezia = exported["document"]["endpoints"][0]["amnezia"]
+
+    # The 3.1 field set survives the encrypted subscription intact, and the
+    # boolean stays a boolean for the core's strict parser.
+    assert amnezia["random_trailers"] is True
+    assert "disable_cookies" not in amnezia
+    assert {key: amnezia[key] for key in generation} == generation
+
+
 def test_hydrabox_names_naive_variants_without_changing_runtime_tags():
     state, user = _state()
     state.configuration_names["naive"] = "Домашний Naive"

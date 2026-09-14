@@ -183,7 +183,10 @@ Cloudflare).
 TUI. Для AmneziaWG 3.0/3.1 HYDRA публикует source-proven `wg://` для Throne
 `1.3.0-beta.3` и официальный Qt-compressed `vpn://` для Amnezia; оба переносят
 полный набор директив поколения. Sing-Box Extended/HydraBox получает
-3.0-проекцию, а 3.1 и NekoBox `sn://awg` остаются отключёнными fail-closed.
+3.0-проекцию и 3.1-проекцию, когда установлено ядро HydraCore
+`v1.14.0-extended-2.7.1-hydracore.12` или новее (на старом ядре 3.1
+отклоняется с причиной, называющей нужный релиз); NekoBox `sn://awg`
+остаётся отключённым fail-closed.
 Полная карта модулей, портов, служб и файлов —
 [REFERENCE.md](docs/REFERENCE.md).
 

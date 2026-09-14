@@ -1010,6 +1010,44 @@ def test_singbox_awg30_exports_source_proven_generation_fields(tmp_path):
     )
 
 
+def test_singbox_awg31_exports_boolean_random_trailers(tmp_path):
+    plugin = AmneziaWGPlugin()
+    user = _make_user("reader@example.com")
+    _set_keys(user, "desktop", "d")
+    conf = tmp_path / "awg0.conf"
+    conf.write_text(
+        FAKE_CONF
+        + "HeaderProtectionKey = header\nContentPaddingAddition = 50-100\n"
+        + "RekeyAfterTime = 100-140\nRekeyTimeout = 4-6\nRejectAfterTime = 160-200\n"
+        + "KeepaliveTimeout = 8-12\nMaxHandshakeAttempts = 7\nRandomTrailers = on\nDisableCookies = false\n"
+        + "### reader@example.com\n[Peer]\nPublicKey = public-d\nPresharedKey = psk-d\n"
+        + "AllowedIPs = 10.66.66.2/32\n",
+        encoding="utf-8",
+    )
+    state = AppState(
+        protocols={"amneziawg": PluginState(config={"protocol_mode": "3.1"})},
+        users=[user],
+    )
+    state.network.server_ip = "203.0.113.10"
+
+    with (
+        patch("hydra.plugins.amneziawg.plugin.AWG_CONF", conf),
+        patch.object(plugin, "_server_pubkey_for_conf", return_value="server-public"),
+        patch("hydra.plugins.amneziawg.client_links.kernel_supports_awg31", return_value=True),
+        patch("hydra.plugins.amneziawg.plugin.HOST.run") as host_run,
+    ):
+        config = json.loads(plugin.generate_singbox_client_config(user, state))
+
+    host_run.assert_not_called()
+    amnezia = config["endpoints"][0]["amnezia"]
+    # The core expects a JSON boolean; the stringified form is refused by its strict parser.
+    assert amnezia["random_trailers"] is True
+    # Cookie replies stay enabled: the app never turns the anti-DoS protection off.
+    assert "disable_cookies" not in amnezia
+    assert amnezia["header_protection_key"] == "header"
+    assert amnezia["max_handshake_attempts"] == "7"
+
+
 def test_singbox_client_config_renders_extended_desktop_and_mobile_endpoints(
     tmp_path,
 ):

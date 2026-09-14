@@ -111,7 +111,11 @@ Hysteria2 по умолчанию использует `8443/udp`. Если пр
 Extended для каждого доступного desktop/mobile профиля. Параметры `Jc`, `Jmin`,
 `Jmax`, `S1`–`S4`, `H1`–`H4` и `I1` находятся во вложенном объекте `amnezia`;
 `route.final` ссылается на первый AWG endpoint. Для AWG 3.0 Sing-Box Extended
-и HydraBox получают source-proven `amnezia` поля; AWG 3.1 там не выдаётся.
+и HydraBox получают source-proven `amnezia` поля; AWG 3.1 выдаётся там же,
+когда установлено ядро HydraCore `v1.14.0-extended-2.7.1-hydracore.12` или
+новее: оно несёт оба поля поколения (`random_trailers`, `disable_cookies`).
+На более старом ядре экспорт 3.1 остаётся fail-closed с причиной, называющей
+требуемый релиз.
 Throne `1.3.0-beta.3` получает complete `wg://`, а официальный Amnezia —
 Qt-compressed `vpn://` с полным `last_config`. Нативный `.conf` остаётся
 доступен для всех поколений.
@@ -148,7 +152,10 @@ fail-closed.
 `amnezia.i1`–`amnezia.i5`, `amnezia.j1`–`amnezia.j3` и `amnezia.itime` вместе с
 `Jc`/`Jmin`/`Jmax`, `S1`–`S4` и `H1`–`H4`. Для AWG 3.0 к ним добавляются
 source-proven `header_protection_key`, `content_padding_addition`, rekey/timeout
-и `max_handshake_attempts`; AWG 3.1 endpoint намеренно не рендерится. Detour-
+и `max_handshake_attempts`; AWG 3.1 endpoint рендерится на ядре
+`v1.14.0-extended-2.7.1-hydracore.12` или новее, где `random_trailers`
+передаётся JSON-булевым, а `disable_cookies` не выставляется — анти-DoS
+защита остаётся включённой. Detour-
 зависимости сохраняются с исходными тегами, а `profiles` явно указывает только
 на корневые selectable entrypoints. Пользовательское имя профиля берётся из
 `PluginMeta.display_name`, с fallback на короткий `PluginMeta.name`;

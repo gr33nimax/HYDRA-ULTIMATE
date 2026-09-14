@@ -128,6 +128,7 @@ TSK-013 is a release gate for TSK-012.
 - [x] **TSK-015 — Gate HydraBox by SBE’s actual mode contract**
   - **Факт:** 3.0 serializes only source-proven `amnezia` fields and enables the Sing-Box/HydraBox renderer; 3.1 stays fail-closed because both pinned SBE tags omit its two fields. `tests/test_awg_architecture.py tests/test_awg_plugin.py tests/test_awg_protocol_runtime.py tests/test_hydrabox_subscription.py` → `84 passed`.
   - Permit 3.0 only for the exact source-proven SBE contract; retain an explicit 3.1 incompatibility reason until the binary/source accepts both missing fields.
+  - **Каскад (2026-09-14, HydraCore 2.7.1):** 3.1 экспортируется гейтом по версии установленного ядра: `v1.14.0-extended-2.7.1-hydracore.12`+ → `singbox`/`hydrabox_subscription` = ready, старше → fail-closed с причиной, называющей требуемый релиз. `random_trailers` сериализуется JSON-булевым (ядро отклоняет строку), `disable_cookies` не выставляется. Факты: `tests/test_awg_protocol_runtime.py` (supporting/old core), `tests/test_awg_plugin.py::test_singbox_awg31_exports_boolean_random_trailers`; ядро — `option/wireguard_amnezia_test.go`, `experimental/libbox/hydracore_subscription_awg_test.go`.
   - _Requirements: R4, R8, R10._
 
 - [x] **TSK-016 — Verify and document confirmed external compatibility**

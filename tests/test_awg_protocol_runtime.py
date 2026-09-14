@@ -63,11 +63,14 @@ def test_protocol_mode_rejects_missing_or_invalid_upstream_status(tmp_path):
             plugin.observed_protocol_mode()
 
 
-def test_protocol_mode_status_reports_all_unsupported_awg3_exports():
+def test_protocol_mode_status_opens_awg31_exports_on_a_supporting_core():
     plugin = AmneziaWGPlugin()
     state = AppState(protocols={"amneziawg": PluginState(installed=True, config={"protocol_mode": "3.1"})})
 
-    with patch.object(plugin, "observed_protocol_mode", return_value="3.1"):
+    with (
+        patch.object(plugin, "observed_protocol_mode", return_value="3.1"),
+        patch("hydra.plugins.amneziawg.client_links.kernel_supports_awg31", return_value=True),
+    ):
         status = plugin.protocol_mode_status(state)
 
     assert status["desired"] == "3.1"
@@ -77,10 +80,25 @@ def test_protocol_mode_status_reports_all_unsupported_awg3_exports():
     assert exports["native_conf"] == "ready"
     assert exports["wg_uri"] == "ready"
     assert exports["vpn_uri"] == "ready"
-    assert all(
-        exports[key] == "unsupported: AWG 3.1 importer compatibility is unverified"
-        for key in ("sn_awg", "singbox", "hydrabox_subscription")
-    )
+    assert exports["singbox"] == "ready"
+    assert exports["hydrabox_subscription"] == "ready"
+    assert exports["sn_awg"] == "unsupported: AWG 3.1 importer compatibility is unverified"
+
+
+def test_protocol_mode_status_keeps_awg31_exports_closed_on_an_old_core():
+    plugin = AmneziaWGPlugin()
+    state = AppState(protocols={"amneziawg": PluginState(installed=True, config={"protocol_mode": "3.1"})})
+
+    with (
+        patch.object(plugin, "observed_protocol_mode", return_value="3.1"),
+        patch("hydra.plugins.amneziawg.client_links.kernel_supports_awg31", return_value=False),
+    ):
+        exports = plugin.protocol_mode_status(state)["exports"]
+
+    assert isinstance(exports, dict)
+    assert exports["native_conf"] == "ready"
+    for key in ("singbox", "hydrabox_subscription"):
+        assert exports[key].startswith("unsupported: AWG 3.1 requires a HydraCore")
 
 
 def test_protocol_mode_status_allows_only_source_proven_awg30_sbe_exports():
@@ -94,6 +112,22 @@ def test_protocol_mode_status_allows_only_source_proven_awg30_sbe_exports():
     assert exports["singbox"] == "ready"
     assert exports["hydrabox_subscription"] == "ready"
     assert exports["sn_awg"] == "unsupported: AWG 3.0 importer compatibility is unverified"
+
+
+def test_awg31_core_gate_compares_real_version_strings():
+    from hydra.plugins.amneziawg.client_links import kernel_supports_awg31
+
+    def with_version(version):
+        with patch("hydra.core.singbox.get_version", return_value=version):
+            return kernel_supports_awg31()
+
+    assert with_version("v1.14.0-extended-2.7.1-hydracore.12") is True
+    assert with_version("v1.14.0-extended-2.7.1-hydracore.12-debug.2") is True
+    assert with_version("v1.13.16-extended-hydracore.11-debug.61") is False
+    assert with_version("v1.14.0-extended-2.7.1-hydracore.1") is False
+    assert with_version("") is False
+    with patch("hydra.core.singbox.get_version", side_effect=RuntimeError("no core")):
+        assert kernel_supports_awg31() is False
 
 
 def test_set_protocol_mode_migrates_then_persists_only_verified_mode(tmp_path):

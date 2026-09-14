@@ -129,11 +129,17 @@ official Amnezia `vpn://` link.
 - Throne `1.3.0-beta.3` source proves its AWG editor maps the 3.1 boolean fields;
   subscription import still requires an executable regression
   (<https://raw.githubusercontent.com/throneproj/Throne/1.3.0-beta.3/src/ui/profile/edit_wireguard_amnezia.cpp>).
-- Sing-Box Extended `2.7.0` release notes claim Amnezia 3.1 integration, but the
-  exact `2.7.0`/`2.7.1` `option/wireguard.go` accepts no `random_trailers` or
-  `disable_cookies`. HydraBox therefore remains 3.0-only until source and binary
-  contracts reconcile
-  (<https://github.com/shtorm-7/sing-box-extended/releases/tag/v1.14.0-extended-2.7.0>).
+- Sing-Box Extended `2.7.0` release notes claimed Amnezia 3.1 integration while
+  its `option/wireguard.go` accepted neither `random_trailers` nor
+  `disable_cookies`, so HydraBox stayed 3.0-only. **Каскад (2026-09-14,
+  HydraCore 2.7.1):** HydraCore now carries the upstream `2.7.1` source merged
+  into `debug` and adds both fields to `option.WireGuardAmnezia`
+  (`transport/wireguard.AmneziaOptions`, proven by
+  `option/wireguard_amnezia_test.go` and the AWG subscription test), so the gate
+  is the installed core version — `v1.14.0-extended-2.7.1-hydracore.12` or newer
+  opens 3.1, an older core keeps it fail-closed with a reason naming the
+  release
+  (<https://github.com/shtorm-7/sing-box-extended/releases/tag/v1.14.0-extended-2.7.1>).
 - The official client source serializes and deserializes AWG 3.x fields in the
   nested `last_config` JSON. Its `config-decoder` confirms the exact envelope as
   Qt `qCompress` plus unpadded Base64URL; a user-provided real exported link has

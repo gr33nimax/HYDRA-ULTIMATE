@@ -22,6 +22,27 @@ from .constants import (
 )
 from .directives import AwgInterfaceDirectives, GENERATION_DIRECTIVE_KEYS
 
+# The first HydraCore release that carries the two AWG 3.1 configuration fields.
+# An older core refuses such a profile at parse time, so the HydraBox export stays
+# closed until that release is installed.
+MIN_AWG31_CORE = "v1.14.0-extended-2.7.1-hydracore.12"
+
+
+def _boolean(value: object) -> bool:
+    return str(value).strip().lower() in {"1", "true", "on", "yes"}
+
+
+def kernel_supports_awg31() -> bool:
+    """Report whether the installed core understands the AWG 3.1 field set."""
+    try:
+        from hydra.core.singbox import get_version
+        from hydra.core.singbox_upgrade import parse_version
+
+        version = get_version()
+    except Exception:
+        return False
+    return bool(version) and parse_version(version) >= parse_version(MIN_AWG31_CORE)
+
 
 @dataclass(frozen=True)
 class _ClientProfile:
@@ -191,6 +212,11 @@ class AwgClientLinksMixin:
             if key == "DisableCookies":
                 continue
             normalized = re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
+            if key == "RandomTrailers":
+                # The core expects a JSON boolean here; a stringified one is refused by
+                # its strict configuration parser.
+                options[normalized] = _boolean(value)
+                continue
             options[normalized] = str(value)
         return options
 
@@ -250,6 +276,17 @@ class AwgClientLinksMixin:
         if mode == "3.0":
             capabilities["singbox"] = "ready"
             capabilities["hydrabox_subscription"] = "ready"
+        elif mode == "3.1":
+            if kernel_supports_awg31():
+                capabilities["singbox"] = "ready"
+                capabilities["hydrabox_subscription"] = "ready"
+            else:
+                reason = (
+                    "unsupported: AWG 3.1 requires a HydraCore with the 3.1 fields "
+                    f"({MIN_AWG31_CORE} or newer)"
+                )
+                capabilities["singbox"] = reason
+                capabilities["hydrabox_subscription"] = reason
         return capabilities
 
     @staticmethod
