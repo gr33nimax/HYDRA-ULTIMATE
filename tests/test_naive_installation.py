@@ -1,4 +1,5 @@
 """Exercise the actual Naive installer with a fake compiler and host."""
+
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -54,9 +55,12 @@ def test_naive_install_repairs_missing_unit_without_rebuilding(tmp_path, monkeyp
     )
     layout.binary.write_bytes(b"managed binary")
     monkeypatch.setattr(plugin, "_runtime_layout", lambda: layout)
-    install_service = Mock(side_effect=lambda: layout.service_file.write_text(
-        "[Service]", encoding="utf-8",
-    ))
+    install_service = Mock(
+        side_effect=lambda: layout.service_file.write_text(
+            "[Service]",
+            encoding="utf-8",
+        )
+    )
     download_binary = Mock()
     monkeypatch.setattr(plugin, "_install_service", install_service)
     monkeypatch.setattr(plugin, "_download_binary", download_binary)
@@ -69,9 +73,12 @@ def test_naive_install_repairs_missing_unit_without_rebuilding(tmp_path, monkeyp
 def test_naive_upgrade_restarts_and_rollback_restores_binary_and_config(tmp_path, monkeypatch):
     plugin = NaivePlugin()
     layout = replace(
-        plugin._runtime_layout(), binary=tmp_path / "caddy-naive",
-        config_dir=tmp_path, caddyfile=tmp_path / "Caddyfile",
-        service_file=tmp_path / "caddy.service", log_dir=tmp_path / "logs",
+        plugin._runtime_layout(),
+        binary=tmp_path / "caddy-naive",
+        config_dir=tmp_path,
+        caddyfile=tmp_path / "Caddyfile",
+        service_file=tmp_path / "caddy.service",
+        log_dir=tmp_path / "logs",
         data_dir=tmp_path / "data",
     )
     layout.binary.write_bytes(b"old-binary")

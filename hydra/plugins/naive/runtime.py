@@ -1,4 +1,5 @@
 """NaiveProxy runtime reconciliation and rollback."""
+
 from __future__ import annotations
 
 import time
@@ -63,20 +64,9 @@ class NaiveRuntimeMixin:
             text=True,
         )
         return {
-            "config": (
-                layout.caddyfile.read_bytes()
-                if layout.caddyfile.exists()
-                else None
-            ),
-            "service": (
-                layout.service_file.read_bytes()
-                if layout.service_file.exists()
-                else None
-            ),
-            "running": (
-                runtime.returncode == 0
-                and runtime.stdout.strip() == "active"
-            ),
+            "config": (layout.caddyfile.read_bytes() if layout.caddyfile.exists() else None),
+            "service": (layout.service_file.read_bytes() if layout.service_file.exists() else None),
+            "running": (runtime.returncode == 0 and runtime.stdout.strip() == "active"),
         }
 
     def rollback(
@@ -143,8 +133,11 @@ class NaiveRuntimeMixin:
             capture_output=True,
         )
         restarted = host.run(
-            ["systemctl", "restart" if getattr(self, "_binary_replaced", False)
-             else "reload-or-restart", layout.service_name],
+            [
+                "systemctl",
+                "restart" if getattr(self, "_binary_replaced", False) else "reload-or-restart",
+                layout.service_name,
+            ],
             capture_output=True,
         )
         if enabled.returncode != 0 or restarted.returncode != 0:
@@ -152,9 +145,7 @@ class NaiveRuntimeMixin:
 
         protocol = state.protocols.get("naive")
         network = str(
-            protocol.config.get("network", "tcp")
-            if protocol is not None
-            else "tcp",
+            protocol.config.get("network", "tcp") if protocol is not None else "tcp",
         )
         self._sync_transport_firewall(network)
         time.sleep(2)
@@ -186,11 +177,7 @@ class NaiveRuntimeMixin:
 
         self._remove_iptables_rules()
         host = self._host_backend()
-        protocols = (
-            ("tcp", "udp")
-            if network in ("quic", "both")
-            else ("tcp",)
-        )
+        protocols = ("tcp", "udp") if network in ("quic", "both") else ("tcp",)
         for protocol in protocols:
             for chain in ("INPUT", "OUTPUT"):
                 host.run(
@@ -252,6 +239,5 @@ class NaiveRuntimeMixin:
             text=True,
         )
         if result.returncode != 0:
-            return (result.stderr or result.stdout or
-                    f"Caddy exited with code {result.returncode}")[:4000]
+            return (result.stderr or result.stdout or f"Caddy exited with code {result.returncode}")[:4000]
         return None

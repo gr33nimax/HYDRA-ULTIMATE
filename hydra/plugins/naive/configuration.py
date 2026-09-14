@@ -1,4 +1,5 @@
 """Desired NaiveProxy configuration and deterministic Caddyfile rendering."""
+
 from __future__ import annotations
 
 import copy
@@ -22,16 +23,8 @@ def render_caddyfile(
     accept_proxy_protocol: bool = False,
 ) -> str:
     """Render a complete Caddyfile without reading or mutating the host."""
-    auth_lines = "".join(
-        "            basic_auth "
-        f"{user['username']} {user['password']}\n"
-        for user in users
-    )
-    tls_line = (
-        f"    tls {cert_file} {key_file}\n"
-        if cert_file and key_file
-        else ""
-    )
+    auth_lines = "".join(f"            basic_auth {user['username']} {user['password']}\n" for user in users)
+    tls_line = f"    tls {cert_file} {key_file}\n" if cert_file and key_file else ""
     probe_line = "            probe_resistance\n" if auth_lines else ""
     listener_wrappers = ""
     if accept_proxy_protocol:
@@ -146,9 +139,7 @@ class NaiveConfigurationMixin:
 
             try:
                 prospective_state = copy.deepcopy(state)
-                prospective_state.protocols["naive"].config[
-                    "network"
-                ] = network
+                prospective_state.protocols["naive"].config["network"] = network
                 get_quic_owner(cast(AppState, prospective_state))
             except ValueError:
                 return False
@@ -162,14 +153,9 @@ class NaiveConfigurationMixin:
     ) -> bool:
         """Validate and update the shared NaiveProxy TLS domain."""
         normalized = str(domain or "").strip().lower().rstrip(".")
-        if (
-            not normalized
-            or "://" in normalized
-            or any(character.isspace() for character in normalized)
-        ):
+        if not normalized or "://" in normalized or any(character.isspace() for character in normalized):
             raise ValueError(
-                "Некорректный домен NaiveProxy: укажите имя без схемы "
-                "и пробелов",
+                "Некорректный домен NaiveProxy: укажите имя без схемы и пробелов",
             )
         state.network.domain = normalized
         return True
@@ -182,8 +168,7 @@ class NaiveConfigurationMixin:
         domain = str(state.network.domain or "").strip()
         if not domain:
             raise ValueError(
-                "Домен NaiveProxy не настроен; задайте network.domain "
-                "перед включением",
+                "Домен NaiveProxy не настроен; задайте network.domain перед включением",
             )
         cert_file, key_file = self._resolve_certs(domain, protocol)
         if not cert_file or not key_file:
@@ -198,11 +183,7 @@ class NaiveConfigurationMixin:
             get_quic_owner(cast(AppState, state), prospective="naive")
 
     def _resolve_certs(self: Any, domain: str, protocol) -> tuple[str, str]:
-        config = (
-            protocol.config
-            if protocol is not None and protocol.config
-            else {}
-        )
+        config = protocol.config if protocol is not None and protocol.config else {}
         return self._resolve_tls_material(domain, config)
 
     def _build_caddyfile(

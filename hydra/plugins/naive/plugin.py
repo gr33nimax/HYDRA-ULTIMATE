@@ -1,4 +1,5 @@
 """Thin compatibility facade for the modular NaiveProxy plugin."""
+
 from __future__ import annotations
 
 import shutil as shutil  # noqa: F401 - compatibility monkeypatch seam
@@ -61,9 +62,7 @@ class NaivePlugin(
 
     meta = PluginMeta(
         name="naive",
-        description=(
-            "NaiveProxy: Caddy + forwardproxy, Chromium HTTP/2 fingerprint"
-        ),
+        description=("NaiveProxy: Caddy + forwardproxy, Chromium HTTP/2 fingerprint"),
         category=PluginCategory.TRANSPORT,
         version="2.0.0",
         needs_domain=True,
@@ -107,10 +106,12 @@ class NaivePlugin(
 
     def _installed(self) -> bool:
         layout = self._runtime_layout()
-        return all((
-            layout.binary.is_file(),
-            layout.service_file.is_file(),
-        ))
+        return all(
+            (
+                layout.binary.is_file(),
+                layout.service_file.is_file(),
+            )
+        )
 
     @staticmethod
     def _download_asset(

@@ -35,19 +35,20 @@ def _activation_app(
     calls: list[str] | None = None,
 ) -> ApplicationService:
     events = calls if calls is not None else []
-    return cast(ApplicationService, SimpleNamespace(
-        admin=SimpleNamespace(
-            save_state=lambda _state: events.append("save"),
-        ),
-        protocols=SimpleNamespace(
-            activate=lambda _state, _name, *, domain=None: (
-                events.append(f"activate:{domain}") or True
+    return cast(
+        ApplicationService,
+        SimpleNamespace(
+            admin=SimpleNamespace(
+                save_state=lambda _state: events.append("save"),
             ),
-            disable=lambda _state, _name: events.append("disable") or True,
+            protocols=SimpleNamespace(
+                activate=lambda _state, _name, *, domain=None: events.append(f"activate:{domain}") or True,
+                disable=lambda _state, _name: events.append("disable") or True,
+            ),
+            plugin_command=Mock(return_value=True),
+            apply_error=lambda: "",
         ),
-        plugin_command=Mock(return_value=True),
-        apply_error=lambda: "",
-    ))
+    )
 
 
 @pytest.mark.parametrize(("plugin_type", "source"), DOMAIN_TLS_PLUGINS)
@@ -194,14 +195,17 @@ def test_disabled_naive_domain_change_explains_deferred_certificate():
 
     with (
         patch("hydra.ui._menus.plugin_settings.menu", return_value="1"),
-        patch("hydra.ui._menus.plugin_settings.prompt", side_effect=(
-            "vpn.example.com", "",
-        )),
+        patch(
+            "hydra.ui._menus.plugin_settings.prompt",
+            side_effect=(
+                "vpn.example.com",
+                "",
+            ),
+        ),
         patch("hydra.ui._menus.plugin_settings.success") as report_success,
     ):
         _menu_naive(state, object(), app)
 
     report_success.assert_called_once_with(
-        "Домен сохранён: vpn.example.com. TLS-сертификат будет получен "
-        "при включении NaiveProxy",
+        "Домен сохранён: vpn.example.com. TLS-сертификат будет получен при включении NaiveProxy",
     )

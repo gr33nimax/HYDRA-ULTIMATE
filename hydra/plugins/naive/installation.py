@@ -1,4 +1,5 @@
 """NaiveProxy binary and systemd-unit installation."""
+
 from __future__ import annotations
 
 import shutil
@@ -41,14 +42,8 @@ class NaiveInstallationMixin:
     def uninstall(self) -> bool:
         layout = self._runtime_layout()
         host = self._host_backend()
-        host.run(
-            ["systemctl", "stop", layout.service_name],
-            capture_output=True,
-        )
-        host.run(
-            ["systemctl", "disable", layout.service_name],
-            capture_output=True,
-        )
+        host.run(["systemctl", "stop", layout.service_name], capture_output=True)
+        host.run(["systemctl", "disable", layout.service_name], capture_output=True)
         if layout.service_file.exists():
             layout.service_file.unlink()
         host.run(["systemctl", "daemon-reload"], capture_output=True)
@@ -74,7 +69,8 @@ class NaiveInstallationMixin:
         host = self._host_backend()
         layout = self._runtime_layout()
         settings = replace(
-            sni_router._install_settings(), binary=layout.binary,
+            sni_router._install_settings(),
+            binary=layout.binary,
             caddy_version="v2.10.2",
         )
         existed = layout.binary.exists()
@@ -82,21 +78,33 @@ class NaiveInstallationMixin:
         with tempfile.TemporaryDirectory(prefix="hydra-naive-") as directory:
             probe = Path(directory) / "Caddyfile"
             probe.write_text(
-                ":8080 {\n forward_proxy {\n"
-                "  upstream socks5://127.0.0.1:1080\n  passthrough_uot\n }\n}\n",
+                ":8080 {\n forward_proxy {\n  upstream socks5://127.0.0.1:1080\n  passthrough_uot\n }\n}\n",
                 encoding="utf-8",
             )
             success = sni_router_install.install(
-                None, settings, host, force=True, installed=lambda: False,
-                forward_proxy=True, layer4=False,
+                None,
+                settings,
+                host,
+                force=True,
+                installed=lambda: False,
+                forward_proxy=True,
+                layer4=False,
                 ensure_go=lambda: sni_router_install.ensure_modern_go(
-                    settings, host, official_digest=sni_router._official_go_digest,
+                    settings,
+                    host,
+                    official_digest=sni_router._official_go_digest,
                 ),
                 build=lambda args, env: sni_router_install.run_caddy_build(
-                    args, env, host=host, timeout=settings.build_timeout,
+                    args,
+                    env,
+                    host=host,
+                    timeout=settings.build_timeout,
                 ),
-                validate=lambda binary: not self._validate_caddy(
-                    config_path or probe, binary=binary,
+                validate=lambda binary: (
+                    not self._validate_caddy(
+                        config_path or probe,
+                        binary=binary,
+                    )
                 ),
             )
         if success and existed:
@@ -136,7 +144,4 @@ class NaiveInstallationMixin:
         )
         host = self._host_backend()
         host.run(["systemctl", "daemon-reload"], capture_output=True)
-        host.run(
-            ["systemctl", "enable", layout.service_name],
-            capture_output=True,
-        )
+        host.run(["systemctl", "enable", layout.service_name], capture_output=True)

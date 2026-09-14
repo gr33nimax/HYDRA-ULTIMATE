@@ -1,4 +1,5 @@
 """Specialised settings adapters kept outside the generic plugin menu."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -34,8 +35,7 @@ def _report_change(changed: bool, success_text: str) -> None:
         success(success_text)
     else:
         error(
-            "Не удалось применить настройки; "
-            "предыдущая конфигурация восстановлена",
+            "Не удалось применить настройки; предыдущая конфигурация восстановлена",
         )
 
 
@@ -91,10 +91,7 @@ def _menu_naive(
             message = (
                 f"Домен изменён на {domain}"
                 if enabled
-                else (
-                    f"Домен сохранён: {domain}. TLS-сертификат будет "
-                    "получен при включении NaiveProxy"
-                )
+                else (f"Домен сохранён: {domain}. TLS-сертификат будет получен при включении NaiveProxy")
             )
             _report_change(changed, message)
         except ValueError as exc:
@@ -165,10 +162,7 @@ def menu_hysteria2_settings(
         mode = desired.config.get("congestion_mode", "bbr")
         bandwidth = ""
         if mode == "brutal":
-            bandwidth = (
-                f" · {desired.config.get('up_mbps', 100)}/"
-                f"{desired.config.get('down_mbps', 100)} Mbps"
-            )
+            bandwidth = f" · {desired.config.get('up_mbps', 100)}/{desired.config.get('down_mbps', 100)} Mbps"
         choice = menu(
             [
                 (
@@ -246,13 +240,10 @@ def _change_hysteria2(
     if choice == "3":
         return _change_hysteria2_congestion(state, desired, app)
     if choice == "4":
-        password = (
-            prompt(
-                "Новый пароль (пусто = сгенерировать)",
-                default="",
-            ).strip()
-            or gen_token(24)
-        )
+        password = prompt(
+            "Новый пароль (пусто = сгенерировать)",
+            default="",
+        ).strip() or gen_token(24)
         return app.plugin_command(
             state,
             "hysteria2",
@@ -361,11 +352,7 @@ def _change_snell(
     new_mode = {"1": "http", "2": ""}.get(selected)
     if new_mode is None:
         return None
-    new_host = (
-        prompt("Маскировочный host", default=host)
-        if new_mode
-        else host
-    )
+    new_host = prompt("Маскировочный host", default=host) if new_mode else host
     return app.plugin_command(
         state,
         "snell",
