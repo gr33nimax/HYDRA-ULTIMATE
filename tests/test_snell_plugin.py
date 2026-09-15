@@ -33,7 +33,6 @@ def test_each_user_gets_an_isolated_inbound():
     assert len(inbounds) == 2
     assert all(item["type"] == "snell" for item in inbounds)
     assert all(item["version"] == SNELL_VERSION for item in inbounds)
-    assert all(item["network"] == ["tcp", "udp"] for item in inbounds)
     ports = [cast(int, item["listen_port"]) for item in inbounds]
     keys = [cast(str, item["psk"]) for item in inbounds]
     assert len(set(ports)) == 2
@@ -65,6 +64,21 @@ def test_blocked_user_keeps_reserved_port_but_has_no_inbound():
 
     assert set(ports) == {"uuid-a", "uuid-b"}
     assert [item["tag"] for item in inbounds] == [plugin._tag(active)]
+
+
+def test_neither_side_carries_a_field_the_core_no_longer_accepts():
+    # `network` was dropped from the core's Snell schema, and a configuration carrying it is
+    # refused outright with "unknown field": that is what stopped Snell from being installed at
+    # all on a live server. Snell tunnels UDP inside its own session, so nothing is lost.
+    plugin = SnellPlugin()
+    user = User("a@example.com", "uuid-a")
+    state = _state(user)
+    inbound = plugin.configure(state).inbounds[0]
+    client = json.loads(plugin.generate_client_config(user, state))
+    outbound = next(item for item in client["outbounds"] if item["type"] == "snell")
+
+    assert "network" not in inbound
+    assert "network" not in outbound
 
 
 def test_client_material_matches_inbound():

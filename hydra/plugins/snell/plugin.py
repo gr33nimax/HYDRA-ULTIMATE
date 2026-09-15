@@ -77,7 +77,9 @@ class SnellPlugin(BasePlugin):
                 "listen_port": ports[user.uuid],
                 "psk": self._psk(user.uuid),
                 "version": generation,
-                "network": ["tcp", "udp"],
+                # No `network` here: the core dropped that field from the Snell inbound schema and
+                # refuses a configuration carrying it, and Snell tunnels UDP inside its own session
+                # anyway. This field is what stopped Snell from being installed at all.
             }
             if generation == 5:
                 obfs_mode = self._obfs_mode(state)
@@ -114,7 +116,6 @@ class SnellPlugin(BasePlugin):
             # though the server that answers it is version 5; the core has no
             # outbound 5 at all.
             "version": 4 if generation == 5 else 6,
-            "network": ["tcp", "udp"],
         }
         if generation == 5:
             obfs_mode = self._obfs_mode(state)
