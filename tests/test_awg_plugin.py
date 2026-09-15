@@ -98,6 +98,8 @@ def test_fresh_install_uses_non_conflicting_default_server_address():
     p = AmneziaWGPlugin()
 
     def run(command, **kwargs):
+        if command == ["dpkg", "--audit"]:
+            return MagicMock(returncode=0, stdout="", stderr="")
         if command[:2] == ["rm", "-rf"]:
             return MagicMock(returncode=0, stdout="", stderr="")
         if command[:3] == ["git", "clone", "--depth"]:
@@ -127,6 +129,56 @@ def test_existing_install_does_not_reconfigure_legacy_network():
         assert p.install() is True
 
     host_run.assert_not_called()
+
+
+def test_install_stops_and_names_the_command_when_dpkg_was_interrupted(capsys):
+    # An interrupted dpkg fails every later install, and its own message never reaches the
+    # interface. The operator needs the command, not the word "failed".
+    p = AmneziaWGPlugin()
+
+    def run(command, **kwargs):
+        if command == ["dpkg", "--audit"]:
+            return MagicMock(returncode=1, stdout="amneziawg-dkms half-configured\n", stderr="")
+        raise AssertionError(command)
+
+    with (
+        patch.object(p, "_installed", return_value=False),
+        patch("hydra.plugins.amneziawg.plugin.HOST.run", side_effect=run),
+    ):
+        assert p.install() is False
+
+    assert "dpkg --configure -a" in capsys.readouterr().out
+
+
+def test_install_reports_the_installer_failure_without_its_configuration(capsys):
+    p = AmneziaWGPlugin()
+    installer_output = (
+        "E: dpkg was interrupted, you must manually run 'sudo dpkg --configure -a'.\n"
+        "ERROR: Failed to install software-properties-common and curl.\n"
+        "PrivateKey = SECRETKEYMATERIAL\n"
+    )
+
+    def run(command, **kwargs):
+        if command == ["dpkg", "--audit"]:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        if command[:2] == ["rm", "-rf"]:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        if command[:3] == ["git", "clone", "--depth"]:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        if command == ["bash", "amneziawg-install.sh"]:
+            return MagicMock(returncode=1, stdout=installer_output, stderr="")
+        raise AssertionError(command)
+
+    with (
+        patch.object(p, "_installed", return_value=False),
+        patch.object(p, "_public_ip", return_value="203.0.113.10"),
+        patch("hydra.plugins.amneziawg.plugin.HOST.run", side_effect=run),
+    ):
+        assert p.install() is False
+
+    printed = capsys.readouterr().out
+    assert "Failed to install software-properties-common and curl" in printed
+    assert "SECRETKEYMATERIAL" not in printed
 
 
 def test_status_uses_persisted_lifecycle_instead_of_config_presence():

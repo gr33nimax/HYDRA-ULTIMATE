@@ -18,6 +18,17 @@ from .constants import (
 )
 from .directives import AwgDirectiveError, canonical_mode
 
+# What the installer calls a failure. Its successful path prints the generated configuration —
+# keys included — so its output is never echoed wholesale back to the operator.
+_INSTALLER_FAILURE_PREFIXES = ("ERROR", "E:", "W:")
+
+
+def _installer_failure_lines(result: object) -> list[str]:
+    """The installer's own failure lines, and nothing else."""
+    output = f"{getattr(result, 'stderr', '') or ''}\n{getattr(result, 'stdout', '') or ''}"
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    return [line for line in lines if line.startswith(_INSTALLER_FAILURE_PREFIXES)][:5]
+
 
 class AwgInstallationMixin:
     """Install/remove host assets and validate the running kernel module."""
@@ -28,6 +39,10 @@ class AwgInstallationMixin:
             if not ready:
                 print(f"  {detail}")
             return ready
+        repair = self.package_manager_repair()
+        if repair:
+            print(f"  {repair}")
+            return False
         try:
             HOST.run(["rm", "-rf", str(AWG_INSTALL_DIR)], capture_output=True)
             clone = HOST.run(
@@ -53,12 +68,21 @@ class AwgInstallationMixin:
             environment["ENABLE_IPV6"] = "n"
             environment["SERVER_PUB_IP"] = self._public_ip()
             environment["SERVER_AWG_IPV4"] = DEFAULT_SERVER_IPV4
-            HOST.run(
+            result = HOST.run(
                 ["bash", "amneziawg-install.sh"],
                 cwd=str(AWG_INSTALL_DIR),
                 env=environment,
+                capture_output=True,
+                text=True,
                 timeout=900,
             )
+            if result.returncode != 0:
+                failures = _installer_failure_lines(result) or [
+                    f"установщик завершился с кодом {result.returncode}",
+                ]
+                for line in failures:
+                    print(f"  {line}")
+                return False
             ready, detail = self._ensure_kernel_module()
             if not ready:
                 print(f"  {detail}")
@@ -67,6 +91,22 @@ class AwgInstallationMixin:
         except Exception as exc:
             print(f"  install error: {exc}")
             return False
+
+    @staticmethod
+    def package_manager_repair() -> str:
+        """Name the command that repairs a package manager left mid-way, or nothing when it is fine.
+
+        An interrupted dpkg fails every later install with a message that reaches this plugin and
+        never the operator: the interface shows "not installed" and the reason stays in a log
+        nobody reads. Naming the command is the difference between a dead end and a two-second fix.
+        """
+        audit = HOST.run(["dpkg", "--audit"], capture_output=True, text=True)
+        if not (audit.stdout or "").strip() and not (audit.stderr or "").strip():
+            return ""
+        return (
+            "Менеджер пакетов оставлен в незавершённом состоянии, установка пакетов "
+            "невозможна. Выполните: sudo dpkg --configure -a, затем повторите установку."
+        )
 
     def installer_identity(self) -> str:
         """Return the pinned managed installer revision without mutating it."""
