@@ -63,6 +63,16 @@ def official_go_digest(
     return None
 
 
+def _restore_previous_go(backup_go: Path, current_go: Path) -> None:
+    """Put the previous toolchain back when the new one did not survive."""
+    if current_go.exists() or not backup_go.exists():
+        return
+    try:
+        shutil.move(str(backup_go), str(current_go))
+    except OSError as exc:
+        print(f"  Не удалось вернуть прежний Go: {exc}")
+
+
 def ensure_modern_go(
     settings: InstallSettings,
     host: Any,
@@ -137,8 +147,7 @@ def ensure_modern_go(
             shutil.move(str(backup_go), str(current_go))
     except Exception as exc:
         print(f"  Failed to extract Go: {exc}")
-        if not current_go.exists() and backup_go.exists():
-            shutil.move(str(backup_go), str(current_go))
+        _restore_previous_go(backup_go, current_go)
     finally:
         go_tar.unlink(missing_ok=True)
         shutil.rmtree(extract_root, ignore_errors=True)
@@ -246,7 +255,11 @@ def install(
 
     print(f"  Installing xcaddy and building {settings.binary.name}...")
     go_path = "/usr/local/share/go"
-    os.makedirs(go_path, exist_ok=True)
+    try:
+        os.makedirs(go_path, exist_ok=True)
+    except OSError as exc:
+        print(f"  Не удалось подготовить {go_path}: {exc}")
+        return False
     env = {**os.environ, "GOPATH": go_path, "GOBIN": f"{go_path}/bin"}
     xcaddy_binary = _ensure_xcaddy_binary(go_path, host, env)
 
@@ -305,6 +318,12 @@ def install(
     return True
 
 
+def _restore_failed_binary(binary: Path, rollback: Path) -> None:
+    """Keep the failed binary's place when the swap could not be completed."""
+    if rollback.exists() and not binary.exists():
+        rollback.replace(binary)
+
+
 def restore_previous_binary(binary: Path) -> bool:
     """Restore the last successfully installed Caddy binary."""
     backup = binary.with_suffix(".previous")
@@ -319,8 +338,7 @@ def restore_previous_binary(binary: Path) -> bool:
         rollback.unlink(missing_ok=True)
         return True
     except OSError:
-        if rollback.exists() and not binary.exists():
-            rollback.replace(binary)
+        _restore_failed_binary(binary, rollback)
         return False
 
 
