@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from hydra.contracts.calls_configuration import CALL_COUNT
-from hydra.contracts.hydracore_calls import supports_vps_contract
+from hydra.contracts.hydracore_calls import supports_native_vk_calls
 from hydra.core.host import HostBackend
 from hydra.services.calls_slot_replacement import CallsSlotReplacement, stage_calls_slot_replacement
 from hydra.services.headless_creator_infrastructure import validate_vk_join_link
@@ -157,13 +157,13 @@ class CallsInfrastructure:
             return True, "Calls creator pool is not configured"
         return source.uninstall_creator_pool()
 
-    def _contract(self) -> dict:
+    def _hydra_json(self, subcommand: str) -> dict:
         binary = self.host.which("sing-box")
         if not binary:
             return {}
         try:
             result = self.host.run(
-                [binary, "hydra", "contract", "--json"],
+                [binary, "hydra", subcommand, "--json"],
                 timeout=10,
                 capture_output=True,
                 text=True,
@@ -175,8 +175,22 @@ class CallsInfrastructure:
         except Exception:
             return {}
 
+    def _contract(self) -> dict:
+        return self._hydra_json("contract")
+
+    def _legacy_capabilities(self) -> dict:
+        """The document a core older than the contract prints instead."""
+        return self._hydra_json("capabilities")
+
     def vk_parasite_supported(self) -> bool:
-        return supports_vps_contract(self._contract())
+        # A core that answers the product contract is judged by it; one built before the contract
+        # is judged by the capability document it does print, at the bar the previous HYDRA
+        # applied. Without the second half a server whose core is older than the contract could
+        # not update at all: the gate demanded a document that core can never produce.
+        payload = self._contract()
+        if payload:
+            return supports_native_vk_calls(payload)
+        return supports_native_vk_calls(self._legacy_capabilities())
 
     def singbox_running(self) -> bool:
         try:

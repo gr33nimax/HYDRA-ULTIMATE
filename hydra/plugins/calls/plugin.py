@@ -161,7 +161,7 @@ class CallsPlugin(BasePlugin):
             return ConfigFragment()
         call_mode(state)
         if not self._source.vk_parasite_supported():
-            raise ValueError("installed core does not support VK Calls parasite wire v9")
+            raise ValueError("installed core is not a HydraCore VPS runtime with native VK Calls")
         return ConfigFragment(inbounds=[vk_parasite_inbound(state)])
 
     def generate_client_config(self, user, state: PluginStateAccess) -> str:
@@ -171,7 +171,7 @@ class CallsPlugin(BasePlugin):
             return ""
         call_mode(state)
         if not self._source.vk_parasite_supported():
-            raise ValueError("installed core does not support VK Calls parasite wire v9")
+            raise ValueError("installed core is not a HydraCore VPS runtime with native VK Calls")
         outbound = vk_parasite_outbound(
             user,
             state,

@@ -120,6 +120,56 @@ def test_vk_parasite_support_requires_vps_contract() -> None:
     assert runtime.vk_parasite_supported() is True
 
 
+class DocumentHost(ProbeHost):
+    """One document per subcommand, refusing the ones it does not know — as a real core does."""
+
+    def __init__(self, **answers: dict) -> None:
+        super().__init__()
+        self.answers = answers
+
+    def run(self, args, **kwargs):
+        command = [str(value) for value in args]
+        self.commands.append(command)
+        payload = self.answers.get(command[2]) if len(command) > 2 else None
+        if payload is None:
+            return CompletedProcess(command, 1, stdout="", stderr="unknown command")
+        return CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+
+
+def legacy_capabilities() -> dict:
+    """What a core built before the product contract prints instead of it."""
+    return {
+        "api_version": 2,
+        "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
+        "features": {"call_vk_parasite": True},
+        "protocols": {"call_modes": ["vk_parasite"]},
+    }
+
+
+def test_vk_parasite_support_accepts_a_core_older_than_the_contract() -> None:
+    # The gate used to ask such a core for a document that did not exist when it was built, and
+    # refused a server that had been running Calls for weeks on that basis.
+    runtime = CallsInfrastructure(DocumentHost(capabilities=legacy_capabilities()))
+    assert runtime.vk_parasite_supported() is True
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: payload.update({"api_version": 1}),
+        lambda payload: payload["identity"].update({"role": "client"}),
+        lambda payload: payload["identity"].update({"core_id": "third.party.core"}),
+        lambda payload: payload["features"].update({"call_vk_parasite": False}),
+        lambda payload: payload["protocols"].update({"call_modes": ["p2p"]}),
+    ],
+)
+def test_the_legacy_document_is_held_to_the_same_bar(mutate) -> None:
+    payload = legacy_capabilities()
+    mutate(payload)
+    runtime = CallsInfrastructure(DocumentHost(capabilities=payload))
+    assert runtime.vk_parasite_supported() is False
+
+
 @pytest.mark.parametrize(
     "payload",
     [
