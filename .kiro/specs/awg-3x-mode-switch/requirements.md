@@ -64,6 +64,16 @@ As a HYDRA administrator, I want to select AWG `2.0`, `3.0`, or `3.1`, inspect c
 - HYDRA SHALL correct existing documentation that claims unsupported `I1`–`I5`, `J1`–`J3`, or `Itime` support.
 - HYDRA SHALL not label generic Sing-box output, NekoBox binary output, or any external URI as AWG 3.x-capable without a versioned, executable compatibility test.
 
+## Extension (requirements, 2026-09-15): quiet operator screen
+
+### R12 — Hide passive export omissions in the AWG TUI
+
+- WHEN the ordinary AmneziaWG status screen renders THEN it SHALL show the desired/observed generation and profiles, but SHALL NOT render a line naming export formats that are not issued.
+- HYDRA SHALL keep capability evaluation and fail-closed artifact omission unchanged; it SHALL not fabricate a partial client artifact merely to make the screen look complete.
+- Detailed incompatibility reasons remain available to internal status/CLI diagnostics and the code paths that explicitly request an artifact; they are not normal-dashboard copy.
+
+**Acceptance evidence:** a menu regression test proves that an unavailable export is absent from the rendered AWG status panel while the mode and profile data remain visible; protocol capability tests keep their existing omission assertions.
+
 ## Out of scope
 
 - `amneziawg-proxy` and its traffic imitation modes.

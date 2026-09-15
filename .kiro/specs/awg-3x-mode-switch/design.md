@@ -157,10 +157,9 @@ The AWG menu shows:
 Generation: desired 3.1 / observed 3.1
 Legacy strategy: desktop wired; mobile MTS
 Protocol directives: AWG 3.1 present; Cookie Reply protection enabled
-Exports: .conf ready; vpn:// unavailable for AWG 3.1; sing-box unavailable
 ```
 
-No keys, timer values, padding values, or `RandomTrailers` are printed. The mode selector warns before transition that existing 2.0-only clients stop connecting and offers the safe `2.0` return path. CLI emits the same normalized fields in JSON/text.
+No keys, timer values, padding values, `RandomTrailers`, or passive export-omission rows are printed in the ordinary TUI. Capability evaluation and fail-closed omission remain part of the plugin status/CLI diagnostics and explicit artifact paths, rather than dashboard copy. The mode selector warns before transition that existing 2.0-only clients stop connecting and offers the safe `2.0` return path. CLI emits the same normalized fields in JSON/text.
 
 ## 9. Error policy
 

@@ -7,7 +7,7 @@
 | Not started | 0 | — |
 | In progress | 0 | — |
 | Blocked | 1 | TSK-013 needs a disposable compatible Linux host/client. |
-| Complete | 15 | TSK-001–TSK-012 and TSK-014–TSK-016 have local evidence. |
+| Complete | 16 | TSK-001–TSK-012 and TSK-014–TSK-017 have local evidence. |
 
 ## Dependency graph
 
@@ -135,3 +135,11 @@ TSK-013 is a release gate for TSK-012.
   - **Факт:** focused AWG architecture, exporter, protocol and HydraBox tests passed (`84 passed`), `git diff --check` passed, and `.venv\\Scripts\\python.exe verify.py` passed: `1974 passed` plus `compileall` and Ruff.
   - Run focused exporter/subscription tests, then full verification; update docs and task evidence. Preserve the disposable Linux smoke blocker.
   - _Requirements: R4, R7–R11._
+
+- [x] **TSK-017 — Keep ordinary AWG TUI free of passive export omissions**
+  - **Факт:** the ordinary menu no longer adds the `Экспорты: не выдаются …` row; desired/observed generation and profiles remain. Direct rendering regression plus `tests/test_awg_protocol_runtime.py` → `15 passed`; Ruff for changed Python files and `git diff --check` → exit 0.
+  - Remove the `Экспорты: не выдаются …` dashboard row only; retain desired/observed mode, profiles, the capability matrix, and fail-closed artifact behavior.
+  - Add a direct menu rendering regression that verifies unavailable exports do not appear in the ordinary panel.
+  - **Acceptance:** the menu does not display `Экспорты` or `не выдаются`; protocol capability tests retain their incompatibility assertions.
+  - **Dependency:** TSK-010.
+  - _Requirements: R12._

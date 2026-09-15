@@ -58,11 +58,6 @@ def _menu_amneziawg(
             details: list[tuple[str, object]] = [("Профили", len(profiles))]
             if mode:
                 details.append(("AWG", f"{mode['desired']} / {mode['observed']}"))
-                exports = mode.get("exports")
-                if isinstance(exports, dict):
-                    omitted = [name for name, value in exports.items() if value != "ready"]
-                    if omitted:
-                        details.append(("Экспорты", "не выдаются: " + ", ".join(omitted)))
             details.extend(
                 ("", f"{prof['label']} · {prof['interface']} · :{prof['port']} · {prof['preset']}") for prof in profiles
             )
