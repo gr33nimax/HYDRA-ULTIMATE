@@ -426,17 +426,17 @@ class AwgClientLinksMixin:
 
     @staticmethod
     def _generation_fields(data: _ClientProfile) -> dict[str, str]:
-        fields = {
+        """Return the generation fields exactly as the server interface carries them.
+
+        The server is the source of truth: a client handed a value its server does not have is a
+        client that cannot complete a handshake. Both 3.1 fields are written into the server
+        configuration where the mode is switched, and reflected here — never invented here.
+        """
+        return {
             key: value
             for key, value in data.directives.values.items()
             if key in GENERATION_DIRECTIVE_KEYS and value not in (None, "")
         }
-        if data.directives.mode == "3.1":
-            # Both fields are handed to every client of a 3.1 server, whatever the host happened to
-            # carry: an observer that can read the transport is what 3.1 exists to prevent, and the
-            # cookie packet type is the one clients dropped while its padding was too small.
-            fields["DisableCookies"] = "true"
-        return fields
 
     def _amnezia_payload(
         self,
