@@ -1,4 +1,5 @@
 """Local-host implementation of the administration application port."""
+
 from __future__ import annotations
 
 import shutil
@@ -45,9 +46,7 @@ class AdminInfrastructure:
         return state
 
     def set_clash_api(self, enabled: bool) -> AppState:
-        state, _ = update_state(
-            lambda latest: setattr(latest.network, "clash_api_enabled", enabled)
-        )
+        state, _ = update_state(lambda latest: setattr(latest.network, "clash_api_enabled", enabled))
         return state
 
     def unit_active(self, unit: str) -> bool:
@@ -76,10 +75,13 @@ class AdminInfrastructure:
 
     def disable_unit(self, unit: str) -> bool:
         try:
-            return HOST.run(
-                ["systemctl", "disable", unit],
-                capture_output=True,
-            ).returncode == 0
+            return (
+                HOST.run(
+                    ["systemctl", "disable", unit],
+                    capture_output=True,
+                ).returncode
+                == 0
+            )
         except (OSError, subprocess.SubprocessError, CommandError):
             return False
 
@@ -121,10 +123,7 @@ WantedBy=multi-user.target
         from hydra.utils.net import public_ip
 
         return (
-            getattr(state.network, "sub_domain", "")
-            or state.network.domain
-            or state.network.server_ip
-            or public_ip()
+            getattr(state.network, "sub_domain", "") or state.network.domain or state.network.server_ip or public_ip()
         )
 
     def obtain_subscription_certificate(self, domain: str) -> AdminCommandResult:
@@ -137,8 +136,13 @@ WantedBy=multi-user.target
             try:
                 check = HOST.run(
                     [
-                        "openssl", "x509", "-checkend", "2592000",
-                        "-noout", "-in", str(cert_path),
+                        "openssl",
+                        "x509",
+                        "-checkend",
+                        "2592000",
+                        "-noout",
+                        "-in",
+                        str(cert_path),
                     ],
                     capture_output=True,
                 )
@@ -190,14 +194,22 @@ WantedBy=multi-user.target
             with temporary_open_port("tcp", 80, "temp-certbot"):
                 result = HOST.run(
                     [
-                        "certbot", "certonly", "--standalone",
-                        "-d", domain,
-                        "--non-interactive", "--agree-tos",
+                        "certbot",
+                        "certonly",
+                        "--standalone",
+                        "-d",
+                        domain,
+                        "--non-interactive",
+                        "--agree-tos",
                         "--register-unsafely-without-email",
                         "--keep-until-expiring",
                     ],
                     capture_output=True,
                     text=True,
+                    # ACME registration plus the HTTP-01 challenge regularly needs more than
+                    # the shared 30-second default: the same command elsewhere in the product
+                    # is given three minutes.
+                    timeout=180,
                 )
             if result.returncode == 0:
                 return AdminCommandResult(True, "obtained")
@@ -247,7 +259,12 @@ WantedBy=multi-user.target
         except ImportError:
             installed = HOST.run(
                 [
-                    sys.executable, "-m", "pip", "install", "--upgrade", "-q",
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--upgrade",
+                    "-q",
                     "python-telegram-bot[job-queue]==22.8",
                 ],
                 timeout=180,
@@ -285,9 +302,7 @@ WantedBy=multi-user.target
             ["systemctl", "is-active", "--quiet", "hydra-tg-admin.service"],
             timeout=15,
         )
-        state.telegram.admin_enabled = bool(
-            unit_installed and started.returncode == 0 and active.returncode == 0
-        )
+        state.telegram.admin_enabled = bool(unit_installed and started.returncode == 0 and active.returncode == 0)
         save_state(state)
         return AdminCommandResult(
             state.telegram.admin_enabled,

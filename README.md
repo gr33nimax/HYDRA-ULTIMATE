@@ -192,8 +192,9 @@ TUI. Для AmneziaWG 3.0/3.1 HYDRA публикует source-proven `wg://` д�
 
 ## Установка
 
-Нужны Ubuntu 20.04+ или Debian 11+ с systemd, Python 3.10+, от 512 МБ RAM и 2 ГБ
-диска, внешний IPv4 и права `root`.
+Нужны Ubuntu 22.04+ или Debian 12+ с systemd, Python 3.10+, от 512 МБ RAM и 2 ГБ
+диска, внешний IPv4 и права `root`. Debian 11 и Ubuntu 20.04 не подходят: в них
+Python 3.9 и 3.8, а приложение требует 3.10+ (установщик скажет об этом сразу).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo env HYDRA_REF=dev bash

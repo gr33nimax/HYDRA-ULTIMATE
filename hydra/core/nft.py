@@ -1,4 +1,5 @@
 """hydra/core/nft.py — nftables TPROXY: заворот трафика транспортов в sing-box."""
+
 from __future__ import annotations
 
 from subprocess import CompletedProcess
@@ -63,11 +64,22 @@ def _run_checked(cmd: list[str], **kwargs) -> CompletedProcess:
 
 
 def _ensure_tproxy_modules():
-    """Загружает kernel modules, необходимые для nftables TPROXY."""
-    for mod in ("nft_tproxy", "nf_tproxy_ipv4", "nf_tproxy_ipv6"):
-        _run_checked(
-            ["modprobe", mod],
+    """Проверяет, что хост способен на TPROXY, и загружает нужные модули ядра."""
+    if not HOST.which("nft"):
+        raise RuntimeError(
+            "не найден nft (пакет nftables): без него TPROXY-транспорты не работают",
         )
+    for mod in ("nft_tproxy", "nf_tproxy_ipv4", "nf_tproxy_ipv6"):
+        try:
+            _run_checked(
+                ["modprobe", mod],
+            )
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"ядро хоста не поддерживает TPROXY: не удалось загрузить модуль {mod}; "
+                "так бывает на контейнерных VPS (OpenVZ/LXC) и на ядрах без TPROXY — "
+                f"выберите транспорт без TPROXY. Причина: {exc}",
+            ) from exc
 
 
 def _ensure_policy_routing():
@@ -94,8 +106,6 @@ def _cleanup_policy_routing():
 
 
 def apply_tproxy(fragments: dict, tproxy_port: int = 1081) -> None:
-    _ensure_tproxy_modules()
-
     ports: set[int] = set()
     ifaces: set[str] = set()
     for frag in fragments.values():
@@ -103,9 +113,15 @@ def apply_tproxy(fragments: dict, tproxy_port: int = 1081) -> None:
         ifaces.update(getattr(frag, "nft_tproxy_ifaces", []))
 
     if not ports and not ifaces:
-        HOST.run(["nft", "delete", "table", "inet", NFT_TABLE])
-        _cleanup_policy_routing()
+        # Nothing is routed yet, so the host is not asked to be capable of TPROXY: a fresh
+        # install used to fail here — before the first user existed — on any machine without the
+        # nft binary or the TPROXY kernel modules, and could only report a line number.
+        if HOST.which("nft"):
+            HOST.run(["nft", "delete", "table", "inet", NFT_TABLE])
+            _cleanup_policy_routing()
         return
+
+    _ensure_tproxy_modules()
 
     table_exists = HOST.run(["nft", "list", "table", "inet", NFT_TABLE]).returncode == 0
     ruleset = f"delete table inet {NFT_TABLE}\n" if table_exists else ""

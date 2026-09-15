@@ -12,13 +12,18 @@ set -Eeuo pipefail
 # installer removed proxy variables and made otherwise reachable servers fail.
 umask 022
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
 
-info()  { echo -e "  ${CYAN}→${NC} $*"; }
-ok()    { echo -e "  ${GREEN}✓${NC} $*"; }
-warn()  { echo -e "  ${YELLOW}⚠${NC} $*"; }
-err()   { echo -e "  ${RED}✗${NC} $*"; }
+info() { echo -e "  ${CYAN}→${NC} $*"; }
+ok() { echo -e "  ${GREEN}✓${NC} $*"; }
+warn() { echo -e "  ${YELLOW}⚠${NC} $*"; }
+err() { echo -e "  ${RED}✗${NC} $*"; }
 
 title() {
     echo -e "${BOLD}${CYAN}HYDRA · $*${NC}"
@@ -56,8 +61,9 @@ on_exit() {
     exit "$code"
 }
 
-on_error() {
-    local code=$?
+# Both a failed step and an interrupted one need the same cleanup: the checkout goes back to
+# the previous verified revision, and the previous directory is put back in place.
+restore_previous_installation() {
     if [[ -n "${HYDRA_PREVIOUS_REV:-}" && -d "${INSTALL_DIR:-}/.git" ]]; then
         warn "Возвращаю код HYDRA к предыдущей проверенной версии..."
         if [[ -n "${HYDRA_PREVIOUS_REF:-}" ]]; then
@@ -73,13 +79,39 @@ on_error() {
         fi
         mv "$HYDRA_BACKUP_DIR/old" "$INSTALL_DIR" || true
     fi
+}
+
+on_error() {
+    local code=$?
+    restore_previous_installation
     ERROR_REPORTED=1
     result_error "Установка не завершена (строка ${BASH_LINENO[0]}, код ${code})."
     err "Подробный лог: /var/log/hydra/install.log"
     exit "$code"
 }
+
+# A dropped SSH session used to kill the installer in the middle of pip, the sing-box download
+# or the venv: no message, no cleanup, and a half-written checkout to guess about. An interrupt
+# gets the same recovery as a failure, and says which one it was.
+on_signal() {
+    local name=$1
+    local code=$2
+    trap - ERR HUP INT TERM
+    restore_previous_installation
+    ERROR_REPORTED=1
+    result_error "Установка прервана (${name}). Система осталась в промежуточном состоянии."
+    err "Повторите ту же команду: установка продолжит с этого места."
+    if [[ -f /var/log/hydra/install.log ]]; then
+        err "Подробный лог: /var/log/hydra/install.log"
+    fi
+    exit "$code"
+}
+
 trap on_error ERR
 trap on_exit EXIT
+trap 'on_signal HUP 129' HUP
+trap 'on_signal INT 130' INT
+trap 'on_signal TERM 143' TERM
 
 title "УСТАНОВКА HYDRA"
 step 1 5 "Проверка системы"
@@ -108,16 +140,19 @@ else
 fi
 
 case "$OS" in
-    ubuntu|debian)
-        ok "ОС: $OS $VER"
-        PKG_INSTALL="apt-get install -y -qq"
-        ;;
-    *)
-        err "Поддерживаются только Ubuntu/Debian. Обнаружено: $OS"
-        exit 1
-        ;;
+ubuntu | debian)
+    ok "ОС: $OS $VER"
+    PKG_INSTALL="apt-get install -y -qq"
+    ;;
+*)
+    err "Поддерживаются только Ubuntu/Debian. Обнаружено: $OS"
+    exit 1
+    ;;
 esac
-command -v apt-get >/dev/null || { err "apt-get не найден"; exit 1; }
+command -v apt-get >/dev/null || {
+    err "apt-get не найден"
+    exit 1
+}
 
 step 2 5 "Системные зависимости"
 
@@ -125,11 +160,11 @@ apt-get update -qq
 
 MISSING=()
 command -v python3 &>/dev/null || MISSING+=("python3")
-command -v curl    &>/dev/null || MISSING+=("curl")
-command -v git     &>/dev/null || MISSING+=("git")
-command -v tar     &>/dev/null || MISSING+=("tar")
+command -v curl &>/dev/null || MISSING+=("curl")
+command -v git &>/dev/null || MISSING+=("git")
+command -v tar &>/dev/null || MISSING+=("tar")
 command -v sha256sum &>/dev/null || MISSING+=("coreutils")
-command -v file    &>/dev/null || MISSING+=("file")
+command -v file &>/dev/null || MISSING+=("file")
 python3 -c 'import ensurepip' &>/dev/null || MISSING+=("python3-venv")
 
 for pkg in "${MISSING[@]}"; do
@@ -141,6 +176,7 @@ PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_i
 PY_OK=$(python3 -c "import sys; print(int(sys.version_info >= (3, 10)))")
 if [[ "$PY_OK" != "1" ]]; then
     err "Требуется Python >= 3.10, найден $PY_VER"
+    err "Debian 11 (Python 3.9) и Ubuntu 20.04 (Python 3.8) не подходят: нужен Debian 12+ или Ubuntu 22.04+"
     exit 1
 fi
 ok "Python $PY_VER: OK"
@@ -160,24 +196,29 @@ if [[ ! -f /var/lib/hydra/state.json && ! -f /var/lib/hydra/master.key ]]; then
 fi
 
 # Дополнительные пакеты
-$PKG_INSTALL iptables iproute2 gnupg ca-certificates certbot ufw
+# nftables is required by every TPROXY transport: the binary used to be assumed present until
+# the first apply failed on a minimal image.
+$PKG_INSTALL iptables nftables iproute2 gnupg ca-certificates certbot ufw
 
 step 3 5 "Совместимое ядро"
-if command -v sing-box &> /dev/null \
-    && sing-box version 2>/dev/null | head -1 | grep -qi "hydracore"; then
+if command -v sing-box &>/dev/null &&
+    sing-box version 2>/dev/null | head -1 | grep -qi "hydracore"; then
     info "Обнаружен Hydracore; bootstrap не заменяет custom core"
     ok "Ядро сохранено: $(sing-box version 2>/dev/null | head -1)"
 else
     info "Установка проверенного Hydracore VPS debug..."
     ARCH=$(uname -m)
     case "$ARCH" in
-        x86_64|amd64) HC_ARCH="amd64" ;;
-        aarch64|arm64) HC_ARCH="arm64" ;;
-        *) err "Неподдерживаемая архитектура: $ARCH"; exit 1 ;;
+    x86_64 | amd64) HC_ARCH="amd64" ;;
+    aarch64 | arm64) HC_ARCH="arm64" ;;
+    *)
+        err "Неподдерживаемая архитектура: $ARCH"
+        exit 1
+        ;;
     esac
 
-    HC_META=$(curl -fsSL --connect-timeout 30 --retry 3 "https://api.github.com/repos/gr33nimax/hydracore/releases?per_page=100" \
-        | python3 -c "
+    HC_META=$(curl -fsSL --connect-timeout 30 --retry 3 "https://api.github.com/repos/gr33nimax/hydracore/releases?per_page=100" |
+        python3 -c "
 import sys, json
 for release in json.load(sys.stdin):
     tag = str(release.get('tag_name') or '')
@@ -189,9 +230,10 @@ for release in json.load(sys.stdin):
             raise SystemExit
 ")
 
-    read -r HC_URL HC_DIGEST HC_TAG <<< "$HC_META"
+    read -r HC_URL HC_DIGEST HC_TAG <<<"$HC_META"
     [[ -n "$HC_URL" && "$HC_TAG" == *-debug.* ]] || {
-        err "Не удалось определить Hydracore VPS debug release"; exit 1;
+        err "Не удалось определить Hydracore VPS debug release"
+        exit 1
     }
     HC_TMP=$(mktemp -d /tmp/hydra-hydracore.XXXXXX)
     curl -fsSL --connect-timeout 30 --retry 3 "$HC_URL" -o "$HC_TMP/hydracore.tar.gz"
@@ -199,7 +241,8 @@ for release in json.load(sys.stdin):
         EXPECTED_SHA=${HC_DIGEST#sha256:}
         ACTUAL_SHA=$(sha256sum "$HC_TMP/hydracore.tar.gz" | awk '{print $1}')
         [[ "$ACTUAL_SHA" == "$EXPECTED_SHA" ]] || {
-            err "Проверка целостности Hydracore не пройдена"; exit 1;
+            err "Проверка целостности Hydracore не пройдена"
+            exit 1
         }
         ok "Проверка целостности Hydracore: OK"
     else
@@ -208,14 +251,19 @@ for release in json.load(sys.stdin):
     fi
     tar -xzf "$HC_TMP/hydracore.tar.gz" -C "$HC_TMP"
     HC_BIN=$(find "$HC_TMP" -type f -name sing-box -size +1M -print -quit)
-    [[ -n "$HC_BIN" ]] || { err "В архиве нет корректного Hydracore binary"; exit 1; }
+    [[ -n "$HC_BIN" ]] || {
+        err "В архиве нет корректного Hydracore binary"
+        exit 1
+    }
     file "$HC_BIN" | grep -q 'ELF .* executable' || {
-        err "Hydracore binary не является ELF executable"; exit 1;
+        err "Hydracore binary не является ELF executable"
+        exit 1
     }
     install -m 0755 "$HC_BIN" /usr/local/bin/sing-box.new
     /usr/local/bin/sing-box.new version >/dev/null
     /usr/local/bin/sing-box.new version | head -1 | grep -qi "hydracore" || {
-        err "Hydracore identity не подтверждена"; exit 1;
+        err "Hydracore identity не подтверждена"
+        exit 1
     }
     mv -f /usr/local/bin/sing-box.new /usr/local/bin/sing-box
     rm -rf "$HC_TMP"
@@ -266,14 +314,14 @@ elif [[ -d "$INSTALL_DIR" ]]; then
     curl -fsSL --connect-timeout 30 --retry 3 -o "$UPDATE_TMP/hydra.tar.gz" "$ARCHIVE"
     mkdir -p "$INSTALL_DIR"
     tar -xzf "$UPDATE_TMP/hydra.tar.gz" -C "$INSTALL_DIR" --strip-components=1
-    printf '%s\n' "$HYDRA_TARGET_REV" > "$INSTALL_DIR/.hydra-source-revision"
+    printf '%s\n' "$HYDRA_TARGET_REV" >"$INSTALL_DIR/.hydra-source-revision"
     rm -rf "$UPDATE_TMP"
     ok "Файлы обновлены"
 else
     info "Клонирование репозитория..."
     PARENT_TMP=$(mktemp -d /tmp/hydra-clone.XXXXXX)
-    if git clone --quiet --depth 1 --branch "$HYDRA_REF" "$REPO_URL" "$PARENT_TMP/repo" \
-        && [[ "$(git -C "$PARENT_TMP/repo" rev-parse HEAD)" == "$HYDRA_TARGET_REV" ]]; then
+    if git clone --quiet --depth 1 --branch "$HYDRA_REF" "$REPO_URL" "$PARENT_TMP/repo" &&
+        [[ "$(git -C "$PARENT_TMP/repo" rev-parse HEAD)" == "$HYDRA_TARGET_REV" ]]; then
         mkdir -p "$INSTALL_DIR"
         cp -a "$PARENT_TMP/repo/." "$INSTALL_DIR/"
     else
@@ -283,13 +331,16 @@ else
         curl -fsSL --connect-timeout 30 --retry 3 -o "$PARENT_TMP/hydra.tar.gz" "$ARCHIVE"
         mkdir -p "$INSTALL_DIR"
         tar -xzf "$PARENT_TMP/hydra.tar.gz" -C "$INSTALL_DIR" --strip-components=1
-        printf '%s\n' "$HYDRA_TARGET_REV" > "$INSTALL_DIR/.hydra-source-revision"
+        printf '%s\n' "$HYDRA_TARGET_REV" >"$INSTALL_DIR/.hydra-source-revision"
     fi
     rm -rf "$PARENT_TMP"
     ok "Загружено в $INSTALL_DIR"
 fi
 
-[[ -f "${INSTALL_DIR}/main.py" ]] || { err "main.py не найден в $INSTALL_DIR"; exit 1; }
+[[ -f "${INSTALL_DIR}/main.py" ]] || {
+    err "main.py не найден в $INSTALL_DIR"
+    exit 1
+}
 if [[ -d "${INSTALL_DIR}/.git" ]]; then
     HYDRA_INSTALLED_REV=$(git -C "$INSTALL_DIR" rev-parse HEAD)
 else
@@ -324,14 +375,23 @@ chmod +x "${INSTALL_DIR}/main.py"
 # it before writing the wrapper, otherwise shell redirection follows the link
 # and overwrites the Python entrypoint.
 rm -f /usr/local/bin/hydra
-cat > /usr/local/bin/hydra <<EOF
+cat >/usr/local/bin/hydra <<EOF
 #!/usr/bin/env bash
 exec "${VENV_DIR}/bin/python" "${INSTALL_DIR}/main.py" "\$@"
 EOF
 chmod 0755 /usr/local/bin/hydra
 
 if [[ "$HYDRA_FRESH_INSTALL" == "1" ]]; then
-    "$VENV_DIR/bin/python" "$INSTALL_DIR/main.py" user ensure-default >/dev/null
+    # The command answers in JSON, so stdout stays quiet — but a failure has to say why: the
+    # apply behind this step names the missing prerequisite, and "строка N" does not.
+    CREATE_USER_LOG=$(mktemp)
+    if ! "$VENV_DIR/bin/python" "$INSTALL_DIR/main.py" user ensure-default >"$CREATE_USER_LOG" 2>&1; then
+        err "Не удалось создать первого пользователя:"
+        sed 's/^/    /' "$CREATE_USER_LOG" >&2
+        rm -f "$CREATE_USER_LOG"
+        exit 1
+    fi
+    rm -f "$CREATE_USER_LOG"
     ok "Создан первый пользователь: default"
 fi
 
