@@ -5,18 +5,27 @@ from __future__ import annotations
 import os
 import platform
 import shutil
+from contextlib import contextmanager
+from pathlib import Path
+from typing import TYPE_CHECKING, Iterator
 
 from hydra.core.host import HOST
 
+from .configuration import client_marker_name
 from .constants import (
     AWG_BIN,
     AWG_CONF_DIR,
     AWG_INSTALL_DIR,
+    AWG_INTERFACE,
     AWG_UNIT,
     AWG_UNIT_1,
     DEFAULT_SERVER_IPV4,
 )
 from .directives import AwgDirectiveError, canonical_mode
+
+if TYPE_CHECKING:
+    from hydra.core.state_models import User
+    from hydra.plugins.context import PluginStateAccess
 
 # What the installer calls a failure. Its successful path prints the generated configuration —
 # keys included — so its output is never echoed wholesale back to the operator.
@@ -32,6 +41,17 @@ def _installer_failure_lines(result: object) -> list[str]:
 
 class AwgInstallationMixin:
     """Install/remove host assets and validate the running kernel module."""
+
+    if TYPE_CHECKING:
+
+        def generate_client_config(
+            self,
+            user: "User",
+            state: "PluginStateAccess",
+            profile: str | None = None,
+        ) -> str:
+            """Rendered client configuration, provided by the client-links mixin."""
+            ...
 
     def install(self) -> bool:
         if self._installed():
@@ -150,7 +170,11 @@ class AwgInstallationMixin:
         except AwgDirectiveError as exc:
             raise RuntimeError("invalid protocol status from managed installer") from exc
 
-    def migrate_protocol_mode(self, mode: object) -> None:
+    def migrate_protocol_mode(
+        self,
+        mode: object,
+        state: "PluginStateAccess | None" = None,
+    ) -> None:
         """Invoke exactly one upstream capability-checked migration command."""
         command = {
             "2.0": "--disable-awg3",
@@ -161,18 +185,81 @@ class AwgInstallationMixin:
         if repair:
             raise RuntimeError(repair)
         script = self._managed_installer()
-        result = HOST.run(
-            ["bash", script, command],
-            cwd=str(AWG_INSTALL_DIR),
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
+        with self._lent_client_configs(state):
+            result = HOST.run(
+                ["bash", script, command],
+                cwd=str(AWG_INSTALL_DIR),
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
         if result.returncode != 0:
             # The installer's own words, and only them: its output holds the configuration it
             # writes, keys included. A refusal nobody can read is a refusal nobody can fix.
             detail = "; ".join(_installer_failure_lines(result)) or f"exit code {result.returncode}"
             raise RuntimeError(f"AmneziaWG protocol migration failed: {detail}")
+
+    # The installer scans the resolved home, the web panel's directory, root's home and every user
+    # home for a client configuration, so a generated one belongs under root's home.
+    CLIENT_CONFIG_DIR = Path("/root")
+
+    @contextmanager
+    def _lent_client_configs(self, state: "PluginStateAccess | None") -> Iterator[None]:
+        """Lend the installer the client configurations it proves peers against, then take them back.
+
+        Changing the protocol updates the server and every client as one transaction, and the
+        installer refuses the whole operation when a single peer cannot be proven against a client
+        configuration: that is what stopped every server whose peers HYDRA created. The keys live in
+        HYDRA's state, so the files exist for the length of the call only — private keys do not stay
+        lying in a home directory. A file that is already there is never overwritten: it is used as
+        it is when it carries this user's key, and moved aside, then put back, when it does not.
+        """
+        borrowed: list[Path] = []
+        moved: list[tuple[Path, Path]] = []
+        try:
+            if state is not None:
+                for user in self._migration_users(state):
+                    marker = client_marker_name(user.email)
+                    path = self.CLIENT_CONFIG_DIR / f"{AWG_INTERFACE}-client-{marker}.conf"
+                    rendered = self.generate_client_config(user, state, "desktop")
+                    if not rendered:
+                        continue
+                    if path.exists():
+                        if self._client_config_matches(path, rendered):
+                            continue
+                        aside = path.with_name(path.name + ".hydra-backup")
+                        path.replace(aside)
+                        moved.append((aside, path))
+                    path.write_text(rendered, encoding="utf-8")
+                    path.chmod(0o600)
+                    borrowed.append(path)
+            yield
+        finally:
+            for path in borrowed:
+                path.unlink(missing_ok=True)
+            for aside, original in moved:
+                aside.replace(original)
+
+    @staticmethod
+    def _migration_users(state: "PluginStateAccess | None") -> list["User"]:
+        if state is None:
+            return []
+        return [user for user in state.users if not user.blocked]
+
+    @staticmethod
+    def _client_config_matches(path: Path, rendered: str) -> bool:
+        """True when a file already carries the private key this user's configuration carries."""
+
+        def private_key(text: str) -> str:
+            for line in text.splitlines():
+                if line.startswith("PrivateKey"):
+                    return line.split("=", 1)[-1].strip()
+            return ""
+
+        try:
+            return private_key(path.read_text(encoding="utf-8")) == private_key(rendered)
+        except OSError:
+            return False
 
     def uninstall(self) -> bool:
         for unit in (AWG_UNIT, AWG_UNIT_1):

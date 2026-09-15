@@ -3,7 +3,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hydra.core.state import AppState, PluginState
+from hydra.core.state import AppState, PluginState, User
+from hydra.plugins.amneziawg.configuration import client_marker_name
 from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
 from hydra.services.plugin_commands import PluginCommandService
 
@@ -63,6 +64,89 @@ def test_protocol_migration_reports_the_installer_reason(tmp_path):
     ):
         with pytest.raises(RuntimeError, match="awg3 kernel module is not available"):
             plugin.migrate_protocol_mode("3.0")
+
+
+def _migration_host(script, observe, code=0, stdout=""):
+    """Host stub answering exactly what the migration path asks for."""
+
+    def run(command, **kwargs):
+        if command == ["dpkg", "--audit"]:
+            return _result()
+        if command[:2] == ["git", "-C"]:
+            if "config" in command:
+                return _result(stdout="https://github.com/wiresock/amneziawg-install.git\n")
+            return _result(stdout="abc\n")
+        if command[:2] == ["bash", str(script)]:
+            observe()
+            return _result(code=code, stdout=stdout)
+        return _result()
+
+    return run
+
+
+def _migrating_plugin(tmp_path):
+    script = tmp_path / "amneziawg-install.sh"
+    script.write_text("#!/bin/bash", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    return script, AmneziaWGPlugin()
+
+
+def test_protocol_migration_lends_the_installer_client_configs(tmp_path):
+    # The installer proves every peer against a client configuration and refuses the whole
+    # operation without one — which is what stopped a live server whose peers HYDRA created.
+    script, plugin = _migrating_plugin(tmp_path)
+    marker = client_marker_name("alice@example.com")
+    client_conf = tmp_path / f"awg0-client-{marker}.conf"
+    state = AppState(
+        users=[User(email="alice@example.com", uuid="alice")],
+        protocols={"amneziawg": PluginState(installed=True, config={})},
+    )
+    lent: list[str] = []
+
+    def observe():
+        lent.append(client_conf.read_text(encoding="utf-8") if client_conf.exists() else "")
+
+    with (
+        patch("hydra.plugins.amneziawg.installation.AWG_INSTALL_DIR", tmp_path),
+        patch.object(AmneziaWGPlugin, "CLIENT_CONFIG_DIR", tmp_path),
+        patch.object(plugin, "generate_client_config", return_value="[Interface]\nPrivateKey = alice-key\n"),
+        patch("hydra.plugins.amneziawg.installation.HOST.run", side_effect=_migration_host(script, observe)),
+    ):
+        plugin.migrate_protocol_mode("3.0", state)
+
+    assert lent and "PrivateKey = alice-key" in lent[0], "the installer was not given the client config"
+    assert not client_conf.exists(), "a private key was left behind after the migration"
+
+
+def test_protocol_migration_cleans_up_after_a_refusal_and_restores_a_foreign_file(tmp_path):
+    script, plugin = _migrating_plugin(tmp_path)
+    marker = client_marker_name("alice@example.com")
+    client_conf = tmp_path / f"awg0-client-{marker}.conf"
+    client_conf.write_text("[Interface]\nPrivateKey = someone-elses-key\n", encoding="utf-8")
+    state = AppState(
+        users=[User(email="alice@example.com", uuid="alice")],
+        protocols={"amneziawg": PluginState(installed=True, config={})},
+    )
+    borrowed: list[str] = []
+
+    def observe():
+        borrowed.append(client_conf.read_text(encoding="utf-8"))
+
+    with (
+        patch("hydra.plugins.amneziawg.installation.AWG_INSTALL_DIR", tmp_path),
+        patch.object(AmneziaWGPlugin, "CLIENT_CONFIG_DIR", tmp_path),
+        patch.object(plugin, "generate_client_config", return_value="[Interface]\nPrivateKey = alice-key\n"),
+        patch(
+            "hydra.plugins.amneziawg.installation.HOST.run",
+            side_effect=_migration_host(script, observe, code=1, stdout="ERROR: no recoverable config\n"),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="no recoverable config"):
+            plugin.migrate_protocol_mode("3.0", state)
+
+    assert borrowed and "alice-key" in borrowed[0], "the installer saw someone else's file"
+    assert client_conf.read_text(encoding="utf-8").count("someone-elses-key") == 1
+    assert not list(tmp_path.glob("*.hydra-backup")), "a borrowed file was left aside"
 
 
 def test_protocol_mode_rejects_missing_or_invalid_upstream_status(tmp_path):
@@ -173,7 +257,7 @@ def test_set_protocol_mode_migrates_then_persists_only_verified_mode(tmp_path):
     ):
         assert plugin.set_protocol_mode(state, "3.0") is True
 
-    migrate.assert_called_once_with("3.0")
+    migrate.assert_called_once_with("3.0", state)
     assert state.protocols["amneziawg"].config["protocol_mode"] == "3.0"
 
 
@@ -204,7 +288,7 @@ def test_protocol_mode_rolls_back_upstream_when_apply_fails(tmp_path):
         # noqa: S608 - PluginCommandService allowlists this literal plugin command.
         assert service.execute(state, "amneziawg", "set_protocol_mode", mode="3.0") is False
 
-    assert migrate.call_args_list == [(("3.0",), {}), (("2.0",), {})]
+    assert migrate.call_args_list == [(("3.0", state), {}), (("2.0", state), {})]
     assert "protocol_mode" not in state.protocols["amneziawg"].config
 
 

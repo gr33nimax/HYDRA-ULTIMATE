@@ -143,3 +143,24 @@ TSK-013 is a release gate for TSK-012.
   - **Acceptance:** the menu does not display `Экспорты` or `не выдаются`; protocol capability tests retain their incompatibility assertions.
   - **Dependency:** TSK-010.
   - _Requirements: R12._
+
+- [x] **TSK-018 — Метка пира в формате, который понимает upstream-установщик**
+  - **Факт:** пиры получают `### Client u<12 hex>` — стабильно (из email), уникально, соответствует `^### Client [A-Za-z0-9_-]{1,15}$`; рядом остаётся человекочитаемый email, который строгий подсчёт меток игнорирует. `tests/test_awg_plugin.py::test_peer_markers_are_the_shape_the_installer_requires` — формат, уникальность, стабильность между пересборками; фокусные AWG-тесты `96 passed`, `.venv\Scripts\python.exe verify.py` → `2035 passed`.
+  - Писать `### Client <имя>` (стабильное, уникальное, `[A-Za-z0-9_-]{1,15}`) плюс email отдельной строкой.
+  - Сохранить чтение конфигов со старой меткой и разбор секций по публичным ключам.
+  - **Acceptance:** метка соответствует `^### Client [A-Za-z0-9_-]{1,15}$`, уникальна, воспроизводима между запусками; старый конфиг читается.
+  - _Requirements: R13._
+
+- [x] **TSK-019 — Клиентские конфиги для миграции и их уборка**
+  - **Факт:** `_lent_client_configs` выкладывает `/root/awg0-client-<маркер>.conf` (0600) из состояния на время вызова установщика и удаляет их в `finally` — как при успехе, так и при отказе; чужой файл не затирается (сверка `PrivateKey`), а уводится в сторону и возвращается. Путь отката (`runtime.py::rollback`) тоже передаёт состояние. Тесты: `test_protocol_migration_lends_the_installer_client_configs`, `test_protocol_migration_cleans_up_after_a_refusal_and_restores_a_foreign_file`.
+  - Перед вызовом установщика выложить `/root/awg0-client-<имя>.conf` (0600) из состояния; после — удалить, чужие файлы восстановить из копии.
+  - Уборка выполняется и при отказе: приватные ключи не остаются после неудачной миграции.
+  - **Acceptance:** миграция находит каждый конфиг по публичному ключу; после успеха и после отказа в `/root` нет созданных HYDRA файлов; чужие не изменены.
+  - **Dependency:** TSK-018.
+  - _Requirements: R14._
+
+- [ ] **TSK-020 — Проверка переключения на живом сервере**
+  - Владелец: переключить 2.0 → 3.0 → 3.1 на сервере, где пиров создала HYDRA; приложить вывод `--protocol-status` и `awg show`.
+  - **Acceptance:** статус подтверждает целевой режим; клиент подключается (сначала HB2 из `alpha2`).
+  - **Dependency:** TSK-019.
+  - _Requirements: R13, R14._

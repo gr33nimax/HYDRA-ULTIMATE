@@ -42,7 +42,11 @@ class AwgRuntimeMixin:
 
         def observed_protocol_mode(self) -> str: ...
 
-        def migrate_protocol_mode(self, mode: object) -> None: ...
+        def migrate_protocol_mode(
+            self,
+            mode: object,
+            state: PluginStateAccess | None = None,
+        ) -> None: ...
 
         def installer_identity(self) -> str: ...
 
@@ -122,7 +126,7 @@ class AwgRuntimeMixin:
         if isinstance(protocol_mode, str):
             try:
                 if self.observed_protocol_mode() != protocol_mode:
-                    self.migrate_protocol_mode(protocol_mode)
+                    self.migrate_protocol_mode(protocol_mode, state)
             except RuntimeError:
                 ok = False
         units = (

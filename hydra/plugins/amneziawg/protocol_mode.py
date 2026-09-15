@@ -17,7 +17,11 @@ class AwgProtocolModeMixin:
 
         def observed_protocol_mode(self) -> str: ...
 
-        def migrate_protocol_mode(self, mode: object) -> None: ...
+        def migrate_protocol_mode(
+            self,
+            mode: object,
+            state: PluginStateAccess | None = None,
+        ) -> None: ...
 
         def _conf_path(self, profile_name: str) -> Path: ...
 
@@ -58,7 +62,7 @@ class AwgProtocolModeMixin:
         if desired == target and observed == target:
             return False
         if observed != target:
-            self.migrate_protocol_mode(target)
+            self.migrate_protocol_mode(target, state)
         if self.observed_protocol_mode() != target:
             raise RuntimeError("AmneziaWG protocol migration did not reach requested mode")
         conf_path = self._conf_path("desktop")

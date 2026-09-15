@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import re
 from pathlib import Path
@@ -32,6 +33,23 @@ def interface_prefix(text: str) -> str:
             break
         out.append(line)
     return "\n".join(out).strip()
+
+
+# The installer that performs a protocol migration finds peers by this marker and refuses the
+# whole operation when a single peer lacks one or two share it. An email fits neither its
+# alphabet nor its length.
+CLIENT_MARKER_PREFIX = "### Client "
+CLIENT_MARKER_PATTERN = re.compile(r"^### Client (?P<name>[A-Za-z0-9_-]{1,15})$")
+
+
+def client_marker_name(email: str) -> str:
+    """Return the stable, upstream-compatible name of one user's peer.
+
+    Derived from the email rather than stored, so a regenerated configuration keeps the same
+    marker and the installer can still recognise a peer it has seen before.
+    """
+    digest = hashlib.sha256(email.strip().encode("utf-8")).hexdigest()
+    return f"u{digest[:12]}"
 
 
 class AwgConfigurationMixin:
@@ -142,6 +160,7 @@ class AwgConfigurationMixin:
                 )
             blocks.extend(
                 (
+                    f"{CLIENT_MARKER_PREFIX}{client_marker_name(user.email)}",
                     f"### {user.email}",
                     "[Peer]",
                     f"PublicKey = {public_key}",

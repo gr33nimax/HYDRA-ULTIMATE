@@ -21,6 +21,10 @@ from hydra.plugins.amneziawg.plugin import (
     AWG_UNIT_1,
     AmneziaWGPlugin,
 )
+from hydra.plugins.amneziawg.configuration import (
+    CLIENT_MARKER_PATTERN,
+    client_marker_name,
+)
 from hydra.plugins.base import PluginCategory, ConfigFragment
 from hydra.core.state import AppState, PluginState, User
 from hydra.services.plugin_commands import PluginCommandService
@@ -945,6 +949,76 @@ def test_apply_writes_both_desired_profiles_after_configure(tmp_path):
     assert "PrivateKey = server-d" in desktop_conf.read_text(encoding="utf-8")
     assert "PrivateKey = server-m" in mobile_conf.read_text(encoding="utf-8")
     assert apply_iface.call_count == 2
+
+
+def test_peer_markers_are_the_shape_the_installer_requires(tmp_path):
+    # The installer that performs a protocol migration finds peers by `### Client <name>` and
+    # refuses the whole operation when a single peer lacks one or two share it — which is exactly
+    # what a live server hit once every other precondition had been satisfied.
+    p = AmneziaWGPlugin()
+    desktop_conf = tmp_path / "awg0.conf"
+    mobile_conf = tmp_path / "awg1.conf"
+    alice = _make_user("alice@example.com", "alice")
+    bob = _make_user("bob@example.com", "bob")
+    for user in (alice, bob):
+        _set_keys(user, "desktop", "d")
+        _set_keys(user, "mobile", "m")
+    state = AppState(
+        protocols={
+            "amneziawg": PluginState(
+                enabled=True,
+                config={
+                    "profiles": {
+                        "desktop": {
+                            "interface": AWG_INTERFACE,
+                            "port": 51820,
+                            "network": "10.67.67.0/24",
+                            "server_private_key": "server-d",
+                            "obfuscation": {"Jc": "4"},
+                        },
+                        "mobile": {
+                            "interface": AWG_INTERFACE_1,
+                            "port": 51821,
+                            "network": "10.68.68.0/24",
+                            "server_private_key": "server-m",
+                            "obfuscation": {"Jc": "3"},
+                        },
+                    },
+                },
+            ),
+        },
+        users=[alice, bob],
+    )
+
+    with (
+        patch("hydra.plugins.amneziawg.plugin.AWG_CONF", desktop_conf),
+        patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1", mobile_conf),
+        patch.object(p, "_apply_iface", return_value=True),
+    ):
+        p.configure(state)
+        assert p.apply(state) is True
+
+    text = desktop_conf.read_text(encoding="utf-8")
+    markers = [line for line in text.splitlines() if line.startswith("### Client ")]
+    assert len(markers) == 2, "every peer needs exactly one marker"
+    for marker in markers:
+        assert CLIENT_MARKER_PATTERN.fullmatch(marker), marker
+    assert {line.removeprefix("### Client ") for line in markers} == {
+        client_marker_name("alice@example.com"),
+        client_marker_name("bob@example.com"),
+    }
+    assert "### alice@example.com" in text, "the readable email stays beside the marker"
+
+    # Stable across a regeneration: the installer has to recognise a peer it has seen before.
+    with (
+        patch("hydra.plugins.amneziawg.plugin.AWG_CONF", desktop_conf),
+        patch("hydra.plugins.amneziawg.plugin.AWG_CONF_1", mobile_conf),
+        patch.object(p, "_apply_iface", return_value=True),
+    ):
+        p.configure(state)
+        assert p.apply(state) is True
+    regenerated = desktop_conf.read_text(encoding="utf-8")
+    assert {line for line in regenerated.splitlines() if line.startswith("### Client ")} == set(markers)
 
 
 def test_client_config_and_amnezia_link_are_read_only(tmp_path):
