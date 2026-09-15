@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -21,6 +22,10 @@ NAIVE_FORWARD_PROXY_MODULE = (
 # deliberately does not serve UDP over TCP. Same handler and Caddyfile surface,
 # so the only difference the operator sees is the missing UoT path.
 NAIVE_FORWARD_PROXY_STOCK_MODULE = "github.com/caddyserver/forwardproxy@0aab84dad4fc2830789f34e27b4d7bc22a40889e"
+
+# The Go tarball is unpacked into /tmp before it replaces /usr/local/go: a full /tmp turned that
+# into a confusing tar error halfway through an installation that had already downloaded 70 MB.
+GO_UNPACK_REQUIRED_BYTES = 1024 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -99,8 +104,7 @@ def ensure_modern_go(
             pass
 
     print(
-        "  Modern Go compiler (>= 1.25) not found. "
-        f"Installing official Go {settings.go_version}..."
+        f"  Компилятор Go {settings.go_version} не найден: скачиваю официальную сборку Go {settings.go_version}..."
     )
     go_tar = Path(f"/tmp/hydra-go-{os.getpid()}.tar.gz")
     from hydra.utils.net import detect_arch
@@ -113,7 +117,30 @@ def ensure_modern_go(
     from hydra.utils.downloader import download
 
     digest = official_digest(go_filename)
-    if not (digest and download(go_url, go_tar, sha256=digest)):
+    if not digest:
+        print("  Не удалось получить контрольную сумму официального Go из go.dev")
+        return False
+    # A slow link is not a broken host: the toolchain is about 70 MB and the shared download
+    # timeout is two minutes, so the same attempt is made again instead of failing the whole
+    # installation on one unlucky transfer.
+    downloaded = False
+    for attempt in range(1, 4):
+        if download(go_url, go_tar, timeout=600, sha256=digest):
+            downloaded = True
+            break
+        print(f"  Загрузка Go не удалась (попытка {attempt} из 3)")
+        if attempt < 3:
+            time.sleep(5)
+    if not downloaded:
+        return False
+
+    free_bytes = shutil.disk_usage("/tmp").free
+    if free_bytes < GO_UNPACK_REQUIRED_BYTES:
+        print(
+            "  Недостаточно места в /tmp для распаковки Go: нужно около "
+            f"{GO_UNPACK_REQUIRED_BYTES // (1024 * 1024)} МБ, свободно "
+            f"{free_bytes // (1024 * 1024)} МБ",
+        )
         return False
 
     extract_root = Path(tempfile.mkdtemp(prefix="hydra-go-", dir="/tmp"))
@@ -146,7 +173,7 @@ def ensure_modern_go(
         if backup_go.exists():
             shutil.move(str(backup_go), str(current_go))
     except Exception as exc:
-        print(f"  Failed to extract Go: {exc}")
+        print(f"  Не удалось распаковать Go: {exc}")
         _restore_previous_go(backup_go, current_go)
     finally:
         go_tar.unlink(missing_ok=True)
@@ -171,7 +198,7 @@ def run_caddy_build(
             timeout=timeout,
         )
     except Exception as exc:
-        print(f"  caddy-l4 build failed: {exc}")
+        print(f"  Сборка caddy-l4 не удалась: {exc}")
         return None
 
 
@@ -187,7 +214,7 @@ def _ensure_xcaddy_binary(
         from hydra.utils.net import detect_arch
 
         xcaddy_tar = Path("/tmp/xcaddy.tar.gz")
-        print("  Downloading precompiled xcaddy from GitHub...")
+        print("  Скачиваю готовый xcaddy с GitHub...")
         if download_github_asset(
             "caddyserver/xcaddy",
             f"linux_{detect_arch()}.tar.gz",
@@ -196,20 +223,22 @@ def _ensure_xcaddy_binary(
             try:
                 extract_tarball(xcaddy_tar, Path(f"{go_path}/bin"))
                 os.chmod(xcaddy_binary, 0o755)
-                print("  Successfully downloaded and extracted xcaddy.")
+                print("  xcaddy распакован.")
             except Exception as exc:
-                print(f"  Failed to extract xcaddy: {exc}")
+                print(f"  Не удалось распаковать xcaddy: {exc}")
             finally:
                 xcaddy_tar.unlink(missing_ok=True)
         else:
-            print("  Downloading precompiled xcaddy failed.")
+            print("  Не удалось скачать готовый xcaddy.")
 
     if not os.path.exists(xcaddy_binary):
+        # The pinned archive could not be fetched, so this fallback builds whatever the module
+        # proxy serves today — a different version from the one the release was tested with.
         print(
-            "  Trying go install "
-            "github.com/caddyserver/xcaddy/cmd/xcaddy@latest...",
+            "  Готовый xcaddy недоступен: собираю из исходников, версия не закреплена "
+            "(берётся то, что отдаёт прокси модулей)...",
         )
-        host.run(
+        installed = host.run(
             [
                 "go",
                 "install",
@@ -218,9 +247,16 @@ def _ensure_xcaddy_binary(
             capture_output=True,
             env=env,
         )
+        if getattr(installed, "returncode", 1) != 0:
+            print("  Сборка xcaddy из исходников не удалась")
     if os.path.exists(xcaddy_binary):
         return xcaddy_binary
-    return shutil.which("xcaddy") or "xcaddy"
+    resolved = shutil.which("xcaddy")
+    if resolved:
+        return resolved
+    # An empty answer, not the bare name: a build started with a command that does not exist
+    # fails with a message nobody can act on.
+    return ""
 
 
 def install(
@@ -243,9 +279,9 @@ def install(
 
     del state  # Naive runs in its own binary, independently of the L4 router.
 
-    print("  Installing Go compiler...")
+    print("  Устанавливаю компилятор Go...")
     if not ensure_go():
-        print("  Failed to install a modern Go compiler. Trying apt fallback...")
+        print("  Современный компилятор Go поставить не удалось. Пробую установку из apt...")
         host.run(["apt-get", "update"], capture_output=True, timeout=300)
         host.run(
             ["apt-get", "install", "-y", "golang-go"],
@@ -253,7 +289,7 @@ def install(
             timeout=300,
         )
 
-    print(f"  Installing xcaddy and building {settings.binary.name}...")
+    print(f"  Устанавливаю xcaddy и собираю {settings.binary.name}...")
     go_path = "/usr/local/share/go"
     try:
         os.makedirs(go_path, exist_ok=True)
@@ -262,6 +298,9 @@ def install(
         return False
     env = {**os.environ, "GOPATH": go_path, "GOBIN": f"{go_path}/bin"}
     xcaddy_binary = _ensure_xcaddy_binary(go_path, host, env)
+    if not xcaddy_binary:
+        print("  xcaddy недоступен, а без него Caddy не собрать")
+        return False
 
     pending_binary = settings.binary.with_suffix(".pending")
     pending_binary.unlink(missing_ok=True)
@@ -286,8 +325,8 @@ def install(
     if result is None:
         return False
     if result.returncode != 0:
-        print(f"  [Caddy L4 build error] return code: {result.returncode}")
-        print(f"  Error output:\n{result.stderr or result.stdout or ''}")
+        print(f"  Сборка Caddy L4 завершилась с кодом {result.returncode}")
+        print(f"  Вывод сборки:\n{result.stderr or result.stdout or ''}")
         return False
     if not pending_binary.exists():
         return False
@@ -305,7 +344,7 @@ def install(
         or any(name not in modules.stdout for name in required)
     ):
         pending_binary.unlink(missing_ok=True)
-        print("  Built Caddy binary is missing required Hydra modules")
+        print("  В собранном бинарнике Caddy нет нужных модулей HYDRA")
         return False
 
     pending_binary.chmod(0o755)
