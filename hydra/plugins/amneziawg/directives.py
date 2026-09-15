@@ -8,6 +8,11 @@ from typing import Mapping
 
 
 AWG_PROTOCOL_MODES = ("2.0", "3.0", "3.1")
+# wg-quick runs each of these hooks, so a configuration may carry several of them — upstream's own
+# installer writes two PostUp lines. They are not directives HYDRA interprets, and treating a
+# repeat as a duplicate made an existing server's AWG config unreadable, which is where its update
+# stopped. Two values for a directive HYDRA does interpret stay an error.
+REPEATABLE_DIRECTIVE_KEYS = ("PreUp", "PostUp", "PreDown", "PostDown")
 LEGACY_DIRECTIVE_KEYS = (
     "Jc",
     "Jmin",
@@ -82,9 +87,9 @@ class AwgInterfaceDirectives:
             if not match:
                 continue
             key, value = match.groups()
-            if key in values:
+            if key in values and key not in REPEATABLE_DIRECTIVE_KEYS:
                 raise AwgDirectiveError(f"duplicate AmneziaWG directive: {key}")
-            values[key] = value
+            values.setdefault(key, value)
         if not found_interface:
             raise AwgDirectiveError("missing [Interface] section")
         return cls(values=values)

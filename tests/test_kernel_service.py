@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from subprocess import CompletedProcess
 from types import SimpleNamespace
 
 import pytest
@@ -182,6 +183,34 @@ def test_kernel_candidate_error_redacts_secret_detail(tmp_path) -> None:
 
     assert "hunter2" not in str(failure.value)
     assert str(failure.value) == "candidate rejected the active configuration"
+
+
+def test_kernel_candidate_may_predate_the_contract(tmp_path) -> None:
+    # Rolling back to the release that ran a minute ago must not be refused for the shape of a
+    # document that release never printed.
+    config = tmp_path / "config.json"
+    config.write_text("{}", encoding="utf-8")
+    runtime = KernelInfrastructure(
+        HostBackend(),
+        config_path=config,
+        lock_path=tmp_path / "kernel.lock",
+    )
+    runtime._inspect_binary = lambda binary, *, running: KernelRuntimeStatus(
+        True,
+        provider=KERNEL_HYDRACORE,
+    )
+    runtime._contract_payload = lambda binary: {}
+    runtime._legacy_capabilities_payload = lambda binary: {
+        "api_version": 2,
+        "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
+        "features": {"call_vk_parasite": True},
+        "protocols": {"call_modes": ["vk_parasite"]},
+    }
+    runtime._run = lambda binary, *arguments: CompletedProcess(binary, 0, stdout="", stderr="")
+
+    status = runtime._validate_candidate(tmp_path / "sing-box", KERNEL_HYDRACORE)
+
+    assert status.provider == KERNEL_HYDRACORE
 
 
 class CopyFailHost(HostBackend):

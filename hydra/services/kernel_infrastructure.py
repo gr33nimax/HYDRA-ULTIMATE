@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from hydra.contracts.hydracore_calls import supports_vps_contract
+from hydra.contracts.hydracore_calls import supports_native_vk_calls, supports_vps_contract
 from hydra.core.host import HostBackend
 from hydra.core.state_kernel_models import (
     KERNEL_HYDRACORE,
@@ -176,8 +176,8 @@ class KernelInfrastructure:
             raise RuntimeError("kernel candidate failed its version probe")
         return str(result.stdout or "").strip()
 
-    def _contract_payload(self, binary: Path) -> dict:
-        result = self._run(binary, "hydra", "contract", "--json")
+    def _hydra_payload(self, binary: Path, subcommand: str) -> dict:
+        result = self._run(binary, "hydra", subcommand, "--json")
         if result.returncode != 0:
             return {}
         try:
@@ -186,9 +186,27 @@ class KernelInfrastructure:
             return {}
         return payload if isinstance(payload, dict) else {}
 
+    def _contract_payload(self, binary: Path) -> dict:
+        return self._hydra_payload(binary, "contract")
+
+    def _legacy_capabilities_payload(self, binary: Path) -> dict:
+        """What a core built before the product contract answers instead of it."""
+        return self._hydra_payload(binary, "capabilities")
+
     @staticmethod
     def _has_hydracore_contract(payload: dict) -> bool:
         return supports_vps_contract(payload)
+
+    def _accepts_vps_calls(self, binary: Path) -> bool:
+        """Judge a candidate by the contract it prints, or by the document it printed before it.
+
+        Requiring the contract would also refuse the rollback to the release that was running a
+        minute ago, which is the one path that matters when a new core misbehaves.
+        """
+        payload = self._contract_payload(binary)
+        if payload:
+            return self._has_hydracore_contract(payload)
+        return supports_native_vk_calls(self._legacy_capabilities_payload(binary))
 
     def _inspect_binary(self, binary: Path, *, running: bool) -> KernelRuntimeStatus:
         version_output = self._version_output(binary)
@@ -266,15 +284,15 @@ class KernelInfrastructure:
             raise RuntimeError(
                 f"release identity mismatch: expected {provider}, got {status.provider}",
             )
-        if provider == KERNEL_HYDRACORE:
-            payload = self._contract_payload(candidate)
-            if not self._has_hydracore_contract(payload):
-                raise RuntimeError(
-                    "Hydracore must expose identity, the VPS Calls role, and vk_parasite mode",
-                )
+        if provider == KERNEL_HYDRACORE and not self._accepts_vps_calls(candidate):
+            raise RuntimeError(
+                "Hydracore must expose identity, the VPS Calls role, and vk_parasite mode",
+            )
         if self._config_path.exists():
             checked = self._run(candidate, "check", "-c", str(self._config_path))
             if checked.returncode != 0:
+                # The checker's own output stays out of the message on purpose: it carries the
+                # configuration it read, secrets included (test_kernel_candidate_error_redacts…).
                 raise RuntimeError("candidate rejected the active configuration")
         return status
 

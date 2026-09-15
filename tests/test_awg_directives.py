@@ -56,6 +56,23 @@ def test_mode_two_rejects_generation_directives_and_duplicate_directives():
         AwgInterfaceDirectives.parse("[Interface]\nJc = 1\nJc = 2\n")
 
 
+def test_a_config_may_carry_several_wg_quick_hooks():
+    # Upstream's installer writes several PostUp/PostDown lines: a repeat is how wg-quick is told to
+    # run several commands, not a malformed configuration. Rejecting the repeat made an existing
+    # server's AWG config unreadable, and its update stopped exactly there.
+    parsed = AwgInterfaceDirectives.parse(
+        "[Interface]\n"
+        "PrivateKey = server-private\n"
+        "Address = 10.67.67.1/24\n"
+        "PostUp = iptables -I FORWARD -i %i -j ACCEPT\n"
+        "PostUp = iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE\n"
+        "PostDown = iptables -D FORWARD -i %i -j ACCEPT\n"
+        "\n[Peer]\nPublicKey = peer\n"
+    )
+
+    assert parsed.values["PostUp"].startswith("iptables -I FORWARD")
+
+
 def test_replace_generation_directives_preserves_legacy_unknown_and_peers():
     source = AwgInterfaceDirectives.parse(
         AWG3.replace("KeepaliveTimeout = 10\n", "KeepaliveTimeout = 10\nRandomTrailers = 55\n")
