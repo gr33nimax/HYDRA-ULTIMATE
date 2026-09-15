@@ -1093,7 +1093,7 @@ def test_awg31_throne_and_amnezia_links_include_full_directives(tmp_path):
     assert "header_protection_key=header" in wg_link
     assert "max_handshake_attempts=7" in wg_link
     assert "random_trailers=true" in wg_link
-    assert "disable_cookies=false" in wg_link
+    assert "disable_cookies=true" in wg_link
     assert vpn_link.startswith("vpn://")
     encoded = vpn_link.removeprefix("vpn://")
     compressed = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
@@ -1107,7 +1107,7 @@ def test_awg31_throne_and_amnezia_links_include_full_directives(tmp_path):
     assert payload["HeaderProtectionKey"] == "header"
     assert payload["MaxHandshakeAttempts"] == "7"
     assert payload["RandomTrailers"] == "on"
-    assert payload["DisableCookies"] == "false"
+    assert payload["DisableCookies"] == "true"
     assert payload["client_ip"] == "10.66.66.2/32"
     assert payload["client_pub_key"] == "public-d"
 
@@ -1186,8 +1186,10 @@ def test_singbox_awg31_exports_boolean_random_trailers(tmp_path):
     amnezia = config["endpoints"][0]["amnezia"]
     # The core expects a JSON boolean; the stringified form is refused by its strict parser.
     assert amnezia["random_trailers"] is True
-    # Cookie replies stay enabled: the app never turns the anti-DoS protection off.
-    assert "disable_cookies" not in amnezia
+    # Both fields are handed to every client of a 3.1 server: an observer that can read the
+    # transport is what 3.1 exists to prevent, and the cookie packet type is the one clients
+    # dropped while its padding was too small.
+    assert amnezia["disable_cookies"] is True
     assert amnezia["header_protection_key"] == "header"
     assert amnezia["max_handshake_attempts"] == "7"
 

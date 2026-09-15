@@ -209,12 +209,10 @@ class AwgClientLinksMixin:
             except (TypeError, ValueError):
                 options[normalized] = str(value)
         for key, value in AwgClientLinksMixin._generation_fields(profile).items():
-            if key == "DisableCookies":
-                continue
             normalized = re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
-            if key == "RandomTrailers":
-                # The core expects a JSON boolean here; a stringified one is refused by
-                # its strict configuration parser.
+            if key in {"RandomTrailers", "DisableCookies"}:
+                # The core expects JSON booleans here; stringified ones are refused by its strict
+                # configuration parser.
                 options[normalized] = _boolean(value)
                 continue
             options[normalized] = str(value)
@@ -434,7 +432,10 @@ class AwgClientLinksMixin:
             if key in GENERATION_DIRECTIVE_KEYS and value not in (None, "")
         }
         if data.directives.mode == "3.1":
-            fields["DisableCookies"] = "false"
+            # Both fields are handed to every client of a 3.1 server, whatever the host happened to
+            # carry: an observer that can read the transport is what 3.1 exists to prevent, and the
+            # cookie packet type is the one clients dropped while its padding was too small.
+            fields["DisableCookies"] = "true"
         return fields
 
     def _amnezia_payload(

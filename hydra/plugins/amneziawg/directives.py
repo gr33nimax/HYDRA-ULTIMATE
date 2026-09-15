@@ -121,7 +121,12 @@ class AwgInterfaceDirectives:
                 f"AWG 3.1 directive is not allowed in mode 3.0: {', '.join(unsupported)}",
             )
         disable_cookies = self.values.get("DisableCookies", "").strip().lower()
-        if disable_cookies not in ("", "0", "false", "off", "no"):
+        if canonical != "3.1" and disable_cookies not in ("", "0", "false", "off", "no"):
+            # 3.1 is the mode where clients are handed cookies off by decision — the cookie packet
+            # type is the one they dropped while its padding was too small for the header protection
+            # nonce, and the owner's working configuration has it off. An existing 3.1 server may
+            # still carry the upstream default, so both values are accepted here and the mode is
+            # normalized where it is switched, not where it is read.
             raise AwgDirectiveError("DisableCookies must remain disabled")
         return AwgInterfaceDirectives(self.values, canonical)
 
