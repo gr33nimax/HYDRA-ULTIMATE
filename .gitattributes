@@ -1,0 +1,6 @@
+# The installer and the maintenance scripts are line-oriented shell scripts, not
+# Windows artifacts: keep them LF in the working tree so analysers see the same
+# bytes the index holds. shellcheck reads a carriage return as part of the
+# command, and every Windows checkout otherwise reported the whole file as
+# broken — including files nobody had touched.
+*.sh text eol=lf
