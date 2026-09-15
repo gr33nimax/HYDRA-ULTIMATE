@@ -1,10 +1,12 @@
 """
 hydra/plugins/amneziawg/presets.py — Carrier-пресеты и стратегии обфускации для AmneziaWG.
 """
+
 from __future__ import annotations
 import random
 from typing import Optional, Any
 from dataclasses import dataclass
+
 
 @dataclass
 class Strategy:
@@ -20,6 +22,7 @@ class Strategy:
     h_randomize: bool
     i1_mode: str  # "random" | "absent"
 
+
 @dataclass
 class CarrierOverride:
     label: str
@@ -31,6 +34,7 @@ class CarrierOverride:
     s1_range: tuple[int, int] | None = None
     s2_range: tuple[int, int] | None = None
     i1_mode: str | None = None
+
 
 STRATEGIES: dict[str, Strategy] = {
     "wired": Strategy(
@@ -139,17 +143,23 @@ LEGACY_PRESET_MAP = {
 CARRIER_PRESETS: dict[str, dict] = {
     "default": {
         "label": "Default (проводной интернет)",
-        "jc_min": 3, "jc_max": 6,
-        "jmin_min": 40, "jmin_max": 89,
-        "jmax_delta_min": 50, "jmax_delta_max": 250,
+        "jc_min": 3,
+        "jc_max": 6,
+        "jmin_min": 40,
+        "jmin_max": 89,
+        "jmax_delta_min": 50,
+        "jmax_delta_max": 250,
         "i1_mode": "random",
         "description": "Универсальный пресет для проводного интернета.",
     },
     "mobile": {
         "label": "Mobile (универсальный для мобильных DPI)",
-        "jc_min": 3, "jc_max": 3,
-        "jmin_min": 30, "jmin_max": 50,
-        "jmax_delta_min": 20, "jmax_delta_max": 80,
+        "jc_min": 3,
+        "jc_max": 3,
+        "jmin_min": 30,
+        "jmin_max": 50,
+        "jmax_delta_min": 20,
+        "jmax_delta_max": 80,
         "i1_mode": "random",
         "description": "Jc=3 фиксированный, узкий Jmax. Для мобильных с ТСПУ.",
     },
@@ -298,6 +308,7 @@ def generate_params(
         "I1": i1,
     }
 
+
 def list_presets() -> list[dict]:
     """Возвращает список доступных пресетов (для обратной совместимости)."""
     legacy_info = {
@@ -309,26 +320,25 @@ def list_presets() -> list[dict]:
         "beeline": ("Билайн (Россия)", "Работает default preset."),
         "tattelecom": ("Таттелеком / Летай", "Mobile preset подходит."),
     }
-    return [
-        {"name": name, "label": label, "description": desc}
-        for name, (label, desc) in legacy_info.items()
-    ]
+    return [{"name": name, "label": label, "description": desc} for name, (label, desc) in legacy_info.items()]
+
 
 def list_strategies() -> list[dict]:
     """Возвращает список доступных стратегий."""
-    return [
-        {"name": k, "label": v.label, "description": v.description}
-        for k, v in STRATEGIES.items()
-    ]
+    return [{"name": k, "label": v.label, "description": v.description} for k, v in STRATEGIES.items()]
+
 
 def list_carriers(strategy: str = "mobile") -> list[dict]:
     """Возвращает список операторов для стратегии."""
     out = []
-    out.append({"name": "generic", "label": "📶 Универсальный мобильный", "description": "Подходит большинству операторов"})
+    out.append(
+        {"name": "generic", "label": "📶 Универсальный мобильный", "description": "Подходит большинству операторов"}
+    )
     for k, v in CARRIER_OVERRIDES.items():
         if v.base_strategy == strategy or (strategy == "wired" and k == "beeline"):
             out.append({"name": k, "label": v.label, "description": v.description})
     return out
+
 
 def validate_params(params: dict, protocol_mode: str = "2.0") -> tuple[bool, str]:
     """
@@ -336,6 +346,7 @@ def validate_params(params: dict, protocol_mode: str = "2.0") -> tuple[bool, str
     Возвращает (True, "") или (False, "сообщение об ошибке").
     """
     try:
+
         def get_int(k):
             val = params.get(k, 0)
             if isinstance(val, str) and val.isdigit():
@@ -393,7 +404,10 @@ def validate_params(params: dict, protocol_mode: str = "2.0") -> tuple[bool, str
             h_vals.append(v)
 
         if len(set(h_vals)) != 4:
-            return False, f"Заголовки H1-H4 должны быть уникальными (получено: H1={h_vals[0]}, H2={h_vals[1]}, H3={h_vals[2]}, H4={h_vals[3]})"
+            return (
+                False,
+                f"Заголовки H1-H4 должны быть уникальными (получено: H1={h_vals[0]}, H2={h_vals[1]}, H3={h_vals[2]}, H4={h_vals[3]})",
+            )
 
         i1 = params.get("I1", "")
         if i1:

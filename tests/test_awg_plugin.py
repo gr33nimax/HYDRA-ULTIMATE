@@ -1160,16 +1160,22 @@ def test_3x_paddings_are_one_safe_value_and_2x_is_untouched():
     # value at least as large as the nonce, and upstream asks for identical values once
     # RandomTrailers is on. The 2.0 ranges draw per type and allow zeros — which is what a live
     # server met, and why its cookie packets were dropped.
-    for strategy in ("wired", "mobile", "stealth", "low_latency"):
-        params = generate_params(strategy=strategy, seed=7, protocol_mode="3.1")
-        assert {params["S1"], params["S2"], params["S3"], params["S4"]} == {"32"}, strategy
-        ok, reason = validate_params(params, protocol_mode="3.1")
-        assert ok, reason
+    # Both 3.x generations carry header protection, so both need the padding rule; only 3.1 has
+    # the two extra fields, and those are not drawn here.
+    for mode in ("3.0", "3.1"):
+        for strategy in ("wired", "mobile", "stealth", "low_latency"):
+            params = generate_params(strategy=strategy, seed=7, protocol_mode=mode)
+            assert {params["S1"], params["S2"], params["S3"], params["S4"]} == {"32"}, (mode, strategy)
+            ok, reason = validate_params(params, protocol_mode=mode)
+            assert ok, reason
+            assert "RandomTrailers" not in params, mode
+            assert "DisableCookies" not in params, mode
 
     legacy = generate_params(strategy="stealth", seed=7)
-    ok, reason = validate_params(legacy, protocol_mode="3.1")
-    assert not ok, "a set drawn for 2.0 must be refused for 3.x"
-    assert "S1" in reason and "S4" in reason
+    for mode in ("3.0", "3.1"):
+        ok, reason = validate_params(legacy, protocol_mode=mode)
+        assert not ok, f"a set drawn for 2.0 must be refused for {mode}"
+        assert "S1" in reason and "S4" in reason
     assert validate_params(legacy)[0] is True, "2.0 behaviour is untouched"
 
 
