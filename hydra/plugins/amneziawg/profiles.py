@@ -120,6 +120,7 @@ class AwgProfileMixin:
         preset: str,
         *,
         default_strategy: str,
+        protocol_mode: str = "2.0",
     ) -> dict[str, str]:
         from hydra.plugins.amneziawg.presets import (
             LEGACY_PRESET_MAP,
@@ -139,7 +140,7 @@ class AwgProfileMixin:
             strategy, carrier = LEGACY_PRESET_MAP[preset]
         else:
             strategy = preset
-        return generate_params(strategy=strategy, carrier=carrier)
+        return generate_params(strategy=strategy, carrier=carrier, protocol_mode=protocol_mode)
 
     @staticmethod
     def _private_key_from_conf(conf_path: Path) -> str:
@@ -286,6 +287,7 @@ class AwgProfileMixin:
         obfuscation = self._generate_obfuscation(
             preset,
             default_strategy="mobile",
+            protocol_mode=str(protocol.config.get("protocol_mode", "2.0")),
         )
         pending_credentials = self._missing_profile_credentials(state)
         profiles["mobile"] = {
@@ -303,7 +305,7 @@ class AwgProfileMixin:
         return True
 
     @staticmethod
-    def _copied_profiles(raw_profiles: object) -> dict[str, dict]:
+    def _copied_profiles(raw_profiles: object) -> dict[str, Any]:
         if not isinstance(raw_profiles, dict):
             return {}
         return {key: dict(value) for key, value in raw_profiles.items() if isinstance(value, dict)}
@@ -363,8 +365,8 @@ class AwgProfileMixin:
     def rotate_obfuscation(
         self,
         state: PluginStateAccess,
-        profile: str = None,
-        preset: str = None,
+        profile: str | None = None,
+        preset: str | None = None,
     ) -> bool:
         """Rotate desired obfuscation; runtime changes happen in ``apply``."""
         profile_name = profile or "desktop"
@@ -386,6 +388,7 @@ class AwgProfileMixin:
         new_params = self._generate_obfuscation(
             selected_preset,
             default_strategy=("wired" if profile_name == "desktop" else "mobile"),
+            protocol_mode=str(protocol.config.get("protocol_mode", "2.0")),
         )
         pending_credentials = [
             (user, self._generate_keys())

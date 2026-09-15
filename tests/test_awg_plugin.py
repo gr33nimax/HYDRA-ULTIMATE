@@ -25,6 +25,7 @@ from hydra.plugins.amneziawg.configuration import (
     CLIENT_MARKER_PATTERN,
     client_marker_name,
 )
+from hydra.plugins.amneziawg.presets import generate_params, validate_params
 from hydra.plugins.base import PluginCategory, ConfigFragment
 from hydra.core.state import AppState, PluginState, User
 from hydra.services.plugin_commands import PluginCommandService
@@ -1152,6 +1153,24 @@ def test_singbox_awg30_exports_source_proven_generation_fields(tmp_path):
             "max_handshake_attempts": "7",
         }.items()
     )
+
+
+def test_3x_paddings_are_one_safe_value_and_2x_is_untouched():
+    # In 3.x the padding carries the header protection material, so every packet type needs one
+    # value at least as large as the nonce, and upstream asks for identical values once
+    # RandomTrailers is on. The 2.0 ranges draw per type and allow zeros — which is what a live
+    # server met, and why its cookie packets were dropped.
+    for strategy in ("wired", "mobile", "stealth", "low_latency"):
+        params = generate_params(strategy=strategy, seed=7, protocol_mode="3.1")
+        assert {params["S1"], params["S2"], params["S3"], params["S4"]} == {"32"}, strategy
+        ok, reason = validate_params(params, protocol_mode="3.1")
+        assert ok, reason
+
+    legacy = generate_params(strategy="stealth", seed=7)
+    ok, reason = validate_params(legacy, protocol_mode="3.1")
+    assert not ok, "a set drawn for 2.0 must be refused for 3.x"
+    assert "S1" in reason and "S4" in reason
+    assert validate_params(legacy)[0] is True, "2.0 behaviour is untouched"
 
 
 def test_singbox_awg31_exports_boolean_random_trailers(tmp_path):

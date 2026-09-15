@@ -162,10 +162,46 @@ JMAX_MAX = 1280
 S3_MAX = 64
 S4_MAX = 32
 
+# In 3.x the padding of every packet type carries the material the header protection is built
+# from, so each type needs a padding at least as large as its nonce, and upstream recommends
+# identical values once RandomTrailers is on. The 2.0 ranges above are drawn per type and allow
+# zeros — legal there, a dropped packet here. 32 is above any plausible nonce and below every
+# ceiling clients accept.
+AWG3_PADDING = 32
+
+
+def _draw_paddings(
+    local_random: Any,
+    *,
+    protocol_mode: str,
+    s1_range: tuple[int, int],
+    s2_range: tuple[int, int],
+    s3_range: tuple[int, int],
+    s4_range: tuple[int, int],
+) -> tuple[int, int, int, int]:
+    """Draw the four packet paddings for one strategy.
+
+    In 3.x the padding of every packet type carries the material the header protection is built
+    from: each type needs a value at least as large as its nonce, and upstream recommends identical
+    values once RandomTrailers is on. The 2.0 ranges are drawn per type and allow zeros — legal
+    there, a dropped packet here.
+    """
+    if str(protocol_mode).strip() not in ("", "2.0"):
+        return AWG3_PADDING, AWG3_PADDING, AWG3_PADDING, AWG3_PADDING
+    s1 = local_random.randint(s1_range[0], s1_range[1])
+    s2 = local_random.randint(s2_range[0], s2_range[1])
+    while s1 + 56 == s2:
+        s2 = local_random.randint(s2_range[0], s2_range[1])
+    s3 = local_random.randint(s3_range[0], s3_range[1])
+    s4 = local_random.randint(s4_range[0], s4_range[1])
+    return s1, s2, s3, s4
+
+
 def generate_params(
     strategy: str = "wired",
     carrier: str | None = None,
     seed: int | None = None,
+    protocol_mode: str = "2.0",
 ) -> dict[str, str]:
     """
     Генерирует конкретные значения параметров обфускации по стратегии и оператору.
@@ -219,14 +255,14 @@ def generate_params(
     jmax_delta = local_random.randint(jmax_delta_range[0], jmax_delta_range[1])
     jmax = min(jmin + jmax_delta, JMAX_MAX)
 
-    # Генерация S1 и S2 с ограничением S1 + 56 != S2
-    s1 = local_random.randint(s1_range[0], s1_range[1])
-    s2 = local_random.randint(s2_range[0], s2_range[1])
-    while s1 + 56 == s2:
-        s2 = local_random.randint(s2_range[0], s2_range[1])
-
-    s3 = local_random.randint(s3_range[0], s3_range[1])
-    s4 = local_random.randint(s4_range[0], s4_range[1])
+    s1, s2, s3, s4 = _draw_paddings(
+        local_random,
+        protocol_mode=protocol_mode,
+        s1_range=s1_range,
+        s2_range=s2_range,
+        s3_range=s3_range,
+        s4_range=s4_range,
+    )
 
     # Генерация уникальных заголовков H1-H4
     h_vals: list[int] = []
@@ -294,7 +330,7 @@ def list_carriers(strategy: str = "mobile") -> list[dict]:
             out.append({"name": k, "label": v.label, "description": v.description})
     return out
 
-def validate_params(params: dict) -> tuple[bool, str]:
+def validate_params(params: dict, protocol_mode: str = "2.0") -> tuple[bool, str]:
     """
     Валидирует параметры обфускации.
     Возвращает (True, "") или (False, "сообщение об ошибке").
@@ -339,6 +375,14 @@ def validate_params(params: dict) -> tuple[bool, str]:
         s4 = get_int("S4")
         if s4 < 0 or s4 > S4_MAX:
             return False, f"S4={s4} вне диапазона (0-{S4_MAX})"
+
+        if str(protocol_mode).strip() not in ("", "2.0"):
+            paddings = (s1, s2, s3, s4)
+            if len(set(paddings)) != 1 or paddings[0] < AWG3_PADDING:
+                return False, (
+                    f"Режим {protocol_mode} требует одинаковых S1–S4 не меньше {AWG3_PADDING}: "
+                    f"сейчас S1={s1} S2={s2} S3={s3} S4={s4}"
+                )
 
         # Валидация H1-H4 (до uint32) и уникальности
         h_vals = []
