@@ -435,6 +435,13 @@ def test_calls_apply_opens_listener_and_rollback_restores_firewall(monkeypatch) 
 
 
 class SubscriptionPlugins:
+    """The narrowest plugin catalog a legacy subscription may use.
+
+    Every member a legacy path could reach is present and fails loudly: the test proves that the
+    Calls profile is not reachable through the old subscription route, and a member left out would
+    have made that proof a matter of which attribute happened to be missing.
+    """
+
     def __init__(self, plugin: CallsPlugin) -> None:
         self.plugin = plugin
         self.client_link_called = False
@@ -442,9 +449,30 @@ class SubscriptionPlugins:
     def enabled_transports(self, state):
         return [self.plugin]
 
-    def client_links(self, plugin, user, state):
+    def client_links(self, plugin, user, state, **parameters):
         self.client_link_called = True
         return ["call://must-not-leak"]
+
+    def get(self, name):
+        return self._unused()
+
+    def status(self, plugin, state):
+        return self._unused()
+
+    def client_link(self, plugin, user, state, **parameters):
+        return self._unused()
+
+    def client_config(self, plugin, user, state, **parameters):
+        return self._unused()
+
+    def singbox_client_config(self, plugin, user, state, *, apply_name=True):
+        return self._unused()
+
+    def profiles(self, plugin, state):
+        return self._unused()
+
+    def _unused(self):
+        raise AssertionError("a legacy subscription must not reach the plugin catalog")
 
 
 def test_calls_profile_never_enters_legacy_user_subscriptions() -> None:
