@@ -131,6 +131,9 @@ chmod 600 "$LOG_FILE"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 if [[ -f /etc/os-release ]]; then
+    # A system file that exists at run time on every supported host: shellcheck cannot follow it
+    # and says so (SC1091), which is information rather than a defect to fix in the script.
+    # shellcheck source=/dev/null
     . /etc/os-release
     OS=$ID
     VER=$VERSION_ID
