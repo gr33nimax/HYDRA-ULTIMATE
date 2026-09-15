@@ -181,6 +181,24 @@ def test_install_reports_the_installer_failure_without_its_configuration(capsys)
     assert "SECRETKEYMATERIAL" not in printed
 
 
+def test_uninstall_reports_a_package_manager_that_outlasts_its_budget(capsys):
+    # Purging the module package rebuilds DKMS entries for every kernel. Killing apt half-way
+    # through leaves dpkg in pieces — as it did on a live server — so the removal reports the
+    # failure and never raises it into the menu.
+    p = AmneziaWGPlugin()
+
+    def run(command, **kwargs):
+        if command[:2] == ["apt-get", "purge"]:
+            assert kwargs["timeout"] >= 600, "a package purge was given the command default"
+            raise RuntimeError("Command timed out after 30s: apt-get purge")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("hydra.plugins.amneziawg.plugin.HOST.run", side_effect=run):
+        assert p.uninstall() is False
+
+    assert "timed out" in capsys.readouterr().out
+
+
 def test_status_uses_persisted_lifecycle_instead_of_config_presence():
     p = AmneziaWGPlugin()
     state = AppState(

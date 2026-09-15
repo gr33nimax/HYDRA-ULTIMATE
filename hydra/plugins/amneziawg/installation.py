@@ -178,18 +178,34 @@ class AwgInstallationMixin:
         for unit in (AWG_UNIT, AWG_UNIT_1):
             HOST.run(["systemctl", "stop", unit], capture_output=True)
             HOST.run(["systemctl", "disable", unit], capture_output=True)
-        HOST.run(
-            [
-                "apt-get",
-                "purge",
-                "-y",
-                "-qq",
-                "amneziawg",
-                "amneziawg-tools",
-                "amneziawg-dkms",
-            ],
-            capture_output=True,
-        )
+        try:
+            purged = HOST.run(
+                [
+                    "apt-get",
+                    "purge",
+                    "-y",
+                    "-qq",
+                    "amneziawg",
+                    "amneziawg-tools",
+                    "amneziawg-dkms",
+                ],
+                capture_output=True,
+                text=True,
+                # Purging the module package rebuilds DKMS entries for every installed kernel: minutes
+                # on a busy host. Thirty seconds killed apt mid-purge once already and left dpkg in
+                # pieces, so this gets a package-manager budget and reports instead of raising into
+                # the menu.
+                timeout=600,
+            )
+        except Exception as exc:
+            print(f"  {exc}")
+            return False
+        if purged.returncode != 0:
+            for line in _installer_failure_lines(purged) or [
+                f"apt-get purge завершился с кодом {purged.returncode}",
+            ]:
+                print(f"  {line}")
+            return False
         HOST.run(["modprobe", "-r", "amneziawg"], capture_output=True)
         HOST.run(
             [
