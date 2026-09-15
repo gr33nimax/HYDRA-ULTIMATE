@@ -37,7 +37,7 @@ def test_protocol_mode_uses_only_upstream_noninteractive_commands(tmp_path):
         plugin.migrate_protocol_mode("3.0")
 
     assert run.call_args_list[2].args[0] == ["bash", str(script), "--protocol-status"]
-    assert run.call_args_list[5].args[0] == ["dpkg", "--audit"]
+    assert run.call_args_list[3].args[0] == ["dpkg", "--audit"]
     assert run.call_args_list[6].args[0] == ["bash", str(script), "--enable-awg3"]
 
 
