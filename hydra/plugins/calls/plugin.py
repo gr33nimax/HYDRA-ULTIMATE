@@ -28,6 +28,21 @@ from hydra.plugins.calls.configuration import (
 from hydra.plugins.context import PluginStateAccess
 
 
+def _udp_port(value: object, fallback: int) -> int:
+    """Read a UDP port that an imported state may have left in any shape at all.
+
+    The firewall side of this plugin used to trust the value. A port that arrived as text, or as
+    something else entirely, took the whole apply down instead of falling back to the configured one.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return fallback
+    try:
+        port = int(value)
+    except ValueError:
+        return fallback
+    return port if 1 <= port <= 65535 else fallback
+
+
 class CallsPlugin(BasePlugin):
     """Contribute the authenticated VK Calls listener to Hydracore."""
 
@@ -72,7 +87,7 @@ class CallsPlugin(BasePlugin):
         inbound = vk_parasite_inbound(state)
         from hydra.utils.firewall import open_udp, port_is_open
 
-        port = int(inbound["listen_port"])
+        port = _udp_port(inbound["listen_port"], DEFAULT_CALL_PORT)
         if not port_is_open("udp", port):
             open_udp(port, "hydra-calls-vk")
 
@@ -84,7 +99,7 @@ class CallsPlugin(BasePlugin):
         from hydra.utils.firewall import close_udp
 
         close_udp(
-            int(desired.config.get("listen_port", DEFAULT_CALL_PORT)),
+            _udp_port(desired.config.get("listen_port"), DEFAULT_CALL_PORT),
             "hydra-calls-vk",
         )
 
@@ -93,7 +108,7 @@ class CallsPlugin(BasePlugin):
         if desired is None:
             return None
         call_mode(state)
-        port = int(vk_parasite_inbound(state)["listen_port"])
+        port = _udp_port(vk_parasite_inbound(state)["listen_port"], DEFAULT_CALL_PORT)
         from hydra.utils.firewall import port_is_open
 
         return {"port": port, "was_open": port_is_open("udp", port)}
@@ -106,7 +121,7 @@ class CallsPlugin(BasePlugin):
 
         call_mode(state)
         if desired.enabled:
-            port = int(vk_parasite_inbound(state)["listen_port"])
+            port = _udp_port(vk_parasite_inbound(state)["listen_port"], DEFAULT_CALL_PORT)
             if not port_is_open("udp", port):
                 open_udp(port, "hydra-calls-vk")
         else:
