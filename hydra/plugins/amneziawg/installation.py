@@ -157,6 +157,9 @@ class AwgInstallationMixin:
             "3.0": "--enable-awg3",
             "3.1": "--enable-awg31",
         }[canonical_mode(mode)]
+        repair = self.package_manager_repair()
+        if repair:
+            raise RuntimeError(repair)
         script = self._managed_installer()
         result = HOST.run(
             ["bash", script, command],
@@ -166,7 +169,10 @@ class AwgInstallationMixin:
             timeout=180,
         )
         if result.returncode != 0:
-            raise RuntimeError("AmneziaWG protocol migration failed")
+            # The installer's own words, and only them: its output holds the configuration it
+            # writes, keys included. A refusal nobody can read is a refusal nobody can fix.
+            detail = "; ".join(_installer_failure_lines(result)) or f"exit code {result.returncode}"
+            raise RuntimeError(f"AmneziaWG protocol migration failed: {detail}")
 
     def uninstall(self) -> bool:
         for unit in (AWG_UNIT, AWG_UNIT_1):

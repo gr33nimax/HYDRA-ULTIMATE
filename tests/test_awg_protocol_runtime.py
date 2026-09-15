@@ -26,6 +26,7 @@ def test_protocol_mode_uses_only_upstream_noninteractive_commands(tmp_path):
                 _result(stdout="https://github.com/wiresock/amneziawg-install.git\n"),
                 _result(stdout="abc\n"),
                 _result(stdout="3.1\n"),
+                _result(),
                 _result(stdout="https://github.com/wiresock/amneziawg-install.git\n"),
                 _result(stdout="abc\n"),
                 _result(),
@@ -36,7 +37,32 @@ def test_protocol_mode_uses_only_upstream_noninteractive_commands(tmp_path):
         plugin.migrate_protocol_mode("3.0")
 
     assert run.call_args_list[2].args[0] == ["bash", str(script), "--protocol-status"]
-    assert run.call_args_list[5].args[0] == ["bash", str(script), "--enable-awg3"]
+    assert run.call_args_list[5].args[0] == ["dpkg", "--audit"]
+    assert run.call_args_list[6].args[0] == ["bash", str(script), "--enable-awg3"]
+
+
+def test_protocol_migration_reports_the_installer_reason(tmp_path):
+    # A migration that refuses without saying why leaves the operator with a server in one mode
+    # and a button that does nothing: the installer's own line is the whole diagnosis.
+    script = tmp_path / "amneziawg-install.sh"
+    script.write_text("#!/bin/bash", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    plugin = AmneziaWGPlugin()
+
+    with (
+        patch("hydra.plugins.amneziawg.installation.AWG_INSTALL_DIR", tmp_path),
+        patch(
+            "hydra.plugins.amneziawg.installation.HOST.run",
+            side_effect=[
+                _result(),
+                _result(stdout="https://github.com/wiresock/amneziawg-install.git\n"),
+                _result(stdout="abc\n"),
+                _result(code=1, stdout="ERROR: awg3 kernel module is not available\n", stderr=""),
+            ],
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="awg3 kernel module is not available"):
+            plugin.migrate_protocol_mode("3.0")
 
 
 def test_protocol_mode_rejects_missing_or_invalid_upstream_status(tmp_path):
