@@ -6,7 +6,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from hydra.core.state_models import AppState, PluginState
+from hydra.plugins.base import BasePlugin
 from hydra.services.application import ApplicationService
+from hydra.ui._menus.naive_uot_setting import (
+    UOT_OPTION,
+    change_uot,
+    uot_option_value,
+)
 from hydra.ui._menus.vless_xhttp_settings import (
     open_menu as _menu_vless_xhttp,
     option as _vless_xhttp_option,
@@ -41,7 +47,7 @@ def _report_change(changed: bool, success_text: str) -> None:
 
 def _parse_int(value: object, label: str) -> int:
     try:
-        return int(value)
+        return int(value) if isinstance(value, (int, str)) else int(str(value))
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{label}: требуется целое число") from exc
 
@@ -71,6 +77,7 @@ def _menu_naive(
             ("2", "HTTP/2 (TCP)", "Максимальная совместимость"),
             ("3", "QUIC (UDP)", "HTTP/3 через UDP"),
             ("4", "HTTP/2 + QUIC", "Оба транспорта"),
+            ("5", UOT_OPTION, uot_option_value(state)),
             ("0", "↩ Отмена", ""),
         ],
         "Настройки NaiveProxy",
@@ -97,6 +104,12 @@ def _menu_naive(
         except ValueError as exc:
             error(str(exc))
         prompt("Нажмите Enter")
+        return
+
+    if selected == "5":
+        changed = change_uot(state, app)
+        if changed is not None:
+            _report_change(changed, "Настройки NaiveProxy обновлены")
         return
 
     network = {"2": "tcp", "3": "quic", "4": "both"}.get(selected)
@@ -168,7 +181,7 @@ def menu_hysteria2_settings(
                 (
                     "1",
                     "🌐 Домен и TLS",
-                    desired.config.get("domain", "не задан"),
+                    str(desired.config.get("domain", "не задан")),
                 ),
                 (
                     "2",
@@ -465,7 +478,7 @@ def settings_option(
 
 def open_settings(
     state: AppState,
-    plugin: object,
+    plugin: BasePlugin,
     app: ApplicationService,
 ) -> bool:
     plugin_name = plugin.meta.name

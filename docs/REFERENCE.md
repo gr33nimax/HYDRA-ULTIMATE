@@ -30,7 +30,7 @@
 | :--- | :--- | :--- |
 | `amneziawg` | AmneziaWG 2.0 / 3.0 / 3.1 | WireGuard-транспорт с upstream-managed protocol mode и TPROXY |
 | `mieru` | Mieru | Обфусцированный mTLS-транспорт с ссылками `mierus://` |
-| `naive` | NaiveProxy | HTTP/2-прокси на базе Caddy forward-proxy |
+| `naive` | NaiveProxy | HTTP/2-прокси на базе Caddy forward-proxy; UoT вкл/выкл |
 | `anytls` | AnyTLS | TLS-подобный обфусцированный туннель |
 | `trusttunnel` | TrustTunnel | TLS-транспорт с режимами TCP/QUIC и сайтом-заглушкой |
 | `hysteria2` | Hysteria2 | QUIC-транспорт с Salamander и браузерной заглушкой |
@@ -97,6 +97,18 @@ Naive собирается из закреплённого fork Caddy и уст�
 валидации фактического бинарника; замена выполняется с backup предыдущего
 рабочего файла. Workflow `.github/workflows/naive-caddy.yml` предназначен для
 сборки и валидации real binary, включая HTTP/1 CONNECT и UoT magic passthrough.
+
+UoT (UDP через TCP) можно выключить: `set_uot` в CLI или пункт «UDP через TCP
+(UoT)» в настройках NaiveProxy. Значение по умолчанию — включено (поведение без
+изменений). Выключение собирает Caddy из upstream `forwardproxy` без UoT-кода
+(вместо закреплённого форка `aUsernameWoW/forwardproxy`) и убирает `uot` из
+клиентских ссылок Shadowrocket; `tfo` и `padding` остаются. Причина такой
+реализации: у форка нет флага «выключить UoT», а при заданном `upstream`
+не работают ни `acl`, ни `ports`, которыми magic-адрес можно было бы заблокировать.
+При выключенном UoT UDP по TCP-профилю Naive не ходит (QUIC-профиль не затронут),
+а клиенты с явным `udp_over_tcp` должны выключить его на своей стороне.
+Если установленный бинарник не соответствует настройке, apply пересобирает его;
+состояние видно командой/меню, а не угадывается.
 На момент этой документации этот workflow ещё не запускался для данного diff.
 
 Hysteria2 по умолчанию использует `8443/udp`. Если профиль работает по Wi-Fi,

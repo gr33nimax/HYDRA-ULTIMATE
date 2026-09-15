@@ -1,5 +1,14 @@
 # Changelog
 
+- NaiveProxy can now run without UDP over TCP. UoT is one plugin setting (`set_uot`,
+  TUI: «UDP через TCP (UoT)»), on by default so nothing changes on its own. Turning it
+  off rebuilds Caddy from the upstream `forwardproxy` module instead of the UoT fork and
+  drops `uot` from Shadowrocket links; the installed build is recognised by probing it,
+  not by a stored marker, so the setting cannot silently disagree with the binary. UDP
+  over the TCP Naive profile stops working when UoT is off; the QUIC transport is
+  unaffected. The fork has no «disable UoT» option, and with `upstream` configured its
+  `acl`/`ports` controls do not apply — which is why the build itself is the switch.
+
 - Snell now renders the generations the migrated HydraCore serves: generation 5 (server
   `version: 5` with a flat `obfs_mode` of `none`/`http`/`tls`) or generation 6 (its own
   `mode` of `default`/`unshaped`/`unsafe-raw`). The plugin used to emit a server-side

@@ -17,6 +17,10 @@ NAIVE_FORWARD_PROXY_MODULE = (
     "github.com/caddyserver/forwardproxy@caddy2="
     "github.com/aUsernameWoW/forwardproxy@c55724423ecd39402624538071f198036be79c25"
 )
+# Upstream forwardproxy without the UoT addition: the build for a server that
+# deliberately does not serve UDP over TCP. Same handler and Caddyfile surface,
+# so the only difference the operator sees is the missing UoT path.
+NAIVE_FORWARD_PROXY_STOCK_MODULE = "github.com/caddyserver/forwardproxy@0aab84dad4fc2830789f34e27b4d7bc22a40889e"
 
 
 @dataclass(frozen=True)
@@ -220,6 +224,7 @@ def install(
     ensure_go: Callable[[], bool],
     build: Callable[[list[str], dict[str, str]], Any | None],
     forward_proxy: bool = False,
+    forward_proxy_module: str = NAIVE_FORWARD_PROXY_MODULE,
     layer4: bool = True,
     validate: Callable[[Path], bool] | None = None,
 ) -> bool:
@@ -261,7 +266,7 @@ def install(
         ]
     build_args = list(base_build)
     if forward_proxy:
-        build_args += ["--with", NAIVE_FORWARD_PROXY_MODULE]
+        build_args += ["--with", forward_proxy_module]
     build_args += ["--output", str(pending_binary)]
 
     result = build(build_args, env)

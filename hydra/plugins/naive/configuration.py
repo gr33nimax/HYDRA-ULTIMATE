@@ -10,6 +10,8 @@ from hydra.core.state_models import AppState
 from hydra.plugins.base import ConfigFragment
 from hydra.plugins.context import PluginStateAccess
 
+from .uot import normalize_uot, uot_enabled
+
 
 def render_caddyfile(
     *,
@@ -21,11 +23,13 @@ def render_caddyfile(
     cert_file: str = "",
     key_file: str = "",
     accept_proxy_protocol: bool = False,
+    uot: bool = True,
 ) -> str:
     """Render a complete Caddyfile without reading or mutating the host."""
     auth_lines = "".join(f"            basic_auth {user['username']} {user['password']}\n" for user in users)
     tls_line = f"    tls {cert_file} {key_file}\n" if cert_file and key_file else ""
     probe_line = "            probe_resistance\n" if auth_lines else ""
+    uot_line = "            passthrough_uot\n" if uot else ""
     listener_wrappers = ""
     if accept_proxy_protocol:
         listener_wrappers = """\
@@ -54,8 +58,7 @@ def render_caddyfile(
 {auth_lines}            hide_ip
             hide_via
 {probe_line}            upstream socks5://127.0.0.1:1080
-            passthrough_uot
-    }}
+{uot_line}    }}
     file_server {{
         root {decoy_dir.as_posix()}
     }}
@@ -116,8 +119,28 @@ class NaiveConfigurationMixin:
             key_file=key_file,
             decoy_url=str(config.get("decoy_url", "")),
             accept_proxy_protocol=port == get_internal_port("naive"),
+            uot=uot_enabled(state),
         )
         return ConfigFragment()
+
+    def set_uot(
+        self,
+        state: PluginStateAccess,
+        uot: object,
+    ) -> bool:
+        """Validate and update the desired UDP-over-TCP (UoT) mode."""
+        value = normalize_uot(uot)
+        if value is None:
+            raise ValueError(
+                "\u041d\u0435\u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u043e\u0435 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 UoT: \u043e\u0436\u0438\u0434\u0430\u0435\u0442\u0441\u044f \u0432\u043a\u043b/\u0432\u044b\u043a\u043b"
+            )
+        protocol = state.protocols.get("naive")
+        if protocol is None:
+            return False
+        if bool(protocol.config.get("uot", True)) == value:
+            return False
+        protocol.config["uot"] = value
+        return True
 
     def set_transport(
         self,
@@ -197,6 +220,7 @@ class NaiveConfigurationMixin:
         key_file: str = "",
         decoy_url: str = "",
         accept_proxy_protocol: bool = False,
+        uot: bool = True,
     ) -> str:
         del probe_secret, decoy_url
         from hydra.core.decoy import DECOY_DIRS
@@ -211,4 +235,5 @@ class NaiveConfigurationMixin:
             cert_file=cert_file,
             key_file=key_file,
             accept_proxy_protocol=accept_proxy_protocol,
+            uot=uot,
         )

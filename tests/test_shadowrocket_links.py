@@ -128,3 +128,28 @@ def test_naive_http3_keeps_custom_tls_name_and_unicode_credentials():
     assert base64.urlsafe_b64decode(parsed.netloc + "=" * (-len(parsed.netloc) % 4)).decode() == (
         "user:пароль@[2001:db8::1]:8443"
     )
+
+
+def test_naive_tcp_variants_drop_uot_when_the_server_does_not_serve_it():
+    links = build_shadowrocket_naive_links(
+        "naive+https://user:password@example.com:443?security=tls&sni=example.com#Naive",
+        uot=False,
+    )
+
+    assert [urlsplit(link).scheme for link in links] == ["https", "http2"]
+    for link in links:
+        query = parse_qs(urlsplit(link).query)
+        assert "uot" not in query
+        assert query["tfo"] == ["1"]
+        assert query["padding"] == ["1"]
+
+
+def test_naive_tcp_variants_keep_uot_by_default():
+    links = build_shadowrocket_naive_links(
+        "naive+https://user:password@example.com:443?security=tls&sni=example.com#Naive",
+    )
+
+    for link in links:
+        query = parse_qs(urlsplit(link).query)
+        assert query["uot"] == ["2"]
+        assert query["tfo"] == ["1"]

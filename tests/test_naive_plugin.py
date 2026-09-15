@@ -574,3 +574,61 @@ def test_apply_reconciles_quic_firewall(tmp_path):
         assert p.apply(state)
     assert data_dir.is_dir()
     reconcile.assert_called_once_with("quic")
+
+
+def test_build_caddyfile_without_uot_keeps_the_rest_of_the_proxy_surface():
+    p = NaivePlugin()
+    caddyfile = p._build_caddyfile(
+        domain="vpn.example.com",
+        port=443,
+        users=[{"username": "testuser", "password": "testpass"}],
+        uot=False,
+    )
+
+    assert "passthrough_uot" not in caddyfile
+    assert "upstream socks5://127.0.0.1:1080" in caddyfile
+    assert "probe_resistance" in caddyfile
+    assert "basic_auth testuser testpass" in caddyfile
+
+
+def test_set_uot_validates_and_persists():
+    p = NaivePlugin()
+    state = AppState(
+        protocols={"naive": PluginState(enabled=True, config={})},
+    )
+
+    assert p.set_uot(state, False) is True
+    assert state.protocols["naive"].config["uot"] is False
+    assert p.set_uot(state, False) is False
+    assert p.set_uot(state, "on") is True
+    assert state.protocols["naive"].config["uot"] is True
+    with pytest.raises(ValueError):
+        p.set_uot(state, "maybe")
+
+
+def test_apply_rebuilds_the_binary_when_the_setting_and_the_build_disagree(tmp_path):
+    p = NaivePlugin()
+    state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
+    state.protocols["naive"].config["uot"] = False
+    p._pending_cfg = "test"
+    config_dir = tmp_path / "config"
+    log_dir = tmp_path / "logs"
+    data_dir = tmp_path / "data"
+
+    with (
+        patch("hydra.plugins.naive.plugin.CFG_DIR", config_dir),
+        patch("hydra.plugins.naive.plugin.LOG_DIR", log_dir),
+        patch("hydra.plugins.naive.plugin.CADDYFILE", config_dir / "Caddyfile"),
+        patch("hydra.plugins.naive.plugin.DATA_DIR", data_dir),
+        patch.object(p, "_create_fake_site"),
+        patch.object(p, "_built_for_uot", return_value=True),
+        patch.object(p, "_validate_caddy", return_value=""),
+        patch.object(p, "_download_binary", return_value=True) as rebuild,
+        patch("hydra.plugins.naive.plugin.HOST.run", return_value=MagicMock(returncode=0)),
+        patch("hydra.plugins.naive.plugin.time.sleep"),
+        patch.object(p, "_sync_transport_firewall"),
+    ):
+        assert p.apply(state)
+
+    # The fork is installed but UoT is off: only a rebuild removes that path.
+    assert rebuild.call_args.kwargs == {"uot": False}

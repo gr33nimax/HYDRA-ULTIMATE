@@ -56,25 +56,31 @@ def _raw_query_values(query: str) -> dict[str, str]:
     return values
 
 
-def build_shadowrocket_https_link(link: str) -> str:
+def build_shadowrocket_https_link(link: str, *, uot: bool = True) -> str:
     """Convert a Naive HTTPS URI to Shadowrocket's HTTPS proxy scheme."""
-    return _http_link(link, "https")
+    return _http_link(link, "https", uot=uot)
 
 
-def build_shadowrocket_naive_links(link: str) -> list[str]:
+def build_shadowrocket_naive_links(link: str, *, uot: bool = True) -> list[str]:
     """Expose HTTP/1.1 and HTTP/2 for TCP, HTTP/3 for the QUIC transport."""
     scheme = urllib.parse.urlsplit(link).scheme.lower()
     if scheme == "naive+https":
         return [
-            build_shadowrocket_https_link(link),
-            _http_link(link, "http2", " HTTP/2"),
+            build_shadowrocket_https_link(link, uot=uot),
+            _http_link(link, "http2", " HTTP/2", uot=uot),
         ]
     if scheme == "naive+quic":
         return [_http_link(link, "http3")]
     return [link]
 
 
-def _http_link(link: str, scheme: str, suffix: str = "") -> str:
+def _http_link(
+    link: str,
+    scheme: str,
+    suffix: str = "",
+    *,
+    uot: bool = True,
+) -> str:
     try:
         parsed = urllib.parse.urlsplit(link)
         source_scheme = "naive+quic" if scheme == "http3" else "naive+https"
@@ -102,7 +108,11 @@ def _http_link(link: str, scheme: str, suffix: str = "") -> str:
             "padding": "1",
         }
         if scheme != "http3":
-            parameters.update({"uot": "2", "tfo": "1"})
+            # UoT is only offered while the server still serves it; TCP Fast Open is
+            # independent of that choice.
+            if uot:
+                parameters["uot"] = "2"
+            parameters["tfo"] = "1"
         query = urllib.parse.urlencode(
             parameters,
             quote_via=urllib.parse.quote,

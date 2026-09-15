@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     _RuntimeLayout = Callable[[], NaiveRuntimeLayout]
     _HostBackend = Callable[[], Any]
     _DownloadBinary = Callable[..., bool]
+    _BuiltForUot = Callable[[], bool | None]
     _DecoyTheme = Callable[[PluginStateAccess], str]
 
 
@@ -52,6 +53,7 @@ class NaiveRuntimeMixin:
         _runtime_layout: _RuntimeLayout
         _host_backend: _HostBackend
         _download_binary: _DownloadBinary
+        _built_for_uot: _BuiltForUot
         decoy_theme: _DecoyTheme
 
     def snapshot(self, state: PluginStateAccess) -> dict[str, Any]:
@@ -118,8 +120,19 @@ class NaiveRuntimeMixin:
         pending = layout.caddyfile.with_suffix(".pending")
         pending.write_text(self._pending_cfg)
         pending.chmod(0o640)
+        from .uot import uot_enabled
+
+        desired_uot = uot_enabled(state)
+        built_uot = self._built_for_uot()
+        if built_uot is not None and built_uot != desired_uot:
+            # The Caddyfile alone cannot express «no UoT»: a stock build accepts it
+            # either way, so the binary has to match the setting.
+            if not self._download_binary(pending, uot=desired_uot):
+                pending.unlink(missing_ok=True)
+                print("  Не удалось собрать caddy-naive для выбранного режима UoT")
+                return False
         error = self._validate_caddy(pending)
-        if error and self._download_binary(pending):
+        if error and self._download_binary(pending, uot=desired_uot):
             error = self._validate_caddy(pending)
         if error:
             pending.unlink(missing_ok=True)

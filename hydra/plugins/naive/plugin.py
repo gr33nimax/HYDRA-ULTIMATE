@@ -24,6 +24,7 @@ from hydra.utils.downloader import (
 from hydra.utils.tls import resolve_tls_material as resolve_tls_material
 
 from .access_logs import NaiveAccessLogMixin
+from .build import NaiveBuildMixin
 from .configuration import NaiveConfigurationMixin
 from .constants import (
     BIN_PATH as BIN_PATH,
@@ -49,6 +50,7 @@ from .runtime import NaiveRuntimeMixin
 class NaivePlugin(
     DecoyThemeSupport,
     NaiveInstallationMixin,
+    NaiveBuildMixin,
     NaiveRuntimeMixin,
     NaiveConfigurationMixin,
     NaiveProfilesMixin,
@@ -67,12 +69,13 @@ class NaivePlugin(
         version="2.0.0",
         needs_domain=True,
         required_commands=("systemctl",),
-        commands=("set_domain", "set_transport", "set_decoy_theme"),
+        commands=("set_domain", "set_transport", "set_decoy_theme", "set_uot"),
         queries=("recent_connections",),
         tls_domain_source="network",
         config_defaults=(
             ("network", "tcp"),
             ("decoy_theme", "landing"),
+            ("uot", True),
         ),
         connection_source="recent_connections",
         backup_resources=(
@@ -103,15 +106,6 @@ class NaivePlugin(
     @staticmethod
     def _host_backend():
         return HOST
-
-    def _installed(self) -> bool:
-        layout = self._runtime_layout()
-        return all(
-            (
-                layout.binary.is_file(),
-                layout.service_file.is_file(),
-            )
-        )
 
     @staticmethod
     def _download_asset(

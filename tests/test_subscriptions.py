@@ -27,7 +27,7 @@ from hydra.services.subscriptions.generator import (
     get_user_access_status,
 )
 from hydra.services.subscriptions.server import SubscriptionHandler
-from hydra.core.state import AppState, User
+from hydra.core.state import AppState, PluginState, User
 from hydra.plugins.base import (
     BasePlugin,
     ConfigFragment,
@@ -341,6 +341,28 @@ def test_generate_shadowrocket_sub_replaces_naive_https_link():
     assert urllib.parse.parse_qs(parsed.query)["remarks"] == [
         "alice@example.com NaiveProxy",
     ]
+
+
+def test_shadowrocket_naive_drops_uot_when_the_server_does_not_serve_it():
+    plugin = MockTransport()
+    plugin.client_links = MagicMock(
+        return_value=[
+            "naive+https://user:password@example.com:443?security=tls&sni=example.com#ignored",
+        ]
+    )
+    user = _make_user("alice@example.com")
+    state = _make_state([user])
+    state.protocols["naive"] = PluginState(config={"network": "tcp", "uot": False})
+
+    encoded = generate_shadowrocket_sub(user, state, plugins=_plugins(plugin))
+    links = base64.b64decode(encoded).decode().splitlines()
+
+    for scheme in ("https", "http2"):
+        parsed_variant = urllib.parse.urlsplit(next(link for link in links if link.startswith(f"{scheme}://")))
+        query = urllib.parse.parse_qs(parsed_variant.query)
+        assert "uot" not in query
+        assert query["tfo"] == ["1"]
+        assert query["padding"] == ["1"]
 
 
 def test_shadowrocket_subscription_converts_only_snell_to_cipher_password():

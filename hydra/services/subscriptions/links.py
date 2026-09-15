@@ -49,6 +49,18 @@ def generate_links(
     return list(dict.fromkeys(links))
 
 
+def _naive_uot_enabled(state: AppState) -> bool:
+    """Read the Naive UoT setting.
+
+    Central layers may not import concrete plugins, so the desired value is read
+    from state; the plugin keeps ownership of its meaning and validation.
+    """
+    protocol = state.protocols.get("naive")
+    if protocol is None or not protocol.config:
+        return True
+    return bool(protocol.config.get("uot", True))
+
+
 def _protocol_suffix(link: str) -> str:
     parsed = urllib.parse.urlparse(link)
     scheme = parsed.scheme.lower()
@@ -206,6 +218,7 @@ def generate_shadowrocket_sub(
 ) -> str:
     """Build a base64 list with native Shadowrocket transport variants."""
     links: list[str] = []
+    naive_uot = _naive_uot_enabled(state)
     for link in _base_subscription_links(user, state, plugins=plugins):
         try:
             parsed = urllib.parse.urlsplit(link)
@@ -214,7 +227,7 @@ def generate_shadowrocket_sub(
             links.append(link)
             continue
         if scheme in {"naive+https", "naive+quic"}:
-            links.extend(build_shadowrocket_naive_links(link))
+            links.extend(build_shadowrocket_naive_links(link, uot=naive_uot))
             continue
         if scheme == "wg":
             links.append(build_shadowrocket_awg_link(link))

@@ -111,7 +111,7 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 | **AnyTLS** | `443/tcp` | обфусцированный TLS |
 | **TrustTunnel** | `443/tcp`, `443/udp` | TLS, режимы TCP и QUIC |
 | **ShadowTLS** | `443/tcp` | ShadowTLS v3 + Trojan detour |
-| **NaiveProxy** | `443/tcp`, `443/udp` | HTTP/2 forward-proxy |
+| **NaiveProxy** | `443/tcp`, `443/udp` | HTTP/2 forward-proxy, UoT по настройке |
 | **Hysteria2** | `8443/udp` | QUIC + Salamander |
 | **VLESS + XHTTP** | `443/tcp` | XHTTP через Hydracore и Caddy L4 |
 | **Mieru** | `2012–2022/tcp` | обфусцированный mTLS |

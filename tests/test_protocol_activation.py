@@ -209,3 +209,36 @@ def test_disabled_naive_domain_change_explains_deferred_certificate():
     report_success.assert_called_once_with(
         "Домен сохранён: vpn.example.com. TLS-сертификат будет получен при включении NaiveProxy",
     )
+
+
+def test_naive_menu_switches_uot_off_after_the_warning():
+    state = AppState(
+        protocols={"naive": PluginState(enabled=True, config={"network": "tcp"})},
+    )
+    app = _activation_app()
+
+    with (
+        patch("hydra.ui._menus.plugin_settings.menu", return_value="5"),
+        patch("hydra.ui._menus.naive_uot_setting.confirm", return_value=True) as ask,
+        patch("hydra.ui._menus.naive_uot_setting.prompt", return_value=""),
+    ):
+        _menu_naive(state, object(), app)
+
+    ask.assert_called_once()
+    cast(Mock, app.plugin_command).assert_called_once_with(state, "naive", "set_uot", uot=False)
+
+
+def test_naive_menu_keeps_uot_when_the_warning_is_cancelled():
+    state = AppState(
+        protocols={"naive": PluginState(enabled=True, config={"network": "tcp"})},
+    )
+    app = _activation_app()
+
+    with (
+        patch("hydra.ui._menus.plugin_settings.menu", return_value="5"),
+        patch("hydra.ui._menus.naive_uot_setting.confirm", return_value=False),
+        patch("hydra.ui._menus.naive_uot_setting.prompt", return_value=""),
+    ):
+        _menu_naive(state, object(), app)
+
+    cast(Mock, app.plugin_command).assert_not_called()

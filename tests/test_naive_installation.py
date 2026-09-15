@@ -92,7 +92,7 @@ def test_naive_upgrade_restarts_and_rollback_restores_binary_and_config(tmp_path
     monkeypatch.setattr(plugin, "_create_fake_site", Mock())
     monkeypatch.setattr(plugin, "_validate_caddy", Mock(side_effect=["passthrough_uot", None]))
 
-    def upgrade(config):
+    def upgrade(config, **kwargs):
         assert config.read_text() == "new-config"
         layout.binary.with_suffix(".previous").write_bytes(layout.binary.read_bytes())
         layout.binary.write_bytes(b"new-binary")
@@ -108,3 +108,44 @@ def test_naive_upgrade_restarts_and_rollback_restores_binary_and_config(tmp_path
     assert layout.binary.read_bytes() == b"old-binary"
     assert layout.caddyfile.read_bytes() == b"old-config"
     assert layout.service_file.read_bytes() == b"old-service"
+
+
+def test_naive_stock_build_uses_the_upstream_module_and_plain_probe(tmp_path, monkeypatch):
+    plugin = NaivePlugin()
+    binary = tmp_path / "caddy-naive"
+    layout = replace(plugin._runtime_layout(), binary=binary)
+    monkeypatch.setattr(plugin, "_runtime_layout", lambda: layout)
+    monkeypatch.setattr(sni_router_install, "ensure_modern_go", lambda *a, **k: True)
+    monkeypatch.setattr(sni_router_install.os, "makedirs", Mock())
+    monkeypatch.setattr(sni_router_install, "_ensure_xcaddy_binary", lambda *a: "xcaddy")
+
+    def run(args, **kwargs):
+        if args[0] == "xcaddy":
+            assert sni_router_install.NAIVE_FORWARD_PROXY_STOCK_MODULE in args
+            assert sni_router_install.NAIVE_FORWARD_PROXY_MODULE not in args
+            Path(args[-1]).write_bytes(b"stock")
+        if "validate" in args:
+            assert "passthrough_uot" not in Path(args[3]).read_text()
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="http.handlers.forward_proxy", stderr="")
+
+    monkeypatch.setattr(plugin, "_host_backend", lambda: SimpleNamespace(run=run))
+
+    assert plugin._download_binary(uot=False)
+    assert binary.read_bytes() == b"stock"
+
+
+def test_built_for_uot_classifies_the_installed_binary(tmp_path, monkeypatch):
+    plugin = NaivePlugin()
+    binary = tmp_path / "caddy-naive"
+    layout = replace(plugin._runtime_layout(), binary=binary)
+    monkeypatch.setattr(plugin, "_runtime_layout", lambda: layout)
+
+    assert plugin._built_for_uot() is None
+
+    binary.write_bytes(b"binary")
+    monkeypatch.setattr(plugin, "_validate_caddy", lambda *a, **k: None)
+    assert plugin._built_for_uot() is True
+
+    monkeypatch.setattr(plugin, "_validate_caddy", lambda *a, **k: "unknown directive passthrough_uot")
+    assert plugin._built_for_uot() is False

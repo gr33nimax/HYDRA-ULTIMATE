@@ -370,6 +370,7 @@ sudo hydra plugin command anytls set_decoy_theme --param theme=cafe
 sudo hydra plugin command amneziawg set_protocol_mode --param mode=3.1
 sudo hydra plugin command snell set_settings --param version=5 --param obfs_mode=tls
 sudo hydra plugin command snell set_settings --param version=6 --param mode=unshaped
+sudo hydra plugin command naive set_uot --param uot=false
 hydra plugin query amneziawg protocol_mode_status --with-state
 hydra plugin query vless get_tuning --with-state
 hydra plugin query warp external_sources --with-state
@@ -468,6 +469,25 @@ sudo hydra plugin command vless set_security --param mode=reality   --param hand
 остаётся за клиентом), `chrome`, `firefox`, `safari`, `edge`, `ios`, `android`,
 `random`, `randomized`. Значение попадает в клиентский профиль как блок
 `tls.utls` и в ссылку как `fp=`; сервер его не использует.
+
+### UoT у `naive`
+
+`set_uot` включает и выключает UDP через TCP (`true`/`false`, а также
+`on`/`off`, `1`/`0`). По умолчанию UoT включён — поведение не меняется.
+
+```bash
+sudo hydra plugin command naive set_uot --param uot=false
+```
+
+Выключение убирает UoT-путь на сервере: Caddy собирается из upstream
+`forwardproxy` вместо форка `aUsernameWoW/forwardproxy`, а строки
+`passthrough_uot` в Caddyfile не появляется. Установленная сборка определяется
+пробой бинарника, поэтому настройка не может разойтись с фактическим файлом;
+при расхождении apply пересобирает бинарник одной транзакцией с backup
+предыдущего. Клиентские ссылки Shadowrocket при выключенном UoT не содержат
+`uot` (`tfo` и `padding` остаются). UDP по TCP-профилю Naive в этом режиме не
+работает, QUIC-транспорт не затронут; клиенты с явным `udp_over_tcp` должны
+выключить его сами.
 
 ### Сайт-заглушка
 
