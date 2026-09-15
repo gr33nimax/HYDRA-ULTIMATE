@@ -4,10 +4,10 @@
 
 | State | Count | Evidence |
 | --- | ---: | --- |
-| Not started | 0 | — |
+| Not started | 1 | TSK-020: живая серверная проба. |
 | In progress | 0 | — |
 | Blocked | 1 | TSK-013 needs a disposable compatible Linux host/client. |
-| Complete | 16 | TSK-001–TSK-012 and TSK-014–TSK-017 have local evidence. |
+| Complete | 21 | TSK-001–TSK-012, TSK-014–TSK-019 и TSK-021–TSK-023 имеют локальный evidence. |
 
 ## Dependency graph
 
@@ -17,6 +17,9 @@ TSK-001 ─┬─> TSK-002 ─> TSK-004 ─> TSK-006 ─> TSK-010 ─> TSK-012
                                     └─> TSK-008 ─> TSK-009 ─> TSK-010
 TSK-011 ────────────────────────────────────────────────────────> TSK-012
 TSK-013 is a release gate for TSK-012.
+TSK-021 ─┬─> TSK-023
+TSK-022 ─┘
+TSK-020 remains the live AWG release gate; Snell v6 is an independent stable-release gate.
 ```
 
 ## Tasks
@@ -165,24 +168,26 @@ TSK-013 is a release gate for TSK-012.
   - **Dependency:** TSK-019.
   - _Requirements: R13, R14._
 
-- [ ] **TSK-021 — Генератор обфускации знает про 3.x**
-  - `generate_params` принимает режим: для 3.x `S1–S4` = одно безопасное значение в коридоре, который принимают клиенты; `validate_params` отвергает несовместимый набор с текстом причины.
-  - **Acceptance:** для каждого пресета набор 3.x проходит валидацию, для 2.0 поведение не меняется; тесты на оба режима.
-  - _Requirements: R15._
+- [x] **TSK-021 — Исправить генерацию и валидацию S для 3.x**
+  - **Факт:** `AWG3_PADDING = 32` удалена: `_draw_paddings` для 3.x поднимает только нижнюю границу каждого поля своего пресета до 12 (`_awg3_range`), а `validate_params` отвергает лишь `S < 12`, называя поле. Красное до фикса: `.venv\Scripts\python.exe -m pytest -q tests/test_awg_plugin.py -k "3x_paddings or 3x_lifts or 3x_keeps or 3x_accepts or 3x_refuses or 2x_paddings"` → `4 failed, 2 passed`; после фикса та же команда → `6 passed`. Неравные `62/86/45/21` теперь проходят и не переписываются, нулевые диапазоны становятся `12`, а 2.0 не затронут (например, `low_latency` сохраняет `S3=S4=0`).
+  - В `hydra/plugins/amneziawg/presets.py` удалить ветку `AWG3_PADDING = 32`: для 3.x генерировать каждое `S1`–`S4` в исходном диапазоне соответствующего пресета, подняв только нижнюю границу до 12.
+  - В `validate_params` для 3.x требовать каждый `S >= 12`, но не равенство между S. Сохранить ограничение `S1 + 56 != S2` и байтовую совместимость 2.0.
+  - До изменения добавить красные регрессии: фиксированный 3.x seed не даёт принудительных четырёх `32`; `62/86/45/21` проходит; единственный `S=11` отклоняется с именем поля.
+  - **Acceptance:** существующие валидные неравные S не переписываются, новая 3.x генерация не выдаёт S ниже 12, а 2.0 остаётся прежним.
+  - _Requirements: R17._
 
-- [ ] **TSK-022 — Включение 3.x приводит S1–S4 к безопасным**
-  - До миграции перезаписать четыре значения в серверном конфиге и в params установщика (точечная замена, остальное не трогается), затем перечитать и проверить.
-  - **Acceptance:** после включения 3.x в конфиге одинаковые безопасные S; повторный вход в режим ничего не меняет; тест на фикстурах конфига и params.
-  - **Dependency:** TSK-021.
-  - _Requirements: R15._
+- [x] **TSK-022 — Зафиксировать server-owned поля 3.1 тестом**
+  - **Факт:** форса флагов в коде нет: `rg -n 'RandomTrailers|DisableCookies' hydra/plugins/amneziawg/{configuration,protocol_mode,plugin,installation,runtime}.py` пусто, а экспорт читает их из `_generation_fields` (значения серверного конфига) как есть. Новый `tests/test_awg_plugin.py::test_3x_flags_follow_the_server_in_both_directions` проверяет оба направления (`on/on` и `off/off`) в native `.conf`, `wg://`, `vpn://` и singbox; копирование на `awg1` уже покрыто `tests/test_awg_directives.py::test_replace_generation_directives_preserves_legacy_unknown_and_peers`. Изменений кода не потребовалось.
+  - Проверить и покрыть тестами, что `RandomTrailers` и `DisableCookies` берутся из разобранного серверного конфига и не заменяются генератором, миграцией или экспортёром.
+  - Проверить только доказанные форматы; формат без полного контракта остаётся fail-closed, а не получает частичный профиль.
+  - **Acceptance:** true и false из серверного fixture проходят неизменными по поддерживаемым экспортам; новая S-логика не добавляет или не меняет эти поля.
+  - _Requirements: R18._
 
-- [ ] **TSK-023 — 3.1 всегда несёт RandomTrailers и DisableCookies**
-  - Серверный конфиг: оба поля true при включении 3.1. Экспорт: убрать скрытие `DisableCookies` и форс `false` в `vpn://`/`wg://`; во всех клиентских форматах оба поля true.
-  - **Acceptance:** для 3.1 каждый формат (native, подписка, wg://, vpn://) содержит оба поля true; для 3.0 и 2.0 поведение не меняется; тесты по форматам.
-  - _Requirements: R16._
-
-- [ ] **TSK-024 — Тесты, verify и живая проверка**
-  - Фокусные AWG-тесты, `verify.py`, коммит и пуш; затем владелец проверяет Throne и HB2 на 3.1.
-  - **Acceptance:** все наборы зелёные, на живом сервере проба проходит и оба клиента передают трафик.
-  - **Dependency:** TSK-021, TSK-022, TSK-023.
-  - _Requirements: R15, R16._
+- [x] **TSK-023 — Верифицировать исправление и обновить evidence**
+  - **Факт:** `.venv\Scripts\python.exe verify.py` → Ruff `All checks passed!` и `2043 passed` (compileall и полный pytest); фокусный набор `tests/test_awg_plugin.py tests/test_awg_directives.py tests/test_awg_protocol_runtime.py tests/test_awg_architecture.py tests/test_shadowrocket_links.py tests/test_hydrabox_subscription.py` → `115 passed`; `git status --short` показывает только `hydra/plugins/amneziawg/presets.py`, `tests/test_awg_plugin.py` и три файла спеки — серверных конфигов, миграции, HydraCore или HB2 в диффе нет. Первый фоновый прогон упал не по коду (`cmd.exe` не разрешает bash-путь `.venv/Scripts/...`), перезапуск с `cd /d ... && .venv\Scripts\python.exe verify.py` зелёный.
+  - Выполнить фокусные AWG/export-тесты, затем `.venv\Scripts\python.exe verify.py` и `git diff --check`; обновить `requirements.md` и эту задачу фактами только после зелёного результата.
+  - Убедиться, что дифф не содержит серверных конфигов, миграционных действий, изменений HydraCore или HB2.
+  - Живой AWG handshake остаётся TSK-020, а за stable rollout отдельно отвечает незакрытая Snell v6-интероперабельность.
+  - **Acceptance:** все локальные проверки зелёные, evidence привязан к командам; без живой пробы stable не объявляется готовым.
+  - **Dependency:** TSK-021, TSK-022.
+  - _Requirements: R17, R18._

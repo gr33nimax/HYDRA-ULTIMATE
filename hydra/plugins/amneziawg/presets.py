@@ -173,11 +173,16 @@ S3_MAX = 64
 S4_MAX = 32
 
 # In 3.x the padding of every packet type carries the material the header protection is built
-# from, so each type needs a padding at least as large as its nonce, and upstream recommends
-# identical values once RandomTrailers is on. The 2.0 ranges above are drawn per type and allow
-# zeros — legal there, a dropped packet here. 32 is above any plausible nonce and below every
-# ceiling clients accept.
-AWG3_PADDING = 32
+# from, so each type needs a padding at least as large as its nonce. That minimum is the whole
+# 3.x requirement: upstream asks for identical values only once RandomTrailers is on, and the
+# server owns those values. The 2.0 ranges draw per type and allow zeros — legal there.
+AWG3_PADDING_MIN = 12
+
+
+def _awg3_range(span: tuple[int, int]) -> tuple[int, int]:
+    """Raise only the lower bound of one preset range to the header-protection nonce."""
+    low, high = span
+    return max(low, AWG3_PADDING_MIN), max(high, AWG3_PADDING_MIN)
 
 
 def _draw_paddings(
@@ -191,13 +196,15 @@ def _draw_paddings(
 ) -> tuple[int, int, int, int]:
     """Draw the four packet paddings for one strategy.
 
-    In 3.x the padding of every packet type carries the material the header protection is built
-    from: each type needs a value at least as large as its nonce, and upstream recommends identical
-    values once RandomTrailers is on. The 2.0 ranges are drawn per type and allow zeros — legal
-    there, a dropped packet here.
+    For 3.x each field keeps its own preset range with the nonce minimum applied, because equal
+    paddings are an upstream recommendation only while RandomTrailers is on, not a protocol rule.
+    A range that cannot reach the minimum is lifted to it rather than replaced wholesale.
     """
     if str(protocol_mode).strip() not in ("", "2.0"):
-        return AWG3_PADDING, AWG3_PADDING, AWG3_PADDING, AWG3_PADDING
+        s1_range = _awg3_range(s1_range)
+        s2_range = _awg3_range(s2_range)
+        s3_range = _awg3_range(s3_range)
+        s4_range = _awg3_range(s4_range)
     s1 = local_random.randint(s1_range[0], s1_range[1])
     s2 = local_random.randint(s2_range[0], s2_range[1])
     while s1 + 56 == s2:
@@ -388,12 +395,12 @@ def validate_params(params: dict, protocol_mode: str = "2.0") -> tuple[bool, str
             return False, f"S4={s4} вне диапазона (0-{S4_MAX})"
 
         if str(protocol_mode).strip() not in ("", "2.0"):
-            paddings = (s1, s2, s3, s4)
-            if len(set(paddings)) != 1 or paddings[0] < AWG3_PADDING:
-                return False, (
-                    f"Режим {protocol_mode} требует одинаковых S1–S4 не меньше {AWG3_PADDING}: "
-                    f"сейчас S1={s1} S2={s2} S3={s3} S4={s4}"
-                )
+            for field, value in (("S1", s1), ("S2", s2), ("S3", s3), ("S4", s4)):
+                if value < AWG3_PADDING_MIN:
+                    return False, (
+                        f"Режим {protocol_mode}: {field}={value} меньше {AWG3_PADDING_MIN} — "
+                        "защите заголовка не хватит нонса"
+                    )
 
         # Валидация H1-H4 (до uint32) и уникальности
         h_vals = []

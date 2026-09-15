@@ -1113,6 +1113,63 @@ def test_awg31_throne_and_amnezia_links_include_full_directives(tmp_path):
     assert payload["client_pub_key"] == "public-d"
 
 
+def test_3x_flags_follow_the_server_in_both_directions(tmp_path):
+    # Both 3.1 fields belong to the server. A client handed the opposite value cannot complete a
+    # handshake, so every exporter repeats what the interface carries — including the direction an
+    # earlier policy forced the other way.
+    plugin = AmneziaWGPlugin()
+    user = _make_user("reader@example.com")
+    _set_keys(user, "desktop", "d")
+    state = AppState(
+        protocols={"amneziawg": PluginState(config={"protocol_mode": "3.1"})},
+        users=[user],
+    )
+    state.network.server_ip = "203.0.113.10"
+
+    for trailers, cookies in (("on", "on"), ("off", "off")):
+        conf = tmp_path / "awg0.conf"
+        conf.write_text(
+            FAKE_CONF
+            + "HeaderProtectionKey = header\nContentPaddingAddition = 50-100\n"
+            + "RekeyAfterTime = 100-140\nRekeyTimeout = 4-6\nRejectAfterTime = 160-200\n"
+            + "KeepaliveTimeout = 8-12\nMaxHandshakeAttempts = 7\n"
+            + f"RandomTrailers = {trailers}\nDisableCookies = {cookies}\n"
+            + "### reader@example.com\n[Peer]\nPublicKey = public-d\nPresharedKey = psk-d\n"
+            + "AllowedIPs = 10.66.66.2/32\n",
+            encoding="utf-8",
+        )
+        with (
+            patch("hydra.plugins.amneziawg.plugin.AWG_CONF", conf),
+            patch.object(plugin, "_server_pubkey_for_conf", return_value="server-public"),
+            patch("hydra.plugins.amneziawg.client_links.kernel_supports_awg31", return_value=True),
+            patch("hydra.plugins.amneziawg.plugin.HOST.run") as host_run,
+        ):
+            native = plugin.generate_client_config(user, state)
+            wg_link = plugin.client_link(user, state)
+            vpn_link = plugin.amnezia_link(user, state)
+            singbox = json.loads(plugin.generate_singbox_client_config(user, state))
+
+        host_run.assert_not_called()
+        expected_trailers = trailers == "on"
+        expected_cookies = cookies == "on"
+        assert f"RandomTrailers = {trailers}" in native, trailers
+        assert f"DisableCookies = {cookies}" in native, cookies
+        assert f"random_trailers={'true' if expected_trailers else 'false'}" in wg_link, trailers
+        assert f"disable_cookies={'true' if expected_cookies else 'false'}" in wg_link, cookies
+
+        encoded = vpn_link.removeprefix("vpn://")
+        compressed = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        last_config = json.loads(compressed and zlib.decompress(compressed[4:]))
+        payload = json.loads(last_config["containers"][0]["awg"]["last_config"])
+        assert (payload["RandomTrailers"], payload["DisableCookies"]) == (trailers, cookies)
+
+        amnezia = singbox["endpoints"][0]["amnezia"]
+        assert (amnezia["random_trailers"], amnezia["disable_cookies"]) == (
+            expected_trailers,
+            expected_cookies,
+        )
+
+
 def test_singbox_awg30_exports_source_proven_generation_fields(tmp_path):
     plugin = AmneziaWGPlugin()
     user = _make_user("reader@example.com")
@@ -1155,28 +1212,105 @@ def test_singbox_awg30_exports_source_proven_generation_fields(tmp_path):
     )
 
 
-def test_3x_paddings_are_one_safe_value_and_2x_is_untouched():
-    # In 3.x the padding carries the header protection material, so every packet type needs one
-    # value at least as large as the nonce, and upstream asks for identical values once
-    # RandomTrailers is on. The 2.0 ranges draw per type and allow zeros — which is what a live
-    # server met, and why its cookie packets were dropped.
-    # Both 3.x generations carry header protection, so both need the padding rule; only 3.1 has
-    # the two extra fields, and those are not drawn here.
+# The padding each packet type carries must fit one header-protection nonce (12 bytes); above
+# that minimum upstream lets each field keep its own value. These bounds are the legacy preset
+# ranges with only a lower bound of 12 applied, so a zero-only field becomes the minimum and a
+# wider field keeps its headroom.
+AWG3_S_BOUNDS = {
+    "wired": ((20, 120), (20, 120), (12, 12), (12, 12)),
+    "mobile": ((15, 80), (15, 80), (12, 12), (12, 12)),
+    "stealth": ((50, 150), (50, 150), (12, 55), (12, 24)),
+    "low_latency": ((12, 15), (12, 15), (12, 12), (12, 12)),
+}
+
+
+def _awg_params(s1, s2, s3, s4) -> dict:
+    """A complete, otherwise-valid parameter set with the four paddings under test."""
+    return {
+        "Jc": "4",
+        "Jmin": "50",
+        "Jmax": "150",
+        "S1": str(s1),
+        "S2": str(s2),
+        "S3": str(s3),
+        "S4": str(s4),
+        "H1": "10001",
+        "H2": "10002",
+        "H3": "10003",
+        "H4": "10004",
+    }
+
+
+def test_3x_paddings_keep_their_own_range_above_the_nonce_minimum():
+    # Forcing all four fields to one value rewrites a working server profile: 3.x needs each
+    # padding at least as large as the header-protection nonce, and nothing more. A field whose
+    # legacy range cannot reach the minimum is the only one that gets lifted.
     for mode in ("3.0", "3.1"):
-        for strategy in ("wired", "mobile", "stealth", "low_latency"):
+        for strategy, bounds in AWG3_S_BOUNDS.items():
             params = generate_params(strategy=strategy, seed=7, protocol_mode=mode)
-            assert {params["S1"], params["S2"], params["S3"], params["S4"]} == {"32"}, (mode, strategy)
+            drawn = [int(params[f"S{i}"]) for i in range(1, 5)]
+            for index, (field, (low, high)) in enumerate(zip(("S1", "S2", "S3", "S4"), bounds)):
+                assert low <= drawn[index] <= high, (mode, strategy, field, params[field])
+            assert drawn != [32, 32, 32, 32], f"{mode}/{strategy} is still forced to a constant"
             ok, reason = validate_params(params, protocol_mode=mode)
             assert ok, reason
             assert "RandomTrailers" not in params, mode
             assert "DisableCookies" not in params, mode
 
-    legacy = generate_params(strategy="stealth", seed=7)
+
+def test_3x_lifts_a_zero_only_field_to_the_nonce_minimum():
+    # wired, mobile and low_latency draw S3=S4=0 for 2.0, which the 3.x protocol cannot carry.
+    for strategy in ("wired", "mobile", "low_latency"):
+        params = generate_params(strategy=strategy, seed=7, protocol_mode="3.1")
+        assert params["S3"] == "12", (strategy, params["S3"])
+        assert params["S4"] == "12", (strategy, params["S4"])
+
+
+def test_3x_keeps_the_s1_s2_fingerprint_guard():
     for mode in ("3.0", "3.1"):
-        ok, reason = validate_params(legacy, protocol_mode=mode)
-        assert not ok, f"a set drawn for 2.0 must be refused for {mode}"
-        assert "S1" in reason and "S4" in reason
-    assert validate_params(legacy)[0] is True, "2.0 behaviour is untouched"
+        for strategy in AWG3_S_BOUNDS:
+            params = generate_params(strategy=strategy, seed=11, protocol_mode=mode)
+            assert int(params["S1"]) + 56 != int(params["S2"]), (mode, strategy)
+
+
+def test_3x_accepts_unequal_server_paddings():
+    # A live server met 62/86/45/21 and dropped cookie packets for an unrelated reason; the values
+    # themselves are valid for 3.x and must pass, not be rewritten.
+    for mode in ("3.0", "3.1"):
+        ok, reason = validate_params(_awg_params(62, 86, 45, 21), protocol_mode=mode)
+        assert ok, reason
+    ok, reason = validate_params(_awg_params(32, 32, 32, 32), protocol_mode="3.1")
+    assert ok, reason
+
+
+def test_3x_refuses_a_padding_below_the_nonce_minimum_without_substituting():
+    cases = {
+        "S1": (11, 86, 45, 21),
+        "S2": (62, 11, 45, 21),
+        "S3": (62, 86, 11, 21),
+        "S4": (62, 86, 45, 11),
+    }
+    for field, values in cases.items():
+        for mode in ("3.0", "3.1"):
+            ok, reason = validate_params(_awg_params(*values), protocol_mode=mode)
+            assert not ok, (field, mode)
+            assert field in reason, (field, reason)
+            assert "12" in reason, (field, reason)
+
+
+def test_2x_paddings_are_untouched_by_the_3x_minimum():
+    # 2.0 carries no header protection, so a small or zero padding stays legal there and the
+    # generation path must not clamp it: a seeded 2.0 set is stable and low_latency still draws
+    # its two zero fields.
+    for strategy in AWG3_S_BOUNDS:
+        twice = [generate_params(strategy=strategy, seed=7, protocol_mode="2.0") for _ in range(2)]
+        assert twice[0] == twice[1], strategy
+    low_latency = generate_params(strategy="low_latency", seed=7, protocol_mode="2.0")
+    assert (low_latency["S3"], low_latency["S4"]) == ("0", "0")
+    assert low_latency == generate_params(strategy="low_latency", seed=7), "the default mode is 2.0"
+    for mode in ("", "2.0"):
+        ok, reason = validate_params(_awg_params(62, 86, 30, 11), protocol_mode=mode)
+        assert ok, (mode, reason)
 
 
 def test_singbox_awg31_exports_boolean_random_trailers(tmp_path):

@@ -245,3 +245,69 @@ the native configuration path.
   separate disposable-client evidence.
 - Run the disposable Linux native handshake matrix separately; it remains the
   final interoperability proof.
+
+## 13. Extension design (2026-09-15): минимальная S-политика
+
+### Decision D5 — preserve the four S values; constrain only the nonce minimum
+
+The existing `AWG3_PADDING = 32` branch is removed. It makes every 3.x generation
+emit `32/32/32/32` and rejects valid unequal configurations even though the embedded
+AWG UAPI requires only each `S1`–`S4 >= 12` when Header Protection is enabled.
+
+`presets.py` remains the owner of legacy profile generation, but it does not become
+an owner of upstream 3.x protocol material:
+
+```text
+existing/upstream config ──> parse/validate ──> preserve verbatim ──> server + exports
+new profile/rotation     ──> draw each S from its own legacy range, clamped at 12
+                                           └──> validate each S >= 12
+```
+
+The clamp applies only while generating a new 3.x profile. It changes no existing
+interface, installer `params`, peer, key, `H*`, or 3.1 boolean. A configuration with
+`62/86/45/21` is valid and stays unchanged; any S below 12 fails before a runtime
+write with an explicit error. Values already forced to `32/32/32/32` remain valid and
+are not rewritten back.
+
+### Components
+
+| Component | Change | Deliberately unchanged |
+| --- | --- | --- |
+| `presets.py::_draw_paddings` | For 3.x, draw four independent values from each preset range after raising only that range's lower bound to 12. Retain the legacy `S1 + 56 != S2` guard. | No uniform `32` replacement. |
+| `presets.py::validate_params` | For 3.x, reject only a value below 12; accept unequal values. | 2.0 validation and H uniqueness stay as-is. |
+| `tests/test_awg_plugin.py` | Replace the hardcoded-32 assertion with range/minimum, unequal-valid, below-12-rejected and 2.0 regression cases. | No live-host test is claimed. |
+| HB2 / HydraCore | None. They already carry received AWG 3.1 values correctly. | No new APK/core build. |
+
+### 3.1 flag and header boundaries
+
+This fix does not enable, disable, or synthesize `RandomTrailers` or
+`DisableCookies`. The upstream config remains authoritative and renderers project the
+observed value only where their contract supports it. The official recommendation for
+`RandomTrailers` plus Header Protection (`H1=1,H2=2,H3=3,H4=4`) is recorded as an
+operator constraint, not imposed by this patch: replacing H values would change the
+fingerprint and needs separate live evidence.
+
+### Error handling and rollout
+
+- A new 3.x generation whose effective per-field range cannot reach 12 fails before
+  saving or applying configuration.
+- Existing values below 12 fail validation; HYDRA reports the exact S field and makes
+  no automatic substitution.
+- Deployment is a HYDRA-only Python update. It needs neither a new HydraCore nor a
+  new HydraBox APK.
+- Stable promotion stays blocked until a disposable/live AWG handshake and the
+  independent Snell v6 issue are green.
+
+### Test evidence required
+
+1. Deterministic generation for each preset: every 3.x S is within its own permitted
+   range and at least 12; S fields are not forced equal.
+2. `62/86/45/21` validates for 3.x; a case with one S at 11 rejects with that field.
+3. Deterministic 2.0 output remains byte-identical for the same seed.
+4. Existing source-proven server values for `random_trailers` and `disable_cookies`
+   round-trip through every supported renderer without forced replacement.
+5. Focused AWG tests plus `verify.py`; handshake remains a separate release gate.
+
+**Links:** R17–R18; accepted upstream-ownership decision
+`.kiro/decisions/0002-awg-generation-upstream-ownership.md`; [AmneziaWG docs](https://docs.amnezia.org/documentation/amnezia-wg/);
+[amneziawg-go v3 API](https://pkg.go.dev/github.com/amnezia-vpn/amneziawg-go/v3).
