@@ -96,6 +96,7 @@ def test_client_material_matches_inbound():
     assert outbound["version"] == 4
     assert "obfs" not in inbound
     assert "obfs" not in outbound
+    assert "obfs=" not in plugin.client_link(user, state)
     assert "obfs-mode=" not in plugin.client_link(user, state)
     assert "udp-relay=true" in plugin.client_link(user, state)
     assert plugin.client_link(user, state).startswith("snell://")
@@ -141,7 +142,7 @@ def test_http_obfs_is_configurable_on_the_classic_generation():
     assert outbound["obfs_host"] == "www.example.com"
     assert "obfs" not in inbound
     assert "obfs" not in outbound
-    assert "obfs-mode=http" in plugin.client_link(user, state)
+    assert "obfs=http" in plugin.client_link(user, state)
     assert "udp-relay=true" in plugin.client_link(user, state)
 
 
@@ -165,7 +166,7 @@ def test_tls_obfs_is_configurable_on_the_classic_generation():
     assert inbound["obfs_mode"] == "tls"
     assert outbound["obfs_mode"] == "tls"
     assert outbound["obfs_host"] == "cdn.example.com"
-    assert "obfs-mode=tls" in plugin.client_link(user, state)
+    assert "obfs=tls" in plugin.client_link(user, state)
 
 
 def test_generation_six_uses_its_own_mode_on_both_ends():

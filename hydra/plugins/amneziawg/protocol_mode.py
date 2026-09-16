@@ -100,6 +100,30 @@ class AwgProtocolModeMixin:
                 return "3.0"
         return "2.0"
 
+    @staticmethod
+    def _generation_flags_are(state: PluginStateAccess, target: str) -> bool:
+        """Whether every profile carries the flags the target generation means.
+
+        Without this, a switch that has only flags to repair looks like a no-op: a profile stored as
+        3.1 with cookies still on would keep serving a pair that is not 3.1 at all.
+        """
+        protocol = state.protocols.get("amneziawg")
+        profiles = protocol.config.get("profiles") if protocol else None
+        if not isinstance(profiles, dict):
+            return True
+        for profile in profiles.values():
+            if not isinstance(profile, dict):
+                continue
+            stored = profile.get("generation")
+            material = stored if isinstance(stored, dict) else {}
+            if target == "3.1":
+                if not material.get("RandomTrailers") or not material.get("DisableCookies"):
+                    return False
+            elif target == "3.0":
+                if "RandomTrailers" in material or "DisableCookies" in material:
+                    return False
+        return True
+
     def _set_served_generation(self, state: PluginStateAccess, target: str) -> bool:
         """Switch the generation of the host the core serves.
 
@@ -109,7 +133,11 @@ class AwgProtocolModeMixin:
         protocol = state.protocols.get("amneziawg")
         if protocol is None:
             raise RuntimeError("AmneziaWG configuration is missing")
-        if self.desired_protocol_mode(state) == target and self._stored_generation(state) == target:
+        if (
+            self.desired_protocol_mode(state) == target
+            and self._stored_generation(state) == target
+            and self._generation_flags_are(state, target)
+        ):
             return False
         profiles = protocol.config.get("profiles")
         if not isinstance(profiles, dict) or not profiles:
@@ -128,6 +156,17 @@ class AwgProtocolModeMixin:
                     profile["obfuscation"] = awg_presets.lift_paddings_for_mode(obfuscation, target)
                 for key, value in generate_generation_material(target).items():
                     material.setdefault(key, value)
+                if target == "3.1":
+                    # The generation *is* this pair and it is not the operator's to vary: random
+                    # trailers on, cookies off. A profile carrying the other combination serves
+                    # something that is not 3.1, and the links of this generation say so.
+                    material["RandomTrailers"] = True
+                    material["DisableCookies"] = True
+                elif target == "3.0":
+                    # 3.0 replaced obfuscation with header protection and nothing else: the two 3.1
+                    # fields describe a shape this generation does not have.
+                    material.pop("RandomTrailers", None)
+                    material.pop("DisableCookies", None)
             if material:
                 profile["generation"] = material
         protocol.config["protocol_mode"] = target

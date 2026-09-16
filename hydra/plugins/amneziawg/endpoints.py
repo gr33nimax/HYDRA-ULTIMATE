@@ -71,9 +71,9 @@ GENERATION_RANGES_30: tuple[tuple[str, str], ...] = (
 def generate_generation_material(protocol_mode: str, rng: Any | None = None) -> dict[str, Any]:
     """Material HYDRA owns for a generation it serves: a fresh header-protection key and the ranges.
 
-    Random trailers stay on — they are the point of 3.1 once the trailer path works — while cookies stay
-    enabled, because disabling them trades away anti-DoS protection and is the operator's decision, not a
-    default this code should make.
+    The 3.1 pair is random trailers on and cookies off: that combination *is* the generation, not a
+    setting to leave open — a profile carrying the other one is not serving 3.1, and every client
+    that reads a link of this generation expects exactly this pair.
     """
     if _is_plain_mode(protocol_mode):
         return {}
@@ -84,7 +84,7 @@ def generate_generation_material(protocol_mode: str, rng: Any | None = None) -> 
     material.update(dict(GENERATION_RANGES_30))
     if str(protocol_mode).strip() == "3.1":
         material["RandomTrailers"] = True
-        material["DisableCookies"] = False
+        material["DisableCookies"] = True
     return material
 
 

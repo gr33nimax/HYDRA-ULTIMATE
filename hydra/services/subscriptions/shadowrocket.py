@@ -177,7 +177,9 @@ def build_shadowrocket_snell_link(link: str) -> str:
             return link
         relay = query.get("udp-relay", query.get("udp", ["1"]))[0].lower()
         udp = "0" if relay in {"false", "0"} else "1"
-        obfs_mode = query.get("obfs-mode", [""])[0].strip().lower()
+        # `obfs` is the name clients write and read; `obfs-mode` is ours. Both are accepted so a link
+        # that came from this server keeps its obfuscation on the way back in.
+        obfs_mode = (query.get("obfs-mode") or query.get("obfs") or [""])[0].strip().lower()
         obfs_host = query.get("obfs-host", [""])[0].strip()
         if obfs_mode not in {"", "none", "http", "tls"} or (obfs_mode in {"http", "tls"} and not obfs_host):
             return link

@@ -141,13 +141,10 @@ def test_generated_material_fills_a_31_profile():
     assert len(material["HeaderProtectionKey"]) == 44  # 32 bytes, base64
     assert material["ContentPaddingAddition"] == "10-100"
     assert material["RandomTrailers"] is True
-    # Cookies stay enabled: disabling them trades away anti-DoS protection and is the operator's call.
-    assert material["DisableCookies"] is False
+    # 3.1 *is* this pair — random trailers on, cookies off — so the material carries it and every
+    # link of this generation says the same thing.
+    assert material["DisableCookies"] is True
     assert generate_generation_material("2.0") == {}
-
-
-
-
 
 
 def _served_state(mode: str = "2.0", *, material: dict | None = None) -> AppState:
@@ -201,7 +198,9 @@ def test_switching_back_to_2x_keeps_the_material_for_a_return():
 
 
 def test_a_switch_that_changes_nothing_reports_no_change():
-    state = _served_state("3.1", material={"HeaderProtectionKey": "keep-me", "RandomTrailers": True})
+    state = _served_state(
+        "3.1", material={"HeaderProtectionKey": "keep-me", "RandomTrailers": True, "DisableCookies": True}
+    )
 
     assert AmneziaWGPlugin().set_protocol_mode(state, "3.1") is False
 

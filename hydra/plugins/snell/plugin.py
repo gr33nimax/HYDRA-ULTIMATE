@@ -150,7 +150,9 @@ class SnellPlugin(BasePlugin):
         if generation == 5:
             obfs_mode = self._obfs_mode(state)
             if obfs_mode != "none":
-                query_params.update({"obfs-mode": obfs_mode, "obfs-host": self._obfs_host(state)})
+                # `obfs` is the name the clients read (Throne, Shadowrocket): `obfs-mode` was ours
+                # alone and made an imported link lose its obfuscation silently.
+                query_params.update({"obfs": obfs_mode, "obfs-host": self._obfs_host(state)})
         else:
             query_params["mode"] = self._v6_mode(state)
         query = urllib.parse.urlencode(query_params)

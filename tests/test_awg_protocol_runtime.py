@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from hydra.core.state import AppState, PluginState, User
 from hydra.plugins.amneziawg.constants import DEFAULT_OBFUSCATION
+from hydra.plugins.amneziawg.keys import generate_private_key
 from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
 from hydra.plugins.amneziawg.protocol_mode import served_generation
 
@@ -128,6 +129,24 @@ def test_set_protocol_mode_switches_the_served_generation_without_the_installer(
 
     assert plugin.set_protocol_mode(state, "2.0") is True
     assert profiles["desktop"]["generation"] == generation
+
+
+def test_a_31_profile_with_cookies_on_is_repaired_not_called_already_active():
+    """The live case: the stored generation says 3.1 while the pair is not the one 3.1 means."""
+    plugin = AmneziaWGPlugin()
+    state = _state("3.1")
+    profile = state.protocols["amneziawg"].config["profiles"]["desktop"]
+    profile["obfuscation"] = dict(DEFAULT_OBFUSCATION)
+    profile["server_private_key"] = generate_private_key()
+    profile["generation"] = {"RandomTrailers": True, "DisableCookies": False}
+    state.users = [_user_with_keys("a@example.com", "u1", octet="3")]
+
+    assert plugin.set_protocol_mode(state, "3.1") is True
+
+    material = profile["generation"]
+    assert material["RandomTrailers"] is True and material["DisableCookies"] is True
+    # И ссылка говорит то же самое, что сервер: концы сходятся по построению.
+    assert "disable_cookies=true" in plugin.client_link(state.users[0], state)
 
 
 def test_set_protocol_mode_refuses_a_profile_less_protocol():

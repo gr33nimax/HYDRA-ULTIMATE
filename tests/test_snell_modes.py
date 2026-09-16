@@ -103,7 +103,7 @@ def test_snell_share_link_carries_the_client_side_version():
         modern_link = plugin.client_link(modern.users[0], modern)
 
     assert "version=4" in classic_link
-    assert "obfs-mode=http" in classic_link
+    assert "obfs=http" in classic_link and "obfs-mode=" not in classic_link
     assert "obfs-host=www.bing.com" in classic_link
     assert "version=6" in modern_link
     assert "mode=unsafe-raw" in modern_link
