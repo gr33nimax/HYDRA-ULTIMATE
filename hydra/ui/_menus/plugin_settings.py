@@ -425,8 +425,8 @@ def _change_snell_transport(
     host = str(desired.config.get("obfs_host", "www.bing.com"))
     selected = menu(
         [
-            ("1", "HTTP", "Имитация HTTP-трафика — понимают все клиенты"),
-            ("2", "TLS", "Имитация HTTPS — наш ядро/HydraBox и mihomo; Throne и Surge — нет"),
+            ("1", "HTTP", "Имитация HTTP-трафика"),
+            ("2", "TLS", "Имитация HTTPS"),
             ("3", "Выключить", "Без маскировки"),
             ("0", "Отмена", ""),
         ],
