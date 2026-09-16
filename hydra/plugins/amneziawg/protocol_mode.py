@@ -19,10 +19,15 @@ from .endpoints import generate_generation_material
 
 
 def _generation_of_amnezia(amnezia: object) -> str | None:
-    """Read one served amnezia block's generation, or None when it carries no material."""
+    """Read one served amnezia block's generation, or None when it carries no material.
+
+    The 3.1 pair *is* the generation, so both fields have to be served for the answer to be 3.1;
+    an endpoint carrying only ``random_trailers`` is the mixed shape an earlier release could
+    write, and calling it 3.1 is what kept a cookies-enabled server looking correctly configured.
+    """
     if not isinstance(amnezia, dict) or not amnezia:
         return None
-    if "random_trailers" in amnezia:
+    if "random_trailers" in amnezia and "disable_cookies" in amnezia:
         return "3.1"
     if "header_protection_key" in amnezia:
         return "3.0"

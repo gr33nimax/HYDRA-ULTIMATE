@@ -88,6 +88,32 @@ def generate_generation_material(protocol_mode: str, rng: Any | None = None) -> 
     return material
 
 
+def canonical_generation(
+    generation: Mapping[str, Any] | None,
+    protocol_mode: str,
+) -> dict[str, Any]:
+    """Return the generation material a mode actually serves.
+
+    The 3.1 pair is not a stored preference: random trailers on and cookies off *is* the
+    generation. An earlier release could persist the opposite pair next to ``protocol_mode: 3.1``,
+    and reading that material back verbatim made the served endpoint and the exported links agree
+    on something that is not 3.1 at all. Canonicalizing here is what keeps the endpoint, the
+    ``wg://`` link and every subscription saying the same true thing, whichever version wrote the
+    stored material.
+    """
+    material = dict(generation) if isinstance(generation, Mapping) else {}
+    mode = str(protocol_mode).strip()
+    if mode == "3.1":
+        material["RandomTrailers"] = True
+        material["DisableCookies"] = True
+    elif not _is_plain_mode(mode):
+        # 3.0 replaced obfuscation with header protection and nothing else, so the two 3.1 fields
+        # describe a shape this generation does not have.
+        material.pop("RandomTrailers", None)
+        material.pop("DisableCookies", None)
+    return material
+
+
 def obfuscation_block(obfuscation: dict[str, Any], *, include_i1: bool) -> dict[str, Any]:
     """Project stored obfuscation onto the core's field names."""
     block: dict[str, Any] = {}
@@ -110,6 +136,7 @@ def generation_block(generation: Mapping[str, Any], protocol_mode: str) -> dict[
     """Return the 3.x fields for one generation, or refuse naming what is missing."""
     if _is_plain_mode(protocol_mode):
         return {}
+    generation = canonical_generation(generation, protocol_mode)
     block: dict[str, Any] = {}
     for source, target in GENERATION_FIELDS_30:
         value = generation.get(source)
@@ -123,11 +150,8 @@ def generation_block(generation: Mapping[str, Any], protocol_mode: str) -> dict[
     if optional_value not in (None, ""):
         block[optional_target] = optional_value
     if str(protocol_mode).strip() == "3.1":
+        # The pair cannot be missing here: ``canonical_generation`` supplies it for this mode.
         for source, target in GENERATION_FIELDS_31:
-            if source not in generation:
-                raise ValueError(
-                    f"AmneziaWG generation material is missing {source} for mode {protocol_mode}",
-                )
             block[target] = bool(generation[source])
     return block
 

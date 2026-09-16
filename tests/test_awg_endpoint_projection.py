@@ -5,7 +5,9 @@ exactly when HYDRA has issued it an address, and the generation material is what
 These tests pin that contract per generation.
 """
 
+import json
 import sys
+import urllib.parse
 from pathlib import Path
 from unittest.mock import patch
 
@@ -48,14 +50,15 @@ GENERATION_31 = {
 PEER_OCTET = "3"
 
 
-def _project(
-    _tmp_path=None,
+def _state(
     *,
     mode: str = "2.0",
     blocked: bool = False,
     with_server_key: bool = True,
     generation: bool = True,
-) -> list[dict]:
+    generation_overrides: dict | None = None,
+) -> tuple[AppState, User]:
+    """Desired state with one desktop profile, plus the user it issues an address to."""
     profile: dict = {
         "port": 50494,
         "network": "10.67.67.0/24",
@@ -64,8 +67,13 @@ def _project(
     }
     if with_server_key:
         profile["server_private_key"] = "server-private"
+        # Stated explicitly so client serialization reads it instead of deriving the public half
+        # from a placeholder that is not valid key material.
+        profile["server_public_key"] = "server-public"
     if generation and mode != "2.0":
-        profile["generation"] = dict(GENERATION_31)
+        material = dict(GENERATION_31)
+        material.update(generation_overrides or {})
+        profile["generation"] = material
     user = User(email="alice@example.com", uuid="u1", blocked=blocked)
     user.credentials["amneziawg"] = {
         "private_key": "private-d",
@@ -81,6 +89,25 @@ def _project(
             )
         },
         users=[user],
+    )
+    return state, user
+
+
+def _project(
+    _tmp_path=None,
+    *,
+    mode: str = "2.0",
+    blocked: bool = False,
+    with_server_key: bool = True,
+    generation: bool = True,
+    generation_overrides: dict | None = None,
+) -> list[dict]:
+    state, _user = _state(
+        mode=mode,
+        blocked=blocked,
+        with_server_key=with_server_key,
+        generation=generation,
+        generation_overrides=generation_overrides,
     )
     return AmneziaWGPlugin().server_endpoints(state)
 
@@ -165,15 +192,36 @@ def _served_state(mode: str = "2.0", *, material: dict | None = None) -> AppStat
     )
 
 
+def _desktop_config(state: AppState) -> dict:
+    """The AmneziaWG configuration block of a state built by these tests."""
+    protocol = state.protocols.get("amneziawg")
+    config = protocol.config if protocol is not None else None
+    assert isinstance(config, dict), "the profile has no configuration block"
+    return config
+
+
+def _desktop_material(state: AppState) -> dict:
+    """The stored generation material of the desktop profile.
+
+    Desired state is a loose mapping, so the read is narrowed once here instead of chaining
+    subscripts at every assertion site.
+    """
+    profiles = _desktop_config(state).get("profiles")
+    profile = profiles.get("desktop") if isinstance(profiles, dict) else None
+    material = profile.get("generation") if isinstance(profile, dict) else None
+    assert isinstance(material, dict), "the desktop profile carries no generation material"
+    return material
+
+
 def test_switching_a_served_host_into_31_generates_the_material():
     state = _served_state()
 
     assert AmneziaWGPlugin().set_protocol_mode(state, "3.1") is True
 
-    material = state.protocols["amneziawg"].config["profiles"]["desktop"]["generation"]
+    material = _desktop_material(state)
     assert len(material["HeaderProtectionKey"]) == 44
     assert material["RandomTrailers"] is True
-    assert state.protocols["amneziawg"].config["protocol_mode"] == "3.1"
+    assert _desktop_config(state)["protocol_mode"] == "3.1"
 
 
 def test_switching_never_replaces_the_material_it_finds():
@@ -182,9 +230,9 @@ def test_switching_never_replaces_the_material_it_finds():
 
     assert AmneziaWGPlugin().set_protocol_mode(state, "3.0") is True
 
-    material = state.protocols["amneziawg"].config["profiles"]["desktop"]["generation"]
+    material = _desktop_material(state)
     assert material["HeaderProtectionKey"] == "keep-me"
-    assert state.protocols["amneziawg"].config["protocol_mode"] == "3.0"
+    assert _desktop_config(state)["protocol_mode"] == "3.0"
 
 
 def test_switching_back_to_2x_keeps_the_material_for_a_return():
@@ -192,9 +240,8 @@ def test_switching_back_to_2x_keeps_the_material_for_a_return():
 
     assert AmneziaWGPlugin().set_protocol_mode(state, "2.0") is True
 
-    config = state.protocols["amneziawg"].config
-    assert config["protocol_mode"] == "2.0"
-    assert config["profiles"]["desktop"]["generation"]["HeaderProtectionKey"] == "keep-me"
+    assert _desktop_config(state)["protocol_mode"] == "2.0"
+    assert _desktop_material(state)["HeaderProtectionKey"] == "keep-me"
 
 
 def test_a_switch_that_changes_nothing_reports_no_change():
@@ -203,6 +250,111 @@ def test_a_switch_that_changes_nothing_reports_no_change():
     )
 
     assert AmneziaWGPlugin().set_protocol_mode(state, "3.1") is False
+
+
+# --- the 3.1 pair is the generation, not a stored preference -------------------------------------
+#
+# An earlier release could persist ``DisableCookies: False`` next to ``protocol_mode: 3.1``.  The
+# endpoint used to serve that verbatim, so the host looked like 3.1 while cookies stayed on, and the
+# exported links faithfully echoed a server that was not 3.1.  Every consumer now derives the pair
+# from the mode, so the two ends agree by construction.
+
+
+STALE_COOKIES = {"DisableCookies": False}
+
+
+def test_31_endpoint_repairs_a_stale_cookie_flag(tmp_path):
+    amnezia = _project(
+        tmp_path,
+        mode="3.1",
+        generation_overrides=STALE_COOKIES,
+    )[0]["amnezia"]
+
+    assert amnezia["random_trailers"] is True
+    assert amnezia["disable_cookies"] is True
+
+
+def test_30_endpoint_drops_a_stale_31_pair(tmp_path):
+    amnezia = _project(
+        tmp_path,
+        mode="3.0",
+        generation_overrides=STALE_COOKIES,
+    )[0]["amnezia"]
+
+    assert "random_trailers" not in amnezia
+    assert "disable_cookies" not in amnezia
+    assert amnezia["header_protection_key"]
+
+
+def test_31_link_states_the_pair_the_server_serves():
+    state, user = _state(mode="3.1", generation_overrides=STALE_COOKIES)
+    state.network.server_ip = "203.0.113.10"
+
+    link = AmneziaWGPlugin().client_link(user, state, profile="desktop")
+
+    assert "random_trailers=true" in link
+    assert "disable_cookies=true" in link
+
+
+def test_31_client_config_states_the_pair_the_server_serves():
+    state, user = _state(mode="3.1", generation_overrides=STALE_COOKIES)
+    state.network.server_ip = "203.0.113.10"
+
+    config = AmneziaWGPlugin().generate_client_config(user, state, profile="desktop")
+
+    assert "RandomTrailers = true" in config
+    assert "DisableCookies = true" in config
+
+
+def test_31_singbox_and_hydrabox_exports_carry_the_pair():
+    """HydraBox and the native sing-box export read the same canonical material."""
+    from hydra.plugins.amneziawg.client_links import AwgClientLinksMixin
+
+    state, user = _state(mode="3.1", generation_overrides=STALE_COOKIES)
+    state.network.server_ip = "203.0.113.10"
+    plugin = AmneziaWGPlugin()
+    profile = plugin._client_profile(user, state, "desktop")
+    assert profile is not None
+
+    options = AwgClientLinksMixin._singbox_amnezia_options(profile)
+
+    assert options["random_trailers"] is True
+    assert options["disable_cookies"] is True
+
+
+def test_31_shadowrocket_subscription_carries_the_pair():
+    """The subscription converts HYDRA's own link, so it cannot disagree with it."""
+    from hydra.services.subscriptions.shadowrocket import build_shadowrocket_awg_link
+
+    state, user = _state(mode="3.1", generation_overrides=STALE_COOKIES)
+    state.network.server_ip = "203.0.113.10"
+    link = AmneziaWGPlugin().client_link(user, state, profile="desktop")
+
+    converted = build_shadowrocket_awg_link(link)
+    obfs_param = urllib.parse.parse_qs(
+        urllib.parse.urlsplit(converted).query,
+    )["obfsParam"][0]
+
+    assert '"random_trailers":"true"' in obfs_param
+    assert '"disable_cookies":"true"' in obfs_param
+
+
+def test_served_generation_needs_the_whole_pair(tmp_path):
+    """A lone ``random_trailers`` is the mixed shape, not a served 3.1."""
+    from hydra.plugins.amneziawg.protocol_mode import served_generation
+
+    def served(amnezia: dict) -> str:
+        path = tmp_path / "config.json"
+        path.write_text(
+            json.dumps({"endpoints": [{"type": "wireguard", "amnezia": amnezia}]}),
+            encoding="utf-8",
+        )
+        return served_generation(path)
+
+    assert served({"random_trailers": True, "disable_cookies": True}) == "3.1"
+    assert served({"header_protection_key": "k", "random_trailers": True}) == "3.0"
+    assert served({"header_protection_key": "k"}) == "3.0"
+    assert served({"jc": 4}) == "2.0"
 
 
 def _served_31_fixture(tmp_path) -> tuple[AmneziaWGPlugin, AppState, User]:

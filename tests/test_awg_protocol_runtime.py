@@ -108,7 +108,15 @@ def test_served_generation_reads_the_core_configuration(tmp_path):
 
     assert write({"jc": 5, "jmin": 50}) == "2.0"
     assert write({"header_protection_key": "k"}) == "3.0"
-    assert write({"header_protection_key": "k", "random_trailers": True}) == "3.1"
+    # The pair *is* the generation, so a lone ``random_trailers`` is the mixed shape an earlier
+    # release could leave behind, not a served 3.1. Reading it as 3.1 is exactly what kept a
+    # cookies-enabled endpoint looking correctly configured.
+    assert write({"header_protection_key": "k", "random_trailers": True}) == "3.0"
+    assert write({
+        "header_protection_key": "k",
+        "random_trailers": True,
+        "disable_cookies": True,
+    }) == "3.1"
     assert write({}) == "unavailable"
     config.unlink()
     assert served_generation(config) == "unavailable"

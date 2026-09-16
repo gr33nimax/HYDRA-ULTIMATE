@@ -21,6 +21,7 @@ from .constants import (
     PROFILE_NETWORKS,
 )
 from .directives import GENERATION_DIRECTIVE_KEYS, canonical_mode
+from .endpoints import canonical_generation
 from .keys import public_key
 
 # The first HydraCore release that carries the two AWG 3.1 configuration fields.
@@ -57,6 +58,7 @@ class _ClientProfile:
     mtu: str
     obfuscation: dict[str, str]
     generation: dict[str, str]
+    protocol_mode: str
 
 
 class AwgClientLinksMixin:
@@ -97,6 +99,10 @@ class AwgClientLinksMixin:
         )
         stored_generation = profile.get("generation")
         generation = stored_generation if isinstance(stored_generation, dict) else {}
+        # Every client artifact reads the material the mode actually serves, not the stored copy: a
+        # profile written by an earlier release can carry the opposite 3.1 pair.
+        mode = self.desired_protocol_mode(state)
+        generation = canonical_generation(generation, mode)
         return _ClientProfile(
             name=profile_name,
             keys=keys,
@@ -107,7 +113,12 @@ class AwgClientLinksMixin:
             port=self._profile_port(state, profile_name),
             mtu=str(profile.get("mtu") or "").strip() or DEFAULT_MTU,
             obfuscation=self._obfuscation(state, profile_name),
-            generation={str(key): value for key, value in generation.items() if value not in (None, "")},
+            generation={
+                str(key): value
+                for key, value in generation.items()
+                if value not in (None, "")
+            },
+            protocol_mode=mode,
         )
 
     @staticmethod
@@ -138,7 +149,10 @@ class AwgClientLinksMixin:
             if profile.obfuscation.get(key) not in (None, ""):
                 lines.append(f"{key} = {profile.obfuscation[key]}")
         for key in GENERATION_DIRECTIVE_KEYS:
-            value = profile.generation.get(key)
+            value = canonical_generation(
+                profile.generation,
+                profile.protocol_mode,
+            ).get(key)
             if value in (None, ""):
                 continue
             # The two 3.1 flags are booleans in the stored material; a client configuration carries tokens.
@@ -408,9 +422,10 @@ class AwgClientLinksMixin:
         client that cannot complete a handshake. Both 3.1 fields are written into the server
         configuration where the mode is switched, and reflected here — never invented here.
         """
+        material = canonical_generation(data.generation, data.protocol_mode)
         return {
             key: value
-            for key, value in data.generation.items()
+            for key, value in material.items()
             if key in GENERATION_DIRECTIVE_KEYS and value not in (None, "")
         }
 

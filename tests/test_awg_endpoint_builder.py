@@ -110,13 +110,16 @@ def test_31_carries_both_booleans_as_json_booleans():
     assert isinstance(block["random_trailers"], bool)
 
 
-def test_31_booleans_follow_the_stored_value():
+def test_31_pair_follows_the_mode_not_the_stored_value():
+    # The pair *is* the generation, not a stored preference. An earlier release could persist
+    # cookies-on next to ``protocol_mode: 3.1``; serving that verbatim made a cookies-enabled host
+    # look correctly configured and every exported link echo a server that was not 3.1.
     generation = {**GENERATION_30, "RandomTrailers": False, "DisableCookies": False}
 
     block = amnezia_block(TRAFFIC_PROVEN_2X, generation, "3.1")
 
-    assert block["random_trailers"] is False
-    assert block["disable_cookies"] is False
+    assert block["random_trailers"] is True
+    assert block["disable_cookies"] is True
 
 
 def test_an_optional_handshake_attempt_limit_is_carried_when_present():
@@ -136,9 +139,13 @@ def test_missing_generation_material_is_refused_by_name(missing):
         generation_block(generation, "3.0")
 
 
-def test_31_refuses_when_the_two_extra_fields_are_absent():
-    with pytest.raises(ValueError, match="RandomTrailers"):
-        generation_block(GENERATION_30, "3.1")
+def test_31_supplies_the_pair_when_the_stored_material_lacks_it():
+    # 3.1 does not depend on the stored pair any more, so its absence is no longer a refusal:
+    # the mode supplies it, which is what heals a profile written by an earlier release.
+    block = generation_block(GENERATION_30, "3.1")
+
+    assert block["random_trailers"] is True
+    assert block["disable_cookies"] is True
 
 
 def test_padding_below_the_header_protection_nonce_is_refused():
