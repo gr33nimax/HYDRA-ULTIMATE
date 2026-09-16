@@ -9,7 +9,7 @@ instead, and that core accepts a different contract:
 
 | Side | Accepted by the core | Evidence |
 | --- | --- | --- |
-| server (`inbound`) | `version` 5 (`obfs_mode: none,http` by default — `tls` is implemented on our side but no third-party client offers it on 5) or 6 (`mode: default,unshaped,unsafe-raw`); 4 is refused | `snell: unsupported version: 4`, `Snell obfs mode must be none or http` |
+| server (`inbound`) | `version` 5 (`obfs_mode: none,http,tls` — `tls` is a layer our side wraps on both ends; Surge and sing-box clients offer only `http` on 5, our client and mihomo take `tls`) or 6 (`mode: default,unshaped,unsafe-raw`); 4 is refused | `snell: unsupported version: 4`, `Snell obfs mode must be none, http or tls` |
 | client (`outbound`) | `version` 4 (`obfs_mode` + `obfs_host`) or 6 (`mode`); 5 is refused | `snell: unsupported version: 5` |
 | obfuscation shape | flat `obfs_mode` / `obfs_host`; a nested `obfs` object is refused | `unknown field "obfs"` |
 
@@ -42,9 +42,7 @@ user is served by a matching server and client.
 3. IF a generation outside `5` and `6` is requested THEN HYDRA SHALL refuse it with a
    message naming the two supported generations.
 4. WHEN the generation is `5` THEN the operator SHALL be able to choose an obfuscation mode
-   `none` or `http` and an obfuscation host used by `http`. `tls` is implemented on our side
-   (`sing-snell/obfs.go`: `ClientConn`/`ServerConn` handle `ObfsModeTLS`) but no third-party client
-   offers it on generation 5, so it stays out of the set.
+   `none`, `http` or `tls`, and an obfuscation host used by `http` and `tls`.
 5. WHEN the generation is `6` THEN the operator SHALL be able to choose a mode `default`,
    `unshaped` or `unsafe-raw`, and obfuscation settings SHALL NOT apply.
 

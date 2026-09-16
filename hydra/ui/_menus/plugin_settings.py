@@ -425,13 +425,14 @@ def _change_snell_transport(
     host = str(desired.config.get("obfs_host", "www.bing.com"))
     selected = menu(
         [
-            ("1", "HTTP", "Имитация HTTP-трафика"),
-            ("2", "Выключить", "Без маскировки: tls бывает только у поколений 1–3, и клиенты его на пятёрке не делают"),
+            ("1", "HTTP", "Имитация HTTP-трафика — понимают все клиенты"),
+            ("2", "TLS", "Имитация HTTPS — наш ядро/HydraBox и mihomo; Throne и Surge — нет"),
+            ("3", "Выключить", "Без маскировки"),
             ("0", "Отмена", ""),
         ],
         f"МАСКИРОВКА SNELL 5 · сейчас {obfs_mode.upper() or 'NONE'}",
     )
-    new_mode = {"1": "http", "2": "none"}.get(selected)
+    new_mode = {"1": "http", "2": "tls", "3": "none"}.get(selected)
     if new_mode is None:
         return None
     new_host = prompt("Маскировочный host", default=host) if new_mode != "none" else host

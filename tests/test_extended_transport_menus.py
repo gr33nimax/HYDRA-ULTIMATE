@@ -38,7 +38,7 @@ def test_hysteria2_tui_changes_congestion_mode():
     )
 
 
-def test_snell_tui_can_turn_masking_off_on_the_classic_generation():
+def test_snell_tui_changes_obfs_to_tls_on_the_classic_generation():
     state = AppState()
     state.protocols["snell"] = PluginState(
         installed=True,
@@ -60,16 +60,15 @@ def test_snell_tui_can_turn_masking_off_on_the_classic_generation():
     ):
         _menu_snell_settings(state, plugin, app)
 
-    # The stored version 4 is the classic generation; its client half stays a 4. Option 2 is
-    # "выключить" now that `tls` is no longer offered for generation 5, and turning masking off
-    # keeps the host that was already stored.
+    # The stored version 4 is the classic generation; its client half stays a 4. Option 2 is the
+    # TLS obfuscation, which our own implementation wraps on both ends.
     app.plugin_command.assert_called_once_with(
         state,
         "snell",
         "set_settings",
         version=5,
-        obfs_mode="none",
-        obfs_host="www.bing.com",
+        obfs_mode="tls",
+        obfs_host="cdn.example.com",
         mode="default",
     )
     assert plugin.method_calls == []
