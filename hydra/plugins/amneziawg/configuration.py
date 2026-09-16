@@ -168,6 +168,14 @@ class AwgConfigurationMixin:
                 used.append(normalized)
         return used
 
+    @staticmethod
+    def _first_free(used: set[str]) -> str:
+        """The first tunnel octet that is not taken: an address, not a hash, so it stays readable."""
+        for octet in range(2, 255):
+            if str(octet) not in used:
+                return str(octet)
+        return "254"
+
 
 def _is_address(value: str) -> bool:
     try:

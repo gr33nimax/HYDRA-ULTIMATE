@@ -99,9 +99,7 @@ class AwgProfileMixin:
         """Create a desired desktop snapshot during an explicit command."""
         protocol = state.protocols["amneziawg"]
         desired = self._profile_config(state, "desktop") or {}
-        configured_network = self._normalize_profile_network(
-            desired.get("network") or protocol.config.get("network")
-        )
+        configured_network = self._normalize_profile_network(desired.get("network") or protocol.config.get("network"))
         configured_obfuscation = (
             desired.get("obfuscation")
             if isinstance(desired.get("obfuscation"), dict)
@@ -112,9 +110,7 @@ class AwgProfileMixin:
             if isinstance(configured_obfuscation, dict) and configured_obfuscation
             else dict(DEFAULT_OBFUSCATION)
         )
-        private_key = str(
-            desired.get("server_private_key") or protocol.config.get("server_private_key") or ""
-        ).strip()
+        private_key = str(desired.get("server_private_key") or protocol.config.get("server_private_key") or "").strip()
         if not private_key:
             private_key = self._generate_private_key()
         materialized = {
@@ -313,7 +309,68 @@ class AwgProfileMixin:
         credential_name = "amneziawg" if profile_name == "desktop" else f"amneziawg_{profile_name}"
         for user, credentials in pending_credentials:
             user.credentials[credential_name] = credentials
+        self._provision_missing_octets(state)
         return True
+
+    def _provision_missing_octets(self, state: PluginStateAccess) -> int:
+        """Give every user of every served profile a tunnel address.
+
+        The interface file used to carry these addresses and the core reads none of it: a peer
+        without an address cannot be projected into an endpoint, nor handed to a client, which is
+        what made a profile created after the move deliver nothing at all. An address that was
+        already issued is never moved.
+        """
+        protocol = state.protocols.get("amneziawg")
+        if protocol is None:
+            return 0
+        profiles = protocol.config.get("profiles")
+        if not isinstance(profiles, dict):
+            return 0
+        assigned = 0
+        for profile_name, default_network in (
+            ("desktop", DEFAULT_NETWORK),
+            ("mobile", MOBILE_NETWORK),
+        ):
+            if profile_name not in profiles:
+                continue
+            _, server_octet, _ = self._network_for_profile(state, profile_name, default_network)
+            credential_name = "amneziawg" if profile_name == "desktop" else f"amneziawg_{profile_name}"
+            used = {server_octet}
+            pending: list[dict] = []
+            for user in state.users:
+                credentials = user.credentials.get(credential_name)
+                if not isinstance(credentials, dict):
+                    continue
+                octet = str(credentials.get("address_octet") or "").strip()
+                if octet:
+                    used.add(octet)
+                else:
+                    pending.append(credentials)
+            for credentials in pending:
+                octet = self._first_free(used)
+                credentials["address_octet"] = octet
+                used.add(octet)
+                assigned += 1
+        return assigned
+
+    def on_enable(self, state: PluginStateAccess) -> None:
+        """Make "enabled" mean "serving": a host without a profile gets one, and its users addresses.
+
+        Enabling AmneziaWG used to set the flags and leave the core with nothing to serve: the screen
+        said "работает" while no endpoint existed, and no client could be handed anything.
+        """
+        protocol = state.protocols.get("amneziawg")
+        if protocol is None:
+            return
+        profile = self._profile_config(state, "desktop")
+        if not isinstance(profile, dict) or not str(profile.get("server_private_key") or "").strip():
+            profiles = self._copied_profiles(protocol.config.get("profiles"))
+            profiles["desktop"] = self._materialize_desktop_profile(state)
+            protocol.config["profiles"] = profiles
+        for user in state.users:
+            if not user.blocked and self._existing_keys(user, "desktop") is None:
+                user.credentials["amneziawg"] = self._generate_keys()
+        self._provision_missing_octets(state)
 
     def _provision_user_profiles(
         self,

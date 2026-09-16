@@ -185,6 +185,30 @@ def _awg3_range(span: tuple[int, int]) -> tuple[int, int]:
     return max(low, AWG3_PADDING_MIN), max(high, AWG3_PADDING_MIN)
 
 
+def lift_paddings_for_mode(obfuscation: dict, protocol_mode: str) -> dict:
+    """Raise each padding to the mode's floor, keeping every value that already clears it.
+
+    A profile drawn under 2.0 may carry `S3=0`: legal there, impossible under 3.x, where header
+    protection reads the same paddings as its nonce. Only the fields below the floor move — equal
+    paddings are an upstream recommendation for RandomTrailers, not a rule, so a value the operator
+    chose keeps standing.
+    """
+    result = {str(key): str(value) for key, value in dict(obfuscation).items()}
+    if str(protocol_mode).strip() in ("", "2.0"):
+        return result
+    for field in ("S1", "S2", "S3", "S4"):
+        raw = result.get(field)
+        if raw is None:
+            continue
+        try:
+            value = int(str(raw).strip())
+        except (TypeError, ValueError):
+            continue
+        if value < AWG3_PADDING_MIN:
+            result[field] = str(AWG3_PADDING_MIN)
+    return result
+
+
 def _draw_paddings(
     local_random: Any,
     *,

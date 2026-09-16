@@ -13,6 +13,7 @@ from typing import Any, TYPE_CHECKING
 from hydra.core.singbox import SINGBOX_CONFIG
 from hydra.plugins.context import PluginStateAccess
 
+from . import presets as awg_presets
 from .directives import canonical_mode
 from .endpoints import generate_generation_material
 
@@ -119,6 +120,12 @@ class AwgProtocolModeMixin:
             stored = profile.get("generation")
             material = dict(stored) if isinstance(stored, dict) else {}
             if target != "2.0":
+                # A profile drawn under 2.0 may carry paddings the third generation cannot use:
+                # header protection reads each of them as its nonce, so they are raised to the floor
+                # here instead of making the whole switch fail on a value nobody chose deliberately.
+                obfuscation = profile.get("obfuscation")
+                if isinstance(obfuscation, dict):
+                    profile["obfuscation"] = awg_presets.lift_paddings_for_mode(obfuscation, target)
                 for key, value in generate_generation_material(target).items():
                     material.setdefault(key, value)
             if material:

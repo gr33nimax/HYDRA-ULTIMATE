@@ -10,7 +10,8 @@ from typing import Any, cast
 
 from unittest.mock import patch
 
-from hydra.core.state import AppState, PluginState
+from hydra.core.state import AppState, PluginState, User
+from hydra.plugins.amneziawg.constants import DEFAULT_OBFUSCATION
 from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
 from hydra.plugins.amneziawg.protocol_mode import served_generation
 
@@ -139,3 +140,63 @@ def test_set_protocol_mode_refuses_a_profile_less_protocol():
         assert "no profile" in str(exc)
     else:
         raise AssertionError("switching without a profile must be refused")
+
+
+def _user_with_keys(email, uuid, octet=None):
+    user = User(email=email, uuid=uuid)
+    credentials = {"private_key": "private-x", "public_key": "public-x", "preshared_key": "psk-x"}
+    if octet:
+        credentials["address_octet"] = octet
+    user.credentials["amneziawg"] = credentials
+    return user
+
+
+def test_switching_to_31_lifts_paddings_the_third_generation_cannot_use():
+    """A profile drawn under 2.0 may carry S3=0: the switch raises it instead of failing."""
+    plugin = AmneziaWGPlugin()
+    state = _state("2.0")
+    profile = state.protocols["amneziawg"].config["profiles"]["desktop"]
+    profile["obfuscation"] = {**DEFAULT_OBFUSCATION, "S1": "14", "S2": "9", "S3": "0", "S4": "20"}
+    user = _user_with_keys("a@example.com", "u1", octet="3")
+    state.users = [user]
+
+    assert plugin.set_protocol_mode(state, "3.1") is True
+
+    obfuscation = profile["obfuscation"]
+    assert obfuscation["S2"] == "12" and obfuscation["S3"] == "12"
+    assert obfuscation["S1"] == "14" and obfuscation["S4"] == "20"
+    # И конфигурация собирается: именно этот шаг и падал на сервере.
+    endpoint = plugin.server_endpoints(state)[0]
+    assert endpoint["amnezia"]["s3"] == 12
+    assert "header_protection_key" in endpoint["amnezia"]
+
+
+def test_second_generation_keeps_its_own_paddings():
+    plugin = AmneziaWGPlugin()
+    state = _state("2.0")
+    profile = state.protocols["amneziawg"].config["profiles"]["desktop"]
+    profile["obfuscation"] = {**DEFAULT_OBFUSCATION, "S3": "0"}
+
+    assert plugin.set_protocol_mode(state, "3.1") is True
+    assert plugin.set_protocol_mode(state, "2.0") is True
+
+    assert profile["obfuscation"]["S3"] == "12"
+
+
+def test_enabling_creates_the_profile_and_gives_users_addresses():
+    """«Включено» означает «обслуживает»: без профиля и адресов сервер ничего не отдаёт."""
+    plugin = AmneziaWGPlugin()
+    state = AppState(
+        protocols={"amneziawg": PluginState(installed=True, enabled=True, config={})},
+        users=[_user_with_keys("a@example.com", "u1")],
+    )
+    state.network.server_ip = "203.0.113.10"
+
+    plugin.on_enable(state)
+
+    config = state.protocols["amneziawg"].config
+    assert "desktop" in config["profiles"]
+    assert state.users[0].credentials["amneziawg"]["address_octet"]
+    # Клиентский артефакт существует — до выдачи адреса он был пустым, и подписка молчала.
+    assert plugin.client_link(state.users[0], state)
+    assert plugin.server_endpoints(state)[0]["peers"]
