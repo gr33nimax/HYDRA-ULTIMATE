@@ -123,10 +123,7 @@ class AntiDPILifecycleMixin:
             return self._fail("Could not persist reconciliation outcome")
         if failed:
             return self._fail(
-                "Reconciliation failed: "
-                + ", ".join(failed)
-                + " — "
-                + "; ".join(reasons),
+                "Reconciliation failed: " + ", ".join(failed) + " — " + "; ".join(reasons),
             )
         self.last_error = ""
         return True

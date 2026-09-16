@@ -349,8 +349,10 @@ def test_service_unit_grants_the_capabilities_iptables_needs(tmp_path):
     """
     script = tmp_path / "hydra-antidpi.py"
     service = tmp_path / "hydra-antidpi.service"
-    with patch("hydra.plugins.antidpi.plugin.SCRIPT_FILE", script), \
-         patch("hydra.plugins.antidpi.plugin.SERVICE_FILE", service):
+    with (
+        patch("hydra.plugins.antidpi.plugin.SCRIPT_FILE", script),
+        patch("hydra.plugins.antidpi.plugin.SERVICE_FILE", service),
+    ):
         AntiDPIPlugin()._write_service()
 
     unit = service.read_text(encoding="utf-8")
@@ -370,13 +372,15 @@ def test_reconciliation_keeps_the_underlying_step_cause(wired):
         plugin.last_error = cause
         return False
 
-    with patch.object(plugin, "_ensure_sets", return_value=True), \
-         patch.object(plugin, "_ensure_rules", side_effect=failing_rules), \
-         patch.object(plugin, "_remove_obsolete_telemetry", return_value=True), \
-         patch.object(plugin, "release_whitelisted_bans", return_value=0), \
-         patch.object(plugin, "whitelisted_bans", return_value=[]), \
-         patch.object(plugin, "_restore_bans", return_value=True), \
-         patch.object(plugin, "record_reconciliation", return_value=True):
+    with (
+        patch.object(plugin, "_ensure_sets", return_value=True),
+        patch.object(plugin, "_ensure_rules", side_effect=failing_rules),
+        patch.object(plugin, "_remove_obsolete_telemetry", return_value=True),
+        patch.object(plugin, "release_whitelisted_bans", return_value=0),
+        patch.object(plugin, "whitelisted_bans", return_value=[]),
+        patch.object(plugin, "_restore_bans", return_value=True),
+        patch.object(plugin, "record_reconciliation", return_value=True),
+    ):
         assert plugin.reconcile_enforcement(AppState()) is False
 
     assert "INPUT rules" in plugin.last_error
