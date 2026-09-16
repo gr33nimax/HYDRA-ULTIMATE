@@ -10,14 +10,15 @@ from collections.abc import Callable
 from typing import Any, cast
 from pathlib import Path
 
+from hydra.core.state import AppState
 from hydra.plugins.amneziawg.client_links import AwgClientLinksMixin
 from hydra.plugins.amneziawg.configuration import AwgConfigurationMixin
 from hydra.plugins.amneziawg.installation import AwgInstallationMixin
 from hydra.plugins.amneziawg.observation import AwgObservationMixin
 from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
 from hydra.plugins.amneziawg.profiles import AwgProfileMixin
+from hydra.plugins.amneziawg.projection import AwgProjectionMixin
 from hydra.plugins.amneziawg.protocol_mode import AwgProtocolModeMixin
-from hydra.plugins.amneziawg.runtime import AwgRuntimeMixin
 
 
 _PACKAGE = Path(inspect.getfile(AmneziaWGPlugin)).parent
@@ -25,11 +26,11 @@ _CAPABILITY_CLASSES = (
     AmneziaWGPlugin,
     AwgInstallationMixin,
     AwgConfigurationMixin,
+    AwgProjectionMixin,
     AwgProfileMixin,
     AwgProtocolModeMixin,
     AwgClientLinksMixin,
     AwgObservationMixin,
-    AwgRuntimeMixin,
 )
 
 
@@ -246,14 +247,11 @@ def test_render_and_query_hooks_do_not_provision_or_persist():
     }
     for method_name in (
         "configure",
-        "_generate_config_for_iface",
         "generate_client_config",
         "generate_singbox_client_config",
         "client_link",
         "amnezia_link",
         "get_profiles",
-        "traffic",
-        "connected_clients",
     ):
         assert not (_called_names(method_name) & forbidden), method_name
 
@@ -299,16 +297,22 @@ def test_profile_commands_have_no_runtime_or_persistence_callbacks():
         assert "systemctl" not in literals
 
 
-def test_apply_is_the_profile_runtime_reconciler():
-    calls = _called_names("apply")
-    assert "write_text" in calls
-    assert "unlink" in calls
-    literals = {
-        node.value
-        for node in ast.walk(_tree("apply"))
-        if isinstance(node, ast.Constant) and isinstance(node.value, str)
-    }
-    assert "systemctl" in literals
+def test_the_plugin_owns_no_host_side_apply_and_no_configuration_file():
+    """Removal fence: the core serves the tunnel, so nothing here writes a host file or drives a unit."""
+    assert "apply" not in _METHODS
+    assert "_generate_config_for_iface" not in _METHODS
+    for method_name, tree in _METHODS.items():
+        literals = {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+        assert "awg-quick" not in literals, method_name
+        assert "amneziawg-install" not in literals, method_name
+        assert "systemctl" not in literals, method_name
+    fragment = AmneziaWGPlugin().configure(AppState())
+    assert fragment.endpoints == []
+    assert fragment.nft_tproxy_ifaces == []
 
 
 def test_lifecycle_hooks_do_not_call_other_lifecycle_hooks():

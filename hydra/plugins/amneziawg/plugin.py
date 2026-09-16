@@ -1,14 +1,13 @@
 """AmneziaWG plugin façade.
 
-The public plugin API remains on this class while cohesive production mixins
-own configuration rendering, desired profiles, client serialization, host
-installation, runtime reconciliation, and observation.
+The public plugin API remains on this class while cohesive production mixins own configuration
+rendering, desired profiles, client serialization, readiness, and observation. The core terminates the
+tunnel; there is no host-side runtime to reconcile.
 """
 
 from __future__ import annotations
 
 import subprocess as subprocess  # compatibility monkeypatch seam
-from pathlib import Path
 
 from hydra.contracts import BackupResource
 from hydra.core.host import HOST as HOST  # compatibility monkeypatch seam
@@ -16,20 +15,18 @@ from hydra.plugins.base import BasePlugin, PluginCategory, PluginMeta
 
 from .client_links import AwgClientLinksMixin
 from .configuration import AwgConfigurationMixin
+from .projection import AwgProjectionMixin
 from .constants import (
-    AWG_BIN as AWG_BIN,
     AWG_CONF as AWG_CONF,
     AWG_CONF_1 as AWG_CONF_1,
     AWG_CONF_DIR as AWG_CONF_DIR,
     AWG_INSTALL_DIR as AWG_INSTALL_DIR,
-    AWG_INTERFACE as AWG_INTERFACE,
-    AWG_INTERFACE_1 as AWG_INTERFACE_1,
     AWG_PARAMS as AWG_PARAMS,
-    AWG_UNIT as AWG_UNIT,
-    AWG_UNIT_1 as AWG_UNIT_1,
     DEFAULT_OBFUSCATION as DEFAULT_OBFUSCATION,
     DEFAULT_PORT as DEFAULT_PORT,
     DEFAULT_PORT_1 as DEFAULT_PORT_1,
+    ENDPOINT_TAG_DESKTOP as ENDPOINT_TAG_DESKTOP,
+    ENDPOINT_TAG_MOBILE as ENDPOINT_TAG_MOBILE,
     KNOWN_SUBNETS,
     OBFUSCATION_KEYS as _OBFUSCATION_KEYS,
     OBFUSCATION_KEYS_EXTENDED as _OBFUSCATION_KEYS_EXTENDED,
@@ -39,7 +36,6 @@ from .installation import AwgInstallationMixin
 from .observation import AwgObservationMixin
 from .profiles import AwgProfileMixin
 from .protocol_mode import AwgProtocolModeMixin
-from .runtime import AwgRuntimeMixin
 
 
 # These names existed in the original module. Keep their values and mutability
@@ -53,20 +49,20 @@ OBFUSCATION_KEYS_EXTENDED = list(_OBFUSCATION_KEYS_EXTENDED)
 class AmneziaWGPlugin(
     AwgInstallationMixin,
     AwgConfigurationMixin,
+    AwgProjectionMixin,
     AwgProfileMixin,
     AwgProtocolModeMixin,
     AwgClientLinksMixin,
     AwgObservationMixin,
-    AwgRuntimeMixin,
     BasePlugin,
 ):
     """Coordinate the AmneziaWG capabilities behind the plugin contract."""
 
     meta = PluginMeta(
         name="amneziawg",
-        description=("AmneziaWG 2.0: WireGuard с обфускацией (kernel-модуль)"),
+        description=("AmneziaWG 2.0: WireGuard с обфускацией (обслуживает ядро)"),
         category=PluginCategory.TRANSPORT,
-        version="2.1.0",
+        version="3.0.0",
         needs_domain=False,
         commands=(
             "add_profile",
@@ -78,16 +74,3 @@ class AmneziaWGPlugin(
         subscription_profile_query="get_profiles",
         backup_resources=(BackupResource(str(AWG_CONF_DIR), "tree"),),
     )
-
-    def __init__(self) -> None:
-        self._pending_conf: str | None = None
-        self._pending_conf_1: str | None = None
-        self._peer_map: dict[str, str | tuple[str, str]] = {}
-
-    def traffic_snapshot(self, state):
-        """Expose raw interface counters to generic accounting."""
-        return self.traffic(state)
-
-    def _conf_path(self, profile_name: str) -> Path:
-        """Resolve legacy patchable path seams at the façade boundary."""
-        return AWG_CONF_1 if profile_name == "mobile" else AWG_CONF

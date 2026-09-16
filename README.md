@@ -46,7 +46,7 @@ Caddy L4 и nftables. Применение — транзакционное, с 
                                                 ├─▶ Sing-Box ─▶ интернет
   UDP/443 ──────────▶  один QUIC-транспорт     ─┤   маршруты     напрямую
   8443/udp ─────────▶  Hysteria2               ─┤   DNS          или через
-  51820/udp ────────▶  AmneziaWG ─▶ TPROXY     ─┤   исходящие    WARP
+  51820/udp ────────▶  AmneziaWG ─▶ ядро       ─┤   исходящие    WARP
   56000/udp ────────▶  qWDTT                   ─┘
 
   поверх всего:  AntiDPI · Honeypot · Fail2ban · IPBan
@@ -107,7 +107,7 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 
 | Транспорт | Порт по умолчанию | Тип |
 | :--- | :--- | :--- |
-| **AmneziaWG 2.0 / 3.0 / 3.1** | `51820/udp`, `51821/udp` | WireGuard с upstream-managed generation |
+| **AmneziaWG 2.0 / 3.0 / 3.1** | `51820/udp`, `51821/udp` | WireGuard: туннель обслуживает ядро |
 | **AnyTLS** | `443/tcp` | обфусцированный TLS |
 | **TrustTunnel** | `443/tcp`, `443/udp` | TLS, режимы TCP и QUIC |
 | **ShadowTLS** | `443/tcp` | ShadowTLS v3 + Trojan detour |

@@ -402,9 +402,22 @@ def validate_params(params: dict, protocol_mode: str = "2.0") -> tuple[bool, str
                         "защите заголовка не хватит нонса"
                     )
 
-        # Валидация H1-H4 (до uint32) и уникальности
+        # Валидация H1-H4 (до uint32), диапазонов и уникальности. Значение заголовка бывает и
+        # диапазоном — так его выдаёт установщик и так его принимает ядро; для проверки уникальности
+        # берём начало диапазона (совпавшие начала означают пересечение).
         h_vals = []
         for key in ("H1", "H2", "H3", "H4"):
+            text = str(params.get(key, 0)).strip()
+            if "-" in text:
+                begin, _, end = text.partition("-")
+                try:
+                    low, high = int(begin.strip()), int(end.strip())
+                except ValueError:
+                    return False, f"{key}={text} не является числом или диапазоном"
+                if low < 0 or high > 4294967295 or low > high:
+                    return False, f"{key}={text} вне диапазона (0-4294967295)"
+                h_vals.append(low)
+                continue
             v = get_int(key)
             if v < 0 or v > 4294967295:
                 return False, f"{key}={v} вне диапазона (0-4294967295)"

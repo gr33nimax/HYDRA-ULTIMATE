@@ -1,5 +1,15 @@
 # Changelog
 
+- AmneziaWG is now served by HydraCore itself, and the installer-era scheme is gone from the
+  code: no checkout, no `--protocol-status`/`--enable-awg3*`, no package purge, no kernel-module
+  handling, no `awg-quick` units, no `params` snapshot, no interface file and no TPROXY entries.
+  HYDRA writes one `wireguard` endpoint per profile with the peers it issues, generates the key
+  material itself, reads the served generation back from the core configuration, and attributes
+  per-user traffic by the peer's tunnel address. The generation is a field of the core
+  configuration, `random_trailers` works after the fork fix, and removing the protocol touches
+  neither the package manager nor the kernel module — leftovers of an older install are named and
+  removed. Profiles are re-issued and clients import them again.
+
 - NaiveProxy can now run without UDP over TCP. UoT is one plugin setting (`set_uot`,
   TUI: «UDP через TCP (UoT)»), on by default so nothing changes on its own. Turning it
   off rebuilds Caddy from the upstream `forwardproxy` module instead of the UoT fork and

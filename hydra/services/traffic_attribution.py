@@ -29,6 +29,9 @@ class TrafficEvidence:
     """Indexes derived from one Sing-box journal snapshot."""
 
     source_ports: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    # A tunnel peer has no stable source port of its own: the address it holds inside the tunnel is the
+    # identity, which is what a core-served AmneziaWG endpoint can offer.
+    source_addresses: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     sources: Mapping[str, Mapping[Address, str]] = field(default_factory=dict)
     destinations: Mapping[
         str,
@@ -374,6 +377,10 @@ class ConnectionAttributor:
             source_port,
         )
         user = evidence.sources.get(protocol, {}).get(source)
+        if user:
+            return user
+
+        user = evidence.source_addresses.get(protocol, {}).get(source[0])
         if user:
             return user
 

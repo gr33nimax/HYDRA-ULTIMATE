@@ -342,3 +342,42 @@ def test_active_connections_include_a_custom_attributed_protocol():
             "traffic_scope": "active",
         },
     ]
+
+def test_an_awg_peer_is_attributed_by_its_tunnel_address():
+    """A tunnel peer has no stable source port: the address it holds inside the tunnel identifies it."""
+    from hydra.core.state import AppState, PluginState, User
+    from hydra.services.traffic_attribution import ConnectionAttributor, TrafficEvidence
+    from hydra.services.traffic_daemon import _awg_source_addresses
+
+    protocol = PluginState(
+        installed=True,
+        config={"protocol_mode": "2.0", "profiles": {"desktop": {"network": "10.67.67.0/24"}}},
+    )
+    alice = User(email="alice@example.com", uuid="u1")
+    alice.credentials["amneziawg"] = {"address_octet": "3"}
+    mallory = User(email="mallory@example.com", uuid="u2", blocked=True)
+    mallory.credentials["amneziawg"] = {"address_octet": "9"}
+    state = AppState(protocols={"amneziawg": protocol}, users=[alice, mallory])
+
+    addresses = _awg_source_addresses(state)
+    assert addresses == {"10.67.67.3": "alice@example.com"}
+
+    connection = {"metadata": {"sourceIP": "10.67.67.3", "sourcePort": "44321"}}
+    assert (
+        ConnectionAttributor._evidence_user(
+            "amneziawg",
+            connection,
+            TrafficEvidence(source_addresses={"amneziawg": addresses}),
+        )
+        == "alice@example.com"
+    )
+
+    unknown = {"metadata": {"sourceIP": "10.67.67.77", "sourcePort": "44321"}}
+    assert (
+        ConnectionAttributor._evidence_user(
+            "amneziawg",
+            unknown,
+            TrafficEvidence(source_addresses={"amneziawg": addresses}),
+        )
+        == ""
+    )

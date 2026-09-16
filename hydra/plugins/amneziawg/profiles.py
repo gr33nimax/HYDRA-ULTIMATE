@@ -2,24 +2,21 @@
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from hydra.core.host import HOST
 from hydra.core.state_models import User
 from hydra.plugins.context import PluginStateAccess
 
-from .configuration import interface_prefix
 from .constants import (
-    AWG_INTERFACE,
-    AWG_INTERFACE_1,
-    AWG_UNIT,
     DEFAULT_NETWORK,
     DEFAULT_OBFUSCATION,
     DEFAULT_PORT,
     DEFAULT_PORT_1,
+    ENDPOINT_TAG_DESKTOP,
+    ENDPOINT_TAG_MOBILE,
+    MOBILE_NETWORK,
 )
+from .keys import generate_preshared_key, generate_private_key, public_key
 
 
 class AwgProfileMixin:
@@ -34,43 +31,16 @@ class AwgProfileMixin:
     def _generate_keys(self) -> dict[str, str]:
         """Generate one complete key bundle without mutating desired state."""
         private_key = self._generate_private_key()
-        public_result = self._awg("pubkey", _input=private_key)
-        if public_result.returncode != 0:
-            public_result = HOST.run(
-                ["wg", "pubkey"],
-                input=private_key,
-                capture_output=True,
-                text=True,
-            )
-        preshared_result = self._awg("genpsk")
-        if preshared_result.returncode != 0:
-            preshared_result = HOST.run(
-                ["wg", "genpsk"],
-                capture_output=True,
-                text=True,
-            )
-        public_key = public_result.stdout.strip()
-        preshared_key = preshared_result.stdout.strip()
-        if not private_key or not public_key or not preshared_key:
-            raise RuntimeError("AmneziaWG key generation returned an empty key")
         return {
             "private_key": private_key,
-            "public_key": public_key,
-            "preshared_key": preshared_key,
+            "public_key": public_key(private_key),
+            "preshared_key": generate_preshared_key(),
         }
 
-    def _generate_private_key(self) -> str:
-        result = self._awg("genkey")
-        if result.returncode != 0:
-            result = HOST.run(
-                ["wg", "genkey"],
-                capture_output=True,
-                text=True,
-            )
-        private_key = result.stdout.strip()
-        if not private_key:
-            raise RuntimeError("AmneziaWG private-key generation failed")
-        return private_key
+    @staticmethod
+    def _generate_private_key() -> str:
+        """A fresh server or client private key."""
+        return generate_private_key()
 
     def _provision_user_keys(
         self,
@@ -94,26 +64,6 @@ class AwgProfileMixin:
         if not isinstance(credentials, dict) or not required <= credentials.keys():
             return None
         return credentials
-
-    def _server_pubkey_for_conf(self, conf_path: Path) -> str:
-        text = conf_path.read_text(encoding="utf-8") if conf_path.exists() else ""
-        match = re.search(
-            r"PrivateKey\s*=\s*(\S+)",
-            interface_prefix(text),
-        )
-        if not match:
-            return ""
-        result = self._awg("pubkey", _input=match.group(1))
-        if result.returncode != 0:
-            result = HOST.run(
-                ["wg", "pubkey"],
-                input=match.group(1),
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                return ""
-        return result.stdout.strip()
 
     @staticmethod
     def _generate_obfuscation(
@@ -142,34 +92,6 @@ class AwgProfileMixin:
             strategy = preset
         return generate_params(strategy=strategy, carrier=carrier, protocol_mode=protocol_mode)
 
-    @staticmethod
-    def _private_key_from_conf(conf_path: Path) -> str:
-        if not conf_path.exists():
-            return ""
-        match = re.search(
-            r"^PrivateKey\s*=\s*(\S+)",
-            interface_prefix(conf_path.read_text(encoding="utf-8")),
-            re.M,
-        )
-        return match.group(1) if match else ""
-
-    @staticmethod
-    def _port_from_conf(conf_path: Path, default: int) -> int:
-        if not conf_path.exists():
-            return default
-        match = re.search(
-            r"^ListenPort\s*=\s*(\d+)",
-            interface_prefix(conf_path.read_text(encoding="utf-8")),
-            re.M,
-        )
-        if not match:
-            return default
-        try:
-            port = int(match.group(1))
-        except ValueError:
-            return default
-        return port if 1 <= port <= 65535 else default
-
     def _materialize_desktop_profile(
         self,
         state: PluginStateAccess,
@@ -177,40 +99,32 @@ class AwgProfileMixin:
         """Create a desired desktop snapshot during an explicit command."""
         protocol = state.protocols["amneziawg"]
         desired = self._profile_config(state, "desktop") or {}
-        conf_path = self._conf_path("desktop")
-        _, _, runtime_network = self._network_for_profile(
-            state,
-            conf_path,
-            "desktop",
-            DEFAULT_NETWORK,
+        configured_network = self._normalize_profile_network(
+            desired.get("network") or protocol.config.get("network")
         )
-        configured_network = self._normalize_profile_network(desired.get("network") or protocol.config.get("network"))
-        resolved_network = runtime_network if conf_path.exists() else self._resolve_network(state)
         configured_obfuscation = (
             desired.get("obfuscation")
             if isinstance(desired.get("obfuscation"), dict)
             else protocol.config.get("obfuscation")
         )
-        obfuscation = dict(configured_obfuscation) if isinstance(configured_obfuscation, dict) else self._obfuscation()
-        if not obfuscation:
-            obfuscation = dict(DEFAULT_OBFUSCATION)
-        private_key = str(
-            desired.get("server_private_key")
-            or protocol.config.get("server_private_key")
-            or self._private_key_from_conf(conf_path)
-            or ""
+        obfuscation = (
+            dict(configured_obfuscation)
+            if isinstance(configured_obfuscation, dict) and configured_obfuscation
+            else dict(DEFAULT_OBFUSCATION)
         )
+        private_key = str(
+            desired.get("server_private_key") or protocol.config.get("server_private_key") or ""
+        ).strip()
         if not private_key:
             private_key = self._generate_private_key()
-        port = self._normalize_port(
-            desired.get("port") or protocol.port or self._port_from_conf(conf_path, DEFAULT_PORT),
-            DEFAULT_PORT,
-        )
         materialized = {
-            "interface": str(desired.get("interface") or AWG_INTERFACE),
-            "port": port,
+            "interface": str(desired.get("interface") or ENDPOINT_TAG_DESKTOP),
+            "port": self._normalize_port(
+                desired.get("port") or protocol.port,
+                DEFAULT_PORT,
+            ),
             "preset": str(desired.get("preset") or protocol.config.get("preset") or "default"),
-            "network": configured_network or resolved_network,
+            "network": configured_network or self._resolve_network(state),
             "server_private_key": private_key,
             "obfuscation": obfuscation,
         }
@@ -228,16 +142,15 @@ class AwgProfileMixin:
                 if name not in {"desktop", "mobile"} or not isinstance(profile, dict):
                     continue
                 mobile = name == "mobile"
-                default_interface = AWG_INTERFACE_1 if mobile else AWG_INTERFACE
+                default_interface = ENDPOINT_TAG_MOBILE if mobile else ENDPOINT_TAG_DESKTOP
                 default_port = DEFAULT_PORT_1 if mobile else DEFAULT_PORT
-                default_network = "10.68.68.0/24" if mobile else DEFAULT_NETWORK
+                default_network = MOBILE_NETWORK if mobile else DEFAULT_NETWORK
                 obfuscation = profile.get("obfuscation")
                 result.append(
                     {
                         "name": name,
                         "label": "Mobile" if mobile else "Desktop",
                         "interface": str(profile.get("interface") or default_interface),
-                        "unit": (f"awg-quick@{profile.get('interface') or default_interface}"),
                         "port": self._normalize_port(
                             profile.get("port"),
                             default_port,
@@ -250,17 +163,15 @@ class AwgProfileMixin:
             if result:
                 return result
 
-        _, _, network = self._network(state)
         return [
             {
                 "name": "desktop",
                 "label": "Desktop",
-                "interface": AWG_INTERFACE,
-                "unit": AWG_UNIT,
-                "port": self._current_port(),
+                "interface": ENDPOINT_TAG_DESKTOP,
+                "port": self._profile_port(state, "desktop"),
                 "preset": "default",
-                "network": network,
-                "obfuscation": self._obfuscation(),
+                "network": self._network_for_profile(state, "desktop", DEFAULT_NETWORK)[2],
+                "obfuscation": self._obfuscation(state, "desktop"),
             }
         ]
 
@@ -291,7 +202,7 @@ class AwgProfileMixin:
         )
         pending_credentials = self._missing_profile_credentials(state)
         profiles["mobile"] = {
-            "interface": AWG_INTERFACE_1,
+            "interface": ENDPOINT_TAG_MOBILE,
             "port": DEFAULT_PORT_1,
             "preset": preset,
             "network": network,

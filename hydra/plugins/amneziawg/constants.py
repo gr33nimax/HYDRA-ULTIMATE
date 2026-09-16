@@ -1,8 +1,7 @@
-"""Stable AmneziaWG runtime defaults.
+"""Stable AmneziaWG defaults and the paths an older HYDRA wrote.
 
-Mutable test seams for the two configuration paths intentionally live in
-``plugin.py``.  Production helpers obtain those paths from the plugin instance
-so callers that historically patched ``plugin.AWG_CONF`` keep working.
+Mutable test seams for the legacy configuration paths intentionally live in ``plugin.py``: a host that
+was never cut over may still carry those files, and they are what ``uninstall`` cleans up.
 """
 
 from __future__ import annotations
@@ -11,25 +10,27 @@ from pathlib import Path
 
 from .directives import LEGACY_DIRECTIVE_KEYS
 
-
 AWG_INSTALL_DIR = Path("/opt/awg-install")
-AWG_BIN = Path("/usr/bin/awg")
 AWG_CONF_DIR = Path("/etc/amnezia/amneziawg")
 AWG_CONF = AWG_CONF_DIR / "awg0.conf"
 AWG_CONF_1 = AWG_CONF_DIR / "awg1.conf"
 AWG_PARAMS = AWG_CONF_DIR / "params"
 
-AWG_INTERFACE = "awg0"
-AWG_INTERFACE_1 = "awg1"
-AWG_UNIT = "awg-quick@awg0"
-AWG_UNIT_1 = "awg-quick@awg1"
-
 DEFAULT_PORT = 51820
 DEFAULT_PORT_1 = 51821
 DEFAULT_NETWORK = "10.67.67.0/24"
-DEFAULT_SERVER_IPV4 = "10.67.67.1"
+MOBILE_NETWORK = "10.68.68.0/24"
+DEFAULT_MTU = "1376"
+# One place that says which network a profile defaults to: the endpoint and every client artifact
+# read it from here, so a profile cannot be served one subnet and handed another.
+PROFILE_NETWORKS = {"desktop": DEFAULT_NETWORK, "mobile": MOBILE_NETWORK}
 KNOWN_SUBNETS = ("10.66.66.0/16", "172.17.0.0/16")
 PREFERRED_SUBNETS = (DEFAULT_NETWORK,)
+
+# The tag each profile carries in the core configuration; the same label reaches the
+# operator and the client artifacts.
+ENDPOINT_TAG_DESKTOP = "awg-desktop"
+ENDPOINT_TAG_MOBILE = "awg-mobile"
 
 DEFAULT_OBFUSCATION = {
     "Jc": "5",

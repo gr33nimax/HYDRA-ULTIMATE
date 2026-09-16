@@ -11,16 +11,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
+from hydra.core.host import HOST
 from hydra.core.state_models import User
 from hydra.plugins.context import PluginStateAccess
 
 from .constants import (
-    DEFAULT_NETWORK,
-    DEFAULT_PORT,
-    DEFAULT_PORT_1,
+    DEFAULT_MTU,
     OBFUSCATION_KEYS_EXTENDED,
+    PROFILE_NETWORKS,
 )
-from .directives import AwgInterfaceDirectives, GENERATION_DIRECTIVE_KEYS
+from .directives import GENERATION_DIRECTIVE_KEYS, canonical_mode
+from .keys import public_key
 
 # The first HydraCore release that carries the two AWG 3.1 configuration fields.
 # An older core refuses such a profile at parse time, so the HydraBox export stays
@@ -47,7 +48,6 @@ def kernel_supports_awg31() -> bool:
 @dataclass(frozen=True)
 class _ClientProfile:
     name: str
-    conf_path: Path
     keys: dict
     address_base: str
     address_octet: str
@@ -56,7 +56,7 @@ class _ClientProfile:
     port: int
     mtu: str
     obfuscation: dict[str, str]
-    directives: AwgInterfaceDirectives
+    generation: dict[str, str]
 
 
 class AwgClientLinksMixin:
@@ -74,84 +74,59 @@ class AwgClientLinksMixin:
         state: PluginStateAccess,
         profile_name: str,
     ) -> _ClientProfile | None:
-        conf_path = self._conf_path(profile_name)
-        if not conf_path.exists():
-            return None
+        """Serialize one user's profile from desired state alone."""
+        profile = self._profile_config(state, profile_name) or {}
         keys = self._existing_keys(user, profile_name)
         if keys is None:
             return None
-        address_octet = self._existing_peer_ips_for_conf(conf_path).get(keys["public_key"])
+        address_octet = str(keys.get("address_octet") or "").strip()
         if not address_octet:
             return None
-        default_network = "10.68.68.0/24" if profile_name == "mobile" else DEFAULT_NETWORK
+        # The public half is derived from the server key HYDRA holds: the key is the only source, so a
+        # client can never be handed a value the endpoint does not serve.
+        server_private_key = str(profile.get("server_private_key") or "").strip()
+        server_public_key = str(profile.get("server_public_key") or "").strip() or (
+            public_key(server_private_key) if server_private_key else ""
+        )
+        if not server_public_key:
+            return None
         address_base, _, _ = self._network_for_profile(
             state,
-            conf_path,
             profile_name,
-            default_network,
+            PROFILE_NETWORKS.get(profile_name, PROFILE_NETWORKS["desktop"]),
         )
-        server_public_key = self._server_pubkey_for_conf(conf_path)
-        port = self._profile_port(state, profile_name)
-        params = self._params()
-        endpoint = state.network.server_ip or params.get("SERVER_PUB_IP") or self._public_ip()
-        mtu_match = re.search(
-            r"^MTU\s*=\s*(\d+)",
-            self._interface_block_for_conf(conf_path, address_base, "1"),
-            re.M,
-        )
-        mtu = mtu_match.group(1) if mtu_match and mtu_match.group(1) != "1420" else "1376"
-        protocol = state.protocols.get("amneziawg")
-        mode = protocol.config.get("protocol_mode", "2.0") if protocol else "2.0"
-        directives = AwgInterfaceDirectives.parse(
-            conf_path.read_text(encoding="utf-8"),
-        ).for_mode(mode)
+        stored_generation = profile.get("generation")
+        generation = stored_generation if isinstance(stored_generation, dict) else {}
         return _ClientProfile(
             name=profile_name,
-            conf_path=conf_path,
             keys=keys,
             address_base=address_base,
             address_octet=address_octet,
             server_public_key=server_public_key,
-            endpoint=endpoint,
-            port=port,
-            mtu=mtu,
-            obfuscation=self._obfuscation_for_conf(conf_path),
-            directives=directives,
+            endpoint=state.network.server_ip or self._public_ip(),
+            port=self._profile_port(state, profile_name),
+            mtu=str(profile.get("mtu") or "").strip() or DEFAULT_MTU,
+            obfuscation=self._obfuscation(state, profile_name),
+            generation={
+                str(key): value
+                for key, value in generation.items()
+                if value not in (None, "")
+            },
         )
 
-    def _profile_port(
-        self,
-        state: PluginStateAccess,
-        profile_name: str,
-    ) -> int:
-        profile = self._profile_config(state, profile_name)
-        default_port = DEFAULT_PORT_1 if profile_name == "mobile" else DEFAULT_PORT
-        if profile is not None and profile.get("port") is not None:
-            try:
-                port = int(profile["port"])
-                if 1 <= port <= 65535:
-                    return port
-            except (TypeError, ValueError):
-                pass
-        conf_path = self._conf_path(profile_name)
-        text = conf_path.read_text(encoding="utf-8") if conf_path.exists() else ""
-        match = re.search(r"^ListenPort\s*=\s*(\d+)", text, re.M)
-        if not match:
-            return default_port
-        try:
-            return int(match.group(1))
-        except ValueError:
-            return default_port
+    @staticmethod
+    def _public_ip() -> str:
+        """The address clients dial when desired state recorded none."""
+        result = HOST.run(["hostname", "-I"], capture_output=True, text=True)
+        addresses = (result.stdout or "").split()
+        return addresses[0] if addresses else "127.0.0.1"
 
     def _render_client_config(
         self,
         profile: _ClientProfile,
         state: PluginStateAccess,
     ) -> str:
-        params = self._params()
-        primary_dns = params.get("CLIENT_DNS_1", "1.1.1.1")
-        secondary_dns = params.get("CLIENT_DNS_2", "")
-        dns = f"{primary_dns}, {secondary_dns}" if secondary_dns else primary_dns
+        dns = "1.1.1.1"
         dnscrypt = state.protocols.get("dnscrypt")
         if dnscrypt and dnscrypt.enabled:
             dns = profile.endpoint
@@ -167,9 +142,11 @@ class AwgClientLinksMixin:
             if profile.obfuscation.get(key) not in (None, ""):
                 lines.append(f"{key} = {profile.obfuscation[key]}")
         for key in GENERATION_DIRECTIVE_KEYS:
-            value = profile.directives.values.get(key)
-            if value not in (None, ""):
-                lines.append(f"{key} = {value}")
+            value = profile.generation.get(key)
+            if value in (None, ""):
+                continue
+            # The two 3.1 flags are booleans in the stored material; a client configuration carries tokens.
+            lines.append(f"{key} = {str(value).lower() if isinstance(value, bool) else value}")
         lines.extend(
             (
                 "",
@@ -357,7 +334,9 @@ class AwgClientLinksMixin:
             for key, value in self._generation_fields(data).items():
                 name = re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
                 if key in {"RandomTrailers", "DisableCookies"}:
-                    value = "true" if value.lower() in {"1", "true", "on", "yes"} else "false"
+                    # The material is a boolean once HYDRA owns it and a token when it comes from an
+                    # interface file; one normalizer handles both.
+                    value = "true" if _boolean(value) else "false"
                 params.append(f"{name}={value}")
         if field("PublicKey"):
             params.append(f"public_key={field('PublicKey')}")
@@ -434,7 +413,7 @@ class AwgClientLinksMixin:
         """
         return {
             key: value
-            for key, value in data.directives.values.items()
+            for key, value in data.generation.items()
             if key in GENERATION_DIRECTIVE_KEYS and value not in (None, "")
         }
 

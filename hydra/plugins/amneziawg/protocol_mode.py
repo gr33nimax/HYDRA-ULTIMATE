@@ -1,31 +1,64 @@
-"""Transactional desired-state command for upstream AWG generation changes."""
+"""Desired-state command for AWG generation changes.
+
+The core serves the tunnel, so a mode change is the shape of the endpoint's amnezia object: HYDRA
+regenerates it, the command service applies and verifies it, and nothing shells out to an installer.
+"""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
+from hydra.core.singbox import SINGBOX_CONFIG
 from hydra.plugins.context import PluginStateAccess
 
-from .directives import AwgDirectiveError, AwgInterfaceDirectives, canonical_mode
+from .directives import canonical_mode
+from .endpoints import generate_generation_material
+
+
+def _generation_of_amnezia(amnezia: object) -> str | None:
+    """Read one served amnezia block's generation, or None when it carries no material."""
+    if not isinstance(amnezia, dict) or not amnezia:
+        return None
+    if "random_trailers" in amnezia:
+        return "3.1"
+    if "header_protection_key" in amnezia:
+        return "3.0"
+    return "2.0"
+
+
+def served_generation(config_path: Path | None = None) -> str:
+    """The generation the core is actually configured with, read back from its configuration.
+
+    This is the authoritative answer for a served host: the installer's status talks about a scheme
+    that is no longer in play.
+    """
+    path = config_path or SINGBOX_CONFIG
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "unavailable"
+    endpoints = payload.get("endpoints") if isinstance(payload, dict) else None
+    if not isinstance(endpoints, list):
+        return "unavailable"
+    for endpoint in endpoints:
+        if not isinstance(endpoint, dict) or endpoint.get("type") != "wireguard":
+            continue
+        generation = _generation_of_amnezia(endpoint.get("amnezia"))
+        if generation is not None:
+            return generation
+    return "unavailable"
 
 
 class AwgProtocolModeMixin:
-    """Keep desired mode aligned with a verified upstream runtime mode."""
+    """Keep desired mode aligned with the generation the core is configured with."""
 
     if TYPE_CHECKING:
 
-        def observed_protocol_mode(self) -> str: ...
-
-        def migrate_protocol_mode(
-            self,
-            mode: object,
-            state: PluginStateAccess | None = None,
-        ) -> None: ...
-
-        def _conf_path(self, profile_name: str) -> Path: ...
-
-        def export_capabilities(self, state: PluginStateAccess) -> dict[str, str]: ...
+        def __getattr__(self, name: str) -> Any:
+            """Static dependency seam for the mode command."""
+            ...
 
     @staticmethod
     def desired_protocol_mode(state: PluginStateAccess) -> str:
@@ -33,13 +66,10 @@ class AwgProtocolModeMixin:
         raw = protocol.config.get("protocol_mode", "2.0") if protocol else "2.0"
         return canonical_mode(raw)
 
-    def protocol_mode_status(self, state: PluginStateAccess) -> dict[str, object]:
+    def protocol_mode_status(self, state: PluginStateAccess) -> dict[str, Any]:
         """Return a redacted mode and export-capability projection."""
         desired = self.desired_protocol_mode(state)
-        try:
-            observed = self.observed_protocol_mode()
-        except RuntimeError:
-            observed = "unavailable"
+        observed = served_generation()
         protocol = state.protocols.get("amneziawg")
         profiles = protocol.config.get("profiles") if protocol else None
         desktop = profiles.get("desktop") if isinstance(profiles, dict) else None
@@ -51,26 +81,54 @@ class AwgProtocolModeMixin:
             "exports": self.export_capabilities(state),
         }
 
+    def _stored_generation(self, state: PluginStateAccess) -> str:
+        """The generation the material HYDRA keeps describes, which is what the projection emits."""
+        protocol = state.protocols.get("amneziawg")
+        profiles = protocol.config.get("profiles") if protocol else None
+        if not isinstance(profiles, dict):
+            return "2.0"
+        for profile in profiles.values():
+            if not isinstance(profile, dict):
+                continue
+            material = profile.get("generation")
+            if not isinstance(material, dict) or not material:
+                continue
+            if "RandomTrailers" in material:
+                return "3.1"
+            if "HeaderProtectionKey" in material:
+                return "3.0"
+        return "2.0"
+
+    def _set_served_generation(self, state: PluginStateAccess, target: str) -> bool:
+        """Switch the generation of the host the core serves.
+
+        Entering 3.x fills in the material a profile does not carry yet, and leaving 3.x keeps it,
+        which makes a return free. Values the operator already has are never replaced.
+        """
+        protocol = state.protocols.get("amneziawg")
+        if protocol is None:
+            raise RuntimeError("AmneziaWG configuration is missing")
+        if self.desired_protocol_mode(state) == target and self._stored_generation(state) == target:
+            return False
+        profiles = protocol.config.get("profiles")
+        if not isinstance(profiles, dict) or not profiles:
+            raise RuntimeError("AmneziaWG has no profile to switch")
+        for profile in profiles.values():
+            if not isinstance(profile, dict):
+                continue
+            stored = profile.get("generation")
+            material = dict(stored) if isinstance(stored, dict) else {}
+            if target != "2.0":
+                for key, value in generate_generation_material(target).items():
+                    material.setdefault(key, value)
+            if material:
+                profile["generation"] = material
+        protocol.config["protocol_mode"] = target
+        return True
+
     def set_protocol_mode(self, state: PluginStateAccess, mode: object) -> bool:
-        """Migrate upstream first; persist desired mode only after verification."""
+        """Persist the desired generation; the command service applies and verifies it."""
         protocol = state.protocols.get("amneziawg")
         if protocol is None or not protocol.installed:
             raise RuntimeError("AmneziaWG is not installed")
-        target = canonical_mode(mode)
-        desired = self.desired_protocol_mode(state)
-        observed = self.observed_protocol_mode()
-        if desired == target and observed == target:
-            return False
-        if observed != target:
-            self.migrate_protocol_mode(target, state)
-        if self.observed_protocol_mode() != target:
-            raise RuntimeError("AmneziaWG protocol migration did not reach requested mode")
-        conf_path = self._conf_path("desktop")
-        if not conf_path.exists():
-            raise RuntimeError("AmneziaWG primary configuration is missing")
-        try:
-            AwgInterfaceDirectives.parse(conf_path.read_text(encoding="utf-8")).for_mode(target)
-        except AwgDirectiveError as exc:
-            raise RuntimeError("AmneziaWG migrated configuration is invalid") from exc
-        protocol.config["protocol_mode"] = target
-        return True
+        return self._set_served_generation(state, canonical_mode(mode))
