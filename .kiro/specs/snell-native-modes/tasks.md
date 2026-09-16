@@ -84,3 +84,23 @@ TSK-006 (HydraCore fence) is independent and closes R2.4
 - [x] **TSK-009 — Shadowrocket takes the obfuscation from its own parameter**
   - **Факт:** live Shadowrocket exports corrected the provisional URI grammar: `none` keeps the full credential base64 with `version=4&udp=1`; `http`/`tls` use credential-only base64 followed by literal `@host:port`, plus `plugin=obfs-local;...`; TLS serializes `obfs-host={"Host":"<host>"}` inside that plugin. Generation 6 still passes through untouched. The cross-protocol target contract lives in `.kiro/specs/shadowrocket-imports/requirements.md`; regression coverage is in `tests/test_shadowrocket_links.py`, `tests/test_snell_modes.py` and `tests/test_subscriptions.py`.
   - **Dependency:** TSK-003. _Requirements: R3.4._
+
+- [x] **TSK-010 — generation 5 obfuscation: what clients offer, not what the wire format forbids**
+  - **Факт (что ломалось):** живой хост отдавал `version: 5` + `obfs_mode: tls`, и в журнале ядра
+    **каждое** клиентское соединение (Throne, разные профили, трое суток) падало одинаково:
+    `inbound/snell[...]: process connection …: snell: serve …: read request: open record header:
+    cipher: message authentication failed`. Причина — не формат: tls-обфускация реализована с обеих
+    сторон (`sing-snell/obfs.go:93-113` — `ClientConn`/`ServerConn` разбирают `ObfsModeTLS`, рабочие
+    `tlsObfsClientConn`/`tlsObfsServerConn` — `:304`, `:398`). Ограничение живёт в клиентах:
+    официальный Surge даёт tls только поколениям 1–3, а sing-box-клиент (и Throne на нём) на пятёрке
+    его не предлагает. Сервер с tls отвечает только нашему клиенту — а живой хост не отвечал никому.
+  - **Факт (правка):** `OBFS_MODES = ("none", "http")`; `_obfs_mode()` и `set_settings()` отвергают
+    `tls` с причиной, а не пишут его молча; меню предлагает HTTP и выключение; три теста, считавшие
+    `tls` валидным, проверяют отказ, и один — что меню умеет выключать маскировку. Проверка:
+    `tests/test_snell_modes.py`, `tests/test_snell_plugin.py`, `tests/test_extended_transport_menus.py`
+    → 37 passed.
+  - **Открытый вопрос (доказательство, а не мнение):** loopback-тест «наш inbound v5 ↔ наш outbound v4»
+    с `tls` покажет, работает ли наша пара end-to-end; парного теста в репозитории нет, успешных
+    соединений в живых логах тоже. Возврат `tls` (опциональным режимом только для нашего клиента или
+    вторым inbound'ом на пользователя) решается по результату этого теста.
+  - _Requirements: R1, R5._

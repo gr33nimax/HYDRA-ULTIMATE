@@ -19,12 +19,15 @@ PORT_START = 32000
 PORT_END = 32999
 SNELL_GENERATIONS = (5, 6)
 SNELL_VERSION = 5
-# Obfuscation is not free-form. Surge's own protocol gives `tls` only to generations 1-3;
-# generations 4 and 5 carry `http` or nothing, and generation 6 replaced obfuscation with its own
-# traffic `mode`. A generation-5 server left with `tls` offers a combination no conforming client
-# can answer, and every connection then dies on its first record with "cipher: message
-# authentication failed" — which is exactly what a host configured that way showed for every
-# client, every time.
+# Obfuscation is not free-form, but the rule is about clients rather than about the wire
+# format. Surge's client offers `tls` only to generations 1-3 and keeps `http` for 4 and 5 —
+# while our own implementation wraps `tls` on both ends (`sing-snell/obfs.go`: ClientConn and
+# ServerConn both handle ObfsModeTLS), and independent implementations do the same. What that
+# means in practice: a generation-5 server carrying `tls` answers our own client and nobody else,
+# because sing-box's outbound and Surge do not offer it there. A live host configured that way
+# showed exactly that: every client connection died on its first record with "cipher: message
+# authentication failed". `tls` stays out of the default set; offering it deliberately is a
+# separate decision, not something a mode list should do by accident.
 OBFS_MODES = ("none", "http")
 OBFS_MODE = "none"
 OBFS_HOST = "www.bing.com"
@@ -287,8 +290,9 @@ class SnellPlugin(BasePlugin):
         mode = str(raw).strip().lower() or "none"
         if mode not in OBFS_MODES:
             raise ValueError(
-                "Snell obfs mode must be none or http: `tls` belongs to generations 1-3, and "
-                "generation 6 replaces obfuscation with its own mode",
+                "Snell obfs mode must be none or http: `tls` is implemented on our side but no "
+                "third-party client offers it on generation 5, so a server carrying it would answer "
+                "only our own client",
             )
         return mode
 
@@ -337,8 +341,9 @@ class SnellPlugin(BasePlugin):
         normalized_mode = str(obfs_mode).strip().lower() or "none"
         if normalized_mode not in OBFS_MODES:
             raise ValueError(
-                "Snell obfs mode must be none or http: `tls` belongs to generations 1-3, and "
-                "generation 6 replaces obfuscation with its own mode",
+                "Snell obfs mode must be none or http: `tls` is implemented on our side but no "
+                "third-party client offers it on generation 5, so a server carrying it would answer "
+                "only our own client",
             )
         normalized_v6_mode = str(mode).strip().lower() or V6_MODE
         if normalized_v6_mode not in V6_MODES:

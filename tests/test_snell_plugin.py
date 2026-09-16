@@ -250,7 +250,7 @@ def test_invalid_runtime_settings_do_not_mutate_state():
         plugin.set_settings(
             state,
             6,
-            "tls",
+            "http",
             "cdn.example.com",
         )
     assert state.protocols["snell"].config == before
