@@ -225,8 +225,12 @@ ProtectSystem=strict
 ReadWritePaths=/var/lib/hydra /var/log/caddy-l4 /run
 # AF_INET/AF_INET6 are required for outbound Telegram HTTPS notifications.
 RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
-CapabilityBoundingSet=CAP_NET_ADMIN
-AmbientCapabilities=CAP_NET_ADMIN
+# The ipset match extension opens a netlink socket while iptables parses
+# `-m set --match-set`.  With CAP_NET_ADMIN alone every -C and -I fails with
+# "Can't open socket to ipset", so reconciliation reports a failure and a lost
+# DROP rule could never be re-installed.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
 [Install]
 WantedBy=multi-user.target

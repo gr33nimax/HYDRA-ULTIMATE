@@ -1,4 +1,10 @@
-"""Navigation, input, and notification-noise contracts of the admin bot."""
+"""Navigation, input, and notification-noise contracts of the admin bot.
+
+Handlers run against duck-typed stand-ins for ``telegram.Update`` built by
+``_update`` and captured by ``_rendered``.  Both are annotated ``Any`` so the
+intent is stated once, rather than suppressed at every call site: the handler
+only touches the fields the double provides.
+"""
 
 from __future__ import annotations
 

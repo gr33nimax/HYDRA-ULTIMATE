@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hydra.core.state_models import AppState
 from hydra.plugins.antidpi.detection import (
     evidence_problem,
     is_enforcement_evidence,
@@ -332,3 +333,51 @@ def test_plugin_identity_and_capabilities_stay_stable():
         "remove_whitelist",
         "unban_address",
     )
+
+
+# --- service sandbox -------------------------------------------------------
+
+
+def test_service_unit_grants_the_capabilities_iptables_needs(tmp_path):
+    """The ipset matcher needs CAP_NET_RAW, not only CAP_NET_ADMIN.
+
+    ``iptables`` opens a netlink socket while it parses ``-m set
+    --match-set``.  Under the service sandbox the earlier unit granted only
+    CAP_NET_ADMIN, so every ``-C``/``-I`` answered "Can't open socket to
+    ipset": reconciliation reported a failed step on the live host and a lost
+    DROP rule could never have been re-installed.
+    """
+    script = tmp_path / "hydra-antidpi.py"
+    service = tmp_path / "hydra-antidpi.service"
+    with patch("hydra.plugins.antidpi.plugin.SCRIPT_FILE", script), \
+         patch("hydra.plugins.antidpi.plugin.SERVICE_FILE", service):
+        AntiDPIPlugin()._write_service()
+
+    unit = service.read_text(encoding="utf-8")
+    assert "CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW" in unit
+    assert "AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW" in unit
+    # iptables serializes host-wide updates through /run/xtables.lock.
+    assert "ReadWritePaths=/var/lib/hydra /var/log/caddy-l4 /run" in unit
+    assert "RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6" in unit
+
+
+def test_reconciliation_keeps_the_underlying_step_cause(wired):
+    """A bare step label hid why iptables refused; the cause must survive."""
+    plugin = AntiDPIPlugin()
+    cause = "правило iptables для hydra_antidpi: Can't open socket to ipset"
+
+    def failing_rules() -> bool:
+        plugin.last_error = cause
+        return False
+
+    with patch.object(plugin, "_ensure_sets", return_value=True), \
+         patch.object(plugin, "_ensure_rules", side_effect=failing_rules), \
+         patch.object(plugin, "_remove_obsolete_telemetry", return_value=True), \
+         patch.object(plugin, "release_whitelisted_bans", return_value=0), \
+         patch.object(plugin, "whitelisted_bans", return_value=[]), \
+         patch.object(plugin, "_restore_bans", return_value=True), \
+         patch.object(plugin, "record_reconciliation", return_value=True):
+        assert plugin.reconcile_enforcement(AppState()) is False
+
+    assert "INPUT rules" in plugin.last_error
+    assert "Can't open socket to ipset" in plugin.last_error

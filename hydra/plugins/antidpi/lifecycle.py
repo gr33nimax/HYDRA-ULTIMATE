@@ -74,7 +74,8 @@ class AntiDPILifecycleMixin:
             return self._fail(
                 "AntiDPI state is degraded; automatic enforcement is paused",
             )
-        failed = []
+        failed: list[str] = []
+        reasons: list[str] = []
         del state
         steps = (
             ("ipset sets", self._ensure_sets),
@@ -82,28 +83,51 @@ class AntiDPILifecycleMixin:
             ("obsolete telemetry cleanup", self._remove_obsolete_telemetry),
         )
         for label, action in steps:
+            # Each step writes its own cause into ``last_error``; reporting the
+            # bare label would hide why iptables refused, which is exactly how
+            # a missing CAP_NET_RAW stayed invisible behind "INPUT rules".
+            self.last_error = ""
             try:
-                if not action():
-                    failed.append(label)
-            except Exception:
+                done = action()
+            except Exception as exc:
+                reasons.append(f"{label}: {type(exc).__name__}: {exc}")
+                failed.append(label)
+                continue
+            if not done:
+                reasons.append(
+                    f"{label}: {self.last_error or 'шаг вернул False'}",
+                )
                 failed.append(label)
         try:
             self.release_whitelisted_bans()
             covered = self.whitelisted_bans()
-        except Exception:
+        except Exception as exc:
             covered = ["state read failed"]
+            reasons.append(f"whitelist-covered bans: {type(exc).__name__}: {exc}")
         if covered:
             failed.append("whitelist-covered bans")
         else:
+            self.last_error = ""
             try:
-                if not self._restore_bans():
-                    failed.append("stored bans")
-            except Exception:
+                restored = self._restore_bans()
+            except Exception as exc:
+                reasons.append(f"stored bans: {type(exc).__name__}: {exc}")
                 failed.append("stored bans")
+            else:
+                if not restored:
+                    reasons.append(
+                        f"stored bans: {self.last_error or 'шаг вернул False'}",
+                    )
+                    failed.append("stored bans")
         if not self.record_reconciliation(failed):
             return self._fail("Could not persist reconciliation outcome")
         if failed:
-            return self._fail("Reconciliation failed: " + ", ".join(failed))
+            return self._fail(
+                "Reconciliation failed: "
+                + ", ".join(failed)
+                + " — "
+                + "; ".join(reasons),
+            )
         self.last_error = ""
         return True
 
