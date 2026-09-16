@@ -28,16 +28,27 @@ class AwgObservationMixin:
     ) -> PluginStatus:
         installed = self._installed()
         enabled = False
+        serving = False
+        port = 0
         if state is not None:
             protocol = state.protocols.get("amneziawg")
             if protocol:
                 installed = bool(protocol.installed and installed)
                 enabled = bool(protocol.enabled and installed)
-        port = self._profile_port(state, "desktop") if installed and state is not None else 0
+            if enabled:
+                # "Enabled" is a flag; serving is a fact. A host enabled without a profile leaves the
+                # core with no endpoint, and calling that "работает" is what kept a silent
+                # misconfiguration invisible on a live server.
+                try:
+                    serving = bool(self.server_endpoints(state))
+                except Exception:  # noqa: BLE001 - an unbuildable configuration is not serving
+                    serving = False
+                if serving:
+                    port = self._profile_port(state, "desktop")
         return PluginStatus(
             installed=installed,
             enabled=enabled,
-            running=enabled and _core_running(),
+            running=bool(enabled and serving and _core_running()),
             port=port,
         )
 

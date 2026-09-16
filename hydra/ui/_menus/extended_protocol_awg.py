@@ -37,6 +37,7 @@ from hydra.ui._menus.extended_protocol_awg_profiles import (
     _manage_awg_profiles,
     _rotate_awg_obfuscation,
 )
+from hydra.ui._menus.extended_protocol_awg_version import _awg_switch_version
 
 
 def _menu_amneziawg(
@@ -150,22 +151,7 @@ def _menu_amneziawg(
             _awg_generate_wizard_menu(state, p, app)
 
         elif choice == "7" and ps.installed and ps.enabled:
-            target = menu(
-                [
-                    ("1", "AWG 2.0", "Максимальная совместимость"),
-                    ("2", "AWG 3.0", "Нужны совместимые клиенты"),
-                    ("3", "AWG 3.1", "Нужны совместимые клиенты"),
-                ],
-                "ВЕРСИЯ AMNEZIAWG",
-            )
-            selected = {"1": "2.0", "2": "3.0", "3": "3.1"}.get(target)
-            if selected and confirm(f"Переключить сервер на AWG {selected}?", default=False):
-                try:
-                    changed = app.plugin_command(state, "amneziawg", "set_protocol_mode", mode=selected)
-                    success("Версия AWG применена" if changed else "Эта версия уже активна")
-                except (RuntimeError, ValueError, OSError) as exc:
-                    error(f"Не удалось переключить AWG: {exc}")
-                prompt("Нажмите Enter")
+            _awg_switch_version(state, p, app)
 
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):
