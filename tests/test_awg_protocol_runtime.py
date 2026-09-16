@@ -95,6 +95,26 @@ def test_awg31_core_gate_compares_real_version_strings():
     assert with_version(None) is False
 
 
+def _desktop_config(state: AppState) -> dict:
+    """The AmneziaWG configuration block of a state built by these tests.
+
+    Desired state is a loose mapping, so the read is narrowed once here instead of chaining
+    subscripts at every assertion site.
+    """
+    protocol = state.protocols.get("amneziawg")
+    config = protocol.config if protocol is not None else None
+    assert isinstance(config, dict), "the protocol has no configuration block"
+    return config
+
+
+def _desktop_profile(state: AppState) -> dict:
+    """The desktop profile as desired state stores it, ready to be read or mutated."""
+    profiles = _desktop_config(state).get("profiles")
+    profile = profiles.get("desktop") if isinstance(profiles, dict) else None
+    assert isinstance(profile, dict), "the desktop profile is missing"
+    return profile
+
+
 def test_served_generation_reads_the_core_configuration(tmp_path):
     """The observed generation is what the core actually runs, not what state wishes for."""
     config = tmp_path / "config.json"
@@ -112,11 +132,16 @@ def test_served_generation_reads_the_core_configuration(tmp_path):
     # release could leave behind, not a served 3.1. Reading it as 3.1 is exactly what kept a
     # cookies-enabled endpoint looking correctly configured.
     assert write({"header_protection_key": "k", "random_trailers": True}) == "3.0"
-    assert write({
-        "header_protection_key": "k",
-        "random_trailers": True,
-        "disable_cookies": True,
-    }) == "3.1"
+    assert (
+        write(
+            {
+                "header_protection_key": "k",
+                "random_trailers": True,
+                "disable_cookies": True,
+            }
+        )
+        == "3.1"
+    )
     assert write({}) == "unavailable"
     config.unlink()
     assert served_generation(config) == "unavailable"
@@ -126,27 +151,25 @@ def test_set_protocol_mode_switches_the_served_generation_without_the_installer(
     """Entering 3.x fills the material a profile lacks; leaving it back keeps that material."""
     plugin = AmneziaWGPlugin()
     state = _state("2.0")
-    profiles = state.protocols["amneziawg"].config["profiles"]
-
     assert plugin.set_protocol_mode(state, "3.1") is True
-    generation = profiles["desktop"]["generation"]
+    generation = _desktop_profile(state)["generation"]
     assert "HeaderProtectionKey" in generation
     assert generation["RandomTrailers"] is True
-    assert state.protocols["amneziawg"].config["protocol_mode"] == "3.1"
+    assert _desktop_config(state)["protocol_mode"] == "3.1"
 
     operator_value = generation["HeaderProtectionKey"]
     assert plugin.set_protocol_mode(state, "3.1") is False
-    assert profiles["desktop"]["generation"]["HeaderProtectionKey"] == operator_value
+    assert _desktop_profile(state)["generation"]["HeaderProtectionKey"] == operator_value
 
     assert plugin.set_protocol_mode(state, "2.0") is True
-    assert profiles["desktop"]["generation"] == generation
+    assert _desktop_profile(state)["generation"] == generation
 
 
 def test_a_31_profile_with_cookies_on_is_repaired_not_called_already_active():
     """The live case: the stored generation says 3.1 while the pair is not the one 3.1 means."""
     plugin = AmneziaWGPlugin()
     state = _state("3.1")
-    profile = state.protocols["amneziawg"].config["profiles"]["desktop"]
+    profile = _desktop_profile(state)
     profile["obfuscation"] = dict(DEFAULT_OBFUSCATION)
     profile["server_private_key"] = generate_private_key()
     profile["generation"] = {"RandomTrailers": True, "DisableCookies": False}
@@ -185,7 +208,7 @@ def test_switching_to_31_lifts_paddings_the_third_generation_cannot_use():
     """A profile drawn under 2.0 may carry S3=0: the switch raises it instead of failing."""
     plugin = AmneziaWGPlugin()
     state = _state("2.0")
-    profile = state.protocols["amneziawg"].config["profiles"]["desktop"]
+    profile = _desktop_profile(state)
     profile["obfuscation"] = {**DEFAULT_OBFUSCATION, "S1": "14", "S2": "9", "S3": "0", "S4": "20"}
     user = _user_with_keys("a@example.com", "u1", octet="3")
     state.users = [user]
@@ -204,7 +227,7 @@ def test_switching_to_31_lifts_paddings_the_third_generation_cannot_use():
 def test_second_generation_keeps_its_own_paddings():
     plugin = AmneziaWGPlugin()
     state = _state("2.0")
-    profile = state.protocols["amneziawg"].config["profiles"]["desktop"]
+    profile = _desktop_profile(state)
     profile["obfuscation"] = {**DEFAULT_OBFUSCATION, "S3": "0"}
 
     assert plugin.set_protocol_mode(state, "3.1") is True
@@ -224,7 +247,7 @@ def test_enabling_creates_the_profile_and_gives_users_addresses():
 
     plugin.on_enable(state)
 
-    config = state.protocols["amneziawg"].config
+    config = _desktop_config(state)
     assert "desktop" in config["profiles"]
     assert state.users[0].credentials["amneziawg"]["address_octet"]
     # Клиентский артефакт существует — до выдачи адреса он был пустым, и подписка молчала.
@@ -236,7 +259,7 @@ def test_the_amnezia_link_carries_the_generation_as_tokens():
     """The client reads every AWG parameter as a string: a boolean reaches it as an empty value."""
     plugin = AmneziaWGPlugin()
     state = _state("3.1")
-    profile = state.protocols["amneziawg"].config["profiles"]["desktop"]
+    profile = _desktop_profile(state)
     profile["obfuscation"] = dict(DEFAULT_OBFUSCATION)
     profile["server_private_key"] = generate_private_key()
     profile["generation"] = {
