@@ -303,9 +303,7 @@ def test_the_plugin_owns_no_host_side_apply_and_no_configuration_file():
     assert "_generate_config_for_iface" not in _METHODS
     for method_name, tree in _METHODS.items():
         literals = {
-            node.value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+            node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)
         }
         assert "awg-quick" not in literals, method_name
         assert "amneziawg-install" not in literals, method_name

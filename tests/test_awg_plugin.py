@@ -69,18 +69,6 @@ def test_plugin_meta():
     assert p.meta.needs_domain is False
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def test_status_uses_persisted_lifecycle_instead_of_config_presence():
     p = AmneziaWGPlugin()
     state = AppState(
@@ -96,10 +84,6 @@ def test_status_uses_persisted_lifecycle_instead_of_config_presence():
     assert status.installed is True
     assert status.enabled is False
     assert status.running is False
-
-
-
-
 
 
 def test_configure_no_side_effects():
@@ -137,8 +121,6 @@ def test_configure_empty_when_no_conf():
         assert frag.inbounds == []
 
 
-
-
 def test_on_user_add_defers_apply_to_orchestrator():
     p = AmneziaWGPlugin()
     user = _make_user("a@x.com")
@@ -163,10 +145,6 @@ def test_on_user_remove_defers_apply_to_orchestrator():
         p.on_user_remove(user, state)
 
     host_run.assert_not_called()
-
-
-
-
 
 
 def test_resolve_network_avoids_conflicts():
@@ -232,14 +210,6 @@ def test_invalid_legacy_amnezia_network_falls_back_without_raising():
     assert result == ("10.67.67", "1", "10.67.67.0/24")
 
 
-
-
-
-
-
-
-
-
 def test_add_profile_only_mutates_desired_state(tmp_path):
     p = AmneziaWGPlugin()
     desktop_conf = tmp_path / "awg0.conf"
@@ -265,7 +235,7 @@ def test_add_profile_only_mutates_desired_state(tmp_path):
                 "private_key": "mobile-private",
                 "public_key": "mobile-public",
                 "preshared_key": "mobile-psk",
-            "address_octet": "4",
+                "address_octet": "4",
                 "address_octet": "4",
             },
         ),
@@ -287,12 +257,6 @@ def test_add_profile_only_mutates_desired_state(tmp_path):
         assert profile["server_private_key"]
     assert user.credentials["amneziawg_mobile"]["public_key"] == "mobile-public"
     assert "amneziawg_mobile" not in blocked.credentials
-
-
-
-
-
-
 
 
 def test_rotate_obfuscation_only_mutates_desired_state(tmp_path):
@@ -343,18 +307,6 @@ def test_rotate_obfuscation_only_mutates_desired_state(tmp_path):
     assert isinstance(desktop, dict)
     assert desktop["preset"] == "stealth"
     assert desktop["obfuscation"] == replacement
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # The padding each packet type carries must fit one header-protection nonce (12 bytes); above
@@ -458,10 +410,6 @@ def test_2x_paddings_are_untouched_by_the_3x_minimum():
         assert ok, (mode, reason)
 
 
-
-
-
-
 def test_on_user_add_provisions_active_profiles_only_in_lifecycle():
     p = AmneziaWGPlugin()
     user = _make_user("new@example.com")
@@ -530,8 +478,6 @@ def test_get_profiles_reads_desired_state_without_host_or_mutation():
     assert profiles[0]["port"] == 51820
     assert profiles[0]["network"] == "10.67.67.0/24"
     assert state == before
-
-
 
 
 def test_presets_strategies_and_overrides():
