@@ -47,9 +47,9 @@ class AwgInstallationMixin:
 
     def install(self) -> bool:
         if not _core_present():
-            print("  HydraCore не установлен: обслуживать AmneziaWG нечем")
+            print("  HydraCore не установлен — обслуживать AmneziaWG нечем")
             return False
-        print("  AmneziaWG обслуживается ядром: устанавливать нечего")
+        print("  AmneziaWG готов к работе: туннель обслуживает HydraCore")
         return True
 
     def uninstall(self) -> bool:
@@ -59,9 +59,12 @@ class AwgInstallationMixin:
                 continue
             _remove(path)
             removed = True
+        # Nothing else is touched on purpose: the core keeps serving the tunnel, so removing the
+        # plugin must not take the AmneziaWG package or module away from it.
         if removed:
             print("  Остатки прежней схемы удалены")
-        print("  AmneziaWG обслуживается ядром: пакеты, модуль и юниты не трогаем")
+        else:
+            print("  Прежней схемы на хосте нет — удалять нечего")
         return True
 
     @staticmethod
