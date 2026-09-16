@@ -38,7 +38,7 @@ def _supported():
     return patch("hydra.plugins.snell.plugin.kernel_supports_snell", return_value=True)
 
 
-@pytest.mark.parametrize("obfs_mode", ["none", "http", "tls"])
+@pytest.mark.parametrize("obfs_mode", ["none", "http"])
 def test_snell5_server_uses_the_flat_obfs_field(obfs_mode):
     state = _state({"version": 5, "obfs_mode": obfs_mode})
 
@@ -67,7 +67,7 @@ def test_snell6_server_uses_its_own_mode(mode):
 
 
 def test_snell5_client_outbound_is_the_classic_pair():
-    state = _state({"version": 5, "obfs_mode": "tls"})
+    state = _state({"version": 5, "obfs_mode": "http"})
     plugin = SnellPlugin()
 
     with _supported():
@@ -76,9 +76,28 @@ def test_snell5_client_outbound_is_the_classic_pair():
     # A version 5 server has no version 5 client in the core's library: the pair is
     # negotiated as a client-side 4 with the obfuscation settings.
     assert outbound["version"] == 4
-    assert outbound["obfs_mode"] == "tls"
+    assert outbound["obfs_mode"] == "http"
     assert outbound["obfs_host"] == "www.bing.com"
     assert "obfs" not in outbound
+
+
+def test_snell5_refuses_tls_obfuscation():
+    """`tls` belongs to generations 1-3: a fifth-generation server offering it cannot be answered."""
+    state = _state({"version": 5, "obfs_mode": "tls"})
+
+    with _supported(), pytest.raises(ValueError) as failure:
+        SnellPlugin().configure(state)
+
+    assert "none or http" in str(failure.value)
+
+
+def test_settings_refuse_tls_on_generation_five():
+    state = _state({"version": 5})
+
+    with pytest.raises(ValueError) as failure:
+        SnellPlugin().set_settings(state, version=5, obfs_mode="tls")
+
+    assert "none or http" in str(failure.value)
 
 
 def test_snell6_client_outbound_matches_its_server():
@@ -135,8 +154,8 @@ def test_snell_settings_validation_and_migration():
     state = _state()
     plugin = SnellPlugin()
 
-    assert plugin.set_settings(state, version=5, obfs_mode="tls") is True
-    assert state.protocols["snell"].config["obfs_mode"] == "tls"
+    assert plugin.set_settings(state, version=5, obfs_mode="http") is True
+    assert state.protocols["snell"].config["obfs_mode"] == "http"
     assert plugin.set_settings(state, version=6, obfs_mode="none", mode="unshaped") is True
     assert state.protocols["snell"].config == {
         "version": 6,
@@ -149,10 +168,14 @@ def test_snell_settings_validation_and_migration():
         plugin.set_settings(state, version=7, obfs_mode="none")
     with pytest.raises(ValueError):
         plugin.set_settings(state, version=5, obfs_mode="quic")
+    # `tls` obfuscation belongs to generations 1-3: hosting it on generation 5 is the combination
+    # that made every client fail at its first record.
+    with pytest.raises(ValueError):
+        plugin.set_settings(state, version=5, obfs_mode="tls")
     with pytest.raises(ValueError):
         plugin.set_settings(state, version=6, obfs_mode="http")
     with pytest.raises(ValueError):
-        plugin.set_settings(state, version=5, obfs_mode="tls", mode="unshaped")
+        plugin.set_settings(state, version=5, obfs_mode="http", mode="unshaped")
     with pytest.raises(ValueError):
         plugin.set_settings(state, version=5, obfs_mode="tls", obfs_host="")
 
@@ -192,11 +215,11 @@ def test_snell_status_names_the_generation_and_its_clients():
 
     with _supported():
         modern = plugin.status(_state({"version": 6, "mode": "unshaped"}))
-        classic = plugin.status(_state({"version": 5, "obfs_mode": "tls"}))
+        classic = plugin.status(_state({"version": 5, "obfs_mode": "http"}))
 
     assert modern.info["Версия"] == "v6"
     assert modern.info["Клиенты"] == "только v6"
     assert modern.info["Obfs"] == "не применимо"
     assert classic.info["Версия"] == "v5"
-    assert classic.info["Obfs"] == "TLS · www.bing.com"
+    assert classic.info["Obfs"] == "HTTP · www.bing.com"
     assert "Клиенты" not in classic.info

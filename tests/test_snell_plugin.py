@@ -145,7 +145,12 @@ def test_http_obfs_is_configurable_on_the_classic_generation():
     assert "udp-relay=true" in plugin.client_link(user, state)
 
 
-def test_tls_obfs_is_configurable_on_the_classic_generation():
+def test_tls_obfs_is_refused_on_the_classic_generation():
+    """`tls` obfuscation exists only in generations 1-3.
+
+    A generation-5 server configured with it offers a combination no conforming client can answer:
+    every connection dies at its first record. The plugin refuses to write it instead.
+    """
     plugin = SnellPlugin()
     user = User("a@example.com", "uuid-a")
     state = _state(user)
@@ -156,15 +161,11 @@ def test_tls_obfs_is_configurable_on_the_classic_generation():
             "obfs_host": "cdn.example.com",
         }
     )
-    inbound = plugin.configure(state).inbounds[0]
-    outbound = next(
-        item for item in json.loads(plugin.generate_client_config(user, state))["outbounds"] if item["type"] == "snell"
-    )
 
-    assert inbound["obfs_mode"] == "tls"
-    assert outbound["obfs_mode"] == "tls"
-    assert outbound["obfs_host"] == "cdn.example.com"
-    assert "obfs-mode=tls" in plugin.client_link(user, state)
+    with pytest.raises(ValueError) as failure:
+        plugin.configure(state)
+
+    assert "none or http" in str(failure.value)
 
 
 def test_generation_six_uses_its_own_mode_on_both_ends():

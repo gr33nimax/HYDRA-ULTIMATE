@@ -15,7 +15,7 @@ TSK-006 (HydraCore fence) is independent and closes R2.4
 | State | Count | Evidence |
 | --- | ---: | --- |
 | Not started | 0 | — |
-| Complete | 9 | TSK-001 … TSK-009 |
+| Complete | 10 | TSK-001 … TSK-010 |
 
 ## Tasks
 
@@ -24,7 +24,7 @@ TSK-006 (HydraCore fence) is independent and closes R2.4
   - Replace `SNELL_VERSION = 4` with a generation pair understanding (`5`/`6`), read a stored
     `4` as `5`, and extend `set_settings()` with `mode` plus the per-generation validation
     matrix from the design.
-  - **Acceptance:** `set_settings` accepts `5`+`http|tls|none` and `6`+`default|unshaped|unsafe-raw`,
+  - **Acceptance:** `set_settings` accepts `5`+`none|http` and `6`+`default|unshaped|unsafe-raw`,
     refuses cross combinations and unknown values, and reports the generation truthfully in
     `status()`.
   - **Dependency:** none. _Requirements: R1, R5._

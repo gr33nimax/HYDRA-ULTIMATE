@@ -19,7 +19,13 @@ PORT_START = 32000
 PORT_END = 32999
 SNELL_GENERATIONS = (5, 6)
 SNELL_VERSION = 5
-OBFS_MODES = ("none", "http", "tls")
+# Obfuscation is not free-form. Surge's own protocol gives `tls` only to generations 1-3;
+# generations 4 and 5 carry `http` or nothing, and generation 6 replaced obfuscation with its own
+# traffic `mode`. A generation-5 server left with `tls` offers a combination no conforming client
+# can answer, and every connection then dies on its first record with "cipher: message
+# authentication failed" — which is exactly what a host configured that way showed for every
+# client, every time.
+OBFS_MODES = ("none", "http")
 OBFS_MODE = "none"
 OBFS_HOST = "www.bing.com"
 V6_MODES = ("default", "unshaped", "unsafe-raw")
@@ -280,7 +286,10 @@ class SnellPlugin(BasePlugin):
         raw = ps.config.get("obfs_mode", OBFS_MODE) if ps else OBFS_MODE
         mode = str(raw).strip().lower() or "none"
         if mode not in OBFS_MODES:
-            raise ValueError("Snell obfs mode must be none, http or tls")
+            raise ValueError(
+                "Snell obfs mode must be none or http: `tls` belongs to generations 1-3, and "
+                "generation 6 replaces obfuscation with its own mode",
+            )
         return mode
 
     @staticmethod
@@ -327,7 +336,10 @@ class SnellPlugin(BasePlugin):
             raise ValueError("Hydra Snell supports generations 5 and 6")
         normalized_mode = str(obfs_mode).strip().lower() or "none"
         if normalized_mode not in OBFS_MODES:
-            raise ValueError("Snell obfs mode must be none, http or tls")
+            raise ValueError(
+                "Snell obfs mode must be none or http: `tls` belongs to generations 1-3, and "
+                "generation 6 replaces obfuscation with its own mode",
+            )
         normalized_v6_mode = str(mode).strip().lower() or V6_MODE
         if normalized_v6_mode not in V6_MODES:
             raise ValueError("Snell v6 mode must be default, unshaped or unsafe-raw")
@@ -336,7 +348,7 @@ class SnellPlugin(BasePlugin):
         if normalized_version == 5 and normalized_v6_mode != V6_MODE:
             raise ValueError("Snell v6 mode applies to generation 6 only")
         normalized_host = str(obfs_host).strip()
-        if normalized_mode in ("http", "tls") and (
+        if normalized_mode == "http" and (
             not normalized_host or "://" in normalized_host or any(character.isspace() for character in normalized_host)
         ):
             raise ValueError("Invalid Snell obfs host")
