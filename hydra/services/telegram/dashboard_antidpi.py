@@ -4,6 +4,7 @@ Every human-readable label (signals, sources, remaining ban time) is produced
 by the plugin's own management projection, so this adapter only arranges
 already-translated evidence and never imports plugin internals.
 """
+
 from __future__ import annotations
 
 import html
@@ -16,6 +17,28 @@ from hydra.utils.format_ru import (
 )
 
 COUNTER_ROWS = 3
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    """Return an integer from untrusted projection data, or ``default``."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
+def _is_false(value: object) -> bool:
+    """Return True only for the JSON boolean ``false``."""
+    return isinstance(value, bool) and not value
 
 
 def _snapshot(app: ApplicationService) -> dict:
@@ -49,27 +72,23 @@ def _service_label(app: ApplicationService) -> str:
 def _headline(app: ApplicationService, data: dict) -> list[str]:
     now = data.get("now", 0)
     bans = _rows(data, "ban_rows")
-    watching = _rows(data, "watchlist")
     lines = [
         _service_label(app),
-        f"<b>{len(bans)}</b> блокировок · "
-        f"<b>{len(watching)}</b> под наблюдением",
-        f"{format_count(data.get('events'))} событий · "
-        f"{html.escape(format_age(data.get('last_event_at'), now=now))}",
+        f"<b>{len(bans)}</b> блокировок",
+        f"{format_count(data.get('events'))} событий · {html.escape(format_age(data.get('last_event_at'), now=now))}",
     ]
     if data.get("degraded"):
         lines.append(
             "⚠️ <b>State повреждён:</b> автоматические блокировки приостановлены",
         )
     reconciliation = _mapping_projection(data.get("reconciliation"))
-    if reconciliation.get("ok") is False:
+    if _is_false(reconciliation.get("ok")):
         failed = ", ".join(str(value) for value in reconciliation.get("failed", []))
         lines.append(
-            "⚠️ <b>Firewall:</b> не синхронизирован · "
-            + html.escape(failed or "ошибка"),
+            "⚠️ <b>Firewall:</b> не синхронизирован · " + html.escape(failed or "ошибка"),
         )
     failures = _mapping_projection(data.get("ban_failures"))
-    count = int(failures.get("count", 0) or 0)
+    count = _as_int(failures.get("count", 0))
     try:
         last_at = float(failures.get("last_at", 0) or 0)
         recent = last_at > 0 and float(now) - last_at <= 86400
@@ -77,8 +96,7 @@ def _headline(app: ApplicationService, data: dict) -> list[str]:
         recent = False
     if count and recent:
         lines.append(
-            f"⚠️ Firewall: {count} ошибок · "
-            f"{html.escape(format_age(failures.get('last_at'), now=now))}",
+            f"⚠️ Firewall: {count} ошибок · {html.escape(format_age(failures.get('last_at'), now=now))}",
         )
     return lines
 
@@ -87,10 +105,7 @@ def _counter_lines(data: dict, key: str) -> list[str]:
     rows = _rows(_mapping_projection(data.get("counters")), key, COUNTER_ROWS)
     if not rows:
         return ["<i>нет данных</i>"]
-    return [
-        f"• {_text(row, 'label')} — {int(row.get('count', 0) or 0)}"
-        for row in rows
-    ]
+    return [f"• {_text(row, 'label')} — {_as_int(row.get('count', 0))}" for row in rows]
 
 
 def get_antidpi_dashboard_text(
@@ -111,7 +126,6 @@ def get_antidpi_status_text(app: ApplicationService) -> str:
         "\n".join(
             [
                 *_headline(app, data),
-                f"Учтено {format_count(data.get('tracked_addresses'))} · "
                 f"whitelist {len(whitelist)}",
             ],
         ),

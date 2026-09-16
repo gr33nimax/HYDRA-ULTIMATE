@@ -6,6 +6,7 @@ truncated. This module owns the missing structure — which screen belongs under
 which, how a page is addressed, and how a callback payload is parsed — as pure
 data, so keyboards, views, and routing cannot disagree about it.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -34,7 +35,6 @@ SCREENS: dict[str, Screen] = {
         Screen("antidpi", "AntiDPI", "home"),
         Screen("antidpi_details", "Подробно", "antidpi"),
         Screen("antidpi_bans", "Блокировки", "antidpi", paged=True),
-        Screen("antidpi_watch", "Под наблюдением", "antidpi", paged=True),
         Screen("honeypot", "Honeypot", "home"),
         Screen("honeypot_bans", "Пойманные адреса", "honeypot", paged=True),
         Screen("fail2ban", "Fail2ban", "home"),
@@ -73,8 +73,9 @@ def breadcrumb(name: object) -> str:
 def view_callback(name: object, page: int = 1) -> str:
     """Build the callback payload that addresses one screen page."""
     target = screen(name).name
-    if page > 1:
-        return f"{VIEW_PREFIX}:{target}:{int(page)}"
+    number = _as_int(page, 1)
+    if number > 1:
+        return f"{VIEW_PREFIX}:{target}:{number}"
     return f"{VIEW_PREFIX}:{target}"
 
 
@@ -97,7 +98,6 @@ def parse_view(data: object) -> tuple[str, int]:
 ORIGIN_CODES: dict[str, str] = {
     "a": "antidpi",
     "b": "antidpi_bans",
-    "w": "antidpi_watch",
     "h": "honeypot_bans",
 }
 _ORIGIN_BY_SCREEN = {screen: code for code, screen in ORIGIN_CODES.items()}
@@ -107,6 +107,23 @@ def address_callback(address: object, origin: str = "antidpi") -> str:
     """Build the payload that opens one address card from a given screen."""
     code = _ORIGIN_BY_SCREEN.get(str(origin), "a")
     return f"{IP_PREFIX}:{code}:{str(address).strip()}"
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    """Return an integer from callback payload data, or ``default``."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default
 
 
 def parse_address(data: object) -> tuple[str, str]:
@@ -121,16 +138,13 @@ def parse_address(data: object) -> tuple[str, str]:
     parts = raw.split(":", 2)
     if len(parts) == 3 and parts[1] in ORIGIN_CODES:
         return parts[2], ORIGIN_CODES[parts[1]]
-    return raw[len(IP_PREFIX) + 1:], "antidpi"
+    return raw[len(IP_PREFIX) + 1 :], "antidpi"
 
 
 def page_count(total: object, size: int = PAGE_SIZE) -> int:
     """Return how many pages a list of ``total`` items needs."""
-    try:
-        items = max(0, int(total))
-    except (TypeError, ValueError):
-        items = 0
-    span = max(1, int(size))
+    items = max(0, _as_int(total))
+    span = max(1, size)
     return max(1, min(MAX_PAGES, -(-items // span)))
 
 
@@ -140,20 +154,17 @@ def page_slice(
     size: int = PAGE_SIZE,
 ) -> tuple[list, int, int]:
     """Return ``(rows, page, pages)`` clamped to the available range."""
-    values = list(items or [])
-    span = max(1, int(size))
+    values = list(items) if isinstance(items, (list, tuple)) else []
+    span = max(1, size)
     pages = page_count(len(values), span)
-    try:
-        current = max(1, min(pages, int(page)))
-    except (TypeError, ValueError):
-        current = 1
+    current = max(1, min(pages, _as_int(page, 1)))
     start = (current - 1) * span
-    return values[start:start + span], current, pages
+    return values[start : start + span], current, pages
 
 
 def page_label(page: int, pages: int) -> str:
     """Render the page indicator shown between the paging arrows."""
-    return f"стр. {int(page)}/{int(pages)}"
+    return f"стр. {page}/{pages}"
 
 
 __all__ = [

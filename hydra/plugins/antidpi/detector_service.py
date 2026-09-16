@@ -1,4 +1,5 @@
 """Plugin-facing orchestration for the pure AntiDPI detector."""
+
 from __future__ import annotations
 
 import ipaddress
@@ -8,12 +9,12 @@ from dataclasses import dataclass
 
 from hydra.plugins.antidpi.detection import (
     Observation,
+    is_enforcement_evidence,
     observe_state,
     record_automatic_ban,
 )
 from hydra.plugins.antidpi.model import (
     BAN_NOTIFICATION_COOLDOWN,
-    format_score,
     get_ban_duration,
     record_ban_failure,
     track_notification,
@@ -22,6 +23,40 @@ from hydra.plugins.antidpi.state_store import (
     AntiDPIStateCorruptError,
     AntiDPIStateStore,
 )
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    """Return an integer from untrusted persisted state, or ``default``."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
+def _as_float(value: object, default: float = 0.0) -> float:
+    """Return a float from untrusted input, or ``default``."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default
 
 
 def _duration_label(duration: int) -> str:
@@ -36,9 +71,25 @@ def _duration_label(duration: int) -> str:
 class _PendingNotice:
     """One notification decided under the state lock, delivered outside it."""
 
-    kind: str  # "alert" | "coordination" | "ban"
+    kind: str  # "ban" — discarded input never notifies
     observation: Observation
     metadata: dict | None = None
+
+
+def _evidence_fields(observation: Observation) -> list[tuple[str, object]]:
+    """Render the bounded, secret-free evidence behind one ban."""
+    event = observation.event
+    fields: list[tuple[str, object]] = [
+        ("Event", str(event.get("kind", "anomaly"))),
+        ("Protocol", str(event.get("protocol", "L4"))),
+        ("Reason", str(event.get("reason", ""))),
+        ("Source", observation.source),
+        ("Attribution", str(event.get("attribution", ""))),
+    ]
+    path = str(event.get("path", ""))
+    if path:
+        fields.append(("Path", path[:120]))
+    return fields
 
 
 class AntiDPIDetectorMixin:
@@ -48,90 +99,6 @@ class AntiDPIDetectorMixin:
         self._notification_queue: queue.Queue = queue.Queue(maxsize=256)
         self._notification_worker: threading.Thread | None = None
         self._notification_worker_lock = threading.Lock()
-
-    def _alert_fields(self, observation: Observation) -> list[tuple[str, object]]:
-        event = observation.event
-        fields = [
-            ("IP", observation.address),
-            *self._security_context(observation.address),
-            ("Event", str(event.get("kind", event.get("reason", "anomaly")))),
-            ("Protocol", str(event.get("protocol", "L4"))),
-            ("Source", observation.source),
-            ("Signals", ", ".join(observation.signals)),
-            (
-                "Score",
-                format_score(
-                    observation.entry["score"],
-                    threshold=observation.required_score,
-                ),
-            ),
-        ]
-        if observation.families:
-            fields.append(("Evidence", ", ".join(observation.families)))
-        if observation.block_reason == "single_family":
-            fields.append(
-                (
-                    "Policy",
-                    "alert-only / улики одного типа, для бана нужен "
-                    "второй независимый признак",
-                ),
-            )
-        if observation.coordinated:
-            fields.append(
-                (
-                    "Coordinated",
-                    f"{observation.coordinated.get('prefix', '—')} "
-                    f"({observation.coordinated.get('members', 0)} адресов)",
-                ),
-            )
-        if not observation.evidence_can_ban:
-            fields.append(
-                (
-                    "Policy",
-                    str(
-                        event.get(
-                            "policy",
-                            "alert-only / unverified UDP source",
-                        ),
-                    ),
-                ),
-            )
-        if (
-            observation.entry["verified_score"]
-            != observation.entry["score"]
-        ):
-            fields.append(
-                (
-                    "Verified score",
-                    format_score(observation.entry["verified_score"]),
-                ),
-            )
-        return fields
-
-    def _notify_alert(self, observation: Observation) -> bool:
-        try:
-            return bool(
-                self._notify_security_event(
-                    "AntiDPI",
-                    "ALERT",
-                    self._alert_fields(observation),
-                    category="antidpi",
-                    reply_markup={
-                        "inline_keyboard": [
-                            [
-                                {
-                                    "text": "🚫 Заблокировать",
-                                    "callback_data": (
-                                        f"antidpi-ban:{observation.address}"
-                                    ),
-                                },
-                            ],
-                        ],
-                    },
-                ),
-            )
-        except Exception:
-            return False
 
     def _notify_ban(
         self,
@@ -146,23 +113,7 @@ class AntiDPIDetectorMixin:
                     [
                         ("IP", observation.address),
                         *self._security_context(observation.address),
-                        (
-                            "Event",
-                            observation.event.get("kind", "anomaly"),
-                        ),
-                        (
-                            "Protocol",
-                            observation.event.get("protocol", "L4"),
-                        ),
-                        ("Source", observation.source),
-                        (
-                            "Signals",
-                            ", ".join(
-                                str(value)
-                                for value in observation.entry["signals"]
-                            ),
-                        ),
-                        ("Score", format_score(observation.entry["score"])),
+                        *_evidence_fields(observation),
                         ("TTL", _duration_label(metadata["duration"])),
                         ("Offense", metadata["offense_count"]),
                     ],
@@ -172,38 +123,7 @@ class AntiDPIDetectorMixin:
         except Exception:
             return False
 
-    def _notify_coordination(self, observation: Observation) -> bool:
-        report = observation.coordinated
-        try:
-            return bool(
-                self._notify_security_event(
-                    "AntiDPI",
-                    "COORDINATED",
-                    [
-                        ("Subnet", report.get("prefix", "—")),
-                        ("Addresses", report.get("members", 0)),
-                        (
-                            "Seen",
-                            ", ".join(report.get("addresses", ())[:5]),
-                        ),
-                        ("Window", "10m"),
-                        (
-                            "Policy",
-                            "alert-only / распределённое сканирование, "
-                            "адреса банятся только по собственным уликам",
-                        ),
-                    ],
-                    category="antidpi",
-                ),
-            )
-        except Exception:
-            return False
-
     def _deliver_notice(self, notice: _PendingNotice) -> bool:
-        if notice.kind == "alert":
-            return self._notify_alert(notice.observation)
-        if notice.kind == "coordination":
-            return self._notify_coordination(notice.observation)
         return self._notify_ban(
             notice.observation,
             notice.metadata or {},
@@ -213,11 +133,14 @@ class AntiDPIDetectorMixin:
         """Apply the ban-notice cooldown in its own short transaction."""
         with self._state_lock():
             data = store.load()
-            last_notice = float(data.get("last_ban_notification_at", 0) or 0)
+            last_notice = _as_float(data.get("last_ban_notification_at", 0))
             if timestamp - last_notice < BAN_NOTIFICATION_COOLDOWN:
-                data["suppressed_ban_notifications"] = int(
-                    data.get("suppressed_ban_notifications", 0),
-                ) + 1
+                data["suppressed_ban_notifications"] = (
+                    _as_int(
+                        data.get("suppressed_ban_notifications", 0),
+                    )
+                    + 1
+                )
                 store.save(data)
                 return False
             data["last_ban_notification_at"] = timestamp
@@ -294,6 +217,20 @@ class AntiDPIDetectorMixin:
         """Wait for queued delivery in deterministic unit tests."""
         self._notification_queue.join()
 
+    def _advance_cursor(self, store: AntiDPIStateStore, cursor: str) -> None:
+        """Remember a discarded record without touching detection state."""
+        try:
+            with self._state_lock():
+                data = store.load()
+                if data.get("journal_cursor") == cursor:
+                    return
+                data["journal_cursor"] = cursor
+                store.save(data)
+        except (OSError, RuntimeError):
+            # A cursor that cannot be stored only costs a replay, and the
+            # duplicate is discarded again without side effects.
+            return
+
     def _revert_ban_intent(
         self,
         data: dict,
@@ -314,11 +251,7 @@ class AntiDPIDetectorMixin:
         history = data.get("history", [])
         if isinstance(history, list):
             for item in reversed(history):
-                if (
-                    isinstance(item, dict)
-                    and item.get("ip") == address
-                    and item.get("status") == "active"
-                ):
+                if isinstance(item, dict) and item.get("ip") == address and item.get("status") == "active":
                     item["status"] = "failed"
                     item["failed_at"] = now
                     break
@@ -336,16 +269,9 @@ class AntiDPIDetectorMixin:
         so state and ipset never disagree about the address.
         """
         ban_counts = data.get("ban_counts", {})
-        previous_count = (
-            int(ban_counts.get(observation.address, 0))
-            if isinstance(ban_counts, dict)
-            else 0
-        )
+        previous_count = _as_int(ban_counts.get(observation.address, 0)) if isinstance(ban_counts, dict) else 0
         duration = get_ban_duration(previous_count + 1)
-        remaining = int(
-            duration
-            - max(0.0, observation.enforced_at - observation.timestamp)
-        )
+        remaining = _as_int(duration - max(0.0, observation.enforced_at - observation.timestamp))
         if remaining <= 0:
             store.save(data)
             return False, None
@@ -381,27 +307,29 @@ class AntiDPIDetectorMixin:
         now: float | None = None,
         event_time: float | None = None,
     ) -> bool:
-        """Record one event and enforce only the pure model's ban decision."""
+        """Enforce only proven AntiScan evidence; discard everything else."""
+        normalized_event = dict(event) if isinstance(event, dict) else {}
+        journal_cursor = str(normalized_event.pop("_journal_cursor", ""))[:4096]
+        store = self._state_store()
+        if not is_enforcement_evidence(normalized_event):
+            # The record carries no proven protocol reject or decoy scan.  It
+            # must not create state, a firewall call or a Telegram message;
+            # only the journal cursor is advanced so it is not replayed.
+            if journal_cursor:
+                self._advance_cursor(store, journal_cursor)
+            return False
         try:
             parsed_address = ipaddress.ip_address(str(ip).strip("[]"))
         except ValueError:
             return False
-        normalized_event = dict(event) if isinstance(event, dict) else {}
-        enforced_at = self._clock() if now is None else float(now)
-        timestamp = enforced_at if event_time is None else float(event_time)
+        enforced_at = self._clock() if now is None else _as_float(now)
+        timestamp = enforced_at if event_time is None else _as_float(event_time)
         if timestamp <= 0 or timestamp > enforced_at + 5:
             timestamp = enforced_at
-        journal_cursor = str(normalized_event.pop("_journal_cursor", ""))[:4096]
-        store = self._state_store()
         try:
             with self._state_lock():
                 data = store.load()
                 if journal_cursor and data.get("journal_cursor") == journal_cursor:
-                    return False
-                if normalized_event.get("source") == "kernel-udp-probe":
-                    if journal_cursor:
-                        data["journal_cursor"] = journal_cursor
-                        store.save(data)
                     return False
                 if self._is_whitelisted(parsed_address, data):
                     if journal_cursor:
@@ -419,10 +347,6 @@ class AntiDPIDetectorMixin:
                 if journal_cursor:
                     data["journal_cursor"] = journal_cursor
                 notices: list[_PendingNotice] = []
-                if observation.should_alert:
-                    notices.append(_PendingNotice("alert", observation))
-                if observation.coordinated.get("first_report"):
-                    notices.append(_PendingNotice("coordination", observation))
                 if observation.active_ban:
                     store.save(data)
                     banned = True

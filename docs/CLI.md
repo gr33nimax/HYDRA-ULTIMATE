@@ -64,7 +64,7 @@ hydra
 │   └── switch PROVIDER [--channel stable|preview|debug] [--force]
 ├── uninstall [--yes] [--dry-run] [--keep-data]
 └── antidpi
-    ├── sync                      установить/обновить телеметрию
+    ├── sync                      восстановить правила и активные баны
     ├── selftest [--full] [--wait N] [--output PATH]
     └── capture [--seconds N] [--output PATH]
 ```
@@ -86,7 +86,7 @@ hydra
 | `kernel status` | — | Показать desired provider, runtime identity и capabilities |
 | `kernel switch ...` | ✔ | Проверенно и транзакционно заменить совместимое ядро |
 | `uninstall` | ✔ | Удалить HYDRA |
-| `antidpi ...` | ✔ | Расширенная диагностика AntiDPI |
+| `antidpi ...` | ✔ | Расширенная диагностика AntiScan |
 
 Глобальные параметры:
 
@@ -544,8 +544,8 @@ sudo hydra antidpi selftest --full --wait 3
 sudo hydra antidpi capture --seconds 180
 ```
 
-Это расширенные операции диагностики и обслуживания. Детали scoring,
-redaction, firewall и внешнего capture описаны в [ANTIDPI.md](ANTIDPI.md).
+Это расширенные операции диагностики и обслуживания. Детали контракта
+улик, redaction, firewall и внешнего capture описаны в [ANTIDPI.md](ANTIDPI.md).
 
 ## Совместимость
 

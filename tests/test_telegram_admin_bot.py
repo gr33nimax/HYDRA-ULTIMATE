@@ -1,12 +1,18 @@
+"""Tests for the Telegram Admin Bot and notification integration.
+
+Handlers are exercised against duck-typed stand-ins for ``telegram.Update``
+built from ``SimpleNamespace``.  Those doubles are annotated ``Any`` at their
+definition so a reader sees the intent once, instead of a suppression at every
+call site: the point is that the handler only touches the fields it is given.
 """
-tests/test_telegram_admin_bot.py — Tests for new Telegram Admin Bot & notification integration.
-"""
+
 from __future__ import annotations
 
 import asyncio
 import json
 import subprocess
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -78,9 +84,7 @@ def application():
         ("fail2ban", "recent_logs"): [],
     }
     plugin_query = MagicMock(
-        side_effect=lambda plugin, query, **_parameters: snapshots[
-            (plugin, query)
-        ],
+        side_effect=lambda plugin, query, **_parameters: snapshots[(plugin, query)],
     )
     return SimpleNamespace(
         protocols=protocols,
@@ -97,7 +101,7 @@ def test_send_admin_notification_without_token():
 
 def test_send_admin_notification_success():
     state = AppState(telegram=TelegramConfig(admin_token="123:TOKEN", admin_chat_id="999888"))
-    
+
     with patch("urllib.request.urlopen") as mock_urlopen:
         mock_response = MagicMock()
         mock_response.status = 200
@@ -117,10 +121,14 @@ def test_send_admin_notification_success():
 def test_send_admin_notification_includes_inline_keyboard():
     state = AppState(telegram=TelegramConfig(admin_token="123:TOKEN", admin_chat_id="999888"))
     keyboard = {
-        "inline_keyboard": [[{
-            "text": "🚫 Заблокировать",
-            "callback_data": "antidpi-ban:198.51.100.22",
-        }]],
+        "inline_keyboard": [
+            [
+                {
+                    "text": "🚫 Заблокировать",
+                    "callback_data": "antidpi-ban:198.51.100.22",
+                }
+            ]
+        ],
     }
     with patch("urllib.request.urlopen") as mock_urlopen:
         mock_urlopen.return_value.__enter__.return_value.status = 200
@@ -130,9 +138,13 @@ def test_send_admin_notification_includes_inline_keyboard():
 
 
 def test_notification_categories_can_be_disabled():
-    state = AppState(telegram=TelegramConfig(
-        admin_token="123:TOKEN", admin_chat_id="999888", notify_antidpi=False,
-    ))
+    state = AppState(
+        telegram=TelegramConfig(
+            admin_token="123:TOKEN",
+            admin_chat_id="999888",
+            notify_antidpi=False,
+        )
+    )
     assert notification_allowed(state, "antidpi") is False
     with patch("urllib.request.urlopen") as mock_urlopen:
         assert send_admin_notification("probe", state=state, category="antidpi") is False
@@ -140,9 +152,13 @@ def test_notification_categories_can_be_disabled():
 
 
 def test_master_notification_switch_can_be_forced():
-    state = AppState(telegram=TelegramConfig(
-        admin_token="123:TOKEN", admin_chat_id="999888", notifications_enabled=False,
-    ))
+    state = AppState(
+        telegram=TelegramConfig(
+            admin_token="123:TOKEN",
+            admin_chat_id="999888",
+            notifications_enabled=False,
+        )
+    )
     with patch("urllib.request.urlopen") as mock_urlopen:
         mock_urlopen.return_value.__enter__.return_value.status = 200
         assert send_admin_notification("test", state=state) is False
@@ -240,27 +256,35 @@ def test_security_event_formatter_escapes_all_dynamic_fields():
     assert message == "<b>Anti&lt;DPI · ALERT</b>\n<b>Source:</b> <code>a&amp;b</code>"
 
 
-def test_antidpi_observe_event_notification(tmp_path):
+def test_antidpi_proven_reject_sends_one_ban_notification(tmp_path):
     mock_notify = MagicMock(return_value=True)
     plugin = AntiDPIPlugin(notifier=mock_notify)
-    event = {"kind": "malformed_tls", "protocol": "tls", "handshake_ok": False}
+    evidence = {
+        "kind": "protocol_reject",
+        "protocol": "snell",
+        "reason": "record_auth_failed",
+        "source": "journal",
+        "attribution": "direct",
+    }
     state_file = tmp_path / "antidpi.json"
+    accepted = MagicMock(returncode=0, stdout="", stderr="")
 
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file):
-        with patch.object(plugin, "_load_state", return_value={"scores": {}, "banned": {}, "whitelist": []}):
-            with patch.object(plugin, "_save_state"):
-                plugin.observe_event("198.51.100.22", event)
-                plugin._drain_notifications()
-                mock_notify.assert_called()
-                component, action, fields = mock_notify.call_args.args[:3]
-                assert mock_notify.call_args.kwargs["category"] == "antidpi"
-                assert component == "AntiDPI"
-                assert action == "ALERT"
-                assert ("IP", "198.51.100.22") in fields
-                markup = mock_notify.call_args.kwargs["reply_markup"]
-                button = markup["inline_keyboard"][0][0]
-                assert button["callback_data"] == "antidpi-ban:198.51.100.22"
-                assert len(button["callback_data"].encode("utf-8")) <= 64
+    with (
+        patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file),
+        patch("hydra.plugins.antidpi.plugin._run", return_value=accepted),
+    ):
+        assert plugin.observe_event("198.51.100.22", evidence, now=1000) is True
+        plugin._drain_notifications()
+
+    mock_notify.assert_called_once()
+    component, action, fields = mock_notify.call_args.args[:3]
+    assert mock_notify.call_args.kwargs["category"] == "antidpi"
+    assert (component, action) == ("AntiDPI", "BAN")
+    assert ("IP", "198.51.100.22") in fields
+    assert ("Protocol", "snell") in fields
+    assert ("Reason", "record_auth_failed") in fields
+    # A ban is an action, not an offer, so it carries no block button.
+    assert "reply_markup" not in mock_notify.call_args.kwargs
 
 
 def test_antidpi_alert_ban_callback_updates_original_message(application):
@@ -273,7 +297,7 @@ def test_antidpi_alert_ban_callback_updates_original_message(application):
         answer=AsyncMock(),
         edit_message_text=AsyncMock(),
     )
-    update = SimpleNamespace(
+    update: Any = SimpleNamespace(
         effective_user=SimpleNamespace(id="999888"),
         effective_message=query.message,
         callback_query=query,
@@ -303,16 +327,18 @@ def test_configured_group_admin_can_use_antidpi_ban_callback(application):
     bot = AdminBot.__new__(AdminBot)
     bot.admin_chat_id = "-1001234567890"
     bot.application = application
-    telegram_bot = SimpleNamespace(get_chat_member=AsyncMock(
-        return_value=SimpleNamespace(status="administrator"),
-    ))
+    telegram_bot = SimpleNamespace(
+        get_chat_member=AsyncMock(
+            return_value=SimpleNamespace(status="administrator"),
+        )
+    )
     query = SimpleNamespace(
         data="antidpi-ban:198.51.100.23",
         message=SimpleNamespace(text_html="<b>AntiDPI · ALERT</b>", text="AntiDPI · ALERT"),
         answer=AsyncMock(),
         edit_message_text=AsyncMock(),
     )
-    update = SimpleNamespace(
+    update: Any = SimpleNamespace(
         effective_user=SimpleNamespace(id=777),
         effective_chat=SimpleNamespace(id=-1001234567890),
         effective_message=query.message,
@@ -342,11 +368,13 @@ def test_configured_group_admin_can_use_antidpi_ban_callback(application):
 def test_configured_group_regular_member_is_denied_admin_actions():
     bot = AdminBot.__new__(AdminBot)
     bot.admin_chat_id = "-1001234567890"
-    telegram_bot = SimpleNamespace(get_chat_member=AsyncMock(
-        return_value=SimpleNamespace(status="member"),
-    ))
+    telegram_bot = SimpleNamespace(
+        get_chat_member=AsyncMock(
+            return_value=SimpleNamespace(status="member"),
+        )
+    )
     query = SimpleNamespace(answer=AsyncMock())
-    update = SimpleNamespace(
+    update: Any = SimpleNamespace(
         effective_user=SimpleNamespace(id=778),
         effective_chat=SimpleNamespace(id=-1001234567890),
         callback_query=query,
@@ -358,24 +386,27 @@ def test_configured_group_regular_member_is_denied_admin_actions():
     query.answer.assert_awaited_once_with("Доступ запрещён", show_alert=True)
 
 
-def test_single_native_auth_failure_sends_alert_without_banning(tmp_path):
+def test_discarded_input_neither_bans_nor_notifies(tmp_path):
+    """The removed ALERT contract: unproven input must be completely silent."""
     notify = MagicMock(return_value=True)
     plugin = AntiDPIPlugin(notifier=notify)
     state_file = tmp_path / "antidpi-auth.json"
     result = MagicMock(returncode=0, stdout="", stderr="")
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run", return_value=result):
+    with (
+        patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file),
+        patch("hydra.plugins.antidpi.plugin._run", return_value=result) as runner,
+    ):
         banned = plugin.observe_event(
             "198.51.100.44",
             {"kind": "auth_failure", "protocol": "naive", "source": "caddy-naive"},
             now=1000,
         )
         plugin._drain_notifications()
+
     assert banned is False
-    notify.assert_called_once()
-    component, action, fields = notify.call_args.args[:3]
-    assert (component, action) == ("AntiDPI", "ALERT")
-    assert ("Event", "auth_failure") in fields
+    notify.assert_not_called()
+    assert runner.call_count == 0
+    assert plugin._load_state().get("banned", {}) == {}
 
 
 def test_unban_ip_everywhere(application):
@@ -420,10 +451,7 @@ def test_manual_antidpi_ban_uses_action_boundary(application):
     }
     application.plugin_action.return_value = expected
 
-    assert (
-        security_actions.ban_ip_antidpi("198.51.100.9", application)
-        == expected
-    )
+    assert security_actions.ban_ip_antidpi("198.51.100.9", application) == expected
     application.plugin_action.assert_called_once_with(
         "antidpi",
         "manual_ban",
@@ -437,7 +465,7 @@ def test_controller_honeypot_unban_uses_action_boundary(application):
     bot = AdminBot.__new__(AdminBot)
     bot.application = application
     bot._show = AsyncMock()
-    update = SimpleNamespace()
+    update: Any = SimpleNamespace()
 
     asyncio.run(
         bot._unban_honeypot(
@@ -451,7 +479,9 @@ def test_controller_honeypot_unban_uses_action_boundary(application):
         "unban",
         raw="198.51.100.10",
     )
-    assert "разблокирован" in bot._show.await_args.args[1]
+    show_call = bot._show.await_args
+    assert show_call is not None
+    assert "разблокирован" in show_call.args[1]
 
 
 def test_projected_log_follower_processes_only_new_lines():
@@ -474,8 +504,10 @@ def test_projected_log_follower_processes_only_new_lines():
     )
     process = MagicMock()
 
+    # The follower only needs the Event surface, not a real Event.
+    stop_event: Any = StopAfterTwoPolls()
     security_actions._follow_plugin_log(
-        StopAfterTwoPolls(),
+        stop_event,
         fetch,
         process,
     )
@@ -493,11 +525,8 @@ def test_notification_toggle_persists_in_state():
 
 def test_main_keyboard_callback_payloads_fit_telegram_limit():
     keyboard = _main_keyboard()
-    callbacks = [
-        button.callback_data
-        for row in keyboard.inline_keyboard
-        for button in row
-        if button.callback_data
+    callbacks: list[Any] = [
+        button.callback_data for row in keyboard.inline_keyboard for button in row if button.callback_data
     ]
     assert {"view:system", "view:antidpi", "view:honeypot", "view:fail2ban", "view:notifications"} <= set(callbacks)
     assert all(len(value.encode("utf-8")) <= 64 for value in callbacks)
@@ -510,13 +539,11 @@ def test_honeypot_notification_is_separate_category(application):
             application,
         )
         _process_honeypot_log_line(
-            "[2026-07-21T10:00:00] BAN 198.51.100.55 "
-            "backend=iptables result=FAIL",
+            "[2026-07-21T10:00:00] BAN 198.51.100.55 backend=iptables result=FAIL",
             application,
         )
         _process_honeypot_log_line(
-            "[2026-07-21T10:00:00] BAN 198.51.100.55 "
-            "backend=iptables result=OK",
+            "[2026-07-21T10:00:00] BAN 198.51.100.55 backend=iptables result=OK",
             application,
         )
     notify.assert_called_once()
@@ -533,8 +560,7 @@ def test_honeypot_notification_is_separate_category(application):
 
 def test_fail2ban_jail_parser_extracts_full_status():
     parsed = _parse_fail2ban_jail(
-        "Currently failed: 2\nTotal failed: 14\nCurrently banned: 1\n"
-        "Total banned: 5\nBanned IP list: 198.51.100.9\n"
+        "Currently failed: 2\nTotal failed: 14\nCurrently banned: 1\nTotal banned: 5\nBanned IP list: 198.51.100.9\n"
     )
     assert parsed == {
         "currently_failed": 2,
@@ -571,22 +597,27 @@ def test_compact_fail2ban_dashboard_includes_policy_and_latest_ban(
             "bantime": "3600",
         },
     }
-    with patch(
-        "hydra.services.telegram.dashboards._recent_fail2ban_bans",
-        return_value=[{
-            "ip": "198.51.100.9",
-            "jail": "hydra-sshd",
-            "when": "2026-07-21 11:42:03",
-        }],
-    ), patch(
-        "hydra.services.telegram.dashboards._lookup_security_intel",
-        return_value={
-            "198.51.100.9": {
-                "flag": "🇷🇺",
-                "asn": "AS64500",
-                "owner": "Example Net",
+    with (
+        patch(
+            "hydra.services.telegram.dashboards._recent_fail2ban_bans",
+            return_value=[
+                {
+                    "ip": "198.51.100.9",
+                    "jail": "hydra-sshd",
+                    "when": "2026-07-21 11:42:03",
+                }
+            ],
+        ),
+        patch(
+            "hydra.services.telegram.dashboards._lookup_security_intel",
+            return_value={
+                "198.51.100.9": {
+                    "flag": "🇷🇺",
+                    "asn": "AS64500",
+                    "owner": "Example Net",
+                },
             },
-        },
+        ),
     ):
         text = get_fail2ban_dashboard_text(application)
     assert "1</b> активных банов" in text
@@ -609,13 +640,13 @@ def test_recent_fail2ban_parser_returns_five_unique_latest_bans():
         f"2026-07-21 10:0{index}:00 fail2ban.actions [1]: NOTICE [hydra-sshd] Ban 198.51.100.{index}"
         for index in range(1, 7)
     ]
-    lines.append(
-        "2026-07-21 10:07:00 fail2ban.actions [1]: NOTICE [hydra-recidive] Ban 198.51.100.6"
-    )
+    lines.append("2026-07-21 10:07:00 fail2ban.actions [1]: NOTICE [hydra-recidive] Ban 198.51.100.6")
     parsed = _parse_fail2ban_ban_lines(lines, 5)
     assert len(parsed) == 5
     assert parsed[0] == {
-        "ip": "198.51.100.6", "jail": "hydra-recidive", "when": "2026-07-21 10:07:00",
+        "ip": "198.51.100.6",
+        "jail": "hydra-recidive",
+        "when": "2026-07-21 10:07:00",
     }
     assert parsed[-1]["ip"] == "198.51.100.2"
 
@@ -623,14 +654,12 @@ def test_recent_fail2ban_parser_returns_five_unique_latest_bans():
 def test_compact_honeypot_dashboard_keeps_ip_rows_in_the_list(application):
     banned = {
         f"198.51.100.{index}": {
-            "banned_at": f"2026-07-21T10:0{index}:00", "backend": "iptables",
+            "banned_at": f"2026-07-21T10:0{index}:00",
+            "backend": "iptables",
         }
         for index in range(1, 7)
     }
-    intel = {
-        f"198.51.100.{index}": {"flag": "🇩🇪", "asn": "AS64501", "owner": "Test Network"}
-        for index in range(2, 7)
-    }
+    intel = {f"198.51.100.{index}": {"flag": "🇩🇪", "asn": "AS64501", "owner": "Test Network"} for index in range(2, 7)}
     application.protocols.status.side_effect = None
     application.protocols.status.return_value = PluginStatus(
         installed=True,
@@ -661,14 +690,18 @@ def test_compact_honeypot_dashboard_keeps_ip_rows_in_the_list(application):
 def test_admin_bot_installer_starts_and_verifies_service():
     from hydra.ui import menus
 
-    state = AppState(telegram=TelegramConfig(
-        admin_token="123:TOKEN", admin_chat_id="999888",
-    ))
+    menus_module: Any = menus
+
+    state = AppState(
+        telegram=TelegramConfig(
+            admin_token="123:TOKEN",
+            admin_chat_id="999888",
+        )
+    )
     install = MagicMock(return_value=SimpleNamespace(ok=True, code=""))
     app = SimpleNamespace(admin=SimpleNamespace(install_admin_bot=install))
-    with patch.object(menus, "success") as success_message, \
-         patch.object(menus, "prompt"):
-        menus._install_admin_bot(state, app)
+    with patch.object(menus, "success") as success_message, patch.object(menus, "prompt"):
+        menus_module._install_admin_bot(state, app)
 
     install.assert_called_once_with(state)
     success_message.assert_called_once_with(

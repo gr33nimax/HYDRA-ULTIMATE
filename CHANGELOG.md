@@ -1,5 +1,27 @@
 # Changelog
 
+- The AntiDPI detector is narrowed to a closed evidence allowlist and now bans only what
+  the host itself can prove: a protocol-owned rejection carrying the real external peer,
+  or an explicit scanner path on a decoy site. Everything else — unknown SNI, generic TLS
+  EOF/alert/handshake failures, kernel port-scan and sweep telemetry, UDP probes, Mieru
+  byte-count inference, subnet correlation and time-window source guessing — is deleted at
+  the source rather than muted downstream, together with the iptables LOG rules, the
+  AmneziaWG kernel debug hook and the Caddy `layer4` JSON log that fed it. Scoring, decay,
+  evidence families, coordinated-subnet detection and the sub-threshold watchlist are gone
+  from the decision, the projections and the operator surfaces; the Telegram side now
+  reports an applied ban or a firewall refusal and nothing else, so the ALERT with its
+  inline ban button is retired in favour of the button on the address card. On the live
+  host the old contract produced 60 779 events (47 985 handshake failures, 39 914 unknown
+  SNI) for 63 bans, while the genuine Snell record-header rejection was never turned into
+  a signal; that rejection and the `/.git/` decoy path are now the enforcement inputs, and
+  the ban ladder (10 minutes, 1 hour, 24 hours, 7 days) is driven by a single proven
+  event. Protocols without a fixture-proven reject — AnyTLS, VLESS, Naive, TrustTunnel,
+  ShadowTLS, Hysteria2, qWDTT, AmneziaWG, Mieru, Telemt, Calls — are documented as
+  unsupported with the reason, and a new protocol enters only through a sanitized capture
+  from the deployed implementation. The plugin key, service name and compatible imports
+  are unchanged, and legacy `scores`/`subnets` state stays readable for rollback without
+  ever influencing a decision.
+
 - AmneziaWG is now served by HydraCore itself, and the installer-era scheme is gone from the
   code: no checkout, no `--protocol-status`/`--enable-awg3*`, no package purge, no kernel-module
   handling, no `awg-quick` units, no `params` snapshot, no interface file and no TPROXY entries.

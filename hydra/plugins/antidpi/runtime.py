@@ -1,4 +1,5 @@
 """Injected systemd and host runtime adapter for AntiDPI."""
+
 # audit: allow-generated-runtime-subprocess
 from __future__ import annotations
 
@@ -15,15 +16,42 @@ from hydra.plugins.antidpi.firewall_rules import SET_V4, SET_V6
 from hydra.plugins.antidpi.model import ban_duration
 from hydra.plugins.antidpi.state_store import AntiDPIStateStore, lock_state_file
 
-AWG_REJECTION_DEBUG_FUNCTIONS = (
+# AmneziaWG kernel debug hooks owned by earlier versions.  AntiScan does not
+# observe AmneziaWG at all, so these names survive only to switch the hooks
+# back off on an upgraded host.
+AWG_DEBUG_FUNCTIONS = (
     "wg_receive_handshake_packet",
     "wg_noise_handshake_consume_initiation",
+    "prepare_awg_message",
 )
-AWG_NOISY_DEBUG_FUNCTIONS = ("prepare_awg_message",)
+
+
+def _is_true(value: object) -> bool:
+    """Return True only for the JSON boolean ``true``."""
+    return isinstance(value, bool) and value
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    """Return an integer from untrusted state, or ``default``."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default
 
 
 class HostCommands(Protocol):
-    def which(self, name: str) -> str | None: ...
+    def which(self, executable: str) -> str | None:
+        """Return the resolved path of an executable, or ``None``."""
+        ...
 
 
 CommandRunner = Callable[..., object]
@@ -38,6 +66,8 @@ class RuntimePaths:
     awg_debug_service: Path
     awg_debug_controls: tuple[Path, ...]
     project_root: Path
+    # ``awg_debug_service``/``awg_debug_controls`` are retained only so the
+    # upgrade path can delete the artifacts a previous version installed.
 
 
 class AntiDPIRuntime(FirewallAdapter):
@@ -78,66 +108,34 @@ class AntiDPIRuntime(FirewallAdapter):
                 ),
             )
 
-    def sync_awg_debug(self, enabled: bool) -> bool:
+    def remove_awg_debug_artifacts(self) -> bool:
+        """Undo the AmneziaWG debug service owned by earlier versions.
+
+        The contraction removed every AmneziaWG observation, so an upgraded
+        host must not keep its kernel debug hook enabled.  The cleanup is
+        idempotent: a host that never had the service stays healthy.
+        """
         control = next(
             (path for path in self.paths.awg_debug_controls if path.exists()),
             None,
         )
-        service = self.paths.awg_debug_service
-        if control is None:
-            if not enabled:
-                self.run(
-                    ["systemctl", "disable", "--now", service.name],
+        if control is not None:
+            try:
+                control.write_text(
+                    "".join(f"module amneziawg func {name} -p\n" for name in AWG_DEBUG_FUNCTIONS),
+                    encoding="utf-8",
                 )
-                service.unlink(missing_ok=True)
-            return True
-        flag = "+p" if enabled else "-p"
-        commands = [
-            *(
-                f"module amneziawg func {name} -p"
-                for name in AWG_NOISY_DEBUG_FUNCTIONS
-            ),
-            *(
-                f"module amneziawg func {name} {flag}"
-                for name in AWG_REJECTION_DEBUG_FUNCTIONS
-            ),
-        ]
+            except OSError:
+                # Best effort: the service removal below is the real cleanup.
+                pass
+        service = self.paths.awg_debug_service
+        self.run(["systemctl", "disable", "--now", service.name])
         try:
-            control.write_text("\n".join(commands) + "\n", encoding="utf-8")
-        except OSError:
-            return not enabled
-        if not enabled:
-            self.run(["systemctl", "disable", "--now", service.name])
             service.unlink(missing_ok=True)
-            self.run(["systemctl", "daemon-reload"])
-            return True
-        self._write_awg_debug_service(service, control, commands)
+        except OSError:
+            return False
         self.run(["systemctl", "daemon-reload"])
-        result = self.run(["systemctl", "enable", "--now", service.name])
-        return getattr(result, "returncode", 1) == 0
-
-    @staticmethod
-    def _write_awg_debug_service(
-        service: Path,
-        control: Path,
-        commands: list[str],
-    ) -> None:
-        start = "; ".join(f"echo '{command}'" for command in commands)
-        stop = "; ".join(
-            f"echo 'module amneziawg func {name} -p'"
-            for name in (
-                *AWG_NOISY_DEBUG_FUNCTIONS,
-                *AWG_REJECTION_DEBUG_FUNCTIONS,
-            )
-        )
-        service.write_text(
-            "[Unit]\nAfter=systemd-modules-load.service\n"
-            "[Service]\nType=oneshot\n"
-            f'ExecStart=/bin/sh -c "({start}) > {control}"\n'
-            f'ExecStop=/bin/sh -c "({stop}) > {control}"\n'
-            "RemainAfterExit=yes\n[Install]\nWantedBy=multi-user.target\n",
-            encoding="utf-8",
-        )
+        return not service.exists()
 
     def restore_bans(self, store: AntiDPIStateStore) -> bool:
         now = time.time()
@@ -171,12 +169,8 @@ class AntiDPIRuntime(FirewallAdapter):
             duration = ban_duration(metadata)
         except (ValueError, TypeError):
             return None
-        permanent = mapping.get("permanent") is True
-        remaining = (
-            0
-            if permanent
-            else int(duration - max(0, now - banned_at))
-        )
+        permanent = _is_true(mapping.get("permanent"))
+        remaining = 0 if permanent else _as_int(duration - max(0, now - banned_at))
         if not permanent and remaining <= 0:
             return None
         set_name = SET_V6 if address.version == 6 else SET_V4

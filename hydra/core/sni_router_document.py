@@ -1,4 +1,5 @@
 """Pure, section-oriented Caddy document rendering for the SNI router."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
@@ -72,14 +73,10 @@ def _logging(settings: RenderSettings) -> dict[str, Any]:
                 "include": ["http.log.access.decoy"],
                 "level": "INFO",
             },
-            "antidpi": {
-                "writer": {
-                    "output": "file",
-                    "filename": "/var/log/caddy-l4/antidpi.jsonl",
-                },
-                "include": ["layer4"],
-                "level": "INFO",
-            },
+            # The layer4 JSON logger that fed AntiDPI's generic TLS
+            # observations is gone: nothing reads it since the evidence
+            # contraction, so keeping the writer would only grow a log nobody
+            # consults.
             "trusttunnel": {
                 "writer": {
                     "output": "file",
@@ -101,27 +98,21 @@ def _tls_app(backends: list[Backend]) -> dict[str, Any]:
         for backend in backends
         if (
             (
-                backend["name"]
-                in ("anytls", "trusttunnel", "hysteria2")
+                backend["name"] in ("anytls", "trusttunnel", "hysteria2")
                 or backend.get("route_kind") == "http_path_proxy"
             )
             and backend["cert_file"]
             and backend["key_file"]
         )
     ]
-    return (
-        {"certificates": {"load_files": certificates}}
-        if certificates
-        else {}
-    )
+    return {"certificates": {"load_files": certificates}} if certificates else {}
 
 
 def _tls_handler(backend: Backend) -> dict[str, Any]:
     """Terminate TLS only when a complete certificate pair is planned."""
     if not backend.get("cert_file") or not backend.get("key_file"):
         raise ValueError(
-            f"TLS material is missing for {backend['name']} "
-            f"domain {backend['domain']}",
+            f"TLS material is missing for {backend['name']} domain {backend['domain']}",
         )
     return {"handler": "tls"}
 
@@ -165,11 +156,7 @@ def _tls_route(
             proxy_factory(f"127.0.0.1:{port}", proxy_protocol=True),
         ]
     elif name == "shadowtls":
-        target = (
-            settings.relay_ports["shadowtls"]
-            if relay_enabled
-            else port
-        )
+        target = settings.relay_ports["shadowtls"] if relay_enabled else port
         handlers = [
             proxy_factory(
                 f"127.0.0.1:{target}",
@@ -177,11 +164,7 @@ def _tls_route(
             ),
         ]
     elif name == "anytls":
-        target = (
-            settings.relay_ports["anytls"]
-            if relay_enabled
-            else port
-        )
+        target = settings.relay_ports["anytls"] if relay_enabled else port
         handlers = [
             _tls_handler(backend),
             {
@@ -199,8 +182,7 @@ def _tls_route(
                     {
                         "handle": [
                             proxy_factory(
-                                "127.0.0.1:"
-                                f"{settings.decoy_ports['anytls']}",
+                                f"127.0.0.1:{settings.decoy_ports['anytls']}",
                                 proxy_protocol=True,
                             ),
                         ],
@@ -245,11 +227,7 @@ def _tls_routes(
         )
     ]
     fallback = next(
-        (
-            item
-            for item in backends
-            if item["name"] in ("anytls", "trusttunnel")
-        ),
+        (item for item in backends if item["name"] in ("anytls", "trusttunnel")),
         None,
     )
     if fallback:
@@ -286,14 +264,8 @@ def _quic_server(
     )
     if not backend:
         raise ValueError(f"QUIC backend {owner} отсутствует в Caddy config")
-    udp_relay_enabled = (
-        relay_enabled and backend["name"] in settings.udp_relay_ports
-    )
-    target_port = (
-        settings.udp_relay_ports[str(backend["name"])]
-        if udp_relay_enabled
-        else backend["port"]
-    )
+    udp_relay_enabled = relay_enabled and backend["name"] in settings.udp_relay_ports
+    target_port = settings.udp_relay_ports[str(backend["name"])] if udp_relay_enabled else backend["port"]
     return {
         "listen": ["udp/:443"],
         "routes": [
@@ -301,9 +273,7 @@ def _quic_server(
                 "handle": [
                     proxy_factory(
                         f"udp/127.0.0.1:{target_port}",
-                        preserve_source=(
-                            backend["name"] in settings.preserved_backends
-                        ),
+                        preserve_source=(backend["name"] in settings.preserved_backends),
                         proxy_protocol=udp_relay_enabled,
                     ),
                 ],

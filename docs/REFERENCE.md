@@ -223,7 +223,7 @@ WGCF-профиль, а `warp_<name>` — соответствующий relay-�
 
 | Ключ | Модуль | Назначение |
 | :--- | :--- | :--- |
-| `antidpi` | AntiDPI | Корреляция protocol probes и сканирования с динамическим ipset |
+| `antidpi` | AntiScan | Доказанные отказы протоколов и сканы decoy-сайтов с динамическим ipset |
 | `fail2ban` | Fail2ban | Блокировка SSH и аутентификационных атак |
 | `honeypot` | Honeypot | Обнаружение сканирования портов |
 | `ipban` | IPBan | Статические списки IP/CIDR/ASN/стран |
@@ -250,7 +250,7 @@ Caddy, тот же source port используется для точного п
 
 | Unit | Роль |
 | :--- | :--- |
-| `hydra-antidpi.service` | Коллектор и enforcement AntiDPI |
+| `hydra-antidpi.service` | Коллектор и enforcement AntiScan |
 | `hydra-honeypot.service` | Ловушка сканирования портов |
 | `hydra-source-relay.service` | TCP source-relay: PROXY v2 → loopback backend |
 | `hydra-udp-source-relay.service` | UDP source-relay для QUIC-маршрутов |
@@ -261,8 +261,8 @@ Caddy, тот же source port используется для точного п
 | `hydra-sync-agent.timer` | Расписание sync agent |
 | `hydra-tg-admin.service` | Telegram Admin Bot |
 
-Вспомогательные отладочные units, включаемые по требованию:
-`hydra-awg-antidpi-debug.service`, `hydra-awg-fail2ban-debug.service`.
+Вспомогательный отладочный unit, включаемый по требованию:
+`hydra-awg-fail2ban-debug.service`. Прежний `hydra-awg-antidpi-debug.service` больше не создаётся: сверка удаляет его вместе с debug-хуком AmneziaWG.
 
 Legacy unit `hydra-tg-bot.service` сохранён только для удаления на старых
 установках; новый код его не создаёт.
@@ -309,7 +309,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/etc/systemd/journald.conf.d/90-hydra-journald.conf` | Бюджеты постоянного и runtime-журнала |
 | `/etc/caddy-l4/config.json` | Сгенерированная конфигурация TLS-мультиплексора |
 | `/etc/nftables.conf` | Правила nftables, включая TPROXY |
-| `/etc/iptables/rules.v4` | Сохранённые правила iptables (телеметрия AntiDPI) |
+| `/etc/iptables/rules.v4` | Сохранённые правила iptables (DROP-правила банов AntiScan) |
 | `/etc/dnscrypt-proxy/dnscrypt-proxy.toml` | Конфигурация DNSCrypt |
 | `/etc/telemt/telemt.toml` | Конфигурация MTProto-прокси |
 | `/etc/hydra/cookiesvk/` | Единый закрытый каталог провайдера VK; права `0700` |
@@ -365,7 +365,7 @@ DNS default на схему `type/server/domain_resolver` и проверяет 
 | `state.json.corrupt` | ядро | Изолированная копия повреждённого файла |
 | `state.lock` | ядро | Файловая блокировка чтения/записи |
 | `master.key` | ядро | Ключ шифрования чувствительных значений |
-| `antidpi.json` | `antidpi` | Score, evidence, активные баны и offense counters |
+| `antidpi.json` | `antidpi` | Активные баны с уликой, offense counters, whitelist и курсор журнала. Поля `scores`/`subnets` прежних версий сохраняются только для отката и не читаются |
 | `honeypot.json` | `honeypot` | События и собственные баны ловушки |
 | `ipban.json` | `ipban` | Статические списки блокировок |
 | `ip-intel-cache.json` | сервисы | Кэш GeoIP/ASN для уведомлений |
@@ -393,7 +393,7 @@ DNS default на схему `type/server/domain_resolver` и проверяет 
 | `/var/log/hydra/sync-agent.log` | Агент периодического обслуживания |
 | `/var/log/hydra/warp_install.log` | Установка WARP |
 | `/var/log/hydra-honeypot.log` | События ловушки |
-| `/var/log/caddy-l4/antidpi.jsonl` | JSONL-события layer4 для AntiDPI |
+| `/var/log/caddy-l4/antidpi.jsonl` | Не создаётся с 2.5.6: generic-TLS наблюдения удалены, файл можно удалить вручную |
 | `/var/log/caddy-naive/access.log` | Access-журнал NaiveProxy |
 | `/var/log/fail2ban.log` | Журнал Fail2ban |
 | `/var/log/telemt_install.log` | Установка Telemt |
@@ -477,8 +477,8 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 
 | Набор | Содержание |
 | :--- | :--- |
-| `hydra_antidpi` | Активные баны AntiDPI, IPv4 |
-| `hydra_antidpi6` | Активные баны AntiDPI, IPv6 |
+| `hydra_antidpi` | Активные баны AntiScan, IPv4 |
+| `hydra_antidpi6` | Активные баны AntiScan, IPv6 |
 
 ## Формат persisted state
 
@@ -607,7 +607,7 @@ sudo curl -fsS http://127.0.0.1:2021/config/ | jq .
 # Слушающие сокеты
 sudo ss -ltnup
 
-# Баны AntiDPI
+# Баны AntiScan
 sudo ipset list hydra_antidpi
 sudo ipset list hydra_antidpi6
 

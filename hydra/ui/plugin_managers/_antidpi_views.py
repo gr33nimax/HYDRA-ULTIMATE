@@ -1,16 +1,14 @@
 """Read-only Anti-DPI panels for the TUI controller."""
+
 from __future__ import annotations
 
 from datetime import datetime
 
 from hydra.plugins.antidpi.labels import (
-    block_reason_label,
     health_label,
-    signal_label,
     signal_summary,
     source_label,
 )
-from hydra.plugins.antidpi.model import BAN_THRESHOLD
 from hydra.utils.format_ru import (
     format_age,
     format_count,
@@ -33,10 +31,49 @@ TABLE_WIDTH = 74
 ADDRESS_WIDTH = 26
 
 
+def _as_float(value: object, default: float = 0.0) -> float:
+    """Return a float from untrusted persisted state, or ``default``."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    """Return an integer from untrusted persisted state, or ``default``."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
+def _is_false(value: object) -> bool:
+    """Return True only for the JSON boolean ``false``."""
+    return isinstance(value, bool) and not value
+
+
 def timestamp(value: object) -> str:
     """Render an absolute event time, tolerating corrupt persisted values."""
     try:
-        return datetime.fromtimestamp(float(value)).strftime("%d.%m %H:%M:%S")
+        return datetime.fromtimestamp(_as_float(value)).strftime("%d.%m %H:%M:%S")
     except (TypeError, ValueError, OSError, OverflowError):
         return "—"
 
@@ -67,17 +104,13 @@ def wrapped(label: str, text: str, *, width: int = 56) -> list[str]:
         else:
             current = candidate
     lines.append(current or "—")
-    return [
-        f"{prefix if index == 0 else indent}{value}{NC}"
-        for index, value in enumerate(lines)
-    ]
+    return [f"{prefix if index == 0 else indent}{value}{NC}" for index, value in enumerate(lines)]
 
 
 def status_lines(*, running: bool, health, data: dict) -> list[str]:
     """Render the compact AntiDPI summary."""
     now = data.get("now", 0)
     bans = rows(data, "ban_rows")
-    watch = rows(data, "watchlist")
     whitelist = data.get("whitelist", [])
     whitelist = whitelist if isinstance(whitelist, list) else []
     healthy = bool(getattr(health, "healthy", False))
@@ -87,9 +120,7 @@ def status_lines(*, running: bool, health, data: dict) -> list[str]:
         kv("Статус", f"{service} {DIM}·{NC} {condition}"),
         kv(
             "Защита",
-            f"{RED if bans else GREEN}{len(bans)} банов{NC} {DIM}·{NC} "
-            f"{YELLOW if watch else DIM}{len(watch)} наблюдается{NC} {DIM}· "
-            f"whitelist {len(whitelist)}{NC}",
+            f"{RED if bans else GREEN}{len(bans)} банов{NC} {DIM}· whitelist {len(whitelist)}{NC}",
         ),
         kv(
             "События",
@@ -99,10 +130,7 @@ def status_lines(*, running: bool, health, data: dict) -> list[str]:
         ),
     ]
     reconciliation = data.get("reconciliation", {})
-    reconciliation_failed = (
-        isinstance(reconciliation, dict)
-        and reconciliation.get("ok") is False
-    )
+    reconciliation_failed = isinstance(reconciliation, dict) and _is_false(reconciliation.get("ok"))
     failed = [
         health_label(name)
         for name, value in (getattr(health, "checks", {}) or {}).items()
@@ -126,7 +154,7 @@ def status_lines(*, running: bool, health, data: dict) -> list[str]:
 def _failure_lines(data: dict, *, now: float) -> list[str]:
     failures = data.get("ban_failures", {})
     failures = failures if isinstance(failures, dict) else {}
-    count = int(failures.get("count", 0) or 0)
+    count = _as_int(failures.get("count", 0))
     try:
         last_at = float(failures.get("last_at", 0) or 0)
         recent = last_at > 0 and float(now) - last_at <= 86400
@@ -166,9 +194,10 @@ def ban_table(
     ordered = rows(data, "ban_rows")
     if not ordered:
         return [f"  {DIM}Активных блокировок нет{NC}"]
-    window = ordered[max(0, int(offset)) : max(0, int(offset)) + max(0, int(limit))]
+    start = max(0, _as_int(offset))
+    window = ordered[start : start + max(0, _as_int(limit, 20))]
     lines = [
-        f"  {BOLD}{'#':<4}{'IP':<{ADDRESS_WIDTH}}{'Баллы':<9}Осталось{NC}",
+        f"  {BOLD}{'#':<4}{'IP':<{ADDRESS_WIDTH}}Осталось{NC}",
         rule(),
     ]
     for index, view in enumerate(window, 1):
@@ -179,26 +208,22 @@ def ban_table(
                 "Источник:  ",
                 f"{view.get('source', '—')} · {view.get('protocol', '—')} · "
                 f"срок {view.get('ttl', '—')} · "
-                f"нарушение #{int(view.get('offense', 1) or 1)} · "
+                f"нарушение #{_as_int(view.get('offense', 1), default=1)} · "
                 f"{timestamp(view.get('at'))}",
             ),
         )
         lines.append("")
-    hidden = len(ordered) - (max(0, int(offset)) + len(window))
+    hidden = len(ordered) - (start + len(window))
     if hidden > 0:
         lines.append(
-            f"  {DIM}…и ещё {plural(hidden, ('адрес', 'адреса', 'адресов'))}"
-            f"{NC}",
+            f"  {DIM}…и ещё {plural(hidden, ('адрес', 'адреса', 'адресов'))}{NC}",
         )
     return lines
 
 
 def _ban_rows(index: int, address: str, view: dict) -> list[str]:
     """Keep long IPv6 literals readable instead of truncating the row."""
-    metrics = (
-        f"{YELLOW}{view['score']:<9.1f}{NC}"
-        f"{view['icon']} {view['remaining_label']}"
-    )
+    metrics = f"{view['icon']} {view['remaining_label']}"
     if len(address) > ADDRESS_WIDTH:
         return [
             f"  {CYAN}{index:<4}{NC}{RED}{address}{NC}",
@@ -214,16 +239,13 @@ def history_table(data: dict, *, limit: int = 12) -> list[str]:
     records = data.get("history", []) if isinstance(data, dict) else []
     records = records if isinstance(records, list) else []
     active = {str(row.get("ip")) for row in rows(data, "ban_rows")}
-    closed = [
-        item
-        for item in reversed(records)
-        if isinstance(item, dict) and str(item.get("ip")) not in active
-    ][:limit]
+    closed = [item for item in reversed(records) if isinstance(item, dict) and str(item.get("ip")) not in active][
+        :limit
+    ]
     if not closed:
         return [f"  {DIM}Завершённых записей нет{NC}"]
     lines = [
-        f"  {BOLD}{'IP':<{ADDRESS_WIDTH}}{'Баллы':<9}{'Статус':<12}"
-        f"Время{NC}",
+        f"  {BOLD}{'IP':<{ADDRESS_WIDTH}}{'Статус':<12}Время{NC}",
         rule(),
     ]
     states = {
@@ -233,98 +255,12 @@ def history_table(data: dict, *, limit: int = 12) -> list[str]:
     }
     for item in closed:
         color, text = states.get(str(item.get("status", "")), (DIM, "—"))
-        try:
-            score = float(item.get("score", 0) or 0)
-        except (TypeError, ValueError):
-            score = 0.0
         lines.append(
-            f"  {address_cell(item.get('ip'))}"
-            f"{DIM}{score:<9.1f}{NC}{color}{text:<12}{NC}"
-            f"{DIM}{timestamp(item.get('at'))}{NC}",
+            f"  {address_cell(item.get('ip'))}{color}{text:<12}{NC}{DIM}{timestamp(item.get('at'))}{NC}",
         )
         lines.append(
             f"     {DIM}{signal_summary(item.get('signals'), limit=4)}{NC}",
         )
-    return lines
-
-
-def watchlist_table(data: dict) -> list[str]:
-    """Render sub-threshold evidence so operators see attacks in progress."""
-    items = rows(data, "watchlist")
-    now = data.get("now", 0) if isinstance(data, dict) else 0
-    if not items:
-        return [
-            f"  {DIM}Под наблюдением никого нет.{NC}",
-            f"  {DIM}Здесь появляются адреса с уликами ниже порога "
-            f"блокировки: {BAN_THRESHOLD} при двух семействах улик, "
-            f"{round(BAN_THRESHOLD * 1.5)} — при одном.{NC}",
-        ]
-    lines = [
-        f"  {BOLD}{'#':<4}{'IP':<{ADDRESS_WIDTH}}{'Баллы':<20}"
-        f"Последнее событие{NC}",
-        rule(),
-    ]
-    for index, row in enumerate(items, 1):
-        score = float(row.get("score", 0) or 0)
-        verified = float(row.get("verified_score", 0) or 0)
-        threshold = float(row.get("threshold", BAN_THRESHOLD) or BAN_THRESHOLD)
-        color = RED if score >= threshold * 0.75 else YELLOW
-        bar = f"{color}{progress_bar(score, maximum=threshold)}{NC}"
-        lines.append(
-            f"  {CYAN}{index:<4}{NC}{address_cell(row.get('ip'))}"
-            f"{bar} {color}{score:>4.1f}{NC}{DIM}/{threshold:.0f}{NC}  "
-            f"{DIM}{format_age(row.get('updated'), now=now)}{NC}",
-        )
-        detail = ", ".join(
-            signal_label(value) for value in row.get("signals", [])
-        )
-        lines.extend(wrapped("Сигналы:   ", detail or "—"))
-        evidence = str(row.get("evidence", "") or "").strip()
-        if evidence and evidence != "—":
-            lines.extend(wrapped("Улики:     ", evidence))
-        if verified < score:
-            lines.append(
-                f"     {DIM}Подтверждено: {verified:.1f} "
-                f"(остальное — alert-only телеметрия){NC}",
-            )
-        blocked = str(
-            row.get("block_label")
-            or block_reason_label(row.get("block_reason")),
-        ).strip()
-        if blocked:
-            lines.extend(wrapped("До бана:   ", blocked))
-        lines.append("")
-    return lines
-
-
-def coordinated_table(data: dict) -> list[str]:
-    """Render subnets that are probing from several addresses at once."""
-    items = rows(data, "coordinated")
-    if not items:
-        return [
-            f"  {DIM}Скоординированной активности не зафиксировано.{NC}",
-            f"  {DIM}Сюда попадают подсети, из которых улики приходят "
-            f"сразу с нескольких адресов.{NC}",
-        ]
-    lines = [
-        f"  {BOLD}{'Подсеть':<24}{'Адресов':<10}Последняя активность{NC}",
-        rule(),
-    ]
-    now = data.get("now", 0) if isinstance(data, dict) else 0
-    for row in items:
-        lines.append(
-            f"  {YELLOW}{str(row.get('prefix', '—')):<24}{NC}"
-            f"{RED}{int(row.get('members', 0) or 0):<10}{NC}"
-            f"{DIM}{format_age(row.get('updated'), now=now)}{NC}",
-        )
-        lines.extend(
-            wrapped("Адреса:    ", ", ".join(row.get("addresses", []) or ["—"])),
-        )
-        lines.append("")
-    lines.append(
-        f"  {DIM}Агрегат не банит сам по себе: каждый адрес блокируется "
-        f"только по собственным уликам.{NC}",
-    )
     return lines
 
 
@@ -342,14 +278,14 @@ def counter_lines(data: dict) -> list[str]:
 
 
 def _counter_rows(values: object) -> list[str]:
-    items = [row for row in (values or []) if isinstance(row, dict)]
+    items = [row for row in values if isinstance(row, dict)] if isinstance(values, (list, tuple)) else []
     if not items:
         return [f"  {DIM}нет данных{NC}"]
     return [
         f"    {str(row.get('label', '—')):<34}"
         f"{CYAN}"
-        f"{progress_bar(row.get('count'), maximum=row.get('maximum'), width=12)}"
-        f"{NC} {WHITE}{int(row.get('count', 0) or 0)}{NC}"
+        f"{progress_bar(_as_float(row.get('count')), maximum=row.get('maximum'), width=12)}"
+        f"{NC} {WHITE}{_as_int(row.get('count'))}{NC}"
         for row in items
     ]
 
@@ -357,12 +293,10 @@ def _counter_rows(values: object) -> list[str]:
 __all__ = [
     "address_cell",
     "ban_table",
-    "coordinated_table",
     "counter_lines",
     "history_table",
     "rule",
     "status_lines",
     "timestamp",
-    "watchlist_table",
     "wrapped",
 ]

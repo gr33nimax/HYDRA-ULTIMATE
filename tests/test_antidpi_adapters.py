@@ -1,215 +1,180 @@
+"""Parser regressions for the closed AntiScan evidence allowlist.
+
+The positive fixtures are real sanitized captures from the deployed host; see
+``tests/fixtures/antidpi/MANIFEST.md``.  A parser change that stops matching
+them ships a detector that silently does nothing, so these assertions are the
+contract, not an illustration.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
 from hydra.plugins.antidpi.adapters import (
-    decode_log_message, parse_kernel_scan_line, parse_protocol_line,
-    parse_unattributed_protocol_line,
+    decode_log_message,
+    parse_protocol_line,
+    remote_ip,
+)
+from hydra.plugins.antidpi.detection import evidence_problem, is_enforcement_evidence
+from hydra.plugins.antidpi.normalization import (
+    DECOY_PATH_TOKENS,
+    normalize_decoy_record,
 )
 
-
-def test_awg_rejection_is_normalized():
-    result = parse_protocol_line("amneziawg.service", "Invalid MAC of handshake from 203.0.113.9:48120")
-    assert result == ("203.0.113.9", {
-        "protocol": "amneziawg", "kind": "handshake_failure",
-        "handshake_ok": False, "source": "journal", "ban_eligible": False,
-    })
+FIXTURES = Path(__file__).parent / "fixtures" / "antidpi"
+SNELL = FIXTURES / "snell-cipher-auth-failure.txt"
+DECOY = FIXTURES / "decoy-scanner-paths.jsonl"
+NEGATIVES = FIXTURES / "negatives.jsonl"
 
 
-def test_awg_real_kernel_invalid_mac_is_normalized():
-    result = parse_protocol_line(
-        "kernel",
-        "wireguard: awg0: Invalid MAC of handshake, dropping packet from 203.0.113.9:48120",
-    )
-    assert result == ("203.0.113.9", {
-        "protocol": "amneziawg", "kind": "handshake_failure",
-        "handshake_ok": False, "source": "journal", "ban_eligible": False,
-    })
+def _snell_lines() -> list[str]:
+    return [line for line in SNELL.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def test_awg_real_kernel_unknown_peer_is_normalized():
-    result = parse_protocol_line(
-        "kernel-journal",
-        "wireguard: awg1: unknown peer from [2001:db8::9]:48121",
-    )
-    assert result is not None
-    assert result[0] == "2001:db8::9"
-    assert result[1]["protocol"] == "amneziawg"
-    assert result[1]["ban_eligible"] is False
+def _decoy_records() -> list[dict]:
+    return [json.loads(line) for line in DECOY.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def test_awg_legitimate_junk_packet_is_not_rejection_evidence():
-    result = parse_protocol_line(
-        "kernel",
-        "wireguard: awg0: Unknown message from 198.51.100.8:48120 encountered, packet dropped",
-    )
-    assert result is None
-
-
-def test_non_evidence_is_ignored():
-    assert parse_protocol_line("sing-box.service", "accepted connection from 203.0.113.9") is None
-
-
-def test_honeypot_events_are_not_antidpi_evidence():
-    assert parse_protocol_line(
-        "honeypot", "BAN 198.51.100.91 backend=iptables result=OK",
-    ) is None
-    assert parse_protocol_line(
-        "honeypot", "CONNECT 198.51.100.91:45600",
-    ) is None
-
-
-def test_kernel_tcp_scan_is_normalized():
-    line = "HYDRA_SCAN_TCP IN=eth0 SRC=198.51.100.77 DST=192.0.2.1 SPT=44222 DPT=22"
-    assert parse_kernel_scan_line(line) == (
-        "198.51.100.77",
-        {
-            "protocol": "tcp",
-            "kind": "port_scan",
-            "source": "kernel-firewall",
-            "connections_10s": 12,
-            "destination_port": 22,
-        },
-    )
-
-
-def test_kernel_udp_protocol_probe_is_alert_only():
-    line = "HYDRA_UDP_PROBE IN=eth0 SRC=198.51.100.78 DST=192.0.2.1 SPT=44222 DPT=8443"
-    assert parse_kernel_scan_line(line) == (
-        "198.51.100.78",
-        {
-            "protocol": "udp", "kind": "udp_probe", "source": "kernel-udp-probe",
-            "destination_port": 8443, "ban_eligible": False,
-        },
-    )
-
-
-def test_generic_kernel_udp_scan_is_also_alert_only():
-    line = "HYDRA_SCAN_UDP IN=eth0 SRC=198.51.100.79 DST=192.0.2.1 SPT=44222 DPT=8443"
-    parsed = parse_kernel_scan_line(line)
-    assert parsed is not None
-    assert parsed[1]["ban_eligible"] is False
-
-
-def test_mieru_low_volume_close_is_normalized_as_alert_only():
-    line = (
-        "HYDRA_MIERU_SHORT IN=ens3 SRC=198.51.100.80 DST=192.0.2.1 "
-        "SPT=60057 DPT=2012"
-    )
-    assert parse_kernel_scan_line(line) == (
-        "198.51.100.80",
-        {
-            "protocol": "mieru", "kind": "low_volume_session",
-            "source": "kernel-mieru", "source_port": 60057,
-            "destination_port": 2012, "ban_eligible": False,
-            "policy": "alert-only / inferred low-volume TCP rejection",
-        },
-    )
-
-
-def test_unrelated_kernel_message_is_ignored():
-    assert parse_kernel_scan_line("TCP: harmless kernel diagnostic") is None
-
-
-def test_protocol_error_with_ip_before_message_is_normalized():
-    result = parse_protocol_line(
-        "sing-box.service",
-        "peer 198.51.100.88:45500 handshake failed: protocol error",
-    )
-    assert result is not None
-    assert result[0] == "198.51.100.88"
-    assert result[1]["kind"] == "handshake_failure"
-
-
-def test_singbox_journal_byte_array_is_decoded_and_anytls_auth_is_normalized():
-    line = (
-        "+0000 ERROR inbound/anytls[anytls-in]: process connection from "
-        "127.0.0.1:14902: unknown user password: fallback disabled"
-    )
-    encoded = list(line.encode())
-    assert decode_log_message(encoded) == line
-    assert parse_protocol_line("sing-box.service", encoded) == (
-        "127.0.0.1",
-        {"protocol": "anytls", "kind": "auth_failure", "source": "journal", "peer_port": 14902},
-    )
-
-
-def test_anytls_eof_and_wdtt_native_errors_are_normalized():
-    anytls = parse_protocol_line(
-        "sing-box.service",
-        "inbound/anytls[anytls-in]: process connection from 198.51.100.7:1234: EOF: fallback disabled",
-    )
-    assert anytls == (
-        "198.51.100.7",
-        {"protocol": "anytls", "kind": "invalid_first_packet", "source": "journal"},
-    )
-    wdtt = parse_protocol_line(
-        "wdtt.service",
-        "[DTLS] [ERR] Handshake failed from 198.51.100.8:24420: handshake error: dtls fatal",
-    )
-    assert wdtt == (
-        "198.51.100.8",
-        {
-            "protocol": "wdtt", "kind": "handshake_failure", "handshake_ok": False,
-            "source": "journal", "ban_eligible": False,
-        },
-    )
-
-
-def test_trusttunnel_and_snell_production_messages_are_normalized():
-    trust = parse_protocol_line(
-        "sing-box.service",
-        "inbound/trusttunnel[trusttunnel-in]: process connection from 198.51.100.9:20550: authorization failed",
-    )
-    assert trust == (
-        "198.51.100.9",
-        {"protocol": "trusttunnel", "kind": "auth_failure", "source": "journal"},
-    )
-    snell = parse_protocol_line(
-        "sing-box.service",
-        'inbound/snell[snell-in]: process connection from 198.51.100.10:43498: malformed HTTP request "probe"',
-    )
-    assert snell == (
-        "198.51.100.10",
-        {"protocol": "snell", "kind": "invalid_first_packet", "source": "journal"},
-    )
-
-
-def test_reflected_client_keywords_do_not_become_protocol_evidence():
-    assert parse_protocol_line(
-        "sing-box.service",
-        'inbound/snell[snell-in]: process connection from 198.51.100.11:1234: EOF payload="INVALID-HANDSHAKE"',
-    ) is None
-    assert parse_protocol_line(
-        "sing-box.service",
-        'inbound/hysteria2[hysteria2-in]: connection from 198.51.100.12:1234 uses QUIC',
-    ) is None
-
-
-def test_shadowtls_detoured_trojan_auth_failure_keeps_relay_endpoint():
-    result = parse_protocol_line(
-        "sing-box.service",
-        "inbound/trojan[shadowtls-trojan-in]: process connection from "
-        "127.0.0.1:32145: invalid password",
-    )
-    assert result == (
-        "127.0.0.1",
-        {
-            "protocol": "shadowtls", "kind": "auth_failure",
-            "source": "journal", "peer_port": 32145,
-        },
-    )
-    bad_request = parse_protocol_line(
-        "sing-box.service",
-        "inbound/trojan[shadowtls-trojan-in]: process connection from "
-        "127.0.0.1:32146: bad request: fallback disabled",
-    )
-    assert bad_request[1]["kind"] == "auth_failure"
-    assert bad_request[1]["peer_port"] == 32146
-
-
-def test_shadowtls_native_hmac_mismatch_is_strict_unattributed_evidence():
-    line = (
-        "WARN inbound/shadowtls[shadowtls-in]: "
-        "client hello verify failed: hmac mismatch"
-    )
-    assert parse_protocol_line("sing-box.service", line) is None
-    assert parse_unattributed_protocol_line("sing-box.service", line) == {
-        "protocol": "shadowtls", "kind": "auth_failure", "source": "journal",
+def _negatives() -> dict[str, dict]:
+    return {
+        entry["kind"]: entry
+        for entry in (json.loads(line) for line in NEGATIVES.read_text(encoding="utf-8").splitlines() if line.strip())
     }
+
+
+def test_fixtures_exist_and_are_sanitized():
+    """A missing or leaked fixture must fail loudly, not silently disable a test."""
+    for path in (SNELL, DECOY, NEGATIVES, FIXTURES / "MANIFEST.md"):
+        assert path.exists(), f"missing fixture: {path}"
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in (SNELL, DECOY, NEGATIVES))
+    for address in ("95.139.44.62", "34.102.28.45", "129.159.56.14"):
+        assert address not in combined, "real capture address was not sanitized"
+
+
+@pytest.mark.parametrize("line", _snell_lines())
+def test_real_snell_reject_is_evidence(line):
+    """Every captured Snell record-header failure must normalize identically."""
+    match = parse_protocol_line("sing-box", line)
+    assert match is not None, line
+    address, event = match
+    assert remote_ip(address) == address
+    assert event == {
+        "kind": "protocol_reject",
+        "protocol": "snell",
+        "reason": "record_auth_failed",
+        "source": "journal",
+        "attribution": "direct",
+    }
+    assert is_enforcement_evidence(event)
+    assert evidence_problem(event) == ""
+
+
+def test_all_captured_snell_tags_are_recognized():
+    """Four different inbound tags appear in production; all must match."""
+    assert len({line.split("inbound/snell[")[1].split("]")[0] for line in _snell_lines()}) >= 3
+    assert all(parse_protocol_line("sing-box", line) for line in _snell_lines())
+
+
+def test_peer_mismatch_is_never_attributed():
+    """Wrapper and protocol-owned error disagreeing on the peer means no proof."""
+    line = (
+        "+0000 2026-09-16 13:45:24 ERROR [1 20ms] "
+        "inbound/snell[snell-1111aaaa2222-in]: process connection from "
+        "203.0.113.44:8235: snell: serve 198.51.100.9:8235: read request: "
+        "open record header: cipher: message authentication failed"
+    )
+    assert parse_protocol_line("sing-box", line) is None
+
+
+def test_journal_byte_array_messages_are_decoded():
+    """sing-box-extended writes []byte through journald; both shapes must parse."""
+    payload = _snell_lines()[0].encode("utf-8")
+    encoded = json.dumps(list(payload))
+    assert decode_log_message(encoded) == _snell_lines()[0]
+    assert parse_protocol_line("sing-box", encoded) is not None
+
+
+def test_unrelated_snell_error_is_not_auth_evidence():
+    """Only the record-header authentication failure is proof."""
+    record = _negatives()["snell_unrelated_error"]["record"]
+    assert parse_protocol_line("sing-box", record["msg"]) is None
+
+
+def test_successful_snell_session_is_not_evidence():
+    record = _negatives()["snell_successful_session"]["record"]
+    assert parse_protocol_line("sing-box", record["msg"]) is None
+
+
+def test_other_inbound_is_never_attributed_to_snell():
+    record = _negatives()["other_inbound_tag"]["record"]
+    assert parse_protocol_line("sing-box", record["msg"]) is None
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["generic_tls_no_certificate", "generic_tls_eof", "generic_tls_unknown_sni"],
+)
+def test_generic_tls_noise_never_becomes_evidence(kind):
+    """These produced 77265 lines and 39914 alerts on the live host."""
+    record = _negatives()[kind]["record"]
+    assert parse_protocol_line("caddy-l4", json.dumps(record)) is None
+    assert parse_protocol_line("caddy-l4", record["error"]) is None
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "generic_tls_no_certificate",
+        "generic_tls_eof",
+        "generic_tls_unknown_sni",
+        "normal_decoy_asset",
+        "decoy_query_string_only",
+    ],
+)
+def test_negatives_are_not_decoy_scans(kind):
+    record = _negatives()[kind]["record"]
+    assert normalize_decoy_record(record) is None
+
+
+def test_unauthenticated_naive_connect_is_not_evidence():
+    """Production shows 404 here, never 407: there is no attributable reject."""
+    record = _negatives()["naive_unauthenticated_decoy"]["record"]
+    assert normalize_decoy_record(record) is None
+
+
+@pytest.mark.parametrize("record", _decoy_records())
+def test_real_decoy_scans_are_evidence(record):
+    match = normalize_decoy_record(record)
+    assert match is not None, record.get("request", {}).get("uri")
+    address, event = match
+    assert address
+    assert event["kind"] == "decoy_scan"
+    assert event["reason"] == "scanner_path"
+    assert event["attribution"] == "direct"
+    assert is_enforcement_evidence(event)
+
+
+def test_decoy_allowlist_covers_the_paths_production_actually_probes():
+    """`/.git/` was missing before the contraction and is the second-biggest hit."""
+    probed = {record["request"]["uri"].lower() for record in _decoy_records()}
+    assert any(uri.startswith("/.env") for uri in probed)
+    assert any(uri.startswith("/.git/") for uri in probed)
+    for uri in probed:
+        assert any(uri.startswith(token) for token in DECOY_PATH_TOKENS), uri
+
+
+def test_evidence_path_is_bounded_and_printable():
+    record = {
+        "request": {
+            "remote_ip": "203.0.113.5",
+            "uri": "/.env" + "A" * 500 + "\x07\x1b[31m",
+        },
+    }
+    match = normalize_decoy_record(record)
+    assert match is not None
+    path = match[1]["path"]
+    assert len(path) <= 120
+    assert path.isprintable()

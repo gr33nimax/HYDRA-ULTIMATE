@@ -1,4 +1,5 @@
 """Administrative AntiDPI operations over explicit state/runtime ports."""
+
 from __future__ import annotations
 
 import copy
@@ -18,6 +19,30 @@ from hydra.plugins.antidpi.projection import (
 from hydra.plugins.antidpi.projection import management_projection
 from hydra.plugins.antidpi.state_store import AntiDPIStateCorruptError
 from hydra.plugins.context import PluginStateAccess
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    """Return an integer from caller input, or ``default``."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
+def _is_permanent(metadata: object) -> bool:
+    """Return True only for the JSON boolean ``true`` of a manual ban."""
+    if not isinstance(metadata, dict):
+        return False
+    return isinstance(metadata.get("permanent"), bool) and metadata["permanent"]
 
 
 class AntiDPIManagementMixin:
@@ -40,7 +65,6 @@ class AntiDPIManagementMixin:
                 "degraded": True,
                 "state_error": str(exc),
                 "ban_rows": [],
-                "watchlist": [],
                 "history": [],
             }
         return management_projection(data, now=self._clock())
@@ -76,7 +100,7 @@ class AntiDPIManagementMixin:
                 "-u",
                 "hydra-antidpi",
                 "-n",
-                str(max(1, min(int(limit), 200))),
+                str(max(1, min(_as_int(limit, 50), 200))),
                 "--no-pager",
                 "-o",
                 "short-iso",
@@ -84,9 +108,7 @@ class AntiDPIManagementMixin:
             text=True,
         )
         output = str(
-            getattr(result, "stdout", "")
-            or getattr(result, "stderr", "")
-            or "",
+            getattr(result, "stdout", "") or getattr(result, "stderr", "") or "",
         ).strip()
         return output.splitlines()
 
@@ -112,15 +134,12 @@ class AntiDPIManagementMixin:
             covered = self._banned_inside(data, parsed, now=self._clock())
         # Releasing runs outside the state lock: ``unban`` acquires it again
         # and flock is not reentrant across file descriptors.
-        failed = [
-            address for address in covered if not self.unban(address)
-        ]
+        failed = [address for address in covered if not self.unban(address)]
         if failed:
             # The whitelist entry is saved, but the operator must see that
             # trusted addresses may still be blocked.
             self._fail(
-                "Whitelist сохранён, но блокировки не сняты: "
-                + ", ".join(failed[:8]),
+                "Whitelist сохранён, но блокировки не сняты: " + ", ".join(failed[:8]),
             )
             return False
         return not already_present
@@ -202,8 +221,7 @@ class AntiDPIManagementMixin:
         remaining = self.whitelisted_bans()
         if remaining:
             self._fail(
-                "Whitelist-covered bans remain enforced: "
-                + ", ".join(remaining[:8]),
+                "Whitelist-covered bans remain enforced: " + ", ".join(remaining[:8]),
             )
         return released
 
@@ -275,9 +293,7 @@ class AntiDPIManagementMixin:
                 text=True,
             )
             detail = str(
-                getattr(result, "stderr", "")
-                or getattr(result, "stdout", "")
-                or "",
+                getattr(result, "stderr", "") or getattr(result, "stdout", "") or "",
             ).lower()
             if getattr(result, "returncode", 1) != 0 and "not in set" not in detail:
                 return False
@@ -302,7 +318,7 @@ class AntiDPIManagementMixin:
                 return {"ok": False, "error": "whitelisted"}
             expire_bans(data, now=timestamp)
             current = active_bans(data, now=timestamp).get(compressed)
-            if isinstance(current, dict) and current.get("permanent") is True:
+            if isinstance(current, dict) and _is_permanent(current):
                 return {
                     "ok": True,
                     "already_active": True,

@@ -4,41 +4,24 @@ This module deliberately knows nothing about files, subprocesses, systemd,
 ipset, Telegram, or the plugin registry.  Callers provide the current time and
 persist the mutated dictionaries through an explicit state store.
 """
+
 from __future__ import annotations
 
 import ipaddress
 import time
 from collections.abc import Iterable
 
-SIGNAL_WEIGHTS = {
-    "malformed_tls": 4,
-    "non_tls_on_tls": 3,
-    "unknown_sni": 2,
-    "handshake_failure": 2,
-    "protocol_mismatch": 3,
-    "quic_retry_burst": 2,
-    "connection_burst": 2,
-    "invalid_first_packet": 3,
-    "active_decoy_probe": 8,
-    "auth_failure": 3,
-    "port_scan": 2,
-    "port_sweep": 6,
-    "udp_probe": 4,
-    "low_volume_session": 3,
-}
-
-SCORE_HALF_LIFE = 300.0
-BAN_THRESHOLD = 8
-ALERT_THRESHOLD = 6
-AUTH_ALERT_THRESHOLD = 3
+# Progressive ban ladder.  Enforcement no longer consults a score: one proven
+# protocol reject or decoy scan starts the ladder at its first step.
 BAN_DURATIONS = (600, 3600, 86400, 604800)
 LEGACY_BAN_DURATION = 86400
-ALERT_COOLDOWN = 300.0
-MAX_OBSERVED_SCORE = BAN_THRESHOLD * 2
 BAN_NOTIFICATION_COOLDOWN = 5.0
+
+# Retention for legacy runtime state written by earlier AntiDPI versions.  The
+# current runtime never reads those entries for a decision; the retention
+# window only lets old data age out instead of being migrated destructively.
 SCORE_RETENTION = 86400.0
 MAX_SCORE_ENTRIES = 20000
-WATCHLIST_MIN_SCORE = 0.5
 MAX_HISTORY_ENTRIES = 1000
 DEFAULT_TRUSTED_NETWORKS = tuple(
     ipaddress.ip_network(value)
@@ -49,6 +32,48 @@ DEFAULT_TRUSTED_NETWORKS = tuple(
         "fc00::/7",
     )
 )
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    """Return an integer from untrusted state, or ``default``."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
+def _as_float(value: object, default: float = 0.0) -> float:
+    """Return a float from untrusted state, or ``default``."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
+def _is_permanent(metadata: object) -> bool:
+    """Return True only for the JSON boolean ``true`` of an admin-owned ban."""
+    if not isinstance(metadata, dict):
+        return False
+    return isinstance(metadata.get("permanent"), bool) and metadata["permanent"]
+
 
 _WHITELIST_CACHE: tuple[
     tuple[str, ...],
@@ -95,25 +120,16 @@ def get_ban_duration(offense_count: int) -> int:
     return BAN_DURATIONS[index]
 
 
-def format_score(value: object, *, threshold: float = BAN_THRESHOLD) -> str:
-    """Render detector precision without visually crossing the ban threshold."""
-    try:
-        score = float(value)
-    except (TypeError, ValueError):
-        score = 0.0
-    return f"{score:.2f}/{threshold:.2f}"
-
-
 def track_notification(data: dict, delivered: bool, *, now: float) -> None:
     """Persist delivery telemetry without storing notification credentials."""
     stats = data.setdefault("notification_stats", {})
     if not isinstance(stats, dict):
         stats = {}
         data["notification_stats"] = stats
-    stats["attempted"] = int(stats.get("attempted", 0)) + 1
+    stats["attempted"] = _as_int(stats.get("attempted", 0)) + 1
     stats["last_attempt_at"] = now
     key = "delivered" if delivered else "failed"
-    stats[key] = int(stats.get(key, 0)) + 1
+    stats[key] = _as_int(stats.get(key, 0)) + 1
     stats[f"last_{key}_at"] = now
 
 
@@ -137,7 +153,7 @@ def active_bans(data: dict, *, now: float | None = None) -> dict:
     for address, metadata in banned.items():
         if not isinstance(metadata, dict):
             continue
-        if metadata.get("permanent") is True:
+        if _is_permanent(metadata):
             result[address] = metadata
             continue
         try:
@@ -162,7 +178,7 @@ def expire_bans(data: dict, *, now: float | None = None) -> bool:
             banned.pop(address, None)
             changed = True
             continue
-        if metadata.get("permanent") is True:
+        if _is_permanent(metadata):
             continue
         try:
             elapsed = timestamp >= float(metadata.get("at", 0)) + ban_duration(metadata)
@@ -201,16 +217,8 @@ def prune_ban_counts(data: dict, *, now: float | None = None) -> None:
     known = set(active_bans(data, now=timestamp))
     history = data.get("history", [])
     if isinstance(history, list):
-        known.update(
-            str(item.get("ip"))
-            for item in history
-            if isinstance(item, dict) and item.get("ip")
-        )
-    data["ban_counts"] = {
-        address: value
-        for address, value in counts.items()
-        if address in known
-    }
+        known.update(str(item.get("ip")) for item in history if isinstance(item, dict) and item.get("ip"))
+    data["ban_counts"] = {address: value for address, value in counts.items() if address in known}
 
 
 def record_ban_failure(data: dict, address: str, *, now: float) -> None:
@@ -225,7 +233,7 @@ def record_ban_failure(data: dict, address: str, *, now: float) -> None:
     if not isinstance(stats, dict):
         stats = {}
         data["ban_failures"] = stats
-    stats["count"] = int(stats.get("count", 0) or 0) + 1
+    stats["count"] = _as_int(stats.get("count", 0)) + 1
     stats["last_at"] = now
     stats["last_ip"] = str(address)[:64]
 
@@ -255,76 +263,15 @@ def prune_runtime_state(
         if address in active or timestamp - updated <= SCORE_RETENTION:
             retained[address] = metadata
     if len(retained) > max_entries:
-        protected = {
-            address: retained[address]
-            for address in active
-            if address in retained
-        }
+        protected = {address: retained[address] for address in active if address in retained}
         candidates = sorted(
-            (
-                (address, metadata)
-                for address, metadata in retained.items()
-                if address not in protected
-            ),
-            key=lambda item: float(item[1].get("updated", 0)),
+            ((address, metadata) for address, metadata in retained.items() if address not in protected),
+            key=lambda item: _as_float(item[1].get("updated", 0)),
             reverse=True,
         )
         available = max(0, max_entries - len(protected))
         retained = {**protected, **dict(candidates[:available])}
     data["scores"] = retained
-
-
-def decayed_score(
-    score: float,
-    elapsed: float,
-    half_life: float = SCORE_HALF_LIFE,
-) -> float:
-    """Decay evidence exponentially so old probes cannot cause a late ban."""
-    if elapsed <= 0:
-        return max(0.0, float(score))
-    if half_life <= 0:
-        return 0.0
-    return max(0.0, float(score) * 0.5 ** (elapsed / half_life))
-
-
-def score_event(event: dict) -> tuple[int, tuple[str, ...]]:
-    """Return ``(score, signals)`` for one normalized L4 event."""
-    if not isinstance(event, dict):
-        return 0, ()
-    signals: list[str] = []
-    kind = str(event.get("kind", event.get("reason", ""))).lower()
-    mapping = {
-        "malformed_tls": ("malformed_tls",),
-        "bad_client_hello": ("malformed_tls",),
-        "non_tls": ("non_tls_on_tls",),
-        "unknown_sni": ("unknown_sni",),
-        "handshake_error": ("handshake_failure",),
-        "handshake_failure": ("handshake_failure",),
-        "protocol_mismatch": ("protocol_mismatch",),
-        "invalid_first_packet": ("invalid_first_packet",),
-        "active_decoy_probe": ("active_decoy_probe",),
-        "auth_failure": ("auth_failure",),
-        "port_scan": ("port_scan",),
-        "udp_probe": ("udp_probe",),
-        "low_volume_session": ("low_volume_session",),
-    }
-    signals.extend(mapping.get(kind, ()))
-    protocol = str(event.get("protocol", "")).lower()
-    if protocol in {"tls", "https", "quic"} and event.get("handshake_ok") is False:
-        signals.append("handshake_failure")
-    if event.get("sni_known") is False and "unknown_sni" not in signals:
-        signals.append("unknown_sni")
-    try:
-        if int(event.get("distinct_ports_60s", 0)) >= 4:
-            signals.append("port_sweep")
-        if int(event.get("connections_10s", 0)) >= 12:
-            signals.append("connection_burst")
-        if protocol == "quic" and int(event.get("retries_10s", 0)) >= 6:
-            signals.append("quic_retry_burst")
-    except (TypeError, ValueError):
-        pass
-    unique = tuple(dict.fromkeys(signals))
-    return sum(SIGNAL_WEIGHTS.get(signal, 0) for signal in unique), unique
 
 
 def record_unban(data: dict, address: str, *, now: float) -> None:
@@ -339,11 +286,7 @@ def record_unban(data: dict, address: str, *, now: float) -> None:
     if not isinstance(history, list):
         return
     for item in reversed(history):
-        if (
-            isinstance(item, dict)
-            and item.get("ip") == address
-            and item.get("status") == "active"
-        ):
+        if isinstance(item, dict) and item.get("ip") == address and item.get("status") == "active":
             item["status"] = "unbanned"
             item["unbanned_at"] = now
             break
@@ -363,9 +306,9 @@ def record_manual_ban(
         ban_counts = {}
         data["ban_counts"] = ban_counts
     offense_count = (
-        int(current.get("offense_count", 1) or 1)
+        max(1, _as_int(current.get("offense_count", 1), default=1))
         if isinstance(current, dict)
-        else int(ban_counts.get(address, 0) or 0) + 1
+        else _as_int(ban_counts.get(address, 0)) + 1
     )
     scores = data.get("scores", {})
     if not isinstance(scores, dict):
@@ -379,8 +322,8 @@ def record_manual_ban(
     signals = list(dict.fromkeys([*raw_signals, "manual_ban"]))[-16:]
     metadata = {
         "at": timestamp,
-        "score": float(
-            entry.get("verified_score", entry.get("score", 0)) or 0,
+        "score": _as_float(
+            entry.get("verified_score", entry.get("score", 0)),
         ),
         "signals": signals,
         "source": str(source)[:80],
@@ -402,11 +345,7 @@ def record_manual_ban(
     promoted = False
     if isinstance(current, dict):
         for item in reversed(history):
-            if (
-                isinstance(item, dict)
-                and item.get("ip") == address
-                and item.get("status") == "active"
-            ):
+            if isinstance(item, dict) and item.get("ip") == address and item.get("status") == "active":
                 item.clear()
                 item.update({"ip": address, **metadata, "status": "active"})
                 promoted = True

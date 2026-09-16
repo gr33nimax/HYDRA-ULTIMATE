@@ -1,17 +1,36 @@
+"""Collector contracts for the AntiScan journal stream.
+
+The collector subscribes to exactly one journal stream and normalizes records
+through the strict parser.  Records that carry no proven evidence must come out
+as ``None`` so they never reach state, the firewall or Telegram.
+"""
+
+from __future__ import annotations
+
 import queue
-from unittest.mock import patch
+from pathlib import Path
 
 from hydra.core.state_models import AppState
 from hydra.plugins.antidpi.agent import (
-    TextTail,
     _journal_follow_command,
     _normalize_journal_record,
     _offer_event,
 )
 
+FIXTURES = Path(__file__).parent / "fixtures" / "antidpi"
+SNELL_IP = "203.0.113.44"
+
+
+def _snell_line() -> str:
+    return next(
+        line
+        for line in (FIXTURES / "snell-cipher-auth-failure.txt").read_text(encoding="utf-8").splitlines()
+        if SNELL_IP in line
+    )
+
 
 def test_bounded_event_queue_does_not_block_and_keeps_recent_event():
-    events = queue.Queue(maxsize=1)
+    events: queue.Queue = queue.Queue(maxsize=1)
     first = ("198.51.100.1", {"kind": "first"})
     second = ("198.51.100.2", {"kind": "second"})
     _offer_event(events, first)
@@ -19,44 +38,65 @@ def test_bounded_event_queue_does_not_block_and_keeps_recent_event():
     assert events.get_nowait() == second
 
 
-def test_text_tail_normalizes_new_protocol_lines(tmp_path):
-    log = tmp_path / "sing-box.log"
-    log.write_text("handshake failed 198.51.100.90\n", encoding="utf-8")
-    tail = TextTail(log, "sing-box")
-    assert tail.read() == []
-    with log.open("a", encoding="utf-8") as handle:
-        handle.write("handshake failed 198.51.100.91\n")
-    events = tail.read()
-    assert events[0][0] == "198.51.100.91"
-    assert events[0][1]["kind"] == "handshake_failure"
-    assert events[0][1]["source"] == "sing-box-log"
-
-
-def test_antidpi_uses_one_filtered_journal_stream_for_services_and_kernel():
+def test_journal_stream_subscribes_only_to_the_proven_protocol_unit():
     command = _journal_follow_command()
 
     assert command[:5] == ["journalctl", "-f", "-n", "0", "-o"]
     assert "_SYSTEMD_UNIT=sing-box.service" in command
-    assert "+" in command
-    assert "_TRANSPORT=kernel" in command
+    # The kernel transport and the other unit filters carried the removed
+    # scan, UDP and per-protocol telemetry.
+    assert "_TRANSPORT=kernel" not in command
+    assert "+" not in command
+    for unit in ("amneziawg", "hysteria2", "mieru", "telemt", "wdtt", "caddy-l4"):
+        assert f"_SYSTEMD_UNIT={unit}.service" not in command
 
 
-def test_combined_journal_stream_preserves_kernel_event_attribution():
-    parsed = ("198.51.100.44", {"kind": "udp_probe"})
-    with (
-        patch(
-            "hydra.plugins.antidpi.agent.parse_kernel_scan_line",
-            return_value=parsed,
-        ) as parse,
-        patch(
-            "hydra.plugins.antidpi.agent._attribute_udp_protocol",
-            side_effect=lambda event, _reader: event,
-        ),
+def test_journal_record_with_a_proven_reject_normalizes():
+    record = {
+        "_SYSTEMD_UNIT": "sing-box.service",
+        "MESSAGE": _snell_line(),
+    }
+    event = _normalize_journal_record(record, AppState)
+
+    assert event is not None
+    address, details = event
+    assert address == SNELL_IP
+    assert details["kind"] == "protocol_reject"
+    assert details["protocol"] == "snell"
+    assert details["source"] == "journal"
+    assert details["attribution"] == "direct"
+
+
+def test_journal_record_without_proven_evidence_is_discarded():
+    """Generic failures, other inbounds and boilerplate must all be silent."""
+    for message in (
+        "handshake failed from 198.51.100.90:443",
+        "no certificate available for 'no-such.invalid'",
+        "inbound/vless[vless-xhttp-in]: process connection from "
+        "198.51.100.9:1234: unknown UUID: "
+        "00000000-0000-0000-0000-000000000000",
+        "inbound/snell[snell-1111aaaa2222-in]: [user] inbound connection to example.com:443",
+        "HYDRA_SCAN_TCP SRC=198.51.100.9 DPT=1001",
     ):
-        event = _normalize_journal_record(
-            {"_TRANSPORT": "kernel", "MESSAGE": "kernel probe"},
-            lambda: AppState(),
-        )
+        assert (
+            _normalize_journal_record(
+                {"_SYSTEMD_UNIT": "sing-box.service", "MESSAGE": message},
+                AppState,
+            )
+            is None
+        ), message
 
-    assert event == parsed
-    parse.assert_called_once_with("kernel probe")
+
+def test_collector_has_no_text_tail_or_kernel_normalizer():
+    """Removed seams must not linger: a text tail could never enforce.
+
+    ``TextTail`` stamped its events with a ``<service>-log`` source, which is
+    outside the evidence allowlist, so wiring it up would silently disable
+    enforcement instead of failing loudly.
+    """
+    from hydra.plugins.antidpi import agent, adapters
+
+    assert not hasattr(agent, "TextTail")
+    assert not hasattr(agent, "_attribute_udp_protocol")
+    assert not hasattr(agent, "_resolve_relay_source")
+    assert not hasattr(adapters, "parse_kernel_scan_line")

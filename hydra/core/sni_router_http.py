@@ -1,7 +1,8 @@
 """Pure HTTP decoy-server sections for the Caddy SNI document."""
+
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, Protocol
 
 
@@ -9,9 +10,36 @@ Backend = dict[str, Any]
 
 
 class RenderSettings(Protocol):
-    internal_ports: dict[str, int]
-    decoy_ports: dict[str, int]
-    relay_ports: dict[str, int]
+    """Read-only view of the ports this module renders.
+
+    Declared as mappings because the renderer only looks ports up; a mutable
+    ``dict`` annotation would reject the dataclass that actually supplies them.
+    """
+
+    internal_ports: Mapping[str, int]
+    decoy_ports: Mapping[str, int]
+    relay_ports: Mapping[str, int]
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    """Return an integer from rendered plugin config, or ``default``.
+
+    A listener port arrives from plugin configuration, so a malformed value
+    must not abort the whole Caddy document render.
+    """
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default
 
 
 def _redirect_server() -> dict[str, Any]:
@@ -29,8 +57,7 @@ def _redirect_server() -> dict[str, Any]:
                         "status_code": 308,
                         "headers": {
                             "Location": [
-                                "https://{http.request.host}"
-                                "{http.request.uri}",
+                                "https://{http.request.host}{http.request.uri}",
                             ],
                         },
                     },
@@ -74,11 +101,7 @@ def _trusttunnel_server(
     listener_wrappers: Callable[[], list[dict[str, Any]]],
 ) -> dict[str, Any]:
     relay = relay_enabled and "trusttunnel" in settings.relay_ports
-    upstream_port = (
-        settings.relay_ports["trusttunnel"]
-        if relay
-        else settings.internal_ports["trusttunnel"]
-    )
+    upstream_port = settings.relay_ports["trusttunnel"] if relay else settings.internal_ports["trusttunnel"]
     transport: dict[str, Any] = {
         "protocol": "http",
         "versions": ["2"],
@@ -115,8 +138,7 @@ def _trusttunnel_server(
                             "request": {
                                 "set": {
                                     "Proxy-Authorization": [
-                                        "{http.request.header."
-                                        "Proxy-Authorization}",
+                                        "{http.request.header.Proxy-Authorization}",
                                     ],
                                     "Authorization": [
                                         "{http.request.header.Authorization}",
@@ -163,11 +185,7 @@ def _path_proxy_decoy_server(
 ) -> dict[str, Any]:
     path = str(backend["proxy_path"]).rstrip("/")
     exact_source = str(backend["name"]) in settings.relay_ports
-    upstream_port = (
-        settings.relay_ports[str(backend["name"])]
-        if exact_source
-        else int(backend["port"])
-    )
+    upstream_port = settings.relay_ports[str(backend["name"])] if exact_source else _as_int(backend["port"])
     transport: dict[str, Any] = {
         "protocol": "http",
         "versions": ["2"],
@@ -207,7 +225,7 @@ def _path_proxy_decoy_server(
         ],
     }
     return {
-        "listen": [f"127.0.0.1:{int(backend['decoy_port'])}"],
+        "listen": [f"127.0.0.1:{_as_int(backend['decoy_port'])}"],
         "listener_wrappers": listener_wrappers(),
         "automatic_https": {
             "disable": True,
