@@ -4,7 +4,10 @@ The installer-era migration commands are gone: a mode change is desired state pl
 endpoint carries, and the observed value is read back from the core's own configuration.
 """
 
+import base64
 import json
+import struct
+import zlib
 
 from typing import Any, cast
 
@@ -219,3 +222,35 @@ def test_enabling_creates_the_profile_and_gives_users_addresses():
     # Клиентский артефакт существует — до выдачи адреса он был пустым, и подписка молчала.
     assert plugin.client_link(state.users[0], state)
     assert plugin.server_endpoints(state)[0]["peers"]
+
+
+def test_the_amnezia_link_carries_the_generation_as_tokens():
+    """The client reads every AWG parameter as a string: a boolean reaches it as an empty value."""
+    plugin = AmneziaWGPlugin()
+    state = _state("3.1")
+    profile = state.protocols["amneziawg"].config["profiles"]["desktop"]
+    profile["obfuscation"] = dict(DEFAULT_OBFUSCATION)
+    profile["server_private_key"] = generate_private_key()
+    profile["generation"] = {
+        "HeaderProtectionKey": "k" * 44,
+        "RandomTrailers": True,
+        "DisableCookies": True,
+    }
+    state.users = [_user_with_keys("a@example.com", "u1", octet="3")]
+
+    link = plugin.amnezia_link(state.users[0], state)
+    assert link.startswith("vpn://")
+
+    encoded = link[len("vpn://") :]
+    raw = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+    body = zlib.decompress(raw[4:])
+    assert struct.unpack(">I", raw[:4])[0] == len(body)
+    container = json.loads(body.decode("utf-8"))["containers"][0]["awg"]
+    # Ни прибитой константы: поколение клиент выводит из самой конфигурации.
+    assert "protocol_version" not in container
+    assert isinstance(container["port"], str)
+
+    inner = json.loads(container["last_config"])
+    assert inner["RandomTrailers"] == "on"
+    assert inner["DisableCookies"] == "on"
+    assert isinstance(inner["RandomTrailers"], str)

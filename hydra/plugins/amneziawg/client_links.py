@@ -371,7 +371,8 @@ class AwgClientLinksMixin:
                         "isThirdPartyConfig": True,
                         "last_config": inner_json,
                         "port": str(data.port),
-                        "protocol_version": "2",
+                        # No `protocol_version`: the client derives the generation from `last_config`,
+                        # and a constant "2" on a 3.x profile is exactly what made the import fail.
                         "transport_proto": "udp",
                     },
                     "container": "amnezia-awg",
@@ -436,7 +437,14 @@ class AwgClientLinksMixin:
             value = obfuscation.get(key, "")
             if value:
                 payload[key] = str(value)
-        payload.update(self._generation_fields(data))
+        generation = self._generation_fields(data)
+        # The Amnezia client reads every AWG parameter as a string, so a JSON boolean reaches it as
+        # an empty value and the two 3.1 toggles disappear: they travel as the tokens that client
+        # writes itself.
+        for key in ("RandomTrailers", "DisableCookies"):
+            if key in generation:
+                generation[key] = "on" if _boolean(generation[key]) else "off"
+        payload.update(generation)
         payload.update(
             {
                 "allowed_ips": ["0.0.0.0/0"],
