@@ -77,6 +77,32 @@ class VlessCdnPlugin(BasePlugin):
     #  configure
     # ═════════════════════════════════════════════════════════════════════
 
+    def on_enable(self, state: PluginStateAccess) -> None:
+        """Не дать включить протокол, который не установлен.
+
+        Маршрут читается из состояния сразу, как только протокол включён, а без
+        сертификата origin сборка документа маршрутов падает — вместе со всей
+        перестройкой мультиплексора. Поэтому отказ случается здесь, до неё.
+        """
+        plugin_state = state.protocols.get(PROTOCOL_NAME)
+        config = plugin_state.config if plugin_state else {}
+        required = (
+            "cdn_domain",
+            "origin_host",
+            "xhttp_path",
+            "cert_file",
+            "key_file",
+            "encryption_private_key",
+        )
+        missing = [key for key in required if not str(config.get(key, "") or "").strip()]
+        if not as_int(config.get("core_port")):
+            missing.append("core_port")
+        if missing:
+            raise ValueError(
+                "Протокол не установлен: сначала выполните установку "
+                f"(не хватает: {', '.join(missing)})",
+            )
+
     def configure(self, state: PluginStateAccess) -> ConfigFragment:
         """Inbound VLESS с XHTTP packet-up и расшифровкой VLESS Encryption.
 
