@@ -1,4 +1,5 @@
 """Pure SNI-router policy, backend discovery, and ownership validation."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -56,8 +57,7 @@ def needs_mux(state: AppState, internal_ports: Mapping[str, int]) -> bool:
         protocol.enabled
         and protocol.config.get("domain")
         and isinstance(protocol.config.get(_DYNAMIC_ROUTE_KEY), Mapping)
-        and protocol.config[_DYNAMIC_ROUTE_KEY].get("kind")
-        == _DYNAMIC_ROUTE_KIND
+        and protocol.config[_DYNAMIC_ROUTE_KEY].get("kind") == _DYNAMIC_ROUTE_KIND
         for protocol in state.protocols.values()
     ):
         return True
@@ -109,10 +109,7 @@ def get_quic_owner(state: AppState, prospective: str | None = None) -> str | Non
     owners = get_quic_owners(state, prospective=prospective)
     if len(owners) > 1:
         labels = ", ".join(owners)
-        raise ValueError(
-            "UDP/443 одновременно запрошен несколькими "
-            f"QUIC-протоколами: {labels}"
-        )
+        raise ValueError(f"UDP/443 одновременно запрошен несколькими QUIC-протоколами: {labels}")
     return owners[0] if owners else None
 
 
@@ -143,25 +140,25 @@ def collect_backends(
             domain = proto.config.get("domain", "")
         if not domain:
             continue
-        backends.append({
-            "name": name,
-            "domain": domain,
-            "port": port,
-            "cert_file": proto.config.get("cert_file", ""),
-            "key_file": proto.config.get("key_file", ""),
-            "network_mode": (
-                proto.config.get("network", "tcp")
-                if name == "naive"
-                else (
-                    proto.config.get("transport", "tcp")
-                    if name == "trusttunnel"
-                    else ""
+        backends.append(
+            {
+                "name": name,
+                "domain": domain,
+                "port": port,
+                "cert_file": proto.config.get("cert_file", ""),
+                "key_file": proto.config.get("key_file", ""),
+                "network_mode": (
+                    proto.config.get("network", "tcp")
+                    if name == "naive"
+                    else (proto.config.get("transport", "tcp") if name == "trusttunnel" else "")
+                ),
+                "decoy_theme": str(
+                    proto.config.get("decoy_theme", ""),
                 )
-            ),
-            "decoy_theme": str(
-                proto.config.get("decoy_theme", ""),
-            ).strip().lower(),
-        })
+                .strip()
+                .lower(),
+            }
+        )
 
     occupied_ports = {
         *(int(item) for item in internal_ports.values()),
@@ -197,13 +194,15 @@ def collect_backends(
 
     sub_domain = getattr(state.network, "sub_domain", "")
     if sub_domain:
-        backends.append({
-            "name": "sub_server",
-            "domain": sub_domain,
-            "port": internal_ports["sub_server"],
-            "cert_file": "",
-            "key_file": "",
-        })
+        backends.append(
+            {
+                "name": "sub_server",
+                "domain": sub_domain,
+                "port": internal_ports["sub_server"],
+                "cert_file": "",
+                "key_file": "",
+            }
+        )
     _validate_unique_domains(backends)
     return backends
 
@@ -217,8 +216,7 @@ def _validate_unique_domains(backends: list[dict[str, Any]]) -> None:
         previous = owners.get(domain)
         if previous is not None:
             raise ValueError(
-                f"TLS domain {domain} is assigned to both "
-                f"{previous} and {backend['name']}",
+                f"TLS domain {domain} is assigned to both {previous} and {backend['name']}",
             )
         owners[domain] = str(backend["name"])
 
@@ -253,10 +251,7 @@ def _passthrough_backend(
     occupied_ports: set[int],
 ) -> dict[str, Any]:
     """Project a plugin-owned TLS passthrough route, e.g. Reality."""
-    if (
-        not isinstance(route, Mapping)
-        or route.get("kind") != _PASSTHROUGH_ROUTE_KIND
-    ):
+    if not isinstance(route, Mapping) or route.get("kind") != _PASSTHROUGH_ROUTE_KIND:
         raise _route_error(name, f"kind must be {_PASSTHROUGH_ROUTE_KIND}")
     internal_port = _route_port(
         name,
@@ -268,12 +263,7 @@ def _passthrough_backend(
     if not isinstance(sni_key, str) or not sni_key:
         raise _route_error(name, "sni_config must name a config field")
     sni = str(config.get(sni_key, "")).strip().lower().rstrip(".")
-    if (
-        not sni
-        or "://" in sni
-        or "." not in sni
-        or any(character.isspace() for character in sni)
-    ):
+    if not sni or "://" in sni or "." not in sni or any(character.isspace() for character in sni):
         raise _route_error(name, f"{sni_key} is not a valid SNI")
     return {
         "name": name,
@@ -292,10 +282,7 @@ def _dynamic_backend(
     route: object,
     occupied_ports: set[int],
 ) -> dict[str, Any]:
-    if (
-        not isinstance(route, Mapping)
-        or route.get("kind") != _DYNAMIC_ROUTE_KIND
-    ):
+    if not isinstance(route, Mapping) or route.get("kind") != _DYNAMIC_ROUTE_KIND:
         raise _route_error(name, f"kind must be {_DYNAMIC_ROUTE_KIND}")
     # Маршрут может назвать поле конфигурации, откуда берётся его имя, — тогда
     # протоколу не нужно дублировать origin-имя в поле с чужим названием.
@@ -332,16 +319,15 @@ def _dynamic_backend(
     )
     root = str(route.get("decoy_root", ""))
     root_parts = root.split("/")[1:]
-    if (
-        not root.startswith("/var/www/decoy-")
-        or "\\" in root
-        or any(part in {"", ".", ".."} for part in root_parts)
-    ):
+    if not root.startswith("/var/www/decoy-") or "\\" in root or any(part in {"", ".", ".."} for part in root_parts):
         raise _route_error(name, "decoy_root must be under /var/www/decoy-*")
-    theme = str(
-        config.get("decoy_theme")
-        or route.get("decoy_theme", ""),
-    ).strip().lower()
+    theme = (
+        str(
+            config.get("decoy_theme") or route.get("decoy_theme", ""),
+        )
+        .strip()
+        .lower()
+    )
     if not is_supported(theme):
         raise _route_error(name, "decoy_theme is not supported")
     path_key = route.get("path_config")
@@ -424,10 +410,7 @@ def relay_routes(
     return [
         (str(backend["name"]), relay_ports[str(backend["name"])], int(backend["port"]))
         for backend in backends
-        if (
-            backend["name"] in relay_ports
-            and (backend["name"] == "vless" or antidpi)
-        )
+        if (backend["name"] in relay_ports and (backend["name"] == "vless" or antidpi))
     ]
 
 

@@ -14,7 +14,12 @@ from cryptography.x509.oid import NameOID
 
 from hydra.core.state import AppState
 from hydra.core.state_models import PluginState
-from hydra.contracts.vless_cdn import DEFAULT_XHTTP_PATH, PROTOCOL_NAME
+from hydra.contracts.vless_cdn import (
+    DEFAULT_XHTTP_PATH,
+    PROTOCOL_NAME,
+    client_encryption_value,
+    server_encryption_value,
+)
 from hydra.services.vless_cdn_install import (
     certificate_not_after,
     install_protocol,
@@ -181,6 +186,48 @@ def test_certificate_failure_leaves_the_state_untouched():
     assert config == {"origin_host": "old.example.com"}
     assert "cert_file" not in config
     assert "cdn_domain" not in config
+
+
+def test_install_issues_an_encryption_keypair():
+    state = AppState()
+
+    install_protocol(
+        state,
+        cdn_domain="cdn.example.com",
+        origin_host="origin.example.com",
+        provisioner=_Issuer(("cert.pem", "key.pem")),
+        port_allocator=_counting_port()[0],
+    )
+
+    config = state.protocols[PROTOCOL_NAME].config
+    private_key = str(config["encryption_private_key"])
+    public_key = str(config["encryption_public_key"])
+
+    assert config["encryption_mode"] == "native"
+    assert private_key and public_key and private_key != public_key
+    assert server_encryption_value(private_key).endswith(private_key)
+    assert client_encryption_value(public_key).endswith(public_key)
+
+    # Приватный ключ остаётся на сервере: в клиентский профиль идёт только публичный.
+    assert private_key not in client_encryption_value(public_key)
+
+
+def test_reinstall_keeps_the_keypair_it_already_handed_out():
+    state = AppState()
+    kwargs = {
+        "cdn_domain": "cdn.example.com",
+        "origin_host": "origin.example.com",
+        "provisioner": _Issuer(("cert.pem", "key.pem")),
+        "port_allocator": _counting_port()[0],
+    }
+    install_protocol(state, **kwargs)
+    first = dict(state.protocols[PROTOCOL_NAME].config)
+
+    install_protocol(state, **kwargs)
+    second = state.protocols[PROTOCOL_NAME].config
+
+    assert second["encryption_private_key"] == first["encryption_private_key"]
+    assert second["encryption_public_key"] == first["encryption_public_key"]
 
 
 def test_reinstall_keeps_the_port_the_route_already_uses():

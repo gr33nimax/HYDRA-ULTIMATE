@@ -99,6 +99,81 @@ def normalize_path(value: object) -> str:
     return normalized
 
 
+ENCRYPTION_SCHEME = "mlkem768x25519plus"
+ENCRYPTION_MODES = ("native", "xorpub", "random")
+DEFAULT_ENCRYPTION_MODE = "native"
+CLIENT_ENCRYPTION_HANDSHAKE = "1rtt"
+
+# Окно тикетов и ротации ключа в секундах: ядро берёт случайное значение между
+# границами (`seconds = RandBetween(from, to)` в server.go); ноль с обеих сторон
+# означает, что 0-RTT запрещён. Это окно в минутах, а не срок действия ключа.
+ENCRYPTION_TICKET_SECONDS = (300, 600)
+KEY_SIZE = 32
+
+
+def _b64url(raw: bytes) -> str:
+    import base64
+
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def generate_encryption_keypair() -> tuple[str, str]:
+    """Сгенерировать пару X25519: (приватный ключ, публичный ключ) в base64url.
+
+    Ядро принимает как X25519 (32 байта), так и ключ ML-KEM-768; для нашей схемы
+    достаточно X25519, а имя схемы остаётся общим.
+    """
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import x25519
+
+    private = x25519.X25519PrivateKey.generate()
+    private_bytes = private.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    public_bytes = private.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    return _b64url(private_bytes), _b64url(public_bytes)
+
+
+def server_encryption_value(
+    private_key: str,
+    *,
+    mode: str = DEFAULT_ENCRYPTION_MODE,
+    seconds: tuple[int, int] = ENCRYPTION_TICKET_SECONDS,
+) -> str:
+    """Строка `decryption` для inbound: схема, режим, окно тикетов, приватный ключ."""
+    if mode not in ENCRYPTION_MODES:
+        raise ValueError(f"режим шифрования не поддерживается: {mode}")
+    key = str(private_key).strip()
+    if not key:
+        raise ValueError("приватный ключ не задан")
+    try:
+        start, end = int(seconds[0]), int(seconds[1])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("окно тикетов должно быть числом") from exc
+    if start <= 0 or end < start:
+        raise ValueError("окно тикетов должно быть положительным и упорядоченным")
+    return f"{ENCRYPTION_SCHEME}.{mode}.{start}-{end}s.{key}"
+
+
+def client_encryption_value(
+    public_key: str,
+    *,
+    mode: str = DEFAULT_ENCRYPTION_MODE,
+) -> str:
+    """Строка `encryption` для клиента: схема, режим, рукопожатие, публичный ключ."""
+    if mode not in ENCRYPTION_MODES:
+        raise ValueError(f"режим шифрования не поддерживается: {mode}")
+    key = str(public_key).strip()
+    if not key:
+        raise ValueError("публичный ключ не задан")
+    return f"{ENCRYPTION_SCHEME}.{mode}.{CLIENT_ENCRYPTION_HANDSHAKE}.{key}"
+
+
 def normalize_hostname(value: object, *, field: str) -> str:
     """Return a lowercase hostname suitable for SNI and for an ACME HTTP-01 challenge."""
     host = str(value or "").strip().rstrip(".")

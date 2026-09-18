@@ -1,4 +1,5 @@
 """TSK-003: маршрут origin в SNI-документе — h2c на L4 и PROXY v2 внутри."""
+
 from __future__ import annotations
 
 from typing import Any, cast

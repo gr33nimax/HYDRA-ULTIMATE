@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from hydra.contracts import JsonValue
+from hydra.contracts import JsonObject, JsonValue
 from hydra.plugins.base import (
     BasePlugin,
     ConfigFragment,
@@ -20,12 +20,17 @@ from hydra.plugins.context import PluginStateAccess
 from hydra.contracts.vless_cdn import (
     CONFIG_DEFAULTS,
     DECOY_ROUTE,
+    DEFAULT_ENCRYPTION_MODE,
     DEFAULT_XHTTP_PATH,
     PROTOCOL_NAME,
     as_int,
     normalize_hostname,
     normalize_path,
+    server_encryption_value,
 )
+from hydra.plugins.vless_cdn.profile import xhttp_transport
+
+INBOUND_TAG = "vless-cdn-in"
 
 
 class VlessCdnPlugin(BasePlugin):
@@ -73,13 +78,55 @@ class VlessCdnPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def configure(self, state: PluginStateAccess) -> ConfigFragment:
-        """Пока пусто: inbound генерируется вместе с маршрутом, который к нему ведёт.
+        """Inbound VLESS с XHTTP packet-up и расшифровкой VLESS Encryption.
 
-        Inbound без маршрута и маршрут без inbound — это половина конфигурации:
-        слушатель, до которого никто не дойдёт. Поэтому они появляются одной
-        задачей, а до неё протокол не добавляет в конфигурацию ничего.
+        Пока нет ключа, порта или хотя бы одного пользователя, слушателя не появляется:
+        полупроверенный вход хуже отсутствующего, потому что выглядит рабочим.
         """
-        return ConfigFragment()
+        protocol = state.protocols.get(PROTOCOL_NAME)
+        if protocol is None:
+            return ConfigFragment()
+        config = protocol.config
+        origin = str(config.get("origin_host", "")).strip()
+        path = str(config.get("xhttp_path", DEFAULT_XHTTP_PATH)).strip()
+        port = as_int(config.get("core_port"))
+        private_key = str(config.get("encryption_private_key", "")).strip()
+        mode = str(config.get("encryption_mode", DEFAULT_ENCRYPTION_MODE)).strip()
+        users: list[JsonValue] = [
+            {"name": user.email, "uuid": user.uuid}
+            for user in state.users
+            if not user.blocked
+        ]
+        if not (origin and path and port and private_key and users):
+            return ConfigFragment()
+        try:
+            decryption = server_encryption_value(private_key, mode=mode)
+        except ValueError:
+            return ConfigFragment()
+        return ConfigFragment(
+            inbounds=[self._inbound(origin, path, port, decryption, users)],
+        )
+
+    @staticmethod
+    def _inbound(
+        origin: str,
+        path: str,
+        port: int,
+        decryption: str,
+        users: list[JsonValue],
+    ) -> JsonObject:
+        inbound: JsonObject = {
+            "type": "vless",
+            "tag": INBOUND_TAG,
+            "listen": "127.0.0.1",
+            "listen_port": port,
+            "users": users,
+            "decryption": decryption,
+            # TLS завершает web backend, поэтому внутри inbound его нет: сюда
+            # приходит уже расшифрованный поток.
+            "transport": xhttp_transport(path, origin, client=False),
+        }
+        return inbound
 
     # ═════════════════════════════════════════════════════════════════════
     #  Команды

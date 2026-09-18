@@ -18,9 +18,11 @@ from cryptography import x509
 from hydra.core.host import HOST
 from hydra.core.state_models import AppState, PluginState
 from hydra.contracts.vless_cdn import (
+    DEFAULT_ENCRYPTION_MODE,
     DEFAULT_XHTTP_PATH,
     PROTOCOL_NAME,
     as_int,
+    generate_encryption_keypair,
     normalize_hostname,
     normalize_path,
 )
@@ -140,6 +142,16 @@ def install_protocol(
         protocol = PluginState()
         state.protocols[PROTOCOL_NAME] = protocol
 
+    config = protocol.config
+
+    # Ключи выпускаются один раз: переустановка не должна молча обесценить уже
+    # выданные клиентские профили.
+    mode = str(config.get("encryption_mode") or DEFAULT_ENCRYPTION_MODE)
+    private_key = str(config.get("encryption_private_key", "")).strip()
+    public_key = str(config.get("encryption_public_key", "")).strip()
+    if not (private_key and public_key):
+        private_key, public_key = generate_encryption_keypair()
+
     protocol.config.update(
         {
             "cdn_domain": cdn,
@@ -148,6 +160,9 @@ def install_protocol(
             "core_port": core_port,
             "cert_file": cert_file,
             "key_file": key_file,
+            "encryption_mode": mode,
+            "encryption_private_key": private_key,
+            "encryption_public_key": public_key,
         },
     )
     return InstallOutcome(
