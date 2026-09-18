@@ -9,7 +9,7 @@ import pytest
 
 from hydra.contracts import JsonValue
 from hydra.core.state import AppState
-from hydra.core.state_models import PluginState, User
+from hydra.core.state_models import PluginState
 from hydra.plugins.vless_cdn.plugin import PROTOCOL_NAME, VlessCdnPlugin
 from hydra.services.vless_cdn_install import InstallOutcome
 from hydra.ui._menus import extended_protocol_vless_cdn as menu
@@ -156,17 +156,3 @@ def test_install_stops_when_the_timer_cannot_be_installed(tmp_path):
 
     refresh.assert_not_called()
     assert any("таймер" in text for text in messages)
-
-
-def test_profile_needs_a_user_to_belong_to():
-    state = AppState(protocols={PROTOCOL_NAME: PluginState(config=dict(PROVISIONED))})
-
-    with pytest.raises(ValueError, match="активного пользователя"):
-        menu._first_user(state)
-
-    state.users = [User(email="reader@example.com", uuid="u1", blocked=True)]
-    with pytest.raises(ValueError, match="активного пользователя"):
-        menu._first_user(state)
-
-    state.users.append(User(email="live@example.com", uuid="u2"))
-    assert menu._first_user(state).email == "live@example.com"

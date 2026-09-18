@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from hydra.contracts import JsonObject, JsonValue
+from hydra.core.state_models import User
 from hydra.plugins.base import (
     BasePlugin,
     ConfigFragment,
@@ -28,6 +29,10 @@ from hydra.contracts.vless_cdn import (
     normalize_path,
     server_encryption_value,
 )
+# Имя функции берётся из модуля, а не из пакета: пакет реэкспортирует плагин,
+# и импорт через него замыкал бы плагин на самого себя.
+from hydra.plugins.vless_cdn.client import profile as client_profile
+from hydra.plugins.vless_cdn.client import share_link as client_share_link
 from hydra.plugins.vless_cdn.profile import xhttp_transport
 
 INBOUND_TAG = "vless-cdn-in"
@@ -39,6 +44,7 @@ class VlessCdnPlugin(BasePlugin):
     meta = PluginMeta(
         name=PROTOCOL_NAME,
         description="VLESS через внешний CDN: XHTTP packet-up, uplink GET, сайт о регионе",
+        display_name="VLESS Яндекс CDN",
         category=PluginCategory.TRANSPORT,
         version="0.1.0",
         # Публичное имя выдаёт CDN, а origin-имя спрашивается отдельно, поэтому
@@ -101,6 +107,34 @@ class VlessCdnPlugin(BasePlugin):
             raise ValueError(
                 f"Протокол не установлен: сначала выполните установку (не хватает: {', '.join(missing)})",
             )
+
+    def generate_client_config(self, user: User, state: PluginStateAccess) -> str:
+        """Клиентский профиль одного пользователя — то, что уходит в подписку."""
+        config = self._provisioned(state)
+        if config is None:
+            return ""
+        try:
+            return client_profile(user, config)
+        except ValueError:
+            return ""
+
+    def client_link(self, user: User, state: PluginStateAccess) -> str:
+        """Share-ссылка для тех клиентов, которые её понимают."""
+        config = self._provisioned(state)
+        if config is None:
+            return ""
+        try:
+            return client_share_link(user, config)
+        except ValueError:
+            return ""
+
+    @staticmethod
+    def _provisioned(state: PluginStateAccess) -> dict | None:
+        """Конфиг отдаётся только включённым и полностью установленным протоколом."""
+        plugin_state = state.protocols.get(PROTOCOL_NAME)
+        if plugin_state is None or not plugin_state.enabled:
+            return None
+        return dict(plugin_state.config)
 
     def configure(self, state: PluginStateAccess) -> ConfigFragment:
         """Inbound VLESS с XHTTP packet-up и расшифровкой VLESS Encryption.

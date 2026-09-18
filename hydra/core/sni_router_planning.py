@@ -118,6 +118,20 @@ def has_sub_domain(state: AppState) -> bool:
     return bool(getattr(state.network, "sub_domain", ""))
 
 
+def _port_of(value: object, default: int = 0) -> int:
+    """Привести порт из состояния к числу: испорченное значение не должно ломать сборку.
+
+    Раньше здесь стояло приведение без обёртки: одна нечисловая запись в состоянии
+    роняла построение всего документа маршрутов вместо понятного отказа.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 def collect_backends(
     state: AppState,
     internal_ports: Mapping[str, int],
@@ -161,8 +175,8 @@ def collect_backends(
         )
 
     occupied_ports = {
-        *(int(item) for item in internal_ports.values()),
-        *(int(item) for item in reserved_ports),
+        *(_port_of(item) for item in internal_ports.values()),
+        *(_port_of(item) for item in reserved_ports),
     }
     for name, proto in sorted(state.protocols.items()):
         if name in internal_ports or not proto.enabled:
@@ -177,7 +191,7 @@ def collect_backends(
             )
             backends.append(backend)
             occupied_ports.update(
-                (int(backend["port"]), int(backend["decoy_port"])),
+                (_port_of(backend["port"]), _port_of(backend["decoy_port"])),
             )
             continue
         passthrough = proto.config.get(_PASSTHROUGH_ROUTE_KEY)
@@ -190,7 +204,7 @@ def collect_backends(
             occupied_ports,
         )
         backends.append(backend)
-        occupied_ports.add(int(backend["port"]))
+        occupied_ports.add(_port_of(backend["port"]))
 
     sub_domain = getattr(state.network, "sub_domain", "")
     if sub_domain:
@@ -411,7 +425,7 @@ def relay_routes(
     """Plan TCP exact-source relay routes."""
     antidpi = antidpi_enabled(state)
     return [
-        (str(backend["name"]), relay_ports[str(backend["name"])], int(backend["port"]))
+        (str(backend["name"]), relay_ports[str(backend["name"])], _port_of(backend["port"]))
         for backend in backends
         if (backend["name"] in relay_ports and (backend["name"] == "vless" or antidpi))
     ]
@@ -429,4 +443,4 @@ def udp_relay_routes(
     backend = next((item for item in backends if item["name"] == owner), None)
     if backend is None:
         return []
-    return [(owner, udp_relay_ports[owner], int(backend["port"]))]
+    return [(owner, udp_relay_ports[owner], _port_of(backend["port"]))]

@@ -3,17 +3,12 @@
 from __future__ import annotations
 
 from hydra.contracts.vless_cdn import as_int
-from hydra.core.state_models import AppState, User
+from hydra.core.state_models import AppState
 from hydra.plugins.base import BasePlugin
-from hydra.plugins.vless_cdn import client as cdn_client
 from hydra.plugins.vless_cdn.plugin import PROTOCOL_NAME
 from hydra.services.application import ApplicationService
 from hydra.services.vless_cdn_install import install_protocol
-from hydra.services.vless_cdn_site import (
-    install_site_timer,
-    refresh_site,
-    remove_site_timer,
-)
+from hydra.services.vless_cdn_site import install_site_timer, refresh_site, remove_site_timer
 from hydra.ui.protocol_ui import protocol_menu_title, protocol_status_panel
 from hydra.ui.tui import (
     BOLD,
@@ -24,7 +19,6 @@ from hydra.ui.tui import (
     error,
     info,
     menu,
-    panel,
     prompt,
     success,
 )
@@ -73,48 +67,6 @@ def _install(state: AppState, plugin: BasePlugin, app: ApplicationService) -> No
     prompt("Нажмите Enter")
 
 
-def _show_profile(state: AppState, plugin: BasePlugin) -> None:
-    """Показать клиенту, куда подключаться, вместе с честной оговоркой."""
-    desired = _desired_state(state, PROTOCOL_NAME)
-    try:
-        view = cdn_client.client_view(
-            _first_user(state),
-            desired.config,
-        )
-        body = [
-            f"Сервер: {BOLD}{view['server']}:{view['port']}{NC}",
-            f"XHTTP путь: {view['path']}",
-            f"Режим: {view['mode']}",
-            f"Шифрование: {view['encryption_mode']}",
-        ]
-        panel("Клиент", body, wrap=True)
-        info(str(view["share_note"]))
-        info("")
-        info(cdn_client.profile(_first_user(state), desired.config))
-    except Exception as exc:
-        error(f"Профиль недоступен: {exc}")
-    prompt("Нажмите Enter")
-
-
-def _refresh_now(state: AppState) -> None:
-    try:
-        target = refresh_site(state)
-    except Exception as exc:
-        error(f"Страница не обновилась: {exc}")
-        prompt("Нажмите Enter")
-        return
-    success(f"Страница обновлена: {target}")
-    prompt("Нажмите Enter")
-
-
-def _first_user(state: AppState) -> User:
-    """Первый активный пользователь: профиль выдаётся конкретному человеку."""
-    for user in state.users:
-        if not user.blocked:
-            return user
-    raise ValueError("нет ни одного активного пользователя")
-
-
 def _menu_vless_cdn(
     state: AppState,
     plugin: BasePlugin,
@@ -158,8 +110,6 @@ def _menu_vless_cdn(
             )
             options.extend(
                 [
-                    ("2", "🌐 Профиль клиента", "Куда подключается клиент и ссылка"),
-                    ("3", "🖼  Обновить страницу", "Перегенерировать сайт сейчас"),
                     ("8", "🔄 Переустановить", "Заменить домены и выпустить сертификат заново"),
                     ("9", "❌ Удалить", "Протокол, страница и таймер"),
                 ],
@@ -191,10 +141,6 @@ def _menu_vless_cdn(
                 report_success=success,
                 pause=prompt,
             )
-        elif choice == "2":
-            _show_profile(state, plugin)
-        elif choice == "3":
-            _refresh_now(state)
         elif choice == "8":
             if confirm("Переустановить протокол с новыми доменами?", default=False):
                 _install(state, plugin, app)

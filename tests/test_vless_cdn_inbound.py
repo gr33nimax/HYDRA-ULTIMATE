@@ -175,3 +175,63 @@ def test_blocked_users_are_left_out():
 
     assert [user["uuid"] for user in inbound["users"]] == [USER_UUID]
     assert not re.search("blocked", str(inbound))
+
+
+PROVISIONED: dict[str, JsonValue] = {
+    "cdn_domain": "cdn.example.com",
+    "origin_host": ORIGIN,
+    "xhttp_path": DEFAULT_XHTTP_PATH,
+    "core_port": CORE_PORT,
+    "cert_file": "/etc/letsencrypt/live/origin.example.com/fullchain.pem",
+    "key_file": "/etc/letsencrypt/live/origin.example.com/privkey.pem",
+    "encryption_private_key": generate_encryption_keypair()[0],
+    "encryption_public_key": generate_encryption_keypair()[1],
+}
+
+
+def _subscriber(*, enabled: bool = True, config: dict | None = None) -> AppState:
+    return AppState(
+        protocols={
+            PROTOCOL_NAME: PluginState(
+                enabled=enabled,
+                config=dict(PROVISIONED if config is None else config),
+            ),
+        },
+        users=[User(email="reader@example.com", uuid=USER_UUID)],
+    )
+
+
+def test_the_protocol_hands_out_a_profile_and_a_link():
+    state = _subscriber()
+    plugin = VlessCdnPlugin()
+    user = state.users[0]
+
+    profile = plugin.generate_client_config(user, state)
+    link = plugin.client_link(user, state)
+
+    assert "cdn.example.com" in profile, "клиент идёт на публичный домен"
+    assert ORIGIN not in profile, "адрес origin в клиентский профиль не попадает"
+    assert link.startswith("vless://") and "mode=packet-up" in link
+
+
+def test_a_disabled_protocol_hands_out_nothing():
+    state = _subscriber(enabled=False)
+    plugin = VlessCdnPlugin()
+    user = state.users[0]
+
+    assert plugin.generate_client_config(user, state) == ""
+    assert plugin.client_link(user, state) == ""
+
+
+def test_an_unprovisioned_protocol_hands_out_nothing():
+    state = _subscriber(config={})
+    plugin = VlessCdnPlugin()
+    user = state.users[0]
+
+    assert plugin.generate_client_config(user, state) == ""
+    assert plugin.client_link(user, state) == ""
+
+
+def test_the_protocol_has_a_human_name_for_the_menu():
+    assert "Яндекс" in VlessCdnPlugin.meta.display_name
+    assert VlessCdnPlugin.meta.display_name != PROTOCOL_NAME
