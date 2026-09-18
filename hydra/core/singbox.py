@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -29,6 +28,7 @@ from hydra.core.singbox_upgrade import (
     migrate_runtime_dns_config,
     parse_version,
     upgrade_kernel,
+    version_token,
 )
 from hydra.utils.commands import redact_text
 
@@ -106,12 +106,6 @@ def is_installed() -> bool:
     return _find_singbox() is not None
 
 
-# A core built under the readable tag contract prints a version that starts with a
-# letter (`hydracore-sbe-1.14.0`), so a rule that only accepts a leading digit reads
-# a perfectly good core as an unknown version.
-_READABLE_VERSION_TOKEN = re.compile(r"hydracore-sbe-\d+\.\d+\.\d+[0-9A-Za-z.+-]*")
-
-
 def get_version() -> Optional[str]:
     """Возвращает версию установленного Sing-Box."""
     bin_path = _find_singbox()
@@ -120,10 +114,7 @@ def get_version() -> Optional[str]:
     r = _run([str(bin_path), "version"])
     if r.returncode == 0:
         first_line = r.stdout.strip().split("\n")[0]
-        for token in first_line.split():
-            candidate = token.removeprefix("v")
-            if candidate[:1].isdigit() or _READABLE_VERSION_TOKEN.fullmatch(candidate):
-                return candidate
+        return version_token(first_line)
     return None
 
 

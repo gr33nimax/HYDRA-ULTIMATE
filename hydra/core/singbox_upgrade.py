@@ -1,4 +1,5 @@
 """Transactional Sing-Box binary upgrade with rollback."""
+
 from __future__ import annotations
 
 import re
@@ -47,11 +48,7 @@ def parse_version(value: str | None) -> tuple[int, ...]:
 
 def newer_release_available(current: str | None, latest: str | None) -> bool:
     """Return true only when both versions are known and latest is newer."""
-    return bool(
-        current
-        and latest
-        and parse_version(latest) > parse_version(current)
-    )
+    return bool(current and latest and parse_version(latest) > parse_version(current))
 
 
 # Capability gates were written against the legacy naming, which carried both the
@@ -66,9 +63,7 @@ def newer_release_available(current: str | None, latest: str | None) -> bool:
 # token the core prints before anything compares versions.
 _READABLE_CONTRACT_CYCLE = 10**6
 _READABLE_CONTRACT_PATTERN = re.compile(r"hydracore-sbe-(\d+)\.(\d+)\.(\d+)")
-_LEGACY_CORE_PATTERN = re.compile(
-    r"v?(\d+)\.(\d+)\.(\d+)-extended(?:-\d+(?:\.\d+)*)?-hydracore\.(\d+)"
-)
+_LEGACY_CORE_PATTERN = re.compile(r"v?(\d+)\.(\d+)\.(\d+)-extended(?:-\d+(?:\.\d+)*)?-hydracore\.(\d+)")
 
 # The upstream Snell generations and the AWG 3.1 configuration fields both arrived
 # with the sing-box-extended 1.14.0 line, HydraCore cycle 12.
@@ -108,12 +103,23 @@ def _exception_text(exc: Exception) -> str:
     return redact_text(detail)
 
 
+# The token a core prints is not always a bare number: under the readable tag
+# contract it starts with a letter (`hydracore-sbe-1.14.0`), so a rule that only
+# accepts a leading digit reads a perfectly good core as no version at all.
+_READABLE_VERSION_TOKEN = re.compile(r"hydracore-sbe-\d+\.\d+\.\d+[0-9A-Za-z.+-]*")
+
+
+def version_token(first_line: str) -> str | None:
+    """Pick the version token out of a `sing-box version ...` line."""
+    for token in first_line.split():
+        candidate = token.removeprefix("v")
+        if candidate[:1].isdigit() or _READABLE_VERSION_TOKEN.fullmatch(candidate):
+            return candidate
+    return None
+
+
 def _result_detail(result: Any) -> str:
-    output = str(
-        getattr(result, "stderr", "")
-        or getattr(result, "stdout", "")
-        or ""
-    ).strip()
+    output = str(getattr(result, "stderr", "") or getattr(result, "stdout", "") or "").strip()
     return redact_text(output.splitlines()[-1]) if output else ""
 
 
@@ -244,8 +250,7 @@ def _rollback_upgrade(
             )
             return (
                 False,
-                f"{reason}. Старое ядро и конфигурация восстановлены, "
-                "но служба не запустилась.",
+                f"{reason}. Старое ядро и конфигурация восстановлены, но служба не запустилась.",
             )
     return False, f"{reason}. Выполнен откат."
 
@@ -343,15 +348,13 @@ def upgrade_kernel(
             )
         except Exception as exc:
             return rollback(
-                "Не удалось проверить конфигурацию новым ядром: "
-                f"{_exception_text(exc)}",
+                f"Не удалось проверить конфигурацию новым ядром: {_exception_text(exc)}",
             )
         if result.returncode != 0:
             detail = _result_detail(result)
             operations.log(
                 "ERROR",
-                "New binary rejected existing config, rolling back. "
-                f"Detail: {detail or 'unknown error'}",
+                f"New binary rejected existing config, rolling back. Detail: {detail or 'unknown error'}",
             )
             reason = "Конфигурация несовместима с новым ядром"
             if detail:
@@ -364,8 +367,7 @@ def upgrade_kernel(
             started = operations.start()
         except Exception as exc:
             return rollback(
-                "Служба не смогла запуститься с новым ядром: "
-                f"{_exception_text(exc)}",
+                f"Служба не смогла запуститься с новым ядром: {_exception_text(exc)}",
             )
         if not started:
             return rollback(
