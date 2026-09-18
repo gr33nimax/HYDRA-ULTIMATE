@@ -24,10 +24,12 @@ from .directives import GENERATION_DIRECTIVE_KEYS, canonical_mode
 from .endpoints import canonical_generation
 from .keys import public_key
 
-# The first HydraCore release that carries the two AWG 3.1 configuration fields.
-# An older core refuses such a profile at parse time, so the HydraBox export stays
-# closed until that release is installed.
-MIN_AWG31_CORE = "v1.14.0-extended-2.7.1-hydracore.12"
+# The two AWG 3.1 configuration fields arrived with the sing-box-extended 1.14.0
+# line, HydraCore cycle 12. An older core refuses such a profile at parse time, so
+# the HydraBox export stays closed until that core is installed. The comparison
+# lives next to the version naming it has to understand, because the core's tag is
+# written in two schemes.
+MIN_AWG31_CORE_TEXT = "sing-box-extended 1.14.0"
 
 
 def _boolean(value: object) -> bool:
@@ -38,12 +40,12 @@ def kernel_supports_awg31() -> bool:
     """Report whether the installed core understands the AWG 3.1 field set."""
     try:
         from hydra.core.singbox import get_version
-        from hydra.core.singbox_upgrade import parse_version
+        from hydra.core.singbox_upgrade import core_supports_upstream_capability
 
         version = get_version()
     except Exception:
         return False
-    return bool(version) and parse_version(version) >= parse_version(MIN_AWG31_CORE)
+    return bool(version) and core_supports_upstream_capability(version)
 
 
 @dataclass(frozen=True)
@@ -262,7 +264,7 @@ class AwgClientLinksMixin:
                 capabilities["singbox"] = "ready"
                 capabilities["hydrabox_subscription"] = "ready"
             else:
-                reason = f"unsupported: AWG 3.1 requires a HydraCore with the 3.1 fields ({MIN_AWG31_CORE} or newer)"
+                reason = f"unsupported: AWG 3.1 requires a HydraCore with the 3.1 fields ({MIN_AWG31_CORE_TEXT} or newer)"
                 capabilities["singbox"] = reason
                 capabilities["hydrabox_subscription"] = reason
         return capabilities

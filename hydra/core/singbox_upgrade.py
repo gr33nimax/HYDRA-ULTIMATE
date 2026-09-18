@@ -54,6 +54,52 @@ def newer_release_available(current: str | None, latest: str | None) -> bool:
     )
 
 
+# Capability gates were written against the legacy naming, which carried both the
+# upstream baseline and a HydraCore cycle (`v1.14.0-extended-2.7.1-hydracore.12`).
+# The readable contract names the baseline only (`hydracore-sbe-1.14.0`) and counts
+# releases inside it, so a tag alone cannot say which cycle it belongs to. Both
+# schemes are therefore mapped onto one rank: baseline components first, then the
+# cycle. A release named by the readable contract comes from the line that carries
+# these capabilities, so it ranks at that line and not below it.
+_READABLE_CONTRACT_CYCLE = 10**6
+_READABLE_CONTRACT_PATTERN = re.compile(r"hydracore-sbe-(\d+)\.(\d+)\.(\d+)")
+_LEGACY_CORE_PATTERN = re.compile(
+    r"v(\d+)\.(\d+)\.(\d+)-extended(?:-\d+(?:\.\d+)*)?-hydracore\.(\d+)"
+)
+
+# The upstream Snell generations and the AWG 3.1 configuration fields both arrived
+# with the sing-box-extended 1.14.0 line, HydraCore cycle 12.
+MIN_UPSTREAM_CAPABILITY_CORE = (1, 14, 0, 12)
+UPSTREAM_CAPABILITY_TEXT = "sing-box-extended 1.14.0"
+
+
+def core_capability_rank(value: str | None) -> tuple[int, int, int, int] | None:
+    """Rank a HydraCore version for gates written before the readable contract."""
+    if not value:
+        return None
+    readable = _READABLE_CONTRACT_PATTERN.search(value)
+    legacy = None if readable else _LEGACY_CORE_PATTERN.search(value)
+    match = readable or legacy
+    if match is None:
+        return None
+    cycle = _READABLE_CONTRACT_CYCLE if readable else None
+    try:
+        major = int(match.group(1))
+        minor = int(match.group(2))
+        patch = int(match.group(3))
+        if cycle is None:
+            cycle = int(match.group(4))
+    except ValueError:
+        return None
+    return (major, minor, patch, cycle)
+
+
+def core_supports_upstream_capability(version: str | None) -> bool:
+    """Report whether a core version carries the upstream Snell/AWG 3.1 capability."""
+    rank = core_capability_rank(version)
+    return rank is not None and rank >= MIN_UPSTREAM_CAPABILITY_CORE
+
+
 def _exception_text(exc: Exception) -> str:
     detail = str(exc).strip() or type(exc).__name__
     return redact_text(detail)

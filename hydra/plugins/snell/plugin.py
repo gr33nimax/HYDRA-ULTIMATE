@@ -30,22 +30,25 @@ OBFS_HOST = "www.bing.com"
 V6_MODES = ("default", "unshaped", "unsafe-raw")
 V6_MODE = "default"
 
-# The first HydraCore release that carries the upstream Snell implementation: its server
-# accepts version 5 or 6 and expects the flat `obfs_mode` / `mode` fields. The core this
-# plugin was written for owned its own Snell and took a server `version: 4`.
-MIN_SNELL_CORE = "v1.14.0-extended-2.7.1-hydracore.12"
+# The upstream Snell generations arrived with the sing-box-extended 1.14.0 line,
+# HydraCore cycle 12: its server accepts version 5 or 6 and expects the flat
+# `obfs_mode` / `mode` fields. The core this plugin was written for owned its own
+# Snell and took a server `version: 4`. The comparison itself lives next to the
+# version naming it has to understand, because the core's tag is written in two
+# schemes.
+MIN_SNELL_CORE_TEXT = "sing-box-extended 1.14.0"
 
 
 def kernel_supports_snell() -> bool:
     """Report whether the installed core speaks the upstream Snell generations."""
     try:
         from hydra.core.singbox import get_version
-        from hydra.core.singbox_upgrade import parse_version
+        from hydra.core.singbox_upgrade import core_supports_upstream_capability
 
         version = get_version()
     except Exception:
         return False
-    return bool(version) and parse_version(version) >= parse_version(MIN_SNELL_CORE)
+    return bool(version) and core_supports_upstream_capability(version)
 
 
 class SnellPlugin(BasePlugin):
@@ -303,7 +306,7 @@ class SnellPlugin(BasePlugin):
     def _require_generation_support() -> None:
         if not kernel_supports_snell():
             raise ValueError(
-                f"Snell 5/6 requires a HydraCore with the upstream Snell implementation ({MIN_SNELL_CORE} or newer)"
+                f"Snell 5/6 requires a HydraCore with the upstream Snell implementation ({MIN_SNELL_CORE_TEXT} or newer)"
             )
 
     @staticmethod

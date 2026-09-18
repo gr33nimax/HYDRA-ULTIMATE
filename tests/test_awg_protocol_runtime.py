@@ -92,6 +92,9 @@ def test_awg31_core_gate_compares_real_version_strings():
     assert with_version("v1.14.0-extended-2.7.1-hydracore.12") is True
     assert with_version("v1.14.0-extended-2.7.1-hydracore.12-debug.2") is True
     assert with_version("v1.14.0-extended-2.7.1-hydracore.11") is False
+    # The readable contract names the baseline instead of a HydraCore cycle.
+    assert with_version("hydracore-sbe-1.14.0") is True
+    assert with_version("hydracore-sbe-1.13.16-debug-4") is False
     assert with_version(None) is False
 
 
