@@ -23,6 +23,7 @@
 | Задача | Документ |
 | :--- | :--- |
 | Установить на чистую VPS или обновить рабочую | [UPGRADE.md](UPGRADE.md) |
+| Продвинуть `debug → dev → main` или подготовить rollout | [RELEASE.md](RELEASE.md) |
 | Управлять сервером из скриптов и cron | [CLI.md](CLI.md) |
 | Понять устройство системы и её инварианты | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | Найти путь, порт, службу или файл состояния | [REFERENCE.md](REFERENCE.md) |
@@ -51,6 +52,11 @@ state, безопасность, release-модель и границы теку
 Чистая установка через `bootstrap.sh`, запуск из исходников и транзакционное
 обновление рабочей VPS одной командой через `updater.sh`: гарантии updater,
 порядок отката, состав снимка и процедура ручного восстановления.
+
+### [RELEASE.md](RELEASE.md)
+
+Каналы `debug`, `dev`, `main`, promotion-гейты, release record, canary и
+rollback перед production rollout.
 
 ### [REFERENCE.md](REFERENCE.md)
 
