@@ -21,6 +21,7 @@ from hydra.plugins.shadowtls.plugin import ShadowTLSPlugin
 from hydra.plugins.snell.plugin import SnellPlugin
 from hydra.plugins.telemt.plugin import TelemtPlugin
 from hydra.plugins.trusttunnel.plugin import TrustTunnelPlugin
+from hydra.plugins.vless_cdn.plugin import VlessCdnPlugin
 from hydra.plugins.vless_xhttp.plugin import VlessXhttpPlugin
 from hydra.plugins.warp.plugin import WarpPlugin
 from hydra.plugins.wdtt.plugin import WdttPlugin
@@ -36,6 +37,7 @@ BUILTIN_PLUGIN_FACTORIES: tuple[PluginFactory, ...] = (
     ShadowTLSPlugin,
     Hysteria2Plugin,
     VlessXhttpPlugin,
+    VlessCdnPlugin,
     SnellPlugin,
     MieruPlugin,
     NaivePlugin,
