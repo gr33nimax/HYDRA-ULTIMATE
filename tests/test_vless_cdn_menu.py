@@ -123,6 +123,9 @@ def test_install_wires_the_certificate_then_the_timer_then_the_page(tmp_path):
         menu._install(state, MagicMock(), app)
 
     assert order == ["certificate", "timer", "page"], "порядок шагов установки"
+    # Конфиг применяется ровно один раз: без этого документ маршрутов остаётся
+    # прежним, и переустановка ничего не меняет.
+    app.apply.assert_called_once_with(state)
     reported.assert_not_called()
     app.admin.save_state.assert_called_once()
 
@@ -156,3 +159,37 @@ def test_install_stops_when_the_timer_cannot_be_installed(tmp_path):
 
     refresh.assert_not_called()
     assert any("таймер" in text for text in messages)
+
+
+def test_install_stops_when_the_configuration_cannot_be_applied():
+    """Иначе установка отчитывается успехом, а Caddy остаётся со старым документом."""
+    state = AppState()
+    app = MagicMock()
+    app.admin.save_state.return_value = None
+    app.apply.return_value = False
+    app.apply_error.return_value = "caddy validate failed"
+    messages: list[str] = []
+
+    with (
+        patch.object(menu, "prompt", side_effect=_answers("cdn.example.com", "origin.example.com")),
+        patch.object(
+            menu,
+            "install_protocol",
+            side_effect=lambda target, **_kwargs: InstallOutcome(
+                ok=True,
+                cdn_domain="cdn.example.com",
+                origin_host="origin.example.com",
+                xhttp_path="/api/media/session",
+                core_port=20449,
+            ),
+        ),
+        patch.object(menu, "install_site_timer") as timer,
+        patch.object(menu, "error", side_effect=lambda text: messages.append(str(text))),
+        patch.object(menu, "info"),
+        patch.object(menu, "success"),
+    ):
+        menu._install(state, MagicMock(), app)
+
+    app.apply.assert_called_once_with(state)
+    timer.assert_not_called()
+    assert any("caddy validate failed" in text for text in messages)

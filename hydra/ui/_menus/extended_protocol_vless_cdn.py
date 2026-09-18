@@ -48,6 +48,13 @@ def _install(state: AppState, plugin: BasePlugin, app: ApplicationService) -> No
         prompt("Нажмите Enter")
         return
 
+    # Документ маршрутов строится из состояния: без явного применения маршрут
+    # остаётся прежним, и переустановка выглядит как «ничего не изменилось».
+    if not app.apply(state):
+        error(f"Конфиг не применился: {app.apply_error() or 'причина неизвестна'}")
+        prompt("Нажмите Enter")
+        return
+
     if not install_site_timer():
         error("Страница установлена, но таймер обновления поставить не удалось")
         prompt("Нажмите Enter")
