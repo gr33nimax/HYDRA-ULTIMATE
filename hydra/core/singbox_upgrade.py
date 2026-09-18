@@ -61,10 +61,13 @@ def newer_release_available(current: str | None, latest: str | None) -> bool:
 # schemes are therefore mapped onto one rank: baseline components first, then the
 # cycle. A release named by the readable contract comes from the line that carries
 # these capabilities, so it ranks at that line and not below it.
+#
+# The leading `v` is optional: hydra.core.singbox.get_version() strips it from the
+# token the core prints before anything compares versions.
 _READABLE_CONTRACT_CYCLE = 10**6
 _READABLE_CONTRACT_PATTERN = re.compile(r"hydracore-sbe-(\d+)\.(\d+)\.(\d+)")
 _LEGACY_CORE_PATTERN = re.compile(
-    r"v(\d+)\.(\d+)\.(\d+)-extended(?:-\d+(?:\.\d+)*)?-hydracore\.(\d+)"
+    r"v?(\d+)\.(\d+)\.(\d+)-extended(?:-\d+(?:\.\d+)*)?-hydracore\.(\d+)"
 )
 
 # The upstream Snell generations and the AWG 3.1 configuration fields both arrived

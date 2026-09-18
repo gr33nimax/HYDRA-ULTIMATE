@@ -91,6 +91,8 @@ def test_awg31_core_gate_compares_real_version_strings():
 
     assert with_version("v1.14.0-extended-2.7.1-hydracore.12") is True
     assert with_version("v1.14.0-extended-2.7.1-hydracore.12-debug.2") is True
+    # get_version() strips the leading `v`, so the gate must rank that spelling too.
+    assert with_version("1.14.0-extended-2.7.1-hydracore.12-debug.11") is True
     assert with_version("v1.14.0-extended-2.7.1-hydracore.11") is False
     # The readable contract names the baseline instead of a HydraCore cycle.
     assert with_version("hydracore-sbe-1.14.0") is True

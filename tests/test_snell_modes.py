@@ -170,6 +170,8 @@ def test_snell_gate_reads_the_installed_core_version():
 
     assert with_version(CORE_WITH_SNELL) is True
     assert with_version("v1.14.0-extended-2.7.1-hydracore.12-debug.2") is True
+    # get_version() strips the leading `v`, so the gate must rank that spelling too.
+    assert with_version("1.14.0-extended-2.7.1-hydracore.12-debug.2") is True
     # The readable contract names the baseline instead of a HydraCore cycle.
     assert with_version("hydracore-sbe-1.14.0") is True
     assert with_version("hydracore-sbe-1.14.0-debug-1") is True

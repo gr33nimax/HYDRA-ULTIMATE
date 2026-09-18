@@ -38,6 +38,18 @@ def test_legacy_contract_still_ranks_by_its_cycle():
     assert core_supports_upstream_capability("v1.13.16-extended-hydracore.11-debug.61") is False
 
 
+def test_versions_as_hydra_reads_them_are_ranked_too():
+    """hydra.core.singbox.get_version() strips a leading `v` from the core's token.
+
+    The gates receive what that helper returns, not the literal release name, so a
+    rule that only understands the `v`-prefixed spelling reads every legacy core
+    as unknown and refuses a working configuration.
+    """
+    assert core_supports_upstream_capability("1.14.0-extended-2.7.1-hydracore.12") is True
+    assert core_supports_upstream_capability("1.14.0-extended-2.7.1-hydracore.12-debug.11") is True
+    assert core_supports_upstream_capability("1.13.16-extended-hydracore.11-debug.61") is False
+
+
 def test_unknown_versions_are_never_supported():
     for value in (None, "", "sing-box version", "v1.14.0"):
         assert core_capability_rank(value) is None
