@@ -92,11 +92,7 @@ class VlessCdnPlugin(BasePlugin):
         port = as_int(config.get("core_port"))
         private_key = str(config.get("encryption_private_key", "")).strip()
         mode = str(config.get("encryption_mode", DEFAULT_ENCRYPTION_MODE)).strip()
-        users: list[JsonValue] = [
-            {"name": user.email, "uuid": user.uuid}
-            for user in state.users
-            if not user.blocked
-        ]
+        users: list[JsonValue] = [{"name": user.email, "uuid": user.uuid} for user in state.users if not user.blocked]
         if not (origin and path and port and private_key and users):
             return ConfigFragment()
         try:

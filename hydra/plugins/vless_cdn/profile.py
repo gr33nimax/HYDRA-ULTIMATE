@@ -8,6 +8,7 @@
 зажимается в 5 с – 5 мин, значение из референса скопировать нельзя), `sc_stream_up_server_secs`
 (относится к `stream-up`, а мы в `packet-up`) и `congestion_controller`/`cwnd` (только HTTP/3).
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -89,4 +90,37 @@ def xhttp_transport(path: str, host: str, *, client: bool) -> dict[str, Any]:
     return transport
 
 
-__all__ = ["MODE", "UPLINK_METHOD", "XMUX", "xhttp_transport"]
+def link_extra() -> dict[str, Any]:
+    """Те же настройки в том виде, в каком их передаёт share-ссылка (Xray-стиль).
+
+    Значения берутся из констант выше, поэтому ссылка и конфиг не могут разойтись.
+    """
+    return {
+        "xPaddingBytes": X_PADDING_BYTES,
+        "xPaddingObfsMode": True,
+        "xPaddingKey": X_PADDING_KEY,
+        "xPaddingHeader": X_PADDING_HEADER,
+        "xPaddingPlacement": X_PADDING_PLACEMENT,
+        "xPaddingMethod": X_PADDING_METHOD,
+        "sessionIDPlacement": SESSION_PLACEMENT,
+        "sessionIDKey": SESSION_KEY,
+        "sessionIDTable": SESSION_ID_TABLE,
+        "sessionIDLength": SESSION_ID_LENGTH,
+        "seqPlacement": SEQ_PLACEMENT,
+        "seqKey": SEQ_KEY,
+        "uplinkDataPlacement": UPLINK_DATA_PLACEMENT,
+        "uplinkHTTPMethod": UPLINK_METHOD,
+        "scMaxEachPostBytes": SC_MAX_EACH_POST_BYTES,
+        "scMaxBufferedPosts": SC_MAX_BUFFERED_POSTS,
+        "scMinPostsIntervalMs": SC_MIN_POSTS_INTERVAL_MS,
+        "xmux": {
+            "maxConcurrency": XMUX["max_concurrency"],
+            "maxConnections": XMUX["max_connections"],
+            "cMaxReuseTimes": XMUX["c_max_reuse_times"],
+            "hMaxRequestTimes": XMUX["h_max_request_times"],
+            "hMaxReusableSecs": XMUX["h_max_reusable_secs"],
+        },
+    }
+
+
+__all__ = ["MODE", "UPLINK_METHOD", "XMUX", "link_extra", "xhttp_transport"]

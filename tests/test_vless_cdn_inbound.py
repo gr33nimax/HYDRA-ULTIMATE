@@ -1,4 +1,5 @@
 """TSK-004: inbound VLESS с XHTTP packet-up и VLESS Encryption."""
+
 from __future__ import annotations
 
 import base64
