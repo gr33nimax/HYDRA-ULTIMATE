@@ -110,6 +110,8 @@ def test_route_reads_its_identity_from_the_protocol_config():
     assert backend["proxy_path"] == DEFAULT_XHTTP_PATH
     assert backend["route_kind"] == "http_path_proxy"
     assert backend["origin_http2"] is True
+    assert backend["upstream_tls"] is False, "ядро слушает без TLS"
+    assert backend["public_host"] == CDN, "наверх уходит публичное имя"
 
 
 def test_l4_terminates_tls_and_offers_http2_to_the_cdn():
@@ -142,8 +144,10 @@ def test_inner_server_routes_the_tunnel_then_the_assets_then_the_site():
     assert proxy["handler"] == "reverse_proxy"
     assert proxy["flush_interval"] == -1, "поток не должен буферизоваться"
     assert proxy["upstreams"] == [{"dial": f"127.0.0.1:{CORE_PORT}"}]
-    assert proxy["transport"]["versions"] == ["2"], "до ядра путь идёт по h2c"
-    assert proxy["headers"]["request"]["set"]["Host"] == [ORIGIN]
+    transport = proxy["transport"]
+    assert transport["versions"] == ["2", "h2c"], "до ядра путь идёт по cleartext HTTP/2"
+    assert "tls" not in transport, "ядро принимает расшифрованный поток: TLS на этом плече лишний"
+    assert proxy["headers"]["request"]["set"]["Host"] == [CDN], "клиент и ядро видят одно публичное имя"
     assert proxy["headers"]["response"]["set"]["Cache-Control"] == [
         "no-store, no-transform",
     ], "туннель нельзя кешировать"
@@ -195,6 +199,8 @@ def test_other_protocols_are_untouched_by_our_route():
     document = _document(with_vless=True)
 
     assert "origin_http2" not in backends["vless"]
+    assert "upstream_tls" not in backends["vless"], "чужой маршрут не переведён на cleartext"
+    assert "public_host" not in backends["vless"], "чужое имя не переписывается"
 
     vless_server = _require(
         _inner_server(document, VLESS_DECOY_PORT),
@@ -207,3 +213,13 @@ def test_other_protocols_are_untouched_by_our_route():
         "маршрут чужого протокола",
     )
     assert "connection_policies" not in vless_tls["handle"][0]
+
+    vless_tunnel = _require(
+        _find(vless_server, lambda node: node.get("handler") == "reverse_proxy"),
+        "туннель чужого протокола",
+    )
+    assert vless_tunnel["transport"]["versions"] == ["2"], "у чужого протокола версии не меняются"
+    assert vless_tunnel["transport"]["tls"]["server_name"] == "xhttp.example.com", (
+        "inbound чужого протокола с сертификатом: TLS на этом плече остаётся"
+    )
+    assert vless_tunnel["headers"]["request"]["set"]["Host"] == ["xhttp.example.com"]

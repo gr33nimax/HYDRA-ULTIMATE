@@ -98,26 +98,30 @@ def _named_state() -> tuple[AppState, User]:
 
 
 def test_json_name_updates_primary_and_all_profile_references() -> None:
-    payload = json.dumps({
-        "outbounds": [
-            {"type": "test", "tag": "primary", "password": "primary"},
-            {
-                "type": "selector",
-                "tag": "choice",
-                "outbounds": ["primary", "direct"],
-                "default": "primary",
-            },
-            {"type": "direct", "tag": "direct"},
-        ],
-        "route": {"final": "primary", "rules": [{"outbound": "primary"}]},
-    })
+    payload = json.dumps(
+        {
+            "outbounds": [
+                {"type": "test", "tag": "primary", "password": "primary"},
+                {
+                    "type": "selector",
+                    "tag": "choice",
+                    "outbounds": ["primary", "direct"],
+                    "default": "primary",
+                },
+                {"type": "direct", "tag": "direct"},
+            ],
+            "route": {"final": "primary", "rules": [{"outbound": "primary"}]},
+        }
+    )
 
-    named = json.loads(apply_json_configuration_name(
-        payload,
-        key="anytls",
-        global_names={"anytls": "Общее"},
-        user_names={"anytls": "Личное"},
-    ))
+    named = json.loads(
+        apply_json_configuration_name(
+            payload,
+            key="anytls",
+            global_names={"anytls": "Общее"},
+            user_names={"anytls": "Личное"},
+        )
+    )
 
     assert named["outbounds"][0]["tag"] == "Личное"
     assert named["outbounds"][0]["password"] == "primary"
@@ -128,41 +132,55 @@ def test_json_name_updates_primary_and_all_profile_references() -> None:
 
 
 def test_json_name_uses_first_primary_and_stable_collision_suffix() -> None:
-    payload = json.dumps({
-        "outbounds": [
-            {"type": "test", "tag": "primary", "password": "keep"},
-            {"type": "direct", "tag": "direct"},
-        ],
-    })
+    payload = json.dumps(
+        {
+            "outbounds": [
+                {"type": "test", "tag": "primary", "password": "keep"},
+                {"type": "direct", "tag": "direct"},
+            ],
+        }
+    )
 
-    named = json.loads(apply_json_configuration_name(
-        payload,
-        key="anytls",
-        global_names={"anytls": "direct"},
-        user_names={},
-    ))
+    named = json.loads(
+        apply_json_configuration_name(
+            payload,
+            key="anytls",
+            global_names={"anytls": "direct"},
+            user_names={},
+        )
+    )
 
     assert named["outbounds"][0]["tag"] == "direct (2)"
     assert named["outbounds"][0]["password"] == "keep"
-    assert apply_json_configuration_name(
-        "[]", key="anytls", global_names={"anytls": "Named"}, user_names={},
-    ) == "[]"
+    assert (
+        apply_json_configuration_name(
+            "[]",
+            key="anytls",
+            global_names={"anytls": "Named"},
+            user_names={},
+        )
+        == "[]"
+    )
     assert configuration_name_key("amneziawg", {"profile": "mobile"}) == "amneziawg:mobile"
 
 
 def test_subscription_configs_and_links_use_protocol_specific_names() -> None:
     state, user = _named_state()
-    user.configuration_name_overrides.update({
-        "anytls": "Личный AnyTLS",
-        "shadowtls": "Личный ShadowTLS",
-        "trusttunnel:quic": "Личный TT QUIC",
-    })
-    state.configuration_names.update({
-        "anytls": "Общий AnyTLS",
-        "shadowtls": "Общий ShadowTLS",
-        "trusttunnel:tcp": "Общий TT TCP",
-        "trusttunnel:quic": "Общий TT QUIC",
-    })
+    user.configuration_name_overrides.update(
+        {
+            "anytls": "Личный AnyTLS",
+            "shadowtls": "Личный ShadowTLS",
+            "trusttunnel:quic": "Личный TT QUIC",
+        }
+    )
+    state.configuration_names.update(
+        {
+            "anytls": "Общий AnyTLS",
+            "shadowtls": "Общий ShadowTLS",
+            "trusttunnel:tcp": "Общий TT TCP",
+            "trusttunnel:quic": "Общий TT QUIC",
+        }
+    )
     anytls = AnyTLSPlugin()
     shadowtls = ShadowTLSPlugin()
     trusttunnel = TrustTunnelPlugin()
@@ -180,7 +198,8 @@ def test_subscription_configs_and_links_use_protocol_specific_names() -> None:
     assert shadowtls_config["route"]["final"] == "Личный ShadowTLS"
     assert shadowtls_primary["password"] == ShadowTLSPlugin()._derive_trojan_password(user.uuid)
     assert {item["tag"] for item in trusttunnel_config["outbounds"]} >= {
-        "Общий TT TCP", "Личный TT QUIC",
+        "Общий TT TCP",
+        "Личный TT QUIC",
     }
 
     anytls_link = plugins.client_link(anytls, user, state)
@@ -198,10 +217,12 @@ def test_subscription_configs_and_links_use_protocol_specific_names() -> None:
 
 def test_native_links_keep_variant_names_distinct_and_rename_awg() -> None:
     state, user = _named_state()
-    state.configuration_names.update({
-        "naive": "Домашний Naive",
-        "amneziawg:desktop": "Домашний AWG",
-    })
+    state.configuration_names.update(
+        {
+            "naive": "Домашний Naive",
+            "amneziawg:desktop": "Домашний AWG",
+        }
+    )
     links = [
         "naive+https://u:p@example.com:443#old",
         "naive+quic://u:p@example.com:443#old",
@@ -209,8 +230,7 @@ def test_native_links_keep_variant_names_distinct_and_rename_awg() -> None:
     ]
 
     assert [
-        urllib.parse.unquote(urllib.parse.urlsplit(tag_client_link(link, user, state)).fragment)
-        for link in links
+        urllib.parse.unquote(urllib.parse.urlsplit(tag_client_link(link, user, state)).fragment) for link in links
     ] == ["Домашний Naive", "Домашний Naive QUIC", "Домашний AWG"]
 
 
@@ -238,6 +258,4 @@ def test_a_family_override_still_keeps_the_cdn_profile_apart() -> None:
     cdn = f"vless://u@cdn.example.com:443?type=xhttp&extra={extra}#old"
 
     assert urllib.parse.unquote(urllib.parse.urlsplit(tag_client_link(plain, user, state)).fragment) == "Мой VLESS"
-    assert (
-        urllib.parse.unquote(urllib.parse.urlsplit(tag_client_link(cdn, user, state)).fragment) == "Мой VLESS CDN"
-    )
+    assert urllib.parse.unquote(urllib.parse.urlsplit(tag_client_link(cdn, user, state)).fragment) == "Мой VLESS CDN"

@@ -374,6 +374,15 @@ def _dynamic_backend(
         # Ключ появляется только там, где он заявлен: маршруты остальных протоколов
         # остаются ровно такими же, как раньше.
         backend["origin_http2"] = True
+    if not route.get("upstream_tls", True):
+        # Так же — только по заявке маршрута: остальные продолжают ходить в ядро
+        # по TLS, потому что там inbound с сертификатом.
+        backend["upstream_tls"] = False
+    host_key = route.get("public_host_config")
+    if isinstance(host_key, str) and host_key:
+        public_host = str(config.get(host_key, "")).strip()
+        if public_host:
+            backend["public_host"] = public_host
     prefix = str(route.get("assets_prefix") or "").strip().rstrip("/")
     if prefix:
         backend["assets_prefix"] = prefix

@@ -227,12 +227,16 @@ def _path_proxy_decoy_server(
     assets_prefix = str(backend.get("assets_prefix") or "").rstrip("/")
     exact_source = str(backend["name"]) in settings.relay_ports
     upstream_port = settings.relay_ports[str(backend["name"])] if exact_source else _as_int(backend["port"])
+    upstream_tls = bool(backend.get("upstream_tls", True))
     transport: dict[str, Any] = {
         "protocol": "http",
-        "versions": ["2"],
+        # Явный h2c: без TLS Caddy иначе ждёт HTTP/1.1, и расшифрованный поток CDN
+        # до ядра не доходит. TLS на этом плече — только там, где его заявил маршрут.
+        "versions": ["2"] if upstream_tls else ["2", "h2c"],
         "response_header_timeout": "30s",
-        "tls": {"server_name": str(backend["domain"])},
     }
+    if upstream_tls:
+        transport["tls"] = {"server_name": str(backend["domain"])}
     if exact_source:
         # A PROXY header describes one downstream TCP peer.  Prevent HTTP/2
         # connection reuse from mixing several clients behind one header.
@@ -252,7 +256,9 @@ def _path_proxy_decoy_server(
         "headers": {
             "request": {
                 "set": {
-                    "Host": [str(backend["domain"])],
+                    # Публичное имя, а не origin: клиент тоже ходит на публичное имя,
+                    # и ядро должно видеть то же самое.
+                    "Host": [str(backend.get("public_host") or backend["domain"])],
                 },
             },
             # Туннель не должен кешироваться нигде по пути.

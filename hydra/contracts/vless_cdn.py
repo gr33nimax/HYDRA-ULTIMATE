@@ -46,6 +46,11 @@ DECOY_ROUTE: dict[str, JsonValue] = {
     "path_config": "xhttp_path",
     "assets_prefix": RESERVED_PATH_PREFIX,
     "origin_http2": True,
+    # Расшифрованный поток ядро принимает по cleartext HTTP/2: TLS на этом плече
+    # завершён выше, а Caddy без явного h2c говорит по HTTP/1.1 и туннель не встаёт.
+    "upstream_tls": False,
+    # Клиент и ядро должны видеть одно публичное имя: origin-имя — деталь CDN.
+    "public_host_config": "cdn_domain",
 }
 
 # Значения immutable: они попадают в состояние как есть и не должны делиться
