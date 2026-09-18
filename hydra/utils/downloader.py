@@ -4,6 +4,7 @@ hydra/utils/downloader.py — Скачивание бинарников с GitHu
 Логика портирована из legacy-модуля NaiveProxy
 (_download_binary, _get_latest_version).
 """
+
 from __future__ import annotations
 
 import json
@@ -14,7 +15,7 @@ import tarfile
 import tempfile
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 
@@ -61,8 +62,8 @@ def _release_metadata(
     *,
     timeout: int,
     include_prerelease: bool = False,
-    prerelease_tag_marker: str = "",
-    prerelease_exclude_marker: str = "",
+    prerelease_tag_markers: Sequence[str] = (),
+    prerelease_exclude_markers: Sequence[str] = (),
 ) -> dict:
     endpoint = "releases?per_page=20" if include_prerelease else "releases/latest"
     url = f"https://api.github.com/repos/{repo}/{endpoint}"
@@ -85,14 +86,8 @@ def _release_metadata(
         and not item.get("draft")
         and item.get("prerelease") is True
         and isinstance(item.get("tag_name"), str)
-        and (
-            not prerelease_tag_marker
-            or prerelease_tag_marker in item["tag_name"]
-        )
-        and (
-            not prerelease_exclude_marker
-            or prerelease_exclude_marker not in item["tag_name"]
-        )
+        and (not prerelease_tag_markers or any(marker in item["tag_name"] for marker in prerelease_tag_markers))
+        and not any(marker in item["tag_name"] for marker in prerelease_exclude_markers)
     ]
     # The GitHub releases endpoint does not guarantee that the first matching
     # entry is the most recently published one. In particular, a newer debug
@@ -119,21 +114,24 @@ def latest_release(
     timeout: int = 10,
     *,
     include_prerelease: bool = False,
-    prerelease_tag_marker: str = "",
-    prerelease_exclude_marker: str = "",
+    prerelease_tag_markers: Sequence[str] = (),
+    prerelease_exclude_markers: Sequence[str] = (),
 ) -> str:
     """Возвращает tag_name (с 'v') последнего релиза. 'unknown' при ошибке.
 
-    repo = 'owner/repo', напр. 'enfein/mieru'.
+    repo = 'owner/repo', напр. 'enfein/mieru'. ``prerelease_tag_markers`` is an
+    any-of filter: an empty tuple accepts every prerelease tag.
     """
     try:
-        return str(_release_metadata(
-            repo,
-            timeout=timeout,
-            include_prerelease=include_prerelease,
-            prerelease_tag_marker=prerelease_tag_marker,
-            prerelease_exclude_marker=prerelease_exclude_marker,
-        ).get("tag_name", "unknown"))
+        return str(
+            _release_metadata(
+                repo,
+                timeout=timeout,
+                include_prerelease=include_prerelease,
+                prerelease_tag_markers=prerelease_tag_markers,
+                prerelease_exclude_markers=prerelease_exclude_markers,
+            ).get("tag_name", "unknown")
+        )
     except Exception:
         return "unknown"
 
@@ -156,6 +154,7 @@ def verify_sha256(path: Path, expected: str) -> bool:
 def secrets_compare(left: str, right: str) -> bool:
     """Use a constant-time comparison without exposing hashlib internals."""
     import hmac
+
     return hmac.compare_digest(left, right)
 
 
@@ -224,8 +223,7 @@ def download_github_asset(
     """
     url = f"https://api.github.com/repos/{repo}/releases/latest"
     try:
-        req = urllib.request.Request(
-            url, headers={"User-Agent": "HYDRA-Installer"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HYDRA-Installer"})
         with urllib.request.urlopen(req, timeout=15) as r:
             data = json.loads(r.read())
 
@@ -261,8 +259,8 @@ def download_github_asset_filtered(
     dest: Path,
     *,
     include_prerelease: bool = False,
-    prerelease_tag_marker: str = "",
-    prerelease_exclude_marker: str = "",
+    prerelease_tag_markers: Sequence[str] = (),
+    prerelease_exclude_markers: Sequence[str] = (),
     require_unique: bool = False,
     require_digest: bool = False,
     on_error: ErrorReporter | None = None,
@@ -283,16 +281,14 @@ def download_github_asset_filtered(
             repo,
             timeout=15,
             include_prerelease=include_prerelease,
-            prerelease_tag_marker=prerelease_tag_marker,
-            prerelease_exclude_marker=prerelease_exclude_marker,
+            prerelease_tag_markers=prerelease_tag_markers,
+            prerelease_exclude_markers=prerelease_exclude_markers,
         )
 
         matches = [
             asset
             for asset in data.get("assets", [])
-            if isinstance(asset, dict)
-            and isinstance(asset.get("name"), str)
-            and name_filter(asset["name"])
+            if isinstance(asset, dict) and isinstance(asset.get("name"), str) and name_filter(asset["name"])
         ]
         if require_unique and len(matches) != 1:
             return _fail(

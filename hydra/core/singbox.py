@@ -5,6 +5,7 @@ hydra/core/singbox.py — Управление Sing-Box.
 Sing-Box — центральный оркестратор: все протоколы → inbound'ы,
 WARP/DNS/GeoIP → outbound/route/rules.
 """
+
 from __future__ import annotations
 
 import json
@@ -73,6 +74,7 @@ def log(level: str, message: str) -> None:
 
 def _run(cmd: list, capture: bool = True, timeout: int = 30) -> subprocess.CompletedProcess:
     import os
+
     kw = {"timeout": timeout}
     if capture:
         kw.update(capture_output=True, text=True, encoding="utf-8", errors="replace")
@@ -96,6 +98,7 @@ def preflight_conflicts(config: dict) -> list[str]:
 # ═════════════════════════════════════════════════════════════════════════════
 #  Установка
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 def is_installed() -> bool:
     """Проверяет, установлен ли Sing-Box."""
@@ -130,12 +133,12 @@ def _custom_kernel_selected() -> bool:
 
 
 def install(force: bool = False) -> bool:
-    """Install the verified Hydracore VPS debug release."""
+    """Install the newest Hydracore release the selected channel serves."""
     _set_error("")
     if not force and "hydracore" in (get_version() or "").lower():
         return True
 
-    _log("INFO", "Installing Hydracore VPS debug release...")
+    _log("INFO", "Installing Hydracore release for the selected channel...")
 
     from hydra.utils.net import detect_arch
     from hydra.utils.downloader import (
@@ -149,6 +152,8 @@ def install(force: bool = False) -> bool:
     def _match(name: str) -> bool:
         return name == f"hydracore-vps-linux-{arch}.tar.gz"
 
+    selection = singbox_service.selected_kernel_release(load_state)
+
     with tempfile.TemporaryDirectory(prefix="hydra-kernel-") as directory:
         dest = Path(directory)
         tarball = dest / "kernel.tar.gz"
@@ -156,8 +161,9 @@ def install(force: bool = False) -> bool:
             HYDRACORE_REPO,
             _match,
             tarball,
-            include_prerelease=True,
-            prerelease_tag_marker="-debug.",
+            include_prerelease=selection.include_prerelease,
+            prerelease_tag_markers=selection.prerelease_tag_markers,
+            prerelease_exclude_markers=selection.prerelease_exclude_markers,
             require_unique=True,
             require_digest=True,
             on_error=_set_error,
@@ -168,9 +174,7 @@ def install(force: bool = False) -> bool:
         extracted = dest / "extracted"
         extract_tarball(tarball, extracted)
         candidates = [
-            path
-            for path in extracted.rglob("sing-box")
-            if path.is_file() and path.stat().st_size > 1_000_000
+            path for path in extracted.rglob("sing-box") if path.is_file() and path.stat().st_size > 1_000_000
         ]
         if len(candidates) != 1 or not verify_elf(candidates[0]):
             _set_error("Hydracore release must contain exactly one ELF sing-box binary")
@@ -212,6 +216,7 @@ def install(force: bool = False) -> bool:
 # ═════════════════════════════════════════════════════════════════════════════
 #  Генерация конфига
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 def generate_config(
     state: AppState,
@@ -264,8 +269,7 @@ def _preflight_conflicts(config: dict) -> list[str]:
             existing = snis.get(normalized)
             if existing and existing[0] != sni_scope:
                 errors.append(
-                    f"SNI '{normalized}' назначен нескольким inbound "
-                    f"({existing[1]} и {owner})",
+                    f"SNI '{normalized}' назначен нескольким inbound ({existing[1]} и {owner})",
                 )
             else:
                 snis[normalized] = (sni_scope, owner)
@@ -332,6 +336,7 @@ def write_config(config: dict) -> bool:
 #  Управление службой
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def _render_service_unit(bin_path: Path) -> str:
     """Compatibility wrapper for the managed Sing-Box unit renderer."""
     return singbox_units.render_service_unit(bin_path, SINGBOX_CONFIG)
@@ -373,12 +378,8 @@ def start() -> bool:
         _log("INFO", "No config found, creating minimal default...")
         minimal = {
             "log": {"level": "info"},
-            "inbounds": [
-                {"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080}
-            ],
-            "outbounds": [
-                {"type": "direct", "tag": "direct"}
-            ],
+            "inbounds": [{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080}],
+            "outbounds": [{"type": "direct", "tag": "direct"}],
         }
         write_config(minimal)
 
@@ -471,10 +472,7 @@ def status_text() -> str:
     update_suffix = ""
     if state.install.get("singbox_update_available") and version:
         update_suffix = " (Доступно обновление)"
-    return (
-        f"Sing-Box: {version or 'не установлен'}{update_suffix} | "
-        f"{'✓ запущен' if running else '✗ остановлен'}"
-    )
+    return f"Sing-Box: {version or 'не установлен'}{update_suffix} | {'✓ запущен' if running else '✗ остановлен'}"
 
 
 def update_kernel() -> tuple[bool, str]:
@@ -495,4 +493,3 @@ def update_kernel() -> tuple[bool, str]:
             migrate_config=migrate_runtime_dns_config,
         ),
     )
-

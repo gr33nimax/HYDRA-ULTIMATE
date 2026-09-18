@@ -209,7 +209,10 @@ if command -v sing-box &>/dev/null &&
     info "Обнаружен Hydracore; bootstrap не заменяет custom core"
     ok "Ядро сохранено: $(sing-box version 2>/dev/null | head -1)"
 else
-    info "Установка проверенного Hydracore VPS debug..."
+    # The channel is the switch that decides which release is installed; the
+    # version is always resolved at install time from GitHub.
+    HC_CHANNEL="stable"
+    info "Установка проверенного Hydracore VPS (канал ${HC_CHANNEL})..."
     ARCH=$(uname -m)
     case "$ARCH" in
     x86_64 | amd64) HC_ARCH="amd64" ;;
@@ -223,19 +226,48 @@ else
     HC_META=$(curl -fsSL --connect-timeout 30 --retry 3 "https://api.github.com/repos/gr33nimax/hydracore/releases?per_page=100" |
         python3 -c "
 import sys, json
+channel = '${HC_CHANNEL}'
+asset_name = 'hydracore-vps-linux-${HC_ARCH}.tar.gz'
+
+def eligible(release):
+    if release.get('draft') or not str(release.get('tag_name') or ''):
+        return False
+    tag = str(release.get('tag_name'))
+    if channel == 'stable':
+        return not release.get('prerelease')
+    # The debug channel serves the readable prereleases and never the retired
+    # '-debug.<n>' form, matching the selector the running HYDRA uses.
+    return (
+        release.get('prerelease') is True
+        and '-debug.' not in tag
+        and ('-debug-' in tag or '-rc-' in tag)
+    )
+
+best = None
 for release in json.load(sys.stdin):
-    tag = str(release.get('tag_name') or '')
-    if not release.get('prerelease') or '-debug.' not in tag:
+    if not eligible(release):
         continue
-    for asset in release.get('assets', []):
-        if asset.get('name') == 'hydracore-vps-linux-${HC_ARCH}.tar.gz':
-            print(asset.get('browser_download_url', ''), asset.get('digest', ''), tag)
-            raise SystemExit
+    asset = next(
+        (item for item in release.get('assets', []) if item.get('name') == asset_name),
+        None,
+    )
+    if asset is None:
+        continue
+    order = (
+        str(release.get('published_at') or ''),
+        str(release.get('created_at') or ''),
+        str(release.get('tag_name')),
+    )
+    if best is None or order > best[0]:
+        best = (order, asset, str(release.get('tag_name')))
+
+if best is not None:
+    print(best[1].get('browser_download_url', ''), best[1].get('digest', ''), best[2])
 ")
 
     read -r HC_URL HC_DIGEST HC_TAG <<<"$HC_META"
-    [[ -n "$HC_URL" && "$HC_TAG" == *-debug.* ]] || {
-        err "Не удалось определить Hydracore VPS debug release"
+    [[ -n "$HC_URL" && -n "$HC_TAG" ]] || {
+        err "Не удалось определить Hydracore release канала ${HC_CHANNEL}"
         exit 1
     }
     HC_TMP=$(mktemp -d /tmp/hydra-hydracore.XXXXXX)

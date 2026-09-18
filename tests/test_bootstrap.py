@@ -1,4 +1,5 @@
 """Regression checks for the public one-command installer."""
+
 from pathlib import Path
 
 
@@ -28,8 +29,8 @@ def test_every_fresh_install_path_uses_selected_ref():
 def test_bootstrap_verifies_exact_remote_commit_before_dependencies():
     assert 'git fetch --quiet "$REPO_URL" "$HYDRA_TARGET_REV"' in BOOTSTRAP
     assert 'git checkout --quiet -B "$HYDRA_REF" "$HYDRA_TARGET_REV"' in BOOTSTRAP
-    assert 'git symbolic-ref --quiet --short HEAD' in BOOTSTRAP
-    assert BOOTSTRAP.count('.hydra-source-revision') >= 3
+    assert "git symbolic-ref --quiet --short HEAD" in BOOTSTRAP
+    assert BOOTSTRAP.count(".hydra-source-revision") >= 3
     assert 'if [[ "$HYDRA_INSTALLED_REV" != "$HYDRA_TARGET_REV" ]]' in BOOTSTRAP
     assert BOOTSTRAP.index('if [[ "$HYDRA_INSTALLED_REV" != "$HYDRA_TARGET_REV" ]]') < BOOTSTRAP.index(
         'info "Изолированное Python-окружение..."'
@@ -52,10 +53,7 @@ def test_readme_overview_table_has_no_empty_header_row():
 
 def test_public_docs_do_not_reference_retired_branch():
     retired_branch = "legacy" + "-main"
-    assert all(
-        retired_branch not in document
-        for document in (README, INSTALL_GUIDE, DOCS_INDEX, CHANGELOG)
-    )
+    assert all(retired_branch not in document for document in (README, INSTALL_GUIDE, DOCS_INDEX, CHANGELOG))
 
 
 def test_installer_has_numbered_progress_and_unambiguous_result():
@@ -68,10 +66,7 @@ def test_installer_has_numbered_progress_and_unambiguous_result():
 
 
 def test_fresh_install_includes_certbot_before_tls_protocol_activation():
-    package_line = next(
-        line for line in BOOTSTRAP.splitlines()
-        if line.startswith("$PKG_INSTALL iptables")
-    )
+    package_line = next(line for line in BOOTSTRAP.splitlines() if line.startswith("$PKG_INSTALL iptables"))
 
     assert "certbot" in package_line.split()
 
@@ -88,10 +83,12 @@ def test_bootstrap_never_overwrites_detected_hydracore():
     assert "bootstrap не заменяет custom core" in BOOTSTRAP
 
 
-def test_clean_bootstrap_installs_only_verified_hydracore_debug_vps_asset():
+def test_clean_bootstrap_installs_the_newest_stable_hydracore_vps_asset():
     assert "gr33nimax/hydracore/releases?per_page=100" in BOOTSTRAP
     assert "hydracore-vps-linux-${HC_ARCH}.tar.gz" in BOOTSTRAP
-    assert "'-debug.' not in tag" in BOOTSTRAP
+    assert 'HC_CHANNEL="stable"' in BOOTSTRAP
+    assert "return not release.get('prerelease')" in BOOTSTRAP
+    assert "order > best[0]" in BOOTSTRAP
     assert '[[ "$HC_DIGEST" == sha256:* ]]' in BOOTSTRAP
     assert "file \"$HC_BIN\" | grep -q 'ELF .* executable'" in BOOTSTRAP
     assert "Hydracore identity не подтверждена" in BOOTSTRAP

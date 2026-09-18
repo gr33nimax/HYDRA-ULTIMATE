@@ -61,7 +61,7 @@ hydra
 │   └── migrate-state             атомарный импорт legacy state
 ├── kernel
 │   ├── status                    выбранное и фактическое ядро
-│   └── switch PROVIDER [--channel stable|preview|debug] [--force]
+│   └── switch PROVIDER [--channel stable|debug] [--force]
 ├── uninstall [--yes] [--dry-run] [--keep-data]
 └── antidpi
     ├── sync                      восстановить правила и активные баны
@@ -226,12 +226,16 @@ sudo hydra kernel switch hydracore --channel debug --force
 sudo hydra kernel switch sing-box-extended
 ```
 
-Допустимые provider: `sing-box-extended` и `hydracore`; каналы: `stable`,
-`preview` и `debug`. `stable` использует GitHub latest release без prerelease,
-а `preview` требует последний опубликованный prerelease, исключая отладочные
-релизы Hydracore. `debug` доступен только для Hydracore и выбирает prerelease,
-в теге которого есть `-debug.`. Такой бинарник дополнительно обязан объявить
-нативную телеметрию VK Calls. Команда принимает только asset доверенного GitHub-репозитория с
+Допустимые provider: `sing-box-extended` и `hydracore`; предлагаемые каналы:
+`stable` (по умолчанию) и `debug`. `stable` использует GitHub latest release
+без prerelease. `debug` выбирает самый свежий опубликованный prerelease
+Hydracore и принимает обе читаемые формы —
+`hydracore-sbe-<sbe-version>-debug-<n>` и релиз-кандидат
+`hydracore-sbe-<sbe-version>-rc-<n>`; retired-тег `-debug.<n>` не выбирается
+ни одним каналом. Persisted-значение `preview` больше не предлагается, но
+продолжает резолвиться как `debug`, чтобы уже выбравшая его установка не
+сломалась. Такой бинарник дополнительно обязан объявить нативную телеметрию
+VK Calls. Команда принимает только asset доверенного GitHub-репозитория с
 единственным точным именем для архитектуры и обязательным `asset.digest`.
 До замены выполняются identity/capability и config-check. После запуска служба
 должна пройти bounded stability check; state сохраняется последним. Любой сбой

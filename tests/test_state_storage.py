@@ -52,7 +52,7 @@ def test_current_format_kernel_migration_is_persisted_once(monkeypatch, tmp_path
     second = state_module.migrate_persisted_state()
 
     assert loaded.kernel.provider == "hydracore"
-    assert loaded.kernel.channel == "debug"
+    assert loaded.kernel.channel == "stable"
     assert first == {"from": 1, "to": 1, "changed": True}
     assert second == {"from": 1, "to": 1, "changed": False}
     assert state_module.STATE_FILE.read_bytes() == migrated_bytes

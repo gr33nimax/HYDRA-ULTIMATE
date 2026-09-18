@@ -32,7 +32,7 @@ def test_app_state_defaults():
     assert state.headless_creator.providers == {}
     assert state.headless_creator.consumers == {}
     assert state.kernel.provider == "hydracore"
-    assert state.kernel.channel == "debug"
+    assert state.kernel.channel == "stable"
 
 
 def test_null_boolean_switches_use_dataclass_defaults(tmp_path, monkeypatch):

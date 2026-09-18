@@ -141,7 +141,8 @@ Calls больше не привязан к версии persisted state или 
 проверяется по contract перед изменением runtime. Старые state schema 0–18
 однократно импортируются напрямую в стабильный State Format v1.
 
-HYDRA использует только Hydracore VPS из debug-канала. Обновление проверяет
+HYDRA использует только Hydracore VPS. Канал ядра — явный switch: `stable` по
+умолчанию, `debug` включается осознанно. Обновление проверяет
 digest, ELF, identity/contract, активный config и health-check; при ошибке
 до замены сохраняются предыдущий бинарник и backup. Отдельного выбора
 Другого kernel provider больше нет.
@@ -151,8 +152,11 @@ hydra kernel status
 sudo hydra kernel switch hydracore --channel debug --force
 ```
 
-Канал `debug` — стандартный канал Hydracore. Он выбирает отдельный prerelease
-с маркером `-debug.`, требует нативную телеметрию VK Calls и проходит те же
+Канал `debug` выбирает самый свежий опубликованный prerelease Hydracore:
+`hydracore-sbe-<sbe-version>-debug-<n>` либо релиз-кандидат
+`hydracore-sbe-<sbe-version>-rc-<n>`. Retired-тег `-debug.<n>` не выбирается ни
+одним каналом, а persisted-значение `preview` резолвится как `debug`. Бинарник
+требует нативную телеметрию VK Calls и проходит те же
 проверки digest, ELF, identity/contract, активного конфига и health-check.
 
 Creator принадлежит только `Calls · VK` (Hydra VK Tunnel). В меню Calls можно

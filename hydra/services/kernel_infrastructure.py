@@ -17,7 +17,7 @@ from hydra.core.state_kernel_models import (
     KERNEL_HYDRACORE,
 )
 from hydra.services.kernel import KernelRuntimeStatus
-from hydra.services.kernel_release_channels import kernel_release_selection
+from hydra.core.kernel_release_channels import kernel_release_selection
 from hydra.utils.downloader import (
     download_github_asset_filtered,
     extract_tarball,
@@ -255,8 +255,8 @@ class KernelInfrastructure:
             lambda name: pattern.fullmatch(name) is not None,
             archive,
             include_prerelease=selection.include_prerelease,
-            prerelease_tag_marker=selection.prerelease_tag_marker,
-            prerelease_exclude_marker=selection.prerelease_exclude_marker,
+            prerelease_tag_markers=selection.prerelease_tag_markers,
+            prerelease_exclude_markers=selection.prerelease_exclude_markers,
             require_unique=True,
             require_digest=True,
             on_error=errors.append,

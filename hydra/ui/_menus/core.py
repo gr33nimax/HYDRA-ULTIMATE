@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from hydra.core.singbox_upgrade import newer_release_available
+from hydra.core.state_kernel_models import OFFERED_KERNEL_CHANNELS, resolve_kernel_channel
 from hydra.core.state_models import AppState
 from hydra.services.application import ApplicationService
 from hydra.ui._menus.kernel import handle_kernel_choice
@@ -82,6 +83,7 @@ def run_core_menu(
                 deps.kv("Версия:", version_text),
                 deps.kv("Провайдер:", kernel_status.runtime.provider),
                 deps.kv("Канал:", state.kernel.channel),
+                deps.kv("Кандидат:", latest_version or "—"),
                 deps.kv(
                     "Конфиг:",
                     f"{deps.dim}/etc/sing-box/config.json{deps.reset}",
@@ -123,7 +125,9 @@ def run_core_menu(
             ),
         ]
 
-        target_channel = "stable" if state.kernel.channel == "debug" else "debug"
+        target_channel = next(
+            channel for channel in OFFERED_KERNEL_CHANNELS if channel != resolve_kernel_channel(state.kernel.channel)
+        )
         items.append((
             "8",
             f"🧪 Переключить Hydracore на канал {target_channel}",

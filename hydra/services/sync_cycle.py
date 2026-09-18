@@ -1,4 +1,5 @@
 """Independent phases of one background synchronization cycle."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -118,6 +119,7 @@ def _sync_plugin_maintenance(
             log(f"{title}: failed: {detail}")
             failures.append(f"{title}: {detail}")
     if apply_required:
+
         def mark_pending(latest: AppState) -> None:
             latest.install["sync_config_pending"] = True
 
@@ -169,9 +171,7 @@ def _sync_certificates(
 
     # Protocol certificates are reissued by the shared apply preflight; the
     # subscription endpoint is not a plugin and has to be renewed directly.
-    by_apply = [
-        status for status in renewable if status.owner != "subscriptions"
-    ]
+    by_apply = [status for status in renewable if status.owner != "subscriptions"]
     failures = [
         failure
         for status in renewable
@@ -180,12 +180,8 @@ def _sync_certificates(
     ]
 
     def record(latest: AppState) -> None:
-        latest.install["certificates_last_check"] = (
-            datetime.now(timezone.utc).isoformat()
-        )
-        latest.install["certificates_report"] = [
-            status.as_dict() for status in statuses
-        ]
+        latest.install["certificates_last_check"] = datetime.now(timezone.utc).isoformat()
+        latest.install["certificates_report"] = [status.as_dict() for status in statuses]
         if by_apply and not latest.install.get("sync_config_pending"):
             latest.install["sync_config_pending"] = True
             latest.install["sync_config_pending_source"] = "certificates"
@@ -193,8 +189,7 @@ def _sync_certificates(
     state, _ = update_state(record)
     if by_apply:
         log(
-            "Certificates: queued a config apply to renew "
-            + ", ".join(status.domain for status in by_apply),
+            "Certificates: queued a config apply to renew " + ", ".join(status.domain for status in by_apply),
         )
     return state, failures
 
@@ -243,8 +238,7 @@ def _apply_pending_config(
 
             state, _ = update_state(defer_renewal)
             log(
-                "Certificate renewal apply failed; deferred to the next "
-                "daily check",
+                "Certificate renewal apply failed; deferred to the next daily check",
             )
             return state, [
                 "не удалось обновить сертификаты",
@@ -291,9 +285,9 @@ def _sync_singbox_update(
         log("Sync: Sing-Box update check is disabled by settings")
         return state, []
     try:
+        from hydra.core.kernel_release_channels import kernel_release_selection
         from hydra.core.singbox import HYDRACORE_REPO, get_version
         from hydra.core.singbox_upgrade import newer_release_available
-        from hydra.services.kernel_release_channels import kernel_release_selection
         from hydra.utils.downloader import latest_release
 
         if not _singbox_update_due(state, forced=forced):
@@ -306,10 +300,8 @@ def _sync_singbox_update(
         latest_version = latest_release(
             HYDRACORE_REPO,
             include_prerelease=release_selection.include_prerelease,
-            prerelease_tag_marker=release_selection.prerelease_tag_marker,
-            prerelease_exclude_marker=(
-                release_selection.prerelease_exclude_marker
-            ),
+            prerelease_tag_markers=release_selection.prerelease_tag_markers,
+            prerelease_exclude_markers=release_selection.prerelease_exclude_markers,
         )
         if not latest_version or latest_version == "unknown":
             log(
@@ -337,9 +329,7 @@ def _sync_singbox_update(
         )
 
         def save_update_info(latest: AppState) -> bool:
-            latest.install["singbox_last_update_check"] = (
-                datetime.now(timezone.utc).isoformat()
-            )
+            latest.install["singbox_last_update_check"] = datetime.now(timezone.utc).isoformat()
             latest.install["singbox_update_available"] = update_available
             latest.install["singbox_latest_version"] = latest_version
             return True
@@ -376,8 +366,7 @@ def run_sync_cycle(
         True,
     )
     log(
-        "Sync started"
-        + (" (manual full check)" if force_all_checks else ""),
+        "Sync started" + (" (manual full check)" if force_all_checks else ""),
     )
     state, blocked, failures = _sync_user_limits(
         state,

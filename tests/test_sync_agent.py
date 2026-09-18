@@ -16,6 +16,7 @@ def _state_updater(state: AppState):
     def update(mutator):
         result = mutator(state)
         return state, result
+
     return update
 
 
@@ -39,10 +40,12 @@ def test_failed_config_apply_is_retried_on_next_sync():
     warp_status = MagicMock(enabled=False)
     check_limits = MagicMock(side_effect=[[user.email], []])
 
-    with patch.object(sync_agent, "update_state", side_effect=_state_updater(state)), \
-         patch.object(sync_agent, "_log"), \
-         patch("hydra.core.orchestrator.apply_config", side_effect=[False, True]) as apply, \
-         patch("hydra.plugins.warp.plugin.WarpPlugin.status", return_value=warp_status):
+    with (
+        patch.object(sync_agent, "update_state", side_effect=_state_updater(state)),
+        patch.object(sync_agent, "_log"),
+        patch("hydra.core.orchestrator.apply_config", side_effect=[False, True]) as apply,
+        patch("hydra.plugins.warp.plugin.WarpPlugin.status", return_value=warp_status),
+    ):
         _run_sync(traffic_check=check_limits)
         assert user.blocked is True
         assert state.install["sync_config_pending"] is True
@@ -62,10 +65,12 @@ def test_expired_user_is_blocked_and_config_is_applied():
     state = AppState(users=[user])
     warp_status = MagicMock(enabled=False)
 
-    with patch.object(sync_agent, "update_state", side_effect=_state_updater(state)), \
-         patch.object(sync_agent, "_log"), \
-         patch("hydra.core.orchestrator.apply_config", return_value=True) as apply, \
-         patch("hydra.plugins.warp.plugin.WarpPlugin.status", return_value=warp_status):
+    with (
+        patch.object(sync_agent, "update_state", side_effect=_state_updater(state)),
+        patch.object(sync_agent, "_log"),
+        patch("hydra.core.orchestrator.apply_config", return_value=True) as apply,
+        patch("hydra.plugins.warp.plugin.WarpPlugin.status", return_value=warp_status),
+    ):
         _run_sync()
 
     assert user.blocked is True
@@ -77,10 +82,12 @@ def test_failed_warp_apply_is_queued_for_retry():
     state = AppState()
     get_protocol(state, "warp").enabled = True
 
-    with patch.object(sync_agent, "update_state", side_effect=_state_updater(state)), \
-         patch.object(sync_agent, "_log"), \
-         patch("hydra.core.orchestrator.apply_config", return_value=False), \
-         patch("hydra.plugins.warp.plugin.WarpPlugin.update_external_rules", return_value=(True, "ok")):
+    with (
+        patch.object(sync_agent, "update_state", side_effect=_state_updater(state)),
+        patch.object(sync_agent, "_log"),
+        patch("hydra.core.orchestrator.apply_config", return_value=False),
+        patch("hydra.plugins.warp.plugin.WarpPlugin.update_external_rules", return_value=(True, "ok")),
+    ):
         _run_sync()
 
     assert state.install["sync_config_pending"] is True
@@ -94,10 +101,12 @@ def test_pending_config_is_retried_when_limit_checks_are_disabled():
     state.install["sync_config_pending"] = True
     check_limits = MagicMock()
 
-    with patch("hydra.core.state.load_state", return_value=state), \
-         patch.object(sync_agent, "update_state", side_effect=_state_updater(state)), \
-         patch.object(sync_agent, "_log"), \
-         patch("hydra.core.orchestrator.apply_config", return_value=True) as apply:
+    with (
+        patch("hydra.core.state.load_state", return_value=state),
+        patch.object(sync_agent, "update_state", side_effect=_state_updater(state)),
+        patch.object(sync_agent, "_log"),
+        patch("hydra.core.orchestrator.apply_config", return_value=True) as apply,
+    ):
         ok, _ = _run_sync(traffic_check=check_limits)
 
     assert ok is True
@@ -108,21 +117,26 @@ def test_pending_config_is_retried_when_limit_checks_are_disabled():
 
 def test_manual_full_check_ignores_automatic_check_toggles():
     state = AppState()
-    state.install.update({
-        "sync_limits_enabled": False,
-        "sync_warp_enabled": False,
-        "sync_updates_enabled": False,
-    })
+    state.kernel.channel = "debug"
+    state.install.update(
+        {
+            "sync_limits_enabled": False,
+            "sync_warp_enabled": False,
+            "sync_updates_enabled": False,
+        }
+    )
     get_protocol(state, "warp").enabled = True
     check_limits = MagicMock(return_value=[])
 
-    with patch("hydra.core.state.load_state", return_value=state), \
-         patch.object(sync_agent, "update_state", side_effect=_state_updater(state)), \
-         patch.object(sync_agent, "_log"), \
-         patch("hydra.plugins.warp.plugin.WarpPlugin.update_external_rules", return_value=(True, "ok")) as warp_update, \
-         patch("hydra.core.orchestrator.apply_config", return_value=True), \
-         patch("hydra.utils.downloader.latest_release", return_value="v1.13.11-extended-2.1.0") as latest, \
-         patch("hydra.core.singbox.get_version", return_value="1.13.11-extended-2.1.0"):
+    with (
+        patch("hydra.core.state.load_state", return_value=state),
+        patch.object(sync_agent, "update_state", side_effect=_state_updater(state)),
+        patch.object(sync_agent, "_log"),
+        patch("hydra.plugins.warp.plugin.WarpPlugin.update_external_rules", return_value=(True, "ok")) as warp_update,
+        patch("hydra.core.orchestrator.apply_config", return_value=True),
+        patch("hydra.utils.downloader.latest_release", return_value="v1.13.11-extended-2.1.0") as latest,
+        patch("hydra.core.singbox.get_version", return_value="1.13.11-extended-2.1.0"),
+    ):
         ok, _ = _run_sync(
             traffic_check=check_limits,
             force_all_checks=True,
@@ -135,8 +149,8 @@ def test_manual_full_check_ignores_automatic_check_toggles():
     latest.assert_called_once_with(
         "gr33nimax/hydracore",
         include_prerelease=True,
-        prerelease_tag_marker="-debug.",
-        prerelease_exclude_marker="",
+        prerelease_tag_markers=("-debug-", "-rc-"),
+        prerelease_exclude_markers=("-debug.",),
     )
 
 
@@ -144,10 +158,12 @@ def test_manual_run_reports_update_check_failure():
     state = AppState()
     state.install["sync_warp_enabled"] = False
 
-    with patch("hydra.core.state.load_state", return_value=state), \
-         patch.object(sync_agent, "update_state", side_effect=_state_updater(state)), \
-         patch.object(sync_agent, "_log"), \
-         patch("hydra.utils.downloader.latest_release", return_value="unknown"):
+    with (
+        patch("hydra.core.state.load_state", return_value=state),
+        patch.object(sync_agent, "update_state", side_effect=_state_updater(state)),
+        patch.object(sync_agent, "_log"),
+        patch("hydra.utils.downloader.latest_release", return_value="unknown"),
+    ):
         ok, message = _run_sync(force_update_check=True)
 
     assert ok is False
@@ -158,11 +174,13 @@ def test_manual_run_does_not_report_update_when_installed_version_is_unknown():
     state = AppState()
     state.install["sync_warp_enabled"] = False
 
-    with patch("hydra.core.state.load_state", return_value=state), \
-         patch.object(sync_agent, "update_state", side_effect=_state_updater(state)), \
-         patch.object(sync_agent, "_log"), \
-         patch("hydra.utils.downloader.latest_release", return_value="v1.13.16-extended-hydracore.7"), \
-         patch("hydra.core.singbox.get_version", return_value=None):
+    with (
+        patch("hydra.core.state.load_state", return_value=state),
+        patch.object(sync_agent, "update_state", side_effect=_state_updater(state)),
+        patch.object(sync_agent, "_log"),
+        patch("hydra.utils.downloader.latest_release", return_value="v1.13.16-extended-hydracore.7"),
+        patch("hydra.core.singbox.get_version", return_value=None),
+    ):
         ok, message = _run_sync(force_update_check=True)
 
     assert ok is False
@@ -174,9 +192,7 @@ def test_manual_run_does_not_report_update_when_installed_version_is_unknown():
 def test_stale_warp_cache_is_refreshed(tmp_path):
     cache = tmp_path / "warp.json"
     cache.write_text(
-        '{"updated_at": "'
-        + (datetime.now() - timedelta(days=2)).isoformat()
-        + '"}',
+        '{"updated_at": "' + (datetime.now() - timedelta(days=2)).isoformat() + '"}',
         encoding="utf-8",
     )
 

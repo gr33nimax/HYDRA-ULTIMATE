@@ -197,7 +197,7 @@ def test_kernel_switch_dispatches_through_application_port(capsys):
     )
 
 
-def test_kernel_switch_defaults_to_available_debug_channel(capsys):
+def test_kernel_switch_defaults_to_the_stable_channel(capsys):
     app = MagicMock()
     app.kernel.switch.return_value.as_dict.return_value = {"ok": True}
     state = AppState()
@@ -209,7 +209,7 @@ def test_kernel_switch_defaults_to_available_debug_channel(capsys):
     app.kernel.switch.assert_called_once_with(
         state,
         "hydracore",
-        channel="debug",
+        channel="stable",
         force=False,
     )
 

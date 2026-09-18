@@ -63,7 +63,7 @@ def test_kernel_service_persists_only_after_verified_runtime() -> None:
     )
     service = KernelService(runtime, save_state=lambda current: saved.append(current.kernel.provider))
 
-    result = service.switch(state, KERNEL_HYDRACORE)
+    result = service.switch(state, KERNEL_HYDRACORE, channel="debug")
 
     assert result.ok and result.changed
     assert state.kernel.provider == KERNEL_HYDRACORE
@@ -86,7 +86,7 @@ def test_kernel_service_rolls_runtime_back_when_state_save_fails() -> None:
     state.revision = 7
     service = KernelService(runtime, save_state=fail_save)
     with pytest.raises(OSError, match="disk full"):
-        service.switch(state, KERNEL_HYDRACORE)
+        service.switch(state, KERNEL_HYDRACORE, channel="debug")
 
     assert state.kernel.provider == KERNEL_HYDRACORE
     assert state.revision == 7

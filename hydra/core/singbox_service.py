@@ -6,7 +6,14 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
-from hydra.core.state_kernel_models import KERNEL_HYDRACORE
+from hydra.core.kernel_release_channels import (
+    KernelReleaseSelection,
+    kernel_release_selection,
+)
+from hydra.core.state_kernel_models import (
+    DEFAULT_KERNEL_CHANNEL,
+    KERNEL_HYDRACORE,
+)
 from hydra.utils.commands import redact_text
 
 
@@ -18,6 +25,15 @@ def custom_kernel_selected(version: str | None, state_loader: Callable[[], Any])
         return state_loader().kernel.provider == KERNEL_HYDRACORE
     except Exception:
         return False
+
+
+def selected_kernel_release(state_loader: Callable[[], Any]) -> KernelReleaseSelection:
+    """Resolve the persisted kernel channel to its release selection."""
+    try:
+        channel = state_loader().kernel.channel
+    except Exception:
+        channel = DEFAULT_KERNEL_CHANNEL
+    return kernel_release_selection(KERNEL_HYDRACORE, channel)
 
 
 def inspect_current_config(
