@@ -71,6 +71,22 @@ def test_get_version_accepts_hydracore_v_prefixed_token(tmp_path) -> None:
         assert singbox.get_version() == "1.13.16-extended-hydracore.7"
 
 
+def test_get_version_accepts_the_readable_contract_token(tmp_path) -> None:
+    """The tag contract makes the version start with a letter, not a digit."""
+    binary = tmp_path / "sing-box"
+    binary.write_bytes(b"binary")
+    result = MagicMock(
+        returncode=0,
+        stdout="sing-box version hydracore-sbe-1.14.0\n",
+    )
+
+    with (
+        patch("hydra.core.singbox._find_singbox", return_value=binary),
+        patch("hydra.core.singbox._run", return_value=result),
+    ):
+        assert singbox.get_version() == "hydracore-sbe-1.14.0"
+
+
 def test_legacy_kernel_paths_fail_closed_for_detected_hydracore() -> None:
     with (
         patch(
