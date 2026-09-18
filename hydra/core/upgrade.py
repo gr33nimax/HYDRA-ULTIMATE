@@ -12,6 +12,14 @@ from hydra.core.host import HOST
 from hydra.utils.commands import CommandError
 
 
+def _dirty_worktree_detail(entries: list[str], limit: int = 5) -> str:
+    """Name what makes the checkout dirty: an operator cannot clean what is unnamed."""
+    shown = ", ".join(entries[:limit])
+    remaining = len(entries) - limit
+    suffix = f" (+{remaining} more)" if remaining > 0 else ""
+    return f"local changes detected: {shown}{suffix}"
+
+
 def check_upgrade(state: AppState, project_dir: Path | None = None) -> dict:
     """Check whether local state and checkout are safe to upgrade."""
     checks: list[dict] = []
@@ -39,8 +47,9 @@ def check_upgrade(state: AppState, project_dir: Path | None = None) -> dict:
                 timeout=10,
                 env=os.environ.copy(),
             )
-            clean = result.returncode == 0 and not result.stdout.strip()
-            record("git_worktree", clean, "clean" if clean else "local changes detected")
+            entries = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            clean = result.returncode == 0 and not entries
+            record("git_worktree", clean, "clean" if clean else _dirty_worktree_detail(entries))
         except CommandError as exc:
             record("git_worktree", False, str(exc))
     else:

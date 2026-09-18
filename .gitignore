@@ -24,6 +24,11 @@ state.json
 health.status
 checkpoint.json
 
+# Build provenance written by the updater into the installed tree. It is a
+# stamped artifact, not source: without this rule it makes the checkout look
+# dirty and the next upgrade refuses to run.
+.hydra-build.json
+
 # IDE
 .idea/
 .vscode/
