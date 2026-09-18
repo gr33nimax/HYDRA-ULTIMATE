@@ -1,4 +1,5 @@
 """TSK-007: погода — один провайдер, кеш и честный отказ."""
+
 from __future__ import annotations
 
 from pathlib import Path

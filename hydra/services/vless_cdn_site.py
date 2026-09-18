@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,7 @@ from hydra.core.host import HOST
 from hydra.core.install_layout import project_root as _project_root
 from hydra.core.install_layout import python_executable
 from hydra.core.state_models import AppState, PluginState
+from hydra.core.region_image import RegionImage, as_timestamp, refresh_region_image
 from hydra.core.vless_cdn_page import (
     ImageView,
     SiteData,
@@ -140,6 +142,43 @@ def build_site_data(
     )
 
 
+def image_for_site(
+    *,
+    protocol: PluginState,
+    directory: str | Path,
+    now: float | None = None,
+    refresh: Callable[..., RegionImage] | None = None,
+) -> ImageView:
+    """Изображение региона: обновляем не чаще, чем раз в двенадцать часов."""
+    config = protocol.config
+    # Функция берётся в момент вызова: иначе подмена в тестах (и в диагностике)
+    # действовала бы только случайно.
+    update = refresh or refresh_region_image
+    query = " ".join(
+        part
+        for part in (
+            str(config.get("region_city", "") or "").strip(),
+            str(config.get("region_country_name", "") or "").strip(),
+        )
+        if part
+    )
+    asset = update(
+        directory,
+        query=query,
+        last_updated=as_timestamp(config.get("image_updated_at")),
+        now=now,
+    )
+    if asset.refreshed:
+        config["image_updated_at"] = time.time() if now is None else as_timestamp(now)
+        config["image_source"] = asset.source
+        config["image_attribution"] = asset.attribution
+    return ImageView(
+        src=asset.src,
+        attribution=str(config.get("image_attribution", "") or ""),
+        source=str(config.get("image_source", "") or ""),
+    )
+
+
 def refresh_site(
     state: AppState,
     *,
@@ -154,21 +193,35 @@ def refresh_site(
     if current is None:
         raise LookupError("протокол VLESS через CDN не настроен")
 
+    target_dir = Path(str(directory or DECOY_ROOT))
+    target_dir.mkdir(parents=True, exist_ok=True)
+
     ensure_region(state, protocol=current, lookup=lookup)
-    current_weather = weather if weather is not None else weather_view(
-        current.config.get("region_latitude", ""),
-        current.config.get("region_longitude", ""),
+    current_weather = (
+        weather
+        if weather is not None
+        else weather_view(
+            current.config.get("region_latitude", ""),
+            current.config.get("region_longitude", ""),
+        )
+    )
+    current_image = (
+        image
+        if image is not None
+        else image_for_site(
+            protocol=current,
+            directory=target_dir,
+            now=now.timestamp() if now is not None else None,
+        )
     )
     data = build_site_data(
         state,
         protocol=current,
         now=now,
         weather=current_weather,
-        image=image,
+        image=current_image,
     )
 
-    target_dir = Path(str(directory or DECOY_ROOT))
-    target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / PAGE_NAME
     HOST.atomic_write(target, render_page(data), mode=0o644)
     return target
@@ -222,6 +275,7 @@ __all__ = [
     "build_site_data",
     "ensure_region",
     "extra_zones",
+    "image_for_site",
     "install_site_timer",
     "refresh_site",
     "remove_site_timer",

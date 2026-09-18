@@ -11,6 +11,7 @@ from hydra.contracts import JsonValue
 from hydra.contracts.vless_cdn import PROTOCOL_NAME
 from hydra.core.state import AppState
 from hydra.core.state_models import PluginState
+from hydra.core.region_image import RegionImage
 from hydra.core.vless_cdn_page import (
     ImageView,
     SiteData,
@@ -201,12 +202,55 @@ def test_refresh_refuses_an_unconfigured_protocol(tmp_path):
 
 @pytest.fixture(autouse=True)
 def _no_provider_calls(monkeypatch):
-    """Ни один тест этой страницы не должен случайно пойти в сеть за погодой."""
+    """Ни один тест этой страницы не должен случайно пойти в сеть."""
     monkeypatch.setattr(
         site,
         "weather_view",
         lambda *args, **kwargs: WeatherView(available=False),
     )
+    monkeypatch.setattr(
+        site,
+        "refresh_region_image",
+        lambda *args, **kwargs: RegionImage(src="/assets/region.svg"),
+    )
+
+
+def test_attribution_of_a_refreshed_image_reaches_the_page(tmp_path, monkeypatch):
+    def fake_refresh(directory: object, **kwargs) -> RegionImage:
+        return RegionImage(
+            src="/assets/region.jpg",
+            attribution="Christian Wolf, CC BY-SA 3.0 de",
+            source="File:Skyline Frankfurt am Main 2015.jpg",
+            refreshed=True,
+        )
+
+    monkeypatch.setattr(site, "refresh_region_image", fake_refresh)
+    state = _state()
+    target = site.refresh_site(state, directory=tmp_path, now=STAMP)
+
+    page = Path(target).read_text(encoding="utf-8")
+    assert 'src="/assets/region.jpg"' in page
+    assert "CC BY-SA 3.0 de" in page
+
+    config = state.protocols[PROTOCOL_NAME].config
+    assert config["image_attribution"] == "Christian Wolf, CC BY-SA 3.0 de"
+    assert config["image_source"] == "File:Skyline Frankfurt am Main 2015.jpg"
+    assert config["image_updated_at"] == STAMP.timestamp()
+
+
+def test_query_for_the_image_names_the_city_and_the_country(tmp_path, monkeypatch):
+    seen: dict[str, str] = {}
+
+    def fake_refresh(directory: object, **kwargs) -> RegionImage:
+        seen["query"] = str(kwargs.get("query"))
+        seen["last_updated"] = str(kwargs.get("last_updated"))
+        return RegionImage(src="/assets/region.svg")
+
+    monkeypatch.setattr(site, "refresh_region_image", fake_refresh)
+    site.refresh_site(_state(), directory=tmp_path, now=STAMP)
+
+    assert seen["query"] == f"{CITY} {COUNTRY}"
+    assert seen["last_updated"] == "0.0", "без сохранённой отметки окно не действует"
 
 
 def test_page_takes_weather_from_the_region_coordinates(tmp_path, monkeypatch):

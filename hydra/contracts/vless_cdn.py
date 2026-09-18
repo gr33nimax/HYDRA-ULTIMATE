@@ -65,6 +65,7 @@ CONFIG_DEFAULTS: tuple[tuple[str, JsonValue], ...] = (
     ("region_image_id", ""),
     ("image_source", ""),
     ("image_attribution", ""),
+    ("image_updated_at", 0.0),
     (DECOY_ROUTE_KEY, DECOY_ROUTE),
 )
 
