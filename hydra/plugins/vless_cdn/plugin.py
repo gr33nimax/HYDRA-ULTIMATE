@@ -19,6 +19,7 @@ from hydra.plugins.base import (
 )
 from hydra.plugins.context import PluginStateAccess
 from hydra.contracts.vless_cdn import (
+    CLIENT_LABEL,
     CONFIG_DEFAULTS,
     DECOY_ROUTE,
     DEFAULT_ENCRYPTION_MODE,
@@ -29,6 +30,7 @@ from hydra.contracts.vless_cdn import (
     normalize_path,
     server_encryption_value,
 )
+
 # Имя функции берётся из модуля, а не из пакета: пакет реэкспортирует плагин,
 # и импорт через него замыкал бы плагин на самого себя.
 from hydra.plugins.vless_cdn.client import profile as client_profile
@@ -44,7 +46,8 @@ class VlessCdnPlugin(BasePlugin):
     meta = PluginMeta(
         name=PROTOCOL_NAME,
         description="VLESS через внешний CDN: XHTTP packet-up, uplink GET, сайт о регионе",
-        display_name="VLESS Яндекс CDN",
+        display_name=CLIENT_LABEL,
+        subscription_profile_name=CLIENT_LABEL,
         category=PluginCategory.TRANSPORT,
         version="0.1.0",
         # Публичное имя выдаёт CDN, а origin-имя спрашивается отдельно, поэтому

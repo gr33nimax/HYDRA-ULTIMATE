@@ -14,6 +14,7 @@ from typing import Any
 
 from hydra.contracts import JsonObject
 from hydra.contracts.vless_cdn import (
+    CLIENT_LABEL,
     DEFAULT_ENCRYPTION_MODE,
     DEFAULT_XHTTP_PATH,
     client_encryption_value,
@@ -98,7 +99,7 @@ def share_link(user: User, config: Mapping[str, object]) -> str:
     }
     query = urllib.parse.urlencode(list(parameters.items()))
     uuid = urllib.parse.quote(user.uuid, safe="")
-    tag = urllib.parse.quote(f"{user.email} VLESS CDN", safe="")
+    tag = urllib.parse.quote(f"{user.email} {CLIENT_LABEL}", safe="")
     return f"vless://{uuid}@{cdn}:{PUBLIC_PORT}?{query}#{tag}"
 
 

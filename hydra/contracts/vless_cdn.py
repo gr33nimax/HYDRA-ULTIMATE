@@ -15,6 +15,10 @@ import re
 from hydra.contracts import JsonValue
 
 PROTOCOL_NAME = "vless_cdn"
+
+# Имя, которое видит клиент: меню панели, подписка и подпись share-ссылки берут его
+# отсюда, иначе в клиенте два VLESS-профиля выглядят одинаково.
+CLIENT_LABEL = "VLESS Яндекс CDN"
 DEFAULT_XHTTP_PATH = "/api/media/session"
 MIN_PATH_SEGMENTS = 3
 RESERVED_PATH_PREFIX = "/assets"

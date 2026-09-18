@@ -5,10 +5,13 @@ from __future__ import annotations
 import base64
 import re
 
+import urllib.parse
+
 import pytest
 
 from hydra.contracts import JsonValue
 from hydra.contracts.vless_cdn import (
+    CLIENT_LABEL,
     DEFAULT_XHTTP_PATH,
     ENCRYPTION_SCHEME,
     PROTOCOL_NAME,
@@ -232,6 +235,15 @@ def test_an_unprovisioned_protocol_hands_out_nothing():
     assert plugin.client_link(user, state) == ""
 
 
-def test_the_protocol_has_a_human_name_for_the_menu():
-    assert "Яндекс" in VlessCdnPlugin.meta.display_name
-    assert VlessCdnPlugin.meta.display_name != PROTOCOL_NAME
+def test_the_protocol_has_one_human_name_in_every_layer():
+    """Имя обязано совпадать в меню, подписке и ссылке: иначе два VLESS не различить."""
+    plugin = VlessCdnPlugin()
+
+    assert plugin.meta.display_name == CLIENT_LABEL
+    assert plugin.meta.subscription_profile_name == CLIENT_LABEL
+    assert CLIENT_LABEL != PROTOCOL_NAME
+
+    state = _subscriber()
+    link = plugin.client_link(state.users[0], state)
+    fragment = urllib.parse.unquote(link.split("#", 1)[1])
+    assert fragment == f"reader@example.com {CLIENT_LABEL}"
