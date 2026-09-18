@@ -12,3 +12,7 @@ def test_menu_is_compact_by_default(monkeypatch, capsys):
     assert "╭" in output
     assert "╔" not in output
     assert "ULTIMATE" in tui.BANNER
+
+
+def test_progress_bar_tolerates_non_finite_values():
+    assert tui._bar(float("nan"), 10, width=4).endswith("0%")

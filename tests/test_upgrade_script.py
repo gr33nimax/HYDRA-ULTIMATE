@@ -7,9 +7,7 @@ from hydra.plugins.warp.parsing import parse_wg_conf
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "upgrade.sh"
 LAUNCHER = ROOT / "updater.sh"
-LINUX_INTEGRATION_SMOKE = (
-    ROOT / ".github" / "scripts" / "linux-integration-smoke.sh"
-)
+LINUX_INTEGRATION_SMOKE = ROOT / ".github" / "scripts" / "linux-integration-smoke.sh"
 LINUX_UPGRADE_SMOKE = ROOT / ".github" / "scripts" / "linux-upgrade-smoke.sh"
 UPGRADE_DOCS = (ROOT / "README.md", ROOT / "docs" / "UPGRADE.md")
 
@@ -26,8 +24,11 @@ def test_existing_install_updater_is_transactional_and_main_by_default():
     assert "return 1" in fail_helper
     assert "exit 1; }" not in source
     assert "git ls-remote --exit-code" in source
-    assert 'flock -n 9' in source
+    assert "flock -n 9" in source
     assert 'python3 -m venv "$STAGE_DIR/.venv"' in source
+    assert 'BUILD_CHANNEL="local"' in source
+    assert "main | dev | debug) BUILD_CHANNEL=$HYDRA_REF ;;" in source
+    assert '"$STAGE_DIR/.hydra-build.json"' in source
     assert 'PYTHONPATH="$STAGE_DIR"' in source
     assert 'PYTHONPATH="$INSTALL_DIR"' in source
     assert "-m hydra.cli --json upgrade check" in source
@@ -58,10 +59,10 @@ def test_linux_upgrade_smoke_uses_the_target_checkout_version():
 
 def test_linux_integration_smoke_provisions_the_migrated_warp_runtime():
     source = LINUX_INTEGRATION_SMOKE.read_text(encoding="utf-8")
-    marker = 'cat > "$wgcf_profile" <<\'EOF\'\n'
+    marker = "cat > \"$wgcf_profile\" <<'EOF'\n"
     profile = source.split(marker, 1)[1].split("\nEOF", 1)[0]
 
-    assert 'wgcf_profile=/etc/wireguard/wgcf-profile.conf' in source
+    assert "wgcf_profile=/etc/wireguard/wgcf-profile.conf" in source
     assert 'cat > "$wgcf_profile"' in source
     assert 'chmod 0600 "$wgcf_profile"' in source
     assert 'rm -f "$wgcf_profile"' in source
@@ -90,18 +91,24 @@ def test_target_commands_do_not_depend_on_the_updater_working_directory():
     assert 'cd "$INSTALL_DIR"' in install_helper
     assert "trap - ERR" in stage_helper
     assert "trap - ERR" in install_helper
-    assert len(
-        re.findall(
-            r"(?m)^\s*run_stage_python\s+(?:\\\s*)?-m hydra\.cli\b",
-            source,
-        ),
-    ) == 6
-    assert len(
-        re.findall(
-            r"(?m)^\s*run_install_python\s+(?:\\\s*)?-m hydra\.cli\b",
-            source,
-        ),
-    ) == 2
+    assert (
+        len(
+            re.findall(
+                r"(?m)^\s*run_stage_python\s+(?:\\\s*)?-m hydra\.cli\b",
+                source,
+            ),
+        )
+        == 6
+    )
+    assert (
+        len(
+            re.findall(
+                r"(?m)^\s*run_install_python\s+(?:\\\s*)?-m hydra\.cli\b",
+                source,
+            ),
+        )
+        == 2
+    )
 
 
 def test_upgrade_orders_preflight_backup_migration_and_cutover_safely():
@@ -296,8 +303,7 @@ def test_documented_updater_is_fully_downloaded_before_sudo_execution():
             "HYDRA-ULTIMATE/dev/updater.sh | sudo env HYDRA_REF=dev bash"
         ),
         ROOT / "docs" / "UPGRADE.md": (
-            "curl -fsSL https://raw.githubusercontent.com/gr33nimax/"
-            "HYDRA-ULTIMATE/main/updater.sh | sudo bash"
+            "curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/updater.sh | sudo bash"
         ),
     }
     for path in UPGRADE_DOCS:
@@ -311,14 +317,14 @@ def test_one_command_launcher_downloads_engine_completely_before_execution():
     source = LAUNCHER.read_text(encoding="utf-8")
 
     assert 'HYDRA_REF="${HYDRA_REF:-main}"' in source
-    assert 'UPGRADE_SCRIPT=$(mktemp /tmp/hydra-updater.XXXXXX)' in source
+    assert "UPGRADE_SCRIPT=$(mktemp /tmp/hydra-updater.XXXXXX)" in source
     assert '"${RAW_BASE}/${HYDRA_REF}/upgrade.sh"' in source
     assert '-o "$UPGRADE_SCRIPT"' in source
     assert source.index('-o "$UPGRADE_SCRIPT"') < source.index(
         'env HYDRA_REF="$HYDRA_REF" HYDRA_UPDATER_LAUNCHED=1',
     )
     assert "git check-ref-format --branch" in source
-    assert 'trap cleanup EXIT HUP INT TERM' in source
+    assert "trap cleanup EXIT HUP INT TERM" in source
 
 
 def test_updater_has_numbered_progress_and_clear_terminal_states():

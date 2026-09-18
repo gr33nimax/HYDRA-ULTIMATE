@@ -51,3 +51,7 @@ scratch/
 graphify-out/
 AGENTS.md
 docs/AGENT_PLAYBOOK.md
+
+# Local agent and spec artifacts
+.kiro/
+.pi/
