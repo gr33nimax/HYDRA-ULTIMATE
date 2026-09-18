@@ -113,11 +113,7 @@ class AwgClientLinksMixin:
             port=self._profile_port(state, profile_name),
             mtu=str(profile.get("mtu") or "").strip() or DEFAULT_MTU,
             obfuscation=self._obfuscation(state, profile_name),
-            generation={
-                str(key): value
-                for key, value in generation.items()
-                if value not in (None, "")
-            },
+            generation={str(key): value for key, value in generation.items() if value not in (None, "")},
             protocol_mode=mode,
         )
 
