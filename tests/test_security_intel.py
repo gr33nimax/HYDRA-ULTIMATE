@@ -17,18 +17,20 @@ class _Response:
         return None
 
     def read(self, _limit):
-        return json.dumps({
-            "success": True,
-            "country": "Germany",
-            "country_code": "DE",
-            "region": "Hesse",
-            "city": "Frankfurt am Main",
-            "capital": "Berlin",
-            "latitude": 50.1109,
-            "longitude": 8.6821,
-            "timezone": {"id": "Europe/Berlin"},
-            "connection": {"asn": 24940, "org": "Hetzner Online GmbH"},
-        }).encode()
+        return json.dumps(
+            {
+                "success": True,
+                "country": "Germany",
+                "country_code": "DE",
+                "region": "Hesse",
+                "city": "Frankfurt am Main",
+                "capital": "Berlin",
+                "latitude": 50.1109,
+                "longitude": 8.6821,
+                "timezone": {"id": "Europe/Berlin"},
+                "connection": {"asn": 24940, "org": "Hetzner Online GmbH"},
+            }
+        ).encode()
 
 
 def test_country_code_is_rendered_as_flag():
@@ -42,10 +44,16 @@ def test_lookup_is_cached_and_formats_owner(tmp_path):
         first = lookup_ip("8.8.8.8", now=100, cache_file=cache)
         second = lookup_ip("8.8.8.8", now=101, cache_file=cache)
     assert request.call_count == 1
-    assert first == second == {
-        "country_code": "DE", "flag": "🇩🇪",
-        "owner": "Hetzner Online GmbH", "asn": "AS24940",
-    }
+    assert (
+        first
+        == second
+        == {
+            "country_code": "DE",
+            "flag": "🇩🇪",
+            "owner": "Hetzner Online GmbH",
+            "asn": "AS24940",
+        }
+    )
 
 
 def test_lookup_failure_is_fail_open(tmp_path):
@@ -56,10 +64,13 @@ def test_lookup_failure_is_fail_open(tmp_path):
 
 
 def test_notification_fields_include_flag_and_network(tmp_path):
-    with patch("hydra.services.security_intel.CACHE_FILE", tmp_path / "cache.json"), \
-         patch("hydra.services.security_intel.urllib.request.urlopen", return_value=_Response()):
+    with (
+        patch("hydra.services.security_intel.CACHE_FILE", tmp_path / "cache.json"),
+        patch("hydra.services.security_intel.urllib.request.urlopen", return_value=_Response()),
+    ):
         assert notification_fields("8.8.8.8") == [
-            ("Geo", "🇩🇪"), ("Owner", "AS24940 Hetzner Online GmbH"),
+            ("Geo", "🇩🇪"),
+            ("Owner", "AS24940 Hetzner Online GmbH"),
         ]
 
 
@@ -70,16 +81,20 @@ def test_region_comes_from_the_same_single_request(tmp_path):
         again = lookup_region("8.8.8.8", now=101, cache_file=cache)
 
     assert request.call_count == 1, "регион не должен стоить второго запроса"
-    assert region == again == {
-        "country": "Germany",
-        "country_code": "DE",
-        "city": "Frankfurt am Main",
-        "region": "Hesse",
-        "capital": "Berlin",
-        "latitude": "50.110900",
-        "longitude": "8.682100",
-        "timezone": "Europe/Berlin",
-    }
+    assert (
+        region
+        == again
+        == {
+            "country": "Germany",
+            "country_code": "DE",
+            "city": "Frankfurt am Main",
+            "region": "Hesse",
+            "capital": "Berlin",
+            "latitude": "50.110900",
+            "longitude": "8.682100",
+            "timezone": "Europe/Berlin",
+        }
+    )
 
 
 def test_region_and_notification_share_one_lookup(tmp_path):

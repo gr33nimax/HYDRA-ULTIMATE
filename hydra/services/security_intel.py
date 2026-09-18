@@ -1,4 +1,5 @@
 """Fail-open, cached IP country and network ownership enrichment."""
+
 from __future__ import annotations
 
 import ipaddress

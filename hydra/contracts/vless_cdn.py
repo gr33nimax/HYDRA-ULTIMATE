@@ -55,6 +55,8 @@ CONFIG_DEFAULTS: tuple[tuple[str, JsonValue], ...] = (
     ("encryption_public_key", ""),
     ("region_country_code", ""),
     ("region_country_name", ""),
+    ("region_city", ""),
+    ("region_flag", ""),
     ("region_capital", ""),
     ("region_latitude", 0.0),
     ("region_longitude", 0.0),
