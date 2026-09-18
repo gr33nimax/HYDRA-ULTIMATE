@@ -1,4 +1,5 @@
 """TSK-005: клиентский профиль и share-данные на публичный CDN-домен."""
+
 from __future__ import annotations
 
 import json
@@ -61,8 +62,15 @@ def test_client_and_server_agree_on_every_shared_setting():
     client = xhttp_transport(DEFAULT_XHTTP_PATH, CDN, client=True)
 
     # Различаться обязаны только host (у клиента — публичное имя) и поля своей стороны.
-    differing = {"host", "uplink_http_method", "xmux", "no_sse_header", "sc_max_buffered_posts",
-                 "sc_min_posts_interval_ms", "server_max_header_bytes"}
+    differing = {
+        "host",
+        "uplink_http_method",
+        "xmux",
+        "no_sse_header",
+        "sc_max_buffered_posts",
+        "sc_min_posts_interval_ms",
+        "server_max_header_bytes",
+    }
     shared_server = {key: value for key, value in server.items() if key not in differing}
     shared_client = {key: value for key, value in client.items() if key not in differing}
 
