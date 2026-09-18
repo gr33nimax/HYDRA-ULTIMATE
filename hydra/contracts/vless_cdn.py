@@ -40,6 +40,7 @@ DECOY_ROUTE: dict[str, JsonValue] = {
     "decoy_root": DECOY_ROOT,
     "decoy_theme": DECOY_THEME,
     "path_config": "xhttp_path",
+    "assets_prefix": RESERVED_PATH_PREFIX,
     "origin_http2": True,
 }
 

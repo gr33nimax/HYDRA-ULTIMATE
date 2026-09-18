@@ -360,6 +360,9 @@ def _dynamic_backend(
         # Ключ появляется только там, где он заявлен: маршруты остальных протоколов
         # остаются ровно такими же, как раньше.
         backend["origin_http2"] = True
+    prefix = str(route.get("assets_prefix") or "").strip().rstrip("/")
+    if prefix:
+        backend["assets_prefix"] = prefix
     return backend
 
 

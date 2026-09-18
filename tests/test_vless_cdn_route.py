@@ -126,26 +126,58 @@ def test_l4_terminates_tls_and_offers_http2_to_the_cdn():
     assert forward["upstreams"] == [{"dial": [f"127.0.0.1:{DECOY_HTTP_PORT}"]}]
 
 
-def test_inner_server_accepts_the_decrypted_http2_stream_and_keeps_streaming():
+def test_inner_server_routes_the_tunnel_then_the_assets_then_the_site():
     server = _require(_inner_server(_document(), DECOY_HTTP_PORT), "внутренний сервер")
 
     assert server["protocols"] == ["h1", "h2c"]
     assert server["listener_wrappers"], "PROXY v2 wrapper must stay in place"
     assert server["automatic_https"] == {"disable": True, "disable_redirects": True}
 
-    path_route, fallback = server["routes"]
-    assert path_route["match"] == [
+    tunnel, assets, fallback = server["routes"]
+
+    assert tunnel["match"] == [
         {"path": [DEFAULT_XHTTP_PATH, f"{DEFAULT_XHTTP_PATH}/*"]},
-    ]
-    proxy = path_route["handle"][0]
+    ], "путь туннеля разбирается первым"
+    proxy = tunnel["handle"][0]
     assert proxy["handler"] == "reverse_proxy"
     assert proxy["flush_interval"] == -1, "поток не должен буферизоваться"
     assert proxy["upstreams"] == [{"dial": f"127.0.0.1:{CORE_PORT}"}]
     assert proxy["transport"]["versions"] == ["2"], "до ядра путь идёт по h2c"
     assert proxy["headers"]["request"]["set"]["Host"] == [ORIGIN]
+    assert proxy["headers"]["response"]["set"]["Cache-Control"] == [
+        "no-store, no-transform",
+    ], "туннель нельзя кешировать"
 
+    assert assets["match"] == [{"path": ["/assets/*"]}], "статика — своим маршрутом"
+    cache = assets["handle"][0]
+    assert cache["handler"] == "headers"
+    assert cache["response"]["set"]["Cache-Control"] == ["public, max-age=86400"]
+    assert assets["handle"][1]["handler"] == "file_server"
+
+    assert "match" not in fallback, "сайт обслуживает всё остальное и ничего не перехватывает"
     assert fallback["handle"][0]["handler"] == "file_server"
     assert fallback["handle"][0]["root"] == DECOY_ROOT
+
+
+def test_the_site_can_never_answer_on_the_tunnel_path():
+    """Сайт обязан оставаться последним и без своего пути, иначе он перехватит туннель."""
+    server = _require(_inner_server(_document(), DECOY_HTTP_PORT), "внутренний сервер")
+    tunnel, _assets, fallback = server["routes"]
+
+    assert tunnel["match"][0]["path"] == [
+        DEFAULT_XHTTP_PATH,
+        f"{DEFAULT_XHTTP_PATH}/*",
+    ]
+    assert "match" not in fallback, "у сайта нет собственного пути — он обслуживает остаток"
+
+
+def test_the_static_prefix_and_the_tunnel_path_do_not_overlap():
+    """Туннель внутри /assets отдавался бы как статика — это запрещено контрактом."""
+    prefix = str(VlessCdnPlugin.route_config()["assets_prefix"]).rstrip("/")
+    path = _backends()[PROTOCOL_NAME]["proxy_path"]
+
+    assert path != prefix
+    assert not path.startswith(f"{prefix}/"), "туннель не может жить внутри статики"
 
 
 def test_a_route_without_the_flag_keeps_behaving_as_before():

@@ -177,6 +177,44 @@ def _trusttunnel_server(
     }
 
 
+def _decoy_routes(
+    path: str,
+    assets_prefix: str,
+    proxy: dict[str, Any],
+    decoy_handler: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Таблица маршрутов: туннель, затем статика (если заявлена), затем сайт.
+
+    Порядок — часть контракта: сайт идёт последним и без своего пути, поэтому он не
+    может перехватить туннель, а статика не проваливается в сайт.
+    """
+    routes: list[dict[str, Any]] = [
+        {
+            "match": [{"path": [path, f"{path}/*"]}],
+            "handle": [proxy],
+        },
+    ]
+    if assets_prefix:
+        routes.append(
+            {
+                "match": [{"path": [f"{assets_prefix}/*"]}],
+                "handle": [
+                    {
+                        "handler": "headers",
+                        "response": {
+                            "set": {
+                                "Cache-Control": ["public, max-age=86400"],
+                            },
+                        },
+                    },
+                    decoy_handler.copy(),
+                ],
+            },
+        )
+    routes.append({"handle": [decoy_handler.copy()]})
+    return routes
+
+
 def _path_proxy_decoy_server(
     backend: Backend,
     settings: RenderSettings,
@@ -184,6 +222,9 @@ def _path_proxy_decoy_server(
     listener_wrappers: Callable[[], list[dict[str, Any]]],
 ) -> dict[str, Any]:
     path = str(backend["proxy_path"]).rstrip("/")
+    # Префикс статики объявляет сам протокол: если он его не заявил, таблица маршрутов
+    # остаётся прежней — два маршрута, как у остальных протоколов.
+    assets_prefix = str(backend.get("assets_prefix") or "").rstrip("/")
     exact_source = str(backend["name"]) in settings.relay_ports
     upstream_port = settings.relay_ports[str(backend["name"])] if exact_source else _as_int(backend["port"])
     transport: dict[str, Any] = {
@@ -214,6 +255,12 @@ def _path_proxy_decoy_server(
                     "Host": [str(backend["domain"])],
                 },
             },
+            # Туннель не должен кешироваться нигде по пути.
+            "response": {
+                "set": {
+                    "Cache-Control": ["no-store, no-transform"],
+                },
+            },
         },
         "handle_response": [
             {
@@ -231,13 +278,7 @@ def _path_proxy_decoy_server(
             "disable": True,
             "disable_redirects": True,
         },
-        "routes": [
-            {
-                "match": [{"path": [path, f"{path}/*"]}],
-                "handle": [proxy],
-            },
-            {"handle": [decoy_handler.copy()]},
-        ],
+        "routes": _decoy_routes(path, assets_prefix, proxy, decoy_handler),
         "errors": {
             "routes": [{"handle": [decoy_handler.copy()]}],
         },

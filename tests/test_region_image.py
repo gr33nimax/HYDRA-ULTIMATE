@@ -1,4 +1,5 @@
 """TSK-008: изображение региона — разбор ответа, обновление раз в 12 часов, запасной файл."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -86,7 +87,9 @@ def test_placeholder_is_local_and_never_a_remote_reference():
 
 
 def test_first_run_downloads_the_image_and_keeps_a_placeholder(tmp_path):
-    find, _ = _search(RegionImage(src="https://upload.wikimedia.org/thumb/region.jpg", attribution="A, CC0", source="File:R"))
+    find, _ = _search(
+        RegionImage(src="https://upload.wikimedia.org/thumb/region.jpg", attribution="A, CC0", source="File:R")
+    )
     fetch, _ = _download()
 
     image = refresh_region_image(tmp_path, query="Frankfurt Germany", now=100, search=find, download=fetch)
