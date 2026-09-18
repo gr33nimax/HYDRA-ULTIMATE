@@ -1,4 +1,5 @@
 """Меню протокола: установка, отказ при неполной установке, регистрация."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -84,7 +85,8 @@ def test_install_refuses_a_bad_answer_and_touches_nothing():
 def test_install_wires_the_certificate_then_the_timer_then_the_page(tmp_path):
     state = AppState()
     app = MagicMock()
-    app.admin.save_state.return_value = True
+    # Как в жизни: порт сохранения возвращает None, а не признак успеха.
+    app.admin.save_state.return_value = None
     order: list[str] = []
 
     def fake_install(target: AppState, *, cdn_domain: str, origin_host: str) -> InstallOutcome:
@@ -128,7 +130,7 @@ def test_install_wires_the_certificate_then_the_timer_then_the_page(tmp_path):
 def test_install_stops_when_the_timer_cannot_be_installed(tmp_path):
     state = AppState()
     app = MagicMock()
-    app.admin.save_state.return_value = True
+    app.admin.save_state.return_value = None
     messages: list[str] = []
 
     with (

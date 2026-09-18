@@ -99,8 +99,7 @@ class VlessCdnPlugin(BasePlugin):
             missing.append("core_port")
         if missing:
             raise ValueError(
-                "Протокол не установлен: сначала выполните установку "
-                f"(не хватает: {', '.join(missing)})",
+                f"Протокол не установлен: сначала выполните установку (не хватает: {', '.join(missing)})",
             )
 
     def configure(self, state: PluginStateAccess) -> ConfigFragment:

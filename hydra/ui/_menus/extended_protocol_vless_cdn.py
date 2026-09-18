@@ -1,7 +1,10 @@
 """Меню протокола «VLESS через CDN»: установка, профиль клиента, страница."""
+
 from __future__ import annotations
 
-from hydra.core.state_models import AppState
+from hydra.contracts.vless_cdn import as_int
+from hydra.core.state_models import AppState, User
+from hydra.plugins.base import BasePlugin
 from hydra.plugins.vless_cdn import client as cdn_client
 from hydra.plugins.vless_cdn.plugin import PROTOCOL_NAME
 from hydra.services.application import ApplicationService
@@ -16,7 +19,6 @@ from hydra.ui.tui import (
     BOLD,
     CYAN,
     NC,
-    PANEL_W,
     clear,
     confirm,
     error,
@@ -31,7 +33,7 @@ from hydra.ui._menus.extended_protocol_common import _application, _desired_stat
 from hydra.ui._menus.protocol_activation import run_lifecycle_action
 
 
-def _install(state: AppState, plugin: object, app: ApplicationService) -> None:
+def _install(state: AppState, plugin: BasePlugin, app: ApplicationService) -> None:
     """Спросить два имени, выпустить сертификат и поставить обновление страницы."""
     cdn_domain = prompt("CDN-домен (который вводит клиент):").strip()
     origin_host = prompt("Origin-имя (под которым CDN ходит на сервер):").strip()
@@ -43,8 +45,12 @@ def _install(state: AppState, plugin: object, app: ApplicationService) -> None:
         return
 
     info("Сохраняю состояние...")
-    if not app.admin.save_state(state):
-        error("Не удалось сохранить состояние")
+    try:
+        # Порт объявляет save_state как возвращающий None: проверять результат
+        # как флаг нельзя, ошибку видно только по исключению.
+        app.admin.save_state(state)
+    except Exception as exc:
+        error(f"Не удалось сохранить состояние: {exc}")
         prompt("Нажмите Enter")
         return
 
@@ -67,7 +73,7 @@ def _install(state: AppState, plugin: object, app: ApplicationService) -> None:
     prompt("Нажмите Enter")
 
 
-def _show_profile(state: AppState, plugin: object) -> None:
+def _show_profile(state: AppState, plugin: BasePlugin) -> None:
     """Показать клиенту, куда подключаться, вместе с честной оговоркой."""
     desired = _desired_state(state, PROTOCOL_NAME)
     try:
@@ -81,7 +87,7 @@ def _show_profile(state: AppState, plugin: object) -> None:
             f"Режим: {view['mode']}",
             f"Шифрование: {view['encryption_mode']}",
         ]
-        panel("Клиент", body, width=PANEL_W, wrap=True)
+        panel("Клиент", body, wrap=True)
         info(str(view["share_note"]))
         info("")
         info(cdn_client.profile(_first_user(state), desired.config))
@@ -101,7 +107,7 @@ def _refresh_now(state: AppState) -> None:
     prompt("Нажмите Enter")
 
 
-def _first_user(state: AppState):
+def _first_user(state: AppState) -> User:
     """Первый активный пользователь: профиль выдаётся конкретному человеку."""
     for user in state.users:
         if not user.blocked:
@@ -111,7 +117,7 @@ def _first_user(state: AppState):
 
 def _menu_vless_cdn(
     state: AppState,
-    plugin: object,
+    plugin: BasePlugin,
     app: ApplicationService | None = None,
 ) -> None:
     """Меню протокола: два имени, профиль клиента и страница-прикрытие."""
@@ -136,7 +142,7 @@ def _menu_vless_cdn(
             installed=bool(config.get("cert_file")),
             enabled=desired.enabled,
             running=bool(desired.enabled and config.get("cert_file")),
-            port=int(config.get("core_port", 0) or 0),
+            port=as_int(config.get("core_port")),
             details=details,
             display_name=plugin.meta.display_name,
         )

@@ -1,4 +1,5 @@
 """Declarative routing to optional specialised plugin controllers."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
