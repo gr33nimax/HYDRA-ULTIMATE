@@ -21,6 +21,28 @@ RESERVED_PATH_PREFIX = "/assets"
 
 _LABEL = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$")
 
+# Ключ и порт маршрута в SNI-документе. Ключ обязан совпадать с тем, который читает
+# планировщик; он продублирован здесь, потому что слой контрактов не может импортировать
+# core — это нарушило бы порядок слоёв, который проверяет архитектурный тест.
+DECOY_ROUTE_KEY = "_tls_http_decoy_route"
+DECOY_HTTP_PORT = 10806
+DECOY_ROOT = "/var/www/decoy-cdn"
+DECOY_THEME = "status"
+
+# Маршрут читает имена и порт из тех же полей состояния, что и остальной код, и объявляет
+# HTTP/2 на участке CDN → origin. Константа типизирована, чтобы её можно было положить
+# в состояние без приведения типов.
+DECOY_ROUTE: dict[str, JsonValue] = {
+    "kind": "http_path_proxy",
+    "internal_port_config": "core_port",
+    "domain_config": "origin_host",
+    "decoy_http_port": DECOY_HTTP_PORT,
+    "decoy_root": DECOY_ROOT,
+    "decoy_theme": DECOY_THEME,
+    "path_config": "xhttp_path",
+    "origin_http2": True,
+}
+
 # Значения immutable: они попадают в состояние как есть и не должны делиться
 # между экземплярами.
 CONFIG_DEFAULTS: tuple[tuple[str, JsonValue], ...] = (
@@ -41,6 +63,7 @@ CONFIG_DEFAULTS: tuple[tuple[str, JsonValue], ...] = (
     ("region_image_id", ""),
     ("image_source", ""),
     ("image_attribution", ""),
+    (DECOY_ROUTE_KEY, DECOY_ROUTE),
 )
 
 

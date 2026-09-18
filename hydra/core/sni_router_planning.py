@@ -297,15 +297,33 @@ def _dynamic_backend(
         or route.get("kind") != _DYNAMIC_ROUTE_KIND
     ):
         raise _route_error(name, f"kind must be {_DYNAMIC_ROUTE_KIND}")
-    domain = str(config.get("domain", "")).strip()
+    # Маршрут может назвать поле конфигурации, откуда берётся его имя, — тогда
+    # протоколу не нужно дублировать origin-имя в поле с чужим названием.
+    domain_key = route.get("domain_config") or "domain"
+    if not isinstance(domain_key, str) or not domain_key:
+        raise _route_error(name, "domain_config must name a config field")
+    domain = str(config.get(domain_key, "")).strip()
     if not domain:
-        raise _route_error(name, "domain is required")
-    internal_port = _route_port(
-        name,
-        route.get("internal_port"),
-        "internal_port",
-        occupied_ports,
-    )
+        raise _route_error(name, f"{domain_key} is required")
+    internal_key = route.get("internal_port_config")
+    if internal_key is None:
+        internal_port = _route_port(
+            name,
+            route.get("internal_port"),
+            "internal_port",
+            occupied_ports,
+        )
+    elif isinstance(internal_key, str) and internal_key:
+        # Порт ядра выбирается при установке и живёт в состоянии: маршрут читает
+        # его оттуда же, чтобы значение не разъехалось с inbound'ом.
+        internal_port = _route_port(
+            name,
+            config.get(internal_key),
+            internal_key,
+            occupied_ports,
+        )
+    else:
+        raise _route_error(name, "internal_port_config must name a config field")
     decoy_port = _route_port(
         name,
         route.get("decoy_http_port"),
@@ -339,7 +357,7 @@ def _dynamic_backend(
         or any(part in {"", ".", ".."} for part in path_parts)
     ):
         raise _route_error(name, f"{path_key} is not a valid HTTP path")
-    return {
+    backend = {
         "name": name,
         "domain": domain,
         "port": internal_port,
@@ -352,6 +370,11 @@ def _dynamic_backend(
         "decoy_theme": theme,
         "proxy_path": proxy_path,
     }
+    if route.get("origin_http2"):
+        # Ключ появляется только там, где он заявлен: маршруты остальных протоколов
+        # остаются ровно такими же, как раньше.
+        backend["origin_http2"] = True
+    return backend
 
 
 def has_source_preservation(config: object) -> bool:

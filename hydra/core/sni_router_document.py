@@ -114,7 +114,13 @@ def _tls_handler(backend: Backend) -> dict[str, Any]:
         raise ValueError(
             f"TLS material is missing for {backend['name']} domain {backend['domain']}",
         )
-    return {"handler": "tls"}
+    handler: dict[str, Any] = {"handler": "tls"}
+    if backend.get("origin_http2"):
+        # CDN может идти к origin по HTTP/2. Мультиплексор завершает TLS и отдаёт
+        # расшифрованный поток дальше; внутренний сервер принимает h2c, потому что
+        # h2c есть в его protocols, — иначе половина хопа говорила бы на другом языке.
+        handler["connection_policies"] = [{"alpn": ["h2", "http/1.1"]}]
+    return handler
 
 
 def _tls_route(

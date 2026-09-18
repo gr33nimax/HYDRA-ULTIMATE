@@ -1,4 +1,5 @@
 """TSK-002: установка протокола — два имени и сертификат origin."""
+
 from __future__ import annotations
 
 import socket

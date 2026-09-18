@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from hydra.contracts import JsonValue
 from hydra.plugins.base import (
     BasePlugin,
     ConfigFragment,
@@ -18,6 +19,7 @@ from hydra.plugins.base import (
 from hydra.plugins.context import PluginStateAccess
 from hydra.contracts.vless_cdn import (
     CONFIG_DEFAULTS,
+    DECOY_ROUTE,
     DEFAULT_XHTTP_PATH,
     PROTOCOL_NAME,
     as_int,
@@ -56,6 +58,15 @@ class VlessCdnPlugin(BasePlugin):
     def uninstall(self) -> bool:
         """Своих артефактов пока нет: маршрут и inbound снимаются вместе с ними."""
         return True
+
+    # ═════════════════════════════════════════════════════════════════════
+    #  Маршрут
+    # ═════════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def route_config() -> dict[str, JsonValue]:
+        """Свежая копия декларации маршрута: планировщик читает её из состояния."""
+        return dict(DECOY_ROUTE)
 
     # ═════════════════════════════════════════════════════════════════════
     #  configure

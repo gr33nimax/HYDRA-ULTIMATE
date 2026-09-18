@@ -224,7 +224,7 @@ def _path_proxy_decoy_server(
             },
         ],
     }
-    return {
+    server: dict[str, Any] = {
         "listen": [f"127.0.0.1:{_as_int(backend['decoy_port'])}"],
         "listener_wrappers": listener_wrappers(),
         "automatic_https": {
@@ -247,6 +247,11 @@ def _path_proxy_decoy_server(
             },
         },
     }
+    if backend.get("origin_http2"):
+        # Расшифрованный поток от CDN может быть HTTP/2; без h2c здесь внутренний
+        # сервер понял бы только HTTP/1.1, и туннель бы не поднялся.
+        server["protocols"] = ["h1", "h2c"]
+    return server
 
 
 def http_servers(
