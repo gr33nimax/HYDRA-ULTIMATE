@@ -194,6 +194,32 @@ def test_a_route_without_the_flag_keeps_behaving_as_before():
     assert "protocols" not in server
 
 
+def test_a_route_stored_by_an_older_version_is_refreshed_on_load(tmp_path, monkeypatch):
+    """Дефолты умеют только добавлять ключи: прежняя копия маршрута иначе остаётся навсегда."""
+    from hydra.core import state as state_module
+
+    monkeypatch.setattr(state_module, "STATE_FILE", tmp_path / "state.json")
+    state = _state()
+    stored = state.protocols[PROTOCOL_NAME].config[DECOY_ROUTE_KEY]
+    assert isinstance(stored, dict)
+    stale = dict(stored)
+    stale.pop("upstream_tls", None)
+    stale.pop("public_host_config", None)
+    state.protocols[PROTOCOL_NAME].config[DECOY_ROUTE_KEY] = cast(JsonValue, stale)
+    state_module.save_state(state)
+
+    loaded = state_module.load_state()
+    route = loaded.protocols[PROTOCOL_NAME].config[DECOY_ROUTE_KEY]
+    assert isinstance(route, dict)
+
+    assert route["upstream_tls"] is False, "ядро слушает без TLS — это должно доехать до планировщика"
+    assert route["public_host_config"] == "cdn_domain"
+
+    backend = _backends()[PROTOCOL_NAME]
+    assert backend["upstream_tls"] is False
+    assert backend["public_host"] == CDN
+
+
 def test_other_protocols_are_untouched_by_our_route():
     backends = _backends(with_vless=True)
     document = _document(with_vless=True)

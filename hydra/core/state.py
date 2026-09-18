@@ -15,7 +15,8 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, TypeVar, get_type_hints
+from typing import Any, Callable, TypeVar, cast, get_type_hints
+from hydra.contracts.vless_cdn import DECOY_ROUTE, DECOY_ROUTE_KEY, PROTOCOL_NAME
 from hydra.core.state_format import (
     STATE_FORMAT_VERSION,
     is_state_document,
@@ -117,8 +118,12 @@ def _state_lock():
 #  Загрузка / сохранение
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _to_dict(obj) -> dict:
-    """Рекурсивно преобразует dataclass в словарь."""
+def _to_dict(obj: Any) -> Any:
+    """Рекурсивно преобразует dataclass в словарь.
+
+    Функция полиморфна: на входе и на выходе бывает список, словарь, dataclass или
+    скалярное поле, поэтому тип здесь `Any`, а не `dict`.
+    """
     if isinstance(obj, list):
         return [_to_dict(item) for item in obj]
     if isinstance(obj, dict):
@@ -128,7 +133,7 @@ def _to_dict(obj) -> dict:
     return obj
 
 
-def _from_dict(cls, data: dict):
+def _from_dict(cls: Any, data: Any) -> Any:
     """Рекурсивно создаёт dataclass из словаря."""
     if cls is dict:
         return data
@@ -184,17 +189,40 @@ def _read_raw_state_unlocked() -> dict:
 
 def _validate_serialized_state(raw: object) -> None:
     if is_state_document(raw):
-        validate_state_document(raw)
-        _validate_raw_state(unpack_state_document(raw))
+        document = cast(dict, raw)
+        validate_state_document(document)
+        _validate_raw_state(unpack_state_document(document))
     else:
-        _validate_raw_state(raw)
-        _validate_supported_version(raw)
+        legacy = cast(dict, raw)
+        _validate_raw_state(legacy)
+        _validate_supported_version(legacy)
+
+
+def _refresh_protocol_routes(raw: dict) -> None:
+    """Привести сохранённый маршрут протокола к текущему контракту.
+
+    Дефолты заполняют только отсутствующие ключи, поэтому копия маршрута, записанная
+    при первой установке, иначе остаётся навсегда: новые признаки не доходят до
+    планировщика, и в Caddy остаётся прежний транспорт. Маршрут принадлежит
+    контракту, а не состоянию.
+    """
+    protocols = raw.get("protocols")
+    if not isinstance(protocols, dict):
+        return
+    protocol = protocols.get(PROTOCOL_NAME)
+    if not isinstance(protocol, dict):
+        return
+    config = protocol.get("config")
+    if not isinstance(config, dict) or DECOY_ROUTE_KEY not in config:
+        return
+    config[DECOY_ROUTE_KEY] = copy.deepcopy(DECOY_ROUTE)
 
 
 def _decode_serialized_state(raw: dict) -> dict:
     document = normalize_state_document(raw)
     decoded = unpack_state_document(document)
     _validate_raw_state(decoded)
+    _refresh_protocol_routes(decoded)
     return decoded
 
 
