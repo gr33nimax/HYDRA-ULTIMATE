@@ -4,6 +4,7 @@
 флаг в меню (`security_intel.lookup_region`), и сохраняется: страница не должна ходить в
 чужой API на каждый показ.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -20,9 +21,9 @@ from hydra.core.state_models import AppState, PluginState
 from hydra.core.vless_cdn_page import (
     ImageView,
     SiteData,
-    WeatherView,
     render_page,
 )
+from hydra.core.weather import WeatherView, weather_view
 from hydra.services.security_intel import lookup_region
 
 TIMER_NAME = "hydra-vless-cdn-site"
@@ -68,10 +69,7 @@ def extra_zones(value: object) -> tuple[tuple[str, str], ...]:
 
 
 def _region_of(protocol: PluginState) -> dict[str, str]:
-    return {
-        key: str(protocol.config.get(stored, "") or "").strip()
-        for key, stored in REGION_KEYS.items()
-    }
+    return {key: str(protocol.config.get(stored, "") or "").strip() for key, stored in REGION_KEYS.items()}
 
 
 def ensure_region(
@@ -157,7 +155,17 @@ def refresh_site(
         raise LookupError("протокол VLESS через CDN не настроен")
 
     ensure_region(state, protocol=current, lookup=lookup)
-    data = build_site_data(state, protocol=current, now=now, weather=weather, image=image)
+    current_weather = weather if weather is not None else weather_view(
+        current.config.get("region_latitude", ""),
+        current.config.get("region_longitude", ""),
+    )
+    data = build_site_data(
+        state,
+        protocol=current,
+        now=now,
+        weather=current_weather,
+        image=image,
+    )
 
     target_dir = Path(str(directory or DECOY_ROOT))
     target_dir.mkdir(parents=True, exist_ok=True)

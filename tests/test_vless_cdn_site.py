@@ -1,8 +1,11 @@
 """TSK-006: страница-прикрытие — генератор, данные региона и таймер."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+
+import pytest
 
 from hydra.contracts import JsonValue
 from hydra.contracts.vless_cdn import PROTOCOL_NAME
@@ -68,6 +71,8 @@ def _state(**config) -> AppState:
         "region_city": CITY,
         "region_capital": CAPITAL,
         "region_timezone": "Europe/Berlin",
+        "region_latitude": "50.110900",
+        "region_longitude": "8.682100",
         "region_extra_timezones": "London=Europe/London,Tokyo=Asia/Tokyo",
     }
     values.update(config)
@@ -190,10 +195,44 @@ def test_page_is_written_to_the_directory_the_backend_serves(tmp_path):
 
 
 def test_refresh_refuses_an_unconfigured_protocol(tmp_path):
-    import pytest
-
     with pytest.raises(LookupError):
         site.refresh_site(AppState(), directory=tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def _no_provider_calls(monkeypatch):
+    """Ни один тест этой страницы не должен случайно пойти в сеть за погодой."""
+    monkeypatch.setattr(
+        site,
+        "weather_view",
+        lambda *args, **kwargs: WeatherView(available=False),
+    )
+
+
+def test_page_takes_weather_from_the_region_coordinates(tmp_path, monkeypatch):
+    seen: dict[str, str] = {}
+
+    def fake_weather(latitude: object, longitude: object, **kwargs) -> WeatherView:
+        seen.update({"lat": str(latitude), "lon": str(longitude)})
+        return WeatherView(temperature="+12 °C", condition="Cloudy", wind="4.2 m/s")
+
+    monkeypatch.setattr(site, "weather_view", fake_weather)
+    target = site.refresh_site(_state(), directory=tmp_path, now=STAMP)
+
+    assert seen == {"lat": "50.110900", "lon": "8.682100"}
+    page = Path(target).read_text(encoding="utf-8")
+    assert "+12 °C" in page
+    assert "Cloudy" in page
+    assert "4.2 m/s" in page
+
+
+def test_page_survives_a_silent_weather_provider(tmp_path):
+    target = site.refresh_site(_state(), directory=tmp_path, now=STAMP)
+
+    page = Path(target).read_text(encoding="utf-8")
+    assert "temporarily unavailable" in page
+    assert CITY in page
+    assert 'data-zone="Europe/Berlin"' in page
 
 
 def test_timer_units_follow_the_house_pattern(tmp_path):

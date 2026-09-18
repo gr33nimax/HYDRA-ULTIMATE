@@ -5,24 +5,15 @@
 «замерзает» между обновлениями и не требует внешнего API. Внешних хостов на странице
 нет вообще — стили и скрипт внутри, изображение отдаётся локально.
 """
+
 from __future__ import annotations
 
 import html
 from dataclasses import dataclass, field
 
+from hydra.core.weather import WeatherView
+
 DEFAULT_TITLE = "Regional Network Status"
-
-
-@dataclass(frozen=True)
-class WeatherView:
-    """Погода в городе сервера; поля могут быть пустыми, если провайдер молчит."""
-
-    temperature: str = ""
-    condition: str = ""
-    wind: str = ""
-    humidity: str = ""
-    updated: str = ""
-    available: bool = True
 
 
 @dataclass(frozen=True)
@@ -196,20 +187,19 @@ def _image_block(image: ImageView) -> str:
 def _facts(data: SiteData) -> str:
     rows = []
     if data.capital:
-        rows.append(f'<div class="fact"><span class="key">Capital</span><span class="val">{_escape(data.capital)}</span></div>')
+        rows.append(
+            f'<div class="fact"><span class="key">Capital</span><span class="val">{_escape(data.capital)}</span></div>'
+        )
     if data.updated:
-        rows.append(f'<div class="fact"><span class="key">Updated</span><span class="val">{_escape(data.updated)}</span></div>')
+        rows.append(
+            f'<div class="fact"><span class="key">Updated</span><span class="val">{_escape(data.updated)}</span></div>'
+        )
     return '<section class="facts">' + "".join(rows) + "</section>"
 
 
 def _header(data: SiteData) -> str:
     flag = f'<span class="flag">{_escape(data.flag)}</span>' if data.flag else ""
-    return (
-        "<header>"
-        f"{flag}<h1>{_escape(data.place)}</h1>"
-        f'<span class="sub">{_escape(data.country)}</span>'
-        "</header>"
-    )
+    return f'<header>{flag}<h1>{_escape(data.place)}</h1><span class="sub">{_escape(data.country)}</span></header>'
 
 
 def render_page(data: SiteData, *, title: str = DEFAULT_TITLE) -> str:
