@@ -6,6 +6,7 @@ import urllib.parse
 
 import pytest
 
+from hydra.contracts.vless_cdn import CLIENT_LABEL
 from hydra.core.configuration_names import (
     apply_json_configuration_name,
     configuration_name_key,
@@ -211,3 +212,32 @@ def test_native_links_keep_variant_names_distinct_and_rename_awg() -> None:
         urllib.parse.unquote(urllib.parse.urlsplit(tag_client_link(link, user, state)).fragment)
         for link in links
     ] == ["Домашний Naive", "Домашний Naive QUIC", "Домашний AWG"]
+
+
+def test_a_cdn_vless_link_is_not_named_like_an_ordinary_xhttp_one() -> None:
+    """У обычного VLESS и у VLESS за CDN тип `xhttp` одинаков: имена обязаны различаться."""
+    state, user = _named_state()
+    extra = urllib.parse.quote(json.dumps({"uplinkHTTPMethod": "GET"}))
+    plain = "vless://u@example.com:443?type=xhttp&path=%2Fapi#old"
+    cdn = f"vless://u@cdn.example.com:443?type=xhttp&path=%2Fapi&extra={extra}#old"
+
+    plain_name = urllib.parse.unquote(urllib.parse.urlsplit(tag_client_link(plain, user, state)).fragment)
+    cdn_name = urllib.parse.unquote(urllib.parse.urlsplit(tag_client_link(cdn, user, state)).fragment)
+
+    assert plain_name == f"{user.email} VLESS XHTTP"
+    assert cdn_name == f"{user.email} {CLIENT_LABEL}"
+    assert plain_name != cdn_name
+
+
+def test_a_family_override_still_keeps_the_cdn_profile_apart() -> None:
+    """Общее имя для семейства VLESS не должно схлопывать оба профиля в одно."""
+    state, user = _named_state()
+    state.configuration_names.update({"vless": "Мой VLESS"})
+    extra = urllib.parse.quote(json.dumps({"uplinkHTTPMethod": "GET"}))
+    plain = "vless://u@example.com:443?type=xhttp#old"
+    cdn = f"vless://u@cdn.example.com:443?type=xhttp&extra={extra}#old"
+
+    assert urllib.parse.unquote(urllib.parse.urlsplit(tag_client_link(plain, user, state)).fragment) == "Мой VLESS"
+    assert (
+        urllib.parse.unquote(urllib.parse.urlsplit(tag_client_link(cdn, user, state)).fragment) == "Мой VLESS CDN"
+    )

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+import json
 import urllib.parse
 
+from hydra.contracts.vless_cdn import CLIENT_LABEL
 from hydra.core.configuration_names import resolve_configuration_name
 from hydra.core.state_models import AppState, User
 from hydra.services.subscriptions.access import SubscriptionPluginAccess
@@ -61,6 +63,24 @@ def _naive_uot_enabled(state: AppState) -> bool:
     return bool(protocol.config.get("uot", True))
 
 
+def _vless_uplink_over_get(query: dict[str, list[str]]) -> bool:
+    """VLESS за внешним CDN узнаётся по uplink через GET в блоке `extra`.
+
+    Тип `xhttp` стоит и у обычного профиля, поэтому по одному ему два VLESS не
+    различить — и оба получали одно имя, то есть в клиенте появлялся клон.
+    Поле `uplinkHTTPMethod` не выставляет больше никто: это признак протокола, а не
+    договорённость о подписи.
+    """
+    raw = query.get("extra", [""])[0]
+    if not raw:
+        return False
+    try:
+        extra = json.loads(raw)
+    except ValueError:
+        return False
+    return isinstance(extra, dict) and bool(extra.get("uplinkHTTPMethod"))
+
+
 def _protocol_suffix(link: str) -> str:
     parsed = urllib.parse.urlparse(link)
     scheme = parsed.scheme.lower()
@@ -79,6 +99,8 @@ def _protocol_suffix(link: str) -> str:
         return "Hysteria2"
     if scheme == "vless":
         query = urllib.parse.parse_qs(parsed.query)
+        if _vless_uplink_over_get(query):
+            return CLIENT_LABEL
         if query.get("type", [""])[0] == "xhttp":
             return "VLESS XHTTP"
         return "VLESS"
@@ -99,6 +121,10 @@ def _configuration_name_key(link: str) -> str:
     query = urllib.parse.parse_qs(parsed.query)
     if scheme == "trojan" and "shadow-tls" in query.get("plugin", []):
         return "shadowtls"
+    if scheme == "vless" and _vless_uplink_over_get(query):
+        # Свой ключ: общий с обычным VLESS ключ переопределение имени накрыло бы оба
+        # профиля разом, и они снова стали бы неразличимы.
+        return "vless:cdn"
     return {
         "naive": "naive:https",
         "naive+https": "naive:https",
@@ -138,6 +164,7 @@ def tag_client_link(link: str, user: User, state: AppState) -> str:
                 "naive:quic": " QUIC",
                 "amneziawg:desktop": " Desktop",
                 "amneziawg:mobile": " Mobile",
+                "vless:cdn": " CDN",
             }.get(key, ""),
         )
         return urllib.parse.urlunparse(
