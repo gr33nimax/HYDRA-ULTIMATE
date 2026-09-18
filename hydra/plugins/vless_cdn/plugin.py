@@ -5,6 +5,7 @@
 различаются путём. Поэтому протокол живёт отдельным плагином, а не режимом внутри
 существующего VLESS+XHTTP.
 """
+
 from __future__ import annotations
 
 from hydra.plugins.base import (
@@ -15,24 +16,14 @@ from hydra.plugins.base import (
     PluginStatus,
 )
 from hydra.plugins.context import PluginStateAccess
-from hydra.plugins.vless_cdn.config import (
+from hydra.contracts.vless_cdn import (
     CONFIG_DEFAULTS,
     DEFAULT_XHTTP_PATH,
+    PROTOCOL_NAME,
+    as_int,
     normalize_hostname,
     normalize_path,
 )
-
-PROTOCOL_NAME = "vless_cdn"
-
-
-def _as_int(value: object) -> int:
-    """Coerce a persisted value to an int without trusting its type."""
-    if isinstance(value, bool) or not isinstance(value, (int, str)):
-        return 0
-    try:
-        return int(value)
-    except ValueError:
-        return 0
 
 
 class VlessCdnPlugin(BasePlugin):
@@ -111,7 +102,7 @@ class VlessCdnPlugin(BasePlugin):
             "cdn_domain": str(config.get("cdn_domain", "")),
             "origin_host": str(config.get("origin_host", "")),
             "xhttp_path": str(config.get("xhttp_path", DEFAULT_XHTTP_PATH)),
-            "core_port": _as_int(config.get("core_port", 0)),
+            "core_port": as_int(config.get("core_port", 0)),
             "ready": self._ready(config),
         }
 
@@ -136,6 +127,7 @@ class VlessCdnPlugin(BasePlugin):
     @staticmethod
     def _ready(config: dict) -> bool:
         return bool(config.get("cdn_domain") and config.get("origin_host"))
+
     def _store(self, state: PluginStateAccess, key: str, value: str, *, field: str) -> bool:
         plugin_state = state.protocols.get(PROTOCOL_NAME)
         if plugin_state is None:

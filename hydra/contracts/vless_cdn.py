@@ -1,15 +1,20 @@
-"""Значения по умолчанию и проверки для протокола VLESS через внешний CDN.
+"""Контракт протокола «VLESS через внешний CDN»: имена, путь, значения по умолчанию.
 
 Путь, имена и порт попадают сразу в три места — web-маршрут, inbound ядра и
 клиентский профиль, — поэтому они проверяются здесь один раз и больше нигде не
 собираются по частям.
+
+Модуль намеренно лежит в слое контрактов: его читают и плагин, и сервис установки,
+а импорт конкретного плагина сервисом (или наоборот) архитектурный тест запрещает.
 """
+
 from __future__ import annotations
 
 import re
 
 from hydra.contracts import JsonValue
 
+PROTOCOL_NAME = "vless_cdn"
 DEFAULT_XHTTP_PATH = "/api/media/session"
 MIN_PATH_SEGMENTS = 3
 RESERVED_PATH_PREFIX = "/assets"
@@ -37,6 +42,16 @@ CONFIG_DEFAULTS: tuple[tuple[str, JsonValue], ...] = (
     ("image_source", ""),
     ("image_attribution", ""),
 )
+
+
+def as_int(value: object) -> int:
+    """Привести сохранённое значение к int, не доверяя его типу."""
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return 0
+    try:
+        return int(value)
+    except ValueError:
+        return 0
 
 
 def normalize_path(value: object) -> str:

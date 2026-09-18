@@ -1,4 +1,5 @@
 """TSK-001: каркас протокола VLESS через внешний CDN."""
+
 from unittest.mock import patch
 
 import pytest
@@ -6,7 +7,7 @@ import pytest
 from hydra.core.state import AppState
 from hydra.core.state_models import PluginState
 from hydra.plugins.defaults import default_plugins
-from hydra.plugins.vless_cdn.config import (
+from hydra.contracts.vless_cdn import (
     DEFAULT_XHTTP_PATH,
     MIN_PATH_SEGMENTS,
     normalize_hostname,
@@ -54,6 +55,7 @@ def test_defaults_are_seeded_by_the_framework_path():
     seeded["region_country_code"] = "FI"
     fresh = normalize_protocol_config({}, VlessCdnPlugin.meta.config_defaults)
     assert fresh["region_country_code"] == ""
+
 
 def test_configure_contributes_nothing_before_the_route_exists():
     fragment = VlessCdnPlugin().configure(_state())

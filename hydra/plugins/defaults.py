@@ -1,4 +1,5 @@
 """Built-in plugin composition, kept separate from the neutral catalog."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
@@ -60,14 +61,9 @@ def default_plugins(
 ) -> list[BasePlugin]:
     """Compose built-ins while allowing an outer composition root to extend."""
     plugins = [
-        CallsPlugin(call_config_source) if factory is CallsPlugin else factory()
-        for factory in BUILTIN_PLUGIN_FACTORIES
+        CallsPlugin(call_config_source) if factory is CallsPlugin else factory() for factory in BUILTIN_PLUGIN_FACTORIES
     ]
-    honeypot = next(
-        plugin
-        for plugin in plugins
-        if isinstance(plugin, HoneypotPlugin)
-    )
+    honeypot = next(plugin for plugin in plugins if isinstance(plugin, HoneypotPlugin))
     plugins.append(
         AntiDPIPlugin(
             notifier=notifier,
