@@ -266,7 +266,7 @@ def test_a_family_override_still_keeps_the_cdn_profile_apart() -> None:
 
 def test_an_exact_cdn_override_does_not_rename_ordinary_vless() -> None:
     state, user = _named_state()
-    state.configuration_names.update({"vless:cdn": "Мой CDN"})
+    state.configuration_names.update({"vless_cdn": "Мой CDN"})
     extra = urllib.parse.quote(json.dumps({"uplinkHTTPMethod": "GET"}))
     plain = "vless://u@example.com:443?type=xhttp#old"
     cdn = f"vless://u@cdn.example.com:443?type=xhttp&extra={extra}#old"
@@ -275,3 +275,42 @@ def test_an_exact_cdn_override_does_not_rename_ordinary_vless() -> None:
         f"{user.email} VLESS XHTTP"
     )
     assert urllib.parse.unquote(urllib.parse.urlsplit(tag_client_link(cdn, user, state)).fragment) == "Мой CDN"
+
+
+def test_the_cdn_override_uses_the_plugin_key_every_client_reads() -> None:
+    """One rename must reach every format, not only the HydraBox profile.
+
+    The UI persists the rename under the canonical plugin key ``vless_cdn``
+    (``configuration_name_key()``) and HydraBox reads that same key, but the URI
+    pipeline used to look up ``vless:cdn``.  Nothing writes that key, so Throne
+    and NekoBox fell back to the built-in default while HydraBox honoured the
+    rename.
+    """
+    state, user = _named_state()
+    state.configuration_names.update({"vless_cdn": "Обход БС"})
+    extra = urllib.parse.quote(json.dumps({"uplinkHTTPMethod": "GET"}))
+    cdn = f"vless://u@cdn.example.com:443?type=xhttp&extra={extra}#old"
+
+    # The key the UI writes for this protocol must be the key the URI reads.
+    assert configuration_name_key("vless_cdn", {}) == "vless_cdn"
+    assert urllib.parse.unquote(urllib.parse.urlsplit(tag_client_link(cdn, user, state)).fragment) == "Обход БС"
+
+
+def test_a_user_cdn_override_beats_the_global_one() -> None:
+    state, user = _named_state()
+    state.configuration_names.update({"vless_cdn": "Обход БС"})
+    user.configuration_name_overrides.update({"vless_cdn": "Личный CDN"})
+    extra = urllib.parse.quote(json.dumps({"uplinkHTTPMethod": "GET"}))
+    cdn = f"vless://u@cdn.example.com:443?type=xhttp&extra={extra}#old"
+
+    assert urllib.parse.unquote(urllib.parse.urlsplit(tag_client_link(cdn, user, state)).fragment) == "Личный CDN"
+
+
+def test_without_an_override_the_cdn_default_is_unchanged() -> None:
+    state, user = _named_state()
+    extra = urllib.parse.quote(json.dumps({"uplinkHTTPMethod": "GET"}))
+    cdn = f"vless://u@cdn.example.com:443?type=xhttp&extra={extra}#old"
+
+    assert urllib.parse.unquote(urllib.parse.urlsplit(tag_client_link(cdn, user, state)).fragment) == (
+        f"{user.email} {CLIENT_LABEL}"
+    )

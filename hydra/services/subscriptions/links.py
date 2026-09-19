@@ -122,9 +122,11 @@ def _configuration_name_key(link: str) -> str:
     if scheme == "trojan" and "shadow-tls" in query.get("plugin", []):
         return "shadowtls"
     if scheme == "vless" and _vless_uplink_over_get(query):
-        # Свой ключ: общий с обычным VLESS ключ переопределение имени накрыло бы оба
-        # профиля разом, и они снова стали бы неразличимы.
-        return "vless:cdn"
+        # Канонический ключ протокола — имя плагина `vless_cdn`: под ним переименование
+        # сохраняет UI (`configuration_name_key`) и под ним же его читает HydraBox.
+        # Отдельный ключ `vless:cdn` не совпадал с этим именем, поэтому Throne и NekoBox
+        # не видели override и падали в встроенный default.
+        return "vless_cdn"
     return {
         "naive": "naive:https",
         "naive+https": "naive:https",
@@ -154,7 +156,7 @@ def tag_client_link(link: str, user: User, state: AppState) -> str:
         parsed = urllib.parse.urlparse(link)
         if parsed.scheme.lower() in {"tt", "trusttunnel"}:
             return link
-        base_key = "" if key == "vless:cdn" else key.partition(":")[0]
+        base_key = key.partition(":")[0] if ":" in key else ""
         label = resolve_configuration_name(
             key=key,
             default=f"{user.email} {suffix}",

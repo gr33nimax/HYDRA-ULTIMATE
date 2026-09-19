@@ -1,5 +1,12 @@
 # Changelog
 
+- A renamed VLESS CDN profile now reaches every client under one key.  The rename was persisted by
+  the UI and read by HydraBox under the canonical plugin key `vless_cdn`, while the URI pipeline
+  looked up `vless:cdn` — a key nothing ever wrote, so Throne and NekoBox fell back to the built-in
+  `<email> VLESS Яндекс CDN` while HydraBox showed the operator's name.  Both places now use
+  `vless_cdn`, the family override of ordinary VLESS no longer leaks into the CDN profile, and the
+  built-in defaults of both formats are unchanged.
+
 - AntiScan no longer bans on a Snell rejection.  The record it matched —
   `open record header: cipher: message authentication failed` — proves that a frame did not
   decrypt, which is byte-identical for a hostile probe and for a legitimate client whose PSK is
