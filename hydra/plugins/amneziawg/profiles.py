@@ -383,6 +383,7 @@ class AwgProfileMixin:
 
     def on_user_add(self, user: User, state: PluginStateAccess) -> None:
         self._provision_user_profiles(user, state)
+        self._provision_missing_octets(state)
 
     def on_user_remove(self, user: User, state: PluginStateAccess) -> None:
         pass

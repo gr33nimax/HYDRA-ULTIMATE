@@ -22,7 +22,10 @@ from hydra.ui.tui import (
 )
 
 from hydra.ui._menus.extended_protocol_common import _application, _desired_state
-from hydra.ui._menus.protocol_activation import run_lifecycle_action
+
+
+def _set_enabled(state: AppState, desired: object, app: ApplicationService) -> bool:
+    return app.disable_vless_cdn(state) if getattr(desired, "enabled", False) else app.enable_vless_cdn(state)
 
 
 def _install(state: AppState, plugin: BasePlugin, app: ApplicationService) -> None:
@@ -110,17 +113,11 @@ def _menu_vless_cdn(
         if choice == "1" and not config.get("cert_file"):
             _install(state, plugin, app)
         elif choice == "1":
-            run_lifecycle_action(
-                state,
-                plugin,
-                desired,
-                app,
-                ask=prompt,
-                report_error=error,
-                report_info=info,
-                report_success=success,
-                pause=prompt,
-            )
+            if _set_enabled(state, desired, app):
+                success("Отключено" if desired.enabled else "Активировано")
+            else:
+                error("Не удалось изменить состояние протокола")
+            prompt("Нажмите Enter")
         elif choice == "8":
             if confirm("Переустановить протокол с новыми доменами?", default=False):
                 _install(state, plugin, app)

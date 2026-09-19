@@ -11,7 +11,7 @@ import socket
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from cryptography import x509
 
@@ -27,6 +27,7 @@ from hydra.contracts.vless_cdn import (
     normalize_path,
 )
 from hydra.services.certificates import CertificateHost, CertificateProvisioner
+from hydra.services.vless_cdn_site import install_site_timer, refresh_site, remove_site_timer
 
 PortAllocator = Callable[[], int]
 
@@ -39,6 +40,69 @@ class CertificateIssuer(Protocol):
     """
 
     def ensure(self, domain: str, config: dict) -> tuple[str, str]: ...
+
+
+@dataclass(frozen=True)
+class VlessCdnLifecycleOperations:
+    """Keep the CDN timer coupled to the generic protocol lifecycle."""
+
+    operations: Any
+
+    def install_plugin(self, state: AppState, name: str) -> bool:
+        return bool(self.operations.install_plugin(state, name))
+
+    def uninstall_plugin(self, state: AppState, name: str) -> bool:
+        if not remove_site_timer():
+            return False
+        if self.operations.uninstall_plugin(state, name):
+            return True
+        install_site_timer()
+        return False
+
+    def reinstall_plugin(self, state: AppState, name: str) -> bool:
+        if not remove_site_timer():
+            return False
+        if self.operations.reinstall_plugin(state, name) and self._start_site(state):
+            return True
+        install_site_timer()
+        return False
+
+    def activate_plugin(self, state: AppState, name: str, *, domain: str | None = None) -> bool:
+        if not self.operations.activate_plugin(state, name, domain=domain):
+            return False
+        if self._start_site(state):
+            return True
+        self.operations.disable(state, name)
+        remove_site_timer()
+        return False
+
+    def enable(self, state: AppState, name: str) -> bool:
+        if not self.operations.enable(state, name):
+            return False
+        if self._start_site(state):
+            return True
+        self.operations.disable(state, name)
+        remove_site_timer()
+        return False
+
+    def disable(self, state: AppState, name: str) -> bool:
+        if not remove_site_timer():
+            return False
+        if self.operations.disable(state, name):
+            return True
+        install_site_timer()
+        return False
+
+    @staticmethod
+    def _start_site(state: AppState) -> bool:
+        if not install_site_timer():
+            return False
+        try:
+            refresh_site(state)
+        except Exception:
+            remove_site_timer()
+            return False
+        return True
 
 
 def host_provisioner() -> CertificateProvisioner:
@@ -177,6 +241,7 @@ def install_protocol(
 
 __all__ = [
     "CertificateIssuer",
+    "VlessCdnLifecycleOperations",
     "InstallOutcome",
     "certificate_not_after",
     "host_provisioner",

@@ -410,6 +410,27 @@ def test_2x_paddings_are_untouched_by_the_3x_minimum():
         assert ok, (mode, reason)
 
 
+def test_on_user_add_assigns_an_address_and_projects_the_new_peer():
+    plugin = AmneziaWGPlugin()
+    existing = _make_user("existing@example.com", uuid="existing")
+    _set_keys(existing)
+    state = AppState(
+        protocols={"amneziawg": PluginState(enabled=True, config={})},
+        users=[existing],
+    )
+    plugin.on_enable(state)
+    new_user = _make_user("new@example.com", uuid="new")
+    state.users.append(new_user)
+
+    plugin.on_user_add(new_user, state)
+
+    assert new_user.credentials["amneziawg"]["address_octet"]
+    assert plugin.generate_client_config(new_user, state)
+    peers = plugin.server_endpoints(state)[0]["peers"]
+    assert any(peer["public_key"] == new_user.credentials["amneziawg"]["public_key"] for peer in peers)
+    assert existing.credentials["amneziawg"]["address_octet"] == "3"
+
+
 def test_on_user_add_provisions_active_profiles_only_in_lifecycle():
     p = AmneziaWGPlugin()
     user = _make_user("new@example.com")

@@ -164,6 +164,43 @@ class ApplicationService:
     def reconcile_background_services(self, state: AppState) -> None:
         self.reconcile_runtime(state)
 
+    def enable_vless_cdn(self, state: AppState) -> bool:
+        """Enable CDN runtime and its page timer as one application operation."""
+        snapshot = copy.deepcopy(state)
+        if not self.protocols.enable(state, "vless_cdn"):
+            return False
+        try:
+            if not install_site_timer():
+                raise RuntimeError("site timer installation failed")
+            refresh_site(state)
+        except Exception:
+            remove_site_timer()
+            restore_state_in_place(state, snapshot)
+            self.admin.save_state(state)
+            self.apply(state)
+            return False
+        return True
+
+    def disable_vless_cdn(self, state: AppState) -> bool:
+        """Stop CDN page refresh before disabling its runtime."""
+        snapshot = copy.deepcopy(state)
+        if not remove_site_timer():
+            return False
+        try:
+            if self.protocols.disable(state, "vless_cdn"):
+                return True
+        except Exception:
+            restore_state_in_place(state, snapshot)
+            self.admin.save_state(state)
+            self.apply(state)
+            install_site_timer()
+            return False
+        restore_state_in_place(state, snapshot)
+        self.admin.save_state(state)
+        self.apply(state)
+        install_site_timer()
+        return False
+
     def provision_vless_cdn(
         self,
         state: AppState,

@@ -1,8 +1,9 @@
 """Application service boundary for protocol and plugin management."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 from hydra.core.configuration_names import (
     apply_json_configuration_name,
@@ -64,11 +65,7 @@ def _manual_client_artifact(
     if not isinstance(raw_links, (list, tuple)):
         return None
     links = tuple(
-        dict.fromkeys(
-            link.strip()
-            for link in raw_links
-            if isinstance(link, str) and link.strip()
-        ),
+        dict.fromkeys(link.strip() for link in raw_links if isinstance(link, str) and link.strip()),
     )
     config = str(value.get("config", "") or "")
     if not config and not links:
@@ -91,6 +88,10 @@ class ProtocolService:
     catalog: ProtocolCatalog
     invoker: PluginInvoker = field(default_factory=PluginInvoker)
     state_reader: Callable[[], AppState] | None = None
+    lifecycle_overrides: Mapping[str, ProtocolOperations] = field(default_factory=dict)
+
+    def _lifecycle_operations(self, name: str) -> ProtocolOperations:
+        return self.lifecycle_overrides.get(name, self.operations)
 
     def list(self, category: PluginCategory | None = None) -> list[BasePlugin]:
         if category == PluginCategory.TRANSPORT:
@@ -208,12 +209,16 @@ class ProtocolService:
             state,
             **parameters,
         )
-        return apply_json_configuration_name(
-            payload,
-            key=configuration_name_key(plugin.meta.name, parameters),
-            global_names=state.configuration_names,
-            user_names=user.configuration_name_overrides,
-        ) if plugin.meta.name != "trusttunnel" else payload
+        return (
+            apply_json_configuration_name(
+                payload,
+                key=configuration_name_key(plugin.meta.name, parameters),
+                global_names=state.configuration_names,
+                user_names=user.configuration_name_overrides,
+            )
+            if plugin.meta.name != "trusttunnel"
+            else payload
+        )
 
     def client_link(
         self,
@@ -273,8 +278,7 @@ class ProtocolService:
         return [
             plugin
             for plugin in self.list(category)
-            if state.protocols.get(plugin.meta.name)
-            and state.protocols[plugin.meta.name].enabled
+            if state.protocols.get(plugin.meta.name) and state.protocols[plugin.meta.name].enabled
         ]
 
     def enabled_names(
@@ -294,10 +298,7 @@ class ProtocolService:
         return {
             plugin.meta.name
             for plugin in self.enabled(state, category)
-            if (
-                plugin.meta.capabilities.subscription_enabled
-                or plugin.meta.capabilities.hydra_v2_subscription_enabled
-            )
+            if (plugin.meta.capabilities.subscription_enabled or plugin.meta.capabilities.hydra_v2_subscription_enabled)
         }
 
     def manual_client_artifacts(
@@ -344,7 +345,12 @@ class ProtocolService:
         if not callable(reader):
             return None
         value = self.invoker.query(plugin, "total_traffic", state=state)
-        return None if value is None else max(0, int(value))
+        if value is None:
+            return None
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return None
 
     def notify_user_block(self, state: AppState, user) -> list[str]:
         failures: list[str] = []
@@ -352,19 +358,16 @@ class ProtocolService:
             try:
                 self.invoker.user_block(plugin, user, state)
             except Exception as exc:
+                detail = str(exc)
                 failures.append(
-                    f"{plugin.meta.name}: {str(exc) or exc.__class__.__name__}",
+                    f"{plugin.meta.name}: {detail if detail else exc.__class__.__name__}",
                 )
         return failures
 
     def statuses(self, state: AppState | None = None) -> dict[str, dict[str, Any]]:
         if state is None and self.state_reader is not None:
             state = self.state_reader()
-        return (
-            self.catalog.status_all(state)
-            if state is not None
-            else self.catalog.status_all()
-        )
+        return self.catalog.status_all(state) if state is not None else self.catalog.status_all()
 
     def inventory(
         self,
@@ -398,7 +401,7 @@ class ProtocolService:
         return inventory
 
     def install(self, state: AppState, name: str) -> bool:
-        return self.operations.install_plugin(state, name)
+        return self._lifecycle_operations(name).install_plugin(state, name)
 
     def lifecycle_result(self, state: AppState, operation: str, name: str) -> ServiceResult:
         """Normalize legacy bool lifecycle operations for all adapters."""
@@ -415,10 +418,10 @@ class ProtocolService:
             return failed_result(exc, fallback=ErrorCode.PLUGIN)
 
     def reinstall(self, state: AppState, name: str) -> bool:
-        return self.operations.reinstall_plugin(state, name)
+        return self._lifecycle_operations(name).reinstall_plugin(state, name)
 
     def uninstall(self, state: AppState, name: str) -> bool:
-        return self.operations.uninstall_plugin(state, name)
+        return self._lifecycle_operations(name).uninstall_plugin(state, name)
 
     def activate(
         self,
@@ -428,17 +431,17 @@ class ProtocolService:
         domain: str | None = None,
     ) -> bool:
         """Install and enable a protocol with staged activation input."""
-        return self.operations.activate_plugin(
+        return self._lifecycle_operations(name).activate_plugin(
             state,
             name,
             domain=domain,
         )
 
     def enable(self, state: AppState, name: str) -> bool:
-        return self.operations.enable(state, name)
+        return self._lifecycle_operations(name).enable(state, name)
 
     def disable(self, state: AppState, name: str) -> bool:
-        return self.operations.disable(state, name)
+        return self._lifecycle_operations(name).disable(state, name)
 
     def reconciliation(self) -> ReconciliationService:
         return ReconciliationService(self)

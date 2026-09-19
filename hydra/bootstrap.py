@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any, cast
 
 from hydra.core import nft, singbox
 from hydra.core.doctor import run_host_preflight
@@ -50,6 +51,7 @@ from hydra.services.plugin_commands import PluginCommandService
 from hydra.services.plugin_queries import PluginQueryService
 from hydra.services.protocol_setup import ProtocolSetupService
 from hydra.services.protocols import ProtocolService
+from hydra.services.vless_cdn_install import VlessCdnLifecycleOperations
 from hydra.services.security_intel import notification_fields
 from hydra.services.security_notifications import notify_security_event
 from hydra.services.sync_agent import run_sync
@@ -143,7 +145,7 @@ def production_application(
         host=HOST,
         log_error=lambda message: singbox.log("ERROR", message),
     )
-    certificates = CertificateProvisioner(HOST)
+    certificates = CertificateProvisioner(cast(Any, HOST))
     orchestration = OrchestrationService(
         plugins=plugins,
         singbox=singbox,
@@ -167,6 +169,9 @@ def production_application(
         orchestration,
         plugins,
         state_reader=load_state,
+        lifecycle_overrides={
+            "vless_cdn": VlessCdnLifecycleOperations(orchestration),
+        },
     )
     traffic = TrafficService(protocols)
     plugin_actions = PluginActionService(get_plugin=plugins.get)
@@ -187,7 +192,7 @@ def production_application(
         KernelInfrastructure(HOST),
         save_state=save_state,
     )
-    certificate_audit = CertificateInspector(HOST)
+    certificate_audit = CertificateInspector(cast(Any, HOST))
     admin = AdminInfrastructure(
         sync_operations=default_sync_operations(
             protocols=protocols,
@@ -247,7 +252,7 @@ def production_application(
         traffic=traffic,
         planner=ConfigurationPlanner(
             collect_fragments=plugins.collect_fragments,
-            generate_config=singbox.generate_config,
+            generate_config=cast(Any, singbox.generate_config),
             preflight_conflicts=singbox.preflight_conflicts,
             requirements=plugins.requirements,
             reconciliation_plan=protocols.reconciliation().plan,

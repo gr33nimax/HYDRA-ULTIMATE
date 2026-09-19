@@ -63,6 +63,16 @@ def test_a_half_provisioned_protocol_names_what_is_missing():
         plugin.on_enable(state)
 
 
+def test_toggle_delegates_to_the_cdn_application_operation():
+    app = MagicMock()
+    enabled = PluginState(enabled=True)
+
+    getattr(menu, "_set_enabled")(AppState(), enabled, app)
+
+    app.disable_vless_cdn.assert_called_once()
+    app.protocols.disable.assert_not_called()
+
+
 def test_install_forwards_a_bad_answer_to_the_application_use_case():
     state = AppState()
     app = MagicMock()
