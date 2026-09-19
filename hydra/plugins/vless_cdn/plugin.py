@@ -149,25 +149,26 @@ class VlessCdnPlugin(BasePlugin):
         if protocol is None:
             return ConfigFragment()
         config = protocol.config
+        cdn = str(config.get("cdn_domain", "")).strip()
         origin = str(config.get("origin_host", "")).strip()
         path = str(config.get("xhttp_path", DEFAULT_XHTTP_PATH)).strip()
         port = as_int(config.get("core_port"))
         private_key = str(config.get("encryption_private_key", "")).strip()
         mode = str(config.get("encryption_mode", DEFAULT_ENCRYPTION_MODE)).strip()
         users: list[JsonValue] = [{"name": user.email, "uuid": user.uuid} for user in state.users if not user.blocked]
-        if not (origin and path and port and private_key and users):
+        if not (cdn and origin and path and port and private_key and users):
             return ConfigFragment()
         try:
             decryption = server_encryption_value(private_key, mode=mode)
         except ValueError:
             return ConfigFragment()
         return ConfigFragment(
-            inbounds=[self._inbound(origin, path, port, decryption, users)],
+            inbounds=[self._inbound(cdn, path, port, decryption, users)],
         )
 
     @staticmethod
     def _inbound(
-        origin: str,
+        host: str,
         path: str,
         port: int,
         decryption: str,
@@ -182,7 +183,7 @@ class VlessCdnPlugin(BasePlugin):
             "decryption": decryption,
             # TLS завершает web backend, поэтому внутри inbound его нет: сюда
             # приходит уже расшифрованный поток.
-            "transport": xhttp_transport(path, origin, client=False),
+            "transport": xhttp_transport(path, host, client=False),
         }
         return inbound
 

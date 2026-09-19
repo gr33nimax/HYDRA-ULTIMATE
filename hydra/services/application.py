@@ -3,16 +3,21 @@
 Transport adapters (CLI, TUI, Telegram and future HTTP handlers) should depend
 on this facade. Production assembly belongs to :mod:`hydra.bootstrap`.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import copy
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from hydra.core.runtime_state import PluginStatusReader
 from hydra.core.state_models import AppState, User
 from hydra.core.errors import ErrorCode, ServiceResult, failed_result
 from hydra.services.protocols import ProtocolService
+from hydra.services.configuration import restore_state_in_place
+from hydra.services.vless_cdn_install import InstallOutcome, install_protocol
+from hydra.services.vless_cdn_site import install_site_timer, refresh_site, remove_site_timer
 from hydra.services.admin import AdminOperations, UnavailableAdminOperations
 from hydra.services.backups import (
     BackupOperations,
@@ -83,16 +88,20 @@ class ApplicationService:
     plugin_statuses: PluginStatusReader
     reconcile_runtime: Callable[[AppState], None] = lambda state: None
     apply_journal: Callable[[], Path] = lambda: Path("/var/log/hydra/apply.jsonl")
-    admin: AdminOperations = field(default_factory=UnavailableAdminOperations)
+    admin: AdminOperations = field(
+        default_factory=lambda: cast(AdminOperations, UnavailableAdminOperations()),
+    )
     backups: BackupOperations = field(
         default_factory=UnavailableBackupOperations,
     )
-    logs: LogOperations = field(default_factory=UnavailableLogOperations)
+    logs: LogOperations = field(
+        default_factory=lambda: cast(LogOperations, UnavailableLogOperations()),
+    )
     diagnostics: DiagnosticOperations = field(
-        default_factory=UnavailableDiagnosticOperations,
+        default_factory=lambda: cast(DiagnosticOperations, UnavailableDiagnosticOperations()),
     )
     monitoring: SystemMonitoring = field(
-        default_factory=UnavailableSystemMonitoring,
+        default_factory=lambda: cast(SystemMonitoring, UnavailableSystemMonitoring()),
     )
     system: SystemOperations = field(
         default_factory=UnavailableSystemOperations,
@@ -121,7 +130,9 @@ class ApplicationService:
     certificates: CertificateInspection = field(
         default_factory=UnavailableCertificateInspection,
     )
-    calls: CallOperations = field(default_factory=UnavailableCallOperations)
+    calls: CallOperations = field(
+        default_factory=lambda: cast(CallOperations, UnavailableCallOperations()),
+    )
     maintenance: MaintenanceOperations = field(
         default_factory=UnavailableMaintenanceOperations,
     )
@@ -152,6 +163,65 @@ class ApplicationService:
 
     def reconcile_background_services(self, state: AppState) -> None:
         self.reconcile_runtime(state)
+
+    def provision_vless_cdn(
+        self,
+        state: AppState,
+        *,
+        cdn_domain: str,
+        origin_host: str,
+    ) -> InstallOutcome:
+        """Provision CDN state, runtime config and site artifacts as one use-case."""
+        snapshot = copy.deepcopy(state)
+        outcome = install_protocol(
+            state,
+            cdn_domain=cdn_domain,
+            origin_host=origin_host,
+        )
+        if not outcome.ok:
+            return outcome
+
+        timer_attempted = False
+        try:
+            self.admin.save_state(state)
+            if not self.apply(state):
+                raise RuntimeError(self.apply_error() or "configuration apply failed")
+            timer_attempted = True
+            if not install_site_timer():
+                raise RuntimeError("site timer installation failed")
+            refresh_site(state)
+            self.admin.save_state(state)
+        except Exception as exc:
+            if timer_attempted:
+                remove_site_timer()
+            restore_state_in_place(state, snapshot)
+            try:
+                self.admin.save_state(state)
+                self.apply(state)
+            except Exception:
+                pass
+            detail = str(exc)
+            if not detail:
+                detail = exc.__class__.__name__
+            return replace(outcome, ok=False, detail=detail)
+        return outcome
+
+    def uninstall_vless_cdn(self, state: AppState) -> bool:
+        """Remove CDN protocol and its timer without leaving a half-removed site."""
+        snapshot = copy.deepcopy(state)
+        if not self.protocols.uninstall(state, "vless_cdn"):
+            return False
+        if remove_site_timer():
+            return True
+
+        restore_state_in_place(state, snapshot)
+        try:
+            self.admin.save_state(state)
+            self.apply(state)
+            install_site_timer()
+        except Exception:
+            pass
+        return False
 
     def plugin_command(
         self,
@@ -203,18 +273,9 @@ class ApplicationService:
         host = self.system.doctor(state)
         changes = self.planner.build(state)
         tls_mux = changes.get("tls_mux", {})
-        tls_mux_ok = (
-            bool(tls_mux.get("ok", tls_mux.get("valid", True)))
-            if isinstance(tls_mux, dict)
-            else True
-        )
+        tls_mux_ok = bool(tls_mux.get("ok", tls_mux.get("valid", True))) if isinstance(tls_mux, dict) else True
         return {
-            "ok": bool(
-                configuration.get("valid")
-                and host.get("ok")
-                and changes.get("valid")
-                and tls_mux_ok
-            ),
+            "ok": bool(configuration.get("valid") and host.get("ok") and changes.get("valid") and tls_mux_ok),
             "configuration": configuration,
             "host": host,
             "changes": changes,
@@ -259,7 +320,12 @@ class ApplicationService:
         return self.users.rename(state, email, new_email)
 
     def set_user_device_limit(
-        self, state: AppState, email: str, limit: int, *, reset: bool = False,
+        self,
+        state: AppState,
+        email: str,
+        limit: int,
+        *,
+        reset: bool = False,
     ) -> User:
         return self.users.set_device_limit(state, email, limit, reset=reset)
 

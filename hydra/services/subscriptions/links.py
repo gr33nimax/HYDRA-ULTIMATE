@@ -154,17 +154,17 @@ def tag_client_link(link: str, user: User, state: AppState) -> str:
         parsed = urllib.parse.urlparse(link)
         if parsed.scheme.lower() in {"tt", "trusttunnel"}:
             return link
+        base_key = "" if key == "vless:cdn" else key.partition(":")[0]
         label = resolve_configuration_name(
             key=key,
             default=f"{user.email} {suffix}",
             global_names=state.configuration_names,
             user_names=user.configuration_name_overrides,
-            base_key=key.partition(":")[0] if ":" in key else "",
+            base_key=base_key,
             base_suffix={
                 "naive:quic": " QUIC",
                 "amneziawg:desktop": " Desktop",
                 "amneziawg:mobile": " Mobile",
-                "vless:cdn": " CDN",
             }.get(key, ""),
         )
         return urllib.parse.urlunparse(

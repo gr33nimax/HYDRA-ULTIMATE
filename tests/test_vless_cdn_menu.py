@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -64,8 +63,10 @@ def test_a_half_provisioned_protocol_names_what_is_missing():
         plugin.on_enable(state)
 
 
-def test_install_refuses_a_bad_answer_and_touches_nothing():
+def test_install_forwards_a_bad_answer_to_the_application_use_case():
     state = AppState()
+    app = MagicMock()
+    app.provision_vless_cdn.return_value = InstallOutcome(ok=False, detail="Origin-имя некорректно")
     messages: list[str] = []
 
     with (
@@ -73,123 +74,75 @@ def test_install_refuses_a_bad_answer_and_touches_nothing():
         patch.object(menu, "error", side_effect=lambda text: messages.append(str(text))),
         patch.object(menu, "info"),
         patch.object(menu, "success"),
-        patch.object(menu, "install_site_timer") as timer,
     ):
-        menu._install(state, MagicMock(), MagicMock())
+        menu._install(state, MagicMock(), app)
 
+    app.provision_vless_cdn.assert_called_once_with(
+        state,
+        cdn_domain="cdn.example.com",
+        origin_host="bad host",
+    )
     assert any("Origin-имя" in text for text in messages)
-    timer.assert_not_called()
     assert state.protocols.get(PROTOCOL_NAME) is None
 
 
-def test_install_wires_the_certificate_then_the_timer_then_the_page(tmp_path):
+def test_install_delegates_the_entire_runtime_transaction_to_application():
     state = AppState()
     app = MagicMock()
-    # Как в жизни: порт сохранения возвращает None, а не признак успеха.
-    app.admin.save_state.return_value = None
-    order: list[str] = []
-
-    def fake_install(target: AppState, *, cdn_domain: str, origin_host: str) -> InstallOutcome:
-        order.append("certificate")
-        target.protocols[PROTOCOL_NAME] = PluginState(
-            config={**PROVISIONED, "cdn_domain": cdn_domain, "origin_host": origin_host},
-        )
-        return InstallOutcome(
-            ok=True,
-            cdn_domain=cdn_domain,
-            origin_host=origin_host,
-            xhttp_path="/api/media/session",
-            core_port=20449,
-            certificate_until="2027-01-02 03:04 UTC",
-        )
-
-    def fake_timer() -> bool:
-        order.append("timer")
-        return True
-
-    def fake_refresh(*_args, **_kwargs) -> Path:
-        order.append("page")
-        return tmp_path / "index.html"
+    app.provision_vless_cdn.return_value = InstallOutcome(
+        ok=True,
+        cdn_domain="cdn.example.com",
+        origin_host="origin.example.com",
+        xhttp_path="/api/media/session",
+        core_port=20449,
+        certificate_until="2027-01-02 03:04 UTC",
+    )
 
     with (
         patch.object(menu, "prompt", side_effect=_answers("cdn.example.com", "origin.example.com")),
-        patch.object(menu, "install_protocol", side_effect=fake_install),
-        patch.object(menu, "install_site_timer", side_effect=fake_timer),
-        patch.object(menu, "refresh_site", side_effect=fake_refresh),
         patch.object(menu, "success"),
         patch.object(menu, "info"),
         patch.object(menu, "error") as reported,
     ):
         menu._install(state, MagicMock(), app)
 
-    assert order == ["certificate", "timer", "page"], "порядок шагов установки"
-    # Конфиг применяется ровно один раз: без этого документ маршрутов остаётся
-    # прежним, и переустановка ничего не меняет.
-    app.apply.assert_called_once_with(state)
+    app.provision_vless_cdn.assert_called_once_with(
+        state,
+        cdn_domain="cdn.example.com",
+        origin_host="origin.example.com",
+    )
     reported.assert_not_called()
-    app.admin.save_state.assert_called_once()
 
 
-def test_install_stops_when_the_timer_cannot_be_installed(tmp_path):
+def test_install_reports_a_timer_failure_from_application():
     state = AppState()
     app = MagicMock()
-    app.admin.save_state.return_value = None
+    app.provision_vless_cdn.return_value = InstallOutcome(ok=False, detail="site timer installation failed")
     messages: list[str] = []
 
     with (
         patch.object(menu, "prompt", side_effect=_answers("cdn.example.com", "origin.example.com")),
-        patch.object(
-            menu,
-            "install_protocol",
-            side_effect=lambda target, **_kwargs: InstallOutcome(
-                ok=True,
-                cdn_domain="cdn.example.com",
-                origin_host="origin.example.com",
-                xhttp_path="/api/media/session",
-                core_port=20449,
-            ),
-        ),
-        patch.object(menu, "install_site_timer", return_value=False),
-        patch.object(menu, "refresh_site") as refresh,
         patch.object(menu, "error", side_effect=lambda text: messages.append(str(text))),
         patch.object(menu, "info"),
         patch.object(menu, "success"),
     ):
         menu._install(state, MagicMock(), app)
 
-    refresh.assert_not_called()
-    assert any("таймер" in text for text in messages)
+    assert any("timer" in text for text in messages)
 
 
-def test_install_stops_when_the_configuration_cannot_be_applied():
-    """Иначе установка отчитывается успехом, а Caddy остаётся со старым документом."""
+def test_install_reports_an_apply_failure_from_application():
     state = AppState()
     app = MagicMock()
-    app.admin.save_state.return_value = None
-    app.apply.return_value = False
-    app.apply_error.return_value = "caddy validate failed"
+    app.provision_vless_cdn.return_value = InstallOutcome(ok=False, detail="caddy validate failed")
     messages: list[str] = []
 
     with (
         patch.object(menu, "prompt", side_effect=_answers("cdn.example.com", "origin.example.com")),
-        patch.object(
-            menu,
-            "install_protocol",
-            side_effect=lambda target, **_kwargs: InstallOutcome(
-                ok=True,
-                cdn_domain="cdn.example.com",
-                origin_host="origin.example.com",
-                xhttp_path="/api/media/session",
-                core_port=20449,
-            ),
-        ),
-        patch.object(menu, "install_site_timer") as timer,
         patch.object(menu, "error", side_effect=lambda text: messages.append(str(text))),
         patch.object(menu, "info"),
         patch.object(menu, "success"),
     ):
         menu._install(state, MagicMock(), app)
 
-    app.apply.assert_called_once_with(state)
-    timer.assert_not_called()
     assert any("caddy validate failed" in text for text in messages)

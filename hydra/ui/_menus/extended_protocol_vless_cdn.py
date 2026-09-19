@@ -7,8 +7,6 @@ from hydra.core.state_models import AppState
 from hydra.plugins.base import BasePlugin
 from hydra.plugins.vless_cdn.plugin import PROTOCOL_NAME
 from hydra.services.application import ApplicationService
-from hydra.services.vless_cdn_install import install_protocol
-from hydra.services.vless_cdn_site import install_site_timer, refresh_site, remove_site_timer
 from hydra.ui.protocol_ui import protocol_menu_title, protocol_status_panel
 from hydra.ui.tui import (
     BOLD,
@@ -32,38 +30,13 @@ def _install(state: AppState, plugin: BasePlugin, app: ApplicationService) -> No
     cdn_domain = prompt("CDN-домен (который вводит клиент):").strip()
     origin_host = prompt("Origin-имя (под которым CDN ходит на сервер):").strip()
 
-    outcome = install_protocol(state, cdn_domain=cdn_domain, origin_host=origin_host)
+    outcome = app.provision_vless_cdn(
+        state,
+        cdn_domain=cdn_domain,
+        origin_host=origin_host,
+    )
     if not outcome.ok:
         error(outcome.detail)
-        prompt("Нажмите Enter")
-        return
-
-    info("Сохраняю состояние...")
-    try:
-        # Порт объявляет save_state как возвращающий None: проверять результат
-        # как флаг нельзя, ошибку видно только по исключению.
-        app.admin.save_state(state)
-    except Exception as exc:
-        error(f"Не удалось сохранить состояние: {exc}")
-        prompt("Нажмите Enter")
-        return
-
-    # Документ маршрутов строится из состояния: без явного применения маршрут
-    # остаётся прежним, и переустановка выглядит как «ничего не изменилось».
-    if not app.apply(state):
-        error(f"Конфиг не применился: {app.apply_error() or 'причина неизвестна'}")
-        prompt("Нажмите Enter")
-        return
-
-    if not install_site_timer():
-        error("Страница установлена, но таймер обновления поставить не удалось")
-        prompt("Нажмите Enter")
-        return
-
-    try:
-        refresh_site(state)
-    except Exception as exc:
-        error(f"Страница не обновилась: {exc}")
         prompt("Нажмите Enter")
         return
 
@@ -154,8 +127,7 @@ def _menu_vless_cdn(
         elif choice == "9":
             if not confirm("Удалить протокол, страницу и таймер?", default=False):
                 continue
-            remove_site_timer()
-            if app.protocols.uninstall(state, PROTOCOL_NAME):
+            if app.uninstall_vless_cdn(state):
                 success("Удалено")
                 prompt("Нажмите Enter")
                 return

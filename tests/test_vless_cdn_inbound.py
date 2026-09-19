@@ -24,6 +24,7 @@ from hydra.core.state_models import PluginState, User
 from hydra.plugins.vless_cdn.plugin import VlessCdnPlugin
 from hydra.plugins.vless_cdn.profile import MODE, UPLINK_METHOD, xhttp_transport
 
+CDN = "cdn.example.com"
 ORIGIN = "origin.example.com"
 CORE_PORT = 20449
 USER_UUID = "5f0d6b7a-6f4e-4a5b-9d3c-52c11f0a9b21"
@@ -31,6 +32,7 @@ USER_UUID = "5f0d6b7a-6f4e-4a5b-9d3c-52c11f0a9b21"
 
 def _state(**overrides) -> AppState:
     config: dict[str, JsonValue] = {
+        "cdn_domain": CDN,
         "origin_host": ORIGIN,
         "xhttp_path": DEFAULT_XHTTP_PATH,
         "core_port": CORE_PORT,
@@ -93,7 +95,7 @@ def test_inbound_carries_the_profile_the_core_expects():
     assert transport["type"] == "xhttp"
     assert transport["mode"] == MODE == "packet-up"
     assert transport["path"] == DEFAULT_XHTTP_PATH
-    assert transport["host"] == ORIGIN
+    assert transport["host"] == CDN, "ядро должно видеть тот же публичный Host, что Caddy и клиент"
 
     assert transport["x_padding_bytes"] == "100-1000", "ядро не умеет выключать padding"
     assert transport["x_padding_obfs_mode"] is True
