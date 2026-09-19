@@ -257,13 +257,18 @@ def test_security_event_formatter_escapes_all_dynamic_fields():
 
 
 def test_antidpi_proven_reject_sends_one_ban_notification(tmp_path):
+    """A ban notification is still emitted for evidence that remains provable.
+
+    The decoy scanner path is the surviving automatic input; the Snell record is
+    deliberately no longer one (see the Snell amendment in the AntiScan spec).
+    """
     mock_notify = MagicMock(return_value=True)
     plugin = AntiDPIPlugin(notifier=mock_notify)
     evidence = {
-        "kind": "protocol_reject",
-        "protocol": "snell",
-        "reason": "record_auth_failed",
-        "source": "journal",
+        "kind": "decoy_scan",
+        "protocol": "https",
+        "reason": "scanner_path",
+        "source": "caddy-decoy",
         "attribution": "direct",
     }
     state_file = tmp_path / "antidpi.json"
@@ -281,8 +286,8 @@ def test_antidpi_proven_reject_sends_one_ban_notification(tmp_path):
     assert mock_notify.call_args.kwargs["category"] == "antidpi"
     assert (component, action) == ("AntiDPI", "BAN")
     assert ("IP", "198.51.100.22") in fields
-    assert ("Protocol", "snell") in fields
-    assert ("Reason", "record_auth_failed") in fields
+    assert ("Protocol", "https") in fields
+    assert ("Reason", "scanner_path") in fields
     # A ban is an action, not an offer, so it carries no block button.
     assert "reply_markup" not in mock_notify.call_args.kwargs
 

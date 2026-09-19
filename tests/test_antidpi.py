@@ -84,23 +84,73 @@ def wired(tmp_path):
 # --- the two allowed inputs ------------------------------------------------
 
 
-def test_proven_snell_reject_bans_and_notifies(wired):
+def test_snell_reject_no_longer_bans(wired):
+    """A Snell auth failure is not proof of hostility: credentials go stale.
+
+    The parser still recognises the record (see ``test_antidpi_adapters``), but
+    the record must not reach the firewall, state or Telegram while Snell is
+    absent from the enforcement allowlist.
+    """
     _state_file, runner = wired
     notify = MagicMock(return_value=True)
     plugin = AntiDPIPlugin(notifier=notify)
+    event = _snell_event()
 
-    banned = plugin.observe_event(SNELL_IP, _snell_event(), now=NOW)
+    banned = plugin.observe_event(SNELL_IP, event, now=NOW)
 
-    assert banned is True
-    assert SNELL_IP in plugin._load_state()["banned"]
-    assert runner.call_count == 1
-    command = runner.call_args.args[0]
-    assert command[:2] == ["ipset", "add"]
-    assert SNELL_IP in command
+    assert evidence_problem(event) != ""
+    assert is_enforcement_evidence(event) is False
+    assert banned is False
+    assert SNELL_IP not in plugin._load_state().get("banned", {})
+    assert runner.call_count == 0
     plugin._drain_notifications()
-    assert notify.call_count == 1
-    component, action = notify.call_args.args[0], notify.call_args.args[1]
-    assert (component, action) == ("AntiDPI", "BAN")
+    assert notify.call_count == 0
+
+
+def test_a_snell_reject_still_advances_the_journal_cursor(wired):
+    """A discarded record must not be replayed forever from the journal."""
+    _state_file, _runner = wired
+    plugin = AntiDPIPlugin()
+
+    plugin.observe_event(
+        SNELL_IP,
+        {**_snell_event(), "_journal_cursor": "cursor-1"},
+        now=NOW,
+    )
+
+    assert plugin.journal_cursor() == "cursor-1"
+    assert SNELL_IP not in plugin._load_state().get("banned", {})
+
+
+def test_snell_is_absent_from_the_enforcement_allowlist():
+    """Snell stays out until tag ownership can be proven (design D-C).
+
+    The parser binds whatever tag the core printed and has no access to desired
+    state, so it cannot tell a current listener from a retired one. Returning
+    Snell to this allowlist without a tag-ownership check in the journal
+    normalizer re-opens the false-positive ban this change removed.
+    """
+    from hydra.plugins.antidpi.detection import PROTOCOL_REJECT_RULES
+
+    assert "snell" not in PROTOCOL_REJECT_RULES
+
+
+def test_the_parser_still_recognises_the_record_as_a_diagnostic():
+    """Demoting the parser must not blind the capture pipeline."""
+    from hydra.plugins.antidpi.adapters import parse_protocol_line
+
+    line = next(
+        line
+        for line in (FIXTURES / "snell-cipher-auth-failure.txt").read_text(encoding="utf-8").splitlines()
+        if SNELL_IP in line
+    )
+
+    match = parse_protocol_line("sing-box", line)
+
+    assert match is not None, "the fixture must keep exercising the parser"
+    address, event = match
+    assert address == SNELL_IP
+    assert event["reason"] == "record_auth_failed"
 
 
 def test_proven_decoy_scan_bans(wired):
@@ -108,21 +158,6 @@ def test_proven_decoy_scan_bans(wired):
     plugin = AntiDPIPlugin()
 
     assert plugin.observe_event(DECOY_IP, _decoy_event(), now=NOW) is True
-
-
-def test_ban_record_keeps_bounded_evidence(wired):
-    _state_file, _runner = wired
-    plugin = AntiDPIPlugin()
-
-    plugin.observe_event(SNELL_IP, _snell_event(), now=NOW)
-
-    entry = plugin._load_state()["banned"][SNELL_IP]
-    assert entry["protocol"] == "snell"
-    assert entry["reason"] == "record_auth_failed"
-    assert entry["attribution"] == "direct"
-    assert entry["offense_count"] == 1
-    assert entry["duration"] > 0
-    assert entry["signals"] == ["snell:record_auth_failed"]
 
 
 # --- everything else is silent --------------------------------------------
@@ -181,7 +216,11 @@ def test_non_evidence_leaves_no_trace(wired, event):
 
 
 def test_evidence_allowlist_rejects_every_unknown_combination():
-    """A protocol or reason that was never proven cannot enforce."""
+    """A protocol or reason that was never proven cannot enforce.
+
+    Snell is in this list on purpose: the record is real, but it cannot tell a
+    hostile probe from stale credentials, so it is not enforcement evidence.
+    """
     assert (
         evidence_problem(
             {
@@ -192,7 +231,16 @@ def test_evidence_allowlist_rejects_every_unknown_combination():
                 "attribution": "direct",
             }
         )
-        == ""
+        != ""
+    )
+    assert is_enforcement_evidence(
+        {
+            "kind": "decoy_scan",
+            "protocol": "https",
+            "reason": "scanner_path",
+            "source": "caddy-decoy",
+            "attribution": "direct",
+        }
     )
     for protocol in ("mieru", "telemt", "wdtt", "amneziawg", "shadowtls", "naive", "trusttunnel", "vless", "anytls"):
         assert not is_enforcement_evidence(
@@ -214,13 +262,13 @@ def test_active_ban_does_not_notify_twice(wired):
     notify = MagicMock(return_value=True)
     plugin = AntiDPIPlugin(notifier=notify)
 
-    plugin.observe_event(SNELL_IP, _snell_event(), now=NOW)
+    plugin.observe_event(DECOY_IP, _decoy_event(), now=NOW)
     plugin._drain_notifications()
-    plugin.observe_event(SNELL_IP, _snell_event(), now=NOW + 1)
+    plugin.observe_event(DECOY_IP, _decoy_event(), now=NOW + 1)
     plugin._drain_notifications()
 
     assert notify.call_count == 1
-    assert plugin._load_state()["banned"][SNELL_IP]["offense_count"] == 1
+    assert plugin._load_state()["banned"][DECOY_IP]["offense_count"] == 1
 
 
 def test_firewall_refusal_is_never_reported_as_a_ban(tmp_path):
@@ -232,7 +280,7 @@ def test_firewall_refusal_is_never_reported_as_a_ban(tmp_path):
         patch("hydra.plugins.antidpi.plugin._run", return_value=refused),
     ):
         plugin = AntiDPIPlugin(notifier=notify)
-        banned = plugin.observe_event(SNELL_IP, _snell_event(), now=NOW)
+        banned = plugin.observe_event(DECOY_IP, _decoy_event(), now=NOW)
         state = plugin._load_state()
 
     assert banned is False
@@ -244,11 +292,11 @@ def test_second_offense_uses_the_next_duration_step(wired):
     _state_file, _runner = wired
     plugin = AntiDPIPlugin()
 
-    plugin.observe_event(SNELL_IP, _snell_event(), now=NOW)
-    first = plugin._load_state()["banned"][SNELL_IP]["duration"]
-    plugin.unban(SNELL_IP)
-    plugin.observe_event(SNELL_IP, _snell_event(), now=NOW + 10)
-    second = plugin._load_state()["banned"][SNELL_IP]["duration"]
+    plugin.observe_event(DECOY_IP, _decoy_event(), now=NOW)
+    first = plugin._load_state()["banned"][DECOY_IP]["duration"]
+    plugin.unban(DECOY_IP)
+    plugin.observe_event(DECOY_IP, _decoy_event(), now=NOW + 10)
+    second = plugin._load_state()["banned"][DECOY_IP]["duration"]
 
     assert second > first
 
@@ -260,7 +308,7 @@ def test_whitelisted_address_is_never_banned(wired):
     state["whitelist"] = ["203.0.113.0/24"]
     with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file):
         plugin._state_store().save(state)
-        assert plugin.observe_event(SNELL_IP, _snell_event(), now=NOW) is False
+        assert plugin.observe_event(DECOY_IP, _decoy_event(), now=NOW) is False
         assert plugin._load_state()["banned"] == {}
     assert runner.call_count == 0
 
@@ -280,7 +328,7 @@ def test_loopback_and_private_peers_are_rejected_before_state(wired):
     plugin = AntiDPIPlugin()
 
     for address in ("127.0.0.1", "10.1.2.3", "192.168.1.5", "not-an-ip"):
-        assert plugin.observe_event(address, _snell_event(), now=NOW) is False
+        assert plugin.observe_event(address, _decoy_event(), now=NOW) is False
 
     assert runner.call_count == 0
     assert plugin._load_state().get("banned", {}) == {}

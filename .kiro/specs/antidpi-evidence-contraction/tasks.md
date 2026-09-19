@@ -282,3 +282,109 @@ TSK-002 + TSK-012 ────────────────────�
 - [ ] Local verification is green.
 - [ ] Disposable Linux acceptance is green.
 - [ ] Requirements, design, tasks, ADR and public documentation agree.
+
+## Amendment tasks — Snell false-positive ban withdrawal (2026-09-19)
+
+**Status:** ready for implementation.
+**Requirements:** `requirements.md` → «Requirements amendment — Snell false-positive ban withdrawal».
+**Design:** `design.md` → «Amendment design — Snell false-positive ban withdrawal» (D-A–D-E).
+
+### Dependency graph
+
+```text
+TSK-014 → TSK-015 → TSK-016
+```
+
+- [x] **TSK-014 — Убрать Snell из allowlist автоматического enforcement**
+  - **Objective:** Прекратить автоматические баны по единственному Snell auth-fail, не удаляя
+    диагностический парсер и не меняя схему состояния.
+  - **Deliverables:** `PROTOCOL_REJECT_RULES` пуст; в `detection.py` зафиксирована причина;
+    `adapters.py` помечен как diagnostic-only парсер без enforcement-потребителя; в `labels.py`
+    метка `snell:record_auth_failed` помечена как историческая, а не действующая улика.
+  - **Files:** `hydra/plugins/antidpi/detection.py`, `adapters.py`, `labels.py`.
+  - **Acceptance:** точная fixture-строка даёт `evidence_problem() != ""` и
+    `is_enforcement_evidence(...) is False`; `observe_event()` по ней не мутирует state, не
+    вызывает firewall и не отправляет уведомление, но продвигает journal cursor; decoy-баны,
+    ручные баны, TTL и whitelist не меняются; `SCHEMA_VERSION` не меняется.
+  - **Red-first:** сначала инвертировать `test_proven_snell_reject_bans_and_notifies` в
+    discard-проверку и убедиться, что она падает на текущем коде.
+
+  - **Факт:** красное зафиксировано до правки — `3 failed` (`test_snell_reject_no_longer_bans`,
+    `test_a_snell_reject_still_advances_the_journal_cursor`,
+    `test_snell_is_absent_from_the_enforcement_allowlist`). Фикс — пустой
+    `PROTOCOL_REJECT_RULES` с объяснением причины; `SCHEMA_VERSION` и схема состояния не тронуты.
+    После: `tests/test_antidpi.py` → `29 passed`. Парсер и фикстура сохранены как диагностика.
+
+- [x] **TSK-015 — Переписать тесты и самопроверку под снятый контракт**
+  - **Objective:** Заменить позитивные утверждения о Snell-банах на негативные без ослабления
+    остальных инвариантов; самопроверка должна говорить, что именно доказывает.
+  - **Deliverables:** обновлены `tests/test_antidpi.py`, `test_antidpi_adapters.py`,
+    `test_antidpi_agent.py`, `test_antidpi_selftest.py`, `test_antidpi_projection.py`,
+    `test_antidpi_operator_views.py`, `test_telegram_admin_bot.py`; парсер остаётся покрытым
+    положительной fixture-проверкой; формулировки `selftest_report.py`/`selftest.py` больше не
+    обещают enforceable Snell; негативный кейс «точный отказ на неучтённом/снятом теге не даёт
+    события» добавлен (как precondition для D-C).
+  - **Files:** перечисленные тесты, `hydra/plugins/antidpi/selftest_report.py`, `selftest.py`.
+  - **Acceptance:** ни один тест не удалён ради зелёного результата — изменённые утверждения
+    отражают изменённое требование; fixture и парсерные проверки остались; cursor durability,
+    state corruption, reconciliation и compatibility facades зелёные.
+
+  - **Факт:** `195 passed` по `test_antidpi*.py` + `test_telegram_admin_bot.py`. Четыре теста,
+    использовавшие Snell как «работающую улику» для проверки механики бана
+    (`test_active_ban_does_not_notify_twice`, `test_firewall_refusal_*`,
+    `test_second_offense_*`, `test_whitelisted_address_*`), переведены на `decoy_scan` — иначе они
+    проходили бы вакуумно, потому что улика отбрасывается раньше проверки адреса. Парсерный тест
+    переименован в `test_real_snell_reject_is_still_parsed_but_not_enforceable` и проверяет обе
+    стороны контракта. В `selftest_report.py` README больше не обещает enforceable Snell.
+    Попутно пойман реальный дефект: `signal_summary()` вызывал `int(limit)` без защиты — заменён на
+    существующий `_positive_int`.
+
+- [x] **TSK-016 — Документация и локальная верификация**  - **Objective:** Привести публичное описание политики в соответствие с новым контрактом и
+    доказать это локально.
+  - **Deliverables:** `docs/ANTIDPI.md` (§3, §6 матрица, §12 self-test, §13 чеклист добавления
+    протокола — с обязательной проверкой владения тегом), новая запись в `CHANGELOG.md`;
+    `python -m pytest -q tests/test_antidpi*.py`, архитектурные guard'ы, `python -m ruff check
+    main.py hydra tests`, `python verify.py` когда это соразмерно.
+  - **Files:** `docs/ANTIDPI.md`, `CHANGELOG.md`.
+  - **Acceptance:** все выполненные команды завершаются `0`; в документации нет утверждений,
+    противоречащих коду; запись в changelog объясняет, почему Snell больше не банит
+    автоматически; Linux-интеграция явно отмечена как невыполненная локально.
+
+  - **Факт:** `docs/ANTIDPI.md`: §3 переписан (почему запись снята с enforcement и что парсер
+    всё ещё даёт), §6 матрица — Snell `не поддержан` с причиной, §12 self-test — «доказывает
+    парсер и трубопровод, а не право банить», §13 получил обязательный шаг «доказать владение
+    тегом» со слоем (`agent._normalize_journal_record`) и причиной, почему не в `adapters`.
+    `CHANGELOG.md` — запись о снятии Snell и о едином ключе имени CDN. Локальная верификация
+    в TSK-017.
+
+### Progress (amendment)
+
+| Задача | Статус | Факт |
+| --- | --- | --- |
+| TSK-014 | готова | красное→зелёное: `3 failed` → `29 passed`; `PROTOCOL_REJECT_RULES` пуст |
+| TSK-015 | готова | `195 passed`; вакуумные тесты переведены на decoy; парсер покрыт обе стороны |
+| TSK-016 | готова | `docs/ANTIDPI.md` §3/§6/§12/§13 + `CHANGELOG.md` |
+| TSK-017 | готова | `2128 passed`; ruff чист; архитектурные guard'ы `32 passed`; compileall OK |
+
+### Локальная верификация (факт)
+
+- `python -m pytest -q` → `2128 passed in 58.57s`;
+- `python -m pytest -q tests/test_architecture_graph.py tests/test_architecture_audit.py
+  tests/test_architecture_size_limits.py tests/test_plugin_purity.py` → `32 passed`;
+- `python -m ruff check main.py hydra tests` → `All checks passed!`;
+- `python -m compileall -q main.py hydra tests` → OK;
+- живой прогон: `PROTOCOL_REJECT_RULES == {}`, `evidence_problem()` → `'protocol snell has no
+  proven reject'`, `observe_event()` → `banned=False`, `firewall calls: 0`, `notify calls: 0`,
+  журнальный курсор при этом продвигается;
+- **не выполнено локально:** Linux-интеграция (реальный ipset/systemd/DROP) — среда Windows.
+  Проверка на VPS остаётся за владельцем; именно она покажет, что старые баны не воссоздаются,
+  а новые Snell-срабатывания больше не появляются.
+
+### Requirement coverage (amendment)
+
+| Amendment requirement | Tasks |
+| --- | --- |
+| Нет авто-бана по Snell auth-fail | TSK-014, TSK-015, TSK-016 |
+| Snell вне allowlist до доказанного дискриминатора | TSK-014, TSK-016 |
+| Проверка владения тегом для будущего адаптера | TSK-015, TSK-016 |
+| Ручные баны и decoy-сканы без изменений | TSK-014, TSK-015 |

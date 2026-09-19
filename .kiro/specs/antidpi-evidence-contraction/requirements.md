@@ -203,3 +203,40 @@ These are implementation prerequisites, not permission to reintroduce heuristics
 - capture and sanitize real deployed log lines for AnyTLS, VLESS, Naive and Snell;
 - verify exact source-relay attribution against those captures;
 - keep TrustTunnel disabled unless its deployed implementation produces an exact native reject with attributable external IP.
+
+## Requirements amendment — Snell false-positive ban withdrawal (2026-09-19)
+
+**Status:** awaiting explicit approval before design/tasks. This amendment supersedes R2/R3/R10
+only for Snell automatic enforcement.
+
+### Observed defect
+
+A current Snell `record_auth_failed` parser accepts any `inbound/snell[...]` tag and emits
+immediate ban-capable evidence after one authentication failure. A legitimate client with stale,
+incorrect or incompatible credentials produces the same protocol-owned message as a hostile probe.
+The journal adapter does not verify that the inbound tag belongs to the current HYDRA desired
+configuration, so an orphaned/retired Snell listener may also trigger the ban path.
+
+### Expected behavior
+
+- WHEN a Snell client produces `record_auth_failed` or another authentication failure THEN
+  AntiScan SHALL NOT create an automatic ban, firewall call, persistent event, Telegram `BAN`,
+  score or watchlist entry from that record alone.
+- Snell SHALL be absent from the automatic protocol-evidence allowlist until a future approved
+  requirement proves a discriminator that separates hostile probes from legitimate credential
+  drift without heuristic correlation.
+- WHEN a journal parser recognises a managed protocol inbound for any future enforcement purpose
+  THEN it SHALL verify the exact current HYDRA-owned inbound tag before accepting evidence; a
+  wildcard tag match SHALL NOT be sufficient.
+- Manual bans, decoy-scan enforcement and the active rules for non-Snell eligible evidence SHALL
+  remain unchanged.
+
+### Acceptance evidence
+
+1. Replaying each existing positive Snell fixture and an otherwise exact reject on an unowned
+   or retired tag produces no state mutation, firewall invocation or notification.
+2. A legitimate current Snell client with an incorrect/stale PSK cannot be automatically banned
+   by this plugin.
+3. Decoy scanner-path fixtures and existing manual-ban flows retain their current behavior.
+4. Focused AntiDPI tests and the applicable architecture guards pass; no local systemd/firewall
+   mutation is performed.

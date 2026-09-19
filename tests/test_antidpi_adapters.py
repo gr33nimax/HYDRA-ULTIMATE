@@ -55,8 +55,12 @@ def test_fixtures_exist_and_are_sanitized():
 
 
 @pytest.mark.parametrize("line", _snell_lines())
-def test_real_snell_reject_is_evidence(line):
-    """Every captured Snell record-header failure must normalize identically."""
+def test_real_snell_reject_is_still_parsed_but_not_enforceable(line):
+    """The parser keeps its diagnostic value; the allowlist no longer accepts it.
+
+    Every captured record-header failure must still normalize identically — the
+    capture pipeline depends on it — while none of them may reach the firewall.
+    """
     match = parse_protocol_line("sing-box", line)
     assert match is not None, line
     address, event = match
@@ -68,8 +72,8 @@ def test_real_snell_reject_is_evidence(line):
         "source": "journal",
         "attribution": "direct",
     }
-    assert is_enforcement_evidence(event)
-    assert evidence_problem(event) == ""
+    assert not is_enforcement_evidence(event)
+    assert evidence_problem(event) != ""
 
 
 def test_all_captured_snell_tags_are_recognized():

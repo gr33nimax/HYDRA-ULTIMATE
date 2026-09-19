@@ -1,5 +1,20 @@
 # Changelog
 
+- AntiScan no longer bans on a Snell rejection.  The record it matched —
+  `open record header: cipher: message authentication failed` — proves that a frame did not
+  decrypt, which is byte-identical for a hostile probe and for a legitimate client whose PSK is
+  stale, mistyped or generated for another generation; on a live host that difference is the
+  plugin banning its own users.  The grammar also bound whatever inbound tag the core printed and
+  the parser had no access to desired state, so a retired or foreign Snell listener matched it too.
+  Snell is therefore absent from `PROTOCOL_REJECT_RULES`, and the record is demoted to a diagnostic
+  input: the parser, its sanitized fixture, the journal stream and the self-test still prove that a
+  rejection reaches the pipeline and lands redacted in the capture archive, while nothing can reach
+  the firewall, state or Telegram through it.  The decoy scanner path remains the single automatic
+  ban input, manual bans, progressive durations, expiry and the whitelist are untouched, and no
+  state migration is involved — fewer events are accepted, nothing is written differently.  Snell
+  returns only together with an owned-tag check in the journal normalizer, because that is the only
+  layer with access to desired state; the procedure in `docs/ANTIDPI.md` now requires it.
+
 - The AntiDPI detector is narrowed to a closed evidence allowlist and now bans only what
   the host itself can prove: a protocol-owned rejection carrying the real external peer,
   or an explicit scanner path on a decoy site. Everything else — unknown SNI, generic TLS

@@ -372,8 +372,162 @@ Local Windows tests cannot replace this gate.
 3. If obsolete telemetry had been removed, the prior version recreates its owned rules/services.
 4. Existing bans and offense counts remain readable in both directions.
 
+## Amendment design — Snell false-positive ban withdrawal (2026-09-19)
+
+**Version:** 1.1 (amendment)
+**Requirements:** `requirements.md` → «Requirements amendment — Snell false-positive ban withdrawal (2026-09-19)»
+**Status:** design ready, awaiting implementation
+
+### Problem statement (verified, not assumed)
+
+| Fact | Evidence |
+| --- | --- |
+| The Snell grammar binds any inbound tag | `hydra/plugins/antidpi/adapters.py:27` — `inbound/snell\[[^\]]+\]` |
+| The matched tag is discarded before the event exists | `hydra/plugins/antidpi/adapters.py:84-98` — the returned dict carries protocol/reason/source/attribution, no tag |
+| The state reader is deliberately unused | `hydra/plugins/antidpi/agent.py:194-197` — `del state_reader` |
+| One reject is enough to ban | `hydra/plugins/antidpi/detection.py:178` — `should_ban=not active_ban` |
+| Enforcement path is `ipset add` + `INPUT DROP` | `hydra/plugins/antidpi/detector_service.py:259-300`, `:314-354` |
+| The current suite locks this in | `tests/test_antidpi.py:87-101`, `tests/test_antidpi_adapters.py:57-78` |
+
+Two mechanisms produce the reported false positive, and the code cannot distinguish them:
+
+1. a legitimate client whose PSK is stale, mistyped or generated for another generation — the wire
+   result is byte-identical to a hostile probe;
+2. an orphaned or retired Snell listener still present in the running core configuration: its tag
+   matches the wildcard grammar and no comparison against desired state ever happens.
+
+Neither is a parser bug. The defect is the **policy**: `record_auth_failed` is treated as proof of
+hostility, and tag ownership is never checked.
+
+### Decision D-A — Snell leaves the automatic enforcement allowlist
+
+The single authoritative change is the evidence contract, not the parser:
+
+```python
+# hydra/plugins/antidpi/detection.py
+PROTOCOL_REJECT_RULES: dict[str, frozenset[str]] = {}   # was {"snell": {"record_auth_failed"}}
+```
+
+Consequences, all of them intentional:
+
+- `evidence_problem()` returns `"protocol snell has no proven reject"` for the existing event;
+- `observe_event()` takes the discard branch: no state mutation, no firewall call, no `BAN`, no
+  score, no watchlist entry — while still advancing the journal cursor, so a discarded record is
+  never replayed (`detector_service.py:334-347`);
+- `decoy_scan` enforcement and manual bans are untouched;
+- existing active bans keep their recorded TTL and expire normally; offense counts stay readable.
+
+This is a one-line contract change with the smallest possible rollback surface. Reverting the line
+restores the previous behavior exactly, with no state migration in either direction.
+
+### Decision D-B — the parser survives as a diagnostic, not as an enforcement input
+
+The Snell grammar, its sanitized fixture and the journal stream are **kept**, because they are the
+only mechanism that can answer the open question «does a discriminator between a hostile probe and
+credential drift exist?». They are demoted, not deleted:
+
+- `adapters._PROTOCOL_REJECTS` keeps its anchored grammar and gains a docstring stating that it is a
+  diagnostic parser with no enforcement consumer while `PROTOCOL_REJECT_RULES` is empty;
+- `hydra antidpi capture` / `selftest` keep collecting and redacting the records;
+- nothing in the parser can reach `ipset`, state or Telegram by itself — `detection.py` is the only
+  gate, and it is closed.
+
+Deleting the collector instead would remove the very evidence a future enabling task needs, and
+would enlarge the rollback surface for no behavioral gain.
+
+### Decision D-C — tag ownership becomes a precondition for the next adapter
+
+A wildcard inbound tag SHALL NOT be accepted again. The requirement is recorded where the enabling
+procedure lives (`docs/ANTIDPI.md` §13) and here, and it must be implemented **together with** the
+next adapter rather than as dead code today:
+
+1. the protocol plugin exposes the tags its current desired state generates
+   (`snell` already does: `hydra/plugins/snell/plugin.py:73-99`; attribution already resolves them:
+   `hydra/services/traffic_attribution.py:287-302`);
+2. the journal normalizer compares the matched tag against that set and drops non-matching records
+   before an event exists — this is the layer that has `state_reader`, and it is the layer where the
+   `del state_reader` placeholder currently sits (`agent.py:194-197`);
+3. the enabling task's acceptance SHALL include a negative fixture: an exact reject on an unowned or
+   retired tag produces no event, no state, no firewall call and no notification.
+
+No matcher is written now: with `PROTOCOL_REJECT_RULES` empty there is no consumer, and a guard for
+an adapter that does not exist is speculative code.
+
+### Decision D-D — the self-test states what it actually proves
+
+`selftest_targets.SUPPORTED_PROTOCOLS = ("snell",)` and the probe remain, but the report SHALL claim
+parser/plumbing coverage («the parser sees this reject and the pipeline archives it redacted»), not
+enforceability. The journal-path, redaction and archive coverage is genuinely valuable and would be
+lost by removing the probe; the misleading claim is what changes.
+
+### Decision D-E — no state schema change, no migration
+
+The plugin key `antidpi`, `SCHEMA_VERSION`, the state file layout, the ban ladder, the ipset set name
+and the systemd unit are unchanged. Withdrawing a rule cannot require a migration: nothing is
+written differently, only fewer events are accepted.
+
+### Surfaces that change
+
+| Surface | Change |
+| --- | --- |
+| `hydra/plugins/antidpi/detection.py` | `PROTOCOL_REJECT_RULES` emptied; comment states why |
+| `hydra/plugins/antidpi/adapters.py` | docstring: diagnostic-only parser |
+| `hydra/plugins/antidpi/labels.py` | `snell:record_auth_failed` label marked as historical evidence, not an enforceable signal |
+| `hydra/plugins/antidpi/selftest_report.py` / `selftest.py` | wording: parser proof, not enforcement proof |
+| `docs/ANTIDPI.md` | §3, §6 matrix, §12 self-test, §13 enabling checklist |
+| `CHANGELOG.md` | new top entry: the withdrawal and its reason |
+| `tests/test_antidpi*.py` | enforcement assertions flipped to discard assertions |
+
+### Error handling
+
+| Failure | Behavior |
+| --- | --- |
+| Snell record arrives after the change | discarded, cursor advanced, nothing observable |
+| Operator expected a Snell ban | status/history shows no new bans; the withdrawal is documented, not silent |
+| Legacy ban record already persisted | kept and expired normally; no rewrite, no retroactive unban |
+| Decoy path still enforced | unchanged code path, unchanged tests |
+| Rollback | revert the allowlist line; the parser, fixtures and docs remain valid |
+
+### Testing strategy
+
+- **Contract:** an exact fixture line yields `evidence_problem() != ""` and
+  `is_enforcement_evidence(...) is False` — the current positive assertion is inverted, not deleted,
+  because the approved requirement changed.
+- **No side effects:** the exact fixture line produces no state mutation, no firewall call and no
+  notification through `AntiDPIPlugin.observe_event`.
+- **Parser intact:** the fixture still parses (tag, peer and served address agreement still proven),
+  so the diagnostic value is not silently lost.
+- **Unowned tag:** an otherwise exact reject carrying an unknown or retired tag produces no event.
+- **Unchanged:** decoy-scan ban, manual ban, expiry, whitelist, reconciliation, cursor durability,
+  state corruption and compatibility facades stay green.
+- **Architecture:** graph/audit/size guards and Ruff pass; no new import, process or dependency.
+
+### Requirement traceability
+
+| Amendment requirement | Design coverage |
+| --- | --- |
+| No automatic ban from a Snell auth failure | D-A |
+| Snell absent from the allowlist until a proven discriminator exists | D-A, D-B |
+| Owned-tag verification before any future enforcement | D-C |
+| Manual bans and decoy enforcement unchanged | D-A, D-E |
+| Evidence, not promises | Testing strategy, D-D |
+
+### Rollback
+
+1. Restore the single `PROTOCOL_REJECT_RULES` entry.
+2. No state restore, no migration, no host action: persisted bans, cursors and offense counts are
+   compatible in both directions.
+3. Re-run `pytest -q tests/test_antidpi*.py` and confirm the pre-amendment assertions pass again.
+
+### Note on the decision journal
+
+`scripts/decisions.mjs` is absent from this repository (verified), so the ADR-light workflow cannot
+be executed here. The architectural choice is recorded in this design extension, as already done for
+`.kiro/specs/vless-yandex-cdn/design.md` (D10–D12).
+
 ## Links
 
 - Requirements: `.kiro/specs/antidpi-evidence-contraction/requirements.md`
 - Decision: `.kiro/decisions/0003-antidpi-closed-evidence.md`
 - Current policy documentation: `docs/ANTIDPI.md`
+- Related spec: `.kiro/specs/vless-yandex-cdn/`

@@ -16,6 +16,12 @@ from hydra.utils.format_ru import format_duration
 
 # Only the evidence AntiScan can actually produce is translated; anything
 # else stays visible under its raw key instead of inventing a meaning.
+#
+# ``snell:record_auth_failed`` stays translated because bans recorded before
+# the Snell withdrawal are still displayed in history.  It is historical
+# vocabulary, not a claim that the signal can ban today: a Snell rejection is
+# byte-identical for a probe and for a client with stale credentials, so it is
+# no longer an enforcement input.
 SIGNAL_LABELS: dict[str, str] = {
     "snell:record_auth_failed": "Snell: неверный ключ клиента",
     "https:scanner_path": "поиск уязвимых путей на decoy-сайте",
@@ -53,7 +59,7 @@ def signal_summary(values: object, *, limit: int = 3) -> str:
     items = signal_list(values)
     if not items:
         return "аномальное поведение"
-    visible = [signal_label(item) for item in items[: max(1, int(limit))]]
+    visible = [signal_label(item) for item in items[: max(1, _positive_int(limit, default=3))]]
     hidden = len(items) - len(visible)
     if hidden > 0:
         visible.append(f"+{hidden}")

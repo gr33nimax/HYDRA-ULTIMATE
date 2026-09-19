@@ -32,9 +32,15 @@ DECOY_SCAN_KIND = "decoy_scan"
 
 # protocol -> reasons a protocol-owned parser may report, and the sources
 # allowed to report them.  A protocol absent here can never enforce.
-PROTOCOL_REJECT_RULES: dict[str, frozenset[str]] = {
-    "snell": frozenset({"record_auth_failed"}),
-}
+#
+# Snell is deliberately absent.  ``record_auth_failed`` is byte-identical for a
+# hostile probe and for a legitimate client whose PSK is stale, mistyped or
+# generated for another generation, so the record proves that a frame did not
+# decrypt - not that the sender was hostile.  The grammar also binds whatever
+# tag the core printed, and the parser has no access to desired state, so a
+# retired or foreign listener matches it too.  Snell returns only together with
+# an owned-tag check in the journal normalizer (docs/ANTIDPI.md 13).
+PROTOCOL_REJECT_RULES: dict[str, frozenset[str]] = {}
 PROTOCOL_REJECT_SOURCES = frozenset({"journal", "caddy-source-relay"})
 
 DECOY_REASONS = frozenset({"scanner_path"})
