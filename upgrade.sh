@@ -35,17 +35,20 @@ UI_RESET=""
 UI_CYAN=""
 UI_GREEN=""
 UI_RED=""
+UI_YELLOW=""
 UI_DIM=""
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
     UI_RESET=$'\033[0m'
     UI_CYAN=$'\033[1;36m'
     UI_GREEN=$'\033[1;32m'
     UI_RED=$'\033[1;31m'
+    UI_YELLOW=$'\033[1;33m'
     UI_DIM=$'\033[2m'
 fi
 
 info() { printf '    %s•%s %s\n' "$UI_DIM" "$UI_RESET" "$*"; }
 ok() { printf '  %s✓%s %s\n' "$UI_GREEN" "$UI_RESET" "$*"; }
+warn() { printf '  %s⚠%s %s\n' "$UI_YELLOW" "$UI_RESET" "$*"; }
 fail() {
     printf '  %s✗ Ошибка:%s %s\n' "$UI_RED" "$UI_RESET" "$*" >&2
     return 1
@@ -79,6 +82,12 @@ result_error() {
 
 summary_row() {
     printf '  %-18s %s\n' "$1:" "$2"
+}
+
+support_reminder() {
+    [[ "${HYDRA_REF:-}" == "debug" ]] || return 0
+    printf '\n  %sПоддержать разработку:%s %shttps://web.tribute.tg/d/QHN%s\n' \
+        "$UI_DIM" "$UI_RESET" "$UI_CYAN" "$UI_RESET"
 }
 
 if [[ "${HYDRA_UPDATER_LAUNCHED:-0}" != "1" ]]; then
@@ -176,7 +185,7 @@ run_install_python() {
 }
 
 discover_units() {
-    local loaded_units state unit unit_files
+    local loaded_units unit unit_files _state
     local -A seen_units=()
     MANAGED_UNITS=()
     if ! unit_files=$(
@@ -187,7 +196,7 @@ discover_units() {
         fail "Не удалось получить список служб HYDRA в systemd."
         return 1
     fi
-    while read -r unit state _; do
+    while read -r unit _state _; do
         [[ "$unit" =~ ^hydra-.*\.(service|timer)$ ||
             "$unit" == "caddy-l4.service" ]] || continue
         [[ "$unit" =~ @\.(service|timer)$ ]] && continue
@@ -236,7 +245,7 @@ capture_active_units() {
             esac
         done <<<"$properties"
         [[ -n "$active_state" ]] || {
-            fail "Systemd вернул неполное состояние службы: $unit"
+            fail "systemd вернул неполное состояние службы: $unit"
             return 1
         }
         case "$active_state" in
@@ -281,8 +290,8 @@ start_previous_units() {
 }
 
 wait_for_previous_units() {
-    local attempt unit all_active
-    for attempt in {1..30}; do
+    local unit all_active _attempt
+    for _attempt in {1..30}; do
         all_active=1
         for unit in "${ACTIVE_UNITS[@]}"; do
             if ! systemctl is-active --quiet "$unit"; then
@@ -453,7 +462,7 @@ TARGET_SHA=$(
         awk 'NR == 1 {print $1}'
 )
 [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || {
-    fail "Не удалось определить целевой commit ветки."
+    fail "Не удалось определить целевой коммит ветки."
 }
 
 if [[ -d "$INSTALL_DIR/.git" ]]; then
@@ -465,13 +474,14 @@ else
     CURRENT_SHA=$(tr -d '[:space:]' <"$INSTALL_DIR/.hydra-source-revision" 2>/dev/null || true)
 fi
 [[ "$CURRENT_SHA" =~ ^[0-9a-f]{40}$ ]] || {
-    fail "Не удалось определить commit установленной версии."
+    fail "Не удалось определить коммит установленной версии."
 }
 [[ "$CURRENT_SHA" != "$TARGET_SHA" ]] || {
     result_ok "Обновление не требуется: уже установлен ${TARGET_SHA:0:12}."
     summary_row "Ветка" "$HYDRA_REF"
-    summary_row "Commit" "${TARGET_SHA:0:12}"
+    summary_row "Коммит" "${TARGET_SHA:0:12}"
     summary_row "Подробный лог" "/var/log/hydra/upgrade.log"
+    support_reminder
     exit 0
 }
 
@@ -490,13 +500,13 @@ HYDRA_INSTALL_DIR=$INSTALL_DIR
 EOF
 chmod 0600 "$ROLLBACK_DIR/metadata.env"
 
-step 3 7 "Подготовка нового release"
-info "Commit: ${TARGET_SHA:0:12}"
+step 3 7 "Подготовка новой версии"
+info "Коммит: ${TARGET_SHA:0:12}"
 git init --quiet "$STAGE_DIR"
 git -C "$STAGE_DIR" remote add origin "$REPO_URL"
 git -C "$STAGE_DIR" fetch --quiet --depth 1 origin "$TARGET_SHA"
 [[ "$(git -C "$STAGE_DIR" rev-parse FETCH_HEAD)" == "$TARGET_SHA" ]] || {
-    fail "Загруженный commit не совпадает с целевой версией ветки."
+    fail "Загруженный коммит не совпадает с целевой версией ветки."
 }
 git -C "$STAGE_DIR" checkout --quiet --detach "$TARGET_SHA"
 
@@ -517,7 +527,7 @@ run_stage_python \
     >"$ROLLBACK_DIR/target-version.txt"
 
 step 4 7 "Безопасная проверка перед обновлением"
-info "Проверяю новый код без изменения рабочего state"
+info "Проверяю новый код без изменения рабочего состояния"
 CURRENT_OPERATION="Проверка готовности state к обновлению"
 CURRENT_REPORT="$ROLLBACK_DIR/preflight-upgrade.json"
 run_stage_python -m hydra.cli --json upgrade check \
@@ -526,7 +536,7 @@ CURRENT_OPERATION="Полная проверка целевой версии"
 CURRENT_REPORT="$ROLLBACK_DIR/preflight-check.json"
 run_stage_python -m hydra.cli --json check \
     >"$CURRENT_REPORT"
-CURRENT_OPERATION="Проверка результатов preflight"
+CURRENT_OPERATION="Проверка результатов предварительной диагностики"
 CURRENT_REPORT="$ROLLBACK_DIR/preflight-check.json"
 run_stage_python - "$ROLLBACK_DIR" <<'PY'
 import json
@@ -548,7 +558,7 @@ CURRENT_REPORT=""
 
 discover_units
 capture_active_units
-step 5 7 "Резервная копия и импорт legacy state"
+step 5 7 "Резервная копия и перенос состояния"
 info "Останавливаю активные службы HYDRA: ${#ACTIVE_UNITS[@]}"
 SERVICES_QUIESCED=1
 stop_managed_units
@@ -585,14 +595,14 @@ run_stage_python \
     "$ROLLBACK_DIR/hydra-backup.tar.gz" --dry-run \
     >"$CURRENT_REPORT"
 
-info "Импортирую legacy state при остановленных службах"
+info "Переношу состояние при остановленных службах"
 STATE_MUTATION_STARTED=1
-CURRENT_OPERATION="Импорт legacy state"
+CURRENT_OPERATION="Перенос состояния"
 CURRENT_REPORT="$ROLLBACK_DIR/state-import.json"
 run_stage_python \
     -m hydra.cli --json upgrade migrate-state \
     >"$CURRENT_REPORT"
-CURRENT_OPERATION="Проверка state после импорта"
+CURRENT_OPERATION="Проверка состояния после переноса"
 CURRENT_REPORT="$ROLLBACK_DIR/state-check.json"
 run_stage_python \
     -m hydra.cli --json upgrade check \
@@ -630,13 +640,13 @@ mv -f "$WRAPPER_TMP" "$WRAPPER"
 WRAPPER_TMP=""
 
 if ! bash "$INSTALL_DIR/deploy/apply-resource-defaults.sh"; then
-    warn "Не удалось обновить стандартные ограничения RAM/журналов; обновление продолжено"
+    warn "Не удалось обновить стандартные лимиты памяти и журналов; обновление продолжено"
 fi
 
 start_previous_units
 
 step 7 7 "Итоговая проверка"
-info "Проверяю state, статус и systemd"
+info "Проверяю состояние, статус и systemd"
 CURRENT_OPERATION="Проверка новой версии"
 CURRENT_REPORT="$ROLLBACK_DIR/post-check.json"
 run_install_python \
@@ -662,7 +672,7 @@ CURRENT_REPORT=""
 wait_for_previous_units
 
 [[ "$(git -C "$INSTALL_DIR" rev-parse HEAD)" == "$TARGET_SHA" ]] || {
-    fail "Commit установки неожиданно изменился во время переключения."
+    fail "Коммит установки неожиданно изменился во время переключения."
 }
 
 printf '%s\n' "$TARGET_SHA" >"$ROLLBACK_DIR/SUCCESS"
@@ -681,3 +691,4 @@ summary_row "Ветка" "$HYDRA_REF"
 summary_row "Переход" "${CURRENT_SHA:0:12} → ${TARGET_SHA:0:12}"
 summary_row "Снимок отката" "$ROLLBACK_DIR"
 summary_row "Подробный лог" "/var/log/hydra/upgrade.log"
+support_reminder

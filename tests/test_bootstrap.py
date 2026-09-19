@@ -80,7 +80,14 @@ def test_install_guide_runs_sources_through_the_isolated_environment():
 
 def test_bootstrap_never_overwrites_detected_hydracore():
     assert 'grep -qi "hydracore"' in BOOTSTRAP
-    assert "bootstrap не заменяет custom core" in BOOTSTRAP
+    assert "установщик не заменяет стороннее ядро" in BOOTSTRAP
+
+
+def test_support_link_and_installer_reminder_are_debug_only():
+    assert "https://web.tribute.tg/d/QHN" in README
+    assert "boosty.to/gr33nimax/donate" not in README
+    assert '[[ "${HYDRA_REF:-}" == "debug" ]] || return 0' in BOOTSTRAP
+    assert "Поддержать разработку" in BOOTSTRAP
 
 
 def test_clean_bootstrap_installs_the_newest_stable_hydracore_vps_asset():
@@ -91,6 +98,6 @@ def test_clean_bootstrap_installs_the_newest_stable_hydracore_vps_asset():
     assert "order > best[0]" in BOOTSTRAP
     assert '[[ "$HC_DIGEST" == sha256:* ]]' in BOOTSTRAP
     assert "file \"$HC_BIN\" | grep -q 'ELF .* executable'" in BOOTSTRAP
-    assert "Hydracore identity не подтверждена" in BOOTSTRAP
+    assert "Подлинность Hydracore не подтверждена" in BOOTSTRAP
     assert "shtorm-7/sing-box-extended" not in BOOTSTRAP
     assert "Установка sing-box-extended" not in BOOTSTRAP

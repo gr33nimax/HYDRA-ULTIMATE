@@ -291,7 +291,7 @@ python verify.py     # compile + lint + полный pytest
 
 ## Поддержать проект
 
-[Поддержать разработку HYDRA на Boosty](https://boosty.to/gr33nimax/donate).
+[Поддержать разработку HYDRA](https://web.tribute.tg/d/QHN).
 
 ## Связанный проект
 

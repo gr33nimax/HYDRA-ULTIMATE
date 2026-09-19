@@ -45,6 +45,12 @@ result_error() {
     echo -e "\n${RED}${BOLD}ОШИБКА: $*${NC}" >&2
 }
 
+support_reminder() {
+    [[ "${HYDRA_REF:-}" == "debug" ]] || return 0
+    echo ""
+    echo -e "  ${DIM}Поддержать разработку:${NC} ${CYAN}https://web.tribute.tg/d/QHN${NC}"
+}
+
 INSTALL_COMPLETED=0
 ERROR_REPORTED=0
 
@@ -182,7 +188,7 @@ if [[ "$PY_OK" != "1" ]]; then
     err "Debian 11 (Python 3.9) и Ubuntu 20.04 (Python 3.8) не подходят: нужен Debian 12+ или Ubuntu 22.04+"
     exit 1
 fi
-ok "Python $PY_VER: OK"
+ok "Python $PY_VER: подходит"
 
 # New installations get a private KDF secret. Existing state files retain the
 # legacy derivation so current client links and credentials do not rotate.
@@ -206,7 +212,7 @@ $PKG_INSTALL iptables nftables iproute2 gnupg ca-certificates certbot ufw
 step 3 5 "Совместимое ядро"
 if command -v sing-box &>/dev/null &&
     sing-box version 2>/dev/null | head -1 | grep -qi "hydracore"; then
-    info "Обнаружен Hydracore; bootstrap не заменяет custom core"
+    info "Обнаружен Hydracore; установщик не заменяет стороннее ядро"
     ok "Ядро сохранено: $(sing-box version 2>/dev/null | head -1)"
 else
     # The channel is the switch that decides which release is installed; the
@@ -267,7 +273,7 @@ if best is not None:
 
     read -r HC_URL HC_DIGEST HC_TAG <<<"$HC_META"
     [[ -n "$HC_URL" && -n "$HC_TAG" ]] || {
-        err "Не удалось определить Hydracore release канала ${HC_CHANNEL}"
+        err "Не удалось определить релиз Hydracore для канала ${HC_CHANNEL}"
         exit 1
     }
     HC_TMP=$(mktemp -d /tmp/hydra-hydracore.XXXXXX)
@@ -279,7 +285,7 @@ if best is not None:
             err "Проверка целостности Hydracore не пройдена"
             exit 1
         }
-        ok "Проверка целостности Hydracore: OK"
+        ok "Проверка целостности Hydracore пройдена"
     else
         err "GitHub не предоставил SHA-256 для Hydracore; установка остановлена"
         exit 1
@@ -287,17 +293,17 @@ if best is not None:
     tar -xzf "$HC_TMP/hydracore.tar.gz" -C "$HC_TMP"
     HC_BIN=$(find "$HC_TMP" -type f -name sing-box -size +1M -print -quit)
     [[ -n "$HC_BIN" ]] || {
-        err "В архиве нет корректного Hydracore binary"
+        err "В архиве нет исполняемого файла Hydracore"
         exit 1
     }
     file "$HC_BIN" | grep -q 'ELF .* executable' || {
-        err "Hydracore binary не является ELF executable"
+        err "Файл Hydracore не является исполняемым ELF-файлом"
         exit 1
     }
     install -m 0755 "$HC_BIN" /usr/local/bin/sing-box.new
     /usr/local/bin/sing-box.new version >/dev/null
     /usr/local/bin/sing-box.new version | head -1 | grep -qi "hydracore" || {
-        err "Hydracore identity не подтверждена"
+        err "Подлинность Hydracore не подтверждена"
         exit 1
     }
     mv -f /usr/local/bin/sing-box.new /usr/local/bin/sing-box
@@ -320,10 +326,10 @@ if ! HYDRA_TARGET_REV=$(git ls-remote --exit-code "$REPO_URL" "$HYDRA_REMOTE_REF
     exit 1
 fi
 if [[ ! "$HYDRA_TARGET_REV" =~ ^[0-9a-f]{40}$ ]]; then
-    err "Не удалось определить commit ветки $HYDRA_REF"
+    err "Не удалось определить коммит ветки $HYDRA_REF"
     exit 1
 fi
-info "Выбрана ветка ${HYDRA_REF}, commit ${HYDRA_TARGET_REV:0:12}"
+info "Выбрана ветка ${HYDRA_REF}, коммит ${HYDRA_TARGET_REV:0:12}"
 
 if [[ -d "${INSTALL_DIR}/.git" ]]; then
     info "Обновление репозитория..."
@@ -360,7 +366,7 @@ else
         mkdir -p "$INSTALL_DIR"
         cp -a "$PARENT_TMP/repo/." "$INSTALL_DIR/"
     else
-        warn "git clone не дал выбранный commit — загружаю точный архив..."
+        warn "git clone не дал выбранный коммит — загружаю точный архив..."
         rm -rf "$PARENT_TMP/repo"
         ARCHIVE="${REPO_URL}/archive/${HYDRA_TARGET_REV}.tar.gz"
         curl -fsSL --connect-timeout 30 --retry 3 -o "$PARENT_TMP/hydra.tar.gz" "$ARCHIVE"
@@ -382,10 +388,10 @@ else
     HYDRA_INSTALLED_REV=$(cat "$INSTALL_DIR/.hydra-source-revision" 2>/dev/null || true)
 fi
 if [[ "$HYDRA_INSTALLED_REV" != "$HYDRA_TARGET_REV" ]]; then
-    err "Проверка версии не пройдена: ожидался $HYDRA_TARGET_REV, установлен ${HYDRA_INSTALLED_REV:-unknown}"
+    err "Проверка версии не пройдена: ожидался $HYDRA_TARGET_REV, установлен ${HYDRA_INSTALLED_REV:-не определён}"
     exit 1
 fi
-ok "Проверка commit: ${HYDRA_INSTALLED_REV:0:12}"
+ok "Проверка коммита: ${HYDRA_INSTALLED_REV:0:12}"
 
 # ── Python-зависимости ──────────────────────────────────────────────────────
 info "Изолированное Python-окружение..."
@@ -401,7 +407,7 @@ if [[ -n "${HYDRA_BACKUP_DIR:-}" ]]; then
 fi
 
 if ! bash "$INSTALL_DIR/deploy/apply-resource-defaults.sh"; then
-    warn "Не удалось применить стандартные ограничения RAM/журналов; установка продолжена"
+    warn "Не удалось применить стандартные лимиты памяти и журналов; установка продолжена"
 fi
 
 # ── Symlink ──────────────────────────────────────────────────────────────────
@@ -436,6 +442,7 @@ result_ok "HYDRA v${HYDRA_VERSION} установлена"
 echo -e "  Запуск: ${BOLD}sudo hydra${NC}"
 echo -e "  Проверка: ${BOLD}hydra check${NC}"
 echo -e "  Лог: ${DIM}${LOG_FILE}${NC}"
+support_reminder
 echo ""
 
 INSTALL_COMPLETED=1
