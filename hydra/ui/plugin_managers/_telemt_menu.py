@@ -38,9 +38,16 @@ def _render_status(protocol, app):
     return installed
 
 
-def _menu_options(enabled):
+def _menu_options(*, installed, enabled):
+    """Offer only the actions that make sense in the current install state."""
+    if not installed:
+        return [
+            ("1", "Установить Telemt", "Порт и TLS-домен"),
+            ("-", "", ""),
+            ("0", "Назад", ""),
+        ]
     return [
-        ("1", "Установить / настроить", "Порт и TLS-домен"),
+        ("1", "Перенастроить", "Сменить порт и TLS-домен"),
         ("2", "Расширенные настройки", "Сеть, MiddleProxy и логи"),
         ("3", "Показать ссылки", "Ссылки активных пользователей"),
         ("4", "Перезапустить сервис", "Перезапуск telemt"),
@@ -72,6 +79,9 @@ def _dispatch(choice, state, app, protocol, *, installed):
         return False
     if choice == "1":
         facade._run_install(state, app)
+    elif not installed:
+        facade.warn("Сначала установите Telemt.")
+        facade._pause()
     elif choice == "2":
         facade._run_advanced(state, app)
     elif choice == "3":
@@ -94,7 +104,10 @@ def run(state, app):
     while True:
         facade.clear()
         installed = _render_status(protocol, app)
-        choice = facade.menu(_menu_options(protocol.enabled), facade.protocol_menu_title("telemt"))
+        choice = facade.menu(
+            _menu_options(installed=installed, enabled=protocol.enabled),
+            facade.protocol_menu_title("telemt"),
+        )
         try:
             if not _dispatch(choice, state, app, protocol, installed=installed):
                 return

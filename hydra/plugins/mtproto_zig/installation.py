@@ -5,12 +5,23 @@ from __future__ import annotations
 import platform
 import shutil
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from hydra.utils.downloader import download_github_asset, extract_tarball, verify_elf
 
 from .constants import SERVICE_USER
+
+
+def _report(on_failure: Callable[[str], None] | None, stage: str) -> None:
+    """Report one redacted failure stage without leaking host output."""
+    if on_failure is None:
+        return
+    try:
+        on_failure(stage)
+    except Exception:
+        pass
 
 
 def _remove_tree(path: Path) -> None:
@@ -49,7 +60,13 @@ def write_service(*, host: Any, service_file: Path, binary: Path, config: Path, 
     return host.run(["systemctl", "daemon-reload"], capture_output=True).returncode == 0
 
 
-def download_binary(*, host: Any, repo: str, binary: Path) -> bool:
+def download_binary(
+    *,
+    host: Any,
+    repo: str,
+    binary: Path,
+    on_failure: Callable[[str], None] | None = None,
+) -> bool:
     machine = platform.machine().lower()
     patterns = (
         ("mtproto-proxy-linux-aarch64_crypto.tar.gz", "mtproto-proxy-linux-aarch64.tar.gz")
@@ -58,6 +75,7 @@ def download_binary(*, host: Any, repo: str, binary: Path) -> bool:
     )
     destination = Path(tempfile.gettempdir()) / "hydra-mtproto-zig"
     destination.mkdir(parents=True, exist_ok=True)
+    reason = "не удалось скачать релизный архив mtproto.zig"
     for pattern in patterns:
         archive = destination / f"{pattern}.tar.gz"
         if not download_github_asset(repo, pattern, archive):
@@ -79,9 +97,12 @@ def download_binary(*, host: Any, repo: str, binary: Path) -> bool:
             binary.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(found, binary)
             binary.chmod(0o755)
-            return verify_elf(binary)
+            if verify_elf(binary):
+                return True
+            reason = "загруженный бинарник mtproto.zig не является исполняемым ELF"
         except (OSError, ValueError):
             continue
+    _report(on_failure, reason)
     return False
 
 

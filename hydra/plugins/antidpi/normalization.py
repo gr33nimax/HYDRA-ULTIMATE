@@ -14,6 +14,12 @@ from collections.abc import Callable
 from hydra.core.yandex_cdn import contains_peer
 from hydra.plugins.antidpi.adapters import remote_ip
 
+__all__ = [
+    "Normalizer",
+    "normalize_decoy_record",
+    "normalize_vless_cdn_record",
+]
+
 Normalizer = Callable[[dict], "tuple[str, dict] | None"]
 
 # Scanner path prefixes checked against the normalized request path only.

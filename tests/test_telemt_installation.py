@@ -146,6 +146,33 @@ def test_failed_first_install_removes_new_partial_binary(tmp_path):
     assert not binary.exists()
 
 
+def test_failed_install_reports_the_failed_stage(tmp_path):
+    binary = tmp_path / "telemt"
+    stages: list[str] = []
+
+    def download_new(**_kwargs):
+        binary.write_bytes(b"new binary")
+        return True
+
+    with (
+        patch("hydra.plugins.telemt.installation.download_binary", side_effect=download_new),
+        patch("hydra.plugins.telemt.installation.verify_elf", return_value=True),
+        patch("hydra.plugins.telemt.installation.ensure_service_user", return_value=False),
+    ):
+        assert not installation.install(
+            host=_Host(),
+            repo="telemt/telemt",
+            bin_path=binary,
+            work_dir=tmp_path / "work",
+            service_file=tmp_path / "telemt.service",
+            config_file=tmp_path / "config.toml",
+            service_name="telemt",
+            on_failure=stages.append,
+        )
+
+    assert stages == ["не удалось создать сервисного пользователя Telemt"]
+
+
 def test_failed_manual_update_restores_previous_binary(tmp_path):
     binary = tmp_path / "telemt"
     binary.write_bytes(b"old binary")

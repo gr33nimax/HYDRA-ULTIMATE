@@ -45,8 +45,10 @@ class TelemtPlugin(BasePlugin):
 
     def __init__(self) -> None:
         self._pending_cfg: str | None = None
+        self._install_failure = ""
 
     def install(self) -> bool:
+        self._install_failure = ""
         return installation.install(
             host=HOST,
             repo=GITHUB_REPO,
@@ -55,7 +57,15 @@ class TelemtPlugin(BasePlugin):
             service_file=SERVICE_FILE,
             config_file=CONFIG_FILE,
             service_name=SERVICE_NAME,
+            on_failure=self._note_install_failure,
         )
+
+    def install_failure(self) -> str:
+        """Redacted stage of the last failed install, for operator diagnostics."""
+        return self._install_failure
+
+    def _note_install_failure(self, stage: str) -> None:
+        self._install_failure = stage
 
     def uninstall(self) -> bool:
         return installation.uninstall(

@@ -15,9 +15,10 @@ def apply(config: str | None, *, host: Any, config_file: Path, service: str, bin
     ownership = host.run(["chown", f"root:{SERVICE_USER}", str(config_file)], capture_output=True)
     if ownership.returncode != 0:
         return False
-    check = host.run([str(binary), "--check-config", str(config_file)], capture_output=True)
-    if check.returncode != 0:
-        return False
+    # Upstream runs the proxy as ``mtproto-proxy <config.toml>`` and validates
+    # configuration through ``mtbuddy config validate``; there is no proxy-side
+    # ``--check-config`` flag. The systemd restart plus ``is-active`` result is
+    # the runtime health gate.
     results = (
         host.run(["systemctl", "daemon-reload"], capture_output=True),
         host.run(["systemctl", "enable", service], capture_output=True),

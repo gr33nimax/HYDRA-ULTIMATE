@@ -50,20 +50,38 @@ class MtprotoZigPlugin(BasePlugin):
 
     def __init__(self) -> None:
         self._pending_config: str | None = None
+        self._install_failure = ""
 
     def install(self) -> bool:
-        if not self._installed() and not installation.download_binary(host=HOST, repo=GITHUB_REPO, binary=BIN_PATH):
+        self._install_failure = ""
+        if not self._installed() and not installation.download_binary(
+            host=HOST,
+            repo=GITHUB_REPO,
+            binary=BIN_PATH,
+            on_failure=self._note_install_failure,
+        ):
             return False
         if not installation.ensure_service_user(HOST):
+            self._note_install_failure("не удалось создать сервисного пользователя mtproto-zig")
             return False
-        return installation.write_service(
+        if not installation.write_service(
             host=HOST,
             service_file=SERVICE_FILE,
             binary=BIN_PATH,
             config=CONFIG_FILE,
             work_dir=WORK_DIR,
             service=SERVICE_NAME,
-        )
+        ):
+            self._note_install_failure("не удалось записать systemd-юнит mtproto-zig")
+            return False
+        return True
+
+    def install_failure(self) -> str:
+        """Redacted stage of the last failed install, for operator diagnostics."""
+        return self._install_failure
+
+    def _note_install_failure(self, stage: str) -> None:
+        self._install_failure = stage
 
     def uninstall(self) -> bool:
         return installation.uninstall(

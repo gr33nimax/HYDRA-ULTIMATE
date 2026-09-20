@@ -1,6 +1,9 @@
 """Local-host adapter for diagnostic network, clock, and filesystem probes."""
+
 from __future__ import annotations
 
+import errno
+import json
 import os
 import shutil
 import socket
@@ -73,8 +76,9 @@ def _error_result(exc: BaseException) -> HttpProbeResult:
             body = exc.read()
         except Exception:
             body = b""
+        status = exc.code if isinstance(exc.code, int) else 0
         return HttpProbeResult(
-            status=int(exc.code),
+            status=status,
             body=body,
             error_kind="http",
             error_detail=str(exc),
@@ -102,6 +106,16 @@ def _error_result(exc: BaseException) -> HttpProbeResult:
             kind = "url"
         return HttpProbeResult(error_kind=kind, error_detail=reason)
     return HttpProbeResult(error_kind="other", error_detail=str(exc))
+
+
+# A host without an IPv6 stack must not look like a host with a busy port.
+_IPV6_UNAVAILABLE = frozenset(
+    {
+        errno.EAFNOSUPPORT,
+        errno.EADDRNOTAVAIL,
+        errno.EPROTONOSUPPORT,
+    }
+)
 
 
 class HostDiagnosticOperations(DiagnosticOperations):
@@ -174,6 +188,24 @@ class HostDiagnosticOperations(DiagnosticOperations):
         except OSError:
             return True
 
+    def port_occupied(self, port: int) -> bool:
+        """Report whether any listener already owns the port on every family.
+
+        A wildcard bind sees listeners bound to one specific address, which a
+        loopback probe misses. Only a genuine address conflict counts as
+        occupied: a host without IPv6 must not look like a busy port.
+        """
+        for family, address in ((socket.AF_INET, "0.0.0.0"), (socket.AF_INET6, "::")):
+            try:
+                with socket.socket(family, socket.SOCK_STREAM) as stream:
+                    stream.bind((address, port))
+            except OSError as exc:
+                if family == socket.AF_INET6:
+                    if exc.errno in _IPV6_UNAVAILABLE:
+                        continue
+                return True
+        return False
+
     def tcp_connect(self, host: str, port: int, timeout: float) -> bool:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as stream:
@@ -184,12 +216,14 @@ class HostDiagnosticOperations(DiagnosticOperations):
             return False
 
     def read_json_file(self, path: str) -> Any:
-        if not os.path.exists(path):
-            raise FileNotFoundError(path)
-        with open(path, "r", encoding="utf-8") as handle:
-            import json
-
-            return json.load(handle)
+        """Read one JSON file, reporting a missing or malformed file as an error."""
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except FileNotFoundError:
+            raise FileNotFoundError(path) from None
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Некорректный JSON в {path}: {exc}") from exc
 
     def path_exists(self, path: str) -> bool:
         return os.path.exists(path)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import platform
 import shutil
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -26,6 +27,16 @@ class HostRunner(Protocol):
     def ensure_directory(self, path: Path, *, mode: int = 0o755) -> None: ...
 
     def remove_file(self, path: Path) -> None: ...
+
+
+def _report(on_failure: Callable[[str], None] | None, stage: str) -> None:
+    """Report one redacted failure stage without leaking host output."""
+    if on_failure is None:
+        return
+    try:
+        on_failure(stage)
+    except Exception:
+        pass
 
 
 def _remove_tree(path: Path) -> None:
@@ -183,23 +194,28 @@ def install(
     service_file: Path,
     config_file: Path,
     service_name: str,
+    on_failure: Callable[[str], None] | None = None,
 ) -> bool:
     """Install Telemt without leaving a partial binary or unit behind."""
     previous_binary = bin_path.read_bytes() if bin_path.exists() else None
     previous_service = service_file.read_bytes() if service_file.exists() else None
     installed = bool(previous_binary and verify_elf(bin_path))
-    success = (
-        (installed or download_binary(repo=repo, bin_path=bin_path))
-        and ensure_service_user(host)
-        and write_service(
-            host=host,
-            work_dir=work_dir,
-            service_file=service_file,
-            bin_path=bin_path,
-            config_file=config_file,
-            service_name=service_name,
-        )
-    )
+    success = installed or download_binary(repo=repo, bin_path=bin_path)
+    if not success:
+        _report(on_failure, "не удалось скачать бинарник Telemt")
+    elif not ensure_service_user(host):
+        success = False
+        _report(on_failure, "не удалось создать сервисного пользователя Telemt")
+    elif not write_service(
+        host=host,
+        work_dir=work_dir,
+        service_file=service_file,
+        bin_path=bin_path,
+        config_file=config_file,
+        service_name=service_name,
+    ):
+        success = False
+        _report(on_failure, "не удалось записать systemd-юнит Telemt")
     if success:
         return True
     _restore_file(host, bin_path, previous_binary, mode=0o755)

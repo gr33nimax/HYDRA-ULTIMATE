@@ -54,6 +54,29 @@ def _install_or_repair(state, app) -> bool:
     return app.protocols.reinstall(state, "telemt") if protocol.installed else app.protocols.install(state, "telemt")
 
 
+def _port_is_free(app, port: int) -> bool:
+    """Preflight probe: another listener may already own this TCP port.
+
+    Uses the wildcard probe so a service bound to one specific address is
+    still detected. A missing or failing diagnostic port must never block an
+    install; the runtime apply still reports a real bind failure.
+    """
+    diagnostics = getattr(app, "diagnostics", None)
+    probe = getattr(diagnostics, "port_occupied", None) or getattr(diagnostics, "port_listening", None)
+    if not callable(probe):
+        return True
+    try:
+        return not bool(probe(port))
+    except Exception:
+        return True
+
+
+def _failure_detail(app, fallback: str) -> str:
+    """Use the recorded lifecycle failure, or a concrete next step."""
+    detail = str(app.apply_error() or "").strip()
+    return detail or fallback
+
+
 def run_install(state, app) -> None:
     from hydra.plugins.telemt.migration import preview
 
@@ -67,6 +90,11 @@ def run_install(state, app) -> None:
     facade.warn("Настройка Telemt Fake TLS.")
     port = _choose_port()
     if port is None:
+        return
+    current_port = protocol.config.get("port", 0) if protocol else 0
+    if port != current_port and not _port_is_free(app, port):
+        facade.error(f"Порт {port} уже занят другим сервисом. Выберите свободный порт.")
+        facade._pause()
         return
     tls_domain = facade._ask(
         "TLS-домен маскировки (например, google.com)",
@@ -88,8 +116,12 @@ def run_install(state, app) -> None:
     ):
         return
     _save_install_settings(state, app, port=port, tls_domain=tls_domain)
-    if not (_install_or_repair(state, app) and app.protocols.enable(state, "telemt")):
-        facade.error("Установка Telemt провалилась.")
+    if not _install_or_repair(state, app):
+        facade.error("Установка Telemt не удалась: " + _failure_detail(app, "смотрите journalctl -u telemt"))
+        facade._pause()
+        return
+    if not app.protocols.enable(state, "telemt"):
+        facade.error("Telemt установлен, но не запустился: " + _failure_detail(app, "смотрите systemctl status telemt"))
         facade._pause()
         return
     facade.success("Telemt установлен. Выдай пользователям новые ссылки.")

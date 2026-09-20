@@ -1,4 +1,5 @@
 """Transactional plugin lifecycle use-cases."""
+
 from __future__ import annotations
 
 import copy
@@ -39,6 +40,7 @@ class PluginLifecycleOperations:
             transaction.rollback(self.log_rollback_error)
             raise
         if not installed:
+            self._note_plugin_install_failure(name, plugin)
             transaction.rollback(self.log_rollback_error)
             return False
 
@@ -262,3 +264,23 @@ class PluginLifecycleOperations:
     def _require_success(result: bool, message: str) -> None:
         if not result:
             raise RuntimeError(message)
+
+    def _note_plugin_install_failure(
+        self,
+        name: str,
+        plugin: Any,
+    ) -> None:
+        """Surface a plugin-declared redacted install stage to the caller.
+
+        The hook is optional and best-effort: a diagnostic label must never
+        replace the real lifecycle result or raise on its own.
+        """
+        hook = getattr(plugin, "install_failure", None)
+        if not callable(hook):
+            return
+        try:
+            detail = str(hook() or "").strip()
+        except Exception:
+            return
+        if detail:
+            self.set_apply_error(f"Установка {name}: {detail}")
