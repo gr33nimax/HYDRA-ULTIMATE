@@ -15,10 +15,10 @@ from typing import TextIO
 
 from hydra.core.host import HOST
 from hydra.core.state_models import AppState
-from hydra.core.sni_router import DECOY_LOG, TRUSTTUNNEL_LOG
+from hydra.core.sni_router import DECOY_LOG, TRUSTTUNNEL_LOG, VLESS_CDN_DECOY_LOG
 from hydra.plugins.antidpi.adapters import parse_protocol_line
 from hydra.plugins.antidpi.detection import event_time as _event_now
-from hydra.plugins.antidpi.normalization import normalize_decoy_record
+from hydra.plugins.antidpi.normalization import normalize_decoy_record, normalize_vless_cdn_record
 from hydra.plugins.antidpi.plugin import (
     CURSOR_FILE,
     AntiDPIPlugin,
@@ -299,6 +299,7 @@ def run(
     journal.start()
     tails = (
         JsonTail(DECOY_LOG, (normalize_decoy_record,)),
+        JsonTail(VLESS_CDN_DECOY_LOG, (normalize_vless_cdn_record,)),
         JsonTail(NAIVE_ACCESS_LOG, (normalize_decoy_record,), create=False),
         JsonTail(TRUSTTUNNEL_LOG, (normalize_decoy_record,)),
     )

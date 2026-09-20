@@ -66,18 +66,6 @@ from hydra.services.uninstall import CleanupStep, UninstallService
 from hydra.services.users import UserService
 
 
-def _disable_telemt_ios_fix() -> None:
-    from hydra.plugins.telemt.telemt_ios_fix_console import disable_ios_fix
-
-    disable_ios_fix()
-
-
-def _disable_telemt_syn_limiter() -> None:
-    from hydra.plugins.telemt.telemt_syn_limiter_console import disable_syn_limiter
-
-    disable_syn_limiter()
-
-
 def _require_cleanup_result(operation) -> None:
     ok, message = operation()
     if not ok:
@@ -267,8 +255,6 @@ def production_application(
                         calls_creator_runtime.uninstall_creator_pool,
                     ),
                 ),
-                CleanupStep("telemt-ios", _disable_telemt_ios_fix),
-                CleanupStep("telemt-syn", _disable_telemt_syn_limiter),
             ),
         ),
         certificates=certificate_audit,

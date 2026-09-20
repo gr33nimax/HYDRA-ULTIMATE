@@ -3,8 +3,11 @@ from unittest.mock import MagicMock
 from hydra.core.state import AppState, PluginState, User
 from hydra.services.active_connections import tracked_active_connections
 from hydra.services.traffic import (
-    refresh_user_traffic, check_traffic_limits, protocol_totals,
-    reset_global_report_traffic, reset_user_traffic,
+    refresh_user_traffic,
+    check_traffic_limits,
+    protocol_totals,
+    reset_global_report_traffic,
+    reset_user_traffic,
 )
 from hydra.services.traffic_accounting import apply_connection_snapshot
 from hydra.services.traffic_attribution import TrafficEvidence
@@ -15,11 +18,7 @@ class FakeTrafficProtocols:
         self.plugins = {plugin.meta.name: plugin for plugin in plugins}
 
     def enabled_names(self, state: AppState) -> set[str]:
-        return {
-            name
-            for name, protocol in state.protocols.items()
-            if protocol.enabled and name in self.plugins
-        }
+        return {name for name, protocol in state.protocols.items() if protocol.enabled and name in self.plugins}
 
     def traffic(self, state: AppState, name: str) -> dict[str, int]:
         return self.plugins[name].traffic(state)
@@ -65,8 +64,9 @@ def test_first_connection_poll_initializes_report_before_crediting_bytes():
 
 
 def test_reset_user_preserves_legacy_global_total_before_first_poll():
-    user = User(email="u@example.com", uuid="u1", traffic_used_bytes=300,
-                credentials={"anytls": {"traffic_used_bytes": 300}})
+    user = User(
+        email="u@example.com", uuid="u1", traffic_used_bytes=300, credentials={"anytls": {"traffic_used_bytes": 300}}
+    )
     state = AppState(users=[user])
     reset_user_traffic(state, user.email)
     assert user.traffic_used_bytes == 0
@@ -82,7 +82,9 @@ def test_resettable_snapshot_is_accumulated_monotonically():
     plugin = MagicMock()
     plugin.meta.name = "amneziawg"
     plugin.traffic_snapshot.side_effect = [
-        {user.email: 100}, {user.email: 150}, {user.email: 20},
+        {user.email: 100},
+        {user.email: 150},
+        {user.email: 20},
     ]
     plugin.aggregate_traffic_snapshot.return_value = None
     protocols = FakeTrafficProtocols([plugin])
@@ -140,7 +142,9 @@ def test_custom_plugin_snapshot_needs_no_service_allowlist():
 def test_limit_is_reached_at_exact_boundary():
     limit = 1073741824
     user = User(
-        email="u@example.com", uuid="u1", traffic_limit_gb=1,
+        email="u@example.com",
+        uuid="u1",
+        traffic_limit_gb=1,
         traffic_used_bytes=limit,
     )
     state = AppState(users=[user])
@@ -242,16 +246,13 @@ def test_active_connections_group_only_current_attributed_sessions():
     state = AppState()
     state.network.clash_api_enabled = True
     import time
+
     state.install["traffic_daemon_last_poll"] = time.time()
     state.install["traffic_connection_counters"] = {
-        "a": {"user": "u@example.com", "protocol": "anytls", "download": 100,
-              "upload": 20, "missed_polls": 0},
-        "b": {"user": "u@example.com", "protocol": "anytls", "download": 50,
-              "upload": 10, "missed_polls": 0},
-        "stale": {"user": "old@example.com", "protocol": "anytls", "download": 999,
-                  "upload": 999, "missed_polls": 1},
-        "unknown": {"user": "", "protocol": "mieru", "download": 999,
-                    "upload": 999, "missed_polls": 0},
+        "a": {"user": "u@example.com", "protocol": "anytls", "download": 100, "upload": 20, "missed_polls": 0},
+        "b": {"user": "u@example.com", "protocol": "anytls", "download": 50, "upload": 10, "missed_polls": 0},
+        "stale": {"user": "old@example.com", "protocol": "anytls", "download": 999, "upload": 999, "missed_polls": 1},
+        "unknown": {"user": "", "protocol": "mieru", "download": 999, "upload": 999, "missed_polls": 0},
     }
     rows = tracked_active_connections(state)
     assert len(rows) == 1
@@ -265,6 +266,7 @@ def test_active_connections_include_attributed_shadowtls_sessions():
     state = AppState()
     state.network.clash_api_enabled = True
     import time
+
     state.install["traffic_daemon_last_poll"] = time.time()
     state.install["traffic_connection_counters"] = {
         "shadow": {
@@ -289,6 +291,7 @@ def test_active_connections_include_attributed_hysteria2_sessions():
     state = AppState()
     state.network.clash_api_enabled = True
     import time
+
     state.install["traffic_daemon_last_poll"] = time.time()
     state.install["traffic_connection_counters"] = {
         "hysteria2": {
@@ -335,13 +338,31 @@ def test_active_connections_include_a_custom_attributed_protocol():
             "tx": 100,
             "connections": 1,
             "last_handshake": int(
-                state.install["traffic_connection_counters"][
-                    "custom"
-                ]["seen_at"],
+                state.install["traffic_connection_counters"]["custom"]["seen_at"],
             ),
             "traffic_scope": "active",
         },
     ]
+
+
+def test_vless_cdn_connection_is_credited_by_its_inbound_tag():
+    user = User(email="cdn@example.com", uuid="u1")
+    state = AppState(
+        users=[user],
+        protocols={"vless_cdn": PluginState(enabled=True)},
+    )
+    connection = {
+        "id": "cdn-1",
+        "metadata": {"user": user.email, "inboundTag": "vless-cdn-in"},
+        "upload": 120,
+        "download": 880,
+    }
+
+    assert apply_connection_snapshot(state, [connection], TrafficEvidence())
+    assert user.traffic_used_bytes == 1000
+    assert user.credentials["vless_cdn"]["traffic_used_bytes"] == 1000
+    assert state.install["traffic_connection_counters"]["cdn-1"]["protocol"] == "vless_cdn"
+
 
 def test_an_awg_peer_is_attributed_by_its_tunnel_address():
     """A tunnel peer has no stable source port: the address it holds inside the tunnel identifies it."""

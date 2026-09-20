@@ -38,6 +38,7 @@
 | `shadowtls` | ShadowTLS | ShadowTLS v3 с Trojan detour |
 | `snell` | Snell 5/6 | TCP/UDP-прокси Hydracore: поколение 5 с `obfs_mode` `none`/`http`/`tls` или поколение 6 с `mode` `default`/`unshaped`/`unsafe-raw` |
 | `telemt` | MTProto / Telemt | Telegram MTProxy с управлением пользователями |
+| `mtproto_zig` | MTProto Zig | FakeTLS MTProxy: напрямую на TCP/443 или за Caddy L4 по SNI |
 | `calls` | Hydra VK Tunnel | Native `call`: только Hydracore VK-parasite; профиль подписки «Обход БС» |
 | `wdtt` | qWDTT | WireGuard-туннелирование поверх TURN |
 
@@ -275,6 +276,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `caddy-l4.service` | TLS/SNI-мультиплексор на общем TCP/443 |
 | `caddy-naive.service` | Caddy forward-proxy для NaiveProxy |
 | `telemt.service` | Демон MTProto-прокси |
+| `mtproto-zig.service` | FakeTLS MTProxy, запускаемый непривилегированным `mtproto-zig` с `CAP_NET_BIND_SERVICE` |
 | `wdtt.service` | Демон qWDTT |
 | `hydra-headless-creator-vk-calls@.service` | Отдельные поколения 1–4 VK-комнат Hydracore Calls |
 | `fail2ban.service` | SSH и auth jails |
@@ -297,6 +299,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/usr/local/bin/hydra` | Wrapper команды `hydra` |
 | `/usr/local/bin/sing-box` | Проверенный Hydracore VPS debug binary |
 | `/usr/local/bin/caddy-l4` | Бинарник Caddy с модулем layer4 |
+| `/usr/local/bin/mtproto-zig` | Проверенный upstream бинарник mtproto.zig |
 
 ### Конфигурации
 
@@ -312,6 +315,8 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/etc/iptables/rules.v4` | Сохранённые правила iptables (DROP-правила банов AntiScan) |
 | `/etc/dnscrypt-proxy/dnscrypt-proxy.toml` | Конфигурация DNSCrypt |
 | `/etc/telemt/telemt.toml` | Конфигурация MTProto-прокси |
+| `/etc/hydra-mtproto-zig/config.toml` | Конфигурация mtproto.zig; при SNI-mux слушает только `127.0.0.1:20449` |
+| `/var/lib/hydra/mtproto-zig/traffic-totals.json` | Накопленные per-user байты метрик mtproto.zig |
 | `/etc/hydra/cookiesvk/` | Единый закрытый каталог провайдера VK; права `0700` |
 | `/etc/hydra/cookiesvk/cookies-vk.json` | VK Creator JSON только для native Calls; импортируется через Calls TUI, файл `0600`, не входит в state |
 | `/var/lib/hydra/calls/vk/native.join` | Только legacy-артефакт для cleanup при uninstall; новый Calls его не создаёт и не читает |

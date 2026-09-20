@@ -238,6 +238,23 @@ def test_attribution_of_a_refreshed_image_reaches_the_page(tmp_path, monkeypatch
     assert config["image_updated_at"] == STAMP.timestamp()
 
 
+def test_failed_due_image_refresh_stays_due_and_records_the_error(tmp_path):
+    state = _state(image_updated_at=100.0)
+
+    image = site.image_for_site(
+        protocol=state.protocols[PROTOCOL_NAME],
+        directory=tmp_path,
+        now=100.0 + 86401,
+        refresh=lambda *_args, **_kwargs: RegionImage(src="/assets/region.jpg", error="download failed"),
+    )
+
+    config = state.protocols[PROTOCOL_NAME].config
+    assert image.src == "/assets/region.jpg"
+    assert config["image_updated_at"] == 100.0
+    assert config["image_refresh_error"] == "download failed"
+    assert config["image_last_attempt_at"] == 86501.0
+
+
 def test_query_for_the_image_names_the_city_and_the_country(tmp_path, monkeypatch):
     seen: dict[str, str] = {}
 
@@ -277,6 +294,23 @@ def test_page_survives_a_silent_weather_provider(tmp_path):
     assert "temporarily unavailable" in page
     assert CITY in page
     assert 'data-zone="Europe/Berlin"' in page
+
+
+def test_timer_entrypoint_updates_state_and_refreshes_prefixes(monkeypatch, tmp_path):
+    from hydra.core import state as state_module
+    from hydra.core import yandex_cdn
+    from hydra.entrypoints import vless_cdn_site
+
+    calls: list[object] = []
+    monkeypatch.setattr(yandex_cdn, "refresh_prefixes", lambda: yandex_cdn.PrefixRefresh(True, 1))
+    monkeypatch.setattr(
+        state_module,
+        "update_state",
+        lambda mutator: (calls.append(mutator) or AppState(), tmp_path / "index.html"),
+    )
+
+    assert vless_cdn_site.main() == 0
+    assert len(calls) == 1
 
 
 def test_timer_units_follow_the_house_pattern(tmp_path):

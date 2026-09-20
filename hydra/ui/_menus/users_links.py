@@ -1,4 +1,5 @@
 """Subscription links and contract-driven client artifact views."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -51,9 +52,7 @@ def _profile_specs(
         (
             str(profile.get("name", "")).strip(),
             str(
-                profile.get("label")
-                or profile.get("name")
-                or "",
+                profile.get("label") or profile.get("name") or "",
             ).strip(),
         )
         for profile in profiles
@@ -78,11 +77,7 @@ def _client_artifacts(
             plugin_name,
             app,
         ):
-            parameters = (
-                {"profile": profile_name}
-                if profile_name
-                else {}
-            )
+            parameters = {"profile": profile_name} if profile_name else {}
             try:
                 config = (
                     app.protocols.client_config(
@@ -143,11 +138,7 @@ def _client_artifacts(
 
 
 def _artifact_name_key(artifact: _ClientArtifact) -> str:
-    return (
-        f"{artifact.plugin_name}:{artifact.profile_name}"
-        if artifact.profile_name
-        else artifact.plugin_name
-    )
+    return f"{artifact.plugin_name}:{artifact.profile_name}" if artifact.profile_name else artifact.plugin_name
 
 
 def _artifact_title(
@@ -172,19 +163,6 @@ def _artifact_title(
     return label
 
 
-def _render_qr(value: str, *, invert: bool = False) -> None:
-    if not value:
-        return
-    try:
-        import qrcode
-
-        qr = qrcode.QRCode(border=1)
-        qr.add_data(value)
-        qr.print_ascii(invert=invert)
-    except Exception:
-        pass
-
-
 def _link_caption(link: str) -> str:
     if link.startswith("qwdtt://"):
         return "qWDTT master URL"
@@ -204,14 +182,12 @@ def _render_inline_artifact(
     heading = _artifact_title(artifact, state, user, app)
     fill = max(0, PANEL_W - 10 - len(heading))
     print(
-        f"  {CYAN}── {BOLD}{heading}{NC}"
-        f"{CYAN}{'─' * fill}{NC}",
+        f"  {CYAN}── {BOLD}{heading}{NC}{CYAN}{'─' * fill}{NC}",
     )
     for link in artifact.links:
         print(f"  {GREEN}{_link_caption(link)}:{NC}")
         print(tag_client_link(link, user, state) if user and state else link)
     if artifact.config:
-        _render_qr(artifact.config)
         print(f"  {DIM}{'─' * PANEL_W}{NC}")
         for line in artifact.config.splitlines():
             print(line)
@@ -249,8 +225,7 @@ def _show_subscription_links(
     title(f"Подписка: {user.email}")
     if not app.admin.unit_active("hydra-sub"):
         warn(
-            "Сервер подписок не запущен. Включите его в меню "
-            "«Сервер подписок», затем повторите попытку.",
+            "Сервер подписок не запущен. Включите его в меню «Сервер подписок», затем повторите попытку.",
         )
         prompt("Нажмите Enter")
         return
@@ -273,8 +248,7 @@ def _show_subscription_links(
     print()
     print(f"  {BOLD}Основная ссылка (рекомендуется){NC}")
     print(
-        f"  {DIM}NekoBox, Shadowrocket и Throne определяются "
-        f"автоматически по приложению.{NC}",
+        f"  {DIM}NekoBox, Shadowrocket и Throne определяются автоматически по приложению.{NC}",
     )
     print(urls["auto"])
     print()
@@ -289,8 +263,7 @@ def _show_subscription_links(
         print(f"  {label}:")
         print(urls[key])
     print(
-        f"\n  {DIM}Ссылка содержит секретный токен — "
-        f"передавайте её только владельцу.{NC}",
+        f"\n  {DIM}Ссылка содержит секретный токен — передавайте её только владельцу.{NC}",
     )
     prompt("Нажмите Enter")
 
@@ -311,7 +284,5 @@ def _user_configs(
         return
     for artifact in artifacts:
         _render_inline_artifact(artifact, state, user, app)
-        if artifact.config:
-            _render_qr(artifact.config, invert=True)
     print()
     prompt("Нажмите Enter")

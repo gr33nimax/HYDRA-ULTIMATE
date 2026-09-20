@@ -11,6 +11,7 @@ from __future__ import annotations
 import ipaddress
 from collections.abc import Callable
 
+from hydra.core.yandex_cdn import contains_peer
 from hydra.plugins.antidpi.adapters import remote_ip
 
 Normalizer = Callable[[dict], "tuple[str, dict] | None"]
@@ -74,3 +75,13 @@ def normalize_decoy_record(record: dict) -> tuple[str, dict] | None:
         "attribution": "direct",
         "path": _bounded_path(path),
     }
+
+
+def normalize_vless_cdn_record(
+    record: dict,
+    *,
+    is_cdn_peer: Callable[[object], bool] = contains_peer,
+) -> tuple[str, dict] | None:
+    """Suppress a scanner record only for a verified VLESS-CDN socket peer."""
+    event = normalize_decoy_record(record)
+    return None if event is None or is_cdn_peer(event[0]) else event

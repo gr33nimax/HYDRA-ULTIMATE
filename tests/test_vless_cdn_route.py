@@ -134,6 +134,7 @@ def test_inner_server_routes_the_tunnel_then_the_assets_then_the_site():
     assert server["protocols"] == ["h1", "h2c"]
     assert server["listener_wrappers"], "PROXY v2 wrapper must stay in place"
     assert server["automatic_https"] == {"disable": True, "disable_redirects": True}
+    assert server["logs"]["logger_names"] == {ORIGIN: "vless-cdn-decoy"}
 
     tunnel, assets, fallback = server["routes"]
 

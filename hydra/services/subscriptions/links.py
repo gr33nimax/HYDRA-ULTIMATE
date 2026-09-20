@@ -198,6 +198,8 @@ def _awg_links(
                 profile=profile["name"],
             )
             if config:
+                if any(line.startswith(("RandomTrailers =", "DisableCookies =")) for line in config.splitlines()):
+                    continue
                 link = generate_awg_sn_link(
                     config,
                     resolve_configuration_name(

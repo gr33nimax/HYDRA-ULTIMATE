@@ -83,6 +83,21 @@ def needs_mux(state: AppState, internal_ports: Mapping[str, int]) -> bool:
         if domain:
             count += 1
 
+    # Plugin-owned TLS passthrough endpoints (Reality, mtproto.zig) are not in
+    # the historical fixed-port map, but still claim TCP/443 when combined
+    # with another SNI backend.
+    for name, proto in state.protocols.items():
+        route = proto.config.get(_PASSTHROUGH_ROUTE_KEY)
+        if (
+            name not in internal_ports
+            and proto.enabled
+            and isinstance(route, Mapping)
+            and route.get("kind") == _PASSTHROUGH_ROUTE_KIND
+            and isinstance(route.get("sni_config"), str)
+            and proto.config.get(str(route["sni_config"]))
+        ):
+            count += 1
+
     sub_domain = getattr(state.network, "sub_domain", "")
     if sub_domain:
         count += 1

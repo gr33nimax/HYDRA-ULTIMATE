@@ -12,7 +12,6 @@ license = "GPL-3.0-only"
 dependencies = [
     "cryptography==50.0.0",
     "python-telegram-bot[job-queue]==22.8",
-    "qrcode==8.2",
 ]
 
 [project.optional-dependencies]

@@ -845,6 +845,53 @@ def test_kryo_length_prefixed_string_encoding():
     assert _serialize_string_len("😀") == bytes.fromhex("83eda0bdedb880")
 
 
+def test_awg_31_does_not_append_a_lossy_sn_link():
+    from hydra.services.subscriptions.links import _awg_links
+
+    user = _make_user("awg31@example.com")
+    state = _make_state([user])
+    plugin = MagicMock()
+    access = MagicMock()
+    access.get.return_value = plugin
+    access.status.return_value = PluginStatus(installed=True, enabled=True, running=True)
+    access.profiles.return_value = [{"name": "desktop", "label": "Desktop"}]
+    access.client_config.return_value = """[Interface]
+PrivateKey = private
+Address = 10.67.67.3/32
+RandomTrailers = true
+DisableCookies = true
+
+[Peer]
+PublicKey = public
+Endpoint = 203.0.113.10:51820
+"""
+
+    assert _awg_links(user, state, access) == []
+
+
+def test_awg_30_keeps_the_legacy_sn_link():
+    from hydra.services.subscriptions.links import _awg_links
+
+    user = _make_user("awg30@example.com")
+    state = _make_state([user])
+    plugin = MagicMock()
+    access = MagicMock()
+    access.get.return_value = plugin
+    access.status.return_value = PluginStatus(installed=True, enabled=True, running=True)
+    access.profiles.return_value = [{"name": "desktop", "label": "Desktop"}]
+    access.client_config.return_value = """[Interface]
+PrivateKey = private
+Address = 10.67.67.3/32
+HeaderProtectionKey = key
+
+[Peer]
+PublicKey = public
+Endpoint = 203.0.113.10:51820
+"""
+
+    assert len(_awg_links(user, state, access)) == 1
+
+
 def test_generate_awg_sn_link():
     conf = """[Interface]
 PrivateKey = MOaSN+H5tfDmpWIGmv2nXBZwV5NEezzjoDu6mZyvqXI=

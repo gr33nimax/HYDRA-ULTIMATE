@@ -61,18 +61,30 @@ def _release_metadata(
     repo: str,
     *,
     timeout: int,
+    release_tag: str | None = None,
     include_prerelease: bool = False,
     prerelease_tag_markers: Sequence[str] = (),
     prerelease_exclude_markers: Sequence[str] = (),
 ) -> dict:
-    endpoint = "releases?per_page=20" if include_prerelease else "releases/latest"
+    if release_tag and include_prerelease:
+        raise ValueError("release_tag cannot be combined with include_prerelease")
+    endpoint = (
+        f"releases/tags/{release_tag}"
+        if release_tag
+        else "releases?per_page=20"
+        if include_prerelease
+        else "releases/latest"
+    )
     url = f"https://api.github.com/repos/{repo}/{endpoint}"
     request = urllib.request.Request(
         url,
         headers=_github_headers(),
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = json.loads(response.read())
+        try:
+            payload = json.loads(response.read())
+        except json.JSONDecodeError as exc:
+            raise ValueError("GitHub release response is not valid JSON") from exc
     if not include_prerelease:
         if not isinstance(payload, dict):
             raise ValueError("GitHub latest release response must be an object")
@@ -84,7 +96,7 @@ def _release_metadata(
         for item in payload
         if isinstance(item, dict)
         and not item.get("draft")
-        and item.get("prerelease") is True
+        and bool(item.get("prerelease"))
         and isinstance(item.get("tag_name"), str)
         and (not prerelease_tag_markers or any(marker in item["tag_name"] for marker in prerelease_tag_markers))
         and not any(marker in item["tag_name"] for marker in prerelease_exclude_markers)
@@ -258,6 +270,7 @@ def download_github_asset_filtered(
     name_filter: Callable[[str], bool],
     dest: Path,
     *,
+    release_tag: str | None = None,
     include_prerelease: bool = False,
     prerelease_tag_markers: Sequence[str] = (),
     prerelease_exclude_markers: Sequence[str] = (),
@@ -280,6 +293,7 @@ def download_github_asset_filtered(
         data = _release_metadata(
             repo,
             timeout=15,
+            release_tag=release_tag,
             include_prerelease=include_prerelease,
             prerelease_tag_markers=prerelease_tag_markers,
             prerelease_exclude_markers=prerelease_exclude_markers,

@@ -85,7 +85,9 @@ def ensure_region(
     current = protocol or state.protocols.get(PROTOCOL_NAME)
     if current is None:
         return False
+    config = current.config
     if all(_region_of(current).values()):
+        config["region_status"] = "resolved"
         return False
 
     target = address or str(state.network.server_ip or "").strip()
@@ -95,12 +97,17 @@ def ensure_region(
         try:
             target = str(public_ip() or "").strip()
         except Exception:
-            return False
+            target = ""
     if not target:
+        if not config.get("region_city") and not config.get("region_country_name"):
+            config.update({"region_status": "unavailable", "region_error": "origin address unavailable"})
         return False
 
     region = lookup(target)
+    config["region_checked_at"] = time.time()
     if not region:
+        if not config.get("region_city") and not config.get("region_country_name"):
+            config.update({"region_status": "unavailable", "region_error": "origin lookup unavailable"})
         return False
 
     for key, stored in REGION_KEYS.items():
@@ -112,6 +119,10 @@ def ensure_region(
         from hydra.services.security_intel import country_flag
 
         current.config["region_flag"] = country_flag(code)
+    if config.get("region_city") or config.get("region_country_name"):
+        config.update({"region_status": "resolved", "region_error": ""})
+    else:
+        config.update({"region_status": "unavailable", "region_error": "origin lookup incomplete"})
     return True
 
 
@@ -168,10 +179,15 @@ def image_for_site(
         last_updated=as_timestamp(config.get("image_updated_at")),
         now=now,
     )
+    timestamp = time.time() if now is None else as_timestamp(now)
     if asset.refreshed:
-        config["image_updated_at"] = time.time() if now is None else as_timestamp(now)
+        config["image_updated_at"] = timestamp
         config["image_source"] = asset.source
         config["image_attribution"] = asset.attribution
+        config["image_refresh_error"] = ""
+    elif asset.error:
+        config["image_last_attempt_at"] = timestamp
+        config["image_refresh_error"] = asset.error
     return ImageView(
         src=asset.src,
         attribution=str(config.get("image_attribution", "") or ""),

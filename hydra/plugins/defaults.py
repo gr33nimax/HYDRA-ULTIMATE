@@ -17,6 +17,7 @@ from hydra.plugins.honeypot.plugin import HoneypotPlugin
 from hydra.plugins.hysteria2.plugin import Hysteria2Plugin
 from hydra.plugins.ipban.plugin import IPBanPlugin
 from hydra.plugins.mieru.plugin import MieruPlugin
+from hydra.plugins.mtproto_zig.plugin import MtprotoZigPlugin
 from hydra.plugins.naive.plugin import NaivePlugin
 from hydra.plugins.shadowtls.plugin import ShadowTLSPlugin
 from hydra.plugins.snell.plugin import SnellPlugin
@@ -43,6 +44,7 @@ BUILTIN_PLUGIN_FACTORIES: tuple[PluginFactory, ...] = (
     MieruPlugin,
     NaivePlugin,
     TelemtPlugin,
+    MtprotoZigPlugin,
     WdttPlugin,
     DNSCryptPlugin,
     WarpPlugin,
@@ -87,6 +89,7 @@ __all__ = [
     "Hysteria2Plugin",
     "IPBanPlugin",
     "MieruPlugin",
+    "MtprotoZigPlugin",
     "NaivePlugin",
     "PluginFactory",
     "ShadowTLSPlugin",

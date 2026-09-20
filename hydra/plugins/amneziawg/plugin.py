@@ -70,7 +70,7 @@ class AmneziaWGPlugin(
             "rotate_obfuscation",
             "set_protocol_mode",
         ),
-        queries=("amnezia_link", "get_profiles", "protocol_mode_status"),
+        queries=("amnezia_link", "get_profiles", "get_issued_profiles", "protocol_mode_status"),
         subscription_profile_query="get_profiles",
         backup_resources=(BackupResource(str(AWG_CONF_DIR), "tree"),),
     )

@@ -1,4 +1,5 @@
 """Architecture and compatibility guards for the modular Telemt package."""
+
 from __future__ import annotations
 
 import ast
@@ -21,11 +22,7 @@ FEATURE_FACADES = {
 
 
 def _production_modules() -> list[Path]:
-    return [
-        path
-        for path in TELEMT.glob("*.py")
-        if path.name not in COMPATIBILITY_MODULES
-    ]
+    return [path for path in TELEMT.glob("*.py") if path.name not in COMPATIBILITY_MODULES]
 
 
 def test_telemt_modules_and_functions_remain_reviewable() -> None:
@@ -40,9 +37,7 @@ def test_telemt_modules_and_functions_remain_reviewable() -> None:
                 continue
             length = (node.end_lineno or node.lineno) - node.lineno + 1
             if length > 100:
-                oversized_functions.append(
-                    f"{path.name}:{node.name}={length}"
-                )
+                oversized_functions.append(f"{path.name}:{node.name}={length}")
     assert oversized_modules == []
     assert oversized_functions == []
 
@@ -64,18 +59,23 @@ def test_telemt_domain_does_not_reach_services_ui_or_registry() -> None:
                 modules.append(node.module)
             for module in modules:
                 if module.startswith(forbidden):
-                    violations.append(f"{path.name}:{node.lineno} {module}")
+                    violations.append(f"{path.name}:{getattr(node, 'lineno', 0)} {module}")
     assert violations == []
+
+
+def test_telemt_core_has_no_legacy_side_feature_or_host_tuning_path() -> None:
+    core_modules = ("plugin.py", "configuration.py", "installation.py", "runtime.py", "profiles.py")
+    forbidden = ("cron", "fallback", "iptables", "ios_fix", "self_route", "singbox", "syn_limiter", "sysctl")
+
+    for name in core_modules:
+        source = (TELEMT / name).read_text(encoding="utf-8").lower()
+        assert not any(term in source for term in forbidden), name
 
 
 def test_feature_entrypoints_remain_compatibility_facades() -> None:
     for facade_name, implementation_name in FEATURE_FACADES.items():
-        facade = importlib.import_module(
-            f"hydra.plugins.telemt.{facade_name.removesuffix('.py')}"
-        )
-        implementation = importlib.import_module(
-            f"hydra.plugins.telemt.{implementation_name}"
-        )
+        facade = importlib.import_module(f"hydra.plugins.telemt.{facade_name.removesuffix('.py')}")
+        implementation = importlib.import_module(f"hydra.plugins.telemt.{implementation_name}")
         assert facade is implementation
 
 

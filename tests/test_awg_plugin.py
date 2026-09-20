@@ -501,6 +501,36 @@ def test_get_profiles_reads_desired_state_without_host_or_mutation():
     assert state == before
 
 
+def test_issued_profiles_exclude_an_unissued_mobile_draft_without_mutation():
+    plugin = AmneziaWGPlugin()
+    user = _make_user("active@example.com")
+    _set_keys(user, "desktop")
+    user.credentials["amneziawg_mobile"] = {
+        "private_key": "mobile-private",
+        "public_key": "mobile-public",
+        "preshared_key": "mobile-psk",
+    }
+    state = AppState(
+        protocols={
+            "amneziawg": PluginState(
+                enabled=True,
+                config={
+                    "profiles": {
+                        "desktop": {"server_private_key": "desktop-server"},
+                        "mobile": {"server_private_key": "mobile-server"},
+                    },
+                },
+            ),
+        },
+        users=[user],
+    )
+    before = copy.deepcopy(state)
+
+    assert [profile["name"] for profile in plugin.get_profiles(state)] == ["desktop", "mobile"]
+    assert [profile["name"] for profile in plugin.get_issued_profiles(state)] == ["desktop"]
+    assert state == before
+
+
 def test_presets_strategies_and_overrides():
     from hydra.plugins.amneziawg.presets import (
         generate_params,

@@ -1,14 +1,19 @@
 """tests/test_telemt_plugin.py — Тесты для Telemt MTProxy plugin v2."""
+
 import copy
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import Mock, patch, MagicMock
 import sys
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.plugins.telemt.plugin import TelemtPlugin, CONFIG_FILE
 from hydra.plugins.base import PluginCategory, ConfigFragment
+from hydra.plugins.invoker import PluginInvoker
+from hydra.services.user_lifecycle import UserLifecycleOperations, UserTransport
 from hydra.core.state import AppState, User, PluginState
 
 
@@ -36,18 +41,12 @@ def test_disable_stops_and_disables_service():
     )
 
 
-def test_install_repairs_service_when_binary_already_exists():
+def test_install_delegates_to_transactional_installer():
     plugin = TelemtPlugin()
-    with patch.object(plugin, "_installed", return_value=True), \
-         patch.object(plugin, "_install_service") as install_service, \
-         patch("hydra.plugins.telemt.plugin.CONFIG_DIR") as config_dir, \
-         patch("hydra.plugins.telemt.plugin.WORK_DIR") as work_dir, \
-         patch("hydra.plugins.telemt.plugin.SERVICE_FILE") as service_file:
-        service_file.exists.return_value = True
+    with patch("hydra.plugins.telemt.plugin.installation.install", return_value=True) as install:
         assert plugin.install() is True
-    config_dir.mkdir.assert_called_once_with(parents=True, exist_ok=True)
-    work_dir.mkdir.assert_called_once_with(parents=True, exist_ok=True)
-    install_service.assert_called_once_with()
+
+    install.assert_called_once()
 
 
 def _make_state(users: list | None = None, domain: str = "", server_ip: str = "1.2.3.4") -> AppState:
@@ -68,49 +67,19 @@ def test_plugin_meta():
     p = TelemtPlugin()
     assert p.meta.name == "telemt"
     assert p.meta.category == PluginCategory.TRANSPORT
-    assert p.meta.needs_domain is False
-    assert p.meta.capabilities.actions == (
-        "apply_optimizations",
-        "remove_optimizations",
-        "update_binary",
-    )
+    assert p.meta.needs_domain is True
+    assert p.meta.capabilities.actions == ("update_binary",)
 
 
-def test_optimizations_are_plugin_owned_actions(tmp_path):
-    sysctl_file = tmp_path / "telemt.conf"
-    limits_file = tmp_path / "telemt-limits.conf"
-    cron_file = tmp_path / "telemt-stats"
-    for path in (sysctl_file, limits_file, cron_file):
-        path.write_text("legacy", encoding="utf-8")
-
-    host = MagicMock()
-    host.run.return_value = MagicMock(returncode=0)
-    with (
-        patch("hydra.plugins.telemt.plugin.HOST", host),
-        patch(
-            "hydra.plugins.telemt.plugin.PERFORMANCE_SYSCTL_FILE",
-            sysctl_file,
-        ),
-        patch(
-            "hydra.plugins.telemt.plugin.PERFORMANCE_LIMITS_FILE",
-            limits_file,
-        ),
-        patch("hydra.plugins.telemt.plugin.STATS_CRON_FILE", cron_file),
-    ):
-        assert TelemtPlugin.apply_optimizations() is True
-        assert host.atomic_write.call_count == 2
-        assert TelemtPlugin.remove_optimizations() is True
-
-    assert not sysctl_file.exists()
-    assert not limits_file.exists()
-    assert not cron_file.exists()
+def test_plugin_exposes_no_implicit_host_tuning_actions():
+    assert "optimizations" not in " ".join(TelemtPlugin.meta.capabilities.actions)
 
 
 def test_update_binary_exposes_public_runtime_action():
     plugin = TelemtPlugin()
-    with patch.object(plugin, "_download_binary", return_value=True) as download:
+    with patch("hydra.plugins.telemt.plugin.installation.update_binary", return_value=True) as update:
         assert plugin.update_binary() is True
-    download.assert_called_once_with()
+    update.assert_called_once()
 
 
 def test_configure_returns_fragment_with_port():
@@ -153,10 +122,12 @@ def test_configure_and_client_link_do_not_create_or_mutate_protocol_state():
 def test_configure_skips_blocked_users():
     """Заблокированные юзеры не попадают в конфиг."""
     p = TelemtPlugin()
-    state = _make_state([
-        _make_user("active@x.com", uuid="uuid-a"),
-        _make_user("blocked@x.com", uuid="uuid-b", blocked=True),
-    ])
+    state = _make_state(
+        [
+            _make_user("active@x.com", uuid="uuid-a"),
+            _make_user("blocked@x.com", uuid="uuid-b", blocked=True),
+        ]
+    )
     frag = p.configure(state)
     assert frag.nft_tproxy_ports == [8443]
     assert "uuid-b" not in p._pending_cfg
@@ -173,8 +144,8 @@ def test_client_link_valid_uri():
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
     link = p.client_link(_make_user("a@x.com", uuid="uuid-a"), state)
 
-    assert link.startswith("tg://proxy?server=1.2.3.4&port=8443&secret=")
-    assert len(link.split("secret=")[1]) == 32  # 32 hex chars
+    assert link.startswith("tg://proxy?server=1.2.3.4&port=8443&secret=ee")
+    assert link.endswith("google.com".encode().hex())
 
 
 def test_client_link_with_tls_domain():
@@ -187,6 +158,38 @@ def test_client_link_with_tls_domain():
     # ee + 32 hex secret + domain in hex
     expected_domain_hex = "example.com".encode().hex()
     assert link.endswith(expected_domain_hex)
+
+
+def test_common_user_lifecycle_updates_rendered_telemt_access():
+    plugin = TelemtPlugin()
+    state = _make_state()
+    rendered: list[str] = []
+
+    def apply_config(current_state):
+        plugin.configure(current_state)
+        rendered.append(plugin._pending_cfg or "")
+        return True
+
+    lifecycle = UserLifecycleOperations(
+        transports=lambda: [cast(UserTransport, plugin)],
+        apply_config=apply_config,
+        save_state=lambda _state: None,
+        last_apply_error=lambda: "",
+        log_rollback_error=lambda _error: None,
+        invoker=PluginInvoker(),
+    )
+    user = _make_user("a@x.com", uuid="uuid-a")
+
+    with patch.object(UserLifecycleOperations, "_restart_subscriptions"):
+        lifecycle.add(state, user)
+        lifecycle.block(state, user.email)
+        lifecycle.unblock(state, user.email)
+        lifecycle.remove(state, user.email)
+
+    assert user.credentials["telemt"]["username"] in rendered[0]
+    assert user.credentials["telemt"]["username"] not in rendered[1]
+    assert user.credentials["telemt"]["username"] in rendered[2]
+    assert user.credentials["telemt"]["username"] not in rendered[3]
 
 
 def test_on_user_add_sets_credentials():
@@ -237,9 +240,11 @@ def test_generate_client_config_returns_json_with_link():
 def test_status_returns_plugin_status():
     """status() возвращает PluginStatus без ошибок."""
     p = TelemtPlugin()
-    with patch.object(TelemtPlugin, "_installed", return_value=True), \
-         patch("hydra.plugins.telemt.plugin.CONFIG_FILE") as mock_cfg, \
-         patch("subprocess.run") as mock_run:
+    with (
+        patch.object(TelemtPlugin, "_installed", return_value=True),
+        patch("hydra.plugins.telemt.plugin.CONFIG_FILE") as mock_cfg,
+        patch("subprocess.run") as mock_run,
+    ):
         mock_cfg.exists.return_value = True
         mock_run.return_value = MagicMock(stdout="active\n", returncode=0)
         s = p.status()
@@ -254,14 +259,14 @@ def test_build_toml_basic():
         port=8443,
         ipv4=True,
         ipv6=False,
-        tls_domain="",
+        tls_domain="mask.example",
         users={"user1": "aabbccdd11223344aabbccdd11223344"},
     )
 
     assert "port = 8443" in toml
     assert 'user1 = "aabbccdd11223344aabbccdd11223344"' in toml
-    assert "ipv4 = true" in toml
-    assert 'type = "direct"' in toml
+    assert 'ip = "0.0.0.0"' in toml
+    assert 'tls_domain = "mask.example"' in toml
     assert "[access.users]" in toml
 
 
@@ -287,7 +292,7 @@ def test_build_toml_multiple_users():
         port=8443,
         ipv4=True,
         ipv6=False,
-        tls_domain="",
+        tls_domain="mask.example",
         users={"u1": "s1", "u2": "s2", "u3": "s3"},
     )
 

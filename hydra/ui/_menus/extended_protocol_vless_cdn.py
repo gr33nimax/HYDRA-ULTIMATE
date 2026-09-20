@@ -70,7 +70,7 @@ def _menu_vless_cdn(
             ("XHTTP путь", str(config.get("xhttp_path", "") or "—")),
             ("Порт ядра", str(config.get("core_port", 0) or "—")),
             ("Сертификат", str(config.get("cert_file", "") or "—")),
-            ("Регион", str(config.get("region_city", "") or "—")),
+            ("Регион origin-сервера", str(config.get("region_city", "") or "—")),
         ]
         protocol_status_panel(
             PROTOCOL_NAME,

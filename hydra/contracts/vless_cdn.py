@@ -72,10 +72,15 @@ CONFIG_DEFAULTS: tuple[tuple[str, JsonValue], ...] = (
     ("region_longitude", 0.0),
     ("region_timezone", ""),
     ("region_extra_timezones", ""),
+    ("region_status", "unavailable"),
+    ("region_error", ""),
+    ("region_checked_at", 0.0),
     ("region_image_id", ""),
     ("image_source", ""),
     ("image_attribution", ""),
     ("image_updated_at", 0.0),
+    ("image_last_attempt_at", 0.0),
+    ("image_refresh_error", ""),
     (DECOY_ROUTE_KEY, DECOY_ROUTE),
 )
 

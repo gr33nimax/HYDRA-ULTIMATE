@@ -24,7 +24,7 @@ IMAGE_NAME = "region.jpg"
 PLACEHOLDER_NAME = "region.svg"
 IMAGE_SRC = f"/{ASSETS_DIR}/{IMAGE_NAME}"
 PLACEHOLDER_SRC = f"/{ASSETS_DIR}/{PLACEHOLDER_NAME}"
-REFRESH_SECONDS = 12 * 3600
+REFRESH_SECONDS = 24 * 3600
 TIMEOUT = 8.0
 MIN_BYTES = 4096
 MAX_BYTES = 6 * 1024 * 1024
@@ -40,6 +40,7 @@ class RegionImage:
     attribution: str = ""
     source: str = ""
     refreshed: bool = False
+    error: str = ""
 
 
 def placeholder_svg() -> str:
@@ -183,7 +184,7 @@ def refresh_region_image(
     search: Callable[[str], RegionImage | None] = _search,
     download: Callable[[str], bytes | None] = _download,
 ) -> RegionImage:
-    """Обновить изображение, если прошло двенадцать часов, и никогда не ломать страницу."""
+    """Refresh a daily image without ever breaking the decoy page."""
     timestamp = time.time() if now is None else now
     write_placeholder(directory)
     target = _stored(directory)
@@ -196,19 +197,19 @@ def refresh_region_image(
     candidate = search(str(query or "").strip()) if str(query or "").strip() else None
     if candidate is None:
         # Нечего качать: остаётся прошлая копия, иначе — запасной файл.
-        return RegionImage(src=IMAGE_SRC if found else PLACEHOLDER_SRC)
+        return RegionImage(src=IMAGE_SRC if found else PLACEHOLDER_SRC, error="image not found")
 
     data = download(candidate.src)
     if data is None or not _size_is_sane(data):
         # Мусор и огрызки не должны заменять рабочую картинку.
-        return RegionImage(src=IMAGE_SRC if found else PLACEHOLDER_SRC)
+        return RegionImage(src=IMAGE_SRC if found else PLACEHOLDER_SRC, error="image download failed")
 
     pending = target.with_suffix(target.suffix + ".tmp")
     try:
         pending.write_bytes(data)
         pending.replace(target)
     except OSError:
-        return RegionImage(src=IMAGE_SRC if found else PLACEHOLDER_SRC)
+        return RegionImage(src=IMAGE_SRC if found else PLACEHOLDER_SRC, error="image write failed")
 
     return RegionImage(
         src=IMAGE_SRC,

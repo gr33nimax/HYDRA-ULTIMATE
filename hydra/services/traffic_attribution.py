@@ -6,6 +6,7 @@ Clash connection through an injectable strategy.  A new protocol that exposes
 ``metadata.user`` works automatically; protocols with unusual attribution can
 provide one small resolver without changing the accounting loop.
 """
+
 from __future__ import annotations
 
 import re
@@ -93,9 +94,7 @@ def _parse_context_port_users(
         if user:
             context_users[context_id] = user.group(1)
     return {
-        context_ports[context_id]: user
-        for context_id, user in context_users.items()
-        if context_id in context_ports
+        context_ports[context_id]: user for context_id, user in context_users.items() if context_id in context_ports
     }
 
 
@@ -294,11 +293,7 @@ def _snell_user(
         metadata.get("inboundTag", "") or metadata.get("type", ""),
     )
     return next(
-        (
-            user.email
-            for user in state.users
-            if snell_user_tag(user) in inbound_tag
-        ),
+        (user.email for user in state.users if snell_user_tag(user) in inbound_tag),
         None,
     )
 
@@ -344,15 +339,8 @@ class ConnectionAttributor:
         evidence: TrafficEvidence,
     ) -> str:
         names = {*state.protocols, *evidence.protocols, *self.aliases}
-        candidates = (
-            (name, name, *self.aliases.get(name, ()))
-            for name in names
-        )
-        matches = [
-            name
-            for name, *tokens in candidates
-            if any(token.lower() in inbound_tag for token in tokens)
-        ]
+        candidates = ((name, name, *self.aliases.get(name, ())) for name in names)
+        matches = [name for name, *tokens in candidates if any(token.lower() in inbound_tag for token in tokens)]
         return max(matches, key=len, default="")
 
     @staticmethod
@@ -386,15 +374,11 @@ class ConnectionAttributor:
 
         destination = (
             str(
-                metadata.get("host")
-                or metadata.get("destinationIP", ""),
+                metadata.get("host") or metadata.get("destinationIP", ""),
             ).lower(),
             str(metadata.get("destinationPort", "")),
         )
-        return (
-            evidence.destinations.get(protocol, {}).get(destination)
-            or ""
-        )
+        return evidence.destinations.get(protocol, {}).get(destination) or ""
 
 
 DEFAULT_ATTRIBUTOR = ConnectionAttributor(
@@ -405,6 +389,7 @@ DEFAULT_ATTRIBUTOR = ConnectionAttributor(
         # ``calls``.
         "calls": ("call",),
         "snell": ("snell-",),
+        "vless_cdn": ("vless-cdn",),
     },
 )
 

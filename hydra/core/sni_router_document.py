@@ -26,6 +26,7 @@ class RenderSettings:
     source_preservation_enabled: bool
     decoy_log: str
     trusttunnel_log: str
+    vless_cdn_decoy_log: str
     admin_address: str
 
 
@@ -71,6 +72,14 @@ def _logging(settings: RenderSettings) -> dict[str, Any]:
                     "filename": settings.decoy_log,
                 },
                 "include": ["http.log.access.decoy"],
+                "level": "INFO",
+            },
+            "vless-cdn-decoy": {
+                "writer": {
+                    "output": "file",
+                    "filename": settings.vless_cdn_decoy_log,
+                },
+                "include": ["http.log.access.vless-cdn-decoy"],
                 "level": "INFO",
             },
             # The layer4 JSON logger that fed AntiDPI's generic TLS

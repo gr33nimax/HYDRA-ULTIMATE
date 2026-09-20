@@ -10,15 +10,18 @@ import sys
 
 
 def main() -> int:
-    from hydra.core.state import load_state
+    from hydra.core.state import update_state
+    from hydra.core.yandex_cdn import refresh_prefixes
     from hydra.services.vless_cdn_site import refresh_site
 
     try:
-        state = load_state()
-        target = refresh_site(state)
+        prefix_refresh = refresh_prefixes()
+        _state, target = update_state(refresh_site)
     except Exception as exc:
         print(f"vless-cdn site refresh failed: {exc}", file=sys.stderr)
         return 1
+    if not prefix_refresh.ok:
+        print(f"vless-cdn prefix refresh failed: {prefix_refresh.error}", file=sys.stderr)
     print(f"vless-cdn site refreshed: {target}")
     return 0
 

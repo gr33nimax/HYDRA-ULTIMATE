@@ -144,7 +144,7 @@ def test_awg_tui_hides_passive_export_omissions():
         port=51820,
     )
     app.plugin_query.side_effect = lambda _plugin, query, **_kwargs: {
-        "get_profiles": [
+        "get_issued_profiles": [
             {"label": "Desktop", "interface": "awg0", "port": 51820, "preset": "wired"},
         ],
         "protocol_mode_status": {

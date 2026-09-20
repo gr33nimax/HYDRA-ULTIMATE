@@ -171,6 +171,23 @@ class AwgProfileMixin:
             }
         ]
 
+    def get_issued_profiles(self, state: PluginStateAccess) -> list[dict]:
+        """Return only profiles with a server key and an issued user peer."""
+        issued = []
+        for profile in self.get_profiles(state):
+            name = str(profile["name"])
+            desired = self._profile_config(state, name) or {}
+            if not str(desired.get("server_private_key") or "").strip():
+                continue
+            if any(
+                (credentials := self._existing_keys(user, name)) is not None
+                and str(credentials.get("address_octet") or "").strip()
+                for user in state.users
+                if not user.blocked
+            ):
+                issued.append(profile)
+        return issued
+
     def add_profile(
         self,
         name: str,

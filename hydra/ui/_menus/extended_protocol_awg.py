@@ -54,7 +54,7 @@ def _menu_amneziawg(
 
         try:
             st = app.protocols.status(p.meta.name)
-            profiles = app.plugin_query("amneziawg", "get_profiles", state=state) if st.installed else []
+            profiles = app.plugin_query("amneziawg", "get_issued_profiles", state=state) if st.installed else []
             mode = app.plugin_query("amneziawg", "protocol_mode_status", state=state) if st.installed else {}
             details: list[tuple[str, object]] = [("Профили", len(profiles))]
             if mode:

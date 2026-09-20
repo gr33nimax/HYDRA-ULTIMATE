@@ -3,22 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Any, Protocol
+from typing import Any
 
 
 Backend = dict[str, Any]
-
-
-class RenderSettings(Protocol):
-    """Read-only view of the ports this module renders.
-
-    Declared as mappings because the renderer only looks ports up; a mutable
-    ``dict`` annotation would reject the dataclass that actually supplies them.
-    """
-
-    internal_ports: Mapping[str, int]
-    decoy_ports: Mapping[str, int]
-    relay_ports: Mapping[str, int]
 
 
 def _as_int(value: object, default: int = 0) -> int:
@@ -95,7 +83,7 @@ def _static_decoy_server(
 
 def _trusttunnel_server(
     backend: Backend,
-    settings: RenderSettings,
+    settings: Any,
     *,
     relay_enabled: bool,
     listener_wrappers: Callable[[], list[dict[str, Any]]],
@@ -217,7 +205,7 @@ def _decoy_routes(
 
 def _path_proxy_decoy_server(
     backend: Backend,
-    settings: RenderSettings,
+    settings: Any,
     *,
     listener_wrappers: Callable[[], list[dict[str, Any]]],
 ) -> dict[str, Any]:
@@ -290,7 +278,7 @@ def _path_proxy_decoy_server(
         },
         "logs": {
             "logger_names": {
-                str(backend["domain"]): "decoy",
+                str(backend["domain"]): ("vless-cdn-decoy" if backend["name"] == "vless_cdn" else "decoy"),
             },
         },
     }
@@ -303,7 +291,7 @@ def _path_proxy_decoy_server(
 
 def http_servers(
     backends: list[Backend],
-    settings: RenderSettings,
+    settings: Any,
     *,
     relay_enabled: bool,
     listener_wrappers: Callable[[], list[dict[str, Any]]],

@@ -1,5 +1,14 @@
 # Changelog
 
+- Добавлен `mtproto_zig`: FakeTLS MTProxy с отдельными Hydra-owned путями,
+  непривилегированным systemd-пользователем и `CAP_NET_BIND_SERVICE`. Он слушает TCP/443
+  напрямую или loopback `127.0.0.1:20449` за Caddy L4 по SNI, выдаёт per-user `tg://proxy`
+  через общий слой клиентских артефактов и сохраняет накопленный трафик из loopback Prometheus.
+  PROXY v2 намеренно не передаётся: upstream видит `127.0.0.1`, IP-квоты не поддерживаются.
+
+- Ручные TUI-выводы клиентских ссылок и конфигураций больше не печатают ASCII QR-коды;
+  сами ссылки, подписки и текстовые конфигурации не менялись. Удалена зависимость `qrcode`.
+
 - A renamed VLESS CDN profile now reaches every client under one key.  The rename was persisted by
   the UI and read by HydraBox under the canonical plugin key `vless_cdn`, while the URI pipeline
   looked up `vless:cdn` — a key nothing ever wrote, so Throne and NekoBox fell back to the built-in
