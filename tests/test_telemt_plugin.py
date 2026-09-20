@@ -67,7 +67,8 @@ def test_plugin_meta():
     p = TelemtPlugin()
     assert p.meta.name == "telemt"
     assert p.meta.category == PluginCategory.TRANSPORT
-    assert p.meta.needs_domain is True
+    assert p.meta.needs_domain is False
+    assert p.meta.capabilities.tls_domain_source == ""
     assert p.meta.capabilities.actions == ("update_binary",)
 
 

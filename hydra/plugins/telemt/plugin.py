@@ -33,10 +33,9 @@ class TelemtPlugin(BasePlugin):
         description="Telemt Fake TLS MTProxy",
         category=PluginCategory.TRANSPORT,
         version="3.5.7",
-        needs_domain=True,
+        needs_domain=False,
         required_commands=("systemctl",),
         actions=("update_binary",),
-        tls_domain_source="protocol",
         backup_resources=(
             BackupResource(str(CONFIG_DIR), "tree"),
             BackupResource(str(WORK_DIR), "tree"),
