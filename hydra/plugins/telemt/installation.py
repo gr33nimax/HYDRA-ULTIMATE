@@ -9,6 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
+from hydra.utils.commands import bounded_reason
 from hydra.utils.downloader import (
     download_github_asset_filtered,
     extract_tarball,
@@ -73,6 +74,7 @@ def write_service(
     bin_path: Path,
     config_file: Path,
     service_name: str,
+    on_failure: Callable[[str], None] | None = None,
 ) -> bool:
     """Write Telemt's least-privilege systemd unit through HostBackend."""
     host.ensure_directory(work_dir, mode=0o750)
@@ -101,7 +103,12 @@ def write_service(
         "WantedBy=multi-user.target\n"
     )
     host.atomic_write(service_file, unit, mode=0o644)
-    return host.run(["systemctl", "daemon-reload"], capture_output=True).returncode == 0
+    result = host.run(["systemctl", "daemon-reload"], capture_output=True)
+    if result.returncode == 0:
+        return True
+    reason = bounded_reason(result) or "проверьте systemctl daemon-reload на хосте"
+    report_stage(on_failure, f"systemd не принял юнит Telemt: {reason}")
+    return False
 
 
 def download_and_extract(
@@ -213,6 +220,7 @@ def install(
         bin_path=bin_path,
         config_file=config_file,
         service_name=service_name,
+        on_failure=on_failure,
     ):
         success = False
         report_stage(on_failure, "не удалось записать systemd-юнит Telemt")

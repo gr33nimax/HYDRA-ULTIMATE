@@ -19,9 +19,9 @@ class _Host:
     def __init__(self) -> None:
         self.commands: list[list[str]] = []
 
-    def run(self, args, **_kwargs):
-        self.commands.append(list(args))
-        return CompletedProcess(args, 0, "active\n", "")
+    def run(self, command, **_kwargs):
+        self.commands.append(list(command))
+        return CompletedProcess(command, 0, "active\n", "")
 
     def atomic_write(self, path: Path, content, **_kwargs) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -210,18 +210,22 @@ def test_telemt_dispatch_requires_installation_for_other_actions():
 class _ScriptedHost(_Host):
     """Host double that fails exactly the commands a test names."""
 
-    def __init__(self, fail, output: str = "") -> None:
+    def __init__(self, fail, output: str = "", stderr: str = "") -> None:
         super().__init__()
         self._fail = fail
         self._output = output
+        self._stderr = stderr
 
-    def run(self, args, **_kwargs):
-        self.commands.append(list(args))
-        code = 1 if self._fail(list(args)) else 0
-        return CompletedProcess(args, code, self._output, "")
+    def run(self, command, **_kwargs):
+        self.commands.append(list(command))
+        code = 1 if self._fail(list(command)) else 0
+        return CompletedProcess(command, code, self._output, self._stderr)
 
     def ensure_directory(self, path: Path, **_kwargs) -> None:
         path.mkdir(parents=True, exist_ok=True)
+
+    def remove_file(self, path: Path) -> None:
+        path.unlink(missing_ok=True)
 
 
 def test_telemt_apply_reports_the_failed_systemd_step(tmp_path):
@@ -289,6 +293,86 @@ def _lifecycle(plugin, *, apply_config, errors: list[str]) -> PluginLifecycleOpe
         log_rollback_error=lambda _message: None,
         invoker=PluginInvoker(),
     )
+
+
+def test_bounded_reason_redacts_and_bounds_command_output():
+    from hydra.utils.commands import bounded_reason
+
+    reason = bounded_reason(
+        SimpleNamespace(stderr="\n  Failed to reload daemon: token=abcd1234 leaked  \nsecond\n"),
+        limit=40,
+    )
+
+    assert reason.startswith("Failed to reload daemon:")
+    assert "abcd1234" not in reason
+    assert "<redacted" not in reason, "a half-written marker must never be reported"
+    assert len(reason) <= 40
+
+    full = bounded_reason(SimpleNamespace(stderr="denied token=abcd1234\n"))
+    assert full == "denied token=<redacted>"
+    assert bounded_reason(SimpleNamespace(stderr=b"boom\n")) == "boom"
+    assert bounded_reason(SimpleNamespace(stderr="")) == ""
+
+
+def test_telemt_apply_reports_the_systemd_reason(tmp_path):
+    from hydra.plugins.telemt import runtime as telemt_runtime
+
+    stages: list[str] = []
+    applied = telemt_runtime.apply(
+        "[server]\nport = 8888\n",
+        host=_ScriptedHost(
+            lambda command: command[:2] == ["systemctl", "daemon-reload"],
+            stderr="Failed to reload daemon: bad unit file\n",
+        ),
+        config_file=tmp_path / "config.toml",
+        service_name="telemt",
+        on_failure=stages.append,
+    )
+
+    assert applied is False
+    assert stages == [
+        "systemctl daemon-reload не выполнился для Telemt: Failed to reload daemon: bad unit file",
+    ]
+
+
+def test_mtproto_apply_reports_the_service_reason(tmp_path):
+    stages: list[str] = []
+    applied = zig_runtime.apply(
+        "[server]\nport = 443\n",
+        host=_ScriptedHost(
+            lambda command: command[:2] == ["systemctl", "is-active"],
+            output="inactive\n",
+            stderr="Failed to start mtproto-zig.service: exit code\n",
+        ),
+        config_file=tmp_path / "config.toml",
+        service="mtproto-zig",
+        binary=tmp_path / "mtproto-zig",
+        on_failure=stages.append,
+    )
+
+    assert applied is False
+    assert stages == [
+        "служба mtproto-zig не запустилась: смотрите journalctl -u mtproto-zig "
+        "(Failed to start mtproto-zig.service: exit code)",
+    ]
+
+
+def test_telemt_install_reports_the_systemd_reason(tmp_path):
+    from hydra.plugins.telemt import installation as telemt_installation
+
+    stages: list[str] = []
+    written = telemt_installation.write_service(
+        host=_ScriptedHost(lambda _command: True, stderr="Failed to reload daemon: bad unit file\n"),
+        work_dir=tmp_path / "work",
+        service_file=tmp_path / "telemt.service",
+        bin_path=tmp_path / "telemt",
+        config_file=tmp_path / "config.toml",
+        service_name="telemt",
+        on_failure=stages.append,
+    )
+
+    assert written is False
+    assert stages == ["systemd не принял юнит Telemt: Failed to reload daemon: bad unit file"]
 
 
 def test_lifecycle_prefers_the_plugin_apply_stage():

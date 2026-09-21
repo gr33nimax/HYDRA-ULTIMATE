@@ -6,6 +6,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from hydra.utils.commands import bounded_reason
+
 from .constants import SERVICE_USER
 from .installation import report_stage
 
@@ -39,7 +41,9 @@ def apply(
     )
     if all(result.returncode == 0 for result in results):
         return True
-    report_stage(on_failure, "служба mtproto-zig не запустилась: смотрите journalctl -u mtproto-zig")
+    reason = bounded_reason(results[-1])
+    suffix = f" ({reason})" if reason else ""
+    report_stage(on_failure, f"служба {service} не запустилась: смотрите journalctl -u {service}{suffix}")
     return False
 
 

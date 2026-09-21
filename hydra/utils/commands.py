@@ -1,4 +1,5 @@
 """Safe, bounded execution of external commands."""
+
 from __future__ import annotations
 
 import os
@@ -14,9 +15,7 @@ class CommandError(HostOperationError):
 
 DEFAULT_TIMEOUT = 30
 _SECRET_ARG = re.compile(r"(?i)(token|password|secret|private[_-]?key|authorization)=([^\s]+)")
-_SECRET_TEXT = re.compile(
-    r"(?i)(token|password|secret|private[_-]?key|authorization)(\s*[:=]\s*)([^\s,;]+)"
-)
+_SECRET_TEXT = re.compile(r"(?i)(token|password|secret|private[_-]?key|authorization)(\s*[:=]\s*)([^\s,;]+)")
 _VK_CALL_LINK = re.compile(
     r"https://(?:www\.)?vk\.(?:com|ru)/call/join/[^\s\"'<>]+",
     re.IGNORECASE,
@@ -36,6 +35,34 @@ def redact_command(args: Sequence[object]) -> str:
     return " ".join(redact_text(_SECRET_ARG.sub(r"\1=<redacted>", value)) for value in values)
 
 
+def bounded_reason(result: object, *, limit: int = 160) -> str:
+    """Bounded, redacted first stderr line of a failed command result.
+
+    Operator diagnostics need the real reason (for example which systemd unit
+    is invalid) without unbounded host output or leaked credentials.
+    """
+    text = getattr(result, "stderr", "") or ""
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", "ignore")
+    for line in str(text).splitlines():
+        cleaned = "".join(character for character in line if character.isprintable()).strip()
+        if cleaned:
+            return _truncate(redact_text(cleaned), limit)
+    return ""
+
+
+def _truncate(value: str, limit: int) -> str:
+    """Cut to ``limit`` without leaving a half-written redaction marker."""
+    if len(value) <= limit:
+        return value
+    truncated = value[:limit]
+    marker = "<redacted>"
+    for size in range(len(marker) - 1, 0, -1):
+        if truncated.endswith(marker[:size]):
+            return truncated[:-size]
+    return truncated
+
+
 def run(
     args: Sequence[object],
     *,
@@ -46,7 +73,9 @@ def run(
     capture_output: bool = True,
     env: dict[str, str] | None = None,
     cwd: str | os.PathLike[str] | None = None,
-    stdout=None, stderr=None, encoding: str | None = None,
+    stdout=None,
+    stderr=None,
+    encoding: str | None = None,
     errors: str | None = None,
 ) -> subprocess.CompletedProcess:
     """Run an argv command without a shell and with a bounded runtime."""
@@ -63,8 +92,11 @@ def run(
             "check": False,
         }
         for key, value in (
-            ("stdout", stdout), ("stderr", stderr), ("cwd", cwd),
-            ("encoding", encoding), ("errors", errors),
+            ("stdout", stdout),
+            ("stderr", stderr),
+            ("cwd", cwd),
+            ("encoding", encoding),
+            ("errors", errors),
         ):
             if value is not None:
                 options[key] = value

@@ -6,6 +6,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from hydra.utils.commands import bounded_reason
+
 from .constants import SERVICE_USER
 from .installation import report_stage
 
@@ -31,12 +33,16 @@ def apply(
     for action in ("daemon-reload", "enable", "restart"):
         result = host.run(["systemctl", action, service_name], capture_output=True, text=True)
         if result.returncode != 0:
-            report_stage(on_failure, f"systemctl {action} не выполнился для Telemt")
+            reason = bounded_reason(result)
+            suffix = f": {reason}" if reason else ""
+            report_stage(on_failure, f"systemctl {action} не выполнился для Telemt{suffix}")
             return False
     health = host.run(["systemctl", "is-active", service_name], capture_output=True, text=True)
     if health.returncode == 0 and health.stdout.strip() == "active":
         return True
-    report_stage(on_failure, "служба Telemt не запустилась: смотрите journalctl -u telemt")
+    reason = bounded_reason(health)
+    suffix = f" ({reason})" if reason else ""
+    report_stage(on_failure, f"служба Telemt не запустилась: смотрите journalctl -u {service_name}{suffix}")
     return False
 
 

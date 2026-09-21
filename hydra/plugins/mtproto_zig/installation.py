@@ -9,6 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from hydra.utils.commands import bounded_reason
 from hydra.utils.downloader import download_github_asset, extract_tarball, verify_elf
 
 from .constants import SERVICE_USER
@@ -44,7 +45,16 @@ def ensure_service_user(host: Any) -> bool:
     )
 
 
-def write_service(*, host: Any, service_file: Path, binary: Path, config: Path, work_dir: Path, service: str) -> bool:
+def write_service(
+    *,
+    host: Any,
+    service_file: Path,
+    binary: Path,
+    config: Path,
+    work_dir: Path,
+    service: str,
+    on_failure: Callable[[str], None] | None = None,
+) -> bool:
     service_file.parent.mkdir(parents=True, exist_ok=True)
     work_dir.mkdir(parents=True, exist_ok=True)
     service_file.write_text(
@@ -57,7 +67,12 @@ def write_service(*, host: Any, service_file: Path, binary: Path, config: Path, 
         f"ReadWritePaths={work_dir}\n\n[Install]\nWantedBy=multi-user.target\n",
         encoding="utf-8",
     )
-    return host.run(["systemctl", "daemon-reload"], capture_output=True).returncode == 0
+    result = host.run(["systemctl", "daemon-reload"], capture_output=True)
+    if result.returncode == 0:
+        return True
+    reason = bounded_reason(result) or "проверьте systemctl daemon-reload на хосте"
+    report_stage(on_failure, f"systemd не принял юнит mtproto-zig: {reason}")
+    return False
 
 
 def download_binary(

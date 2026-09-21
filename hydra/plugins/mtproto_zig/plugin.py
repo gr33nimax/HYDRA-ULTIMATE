@@ -72,8 +72,10 @@ class MtprotoZigPlugin(BasePlugin):
             config=CONFIG_FILE,
             work_dir=WORK_DIR,
             service=SERVICE_NAME,
+            on_failure=self._note_install_failure,
         ):
-            self._note_install_failure("не удалось записать systemd-юнит mtproto-zig")
+            if not self._install_failure:
+                self._note_install_failure("не удалось записать systemd-юнит mtproto-zig")
             return False
         return True
 
