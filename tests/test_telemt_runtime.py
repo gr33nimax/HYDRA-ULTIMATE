@@ -83,6 +83,7 @@ def test_executor_rolls_back_telemt_when_apply_fails(tmp_path):
         patch.object(telemt_plugin, "HOST", host),
         patch.object(telemt_plugin, "CONFIG_FILE", config),
         patch.object(telemt_plugin, "SERVICE_FILE", service),
+        patch.object(telemt_plugin, "WORK_DIR", tmp_path / "work"),
         patch.object(TelemtPlugin := telemt_plugin.TelemtPlugin, "status", return_value=PluginStatus(True, True, True)),
         pytest.raises(RuntimeError, match="telemt apply returned false"),
     ):

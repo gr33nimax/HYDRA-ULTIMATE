@@ -10,7 +10,7 @@ from hydra.services.traffic import (
     reset_user_traffic,
 )
 from hydra.services.traffic_accounting import apply_connection_snapshot
-from hydra.services.traffic_attribution import TrafficEvidence
+from hydra.services.traffic_attribution import TrafficEvidence, evidence_from_journal
 
 
 class FakeTrafficProtocols:
@@ -362,6 +362,184 @@ def test_vless_cdn_connection_is_credited_by_its_inbound_tag():
     assert user.traffic_used_bytes == 1000
     assert user.credentials["vless_cdn"]["traffic_used_bytes"] == 1000
     assert state.install["traffic_connection_counters"]["cdn-1"]["protocol"] == "vless_cdn"
+
+
+def test_vless_cdn_journal_evidence_credits_only_the_cdn_identity():
+    user = User(email="cdn@example.com", uuid="u1")
+    state = AppState(
+        users=[user],
+        protocols={"vless_cdn": PluginState(enabled=True)},
+    )
+    state.network.clash_api_enabled = True
+    connection = {
+        "id": "cdn-journal",
+        "metadata": {
+            "inboundTag": "vless-cdn-in",
+            "user": "",
+            "sourceIP": "127.0.0.1",
+            "sourcePort": "43123",
+        },
+        "upload": 120,
+        "download": 880,
+    }
+    evidence = evidence_from_journal(
+        [
+            "INFO [123456 0ms] inbound/vless[vless-cdn-in]: inbound connection from 127.0.0.1:43123",
+            "INFO [123456 1ms] inbound/vless[vless-cdn-in]: "
+            "[cdn@example.com] inbound connection to origin.example.com:443",
+        ],
+    )
+    # Evidence is published per inbound, so the CDN identity holds only CDN records.
+    assert evidence.source_ports["vless_cdn"] == {"43123": "cdn@example.com"}
+    assert evidence.source_ports["vless"] == {}
+
+    assert apply_connection_snapshot(state, [connection], evidence)
+    assert user.traffic_used_bytes == 1000
+    assert user.credentials["vless_cdn"]["traffic_used_bytes"] == 1000
+    assert "vless" not in user.credentials
+    rows = tracked_active_connections(state)
+    assert [row["plugin"] for row in rows] == ["vless_cdn"]
+    assert rows[0]["email"] == "cdn@example.com"
+
+
+def test_regular_vless_journal_evidence_stays_out_of_the_cdn_bucket():
+    user = User(email="vless@example.com", uuid="u1")
+    state = AppState(
+        users=[user],
+        protocols={"vless": PluginState(enabled=True)},
+    )
+    state.network.clash_api_enabled = True
+    connection = {
+        "id": "vless-journal",
+        "metadata": {
+            "inboundTag": "vless-xhttp-in",
+            "user": "",
+            "sourceIP": "127.0.0.1",
+            "sourcePort": "43124",
+        },
+        "upload": 300,
+        "download": 700,
+    }
+    evidence = evidence_from_journal(
+        [
+            "INFO [123456 0ms] inbound/vless[vless-xhttp-in]: inbound connection from 127.0.0.1:43124",
+            "INFO [123456 1ms] inbound/vless[vless-xhttp-in]: "
+            "[vless@example.com] inbound connection to cp.cloudflare.com:80",
+        ],
+    )
+
+    assert evidence.source_ports["vless"] == {"43124": "vless@example.com"}
+    assert "vless_cdn" not in evidence.source_ports
+
+    assert apply_connection_snapshot(state, [connection], evidence)
+    assert user.credentials["vless"]["traffic_used_bytes"] == 1000
+    assert "vless_cdn" not in user.credentials
+    rows = tracked_active_connections(state)
+    assert [row["plugin"] for row in rows] == ["vless"]
+    assert rows[0]["email"] == "vless@example.com"
+
+
+def test_recycled_loopback_port_cannot_move_vless_evidence_to_the_cdn_identity():
+    """A regular VLESS log record must never credit a CDN connection on a reused port."""
+    cdn = User(email="cdn@example.com", uuid="u1")
+    regular = User(email="vless@example.com", uuid="u2")
+    state = AppState(
+        users=[cdn, regular],
+        protocols={
+            "vless": PluginState(enabled=True),
+            "vless_cdn": PluginState(enabled=True),
+        },
+    )
+    state.network.clash_api_enabled = True
+    # The loopback relay can hand the same source port to a CDN connection after a
+    # regular VLESS connection closed; the journal record must not follow it.
+    cdn_connection = {
+        "id": "recycled-cdn",
+        "metadata": {
+            "inboundTag": "vless-cdn-in",
+            "user": "",
+            "sourceIP": "127.0.0.1",
+            "sourcePort": "43123",
+        },
+        "upload": 120,
+        "download": 880,
+    }
+    regular_connection = {
+        "id": "original-vless",
+        "metadata": {
+            "inboundTag": "vless-xhttp-in",
+            "user": "",
+            "sourceIP": "127.0.0.1",
+            "sourcePort": "43123",
+        },
+        "upload": 300,
+        "download": 700,
+    }
+    evidence = evidence_from_journal(
+        [
+            "INFO [123456 0ms] inbound/vless[vless-xhttp-in]: inbound connection from 127.0.0.1:43123",
+            "INFO [123456 1ms] inbound/vless[vless-xhttp-in]: "
+            "[vless@example.com] inbound connection to cp.cloudflare.com:80",
+        ],
+    )
+
+    assert evidence.source_ports["vless"] == {"43123": "vless@example.com"}
+    assert "vless_cdn" not in evidence.source_ports
+
+    assert apply_connection_snapshot(
+        state,
+        [cdn_connection, regular_connection],
+        evidence,
+    )
+    assert cdn.traffic_used_bytes == 0
+    assert "vless_cdn" not in cdn.credentials
+    assert regular.credentials["vless"]["traffic_used_bytes"] == 1000
+    # The regular VLESS record must not land in any vless_cdn bucket.
+    assert "vless_cdn" not in regular.credentials
+    rows = tracked_active_connections(state)
+    assert [(row["plugin"], row["email"]) for row in rows] == [
+        ("vless", "vless@example.com"),
+    ]
+    cdn_record = state.install["traffic_connection_counters"]["recycled-cdn"]
+    assert cdn_record["user"] == ""
+    assert cdn_record["protocol"] == "vless_cdn"
+
+
+def test_vless_cdn_without_matching_journal_evidence_stays_uncredited():
+    user = User(email="cdn@example.com", uuid="u1")
+    state = AppState(
+        users=[user],
+        protocols={"vless_cdn": PluginState(enabled=True)},
+    )
+    state.network.clash_api_enabled = True
+    connection = {
+        "id": "cdn-unmatched",
+        "metadata": {
+            "inboundTag": "vless-cdn-in",
+            "user": "",
+            "sourcePort": "43125",
+        },
+        "upload": 120,
+        "download": 880,
+    }
+    evidence = evidence_from_journal(
+        [
+            "INFO [123456 0ms] inbound/vless[vless-cdn-in]: inbound connection from 127.0.0.1:43123",
+            "INFO [123456 1ms] inbound/vless[vless-cdn-in]: "
+            "[cdn@example.com] inbound connection to origin.example.com:443",
+        ],
+    )
+
+    assert apply_connection_snapshot(state, [connection], evidence) is False
+    assert user.traffic_used_bytes == 0
+    assert user.credentials.get("vless_cdn", {}).get("traffic_used_bytes", 0) == 0
+    assert tracked_active_connections(state) == []
+    record = state.install["traffic_connection_counters"]["cdn-unmatched"]
+    assert record["user"] == ""
+    assert record["protocol"] == "vless_cdn"
+    empty = evidence_from_journal(())
+    assert empty.source_ports == {"anytls": {}, "vless": {}}
+    assert "vless_cdn" not in empty.source_ports
 
 
 def test_an_awg_peer_is_attributed_by_its_tunnel_address():

@@ -64,10 +64,16 @@ def _parse_context_port_users(
     lines: Sequence[str],
     *,
     inbound_type: str,
-) -> dict[str, str]:
+) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
+    """Correlate auth logs with source ports by inbound tag and legacy flat order."""
     context_ports: dict[str, str] = {}
     context_users: dict[str, str] = {}
+    context_tags: dict[str, str] = {}
     marker = f"inbound/{inbound_type}"
+    tag_re = re.compile(
+        rf"inbound/{re.escape(inbound_type)}\[([^\]]+)\]",
+        re.IGNORECASE,
+    )
     for line in lines:
         if marker not in line.lower():
             continue
@@ -75,6 +81,9 @@ def _parse_context_port_users(
         if not context:
             continue
         context_id = context.group(1)
+        tag = tag_re.search(line)
+        if tag:
+            context_tags[context_id] = tag.group(1)
         source = re.search(
             r"inbound connection from\s+"
             r"(?:\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9._:-]+):(\d+)",
@@ -93,18 +102,56 @@ def _parse_context_port_users(
         )
         if user:
             context_users[context_id] = user.group(1)
-    return {
-        context_ports[context_id]: user for context_id, user in context_users.items() if context_id in context_ports
-    }
+    grouped: dict[str, dict[str, str]] = {}
+    flat: dict[str, str] = {}
+    for context_id, user in context_users.items():
+        port = context_ports.get(context_id)
+        if port is None:
+            continue
+        flat[port] = user
+        tag = context_tags.get(context_id)
+        if tag is not None:
+            grouped.setdefault(tag, {})[port] = user
+    return grouped, flat
+
+
+def _canonical_protocol_for_inbound(tag: str, *, family: str) -> str:
+    """Resolve a journal inbound tag to the canonical protocol sharing its family."""
+    names = {family: (family,), **DEFAULT_ATTRIBUTOR.aliases}
+    inbound = tag.lower()
+    matches = [name for name, tokens in names.items() if any(token in inbound for token in tokens)]
+    return max(matches, key=len, default=family)
+
+
+def _inbound_scoped_source_ports(
+    lines: Sequence[str],
+    *,
+    inbound_type: str,
+) -> dict[str, dict[str, str]]:
+    """Publish each inbound's source-port users under its own canonical protocol.
+
+    Regular and CDN VLESS log the same grammar but hold different credentials, so a
+    record is only visible to the identity of the inbound that logged it; a recycled
+    loopback source port can never move evidence across identities.
+    """
+    scoped: dict[str, dict[str, str]] = {inbound_type: {}}
+    grouped, _flat = _parse_context_port_users(lines, inbound_type=inbound_type)
+    for tag, ports in grouped.items():
+        protocol = _canonical_protocol_for_inbound(tag, family=inbound_type)
+        scoped.setdefault(protocol, {}).update(ports)
+    return scoped
 
 
 def parse_anytls_users(lines: Sequence[str]) -> dict[str, str]:
-    return _parse_context_port_users(lines, inbound_type="anytls")
+    """Legacy flat source-port evidence; later journal contexts win."""
+    _grouped, flat = _parse_context_port_users(lines, inbound_type="anytls")
+    return flat
 
 
 def parse_vless_users(lines: Sequence[str]) -> dict[str, str]:
-    """Correlate VLESS auth logs with Clash source-port metadata."""
-    return _parse_context_port_users(lines, inbound_type="vless")
+    """Legacy flat VLESS source-port evidence; later journal contexts win."""
+    _grouped, flat = _parse_context_port_users(lines, inbound_type="vless")
+    return flat
 
 
 def _record_destination(
@@ -263,10 +310,13 @@ def evidence_from_journal(lines: Sequence[str]) -> TrafficEvidence:
         lines,
         protocol="shadowtls",
     )
+    # Sing-box logs the same VLESS grammar for the CDN inbound, but each canonical
+    # identity keeps only its own inbound's records, so one journal read serves both
+    # without letting a recycled source port move evidence across them.
     return TrafficEvidence(
         source_ports={
-            "anytls": parse_anytls_users(lines),
-            "vless": parse_vless_users(lines),
+            **_inbound_scoped_source_ports(lines, inbound_type="anytls"),
+            **_inbound_scoped_source_ports(lines, inbound_type="vless"),
         },
         sources={
             "mieru": parse_mieru_users(lines),
