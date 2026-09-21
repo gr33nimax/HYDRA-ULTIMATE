@@ -99,6 +99,11 @@ class MtprotoZigPlugin(BasePlugin):
             directories=(CONFIG_DIR, WORK_DIR),
         )
 
+    def needs_tls_domain(self, state: PluginStateAccess) -> bool:
+        """FakeTLS owns the handshake; Caddy only routes its SNI."""
+        del state
+        return False
+
     def configure(self, state: PluginStateAccess) -> ConfigFragment:
         self._pending_config, fragment = configuration.plan_configuration(state)
         return fragment
