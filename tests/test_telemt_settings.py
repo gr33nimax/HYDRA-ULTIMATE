@@ -15,9 +15,21 @@ def test_normal_fake_tls_settings_render_upstream_357_fields():
     assert 'ip = "0.0.0.0"' in toml
     assert 'tls_domain = "mask.example"' in toml
     assert "tls_emulation = true" in toml
-    assert 'alice = "' + "a" * 32 + '"' in toml
+    assert '"alice" = "' + "a" * 32 + '"' in toml
     assert "fake_cert_len" not in toml
     assert "client_mss" not in toml
+
+
+def test_base64_user_keys_are_quoted_for_toml():
+    """A derived username may contain +, / or =; an unquoted key is invalid TOML."""
+    settings = configuration.TelemtSettings(port=443, tls_domain="mask.example")
+
+    toml = configuration.render_toml(settings, {"u+ab/cd=": "a" * 32})
+
+    assert '"u+ab/cd=" = "' + "a" * 32 + '"' in toml
+
+    tomllib = pytest.importorskip("tomllib", reason="stdlib TOML parser needs Python 3.11+")
+    assert tomllib.loads(toml)["access"]["users"]["u+ab/cd="] == "a" * 32
 
 
 @pytest.mark.parametrize(

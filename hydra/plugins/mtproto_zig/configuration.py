@@ -25,6 +25,16 @@ def effective_listener(state: PluginStateAccess) -> tuple[str, int]:
     return ("127.0.0.1", INTERNAL_PORT) if needs_mux(cast(AppState, state)) else ("::", PUBLIC_PORT)
 
 
+def _toml_key(name: str) -> str:
+    """Quote a user key: derived usernames are base64 and may hold +, / or =.
+
+    An unquoted key with those characters is a TOML parse error, which makes
+    the whole mtproto.zig config unusable.
+    """
+    escaped = name.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def build_toml(*, address: str, port: int, domain: str, users: dict[str, str]) -> str:
     lines = [
         "[server]",
@@ -38,7 +48,7 @@ def build_toml(*, address: str, port: int, domain: str, users: dict[str, str]) -
         "fake_tls_only = true",
         "",
         "[access.users]",
-        *(f'{name} = "{secret}"' for name, secret in sorted(users.items())),
+        *(f'{_toml_key(name)} = "{secret}"' for name, secret in sorted(users.items())),
         "",
         "[metrics]",
         "enabled = true",

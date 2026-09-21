@@ -18,13 +18,24 @@ from hydra.core.state import AppState, User, PluginState
 
 
 def test_manager_toggle_uses_application_boundary():
-    from hydra.plugins.telemt.manager import _set_telemt_enabled
+    from typing import cast
+
+    from hydra.plugins.telemt import manager as legacy_manager
+    from hydra.services.application import ApplicationService
+    from hydra.ui.plugin_managers import telemt as manager
+
+    # The legacy path is the same module object, so exercising the canonical
+    # module also covers it (and stays statically resolvable).
+    assert legacy_manager is manager
 
     state = AppState(protocols={"telemt": PluginState(enabled=True, installed=True)})
     disable = Mock(return_value=True)
-    app = SimpleNamespace(protocols=SimpleNamespace(disable=disable))
+    app = cast(
+        ApplicationService,
+        SimpleNamespace(protocols=SimpleNamespace(disable=disable)),
+    )
 
-    assert _set_telemt_enabled(state, False, app) is True
+    assert manager._set_telemt_enabled(state, False, app) is True
     disable.assert_called_once_with(state, "telemt")
 
 
@@ -131,11 +142,15 @@ def test_configure_skips_blocked_users():
     )
     frag = p.configure(state)
     assert frag.nft_tproxy_ports == [8443]
-    assert "uuid-b" not in p._pending_cfg
+    pending = p._pending_cfg
+    assert pending is not None
+    assert "uuid-b" not in pending
     # в TOML только один пользователь
-    user_lines = [l for l in p._pending_cfg.splitlines() if "uuid" in l]
+    user_lines = [line for line in pending.splitlines() if "uuid" in line]
     assert len(user_lines) == 0  # uuid не хранится, хранится username
-    secret_lines = [l for l in p._pending_cfg.splitlines() if "=" in l and '"' in l and l.strip().startswith("u")]
+    secret_lines = [
+        line for line in pending.splitlines() if "=" in line and '"' in line and line.strip().startswith('"u')
+    ]
     assert len(secret_lines) == 1
 
 
@@ -265,7 +280,7 @@ def test_build_toml_basic():
     )
 
     assert "port = 8443" in toml
-    assert 'user1 = "aabbccdd11223344aabbccdd11223344"' in toml
+    assert '"user1" = "aabbccdd11223344aabbccdd11223344"' in toml
     assert 'ip = "0.0.0.0"' in toml
     assert 'tls_domain = "mask.example"' in toml
     assert "[access.users]" in toml
@@ -297,9 +312,9 @@ def test_build_toml_multiple_users():
         users={"u1": "s1", "u2": "s2", "u3": "s3"},
     )
 
-    assert 'u1 = "s1"' in toml
-    assert 'u2 = "s2"' in toml
-    assert 'u3 = "s3"' in toml
+    assert '"u1" = "s1"' in toml
+    assert '"u2" = "s2"' in toml
+    assert '"u3" = "s3"' in toml
 
 
 def test_make_tls_secret():

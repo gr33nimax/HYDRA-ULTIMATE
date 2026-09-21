@@ -19,6 +19,16 @@ _LOG_LEVELS = frozenset({"normal", "debug"})
 _HOST_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 
 
+def _toml_key(name: str) -> str:
+    """Quote a user key: derived usernames are base64 and may hold +, / or =.
+
+    An unquoted key with those characters is a TOML parse error, which makes
+    the whole Telemt config unusable.
+    """
+    escaped = name.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def _validate_domain(value: str) -> str:
     domain = value.strip().lower()
     labels = domain.rstrip(".").split(".")
@@ -146,7 +156,7 @@ def render_toml(settings: TelemtSettings, users: dict[str, str]) -> str:
             "[access.users]",
         )
     )
-    lines.extend(f'{name} = "{secret}"' for name, secret in sorted(users.items()))
+    lines.extend(f'{_toml_key(name)} = "{secret}"' for name, secret in sorted(users.items()))
     return "\n".join(lines) + "\n"
 
 

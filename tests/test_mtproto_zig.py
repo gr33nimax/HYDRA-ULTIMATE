@@ -2,6 +2,8 @@ from hydra.core.state import AppState, PluginState, User
 from pathlib import Path
 from subprocess import CompletedProcess
 
+import pytest
+
 from hydra.plugins.mtproto_zig import configuration, installation, observation, runtime
 from hydra.plugins.mtproto_zig.credentials import derive_secret, derive_username
 from hydra.plugins.telemt.credentials import derive_secret as telemt_secret
@@ -36,6 +38,21 @@ def test_config_uses_direct_then_sni_loopback_and_public_link():
 
 def test_credentials_are_isolated_from_telemt():
     assert derive_secret("same") != telemt_secret("same")
+
+
+def test_base64_user_keys_are_quoted_for_toml():
+    """A derived username may contain +, / or =; an unquoted key is invalid TOML."""
+    toml = configuration.build_toml(
+        address="127.0.0.1",
+        port=20449,
+        domain="cover.example",
+        users={"u+ab/cd=": "b" * 32},
+    )
+
+    assert '"u+ab/cd=" = "' + "b" * 32 + '"' in toml
+
+    tomllib = pytest.importorskip("tomllib", reason="stdlib TOML parser needs Python 3.11+")
+    assert tomllib.loads(toml)["access"]["users"]["u+ab/cd="] == "b" * 32
 
 
 def test_lifecycle_uses_hydra_paths_and_least_privilege_unit(tmp_path):
