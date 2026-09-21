@@ -181,11 +181,13 @@ def test_telemt_menu_hides_actions_until_it_is_installed():
     from hydra.ui.plugin_managers._facade_bridge import bind_facade
 
     with bind_facade(telemt):
-        uninstalled = [key for key, _label, _hint in _telemt_menu._menu_options(installed=False, enabled=False)]
-        installed = [key for key, _label, _hint in _telemt_menu._menu_options(installed=True, enabled=False)]
+        uninstalled = _telemt_menu._menu_options(installed=False, enabled=False)
+        installed = _telemt_menu._menu_options(installed=True, enabled=False)
 
-    assert uninstalled == ["1", "-", "0"]
-    assert {"2", "3", "4", "5", "6", "7", "9"} <= set(installed)
+    assert [key for key, _label, _hint in uninstalled] == ["1", "-", "0"]
+    assert [key for key, _label, _hint in installed] == ["1", "2", "3", "4", "5", "6", "9", "-", "0"]
+    # R8: per-user links live only in the generic manual-configurations flow.
+    assert not any("ссылки" in label.lower() for _key, label, _hint in installed)
 
 
 def test_telemt_dispatch_requires_installation_for_other_actions():

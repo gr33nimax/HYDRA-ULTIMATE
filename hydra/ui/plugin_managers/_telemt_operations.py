@@ -1,4 +1,4 @@
-"""Hydra-facing Telemt install, update, links, logs and uninstall flows."""
+"""Hydra-facing Telemt install, update, logs and uninstall flows."""
 
 from __future__ import annotations
 
@@ -128,7 +128,87 @@ def run_install(state, app) -> None:
     facade._pause()
 
 
+# Exactly the three approved advanced controls. Each row names the one setting it
+# writes and the single consequence the renderer actually produces.
+_NETWORK_CHOICES = (
+    ("1", "auto", "слушает 0.0.0.0"),
+    ("2", "ipv4", "слушает 0.0.0.0"),
+    ("3", "ipv6", "слушает ::"),
+    ("4", "dual_stack", "слушает 0.0.0.0 и ::"),
+)
+_MIDDLE_PROXY_CHOICES = (
+    ("1", "on", "трафик Telegram идёт через Middle Proxy"),
+    ("2", "off", "прямой путь к Telegram"),
+)
+_LOG_CHOICES = (
+    ("1", "normal", "обычные логи"),
+    ("2", "debug", "подробная диагностика"),
+)
+
+
+def _consequence(choices: tuple[tuple[str, str, str], ...], value: object) -> str:
+    return next((consequence for _key, candidate, consequence in choices if candidate == value), "")
+
+
+def _advanced_rows(current) -> list[tuple[str, str, str]]:
+    """Three rows: the stored value plus the one change the renderer makes."""
+    middle_proxy = "on" if current.use_middle_proxy else "off"
+    return [
+        ("1", f"Сеть: {current.network} — {_consequence(_NETWORK_CHOICES, current.network)}", ""),
+        ("2", f"MiddleProxy: {middle_proxy} — {_consequence(_MIDDLE_PROXY_CHOICES, middle_proxy)}", ""),
+        ("3", f"Логи: {current.log_level} — {_consequence(_LOG_CHOICES, current.log_level)}", ""),
+        ("0", "↩ Назад", ""),
+    ]
+
+
+def _pick(title: str, field: str, choices: tuple[tuple[str, str, str], ...]) -> str | None:
+    """Offer only one row's validated values; ``None`` means cancelled."""
+    options = [(key, f"{value} — {consequence}", "") for key, value, consequence in choices]
+    options.append(("0", "↩ Отмена", ""))
+    choice = facade.menu(options, title)
+    for key, value, _consequence in choices:
+        if key == choice:
+            return value
+    if choice != "0":
+        facade.error(
+            f"Недопустимое значение для {field}: {choice}. Допустимо: "
+            + ", ".join(value for _key, value, _consequence in choices)
+        )
+    return None
+
+
+def _save_advanced(state, app, protocol, **changes) -> None:
+    """Persist one changed key, keeping the other advanced settings untouched."""
+    advanced = protocol.config.get("advanced")
+    if not isinstance(advanced, dict):
+        advanced = {}
+    advanced.update(changes)
+    protocol.config["advanced"] = advanced
+    app.admin.save_state(state)
+    if protocol.installed and protocol.enabled and not app.protocols.reinstall(state, "telemt"):
+        facade.error("Настройки сохранены, но Telemt не удалось применить.")
+    else:
+        facade.success("Расширенные настройки Telemt сохранены.")
+    facade._pause()
+
+
+def _edit_advanced(state, app, protocol, choice: str) -> None:
+    if choice == "1":
+        selected = _pick("СЕТЬ TELEMT", "network", _NETWORK_CHOICES)
+        if selected is not None:
+            _save_advanced(state, app, protocol, network=selected)
+    elif choice == "2":
+        selected = _pick("MIDDLEPROXY TELEMT", "use_middle_proxy", _MIDDLE_PROXY_CHOICES)
+        if selected is not None:
+            _save_advanced(state, app, protocol, use_middle_proxy=selected == "on")
+    elif choice == "3":
+        selected = _pick("ЛОГИ TELEMT", "log_level", _LOG_CHOICES)
+        if selected is not None:
+            _save_advanced(state, app, protocol, log_level=selected)
+
+
 def run_advanced(state, app) -> None:
+    """Repeating three-row advanced list; normal setup stays untouched."""
     from hydra.plugins.telemt.configuration import settings_from_state
     from hydra.plugins.telemt.migration import preview
 
@@ -142,59 +222,18 @@ def run_advanced(state, app) -> None:
         facade.error("Старые Telemt-настройки требуют ручной миграции: " + ", ".join(migration.blockers))
         facade._pause()
         return
-    try:
-        current = settings_from_state(state)
-    except ValueError as exc:
-        facade.error(str(exc))
-        facade._pause()
-        return
-    network = facade.menu(
-        [
-            ("1", "auto", "IPv4 listener по умолчанию"),
-            ("2", "ipv4", "Только IPv4"),
-            ("3", "ipv6", "Только IPv6"),
-            ("4", "dual_stack", "IPv4 и IPv6"),
-        ],
-        "СЕТЬ TELEMT",
-    )
-    selected_network = {"1": "auto", "2": "ipv4", "3": "ipv6", "4": "dual_stack"}.get(network)
-    if selected_network is None:
-        return
-    use_middle_proxy = facade.confirm("Включить MiddleProxy?")
-    log_choice = facade.menu(
-        [("1", "normal", "Обычные логи"), ("2", "debug", "Подробная диагностика")],
-        "ЛОГИ TELEMT",
-    )
-    log_level = {"1": "normal", "2": "debug"}.get(log_choice)
-    if log_level is None:
-        return
-    protocol.config["advanced"] = {
-        "network": selected_network,
-        "use_middle_proxy": use_middle_proxy,
-        "log_level": log_level,
-    }
-    app.admin.save_state(state)
-    if protocol.installed and protocol.enabled and not app.protocols.reinstall(state, "telemt"):
-        facade.error("Настройки сохранены, но Telemt не удалось применить.")
-    else:
-        facade.success("Расширенные настройки Telemt сохранены.")
-    facade._pause()
-
-
-def view_links(state, app) -> None:
-    facade.clear()
-    lines: list[str] = []
-    for user in state.users:
-        if not user.blocked:
-            lines.append(f"{facade.BOLD}{user.email}{facade.NC}")
-            lines.extend(
-                f"  {facade.YELLOW}{link}{facade.NC}" for link in app.protocols.client_links(state, "telemt", user)
-            )
-    if not lines:
-        facade.warn("Нет активных пользователей. Сначала создайте пользователя.")
-    else:
-        facade.panel("ССЫЛКИ TELEMT", lines, wrap=True)
-    facade._pause()
+    while True:
+        facade.clear()
+        try:
+            current = settings_from_state(state)
+        except ValueError as exc:
+            facade.error(str(exc))
+            facade._pause()
+            return
+        choice = facade.menu(_advanced_rows(current), "РАСШИРЕННЫЕ НАСТРОЙКИ TELEMT")
+        if choice == "0":
+            return
+        _edit_advanced(state, app, protocol, choice)
 
 
 def run_update(app) -> None:

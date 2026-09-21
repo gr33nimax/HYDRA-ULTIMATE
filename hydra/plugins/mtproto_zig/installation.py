@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import platform
 import shutil
+import tarfile
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from hydra.utils.commands import bounded_reason
-from hydra.utils.downloader import download_github_asset, extract_tarball, verify_elf
+from hydra.utils.downloader import download_release_asset, extract_tarball, verify_elf
 
 from .constants import SERVICE_USER
 
@@ -90,21 +91,29 @@ def download_binary(
     binary: Path,
     on_failure: Callable[[str], None] | None = None,
 ) -> bool:
+    """Resolve, digest-verify and atomically install the proxy binary.
+
+    The release is resolved from the archive itself, never from
+    ``releases/latest``: upstream may publish a newest release that carries only
+    unrelated assets. Nothing is replaced until the verified archive has
+    produced a verified ELF, so every earlier failure keeps the previous binary
+    and service state. Upstream ``bootstrap.sh`` and ``mtbuddy`` are never run:
+    they own another layout, unit, configuration and host mutation.
+    """
     machine = platform.machine().lower()
-    patterns = (
+    candidates = (
         ("mtproto-proxy-linux-aarch64_crypto.tar.gz", "mtproto-proxy-linux-aarch64.tar.gz")
         if machine in {"aarch64", "arm64"}
         else ("mtproto-proxy-linux-x86_64_v3.tar.gz", "mtproto-proxy-linux-x86_64.tar.gz")
     )
-    destination = Path(tempfile.gettempdir()) / "hydra-mtproto-zig"
-    destination.mkdir(parents=True, exist_ok=True)
-    reason = "не удалось скачать релизный архив mtproto.zig"
-    for pattern in patterns:
-        archive = destination / f"{pattern}.tar.gz"
-        if not download_github_asset(repo, pattern, archive):
-            continue
+    destination = Path(tempfile.mkdtemp(prefix="hydra-mtproto-zig-"))
+    try:
+        archive = destination / "mtproto-proxy.tar.gz"
+        reasons: list[str] = []
+        if not download_release_asset(repo, candidates, archive, on_error=reasons.append):
+            report_stage(on_failure, reasons[-1] if reasons else "не удалось скачать релизный архив mtproto.zig")
+            return False
         extracted = destination / "extracted"
-        _remove_tree(extracted)
         try:
             extract_tarball(archive, extracted)
             found = next(
@@ -115,18 +124,32 @@ def download_binary(
                 ),
                 None,
             )
-            if found is None:
-                continue
+        except (OSError, ValueError, tarfile.TarError) as exc:
+            report_stage(on_failure, f"не удалось распаковать релизный архив mtproto.zig: {exc}")
+            return False
+        if found is None:
+            report_stage(on_failure, "в релизном архиве mtproto.zig нет бинарника mtproto-proxy")
+            return False
+        if not verify_elf(found):
+            report_stage(on_failure, "загруженный бинарник mtproto.zig не является исполняемым ELF")
+            return False
+        pending = binary.with_suffix(".pending")
+        try:
             binary.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(found, binary)
-            binary.chmod(0o755)
-            if verify_elf(binary):
-                return True
-            reason = "загруженный бинарник mtproto.zig не является исполняемым ELF"
-        except (OSError, ValueError):
-            continue
-    report_stage(on_failure, reason)
-    return False
+            shutil.copy2(found, pending)
+            pending.chmod(0o755)
+            if not verify_elf(pending):
+                pending.unlink(missing_ok=True)
+                report_stage(on_failure, "проверка подготовленного бинарника mtproto.zig не прошла")
+                return False
+            pending.replace(binary)
+        except OSError as exc:
+            pending.unlink(missing_ok=True)
+            report_stage(on_failure, f"не удалось установить бинарник mtproto.zig: {exc}")
+            return False
+        return True
+    finally:
+        _remove_tree(destination)
 
 
 def uninstall(*, host: Any, service: str, service_file: Path, binary: Path, directories: tuple[Path, ...]) -> bool:

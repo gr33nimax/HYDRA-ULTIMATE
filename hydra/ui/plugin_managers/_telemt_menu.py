@@ -49,11 +49,10 @@ def _menu_options(*, installed, enabled):
     return [
         ("1", "Перенастроить", "Сменить порт и TLS-домен"),
         ("2", "Расширенные настройки", "Сеть, MiddleProxy и логи"),
-        ("3", "Показать ссылки", "Ссылки активных пользователей"),
-        ("4", "Перезапустить сервис", "Перезапуск telemt"),
-        ("5", "Проверить и обновить", "Ручное обновление с rollback"),
-        ("6", "Статус и логи", "systemd и последние журналы"),
-        ("7", "Отключить Telemt" if enabled else "Включить Telemt", "Изменить состояние службы"),
+        ("3", "Перезапустить сервис", "Перезапуск telemt"),
+        ("4", "Проверить и обновить", "Ручное обновление с rollback"),
+        ("5", "Статус и логи", "systemd и последние журналы"),
+        ("6", "Отключить Telemt" if enabled else "Включить Telemt", "Изменить состояние службы"),
         ("9", f"{facade.RED}Удалить Telemt{facade.NC}", "Только артефакты Telemt"),
         ("-", "", ""),
         ("0", "Назад", ""),
@@ -85,14 +84,12 @@ def _dispatch(choice, state, app, protocol, *, installed):
     elif choice == "2":
         facade._run_advanced(state, app)
     elif choice == "3":
-        facade._view_links(state, app)
-    elif choice == "4":
         app.admin.restart_unit(facade.SERVICE_NAME)
-    elif choice == "5":
+    elif choice == "4":
         facade._run_update(app)
-    elif choice == "6":
+    elif choice == "5":
         facade._view_logs(app)
-    elif choice == "7":
+    elif choice == "6":
         _toggle(state, app, protocol, installed=installed)
     elif choice == "9" and facade.confirm("Удалить Telemt?"):
         facade._run_uninstall(state, app)

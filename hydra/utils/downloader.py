@@ -333,6 +333,92 @@ def download_github_asset_filtered(
         )
 
 
+def _published_releases(repo: str, *, timeout: int, per_page: int = 30) -> list[dict]:
+    """Published (non-draft) releases, newest publication first.
+
+    The releases endpoint does not guarantee response order, so the immutable
+    publication timestamps decide — the same ordering `_release_metadata`
+    already applies to prereleases.
+    """
+    url = f"https://api.github.com/repos/{repo}/releases?per_page={per_page}"
+    request = urllib.request.Request(url, headers=_github_headers())
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        try:
+            payload = json.loads(response.read())
+        except json.JSONDecodeError as exc:
+            raise ValueError("GitHub releases response is not valid JSON") from exc
+    if not isinstance(payload, list):
+        raise ValueError("GitHub releases response must be a list")
+    releases = [
+        item
+        for item in payload
+        if isinstance(item, dict) and not item.get("draft") and isinstance(item.get("tag_name"), str)
+    ]
+    releases.sort(
+        key=lambda item: (
+            str(item.get("published_at") or ""),
+            str(item.get("created_at") or ""),
+            str(item.get("tag_name") or ""),
+        ),
+        reverse=True,
+    )
+    return releases
+
+
+def resolve_release_asset(
+    repo: str,
+    asset_names: Sequence[str],
+    *,
+    timeout: int = 15,
+    per_page: int = 30,
+) -> tuple[str, dict]:
+    """Newest published release that still ships one exact ``asset_names`` file.
+
+    ``releases/latest`` is deliberately not consulted: an upstream project may
+    publish a newest release that contains only unrelated assets, which would
+    make the real artifact unreachable. ``asset_names`` is ordered by
+    preference, so the first name present inside the selected release wins.
+    Returns ``(release_tag, asset)`` and raises ``ValueError`` with a redacted
+    reason when no release qualifies.
+    """
+    for release in _published_releases(repo, timeout=timeout, per_page=per_page):
+        available = {
+            asset["name"]: asset
+            for asset in release.get("assets", [])
+            if isinstance(asset, dict) and isinstance(asset.get("name"), str)
+        }
+        for name in asset_names:
+            if name in available:
+                return str(release["tag_name"]), available[name]
+    raise ValueError(f"в релизах {repo} нет точного архива " + " или ".join(asset_names))
+
+
+def download_release_asset(
+    repo: str,
+    asset_names: Sequence[str],
+    dest: Path,
+    *,
+    timeout: int = 15,
+    on_error: ErrorReporter | None = None,
+) -> bool:
+    """Download the exact asset of the newest release that contains it.
+
+    The asset's GitHub ``sha256:`` digest is mandatory on this path: the caller
+    installs the result as a privileged executable, so
+    ``HYDRA_ALLOW_UNVERIFIED_DOWNLOADS`` does not apply here.
+    """
+    try:
+        _release_tag, asset = resolve_release_asset(repo, asset_names, timeout=timeout)
+    except ValueError as exc:
+        return _fail(str(exc), on_error)
+    except Exception as exc:
+        return _fail(f"не удалось получить релизы {repo}: {_network_error(exc)}", on_error)
+    digest = _asset_digest(asset)
+    if not digest:
+        return _fail(f"Файл {asset['name']} не содержит SHA-256 digest", on_error)
+    return download(asset["browser_download_url"], dest, sha256=digest, on_error=on_error)
+
+
 def verify_elf(path: Path) -> bool:
     """True если первые 4 байта == b'\\x7fELF'."""
     try:

@@ -136,38 +136,162 @@ def test_telemt_dispatch_ignores_retired_special_menu_keys():
     assert keep_open is True
 
 
-def test_telemt_advanced_settings_use_only_bounded_fields():
+class _MenuScript:
+    """Return scripted menu choices and record every rendered option list."""
+
+    def __init__(self, choices):
+        self._choices = list(choices)
+        self.rendered: list[list[tuple[str, str, str]]] = []
+
+    def __call__(self, options, header=""):
+        self.rendered.append(list(options))
+        return self._choices.pop(0) if self._choices else "0"
+
+
+def _advanced_state(**advanced) -> tuple[AppState, PluginState]:
+    protocol = PluginState(
+        enabled=False,
+        installed=True,
+        config={"settings_version": 1, "port": 8443, "tls_domain": "mask.example", "advanced": dict(advanced)},
+    )
+    state = AppState()
+    state.protocols["telemt"] = protocol
+    return state, protocol
+
+
+def _advanced_app() -> SimpleNamespace:
+    return SimpleNamespace(
+        admin=SimpleNamespace(save_state=Mock()),
+        protocols=SimpleNamespace(reinstall=Mock(return_value=True)),
+    )
+
+
+def _run_advanced(state, app, choices, errors: list[str]) -> list[list[tuple[str, str, str]]]:
     from hydra.ui.plugin_managers._facade_bridge import bind_facade
     from hydra.ui.plugin_managers import _telemt_operations
     from hydra.ui.plugin_managers import telemt
 
-    state = AppState()
-    state.protocols["telemt"] = PluginState(
-        config={"settings_version": 1, "port": 8443, "tls_domain": "mask.example", "advanced": {}}
-    )
-    app = SimpleNamespace(admin=SimpleNamespace(save_state=Mock()), protocols=SimpleNamespace())
-
+    script = _MenuScript(choices)
     with (
         bind_facade(telemt),
-        patch.object(telemt, "menu", side_effect=["4", "2"]),
-        patch.object(telemt, "confirm", return_value=True),
+        patch.object(telemt, "menu", script),
+        patch.object(telemt, "clear"),
         patch.object(telemt, "success"),
+        patch.object(telemt, "error", errors.append),
         patch.object(telemt, "_pause"),
     ):
         _telemt_operations.run_advanced(state, app)
+    return script.rendered
 
-    assert state.protocols["telemt"].config["advanced"] == {
-        "network": "dual_stack",
+
+def test_telemt_advanced_settings_use_only_bounded_fields():
+    state, protocol = _advanced_state(network="auto", use_middle_proxy=False, log_level="normal")
+    app = _advanced_app()
+
+    _run_advanced(state, app, ["1", "3", "0"], [])
+
+    assert protocol.config["advanced"] == {
+        "network": "ipv6",
+        "use_middle_proxy": False,
+        "log_level": "normal",
+    }
+    app.admin.save_state.assert_called_once_with(state)
+
+
+def test_telemt_advanced_list_shows_three_rows_with_current_values():
+    state, _protocol = _advanced_state(network="dual_stack", use_middle_proxy=True, log_level="debug")
+
+    rendered = _run_advanced(state, _advanced_app(), ["0"], [])
+
+    rows = rendered[0]
+    assert [key for key, _label, _hint in rows] == ["1", "2", "3", "0"]
+    labels = [label for _key, label, _hint in rows]
+    assert labels[:3] == [
+        "Сеть: dual_stack — слушает 0.0.0.0 и ::",
+        "MiddleProxy: on — трафик Telegram идёт через Middle Proxy",
+        "Логи: debug — подробная диагностика",
+    ]
+
+
+def test_telemt_advanced_save_changes_one_row_and_returns_to_the_list():
+    state, protocol = _advanced_state(network="ipv4", use_middle_proxy=True, log_level="normal")
+
+    rendered = _run_advanced(state, _advanced_app(), ["3", "2", "0"], [])
+
+    assert protocol.config["advanced"] == {
+        "network": "ipv4",
         "use_middle_proxy": True,
         "log_level": "debug",
     }
-    app.admin.save_state.assert_called_once_with(state)
+    # The list is rendered again after the save, showing the stored value.
+    assert rendered[2][2][1] == "Логи: debug — подробная диагностика"
+
+
+def test_telemt_advanced_cancel_returns_to_the_list_without_saving():
+    state, protocol = _advanced_state(network="ipv4", use_middle_proxy=True, log_level="normal")
+    app = _advanced_app()
+
+    rendered = _run_advanced(state, app, ["2", "0", "0"], [])
+
+    assert protocol.config["advanced"] == {"network": "ipv4", "use_middle_proxy": True, "log_level": "normal"}
+    app.admin.save_state.assert_not_called()
+    assert len(rendered) == 3
+
+
+def test_telemt_advanced_back_exits_without_persisting():
+    state, protocol = _advanced_state(network="ipv4", use_middle_proxy=True, log_level="normal")
+    app = _advanced_app()
+
+    rendered = _run_advanced(state, app, ["0"], [])
+
+    assert len(rendered) == 1
+    app.admin.save_state.assert_not_called()
+    app.protocols.reinstall.assert_not_called()
+    assert protocol.config["advanced"] == {"network": "ipv4", "use_middle_proxy": True, "log_level": "normal"}
+
+
+def test_telemt_advanced_rejects_a_value_outside_the_selected_row():
+    state, protocol = _advanced_state(network="ipv4", use_middle_proxy=True, log_level="normal")
+    app = _advanced_app()
+    errors: list[str] = []
+
+    rendered = _run_advanced(state, app, ["1", "9", "0"], errors)
+
+    # The row offers only its validated values plus the explicit cancel.
+    assert [label for _key, label, _hint in rendered[1]] == [
+        "auto — слушает 0.0.0.0",
+        "ipv4 — слушает 0.0.0.0",
+        "ipv6 — слушает ::",
+        "dual_stack — слушает 0.0.0.0 и ::",
+        "↩ Отмена",
+    ]
+    assert errors == ["Недопустимое значение для network: 9. Допустимо: auto, ipv4, ipv6, dual_stack"]
+    app.admin.save_state.assert_not_called()
+    assert protocol.config["advanced"] == {"network": "ipv4", "use_middle_proxy": True, "log_level": "normal"}
+
+
+def test_telemt_advanced_reapplies_only_while_installed_and_enabled():
+    enabled_state, enabled_protocol = _advanced_state(network="ipv4")
+    enabled_protocol.enabled = True
+    enabled_app = _advanced_app()
+
+    _run_advanced(enabled_state, enabled_app, ["2", "1", "0"], [])
+
+    enabled_app.protocols.reinstall.assert_called_once_with(enabled_state, "telemt")
+
+    idle_app = _advanced_app()
+    halted = _advanced_state(network="ipv4")[0]
+
+    _run_advanced(halted, idle_app, ["2", "1", "0"], [])
+
+    idle_app.admin.save_state.assert_called_once_with(halted)
+    idle_app.protocols.reinstall.assert_not_called()
 
 
 def test_telemt_normal_install_has_no_legacy_prompts():
     source = (ROOT / "hydra" / "ui" / "plugin_managers" / "_telemt_operations.py").read_text(encoding="utf-8")
     start = source.index("def run_install")
-    normal_flow = source[start : source.index("\ndef view_links", start)]
+    normal_flow = source[start : source.index("\ndef run_advanced", start)]
 
     assert "_choose_network" not in normal_flow
     assert "client_mss" not in normal_flow

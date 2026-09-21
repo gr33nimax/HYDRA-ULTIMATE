@@ -113,13 +113,6 @@ def _run_advanced(state: AppState, app: ApplicationService) -> None:
         run_advanced(state, app)
 
 
-def _view_links(state: AppState, app: ApplicationService) -> None:
-    from hydra.ui.plugin_managers._telemt_operations import view_links
-
-    with _implementation_scope():
-        view_links(state, app)
-
-
 def _run_update(app: ApplicationService) -> None:
     from hydra.ui.plugin_managers._telemt_operations import run_update
 
