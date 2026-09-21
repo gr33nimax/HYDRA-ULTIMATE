@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from hydra.core.state_models import AppState, User
@@ -173,6 +174,22 @@ def _link_caption(link: str) -> str:
     return "Ссылка"
 
 
+def _manual_config(artifact: _ClientArtifact) -> str:
+    """Hide a JSON envelope that only repeats an already displayed link."""
+    try:
+        payload = json.loads(artifact.config)
+    except (json.JSONDecodeError, TypeError):
+        return artifact.config
+    if (
+        isinstance(payload, dict)
+        and set(payload) == {"link", "protocol"}
+        and payload.get("protocol") == artifact.plugin_name
+        and payload.get("link") in artifact.links
+    ):
+        return ""
+    return artifact.config
+
+
 def _render_inline_artifact(
     artifact: _ClientArtifact,
     state: AppState | None = None,
@@ -187,9 +204,10 @@ def _render_inline_artifact(
     for link in artifact.links:
         print(f"  {GREEN}{_link_caption(link)}:{NC}")
         print(tag_client_link(link, user, state) if user and state else link)
-    if artifact.config:
+    config = _manual_config(artifact)
+    if config:
         print(f"  {DIM}{'─' * PANEL_W}{NC}")
-        for line in artifact.config.splitlines():
+        for line in config.splitlines():
             print(line)
         print(f"  {DIM}{'─' * PANEL_W}{NC}")
     print()
