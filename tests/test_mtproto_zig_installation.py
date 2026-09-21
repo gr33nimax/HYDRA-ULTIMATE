@@ -171,7 +171,7 @@ def test_missing_digest_fails_closed_without_downloading(tmp_path, monkeypatch):
         ok = downloader.download_release_asset("example/repo", ASSET_NAMES, destination, on_error=errors.append)
 
     assert ok is False
-    assert errors == [f"Файл {PROXY_ASSET['name']} не содержит SHA-256 digest"]
+    assert errors == [f"Файл {PROXY_ASSET['name']} не содержит SHA-256 digest или sidecar"]
     download.assert_not_called()
     assert not destination.exists()
 
@@ -196,6 +196,30 @@ def test_matching_digest_downloads_the_asset(tmp_path):
     destination = tmp_path / "proxy.tar.gz"
 
     with patch.object(downloader.urllib.request, "urlopen", side_effect=_github([_release("v1", asset)], payload)):
+        assert downloader.download_release_asset("example/repo", ASSET_NAMES, destination) is True
+
+    assert destination.read_bytes() == payload
+
+
+def test_release_checksum_sidecar_verifies_an_older_asset(tmp_path):
+    payload = b"archive-bytes"
+    digest = hashlib.sha256(payload).hexdigest()
+    sidecar = {
+        "name": PROXY_ASSET["name"] + ".sha256",
+        "browser_download_url": "https://example.invalid/a.sha256",
+    }
+    releases = [_release("v1", PROXY_ASSET, sidecar)]
+    destination = tmp_path / "proxy.tar.gz"
+
+    def open_url(request, timeout=None):  # noqa: ARG001 - urlopen signature
+        url = getattr(request, "full_url", str(request))
+        if "/releases" in url:
+            return _Response(json.dumps(releases).encode())
+        if url.endswith(".sha256"):
+            return _Response(f"{digest}  {PROXY_ASSET['name']}\n".encode())
+        return _Response(payload)
+
+    with patch.object(downloader.urllib.request, "urlopen", side_effect=open_url):
         assert downloader.download_release_asset("example/repo", ASSET_NAMES, destination) is True
 
     assert destination.read_bytes() == payload
@@ -302,11 +326,15 @@ def test_install_failure_reaches_apply_error_with_its_exact_stage():
     def set_error(message: str) -> None:
         current["error"] = message
 
+    def rollback_apply(_state) -> bool:
+        current["error"] = ""
+        return True
+
     operations = PluginLifecycleOperations(
         get_plugin=lambda _name: plugin,
         get_protocol=lambda state, name: state.protocols.setdefault(name, PluginState()),
         lifecycle_result=lambda _plugin, _operation, _state=None: False,
-        apply_config=lambda _state: True,
+        apply_config=rollback_apply,
         save_state=lambda _state: None,
         last_apply_error=lambda: current["error"],
         set_apply_error=set_error,

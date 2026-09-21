@@ -365,22 +365,13 @@ def _published_releases(repo: str, *, timeout: int, per_page: int = 30) -> list[
     return releases
 
 
-def resolve_release_asset(
+def _resolve_release_asset(
     repo: str,
     asset_names: Sequence[str],
     *,
-    timeout: int = 15,
-    per_page: int = 30,
-) -> tuple[str, dict]:
-    """Newest published release that still ships one exact ``asset_names`` file.
-
-    ``releases/latest`` is deliberately not consulted: an upstream project may
-    publish a newest release that contains only unrelated assets, which would
-    make the real artifact unreachable. ``asset_names`` is ordered by
-    preference, so the first name present inside the selected release wins.
-    Returns ``(release_tag, asset)`` and raises ``ValueError`` with a redacted
-    reason when no release qualifies.
-    """
+    timeout: int,
+    per_page: int,
+) -> tuple[str, dict, dict[str, dict]]:
     for release in _published_releases(repo, timeout=timeout, per_page=per_page):
         available = {
             asset["name"]: asset
@@ -389,8 +380,45 @@ def resolve_release_asset(
         }
         for name in asset_names:
             if name in available:
-                return str(release["tag_name"]), available[name]
+                return str(release["tag_name"]), available[name], available
     raise ValueError(f"в релизах {repo} нет точного архива " + " или ".join(asset_names))
+
+
+def resolve_release_asset(
+    repo: str,
+    asset_names: Sequence[str],
+    *,
+    timeout: int = 15,
+    per_page: int = 30,
+) -> tuple[str, dict]:
+    """Newest published release that still ships one exact ``asset_names`` file."""
+    tag, asset, _available = _resolve_release_asset(
+        repo,
+        asset_names,
+        timeout=timeout,
+        per_page=per_page,
+    )
+    return tag, asset
+
+
+def _sidecar_digest(asset: dict, available: dict[str, dict], *, timeout: int) -> str | None:
+    """Read an exact same-release ``.sha256`` sidecar used by older releases."""
+    name = str(asset["name"])
+    sidecar = available.get(name + ".sha256")
+    if sidecar is None or not isinstance(sidecar.get("browser_download_url"), str):
+        return None
+    request = urllib.request.Request(sidecar["browser_download_url"], headers=_download_headers())
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        raw = response.read(4097)
+    if len(raw) > 4096:
+        raise ValueError("SHA-256 sidecar is too large")
+    parts = raw.decode("ascii").strip().split()
+    if len(parts) not in {1, 2} or (len(parts) == 2 and parts[1].lstrip("*") != name):
+        raise ValueError("SHA-256 sidecar has an invalid format")
+    digest = parts[0].lower()
+    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+        raise ValueError("SHA-256 sidecar has an invalid digest")
+    return digest
 
 
 def download_release_asset(
@@ -408,14 +436,22 @@ def download_release_asset(
     ``HYDRA_ALLOW_UNVERIFIED_DOWNLOADS`` does not apply here.
     """
     try:
-        _release_tag, asset = resolve_release_asset(repo, asset_names, timeout=timeout)
+        _release_tag, asset, available = _resolve_release_asset(
+            repo,
+            asset_names,
+            timeout=timeout,
+            per_page=30,
+        )
+        digest = _asset_digest(asset) or _sidecar_digest(asset, available, timeout=timeout)
     except ValueError as exc:
         return _fail(str(exc), on_error)
     except Exception as exc:
         return _fail(f"не удалось получить релизы {repo}: {_network_error(exc)}", on_error)
-    digest = _asset_digest(asset)
     if not digest:
-        return _fail(f"Файл {asset['name']} не содержит SHA-256 digest", on_error)
+        return _fail(
+            f"Файл {asset['name']} не содержит SHA-256 digest или sidecar",
+            on_error,
+        )
     return download(asset["browser_download_url"], dest, sha256=digest, on_error=on_error)
 
 

@@ -41,7 +41,10 @@ class PluginLifecycleOperations:
             raise
         if not installed:
             self._note_install_failure(name, plugin)
+            failure = self.last_apply_error()
             transaction.rollback(self.log_rollback_error)
+            if failure:
+                self.set_apply_error(failure)
             return False
 
         if not self.get_protocol(snapshot, name).installed:
