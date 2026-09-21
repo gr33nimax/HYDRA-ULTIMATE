@@ -16,6 +16,24 @@ from .installation import report_stage
 # retry separates that transient rejection from a real unit problem.
 RELOAD_RETRY_SECONDS = 1.0
 
+# ``Type=simple`` reports the unit active before the process proves itself, so a
+# slow start and an instant crash must be told apart by polling.
+READY_POLLS = 12
+READY_INTERVAL_SECONDS = 0.5
+
+
+def _service_state(host: Any, service_name: str, *, polls: int = 1) -> tuple[str, Any]:
+    """Read the unit state, polling while it is still starting."""
+    result = _systemctl(host, "is-active", service_name)
+    state = (result.stdout or "").strip()
+    for _ in range(max(0, polls - 1)):
+        if state == "active":
+            return state, result
+        time.sleep(READY_INTERVAL_SECONDS)
+        result = _systemctl(host, "is-active", service_name)
+        state = (result.stdout or "").strip()
+    return state, result
+
 
 def _systemctl(host: Any, action: str, service_name: str = "") -> Any:
     """Run one systemctl action; a unit name is only passed when it applies."""
@@ -65,13 +83,29 @@ def apply(
             suffix = f": {reason}" if reason else ""
             report_stage(on_failure, f"systemctl {action} не выполнился для Telemt{suffix}")
             return False
-    health = _systemctl(host, "is-active", service_name)
-    if health.returncode == 0 and health.stdout.strip() == "active":
-        return True
-    reason = bounded_reason(health)
-    suffix = f" ({reason})" if reason else ""
-    report_stage(on_failure, f"служба Telemt не запустилась: смотрите journalctl -u {service_name}{suffix}")
-    return False
+    state, result = _service_state(host, service_name, polls=READY_POLLS)
+    if state != "active":
+        reason = bounded_reason(result)
+        suffix = f" ({reason})" if reason else ""
+        report_stage(
+            on_failure,
+            f"служба Telemt не запустилась (state={state or 'unknown'}): смотрите journalctl -u {service_name}{suffix}",
+        )
+        return False
+    # Confirm the process stays up: a unit that dies right after the fork must
+    # not be reported as a successful start.
+    time.sleep(READY_INTERVAL_SECONDS)
+    settled, settled_result = _service_state(host, service_name)
+    if settled != "active":
+        reason = bounded_reason(settled_result)
+        suffix = f" ({reason})" if reason else ""
+        report_stage(
+            on_failure,
+            f"служба Telemt завершилась сразу после запуска (state={settled or 'unknown'}): "
+            f"смотрите journalctl -u {service_name}{suffix}",
+        )
+        return False
+    return True
 
 
 def snapshot(*, config_file: Path, service_file: Path, running: bool) -> dict[str, bytes | bool | None]:

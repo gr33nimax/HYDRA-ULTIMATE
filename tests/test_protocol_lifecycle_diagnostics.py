@@ -246,8 +246,11 @@ def test_telemt_apply_reports_the_failed_systemd_step(tmp_path):
     assert stages == ["systemctl restart не выполнился для Telemt"]
 
 
-def test_telemt_apply_reports_an_inactive_service(tmp_path):
+def test_telemt_apply_reports_an_inactive_service(tmp_path, monkeypatch):
     from hydra.plugins.telemt import runtime as telemt_runtime
+
+    monkeypatch.setattr(telemt_runtime, "READY_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(telemt_runtime, "READY_POLLS", 2)
 
     stages: list[str] = []
     applied = telemt_runtime.apply(
@@ -260,10 +263,15 @@ def test_telemt_apply_reports_an_inactive_service(tmp_path):
     )
 
     assert applied is False
-    assert stages == ["служба Telemt не запустилась: смотрите journalctl -u telemt"]
+    assert stages == [
+        "служба Telemt не запустилась (state=inactive): смотрите journalctl -u telemt",
+    ]
 
 
-def test_mtproto_apply_reports_an_inactive_service(tmp_path):
+def test_mtproto_apply_reports_an_inactive_service(tmp_path, monkeypatch):
+    monkeypatch.setattr(zig_runtime, "READY_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(zig_runtime, "READY_POLLS", 2)
+
     stages: list[str] = []
     applied = zig_runtime.apply(
         "[server]\nport = 443\n",
@@ -276,7 +284,90 @@ def test_mtproto_apply_reports_an_inactive_service(tmp_path):
     )
 
     assert applied is False
-    assert stages == ["служба mtproto-zig не запустилась: смотрите journalctl -u mtproto-zig"]
+    assert stages == [
+        "служба mtproto-zig не запустилась (state=inactive): смотрите journalctl -u mtproto-zig",
+    ]
+
+
+def test_telemt_apply_waits_for_a_slow_start(tmp_path, monkeypatch):
+    from hydra.plugins.telemt import runtime as telemt_runtime
+
+    monkeypatch.setattr(telemt_runtime, "READY_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(telemt_runtime, "READY_POLLS", 4)
+    states = iter(["activating\n", "activating\n", "active\n", "active\n"])
+
+    class StartingHost(_ScriptedHost):
+        def run(self, args, **_kwargs):
+            self.commands.append(list(args))
+            if args[:2] == ["systemctl", "is-active"]:
+                return CompletedProcess(args, 0, next(states, "active\n"), "")
+            return CompletedProcess(args, 0, "", "")
+
+    assert (
+        telemt_runtime.apply(
+            "[server]\nport = 8888\n",
+            host=StartingHost(lambda _command: False),
+            config_file=tmp_path / "config.toml",
+            work_dir=tmp_path / "work",
+            service_name="telemt",
+        )
+        is True
+    )
+
+
+def test_telemt_apply_rejects_a_service_that_dies_right_after_start(tmp_path, monkeypatch):
+    from hydra.plugins.telemt import runtime as telemt_runtime
+
+    monkeypatch.setattr(telemt_runtime, "READY_INTERVAL_SECONDS", 0.0)
+    states = iter(["active\n", "failed\n"])
+
+    class CrashingHost(_ScriptedHost):
+        def run(self, args, **_kwargs):
+            self.commands.append(list(args))
+            if args[:2] == ["systemctl", "is-active"]:
+                return CompletedProcess(args, 0, next(states, "failed\n"), "")
+            return CompletedProcess(args, 0, "", "")
+
+    stages: list[str] = []
+    applied = telemt_runtime.apply(
+        "[server]\nport = 8888\n",
+        host=CrashingHost(lambda _command: False),
+        config_file=tmp_path / "config.toml",
+        work_dir=tmp_path / "work",
+        service_name="telemt",
+        on_failure=stages.append,
+    )
+
+    assert applied is False
+    assert stages == [
+        "служба Telemt завершилась сразу после запуска (state=failed): смотрите journalctl -u telemt",
+    ]
+
+
+def test_telemt_health_names_the_unit_state():
+    plugin = TelemtPlugin()
+    with patch.object(
+        TelemtPlugin,
+        "status",
+        return_value=SimpleNamespace(running=False, info={"state": "failed"}),
+    ):
+        health = plugin.healthcheck_for_state(AppState())
+
+    assert health.healthy is False
+    assert health.detail == "служба telemt не активна (state=failed): смотрите journalctl -u telemt"
+
+
+def test_mtproto_health_names_the_unit_state():
+    plugin = MtprotoZigPlugin()
+    with patch.object(
+        MtprotoZigPlugin,
+        "status",
+        return_value=SimpleNamespace(running=False, info={"state": "failed"}),
+    ):
+        health = plugin.healthcheck_for_state(AppState())
+
+    assert health.healthy is False
+    assert health.detail == "служба mtproto-zig не активна (state=failed): смотрите journalctl -u mtproto-zig"
 
 
 def _lifecycle(plugin, *, apply_config, errors: list[str]) -> PluginLifecycleOperations:
@@ -358,7 +449,7 @@ def test_mtproto_apply_reports_the_service_reason(tmp_path):
 
     assert applied is False
     assert stages == [
-        "служба mtproto-zig не запустилась: смотрите journalctl -u mtproto-zig "
+        "служба mtproto-zig не запустилась (state=inactive): смотрите journalctl -u mtproto-zig "
         "(Failed to start mtproto-zig.service: exit code)",
     ]
 

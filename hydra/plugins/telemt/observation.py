@@ -44,6 +44,7 @@ def status(
     if is_installed is None:
         is_installed = installed(bin_path)
     running = False
+    state = ""
     port = default_port
     if is_installed:
         result = host.run(
@@ -51,7 +52,8 @@ def status(
             capture_output=True,
             text=True,
         )
-        running = result.stdout.strip() == "active"
+        state = (result.stdout or "").strip()
+        running = state == "active"
         if config_file.exists():
             try:
                 for line in config_file.read_text(encoding="utf-8").splitlines():
@@ -65,6 +67,7 @@ def status(
         enabled=config_file.exists(),
         running=running,
         port=port,
+        info={"state": state} if state else {},
     )
 
 

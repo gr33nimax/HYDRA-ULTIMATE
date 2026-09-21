@@ -8,7 +8,7 @@ from pathlib import Path
 from hydra.contracts import BackupResource
 from hydra.core.host import HOST
 from hydra.core.state_models import User
-from hydra.plugins.base import BasePlugin, ConfigFragment, PluginCategory, PluginMeta, PluginStatus
+from hydra.plugins.base import BasePlugin, ConfigFragment, HealthResult, PluginCategory, PluginMeta, PluginStatus
 from hydra.plugins.context import PluginStateAccess
 from hydra.utils.downloader import verify_elf
 from hydra.utils.net import public_ip
@@ -151,6 +151,18 @@ class TelemtPlugin(BasePlugin):
             service_name=SERVICE_NAME,
             default_port=DEFAULT_PORT,
             is_installed=self._installed(),
+        )
+
+    def healthcheck_for_state(self, state: PluginStateAccess) -> HealthResult:
+        """Name the unit state and where to look when Telemt is not running."""
+        current = self.status(state)
+        if current.running:
+            return HealthResult(True)
+        unit_state = str(current.info.get("state", "") or "unknown")
+        return HealthResult(
+            False,
+            f"служба {SERVICE_NAME} не активна (state={unit_state}): смотрите journalctl -u {SERVICE_NAME}",
+            "error",
         )
 
     def traffic(self, state: PluginStateAccess) -> dict[str, int]:

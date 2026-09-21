@@ -8,7 +8,7 @@ from pathlib import Path
 from hydra.contracts import BackupResource, ConfigFragment
 from hydra.core.host import HOST
 from hydra.core.state_models import User
-from hydra.plugins.base import BasePlugin, PluginCategory, PluginMeta, PluginStatus
+from hydra.plugins.base import BasePlugin, HealthResult, PluginCategory, PluginMeta, PluginStatus
 from hydra.plugins.context import PluginStateAccess
 from hydra.utils.downloader import verify_elf
 from hydra.utils.net import public_ip
@@ -109,6 +109,7 @@ class MtprotoZigPlugin(BasePlugin):
             self._pending_config,
             host=HOST,
             config_file=CONFIG_FILE,
+            work_dir=WORK_DIR,
             service=SERVICE_NAME,
             binary=BIN_PATH,
             on_failure=self._note_apply_failure,
@@ -147,13 +148,26 @@ class MtprotoZigPlugin(BasePlugin):
         result = (
             HOST.run(["systemctl", "is-active", SERVICE_NAME], capture_output=True, text=True) if installed else None
         )
-        running = bool(result and result.returncode == 0 and result.stdout.strip() == "active")
+        unit_state = (result.stdout or "").strip() if result else ""
+        running = bool(result and result.returncode == 0 and unit_state == "active")
         return PluginStatus(
             installed=installed,
             enabled=CONFIG_FILE.exists(),
             running=running,
             port=INTERNAL_PORT,
-            info={"traffic_file": str(TOTALS_FILE)},
+            info={"traffic_file": str(TOTALS_FILE), "state": unit_state},
+        )
+
+    def healthcheck_for_state(self, state: PluginStateAccess) -> HealthResult:
+        """Name the unit state and where to look when mtproto-zig is not running."""
+        current = self.status(state)
+        if current.running:
+            return HealthResult(True)
+        unit_state = str(current.info.get("state", "") or "unknown")
+        return HealthResult(
+            False,
+            f"служба {SERVICE_NAME} не активна (state={unit_state}): смотрите journalctl -u {SERVICE_NAME}",
+            "error",
         )
 
     def traffic(self, state: PluginStateAccess) -> dict[str, int]:
