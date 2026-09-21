@@ -51,6 +51,9 @@ def test_lifecycle_uses_hydra_paths_and_least_privilege_unit(tmp_path):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
 
+        def ensure_directory(self, path, **_kwargs):
+            path.mkdir(parents=True, exist_ok=True)
+
     host = Host()
     service = tmp_path / "mtproto-zig.service"
     config = tmp_path / "config.toml"
@@ -63,9 +66,18 @@ def test_lifecycle_uses_hydra_paths_and_least_privilege_unit(tmp_path):
     assert "User=mtproto-zig" in unit
     assert "CAP_NET_ADMIN" not in unit
     assert runtime.apply(
-        "[server]\\nport = 443\\n", host=host, config_file=config, service="mtproto-zig", binary=binary
+        "[server]\\nport = 443\\n",
+        host=host,
+        config_file=config,
+        work_dir=tmp_path / "work",
+        service="mtproto-zig",
+        binary=binary,
     )
     assert ["chown", "root:mtproto-zig", str(config)] in host.commands
+    # daemon-reload accepts no unit name; passing one fails with "Too many arguments."
+    reloads = [command for command in host.commands if command[1] == "daemon-reload"]
+    assert reloads
+    assert all(len(command) == 2 for command in reloads)
 
 
 def test_metrics_accumulate_across_counter_reset(tmp_path):

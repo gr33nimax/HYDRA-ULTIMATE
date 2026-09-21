@@ -42,7 +42,13 @@ def test_apply_mutates_only_telemt_config_and_its_unit(tmp_path):
     host = _Host(tmp_path)
     config = tmp_path / "etc" / "config.toml"
 
-    assert runtime.apply("[server]\nport = 443\n", host=host, config_file=config, service_name="telemt")
+    assert runtime.apply(
+        "[server]\nport = 443\n",
+        host=host,
+        config_file=config,
+        work_dir=tmp_path / "work",
+        service_name="telemt",
+    )
 
     assert config.read_text() == "[server]\nport = 443\n"
     assert ["chown", "root:telemt", str(config)] in host.commands
@@ -52,6 +58,10 @@ def test_apply_mutates_only_telemt_config_and_its_unit(tmp_path):
         "restart",
         "is-active",
     }
+    # daemon-reload accepts no unit name; passing one fails with "Too many arguments."
+    reloads = [command for command in host.commands if command[1] == "daemon-reload"]
+    assert reloads
+    assert all(len(command) == 2 for command in reloads)
 
 
 def test_executor_rolls_back_telemt_when_apply_fails(tmp_path):
@@ -88,7 +98,13 @@ def test_failed_apply_can_restore_the_captured_service_state(tmp_path):
     snapshot = runtime.snapshot(config_file=config, service_file=unit, running=True)
     host = _Host(tmp_path, failures={"restart"})
 
-    assert not runtime.apply("new", host=host, config_file=config, service_name="telemt")
+    assert not runtime.apply(
+        "new",
+        host=host,
+        config_file=config,
+        work_dir=tmp_path / "work",
+        service_name="telemt",
+    )
     host.failures.clear()
     assert runtime.rollback(snapshot, host=host, config_file=config, service_file=unit, service_name="telemt")
 

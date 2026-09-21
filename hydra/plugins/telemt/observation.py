@@ -1,17 +1,31 @@
 """Runtime observation for Telemt."""
+
 from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from hydra.plugins.base import PluginStatus
 from hydra.plugins.context import PluginStateAccess
 
 
 class HostRunner(Protocol):
-    def run(self, command: list[str], **kwargs): ...
+    """The subset of the injected HostBackend this module drives."""
+
+    def run(
+        self,
+        args: Sequence[object],
+        *,
+        timeout: float = ...,
+        check: bool = ...,
+        text: bool = ...,
+        capture_output: bool = ...,
+        encoding: str | None = ...,
+        errors: str | None = ...,
+    ) -> Any: ...
 
 
 def installed(bin_path: Path) -> bool:
@@ -63,9 +77,7 @@ def traffic(
     if not stats_file.exists():
         return {}
     try:
-        users_data = json.loads(
-            stats_file.read_text(encoding="utf-8")
-        ).get("users", {})
+        users_data = json.loads(stats_file.read_text(encoding="utf-8")).get("users", {})
     except Exception:
         return {}
     result: dict[str, int] = {}

@@ -19,14 +19,17 @@ class _Host:
     def __init__(self) -> None:
         self.commands: list[list[str]] = []
 
-    def run(self, command, **_kwargs):
-        self.commands.append(list(command))
-        return CompletedProcess(command, 0, "active\n", "")
+    def run(self, args, **_kwargs):
+        self.commands.append(list(args))
+        return CompletedProcess(args, 0, "active\n", "")
 
     def atomic_write(self, path: Path, content, **_kwargs) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         text = content if isinstance(content, str) else bytes(content).decode()
         path.write_text(text, encoding="utf-8")
+
+    def ensure_directory(self, path: Path, **_kwargs) -> None:
+        path.mkdir(parents=True, exist_ok=True)
 
 
 def test_mtproto_apply_never_calls_an_undocumented_config_flag(tmp_path):
@@ -39,6 +42,7 @@ def test_mtproto_apply_never_calls_an_undocumented_config_flag(tmp_path):
         "[server]\nport = 443\n",
         host=host,
         config_file=config,
+        work_dir=tmp_path / "work",
         service="mtproto-zig",
         binary=binary,
     )
@@ -216,13 +220,10 @@ class _ScriptedHost(_Host):
         self._output = output
         self._stderr = stderr
 
-    def run(self, command, **_kwargs):
-        self.commands.append(list(command))
-        code = 1 if self._fail(list(command)) else 0
-        return CompletedProcess(command, code, self._output, self._stderr)
-
-    def ensure_directory(self, path: Path, **_kwargs) -> None:
-        path.mkdir(parents=True, exist_ok=True)
+    def run(self, args, **_kwargs):
+        self.commands.append(list(args))
+        code = 1 if self._fail(list(args)) else 0
+        return CompletedProcess(args, code, self._output, self._stderr)
 
     def remove_file(self, path: Path) -> None:
         path.unlink(missing_ok=True)
@@ -236,6 +237,7 @@ def test_telemt_apply_reports_the_failed_systemd_step(tmp_path):
         "[server]\nport = 8888\n",
         host=_ScriptedHost(lambda command: command[:2] == ["systemctl", "restart"]),
         config_file=tmp_path / "config.toml",
+        work_dir=tmp_path / "work",
         service_name="telemt",
         on_failure=stages.append,
     )
@@ -252,6 +254,7 @@ def test_telemt_apply_reports_an_inactive_service(tmp_path):
         "[server]\nport = 8888\n",
         host=_ScriptedHost(lambda _command: False, output="inactive\n"),
         config_file=tmp_path / "config.toml",
+        work_dir=tmp_path / "work",
         service_name="telemt",
         on_failure=stages.append,
     )
@@ -266,6 +269,7 @@ def test_mtproto_apply_reports_an_inactive_service(tmp_path):
         "[server]\nport = 443\n",
         host=_ScriptedHost(lambda command: command[:2] == ["systemctl", "is-active"], output="inactive\n"),
         config_file=tmp_path / "config.toml",
+        work_dir=tmp_path / "work",
         service="mtproto-zig",
         binary=tmp_path / "mtproto-zig",
         on_failure=stages.append,
@@ -325,6 +329,7 @@ def test_telemt_apply_reports_the_systemd_reason(tmp_path):
             stderr="Failed to reload daemon: bad unit file\n",
         ),
         config_file=tmp_path / "config.toml",
+        work_dir=tmp_path / "work",
         service_name="telemt",
         on_failure=stages.append,
     )
@@ -345,6 +350,7 @@ def test_mtproto_apply_reports_the_service_reason(tmp_path):
             stderr="Failed to start mtproto-zig.service: exit code\n",
         ),
         config_file=tmp_path / "config.toml",
+        work_dir=tmp_path / "work",
         service="mtproto-zig",
         binary=tmp_path / "mtproto-zig",
         on_failure=stages.append,

@@ -91,6 +91,7 @@ class TelemtPlugin(BasePlugin):
             self._pending_cfg,
             host=HOST,
             config_file=CONFIG_FILE,
+            work_dir=WORK_DIR,
             service_name=SERVICE_NAME,
             on_failure=self._note_apply_failure,
         )

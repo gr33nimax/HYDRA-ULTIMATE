@@ -5,7 +5,7 @@ from __future__ import annotations
 import platform
 import shutil
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -21,7 +21,19 @@ from .upstream_contract import RELEASE_TAG, release_archive
 
 
 class HostRunner(Protocol):
-    def run(self, command: list[str], **kwargs: Any) -> Any: ...
+    """The subset of the injected HostBackend this module drives."""
+
+    def run(
+        self,
+        args: Sequence[object],
+        *,
+        timeout: float = ...,
+        check: bool = ...,
+        text: bool = ...,
+        capture_output: bool = ...,
+        encoding: str | None = ...,
+        errors: str | None = ...,
+    ) -> Any: ...
 
     def atomic_write(self, path: Path, content: str | bytes, *, mode: int = 0o644) -> None: ...
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -11,12 +12,25 @@ from hydra.utils.commands import bounded_reason
 from .constants import SERVICE_USER
 from .installation import report_stage
 
+# A reload that is already in flight is rejected occasionally; one bounded
+# retry separates that transient rejection from a real unit problem.
+RELOAD_RETRY_SECONDS = 1.0
+
+
+def _systemctl(host: Any, action: str, service: str = "") -> Any:
+    """Run one systemctl action; a unit name is only passed when it applies."""
+    command = ["systemctl", action]
+    if service:
+        command.append(service)
+    return host.run(command, capture_output=True, text=True)
+
 
 def apply(
     config: str | None,
     *,
     host: Any,
     config_file: Path,
+    work_dir: Path,
     service: str,
     binary: Path,
     on_failure: Callable[[str], None] | None = None,
@@ -24,6 +38,9 @@ def apply(
     if not config:
         report_stage(on_failure, "конфигурация mtproto.zig не построена")
         return False
+    # The unit grants this directory through ReadWritePaths, so it must exist
+    # before systemd loads the unit again.
+    host.ensure_directory(work_dir, mode=0o750)
     host.atomic_write(config_file, config, mode=0o640)
     ownership = host.run(["chown", f"root:{SERVICE_USER}", str(config_file)], capture_output=True)
     if ownership.returncode != 0:
@@ -33,15 +50,28 @@ def apply(
     # configuration through ``mtbuddy config validate``; there is no proxy-side
     # ``--check-config`` flag. The systemd restart plus ``is-active`` result is
     # the runtime health gate.
-    results = (
-        host.run(["systemctl", "daemon-reload"], capture_output=True),
-        host.run(["systemctl", "enable", service], capture_output=True),
-        host.run(["systemctl", "restart", service], capture_output=True),
-        host.run(["systemctl", "is-active", service], capture_output=True, text=True),
-    )
-    if all(result.returncode == 0 for result in results):
+    reload_result = _systemctl(host, "daemon-reload")
+    if reload_result.returncode != 0:
+        # A reload that is already in flight is rejected occasionally; one
+        # bounded retry separates that transient rejection from a unit problem.
+        time.sleep(RELOAD_RETRY_SECONDS)
+        reload_result = _systemctl(host, "daemon-reload")
+    if reload_result.returncode != 0:
+        reason = bounded_reason(reload_result)
+        suffix = f": {reason}" if reason else ""
+        report_stage(on_failure, f"systemctl daemon-reload не выполнился для {service}{suffix}")
+        return False
+    for action in ("enable", "restart"):
+        result = _systemctl(host, action, service)
+        if result.returncode != 0:
+            reason = bounded_reason(result)
+            suffix = f": {reason}" if reason else ""
+            report_stage(on_failure, f"systemctl {action} не выполнился для {service}{suffix}")
+            return False
+    health = _systemctl(host, "is-active", service)
+    if health.returncode == 0 and health.stdout.strip() == "active":
         return True
-    reason = bounded_reason(results[-1])
+    reason = bounded_reason(health)
     suffix = f" ({reason})" if reason else ""
     report_stage(on_failure, f"служба {service} не запустилась: смотрите journalctl -u {service}{suffix}")
     return False
