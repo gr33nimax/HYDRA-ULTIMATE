@@ -114,14 +114,15 @@ def download_binary(
             report_stage(on_failure, reasons[-1] if reasons else "не удалось скачать релизный архив mtproto.zig")
             return False
         extracted = destination / "extracted"
+        binary_names = {
+            "mtproto-proxy",
+            "mtproto-zig",
+            *(Path(candidate).name.removesuffix(".tar.gz") for candidate in candidates),
+        }
         try:
             extract_tarball(archive, extracted)
             found = next(
-                (
-                    item
-                    for item in extracted.rglob("*")
-                    if item.is_file() and item.name in {"mtproto-proxy", "mtproto-zig"}
-                ),
+                (item for item in extracted.rglob("*") if item.is_file() and item.name in binary_names),
                 None,
             )
         except (OSError, ValueError, tarfile.TarError) as exc:

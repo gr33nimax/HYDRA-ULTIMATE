@@ -238,6 +238,15 @@ def test_download_failure_keeps_the_previous_binary(tmp_path):
     assert stages == ["в релизах example/repo нет точного архива mtproto-proxy-linux-x86_64.tar.gz"]
 
 
+def test_archive_accepts_the_exact_architecture_binary_name(tmp_path):
+    archive = _archive(tmp_path, name="mtproto-proxy-linux-x86_64")
+
+    installed, binary = _install(tmp_path, archive)
+
+    assert installed is True
+    assert binary.read_bytes() == b"\x7fELF"
+
+
 def test_archive_without_the_binary_keeps_the_previous_binary(tmp_path):
     archive = tmp_path / "empty.tar.gz"
     other = tmp_path / "readme.txt"
