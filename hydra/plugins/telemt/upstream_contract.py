@@ -28,6 +28,7 @@ UPSTREAM_TOML_PATHS = frozenset(
         "general.modes.tls",
         "general.links.show",
         "server.port",
+        "server.log_level",
         "server.listeners.ip",
         "server.api.enabled",
         "server.api.listen",

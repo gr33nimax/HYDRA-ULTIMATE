@@ -18,6 +18,12 @@ _NETWORKS = frozenset({"auto", "ipv4", "ipv6", "dual_stack"})
 _LOG_LEVELS = frozenset({"normal", "debug"})
 _HOST_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 
+# Upstream serves an unauthenticated status API and defaults to a wildcard
+# bind. Hydra neither needs nor exposes it: keep it disabled, and loopback-only
+# in case it is ever enabled by hand.
+API_LISTEN = "127.0.0.1:9091"
+API_WHITELIST = ("127.0.0.1/32", "::1/128")
+
 
 def _toml_key(name: str) -> str:
     """Quote a user key: derived usernames are base64 and may hold +, / or =.
@@ -126,8 +132,6 @@ def _listeners(network: str) -> tuple[str, ...]:
 def render_toml(settings: TelemtSettings, users: dict[str, str]) -> str:
     """Render only the reviewed Telemt 3.5.7 TOML surface."""
     lines = [
-        f'log_level = "{settings.log_level}"',
-        "",
         "[general]",
         f"use_middle_proxy = {str(settings.use_middle_proxy).lower()}",
         "",
@@ -140,11 +144,21 @@ def render_toml(settings: TelemtSettings, users: dict[str, str]) -> str:
         'show = "*"',
         "",
         "[server]",
+        f'log_level = "{settings.log_level}"',
         f"port = {settings.port}",
         "",
     ]
     for address in _listeners(settings.network):
         lines.extend(("[[server.listeners]]", f'ip = "{address}"', ""))
+    lines.extend(
+        (
+            "[server.api]",
+            "enabled = false",
+            f'listen = "{API_LISTEN}"',
+            "whitelist = [" + ", ".join(f'"{cidr}"' for cidr in API_WHITELIST) + "]",
+            "",
+        )
+    )
     lines.extend(
         (
             "[censorship]",

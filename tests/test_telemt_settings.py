@@ -20,6 +20,34 @@ def test_normal_fake_tls_settings_render_upstream_357_fields():
     assert "client_mss" not in toml
 
 
+def test_log_level_belongs_to_the_server_section():
+    """Upstream ignores a top-level log_level, so it must live under [server]."""
+    settings = configuration.TelemtSettings(port=443, tls_domain="mask.example", log_level="debug")
+
+    toml = configuration.render_toml(settings, {"alice": "a" * 32})
+
+    assert "log_level" not in toml.split("[server]", 1)[0]
+
+    tomllib = pytest.importorskip("tomllib", reason="stdlib TOML parser needs Python 3.11+")
+    parsed = tomllib.loads(toml)
+
+    assert parsed["server"]["log_level"] == "debug"
+    assert "log_level" not in parsed
+
+
+def test_status_api_is_disabled_and_never_bound_to_a_public_interface():
+    """Upstream defaults the unauthenticated status API to a wildcard bind."""
+    settings = configuration.TelemtSettings(port=443, tls_domain="mask.example")
+
+    toml = configuration.render_toml(settings, {"alice": "a" * 32})
+
+    assert "[server.api]" in toml
+    assert "enabled = false" in toml
+    assert f'listen = "{configuration.API_LISTEN}"' in toml
+    assert 'whitelist = ["127.0.0.1/32", "::1/128"]' in toml
+    assert "0.0.0.0" not in toml.split("[server.api]", 1)[1]
+
+
 def test_base64_user_keys_are_quoted_for_toml():
     """A derived username may contain +, / or =; an unquoted key is invalid TOML."""
     settings = configuration.TelemtSettings(port=443, tls_domain="mask.example")
