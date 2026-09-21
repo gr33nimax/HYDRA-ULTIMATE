@@ -459,7 +459,10 @@ def test_telemt_install_reports_the_systemd_reason(tmp_path):
 
     stages: list[str] = []
     written = telemt_installation.write_service(
-        host=_ScriptedHost(lambda _command: True, stderr="Failed to reload daemon: bad unit file\n"),
+        host=_ScriptedHost(
+            lambda command: command[:2] == ["systemctl", "daemon-reload"],
+            stderr="Failed to reload daemon: bad unit file\n",
+        ),
         work_dir=tmp_path / "work",
         service_file=tmp_path / "telemt.service",
         bin_path=tmp_path / "telemt",

@@ -1,5 +1,6 @@
 """Telemt installation uses a dedicated least-privilege service identity."""
 
+from collections.abc import Sequence
 from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import patch
@@ -11,9 +12,9 @@ class _Host:
     def __init__(self) -> None:
         self.commands: list[list[str]] = []
 
-    def run(self, command: list[str], **_kwargs) -> CompletedProcess[str]:
-        self.commands.append(command)
-        return CompletedProcess(command, 0, "", "")
+    def run(self, args: Sequence[object], **_kwargs) -> CompletedProcess[str]:
+        self.commands.append(list(args))
+        return CompletedProcess(list(args), 0, "", "")
 
     def atomic_write(self, path, content, *, mode=0o644):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,6 +50,8 @@ def test_service_is_hydra_owned_and_least_privilege(tmp_path):
     assert "CAP_NET_ADMIN" not in unit
     assert "User=root" not in unit
     assert ["systemctl", "daemon-reload"] in host.commands
+    # A root-owned work directory makes systemd fail with status=200/CHDIR.
+    assert ["chown", "telemt:telemt", str(work_dir)] in host.commands
 
 
 def test_service_user_is_created_as_a_non_login_user():

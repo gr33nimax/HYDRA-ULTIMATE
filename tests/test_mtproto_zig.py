@@ -74,6 +74,8 @@ def test_lifecycle_uses_hydra_paths_and_least_privilege_unit(tmp_path):
         binary=binary,
     )
     assert ["chown", "root:mtproto-zig", str(config)] in host.commands
+    # A root-owned work directory makes systemd fail with status=200/CHDIR.
+    assert ["chown", "mtproto-zig:mtproto-zig", str(tmp_path / "work")] in host.commands
     # daemon-reload accepts no unit name; passing one fails with "Too many arguments."
     reloads = [command for command in host.commands if command[1] == "daemon-reload"]
     assert reloads

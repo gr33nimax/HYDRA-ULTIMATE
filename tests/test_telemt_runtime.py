@@ -52,6 +52,10 @@ def test_apply_mutates_only_telemt_config_and_its_unit(tmp_path):
 
     assert config.read_text() == "[server]\nport = 443\n"
     assert ["chown", "root:telemt", str(config)] in host.commands
+    # The unit runs as the service user: its working directory and the config
+    # directory must be usable by that user, otherwise systemd fails CHDIR.
+    assert ["chown", "root:telemt", str(config.parent)] in host.commands
+    assert ["chown", "telemt:telemt", str(tmp_path / "work")] in host.commands
     assert {command[1] for command in host.commands if command[0] == "systemctl"} == {
         "daemon-reload",
         "enable",

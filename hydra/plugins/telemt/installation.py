@@ -91,6 +91,13 @@ def write_service(
     """Write Telemt's least-privilege systemd unit through HostBackend."""
     host.ensure_directory(work_dir, mode=0o750)
     host.ensure_directory(service_file.parent)
+    # The unit runs as the service user, so it must be able to enter and write
+    # its working directory: a root-owned 0750 directory fails CHDIR with
+    # "status=200/CHDIR".
+    ownership = host.run(["chown", f"{SERVICE_USER}:{SERVICE_USER}", str(work_dir)], capture_output=True)
+    if ownership.returncode != 0:
+        report_stage(on_failure, "не удалось назначить владельца рабочего каталога Telemt")
+        return False
     unit = (
         "[Unit]\n"
         "Description=Hydra Telemt MTProxy\n"

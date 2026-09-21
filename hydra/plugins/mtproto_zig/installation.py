@@ -57,6 +57,14 @@ def write_service(
 ) -> bool:
     service_file.parent.mkdir(parents=True, exist_ok=True)
     work_dir.mkdir(parents=True, exist_ok=True)
+    work_dir.chmod(0o750)
+    # The unit runs as the service user, so it must be able to enter and write
+    # its working directory: a root-owned 0750 directory fails CHDIR with
+    # "status=200/CHDIR".
+    ownership = host.run(["chown", f"{SERVICE_USER}:{SERVICE_USER}", str(work_dir)], capture_output=True)
+    if ownership.returncode != 0:
+        report_stage(on_failure, "не удалось назначить владельца рабочего каталога mtproto-zig")
+        return False
     service_file.write_text(
         "[Unit]\nDescription=Hydra MTProto Zig\nAfter=network-online.target\nWants=network-online.target\n\n"
         "[Service]\nType=simple\n"

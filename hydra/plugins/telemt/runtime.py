@@ -57,9 +57,19 @@ def apply(
         report_stage(on_failure, "конфигурация Telemt не построена")
         return False
     host.ensure_directory(config_file.parent, mode=0o750)
+    # The service reads its own config, so the directory must be traversable for
+    # the service group and the work directory must belong to the service user.
+    config_owner = host.run(["chown", f"root:{SERVICE_USER}", str(config_file.parent)], capture_output=True)
+    if config_owner.returncode != 0:
+        report_stage(on_failure, "не удалось назначить владельца каталога конфигурации Telemt")
+        return False
     # The unit grants this directory through ReadWritePaths, so it must exist
-    # before systemd loads the unit again.
+    # and belong to the service user before systemd loads the unit again.
     host.ensure_directory(work_dir, mode=0o750)
+    work_owner = host.run(["chown", f"{SERVICE_USER}:{SERVICE_USER}", str(work_dir)], capture_output=True)
+    if work_owner.returncode != 0:
+        report_stage(on_failure, "не удалось назначить владельца рабочего каталога Telemt")
+        return False
     host.atomic_write(config_file, pending_config, mode=0o640)
     ownership = host.run(["chown", f"root:{SERVICE_USER}", str(config_file)], capture_output=True)
     if ownership.returncode != 0:

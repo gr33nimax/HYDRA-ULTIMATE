@@ -57,8 +57,12 @@ def apply(
         report_stage(on_failure, "конфигурация mtproto.zig не построена")
         return False
     # The unit grants this directory through ReadWritePaths, so it must exist
-    # before systemd loads the unit again.
+    # and belong to the service user before systemd loads the unit again.
     host.ensure_directory(work_dir, mode=0o750)
+    work_owner = host.run(["chown", f"{SERVICE_USER}:{SERVICE_USER}", str(work_dir)], capture_output=True)
+    if work_owner.returncode != 0:
+        report_stage(on_failure, "не удалось назначить владельца рабочего каталога mtproto-zig")
+        return False
     host.atomic_write(config_file, config, mode=0o640)
     ownership = host.run(["chown", f"root:{SERVICE_USER}", str(config_file)], capture_output=True)
     if ownership.returncode != 0:
