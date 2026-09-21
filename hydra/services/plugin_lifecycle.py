@@ -40,7 +40,7 @@ class PluginLifecycleOperations:
             transaction.rollback(self.log_rollback_error)
             raise
         if not installed:
-            self._note_plugin_install_failure(name, plugin)
+            self._note_install_failure(name, plugin)
             transaction.rollback(self.log_rollback_error)
             return False
 
@@ -193,6 +193,7 @@ class PluginLifecycleOperations:
             raise
 
         if not applied:
+            self._note_apply_failure(name, plugin)
             self._rollback_after_apply_failure(transaction)
         else:
             transaction.commit()
@@ -265,22 +266,35 @@ class PluginLifecycleOperations:
         if not result:
             raise RuntimeError(message)
 
-    def _note_plugin_install_failure(
-        self,
-        name: str,
-        plugin: Any,
-    ) -> None:
-        """Surface a plugin-declared redacted install stage to the caller.
+    def _note_install_failure(self, name: str, plugin: Any) -> None:
+        """Report the failing install step instead of a vague fallback."""
+        stage = self._plugin_stage(plugin, "install")
+        self.set_apply_error(
+            f"Установка {name}: {stage}" if stage else f"Установка {name} не удалась",
+        )
 
-        The hook is optional and best-effort: a diagnostic label must never
-        replace the real lifecycle result or raise on its own.
+    def _note_apply_failure(self, name: str, plugin: Any) -> None:
+        """Prefer the plugin's redacted apply step over a generic apply error."""
+        stage = self._plugin_stage(plugin, "apply")
+        if stage:
+            self.set_apply_error(f"Применение {name}: {stage}")
+        elif not self.last_apply_error():
+            self.set_apply_error(f"Включение {name} не удалось")
+
+    @staticmethod
+    def _plugin_stage(plugin: Any, kind: str) -> str:
+        """Read one optional, best-effort redacted plugin failure stage.
+
+        A diagnostic label must never replace the real lifecycle result or
+        raise on its own.
         """
-        hook = getattr(plugin, "install_failure", None)
+        hook = getattr(plugin, f"{kind}_failure", None)
         if not callable(hook):
-            return
+            return ""
         try:
-            detail = str(hook() or "").strip()
+            stage = hook()
         except Exception:
-            return
-        if detail:
-            self.set_apply_error(f"Установка {name}: {detail}")
+            return ""
+        # Only a real string stage counts: a test double or third-party plugin
+        # may expose a callable attribute that returns something else.
+        return stage.strip() if isinstance(stage, str) else ""

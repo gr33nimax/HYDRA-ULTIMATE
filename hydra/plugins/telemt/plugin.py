@@ -46,6 +46,7 @@ class TelemtPlugin(BasePlugin):
     def __init__(self) -> None:
         self._pending_cfg: str | None = None
         self._install_failure = ""
+        self._apply_failure = ""
 
     def install(self) -> bool:
         self._install_failure = ""
@@ -64,6 +65,10 @@ class TelemtPlugin(BasePlugin):
         """Redacted stage of the last failed install, for operator diagnostics."""
         return self._install_failure
 
+    def apply_failure(self) -> str:
+        """Redacted stage of the last failed apply, for operator diagnostics."""
+        return self._apply_failure
+
     def _note_install_failure(self, stage: str) -> None:
         self._install_failure = stage
 
@@ -81,12 +86,17 @@ class TelemtPlugin(BasePlugin):
         return fragment
 
     def apply(self, state: PluginStateAccess) -> bool:
+        self._apply_failure = ""
         return runtime.apply(
             self._pending_cfg,
             host=HOST,
             config_file=CONFIG_FILE,
             service_name=SERVICE_NAME,
+            on_failure=self._note_apply_failure,
         )
+
+    def _note_apply_failure(self, stage: str) -> None:
+        self._apply_failure = stage
 
     def snapshot(self, state: PluginStateAccess) -> dict:
         return runtime.snapshot(

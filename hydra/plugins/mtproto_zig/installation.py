@@ -14,7 +14,7 @@ from hydra.utils.downloader import download_github_asset, extract_tarball, verif
 from .constants import SERVICE_USER
 
 
-def _report(on_failure: Callable[[str], None] | None, stage: str) -> None:
+def report_stage(on_failure: Callable[[str], None] | None, stage: str) -> None:
     """Report one redacted failure stage without leaking host output."""
     if on_failure is None:
         return
@@ -102,7 +102,7 @@ def download_binary(
             reason = "загруженный бинарник mtproto.zig не является исполняемым ELF"
         except (OSError, ValueError):
             continue
-    _report(on_failure, reason)
+    report_stage(on_failure, reason)
     return False
 
 

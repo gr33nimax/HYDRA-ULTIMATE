@@ -205,3 +205,115 @@ def test_telemt_dispatch_requires_installation_for_other_actions():
 
     assert keep_open is True
     assert warnings == ["Сначала установите Telemt."]
+
+
+class _ScriptedHost(_Host):
+    """Host double that fails exactly the commands a test names."""
+
+    def __init__(self, fail, output: str = "") -> None:
+        super().__init__()
+        self._fail = fail
+        self._output = output
+
+    def run(self, args, **_kwargs):
+        self.commands.append(list(args))
+        code = 1 if self._fail(list(args)) else 0
+        return CompletedProcess(args, code, self._output, "")
+
+    def ensure_directory(self, path: Path, **_kwargs) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+
+
+def test_telemt_apply_reports_the_failed_systemd_step(tmp_path):
+    from hydra.plugins.telemt import runtime as telemt_runtime
+
+    stages: list[str] = []
+    applied = telemt_runtime.apply(
+        "[server]\nport = 8888\n",
+        host=_ScriptedHost(lambda command: command[:2] == ["systemctl", "restart"]),
+        config_file=tmp_path / "config.toml",
+        service_name="telemt",
+        on_failure=stages.append,
+    )
+
+    assert applied is False
+    assert stages == ["systemctl restart не выполнился для Telemt"]
+
+
+def test_telemt_apply_reports_an_inactive_service(tmp_path):
+    from hydra.plugins.telemt import runtime as telemt_runtime
+
+    stages: list[str] = []
+    applied = telemt_runtime.apply(
+        "[server]\nport = 8888\n",
+        host=_ScriptedHost(lambda _command: False, output="inactive\n"),
+        config_file=tmp_path / "config.toml",
+        service_name="telemt",
+        on_failure=stages.append,
+    )
+
+    assert applied is False
+    assert stages == ["служба Telemt не запустилась: смотрите journalctl -u telemt"]
+
+
+def test_mtproto_apply_reports_an_inactive_service(tmp_path):
+    stages: list[str] = []
+    applied = zig_runtime.apply(
+        "[server]\nport = 443\n",
+        host=_ScriptedHost(lambda command: command[:2] == ["systemctl", "is-active"], output="inactive\n"),
+        config_file=tmp_path / "config.toml",
+        service="mtproto-zig",
+        binary=tmp_path / "mtproto-zig",
+        on_failure=stages.append,
+    )
+
+    assert applied is False
+    assert stages == ["служба mtproto-zig не запустилась: смотрите journalctl -u mtproto-zig"]
+
+
+def _lifecycle(plugin, *, apply_config, errors: list[str]) -> PluginLifecycleOperations:
+    current = {"error": ""}
+
+    def set_error(message: str) -> None:
+        current["error"] = message
+        errors.append(message)
+
+    return PluginLifecycleOperations(
+        get_plugin=lambda _name: plugin,
+        get_protocol=lambda state, name: state.protocols.setdefault(name, PluginState()),
+        lifecycle_result=lambda *_args, **_kwargs: True,
+        apply_config=apply_config,
+        save_state=lambda _state: None,
+        last_apply_error=lambda: current["error"],
+        set_apply_error=set_error,
+        log_rollback_error=lambda _message: None,
+        invoker=PluginInvoker(),
+    )
+
+
+def test_lifecycle_prefers_the_plugin_apply_stage():
+    errors: list[str] = []
+    plugin = SimpleNamespace(
+        apply_failure=lambda: "служба Telemt не запустилась: смотрите journalctl -u telemt",
+    )
+
+    enabled = _lifecycle(plugin, apply_config=lambda _state: False, errors=errors).enable(
+        AppState(),
+        "telemt",
+    )
+
+    assert enabled is False
+    assert errors[-1] == "Применение telemt: служба Telemt не запустилась: смотрите journalctl -u telemt"
+
+
+def test_lifecycle_never_reports_an_empty_failure_message():
+    errors: list[str] = []
+
+    enabled = _lifecycle(
+        SimpleNamespace(),
+        apply_config=lambda _state: False,
+        errors=errors,
+    ).enable(AppState(), "mtproto_zig")
+
+    assert enabled is False
+    assert errors[-1] == "Включение mtproto_zig не удалось"

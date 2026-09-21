@@ -29,7 +29,7 @@ class HostRunner(Protocol):
     def remove_file(self, path: Path) -> None: ...
 
 
-def _report(on_failure: Callable[[str], None] | None, stage: str) -> None:
+def report_stage(on_failure: Callable[[str], None] | None, stage: str) -> None:
     """Report one redacted failure stage without leaking host output."""
     if on_failure is None:
         return
@@ -202,10 +202,10 @@ def install(
     installed = bool(previous_binary and verify_elf(bin_path))
     success = installed or download_binary(repo=repo, bin_path=bin_path)
     if not success:
-        _report(on_failure, "не удалось скачать бинарник Telemt")
+        report_stage(on_failure, "не удалось скачать бинарник Telemt")
     elif not ensure_service_user(host):
         success = False
-        _report(on_failure, "не удалось создать сервисного пользователя Telemt")
+        report_stage(on_failure, "не удалось создать сервисного пользователя Telemt")
     elif not write_service(
         host=host,
         work_dir=work_dir,
@@ -215,7 +215,7 @@ def install(
         service_name=service_name,
     ):
         success = False
-        _report(on_failure, "не удалось записать systemd-юнит Telemt")
+        report_stage(on_failure, "не удалось записать systemd-юнит Telemt")
     if success:
         return True
     _restore_file(host, bin_path, previous_binary, mode=0o755)
