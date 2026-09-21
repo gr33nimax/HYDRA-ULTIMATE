@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+from email.message import Message
 import socket
 import ssl
 import urllib.error
@@ -13,6 +14,14 @@ import pytest
 from hydra.core.state import AppState
 from hydra.services.admin import SingboxDiagnostics
 from hydra.ui import diagnostics
+
+
+def _set_ip_version(value: int | None) -> None:
+    setattr(diagnostics._thread_local, "ip_version", value)
+
+
+def _ip_version() -> int | None:
+    return getattr(diagnostics._thread_local, "ip_version", None)
 
 
 def response(body: bytes = b"", *, status: int = 200, headers=None):
@@ -34,9 +43,9 @@ def diagnostic_app(admin: MagicMock | None = None) -> MagicMock:
 
 @pytest.fixture(autouse=True)
 def reset_ip_selector():
-    diagnostics._thread_local.ip_version = None
+    _set_ip_version(None)
     yield
-    diagnostics._thread_local.ip_version = None
+    _set_ip_version(None)
 
 
 @pytest.fixture
@@ -54,7 +63,7 @@ class TestSocketAndPackageHelpers:
         [(None, 0), (4, socket.AF_INET), (6, socket.AF_INET6)],
     )
     def test_filtered_getaddrinfo_selects_family(self, version, expected_family):
-        diagnostics._thread_local.ip_version = version
+        _set_ip_version(version)
         with patch.object(diagnostics, "original_getaddrinfo", return_value=["ok"]) as original:
             assert diagnostics.filtered_getaddrinfo("example.com", 443) == ["ok"]
         original.assert_called_once_with("example.com", 443, expected_family, 0, 0, 0)
@@ -183,7 +192,7 @@ class TestHttpAndAddressHelpers:
 
     def test_make_http_request_returns_http_error_body(self):
         http_error = urllib.error.HTTPError(
-            "https://example.com", 403, "Forbidden", None, io.BytesIO(b"Forbidden body")
+            "https://example.com", 403, "Forbidden", Message(), io.BytesIO(b"Forbidden body")
         )
         with patch.object(diagnostics.urllib.request, "urlopen", side_effect=http_error):
             assert diagnostics.make_http_request("https://example.com") == "Forbidden body"
@@ -200,7 +209,7 @@ class TestHttpAndAddressHelpers:
         ) as opened:
             assert diagnostics.get_ip_address(4) == "203.0.113.7"
         assert opened.call_count == 2
-        assert diagnostics._thread_local.ip_version is None
+        assert _ip_version() is None
 
     def test_get_ip_address_rejects_malformed_and_wrong_version_values(self):
         with patch.object(
@@ -210,13 +219,13 @@ class TestHttpAndAddressHelpers:
         ) as opened:
             assert diagnostics.get_ip_address(4) == "198.51.100.8"
         assert opened.call_count == 3
-        assert diagnostics._thread_local.ip_version is None
+        assert _ip_version() is None
 
     def test_get_ip_address_returns_empty_when_all_endpoints_fail(self):
         with patch.object(diagnostics.urllib.request, "urlopen", side_effect=OSError("offline")) as opened:
             assert diagnostics.get_ip_address(6) == ""
         assert opened.call_count == 3
-        assert diagnostics._thread_local.ip_version is None
+        assert _ip_version() is None
 
 
 class TestGeoIPAndCustomServices:
@@ -239,7 +248,7 @@ class TestGeoIPAndCustomServices:
             diagnostics.urllib.request, "urlopen", return_value=response(json.dumps(payload).encode())
         ):
             assert diagnostics.query_primary_geoip("203.0.113.5", service) == expected
-        assert diagnostics._thread_local.ip_version is None
+        assert _ip_version() is None
 
     def test_query_primary_geoip_plain_text_and_unknown_service(self):
         with patch.object(diagnostics.urllib.request, "urlopen", return_value=response(b" gb\n")):
@@ -255,7 +264,7 @@ class TestGeoIPAndCustomServices:
         ) as opened:
             assert diagnostics.query_primary_geoip("203.0.113.5", "RIPE") == "IT"
         assert opened.call_count == 2
-        assert diagnostics._thread_local.ip_version is None
+        assert _ip_version() is None
 
     @pytest.mark.parametrize(
         ("service", "payload", "expected"),
@@ -271,7 +280,7 @@ class TestGeoIPAndCustomServices:
     def test_custom_service_parsers(self, service, payload, expected):
         with patch.object(diagnostics, "make_http_request", return_value=payload):
             assert diagnostics.check_custom_service(service, 4, system_has_ipv6=False) == expected
-        assert diagnostics._thread_local.ip_version is None
+        assert _ip_version() is None
 
     def test_custom_service_direct_http_parsers(self):
         with patch.object(
@@ -295,17 +304,17 @@ class TestGeoIPAndCustomServices:
         ) as opened:
             assert diagnostics.check_custom_service("Disney+", 4, False) == "AU"
         assert opened.call_count == 3
-        assert diagnostics._thread_local.ip_version is None
+        assert _ip_version() is None
 
     def test_custom_service_unavailable_ipv6_does_not_leak_selector(self):
-        diagnostics._thread_local.ip_version = None
+        _set_ip_version(None)
         assert diagnostics.check_custom_service("Netflix", 6, system_has_ipv6=False) == "—"
-        assert diagnostics._thread_local.ip_version is None
+        assert _ip_version() is None
 
     def test_custom_service_malformed_response_is_no(self):
         with patch.object(diagnostics, "make_http_request", return_value="not json"):
             assert diagnostics.check_custom_service("Netflix", 4, False) == "No"
-        assert diagnostics._thread_local.ip_version is None
+        assert _ip_version() is None
 
 
 class TestCensorcheck:
@@ -342,14 +351,14 @@ class TestCensorcheck:
 
     def test_check_domain_censor_detects_regional_block_in_http_error(self, resolved_dns):
         http_error = urllib.error.HTTPError(
-            "https://openai.com", 403, "Forbidden", None, io.BytesIO(b"not available in your country")
+            "https://openai.com", 403, "Forbidden", Message(), io.BytesIO(b"not available in your country")
         )
         with patch.object(diagnostics.urllib.request, "urlopen", side_effect=http_error):
             assert diagnostics.check_domain_censor("openai.com") == -5
 
     def test_check_domain_censor_returns_plain_http_error_code(self, resolved_dns):
         http_error = urllib.error.HTTPError(
-            "https://example.com", 451, "Unavailable", None, io.BytesIO(b"legal")
+            "https://example.com", 451, "Unavailable", Message(), io.BytesIO(b"legal")
         )
         with patch.object(diagnostics.urllib.request, "urlopen", side_effect=http_error):
             assert diagnostics.check_domain_censor("example.com") == 451
