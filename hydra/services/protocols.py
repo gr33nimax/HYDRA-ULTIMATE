@@ -148,6 +148,17 @@ class ProtocolService:
             state,
         )
 
+    def traffic_source_reason(
+        self,
+        state: AppState,
+        name: str,
+    ) -> str:
+        """Explain why a protocol's live counter source is unavailable."""
+        return self.invoker.traffic_source_reason(
+            self.require(name),
+            state,
+        )
+
     def aggregate_traffic_snapshot(
         self,
         state: AppState,

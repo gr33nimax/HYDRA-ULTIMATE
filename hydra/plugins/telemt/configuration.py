@@ -8,7 +8,7 @@ import re
 from hydra.plugins.base import ConfigFragment
 from hydra.plugins.context import PluginStateAccess
 
-from .constants import DEFAULT_PORT
+from .constants import API_LISTEN, API_WHITELIST, DEFAULT_PORT
 from .credentials import derive_secret, derive_username
 from .migration import preview as migration_preview
 
@@ -17,12 +17,6 @@ __all__ = ["TelemtSettings", "plan_configuration", "render_toml", "settings_from
 _NETWORKS = frozenset({"auto", "ipv4", "ipv6", "dual_stack"})
 _LOG_LEVELS = frozenset({"normal", "debug"})
 _HOST_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
-
-# Upstream serves an unauthenticated status API and defaults to a wildcard
-# bind. Hydra neither needs nor exposes it: keep it disabled, and loopback-only
-# in case it is ever enabled by hand.
-API_LISTEN = "127.0.0.1:9091"
-API_WHITELIST = ("127.0.0.1/32", "::1/128")
 
 
 def _toml_key(name: str) -> str:
@@ -153,7 +147,7 @@ def render_toml(settings: TelemtSettings, users: dict[str, str]) -> str:
     lines.extend(
         (
             "[server.api]",
-            "enabled = false",
+            "enabled = true",
             f'listen = "{API_LISTEN}"',
             "whitelist = [" + ", ".join(f'"{cidr}"' for cidr in API_WHITELIST) + "]",
             "",

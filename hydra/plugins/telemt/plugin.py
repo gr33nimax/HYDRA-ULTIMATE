@@ -47,6 +47,7 @@ class TelemtPlugin(BasePlugin):
         self._pending_cfg: str | None = None
         self._install_failure = ""
         self._apply_failure = ""
+        self._traffic_reason = ""
 
     def install(self) -> bool:
         self._install_failure = ""
@@ -144,7 +145,7 @@ class TelemtPlugin(BasePlugin):
         return profiles.generate_client_config(self.client_link(user, state))
 
     def status(self, state: PluginStateAccess | None = None) -> PluginStatus:
-        return observation.status(
+        result = observation.status(
             host=HOST,
             bin_path=BIN_PATH,
             config_file=CONFIG_FILE,
@@ -152,11 +153,20 @@ class TelemtPlugin(BasePlugin):
             default_port=DEFAULT_PORT,
             is_installed=self._installed(),
         )
+        result.info["traffic_source"] = self._traffic_reason or "ok"
+        return result
 
     def healthcheck_for_state(self, state: PluginStateAccess) -> HealthResult:
         """Name the unit state and where to look when Telemt is not running."""
         current = self.status(state)
         if current.running:
+            reason = str(current.info.get("traffic_source", "") or "")
+            if reason and reason != "ok":
+                return HealthResult(
+                    True,
+                    f"источник трафика недоступен: {reason}",
+                    "warning",
+                )
             return HealthResult(True)
         unit_state = str(current.info.get("state", "") or "unknown")
         return HealthResult(
@@ -166,10 +176,22 @@ class TelemtPlugin(BasePlugin):
         )
 
     def traffic(self, state: PluginStateAccess) -> dict[str, int]:
-        return {}
+        """Accumulated per-user totals owned by the accounting service."""
+        return super().traffic(state)
 
     def traffic_snapshot(self, state: PluginStateAccess) -> dict[str, int] | None:
-        return self.traffic(state)
+        """Read the cumulative control-API counter; ``None`` means unavailable."""
+        totals, reason = observation.traffic(
+            state,
+            derive_username=derive_username,
+        )
+        self._traffic_reason = reason
+        return totals
+
+    def traffic_source_reason(self, state: PluginStateAccess) -> str:
+        """Reason the last counter read failed; empty when it succeeded."""
+        del state
+        return self._traffic_reason
 
     def update_binary(self) -> bool:
         return installation.update_binary(

@@ -35,17 +35,19 @@ def test_log_level_belongs_to_the_server_section():
     assert "log_level" not in parsed
 
 
-def test_status_api_is_disabled_and_never_bound_to_a_public_interface():
-    """Upstream defaults the unauthenticated status API to a wildcard bind."""
+def test_status_api_is_enabled_on_loopback_only():
+    """ADR 0016 consumes the control API, so it is enabled on loopback only."""
     settings = configuration.TelemtSettings(port=443, tls_domain="mask.example")
 
     toml = configuration.render_toml(settings, {"alice": "a" * 32})
 
     assert "[server.api]" in toml
-    assert "enabled = false" in toml
+    assert "enabled = true" in toml
     assert f'listen = "{configuration.API_LISTEN}"' in toml
-    assert 'whitelist = ["127.0.0.1/32", "::1/128"]' in toml
-    assert "0.0.0.0" not in toml.split("[server.api]", 1)[1]
+    assert 'whitelist = ["127.0.0.0/8"]' in toml
+    api_section = toml.split("[server.api]", 1)[1]
+    assert "0.0.0.0" not in api_section
+    assert '"::"' not in api_section
 
 
 def test_base64_user_keys_are_quoted_for_toml():

@@ -16,3 +16,7 @@ PERFORMANCE_LIMITS_FILE = Path("/etc/security/limits.d/99-telemt-limits.conf")
 
 DEFAULT_PORT = 8443
 GITHUB_REPO = "telemt/telemt"
+
+# Loopback-only control API that supplies the authoritative per-user counters.
+API_LISTEN = "127.0.0.1:9091"
+API_WHITELIST = ("127.0.0.0/8",)

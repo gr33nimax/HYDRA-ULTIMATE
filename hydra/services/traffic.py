@@ -13,6 +13,7 @@ from typing import Protocol
 from hydra.core.state import update_state
 from hydra.core.state_models import AppState, User, find_user
 from hydra.services.traffic_accounting import (
+    _legacy_protocol_totals,
     ensure_report_totals,
     record_report_delta,
 )
@@ -27,6 +28,11 @@ class TrafficProtocolAccess(Protocol):
         state: AppState,
         name: str,
     ) -> dict[str, int] | None: ...
+    def traffic_source_reason(
+        self,
+        state: AppState,
+        name: str,
+    ) -> str: ...
     def aggregate_traffic_snapshot(
         self,
         state: AppState,
@@ -45,6 +51,7 @@ class TrafficOperations(Protocol):
     def refresh_state(self) -> AppState: ...
     def collect(self, state: AppState | None = None) -> dict[str, int]: ...
     def protocol_totals(self, state: AppState) -> dict[str, int]: ...
+    def source_availability(self, state: AppState) -> dict[str, str]: ...
     def check_limits(self, state: AppState) -> list[str]: ...
     def reset_global_report_state(self) -> AppState: ...
     def reset_user_traffic_state(self, email: str) -> AppState: ...
@@ -67,6 +74,9 @@ class UnavailableTrafficOperations:
         return self._unavailable()
 
     def protocol_totals(self, state: AppState) -> dict[str, int]:
+        return self._unavailable()
+
+    def source_availability(self, state: AppState) -> dict[str, str]:
         return self._unavailable()
 
     def check_limits(self, state: AppState) -> list[str]:
@@ -96,6 +106,20 @@ class TrafficService:
 
     def protocol_totals(self, state: AppState) -> dict[str, int]:
         return protocol_totals(state)
+
+    def source_availability(self, state: AppState) -> dict[str, str]:
+        """Report per-protocol counter-source reasons from the last refresh."""
+        reader = getattr(self.protocols, "traffic_source_reason", None)
+        if not callable(reader):
+            return {}
+        reasons: dict[str, str] = {}
+        for name in sorted(self.protocols.enabled_names(state)):
+            try:
+                reasons[name] = str(reader(state, name) or "")
+            except Exception:
+                # A protocol that cannot even explain itself is unavailable.
+                reasons[name] = "источник недоступен"
+        return reasons
 
     def check_limits(self, state: AppState) -> list[str]:
         return check_traffic_limits(state, protocols=self.protocols)
@@ -249,26 +273,6 @@ def protocol_totals(state: AppState) -> dict[str, int]:
     return _legacy_protocol_totals(state)
 
 
-def _legacy_protocol_totals(state: AppState) -> dict[str, int]:
-    totals: dict[str, int] = {}
-    for user in state.users:
-        for protocol, stats in user.credentials.items():
-            if not isinstance(stats, dict):
-                continue
-            used = _as_non_negative_int(stats.get("traffic_used_bytes", 0))
-            if used:
-                totals[protocol] = totals.get(protocol, 0) + used
-    for protocol, stats in state.install.get("protocol_traffic_totals", {}).items():
-        if not isinstance(stats, dict):
-            continue
-        used = _as_non_negative_int(stats.get("traffic_used_bytes", 0))
-        if used:
-            # Aggregate-only accounting must not be added twice if a protocol
-            # gains reliable per-user attribution in the future.
-            totals[protocol] = max(totals.get(protocol, 0), used)
-    return totals
-
-
 def _protocol_total(state: AppState, protocol: str) -> int:
     return _legacy_protocol_totals(state).get(protocol, 0)
 
@@ -325,7 +329,11 @@ def check_traffic_limits(
     for user in state.users:
         if user.blocked:
             continue
-        limit_bytes = int(user.traffic_limit_gb * 1073741824)
+        try:
+            limit_bytes = int(user.traffic_limit_gb * 1073741824)
+        except (TypeError, ValueError) as exc:
+            # A malformed quota must fail loudly, never silently disable itself.
+            raise ValueError("invalid traffic limit") from exc
         if limit_bytes > 0 and user.traffic_used_bytes >= limit_bytes:
             exceeded.append(user.email)
     return exceeded

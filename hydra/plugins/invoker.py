@@ -103,6 +103,14 @@ class PluginInvoker:
         self._validate_version(plugin)
         return plugin.traffic_snapshot(state)
 
+    def traffic_source_reason(
+        self,
+        plugin: BasePlugin,
+        state: PluginStateAccess,
+    ) -> str:
+        self._validate_version(plugin)
+        return plugin.traffic_source_reason(state)
+
     def aggregate_traffic_snapshot(
         self,
         plugin: BasePlugin,

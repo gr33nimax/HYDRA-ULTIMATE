@@ -56,6 +56,7 @@ class MtprotoZigPlugin(BasePlugin):
         self._pending_config: str | None = None
         self._install_failure = ""
         self._apply_failure = ""
+        self._traffic_reason = ""
 
     def install(self) -> bool:
         self._install_failure = ""
@@ -304,6 +305,7 @@ class MtprotoZigPlugin(BasePlugin):
         mode = configuration.web_mode(config)
         info: dict = {
             "traffic_file": str(TOTALS_FILE),
+            "traffic_source": self._traffic_reason or "ok",
             "state": unit_state,
             "web_mode": mode,
         }
@@ -336,6 +338,13 @@ class MtprotoZigPlugin(BasePlugin):
         """Name the unit state and where to look when mtproto-zig is not running."""
         current = self.status(state)
         if current.running:
+            reason = str(current.info.get("traffic_source", "") or "")
+            if reason and reason != "ok":
+                return HealthResult(
+                    True,
+                    f"источник трафика недоступен: {reason}",
+                    "warning",
+                )
             return HealthResult(True)
         web_state = str(current.info.get("web_state", "") or "")
         if web_state and web_state != "active":
@@ -352,11 +361,18 @@ class MtprotoZigPlugin(BasePlugin):
         )
 
     def traffic(self, state: PluginStateAccess) -> dict[str, int]:
-        totals, _reason = observation.traffic(state, totals_file=TOTALS_FILE)
-        return totals
+        return self.traffic_snapshot(state) or {}
 
     def traffic_snapshot(self, state: PluginStateAccess) -> dict[str, int] | None:
-        return self.traffic(state)
+        """Read the cumulative metrics counters; ``None`` means unavailable."""
+        totals, reason = observation.traffic(state, totals_file=TOTALS_FILE)
+        self._traffic_reason = reason
+        return totals
+
+    def traffic_source_reason(self, state: PluginStateAccess) -> str:
+        """Reason the last counter scrape failed; empty when it succeeded."""
+        del state
+        return self._traffic_reason
 
     def update_binary(self) -> bool:
         return installation.download_binary(host=HOST, repo=GITHUB_REPO, binary=BIN_PATH)

@@ -126,6 +126,7 @@ class ExamplePlugin(BasePlugin):
 | `configure` | Готовит `ConfigFragment` | Не редактирует итоговый `config.json` Sing-Box |
 | `apply` | Применяет подготовленное | — |
 | `health` | Подтверждает работоспособность | — |
+| `traffic_snapshot` / `traffic_source_reason` | Read-only счётчики и причина их недоступности | Не выдумывает числа: `None` и непустая причина означают «источник недоступен», накопленные значения сохраняются |
 
 Не перечитывайте state внутри state-aware метода — кроме явного fallback при
 `state is None`.

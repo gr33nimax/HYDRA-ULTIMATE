@@ -14,7 +14,7 @@ from hydra.services.traffic_attribution import (
 )
 
 
-def _non_negative(value: object) -> int:
+def _non_negative(value: Any) -> int:
     try:
         return max(0, int(value))
     except (TypeError, ValueError):
@@ -22,19 +22,28 @@ def _non_negative(value: object) -> int:
 
 
 def _legacy_protocol_totals(state: AppState) -> dict[str, int]:
+    """Sum per-user traffic by protocol, ignoring credential-only profiles.
+
+    A ``user.credentials`` key is not necessarily a protocol: profile
+    credentials (for example the AmneziaWG mobile keys) never carry
+    ``traffic_used_bytes`` and must not become a reporting namespace.
+    """
     totals: dict[str, int] = {}
     for user in state.users:
         for protocol, stats in user.credentials.items():
-            if isinstance(stats, dict):
-                totals[protocol] = totals.get(protocol, 0) + _non_negative(
-                    stats.get("traffic_used_bytes", 0),
-                )
+            if not isinstance(stats, dict):
+                continue
+            used = _non_negative(stats.get("traffic_used_bytes", 0))
+            if used:
+                totals[protocol] = totals.get(protocol, 0) + used
     for protocol, stats in state.install.get("protocol_traffic_totals", {}).items():
-        if isinstance(stats, dict):
-            totals[protocol] = max(
-                totals.get(protocol, 0),
-                _non_negative(stats.get("traffic_used_bytes", 0)),
-            )
+        if not isinstance(stats, dict):
+            continue
+        used = _non_negative(stats.get("traffic_used_bytes", 0))
+        if used:
+            # Aggregate-only accounting must not be added twice if a protocol
+            # gains reliable per-user attribution in the future.
+            totals[protocol] = max(totals.get(protocol, 0), used)
     return totals
 
 

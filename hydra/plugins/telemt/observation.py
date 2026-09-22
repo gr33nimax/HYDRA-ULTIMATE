@@ -1,15 +1,23 @@
-"""Runtime observation for Telemt."""
+"""Runtime observation and control-API accounting for Telemt."""
 
 from __future__ import annotations
 
 import json
 import shutil
-from collections.abc import Sequence
+import urllib.error
+import urllib.request
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
 from hydra.plugins.base import PluginStatus
 from hydra.plugins.context import PluginStateAccess
+
+from .constants import API_LISTEN
+
+# Upstream ``GET /v1/stats/users`` returns ``UserInfo[]`` with the cumulative
+# ``total_octets`` counter. It is reachable only over the loopback control API.
+STATS_URL = f"http://{API_LISTEN}/v1/stats/users"
 
 
 class HostRunner(Protocol):
@@ -71,21 +79,63 @@ def status(
     )
 
 
+def fetch_users(url: str = STATS_URL) -> str:
+    """Read the control API user counters over loopback."""
+    with urllib.request.urlopen(url, timeout=2) as response:
+        return response.read().decode("utf-8")
+
+
+def _parse_user_totals(payload: str) -> dict[str, int]:
+    """Map ``username`` to its cumulative ``total_octets`` counter."""
+    try:
+        data = json.loads(payload)
+    except ValueError as exc:
+        raise ValueError("тело ответа не является JSON") from exc
+    if not isinstance(data, list):
+        raise ValueError("ответ не является списком пользователей")
+    totals: dict[str, int] = {}
+    for entry in data:
+        if not isinstance(entry, dict):
+            raise ValueError("элемент ответа не является объектом")
+        username = entry.get("username")
+        total = entry.get("total_octets")
+        if not isinstance(username, str) or not username:
+            raise ValueError("в ответе нет имени пользователя")
+        if not isinstance(total, int) or isinstance(total, bool) or total < 0:
+            raise ValueError("в ответе нет корректного total_octets")
+        totals[username] = total
+    return totals
+
+
 def traffic(
     state: PluginStateAccess,
     *,
-    stats_file: Path,
-    derive_username,
-) -> dict[str, int]:
-    if not stats_file.exists():
-        return {}
+    derive_username: Callable[[str], str],
+    fetch: Callable[[], str] = fetch_users,
+) -> tuple[dict[str, int] | None, str]:
+    """Return per-user cumulative traffic from the control API.
+
+    Any failure is an unavailable source (``None``) rather than a measured
+    zero, so the caller keeps the last good accumulated totals.
+    """
     try:
-        users_data = json.loads(stats_file.read_text(encoding="utf-8")).get("users", {})
-    except Exception:
-        return {}
+        payload = fetch()
+    except (OSError, ValueError, urllib.error.URLError) as exc:
+        return None, f"control API недоступен ({exc.__class__.__name__})"
+    try:
+        totals = _parse_user_totals(payload)
+    except (ValueError, TypeError) as exc:
+        return None, f"ответ control API не разобран ({exc})"
     result: dict[str, int] = {}
+    missing = 0
     for user in state.users:
-        data = users_data.get(derive_username(user.uuid))
-        if data is not None:
-            result[user.email] = data.get("rx", 0) + data.get("tx", 0)
-    return result
+        if user.blocked:
+            continue
+        username = derive_username(user.uuid)
+        if username not in totals:
+            missing += 1
+            continue
+        result[user.email] = totals[username]
+    if missing:
+        return None, f"control API не отдал счётчик для {missing} пользователей"
+    return result, ""

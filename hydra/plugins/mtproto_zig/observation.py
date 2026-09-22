@@ -45,12 +45,22 @@ def _load(path: Path) -> dict[str, dict[str, int]]:
 
 def traffic(
     state: PluginStateAccess, *, totals_file: Path, metrics: Callable[[], str] = fetch_metrics
-) -> tuple[dict[str, int], str]:
+) -> tuple[dict[str, int] | None, str]:
+    """Return per-user cumulative totals, or ``None`` when the source is unusable.
+
+    A successful HTTP response without any supported series is not a measured
+    zero: it means the metrics source is unavailable, so the last good totals
+    are kept instead of being overwritten with an empty snapshot.
+    """
     saved = _load(totals_file)
     try:
         current = parse_metrics(metrics())
-    except (OSError, ValueError, urllib.error.URLError):
-        return _by_email(state, saved.get("total", {})), "metrics unavailable"
+    except (OSError, ValueError, urllib.error.URLError) as exc:
+        return None, f"metrics недоступны ({exc.__class__.__name__})"
+    if not current:
+        return None, "нет поддерживаемых серий mtproto_user_*"
+    if not _by_email(state, current):
+        return None, "метки пользователей не совпадают с состоянием"
     last, total = saved.get("last", {}), saved.get("total", {})
     for name, value in current.items():
         previous = last.get(name)

@@ -39,9 +39,15 @@ PROTOCOL_LABELS = {
 
 
 def protocol_label(name: str, display_name: str = "") -> str:
-    """Return the product-facing protocol name instead of an internal key."""
+    """Return the product-facing protocol name instead of an internal key.
+
+    A display name equal to the internal key is the plugin's fallback, not an
+    override, so the shared product labels still apply to it.
+    """
     label = display_name if isinstance(display_name, str) else ""
-    return label or PROTOCOL_LABELS.get(name, name)
+    if label and label != name:
+        return label
+    return PROTOCOL_LABELS.get(name, name)
 
 
 def protocol_menu_title(name: str, display_name: str = "") -> str:

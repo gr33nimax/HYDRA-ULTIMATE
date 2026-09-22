@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, cast
 from hydra.contracts import BackupResource, ConfigFragment, JsonValue
 from hydra.core.state_models import User
 from hydra.plugins.context import PluginStateAccess
@@ -92,7 +92,10 @@ def lifecycle_result(
     """Invoke the typed lifecycle adapter while supporting legacy objects."""
     typed = getattr(type(plugin), f"{operation}_result", None)
     if callable(typed):
-        return typed(plugin) if state is None else typed(plugin, state)
+        return cast(
+            LifecycleResult,
+            typed(plugin) if state is None else typed(plugin, state),
+        )
     callback_name = {
         "install": "install",
         "uninstall": "uninstall",
@@ -290,6 +293,20 @@ class BasePlugin(ABC):
     ) -> dict[str, int] | None:
         """Return a resettable raw per-user counter, when available."""
         return None
+
+    def traffic_source_reason(
+        self,
+        state: PluginStateAccess,
+    ) -> str:
+        """Explain why the live counter source is unavailable, if it is.
+
+        Empty means the last read succeeded, or that this protocol has no
+        snapshot source to read. A protocol that does have one must report
+        every failure here so monitoring can show "unavailable" instead of a
+        measured zero.
+        """
+        del state
+        return ""
 
     def aggregate_traffic_snapshot(
         self,
