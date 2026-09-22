@@ -10,10 +10,11 @@ from hydra.core.host import HOST
 from hydra.core.state_models import User
 from hydra.plugins.base import BasePlugin, HealthResult, PluginCategory, PluginMeta, PluginStatus
 from hydra.plugins.context import PluginStateAccess
+from hydra.plugins.decoy_support import DecoyThemeSupport
 from hydra.utils.downloader import verify_elf
 from hydra.utils.net import public_ip
 
-from . import bridge_probe, configuration, installation, observation, profiles, runtime, web_runtime
+from . import bridge_probe, configuration, cover_site, installation, observation, profiles, runtime, web_runtime
 from .constants import (
     BIN_PATH,
     CONFIG_DIR,
@@ -31,7 +32,8 @@ from .constants import (
 from .credentials import bridge_capability, derive_secret, derive_username
 
 
-class MtprotoZigPlugin(BasePlugin):
+class MtprotoZigPlugin(DecoyThemeSupport, BasePlugin):
+    decoy_default_theme = "landing"
     meta = PluginMeta(
         name="mtproto_zig",
         display_name="MTProto Zig",
@@ -40,10 +42,13 @@ class MtprotoZigPlugin(BasePlugin):
         needs_domain=True,
         required_commands=("systemctl",),
         actions=("update_binary",),
-        commands=("set_web_settings",),
+        commands=("set_web_settings", "set_decoy_theme"),
         tls_domain_source="protocol",
         connection_source="none",
-        config_defaults=((ROUTE_KEY, configuration.route_metadata()),),
+        config_defaults=(
+            (ROUTE_KEY, configuration.route_metadata()),
+            ("decoy_theme", "landing"),
+        ),
         backup_resources=(
             BackupResource(str(CONFIG_DIR), "tree"),
             BackupResource(str(WORK_DIR), "tree"),
@@ -56,6 +61,8 @@ class MtprotoZigPlugin(BasePlugin):
         self._pending_config: str | None = None
         self._install_failure = ""
         self._apply_failure = ""
+        self._public_dir = ""
+        self._decoy_failure = ""
         self._traffic_reason = ""
 
     def install(self) -> bool:
@@ -157,9 +164,13 @@ class MtprotoZigPlugin(BasePlugin):
         :func:`configuration.set_web_settings`.
         """
         self._apply_failure = ""
+        self._public_dir, self._decoy_failure = "", ""
         config = self._config(state)
+        pending = self._pending_config
+        if configuration.web_active(config):
+            pending, self._public_dir, self._decoy_failure = cover_site.plan(state, self.decoy_theme(state))
         applied = runtime.apply(
-            self._pending_config,
+            pending,
             host=HOST,
             config_file=CONFIG_FILE,
             work_dir=WORK_DIR,
@@ -215,7 +226,7 @@ class MtprotoZigPlugin(BasePlugin):
             return False
         if mode != "web-only":
             return True
-        committed, _fragment = configuration.plan_configuration(state, web_only=True)
+        committed, _fragment = configuration.plan_configuration(state, web_only=True, public_dir=self._public_dir)
         return runtime.apply(
             committed,
             host=HOST,
@@ -323,6 +334,7 @@ class MtprotoZigPlugin(BasePlugin):
             {
                 "web_domain": configuration.web_domain(config),
                 "web_state": web_state,
+                "decoy_site": self._decoy_failure or "ok",
                 "link_mode": "WEB bridge only" if mode == "web-only" else "FakeTLS + WEB bridge",
             },
         )
@@ -338,6 +350,9 @@ class MtprotoZigPlugin(BasePlugin):
         """Name the unit state and where to look when mtproto-zig is not running."""
         current = self.status(state)
         if current.running:
+            decoy = str(current.info.get("decoy_site", "") or "")
+            if decoy and decoy != "ok":
+                return HealthResult(True, decoy, "warning")
             reason = str(current.info.get("traffic_source", "") or "")
             if reason and reason != "ok":
                 return HealthResult(

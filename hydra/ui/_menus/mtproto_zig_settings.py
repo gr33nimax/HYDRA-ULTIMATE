@@ -44,38 +44,27 @@ def open_menu(
     _plugin: object,
     app: ApplicationService,
 ) -> None:
-    """Choose the WEB access mode through the transactional plugin command."""
+    """Choose the WEB access mode through the transactional plugin command.
+
+    The protocol menu already shows the "🌐 Режим WEB" row, so this adapter
+    opens the chooser directly. ``None`` from :func:`_change_mode` means the
+    operator cancelled or re-picked the current mode, which ends the
+    interaction instead of redrawing a menu.
+    """
     configuration = _configuration()
-    while True:
-        state = app.admin.load_state()
-        desired = desired_state(state, "mtproto_zig")
-        mode = _web_mode(desired)
-        domain = configuration.web_domain(desired.config)
-        choice = menu(
-            [
-                (
-                    "1",
-                    "🌐 Режим WEB",
-                    f"{mode} · {domain}" if domain else mode,
-                ),
-                ("0", "↩ Назад", ""),
-            ],
-            "НАСТРОЙКИ MTPROTO ZIG",
-        )
-        if choice == "0":
-            return
-        if choice != "1":
-            continue
-        try:
-            changed = _change_mode(state, desired, app, mode, domain)
-        except (TypeError, ValueError) as exc:
-            error(str(exc))
-            prompt("Нажмите Enter")
-            continue
-        if changed is None:
-            continue
-        _report_change(changed, "Настройки WEB MTProto Zig обновлены")
+    desired = desired_state(state, "mtproto_zig")
+    mode = _web_mode(desired)
+    domain = configuration.web_domain(desired.config)
+    try:
+        changed = _change_mode(state, desired, app, mode, domain)
+    except (TypeError, ValueError) as exc:
+        error(str(exc))
         prompt("Нажмите Enter")
+        return
+    if changed is None:
+        return
+    _report_change(changed, "Настройки WEB MTProto Zig обновлены")
+    prompt("Нажмите Enter")
 
 
 def _unchanged(configuration, target: str, mode: str, domain: str, chosen: str) -> bool:
@@ -102,7 +91,7 @@ def _change_mode(
     mode: str,
     domain: str,
 ) -> bool | None:
-    """Return the command result, or ``None`` when the operator cancelled."""
+    """Return the command result, or ``None`` when cancelled or unchanged."""
     configuration = _configuration()
     selected = menu(
         [

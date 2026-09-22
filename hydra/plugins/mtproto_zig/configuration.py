@@ -169,8 +169,8 @@ def _toml_key(name: str) -> str:
     return f'"{escaped}"'
 
 
-def _web_section(domain: str, backend: str, *, only: bool) -> list[str]:
-    return [
+def _web_section(domain: str, backend: str, *, only: bool, public_dir: str = "") -> list[str]:
+    section = [
         "[web]",
         "enabled = true",
         f"only = {'true' if only else 'false'}",
@@ -178,12 +178,17 @@ def _web_section(domain: str, backend: str, *, only: bool) -> list[str]:
         f"port = {WEB_RELAY_PORT}",
         f'backend = "{backend}"',
         f'domain = "{domain}"',
+    ]
+    if public_dir:
+        section.append(f'public_dir = "{public_dir}"')
+    section += [
         f'ws_path = "{WEB_WS_PATH}"',
         # The managed frontend forwards one raw decrypted stream, so no trusted
         # header carries the client address. Declaring one would credit every
         # relayed user with the frontend's loopback address.
         "trust_forwarded_for = false",
     ]
+    return section
 
 
 def build_toml(
@@ -194,6 +199,7 @@ def build_toml(
     users: dict[str, str],
     web_domain: str = "",
     web_only: bool = False,
+    public_dir: str = "",
 ) -> str:
     lines = [
         "[server]",
@@ -222,6 +228,7 @@ def build_toml(
                 web_domain,
                 f"{backend_host}:{port}",
                 only=web_only,
+                public_dir=public_dir,
             ),
         ]
     lines += ["", "[upstream]", 'type = "auto"']
@@ -232,6 +239,7 @@ def plan_configuration(
     state: PluginStateAccess,
     *,
     web_only: bool = False,
+    public_dir: str = "",
 ) -> tuple[str, ConfigFragment]:
     protocol = state.protocols.get("mtproto_zig")
     config = protocol.config if protocol else {}
@@ -259,6 +267,7 @@ def plan_configuration(
             users=users,
             web_domain=relay_domain if mode != "off" else "",
             web_only=web_only and mode == "web-only",
+            public_dir=public_dir,
         ),
         ConfigFragment(),
     )

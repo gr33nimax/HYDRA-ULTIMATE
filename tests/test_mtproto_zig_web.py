@@ -555,6 +555,7 @@ def test_staging_never_commits_web_only_before_the_bridge_is_proven(tmp_path):
         return True
 
     with (
+        patch("hydra.core.decoy.ensure_decoy_site", return_value=Path("/var/www/decoy-zig")),
         patch("hydra.plugins.mtproto_zig.plugin.runtime.apply", side_effect=fake_apply),
         patch("hydra.plugins.mtproto_zig.plugin.web_runtime.apply", return_value=True),
         patch("hydra.plugins.mtproto_zig.plugin.web_runtime.running", return_value=False),
@@ -580,6 +581,7 @@ def test_web_only_is_committed_after_a_successful_bridge_probe():
         return True
 
     with (
+        patch("hydra.core.decoy.ensure_decoy_site", return_value=Path("/var/www/decoy-zig")),
         patch("hydra.plugins.mtproto_zig.plugin.runtime.apply", side_effect=fake_apply),
         patch("hydra.plugins.mtproto_zig.plugin.web_runtime.apply", return_value=True),
         patch("hydra.plugins.mtproto_zig.plugin.web_runtime.running", return_value=True),
@@ -722,7 +724,7 @@ def test_cancelling_the_web_only_confirmation_changes_nothing():
     )
 
     with (
-        patch.object(mtproto_zig_settings, "menu", side_effect=["1", "3", "0"]),
+        patch.object(mtproto_zig_settings, "menu", side_effect=["3"]),
         patch.object(mtproto_zig_settings, "prompt", return_value=WEB_DOMAIN),
         patch.object(mtproto_zig_settings, "confirm", return_value=False) as confirm,
     ):
@@ -746,7 +748,7 @@ def test_confirming_web_only_goes_through_the_plugin_command():
     )
 
     with (
-        patch.object(mtproto_zig_settings, "menu", side_effect=["1", "3", "0"]),
+        patch.object(mtproto_zig_settings, "menu", side_effect=["3"]),
         patch.object(mtproto_zig_settings, "prompt", return_value=WEB_DOMAIN),
         patch.object(mtproto_zig_settings, "confirm", return_value=True),
         patch.object(mtproto_zig_settings, "_report_change"),
@@ -778,7 +780,7 @@ def test_reselecting_the_same_mode_is_reported_as_a_no_op():
     messages: list[str] = []
 
     with (
-        patch.object(mtproto_zig_settings, "menu", side_effect=["1", "2", "0"]),
+        patch.object(mtproto_zig_settings, "menu", side_effect=["2"]),
         patch.object(mtproto_zig_settings, "prompt", return_value="Relay.Example."),
         patch.object(mtproto_zig_settings, "info", messages.append),
         patch.object(mtproto_zig_settings, "error", messages.append),
@@ -787,6 +789,202 @@ def test_reselecting_the_same_mode_is_reported_as_a_no_op():
 
     command.assert_not_called()
     assert messages and "уже выбран" in messages[0]
+
+
+def test_settings_row_opens_the_mode_chooser_directly():
+    """The protocol menu already showed the WEB row; do not draw it again."""
+    from hydra.ui._menus import mtproto_zig_settings
+
+    state = _state("hybrid")
+    app = cast(
+        ApplicationService,
+        SimpleNamespace(
+            admin=SimpleNamespace(load_state=lambda: state),
+            plugin_command=Mock(),
+        ),
+    )
+
+    with patch.object(mtproto_zig_settings, "menu", side_effect=["0"]) as chooser:
+        mtproto_zig_settings.open_menu(state, SimpleNamespace(), app)
+
+    chooser.assert_called_once()
+    assert "РЕЖИМ WEB" in chooser.call_args[0][1]
+    assert "НАСТРОЙКИ MTPROTO ZIG" not in chooser.call_args[0][1]
+
+
+def test_cancelling_the_mode_chooser_draws_no_second_menu():
+    from hydra.ui._menus import mtproto_zig_settings
+
+    state = _state("hybrid")
+    app = cast(ApplicationService, SimpleNamespace(plugin_command=Mock()))
+
+    with (
+        patch.object(mtproto_zig_settings, "menu", side_effect=["0"]) as chooser,
+        patch.object(mtproto_zig_settings, "prompt") as wait,
+    ):
+        mtproto_zig_settings.open_menu(state, SimpleNamespace(), app)
+
+    chooser.assert_called_once()
+    wait.assert_not_called()
+
+
+# ── TSK-020: cover site on the WEB domain (R15) ─────────────────────────────
+
+
+def test_cover_site_is_referenced_only_while_web_mode_is_active():
+    plugin = MtprotoZigPlugin()
+    site = Path("/var/www/decoy-zig")
+    applied: list[str] = []
+
+    def fake_apply(config, **_kwargs):
+        applied.append(config)
+        return True
+
+    active = _state("hybrid")
+    plugin.configure(active)
+    with (
+        patch("hydra.core.decoy.ensure_decoy_site", return_value=site) as ensure,
+        patch("hydra.plugins.mtproto_zig.plugin.runtime.apply", side_effect=fake_apply),
+        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.apply", return_value=True),
+    ):
+        assert plugin.apply(active) is True
+
+    ensure.assert_called_once_with("mtproto_zig", "landing", domain=WEB_DOMAIN)
+    assert f'public_dir = "{site}"' in applied[0]
+
+    off = _state()
+    plugin.configure(off)
+    with (
+        patch("hydra.core.decoy.ensure_decoy_site") as ensure_off,
+        patch("hydra.plugins.mtproto_zig.plugin.runtime.apply", side_effect=fake_apply),
+        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.stop", return_value=True),
+        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.running", return_value=False),
+    ):
+        assert plugin.apply(off) is True
+
+    ensure_off.assert_not_called()
+    assert "public_dir" not in applied[1]
+
+
+def test_cover_site_generation_failure_leaves_no_public_dir():
+    plugin = MtprotoZigPlugin()
+    state = _state("hybrid")
+    plugin.configure(state)
+    applied: list[str] = []
+
+    def fake_apply(config, **_kwargs):
+        applied.append(config)
+        return True
+
+    with (
+        patch("hydra.core.decoy.ensure_decoy_site", side_effect=OSError("диск недоступен")),
+        patch("hydra.plugins.mtproto_zig.plugin.runtime.apply", side_effect=fake_apply),
+        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.apply", return_value=True),
+        patch.object(MtprotoZigPlugin, "_installed", return_value=True),
+        patch("hydra.plugins.mtproto_zig.plugin.HOST.run") as run,
+        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.service_state", return_value="active"),
+    ):
+        run.return_value = CompletedProcess(["systemctl"], 0, "active\n", "")
+        assert plugin.apply(state) is True
+        status = plugin.status(state)
+        health = plugin.healthcheck_for_state(state)
+
+    assert "public_dir" not in applied[0], "a failed generation must not be referenced"
+    assert "диск недоступен" in status.info["decoy_site"]
+    assert health.healthy is True, "a cover-site failure must not fail the transport"
+    assert health.severity == "warning"
+    assert "диск недоступен" in health.detail
+
+
+def test_cover_theme_is_selectable_through_the_shared_decoy_command():
+    from hydra.plugins.decoy_support import supports_decoy_theme
+    from hydra.ui._menus import decoy_theme
+
+    plugin = MtprotoZigPlugin()
+    state = _state("hybrid")
+    desired = state.protocols["mtproto_zig"]
+
+    assert supports_decoy_theme(plugin)
+    assert decoy_theme.decoy_option(plugin, desired) == (
+        "🎭 Сайт-заглушка",
+        decoy_theme.theme_label("landing"),
+    )
+    assert plugin.set_decoy_theme(state, "blog")
+    assert desired.config["decoy_theme"] == "blog"
+
+
+def test_changing_the_cover_theme_regenerates_the_site(tmp_path):
+    from hydra.core.decoy import DECOY_DIRS
+    from hydra.core.decoy_sites import builder
+    from hydra.core.decoy_sites.identity import build_identity
+    from hydra.core.decoy_sites.registry import get_theme
+
+    plugin = MtprotoZigPlugin()
+    state = _state("hybrid")
+    site = tmp_path / "decoy-zig"
+    generated: list[str] = []
+    published: list[Path] = []
+
+    def publish(site_dir, theme, *, domain=""):
+        published.append(Path(site_dir))
+        selected = get_theme(theme)
+        identity = build_identity(domain or site.name)
+        if not builder.is_current(site, selected.name, identity):
+            builder.build(site, selected.name, selected.render, identity)
+        generated.append(selected.name)
+        return site
+
+    def render_apply() -> str:
+        plugin.configure(state)
+        captured: list[str] = []
+
+        def fake_apply(config, **_kwargs):
+            captured.append(config)
+            return True
+
+        with (
+            patch("hydra.core.decoy.ensure_site", side_effect=publish),
+            patch("hydra.plugins.mtproto_zig.plugin.runtime.apply", side_effect=fake_apply),
+            patch("hydra.plugins.mtproto_zig.plugin.web_runtime.apply", return_value=True),
+        ):
+            assert plugin.apply(state) is True
+        return captured[0]
+
+    first = render_apply()
+    first_index = (site / "index.html").read_text(encoding="utf-8")
+    assert plugin.set_decoy_theme(state, "blog")
+    second = render_apply()
+
+    assert published == [DECOY_DIRS["mtproto_zig"], DECOY_DIRS["mtproto_zig"]]
+    assert generated == ["landing", "blog"]
+    assert f'public_dir = "{site}"' in first
+    assert f'public_dir = "{site}"' in second
+    assert builder.is_current(site, "blog", build_identity(WEB_DOMAIN))
+    assert (site / "index.html").read_text(encoding="utf-8") != first_index
+
+
+def test_cover_site_stays_inside_the_upstream_loader_bounds(tmp_path):
+    from hydra.core.decoy import DECOY_DIRS
+    from hydra.core.decoy_sites import builder
+    from hydra.core.decoy_sites.identity import build_identity
+    from hydra.core.decoy_sites.registry import get_theme
+
+    registered = DECOY_DIRS["mtproto_zig"]
+    assert registered.as_posix().startswith("/var/www/decoy-")
+    assert not registered.is_symlink()
+
+    site = tmp_path / "decoy-zig"
+    theme = get_theme("landing")
+    builder.build(site, theme.name, theme.render, build_identity(WEB_DOMAIN))
+    files = [path for path in site.rglob("*") if path.is_file()]
+
+    assert len(files) <= 256
+    assert max(path.stat().st_size for path in files) <= 2 * 1024 * 1024
+    assert sum(path.stat().st_size for path in files) <= 16 * 1024 * 1024
+    assert max(len(path.relative_to(site).parts) for path in files) <= 8
+    assert not any(path.is_symlink() for path in site.rglob("*"))
+    # The marker is the only dotfile; the upstream loader never publishes it.
+    assert {path.name for path in site.rglob("*") if path.name.startswith(".")} == {builder.MARKER_NAME}
 
 
 # ── TSK-017: no upstream manager, no second host owner ───────────────────────
@@ -883,6 +1081,7 @@ def test_apply_takes_a_fresh_relay_snapshot_every_time():
         return {"unit": None, "running": kwargs["running"]}
 
     with (
+        patch("hydra.core.decoy.ensure_decoy_site", return_value=Path("/var/www/decoy-zig")),
         patch("hydra.plugins.mtproto_zig.plugin.runtime.apply", return_value=False),
         patch("hydra.plugins.mtproto_zig.plugin.web_runtime.running", return_value=True) as running,
         patch("hydra.plugins.mtproto_zig.plugin.web_runtime.service_state", return_value="active"),
@@ -1226,3 +1425,36 @@ def test_bridge_probe_requires_a_capability():
 
     assert healthy is False
     assert "capability" in detail
+
+
+def test_cover_site_is_never_accepted_as_the_bridge_page(tmp_path):
+    """R15.2: publishing a site must not make the readiness proof accept it."""
+    from hydra.core.decoy_sites import builder
+    from hydra.core.decoy_sites.identity import build_identity
+    from hydra.core.decoy_sites.registry import get_theme
+
+    site = tmp_path / "decoy-zig"
+    theme = get_theme("landing")
+    builder.build(site, theme.name, theme.render, build_identity(WEB_DOMAIN))
+    index = (site / "index.html").read_bytes()
+    page = b"HTTP/1.1 200 OK\r\nContent-Length: " + str(len(index)).encode() + b"\r\n\r\n" + index
+
+    healthy, detail = _probe_with(lambda _request: page, _Relay().respond)
+
+    assert healthy is False
+    assert "авторизованные метаданные" in detail
+
+
+def test_malformed_navigation_with_a_capability_stays_refused():
+    """Upstream answers 404 for a malformed navigation carrying a real capability.
+
+    The probe always sends a well-formed navigation, so this pins the relay
+    answer it must keep refusing once a public site is configured.
+    """
+    healthy, detail = _probe_with(
+        lambda _request: b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found",
+        _Relay().respond,
+    )
+
+    assert healthy is False
+    assert "HTTP 404" in detail
