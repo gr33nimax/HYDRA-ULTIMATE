@@ -48,6 +48,7 @@ class TelemtPlugin(BasePlugin):
         self._install_failure = ""
         self._apply_failure = ""
         self._traffic_reason = ""
+        self._traffic_missing_users: int | None = None
 
     def install(self) -> bool:
         self._install_failure = ""
@@ -154,6 +155,8 @@ class TelemtPlugin(BasePlugin):
             is_installed=self._installed(),
         )
         result.info["traffic_source"] = self._traffic_reason or "ok"
+        if self._traffic_missing_users is not None:
+            result.info["api_missing_users"] = self._traffic_missing_users
         return result
 
     def healthcheck_for_state(self, state: PluginStateAccess) -> HealthResult:
@@ -186,6 +189,7 @@ class TelemtPlugin(BasePlugin):
             derive_username=derive_username,
         )
         self._traffic_reason = reason
+        self._traffic_missing_users = observation.missing_users(state, totals)
         return totals
 
     def traffic_source_reason(self, state: PluginStateAccess) -> str:

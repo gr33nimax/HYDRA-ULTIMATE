@@ -115,8 +115,12 @@ def traffic(
 ) -> tuple[dict[str, int] | None, str]:
     """Return per-user cumulative traffic from the control API.
 
-    Any failure is an unavailable source (``None``) rather than a measured
-    zero, so the caller keeps the last good accumulated totals.
+    A parsed answer that names at least one state user is an available source
+    even when it does not know a not-yet-applied user (R2a): the found users are
+    returned with an empty reason, and the divergence is reported through
+    :func:`missing_users`. Any failure, and an answer naming no state user at
+    all, stays unavailable (``None``) rather than a measured zero, so the caller
+    keeps the last good accumulated totals.
     """
     try:
         payload = fetch()
@@ -136,6 +140,20 @@ def traffic(
             missing += 1
             continue
         result[user.email] = totals[username]
-    if missing:
+    if missing and not result:
         return None, f"control API не отдал счётчик для {missing} пользователей"
     return result, ""
+
+
+def missing_users(
+    state: PluginStateAccess,
+    totals: dict[str, int] | None,
+) -> int | None:
+    """Count non-blocked state users an available snapshot did not report (R2a).
+
+    ``None`` means the source was unavailable, so the divergence is unknown and
+    the failure reason reports it instead.
+    """
+    if totals is None:
+        return None
+    return sum(1 for user in state.users if not user.blocked and user.email not in totals)

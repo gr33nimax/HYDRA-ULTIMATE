@@ -45,6 +45,16 @@ def _state(*, blocked: bool = False) -> AppState:
     return AppState(users=[user], protocols={"telemt": PluginState(enabled=True)})
 
 
+def _two_users(*, second_blocked: bool = False) -> AppState:
+    return AppState(
+        users=[
+            User(email="a@example.com", uuid="user-a"),
+            User(email="b@example.com", uuid="user-b", blocked=second_blocked),
+        ],
+        protocols={"telemt": PluginState(enabled=True)},
+    )
+
+
 def _entry(uuid: str, total: int) -> dict:
     return {"username": derive_username(uuid), "total_octets": total}
 
@@ -183,3 +193,96 @@ def test_plugin_status_and_health_expose_the_counter_failure():
 def test_legacy_stats_file_reader_is_not_a_source():
     """The iptables/stats.json scheme must not be revived (ADR 0016)."""
     assert "stats_file" not in inspect.signature(observation.traffic).parameters
+
+
+def test_partial_control_api_answer_keeps_the_row_and_reports_the_missing_user():
+    """R2a: an unapplied user is desired/runtime divergence, not a failed read."""
+    state = _two_users()
+    plugin = TelemtPlugin()
+    protocols = _Protocols(plugin)
+    partial = _read(state, _payload(_entry("user-a", 4096)))
+
+    with (
+        patch.object(TelemtPlugin, "_installed", return_value=False),
+        patch.object(observation, "traffic", side_effect=[partial, partial]),
+    ):
+        refresh_user_traffic(state, protocols=protocols)
+        totals = plugin.traffic_snapshot(state)
+        status = plugin.status(state)
+
+    assert totals == {"a@example.com": 4096}
+    assert plugin.traffic_source_reason(state) == ""
+    assert status.info["traffic_source"] == "ok"
+    assert status.info["api_missing_users"] == 1
+    # The row keeps showing traffic for the user the API does know.
+    assert state.users[0].credentials["telemt"]["traffic_used_bytes"] == 4096
+    assert "telemt" not in state.users[1].credentials
+
+
+def test_empty_control_api_user_list_is_unavailable():
+    state = _two_users()
+    plugin = TelemtPlugin()
+    totals, reason = _read(state, _payload())
+
+    with (
+        patch.object(TelemtPlugin, "_installed", return_value=False),
+        patch.object(observation, "traffic", return_value=(totals, reason)),
+    ):
+        assert plugin.traffic_snapshot(state) is None
+        status = plugin.status(state)
+
+    assert totals is None
+    assert reason
+    assert plugin.traffic_source_reason(state) == reason
+    assert status.info["traffic_source"] != "ok"
+    # An unavailable source cannot say how many users it is missing.
+    assert "api_missing_users" not in status.info
+
+
+def test_partial_answers_do_not_weaken_the_unavailable_cases():
+    state = _two_users()
+    plugin = TelemtPlugin()
+    protocols = _Protocols(plugin)
+    http_error = urllib.error.HTTPError(
+        observation.STATS_URL,
+        503,
+        "Service Unavailable",
+        Message(),
+        None,
+    )
+    samples = [
+        _read(state, _payload(_entry("user-a", 100))),
+        _failing_read(state, urllib.error.URLError("connection refused")),
+        _failing_read(state, http_error),
+        _read(state, "not json"),
+    ]
+
+    for label, (totals, reason) in zip(
+        ("fetch failure", "non-200", "malformed JSON"), samples[1:], strict=True
+    ):
+        assert totals is None, label
+        assert reason, label
+
+    with patch.object(observation, "traffic", side_effect=samples):
+        for _ in samples:
+            refresh_user_traffic(state, protocols=protocols)
+
+    assert state.users[0].credentials["telemt"]["traffic_used_bytes"] == 100
+    assert "control API" in plugin.traffic_source_reason(state)
+
+
+def test_blocked_user_absent_from_the_response_is_not_missing():
+    state = _two_users(second_blocked=True)
+    plugin = TelemtPlugin()
+    partial = _read(state, _payload(_entry("user-a", 4096)))
+
+    with (
+        patch.object(TelemtPlugin, "_installed", return_value=False),
+        patch.object(observation, "traffic", return_value=partial),
+    ):
+        totals = plugin.traffic_snapshot(state)
+        status = plugin.status(state)
+
+    assert totals == {"a@example.com": 4096}
+    assert plugin.traffic_source_reason(state) == ""
+    assert status.info["api_missing_users"] == 0
