@@ -29,7 +29,7 @@ from .constants import (
     WEB_SERVICE_NAME,
     WORK_DIR,
 )
-from .credentials import bridge_capability, derive_secret, derive_username
+from .credentials import derive_secret, derive_username
 
 
 class MtprotoZigPlugin(DecoyThemeSupport, BasePlugin):
@@ -42,7 +42,7 @@ class MtprotoZigPlugin(DecoyThemeSupport, BasePlugin):
         needs_domain=True,
         required_commands=("systemctl",),
         actions=("update_binary",),
-        commands=("set_web_settings", "set_decoy_theme"),
+        commands=("set_domain", "set_web_settings", "set_decoy_theme"),
         tls_domain_source="protocol",
         connection_source="none",
         config_defaults=(
@@ -136,6 +136,15 @@ class MtprotoZigPlugin(DecoyThemeSupport, BasePlugin):
             raise ValueError("Для WEB-режима MTProto Zig нужен отдельный домен релея")
         return ((domain, "web_cert_file", "web_key_file"),)
 
+    def set_domain(
+        self,
+        state: PluginStateAccess,
+        domain: str,
+        confirm_change: object = False,
+    ) -> bool:
+        """Persist the FakeTLS cover domain; the WEB relay domain is untouched."""
+        return configuration.set_cover_domain(state, domain, confirm_change)
+
     def set_web_settings(
         self,
         state: PluginStateAccess,
@@ -209,7 +218,7 @@ class MtprotoZigPlugin(DecoyThemeSupport, BasePlugin):
         mode = configuration.web_mode(config)
         if mode == "off":
             return True
-        capability = self._bridge_capability(state)
+        capability = configuration.bridge_capability_for(state)
         if not capability:
             if mode != "web-only":
                 return True
@@ -236,15 +245,6 @@ class MtprotoZigPlugin(DecoyThemeSupport, BasePlugin):
             binary=BIN_PATH,
             on_failure=self._note_apply_failure,
         )
-
-    @classmethod
-    def _bridge_capability(cls, state: PluginStateAccess) -> str:
-        """Build the probe capability from the first active user's secret."""
-        host = configuration.web_domain(cls._config(state))
-        for user in state.users:
-            if not user.blocked:
-                return bridge_capability(derive_secret(user.uuid), host)
-        return ""
 
     @staticmethod
     def _config(state: PluginStateAccess) -> dict:

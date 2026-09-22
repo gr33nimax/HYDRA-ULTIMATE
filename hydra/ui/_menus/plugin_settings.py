@@ -18,7 +18,7 @@ from hydra.ui._menus.vless_xhttp_settings import (
     open_menu as _menu_vless_xhttp,
     option as _vless_xhttp_option,
 )
-from hydra.ui._menus.settings_support import FAILURE_TEXT, desired_state
+from hydra.ui._menus.settings_support import desired_state, report_change
 from hydra.ui.tui import error, menu, prompt, success
 from hydra.utils.crypto import gen_token
 
@@ -38,11 +38,8 @@ def _desired_state(state: AppState, name: str) -> PluginState:
     return desired_state(state, name)
 
 
-def _report_change(changed: bool, success_text: str) -> None:
-    if changed:
-        success(success_text)
-        return
-    error(FAILURE_TEXT)
+def _report_change(app: ApplicationService, changed: bool, success_text: str) -> None:
+    report_change(app, changed, success_text, report_success=success, report_error=error)
 
 
 def _parse_int(value: object, label: str) -> int:
@@ -100,7 +97,7 @@ def _menu_naive(
                 if enabled
                 else (f"Домен сохранён: {domain}. TLS-сертификат будет получен при включении NaiveProxy")
             )
-            _report_change(changed, message)
+            _report_change(app, changed, message)
         except ValueError as exc:
             error(str(exc))
         prompt("Нажмите Enter")
@@ -109,7 +106,7 @@ def _menu_naive(
     if selected == "5":
         changed = change_uot(state, app)
         if changed is not None:
-            _report_change(changed, "Настройки NaiveProxy обновлены")
+            _report_change(app, changed, "Настройки NaiveProxy обновлены")
         return
 
     network = {"2": "tcp", "3": "quic", "4": "both"}.get(selected)
@@ -121,7 +118,7 @@ def _menu_naive(
         "set_transport",
         network=network,
     )
-    _report_change(changed, f"Транспорт изменён на {network}")
+    _report_change(app, changed, f"Транспорт изменён на {network}")
     prompt("Нажмите Enter")
 
 
@@ -149,6 +146,7 @@ def _menu_shadowtls(
                 value=value,
             )
             _report_change(
+                app,
                 changed,
                 f"SNI ShadowTLS изменён на {value}",
             )
@@ -213,7 +211,7 @@ def menu_hysteria2_settings(
             )
             if changed is None:
                 continue
-            _report_change(changed, "Настройки Hysteria2 обновлены")
+            _report_change(app, changed, "Настройки Hysteria2 обновлены")
         except (TypeError, ValueError) as exc:
             error(str(exc))
         prompt("Нажмите Enter")
@@ -343,7 +341,7 @@ def menu_snell_settings(
             )
             if changed is None:
                 continue
-            _report_change(changed, "Настройки Snell обновлены")
+            _report_change(app, changed, "Настройки Snell обновлены")
         except (TypeError, ValueError) as exc:
             error(str(exc))
         prompt("Нажмите Enter")

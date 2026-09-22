@@ -22,7 +22,7 @@ from .constants import (
     WEB_ROUTE_KEY,
     WEB_WS_PATH,
 )
-from .credentials import derive_secret, derive_username
+from .credentials import bridge_capability, derive_secret, derive_username
 
 
 def route_metadata() -> dict[str, JsonValue]:
@@ -65,6 +65,17 @@ def web_domain(config: Mapping[str, JsonValue]) -> str:
     return str(config.get("web_domain", "")).strip().lower().rstrip(".")
 
 
+def bridge_capability_for(state: PluginStateAccess) -> str:
+    """Build the WEB bridge probe capability from the first active user."""
+    protocol = state.protocols.get("mtproto_zig")
+    config = protocol.config if protocol else {}
+    host = web_domain(config)
+    for user in state.users:
+        if not user.blocked:
+            return bridge_capability(derive_secret(user.uuid), host)
+    return ""
+
+
 def _last_label_is_numeric(host: str) -> bool:
     """The WHATWG "ends in a number" rule upstream mirrors to reject IPv4 forms.
 
@@ -93,6 +104,19 @@ def normalize_web_domain(value: object) -> str:
     return host
 
 
+def normalize_cover_domain(value: object) -> str:
+    """Require a real DNS name for the borrowed FakeTLS cover host.
+
+    The cover name is somebody else's site and the SNI router refuses to give
+    one name to two backends, so it is validated exactly like the WEB host:
+    IP literals, including numeric and hex-looking forms, are not accepted.
+    """
+    host = normalize_hostname(value, field="Домен FakeTLS")
+    if _last_label_is_numeric(host):
+        raise ValueError("Домен FakeTLS должен быть доменным именем, а не IP-адресом")
+    return host
+
+
 def web_active(config: Mapping[str, JsonValue]) -> bool:
     return web_mode(config) != "off"
 
@@ -109,6 +133,40 @@ def _ensure_passthrough_route(config: dict, changed: bool) -> bool:
     if isinstance(config.get(ROUTE_KEY), dict):
         return changed
     config[ROUTE_KEY] = route_metadata()
+    return True
+
+
+def set_cover_domain(
+    state: PluginStateAccess,
+    domain: str,
+    confirm_change: object = False,
+) -> bool:
+    """Persist the FakeTLS cover domain without touching the WEB relay domain.
+
+    The cover host is embedded in every issued FakeTLS secret
+    (``ee<secret><domain hex>``), so changing it invalidates those links and
+    needs explicit confirmation from any caller, including a headless one. The
+    name is validated before any mutation, and a collision with the WEB relay
+    host is refused here so the operator sees the conflict instead of the raw
+    SNI-router error.
+    """
+    protocol = state.protocols.setdefault("mtproto_zig", PluginState())
+    host = normalize_cover_domain(domain)
+    current = str(protocol.config.get("domain", "")).strip().lower().rstrip(".")
+    relay = web_domain(protocol.config)
+    if relay and host == relay:
+        raise ValueError(
+            f"Домен FakeTLS совпадает с доменом WEB-релея {host}: "
+            "один домен не может принадлежать двум маршрутам",
+        )
+    if host == current:
+        return False
+    if current and not _confirmed(confirm_change):
+        raise ValueError(
+            "Смена домена FakeTLS делает нерабочими все выданные FakeTLS-ссылки "
+            "(домен вшит в секрет): передайте confirm_change=true",
+        )
+    protocol.config["domain"] = host
     return True
 
 

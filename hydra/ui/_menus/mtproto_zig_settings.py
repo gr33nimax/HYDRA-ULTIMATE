@@ -8,8 +8,14 @@ from __future__ import annotations
 
 from hydra.core.state_models import AppState, PluginState
 from hydra.services.application import ApplicationService
-from hydra.ui._menus.settings_support import FAILURE_TEXT, desired_state
+from hydra.ui._menus.settings_support import desired_state, report_change
 from hydra.ui.tui import confirm, error, info, menu, prompt, success
+
+_MODE_LABELS = {
+    "off": "выключен · только FakeTLS",
+    "hybrid": "FakeTLS + WEB",
+    "web-only": "только WEB",
+}
 
 
 def _configuration():
@@ -22,21 +28,21 @@ def _web_mode(desired: PluginState) -> str:
     return _configuration().web_mode(desired.config)
 
 
+def _mode_label(mode: str) -> str:
+    return _MODE_LABELS.get(mode, mode)
+
+
+def _cover_domain(desired: PluginState) -> str:
+    return str(desired.config.get("domain", "")).strip().lower().rstrip(".")
+
+
 def option(desired: PluginState) -> tuple[str, str]:
-    mode = _web_mode(desired)
-    label = {
-        "off": "выключен · только FakeTLS",
-        "hybrid": "FakeTLS + WEB",
-        "web-only": "только WEB",
-    }.get(mode, mode)
-    return "🌐 Режим WEB", label
+    cover = _cover_domain(desired) or "не задан"
+    return "⚙️ Настройки MTProto Zig", f"WEB: {_mode_label(_web_mode(desired))} · FakeTLS: {cover}"
 
 
-def _report_change(changed: bool, success_text: str) -> None:
-    if changed:
-        success(success_text)
-        return
-    error(FAILURE_TEXT)
+def _report_change(app: ApplicationService, changed: bool, success_text: str) -> None:
+    report_change(app, changed, success_text, report_success=success, report_error=error)
 
 
 def open_menu(
@@ -44,15 +50,38 @@ def open_menu(
     _plugin: object,
     app: ApplicationService,
 ) -> None:
+    """Open the two independent settings: WEB access mode and FakeTLS cover.
+
+    The protocol menu shows this adapter once, so the rows here are the two
+    values R16 keeps separate. Selecting a row opens its chooser or prompt
+    directly: no intermediate menu repeats the row that was pressed.
+    """
+    desired = desired_state(state, "mtproto_zig")
+    selected = menu(
+        [
+            ("1", "🌐 Режим WEB", _mode_label(_web_mode(desired))),
+            ("2", "🔒 Домен FakeTLS", _cover_domain(desired) or "не задан"),
+            ("0", "↩ Назад", ""),
+        ],
+        "НАСТРОЙКИ MTPROTO ZIG",
+    )
+    if selected == "1":
+        _open_web_mode(state, desired, app)
+    elif selected == "2":
+        _open_cover_domain(state, desired, app)
+
+
+def _open_web_mode(
+    state: AppState,
+    desired: PluginState,
+    app: ApplicationService,
+) -> None:
     """Choose the WEB access mode through the transactional plugin command.
 
-    The protocol menu already shows the "🌐 Режим WEB" row, so this adapter
-    opens the chooser directly. ``None`` from :func:`_change_mode` means the
-    operator cancelled or re-picked the current mode, which ends the
-    interaction instead of redrawing a menu.
+    ``None`` from :func:`_change_mode` means the operator cancelled or re-picked
+    the current mode, which ends the interaction instead of redrawing a menu.
     """
     configuration = _configuration()
-    desired = desired_state(state, "mtproto_zig")
     mode = _web_mode(desired)
     domain = configuration.web_domain(desired.config)
     try:
@@ -63,7 +92,55 @@ def open_menu(
         return
     if changed is None:
         return
-    _report_change(changed, "Настройки WEB MTProto Zig обновлены")
+    _report_change(app, changed, "Настройки WEB MTProto Zig обновлены")
+    prompt("Нажмите Enter")
+
+
+def _open_cover_domain(
+    state: AppState,
+    desired: PluginState,
+    app: ApplicationService,
+) -> None:
+    """Change the FakeTLS cover domain through the transactional command.
+
+    The domain is embedded in every issued FakeTLS secret, so a real change is
+    confirmed before the command runs. Validation refuses the value before that
+    prompt, so an empty or IP-literal domain never reaches the mutation.
+    """
+    configuration = _configuration()
+    current = _cover_domain(desired)
+    entered = prompt(
+        "Домен FakeTLS (чужой сайт для FakeTLS-handshake)",
+        default=current,
+    ).strip()
+    try:
+        chosen = configuration.normalize_cover_domain(entered)
+    except ValueError as exc:
+        error(str(exc))
+        prompt("Нажмите Enter")
+        return
+    if chosen == current:
+        info(f"Домен FakeTLS уже задан: {chosen}")
+        return
+    if current and not confirm(
+        "Смена домена FakeTLS сделает нерабочими все выданные FakeTLS-ссылки: "
+        "домен вшит в секрет (ee<secret><domain hex>). Продолжить?",
+        default=False,
+    ):
+        return
+    try:
+        changed = app.plugin_command(
+            state,
+            "mtproto_zig",
+            "set_domain",
+            domain=chosen,
+            confirm_change=True,
+        )
+    except (TypeError, ValueError) as exc:
+        error(str(exc))
+        prompt("Нажмите Enter")
+        return
+    _report_change(app, changed, f"Домен FakeTLS изменён на {chosen}")
     prompt("Нажмите Enter")
 
 

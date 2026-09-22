@@ -697,17 +697,19 @@ def test_web_only_status_names_the_exclusive_link_mode():
 # ── TSK-016: TUI adapter and the WEB-only safety gate ────────────────────────
 
 
-def test_settings_row_names_each_mode():
+def test_settings_row_names_both_values_behind_one_entry():
     from hydra.ui._menus import mtproto_zig_settings
 
-    labels = {
+    rows = {
         mode: mtproto_zig_settings.option(_state(mode).protocols["mtproto_zig"])
         for mode in ("off", "hybrid", "web-only")
     }
 
-    assert labels["off"] == ("🌐 Режим WEB", "выключен · только FakeTLS")
-    assert labels["hybrid"] == ("🌐 Режим WEB", "FakeTLS + WEB")
-    assert labels["web-only"] == ("🌐 Режим WEB", "только WEB")
+    assert {row[0] for row in rows.values()} == {"⚙️ Настройки MTProto Zig"}
+    assert "выключен · только FakeTLS" in rows["off"][1]
+    assert "FakeTLS + WEB" in rows["hybrid"][1]
+    assert "только WEB" in rows["web-only"][1]
+    assert all(COVER_DOMAIN in row[1] for row in rows.values())
 
 
 def test_cancelling_the_web_only_confirmation_changes_nothing():
@@ -724,7 +726,7 @@ def test_cancelling_the_web_only_confirmation_changes_nothing():
     )
 
     with (
-        patch.object(mtproto_zig_settings, "menu", side_effect=["3"]),
+        patch.object(mtproto_zig_settings, "menu", side_effect=["1", "3"]),
         patch.object(mtproto_zig_settings, "prompt", return_value=WEB_DOMAIN),
         patch.object(mtproto_zig_settings, "confirm", return_value=False) as confirm,
     ):
@@ -748,7 +750,7 @@ def test_confirming_web_only_goes_through_the_plugin_command():
     )
 
     with (
-        patch.object(mtproto_zig_settings, "menu", side_effect=["3"]),
+        patch.object(mtproto_zig_settings, "menu", side_effect=["1", "3"]),
         patch.object(mtproto_zig_settings, "prompt", return_value=WEB_DOMAIN),
         patch.object(mtproto_zig_settings, "confirm", return_value=True),
         patch.object(mtproto_zig_settings, "_report_change"),
@@ -780,7 +782,7 @@ def test_reselecting_the_same_mode_is_reported_as_a_no_op():
     messages: list[str] = []
 
     with (
-        patch.object(mtproto_zig_settings, "menu", side_effect=["2"]),
+        patch.object(mtproto_zig_settings, "menu", side_effect=["1", "2"]),
         patch.object(mtproto_zig_settings, "prompt", return_value="Relay.Example."),
         patch.object(mtproto_zig_settings, "info", messages.append),
         patch.object(mtproto_zig_settings, "error", messages.append),
@@ -792,7 +794,7 @@ def test_reselecting_the_same_mode_is_reported_as_a_no_op():
 
 
 def test_settings_row_opens_the_mode_chooser_directly():
-    """The protocol menu already showed the WEB row; do not draw it again."""
+    """One settings menu, then the chooser: no menu repeats the pressed row."""
     from hydra.ui._menus import mtproto_zig_settings
 
     state = _state("hybrid")
@@ -804,12 +806,14 @@ def test_settings_row_opens_the_mode_chooser_directly():
         ),
     )
 
-    with patch.object(mtproto_zig_settings, "menu", side_effect=["0"]) as chooser:
+    with patch.object(mtproto_zig_settings, "menu", side_effect=["1", "0"]) as drawn:
         mtproto_zig_settings.open_menu(state, SimpleNamespace(), app)
 
-    chooser.assert_called_once()
-    assert "РЕЖИМ WEB" in chooser.call_args[0][1]
-    assert "НАСТРОЙКИ MTPROTO ZIG" not in chooser.call_args[0][1]
+    assert drawn.call_count == 2
+    settings_items = drawn.call_args_list[0][0][0]
+    assert [item[1] for item in settings_items[:2]] == ["🌐 Режим WEB", "🔒 Домен FakeTLS"]
+    assert "РЕЖИМ WEB" in drawn.call_args_list[1][0][1]
+    assert "НАСТРОЙКИ MTPROTO ZIG" not in drawn.call_args_list[1][0][1]
 
 
 def test_cancelling_the_mode_chooser_draws_no_second_menu():
@@ -819,13 +823,197 @@ def test_cancelling_the_mode_chooser_draws_no_second_menu():
     app = cast(ApplicationService, SimpleNamespace(plugin_command=Mock()))
 
     with (
-        patch.object(mtproto_zig_settings, "menu", side_effect=["0"]) as chooser,
+        patch.object(mtproto_zig_settings, "menu", side_effect=["1", "0"]) as drawn,
         patch.object(mtproto_zig_settings, "prompt") as wait,
     ):
         mtproto_zig_settings.open_menu(state, SimpleNamespace(), app)
 
-    chooser.assert_called_once()
+    assert drawn.call_count == 2, "the settings menu and one chooser, nothing more"
     wait.assert_not_called()
+
+
+# ── TSK-021: the FakeTLS cover domain is its own settings row (R16) ─────────
+
+
+def test_cover_domain_change_leaves_the_web_domain_untouched():
+    plugin = MtprotoZigPlugin()
+    state = _state("hybrid")
+
+    assert plugin.set_domain(state, "new-cover.example", confirm_change=True) is True
+
+    config = _config(state)
+    assert config["domain"] == "new-cover.example"
+    assert config["web_domain"] == WEB_DOMAIN
+    assert config[configuration.WEB_ROUTE_KEY]["kind"] == "http_reverse_proxy"
+
+
+def test_web_domain_change_leaves_the_cover_domain_untouched():
+    plugin = MtprotoZigPlugin()
+    state = _state("hybrid")
+
+    assert plugin.set_web_settings(state, mode="hybrid", domain="other.example", confirm_host_change=True) is True
+
+    assert _config(state)["domain"] == COVER_DOMAIN
+    assert _config(state)["web_domain"] == "other.example"
+
+
+def test_cover_domain_equal_to_the_web_domain_is_refused_before_mutation():
+    plugin = MtprotoZigPlugin()
+    state = _state("hybrid")
+
+    with pytest.raises(ValueError, match=WEB_DOMAIN) as refused:
+        plugin.set_domain(state, WEB_DOMAIN)
+
+    assert "WEB-релея" in str(refused.value), "the message must name the conflict"
+    assert _config(state)["domain"] == COVER_DOMAIN
+
+
+@pytest.mark.parametrize("domain", ["", "cover", "10.0.0.1", "0177.0.0.1", "0x7f.1"])
+def test_cover_domain_rejects_empty_ip_literal_and_single_label_before_mutation(domain):
+    plugin = MtprotoZigPlugin()
+    state = _state()
+
+    with pytest.raises(ValueError):
+        plugin.set_domain(state, domain)
+
+    assert _config(state)["domain"] == COVER_DOMAIN
+
+
+def test_changing_an_issued_cover_domain_needs_explicit_confirmation():
+    """A headless caller must not invalidate issued FakeTLS links by accident."""
+    plugin = MtprotoZigPlugin()
+    state = _state()
+
+    with pytest.raises(ValueError, match="confirm_change"):
+        plugin.set_domain(state, "other.example")
+    assert _config(state)["domain"] == COVER_DOMAIN
+
+    assert plugin.set_domain(state, "other.example", confirm_change="true") is True
+    assert _config(state)["domain"] == "other.example"
+
+
+def test_cover_domain_change_requests_no_certificate_and_no_decoy_site():
+    plugin = MtprotoZigPlugin()
+    state = _state("hybrid")
+    certificates = _Certificates()
+    setup = ProtocolSetupService(certificates, lambda name: plugin if name == "mtproto_zig" else None)
+
+    assert plugin.set_domain(state, "new-cover.example", confirm_change=True) is True
+
+    assert plugin.certificate_requirements(state) == ((WEB_DOMAIN, "web_cert_file", "web_key_file"),)
+    setup.prepare_enable(state, "mtproto_zig")
+    assert certificates.calls == [WEB_DOMAIN], "the cover domain never requests a certificate"
+    assert _config(state).get("cert_file") in (None, "")
+    rendered, _fragment = configuration.plan_configuration(state)
+    assert 'tls_domain = "new-cover.example"' in rendered
+    assert "public_dir" not in rendered
+
+
+def test_cover_domain_change_runs_through_the_transactional_command_service():
+    from hydra.services.plugin_commands import PluginCommandService
+
+    plugin = MtprotoZigPlugin()
+    state = _state()
+    applied: list[str] = []
+    service = PluginCommandService(
+        get_plugin=lambda name: plugin if name == "mtproto_zig" else None,
+        apply_config=lambda current: applied.append("apply") or True,
+        save_state=lambda current: None,
+    )
+
+    with patch.object(MtprotoZigPlugin, "snapshot", return_value={}):
+        assert service.execute(
+            state,
+            "mtproto_zig",
+            "set_domain",
+            domain="new-cover.example",
+            confirm_change=True,
+        )
+
+    assert _config(state)["domain"] == "new-cover.example"
+    assert applied == ["apply"], "an enabled protocol applies the new cover domain"
+
+
+def test_settings_menu_shows_both_rows_without_repeating_the_pressed_row():
+    from hydra.ui._menus import mtproto_zig_settings
+
+    state = _state("hybrid")
+    app = cast(ApplicationService, SimpleNamespace(plugin_command=Mock()))
+
+    with patch.object(mtproto_zig_settings, "menu", side_effect=["0"]) as drawn:
+        mtproto_zig_settings.open_menu(state, SimpleNamespace(), app)
+
+    items = drawn.call_args[0][0]
+    assert [item[1] for item in items[:2]] == ["🌐 Режим WEB", "🔒 Домен FakeTLS"]
+    assert items[1][2] == COVER_DOMAIN, "the FakeTLS row shows the current cover domain"
+    assert drawn.call_args[0][1] == "НАСТРОЙКИ MTPROTO ZIG"
+    entry, _value = mtproto_zig_settings.option(state.protocols["mtproto_zig"])
+    assert entry not in [item[1] for item in items]
+
+
+def test_cover_domain_change_needs_confirmation():
+    from hydra.ui._menus import mtproto_zig_settings
+
+    state = _state()
+    command = Mock(return_value=True)
+    app = cast(ApplicationService, SimpleNamespace(plugin_command=command))
+
+    with (
+        patch.object(mtproto_zig_settings, "menu", side_effect=["2"]),
+        patch.object(mtproto_zig_settings, "prompt", return_value="new-cover.example"),
+        patch.object(mtproto_zig_settings, "confirm", return_value=False) as confirm,
+    ):
+        mtproto_zig_settings.open_menu(state, SimpleNamespace(), app)
+
+    confirm.assert_called_once()
+    assert "ссылк" in confirm.call_args[0][0]
+    assert "секрет" in confirm.call_args[0][0]
+    command.assert_not_called()
+
+
+def test_confirmed_cover_domain_change_goes_through_the_plugin_command():
+    from hydra.ui._menus import mtproto_zig_settings
+
+    state = _state()
+    command = Mock(return_value=True)
+    app = cast(ApplicationService, SimpleNamespace(plugin_command=command))
+
+    with (
+        patch.object(mtproto_zig_settings, "menu", side_effect=["2"]),
+        patch.object(mtproto_zig_settings, "prompt", return_value="New-Cover.Example."),
+        patch.object(mtproto_zig_settings, "confirm", return_value=True),
+        patch.object(mtproto_zig_settings, "_report_change"),
+    ):
+        mtproto_zig_settings.open_menu(state, SimpleNamespace(), app)
+
+    command.assert_called_once_with(
+        state,
+        "mtproto_zig",
+        "set_domain",
+        domain="new-cover.example",
+        confirm_change=True,
+    )
+
+
+def test_an_ip_literal_cover_domain_is_refused_before_confirmation_and_command():
+    from hydra.ui._menus import mtproto_zig_settings
+
+    state = _state()
+    command = Mock(return_value=True)
+    app = cast(ApplicationService, SimpleNamespace(plugin_command=command))
+    messages: list[str] = []
+
+    with (
+        patch.object(mtproto_zig_settings, "menu", side_effect=["2"]),
+        patch.object(mtproto_zig_settings, "prompt", return_value="10.0.0.1"),
+        patch.object(mtproto_zig_settings, "confirm") as confirm,
+        patch.object(mtproto_zig_settings, "error", messages.append),
+    ):
+        mtproto_zig_settings.open_menu(state, SimpleNamespace(), app)
+
+    confirm.assert_not_called()
+    command.assert_not_called()
+    assert messages and "IP-адресом" in messages[0]
 
 
 # ── TSK-020: cover site on the WEB domain (R15) ─────────────────────────────
