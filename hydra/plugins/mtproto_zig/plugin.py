@@ -226,9 +226,9 @@ class MtprotoZigPlugin(DecoyThemeSupport, BasePlugin):
                 "WEB-мост нельзя проверить: нет ни одного активного пользователя",
             )
             return False
-        healthy, reason = bridge_probe.probe_bridge(
-            configuration.web_domain(config),
-            capability=capability,
+        domain = configuration.web_domain(config)
+        healthy, reason = runtime.ready_probe(
+            lambda: bridge_probe.probe_bridge(domain, capability=capability),
         )
         if not healthy:
             self._note_apply_failure(f"WEB-мост не подтверждён: {reason}")

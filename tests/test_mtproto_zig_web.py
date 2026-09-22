@@ -456,6 +456,60 @@ def test_relay_staging_reports_an_inactive_unit(tmp_path):
     assert stages and stages[0].startswith("служба mtproto-zig-web не запустилась (state=failed)")
 
 
+def test_relay_probe_retries_until_the_relay_binds_its_socket(tmp_path):
+    """R17.1: `Type=simple` reports active before the socket exists, so the first refusal is a race."""
+    host = _Host()
+    stages: list[str] = []
+    probe = Mock(side_effect=[(False, "connection refused")] * 3 + [(True, "")])
+
+    with (
+        patch.object(web_runtime, "probe_local", probe),
+        patch("hydra.plugins.mtproto_zig.runtime.time.sleep"),
+    ):
+        applied = web_runtime.apply(
+            host=host,
+            binary=tmp_path / "mtproto-zig",
+            config_file=tmp_path / "config.toml",
+            work_dir=tmp_path / "work",
+            service="mtproto-zig-web",
+            service_file=tmp_path / "unit.service",
+            proxy_service="mtproto-zig",
+            on_failure=stages.append,
+        )
+
+    assert applied is True
+    assert stages == []
+    assert probe.call_count == 4, "three refused connections must not fail an apply that then succeeds"
+
+
+def test_relay_probe_fails_only_after_the_bounded_retry_budget(tmp_path):
+    """R17.1: a relay that never answers fails with its reason within a finite budget."""
+    host = _Host()
+    stages: list[str] = []
+    probe = Mock(return_value=(False, "connection refused"))
+
+    with (
+        patch.object(web_runtime, "probe_local", probe),
+        patch("hydra.plugins.mtproto_zig.runtime.time.sleep"),
+    ):
+        applied = web_runtime.apply(
+            host=host,
+            binary=tmp_path / "mtproto-zig",
+            config_file=tmp_path / "config.toml",
+            work_dir=tmp_path / "work",
+            service="mtproto-zig-web",
+            service_file=tmp_path / "unit.service",
+            proxy_service="mtproto-zig",
+            on_failure=stages.append,
+        )
+
+    assert applied is False
+    assert probe.call_count == web_runtime.READY_POLLS, "the retry budget must be bounded, not infinite"
+    assert stages == [
+        f"WEB-релей не отвечает на 127.0.0.1:{configuration.WEB_RELAY_PORT}: connection refused",
+    ]
+
+
 def test_relay_snapshot_and_rollback_restore_the_previous_unit(tmp_path):
     service = tmp_path / "unit.service"
     service.write_text("old unit", encoding="utf-8")
@@ -479,6 +533,87 @@ def test_relay_snapshot_rollback_removes_a_unit_that_did_not_exist(tmp_path):
 
     assert not service.exists()
     assert ["systemctl", "disable", "--now", "mtproto-zig-web"] in host.commands
+
+
+def _enable_link(root: Path, service: str) -> Path:
+    """The multi-user.target.wants entry systemd leaves behind for an enabled unit."""
+    link = root / "multi-user.target.wants" / f"{service}.service"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link.symlink_to(root / f"{service}.service")
+    except OSError:
+        # Windows without symlink privileges: a plain entry at the same path
+        # still stands in for the enable link that would survive.
+        link.write_text("", encoding="utf-8")
+    return link
+
+
+class _LinkAwareHost:
+    """Host double whose ``disable`` needs the unit file the way systemd does."""
+
+    def __init__(self, *, unit: Path, link: Path) -> None:
+        self.commands: list[list[str]] = []
+        self.unit_present_at_disable: list[bool] = []
+        self._unit = unit
+        self._link = link
+
+    def run(self, args, **_kwargs):
+        command = list(args)
+        self.commands.append(command)
+        if command[:2] == ["systemctl", "disable"]:
+            self.unit_present_at_disable.append(self._unit.exists())
+            if not self._unit.exists():
+                # ``disable`` reads [Install] from the unit file: a file removed
+                # first leaves the enable link behind and fails the disable.
+                return CompletedProcess(args, 1, "", "Unit file does not exist")
+            self._link.unlink(missing_ok=True)
+        return CompletedProcess(args, 0, "active\n", "")
+
+
+def test_relay_rollback_disables_before_removing_the_unit_and_drops_the_link(tmp_path):
+    """R17.3: disable reads [Install] from the file, so the file must still be there."""
+    service = "mtproto-zig-web"
+    unit = tmp_path / f"{service}.service"
+    unit.write_text("unit installed by the failed apply", encoding="utf-8")
+    link = _enable_link(tmp_path, service)
+    host = _LinkAwareHost(unit=unit, link=link)
+    stages: list[str] = []
+
+    restored = web_runtime.rollback(
+        {"unit": None, "running": False},
+        host=host,
+        service=service,
+        service_file=unit,
+        on_failure=stages.append,
+    )
+
+    assert restored is True
+    assert not unit.exists()
+    assert not link.exists(), "a surviving enable link pulls the relay back in at boot"
+    assert host.unit_present_at_disable == [True], "disable must run before the unit file is removed"
+    assert ["systemctl", "daemon-reload"] in host.commands
+    assert stages == []
+
+
+def test_relay_rollback_restores_a_previous_unit_that_was_not_running(tmp_path):
+    """A restored unit that was down comes back down, exactly as it was captured."""
+    unit = tmp_path / "mtproto-zig-web.service"
+    unit.write_text("new unit", encoding="utf-8")
+    host = _Host()
+
+    assert (
+        web_runtime.rollback(
+            {"unit": b"old unit", "running": False},
+            host=host,
+            service="mtproto-zig-web",
+            service_file=unit,
+        )
+        is True
+    )
+
+    assert unit.read_bytes() == b"old unit"
+    assert ["systemctl", "disable", "mtproto-zig-web"] in host.commands
+    assert ["systemctl", "restart", "mtproto-zig-web"] not in host.commands
 
 
 def test_stopping_the_relay_disables_removes_and_reloads(tmp_path):
@@ -567,6 +702,49 @@ def test_staging_never_commits_web_only_before_the_bridge_is_proven(tmp_path):
 
     assert applied_configs == [applied_configs[0]], "an unproven bridge must not commit only=true"
     assert "only = true" not in _toml_lines(applied_configs[0])
+    assert plugin.apply_failure() == "WEB-мост не подтверждён: no route"
+
+
+def test_bridge_readiness_is_retried_before_the_web_only_commit():
+    """R17.2: the rebuilt frontend races the route, so the first refusal retries."""
+    plugin = MtprotoZigPlugin()
+    state = _state("web-only")
+    plugin.configure(state)
+    probe = Mock(side_effect=[(False, "no route"), (True, "")])
+
+    with (
+        patch("hydra.core.decoy.ensure_decoy_site", return_value=Path("/var/www/decoy-zig")),
+        patch("hydra.plugins.mtproto_zig.plugin.runtime.apply", return_value=True),
+        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.apply", return_value=True),
+        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.running", return_value=True),
+        patch("hydra.plugins.mtproto_zig.plugin.bridge_probe.probe_bridge", probe),
+        patch("hydra.plugins.mtproto_zig.runtime.time.sleep"),
+    ):
+        assert plugin.apply(state) is True
+        assert plugin.finalize_apply(state) is True
+
+    assert probe.call_count == 2, "a bridge that answers on the second attempt is ready"
+
+
+def test_bridge_readiness_fails_only_after_the_bounded_retry_budget():
+    """R17.2: an unproven bridge fails with its reason within a finite budget."""
+    plugin = MtprotoZigPlugin()
+    state = _state("web-only")
+    plugin.configure(state)
+    probe = Mock(return_value=(False, "no route"))
+
+    with (
+        patch("hydra.core.decoy.ensure_decoy_site", return_value=Path("/var/www/decoy-zig")),
+        patch("hydra.plugins.mtproto_zig.plugin.runtime.apply", return_value=True),
+        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.apply", return_value=True),
+        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.running", return_value=True),
+        patch("hydra.plugins.mtproto_zig.plugin.bridge_probe.probe_bridge", probe),
+        patch("hydra.plugins.mtproto_zig.runtime.time.sleep"),
+    ):
+        assert plugin.apply(state) is True
+        assert plugin.finalize_apply(state) is False
+
+    assert probe.call_count == web_runtime.READY_POLLS, "the retry budget must be bounded, not infinite"
     assert plugin.apply_failure() == "WEB-мост не подтверждён: no route"
 
 
@@ -1309,6 +1487,46 @@ def test_disabling_the_proxy_disables_and_removes_the_relay_unit(tmp_path):
     assert ["systemctl", "disable", "--now", "mtproto-zig"] in commands
     assert ["systemctl", "disable", "--now", "mtproto-zig-web"] in commands
     assert not unit.exists(), "the relay unit must not survive a disable"
+
+
+def test_a_rolled_back_web_apply_leaves_no_relay_for_partof_to_pull_up(tmp_path):
+    """R17.4: PartOf= only reuses a unit that is still installed, so the rollback must remove it."""
+    plugin = MtprotoZigPlugin()
+    state = _state()
+    unit = tmp_path / "mtproto-zig-web.service"
+    unit.write_text("unit installed by the failed WEB apply", encoding="utf-8")
+    link = _enable_link(tmp_path, "mtproto-zig-web")
+    started: list[str] = []
+
+    class _Host:
+        """Minimal systemd: ``disable`` needs the unit file, and a main-unit restart
+        drags the relay in only while its own unit is still installed."""
+
+        def run(self, args, **_kwargs):
+            command = list(args)
+            if command[:2] == ["systemctl", "disable"]:
+                if not unit.exists():
+                    return CompletedProcess(args, 1, "", "Unit file does not exist")
+                link.unlink(missing_ok=True)
+            if command[:2] == ["systemctl", "restart"]:
+                started.append(command[-1])
+                if command[-1] == "mtproto-zig" and unit.exists():
+                    started.append("mtproto-zig-web")
+            return CompletedProcess(args, 0, "active\n", "")
+
+    host = _Host()
+    snapshot = {"config": None, "service": None, "running": False, "web": {"unit": None, "running": False}}
+    with (
+        patch("hydra.plugins.mtproto_zig.plugin.HOST", host),
+        patch("hydra.plugins.mtproto_zig.plugin.WEB_SERVICE_FILE", unit),
+        patch("hydra.plugins.mtproto_zig.plugin.runtime.rollback", return_value=True),
+    ):
+        assert plugin.rollback(state, snapshot) is True
+        host.run(["systemctl", "restart", "mtproto-zig"])
+
+    assert not unit.exists(), "a WEB-less relay unit must not survive the rollback"
+    assert not link.exists(), "an enabled relay would be pulled up by PartOf= at every restart"
+    assert started == ["mtproto-zig"], "restarting the proxy must not bring a WEB-less relay up"
 
 
 @pytest.mark.parametrize("stage", ["page", "upgrade"])

@@ -21,7 +21,7 @@ from hydra.utils.commands import bounded_reason
 from .bridge_probe import PROBE_TIMEOUT_SECONDS
 from .constants import WEB_RELAY_PORT, WEB_WS_PATH
 from .installation import report_stage, write_web_service
-from .runtime import READY_INTERVAL_SECONDS, READY_POLLS, service_state
+from .runtime import READY_POLLS, ready_probe, service_state
 
 
 def snapshot(*, service_file: Path, running: bool) -> dict:
@@ -32,14 +32,27 @@ def snapshot(*, service_file: Path, running: bool) -> dict:
     }
 
 
-def rollback(previous: dict | None, *, host: Any, service: str, service_file: Path) -> bool:
-    """Restore the captured relay unit and running state."""
+def rollback(
+    previous: dict | None,
+    *,
+    host: Any,
+    service: str,
+    service_file: Path,
+    on_failure: Callable[[str], None] | None = None,
+) -> bool:
+    """Restore the captured relay unit and running state.
+
+    A rollback to "no relay" is a stop: ``systemctl disable --now`` must run
+    while the unit file still exists, because ``disable`` reads ``[Install]``
+    from it to drop the enable symlink. Removing the file first would leave the
+    symlink behind, turn the failed disable into a false rollback failure, and
+    let ``PartOf=`` pull a WEB-less relay up together with the main service.
+    """
     content = (previous or {}).get("unit")
     if content is None:
-        service_file.unlink(missing_ok=True)
-    else:
-        service_file.parent.mkdir(parents=True, exist_ok=True)
-        service_file.write_bytes(content)
+        return stop(host=host, service=service, service_file=service_file, on_failure=on_failure)
+    service_file.parent.mkdir(parents=True, exist_ok=True)
+    service_file.write_bytes(content)
     host.run(["systemctl", "daemon-reload"], capture_output=True)
     action = "restart" if (previous or {}).get("running") else "disable"
     if action == "disable":
@@ -91,7 +104,7 @@ def apply(
             f"служба {service} не запустилась (state={state or 'unknown'}): смотрите journalctl -u {service}{suffix}",
         )
         return False
-    healthy, reason = probe_local()
+    healthy, reason = ready_probe(probe_local)
     if not healthy:
         report_stage(on_failure, f"WEB-релей не отвечает на 127.0.0.1:{WEB_RELAY_PORT}: {reason}")
         return False

@@ -35,6 +35,24 @@ def service_state(host: Any, service: str, *, polls: int = 1) -> tuple[str, Any]
     return state, result
 
 
+def ready_probe(check: Callable[[], tuple[bool, str]], *, polls: int = READY_POLLS) -> tuple[bool, str]:
+    """Retry one readiness check until it passes or the poll budget is spent.
+
+    ``Type=simple`` reports a unit active before the process has bound its
+    socket, so a single refused connection is a race, not a verdict: only an
+    exhausted budget fails, and the last reason is preserved.
+    """
+    budget = max(1, polls)
+    healthy, reason = False, ""
+    for attempt in range(budget):
+        healthy, reason = check()
+        if healthy:
+            return True, ""
+        if attempt + 1 < budget:
+            time.sleep(READY_INTERVAL_SECONDS)
+    return False, reason
+
+
 def _systemctl(host: Any, action: str, service: str = "") -> Any:
     """Run one systemctl action; a unit name is only passed when it applies."""
     command = ["systemctl", action]
