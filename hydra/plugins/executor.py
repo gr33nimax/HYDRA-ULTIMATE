@@ -1,4 +1,5 @@
 """Configuration, apply and health execution for catalogued plugins."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -11,6 +12,9 @@ from hydra.core.state_models import AppState
 from hydra.plugins.base import BasePlugin
 from hydra.plugins.catalog import PluginCatalog
 from hydra.plugins.invoker import PluginInvoker
+
+
+_NOT_ACTIVE_DETAIL = "service is not active"
 
 
 class PluginConfigurationError(PluginError):
@@ -70,13 +74,12 @@ class PluginExecutor:
                     f"Plugin {plugin.meta.name} apply failed: {exc}",
                 ) from exc
 
+            def rollback_plugin(plugin=plugin, snapshot=snapshot) -> bool:
+                return self.invoker.rollback(plugin, state, snapshot)
+
             transaction.add_rollback(
                 f"plugin {plugin.meta.name}",
-                lambda plugin=plugin, snapshot=snapshot: self.invoker.rollback(
-                    plugin,
-                    state,
-                    snapshot,
-                ),
+                rollback_plugin,
                 priority=-(len(applied) + 1),
             )
             transaction.advance("apply")
@@ -113,9 +116,10 @@ class PluginExecutor:
                 health = self.invoker.health(plugin, state)
                 healthy, detail = health.healthy, health.detail
             except Exception as exc:
-                healthy, detail = False, str(exc) or exc.__class__.__name__
+                reason = str(exc)
+                healthy, detail = False, reason if reason else exc.__class__.__name__
             if not healthy:
-                if detail == "service is not active":
+                if detail == _NOT_ACTIVE_DETAIL:
                     detail = (
                         "service is not active while enabled in configuration; "
                         f"disable {plugin.meta.name} in the TUI protocol menu"

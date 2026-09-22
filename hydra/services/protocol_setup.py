@@ -38,6 +38,28 @@ def _requires_tls_domain(plugin: BasePlugin, state: AppState) -> bool:
     return bool(hook(state))
 
 
+def _additional_certificate_requirements(
+    plugin: BasePlugin,
+    state: AppState,
+) -> tuple[tuple[str, str, str], ...]:
+    """Read one optional plugin-owned extra certificate requirement.
+
+    A transport may serve TLS without owning a certificate for its main domain
+    and still need a real one for a second name, for example a WEB relay host.
+    """
+    hook = getattr(plugin, "certificate_requirements", None)
+    if not callable(hook):
+        return ()
+    declared = hook(state)
+    if not isinstance(declared, (list, tuple)):
+        return ()
+    return tuple(
+        (str(entry[0]), str(entry[1]), str(entry[2]))
+        for entry in declared
+        if isinstance(entry, (list, tuple)) and len(entry) == 3
+    )
+
+
 def normalize_required_domain(value: object) -> str:
     """Normalize a required TLS host or reject adapter input early."""
     normalized = str(value or "").strip().lower().rstrip(".")
@@ -97,6 +119,7 @@ class ProtocolSetupService:
             defaults,
         )
         if not source:
+            self._apply_additional_certificates(plugin, state, protocol)
             return
         domain = state.network.domain if source == "network" else protocol.config.get("domain", "")
         try:
@@ -118,6 +141,22 @@ class ProtocolSetupService:
         for name, protocol in sorted(state.protocols.items()):
             if protocol.enabled and self.get_plugin(name) is not None:
                 self.prepare_enable(state, name)
+
+    def _apply_additional_certificates(
+        self,
+        plugin: BasePlugin,
+        state: AppState,
+        protocol: PluginState,
+    ) -> None:
+        """Obtain every extra certificate the plugin declares, fail-closed."""
+        for domain, cert_key, key_key in _additional_certificate_requirements(
+            plugin,
+            state,
+        ):
+            normalized = normalize_required_domain(domain)
+            cert, key = self.certificates.ensure(normalized, protocol.config)
+            protocol.config[cert_key] = cert
+            protocol.config[key_key] = key
 
 
 __all__ = [

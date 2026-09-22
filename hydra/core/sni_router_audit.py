@@ -1,11 +1,12 @@
 """Read-only consistency auditing for persisted and rendered SNI routes."""
+
 from __future__ import annotations
 
 import json
 from collections.abc import Callable
 from pathlib import Path
 
-from hydra.core.sni_router_planning import CaddyRouteAudit
+from hydra.core.sni_router_planning import CaddyRouteAudit, TLS_TERMINATED_ROUTE_KINDS
 from hydra.core.state_models import AppState
 
 
@@ -29,20 +30,13 @@ def _collect_sni(node: object, actual: set[str]) -> None:
 def _loaded_certificate_pairs(config: object) -> set[tuple[str, str]]:
     if not isinstance(config, dict):
         return set()
-    files = (
-        config.get("apps", {})
-        .get("tls", {})
-        .get("certificates", {})
-        .get("load_files", [])
-    )
+    files = config.get("apps", {}).get("tls", {}).get("certificates", {}).get("load_files", [])
     if not isinstance(files, list):
         return set()
     return {
         (str(item.get("certificate") or ""), str(item.get("key") or ""))
         for item in files
-        if isinstance(item, dict)
-        and item.get("certificate")
-        and item.get("key")
+        if isinstance(item, dict) and item.get("certificate") and item.get("key")
     }
 
 
@@ -57,15 +51,7 @@ def audit_routes(
 ) -> CaddyRouteAudit:
     """Compare persisted routes with the rendered artifact without mutating host state."""
     backends = collect_backends(state)
-    expected = tuple(
-        sorted(
-            {
-                str(item["domain"])
-                for item in backends
-                if item.get("domain")
-            }
-        )
-    )
+    expected = tuple(sorted({str(item["domain"]) for item in backends if item.get("domain")}))
     required = needs_mux(state)
     if not required:
         return CaddyRouteAudit(
@@ -84,12 +70,7 @@ def audit_routes(
     if config_present:
         try:
             config = json.loads(config_path.read_text(encoding="utf-8"))
-            tls_mux = (
-                config.get("apps", {})
-                .get("layer4", {})
-                .get("servers", {})
-                .get("tls_mux", {})
-            )
+            tls_mux = config.get("apps", {}).get("layer4", {}).get("servers", {}).get("tls_mux", {})
             _collect_sni(tls_mux, actual)
             loaded_certificates = _loaded_certificate_pairs(config)
         except (OSError, ValueError, TypeError) as exc:
@@ -103,9 +84,8 @@ def audit_routes(
     certificate_errors: list[str] = []
     for backend in backends:
         if (
-            backend["name"]
-            not in {"anytls", "trusttunnel", "hysteria2"}
-            and backend.get("route_kind") != "http_path_proxy"
+            backend["name"] not in {"anytls", "trusttunnel", "hysteria2"}
+            and backend.get("route_kind") not in TLS_TERMINATED_ROUTE_KINDS
         ):
             continue
         pair_complete = True
@@ -113,22 +93,16 @@ def audit_routes(
             certificate = str(backend.get(key) or "")
             if not certificate:
                 pair_complete = False
-                certificate_errors.append(
-                    f"{backend['domain']}: {key} is not configured"
-                )
+                certificate_errors.append(f"{backend['domain']}: {key} is not configured")
             elif not Path(certificate).is_file():
                 pair_complete = False
-                certificate_errors.append(
-                    f"{backend['domain']}: {key} missing ({certificate})"
-                )
+                certificate_errors.append(f"{backend['domain']}: {key} missing ({certificate})")
         pair = (
             str(backend.get("cert_file") or ""),
             str(backend.get("key_file") or ""),
         )
         if pair_complete and pair not in loaded_certificates:
-            certificate_errors.append(
-                f"{backend['domain']}: certificate pair is not loaded by Caddy"
-            )
+            certificate_errors.append(f"{backend['domain']}: certificate pair is not loaded by Caddy")
 
     try:
         service_active: bool | None = is_active()

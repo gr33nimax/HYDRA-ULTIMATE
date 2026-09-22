@@ -153,6 +153,52 @@ def download_binary(
         _remove_tree(destination)
 
 
+def write_web_service(
+    *,
+    host: Any,
+    service_file: Path,
+    binary: Path,
+    config: Path,
+    work_dir: Path,
+    service: str,
+    proxy_service: str,
+    on_failure: Callable[[str], None] | None = None,
+) -> bool:
+    """Write the WEB relay unit, which runs the same verified binary.
+
+    The relay reads the single Hydra-owned configuration, binds an unprivileged
+    loopback port and writes nothing, so it keeps no capability at all.
+    """
+    service_file.parent.mkdir(parents=True, exist_ok=True)
+    service_file.write_text(
+        "[Unit]\nDescription=Hydra MTProto Zig WEB relay\n"
+        f"After=network-online.target {proxy_service}.service\n"
+        "Wants=network-online.target\n"
+        f"Requires={proxy_service}.service\nPartOf={proxy_service}.service\n\n"
+        "[Service]\nType=simple\n"
+        f"User={SERVICE_USER}\nGroup={SERVICE_USER}\nWorkingDirectory={work_dir}\n"
+        f"ExecStart={binary} web-relay {config}\n"
+        "Restart=on-failure\nRestartSec=2\nLimitNOFILE=65536\n"
+        "NoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\n"
+        "ProtectHome=true\nCapabilityBoundingSet=\nUMask=0077\n\n"
+        "[Install]\nWantedBy=multi-user.target\n",
+        encoding="utf-8",
+    )
+    result = host.run(["systemctl", "daemon-reload"], capture_output=True)
+    if result.returncode == 0:
+        return True
+    reason = bounded_reason(result) or "проверьте systemctl daemon-reload на хосте"
+    report_stage(on_failure, f"systemd не принял юнит WEB-релея mtproto-zig: {reason}")
+    return False
+
+
+def uninstall_web(*, host: Any, service: str, service_file: Path) -> None:
+    """Remove only the Hydra-owned WEB relay unit."""
+    host.run(["systemctl", "disable", "--now", service], capture_output=True)
+    service_file.unlink(missing_ok=True)
+    host.run(["systemctl", "daemon-reload"], capture_output=True)
+
+
 def uninstall(*, host: Any, service: str, service_file: Path, binary: Path, directories: tuple[Path, ...]) -> bool:
     host.run(["systemctl", "disable", "--now", service], capture_output=True)
     service_file.unlink(missing_ok=True)

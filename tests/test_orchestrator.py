@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import patch, MagicMock
 from contextlib import contextmanager
+from types import SimpleNamespace
 import pytest
 
 from hydra.core.state import AppState, NetworkConfig, PluginState, User
@@ -769,3 +770,117 @@ def test_uninstall_preserves_apply_error_across_successful_rollback():
         assert orchestrator.uninstall_plugin(state, "mock") is False
 
     assert orchestrator.last_apply_error() == "removal would break routing"
+
+
+def test_apply_snapshots_the_frontend_before_stopping_it():
+    """A failed transition to direct mode restores the previous mux ownership."""
+    from hydra.services.orchestration import apply_config, last_apply_error
+
+    state = AppState()
+    order: list[str] = []
+    backup = SimpleNamespace(config=b"previous", caddy_unit=b"unit")
+    plugin = MagicMock()
+    plugin.meta.name = "mtproto_zig"
+    plugin.rollback.side_effect = lambda *_args: order.append("plugin") or True
+    fake_socket = MagicMock()
+    fake_socket.__enter__.return_value.connect_ex.return_value = 1
+
+    with (
+        patch("hydra.core.orchestrator.registry.collect_fragments", return_value={}),
+        patch("hydra.core.orchestrator.registry.apply_enabled", return_value=[(plugin, {"old": True})]),
+        patch("hydra.core.orchestrator.registry.health_all", return_value={"mtproto_zig": "route is not active"}),
+        patch("hydra.core.orchestrator.singbox.generate_config", return_value={}),
+        patch("hydra.core.orchestrator.singbox.write_config", return_value=True),
+        patch("hydra.core.orchestrator.singbox.reload", return_value=True),
+        patch("hydra.core.orchestrator.nft.snapshot_tproxy", return_value=MagicMock()),
+        patch("hydra.core.orchestrator.nft.apply_tproxy"),
+        patch("hydra.core.orchestrator.nft.restore_tproxy"),
+        patch("hydra.core.orchestrator.save_state"),
+        patch("hydra.core.sni_router.needs_mux", return_value=False),
+        patch("hydra.core.sni_router.stop", side_effect=lambda: order.append("stop")),
+        patch("hydra.core.sni_router.snapshot_runtime", side_effect=lambda: order.append("snapshot") or backup),
+        patch("hydra.core.sni_router.restore_runtime", side_effect=lambda _backup: order.append("restore")),
+        patch("socket.socket", return_value=fake_socket),
+    ):
+        assert apply_config(state) is False
+
+    assert order == ["snapshot", "stop", "restore", "plugin"]
+    assert last_apply_error() == "Проверка сервисов не пройдена: mtproto_zig: route is not active"
+def test_apply_aborts_and_rolls_back_when_finalization_fails():
+    """A plugin that cannot prove its path must fail the whole apply."""
+    from hydra.services.orchestration import apply_config, last_apply_error
+
+    state = AppState()
+    order: list[str] = []
+    backup = SimpleNamespace(config=b"previous", caddy_unit=b"unit")
+    plugin = MagicMock()
+    plugin.meta.name = "mtproto_zig"
+    plugin.finalize_apply.return_value = False
+    plugin.apply_failure.return_value = "WEB-мост не подтверждён: нет WELCOME"
+    plugin.rollback.side_effect = lambda *_args: order.append("plugin") or True
+    fake_socket = MagicMock()
+    fake_socket.__enter__.return_value.connect_ex.return_value = 1
+
+    with (
+        patch("hydra.core.orchestrator.registry.collect_fragments", return_value={}),
+        patch("hydra.core.orchestrator.registry.apply_enabled", return_value=[(plugin, {"old": True})]),
+        patch("hydra.core.orchestrator.registry.health_all", return_value={}),
+        patch("hydra.core.orchestrator.singbox.generate_config", return_value={}),
+        patch("hydra.core.orchestrator.singbox.write_config", return_value=True),
+        patch("hydra.core.orchestrator.singbox.reload", return_value=True),
+        patch("hydra.core.orchestrator.nft.snapshot_tproxy", return_value=MagicMock()),
+        patch("hydra.core.orchestrator.nft.apply_tproxy"),
+        patch("hydra.core.orchestrator.nft.restore_tproxy"),
+        patch("hydra.core.orchestrator.save_state"),
+        patch("hydra.core.sni_router.needs_mux", return_value=True),
+        patch("hydra.core.sni_router.rebuild", return_value=True),
+        patch("hydra.core.sni_router.snapshot_runtime", return_value=backup),
+        patch("hydra.core.sni_router.restore_runtime", side_effect=lambda _backup: order.append("caddy")),
+        patch("socket.socket", return_value=fake_socket),
+    ):
+        assert apply_config(state) is False
+
+    plugin.finalize_apply.assert_called_once()
+    assert order == ["caddy", "plugin"]
+    assert last_apply_error() == "WEB-мост не подтверждён: нет WELCOME"
+def test_apply_restores_caddy_runtime_before_plugin_rollback():
+    """A failure after the frontend was activated must free TCP/443 first.
+
+    The plugin rollback restarts a backend that may need the public port, so the
+    frontend has to return to its captured state before that restart happens —
+    and the original failure must survive the rollback.
+    """
+    from hydra.services.orchestration import apply_config, last_apply_error
+
+    state = AppState()
+    order: list[str] = []
+    backup = MagicMock()
+    plugin = MagicMock()
+    plugin.meta.name = "mtproto_zig"
+    plugin.rollback.side_effect = lambda *_args: order.append("plugin") or True
+    fake_socket = MagicMock()
+    fake_socket.__enter__.return_value.connect_ex.return_value = 1
+
+    with (
+        patch("hydra.core.orchestrator.registry.collect_fragments", return_value={}),
+        patch("hydra.core.orchestrator.registry.apply_enabled", return_value=[(plugin, {"old": True})]),
+        patch("hydra.core.orchestrator.registry.health_all", return_value={"mtproto_zig": "WEB bridge is down"}),
+        patch("hydra.core.orchestrator.singbox.generate_config", return_value={}),
+        patch("hydra.core.orchestrator.singbox.write_config", return_value=True),
+        patch("hydra.core.orchestrator.singbox.reload", return_value=True),
+        patch("hydra.core.orchestrator.nft.snapshot_tproxy", return_value=MagicMock()),
+        patch("hydra.core.orchestrator.nft.apply_tproxy"),
+        patch("hydra.core.orchestrator.nft.restore_tproxy"),
+        patch("hydra.core.orchestrator.save_state"),
+        patch("hydra.core.sni_router.needs_mux", return_value=True),
+        patch("hydra.core.sni_router.rebuild", return_value=True),
+        patch("hydra.core.sni_router.snapshot_runtime", return_value=backup) as snapshot,
+        patch("hydra.core.sni_router.restore_runtime", side_effect=lambda _backup: order.append("caddy")),
+        patch("socket.socket", return_value=fake_socket),
+    ):
+        assert apply_config(state) is False
+
+    snapshot.assert_called_once_with()
+    assert order == ["caddy", "plugin"]
+    plugin.rollback.assert_called_once_with(state, {"old": True})
+    assert last_apply_error() == "Проверка сервисов не пройдена: mtproto_zig: WEB bridge is down"

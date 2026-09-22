@@ -14,6 +14,10 @@ _DYNAMIC_ROUTE_KEY = "_tls_http_decoy_route"
 _DYNAMIC_ROUTE_KIND = "http_path_proxy"
 _PASSTHROUGH_ROUTE_KEY = "_tls_passthrough_route"
 _PASSTHROUGH_ROUTE_KIND = "tls_passthrough"
+_TERMINATED_ROUTE_KEY = "_tls_terminated_route"
+_TERMINATED_ROUTE_KIND = "http_reverse_proxy"
+# Route kinds that terminate TLS in the multiplexer and load a certificate pair.
+TLS_TERMINATED_ROUTE_KINDS = (_DYNAMIC_ROUTE_KIND, _TERMINATED_ROUTE_KIND)
 
 
 @dataclass(frozen=True)
@@ -83,19 +87,24 @@ def needs_mux(state: AppState, internal_ports: Mapping[str, int]) -> bool:
         if domain:
             count += 1
 
-    # Plugin-owned TLS passthrough endpoints (Reality, mtproto.zig) are not in
-    # the historical fixed-port map, but still claim TCP/443 when combined
-    # with another SNI backend.
+    # Plugin-owned TLS endpoints are not in the historical fixed-port map: a
+    # passthrough one claims TCP/443 when combined with another SNI backend, and
+    # a TLS-terminating one is served by the frontend or not at all.
     for name, proto in state.protocols.items():
-        route = proto.config.get(_PASSTHROUGH_ROUTE_KEY)
-        if (
-            name not in internal_ports
-            and proto.enabled
-            and isinstance(route, Mapping)
-            and route.get("kind") == _PASSTHROUGH_ROUTE_KIND
-            and isinstance(route.get("sni_config"), str)
-            and proto.config.get(str(route["sni_config"]))
+        if name in internal_ports or not proto.enabled:
+            continue
+        for key, kind, frontend_only in (
+            (_PASSTHROUGH_ROUTE_KEY, _PASSTHROUGH_ROUTE_KIND, False),
+            (_TERMINATED_ROUTE_KEY, _TERMINATED_ROUTE_KIND, True),
         ):
+            route = proto.config.get(key)
+            if not isinstance(route, Mapping) or route.get("kind") != kind:
+                continue
+            sni_key = route.get("sni_config")
+            if not isinstance(sni_key, str) or not proto.config.get(sni_key):
+                continue
+            if frontend_only:
+                return True
             count += 1
 
     sub_domain = getattr(state.network, "sub_domain", "")
@@ -209,17 +218,23 @@ def collect_backends(
                 (_port_of(backend["port"]), _port_of(backend["decoy_port"])),
             )
             continue
-        passthrough = proto.config.get(_PASSTHROUGH_ROUTE_KEY)
-        if passthrough is None:
-            continue
-        backend = _passthrough_backend(
-            name,
-            proto.config,
-            passthrough,
-            occupied_ports,
-        )
-        backends.append(backend)
-        occupied_ports.add(_port_of(backend["port"]))
+        for key, kind, backend_name in (
+            (_PASSTHROUGH_ROUTE_KEY, _PASSTHROUGH_ROUTE_KIND, name),
+            (_TERMINATED_ROUTE_KEY, _TERMINATED_ROUTE_KIND, f"{name}:web"),
+        ):
+            route = proto.config.get(key)
+            if route is None:
+                continue
+            backend = _plugin_route_backend(
+                name,
+                proto.config,
+                route,
+                occupied_ports,
+                kind=kind,
+                backend_name=backend_name,
+            )
+            backends.append(backend)
+            occupied_ports.add(_port_of(backend["port"]))
 
     sub_domain = getattr(state.network, "sub_domain", "")
     if sub_domain:
@@ -273,15 +288,22 @@ def _route_port(
     return port
 
 
-def _passthrough_backend(
+def _plugin_route_backend(
     name: str,
     config: Mapping[str, Any],
     route: object,
     occupied_ports: set[int],
+    *,
+    kind: str,
+    backend_name: str,
 ) -> dict[str, Any]:
-    """Project a plugin-owned TLS passthrough route, e.g. Reality."""
-    if not isinstance(route, Mapping) or route.get("kind") != _PASSTHROUGH_ROUTE_KIND:
-        raise _route_error(name, f"kind must be {_PASSTHROUGH_ROUTE_KIND}")
+    """Project one plugin-owned TLS route declared in plugin configuration.
+
+    ``tls_passthrough`` keeps TLS in the plugin; ``http_reverse_proxy`` lets the
+    multiplexer terminate it and forward the plaintext stream to the plugin.
+    """
+    if not isinstance(route, Mapping) or route.get("kind") != kind:
+        raise _route_error(name, f"kind must be {kind}")
     internal_port = _route_port(
         name,
         route.get("internal_port"),
@@ -294,15 +316,23 @@ def _passthrough_backend(
     sni = str(config.get(sni_key, "")).strip().lower().rstrip(".")
     if not sni or "://" in sni or "." not in sni or any(character.isspace() for character in sni):
         raise _route_error(name, f"{sni_key} is not a valid SNI")
-    return {
-        "name": name,
+    backend = {
+        "name": backend_name,
         "domain": sni,
         "port": internal_port,
         "cert_file": "",
         "key_file": "",
         "network_mode": "",
-        "route_kind": _PASSTHROUGH_ROUTE_KIND,
+        "route_kind": kind,
     }
+    for field, config_key in (("cert_file", "cert_config"), ("key_file", "key_config")):
+        key = route.get(config_key)
+        if key is None:
+            continue
+        if not isinstance(key, str) or not key:
+            raise _route_error(name, f"{config_key} must name a config field")
+        backend[field] = config.get(key, "")
+    return backend
 
 
 def _dynamic_backend(

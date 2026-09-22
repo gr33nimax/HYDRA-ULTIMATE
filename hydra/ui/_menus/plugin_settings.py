@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from hydra.core.state_models import AppState, PluginState
 from hydra.plugins.base import BasePlugin
 from hydra.services.application import ApplicationService
+from hydra.ui._menus.mtproto_zig_settings import open_menu as _menu_mtproto_zig, option as _mtproto_zig_option
 from hydra.ui._menus.naive_uot_setting import (
     UOT_OPTION,
     change_uot,
@@ -17,6 +18,7 @@ from hydra.ui._menus.vless_xhttp_settings import (
     open_menu as _menu_vless_xhttp,
     option as _vless_xhttp_option,
 )
+from hydra.ui._menus.settings_support import FAILURE_TEXT, desired_state
 from hydra.ui.tui import error, menu, prompt, success
 from hydra.utils.crypto import gen_token
 
@@ -33,16 +35,14 @@ class SettingsAdapter:
 
 
 def _desired_state(state: AppState, name: str) -> PluginState:
-    return state.protocols.get(name) or PluginState()
+    return desired_state(state, name)
 
 
 def _report_change(changed: bool, success_text: str) -> None:
     if changed:
         success(success_text)
-    else:
-        error(
-            "Не удалось применить настройки; предыдущая конфигурация восстановлена",
-        )
+        return
+    error(FAILURE_TEXT)
 
 
 def _parse_int(value: object, label: str) -> int:
@@ -449,6 +449,7 @@ def _change_snell_transport(
 
 SETTINGS_ADAPTERS: dict[str, SettingsAdapter] = {
     "naive": SettingsAdapter(_naive_option, _menu_naive),
+    "mtproto_zig": SettingsAdapter(_mtproto_zig_option, _menu_mtproto_zig),
     "shadowtls": SettingsAdapter(
         _shadowtls_option,
         _menu_shadowtls,

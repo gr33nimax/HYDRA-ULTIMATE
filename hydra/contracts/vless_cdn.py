@@ -10,9 +10,8 @@
 
 from __future__ import annotations
 
-import re
-
 from hydra.contracts import JsonValue
+from hydra.contracts.hostnames import normalize_hostname as _shared_normalize_hostname
 
 PROTOCOL_NAME = "vless_cdn"
 
@@ -22,8 +21,6 @@ CLIENT_LABEL = "VLESS Яндекс CDN"
 DEFAULT_XHTTP_PATH = "/api/media/session"
 MIN_PATH_SEGMENTS = 3
 RESERVED_PATH_PREFIX = "/assets"
-
-_LABEL = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$")
 
 # Ключ и порт маршрута в SNI-документе. Ключ обязан совпадать с тем, который читает
 # планировщик; он продублирован здесь, потому что слой контрактов не может импортировать
@@ -193,18 +190,5 @@ def client_encryption_value(
 
 
 def normalize_hostname(value: object, *, field: str) -> str:
-    """Return a lowercase hostname suitable for SNI and for an ACME HTTP-01 challenge."""
-    host = str(value or "").strip().rstrip(".")
-    if not host:
-        raise ValueError(f"{field} не задан")
-    if "://" in host or "/" in host or any(character.isspace() for character in host):
-        raise ValueError(f"{field} должен быть именем хоста без схемы и пути")
-    if len(host) > 253:
-        raise ValueError(f"{field} слишком длинный")
-
-    labels = host.split(".")
-    if len(labels) < 2 or any(not _LABEL.match(label) for label in labels):
-        raise ValueError(
-            f"{field} должен быть доменным именем, например origin.example.com",
-        )
-    return host.lower()
+    """Compatibility re-export of the shared hostname validation contract."""
+    return _shared_normalize_hostname(value, field=field)

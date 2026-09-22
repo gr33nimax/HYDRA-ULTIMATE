@@ -1,4 +1,5 @@
 """Stable runtime facade for the Caddy L4 SNI router."""
+
 from __future__ import annotations
 
 import json
@@ -11,6 +12,7 @@ from typing import Any
 
 from hydra.core import sni_router_reconcile as _reconcile
 from hydra.core.sni_router_runtime_models import (
+    RuntimeBackup,
     RuntimeOperations,
     RuntimeSettings,
 )
@@ -97,8 +99,7 @@ def probe_tls_route(
     if negotiated != "h2":
         return (
             False,
-            "TLS route negotiated ALPN "
-            f"{negotiated or 'none'} instead of h2",
+            f"TLS route negotiated ALPN {negotiated or 'none'} instead of h2",
         )
     return True, ""
 
@@ -111,6 +112,24 @@ def rebuild(
 ) -> bool:
     """Render, validate, and transactionally apply the desired SNI runtime."""
     return _reconcile.rebuild(state, settings, host, operations)
+
+
+def snapshot_runtime(
+    settings: RuntimeSettings,
+    operations: RuntimeOperations,
+) -> RuntimeBackup:
+    """Capture the Caddy runtime before an outer apply transaction mutates it."""
+    return _reconcile.snapshot_runtime(settings, operations)
+
+
+def restore_runtime(
+    backup: RuntimeBackup,
+    settings: RuntimeSettings,
+    host: Any,
+    operations: RuntimeOperations,
+) -> None:
+    """Restore a runtime captured by :func:`snapshot_runtime`."""
+    _reconcile.restore_runtime(settings, host, operations, backup)
 
 
 def stop(
@@ -237,6 +256,7 @@ def uninstall_haproxy(host: Any) -> None:
 
 
 __all__ = [
+    "RuntimeBackup",
     "RuntimeOperations",
     "RuntimeSettings",
     "config_had_quic_proxy",
@@ -244,6 +264,8 @@ __all__ = [
     "is_active",
     "probe_tls_route",
     "rebuild",
+    "restore_runtime",
+    "snapshot_runtime",
     "stop",
     "uninstall_haproxy",
 ]

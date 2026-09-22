@@ -1,8 +1,9 @@
 """Single invocation boundary for the versioned plugin contract."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from hydra.contracts import ConfigFragment
 from hydra.plugins.base import (
@@ -57,6 +58,16 @@ class PluginInvoker:
         callback = getattr(plugin, "rollback", None)
         return bool(callback(state, snapshot)) if callable(callback) else True
 
+    def finalize(self, plugin: BasePlugin, state: PluginStateAccess) -> bool:
+        """Run an optional post-frontend finalization hook.
+
+        The hook runs after the shared frontend has been rebuilt, so a plugin can
+        prove its own end-to-end path before committing a narrower access mode.
+        """
+        self._validate_version(plugin)
+        callback = getattr(plugin, "finalize_apply", None)
+        return bool(callback(state)) if callable(callback) else True
+
     def health(
         self,
         plugin: BasePlugin,
@@ -65,7 +76,7 @@ class PluginInvoker:
         self._validate_version(plugin)
         health_result = getattr(plugin, "health_result", None)
         if callable(health_result):
-            return health_result(state)
+            return cast(HealthResult, health_result(state))
         result = plugin.healthcheck()
         if isinstance(result, tuple):
             healthy, detail = result

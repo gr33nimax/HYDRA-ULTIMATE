@@ -405,6 +405,24 @@ def rebuild(state: AppState) -> bool:
     )
 
 
+def snapshot_runtime():
+    """Capture the Caddy runtime before an outer apply transaction mutates it."""
+    return _runtime.snapshot_runtime(
+        _runtime_settings(),
+        _runtime_operations(),
+    )
+
+
+def restore_runtime(backup) -> None:
+    """Restore a runtime captured by :func:`snapshot_runtime`."""
+    _runtime.restore_runtime(
+        backup,
+        _runtime_settings(),
+        HOST,
+        _runtime_operations(),
+    )
+
+
 def stop() -> None:
     _runtime.stop(
         _runtime_settings(),
@@ -440,6 +458,8 @@ __all__ = [
     "needs_mux",
     "probe_tls_route",
     "rebuild",
+    "restore_runtime",
+    "snapshot_runtime",
     "stop",
     "uninstall_haproxy",
 ]

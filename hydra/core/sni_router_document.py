@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from hydra.core.sni_router_http import http_servers
+from hydra.core.sni_router_planning import TLS_TERMINATED_ROUTE_KINDS
 from hydra.core.state_models import AppState
 
 
@@ -108,7 +109,7 @@ def _tls_app(backends: list[Backend]) -> dict[str, Any]:
         if (
             (
                 backend["name"] in ("anytls", "trusttunnel", "hysteria2")
-                or backend.get("route_kind") == "http_path_proxy"
+                or backend.get("route_kind") in TLS_TERMINATED_ROUTE_KINDS
             )
             and backend["cert_file"]
             and backend["key_file"]
@@ -129,6 +130,11 @@ def _tls_handler(backend: Backend) -> dict[str, Any]:
         # расшифрованный поток дальше; внутренний сервер принимает h2c, потому что
         # h2c есть в его protocols, — иначе половина хопа говорила бы на другом языке.
         handler["connection_policies"] = [{"alpn": ["h2", "http/1.1"]}]
+    elif backend.get("route_kind") == "http_reverse_proxy":
+        # WEB-релей — обычный HTTP/1.1-сервер за завершением TLS (WebSocket
+        # upgrade), поэтому здесь согласуется только http/1.1: расшифрованный
+        # поток уходит в релей как есть, без h2-фреймов.
+        handler["connection_policies"] = [{"alpn": ["http/1.1"]}]
     return handler
 
 
@@ -158,7 +164,14 @@ def _tls_route(
             ],
         }
 
-    if backend.get("route_kind") == "http_path_proxy":
+    if backend.get("route_kind") == "http_reverse_proxy":
+        # The WEB bridge needs the whole origin: TLS is terminated here and the
+        # decrypted HTTP/WebSocket stream is forwarded unchanged to the relay.
+        handlers = [
+            _tls_handler(backend),
+            proxy_factory(f"127.0.0.1:{port}"),
+        ]
+    elif backend.get("route_kind") == "http_path_proxy":
         handlers = [
             _tls_handler(backend),
             proxy_factory(

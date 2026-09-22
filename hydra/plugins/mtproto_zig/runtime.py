@@ -22,7 +22,7 @@ READY_POLLS = 12
 READY_INTERVAL_SECONDS = 0.5
 
 
-def _service_state(host: Any, service: str, *, polls: int = 1) -> tuple[str, Any]:
+def service_state(host: Any, service: str, *, polls: int = 1) -> tuple[str, Any]:
     """Read the unit state, polling while it is still starting."""
     result = _systemctl(host, "is-active", service)
     state = (result.stdout or "").strip()
@@ -90,7 +90,7 @@ def apply(
             suffix = f": {reason}" if reason else ""
             report_stage(on_failure, f"systemctl {action} не выполнился для {service}{suffix}")
             return False
-    state, result = _service_state(host, service, polls=READY_POLLS)
+    state, result = service_state(host, service, polls=READY_POLLS)
     if state != "active":
         reason = bounded_reason(result)
         suffix = f" ({reason})" if reason else ""
@@ -102,7 +102,7 @@ def apply(
     # Confirm the process stays up: a unit that dies right after the fork must
     # not be reported as a successful start.
     time.sleep(READY_INTERVAL_SECONDS)
-    settled, settled_result = _service_state(host, service)
+    settled, settled_result = service_state(host, service)
     if settled != "active":
         reason = bounded_reason(settled_result)
         suffix = f" ({reason})" if reason else ""

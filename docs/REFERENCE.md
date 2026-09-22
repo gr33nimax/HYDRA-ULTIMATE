@@ -38,7 +38,7 @@
 | `shadowtls` | ShadowTLS | ShadowTLS v3 с Trojan detour |
 | `snell` | Snell 5/6 | TCP/UDP-прокси Hydracore: поколение 5 с `obfs_mode` `none`/`http`/`tls` или поколение 6 с `mode` `default`/`unshaped`/`unsafe-raw` |
 | `telemt` | MTProto / Telemt | Telegram MTProxy с управлением пользователями |
-| `mtproto_zig` | MTProto Zig | FakeTLS MTProxy: напрямую на TCP/443 или за Caddy L4 по SNI |
+| `mtproto_zig` | MTProto Zig | FakeTLS MTProxy: напрямую на TCP/443, за Caddy L4 по SNI или WEB-мост для Telegram Desktop 7.1+ |
 | `calls` | Hydra VK Tunnel | Native `call`: только Hydracore VK-parasite; профиль подписки «Обход БС» |
 | `wdtt` | qWDTT | WireGuard-туннелирование поверх TURN |
 
@@ -241,6 +241,44 @@ Telegram выдаются в общем экране ручных конфигу
 Upstream `bootstrap.sh` и `mtbuddy` не запускаются: они владеют другой раскладкой, юнитом,
 конфигурацией и дополнительными изменениями хоста.
 
+У транспорта `mtproto_zig` есть три режима доступа, которые переключаются строкой
+`🌐 Режим WEB` в его настройках:
+
+| Режим | Что выдаётся клиенту | Прямой вход |
+| :--- | :--- | :--- |
+| `off` (по умолчанию) | только обычная `tg://proxy`-ссылка FakeTLS | работает |
+| `hybrid` | FakeTLS-ссылка и `tg://webproxy` | работает |
+| `web-only` | только `tg://webproxy` | закрыт: маршрут FakeTLS снят с фронтенда, прежние `tg://proxy`-ссылки не подключаются |
+
+WEB-ссылка (`tg://webproxy?server=<домен>&secret=dd<32-hex>`) требует **отдельный домен оператора**
+с A-записью на этот сервер и публичный TLS-сертификат: Telegram Desktop отклоняет IP и однословные
+имена, а прикрываемый FakeTLS-домен (например `max.ru`) остаётся чужим именем и сертификата не
+требует. Управляемый фронтенд `caddy-l4` остаётся единственным владельцем TCP/443: он завершает
+TLS для WEB-домена и передаёт расшифрованный HTTP/WebSocket-поток на loopback-релей
+`mtproto-zig-web.service` (`127.0.0.1:8081`), запущенный тем же проверенным бинарником
+(`mtproto-zig web-relay`). Собственных `nginx`, `/opt/mtproto-proxy`, юнитов и firewall-правил
+Hydra не создаёт.
+
+Переход в `web-only` выполняется staged: сначала поднимается релей с `only = false` и проверяется его
+loopback-ответ, а фронтенд рендерится без маршрута FakeTLS (поэтому прежние прямые ссылки перестают
+подключаться уже на этой стадии), затем выполняется настоящая проверка моста через локальный `:443` с
+SNI WEB-домена: страница моста запрашивается с capability, выведенной из секрета реального
+пользователя, из её метаданных берётся кратковременный токен моста, выполняется авторизованный
+WebSocket-апгрейд на том же origin — принимается только `101` с совпадающими
+`Sec-WebSocket-Accept`/`Sec-WebSocket-Protocol` — после чего проба **обязана первой отправить
+обязательный masked binary HELLO** (тип кадра `0x10`, поток 0, payload `0x01`) и только затем
+прочитать первый кадр WELCOME (`0x11`, поток 0, пустой payload); релей, который не поприветствовали,
+не отвечает и не подтверждает сессию (`bridge_probe.py`). Только после этого конфигурация
+переключается на `only = true` и Zig перезапускается; повторная проверка после этого переключения
+ограничена состоянием двух юнитов (main и релей) — аудит маршрута и мостовая проба не повторяются,
+их результат подтверждён до коммита. Если мост не подтверждён (в том числе когда нет ни одного активного пользователя и
+capability построить нельзя), снапшот возвращает прежний режим, маршрут и ранее выданные ссылки, а
+ошибка остаётся видимой.
+Смена WEB-домена делает нерабочими все выданные
+WEB-ссылки и требует явного подтверждения. Ограничение v1: фронтенд передаёт в релей один
+расшифрованный поток без заголовка клиентского адреса, поэтому per-IP лимиты Zig к WEB-клиентам не
+применяются.
+
 ### `enhancement` — сетевые расширения
 
 | Ключ | Модуль | Назначение |
@@ -312,6 +350,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `caddy-naive.service` | Caddy forward-proxy для NaiveProxy |
 | `telemt.service` | Демон MTProto-прокси |
 | `mtproto-zig.service` | FakeTLS MTProxy, запускаемый непривилегированным `mtproto-zig` с `CAP_NET_BIND_SERVICE` |
+| `mtproto-zig-web.service` | WEB-релей mtproto.zig: `mtproto-zig web-relay`, loopback `127.0.0.1:8081`, без capabilities |
 | `wdtt.service` | Демон qWDTT |
 | `hydra-headless-creator-vk-calls@.service` | Отдельные поколения 1–4 VK-комнат Hydracore Calls |
 | `fail2ban.service` | SSH и auth jails |
@@ -350,7 +389,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/etc/iptables/rules.v4` | Сохранённые правила iptables (DROP-правила банов AntiScan) |
 | `/etc/dnscrypt-proxy/dnscrypt-proxy.toml` | Конфигурация DNSCrypt |
 | `/etc/telemt/telemt.toml` | Конфигурация MTProto-прокси |
-| `/etc/hydra-mtproto-zig/config.toml` | Конфигурация mtproto.zig; при SNI-mux слушает только `127.0.0.1:20449` |
+| `/etc/hydra-mtproto-zig/config.toml` | Конфигурация mtproto.zig; при SNI-mux слушает только `127.0.0.1:20449`, а `[web]` описывает WEB-релей |
 | `/var/lib/hydra/mtproto-zig/traffic-totals.json` | Накопленные per-user байты метрик mtproto.zig |
 | `/etc/hydra/cookiesvk/` | Единый закрытый каталог провайдера VK; права `0700` |
 | `/etc/hydra/cookiesvk/cookies-vk.json` | VK Creator JSON только для native Calls; импортируется через Calls TUI, файл `0600`, не входит в state |
