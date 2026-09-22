@@ -10,6 +10,11 @@
 
 from __future__ import annotations
 
+import ipaddress
+import socket
+import urllib.parse
+from collections.abc import Callable
+
 from hydra.contracts import JsonValue
 from hydra.contracts.hostnames import normalize_hostname as _shared_normalize_hostname
 
@@ -21,6 +26,30 @@ CLIENT_LABEL = "VLESS Яндекс CDN"
 DEFAULT_XHTTP_PATH = "/api/media/session"
 MIN_PATH_SEGMENTS = 3
 RESERVED_PATH_PREFIX = "/assets"
+
+# Семейство медиа-путей. Под ним живёт и клиент сайта-заглушки (плейлист и сегменты),
+# и боевой путь VLESS: так боевой путь — одна из многих медиа-сессий, а не одинокая
+# полоса трафика на мёртвом префиксе. См. .kiro/specs/vless-cdn-decoy.
+MEDIA_PATH_PREFIX = "/api/media"
+MEDIA_PLAYLIST_PATH = f"{MEDIA_PATH_PREFIX}/playlist.m3u8"
+MEDIA_SEGMENT_PATH_PREFIX = f"{MEDIA_PATH_PREFIX}/seg/"
+
+# Проводные метки, которые шлёт и плеер заглушки, и сам транспорт VLESS. Значения — те же,
+# что в hydra/plugins/vless_cdn/profile.py, и держатся здесь, чтобы клиент, сайт и туннель
+# не разъехались (R4).
+MEDIA_SESSION_HEADER = "X-Upload-Token"
+MEDIA_SEQ_PARAM = "chunk_id"
+MEDIA_PADDING_HEADER = "X-Client-Version"
+
+# Формы источника камеры, которые принимает ретранслятор, по схеме/хосту URL.
+MEDIA_SOURCE_HLS = "hls"
+MEDIA_SOURCE_RTSP = "rtsp"
+MEDIA_SOURCE_MJPEG = "mjpeg"
+MEDIA_SOURCE_YOUTUBE = "youtube"
+MEDIA_SOURCE_SCHEMES = ("http", "https", "rtsp")
+YOUTUBE_HOSTS = frozenset(
+    {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"},
+)
 
 # Ключ и порт маршрута в SNI-документе. Ключ обязан совпадать с тем, который читает
 # планировщик; он продублирован здесь, потому что слой контрактов не может импортировать
@@ -105,6 +134,13 @@ def normalize_path(value: object) -> str:
     normalized = path.rstrip("/") or "/"
     if normalized == RESERVED_PATH_PREFIX or normalized.startswith(f"{RESERVED_PATH_PREFIX}/"):
         raise ValueError(f"XHTTP путь не может занимать зарезервированный {RESERVED_PATH_PREFIX}")
+    # Боевой путь обязан лежать внутри медиа-семейства: иначе он выбивается из
+    # органического медиа-трафика сайта и становится лёгкой зацепкой.
+    if not normalized.startswith(f"{MEDIA_PATH_PREFIX}/"):
+        raise ValueError(
+            f"XHTTP путь должен лежать внутри {MEDIA_PATH_PREFIX}/, "
+            "чтобы не отличаться от медиа-трафика сайта-заглушки",
+        )
 
     segments = [segment for segment in normalized.split("/") if segment]
     if len(segments) < MIN_PATH_SEGMENTS:
@@ -192,3 +228,77 @@ def client_encryption_value(
 def normalize_hostname(value: object, *, field: str) -> str:
     """Compatibility re-export of the shared hostname validation contract."""
     return _shared_normalize_hostname(value, field=field)
+
+
+def classify_media_source(value: object) -> str:
+    """Форма источника камеры по URL: `hls`, `rtsp`, `mjpeg` или `youtube`.
+
+    Форма однозначна и выводится из схемы/хоста, чтобы ретранслятор, сайт и контракт не
+    решали это каждый по-своему. Нераспознанный или запрещённый URL — ошибка, а не
+    догадка: пусть вызывающий сам решает, уходить ли на синтетику.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("URL источника пуст")
+    parts = urllib.parse.urlsplit(raw)
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").lower()
+    if scheme not in MEDIA_SOURCE_SCHEMES:
+        raise ValueError(f"схема источника не поддерживается: {scheme or '(нет)'}")
+    if not host:
+        raise ValueError("URL источника без хоста")
+    if host in YOUTUBE_HOSTS:
+        # YouTube отдаёт только страницу-смотрильню; поток достаёт yt-dlp отдельно.
+        return MEDIA_SOURCE_YOUTUBE
+    if scheme == "rtsp":
+        return MEDIA_SOURCE_RTSP
+    if parts.path.lower().endswith(".m3u8"):
+        return MEDIA_SOURCE_HLS
+    # Остальной http(s) — обычный MJPEG/HTTP-поток вебкамеры.
+    return MEDIA_SOURCE_MJPEG
+
+
+def resolve_host(host: str) -> list[str]:
+    """Все адреса, в которые разрешается имя; пусто, если не разрешается."""
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except OSError:
+        return []
+    return sorted({str(info[4][0]) for info in infos})
+
+
+def assert_public_media_source(
+    value: object,
+    *,
+    resolve: Callable[[str], list[str]] = resolve_host,
+) -> str:
+    """Отклонить URL источника, указывающий внутрь хоста или в приватную сеть (SSRF).
+
+    URL — операторский аргумент, поэтому проверяется до любого соединения: схема и форма
+    допустимы, а хост либо литеральный адрес, либо имя, каждый адрес которого публичный.
+    Разрешение имени только расширяемо: тесты подменяют `resolve`, не ходя в DNS.
+    """
+    raw = str(value or "").strip()
+    kind = classify_media_source(raw)
+    if kind == MEDIA_SOURCE_YOUTUBE:
+        # Известные публичные хосты: резолвить их здесь незачем и вредно.
+        return raw
+    host = urllib.parse.urlsplit(raw).hostname or ""
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        addresses = resolve(host)
+        if not addresses:
+            raise ValueError("URL источника не разрешается в адрес") from None
+    else:
+        addresses = [str(literal)]
+    for address in addresses:
+        try:
+            parsed = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise ValueError("URL источника разрешается не в адрес") from exc
+        if not parsed.is_global:
+            raise ValueError(
+                "URL источника указывает во внутреннюю или служебную сеть",
+            )
+    return raw

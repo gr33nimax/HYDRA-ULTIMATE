@@ -13,22 +13,30 @@ from __future__ import annotations
 
 from typing import Any
 
+# Имена проводных меток — из слоя контрактов: тот же почерк шлёт и клиент сайта-заглушки,
+# поэтому значения держатся в одном месте (hydra/contracts/vless_cdn.py), а не дублируются.
+from hydra.contracts.vless_cdn import (
+    MEDIA_PADDING_HEADER,
+    MEDIA_SEQ_PARAM,
+    MEDIA_SESSION_HEADER,
+)
+
 MODE = "packet-up"
 UPLINK_METHOD = "GET"
 
 X_PADDING_BYTES = "100-1000"
 X_PADDING_KEY = "hash"
-X_PADDING_HEADER = "X-Client-Version"
+X_PADDING_HEADER = MEDIA_PADDING_HEADER
 X_PADDING_PLACEMENT = "queryInHeader"
 X_PADDING_METHOD = "tokenish"
 
 SESSION_PLACEMENT = "header"
-SESSION_KEY = "X-Upload-Token"
+SESSION_KEY = MEDIA_SESSION_HEADER
 SESSION_ID_TABLE = "Base62"
 SESSION_ID_LENGTH = "16-32"
 
 SEQ_PLACEMENT = "query"
-SEQ_KEY = "chunk_id"
+SEQ_KEY = MEDIA_SEQ_PARAM
 
 UPLINK_DATA_PLACEMENT = "body"
 
