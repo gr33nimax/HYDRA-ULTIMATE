@@ -329,7 +329,9 @@ class MtprotoZigPlugin(DecoyThemeSupport, BasePlugin):
                 port=INTERNAL_PORT,
                 info=info,
             )
-        web_state = web_runtime.service_state(HOST, WEB_SERVICE_NAME)
+        # ``service_state`` returns ``(state, result)``; a tuple never equals
+        # "active", so the status must read the state string out of it.
+        web_state, _web_result = web_runtime.service_state(HOST, WEB_SERVICE_NAME)
         info.update(
             {
                 "web_domain": configuration.web_domain(config),

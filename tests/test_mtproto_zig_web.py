@@ -842,7 +842,7 @@ def test_status_requires_the_relay_unit_in_web_mode():
     with (
         patch.object(MtprotoZigPlugin, "_installed", return_value=True),
         patch("hydra.plugins.mtproto_zig.plugin.HOST.run") as run,
-        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.service_state", return_value="failed"),
+        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.service_state", return_value=("failed", None)),
     ):
         run.return_value = CompletedProcess(["systemctl"], 0, "active\n", "")
         status = plugin.status(state)
@@ -862,7 +862,7 @@ def test_web_only_status_names_the_exclusive_link_mode():
     with (
         patch.object(MtprotoZigPlugin, "_installed", return_value=True),
         patch("hydra.plugins.mtproto_zig.plugin.HOST.run") as run,
-        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.service_state", return_value="active"),
+        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.service_state", return_value=("active", None)),
     ):
         run.return_value = CompletedProcess(["systemctl"], 0, "active\n", "")
         status = plugin.status(_state("web-only"))
@@ -870,6 +870,50 @@ def test_web_only_status_names_the_exclusive_link_mode():
     assert status.running is True
     assert status.info["link_mode"] == "WEB bridge only"
     assert status.info["web_domain"] == WEB_DOMAIN
+
+
+def test_status_reads_the_relay_state_string_out_of_the_service_state_tuple():
+    """R17.6: ``service_state`` returns ``(state, result)``, not the state alone."""
+    plugin = MtprotoZigPlugin()
+    state = _state("hybrid")
+
+    with (
+        patch.object(MtprotoZigPlugin, "_installed", return_value=True),
+        patch("hydra.plugins.mtproto_zig.plugin.HOST.run") as run,
+    ):
+        run.return_value = CompletedProcess(["systemctl"], 0, "active\n", "")
+        status = plugin.status(state)
+        health = plugin.healthcheck_for_state(state)
+
+    assert status.running is True
+    assert status.info["web_state"] == "active"
+    assert isinstance(status.info["web_state"], str), "a tuple here breaks every state comparison downstream"
+    assert "active" in status.info["web_state"] and "CompletedProcess" not in status.info["web_state"]
+    assert health.healthy is True, "an active relay unit must not fail health"
+    assert health.severity != "error"
+
+
+def test_status_reports_an_inactive_relay_unit_by_name():
+    plugin = MtprotoZigPlugin()
+    state = _state("hybrid")
+
+    def run(args, **_kwargs):
+        stdout = "active\n" if args[-1] == "mtproto-zig" else "inactive\n"
+        return CompletedProcess(args, 0 if stdout == "active\n" else 3, stdout, "")
+
+    with (
+        patch.object(MtprotoZigPlugin, "_installed", return_value=True),
+        patch("hydra.plugins.mtproto_zig.plugin.HOST.run", side_effect=run),
+    ):
+        status = plugin.status(state)
+        health = plugin.healthcheck_for_state(state)
+
+    assert status.running is False
+    assert status.info["web_state"] == "inactive"
+    assert status.info["state"] == "active", "the main unit stays active; only the relay is down"
+    assert health.healthy is False
+    assert health.severity == "error"
+    assert "mtproto-zig-web" in health.detail
 
 
 # ── TSK-016: TUI adapter and the WEB-only safety gate ────────────────────────
@@ -1248,7 +1292,7 @@ def test_cover_site_generation_failure_leaves_no_public_dir():
         patch("hydra.plugins.mtproto_zig.plugin.web_runtime.apply", return_value=True),
         patch.object(MtprotoZigPlugin, "_installed", return_value=True),
         patch("hydra.plugins.mtproto_zig.plugin.HOST.run") as run,
-        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.service_state", return_value="active"),
+        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.service_state", return_value=("active", None)),
     ):
         run.return_value = CompletedProcess(["systemctl"], 0, "active\n", "")
         assert plugin.apply(state) is True
@@ -1450,7 +1494,7 @@ def test_apply_takes_a_fresh_relay_snapshot_every_time():
         patch("hydra.core.decoy.ensure_decoy_site", return_value=Path("/var/www/decoy-zig")),
         patch("hydra.plugins.mtproto_zig.plugin.runtime.apply", return_value=False),
         patch("hydra.plugins.mtproto_zig.plugin.web_runtime.running", return_value=True) as running,
-        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.service_state", return_value="active"),
+        patch("hydra.plugins.mtproto_zig.plugin.web_runtime.service_state", return_value=("active", None)),
         patch("hydra.plugins.mtproto_zig.plugin.web_runtime.snapshot", side_effect=snapshot),
     ):
         assert plugin.apply(state) is False
