@@ -165,6 +165,9 @@ def test_segment_and_playlist_names_match_the_url_paths():
     assert args[args.index("-hls_segment_filename") + 1] == str(
         base / MEDIA_SEGMENT_DIR / MEDIA_SEGMENT_TEMPLATE,
     )
+    # The playlist entries must carry the seg/ prefix so the URL the player fetches
+    # (/api/media/seg/seg-*.ts) matches where the files live and what Caddy serves.
+    assert args[args.index("-hls_base_url") + 1] == MEDIA_SEGMENT_DIR + "/"
 
 
 # ── Синтетическая сцена ─────────────────────────────────────────────────────────

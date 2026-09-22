@@ -101,6 +101,8 @@ def hls_output_args(output_dir: str | Path) -> list[str]:
         str(HLS_LIST_SIZE),
         "-hls_flags",
         HLS_FLAGS,
+        "-hls_base_url",
+        f"{MEDIA_SEGMENT_DIR}/",
         "-hls_segment_filename",
         str(segment),
         str(playlist),
