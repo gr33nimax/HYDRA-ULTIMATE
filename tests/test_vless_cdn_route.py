@@ -25,7 +25,7 @@ CORE_PORT = 20449
 VLESS_DECOY_PORT = 10804
 
 
-def _state(*, origin_http2: bool = True, with_vless: bool = False) -> AppState:
+def _state(*, origin_http2: bool = True, with_vless: bool = False, cam_source_url: str = "") -> AppState:
     route = VlessCdnPlugin.route_config()
     route["origin_http2"] = origin_http2
     state = AppState()
@@ -39,6 +39,7 @@ def _state(*, origin_http2: bool = True, with_vless: bool = False) -> AppState:
             "core_port": CORE_PORT,
             "cert_file": f"/etc/letsencrypt/live/{ORIGIN}/fullchain.pem",
             "key_file": f"/etc/letsencrypt/live/{ORIGIN}/privkey.pem",
+            "cam_source_url": cam_source_url,
             DECOY_ROUTE_KEY: route,
         },
     )
@@ -182,6 +183,42 @@ def test_the_tunnel_path_stays_inside_the_media_family_the_site_uses():
     backend = _backends()[PROTOCOL_NAME]
 
     assert backend["proxy_path"].startswith(f"{MEDIA_PATH_PREFIX}/")
+
+
+def test_an_hls_source_makes_media_a_reverse_proxy_relay_not_static():
+    """С HLS-источником /api/media/* ретранслируется на upstream, без ffmpeg и без статики."""
+    # Литеральный публичный IP — чтобы SSRF-проверка не ходила в DNS.
+    source = "https://8.8.8.8/cam/tracks-v1/index.fmp4.m3u8"
+    backend = _backends(cam_source_url=source)[PROTOCOL_NAME]
+    assert backend["media_source"] == {
+        "host": "8.8.8.8",
+        "port": 443,
+        "tls": True,
+        "dir": "/cam/tracks-v1",
+        "playlist": "index.fmp4.m3u8",
+    }
+
+    server = _require(
+        _inner_server(_document(cam_source_url=source), DECOY_HTTP_PORT),
+        "внутренний сервер",
+    )
+    tunnel, media, assets, fallback = server["routes"]
+    assert tunnel["match"][0]["path"][0] == DEFAULT_XHTTP_PATH, "туннель всё ещё первый"
+    assert media["match"] == [{"path": [f"{MEDIA_PATH_PREFIX}/*"]}]
+    rewrite, relay = media["handle"]
+    # Одна замена префикса — и плейлист, и init, и сегменты уезжают в <dir>/имя upstream.
+    assert rewrite["handler"] == "rewrite"
+    assert rewrite["path_regexp"] == [{"find": f"^{MEDIA_PATH_PREFIX}/", "replace": "/cam/tracks-v1/"}]
+    assert relay["handler"] == "reverse_proxy"
+    assert relay["upstreams"] == [{"dial": "8.8.8.8:443"}]
+    assert relay["transport"]["tls"] == {"server_name": "8.8.8.8"}
+    assert relay["headers"]["request"]["set"]["Host"] == ["8.8.8.8"], "чужой origin видит своё имя"
+    # upstream упал → отдаём статику сайта, а не голую 5xx.
+    assert relay["handle_response"][0]["match"]["status_code"] == [502, 503, 504]
+    assert relay["handle_response"][0]["routes"][0]["handle"][0]["handler"] == "file_server"
+    # Никакой статики плейлиста/сегментов: её заменил релей.
+    assert "match" not in fallback
+    assert assets["match"] == [{"path": ["/assets/*"]}]
 
 
 def test_a_route_without_a_media_prefix_keeps_two_routes():

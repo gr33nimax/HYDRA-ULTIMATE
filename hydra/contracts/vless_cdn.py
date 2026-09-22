@@ -77,6 +77,9 @@ DECOY_ROUTE: dict[str, JsonValue] = {
     "upstream_tls": False,
     # Клиент и ядро должны видеть одно публичное имя: origin-имя — деталь CDN.
     "public_host_config": "cdn_domain",
+    # HLS-источник для /api/media/*: сайт ретранслирует его reverse_proxy'ем, а не кодирует
+    # локально. Пусто — медиа-эндпоинт пустой (без fallback, как и решено).
+    "media_source_config": "cam_source_url",
 }
 
 # Значения immutable: они попадают в состояние как есть и не должны делиться
@@ -305,6 +308,46 @@ def assert_public_media_source(
                 "URL источника указывает во внутреннюю или служебную сеть",
             )
     return raw
+
+
+def parse_hls_relay_source(
+    value: object,
+    *,
+    resolve: Callable[[str], list[str]] = resolve_host,
+) -> dict[str, object] | None:
+    """Разобрать HLS-URL под reverse_proxy: хост, папка и имя плейлиста, или None.
+
+    Ретранслируется только http(s) HLS с относительными сегментами: Caddy проксирует
+    папку целиком, ничего не переписывая внутри плейлиста. RTSP/MJPEG/YouTube так не
+    проксируются (нет готового HLS с относительными путями) — для них возвращаем None,
+    и медиа-эндпоинт остаётся пустым. SSRF проверяется здесь же: URL операторский.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        if classify_media_source(raw) != MEDIA_SOURCE_HLS:
+            return None
+        assert_public_media_source(raw, resolve=resolve)
+    except ValueError:
+        return None
+    parts = urllib.parse.urlsplit(raw)
+    scheme = parts.scheme.lower()
+    host = parts.hostname or ""
+    if not host:
+        return None
+    port = parts.port or (443 if scheme == "https" else 80)
+    path = parts.path
+    directory, _, basename = path.rpartition("/")
+    if not basename:
+        return None
+    return {
+        "host": host,
+        "port": port,  # urlsplit.port уже int—or—None; дефолт тоже int
+        "tls": scheme == "https",
+        "dir": directory,  # без завершающего «/», может быть пустым для корня
+        "playlist": basename,
+    }
 
 
 def normalize_media_source(

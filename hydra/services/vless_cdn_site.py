@@ -13,7 +13,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from hydra.contracts.vless_cdn import DECOY_ROOT, PROTOCOL_NAME
+from hydra.contracts.vless_cdn import (
+    DECOY_ROOT,
+    MEDIA_PATH_PREFIX,
+    MEDIA_PLAYLIST_PATH,
+    PROTOCOL_NAME,
+    parse_hls_relay_source,
+)
 from hydra.core import systemd
 from hydra.core.host import HOST
 from hydra.core.install_layout import project_root as _project_root
@@ -27,7 +33,7 @@ from hydra.core.vless_cdn_page import (
 )
 from hydra.core.weather import WeatherView, weather_view
 from hydra.services.security_intel import lookup_region
-from hydra.services.vless_cdn_stream import install_stream_service, remove_stream_service
+from hydra.services.vless_cdn_stream import remove_stream_service
 
 TIMER_NAME = "hydra-vless-cdn-site"
 TIMER_CALENDAR = "*:0/10"
@@ -139,6 +145,12 @@ def build_site_data(
     current = protocol or state.protocols.get(PROTOCOL_NAME)
     config = current.config if current else {}
     stamp = now or datetime.now(timezone.utc)
+    # Если задан внешний HLS-источник, плеер должен запрашивать его имя плейлиста
+    # под /api/media/, чтобы reverse_proxy отобразил его в <dir>/<имя> на upstream.
+    media_source = parse_hls_relay_source(config.get("cam_source_url", ""))
+    playlist_path = (
+        f"{MEDIA_PATH_PREFIX}/{media_source['playlist']}" if media_source else MEDIA_PLAYLIST_PATH
+    )
     return SiteData(
         country=str(config.get("region_country_name", "") or ""),
         country_code=str(config.get("region_country_code", "") or ""),
@@ -151,6 +163,7 @@ def build_site_data(
         status="operational",
         weather=weather or WeatherView(available=False),
         image=image or ImageView(),
+        playlist_path=playlist_path,
     )
 
 
@@ -289,19 +302,15 @@ WantedBy=timers.target
 
 
 def install_site_timer(root: Path | None = None) -> bool:
-    """Поднять стек прикрытия: живую страницу (таймер) и живой медиапоток (сервис).
+    """Поднять стек прикрытия: живую страницу (таймер).
 
-    Поток ставится первым: без него страница ссылалась бы на плейлист, которого нет,
-    и снаружи это выглядело бы как мёртвый медиасервис. Частичный сбой откатывается,
-    чтобы не оставалось половины стека.
+    Медиа больше не кодируется локально: /api/media/* отдаёт reverse_proxy Caddy на живой HLS
+    (см. sni_router_http). Поэтому сначала сносим старый ffmpeg-юнит (если остался от прежней
+    версии), чтобы он не жёг CPU впустую, и ставим только таймер страницы.
     """
-    if not install_stream_service(root):
-        return False
+    remove_stream_service()
     service, timer = site_units(root)
-    if not systemd.install_timer(TIMER_NAME, service, timer):
-        remove_stream_service()
-        return False
-    return True
+    return systemd.install_timer(TIMER_NAME, service, timer)
 
 
 def remove_site_timer() -> bool:

@@ -19,6 +19,7 @@ from hydra.contracts.vless_cdn import (
     assert_public_media_source,
     classify_media_source,
     normalize_path,
+    parse_hls_relay_source,
 )
 
 
@@ -159,3 +160,39 @@ def test_ssrf_refuses_bad_scheme_before_any_resolution():
 
     with pytest.raises(ValueError):
         assert_public_media_source("file:///etc/passwd", resolve=explode)
+
+
+# ── Разбор HLS-источника под reverse_proxy ────────────────────────────────
+
+
+def test_relay_parse_splits_host_dir_and_playlist():
+    src = parse_hls_relay_source(
+        "https://8.8.8.8/camera01/tracks-v1/index.fmp4.m3u8",
+    )
+    assert src == {
+        "host": "8.8.8.8",
+        "port": 443,
+        "tls": True,
+        "dir": "/camera01/tracks-v1",
+        "playlist": "index.fmp4.m3u8",
+    }
+
+
+def test_relay_parse_rejects_non_hls_and_private_and_empty():
+    # RTSP/MJPEG/YouTube не ретранслируются чистым proxy → None.
+    assert parse_hls_relay_source("rtsp://8.8.8.8/live") is None
+    assert parse_hls_relay_source("https://youtu.be/abc") is None
+    assert parse_hls_relay_source("") is None
+    # Приватный адрес (SSRF) — тоже None, без исключения.
+    assert parse_hls_relay_source("https://10.0.0.5/x.m3u8") is None
+
+
+def test_relay_parse_reads_explicit_port_and_http():
+    src = parse_hls_relay_source("http://8.8.8.8:8080/hls/live.m3u8")
+    assert src == {
+        "host": "8.8.8.8",
+        "port": 8080,
+        "tls": False,
+        "dir": "/hls",
+        "playlist": "live.m3u8",
+    }

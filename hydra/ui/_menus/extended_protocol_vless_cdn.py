@@ -51,11 +51,11 @@ def _install(state: AppState, plugin: BasePlugin, app: ApplicationService) -> No
 
 
 def _set_camera(state: AppState, plugin: BasePlugin, app: ApplicationService) -> None:
-    """URL реальной камеры (пусто — синтетика). Проверка формы/SSRF — в команде плагина."""
-    info("Пусто = синтетический стрим. Форматы: HLS (.m3u8), RTSP, MJPEG/HTTP, YouTube.")
-    url = prompt("URL камеры-источника:").strip()
+    """URL живого HLS-источника (пусто — медиа-эндпоинт пуст). Проверка формы/SSRF — в команде."""
+    info("HLS (.m3u8) — его Caddy ретранслирует на /api/media/* без ffmpeg. Пусто = медиа нет.")
+    url = prompt("URL HLS-источника (.m3u8):").strip()
     if app.plugin_command(state, PROTOCOL_NAME, "set_cam_source_url", url=url):
-        success("Синтетика" if not url else "Источник камеры сохранён")
+        success("Медиа-эндпоинт пуст" if not url else "HLS-источник сохранён")
     else:
         error("URL отклонён: неверная форма или ссылка во внутреннюю сеть")
     prompt("Нажмите Enter")
@@ -82,7 +82,7 @@ def _menu_vless_cdn(
             ("Порт ядра", str(config.get("core_port", 0) or "—")),
             ("Сертификат", str(config.get("cert_file", "") or "—")),
             ("Регион origin-сервера", str(config.get("region_city", "") or "—")),
-            ("Камера-источник", str(config.get("cam_source_url", "") or "синтетика")),
+            ("HLS-источник", str(config.get("cam_source_url", "") or "нет")),
         ]
         protocol_status_panel(
             PROTOCOL_NAME,

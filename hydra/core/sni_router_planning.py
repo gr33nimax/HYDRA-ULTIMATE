@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from hydra.contracts.vless_cdn import parse_hls_relay_source
 from hydra.core.decoy_sites.registry import is_supported
 from hydra.core.state_models import AppState
 
@@ -343,8 +344,7 @@ def _dynamic_backend(
 ) -> dict[str, Any]:
     if not isinstance(route, Mapping) or route.get("kind") != _DYNAMIC_ROUTE_KIND:
         raise _route_error(name, f"kind must be {_DYNAMIC_ROUTE_KIND}")
-    # Маршрут может назвать поле конфигурации, откуда берётся его имя, — тогда
-    # протоколу не нужно дублировать origin-имя в поле с чужим названием.
+    # Маршрут может назвать поле конфигурации, откуда берётся его origin-имя.
     domain_key = route.get("domain_config") or "domain"
     if not isinstance(domain_key, str) or not domain_key:
         raise _route_error(name, "domain_config must name a config field")
@@ -360,8 +360,7 @@ def _dynamic_backend(
             occupied_ports,
         )
     elif isinstance(internal_key, str) and internal_key:
-        # Порт ядра выбирается при установке и живёт в состоянии: маршрут читает
-        # его оттуда же, чтобы значение не разъехалось с inbound'ом.
+        # Порт ядра выбирается при установке и живёт в состоянии; маршрут читает его оттуда же.
         internal_port = _route_port(
             name,
             config.get(internal_key),
@@ -381,11 +380,7 @@ def _dynamic_backend(
     if not root.startswith("/var/www/decoy-") or "\\" in root or any(part in {"", ".", ".."} for part in root_parts):
         raise _route_error(name, "decoy_root must be under /var/www/decoy-*")
     theme = (
-        str(
-            config.get("decoy_theme") or route.get("decoy_theme", ""),
-        )
-        .strip()
-        .lower()
+        str(config.get("decoy_theme") or route.get("decoy_theme", "")).strip().lower()
     )
     if not is_supported(theme):
         raise _route_error(name, "decoy_theme is not supported")
@@ -416,12 +411,8 @@ def _dynamic_backend(
         "proxy_path": proxy_path,
     }
     if route.get("origin_http2"):
-        # Ключ появляется только там, где он заявлен: маршруты остальных протоколов
-        # остаются ровно такими же, как раньше.
         backend["origin_http2"] = True
     if not route.get("upstream_tls", True):
-        # Так же — только по заявке маршрута: остальные продолжают ходить в ядро
-        # по TLS, потому что там inbound с сертификатом.
         backend["upstream_tls"] = False
     host_key = route.get("public_host_config")
     if isinstance(host_key, str) and host_key:
@@ -431,6 +422,12 @@ def _dynamic_backend(
     prefix = str(route.get("assets_prefix") or "").strip().rstrip("/")
     if prefix:
         backend["assets_prefix"] = prefix
+    media_key = route.get("media_source_config")
+    if isinstance(media_key, str) and media_key:
+        # parse проверяет SSRF; не-HLS/приватный/пустой → None, медиа-маршруты не появляются.
+        source = parse_hls_relay_source(config.get(media_key, ""))
+        if source:
+            backend["media_source"] = source
     return backend
 
 

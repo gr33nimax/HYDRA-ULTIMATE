@@ -198,6 +198,49 @@ def _static_route(
     }
 
 
+def _media_relay_route(
+    media_source: dict[str, Any],
+    decoy_handler: dict[str, Any],
+) -> dict[str, Any]:
+    """Ретрансляция чужого HLS как своё медиа: /api/media/* → upstream/<dir>/*.
+
+    Сегменты у источника — относительные имена в папке плейлиста, поэтому одна замена
+    префикса (^/api/media/ → <dir>/) покрывает и плейлист, и init, и сегменты — ничего внутри
+    плейлиста переписывать не надо. Клиент всё время на нашём домене; upstream падает (5xx) →
+    отдаём статику сайта, чтобы медиа-путь не зиял голой 500-кой.
+    """
+    host = str(media_source["host"])
+    directory = str(media_source["dir"]).rstrip("/")
+    transport: dict[str, Any] = {"protocol": "http", "response_header_timeout": "30s"}
+    if bool(media_source.get("tls", True)):
+        transport["tls"] = {"server_name": host}
+    relay = {
+        "handler": "reverse_proxy",
+        "upstreams": [{"dial": f"{host}:{int(media_source['port'])}"}],
+        "transport": transport,
+        "headers": {
+            # Чужой origin должен видеть своё имя, а не наш домен.
+            "request": {"set": {"Host": [host]}},
+            # Короткий кеш: плейлист live-окна обновляется часто, сегменты неизменны.
+            "response": {"set": {"Cache-Control": ["public, max-age=2"]}},
+        },
+        "handle_response": [
+            {
+                "match": {"status_code": [502, 503, 504]},
+                "routes": [{"handle": [decoy_handler.copy()]}],
+            },
+        ],
+    }
+    rewrite = {
+        "handler": "rewrite",
+        "path_regexp": [{"find": f"^{MEDIA_PATH_PREFIX}/", "replace": f"{directory}/"}],
+    }
+    return {
+        "match": [{"path": [f"{MEDIA_PATH_PREFIX}/*"]}],
+        "handle": [rewrite, relay],
+    }
+
+
 def _decoy_routes(
     path: str,
     assets_prefix: str,
@@ -205,14 +248,14 @@ def _decoy_routes(
     decoy_handler: dict[str, Any],
     *,
     media_prefix: str = "",
+    media_source: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Таблица маршрутов: туннель, затем медиа сайта, затем статика, затем сайт.
 
     Порядок — часть контракта. Туннель идёт первым по своему точному пути и поэтому
-    не может быть перехвачен; медиа-маршруты (`/api/media/*`, куда плеер заглушки сам
-    ходит за плейлистом и сегментами) отдаются статикой — так боевой путь один из
-    многих, а не одинокая полоса на мёртвом префиксе; сайт идёт последним и без своего
-    пути, поэтому не перехватывает ничего из перечисленного.
+    не может быть перехвачен медиа-маршрутом `/api/media/*` (Caddy берёт первое совпадение).
+    Медиа: есть внешний HLS-источник → reverse_proxy на него; иначе — старая статика
+    (плейлист и seg/ из корня сайта). Сайт идёт последним и ничего не перехватывает.
     """
     routes: list[dict[str, Any]] = [
         {
@@ -220,7 +263,11 @@ def _decoy_routes(
             "handle": [proxy],
         },
     ]
-    if media_prefix:
+    if media_source is not None:
+        # Ретрансляция: /api/media/* — чужой живой HLS, отданный с нашего домена.
+        # Без ffmpeg и без статики: трафик плеера на /api/media/*, как и XHTTP.
+        routes.append(_media_relay_route(media_source, decoy_handler))
+    elif media_prefix:
         # Плейлист и сегменты плеера — то же медиа-семейство, что и боевой путь, тем же
         # file_server'ом с корнем сайта: /api/media/... → {decoy_root}/api/media/...
         routes.append(
@@ -329,7 +376,14 @@ def _path_proxy_decoy_server(
             "disable": True,
             "disable_redirects": True,
         },
-        "routes": _decoy_routes(path, assets_prefix, proxy, decoy_handler, media_prefix=media_prefix),
+        "routes": _decoy_routes(
+            path,
+            assets_prefix,
+            proxy,
+            decoy_handler,
+            media_prefix=media_prefix,
+            media_source=backend.get("media_source"),
+        ),
         "errors": {
             "routes": [{"handle": [decoy_handler.copy()]}],
         },

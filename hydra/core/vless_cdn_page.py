@@ -41,6 +41,7 @@ class SiteData:
     status: str = ""
     weather: WeatherView = field(default_factory=WeatherView)
     image: ImageView = field(default_factory=ImageView)
+    playlist_path: str = MEDIA_PLAYLIST_PATH
 
     @property
     def place(self) -> str:
@@ -194,7 +195,7 @@ def _image_block(image: ImageView) -> str:
     )
 
 
-def _live_script() -> str:
+def _live_script(data: SiteData) -> str:
     """Плеер: сам ходит по боевому семейству /api/media/* тем же почерком, что туннель.
 
     HLS-библиотека берётся с того же origin (`/assets/hls.min.js`), а не с третьей
@@ -207,7 +208,7 @@ def _live_script() -> str:
         "(function () {"
         "  var video = document.getElementById('live-stream');"
         "  if (!video) { return; }"
-        f"  var PLAYLIST = '{MEDIA_PLAYLIST_PATH}';"
+        f"  var PLAYLIST = '{_escape(data.playlist_path)}';"
         "  var token = Math.random().toString(36).slice(2, 12) + Date.now().toString(36);"
         "  function sign(xhr) {"
         "    xhr.setRequestHeader('X-Upload-Token', token);"
@@ -239,13 +240,13 @@ def _live_player(data: SiteData) -> str:
     return (
         '<section class="live">'
         '<video id="live-stream" class="live-video" controls autoplay muted playsinline'
-        f' preload="none" src="{_escape(MEDIA_PLAYLIST_PATH)}"{poster}></video>'
+        f' preload="none" src="{_escape(data.playlist_path)}"{poster}></video>'
         '<div class="live-bar"><span class="live-dot"></span>'
         '<span class="live-tag">LIVE</span>'
         f'<span class="live-place">{place} · street camera</span></div>'
         "</section>"
         '<script src="/assets/hls.min.js"></script>'
-        f"<script>{_live_script()}</script>"
+        f"<script>{_live_script(data)}</script>"
     )
 
 

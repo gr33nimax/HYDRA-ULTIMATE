@@ -177,6 +177,16 @@ def test_site_data_is_built_from_state_and_a_stamp():
     assert data.updated == "2026-09-19 00:30 UTC"
     assert data.weather.available is False, "погода появится отдельной задачей"
     assert data.image.src == "", "изображение появится отдельной задачей"
+    assert data.playlist_path == "/api/media/playlist.m3u8", "без источника — дефолтное имя"
+
+
+def test_site_data_points_the_player_at_the_upstream_playlist_basename():
+    # Плеер должен просить имя плейлиста апстрима, чтобы reverse_proxy отобразил его верно.
+    data = site.build_site_data(
+        _state(cam_source_url="https://8.8.8.8/cam/tracks-v1/index.fmp4.m3u8"),
+        now=STAMP,
+    )
+    assert data.playlist_path == "/api/media/index.fmp4.m3u8"
 
 
 def test_region_is_filled_once_and_never_overwritten():
@@ -353,7 +363,7 @@ def test_timer_units_follow_the_house_pattern(tmp_path):
     assert "WantedBy=timers.target" in timer
 
 
-def test_installing_the_timer_uses_the_shared_installer(monkeypatch, tmp_path):
+def test_installing_the_timer_installs_the_site_and_clears_old_stream(monkeypatch, tmp_path):
     captured: dict[str, str] = {}
 
     def fake_install(name: str, service: str, timer: str) -> bool:
@@ -361,47 +371,22 @@ def test_installing_the_timer_uses_the_shared_installer(monkeypatch, tmp_path):
         return True
 
     monkeypatch.setattr(site.systemd, "install_timer", fake_install)
-    stream = MagicMock(return_value=True)
-    monkeypatch.setattr(site, "install_stream_service", stream)
+    # Старый ffmpeg-юнит сносится при установке, чтобы не жёг CPU после перехода на proxy.
+    cleanup = MagicMock(return_value=True)
+    monkeypatch.setattr(site, "remove_stream_service", cleanup)
 
     assert site.install_site_timer(tmp_path) is True
     assert captured["name"] == site.TIMER_NAME == "hydra-vless-cdn-site"
     assert "vless_cdn_site" in captured["service"]
-    stream.assert_called_once_with(tmp_path)
-
-
-def test_the_site_stack_installs_the_live_stream_first(monkeypatch, tmp_path):
-    """Страница ссылается на плейлист: без потока она указывала бы в пустоту."""
-    order: list[str] = []
-    monkeypatch.setattr(site, "install_stream_service", lambda root=None: order.append("stream") or True)
-    monkeypatch.setattr(
-        site.systemd,
-        "install_timer",
-        lambda *_args: order.append("timer") or True,
-    )
-
-    assert site.install_site_timer(tmp_path) is True
-    assert order == ["stream", "timer"]
-
-
-def test_a_missing_ffmpeg_stops_the_site_stack_before_the_timer(monkeypatch, tmp_path):
-    """Без ffmpeg потока не будет: лучше явный отказ, чем страница с мёртвым плеером."""
-    timer = MagicMock(return_value=True)
-    monkeypatch.setattr(site, "install_stream_service", lambda root=None: False)
-    monkeypatch.setattr(site.systemd, "install_timer", timer)
-
-    assert site.install_site_timer(tmp_path) is False
-    timer.assert_not_called()
-
-
-def test_a_failed_timer_rolls_back_the_stream_service(monkeypatch, tmp_path):
-    cleanup = MagicMock(return_value=True)
-    monkeypatch.setattr(site, "install_stream_service", lambda root=None: True)
-    monkeypatch.setattr(site.systemd, "install_timer", lambda *_args: False)
-    monkeypatch.setattr(site, "remove_stream_service", cleanup)
-
-    assert site.install_site_timer(tmp_path) is False
     cleanup.assert_called_once_with()
+
+
+def test_a_failed_timer_install_reports_failure(monkeypatch, tmp_path):
+    """Нет больше отдельного ffmpeg-сервиса: стек — это только таймер страницы."""
+    monkeypatch.setattr(site, "remove_stream_service", MagicMock(return_value=True))
+    monkeypatch.setattr(site.systemd, "install_timer", lambda *_args: False)
+
+    assert site.install_site_timer(tmp_path) is False
 
 
 def test_removing_the_site_stack_removes_the_stream_too(monkeypatch):
