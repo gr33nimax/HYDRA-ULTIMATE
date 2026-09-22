@@ -64,10 +64,32 @@ def ensure_ffmpeg(*, host: Any = HOST, package: str = FFMPEG_PACKAGE) -> bool:
     return host.which(FFMPEG) is not None
 
 
+def ensure_ytdlp(*, host: Any = HOST, python: str | Path | None = None) -> bool:
+    """Поставить/обновить yt-dlp в venv и вызывать его как `python -m yt_dlp`.
+
+    Через модуль, а не консольный скрипт: PATH systemd-юнита может не включать
+    `.venv/bin`. `-U`, потому что устаревший yt-dlp ломается об изменения YouTube — тот редкий
+    случай, где пин вреден. yt-dlp нужен только для YouTube-формы, поэтому отказ не фатален
+    для сервиса (остальные формы и синтетика работают без него).
+    """
+    interpreter = str(python or python_executable())
+    check = host.run([interpreter, "-m", "yt_dlp", "--version"], timeout=YTDLP_TIMEOUT)
+    if _returncode(check) == 0:
+        return True
+    install = host.run(
+        [interpreter, "-m", "pip", "install", "-U", "-q", "yt-dlp"],
+        timeout=APT_INSTALL_TIMEOUT,
+    )
+    if _returncode(install) != 0:
+        return False
+    return _returncode(host.run([interpreter, "-m", "yt_dlp", "--version"], timeout=YTDLP_TIMEOUT)) == 0
+
+
 def resolve_youtube_url(
     watch_url: object,
     *,
     host: Any = HOST,
+    python: str | Path | None = None,
     timeout: float = YTDLP_TIMEOUT,
 ) -> str:
     """Прямой адрес потока для YouTube-страницы: первый непустой URL из вывода yt-dlp.
@@ -75,9 +97,8 @@ def resolve_youtube_url(
     Возвращённый адрес потом ещё раз проверяется контрактом (SSRF) в `stream_plan`: yt-dlp —
     внешний инструмент, и доверять его ответу без проверки нельзя.
     """
-    if host.which(YTDLP) is None:
-        return ""
-    result = host.run(ytdlp_command(watch_url), timeout=timeout, text=True)
+    interpreter = str(python or python_executable())
+    result = host.run(ytdlp_command(watch_url, python=interpreter), timeout=timeout, text=True)
     if _returncode(result) != 0:
         return ""
     for line in str(getattr(result, "stdout", "") or "").splitlines():
@@ -88,9 +109,16 @@ def resolve_youtube_url(
 
 
 def run_ffmpeg(plan: StreamPlan, *, host: Any = HOST) -> int:
-    """Запустить ffmpeg по готовому argv и дождаться выхода; код — как есть."""
-    process = host.popen(plan.command)
-    return int(process.wait())
+    """Запустить ffmpeg по готовому argv и дождаться выхода; код — как есть.
+
+    Любой сбой запуска (нет бинаря, ошибка popen) — ненулевой код, а не исключение: сторож
+    должен уйти на синтетику/перезапуск, а не упасть целиком.
+    """
+    try:
+        process = host.popen(plan.command)
+        return int(process.wait())
+    except Exception:
+        return 1
 
 
 def run_supervisor(
@@ -133,7 +161,11 @@ def run_supervisor(
             which=which,
         )
         log(f"stream: kind={plan.kind} synthetic={plan.synthetic} reason={plan.reason}")
-        code = int(run(plan))
+        try:
+            code = int(run(plan))
+        except Exception as exc:  # один упавший прогон не должен ронять сторожа
+            log(f"stream: run failed: {exc}")
+            code = 1
         if plan.synthetic:
             synthetic_streak = 1 if synthetic_streak == 0 else synthetic_streak + 1
         elif code == 0:
@@ -213,9 +245,15 @@ WantedBy=multi-user.target
 
 
 def install_stream_service(root: Path | None = None) -> bool:
-    """Поставить ffmpeg, включить и запустить сервис живого потока."""
+    """Поставить ffmpeg (обязательно) и yt-dlp (для YouTube-источника), включить сервис.
+
+    ffmpeg — твёрдая зависимость (без него потока нет). yt-dlp ставится best-effort: он нужен только
+    для YouTube-формы, и его отсутствие не должно рушить сервис (остальные формы и синтетика
+    работают). Неудача видна в журнале стрима (`reason=`).
+    """
     if not ensure_ffmpeg():
         return False
+    ensure_ytdlp()
     if not systemd.install_service(STREAM_UNIT_NAME, stream_units(root)):
         return False
     return systemd.start(STREAM_UNIT_SERVICE)
@@ -230,6 +268,7 @@ __all__ = [
     "STREAM_UNIT_NAME",
     "STREAM_UNIT_SERVICE",
     "ensure_ffmpeg",
+    "ensure_ytdlp",
     "install_stream_service",
     "remove_stream_service",
     "resolve_youtube_url",

@@ -67,9 +67,15 @@ def media_directory(root: str | Path = DECOY_ROOT) -> Path:
     return Path(root) / MEDIA_PATH_PREFIX.lstrip("/")
 
 
-def ytdlp_command(watch_url: object) -> list[str]:
-    """Аргументы yt-dlp, достающие прямой адрес потока; исполняет вызывающий (host-слой)."""
-    return [YTDLP, "-f", "best", "-g", "--no-playlist", str(watch_url or "").strip()]
+def ytdlp_command(watch_url: object, *, python: str = YTDLP) -> list[str]:
+    """Аргументы yt-dlp, достающие прямой адрес потока; исполняет вызывающий (host-слой).
+
+    `python` — интерпретатор venv: yt-dlp зовётся как `python -m yt_dlp`, чтобы не зависеть от PATH
+    systemd-юнита; дефолт `yt-dlp` сохраняет старый вызов через консольный скрипт.
+    """
+    if python == YTDLP:
+        return [YTDLP, "-f", "best", "-g", "--no-playlist", str(watch_url or "").strip()]
+    return [str(python), "-m", "yt_dlp", "-f", "best", "-g", "--no-playlist", str(watch_url or "").strip()]
 
 
 def hls_output_args(output_dir: str | Path) -> list[str]:

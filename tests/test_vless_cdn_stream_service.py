@@ -77,18 +77,60 @@ def test_ffmpeg_install_failure_is_reported_not_ignored():
     assert stream.ensure_ffmpeg(host=host) is False
 
 
+class _PipHost:
+    """yt_dlp модуль отсутствует до install, потом появляется (pip успешен)."""
+
+    def __init__(self, *, install_ok: bool = True) -> None:
+        self.install_ok = install_ok
+        self.commands: list[list[str]] = []
+        self._installed = False
+
+    def run(self, args, **_kwargs) -> _Result:
+        argv = [str(item) for item in args]
+        self.commands.append(argv)
+        if argv[1:3] == ["-m", "yt_dlp"] and argv[3:4] == ["--version"]:
+            return _Result(0 if self._installed else 1, "")
+        if argv[1:4] == ["-m", "pip", "install"]:
+            self._installed = self.install_ok
+            return _Result(0 if self.install_ok else 1, "")
+        return _Result(0, "")
+
+
+def test_ytdlp_present_needs_no_pip():
+    host = _PipHost()
+    host._installed = True
+
+    assert stream.ensure_ytdlp(host=host, python="/venv/python") is True
+    assert all(argv[1:4] != ["-m", "pip", "install"] for argv in host.commands), "уже есть — не ставим"
+
+
+def test_ytdlp_is_installed_when_missing():
+    host = _PipHost(install_ok=True)
+
+    assert stream.ensure_ytdlp(host=host, python="/venv/python") is True
+    assert any(argv[1:4] == ["-m", "pip", "install"] and "yt-dlp" in argv for argv in host.commands)
+
+
+def test_ytdlp_install_failure_is_not_fatal_returns_false():
+    host = _PipHost(install_ok=False)
+
+    assert stream.ensure_ytdlp(host=host, python="/venv/python") is False
+
+
 # ── Резолв YouTube-потока (и проверка на SSRF ниже — в stream_plan) ──────────────
 
 
 def test_youtube_without_ytdlp_resolves_nothing():
-    assert stream.resolve_youtube_url("https://youtu.be/abc", host=_YtdlpHost(present=False)) == ""
+    # yt-dlp вызывается как `python -m yt_dlp`; его отсутствие — ненулевой код (модуль не найден).
+    assert stream.resolve_youtube_url("https://youtu.be/abc", host=_YtdlpHost(returncode=1)) == ""
 
 
 def test_youtube_url_is_taken_from_the_first_url_line():
     host = _YtdlpHost(stdout="WARNING: noisy\nhttps://video.example/stream.m3u8\n")
 
-    assert stream.resolve_youtube_url("https://youtu.be/abc", host=host) == "https://video.example/stream.m3u8"
-    assert host.commands[0][0] == "yt-dlp"
+    assert stream.resolve_youtube_url("https://youtu.be/abc", host=host, python="/venv/python") == "https://video.example/stream.m3u8"
+    # Зовётся через `python -m yt_dlp`, а не консольный скрипт — PATH systemd-юнита не важен.
+    assert host.commands[0][:3] == ["/venv/python", "-m", "yt_dlp"]
 
 
 def test_youtube_failure_resolves_nothing():

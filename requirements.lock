@@ -3,3 +3,6 @@
 # dependencies are pinned for reproducible HYDRA behavior.
 cryptography==50.0.0
 python-telegram-bot[job-queue]==22.8
+# yt-dlp intentionally unpinned: an outdated version breaks on YouTube changes,
+# so the vless_cdn stream installer also runs `pip install -U yt-dlp` at setup.
+yt-dlp
