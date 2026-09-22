@@ -216,7 +216,7 @@ def synthetic_graph(*, region: str = "", cam_id: str = "", seed: str = "") -> st
         f"noise=alls={noise}:allf=t+u",
         f"hue=H='{hue_amplitude:.3f}*sin(t/9)'",
         _drawtext("LIVE", x=20, y=20, size=28, colour="red"),
-        _drawtext("%{localtime\\:%H\\:%M\\:%S}", x=20, y=60, size=24, colour="white"),
+        _drawtext("%{localtime\\:%X}", x=20, y=60, size=24, colour="white"),
         _drawtext(camera, x=20, y=100, size=20, colour="0x9fb0c0"),
     ]
     if city:
