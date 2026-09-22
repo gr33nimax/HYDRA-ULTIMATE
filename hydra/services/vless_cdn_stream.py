@@ -26,6 +26,7 @@ from hydra.core.install_layout import python_executable
 from hydra.core.state_models import AppState
 from hydra.core.vless_cdn_stream import (
     FFMPEG,
+    MEDIA_SEGMENT_DIR,
     YTDLP,
     StreamPlan,
     media_directory,
@@ -206,6 +207,10 @@ def run_for_state(
     config = protocol.config if protocol else {}
     directory = Path(output_dir) if output_dir is not None else media_directory(DECOY_ROOT)
     directory.mkdir(parents=True, exist_ok=True)
+    # ffmpeg's HLS muxer opens the segment file for writing but does not create its parent;
+    # without this the run dies on 'seg/seg-00000.ts: No such file or directory' and never
+    # produces a segment, so the playlist points at a file that was never written.
+    (directory / MEDIA_SEGMENT_DIR).mkdir(parents=True, exist_ok=True)
     region = str(config.get("region_city", "") or config.get("region_country_name", "") or "").strip()
     seed = str(config.get("origin_host", "") or config.get("cdn_domain", "") or "").strip()
     return run_supervisor(

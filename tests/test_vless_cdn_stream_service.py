@@ -128,7 +128,10 @@ def test_youtube_without_ytdlp_resolves_nothing():
 def test_youtube_url_is_taken_from_the_first_url_line():
     host = _YtdlpHost(stdout="WARNING: noisy\nhttps://video.example/stream.m3u8\n")
 
-    assert stream.resolve_youtube_url("https://youtu.be/abc", host=host, python="/venv/python") == "https://video.example/stream.m3u8"
+    assert (
+        stream.resolve_youtube_url("https://youtu.be/abc", host=host, python="/venv/python")
+        == "https://video.example/stream.m3u8"
+    )
     # Зовётся через `python -m yt_dlp`, а не консольный скрипт — PATH systemd-юнита не важен.
     assert host.commands[0][:3] == ["/venv/python", "-m", "yt_dlp"]
 
@@ -280,6 +283,8 @@ def test_run_for_state_reads_the_camera_and_region(tmp_path):
     assert result == 0
     assert seen == ["hls"]
     assert tmp_path.exists()
+    # ffmpeg не создаёт каталог сегмента сам — без этого поток падает на seg/seg-00000.ts.
+    assert (tmp_path / "seg").is_dir()
 
 
 def test_run_for_state_without_a_camera_falls_back_to_synthetic(tmp_path):
