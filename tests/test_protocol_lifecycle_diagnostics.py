@@ -8,6 +8,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from hydra.core.state import AppState, PluginState
+from hydra.plugins.catalog import PluginCatalog
+from hydra.plugins.executor import PluginExecutor
 from hydra.plugins.mtproto_zig import runtime as zig_runtime
 from hydra.plugins.mtproto_zig.plugin import MtprotoZigPlugin
 from hydra.plugins.telemt.plugin import TelemtPlugin
@@ -503,3 +505,69 @@ def test_lifecycle_never_reports_an_empty_failure_message():
 
     assert enabled is False
     assert errors[-1] == "Включение mtproto_zig не удалось"
+
+
+def _false_apply_plugin(**overrides):
+    """A plugin whose apply returns false, optionally recording its own stage."""
+    plugin = SimpleNamespace(
+        meta=SimpleNamespace(name="mtproto_zig", contract_version=1),
+        snapshot=lambda state: {},
+        apply=lambda state: False,
+        rollback=lambda state, snapshot: True,
+    )
+    for name, value in overrides.items():
+        setattr(plugin, name, value)
+    return plugin
+
+
+def _apply_enabled_error(plugin) -> str:
+    """Run the canonical apply path and return the message it raises."""
+    state = AppState(protocols={"mtproto_zig": PluginState(enabled=True)})
+    try:
+        PluginExecutor(PluginCatalog([plugin])).apply_enabled(
+            state,
+            log_error=lambda _message: None,
+        )
+    except RuntimeError as exc:
+        return str(exc)
+    raise AssertionError("a false plugin apply must raise")
+
+
+def test_executor_prefers_the_plugin_apply_stage_over_the_generic_text():
+    plugin = _false_apply_plugin(
+        apply_failure=lambda: "WEB-мост не подтверждён: no route",
+    )
+
+    message = _apply_enabled_error(plugin)
+
+    assert message == (
+        "Plugin mtproto_zig apply returned false: "
+        "WEB-мост не подтверждён: no route"
+    )
+
+
+def test_executor_keeps_the_generic_text_without_a_plugin_stage():
+    assert _apply_enabled_error(_false_apply_plugin()) == (
+        "Plugin mtproto_zig apply returned false"
+    )
+
+
+def test_a_raising_apply_failure_reader_never_breaks_the_rollback():
+    rolled_back: list[str] = []
+
+    def broken_reader() -> str:
+        raise RuntimeError("diagnostics unavailable")
+
+    plugin = _false_apply_plugin(
+        apply_failure=broken_reader,
+        rollback=lambda state, snapshot: rolled_back.append("rollback") or True,
+    )
+
+    assert _apply_enabled_error(plugin) == "Plugin mtproto_zig apply returned false"
+    assert rolled_back == ["rollback"]
+
+
+def test_a_non_string_apply_failure_reader_keeps_the_generic_text():
+    plugin = _false_apply_plugin(apply_failure=lambda: Mock())
+
+    assert _apply_enabled_error(plugin) == "Plugin mtproto_zig apply returned false"

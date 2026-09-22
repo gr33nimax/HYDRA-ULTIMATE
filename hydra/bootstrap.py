@@ -234,6 +234,8 @@ def production_application(
                 certificates,
                 plugins.get,
             ).prepare_enable,
+            last_apply_error=orchestration.last_apply_error,
+            set_apply_error=orchestration._set_apply_error,
         ),
         plugin_queries=plugin_queries,
         plugin_actions=plugin_actions,

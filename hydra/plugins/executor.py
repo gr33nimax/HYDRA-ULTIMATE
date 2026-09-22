@@ -92,9 +92,7 @@ class PluginExecutor:
                 ) from exc
             if not applied_ok:
                 transaction.rollback(log_error)
-                raise RuntimeError(
-                    f"Plugin {plugin.meta.name} apply returned false",
-                )
+                raise RuntimeError(apply_failure_message(plugin))
             applied.append((plugin, snapshot))
         transaction.commit()
         return applied
@@ -132,3 +130,23 @@ def uses_central_apply(plugin: BasePlugin) -> bool:
     """Read the capability while preserving legacy custom plugins."""
     value = getattr(plugin.meta, "central_apply", None)
     return plugin.meta.name != "wdtt" if value is None else value
+
+
+def apply_failure_message(plugin: BasePlugin) -> str:
+    """Prefer the plugin's own redacted apply stage over the generic text.
+
+    A plugin that returns false records the failing stage itself (the unit that
+    did not come up, the route that stayed inactive). Reading it is best effort:
+    a missing hook, a non-string value or a raising reader must never change the
+    apply outcome, so the generic message stays as the fallback.
+    """
+    message = f"Plugin {plugin.meta.name} apply returned false"
+    reader = getattr(plugin, "apply_failure", None)
+    if not callable(reader):
+        return message
+    try:
+        stage = reader()
+    except Exception:
+        return message
+    detail = stage.strip() if isinstance(stage, str) else ""
+    return f"{message}: {detail}" if detail else message

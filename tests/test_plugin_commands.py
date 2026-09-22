@@ -37,7 +37,15 @@ def _state(*, enabled: bool) -> AppState:
     )
 
 
-def _service(plugin, *, apply=lambda state: True, saves=None, prepare=None):
+def _service(
+    plugin,
+    *,
+    apply=lambda state: True,
+    saves=None,
+    prepare=None,
+    last_apply_error=lambda: "",
+    set_apply_error=lambda message: None,
+):
     persisted = saves if saves is not None else []
     return PluginCommandService(
         get_plugin=lambda name: plugin if name == "naive" else None,
@@ -46,6 +54,8 @@ def _service(plugin, *, apply=lambda state: True, saves=None, prepare=None):
             state.protocols["naive"].config["network"],
         ),
         prepare_apply=prepare or (lambda state, name: None),
+        last_apply_error=last_apply_error,
+        set_apply_error=set_apply_error,
     )
 
 
@@ -133,6 +143,115 @@ def test_failed_apply_restores_and_persists_previous_desired_state():
     )
     assert state.protocols["naive"].config == {"network": "tcp"}
     assert saved == ["tcp"]
+
+
+APPLY_REASON = "Не удалось применить конфигурацию плагина: route is not active"
+
+
+class _FailingRollbackPlugin(_Plugin):
+    """A plugin whose cleanup reports failure after a failed apply."""
+
+    def rollback(self, state, snapshot):
+        return False
+
+
+def test_failed_apply_keeps_the_apply_reason_after_a_successful_rollback():
+    state = _state(enabled=True)
+    error = {"value": APPLY_REASON}
+    service = _service(
+        _Plugin(),
+        apply=lambda current: False,
+        last_apply_error=lambda: error["value"],
+        set_apply_error=lambda message: error.update(value=message),
+    )
+
+    assert not service.execute(state, "naive", "set_transport", network="quic")
+    assert error["value"] == APPLY_REASON
+    assert "rollback" not in error["value"]
+    assert state.protocols["naive"].config == {"network": "tcp"}
+
+
+def test_failed_rollback_reports_it_next_to_the_apply_reason():
+    state = _state(enabled=True)
+    error = {"value": APPLY_REASON}
+    service = _service(
+        _FailingRollbackPlugin(),
+        apply=lambda current: False,
+        last_apply_error=lambda: error["value"],
+        set_apply_error=lambda message: error.update(value=message),
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        service.execute(state, "naive", "set_transport", network="quic")
+
+    assert str(raised.value).splitlines() == [
+        APPLY_REASON,
+        "plugin command rollback failed: naive.set_transport",
+    ]
+    assert error["value"] == APPLY_REASON, "the restored reason must survive the raise"
+    assert state.protocols["naive"].config == {"network": "tcp"}
+
+
+def test_failed_rollback_without_an_apply_reason_keeps_the_existing_text():
+    state = _state(enabled=True)
+    service = _service(_FailingRollbackPlugin(), apply=lambda current: False)
+
+    with pytest.raises(
+        RuntimeError,
+        match="plugin command rollback failed: naive.set_transport",
+    ):
+        service.execute(state, "naive", "set_transport", network="quic")
+    assert state.protocols["naive"].config == {"network": "tcp"}
+
+
+def test_successful_command_never_touches_the_apply_error():
+    state = _state(enabled=True)
+    written = []
+    service = _service(
+        _Plugin(),
+        last_apply_error=lambda: APPLY_REASON,
+        set_apply_error=written.append,
+    )
+
+    assert service.execute(state, "naive", "set_transport", network="quic")
+    assert written == []
+
+
+def test_unchanged_command_never_touches_the_apply_error():
+    state = _state(enabled=False)
+    written = []
+    service = _service(
+        _Plugin(),
+        last_apply_error=lambda: APPLY_REASON,
+        set_apply_error=written.append,
+    )
+
+    assert not service.execute(state, "naive", "set_transport", network="rejected")
+    assert written == []
+
+
+def test_persist_only_command_never_touches_the_apply_error():
+    plugin = _Plugin()
+    plugin.meta = SimpleNamespace(
+        name="naive",
+        contract_version=1,
+        capabilities=SimpleNamespace(
+            commands=("set_transport",),
+            central_apply=True,
+            persist_only_commands=("set_transport",),
+        ),
+    )
+    state = _state(enabled=True)
+    written = []
+    service = _service(
+        plugin,
+        last_apply_error=lambda: APPLY_REASON,
+        set_apply_error=written.append,
+    )
+
+    assert service.execute(state, "naive", "set_transport", network="quic")
+    assert state.protocols["naive"].config["network"] == "quic"
+    assert written == []
 
 
 def test_rejected_and_raising_commands_leave_no_partial_state():

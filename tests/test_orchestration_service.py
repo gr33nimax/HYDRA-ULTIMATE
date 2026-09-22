@@ -164,3 +164,27 @@ def test_instance_orchestrator_does_not_import_global_registry():
         elif isinstance(node, ast.ImportFrom) and node.module:
             modules.append(node.module)
     assert "hydra.plugins.registry" not in modules
+
+
+def test_sync_user_configs_prefers_the_plugin_apply_stage(tmp_path):
+    service, _plugin = _service(tmp_path)
+    state = AppState(protocols={"local": PluginState(enabled=True)})
+    double = SimpleNamespace(
+        meta=SimpleNamespace(name="local", contract_version=1),
+        configure=lambda _state: ConfigFragment(),
+        apply=lambda _state: False,
+        apply_failure=lambda: "юнит не поднялся: смотрите journalctl -u local",
+    )
+    service.plugins = SimpleNamespace(transports=lambda: [double])
+
+    try:
+        service.sync_user_configs(state)
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("a false plugin apply must raise")
+
+    assert message == (
+        "Plugin local apply returned false: "
+        "юнит не поднялся: смотрите journalctl -u local"
+    )

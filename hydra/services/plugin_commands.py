@@ -48,6 +48,9 @@ class PluginCommandService:
     invoker: PluginInvoker = field(default_factory=PluginInvoker)
     prepare_apply: Callable[[AppState, str], None] = lambda state, name: None
     commands: Mapping[str, frozenset[str]] | None = None
+    # A failed apply must stay visible after the rollback that followed it.
+    last_apply_error: Callable[[], str] = lambda: ""
+    set_apply_error: Callable[[str], None] = lambda message: None
 
     def _persist_rollback(self, state: AppState) -> None:
         """Persist a restored snapshot without failing on a stale revision."""
@@ -141,7 +144,23 @@ class PluginCommandService:
                     if not central_apply:
                         self.save_state(state)
                     return True
-                rollback()
+                # The apply reason is captured before the rollback, because the
+                # cleanup is allowed to fail and must never replace the cause.
+                failure = self.last_apply_error()
+                rollback_error: Exception | None = None
+                try:
+                    rollback()
+                except Exception as exc:
+                    rollback_error = exc
+                finally:
+                    if failure:
+                        self.set_apply_error(failure)
+                if rollback_error is not None:
+                    raise RuntimeError(
+                        f"{failure}\n{rollback_error}"
+                        if failure
+                        else str(rollback_error),
+                    ) from rollback_error
                 return False
 
             self.save_state(state)

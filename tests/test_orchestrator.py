@@ -884,3 +884,26 @@ def test_apply_restores_caddy_runtime_before_plugin_rollback():
     assert order == ["caddy", "plugin"]
     plugin.rollback.assert_called_once_with(state, {"old": True})
     assert last_apply_error() == "Проверка сервисов не пройдена: mtproto_zig: WEB bridge is down"
+
+
+def test_legacy_sync_user_configs_prefers_the_plugin_apply_stage():
+    from hydra.core import orchestrator
+
+    state = AppState()
+    state.protocols["mock_transport"] = PluginState(enabled=True, installed=True)
+    plugin = MagicMock()
+    plugin.meta.name = "mock_transport"
+    plugin.apply.return_value = False
+    plugin.apply_failure.return_value = "служба не запустилась: journalctl -u mock"
+
+    with (
+        patch("hydra.core.orchestrator.registry.transports", return_value=[plugin]),
+        patch("hydra.core.orchestrator.save_state"),
+        pytest.raises(RuntimeError) as raised,
+    ):
+        orchestrator.sync_user_configs(state)
+
+    assert str(raised.value) == (
+        "Plugin mock_transport apply returned false: "
+        "служба не запустилась: journalctl -u mock"
+    )
