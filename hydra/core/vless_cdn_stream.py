@@ -44,11 +44,13 @@ MEDIA_SEGMENT_DIR = "seg"
 MEDIA_SEGMENT_TEMPLATE = "seg-%05d.ts"
 
 # Картинка под дешёвую вебкамеру: невысокий fps, небольшая сетка, грайн от noise.
-FRAME_WIDTH = 1280
-FRAME_HEIGHT = 720
-FRAME_RATE = 15
+# Мелко и на ultrafast нарочно: синтетика кодируется на CPU, а это фоновый
+# фолбэк — не нужно 720p, настоящая уличная камера и так низкого разрешения.
+FRAME_WIDTH = 640
+FRAME_HEIGHT = 360
+FRAME_RATE = 12
 VIDEO_CODEC = "libx264"
-VIDEO_PRESET = "veryfast"
+VIDEO_PRESET = "ultrafast"
 VIDEO_TUNE = "zerolatency"
 
 
@@ -67,6 +69,12 @@ def media_directory(root: str | Path = DECOY_ROOT) -> Path:
     return Path(root) / MEDIA_PATH_PREFIX.lstrip("/")
 
 
+# Prefer an H.264 (avc1) muxed rendition so the relay can `-c copy` into HLS/mpegts:
+# YouTube also serves VP9/AV1, which cannot be remuxed to mpegts and would force a
+# CPU-burning transcode (or fail). Fallback to best if no avc1 exists.
+_YTDLP_ARGS = ("-f", "best[vcodec^=avc1]/best", "-g", "--no-playlist")
+
+
 def ytdlp_command(watch_url: object, *, python: str = YTDLP) -> list[str]:
     """Аргументы yt-dlp, достающие прямой адрес потока; исполняет вызывающий (host-слой).
 
@@ -74,25 +82,37 @@ def ytdlp_command(watch_url: object, *, python: str = YTDLP) -> list[str]:
     systemd-юнита; дефолт `yt-dlp` сохраняет старый вызов через консольный скрипт.
     """
     if python == YTDLP:
-        return [YTDLP, "-f", "best", "-g", "--no-playlist", str(watch_url or "").strip()]
-    return [str(python), "-m", "yt_dlp", "-f", "best", "-g", "--no-playlist", str(watch_url or "").strip()]
+        return [YTDLP, *_YTDLP_ARGS, str(watch_url or "").strip()]
+    return [str(python), "-m", "yt_dlp", *_YTDLP_ARGS, str(watch_url or "").strip()]
 
 
-def hls_output_args(output_dir: str | Path) -> list[str]:
-    """Сегментер HLS — единый хвост команды для источника и синтетики."""
+def hls_output_args(output_dir: str | Path, *, copy: bool = False) -> list[str]:
+    """Сегментер HLS — единый хвост команды для источника и синтетики.
+
+    `copy=True` — ремукс без перекодирования (`-c copy`): реальный источник уже H.264,
+    перекодировать его — сжигать CPU впустую и вести себя не как CDN (origin не транскодит).
+    `copy=False` — кодирование libx264: нужно только синтетике (lavfi даёт сырые кадры).
+    """
     base = Path(output_dir)
     playlist = base / MEDIA_PLAYLIST_NAME
     segment = base / MEDIA_SEGMENT_DIR / MEDIA_SEGMENT_TEMPLATE
+    codec_args = (
+        ["-c", "copy"]
+        if copy
+        else [
+            "-c:v",
+            VIDEO_CODEC,
+            "-preset",
+            VIDEO_PRESET,
+            "-tune",
+            VIDEO_TUNE,
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+        ]
+    )
     return [
-        "-c:v",
-        VIDEO_CODEC,
-        "-preset",
-        VIDEO_PRESET,
-        "-tune",
-        VIDEO_TUNE,
-        "-pix_fmt",
-        "yuv420p",
-        "-an",
+        *codec_args,
         "-f",
         "hls",
         "-hls_time",
@@ -155,13 +175,13 @@ def stream_plan(
         url = raw
 
     return StreamPlan(
-        command=_command(_source_input_args(url, kind), output_dir),
+        command=_command(_source_input_args(url, kind), output_dir, copy=True),
         kind=kind,
         synthetic=False,
     )
 
 
-def _command(input_args: list[str], output_dir: str | Path) -> list[str]:
+def _command(input_args: list[str], output_dir: str | Path, *, copy: bool = False) -> list[str]:
     return [
         FFMPEG,
         "-hide_banner",
@@ -169,7 +189,7 @@ def _command(input_args: list[str], output_dir: str | Path) -> list[str]:
         "warning",
         "-nostdin",
         *input_args,
-        *hls_output_args(output_dir),
+        *hls_output_args(output_dir, copy=copy),
     ]
 
 

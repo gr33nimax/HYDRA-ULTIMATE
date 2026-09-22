@@ -139,16 +139,26 @@ def test_youtube_with_ytdlp_but_no_resolved_url_waits_on_synthetic():
 # ── Единая форма HLS у источника и синтетики ────────────────────────────────────
 
 
-def test_source_and_synthetic_share_the_exact_hls_tail():
+def test_source_remuxes_and_synthetic_encodes():
     source = stream_plan("https://cam.example/live/stream.m3u8", output_dir=OUT, resolve=_PUBLIC)
     synthetic = stream_plan("", output_dir=OUT)
 
-    tail = len(hls_output_args(OUT))
-    assert source.command[-tail:] == synthetic.command[-tail:] == hls_output_args(OUT)
+    # Реальный источник уже H.264 — ремукс без транскодинга (иначе 100% CPU впустую).
+    assert "-c" in source.command
+    assert source.command[source.command.index("-c") + 1] == "copy"
+    assert "libx264" not in source.command
+    # Синтетика — сырые кадры lavfi, их надо кодировать.
+    assert "libx264" in synthetic.command
+    assert "copy" not in synthetic.command
+    # Оба заканчиваются одним HLS-сегментером (один и тот же плейлист/seg-путь).
+    tail = len(hls_output_args(OUT, copy=True))
+    assert source.command[-tail:] == hls_output_args(OUT, copy=True)
+    enc_tail = len(hls_output_args(OUT, copy=False))
+    assert synthetic.command[-enc_tail:] == hls_output_args(OUT, copy=False)
 
 
 def test_segmenter_is_a_rolling_hls_window():
-    args = hls_output_args(OUT)
+    args = hls_output_args(OUT, copy=False)
 
     assert args[args.index("-f") + 1] == "hls"
     assert "-hls_time" in args and "-hls_list_size" in args
@@ -156,7 +166,7 @@ def test_segmenter_is_a_rolling_hls_window():
 
 
 def test_segment_and_playlist_names_match_the_url_paths():
-    args = hls_output_args(OUT)
+    args = hls_output_args(OUT, copy=False)
     base = Path(OUT)
 
     assert MEDIA_PLAYLIST_PATH.endswith("/" + MEDIA_PLAYLIST_NAME)
@@ -233,10 +243,11 @@ def test_operator_text_cannot_break_the_filter_graph():
 
 
 def test_ytdlp_command_targets_one_stream():
+    # avc1-first, чтобы отданный поток можно было ремуксить в mpegts без транскодинга (VP9/AV1 нельзя).
     assert ytdlp_command("https://youtu.be/abc") == [
         "yt-dlp",
         "-f",
-        "best",
+        "best[vcodec^=avc1]/best",
         "-g",
         "--no-playlist",
         "https://youtu.be/abc",
