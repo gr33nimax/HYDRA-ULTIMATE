@@ -50,6 +50,17 @@ def _install(state: AppState, plugin: BasePlugin, app: ApplicationService) -> No
     prompt("Нажмите Enter")
 
 
+def _set_camera(state: AppState, plugin: BasePlugin, app: ApplicationService) -> None:
+    """URL реальной камеры (пусто — синтетика). Проверка формы/SSRF — в команде плагина."""
+    info("Пусто = синтетический стрим. Форматы: HLS (.m3u8), RTSP, MJPEG/HTTP, YouTube.")
+    url = prompt("URL камеры-источника:").strip()
+    if app.plugin_command(state, PROTOCOL_NAME, "set_cam_source_url", url=url):
+        success("Синтетика" if not url else "Источник камеры сохранён")
+    else:
+        error("URL отклонён: неверная форма или ссылка во внутреннюю сеть")
+    prompt("Нажмите Enter")
+
+
 def _menu_vless_cdn(
     state: AppState,
     plugin: BasePlugin,
@@ -71,6 +82,7 @@ def _menu_vless_cdn(
             ("Порт ядра", str(config.get("core_port", 0) or "—")),
             ("Сертификат", str(config.get("cert_file", "") or "—")),
             ("Регион origin-сервера", str(config.get("region_city", "") or "—")),
+            ("Камера-источник", str(config.get("cam_source_url", "") or "синтетика")),
         ]
         protocol_status_panel(
             PROTOCOL_NAME,
@@ -93,6 +105,7 @@ def _menu_vless_cdn(
             )
             options.extend(
                 [
+                    ("5", "📹 Источник камеры", "URL реальной камеры (HLS/RTSP/MJPEG/YouTube) или пусто — синтетика"),
                     ("8", "🔄 Переустановить", "Заменить домены и выпустить сертификат заново"),
                     ("9", "❌ Удалить", "Протокол, страница и таймер"),
                 ],
@@ -118,6 +131,8 @@ def _menu_vless_cdn(
             else:
                 error("Не удалось изменить состояние протокола")
             prompt("Нажмите Enter")
+        elif choice == "5" and config.get("cert_file"):
+            _set_camera(state, plugin, app)
         elif choice == "8":
             if confirm("Переустановить протокол с новыми доменами?", default=False):
                 _install(state, plugin, app)

@@ -241,7 +241,21 @@ def refresh_site(
 
     target = target_dir / PAGE_NAME
     HOST.atomic_write(target, render_page(data), mode=0o644)
+    _publish_hls_player(target_dir)
     return target
+
+
+def _publish_hls_player(target_dir: Path) -> None:
+    """Положить hls.js рядом с сайтом: плеер берёт его с того же origin
+    (`/assets/hls.min.js`), не с третьего хоста — иначе в Chrome нет плеера, а внешний
+    запрос сам по себе выдаёт заглушку. Файл вендорится в репо (Apache-2.0)."""
+    source = Path(__file__).resolve().parents[1] / "core" / "vendor" / "hls.min.js"
+    if not source.is_file():
+        return
+    assets = target_dir / "assets"
+    assets.mkdir(parents=True, exist_ok=True)
+    HOST.atomic_write(assets / "hls.min.js", source.read_bytes(), mode=0o644)
+    return
 
 
 def site_units(
