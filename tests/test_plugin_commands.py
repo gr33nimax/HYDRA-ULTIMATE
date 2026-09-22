@@ -278,6 +278,52 @@ def test_rejected_and_raising_commands_leave_no_partial_state():
     assert state.protocols["naive"].config == {"network": "tcp"}
 
 
+class _RaisingCommand(_Plugin):
+    """The base plugin with ``explode`` allowed through the command boundary."""
+
+    meta = SimpleNamespace(
+        name="naive",
+        contract_version=1,
+        capabilities=SimpleNamespace(
+            commands=("explode",),
+            central_apply=True,
+        ),
+    )
+
+
+class _RaisingCommandWithFailedRollback(_RaisingCommand):
+    """A command that raises while its cleanup also reports failure."""
+
+    def rollback(self, state, snapshot):
+        return False
+
+
+def test_a_raising_command_keeps_its_own_exception_when_the_rollback_succeeds():
+    state = _state(enabled=True)
+    service = _service(_RaisingCommand())
+
+    with pytest.raises(RuntimeError, match="command failed") as raised:
+        service.execute(state, "naive", "explode")
+
+    assert raised.value.__cause__ is None
+    assert state.protocols["naive"].config == {"network": "tcp"}
+
+
+def test_a_raising_command_keeps_its_cause_when_the_rollback_also_fails():
+    state = _state(enabled=True)
+    service = _service(_RaisingCommandWithFailedRollback())
+
+    with pytest.raises(RuntimeError) as raised:
+        service.execute(state, "naive", "explode")
+
+    assert str(raised.value).splitlines() == [
+        "command failed",
+        "plugin command rollback failed: naive.explode",
+    ]
+    assert str(raised.value.__cause__) == "command failed"
+    assert state.protocols["naive"].config == {"network": "tcp"}
+
+
 def test_command_allowlist_rejects_arbitrary_plugin_methods():
     with pytest.raises(ValueError, match="unsupported plugin command"):
         _service(_Plugin()).execute(

@@ -9,6 +9,7 @@ from typing import Any, Callable
 from hydra.core.apply_transaction import ApplyTransaction
 from hydra.core.state_models import AppState, PluginState
 from hydra.core.transaction_helpers import state_transaction
+from hydra.plugins.base import failure_stage
 from hydra.plugins.invoker import PluginInvoker
 from hydra.services.configuration import restore_state_in_place
 
@@ -288,16 +289,8 @@ class PluginLifecycleOperations:
     def _plugin_stage(plugin: Any, kind: str) -> str:
         """Read one optional, best-effort redacted plugin failure stage.
 
-        A diagnostic label must never replace the real lifecycle result or
+        The canonical reader lives in :func:`hydra.plugins.base.failure_stage`;
+        a diagnostic label must never replace the real lifecycle result or
         raise on its own.
         """
-        hook = getattr(plugin, f"{kind}_failure", None)
-        if not callable(hook):
-            return ""
-        try:
-            stage = hook()
-        except Exception:
-            return ""
-        # Only a real string stage counts: a test double or third-party plugin
-        # may expose a callable attribute that returns something else.
-        return stage.strip() if isinstance(stage, str) else ""
+        return failure_stage(plugin, kind)

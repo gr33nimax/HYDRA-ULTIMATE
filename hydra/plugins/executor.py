@@ -9,7 +9,7 @@ from hydra.contracts import ConfigFragment, validate_fragment
 from hydra.core.apply_transaction import ApplyTransaction
 from hydra.core.errors import PluginError
 from hydra.core.state_models import AppState
-from hydra.plugins.base import BasePlugin
+from hydra.plugins.base import BasePlugin, failure_stage
 from hydra.plugins.catalog import PluginCatalog
 from hydra.plugins.invoker import PluginInvoker
 
@@ -135,18 +135,9 @@ def uses_central_apply(plugin: BasePlugin) -> bool:
 def apply_failure_message(plugin: BasePlugin) -> str:
     """Prefer the plugin's own redacted apply stage over the generic text.
 
-    A plugin that returns false records the failing stage itself (the unit that
-    did not come up, the route that stayed inactive). Reading it is best effort:
-    a missing hook, a non-string value or a raising reader must never change the
-    apply outcome, so the generic message stays as the fallback.
+    The stage reader is best effort (see :func:`failure_stage`): a missing hook,
+    a non-string value or a raising reader leaves the generic message in place.
     """
     message = f"Plugin {plugin.meta.name} apply returned false"
-    reader = getattr(plugin, "apply_failure", None)
-    if not callable(reader):
-        return message
-    try:
-        stage = reader()
-    except Exception:
-        return message
-    detail = stage.strip() if isinstance(stage, str) else ""
+    detail = failure_stage(plugin, "apply")
     return f"{message}: {detail}" if detail else message

@@ -110,6 +110,24 @@ def lifecycle_result(
     )
 
 
+def failure_stage(plugin, kind: str) -> str:
+    """Read one optional, best-effort redacted plugin failure stage.
+
+    A plugin that fails records the failing stage itself (the unit that did not
+    come up, the route that stayed inactive). Reading it is best effort: a
+    missing hook, a non-string value or a raising reader must never change the
+    lifecycle outcome, so every caller gets "" instead.
+    """
+    hook = getattr(plugin, f"{kind}_failure", None)
+    if not callable(hook):
+        return ""
+    try:
+        stage = hook()
+    except Exception:
+        return ""
+    return stage.strip() if isinstance(stage, str) else ""
+
+
 @dataclass
 class PluginMeta:
     name: str

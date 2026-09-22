@@ -7,6 +7,8 @@ from subprocess import CompletedProcess
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import pytest
+
 from hydra.core.state import AppState, PluginState
 from hydra.plugins.catalog import PluginCatalog
 from hydra.plugins.executor import PluginExecutor
@@ -540,16 +542,11 @@ def test_executor_prefers_the_plugin_apply_stage_over_the_generic_text():
 
     message = _apply_enabled_error(plugin)
 
-    assert message == (
-        "Plugin mtproto_zig apply returned false: "
-        "WEB-мост не подтверждён: no route"
-    )
+    assert message == ("Plugin mtproto_zig apply returned false: WEB-мост не подтверждён: no route")
 
 
 def test_executor_keeps_the_generic_text_without_a_plugin_stage():
-    assert _apply_enabled_error(_false_apply_plugin()) == (
-        "Plugin mtproto_zig apply returned false"
-    )
+    assert _apply_enabled_error(_false_apply_plugin()) == ("Plugin mtproto_zig apply returned false")
 
 
 def test_a_raising_apply_failure_reader_never_breaks_the_rollback():
@@ -571,3 +568,37 @@ def test_a_non_string_apply_failure_reader_keeps_the_generic_text():
     plugin = _false_apply_plugin(apply_failure=lambda: Mock())
 
     assert _apply_enabled_error(plugin) == "Plugin mtproto_zig apply returned false"
+
+
+def _raising_stage_reader():
+    raise RuntimeError("diagnostics unavailable")
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"apply_failure": lambda: "  WEB-мост не подтверждён: no route  "}, "WEB-мост не подтверждён: no route"),
+        ({}, ""),
+        ({"apply_failure": _raising_stage_reader}, ""),
+        ({"apply_failure": lambda: Mock()}, ""),
+    ],
+)
+def test_executor_and_lifecycle_read_the_same_plugin_stage(overrides, expected):
+    """One canonical reader: the two call sites must never drift apart."""
+    plugin = _false_apply_plugin(**overrides)
+
+    message = _apply_enabled_error(plugin)
+    executor_stage = message.split(": ", 1)[1] if ": " in message else ""
+
+    assert PluginLifecycleOperations._plugin_stage(plugin, "apply") == expected
+    assert executor_stage == expected
+
+
+def test_the_stage_reader_serves_both_install_and_apply_hooks():
+    plugin = SimpleNamespace(
+        install_failure=lambda: "  шаг установки  ",
+        apply_failure=lambda: "шаг применения",
+    )
+
+    assert PluginLifecycleOperations._plugin_stage(plugin, "install") == "шаг установки"
+    assert PluginLifecycleOperations._plugin_stage(plugin, "apply") == "шаг применения"

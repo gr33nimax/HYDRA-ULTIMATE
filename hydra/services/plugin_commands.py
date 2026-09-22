@@ -165,9 +165,17 @@ class PluginCommandService:
 
             self.save_state(state)
             return True
-        except Exception:
-            rollback()
-            raise
+        except Exception as exc:
+            # The command's own failure is the cause; a failing cleanup is
+            # reported as an additional line and must never replace it.
+            rollback_error: Exception | None = None
+            try:
+                rollback()
+            except Exception as cleanup_exc:
+                rollback_error = cleanup_exc
+            if rollback_error is None:
+                raise
+            raise RuntimeError(f"{exc}\n{rollback_error}") from exc
 
 
 __all__ = [

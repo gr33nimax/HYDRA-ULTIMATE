@@ -1,4 +1,5 @@
 """Instance-scoped orchestration contracts."""
+
 from __future__ import annotations
 
 import ast
@@ -184,7 +185,4 @@ def test_sync_user_configs_prefers_the_plugin_apply_stage(tmp_path):
     else:
         raise AssertionError("a false plugin apply must raise")
 
-    assert message == (
-        "Plugin local apply returned false: "
-        "юнит не поднялся: смотрите journalctl -u local"
-    )
+    assert message == ("Plugin local apply returned false: юнит не поднялся: смотрите journalctl -u local")
