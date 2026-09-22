@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from hydra.contracts import JsonValue
-from hydra.contracts.vless_cdn import PROTOCOL_NAME
+from hydra.contracts.vless_cdn import MEDIA_PLAYLIST_PATH, PROTOCOL_NAME
 from hydra.core.state import AppState
 from hydra.core.state_models import PluginState
 from hydra.core.region_image import RegionImage
@@ -108,6 +109,30 @@ def test_page_needs_no_third_party_hosts():
 
     assert "http://" not in page
     assert "https://" not in page, "никаких внешних зависимостей на странице"
+
+
+def test_page_plays_the_live_stream_from_the_media_family():
+    page = render_page(_data())
+
+    assert '<video id="live-stream"' in page
+    assert f'src="{MEDIA_PLAYLIST_PATH}"' in page, "плеер смотрит на медиа-семейство туннеля"
+    assert "street camera" in page
+    assert 'class="live-tag"' in page
+    assert ">LIVE<" in page
+
+
+def test_player_uses_the_local_hls_library_and_the_handwriting_headers():
+    page = render_page(_data())
+
+    assert 'src="/assets/hls.min.js"' in page, "библиотека HLS — со своего origin, не с третьей стороны"
+    assert "xhrSetup" in page
+    assert "X-Upload-Token" in page, "сессия плеера — та же рука, что у туннеля"
+    assert "X-Client-Version" in page, "padding-заголовок совпадает с транспортом"
+
+
+def test_player_poster_is_the_region_image():
+    page = render_page(_data())
+    assert 'poster="/assets/region.jpg"' in page
 
 
 def test_missing_weather_keeps_the_page_usable():
@@ -336,7 +361,55 @@ def test_installing_the_timer_uses_the_shared_installer(monkeypatch, tmp_path):
         return True
 
     monkeypatch.setattr(site.systemd, "install_timer", fake_install)
+    stream = MagicMock(return_value=True)
+    monkeypatch.setattr(site, "install_stream_service", stream)
 
     assert site.install_site_timer(tmp_path) is True
     assert captured["name"] == site.TIMER_NAME == "hydra-vless-cdn-site"
     assert "vless_cdn_site" in captured["service"]
+    stream.assert_called_once_with(tmp_path)
+
+
+def test_the_site_stack_installs_the_live_stream_first(monkeypatch, tmp_path):
+    """Страница ссылается на плейлист: без потока она указывала бы в пустоту."""
+    order: list[str] = []
+    monkeypatch.setattr(site, "install_stream_service", lambda root=None: order.append("stream") or True)
+    monkeypatch.setattr(
+        site.systemd,
+        "install_timer",
+        lambda *_args: order.append("timer") or True,
+    )
+
+    assert site.install_site_timer(tmp_path) is True
+    assert order == ["stream", "timer"]
+
+
+def test_a_missing_ffmpeg_stops_the_site_stack_before_the_timer(monkeypatch, tmp_path):
+    """Без ffmpeg потока не будет: лучше явный отказ, чем страница с мёртвым плеером."""
+    timer = MagicMock(return_value=True)
+    monkeypatch.setattr(site, "install_stream_service", lambda root=None: False)
+    monkeypatch.setattr(site.systemd, "install_timer", timer)
+
+    assert site.install_site_timer(tmp_path) is False
+    timer.assert_not_called()
+
+
+def test_a_failed_timer_rolls_back_the_stream_service(monkeypatch, tmp_path):
+    cleanup = MagicMock(return_value=True)
+    monkeypatch.setattr(site, "install_stream_service", lambda root=None: True)
+    monkeypatch.setattr(site.systemd, "install_timer", lambda *_args: False)
+    monkeypatch.setattr(site, "remove_stream_service", cleanup)
+
+    assert site.install_site_timer(tmp_path) is False
+    cleanup.assert_called_once_with()
+
+
+def test_removing_the_site_stack_removes_the_stream_too(monkeypatch):
+    stream = MagicMock(return_value=True)
+    timer = MagicMock(return_value=True)
+    monkeypatch.setattr(site, "remove_stream_service", stream)
+    monkeypatch.setattr(site.systemd, "remove_unit", timer)
+
+    assert site.remove_site_timer() is True
+    stream.assert_called_once_with()
+    timer.assert_called_once_with(site.TIMER_NAME)

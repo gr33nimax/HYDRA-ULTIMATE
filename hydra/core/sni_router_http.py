@@ -5,8 +5,20 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from hydra.contracts.vless_cdn import (
+    MEDIA_PATH_PREFIX,
+    MEDIA_PLAYLIST_PATH,
+    MEDIA_SEGMENT_PATH_PREFIX,
+)
 
 Backend = dict[str, Any]
+
+# MIME медиа-семейства: без него Caddy отдал бы плейлист и сегменты как octet-stream,
+# и плеер бы их не принял. Range-запросы file_server умеет сам.
+PLAYLIST_CONTENT_TYPE = "application/vnd.apple.mpegurl"
+SEGMENT_CONTENT_TYPE = "video/mp2t"
+PLAYLIST_CACHE_CONTROL = "no-cache"
+SEGMENT_CACHE_CONTROL = "public, max-age=60"
 
 
 def _as_int(value: object, default: int = 0) -> int:
@@ -165,16 +177,42 @@ def _trusttunnel_server(
     }
 
 
+def _static_route(
+    match_path: str,
+    content_type: str,
+    cache_control: str,
+    decoy_handler: dict[str, Any],
+) -> dict[str, Any]:
+    """Статика с явным Content-Type: file_server его бы взял по расширению, а для
+    HLS-типов его может не оказаться в таблице MIME. Range файл-сервер отдаёт сам."""
+    headers = {
+        "Content-Type": [content_type],
+        "Cache-Control": [cache_control],
+    }
+    return {
+        "match": [{"path": [match_path]}],
+        "handle": [
+            {"handler": "headers", "response": {"set": headers}},
+            decoy_handler.copy(),
+        ],
+    }
+
+
 def _decoy_routes(
     path: str,
     assets_prefix: str,
     proxy: dict[str, Any],
     decoy_handler: dict[str, Any],
+    *,
+    media_prefix: str = "",
 ) -> list[dict[str, Any]]:
-    """Таблица маршрутов: туннель, затем статика (если заявлена), затем сайт.
+    """Таблица маршрутов: туннель, затем медиа сайта, затем статика, затем сайт.
 
-    Порядок — часть контракта: сайт идёт последним и без своего пути, поэтому он не
-    может перехватить туннель, а статика не проваливается в сайт.
+    Порядок — часть контракта. Туннель идёт первым по своему точному пути и поэтому
+    не может быть перехвачен; медиа-маршруты (`/api/media/*`, куда плеер заглушки сам
+    ходит за плейлистом и сегментами) отдаются статикой — так боевой путь один из
+    многих, а не одинокая полоса на мёртвом префиксе; сайт идёт последним и без своего
+    пути, поэтому не перехватывает ничего из перечисленного.
     """
     routes: list[dict[str, Any]] = [
         {
@@ -182,6 +220,20 @@ def _decoy_routes(
             "handle": [proxy],
         },
     ]
+    if media_prefix:
+        # Плейлист и сегменты плеера — то же медиа-семейство, что и боевой путь, тем же
+        # file_server'ом с корнем сайта: /api/media/... → {decoy_root}/api/media/...
+        routes.append(
+            _static_route(MEDIA_PLAYLIST_PATH, PLAYLIST_CONTENT_TYPE, PLAYLIST_CACHE_CONTROL, decoy_handler),
+        )
+        routes.append(
+            _static_route(
+                f"{MEDIA_SEGMENT_PATH_PREFIX.rstrip('/')}/*",
+                SEGMENT_CONTENT_TYPE,
+                SEGMENT_CACHE_CONTROL,
+                decoy_handler,
+            ),
+        )
     if assets_prefix:
         routes.append(
             {
@@ -213,6 +265,11 @@ def _path_proxy_decoy_server(
     # Префикс статики объявляет сам протокол: если он его не заявил, таблица маршрутов
     # остаётся прежней — два маршрута, как у остальных протоколов.
     assets_prefix = str(backend.get("assets_prefix") or "").rstrip("/")
+    # Медиа-семейство обслуживаем статикой только там, где в нём же живёт туннель:
+    # путь заявлен внутри /api/media/* — значит, плейлист и сегменты сайта — соседи
+    # боевого пути, а не отдельный префикс. У чужих http-протоколов путь снаружи,
+    # и их таблица маршрутов не меняется.
+    media_prefix = MEDIA_PATH_PREFIX if path.startswith(f"{MEDIA_PATH_PREFIX}/") else ""
     exact_source = str(backend["name"]) in settings.relay_ports
     upstream_port = settings.relay_ports[str(backend["name"])] if exact_source else _as_int(backend["port"])
     upstream_tls = bool(backend.get("upstream_tls", True))
@@ -272,7 +329,7 @@ def _path_proxy_decoy_server(
             "disable": True,
             "disable_redirects": True,
         },
-        "routes": _decoy_routes(path, assets_prefix, proxy, decoy_handler),
+        "routes": _decoy_routes(path, assets_prefix, proxy, decoy_handler, media_prefix=media_prefix),
         "errors": {
             "routes": [{"handle": [decoy_handler.copy()]}],
         },

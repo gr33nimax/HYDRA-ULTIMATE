@@ -166,3 +166,73 @@ def test_status_is_not_running_until_both_names_are_set():
 
     assert plugin.status(state).running is False
     assert plugin.get_summary(state)["ready"] is False
+
+
+# ── cam_source_url (TSK-07) ───────────────────────────────────────────────
+
+
+def test_camera_source_defaults_to_empty_and_is_listed():
+    keys = [key for key, _value in VlessCdnPlugin.meta.config_defaults]
+    assert "cam_source_url" in keys
+    assert dict(VlessCdnPlugin.meta.config_defaults)["cam_source_url"] == ""
+
+
+def test_an_empty_camera_source_clears_it_back_to_synthetic():
+    state = _state()
+    plugin = VlessCdnPlugin()
+
+    assert plugin.set_cam_source_url(state, "https://1.1.1.1/cam.m3u8") is True
+    assert plugin.set_cam_source_url(state, "   ") is True
+    assert state.protocols[PROTOCOL_NAME].config["cam_source_url"] == ""
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://1.1.1.1/live/stream.m3u8", "rtsp://1.1.1.1:554/stream", "http://1.1.1.1/mjpg/video.mjpg"],
+)
+def test_a_public_camera_source_is_accepted(url):
+    state = _state()
+    plugin = VlessCdnPlugin()
+
+    assert plugin.set_cam_source_url(state, url) is True
+    assert state.protocols[PROTOCOL_NAME].config["cam_source_url"] == url
+
+
+def test_a_hostname_source_is_accepted_when_it_resolves_publicly():
+    state = _state()
+    plugin = VlessCdnPlugin()
+    resolve = lambda _host: ["93.184.216.34"]  # noqa: E731
+
+    assert plugin.set_cam_source_url(state, "https://cam.example/live/stream.m3u8", resolve=resolve) is True
+
+
+def test_a_hostname_source_that_resolves_privately_is_refused():
+    state = _state()
+    plugin = VlessCdnPlugin()
+    resolve = lambda _host: ["10.0.0.5"]  # noqa: E731
+
+    assert plugin.set_cam_source_url(state, "https://cam.example/live/stream.m3u8", resolve=resolve) is False
+    assert state.protocols[PROTOCOL_NAME].config["cam_source_url"] == ""
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "ftp://cam.example/x.m3u8",
+        "file:///etc/passwd",
+        "http://10.0.0.1/x.m3u8",
+        "https://127.0.0.1/x.m3u8",
+        "https://192.168.0.10/x.m3u8",
+        "not a url",
+    ],
+)
+def test_a_refused_camera_source_leaves_the_config_untouched(url):
+    state = _state()
+    plugin = VlessCdnPlugin()
+
+    assert plugin.set_cam_source_url(state, url) is False
+    assert state.protocols[PROTOCOL_NAME].config["cam_source_url"] == ""
+
+
+def test_camera_source_command_without_a_state_entry_is_refused():
+    assert VlessCdnPlugin().set_cam_source_url(AppState(), "https://1.1.1.1/x.m3u8") is False

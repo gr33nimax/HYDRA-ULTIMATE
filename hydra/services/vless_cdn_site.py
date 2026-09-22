@@ -27,6 +27,7 @@ from hydra.core.vless_cdn_page import (
 )
 from hydra.core.weather import WeatherView, weather_view
 from hydra.services.security_intel import lookup_region
+from hydra.services.vless_cdn_stream import install_stream_service, remove_stream_service
 
 TIMER_NAME = "hydra-vless-cdn-site"
 TIMER_CALENDAR = "*:0/10"
@@ -274,13 +275,25 @@ WantedBy=timers.target
 
 
 def install_site_timer(root: Path | None = None) -> bool:
-    """Поставить таймер обновления страницы через общий установщик юнитов."""
+    """Поднять стек прикрытия: живую страницу (таймер) и живой медиапоток (сервис).
+
+    Поток ставится первым: без него страница ссылалась бы на плейлист, которого нет,
+    и снаружи это выглядело бы как мёртвый медиасервис. Частичный сбой откатывается,
+    чтобы не оставалось половины стека.
+    """
+    if not install_stream_service(root):
+        return False
     service, timer = site_units(root)
-    return systemd.install_timer(TIMER_NAME, service, timer)
+    if not systemd.install_timer(TIMER_NAME, service, timer):
+        remove_stream_service()
+        return False
+    return True
 
 
 def remove_site_timer() -> bool:
-    return systemd.remove_unit(TIMER_NAME)
+    stream_removed = remove_stream_service()
+    timer_removed = systemd.remove_unit(TIMER_NAME)
+    return stream_removed and timer_removed
 
 
 __all__ = [

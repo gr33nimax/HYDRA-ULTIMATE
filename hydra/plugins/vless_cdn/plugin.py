@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from hydra.contracts import JsonObject, JsonValue
 from hydra.core.state_models import User
 from hydra.plugins.base import (
@@ -27,7 +29,9 @@ from hydra.contracts.vless_cdn import (
     PROTOCOL_NAME,
     as_int,
     normalize_hostname,
+    normalize_media_source,
     normalize_path,
+    resolve_host,
     server_encryption_value,
 )
 
@@ -53,7 +57,7 @@ class VlessCdnPlugin(BasePlugin):
         # Публичное имя выдаёт CDN, а origin-имя спрашивается отдельно, поэтому
         # общий сценарий «спросить основной домен» здесь не подходит.
         needs_domain=False,
-        commands=("set_cdn_domain", "set_origin_host", "set_path"),
+        commands=("set_cdn_domain", "set_origin_host", "set_path", "set_cam_source_url"),
         queries=("get_summary",),
         config_defaults=CONFIG_DEFAULTS,
         connection_source="tracked",
@@ -209,6 +213,28 @@ class VlessCdnPlugin(BasePlugin):
         except ValueError:
             return False
         plugin_state.config["xhttp_path"] = path
+        return True
+
+    def set_cam_source_url(
+        self,
+        state: PluginStateAccess,
+        url: str,
+        *,
+        resolve: Callable[[str], list[str]] = resolve_host,
+    ) -> bool:
+        """Живая камера оператора: пусто — синтетика, иначе проверенный URL источника.
+
+        Проверка идёт контрактом: форма (hls/rtsp/mjpeg/youtube) и запрет ссылки
+        внутрь хоста/в приватную сеть. `resolve` инжектируем — тесты не ходят в DNS.
+        """
+        plugin_state = state.protocols.get(PROTOCOL_NAME)
+        if plugin_state is None:
+            return False
+        try:
+            source = normalize_media_source(url, resolve=resolve)
+        except ValueError:
+            return False
+        plugin_state.config["cam_source_url"] = source
         return True
 
     def get_summary(self, state: PluginStateAccess) -> dict[str, object]:

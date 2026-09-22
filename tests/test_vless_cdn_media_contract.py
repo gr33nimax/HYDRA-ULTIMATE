@@ -24,6 +24,7 @@ from hydra.contracts.vless_cdn import (
 
 # ── Путь живёт внутри медиа-семейства (R4) ──────────────────────────────────────
 
+
 def test_default_path_sits_inside_the_media_family():
     assert DEFAULT_XHTTP_PATH.startswith(f"{MEDIA_PATH_PREFIX}/")
     assert normalize_path(DEFAULT_XHTTP_PATH) == DEFAULT_XHTTP_PATH
@@ -62,6 +63,7 @@ def test_media_subpaths_are_built_from_the_prefix():
 
 # ── Проводные метки совпадают с транспортом (R4.1) ──────────────────────────────
 
+
 def test_wire_marks_match_the_transport_exactly():
     from hydra.plugins.vless_cdn.profile import SEQ_KEY, SESSION_KEY, X_PADDING_HEADER
 
@@ -71,6 +73,7 @@ def test_wire_marks_match_the_transport_exactly():
 
 
 # ── Классификация источника по форме ────────────────────────────────────────────
+
 
 @pytest.mark.parametrize(
     ("url", "expected"),
@@ -99,6 +102,7 @@ def test_source_form_refuses_what_it_cannot_play(url):
 
 
 # ── SSRF: источник не должен указывать внутрь (R-NFR-security) ──────────────────
+
 
 def _resolver(mapping):
     def resolve(host: str) -> list[str]:

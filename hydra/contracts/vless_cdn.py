@@ -86,6 +86,9 @@ CONFIG_DEFAULTS: tuple[tuple[str, JsonValue], ...] = (
     ("origin_host", ""),
     ("xhttp_path", DEFAULT_XHTTP_PATH),
     ("core_port", 0),
+    # Живая камера оператора: пусто — чистая синтетика (фолбэк без внешнего источника).
+    # Форма URL (hls/rtsp/mjpeg/youtube) проверяется контрактом, SSRF — перед стримом.
+    ("cam_source_url", ""),
     ("encryption_mode", "native"),
     ("encryption_private_key", ""),
     ("encryption_public_key", ""),
@@ -301,4 +304,22 @@ def assert_public_media_source(
             raise ValueError(
                 "URL источника указывает во внутреннюю или служебную сеть",
             )
+    return raw
+
+
+def normalize_media_source(
+    value: object,
+    *,
+    resolve: Callable[[str], list[str]] = resolve_host,
+) -> str:
+    """Привести URL источника камеры к одному виду или отклонить его.
+
+    Пусто — это «источника нет», то есть чистая синтетика: допустимое состояние, а не
+    ошибка. Непустое значение проверяется на форму (`classify_media_source`) и на SSRF
+    (`assert_public_media_source`), чтобы оператор не мог сохранить ссылку внутрь хоста.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    assert_public_media_source(raw, resolve=resolve)
     return raw

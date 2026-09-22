@@ -10,6 +10,9 @@ from hydra.contracts.vless_cdn import (
     DECOY_ROOT,
     DECOY_ROUTE_KEY,
     DEFAULT_XHTTP_PATH,
+    MEDIA_PATH_PREFIX,
+    MEDIA_PLAYLIST_PATH,
+    MEDIA_SEGMENT_PATH_PREFIX,
     PROTOCOL_NAME,
 )
 from hydra.core.sni_router import _collect_backends, _generate_config
@@ -128,7 +131,7 @@ def test_l4_terminates_tls_and_offers_http2_to_the_cdn():
     assert forward["upstreams"] == [{"dial": [f"127.0.0.1:{DECOY_HTTP_PORT}"]}]
 
 
-def test_inner_server_routes_the_tunnel_then_the_assets_then_the_site():
+def test_inner_server_routes_the_tunnel_then_the_media_then_the_assets_then_the_site():
     server = _require(_inner_server(_document(), DECOY_HTTP_PORT), "внутренний сервер")
 
     assert server["protocols"] == ["h1", "h2c"]
@@ -136,7 +139,7 @@ def test_inner_server_routes_the_tunnel_then_the_assets_then_the_site():
     assert server["automatic_https"] == {"disable": True, "disable_redirects": True}
     assert server["logs"]["logger_names"] == {ORIGIN: "vless-cdn-decoy"}
 
-    tunnel, assets, fallback = server["routes"]
+    tunnel, playlist, segments, assets, fallback = server["routes"]
 
     assert tunnel["match"] == [
         {"path": [DEFAULT_XHTTP_PATH, f"{DEFAULT_XHTTP_PATH}/*"]},
@@ -153,6 +156,16 @@ def test_inner_server_routes_the_tunnel_then_the_assets_then_the_site():
         "no-store, no-transform",
     ], "туннель нельзя кешировать"
 
+    # Медиа плеера — тем же file_server'ом, но с явным Content-Type: боевой путь
+    # живёт в том же семействе /api/media/*, поэтому он «один из многих».
+    assert playlist["match"] == [{"path": [MEDIA_PLAYLIST_PATH]}]
+    assert playlist["handle"][0]["response"]["set"]["Content-Type"] == ["application/vnd.apple.mpegurl"]
+    assert playlist["handle"][1]["handler"] == "file_server"
+
+    assert segments["match"] == [{"path": [f"{MEDIA_SEGMENT_PATH_PREFIX.rstrip('/')}/*"]}]
+    assert segments["handle"][0]["response"]["set"]["Content-Type"] == ["video/mp2t"]
+    assert segments["handle"][1]["handler"] == "file_server"
+
     assert assets["match"] == [{"path": ["/assets/*"]}], "статика — своим маршрутом"
     cache = assets["handle"][0]
     assert cache["handler"] == "headers"
@@ -164,16 +177,39 @@ def test_inner_server_routes_the_tunnel_then_the_assets_then_the_site():
     assert fallback["handle"][0]["root"] == DECOY_ROOT
 
 
+def test_the_tunnel_path_stays_inside_the_media_family_the_site_uses():
+    """Боевой путь обязан делить префикс с медиа сайта, иначе он выбивается из трафика."""
+    backend = _backends()[PROTOCOL_NAME]
+
+    assert backend["proxy_path"].startswith(f"{MEDIA_PATH_PREFIX}/")
+
+
+def test_a_route_without_a_media_prefix_keeps_two_routes():
+    """Чужой http-протокол без медиа-семейства получает прежнюю таблицу маршрутов."""
+    vless_server = _require(
+        _inner_server(_document(with_vless=True), VLESS_DECOY_PORT),
+        "внутренний сервер чужого протокола",
+    )
+
+    tunnel, fallback = vless_server["routes"]
+    assert "match" in tunnel
+    assert "match" not in fallback
+    for route in vless_server["routes"]:
+        for match in route.get("match", []):
+            if "path" in match:
+                assert not match["path"][0].startswith(MEDIA_PATH_PREFIX)
+
+
 def test_the_site_can_never_answer_on_the_tunnel_path():
     """Сайт обязан оставаться последним и без своего пути, иначе он перехватит туннель."""
     server = _require(_inner_server(_document(), DECOY_HTTP_PORT), "внутренний сервер")
-    tunnel, _assets, fallback = server["routes"]
+    tunnel = server["routes"][0]
 
     assert tunnel["match"][0]["path"] == [
         DEFAULT_XHTTP_PATH,
         f"{DEFAULT_XHTTP_PATH}/*",
     ]
-    assert "match" not in fallback, "у сайта нет собственного пути — он обслуживает остаток"
+    assert "match" not in server["routes"][-1], "у сайта нет собственного пути — он обслуживает остаток"
 
 
 def test_the_static_prefix_and_the_tunnel_path_do_not_overlap():

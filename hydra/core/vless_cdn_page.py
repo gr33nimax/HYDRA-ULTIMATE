@@ -11,6 +11,7 @@ from __future__ import annotations
 import html
 from dataclasses import dataclass, field
 
+from hydra.contracts.vless_cdn import MEDIA_PLAYLIST_PATH
 from hydra.core.weather import WeatherView
 
 DEFAULT_TITLE = "Regional Network Status"
@@ -81,6 +82,15 @@ h1 { font-size: 1.6rem; margin: 0; font-weight: 600; }
   height: 180px; border-radius: 12px;
   background: linear-gradient(135deg, #1b2430, #243347 60%, #1b2430);
 }
+.live { margin: 1.5rem 0 0; }
+.live-video { width: 100%; aspect-ratio: 16 / 9; display: block; border-radius: 12px;
+  background: #0b0e13; object-fit: cover; }
+.live-bar { display: flex; align-items: center; gap: .5rem; margin-top: .5rem;
+  color: #c9d1d9; font-size: .9rem; }
+.live-dot { width: .6rem; height: .6rem; border-radius: 50%; background: #f85149;
+  box-shadow: 0 0 0 3px rgba(248,81,73,.25); }
+.live-tag { color: #f85149; font-weight: 600; letter-spacing: .06em; }
+.live-place { color: #8b949e; }
 .credit { color: #6e7681; font-size: .78rem; margin-top: .4rem; }
 .grid { display: grid; gap: 1rem; margin-top: 1.5rem;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
@@ -184,6 +194,61 @@ def _image_block(image: ImageView) -> str:
     )
 
 
+def _live_script() -> str:
+    """Плеер: сам ходит по боевому семейству /api/media/* тем же почерком, что туннель.
+
+    HLS-библиотека берётся с того же origin (`/assets/hls.min.js`), а не с третьей
+    стороны: страница не заводит внешних хостов. Если библиотеки нет — нативный HLS
+    (Safari/iOS) всё равно играет, а софa не ломается. Заголовки почерка
+    (сессия `X-Upload-Token` и padding `X-Client-Version`) — те же имена, что у
+    VLESS-транспорта, чтобы запросы плеера не отличались от боевых.
+    """
+    return (
+        "(function () {"
+        "  var video = document.getElementById('live-stream');"
+        "  if (!video) { return; }"
+        f"  var PLAYLIST = '{MEDIA_PLAYLIST_PATH}';"
+        "  var token = Math.random().toString(36).slice(2, 12) + Date.now().toString(36);"
+        "  function sign(xhr) {"
+        "    xhr.setRequestHeader('X-Upload-Token', token);"
+        "    xhr.setRequestHeader('X-Client-Version', 'web/1.0');"
+        "  }"
+        "  var Hls = window.Hls;"
+        "  if (Hls && Hls.isSupported && Hls.isSupported()) {"
+        "    var hls = new Hls({ xhrSetup: function (xhr) { sign(xhr); } });"
+        "    hls.loadSource(PLAYLIST);"
+        "    hls.attachMedia(video);"
+        "  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {"
+        "    video.src = PLAYLIST;"
+        "  }"
+        "  var started = video.play();"
+        "  if (started && started.catch) { started.catch(function () {}); }"
+        "})();"
+    )
+
+
+def _live_player(data: SiteData) -> str:
+    """Блок «живой камеры»: то, ради чего страница отдаёт настоящий медиапоток.
+
+    `src` стоит уже в разметке: статичный разбор страницы видит плеер, указывающий на
+    медиа-семейство, — это и есть «настоящий медиасервис». JS лишь доустанавливает
+    HLS там, где браузер сам её не играет.
+    """
+    poster = f' poster="{_escape(data.image.src)}"' if data.image.src else ""
+    place = _escape(data.place)
+    return (
+        '<section class="live">'
+        '<video id="live-stream" class="live-video" controls autoplay muted playsinline'
+        f' preload="none" src="{_escape(MEDIA_PLAYLIST_PATH)}"{poster}></video>'
+        '<div class="live-bar"><span class="live-dot"></span>'
+        '<span class="live-tag">LIVE</span>'
+        f'<span class="live-place">{place} · street camera</span></div>'
+        "</section>"
+        '<script src="/assets/hls.min.js"></script>'
+        f"<script>{_live_script()}</script>"
+    )
+
+
 def _facts(data: SiteData) -> str:
     rows = []
     if data.capital:
@@ -216,6 +281,7 @@ def render_page(data: SiteData, *, title: str = DEFAULT_TITLE) -> str:
 <body>
 <main>
   {_header(data)}
+  {_live_player(data)}
   {_image_block(data.image)}
   <section class="grid">
     {_weather_block(data.weather)}

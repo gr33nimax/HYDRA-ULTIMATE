@@ -48,6 +48,7 @@ _PUBLIC = _resolver(
 
 # ── Формы источника ─────────────────────────────────────────────────────────────
 
+
 def test_hls_source_is_used_directly():
     plan = stream_plan("https://cam.example/live/stream.m3u8", output_dir=OUT, resolve=_PUBLIC)
 
@@ -91,6 +92,7 @@ def test_youtube_with_ytdlp_and_resolved_url():
 
 
 # ── Фолбэк на синтетику (заглушка никогда не мёртвая) ───────────────────────────
+
 
 def test_empty_source_falls_back_to_synthetic_without_a_complaint():
     plan = stream_plan("", output_dir=OUT)
@@ -136,6 +138,7 @@ def test_youtube_with_ytdlp_but_no_resolved_url_waits_on_synthetic():
 
 # ── Единая форма HLS у источника и синтетики ────────────────────────────────────
 
+
 def test_source_and_synthetic_share_the_exact_hls_tail():
     source = stream_plan("https://cam.example/live/stream.m3u8", output_dir=OUT, resolve=_PUBLIC)
     synthetic = stream_plan("", output_dir=OUT)
@@ -166,6 +169,7 @@ def test_segment_and_playlist_names_match_the_url_paths():
 
 # ── Синтетическая сцена ─────────────────────────────────────────────────────────
 
+
 def test_synthetic_scene_is_procedural_and_marks_live():
     graph = synthetic_graph(region="Helsinki", cam_id="CAM-0007", seed="decoy.example")
 
@@ -186,6 +190,31 @@ def test_two_domains_do_not_share_a_byte_identical_scene():
     assert one != other
 
 
+def test_the_seed_drives_the_procedural_parameters():
+    """Разные домены дают разные оттенок/грайн — сцены не сливаются в одну."""
+    graphs = {synthetic_graph(seed=f"host-{index}.example") for index in range(12)}
+    assert len(graphs) > 1, "seed должен менять хотя бы часть параметров сцены"
+
+
+def test_the_region_and_the_camera_id_reach_the_scene():
+    helsinki = synthetic_graph(region="Helsinki", seed="s")
+    madrid = synthetic_graph(region="Madrid", seed="s")
+
+    assert "Helsinki" in helsinki
+    assert "Madrid" in madrid
+    assert helsinki != madrid, "регион меняет сцену: разные серверы не байт-в-байт"
+
+
+def test_synthetic_plan_reads_only_from_lavfi():
+    """Никаких внешних файлов у синтетики: единственный вход — lavfi-источник."""
+    plan = stream_plan("", output_dir=OUT)
+
+    assert plan.synthetic is True
+    input_index = plan.command.index("-i")
+    assert plan.command[input_index - 1] == "lavfi"
+    assert not any(part.endswith((".mp4", ".ts", ".m3u8")) for part in plan.command[:input_index])
+
+
 def test_operator_text_cannot_break_the_filter_graph():
     clean = synthetic_graph(region="Helsinki", cam_id="CAM-1", seed="s")
     dirty = synthetic_graph(region="evil':'x,drawtext=text='pwn", cam_id="a:b'c%{x}", seed="s")
@@ -199,9 +228,15 @@ def test_operator_text_cannot_break_the_filter_graph():
 
 # ── Вспомогательное ─────────────────────────────────────────────────────────────
 
+
 def test_ytdlp_command_targets_one_stream():
     assert ytdlp_command("https://youtu.be/abc") == [
-        "yt-dlp", "-f", "best", "-g", "--no-playlist", "https://youtu.be/abc",
+        "yt-dlp",
+        "-f",
+        "best",
+        "-g",
+        "--no-playlist",
+        "https://youtu.be/abc",
     ]
 
 

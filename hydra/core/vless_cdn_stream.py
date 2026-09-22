@@ -78,16 +78,25 @@ def hls_output_args(output_dir: str | Path) -> list[str]:
     playlist = base / MEDIA_PLAYLIST_NAME
     segment = base / MEDIA_SEGMENT_DIR / MEDIA_SEGMENT_TEMPLATE
     return [
-        "-c:v", VIDEO_CODEC,
-        "-preset", VIDEO_PRESET,
-        "-tune", VIDEO_TUNE,
-        "-pix_fmt", "yuv420p",
+        "-c:v",
+        VIDEO_CODEC,
+        "-preset",
+        VIDEO_PRESET,
+        "-tune",
+        VIDEO_TUNE,
+        "-pix_fmt",
+        "yuv420p",
         "-an",
-        "-f", "hls",
-        "-hls_time", str(HLS_SEGMENT_SECONDS),
-        "-hls_list_size", str(HLS_LIST_SIZE),
-        "-hls_flags", HLS_FLAGS,
-        "-hls_segment_filename", str(segment),
+        "-f",
+        "hls",
+        "-hls_time",
+        str(HLS_SEGMENT_SECONDS),
+        "-hls_list_size",
+        str(HLS_LIST_SIZE),
+        "-hls_flags",
+        HLS_FLAGS,
+        "-hls_segment_filename",
+        str(segment),
         str(playlist),
     ]
 
@@ -148,7 +157,8 @@ def _command(input_args: list[str], output_dir: str | Path) -> list[str]:
     return [
         FFMPEG,
         "-hide_banner",
-        "-loglevel", "warning",
+        "-loglevel",
+        "warning",
         "-nostdin",
         *input_args,
         *hls_output_args(output_dir),
@@ -161,10 +171,14 @@ def _source_input_args(url: str, kind: str) -> list[str]:
         return ["-rtsp_transport", "tcp", "-i", url]
     # http(s) HLS и MJPEG: переподключение, чтобы пропавший источник не застопорил заглушку.
     return [
-        "-reconnect", "1",
-        "-reconnect_streamed", "1",
-        "-reconnect_delay_max", "5",
-        "-i", url,
+        "-reconnect",
+        "1",
+        "-reconnect_streamed",
+        "1",
+        "-reconnect_delay_max",
+        "5",
+        "-i",
+        url,
     ]
 
 
