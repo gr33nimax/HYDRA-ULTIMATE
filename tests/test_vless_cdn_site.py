@@ -89,8 +89,6 @@ def test_page_describes_the_server_itself():
 
     for fragment in (CITY, COUNTRY, CAPITAL, "🇩🇪", "+12 °C", "Cloudy", "4.2 m/s", "58%"):
         assert fragment in page
-    assert "/assets/region.jpg" in page
-    assert "Wikimedia Commons" in page
     assert "<title>" in page and CITY in page.split("<title>")[1].split("</title>")[0]
 
 
@@ -130,9 +128,18 @@ def test_player_uses_the_local_hls_library_and_the_handwriting_headers():
     assert "X-Client-Version" in page, "padding-заголовок совпадает с транспортом"
 
 
-def test_player_poster_is_the_region_image():
+def test_player_declares_the_source_via_a_child_not_a_video_src_attribute():
+    # <source> вместо src= на <video>: hls.js чисто перехватывает элемент (атрибут src
+    # с m3u8 на не-Safari сначала даёт нативную ошибку и мешает MSE).
     page = render_page(_data())
-    assert 'poster="/assets/region.jpg"' in page
+    assert '<source src="/api/media/playlist.m3u8" type="application/vnd.apple.mpegurl">' in page
+    assert 'poster=' not in page
+
+
+def test_the_page_carries_no_region_image():
+    page = render_page(_data())
+    assert "<img" not in page, "изображение с сайта убрано"
+    assert "hero" not in page
 
 
 def test_missing_weather_keeps_the_page_usable():
@@ -141,13 +148,6 @@ def test_missing_weather_keeps_the_page_usable():
     assert "temporarily unavailable" in page
     assert CITY in page
     assert 'data-zone="Europe/Berlin"' in page
-
-
-def test_missing_image_falls_back_to_a_local_placeholder():
-    page = render_page(_data(image=ImageView()))
-
-    assert "hero placeholder" in page
-    assert "<img" not in page
 
 
 def test_primary_zone_comes_first_and_is_not_repeated():
@@ -250,7 +250,8 @@ def _no_provider_calls(monkeypatch):
     )
 
 
-def test_attribution_of_a_refreshed_image_reaches_the_page(tmp_path, monkeypatch):
+def test_attribution_of_a_refreshed_image_is_stored_but_not_shown(tmp_path, monkeypatch):
+    # Изображение больше не на странице, но атрибуция/источник всё равно пишутся в состояние.
     def fake_refresh(directory: object, **kwargs) -> RegionImage:
         return RegionImage(
             src="/assets/region.jpg",
@@ -264,8 +265,8 @@ def test_attribution_of_a_refreshed_image_reaches_the_page(tmp_path, monkeypatch
     target = site.refresh_site(state, directory=tmp_path, now=STAMP)
 
     page = Path(target).read_text(encoding="utf-8")
-    assert 'src="/assets/region.jpg"' in page
-    assert "CC BY-SA 3.0 de" in page
+    assert "<img" not in page, "изображение убрано с сайта"
+    assert "region.jpg" not in page
 
     config = state.protocols[PROTOCOL_NAME].config
     assert config["image_attribution"] == "Christian Wolf, CC BY-SA 3.0 de"

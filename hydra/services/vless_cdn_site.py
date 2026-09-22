@@ -148,9 +148,7 @@ def build_site_data(
     # Если задан внешний HLS-источник, плеер должен запрашивать его имя плейлиста
     # под /api/media/, чтобы reverse_proxy отобразил его в <dir>/<имя> на upstream.
     media_source = parse_hls_relay_source(config.get("cam_source_url", ""))
-    playlist_path = (
-        f"{MEDIA_PATH_PREFIX}/{media_source['playlist']}" if media_source else MEDIA_PLAYLIST_PATH
-    )
+    playlist_path = f"{MEDIA_PATH_PREFIX}/{media_source['playlist']}" if media_source else MEDIA_PLAYLIST_PATH
     return SiteData(
         country=str(config.get("region_country_name", "") or ""),
         country_code=str(config.get("region_country_code", "") or ""),

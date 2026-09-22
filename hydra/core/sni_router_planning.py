@@ -379,9 +379,7 @@ def _dynamic_backend(
     root_parts = root.split("/")[1:]
     if not root.startswith("/var/www/decoy-") or "\\" in root or any(part in {"", ".", ".."} for part in root_parts):
         raise _route_error(name, "decoy_root must be under /var/www/decoy-*")
-    theme = (
-        str(config.get("decoy_theme") or route.get("decoy_theme", "")).strip().lower()
-    )
+    theme = str(config.get("decoy_theme") or route.get("decoy_theme", "")).strip().lower()
     if not is_supported(theme):
         raise _route_error(name, "decoy_theme is not supported")
     path_key = route.get("path_config")

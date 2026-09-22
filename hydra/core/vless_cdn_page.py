@@ -77,12 +77,6 @@ header { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
 h1 { font-size: 1.6rem; margin: 0; font-weight: 600; }
 .sub { color: #8b949e; }
 .flag { font-size: 1.6rem; }
-.hero { margin: 1.5rem 0 0; padding: 0; }
-.hero img { width: 100%; height: auto; border-radius: 12px; display: block; }
-.hero.placeholder {
-  height: 180px; border-radius: 12px;
-  background: linear-gradient(135deg, #1b2430, #243347 60%, #1b2430);
-}
 .live { margin: 1.5rem 0 0; }
 .live-video { width: 100%; aspect-ratio: 16 / 9; display: block; border-radius: 12px;
   background: #0b0e13; object-fit: cover; }
@@ -92,7 +86,6 @@ h1 { font-size: 1.6rem; margin: 0; font-weight: 600; }
   box-shadow: 0 0 0 3px rgba(248,81,73,.25); }
 .live-tag { color: #f85149; font-weight: 600; letter-spacing: .06em; }
 .live-place { color: #8b949e; }
-.credit { color: #6e7681; font-size: .78rem; margin-top: .4rem; }
 .grid { display: grid; gap: 1rem; margin-top: 1.5rem;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
 .card { background: #161b22; border: 1px solid #21262d; border-radius: 12px; padding: 1rem 1.1rem; }
@@ -182,19 +175,6 @@ def _clock_rows(zones: tuple[tuple[str, str], ...]) -> str:
     return '<ul class="clocks">' + "".join(rows) + "</ul>"
 
 
-def _image_block(image: ImageView) -> str:
-    if not image.src:
-        return '<div class="hero placeholder" aria-hidden="true"></div>'
-    caption = image.attribution or image.source
-    credit = f'<div class="credit">{_escape(caption)}</div>' if caption else ""
-    return (
-        '<figure class="hero">'
-        f'<img src="{_escape(image.src)}" alt="{_escape(image.source or "region")}">'
-        f"{credit}"
-        "</figure>"
-    )
-
-
 def _live_script(data: SiteData) -> str:
     """Плеер: сам ходит по боевому семейству /api/media/* тем же почерком, что туннель.
 
@@ -231,16 +211,15 @@ def _live_script(data: SiteData) -> str:
 def _live_player(data: SiteData) -> str:
     """Блок «живой камеры»: то, ради чего страница отдаёт настоящий медиапоток.
 
-    `src` стоит уже в разметке: статичный разбор страницы видит плеер, указывающий на
-    медиа-семейство, — это и есть «настоящий медиасервис». JS лишь доустанавливает
-    HLS там, где браузер сам её не играет.
+    Источник объявлен через <source>, а не атрибут src на <video>: статический разбор
+    всё равно видит медиа-URL, но hls.js чисто перехватывает элемент (атрибут src с m3u8
+    на не-Safari сначала даёт нативную ошибку и мешает MSE). JS доустанавливает HLS.
     """
-    poster = f' poster="{_escape(data.image.src)}"' if data.image.src else ""
     place = _escape(data.place)
     return (
         '<section class="live">'
-        '<video id="live-stream" class="live-video" controls autoplay muted playsinline'
-        f' preload="none" src="{_escape(data.playlist_path)}"{poster}></video>'
+        '<video id="live-stream" class="live-video" controls autoplay muted playsinline preload="none">'
+        f'<source src="{_escape(data.playlist_path)}" type="application/vnd.apple.mpegurl"></video>'
         '<div class="live-bar"><span class="live-dot"></span>'
         '<span class="live-tag">LIVE</span>'
         f'<span class="live-place">{place} · street camera</span></div>'
@@ -283,7 +262,6 @@ def render_page(data: SiteData, *, title: str = DEFAULT_TITLE) -> str:
 <main>
   {_header(data)}
   {_live_player(data)}
-  {_image_block(data.image)}
   <section class="grid">
     {_weather_block(data.weather)}
   </section>
