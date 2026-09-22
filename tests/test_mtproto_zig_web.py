@@ -612,7 +612,7 @@ def test_relay_rollback_restores_a_previous_unit_that_was_not_running(tmp_path):
     )
 
     assert unit.read_bytes() == b"old unit"
-    assert ["systemctl", "disable", "mtproto-zig-web"] in host.commands
+    assert ["systemctl", "disable", "--now", "mtproto-zig-web"] in host.commands
     assert ["systemctl", "restart", "mtproto-zig-web"] not in host.commands
 
 
