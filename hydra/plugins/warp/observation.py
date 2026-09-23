@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import re
@@ -44,8 +45,24 @@ def external_rules_update_due(
     return any(key not in data for key in enabled_keys)
 
 
+def legacy_install_paths(paths: tuple[Path, ...]) -> list[str]:
+    """Return the legacy installer files this host still carries."""
+    return [str(path) for path in paths if path.exists()]
+
+
+def remove_legacy_install(paths: tuple[Path, ...]) -> list[str]:
+    """Delete the files an older release installed; report what was removed."""
+    removed = []
+    for path in paths:
+        with contextlib.suppress(OSError):
+            path.unlink()
+            removed.append(str(path))
+    return removed
+
+
 def manager_observation(
     profiles_dir: Path,
+    legacy_paths: tuple[Path, ...] = (),
 ) -> dict[str, object]:
     profiles_dir.mkdir(parents=True, exist_ok=True)
     profiles: list[dict[str, object]] = []
@@ -70,6 +87,7 @@ def manager_observation(
     return {
         "profile_directory": str(profiles_dir),
         "profiles": profiles,
+        "legacy_install": legacy_install_paths(legacy_paths),
     }
 
 
@@ -86,5 +104,7 @@ __all__ = [
     "delete_local_profile",
     "external_rules_update_due",
     "external_sources",
+    "legacy_install_paths",
     "manager_observation",
+    "remove_legacy_install",
 ]

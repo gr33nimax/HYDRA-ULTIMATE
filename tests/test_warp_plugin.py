@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.core.singbox_config import generate_config
-from hydra.plugins.warp import observation
+from hydra.plugins.warp import observation, parsing
 from hydra.plugins.warp.plugin import WarpPlugin, WARP_EXTERNAL_CACHE
 from hydra.core.state import AppState, PluginState
 
@@ -54,6 +54,7 @@ def test_due_query_sees_sources_missing_from_the_cache(tmp_path):
 def test_runtime_actions_are_declared_public_capabilities():
     assert set(WarpPlugin.meta.capabilities.actions) == {
         "delete_local_profile",
+        "remove_legacy_install",
         "update_external_rules",
     }
 
@@ -80,24 +81,68 @@ def test_manager_observation_and_profile_deletion_are_plugin_owned(tmp_path):
     assert not profile.exists()
 
 
+def test_uninstall_removes_the_legacy_wgcf_artifacts(tmp_path):
+    binary = tmp_path / "wgcf"
+    profile = tmp_path / "wgcf-profile.conf"
+    account = tmp_path / "wgcf-account.toml"
+    install_log = tmp_path / "warp_install.log"
+    for path in (binary, profile, account, install_log):
+        path.write_text("x", encoding="utf-8")
+    cache = tmp_path / "warp_external.json"
+    cache.write_text("{}", encoding="utf-8")
+
+    with (
+        patch(
+            "hydra.plugins.warp.plugin.LEGACY_WGCF_PATHS",
+            (binary, profile, account, install_log),
+        ),
+        patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE", cache),
+    ):
+        assert WarpPlugin().uninstall() is True
+
+    assert not any(
+        path.exists() for path in (binary, profile, account, install_log)
+    )
+    assert not cache.exists()
+
+
+def test_manager_observation_reports_legacy_artifacts(tmp_path):
+    profiles_dir = tmp_path / "profiles"
+    binary = tmp_path / "wgcf"
+    binary.write_text("x", encoding="utf-8")
+    absent = tmp_path / "absent"
+
+    with (
+        patch("hydra.plugins.warp.plugin.WARP_PROFILES_DIR", profiles_dir),
+        patch("hydra.plugins.warp.plugin.LEGACY_WGCF_PATHS", (binary, absent)),
+    ):
+        assert WarpPlugin.manager_observation()["legacy_install"] == [
+            str(binary),
+        ]
+        assert WarpPlugin.remove_legacy_install() == [str(binary)]
+        assert WarpPlugin.remove_legacy_install() == []
+
+    assert not binary.exists()
+
+
 def test_is_ip_or_cidr():
-    assert WarpPlugin._is_ip_or_cidr("1.1.1.1") is True
-    assert WarpPlugin._is_ip_or_cidr("192.168.1.0/24") is True
-    assert WarpPlugin._is_ip_or_cidr("2001:db8::/32") is True
-    assert WarpPlugin._is_ip_or_cidr("google.com") is False
-    assert WarpPlugin._is_ip_or_cidr("1.2.3.256") is False
+    assert parsing.is_ip_or_cidr("1.1.1.1") is True
+    assert parsing.is_ip_or_cidr("192.168.1.0/24") is True
+    assert parsing.is_ip_or_cidr("2001:db8::/32") is True
+    assert parsing.is_ip_or_cidr("google.com") is False
+    assert parsing.is_ip_or_cidr("1.2.3.256") is False
 
 
 def test_is_valid_domain():
-    assert WarpPlugin._is_valid_domain("google.com") is True
-    assert WarpPlugin._is_valid_domain("openai.com") is True
-    assert WarpPlugin._is_valid_domain(".claude.ai") is True
-    assert WarpPlugin._is_valid_domain(".ru") is True
-    assert WarpPlugin._is_valid_domain(".su") is True
-    assert WarpPlugin._is_valid_domain(".рф") is True
-    assert WarpPlugin._is_valid_domain(".xn--p1ai") is True
-    assert WarpPlugin._is_valid_domain("invalid_domain") is False
-    assert WarpPlugin._is_valid_domain("http://google.com") is False
+    assert parsing.is_valid_domain("google.com") is True
+    assert parsing.is_valid_domain("openai.com") is True
+    assert parsing.is_valid_domain(".claude.ai") is True
+    assert parsing.is_valid_domain(".ru") is True
+    assert parsing.is_valid_domain(".su") is True
+    assert parsing.is_valid_domain(".рф") is True
+    assert parsing.is_valid_domain(".xn--p1ai") is True
+    assert parsing.is_valid_domain("invalid_domain") is False
+    assert parsing.is_valid_domain("http://google.com") is False
 
 
 def test_install_preloads_all_external_lists():
@@ -401,15 +446,15 @@ def test_configure_rejects_route_to_missing_relay_outbound(mock_cache):
 
 
 def test_parse_endpoint_supports_ipv6_and_rejects_invalid_ports():
-    assert WarpPlugin._parse_endpoint("[2001:db8::1]:2408") == ("2001:db8::1", 2408)
-    assert WarpPlugin._parse_endpoint("host.example:0") is None
-    assert WarpPlugin._parse_endpoint("host.example:not-a-port") is None
+    assert parsing.parse_endpoint("[2001:db8::1]:2408") == ("2001:db8::1", 2408)
+    assert parsing.parse_endpoint("host.example:0") is None
+    assert parsing.parse_endpoint("host.example:not-a-port") is None
 
 
 def test_wireguard_parser_ignores_unknown_sections_and_requires_keys():
     plugin = WarpPlugin()
-    assert plugin._parse_wg_conf("[Unknown]\nFoo = bar") is None
-    assert plugin._parse_wg_conf("[Interface]\nAddress = 10.0.0.2/32\n[Peer]\nEndpoint = host:1") is None
+    assert parsing.parse_wg_conf("[Unknown]\nFoo = bar") is None
+    assert parsing.parse_wg_conf("[Interface]\nAddress = 10.0.0.2/32\n[Peer]\nEndpoint = host:1") is None
 
 
 def test_enabled_warp_keeps_the_device_profile_in_the_core_cache():
@@ -432,12 +477,13 @@ def test_disabled_warp_does_not_ask_for_the_core_cache():
 
 
 def test_wireguard_parser_preserves_repeated_ipv4_and_ipv6_lines():
-    parsed = WarpPlugin()._parse_wg_conf(
+    parsed = parsing.parse_wg_conf(
         "[Interface]\nPrivateKey = private\n"
         "Address = 172.16.0.2/32\nAddress = 2606:4700:110::2/128\n"
         "[Peer]\nPublicKey = public\nEndpoint = engage.cloudflareclient.com:2408\n"
         "AllowedIPs = 0.0.0.0/0\nAllowedIPs = ::/0\n"
     )
 
+    assert parsed is not None
     assert parsed["interface"]["address"] == "172.16.0.2/32, 2606:4700:110::2/128"
     assert parsed["peer"]["allowedips"] == "0.0.0.0/0, ::/0"

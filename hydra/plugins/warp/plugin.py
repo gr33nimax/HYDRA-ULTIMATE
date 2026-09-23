@@ -25,6 +25,7 @@ from hydra.plugins.warp import (
 from hydra.plugins.warp.constants import (
     DEFAULT_WARP_DOMAINS,
     EXTERNAL_LISTS,
+    LEGACY_WGCF_PATHS,
     RUSSIA_TLD_SUFFIXES,
     WARP_CATALOG_CACHE,
     WARP_EXTERNAL_CACHE,
@@ -41,6 +42,7 @@ class WarpPlugin(WarpMaintenanceMixin, BasePlugin):
         version="3.0.0",
         actions=(
             "delete_local_profile",
+            "remove_legacy_install",
             "update_external_rules",
         ),
         queries=(
@@ -74,11 +76,19 @@ class WarpPlugin(WarpMaintenanceMixin, BasePlugin):
 
     @staticmethod
     def manager_observation() -> dict[str, object]:
-        return observation.manager_observation(WARP_PROFILES_DIR)
+        return observation.manager_observation(
+            WARP_PROFILES_DIR,
+            LEGACY_WGCF_PATHS,
+        )
 
     @staticmethod
     def delete_local_profile(*, name: str) -> bool:
         return observation.delete_local_profile(WARP_PROFILES_DIR, name=name)
+
+    @staticmethod
+    def remove_legacy_install() -> list[str]:
+        """Drop what the retired wgcf installer left on this host."""
+        return observation.remove_legacy_install(LEGACY_WGCF_PATHS)
 
     def install(self) -> bool:
         """Nothing to install: the core registers the WARP device itself."""
@@ -90,14 +100,8 @@ class WarpPlugin(WarpMaintenanceMixin, BasePlugin):
     def uninstall(self) -> bool:
         with contextlib.suppress(OSError):
             WARP_EXTERNAL_CACHE.unlink(missing_ok=True)
+        observation.remove_legacy_install(LEGACY_WGCF_PATHS)
         return True
-
-    def _parse_wg_conf(self, text: str) -> dict | None:
-        return parsing.parse_wg_conf(text)
-
-    @staticmethod
-    def _parse_endpoint(raw_endpoint: str) -> tuple[str, int] | None:
-        return parsing.parse_endpoint(raw_endpoint)
 
     def configure(self, state: PluginStateAccess) -> ConfigFragment:
         return configuration.configure_warp(
@@ -106,10 +110,10 @@ class WarpPlugin(WarpMaintenanceMixin, BasePlugin):
             external_cache=WARP_EXTERNAL_CACHE,
             default_domains=DEFAULT_WARP_DOMAINS,
             russia_suffixes=RUSSIA_TLD_SUFFIXES,
-            parse_config=self._parse_wg_conf,
-            parse_endpoint=self._parse_endpoint,
-            validate_domain=self._is_valid_domain,
-            validate_ip=self._is_ip_or_cidr,
+            parse_config=parsing.parse_wg_conf,
+            parse_endpoint=parsing.parse_endpoint,
+            validate_domain=parsing.is_valid_domain,
+            validate_ip=parsing.is_ip_or_cidr,
             resolve_host=socket.gethostbyname,
         )
 
@@ -126,23 +130,6 @@ class WarpPlugin(WarpMaintenanceMixin, BasePlugin):
             enabled=enabled,
             running=enabled and is_running(),
         )
-
-    def traffic(self, state: PluginStateAccess) -> dict[str, int]:
-        return {}
-
-    def on_enable(self, state: PluginStateAccess) -> None:
-        pass
-
-    def on_disable(self, state: PluginStateAccess) -> None:
-        pass
-
-    @staticmethod
-    def _is_ip_or_cidr(token: str) -> bool:
-        return parsing.is_ip_or_cidr(token)
-
-    @staticmethod
-    def _is_valid_domain(token: str) -> bool:
-        return parsing.is_valid_domain(token)
 
     def preload_external_rules(self) -> tuple[bool, str]:
         state = AppState(
@@ -173,7 +160,7 @@ class WarpPlugin(WarpMaintenanceMixin, BasePlugin):
             catalog=catalog.load_sources(WARP_CATALOG_CACHE),
             cache=WARP_EXTERNAL_CACHE,
             host=HOST,
-            validate_ip=self._is_ip_or_cidr,
-            validate_domain=self._is_valid_domain,
+            validate_ip=parsing.is_ip_or_cidr,
+            validate_domain=parsing.is_valid_domain,
         )
         return ok, note + message

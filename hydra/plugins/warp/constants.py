@@ -53,6 +53,16 @@ EXTERNAL_LISTS = {
 # somewhere, and every ``.ru``/``.su`` domain follows it.
 RU_TLD_SOURCE = "category-ru"
 
+# Files an older HYDRA release installed for the wgcf transport. The transport no
+# longer uses them, but an updated host still carries a downloaded binary and a
+# live Cloudflare credential in them, so uninstall removes them.
+LEGACY_WGCF_PATHS = (
+    Path("/usr/local/bin/wgcf"),
+    Path("/etc/wireguard/wgcf-profile.conf"),
+    Path("/etc/wireguard/wgcf-account.toml"),
+    Path("/var/log/hydra/warp_install.log"),
+)
+
 DEFAULT_WARP_DOMAINS = [
     "openai.com",
     "claude.ai",
@@ -69,6 +79,7 @@ __all__ = [
     "DEFAULT_WARP_DOMAINS",
     "EXTERNAL_LISTS",
     "EXTRA_SOURCES",
+    "LEGACY_WGCF_PATHS",
     "RU_TLD_SOURCE",
     "RUSSIA_TLD_SUFFIXES",
     "WARP_CATALOG_CACHE",

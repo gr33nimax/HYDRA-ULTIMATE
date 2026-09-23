@@ -28,6 +28,7 @@ def _runtime(app: ApplicationService):
     observation = facade._warp_observation(app)
     profile_rows = observation.get("profiles", [])
     profiles = sorted(str(row["name"]) for row in profile_rows if isinstance(row, dict) and row.get("name"))
+    legacy = [str(path) for path in observation.get("legacy_install", [])]
     destinations = [
         "direct",
         "warp",
@@ -38,6 +39,7 @@ def _runtime(app: ApplicationService):
         profiles,
         destinations,
         facade._external_sources(app),
+        legacy,
     )
 
 
@@ -103,8 +105,9 @@ def _status_lines(
 
 def _options(
     status,
+    legacy_count: int = 0,
 ) -> list[tuple[str, str, str]]:
-    return [
+    options = [
         (
             "1",
             f"{'⏸️  Выключить' if status.enabled else '▶️  Включить'} WARP",
@@ -130,8 +133,30 @@ def _options(
             "🔄 Обновить внешние списки сейчас",
             "Загрузить свежие списки правил с GitHub",
         ),
-        ("0", "↩ Назад", ""),
     ]
+    if legacy_count:
+        options.append(
+            (
+                "9",
+                f"🧹 Убрать остатки wgcf ({legacy_count})",
+                "Удалить профиль, аккаунт, бинарник и журнал прежнего установщика",
+            ),
+        )
+    options.append(("0", "↩ Назад", ""))
+    return options
+
+
+def _remove_legacy(app: ApplicationService) -> None:
+    """Drop what the retired wgcf installer left on this host."""
+    info("Удаляю файлы прежнего установщика wgcf...")
+    removed = app.plugin_action("warp", "remove_legacy_install")
+    if removed:
+        success(f"Удалено файлов: {len(removed)}")
+        for path in removed:
+            print(f"  {DIM}{path}{NC}")
+    else:
+        info("Остатков wgcf не найдено.")
+    prompt("Нажмите Enter для продолжения")
 
 
 def _toggle(
@@ -199,6 +224,8 @@ def _dispatch(
         facade._menu_geo_profiles(state, plugin_state, app)
     elif choice == "5":
         _update_external_rules(state, app, plugin_state)
+    elif choice == "9":
+        _remove_legacy(app)
 
 
 def run(state: AppState, app: ApplicationService) -> None:
@@ -212,6 +239,7 @@ def run(state: AppState, app: ApplicationService) -> None:
             profiles,
             destinations,
             external_sources,
+            legacy,
         ) = _runtime(app)
         plugin_state.config.setdefault("local_lists", {})
         list_targets = plugin_state.config.get("list_targets")
@@ -229,7 +257,7 @@ def run(state: AppState, app: ApplicationService) -> None:
             ),
         )
         choice = menu(
-            _options(status),
+            _options(status, len(legacy)),
             "УПРАВЛЕНИЕ WARP",
         )
         if choice == "0":
