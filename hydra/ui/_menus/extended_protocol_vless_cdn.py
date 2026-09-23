@@ -51,14 +51,14 @@ def _install(state: AppState, plugin: BasePlugin, app: ApplicationService) -> No
 
 
 def _set_camera(state: AppState, plugin: BasePlugin, app: ApplicationService) -> None:
-    """URL живого HLS-источника (пусто — медиа-эндпоинт пуст). Смена пересобирает сайт."""
-    info("HLS (.m3u8) — его Caddy ретранслирует на /api/media/* без ffmpeg. Пусто = медиа нет.")
-    info("Источник проверяется: должен отвечать и иметь относительные пути сегментов.")
-    url = prompt("URL HLS-источника (.m3u8):").strip()
+    """URL источника камеры для go2rtc (пусто — медиа-эндпоинт пуст). Смена пересобирает сайт."""
+    info("go2rtc тянет rtsp/hls/mjpeg сам и отдаёт HLS на /api/media/*. Пусто = медиа нет.")
+    info("Примеры: rtsp://…, https://…/index.m3u8. Смена перезапускает go2rtc и пересобирает страницу.")
+    url = prompt("URL источника камеры:").strip()
     if app.set_vless_cdn_camera(state, url):
-        success("Медиа-эндпоинт пуст, сайт пересобран" if not url else "HLS-источник сохранён, сайт пересобран")
+        success("Медиа-эндпоинт пуст, сайт пересобран" if not url else "Источник сохранён, go2rtc перезапущен")
     else:
-        error("URL отклонён: не HLS, недоступен, абсолютные пути сегментов или ссылка во внутреннюю сеть")
+        error("URL отклонён: неверная форма или ссылка во внутреннюю сеть")
     prompt("Нажмите Enter")
 
 

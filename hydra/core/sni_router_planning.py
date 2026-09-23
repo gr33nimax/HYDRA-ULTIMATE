@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from hydra.contracts.vless_cdn import parse_hls_relay_source
+from hydra.contracts.vless_cdn import go2rtc_media_source
 from hydra.core.decoy_sites.registry import is_supported
 from hydra.core.state_models import AppState
 
@@ -421,11 +421,9 @@ def _dynamic_backend(
     if prefix:
         backend["assets_prefix"] = prefix
     media_key = route.get("media_source_config")
-    if isinstance(media_key, str) and media_key:
-        # parse проверяет SSRF; не-HLS/приватный/пустой → None, медиа-маршруты не появляются.
-        source = parse_hls_relay_source(config.get(media_key, ""))
-        if source:
-            backend["media_source"] = source
+    if isinstance(media_key, str) and media_key and str(config.get(media_key, "") or "").strip():
+        # Источник задан → /api/media/* ретранслируется на локальный go2rtc (он тянет камеру).
+        backend["media_source"] = go2rtc_media_source()
     return backend
 
 

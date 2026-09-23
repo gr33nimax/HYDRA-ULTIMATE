@@ -18,9 +18,8 @@ from hydra.contracts.vless_cdn import (
     MEDIA_SOURCE_YOUTUBE,
     assert_public_media_source,
     classify_media_source,
+    go2rtc_media_source,
     normalize_path,
-    parse_hls_relay_source,
-    playlist_segments_are_relative,
 )
 
 
@@ -166,52 +165,12 @@ def test_ssrf_refuses_bad_scheme_before_any_resolution():
 # ── Разбор HLS-источника под reverse_proxy ────────────────────────────────
 
 
-def test_relay_parse_splits_host_dir_and_playlist():
-    src = parse_hls_relay_source(
-        "https://8.8.8.8/camera01/tracks-v1/index.fmp4.m3u8",
-    )
-    assert src == {
-        "host": "8.8.8.8",
-        "port": 443,
-        "tls": True,
-        "dir": "/camera01/tracks-v1",
-        "playlist": "index.fmp4.m3u8",
-    }
-
-
-def test_relay_parse_rejects_non_hls_and_private_and_empty():
-    # RTSP/MJPEG/YouTube не ретранслируются чистым proxy → None.
-    assert parse_hls_relay_source("rtsp://8.8.8.8/live") is None
-    assert parse_hls_relay_source("https://youtu.be/abc") is None
-    assert parse_hls_relay_source("") is None
-    # Приватный адрес (SSRF) — тоже None, без исключения.
-    assert parse_hls_relay_source("https://10.0.0.5/x.m3u8") is None
-
-
-def test_relative_segment_playlist_is_relayable():
-    # Голые имена сегментов + fMP4-init через EXT-X-MAP URI — всё относительное.
-    playlist = '#EXTM3U\n#EXT-X-MAP:URI="init.hls.fmp4"\n#EXTINF:4,\nseg-0.hls.fmp4\n'
-    assert playlist_segments_are_relative(playlist) is True
-    # Только .ts без схемы — тоже относительно.
-    assert playlist_segments_are_relative("#EXTM3U\n#EXTINF:4,\nlive128.ts\n") is True
-
-
-def test_absolute_segment_playlist_is_not_relayable():
-    # Абсолютный сегмент → плеер уйдёт с нашего домена.
-    assert playlist_segments_are_relative("#EXTM3U\n#EXTINF:4,\nhttps://cdn.x/seg-0.ts\n") is False
-    # Абсолютный init через EXT-X-MAP — тоже нет.
-    assert playlist_segments_are_relative('#EXT-X-MAP:URI="https://cdn.x/init.mp4"\nseg-0.ts\n') is False
-    # Пустой/без сегментов — нечего ретранслировать.
-    assert playlist_segments_are_relative("#EXTM3U\n#EXT-X-ENDLIST\n") is False
-    assert playlist_segments_are_relative("") is False
-
-
-def test_relay_parse_reads_explicit_port_and_http():
-    src = parse_hls_relay_source("http://8.8.8.8:8080/hls/live.m3u8")
-    assert src == {
-        "host": "8.8.8.8",
-        "port": 8080,
+def test_go2rtc_media_source_points_at_localhost_stream():
+    # /api/media/* ретранслируется на локальный go2rtc; rewrite ^/api/media/ → /api/.
+    assert go2rtc_media_source() == {
+        "host": "127.0.0.1",
+        "port": 1984,
         "tls": False,
-        "dir": "/hls",
-        "playlist": "live.m3u8",
+        "dir": "/api",
+        "playlist": "stream.m3u8?src=decoy",
     }

@@ -18,7 +18,7 @@ from hydra.contracts.vless_cdn import (
     MEDIA_PATH_PREFIX,
     MEDIA_PLAYLIST_PATH,
     PROTOCOL_NAME,
-    parse_hls_relay_source,
+    go2rtc_media_source,
 )
 from hydra.core import systemd
 from hydra.core.host import HOST
@@ -145,10 +145,12 @@ def build_site_data(
     current = protocol or state.protocols.get(PROTOCOL_NAME)
     config = current.config if current else {}
     stamp = now or datetime.now(timezone.utc)
-    # Если задан внешний HLS-источник, плеер должен запрашивать его имя плейлиста
-    # под /api/media/, чтобы reverse_proxy отобразил его в <dir>/<имя> на upstream.
-    media_source = parse_hls_relay_source(config.get("cam_source_url", ""))
-    playlist_path = f"{MEDIA_PATH_PREFIX}/{media_source['playlist']}" if media_source else MEDIA_PLAYLIST_PATH
+    # Если задан источник, плеер просит плейлист go2rtc (`stream.m3u8?src=decoy`) под /api/media/,
+    # а Caddy rewrite'ом отображает его на /api/ локального go2rtc.
+    has_source = bool(str(config.get("cam_source_url", "") or "").strip())
+    playlist_path = (
+        f"{MEDIA_PATH_PREFIX}/{go2rtc_media_source()['playlist']}" if has_source else MEDIA_PLAYLIST_PATH
+    )
     return SiteData(
         country=str(config.get("region_country_name", "") or ""),
         country_code=str(config.get("region_country_code", "") or ""),

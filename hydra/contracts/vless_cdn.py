@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import ipaddress
-import re
 import socket
 import urllib.parse
 from collections.abc import Callable
@@ -34,6 +33,13 @@ RESERVED_PATH_PREFIX = "/assets"
 MEDIA_PATH_PREFIX = "/api/media"
 MEDIA_PLAYLIST_PATH = f"{MEDIA_PATH_PREFIX}/playlist.m3u8"
 MEDIA_SEGMENT_PATH_PREFIX = f"{MEDIA_PATH_PREFIX}/seg/"
+
+# Локальный go2rtc-ретранслятор: его HLS Caddy отдаёт под /api/media/*. Один поток `decoy`.
+# go2rtc пишет в плейлисте ОТНОСИТЕЛЬНЫЕ ссылки (hls/playlist.m3u8?id=, segment.ts?id=),
+# поэтому одна замена префикса ^/api/media/ → /api/ покрывает всю цепочку.
+GO2RTC_API_HOST = "127.0.0.1"
+GO2RTC_API_PORT = 1984
+GO2RTC_STREAM_NAME = "decoy"
 
 # Проводные метки, которые шлёт и плеер заглушки, и сам транспорт VLESS. Значения — те же,
 # что в hydra/plugins/vless_cdn/profile.py, и держатся здесь, чтобы клиент, сайт и туннель
@@ -311,69 +317,20 @@ def assert_public_media_source(
     return raw
 
 
-def parse_hls_relay_source(
-    value: object,
-    *,
-    resolve: Callable[[str], list[str]] = resolve_host,
-) -> dict[str, object] | None:
-    """Разобрать HLS-URL под reverse_proxy: хост, папка и имя плейлиста, или None.
+def go2rtc_media_source() -> dict[str, object]:
+    """Цель reverse_proxy для /api/media/*: локальный go2rtc, отдающий HLS потока `decoy`.
 
-    Ретранслируется только http(s) HLS с относительными сегментами: Caddy проксирует
-    папку целиком, ничего не переписывая внутри плейлиста. RTSP/MJPEG/YouTube так не
-    проксируются (нет готового HLS с относительными путями) — для них возвращаем None,
-    и медиа-эндпоинт остаётся пустым. SSRF проверяется здесь же: URL операторский.
+    `dir=/api` → rewrite ^/api/media/ → /api/; плейлист `stream.m3u8?src=decoy`. Сам go2rtc
+    тянет любой источник (rtsp/hls/mjpeg) server-side и ремуксит в HLS — так любой
+    источник оказывается на нашем домене с относительными путями.
     """
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-    try:
-        if classify_media_source(raw) != MEDIA_SOURCE_HLS:
-            return None
-        assert_public_media_source(raw, resolve=resolve)
-    except ValueError:
-        return None
-    parts = urllib.parse.urlsplit(raw)
-    scheme = parts.scheme.lower()
-    host = parts.hostname or ""
-    if not host:
-        return None
-    port = parts.port or (443 if scheme == "https" else 80)
-    path = parts.path
-    directory, _, basename = path.rpartition("/")
-    if not basename:
-        return None
     return {
-        "host": host,
-        "port": port,  # urlsplit.port уже int—or—None; дефолт тоже int
-        "tls": scheme == "https",
-        "dir": directory,  # без завершающего «/», может быть пустым для корня
-        "playlist": basename,
+        "host": GO2RTC_API_HOST,
+        "port": GO2RTC_API_PORT,
+        "tls": False,
+        "dir": "/api",
+        "playlist": f"stream.m3u8?src={GO2RTC_STREAM_NAME}",
     }
-
-
-def playlist_segments_are_relative(text: object) -> bool:
-    """Все ссылки в плейлисте — относительные (его можно ретранслировать reverse_proxy'ем).
-
-    Проверяет и строки сегментов/вариантов (не-# строки), и URI="..." внутри тегов
-    (#EXT-X-MAP для fMP4-init). Хоть один абсолютный http(s)-URL → плеер уйдёт с нашего
-    домена (прикрытие сломано + CORS режет заголовки) — такой источник отклоняем.
-    Пустой/без сегментов плейлист — тоже негоден (нечего ретранслировать).
-    """
-    found = False
-    for raw in str(text or "").splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        if line.startswith("#"):
-            for uri in re.findall(r'URI="([^"]*)"', line):
-                found = True
-                if uri.lower().startswith(("http://", "https://")):
-                    return False
-            continue
-        found = True
-        if line.lower().startswith(("http://", "https://")):
-            return False
-    return found
 
 
 def normalize_media_source(

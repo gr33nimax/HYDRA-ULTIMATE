@@ -180,21 +180,40 @@ class ApplicationService:
             self.admin.save_state(state)
             self.apply(state)
             return False
+        self._ensure_go2rtc(state)
         return True
 
     def set_vless_cdn_camera(self, state: AppState, url: str) -> bool:
-        """Сменить HLS-источник и тут же пересобрать страницу прикрытия.
+        """Сменить источник камеры, пересобрать страницу и перевести на него go2rtc.
 
         `set_cam_source_url` (через plugin_command) уже пересобирает маршруты Caddy
-        (central_apply). Но имя плейлиста в разметке плеера зависит от источника,
-        поэтому страницу надо перегенерить сразу, а не ждать 10-минутный таймер.
-        Пересборка страницы best-effort: её всё равно повторит таймер, если сейчас не выйдет.
+        (central_apply). Затем: перегенерить страницу (имя плейлиста) и переключить
+        go2rtc на новый source. Оба шага best-effort: таймер повторит страницу, а go2rtc
+        подхватит конфиг при следующем старте; туннель от этого не зависит.
         """
         if not self.plugin_command(state, "vless_cdn", "set_cam_source_url", url=url):
             return False
         with contextlib.suppress(Exception):
             refresh_site(state)
+        self._ensure_go2rtc(state)
         return True
+
+    @staticmethod
+    def _ensure_go2rtc(state: AppState) -> None:
+        """Поднять/перенастроить go2rtc под текущий cam_source_url. Best-effort.
+
+        Неудача (нет сети для скачивания бинаря и т.п.) не должна рушить включение
+        протокола: без go2rtc медиа-эндпоинт пуст, но XHTTP-туннель работает.
+        """
+        from hydra.core import go2rtc
+
+        protocol = state.protocols.get("vless_cdn")
+        source = str((protocol.config.get("cam_source_url", "") if protocol else "") or "").strip()
+        with contextlib.suppress(Exception):
+            if source:
+                go2rtc.apply_source(source)
+            else:
+                go2rtc.remove()
 
     def disable_vless_cdn(self, state: AppState) -> bool:
         """Stop CDN page refresh before disabling its runtime."""
@@ -203,6 +222,10 @@ class ApplicationService:
             return False
         try:
             if self.protocols.disable(state, "vless_cdn"):
+                with contextlib.suppress(Exception):
+                    from hydra.core import go2rtc
+
+                    go2rtc.remove()
                 return True
         except Exception:
             restore_state_in_place(state, snapshot)
@@ -256,6 +279,7 @@ class ApplicationService:
             if not detail:
                 detail = exc.__class__.__name__
             return replace(outcome, ok=False, detail=detail)
+        self._ensure_go2rtc(state)
         return outcome
 
     def uninstall_vless_cdn(self, state: AppState) -> bool:
@@ -264,6 +288,10 @@ class ApplicationService:
         if not self.protocols.uninstall(state, "vless_cdn"):
             return False
         if remove_site_timer():
+            with contextlib.suppress(Exception):
+                from hydra.core import go2rtc
+
+                go2rtc.remove()
             return True
 
         restore_state_in_place(state, snapshot)

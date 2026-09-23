@@ -185,17 +185,16 @@ def test_the_tunnel_path_stays_inside_the_media_family_the_site_uses():
     assert backend["proxy_path"].startswith(f"{MEDIA_PATH_PREFIX}/")
 
 
-def test_an_hls_source_makes_media_a_reverse_proxy_relay_not_static():
-    """С HLS-источником /api/media/* ретранслируется на upstream, без ffmpeg и без статики."""
-    # Литеральный публичный IP — чтобы SSRF-проверка не ходила в DNS.
-    source = "https://8.8.8.8/cam/tracks-v1/index.fmp4.m3u8"
+def test_a_source_makes_media_a_reverse_proxy_relay_to_go2rtc():
+    """С источником /api/media/* ретранслируется на локальный go2rtc, без ffmpeg и без статики."""
+    source = "rtsp://8.8.8.8/live"  # go2rtc тянет любой вход, в т.ч. rtsp
     backend = _backends(cam_source_url=source)[PROTOCOL_NAME]
     assert backend["media_source"] == {
-        "host": "8.8.8.8",
-        "port": 443,
-        "tls": True,
-        "dir": "/cam/tracks-v1",
-        "playlist": "index.fmp4.m3u8",
+        "host": "127.0.0.1",
+        "port": 1984,
+        "tls": False,
+        "dir": "/api",
+        "playlist": "stream.m3u8?src=decoy",
     }
 
     server = _require(
@@ -206,17 +205,15 @@ def test_an_hls_source_makes_media_a_reverse_proxy_relay_not_static():
     assert tunnel["match"][0]["path"][0] == DEFAULT_XHTTP_PATH, "туннель всё ещё первый"
     assert media["match"] == [{"path": [f"{MEDIA_PATH_PREFIX}/*"]}]
     rewrite, relay = media["handle"]
-    # Одна замена префикса — и плейлист, и init, и сегменты уезжают в <dir>/имя upstream.
+    # go2rtc пишет относительные ссылки → одна замена ^/api/media/ → /api/ покрывает всё.
     assert rewrite["handler"] == "rewrite"
-    assert rewrite["path_regexp"] == [{"find": f"^{MEDIA_PATH_PREFIX}/", "replace": "/cam/tracks-v1/"}]
+    assert rewrite["path_regexp"] == [{"find": f"^{MEDIA_PATH_PREFIX}/", "replace": "/api/"}]
     assert relay["handler"] == "reverse_proxy"
-    assert relay["upstreams"] == [{"dial": "8.8.8.8:443"}]
-    assert relay["transport"]["tls"] == {"server_name": "8.8.8.8"}
-    assert relay["headers"]["request"]["set"]["Host"] == ["8.8.8.8"], "чужой origin видит своё имя"
+    assert relay["upstreams"] == [{"dial": "127.0.0.1:1984"}]
+    assert "tls" not in relay["transport"], "локальный go2rtc — плайн HTTP, без TLS"
     # upstream упал → отдаём статику сайта, а не голую 5xx.
     assert relay["handle_response"][0]["match"]["status_code"] == [502, 503, 504]
     assert relay["handle_response"][0]["routes"][0]["handle"][0]["handler"] == "file_server"
-    # Никакой статики плейлиста/сегментов: её заменил релей.
     assert "match" not in fallback
     assert assets["match"] == [{"path": ["/assets/*"]}]
 

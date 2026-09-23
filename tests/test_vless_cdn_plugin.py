@@ -171,14 +171,6 @@ def test_status_is_not_running_until_both_names_are_set():
 # ── cam_source_url (TSK-07) ───────────────────────────────────────────────
 
 
-_REL_PLAYLIST = '#EXTM3U\n#EXT-X-MAP:URI="init.hls.fmp4"\n#EXTINF:4,\nseg-0.hls.fmp4\n'
-_ABS_PLAYLIST = "#EXTM3U\n#EXTINF:4,\nhttps://cdn.example/seg-0.ts\n"
-
-
-def _rel_fetch(_url: str) -> str:
-    return _REL_PLAYLIST
-
-
 def test_camera_source_defaults_to_empty_and_is_listed():
     keys = [key for key, _value in VlessCdnPlugin.meta.config_defaults]
     assert "cam_source_url" in keys
@@ -189,51 +181,22 @@ def test_an_empty_camera_source_clears_it():
     state = _state()
     plugin = VlessCdnPlugin()
 
-    assert plugin.set_cam_source_url(state, "https://1.1.1.1/cam/x.m3u8", fetch=_rel_fetch) is True
+    assert plugin.set_cam_source_url(state, "https://1.1.1.1/cam.m3u8") is True
     assert plugin.set_cam_source_url(state, "   ") is True
     assert state.protocols[PROTOCOL_NAME].config["cam_source_url"] == ""
 
 
-def test_a_public_hls_source_with_relative_segments_is_accepted():
-    state = _state()
-    plugin = VlessCdnPlugin()
-
-    url = "https://1.1.1.1/live/stream.m3u8"
-    assert plugin.set_cam_source_url(state, url, fetch=_rel_fetch) is True
-    assert state.protocols[PROTOCOL_NAME].config["cam_source_url"] == url
-
-
 @pytest.mark.parametrize(
     "url",
-    ["rtsp://1.1.1.1:554/stream", "http://1.1.1.1/mjpg/video.mjpg"],
+    ["https://1.1.1.1/live/stream.m3u8", "rtsp://1.1.1.1:554/stream", "http://1.1.1.1/mjpg/video.mjpg"],
 )
-def test_non_hls_sources_are_refused(url):
-    # Чистым reverse_proxy ретранслируется только HLS; RTSP/MJPEG без ffmpeg некуда деть.
+def test_a_public_source_is_accepted(url):
+    # go2rtc ретранслирует любой из этих входов; проверяем только форму + SSRF.
     state = _state()
     plugin = VlessCdnPlugin()
 
-    assert plugin.set_cam_source_url(state, url, fetch=_rel_fetch) is False
-    assert state.protocols[PROTOCOL_NAME].config["cam_source_url"] == ""
-
-
-def test_absolute_segment_paths_are_refused():
-    # Абсолютные сегменты → плеер ушёл бы с нашего домена (прикрытие + CORS ломаются).
-    state = _state()
-    plugin = VlessCdnPlugin()
-
-    assert plugin.set_cam_source_url(state, "https://1.1.1.1/x.m3u8", fetch=lambda _u: _ABS_PLAYLIST) is False
-    assert state.protocols[PROTOCOL_NAME].config["cam_source_url"] == ""
-
-
-def test_an_unreachable_playlist_is_refused():
-    state = _state()
-    plugin = VlessCdnPlugin()
-
-    def boom(_url: str) -> str:
-        raise OSError("connection refused")
-
-    assert plugin.set_cam_source_url(state, "https://1.1.1.1/x.m3u8", fetch=boom) is False
-    assert state.protocols[PROTOCOL_NAME].config["cam_source_url"] == ""
+    assert plugin.set_cam_source_url(state, url) is True
+    assert state.protocols[PROTOCOL_NAME].config["cam_source_url"] == url
 
 
 def test_a_hostname_source_is_accepted_when_it_resolves_publicly():
@@ -241,12 +204,7 @@ def test_a_hostname_source_is_accepted_when_it_resolves_publicly():
     plugin = VlessCdnPlugin()
     resolve = lambda _host: ["93.184.216.34"]  # noqa: E731
 
-    assert (
-        plugin.set_cam_source_url(
-            state, "https://cam.example/live/stream.m3u8", resolve=resolve, fetch=_rel_fetch,
-        )
-        is True
-    )
+    assert plugin.set_cam_source_url(state, "https://cam.example/live/stream.m3u8", resolve=resolve) is True
 
 
 def test_a_hostname_source_that_resolves_privately_is_refused():
@@ -254,12 +212,7 @@ def test_a_hostname_source_that_resolves_privately_is_refused():
     plugin = VlessCdnPlugin()
     resolve = lambda _host: ["10.0.0.5"]  # noqa: E731
 
-    assert (
-        plugin.set_cam_source_url(
-            state, "https://cam.example/live/stream.m3u8", resolve=resolve, fetch=_rel_fetch,
-        )
-        is False
-    )
+    assert plugin.set_cam_source_url(state, "https://cam.example/live/stream.m3u8", resolve=resolve) is False
     assert state.protocols[PROTOCOL_NAME].config["cam_source_url"] == ""
 
 
@@ -278,12 +231,9 @@ def test_a_refused_camera_source_leaves_the_config_untouched(url):
     state = _state()
     plugin = VlessCdnPlugin()
 
-    def never(_url: str) -> str:  # форма/SSRF отсекают до любого фетча
-        raise AssertionError("негодный URL не должен доходить до загрузки")
-
-    assert plugin.set_cam_source_url(state, url, fetch=never) is False
+    assert plugin.set_cam_source_url(state, url) is False
     assert state.protocols[PROTOCOL_NAME].config["cam_source_url"] == ""
 
 
 def test_camera_source_command_without_a_state_entry_is_refused():
-    assert VlessCdnPlugin().set_cam_source_url(AppState(), "https://1.1.1.1/x.m3u8", fetch=_rel_fetch) is False
+    assert VlessCdnPlugin().set_cam_source_url(AppState(), "https://1.1.1.1/x.m3u8") is False

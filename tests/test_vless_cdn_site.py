@@ -180,13 +180,13 @@ def test_site_data_is_built_from_state_and_a_stamp():
     assert data.playlist_path == "/api/media/playlist.m3u8", "без источника — дефолтное имя"
 
 
-def test_site_data_points_the_player_at_the_upstream_playlist_basename():
-    # Плеер должен просить имя плейлиста апстрима, чтобы reverse_proxy отобразил его верно.
+def test_site_data_points_the_player_at_the_go2rtc_playlist():
+    # Плеер должен просить плейлист go2rtc, чтобы Caddy отобразил его на /api/ локального go2rtc.
     data = site.build_site_data(
-        _state(cam_source_url="https://8.8.8.8/cam/tracks-v1/index.fmp4.m3u8"),
+        _state(cam_source_url="rtsp://8.8.8.8/live"),
         now=STAMP,
     )
-    assert data.playlist_path == "/api/media/index.fmp4.m3u8"
+    assert data.playlist_path == "/api/media/stream.m3u8?src=decoy"
 
 
 def test_region_is_filled_once_and_never_overwritten():
