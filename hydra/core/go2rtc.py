@@ -75,11 +75,6 @@ def render_config(source_url: str) -> str:
     """
     source = str(source_url).strip()
     source_line = f"  {GO2RTC_STREAM_NAME}: {_yaml_quote(source)}" if source else f"  {GO2RTC_STREAM_NAME}:"
-    # `preload` держит продюсера тёплым. Без него go2rtc поднимает источник только под
-    # зрителя, а окно выхода у него крошечное (сегмент ждём 3 с, сессия живёт 5 с): любая
-    # икота закрывает сессию, продюсер останавливается, и следующее обращение снова платит
-    # холодный старт. Только при заданном источнике: у пустого потока преload нечего греть.
-    preload = f"preload:\n  {GO2RTC_STREAM_NAME}: \"\"\n" if source else ""
     return (
         "api:\n"
         f'  listen: "{GO2RTC_API_HOST}:{GO2RTC_API_PORT}"\n'
@@ -98,7 +93,6 @@ def render_config(source_url: str) -> str:
         "ffmpeg:\n"
         # as_posix: конфиг обязан нести POSIX-путь независимо от того, где его собрали.
         f"  bin: {FFMPEG_BIN.as_posix()}\n"
-        f"{preload}"
         "streams:\n"
         f"{source_line}\n"
     )

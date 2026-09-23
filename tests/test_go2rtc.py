@@ -116,11 +116,8 @@ def test_config_points_go2rtc_at_our_pinned_ffmpeg():
     assert "bin: /usr/local/bin/ffmpeg" in text, "путь в конфиге всегда POSIX"
 
 
-def test_config_preloads_the_stream_only_when_a_source_is_set():
-    # Без preload go2rtc поднимает источник только под зрителя, и каждая икота выходит
-    # холодным стартом: сегмент ждём 3 с, сессия живёт 5 с.
-    with_source = go2rtc.render_config("ffmpeg:https://h/x.m3u8")
-    assert 'preload:\n  decoy: ""' in with_source
-
-    without_source = go2rtc.render_config("")
-    assert "preload:" not in without_source
+def test_config_never_preloads_the_stream():
+    # preload держал продюсера тёплым, но тянул источник круглосуточно даже без зрителей.
+    # Решено не платить: медиа живёт только под зрителя.
+    assert "preload:" not in go2rtc.render_config("ffmpeg:https://h/x.m3u8")
+    assert "preload:" not in go2rtc.render_config("")
