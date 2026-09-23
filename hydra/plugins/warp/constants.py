@@ -17,15 +17,15 @@ CATALOG_BASE = "https://raw.githubusercontent.com/Ground-Zerro/Geo-Aggregator/ma
 # address, which is what WARP provides.
 EXTRA_SOURCES = {
     "refilter": {
-        "name": "Реестр РКН",
+        "name": "Домены (Re:filter)",
         "url": CATALOG_BASE + "source2/refilter.txt",
-        "desc": "Заблокированное в РФ",
+        "desc": "Список Re:filter из runetfreedom/russia-v2ray-rules-dat",
         "group": "blocked",
     },
     "antifilter": {
-        "name": "Антифильтр (IP)",
+        "name": "IP-адреса (Антифильтр)",
         "url": CATALOG_BASE + "source1/antifilter.txt",
-        "desc": "Заблокированные IP-диапазоны",
+        "desc": "Список antifilter.download",
         "group": "blocked",
     },
 }

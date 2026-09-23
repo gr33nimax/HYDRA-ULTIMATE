@@ -126,8 +126,7 @@ def _target_label(target: str, routed: int = 1, total: int = 1) -> str:
 def _category_lines(categories: list[dict]) -> list[str]:
     enabled = sum(1 for category in categories if category.get("routed"))
     return [
-        f"  {BOLD}Каталог Geo-Aggregator:{NC} {len(categories)} категорий, "
-        f"включено {enabled}.",
+        f"  {BOLD}Каталог Geo-Aggregator:{NC} {len(categories)} категорий, включено {enabled}.",
         "  " + "─" * 60,
         "  Категория направляется целиком — один маршрут на все её списки;",
         "  отдельный список внутри категории можно переопределить.",
@@ -153,6 +152,7 @@ def _menu_category_sources(
     while True:
         clear()
         list_targets = _list_targets(ps)
+        note = str(category.get("note") or "")
         panel(
             f"🔗 {str(category['label']).upper()}",
             [
@@ -160,9 +160,11 @@ def _menu_category_sources(
                 f"  Источников в категории: {len(keys)}",
                 f"  Сейчас: {_target_label(str(category['target']), *_counts(category))}",
                 "  " + "─" * 55,
+                *([f"  {note}", "  " + "─" * 55] if note else []),
                 "  Категория направляется целиком, но отдельный список",
                 "  можно переопределить внутри неё.",
             ],
+            wrap=True,
         )
         options = [
             (

@@ -33,6 +33,18 @@ GROUP_LABELS = {
     OTHER_GROUP: "Прочее",
 }
 
+# What a group actually holds, for the groups HYDRA assembled itself. Upstream
+# groups are self-describing through the sources the catalogue puts in them.
+GROUP_NOTES = {
+    "blocked": (
+        "Что блокируют внутри РФ: домены из списка Re:filter "
+        "(runetfreedom/russia-v2ray-rules-dat) и IP-адреса с antifilter.download. "
+        "Таким сервисам нужен иностранный адрес — WARP. Это самый крупный набор: "
+        "в нём есть и то, что уже покрыто категориями по сервисам."
+    ),
+    LOCAL_GROUP: "Списки, которые оператор завёл сам.",
+}
+
 # Menu order: what an operator reaches for first, then the upstream catalogue.
 GROUP_ORDER = (
     "blocked",
@@ -171,12 +183,9 @@ def category_menu(
     return [
         {
             **item.as_dict(),
+            "note": GROUP_NOTES.get(item.key, ""),
             "target": category_target(item, targets),
-            "routed": sum(
-                1
-                for key in item.source_keys
-                if str(targets.get(key) or "none") != "none"
-            ),
+            "routed": sum(1 for key in item.source_keys if str(targets.get(key) or "none") != "none"),
             "total": len(item.source_keys),
         }
         for item in categories

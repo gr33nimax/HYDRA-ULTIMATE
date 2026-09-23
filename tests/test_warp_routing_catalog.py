@@ -148,6 +148,10 @@ def test_category_menu_counts_a_partially_routed_category() -> None:
 
     blocked = next(item for item in menu if item["key"] == "blocked")
     assert (blocked["routed"], blocked["total"]) == (0, 2)
+    assert "antifilter.download" in blocked["note"]
+
+    media = next(item for item in menu if item["key"] == "media")
+    assert media["note"] == ""
 
 
 def test_catalogue_cache_falls_back_when_absent_or_malformed(tmp_path: Path) -> None:
