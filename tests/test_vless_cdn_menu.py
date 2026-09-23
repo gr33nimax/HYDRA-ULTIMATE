@@ -156,3 +156,120 @@ def test_install_reports_an_apply_failure_from_application():
         menu._install(state, MagicMock(), app)
 
     assert any("caddy validate failed" in text for text in messages)
+
+
+# ── Пункт режима медиа и ввод источника ────────────────────────────────────────
+
+
+def _provisioned_state(**overrides: JsonValue) -> AppState:
+    config: dict[str, JsonValue] = dict(PROVISIONED)
+    config.update(overrides)
+    return AppState(protocols={PROTOCOL_NAME: PluginState(enabled=True, config=config)})
+
+
+def test_the_menu_offers_the_media_mode_item_once_provisioned():
+    state = _provisioned_state()
+    app = MagicMock()
+    app.admin.load_state.return_value = state
+    captured: dict[str, list[tuple[str, str, str]]] = {}
+
+    def fake_menu(options, title):
+        captured["options"] = options
+        return "0"  # выходим сразу — важен состав пунктов и панель
+
+    with (
+        patch.object(menu, "clear"),
+        patch.object(menu, "menu", side_effect=fake_menu),
+        patch.object(menu, "protocol_status_panel") as panel,
+    ):
+        menu._menu_vless_cdn(state, VlessCdnPlugin(), app)
+
+    keys = [key for key, _, _ in captured["options"]]
+    assert "6" in keys, "без пункта режим не переключить"
+    assert "5" in keys
+
+    # Панель обязана показать режим и его состояние: иначе настройка невидимая.
+    details = dict(panel.call_args.kwargs["details"])
+    assert details["Режим медиа"] == "Видео"
+    assert "НЕ ЗАДАН" in details["Источник"]
+
+
+def test_the_panel_shows_the_photo_state_instead_of_the_source():
+    state = _provisioned_state(media_mode="photo", image_refresh_error="download failed")
+    app = MagicMock()
+    app.admin.load_state.return_value = state
+
+    with (
+        patch.object(menu, "clear"),
+        patch.object(menu, "menu", return_value="0"),
+        patch.object(menu, "protocol_status_panel") as panel,
+    ):
+        menu._menu_vless_cdn(state, VlessCdnPlugin(), app)
+
+    details = dict(panel.call_args.kwargs["details"])
+    assert details["Режим медиа"] == "Фото"
+    assert "download failed" in details["Фото региона"], "ошибка загрузки фото должна быть видна"
+
+
+@pytest.mark.parametrize(("choice", "expected"), [("1", "video"), ("2", "photo")])
+def test_the_mode_item_applies_the_choice(choice, expected):
+    state = AppState()
+    app = MagicMock()
+    app.set_vless_cdn_mode.return_value = True
+    messages: list[str] = []
+
+    with (
+        patch.object(menu, "menu", return_value=choice),
+        patch.object(menu, "prompt"),
+        patch.object(menu, "success", side_effect=lambda text: messages.append(str(text))),
+    ):
+        menu._set_mode(state, MagicMock(), app)
+
+    app.set_vless_cdn_mode.assert_called_once_with(state, expected)
+    assert messages, "оператор должен увидеть, что режим сменился"
+
+
+def test_backing_out_of_the_mode_item_changes_nothing():
+    app = MagicMock()
+
+    with patch.object(menu, "menu", return_value="0"), patch.object(menu, "prompt"):
+        menu._set_mode(AppState(), MagicMock(), app)
+
+    app.set_vless_cdn_mode.assert_not_called()
+
+
+def test_the_mode_item_reports_a_failed_switch():
+    app = MagicMock()
+    app.set_vless_cdn_mode.return_value = False
+    messages: list[str] = []
+
+    with (
+        patch.object(menu, "menu", return_value="2"),
+        patch.object(menu, "prompt"),
+        patch.object(menu, "error", side_effect=lambda text: messages.append(str(text))),
+    ):
+        menu._set_mode(AppState(), MagicMock(), app)
+
+    assert messages, "молчаливый отказ выглядел бы как успех"
+
+
+def test_the_source_prompt_documents_the_format_and_reports_refusal():
+    state = AppState()
+    app = MagicMock()
+    app.set_vless_cdn_camera.return_value = False
+    shown: list[str] = []
+    errors: list[str] = []
+
+    with (
+        patch.object(menu, "prompt", return_value="https://www.youtube.com/watch?v=abc"),
+        patch.object(menu, "info", side_effect=lambda text: shown.append(str(text))),
+        patch.object(menu, "error", side_effect=lambda text: errors.append(str(text))),
+    ):
+        menu._set_camera(state, MagicMock(), app)
+
+    app.set_vless_cdn_camera.assert_called_once_with(state, "https://www.youtube.com/watch?v=abc")
+    text = "\n".join(shown)
+    assert "rtsp://" in text and "m3u8" in text, "формат должен быть показан до ввода"
+    assert "ffmpeg:" in text, "про префикс иначе не узнать"
+    assert "YouTube" in text, "отказ объявляется заранее, а не после"
+    assert errors and "YouTube" in errors[0]

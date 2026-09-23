@@ -43,6 +43,18 @@ MEDIA_MODES = (MEDIA_MODE_VIDEO, MEDIA_MODE_PHOTO)
 DEFAULT_MEDIA_MODE = MEDIA_MODE_VIDEO
 MEDIA_MODE_LABELS: dict[str, str] = {MEDIA_MODE_VIDEO: "Видео", MEDIA_MODE_PHOTO: "Фото"}
 
+# Настройки живого потока. `stream_hls_time` — только минимум: резать можно лишь по
+# кейфреймам, поэтому у источника с интервалом в 3 с выйдет 3 с, сколько ни проси.
+# Окно в 10 сегментов — это десятки секунд запаса вместо одной секунды у прежнего
+# ретранслятора, и именно оно делает поток терпимым к задержке через CDN.
+STREAM_HLS_TIME_DEFAULT = 2
+STREAM_LIST_SIZE_DEFAULT = 10
+# Простой, после которого сторож гасит ffmpeg. Ноль — не гасить никогда.
+STREAM_IDLE_TIMEOUT_DEFAULT = 120
+# Сторож медиа: Caddy проксирует ему только плейлист, сегменты остаются статикой.
+GATE_HOST = "127.0.0.1"
+GATE_PORT = 1985
+
 # Локальный go2rtc-ретранслятор: его HLS Caddy отдаёт под /api/media/*. Один поток `decoy`.
 # go2rtc пишет в плейлисте ОТНОСИТЕЛЬНЫЕ ссылки (hls/playlist.m3u8?id=, segment.ts?id=),
 # поэтому одна замена префикса ^/api/media/ → /api/ покрывает всю цепочку.
@@ -122,6 +134,9 @@ CONFIG_DEFAULTS: tuple[tuple[str, JsonValue], ...] = (
     # фото живёт без него и медиатрафика не гоняет. Дефолт — видео: он не меняет поведение
     # уже настроенных инсталляций.
     ("media_mode", DEFAULT_MEDIA_MODE),
+    ("stream_hls_time", STREAM_HLS_TIME_DEFAULT),
+    ("stream_hls_list_size", STREAM_LIST_SIZE_DEFAULT),
+    ("stream_idle_timeout", STREAM_IDLE_TIMEOUT_DEFAULT),
     ("encryption_mode", "native"),
     ("encryption_private_key", ""),
     ("encryption_public_key", ""),

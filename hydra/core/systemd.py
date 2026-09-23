@@ -30,13 +30,19 @@ def _reload() -> bool:
     return _run(["systemctl", "daemon-reload"]).returncode == 0
 
 
-def install_service(name: str, content: str) -> bool:
-    """Создаёт и включает systemd-сервис."""
+def install_service(name: str, content: str, *, enable: bool = True) -> bool:
+    """Создаёт systemd-сервис и (по умолчанию) включает его.
+
+    `enable=False` нужен службам по требованию: юнит обязан существовать, но не
+    подниматься на загрузке — его запускает тот, кому он нужен.
+    """
     unit_path = SYSTEMD_DIR / f"{name}.service"
     unit_path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write(unit_path, content)
     if not _reload():
         return False
+    if not enable:
+        return True
     return _run(["systemctl", "enable", f"{name}.service"]).returncode == 0
 
 
