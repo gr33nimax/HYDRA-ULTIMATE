@@ -154,28 +154,32 @@ def create_backup(
         f".{destination.name}.{os.getpid()}.tmp",
     )
     try:
-        for source, resource in sources:
-            manifest_files.append(
-                {
-                    "path": source.as_posix(),
-                    "archive_path": _archive_path(source),
-                    "owner": resource.owner,
-                    "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-                    "bytes": source.stat().st_size,
-                },
-            )
-        manifest = {
-            "format": 2,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "files": manifest_files,
-        }
         with tarfile.open(temporary, "w:gz") as archive:
-            for source, _resource in sources:
-                archive.add(
-                    source,
-                    arcname=_archive_path(source),
-                    recursive=False,
+            for source, resource in sources:
+                # Читаем байты ОДИН раз и хешируем те же самые, что кладём в архив. Живой
+                # лог (напр. etc/wdtt/server.log) между хешем и tar-add дописывался → checksum
+                # mismatch при проверке. Одно чтение убирает гонку.
+                data = source.read_bytes()
+                manifest_files.append(
+                    {
+                        "path": source.as_posix(),
+                        "archive_path": _archive_path(source),
+                        "owner": resource.owner,
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                        "bytes": len(data),
+                    },
                 )
+                stat = source.stat()
+                info = tarfile.TarInfo(_archive_path(source))
+                info.size = len(data)
+                info.mode = stat.st_mode & 0o777
+                info.mtime = int(stat.st_mtime)
+                archive.addfile(info, fileobj=io.BytesIO(data))
+            manifest = {
+                "format": 2,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "files": manifest_files,
+            }
             payload = json.dumps(
                 manifest,
                 ensure_ascii=False,
