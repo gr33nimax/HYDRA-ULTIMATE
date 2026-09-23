@@ -68,14 +68,18 @@ def _yaml_quote(value: str) -> str:
 
 
 def render_config(source_url: str) -> str:
-    """go2rtc.yaml: один поток `decoy` из источника; API — только localhost, RTSP/WebRTC off.
+    """go2rtc.yaml: один поток `decoy` из источника; всё слушает только loopback.
 
     Пустой источник тоже валиден: поток объявлен без адреса (go2rtc это допускает),
     просто отдавать нечего, пока источник не задан.
     """
-    source_line = (
-        f"  {GO2RTC_STREAM_NAME}: {_yaml_quote(source_url)}" if str(source_url).strip() else f"  {GO2RTC_STREAM_NAME}:"
-    )
+    source = str(source_url).strip()
+    source_line = f"  {GO2RTC_STREAM_NAME}: {_yaml_quote(source)}" if source else f"  {GO2RTC_STREAM_NAME}:"
+    # `preload` держит продюсера тёплым. Без него go2rtc поднимает источник только под
+    # зрителя, а окно выхода у него крошечное (сегмент ждём 3 с, сессия живёт 5 с): любая
+    # икота закрывает сессию, продюсер останавливается, и следующее обращение снова платит
+    # холодный старт. Только при заданном источнике: у пустого потока преload нечего греть.
+    preload = f"preload:\n  {GO2RTC_STREAM_NAME}: \"\"\n" if source else ""
     return (
         "api:\n"
         f'  listen: "{GO2RTC_API_HOST}:{GO2RTC_API_PORT}"\n'
@@ -92,7 +96,9 @@ def render_config(source_url: str) -> str:
         # Путь к бинарю прописан явно: без этого go2rtc берёт первый `ffmpeg` из PATH,
         # а там может оказаться дистрибутивный — он ниже его порога версии.
         "ffmpeg:\n"
-        f"  bin: {FFMPEG_BIN}\n"
+        # as_posix: конфиг обязан нести POSIX-путь независимо от того, где его собрали.
+        f"  bin: {FFMPEG_BIN.as_posix()}\n"
+        f"{preload}"
         "streams:\n"
         f"{source_line}\n"
     )
