@@ -261,6 +261,42 @@ def test_service_unit_drift_detects_legacy_capability_set(tmp_path):
     )
 
 
+def test_service_unit_has_no_reload_hook():
+    # `ExecReload` у sing-box означает «убить ядро»: SIGHUP он обрабатывает как остановку,
+    # а не как перечитку конфига. Хука быть не должно — иначе ручной `systemctl reload`
+    # молча роняет сервис, и он поднимается только через RestartSec.
+    unit = singbox_units.render_service_unit(
+        Path("/usr/local/bin/sing-box"),
+        Path("/etc/sing-box/config.json"),
+    )
+
+    assert "ExecReload" not in unit
+
+
+def test_reload_restarts_the_core_instead_of_signalling_it():
+    # Применение конфига обязано быть перезапуском: `systemctl reload` отправляет SIGHUP,
+    # сервис умирает, пост-проверка видит его мёртвым и откатывает правку маршрута —
+    # то есть изменение не доезжает вовсе.
+    commands: list[list[str]] = []
+
+    def run(args, **_kwargs):
+        commands.append(list(args))
+        return MagicMock(returncode=0)
+
+    with (
+        patch("hydra.core.singbox.is_running", return_value=True),
+        patch("hydra.core.singbox._service_unit_needs_update", return_value=False),
+        patch("hydra.core.singbox.wait_until_stable", return_value=True),
+        patch("hydra.core.singbox.HOST.run", side_effect=run),
+        patch("hydra.core.singbox._set_error"),
+        patch("hydra.core.singbox._log"),
+    ):
+        assert singbox.reload() is True
+
+    assert ["systemctl", "restart", "sing-box"] in commands
+    assert ["systemctl", "reload", "sing-box"] not in commands
+
+
 @pytest.fixture
 def mock_singbox_paths(tmp_path):
     bin_path = tmp_path / "sing-box"

@@ -76,15 +76,13 @@ def log(level: str, message: str) -> None:
 def _run(cmd: list, capture: bool = True, timeout: int = 30) -> subprocess.CompletedProcess:
     import os
 
-    kw = {"timeout": timeout}
-    if capture:
-        kw.update(capture_output=True, text=True, encoding="utf-8", errors="replace")
-    else:
-        kw.update(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     env = os.environ.copy()
     env["ENABLE_DEPRECATED_LEGACY_DNS_SERVERS"] = "true"
     env["ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER"] = "true"
-    return HOST.run(cmd, env=env, **kw)
+    # Аргументы перечислены явно: у словаря выводится один тип значения, и он конфликтует.
+    if capture:
+        return HOST.run(cmd, timeout=timeout, env=env, text=True, encoding="utf-8", errors="replace")
+    return HOST.run(cmd, timeout=timeout, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def validate_current_config() -> tuple[bool | None, str]:
@@ -422,12 +420,18 @@ def wait_until_stable(checks: int = 3, interval: float = 0.5) -> bool:
 
 
 def reload() -> bool:
-    """Перезагружает конфиг sing-box (graceful)."""
+    """Применить конфиг перезапуском: sing-box не умеет перечитывать его на ходу.
+
+    `systemctl reload` — это `ExecReload=/bin/kill -HUP`, а SIGHUP sing-box обрабатывает
+    как остановку: ядро умирает, `Restart=on-failure` поднимает его через `RestartSec`,
+    пост-проверка видит мёртвый сервис и откатывает правку маршрута. Restart доводит до
+    активного состояния сам.
+    """
     if not is_running() or _service_unit_needs_update():
         return start()
-    r = _run(["systemctl", "reload", "sing-box"])
+    r = _run(["systemctl", "restart", "sing-box"])
     if r.returncode != 0:
-        message = f"Не удалось перезагрузить Sing-Box: {r.stderr or r.stdout or 'ошибка systemd'}"
+        message = f"Не удалось перезапустить Sing-Box: {r.stderr or r.stdout or 'ошибка systemd'}"
         _set_error(message)
         _log("ERROR", message)
         return False
