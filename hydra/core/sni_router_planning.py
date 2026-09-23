@@ -58,14 +58,15 @@ def get_decoy_http_port(plugin_name: str, decoy_ports: Mapping[str, int]) -> int
 
 def needs_mux(state: AppState, internal_ports: Mapping[str, int]) -> bool:
     """Decide whether the public TCP/443 SNI multiplexer is required."""
-    if any(
-        protocol.enabled
-        and protocol.config.get("domain")
-        and isinstance(protocol.config.get(_DYNAMIC_ROUTE_KEY), Mapping)
-        and protocol.config[_DYNAMIC_ROUTE_KEY].get("kind") == _DYNAMIC_ROUTE_KIND
-        for protocol in state.protocols.values()
-    ):
-        return True
+    for protocol in state.protocols.values():
+        route = protocol.config.get(_DYNAMIC_ROUTE_KEY)
+        if (
+            protocol.enabled
+            and protocol.config.get("domain")
+            and isinstance(route, Mapping)
+            and route.get("kind") == _DYNAMIC_ROUTE_KIND
+        ):
+            return True
 
     for name in ("anytls", "trusttunnel", "hysteria2"):
         proto = state.protocols.get(name)
@@ -276,7 +277,7 @@ def _route_port(
     field: str,
     occupied_ports: set[int],
 ) -> int:
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         raise _route_error(name, f"{field} must be an integer port")
     try:
         port = int(value)
@@ -485,7 +486,7 @@ def udp_relay_routes(
 ) -> list[tuple[str, int, int]]:
     """Plan the sole UDP exact-source relay route."""
     owner = get_quic_owner(state)
-    if not antidpi_enabled(state) or owner not in udp_relay_ports:
+    if owner is None or not antidpi_enabled(state) or owner not in udp_relay_ports:
         return []
     backend = next((item for item in backends if item["name"] == owner), None)
     if backend is None:

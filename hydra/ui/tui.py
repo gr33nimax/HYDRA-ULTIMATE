@@ -343,16 +343,24 @@ def _menu_key(key: str) -> str:
 
 
 def menu(options: list[tuple[str, str, str]], header: str = "") -> str:
-    """Отображает компактное меню в тонкой рамке."""
+    """Отображает компактное меню в тонкой рамке.
+
+    Третий элемент кортежа — краткое описание; если оно есть, показываем его тусклой
+    строкой под пунктом — оператору не надо угадывать, что делает пункт.
+    """
     print()
     print(_frame_top(header))
 
-    for key, label, _desc in options:
+    for key, label, desc in options:
         if key == "-":
             print(_frame_rule())
             continue
         key_col = _menu_key(key)
         print(*_frame_row(f"{key_col}  {label}"), sep="\n")
+        text = str(desc or "").strip()
+        if text:
+            # Выравниваем под label: ключ «[X]» = 3 символа + 2 пробела.
+            print(*_frame_row(f"     {DIM}{text}{NC}"), sep="\n")
     print(_frame_bottom())
     print()
 
