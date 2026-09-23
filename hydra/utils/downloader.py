@@ -465,9 +465,9 @@ def verify_elf(path: Path) -> bool:
 
 
 def extract_tarball(archive: Path, dest: Path) -> Path:
-    """Safely extract a tar.gz archive inside ``dest``."""
+    """Safely extract a tar archive inside ``dest`` (gz/bz2/xz auto-detected)."""
     dest.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(str(archive), "r:gz") as tar:
+    with tarfile.open(str(archive), "r:*") as tar:
         destination = dest.resolve()
         members = tar.getmembers()
         for member in members:

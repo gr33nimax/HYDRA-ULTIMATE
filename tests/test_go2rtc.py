@@ -66,32 +66,47 @@ def test_apply_source_rewrites_config_and_restarts(monkeypatch, tmp_path):
     assert written["src"] == "rtsp://new/cam"
 
 
-def test_ffmpeg_source_fails_closed_when_ffmpeg_is_unavailable(monkeypatch, tmp_path):
+def test_apply_source_needs_ffmpeg_only_for_prefixed_sources(monkeypatch, tmp_path):
     monkeypatch.setattr(go2rtc, "GO2RTC_BIN", tmp_path / "go2rtc")
     (tmp_path / "go2rtc").write_bytes(b"\x7fELF")
     monkeypatch.setattr(go2rtc, "write_config", lambda _src: None)
     monkeypatch.setattr(go2rtc.systemd, "restart", lambda _svc: True)
-    monkeypatch.setattr(go2rtc.HOST, "which", lambda name: "/usr/bin/" + name)
 
-    # ffmpeg есть → источник с префиксом проходит.
+    asked: list[str] = []
+    monkeypatch.setattr(go2rtc, "ensure_ffmpeg", lambda **_k: asked.append("call") or True)
+
     assert go2rtc.apply_source("ffmpeg:https://h/x.m3u8") is True
-
-    # Ни ffmpeg, ни apt-get → явный отказ, а не перезапуск сервиса без видео.
-    restart = MagicMock(return_value=True)
-    monkeypatch.setattr(go2rtc.systemd, "restart", restart)
-    monkeypatch.setattr(go2rtc.HOST, "which", lambda _name: None)
-    errors: list[str] = []
-
-    assert go2rtc.apply_source("ffmpeg:https://h/x.m3u8", on_error=errors.append) is False
-    restart.assert_not_called()
-    assert errors and "ffmpeg" in errors[0]
-
-
-def test_plain_source_never_looks_for_ffmpeg(monkeypatch, tmp_path):
-    monkeypatch.setattr(go2rtc, "GO2RTC_BIN", tmp_path / "go2rtc")
-    (tmp_path / "go2rtc").write_bytes(b"\x7fELF")
-    monkeypatch.setattr(go2rtc, "write_config", lambda _src: None)
-    monkeypatch.setattr(go2rtc.systemd, "restart", lambda _svc: True)
-    monkeypatch.setattr(go2rtc.HOST, "which", lambda _name: None)
+    assert asked == ["call"], "источник с префиксом обязан требовать ffmpeg"
 
     assert go2rtc.apply_source("rtsp://cam/live") is True
+    assert asked == ["call"], "обычный источник ffmpeg не требует"
+
+
+def test_ffmpeg_source_stops_when_the_binary_cannot_be_installed(monkeypatch, tmp_path):
+    monkeypatch.setattr(go2rtc, "GO2RTC_BIN", tmp_path / "go2rtc")
+    (tmp_path / "go2rtc").write_bytes(b"\x7fELF")
+    monkeypatch.setattr(go2rtc, "write_config", lambda _src: None)
+    restart = MagicMock(return_value=True)
+    monkeypatch.setattr(go2rtc.systemd, "restart", restart)
+    monkeypatch.setattr(go2rtc, "ensure_ffmpeg", lambda **_k: False)
+
+    # Без ffmpeg источник всё равно не поедет, поэтому сервис не перезапускаем вхолостую.
+    assert go2rtc.apply_source("ffmpeg:https://h/x.m3u8") is False
+    restart.assert_not_called()
+
+
+def test_ensure_ffmpeg_refuses_an_unknown_architecture(monkeypatch, tmp_path):
+    monkeypatch.setattr(go2rtc, "FFMPEG_BIN", tmp_path / "ffmpeg")
+    monkeypatch.setattr("hydra.utils.net.detect_arch", lambda: "riscv64")
+
+    errors: list[str] = []
+    assert go2rtc.ensure_ffmpeg(on_error=errors.append) is False
+    assert errors and "riscv64" in errors[0]
+
+
+def test_config_points_go2rtc_at_our_pinned_ffmpeg():
+    text = go2rtc.render_config("ffmpeg:https://h/x.m3u8")
+
+    # Без явного пути go2rtc берёт первый `ffmpeg` из PATH, а там может оказаться
+    # дистрибутивный — он ниже его порога версии.
+    assert f"  bin: {go2rtc.FFMPEG_BIN}" in text

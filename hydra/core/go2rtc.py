@@ -34,9 +34,20 @@ GO2RTC_CONFIG = Path("/etc/hydra/go2rtc.yaml")
 GO2RTC_UNIT_NAME = "hydra-go2rtc"
 GO2RTC_UNIT_SERVICE = f"{GO2RTC_UNIT_NAME}.service"
 
-# Пакет для источников с префиксом `ffmpeg:`: родной HLS-ридер go2rtc падает на корректных
-# манифестах (CRLF в строках сегментов, fMP4), и такой источник уводится на разбор ffmpeg'у.
-FFMPEG_PACKAGE = "ffmpeg"
+# Источник с префиксом `ffmpeg:` уводит разбор на ffmpeg (родной HLS-ридер go2rtc падает
+# на корректных манифестах: CRLF в строках сегментов, fMP4). Бинарь берём сборкой BtbN, а
+# не дистрибутивом: go2rtc пропускает только ffmpeg >= 5.0 (сравнивает libavformat >=
+# 59.16), а в jammy 22.04 лежит 4.4.2 с 58.76 — apt-версия отвергается.
+# Пин — имя ассета, а не тег: BtbN чистит старые autobuild-релизы, а stable-линия в
+# релизе `latest` живёт долго. Диггест ассета обязателен (require_digest).
+FFMPEG_REPO = "BtbN/FFmpeg-Builds"
+FFMPEG_ASSETS = {
+    "amd64": "ffmpeg-n9.0-latest-linux64-lgpl-9.0.tar.xz",
+    "arm64": "ffmpeg-n9.0-latest-linuxarm64-lgpl-9.0.tar.xz",
+}
+FFMPEG_BIN = Path("/usr/local/bin/ffmpeg")
+# Статический ffmpeg ~80 МБ; порог ловит обрезанную загрузку и html-заглушку.
+FFMPEG_MIN_BIN_SIZE = 20_000_000
 
 # Минимальный порог размера ELF, чтобы не принять html-заглушку за бинарь.
 _MIN_BIN_SIZE = 1_000_000
@@ -68,6 +79,10 @@ def render_config(source_url: str) -> str:
         '  listen: ""\n'
         "log:\n"
         "  level: warn\n"
+        # Путь к бинарю прописан явно: без этого go2rtc берёт первый `ffmpeg` из PATH,
+        # а там может оказаться дистрибутивный — он ниже его порога версии.
+        "ffmpeg:\n"
+        f"  bin: {FFMPEG_BIN}\n"
         "streams:\n"
         f"{source_line}\n"
     )
@@ -134,21 +149,48 @@ def _fail(on_error: Callable[[str], None] | None, message: str) -> None:
 
 
 def ensure_ffmpeg(*, on_error: Callable[[str], None] | None = None) -> bool:
-    """Поставить ffmpeg, если источник отдан ему (`ffmpeg:` в начале URL).
+    """Положить пинованный статический ffmpeg в /usr/local/bin, если источника без него нет.
 
     Без бинаря go2rtc молча не отдаёт видео: ошибка ffmpeg-продюсера видна только в логе,
     а плеер стоит пустой. Поэтому отказ явный, с причиной в `on_error`.
+
+    Проверяем именно свой путь, а не наличие `ffmpeg` в PATH: дистрибутивный бинарь
+    может быть старше порога go2rtc, и повторять его разбор версии здесь — лишняя
+    догадка, которая разъедется с ядром. Свой бинарь всегда тот, что нужен, и в PATH он
+    раньше `/usr/bin`; в go2rtc.yaml путь прописан явно (`bin`).
     """
-    if HOST.which(FFMPEG_PACKAGE):
+    if FFMPEG_BIN.exists() and FFMPEG_BIN.stat().st_size > FFMPEG_MIN_BIN_SIZE:
         return True
-    if not HOST.which("apt-get"):
-        _fail(on_error, f"источник требует {FFMPEG_PACKAGE}, а на хосте нет ни его, ни apt-get")
+    from hydra.utils.downloader import download_github_asset_filtered, extract_tarball, verify_elf
+    from hydra.utils.net import detect_arch
+
+    arch = detect_arch()
+    asset = FFMPEG_ASSETS.get(arch)
+    if asset is None:
+        _fail(on_error, f"нет сборки ffmpeg под архитектуру {arch}")
         return False
-    HOST.run(["apt-get", "update", "-qq"], timeout=300)
-    result = HOST.run(["apt-get", "install", "-y", "-qq", FFMPEG_PACKAGE], text=True, timeout=300)
-    if result.returncode != 0 or not HOST.which(FFMPEG_PACKAGE):
-        _fail(on_error, f"{FFMPEG_PACKAGE} не установился: {str(result.stderr or '').strip()[:200]}")
-        return False
+    with tempfile.TemporaryDirectory(prefix="hydra-ffmpeg-") as directory:
+        archive = Path(directory) / "ffmpeg.tar.xz"
+        if not download_github_asset_filtered(
+            FFMPEG_REPO,
+            lambda name: name == asset,
+            archive,
+            require_unique=True,
+            require_digest=True,
+            on_error=on_error,
+        ):
+            return False
+        unpacked = extract_tarball(archive, Path(directory) / "unpacked")
+        candidates = sorted(unpacked.glob("*/bin/ffmpeg"))
+        if len(candidates) != 1:
+            _fail(on_error, f"в архиве ffmpeg ожидался один бинарь, найдено {len(candidates)}")
+            return False
+        binary = candidates[0]
+        if binary.stat().st_size <= FFMPEG_MIN_BIN_SIZE or not verify_elf(binary):
+            _fail(on_error, "ffmpeg из архива не похож на ELF-бинарь")
+            return False
+        binary.chmod(0o755)
+        HOST.atomic_copy(binary, FFMPEG_BIN, mode=0o755)
     return True
 
 
@@ -193,7 +235,10 @@ def remove() -> bool:
 
 
 __all__ = [
-    "FFMPEG_PACKAGE",
+    "FFMPEG_ASSETS",
+    "FFMPEG_BIN",
+    "FFMPEG_MIN_BIN_SIZE",
+    "FFMPEG_REPO",
     "GO2RTC_BIN",
     "GO2RTC_CONFIG",
     "GO2RTC_REPO",
