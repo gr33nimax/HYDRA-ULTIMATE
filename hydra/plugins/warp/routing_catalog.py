@@ -14,6 +14,17 @@ DEFAULT_LOCAL_LIST = "default"
 AI_GROUP = "ai"
 LOCAL_GROUP = "local"
 OTHER_GROUP = "other"
+AVAILABILITY_GROUP = "availability"
+
+# Upstream files these two under "ru", but they are reachability lists, not
+# Russian services: one holds what is blocked inside Russia together with the
+# foreign sites that refuse Russian subnets, the other holds Russian services
+# that only answer from outside. Left inside "Российские сервисы" they made the
+# category unrouteable, because its direction stopped being one thing.
+SOURCE_GROUP_OVERRIDES = {
+    "itDog-russia-inside": AVAILABILITY_GROUP,
+    "itDog-russia-outside": AVAILABILITY_GROUP,
+}
 
 # Which way a category has to be routed to work at all: the RU group is reachable
 # from a Russian address, while everything else in the catalogue is either
@@ -23,12 +34,14 @@ OTHER_GROUP = "other"
 GROUP_DIRECTIONS = {
     "ru": "direct",
     "blocked": "warp",
+    AVAILABILITY_GROUP: "",
     LOCAL_GROUP: "",
 }
 DEFAULT_DIRECTION = "warp"
 
 GROUP_LABELS = {
     "blocked": "Заблокированное в РФ",
+    AVAILABILITY_GROUP: "Доступность из РФ (itdog)",
     LOCAL_GROUP: "Мои списки",
     OTHER_GROUP: "Прочее",
 }
@@ -43,12 +56,19 @@ GROUP_NOTES = {
         "в нём есть и то, что уже покрыто категориями по сервисам."
     ),
     LOCAL_GROUP: "Списки, которые оператор завёл сам.",
+    AVAILABILITY_GROUP: (
+        "Списки доступности от itdoginfo, а не российские сервисы. «Доступны только "
+        "из РФ» — то, что режут в России, плюс зарубежные сайты, которые сами "
+        "отказывают российским адресам; «Недоступны из РФ» — российские сервисы, "
+        "которые отвечают только снаружи. Направления у них разные — смотри по факту."
+    ),
 }
 
 # Menu order: what an operator reaches for first, then the upstream catalogue.
 GROUP_ORDER = (
     "blocked",
     "ru",
+    AVAILABILITY_GROUP,
     "ai",
     "media",
     "social",
@@ -120,7 +140,11 @@ def build_routing_catalog(
         item = external_lists[key]
         if not isinstance(item, dict):
             continue
-        grouped.setdefault(str(item.get("group") or OTHER_GROUP), []).append(
+        group = SOURCE_GROUP_OVERRIDES.get(
+            key,
+            str(item.get("group") or OTHER_GROUP),
+        )
+        grouped.setdefault(group, []).append(
             (
                 f"ext:{key}",
                 str(item.get("name") or key),
@@ -193,9 +217,11 @@ def category_menu(
 
 
 __all__ = [
+    "AVAILABILITY_GROUP",
     "DEFAULT_LOCAL_LIST",
     "GROUP_DIRECTIONS",
     "GROUP_ORDER",
+    "SOURCE_GROUP_OVERRIDES",
     "RoutingCategory",
     "build_routing_catalog",
     "category_menu",

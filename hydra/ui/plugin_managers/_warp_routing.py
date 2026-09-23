@@ -199,16 +199,17 @@ def _menu_category_sources(
             _menu_category_source_list(state, ps, app, category)
 
 
+def _is_aggregate(key: str) -> bool:
+    """Whether an upstream source is its own roll-up rather than one service."""
+    return key.startswith("ext:category-")
+
+
 def _filter_sources(sources: list[tuple[str, str]], query: str) -> list[tuple[str, str]]:
     """Sources whose name or key contains the query, in catalogue order."""
     needle = query.strip().lower()
     if not needle:
         return sources
-    return [
-        item
-        for item in sources
-        if needle in str(item[1]).lower() or needle in str(item[0]).lower()
-    ]
+    return [item for item in sources if needle in str(item[1]).lower() or needle in str(item[0]).lower()]
 
 
 def _menu_category_source_list(
@@ -238,16 +239,21 @@ def _menu_category_source_list(
         )
         lines = [
             f"  {found}",
-            f"  Страница {page + 1} из {total_pages} "
-            f"(показано {start + 1}-{start + len(chunk)})",
+            f"  Страница {page + 1} из {total_pages} (показано {start + 1}-{start + len(chunk)})",
             "  " + "─" * 55,
         ]
         if not chunk:
             lines.append(f"  {DIM}Ничего не найдено.{NC}")
         for offset, (key, name) in enumerate(chunk, start=start + 1):
             target = str(list_targets.get(key) or "none")
+            mark = f" {DIM}· агрегат{NC}" if _is_aggregate(key) else ""
             lines.append(
-                f"  {offset:>3}. {CYAN}{str(name):<30}{NC} {_target_label(target)}",
+                f"  {offset:>3}. {CYAN}{str(name):<30}{NC} {_target_label(target)}{mark}",
+            )
+        if any(_is_aggregate(key) for key, _ in all_sources):
+            lines.append(
+                f"  {DIM}«агрегат» — сводный список Geo-Aggregator: не сумма сервисов выше, "
+                f"а свой набор, частично с ними пересекается.{NC}",
             )
         lines.extend(
             [
@@ -256,7 +262,7 @@ def _menu_category_source_list(
                 "  [n]/[p] — страницы, [-] — сбросить поиск, [0] — назад",
             ]
         )
-        panel(f"🔗 {str(category['label']).upper()} · СЕРВИСЫ", lines)
+        panel(f"🔗 {str(category['label']).upper()} · СЕРВИСЫ", lines, wrap=True)
 
         raw = prompt("Выбор").strip()
         if raw == "0":

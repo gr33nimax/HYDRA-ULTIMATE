@@ -154,6 +154,48 @@ def test_category_menu_counts_a_partially_routed_category() -> None:
     assert media["note"] == ""
 
 
+def test_reachability_lists_leave_the_russian_services_category() -> None:
+    sources = {
+        "category-ru": {
+            "name": "Все российские сервисы",
+            "url": "u",
+            "desc": "Российские сервисы",
+            "group": "ru",
+        },
+        "category-bank-ru": {
+            "name": "Банки РФ",
+            "url": "u",
+            "desc": "Российские сервисы",
+            "group": "ru",
+        },
+        "itDog-russia-inside": {
+            "name": "Доступны только из РФ",
+            "url": "u",
+            "desc": "Российские сервисы",
+            "group": "ru",
+        },
+        "itDog-russia-outside": {
+            "name": "Недоступны из РФ",
+            "url": "u",
+            "desc": "Российские сервисы",
+            "group": "ru",
+        },
+    }
+
+    categories = build_routing_catalog(sources, {})
+
+    ru = _category(categories, "ru")
+    assert ru.source_keys == ("ext:category-bank-ru", "ext:category-ru")
+
+    availability = _category(categories, "availability")
+    assert availability.label == "Доступность из РФ (itdog)"
+    assert availability.source_keys == (
+        "ext:itDog-russia-inside",
+        "ext:itDog-russia-outside",
+    )
+    assert availability.direction == ""
+
+
 def test_catalogue_cache_falls_back_when_absent_or_malformed(tmp_path: Path) -> None:
     missing = catalog.load_sources(tmp_path / "absent.json")
     assert "refilter" in missing and "category-ru" in missing
