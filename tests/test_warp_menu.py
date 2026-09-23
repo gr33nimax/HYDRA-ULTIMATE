@@ -9,6 +9,33 @@ from hydra.ui.plugin_managers._warp_menu import (
     _options,
     _status_lines,
 )
+from hydra.ui.plugin_managers._warp_routing import _category_row, _target_label
+
+
+def test_a_partially_routed_category_names_its_real_coverage():
+    assert "1 из 13" in _target_label("warp_Russia", 1, 13)
+    assert "выключено" in _target_label("none", 0, 13)
+    assert "выключено" in _target_label("none")
+    assert "разные" in _target_label("mixed", 3, 5)
+    assert "warp" in _target_label("warp", 2, 2)
+
+
+def test_the_category_row_carries_the_target_and_the_usual_direction():
+    row = _category_row(
+        {
+            "label": "Российские сервисы",
+            "target": "warp_Russia",
+            "routed": 1,
+            "total": 13,
+            "direction": "direct",
+            "description": "13 источников",
+        },
+    )
+
+    assert "Российские сервисы" in row
+    assert "warp_Russia" in row
+    assert "1 из 13" in row
+    assert "DIRECT" in row
 
 
 def _status(installed: bool, enabled: bool = False):

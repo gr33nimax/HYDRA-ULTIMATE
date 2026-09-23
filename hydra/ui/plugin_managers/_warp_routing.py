@@ -42,14 +42,6 @@ def _local_lists(ps) -> dict:
     return lists
 
 
-def _target_label(target: str) -> str:
-    if target == "none":
-        return f"{RED}выключено{NC}"
-    if target == "mixed":
-        return f"{YELLOW}разные направления{NC}"
-    return f"{GREEN if target != 'direct' else YELLOW}{target}{NC}"
-
-
 def _destinations(app: ApplicationService) -> list[str]:
     observation = facade._warp_observation(app)
     destinations = ["direct", "warp"]
@@ -108,23 +100,47 @@ def _apply_target(
             facade._show_diagnostic_info(app)
 
 
-def _category_lines(categories: list[dict]) -> list[str]:
-    lines = [
-        f"  {BOLD}Каталог Geo-Aggregator, {len(categories)} категорий:{NC}",
-        "  " + "─" * 60,
-    ]
-    for index, category in enumerate(categories, start=1):
-        lines.append(
-            f"  {index:>3}. {CYAN}{str(category['label']):<30}{NC} {DIM}{category['description']}{NC}",
-        )
-        lines.append(f"       сейчас: {_target_label(str(category['target']))}")
-    lines.extend(
-        [
-            "  " + "─" * 60,
-            "  Категория направляется целиком: один маршрут на все её списки.",
-        ]
+def _counts(category: dict) -> tuple[int, int]:
+    """Sources carrying a route in this category, and how many it has."""
+    total = category.get("total")
+    routed = category.get("routed")
+    return (
+        routed if isinstance(routed, int) else 0,
+        total if isinstance(total, int) else len(category.get("source_keys") or ()),
     )
-    return lines
+
+
+def _target_label(target: str, routed: int = 1, total: int = 1) -> str:
+    """Render one destination, naming the sources it actually covers."""
+    if routed == 0 or target == "none":
+        return f"{RED}выключено{NC}"
+    if target == "mixed":
+        body = f"{YELLOW}разные направления{NC}"
+    else:
+        body = f"{GREEN if target != 'direct' else YELLOW}{target}{NC}"
+    if routed < total:
+        return f"{body} {DIM}({routed} из {total}){NC}"
+    return body
+
+
+def _category_lines(categories: list[dict]) -> list[str]:
+    enabled = sum(1 for category in categories if category.get("routed"))
+    return [
+        f"  {BOLD}Каталог Geo-Aggregator:{NC} {len(categories)} категорий, "
+        f"включено {enabled}.",
+        "  " + "─" * 60,
+        "  Категория направляется целиком — один маршрут на все её списки;",
+        "  отдельный список внутри категории можно переопределить.",
+        f"  {DIM}«обычно → WARP» — сервису нужен иностранный адрес, «обычно → DIRECT» — российский.{NC}",
+    ]
+
+
+def _category_row(category: dict) -> str:
+    """One menu row: what the category is, where it goes, where it usually goes."""
+    target = _target_label(str(category["target"]), *_counts(category))
+    direction = str(category.get("direction") or "")
+    row = f"{category['label']} — {target}"
+    return f"{row} {DIM}· {direction.upper()}{NC}" if direction else row
 
 
 def _menu_category_sources(
@@ -142,7 +158,7 @@ def _menu_category_sources(
             [
                 f"  {category['description']}",
                 f"  Источников в категории: {len(keys)}",
-                f"  Сейчас: {_target_label(str(category['target']))}",
+                f"  Сейчас: {_target_label(str(category['target']), *_counts(category))}",
                 "  " + "─" * 55,
                 "  Категория направляется целиком, но отдельный список",
                 "  можно переопределить внутри неё.",
@@ -260,8 +276,8 @@ def _menu_external_sources_toggle(
         options = [
             (
                 str(index),
-                str(category["label"]),
-                f"{category['description']} · сейчас: {category['target']}",
+                _category_row(category),
+                str(category["description"]),
             )
             for index, category in enumerate(categories, start=1)
         ]

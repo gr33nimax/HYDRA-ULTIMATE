@@ -136,6 +136,18 @@ def test_category_menu_carries_the_current_destination() -> None:
     media = next(item for item in menu if item["key"] == "media")
     assert media["target"] == "mixed"
     assert media["source_keys"] == ("ext:netflix", "ext:youtube")
+    assert (media["routed"], media["total"]) == (2, 2)
+
+
+def test_category_menu_counts_a_partially_routed_category() -> None:
+    menu = category_menu(_catalog(), {"ext:youtube": "warp"}, {})
+
+    media = next(item for item in menu if item["key"] == "media")
+    assert media["target"] == "warp"
+    assert (media["routed"], media["total"]) == (1, 2)
+
+    blocked = next(item for item in menu if item["key"] == "blocked")
+    assert (blocked["routed"], blocked["total"]) == (0, 2)
 
 
 def test_catalogue_cache_falls_back_when_absent_or_malformed(tmp_path: Path) -> None:

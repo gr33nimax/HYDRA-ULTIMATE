@@ -157,13 +157,30 @@ def category_menu(
     list_targets: dict | None = None,
     local_lists: dict | None = None,
 ) -> list[dict]:
-    """Build the menu payload: every category with its current destination."""
+    """Build the menu payload: every category with its current destination.
+
+    A destination alone cannot be read: a category where one source of thirteen
+    carries a route must not look like a category that is routed. ``routed`` and
+    ``total`` carry that difference to the menu.
+    """
     targets = list_targets if isinstance(list_targets, dict) else {}
     categories = build_routing_catalog(
         external_lists,
         local_lists if isinstance(local_lists, dict) else {},
     )
-    return [{**item.as_dict(), "target": category_target(item, targets)} for item in categories]
+    return [
+        {
+            **item.as_dict(),
+            "target": category_target(item, targets),
+            "routed": sum(
+                1
+                for key in item.source_keys
+                if str(targets.get(key) or "none") != "none"
+            ),
+            "total": len(item.source_keys),
+        }
+        for item in categories
+    ]
 
 
 __all__ = [
