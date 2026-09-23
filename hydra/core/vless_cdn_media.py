@@ -197,7 +197,13 @@ class _Handler(BaseHTTPRequestHandler):
     gate: Gate
 
     def do_GET(self) -> None:  # noqa: N802 — имя задано базовым классом
-        body = self.gate.playlist()
+        # Клиент мог уйти, не дождавшись (curl по таймауту, браузер, перезагрузка страницы).
+        # Для сторожа это обычное дело, а traceback в журнале на каждый такой уход только
+        # топит настоящие проблемы.
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+            self._respond(self.gate.playlist())
+
+    def _respond(self, body: bytes | None) -> None:
         if body is None:
             # 503, а не пустой плейлист: Caddy на 5xx отдаёт статику, и медиа-путь не
             # выглядит голой ошибкой.

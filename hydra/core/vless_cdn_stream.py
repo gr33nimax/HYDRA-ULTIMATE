@@ -150,13 +150,14 @@ def build_command(
 
 
 def _quote(value: str) -> str:
-    """Экранировать аргумент для ExecStart: пробел и кавычка ломают разбор systemd.
+    """Экранировать аргумент для ExecStart.
 
-    systemd разбирает ExecStart сам, а не через шелл, поэтому «просто склеить» аргументы
-    пробелом достаточно только пока в них нет пробелов и кавычек. URL и путь — данные
-    оператора, так что экранируем, а не надеемся.
+    systemd разбирает ExecStart сам, а не через шелл, и вдобавок раскрывает в нём
+    спецификаторы: управляющий символ — это `%` (`%d` — каталог credentials), поэтому его
+    надо удваивать. Без этого `-hls_segment_filename …/s%d.ts` превращает юнит в
+    `bad-setting`, и служба не стартует вовсе — сама и без единой строки в журнале ffmpeg.
     """
-    text = str(value)
+    text = str(value).replace("%", "%%")
     if not any(character in text for character in ' \t"\\'):
         return text
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'

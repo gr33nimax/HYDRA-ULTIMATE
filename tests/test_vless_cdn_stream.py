@@ -97,6 +97,23 @@ def test_unit_quotes_arguments_with_spaces():
     assert '"https://h/x.m3u8?a=1 b=2"' in stream.render_unit(command)
 
 
+def test_unit_escapes_percent_in_segment_names():
+    # `%` в ExecStart — спецификатор systemd (`%d` — каталог credentials). Незаэкранированный
+    # `s%d.ts` делает юнит `bad-setting`, и служба не стартует вовсе: именно так декой не
+    # работал после раскатки, а в журнале не было ни строки от ffmpeg.
+    unit = stream.render_unit(_command())
+
+    assert "s%%d.ts" in unit
+    assert "s%d.ts" not in unit
+
+
+def test_unit_escapes_percent_in_a_source_url():
+    # URL с процентным кодированием — обычное дело, и он тоже идёт в ExecStart.
+    command = stream.build_command("https://cam.example/a%20b/index.m3u8", hls_time=2, list_size=10)
+
+    assert "a%%20b" in stream.render_unit(command)
+
+
 # ── Жизненный цикл ─────────────────────────────────────────────────────────────
 
 
