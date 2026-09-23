@@ -9,7 +9,25 @@ from hydra.ui.plugin_managers._warp_menu import (
     _options,
     _status_lines,
 )
-from hydra.ui.plugin_managers._warp_routing import _category_row, _target_label
+from hydra.ui.plugin_managers._warp_routing import (
+    _category_row,
+    _filter_sources,
+    _target_label,
+)
+
+
+def test_a_source_can_be_found_by_name():
+    sources = [
+        ("ext:netflix", "Netflix"),
+        ("ext:youtube", "YouTube"),
+        ("ext:rutracker", "RuTracker"),
+    ]
+
+    assert _filter_sources(sources, "youtube") == [("ext:youtube", "YouTube")]
+    assert _filter_sources(sources, "tracker") == [("ext:rutracker", "RuTracker")]
+    assert _filter_sources(sources, "ext:netflix") == [("ext:netflix", "Netflix")]
+    assert _filter_sources(sources, "") == sources
+    assert _filter_sources(sources, "нет-такого") == []
 
 
 def test_a_partially_routed_category_names_its_real_coverage():

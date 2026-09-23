@@ -128,8 +128,8 @@ def _category_lines(categories: list[dict]) -> list[str]:
     return [
         f"  {BOLD}Каталог Geo-Aggregator:{NC} {len(categories)} категорий, включено {enabled}.",
         "  " + "─" * 60,
-        "  Категория направляется целиком — один маршрут на все её списки;",
-        "  отдельный список внутри категории можно переопределить.",
+        "  Категория направляется целиком; внутри — конкретные сервисы",
+        "  (youtube, google, telegram), и каждый можно направить отдельно.",
         f"  {DIM}«обычно → WARP» — сервису нужен иностранный адрес, «обычно → DIRECT» — российский.{NC}",
     ]
 
@@ -157,11 +157,11 @@ def _menu_category_sources(
             f"🔗 {str(category['label']).upper()}",
             [
                 f"  {category['description']}",
-                f"  Источников в категории: {len(keys)}",
+                f"  Сервисов в категории: {len(keys)}",
                 f"  Сейчас: {_target_label(str(category['target']), *_counts(category))}",
                 "  " + "─" * 55,
                 *([f"  {note}", "  " + "─" * 55] if note else []),
-                "  Категория направляется целиком, но отдельный список",
+                "  Категория направляется целиком, но отдельный сервис",
                 "  можно переопределить внутри неё.",
             ],
             wrap=True,
@@ -174,8 +174,8 @@ def _menu_category_sources(
             ),
             (
                 "2",
-                f"📋 Разобрать по источникам ({len(keys)})",
-                "Посмотреть и переопределить отдельные списки",
+                f"📋 Сервисы внутри ({len(keys)})",
+                "Поиск по названию и отдельный маршрут каждому сервису",
             ),
             ("0", "↩ Назад", ""),
         ]
@@ -199,17 +199,31 @@ def _menu_category_sources(
             _menu_category_source_list(state, ps, app, category)
 
 
+def _filter_sources(sources: list[tuple[str, str]], query: str) -> list[tuple[str, str]]:
+    """Sources whose name or key contains the query, in catalogue order."""
+    needle = query.strip().lower()
+    if not needle:
+        return sources
+    return [
+        item
+        for item in sources
+        if needle in str(item[1]).lower() or needle in str(item[0]).lower()
+    ]
+
+
 def _menu_category_source_list(
     state: AppState,
     ps,
     app: ApplicationService,
     category: dict,
 ) -> None:
-    sources = list(zip(category["source_keys"], category["sources"]))
+    all_sources = list(zip(category["source_keys"], category["sources"]))
+    query = ""
     page = 0
     while True:
         clear()
         list_targets = _list_targets(ps)
+        sources = _filter_sources(all_sources, query)
         total_pages = max(
             1,
             (len(sources) + _SOURCE_PAGE_SIZE - 1) // _SOURCE_PAGE_SIZE,
@@ -217,10 +231,19 @@ def _menu_category_source_list(
         page = min(page, total_pages - 1)
         start = page * _SOURCE_PAGE_SIZE
         chunk = sources[start : start + _SOURCE_PAGE_SIZE]
+        found = (
+            f"Поиск «{query}»: найдено {len(sources)} из {len(all_sources)}"
+            if query
+            else f"Всего сервисов: {len(sources)}"
+        )
         lines = [
-            f"  Страница {page + 1} из {total_pages} (показано {start + 1}-{start + len(chunk)} из {len(sources)})",
+            f"  {found}",
+            f"  Страница {page + 1} из {total_pages} "
+            f"(показано {start + 1}-{start + len(chunk)})",
             "  " + "─" * 55,
         ]
+        if not chunk:
+            lines.append(f"  {DIM}Ничего не найдено.{NC}")
         for offset, (key, name) in enumerate(chunk, start=start + 1):
             target = str(list_targets.get(key) or "none")
             lines.append(
@@ -229,33 +252,41 @@ def _menu_category_source_list(
         lines.extend(
             [
                 "  " + "─" * 55,
-                "  Ввод: номер — задать маршрут, [n] — след. страница,",
-                "  [p] — пред. страница, [0] — назад",
+                "  Ввод: номер — задать маршрут, текст — поиск (например youtube),",
+                "  [n]/[p] — страницы, [-] — сбросить поиск, [0] — назад",
             ]
         )
-        panel(f"🔗 {str(category['label']).upper()} · ИСТОЧНИКИ", lines)
+        panel(f"🔗 {str(category['label']).upper()} · СЕРВИСЫ", lines)
 
-        raw = prompt("Выбор").strip().lower()
+        raw = prompt("Выбор").strip()
         if raw == "0":
             return
-        if raw == "n":
+        if raw.lower() == "n":
             page = min(page + 1, total_pages - 1)
             continue
-        if raw == "p":
+        if raw.lower() == "p":
             page = max(page - 1, 0)
             continue
+        if raw == "-":
+            query = ""
+            page = 0
+            continue
         index = facade._menu_number(raw)
-        if index is None or not start + 1 <= index <= start + len(chunk):
+        if index is not None:
+            if not start + 1 <= index <= start + len(chunk):
+                continue
+            key, name = sources[index - 1]
+            target = _choose_target(
+                _destinations(app),
+                f"МАРШРУТ ДЛЯ {str(name).upper()}",
+            )
+            if target is None:
+                continue
+            _apply_target(state, ps, app, [key], target, str(name))
+            prompt("Нажмите Enter для продолжения")
             continue
-        key, name = sources[index - 1]
-        target = _choose_target(
-            _destinations(app),
-            f"МАРШРУТ ДЛЯ {str(name).upper()}",
-        )
-        if target is None:
-            continue
-        _apply_target(state, ps, app, [key], target, str(name))
-        prompt("Нажмите Enter для продолжения")
+        query = raw
+        page = 0
 
 
 def _menu_external_sources_toggle(
