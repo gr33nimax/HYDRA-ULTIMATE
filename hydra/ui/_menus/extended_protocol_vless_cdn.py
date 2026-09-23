@@ -51,13 +51,14 @@ def _install(state: AppState, plugin: BasePlugin, app: ApplicationService) -> No
 
 
 def _set_camera(state: AppState, plugin: BasePlugin, app: ApplicationService) -> None:
-    """URL живого HLS-источника (пусто — медиа-эндпоинт пуст). Проверка формы/SSRF — в команде."""
+    """URL живого HLS-источника (пусто — медиа-эндпоинт пуст). Смена пересобирает сайт."""
     info("HLS (.m3u8) — его Caddy ретранслирует на /api/media/* без ffmpeg. Пусто = медиа нет.")
+    info("Источник проверяется: должен отвечать и иметь относительные пути сегментов.")
     url = prompt("URL HLS-источника (.m3u8):").strip()
-    if app.plugin_command(state, PROTOCOL_NAME, "set_cam_source_url", url=url):
-        success("Медиа-эндпоинт пуст" if not url else "HLS-источник сохранён")
+    if app.set_vless_cdn_camera(state, url):
+        success("Медиа-эндпоинт пуст, сайт пересобран" if not url else "HLS-источник сохранён, сайт пересобран")
     else:
-        error("URL отклонён: неверная форма или ссылка во внутреннюю сеть")
+        error("URL отклонён: не HLS, недоступен, абсолютные пути сегментов или ссылка во внутреннюю сеть")
     prompt("Нажмите Enter")
 
 

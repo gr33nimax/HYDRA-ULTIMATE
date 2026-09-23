@@ -26,11 +26,14 @@ from hydra.contracts.vless_cdn import (
     DECOY_ROUTE,
     DEFAULT_ENCRYPTION_MODE,
     DEFAULT_XHTTP_PATH,
+    MEDIA_SOURCE_HLS,
     PROTOCOL_NAME,
     as_int,
+    classify_media_source,
     normalize_hostname,
     normalize_media_source,
     normalize_path,
+    playlist_segments_are_relative,
     resolve_host,
     server_encryption_value,
 )
@@ -42,6 +45,20 @@ from hydra.plugins.vless_cdn.client import share_link as client_share_link
 from hydra.plugins.vless_cdn.profile import xhttp_transport
 
 INBOUND_TAG = "vless-cdn-in"
+
+# Проверка источника дёргает плейлист один раз при вводе: короткий таймаут, небольшой
+# потолок чтения — плейлист крошечный, а читать чужой URL без границ опасно.
+_PLAYLIST_FETCH_TIMEOUT = 10.0
+_PLAYLIST_MAX_BYTES = 262144
+
+
+def _fetch_playlist_text(url: str) -> str:
+    """Скачать тело плейлиста (текст). Ошибка сети → OSError, которую ловит вызывающий."""
+    import urllib.request
+
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})  # noqa: S310 — схема уже проверена SSRF
+    with urllib.request.urlopen(request, timeout=_PLAYLIST_FETCH_TIMEOUT) as response:  # noqa: S310
+        return response.read(_PLAYLIST_MAX_BYTES).decode("utf-8", "replace")
 
 
 class VlessCdnPlugin(BasePlugin):
@@ -221,18 +238,30 @@ class VlessCdnPlugin(BasePlugin):
         url: str,
         *,
         resolve: Callable[[str], list[str]] = resolve_host,
+        fetch: Callable[[str], str] = _fetch_playlist_text,
     ) -> bool:
-        """Живая камера оператора: пусто — синтетика, иначе проверенный URL источника.
+        """Живой HLS-источник под reverse_proxy: пусто — очистить, иначе — проверенный URL.
 
-        Проверка идёт контрактом: форма (hls/rtsp/mjpeg/youtube) и запрет ссылки
-        внутрь хоста/в приватную сеть. `resolve` инжектируем — тесты не ходят в DNS.
+        Защита в три шага: (1) форма+SSRF контрактом; (2) только HLS — только его
+        умеет ретранслировать Caddy; (3) дёрнуть плейлист и отклонить, если сегменты
+        абсолютные (плеер ушёл бы с нашего домена → прикрытие + CORS ломаются) или
+        плейлист недоступен. `resolve`/`fetch` инжектируемы — тесты не ходят в сеть.
         """
         plugin_state = state.protocols.get(PROTOCOL_NAME)
         if plugin_state is None:
             return False
+        raw = str(url or "").strip()
+        if not raw:
+            plugin_state.config["cam_source_url"] = ""
+            return True
         try:
-            source = normalize_media_source(url, resolve=resolve)
-        except ValueError:
+            source = normalize_media_source(raw, resolve=resolve)
+            if classify_media_source(source) != MEDIA_SOURCE_HLS:
+                return False
+            body = fetch(source)
+        except (ValueError, OSError):
+            return False
+        if not playlist_segments_are_relative(body):
             return False
         plugin_state.config["cam_source_url"] = source
         return True

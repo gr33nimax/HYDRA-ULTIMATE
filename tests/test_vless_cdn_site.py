@@ -133,7 +133,7 @@ def test_player_declares_the_source_via_a_child_not_a_video_src_attribute():
     # с m3u8 на не-Safari сначала даёт нативную ошибку и мешает MSE).
     page = render_page(_data())
     assert '<source src="/api/media/playlist.m3u8" type="application/vnd.apple.mpegurl">' in page
-    assert 'poster=' not in page
+    assert "poster=" not in page
 
 
 def test_the_page_carries_no_region_image():

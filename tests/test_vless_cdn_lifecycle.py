@@ -33,6 +33,46 @@ def _stage(state: AppState, **_kwargs: object) -> InstallOutcome:
     return InstallOutcome(ok=True, cdn_domain="cdn.example.com")
 
 
+def test_setting_the_camera_rebuilds_the_site(monkeypatch) -> None:
+    commands = MagicMock()
+    commands.execute.return_value = True
+    app = ApplicationService(
+        users=MagicMock(),
+        protocols=MagicMock(),
+        apply_config=MagicMock(return_value=True),
+        last_apply_error=lambda: "",
+        plugin_statuses=MagicMock(),
+        admin=MagicMock(),
+        plugin_commands=commands,
+    )
+    state = AppState()
+    page = MagicMock()
+    monkeypatch.setattr(application, "refresh_site", page)
+
+    assert app.set_vless_cdn_camera(state, "https://1.1.1.1/cam/x.m3u8") is True
+    page.assert_called_once_with(state)
+
+
+def test_a_rejected_camera_does_not_rebuild_the_site(monkeypatch) -> None:
+    commands = MagicMock()
+    commands.execute.return_value = False
+    app = ApplicationService(
+        users=MagicMock(),
+        protocols=MagicMock(),
+        apply_config=MagicMock(return_value=True),
+        last_apply_error=lambda: "",
+        plugin_statuses=MagicMock(),
+        admin=MagicMock(),
+        plugin_commands=commands,
+    )
+    state = AppState()
+    page = MagicMock()
+    monkeypatch.setattr(application, "refresh_site", page)
+
+    assert app.set_vless_cdn_camera(state, "https://camsecure.co/HLS/x.m3u8") is False
+    page.assert_not_called()
+
+
 def test_provision_rolls_back_state_when_apply_fails(monkeypatch) -> None:
     app, _protocols, apply_config, _admin = _app(apply=False)
     state = AppState()

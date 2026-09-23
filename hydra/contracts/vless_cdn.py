@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 import urllib.parse
 from collections.abc import Callable
@@ -348,6 +349,31 @@ def parse_hls_relay_source(
         "dir": directory,  # без завершающего «/», может быть пустым для корня
         "playlist": basename,
     }
+
+
+def playlist_segments_are_relative(text: object) -> bool:
+    """Все ссылки в плейлисте — относительные (его можно ретранслировать reverse_proxy'ем).
+
+    Проверяет и строки сегментов/вариантов (не-# строки), и URI="..." внутри тегов
+    (#EXT-X-MAP для fMP4-init). Хоть один абсолютный http(s)-URL → плеер уйдёт с нашего
+    домена (прикрытие сломано + CORS режет заголовки) — такой источник отклоняем.
+    Пустой/без сегментов плейлист — тоже негоден (нечего ретранслировать).
+    """
+    found = False
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            for uri in re.findall(r'URI="([^"]*)"', line):
+                found = True
+                if uri.lower().startswith(("http://", "https://")):
+                    return False
+            continue
+        found = True
+        if line.lower().startswith(("http://", "https://")):
+            return False
+    return found
 
 
 def normalize_media_source(

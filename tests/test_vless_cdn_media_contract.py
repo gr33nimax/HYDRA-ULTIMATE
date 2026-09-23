@@ -20,6 +20,7 @@ from hydra.contracts.vless_cdn import (
     classify_media_source,
     normalize_path,
     parse_hls_relay_source,
+    playlist_segments_are_relative,
 )
 
 
@@ -185,6 +186,24 @@ def test_relay_parse_rejects_non_hls_and_private_and_empty():
     assert parse_hls_relay_source("") is None
     # Приватный адрес (SSRF) — тоже None, без исключения.
     assert parse_hls_relay_source("https://10.0.0.5/x.m3u8") is None
+
+
+def test_relative_segment_playlist_is_relayable():
+    # Голые имена сегментов + fMP4-init через EXT-X-MAP URI — всё относительное.
+    playlist = '#EXTM3U\n#EXT-X-MAP:URI="init.hls.fmp4"\n#EXTINF:4,\nseg-0.hls.fmp4\n'
+    assert playlist_segments_are_relative(playlist) is True
+    # Только .ts без схемы — тоже относительно.
+    assert playlist_segments_are_relative("#EXTM3U\n#EXTINF:4,\nlive128.ts\n") is True
+
+
+def test_absolute_segment_playlist_is_not_relayable():
+    # Абсолютный сегмент → плеер уйдёт с нашего домена.
+    assert playlist_segments_are_relative("#EXTM3U\n#EXTINF:4,\nhttps://cdn.x/seg-0.ts\n") is False
+    # Абсолютный init через EXT-X-MAP — тоже нет.
+    assert playlist_segments_are_relative('#EXT-X-MAP:URI="https://cdn.x/init.mp4"\nseg-0.ts\n') is False
+    # Пустой/без сегментов — нечего ретранслировать.
+    assert playlist_segments_are_relative("#EXTM3U\n#EXT-X-ENDLIST\n") is False
+    assert playlist_segments_are_relative("") is False
 
 
 def test_relay_parse_reads_explicit_port_and_http():

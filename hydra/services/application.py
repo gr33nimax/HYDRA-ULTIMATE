@@ -6,6 +6,7 @@ on this facade. Production assembly belongs to :mod:`hydra.bootstrap`.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -179,6 +180,20 @@ class ApplicationService:
             self.admin.save_state(state)
             self.apply(state)
             return False
+        return True
+
+    def set_vless_cdn_camera(self, state: AppState, url: str) -> bool:
+        """Сменить HLS-источник и тут же пересобрать страницу прикрытия.
+
+        `set_cam_source_url` (через plugin_command) уже пересобирает маршруты Caddy
+        (central_apply). Но имя плейлиста в разметке плеера зависит от источника,
+        поэтому страницу надо перегенерить сразу, а не ждать 10-минутный таймер.
+        Пересборка страницы best-effort: её всё равно повторит таймер, если сейчас не выйдет.
+        """
+        if not self.plugin_command(state, "vless_cdn", "set_cam_source_url", url=url):
+            return False
+        with contextlib.suppress(Exception):
+            refresh_site(state)
         return True
 
     def disable_vless_cdn(self, state: AppState) -> bool:
