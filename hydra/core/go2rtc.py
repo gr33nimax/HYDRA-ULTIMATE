@@ -5,7 +5,8 @@
 go2rtc ремуксит H264 и тянет апстрим только когда есть зритель (on-demand).
 
 Бинарь ставится пином версии из GitHub releases с проверкой SHA-256 (digest из метаданных
-релиза). API прибит к localhost, RTSP/WebRTC-серверы go2rtc выключены — наружу ничего не торчит.
+релиза). API прибит к localhost, RTSP — тоже (нужен только как внутренний транспорт для
+`ffmpeg:`-источников), WebRTC/SRTP выключены — наружу ничего не торчит.
 """
 
 from __future__ import annotations
@@ -33,6 +34,13 @@ GO2RTC_BIN = Path("/usr/local/bin/go2rtc")
 GO2RTC_CONFIG = Path("/etc/hydra/go2rtc.yaml")
 GO2RTC_UNIT_NAME = "hydra-go2rtc"
 GO2RTC_UNIT_SERVICE = f"{GO2RTC_UNIT_NAME}.service"
+
+# RTSP-сервер go2rtc — внутренний транспорт для `ffmpeg:`-источников: go2rtc запускает
+# ffmpeg в режиме exec, а тот пишет результат в собственный RTSP-сервер (шаблон вывода
+# содержит `{output}`), и без него источник падает с "exec: rtsp module disabled".
+# Слушаем только loopback — наружу порт не смотрит.
+GO2RTC_RTSP_HOST = "127.0.0.1"
+GO2RTC_RTSP_PORT = 8554
 
 # Источник с префиксом `ffmpeg:` уводит разбор на ffmpeg (родной HLS-ридер go2rtc падает
 # на корректных манифестах: CRLF в строках сегментов, fMP4). Бинарь берём сборкой BtbN, а
@@ -71,8 +79,10 @@ def render_config(source_url: str) -> str:
     return (
         "api:\n"
         f'  listen: "{GO2RTC_API_HOST}:{GO2RTC_API_PORT}"\n'
+        # RTSP — только loopback: он нужен `ffmpeg:`-источникам как приёмник (см. выше),
+        # и без него такой источник не стартует вовсе.
         "rtsp:\n"
-        '  listen: ""\n'
+        f'  listen: "{GO2RTC_RTSP_HOST}:{GO2RTC_RTSP_PORT}"\n'
         "webrtc:\n"
         '  listen: ""\n'
         "srtp:\n"
@@ -242,6 +252,8 @@ __all__ = [
     "GO2RTC_BIN",
     "GO2RTC_CONFIG",
     "GO2RTC_REPO",
+    "GO2RTC_RTSP_HOST",
+    "GO2RTC_RTSP_PORT",
     "GO2RTC_UNIT_NAME",
     "GO2RTC_UNIT_SERVICE",
     "GO2RTC_VERSION",

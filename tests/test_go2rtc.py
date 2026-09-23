@@ -12,8 +12,11 @@ def test_config_binds_api_to_localhost_and_disables_public_servers():
     text = go2rtc.render_config("rtsp://cam.example/live")
 
     assert 'listen: "127.0.0.1:1984"' in text, "API только на localhost"
-    # RTSP/WebRTC/SRTP наружу торчать не должны — иначе открытый стриминг-сервер.
-    assert text.count('listen: ""') == 3
+    # RTSP нужен как внутренний транспорт для `ffmpeg:`-источников: go2rtc гоняет ffmpeg
+    # в режиме exec, а тот пишет в собственный RTSP-сервер. Наружу он всё равно не смотрит.
+    assert 'listen: "127.0.0.1:8554"' in text, "RTSP только на loopback"
+    # WebRTC/SRTP наружу торчать не должны — иначе открытый стриминг-сервер.
+    assert text.count('listen: ""') == 2
     assert 'decoy: "rtsp://cam.example/live"' in text
 
 
