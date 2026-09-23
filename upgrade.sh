@@ -14,6 +14,10 @@ LOCK_FILE="${HYDRA_UPGRADE_LOCK_FILE:-/run/lock/hydra-upgrade.lock}"
 WRAPPER="/usr/local/bin/hydra"
 REPO_URL="${HYDRA_REPO_URL:-https://github.com/gr33nimax/HYDRA-ULTIMATE}"
 HYDRA_REF="${HYDRA_REF:-main}"
+# Удержание артефактов: каждый деплой оставляет каталог релиза и снимок отката,
+# без ограничения они копятся сотнями и съедают диск.
+KEEP_RELEASES="${HYDRA_KEEP_RELEASES:-3}"
+KEEP_BACKUP_DAYS="${HYDRA_KEEP_BACKUP_DAYS:-7}"
 
 configure_utf8_locale() {
     local candidate
@@ -366,6 +370,63 @@ restore_wrapper() {
     fi
 }
 
+prune_old_artifacts() {
+    # Каждый деплой оставляет каталог релиза и снимок отката. Без удержания они
+    # копятся сотнями и съедают диск, поэтому старые удаляются после успешного
+    # обновления. Ошибки уборки не влияют на результат установки.
+    local keep_releases="${KEEP_RELEASES:-3}"
+    local keep_backup_days="${KEEP_BACKUP_DAYS:-7}"
+    local current_target current_name="" path removed=0 failed=0
+
+    [[ "$keep_releases" =~ ^[1-9][0-9]*$ ]] || keep_releases=3
+    [[ "$keep_backup_days" =~ ^[1-9][0-9]*$ ]] || keep_backup_days=7
+
+    current_target=$(readlink -f -- "$INSTALL_DIR" 2>/dev/null || true)
+    if [[ -n "$current_target" ]]; then
+        current_name=$(basename -- "$current_target")
+    fi
+
+    # Каталоги, оставшиеся от прерванных обновлений.
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        rm -rf -- "$path" || { failed=$((failed + 1)); continue; }
+        removed=$((removed + 1))
+    done < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d \
+        -name '.staging-*' -mtime +1 -print 2>/dev/null || true)
+
+    if [[ -z "$current_name" ]]; then
+        warn "Не удалось определить текущий release; очистка релизов пропущена"
+    else
+        # Текущий release плюс keep_releases-1 свежих остаются для отката.
+        while IFS= read -r path; do
+            [[ -n "$path" ]] || continue
+            [[ "$(basename -- "$path")" == "$current_name" ]] && continue
+            rm -rf -- "$path" || { failed=$((failed + 1)); continue; }
+            removed=$((removed + 1))
+        done < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d \
+            ! -name '.staging-*' ! -name "$current_name" \
+            -printf '%T@ %p\n' 2>/dev/null |
+            sort -rn | tail -n "+$keep_releases" | cut -d' ' -f2- || true)
+    fi
+
+    # Снимки отката старше keep_backup_days больше не нужны.
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        [[ "$path" == "$ROLLBACK_DIR" ]] && continue
+        rm -rf -- "$path" || { failed=$((failed + 1)); continue; }
+        removed=$((removed + 1))
+    done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d \
+        -mtime "+$keep_backup_days" -print 2>/dev/null || true)
+
+    if ((removed > 0)); then
+        info "Удалено устаревших артефактов: $removed"
+    fi
+    if ((failed > 0)); then
+        warn "Не удалось удалить артефактов: $failed"
+    fi
+    return 0
+}
+
 cleanup_transient_paths() {
     if [[ -n "$CUTOVER_LINK" && "$CUTOVER_LINK" == "${INSTALL_DIR}.next-"* ]]; then
         rm -f -- "$CUTOVER_LINK" || true
@@ -685,6 +746,7 @@ STATE_MUTATION_STARTED=0
 WRAPPER_MUTATION_STARTED=0
 cleanup_transient_paths
 trap - ERR HUP INT TERM
+prune_old_artifacts
 
 result_ok "Новая версия HYDRA установлена и проверена."
 summary_row "Ветка" "$HYDRA_REF"

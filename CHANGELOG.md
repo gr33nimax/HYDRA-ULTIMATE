@@ -418,6 +418,15 @@
   пул `hydra-headless-creator-vk-calls@*.service` не блокирует обновление и
   корректно восстанавливается после переключения release либо rollback.
 
+- Updater больше не копит релизы и снимки отката навсегда. На долгоживущей
+  установке `/opt/hydra-releases` и `/var/backups/hydra/upgrades` росли с каждой
+  раскаткой, и в какой-то момент обновление упиралось в переполненный диск.
+  После успешного переключения updater удаляет всё, кроме текущего release и
+  `HYDRA_KEEP_RELEASES-1` свежих (по умолчанию 3), снимки отката старше
+  `HYDRA_KEEP_BACKUP_DAYS` дней (по умолчанию 7) и брошенные `.staging-*` от
+  прерванных обновлений. Текущий release не удаляется никогда, а сбой уборки не
+  влияет на результат установки.
+
 ### Hydracore / Calls
 
 - Calls now generates only the `vk_parasite` wire-v4 contract with exactly four

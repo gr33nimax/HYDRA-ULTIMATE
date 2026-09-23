@@ -682,6 +682,8 @@ runtime capabilities, а не номером persisted state или wire-пол�
 | `HYDRA_INSTALL_DIR` | `/opt/hydra` | Стабильная точка входа установки |
 | `HYDRA_RELEASES_DIR` | `/opt/hydra-releases` | Каталог изолированных release |
 | `HYDRA_UPGRADE_BACKUP_DIR` | `/var/backups/hydra/upgrades` | Постоянные снимки отката |
+| `HYDRA_KEEP_RELEASES` | `3` | Сколько release остаётся после успешного обновления |
+| `HYDRA_KEEP_BACKUP_DAYS` | `7` | Сколько дней хранятся снимки отката |
 | `HYDRA_UPGRADE_LOCK_FILE` | внутреннее | Блокировка от параллельного запуска updater |
 
 ### `bootstrap.sh`

@@ -1,5 +1,11 @@
+import os
 import re
+import shutil
+import subprocess
+import time
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).parents[1]
@@ -391,3 +397,122 @@ def test_all_main_install_and_update_entrypoints_default_to_main():
     assert 'DEFAULT_BRANCH="main"' in bootstrap
     assert 'HYDRA_REF="${HYDRA_REF:-main}"' in launcher
     assert 'HYDRA_REF="${HYDRA_REF:-main}"' in engine
+
+
+def test_old_artifacts_are_pruned_only_after_a_successful_cutover():
+    source = _source()
+    success_tail = source[
+        source.index('printf \'%s\\n\' "$TARGET_SHA" >"$ROLLBACK_DIR/SUCCESS"') :
+    ]
+
+    assert "prune_old_artifacts\n" in success_tail
+    assert success_tail.index("prune_old_artifacts\n") > success_tail.index(
+        "trap - ERR HUP INT TERM"
+    )
+
+
+def _prune_old_artifacts_function() -> str:
+    source = _source()
+    start = source.index("prune_old_artifacts() {")
+    end = source.index("cleanup_transient_paths() {", start)
+    function = source[start:end].rstrip()
+    assert function.endswith("}")
+    return function
+
+
+def _usable_bash() -> str:
+    """Абсолютный путь к рабочему bash: на Windows `bash` из PATH — это WSL."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash недоступен")
+    probe = subprocess.run(
+        [bash, "-c", "echo $BASH_VERSION"], capture_output=True, text=True
+    )
+    if probe.returncode != 0 or not probe.stdout.strip():
+        pytest.skip("нет рабочего bash")
+    return bash
+
+
+def test_prune_old_artifacts_keeps_the_current_release_and_fresh_snapshots(tmp_path):
+    root = tmp_path.resolve()
+    releases = root / "releases"
+    backups = root / "backups"
+    install = root / "install"
+    releases.mkdir()
+    backups.mkdir()
+
+    def make_release(name: str, age_days: int) -> Path:
+        path = releases / name
+        path.mkdir()
+        (path / "main.py").write_text("", encoding="utf-8")
+        stamp = time.time() - age_days * 86400
+        os.utime(path, (stamp, stamp))
+        return path
+
+    current = make_release("current-sha", 30)
+    recent = [make_release(f"recent-{index}-sha", 1 + index) for index in range(4)]
+    pruned = [make_release(f"stale-{index}-sha", 10 + index) for index in range(4)]
+
+    stale_staging = releases / ".staging-abandoned"
+    stale_staging.mkdir()
+    stamp = time.time() - 3 * 86400
+    os.utime(stale_staging, (stamp, stamp))
+    inflight_staging = releases / ".staging-inflight"
+    inflight_staging.mkdir()
+
+    fresh_backup = backups / "fresh-snapshot"
+    fresh_backup.mkdir()
+    stale_backup = backups / "stale-snapshot"
+    stale_backup.mkdir()
+    stamp = time.time() - 30 * 86400
+    os.utime(stale_backup, (stamp, stamp))
+
+    install = root / "install"
+    try:
+        install.symlink_to(current, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        # Без прав на symlink достаточно реального пути: функция резолвит его
+        # тем же readlink -f и сравнивает с содержимым каталога релизов.
+        install = current
+
+    script = root / "run.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -Eeuo pipefail\n"
+        "info() { printf 'info: %s\\n' \"$*\"; }\n"
+        "warn() { printf 'warn: %s\\n' \"$*\"; }\n"
+        + _prune_old_artifacts_function()
+        + "\nprune_old_artifacts\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [_usable_bash(), str(script)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env={
+            **os.environ,
+            "RELEASES_DIR": str(releases),
+            "BACKUP_ROOT": str(backups),
+            "INSTALL_DIR": str(install),
+            "ROLLBACK_DIR": str(fresh_backup),
+            "KEEP_RELEASES": "3",
+            "KEEP_BACKUP_DAYS": "7",
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Удалено устаревших артефактов" in completed.stdout
+    assert "warn:" not in completed.stdout
+
+    # current старше остальных: он выживает только благодаря явному исключению.
+    assert current.is_dir()
+    assert recent[0].is_dir()
+    assert recent[1].is_dir()
+    for path in (*recent[2:], *pruned):
+        assert not path.exists(), path
+    assert not stale_staging.exists()
+    assert inflight_staging.is_dir()
+    assert fresh_backup.is_dir()
+    assert not stale_backup.exists()
