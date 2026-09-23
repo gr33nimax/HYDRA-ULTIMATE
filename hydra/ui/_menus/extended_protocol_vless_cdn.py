@@ -53,7 +53,9 @@ def _install(state: AppState, plugin: BasePlugin, app: ApplicationService) -> No
 def _set_camera(state: AppState, plugin: BasePlugin, app: ApplicationService) -> None:
     """URL источника камеры для go2rtc (пусто — медиа-эндпоинт пуст). Смена пересобирает сайт."""
     info("go2rtc тянет rtsp/hls/mjpeg сам и отдаёт HLS на /api/media/*. Пусто = медиа нет.")
-    info("Примеры: rtsp://…, https://…/index.m3u8. Смена перезапускает go2rtc и пересобирает страницу.")
+    info("Примеры: rtsp://…, https://…/index.m3u8.")
+    info("Манифест ломает родной HLS-ридер go2rtc (CRLF в строках, fMP4)? Ставь ffmpeg: перед")
+    info("адресом — go2rtc поставит ffmpeg и отдаст разбор ему. Смена перезапускает go2rtc и сайт.")
     url = prompt("URL источника камеры:").strip()
     if app.set_vless_cdn_camera(state, url):
         success("Медиа-эндпоинт пуст, сайт пересобран" if not url else "Источник сохранён, go2rtc перезапущен")

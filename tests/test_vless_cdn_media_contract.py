@@ -20,6 +20,7 @@ from hydra.contracts.vless_cdn import (
     classify_media_source,
     go2rtc_media_source,
     normalize_path,
+    source_needs_ffmpeg,
 )
 
 
@@ -160,6 +161,39 @@ def test_ssrf_refuses_bad_scheme_before_any_resolution():
 
     with pytest.raises(ValueError):
         assert_public_media_source("file:///etc/passwd", resolve=explode)
+
+
+# ── Префикс ffmpeg: уводит источник с родного HLS-ридера go2rtc ────────────────
+
+
+def test_ffmpeg_prefix_keeps_the_inner_url_checkable():
+    # Родной ридер go2rtc падает на корректных манифестах (CRLF, fMP4); префикс уводит
+    # разбор на ffmpeg. Форма определяется по внутреннему URL, а не по префиксу.
+    url = "ffmpeg:https://8.8.8.8/x.m3u8"
+    assert classify_media_source(url) == MEDIA_SOURCE_HLS
+    assert assert_public_media_source(url) == url
+    assert source_needs_ffmpeg(url) is True
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "ffmpeg:https://127.0.0.1/x.m3u8",
+        "ffmpeg:https://10.0.0.1/x.m3u8",
+        "ffmpeg:https://[::1]/x.m3u8",
+        "ffmpeg:file:///etc/passwd",
+    ],
+)
+def test_ffmpeg_prefix_does_not_bypass_the_source_checks(url):
+    # Префикс — не лазейка: SSRF и форма проверяются по тому, что за ним.
+    with pytest.raises(ValueError):
+        assert_public_media_source(url)
+
+
+def test_bare_source_needs_no_ffmpeg():
+    assert source_needs_ffmpeg("https://8.8.8.8/x.m3u8") is False
+    assert source_needs_ffmpeg("rtsp://8.8.8.8/live") is False
+    assert source_needs_ffmpeg("") is False
 
 
 # ── Разбор HLS-источника под reverse_proxy ────────────────────────────────

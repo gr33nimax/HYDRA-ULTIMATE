@@ -15,7 +15,12 @@ import contextlib
 from collections.abc import Callable
 from pathlib import Path
 
-from hydra.contracts.vless_cdn import GO2RTC_API_HOST, GO2RTC_API_PORT, GO2RTC_STREAM_NAME
+from hydra.contracts.vless_cdn import (
+    GO2RTC_API_HOST,
+    GO2RTC_API_PORT,
+    GO2RTC_STREAM_NAME,
+    source_needs_ffmpeg,
+)
 from hydra.core import systemd
 from hydra.core.host import HOST
 
@@ -28,6 +33,10 @@ GO2RTC_BIN = Path("/usr/local/bin/go2rtc")
 GO2RTC_CONFIG = Path("/etc/hydra/go2rtc.yaml")
 GO2RTC_UNIT_NAME = "hydra-go2rtc"
 GO2RTC_UNIT_SERVICE = f"{GO2RTC_UNIT_NAME}.service"
+
+# Пакет для источников с префиксом `ffmpeg:`: родной HLS-ридер go2rtc падает на корректных
+# манифестах (CRLF в строках сегментов, fMP4), и такой источник уводится на разбор ffmpeg'у.
+FFMPEG_PACKAGE = "ffmpeg"
 
 # Минимальный порог размера ELF, чтобы не принять html-заглушку за бинарь.
 _MIN_BIN_SIZE = 1_000_000
@@ -119,6 +128,30 @@ def ensure_binary(*, on_error: Callable[[str], None] | None = None) -> bool:
     return True
 
 
+def _fail(on_error: Callable[[str], None] | None, message: str) -> None:
+    if on_error is not None:
+        on_error(message)
+
+
+def ensure_ffmpeg(*, on_error: Callable[[str], None] | None = None) -> bool:
+    """Поставить ffmpeg, если источник отдан ему (`ffmpeg:` в начале URL).
+
+    Без бинаря go2rtc молча не отдаёт видео: ошибка ffmpeg-продюсера видна только в логе,
+    а плеер стоит пустой. Поэтому отказ явный, с причиной в `on_error`.
+    """
+    if HOST.which(FFMPEG_PACKAGE):
+        return True
+    if not HOST.which("apt-get"):
+        _fail(on_error, f"источник требует {FFMPEG_PACKAGE}, а на хосте нет ни его, ни apt-get")
+        return False
+    HOST.run(["apt-get", "update", "-qq"], timeout=300)
+    result = HOST.run(["apt-get", "install", "-y", "-qq", FFMPEG_PACKAGE], text=True, timeout=300)
+    if result.returncode != 0 or not HOST.which(FFMPEG_PACKAGE):
+        _fail(on_error, f"{FFMPEG_PACKAGE} не установился: {str(result.stderr or '').strip()[:200]}")
+        return False
+    return True
+
+
 def write_config(source_url: str) -> None:
     """Записать go2rtc.yaml с текущим источником (idempotent)."""
     GO2RTC_CONFIG.parent.mkdir(parents=True, exist_ok=True)
@@ -128,6 +161,8 @@ def write_config(source_url: str) -> None:
 def install(source_url: str, *, on_error: Callable[[str], None] | None = None) -> bool:
     """Поставить бинарь, записать конфиг, поднять сервис. Без бинаря — фейл-клоуз."""
     if not ensure_binary(on_error=on_error):
+        return False
+    if source_needs_ffmpeg(source_url) and not ensure_ffmpeg(on_error=on_error):
         return False
     write_config(source_url)
     if not systemd.install_service(GO2RTC_UNIT_NAME, _unit()):
@@ -143,6 +178,8 @@ def apply_source(source_url: str, *, on_error: Callable[[str], None] | None = No
     """
     if not GO2RTC_BIN.exists() and not install(source_url, on_error=on_error):
         return False
+    if source_needs_ffmpeg(source_url) and not ensure_ffmpeg(on_error=on_error):
+        return False
     write_config(source_url)
     return systemd.restart(GO2RTC_UNIT_SERVICE)
 
@@ -156,6 +193,7 @@ def remove() -> bool:
 
 
 __all__ = [
+    "FFMPEG_PACKAGE",
     "GO2RTC_BIN",
     "GO2RTC_CONFIG",
     "GO2RTC_REPO",
@@ -164,6 +202,7 @@ __all__ = [
     "GO2RTC_VERSION",
     "apply_source",
     "ensure_binary",
+    "ensure_ffmpeg",
     "install",
     "remove",
     "render_config",

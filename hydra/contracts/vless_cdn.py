@@ -58,6 +58,13 @@ YOUTUBE_HOSTS = frozenset(
     {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"},
 )
 
+# Префикс, который понимает сам go2rtc, а не наш код: `ffmpeg:` отдаёт разбор ffmpeg'у.
+# Нужен там, где родной HLS-ридер go2rtc падает на корректном манифесте: строки с CRLF
+# (хвостовой `\r` попадает в адрес сегмента и `url.Parse` его отклоняет) и fMP4
+# (`#EXT-X-MAP` он не читает вовсе). Проверяется только внутренний URL, префикс уходит
+# в go2rtc как есть.
+MEDIA_SOURCE_PREFIX = "ffmpeg:"
+
 # Ключ и порт маршрута в SNI-документе. Ключ обязан совпадать с тем, который читает
 # планировщик; он продублирован здесь, потому что слой контрактов не может импортировать
 # core — это нарушило бы порядок слоёв, который проверяет архитектурный тест.
@@ -243,6 +250,19 @@ def normalize_hostname(value: object, *, field: str) -> str:
     return _shared_normalize_hostname(value, field=field)
 
 
+def strip_source_prefix(value: object) -> str:
+    """Снять префикс go2rtc (`ffmpeg:`), если он есть: проверяем форму внутреннего URL."""
+    raw = str(value or "").strip()
+    if raw.lower().startswith(MEDIA_SOURCE_PREFIX):
+        return raw[len(MEDIA_SOURCE_PREFIX) :].strip()
+    return raw
+
+
+def source_needs_ffmpeg(value: object) -> bool:
+    """True, если источник отдан ffmpeg'у: тогда на хосте нужен бинарь ffmpeg."""
+    return str(value or "").strip().lower().startswith(MEDIA_SOURCE_PREFIX)
+
+
 def classify_media_source(value: object) -> str:
     """Форма источника камеры по URL: `hls`, `rtsp`, `mjpeg` или `youtube`.
 
@@ -253,7 +273,7 @@ def classify_media_source(value: object) -> str:
     raw = str(value or "").strip()
     if not raw:
         raise ValueError("URL источника пуст")
-    parts = urllib.parse.urlsplit(raw)
+    parts = urllib.parse.urlsplit(strip_source_prefix(raw))
     scheme = parts.scheme.lower()
     host = (parts.hostname or "").lower()
     if scheme not in MEDIA_SOURCE_SCHEMES:
@@ -296,7 +316,7 @@ def assert_public_media_source(
     if kind == MEDIA_SOURCE_YOUTUBE:
         # Известные публичные хосты: резолвить их здесь незачем и вредно.
         return raw
-    host = urllib.parse.urlsplit(raw).hostname or ""
+    host = urllib.parse.urlsplit(strip_source_prefix(raw)).hostname or ""
     try:
         literal = ipaddress.ip_address(host)
     except ValueError:
