@@ -8,6 +8,7 @@ from hydra.core.state import AppState
 from hydra.core.state_models import PluginState
 from hydra.plugins.defaults import default_plugins
 from hydra.contracts.vless_cdn import (
+    DEFAULT_MEDIA_MODE,
     DEFAULT_XHTTP_PATH,
     MIN_PATH_SEGMENTS,
     normalize_hostname,
@@ -150,6 +151,7 @@ def test_summary_and_status_report_what_the_operator_set():
         "origin_host": "origin.example.com",
         "xhttp_path": DEFAULT_XHTTP_PATH,
         "core_port": 0,
+        "media_mode": DEFAULT_MEDIA_MODE,
         "ready": True,
     }
 

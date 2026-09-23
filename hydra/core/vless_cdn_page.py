@@ -11,7 +11,7 @@ from __future__ import annotations
 import html
 from dataclasses import dataclass, field
 
-from hydra.contracts.vless_cdn import MEDIA_PLAYLIST_PATH
+from hydra.contracts.vless_cdn import DEFAULT_MEDIA_MODE, MEDIA_MODE_PHOTO, MEDIA_PLAYLIST_PATH
 from hydra.core.weather import WeatherView
 
 DEFAULT_TITLE = "Regional Network Status"
@@ -42,6 +42,16 @@ class SiteData:
     weather: WeatherView = field(default_factory=WeatherView)
     image: ImageView = field(default_factory=ImageView)
     playlist_path: str = MEDIA_PLAYLIST_PATH
+    mode: str = DEFAULT_MEDIA_MODE
+
+    @property
+    def shows_video(self) -> bool:
+        """Плеер или фото решает режим, а не наличие источника.
+
+        Неизвестное значение ведёт себя как видео — так же, как и в контракте: старое
+        состояние без поля не должно внезапно переключать страницу на фото.
+        """
+        return self.mode != MEDIA_MODE_PHOTO
 
     @property
     def place(self) -> str:
@@ -77,6 +87,12 @@ header { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
 h1 { font-size: 1.6rem; margin: 0; font-weight: 600; }
 .sub { color: #8b949e; }
 .flag { font-size: 1.6rem; }
+.hero { margin: 1.5rem 0 0; padding: 0; }
+.hero img { width: 100%; height: auto; border-radius: 12px; display: block; }
+.hero.placeholder {
+  height: 180px; border-radius: 12px;
+  background: linear-gradient(135deg, #1b2430, #243347 60%, #1b2430);
+}
 .live { margin: 1.5rem 0 0; }
 .live-video { width: 100%; aspect-ratio: 16 / 9; display: block; border-radius: 12px;
   background: #0b0e13; object-fit: cover; }
@@ -86,6 +102,7 @@ h1 { font-size: 1.6rem; margin: 0; font-weight: 600; }
   box-shadow: 0 0 0 3px rgba(248,81,73,.25); }
 .live-tag { color: #f85149; font-weight: 600; letter-spacing: .06em; }
 .live-place { color: #8b949e; }
+.credit { color: #6e7681; font-size: .78rem; margin-top: .4rem; }
 .grid { display: grid; gap: 1rem; margin-top: 1.5rem;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
 .card { background: #161b22; border: 1px solid #21262d; border-radius: 12px; padding: 1rem 1.1rem; }
@@ -173,6 +190,20 @@ def _clock_rows(zones: tuple[tuple[str, str], ...]) -> str:
         for label, zone in zones
     ]
     return '<ul class="clocks">' + "".join(rows) + "</ul>"
+
+
+def _image_block(image: ImageView) -> str:
+    """Фото региона. Пустой src — не дыра в разметке, а локальная заглушка-градиент."""
+    if not image.src:
+        return '<div class="hero placeholder" aria-hidden="true"></div>'
+    caption = image.attribution or image.source
+    credit = f'<div class="credit">{_escape(caption)}</div>' if caption else ""
+    return (
+        '<figure class="hero">'
+        f'<img src="{_escape(image.src)}" alt="{_escape(image.source or "region")}">'
+        f"{credit}"
+        "</figure>"
+    )
 
 
 def _live_script(data: SiteData) -> str:
@@ -263,6 +294,15 @@ def _live_player(data: SiteData) -> str:
     )
 
 
+def _media_block(data: SiteData) -> str:
+    """Что страница показывает вместо медиа: плеер в видео-режиме, фото — в фото-режиме.
+
+    Фото-режим — это не «видео без источника»: плеера там нет вовсе, поэтому и путей
+    /api/media/* страница не запрашивает.
+    """
+    return _live_player(data) if data.shows_video else _image_block(data.image)
+
+
 def _facts(data: SiteData) -> str:
     rows = []
     if data.capital:
@@ -295,7 +335,7 @@ def render_page(data: SiteData, *, title: str = DEFAULT_TITLE) -> str:
 <body>
 <main>
   {_header(data)}
-  {_live_player(data)}
+  {_media_block(data)}
   <section class="grid">
     {_weather_block(data.weather)}
   </section>

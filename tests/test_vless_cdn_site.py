@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from hydra.contracts import JsonValue
-from hydra.contracts.vless_cdn import MEDIA_PLAYLIST_PATH, PROTOCOL_NAME
+from hydra.contracts.vless_cdn import MEDIA_MODE_PHOTO, MEDIA_PLAYLIST_PATH, PROTOCOL_NAME
 from hydra.core.state import AppState
 from hydra.core.state_models import PluginState
 from hydra.core.region_image import RegionImage
@@ -169,10 +169,34 @@ def test_hold_ping_stays_quiet_when_the_session_url_is_unknown():
     assert "|| session;" in page, "неизвестный URL не затирает уже известный"
 
 
-def test_the_page_carries_no_region_image():
+def test_photo_mode_shows_the_region_image_and_no_player():
+    # Фото-режим — не «видео без источника»: плеера нет вовсе, поэтому и путей
+    # /api/media/* страница не запрашивает.
+    page = render_page(_data(mode=MEDIA_MODE_PHOTO))
+
+    assert '<figure class="hero">' in page
+    assert 'src="/assets/region.jpg"' in page
+    assert "Wikimedia Commons" in page, "атрибуция едет вместе с фото"
+    assert '<video id="live-stream"' not in page
+    assert "hls.min.js" not in page
+    assert "/api/media/" not in page
+
+
+def test_video_mode_shows_no_photo():
+    # Постер в видео-режиме решено не показывать: фото живёт только в своём режиме.
     page = render_page(_data())
-    assert "<img" not in page, "изображение с сайта убрано"
-    assert "hero" not in page
+
+    assert '<video id="live-stream"' in page
+    assert 'class="hero"' not in page
+    assert 'src="/assets/region.jpg"' not in page
+
+
+def test_photo_mode_without_an_image_falls_back_to_a_placeholder():
+    # Пустой src — не дыра в разметке: локальная заглушка-градиент вместо битой картинки.
+    page = render_page(_data(mode=MEDIA_MODE_PHOTO, image=ImageView()))
+
+    assert 'class="hero placeholder"' in page
+    assert "<img" not in page
 
 
 def test_missing_weather_keeps_the_page_usable():

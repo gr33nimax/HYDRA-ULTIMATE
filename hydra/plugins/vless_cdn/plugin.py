@@ -29,6 +29,7 @@ from hydra.contracts.vless_cdn import (
     PROTOCOL_NAME,
     as_int,
     normalize_hostname,
+    normalize_media_mode,
     normalize_media_source,
     normalize_path,
     resolve_host,
@@ -57,7 +58,7 @@ class VlessCdnPlugin(BasePlugin):
         # Публичное имя выдаёт CDN, а origin-имя спрашивается отдельно, поэтому
         # общий сценарий «спросить основной домен» здесь не подходит.
         needs_domain=False,
-        commands=("set_cdn_domain", "set_origin_host", "set_path", "set_cam_source_url"),
+        commands=("set_cdn_domain", "set_origin_host", "set_path", "set_cam_source_url", "set_media_mode"),
         queries=("get_summary",),
         config_defaults=CONFIG_DEFAULTS,
         connection_source="tracked",
@@ -238,6 +239,20 @@ class VlessCdnPlugin(BasePlugin):
         plugin_state.config["cam_source_url"] = source
         return True
 
+    def set_media_mode(self, state: PluginStateAccess, mode: str) -> bool:
+        """Что показывает страница: живое видео или фото региона.
+
+        Режим ничего не пересобирает в маршрутах — медиа-путь живёт от источника, а не от
+        режима, и боевой XHTTP-путь обязан оставаться на месте в любом случае. Неизвестное
+        значение приводится к дефолту, а не отклоняется: оператор не должен запираться
+        в режиме, который сам же и опечатал.
+        """
+        plugin_state = state.protocols.get(PROTOCOL_NAME)
+        if plugin_state is None:
+            return False
+        plugin_state.config["media_mode"] = normalize_media_mode(mode)
+        return True
+
     def get_summary(self, state: PluginStateAccess) -> dict[str, object]:
         """То, что оператор должен видеть про протокол в одном месте."""
         plugin_state = state.protocols.get(PROTOCOL_NAME)
@@ -247,6 +262,7 @@ class VlessCdnPlugin(BasePlugin):
             "origin_host": str(config.get("origin_host", "")),
             "xhttp_path": str(config.get("xhttp_path", DEFAULT_XHTTP_PATH)),
             "core_port": as_int(config.get("core_port", 0)),
+            "media_mode": normalize_media_mode(config.get("media_mode")),
             "ready": self._ready(config),
         }
 

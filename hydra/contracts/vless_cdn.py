@@ -34,6 +34,15 @@ MEDIA_PATH_PREFIX = "/api/media"
 MEDIA_PLAYLIST_PATH = f"{MEDIA_PATH_PREFIX}/playlist.m3u8"
 MEDIA_SEGMENT_PATH_PREFIX = f"{MEDIA_PATH_PREFIX}/seg/"
 
+# Что показывает страница-заглушка. Видео — живой ретранслятор через go2rtc, и он требует
+# `cam_source_url`. Фото — региональная картинка без медиатрафика вовсе: страница живая,
+# но объём VLESS она больше не объясняет — это осознанный размен, а не «то же дешевле».
+MEDIA_MODE_VIDEO = "video"
+MEDIA_MODE_PHOTO = "photo"
+MEDIA_MODES = (MEDIA_MODE_VIDEO, MEDIA_MODE_PHOTO)
+DEFAULT_MEDIA_MODE = MEDIA_MODE_VIDEO
+MEDIA_MODE_LABELS: dict[str, str] = {MEDIA_MODE_VIDEO: "Видео", MEDIA_MODE_PHOTO: "Фото"}
+
 # Локальный go2rtc-ретранслятор: его HLS Caddy отдаёт под /api/media/*. Один поток `decoy`.
 # go2rtc пишет в плейлисте ОТНОСИТЕЛЬНЫЕ ссылки (hls/playlist.m3u8?id=, segment.ts?id=),
 # поэтому одна замена префикса ^/api/media/ → /api/ покрывает всю цепочку.
@@ -52,8 +61,10 @@ MEDIA_PADDING_HEADER = "X-Client-Version"
 MEDIA_SOURCE_HLS = "hls"
 MEDIA_SOURCE_RTSP = "rtsp"
 MEDIA_SOURCE_MJPEG = "mjpeg"
-MEDIA_SOURCE_YOUTUBE = "youtube"
 MEDIA_SOURCE_SCHEMES = ("http", "https", "rtsp")
+# YouTube — не форма, а явный отказ: go2rtc не умеет YouTube (ни схемы, ни резолвера в нём
+# нет), такой URL уходит в обычный http-загрузчик, получает html и умирает на разборе
+# контейнера. Список держим, чтобы отказ был внятным, а не «не удалось подключиться».
 YOUTUBE_HOSTS = frozenset(
     {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"},
 )
@@ -103,9 +114,14 @@ CONFIG_DEFAULTS: tuple[tuple[str, JsonValue], ...] = (
     ("origin_host", ""),
     ("xhttp_path", DEFAULT_XHTTP_PATH),
     ("core_port", 0),
-    # Живая камера оператора: пусто — чистая синтетика (фолбэк без внешнего источника).
-    # Форма URL (hls/rtsp/mjpeg/youtube) проверяется контрактом, SSRF — перед стримом.
+    # Живая камера оператора: пусто — медиа нет вовсе (плеер будет пустой, синтетики нет
+    # с коммита «drop ffmpeg»). Форма URL (hls/rtsp/mjpeg) проверяется контрактом,
+    # SSRF — до любого соединения.
     ("cam_source_url", ""),
+    # Что показывает страница: живое видео или фото региона. Видео требует источника,
+    # фото живёт без него и медиатрафика не гоняет. Дефолт — видео: он не меняет поведение
+    # уже настроенных инсталляций.
+    ("media_mode", DEFAULT_MEDIA_MODE),
     ("encryption_mode", "native"),
     ("encryption_private_key", ""),
     ("encryption_public_key", ""),
@@ -281,8 +297,7 @@ def classify_media_source(value: object) -> str:
     if not host:
         raise ValueError("URL источника без хоста")
     if host in YOUTUBE_HOSTS:
-        # YouTube отдаёт только страницу-смотрильню; поток достаёт yt-dlp отдельно.
-        return MEDIA_SOURCE_YOUTUBE
+        raise ValueError("YouTube ретранслятор не умеет: нужен прямой поток (HLS/RTSP/MJPEG)")
     if scheme == "rtsp":
         return MEDIA_SOURCE_RTSP
     if parts.path.lower().endswith(".m3u8"):
@@ -312,10 +327,8 @@ def assert_public_media_source(
     Разрешение имени только расширяемо: тесты подменяют `resolve`, не ходя в DNS.
     """
     raw = str(value or "").strip()
-    kind = classify_media_source(raw)
-    if kind == MEDIA_SOURCE_YOUTUBE:
-        # Известные публичные хосты: резолвить их здесь незачем и вредно.
-        return raw
+    # Форма проверяется здесь же: нераспознанное или запрещённое (YouTube) — отказ до сети.
+    classify_media_source(raw)
     host = urllib.parse.urlsplit(strip_source_prefix(raw)).hostname or ""
     try:
         literal = ipaddress.ip_address(host)
@@ -360,12 +373,24 @@ def normalize_media_source(
 ) -> str:
     """Привести URL источника камеры к одному виду или отклонить его.
 
-    Пусто — это «источника нет», то есть чистая синтетика: допустимое состояние, а не
-    ошибка. Непустое значение проверяется на форму (`classify_media_source`) и на SSRF
-    (`assert_public_media_source`), чтобы оператор не мог сохранить ссылку внутрь хоста.
+    Пусто — это «источника нет»: допустимое состояние (тогда в видео-режиме плеер будет
+    пустой, а страница — фото), а не ошибка. Непустое значение проверяется на форму
+    (`classify_media_source`) и на SSRF (`assert_public_media_source`), чтобы оператор не
+    мог сохранить ссылку внутрь хоста.
     """
     raw = str(value or "").strip()
     if not raw:
         return ""
     assert_public_media_source(raw, resolve=resolve)
     return raw
+
+
+def normalize_media_mode(value: object) -> str:
+    """Режим медиа. Неизвестное значение — дефолт, а не исключение.
+
+    Так читаются состояния, записанные до появления поля: старые инсталляции не должны
+    падать из-за отсутствующего ключа, а явно испорченное значение не должно ломать
+    страницу — в обоих случаях поведение остаётся прежним (видео).
+    """
+    raw = str(value or "").strip().lower()
+    return raw if raw in MEDIA_MODES else DEFAULT_MEDIA_MODE

@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from hydra.contracts.vless_cdn import (
+    DEFAULT_MEDIA_MODE,
     DEFAULT_XHTTP_PATH,
+    MEDIA_MODE_PHOTO,
+    MEDIA_MODE_VIDEO,
+    MEDIA_MODES,
     MEDIA_PADDING_HEADER,
     MEDIA_PATH_PREFIX,
     MEDIA_PLAYLIST_PATH,
@@ -15,10 +19,10 @@ from hydra.contracts.vless_cdn import (
     MEDIA_SOURCE_HLS,
     MEDIA_SOURCE_MJPEG,
     MEDIA_SOURCE_RTSP,
-    MEDIA_SOURCE_YOUTUBE,
     assert_public_media_source,
     classify_media_source,
     go2rtc_media_source,
+    normalize_media_mode,
     normalize_path,
     source_needs_ffmpeg,
 )
@@ -85,9 +89,6 @@ def test_wire_marks_match_the_transport_exactly():
         ("rtsp://cam.example:554/stream", MEDIA_SOURCE_RTSP),
         ("http://cam.example/mjpg/video.mjpg", MEDIA_SOURCE_MJPEG),
         ("https://cam.example/video", MEDIA_SOURCE_MJPEG),
-        ("https://www.youtube.com/watch?v=abc", MEDIA_SOURCE_YOUTUBE),
-        ("https://youtu.be/abc", MEDIA_SOURCE_YOUTUBE),
-        ("https://m.youtube.com/watch?v=abc", MEDIA_SOURCE_YOUTUBE),
     ],
 )
 def test_source_form_is_read_from_scheme_and_host(url, expected):
@@ -96,7 +97,19 @@ def test_source_form_is_read_from_scheme_and_host(url, expected):
 
 @pytest.mark.parametrize(
     "url",
-    ["", "   ", "ftp://cam.example/x.m3u8", "file:///etc/passwd", "https://", "cam.example/x.m3u8"],
+    [
+        "",
+        "   ",
+        "ftp://cam.example/x.m3u8",
+        "file:///etc/passwd",
+        "https://",
+        "cam.example/x.m3u8",
+        # YouTube — не форма, а отказ: go2rtc его не умеет. Раньше такой URL проходил
+        # проверку и сохранялся, а потом молча давал мёртвый плеер.
+        "https://www.youtube.com/watch?v=abc",
+        "https://youtu.be/abc",
+        "https://m.youtube.com/watch?v=abc",
+    ],
 )
 def test_source_form_refuses_what_it_cannot_play(url):
     with pytest.raises(ValueError):
@@ -147,12 +160,14 @@ def test_unresolvable_host_is_refused():
         assert_public_media_source("https://nowhere.example/x.m3u8", resolve=_resolver({}))
 
 
-def test_youtube_host_needs_no_resolution():
-    # Youtube — известный публичный хост: резолвер, который бы упал, не вызывается.
+def test_youtube_is_refused_before_any_resolution():
+    # Отказ должен быть внятным и до сети: иначе оператор сохраняет источник, который не
+    # играет, и не имеет ни одной зацепки — почему.
     def explode(_host: str) -> list[str]:
-        raise AssertionError("youtube не должен резолвиться")
+        raise AssertionError("youtube не должен доходить до резолвера")
 
-    assert assert_public_media_source("https://youtu.be/abc", resolve=explode).startswith("https://youtu.be/")
+    with pytest.raises(ValueError, match="YouTube"):
+        assert_public_media_source("https://youtu.be/abc", resolve=explode)
 
 
 def test_ssrf_refuses_bad_scheme_before_any_resolution():
@@ -208,3 +223,23 @@ def test_go2rtc_media_source_points_at_localhost_stream():
         "dir": "/api",
         "playlist": "stream.m3u8?src=decoy",
     }
+
+
+# ── Режим медиа ────────────────────────────────────────────────────────────────
+
+
+def test_media_modes_are_video_and_photo_with_video_as_default():
+    assert MEDIA_MODES == (MEDIA_MODE_VIDEO, MEDIA_MODE_PHOTO)
+    assert DEFAULT_MEDIA_MODE == MEDIA_MODE_VIDEO
+
+
+@pytest.mark.parametrize("value", ["video", "VIDEO", " video ", MEDIA_MODE_PHOTO, "Photo"])
+def test_known_media_mode_survives_normalization(value):
+    assert normalize_media_mode(value) in MEDIA_MODES
+
+
+@pytest.mark.parametrize("value", ["", None, "фото", "synthetic", 42])
+def test_unknown_media_mode_falls_back_to_the_default(value):
+    # Состояние без поля и опечатка оператора ведут себя одинаково — как было до появления
+    # режима, то есть видео: старая инсталляция не должна внезапно показать фото.
+    assert normalize_media_mode(value) == DEFAULT_MEDIA_MODE

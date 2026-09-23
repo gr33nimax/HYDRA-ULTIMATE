@@ -19,6 +19,7 @@ from hydra.contracts.vless_cdn import (
     MEDIA_PLAYLIST_PATH,
     PROTOCOL_NAME,
     go2rtc_media_source,
+    normalize_media_mode,
 )
 from hydra.core import systemd
 from hydra.core.host import HOST
@@ -146,11 +147,10 @@ def build_site_data(
     config = current.config if current else {}
     stamp = now or datetime.now(timezone.utc)
     # Если задан источник, плеер просит плейлист go2rtc (`stream.m3u8?src=decoy`) под /api/media/,
-    # а Caddy rewrite'ом отображает его на /api/ локального go2rtc.
+    # а Caddy rewrite'ом отображает его на /api/ локального go2rtc. В фото-режиме этот путь
+    # не запрашивается вовсе — его в разметке просто нет.
     has_source = bool(str(config.get("cam_source_url", "") or "").strip())
-    playlist_path = (
-        f"{MEDIA_PATH_PREFIX}/{go2rtc_media_source()['playlist']}" if has_source else MEDIA_PLAYLIST_PATH
-    )
+    playlist_path = f"{MEDIA_PATH_PREFIX}/{go2rtc_media_source()['playlist']}" if has_source else MEDIA_PLAYLIST_PATH
     return SiteData(
         country=str(config.get("region_country_name", "") or ""),
         country_code=str(config.get("region_country_code", "") or ""),
@@ -164,6 +164,7 @@ def build_site_data(
         weather=weather or WeatherView(available=False),
         image=image or ImageView(),
         playlist_path=playlist_path,
+        mode=normalize_media_mode(config.get("media_mode")),
     )
 
 

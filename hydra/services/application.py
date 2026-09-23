@@ -198,6 +198,20 @@ class ApplicationService:
         self._ensure_go2rtc(state)
         return True
 
+    def set_vless_cdn_mode(self, state: AppState, mode: str) -> bool:
+        """Сменить режим медиа и пересобрать страницу.
+
+        go2rtc не трогаем: он живёт от источника, а не от режима. В фото-режиме источник
+        просто перестаёт запрашиваться страницей, но остаётся настроенным на будущее, а
+        медиа-маршрут — на месте: боевой XHTTP-путь не должен зависеть от того, что
+        показывает заглушка.
+        """
+        if not self.plugin_command(state, "vless_cdn", "set_media_mode", mode=mode):
+            return False
+        with contextlib.suppress(Exception):
+            refresh_site(state)
+        return True
+
     @staticmethod
     def _ensure_go2rtc(state: AppState) -> None:
         """Поднять/перенастроить go2rtc под текущий cam_source_url. Best-effort.
