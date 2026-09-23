@@ -183,6 +183,13 @@ def _live_script(data: SiteData) -> str:
     (Safari/iOS) всё равно играет, а софa не ломается. Заголовки почерка
     (сессия `X-Upload-Token` и padding `X-Client-Version`) — те же имена, что у
     VLESS-транспорта, чтобы запросы плеера не отличались от боевых.
+
+    Обработчик ошибок и удержание сессии — не украшение. Без них hls.js на фатальной
+    ошибке замолкает: перестаёт опрашивать плейлист, через 5 с keepalive в go2rtc убивает
+    сессию вместе с её единственным потребителем, go2rtc гасит продюсера, и следующее
+    открытие платит холодный старт, который не укладывается в 3-секундное ожидание
+    сегмента. Получалась петля обрывов, и в логе go2rtc при этом не было ни одной ошибки
+    продюсера — падал плеер, а не источник.
     """
     return (
         "(function () {"
@@ -190,15 +197,42 @@ def _live_script(data: SiteData) -> str:
         "  if (!video) { return; }"
         f"  var PLAYLIST = '{_escape(data.playlist_path)}';"
         "  var token = Math.random().toString(36).slice(2, 12) + Date.now().toString(36);"
+        "  var HDRS = { 'X-Upload-Token': token, 'X-Client-Version': 'web/1.0' };"
         "  function sign(xhr) {"
-        "    xhr.setRequestHeader('X-Upload-Token', token);"
-        "    xhr.setRequestHeader('X-Client-Version', 'web/1.0');"
+        "    for (var k in HDRS) { xhr.setRequestHeader(k, HDRS[k]); }"
         "  }"
         "  var Hls = window.Hls;"
         "  if (Hls && Hls.isSupported && Hls.isSupported()) {"
         "    var hls = new Hls({ xhrSetup: function (xhr) { sign(xhr); } });"
+        "    var fails = 0;"
+        "    var session = '';"
+        # Пинг продлевает keepalive сессии (5 с в go2rtc), поэтому продюсер не гаснет, пока
+        # страница открыта. Интервал с джиттером: ровный период — сам по себе почерк.
+        "    function hold() {"
+        "      if (session) {"
+        "        fetch(session, { headers: HDRS, cache: 'no-store' }).catch(function () {});"
+        "      }"
+        "      setTimeout(hold, 1500 + Math.random() * 1500);"
+        "    }"
+        # URL сессии берём у самого плеера: details.url — это и есть плейлист с ?id=.
+        # Не нашлось — молчим: тогда остаётся только восстановление после ошибки.
+        "    hls.on(Hls.Events.LEVEL_LOADED, function (e, d) {"
+        "      session = (d && d.details && d.details.url)"
+        "        || (hls.levels && hls.levels[0] && hls.levels[0].url) || session;"
+        "      fails = 0;"
+        "    });"
+        # Фатальная ошибка больше не тупик: сначала штатное восстановление hls.js, а если
+        # подряд не вышло несколько раз — перезагрузка источника с нуля.
+        "    hls.on(Hls.Events.ERROR, function (e, d) {"
+        "      if (!d || !d.fatal) { return; }"
+        "      fails += 1;"
+        "      if (fails > 4) { fails = 0; hls.loadSource(PLAYLIST); hls.startLoad(); return; }"
+        "      if (d.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }"
+        "      hls.startLoad();"
+        "    });"
         "    hls.loadSource(PLAYLIST);"
         "    hls.attachMedia(video);"
+        "    hold();"
         "  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {"
         "    video.src = PLAYLIST;"
         "  }"

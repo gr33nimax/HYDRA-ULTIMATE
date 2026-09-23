@@ -136,6 +136,39 @@ def test_player_declares_the_source_via_a_child_not_a_video_src_attribute():
     assert "poster=" not in page
 
 
+def test_player_recovers_from_a_fatal_error_instead_of_going_silent():
+    # Без обработчика hls.js на фатальной ошибке замолкает: перестаёт опрашивать плейлист,
+    # через 5 с keepalive в go2rtc убивает сессию и её потребителя, продюсер гаснет, и
+    # следующее открытие платит холодный старт. Это и была петля обрывов.
+    page = render_page(_data())
+
+    assert "Hls.Events.ERROR" in page
+    assert "d.fatal" in page, "не-фатальные ошибки не трогаем — hls.js их переживает сам"
+    assert "hls.startLoad()" in page
+    assert "hls.recoverMediaError()" in page
+    assert "hls.loadSource(PLAYLIST); hls.startLoad();" in page, "после серии неудач — с нуля"
+
+
+def test_player_holds_its_session_with_a_jittered_ping():
+    # Пинг продлевает keepalive сессии, поэтому продюсер не гаснет, пока страница открыта.
+    # Несёт те же заголовки почерка, иначе сам стал бы новой зацепкой; интервал с джиттером,
+    # потому что ровный период — тоже почерк.
+    page = render_page(_data())
+
+    assert "Hls.Events.LEVEL_LOADED" in page
+    assert "fetch(session, { headers: HDRS, cache: 'no-store' })" in page
+    assert "setTimeout(hold, 1500 + Math.random() * 1500)" in page
+
+
+def test_hold_ping_stays_quiet_when_the_session_url_is_unknown():
+    # details.url может не прийти: тогда пинг молчит, и остаётся только восстановление
+    # после ошибки. Молчаливая деградация вместо исключения.
+    page = render_page(_data())
+
+    assert "if (session) {" in page
+    assert "|| session;" in page, "неизвестный URL не затирает уже известный"
+
+
 def test_the_page_carries_no_region_image():
     page = render_page(_data())
     assert "<img" not in page, "изображение с сайта убрано"
