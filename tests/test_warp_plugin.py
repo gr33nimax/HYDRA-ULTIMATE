@@ -54,7 +54,6 @@ def test_due_query_sees_sources_missing_from_the_cache(tmp_path):
 def test_runtime_actions_are_declared_public_capabilities():
     assert set(WarpPlugin.meta.capabilities.actions) == {
         "delete_local_profile",
-        "remove_legacy_install",
         "update_external_rules",
     }
 
@@ -100,29 +99,8 @@ def test_uninstall_removes_the_legacy_wgcf_artifacts(tmp_path):
     ):
         assert WarpPlugin().uninstall() is True
 
-    assert not any(
-        path.exists() for path in (binary, profile, account, install_log)
-    )
+    assert not any(path.exists() for path in (binary, profile, account, install_log))
     assert not cache.exists()
-
-
-def test_manager_observation_reports_legacy_artifacts(tmp_path):
-    profiles_dir = tmp_path / "profiles"
-    binary = tmp_path / "wgcf"
-    binary.write_text("x", encoding="utf-8")
-    absent = tmp_path / "absent"
-
-    with (
-        patch("hydra.plugins.warp.plugin.WARP_PROFILES_DIR", profiles_dir),
-        patch("hydra.plugins.warp.plugin.LEGACY_WGCF_PATHS", (binary, absent)),
-    ):
-        assert WarpPlugin.manager_observation()["legacy_install"] == [
-            str(binary),
-        ]
-        assert WarpPlugin.remove_legacy_install() == [str(binary)]
-        assert WarpPlugin.remove_legacy_install() == []
-
-    assert not binary.exists()
 
 
 def test_is_ip_or_cidr():

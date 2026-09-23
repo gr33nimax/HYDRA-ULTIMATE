@@ -14,12 +14,14 @@ from hydra.ui.tui import (
     RED,
     YELLOW,
     clear,
+    confirm,
     error,
     info,
     menu,
     panel,
     prompt,
     success,
+    warn,
 )
 
 
@@ -28,7 +30,6 @@ def _runtime(app: ApplicationService):
     observation = facade._warp_observation(app)
     profile_rows = observation.get("profiles", [])
     profiles = sorted(str(row["name"]) for row in profile_rows if isinstance(row, dict) and row.get("name"))
-    legacy = [str(path) for path in observation.get("legacy_install", [])]
     destinations = [
         "direct",
         "warp",
@@ -39,7 +40,6 @@ def _runtime(app: ApplicationService):
         profiles,
         destinations,
         facade._external_sources(app),
-        legacy,
     )
 
 
@@ -105,57 +105,88 @@ def _status_lines(
 
 def _options(
     status,
-    legacy_count: int = 0,
 ) -> list[tuple[str, str, str]]:
-    options = [
-        (
-            "1",
-            f"{'⏸️  Выключить' if status.enabled else '▶️  Включить'} WARP",
-            "Переключить статус службы в Sing-Box",
-        ),
-        (
-            "2",
-            "📋 Управление списками правил",
-            "Добавление/редактирование локальных и внешних списков",
-        ),
-        (
-            "3",
-            "🔀 Настройка маршрутизации",
-            "Связать списки правил с точками выхода (WARP/релеи)",
-        ),
-        (
-            "4",
-            "⚙️ Управление профилями релеев",
-            "Добавить/удалить кастомные профили релеев",
-        ),
-        (
-            "5",
-            "🔄 Обновить внешние списки сейчас",
-            "Загрузить свежие списки правил с GitHub",
-        ),
-    ]
-    if legacy_count:
-        options.append(
+    if not status.installed:
+        options = [
+            (
+                "1",
+                "🔧 Установить WARP",
+                "Подготовить транспорт и заранее загрузить списки правил",
+            ),
+        ]
+    else:
+        options = [
+            (
+                "1",
+                f"{'⏸️  Выключить' if status.enabled else '▶️  Включить'} WARP",
+                "Переключить статус службы в Sing-Box",
+            ),
+            (
+                "2",
+                "📋 Управление списками правил",
+                "Добавление/редактирование локальных и внешних списков",
+            ),
+            (
+                "3",
+                "🔀 Настройка маршрутизации",
+                "Связать списки правил с точками выхода (WARP/релеи)",
+            ),
+            (
+                "4",
+                "⚙️ Управление профилями релеев",
+                "Добавить/удалить кастомные профили релеев",
+            ),
+            (
+                "5",
+                "🔄 Обновить внешние списки сейчас",
+                "Загрузить свежие списки правил с GitHub",
+            ),
+            ("-", "", ""),
+            (
+                "8",
+                "🔄 Переустановить",
+                "Переустановка с сохранением маршрутов",
+            ),
             (
                 "9",
-                f"🧹 Убрать остатки wgcf ({legacy_count})",
-                "Удалить профиль, аккаунт, бинарник и журнал прежнего установщика",
+                "❌ Удалить",
+                "Снять маршруты, кэш правил и остатки прежнего установщика",
             ),
-        )
+        ]
     options.append(("0", "↩ Назад", ""))
     return options
 
 
-def _remove_legacy(app: ApplicationService) -> None:
-    """Drop what the retired wgcf installer left on this host."""
-    info("Удаляю файлы прежнего установщика wgcf...")
-    removed = app.plugin_action("warp", "remove_legacy_install")
-    if removed:
-        success(f"Удалено файлов: {len(removed)}")
-        for path in removed:
-            print(f"  {DIM}{path}{NC}")
+def _install(state: AppState, app: ApplicationService) -> None:
+    info("Устанавливаю WARP...")
+    if app.protocols.install(state, "warp"):
+        success("WARP установлен и готов к работе.")
     else:
-        info("Остатков wgcf не найдено.")
+        error("Ошибка при установке.")
+    prompt("Нажмите Enter для продолжения")
+
+
+def _reinstall(state: AppState, app: ApplicationService) -> None:
+    warn("ПЕРЕУСТАНОВКА WARP!")
+    if confirm("Продолжить?", default=False):
+        info("Восстанавливаю установку с сохранением маршрутов...")
+        if app.protocols.reinstall(state, "warp"):
+            success("Успешно переустановлено!")
+        else:
+            error("Ошибка при переустановке.")
+    prompt("Нажмите Enter для продолжения")
+
+
+def _uninstall(state: AppState, app: ApplicationService) -> None:
+    warn("ПОЛНОЕ УДАЛЕНИЕ WARP!")
+    if confirm("Вы уверены?", default=False):
+        info("Удаляю...")
+        if not app.protocols.disable(state, "warp"):
+            error("Не удалось отключить WARP перед удалением.")
+        elif app.protocols.uninstall(state, "warp"):
+            success("WARP полностью удалён.")
+        else:
+            error("Ошибка при удалении.")
     prompt("Нажмите Enter для продолжения")
 
 
@@ -210,22 +241,27 @@ def _dispatch(
     destinations: list[str],
 ) -> None:
     if choice == "1":
-        _toggle(state, app, status)
-    elif choice == "2":
+        if status.installed:
+            _toggle(state, app, status)
+        else:
+            _install(state, app)
+    elif choice == "2" and status.installed:
         facade._menu_rules_lists(state, plugin_state, app)
-    elif choice == "3":
+    elif choice == "3" and status.installed:
         facade._menu_routing_rules(
             state,
             plugin_state,
             destinations,
             app,
         )
-    elif choice == "4":
+    elif choice == "4" and status.installed:
         facade._menu_geo_profiles(state, plugin_state, app)
-    elif choice == "5":
+    elif choice == "5" and status.installed:
         _update_external_rules(state, app, plugin_state)
-    elif choice == "9":
-        _remove_legacy(app)
+    elif choice == "8" and status.installed:
+        _reinstall(state, app)
+    elif choice == "9" and status.installed:
+        _uninstall(state, app)
 
 
 def run(state: AppState, app: ApplicationService) -> None:
@@ -239,7 +275,6 @@ def run(state: AppState, app: ApplicationService) -> None:
             profiles,
             destinations,
             external_sources,
-            legacy,
         ) = _runtime(app)
         plugin_state.config.setdefault("local_lists", {})
         list_targets = plugin_state.config.get("list_targets")
@@ -257,7 +292,7 @@ def run(state: AppState, app: ApplicationService) -> None:
             ),
         )
         choice = menu(
-            _options(status, len(legacy)),
+            _options(status),
             "УПРАВЛЕНИЕ WARP",
         )
         if choice == "0":

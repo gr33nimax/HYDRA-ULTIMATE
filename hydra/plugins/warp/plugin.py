@@ -42,7 +42,6 @@ class WarpPlugin(WarpMaintenanceMixin, BasePlugin):
         version="3.0.0",
         actions=(
             "delete_local_profile",
-            "remove_legacy_install",
             "update_external_rules",
         ),
         queries=(
@@ -76,22 +75,15 @@ class WarpPlugin(WarpMaintenanceMixin, BasePlugin):
 
     @staticmethod
     def manager_observation() -> dict[str, object]:
-        return observation.manager_observation(
-            WARP_PROFILES_DIR,
-            LEGACY_WGCF_PATHS,
-        )
+        return observation.manager_observation(WARP_PROFILES_DIR)
 
     @staticmethod
     def delete_local_profile(*, name: str) -> bool:
         return observation.delete_local_profile(WARP_PROFILES_DIR, name=name)
 
-    @staticmethod
-    def remove_legacy_install() -> list[str]:
-        """Drop what the retired wgcf installer left on this host."""
-        return observation.remove_legacy_install(LEGACY_WGCF_PATHS)
-
     def install(self) -> bool:
-        """Nothing to install: the core registers the WARP device itself."""
+        """Prepare the transport: the core owns the device, HYDRA owns the lists."""
+        print("  WARP готов к работе: устройство Cloudflare регистрирует ядро")
         lists_ok, message = self.preload_external_rules()
         if not lists_ok:
             print(f"  Не удалось заранее загрузить списки WARP: {message}")
@@ -100,7 +92,13 @@ class WarpPlugin(WarpMaintenanceMixin, BasePlugin):
     def uninstall(self) -> bool:
         with contextlib.suppress(OSError):
             WARP_EXTERNAL_CACHE.unlink(missing_ok=True)
-        observation.remove_legacy_install(LEGACY_WGCF_PATHS)
+        removed = observation.remove_legacy_install(LEGACY_WGCF_PATHS)
+        # Nothing else is touched on purpose: the core keeps terminating WARP, so
+        # removing the plugin must not take the device away from it.
+        if removed:
+            print("  Остатки прежнего установщика wgcf удалены")
+        else:
+            print("  Прежней схемы на хосте нет — удалять нечего")
         return True
 
     def configure(self, state: PluginStateAccess) -> ConfigFragment:
@@ -120,13 +118,15 @@ class WarpPlugin(WarpMaintenanceMixin, BasePlugin):
     def status(self, state: PluginStateAccess | None = None) -> PluginStatus:
         from hydra.core.singbox import is_running
 
+        installed = False
         enabled = False
         if state is not None:
             plugin_state = state.protocols.get("warp")
             if plugin_state:
+                installed = plugin_state.installed
                 enabled = plugin_state.enabled
         return PluginStatus(
-            installed=True,
+            installed=installed,
             enabled=enabled,
             running=enabled and is_running(),
         )
