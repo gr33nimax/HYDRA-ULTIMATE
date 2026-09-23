@@ -157,12 +157,20 @@ def test_inner_server_routes_the_tunnel_then_the_media_then_the_assets_then_the_
         "no-store, no-transform",
     ], "туннель нельзя кешировать"
 
-    # Медиа плеера — тем же file_server'ом, но с явным Content-Type: боевой путь
-    # живёт в том же семействе /api/media/*, поэтому он «один из многих».
+    # Плейлист идёт через сторожа: он поднимает поток по требованию и гасит по простою.
+    # Боевой путь живёт в том же семействе /api/media/*, поэтому он «один из многих».
     assert playlist["match"] == [{"path": [MEDIA_PLAYLIST_PATH]}]
-    assert playlist["handle"][0]["response"]["set"]["Content-Type"] == ["application/vnd.apple.mpegurl"]
-    assert playlist["handle"][1]["handler"] == "file_server"
+    gate = playlist["handle"][0]
+    assert gate["handler"] == "reverse_proxy"
+    assert gate["upstreams"] == [{"dial": "127.0.0.1:1985"}]
+    assert "tls" not in gate["transport"], "сторож локальный: TLS на этом плече лишний"
+    # Сторож лежит → плейлист отдаём статикой, а не голой ошибкой.
+    assert gate["handle_response"][0]["match"]["status_code"] == [502, 503, 504]
+    served = gate["handle_response"][0]["routes"][0]["handle"]
+    assert served[0]["response"]["set"]["Content-Type"] == ["application/vnd.apple.mpegurl"]
+    assert served[1]["handler"] == "file_server"
 
+    # Сегменты — неизменяемые файлы: их раздаёт статика, а не python.
     assert segments["match"] == [{"path": [f"{MEDIA_SEGMENT_PATH_PREFIX.rstrip('/')}/*"]}]
     assert segments["handle"][0]["response"]["set"]["Content-Type"] == ["video/mp2t"]
     assert segments["handle"][1]["handler"] == "file_server"
@@ -185,37 +193,27 @@ def test_the_tunnel_path_stays_inside_the_media_family_the_site_uses():
     assert backend["proxy_path"].startswith(f"{MEDIA_PATH_PREFIX}/")
 
 
-def test_a_source_makes_media_a_reverse_proxy_relay_to_go2rtc():
-    """С источником /api/media/* ретранслируется на локальный go2rtc, без ffmpeg и без статики."""
-    source = "rtsp://8.8.8.8/live"  # go2rtc тянет любой вход, в т.ч. rtsp
-    backend = _backends(cam_source_url=source)[PROTOCOL_NAME]
-    assert backend["media_source"] == {
-        "host": "127.0.0.1",
-        "port": 1984,
-        "tls": False,
-        "dir": "/api",
-        "playlist": "stream.m3u8?src=decoy",
-    }
+def test_media_routes_do_not_depend_on_the_source():
+    """Плейлист отдаёт сторож при любом источнике: он же решает, когда поднять поток.
+
+    Раньше источник переключал медиа-путь на ретрансляцию через go2rtc. Теперь он влияет
+    только на команду ffmpeg, а маршруты от него не зависят вовсе — иначе пустой источник
+    оставлял бы медиа-путь мёртвым.
+    """
+    assert "media_source" not in _backends()[PROTOCOL_NAME]
+    assert "media_source" not in _backends(cam_source_url="rtsp://8.8.8.8/live")[PROTOCOL_NAME]
 
     server = _require(
-        _inner_server(_document(cam_source_url=source), DECOY_HTTP_PORT),
+        _inner_server(_document(cam_source_url="rtsp://8.8.8.8/live"), DECOY_HTTP_PORT),
         "внутренний сервер",
     )
-    tunnel, media, assets, fallback = server["routes"]
+    tunnel, playlist, segments, assets, fallback = server["routes"]
     assert tunnel["match"][0]["path"][0] == DEFAULT_XHTTP_PATH, "туннель всё ещё первый"
-    assert media["match"] == [{"path": [f"{MEDIA_PATH_PREFIX}/*"]}]
-    rewrite, relay = media["handle"]
-    # go2rtc пишет относительные ссылки → одна замена ^/api/media/ → /api/ покрывает всё.
-    assert rewrite["handler"] == "rewrite"
-    assert rewrite["path_regexp"] == [{"find": f"^{MEDIA_PATH_PREFIX}/", "replace": "/api/"}]
-    assert relay["handler"] == "reverse_proxy"
-    assert relay["upstreams"] == [{"dial": "127.0.0.1:1984"}]
-    assert "tls" not in relay["transport"], "локальный go2rtc — плайн HTTP, без TLS"
-    # upstream упал → отдаём статику сайта, а не голую 5xx.
-    assert relay["handle_response"][0]["match"]["status_code"] == [502, 503, 504]
-    assert relay["handle_response"][0]["routes"][0]["handle"][0]["handler"] == "file_server"
-    assert "match" not in fallback
+    assert playlist["match"] == [{"path": [MEDIA_PLAYLIST_PATH]}]
+    assert playlist["handle"][0]["upstreams"] == [{"dial": "127.0.0.1:1985"}]
+    assert segments["handle"][0]["response"]["set"]["Content-Type"] == ["video/mp2t"]
     assert assets["match"] == [{"path": ["/assets/*"]}]
+    assert "match" not in fallback
 
 
 def test_a_route_without_a_media_prefix_keeps_two_routes():

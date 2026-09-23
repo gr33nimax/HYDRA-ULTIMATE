@@ -270,6 +270,6 @@ def test_the_source_prompt_documents_the_format_and_reports_refusal():
     app.set_vless_cdn_camera.assert_called_once_with(state, "https://www.youtube.com/watch?v=abc")
     text = "\n".join(shown)
     assert "rtsp://" in text and "m3u8" in text, "формат должен быть показан до ввода"
-    assert "ffmpeg:" in text, "про префикс иначе не узнать"
-    assert "YouTube" in text, "отказ объявляется заранее, а не после"
+    assert "H264" in text, "про кодек иначе не узнать"
+    assert "YouTube" in text and "MJPEG" in text, "отказ объявляется заранее, а не после"
     assert errors and "YouTube" in errors[0]

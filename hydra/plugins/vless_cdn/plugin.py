@@ -28,6 +28,7 @@ from hydra.contracts.vless_cdn import (
     DEFAULT_XHTTP_PATH,
     PROTOCOL_NAME,
     as_int,
+    as_int_or,
     normalize_hostname,
     normalize_media_mode,
     normalize_media_source,
@@ -58,7 +59,14 @@ class VlessCdnPlugin(BasePlugin):
         # Публичное имя выдаёт CDN, а origin-имя спрашивается отдельно, поэтому
         # общий сценарий «спросить основной домен» здесь не подходит.
         needs_domain=False,
-        commands=("set_cdn_domain", "set_origin_host", "set_path", "set_cam_source_url", "set_media_mode"),
+        commands=(
+            "set_cdn_domain",
+            "set_origin_host",
+            "set_path",
+            "set_cam_source_url",
+            "set_media_mode",
+            "set_stream_settings",
+        ),
         queries=("get_summary",),
         config_defaults=CONFIG_DEFAULTS,
         connection_source="tracked",
@@ -223,11 +231,11 @@ class VlessCdnPlugin(BasePlugin):
         *,
         resolve: Callable[[str], list[str]] = resolve_host,
     ) -> bool:
-        """Источник камеры для go2rtc: пусто — очистить, иначе — SSRF-безопасный URL.
+        """Источник потока: пусто — очистить, иначе — SSRF-безопасный URL.
 
-        go2rtc тянет rtsp/hls/mjpeg сам и ремуксит в HLS, поэтому проверяем только форму и
-        SSRF (`normalize_media_source`): относительность сегментов больше не наша забота — её
-        снимает локальный ретранслятор. `resolve` инжектируем — тесты не ходят в DNS.
+        Проверяем форму и SSRF (`normalize_media_source`): относительность сегментов — не
+        наша забота, её держит сам плейлист, который пишет ffmpeg. `resolve` инжектируем —
+        тесты не ходят в DNS.
         """
         plugin_state = state.protocols.get(PROTOCOL_NAME)
         if plugin_state is None:
@@ -251,6 +259,29 @@ class VlessCdnPlugin(BasePlugin):
         if plugin_state is None:
             return False
         plugin_state.config["media_mode"] = normalize_media_mode(mode)
+        return True
+
+    def set_stream_settings(
+        self,
+        state: PluginStateAccess,
+        *,
+        hls_time: object,
+        list_size: object,
+        idle_timeout: object,
+    ) -> bool:
+        """Три настройки потока разом: порознь они смысла не имеют.
+
+        Границы — не украшение: слишком маленькое окно снова делает поток хрупким, а
+        слишком короткая длительность сегмента заставляет ffmpeg резать чаще, чем он
+        может (резать можно только по кейфреймам). Верхняя граница окна ограничивает
+        диск: каждый сегмент — это мегабайты.
+        """
+        plugin_state = state.protocols.get(PROTOCOL_NAME)
+        if plugin_state is None:
+            return False
+        plugin_state.config["stream_hls_time"] = min(30, max(1, as_int_or(hls_time, 1)))
+        plugin_state.config["stream_hls_list_size"] = min(60, max(3, as_int_or(list_size, 3)))
+        plugin_state.config["stream_idle_timeout"] = min(24 * 3600, max(0, as_int_or(idle_timeout, 0)))
         return True
 
     def get_summary(self, state: PluginStateAccess) -> dict[str, object]:

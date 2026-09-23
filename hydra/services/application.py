@@ -15,6 +15,7 @@ from typing import Any, Callable, cast
 from hydra.core.runtime_state import PluginStatusReader
 from hydra.core.state_models import AppState, User
 from hydra.core.errors import ErrorCode, ServiceResult, failed_result
+from hydra.services import vless_cdn_media as media_ops
 from hydra.services.protocols import ProtocolService
 from hydra.services.configuration import restore_state_in_place
 from hydra.services.vless_cdn_install import InstallOutcome, install_protocol
@@ -180,54 +181,86 @@ class ApplicationService:
             self.admin.save_state(state)
             self.apply(state)
             return False
-        self._ensure_go2rtc(state)
+        self._ensure_media(state)
         return True
 
     def set_vless_cdn_camera(self, state: AppState, url: str) -> bool:
-        """Сменить источник камеры, пересобрать страницу и перевести на него go2rtc.
+        """Сменить источник, пересобрать страницу и перевести на него поток.
 
         `set_cam_source_url` (через plugin_command) уже пересобирает маршруты Caddy
-        (central_apply). Затем: перегенерить страницу (имя плейлиста) и переключить
-        go2rtc на новый source. Оба шага best-effort: таймер повторит страницу, а go2rtc
-        подхватит конфиг при следующем старте; туннель от этого не зависит.
+        (central_apply). Затем — перегенерить страницу и переписать команду потока.
+        Оба шага best-effort: таймер повторит страницу, а поток подхватит новый источник
+        при следующем старте; туннель от этого не зависит.
         """
         if not self.plugin_command(state, "vless_cdn", "set_cam_source_url", url=url):
             return False
         with contextlib.suppress(Exception):
             refresh_site(state)
-        self._ensure_go2rtc(state)
+        self._ensure_media(state)
         return True
 
     def set_vless_cdn_mode(self, state: AppState, mode: str) -> bool:
         """Сменить режим медиа и пересобрать страницу.
 
-        go2rtc не трогаем: он живёт от источника, а не от режима. В фото-режиме источник
-        просто перестаёт запрашиваться страницей, но остаётся настроенным на будущее, а
-        медиа-маршрут — на месте: боевой XHTTP-путь не должен зависеть от того, что
-        показывает заглушка.
+        Режим решает, нужен ли поток вообще: в фото-режиме медиа снимается целиком, вместе
+        с окном сегментов, а в видео — ставится заново. Маршруты Caddy при этом не трогаются:
+        боевой XHTTP-путь не должен зависеть от того, что показывает заглушка.
         """
         if not self.plugin_command(state, "vless_cdn", "set_media_mode", mode=mode):
             return False
         with contextlib.suppress(Exception):
             refresh_site(state)
+        self._ensure_media(state)
+        return True
+
+    def set_vless_cdn_stream(
+        self,
+        state: AppState,
+        *,
+        hls_time: object,
+        list_size: object,
+        idle_timeout: object,
+    ) -> bool:
+        """Сохранить настройки потока и переустановить службы под них.
+
+        Страницу пересобирать не нужно: её путь к плейлисту от этих чисел не зависит.
+        Переустановка best-effort — настройки уже сохранены, а сторож подхватит их при
+        следующем обращении к плейлисту.
+        """
+        if not self.plugin_command(
+            state,
+            "vless_cdn",
+            "set_stream_settings",
+            hls_time=hls_time,
+            list_size=list_size,
+            idle_timeout=idle_timeout,
+        ):
+            return False
+        self._ensure_media(state)
         return True
 
     @staticmethod
-    def _ensure_go2rtc(state: AppState) -> None:
-        """Поднять/перенастроить go2rtc под текущий cam_source_url. Best-effort.
+    def media_status() -> dict[str, object]:
+        """Состояние медиа-пути для интерфейса: идёт ли поток и свеж ли плейлист."""
+        return media_ops.media_status()
 
-        Неудача (нет сети для скачивания бинаря и т.п.) не должна рушить включение
-        протокола: без go2rtc медиа-эндпоинт пуст, но XHTTP-туннель работает.
+    @staticmethod
+    def _ensure_media(state: AppState) -> None:
+        """Привести медиа-путь в соответствие режиму и источнику. Best-effort.
+
+        Неудача (нет сети для скачивания ffmpeg и т.п.) не должна рушить включение
+        протокола: без медиа пустой плеер, но XHTTP-туннель работает. Что именно не
+        вышло, видно в меню: поток при этом останется спать.
         """
-        from hydra.core import go2rtc
-
         protocol = state.protocols.get("vless_cdn")
-        source = str((protocol.config.get("cam_source_url", "") if protocol else "") or "").strip()
         with contextlib.suppress(Exception):
-            if source:
-                go2rtc.apply_source(source)
-            else:
-                go2rtc.remove()
+            media_ops.ensure_media(protocol.config if protocol else {})
+
+    @staticmethod
+    def _remove_media() -> None:
+        """Снять медиа целиком: сторож, поток и окно сегментов. Best-effort."""
+        with contextlib.suppress(Exception):
+            media_ops.remove_media()
 
     def disable_vless_cdn(self, state: AppState) -> bool:
         """Stop CDN page refresh before disabling its runtime."""
@@ -236,10 +269,7 @@ class ApplicationService:
             return False
         try:
             if self.protocols.disable(state, "vless_cdn"):
-                with contextlib.suppress(Exception):
-                    from hydra.core import go2rtc
-
-                    go2rtc.remove()
+                self._remove_media()
                 return True
         except Exception:
             restore_state_in_place(state, snapshot)
@@ -293,7 +323,7 @@ class ApplicationService:
             if not detail:
                 detail = exc.__class__.__name__
             return replace(outcome, ok=False, detail=detail)
-        self._ensure_go2rtc(state)
+        self._ensure_media(state)
         return outcome
 
     def uninstall_vless_cdn(self, state: AppState) -> bool:
@@ -302,10 +332,7 @@ class ApplicationService:
         if not self.protocols.uninstall(state, "vless_cdn"):
             return False
         if remove_site_timer():
-            with contextlib.suppress(Exception):
-                from hydra.core import go2rtc
-
-                go2rtc.remove()
+            self._remove_media()
             return True
 
         restore_state_in_place(state, snapshot)

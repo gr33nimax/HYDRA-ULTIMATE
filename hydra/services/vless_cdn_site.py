@@ -15,10 +15,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from hydra.contracts.vless_cdn import (
     DECOY_ROOT,
-    MEDIA_PATH_PREFIX,
     MEDIA_PLAYLIST_PATH,
     PROTOCOL_NAME,
-    go2rtc_media_source,
     normalize_media_mode,
 )
 from hydra.core import systemd
@@ -34,7 +32,6 @@ from hydra.core.vless_cdn_page import (
 )
 from hydra.core.weather import WeatherView, weather_view
 from hydra.services.security_intel import lookup_region
-from hydra.services.vless_cdn_stream import remove_stream_service
 
 TIMER_NAME = "hydra-vless-cdn-site"
 TIMER_CALENDAR = "*:0/10"
@@ -146,11 +143,9 @@ def build_site_data(
     current = protocol or state.protocols.get(PROTOCOL_NAME)
     config = current.config if current else {}
     stamp = now or datetime.now(timezone.utc)
-    # Если задан источник, плеер просит плейлист go2rtc (`stream.m3u8?src=decoy`) под /api/media/,
-    # а Caddy rewrite'ом отображает его на /api/ локального go2rtc. В фото-режиме этот путь
-    # не запрашивается вовсе — его в разметке просто нет.
-    has_source = bool(str(config.get("cam_source_url", "") or "").strip())
-    playlist_path = f"{MEDIA_PATH_PREFIX}/{go2rtc_media_source()['playlist']}" if has_source else MEDIA_PLAYLIST_PATH
+    # Плейлист — всегда один и тот же путь: его отдаёт сторож, который поднимает поток по
+    # требованию. В фото-режиме страница этот путь не запрашивает вовсе.
+    playlist_path = MEDIA_PLAYLIST_PATH
     return SiteData(
         country=str(config.get("region_country_name", "") or ""),
         country_code=str(config.get("region_country_code", "") or ""),
@@ -305,19 +300,15 @@ WantedBy=timers.target
 def install_site_timer(root: Path | None = None) -> bool:
     """Поднять стек прикрытия: живую страницу (таймер).
 
-    Медиа больше не кодируется локально: /api/media/* отдаёт reverse_proxy Caddy на живой HLS
-    (см. sni_router_http). Поэтому сначала сносим старый ffmpeg-юнит (если остался от прежней
-    версии), чтобы он не жёг CPU впустую, и ставим только таймер страницы.
+    Медиа живёт отдельно: плейлист отдаёт сторож, сегменты пишет ffmpeg (см.
+    core/vless_cdn_stream). Здесь — только страница и её обновление по таймеру.
     """
-    remove_stream_service()
     service, timer = site_units(root)
     return systemd.install_timer(TIMER_NAME, service, timer)
 
 
 def remove_site_timer() -> bool:
-    stream_removed = remove_stream_service()
-    timer_removed = systemd.remove_unit(TIMER_NAME)
-    return stream_removed and timer_removed
+    return systemd.remove_unit(TIMER_NAME)
 
 
 __all__ = [

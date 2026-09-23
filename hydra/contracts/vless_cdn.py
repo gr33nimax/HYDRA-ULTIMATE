@@ -34,7 +34,7 @@ MEDIA_PATH_PREFIX = "/api/media"
 MEDIA_PLAYLIST_PATH = f"{MEDIA_PATH_PREFIX}/playlist.m3u8"
 MEDIA_SEGMENT_PATH_PREFIX = f"{MEDIA_PATH_PREFIX}/seg/"
 
-# Что показывает страница-заглушка. Видео — живой ретранслятор через go2rtc, и он требует
+# Что показывает страница-заглушка. Видео — живой поток через ffmpeg, и он требует
 # `cam_source_url`. Фото — региональная картинка без медиатрафика вовсе: страница живая,
 # но объём VLESS она больше не объясняет — это осознанный размен, а не «то же дешевле».
 MEDIA_MODE_VIDEO = "video"
@@ -55,13 +55,6 @@ STREAM_IDLE_TIMEOUT_DEFAULT = 120
 GATE_HOST = "127.0.0.1"
 GATE_PORT = 1985
 
-# Локальный go2rtc-ретранслятор: его HLS Caddy отдаёт под /api/media/*. Один поток `decoy`.
-# go2rtc пишет в плейлисте ОТНОСИТЕЛЬНЫЕ ссылки (hls/playlist.m3u8?id=, segment.ts?id=),
-# поэтому одна замена префикса ^/api/media/ → /api/ покрывает всю цепочку.
-GO2RTC_API_HOST = "127.0.0.1"
-GO2RTC_API_PORT = 1984
-GO2RTC_STREAM_NAME = "decoy"
-
 # Проводные метки, которые шлёт и плеер заглушки, и сам транспорт VLESS. Значения — те же,
 # что в hydra/plugins/vless_cdn/profile.py, и держатся здесь, чтобы клиент, сайт и туннель
 # не разъехались (R4).
@@ -69,23 +62,21 @@ MEDIA_SESSION_HEADER = "X-Upload-Token"
 MEDIA_SEQ_PARAM = "chunk_id"
 MEDIA_PADDING_HEADER = "X-Client-Version"
 
-# Формы источника камеры, которые принимает ретранслятор, по схеме/хосту URL.
+# Формы источника, которые поток умеет отдать в браузер. MJPEG сюда не входит: ни HLS,
+# ни MSE его не несут, то есть такой источник сохранился бы и молча не играл.
 MEDIA_SOURCE_HLS = "hls"
 MEDIA_SOURCE_RTSP = "rtsp"
-MEDIA_SOURCE_MJPEG = "mjpeg"
 MEDIA_SOURCE_SCHEMES = ("http", "https", "rtsp")
-# YouTube — не форма, а явный отказ: go2rtc не умеет YouTube (ни схемы, ни резолвера в нём
-# нет), такой URL уходит в обычный http-загрузчик, получает html и умирает на разборе
-# контейнера. Список держим, чтобы отказ был внятным, а не «не удалось подключиться».
+# YouTube — не форма, а явный отказ: страница-смотрильня требует отдельного резолвера,
+# которого у нас нет, и такой URL умирает на разборе контейнера. Список держим, чтобы
+# отказ был внятным, а не «не удалось подключиться».
 YOUTUBE_HOSTS = frozenset(
     {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"},
 )
 
-# Префикс, который понимает сам go2rtc, а не наш код: `ffmpeg:` отдаёт разбор ffmpeg'у.
-# Нужен там, где родной HLS-ридер go2rtc падает на корректном манифесте: строки с CRLF
-# (хвостовой `\r` попадает в адрес сегмента и `url.Parse` его отклоняет) и fMP4
-# (`#EXT-X-MAP` он не читает вовсе). Проверяется только внутренний URL, префикс уходит
-# в go2rtc как есть.
+# Префикс, оставшийся от прежней ретрансляции через go2rtc: он уходил в его конфиг как
+# есть. Наш код его больше не пишет, но читать обязан — иначе развёрнутая машина после
+# обновления перестанет понимать собственный сохранённый источник.
 MEDIA_SOURCE_PREFIX = "ffmpeg:"
 
 # Ключ и порт маршрута в SNI-документе. Ключ обязан совпадать с тем, который читает
@@ -114,9 +105,6 @@ DECOY_ROUTE: dict[str, JsonValue] = {
     "upstream_tls": False,
     # Клиент и ядро должны видеть одно публичное имя: origin-имя — деталь CDN.
     "public_host_config": "cdn_domain",
-    # HLS-источник для /api/media/*: сайт ретранслирует его reverse_proxy'ем, а не кодирует
-    # локально. Пусто — медиа-эндпоинт пустой (без fallback, как и решено).
-    "media_source_config": "cam_source_url",
 }
 
 # Значения immutable: они попадают в состояние как есть и не должны делиться
@@ -170,6 +158,14 @@ def as_int(value: object) -> int:
         return int(value)
     except ValueError:
         return 0
+
+
+def as_int_or(value: object, default: int) -> int:
+    """Целое из состояния с дефолтом. Ноль — законное значение, поэтому «пусто» и «ноль»
+    надо различать: для `stream_idle_timeout` ноль значит «не гасить никогда»."""
+    if value is None or value == "":
+        return default
+    return as_int(value)
 
 
 def normalize_path(value: object) -> str:
@@ -282,24 +278,19 @@ def normalize_hostname(value: object, *, field: str) -> str:
 
 
 def strip_source_prefix(value: object) -> str:
-    """Снять префикс go2rtc (`ffmpeg:`), если он есть: проверяем форму внутреннего URL."""
+    """Снять префикс прежней ретрансляции (`ffmpeg:`), если он есть: проверяем форму
+    внутреннего URL. Наш код его больше не пишет, но обязан прочитать сохранённый."""
     raw = str(value or "").strip()
     if raw.lower().startswith(MEDIA_SOURCE_PREFIX):
         return raw[len(MEDIA_SOURCE_PREFIX) :].strip()
     return raw
 
 
-def source_needs_ffmpeg(value: object) -> bool:
-    """True, если источник отдан ffmpeg'у: тогда на хосте нужен бинарь ffmpeg."""
-    return str(value or "").strip().lower().startswith(MEDIA_SOURCE_PREFIX)
-
-
 def classify_media_source(value: object) -> str:
-    """Форма источника камеры по URL: `hls`, `rtsp`, `mjpeg` или `youtube`.
+    """Форма источника по URL: `hls` или `rtsp`.
 
-    Форма однозначна и выводится из схемы/хоста, чтобы ретранслятор, сайт и контракт не
-    решали это каждый по-своему. Нераспознанный или запрещённый URL — ошибка, а не
-    догадка: пусть вызывающий сам решает, уходить ли на синтетику.
+    Форма однозначна и выводится из схемы/хоста, чтобы поток и контракт не решали это
+    каждый по-своему. Нераспознанный или запрещённый URL — ошибка, а не догадка.
     """
     raw = str(value or "").strip()
     if not raw:
@@ -312,13 +303,14 @@ def classify_media_source(value: object) -> str:
     if not host:
         raise ValueError("URL источника без хоста")
     if host in YOUTUBE_HOSTS:
-        raise ValueError("YouTube ретранслятор не умеет: нужен прямой поток (HLS/RTSP/MJPEG)")
+        raise ValueError("YouTube поток не умеет: нужен прямой поток (HLS-плейлист или RTSP)")
     if scheme == "rtsp":
         return MEDIA_SOURCE_RTSP
     if parts.path.lower().endswith(".m3u8"):
         return MEDIA_SOURCE_HLS
-    # Остальной http(s) — обычный MJPEG/HTTP-поток вебкамеры.
-    return MEDIA_SOURCE_MJPEG
+    # MJPEG и прочий http-поток отклоняем: в браузере его нечем проиграть, а сохранить и
+    # потом молча показать пустой плеер — худший из вариантов.
+    raise ValueError("нужен HLS-плейлист (.m3u8) или RTSP: браузер не играет MJPEG")
 
 
 def resolve_host(host: str) -> list[str]:
@@ -363,22 +355,6 @@ def assert_public_media_source(
                 "URL источника указывает во внутреннюю или служебную сеть",
             )
     return raw
-
-
-def go2rtc_media_source() -> dict[str, object]:
-    """Цель reverse_proxy для /api/media/*: локальный go2rtc, отдающий HLS потока `decoy`.
-
-    `dir=/api` → rewrite ^/api/media/ → /api/; плейлист `stream.m3u8?src=decoy`. Сам go2rtc
-    тянет любой источник (rtsp/hls/mjpeg) server-side и ремуксит в HLS — так любой
-    источник оказывается на нашем домене с относительными путями.
-    """
-    return {
-        "host": GO2RTC_API_HOST,
-        "port": GO2RTC_API_PORT,
-        "tls": False,
-        "dir": "/api",
-        "playlist": f"stream.m3u8?src={GO2RTC_STREAM_NAME}",
-    }
 
 
 def normalize_media_source(

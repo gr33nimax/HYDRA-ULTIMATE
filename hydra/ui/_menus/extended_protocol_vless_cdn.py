@@ -8,7 +8,11 @@ from hydra.contracts.vless_cdn import (
     MEDIA_MODE_LABELS,
     MEDIA_MODE_PHOTO,
     MEDIA_MODE_VIDEO,
+    STREAM_HLS_TIME_DEFAULT,
+    STREAM_IDLE_TIMEOUT_DEFAULT,
+    STREAM_LIST_SIZE_DEFAULT,
     as_int,
+    as_int_or,
     normalize_media_mode,
 )
 from hydra.core.region_image import as_timestamp
@@ -61,25 +65,23 @@ def _install(state: AppState, plugin: BasePlugin, app: ApplicationService) -> No
 
 def _set_camera(state: AppState, plugin: BasePlugin, app: ApplicationService) -> None:
     """URL источника для видео-режима: формат, как записывать и чем отклоняется."""
-    info("Источник для видео-режима. go2rtc тянет поток сам и отдаёт HLS на /api/media/*.")
+    info("Источник для видео-режима: ffmpeg ремуксит его в живой HLS на /api/media/*.")
     info("")
-    info("Формат — просто URL целиком, без кавычек и пробелов:")
+    info("Формат — URL целиком, без кавычек и пробелов:")
     info("  https://host/live/index.m3u8     HLS-плейлист")
     info("  rtsp://user:pass@host:554/path   RTSP-камера, логин и пароль прямо в URL")
-    info("  http://host/mjpg/video.mjpg      MJPEG-поток")
-    info("  ffmpeg:https://host/x.m3u8       тот же HLS, но разбор отдан ffmpeg")
     info("")
-    info("Префикс ffmpeg: нужен, когда родной HLS-ридер go2rtc ломается на корректном")
-    info("манифесте — переводы строк CRLF или fMP4. Проверить так:")
-    info("  curl -s '<адрес>' | cat -A | head   — ^M$ в конце строк значит CRLF.")
+    info("Нужен H264: H265 проиграется только в Safari, MJPEG не проиграется нигде.")
+    info("Поток поднимается по требованию: первые секунды после захода уйдут на то,")
+    info("чтобы ffmpeg поднялся и нарезал первый сегмент.")
     info("")
     info("Пусто — источник снимается: в видео-режиме плеер останется пустым, в фото — нет.")
     info("Ссылка внутрь сервера (127.0.0.1, 10.x, 192.168.x) и YouTube отклоняются.")
-    url = prompt("URL источника камеры (пусто — снять):").strip()
+    url = prompt("URL источника (пусто — снять):").strip()
     if app.set_vless_cdn_camera(state, url):
-        success("Источник снят" if not url else "Источник сохранён, go2rtc перезапущен")
+        success("Источник снят" if not url else "Источник сохранён")
     else:
-        error("Отклонено: неверная форма, YouTube или ссылка во внутреннюю сеть")
+        error("Отклонено: неверная форма, YouTube, MJPEG или ссылка во внутреннюю сеть")
     prompt("Нажмите Enter")
 
 
@@ -88,14 +90,16 @@ def _media_state(mode: str, config: dict) -> list[tuple[str, str]]:
     if mode == MEDIA_MODE_PHOTO:
         error = str(config.get("image_refresh_error", "") or "")
         stamp = as_timestamp(config.get("image_updated_at"))
-        when = (
-            datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-            if stamp
-            else "ещё не скачано"
-        )
+        when = datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if stamp else "ещё не скачано"
         return [("Фото региона", f"{when} · ошибка: {error}" if error else when)]
     source = str(config.get("cam_source_url", "") or "").strip()
-    return [("Источник", source or "НЕ ЗАДАН — плеер будет пустой")]
+    window = as_int_or(config.get("stream_hls_list_size"), STREAM_LIST_SIZE_DEFAULT)
+    idle = as_int_or(config.get("stream_idle_timeout"), STREAM_IDLE_TIMEOUT_DEFAULT)
+    pause = "не гасить" if idle <= 0 else f"пауза через {idle} с"
+    return [
+        ("Источник", source or "НЕ ЗАДАН — плеер будет пустой"),
+        ("Окно потока", f"{window} сегментов · {pause}"),
+    ]
 
 
 def _set_mode(state: AppState, plugin: BasePlugin, app: ApplicationService) -> None:
@@ -105,7 +109,7 @@ def _set_mode(state: AppState, plugin: BasePlugin, app: ApplicationService) -> N
         (
             "1",
             f"{'●' if current == MEDIA_MODE_VIDEO else '○'} Видео — ретрансляция камеры",
-            "Страница играет живой поток через go2rtc, нужен источник (пункт 5). Даёт"
+            "Страница играет живой поток (пункт 5 — источник, 7 — настройки). Даёт"
             " медиатрафик на origin — то, ради чего заглушка и существует.",
         ),
         (
@@ -124,6 +128,72 @@ def _set_mode(state: AppState, plugin: BasePlugin, app: ApplicationService) -> N
         success(f"Режим: {MEDIA_MODE_LABELS[mode]}")
     else:
         error("Не удалось сменить режим")
+    prompt("Нажмите Enter")
+
+
+def _set_stream(state: AppState, plugin: BasePlugin, app: ApplicationService) -> None:
+    """Настройки потока — три числа, от которых зависят запас и трафик.
+
+    Текущий режим работы показываем здесь, а не в панели: чтобы его узнать, надо
+    спросить systemd, и делать это на каждой отрисовке меню незачем.
+    """
+    desired = _desired_state(state, PROTOCOL_NAME)
+    config = desired.config
+    hls_time = max(1, as_int_or(config.get("stream_hls_time"), STREAM_HLS_TIME_DEFAULT))
+    list_size = max(3, as_int_or(config.get("stream_hls_list_size"), STREAM_LIST_SIZE_DEFAULT))
+    idle = max(0, as_int_or(config.get("stream_idle_timeout"), STREAM_IDLE_TIMEOUT_DEFAULT))
+
+    status = app.media_status()
+    where = "работает" if status.get("active") else "спит"
+    age = status.get("playlist_age")
+    if isinstance(age, (int, float)):
+        where += f", плейлисту {age:.0f} с"
+    info(f"Поток сейчас: {where}")
+    info("")
+
+    options = [
+        (
+            "1",
+            f"Сегмент: {hls_time} с",
+            "Минимум, а не приказ: ffmpeg режет только по кейфреймам источника.",
+        ),
+        (
+            "2",
+            f"Окно плейлиста: {list_size} сегментов",
+            "Больше окно — терпимее к задержке через CDN и больше места на диске.",
+        ),
+        (
+            "3",
+            f"Пауза без зрителя: {'никогда' if idle <= 0 else str(idle) + ' с'}",
+            "Сколько ждать без обращений, прежде чем погасить поток. Ноль — не гасить.",
+        ),
+        ("0", "↩ Назад", ""),
+    ]
+    choice = menu(options, "Настройки потока")
+    fields = {
+        "1": ("hls_time", "Длительность сегмента, с", hls_time),
+        "2": ("list_size", "Размер окна, сегментов", list_size),
+        "3": ("idle_timeout", "Пауза без зрителя, с (0 — не гасить)", idle),
+    }
+    if choice not in fields:
+        return
+    field, label, current = fields[choice]
+    answer = prompt(f"{label} [{current}]:").strip()
+    if not answer:
+        return
+    # object, а не int: в поле попадает ещё не разобранный ответ оператора — его
+    # проверяет контракт, а не этот экран.
+    values: dict[str, object] = {"hls_time": hls_time, "list_size": list_size, "idle_timeout": idle}
+    values[field] = answer
+    if app.set_vless_cdn_stream(
+        state,
+        hls_time=values["hls_time"],
+        list_size=values["list_size"],
+        idle_timeout=values["idle_timeout"],
+    ):
+        success("Сохранено, службы переустановлены")
+    else:
+        error("Не удалось сохранить настройки")
     prompt("Нажмите Enter")
 
 
@@ -173,8 +243,9 @@ def _menu_vless_cdn(
             )
             options.extend(
                 [
-                    ("5", "📹 Источник камеры", "URL потока для видео-режима: HLS, RTSP или MJPEG"),
-                    ("6", "🎞 Режим медиа", "Видео (ретрансляция) или фото региона — что видит посетитель"),
+                    ("5", "📹 Источник потока", "URL для видео-режима: HLS-плейлист или RTSP"),
+                    ("6", "🎞 Режим медиа", "Видео (живой поток) или фото региона — что видит посетитель"),
+                    ("7", "⚙️ Настройки потока", "Сегмент, окно плейлиста, пауза без зрителя"),
                     ("8", "🔄 Переустановить", "Заменить домены и выпустить сертификат заново"),
                     ("9", "❌ Удалить", "Протокол, страница и таймер"),
                 ],
@@ -204,6 +275,8 @@ def _menu_vless_cdn(
             _set_camera(state, plugin, app)
         elif choice == "6" and config.get("cert_file"):
             _set_mode(state, plugin, app)
+        elif choice == "7" and config.get("cert_file"):
+            _set_stream(state, plugin, app)
         elif choice == "8":
             if confirm("Переустановить протокол с новыми доменами?", default=False):
                 _install(state, plugin, app)

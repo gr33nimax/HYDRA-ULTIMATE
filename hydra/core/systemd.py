@@ -4,6 +4,7 @@ hydra/core/systemd.py — Управление systemd-юнитами.
 Создание, удаление, включение/выключение служб и таймеров.
 Используется для Sync Agent, Telegram-ботов и других фоновых служб.
 """
+
 from __future__ import annotations
 
 import subprocess

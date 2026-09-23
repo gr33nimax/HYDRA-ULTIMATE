@@ -17,14 +17,15 @@ from hydra.contracts.vless_cdn import (
     MEDIA_SEQ_PARAM,
     MEDIA_SESSION_HEADER,
     MEDIA_SOURCE_HLS,
-    MEDIA_SOURCE_MJPEG,
     MEDIA_SOURCE_RTSP,
+    STREAM_HLS_TIME_DEFAULT,
+    STREAM_IDLE_TIMEOUT_DEFAULT,
+    STREAM_LIST_SIZE_DEFAULT,
+    as_int_or,
     assert_public_media_source,
     classify_media_source,
-    go2rtc_media_source,
     normalize_media_mode,
     normalize_path,
-    source_needs_ffmpeg,
 )
 
 
@@ -87,8 +88,6 @@ def test_wire_marks_match_the_transport_exactly():
         ("https://cam.example/live/stream.m3u8", MEDIA_SOURCE_HLS),
         ("http://cam.example/live/stream.M3U8", MEDIA_SOURCE_HLS),
         ("rtsp://cam.example:554/stream", MEDIA_SOURCE_RTSP),
-        ("http://cam.example/mjpg/video.mjpg", MEDIA_SOURCE_MJPEG),
-        ("https://cam.example/video", MEDIA_SOURCE_MJPEG),
     ],
 )
 def test_source_form_is_read_from_scheme_and_host(url, expected):
@@ -104,11 +103,16 @@ def test_source_form_is_read_from_scheme_and_host(url, expected):
         "file:///etc/passwd",
         "https://",
         "cam.example/x.m3u8",
-        # YouTube — не форма, а отказ: go2rtc его не умеет. Раньше такой URL проходил
-        # проверку и сохранялся, а потом молча давал мёртвый плеер.
+        # YouTube — не форма, а отказ: страница-смотрильня требует отдельного резолвера,
+        # которого у нас нет. Раньше такой URL проходил проверку, сохранялся, а потом
+        # молча давал мёртвый плеер.
         "https://www.youtube.com/watch?v=abc",
         "https://youtu.be/abc",
         "https://m.youtube.com/watch?v=abc",
+        # MJPEG и прочий http-поток: ни HLS, ни MSE его не несут, то есть источник
+        # сохранился бы и не играл. Отказ должен быть на входе, а не в пустом плеере.
+        "http://cam.example/mjpg/video.mjpg",
+        "https://cam.example/video",
     ],
 )
 def test_source_form_refuses_what_it_cannot_play(url):
@@ -178,16 +182,16 @@ def test_ssrf_refuses_bad_scheme_before_any_resolution():
         assert_public_media_source("file:///etc/passwd", resolve=explode)
 
 
-# ── Префикс ffmpeg: уводит источник с родного HLS-ридера go2rtc ────────────────
+# ── Префикс прежней ретрансляции: читаем, но не пишем ──────────────────────────
 
 
-def test_ffmpeg_prefix_keeps_the_inner_url_checkable():
-    # Родной ридер go2rtc падает на корректных манифестах (CRLF, fMP4); префикс уводит
-    # разбор на ffmpeg. Форма определяется по внутреннему URL, а не по префиксу.
+def test_legacy_prefix_still_reads_the_inner_url():
+    # Префикс `ffmpeg:` остался от прежней ретрансляции через go2rtc: он уходил в её конфиг
+    # как есть. Наш код его больше не пишет, но обязан прочитать сохранённый — иначе
+    # развёрнутая машина после обновления перестанет понимать собственный источник.
     url = "ffmpeg:https://8.8.8.8/x.m3u8"
     assert classify_media_source(url) == MEDIA_SOURCE_HLS
     assert assert_public_media_source(url) == url
-    assert source_needs_ffmpeg(url) is True
 
 
 @pytest.mark.parametrize(
@@ -199,30 +203,35 @@ def test_ffmpeg_prefix_keeps_the_inner_url_checkable():
         "ffmpeg:file:///etc/passwd",
     ],
 )
-def test_ffmpeg_prefix_does_not_bypass_the_source_checks(url):
-    # Префикс — не лазейка: SSRF и форма проверяются по тому, что за ним.
+def test_legacy_prefix_does_not_bypass_the_source_checks(url):
+    # Префикс — не лазейка: форма и SSRF проверяются по тому, что за ним.
     with pytest.raises(ValueError):
         assert_public_media_source(url)
 
 
-def test_bare_source_needs_no_ffmpeg():
-    assert source_needs_ffmpeg("https://8.8.8.8/x.m3u8") is False
-    assert source_needs_ffmpeg("rtsp://8.8.8.8/live") is False
-    assert source_needs_ffmpeg("") is False
+# ── Настройки потока ───────────────────────────────────────────────────────────
 
 
-# ── Разбор HLS-источника под reverse_proxy ────────────────────────────────
+def test_stream_setting_defaults_keep_the_window_wide():
+    # Окно в десять сегментов — это десятки секунд запаса, и именно оно делает поток
+    # терпимым к задержке через CDN. Прошлый ретранслятор держал одну секунду.
+    assert STREAM_LIST_SIZE_DEFAULT >= 10
+    assert STREAM_HLS_TIME_DEFAULT >= 1
+    assert STREAM_IDLE_TIMEOUT_DEFAULT > 0
 
 
-def test_go2rtc_media_source_points_at_localhost_stream():
-    # /api/media/* ретранслируется на локальный go2rtc; rewrite ^/api/media/ → /api/.
-    assert go2rtc_media_source() == {
-        "host": "127.0.0.1",
-        "port": 1984,
-        "tls": False,
-        "dir": "/api",
-        "playlist": "stream.m3u8?src=decoy",
-    }
+@pytest.mark.parametrize(
+    ("value", "default", "expected"),
+    [
+        (None, 120, 120),
+        ("", 120, 120),
+        (0, 120, 0),  # ноль — законное значение: «не гасить»
+        ("45", 120, 45),
+        ("мусор", 120, 0),
+    ],
+)
+def test_stream_setting_reads_the_state_with_a_default(value, default, expected):
+    assert as_int_or(value, default) == expected
 
 
 # ── Режим медиа ────────────────────────────────────────────────────────────────

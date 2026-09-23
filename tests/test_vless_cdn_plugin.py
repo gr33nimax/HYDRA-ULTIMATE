@@ -190,15 +190,29 @@ def test_an_empty_camera_source_clears_it():
 
 @pytest.mark.parametrize(
     "url",
-    ["https://1.1.1.1/live/stream.m3u8", "rtsp://1.1.1.1:554/stream", "http://1.1.1.1/mjpg/video.mjpg"],
+    ["https://1.1.1.1/live/stream.m3u8", "rtsp://1.1.1.1:554/stream"],
 )
 def test_a_public_source_is_accepted(url):
-    # go2rtc ретранслирует любой из этих входов; проверяем только форму + SSRF.
+    # Поток умеет HLS и RTSP; проверяем только форму и SSRF — разбор входа забота ffmpeg.
     state = _state()
     plugin = VlessCdnPlugin()
 
     assert plugin.set_cam_source_url(state, url) is True
     assert state.protocols[PROTOCOL_NAME].config["cam_source_url"] == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://1.1.1.1/mjpg/video.mjpg", "https://www.youtube.com/watch?v=abc"],
+)
+def test_a_source_the_browser_cannot_play_is_refused(url):
+    # MJPEG и YouTube сохранились бы и молча дали пустой плеер: ни HLS, ни MSE их не несут.
+    # Отказ обязан быть на входе, а не обнаруживаться зрителем.
+    state = _state()
+    plugin = VlessCdnPlugin()
+
+    assert plugin.set_cam_source_url(state, url) is False
+    assert state.protocols[PROTOCOL_NAME].config.get("cam_source_url", "") == ""
 
 
 def test_a_hostname_source_is_accepted_when_it_resolves_publicly():
