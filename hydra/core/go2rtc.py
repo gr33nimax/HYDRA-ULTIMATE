@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import tempfile
 import contextlib
+from collections.abc import Callable
 from pathlib import Path
 
 from hydra.contracts.vless_cdn import GO2RTC_API_HOST, GO2RTC_API_PORT, GO2RTC_STREAM_NAME
@@ -20,7 +21,9 @@ from hydra.core.host import HOST
 
 GO2RTC_REPO = "AlexxIT/go2rtc"
 # Пин версии: обновляется правкой этой строки, не «latest» — чужой бинарь на VPS.
-GO2RTC_VERSION = "v1.9.9"
+# v1.9.14+ — у ассетов есть SHA-256 digest в метаданных (старые релизы его не несли,
+# и require_digest их бы отклонил).
+GO2RTC_VERSION = "v1.9.14"
 GO2RTC_BIN = Path("/usr/local/bin/go2rtc")
 GO2RTC_CONFIG = Path("/etc/hydra/go2rtc.yaml")
 GO2RTC_UNIT_NAME = "hydra-go2rtc"
@@ -42,7 +45,9 @@ def render_config(source_url: str) -> str:
     Пустой источник тоже валиден: поток объявлен без адреса (go2rtc это допускает),
     просто отдавать нечего, пока источник не задан.
     """
-    source_line = f"  {GO2RTC_STREAM_NAME}: {_yaml_quote(source_url)}" if str(source_url).strip() else f"  {GO2RTC_STREAM_NAME}:"
+    source_line = (
+        f"  {GO2RTC_STREAM_NAME}: {_yaml_quote(source_url)}" if str(source_url).strip() else f"  {GO2RTC_STREAM_NAME}:"
+    )
     return (
         "api:\n"
         f'  listen: "{GO2RTC_API_HOST}:{GO2RTC_API_PORT}"\n'
@@ -81,11 +86,12 @@ WantedBy=multi-user.target
 """
 
 
-def ensure_binary() -> bool:
+def ensure_binary(*, on_error: Callable[[str], None] | None = None) -> bool:
     """Скачать пинованный go2rtc для нашей арки с проверкой SHA-256; пропустить, если уже есть.
 
     Идентичность релиза подтверждается digest'ом из метаданных GitHub (require_digest),
     а не голым TLS: подменённый ассет не пройдёт. ELF-проверка отсекает html/заглушки.
+    `on_error` (коллбек str->None) прокидывается в загрузчик, чтобы причина сбоя была видна.
     """
     if GO2RTC_BIN.exists() and GO2RTC_BIN.stat().st_size > _MIN_BIN_SIZE:
         return True
@@ -103,6 +109,7 @@ def ensure_binary() -> bool:
             release_tag=GO2RTC_VERSION,
             require_unique=True,
             require_digest=True,
+            on_error=on_error,
         ):
             return False
         if binary.stat().st_size <= _MIN_BIN_SIZE or not verify_elf(binary):
@@ -118,9 +125,9 @@ def write_config(source_url: str) -> None:
     HOST.atomic_write(GO2RTC_CONFIG, render_config(source_url), mode=0o644)
 
 
-def install(source_url: str) -> bool:
+def install(source_url: str, *, on_error: Callable[[str], None] | None = None) -> bool:
     """Поставить бинарь, записать конфиг, поднять сервис. Без бинаря — фейл-клоуз."""
-    if not ensure_binary():
+    if not ensure_binary(on_error=on_error):
         return False
     write_config(source_url)
     if not systemd.install_service(GO2RTC_UNIT_NAME, _unit()):
@@ -128,13 +135,13 @@ def install(source_url: str) -> bool:
     return systemd.start(GO2RTC_UNIT_SERVICE)
 
 
-def apply_source(source_url: str) -> bool:
+def apply_source(source_url: str, *, on_error: Callable[[str], None] | None = None) -> bool:
     """Сменить источник: перезаписать конфиг и перезапустить go2rtc.
 
     Перезапуск, а не reload: on-demand-сессии дешёвые, а SIGHUP go2rtc не гарантирует
     подхват смены streams во всех версиях — перезапуск предсказуем.
     """
-    if not GO2RTC_BIN.exists() and not install(source_url):
+    if not GO2RTC_BIN.exists() and not install(source_url, on_error=on_error):
         return False
     write_config(source_url)
     return systemd.restart(GO2RTC_UNIT_SERVICE)

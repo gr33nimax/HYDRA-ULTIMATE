@@ -33,9 +33,11 @@ def test_config_escapes_quotes_in_source():
 
 def test_unit_runs_the_pinned_binary_with_the_config(monkeypatch):
     captured: dict[str, str] = {}
-    monkeypatch.setattr(go2rtc.systemd, "install_service", lambda name, content: captured.update(name=name, content=content) or True)
+    monkeypatch.setattr(
+        go2rtc.systemd, "install_service", lambda name, content: captured.update(name=name, content=content) or True
+    )
     monkeypatch.setattr(go2rtc.systemd, "start", lambda _svc: True)
-    monkeypatch.setattr(go2rtc, "ensure_binary", lambda: True)
+    monkeypatch.setattr(go2rtc, "ensure_binary", lambda **_k: True)
     monkeypatch.setattr(go2rtc, "write_config", lambda _src: None)
 
     assert go2rtc.install("rtsp://cam/live") is True
@@ -45,7 +47,7 @@ def test_unit_runs_the_pinned_binary_with_the_config(monkeypatch):
 
 
 def test_install_fails_closed_without_binary(monkeypatch):
-    monkeypatch.setattr(go2rtc, "ensure_binary", lambda: False)
+    monkeypatch.setattr(go2rtc, "ensure_binary", lambda **_k: False)
     install = MagicMock(return_value=True)
     monkeypatch.setattr(go2rtc.systemd, "install_service", install)
 
