@@ -41,6 +41,18 @@ def test_existing_install_updater_is_transactional_and_main_by_default():
     assert "wait_for_previous_units" in source
 
 
+def test_stop_managed_units_stops_only_what_is_actually_running():
+    # Юнит может лежать файлом и быть не загруженным: служба по требованию не стартует на
+    # загрузке, а `systemctl stop` на таком возвращает ошибку. Обновление валилось целиком
+    # на одной спящей службе — сначала на остановке, потом ещё раз на откате.
+    source = _source()
+    start = source.index("stop_managed_units() {")
+    body = source[start : source.index("\n}\n", start)]
+
+    assert "ACTIVE_UNITS" in body
+    assert "MANAGED_UNITS" not in body
+
+
 def test_linux_integration_smoke_uses_the_canonical_state_format_version():
     for script in (LINUX_INTEGRATION_SMOKE, LINUX_UPGRADE_SMOKE):
         source = script.read_text(encoding="utf-8")

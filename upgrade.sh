@@ -269,10 +269,14 @@ capture_active_units() {
 }
 
 stop_managed_units() {
+    # Только то, что действительно работает. Юнит может лежать файлом и быть не загруженным
+    # — у нас есть службы по требованию, которые не стартуют на загрузке, — и `systemctl stop`
+    # на таком возвращает ошибку. Без этой проверки одна спящая служба валит обновление
+    # целиком, причём дважды: сначала на остановке, потом ещё раз на откате.
     local failed=0
     local suffix unit
     for suffix in timer service; do
-        for unit in "${MANAGED_UNITS[@]}"; do
+        for unit in "${ACTIVE_UNITS[@]}"; do
             [[ "$unit" == *".$suffix" ]] || continue
             systemctl stop "$unit" || failed=1
         done
