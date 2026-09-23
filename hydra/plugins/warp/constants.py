@@ -2,14 +2,56 @@
 
 from pathlib import Path
 
-WGCF_BIN = Path("/usr/local/bin/wgcf")
-WGCF_PROFILE = Path("/etc/wireguard/wgcf-profile.conf")
-WGCF_ACCOUNT = Path("/etc/wireguard/wgcf-account.toml")
-WARP_INTERFACE = "wgcf"
 WARP_EXTERNAL_CACHE = Path("/var/lib/hydra/warp_external.json")
 WARP_PROFILES_DIR = Path("/etc/hydra/warp_profiles")
-WARP_INSTALL_LOG = Path("/var/log/hydra/warp_install.log")
-RUSSIA_TLD_SUFFIXES = [".ru", ".su"]
+WARP_CATALOG_CACHE = Path("/var/lib/hydra/warp_catalog.json")
+RUSSIA_TLD_SUFFIXES = [".ru", ".su", ".рф", ".xn--p1ai"]
+
+# The rule catalogue is published as data and cached locally, so a service added
+# upstream reaches the operator without a HYDRA release.
+CATALOG_URL = "https://raw.githubusercontent.com/Ground-Zerro/Geo-Aggregator/main/db/catalog.json"
+CATALOG_BASE = "https://raw.githubusercontent.com/Ground-Zerro/Geo-Aggregator/main/"
+
+# Published in the raw tag index but not curated into db/catalog.json. These are
+# the lists this plugin needs most: resources that only work from a foreign
+# address, which is what WARP provides.
+EXTRA_SOURCES = {
+    "refilter": {
+        "name": "Реестр РКН",
+        "url": CATALOG_BASE + "source2/refilter.txt",
+        "desc": "Заблокированное в РФ",
+        "group": "blocked",
+    },
+    "antifilter": {
+        "name": "Антифильтр (IP)",
+        "url": CATALOG_BASE + "source1/antifilter.txt",
+        "desc": "Заблокированные IP-диапазоны",
+        "group": "blocked",
+    },
+}
+
+# Builtin copy of the catalogue used before the first refresh and by install
+# preloading: a fresh host must be able to route something without a network
+# round trip to GitHub.
+EXTERNAL_LISTS = {
+    **EXTRA_SOURCES,
+    "category-ru": {
+        "name": "Все российские сервисы",
+        "url": CATALOG_BASE + "source1/category-ru.txt",
+        "desc": "Российские сервисы",
+        "group": "ru",
+    },
+    "category-ai": {
+        "name": "Все AI-сервисы",
+        "url": CATALOG_BASE + "source1/category-ai.txt",
+        "desc": "AI",
+        "group": "ai",
+    },
+}
+
+# The source whose rule also carries the Russian TLDs: ``list_targets`` routes it
+# somewhere, and every ``.ru``/``.su`` domain follows it.
+RU_TLD_SOURCE = "category-ru"
 
 DEFAULT_WARP_DOMAINS = [
     "openai.com",
@@ -21,45 +63,15 @@ DEFAULT_WARP_DOMAINS = [
     "bard.google.com",
 ]
 
-EXTERNAL_LISTS = {
-    "russia": {
-        "name": "РФ-сервисы",
-        "url": (
-            "https://raw.githubusercontent.com/itdoginfo/allow-domains/"
-            "main/Russia/outside-raw.lst"
-        ),
-        "desc": (
-            "Российские сервисы, доступные только с IP-адресов РФ "
-            "(outside-raw.lst)"
-        ),
-    },
-    "geoblock": {
-        "name": "GEO-block",
-        "url": (
-            "https://raw.githubusercontent.com/itdoginfo/allow-domains/"
-            "main/Categories/geoblock.lst"
-        ),
-        "desc": "Заблокированные в РФ иностранные ресурсы (geoblock.lst)",
-    },
-    "google_ai": {
-        "name": "GoogleAI",
-        "url": (
-            "https://raw.githubusercontent.com/itdoginfo/allow-domains/"
-            "main/Services/google_ai.lst"
-        ),
-        "desc": "Сервисы ИИ от Google: Gemini, AI Studio и др. (google_ai.lst)",
-    },
-}
-
 __all__ = [
+    "CATALOG_BASE",
+    "CATALOG_URL",
     "DEFAULT_WARP_DOMAINS",
     "EXTERNAL_LISTS",
+    "EXTRA_SOURCES",
+    "RU_TLD_SOURCE",
     "RUSSIA_TLD_SUFFIXES",
+    "WARP_CATALOG_CACHE",
     "WARP_EXTERNAL_CACHE",
-    "WARP_INTERFACE",
-    "WARP_INSTALL_LOG",
     "WARP_PROFILES_DIR",
-    "WGCF_ACCOUNT",
-    "WGCF_BIN",
-    "WGCF_PROFILE",
 ]

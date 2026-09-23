@@ -1,4 +1,5 @@
 """Pure Sing-Box configuration assembly and conflict validation."""
+
 from __future__ import annotations
 
 import copy
@@ -85,15 +86,22 @@ def base_config(state: AppState) -> dict:
             ),
         )
 
+    experimental: dict = {}
     if state.network.clash_api_enabled:
-        config["experimental"] = {
-            "clash_api": {
-                "external_controller": (
-                    f"127.0.0.1:{state.network.clash_api_port}"
-                ),
-                "secret": state.network.clash_api_secret,
-            },
+        experimental["clash_api"] = {
+            "external_controller": (f"127.0.0.1:{state.network.clash_api_port}"),
+            "secret": state.network.clash_api_secret,
         }
+    warp = state.protocols.get("warp")
+    if warp is not None and warp.enabled:
+        # The masque outbound registers its own Cloudflare device on first
+        # start; without the cache every sing-box restart would create another.
+        experimental["cache_file"] = {
+            "enabled": True,
+            "store_masque_config": True,
+        }
+    if experimental:
+        config["experimental"] = experimental
     return config
 
 
@@ -135,11 +143,7 @@ def generate_config(
         config.pop("endpoints")
 
     dns_config = next(
-        (
-            fragment.dns
-            for fragment in fragments.values()
-            if fragment.dns
-        ),
+        (fragment.dns for fragment in fragments.values() if fragment.dns),
         None,
     )
     config["dns"] = dns_config or default_dns_config()
@@ -153,10 +157,7 @@ def generate_config(
                 "listen_port": 2080,
             },
         )
-    if not any(
-        outbound.get("tag") == "direct"
-        for outbound in config["outbounds"]
-    ):
+    if not any(outbound.get("tag") == "direct" for outbound in config["outbounds"]):
         config["outbounds"].append({"type": "direct", "tag": "direct"})
     return config
 
@@ -183,10 +184,7 @@ def _listeners_overlap(first: object, second: object) -> bool:
         return second_scope in {"ipv4-any", "ipv4"}
     if second_scope == "ipv4-any":
         return first_scope in {"ipv4-any", "ipv4"}
-    return (
-        first_scope == second_scope
-        and first_value == second_value
-    )
+    return first_scope == second_scope and first_value == second_value
 
 
 def preflight_conflicts(config: dict) -> list[str]:
@@ -227,13 +225,9 @@ def preflight_conflicts(config: dict) -> list[str]:
 
             listen = str(item.get("listen", "0.0.0.0"))
             for previous_listen, previous_port, previous_owner in listeners:
-                if (
-                    previous_port == port
-                    and _listeners_overlap(previous_listen, listen)
-                ):
+                if previous_port == port and _listeners_overlap(previous_listen, listen):
                     errors.append(
-                        f"порт {port} на {listen} пересекается с "
-                        f"{previous_listen} ({previous_owner} и {port_owner})",
+                        f"порт {port} на {listen} пересекается с {previous_listen} ({previous_owner} и {port_owner})",
                     )
             listeners.append((listen, port, port_owner))
 
@@ -241,19 +235,14 @@ def preflight_conflicts(config: dict) -> list[str]:
             if not isinstance(tls, dict):
                 continue
             server_name = tls.get("server_name")
-            names = (
-                server_name
-                if isinstance(server_name, list)
-                else [server_name]
-            )
+            names = server_name if isinstance(server_name, list) else [server_name]
             for name in names:
                 normalized = str(name or "").strip().lower()
                 if not normalized:
                     continue
                 if normalized in snis and snis[normalized] != port_owner:
                     errors.append(
-                        f"SNI '{normalized}' назначен нескольким inbound "
-                        f"({snis[normalized]} и {port_owner})",
+                        f"SNI '{normalized}' назначен нескольким inbound ({snis[normalized]} и {port_owner})",
                     )
                 else:
                     snis[normalized] = port_owner

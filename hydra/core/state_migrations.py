@@ -1,4 +1,5 @@
 """One-time importer from historical state schemas to State Format v1."""
+
 from __future__ import annotations
 
 import copy
@@ -20,6 +21,12 @@ from hydra.core.state_validation import (
 
 _CALLS_WORKERS = (4, 8, 12, 16, 20)
 
+_WARP_SOURCE_RENAMES = {
+    "ext:russia": "ext:category-ru",
+    "ext:geoblock": "ext:refilter",
+    "ext:google_ai": "ext:category-ai",
+}
+
 
 def _normalize_users(raw: dict) -> None:
     for user in raw.setdefault("users", []):
@@ -30,7 +37,9 @@ def _normalize_users(raw: dict) -> None:
             user["devices"] = {}
         else:
             user["devices"] = {
-                device_id: dict(record) if isinstance(record, dict) else {
+                device_id: dict(record)
+                if isinstance(record, dict)
+                else {
                     "first_seen": str(record),
                     "last_seen": str(record),
                     "source": "",
@@ -73,44 +82,48 @@ def _normalize_creator(raw: dict) -> None:
     wdtt_config = wdtt.setdefault("config", {}) if isinstance(wdtt, dict) else {}
     if "headless_enabled" in wdtt_config or "headless_refresh_interval_seconds" in wdtt_config:
         pool_enabled = bool(wdtt_config.pop("headless_enabled", False))
-        sources.append({
-            "pool_enabled": pool_enabled,
-            "refresh_interval_seconds": wdtt_config.pop(
-                "headless_refresh_interval_seconds", 86_400
-            ),
-            "legacy_creator_reinstall_required": pool_enabled,
-        })
+        sources.append(
+            {
+                "pool_enabled": pool_enabled,
+                "refresh_interval_seconds": wdtt_config.pop("headless_refresh_interval_seconds", 86_400),
+                "legacy_creator_reinstall_required": pool_enabled,
+            }
+        )
 
     calls = protocols.get("calls")
     calls_config = calls.setdefault("config", {}) if isinstance(calls, dict) else {}
-    if any(key in calls_config for key in (
-        "qwdtt_pool_enabled", "qwdtt_refresh_interval_seconds",
-        "legacy_creator_reinstall_required",
-    )):
-        sources.append({
-            "pool_enabled": bool(calls_config.pop("qwdtt_pool_enabled", False)),
-            "refresh_interval_seconds": calls_config.pop(
-                "qwdtt_refresh_interval_seconds", 86_400
-            ),
-            "legacy_creator_reinstall_required": bool(calls_config.pop(
-                "legacy_creator_reinstall_required", False
-            )),
-        })
+    if any(
+        key in calls_config
+        for key in (
+            "qwdtt_pool_enabled",
+            "qwdtt_refresh_interval_seconds",
+            "legacy_creator_reinstall_required",
+        )
+    ):
+        sources.append(
+            {
+                "pool_enabled": bool(calls_config.pop("qwdtt_pool_enabled", False)),
+                "refresh_interval_seconds": calls_config.pop("qwdtt_refresh_interval_seconds", 86_400),
+                "legacy_creator_reinstall_required": bool(calls_config.pop("legacy_creator_reinstall_required", False)),
+            }
+        )
 
     vk = providers.get("vk")
-    if isinstance(vk, dict) and any(key in vk for key in (
-        "qwdtt_pool_enabled", "qwdtt_refresh_interval_seconds",
-        "legacy_creator_reinstall_required",
-    )):
-        sources.append({
-            "pool_enabled": bool(vk.pop("qwdtt_pool_enabled", False)),
-            "refresh_interval_seconds": vk.pop(
-                "qwdtt_refresh_interval_seconds", 86_400
-            ),
-            "legacy_creator_reinstall_required": bool(vk.pop(
-                "legacy_creator_reinstall_required", False
-            )),
-        })
+    if isinstance(vk, dict) and any(
+        key in vk
+        for key in (
+            "qwdtt_pool_enabled",
+            "qwdtt_refresh_interval_seconds",
+            "legacy_creator_reinstall_required",
+        )
+    ):
+        sources.append(
+            {
+                "pool_enabled": bool(vk.pop("qwdtt_pool_enabled", False)),
+                "refresh_interval_seconds": vk.pop("qwdtt_refresh_interval_seconds", 86_400),
+                "legacy_creator_reinstall_required": bool(vk.pop("legacy_creator_reinstall_required", False)),
+            }
+        )
         if not vk:
             providers.pop("vk", None)
 
@@ -146,6 +159,26 @@ def _normalize_calls(raw: dict) -> None:
         config.pop(key, None)
 
 
+def _normalize_warp_sources(raw: dict) -> None:
+    """Repoint pre-catalogue WARP route targets at their Geo-Aggregator source.
+
+    The old keys named hand-picked itdog lists; the catalogue names sources
+    after what they contain. A target that already exists under the new key
+    wins, so a re-run never overwrites the operator's current choice.
+    """
+    protocols = raw.get("protocols") or {}
+    protocol = protocols.get("warp") if isinstance(protocols, dict) else None
+    config = protocol.get("config") if isinstance(protocol, dict) else None
+    if not isinstance(config, dict):
+        return
+    targets = config.get("list_targets")
+    if not isinstance(targets, dict):
+        return
+    for old_key, new_key in _WARP_SOURCE_RENAMES.items():
+        if old_key in targets:
+            targets.setdefault(new_key, targets.pop(old_key))
+
+
 def import_legacy_state(data: dict) -> dict:
     """Convert any supported legacy schema directly to State Format v1."""
     validate_raw_state(data)
@@ -158,6 +191,7 @@ def import_legacy_state(data: dict) -> dict:
     raw.setdefault("network", {})
     _normalize_users(raw)
     _normalize_plugin_flags(raw)
+    _normalize_warp_sources(raw)
     _normalize_creator(raw)
     normalize_legacy_kernel(raw)
     wdtt = raw["protocols"].get("wdtt")
@@ -168,13 +202,15 @@ def import_legacy_state(data: dict) -> dict:
             config.setdefault("wg_port", 56001)
     _normalize_calls(raw)
 
-    return pack_state_document({
-        "format_version": STATE_FORMAT_VERSION,
-        "revision": raw.pop("revision"),
-        "core_extensions": {},
-        "feature_extensions": {},
-        **raw,
-    })
+    return pack_state_document(
+        {
+            "format_version": STATE_FORMAT_VERSION,
+            "revision": raw.pop("revision"),
+            "core_extensions": {},
+            "feature_extensions": {},
+            **raw,
+        }
+    )
 
 
 def normalize_state_document(data: dict) -> dict:
@@ -186,6 +222,7 @@ def normalize_state_document(data: dict) -> dict:
     validate_raw_state(raw)
     normalize_legacy_kernel(raw)
     _normalize_calls(raw)
+    _normalize_warp_sources(raw)
     return pack_state_document(raw)
 
 

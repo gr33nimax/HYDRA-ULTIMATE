@@ -378,6 +378,7 @@ sudo hydra plugin command naive set_uot --param uot=false
 hydra plugin query amneziawg protocol_mode_status --with-state
 hydra plugin query vless get_tuning --with-state
 hydra plugin query warp external_sources --with-state
+hydra plugin query warp routing_catalog --with-state
 sudo hydra plugin action dnscrypt apply_server_names \
   --param 'names=["cloudflare","quad9-dnscrypt-ip4-filter-pri"]'
 ```

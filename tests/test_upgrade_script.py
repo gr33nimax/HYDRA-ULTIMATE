@@ -1,8 +1,6 @@
 import re
 from pathlib import Path
 
-from hydra.plugins.warp.parsing import parse_wg_conf
-
 
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "upgrade.sh"
@@ -57,18 +55,12 @@ def test_linux_upgrade_smoke_uses_the_target_checkout_version():
     )
 
 
-def test_linux_integration_smoke_provisions_the_migrated_warp_runtime():
+def test_linux_integration_smoke_needs_no_warp_credentials():
     source = LINUX_INTEGRATION_SMOKE.read_text(encoding="utf-8")
-    marker = "cat > \"$wgcf_profile\" <<'EOF'\n"
-    profile = source.split(marker, 1)[1].split("\nEOF", 1)[0]
 
-    assert "wgcf_profile=/etc/wireguard/wgcf-profile.conf" in source
-    assert 'cat > "$wgcf_profile"' in source
-    assert 'chmod 0600 "$wgcf_profile"' in source
-    assert 'rm -f "$wgcf_profile"' in source
-    assert parse_wg_conf(profile) is not None
-    assert source.index('cat > "$wgcf_profile"') < source.index(
-        "python -m hydra.cli validate",
+    assert "/etc/wireguard" not in source
+    assert source.index("install -m 0600 tests/fixtures/state-2.5.3.json") < (
+        source.index("python -m hydra.cli validate")
     )
 
 
