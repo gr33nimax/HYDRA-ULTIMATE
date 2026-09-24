@@ -12,15 +12,24 @@ RUSSIA_TLD_SUFFIXES = [".ru", ".su", ".рф", ".xn--p1ai"]
 CATALOG_URL = "https://raw.githubusercontent.com/Ground-Zerro/Geo-Aggregator/main/db/catalog.json"
 CATALOG_BASE = "https://raw.githubusercontent.com/Ground-Zerro/Geo-Aggregator/main/"
 
-# Only individual services are routable. The upstream rollups overlap them and
-# made a seemingly precise choice route unrelated destinations as well.
+# Only individual services and the explicitly retained Russian rollup are routable.
 EXTRA_SOURCES: dict[str, dict[str, str]] = {}
-EXTERNAL_LISTS: dict[str, dict[str, str]] = {}
+EXTERNAL_LISTS = {
+    "category-ru": {
+        "name": "Все российские сервисы",
+        "url": CATALOG_BASE + "source1/category-ru.txt",
+        "desc": "Российские сервисы",
+        "group": "ru",
+    },
+}
+RU_TLD_SOURCE = "category-ru"
 
 
 def is_granular_source(key: str) -> bool:
     name = key.lower()
-    return name not in {"refilter", "antifilter"} and not name.startswith(("category-", "itdog-"))
+    return name == RU_TLD_SOURCE or (
+        name not in {"refilter", "antifilter"} and not name.startswith(("category-", "itdog-"))
+    )
 
 
 # Files an older HYDRA release installed for the wgcf transport. The transport no
@@ -50,6 +59,7 @@ __all__ = [
     "EXTERNAL_LISTS",
     "EXTRA_SOURCES",
     "LEGACY_WGCF_PATHS",
+    "RU_TLD_SOURCE",
     "RUSSIA_TLD_SUFFIXES",
     "is_granular_source",
     "WARP_CATALOG_CACHE",

@@ -3,6 +3,7 @@
 import copy
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 import sys
 from unittest.mock import patch, MagicMock
 import json
@@ -476,17 +477,43 @@ def test_direct_rules_are_not_dropped(mock_cache):
 
 
 @patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")
-def test_removed_aggregate_route_is_rejected_instead_of_matching_all_russian_tlds(mock_cache):
+def test_removed_aggregate_route_is_rejected(mock_cache):
     mock_cache.exists.return_value = False
     state = AppState()
     state.protocols["warp"] = PluginState(
         config={
-            "list_targets": {"ext:category-ru": "direct"},
+            "list_targets": {"ext:category-ai": "direct"},
         }
     )
 
-    with pytest.raises(ValueError, match="category-ru.*no longer supported"):
+    with pytest.raises(ValueError, match="category-ai.*no longer supported"):
         WarpPlugin().configure(state)
+
+
+def test_existing_russian_category_route_renders_with_cached_source(tmp_path):
+    cache = tmp_path / "warp_external.json"
+    cache.write_text(json.dumps({"category-ru": {"domains": ["yandex.ru"], "ips": []}}), encoding="utf-8")
+    state = AppState(
+        protocols={
+            "warp": PluginState(
+                enabled=True,
+                config={"list_targets": {"ext:category-ru": "direct"}},
+            )
+        }
+    )
+    with (
+        patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE", cache),
+        patch("hydra.plugins.warp.plugin.WARP_PROFILES_DIR", tmp_path / "profiles"),
+    ):
+        fragment = WarpPlugin().configure(state)
+    assert fragment.outbounds == []
+    suffixes = {
+        suffix
+        for rule in fragment.route_rules
+        if rule["outbound"] == "direct"
+        for suffix in cast(list[str], rule.get("domain_suffix") or [])
+    }
+    assert {"yandex.ru", ".ru", ".su", ".рф", ".xn--p1ai"} <= suffixes
 
 
 @patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")

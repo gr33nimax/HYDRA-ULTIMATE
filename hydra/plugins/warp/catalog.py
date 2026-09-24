@@ -83,9 +83,12 @@ def load_sources(
     if not isinstance(stored, dict) or not stored:
         return _copy(builtin)
     return {
-        str(key): dict(value)
-        for key, value in stored.items()
-        if isinstance(value, dict) and is_granular_source(str(key))
+        **_copy(builtin),
+        **{
+            str(key): dict(value)
+            for key, value in stored.items()
+            if isinstance(value, dict) and is_granular_source(str(key))
+        },
     }
 
 

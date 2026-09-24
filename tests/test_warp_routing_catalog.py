@@ -70,13 +70,14 @@ def test_routing_catalog_excludes_rollups_and_itdog_sources() -> None:
         {},
     )
     keys = {key for category in categories for key in category.source_keys}
-    assert keys == {"ext:youtube", "ext:netflix"}
+    assert keys == {"ext:category-ru", "ext:youtube", "ext:netflix"}
 
 
 def test_catalog_groups_sources_by_their_category() -> None:
     categories = build_routing_catalog(_catalog(), {})
 
-    assert {item.key for item in categories} == {"media"}
+    assert {item.key for item in categories} == {"media", "ru"}
+    assert _category(categories, "ru").source_keys == ("ext:category-ru",)
     media = _category(categories, "media")
     assert media.label == "Медиа и стриминг"
     assert media.source_keys == ("ext:netflix", "ext:youtube")
@@ -182,13 +183,19 @@ def test_reachability_lists_leave_the_russian_services_category() -> None:
 
     categories = build_routing_catalog(sources, {})
 
-    assert categories == []
+    assert _category(categories, "ru").source_keys == ("ext:category-ru",)
 
 
 def test_cached_catalogue_drops_rollups_before_display_or_download(tmp_path: Path) -> None:
     cache = tmp_path / "catalog.json"
     cache.write_text(json.dumps({"sources": _catalog()}), encoding="utf-8")
-    assert set(catalog.load_sources(cache)) == {"youtube", "netflix"}
+    assert set(catalog.load_sources(cache)) == {"category-ru", "youtube", "netflix"}
+
+
+def test_cached_service_catalogue_still_exposes_russian_rollup(tmp_path: Path) -> None:
+    cache = tmp_path / "catalog.json"
+    cache.write_text(json.dumps({"sources": {"youtube": _catalog()["youtube"]}}), encoding="utf-8")
+    assert set(catalog.load_sources(cache)) == {"category-ru", "youtube"}
 
 
 def test_stale_aggregate_only_catalogue_needs_refresh(tmp_path: Path) -> None:
@@ -206,12 +213,12 @@ def test_stale_aggregate_only_catalogue_needs_refresh(tmp_path: Path) -> None:
 
 def test_catalogue_cache_falls_back_when_absent_or_malformed(tmp_path: Path) -> None:
     missing = catalog.load_sources(tmp_path / "absent.json")
-    assert missing == {}  # no broad fallback; local defaults still work offline
+    assert set(missing) == {"category-ru"}  # only the explicitly supported rollup works offline
 
     broken = tmp_path / "broken.json"
     broken.write_text("{not json", encoding="utf-8")
     assert catalog.load_sources(broken) == missing
-    assert set(catalog.load_sources(broken, fallback=_catalog())) == {"youtube", "netflix"}
+    assert set(catalog.load_sources(broken, fallback=_catalog())) == {"category-ru", "youtube", "netflix"}
 
     empty = tmp_path / "empty.json"
     empty.write_text(json.dumps({"sources": {}}), encoding="utf-8")
@@ -240,9 +247,10 @@ def test_catalogue_cache_round_trips_through_a_refresh(tmp_path: Path) -> None:
 
     cache.write_text(written[0][1], encoding="utf-8")
     assert catalog.refresh_due(cache) is False
-    assert catalog.load_sources(cache) == {
-        "youtube": {"name": "YouTube", "url": "u", "desc": "d", "group": "media"},
-    }
+    loaded = catalog.load_sources(cache)
+    assert set(loaded) == {"category-ru", "youtube"}
+    assert loaded["youtube"] == {"name": "YouTube", "url": "u", "desc": "d", "group": "media"}
+    assert loaded["category-ru"]["group"] == "ru"
 
 
 def test_catalogue_refresh_failure_is_reported_not_raised(tmp_path: Path) -> None:
@@ -254,7 +262,7 @@ def test_catalogue_refresh_failure_is_reported_not_raised(tmp_path: Path) -> Non
 
     assert ok is False
     assert "no network" in message
-    assert catalog.load_sources(cache) == {}  # no broad fallback
+    assert set(catalog.load_sources(cache)) == {"category-ru"}  # sole broad fallback
 
 
 def test_legacy_source_keys_are_renamed_and_kept_idempotent() -> None:

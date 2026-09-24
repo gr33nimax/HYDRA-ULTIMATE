@@ -7,7 +7,7 @@ from typing import Callable
 
 from hydra.plugins.base import ConfigFragment
 from hydra.plugins.context import PluginStateAccess
-from hydra.plugins.warp.constants import is_granular_source
+from hydra.plugins.warp.constants import RU_TLD_SOURCE, is_granular_source
 from hydra.plugins.warp.route_validation import validate_route_targets
 
 ParsedProfile = dict[str, dict[str, str]]
@@ -202,6 +202,8 @@ def render_route_rules(
             if not isinstance(cached, dict) or not cached.get("domains") and not cached.get("ips"):
                 raise ValueError(f"WARP source {name} is missing or empty in rule cache")
         source_domains, source_ips = _list_entries(list_key, local_lists, external_rules)
+        if list_key == f"ext:{RU_TLD_SOURCE}":
+            source_domains = [*source_domains, *russia_suffixes]
         domains.update(
             (item.strip().lower(), target)
             for item in source_domains
