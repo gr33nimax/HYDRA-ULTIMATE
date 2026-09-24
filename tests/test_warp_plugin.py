@@ -100,7 +100,7 @@ def test_uninstall_removes_the_legacy_wgcf_artifacts(tmp_path):
         assert WarpPlugin().uninstall() is True
 
     assert not any(path.exists() for path in (binary, profile, account, install_log))
-    assert not cache.exists()
+    assert cache.exists()  # reinstall must retain selected external rules
 
 
 def test_is_ip_or_cidr():
@@ -121,6 +121,17 @@ def test_is_valid_domain():
     assert parsing.is_valid_domain(".xn--p1ai") is True
     assert parsing.is_valid_domain("invalid_domain") is False
     assert parsing.is_valid_domain("http://google.com") is False
+
+
+def test_install_does_not_erase_cached_selected_routes(tmp_path):
+    cache = tmp_path / "warp_external.json"
+    cache.write_text('{"youtube": {"domains": ["youtube.com"], "ips": []}}', encoding="utf-8")
+    with (
+        patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE", cache),
+        patch("hydra.plugins.warp.plugin.catalog.refresh_due", return_value=False),
+    ):
+        assert WarpPlugin().install() is True
+    assert json.loads(cache.read_text(encoding="utf-8"))["youtube"]["domains"] == ["youtube.com"]
 
 
 def test_install_preloads_all_external_lists():
@@ -204,7 +215,8 @@ def test_configure_normalizes_legacy_settings_without_mutating_state(
     )
     before = copy.deepcopy(state)
 
-    WarpPlugin().configure(state)
+    with pytest.raises(ValueError, match="russia.*cache"):
+        WarpPlugin().configure(state)
 
     assert state == before
 
@@ -228,7 +240,7 @@ invalid_domain_name
     # Мок состояния
     mock_state = AppState()
     ps = mock_state.protocols.setdefault("warp", PluginState())
-    ps.config = {"list_targets": {"ext:refilter": "warp"}}
+    ps.config = {"list_targets": {"ext:youtube": "warp"}}
     # Мок пути кэша
     mock_file = MagicMock()
     mock_cache_path.parent = mock_file
@@ -237,7 +249,11 @@ invalid_domain_name
     p = WarpPlugin()
 
     # Вызываем метод
-    ok, msg = p.update_external_rules(mock_state)
+    with patch(
+        "hydra.plugins.warp.plugin.catalog.load_sources",
+        return_value={"youtube": {"name": "YouTube", "url": "https://example.test/youtube.txt"}},
+    ):
+        ok, msg = p.update_external_rules(mock_state)
 
     assert ok is True
     assert "Обновлено списков: 1/1" in msg
@@ -245,8 +261,8 @@ invalid_domain_name
     # Проверяем, что записан валидный JSON с нашими доменами и IP через mock_cache_path
     mock_host.atomic_write.assert_called_once()
     written_data = json.loads(mock_host.atomic_write.call_args.args[1])
-    assert written_data["refilter"]["domains"] == ["openai.com"]
-    assert set(written_data["refilter"]["ips"]) == {"1.1.1.1", "192.168.0.0/16"}
+    assert written_data["youtube"]["domains"] == ["openai.com"]
+    assert set(written_data["youtube"]["ips"]) == {"1.1.1.1", "192.168.0.0/16"}
     assert written_data["updated_at"] == written_data["last_attempt_at"]
 
 
@@ -258,7 +274,7 @@ def test_partial_external_update_is_not_marked_fresh(mock_host, mock_cache, urlo
     state = AppState()
     state.protocols["warp"] = PluginState(
         config={
-            "list_targets": {"ext:refilter": "warp", "ext:antifilter": "warp"},
+            "list_targets": {"ext:youtube": "warp", "ext:netflix": "warp"},
         }
     )
     mock_cache.exists.return_value = False
@@ -268,7 +284,14 @@ def test_partial_external_update_is_not_marked_fresh(mock_host, mock_cache, urlo
     response.__enter__.return_value = response
     urlopen.side_effect = [response, OSError("temporary failure")]
 
-    ok, _ = WarpPlugin().update_external_rules(state)
+    with patch(
+        "hydra.plugins.warp.plugin.catalog.load_sources",
+        return_value={
+            "youtube": {"name": "YouTube", "url": "https://example.test/youtube.txt"},
+            "netflix": {"name": "Netflix", "url": "https://example.test/netflix.txt"},
+        },
+    ):
+        ok, _ = WarpPlugin().update_external_rules(state)
 
     assert ok is False
     written = json.loads(mock_host.atomic_write.call_args.args[1])
@@ -365,6 +388,76 @@ AllowedIPs = 0.0.0.0/0
     assert ip_rule["outbound"] == "warp_russia"
 
 
+def test_specific_direct_route_precedes_overlapping_warp_route():
+    from hydra.plugins.warp.configuration import render_route_rules
+    from hydra.plugins.warp.parsing import is_ip_or_cidr, is_valid_domain
+
+    rules = render_route_rules(
+        {
+            "list_targets": {"local:broad": "warp", "local:specific": "direct"},
+            "local_lists": {
+                "broad": {"domains": ["example.com"], "ips": ["10.0.0.0/8"]},
+                "specific": {"domains": ["app.example.com"], "ips": ["10.0.0.1/32"]},
+            },
+        },
+        {},
+        {"direct", "warp"},
+        russia_suffixes=[],
+        validate_domain=is_valid_domain,
+        validate_ip=is_ip_or_cidr,
+    )
+    assert next(i for i, rule in enumerate(rules) if "app.example.com" in rule.get("domain_suffix", [])) < next(
+        i for i, rule in enumerate(rules) if "example.com" in rule.get("domain_suffix", [])
+    )
+    assert next(i for i, rule in enumerate(rules) if "10.0.0.1/32" in rule.get("ip_cidr", [])) < next(
+        i for i, rule in enumerate(rules) if "10.0.0.0/8" in rule.get("ip_cidr", [])
+    )
+
+
+def test_same_domain_with_direct_and_warp_routes_prioritizes_direct():
+    from hydra.plugins.warp.configuration import render_route_rules
+    from hydra.plugins.warp.parsing import is_ip_or_cidr, is_valid_domain
+
+    rules = render_route_rules(
+        {
+            "list_targets": {"local:proxy": "warp", "local:exclude": "direct"},
+            "local_lists": {
+                "proxy": {"domains": ["example.com"], "ips": []},
+                "exclude": {"domains": ["example.com"], "ips": []},
+            },
+        },
+        {},
+        {"direct", "warp"},
+        russia_suffixes=[],
+        validate_domain=is_valid_domain,
+        validate_ip=is_ip_or_cidr,
+    )
+    assert rules == [
+        {"domain_suffix": ["example.com"], "outbound": "direct"},
+        {"domain_suffix": ["example.com"], "outbound": "warp"},
+    ]
+
+
+def test_enabled_external_source_missing_from_cache_rejects_config(tmp_path):
+    from hydra.plugins.warp.configuration import configure_warp
+    from hydra.plugins.warp.parsing import is_ip_or_cidr, is_valid_domain, parse_endpoint, parse_wg_conf
+
+    state = AppState(protocols={"warp": PluginState(enabled=True, config={"list_targets": {"ext:youtube": "warp"}})})
+    with pytest.raises(ValueError, match="youtube.*cache"):
+        configure_warp(
+            state,
+            profiles_dir=tmp_path,
+            external_cache=tmp_path / "missing.json",
+            default_domains=[],
+            russia_suffixes=[],
+            parse_config=parse_wg_conf,
+            parse_endpoint=parse_endpoint,
+            validate_domain=is_valid_domain,
+            validate_ip=is_ip_or_cidr,
+            resolve_host=lambda value: value,
+        )
+
+
 @patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")
 def test_direct_rules_are_not_dropped(mock_cache):
     mock_cache.exists.return_value = False
@@ -383,7 +476,7 @@ def test_direct_rules_are_not_dropped(mock_cache):
 
 
 @patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")
-def test_russia_external_list_always_includes_all_russian_tlds(mock_cache):
+def test_removed_aggregate_route_is_rejected_instead_of_matching_all_russian_tlds(mock_cache):
     mock_cache.exists.return_value = False
     state = AppState()
     state.protocols["warp"] = PluginState(
@@ -392,14 +485,8 @@ def test_russia_external_list_always_includes_all_russian_tlds(mock_cache):
         }
     )
 
-    fragment = WarpPlugin().configure(state)
-
-    assert fragment.route_rules == [
-        {
-            "domain_suffix": [".ru", ".su", ".xn--p1ai", ".рф"],
-            "outbound": "direct",
-        }
-    ]
+    with pytest.raises(ValueError, match="category-ru.*no longer supported"):
+        WarpPlugin().configure(state)
 
 
 @patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE")

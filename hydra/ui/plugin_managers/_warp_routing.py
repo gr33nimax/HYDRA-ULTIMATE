@@ -53,26 +53,17 @@ def _destinations(app: ApplicationService) -> list[str]:
 
 
 def _choose_target(destinations: list[str], title: str) -> str | None:
-    """Return the chosen destination, ``none`` to detach, or None to cancel."""
+    """Return the chosen destination, or None to cancel."""
     options = [
         (str(index), destination, f"Направить на {destination}")
         for index, destination in enumerate(destinations, start=1)
     ]
-    options.append(
-        (
-            str(len(destinations) + 1),
-            "none (отключить)",
-            "Снять маршрут со списка",
-        ),
-    )
     options.append(("0", "Отмена", ""))
     index = facade._menu_number(menu(options, title))
     if index is None:
         return None
     if 1 <= index <= len(destinations):
         return destinations[index - 1]
-    if index == len(destinations) + 1:
-        return "none"
     return None
 
 
@@ -130,7 +121,7 @@ def _category_lines(categories: list[dict]) -> list[str]:
         "  " + "─" * 60,
         "  Категория направляется целиком; внутри — конкретные сервисы",
         "  (youtube, google, telegram), и каждый можно направить отдельно.",
-        f"  {DIM}«обычно → WARP» — сервису нужен иностранный адрес, «обычно → DIRECT» — российский.{NC}",
+        f"  {DIM}DIRECT — выход с VPS; WARP — выход через Cloudflare.{NC}",
     ]
 
 
@@ -199,11 +190,6 @@ def _menu_category_sources(
             _menu_category_source_list(state, ps, app, category)
 
 
-def _is_aggregate(key: str) -> bool:
-    """Whether an upstream source is its own roll-up rather than one service."""
-    return key.startswith("ext:category-")
-
-
 def _filter_sources(sources: list[tuple[str, str]], query: str) -> list[tuple[str, str]]:
     """Sources whose name or key contains the query, in catalogue order."""
     needle = query.strip().lower()
@@ -246,14 +232,8 @@ def _menu_category_source_list(
             lines.append(f"  {DIM}Ничего не найдено.{NC}")
         for offset, (key, name) in enumerate(chunk, start=start + 1):
             target = str(list_targets.get(key) or "none")
-            mark = f" {DIM}· агрегат{NC}" if _is_aggregate(key) else ""
             lines.append(
-                f"  {offset:>3}. {CYAN}{str(name):<30}{NC} {_target_label(target)}{mark}",
-            )
-        if any(_is_aggregate(key) for key, _ in all_sources):
-            lines.append(
-                f"  {DIM}«агрегат» — сводный список Geo-Aggregator: не сумма сервисов выше, "
-                f"а свой набор, частично с ними пересекается.{NC}",
+                f"  {offset:>3}. {CYAN}{str(name):<30}{NC} {_target_label(target)}",
             )
         lines.extend(
             [

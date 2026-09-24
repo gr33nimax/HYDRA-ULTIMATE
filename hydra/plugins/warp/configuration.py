@@ -1,4 +1,5 @@
 import copy
+import ipaddress
 import json
 import re
 from pathlib import Path
@@ -6,7 +7,7 @@ from typing import Callable
 
 from hydra.plugins.base import ConfigFragment
 from hydra.plugins.context import PluginStateAccess
-from hydra.plugins.warp.constants import RU_TLD_SOURCE
+from hydra.plugins.warp.constants import is_granular_source
 from hydra.plugins.warp.route_validation import validate_route_targets
 
 ParsedProfile = dict[str, dict[str, str]]
@@ -186,43 +187,47 @@ def render_route_rules(
     validate_domain: Callable[[str], bool],
     validate_ip: Callable[[str], bool],
 ) -> list[dict]:
-    outbound_domains: dict[str, list] = {}
-    outbound_ips: dict[str, list] = {}
+    domains: set[tuple[str, str]] = set()
+    ips: set[tuple[str, str]] = set()
     local_lists = config.get("local_lists", {})
     validate_route_targets(config.get("list_targets", {}), destinations)
     for list_key, target in config.get("list_targets", {}).items():
         if not target or target == "none":
             continue
-        domains, ips = _list_entries(
-            list_key,
-            local_lists,
-            external_rules,
-            russia_suffixes,
+        if list_key.startswith("ext:"):
+            name = list_key.split(":", 1)[1]
+            if not is_granular_source(name):
+                raise ValueError(f"WARP source {name} is no longer supported; choose individual services")
+            cached = external_rules.get(name)
+            if not isinstance(cached, dict) or not cached.get("domains") and not cached.get("ips"):
+                raise ValueError(f"WARP source {name} is missing or empty in rule cache")
+        source_domains, source_ips = _list_entries(list_key, local_lists, external_rules)
+        domains.update(
+            (item.strip().lower(), target)
+            for item in source_domains
+            if isinstance(item, str) and validate_domain(item.strip())
         )
-        if domains:
-            outbound_domains.setdefault(target, []).extend(domains)
-        if ips:
-            outbound_ips.setdefault(target, []).extend(ips)
+        ips.update((item.strip(), target) for item in source_ips if isinstance(item, str) and validate_ip(item.strip()))
 
-    rules = []
-    for target, values in outbound_domains.items():
-        domains = sorted(
-            {item.strip().lower() for item in values if isinstance(item, str) and validate_domain(item.strip())}
-        )
-        if domains:
-            rules.append({"domain_suffix": domains, "outbound": target})
-    for target, values in outbound_ips.items():
-        ips = sorted({item.strip() for item in values if isinstance(item, str) and validate_ip(item.strip())})
-        if ips:
-            rules.append({"ip_cidr": ips, "outbound": target})
-    return rules
+    # First matching route wins: narrow suffix/CIDR before broad, direct on ties.
+    domain_order = sorted(domains, key=lambda pair: (-pair[0].count("."), -len(pair[0]), pair[1] != "direct", pair))
+    ip_order = sorted(
+        ips, key=lambda pair: (-ipaddress.ip_network(pair[0], strict=False).prefixlen, pair[1] != "direct", pair)
+    )
+    result = []
+    for field, entries in (("domain_suffix", domain_order), ("ip_cidr", ip_order)):
+        for value, target in entries:
+            if result and field in result[-1] and result[-1]["outbound"] == target:
+                result[-1][field].append(value)
+            else:
+                result.append({field: [value], "outbound": target})
+    return result
 
 
 def _list_entries(
     list_key: str,
     local_lists: dict,
     external_rules: dict,
-    russia_suffixes: list[str],
 ) -> tuple[list, list]:
     if list_key.startswith("local:"):
         values = local_lists.get(list_key.split(":", 1)[1], {})
@@ -230,10 +235,7 @@ def _list_entries(
     if list_key.startswith("ext:"):
         name = list_key.split(":", 1)[1]
         values = external_rules.get(name, {})
-        domains = values.get("domains", [])
-        if name == RU_TLD_SOURCE:
-            domains = [*domains, *russia_suffixes]
-        return domains, values.get("ips", [])
+        return values.get("domains", []), values.get("ips", [])
     return [], []
 
 

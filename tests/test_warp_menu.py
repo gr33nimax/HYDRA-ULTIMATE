@@ -9,8 +9,13 @@ from hydra.ui.plugin_managers._warp_menu import (
     _options,
     _status_lines,
 )
+from hydra.ui.plugin_managers._facade_bridge import bind_facade
+from hydra.ui.plugin_managers import warp as warp_facade
+from hydra.ui.plugin_managers._warp_local_lists import _menu_manage_local_list_items, _menu_rules_lists
+from hydra.ui.plugin_managers._warp_profiles import _menu_geo_profiles
 from hydra.ui.plugin_managers._warp_routing import (
     _category_row,
+    _choose_target,
     _filter_sources,
     _target_label,
 )
@@ -28,6 +33,90 @@ def test_a_source_can_be_found_by_name():
     assert _filter_sources(sources, "ext:netflix") == [("ext:netflix", "Netflix")]
     assert _filter_sources(sources, "") == sources
     assert _filter_sources(sources, "нет-такого") == []
+
+
+def test_failed_apply_restores_deleted_local_list_and_target():
+    ps = PluginState(
+        enabled=True,
+        config={
+            "local_lists": {"mine": {"domains": ["example.com"], "ips": []}},
+            "list_targets": {"local:mine": "warp"},
+        },
+    )
+    state = AppState(protocols={"warp": ps})
+    app = SimpleNamespace(admin=SimpleNamespace(save_state=MagicMock()), apply=MagicMock(return_value=False))
+    with (
+        bind_facade(warp_facade),
+        patch.object(warp_facade, "_external_sources", return_value={}),
+        patch("hydra.ui.plugin_managers._warp_local_lists.menu", side_effect=["3", "1", "0"]),
+        patch("hydra.ui.plugin_managers._warp_local_lists.confirm", return_value=True),
+        patch("hydra.ui.plugin_managers._warp_local_lists.prompt"),
+        patch("hydra.ui.plugin_managers._warp_local_lists.panel"),
+        patch("hydra.ui.plugin_managers._warp_local_lists.clear"),
+        patch("hydra.ui.plugin_managers._warp_local_lists.success"),
+        patch("hydra.ui.plugin_managers._warp_local_lists.error"),
+    ):
+        _menu_rules_lists(state, ps, cast(ApplicationService, app))
+    assert "mine" in cast(dict, ps.config["local_lists"])
+    assert cast(dict, ps.config["list_targets"])["local:mine"] == "warp"
+
+
+def test_failed_apply_restores_local_list_before_next_edit():
+    ps = PluginState(
+        enabled=True,
+        config={
+            "local_lists": {"mine": {"domains": ["example.com"], "ips": []}},
+            "list_targets": {"local:mine": "warp"},
+        },
+    )
+    state = AppState(protocols={"warp": ps})
+    app = SimpleNamespace(admin=SimpleNamespace(save_state=MagicMock()), apply=MagicMock(return_value=False))
+    with (
+        bind_facade(warp_facade),
+        patch("hydra.ui.plugin_managers._warp_local_lists.menu", side_effect=["1", "0"]),
+        patch("hydra.ui.plugin_managers._warp_local_lists.prompt", side_effect=["new.example.com", ""]),
+        patch("hydra.ui.plugin_managers._warp_local_lists.panel"),
+        patch("hydra.ui.plugin_managers._warp_local_lists.clear"),
+        patch("hydra.ui.plugin_managers._warp_local_lists.success"),
+        patch("hydra.ui.plugin_managers._warp_local_lists.error"),
+    ):
+        _menu_manage_local_list_items(state, ps, "mine", cast(ApplicationService, app))
+    assert cast(dict, ps.config["local_lists"])["mine"]["domains"] == ["example.com"]
+
+
+def test_relay_with_active_routes_cannot_be_deleted_and_silently_sent_direct():
+    state = AppState(
+        protocols={"warp": PluginState(enabled=True, config={"list_targets": {"local:mylist": "warp_finland"}})}
+    )
+    app = SimpleNamespace(
+        plugin_action=MagicMock(), apply=MagicMock(return_value=True), admin=SimpleNamespace(save_state=MagicMock())
+    )
+    with (
+        bind_facade(warp_facade),
+        patch.object(
+            warp_facade,
+            "_warp_observation",
+            return_value={
+                "profile_directory": "/tmp",
+                "profiles": [{"name": "finland"}],
+            },
+        ),
+        patch("hydra.ui.plugin_managers._warp_profiles.menu", side_effect=["1", "1", "0"]),
+        patch("hydra.ui.plugin_managers._warp_profiles.confirm", return_value=True),
+        patch("hydra.ui.plugin_managers._warp_profiles.panel"),
+        patch("hydra.ui.plugin_managers._warp_profiles.clear"),
+        patch("hydra.ui.plugin_managers._warp_profiles.prompt"),
+        patch("hydra.ui.plugin_managers._warp_profiles.error"),
+    ):
+        _menu_geo_profiles(state, state.protocols["warp"], cast(ApplicationService, app))
+    app.plugin_action.assert_not_called()
+    assert cast(dict, state.protocols["warp"].config["list_targets"])["local:mylist"] == "warp_finland"
+
+
+def test_route_picker_has_only_destinations_and_cancel():
+    with bind_facade(warp_facade), patch("hydra.ui.plugin_managers._warp_routing.menu", return_value="3") as menu:
+        assert _choose_target(["direct", "warp"], "route") is None
+    assert [option[1] for option in menu.call_args.args[0]] == ["direct", "warp", "Отмена"]
 
 
 def test_a_partially_routed_category_names_its_real_coverage():

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import contextlib
 import socket
 from hydra.core.host import HOST
-from hydra.core.state_models import AppState, PluginState
 from hydra.plugins.base import (
     BasePlugin,
     ConfigFragment,
@@ -86,12 +84,12 @@ class WarpPlugin(WarpMaintenanceMixin, BasePlugin):
         print("  WARP готов к работе: устройство Cloudflare регистрирует ядро")
         lists_ok, message = self.preload_external_rules()
         if not lists_ok:
-            print(f"  Не удалось заранее загрузить списки WARP: {message}")
+            print(f"  Не удалось обновить каталог WARP: {message}")
         return True
 
     def uninstall(self) -> bool:
-        with contextlib.suppress(OSError):
-            WARP_EXTERNAL_CACHE.unlink(missing_ok=True)
+        # Retain the rule cache: reinstall() calls uninstall() before restoring
+        # selected routes, and must not silently turn those routes into direct.
         removed = observation.remove_legacy_install(LEGACY_WGCF_PATHS)
         # Nothing else is touched on purpose: the core keeps terminating WARP, so
         # removing the plugin must not take the device away from it.
@@ -132,16 +130,10 @@ class WarpPlugin(WarpMaintenanceMixin, BasePlugin):
         )
 
     def preload_external_rules(self) -> tuple[bool, str]:
-        state = AppState(
-            protocols={
-                "warp": PluginState(
-                    config={
-                        "list_targets": {f"ext:{key}": "warp" for key in EXTERNAL_LISTS},
-                    }
-                )
-            }
-        )
-        return self.update_external_rules(state)
+        """Refresh the catalogue without deleting cached rules selected in state."""
+        if not catalog.refresh_due(WARP_CATALOG_CACHE):
+            return True, "Каталог списков актуален"
+        return catalog.refresh_sources(WARP_CATALOG_CACHE, host=HOST)
 
     def update_external_rules(
         self,

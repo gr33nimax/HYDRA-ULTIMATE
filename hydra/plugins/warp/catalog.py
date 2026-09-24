@@ -18,6 +18,7 @@ from hydra.plugins.warp.constants import (
     CATALOG_URL,
     EXTERNAL_LISTS,
     EXTRA_SOURCES,
+    is_granular_source,
 )
 
 CATALOG_TTL = timedelta(hours=24)
@@ -26,7 +27,7 @@ _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
 
 def _copy(sources: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
-    return {key: dict(value) for key, value in sources.items()}
+    return {key: dict(value) for key, value in sources.items() if is_granular_source(key)}
 
 
 def fetch_sources(*, timeout: int = _REQUEST_TIMEOUT) -> dict[str, dict[str, str]]:
@@ -54,7 +55,7 @@ def fetch_sources(*, timeout: int = _REQUEST_TIMEOUT) -> dict[str, dict[str, str
             continue
         key = str(service.get("id") or "").strip()
         path = str(service.get("src") or "").strip()
-        if not key or not path:
+        if not key or not path or not is_granular_source(key):
             continue
         group = str(service.get("cat") or "other")
         sources[key] = {
@@ -63,7 +64,7 @@ def fetch_sources(*, timeout: int = _REQUEST_TIMEOUT) -> dict[str, dict[str, str
             "desc": labels.get(group, group),
             "group": group,
         }
-    if len(sources) <= len(EXTRA_SOURCES):
+    if not sources:
         raise ValueError("catalogue carries no services")
     return sources
 
@@ -81,8 +82,11 @@ def load_sources(
     stored = document.get("sources") if isinstance(document, dict) else None
     if not isinstance(stored, dict) or not stored:
         return _copy(builtin)
-    loaded = {str(key): dict(value) for key, value in stored.items() if isinstance(value, dict)}
-    return loaded or _copy(builtin)
+    return {
+        str(key): dict(value)
+        for key, value in stored.items()
+        if isinstance(value, dict) and is_granular_source(str(key))
+    }
 
 
 def refresh_due(cache: Path, *, max_age: timedelta = CATALOG_TTL) -> bool:
@@ -90,6 +94,10 @@ def refresh_due(cache: Path, *, max_age: timedelta = CATALOG_TTL) -> bool:
     try:
         document = json.loads(cache.read_text(encoding="utf-8"))
         updated_at = datetime.fromisoformat(str(document["updated_at"]))
+        if not isinstance(document["sources"], dict) or not any(
+            is_granular_source(str(key)) for key in document["sources"]
+        ):
+            return True
     except (OSError, ValueError, KeyError, TypeError):
         return True
     return datetime.now() - updated_at >= max_age

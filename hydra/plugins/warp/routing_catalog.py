@@ -10,29 +10,21 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
+from hydra.plugins.warp.constants import is_granular_source
+
 DEFAULT_LOCAL_LIST = "default"
 AI_GROUP = "ai"
 LOCAL_GROUP = "local"
 OTHER_GROUP = "other"
 AVAILABILITY_GROUP = "availability"
 
-# Upstream files these two under "ru", but they are reachability lists, not
-# Russian services: one holds what is blocked inside Russia together with the
-# foreign sites that refuse Russian subnets, the other holds Russian services
-# that only answer from outside. Left inside "Российские сервисы" they made the
-# category unrouteable, because its direction stopped being one thing.
-SOURCE_GROUP_OVERRIDES = {
-    "itDog-russia-inside": AVAILABILITY_GROUP,
-    "itDog-russia-outside": AVAILABILITY_GROUP,
-}
+# Kept for the catalogue API; removed sources no longer need overrides.
+SOURCE_GROUP_OVERRIDES: dict[str, str] = {}
 
-# Which way a category has to be routed to work at all: the RU group is reachable
-# from a Russian address, while everything else in the catalogue is either
-# blocked here or refuses Russian subnets and needs the foreign address WARP
-# provides. Routing a category the wrong way is the failure operators actually
-# hit, so the hint is part of the menu instead of folklore.
+# direct exits from the VPS, which may be outside Russia; do not label it
+# a Russian egress just because the upstream category is named "ru".
 GROUP_DIRECTIONS = {
-    "ru": "direct",
+    "ru": "",
     "blocked": "warp",
     AVAILABILITY_GROUP: "",
     LOCAL_GROUP: "",
@@ -41,7 +33,6 @@ DEFAULT_DIRECTION = "warp"
 
 GROUP_LABELS = {
     "blocked": "Заблокированное в РФ",
-    AVAILABILITY_GROUP: "Доступность из РФ (itdog)",
     LOCAL_GROUP: "Мои списки",
     OTHER_GROUP: "Прочее",
 }
@@ -49,26 +40,13 @@ GROUP_LABELS = {
 # What a group actually holds, for the groups HYDRA assembled itself. Upstream
 # groups are self-describing through the sources the catalogue puts in them.
 GROUP_NOTES = {
-    "blocked": (
-        "Что блокируют внутри РФ: домены из списка Re:filter "
-        "(runetfreedom/russia-v2ray-rules-dat) и IP-адреса с antifilter.download. "
-        "Таким сервисам нужен иностранный адрес — WARP. Это самый крупный набор: "
-        "в нём есть и то, что уже покрыто категориями по сервисам."
-    ),
     LOCAL_GROUP: "Списки, которые оператор завёл сам.",
-    AVAILABILITY_GROUP: (
-        "Списки доступности от itdoginfo, а не российские сервисы. «Доступны только "
-        "из РФ» — то, что режут в России, плюс зарубежные сайты, которые сами "
-        "отказывают российским адресам; «Недоступны из РФ» — российские сервисы, "
-        "которые отвечают только снаружи. Направления у них разные — смотри по факту."
-    ),
 }
 
 # Menu order: what an operator reaches for first, then the upstream catalogue.
 GROUP_ORDER = (
     "blocked",
     "ru",
-    AVAILABILITY_GROUP,
     "ai",
     "media",
     "social",
@@ -137,6 +115,8 @@ def build_routing_catalog(
     """
     grouped: dict[str, list[tuple[str, str, str]]] = {}
     for key in sorted(external_lists):
+        if not is_granular_source(key):
+            continue
         item = external_lists[key]
         if not isinstance(item, dict):
             continue

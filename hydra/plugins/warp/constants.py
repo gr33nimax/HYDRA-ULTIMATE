@@ -12,46 +12,16 @@ RUSSIA_TLD_SUFFIXES = [".ru", ".su", ".рф", ".xn--p1ai"]
 CATALOG_URL = "https://raw.githubusercontent.com/Ground-Zerro/Geo-Aggregator/main/db/catalog.json"
 CATALOG_BASE = "https://raw.githubusercontent.com/Ground-Zerro/Geo-Aggregator/main/"
 
-# Published in the raw tag index but not curated into db/catalog.json. These are
-# the lists this plugin needs most: resources that only work from a foreign
-# address, which is what WARP provides.
-EXTRA_SOURCES = {
-    "refilter": {
-        "name": "Домены (Re:filter)",
-        "url": CATALOG_BASE + "source2/refilter.txt",
-        "desc": "Список Re:filter из runetfreedom/russia-v2ray-rules-dat",
-        "group": "blocked",
-    },
-    "antifilter": {
-        "name": "IP-адреса (Антифильтр)",
-        "url": CATALOG_BASE + "source1/antifilter.txt",
-        "desc": "Список antifilter.download",
-        "group": "blocked",
-    },
-}
+# Only individual services are routable. The upstream rollups overlap them and
+# made a seemingly precise choice route unrelated destinations as well.
+EXTRA_SOURCES: dict[str, dict[str, str]] = {}
+EXTERNAL_LISTS: dict[str, dict[str, str]] = {}
 
-# Builtin copy of the catalogue used before the first refresh and by install
-# preloading: a fresh host must be able to route something without a network
-# round trip to GitHub.
-EXTERNAL_LISTS = {
-    **EXTRA_SOURCES,
-    "category-ru": {
-        "name": "Все российские сервисы",
-        "url": CATALOG_BASE + "source1/category-ru.txt",
-        "desc": "Российские сервисы",
-        "group": "ru",
-    },
-    "category-ai": {
-        "name": "Все AI-сервисы",
-        "url": CATALOG_BASE + "source1/category-ai.txt",
-        "desc": "AI",
-        "group": "ai",
-    },
-}
 
-# The source whose rule also carries the Russian TLDs: ``list_targets`` routes it
-# somewhere, and every ``.ru``/``.su`` domain follows it.
-RU_TLD_SOURCE = "category-ru"
+def is_granular_source(key: str) -> bool:
+    name = key.lower()
+    return name not in {"refilter", "antifilter"} and not name.startswith(("category-", "itdog-"))
+
 
 # Files an older HYDRA release installed for the wgcf transport. The transport no
 # longer uses them, but an updated host still carries a downloaded binary and a
@@ -80,8 +50,8 @@ __all__ = [
     "EXTERNAL_LISTS",
     "EXTRA_SOURCES",
     "LEGACY_WGCF_PATHS",
-    "RU_TLD_SOURCE",
     "RUSSIA_TLD_SUFFIXES",
+    "is_granular_source",
     "WARP_CATALOG_CACHE",
     "WARP_EXTERNAL_CACHE",
     "WARP_PROFILES_DIR",

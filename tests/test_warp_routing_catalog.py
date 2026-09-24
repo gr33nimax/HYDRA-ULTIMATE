@@ -61,25 +61,27 @@ def _category(categories: list, key: str):
     return next(item for item in categories if item.key == key)
 
 
+def test_routing_catalog_excludes_rollups_and_itdog_sources() -> None:
+    categories = build_routing_catalog(
+        _catalog()
+        | {
+            "itDog-russia-inside": {"name": "itDog", "url": "u", "group": "ru"},
+        },
+        {},
+    )
+    keys = {key for category in categories for key in category.source_keys}
+    assert keys == {"ext:youtube", "ext:netflix"}
+
+
 def test_catalog_groups_sources_by_their_category() -> None:
     categories = build_routing_catalog(_catalog(), {})
 
-    blocked = _category(categories, "blocked")
-    assert blocked.label == "Заблокированное в РФ"
-    assert blocked.direction == "warp"
-    assert blocked.source_keys == ("ext:antifilter", "ext:refilter")
-    assert blocked.sources == ("Антифильтр (IP)", "Реестр РКН")
-
+    assert {item.key for item in categories} == {"media"}
     media = _category(categories, "media")
     assert media.label == "Медиа и стриминг"
     assert media.source_keys == ("ext:netflix", "ext:youtube")
 
-    ru = _category(categories, "ru")
-    assert ru.label == "Российские сервисы"
-    assert ru.direction == "direct"
-
-    # Ordering puts the lists an operator reaches for first.
-    assert [item.key for item in categories][:3] == ["blocked", "ru", "ai"]
+    assert media.direction == "warp"
 
 
 def test_category_target_reports_uniform_and_mixed_routes() -> None:
@@ -111,7 +113,7 @@ def test_default_hydra_domains_join_the_ai_category() -> None:
 
     ai = _category(categories, "ai")
     assert "local:default" in ai.source_keys
-    assert "ext:category-ai" in ai.source_keys
+    assert ai.source_keys == ("local:default",)
     assert "HYDRA: default" in ai.sources
 
 
@@ -145,10 +147,6 @@ def test_category_menu_counts_a_partially_routed_category() -> None:
     media = next(item for item in menu if item["key"] == "media")
     assert media["target"] == "warp"
     assert (media["routed"], media["total"]) == (1, 2)
-
-    blocked = next(item for item in menu if item["key"] == "blocked")
-    assert (blocked["routed"], blocked["total"]) == (0, 2)
-    assert "antifilter.download" in blocked["note"]
 
     media = next(item for item in menu if item["key"] == "media")
     assert media["note"] == ""
@@ -184,25 +182,36 @@ def test_reachability_lists_leave_the_russian_services_category() -> None:
 
     categories = build_routing_catalog(sources, {})
 
-    ru = _category(categories, "ru")
-    assert ru.source_keys == ("ext:category-bank-ru", "ext:category-ru")
+    assert categories == []
 
-    availability = _category(categories, "availability")
-    assert availability.label == "Доступность из РФ (itdog)"
-    assert availability.source_keys == (
-        "ext:itDog-russia-inside",
-        "ext:itDog-russia-outside",
+
+def test_cached_catalogue_drops_rollups_before_display_or_download(tmp_path: Path) -> None:
+    cache = tmp_path / "catalog.json"
+    cache.write_text(json.dumps({"sources": _catalog()}), encoding="utf-8")
+    assert set(catalog.load_sources(cache)) == {"youtube", "netflix"}
+
+
+def test_stale_aggregate_only_catalogue_needs_refresh(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    cache = tmp_path / "catalog.json"
+    cache.write_text(
+        json.dumps({"updated_at": datetime.now().isoformat(), "sources": {"category-ai": _catalog()["category-ai"]}}),
+        encoding="utf-8",
     )
-    assert availability.direction == ""
+    assert catalog.refresh_due(cache) is True
+    cache.write_text(json.dumps({"updated_at": datetime.now().isoformat(), "sources": ["youtube"]}), encoding="utf-8")
+    assert catalog.refresh_due(cache) is True
 
 
 def test_catalogue_cache_falls_back_when_absent_or_malformed(tmp_path: Path) -> None:
     missing = catalog.load_sources(tmp_path / "absent.json")
-    assert "refilter" in missing and "category-ru" in missing
+    assert missing == {}  # no broad fallback; local defaults still work offline
 
     broken = tmp_path / "broken.json"
     broken.write_text("{not json", encoding="utf-8")
     assert catalog.load_sources(broken) == missing
+    assert set(catalog.load_sources(broken, fallback=_catalog())) == {"youtube", "netflix"}
 
     empty = tmp_path / "empty.json"
     empty.write_text(json.dumps({"sources": {}}), encoding="utf-8")
@@ -245,7 +254,7 @@ def test_catalogue_refresh_failure_is_reported_not_raised(tmp_path: Path) -> Non
 
     assert ok is False
     assert "no network" in message
-    assert catalog.load_sources(cache)  # builtin copy still answers
+    assert catalog.load_sources(cache) == {}  # no broad fallback
 
 
 def test_legacy_source_keys_are_renamed_and_kept_idempotent() -> None:
@@ -298,7 +307,7 @@ def test_an_existing_catalogue_key_wins_over_the_legacy_one() -> None:
     }
 
 
-def test_routing_catalog_module_keeps_the_public_group_contract() -> None:
-    assert routing_catalog.GROUP_ORDER[0] == "blocked"
-    assert routing_catalog.GROUP_DIRECTIONS["ru"] == "direct"
+def test_russian_service_category_does_not_claim_direct_is_a_russian_exit() -> None:
+    categories = build_routing_catalog({"yandex": {"name": "Yandex", "group": "ru"}}, {})
+    assert categories[0].direction == ""
     assert routing_catalog.DEFAULT_LOCAL_LIST == "default"
