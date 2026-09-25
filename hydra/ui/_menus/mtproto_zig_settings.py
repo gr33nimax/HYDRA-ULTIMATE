@@ -170,14 +170,18 @@ def _change_mode(
 ) -> bool | None:
     """Return the command result, or ``None`` when cancelled or unchanged."""
     configuration = _configuration()
+    mode_options = [
+        ("1", "off", "Без WEB · только FakeTLS", "Останутся обычные FakeTLS-ссылки"),
+        ("2", "hybrid", "FakeTLS + WEB", "Обе ссылки; WEB — Telegram Desktop 7.1+"),
+        ("3", "web-only", "Только WEB", "Прямые ссылки перестанут подключаться"),
+    ]
     selected = menu(
         [
-            ("1", "Выключить WEB", "Останутся обычные FakeTLS-ссылки"),
-            ("2", "FakeTLS + WEB", "Обе ссылки; WEB — Telegram Desktop 7.1+"),
-            ("3", "Только WEB", "Прямые ссылки перестанут подключаться"),
-            ("0", "Отмена", ""),
-        ],
-        f"РЕЖИМ WEB MTPROTO ZIG · сейчас {mode}",
+            (key, f"{label} · сейчас" if target_mode == mode else label, hint)
+            for key, target_mode, label, hint in mode_options
+        ]
+        + [("0", "Отмена", "")],
+        f"РЕЖИМ WEB MTPROTO ZIG · сейчас {_mode_label(mode)}",
     )
     target = {"1": "off", "2": "hybrid", "3": "web-only"}.get(selected)
     if target is None:

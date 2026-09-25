@@ -940,6 +940,30 @@ def test_status_reports_an_inactive_relay_unit_by_name():
 # ── TSK-016: TUI adapter and the WEB-only safety gate ────────────────────────
 
 
+def test_web_mode_picker_marks_the_current_mode_and_never_says_disable_when_off():
+    # A host with WEB off used to show an imperative "Выключить WEB" option and a
+    # raw "сейчас off" header — a button to turn off something already off.
+    from hydra.ui._menus import mtproto_zig_settings
+
+    state = _state()  # WEB off by default
+    calls: list = []
+
+    def picker_menu(options, header):
+        calls.append((options, header))
+        # First call is the settings row (open row 1), second is the mode picker.
+        return "1" if len(calls) == 1 else "0"
+
+    app = cast(ApplicationService, SimpleNamespace(plugin_command=Mock()))
+    with patch.object(mtproto_zig_settings, "menu", side_effect=picker_menu):
+        mtproto_zig_settings.open_menu(state, SimpleNamespace(), app)
+
+    options, header = calls[1]
+    labels = {key: label for key, label, _hint in options}
+    assert "Выключить" not in labels["1"]
+    assert "сейчас" in labels["1"]  # off is the current mode, marked as active
+    assert "FakeTLS" in header
+
+
 def test_settings_row_names_both_values_behind_one_entry():
     from hydra.ui._menus import mtproto_zig_settings
 
