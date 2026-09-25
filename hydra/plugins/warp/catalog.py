@@ -18,6 +18,7 @@ from hydra.plugins.warp.constants import (
     CATALOG_URL,
     EXTERNAL_LISTS,
     EXTRA_SOURCES,
+    RU_TLD_SOURCE,
     is_granular_source,
 )
 
@@ -50,14 +51,20 @@ def fetch_sources(*, timeout: int = _REQUEST_TIMEOUT) -> dict[str, dict[str, str
         if isinstance(category, dict)
     }
     sources = _copy(EXTRA_SOURCES)
+    # category-ru is an umbrella: it physically aggregates every Russian
+    # `category-*-ru` list, so selecting it routes all of them. itDog-* and
+    # single services (mosmetro) are intentionally left out of the union.
+    russian_urls: list[str] = []
     for service in document.get("services") or []:
         if not isinstance(service, dict):
             continue
         key = str(service.get("id") or "").strip()
         path = str(service.get("src") or "").strip()
+        group = str(service.get("cat") or "other")
+        if key and path and group == "ru" and key.lower().startswith("category-"):
+            russian_urls.append(base + path)
         if not key or not path or not is_granular_source(key):
             continue
-        group = str(service.get("cat") or "other")
         sources[key] = {
             "name": str(service.get("name") or key),
             "url": base + path,
@@ -66,6 +73,9 @@ def fetch_sources(*, timeout: int = _REQUEST_TIMEOUT) -> dict[str, dict[str, str
         }
     if not sources:
         raise ValueError("catalogue carries no services")
+    if RU_TLD_SOURCE in sources and russian_urls:
+        own = sources[RU_TLD_SOURCE]["url"]
+        sources[RU_TLD_SOURCE]["urls"] = "\n".join(dict.fromkeys([own, *russian_urls]))
     return sources
 
 

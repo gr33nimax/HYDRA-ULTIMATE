@@ -177,6 +177,16 @@ def _normalize_warp_sources(raw: dict) -> None:
     for old_key, new_key in _WARP_SOURCE_RENAMES.items():
         if old_key in targets:
             targets.setdefault(new_key, targets.pop(old_key))
+    # category-ru is the umbrella: fold every ext:category-*-ru into it and drop
+    # retired itdog lists, so preflight no longer fails closed on them.
+    for key in list(targets):
+        if not key.startswith("ext:"):
+            continue
+        name = key.split(":", 1)[1].lower()
+        if name.startswith("itdog-"):
+            targets.pop(key, None)
+        elif name.startswith("category-") and name.endswith("-ru") and name != "category-ru":
+            targets.setdefault("ext:category-ru", targets.pop(key))
 
 
 def import_legacy_state(data: dict) -> dict:
