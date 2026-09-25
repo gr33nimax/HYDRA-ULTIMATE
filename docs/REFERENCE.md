@@ -691,6 +691,7 @@ runtime capabilities, а не номером persisted state или wire-пол�
 | Переменная | По умолчанию | Назначение |
 | :--- | :--- | :--- |
 | `HYDRA_GITHUB_TOKEN` / `GITHUB_TOKEN` | пусто | Bearer token для GitHub release API; значение не логируется |
+| `HYDRA_GOPROXY` | пусто | Go-прокси для сборки `caddy-l4` (`GOPROXY`) на сетях, где заблокировано хранилище go.dev/тулчейнов; например `https://goproxy.cn,direct` |
 | `HYDRA_CALLS_LOCK_FILE` | `/run/lock/hydra-calls.lock` | Calls multi-process operation lock |
 | `HYDRA_APPLY_LOCK_FILE` | `/run/lock/hydra-apply.lock` | Общий apply lock |
 

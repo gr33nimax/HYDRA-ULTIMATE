@@ -297,6 +297,19 @@ def install(
         print(f"  Не удалось подготовить {go_path}: {exc}")
         return False
     env = {**os.environ, "GOPATH": go_path, "GOBIN": f"{go_path}/bin"}
+    # Pin the toolchain to the version Hydra tested against. Without this Go's
+    # default GOTOOLCHAIN=auto quietly upgrades to a newer toolchain a module's
+    # go directive allows and downloads it mid-build; on a host where Google's
+    # toolchain storage is blocked that download 403s and the build dies. The
+    # `+auto` floor keeps a newer already-installed Go usable while forbidding
+    # the wandering upgrade.
+    env.setdefault("GOTOOLCHAIN", f"go{settings.go_version}+auto")
+    # Censored networks can reach a module mirror (which also serves toolchains)
+    # even when go.dev and Google's download CDN are blocked. HYDRA_GOPROXY lets
+    # the operator point the build at such a mirror without touching state.
+    go_proxy = os.environ.get("HYDRA_GOPROXY")
+    if go_proxy:
+        env["GOPROXY"] = go_proxy
     xcaddy_binary = _ensure_xcaddy_binary(go_path, host, env)
     if not xcaddy_binary:
         print("  xcaddy недоступен, а без него Caddy не собрать")
@@ -325,8 +338,15 @@ def install(
     if result is None:
         return False
     if result.returncode != 0:
+        detail = result.stderr or result.stdout or ""
         print(f"  Сборка Caddy L4 завершилась с кодом {result.returncode}")
-        print(f"  Вывод сборки:\n{result.stderr or result.stdout or ''}")
+        print(f"  Вывод сборки:\n{detail}")
+        lowered = detail.lower()
+        if "toolchain" in lowered and ("403" in lowered or "forbidden" in lowered):
+            print(
+                "  Похоже, загрузка Go-тулчейна заблокирована в этой сети. "
+                "Задайте зеркало и повторите: export HYDRA_GOPROXY='https://goproxy.cn,direct'"
+            )
         return False
     if not pending_binary.exists():
         return False
