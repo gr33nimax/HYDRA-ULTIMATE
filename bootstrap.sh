@@ -46,7 +46,6 @@ result_error() {
 }
 
 support_reminder() {
-    [[ "${HYDRA_REF:-}" == "debug" ]] || return 0
     echo ""
     echo -e "  ${DIM}Поддержать разработку:${NC} ${CYAN}https://web.tribute.tg/d/QHN${NC}"
 }

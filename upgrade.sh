@@ -89,7 +89,6 @@ summary_row() {
 }
 
 support_reminder() {
-    [[ "${HYDRA_REF:-}" == "debug" ]] || return 0
     printf '\n  %sПоддержать разработку:%s %shttps://web.tribute.tg/d/QHN%s\n' \
         "$UI_DIM" "$UI_RESET" "$UI_CYAN" "$UI_RESET"
 }

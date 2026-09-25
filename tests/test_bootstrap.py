@@ -83,10 +83,10 @@ def test_bootstrap_never_overwrites_detected_hydracore():
     assert "установщик не заменяет стороннее ядро" in BOOTSTRAP
 
 
-def test_support_link_and_installer_reminder_are_debug_only():
+def test_support_link_shows_on_every_channel():
     assert "https://web.tribute.tg/d/QHN" in README
     assert "boosty.to/gr33nimax/donate" not in README
-    assert '[[ "${HYDRA_REF:-}" == "debug" ]] || return 0' in BOOTSTRAP
+    assert '[[ "${HYDRA_REF:-}" == "debug" ]] || return 0' not in BOOTSTRAP
     assert "Поддержать разработку" in BOOTSTRAP
 
 
