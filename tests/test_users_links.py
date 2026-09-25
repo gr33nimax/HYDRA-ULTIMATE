@@ -57,15 +57,15 @@ def test_manual_configs_include_hydra_vk_tunnel() -> None:
     ]
 
 
-def test_manual_configs_include_the_telemt_link_through_the_shared_artifact_layer() -> None:
-    """R8: Telemt links are rendered here, not in the protocol manager."""
+def test_manual_configs_include_the_mtproto_zig_link_through_the_shared_artifact_layer() -> None:
+    """R8: MTProto Zig links are rendered here, not in the protocol manager."""
     link = "tg://proxy?server=203.0.113.10&port=443&secret=ee" + "a" * 96
     protocols = MagicMock()
-    protocols.enabled_subscription_names.return_value = {"telemt"}
+    protocols.enabled_subscription_names.return_value = {"mtproto_zig"}
     protocols.client_profiles.return_value = []
     protocols.client_config.return_value = ""
     protocols.client_links.return_value = [link]
-    protocols.display_name.return_value = "TeleMT"
+    protocols.display_name.return_value = "MTProto Zig"
     protocols.manual_client_artifacts.return_value = []
     app = SimpleNamespace(protocols=protocols)
     state = AppState()
@@ -73,22 +73,22 @@ def test_manual_configs_include_the_telemt_link_through_the_shared_artifact_laye
 
     artifacts = _client_artifacts(state, user, app)  # type: ignore[arg-type]
 
-    assert [(item.plugin_name, item.links) for item in artifacts] == [("telemt", (link,))]
-    protocols.client_links.assert_called_once_with(state, "telemt", user)
+    assert [(item.plugin_name, item.links) for item in artifacts] == [("mtproto_zig", (link,))]
+    protocols.client_links.assert_called_once_with(state, "mtproto_zig", user)
 
 
-def test_manual_configs_render_the_whole_telemt_link(capsys) -> None:
-    """R8.2: the generic artifact view is the surface that prints the Telemt link."""
+def test_manual_configs_render_the_whole_mtproto_zig_link(capsys) -> None:
+    """R8.2: the generic artifact view is the surface that prints the MTProto Zig link."""
     link = "tg://proxy?server=203.0.113.10&port=443&secret=ee" + "a" * 96
     protocols = MagicMock()
-    protocols.enabled_subscription_names.return_value = {"telemt"}
+    protocols.enabled_subscription_names.return_value = {"mtproto_zig"}
     protocols.client_profiles.return_value = []
     protocols.client_config.return_value = ""
     protocols.client_links.return_value = [link]
     protocols.manual_client_artifacts.return_value = []
     app = SimpleNamespace(
         protocols=protocols,
-        configuration_names=SimpleNamespace(resolve=MagicMock(return_value="TeleMT")),
+        configuration_names=SimpleNamespace(resolve=MagicMock(return_value="MTProto Zig")),
     )
     state = AppState()
     user = User(email="user@example.com", uuid="user-uuid")
@@ -99,8 +99,8 @@ def test_manual_configs_render_the_whole_telemt_link(capsys) -> None:
     assert link in capsys.readouterr().out
 
 
-def test_manual_configs_keep_the_empty_state_when_telemt_is_disabled() -> None:
-    """A disabled transport creates no Telemt-specific fallback screen."""
+def test_manual_configs_keep_the_empty_state_when_mtproto_zig_is_disabled() -> None:
+    """A disabled transport creates no MTProto-specific fallback screen."""
     protocols = MagicMock()
     protocols.enabled_subscription_names.return_value = set()
     protocols.client_profiles.return_value = []

@@ -37,7 +37,6 @@
 | `vless` | VLESS + XHTTP | XHTTP-транспорт Hydracore: свой домен с сертификатом либо Reality с чужим рукопожатием |
 | `shadowtls` | ShadowTLS | ShadowTLS v3 с Trojan detour |
 | `snell` | Snell 5/6 | TCP/UDP-прокси Hydracore: поколение 5 с `obfs_mode` `none`/`http`/`tls` или поколение 6 с `mode` `default`/`unshaped`/`unsafe-raw` |
-| `telemt` | MTProto / Telemt | Telegram MTProxy с управлением пользователями |
 | `mtproto_zig` | MTProto Zig | FakeTLS MTProxy: напрямую на TCP/443, за Caddy L4 по SNI или WEB-мост для Telegram Desktop 7.1+ |
 | `calls` | Hydra VK Tunnel | Native `call`: только Hydracore VK-parasite; профиль подписки «Обход БС» |
 | `wdtt` | qWDTT | WireGuard-туннелирование поверх TURN |
@@ -206,36 +205,6 @@ TUI и генератор выдают ссылку
 state; `status`, логи и публичный JSON показывают максимум производный `kid`.
 Ротация немедленно инвалидирует все ранее выданные HydraBox-ссылки.
 
-Для протокола `telemt` меню управления показывает только действия, влияющие на установку и службу:
-перенастройка порта и TLS-домена, расширенные настройки, перезапуск, проверка обновления, статус,
-включение/отключение и удаление. Отдельного пункта «Показать ссылки» больше нет: per-user ссылки
-Telegram выдаются в общем экране ручных конфигураций пользователя, который собирает артефакты
-каждого включённого транспорта через `ApplicationService.protocols.client_links()`. Вывод ссылок
-ничего не меняет в выводе credentials, формате `tg://proxy`-ссылки, фильтрации заблокированных
-пользователей, подписках и ссылках остальных транспортов; если Telemt выключен или у пользователя
-нет доступного артефакта, общий экран показывает обычное пустое состояние.
-
-Расширенные настройки `telemt` — один короткий список из трёх строк, каждая с текущим значением и
-честным следствием: привязка сети (`advanced.network`: `auto`/`ipv4` → `0.0.0.0`, `ipv6` → `::`,
-`dual_stack` → оба адреса), MiddleProxy (`advanced.use_middle_proxy`: `on` идёт через Middle Proxy,
-`off` — прямой путь) и уровень логов (`advanced.log_level`: `debug` — подробная диагностика,
-`normal` — обычные логи). Выбор строки предлагает только её допустимые значения; сохранение меняет
-ровно один ключ `config["advanced"]` и возвращает в тот же список, отмена строки не сохраняет
-ничего, `0` — выход назад. Повторное применение выполняется только когда Telemt установлен и
-включён, а нормальная установка по-прежнему спрашивает только порт и TLS-домен. Строка с
-недопустимым значением отклоняется с названием поля и принятых значений.
-
-Для учёта per-user трафика Telemt рендерит `[server.api]` включённым только на loopback
-(`127.0.0.1:9091`, whitelist `127.0.0.0/8`) и читает `GET /v1/stats/users` (`total_octets`) как
-накопительный счётчик. Недоступность API (выключен, не-200, неразобранное тело, ответ без единого
-пользователя из state, таймаут) не считается нулём: экран мониторинга показывает «источник
-недоступен», последние достоверные накопленные значения сохраняются, а причина видна в статусе и
-health Telemt. Разобранный ответ хотя бы с одним пользователем из state остаётся доступным даже
-если добавленный, но ещё не применённый пользователь в нём отсутствует: строка продолжает
-показывать трафик, а число ненайденных non-blocked пользователей видно в `status().info` как
-`api_missing_users`.
-Устаревшая схема `stats.json` (iptables-цепочки, cron, оценка доли по сессиям) не используется.
-
 Для транспорта `mtproto_zig` HYDRA ставит бинарник из того релиза upstream, который действительно
 содержит точный архив под архитектуру хоста (`mtproto-proxy-linux-x86_64_v3.tar.gz`, иначе
 `mtproto-proxy-linux-x86_64.tar.gz`; для aarch64 — `..._crypto.tar.gz`, иначе `..._aarch64.tar.gz`).
@@ -321,6 +290,23 @@ WARP применяет списочные маршруты только ког�
 (последний снимает маршруты и остатки прежнего установщика, но оставляет
 кэш правил для безопасной переустановки).
 
+В меню «Сервер подключения WARP» можно запустить warpscout **с этой VPS**,
+выбрать один найденный MASQUE/UDP `IP:port` или вернуть автоматический выбор
+HydraCore. Это не настройка страны выхода и не изменение релеев `warp_<name>`.
+warpscout должен быть установлен оператором из проверенного релиза; при первом
+поиске отдельно подтверждается регистрация его устройства. Файл учётной записи
+хранится в `/var/lib/hydra/warpscout/account.json` (`0600`, каталог `0700`),
+не в state. Поиск не меняет маршруты и не запускается при apply. Результаты
+живут только в текущем экране TUI. Закреплённый адрес хранится в
+`protocols.warp.config.masque_endpoint` и сохраняется при выключении и
+переустановке WARP; удаление WARP снимает настройку, но не удаляет учётную
+запись сканера. При выборе адреса ядро применяет конфигурацию и проверяет
+`warp=on` через отдельный SOCKS-вход `127.0.0.1:11880`, который направлен
+строго в `warp`. При неудаче общий apply откатывает config и state.
+Выбранный вручную адрес проверяется на каждом последующем apply; недоступность
+Cloudflare либо `curl` блокирует изменение вместо подтверждения мнимого успеха.
+На Windows unit-тесты не заменяют проверку на Linux/VPS.
+
 Списки отдельных сервисов берутся из каталога Geo-Aggregator (`db/catalog.json`).
 Из сводных списков сохранён только `category-ru` (вместе с доменными суффиксами
 `.ru`, `.su`, `.рф`, `.xn--p1ai`); остальные `category-*`, все `itDog-*`,
@@ -397,7 +383,6 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `sing-box.service` | Основное ядро транспортов и маршрутизации |
 | `caddy-l4.service` | TLS/SNI-мультиплексор на общем TCP/443 |
 | `caddy-naive.service` | Caddy forward-proxy для NaiveProxy |
-| `telemt.service` | Демон MTProto-прокси |
 | `mtproto-zig.service` | FakeTLS MTProxy, запускаемый непривилегированным `mtproto-zig` с `CAP_NET_BIND_SERVICE` |
 | `mtproto-zig-web.service` | WEB-релей mtproto.zig: `mtproto-zig web-relay`, loopback `127.0.0.1:8081`, без capabilities |
 | `wdtt.service` | Демон qWDTT |
@@ -437,7 +422,6 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/etc/nftables.conf` | Правила nftables, включая TPROXY |
 | `/etc/iptables/rules.v4` | Сохранённые правила iptables (DROP-правила банов AntiScan) |
 | `/etc/dnscrypt-proxy/dnscrypt-proxy.toml` | Конфигурация DNSCrypt |
-| `/etc/telemt/telemt.toml` | Конфигурация MTProto-прокси |
 | `/etc/hydra-mtproto-zig/config.toml` | Конфигурация mtproto.zig; при SNI-mux слушает только `127.0.0.1:20449`, а `[web]` описывает WEB-релей |
 | `/var/lib/hydra/mtproto-zig/traffic-totals.json` | Накопленные per-user байты метрик mtproto.zig |
 | `/etc/hydra/cookiesvk/` | Единый закрытый каталог провайдера VK; права `0700` |
@@ -447,7 +431,6 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/etc/wdtt/qwdtt_link.txt` | Единственная master qWDTT-ссылка с актуальным упорядоченным списком хешей |
 | `/run/lock/hydra-calls.lock` | Межпроцессная сериализация Calls room-pool/lifecycle транзакций |
 | `/etc/cron.d/hydra-traffic` | Задание учёта трафика |
-| `/etc/cron.d/telemt-stats` | Задание статистики Telemt |
 
 При обновлении бинарника Sing-Box HYDRA сначала сохраняет снимок
 `/etc/sing-box/config.json`, затем атомарно мигрирует только собственный legacy
@@ -501,8 +484,6 @@ DNS default на схему `type/server/domain_resolver` и проверяет 
 | `network-tuning-backup.json` | ядро | Исходные значения sysctl до тюнинга |
 | `warp_external.json` | `warp` | Скачанные списки правил WARP |
 | `warp_catalog.json` | `warp` | Кэш каталога источников Geo-Aggregator |
-| `telemt_syn_limiter.json` | `telemt` | Состояние SYN-лимитера |
-| `telemt_ios_fix.json` | `telemt` | Состояние обхода для клиентов iOS |
 
 > [!WARNING]
 > `state.json` записывается только через `save_state()`/`update_state()` —
@@ -524,7 +505,6 @@ DNS default на схему `type/server/domain_resolver` и проверяет 
 | `/var/log/caddy-l4/antidpi.jsonl` | Не создаётся с 2.5.6: generic-TLS наблюдения удалены, файл можно удалить вручную |
 | `/var/log/caddy-naive/access.log` | Access-журнал NaiveProxy |
 | `/var/log/fail2ban.log` | Журнал Fail2ban |
-| `/var/log/telemt_install.log` | Установка Telemt |
 
 Журналы служб доступны через systemd:
 
@@ -550,8 +530,7 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
    443/tcp    Caddy L4 · SNI-мультиплексор      2021  admin API caddy-l4
    443/udp    один QUIC-транспорт               5300  DNSCrypt
    8443/udp   Hysteria2                         9000  локальный TUN qWDTT
-   8443/tcp   Telemt (MTProto)                  9090  Clash API (если включён)
-                                                9091  Telemt control API
+                                                9090  Clash API (если включён)
    9443/tcp   сервер подписок                   1081  TPROXY (если включён)
    9999/tcp   Honeypot
    51820/udp  AmneziaWG                         + динамические порты
@@ -570,7 +549,6 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 | `443/tcp` | TCP | Caddy L4 — общий SNI-мультиплексор для NaiveProxy, AnyTLS, TrustTunnel, ShadowTLS и VLESS + XHTTP |
 | `443/udp` | UDP | Один QUIC-транспорт: NaiveProxy **или** TrustTunnel |
 | `8443/udp` | UDP | Hysteria2 |
-| `8443/tcp` | TCP | Telemt (MTProto) |
 | `51820/udp`, `51821/udp` | UDP | AmneziaWG |
 | `56000/udp` | UDP | qWDTT — DTLS/TURN |
 | `56001/udp` | UDP | qWDTT — WireGuard |
@@ -594,7 +572,6 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 | `127.0.0.1:5300` | DNSCrypt-резолвер (`network.dnscrypt_port`) |
 | `127.0.0.1:9000` | Локальный TUN-порт qWDTT |
 | `127.0.0.1:9090` | Clash API Sing-Box, если включён (`network.clash_api_port`) |
-| `127.0.0.1:9091` | Control API Telemt для per-user счётчика трафика |
 | `127.0.0.1:20448` | Внутренний VLESS + XHTTP inbound Sing-Box |
 | `127.0.0.1:10804` | HTTP-router и сайт-заглушка домена VLESS + XHTTP |
 | `127.0.0.1:21448` | PROXY v2 source-relay для VLESS за Caddy |

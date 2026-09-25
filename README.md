@@ -117,7 +117,7 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 | **VLESS + XHTTP** | `443/tcp` | XHTTP через Hydracore и Caddy L4 |
 | **Mieru** | `2012–2022/tcp` | обфусцированный mTLS |
 | **Snell 5 / 6** | `32000–32999/tcp` | TCP/UDP-прокси Hydracore |
-| **MTProto / Telemt** | `8443/tcp` | Telegram MTProxy |
+| **MTProto Zig** | `443/tcp` | FakeTLS MTProxy (Caddy L4 по SNI) |
 | **Calls · VK** | `56002/udp` | Native Hydracore `call` в режиме VK-parasite |
 | **qWDTT** | `56000/udp`, `56001/udp` | WireGuard поверх TURN |
 
@@ -175,7 +175,8 @@ creator-пул, не использует cookies и продолжает вла
 > journald; доступ к сырому `journalctl -u sing-box` должен быть ограничен.
 
 **Сеть:** DNSCrypt (шифрованный резолвер) · WARP (выборочная маршрутизация через
-Cloudflare).
+Cloudflare; в TUI можно найти и выбрать MASQUE-адрес с этой VPS через отдельно
+установленный warpscout, с откатом при неудачном подключении).
 **Защита:** AntiScan · Fail2ban · Honeypot · IPBan.
 **Ядро:** учёт трафика, лимиты и сроки пользователей ведёт служба
 `hydra-traffic-daemon`.

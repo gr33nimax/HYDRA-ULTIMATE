@@ -45,7 +45,6 @@ PLUGIN_CLASS_EXPORTS = (
     "NaivePlugin",
     "ShadowTLSPlugin",
     "SnellPlugin",
-    "TelemtPlugin",
     "TrustTunnelPlugin",
     "WarpPlugin",
     "WdttPlugin",

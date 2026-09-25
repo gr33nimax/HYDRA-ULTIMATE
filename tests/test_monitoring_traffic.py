@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from hydra.core.state import AppState, PluginState, User
-from hydra.plugins.telemt.plugin import TelemtPlugin
+from hydra.plugins.mtproto_zig.plugin import MtprotoZigPlugin
 from hydra.services.protocols import ProtocolService
 from hydra.services.traffic import TrafficService, protocol_totals
 from hydra.ui._menus.monitoring_support import (
@@ -138,35 +138,35 @@ def test_snapshot_reaches_the_monitoring_view_through_credentials_and_report_tot
 
 def test_protocol_service_exposes_the_plugin_source_reason():
     """The production boundary: ProtocolService -> PluginInvoker -> plugin."""
-    plugin = TelemtPlugin()
+    plugin = MtprotoZigPlugin()
     plugin._traffic_reason = "control API недоступен (URLError)"
     catalog = MagicMock()
-    catalog.get.side_effect = lambda name: plugin if name == "telemt" else None
+    catalog.get.side_effect = lambda name: plugin if name == "mtproto_zig" else None
     catalog.transports.return_value = [plugin]
     catalog.enhancements.return_value = []
     catalog.security.return_value = []
     protocol_service = ProtocolService(operations=MagicMock(), catalog=catalog)
-    state = AppState(protocols={"telemt": PluginState(enabled=True)})
+    state = AppState(protocols={"mtproto_zig": PluginState(enabled=True)})
 
     availability = TrafficService(protocols=protocol_service).source_availability(state)
 
-    assert availability == {"telemt": plugin._traffic_reason}
+    assert availability == {"mtproto_zig": plugin._traffic_reason}
 
 
 def test_unavailable_source_is_rendered_instead_of_a_zero(capsys):
     view = _view(
-        ["telemt"],
-        by_protocol={"telemt": 0},
-        reasons={"telemt": "control API недоступен"},
-        labels={"telemt": "telemt"},
+        ["mtproto_zig"],
+        by_protocol={"mtproto_zig": 0},
+        reasons={"mtproto_zig": "control API недоступен"},
+        labels={"mtproto_zig": "MTProto Zig"},
     )
 
     _render_protocol_traffic(view)
 
-    row = next(line for line in capsys.readouterr().out.splitlines() if "Telemt" in line)
+    row = next(line for line in capsys.readouterr().out.splitlines() if "MTProto Zig" in line)
     assert "источник недоступен" in row
     assert "0 B" not in row
-    assert "Telemt" in row
+    assert "MTProto Zig" in row
 
 
 def test_protocol_rows_keep_the_77_cell_layout_for_short_and_long_labels():

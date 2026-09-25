@@ -7,7 +7,6 @@ import pytest
 
 from hydra.plugins.mtproto_zig import configuration, installation, observation, runtime
 from hydra.plugins.mtproto_zig.credentials import derive_secret, derive_username
-from hydra.plugins.telemt.credentials import derive_secret as telemt_secret
 from hydra.plugins.mtproto_zig.plugin import MtprotoZigPlugin
 
 
@@ -35,10 +34,6 @@ def test_config_uses_direct_then_sni_loopback_and_public_link():
     assert 'bind_address = "127.0.0.1"' in plugin._pending_config
     assert "port = 20449" in plugin._pending_config
     assert "&port=443&secret=ee" in plugin.client_link(mux.users[0], mux)
-
-
-def test_credentials_are_isolated_from_telemt():
-    assert derive_secret("same") != telemt_secret("same")
 
 
 def test_base64_user_keys_are_quoted_for_toml():

@@ -12,7 +12,7 @@ from hydra.plugins.defaults import (
     AmneziaWGPlugin, AntiDPIPlugin, AnyTLSPlugin, DNSCryptPlugin,
     Fail2banPlugin, HoneypotPlugin, Hysteria2Plugin, IPBanPlugin,
     MieruPlugin, NaivePlugin, ShadowTLSPlugin,
-    SnellPlugin, TelemtPlugin, TrustTunnelPlugin, WarpPlugin,
+    SnellPlugin, TrustTunnelPlugin, WarpPlugin,
     WdttPlugin, default_plugins,
 )
 from hydra.plugins.executor import PluginConfigurationError, PluginExecutor
@@ -114,7 +114,7 @@ __all__ = [
     "AmneziaWGPlugin", "AntiDPIPlugin", "AnyTLSPlugin", "DNSCryptPlugin",
     "Fail2banPlugin", "HoneypotPlugin", "Hysteria2Plugin", "IPBanPlugin",
     "MieruPlugin", "NaivePlugin", "ShadowTLSPlugin", "SnellPlugin",
-    "TelemtPlugin", "TrustTunnelPlugin", "WarpPlugin", "WdttPlugin",
+    "TrustTunnelPlugin", "WarpPlugin", "WdttPlugin",
     "PluginConfigurationError",
     "PluginStatus",
     "all_plugins",

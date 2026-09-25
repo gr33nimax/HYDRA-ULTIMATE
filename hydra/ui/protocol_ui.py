@@ -32,7 +32,6 @@ PROTOCOL_LABELS = {
     "mieru": "Mieru",
     "naive": "NaiveProxy",
     "vless": "VLESS",
-    "telemt": "Telemt",
     "wdtt": "qWDTT",
     "calls": "Hydra VK Tunnel",
 }

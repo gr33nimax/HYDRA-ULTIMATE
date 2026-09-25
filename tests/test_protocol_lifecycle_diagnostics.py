@@ -1,4 +1,4 @@
-"""Operator-visible diagnostics and preflights for Telemt and mtproto.zig."""
+"""Operator-visible diagnostics and preflights for mtproto.zig."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from hydra.plugins.catalog import PluginCatalog
 from hydra.plugins.executor import PluginExecutor
 from hydra.plugins.mtproto_zig import runtime as zig_runtime
 from hydra.plugins.mtproto_zig.plugin import MtprotoZigPlugin
-from hydra.plugins.telemt.plugin import TelemtPlugin
 from hydra.plugins.invoker import PluginInvoker
 from hydra.services.plugin_lifecycle import PluginLifecycleOperations
 
@@ -72,22 +71,10 @@ def test_mtproto_install_reports_the_failed_stage():
     assert plugin.install_failure() == "не удалось скачать релизный архив mtproto.zig"
 
 
-def test_telemt_plugin_forwards_the_installer_stage():
-    plugin = TelemtPlugin()
-
-    with patch("hydra.plugins.telemt.plugin.installation.install", return_value=False) as install:
-        assert plugin.install() is False
-
-    on_failure = install.call_args.kwargs["on_failure"]
-    on_failure("не удалось скачать бинарник Telemt")
-
-    assert plugin.install_failure() == "не удалось скачать бинарник Telemt"
-
-
 def test_lifecycle_surfaces_the_plugin_install_stage():
     errors: list[str] = []
     plugin = SimpleNamespace(
-        install_failure=lambda: "не удалось скачать бинарник Telemt",
+        install_failure=lambda: "не удалось скачать бинарник mtproto.zig",
     )
     operations = PluginLifecycleOperations(
         get_plugin=lambda _name: plugin,
@@ -101,120 +88,8 @@ def test_lifecycle_surfaces_the_plugin_install_stage():
         invoker=PluginInvoker(),
     )
 
-    assert operations.install(AppState(), "telemt") is False
-    assert errors == ["Установка telemt: не удалось скачать бинарник Telemt"]
-
-
-def _telemt_app(*, port_free: bool, install_ok: bool = True, apply_error: str = ""):
-    return SimpleNamespace(
-        diagnostics=SimpleNamespace(port_occupied=lambda _port: not port_free),
-        protocols=SimpleNamespace(
-            install=Mock(return_value=install_ok),
-            reinstall=Mock(return_value=install_ok),
-            enable=Mock(return_value=install_ok),
-        ),
-        admin=SimpleNamespace(save_state=Mock()),
-        apply_error=lambda: apply_error,
-    )
-
-
-def _telemt_state(port: int = 8443, domain: str = "old.example") -> AppState:
-    return AppState(
-        protocols={"telemt": PluginState(config={"port": port, "tls_domain": domain})},
-    )
-
-
-def _run_install(state: AppState, app, *, port: int, domain: str) -> list[str]:
-    from hydra.ui.plugin_managers import _telemt_operations
-    from hydra.ui.plugin_managers import telemt
-    from hydra.ui.plugin_managers._facade_bridge import bind_facade
-
-    errors: list[str] = []
-    with (
-        bind_facade(telemt),
-        patch.object(telemt, "clear"),
-        patch.object(telemt, "warn"),
-        patch.object(telemt, "success"),
-        patch.object(telemt, "_pause"),
-        patch.object(telemt, "error", errors.append),
-        patch.object(telemt, "_ask", return_value=domain),
-        patch.object(telemt, "confirm", return_value=True),
-        patch("hydra.ui.plugin_managers._telemt_operations._choose_port", return_value=port),
-    ):
-        _telemt_operations.run_install(state, app)
-    return errors
-
-
-def test_telemt_install_refuses_a_port_owned_by_another_service():
-    app = _telemt_app(port_free=False)
-
-    errors = _run_install(_telemt_state(), app, port=9443, domain="new.example")
-
-    assert errors == ["Порт 9443 уже занят другим сервисом. Выберите свободный порт."]
-    app.admin.save_state.assert_not_called()
-    app.protocols.install.assert_not_called()
-
-
-def test_telemt_reconfigure_keeps_the_port_it_already_listens_on():
-    app = _telemt_app(port_free=False)
-
-    errors = _run_install(_telemt_state(port=8443), app, port=8443, domain="new.example")
-
-    assert errors == []
-    app.admin.save_state.assert_called()
-    app.protocols.enable.assert_called_once()
-
-
-def test_telemt_install_failure_shows_the_plugin_stage():
-    app = _telemt_app(
-        port_free=True,
-        install_ok=False,
-        apply_error="Установка telemt: не удалось скачать бинарник Telemt",
-    )
-
-    errors = _run_install(_telemt_state(), app, port=9443, domain="new.example")
-
-    assert errors == [
-        "Установка Telemt не удалась: Установка telemt: не удалось скачать бинарник Telemt",
-    ]
-
-
-def test_telemt_menu_hides_actions_until_it_is_installed():
-    from hydra.ui.plugin_managers import _telemt_menu
-    from hydra.ui.plugin_managers import telemt
-    from hydra.ui.plugin_managers._facade_bridge import bind_facade
-
-    with bind_facade(telemt):
-        uninstalled = _telemt_menu._menu_options(installed=False, enabled=False)
-        installed = _telemt_menu._menu_options(installed=True, enabled=False)
-
-    assert [key for key, _label, _hint in uninstalled] == ["1", "-", "0"]
-    assert [key for key, _label, _hint in installed] == ["1", "2", "3", "4", "5", "6", "9", "-", "0"]
-    # R8: per-user links live only in the generic manual-configurations flow.
-    assert not any("ссылки" in label.lower() for _key, label, _hint in installed)
-
-
-def test_telemt_dispatch_requires_installation_for_other_actions():
-    from hydra.ui.plugin_managers import _telemt_menu
-    from hydra.ui.plugin_managers import telemt
-    from hydra.ui.plugin_managers._facade_bridge import bind_facade
-
-    warnings: list[str] = []
-    with (
-        bind_facade(telemt),
-        patch.object(telemt, "warn", warnings.append),
-        patch.object(telemt, "_pause"),
-    ):
-        keep_open = _telemt_menu._dispatch(
-            "5",
-            AppState(),
-            SimpleNamespace(),
-            SimpleNamespace(enabled=False),
-            installed=False,
-        )
-
-    assert keep_open is True
-    assert warnings == ["Сначала установите Telemt."]
+    assert operations.install(AppState(), "mtproto_zig") is False
+    assert errors == ["Установка mtproto_zig: не удалось скачать бинарник mtproto.zig"]
 
 
 class _ScriptedHost(_Host):
@@ -233,45 +108,6 @@ class _ScriptedHost(_Host):
 
     def remove_file(self, path: Path) -> None:
         path.unlink(missing_ok=True)
-
-
-def test_telemt_apply_reports_the_failed_systemd_step(tmp_path):
-    from hydra.plugins.telemt import runtime as telemt_runtime
-
-    stages: list[str] = []
-    applied = telemt_runtime.apply(
-        "[server]\nport = 8888\n",
-        host=_ScriptedHost(lambda command: command[:2] == ["systemctl", "restart"]),
-        config_file=tmp_path / "config.toml",
-        work_dir=tmp_path / "work",
-        service_name="telemt",
-        on_failure=stages.append,
-    )
-
-    assert applied is False
-    assert stages == ["systemctl restart не выполнился для Telemt"]
-
-
-def test_telemt_apply_reports_an_inactive_service(tmp_path, monkeypatch):
-    from hydra.plugins.telemt import runtime as telemt_runtime
-
-    monkeypatch.setattr(telemt_runtime, "READY_INTERVAL_SECONDS", 0.0)
-    monkeypatch.setattr(telemt_runtime, "READY_POLLS", 2)
-
-    stages: list[str] = []
-    applied = telemt_runtime.apply(
-        "[server]\nport = 8888\n",
-        host=_ScriptedHost(lambda _command: False, output="inactive\n"),
-        config_file=tmp_path / "config.toml",
-        work_dir=tmp_path / "work",
-        service_name="telemt",
-        on_failure=stages.append,
-    )
-
-    assert applied is False
-    assert stages == [
-        "служба Telemt не запустилась (state=inactive): смотрите journalctl -u telemt",
-    ]
 
 
 def test_mtproto_apply_reports_an_inactive_service(tmp_path, monkeypatch):
@@ -293,74 +129,6 @@ def test_mtproto_apply_reports_an_inactive_service(tmp_path, monkeypatch):
     assert stages == [
         "служба mtproto-zig не запустилась (state=inactive): смотрите journalctl -u mtproto-zig",
     ]
-
-
-def test_telemt_apply_waits_for_a_slow_start(tmp_path, monkeypatch):
-    from hydra.plugins.telemt import runtime as telemt_runtime
-
-    monkeypatch.setattr(telemt_runtime, "READY_INTERVAL_SECONDS", 0.0)
-    monkeypatch.setattr(telemt_runtime, "READY_POLLS", 4)
-    states = iter(["activating\n", "activating\n", "active\n", "active\n"])
-
-    class StartingHost(_ScriptedHost):
-        def run(self, args, **_kwargs):
-            self.commands.append(list(args))
-            if args[:2] == ["systemctl", "is-active"]:
-                return CompletedProcess(args, 0, next(states, "active\n"), "")
-            return CompletedProcess(args, 0, "", "")
-
-    assert (
-        telemt_runtime.apply(
-            "[server]\nport = 8888\n",
-            host=StartingHost(lambda _command: False),
-            config_file=tmp_path / "config.toml",
-            work_dir=tmp_path / "work",
-            service_name="telemt",
-        )
-        is True
-    )
-
-
-def test_telemt_apply_rejects_a_service_that_dies_right_after_start(tmp_path, monkeypatch):
-    from hydra.plugins.telemt import runtime as telemt_runtime
-
-    monkeypatch.setattr(telemt_runtime, "READY_INTERVAL_SECONDS", 0.0)
-    states = iter(["active\n", "failed\n"])
-
-    class CrashingHost(_ScriptedHost):
-        def run(self, args, **_kwargs):
-            self.commands.append(list(args))
-            if args[:2] == ["systemctl", "is-active"]:
-                return CompletedProcess(args, 0, next(states, "failed\n"), "")
-            return CompletedProcess(args, 0, "", "")
-
-    stages: list[str] = []
-    applied = telemt_runtime.apply(
-        "[server]\nport = 8888\n",
-        host=CrashingHost(lambda _command: False),
-        config_file=tmp_path / "config.toml",
-        work_dir=tmp_path / "work",
-        service_name="telemt",
-        on_failure=stages.append,
-    )
-
-    assert applied is False
-    assert stages == [
-        "служба Telemt завершилась сразу после запуска (state=failed): смотрите journalctl -u telemt",
-    ]
-
-
-def test_telemt_health_names_the_unit_state():
-    plugin = TelemtPlugin()
-    with patch.object(
-        TelemtPlugin,
-        "status",
-        return_value=SimpleNamespace(running=False, info={"state": "failed"}),
-    ):
-        health = plugin.healthcheck_for_state(AppState())
-
-    assert health.healthy is False
-    assert health.detail == "служба telemt не активна (state=failed): смотрите journalctl -u telemt"
 
 
 def test_mtproto_health_names_the_unit_state():
@@ -415,28 +183,6 @@ def test_bounded_reason_redacts_and_bounds_command_output():
     assert bounded_reason(SimpleNamespace(stderr="")) == ""
 
 
-def test_telemt_apply_reports_the_systemd_reason(tmp_path):
-    from hydra.plugins.telemt import runtime as telemt_runtime
-
-    stages: list[str] = []
-    applied = telemt_runtime.apply(
-        "[server]\nport = 8888\n",
-        host=_ScriptedHost(
-            lambda command: command[:2] == ["systemctl", "daemon-reload"],
-            stderr="Failed to reload daemon: bad unit file\n",
-        ),
-        config_file=tmp_path / "config.toml",
-        work_dir=tmp_path / "work",
-        service_name="telemt",
-        on_failure=stages.append,
-    )
-
-    assert applied is False
-    assert stages == [
-        "systemctl daemon-reload не выполнился для Telemt: Failed to reload daemon: bad unit file",
-    ]
-
-
 def test_mtproto_apply_reports_the_service_reason(tmp_path):
     stages: list[str] = []
     applied = zig_runtime.apply(
@@ -460,40 +206,19 @@ def test_mtproto_apply_reports_the_service_reason(tmp_path):
     ]
 
 
-def test_telemt_install_reports_the_systemd_reason(tmp_path):
-    from hydra.plugins.telemt import installation as telemt_installation
-
-    stages: list[str] = []
-    written = telemt_installation.write_service(
-        host=_ScriptedHost(
-            lambda command: command[:2] == ["systemctl", "daemon-reload"],
-            stderr="Failed to reload daemon: bad unit file\n",
-        ),
-        work_dir=tmp_path / "work",
-        service_file=tmp_path / "telemt.service",
-        bin_path=tmp_path / "telemt",
-        config_file=tmp_path / "config.toml",
-        service_name="telemt",
-        on_failure=stages.append,
-    )
-
-    assert written is False
-    assert stages == ["systemd не принял юнит Telemt: Failed to reload daemon: bad unit file"]
-
-
 def test_lifecycle_prefers_the_plugin_apply_stage():
     errors: list[str] = []
     plugin = SimpleNamespace(
-        apply_failure=lambda: "служба Telemt не запустилась: смотрите journalctl -u telemt",
+        apply_failure=lambda: "служба mtproto-zig не запустилась: смотрите journalctl -u mtproto-zig",
     )
 
     enabled = _lifecycle(plugin, apply_config=lambda _state: False, errors=errors).enable(
         AppState(),
-        "telemt",
+        "mtproto_zig",
     )
 
     assert enabled is False
-    assert errors[-1] == "Применение telemt: служба Telemt не запустилась: смотрите journalctl -u telemt"
+    assert errors[-1] == "Применение mtproto_zig: служба mtproto-zig не запустилась: смотрите journalctl -u mtproto-zig"
 
 
 def test_lifecycle_never_reports_an_empty_failure_message():

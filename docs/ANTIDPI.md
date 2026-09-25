@@ -166,7 +166,7 @@ cipher: message authentication failed
 - атрибуция по времени (`unique-recent-source`);
 - generic-ошибки Sing-Box;
 - AmneziaWG invalid MAC/unknown peer и его debug-хук ядра;
-- Hysteria2, qWDTT, Telemt, ShadowTLS, AnyTLS, VLESS, Naive, TrustTunnel,
+- Hysteria2, qWDTT, ShadowTLS, AnyTLS, VLESS, Naive, TrustTunnel,
   Calls — как источники решений.
 
 Следствие: **`unknown_sni` больше не приходит в Telegram вообще**, и
@@ -184,7 +184,7 @@ cipher: message authentication failed
 | TrustTunnel | **ноль** `status:407` | не поддержан | отказа в журнале нет |
 | ShadowTLS | — | не поддержан | HMAC mismatch уходит в fallback |
 | Hysteria2, qWDTT, AmneziaWG, Mieru | — | не поддержаны | UDP: source подделывается, владелец адреса не доказан |
-| Telemt, Calls | — | не поддержаны | нет стабильного атрибутируемого отказа |
+| Calls | — | не поддержан | нет стабильного атрибутируемого отказа |
 
 Протокол без своего адаптера не попадает даже в фильтр журнала: он не порождает
 записей, которые потом отбрасываются.

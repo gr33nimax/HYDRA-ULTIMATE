@@ -303,14 +303,14 @@ def test_health_all_explains_how_to_disable_stopped_enabled_plugin():
     from hydra.plugins import registry
 
     plugin = MockPlugin()
-    plugin.meta = PluginMeta(name="telemt", description="TeleMT")
+    plugin.meta = PluginMeta(name="mtproto_zig", description="MTProto Zig")
     plugin.healthcheck = MagicMock(return_value=(False, "service is not active"))
-    state = AppState(protocols={"telemt": PluginState(enabled=True)})
+    state = AppState(protocols={"mtproto_zig": PluginState(enabled=True)})
 
     with patch("hydra.plugins.registry._PLUGINS", [plugin]):
         assert registry.health_all(state) == {
-            "telemt": (
+            "mtproto_zig": (
                 "service is not active while enabled in configuration; "
-                "disable telemt in the TUI protocol menu"
+                "disable mtproto_zig in the TUI protocol menu"
             )
         }

@@ -242,7 +242,7 @@ def test_evidence_allowlist_rejects_every_unknown_combination():
             "attribution": "direct",
         }
     )
-    for protocol in ("mieru", "telemt", "wdtt", "amneziawg", "shadowtls", "naive", "trusttunnel", "vless", "anytls"):
+    for protocol in ("mieru", "wdtt", "amneziawg", "shadowtls", "naive", "trusttunnel", "vless", "anytls"):
         assert not is_enforcement_evidence(
             {
                 "kind": "protocol_reject",

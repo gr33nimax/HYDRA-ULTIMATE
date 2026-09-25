@@ -17,13 +17,13 @@ def test_protocol_names_are_product_facing():
 
 def test_protocol_label_ignores_a_display_name_equal_to_the_internal_key():
     """A plugin without its own name must still get the shared product label."""
-    assert protocol_label("telemt", "telemt") == "Telemt"
+    assert protocol_label("mieru", "mieru") == "Mieru"
     assert protocol_label("anytls", "anytls") == "AnyTLS"
     assert protocol_label("custom", "custom") == "custom"
 
 
 def test_explicit_display_name_still_wins():
-    assert protocol_label("telemt", "My Telemt") == "My Telemt"
+    assert protocol_label("mieru", "My Mieru") == "My Mieru"
     assert protocol_label("anytls", "AnyTLS Box") == "AnyTLS Box"
 
 
