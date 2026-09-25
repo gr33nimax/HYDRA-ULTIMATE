@@ -58,6 +58,8 @@ def test_runtime_actions_are_declared_public_capabilities():
         "update_external_rules",
         "register_masque_scanner",
         "scan_masque_endpoints",
+        "install_warpscout_binary",
+        "remove_warpscout_binary",
     }
     assert "set_masque_endpoint" in WarpPlugin.meta.capabilities.commands
 

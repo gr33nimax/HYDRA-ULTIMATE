@@ -115,13 +115,48 @@ def _results(state: AppState, app: ApplicationService, rows: list[dict]) -> bool
             prompt("Нажмите Enter для продолжения")
 
 
+def _install_scout(app: ApplicationService) -> bool:
+    if not confirm("Скачать и установить warpscout с GitHub?", default=False):
+        return False
+    try:
+        app.plugin_action("warp", "install_warpscout_binary")
+    except Exception:
+        error("Не удалось установить warpscout.")
+        prompt("Нажмите Enter для продолжения")
+        return False
+    success("warpscout установлен.")
+    prompt("Нажмите Enter для продолжения")
+    return True
+
+
+def _remove_scout(app: ApplicationService) -> None:
+    if not confirm("Удалить warpscout с VPS?", default=False):
+        return
+    try:
+        app.plugin_action("warp", "remove_warpscout_binary")
+    except Exception:
+        error("Не удалось удалить warpscout.")
+        prompt("Нажмите Enter для продолжения")
+        return
+    success("warpscout удалён.")
+    prompt("Нажмите Enter для продолжения")
+
+
 def _scan(state: AppState, app: ApplicationService) -> None:
     status = app.plugin_query("warp", "masque_scanner_status")
     if not status["installed"]:
-        error("warpscout не установлен на VPS.")
-        info("Установи проверенный релиз: github.com/vernette/warpscout/releases")
-        prompt("Нажмите Enter для продолжения")
-        return
+        panel(
+            "WARPSCOUT НЕ УСТАНОВЛЕН",
+            [
+                "  Для поиска адресов нужен сканер warpscout.",
+                "  Он ставится и удаляется здесь же, в меню WARP.",
+            ],
+        )
+        if not _install_scout(app):
+            return
+        status = app.plugin_query("warp", "masque_scanner_status")
+        if not status["installed"]:
+            return
     if not status["account_ready"]:
         panel(
             "ПОДГОТОВКА ПОИСКА WARP",
@@ -168,13 +203,20 @@ def _menu_masque(state: AppState, app: ApplicationService) -> None:
     while True:
         clear()
         selected = state.protocols["warp"].config.get("masque_endpoint")
+        installed = app.plugin_query("warp", "masque_scanner_status")["installed"]
         panel(
             "СЕРВЕР ПОДКЛЮЧЕНИЯ WARP",
             [
                 f"  Режим: {'выбран вручную' if selected else 'автоматический'}",
                 f"  Адрес: {_label(selected)}",
+                f"  Сканер: {'warpscout установлен' if installed else 'не установлен'}",
                 f"  WARP: {'включён' if state.protocols['warp'].enabled else 'выключен'}",
             ],
+        )
+        scout_option = (
+            ("3", "Удалить warpscout", "Убрать сканер MASQUE с VPS")
+            if installed
+            else ("3", "Установить warpscout", "Скачать сканер MASQUE с GitHub")
         )
         choice = menu(
             [
@@ -184,6 +226,7 @@ def _menu_masque(state: AppState, app: ApplicationService) -> None:
                     "Вернуть автоматический выбор",
                     "Ядро снова само выберет адрес" if selected else "Уже используется",
                 ),
+                scout_option,
                 ("0", "Назад", ""),
             ],
             "СЕРВЕР ПОДКЛЮЧЕНИЯ WARP",
@@ -194,3 +237,8 @@ def _menu_masque(state: AppState, app: ApplicationService) -> None:
             _scan(state, app)
         elif choice == "2" and selected:
             _switch(state, app, address="", port=0)
+        elif choice == "3":
+            if installed:
+                _remove_scout(app)
+            else:
+                _install_scout(app)

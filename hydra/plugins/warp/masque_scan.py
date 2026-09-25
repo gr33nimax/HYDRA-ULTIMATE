@@ -5,18 +5,108 @@ from __future__ import annotations
 import ipaddress
 import json
 import math
+import platform
 import re
+import shutil
+import tarfile
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 from hydra.contracts import JsonValue
 from hydra.core.host import HOST, HostBackend
 from hydra.plugins.base import HealthResult
 from hydra.plugins.context import PluginStateAccess
+from hydra.utils.downloader import download_github_asset_filtered, extract_tarball, verify_elf
 
 ACCOUNT = Path("/var/lib/hydra/warpscout/account.json")
+WARPSCOUT_BIN = Path("/usr/local/bin/warpscout")
+WARPSCOUT_REPO = "vernette/warpscout"
 PROBE_PORT = 11880
 _HEADER = re.compile(r"^# WARP endpoints: (\d+) working / (\d+) probed$")
+
+
+def _remove_tree(path: Path) -> None:
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        pass
+
+
+def install_warpscout(*, on_failure: Callable[[str], None] | None = None) -> bool:
+    """Digest-verify and atomically install the warpscout binary from GitHub.
+
+    warpscout is a third-party MASQUE scanner published as a per-arch tar.gz
+    whose name carries the version, so the asset is matched by its
+    ``_linux_<arch>.tar.gz`` suffix. The download must carry a SHA-256 digest;
+    nothing replaces the installed binary until a verified ELF is produced.
+    """
+    machine = platform.machine().lower()
+    arch = "arm64" if machine in {"aarch64", "arm64"} else "amd64"
+    suffix = f"_linux_{arch}.tar.gz"
+    destination = Path(tempfile.mkdtemp(prefix="hydra-warpscout-"))
+    try:
+        archive = destination / "warpscout.tar.gz"
+        reasons: list[str] = []
+        if not download_github_asset_filtered(
+            WARPSCOUT_REPO,
+            lambda name: name.endswith(suffix),
+            archive,
+            require_unique=True,
+            require_digest=True,
+            on_error=reasons.append,
+        ):
+            _report(on_failure, reasons[-1] if reasons else "не удалось скачать релиз warpscout")
+            return False
+        extracted = destination / "extracted"
+        try:
+            extract_tarball(archive, extracted)
+            found = next(
+                (item for item in extracted.rglob("*") if item.is_file() and item.name == "warpscout"),
+                None,
+            )
+        except (OSError, ValueError, tarfile.TarError) as exc:
+            _report(on_failure, f"не удалось распаковать архив warpscout: {exc}")
+            return False
+        if found is None:
+            _report(on_failure, "в архиве warpscout нет бинарника warpscout")
+            return False
+        if not verify_elf(found):
+            _report(on_failure, "загруженный warpscout не является исполняемым ELF")
+            return False
+        pending = WARPSCOUT_BIN.with_suffix(".pending")
+        try:
+            WARPSCOUT_BIN.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(found, pending)
+            pending.chmod(0o755)
+            if not verify_elf(pending):
+                pending.unlink(missing_ok=True)
+                _report(on_failure, "проверка подготовленного warpscout не прошла")
+                return False
+            pending.replace(WARPSCOUT_BIN)
+        except OSError as exc:
+            pending.unlink(missing_ok=True)
+            _report(on_failure, f"не удалось установить warpscout: {exc}")
+            return False
+        return True
+    finally:
+        _remove_tree(destination)
+
+
+def remove_warpscout() -> bool:
+    """Remove the warpscout binary and its account directory."""
+    WARPSCOUT_BIN.unlink(missing_ok=True)
+    _remove_tree(ACCOUNT.parent)
+    return True
+
+
+def _report(on_failure: Callable[[str], None] | None, message: str) -> None:
+    if on_failure is None:
+        return
+    try:
+        on_failure(message)
+    except Exception:
+        pass
 
 
 def endpoint_value(address: object, port: object) -> dict[str, JsonValue]:
@@ -40,6 +130,14 @@ class MasqueScannerActions:
     @staticmethod
     def scan_masque_endpoints() -> list[dict[str, object]]:
         return scan_masque(HOST)
+
+    @staticmethod
+    def install_warpscout_binary() -> bool:
+        return install_warpscout()
+
+    @staticmethod
+    def remove_warpscout_binary() -> bool:
+        return remove_warpscout()
 
 
 def set_masque_endpoint(state: PluginStateAccess, *, address: str, port: int) -> bool:
