@@ -170,6 +170,26 @@ def generate_config(
         )
     )
 
+    # sing-box 1.14 (HydraCore) removed the deprecated fallback for a missing
+    # domain resolver, so the route must name one explicitly or the kernel
+    # rejects the config. Prefer a leaf resolver (no onward domain_resolver /
+    # address_resolver) to avoid a bootstrap loop, else the first DNS server.
+    dns_servers = [
+        server
+        for server in (config["dns"].get("servers") or [])
+        if isinstance(server, dict) and isinstance(server.get("tag"), str)
+    ]
+    resolver_tag = next(
+        (
+            server["tag"]
+            for server in dns_servers
+            if not server.get("domain_resolver") and not server.get("address_resolver")
+        ),
+        None,
+    ) or next((server["tag"] for server in dns_servers), None)
+    if resolver_tag:
+        config["route"].setdefault("default_domain_resolver", resolver_tag)
+
     if not config["inbounds"]:
         config["inbounds"].append(
             {

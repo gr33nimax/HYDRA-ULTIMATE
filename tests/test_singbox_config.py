@@ -136,3 +136,30 @@ def test_generate_config_keeps_the_strategy_with_a_plugin_dns() -> None:
 
     assert config["dns"]["strategy"] == DEFAULT_DNS_STRATEGY
     assert config["dns"]["servers"] == [{"tag": "dnscrypt-local"}]
+
+
+def test_route_declares_a_default_domain_resolver_for_the_1_14_kernel() -> None:
+    # sing-box 1.14 (HydraCore) removed the deprecated missing-domain-resolver
+    # fallback that the ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER env only masks
+    # on older kernels. Without route.default_domain_resolver the candidate
+    # rejects the active config and the extended->hydracore switch is impossible.
+    from hydra.core.state_models import AppState
+
+    config = generate_config(AppState(), {})
+    resolver = config["route"]["default_domain_resolver"]
+    tags = {server["tag"] for server in config["dns"]["servers"]}
+    assert resolver in tags
+    # A leaf resolver (no onward domain_resolver) avoids a bootstrap loop.
+    assert resolver == "dns-direct"
+
+
+def test_default_domain_resolver_follows_a_plugin_dns_server() -> None:
+    from hydra.contracts import ConfigFragment
+    from hydra.core.state_models import AppState
+
+    config = generate_config(
+        AppState(),
+        {"dnscrypt": ConfigFragment(dns={"servers": [{"tag": "dnscrypt-local"}], "rules": []})},
+    )
+
+    assert config["route"]["default_domain_resolver"] == "dnscrypt-local"
