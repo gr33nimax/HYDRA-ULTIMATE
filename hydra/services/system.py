@@ -45,6 +45,7 @@ class SystemService:
     doctor_check: Callable[[AppState], dict]
     upgrade_readiness: Callable[[AppState], dict]
     migrate_persisted_state: Callable[[], dict]
+    purge_sidecars: Callable[[], dict] = lambda: {}
 
     def validate(self, state: AppState) -> dict:
         self.validate_state(state)
@@ -62,7 +63,13 @@ class SystemService:
         return self.upgrade_readiness(state)
 
     def migrate_state(self) -> dict:
-        return self.migrate_persisted_state()
+        result = self.migrate_persisted_state()
+        # Upgrading from the pre-native scheme also tears down its leftover
+        # WARP/AmneziaWG sidecars so the core-owned modules come up clean.
+        sidecars = self.purge_sidecars()
+        if any(sidecars.values()):
+            result["legacy_sidecars"] = sidecars
+        return result
 
 
 __all__ = [

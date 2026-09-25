@@ -10,6 +10,7 @@ from typing import Any, cast
 from hydra.core import nft, singbox
 from hydra.core.doctor import run_host_preflight
 from hydra.core.host import HOST
+from hydra.core.legacy_sidecars import purge_legacy_sidecars
 from hydra.core.sni_router import audit_routes
 from hydra.core.state import (
     load_state,
@@ -224,6 +225,7 @@ def production_application(
             doctor_check=run_host_preflight,
             upgrade_readiness=check_upgrade,
             migrate_persisted_state=migrate_persisted_state,
+            purge_sidecars=lambda: purge_legacy_sidecars(HOST),
         ),
         plugin_commands=PluginCommandService(
             get_plugin=plugins.get,
