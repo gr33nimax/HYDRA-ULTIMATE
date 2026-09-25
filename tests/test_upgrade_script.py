@@ -367,7 +367,7 @@ def test_updater_uses_utf8_and_one_consistent_human_readable_style():
     assert 'summary_row "Подробный лог"' in engine
 
 
-def test_updater_support_reminder_is_debug_only_and_warning_is_renderable():
+def test_updater_support_reminder_shows_on_every_channel_and_warning_is_renderable():
     source = _source()
     no_update = source[
         source.index('result_ok "Обновление не требуется') : source.index(
@@ -377,7 +377,7 @@ def test_updater_support_reminder_is_debug_only_and_warning_is_renderable():
     ]
     completed = source[source.index('result_ok "Новая версия HYDRA установлена и проверена."') :]
 
-    assert '[[ "${HYDRA_REF:-}" == "debug" ]] || return 0' in source
+    assert '[[ "${HYDRA_REF:-}" == "debug" ]] || return 0' not in source
     assert "Поддержать разработку" in source
     assert "support_reminder" in no_update
     assert "support_reminder" in completed

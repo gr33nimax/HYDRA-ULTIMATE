@@ -134,7 +134,7 @@ def test_one_descriptor_enables_commands_queries_actions_and_setup() -> None:
         },
     )()
 
-    ProtocolSetupService(certificates, get_plugin).prepare_enable(
+    ProtocolSetupService(certificates, get_plugin).prepare_enable(  # type: ignore[arg-type]
         state,
         "extension",
     )
