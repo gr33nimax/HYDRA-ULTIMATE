@@ -138,7 +138,7 @@ def test_dependency_migration_facades_are_thin_and_exact(
 ):
     legacy = importlib.import_module(legacy_module)
     canonical = importlib.import_module(canonical_module)
-    source_path = Path(inspect.getsourcefile(legacy))
+    source_path = Path(inspect.getsourcefile(legacy) or "")
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
 
     assert len(source_path.read_text(encoding="utf-8").splitlines()) < 40
@@ -173,7 +173,7 @@ def test_plugin_helpers_do_not_resolve_the_application_boundary_themselves():
         "hydra.services.application",
     }
     paths = {
-        ROOT / inspect.getsourcefile(plugin_type)
+        ROOT / (inspect.getsourcefile(plugin_type) or "")
         for plugin_type, _method_name in PURE_COMMAND_HELPERS
     }
     paths.add(ROOT / "hydra" / "plugins" / "context.py")
