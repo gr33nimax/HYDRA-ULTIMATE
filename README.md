@@ -121,6 +121,9 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 | **Calls · VK** | `56002/udp` | Native Hydracore `call` в режиме VK-parasite |
 | **qWDTT** | `56000/udp`, `56001/udp` | WireGuard поверх TURN |
 
+Какие из этих транспортов понимают целевые клиенты (Shadowrocket, NekoBox,
+Throne, HydraBox) — [матрица совместимости](docs/COMPATIBILITY.md).
+
 Транспорт **Calls · VK** маскирует трафик под VK-звонки: только Hydracore в режиме
 `vk_parasite`, где аутентифицированный поток каждого пользователя распределяется по пулу
 VK-комнат. Настройка, лимиты и per-user профили — в меню `Calls · VK`; контракт
