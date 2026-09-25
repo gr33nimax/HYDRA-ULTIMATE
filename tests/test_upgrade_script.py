@@ -271,6 +271,24 @@ def test_template_units_are_replaced_with_loaded_instances_before_capture():
     assert 'MANAGED_UNITS+=("$unit")' in discovery
 
 
+def test_empty_unit_match_is_not_fatal_when_systemctl_is_healthy():
+    # A host with no hydra-*.service or caddy-l4.service (e.g. caddy-l4 never
+    # built) makes `systemctl list-unit-files` exit non-zero with no output on
+    # some systemd versions. The upgrade must not abort on that: it probes
+    # systemctl health and treats an empty match set as no managed units.
+    source = _source()
+    discovery = source[
+        source.index("discover_units() {") : source.index(
+            "\n}\n",
+            source.index("discover_units() {"),
+        )
+    ]
+
+    assert "systemctl list-unit-files --no-legend --no-pager >/dev/null 2>&1" in discovery
+    assert 'unit_files=""' in discovery
+    assert 'loaded_units=""' in discovery
+
+
 def test_linux_upgrade_smoke_covers_active_template_instances():
     source = LINUX_UPGRADE_SMOKE.read_text(encoding="utf-8")
 

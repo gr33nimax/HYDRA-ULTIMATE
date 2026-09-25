@@ -196,8 +196,15 @@ discover_units() {
             'hydra-*' 'caddy-l4.service' \
             --no-legend --no-pager 2>/dev/null
     ); then
-        fail "Не удалось получить список служб HYDRA в systemd."
-        return 1
+        # Some systemd versions exit non-zero when the patterns match no unit
+        # files at all — legitimate on a host with no hydra-*.service or
+        # caddy-l4.service yet (e.g. caddy-l4 never built). Fatal only when
+        # systemctl itself is unavailable, not when the match set is empty.
+        if ! systemctl list-unit-files --no-legend --no-pager >/dev/null 2>&1; then
+            fail "Не удалось получить список служб HYDRA в systemd."
+            return 1
+        fi
+        unit_files=""
     fi
     while read -r unit _state _; do
         [[ "$unit" =~ ^hydra-.*\.(service|timer)$ ||
@@ -212,8 +219,11 @@ discover_units() {
             'hydra-*' 'caddy-l4.service' \
             --all --plain --no-legend --no-pager 2>/dev/null
     ); then
-        fail "Не удалось получить список загруженных служб HYDRA в systemd."
-        return 1
+        if ! systemctl list-units --all --plain --no-legend --no-pager >/dev/null 2>&1; then
+            fail "Не удалось получить список загруженных служб HYDRA в systemd."
+            return 1
+        fi
+        loaded_units=""
     fi
     while read -r unit _; do
         [[ "$unit" =~ ^hydra-.*\.(service|timer)$ ||
