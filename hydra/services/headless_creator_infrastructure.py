@@ -145,6 +145,15 @@ class HeadlessCreatorInfrastructure(HeadlessCreatorPoolInfrastructureMixin):
             raise ValueError(f"VK cookies file is missing: {self.cookies_file}")
         raw = json.loads(self.cookies_file.read_text(encoding="utf-8"))
         cookies = normalize_vk_cookies(raw)
+        return self._write_vk_cookies(cookies)
+
+    def import_vk_cookies(self, source_path: Path) -> list[dict[str, str]]:
+        """Validate a local export before replacing the managed cookie file."""
+        raw = json.loads(source_path.read_text(encoding="utf-8"))
+        cookies = normalize_vk_cookies(raw)
+        return self._write_vk_cookies(cookies)
+
+    def _write_vk_cookies(self, cookies: list[dict[str, str]]) -> list[dict[str, str]]:
         self.host.ensure_directory(self.cookies_file.parent, mode=0o700)
         self.host.atomic_write(
             self.cookies_file,

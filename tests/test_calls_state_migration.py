@@ -1,3 +1,4 @@
+"""Compatibility coverage for the single legacy-state importer."""
 from __future__ import annotations
 
 import copy
@@ -8,19 +9,17 @@ from pathlib import Path
 import pytest
 
 from hydra.core import state as state_module
-from hydra.core.state_migrations import (
-    migrate_state,
-    migrate_v6_to_v7,
-    migrate_v7_to_v8,
-    migrate_v8_to_v9,
-    migrate_v9_to_v10,
-    migrate_v10_to_v11,
-)
-from hydra.core.state_models import UnsupportedStateVersion, validate_supported_version
+from hydra.core.state_format import unpack_state_document
+from hydra.core.state_migrations import import_legacy_state
+from hydra.core.state_models import UnsupportedStateVersion
 
 
-def _v6() -> dict:
-    return {
+def _runtime_payload(legacy: dict) -> dict:
+    return unpack_state_document(import_legacy_state(legacy))
+
+
+def test_importer_moves_legacy_creator_directly_to_its_current_namespace() -> None:
+    source = {
         "version": 6,
         "revision": 3,
         "install": {"sync_wdtt_headless_enabled": False},
@@ -40,81 +39,64 @@ def _v6() -> dict:
         "telegram": {},
         "network": {},
     }
-
-
-def test_v6_to_v7_moves_creator_desired_state_without_native_auto_enable() -> None:
-    source = _v6()
     original = copy.deepcopy(source)
 
-    migrated = migrate_v6_to_v7(source)
+    imported = _runtime_payload(source)
 
     assert source == original
-    assert migrated["version"] == 7
-    assert "headless_enabled" not in migrated["protocols"]["wdtt"]["config"]
-    assert "headless_refresh_interval_seconds" not in migrated["protocols"]["wdtt"]["config"]
-    assert migrated["protocols"]["wdtt"]["config"]["main_password"] == "kept"
-    calls = migrated["protocols"]["calls"]
-    assert calls["enabled"] is False
-    assert calls["installed"] is False
-    assert calls["config"] == {
-        "qwdtt_pool_enabled": True,
-        "legacy_creator_reinstall_required": True,
-        "qwdtt_refresh_interval_seconds": 7200,
+    assert imported["format_version"] == 1
+    assert imported["protocols"]["wdtt"]["config"] == {
+        "main_password": "kept",
+        "dtls_port": 56000,
+        "wg_port": 56001,
     }
-    assert migrated["install"]["sync_calls_qwdtt_pool_enabled"] is False
-    assert "sync_wdtt_headless_enabled" not in migrated["install"]
-
-
-def test_v6_to_v7_is_idempotent() -> None:
-    once = migrate_v6_to_v7(_v6())
-    assert migrate_v6_to_v7(once) == once
-    assert migrate_state(_v6(), 6) == migrate_v10_to_v11(
-        migrate_v9_to_v10(migrate_v8_to_v9(migrate_v7_to_v8(once))),
-    )
-
-
-def test_v6_disabled_creator_becomes_disabled_calls_pool() -> None:
-    raw = _v6()
-    raw["protocols"]["wdtt"]["config"]["headless_enabled"] = False
-    migrated = migrate_v6_to_v7(raw)
-    assert migrated["protocols"]["calls"]["config"]["qwdtt_pool_enabled"] is False
-    assert "legacy_creator_reinstall_required" not in migrated["protocols"]["calls"]["config"]
-
-
-def test_v7_to_v8_extracts_creator_from_calls() -> None:
-    source = migrate_v6_to_v7(_v6())
-    migrated = migrate_v7_to_v8(source)
-
-    assert migrated["version"] == 8
-    assert migrated["protocols"]["calls"]["config"] == {}
-    assert migrated["headless_creator"]["providers"]["vk"] == {
-        "qwdtt_pool_enabled": True,
-        "qwdtt_refresh_interval_seconds": 7200,
-        "legacy_creator_reinstall_required": True,
-    }
-    assert migrated["install"]["sync_headless_creator_vk_qwdtt_enabled"] is False
-    assert "sync_calls_qwdtt_pool_enabled" not in migrated["install"]
-    assert migrate_v7_to_v8(migrated) == migrated
-
-
-def test_v8_to_v9_separates_qwdtt_consumer_from_vk_provider() -> None:
-    source = migrate_v7_to_v8(migrate_v6_to_v7(_v6()))
-    migrated = migrate_v8_to_v9(source)
-
-    assert migrated["version"] == 9
-    assert migrated["headless_creator"]["providers"] == {}
-    assert migrated["headless_creator"]["consumers"]["qwdtt"] == {
+    assert imported["headless_creator"]["consumers"]["qwdtt"] == {
         "provider": "vk",
         "pool_enabled": True,
         "refresh_interval_seconds": 7200,
         "legacy_creator_reinstall_required": True,
         "room_count": 4,
     }
-    assert migrate_v8_to_v9(migrated) == migrated
+    assert imported["install"]["sync_headless_creator_vk_qwdtt_enabled"] is False
+    assert "calls" not in imported["protocols"]
 
 
-def test_v10_to_v11_disables_legacy_calls_without_touching_other_protocols() -> None:
-    source = {
+@pytest.mark.parametrize("legacy_version", range(11, 19))
+def test_debug_calls_schemas_import_directly_without_wire_transitions(
+    legacy_version: int,
+) -> None:
+    imported = _runtime_payload({
+        "version": legacy_version,
+        "kernel": {"provider": "hydracore", "channel": "debug"},
+        "protocols": {
+            "calls": {
+                "installed": True,
+                "enabled": True,
+                "config": {
+                    "mode": "vk_parasite",
+                    "workers": 12,
+                    "room_count": 4,
+                    "max_workers_per_session": 16,
+                    "multipath_profile": "legacy",
+                    "read_buffer": 65536,
+                    "custom": "preserved",
+                },
+            },
+        },
+    })
+
+    calls = imported["protocols"]["calls"]
+    assert calls["installed"] is True
+    assert calls["enabled"] is True
+    assert calls["config"] == {
+        "mode": "vk_parasite",
+        "workers": 12,
+        "custom": "preserved",
+    }
+
+
+def test_importer_disables_only_semantically_incompatible_calls() -> None:
+    imported = _runtime_payload({
         "version": 10,
         "kernel": {"provider": "sing-box-extended", "channel": "stable"},
         "protocols": {
@@ -125,43 +107,17 @@ def test_v10_to_v11_disables_legacy_calls_without_touching_other_protocols() -> 
             },
             "vless": {"installed": True, "enabled": True, "config": {}},
         },
-    }
-    original = copy.deepcopy(source)
-
-    migrated = migrate_v10_to_v11(source)
-
-    assert source == original
-    assert migrated["version"] == 11
-    assert migrated["protocols"]["calls"] == {
-        "installed": True,
-        "enabled": False,
-        "config": {"mode": "multi_user"},
-    }
-    assert migrated["protocols"]["vless"] == original["protocols"]["vless"]
-    assert migrate_v10_to_v11(migrated) == migrated
-
-
-def test_v10_to_v11_preserves_active_multi_user_calls_on_hydracore() -> None:
-    migrated = migrate_v10_to_v11({
-        "version": 10,
-        "kernel": {"provider": "hydracore", "channel": "stable"},
-        "protocols": {
-            "calls": {
-                "installed": True,
-                "enabled": True,
-                "config": {"mode": "multi_user", "room_count": 4},
-            },
-        },
     })
 
-    assert migrated["protocols"]["calls"]["enabled"] is True
-    assert migrated["protocols"]["calls"]["config"] == {
-        "mode": "multi_user",
-        "room_count": 4,
+    assert imported["protocols"]["calls"] == {
+        "installed": True,
+        "enabled": False,
+        "config": {"mode": "vk_parasite", "workers": 4},
     }
+    assert imported["protocols"]["vless"]["enabled"] is True
 
 
-def test_v10_calls_fixture_is_atomically_disabled_and_idempotent(
+def test_v10_calls_fixture_is_atomically_imported_and_idempotent(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -172,28 +128,34 @@ def test_v10_calls_fixture_is_atomically_disabled_and_idempotent(
     monkeypatch.setattr(state_module, "STATE_FILE", state_file)
 
     first = state_module.migrate_persisted_state()
-    migrated_bytes = state_file.read_bytes()
+    imported_bytes = state_file.read_bytes()
     second = state_module.migrate_persisted_state()
     loaded = state_module.load_state()
 
-    assert first == {"from": 10, "to": 11, "changed": True}
-    assert second == {"from": 11, "to": 11, "changed": False}
-    assert state_file.read_bytes() == migrated_bytes
+    assert first == {"from": 10, "to": 1, "changed": True}
+    assert second == {"from": 1, "to": 1, "changed": False}
+    assert state_file.read_bytes() == imported_bytes
     assert loaded.revision == 42
     assert loaded.protocols["calls"].installed is True
     assert loaded.protocols["calls"].enabled is False
-    assert loaded.protocols["calls"].config == {"mode": "multi_user"}
+    assert loaded.protocols["calls"].config == {
+        "mode": "vk_parasite",
+        "workers": 4,
+    }
     assert loaded.protocols["vless"].enabled is True
     assert loaded.install["preserved_upgrade_marker"] == "keep"
     assert state_file.with_suffix(".json.bak").is_file()
 
 
-def test_future_schema_is_rejected_after_v11() -> None:
+def test_future_legacy_schema_is_rejected() -> None:
     with pytest.raises(UnsupportedStateVersion):
-        validate_supported_version({"version": 12})
+        import_legacy_state({"version": 19})
 
 
-def test_migrated_state_is_json_serializable_without_secret_artifacts() -> None:
-    payload = json.dumps(migrate_state(_v6(), 6))
+def test_imported_state_has_no_host_runtime_or_secret_artifacts() -> None:
+    payload = json.dumps(import_legacy_state({
+        "version": 6,
+        "protocols": {"wdtt": {"config": {"headless_enabled": True}}},
+    }))
     assert "cookies-vk" not in payload
     assert "vk.com/call/join" not in payload

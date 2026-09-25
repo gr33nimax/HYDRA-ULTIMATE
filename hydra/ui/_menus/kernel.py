@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Callable, Protocol
 
+from hydra.core.state_kernel_models import OFFERED_KERNEL_CHANNELS, resolve_kernel_channel
 from hydra.core.state_models import AppState
 from hydra.services.application import ApplicationService
 
@@ -37,7 +38,7 @@ def handle_kernel_choice(
 ) -> bool:
     """Handle provider install/update/switch choices and report consumption."""
     if choice == "1":
-        deps.info(f"Устанавливаю {state.kernel.provider}...")
+        deps.info(f"Устанавливаю {state.kernel.provider} (канал {state.kernel.channel})...")
         try:
             result = app.kernel.switch(
                 state,
@@ -68,7 +69,11 @@ def handle_kernel_choice(
         return True
 
     if choice == "6" and installed and update_available:
-        deps.info("Устанавливаю обновление Sing-Box...")
+        deps.info(
+            f"Устанавливаю обновление {state.kernel.provider} "
+            f"{state.install.get('singbox_latest_version', '')} "
+            f"(канал {state.kernel.channel})...",
+        )
         try:
             result = app.kernel.switch(
                 state,
@@ -96,28 +101,40 @@ def handle_kernel_choice(
         deps.prompt("Нажмите Enter")
         return True
 
-    if choice == "7":
-        provider = (
-            "hydracore"
-            if state.kernel.provider == "sing-box-extended"
-            else "sing-box-extended"
+    if choice == "8" and state.kernel.provider == "hydracore":
+        channel = next(
+            offered for offered in OFFERED_KERNEL_CHANNELS if offered != resolve_kernel_channel(state.kernel.channel)
         )
         if not confirm_action(
-            f"Переключить рабочее ядро на {provider}?",
+            f"Переключить Hydracore на канал {channel}?",
             default=False,
         ):
             return True
-        deps.info(f"Проверяю и устанавливаю {provider}...")
+        deps.info(f"Проверяю и устанавливаю Hydracore (канал {channel})...")
         try:
-            result = app.kernel.switch(state, provider, channel="stable")
+            result = app.kernel.switch(
+                state,
+                "hydracore",
+                channel=channel,
+                force=True,
+            )
         except Exception as exc:
             deps.error(str(exc) or exc.__class__.__name__)
             deps.prompt("Нажмите Enter")
             return True
         if result.ok:
             deps.success(result.message)
+            if app.apply(state):
+                deps.success("Конфигурация пересобрана и применена")
+            else:
+                deps.warn(
+                    deps.apply_error_text(
+                        "Не удалось автоматически применить конфигурацию",
+                        app,
+                    ),
+                )
         else:
-            deps.error(result.message or "Не удалось переключить ядро")
+            deps.error(result.message or "Не удалось переключить канал Hydracore")
         deps.prompt("Нажмите Enter")
         return True
 

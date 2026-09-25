@@ -1,4 +1,5 @@
 """Declarative routing to optional specialised plugin controllers."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -6,18 +7,8 @@ from types import ModuleType
 
 from hydra.core.state_models import AppState, PluginState
 from hydra.services.application import ApplicationService
-from hydra.ui._menus import extended_protocol_vless, extended_protocols, plugin_settings
-from hydra.ui.plugin_managers import (
-    antidpi,
-    calls,
-    dnscrypt,
-    fail2ban,
-    honeypot,
-    ipban,
-    telemt,
-    warp,
-    wdtt,
-)
+from hydra.ui._menus import extended_protocol_vless, extended_protocol_vless_cdn, extended_protocols, plugin_settings
+from hydra.ui.plugin_managers import antidpi, calls, dnscrypt, fail2ban, honeypot, ipban, warp, wdtt
 
 
 MenuHandler = Callable[[AppState, object, ApplicationService], None]
@@ -54,13 +45,13 @@ SPECIAL_PLUGIN_MENUS: dict[str, MenuHandler] = {
     "mieru": _plugin_handler(extended_protocols, "_menu_mieru"),
     "trusttunnel": _plugin_handler(extended_protocols, "_menu_trusttunnel"),
     "vless": _plugin_handler(extended_protocol_vless, "_menu_vless"),
+    "vless_cdn": _plugin_handler(extended_protocol_vless_cdn, "_menu_vless_cdn"),
     "antidpi": _application_handler(antidpi, "menu_antidpi"),
     "calls": _application_handler(calls, "menu_calls"),
     "dnscrypt": _application_handler(dnscrypt, "menu_dnscrypt"),
     "fail2ban": _application_handler(fail2ban, "menu_fail2ban"),
     "honeypot": _application_handler(honeypot, "menu_honeypot"),
     "ipban": _application_handler(ipban, "menu_ipban"),
-    "telemt": _application_handler(telemt, "menu_telemt"),
     "warp": _application_handler(warp, "menu_warp"),
     "wdtt": _application_handler(wdtt, "menu_wdtt"),
 }

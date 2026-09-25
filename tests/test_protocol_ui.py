@@ -5,6 +5,7 @@ from hydra.ui.protocol_ui import (
     protocol_status_panel,
     status_badge,
 )
+from hydra.ui.tui import PANEL_W
 
 
 def test_protocol_names_are_product_facing():
@@ -12,6 +13,18 @@ def test_protocol_names_are_product_facing():
     assert protocol_label("naive") == "NaiveProxy"
     assert protocol_label("calls") == "Hydra VK Tunnel"
     assert protocol_menu_title("wdtt") == "QWDTT · УПРАВЛЕНИЕ"
+
+
+def test_protocol_label_ignores_a_display_name_equal_to_the_internal_key():
+    """A plugin without its own name must still get the shared product label."""
+    assert protocol_label("mieru", "mieru") == "Mieru"
+    assert protocol_label("anytls", "anytls") == "AnyTLS"
+    assert protocol_label("custom", "custom") == "custom"
+
+
+def test_explicit_display_name_still_wins():
+    assert protocol_label("mieru", "My Mieru") == "My Mieru"
+    assert protocol_label("anytls", "AnyTLS Box") == "AnyTLS Box"
 
 
 def test_protocol_state_distinguishes_disabled_and_failed():
@@ -65,11 +78,11 @@ def test_long_detail_wraps_under_its_column_instead_of_being_cut(capsys):
     output = capsys.readouterr().out
     assert "..." not in output
     assert "заголовков 2" in output
-    body = [line for line in output.splitlines() if line.startswith("  ║")]
-    assert len({len(_visible(line)) for line in body}) == 1
+    body = [line for line in output.splitlines() if line.strip()]
+    assert all(len(_visible(line)) <= PANEL_W + 4 for line in body)
 
 
-def test_every_panel_row_keeps_the_same_visible_width(capsys):
+def test_panel_uses_a_compact_rounded_frame(capsys):
     protocol_status_panel(
         "vless",
         installed=True,
@@ -82,13 +95,12 @@ def test_every_panel_row_keeps_the_same_visible_width(capsys):
         ],
     )
 
-    body = [
-        line
-        for line in capsys.readouterr().out.splitlines()
-        if line.startswith("  ║")
-    ]
-    assert body
-    assert len({len(_visible(line)) for line in body}) == 1
+    output = capsys.readouterr().out
+    assert "VLESS" in output
+    assert "Максимальная маскировка" in output
+    assert "╭" in output
+    assert "│" in output
+    assert "║" not in output
 
 
 def _visible(line: str) -> str:

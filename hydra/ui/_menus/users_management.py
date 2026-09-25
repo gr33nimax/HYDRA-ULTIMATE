@@ -15,6 +15,10 @@ from hydra.ui._menus.users_common import _application
 from hydra.ui._menus.users_detail import detail_menu_choices
 from hydra.ui._menus.users_devices import open_menu as open_device_menu
 from hydra.ui._menus.users_links import _show_subscription_links, _user_configs
+from hydra.ui._menus.users_names import (
+    edit_configuration_name,
+    edit_global_configuration_names,
+)
 from hydra.ui._menus.users_overview import _add_user, _select_user, _show_users
 from hydra.ui._menus.users_subscription import menu_subscription_server
 from hydra.ui.tui import (
@@ -34,8 +38,6 @@ from hydra.ui.tui import (
     title,
     warn,
 )
-
-
 def menu_users(state: AppState, app: ApplicationService | None = None):
     """Управление пользователями."""
     app = _application(app)
@@ -74,6 +76,11 @@ def menu_users(state: AppState, app: ApplicationService | None = None):
                     "🔗 Сервер подписок",
                     "Управление фоновым сервисом подписок",
                 ),
+                (
+                    "5",
+                    "✏️ Общие названия конфигураций",
+                    "Названия для всех пользователей",
+                ),
                 ("0", "↩ Назад", ""),
             ],
             "ПОЛЬЗОВАТЕЛИ",
@@ -89,10 +96,10 @@ def menu_users(state: AppState, app: ApplicationService | None = None):
                 _user_detail_menu(state, user, app)
         elif choice == "4":
             menu_subscription_server(state, app)
+        elif choice == "5":
+            edit_global_configuration_names(state, app)
         elif choice == "0":
             return
-
-
 def _change_traffic_limit(
     state: AppState,
     user: User,
@@ -115,8 +122,6 @@ def _change_traffic_limit(
     except ValueError:
         error("Лимит должен быть неотрицательным конечным числом.")
     prompt("Нажмите Enter")
-
-
 def _change_expiry(
     state: AppState,
     user: User,
@@ -248,6 +253,21 @@ def _user_detail_menu(
                     "HydraBox JWE-ключ обновлён; выдайте новую ссылку.",
                 )
                 prompt("Нажмите Enter")
+        elif choice.upper() == "T":
+            if confirm(
+                f"Обнулить счётчик трафика для {user.email}?",
+                default=False,
+            ):
+                latest = app.traffic.reset_user_traffic_state(user.email)
+                latest_user = next(
+                    item for item in latest.users if item.email == user.email
+                )
+                user.traffic_used_bytes = latest_user.traffic_used_bytes
+                user.credentials = latest_user.credentials
+                success("Счётчик трафика пользователя обнулён.")
+                prompt("Нажмите Enter")
+        elif choice.upper() == "N":
+            edit_configuration_name(state, user, app)
         elif choice == "0":
             return
 

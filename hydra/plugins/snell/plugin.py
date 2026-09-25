@@ -1,4 +1,5 @@
-"""Per-user Snell v4 inbounds via sing-box-extended."""
+"""Per-user Snell 5/6 inbounds via sing-box-extended."""
+
 from __future__ import annotations
 
 import hashlib
@@ -16,17 +17,46 @@ from hydra.utils.plugin_identity import snell_user_tag
 
 PORT_START = 32000
 PORT_END = 32999
-SNELL_VERSION = 4
-OBFS_MODE = ""
+SNELL_GENERATIONS = (5, 6)
+SNELL_VERSION = 5
+# Obfuscation is a layer, not a property of the generation: our implementation wraps `tls` on both
+# ends (`sing-snell/obfs.go` — ClientConn and ServerConn handle ObfsModeTLS), and a loopback probe
+# on a live host proved the pair carries traffic: server 5 with client 4 over tls, http and none,
+# each answered 204. What differs is the clients — Surge and sing-box-based ones (Throne) offer only
+# `http` on generation 5, while our own client and mihomo take `tls`.
+OBFS_MODES = ("none", "http", "tls")
+OBFS_MODE = "none"
 OBFS_HOST = "www.bing.com"
+V6_MODES = ("default", "unshaped", "unsafe-raw")
+V6_MODE = "default"
+
+# The upstream Snell generations arrived with the sing-box-extended 1.14.0 line,
+# HydraCore cycle 12: its server accepts version 5 or 6 and expects the flat
+# `obfs_mode` / `mode` fields. The core this plugin was written for owned its own
+# Snell and took a server `version: 4`. The comparison itself lives next to the
+# version naming it has to understand, because the core's tag is written in two
+# schemes.
+MIN_SNELL_CORE_TEXT = "sing-box-extended 1.14.0"
+
+
+def kernel_supports_snell() -> bool:
+    """Report whether the installed core speaks the upstream Snell generations."""
+    try:
+        from hydra.core.singbox import get_version
+        from hydra.core.singbox_upgrade import core_supports_upstream_capability
+
+        version = get_version()
+    except Exception:
+        return False
+    return bool(version) and core_supports_upstream_capability(version)
 
 
 class SnellPlugin(BasePlugin):
     meta = PluginMeta(
         name="snell",
-        description="Snell v4: отдельный PSK и порт для каждого пользователя",
+        description="Snell 5/6: отдельный PSK и порт для каждого пользователя",
         category=PluginCategory.TRANSPORT,
-        version="1.0.2",
+        version="1.1.0",
         needs_domain=False,
         commands=("set_settings",),
         connection_source="tracked",
@@ -34,29 +64,38 @@ class SnellPlugin(BasePlugin):
 
     def install(self) -> bool:
         from hydra.core.singbox import is_installed
+
         return is_installed()
 
     def uninstall(self) -> bool:
         return True
 
     def configure(self, state: PluginStateAccess) -> ConfigFragment:
+        self._require_generation_support()
         ports = self._port_map(state)
+        generation = self._version(state)
         inbounds = []
         for user in state.users:
             if user.blocked:
                 continue
-            inbounds.append({
+            inbound = {
                 "type": "snell",
                 "tag": self._tag(user),
                 "listen": "::",
                 "listen_port": ports[user.uuid],
                 "psk": self._psk(user.uuid),
-                "version": self._version(state),
-                "network": ["tcp", "udp"],
-            })
-            mode = self._obfs_mode(state)
-            if mode:
-                inbounds[-1]["obfs"] = {"mode": mode}
+                "version": generation,
+                # No `network` here: the core dropped that field from the Snell inbound schema and
+                # refuses a configuration carrying it, and Snell tunnels UDP inside its own session
+                # anyway. This field is what stopped Snell from being installed at all.
+            }
+            if generation == 5:
+                obfs_mode = self._obfs_mode(state)
+                if obfs_mode != "none":
+                    inbound["obfs_mode"] = obfs_mode
+            else:
+                inbound["mode"] = self._v6_mode(state)
+            inbounds.append(inbound)
         return ConfigFragment(inbounds=inbounds)
 
     def apply(self, state: PluginStateAccess) -> bool:
@@ -74,34 +113,51 @@ class SnellPlugin(BasePlugin):
 
     def generate_client_config(self, user: User, state: PluginStateAccess) -> str:
         server = self._server_ip(state)
+        generation = self._version(state)
         outbound = {
             "type": "snell",
             "tag": self._tag(user).replace("-in", "-out"),
             "server": server,
             "server_port": self._port_for(user, state),
             "psk": self._psk(user.uuid),
-            "version": self._version(state),
-            "network": ["tcp", "udp"],
+            # The classic generation is negotiated as 4 on the client side even
+            # though the server that answers it is version 5; the core has no
+            # outbound 5 at all.
+            "version": 4 if generation == 5 else 6,
         }
-        mode = self._obfs_mode(state)
-        if mode:
-            outbound["obfs"] = {"mode": mode, "host": self._obfs_host(state)}
-        return json.dumps({
-            "log": {"level": "info"},
-            "outbounds": [outbound, {"type": "direct", "tag": "direct"}],
-            "route": {"final": outbound["tag"]},
-        }, indent=2)
+        if generation == 5:
+            obfs_mode = self._obfs_mode(state)
+            if obfs_mode != "none":
+                outbound["obfs_mode"] = obfs_mode
+                outbound["obfs_host"] = self._obfs_host(state)
+        else:
+            outbound["mode"] = self._v6_mode(state)
+        return json.dumps(
+            {
+                "log": {"level": "info"},
+                "outbounds": [outbound, {"type": "direct", "tag": "direct"}],
+                "route": {"final": outbound["tag"]},
+            },
+            indent=2,
+        )
 
     def client_link(self, user: User, state: PluginStateAccess) -> str:
         server = self._url_host(self._server_ip(state))
         psk = urllib.parse.quote(self._psk(user.uuid), safe="")
+        generation = self._version(state)
         query_params = {
-            "version": self._version(state),
+            # What a client sends, not what the server is configured as.
+            "version": 4 if generation == 5 else 6,
             "udp-relay": "true",
         }
-        mode = self._obfs_mode(state)
-        if mode:
-            query_params.update({"obfs-mode": mode, "obfs-host": self._obfs_host(state)})
+        if generation == 5:
+            obfs_mode = self._obfs_mode(state)
+            if obfs_mode != "none":
+                # `obfs` is the name the clients read (Throne, Shadowrocket): `obfs-mode` was ours
+                # alone and made an imported link lose its obfuscation silently.
+                query_params.update({"obfs": obfs_mode, "obfs-host": self._obfs_host(state)})
+        else:
+            query_params["mode"] = self._v6_mode(state)
         query = urllib.parse.urlencode(query_params)
         tag = urllib.parse.quote(f"{user.email} Snell", safe="")
         return f"snell://{psk}@{server}:{self._port_for(user, state)}?{query}#{tag}"
@@ -109,15 +165,18 @@ class SnellPlugin(BasePlugin):
     def on_enable(self, state: PluginStateAccess) -> None:
         if state.protocols.get("snell") is None:
             raise ValueError("Snell configuration is missing")
-        self._version(state)
-        mode = self._obfs_mode(state)
-        if mode:
+        self._require_generation_support()
+        generation = self._version(state)
+        if generation == 5 and self._obfs_mode(state) != "none":
             self._obfs_host(state)
+        self._v6_mode(state)
         from hydra.utils.firewall import open_range
+
         open_range("tcp", PORT_START, PORT_END, "snell")
 
     def on_disable(self, state: PluginStateAccess) -> None:
         from hydra.utils.firewall import close_range
+
         close_range("tcp", PORT_START, PORT_END, "snell")
 
     def status(
@@ -125,6 +184,7 @@ class SnellPlugin(BasePlugin):
         state: PluginStateAccess | None = None,
     ) -> PluginStatus:
         from hydra.core.singbox import is_installed, is_running
+
         installed = is_installed()
         enabled = False
         info = {"Диапазон": f"{PORT_START}-{PORT_END}"}
@@ -132,13 +192,18 @@ class SnellPlugin(BasePlugin):
             try:
                 ps = state.protocols.get("snell")
                 enabled = bool(ps and ps.enabled)
-                info["Версия"] = f"v{self._version(state)}"
-                mode = self._obfs_mode(state)
-                info["Obfs"] = f"{mode.upper()} · {self._obfs_host(state)}" if mode else "выключен"
+                generation = self._version(state)
+                info["Версия"] = f"v{generation}"
+                if generation == 5:
+                    mode = self._obfs_mode(state)
+                    info["Obfs"] = f"{mode.upper()} · {self._obfs_host(state)}" if mode != "none" else "выключен"
+                else:
+                    info["Режим"] = self._v6_mode(state)
+                    info["Obfs"] = "не применимо"
+                    info["Клиенты"] = "только v6"
             except Exception:
                 pass
-        return PluginStatus(installed, enabled, installed and enabled and is_running(), PORT_START,
-                            info)
+        return PluginStatus(installed, enabled, installed and enabled and is_running(), PORT_START, info)
 
     @staticmethod
     def _psk(seed: str) -> str:
@@ -165,7 +230,7 @@ class SnellPlugin(BasePlugin):
         for user in ordered_users:
             stored = user.credentials.get("snell", {}).get("port")
             try:
-                port = int(stored)
+                port = int(str(stored).strip())
             except (TypeError, ValueError):
                 continue
             if PORT_START <= port <= PORT_END and port not in used:
@@ -206,22 +271,43 @@ class SnellPlugin(BasePlugin):
     @staticmethod
     def _version(state: PluginStateAccess) -> int:
         ps = state.protocols.get("snell")
-        version = int(ps.config.get("version", SNELL_VERSION)) if ps else SNELL_VERSION
-        if version == 5:
-            # Compatibility migration for installations created before the
-            # sing-box-extended outbound v5->v4 behaviour was accounted for.
-            return 4
-        if version != 4:
-            raise ValueError("Hydra Snell supports version 4")
-        return SNELL_VERSION
+        raw = ps.config.get("version", SNELL_VERSION) if ps else SNELL_VERSION
+        try:
+            version = int(str(raw).strip())
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Некорректная версия Snell") from exc
+        # A server-side version 4 no longer exists in the core: the classic
+        # generation is 5, and its pair is server 5 with client 4.
+        if version == 4:
+            return 5
+        if version not in SNELL_GENERATIONS:
+            raise ValueError("Hydra Snell supports generations 5 and 6")
+        return version
 
     @staticmethod
     def _obfs_mode(state: PluginStateAccess) -> str:
         ps = state.protocols.get("snell")
-        mode = str(ps.config.get("obfs_mode", OBFS_MODE)) if ps else OBFS_MODE
-        if mode not in {"", "http"}:
-            raise ValueError("Snell obfs mode must be empty or http")
+        raw = ps.config.get("obfs_mode", OBFS_MODE) if ps else OBFS_MODE
+        mode = str(raw).strip().lower() or "none"
+        if mode not in OBFS_MODES:
+            raise ValueError("Snell obfs mode must be none, http or tls")
         return mode
+
+    @staticmethod
+    def _v6_mode(state: PluginStateAccess) -> str:
+        ps = state.protocols.get("snell")
+        raw = ps.config.get("mode", V6_MODE) if ps else V6_MODE
+        mode = str(raw).strip().lower() or V6_MODE
+        if mode not in V6_MODES:
+            raise ValueError("Snell v6 mode must be default, unshaped or unsafe-raw")
+        return mode
+
+    @staticmethod
+    def _require_generation_support() -> None:
+        if not kernel_supports_snell():
+            raise ValueError(
+                f"Snell 5/6 requires a HydraCore with the upstream Snell implementation ({MIN_SNELL_CORE_TEXT} or newer)"
+            )
 
     @staticmethod
     def _obfs_host(state: PluginStateAccess) -> str:
@@ -235,21 +321,33 @@ class SnellPlugin(BasePlugin):
         self,
         state: PluginStateAccess,
         version: int,
-        obfs_mode: str,
+        obfs_mode: str = OBFS_MODE,
         obfs_host: str = OBFS_HOST,
+        mode: str = V6_MODE,
     ) -> bool:
         """Validate and update desired Snell settings without I/O."""
-        normalized_version = 4 if int(version) == 5 else int(version)
-        normalized_mode = str(obfs_mode)
+        try:
+            raw_version = int(str(version).strip())
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Некорректная версия Snell") from exc
+        # 4 was the server-side version of the previous core; it maps onto the
+        # classic generation, which the current core serves as 5.
+        normalized_version = 5 if raw_version == 4 else raw_version
+        if normalized_version not in SNELL_GENERATIONS:
+            raise ValueError("Hydra Snell supports generations 5 and 6")
+        normalized_mode = str(obfs_mode).strip().lower() or "none"
+        if normalized_mode not in OBFS_MODES:
+            raise ValueError("Snell obfs mode must be none, http or tls")
+        normalized_v6_mode = str(mode).strip().lower() or V6_MODE
+        if normalized_v6_mode not in V6_MODES:
+            raise ValueError("Snell v6 mode must be default, unshaped or unsafe-raw")
+        if normalized_version == 6 and normalized_mode != "none":
+            raise ValueError("Snell generation 6 replaces obfuscation with its own mode")
+        if normalized_version == 5 and normalized_v6_mode != V6_MODE:
+            raise ValueError("Snell v6 mode applies to generation 6 only")
         normalized_host = str(obfs_host).strip()
-        if normalized_version != SNELL_VERSION:
-            raise ValueError(f"Snell v{SNELL_VERSION} is the only supported version")
-        if normalized_mode not in {"", "http"}:
-            raise ValueError("Snell obfs mode must be empty or http")
-        if normalized_mode and (
-            not normalized_host
-            or "://" in normalized_host
-            or any(character.isspace() for character in normalized_host)
+        if normalized_mode in ("http", "tls") and (
+            not normalized_host or "://" in normalized_host or any(character.isspace() for character in normalized_host)
         ):
             raise ValueError("Invalid Snell obfs host")
         ps = state.protocols.get("snell")
@@ -260,6 +358,7 @@ class SnellPlugin(BasePlugin):
                 "version": normalized_version,
                 "obfs_mode": normalized_mode,
                 "obfs_host": normalized_host,
+                "mode": normalized_v6_mode,
             },
         )
         return True

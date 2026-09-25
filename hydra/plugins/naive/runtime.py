@@ -1,10 +1,22 @@
 """NaiveProxy runtime reconciliation and rollback."""
+
 from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable
 
 from hydra.plugins.context import PluginStateAccess
+
+from .constants import NaiveRuntimeLayout
+
+
+if TYPE_CHECKING:
+    _RuntimeLayout = Callable[[], NaiveRuntimeLayout]
+    _HostBackend = Callable[[], Any]
+    _DownloadBinary = Callable[..., bool]
+    _BuiltForUot = Callable[[], bool | None]
+    _DecoyTheme = Callable[[PluginStateAccess], str]
 
 
 def _accounting_rule(
@@ -37,8 +49,16 @@ class NaiveRuntimeMixin:
 
     _pending_cfg: str | None
 
-    def snapshot(self, state: PluginStateAccess):
+    if TYPE_CHECKING:
+        _runtime_layout: _RuntimeLayout
+        _host_backend: _HostBackend
+        _download_binary: _DownloadBinary
+        _built_for_uot: _BuiltForUot
+        decoy_theme: _DecoyTheme
+
+    def snapshot(self, state: PluginStateAccess) -> dict[str, Any]:
         del state
+        self._binary_replaced = False
         layout = self._runtime_layout()
         runtime = self._host_backend().run(
             ["systemctl", "is-active", layout.service_name],
@@ -46,20 +66,9 @@ class NaiveRuntimeMixin:
             text=True,
         )
         return {
-            "config": (
-                layout.caddyfile.read_bytes()
-                if layout.caddyfile.exists()
-                else None
-            ),
-            "service": (
-                layout.service_file.read_bytes()
-                if layout.service_file.exists()
-                else None
-            ),
-            "running": (
-                runtime.returncode == 0
-                and runtime.stdout.strip() == "active"
-            ),
+            "config": (layout.caddyfile.read_bytes() if layout.caddyfile.exists() else None),
+            "service": (layout.service_file.read_bytes() if layout.service_file.exists() else None),
+            "running": (runtime.returncode == 0 and runtime.stdout.strip() == "active"),
         }
 
     def rollback(
@@ -70,6 +79,12 @@ class NaiveRuntimeMixin:
         del state
         layout = self._runtime_layout()
         previous = snapshot or {}
+        if getattr(self, "_binary_replaced", False):
+            from hydra.core.sni_router_install import restore_previous_binary
+
+            if not restore_previous_binary(layout.binary):
+                return False
+            self._binary_replaced = False
         for key, path in (
             ("config", layout.caddyfile),
             ("service", layout.service_file),
@@ -105,7 +120,20 @@ class NaiveRuntimeMixin:
         pending = layout.caddyfile.with_suffix(".pending")
         pending.write_text(self._pending_cfg)
         pending.chmod(0o640)
+        from .uot import uot_enabled
+
+        desired_uot = uot_enabled(state)
+        built_uot = self._built_for_uot()
+        if built_uot is not None and built_uot != desired_uot:
+            # The Caddyfile alone cannot express «no UoT»: a stock build accepts it
+            # either way, so the binary has to match the setting.
+            if not self._download_binary(pending, uot=desired_uot):
+                pending.unlink(missing_ok=True)
+                print("  Не удалось собрать caddy-naive для выбранного режима UoT")
+                return False
         error = self._validate_caddy(pending)
+        if error and self._download_binary(pending, uot=desired_uot):
+            error = self._validate_caddy(pending)
         if error:
             pending.unlink(missing_ok=True)
             print(f"  Caddyfile validation error: {error}")
@@ -118,17 +146,19 @@ class NaiveRuntimeMixin:
             capture_output=True,
         )
         restarted = host.run(
-            ["systemctl", "reload-or-restart", layout.service_name],
+            [
+                "systemctl",
+                "restart" if getattr(self, "_binary_replaced", False) else "reload-or-restart",
+                layout.service_name,
+            ],
             capture_output=True,
         )
         if enabled.returncode != 0 or restarted.returncode != 0:
             return False
 
         protocol = state.protocols.get("naive")
-        network = (
-            protocol.config.get("network", "tcp")
-            if protocol is not None
-            else "tcp"
+        network = str(
+            protocol.config.get("network", "tcp") if protocol is not None else "tcp",
         )
         self._sync_transport_firewall(network)
         time.sleep(2)
@@ -160,11 +190,7 @@ class NaiveRuntimeMixin:
 
         self._remove_iptables_rules()
         host = self._host_backend()
-        protocols = (
-            ("tcp", "udp")
-            if network in ("quic", "both")
-            else ("tcp",)
-        )
+        protocols = ("tcp", "udp") if network in ("quic", "both") else ("tcp",)
         for protocol in protocols:
             for chain in ("INPUT", "OUTPUT"):
                 host.run(
@@ -209,11 +235,13 @@ class NaiveRuntimeMixin:
     def _validate_caddy(
         self,
         config_path: Path | None = None,
+        *,
+        binary: Path | None = None,
     ) -> str | None:
         layout = self._runtime_layout()
         result = self._host_backend().run(
             [
-                str(layout.binary),
+                str(binary or layout.binary),
                 "validate",
                 "--config",
                 str(config_path or layout.caddyfile),
@@ -224,5 +252,5 @@ class NaiveRuntimeMixin:
             text=True,
         )
         if result.returncode != 0:
-            return (result.stderr or result.stdout or "")[:4000]
+            return (result.stderr or result.stdout or f"Caddy exited with code {result.returncode}")[:4000]
         return None

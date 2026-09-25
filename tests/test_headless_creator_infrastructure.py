@@ -6,6 +6,8 @@ import stat
 from pathlib import Path
 from subprocess import CompletedProcess
 
+import pytest
+
 from hydra.core.host import HostBackend
 from hydra.services.headless_creator_infrastructure import (
     HeadlessCreatorInfrastructure,
@@ -76,6 +78,50 @@ def test_cookie_normalization_uses_canonical_creator_file_shape(tmp_path) -> Non
     assert json.loads(cookie_file.read_text(encoding="utf-8")) == [
         {"name": "remixsid", "value": "token"},
     ]
+
+
+def test_cookie_import_validates_json_before_replacing_existing_cookies(tmp_path) -> None:
+    cookie_file = tmp_path / "cookies-vk.json"
+    cookie_file.write_text('[{"name": "old", "value": "old-token"}]\n', encoding="utf-8")
+    source = tmp_path / "invalid.json"
+    source.write_text("not json", encoding="utf-8")
+    runtime = HeadlessCreatorInfrastructure(HostBackend(), cookies_file=cookie_file)
+
+    with pytest.raises(json.JSONDecodeError):
+        runtime.import_vk_cookies(source)
+
+    assert cookie_file.read_text(encoding="utf-8") == '[{"name": "old", "value": "old-token"}]\n'
+
+
+def test_cookie_import_normalizes_and_restricts_file_permissions(tmp_path) -> None:
+    cookie_file = tmp_path / "cookies-vk.json"
+    source = tmp_path / "cookies.json"
+    _cookies(source)
+    runtime = HeadlessCreatorInfrastructure(HostBackend(), cookies_file=cookie_file)
+
+    assert runtime.import_vk_cookies(source) == [{"name": "remixsid", "value": "token"}]
+    assert json.loads(cookie_file.read_text(encoding="utf-8")) == [
+        {"name": "remixsid", "value": "token"},
+    ]
+    if os.name != "nt":
+        assert stat.S_IMODE(cookie_file.stat().st_mode) == 0o600
+
+
+def test_cookie_import_keeps_existing_cookies_when_atomic_write_fails(tmp_path) -> None:
+    class FailingWriteHost(HostBackend):
+        def atomic_write(self, path, content, *, mode=0o644) -> None:
+            raise OSError("write failed")
+
+    cookie_file = tmp_path / "cookies-vk.json"
+    cookie_file.write_text('[{"name": "old", "value": "old-token"}]\n', encoding="utf-8")
+    source = tmp_path / "cookies.json"
+    _cookies(source)
+    runtime = HeadlessCreatorInfrastructure(FailingWriteHost(), cookies_file=cookie_file)
+
+    with pytest.raises(OSError, match="write failed"):
+        runtime.import_vk_cookies(source)
+
+    assert cookie_file.read_text(encoding="utf-8") == '[{"name": "old", "value": "old-token"}]\n'
 
 
 def test_native_room_is_created_by_headless_creator_not_singbox(tmp_path) -> None:

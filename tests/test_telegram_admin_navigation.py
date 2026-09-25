@@ -1,9 +1,17 @@
-"""Navigation, input, and notification-noise contracts of the admin bot."""
+"""Navigation, input, and notification-noise contracts of the admin bot.
+
+Handlers run against duck-typed stand-ins for ``telegram.Update`` built by
+``_update`` and captured by ``_rendered``.  Both are annotated ``Any`` so the
+intent is stated once, rather than suppressed at every call site: the handler
+only touches the fields the double provides.
+"""
+
 from __future__ import annotations
 
 import asyncio
 import threading
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -81,7 +89,7 @@ def _bot(application):
     return bot
 
 
-def _update(*, data: str = "", text: str = ""):
+def _update(*, data: str = "", text: str = "") -> Any:
     query = (
         SimpleNamespace(
             data=data,
@@ -101,18 +109,14 @@ def _update(*, data: str = "", text: str = ""):
     )
 
 
-def _rendered(update):
+def _rendered(update: Any):
     query = update.callback_query
     if query and query.edit_message_text.await_count:
         call = query.edit_message_text.call_args
     else:
         call = update.effective_message.reply_text.call_args
     keyboard = call.kwargs.get("reply_markup")
-    callbacks = [
-        button.callback_data
-        for row in getattr(keyboard, "inline_keyboard", [])
-        for button in row
-    ]
+    callbacks = [button.callback_data for row in getattr(keyboard, "inline_keyboard", []) for button in row]
     return call.args[0], callbacks
 
 
@@ -121,11 +125,9 @@ def test_every_screen_in_the_graph_has_a_renderer():
 
 
 def test_breadcrumbs_follow_the_screen_graph():
-    assert navigation.breadcrumb("antidpi_bans") == (
-        "Control Center › AntiDPI › Блокировки"
-    )
-    assert navigation.breadcrumb("home") == "Control Center"
-    assert navigation.breadcrumb("unknown") == "Control Center"
+    assert navigation.breadcrumb("antidpi_bans") == ("HYDRA › AntiDPI › Блокировки")
+    assert navigation.breadcrumb("home") == "HYDRA"
+    assert navigation.breadcrumb("unknown") == "HYDRA"
 
 
 def test_address_payloads_survive_ipv6_colons_and_carry_their_origin():
@@ -141,17 +143,18 @@ def test_address_payloads_survive_ipv6_colons_and_carry_their_origin():
 
 
 def test_address_card_returns_to_the_list_it_was_opened_from():
+    """The card returns to the ban list it was opened from.
+
+    The watch origin was removed together with the watchlist; the ban list is
+    now the only list that renders AntiScan addresses.
+    """
     keyboard = security_actions.address_keyboard(
         "203.0.113.9",
-        origin="antidpi_watch",
+        origin="antidpi_bans",
     )
-    labels = {
-        button.text: button.callback_data
-        for row in keyboard.inline_keyboard
-        for button in row
-    }
-    assert labels["⬅️ Под наблюдением"] == "view:antidpi_watch"
-    assert labels["🔄 Обновить"] == "ip:w:203.0.113.9"
+    labels = {button.text: button.callback_data for row in keyboard.inline_keyboard for button in row}
+    assert labels["⬅️ Блокировки"] == "view:antidpi_bans"
+    assert labels["🔄 Обновить"] == "ip:b:203.0.113.9"
 
 
 def test_view_payloads_round_trip_through_the_parser():
@@ -170,26 +173,33 @@ def test_pagination_clamps_to_the_available_range():
 
 def test_back_button_returns_to_the_parent_not_the_main_menu(application):
     keyboard = security_actions._back_keyboard(refresh="antidpi_details")
-    labels = {
-        button.text: button.callback_data
-        for row in keyboard.inline_keyboard
-        for button in row
-    }
+    labels = {button.text: button.callback_data for row in keyboard.inline_keyboard for button in row}
     assert labels["⬅️ AntiDPI"] == "view:antidpi"
     assert labels["🔄 Обновить"] == "view:antidpi_details"
     assert labels["🏠 Меню"] == "view:home"
 
 
+def test_honeypot_summary_links_to_the_paged_ban_list(application):
+    callbacks: list[Any] = [
+        button.callback_data
+        for row in security_actions._honeypot_keyboard(application).inline_keyboard
+        for button in row
+    ]
+
+    assert "view:honeypot_bans" in callbacks
+    assert not any(value.startswith("ask-hp-unban:") for value in callbacks)
+
+
 def test_paged_callback_routes_to_the_requested_page(application):
     bot = _bot(application)
-    update = _update(data="view:antidpi_watch:2")
+    update = _update(data="view:antidpi_bans:2")
     renderer = MagicMock(return_value=("ok", None))
     with patch.dict(
         controller_screens.SCREEN_RENDERERS,
-        {"antidpi_watch": renderer},
+        {"antidpi_bans": renderer},
     ):
         asyncio.run(bot.handle_callback(update, MagicMock()))
-    renderer.assert_called_once_with(application, "antidpi_watch", 2)
+    renderer.assert_called_once_with(application, "antidpi_bans", 2)
 
 
 def test_a_bare_ip_message_opens_the_address_card(application):
@@ -276,9 +286,7 @@ def test_disabled_category_still_wins_over_blocking_actions():
 
 
 def test_monitor_backs_off_when_the_host_is_quiet():
-    intervals = [
-        security_monitors._poll_interval(index) for index in range(0, 20, 5)
-    ]
+    intervals = [security_monitors._poll_interval(index) for index in range(0, 20, 5)]
     assert intervals == sorted(intervals)
     assert intervals[0] < intervals[-1]
     assert intervals[-1] >= 15.0
@@ -299,8 +307,10 @@ def test_monitor_reacts_immediately_after_a_new_line():
         return stop.is_set()
 
     processed: list[str] = []
-    with patch.object(stop, "wait", side_effect=wait), \
-         patch.object(stop, "is_set", side_effect=[False] * 4 + [True] * 8):
+    with (
+        patch.object(stop, "wait", side_effect=wait),
+        patch.object(stop, "is_set", side_effect=[False] * 4 + [True] * 8),
+    ):
         security_monitors._follow_plugin_log(stop, fetch, processed.append)
 
     assert processed == ["b"]

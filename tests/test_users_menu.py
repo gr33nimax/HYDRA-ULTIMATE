@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 from hydra.core.state import AppState, User
 from hydra.ui import menus
-from hydra.ui._menus import users_links
+from hydra.ui._menus import users_links, users_names
 
 
 def test_add_user_normalizes_email_and_rejects_case_insensitive_duplicate():
@@ -163,3 +163,46 @@ def test_subscription_urls_are_printed_as_exact_unframed_lines():
 
     rendered = [call.args[0] for call in output.call_args_list if call.args]
     assert all(url in rendered for url in urls.values())
+
+
+def test_global_configuration_name_editor_selects_from_visible_configs() -> None:
+    user = User(email="alice@example.com", uuid="token")
+    state = AppState(users=[user])
+    artifact = users_links._ClientArtifact(
+        plugin_name="calls",
+        display_name="Hydra VK Tunnel",
+        profile_name="",
+        profile_label="",
+        config="{}",
+        links=(),
+    )
+    app = MagicMock()
+
+    with (
+        patch.object(
+            users_names,
+            "_client_artifacts",
+            return_value=[artifact],
+        ),
+        patch.object(users_names, "menu", return_value="1"),
+        patch.object(
+            users_names,
+            "prompt",
+            side_effect=["Домашний VK", ""],
+        ),
+        patch.object(users_names, "success"),
+    ):
+        users_names.edit_configuration_name(
+            state,
+            user,
+            app,
+            global_scope=True,
+        )
+
+    app.configuration_names.set_global.assert_called_once_with(
+        state,
+        "calls",
+        "Домашний VK",
+    )
+    app.configuration_names.set_user.assert_not_called()
+    app.admin.save_state.assert_called_once_with(state)

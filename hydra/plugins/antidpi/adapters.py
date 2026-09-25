@@ -1,65 +1,38 @@
-"""Protocol-log adapters for the anti-DPI event schema.
+"""Strict protocol-reject adapters for the AntiScan evidence allowlist.
 
-These parsers intentionally emit evidence, not verdicts.  The central scorer
-combines them with rate and temporal context before touching the firewall.
+These parsers emit evidence, not verdicts.  Only a protocol-owned
+authentication/handshake rejection with an exactly attributed external peer
+qualifies; generic TLS noise, HTTP status codes, packet rates and unrelated
+service messages are never evidence and are not parsed at all.
 """
+
 from __future__ import annotations
 
 import ipaddress
 import json
 import re
 
-PATTERNS: tuple[tuple[str, str, str], ...] = (
+# One anchored grammar per enabled protocol reject.  A pattern must bind the
+# inbound tag, the protocol-owned error and the peer endpoint in one record;
+# matching a bare keyword anywhere in a journal line is forbidden.
+_PROTOCOL_REJECTS: tuple[tuple[str, str, str, re.Pattern[str]], ...] = (
     (
-        "amneziawg",
-        r"(?:Invalid MAC(?: of handshake)?|Invalid handshake|unknown peer)",
-        "handshake_failure",
+        # Snell is a direct TCP listener, so the peer is the real client.
+        # ``message authentication failed`` on the record header proves the
+        # caller could not produce a valid encrypted Snell frame.
+        "snell",
+        "record_auth_failed",
+        "direct",
+        re.compile(
+            r"inbound/snell\[[^\]]+\]:\s*"
+            r"process connection from\s+(?P<peer>\[[0-9a-fA-F:]+\]|[0-9.]+):(?P<port>\d+):\s*"
+            r"snell:\s*serve\s+(?P<served>\[[0-9a-fA-F:]+\]|[0-9.]+):(?P<served_port>\d+):\s*"
+            r"read request:\s*open record header:\s*cipher:\s*"
+            r"message authentication failed",
+        ),
     ),
-    ("sing-box", r"(?:handshake failed|invalid handshake|protocol error)", "handshake_failure"),
-    ("anytls", r"(?:authentication failed|invalid password|unknown user password|unauthorized|auth error)", "auth_failure"),
-    ("anytls", r"(?:process connection.*?EOF: fallback disabled)", "invalid_first_packet"),
-    ("trusttunnel", r"(?:authentication failed|authorization failed|invalid token|unauthorized|auth error)", "auth_failure"),
-    (
-        "shadowtls",
-        r"inbound/trojan\[shadowtls-trojan-in\].*"
-        r"(?:authentication failed|invalid password|unknown user|unauthorized|"
-        r"bad request: fallback disabled)",
-        "auth_failure",
-    ),
-    (
-        "shadowtls",
-        r"(?:handshake failed|invalid client hello|read client handshake: unexpected EOF|"
-        r"extract server name: tls: handshake message .* exceeds maximum)",
-        "malformed_tls",
-    ),
-    (
-        "vless",
-        r"inbound/vless\[[^\]]*\][^\n]*?"
-        r"(?:authentication failed|authenticate: |unknown user|"
-        r"invalid request|bad request|unknown uuid)",
-        "auth_failure",
-    ),
-    ("hysteria2", r"(?:handshake failed|invalid packet|authentication failed|failed to parse QUIC)", "invalid_first_packet"),
-    ("mieru", r"(?:handshake failed|authentication failed|invalid credentials)", "auth_failure"),
-    ("snell", r"(?:process connection .*: malformed HTTP request)", "invalid_first_packet"),
-    ("snell", r"(?:handshake failed|invalid client handshake)", "handshake_failure"),
-    ("telemt", r"(?:handshake failed|invalid)", "handshake_failure"),
-    ("naive", r"(?:authentication failed|invalid credentials|malformed request|protocol error)", "auth_failure"),
-    ("wdtt", r"(?:invalid handshake|handshake failed|authentication failed|auth failed|invalid packet)", "handshake_failure"),
 )
 
-_KERNEL_SCAN = re.compile(
-    r"HYDRA_SCAN_(?P<protocol>TCP|UDP)\b.*?SRC=(?P<ip>[^\s]+)(?:.*?DPT=(?P<port>\d+))?",
-    re.IGNORECASE,
-)
-_KERNEL_UDP_PROBE = re.compile(
-    r"HYDRA_UDP_PROBE\b.*?SRC=(?P<ip>[^\s]+).*?DPT=(?P<port>\d+)",
-    re.IGNORECASE,
-)
-_KERNEL_MIERU_SHORT = re.compile(
-    r"HYDRA_MIERU_SHORT\b.*?SRC=(?P<ip>[^\s]+).*?SPT=(?P<source_port>\d+).*?DPT=(?P<port>\d+)",
-    re.IGNORECASE,
-)
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -92,7 +65,7 @@ def remote_ip(value: object) -> str | None:
     """Return the canonical IP from a raw address or host:port endpoint."""
     raw = str(value or "").strip()
     if raw.startswith("[") and "]" in raw:
-        raw = raw[1:raw.index("]")]
+        raw = raw[1 : raw.index("]")]
     else:
         try:
             return ipaddress.ip_address(raw).compressed
@@ -108,141 +81,25 @@ def remote_ip(value: object) -> str | None:
 _remote_ip = remote_ip
 
 
-
-def _extract_endpoint(text: str) -> tuple[str | None, int | None]:
-    candidates = []
-    candidates.extend((ip, port) for ip, port in re.findall(r"\[([0-9a-fA-F:]+)\](?::(\d+))?", text))
-    candidates.extend((ip, port) for ip, port in re.findall(
-        r"(?<![\d.])((?:\d{1,3}\.){3}\d{1,3})(?::(\d+))?", text,
-    ))
-    for candidate, raw_port in candidates:
-        value = str(candidate)
-        try:
-            return ipaddress.ip_address(value).compressed, int(raw_port) if raw_port else None
-        except ValueError:
-            continue
-    return None, None
-
-
-def _extract_ip(text: str) -> str | None:
-    return _extract_endpoint(text)[0]
-
 def parse_protocol_line(service: str, line: object) -> tuple[str, dict] | None:
-    """Parse one journal line into a normalized event, if it is evidence."""
-    service = str(service or "").lower()
+    """Return one proven protocol reject, or ``None`` for anything weaker."""
+    _ = service  # kept for call-site compatibility; the grammar owns the match
     text = decode_log_message(line)
-    for owner, pattern, kind in PATTERNS:
-        owner_visible = owner in service or owner in text.lower()
-        # AmneziaWG emits native rejection diagnostics through the kernel
-        # journal. Some builds identify records as WireGuard or only by awgN.
-        if owner == "amneziawg" and service in {"kernel", "kernel-journal"}:
-            owner_visible = bool(re.search(pattern, text, re.IGNORECASE)) and bool(
-                re.search(r"(?:wireguard|amnezia|\bawg\d*\b)", text, re.IGNORECASE)
-            )
-        if not owner_visible:
+    for protocol, reason, attribution, pattern in _PROTOCOL_REJECTS:
+        match = pattern.search(text)
+        if match is None:
             continue
-        if not re.search(pattern, text, re.IGNORECASE):
+        peer = remote_ip(match.group("peer"))
+        served = remote_ip(match.group("served"))
+        if peer is None or served is None or peer != served:
+            # The wrapper and the protocol-owned error must agree on the peer;
+            # a mismatch means the record cannot be attributed.
             continue
-        ip, peer_port = _extract_endpoint(text)
-        if ip is None:
-            continue
-        event = {"protocol": owner, "kind": kind, "source": "journal"}
-        if owner in {"amneziawg", "hysteria2", "wdtt"}:
-            # Direct UDP source addresses are spoofable until a protocol log
-            # explicitly proves address validation. Keep these events useful
-            # for alerting without allowing them to trigger an IP ban alone.
-            event["ban_eligible"] = False
-        if (
-            peer_port is not None
-            and owner in {"anytls", "trusttunnel", "shadowtls", "vless"}
-            and ipaddress.ip_address(ip).is_loopback
-        ):
-            event["peer_port"] = peer_port
-        if kind == "handshake_failure":
-            event["handshake_ok"] = False
-        return ip, event
-    return None
-
-
-def parse_unattributed_protocol_line(service: str, line: object) -> dict | None:
-    """Return strict native evidence whose log record omits the peer endpoint."""
-    service = str(service or "").lower()
-    text = decode_log_message(line)
-    lowered = text.lower()
-    if (
-        ("sing-box" in service or "shadowtls" in lowered)
-        and "inbound/shadowtls[" in lowered
-        and "client hello verify failed: hmac mismatch" in lowered
-    ):
-        return {
-            "protocol": "shadowtls", "kind": "auth_failure",
+        return peer, {
+            "kind": "protocol_reject",
+            "protocol": protocol,
+            "reason": reason,
             "source": "journal",
+            "attribution": attribution,
         }
     return None
-
-
-def normalize_tls_auth_failure(record: dict) -> tuple[str, dict] | None:
-    """Recognize TLS/Inbound authentication failure in structured JSON records."""
-    if not isinstance(record, dict):
-        return None
-    remote = str(record.get("remote", record.get("remote_ip", record.get("client_ip", ""))))
-    if not remote:
-        return None
-    ip = remote_ip(remote)
-    if ip is None:
-        return None
-    text = " ".join(str(record.get(k, "")) for k in ("msg", "error", "err", "reason")).lower()
-    if any(token in text for token in ("auth_failure", "authentication failed", "invalid password", "unauthorized", "bad credentials")):
-        proto = str(record.get("protocol", record.get("service", "tls"))).lower()
-        return ip, {"protocol": proto, "kind": "auth_failure", "source": "auth_log"}
-    return None
-
-
-def parse_kernel_scan_line(line: str) -> tuple[str, dict] | None:
-    """Normalize a rate-limited kernel firewall scan signal."""
-    mieru = _KERNEL_MIERU_SHORT.search(str(line or ""))
-    if mieru:
-        try:
-            address = ipaddress.ip_address(mieru.group("ip").strip("[]")).compressed
-            source_port = int(mieru.group("source_port"))
-            destination_port = int(mieru.group("port"))
-        except ValueError:
-            return None
-        return address, {
-            "protocol": "mieru", "kind": "low_volume_session",
-            "source": "kernel-mieru", "source_port": source_port,
-            "destination_port": destination_port, "ban_eligible": False,
-            "policy": "alert-only / inferred low-volume TCP rejection",
-        }
-    udp_probe = _KERNEL_UDP_PROBE.search(str(line or ""))
-    if udp_probe:
-        try:
-            address = ipaddress.ip_address(udp_probe.group("ip").strip("[]")).compressed
-            port = int(udp_probe.group("port"))
-        except ValueError:
-            return None
-        return address, {
-            "protocol": "udp", "kind": "udp_probe",
-            "source": "kernel-udp-probe", "destination_port": port,
-            "ban_eligible": False,
-        }
-    match = _KERNEL_SCAN.search(str(line or ""))
-    if not match:
-        return None
-    raw_ip = match.group("ip").strip("[]")
-    try:
-        address = ipaddress.ip_address(raw_ip).compressed
-    except ValueError:
-        return None
-    protocol = match.group("protocol").lower()
-    event = {
-        "protocol": protocol,
-        "kind": "port_scan",
-        "source": "kernel-firewall",
-        "connections_10s": 12,
-    }
-    if protocol == "udp":
-        event["ban_eligible"] = False
-    if match.group("port"):
-        event["destination_port"] = int(match.group("port"))
-    return address, event

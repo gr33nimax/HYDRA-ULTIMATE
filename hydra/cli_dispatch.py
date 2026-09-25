@@ -377,10 +377,14 @@ def _antidpi_command(
             ),
         )
     installed = app.protocols.install(state, "antidpi")
+    synced = bool(
+        installed
+        and app.plugin_action("antidpi", "sync_runtime", state=state)
+    )
     health = app.protocols.health(state, "antidpi")
     payload = {
-        "ok": bool(installed and health.healthy),
-        "error": "" if installed else health.detail,
+        "ok": bool(synced and health.healthy),
+        "error": "" if synced else health.detail,
         "health": health.as_dict(),
     }
     return _result(payload)

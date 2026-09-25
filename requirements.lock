@@ -3,4 +3,3 @@
 # dependencies are pinned for reproducible HYDRA behavior.
 cryptography==50.0.0
 python-telegram-bot[job-queue]==22.8
-qrcode==8.2

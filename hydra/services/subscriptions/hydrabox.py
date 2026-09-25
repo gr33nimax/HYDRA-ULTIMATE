@@ -1,16 +1,21 @@
 """Hydra Subscription v2 generation for the HydraBox delivery format."""
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
+from hydra.core.configuration_names import resolve_configuration_name
 from hydra.core.state_models import AppState, User
 from hydra.services.subscriptions.access import SubscriptionPluginAccess
 from hydra.services.subscriptions.metadata import get_subscription_url
+from hydra.services.subscriptions.profile_names import (
+    hydrabox_profile_id,
+    hydrabox_profile_name,
+    hydrabox_resource_id,
+)
 
 
 HYDRABOX_API_VERSION = "hydra.io/subscription/v2"
@@ -21,7 +26,7 @@ HYDRABOX_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 _MAX_SEQUENCE = 9_007_199_254_740_991
 _PAYLOAD_REVISION_BITS = 16
 # Increment whenever renderer code can change JSON for unchanged persisted state.
-_HYDRABOX_PAYLOAD_REVISION = 2
+_HYDRABOX_PAYLOAD_REVISION = 3
 _MAX_STATE_REVISION = _MAX_SEQUENCE >> _PAYLOAD_REVISION_BITS
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _ALLOWED_OUTBOUND_TYPES = frozenset({
@@ -201,30 +206,14 @@ def _entrypoints(
     return sorted(roots, key=lambda entry: entry[1] != preferred)
 
 
-def _profile_id(plugin_name: str, section: str, tag: str) -> str:
-    prefix = re.sub(r"[^A-Za-z0-9._:-]+", "-", plugin_name).strip("-._:")
-    prefix = prefix or "profile"
-    digest = hashlib.sha256(f"{section}\0{tag}".encode()).hexdigest()[:16]
-    return f"{prefix[:110]}-{digest}"
-
-
-def _resource_id(plugin_name: str) -> str:
-    prefix = re.sub(r"[^A-Za-z0-9._:-]+", "-", plugin_name).strip("-._:")
-    prefix = prefix or "transport"
-    digest = hashlib.sha256(plugin_name.encode()).hexdigest()[:12]
-    return f"resource-{prefix[:106]}-{digest}"
-
-
 def _requested_permissions(
     objects: list[tuple[str, dict[str, Any]]],
 ) -> list[str]:
     sections = {section for section, _ in objects}
-    permissions: list[str] = []
-    if "outbounds" in sections:
-        permissions.append("network.outbound")
-    if "endpoints" in sections:
-        permissions.append("network.endpoint.wireguard")
-    return permissions
+    return [permission for section, permission in (
+        ("outbounds", "network.outbound"),
+        ("endpoints", "network.endpoint.wireguard"),
+    ) if section in sections]
 
 
 def _parse_timestamp(value: str, field: str) -> datetime:
@@ -267,9 +256,7 @@ def _validate_envelope_identity(user: User, state: AppState) -> int:
         or not 0 <= state.revision <= _MAX_STATE_REVISION
     ):
         raise ValueError("invalid HydraBox sequence")
-    return (
-        state.revision << _PAYLOAD_REVISION_BITS
-    ) | _HYDRABOX_PAYLOAD_REVISION
+    return (state.revision << _PAYLOAD_REVISION_BITS) | _HYDRABOX_PAYLOAD_REVISION
 
 
 def generate_hydrabox_subscription(
@@ -289,7 +276,7 @@ def generate_hydrabox_subscription(
         if not plugin.meta.capabilities.hydra_v2_subscription_enabled:
             continue
         try:
-            payload = plugins.singbox_client_config(plugin, user, state)
+            payload = plugins.singbox_client_config(plugin, user, state, apply_name=False)
         except Exception as exc:
             raise ValueError(
                 f"failed to generate {plugin.meta.name} HydraBox projection",
@@ -302,18 +289,21 @@ def generate_hydrabox_subscription(
         entrypoints = _entrypoints(projection, objects)
         if not entrypoints:
             continue
-        label = plugin.meta.subscription_profile_name or (
-            plugin.meta.display_name or plugin.meta.name
+        label = resolve_configuration_name(
+            key=plugin.meta.name,
+            default=plugin.meta.subscription_profile_name or plugin.meta.display_name or plugin.meta.name,
+            global_names=state.configuration_names,
+            user_names=user.configuration_name_overrides,
         )
         multiple = len(entrypoints) > 1
-        resource_id = _resource_id(plugin.meta.name)
+        resource_id = hydrabox_resource_id(plugin.meta.name)
         document: dict[str, list[dict[str, Any]]] = {}
         for section, item in objects:
             document.setdefault(section, []).append(item)
             if item.get("type") == "call":
                 required_core_features.add("call")
-                if item.get("platform") == "vk" and item.get("mode") == "multi_user":
-                    required_core_features.add("call_vk_multi_user")
+                if item.get("platform") == "vk" and item.get("mode") == "vk_parasite":
+                    required_core_features.add("call_vk_parasite")
         resources.append({
             "id": resource_id,
             "format": "sing-box-json",
@@ -321,14 +311,16 @@ def generate_hydrabox_subscription(
             "document": document,
         })
         for section, tag in entrypoints:
-            profile_id = _profile_id(plugin.meta.name, section, tag)
+            profile_id = hydrabox_profile_id(plugin.meta.name, section, tag)
             if profile_id in profile_ids:
                 raise ValueError(f"duplicate HydraBox profile id: {profile_id}")
             profile_ids.add(profile_id)
             profiles.append({
                 "id": profile_id,
                 "resource": resource_id,
-                "name": f"{label} — {tag}" if multiple else label,
+                "name": hydrabox_profile_name(
+                    plugin.meta.name, section, tag, objects, label, multiple, state, user,
+                ),
                 "entrypoint": {"section": section, "tag": tag},
                 "enabled": True,
             })

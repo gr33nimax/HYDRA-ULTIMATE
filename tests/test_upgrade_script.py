@@ -1,15 +1,17 @@
+import os
 import re
+import shutil
+import subprocess
+import time
 from pathlib import Path
 
-from hydra.plugins.warp.parsing import parse_wg_conf
+import pytest
 
 
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "upgrade.sh"
 LAUNCHER = ROOT / "updater.sh"
-LINUX_INTEGRATION_SMOKE = (
-    ROOT / ".github" / "scripts" / "linux-integration-smoke.sh"
-)
+LINUX_INTEGRATION_SMOKE = ROOT / ".github" / "scripts" / "linux-integration-smoke.sh"
 LINUX_UPGRADE_SMOKE = ROOT / ".github" / "scripts" / "linux-upgrade-smoke.sh"
 UPGRADE_DOCS = (ROOT / "README.md", ROOT / "docs" / "UPGRADE.md")
 
@@ -26,8 +28,11 @@ def test_existing_install_updater_is_transactional_and_main_by_default():
     assert "return 1" in fail_helper
     assert "exit 1; }" not in source
     assert "git ls-remote --exit-code" in source
-    assert 'flock -n 9' in source
+    assert "flock -n 9" in source
     assert 'python3 -m venv "$STAGE_DIR/.venv"' in source
+    assert 'BUILD_CHANNEL="local"' in source
+    assert "main | dev | debug) BUILD_CHANNEL=$HYDRA_REF ;;" in source
+    assert '"$STAGE_DIR/.hydra-build.json"' in source
     assert 'PYTHONPATH="$STAGE_DIR"' in source
     assert 'PYTHONPATH="$INSTALL_DIR"' in source
     assert "-m hydra.cli --json upgrade check" in source
@@ -36,12 +41,24 @@ def test_existing_install_updater_is_transactional_and_main_by_default():
     assert "wait_for_previous_units" in source
 
 
-def test_linux_integration_smoke_uses_the_canonical_state_schema_version():
+def test_stop_managed_units_stops_only_what_is_actually_running():
+    # Юнит может лежать файлом и быть не загруженным: служба по требованию не стартует на
+    # загрузке, а `systemctl stop` на таком возвращает ошибку. Обновление валилось целиком
+    # на одной спящей службе — сначала на остановке, потом ещё раз на откате.
+    source = _source()
+    start = source.index("stop_managed_units() {")
+    body = source[start : source.index("\n}\n", start)]
+
+    assert "ACTIVE_UNITS" in body
+    assert "MANAGED_UNITS" not in body
+
+
+def test_linux_integration_smoke_uses_the_canonical_state_format_version():
     for script in (LINUX_INTEGRATION_SMOKE, LINUX_UPGRADE_SMOKE):
         source = script.read_text(encoding="utf-8")
 
-        assert "from hydra.core.state_models import SCHEMA_VERSION" in source
-        assert 'state["version"] == SCHEMA_VERSION' in source
+        assert "from hydra.core.state_format import STATE_FORMAT_VERSION" in source
+        assert 'state["format_version"] == STATE_FORMAT_VERSION' in source
         assert '= "4"' not in source
 
 
@@ -56,18 +73,12 @@ def test_linux_upgrade_smoke_uses_the_target_checkout_version():
     )
 
 
-def test_linux_integration_smoke_provisions_the_migrated_warp_runtime():
+def test_linux_integration_smoke_needs_no_warp_credentials():
     source = LINUX_INTEGRATION_SMOKE.read_text(encoding="utf-8")
-    marker = 'cat > "$wgcf_profile" <<\'EOF\'\n'
-    profile = source.split(marker, 1)[1].split("\nEOF", 1)[0]
 
-    assert 'wgcf_profile=/etc/wireguard/wgcf-profile.conf' in source
-    assert 'cat > "$wgcf_profile"' in source
-    assert 'chmod 0600 "$wgcf_profile"' in source
-    assert 'rm -f "$wgcf_profile"' in source
-    assert parse_wg_conf(profile) is not None
-    assert source.index('cat > "$wgcf_profile"') < source.index(
-        "python -m hydra.cli validate",
+    assert "/etc/wireguard" not in source
+    assert source.index("install -m 0600 tests/fixtures/state-2.5.3.json") < (
+        source.index("python -m hydra.cli validate")
     )
 
 
@@ -90,18 +101,24 @@ def test_target_commands_do_not_depend_on_the_updater_working_directory():
     assert 'cd "$INSTALL_DIR"' in install_helper
     assert "trap - ERR" in stage_helper
     assert "trap - ERR" in install_helper
-    assert len(
-        re.findall(
-            r"(?m)^\s*run_stage_python\s+(?:\\\s*)?-m hydra\.cli\b",
-            source,
-        ),
-    ) == 6
-    assert len(
-        re.findall(
-            r"(?m)^\s*run_install_python\s+(?:\\\s*)?-m hydra\.cli\b",
-            source,
-        ),
-    ) == 2
+    assert (
+        len(
+            re.findall(
+                r"(?m)^\s*run_stage_python\s+(?:\\\s*)?-m hydra\.cli\b",
+                source,
+            ),
+        )
+        == 6
+    )
+    assert (
+        len(
+            re.findall(
+                r"(?m)^\s*run_install_python\s+(?:\\\s*)?-m hydra\.cli\b",
+                source,
+            ),
+        )
+        == 2
+    )
 
 
 def test_upgrade_orders_preflight_backup_migration_and_cutover_safely():
@@ -110,7 +127,7 @@ def test_upgrade_orders_preflight_backup_migration_and_cutover_safely():
     quiesce = source.index('info "Останавливаю активные службы HYDRA')
     snapshot = source.index('cp -a "$STATE_DIR" "$STATE_ROLLBACK_DIR"')
     backup = source.index('info "Создаю и проверяю резервную копию"')
-    migration = source.index('info "Мигрирую state при остановленных службах"')
+    migration = source.index('info "Переношу состояние при остановленных службах"')
     mutation = source.index("STATE_MUTATION_STARTED=1", migration)
     cutover = source.index('step 6 7 "Переключение на новый release"')
 
@@ -119,7 +136,7 @@ def test_upgrade_orders_preflight_backup_migration_and_cutover_safely():
 
 def test_quiesced_state_validation_does_not_depend_on_runtime_health():
     source = _source()
-    migration = source.index('info "Мигрирую state при остановленных службах"')
+    migration = source.index('info "Переношу состояние при остановленных службах"')
     restart = source.index("start_previous_units", migration)
     quiesced_validation = source[migration:restart]
 
@@ -141,7 +158,7 @@ def test_caddy_l4_is_restored_when_quiescing_helpers_stops_it_transitively():
     assert '"$unit" == "caddy-l4.service"' in discovery
     assert source.index("\ncapture_active_units\n") < source.index(
         "stop_managed_units",
-        source.index('step 5 7 "Резервная копия и миграция state"'),
+        source.index('step 5 7 "Резервная копия и перенос состояния"'),
     )
     assert "printf '%s\\n' \"${ACTIVE_UNITS[@]}\"" in source
 
@@ -239,6 +256,29 @@ def test_transient_oneshot_services_are_not_expected_to_remain_active():
     assert "continue" in capture
 
 
+def test_template_units_are_replaced_with_loaded_instances_before_capture():
+    source = _source()
+    discovery = source[
+        source.index("discover_units() {") : source.index(
+            "\n}\n",
+            source.index("discover_units() {"),
+        )
+    ]
+
+    assert "systemctl list-unit-files" in discovery
+    assert "systemctl list-units" in discovery
+    assert '[[ "$unit" =~ @\\.(service|timer)$ ]] && continue' in discovery
+    assert 'MANAGED_UNITS+=("$unit")' in discovery
+
+
+def test_linux_upgrade_smoke_covers_active_template_instances():
+    source = LINUX_UPGRADE_SMOKE.read_text(encoding="utf-8")
+
+    assert "hydra-headless-creator-vk-calls@.service" in source
+    assert "hydra-headless-creator-vk-calls@a-1.service" in source
+    assert source.count('systemctl is-active --quiet "$calls_instance"') >= 3
+
+
 def test_error_and_disconnect_handlers_only_roll_back_in_the_root_shell():
     source = _source()
 
@@ -273,8 +313,7 @@ def test_documented_updater_is_fully_downloaded_before_sudo_execution():
             "HYDRA-ULTIMATE/dev/updater.sh | sudo env HYDRA_REF=dev bash"
         ),
         ROOT / "docs" / "UPGRADE.md": (
-            "curl -fsSL https://raw.githubusercontent.com/gr33nimax/"
-            "HYDRA-ULTIMATE/main/updater.sh | sudo bash"
+            "curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/updater.sh | sudo bash"
         ),
     }
     for path in UPGRADE_DOCS:
@@ -288,14 +327,14 @@ def test_one_command_launcher_downloads_engine_completely_before_execution():
     source = LAUNCHER.read_text(encoding="utf-8")
 
     assert 'HYDRA_REF="${HYDRA_REF:-main}"' in source
-    assert 'UPGRADE_SCRIPT=$(mktemp /tmp/hydra-updater.XXXXXX)' in source
+    assert "UPGRADE_SCRIPT=$(mktemp /tmp/hydra-updater.XXXXXX)" in source
     assert '"${RAW_BASE}/${HYDRA_REF}/upgrade.sh"' in source
     assert '-o "$UPGRADE_SCRIPT"' in source
     assert source.index('-o "$UPGRADE_SCRIPT"') < source.index(
         'env HYDRA_REF="$HYDRA_REF" HYDRA_UPDATER_LAUNCHED=1',
     )
     assert "git check-ref-format --branch" in source
-    assert 'trap cleanup EXIT HUP INT TERM' in source
+    assert "trap cleanup EXIT HUP INT TERM" in source
 
 
 def test_updater_has_numbered_progress_and_clear_terminal_states():
@@ -328,6 +367,24 @@ def test_updater_uses_utf8_and_one_consistent_human_readable_style():
     assert 'summary_row "Подробный лог"' in engine
 
 
+def test_updater_support_reminder_is_debug_only_and_warning_is_renderable():
+    source = _source()
+    no_update = source[
+        source.index('result_ok "Обновление не требуется') : source.index(
+            "exit 0",
+            source.index('result_ok "Обновление не требуется'),
+        )
+    ]
+    completed = source[source.index('result_ok "Новая версия HYDRA установлена и проверена."') :]
+
+    assert '[[ "${HYDRA_REF:-}" == "debug" ]] || return 0' in source
+    assert "Поддержать разработку" in source
+    assert "support_reminder" in no_update
+    assert "support_reminder" in completed
+    assert "UI_YELLOW" in source
+    assert "warn() {" in source
+
+
 def test_updater_does_not_mix_english_operator_errors_into_russian_output():
     source = _source()
     broken_messages = (
@@ -352,3 +409,114 @@ def test_all_main_install_and_update_entrypoints_default_to_main():
     assert 'DEFAULT_BRANCH="main"' in bootstrap
     assert 'HYDRA_REF="${HYDRA_REF:-main}"' in launcher
     assert 'HYDRA_REF="${HYDRA_REF:-main}"' in engine
+
+
+def test_old_artifacts_are_pruned_only_after_a_successful_cutover():
+    source = _source()
+    success_tail = source[source.index('printf \'%s\\n\' "$TARGET_SHA" >"$ROLLBACK_DIR/SUCCESS"') :]
+
+    assert "prune_old_artifacts\n" in success_tail
+    assert success_tail.index("prune_old_artifacts\n") > success_tail.index("trap - ERR HUP INT TERM")
+
+
+def _prune_old_artifacts_function() -> str:
+    source = _source()
+    start = source.index("prune_old_artifacts() {")
+    end = source.index("cleanup_transient_paths() {", start)
+    function = source[start:end].rstrip()
+    assert function.endswith("}")
+    return function
+
+
+def _usable_bash() -> str:
+    """Абсолютный путь к рабочему bash: на Windows `bash` из PATH — это WSL."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash недоступен")
+    probe = subprocess.run([bash, "-c", "echo $BASH_VERSION"], capture_output=True, text=True)
+    if probe.returncode != 0 or not probe.stdout.strip():
+        pytest.skip("нет рабочего bash")
+    return bash
+
+
+def test_prune_old_artifacts_keeps_the_current_release_and_fresh_snapshots(tmp_path):
+    root = tmp_path.resolve()
+    releases = root / "releases"
+    backups = root / "backups"
+    install = root / "install"
+    releases.mkdir()
+    backups.mkdir()
+
+    def make_release(name: str, age_days: int) -> Path:
+        path = releases / name
+        path.mkdir()
+        (path / "main.py").write_text("", encoding="utf-8")
+        stamp = time.time() - age_days * 86400
+        os.utime(path, (stamp, stamp))
+        return path
+
+    current = make_release("current-sha", 30)
+    recent = [make_release(f"recent-{index}-sha", 1 + index) for index in range(4)]
+    pruned = [make_release(f"stale-{index}-sha", 10 + index) for index in range(4)]
+
+    stale_staging = releases / ".staging-abandoned"
+    stale_staging.mkdir()
+    stamp = time.time() - 3 * 86400
+    os.utime(stale_staging, (stamp, stamp))
+    inflight_staging = releases / ".staging-inflight"
+    inflight_staging.mkdir()
+
+    fresh_backup = backups / "fresh-snapshot"
+    fresh_backup.mkdir()
+    stale_backup = backups / "stale-snapshot"
+    stale_backup.mkdir()
+    stamp = time.time() - 30 * 86400
+    os.utime(stale_backup, (stamp, stamp))
+
+    install = root / "install"
+    try:
+        install.symlink_to(current, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        # Без прав на symlink достаточно реального пути: функция резолвит его
+        # тем же readlink -f и сравнивает с содержимым каталога релизов.
+        install = current
+
+    script = root / "run.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -Eeuo pipefail\n"
+        "info() { printf 'info: %s\\n' \"$*\"; }\n"
+        "warn() { printf 'warn: %s\\n' \"$*\"; }\n" + _prune_old_artifacts_function() + "\nprune_old_artifacts\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [_usable_bash(), str(script)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env={
+            **os.environ,
+            "RELEASES_DIR": str(releases),
+            "BACKUP_ROOT": str(backups),
+            "INSTALL_DIR": str(install),
+            "ROLLBACK_DIR": str(fresh_backup),
+            "KEEP_RELEASES": "3",
+            "KEEP_BACKUP_DAYS": "7",
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Удалено устаревших артефактов" in completed.stdout
+    assert "warn:" not in completed.stdout
+
+    # current старше остальных: он выживает только благодаря явному исключению.
+    assert current.is_dir()
+    assert recent[0].is_dir()
+    assert recent[1].is_dir()
+    for path in (*recent[2:], *pruned):
+        assert not path.exists(), path
+    assert not stale_staging.exists()
+    assert inflight_staging.is_dir()
+    assert fresh_backup.is_dir()
+    assert not stale_backup.exists()

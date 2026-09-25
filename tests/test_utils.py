@@ -1,6 +1,7 @@
 """
 tests/test_utils.py — Тесты для hydra/utils (firewall, downloader, crypto, net).
 """
+
 from __future__ import annotations
 
 import string
@@ -20,6 +21,7 @@ from hydra.utils import crypto, net
 # ══════════════════════════════════════════════════════════════════════════════
 #  crypto
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 class TestGenPassword:
     def test_gen_password_length(self):
@@ -116,10 +118,12 @@ class TestDeriveHexKey:
 #  downloader — verify_elf
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 class TestVerifyElf:
     def test_verify_elf_valid(self, tmp_path):
         """Файл с ELF-заголовком → True."""
         from hydra.utils import downloader
+
         elf_file = tmp_path / "test.bin"
         elf_file.write_bytes(b"\x7fELF" + b"\x00" * 100)
         assert downloader.verify_elf(elf_file) is True
@@ -127,6 +131,7 @@ class TestVerifyElf:
     def test_verify_elf_invalid(self, tmp_path):
         """Файл без ELF-заголовка → False."""
         from hydra.utils import downloader
+
         non_elf = tmp_path / "text.txt"
         non_elf.write_bytes(b"xxxx")
         assert downloader.verify_elf(non_elf) is False
@@ -134,6 +139,7 @@ class TestVerifyElf:
     def test_verify_elf_missing(self, tmp_path):
         """Несуществующий файл → False (не Exception)."""
         from hydra.utils import downloader
+
         assert downloader.verify_elf(tmp_path / "nope") is False
 
 
@@ -150,10 +156,14 @@ def test_github_asset_fails_closed_without_digest(tmp_path):
     from hydra.utils import downloader
 
     response = MagicMock()
-    response.__enter__.return_value.read.return_value = b'{"assets":[{"name":"tool-linux","browser_download_url":"https://example.invalid/tool"}]}'
-    with patch.object(downloader.urllib.request, "urlopen", return_value=response), \
-         patch.object(downloader, "_allow_unverified", return_value=False), \
-         patch.object(downloader, "download") as download:
+    response.__enter__.return_value.read.return_value = (
+        b'{"assets":[{"name":"tool-linux","browser_download_url":"https://example.invalid/tool"}]}'
+    )
+    with (
+        patch.object(downloader.urllib.request, "urlopen", return_value=response),
+        patch.object(downloader, "_allow_unverified", return_value=False),
+        patch.object(downloader, "download") as download,
+    ):
         assert downloader.download_github_asset("owner/repo", "tool-linux", tmp_path / "tool") is False
     download.assert_not_called()
 
@@ -179,8 +189,7 @@ def test_github_asset_reports_http_failure(tmp_path):
 
     assert ok is False
     assert errors == [
-        "Не удалось получить последний релиз owner/repo: "
-        "GitHub API вернул HTTP 403: rate limit exceeded",
+        "Не удалось получить последний релиз owner/repo: GitHub API вернул HTTP 403: rate limit exceeded",
     ]
 
 
@@ -212,9 +221,11 @@ def test_trusted_asset_digest_cannot_be_bypassed_by_emergency_flag(tmp_path):
         b'{"assets":[{"name":"hydracore-vps-linux-amd64.tar.gz",'
         b'"browser_download_url":"https://example.invalid/core"}]}'
     )
-    with patch.object(downloader.urllib.request, "urlopen", return_value=response), \
-         patch.object(downloader, "_allow_unverified", return_value=True), \
-         patch.object(downloader, "download") as download:
+    with (
+        patch.object(downloader.urllib.request, "urlopen", return_value=response),
+        patch.object(downloader, "_allow_unverified", return_value=True),
+        patch.object(downloader, "download") as download,
+    ):
         ok = downloader.download_github_asset_filtered(
             "gr33nimax/hydracore",
             lambda name: name == "hydracore-vps-linux-amd64.tar.gz",
@@ -236,10 +247,85 @@ def test_preview_release_selection_skips_stable_and_draft_entries():
         b'{"tag_name":"v2-rc1","draft":false,"prerelease":true}]'
     )
     with patch.object(downloader.urllib.request, "urlopen", return_value=response):
-        assert downloader.latest_release(
-            "gr33nimax/hydracore",
-            include_prerelease=True,
-        ) == "v2-rc1"
+        assert (
+            downloader.latest_release(
+                "gr33nimax/hydracore",
+                include_prerelease=True,
+            )
+            == "v2-rc1"
+        )
+
+
+def test_prerelease_markers_select_the_debug_and_release_candidate_tags():
+    from hydra.utils import downloader
+
+    response = MagicMock()
+    response.__enter__.return_value.read.return_value = (
+        b'[{"tag_name":"v1.14.0-extended-2.7.1-hydracore.12-debug.11",'
+        b'"draft":false,"prerelease":true,'
+        b'"published_at":"2026-09-18T17:20:03Z"},'
+        b'{"tag_name":"hydracore-sbe-1.14.0-debug-1","draft":false,'
+        b'"prerelease":true,"published_at":"2026-09-18T18:59:20Z"},'
+        b'{"tag_name":"hydracore-sbe-1.14.0-rc-1","draft":false,'
+        b'"prerelease":true,"published_at":"2026-09-18T19:39:55Z"}]'
+    )
+    with patch.object(downloader.urllib.request, "urlopen", return_value=response):
+        assert (
+            downloader.latest_release(
+                "gr33nimax/hydracore",
+                include_prerelease=True,
+                prerelease_tag_markers=("-debug-", "-rc-"),
+                prerelease_exclude_markers=("-debug.",),
+            )
+            == "hydracore-sbe-1.14.0-rc-1"
+        )
+
+    with patch.object(downloader.urllib.request, "urlopen", return_value=response):
+        assert (
+            downloader.latest_release(
+                "gr33nimax/hydracore",
+                include_prerelease=True,
+                prerelease_tag_markers=("-debug-",),
+                prerelease_exclude_markers=("-debug.",),
+            )
+            == "hydracore-sbe-1.14.0-debug-1"
+        )
+
+    with patch.object(downloader.urllib.request, "urlopen", return_value=response):
+        assert (
+            downloader.latest_release(
+                "gr33nimax/hydracore",
+                include_prerelease=True,
+                prerelease_exclude_markers=("-debug-", "-debug.", "-rc-"),
+            )
+            == "unknown"
+        )
+
+
+def test_prerelease_selection_uses_publication_time_not_api_order():
+    from hydra.utils import downloader
+
+    response = MagicMock()
+    response.__enter__.return_value.read.return_value = (
+        b'[{"tag_name":"v2-debug-9","draft":false,"prerelease":true,'
+        b'"created_at":"2026-08-13T18:26:36Z",'
+        b'"published_at":"2026-08-13T18:41:38Z"},'
+        b'{"tag_name":"v2-debug-8","draft":false,"prerelease":true,'
+        b'"created_at":"2026-08-13T16:40:51Z",'
+        b'"published_at":"2026-08-13T16:56:34Z"},'
+        b'{"tag_name":"v2-debug-10","draft":false,"prerelease":true,'
+        b'"created_at":"2026-08-13T18:54:56Z",'
+        b'"published_at":"2026-08-13T19:09:45Z"}]'
+    )
+    with patch.object(downloader.urllib.request, "urlopen", return_value=response):
+        assert (
+            downloader.latest_release(
+                "gr33nimax/hydracore",
+                include_prerelease=True,
+                prerelease_tag_markers=("-debug-",),
+            )
+            == "v2-debug-10"
+        )
 
 
 def test_download_closes_mkstemp_descriptor(tmp_path):
@@ -256,9 +342,11 @@ def test_download_closes_mkstemp_descriptor(tmp_path):
     response = MagicMock()
     response.__enter__.return_value = io.BytesIO(b"downloaded binary")
     destination = tmp_path / "tool"
-    with patch.object(downloader.tempfile, "mkstemp", side_effect=tracked_mkstemp), \
-         patch.object(downloader.urllib.request, "urlopen", return_value=response), \
-         patch.object(downloader, "_allow_unverified", return_value=True):
+    with (
+        patch.object(downloader.tempfile, "mkstemp", side_effect=tracked_mkstemp),
+        patch.object(downloader.urllib.request, "urlopen", return_value=response),
+        patch.object(downloader, "_allow_unverified", return_value=True),
+    ):
         assert downloader.download("https://example.invalid/tool", destination) is True
 
     assert destination.read_bytes() == b"downloaded binary"
@@ -278,13 +366,18 @@ def test_download_never_sends_github_token_to_generic_host(tmp_path):
         requests.append(request)
         return response
 
-    with patch.dict(os.environ, {"HYDRA_GITHUB_TOKEN": "do-not-leak"}), \
-         patch.object(downloader.urllib.request, "urlopen", side_effect=capture), \
-         patch.object(downloader, "_allow_unverified", return_value=True):
-        assert downloader.download(
-            "https://go.dev/dl/toolchain.tar.gz",
-            tmp_path / "toolchain.tar.gz",
-        ) is True
+    with (
+        patch.dict(os.environ, {"HYDRA_GITHUB_TOKEN": "do-not-leak"}),
+        patch.object(downloader.urllib.request, "urlopen", side_effect=capture),
+        patch.object(downloader, "_allow_unverified", return_value=True),
+    ):
+        assert (
+            downloader.download(
+                "https://go.dev/dl/toolchain.tar.gz",
+                tmp_path / "toolchain.tar.gz",
+            )
+            is True
+        )
 
     assert len(requests) == 1
     assert requests[0].get_header("Authorization") is None
@@ -292,6 +385,7 @@ def test_download_never_sends_github_token_to_generic_host(tmp_path):
 
 def test_extract_tarball_rejects_parent_traversal(tmp_path):
     from hydra.utils import downloader
+
     archive = tmp_path / "unsafe.tar.gz"
     with tarfile.open(archive, "w:gz") as tar:
         info = tarfile.TarInfo("../outside.txt")
@@ -305,21 +399,34 @@ def test_extract_tarball_rejects_parent_traversal(tmp_path):
 
 def test_iptables_close_uses_owner_comment():
     from hydra.utils import firewall
-    with patch.object(firewall, "_ipt_rule_exists", side_effect=[True, False]), \
-         patch.object(firewall, "_run") as run:
+
+    with patch.object(firewall, "_ipt_rule_exists", side_effect=[True, False]), patch.object(firewall, "_run") as run:
         firewall._ipt_close("tcp", 443, 443, "naive")
 
     delete = run.call_args_list[0].args[0]
     assert delete == [
-        "iptables", "-t", "filter", "-D", "INPUT", "-p", "tcp",
-        "--dport", "443", "-j", "ACCEPT", "-m", "comment",
-        "--comment", "naive",
+        "iptables",
+        "-t",
+        "filter",
+        "-D",
+        "INPUT",
+        "-p",
+        "tcp",
+        "--dport",
+        "443",
+        "-j",
+        "ACCEPT",
+        "-m",
+        "comment",
+        "--comment",
+        "naive",
     ]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  net
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 class TestDetectArch:
     @patch("hydra.utils.net.platform.machine")

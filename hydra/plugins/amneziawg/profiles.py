@@ -1,68 +1,46 @@
 """AmneziaWG credentials and desired-state profile commands."""
+
 from __future__ import annotations
 
-import re
-from pathlib import Path
+from typing import Any, TYPE_CHECKING
 
-from hydra.core.host import HOST
 from hydra.core.state_models import User
 from hydra.plugins.context import PluginStateAccess
 
-from .configuration import interface_prefix
 from .constants import (
-    AWG_INTERFACE,
-    AWG_INTERFACE_1,
-    AWG_UNIT,
     DEFAULT_NETWORK,
     DEFAULT_OBFUSCATION,
     DEFAULT_PORT,
     DEFAULT_PORT_1,
+    ENDPOINT_TAG_DESKTOP,
+    ENDPOINT_TAG_MOBILE,
+    MOBILE_NETWORK,
 )
+from .keys import generate_preshared_key, generate_private_key, public_key
 
 
 class AwgProfileMixin:
     """Own key material and profile mutations, never host reconciliation."""
 
+    if TYPE_CHECKING:
+
+        def __getattr__(self, name: str) -> Any:
+            """Static dependency seam for desired profile operations."""
+            ...
+
     def _generate_keys(self) -> dict[str, str]:
         """Generate one complete key bundle without mutating desired state."""
         private_key = self._generate_private_key()
-        public_result = self._awg("pubkey", _input=private_key)
-        if public_result.returncode != 0:
-            public_result = HOST.run(
-                ["wg", "pubkey"],
-                input=private_key,
-                capture_output=True,
-                text=True,
-            )
-        preshared_result = self._awg("genpsk")
-        if preshared_result.returncode != 0:
-            preshared_result = HOST.run(
-                ["wg", "genpsk"],
-                capture_output=True,
-                text=True,
-            )
-        public_key = public_result.stdout.strip()
-        preshared_key = preshared_result.stdout.strip()
-        if not private_key or not public_key or not preshared_key:
-            raise RuntimeError("AmneziaWG key generation returned an empty key")
         return {
             "private_key": private_key,
-            "public_key": public_key,
-            "preshared_key": preshared_key,
+            "public_key": public_key(private_key),
+            "preshared_key": generate_preshared_key(),
         }
 
-    def _generate_private_key(self) -> str:
-        result = self._awg("genkey")
-        if result.returncode != 0:
-            result = HOST.run(
-                ["wg", "genkey"],
-                capture_output=True,
-                text=True,
-            )
-        private_key = result.stdout.strip()
-        if not private_key:
-            raise RuntimeError("AmneziaWG private-key generation failed")
-        return private_key
+    @staticmethod
+    def _generate_private_key() -> str:
+        """A fresh server or client private key."""
+        return generate_private_key()
 
     def _provision_user_keys(
         self,
@@ -74,49 +52,25 @@ class AwgProfileMixin:
         if existing is not None:
             return existing
         credentials = self._generate_keys()
-        credential_name = (
-            "amneziawg" if profile == "desktop" else f"amneziawg_{profile}"
-        )
+        credential_name = "amneziawg" if profile == "desktop" else f"amneziawg_{profile}"
         user.credentials[credential_name] = credentials
         return credentials
 
-    @staticmethod
-    def _existing_keys(user: User, profile: str = "desktop") -> dict | None:
+    def _existing_keys(self, user: User, profile: str = "desktop") -> dict | None:
         """Read fully provisioned credentials without mutating query state."""
-        credential_name = (
-            "amneziawg" if profile == "desktop" else f"amneziawg_{profile}"
-        )
+        credential_name = "amneziawg" if profile == "desktop" else f"amneziawg_{profile}"
         credentials = user.credentials.get(credential_name)
         required = {"private_key", "public_key", "preshared_key"}
         if not isinstance(credentials, dict) or not required <= credentials.keys():
             return None
         return credentials
 
-    def _server_pubkey_for_conf(self, conf_path: Path) -> str:
-        text = conf_path.read_text(encoding="utf-8") if conf_path.exists() else ""
-        match = re.search(
-            r"PrivateKey\s*=\s*(\S+)",
-            interface_prefix(text),
-        )
-        if not match:
-            return ""
-        result = self._awg("pubkey", _input=match.group(1))
-        if result.returncode != 0:
-            result = HOST.run(
-                ["wg", "pubkey"],
-                input=match.group(1),
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                return ""
-        return result.stdout.strip()
-
     @staticmethod
     def _generate_obfuscation(
         preset: str,
         *,
         default_strategy: str,
+        protocol_mode: str = "2.0",
     ) -> dict[str, str]:
         from hydra.plugins.amneziawg.presets import (
             LEGACY_PRESET_MAP,
@@ -136,32 +90,7 @@ class AwgProfileMixin:
             strategy, carrier = LEGACY_PRESET_MAP[preset]
         else:
             strategy = preset
-        return generate_params(strategy=strategy, carrier=carrier)
-
-    @staticmethod
-    def _private_key_from_conf(conf_path: Path) -> str:
-        if not conf_path.exists():
-            return ""
-        match = re.search(
-            r"^PrivateKey\s*=\s*(\S+)",
-            interface_prefix(conf_path.read_text(encoding="utf-8")),
-            re.M,
-        )
-        return match.group(1) if match else ""
-
-    @staticmethod
-    def _port_from_conf(conf_path: Path, default: int) -> int:
-        if not conf_path.exists():
-            return default
-        match = re.search(
-            r"^ListenPort\s*=\s*(\d+)",
-            interface_prefix(conf_path.read_text(encoding="utf-8")),
-            re.M,
-        )
-        if not match:
-            return default
-        port = int(match.group(1))
-        return port if 1 <= port <= 65535 else default
+        return generate_params(strategy=strategy, carrier=carrier, protocol_mode=protocol_mode)
 
     def _materialize_desktop_profile(
         self,
@@ -170,21 +99,7 @@ class AwgProfileMixin:
         """Create a desired desktop snapshot during an explicit command."""
         protocol = state.protocols["amneziawg"]
         desired = self._profile_config(state, "desktop") or {}
-        conf_path = self._conf_path("desktop")
-        _, _, runtime_network = self._network_for_profile(
-            state,
-            conf_path,
-            "desktop",
-            DEFAULT_NETWORK,
-        )
-        configured_network = self._normalize_profile_network(
-            desired.get("network") or protocol.config.get("network")
-        )
-        resolved_network = (
-            runtime_network
-            if conf_path.exists()
-            else self._resolve_network(state)
-        )
+        configured_network = self._normalize_profile_network(desired.get("network") or protocol.config.get("network"))
         configured_obfuscation = (
             desired.get("obfuscation")
             if isinstance(desired.get("obfuscation"), dict)
@@ -192,34 +107,20 @@ class AwgProfileMixin:
         )
         obfuscation = (
             dict(configured_obfuscation)
-            if isinstance(configured_obfuscation, dict)
-            else self._obfuscation()
+            if isinstance(configured_obfuscation, dict) and configured_obfuscation
+            else dict(DEFAULT_OBFUSCATION)
         )
-        if not obfuscation:
-            obfuscation = dict(DEFAULT_OBFUSCATION)
-        private_key = str(
-            desired.get("server_private_key")
-            or protocol.config.get("server_private_key")
-            or self._private_key_from_conf(conf_path)
-            or ""
-        )
+        private_key = str(desired.get("server_private_key") or protocol.config.get("server_private_key") or "").strip()
         if not private_key:
             private_key = self._generate_private_key()
-        port = self._normalize_port(
-            desired.get("port")
-            or protocol.port
-            or self._port_from_conf(conf_path, DEFAULT_PORT),
-            DEFAULT_PORT,
-        )
         materialized = {
-            "interface": str(desired.get("interface") or AWG_INTERFACE),
-            "port": port,
-            "preset": str(
-                desired.get("preset")
-                or protocol.config.get("preset")
-                or "default"
+            "interface": str(desired.get("interface") or ENDPOINT_TAG_DESKTOP),
+            "port": self._normalize_port(
+                desired.get("port") or protocol.port,
+                DEFAULT_PORT,
             ),
-            "network": configured_network or resolved_network,
+            "preset": str(desired.get("preset") or protocol.config.get("preset") or "default"),
+            "network": configured_network or self._resolve_network(state),
             "server_private_key": private_key,
             "obfuscation": obfuscation,
         }
@@ -237,57 +138,55 @@ class AwgProfileMixin:
                 if name not in {"desktop", "mobile"} or not isinstance(profile, dict):
                     continue
                 mobile = name == "mobile"
-                default_interface = AWG_INTERFACE_1 if mobile else AWG_INTERFACE
+                default_interface = ENDPOINT_TAG_MOBILE if mobile else ENDPOINT_TAG_DESKTOP
                 default_port = DEFAULT_PORT_1 if mobile else DEFAULT_PORT
-                default_network = (
-                    "10.68.68.0/24" if mobile else DEFAULT_NETWORK
-                )
+                default_network = MOBILE_NETWORK if mobile else DEFAULT_NETWORK
                 obfuscation = profile.get("obfuscation")
                 result.append(
                     {
                         "name": name,
                         "label": "Mobile" if mobile else "Desktop",
-                        "interface": str(
-                            profile.get("interface") or default_interface
-                        ),
-                        "unit": (
-                            f"awg-quick@"
-                            f"{profile.get('interface') or default_interface}"
-                        ),
+                        "interface": str(profile.get("interface") or default_interface),
                         "port": self._normalize_port(
                             profile.get("port"),
                             default_port,
                         ),
                         "preset": str(profile.get("preset") or "default"),
-                        "network": (
-                            self._normalize_profile_network(
-                                profile.get("network")
-                            )
-                            or default_network
-                        ),
-                        "obfuscation": (
-                            dict(obfuscation)
-                            if isinstance(obfuscation, dict)
-                            else {}
-                        ),
+                        "network": (self._normalize_profile_network(profile.get("network")) or default_network),
+                        "obfuscation": (dict(obfuscation) if isinstance(obfuscation, dict) else {}),
                     }
                 )
             if result:
                 return result
 
-        _, _, network = self._network(state)
         return [
             {
                 "name": "desktop",
                 "label": "Desktop",
-                "interface": AWG_INTERFACE,
-                "unit": AWG_UNIT,
-                "port": self._current_port(),
+                "interface": ENDPOINT_TAG_DESKTOP,
+                "port": self._profile_port(state, "desktop"),
                 "preset": "default",
-                "network": network,
-                "obfuscation": self._obfuscation(),
+                "network": self._network_for_profile(state, "desktop", DEFAULT_NETWORK)[2],
+                "obfuscation": self._obfuscation(state, "desktop"),
             }
         ]
+
+    def get_issued_profiles(self, state: PluginStateAccess) -> list[dict]:
+        """Return only profiles with a server key and an issued user peer."""
+        issued = []
+        for profile in self.get_profiles(state):
+            name = str(profile["name"])
+            desired = self._profile_config(state, name) or {}
+            if not str(desired.get("server_private_key") or "").strip():
+                continue
+            if any(
+                (credentials := self._existing_keys(user, name)) is not None
+                and str(credentials.get("address_octet") or "").strip()
+                for user in state.users
+                if not user.blocked
+            ):
+                issued.append(profile)
+        return issued
 
     def add_profile(
         self,
@@ -312,10 +211,11 @@ class AwgProfileMixin:
         obfuscation = self._generate_obfuscation(
             preset,
             default_strategy="mobile",
+            protocol_mode=str(protocol.config.get("protocol_mode", "2.0")),
         )
         pending_credentials = self._missing_profile_credentials(state)
         profiles["mobile"] = {
-            "interface": AWG_INTERFACE_1,
+            "interface": ENDPOINT_TAG_MOBILE,
             "port": DEFAULT_PORT_1,
             "preset": preset,
             "network": network,
@@ -329,14 +229,10 @@ class AwgProfileMixin:
         return True
 
     @staticmethod
-    def _copied_profiles(raw_profiles: object) -> dict[str, dict]:
+    def _copied_profiles(raw_profiles: object) -> dict[str, Any]:
         if not isinstance(raw_profiles, dict):
             return {}
-        return {
-            key: dict(value)
-            for key, value in raw_profiles.items()
-            if isinstance(value, dict)
-        }
+        return {key: dict(value) for key, value in raw_profiles.items() if isinstance(value, dict)}
 
     def _mobile_network(
         self,
@@ -368,9 +264,7 @@ class AwgProfileMixin:
             if self._existing_keys(user, "desktop") is None:
                 pending.append((user, "amneziawg", self._generate_keys()))
             if self._existing_keys(user, "mobile") is None:
-                pending.append(
-                    (user, "amneziawg_mobile", self._generate_keys())
-                )
+                pending.append((user, "amneziawg_mobile", self._generate_keys()))
         return pending
 
     def remove_profile(
@@ -395,8 +289,8 @@ class AwgProfileMixin:
     def rotate_obfuscation(
         self,
         state: PluginStateAccess,
-        profile: str = None,
-        preset: str = None,
+        profile: str | None = None,
+        preset: str | None = None,
     ) -> bool:
         """Rotate desired obfuscation; runtime changes happen in ``apply``."""
         profile_name = profile or "desktop"
@@ -417,28 +311,83 @@ class AwgProfileMixin:
         selected_preset = preset or str(current.get("preset") or "default")
         new_params = self._generate_obfuscation(
             selected_preset,
-            default_strategy=(
-                "wired" if profile_name == "desktop" else "mobile"
-            ),
+            default_strategy=("wired" if profile_name == "desktop" else "mobile"),
+            protocol_mode=str(protocol.config.get("protocol_mode", "2.0")),
         )
         pending_credentials = [
             (user, self._generate_keys())
             for user in state.users
-            if not user.blocked
-            and self._existing_keys(user, profile_name) is None
+            if not user.blocked and self._existing_keys(user, profile_name) is None
         ]
         current["preset"] = selected_preset
         current["obfuscation"] = new_params
         profiles[profile_name] = current
         protocol.config["profiles"] = profiles
-        credential_name = (
-            "amneziawg"
-            if profile_name == "desktop"
-            else f"amneziawg_{profile_name}"
-        )
+        credential_name = "amneziawg" if profile_name == "desktop" else f"amneziawg_{profile_name}"
         for user, credentials in pending_credentials:
             user.credentials[credential_name] = credentials
+        self._provision_missing_octets(state)
         return True
+
+    def _provision_missing_octets(self, state: PluginStateAccess) -> int:
+        """Give every user of every served profile a tunnel address.
+
+        The interface file used to carry these addresses and the core reads none of it: a peer
+        without an address cannot be projected into an endpoint, nor handed to a client, which is
+        what made a profile created after the move deliver nothing at all. An address that was
+        already issued is never moved.
+        """
+        protocol = state.protocols.get("amneziawg")
+        if protocol is None:
+            return 0
+        profiles = protocol.config.get("profiles")
+        if not isinstance(profiles, dict):
+            return 0
+        assigned = 0
+        for profile_name, default_network in (
+            ("desktop", DEFAULT_NETWORK),
+            ("mobile", MOBILE_NETWORK),
+        ):
+            if profile_name not in profiles:
+                continue
+            _, server_octet, _ = self._network_for_profile(state, profile_name, default_network)
+            credential_name = "amneziawg" if profile_name == "desktop" else f"amneziawg_{profile_name}"
+            used = {server_octet}
+            pending: list[dict] = []
+            for user in state.users:
+                credentials = user.credentials.get(credential_name)
+                if not isinstance(credentials, dict):
+                    continue
+                octet = str(credentials.get("address_octet") or "").strip()
+                if octet:
+                    used.add(octet)
+                else:
+                    pending.append(credentials)
+            for credentials in pending:
+                octet = self._first_free(used)
+                credentials["address_octet"] = octet
+                used.add(octet)
+                assigned += 1
+        return assigned
+
+    def on_enable(self, state: PluginStateAccess) -> None:
+        """Make "enabled" mean "serving": a host without a profile gets one, and its users addresses.
+
+        Enabling AmneziaWG used to set the flags and leave the core with nothing to serve: the screen
+        said "работает" while no endpoint existed, and no client could be handed anything.
+        """
+        protocol = state.protocols.get("amneziawg")
+        if protocol is None:
+            return
+        profile = self._profile_config(state, "desktop")
+        if not isinstance(profile, dict) or not str(profile.get("server_private_key") or "").strip():
+            profiles = self._copied_profiles(protocol.config.get("profiles"))
+            profiles["desktop"] = self._materialize_desktop_profile(state)
+            protocol.config["profiles"] = profiles
+        for user in state.users:
+            if not user.blocked and self._existing_keys(user, "desktop") is None:
+                user.credentials["amneziawg"] = self._generate_keys()
+        self._provision_missing_octets(state)
 
     def _provision_user_profiles(
         self,
@@ -451,6 +400,7 @@ class AwgProfileMixin:
 
     def on_user_add(self, user: User, state: PluginStateAccess) -> None:
         self._provision_user_profiles(user, state)
+        self._provision_missing_octets(state)
 
     def on_user_remove(self, user: User, state: PluginStateAccess) -> None:
         pass

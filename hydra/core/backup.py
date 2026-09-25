@@ -1,4 +1,5 @@
 """Secure archive mechanics driven by a trusted application backup policy."""
+
 from __future__ import annotations
 
 import hashlib
@@ -69,10 +70,7 @@ def _archive_path(path: Path) -> str:
 
 def _excluded(relative: str, resource: BackupResource) -> bool:
     path = PurePosixPath(relative)
-    return any(
-        path.match(pattern) or path.name == pattern
-        for pattern in resource.excludes
-    )
+    return any(path.match(pattern) or path.name == pattern for pattern in resource.excludes)
 
 
 def _resource_files(resource: BackupResource) -> list[Path]:
@@ -90,11 +88,7 @@ def _resource_files(resource: BackupResource) -> list[Path]:
     return [
         path
         for path in root.rglob("*")
-        if (
-            path.is_file()
-            and not path.is_symlink()
-            and not _excluded(path.relative_to(root).as_posix(), resource)
-        )
+        if (path.is_file() and not path.is_symlink() and not _excluded(path.relative_to(root).as_posix(), resource))
     ]
 
 
@@ -154,28 +148,32 @@ def create_backup(
         f".{destination.name}.{os.getpid()}.tmp",
     )
     try:
-        for source, resource in sources:
-            manifest_files.append(
-                {
-                    "path": source.as_posix(),
-                    "archive_path": _archive_path(source),
-                    "owner": resource.owner,
-                    "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-                    "bytes": source.stat().st_size,
-                },
-            )
-        manifest = {
-            "format": 2,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "files": manifest_files,
-        }
         with tarfile.open(temporary, "w:gz") as archive:
-            for source, _resource in sources:
-                archive.add(
-                    source,
-                    arcname=_archive_path(source),
-                    recursive=False,
+            for source, resource in sources:
+                # Читаем байты ОДИН раз и хешируем те же самые, что кладём в архив. Живой
+                # лог (напр. etc/wdtt/server.log) между хешем и tar-add дописывался → checksum
+                # mismatch при проверке. Одно чтение убирает гонку.
+                data = source.read_bytes()
+                manifest_files.append(
+                    {
+                        "path": source.as_posix(),
+                        "archive_path": _archive_path(source),
+                        "owner": resource.owner,
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                        "bytes": len(data),
+                    },
                 )
+                stat = source.stat()
+                info = tarfile.TarInfo(_archive_path(source))
+                info.size = len(data)
+                info.mode = stat.st_mode & 0o777
+                info.mtime = int(stat.st_mtime)
+                archive.addfile(info, fileobj=io.BytesIO(data))
+            manifest = {
+                "format": 2,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "files": manifest_files,
+            }
             payload = json.dumps(
                 manifest,
                 ensure_ascii=False,
@@ -209,21 +207,12 @@ def _safe_members(
         raw_name = member.name.replace("\\", "/")
         name = raw_name.strip("/")
         parts = PurePosixPath(name).parts
-        if (
-            not name
-            or raw_name.startswith("/")
-            or ".." in parts
-            or member.issym()
-            or member.islnk()
-        ):
+        if not name or raw_name.startswith("/") or ".." in parts or member.issym() or member.islnk():
             raise RestoreError(f"unsafe backup member: {member.name}")
         if name in seen:
             raise RestoreError(f"duplicate backup member: {name}")
         seen.add(name)
-        if (
-            name != MANIFEST_NAME
-            and not _is_allowed_archive_path(name, policy)
-        ):
+        if name != MANIFEST_NAME and not _is_allowed_archive_path(name, policy):
             raise RestoreError(
                 f"backup member is outside HYDRA paths: {member.name}",
             )
@@ -251,10 +240,7 @@ def _read_manifest(
         manifest = json.loads(manifest_handle.read().decode("utf-8"))
     except (UnicodeError, ValueError, TypeError) as exc:
         raise RestoreError("backup manifest cannot be read") from exc
-    if (
-        manifest.get("format") != 2
-        or not isinstance(manifest.get("files"), list)
-    ):
+    if manifest.get("format") != 2 or not isinstance(manifest.get("files"), list):
         raise RestoreError("unsupported backup format")
     return manifest, by_name
 
@@ -286,9 +272,7 @@ def inspect_backup(
             members = _safe_members(archive, active_policy)
             manifest, by_name = _read_manifest(archive, members)
             expected = _manifest_index(manifest["files"])
-            payload_names = {
-                name for name in by_name if name != MANIFEST_NAME
-            }
+            payload_names = {name for name in by_name if name != MANIFEST_NAME}
             if set(expected) != payload_names:
                 raise RestoreError(
                     "backup manifest does not match archive contents",
@@ -342,17 +326,10 @@ def restore_backup(
     written: list[Path] = []
     try:
         with tarfile.open(archive_path, "r:gz") as archive:
-            members = {
-                member.name: member
-                for member in _safe_members(archive, active_policy)
-            }
+            members = {member.name: member for member in _safe_members(archive, active_policy)}
             for name in plan["files"]:
                 target = RESTORE_ROOT / name
-                snapshots[target] = (
-                    (target.read_bytes(), target.stat().st_mode & 0o777)
-                    if target.is_file()
-                    else None
-                )
+                snapshots[target] = (target.read_bytes(), target.stat().st_mode & 0o777) if target.is_file() else None
                 handle = archive.extractfile(members[name])
                 if handle is None:
                     raise RestoreError(
@@ -386,9 +363,7 @@ def restore_backup(
         "archive": str(archive_path),
         "restored": len(written),
         "safety_backup": safety["archive"],
-        "next_step": (
-            "hydra check && sudo hydra apply"
-        ),
+        "next_step": ("hydra check && sudo hydra apply"),
     }
 
 

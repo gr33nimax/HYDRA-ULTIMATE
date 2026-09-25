@@ -4,6 +4,11 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 
+from hydra.core.state_kernel_models import (
+    DEFAULT_KERNEL_CHANNEL,
+    OFFERED_KERNEL_CHANNELS,
+)
+
 
 class CliUsageError(ValueError):
     """A parser failure that can be rendered through the JSON error contract."""
@@ -107,7 +112,7 @@ def _add_upgrade(root: argparse._SubParsersAction) -> None:
     _command(
         commands,
         "migrate-state",
-        "Atomically persist pending state migrations",
+        "Atomically import legacy state into the current format",
         "upgrade.migrate-state",
     )
 
@@ -124,9 +129,13 @@ def _add_kernel(root: argparse._SubParsersAction) -> None:
     )
     switch.add_argument(
         "provider",
-        choices=("sing-box-extended", "hydracore"),
+        choices=("hydracore",),
     )
-    switch.add_argument("--channel", choices=("stable", "preview"), default="stable")
+    switch.add_argument(
+        "--channel",
+        choices=OFFERED_KERNEL_CHANNELS,
+        default=DEFAULT_KERNEL_CHANNEL,
+    )
     switch.add_argument("--force", action="store_true")
 
 

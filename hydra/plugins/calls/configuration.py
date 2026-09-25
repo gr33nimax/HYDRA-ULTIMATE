@@ -1,33 +1,39 @@
 """Compatibility exports for the dependency-neutral Calls configuration."""
 from hydra.contracts.calls_configuration import (
-    CALL_MODE_MULTI_USER,
+    CALL_MODE_VK_PARASITE,
+    CALL_COUNT,
     DEFAULT_CALL_PORT,
-    DEFAULT_ROOM_COUNT,
-    MAX_JOIN_LINKS,
-    MAX_WORKERS,
-    MAX_WORKERS_PER_JOIN_LINK,
+    DEFAULT_PEER_READ_QUEUE_PACKETS,
+    DEFAULT_POOL_REFRESH_INTERVAL,
+    DEFAULT_WORKERS,
+    MAX_POOL_REFRESH_INTERVAL,
+    MIN_POOL_REFRESH_INTERVAL,
+    WORKER_COUNTS,
     CallsStateAccess,
     CallsUser,
     call_mode,
-    multi_user_inbound as _multi_user_inbound,
-    multi_user_outbound as _multi_user_outbound,
+    workers,
+    vk_parasite_inbound as _vk_parasite_inbound,
+    vk_parasite_outbound as _vk_parasite_outbound,
+    peer_read_queue_packets,
+    pool_refresh_interval,
     public_endpoint,
 )
 from hydra.core.calls_credentials import user_password
 from hydra.utils.net import public_ip
 
 
-def multi_user_inbound(state: CallsStateAccess) -> dict:
-    return _multi_user_inbound(state, user_password)
+def vk_parasite_inbound(state: CallsStateAccess) -> dict:
+    return _vk_parasite_inbound(state, user_password)
 
 
-def multi_user_outbound(
+def vk_parasite_outbound(
     user: CallsUser,
     state: CallsStateAccess,
     join_links: list[str],
 ) -> dict:
     server_address = public_endpoint(state, public_ip)
-    return _multi_user_outbound(
+    return _vk_parasite_outbound(
         user,
         state,
         join_links,
@@ -37,15 +43,21 @@ def multi_user_outbound(
 
 
 __all__ = [
-    "CALL_MODE_MULTI_USER",
+    "CALL_MODE_VK_PARASITE",
+    "CALL_COUNT",
     "DEFAULT_CALL_PORT",
-    "DEFAULT_ROOM_COUNT",
-    "MAX_JOIN_LINKS",
-    "MAX_WORKERS",
-    "MAX_WORKERS_PER_JOIN_LINK",
+    "DEFAULT_PEER_READ_QUEUE_PACKETS",
+    "DEFAULT_POOL_REFRESH_INTERVAL",
+    "DEFAULT_WORKERS",
+    "MAX_POOL_REFRESH_INTERVAL",
+    "MIN_POOL_REFRESH_INTERVAL",
+    "WORKER_COUNTS",
     "call_mode",
-    "multi_user_inbound",
-    "multi_user_outbound",
+    "workers",
+    "vk_parasite_inbound",
+    "vk_parasite_outbound",
+    "peer_read_queue_packets",
+    "pool_refresh_interval",
     "public_endpoint",
     "user_password",
 ]

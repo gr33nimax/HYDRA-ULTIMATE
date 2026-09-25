@@ -1,11 +1,16 @@
 """Desired NaiveProxy configuration and deterministic Caddyfile rendering."""
+
 from __future__ import annotations
 
 import copy
 from pathlib import Path
+from typing import Any, cast
 
+from hydra.core.state_models import AppState
 from hydra.plugins.base import ConfigFragment
 from hydra.plugins.context import PluginStateAccess
+
+from .uot import normalize_uot, uot_enabled
 
 
 def render_caddyfile(
@@ -18,23 +23,16 @@ def render_caddyfile(
     cert_file: str = "",
     key_file: str = "",
     accept_proxy_protocol: bool = False,
+    uot: bool = True,
 ) -> str:
     """Render a complete Caddyfile without reading or mutating the host."""
-    auth_lines = "".join(
-        "            basic_auth "
-        f"{user['username']} {user['password']}\n"
-        for user in users
-    )
-    tls_line = (
-        f"    tls {cert_file} {key_file}\n"
-        if cert_file and key_file
-        else ""
-    )
+    auth_lines = "".join(f"            basic_auth {user['username']} {user['password']}\n" for user in users)
+    tls_line = f"    tls {cert_file} {key_file}\n" if cert_file and key_file else ""
     probe_line = "            probe_resistance\n" if auth_lines else ""
+    uot_line = "            passthrough_uot\n" if uot else ""
     listener_wrappers = ""
     if accept_proxy_protocol:
         listener_wrappers = """\
-    servers {
         listener_wrappers {
             proxy_protocol {
                 timeout 1s
@@ -43,14 +41,16 @@ def render_caddyfile(
             }
             tls
         }
-    }
 """
 
     return f"""\
 {{
     http_port 0
     auto_https disable_redirects
-{listener_wrappers}    order forward_proxy before file_server
+    servers {{
+        protocols h1 h2 h3
+{listener_wrappers}    }}
+    order forward_proxy before file_server
 }}
 
 :{port}, {domain}:{port} {{
@@ -58,7 +58,7 @@ def render_caddyfile(
 {auth_lines}            hide_ip
             hide_via
 {probe_line}            upstream socks5://127.0.0.1:1080
-    }}
+{uot_line}    }}
     file_server {{
         root {decoy_dir.as_posix()}
     }}
@@ -77,15 +77,18 @@ class NaiveConfigurationMixin:
 
     _pending_cfg: str | None
 
-    def configure(self, state: PluginStateAccess) -> ConfigFragment:
+    def configure(self: Any, state: PluginStateAccess) -> ConfigFragment:
         from hydra.core.sni_router import (
             get_effective_port,
             get_internal_port,
         )
 
         domain = state.network.domain
+        protocol = state.protocols.get("naive")
         if not domain:
             self._pending_cfg = None
+            if protocol is not None and protocol.enabled:
+                raise ValueError("TLS-сертификат NaiveProxy требует домен")
             return ConfigFragment()
 
         users = [
@@ -96,14 +99,17 @@ class NaiveConfigurationMixin:
             for user in state.users
             if not user.blocked
         ]
-        protocol = state.protocols.get("naive")
         config = protocol.config if protocol and protocol.config else {}
         cert_file, key_file = self._resolve_certs(domain, protocol)
         if not cert_file or not key_file:
             self._pending_cfg = None
+            if protocol is not None and protocol.enabled:
+                raise ValueError(
+                    f"TLS-сертификат для NaiveProxy {domain} не подготовлен",
+                )
             return ConfigFragment()
 
-        port = get_effective_port("naive", state)
+        port = get_effective_port("naive", cast(AppState, state))
         self._pending_cfg = self._build_caddyfile(
             domain=domain,
             port=port,
@@ -113,8 +119,28 @@ class NaiveConfigurationMixin:
             key_file=key_file,
             decoy_url=str(config.get("decoy_url", "")),
             accept_proxy_protocol=port == get_internal_port("naive"),
+            uot=uot_enabled(state),
         )
         return ConfigFragment()
+
+    def set_uot(
+        self,
+        state: PluginStateAccess,
+        uot: object,
+    ) -> bool:
+        """Validate and update the desired UDP-over-TCP (UoT) mode."""
+        value = normalize_uot(uot)
+        if value is None:
+            raise ValueError(
+                "\u041d\u0435\u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u043e\u0435 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 UoT: \u043e\u0436\u0438\u0434\u0430\u0435\u0442\u0441\u044f \u0432\u043a\u043b/\u0432\u044b\u043a\u043b"
+            )
+        protocol = state.protocols.get("naive")
+        if protocol is None:
+            return False
+        if bool(protocol.config.get("uot", True)) == value:
+            return False
+        protocol.config["uot"] = value
+        return True
 
     def set_transport(
         self,
@@ -136,10 +162,8 @@ class NaiveConfigurationMixin:
 
             try:
                 prospective_state = copy.deepcopy(state)
-                prospective_state.protocols["naive"].config[
-                    "network"
-                ] = network
-                get_quic_owner(prospective_state)
+                prospective_state.protocols["naive"].config["network"] = network
+                get_quic_owner(cast(AppState, prospective_state))
             except ValueError:
                 return False
         protocol.config["network"] = network
@@ -152,19 +176,14 @@ class NaiveConfigurationMixin:
     ) -> bool:
         """Validate and update the shared NaiveProxy TLS domain."""
         normalized = str(domain or "").strip().lower().rstrip(".")
-        if (
-            not normalized
-            or "://" in normalized
-            or any(character.isspace() for character in normalized)
-        ):
+        if not normalized or "://" in normalized or any(character.isspace() for character in normalized):
             raise ValueError(
-                "Некорректный домен NaiveProxy: укажите имя без схемы "
-                "и пробелов",
+                "Некорректный домен NaiveProxy: укажите имя без схемы и пробелов",
             )
         state.network.domain = normalized
         return True
 
-    def on_enable(self, state: PluginStateAccess) -> None:
+    def on_enable(self: Any, state: PluginStateAccess) -> None:
         protocol = state.protocols.get("naive")
         if protocol is None:
             raise ValueError("NaiveProxy configuration is missing")
@@ -172,8 +191,7 @@ class NaiveConfigurationMixin:
         domain = str(state.network.domain or "").strip()
         if not domain:
             raise ValueError(
-                "Домен NaiveProxy не настроен; задайте network.domain "
-                "перед включением",
+                "Домен NaiveProxy не настроен; задайте network.domain перед включением",
             )
         cert_file, key_file = self._resolve_certs(domain, protocol)
         if not cert_file or not key_file:
@@ -185,18 +203,14 @@ class NaiveConfigurationMixin:
         if network in ("quic", "both"):
             from hydra.core.sni_router import get_quic_owner
 
-            get_quic_owner(state, prospective="naive")
+            get_quic_owner(cast(AppState, state), prospective="naive")
 
-    def _resolve_certs(self, domain: str, protocol) -> tuple[str, str]:
-        config = (
-            protocol.config
-            if protocol is not None and protocol.config
-            else {}
-        )
+    def _resolve_certs(self: Any, domain: str, protocol) -> tuple[str, str]:
+        config = protocol.config if protocol is not None and protocol.config else {}
         return self._resolve_tls_material(domain, config)
 
     def _build_caddyfile(
-        self,
+        self: Any,
         domain: str,
         port: int,
         users: list[dict],
@@ -206,6 +220,7 @@ class NaiveConfigurationMixin:
         key_file: str = "",
         decoy_url: str = "",
         accept_proxy_protocol: bool = False,
+        uot: bool = True,
     ) -> str:
         del probe_secret, decoy_url
         from hydra.core.decoy import DECOY_DIRS
@@ -220,4 +235,5 @@ class NaiveConfigurationMixin:
             cert_file=cert_file,
             key_file=key_file,
             accept_proxy_protocol=accept_proxy_protocol,
+            uot=uot,
         )

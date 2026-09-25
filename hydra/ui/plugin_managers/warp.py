@@ -1,6 +1,7 @@
 """
 hydra/plugins/warp/manager.py — TUI-консоль управления Cloudflare WARP.
 """
+
 from __future__ import annotations
 
 import ipaddress
@@ -25,6 +26,29 @@ def _implementation_scope():
     return bind_facade(sys.modules[__name__])
 
 
+def _menu_number(value: str) -> int | None:
+    """Parse a typed menu number, tolerating anything the operator types."""
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _warp_catalog(
+    app: ApplicationService,
+    *,
+    list_targets: dict,
+    local_lists: dict,
+) -> list[dict]:
+    """Return the catalogue grouped into menu categories with their targets."""
+    return app.plugin_query(
+        "warp",
+        "routing_catalog",
+        list_targets=list_targets,
+        local_lists=local_lists,
+    )
+
+
 def _warp_observation(app: ApplicationService) -> dict[str, object]:
     return app.plugin_query("warp", "manager_observation")
 
@@ -37,11 +61,7 @@ def _get_last_install_error(app: ApplicationService) -> str:
     result = app.logs.read("file", "/var/log/hydra/install.log", 200)
     for line in reversed(result.lines):
         upper = line.upper()
-        if (
-            "[ERROR]" in upper
-            or "CONFIG INVALID" in upper
-            or "FAILED" in upper
-        ):
+        if "[ERROR]" in upper or "CONFIG INVALID" in upper or "FAILED" in upper:
             return line
     return ""
 
@@ -83,11 +103,61 @@ def _show_diagnostic_info(app: ApplicationService) -> None:
     print(f"  {YELLOW}══════════════════════════════════════════════════{NC}\n")
 
 
-def _restore_route_target(list_targets: dict, key: str, existed: bool, value: str | None) -> None:
-    if existed:
-        list_targets[key] = value
-    else:
-        list_targets.pop(key, None)
+def _restore_route_targets(
+    list_targets: dict,
+    previous: dict[str, str | None],
+) -> None:
+    for key, value in previous.items():
+        if value is None:
+            list_targets.pop(key, None)
+        else:
+            list_targets[key] = value
+
+
+def _commit_route_targets(
+    state: AppState,
+    ps,
+    keys: list[str],
+    target: str,
+    app: ApplicationService,
+) -> tuple[bool, str]:
+    """Persist and apply one mapping per key, restoring all if it is rejected."""
+    list_targets = ps.config.setdefault("list_targets", {})
+    previous = {key: list_targets.get(key) for key in keys}
+    for key in keys:
+        list_targets[key] = target
+    app.admin.save_state(state)
+
+    if any(key.startswith("ext:") for key in keys) and target != "none":
+        ok, message = app.plugin_action(
+            "warp",
+            "update_external_rules",
+            state=state,
+        )
+        if not ok:
+            _restore_route_targets(list_targets, previous)
+            app.admin.save_state(state)
+            return False, message
+
+    if ps.enabled and not app.apply(state):
+        apply_error = app.apply_error() or "неизвестная ошибка применения"
+        _restore_route_targets(list_targets, previous)
+        state.protocols["warp"] = ps
+        app.admin.save_state(state)
+        return False, f"Sing-Box отклонил маршрут; изменение отменено: {apply_error}"
+
+    return True, ""
+
+
+def _commit_route_target(
+    state: AppState,
+    ps,
+    key: str,
+    target: str,
+    app: ApplicationService,
+) -> tuple[bool, str]:
+    """Persist and apply a single mapping, restoring it if it is rejected."""
+    return _commit_route_targets(state, ps, [key], target, app)
 
 
 def _valid_domain(value: str) -> bool:
@@ -106,41 +176,6 @@ def _valid_ip_or_cidr(value: str) -> bool:
     except ValueError:
         return False
     return True
-
-
-def _commit_route_target(
-    state: AppState,
-    ps,
-    key: str,
-    target: str,
-    app: ApplicationService,
-) -> tuple[bool, str]:
-    """Persist and apply a mapping, restoring desired state if it is rejected."""
-    list_targets = ps.config.setdefault("list_targets", {})
-    existed = key in list_targets
-    previous = list_targets.get(key)
-    list_targets[key] = target
-    app.admin.save_state(state)
-
-    if key.startswith("ext:") and target != "none":
-        ok, message = app.plugin_action(
-            "warp",
-            "update_external_rules",
-            state=state,
-        )
-        if not ok:
-            _restore_route_target(list_targets, key, existed, previous)
-            app.admin.save_state(state)
-            return False, message
-
-    if ps.enabled and not app.apply(state):
-        apply_error = app.apply_error() or "неизвестная ошибка применения"
-        _restore_route_target(list_targets, key, existed, previous)
-        state.protocols["warp"] = ps
-        app.admin.save_state(state)
-        return False, f"Sing-Box отклонил маршрут; изменение отменено: {apply_error}"
-
-    return True, ""
 
 
 def menu_warp(
@@ -206,6 +241,13 @@ def _menu_routing_rules(
 
     with _implementation_scope():
         run(state, plugin_state, destinations, app)
+
+
+def _menu_masque(state: AppState, app: ApplicationService) -> None:
+    from hydra.ui.plugin_managers._warp_masque import _menu_masque as run
+
+    with _implementation_scope():
+        run(state, app)
 
 
 def _menu_geo_profiles(

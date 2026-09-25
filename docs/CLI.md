@@ -58,13 +58,13 @@ hydra
 │   └── query                     allowlisted read-only projection
 ├── upgrade
 │   ├── check                     готовность к обновлению
-│   └── migrate-state             атомарная запись миграций схемы
+│   └── migrate-state             атомарный импорт legacy state
 ├── kernel
 │   ├── status                    выбранное и фактическое ядро
-│   └── switch PROVIDER [--channel stable|preview] [--force]
+│   └── switch PROVIDER [--channel stable|debug] [--force]
 ├── uninstall [--yes] [--dry-run] [--keep-data]
 └── antidpi
-    ├── sync                      установить/обновить телеметрию
+    ├── sync                      восстановить правила и активные баны
     ├── selftest [--full] [--wait N] [--output PATH]
     └── capture [--seconds N] [--output PATH]
 ```
@@ -86,7 +86,7 @@ hydra
 | `kernel status` | — | Показать desired provider, runtime identity и capabilities |
 | `kernel switch ...` | ✔ | Проверенно и транзакционно заменить совместимое ядро |
 | `uninstall` | ✔ | Удалить HYDRA |
-| `antidpi ...` | ✔ | Расширенная диагностика AntiDPI |
+| `antidpi ...` | ✔ | Расширенная диагностика AntiScan |
 
 Глобальные параметры:
 
@@ -222,19 +222,28 @@ sudo hydra backup restore /root/hydra.tar.gz --yes
 ```bash
 hydra kernel status
 sudo hydra kernel switch hydracore
+sudo hydra kernel switch hydracore --channel debug --force
 sudo hydra kernel switch sing-box-extended
 ```
 
-Допустимые provider: `sing-box-extended` и `hydracore`; каналы: `stable` и
-`preview`. `stable` использует GitHub latest release без prerelease, а
-`preview` требует последний опубликованный prerelease и не подменяет его
-stable-релизом. Команда принимает только asset доверенного GitHub-репозитория с
+Допустимые provider: `sing-box-extended` и `hydracore`; предлагаемые каналы:
+`stable` (по умолчанию) и `debug`. `stable` использует GitHub latest release
+без prerelease. `debug` выбирает самый свежий опубликованный prerelease
+Hydracore и принимает обе читаемые формы —
+`hydracore-sbe-<sbe-version>-debug-<n>` и релиз-кандидат
+`hydracore-sbe-<sbe-version>-rc-<n>`; retired-тег `-debug.<n>` не выбирается
+ни одним каналом. Persisted-значение `preview` больше не предлагается, но
+продолжает резолвиться как `debug`, чтобы уже выбравшая его установка не
+сломалась. Такой бинарник дополнительно обязан объявить нативную телеметрию
+VK Calls. Команда принимает только asset доверенного GitHub-репозитория с
 единственным точным именем для архитектуры и обязательным `asset.digest`.
 До замены выполняются identity/capability и config-check. После запуска служба
 должна пройти bounded stability check; state сохраняется последним. Любой сбой
 до commit возвращает прежний бинарник и исходное состояние службы.
-Calls поддерживает только Hydracore `multi_user`. Его включение fail-closed
-требует exact capability `call_vk_multi_user` и режима `multi_user`; stock core
+Вернуться на стабильное Hydracore можно штатно: `sudo hydra kernel switch
+hydracore --channel stable --force`.
+Calls поддерживает только Hydracore `vk_parasite`. Его включение fail-closed
+требует exact capability `call_vk_parasite` и режима `vk_parasite`; stock core
 не запускает creator и не получает P2P fallback. Перед обратным switch на
 `sing-box-extended` отключите или удалите Calls: application preflight завершит
 операцию до загрузки и замены бинарника.
@@ -362,8 +371,19 @@ sudo hydra plugin command vless set_tuning \
   --param 'headers={"X-Requested-With":"XMLHttpRequest"}'
 sudo hydra plugin command vless set_tuning --param utls_fingerprint=chrome
 sudo hydra plugin command anytls set_decoy_theme --param theme=cafe
+sudo hydra plugin command amneziawg set_protocol_mode --param mode=3.1
+sudo hydra plugin command snell set_settings --param version=5 --param obfs_mode=tls
+sudo hydra plugin command snell set_settings --param version=6 --param mode=unshaped
+sudo hydra plugin command naive set_uot --param uot=false
+hydra plugin query amneziawg protocol_mode_status --with-state
 hydra plugin query vless get_tuning --with-state
 hydra plugin query warp external_sources --with-state
+hydra plugin query warp routing_catalog --with-state
+hydra plugin query warp masque_scanner_status
+sudo hydra plugin action warp register_masque_scanner
+sudo hydra plugin action warp scan_masque_endpoints
+sudo hydra plugin command warp set_masque_endpoint --param 'address="162.159.198.1"' --param port=443
+sudo hydra plugin command warp set_masque_endpoint --param 'address=""' --param port=0
 sudo hydra plugin action dnscrypt apply_server_names \
   --param 'names=["cloudflare","quad9-dnscrypt-ip4-filter-pri"]'
 ```
@@ -371,6 +391,28 @@ sudo hydra plugin action dnscrypt apply_server_names \
 `--param NAME=JSON` можно повторять. Операция должна быть объявлена в
 `PluginMeta.commands`, `queries` или `actions`; произвольные методы вызвать
 нельзя. Command/action требуют root, query является read-only.
+
+### Версия `amneziawg`
+
+`set_protocol_mode` принимает только `2.0`, `3.0` и `3.1`. Команда проверяет
+закреплённый upstream installer, меняет режим через его non-interactive argv,
+повторно наблюдает режим и применяет конфигурацию одной транзакцией. При ошибке
+восстанавливаются desired state, оба AWG-конфига и состояния systemd. Статус
+показывает desired/observed режим и причины пропуска экспортов, но не ключи или
+значения директив.
+
+```bash
+sudo hydra plugin command amneziawg set_protocol_mode --param mode=3.1
+hydra plugin query amneziawg protocol_mode_status --with-state
+```
+
+AWG 3.0/3.1 выдаёт нативный `.conf`, а также complete `wg://` для Throne
+`1.3.0-beta.3` и Qt-compressed `vpn://` для официального Amnezia: оба формата
+получают все директивы активного поколения. Sing-Box Extended/HydraBox
+выдаются для 3.0 и для 3.1 — второй требует ядра HydraCore
+`v1.14.0-extended-2.7.1-hydracore.12` или новее; `sn://awg` остаётся
+fail-closed. На старом ядре 3.1 отклоняется с причиной, называющей нужный
+релиз. Возврат на `2.0` снова включает все проверенные legacy-экспорты.
 
 ### Режимы TLS у `vless`
 
@@ -438,6 +480,25 @@ sudo hydra plugin command vless set_security --param mode=reality   --param hand
 `random`, `randomized`. Значение попадает в клиентский профиль как блок
 `tls.utls` и в ссылку как `fp=`; сервер его не использует.
 
+### UoT у `naive`
+
+`set_uot` включает и выключает UDP через TCP (`true`/`false`, а также
+`on`/`off`, `1`/`0`). По умолчанию UoT включён — поведение не меняется.
+
+```bash
+sudo hydra plugin command naive set_uot --param uot=false
+```
+
+Выключение убирает UoT-путь на сервере: Caddy собирается из upstream
+`forwardproxy` вместо форка `aUsernameWoW/forwardproxy`, а строки
+`passthrough_uot` в Caddyfile не появляется. Установленная сборка определяется
+пробой бинарника, поэтому настройка не может разойтись с фактическим файлом;
+при расхождении apply пересобирает бинарник одной транзакцией с backup
+предыдущего. Клиентские ссылки Shadowrocket при выключенном UoT не содержат
+`uot` (`tfo` и `padding` остаются). UDP по TCP-профилю Naive в этом режиме не
+работает, QUIC-транспорт не затронут; клиенты с явным `udp_over_tcp` должны
+выключить его сами.
+
 ### Сайт-заглушка
 
 Протоколы с собственным доменом — `naive`, `anytls`, `trusttunnel`, `hysteria2`
@@ -478,8 +539,9 @@ sudo hydra uninstall --yes
 sudo hydra uninstall --yes --keep-data
 ```
 
-`upgrade migrate-state` атомарно записывает pending state migrations и
-идемпотентен на актуальной схеме.
+`upgrade migrate-state` атомарно импортирует legacy schema 0–18 в State Format
+v1 и идемпотентен на уже актуальном документе. Имя команды сохранено для
+совместимости upgrade-скриптов.
 
 `uninstall` требует явного `--yes`; `--keep-data` сохраняет state и журналы.
 Перед удалением создайте backup и вынесите его за пределы VPS.
@@ -492,8 +554,8 @@ sudo hydra antidpi selftest --full --wait 3
 sudo hydra antidpi capture --seconds 180
 ```
 
-Это расширенные операции диагностики и обслуживания. Детали scoring,
-redaction, firewall и внешнего capture описаны в [ANTIDPI.md](ANTIDPI.md).
+Это расширенные операции диагностики и обслуживания. Детали контракта
+улик, redaction, firewall и внешнего capture описаны в [ANTIDPI.md](ANTIDPI.md).
 
 ## Совместимость
 

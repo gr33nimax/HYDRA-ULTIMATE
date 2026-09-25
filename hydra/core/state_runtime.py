@@ -27,6 +27,8 @@ _RUNTIME_INSTALL_KEYS = frozenset(
         "traffic_connection_counters",
         "traffic_daemon_last_poll",
         "traffic_log_cursors",
+        "traffic_report_totals",
+        "traffic_user_reset_epochs",
     },
 )
 
@@ -68,22 +70,39 @@ def merge_runtime_state(
     of letting an unrelated settings save roll them back.
     """
     latest_users = {user.email: user for user in latest.users}
+    traffic_resets = latest.install.get("traffic_user_reset_epochs", {})
     for user in state.users:
         current = latest_users.get(user.email)
         if current is None:
             continue
-        user.traffic_used_bytes = max(
-            int(user.traffic_used_bytes), int(current.traffic_used_bytes),
+        reset = user.email in traffic_resets
+        user.traffic_used_bytes = (
+            int(current.traffic_used_bytes)
+            if reset else max(
+                int(user.traffic_used_bytes), int(current.traffic_used_bytes),
+            )
         )
         # Subscription requests can register a device while a long-lived
         # TUI process still holds an older copy of AppState. Never erase
         # those bindings during an unrelated settings save.
         if user.uuid not in device_resets:
             user.devices = {**current.devices, **user.devices}
-        for protocol, current_stats in current.credentials.items():
+        protocols = set(user.credentials) | set(current.credentials)
+        for protocol in protocols:
+            current_stats = current.credentials.get(protocol, {})
             if not isinstance(current_stats, dict):
                 continue
             target_stats = user.credentials.setdefault(protocol, {})
+            if reset:
+                for key in tuple(target_stats):
+                    if key.startswith("traffic_"):
+                        target_stats.pop(key, None)
+                target_stats.update({
+                    key: copy.deepcopy(value)
+                    for key, value in current_stats.items()
+                    if key.startswith("traffic_")
+                })
+                continue
             current_total = int(current_stats.get("traffic_used_bytes", 0))
             target_total = int(target_stats.get("traffic_used_bytes", 0))
             if current_total >= target_total:

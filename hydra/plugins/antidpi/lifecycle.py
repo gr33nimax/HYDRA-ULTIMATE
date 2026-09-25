@@ -1,4 +1,5 @@
 """AntiDPI lifecycle facade over the injected privileged runtime."""
+
 from __future__ import annotations
 
 import ipaddress
@@ -6,8 +7,23 @@ import ipaddress
 from hydra.plugins.antidpi.model import active_bans
 from hydra.plugins.antidpi.firewall_rules import SET_V4, SET_V6
 from hydra.plugins.antidpi.runtime import AntiDPIRuntime
+from hydra.plugins.antidpi.state_store import AntiDPIStateCorruptError
 from hydra.plugins.base import HealthResult, PluginStatus
 from hydra.plugins.context import PluginStateAccess
+
+# The collector writes its heartbeat once a minute; ten missed beats mean
+# the worker is stuck even though systemd still reports the unit active.
+COLLECTOR_HEARTBEAT_STALE = 600.0
+
+
+def _is_true(value: object) -> bool:
+    """Return True only for the JSON boolean ``true``."""
+    return isinstance(value, bool) and value
+
+
+def _is_false(value: object) -> bool:
+    """Return True only for the JSON boolean ``false``."""
+    return isinstance(value, bool) and not value
 
 
 class AntiDPILifecycleMixin:
@@ -16,18 +32,10 @@ class AntiDPILifecycleMixin:
     def install(self) -> bool:
         """Provision executable assets without activating the detector."""
         self.last_error = ""
-        missing = [
-            name
-            for name in self.meta.required_commands
-            if self._host_command().which(name) is None
-        ]
+        missing = [name for name in self.meta.required_commands if self._host_command().which(name) is None]
         if missing:
             self._install_host_dependencies(missing)
-            missing = [
-                name
-                for name in self.meta.required_commands
-                if self._host_command().which(name) is None
-            ]
+            missing = [name for name in self.meta.required_commands if self._host_command().which(name) is None]
         if missing:
             return self._fail("Не найдены команды: " + ", ".join(missing))
         try:
@@ -47,10 +55,7 @@ class AntiDPILifecycleMixin:
 
     def uninstall(self) -> bool:
         self._command(["systemctl", "disable", "--now", "hydra-antidpi"])
-        self._sync_awg_debug(False)
-        ok = self._remove_udp_probe_rules()
-        ok = self._remove_mieru_probe_rules() and ok
-        ok = self._remove_scan_rules() and ok
+        ok = self._remove_obsolete_telemetry()
         ok = self._remove_rules() and ok
         for name in (SET_V4, SET_V6):
             self._command(["ipset", "flush", name])
@@ -60,11 +65,82 @@ class AntiDPILifecycleMixin:
             path.unlink(missing_ok=True)
         return ok
 
-    def _sync_awg_debug(self, enabled: bool) -> bool:
-        return self._runtime().sync_awg_debug(enabled)
-
     def _restore_bans(self) -> bool:
         return self._runtime().restore_bans(self._state_store())
+
+    def reconcile_enforcement(self, state: PluginStateAccess) -> bool:
+        """Restore every AntiDPI firewall object and expose failed steps."""
+        if _is_true(self.management_snapshot().get("degraded")):
+            return self._fail(
+                "AntiDPI state is degraded; automatic enforcement is paused",
+            )
+        failed: list[str] = []
+        reasons: list[str] = []
+        del state
+        steps = (
+            ("ipset sets", self._ensure_sets),
+            ("INPUT rules", self._ensure_rules),
+            ("obsolete telemetry cleanup", self._remove_obsolete_telemetry),
+        )
+        for label, action in steps:
+            # Each step writes its own cause into ``last_error``; reporting the
+            # bare label would hide why iptables refused, which is exactly how
+            # a missing CAP_NET_RAW stayed invisible behind "INPUT rules".
+            self.last_error = ""
+            try:
+                done = action()
+            except Exception as exc:
+                reasons.append(f"{label}: {type(exc).__name__}: {exc}")
+                failed.append(label)
+                continue
+            if not done:
+                reasons.append(
+                    f"{label}: {self.last_error or 'шаг вернул False'}",
+                )
+                failed.append(label)
+        try:
+            self.release_whitelisted_bans()
+            covered = self.whitelisted_bans()
+        except Exception as exc:
+            covered = ["state read failed"]
+            reasons.append(f"whitelist-covered bans: {type(exc).__name__}: {exc}")
+        if covered:
+            failed.append("whitelist-covered bans")
+        else:
+            self.last_error = ""
+            try:
+                restored = self._restore_bans()
+            except Exception as exc:
+                reasons.append(f"stored bans: {type(exc).__name__}: {exc}")
+                failed.append("stored bans")
+            else:
+                if not restored:
+                    reasons.append(
+                        f"stored bans: {self.last_error or 'шаг вернул False'}",
+                    )
+                    failed.append("stored bans")
+        if not self.record_reconciliation(failed):
+            return self._fail("Could not persist reconciliation outcome")
+        if failed:
+            return self._fail(
+                "Reconciliation failed: " + ", ".join(failed) + " — " + "; ".join(reasons),
+            )
+        self.last_error = ""
+        return True
+
+    def sync_runtime(self, state: PluginStateAccess) -> bool:
+        """Restart an enabled detector and reconcile its firewall runtime."""
+        protocol = state.protocols.get("antidpi")
+        if protocol and protocol.enabled:
+            result = self._command(
+                ["systemctl", "restart", "hydra-antidpi"],
+                text=True,
+            )
+            if getattr(result, "returncode", 1) != 0:
+                return self._fail(
+                    self._result_error(result, "restart hydra-antidpi"),
+                )
+        return self.reconcile_enforcement(state)
 
     def status(
         self,
@@ -75,11 +151,14 @@ class AntiDPILifecycleMixin:
             ["systemctl", "is-active", "hydra-antidpi"],
             text=True,
         )
-        running = (
-            getattr(active, "returncode", 1) == 0
-            and str(getattr(active, "stdout", "")).strip() == "active"
-        )
-        data = self._state_store().load()
+        running = getattr(active, "returncode", 1) == 0 and str(getattr(active, "stdout", "")).strip() == "active"
+        degraded = False
+        try:
+            data = self._state_store().load()
+        except AntiDPIStateCorruptError as exc:
+            data = {}
+            degraded = True
+            self._fail(str(exc))
         paths = self._runtime_paths()
         return PluginStatus(
             installed=paths.script.exists() or paths.service.exists(),
@@ -89,6 +168,8 @@ class AntiDPILifecycleMixin:
                 "banned_ips": len(active_bans(data)),
                 "events": data.get("events", 0),
                 "last_error": self.last_error,
+                "state_degraded": degraded,
+                "reconciliation": data.get("reconciliation", {}),
             },
         )
 
@@ -99,14 +180,15 @@ class AntiDPILifecycleMixin:
         self,
         state: PluginStateAccess,
     ) -> HealthResult:
-        mieru = state.protocols.get("mieru")
-        return self._healthcheck(mieru_enabled=bool(mieru and mieru.enabled))
+        del state
+        return self._healthcheck()
 
-    def _healthcheck(self, *, mieru_enabled: bool) -> HealthResult:
+    def _healthcheck(self) -> HealthResult:
         checks = self._runtime().health_checks(
             running=self.status().running,
-            mieru_enabled=mieru_enabled,
         )
+        checks["collector_heartbeat"] = self._collector_heartbeat_ok()
+        checks.update(self._persisted_health_checks())
         healthy = all(checks.values())
         return HealthResult(
             healthy,
@@ -115,20 +197,50 @@ class AntiDPILifecycleMixin:
             checks,
         )
 
+    def _collector_heartbeat_ok(self) -> bool:
+        """Fail health when the collector is running but has gone silent.
+
+        A missing heartbeat (pre-upgrade state) is not a failure: only a
+        recorded heartbeat that has gone stale proves a stuck collector.
+        """
+        try:
+            data = self._state_store().load()
+        except AntiDPIStateCorruptError:
+            return False
+        except Exception:
+            return True
+        try:
+            heartbeat = float(data.get("collector_heartbeat_at", 0) or 0)
+        except (TypeError, ValueError, OverflowError):
+            return True
+        if heartbeat <= 0:
+            return True
+        return self._clock() - heartbeat <= COLLECTOR_HEARTBEAT_STALE
+
+    def _persisted_health_checks(self) -> dict[str, bool]:
+        try:
+            data = self._state_store().load()
+        except AntiDPIStateCorruptError:
+            return {"state": False, "reconciliation": False}
+        reconciliation = data.get("reconciliation", {})
+        return {
+            "state": True,
+            "reconciliation": not isinstance(reconciliation, dict) or not _is_false(reconciliation.get("ok")),
+        }
+
     def on_enable(self, state: PluginStateAccess) -> None:
+        del state
         prepared = (
             self._ensure_sets()
             and self._ensure_rules()
-            and self._ensure_scan_rules()
-            and self.sync_udp_probe_rules(state)
-            and self.sync_mieru_probe_rules(state)
+            and self._remove_obsolete_telemetry()
+            and self.release_whitelisted_bans() >= 0
+            and not self.whitelisted_bans()
             and self._restore_bans()
-            and self._sync_awg_debug(True)
         )
         if not prepared:
             raise RuntimeError(
-                self.last_error
-                or "Anti-DPI firewall runtime could not be prepared",
+                self.last_error or "Anti-DPI firewall runtime could not be prepared",
             )
         try:
             self._write_service()
@@ -151,10 +263,7 @@ class AntiDPILifecycleMixin:
             ["systemctl", "enable", "--now", "hydra-antidpi"],
             text=True,
         )
-        if (
-            getattr(start_result, "returncode", 1) != 0
-            or not self.status().running
-        ):
+        if getattr(start_result, "returncode", 1) != 0 or not self.status().running:
             raise RuntimeError(
                 self._result_error(start_result, "запуск hydra-antidpi"),
             )
@@ -166,12 +275,9 @@ class AntiDPILifecycleMixin:
         )
         if getattr(result, "returncode", 1) != 0:
             raise RuntimeError("Anti-DPI service could not be stopped")
-        self._sync_awg_debug(False)
         cleanup_results = (
             self._remove_rules(),
-            self._remove_scan_rules(),
-            self._remove_udp_probe_rules(),
-            self._remove_mieru_probe_rules(),
+            self._remove_obsolete_telemetry(),
         )
         if not all(cleanup_results):
             raise RuntimeError("Anti-DPI firewall rules could not be removed")
@@ -185,37 +291,9 @@ class AntiDPILifecycleMixin:
     def _remove_rules(self) -> bool:
         return self._runtime().remove_rules()
 
-    def _ensure_scan_rules(self) -> bool:
-        return self._runtime().ensure_scan_rules()
-
-    def _remove_scan_rules(self) -> bool:
-        return self._runtime().remove_scan_rules()
-
-    def sync_udp_probe_rules(
-        self,
-        state: PluginStateAccess | None = None,
-    ) -> bool:
-        """Remove obsolete per-listener UDP telemetry."""
-        del state
-        return self._remove_udp_probe_rules()
-
-    def _remove_udp_probe_rules(self) -> bool:
-        return self._runtime().remove_udp_probe_rules()
-
-    def sync_mieru_probe_rules(
-        self,
-        state: PluginStateAccess | None = None,
-    ) -> bool:
-        """Install LOG-only inference for Mieru's silent auth rejects."""
-        if state is None:
-            return False
-        protocol = state.protocols.get("mieru")
-        return self._runtime().sync_mieru_probe_rules(
-            bool(protocol and protocol.enabled),
-        )
-
-    def _remove_mieru_probe_rules(self) -> bool:
-        return self._runtime().remove_mieru_probe_rules()
+    def _remove_obsolete_telemetry(self) -> bool:
+        """Delete scan/UDP/Mieru logging rules left by earlier versions."""
+        return self._runtime().remove_obsolete_telemetry()
 
     def _add_firewall_ban(
         self,

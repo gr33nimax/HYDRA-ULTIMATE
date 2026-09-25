@@ -1,4 +1,5 @@
 """NekoBox/SagerNet link serialization helpers."""
+
 from __future__ import annotations
 
 import base64
@@ -33,7 +34,15 @@ def _serialize_len(length: int) -> bytes:
 
 
 def _serialize_string_len(value: str) -> bytes:
-    return _serialize_len(len(value)) + value.encode()
+    utf16 = value.encode("utf-16-be", "surrogatepass")
+    encoded = b"".join(
+        chr(int.from_bytes(utf16[index : index + 2], "big")).encode(
+            "utf-8",
+            "surrogatepass",
+        )
+        for index in range(0, len(utf16), 2)
+    )
+    return _serialize_len(len(utf16) // 2) + encoded
 
 
 def serialize_nekobox_config(config: str, name: str) -> str:
@@ -252,11 +261,7 @@ def clean_link_to_sn(link: str, user: User) -> str | None:
     try:
         parsed = urllib.parse.urlparse(link)
         scheme = parsed.scheme
-        fragment = (
-            urllib.parse.unquote(parsed.fragment)
-            if parsed.fragment
-            else user.email
-        )
+        fragment = urllib.parse.unquote(parsed.fragment) if parsed.fragment else user.email
         if scheme in {
             "naive",
             "naive+quic",
@@ -271,14 +276,8 @@ def clean_link_to_sn(link: str, user: User) -> str | None:
                 return None
             credentials, host_port = parsed.netloc.split("@", 1)
             decoded = urllib.parse.unquote(credentials)
-            username, password = (
-                decoded.split(":", 1) if ":" in decoded else (decoded, "")
-            )
-            host, port_text = (
-                host_port.split(":", 1)
-                if ":" in host_port
-                else (host_port, "443")
-            )
+            username, password = decoded.split(":", 1) if ":" in decoded else (decoded, "")
+            host, port_text = host_port.split(":", 1) if ":" in host_port else (host_port, "443")
             query = urllib.parse.parse_qs(parsed.query)
             if query.get("alpn", ["h2"])[0] == "h3":
                 return None
@@ -306,11 +305,7 @@ def clean_link_to_sn(link: str, user: User) -> str | None:
                 query.get("protocol", ["TCP"])[0],
                 urllib.parse.unquote(username),
                 urllib.parse.unquote(password),
-                (
-                    urllib.parse.unquote(fragment_text)
-                    if fragment_text
-                    else user.email
-                ),
+                (urllib.parse.unquote(fragment_text) if fragment_text else user.email),
             )
     except Exception:
         return None

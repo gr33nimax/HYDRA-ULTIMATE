@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from hydra.core.singbox_config import (
+    DEFAULT_DNS_STRATEGY,
     default_dns_config,
+    dns_policy,
+    generate_config,
     migrate_legacy_default_dns,
 )
 
@@ -82,3 +85,54 @@ def test_migrate_legacy_default_dns_ignores_plugin_owned_dns() -> None:
 
     assert changed is False
     assert migrated is source
+
+
+# ── Стратегия резолва не теряется при чужом dns-фрагменте ──────────────
+
+
+def test_plugin_dns_keeps_the_resolution_strategy() -> None:
+    # Ровно то, что отдаёт dnscrypt на боевом сервере: свои серверы, без стратегии.
+    # Раньше такой фрагмент подменял дефолт целиком, и на машине без IPv6 ядро висело
+    # на v6-адресах десятками секунд, прежде чем упасть на IPv4.
+    plugin_dns = {
+        "servers": [
+            {
+                "type": "udp",
+                "tag": "dnscrypt-local",
+                "server": "127.0.0.1",
+                "server_port": 5300,
+            },
+        ],
+        "rules": [],
+    }
+
+    policy = dns_policy(plugin_dns)
+
+    assert policy["strategy"] == DEFAULT_DNS_STRATEGY
+    assert policy["servers"] == plugin_dns["servers"], "серверы остаются плагинные"
+    assert plugin_dns.get("strategy") is None, "входной документ не меняется"
+
+
+def test_plugin_dns_may_choose_its_own_strategy() -> None:
+    policy = dns_policy({"servers": [], "rules": [], "strategy": "prefer_ipv4"})
+
+    assert policy["strategy"] == "prefer_ipv4"
+
+
+def test_without_a_plugin_dns_the_default_policy_is_used() -> None:
+    assert dns_policy(None) == default_dns_config()
+    assert dns_policy({}) == default_dns_config()
+
+
+def test_generate_config_keeps_the_strategy_with_a_plugin_dns() -> None:
+    # Замок на самом месте сборки: стратегия терялась не в dns_policy, а в generate_config.
+    from hydra.contracts import ConfigFragment
+    from hydra.core.state_models import AppState
+
+    config = generate_config(
+        AppState(),
+        {"dnscrypt": ConfigFragment(dns={"servers": [{"tag": "dnscrypt-local"}], "rules": []})},
+    )
+
+    assert config["dns"]["strategy"] == DEFAULT_DNS_STRATEGY
+    assert config["dns"]["servers"] == [{"tag": "dnscrypt-local"}]

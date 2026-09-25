@@ -1,4 +1,5 @@
 """Network and native-client probes with explicit runtime dependencies."""
+
 from __future__ import annotations
 
 import json
@@ -8,19 +9,16 @@ import ssl
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from hydra.core.state_models import AppState, User
 from hydra.plugins.antidpi.selftest_targets import Target
 
 PAYLOADS = (
     b"HYDRA-ANTIDPI-SELFTEST\r\n",
-    (
-        b"GET /__hydra_antidpi_selftest__ HTTP/1.1\r\n"
-        b"Host: invalid.local\r\nConnection: close\r\n\r\n"
-    ),
+    (b"GET /__hydra_antidpi_selftest__ HTTP/1.1\r\nHost: invalid.local\r\nConnection: close\r\n\r\n"),
     (
         b"CONNECT selftest.invalid:443 HTTP/1.1\r\n"
         b"Host: selftest.invalid:443\r\n"
@@ -55,9 +53,27 @@ class ClientConfigProvider(Protocol):
 
 
 class ProbeHost(Protocol):
-    def which(self, name: str) -> str | None: ...
-    def run(self, command: list[str], **options: object): ...
-    def popen(self, command: list[str], **options: object): ...
+    """Runtime dependencies the probes need from the host adapter."""
+
+    def which(self, executable: str) -> str | None:
+        """Return the resolved path of an executable, or ``None``."""
+        ...
+
+    def run(
+        self,
+        args: Sequence[object],
+        **options: Any,
+    ) -> "subprocess.CompletedProcess[str]":
+        """Run one command under the host's timeout and redaction policy."""
+        ...
+
+    def popen(
+        self,
+        args: Sequence[object],
+        **options: Any,
+    ) -> "subprocess.Popen[str]":
+        """Start one child process under the host's policy."""
+        ...
 
 
 def probe(
@@ -113,7 +129,10 @@ def probe(
 def free_tcp_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
-        return int(listener.getsockname()[1])
+        try:
+            return int(listener.getsockname()[1])
+        except (TypeError, ValueError, IndexError, OSError):
+            return 0
 
 
 def invalid_client_config(
@@ -162,16 +181,9 @@ def invalid_client_config(
 
 def _invalidate_outbounds(config: dict, protocol: str) -> bool:
     changed = False
-    accepted_types = (
-        {protocol}
-        if protocol != "shadowtls"
-        else {"shadowtls", "trojan"}
-    )
+    accepted_types = {protocol} if protocol != "shadowtls" else {"shadowtls", "trojan"}
     for outbound in config["outbounds"]:
-        if (
-            not isinstance(outbound, dict)
-            or outbound.get("type") not in accepted_types
-        ):
+        if not isinstance(outbound, dict) or outbound.get("type") not in accepted_types:
             continue
         outbound["server"] = "127.0.0.1"
         for field in ("password", "username", "psk", "uuid"):
@@ -265,11 +277,7 @@ def _run_native_client(
             env=environment,
         )
         if check.returncode != 0:
-            detail = (
-                check.stderr
-                or check.stdout
-                or "config check failed"
-            ).strip()[-1000:]
+            detail = (check.stderr or check.stdout or "config check failed").strip()[-1000:]
             return {
                 "status": "config_rejected",
                 "started": False,

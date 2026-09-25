@@ -1,4 +1,5 @@
 """Trusted release and host adapter for transactional kernel replacement."""
+
 from __future__ import annotations
 
 import json
@@ -10,12 +11,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from hydra.contracts.hydracore_calls import supports_native_vk_calls, supports_vps_contract
 from hydra.core.host import HostBackend
 from hydra.core.state_kernel_models import (
     KERNEL_HYDRACORE,
-    KERNEL_SINGBOX_EXTENDED,
 )
 from hydra.services.kernel import KernelRuntimeStatus
+from hydra.core.kernel_release_channels import kernel_release_selection
 from hydra.utils.downloader import (
     download_github_asset_filtered,
     extract_tarball,
@@ -31,10 +33,6 @@ class _ReleaseSpec:
 
 
 _TRUSTED_RELEASES = {
-    KERNEL_SINGBOX_EXTENDED: _ReleaseSpec(
-        "shtorm-7/sing-box-extended",
-        lambda arch: rf"^sing-box-.+-linux-{re.escape(arch)}\.tar\.gz$",
-    ),
     KERNEL_HYDRACORE: _ReleaseSpec(
         "gr33nimax/hydracore",
         lambda arch: rf"^hydracore-vps-linux-{re.escape(arch)}\.tar\.gz$",
@@ -157,11 +155,13 @@ class KernelInfrastructure:
 
     def _run(self, binary: Path, *arguments: str):
         env = os.environ.copy()
-        env.update({
-            "LEGACY_DNS_SERVERS": "true",
-            "ENABLE_DEPRECATED_LEGACY_DNS_SERVERS": "true",
-            "ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER": "true",
-        })
+        env.update(
+            {
+                "LEGACY_DNS_SERVERS": "true",
+                "ENABLE_DEPRECATED_LEGACY_DNS_SERVERS": "true",
+                "ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER": "true",
+            }
+        )
         return self._host.run(
             [str(binary), *arguments],
             capture_output=True,
@@ -176,8 +176,8 @@ class KernelInfrastructure:
             raise RuntimeError("kernel candidate failed its version probe")
         return str(result.stdout or "").strip()
 
-    def _capability_payload(self, binary: Path) -> dict:
-        result = self._run(binary, "hydra", "capabilities", "--json")
+    def _hydra_payload(self, binary: Path, subcommand: str) -> dict:
+        result = self._run(binary, "hydra", subcommand, "--json")
         if result.returncode != 0:
             return {}
         try:
@@ -186,69 +186,43 @@ class KernelInfrastructure:
             return {}
         return payload if isinstance(payload, dict) else {}
 
-    @staticmethod
-    def _normalized_capabilities(payload: dict) -> tuple[str, ...]:
-        values: set[str] = set()
-        raw = payload.get("capabilities", ())
-        if isinstance(raw, list):
-            values.update(str(item) for item in raw if isinstance(item, str))
-        features = payload.get("features", {})
-        if isinstance(features, dict):
-            values.update(
-                str(name)
-                for name, enabled in features.items()
-                if enabled is True
-            )
-        identity = payload.get("identity", {})
-        if isinstance(identity, dict) and identity.get("core_id") == _HYDRACORE_CORE_ID:
-            values.add("hydracore")
-        return tuple(sorted(values))
+    def _contract_payload(self, binary: Path) -> dict:
+        return self._hydra_payload(binary, "contract")
+
+    def _legacy_capabilities_payload(self, binary: Path) -> dict:
+        """What a core built before the product contract answers instead of it."""
+        return self._hydra_payload(binary, "capabilities")
 
     @staticmethod
     def _has_hydracore_contract(payload: dict) -> bool:
-        identity = payload.get("identity", {})
-        features = payload.get("features", {})
-        protocols = payload.get("protocols", {})
-        modes = protocols.get("call_modes", ()) if isinstance(protocols, dict) else ()
-        wire = (
-            protocols.get("call_vk_multi_user_wire", {})
-            if isinstance(protocols, dict)
-            else {}
-        )
-        return bool(
-            isinstance(identity, dict)
-            and identity.get("core_id") == _HYDRACORE_CORE_ID
-            and identity.get("role") == "vps"
-            and isinstance(features, dict)
-            and features.get("call_vk_multi_user") is True
-            and features.get("call_vk_multi_user_server") is True
-            and features.get("call_vk_multi_user_client") is False
-            and isinstance(modes, list)
-            and modes == ["multi_user"]
-            and isinstance(wire, dict)
-            and wire.get("min") == 1
-            and wire.get("max") == 2
-        )
+        return supports_vps_contract(payload)
+
+    def _accepts_vps_calls(self, binary: Path) -> bool:
+        """Judge a candidate by the contract it prints, or by the document it printed before it.
+
+        Requiring the contract would also refuse the rollback to the release that was running a
+        minute ago, which is the one path that matters when a new core misbehaves.
+        """
+        payload = self._contract_payload(binary)
+        if payload:
+            return self._has_hydracore_contract(payload)
+        return supports_native_vk_calls(self._legacy_capabilities_payload(binary))
 
     def _inspect_binary(self, binary: Path, *, running: bool) -> KernelRuntimeStatus:
         version_output = self._version_output(binary)
-        capability_payload = self._capability_payload(binary)
-        identity = capability_payload.get("identity", {})
-        core_id = identity.get("core_id") if isinstance(identity, dict) else ""
-        if core_id == _HYDRACORE_CORE_ID or "hydracore" in version_output.lower():
+        contract_payload = self._contract_payload(binary)
+        if contract_payload.get("core_id") == _HYDRACORE_CORE_ID or "hydracore" in version_output.lower():
             provider = KERNEL_HYDRACORE
         elif "extended" in version_output.lower():
-            provider = KERNEL_SINGBOX_EXTENDED
+            provider = "legacy"
         else:
             provider = "unknown"
-        capabilities = self._normalized_capabilities(capability_payload)
         version_line = version_output.splitlines()[0] if version_output else ""
         return KernelRuntimeStatus(
             True,
             running=running,
             provider=provider,
             version=version_line,
-            capabilities=capabilities,
             binary_path=str(binary),
         )
 
@@ -275,11 +249,14 @@ class KernelInfrastructure:
         pattern = re.compile(spec.asset_name(arch))
         archive = directory / "kernel.tar.gz"
         errors: list[str] = []
+        selection = kernel_release_selection(provider, channel)
         downloaded = self._download(
             spec.repository,
             lambda name: pattern.fullmatch(name) is not None,
             archive,
-            include_prerelease=channel == "preview",
+            include_prerelease=selection.include_prerelease,
+            prerelease_tag_markers=selection.prerelease_tag_markers,
+            prerelease_exclude_markers=selection.prerelease_exclude_markers,
             require_unique=True,
             require_digest=True,
             on_error=errors.append,
@@ -289,39 +266,40 @@ class KernelInfrastructure:
         extracted = directory / "extracted"
         extract_tarball(archive, extracted)
         candidates = [
-            path
-            for path in extracted.rglob("sing-box")
-            if path.is_file() and path.stat().st_size > 1_000_000
+            path for path in extracted.rglob("sing-box") if path.is_file() and path.stat().st_size > 1_000_000
         ]
         if len(candidates) != 1 or not verify_elf(candidates[0]):
             raise RuntimeError("release must contain exactly one ELF sing-box binary")
         candidates[0].chmod(0o755)
         return candidates[0]
 
-    def _validate_candidate(self, candidate: Path, provider: str) -> KernelRuntimeStatus:
+    def _validate_candidate(
+        self,
+        candidate: Path,
+        provider: str,
+        channel: str = "stable",
+    ) -> KernelRuntimeStatus:
         status = self._inspect_binary(candidate, running=False)
         if status.provider != provider:
             raise RuntimeError(
                 f"release identity mismatch: expected {provider}, got {status.provider}",
             )
-        if provider == KERNEL_HYDRACORE:
-            payload = self._capability_payload(candidate)
-            if not self._has_hydracore_contract(payload):
-                raise RuntimeError(
-                    "Hydracore must expose exact identity, "
-                    "the VPS Calls role, multi_user-only mode, and wire v1..2",
-                )
+        if provider == KERNEL_HYDRACORE and not self._accepts_vps_calls(candidate):
+            raise RuntimeError(
+                "Hydracore must expose identity, the VPS Calls role, and vk_parasite mode",
+            )
         if self._config_path.exists():
             checked = self._run(candidate, "check", "-c", str(self._config_path))
             if checked.returncode != 0:
+                # The checker's own output stays out of the message on purpose: it carries the
+                # configuration it read, secrets included (test_kernel_candidate_error_redacts…).
                 raise RuntimeError("candidate rejected the active configuration")
         return status
 
     def prepare_switch(self, provider: str, channel: str) -> _PreparedSwitch:
         if provider not in _TRUSTED_RELEASES:
             raise ValueError(f"unsupported kernel provider: {provider}")
-        if channel not in {"stable", "preview"}:
-            raise ValueError(f"unsupported kernel channel: {channel}")
+        kernel_release_selection(provider, channel)
         lease = _KernelLease.acquire(self._lock_path)
         backup = self._binary_path.with_name(f".{self._binary_path.name}.kernel.bak")
         singbox = self._singbox()
@@ -352,7 +330,7 @@ class KernelInfrastructure:
             cleanup()
             with tempfile.TemporaryDirectory(prefix="hydra-kernel-") as temp:
                 candidate = self._download_candidate(provider, channel, Path(temp))
-                candidate_status = self._validate_candidate(candidate, provider)
+                candidate_status = self._validate_candidate(candidate, provider, channel)
                 if target_existed:
                     self._host.atomic_copy(self._binary_path, backup, mode=0o700)
                 if was_running:

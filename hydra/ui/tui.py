@@ -3,14 +3,17 @@ hydra/ui/tui.py — Текстовый UI-фреймворк.
 
 Цвета, рамки, заголовки, панели, утилиты ввода.
 """
+
 from __future__ import annotations
 
+import math
 import os
 import re
 import sys
 import shutil
 from typing import Optional
 from hydra import __version__
+from hydra.build_info import get_build_info
 
 try:
     import readline
@@ -21,29 +24,51 @@ except ImportError:
 #  Цвета
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def _detect_colors() -> dict:
-    keys = ("RED", "GREEN", "YELLOW", "CYAN", "BLUE", "MAGENTA",
-            "BOLD", "DIM", "WHITE", "NC")
+    keys = ("RED", "GREEN", "YELLOW", "CYAN", "BLUE", "MAGENTA", "BOLD", "DIM", "WHITE", "NC")
     if not sys.stdout.isatty():
         return {k: "" for k in keys}
 
     light = os.environ.get("HYDRA_THEME", "").lower() == "light"
     if light:
         return {
-            "RED": "\033[0;31m", "GREEN": "\033[0;32m", "YELLOW": "\033[0;33m",
-            "CYAN": "\033[0;34m", "BLUE": "\033[0;35m", "MAGENTA": "\033[0;35m",
-            "BOLD": "\033[1m", "DIM": "\033[2m", "WHITE": "\033[0;30m", "NC": "\033[0m",
+            "RED": "\033[0;31m",
+            "GREEN": "\033[0;32m",
+            "YELLOW": "\033[0;33m",
+            "CYAN": "\033[0;34m",
+            "BLUE": "\033[0;35m",
+            "MAGENTA": "\033[0;35m",
+            "BOLD": "\033[1m",
+            "DIM": "\033[2m",
+            "WHITE": "\033[0;30m",
+            "NC": "\033[0m",
         }
     return {
-        "RED": "\033[0;31m", "GREEN": "\033[0;32m", "YELLOW": "\033[1;33m",
-        "CYAN": "\033[0;36m", "BLUE": "\033[0;34m", "MAGENTA": "\033[0;35m",
-        "BOLD": "\033[1m", "DIM": "\033[2m", "WHITE": "\033[1;37m", "NC": "\033[0m",
+        "RED": "\033[0;31m",
+        "GREEN": "\033[0;32m",
+        "YELLOW": "\033[1;33m",
+        "CYAN": "\033[0;36m",
+        "BLUE": "\033[0;34m",
+        "MAGENTA": "\033[0;35m",
+        "BOLD": "\033[1m",
+        "DIM": "\033[2m",
+        "WHITE": "\033[1;37m",
+        "NC": "\033[0m",
     }
 
+
 C = _detect_colors()
-RED = C["RED"]; GREEN = C["GREEN"]; YELLOW = C["YELLOW"]; CYAN = C["CYAN"]
-BLUE = C["BLUE"]; MAGENTA = C["MAGENTA"]; BOLD = C["BOLD"]; DIM = C["DIM"]
-WHITE = C["WHITE"]; NC = C["NC"]
+RED = C["RED"]
+GREEN = C["GREEN"]
+YELLOW = C["YELLOW"]
+CYAN = C["CYAN"]
+BLUE = C["BLUE"]
+MAGENTA = C["MAGENTA"]
+BOLD = C["BOLD"]
+DIM = C["DIM"]
+WHITE = C["WHITE"]
+NC = C["NC"]
 
 TERM_WIDTH = shutil.get_terminal_size().columns
 PANEL_W = min(TERM_WIDTH - 4, 78)
@@ -75,27 +100,25 @@ def _strip(s: str) -> str:
 
 def _char_width(char: str) -> int:
     code = ord(char)
-    if code == 0xfe0f:
+    if code == 0xFE0F:
         return 0
     # Common 2-cell emojis in standard BMP
     if code in {
-        0x274c,  # ❌
+        0x274C,  # ❌
         0x2705,  # ✅
-        0x26a1,  # ⚡
-        0x1f4ca, # 📊
-        0x1f310, # 🌐
+        0x26A1,  # ⚡
+        0x1F4CA,  # 📊
+        0x1F310,  # 🌐
     }:
         return 2
     # Special cases: emojis that are rendered as 1 cell wide in standard monospace fonts/terminals
-    if code in (0x1f6e1, 0x1f6e0, 0x1f576):  # 🛡, 🛠 and 🕶
+    if code in (0x1F6E1, 0x1F6E0, 0x1F576):  # 🛡, 🛠 and 🕶
         return 1
     # Emojis > 0xffff are always 2 cells wide
-    if code > 0xffff:
+    if code > 0xFFFF:
         return 2
     # CJK characters
-    if (0x4e00 <= code <= 0x9fff or 
-        0x3000 <= code <= 0x303f or 
-        0xff00 <= code <= 0xffef):
+    if 0x4E00 <= code <= 0x9FFF or 0x3000 <= code <= 0x303F or 0xFF00 <= code <= 0xFFEF:
         return 2
     return 1
 
@@ -107,10 +130,10 @@ def _width(s: str) -> int:
     flags_count = 0
     for char in plain:
         code = ord(char)
-        if 0x1f1e6 <= code <= 0x1f1ff:
+        if 0x1F1E6 <= code <= 0x1F1FF:
             flags_count += 1
         w += _char_width(char)
-    
+
     # Каждая пара региональных индикаторов представляет собой один флаг (2 ячейки).
     # Без корректировки 2 символа давали бы 2 + 2 = 4 ячейки. Вычитаем разницу.
     w -= (flags_count // 2) * 2
@@ -127,12 +150,12 @@ def _fit_line(line: str, max_w: int) -> tuple[str, int]:
     line_w = _width(line)
     if line_w <= max_w:
         return line, line_w
-        
+
     parts = re.split(r"(\033\[[0-9;]*m)", line)
     new_parts = []
     accum_w = 0
     target_w = max_w - 3
-    
+
     for part in parts:
         if not part:
             continue
@@ -140,7 +163,7 @@ def _fit_line(line: str, max_w: int) -> tuple[str, int]:
             new_parts.append(part)
         else:
             for char in part:
-                if ord(char) == 0xfe0f:
+                if ord(char) == 0xFE0F:
                     new_parts.append(char)
                     continue
                 char_w = _char_width(char)
@@ -194,27 +217,53 @@ def _wrap_line(line: str, max_w: int) -> list[tuple[str, int]]:
     return wrapped
 
 
+def _frame_top(title_text: str = "") -> str:
+    if not title_text:
+        return f"{INDENT}{CYAN}╭{'─' * PANEL_W}╮{NC}"
+    title_fit, title_w = _fit_line(title_text, PANEL_W - 3)
+    return f"{INDENT}{CYAN}╭─ {BOLD}{WHITE}{title_fit}{NC}{CYAN} {'─' * (PANEL_W - title_w - 3)}╮{NC}"
+
+
+def _frame_row(line: str, *, wrap: bool = False) -> list[str]:
+    width = PANEL_W - 2
+    fitted = _wrap_line(line, width) if wrap else [_fit_line(line, width)]
+    return [f"{INDENT}{CYAN}│{NC} {value}{' ' * (width - line_w)} {CYAN}│{NC}" for value, line_w in fitted]
+
+
+def _frame_rule() -> str:
+    return f"{INDENT}{CYAN}├{'─' * PANEL_W}┤{NC}"
+
+
+def _frame_bottom() -> str:
+    return f"{INDENT}{CYAN}╰{'─' * PANEL_W}╯{NC}"
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  Баннер
 # ═════════════════════════════════════════════════════════════════════════════
 
-BANNER = rf"""
-{CYAN}        ██╗  ██╗{GREEN}██╗   ██╗{CYAN}██████╗ {GREEN}██████╗ {CYAN} █████╗
-         ██║  ██║{GREEN}╚██╗ ██╔╝{CYAN}██╔══██╗{GREEN}██╔══██╗{CYAN}██╔══██╗
-         ███████║{GREEN} ╚████╔╝ {CYAN}██║  ██║{GREEN}██████╔╝{CYAN}███████║
-         ██╔══██║{GREEN}  ╚██╔╝  {CYAN}██║  ██║{GREEN}██╔══██╗{CYAN}██╔══██║
-         ██║  ██║{GREEN}   ██║   {CYAN}██████╔╝{GREEN}██║  ██║{CYAN}██║  ██║
-         ╚═╝  ╚═╝{GREEN}   ╚═╝   {CYAN}╚═════╝ {GREEN}╚═╝  ╚═╝{CYAN}╚═╝  ╚═╝{NC}
-{DIM}        ─────────────────────────────────────────────────{NC}
-{MAGENTA}              🐉  Multi-Protocol Proxy Manager{NC}
-{DIM}                        v{__version__}{NC}
-"""
-
+_build_info = get_build_info()
+_build_identity = _build_info.channel
+if _build_info.revision:
+    _build_identity += f" · {_build_info.revision[:7]}"
+_banner_left = f"{BOLD}{CYAN}HYDRA{NC} {DIM}v{__version__} · {_build_identity}{NC}"
+_banner_right = f"{MAGENTA}{BOLD}ULTIMATE{NC}"
+_banner_gap = max(1, PANEL_W - _width(_banner_left) - _width(_banner_right) - 2)
+BANNER = "\n".join(
+    (
+        "",
+        _frame_top(),
+        f"{INDENT}{CYAN}│{NC} {_banner_left}{' ' * _banner_gap}{_banner_right} {CYAN}│{NC}",
+        _frame_row(f"{DIM}Multi-Protocol Proxy Manager{NC}")[0],
+        _frame_bottom(),
+    ),
+)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Базовые функции
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 def clear():
     print("\033[2J\033[H", end="", flush=True)
@@ -235,82 +284,55 @@ def kv(label: str, value: str, label_w: int = 16) -> str:
 
 
 def panel(title_text: str, lines: list[str], *, wrap: bool = False):
-    """Панель состояния; wrap сохраняет длинные строки, перенося их."""
-    inner = PANEL_W
-    
-    # Центрируем заголовок
-    title_fit, title_w = _fit_line(title_text, inner - 2)
-    pad_left = (inner - title_w) // 2
-    pad_right = inner - title_w - pad_left
-    
+    """Компактная панель состояния в тонкой рамке."""
     print()
-    print(f"{INDENT}{CYAN}╔{'═' * inner}╗{NC}")
-    print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{WHITE}{title_fit}{NC}{' ' * pad_right}{CYAN}║{NC}")
-    print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+    print(_frame_top(title_text))
     for line in lines:
         plain_line = _strip(line).strip()
         if plain_line and all(c in "─-" for c in plain_line):
-            line_fit = f"{DIM}{'─' * (inner - 2)}{NC}"
-            line_w = inner - 2
-            fitted_lines = [(line_fit, line_w)]
-        else:
-            fitted_lines = (
-                _wrap_line(line, inner - 2)
-                if wrap
-                else [_fit_line(line, inner - 2)]
-            )
-        for line_fit, line_w in fitted_lines:
-            pad = inner - 2 - line_w
-            print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * pad} {CYAN}║{NC}")
-    print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
+            print(_frame_rule())
+            continue
+        print(*_frame_row(line, wrap=wrap), sep="\n")
+    print(_frame_bottom())
 
 
 def box(content: str, header: str = ""):
-    """Рисует рамку вокруг текста с двойными границами."""
-    inner = PANEL_W
-    print(f"{INDENT}{CYAN}╔{'═' * inner}╗{NC}")
-    if header:
-        h_fit, h_w = _fit_line(header, inner - 2)
-        pad_left = (inner - h_w) // 2
-        pad_right = inner - h_w - pad_left
-        print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{h_fit}{NC}{' ' * pad_right}{CYAN}║{NC}")
-        print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+    """Рисует компактную рамку вокруг текста."""
+    print(_frame_top(header))
     for line in content.split("\n"):
         plain_line = _strip(line).strip()
         if plain_line and all(c in "─-" for c in plain_line):
-            line_fit = f"{DIM}{'─' * (inner - 2)}{NC}"
-            line_w = inner - 2
-            pad = 0
+            print(_frame_rule())
         else:
-            line_fit, line_w = _fit_line(line, inner - 2)
-            pad = inner - 2 - line_w
-        print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * pad} {CYAN}║{NC}")
-    print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
+            print(*_frame_row(line), sep="\n")
+    print(_frame_bottom())
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Сообщения
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def info(msg: str):
-    print(f"{INDENT}{CYAN}●{NC} {DIM}INFO{NC}  {msg}")
+    print(f"{INDENT}{CYAN}●{NC} {msg}")
 
 
 def success(msg: str):
-    print(f"{INDENT}{GREEN}✓{NC} {GREEN}{BOLD}OK{NC}    {msg}")
+    print(f"{INDENT}{GREEN}✓{NC} {msg}")
 
 
 def warn(msg: str):
-    print(f"{INDENT}{YELLOW}⚠{NC} {YELLOW}WARN{NC}  {msg}")
+    print(f"{INDENT}{YELLOW}⚠{NC} {msg}")
 
 
 def error(msg: str):
-    print(f"{INDENT}{RED}✗{NC} {RED}{BOLD}ERR{NC}   {msg}")
+    print(f"{INDENT}{RED}✗{NC} {msg}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Меню и ввод
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 def _menu_key(key: str) -> str:
     if key in ("0", "Q", "q"):
@@ -321,55 +343,25 @@ def _menu_key(key: str) -> str:
 
 
 def menu(options: list[tuple[str, str, str]], header: str = "") -> str:
-    """Отображает меню с двойными рамками."""
-    inner = PANEL_W
-    print()
-    print(f"{INDENT}{CYAN}╔{'═' * inner}╗{NC}")
+    """Отображает компактное меню в тонкой рамке.
 
-    if header:
-        h_fit, h_w = _fit_line(header, inner - 2)
-        pad_left = (inner - h_w) // 2
-        pad_right = inner - h_w - pad_left
-        print(f"{INDENT}{CYAN}║{NC}{' ' * pad_left}{BOLD}{WHITE}{h_fit}{NC}{' ' * pad_right}{CYAN}║{NC}")
-        print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+    Третий элемент кортежа — краткое описание; если оно есть, показываем его тусклой
+    строкой под пунктом — оператору не надо угадывать, что делает пункт.
+    """
+    print()
+    print(_frame_top(header))
 
     for key, label, desc in options:
         if key == "-":
-            print(f"{INDENT}{CYAN}╠{'═' * inner}╣{NC}")
+            print(_frame_rule())
             continue
         key_col = _menu_key(key)
-        line = f"  {key_col}  {label}"
-        
-        plain_line = _strip(line).strip()
-        if plain_line and all(c in "─-" for c in plain_line):
-            line_fit = f"{DIM}{'─' * (inner - 2)}{NC}"
-            line_w = inner - 2
-            pad = 0
-        else:
-            line_fit, line_w = _fit_line(line, inner - 2)
-            pad = inner - 2 - line_w
-            
-        print(f"{INDENT}{CYAN}║{NC} {line_fit}{' ' * pad} {CYAN}║{NC}")
-        if desc:
-            import textwrap
-            desc_width = max(20, inner - 9)
-            for paragraph in desc.split("\n"):
-                wrapped_lines = textwrap.wrap(paragraph, width=desc_width) if paragraph.strip() else [""]
-                for w_line in wrapped_lines:
-                    dline = f"       {DIM}{w_line}{NC}"
-                    
-                    plain_dline = _strip(dline).strip()
-                    if plain_dline and all(c in "─-" for c in plain_dline):
-                        dline_fit = f"{DIM}{'─' * (inner - 2)}{NC}"
-                        dline_w = inner - 2
-                        dpad = 0
-                    else:
-                        dline_fit, dline_w = _fit_line(dline, inner - 2)
-                        dpad = inner - 2 - dline_w
-                        
-                    print(f"{INDENT}{CYAN}║{NC} {dline_fit}{' ' * dpad} {CYAN}║{NC}")
-
-    print(f"{INDENT}{CYAN}╚{'═' * inner}╝{NC}")
+        print(*_frame_row(f"{key_col}  {label}"), sep="\n")
+        text = str(desc or "").strip()
+        if text:
+            # Выравниваем под label: ключ «[X]» = 3 символа + 2 пробела.
+            print(*_frame_row(f"     {DIM}{text}{NC}"), sep="\n")
+    print(_frame_bottom())
     print()
 
     keys = [k for k, _, _ in options if k not in ("-", "")]
@@ -378,7 +370,7 @@ def menu(options: list[tuple[str, str, str]], header: str = "") -> str:
         choice = input(f"{INDENT}{CYAN}▸{NC} {BOLD}Выбор{NC}{DIM} ({hint}):{NC} ").strip()
     except (KeyboardInterrupt, EOFError):
         return "0"
-        
+
     if not choice:
         return hint
 
@@ -429,6 +421,7 @@ def confirm(text: str, default: bool = True) -> bool:
 #  Утилиты
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def _bytes_auto(v: int) -> str:
     """Форматирует байты в IEC-единицах."""
     if v < 1024:
@@ -450,8 +443,14 @@ def _bytes(v: int) -> str:
 def _bar(value: float, maximum: float, width: int = 18) -> str:
     if maximum <= 0:
         return f"{GREEN}[{'█' * width}{NC}] ∞"
-    pct = min(value / maximum, 1.0)
-    filled = int(pct * width)
+    pct = value / maximum
+    if not math.isfinite(pct):
+        pct = 0.0
+    pct = min(max(pct, 0.0), 1.0)
+    try:
+        filled = int(pct * width)
+    except (OverflowError, ValueError):
+        filled = 0
     return f"{GREEN}[{'█' * filled}{DIM}{'░' * (width - filled)}{NC}] {pct:.0%}"
 
 

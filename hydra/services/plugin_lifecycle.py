@@ -1,4 +1,5 @@
 """Transactional plugin lifecycle use-cases."""
+
 from __future__ import annotations
 
 import copy
@@ -8,6 +9,7 @@ from typing import Any, Callable
 from hydra.core.apply_transaction import ApplyTransaction
 from hydra.core.state_models import AppState, PluginState
 from hydra.core.transaction_helpers import state_transaction
+from hydra.plugins.base import failure_stage
 from hydra.plugins.invoker import PluginInvoker
 from hydra.services.configuration import restore_state_in_place
 
@@ -39,7 +41,11 @@ class PluginLifecycleOperations:
             transaction.rollback(self.log_rollback_error)
             raise
         if not installed:
+            self._note_install_failure(name, plugin)
+            failure = self.last_apply_error()
             transaction.rollback(self.log_rollback_error)
+            if failure:
+                self.set_apply_error(failure)
             return False
 
         if not self.get_protocol(snapshot, name).installed:
@@ -191,6 +197,7 @@ class PluginLifecycleOperations:
             raise
 
         if not applied:
+            self._note_apply_failure(name, plugin)
             self._rollback_after_apply_failure(transaction)
         else:
             transaction.commit()
@@ -262,3 +269,28 @@ class PluginLifecycleOperations:
     def _require_success(result: bool, message: str) -> None:
         if not result:
             raise RuntimeError(message)
+
+    def _note_install_failure(self, name: str, plugin: Any) -> None:
+        """Report the failing install step instead of a vague fallback."""
+        stage = self._plugin_stage(plugin, "install")
+        self.set_apply_error(
+            f"Установка {name}: {stage}" if stage else f"Установка {name} не удалась",
+        )
+
+    def _note_apply_failure(self, name: str, plugin: Any) -> None:
+        """Prefer the plugin's redacted apply step over a generic apply error."""
+        stage = self._plugin_stage(plugin, "apply")
+        if stage:
+            self.set_apply_error(f"Применение {name}: {stage}")
+        elif not self.last_apply_error():
+            self.set_apply_error(f"Включение {name} не удалось")
+
+    @staticmethod
+    def _plugin_stage(plugin: Any, kind: str) -> str:
+        """Read one optional, best-effort redacted plugin failure stage.
+
+        The canonical reader lives in :func:`hydra.plugins.base.failure_stage`;
+        a diagnostic label must never replace the real lifecycle result or
+        raise on its own.
+        """
+        return failure_stage(plugin, kind)

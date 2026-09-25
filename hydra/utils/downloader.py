@@ -4,6 +4,7 @@ hydra/utils/downloader.py — Скачивание бинарников с GitHu
 Логика портирована из legacy-модуля NaiveProxy
 (_download_binary, _get_latest_version).
 """
+
 from __future__ import annotations
 
 import json
@@ -14,7 +15,7 @@ import tarfile
 import tempfile
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 
@@ -60,34 +61,63 @@ def _release_metadata(
     repo: str,
     *,
     timeout: int,
+    release_tag: str | None = None,
     include_prerelease: bool = False,
+    prerelease_tag_markers: Sequence[str] = (),
+    prerelease_exclude_markers: Sequence[str] = (),
 ) -> dict:
-    endpoint = "releases?per_page=20" if include_prerelease else "releases/latest"
+    if release_tag and include_prerelease:
+        raise ValueError("release_tag cannot be combined with include_prerelease")
+    endpoint = (
+        f"releases/tags/{release_tag}"
+        if release_tag
+        else "releases?per_page=20"
+        if include_prerelease
+        else "releases/latest"
+    )
     url = f"https://api.github.com/repos/{repo}/{endpoint}"
     request = urllib.request.Request(
         url,
         headers=_github_headers(),
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = json.loads(response.read())
+        try:
+            payload = json.loads(response.read())
+        except json.JSONDecodeError as exc:
+            raise ValueError("GitHub release response is not valid JSON") from exc
     if not include_prerelease:
         if not isinstance(payload, dict):
             raise ValueError("GitHub latest release response must be an object")
         return payload
     if not isinstance(payload, list):
         raise ValueError("GitHub releases response must be a list")
-    release = next(
-        (
-            item
-            for item in payload
-            if isinstance(item, dict)
-            and not item.get("draft")
-            and item.get("prerelease") is True
+    candidates = [
+        item
+        for item in payload
+        if isinstance(item, dict)
+        and not item.get("draft")
+        and bool(item.get("prerelease"))
+        and isinstance(item.get("tag_name"), str)
+        and (not prerelease_tag_markers or any(marker in item["tag_name"] for marker in prerelease_tag_markers))
+        and not any(marker in item["tag_name"] for marker in prerelease_exclude_markers)
+    ]
+    # The GitHub releases endpoint does not guarantee that the first matching
+    # entry is the most recently published one. In particular, a newer debug
+    # release may be returned after several older prereleases. Select by the
+    # immutable publication timestamp instead of trusting response order.
+    release = max(
+        candidates,
+        key=lambda item: (
+            str(item.get("published_at") or ""),
+            str(item.get("created_at") or ""),
+            str(item.get("tag_name") or ""),
         ),
-        None,
+        default=None,
     )
     if release is None:
-        raise ValueError(f"repository {repo} has no published preview releases")
+        raise ValueError(
+            f"repository {repo} has no published matching prerelease",
+        )
     return release
 
 
@@ -96,17 +126,24 @@ def latest_release(
     timeout: int = 10,
     *,
     include_prerelease: bool = False,
+    prerelease_tag_markers: Sequence[str] = (),
+    prerelease_exclude_markers: Sequence[str] = (),
 ) -> str:
     """Возвращает tag_name (с 'v') последнего релиза. 'unknown' при ошибке.
 
-    repo = 'owner/repo', напр. 'enfein/mieru'.
+    repo = 'owner/repo', напр. 'enfein/mieru'. ``prerelease_tag_markers`` is an
+    any-of filter: an empty tuple accepts every prerelease tag.
     """
     try:
-        return str(_release_metadata(
-            repo,
-            timeout=timeout,
-            include_prerelease=include_prerelease,
-        ).get("tag_name", "unknown"))
+        return str(
+            _release_metadata(
+                repo,
+                timeout=timeout,
+                include_prerelease=include_prerelease,
+                prerelease_tag_markers=prerelease_tag_markers,
+                prerelease_exclude_markers=prerelease_exclude_markers,
+            ).get("tag_name", "unknown")
+        )
     except Exception:
         return "unknown"
 
@@ -129,6 +166,7 @@ def verify_sha256(path: Path, expected: str) -> bool:
 def secrets_compare(left: str, right: str) -> bool:
     """Use a constant-time comparison without exposing hashlib internals."""
     import hmac
+
     return hmac.compare_digest(left, right)
 
 
@@ -197,8 +235,7 @@ def download_github_asset(
     """
     url = f"https://api.github.com/repos/{repo}/releases/latest"
     try:
-        req = urllib.request.Request(
-            url, headers={"User-Agent": "HYDRA-Installer"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HYDRA-Installer"})
         with urllib.request.urlopen(req, timeout=15) as r:
             data = json.loads(r.read())
 
@@ -233,7 +270,10 @@ def download_github_asset_filtered(
     name_filter: Callable[[str], bool],
     dest: Path,
     *,
+    release_tag: str | None = None,
     include_prerelease: bool = False,
+    prerelease_tag_markers: Sequence[str] = (),
+    prerelease_exclude_markers: Sequence[str] = (),
     require_unique: bool = False,
     require_digest: bool = False,
     on_error: ErrorReporter | None = None,
@@ -253,15 +293,16 @@ def download_github_asset_filtered(
         data = _release_metadata(
             repo,
             timeout=15,
+            release_tag=release_tag,
             include_prerelease=include_prerelease,
+            prerelease_tag_markers=prerelease_tag_markers,
+            prerelease_exclude_markers=prerelease_exclude_markers,
         )
 
         matches = [
             asset
             for asset in data.get("assets", [])
-            if isinstance(asset, dict)
-            and isinstance(asset.get("name"), str)
-            and name_filter(asset["name"])
+            if isinstance(asset, dict) and isinstance(asset.get("name"), str) and name_filter(asset["name"])
         ]
         if require_unique and len(matches) != 1:
             return _fail(
@@ -292,6 +333,128 @@ def download_github_asset_filtered(
         )
 
 
+def _published_releases(repo: str, *, timeout: int, per_page: int = 30) -> list[dict]:
+    """Published (non-draft) releases, newest publication first.
+
+    The releases endpoint does not guarantee response order, so the immutable
+    publication timestamps decide — the same ordering `_release_metadata`
+    already applies to prereleases.
+    """
+    url = f"https://api.github.com/repos/{repo}/releases?per_page={per_page}"
+    request = urllib.request.Request(url, headers=_github_headers())
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        try:
+            payload = json.loads(response.read())
+        except json.JSONDecodeError as exc:
+            raise ValueError("GitHub releases response is not valid JSON") from exc
+    if not isinstance(payload, list):
+        raise ValueError("GitHub releases response must be a list")
+    releases = [
+        item
+        for item in payload
+        if isinstance(item, dict) and not item.get("draft") and isinstance(item.get("tag_name"), str)
+    ]
+    releases.sort(
+        key=lambda item: (
+            str(item.get("published_at") or ""),
+            str(item.get("created_at") or ""),
+            str(item.get("tag_name") or ""),
+        ),
+        reverse=True,
+    )
+    return releases
+
+
+def _resolve_release_asset(
+    repo: str,
+    asset_names: Sequence[str],
+    *,
+    timeout: int,
+    per_page: int,
+) -> tuple[str, dict, dict[str, dict]]:
+    for release in _published_releases(repo, timeout=timeout, per_page=per_page):
+        available = {
+            asset["name"]: asset
+            for asset in release.get("assets", [])
+            if isinstance(asset, dict) and isinstance(asset.get("name"), str)
+        }
+        for name in asset_names:
+            if name in available:
+                return str(release["tag_name"]), available[name], available
+    raise ValueError(f"в релизах {repo} нет точного архива " + " или ".join(asset_names))
+
+
+def resolve_release_asset(
+    repo: str,
+    asset_names: Sequence[str],
+    *,
+    timeout: int = 15,
+    per_page: int = 30,
+) -> tuple[str, dict]:
+    """Newest published release that still ships one exact ``asset_names`` file."""
+    tag, asset, _available = _resolve_release_asset(
+        repo,
+        asset_names,
+        timeout=timeout,
+        per_page=per_page,
+    )
+    return tag, asset
+
+
+def _sidecar_digest(asset: dict, available: dict[str, dict], *, timeout: int) -> str | None:
+    """Read an exact same-release ``.sha256`` sidecar used by older releases."""
+    name = str(asset["name"])
+    sidecar = available.get(name + ".sha256")
+    if sidecar is None or not isinstance(sidecar.get("browser_download_url"), str):
+        return None
+    request = urllib.request.Request(sidecar["browser_download_url"], headers=_download_headers())
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        raw = response.read(4097)
+    if len(raw) > 4096:
+        raise ValueError("SHA-256 sidecar is too large")
+    parts = raw.decode("ascii").strip().split()
+    if len(parts) not in {1, 2} or (len(parts) == 2 and parts[1].lstrip("*") != name):
+        raise ValueError("SHA-256 sidecar has an invalid format")
+    digest = parts[0].lower()
+    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+        raise ValueError("SHA-256 sidecar has an invalid digest")
+    return digest
+
+
+def download_release_asset(
+    repo: str,
+    asset_names: Sequence[str],
+    dest: Path,
+    *,
+    timeout: int = 15,
+    on_error: ErrorReporter | None = None,
+) -> bool:
+    """Download the exact asset of the newest release that contains it.
+
+    The asset's GitHub ``sha256:`` digest is mandatory on this path: the caller
+    installs the result as a privileged executable, so
+    ``HYDRA_ALLOW_UNVERIFIED_DOWNLOADS`` does not apply here.
+    """
+    try:
+        _release_tag, asset, available = _resolve_release_asset(
+            repo,
+            asset_names,
+            timeout=timeout,
+            per_page=30,
+        )
+        digest = _asset_digest(asset) or _sidecar_digest(asset, available, timeout=timeout)
+    except ValueError as exc:
+        return _fail(str(exc), on_error)
+    except Exception as exc:
+        return _fail(f"не удалось получить релизы {repo}: {_network_error(exc)}", on_error)
+    if not digest:
+        return _fail(
+            f"Файл {asset['name']} не содержит SHA-256 digest или sidecar",
+            on_error,
+        )
+    return download(asset["browser_download_url"], dest, sha256=digest, on_error=on_error)
+
+
 def verify_elf(path: Path) -> bool:
     """True если первые 4 байта == b'\\x7fELF'."""
     try:
@@ -302,9 +465,9 @@ def verify_elf(path: Path) -> bool:
 
 
 def extract_tarball(archive: Path, dest: Path) -> Path:
-    """Safely extract a tar.gz archive inside ``dest``."""
+    """Safely extract a tar archive inside ``dest`` (gz/bz2/xz auto-detected)."""
     dest.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(str(archive), "r:gz") as tar:
+    with tarfile.open(str(archive), "r:*") as tar:
         destination = dest.resolve()
         members = tar.getmembers()
         for member in members:

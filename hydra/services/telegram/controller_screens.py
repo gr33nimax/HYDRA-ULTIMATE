@@ -4,6 +4,7 @@ Each entry renders one addressable screen into ``(text, keyboard)``. Routing,
 authorization, and transport live in the controller; what a screen *is* lives
 here, so a new screen never has to be wired into four different files.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -23,9 +24,7 @@ Renderer = Callable[[ApplicationService, str, int], Rendered]
 def _home(app: ApplicationService, name: str, page: int) -> Rendered:
     del app, name, page
     return (
-        "<b>🛡️ HYDRA Control Center</b>\n\n"
-        "Управление защитой и мониторингом VPS.\n"
-        "Пришлите IP-адрес сообщением, чтобы открыть карточку адреса.",
+        "<b>🛡 HYDRA</b>\n\nВыберите раздел или отправьте IP-адрес.",
         security_actions._main_keyboard(),
     )
 
@@ -80,14 +79,6 @@ def _antidpi_bans(app: ApplicationService, name: str, page: int) -> Rendered:
     )
 
 
-def _antidpi_watch(app: ApplicationService, name: str, page: int) -> Rendered:
-    return _paged(
-        dashboard_lists.antidpi_watch_view(app, page),
-        name=name,
-        app=app,
-    )
-
-
 def _honeypot(app: ApplicationService, name: str, page: int) -> Rendered:
     del name, page
     return (
@@ -134,7 +125,6 @@ SCREEN_RENDERERS: dict[str, Renderer] = {
     "antidpi": _antidpi,
     "antidpi_details": _antidpi_details,
     "antidpi_bans": _antidpi_bans,
-    "antidpi_watch": _antidpi_watch,
     "honeypot": _honeypot,
     "honeypot_bans": _honeypot_bans,
     "fail2ban": _fail2ban,

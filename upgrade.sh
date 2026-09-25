@@ -14,14 +14,18 @@ LOCK_FILE="${HYDRA_UPGRADE_LOCK_FILE:-/run/lock/hydra-upgrade.lock}"
 WRAPPER="/usr/local/bin/hydra"
 REPO_URL="${HYDRA_REPO_URL:-https://github.com/gr33nimax/HYDRA-ULTIMATE}"
 HYDRA_REF="${HYDRA_REF:-main}"
+# Удержание артефактов: каждый деплой оставляет каталог релиза и снимок отката,
+# без ограничения они копятся сотнями и съедают диск.
+KEEP_RELEASES="${HYDRA_KEEP_RELEASES:-3}"
+KEEP_BACKUP_DAYS="${HYDRA_KEEP_BACKUP_DAYS:-7}"
 
 configure_utf8_locale() {
     local candidate
     command -v locale >/dev/null 2>&1 || return 0
     command -v awk >/dev/null 2>&1 || return 0
     candidate=$(
-        locale -a 2>/dev/null \
-            | awk 'tolower($0) ~ /^(c|en_us)\.utf-?8$/ {print; exit}'
+        locale -a 2>/dev/null |
+            awk 'tolower($0) ~ /^(c|en_us)\.utf-?8$/ {print; exit}'
     )
     if [[ -n "$candidate" ]]; then
         export LANG="$candidate"
@@ -35,17 +39,20 @@ UI_RESET=""
 UI_CYAN=""
 UI_GREEN=""
 UI_RED=""
+UI_YELLOW=""
 UI_DIM=""
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
     UI_RESET=$'\033[0m'
     UI_CYAN=$'\033[1;36m'
     UI_GREEN=$'\033[1;32m'
     UI_RED=$'\033[1;31m'
+    UI_YELLOW=$'\033[1;33m'
     UI_DIM=$'\033[2m'
 fi
 
 info() { printf '    %s•%s %s\n' "$UI_DIM" "$UI_RESET" "$*"; }
 ok() { printf '  %s✓%s %s\n' "$UI_GREEN" "$UI_RESET" "$*"; }
+warn() { printf '  %s⚠%s %s\n' "$UI_YELLOW" "$UI_RESET" "$*"; }
 fail() {
     printf '  %s✗ Ошибка:%s %s\n' "$UI_RED" "$UI_RESET" "$*" >&2
     return 1
@@ -79,6 +86,12 @@ result_error() {
 
 summary_row() {
     printf '  %-18s %s\n' "$1:" "$2"
+}
+
+support_reminder() {
+    [[ "${HYDRA_REF:-}" == "debug" ]] || return 0
+    printf '\n  %sПоддержать разработку:%s %shttps://web.tribute.tg/d/QHN%s\n' \
+        "$UI_DIM" "$UI_RESET" "$UI_CYAN" "$UI_RESET"
 }
 
 if [[ "${HYDRA_UPDATER_LAUNCHED:-0}" != "1" ]]; then
@@ -176,7 +189,8 @@ run_install_python() {
 }
 
 discover_units() {
-    local state unit unit_files
+    local loaded_units unit unit_files _state
+    local -A seen_units=()
     MANAGED_UNITS=()
     if ! unit_files=$(
         systemctl list-unit-files \
@@ -186,11 +200,30 @@ discover_units() {
         fail "Не удалось получить список служб HYDRA в systemd."
         return 1
     fi
-    while read -r unit state _; do
-        [[ "$unit" =~ ^hydra-.*\.(service|timer)$ \
-            || "$unit" == "caddy-l4.service" ]] || continue
+    while read -r unit _state _; do
+        [[ "$unit" =~ ^hydra-.*\.(service|timer)$ ||
+            "$unit" == "caddy-l4.service" ]] || continue
+        [[ "$unit" =~ @\.(service|timer)$ ]] && continue
+        [[ -z "${seen_units[$unit]+present}" ]] || continue
+        seen_units["$unit"]=1
         MANAGED_UNITS+=("$unit")
-    done <<< "$unit_files"
+    done <<<"$unit_files"
+    if ! loaded_units=$(
+        systemctl list-units \
+            'hydra-*' 'caddy-l4.service' \
+            --all --plain --no-legend --no-pager 2>/dev/null
+    ); then
+        fail "Не удалось получить список загруженных служб HYDRA в systemd."
+        return 1
+    fi
+    while read -r unit _; do
+        [[ "$unit" =~ ^hydra-.*\.(service|timer)$ ||
+            "$unit" == "caddy-l4.service" ]] || continue
+        [[ "$unit" =~ @\.(service|timer)$ ]] && continue
+        [[ -z "${seen_units[$unit]+present}" ]] || continue
+        seen_units["$unit"]=1
+        MANAGED_UNITS+=("$unit")
+    done <<<"$loaded_units"
 }
 
 capture_active_units() {
@@ -210,18 +243,18 @@ capture_active_units() {
         remain_after_exit=""
         while IFS="=" read -r key value; do
             case "$key" in
-                ActiveState) active_state=$value ;;
-                Type) unit_type=$value ;;
-                RemainAfterExit) remain_after_exit=$value ;;
+            ActiveState) active_state=$value ;;
+            Type) unit_type=$value ;;
+            RemainAfterExit) remain_after_exit=$value ;;
             esac
-        done <<< "$properties"
+        done <<<"$properties"
         [[ -n "$active_state" ]] || {
-            fail "Systemd вернул неполное состояние службы: $unit"
+            fail "systemd вернул неполное состояние службы: $unit"
             return 1
         }
         case "$active_state" in
-            active | activating | reloading) ;;
-            *) continue ;;
+        active | activating | reloading) ;;
+        *) continue ;;
         esac
         if [[ "$unit_type" == "oneshot" && "$remain_after_exit" != "yes" ]]; then
             continue
@@ -229,17 +262,21 @@ capture_active_units() {
         ACTIVE_UNITS+=("$unit")
     done
     if ((${#ACTIVE_UNITS[@]})); then
-        printf '%s\n' "${ACTIVE_UNITS[@]}" > "$ROLLBACK_DIR/active-units.txt"
+        printf '%s\n' "${ACTIVE_UNITS[@]}" >"$ROLLBACK_DIR/active-units.txt"
     else
-        : > "$ROLLBACK_DIR/active-units.txt"
+        : >"$ROLLBACK_DIR/active-units.txt"
     fi
 }
 
 stop_managed_units() {
+    # Только то, что действительно работает. Юнит может лежать файлом и быть не загруженным
+    # — у нас есть службы по требованию, которые не стартуют на загрузке, — и `systemctl stop`
+    # на таком возвращает ошибку. Без этой проверки одна спящая служба валит обновление
+    # целиком, причём дважды: сначала на остановке, потом ещё раз на откате.
     local failed=0
     local suffix unit
     for suffix in timer service; do
-        for unit in "${MANAGED_UNITS[@]}"; do
+        for unit in "${ACTIVE_UNITS[@]}"; do
             [[ "$unit" == *".$suffix" ]] || continue
             systemctl stop "$unit" || failed=1
         done
@@ -261,8 +298,8 @@ start_previous_units() {
 }
 
 wait_for_previous_units() {
-    local attempt unit all_active
-    for attempt in {1..30}; do
+    local unit all_active _attempt
+    for _attempt in {1..30}; do
         all_active=1
         for unit in "${ACTIVE_UNITS[@]}"; do
             if ! systemctl is-active --quiet "$unit"; then
@@ -296,8 +333,8 @@ restore_state_snapshot() {
     fi
     if ((STATE_EXISTED)); then
         if ! mv "$STATE_ROLLBACK_DIR" "$STATE_DIR"; then
-            [[ ! -e "$STATE_DIR" && -e "$failed_state" ]] \
-                && mv "$failed_state" "$STATE_DIR"
+            [[ ! -e "$STATE_DIR" && -e "$failed_state" ]] &&
+                mv "$failed_state" "$STATE_DIR"
             return 1
         fi
     fi
@@ -319,8 +356,8 @@ restore_installation() {
             rm -f -- "$INSTALL_DIR" || return 1
         elif [[ -e "$INSTALL_DIR" ]]; then
             mv "$INSTALL_DIR" \
-                "$RELEASES_DIR/failed-install-${TARGET_SHA}-${STAMP}-${UPDATER_BASHPID}" \
-                || return 1
+                "$RELEASES_DIR/failed-install-${TARGET_SHA}-${STAMP}-${UPDATER_BASHPID}" ||
+                return 1
         fi
         mv "$PREVIOUS_DIR" "$INSTALL_DIR" || return 1
     fi
@@ -337,6 +374,72 @@ restore_wrapper() {
     fi
 }
 
+prune_old_artifacts() {
+    # Каждый деплой оставляет каталог релиза и снимок отката. Без удержания они
+    # копятся сотнями и съедают диск, поэтому старые удаляются после успешного
+    # обновления. Ошибки уборки не влияют на результат установки.
+    local keep_releases="${KEEP_RELEASES:-3}"
+    local keep_backup_days="${KEEP_BACKUP_DAYS:-7}"
+    local current_target current_name="" path removed=0 failed=0
+
+    [[ "$keep_releases" =~ ^[1-9][0-9]*$ ]] || keep_releases=3
+    [[ "$keep_backup_days" =~ ^[1-9][0-9]*$ ]] || keep_backup_days=7
+
+    current_target=$(readlink -f -- "$INSTALL_DIR" 2>/dev/null || true)
+    if [[ -n "$current_target" ]]; then
+        current_name=$(basename -- "$current_target")
+    fi
+
+    # Каталоги, оставшиеся от прерванных обновлений.
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        rm -rf -- "$path" || {
+            failed=$((failed + 1))
+            continue
+        }
+        removed=$((removed + 1))
+    done < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d \
+        -name '.staging-*' -mtime +1 -print 2>/dev/null || true)
+
+    if [[ -z "$current_name" ]]; then
+        warn "Не удалось определить текущий release; очистка релизов пропущена"
+    else
+        # Текущий release плюс keep_releases-1 свежих остаются для отката.
+        while IFS= read -r path; do
+            [[ -n "$path" ]] || continue
+            [[ "$(basename -- "$path")" == "$current_name" ]] && continue
+            rm -rf -- "$path" || {
+                failed=$((failed + 1))
+                continue
+            }
+            removed=$((removed + 1))
+        done < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d \
+            ! -name '.staging-*' ! -name "$current_name" \
+            -printf '%T@ %p\n' 2>/dev/null |
+            sort -rn | tail -n "+$keep_releases" | cut -d' ' -f2- || true)
+    fi
+
+    # Снимки отката старше keep_backup_days больше не нужны.
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        [[ "$path" == "$ROLLBACK_DIR" ]] && continue
+        rm -rf -- "$path" || {
+            failed=$((failed + 1))
+            continue
+        }
+        removed=$((removed + 1))
+    done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d \
+        -mtime "+$keep_backup_days" -print 2>/dev/null || true)
+
+    if ((removed > 0)); then
+        info "Удалено устаревших артефактов: $removed"
+    fi
+    if ((failed > 0)); then
+        warn "Не удалось удалить артефактов: $failed"
+    fi
+    return 0
+}
+
 cleanup_transient_paths() {
     if [[ -n "$CUTOVER_LINK" && "$CUTOVER_LINK" == "${INSTALL_DIR}.next-"* ]]; then
         rm -f -- "$CUTOVER_LINK" || true
@@ -344,10 +447,10 @@ cleanup_transient_paths() {
     if [[ -n "$WRAPPER_TMP" && "$WRAPPER_TMP" == "$(dirname "$WRAPPER")/.hydra-wrapper."* ]]; then
         rm -f -- "$WRAPPER_TMP" || true
     fi
-    if (( ! STATE_MUTATION_STARTED )) \
-        && [[ -n "$STATE_ROLLBACK_DIR" ]] \
-        && [[ "$STATE_ROLLBACK_DIR" == "${STATE_DIR}.upgrade-rollback-"* ]] \
-        && [[ -d "$STATE_ROLLBACK_DIR" ]]; then
+    if ((! STATE_MUTATION_STARTED)) &&
+        [[ -n "$STATE_ROLLBACK_DIR" ]] &&
+        [[ "$STATE_ROLLBACK_DIR" == "${STATE_DIR}.upgrade-rollback-"* ]] &&
+        [[ -d "$STATE_ROLLBACK_DIR" ]]; then
         rm -rf -- "$STATE_ROLLBACK_DIR" || {
             printf 'Неиспользованная копия отката сохранена: %s\n' \
                 "$STATE_ROLLBACK_DIR" >&2
@@ -387,10 +490,10 @@ rollback() {
     cleanup_transient_paths
     if ((SERVICES_QUIESCED && critical_restore_ok)); then
         start_previous_units || critical_restore_ok=0
-        ((critical_restore_ok)) && wait_for_previous_units \
-            || critical_restore_ok=0
+        ((critical_restore_ok)) && wait_for_previous_units ||
+            critical_restore_ok=0
     fi
-    if ((!critical_restore_ok)); then
+    if ((! critical_restore_ok)); then
         printf 'Автоматический откат завершён не полностью; проверьте службы HYDRA перед запуском.\n' >&2
     fi
     if [[ -n "$STAGE_DIR" && -d "$STAGE_DIR" && -n "$ROLLBACK_DIR" ]]; then
@@ -429,11 +532,11 @@ trap 'handle_signal 143 $LINENO' TERM
 step 2 7 "Определение целевой версии"
 info "Ветка: $HYDRA_REF"
 TARGET_SHA=$(
-    git ls-remote --exit-code "$REPO_URL" "refs/heads/$HYDRA_REF" \
-        | awk 'NR == 1 {print $1}'
+    git ls-remote --exit-code "$REPO_URL" "refs/heads/$HYDRA_REF" |
+        awk 'NR == 1 {print $1}'
 )
 [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || {
-    fail "Не удалось определить целевой commit ветки."
+    fail "Не удалось определить целевой коммит ветки."
 }
 
 if [[ -d "$INSTALL_DIR/.git" ]]; then
@@ -442,16 +545,17 @@ if [[ -d "$INSTALL_DIR/.git" ]]; then
     }
     CURRENT_SHA=$(git -C "$INSTALL_DIR" rev-parse HEAD)
 else
-    CURRENT_SHA=$(tr -d '[:space:]' < "$INSTALL_DIR/.hydra-source-revision" 2>/dev/null || true)
+    CURRENT_SHA=$(tr -d '[:space:]' <"$INSTALL_DIR/.hydra-source-revision" 2>/dev/null || true)
 fi
 [[ "$CURRENT_SHA" =~ ^[0-9a-f]{40}$ ]] || {
-    fail "Не удалось определить commit установленной версии."
+    fail "Не удалось определить коммит установленной версии."
 }
 [[ "$CURRENT_SHA" != "$TARGET_SHA" ]] || {
     result_ok "Обновление не требуется: уже установлен ${TARGET_SHA:0:12}."
     summary_row "Ветка" "$HYDRA_REF"
-    summary_row "Commit" "${TARGET_SHA:0:12}"
+    summary_row "Коммит" "${TARGET_SHA:0:12}"
     summary_row "Подробный лог" "/var/log/hydra/upgrade.log"
+    support_reminder
     exit 0
 }
 
@@ -461,7 +565,7 @@ chmod 0700 "$ROLLBACK_DIR"
 STAGE_DIR="$RELEASES_DIR/.staging-${TARGET_SHA}-${STAMP}-${BASHPID}"
 RELEASE_DIR="$RELEASES_DIR/${TARGET_SHA}-${STAMP}-${UPDATER_BASHPID}"
 
-cat > "$ROLLBACK_DIR/metadata.env" <<EOF
+cat >"$ROLLBACK_DIR/metadata.env" <<EOF
 HYDRA_FROM_SHA=$CURRENT_SHA
 HYDRA_TO_SHA=$TARGET_SHA
 HYDRA_REF=$HYDRA_REF
@@ -470,15 +574,22 @@ HYDRA_INSTALL_DIR=$INSTALL_DIR
 EOF
 chmod 0600 "$ROLLBACK_DIR/metadata.env"
 
-step 3 7 "Подготовка нового release"
-info "Commit: ${TARGET_SHA:0:12}"
+step 3 7 "Подготовка новой версии"
+info "Коммит: ${TARGET_SHA:0:12}"
 git init --quiet "$STAGE_DIR"
 git -C "$STAGE_DIR" remote add origin "$REPO_URL"
 git -C "$STAGE_DIR" fetch --quiet --depth 1 origin "$TARGET_SHA"
 [[ "$(git -C "$STAGE_DIR" rev-parse FETCH_HEAD)" == "$TARGET_SHA" ]] || {
-    fail "Загруженный commit не совпадает с целевой версией ветки."
+    fail "Загруженный коммит не совпадает с целевой версией ветки."
 }
 git -C "$STAGE_DIR" checkout --quiet --detach "$TARGET_SHA"
+
+BUILD_CHANNEL="local"
+case "$HYDRA_REF" in
+main | dev | debug) BUILD_CHANNEL=$HYDRA_REF ;;
+esac
+printf '{"channel":"%s","revision":"%s"}\n' \
+    "$BUILD_CHANNEL" "$TARGET_SHA" >"$STAGE_DIR/.hydra-build.json"
 
 python3 -m venv "$STAGE_DIR/.venv"
 "$STAGE_DIR/.venv/bin/python" -m pip install \
@@ -487,19 +598,19 @@ run_stage_python -m compileall -q \
     "$STAGE_DIR/main.py" "$STAGE_DIR/hydra"
 run_stage_python \
     -c 'from hydra import __version__; print(__version__)' \
-    > "$ROLLBACK_DIR/target-version.txt"
+    >"$ROLLBACK_DIR/target-version.txt"
 
 step 4 7 "Безопасная проверка перед обновлением"
-info "Проверяю новый код без изменения рабочего state"
+info "Проверяю новый код без изменения рабочего состояния"
 CURRENT_OPERATION="Проверка готовности state к обновлению"
 CURRENT_REPORT="$ROLLBACK_DIR/preflight-upgrade.json"
 run_stage_python -m hydra.cli --json upgrade check \
-    > "$CURRENT_REPORT"
+    >"$CURRENT_REPORT"
 CURRENT_OPERATION="Полная проверка целевой версии"
 CURRENT_REPORT="$ROLLBACK_DIR/preflight-check.json"
 run_stage_python -m hydra.cli --json check \
-    > "$CURRENT_REPORT"
-CURRENT_OPERATION="Проверка результатов preflight"
+    >"$CURRENT_REPORT"
+CURRENT_OPERATION="Проверка результатов предварительной диагностики"
 CURRENT_REPORT="$ROLLBACK_DIR/preflight-check.json"
 run_stage_python - "$ROLLBACK_DIR" <<'PY'
 import json
@@ -521,7 +632,7 @@ CURRENT_REPORT=""
 
 discover_units
 capture_active_units
-step 5 7 "Резервная копия и миграция state"
+step 5 7 "Резервная копия и перенос состояния"
 info "Останавливаю активные службы HYDRA: ${#ACTIVE_UNITS[@]}"
 SERVICES_QUIESCED=1
 stop_managed_units
@@ -550,26 +661,26 @@ CURRENT_REPORT="$ROLLBACK_DIR/backup.json"
 run_stage_python \
     -m hydra.cli --json backup create \
     --output "$ROLLBACK_DIR/hydra-backup.tar.gz" \
-    > "$CURRENT_REPORT"
+    >"$CURRENT_REPORT"
 CURRENT_OPERATION="Проверка резервной копии"
 CURRENT_REPORT="$ROLLBACK_DIR/backup-verification.json"
 run_stage_python \
     -m hydra.cli --json backup restore \
     "$ROLLBACK_DIR/hydra-backup.tar.gz" --dry-run \
-    > "$CURRENT_REPORT"
+    >"$CURRENT_REPORT"
 
-info "Мигрирую state при остановленных службах"
+info "Переношу состояние при остановленных службах"
 STATE_MUTATION_STARTED=1
-CURRENT_OPERATION="Миграция state"
-CURRENT_REPORT="$ROLLBACK_DIR/state-migration.json"
+CURRENT_OPERATION="Перенос состояния"
+CURRENT_REPORT="$ROLLBACK_DIR/state-import.json"
 run_stage_python \
     -m hydra.cli --json upgrade migrate-state \
-    > "$CURRENT_REPORT"
-CURRENT_OPERATION="Проверка state после миграции"
+    >"$CURRENT_REPORT"
+CURRENT_OPERATION="Проверка состояния после переноса"
 CURRENT_REPORT="$ROLLBACK_DIR/state-check.json"
 run_stage_python \
     -m hydra.cli --json upgrade check \
-    > "$CURRENT_REPORT"
+    >"$CURRENT_REPORT"
 CURRENT_OPERATION=""
 CURRENT_REPORT=""
 
@@ -596,28 +707,28 @@ fi
 
 WRAPPER_TMP=$(mktemp "$(dirname "$WRAPPER")/.hydra-wrapper.XXXXXX")
 printf '#!/usr/bin/env bash\nexec "%s/.venv/bin/python" "%s/main.py" "$@"\n' \
-    "$INSTALL_DIR" "$INSTALL_DIR" > "$WRAPPER_TMP"
+    "$INSTALL_DIR" "$INSTALL_DIR" >"$WRAPPER_TMP"
 chmod 0755 "$WRAPPER_TMP"
 WRAPPER_MUTATION_STARTED=1
 mv -f "$WRAPPER_TMP" "$WRAPPER"
 WRAPPER_TMP=""
 
 if ! bash "$INSTALL_DIR/deploy/apply-resource-defaults.sh"; then
-    warn "Не удалось обновить стандартные ограничения RAM/журналов; обновление продолжено"
+    warn "Не удалось обновить стандартные лимиты памяти и журналов; обновление продолжено"
 fi
 
 start_previous_units
 
 step 7 7 "Итоговая проверка"
-info "Проверяю state, статус и systemd"
+info "Проверяю состояние, статус и systemd"
 CURRENT_OPERATION="Проверка новой версии"
 CURRENT_REPORT="$ROLLBACK_DIR/post-check.json"
 run_install_python \
-    -m hydra.cli --json check > "$CURRENT_REPORT"
+    -m hydra.cli --json check >"$CURRENT_REPORT"
 CURRENT_OPERATION="Проверка статуса новой версии"
 CURRENT_REPORT="$ROLLBACK_DIR/post-status.json"
 run_install_python \
-    -m hydra.cli --json status > "$CURRENT_REPORT"
+    -m hydra.cli --json status >"$CURRENT_REPORT"
 CURRENT_OPERATION="Проверка результата обновления"
 CURRENT_REPORT="$ROLLBACK_DIR/post-check.json"
 run_install_python \
@@ -635,10 +746,10 @@ CURRENT_REPORT=""
 wait_for_previous_units
 
 [[ "$(git -C "$INSTALL_DIR" rev-parse HEAD)" == "$TARGET_SHA" ]] || {
-    fail "Commit установки неожиданно изменился во время переключения."
+    fail "Коммит установки неожиданно изменился во время переключения."
 }
 
-printf '%s\n' "$TARGET_SHA" > "$ROLLBACK_DIR/SUCCESS"
+printf '%s\n' "$TARGET_SHA" >"$ROLLBACK_DIR/SUCCESS"
 chmod 0600 "$ROLLBACK_DIR/SUCCESS"
 SERVICES_QUIESCED=0
 CUTOVER_STARTED=0
@@ -648,9 +759,11 @@ STATE_MUTATION_STARTED=0
 WRAPPER_MUTATION_STARTED=0
 cleanup_transient_paths
 trap - ERR HUP INT TERM
+prune_old_artifacts
 
 result_ok "Новая версия HYDRA установлена и проверена."
 summary_row "Ветка" "$HYDRA_REF"
 summary_row "Переход" "${CURRENT_SHA:0:12} → ${TARGET_SHA:0:12}"
 summary_row "Снимок отката" "$ROLLBACK_DIR"
 summary_row "Подробный лог" "/var/log/hydra/upgrade.log"
+support_reminder

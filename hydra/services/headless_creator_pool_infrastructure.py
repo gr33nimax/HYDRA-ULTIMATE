@@ -1,4 +1,5 @@
 """Host adapter capabilities for the standalone creator qWDTT pool."""
+
 from __future__ import annotations
 
 import json
@@ -58,6 +59,14 @@ class CreatorPoolStage:
     previous_room_count: int
 
 
+@dataclass(frozen=True)
+class CreatorSlotStage:
+    slot: int
+    generation: str
+    previous_metadata: dict[str, object]
+    hashes: list[str]
+
+
 class HeadlessCreatorPoolInfrastructureMixin:
     """Blue/green VK creator lifecycle owned outside protocol plugins."""
 
@@ -93,19 +102,17 @@ class HeadlessCreatorPoolInfrastructureMixin:
         count: int | None = None,
     ) -> list[str]:
         prefix = (
-            "wdtt-headless-creator"
-            if legacy
-            else getattr(self, "managed_unit_prefix", "hydra-headless-creator-vk")
+            "wdtt-headless-creator" if legacy else getattr(self, "managed_unit_prefix", "hydra-headless-creator-vk")
         )
         if legacy:
             generation = ""
         elif generation is None:
+            slots = self._slots(self.pool_metadata())
+            if slots:
+                return [f"{prefix}@{slot['generation']}-{slot['index']}.service" for slot in slots]
             generation = str(self.pool_metadata().get("generation", ""))
         count = self._room_count(count)
-        instances = [
-            f"{generation}-{index}" if generation else str(index)
-            for index in range(1, count + 1)
-        ]
+        instances = [f"{generation}-{index}" if generation else str(index) for index in range(1, count + 1)]
         return [f"{prefix}@{instance}.service" for instance in instances]
 
     def call_files(
@@ -115,13 +122,13 @@ class HeadlessCreatorPoolInfrastructureMixin:
         count: int | None = None,
     ) -> list[Path]:
         if generation is None:
+            slots = self._slots(self.pool_metadata())
+            if slots:
+                return [self.pool_dir / f"{slot['generation']}-{slot['index']}.call.txt" for slot in slots]
             generation = str(self.pool_metadata().get("generation", ""))
         count = self._room_count(count)
         prefix = f"{generation}-" if generation else ""
-        return [
-            self.pool_dir / f"{prefix}{index}.call.txt"
-            for index in range(1, count + 1)
-        ]
+        return [self.pool_dir / f"{prefix}{index}.call.txt" for index in range(1, count + 1)]
 
     def _room_count(self, count: int | None = None) -> int:
         if count is None:
@@ -210,11 +217,7 @@ class HeadlessCreatorPoolInfrastructureMixin:
             count=self._room_count_from_metadata(metadata),
         ):
             try:
-                lines = [
-                    line
-                    for line in path.read_text(encoding="utf-8").splitlines()
-                    if line.strip()
-                ]
+                lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
                 hashes.add(extract_call_hash(lines[-1]))
             except (OSError, ValueError, IndexError):
                 continue
@@ -230,11 +233,7 @@ class HeadlessCreatorPoolInfrastructureMixin:
         hashes: list[str] = []
         for path in self.call_files(generation=generation, count=count):
             try:
-                lines = [
-                    line
-                    for line in path.read_text(encoding="utf-8").splitlines()
-                    if line.strip()
-                ]
+                lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
                 hashes.append(extract_call_hash(lines[-1]))
             except (OSError, ValueError, IndexError):
                 return []
@@ -254,6 +253,23 @@ class HeadlessCreatorPoolInfrastructureMixin:
         except (OSError, ValueError, json.JSONDecodeError):
             return {}
 
+    def _slots(self, metadata: dict[str, object]) -> list[dict[str, object]]:
+        raw = metadata.get("slots")
+        if isinstance(raw, list) and len(raw) == self._room_count_from_metadata(metadata):
+            slots = [slot for slot in raw if isinstance(slot, dict)]
+            if len(slots) == len(raw) and all(
+                slot.get("generation") in {"a", "b"} and slot.get("index") == position
+                for position, slot in enumerate(slots, start=1)
+            ):
+                return slots
+        generation = str(metadata.get("generation", ""))
+        if generation not in {"a", "b"}:
+            return []
+        return [
+            {"generation": generation, "index": index}
+            for index in range(1, self._room_count_from_metadata(metadata) + 1)
+        ]
+
     def commit_pool(self, hashes: list[str], *, count: int | None = None) -> None:
         count = self._room_count(count)
         if len(hashes) != count or len(set(hashes)) != len(hashes):
@@ -264,6 +280,10 @@ class HeadlessCreatorPoolInfrastructureMixin:
             "refreshed_at": datetime.now(timezone.utc).isoformat(),
             "generation": self._pool_stage.generation if self._pool_stage else "",
             "room_count": count,
+            "slots": [
+                {"generation": self._pool_stage.generation if self._pool_stage else "", "index": index}
+                for index in range(1, count + 1)
+            ],
         }
         self.host.atomic_write(
             self.pool_state_file,
@@ -417,9 +437,9 @@ class HeadlessCreatorPoolInfrastructureMixin:
         active: list[str] = []
         enabled: list[str] = []
         for unit in self._legacy_units():
-            if self.host.run(["systemctl", "is-active", "--quiet", unit]).returncode == 0:
+            if not self.host.run(["systemctl", "is-active", "--quiet", unit]).returncode:
                 active.append(unit)
-            if self.host.run(["systemctl", "is-enabled", "--quiet", unit]).returncode == 0:
+            if not self.host.run(["systemctl", "is-enabled", "--quiet", unit]).returncode:
                 enabled.append(unit)
         return LegacyCreatorSnapshot(files, tuple(active), tuple(enabled))
 

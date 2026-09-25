@@ -1,10 +1,14 @@
 """tests/test_naive_plugin.py — Тесты для NaiveProxy plugin v2."""
+
 import json
 import time
 from pathlib import Path
 from contextlib import nullcontext
 from unittest.mock import patch, MagicMock
 import sys
+
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.plugins.naive.access_logs import ingest_access_logs
@@ -47,7 +51,12 @@ def test_plugin_meta():
     assert p.meta.needs_domain is True
 
 
-def test_configure_returns_fragment_empty_tproxy():
+@patch.object(
+    NaivePlugin,
+    "_resolve_certs",
+    return_value=("/cert.pem", "/key.pem"),
+)
+def test_configure_returns_fragment_empty_tproxy(_resolve_certs):
     """configure() возвращает ConfigFragment с nft_tproxy_ports=[] (TPROXY не используется)."""
     p = NaivePlugin()
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
@@ -59,7 +68,12 @@ def test_configure_returns_fragment_empty_tproxy():
     assert frag.outbounds == []
 
 
-def test_configure_returns_fragment_even_without_users():
+@patch.object(
+    NaivePlugin,
+    "_resolve_certs",
+    return_value=("/cert.pem", "/key.pem"),
+)
+def test_configure_returns_fragment_even_without_users(_resolve_certs):
     """Без юзеров configure всё равно возвращает пустой nft_tproxy_ports."""
     p = NaivePlugin()
     state = _make_state([])
@@ -71,25 +85,38 @@ def test_configure_returns_fragment_even_without_users():
 def test_configure_skips_blocked_users(mock_resolve):
     """Заблокированные юзеры не попадают в Caddyfile."""
     p = NaivePlugin()
-    state = _make_state([
-        _make_user("active@x.com", uuid="uuid-a"),
-        _make_user("blocked@x.com", uuid="uuid-b", blocked=True),
-    ])
+    state = _make_state(
+        [
+            _make_user("active@x.com", uuid="uuid-a"),
+            _make_user("blocked@x.com", uuid="uuid-b", blocked=True),
+        ]
+    )
     frag = p.configure(state)
     assert frag.nft_tproxy_ports == []
     # В Caddyfile только один пользователь
-    assert "uuid-a" not in p._pending_cfg or True
+    assert p._pending_cfg is not None
     lines = p._pending_cfg.splitlines()
     basic_auth_lines = [l for l in lines if "basic_auth" in l]
     assert len(basic_auth_lines) == 1
 
 
-def test_configure_empty_when_no_domain():
-    """Без домена configure возвращает пустой фрагмент."""
+def test_configure_rejects_enabled_naive_without_domain():
     p = NaivePlugin()
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")], domain="")
-    frag = p.configure(state)
-    assert frag.nft_tproxy_ports == []
+
+    with pytest.raises(ValueError, match="TLS-сертификат"):
+        p.configure(state)
+
+
+def test_configure_rejects_enabled_naive_without_tls_material():
+    p = NaivePlugin()
+    state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
+
+    with (
+        patch.object(p, "_resolve_certs", return_value=("", "")),
+        pytest.raises(ValueError, match="TLS-сертификат"),
+    ):
+        p.configure(state)
 
 
 def test_client_link_valid_uri():
@@ -177,9 +204,11 @@ def test_client_link_empty_without_domain():
 def test_status_returns_plugin_status():
     """status() возвращает PluginStatus без ошибок."""
     p = NaivePlugin()
-    with patch.object(NaivePlugin, "_installed", return_value=True), \
-         patch("hydra.plugins.naive.plugin.CADDYFILE") as mock_cfg, \
-         patch("subprocess.run") as mock_run:
+    with (
+        patch.object(NaivePlugin, "_installed", return_value=True),
+        patch("hydra.plugins.naive.plugin.CADDYFILE") as mock_cfg,
+        patch("subprocess.run") as mock_run,
+    ):
         mock_cfg.exists.return_value = True
         mock_run.return_value = MagicMock(stdout="active\n", returncode=0)
         s = p.status()
@@ -205,7 +234,9 @@ def test_build_caddyfile_basic():
     assert "file_server" in caddyfile
     assert "root /var/www/decoy-a" in caddyfile
     assert "auto_https disable_redirects" in caddyfile
+    assert "protocols h1 h2 h3" in caddyfile
     assert "upstream socks5://127.0.0.1:1080" in caddyfile
+    assert "passthrough_uot" in caddyfile
 
 
 def test_build_caddyfile_fake_site():
@@ -226,7 +257,10 @@ def test_build_caddyfile_accepts_proxy_protocol_only_behind_mux():
     p = NaivePlugin()
     direct = p._build_caddyfile("vpn.example.com", 443, [])
     behind_mux = p._build_caddyfile(
-        "vpn.example.com", 10443, [], accept_proxy_protocol=True,
+        "vpn.example.com",
+        10443,
+        [],
+        accept_proxy_protocol=True,
     )
     assert "proxy_protocol" not in direct
     assert "proxy_protocol" in behind_mux
@@ -263,8 +297,7 @@ def test_on_enable_raises_error_without_domain():
     """on_enable() бросает ValueError, если домен не указан."""
     p = NaivePlugin()
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")], domain="")
-    with patch("hydra.ui.tui.prompt", return_value=""), \
-         patch("hydra.ui.tui.confirm", return_value=False):
+    with patch("hydra.ui.tui.prompt", return_value=""), patch("hydra.ui.tui.confirm", return_value=False):
         try:
             p.on_enable(state)
             assert False, "Должно было выброситься ValueError"
@@ -276,8 +309,7 @@ def test_on_disable_closes_firewall():
     """on_disable() закрывает порт 443."""
     p = NaivePlugin()
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
-    with patch("hydra.utils.firewall.close_tcp") as mock_close, \
-         patch("subprocess.run") as mock_run:
+    with patch("hydra.utils.firewall.close_tcp") as mock_close, patch("subprocess.run") as mock_run:
         p.on_disable(state)
         mock_close.assert_called_once_with(443, "naive")
 
@@ -290,8 +322,7 @@ def test_connected_clients_parses_ss():
         "0      0      10.0.0.1:443    203.0.113.5:58292\n"
         "0      0      10.0.0.1:443    198.51.100.1:59001\n"
     )
-    with patch("shutil.which", return_value="/usr/bin/ss"), \
-         patch("subprocess.run") as mock_run:
+    with patch("shutil.which", return_value="/usr/bin/ss"), patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(stdout=mock_ss, returncode=0)
         clients = p.connected_clients()
         assert len(clients) == 2
@@ -303,9 +334,11 @@ def test_connected_clients_parses_ss():
 def test_status_shows_traffic():
     """status() показывает Общий трафик в info."""
     p = NaivePlugin()
-    with patch.object(NaivePlugin, "_installed", return_value=True), \
-         patch("subprocess.run") as mock_run, \
-         patch.object(NaivePlugin, "_get_total_traffic", return_value=1048576):
+    with (
+        patch.object(NaivePlugin, "_installed", return_value=True),
+        patch("subprocess.run") as mock_run,
+        patch.object(NaivePlugin, "_get_total_traffic", return_value=1048576),
+    ):
         mock_run.return_value = MagicMock(stdout="active\n", returncode=0)
         with patch("hydra.plugins.naive.plugin.CADDYFILE") as mock_cfg:
             mock_cfg.exists.return_value = True
@@ -337,22 +370,21 @@ def test_traffic_parses_caddy_access_logs(tmp_path):
     p = NaivePlugin()
     user = _make_user("user_email@example.com", uuid="uuid-a")
     state = _make_state([user])
-    
+
     caddy_username = p._derive_username(user)
-    
+
     log_content = (
         f'{{"ts":1698246377,"user_id":"{caddy_username}","size":1000,"bytes_read":200}}\n'
         f'{{"ts":1698246378,"user_id":"{caddy_username}","size":1500}}\n'
         f'{{"ts":1698246379,"user_id":"other_user","size":5000}}\n'
         f'{{"ts":1698246380,"user":"{caddy_username}","size":500}}\n'
-        f'invalid json\n'
+        f"invalid json\n"
     )
-    
+
     log_file = tmp_path / "access.log"
     log_file.write_text(log_content, encoding="utf-8")
-    
-    with patch.object(p, "_installed", return_value=True), \
-         patch("hydra.plugins.naive.plugin.LOG_DIR", tmp_path):
+
+    with patch.object(p, "_installed", return_value=True), patch("hydra.plugins.naive.plugin.LOG_DIR", tmp_path):
         traffic_data = p.traffic(state)
         assert traffic_data == {"user_email@example.com": 3200}
 
@@ -388,17 +420,14 @@ def test_recent_connections_uses_completed_caddy_connect_records(tmp_path):
     username = p._derive_username(user)
     now = time.time()
     records = [
-        {"ts": now - 30, "user_id": username, "size": 1000, "bytes_read": 200,
-         "request": {"method": "CONNECT"}},
-        {"ts": now - 10, "user_id": username, "size": 500, "bytes_read": 100,
-         "request": {"method": "CONNECT"}},
-        {"ts": now - 600, "user_id": username, "size": 9999, "bytes_read": 9999,
-         "request": {"method": "CONNECT"}},
-        {"ts": now - 5, "user_id": username, "size": 9999, "bytes_read": 9999,
-         "request": {"method": "GET"}},
+        {"ts": now - 30, "user_id": username, "size": 1000, "bytes_read": 200, "request": {"method": "CONNECT"}},
+        {"ts": now - 10, "user_id": username, "size": 500, "bytes_read": 100, "request": {"method": "CONNECT"}},
+        {"ts": now - 600, "user_id": username, "size": 9999, "bytes_read": 9999, "request": {"method": "CONNECT"}},
+        {"ts": now - 5, "user_id": username, "size": 9999, "bytes_read": 9999, "request": {"method": "GET"}},
     ]
     (tmp_path / "access.log").write_text(
-        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8",
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
     )
 
     with patch("hydra.plugins.naive.plugin.LOG_DIR", tmp_path):
@@ -413,6 +442,7 @@ def test_recent_connections_uses_completed_caddy_connect_records(tmp_path):
 
 
 # === QUIC tests ===
+
 
 def _make_state_with_network(users, domain="example.com", network="tcp"):
     state = _make_state(users, domain)
@@ -523,25 +553,82 @@ def test_apply_reconciles_quic_firewall(tmp_path):
     p = NaivePlugin()
     state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
     state.protocols["naive"].config["network"] = "quic"
-    p._pending_config = "test"
     p._pending_cfg = "test"
     config_dir = tmp_path / "config"
     log_dir = tmp_path / "logs"
     data_dir = tmp_path / "data"
-    with patch("hydra.plugins.naive.plugin.CFG_DIR", config_dir), \
-         patch("hydra.plugins.naive.plugin.LOG_DIR", log_dir), \
-         patch(
-             "hydra.plugins.naive.plugin.CADDYFILE",
-             config_dir / "Caddyfile",
-         ), \
-         patch("hydra.plugins.naive.plugin.DATA_DIR", data_dir), \
-         patch.object(p, "_create_fake_site"), \
-         patch.object(p, "_validate_caddy", return_value=""), \
-         patch("hydra.plugins.naive.plugin.HOST.run", return_value=MagicMock(returncode=0)), \
-         patch("hydra.plugins.naive.plugin.time.sleep"), \
-         patch.object(p, "_sync_transport_firewall") as reconcile:
+    with (
+        patch("hydra.plugins.naive.plugin.CFG_DIR", config_dir),
+        patch("hydra.plugins.naive.plugin.LOG_DIR", log_dir),
+        patch(
+            "hydra.plugins.naive.plugin.CADDYFILE",
+            config_dir / "Caddyfile",
+        ),
+        patch("hydra.plugins.naive.plugin.DATA_DIR", data_dir),
+        patch.object(p, "_create_fake_site"),
+        patch.object(p, "_validate_caddy", return_value=""),
+        patch("hydra.plugins.naive.plugin.HOST.run", return_value=MagicMock(returncode=0)),
+        patch("hydra.plugins.naive.plugin.time.sleep"),
+        patch.object(p, "_sync_transport_firewall") as reconcile,
+    ):
         assert p.apply(state)
     assert data_dir.is_dir()
     reconcile.assert_called_once_with("quic")
 
 
+def test_build_caddyfile_without_uot_keeps_the_rest_of_the_proxy_surface():
+    p = NaivePlugin()
+    caddyfile = p._build_caddyfile(
+        domain="vpn.example.com",
+        port=443,
+        users=[{"username": "testuser", "password": "testpass"}],
+        uot=False,
+    )
+
+    assert "passthrough_uot" not in caddyfile
+    assert "upstream socks5://127.0.0.1:1080" in caddyfile
+    assert "probe_resistance" in caddyfile
+    assert "basic_auth testuser testpass" in caddyfile
+
+
+def test_set_uot_validates_and_persists():
+    p = NaivePlugin()
+    state = AppState(
+        protocols={"naive": PluginState(enabled=True, config={})},
+    )
+
+    assert p.set_uot(state, False) is True
+    assert state.protocols["naive"].config["uot"] is False
+    assert p.set_uot(state, False) is False
+    assert p.set_uot(state, "on") is True
+    assert state.protocols["naive"].config["uot"] is True
+    with pytest.raises(ValueError):
+        p.set_uot(state, "maybe")
+
+
+def test_apply_rebuilds_the_binary_when_the_setting_and_the_build_disagree(tmp_path):
+    p = NaivePlugin()
+    state = _make_state([_make_user("a@x.com", uuid="uuid-a")])
+    state.protocols["naive"].config["uot"] = False
+    p._pending_cfg = "test"
+    config_dir = tmp_path / "config"
+    log_dir = tmp_path / "logs"
+    data_dir = tmp_path / "data"
+
+    with (
+        patch("hydra.plugins.naive.plugin.CFG_DIR", config_dir),
+        patch("hydra.plugins.naive.plugin.LOG_DIR", log_dir),
+        patch("hydra.plugins.naive.plugin.CADDYFILE", config_dir / "Caddyfile"),
+        patch("hydra.plugins.naive.plugin.DATA_DIR", data_dir),
+        patch.object(p, "_create_fake_site"),
+        patch.object(p, "_built_for_uot", return_value=True),
+        patch.object(p, "_validate_caddy", return_value=""),
+        patch.object(p, "_download_binary", return_value=True) as rebuild,
+        patch("hydra.plugins.naive.plugin.HOST.run", return_value=MagicMock(returncode=0)),
+        patch("hydra.plugins.naive.plugin.time.sleep"),
+        patch.object(p, "_sync_transport_firewall"),
+    ):
+        assert p.apply(state)
+
+    # The fork is installed but UoT is off: only a rebuild removes that path.
+    assert rebuild.call_args.kwargs == {"uot": False}

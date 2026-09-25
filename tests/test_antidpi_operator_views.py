@@ -17,7 +17,7 @@ IPV6 = "2001:db8:1234:5678:9abc:def0:1234:5678"
 STATE = {
     "events": 18432,
     "last_event_at": NOW - 42,
-    "last_event_source": "kernel-firewall",
+    "last_event_source": "journal",
     "whitelist": ["203.0.113.10"],
     "notification_stats": {"delivered": 27, "failed": 2},
     "suppressed_ban_notifications": 5,
@@ -26,30 +26,34 @@ STATE = {
         "198.51.100.5": {
             "at": NOW - 1200,
             "duration": 86400,
-            "score": 14.0,
             "offense_count": 3,
-            "signals": ["active_decoy_probe", "port_sweep"],
+            "signals": ["https:scanner_path"],
             "source": "caddy-decoy",
             "protocol": "https",
+            "kind": "decoy_scan",
+            "reason": "scanner_path",
+            "attribution": "direct",
         },
         IPV6: {
             "at": NOW - 100,
             "duration": 600,
-            "score": 8.5,
-            "signals": ["malformed_tls"],
+            "signals": ["snell:record_auth_failed"],
             "source": "journal",
-            "protocol": "shadowtls",
+            "protocol": "snell",
+            "kind": "protocol_reject",
+            "reason": "record_auth_failed",
+            "attribution": "direct",
         },
     },
     "history": [
         {
             "ip": "198.51.100.30",
             "at": NOW - 90000,
-            "score": 8.0,
             "status": "unbanned",
-            "signals": ["port_scan"],
+            "signals": ["https:scanner_path"],
         },
     ],
+    # Legacy scores are still present on upgraded hosts and must stay hidden.
     "scores": {
         "203.0.113.77": {
             "score": 6.0,
@@ -58,8 +62,8 @@ STATE = {
             "signals": ["unknown_sni", "handshake_failure"],
         },
     },
-    "signal_counts": {"unknown_sni": 40, "port_scan": 10},
-    "source_counts": {"kernel-firewall": 30},
+    "signal_counts": {"snell:record_auth_failed": 40, "https:scanner_path": 10},
+    "source_counts": {"journal": 30},
 }
 
 
@@ -89,19 +93,22 @@ def _application(snapshot: dict, *, running: bool = True):
 def test_tui_status_panel_reports_health_delivery_and_enforcement_gaps():
     health = SimpleNamespace(
         healthy=False,
-        checks={"service": True, "firewall": False, "scan_telemetry": False},
+        checks={
+            "service": True,
+            "firewall": False,
+            "obsolete_telemetry_removed": False,
+        },
     )
     text = _plain(
         views.status_lines(running=True, health=health, data=_snapshot()),
     )
 
     assert "требует внимания" in text
-    assert "правила DROP в INPUT, телеметрия сканирования" in text
+    assert "правила DROP в INPUT, устаревшая телеметрия удалена" in text
     assert "18 432" in text
-    assert "42с назад (телеметрия ядра)" in text
-    assert "2 активные" in text
-    assert "1 адрес ·" in text
-    assert "1 запись" in text
+    assert "42с назад (журнал протокола)" in text
+    assert "2 банов" in text
+    assert "whitelist 1" in text
     assert "не применено банов: 3" in text
 
 
@@ -111,7 +118,7 @@ def test_tui_status_panel_stays_quiet_when_everything_is_healthy():
     data.pop("ban_failures")
     text = _plain(views.status_lines(running=True, health=healthy, data=data))
 
-    assert "исправна" in text
+    assert "исправен" in text
     assert "Проблемы" not in text
     assert "не применено банов" not in text
 
@@ -122,7 +129,7 @@ def test_tui_ban_table_keeps_long_ipv6_intact_and_translates_evidence():
 
     assert IPV6 in text
     assert all(len(line) <= 78 for line in _plain(lines).splitlines())
-    assert "активная проверка decoy, перебор разных портов" in text
+    assert "поиск уязвимых путей на decoy-сайте" in text
     assert "decoy-сайт · https · срок 1д · нарушение #3" in text
     assert "🔴 23ч 40м" in text
 
@@ -145,65 +152,53 @@ def test_tui_history_hides_addresses_that_are_still_banned():
     assert "снят" in text
 
 
-def test_tui_watchlist_shows_unverified_evidence_below_the_ban_threshold():
-    text = _plain(views.watchlist_table(_snapshot()))
-
-    assert "203.0.113.77" in text
-    assert "6.0" in text
-    assert "неизвестный SNI, ошибка handshake" in text
-    assert "Подтверждено: 3.0" in text
-
-
-def test_tui_watchlist_explains_the_empty_state():
-    assert "Под наблюдением никого нет" in _plain(views.watchlist_table({}))
+def test_operator_views_have_no_watchlist_surface():
+    """A sub-threshold list cannot exist: there is no threshold any more."""
+    assert not hasattr(views, "watchlist_table")
+    assert not hasattr(views, "coordinated_table")
+    assert "watchlist" not in _snapshot()
+    assert "coordinated" not in _snapshot()
 
 
 def test_tui_counter_panel_uses_translated_labels():
     text = _plain(views.counter_lines(_snapshot()))
 
-    assert "неизвестный SNI" in text
-    assert "телеметрия ядра" in text
+    assert "Snell: неверный ключ клиента" in text
+    assert "журнал протокола" in text
     assert "нет данных" not in text
     assert "нет данных" in _plain(views.counter_lines({}))
 
 
-def test_telegram_dashboard_renders_labels_geoip_and_watchlist():
-    intel = {
-        "198.51.100.5": {
-            "flag": "🇩🇪",
-            "asn": "AS64501",
-            "owner": "Test Network",
-        },
-    }
+def test_telegram_dashboard_keeps_lists_out_of_the_summary():
     with patch.object(
         dashboards,
         "_lookup_security_intel",
-        return_value=intel,
+        return_value={},
     ) as lookup:
         text = dashboards.get_antidpi_dashboard_text(_application(_snapshot()))
 
-    lookup.assert_called_once()
+    lookup.assert_not_called()
     assert "🟢 работает" in text
-    assert "<b>Блокировки:</b> 2 активные" in text
-    assert "🇩🇪 <code>198.51.100.5</code>" in text
-    assert "AS64501 Test Network" in text
-    assert "активная проверка decoy, перебор разных портов" in text
-    assert "23ч 40м" in text
-    assert "Под наблюдением</b>\n👁 <code>203.0.113.77</code>" in text
-    assert "Firewall отклонил блокировок:</b> 3" in text
+    assert "<b>2</b> блокировок" in text
+    assert "под наблюдением" not in text
+    assert "18 432 событий · 42с назад" in text
+    assert "Firewall: 3 ошибок · 15м назад" in text
+    assert "198.51.100.5" not in text
+    assert "203.0.113.77" not in text
     assert text.count("<b>") == text.count("</b>")
 
 
-def test_telegram_detail_view_adds_counters_whitelist_and_full_ban_list():
+def test_telegram_detail_view_adds_compact_counters_and_totals():
     text = dashboards.get_antidpi_status_text(_application(_snapshot()))
 
-    assert "AntiDPI Status" in text
-    assert "Заблокировано IP:</b> 2" in text
+    assert "AntiDPI · подробно" in text
+    assert "<b>2</b> блокировок" in text
     assert "<b>Сигналы</b>" in text
-    assert "неизвестный SNI — 40" in text
-    assert "телеметрия ядра — 30" in text
-    assert "<b>Whitelist:</b> 1 запись" in text
-    assert "Адресов под учётом:</b> 1" in text
+    assert "Snell: неверный ключ клиента — 40" in text
+    assert "журнал протокола — 30" in text
+    assert "whitelist 1" in text
+    assert "Учтено" not in text
+    assert "198.51.100.5" not in text
 
 
 def test_telegram_views_survive_a_failing_plugin_query():
@@ -224,8 +219,8 @@ def test_telegram_views_survive_a_failing_plugin_query():
     detail = dashboards.get_antidpi_status_text(app)
 
     assert "🔴 не установлен" in dashboard
-    assert "Блокировок нет" in dashboard
-    assert "Нет заблокированных IP" in detail
+    assert "<b>0</b> блокировок" in dashboard
+    assert "<b>0</b> блокировок" in detail
     assert "нет данных" in detail
 
 
@@ -235,7 +230,17 @@ def _tui_patches(manager, **extra):
     with ExitStack() as stack:
         mocks = {
             name: stack.enter_context(patch.object(manager, name))
-            for name in ("clear", "panel", "info", "success", "warn", "error")
+            for name in (
+                "clear",
+                "panel",
+                "info",
+                "success",
+                "warn",
+                "error",
+                # Destructive confirmations default to "yes" in tests that
+                # do not care; tests that do pass their own side effect.
+                "confirm",
+            )
         }
         for name, value in extra.items():
             mocks[name] = stack.enter_context(
@@ -351,7 +356,7 @@ def test_details_callback_is_routed_to_the_detailed_status_view():
     asyncio.run(bot.handle_callback(update, MagicMock()))
 
     text = query.edit_message_text.call_args.args[0]
-    assert "AntiDPI Status" in text
+    assert "AntiDPI · подробно" in text
     callbacks = [
         button.callback_data
         for row in query.edit_message_text.call_args.kwargs[
@@ -375,7 +380,6 @@ def test_telegram_antidpi_keyboard_offers_drilldown_routes():
         "ask:antidpi_toggle",
         "view:antidpi_details",
         "view:antidpi_bans",
-        "view:antidpi_watch",
         "view:home",
     } <= set(callbacks)
     assert all(
@@ -460,7 +464,7 @@ def test_telegram_address_card_reports_every_source():
     ]
 
     assert "198.51.100.5" in text
-    assert "AntiDPI:</b> 🔴 заблокирован" in text
+    assert "AntiScan:</b> 🔴 заблокирован" in text
     assert "Honeypot:</b> 🔴 пойман" in text
     assert "antidpi-ban:198.51.100.5" in callbacks
     assert "ask-unban:198.51.100.5" in callbacks

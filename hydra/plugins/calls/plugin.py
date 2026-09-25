@@ -1,4 +1,5 @@
-"""Hydracore native multi-user Calls transport configuration."""
+"""Hydracore native VK-parasite Calls transport configuration."""
+
 from __future__ import annotations
 
 import json
@@ -17,14 +18,29 @@ from hydra.plugins.base import (
     PluginStatus,
 )
 from hydra.plugins.calls.configuration import (
-    CALL_MODE_MULTI_USER,
+    CALL_MODE_VK_PARASITE,
     DEFAULT_CALL_PORT,
-    DEFAULT_ROOM_COUNT,
+    DEFAULT_WORKERS,
     call_mode,
-    multi_user_inbound,
-    multi_user_outbound,
+    vk_parasite_inbound,
+    vk_parasite_outbound,
 )
 from hydra.plugins.context import PluginStateAccess
+
+
+def _udp_port(value: object, fallback: int) -> int:
+    """Read a UDP port that an imported state may have left in any shape at all.
+
+    The firewall side of this plugin used to trust the value. A port that arrived as text, or as
+    something else entirely, took the whole apply down instead of falling back to the configured one.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return fallback
+    try:
+        port = int(value)
+    except ValueError:
+        return fallback
+    return port if 1 <= port <= 65535 else fallback
 
 
 class CallsPlugin(BasePlugin):
@@ -43,8 +59,8 @@ class CallsPlugin(BasePlugin):
         hydra_v2_subscription_enabled=True,
         connection_source="tracked",
         config_defaults=(
-            ("mode", CALL_MODE_MULTI_USER),
-            ("room_count", DEFAULT_ROOM_COUNT),
+            ("mode", CALL_MODE_VK_PARASITE),
+            ("workers", DEFAULT_WORKERS),
             ("listen_port", DEFAULT_CALL_PORT),
         ),
         backup_resources=(
@@ -61,17 +77,17 @@ class CallsPlugin(BasePlugin):
         self._source = source or UnavailableCallConfigSource()
 
     def install(self) -> bool:
-        return self._source.multi_user_supported()
+        return self._source.vk_parasite_supported()
 
     def uninstall(self) -> bool:
         return True
 
     def on_enable(self, state: PluginStateAccess) -> None:
         call_mode(state)
-        inbound = multi_user_inbound(state)
+        inbound = vk_parasite_inbound(state)
         from hydra.utils.firewall import open_udp, port_is_open
 
-        port = int(inbound["listen_port"])
+        port = _udp_port(inbound["listen_port"], DEFAULT_CALL_PORT)
         if not port_is_open("udp", port):
             open_udp(port, "hydra-calls-vk")
 
@@ -83,7 +99,7 @@ class CallsPlugin(BasePlugin):
         from hydra.utils.firewall import close_udp
 
         close_udp(
-            int(desired.config.get("listen_port", DEFAULT_CALL_PORT)),
+            _udp_port(desired.config.get("listen_port"), DEFAULT_CALL_PORT),
             "hydra-calls-vk",
         )
 
@@ -92,7 +108,7 @@ class CallsPlugin(BasePlugin):
         if desired is None:
             return None
         call_mode(state)
-        port = int(multi_user_inbound(state)["listen_port"])
+        port = _udp_port(vk_parasite_inbound(state)["listen_port"], DEFAULT_CALL_PORT)
         from hydra.utils.firewall import port_is_open
 
         return {"port": port, "was_open": port_is_open("udp", port)}
@@ -105,7 +121,7 @@ class CallsPlugin(BasePlugin):
 
         call_mode(state)
         if desired.enabled:
-            port = int(multi_user_inbound(state)["listen_port"])
+            port = _udp_port(vk_parasite_inbound(state)["listen_port"], DEFAULT_CALL_PORT)
             if not port_is_open("udp", port):
                 open_udp(port, "hydra-calls-vk")
         else:
@@ -137,18 +153,21 @@ class CallsPlugin(BasePlugin):
     ) -> PluginStatus:
         desired = state.protocols.get(self.meta.name) if state is not None else None
         enabled = bool(desired and desired.enabled)
-        supported = self._source.multi_user_supported()
-        mode = call_mode(state) if state is not None else CALL_MODE_MULTI_USER
-        ready = (
-            bool(self._source.load_native_join_links())
-            and supported
-        )
+        supported = self._source.vk_parasite_supported()
+        mode = call_mode(state) if state is not None else CALL_MODE_VK_PARASITE
+        ready = bool(self._source.load_native_join_links()) and supported
         running = bool(enabled and ready and self._source.singbox_running())
         return PluginStatus(
             installed=supported,
             enabled=enabled,
             running=running,
-            info={"platform": "vk", "mode": mode, "configured": ready},
+            info={
+                "platform": "vk",
+                "mode": mode,
+                "transport": "four_lane_kcp_v9",
+                "lanes": 4,
+                "configured": ready,
+            },
         )
 
     def configure(self, state: PluginStateAccess) -> ConfigFragment:
@@ -156,9 +175,9 @@ class CallsPlugin(BasePlugin):
         if desired is None or not desired.enabled:
             return ConfigFragment()
         call_mode(state)
-        if not self._source.multi_user_supported():
-            raise ValueError("installed core does not support VK Calls multi_user")
-        return ConfigFragment(inbounds=[multi_user_inbound(state)])
+        if not self._source.vk_parasite_supported():
+            raise ValueError("installed core is not a HydraCore VPS runtime with native VK Calls")
+        return ConfigFragment(inbounds=[vk_parasite_inbound(state)])
 
     def generate_client_config(self, user, state: PluginStateAccess) -> str:
         """Return the remote-safe VK Calls joiner used by subscriptions."""
@@ -166,17 +185,21 @@ class CallsPlugin(BasePlugin):
         if desired is None or not desired.enabled:
             return ""
         call_mode(state)
-        if not self._source.multi_user_supported():
-            raise ValueError("installed core does not support VK Calls multi_user")
-        outbound = multi_user_outbound(
+        if not self._source.vk_parasite_supported():
+            raise ValueError("installed core is not a HydraCore VPS runtime with native VK Calls")
+        outbound = vk_parasite_outbound(
             user,
             state,
             self._source.load_native_join_links(),
         )
-        return json.dumps({
-            "outbounds": [outbound],
-            "route": {"final": outbound["tag"]},
-        }, ensure_ascii=False, separators=(",", ":"))
+        return json.dumps(
+            {
+                "outbounds": [outbound],
+                "route": {"final": outbound["tag"]},
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
     def healthcheck_for_state(self, state: PluginStateAccess) -> HealthResult:
         desired = state.protocols.get(self.meta.name)
@@ -184,14 +207,14 @@ class CallsPlugin(BasePlugin):
             return HealthResult(True)
         call_mode(state)
         checks = {
-            "feature_supported": self._source.multi_user_supported(),
+            "feature_supported": self._source.vk_parasite_supported(),
             "join_links_ready": bool(self._source.load_native_join_links()),
             "singbox_running": self._source.singbox_running(),
         }
         healthy = all(checks.values())
         return HealthResult(
             healthy,
-            "" if healthy else "native VK Calls multi-user prerequisites are not ready",
+            "" if healthy else "native VK Calls four-lane prerequisites are not ready",
             "ok" if healthy else "error",
             checks,
         )

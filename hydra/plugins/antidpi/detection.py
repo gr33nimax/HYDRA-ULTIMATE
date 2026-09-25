@@ -1,36 +1,98 @@
-"""State transition model for one AntiDPI observation.
+"""Decision core for the AntiScan evidence contract.
 
 The detector mutates only the supplied dictionary.  Firewall enforcement,
 notifications, locking, and persistence remain explicit caller decisions.
+
+There is no score, no evidence family and no correlation window: an event is
+either a proven protocol reject / decoy scan, or it does not exist.  Anything
+outside the allowlist below is discarded before it can reach state, the
+firewall or a notification.
 """
+
 from __future__ import annotations
 
 import ipaddress
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass
 
-from hydra.plugins.antidpi.correlation import (
-    active_families,
-    block_reason,
-    event_weight,
-    record_families,
-    record_subnet_activity,
-    required_score,
-)
 from hydra.plugins.antidpi.model import (
-    ALERT_COOLDOWN,
-    ALERT_THRESHOLD,
-    AUTH_ALERT_THRESHOLD,
-    BAN_THRESHOLD,
     MAX_HISTORY_ENTRIES,
-    MAX_OBSERVED_SCORE,
     active_bans,
-    ban_duration,
-    decayed_score,
     expire_bans,
     get_ban_duration,
     prune_runtime_state,
-    score_event,
 )
+
+MAX_EVENT_TIME_SKEW = 5.0
+
+# --- closed evidence allowlist -------------------------------------------
+
+PROTOCOL_REJECT_KIND = "protocol_reject"
+DECOY_SCAN_KIND = "decoy_scan"
+
+# protocol -> reasons a protocol-owned parser may report, and the sources
+# allowed to report them.  A protocol absent here can never enforce.
+#
+# Snell is deliberately absent.  ``record_auth_failed`` is byte-identical for a
+# hostile probe and for a legitimate client whose PSK is stale, mistyped or
+# generated for another generation, so the record proves that a frame did not
+# decrypt - not that the sender was hostile.  The grammar also binds whatever
+# tag the core printed, and the parser has no access to desired state, so a
+# retired or foreign listener matches it too.  Snell returns only together with
+# an owned-tag check in the journal normalizer (docs/ANTIDPI.md 13).
+PROTOCOL_REJECT_RULES: dict[str, frozenset[str]] = {}
+PROTOCOL_REJECT_SOURCES = frozenset({"journal", "caddy-source-relay"})
+
+DECOY_REASONS = frozenset({"scanner_path"})
+DECOY_PROTOCOLS = frozenset({"https"})
+DECOY_SOURCES = frozenset({"caddy-decoy"})
+
+ATTRIBUTIONS = frozenset({"direct", "relay-exact"})
+
+
+def evidence_problem(event: object) -> str:
+    """Return why ``event`` is not enforcement evidence, or ``""`` if it is."""
+    if not isinstance(event, dict):
+        return "not a mapping"
+    kind = str(event.get("kind", "")).strip()
+    attribution = str(event.get("attribution", "")).strip()
+    if attribution not in ATTRIBUTIONS:
+        return "unproven attribution"
+    if kind == PROTOCOL_REJECT_KIND:
+        protocol = str(event.get("protocol", "")).strip().lower()
+        allowed = PROTOCOL_REJECT_RULES.get(protocol)
+        if allowed is None:
+            return f"protocol {protocol or '?'} has no proven reject"
+        if str(event.get("reason", "")).strip() not in allowed:
+            return "reason is not a proven reject"
+        if str(event.get("source", "")).strip() not in PROTOCOL_REJECT_SOURCES:
+            return "source is not a proven reject stream"
+        return ""
+    if kind == DECOY_SCAN_KIND:
+        if str(event.get("protocol", "")).strip().lower() not in DECOY_PROTOCOLS:
+            return "decoy scan protocol mismatch"
+        if str(event.get("reason", "")).strip() not in DECOY_REASONS:
+            return "decoy scan reason mismatch"
+        if str(event.get("source", "")).strip() not in DECOY_SOURCES:
+            return "source is not a decoy surface"
+        return ""
+    return f"kind {kind or '?'} is not enforcement evidence"
+
+
+def is_enforcement_evidence(event: object) -> bool:
+    """Return whether one event may start an automatic ban."""
+    return evidence_problem(event) == ""
+
+
+def event_time(event: dict) -> float | None:
+    """Return the original event time when plausible, else ``None``."""
+    try:
+        timestamp = float(event.get("event_time", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if timestamp <= 0 or timestamp > time.time() + MAX_EVENT_TIME_SKEW:
+        return None
+    return timestamp
 
 
 @dataclass
@@ -41,191 +103,43 @@ class Observation:
     ip: ipaddress.IPv4Address | ipaddress.IPv6Address
     event: dict
     timestamp: float
+    enforced_at: float
     source: str
     signals: tuple[str, ...]
     entry: dict
-    evidence_can_ban: bool
     active_ban: bool
-    should_alert: bool
     should_ban: bool
-    families: tuple[str, ...] = ()
-    required_score: float = float(BAN_THRESHOLD)
-    block_reason: str = ""
-    coordinated: dict = field(default_factory=dict)
 
 
-def _kernel_context(entry: dict, event: dict, timestamp: float) -> None:
-    if str(event.get("source", "")) != "kernel-firewall":
-        return
+def _as_int(value: object, default: int = 0) -> int:
+    """Return an integer from untrusted persisted state, or ``default``."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
+def _evidence_signal(event: dict) -> str:
+    """Return the single human-readable signal name of one evidence event."""
+    protocol = str(event.get("protocol", "unknown"))[:40]
+    reason = str(event.get("reason", event.get("kind", "unknown")))[:60]
+    return f"{protocol}:{reason}"
+
+
+def _existing_ban(data: dict, address: str, timestamp: float) -> bool:
     try:
-        destination_port = int(event.get("destination_port", 0))
+        return address in active_bans(data, now=timestamp)
     except (TypeError, ValueError):
-        destination_port = 0
-    recent_ports = entry.get("kernel_ports", {})
-    if not isinstance(recent_ports, dict):
-        recent_ports = {}
-    recent_ports = {
-        str(port): seen_at
-        for port, seen_at in recent_ports.items()
-        if isinstance(seen_at, (int, float))
-        and timestamp - float(seen_at) <= 60
-    }
-    if 1 <= destination_port <= 65535:
-        recent_ports[str(destination_port)] = timestamp
-    entry["kernel_ports"] = dict(list(recent_ports.items())[-64:])
-    event["distinct_ports_60s"] = len(recent_ports)
-    event["ban_eligible"] = len(recent_ports) >= 4
-    if not event["ban_eligible"]:
-        event["policy"] = "alert-only / single-port connection burst"
-
-
-def _update_score(
-    entry: dict,
-    event: dict,
-    timestamp: float,
-) -> tuple[tuple[str, ...], bool]:
-    _raw_score, signals = score_event(event)
-    evidence_can_ban = event.get("ban_eligible") is not False
-    source = str(event.get("source", "unknown"))[:80]
-    if (
-        source not in {"kernel-firewall", "kernel-udp-probe"}
-        and signals
-        and evidence_can_ban
-    ):
-        entry["last_non_kernel_evidence_at"] = timestamp
-    if "port_sweep" in signals and evidence_can_ban:
-        entry["last_port_sweep_at"] = timestamp
-
-    previous = float(entry.get("score", 0))
-    previous_verified = float(entry.get("verified_score", 0))
-    previous_at = float(entry.get("updated", timestamp) or timestamp)
-    last_unknown_sni = float(entry.get("last_unknown_sni_at", 0) or 0)
-    # Repeated evidence of one kind saturates: the tenth identical handshake
-    # error carries far less information than the first.
-    score = event_weight(entry, signals, timestamp=timestamp)
-    if signals and set(signals) <= {"unknown_sni", "handshake_failure"}:
-        if timestamp - last_unknown_sni < 0.5:
-            score = 0.0
-        else:
-            entry["last_unknown_sni_at"] = timestamp
-    if signals and evidence_can_ban:
-        record_families(entry, signals, timestamp=timestamp)
-
-    elapsed = timestamp - previous_at
-    entry["score"] = round(
-        min(MAX_OBSERVED_SCORE, decayed_score(previous, elapsed) + score),
-        4,
-    )
-    entry["verified_score"] = round(
-        min(
-            MAX_OBSERVED_SCORE,
-            decayed_score(previous_verified, elapsed)
-            + (score if evidence_can_ban else 0.0),
-        ),
-        4,
-    )
-    previous_signals = entry.get("signals", [])
-    if not isinstance(previous_signals, list):
-        previous_signals = [str(previous_signals)] if previous_signals else []
-    entry["signals"] = list(
-        dict.fromkeys([*previous_signals, *signals]),
-    )[-16:]
-    entry["updated"] = timestamp
-    return signals, evidence_can_ban
-
-
-def _record_event_counters(
-    data: dict,
-    *,
-    source: str,
-    signals: tuple[str, ...],
-    timestamp: float,
-) -> None:
-    data["events"] = int(data.get("events", 0)) + 1
-    source_counts = data.setdefault("source_counts", {})
-    if not isinstance(source_counts, dict):
-        source_counts = {}
-        data["source_counts"] = source_counts
-    source_counts[source] = int(source_counts.get(source, 0)) + 1
-    signal_counts = data.setdefault("signal_counts", {})
-    if not isinstance(signal_counts, dict):
-        signal_counts = {}
-        data["signal_counts"] = signal_counts
-    for signal in signals:
-        signal_counts[signal] = int(signal_counts.get(signal, 0)) + 1
-    data["last_event_at"] = timestamp
-    data["last_event_source"] = source
-
-
-def _resolve_active_ban(data: dict, address: str, timestamp: float) -> bool:
-    banned = data.setdefault("banned", {})
-    if not isinstance(banned, dict):
-        banned = {}
-        data["banned"] = banned
-    metadata = banned.get(address)
-    if not isinstance(metadata, dict):
         return False
-    try:
-        active = (
-            metadata.get("permanent") is True
-            or timestamp < float(metadata.get("at", 0)) + ban_duration(metadata)
-        )
-    except (TypeError, ValueError):
-        active = False
-    if active:
-        return True
-    banned.pop(address, None)
-    history = data.get("history", [])
-    if not isinstance(history, list):
-        return False
-    for item in reversed(history):
-        if (
-            isinstance(item, dict)
-            and item.get("ip") == address
-            and item.get("status") == "active"
-        ):
-            item["status"] = "expired"
-            item["expired_at"] = timestamp
-            break
-    return False
-
-
-def _should_alert(
-    entry: dict,
-    event: dict,
-    signals: tuple[str, ...],
-    *,
-    timestamp: float,
-    active_ban: bool,
-    evidence_can_ban: bool,
-) -> bool:
-    protocol_key = str(event.get("protocol", "L4"))[:40].lower()
-    protocol_alerts = entry.get("protocol_alerts", {})
-    if not isinstance(protocol_alerts, dict):
-        protocol_alerts = {}
-    protocol_alerts = {
-        str(key): float(value)
-        for key, value in protocol_alerts.items()
-        if isinstance(value, (int, float))
-        and timestamp - float(value) <= ALERT_COOLDOWN * 4
-    }
-    last_alert_at = float(protocol_alerts.get(protocol_key, 0) or 0)
-    threshold = AUTH_ALERT_THRESHOLD if "auth_failure" in signals else ALERT_THRESHOLD
-    should_alert = (
-        not active_ban
-        and bool(signals)
-        and entry["score"] >= threshold
-        and not (
-            entry["verified_score"] >= BAN_THRESHOLD
-            and evidence_can_ban
-        )
-        and timestamp - last_alert_at >= ALERT_COOLDOWN
-    )
-    if should_alert:
-        entry["last_alert_at"] = timestamp
-        protocol_alerts[protocol_key] = timestamp
-        entry["protocol_alerts"] = protocol_alerts
-    return should_alert
 
 
 def observe_state(
@@ -234,126 +148,67 @@ def observe_state(
     event: dict,
     *,
     timestamp: float,
+    enforcement_time: float | None = None,
     max_score_entries: int,
 ) -> Observation:
-    """Apply one evidence event and return its side-effect decision."""
+    """Decide whether one proven evidence event must ban its address."""
     address = parsed_address.compressed
-    scores = data.setdefault("scores", {})
-    if not isinstance(scores, dict):
-        scores = {}
-        data["scores"] = scores
-    entry = scores.setdefault(
-        address,
-        {
-            "score": 0,
-            "signals": [],
-            "updated": 0,
-            "last_unknown_sni_at": 0,
-        },
-    )
-    if not isinstance(entry, dict):
-        entry = {}
-        scores[address] = entry
-    _kernel_context(entry, event, timestamp)
-    signals, evidence_can_ban = _update_score(entry, event, timestamp)
+    enforced_at = timestamp if enforcement_time is None else enforcement_time
     source = str(event.get("source", "unknown"))[:80]
-    _record_event_counters(
-        data,
-        source=source,
-        signals=signals,
-        timestamp=timestamp,
-    )
-    event_count = int(data.get("events", 0))
+    entry = {
+        "signals": [_evidence_signal(event)],
+        "last_evidence_at": timestamp,
+    }
+    event_count = _as_int(data.get("events", 0)) + 1
+    data["events"] = event_count
+    data["last_event_at"] = timestamp
+    data["last_event_source"] = source
     if event_count % 256 == 0:
-        expire_bans(data, now=timestamp)
-    if len(scores) > max_score_entries or event_count % 256 == 0:
+        expire_bans(data, now=enforced_at)
         prune_runtime_state(
             data,
-            now=timestamp,
+            now=enforced_at,
             max_entries=max_score_entries,
         )
-    active_ban = _resolve_active_ban(data, address, timestamp)
-    should_alert = _should_alert(
-        entry,
-        event,
-        signals,
-        timestamp=timestamp,
-        active_ban=active_ban,
-        evidence_can_ban=evidence_can_ban,
-    )
-    coordinated = (
-        record_subnet_activity(data, address, timestamp=timestamp)
-        if signals and evidence_can_ban
-        else {}
-    )
-    families = active_families(entry, timestamp=timestamp)
-    threshold = required_score(
-        families=families,
-        signals=signals,
-        offense_count=_offense_count(data, address),
-    )
-    should_ban = (
-        not active_ban
-        and entry["verified_score"] >= threshold
-        and evidence_can_ban
-    )
+    active_ban = _existing_ban(data, address, enforced_at)
     return Observation(
         address=address,
         ip=parsed_address,
         event=event,
         timestamp=timestamp,
+        enforced_at=enforced_at,
         source=source,
-        signals=signals,
+        signals=(_evidence_signal(event),),
         entry=entry,
-        evidence_can_ban=evidence_can_ban,
         active_ban=active_ban,
-        should_alert=should_alert,
-        should_ban=should_ban,
-        families=families,
-        required_score=threshold,
-        block_reason=(
-            ""
-            if should_ban or active_ban
-            else block_reason(
-                score=float(entry["verified_score"]),
-                required=threshold,
-                families=families,
-                evidence_can_ban=evidence_can_ban,
-            )
-        ),
-        coordinated=coordinated,
+        should_ban=not active_ban,
     )
 
 
-def _offense_count(data: dict, address: str) -> int:
-    """Return how many times this address was banned before."""
-    counts = data.get("ban_counts", {}) if isinstance(data, dict) else {}
-    if not isinstance(counts, dict):
-        return 0
-    try:
-        return max(0, int(counts.get(address, 0) or 0))
-    except (TypeError, ValueError):
-        return 0
-
-
-def record_automatic_ban(data: dict, observation: Observation) -> dict:
+def record_automatic_ban(
+    data: dict,
+    observation: Observation,
+    *,
+    duration: int | None = None,
+) -> dict:
     """Commit a successful firewall ban into persistent state."""
     address = observation.address
     ban_counts = data.setdefault("ban_counts", {})
     if not isinstance(ban_counts, dict):
         ban_counts = {}
         data["ban_counts"] = ban_counts
-    offense_count = int(ban_counts.get(address, 0)) + 1
-    duration = get_ban_duration(offense_count)
+    offense_count = _as_int(ban_counts.get(address, 0)) + 1
+    duration = get_ban_duration(offense_count) if duration is None else max(0, _as_int(duration))
     ban_counts[address] = offense_count
     event = observation.event
     metadata = {
-        "at": observation.entry["updated"],
-        "score": observation.entry["verified_score"],
+        "at": observation.enforced_at,
         "signals": observation.entry["signals"],
         "source": observation.source,
         "protocol": str(event.get("protocol", "unknown"))[:40],
         "kind": str(event.get("kind", event.get("reason", "anomaly")))[:80],
+        "reason": str(event.get("reason", ""))[:80],
+        "attribution": str(event.get("attribution", ""))[:20],
         "duration": duration,
         "offense_count": offense_count,
     }

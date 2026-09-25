@@ -13,6 +13,7 @@ from hydra.core.state import (
     load_state, save_state, update_state, find_user, add_user, get_protocol,
     STATE_FILE,
 )
+from hydra.services.traffic import reset_user_traffic
 
 
 def test_app_state_defaults():
@@ -30,7 +31,7 @@ def test_app_state_defaults():
     assert isinstance(state.network, NetworkConfig)
     assert state.headless_creator.providers == {}
     assert state.headless_creator.consumers == {}
-    assert state.kernel.provider == "sing-box-extended"
+    assert state.kernel.provider == "hydracore"
     assert state.kernel.channel == "stable"
 
 
@@ -172,6 +173,33 @@ def test_stale_settings_save_preserves_newer_traffic_counters(tmp_path):
         stale_pending.network.domain = "stale.example"
         save_state(stale_pending)
         assert "sync_config_pending" not in load_state().install
+    finally:
+        state_mod.STATE_FILE, state_mod.STATE_DIR = original_file, original_dir
+
+
+def test_stale_save_cannot_restore_a_reset_traffic_quota(tmp_path):
+    import hydra.core.state as state_mod
+
+    original_file, original_dir = state_mod.STATE_FILE, state_mod.STATE_DIR
+    try:
+        state_mod.STATE_FILE = tmp_path / "state.json"
+        state_mod.STATE_DIR = tmp_path
+        initial = AppState(users=[User(
+            email="u@example.com",
+            uuid="u1",
+            traffic_used_bytes=500,
+            credentials={"anytls": {"traffic_used_bytes": 500}},
+        )])
+        save_state(initial)
+        stale = load_state()
+
+        update_state(lambda current: reset_user_traffic(current, "u@example.com"))
+        stale.network.domain = "changed.example"
+        save_state(stale)
+
+        user = load_state().users[0]
+        assert user.traffic_used_bytes == 0
+        assert user.credentials["anytls"]["traffic_used_bytes"] == 0
     finally:
         state_mod.STATE_FILE, state_mod.STATE_DIR = original_file, original_dir
 
@@ -345,9 +373,9 @@ def test_migrate_v2_enablement_flags_to_canonical_protocol_state(
 
     save_state(state)
     persisted = json.loads(state_file.read_text(encoding="utf-8"))
-    assert "security" not in persisted
-    assert "dnscrypt_enabled" not in persisted["network"]
-    assert "warp_enabled" not in persisted["network"]
+    assert "security" not in persisted["core"]
+    assert "dnscrypt_enabled" not in persisted["core"]["network"]
+    assert "warp_enabled" not in persisted["core"]["network"]
 
 
 def test_singbox_generate_config_tproxy_reject_rule():

@@ -1,17 +1,48 @@
 """Administrative AntiDPI operations over explicit state/runtime ports."""
+
 from __future__ import annotations
 
+import copy
 import ipaddress
 
 from hydra.plugins.antidpi.model import (
     active_bans,
     expire_bans,
+    record_ban_failure,
     record_manual_ban,
     record_unban,
 )
 from hydra.plugins.antidpi.firewall_rules import SET_V4, SET_V6
+from hydra.plugins.antidpi.projection import (
+    address_details as project_address_details,
+)
 from hydra.plugins.antidpi.projection import management_projection
+from hydra.plugins.antidpi.state_store import AntiDPIStateCorruptError
 from hydra.plugins.context import PluginStateAccess
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    """Return an integer from caller input, or ``default``."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
+def _is_permanent(metadata: object) -> bool:
+    """Return True only for the JSON boolean ``true`` of a manual ban."""
+    if not isinstance(metadata, dict):
+        return False
+    return isinstance(metadata.get("permanent"), bool) and metadata["permanent"]
 
 
 class AntiDPIManagementMixin:
@@ -26,9 +57,41 @@ class AntiDPIManagementMixin:
 
     def management_snapshot(self) -> dict:
         """Return bounded detector evidence without mutating runtime state."""
-        with self._state_lock():
-            data = self._state_store().load()
+        try:
+            with self._state_lock():
+                data = self._state_store().load()
+        except AntiDPIStateCorruptError as exc:
+            return {
+                "degraded": True,
+                "state_error": str(exc),
+                "ban_rows": [],
+                "history": [],
+            }
         return management_projection(data, now=self._clock())
+
+    def address_details(self, address: str) -> dict:
+        """Return the exact, untruncated evidence for one address.
+
+        Bounded list projections must not decide whether an address has
+        evidence: the card of the 26th watched address is as complete as
+        the first.
+        """
+        try:
+            parsed = ipaddress.ip_address(
+                str(address).strip().strip("[]"),
+            )
+        except ValueError:
+            return {"valid": False}
+        try:
+            with self._state_lock():
+                data = self._state_store().load()
+        except AntiDPIStateCorruptError as exc:
+            return {"valid": True, "degraded": True, "state_error": str(exc)}
+        return project_address_details(
+            data,
+            parsed.compressed,
+            now=self._clock(),
+        )
 
     def recent_logs(self, *, limit: int = 50) -> list[str]:
         result = self._command(
@@ -37,7 +100,7 @@ class AntiDPIManagementMixin:
                 "-u",
                 "hydra-antidpi",
                 "-n",
-                str(max(1, min(int(limit), 200))),
+                str(max(1, min(_as_int(limit, 50), 200))),
                 "--no-pager",
                 "-o",
                 "short-iso",
@@ -45,9 +108,7 @@ class AntiDPIManagementMixin:
             text=True,
         )
         output = str(
-            getattr(result, "stdout", "")
-            or getattr(result, "stderr", "")
-            or "",
+            getattr(result, "stdout", "") or getattr(result, "stderr", "") or "",
         ).strip()
         return output.splitlines()
 
@@ -73,8 +134,14 @@ class AntiDPIManagementMixin:
             covered = self._banned_inside(data, parsed, now=self._clock())
         # Releasing runs outside the state lock: ``unban`` acquires it again
         # and flock is not reentrant across file descriptors.
-        for address in covered:
-            self.unban(address)
+        failed = [address for address in covered if not self.unban(address)]
+        if failed:
+            # The whitelist entry is saved, but the operator must see that
+            # trusted addresses may still be blocked.
+            self._fail(
+                "Whitelist сохранён, но блокировки не сняты: " + ", ".join(failed[:8]),
+            )
+            return False
         return not already_present
 
     @staticmethod
@@ -135,25 +202,101 @@ class AntiDPIManagementMixin:
                 removed += 1
         return removed
 
+    def release_whitelisted_bans(self) -> int:
+        """Drop active bans that the configured whitelist now covers."""
+        with self._state_lock():
+            data = self._state_store().load()
+            covered = []
+            for address in active_bans(data, now=self._clock()):
+                try:
+                    parsed = ipaddress.ip_address(address)
+                except ValueError:
+                    continue
+                if self._is_whitelisted(parsed, data):
+                    covered.append(address)
+        released = 0
+        for address in covered:
+            if self.unban(address):
+                released += 1
+        remaining = self.whitelisted_bans()
+        if remaining:
+            self._fail(
+                "Whitelist-covered bans remain enforced: " + ", ".join(remaining[:8]),
+            )
+        return released
+
+    def whitelisted_bans(self) -> list[str]:
+        """Return active bans that must be released before restoration."""
+        with self._state_lock():
+            data = self._state_store().load()
+            covered = []
+            for address in active_bans(data, now=self._clock()):
+                try:
+                    parsed = ipaddress.ip_address(address)
+                except ValueError:
+                    continue
+                if self._is_whitelisted(parsed, data):
+                    covered.append(address)
+            return sorted(covered)
+
+    def record_reconciliation(self, failed: list[str]) -> bool:
+        """Persist the last collector reconciliation outcome for operators."""
+        try:
+            with self._state_lock():
+                data = self._state_store().load()
+                data["reconciliation"] = {
+                    "ok": not failed,
+                    "at": self._clock(),
+                    "failed": [str(item)[:80] for item in failed[:8]],
+                }
+                self._state_store().save(data)
+            return True
+        except (OSError, RuntimeError):
+            return False
+
+    def record_collector_heartbeat(self) -> bool:
+        """Persist collector liveness so health can detect a stuck worker."""
+        try:
+            with self._state_lock():
+                data = self._state_store().load()
+                data["collector_heartbeat_at"] = self._clock()
+                self._state_store().save(data)
+            return True
+        except (OSError, RuntimeError):
+            return False
+
+    def journal_cursor(self) -> str:
+        """Return the last journal record committed with detector state."""
+        try:
+            with self._state_lock():
+                return str(
+                    self._state_store().load().get("journal_cursor", ""),
+                )[:4096]
+        except (OSError, RuntimeError):
+            return ""
+
     def unban(self, raw: str) -> bool:
-        """Remove an address from ipset and persistent evidence."""
+        """Remove an address from ipset and persistent evidence atomically.
+
+        The firewall delete and the state update share one lock: a manual
+        ban from another process can no longer land between them and be
+        silently forgotten by the state write.
+        """
         try:
             address = ipaddress.ip_address(str(raw).strip("[]"))
         except ValueError:
             return False
         name = SET_V6 if address.version == 6 else SET_V4
-        result = self._command(
-            ["ipset", "del", name, address.compressed],
-            text=True,
-        )
-        detail = str(
-            getattr(result, "stderr", "")
-            or getattr(result, "stdout", "")
-            or "",
-        ).lower()
-        if getattr(result, "returncode", 1) != 0 and "not in set" not in detail:
-            return False
         with self._state_lock():
+            result = self._command(
+                ["ipset", "del", name, address.compressed],
+                text=True,
+            )
+            detail = str(
+                getattr(result, "stderr", "") or getattr(result, "stdout", "") or "",
+            ).lower()
+            if getattr(result, "returncode", 1) != 0 and "not in set" not in detail:
+                return False
             data = self._state_store().load()
             record_unban(data, address.compressed, now=self._clock())
             self._state_store().save(data)
@@ -175,15 +318,14 @@ class AntiDPIManagementMixin:
                 return {"ok": False, "error": "whitelisted"}
             expire_bans(data, now=timestamp)
             current = active_bans(data, now=timestamp).get(compressed)
-            if isinstance(current, dict) and current.get("permanent") is True:
+            if isinstance(current, dict) and _is_permanent(current):
                 return {
                     "ok": True,
                     "already_active": True,
                     "remaining": 0,
                     **current,
                 }
-            if not self._add_firewall_ban(address, duration=0):
-                return {"ok": False, "error": "firewall_error"}
+            previous = copy.deepcopy(data)
             metadata = record_manual_ban(
                 data,
                 compressed,
@@ -191,7 +333,15 @@ class AntiDPIManagementMixin:
                 timestamp=timestamp,
                 current=current if isinstance(current, dict) else None,
             )
+            # Durable intent first: a crash after this point is healed by
+            # startup reconciliation instead of leaving an untracked rule.
             self._state_store().save(data)
+            if not self._add_firewall_ban(address, duration=0):
+                data.clear()
+                data.update(previous)
+                record_ban_failure(data, compressed, now=timestamp)
+                self._state_store().save(data)
+                return {"ok": False, "error": "firewall_error"}
             return {"ok": True, "already_active": False, **metadata}
 
     def sync_host_whitelist(

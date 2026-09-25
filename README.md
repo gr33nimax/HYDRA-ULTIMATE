@@ -3,7 +3,7 @@
 # 🐉 HYDRA
 
 <img src="docs/assets/banner.png" width="760"
-     alt="HYDRA — Multi-Protocol Proxy &amp; Routing Orchestrator, powered by sing-box extended">
+     alt="HYDRA — Multi-Protocol Proxy &amp; Routing Orchestrator, powered by Hydracore">
 
 **Оркестратор многопротокольных прокси-серверов на базе Sing-Box**
 
@@ -46,10 +46,10 @@ Caddy L4 и nftables. Применение — транзакционное, с 
                                                 ├─▶ Sing-Box ─▶ интернет
   UDP/443 ──────────▶  один QUIC-транспорт     ─┤   маршруты     напрямую
   8443/udp ─────────▶  Hysteria2               ─┤   DNS          или через
-  51820/udp ────────▶  AmneziaWG ─▶ TPROXY     ─┤   исходящие    WARP
+  51820/udp ────────▶  AmneziaWG ─▶ ядро       ─┤   исходящие    WARP
   56000/udp ────────▶  qWDTT                   ─┘
 
-  поверх всего:  AntiDPI · Honeypot · Fail2ban · IPBan
+  поверх всего:  AntiScan · Honeypot · Fail2ban · IPBan
                  учёт трафика · подписки · Telegram-бот
 ```
 
@@ -89,8 +89,9 @@ Caddy L4 и nftables. Применение — транзакционное, с 
   собственном resource, а включённый VK Calls публикует готовый joiner-профиль.
 - 🤖 **Управление откуда угодно.** TUI для настройки, `--json` CLI для cron и
   автоматизации, Telegram-бот для повседневного администрирования.
-- 🛡 **Защитный контур из коробки.** AntiDPI, Honeypot, Fail2ban и IPBan с
-  корреляцией событий и защитой от ложных банов.
+- 🛡 **Защитный контур из коробки.** AntiScan, Honeypot, Fail2ban и IPBan.
+  AntiScan банит только доказанные отказы протоколов и сканы сайтов-заглушек,
+  поэтому не заваливает оператора шумом и не банит по догадке.
 - 🧠 **Умеренные ресурсы по умолчанию.** Установка ограничивает рост journald,
   уменьшает запас heap Sing-Box без жёсткого memory cap и не требует отдельного
   профиля для небольшой VPS.
@@ -107,72 +108,66 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 
 | Транспорт | Порт по умолчанию | Тип |
 | :--- | :--- | :--- |
-| **AmneziaWG 2.0** | `51820/udp`, `51821/udp` | WireGuard с обфускацией |
+| **AmneziaWG 2.0 / 3.0 / 3.1** | `51820/udp`, `51821/udp` | WireGuard: туннель обслуживает ядро |
 | **AnyTLS** | `443/tcp` | обфусцированный TLS |
 | **TrustTunnel** | `443/tcp`, `443/udp` | TLS, режимы TCP и QUIC |
 | **ShadowTLS** | `443/tcp` | ShadowTLS v3 + Trojan detour |
-| **NaiveProxy** | `443/tcp`, `443/udp` | HTTP/2 forward-proxy |
+| **NaiveProxy** | `443/tcp`, `443/udp` | HTTP/2 forward-proxy, UoT по настройке |
 | **Hysteria2** | `8443/udp` | QUIC + Salamander |
-| **VLESS + XHTTP** | `443/tcp` | XHTTP через Sing-Box Extended и Caddy L4 |
+| **VLESS + XHTTP** | `443/tcp` | XHTTP через Hydracore и Caddy L4 |
 | **Mieru** | `2012–2022/tcp` | обфусцированный mTLS |
-| **Snell v4** | `32000–32999/tcp` | TCP/UDP-прокси |
-| **MTProto / Telemt** | `8443/tcp` | Telegram MTProxy |
-| **Calls · VK** | `56002/udp` | Native Hydracore `call` в режиме multi-user |
+| **Snell 5 / 6** | `32000–32999/tcp` | TCP/UDP-прокси Hydracore |
+| **MTProto Zig** | `443/tcp` | FakeTLS MTProxy (Caddy L4 по SNI) |
+| **Calls · VK** | `56002/udp` | Native Hydracore `call` в режиме VK-parasite |
 | **qWDTT** | `56000/udp`, `56001/udp` | WireGuard поверх TURN |
 
-Транспорт **Calls · VK** поддерживает только Hydracore `multi_user`. Сервер
+Транспорт **Calls · VK** поддерживает только Hydracore `vk_parasite`. Сервер
 слушает обычный UDP endpoint, а отдельный
-аутентифицированный поток каждого пользователя распределяется по пулу из 1–4
+аутентифицированный поток каждого пользователя распределяется по фиксированному пулу из 4
 VK-комнат (4 по умолчанию). Общий obfs key снимает O(N)-перебор паролей с
 каждого пакета; после O(1) unwrap проверяется только найденный пользователь.
-Один worker создаётся на комнату по умолчанию; явное значение ограничено
-минимумом из server session cap, 27 workers на каждую уникальную join-link и
-общего потолка 108. Перед включением HYDRA требует выбранный Hydracore и точный
-контракт `sing-box hydra capabilities --json` с `call_vk_multi_user=true` и
-режимом `multi_user`. Stock core и legacy `p2p` отклоняются до запуска creator.
+Каждая сессия создаёт ровно четыре VK/TURN worker и четыре независимые KCP
+линии. Перед включением HYDRA требует выбранный Hydracore и точный
+контракт `sing-box hydra contract --json`: `core_id`, роль `vps` и режим
+`vk_parasite`. Stock core и legacy `p2p` отклоняются до запуска creator.
 Calls поднимает отдельный
 blue/green creator-пул `hydra-headless-creator-vk-calls@{a,b}-N`, фиксирует
 его до apply и при любой ошибке восстанавливает прежние комнаты, state и
 runtime. Per-user outbound входит только в зашифрованную Hydra Subscription v2;
 его Sing-Box outbound содержит `join_links`, но никогда legacy-поле `join_link`.
 Admin DTO сохраняет singular alias первого элемента только для API-совместимости.
-При обновлении schema 10 → 11 legacy Calls безопасно остаётся установленным,
-но выключается и нормализуется в `multi_user`, чтобы общий apply продолжил
-обслуживать остальные протоколы. После switch на Hydracore переустановка Calls
-создаёт новый managed-пул.
+Calls больше не привязан к версии persisted state или номеру wire. State хранит
+только актуальный desired config `vk_parasite`; совместимость бинарника
+проверяется по contract перед изменением runtime. Старые state schema 0–18
+однократно импортируются напрямую в стабильный State Format v1.
 
-Ядро выбирается явно и транзакционно:
+HYDRA использует только Hydracore VPS. Канал ядра — явный switch: `stable` по
+умолчанию, `debug` включается осознанно. Обновление проверяет
+digest, ELF, identity/contract, активный config и health-check; при ошибке
+до замены сохраняются предыдущий бинарник и backup. Отдельного выбора
+Другого kernel provider больше нет.
 
 ```bash
 hydra kernel status
-sudo hydra kernel switch hydracore
-sudo hydra kernel switch sing-box-extended
+sudo hydra kernel switch hydracore --channel debug --force
 ```
 
-Перед возвратом на stock core отключите или удалите активный Calls
-`multi_user`; несовместимый active config будет отклонён до замены бинарника.
+Канал `debug` выбирает самый свежий опубликованный prerelease Hydracore:
+`hydracore-sbe-<sbe-version>-debug-<n>` либо релиз-кандидат
+`hydracore-sbe-<sbe-version>-rc-<n>`. Retired-тег `-debug.<n>` не выбирается ни
+одним каналом, а persisted-значение `preview` резолвится как `debug`. Бинарник
+требует нативную телеметрию VK Calls и проходит те же
+проверки digest, ELF, identity/contract, активного конфига и health-check.
 
-HYDRA доверяет только release assets фиксированных репозиториев, требует
-GitHub `asset.digest`, проверяет ELF, identity/capabilities и активный config,
-затем делает bounded health-check. Ошибка запуска или записи state возвращает
-старый бинарник и ранее работавшую службу. Legacy installer/update не
-перезаписывает Hydracore, пока он выбран в state.
-
-Независимый пункт главного TUI `Headless Creator` владеет установкой creator,
-провайдерами и их общими credentials; позже сюда можно добавить WB Stream без
-привязки к протоколам. Единственный VK cookie-файл —
-`/etc/hydra/cookiesvk/cookies-vk.json`. Native Calls и qWDTT используют его
-совместно; размер qWDTT-пула настраивается от 1 до 16 комнат (по умолчанию 4).
-Общий контракт `CreatorSessionManager` выдаёт Calls отдельную managed-группу
-до 4 сессий, а
-qWDTT — свою managed-группу из N сессий. Ротация использует два поколения creator,
-поэтому прежняя master-ссылка остаётся рабочей до публикации новой. WDTT отвечает
-только за сервер, пароли и формирование `qwdtt://` из упорядоченного списка
-хэшей. Старую
-установку creator HYDRA не мигрирует автоматически: после обновления нужен
-явный пункт `Создать комнаты` в qWDTT-подменю `Headless Creator`. Основной экран
-Creator содержит только установку, переход к qWDTT и удаление; qWDTT-подменю —
-создание/остановку комнат, размер пула, автообновление и его интервал.
+Creator принадлежит только `Calls · VK` (Hydra VK Tunnel). В меню Calls можно
+до установки транспорта указать путь к локальному JSON с VK cookies; файл
+нормализуется, проверяется и атомарно заменяет
+`/etc/hydra/cookiesvk/cookies-vk.json` с правами `0600`. После установки Calls
+владеет своим blue/green-пулом ровно из 4 VK-комнат. Из меню Hydra VK Tunnel
+пул можно пересоздать без переустановки или включить автопересоздание с
+интервалом от 1 до 24 часов через Sync Agent. qWDTT не создаёт и не обновляет
+creator-пул, не использует cookies и продолжает владеть только своим сервером
+и `qwdtt://` master-артефактом.
 
 > [!WARNING]
 > VK join-links и полный клиентский профиль — shared secret. HYDRA редактирует
@@ -180,8 +175,9 @@ Creator содержит только установку, переход к qWDT
 > journald; доступ к сырому `journalctl -u sing-box` должен быть ограничен.
 
 **Сеть:** DNSCrypt (шифрованный резолвер) · WARP (выборочная маршрутизация через
-Cloudflare).
-**Защита:** AntiDPI · Fail2ban · Honeypot · IPBan.
+Cloudflare; в TUI можно найти и выбрать MASQUE-адрес с этой VPS через отдельно
+установленный warpscout, с откатом при неудачном подключении).
+**Защита:** AntiScan · Fail2ban · Honeypot · IPBan.
 **Ядро:** учёт трафика, лимиты и сроки пользователей ведёт служба
 `hydra-traffic-daemon`.
 
@@ -190,19 +186,27 @@ Cloudflare).
 домена, поэтому две установки не отдают одинаковый сайт. Обновлённый встроенный
 шаблон публикуется атомарно при следующем apply, а вручную размещённый сайт не
 перезаписывается. Клиентские ссылки и профили выдаются через сервер подписок и
-TUI. Полная карта модулей, портов, служб и файлов —
+TUI. Для AmneziaWG 3.0/3.1 HYDRA публикует source-proven `wg://` для Throne
+`1.3.0-beta.3` и официальный Qt-compressed `vpn://` для Amnezia; оба переносят
+полный набор директив поколения. Sing-Box Extended/HydraBox получает
+3.0-проекцию и 3.1-проекцию, когда установлено ядро HydraCore
+`v1.14.0-extended-2.7.1-hydracore.12` или новее (на старом ядре 3.1
+отклоняется с причиной, называющей нужный релиз); NekoBox `sn://awg`
+остаётся отключённым fail-closed.
+Полная карта модулей, портов, служб и файлов —
 [REFERENCE.md](docs/REFERENCE.md).
 
 ## Установка
 
-Нужны Ubuntu 20.04+ или Debian 11+ с systemd, Python 3.10+, от 512 МБ RAM и 2 ГБ
-диска, внешний IPv4 и права `root`.
+Нужны Ubuntu 22.04+ или Debian 12+ с systemd, Python 3.10+, от 512 МБ RAM и 2 ГБ
+диска, внешний IPv4 и права `root`. Debian 11 и Ubuntu 20.04 не подходят: в них
+Python 3.9 и 3.8, а приложение требует 3.10+ (установщик скажет об этом сразу).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo env HYDRA_REF=dev bash
 ```
 
-Установщик готовит зависимости, Sing-Box Extended, изолированное
+Установщик готовит зависимости, Hydracore VPS debug, изолированное
 Python-окружение и команду `hydra`. Caddy L4 и конкретные протоколы включаются
 позже — только те, что вам нужны.
 
@@ -231,8 +235,9 @@ curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/update
 
 Updater фиксирует точный commit ветки, собирает новую версию и `.venv` отдельно
 от рабочей, выполняет read-only preflight, останавливает только службы HYDRA,
-сохраняет проверенный backup и исходный state, мигрирует схему, переключает
-release и проверяет запуск. При любой ошибке state, код, wrapper и ранее активные
+сохраняет проверенный backup и исходный state, при необходимости импортирует
+legacy state в стабильный формат, переключает release и проверяет запуск. При
+любой ошибке state, код, wrapper и ранее активные
 службы восстанавливаются автоматически. Ход операции выводится нумерованными
 этапами с понятными русскими ошибками; итоговая сводка показывает переход,
 снимок отката и путь к подробному логу.
@@ -287,7 +292,7 @@ python verify.py     # compile + lint + полный pytest
 
 ## Поддержать проект
 
-[Поддержать разработку HYDRA на Boosty](https://boosty.to/gr33nimax/donate).
+[Поддержать разработку HYDRA](https://web.tribute.tg/d/QHN).
 
 ## Связанный проект
 

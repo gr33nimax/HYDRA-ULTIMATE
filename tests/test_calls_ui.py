@@ -80,6 +80,34 @@ def test_calls_profile_is_only_rendered_after_explicit_confirmation() -> None:
     output.assert_not_called()
 
 
+def test_calls_cookie_import_dispatch_is_available_before_installation() -> None:
+    state = AppState()
+    app = SimpleNamespace(calls=SimpleNamespace())
+
+    with patch.object(calls, "_import_cookies") as imported:
+        assert calls._dispatch("2", state, app) is True
+
+    imported.assert_called_once_with(state, app)
+
+
+def test_calls_cookie_import_passes_local_path_without_rendering_contents() -> None:
+    state = AppState()
+    operations = SimpleNamespace(import_vk_cookies=Mock(return_value=ServiceResult(True)))
+    app = SimpleNamespace(calls=operations)
+
+    with (
+        patch.object(calls, "prompt", return_value="~/vk-cookies.json"),
+        patch.object(calls, "_show_result") as show,
+    ):
+        calls._import_cookies(state, app)
+
+    operations.import_vk_cookies.assert_called_once_with(
+        state,
+        "~/vk-cookies.json",
+    )
+    show.assert_called_once()
+
+
 def test_calls_status_uses_minimal_protocol_panel(monkeypatch) -> None:
     state = AppState(
         protocols={"calls": PluginState(installed=True, enabled=True)},
@@ -87,6 +115,9 @@ def test_calls_status_uses_minimal_protocol_panel(monkeypatch) -> None:
     app = SimpleNamespace(calls=SimpleNamespace(status=lambda _state: SimpleNamespace(
         native_running=True,
         native_pool_ready=True,
+        creator_installed=True,
+        cookies_ready=True,
+        room_count=4,
     )))
     captured = {}
     monkeypatch.setattr(
@@ -104,27 +135,35 @@ def test_calls_status_uses_minimal_protocol_panel(monkeypatch) -> None:
         "running": True,
         "details": [
             ("Платформа", "VK"),
-            ("Режим", "multi_user"),
+            ("Режим", "vk_parasite"),
             ("Пул", "готов"),
-            ("Комнат в пуле", "0"),
+            ("VK-звонков", "4"),
+            ("Автопересоздание", "выключено"),
+            ("Интервал пула", "24 ч"),
+            ("Creator", "установлен"),
+            ("VK cookies", "готовы"),
         ],
     }
 
 
-def test_calls_menu_contains_only_install_or_reinstall_profile_uninstall() -> None:
+def test_calls_menu_contains_cookie_import_before_calls_installation() -> None:
     assert [option[1] for option in calls._menu_options(installed=False)] == [
         "🔧 Установить",
+        "📥 Импортировать VK cookies",
         "↩ Назад",
     ]
     assert [option[1] for option in calls._menu_options(installed=True)] == [
         "🔄 Переустановить",
+        "📥 Импортировать VK cookies",
         "📄 Показать admin-профиль",
-        "🔢 Число VK-комнат",
+        "🔢 Число workers",
+        "♻️ Пересоздать VK-пул",
+        "🔄 Переключить автопересоздание",
+        "⏱ Интервал автопересоздания",
         "❌ Удалить",
         "↩ Назад",
     ]
     source = Path(calls.__file__).read_text(encoding="utf-8")
-    assert "VK cookies" not in source
     assert "Включить" not in source
     assert "Выключить" not in source
 
@@ -146,6 +185,30 @@ def test_calls_tui_has_no_host_or_plugin_runtime_dependencies() -> None:
     assert not any(module.startswith("hydra.plugins") for module in imported)
     assert "HOST" not in names
     assert "subprocess" not in names
+
+
+def test_calls_pool_actions_use_calls_application_service() -> None:
+    state = AppState(
+        protocols={"calls": PluginState(installed=True, enabled=True)},
+    )
+    operations = SimpleNamespace(
+        rotate_native_vk=Mock(return_value=ServiceResult(True)),
+    )
+    app = SimpleNamespace(calls=operations)
+
+    with (
+        patch.object(calls, "confirm", return_value=True),
+        patch.object(calls, "_show_result"),
+        patch.object(calls, "_toggle_pool_auto") as toggle,
+        patch.object(calls, "_set_pool_interval") as interval,
+    ):
+        calls._dispatch("5", state, app)
+        calls._dispatch("6", state, app)
+        calls._dispatch("7", state, app)
+
+    operations.rotate_native_vk.assert_called_once_with(state)
+    toggle.assert_called_once_with(state, app)
+    interval.assert_called_once_with(state, app)
 
 
 def test_creator_install_dispatch_uses_independent_application_port() -> None:

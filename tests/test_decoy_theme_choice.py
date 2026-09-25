@@ -10,6 +10,7 @@ from hydra.core.state import AppState, PluginState
 from hydra.plugins.anytls.plugin import AnyTLSPlugin
 from hydra.plugins.decoy_support import supports_decoy_theme
 from hydra.plugins.hysteria2.plugin import Hysteria2Plugin
+from hydra.plugins.mtproto_zig.plugin import MtprotoZigPlugin
 from hydra.plugins.naive.plugin import NaivePlugin
 from hydra.plugins.snell.plugin import SnellPlugin
 from hydra.plugins.trusttunnel.plugin import TrustTunnelPlugin
@@ -22,6 +23,7 @@ DECOY_PLUGINS = (
     (AnyTLSPlugin, "blog"),
     (TrustTunnelPlugin, "docs"),
     (Hysteria2Plugin, "status"),
+    (MtprotoZigPlugin, "landing"),
     (VlessXhttpPlugin, "media"),
 )
 

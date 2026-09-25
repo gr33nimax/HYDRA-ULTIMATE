@@ -1,4 +1,5 @@
 """Compatibility facade and composition root for Hydra's Caddy L4 SNI router."""
+
 from __future__ import annotations
 
 import urllib.request
@@ -24,17 +25,14 @@ CADDY_CFG_DIR = Path("/etc/caddy-l4")
 CADDY_LOG_DIR = Path("/var/log/caddy-l4")
 DECOY_LOG = CADDY_LOG_DIR / "decoy-access.log"
 TRUSTTUNNEL_LOG = CADDY_LOG_DIR / "trusttunnel-access.log"
+VLESS_CDN_DECOY_LOG = CADDY_LOG_DIR / "vless-cdn-decoy-access.log"
 SERVICE_NAME = "caddy-l4"
 SERVICE_FILE = Path("/etc/systemd/system/caddy-l4.service")
 CADDY_ADMIN_ADDRESS = "127.0.0.1:2021"
 SOURCE_SERVICE_NAME = "hydra-caddy-source"
-SOURCE_SERVICE_FILE = Path(
-    f"/etc/systemd/system/{SOURCE_SERVICE_NAME}.service"
-)
+SOURCE_SERVICE_FILE = Path(f"/etc/systemd/system/{SOURCE_SERVICE_NAME}.service")
 RELAY_SERVICE_NAME = "hydra-source-relay"
-RELAY_SERVICE_FILE = Path(
-    f"/etc/systemd/system/{RELAY_SERVICE_NAME}.service"
-)
+RELAY_SERVICE_FILE = Path(f"/etc/systemd/system/{RELAY_SERVICE_NAME}.service")
 FRONTEND_PORT = 443
 CADDY_L4_VERSION = "42db5690dea199f930a6f08005fe2e4aab10dcc9"
 GO_VERSION = "1.25.1"
@@ -64,9 +62,7 @@ _UDP_SOURCE_RELAY_PORTS = {
     "naive": 21443,
     "trusttunnel": 21445,
 }
-_SOURCE_PRESERVED_BACKENDS = frozenset(
-    {"naive", "anytls", "trusttunnel", "shadowtls"}
-)
+_SOURCE_PRESERVED_BACKENDS = frozenset({"naive", "anytls", "trusttunnel", "shadowtls"})
 # Non-local loopback source binding is disabled on supported production kernels.
 # Runtime rollback remains in place to clean up hosts that used the experiment.
 SOURCE_PRESERVATION_ENABLED = False
@@ -126,6 +122,7 @@ def _render_settings() -> _rendering.RenderSettings:
         source_preservation_enabled=SOURCE_PRESERVATION_ENABLED,
         decoy_log=str(DECOY_LOG),
         trusttunnel_log=str(TRUSTTUNNEL_LOG),
+        vless_cdn_decoy_log=str(VLESS_CDN_DECOY_LOG),
         admin_address=CADDY_ADMIN_ADDRESS,
     )
 
@@ -408,6 +405,24 @@ def rebuild(state: AppState) -> bool:
     )
 
 
+def snapshot_runtime():
+    """Capture the Caddy runtime before an outer apply transaction mutates it."""
+    return _runtime.snapshot_runtime(
+        _runtime_settings(),
+        _runtime_operations(),
+    )
+
+
+def restore_runtime(backup) -> None:
+    """Restore a runtime captured by :func:`snapshot_runtime`."""
+    _runtime.restore_runtime(
+        backup,
+        _runtime_settings(),
+        HOST,
+        _runtime_operations(),
+    )
+
+
 def stop() -> None:
     _runtime.stop(
         _runtime_settings(),
@@ -443,6 +458,8 @@ __all__ = [
     "needs_mux",
     "probe_tls_route",
     "rebuild",
+    "restore_runtime",
+    "snapshot_runtime",
     "stop",
     "uninstall_haproxy",
 ]

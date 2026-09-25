@@ -1,4 +1,5 @@
 """Pure Sing-Box configuration assembly and conflict validation."""
+
 from __future__ import annotations
 
 import copy
@@ -23,6 +24,10 @@ _LEGACY_DEFAULT_DNS_SERVERS = [
     },
 ]
 
+# Стратегия резолва обязательна и одна на всех: без неё ядро резолвит и AAAA, а на машине
+# без IPv6 каждое такое соединение висит десятки секунд, прежде чем упасть на IPv4.
+DEFAULT_DNS_STRATEGY = "ipv4_only"
+
 _MODERN_DEFAULT_DNS = {
     "servers": [
         {
@@ -38,7 +43,7 @@ _MODERN_DEFAULT_DNS = {
         },
     ],
     "rules": [],
-    "strategy": "ipv4_only",
+    "strategy": DEFAULT_DNS_STRATEGY,
 }
 
 
@@ -85,21 +90,45 @@ def base_config(state: AppState) -> dict:
             ),
         )
 
+    experimental: dict = {}
     if state.network.clash_api_enabled:
-        config["experimental"] = {
-            "clash_api": {
-                "external_controller": (
-                    f"127.0.0.1:{state.network.clash_api_port}"
-                ),
-                "secret": state.network.clash_api_secret,
-            },
+        experimental["clash_api"] = {
+            "external_controller": (f"127.0.0.1:{state.network.clash_api_port}"),
+            "secret": state.network.clash_api_secret,
         }
+    warp = state.protocols.get("warp")
+    if warp is not None and warp.enabled:
+        # The masque outbound registers its own Cloudflare device on first
+        # start; without the cache every sing-box restart would create another.
+        experimental["cache_file"] = {
+            "enabled": True,
+            "store_masque_config": True,
+        }
+    if experimental:
+        config["experimental"] = experimental
     return config
 
 
 def default_dns_config() -> dict:
     """Return the dependency-free default DNS policy."""
     return copy.deepcopy(_MODERN_DEFAULT_DNS)
+
+
+def dns_policy(plugin_dns: dict | None) -> dict:
+    """DNS-политика для ядра: чужие серверы плюс наша стратегия резолва.
+
+    Плагин (например dnscrypt) отдаёт свои серверы, но стратегию не задаёт. Раньше его
+    фрагмент подменял дефолт целиком — вместе со `strategy`, — и ядро начинало резолвить
+    AAAA. На машине без IPv6 это не мелочь: соединение висит на v6-адресе десятки секунд,
+    прежде чем упасть на IPv4, — в журнале `connect: network is unreachable` и соединения
+    по 30–80 секунд. Поэтому стратегия навязывается в любом случае, а серверы остаются
+    плагинные.
+    """
+    if not plugin_dns:
+        return default_dns_config()
+    merged = copy.deepcopy(plugin_dns)
+    merged.setdefault("strategy", DEFAULT_DNS_STRATEGY)
+    return merged
 
 
 def migrate_legacy_default_dns(config: dict) -> tuple[dict, bool]:
@@ -134,15 +163,12 @@ def generate_config(
     if not config["endpoints"]:
         config.pop("endpoints")
 
-    dns_config = next(
-        (
-            fragment.dns
-            for fragment in fragments.values()
-            if fragment.dns
-        ),
-        None,
+    config["dns"] = dns_policy(
+        next(
+            (fragment.dns for fragment in fragments.values() if fragment.dns),
+            None,
+        )
     )
-    config["dns"] = dns_config or default_dns_config()
 
     if not config["inbounds"]:
         config["inbounds"].append(
@@ -153,10 +179,7 @@ def generate_config(
                 "listen_port": 2080,
             },
         )
-    if not any(
-        outbound.get("tag") == "direct"
-        for outbound in config["outbounds"]
-    ):
+    if not any(outbound.get("tag") == "direct" for outbound in config["outbounds"]):
         config["outbounds"].append({"type": "direct", "tag": "direct"})
     return config
 
@@ -183,10 +206,7 @@ def _listeners_overlap(first: object, second: object) -> bool:
         return second_scope in {"ipv4-any", "ipv4"}
     if second_scope == "ipv4-any":
         return first_scope in {"ipv4-any", "ipv4"}
-    return (
-        first_scope == second_scope
-        and first_value == second_value
-    )
+    return first_scope == second_scope and first_value == second_value
 
 
 def preflight_conflicts(config: dict) -> list[str]:
@@ -227,13 +247,9 @@ def preflight_conflicts(config: dict) -> list[str]:
 
             listen = str(item.get("listen", "0.0.0.0"))
             for previous_listen, previous_port, previous_owner in listeners:
-                if (
-                    previous_port == port
-                    and _listeners_overlap(previous_listen, listen)
-                ):
+                if previous_port == port and _listeners_overlap(previous_listen, listen):
                     errors.append(
-                        f"порт {port} на {listen} пересекается с "
-                        f"{previous_listen} ({previous_owner} и {port_owner})",
+                        f"порт {port} на {listen} пересекается с {previous_listen} ({previous_owner} и {port_owner})",
                     )
             listeners.append((listen, port, port_owner))
 
@@ -241,19 +257,14 @@ def preflight_conflicts(config: dict) -> list[str]:
             if not isinstance(tls, dict):
                 continue
             server_name = tls.get("server_name")
-            names = (
-                server_name
-                if isinstance(server_name, list)
-                else [server_name]
-            )
+            names = server_name if isinstance(server_name, list) else [server_name]
             for name in names:
                 normalized = str(name or "").strip().lower()
                 if not normalized:
                     continue
                 if normalized in snis and snis[normalized] != port_owner:
                     errors.append(
-                        f"SNI '{normalized}' назначен нескольким inbound "
-                        f"({snis[normalized]} и {port_owner})",
+                        f"SNI '{normalized}' назначен нескольким inbound ({snis[normalized]} и {port_owner})",
                     )
                 else:
                     snis[normalized] = port_owner

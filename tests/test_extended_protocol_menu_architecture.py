@@ -15,11 +15,7 @@ MENU_ROOT = ROOT / "hydra" / "ui" / "_menus"
 
 def _functions(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    return {
-        node.name
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
+    return {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
 
 
 def test_extended_protocol_facade_is_thin_and_protocol_logic_is_partitioned():
@@ -34,6 +30,7 @@ def test_extended_protocol_facade_is_thin_and_protocol_logic_is_partitioned():
             "_menu_amneziawg",
             "_tune_awg_hardware",
         },
+        "extended_protocol_awg_version.py": {"_awg_switch_version"},
         "extended_protocol_awg_profiles.py": {
             "_awg_generate_wizard_menu",
             "_manage_awg_profiles",
@@ -78,14 +75,10 @@ def test_protocol_controllers_do_not_depend_on_unrelated_protocol_menus():
         for node in ast.walk(tree):
             if not isinstance(node, ast.ImportFrom) or not node.module:
                 continue
-            if (
-                node.module.startswith("hydra.ui._menus.extended_protocol_")
-                and node.module
-                not in {
-                    "hydra.ui._menus.extended_protocol_common",
-                    f"hydra.ui._menus.{own_module}",
-                }
-            ):
+            if node.module.startswith("hydra.ui._menus.extended_protocol_") and node.module not in {
+                "hydra.ui._menus.extended_protocol_common",
+                f"hydra.ui._menus.{own_module}",
+            }:
                 violations.append(f"{filename}:{node.lineno} {node.module}")
 
     assert violations == []
@@ -122,6 +115,8 @@ def test_legacy_facade_propagates_menu_and_nested_helper_monkeypatches(
         nested,
     )
 
-    menus._menu_anytls(state, plugin, app)
+    # The legacy facade binds these forwarders at import time, so the test asks for the attribute
+    # the same way the facade creates it instead of asserting a static one exists.
+    getattr(menus, "_menu_anytls")(state, plugin, app)
 
     nested.assert_called_once_with(state, plugin, app)

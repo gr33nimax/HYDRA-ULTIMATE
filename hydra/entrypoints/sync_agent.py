@@ -25,6 +25,7 @@ def main() -> int:
                 renew_subscription_certificate=(
                     subscription_certificate_renewal(application.admin)
                 ),
+                maintenance=application.maintenance,
             ),
         )
     except Exception as exc:

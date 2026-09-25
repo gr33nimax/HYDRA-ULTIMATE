@@ -1,9 +1,11 @@
 """Production composition root for all executable adapters."""
+
 from __future__ import annotations
 
 import os
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any, cast
 
 from hydra.core import nft, singbox
 from hydra.core.doctor import run_host_preflight
@@ -25,20 +27,18 @@ from hydra.services.backups import BackupService, compose_backup_policy
 from hydra.services.certificate_audit import CertificateInspector
 from hydra.services.certificates import CertificateProvisioner
 from hydra.services.calls import CallsService
+from hydra.services.calls_health import CallsProbeStore
 from hydra.services.calls_infrastructure import (
     CALLS_CREATOR_UNIT,
     CALLS_POOL_DIR,
     CALLS_POOL_STATE,
+    CALLS_PROBE_STATE,
     CallsInfrastructure,
 )
 from hydra.services.creator_sessions import CreatorSessionManager
+from hydra.services.vk_turn_probe import VkTurnProbe
 from hydra.services.creator_lock_infrastructure import CreatorFileLock
-from hydra.services.headless_creator import (
-    HEADLESS_CREATOR_BACKUP_RESOURCES,
-    HeadlessCreatorService,
-)
 from hydra.services.headless_creator_infrastructure import HeadlessCreatorInfrastructure
-from hydra.services.qwdtt_creator import QwdttCreatorService
 from hydra.services.configuration_plan import ConfigurationPlanner
 from hydra.services.diagnostic_infrastructure import HOST_DIAGNOSTICS
 from hydra.services.log_infrastructure import HostLogOperations
@@ -51,6 +51,7 @@ from hydra.services.plugin_commands import PluginCommandService
 from hydra.services.plugin_queries import PluginQueryService
 from hydra.services.protocol_setup import ProtocolSetupService
 from hydra.services.protocols import ProtocolService
+from hydra.services.vless_cdn_install import VlessCdnLifecycleOperations
 from hydra.services.security_intel import notification_fields
 from hydra.services.security_notifications import notify_security_event
 from hydra.services.sync_agent import run_sync
@@ -65,30 +66,13 @@ from hydra.services.uninstall import CleanupStep, UninstallService
 from hydra.services.users import UserService
 
 
-def _disable_telemt_ios_fix() -> None:
-    from hydra.plugins.telemt.telemt_ios_fix import disable_ios_fix
-
-    disable_ios_fix()
-
-
-def _disable_telemt_syn_limiter() -> None:
-    from hydra.plugins.telemt.telemt_syn_limiter import disable_syn_limiter
-
-    disable_syn_limiter()
-
-
 def _require_cleanup_result(operation) -> None:
     ok, message = operation()
     if not ok:
         raise RuntimeError(message)
 
 
-def _creator_runtimes() -> tuple[
-    HeadlessCreatorInfrastructure,
-    HeadlessCreatorInfrastructure,
-    CallsInfrastructure,
-]:
-    provider = HeadlessCreatorInfrastructure(HOST)
+def _creator_runtimes() -> tuple[HeadlessCreatorInfrastructure, CallsInfrastructure]:
     calls_provider = HeadlessCreatorInfrastructure(
         HOST,
         pool_dir=CALLS_POOL_DIR,
@@ -101,36 +85,16 @@ def _creator_runtimes() -> tuple[
         HOST,
         pool_source=calls_provider,
     )
-    return provider, calls_provider, runtime
+    return calls_provider, runtime
 
 
 def _creator_services(
-    creator_runtime,
     calls_creator_runtime,
     calls_runtime,
     protocols,
-    plugin_actions,
     orchestration,
 ):
-    creator_sessions = CreatorSessionManager({"vk": creator_runtime})
     calls_creator_sessions = CreatorSessionManager({"vk": calls_creator_runtime})
-    qwdtt_creator = QwdttCreatorService(
-        sessions=creator_sessions,
-        runtime=creator_runtime,
-        plugin_actions=plugin_actions,
-        save_state=save_state,
-        operation_lock=CreatorFileLock(
-            HOST,
-            Path(os.environ.get(
-                "HYDRA_CREATOR_LOCK_FILE",
-                "/run/lock/hydra-creator.lock",
-            )),
-        ),
-    )
-    headless_creator = HeadlessCreatorService(
-        providers={"vk": creator_runtime},
-        qwdtt=qwdtt_creator,
-    )
     calls = CallsService(
         runtime=calls_runtime,
         creator=calls_creator_sessions,
@@ -139,14 +103,18 @@ def _creator_services(
         apply_config=orchestration.apply_config,
         operation_lock=CreatorFileLock(
             HOST,
-            Path(os.environ.get(
-                "HYDRA_CALLS_LOCK_FILE",
-                "/run/lock/hydra-calls.lock",
-            )),
+            Path(
+                os.environ.get(
+                    "HYDRA_CALLS_LOCK_FILE",
+                    "/run/lock/hydra-calls.lock",
+                )
+            ),
         ),
         last_apply_error=orchestration.last_apply_error,
+        probe_store=CallsProbeStore(HOST, CALLS_PROBE_STATE),
+        turn_probe=VkTurnProbe(),
     )
-    return qwdtt_creator, headless_creator, calls
+    return calls
 
 
 def production_application(
@@ -154,7 +122,7 @@ def production_application(
     extra_plugin_factories: Iterable[PluginFactory] = (),
 ) -> ApplicationService:
     """Build a fresh, instance-scoped production application."""
-    creator_runtime, calls_creator_runtime, calls_runtime = _creator_runtimes()
+    calls_creator_runtime, calls_runtime = _creator_runtimes()
     plugins = PluginContainer(
         default_plugins(
             notifier=notify_security_event,
@@ -165,7 +133,7 @@ def production_application(
         host=HOST,
         log_error=lambda message: singbox.log("ERROR", message),
     )
-    certificates = CertificateProvisioner(HOST)
+    certificates = CertificateProvisioner(cast(Any, HOST))
     orchestration = OrchestrationService(
         plugins=plugins,
         singbox=singbox,
@@ -189,29 +157,30 @@ def production_application(
         orchestration,
         plugins,
         state_reader=load_state,
+        lifecycle_overrides={
+            "vless_cdn": VlessCdnLifecycleOperations(orchestration),
+        },
     )
     traffic = TrafficService(protocols)
     plugin_actions = PluginActionService(get_plugin=plugins.get)
     plugin_queries = PluginQueryService(get_plugin=plugins.get)
-    qwdtt_creator, headless_creator, calls = _creator_services(
-        creator_runtime,
+    calls = _creator_services(
         calls_creator_runtime,
         calls_runtime,
         protocols,
-        plugin_actions,
         orchestration,
     )
     maintenance = MaintenanceService(
         protocols=protocols,
         plugin_actions=plugin_actions,
         plugin_queries=plugin_queries,
-        headless_creator=qwdtt_creator,
+        calls=calls,
     )
     kernel = KernelService(
         KernelInfrastructure(HOST),
         save_state=save_state,
     )
-    certificate_audit = CertificateInspector(HOST)
+    certificate_audit = CertificateInspector(cast(Any, HOST))
     admin = AdminInfrastructure(
         sync_operations=default_sync_operations(
             protocols=protocols,
@@ -222,9 +191,7 @@ def production_application(
             inspect_certificates=certificate_audit.inspect,
             # Resolved on call: the renewal needs the admin adapter being
             # assembled by this very statement.
-            renew_subscription_certificate=lambda domain: (
-                subscription_certificate_renewal(admin)(domain)
-            ),
+            renew_subscription_certificate=lambda domain: subscription_certificate_renewal(admin)(domain),
             maintenance=maintenance,
         ),
         sync_runner=run_sync,
@@ -241,7 +208,7 @@ def production_application(
         admin=admin,
         backups=BackupService(
             compose_backup_policy(
-                (*plugins.backup_resources(), *HEADLESS_CREATOR_BACKUP_RESOURCES),
+                plugins.backup_resources(),
             ),
         ),
         logs=HostLogOperations(
@@ -267,13 +234,15 @@ def production_application(
                 certificates,
                 plugins.get,
             ).prepare_enable,
+            last_apply_error=orchestration.last_apply_error,
+            set_apply_error=orchestration._set_apply_error,
         ),
         plugin_queries=plugin_queries,
         plugin_actions=plugin_actions,
         traffic=traffic,
         planner=ConfigurationPlanner(
             collect_fragments=plugins.collect_fragments,
-            generate_config=singbox.generate_config,
+            generate_config=cast(Any, singbox.generate_config),
             preflight_conflicts=singbox.preflight_conflicts,
             requirements=plugins.requirements,
             reconciliation_plan=protocols.reconciliation().plan,
@@ -288,13 +257,10 @@ def production_application(
                         calls_creator_runtime.uninstall_creator_pool,
                     ),
                 ),
-                CleanupStep("telemt-ios", _disable_telemt_ios_fix),
-                CleanupStep("telemt-syn", _disable_telemt_syn_limiter),
             ),
         ),
         certificates=certificate_audit,
         calls=calls,
-        headless_creator=headless_creator,
         maintenance=maintenance,
         kernel=kernel,
     )

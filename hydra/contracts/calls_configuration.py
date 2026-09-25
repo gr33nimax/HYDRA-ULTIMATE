@@ -1,16 +1,19 @@
-"""Validated Hydracore multi-user VK Calls projections."""
+"""Validated Hydracore VK parasite Calls projections."""
 from __future__ import annotations
 
 import re
 from typing import Callable, Mapping, Protocol, Sequence
 
 
-CALL_MODE_MULTI_USER = "multi_user"
+CALL_MODE_VK_PARASITE = "vk_parasite"
 DEFAULT_CALL_PORT = 56002
-DEFAULT_ROOM_COUNT = 4
-MAX_JOIN_LINKS = 4
-MAX_WORKERS_PER_JOIN_LINK = 27
-MAX_WORKERS = 108
+CALL_COUNT = 4
+DEFAULT_WORKERS = 4
+WORKER_COUNTS = (4, 8, 12, 16, 20)
+DEFAULT_PEER_READ_QUEUE_PACKETS = 512
+DEFAULT_POOL_REFRESH_INTERVAL = 86_400
+MIN_POOL_REFRESH_INTERVAL = 3_600
+MAX_POOL_REFRESH_INTERVAL = 86_400
 
 
 class CallsProtocolState(Protocol):
@@ -60,13 +63,23 @@ def public_endpoint(
 def call_mode(state: CallsStateAccess) -> str:
     desired = state.protocols.get("calls")
     value = (
-        str(desired.config.get("mode", CALL_MODE_MULTI_USER))
+        str(desired.config.get("mode", CALL_MODE_VK_PARASITE))
         if desired
-        else CALL_MODE_MULTI_USER
+        else CALL_MODE_VK_PARASITE
     )
-    if value != CALL_MODE_MULTI_USER:
-        raise ValueError("Calls mode must be multi_user")
+    if value != CALL_MODE_VK_PARASITE:
+        raise ValueError("Calls mode must be vk_parasite")
     return value
+
+
+def peer_read_queue_packets(config: dict) -> int:
+    return _integer(
+        config,
+        "peer_read_queue_packets",
+        DEFAULT_PEER_READ_QUEUE_PACKETS,
+        16,
+        4096,
+    )
 
 
 def _integer(config: dict, name: str, default: int, minimum: int, maximum: int) -> int:
@@ -120,12 +133,12 @@ def _join_links(values: list[str]) -> list[str]:
     for value in values:
         link = str(value).strip()
         if not link or len(link) > 2048:
-            raise ValueError("Calls multi_user contains an invalid VK join link")
+            raise ValueError("Calls vk_parasite contains an invalid VK join link")
         if link in normalized:
-            raise ValueError("Calls multi_user requires unique VK join links")
+            raise ValueError("Calls vk_parasite requires unique VK join links")
         normalized.append(link)
-    if not 1 <= len(normalized) <= MAX_JOIN_LINKS:
-        raise ValueError("Calls multi_user requires 1..4 unique VK join links")
+    if len(normalized) != CALL_COUNT:
+        raise ValueError("Calls vk_parasite requires exactly 4 unique VK join links")
     return normalized
 
 
@@ -136,7 +149,24 @@ def _obfs_password(config: dict) -> str:
     return password
 
 
-def multi_user_inbound(
+def workers(config: dict) -> int:
+    value = _integer(config, "workers", DEFAULT_WORKERS, 4, 20)
+    if value not in WORKER_COUNTS:
+        raise ValueError("Calls workers must be one of 4, 8, 12, 16, 20")
+    return value
+
+
+def pool_refresh_interval(config: dict) -> int:
+    return _integer(
+        config,
+        "pool_refresh_interval_seconds",
+        DEFAULT_POOL_REFRESH_INTERVAL,
+        MIN_POOL_REFRESH_INTERVAL,
+        MAX_POOL_REFRESH_INTERVAL,
+    )
+
+
+def vk_parasite_inbound(
     state: CallsStateAccess,
     user_password: Callable[[CallsUser], str],
 ) -> dict:
@@ -153,24 +183,19 @@ def multi_user_inbound(
         if not user.blocked
     ]
     if not users:
-        raise ValueError("Calls multi_user requires at least one active user")
+        raise ValueError("Calls vk_parasite requires at least one active user")
+    configured_workers = workers(config)
     return {
         "type": "call",
         "tag": "calls-vk-in",
         "platform": "vk",
-        "mode": CALL_MODE_MULTI_USER,
+        "mode": CALL_MODE_VK_PARASITE,
         "listen": "0.0.0.0",
         "listen_port": _listen_port(state, config),
         "obfs_password": password,
         "users": users,
         "max_sessions": _integer(config, "max_sessions", 128, 1, 4096),
-        "max_workers_per_session": _integer(
-            config,
-            "max_workers_per_session",
-            4,
-            1,
-            MAX_WORKERS,
-        ),
+        "max_workers_per_session": configured_workers,
         "max_pending_handshakes": _integer(
             config,
             "max_pending_handshakes",
@@ -180,10 +205,33 @@ def multi_user_inbound(
         ),
         "handshake_timeout": _duration(config, "handshake_timeout", "10s"),
         "session_idle_timeout": _duration(config, "session_idle_timeout", "5m"),
+        "udp_receive_buffer_bytes": _integer(
+            config,
+            "udp_receive_buffer_bytes",
+            4 * 1024 * 1024,
+            256 * 1024,
+            64 * 1024 * 1024,
+        ),
+        "udp_send_buffer_bytes": _integer(
+            config,
+            "udp_send_buffer_bytes",
+            4 * 1024 * 1024,
+            256 * 1024,
+            64 * 1024 * 1024,
+        ),
+        "ingress_workers": _integer(config, "ingress_workers", 0, 0, 32),
+        "ingress_queue_packets": _integer(
+            config,
+            "ingress_queue_packets",
+            4096,
+            1,
+            65536,
+        ),
+        "peer_read_queue_packets": peer_read_queue_packets(config),
     }
 
 
-def multi_user_outbound(
+def vk_parasite_outbound(
     user: CallsUser,
     state: CallsStateAccess,
     join_links: list[str],
@@ -196,32 +244,19 @@ def multi_user_outbound(
     join_links = _join_links(join_links)
     server = str(server_address).strip().strip("[]")
     if not server:
-        raise ValueError("Calls multi_user server address is not configured")
-    max_workers = _integer(config, "max_workers_per_session", 4, 1, MAX_WORKERS)
-    worker_limit = min(
-        MAX_WORKERS,
-        max_workers,
-        MAX_WORKERS_PER_JOIN_LINK * len(join_links),
-    )
-    workers = _integer(
-        config,
-        "workers",
-        min(len(join_links), worker_limit),
-        1,
-        worker_limit,
-    )
+        raise ValueError("Calls vk_parasite server address is not configured")
     return {
         "type": "call",
         "tag": "call-vk-out",
         "platform": "vk",
-        "mode": CALL_MODE_MULTI_USER,
+        "mode": CALL_MODE_VK_PARASITE,
         "server": server,
         "server_port": _listen_port(state, config),
         "join_links": join_links,
         "user": user.email,
         "password": user_password(user),
         "obfs_password": _obfs_password(config),
-        "workers": workers,
+        "workers": workers(config),
         "worker_connect_timeout": _duration(
             config,
             "worker_connect_timeout",
@@ -231,14 +266,20 @@ def multi_user_outbound(
 
 
 __all__ = [
-    "CALL_MODE_MULTI_USER",
+    "CALL_MODE_VK_PARASITE",
+    "CALL_COUNT",
     "DEFAULT_CALL_PORT",
-    "DEFAULT_ROOM_COUNT",
-    "MAX_JOIN_LINKS",
-    "MAX_WORKERS",
-    "MAX_WORKERS_PER_JOIN_LINK",
+    "DEFAULT_POOL_REFRESH_INTERVAL",
+    "DEFAULT_WORKERS",
+    "DEFAULT_PEER_READ_QUEUE_PACKETS",
+    "MAX_POOL_REFRESH_INTERVAL",
+    "MIN_POOL_REFRESH_INTERVAL",
+    "WORKER_COUNTS",
     "call_mode",
-    "multi_user_inbound",
-    "multi_user_outbound",
+    "workers",
+    "vk_parasite_inbound",
+    "vk_parasite_outbound",
+    "peer_read_queue_packets",
+    "pool_refresh_interval",
     "public_endpoint",
 ]

@@ -24,6 +24,19 @@ class ProbeHost(HostBackend):
         return CompletedProcess(command, self.returncode, stdout="", stderr="")
 
 
+class PoolSource:
+    def __init__(self, links: list[str], units: list[str]) -> None:
+        self.links = links
+        self.units = units
+
+    def read_creator_links(self) -> list[str]:
+        return list(self.links)
+
+    def creator_units(self, *, count: int) -> list[str]:
+        assert count == 4
+        return list(self.units)
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -38,6 +51,24 @@ def test_join_link_validation_is_strict(value: str) -> None:
         validate_join_link(value)
 
 
+def test_calls_pool_read_requires_four_links_and_active_units() -> None:
+    host = ProbeHost()
+    source = PoolSource(
+        ["https://vk.com/call/join/one"],
+        [f"hydra-headless-creator-vk-calls@a-{index}.service" for index in range(1, 5)],
+    )
+    runtime = CallsInfrastructure(host, pool_source=source)
+
+    assert runtime.load_native_join_links() == []
+    source.links = [f"https://vk.com/call/join/{index}" for index in range(4)]
+    assert runtime.load_native_join_links() == source.links
+    source.units.pop()
+    assert runtime.load_native_join_links() == []
+    source.units.append("hydra-headless-creator-vk-calls@a-4.service")
+    host.returncode = 1
+    assert runtime.load_native_join_links() == []
+
+
 def test_calls_can_remove_a_stale_legacy_join_file(tmp_path) -> None:
     legacy = tmp_path / "native.join"
     legacy.write_text("stale", encoding="utf-8")
@@ -48,12 +79,21 @@ def test_calls_can_remove_a_stale_legacy_join_file(tmp_path) -> None:
     assert not legacy.exists()
 
 
-def test_legacy_credentials_constructor_slot_is_ignored() -> None:
-    credentials = object()
-    runtime = CallsInfrastructure(HostBackend(), credentials)
+def test_calls_runtime_delegates_cookie_import_to_existing_credentials_source(tmp_path) -> None:
+    class Credentials:
+        def __init__(self) -> None:
+            self.source_path = None
 
-    assert runtime.credentials_source is credentials
-    assert not hasattr(runtime, "load_vk_cookies")
+        def import_vk_cookies(self, source_path) -> None:
+            self.source_path = source_path
+
+    credentials = Credentials()
+    runtime = CallsInfrastructure(HostBackend(), credentials)
+    source = tmp_path / "cookies.json"
+
+    runtime.import_vk_cookies(source)
+
+    assert credentials.source_path == source
 
 
 class CapabilityHost(ProbeHost):
@@ -63,55 +103,104 @@ class CapabilityHost(ProbeHost):
         return CompletedProcess(
             command,
             0,
-            stdout=json.dumps({
-                "identity": {
+            stdout=json.dumps(
+                {
+                    "contract_version": 1,
                     "core_id": "io.hydrabox.hydracore",
                     "role": "vps",
-                },
-                "features": {
-                    "call_vk_multi_user": True,
-                    "call_vk_multi_user_client": False,
-                    "call_vk_multi_user_server": True,
-                },
-                "protocols": {
-                    "call_modes": ["multi_user"],
-                    "call_vk_multi_user_wire": {"min": 1, "max": 2},
-                },
-            }),
+                    "calls_mode": "vk_parasite",
+                }
+            ),
             stderr="",
         )
 
 
-def test_multi_user_support_requires_feature_and_mode_capability() -> None:
+def test_vk_parasite_support_requires_vps_contract() -> None:
     runtime = CallsInfrastructure(CapabilityHost())
-    assert runtime.multi_user_supported() is True
+    assert runtime.vk_parasite_supported() is True
+
+
+class DocumentHost(ProbeHost):
+    """One document per subcommand, refusing the ones it does not know — as a real core does."""
+
+    def __init__(self, **answers: dict) -> None:
+        super().__init__()
+        self.answers = answers
+
+    def run(self, args, **kwargs):
+        command = [str(value) for value in args]
+        self.commands.append(command)
+        payload = self.answers.get(command[2]) if len(command) > 2 else None
+        if payload is None:
+            return CompletedProcess(command, 1, stdout="", stderr="unknown command")
+        return CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+
+
+def legacy_capabilities() -> dict:
+    """What a core built before the product contract prints instead of it."""
+    return {
+        "api_version": 2,
+        "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
+        "features": {"call_vk_parasite": True},
+        "protocols": {"call_modes": ["vk_parasite"]},
+    }
+
+
+def test_vk_parasite_support_accepts_a_core_older_than_the_contract() -> None:
+    # The gate used to ask such a core for a document that did not exist when it was built, and
+    # refused a server that had been running Calls for weeks on that basis.
+    runtime = CallsInfrastructure(DocumentHost(capabilities=legacy_capabilities()))
+    assert runtime.vk_parasite_supported() is True
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: payload.update({"api_version": 1}),
+        lambda payload: payload["identity"].update({"role": "client"}),
+        lambda payload: payload["identity"].update({"core_id": "third.party.core"}),
+        lambda payload: payload["features"].update({"call_vk_parasite": False}),
+        lambda payload: payload["protocols"].update({"call_modes": ["p2p"]}),
+    ],
+)
+def test_the_legacy_document_is_held_to_the_same_bar(mutate) -> None:
+    payload = legacy_capabilities()
+    mutate(payload)
+    runtime = CallsInfrastructure(DocumentHost(capabilities=payload))
+    assert runtime.vk_parasite_supported() is False
 
 
 @pytest.mark.parametrize(
     "payload",
     [
+        {},
         {
-            "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
-            "features": {"call_vk_multiuser": True},
-            "protocols": {"call_modes": ["multi_user"]},
+            "contract_version": 2,
+            "core_id": "io.hydrabox.hydracore",
+            "role": "vps",
+            "calls_mode": "vk_parasite",
         },
         {
-            "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
-            "features": {
-                "call_vk_multi_user": True,
-                "call_vk_multi_user_server": True,
-                "call_vk_multi_user_client": False,
-            },
-            "protocols": {"call_modes": ["p2p"]},
+            "contract_version": 1,
+            "core_id": "third.party.core",
+            "role": "vps",
+            "calls_mode": "vk_parasite",
         },
         {
-            "identity": {"core_id": "third.party.core"},
-            "features": {"call_vk_multi_user": True},
-            "protocols": {"call_modes": ["multi_user"]},
+            "contract_version": 1,
+            "core_id": "io.hydrabox.hydracore",
+            "role": "client",
+            "calls_mode": "vk_parasite",
+        },
+        {
+            "contract_version": 1,
+            "core_id": "io.hydrabox.hydracore",
+            "role": "vps",
+            "calls_mode": "p2p",
         },
     ],
 )
-def test_multi_user_support_rejects_alias_or_incomplete_modes(payload) -> None:
+def test_vk_parasite_support_rejects_incompatible_contract(payload) -> None:
     host = CapabilityHost()
     host.run = lambda args, **kwargs: CompletedProcess(
         args,
@@ -119,4 +208,4 @@ def test_multi_user_support_rejects_alias_or_incomplete_modes(payload) -> None:
         stdout=json.dumps(payload),
         stderr="",
     )
-    assert CallsInfrastructure(host).multi_user_supported() is False
+    assert CallsInfrastructure(host).vk_parasite_supported() is False

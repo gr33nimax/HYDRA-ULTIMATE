@@ -4,6 +4,7 @@ The TUI deliberately works with plain values returned by this contract.  URL
 openers, sockets, clocks, filesystem reads, and subprocess sentinels belong to
 the host adapter in :mod:`hydra.services.diagnostic_infrastructure`.
 """
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -54,6 +55,8 @@ class DiagnosticOperations(Protocol):
     def ipv6_available(self) -> bool: ...
 
     def port_listening(self, port: int) -> bool: ...
+
+    def port_occupied(self, port: int) -> bool: ...
 
     def tcp_connect(self, host: str, port: int, timeout: float) -> bool: ...
 

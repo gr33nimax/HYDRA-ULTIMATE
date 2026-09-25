@@ -1,0 +1,43 @@
+name: Naive Caddy compatibility
+
+on:
+  push:
+    branches: [debug, dev, main]
+    paths:
+      - 'hydra/plugins/naive/**'
+      - 'hydra/core/sni_router*.py'
+      - '.github/scripts/check_naive_caddy.py'
+      - '.github/workflows/naive-caddy.yml'
+  pull_request:
+    paths:
+      - 'hydra/plugins/naive/**'
+      - 'hydra/core/sni_router*.py'
+      - '.github/scripts/check_naive_caddy.py'
+      - '.github/workflows/naive-caddy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  naive-caddy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.1'
+          cache: false
+      - run: python -m pip install -r requirements.lock
+      - name: Prepare compiler cache
+        run: |
+          sudo mkdir -p /usr/local/share/go
+          sudo chown "$(id -u):$(id -g)" /usr/local/share/go
+      - name: Build installed binary and check real Naive configuration
+        env:
+          PYTHONPATH: .
+        run: python .github/scripts/check_naive_caddy.py

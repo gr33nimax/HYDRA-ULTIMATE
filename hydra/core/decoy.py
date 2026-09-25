@@ -12,6 +12,7 @@ DECOY_DIRS = {
     "anytls": Path("/var/www/decoy-b"),
     "trusttunnel": Path("/var/www/decoy-c"),
     "hysteria2": Path("/var/www/decoy-hysteria2"),
+    "mtproto_zig": Path("/var/www/decoy-zig"),
 }
 
 DEFAULT_THEMES = {
@@ -19,6 +20,7 @@ DEFAULT_THEMES = {
     "anytls": "blog",
     "trusttunnel": "docs",
     "hysteria2": "status",
+    "mtproto_zig": "landing",
 }
 # Historical alias kept for callers written before themes became configurable.
 DECOY_THEMES = DEFAULT_THEMES

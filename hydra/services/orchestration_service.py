@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from hydra.core.state_models import AppState, User
+from hydra.plugins.executor import apply_failure_message
 from hydra.plugins.invoker import PluginInvoker
 from hydra.services.configuration import (
     ConfigurationApplier,
@@ -371,9 +372,7 @@ class OrchestrationService:
                 continue
             invoker.configure(plugin, state)
             if not invoker.apply(plugin, state):
-                raise RuntimeError(
-                    f"Plugin {plugin.meta.name} apply returned false",
-                )
+                raise RuntimeError(apply_failure_message(plugin))
         self.save_state(state)
 
 

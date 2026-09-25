@@ -8,7 +8,7 @@ def validate_device_map(devices: Any, *, legacy: bool) -> None:
     """Reject device bindings that are not id -> record mappings.
 
     Schema 5 turned the binding timestamp into a record describing the
-    device, so a migration step still validates the shape it wrote.
+    device, so the legacy importer still validates the shape it wrote.
     """
     if not isinstance(devices, dict) or any(
         not isinstance(device_id, str) for device_id in devices

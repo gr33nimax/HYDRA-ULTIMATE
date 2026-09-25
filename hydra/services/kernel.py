@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from typing import Protocol
 
 from hydra.core.state_kernel_models import (
+    DEFAULT_KERNEL_CHANNEL,
     KERNEL_HYDRACORE,
     KernelConfig,
     validate_kernel_config,
@@ -75,7 +76,7 @@ class KernelOperations(Protocol):
         state: AppState,
         provider: str,
         *,
-        channel: str = "stable",
+        channel: str = DEFAULT_KERNEL_CHANNEL,
         force: bool = False,
     ) -> KernelSwitchResult: ...
 
@@ -104,7 +105,7 @@ class KernelService:
         state: AppState,
         provider: str,
         *,
-        channel: str = "stable",
+        channel: str = DEFAULT_KERNEL_CHANNEL,
         force: bool = False,
     ) -> KernelSwitchResult:
         desired = KernelConfig(provider=provider, channel=channel)

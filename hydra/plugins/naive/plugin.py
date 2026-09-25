@@ -1,7 +1,8 @@
 """Thin compatibility facade for the modular NaiveProxy plugin."""
+
 from __future__ import annotations
 
-import shutil as shutil  # compatibility monkeypatch seam
+import shutil as shutil  # noqa: F401 - compatibility monkeypatch seam
 import time as time  # compatibility monkeypatch seam
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from hydra.utils.downloader import (
 from hydra.utils.tls import resolve_tls_material as resolve_tls_material
 
 from .access_logs import NaiveAccessLogMixin
+from .build import NaiveBuildMixin
 from .configuration import NaiveConfigurationMixin
 from .constants import (
     BIN_PATH as BIN_PATH,
@@ -48,6 +50,7 @@ from .runtime import NaiveRuntimeMixin
 class NaivePlugin(
     DecoyThemeSupport,
     NaiveInstallationMixin,
+    NaiveBuildMixin,
     NaiveRuntimeMixin,
     NaiveConfigurationMixin,
     NaiveProfilesMixin,
@@ -61,19 +64,18 @@ class NaivePlugin(
 
     meta = PluginMeta(
         name="naive",
-        description=(
-            "NaiveProxy: Caddy + forwardproxy, Chromium HTTP/2 fingerprint"
-        ),
+        description=("NaiveProxy: Caddy + forwardproxy, Chromium HTTP/2 fingerprint"),
         category=PluginCategory.TRANSPORT,
         version="2.0.0",
         needs_domain=True,
         required_commands=("systemctl",),
-        commands=("set_domain", "set_transport", "set_decoy_theme"),
+        commands=("set_domain", "set_transport", "set_decoy_theme", "set_uot"),
         queries=("recent_connections",),
         tls_domain_source="network",
         config_defaults=(
             ("network", "tcp"),
             ("decoy_theme", "landing"),
+            ("uot", True),
         ),
         connection_source="recent_connections",
         backup_resources=(
@@ -104,13 +106,6 @@ class NaivePlugin(
     @staticmethod
     def _host_backend():
         return HOST
-
-    @staticmethod
-    def _installed() -> bool:
-        return (
-            BIN_PATH.exists()
-            or shutil.which("caddy-naive") is not None
-        )
 
     @staticmethod
     def _download_asset(

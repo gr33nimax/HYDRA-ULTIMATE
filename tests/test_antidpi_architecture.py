@@ -141,10 +141,12 @@ def test_antidpi_management_capabilities_are_declared():
     assert capabilities.queries == (
         "management_snapshot",
         "recent_logs",
+        "address_details",
     )
     assert capabilities.actions == (
         "capture_external_tests",
         "manual_ban",
         "run_selftest",
+        "sync_runtime",
         "unban",
     )

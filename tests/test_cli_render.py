@@ -104,7 +104,7 @@ def test_status_renderer_is_compact_and_operator_focused():
     )
 
     assert "HYDRA status" in output
-    assert "State schema" in output
+    assert "State format" in output
     assert "2 users" in output
     assert "vpn.example.com" in output
     assert "naive" in output

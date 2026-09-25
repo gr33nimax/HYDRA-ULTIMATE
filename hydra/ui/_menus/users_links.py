@@ -1,11 +1,14 @@
 """Subscription links and contract-driven client artifact views."""
+
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from hydra.core.state_models import AppState, User
 from hydra.plugins.base import PluginCategory
 from hydra.services.application import ApplicationService
+from hydra.services.subscriptions.links import tag_client_link
 from hydra.services.subscriptions.generator import get_subscription_urls
 from hydra.services.user_access import access_status as get_user_access_status
 from hydra.ui._menus.users_common import _application
@@ -50,9 +53,7 @@ def _profile_specs(
         (
             str(profile.get("name", "")).strip(),
             str(
-                profile.get("label")
-                or profile.get("name")
-                or "",
+                profile.get("label") or profile.get("name") or "",
             ).strip(),
         )
         for profile in profiles
@@ -77,11 +78,7 @@ def _client_artifacts(
             plugin_name,
             app,
         ):
-            parameters = (
-                {"profile": profile_name}
-                if profile_name
-                else {}
-            )
+            parameters = {"profile": profile_name} if profile_name else {}
             try:
                 config = (
                     app.protocols.client_config(
@@ -141,27 +138,30 @@ def _client_artifacts(
     return artifacts
 
 
-def _artifact_title(artifact: _ClientArtifact) -> str:
+def _artifact_name_key(artifact: _ClientArtifact) -> str:
+    return f"{artifact.plugin_name}:{artifact.profile_name}" if artifact.profile_name else artifact.plugin_name
+
+
+def _artifact_title(
+    artifact: _ClientArtifact,
+    state: AppState | None = None,
+    user: User | None = None,
+    app: ApplicationService | None = None,
+) -> str:
     label = protocol_label(
         artifact.plugin_name,
         artifact.display_name,
     )
     if artifact.profile_label:
-        return f"{label} ({artifact.profile_label})"
+        label = f"{label} ({artifact.profile_label})"
+    if state is not None and user is not None and app is not None:
+        return app.configuration_names.resolve(
+            state,
+            user,
+            _artifact_name_key(artifact),
+            label,
+        )
     return label
-
-
-def _render_qr(value: str, *, invert: bool = False) -> None:
-    if not value:
-        return
-    try:
-        import qrcode
-
-        qr = qrcode.QRCode(border=1)
-        qr.add_data(value)
-        qr.print_ascii(invert=invert)
-    except Exception:
-        pass
 
 
 def _link_caption(link: str) -> str:
@@ -174,20 +174,40 @@ def _link_caption(link: str) -> str:
     return "Ссылка"
 
 
-def _render_inline_artifact(artifact: _ClientArtifact) -> None:
-    heading = _artifact_title(artifact)
+def _manual_config(artifact: _ClientArtifact) -> str:
+    """Hide a JSON envelope that only repeats an already displayed link."""
+    try:
+        payload = json.loads(artifact.config)
+    except (json.JSONDecodeError, TypeError):
+        return artifact.config
+    if (
+        isinstance(payload, dict)
+        and set(payload) == {"link", "protocol"}
+        and payload.get("protocol") == artifact.plugin_name
+        and payload.get("link") in artifact.links
+    ):
+        return ""
+    return artifact.config
+
+
+def _render_inline_artifact(
+    artifact: _ClientArtifact,
+    state: AppState | None = None,
+    user: User | None = None,
+    app: ApplicationService | None = None,
+) -> None:
+    heading = _artifact_title(artifact, state, user, app)
     fill = max(0, PANEL_W - 10 - len(heading))
     print(
-        f"  {CYAN}── {BOLD}{heading}{NC}"
-        f"{CYAN}{'─' * fill}{NC}",
+        f"  {CYAN}── {BOLD}{heading}{NC}{CYAN}{'─' * fill}{NC}",
     )
     for link in artifact.links:
         print(f"  {GREEN}{_link_caption(link)}:{NC}")
-        print(link)
-    if artifact.config:
-        _render_qr(artifact.config)
+        print(tag_client_link(link, user, state) if user and state else link)
+    config = _manual_config(artifact)
+    if config:
         print(f"  {DIM}{'─' * PANEL_W}{NC}")
-        for line in artifact.config.splitlines():
+        for line in config.splitlines():
             print(line)
         print(f"  {DIM}{'─' * PANEL_W}{NC}")
     print()
@@ -208,7 +228,7 @@ def _user_links(
     if not artifacts:
         warn("Нет доступных клиентских конфигураций.")
     for artifact in artifacts:
-        _render_inline_artifact(artifact)
+        _render_inline_artifact(artifact, state, user, app)
     prompt("Нажмите Enter")
 
 
@@ -223,8 +243,7 @@ def _show_subscription_links(
     title(f"Подписка: {user.email}")
     if not app.admin.unit_active("hydra-sub"):
         warn(
-            "Сервер подписок не запущен. Включите его в меню "
-            "«Сервер подписок», затем повторите попытку.",
+            "Сервер подписок не запущен. Включите его в меню «Сервер подписок», затем повторите попытку.",
         )
         prompt("Нажмите Enter")
         return
@@ -247,8 +266,7 @@ def _show_subscription_links(
     print()
     print(f"  {BOLD}Основная ссылка (рекомендуется){NC}")
     print(
-        f"  {DIM}NekoBox, Shadowrocket и Throne определяются "
-        f"автоматически по приложению.{NC}",
+        f"  {DIM}NekoBox, Shadowrocket и Throne определяются автоматически по приложению.{NC}",
     )
     print(urls["auto"])
     print()
@@ -263,8 +281,7 @@ def _show_subscription_links(
         print(f"  {label}:")
         print(urls[key])
     print(
-        f"\n  {DIM}Ссылка содержит секретный токен — "
-        f"передавайте её только владельцу.{NC}",
+        f"\n  {DIM}Ссылка содержит секретный токен — передавайте её только владельцу.{NC}",
     )
     prompt("Нажмите Enter")
 
@@ -284,8 +301,6 @@ def _user_configs(
         prompt("Нажмите Enter")
         return
     for artifact in artifacts:
-        _render_inline_artifact(artifact)
-        if artifact.config:
-            _render_qr(artifact.config, invert=True)
+        _render_inline_artifact(artifact, state, user, app)
     print()
     prompt("Нажмите Enter")

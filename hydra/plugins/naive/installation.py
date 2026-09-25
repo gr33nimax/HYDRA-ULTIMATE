@@ -1,35 +1,49 @@
 """NaiveProxy binary and systemd-unit installation."""
+
 from __future__ import annotations
 
 import shutil
+from typing import TYPE_CHECKING, Any, Callable
 
-from .constants import DOWNLOAD_DIR
+from .constants import NaiveRuntimeLayout
+
+
+if TYPE_CHECKING:
+    _RuntimeLayout = Callable[[], NaiveRuntimeLayout]
+    _HostBackend = Callable[[], Any]
+    _DownloadBinary = Callable[..., bool]
 
 
 class NaiveInstallationMixin:
     """Install or remove host assets without owning runtime reconciliation."""
 
+    if TYPE_CHECKING:
+        _runtime_layout: _RuntimeLayout
+        _host_backend: _HostBackend
+        _download_binary: _DownloadBinary
+
+    def _installed(self) -> bool:
+        """Both managed files present: the plugin is installed."""
+        layout = self._runtime_layout()
+        return layout.binary.is_file() and layout.service_file.is_file()
+
     def install(self) -> bool:
+        layout = self._runtime_layout()
         if self._installed():
             return True
-        print("  Скачиваю caddy-naive...")
-        if not self._download_binary():
-            print("  Не удалось установить caddy-naive.")
-            return False
+        if not layout.binary.is_file():
+            print("  Устанавливаю caddy-naive...")
+            if not self._download_binary():
+                print("  Не удалось установить caddy-naive.")
+                return False
         self._install_service()
         return self._installed()
 
     def uninstall(self) -> bool:
         layout = self._runtime_layout()
         host = self._host_backend()
-        host.run(
-            ["systemctl", "stop", layout.service_name],
-            capture_output=True,
-        )
-        host.run(
-            ["systemctl", "disable", layout.service_name],
-            capture_output=True,
-        )
+        host.run(["systemctl", "stop", layout.service_name], capture_output=True)
+        host.run(["systemctl", "disable", layout.service_name], capture_output=True)
         if layout.service_file.exists():
             layout.service_file.unlink()
         host.run(["systemctl", "daemon-reload"], capture_output=True)
@@ -43,32 +57,10 @@ class NaiveInstallationMixin:
             layout.data_dir,
         ):
             if directory.exists():
-                shutil.rmtree(directory, ignore_errors=True)
-        return True
-
-    def _download_binary(self) -> bool:
-        from hydra.utils.net import detect_arch
-
-        layout = self._runtime_layout()
-        architecture = detect_arch()
-        DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        binary = DOWNLOAD_DIR / f"caddy-linux-{architecture}"
-        if not self._download_asset(
-            layout.github_repo,
-            f"caddy-linux-{architecture}",
-            binary,
-        ):
-            return False
-        if not self._verify_binary(binary):
-            return False
-
-        if layout.binary.exists():
-            try:
-                layout.binary.unlink()
-            except Exception:
-                pass
-        shutil.copy2(str(binary), str(layout.binary))
-        layout.binary.chmod(0o755)
+                try:
+                    shutil.rmtree(directory, ignore_errors=True)
+                except OSError:
+                    continue
         return True
 
     def _install_service(self) -> None:
@@ -104,7 +96,4 @@ class NaiveInstallationMixin:
         )
         host = self._host_backend()
         host.run(["systemctl", "daemon-reload"], capture_output=True)
-        host.run(
-            ["systemctl", "enable", layout.service_name],
-            capture_output=True,
-        )
+        host.run(["systemctl", "enable", layout.service_name], capture_output=True)

@@ -1,11 +1,12 @@
 """Owner-neutral maintenance projection and execution facade."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from hydra.core.errors import ServiceResult
 from hydra.core.state_models import AppState
+from hydra.services.calls_contracts import CALLS_POOL_AUTO_FLAG, CallOperations
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,7 @@ class MaintenanceJob:
     apply_on_success: bool
     owner: str = "plugin"
     key: str = ""
+    enabled_by_default: bool = True
 
 
 @dataclass(frozen=True)
@@ -50,16 +52,6 @@ class QueryAccess(Protocol):
     def execute(self, plugin_name: str, query: str, **parameters: object) -> Any: ...
 
 
-class QwdttCreatorMaintenanceAccess(Protocol):
-    def qwdtt_pool_due(self, state: AppState, *, forced: bool = False) -> bool: ...
-    def refresh_qwdtt_pool(
-        self,
-        state: AppState,
-        *,
-        forced: bool = False,
-    ) -> ServiceResult: ...
-
-
 @dataclass(frozen=True)
 class UnavailableMaintenanceOperations:
     def jobs(self) -> list[MaintenanceJob]:
@@ -67,6 +59,13 @@ class UnavailableMaintenanceOperations:
 
     def run(self, state: AppState, forced: bool) -> list[MaintenanceOutcome]:
         return []
+
+
+def _exception_message(exc: Exception) -> str:
+    message = str(exc)
+    if message:
+        return message
+    return exc.__class__.__name__
 
 
 def _action_result(value: Any) -> tuple[bool, str]:
@@ -86,56 +85,57 @@ class MaintenanceService:
     protocols: ProtocolMaintenanceAccess
     plugin_actions: ActionAccess
     plugin_queries: QueryAccess
-    headless_creator: QwdttCreatorMaintenanceAccess
+    calls: CallOperations | None = None
 
     def jobs(self) -> list[MaintenanceJob]:
-        return [
-            *self.protocols.maintenance_jobs(),
-            MaintenanceJob(
-                plugin_name="",
-                action="refresh_qwdtt_pool",
-                title="Обновление VK-комнат qWDTT",
-                description="Переоткрывает настроенное число комнат и публикует qwdtt:// ссылку",
-                due_query="qwdtt_pool_due",
-                enabled_flag="sync_headless_creator_vk_qwdtt_enabled",
-                apply_on_success=False,
-                owner="creator_consumer",
-                key="headless_creator.consumers.qwdtt",
-            ),
-        ]
+        jobs = self.protocols.maintenance_jobs()
+        if self.calls is not None:
+            jobs.append(
+                MaintenanceJob(
+                    plugin_name="calls",
+                    action="rotate_native_vk",
+                    title="Hydra VK Tunnel: автопересоздание пула",
+                    description="Создавать новый blue/green VK-пул по интервалу",
+                    due_query="pool_rotation_due",
+                    enabled_flag=CALLS_POOL_AUTO_FLAG,
+                    apply_on_success=False,
+                    owner="application",
+                    key="calls.pool",
+                    enabled_by_default=False,
+                )
+            )
+        return jobs
 
     def run(self, state: AppState, forced: bool) -> list[MaintenanceOutcome]:
         outcomes: list[MaintenanceOutcome] = []
         for job in self.jobs():
-            if job.owner == "creator_consumer":
-                outcomes.append(self._run_creator_job(state, job, forced))
-            else:
-                outcomes.append(self._run_plugin_job(state, job, forced))
+            outcomes.append(
+                self._run_calls_job(state, job, forced)
+                if job.owner == "application" and job.key == "calls.pool"
+                else self._run_plugin_job(state, job, forced)
+            )
         return outcomes
 
-    def _run_creator_job(
+    def _run_calls_job(
         self,
         state: AppState,
         job: MaintenanceJob,
         forced: bool,
     ) -> MaintenanceOutcome:
-        qwdtt = state.headless_creator.consumers.get("qwdtt", {})
-        if not qwdtt.get("pool_enabled", False):
-            return MaintenanceOutcome(job, "consumer_disabled")
-        if not forced and not state.install.get(job.enabled_flag, True):
-            return MaintenanceOutcome(job, "disabled")
+        desired = state.protocols.get("calls")
+        if not (desired and desired.enabled):
+            return MaintenanceOutcome(job, "plugin_disabled")
+        if self.calls is None:
+            return MaintenanceOutcome(job, "failed", "Calls service is unavailable")
         try:
-            if not forced and not self.headless_creator.qwdtt_pool_due(state):
-                return MaintenanceOutcome(job, "fresh")
-            result = self.headless_creator.refresh_qwdtt_pool(state, forced=True)
-            message = result.error.message if result.error else ""
+            result = self.calls.run_health(state, forced=forced)
             return MaintenanceOutcome(
                 job,
                 "success" if result else "failed",
-                message,
+                "" if result or not result.error else result.error.message,
             )
-        except Exception as exc:
-            return MaintenanceOutcome(job, "failed", str(exc) or exc.__class__.__name__)
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            return MaintenanceOutcome(job, "failed", _exception_message(exc))
 
     def _run_plugin_job(
         self,
@@ -146,7 +146,10 @@ class MaintenanceService:
         desired = state.protocols.get(job.plugin_name)
         if not (desired and desired.enabled):
             return MaintenanceOutcome(job, "plugin_disabled")
-        if not forced and not state.install.get(job.enabled_flag, True):
+        if not forced and not state.install.get(
+            job.enabled_flag,
+            job.enabled_by_default,
+        ):
             return MaintenanceOutcome(job, "disabled")
         try:
             if job.due_query and not self.plugin_queries.execute(
@@ -169,8 +172,8 @@ class MaintenanceService:
                 message,
                 apply_required=ok and job.apply_on_success,
             )
-        except Exception as exc:
-            return MaintenanceOutcome(job, "failed", str(exc) or exc.__class__.__name__)
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            return MaintenanceOutcome(job, "failed", _exception_message(exc))
 
 
 __all__ = [

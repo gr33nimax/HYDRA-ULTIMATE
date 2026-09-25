@@ -1,4 +1,5 @@
 """Managed systemd unit for the Sing-Box runtime."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,7 +20,9 @@ User=root
 WorkingDirectory=/var/lib/sing-box
 Environment=LEGACY_DNS_SERVERS=true ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER=true
 ExecStart={binary_path} run -c {config_path}
-ExecReload=/bin/kill -HUP $MAINPID
+# Перезагрузки конфига на ходу sing-box не умеет: SIGHUP он обрабатывает как остановку, и
+# `systemctl reload` убивает ядро (а RestartSec=30 поднимает его только через полминуты).
+# Поэтому хука нет: применять конфиг надо перезапуском, и это делает singbox.reload().
 Restart=on-failure
 RestartSec=30
 LimitNPROC=500

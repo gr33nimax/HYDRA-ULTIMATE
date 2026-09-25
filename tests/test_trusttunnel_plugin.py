@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import base64
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import pytest
@@ -12,6 +13,26 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from hydra.plugins.trusttunnel.plugin import TrustTunnelPlugin
 from hydra.plugins.base import PluginCategory, ConfigFragment
 from hydra.core.state import AppState, User, PluginState
+
+
+def _decode_deep_link(link: str) -> dict[int, list[bytes]]:
+    assert link.startswith("tt://?")
+    payload = link.removeprefix("tt://?")
+    raw = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+    fields: dict[int, list[bytes]] = {}
+    index = 0
+    while index < len(raw):
+        tag_size = 1 << (raw[index] >> 6)
+        tag = int.from_bytes(raw[index:index + tag_size], "big") & ((1 << (tag_size * 8 - 2)) - 1)
+        index += tag_size
+        length_size = 1 << (raw[index] >> 6)
+        length = int.from_bytes(raw[index:index + length_size], "big") & ((1 << (length_size * 8 - 2)) - 1)
+        index += length_size
+        value = raw[index:index + length]
+        fields.setdefault(tag, []).append(value)
+        index += length
+    assert index == len(raw)
+    return fields
 
 
 def _state(users=None, domain="tt.example.com", transport="tcp",
@@ -166,41 +187,40 @@ def test_generate_client_config_quic_has_server_and_quic_flag():
 
 
 def test_client_link():
-    """Генерирует правильную ссылку tt://."""
+    """Генерирует официальный TrustTunnel deep link."""
     p = TrustTunnelPlugin()
     state = _state([_user("a@x.com", uuid="uuid-a")], domain="custom.domain")
     user = state.users[0]
     
     link = p.client_link(user, state)
-    assert link.startswith("tt://")
-    assert "custom.domain" in link
-    assert "a%40x.com" in link  # URL-encoded
-    assert "security=tls" in link
-    assert "alpn" in link
+    fields = _decode_deep_link(link)
+    assert fields[0] == [b"\x01"]
+    assert fields[1] == [b"custom.domain"]
+    assert fields[2] == [b"custom.domain:443"]
+    assert fields[5] == [b"a@x.com"]
+    assert fields[6] == [p._derive_password("uuid-a").encode()]
+    assert fields[9] == [b"\x01"]
+    assert fields[12] == [b"a@x.com TrustTunnel"]
 
 
-def test_tcp_client_link_is_unchanged():
+def test_tcp_client_link_uses_official_query_payload_form():
     p = TrustTunnelPlugin()
     state = _state([_user("a@x.com", uuid="uuid-a")], domain="custom.domain")
     link = p.client_link(state.users[0], state)
 
-    assert link == (
-        "tt://a%40x.com:"
-        f"{p._derive_password('uuid-a')}@custom.domain:443"
-        "?security=tls&sni=custom.domain&alpn=h2#a%40x.com"
-    )
+    assert link.startswith("tt://?")
+    assert "=" not in link
 
 
-def test_client_links_both_preserve_tt_scheme():
+def test_client_links_both_encode_h2_and_h3():
     p = TrustTunnelPlugin()
     state = _state([_user("a@x.com")], transport="both")
 
     links = p.client_links(state.users[0], state)
 
     assert len(links) == 2
-    assert all(link.startswith("tt://") for link in links)
-    assert any("alpn=h2" in link for link in links)
-    assert any("alpn=h3" in link for link in links)
+    assert all(link.startswith("tt://?") for link in links)
+    assert [_decode_deep_link(link)[9] for link in links] == [[b"\x01"], [b"\x02"]]
 
 
 def test_validate_config_rejects_quic_conflict():
@@ -252,6 +272,7 @@ def test_legacy_state_without_transport_defaults_to_tcp():
         frag = p.configure(state)
 
     assert [inbound["tag"] for inbound in frag.inbounds] == ["trusttunnel-in"]
+    assert _decode_deep_link(p.client_link(state.users[0], state))[9] == [b"\x01"]
 
 
 def test_set_transport_only_updates_desired_state():

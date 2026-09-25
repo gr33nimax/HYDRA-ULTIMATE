@@ -104,9 +104,9 @@ Fail2ban, systemd-units и скрипты учёта трафика. Сложн�
 | Правка применилась наполовину: Sing-Box перезапущен, nftables нет | Каждый изменяющий шаг имеет снимок и rollback: возвращаются state, конфигурации, firewall и плагины |
 | Два QUIC-транспорта незаметно заняли UDP/443 | Конфликт слушателей отклоняется на preflight, а не проявляется отказом в рантайме |
 | Служба показана «включённой», хотя не работает | Желаемое и фактическое разделены: `hydra status` показывает оба и расхождение между ними |
-| Обновление сводится к `git pull`, старый код получает state новой схемы | Транзакционный updater: сборка рядом с рабочей, read-only preflight, два уровня backup, атомарное переключение, откат |
+| Обновление сводится к `git pull`, старый код получает state нового формата | Транзакционный updater: сборка рядом с рабочей, read-only preflight, два уровня backup, атомарное переключение, откат |
 | Пользователь добавлен в один транспорт и забыт в остальных | Добавление пользователя — транзакция по всем включённым транспортам сразу |
-| Сканирование ловится разрозненно, ложные баны блокируют своих | Единый контур корреляции с двухуровневым scoring; подделываемые UDP-сигналы не дают автоматического бана |
+| Сканирование ловится разрозненно, ложные баны блокируют своих | Антискан банит только доказанный отказ протокола с реальным внешним IP или скан сайта-заглушки; шум наблюдается, но не банит |
 
 ## 2. Пути входящего трафика
 
@@ -200,7 +200,7 @@ Hysteria2 владельцем UDP/443 не является: его UDP-пор�
 ### Остальные входы
 
 AmneziaWG и qWDTT создают туннельные интерфейсы, Mieru и Snell работают как
-отдельные входящие подключения, а Telemt обслуживает MTProto. Sing-Box применяет
+отдельные входящие подключения, а mtproto.zig обслуживает MTProto. Sing-Box применяет
 общие правила маршрутизации, DNS и исходящие соединения ко всем потокам, которые
 входят в его контур.
 
@@ -394,9 +394,10 @@ TLS-маршруты проверяются отдельно, потому чт�
 
 Хранилище использует:
 
-- последовательные миграции схемы `vN → vN+1`;
+- стабильный State Format v1 с envelope `core` / `features`;
+- прямой одноразовый импорт исторических schema 0–18 без цепочки миграций;
 - атомарную замену и синхронизацию каталогов;
-- безопасный отказ при неизвестной будущей схеме;
+- безопасный отказ при неизвестной будущей версии формата;
 - резервные и изолированные копии при повреждении;
 - проверку данных до записи;
 - монотонную `revision` и optimistic concurrency: устаревшая запись желаемой
@@ -405,28 +406,25 @@ TLS-маршруты проверяются отдельно, потому чт�
 - откат желаемого состояния с сохранением текущей ревизии, чтобы rollback не мог
   затереть более новое изменение другого процесса.
 
-### Цепочка миграций
+### Стабильный формат и legacy import
 
-В текущей ветке `dev` актуальна схема 8. Миграция — последовательность чистых функций; каждая
-ступень проверяется отдельно, а запись всей цепочки выполняется атомарно.
+На диске `state.json` имеет один стабильный envelope:
 
 ```text
-   v0 ──▶ v1 ──▶ v2 ──▶ v3 ──▶ v4 ──▶ v5 ──▶ v6 ──▶ v7 ──▶ v8+
-                         │      │      │      │      │
-                         │      │      │      │      └─ Headless Creator получает
-                         │      │      │      │         provider-neutral state;
-                         │      │      │      │         v9+ — ошибка совместимости
-                         │      │      │      └─ legacy VK creator state через Calls
-                         │      │      └─ private per-user HydraBox JWE key
-                         │      │
-                         │      └─ device_limit, devices        (выпущено в 2.5.3)
-                         └──────── legacy-флаги WARP, DNSCrypt,
-                                   Fail2ban, Honeypot, IPBan, AntiDPI
-                                   ──▶ protocols[*].enabled, + revision
+format_version: 1
+revision: N
+core:      install, users, telegram, network, ...unknown
+features:  protocols, headless_creator, kernel, ...unknown
 ```
 
-Старый код не должен увидеть state новой схемы — поэтому откат обновления
-возвращает схему прежде, чем вернуть код (см. [§8](#8-release-и-обновление)).
+Обычные изменения полей feature не повышают `format_version`: владелец feature
+задаёт defaults и semantic validation. Неизвестные namespaces сохраняются при
+load/save, поэтому разные ветки не вырезают чужой state. Формат повышается только
+при несовместимой смене самого envelope.
+
+Старые плоские schema 0–18 принимает один чистый importer и сразу создаёт State
+Format v1. Поштучных `vN → vN+1` функций больше нет. Запись результата выполняется
+атомарно; повторный импорт актуального документа ничего не переписывает.
 
 ### Конкурентная запись
 
@@ -513,7 +511,7 @@ Rollback восстанавливает содержимое снимка, но 
    ─────────────────────────────  точка невозврата  ─────────────────────────
    4  quiesce HYDRA writers          службы и таймеры остановлены
    5  backup raw state + архив       два независимых уровня отката
-   6  migrate state                  схема поднята до целевой
+   6  import legacy state            только если state ещё в старой схеме
    7  switch /opt/hydra              атомарная замена симлинка
    8  restart + validate             ранее активные units подняты и проверены
 ```
@@ -524,14 +522,14 @@ Rollback восстанавливает содержимое снимка, но 
 ```text
    остановить новый runtime
         ▼
-   вернуть state в старую схему        ◀── обязательно раньше кода
+   вернуть сырой state snapshot         ◀── обязательно раньше кода
         ▼
    вернуть код и wrapper
         ▼
    запустить ранее активные units из active-units.txt
 ```
 
-Порядок принципиален: старый код не должен получить state новой схемы. Обратная
+Порядок принципиален: старый код не должен получить state нового формата. Обратная
 последовательность привела бы к загрузке несовместимого состояния прежним
 runtime.
 
@@ -580,25 +578,24 @@ Subscription v2 как изолированный `call` outbound с `platform=v
 Клиентский joiner
 не становится источником server-side traffic accounting.
 
-Calls имеет только режим `multi_user`. До любых host-мутаций service требует
+Calls имеет только режим `vk_parasite`. До любых host-мутаций service требует
 desired `kernel.provider=hydracore`, exact identity
 `io.hydrabox.hydracore`, role `vps`, server feature
-`call_vk_multi_user_server=true`, `protocols.call_modes=["multi_user"]` и wire
-compatibility v1..2; stock core, client artifact, capability aliases и `p2p`
+`call_vk_parasite_server=true` и `protocols.call_modes=["vk_parasite"]`;
+stock core, client artifact, capability aliases и `p2p`
 отклоняются fail-closed. Затем service создаёт отдельную managed-группу 1–4
 комнат. Plugin возвращает server inbound с
 `listen/listen_port`, общим `obfs_password`, per-user credentials и bounded
 session/worker/handshake limits; cookies и join-links в server config
 отсутствуют. Per-user Hydra v2 projection содержит `server/server_port`,
-`join_links`, user/password, общий obfs key и worker policy и требует core
-feature `call_vk_multi_user`; singular `join_link` не генерируется в outbound.
+`join_links`, user/password и общий obfs key и требует core
+feature `call_vk_parasite`; singular `join_link` не генерируется в outbound.
 `server` берётся из persisted `calls.config.public_endpoint`, который
 материализуется при enable/reinstall из явного `network.server_ip` либо
 наблюдаемого публичного IP VPS и никогда не наследует transport SNI.
-Admin DTO сохраняет первый link под старым именем только как compatibility alias. Worker policy
-по умолчанию создаёт один worker
-на ссылку и ограничивает явное значение как
-`min(max_workers_per_session, 27 × unique_join_links, 108)`. IPv4 listener по
+Admin DTO сохраняет первый link под старым именем только как compatibility alias.
+Клиент сам выбирает поддерживаемую topology; серверный
+`max_workers_per_session` допускает только 4 или 16. IPv4 listener по
 умолчанию использует свободный `56002/udp`; совпадение с внешними UDP-портами
 enabled transport отклоняется до apply (в частности, qWDTT сохраняет
 `56001/udp` для WireGuard).
@@ -627,19 +624,19 @@ WDTT-артефакта и сохранения state старое поколе�
 lifecycle, timer или systemd creator. Owner-neutral maintenance-фасад объединяет
 plugin tasks и `headless_creator.consumers.qwdtt`; его читают Sync Agent и TUI.
 
-Миграция schema 8 извлекает legacy creator desired state из `calls.config`, а
-schema 9 отделяет qWDTT consumer state в `headless_creator.consumers.qwdtt` от
-provider configuration. Миграции не меняют host runtime. Явное действие
+Legacy importer извлекает прежний creator desired state и отделяет qWDTT
+consumer state в `headless_creator.consumers.qwdtt` от provider configuration.
+Импорт не меняет host runtime. Явное действие
 `Создать комнаты` в qWDTT-подменю Creator делает snapshot старых units/файлов,
 устанавливает новый пул и только затем удаляет legacy creator; failure
 восстанавливает snapshot. Общие VK cookies при этом не удаляются.
 
-Schema 10 добавляет desired `kernel.provider/channel`, оставляет прежний Calls
-в историческом `p2p` и материализует qWDTT port defaults для межсервисного
-preflight. Schema 11 нормализует любой legacy/unknown Calls mode в `multi_user`;
-несовместимый enabled Calls (включая stock core) выключается без удаления
-installed state, поэтому upgrade/apply остальных протоколов остаётся доступен.
-Повторная установка после switch на Hydracore создаёт новый managed-пул.
+Legacy Calls importer материализует qWDTT port defaults и нормализует config в
+актуальный `vk_parasite`; несовместимый enabled Calls (включая stock core)
+выключается без удаления installed state. Число workers сохраняется, если оно
+поддерживается текущим контрактом. Transport compatibility не хранится в state:
+kernel switch и Calls runtime проверяют capabilities фактического Hydracore.
+Повторная установка после switch создаёт новый managed-пул.
 `ApplicationService.kernel` — единственный use-case замены core:
 trusted release metadata и обязательный SHA-256 digest проверяются до ELF,
 identity/capabilities и active-config probe; затем binary меняется атомарно,
@@ -677,7 +674,7 @@ RBAC, CSRF-защиты, audit log и явного CRUD для пользова�
 - CRUD произвольных пользовательских inbound'ов не входит в plugin API;
 - UDP/443 не мультиплексируется — это ограничение сетевой модели, а не
   реализации: прямым владельцем порта может быть только один QUIC-транспорт;
-- Telemt не входит в подтверждённую матрицу детекторов AntiDPI;
+- матрица детекторов AntiScan ограничена доказанными отказами: сейчас это Snell и сканы decoy-сайтов, остальные протоколы в неё не входят (см. [ANTIDPI.md](ANTIDPI.md));
 - поддерживаются только Ubuntu и Debian с systemd.
 
 Новый компонент может считаться частью стабильной архитектуры только когда он

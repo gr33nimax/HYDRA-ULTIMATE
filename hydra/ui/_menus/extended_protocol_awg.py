@@ -1,4 +1,5 @@
 """Controllers for extended transport menus and client status."""
+
 from __future__ import annotations
 
 from hydra.core.state_models import AppState, PluginState
@@ -36,6 +37,8 @@ from hydra.ui._menus.extended_protocol_awg_profiles import (
     _manage_awg_profiles,
     _rotate_awg_obfuscation,
 )
+from hydra.ui._menus.extended_protocol_awg_version import _awg_switch_version
+
 
 def _menu_amneziawg(
     state: AppState,
@@ -51,29 +54,30 @@ def _menu_amneziawg(
 
         try:
             st = app.protocols.status(p.meta.name)
-            profiles = (
-                app.plugin_query(
-                    "amneziawg",
-                    "get_profiles",
-                    state=state,
-                )
-                if st.installed
-                else []
-            )
-            details = [("Профили", len(profiles))]
+            profiles = app.plugin_query("amneziawg", "get_issued_profiles", state=state) if st.installed else []
+            mode = app.plugin_query("amneziawg", "protocol_mode_status", state=state) if st.installed else {}
+            details: list[tuple[str, object]] = [("Профили", len(profiles))]
+            if mode:
+                details.append(("AWG", f"{mode['desired']} / {mode['observed']}"))
             details.extend(
-                ("", f"{prof['label']} · {prof['interface']} · :{prof['port']} · {prof['preset']}")
-                for prof in profiles
+                ("", f"{prof['label']} · {prof['interface']} · :{prof['port']} · {prof['preset']}") for prof in profiles
             )
             protocol_status_panel(
-                p.meta.name, installed=st.installed, enabled=st.enabled,
-                running=st.running, port=st.port, details=details,
+                p.meta.name,
+                installed=st.installed,
+                enabled=st.enabled,
+                running=st.running,
+                port=st.port,
+                details=details,
             )
-        except Exception as exc:
+        except RuntimeError as exc:
             protocol_status_panel(
-                p.meta.name, installed=ps.installed, enabled=ps.enabled,
-                running=False, port=ps.port,
-                error=str(exc) or exc.__class__.__name__,
+                p.meta.name,
+                installed=ps.installed,
+                enabled=ps.enabled,
+                running=False,
+                port=ps.port,
+                error=str(exc),
             )
 
         options = []
@@ -87,6 +91,7 @@ def _menu_amneziawg(
                 options.append(("4", "🔄 Ротация обфускации", "Ротировать параметры обфускации без downtime"))
                 options.append(("5", "⚙️ Оптимизация VPS", "Hardware-aware sysctl/swap/NIC автотюнинг"))
                 options.append(("6", "🎲 Генератор обфускации", "Пошаговый мастер генерации обфускации"))
+                options.append(("7", "🧬 Версия AWG", "Переключить 2.0 / 3.0 / 3.1"))
             else:
                 options.append(("1", "▶️  Включить", "Активировать протокол"))
 
@@ -145,6 +150,9 @@ def _menu_amneziawg(
         elif choice == "6" and ps.installed and ps.enabled:
             _awg_generate_wizard_menu(state, p, app)
 
+        elif choice == "7" and ps.installed and ps.enabled:
+            _awg_switch_version(state, p, app)
+
         elif choice == "8" and ps.installed:
             if confirm("Переустановить?", default=False):
                 ok = app.protocols.reinstall(state, p.meta.name)
@@ -182,8 +190,7 @@ def _tune_awg_hardware(
         lines.append("     Все параметры sysctl уже оптимальны.")
 
     lines.append(
-        "🚀 BBR: "
-        + ("доступен" if report["bbr_available"] else "не поддерживается"),
+        "🚀 BBR: " + ("доступен" if report["bbr_available"] else "не поддерживается"),
     )
     lines.append(f"💾 Постоянный профиль: {report['config_path']}")
     lines.extend(f"⚠ {message}" for message in report["errors"][:5])

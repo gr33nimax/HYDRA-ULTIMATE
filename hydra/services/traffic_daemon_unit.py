@@ -96,7 +96,9 @@ class TrafficDaemonUnitManager:
     def _daemon_revision(project_root: Path) -> str:
         """Hash the whole traffic-daemon component, not only its facade."""
         service_root = project_root / "hydra" / "services"
-        sources = sorted(service_root.glob("traffic*.py"))
+        sources = sorted({
+            *service_root.glob("traffic*.py"),
+        })
         if not sources:
             return "unknown"
         digest = hashlib.sha256()

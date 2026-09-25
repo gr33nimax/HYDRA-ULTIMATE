@@ -1,7 +1,6 @@
 """Inline keyboards and lifecycle toggles for security dashboards."""
-from __future__ import annotations
 
-from collections.abc import Mapping
+from __future__ import annotations
 
 from hydra.core.state_models import AppState
 from hydra.services.application import ApplicationService
@@ -35,8 +34,6 @@ __all__ = [
     "quiet_hours_keyboard",
 ]
 
-def _mapping_projection(value: object) -> dict:
-    return dict(value) if isinstance(value, Mapping) else {}
 
 def _main_keyboard():
     return InlineKeyboardMarkup(
@@ -75,6 +72,7 @@ def _main_keyboard():
             ],
         ],
     )
+
 
 def _notification_keyboard():
     return InlineKeyboardMarkup(
@@ -123,6 +121,7 @@ def _notification_keyboard():
         ],
     )
 
+
 def _antidpi_keyboard(app: ApplicationService):
     status = app.protocols.status("antidpi")
     action = "⏸ Остановить" if status.running else "▶️ Запустить"
@@ -142,13 +141,10 @@ def _antidpi_keyboard(app: ApplicationService):
                 "🚫 Блокировки",
                 callback_data=navigation.view_callback("antidpi_bans"),
             ),
-            InlineKeyboardButton(
-                "👁 Наблюдение",
-                callback_data=navigation.view_callback("antidpi_watch"),
-            ),
         ],
     ]
     return _back_keyboard(refresh="antidpi", extra=rows)
+
 
 def _set_plugin_running(
     state: AppState,
@@ -162,6 +158,7 @@ def _set_plugin_running(
         return app.protocols.disable(state, name)
     return app.protocols.enable(state, name)
 
+
 def _toggle_antidpi(app: ApplicationService) -> tuple[bool, str]:
     state = app.admin.load_state()
     running = app.protocols.status("antidpi").running
@@ -173,6 +170,7 @@ def _toggle_antidpi(app: ApplicationService) -> tuple[bool, str]:
     )
     return ok, "остановлен" if running else "запущен"
 
+
 def _honeypot_keyboard(app: ApplicationService):
     status = app.protocols.status("honeypot")
     rows = [
@@ -181,31 +179,14 @@ def _honeypot_keyboard(app: ApplicationService):
                 "⏹ Остановить" if status.running else "▶️ Запустить",
                 callback_data="ask:honeypot_toggle",
             ),
+            InlineKeyboardButton(
+                "🚫 Блокировки",
+                callback_data=navigation.view_callback("honeypot_bans"),
+            ),
         ],
     ]
-    data = _mapping_projection(
-        app.plugin_query("honeypot", "management_snapshot"),
-    )
-    banned = (
-        data.get("banned", {})
-        if isinstance(data.get("banned"), dict)
-        else {}
-    )
-    ordered = sorted(
-        banned.items(),
-        key=lambda item: str(item[1].get("banned_at", "")),
-        reverse=True,
-    )
-    for address, _metadata in ordered[:5]:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    f"🔓 {address}",
-                    callback_data=f"ask-hp-unban:{address}",
-                ),
-            ],
-        )
     return _back_keyboard(refresh="honeypot", extra=rows)
+
 
 def _toggle_honeypot(app: ApplicationService) -> tuple[bool, str]:
     state = app.admin.load_state()
@@ -217,6 +198,7 @@ def _toggle_honeypot(app: ApplicationService) -> tuple[bool, str]:
         app=app,
     )
     return ok, "остановлен" if running else "запущен"
+
 
 def _fail2ban_keyboard(app: ApplicationService):
     running = app.protocols.status("fail2ban").running
@@ -232,6 +214,7 @@ def _fail2ban_keyboard(app: ApplicationService):
             ],
         ],
     )
+
 
 def _toggle_fail2ban(app: ApplicationService) -> tuple[bool, str]:
     state = app.admin.load_state()

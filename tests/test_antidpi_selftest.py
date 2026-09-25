@@ -10,24 +10,21 @@ from hydra.core.state import AppState, PluginState, TelegramConfig, User
 from hydra.plugins.antidpi import selftest
 
 
-def test_udp_diagnostics_executes_inside_its_function(tmp_path):
-    mapping_file = tmp_path / "mappings.jsonl"
-    mapping_file.write_text('{"source_ip":"198.51.100.8"}\n', encoding="utf-8")
+def test_runtime_diagnostics_executes_inside_its_function():
+    """Only the firewall and socket state AntiScan owns is collected."""
     completed = subprocess.CompletedProcess([], 0, stdout="ok", stderr="")
-    state = AppState(protocols={
-        "hysteria2": PluginState(enabled=True, config={"port": 8443}),
-    })
-    with patch("hydra.plugins.antidpi.selftest.MAP_FILE", mapping_file), \
-         patch("hydra.plugins.antidpi.selftest.HOST.run", return_value=completed) as run:
-        result = selftest._udp_diagnostics(state)
+    with patch("hydra.plugins.antidpi.selftest.HOST.run",
+               return_value=completed) as run:
+        result = selftest._runtime_diagnostics()
 
-    assert result["protocol_ports"][8443] == "hysteria2"
-    assert result["source_relay_mappings"] == ['{"source_ip":"198.51.100.8"}']
     assert set(result["commands"]) == {
-        "iptables_v4", "iptables_v6", "input_rules_v4", "input_rules_v6",
-        "udp_sockets", "tcp_sockets",
+        "input_rules_v4", "input_rules_v6", "udp_sockets", "tcp_sockets",
     }
-    assert run.call_count == 6
+    assert run.call_count == 4
+    # UDP listener attribution and the AWG debug hook are gone.
+    assert "protocol_ports" not in result
+    assert "source_relay_mappings" not in result
+    assert "amneziawg_dynamic_debug" not in result
 
 
 def test_external_capture_writes_redacted_bundle_without_probes(tmp_path):
@@ -42,7 +39,7 @@ def test_external_capture_writes_redacted_bundle_without_probes(tmp_path):
          patch("hydra.plugins.antidpi.selftest._all_journal", return_value=[]), \
          patch("hydra.plugins.antidpi.selftest._all_new_log_lines", return_value={}), \
          patch("hydra.plugins.antidpi.selftest._environment", return_value={}), \
-         patch("hydra.plugins.antidpi.selftest._udp_diagnostics", return_value={"ok": True}), \
+         patch("hydra.plugins.antidpi.selftest._runtime_diagnostics", return_value={"ok": True}), \
          patch("hydra.plugins.antidpi.selftest.time.sleep"), \
          patch("hydra.plugins.antidpi.selftest.time.time", side_effect=[100.0, 101.0, 102.0]):
         result = selftest.capture_external_tests(
@@ -56,18 +53,13 @@ def test_external_capture_writes_redacted_bundle_without_probes(tmp_path):
         report = json.loads(bundle.extractfile("hydra-antidpi-capture/report.json").read())
     assert report["mode"] == "external_capture"
     assert report["antidpi_runtime"]["events"] == 2
-    assert report["udp_diagnostics"] == {"ok": True}
+    assert report["runtime_diagnostics"] == {"ok": True}
     assert report["capture_delta"]["events"] == 1
     assert report["capture_delta"]["notifications"]["delivered"] == 1
 
 
-def test_capture_summary_attributes_udp_port_and_native_awg_evidence():
-    state = AppState(protocols={
-        "hysteria2": PluginState(enabled=True, config={"port": 8443}),
-        "amneziawg": PluginState(enabled=True, config={
-            "profiles": {"phone": {"port": 51820}},
-        }),
-    })
+def test_capture_summary_counts_only_proven_rejects():
+    """Kernel UDP probes and AWG telemetry must not appear in a capture."""
     records = [
         {"SYSLOG_IDENTIFIER": "kernel", "MESSAGE": (
             "HYDRA_UDP_PROBE SRC=198.51.100.5 SPT=12345 DPT=8443"
@@ -76,13 +68,20 @@ def test_capture_summary_attributes_udp_port_and_native_awg_evidence():
             "amneziawg: awg0: Invalid MAC of handshake, dropping packet "
             "from 198.51.100.6:12346"
         )},
+        {"_SYSTEMD_UNIT": "sing-box.service", "MESSAGE": (
+            "inbound/snell[snell-1111aaaa2222-in]: process connection from "
+            "198.51.100.7:1234: snell: serve 198.51.100.7:1234: read request: "
+            "open record header: cipher: message authentication failed"
+        )},
     ]
-    summary = selftest._capture_event_summary(records, state)
-    assert {item["protocol"] for item in summary} == {"hysteria2", "amneziawg"}
-    assert {item["kind"] for item in summary} == {"udp_probe", "handshake_failure"}
+    summary = selftest._capture_event_summary(records)
+
+    assert len(summary) == 1
+    assert summary[0]["protocol"] == "snell"
+    assert summary[0]["count"] == 1
 
 
-def test_targets_cover_enabled_protocol_shapes():
+def test_only_snell_has_a_probe_target():
     state = AppState(
         protocols={
             "anytls": PluginState(enabled=True, config={"domain": "a.example"}),
@@ -91,46 +90,31 @@ def test_targets_cover_enabled_protocol_shapes():
             "snell": PluginState(enabled=True),
             "amneziawg": PluginState(enabled=True, config={"profiles": {"desktop": {"port": 51830}}}),
             "vless": PluginState(enabled=True, config={"domain": "vless.example"}),
+            "naive": PluginState(enabled=True, config={"network": "both"}),
         },
         users=[User(email="u", uuid="id", credentials={"snell": {"port": 32123}})],
     )
-    with patch("hydra.plugins.antidpi.selftest.get_effective_port", return_value=20444):
-        assert {target.transport for target in selftest._targets(state, "anytls")} == {"tcp", "tls"}
-    assert selftest._targets(state, "hysteria2") == [selftest.Target("udp", 4443)]
-    assert selftest._targets(state, "wdtt") == [selftest.Target("udp", 56009)]
     assert selftest._targets(state, "snell") == [selftest.Target("tcp", 32123)]
-    assert selftest._targets(state, "amneziawg") == [selftest.Target("udp", 51830)]
-    assert selftest._targets(state, "vless") == [
-        selftest.Target("tls", 443, sni="vless.example"),
-    ]
-
-
-def test_mieru_journal_is_collected_from_sing_box_unit():
-    assert selftest.JOURNAL_UNITS["mieru"] == ("sing-box",)
-
-
-def test_naive_targets_use_global_domain_and_transport_mode():
-    state = AppState(
-        protocols={"naive": PluginState(enabled=True, config={"network": "both"})},
-    )
-    state.network.domain = "naive.example"
-    with patch("hydra.plugins.antidpi.selftest.get_effective_port", return_value=10443):
-        targets = selftest._targets(state, "naive")
-    assert selftest.Target("tcp", 10443) in targets
-    assert selftest.Target("udp", 10443) in targets
-    assert selftest.Target("tls", 443, sni="naive.example") in targets
+    for protocol in ("anytls", "hysteria2", "wdtt", "amneziawg", "vless", "naive"):
+        assert selftest._targets(state, protocol) == [], protocol
+    assert selftest.SUPPORTED_PROTOCOLS == ("snell",)
+    assert selftest.JOURNAL_UNITS == {"snell": ("sing-box",)}
 
 
 def test_journal_relevance_rejects_background_traffic():
-    assert selftest._relevant_journal_record("anytls", {
+    assert selftest._relevant_journal_record("snell", {
         "_SYSTEMD_UNIT": "sing-box.service",
-        "MESSAGE": "inbound/anytls: unknown user password from 127.0.0.1:1234",
+        "MESSAGE": (
+            "inbound/snell[snell-1111aaaa2222-in]: process connection from "
+            "127.0.0.1:1234: snell: serve 127.0.0.1:1234: read request: "
+            "open record header: cipher: message authentication failed"
+        ),
     }) is True
-    assert selftest._relevant_journal_record("anytls", {
+    assert selftest._relevant_journal_record("snell", {
         "_SYSTEMD_UNIT": "sing-box.service",
         "MESSAGE": "inbound/tproxy: connection from 127.0.0.1:1234",
     }) is False
-    assert selftest._relevant_journal_record("amneziawg", {
+    assert selftest._relevant_journal_record("snell", {
         "_SYSTEMD_UNIT": "kernel",
         "MESSAGE": "HYDRA-PORTSCAN SRC=127.0.0.1 DST=127.0.0.1",
     }) is False
@@ -150,10 +134,19 @@ def test_redactor_removes_state_secrets():
 
 def test_run_selftest_writes_redacted_archive(tmp_path):
     state = AppState(
-        protocols={"telemt": PluginState(enabled=True, port=8443, config={"secret": "native-secret"})},
+        protocols={"snell": PluginState(
+            enabled=True,
+            port=32123,
+            config={"secret": "native-secret"},
+        )},
     )
     archive = tmp_path / "result.tar.gz"
-    record = {"_SYSTEMD_UNIT": "telemt.service", "MESSAGE": "invalid handshake from 192.0.2.10 native-secret"}
+    record = {"_SYSTEMD_UNIT": "sing-box.service", "MESSAGE": (
+        "inbound/snell[snell-1111aaaa2222-in]: process connection from "
+        "192.0.2.10:1234: snell: serve 192.0.2.10:1234: read request: "
+        "open record header: cipher: message authentication failed "
+        "native-secret"
+    )}
     with patch.object(selftest, "_is_linux_host", return_value=True), \
          patch.object(selftest, "_environment", return_value={"hydra_version": "test"}), \
          patch.object(selftest, "_probe", return_value=[{"error": ""}]), \
@@ -165,9 +158,10 @@ def test_run_selftest_writes_redacted_archive(tmp_path):
     assert result["ok"] is True
     with tarfile.open(archive, "r:gz") as bundle:
         report = json.loads(bundle.extractfile("hydra-antidpi-selftest/report.json").read())
-        journal = bundle.extractfile("hydra-antidpi-selftest/journal/telemt.jsonl").read().decode()
-    assert report["protocols"]["telemt"]["status"] in {"filter_match", "native_log_unmatched"}
-    assert report["protocols"]["telemt"]["coverage"]["native_log_observed"] is True
+        journal = bundle.extractfile("hydra-antidpi-selftest/journal/snell.jsonl").read().decode()
+    # A proven journal reject satisfies the protocol-context filter.
+    assert report["protocols"]["snell"]["status"] == "filter_match"
+    assert report["protocols"]["snell"]["coverage"]["native_log_observed"] is True
     assert "native-secret" not in journal
     assert "[REDACTED]" in journal
 
@@ -246,18 +240,10 @@ def test_vless_native_probe_invalidates_uuid_in_ephemeral_copy():
     assert generated["outbounds"][0]["uuid"] == "real-uuid"
 
 
-def test_awg_handshake_payload_uses_profile_header_and_padding():
-    state = AppState(protocols={
-        "amneziawg": PluginState(enabled=True, config={"profiles": {
-            "desktop": {
-                "port": 51830,
-                "obfuscation": {"H1": "287454020", "S1": "40"},
-            },
-        }}),
-    })
-    payload = selftest._awg_handshake_payload(state, selftest.Target("udp", 51830))
-    assert payload[:4] == b"\x44\x33\x22\x11"
-    assert len(payload) == 188
+def test_amneziawg_probe_payload_is_gone():
+    """AntiScan no longer observes AmneziaWG, so it has no payload builder."""
+    assert not hasattr(selftest, "_awg_handshake_payload")
+    assert not hasattr(selftest, "awg_handshake_payload")
 
 
 def test_native_client_environment_enables_legacy_dns_without_mutating_host(monkeypatch):
@@ -282,13 +268,25 @@ def test_native_naive_probe_uses_curl_against_loopback_sni():
     assert "http://selftest.invalid/__hydra_antidpi_selftest__" in command
 
 
-def test_naive_log_filter_summary_recognizes_proxy_auth_failure():
-    line = json.dumps({
-        "status": 407,
-        "request": {"remote_ip": "127.0.0.1", "method": "GET", "uri": "/test"},
+def test_log_filter_summary_recognizes_only_scanner_paths():
+    """Every decoy surface replays through the same scanner-path filter."""
+    scanner = json.dumps({
+        "status": 404,
+        "request": {"remote_ip": "203.0.113.7", "method": "GET", "uri": "/.env"},
     })
-    matches = selftest._log_filter_matches("naive", {"/tmp/access.log": [line]})
-    assert matches[0]["event"]["kind"] == "auth_failure"
+    normal = json.dumps({
+        "status": 200,
+        "request": {"remote_ip": "203.0.113.8", "method": "GET", "uri": "/about"},
+    })
+    matches = selftest._log_filter_matches(
+        "snell",
+        {"/tmp/access.log": [scanner, normal]},
+    )
+
+    assert len(matches) == 1
+    assert matches[0]["ip"] == "203.0.113.7"
+    assert matches[0]["event"]["kind"] == "decoy_scan"
+    assert matches[0]["event"]["reason"] == "scanner_path"
 
 
 def test_full_mode_records_native_client_coverage(tmp_path):

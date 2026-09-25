@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from subprocess import CompletedProcess
 from types import SimpleNamespace
 
 import pytest
 
 from hydra.core.host import HostBackend
-from hydra.core.state_kernel_models import KERNEL_HYDRACORE, KERNEL_SINGBOX_EXTENDED
+from hydra.core.state_kernel_models import KERNEL_HYDRACORE
 from hydra.core.state_models import AppState
 from hydra.services.kernel import KernelRuntimeStatus, KernelService
 from hydra.services.kernel_infrastructure import KernelInfrastructure
@@ -30,7 +31,7 @@ class Runtime:
         self.status = KernelRuntimeStatus(
             True,
             running=True,
-            provider=KERNEL_SINGBOX_EXTENDED,
+            provider="legacy",
         )
         self.prepared: Prepared | None = None
 
@@ -38,12 +39,12 @@ class Runtime:
         return self.status
 
     def prepare_switch(self, provider: str, channel: str) -> Prepared:
-        assert (provider, channel) == (KERNEL_HYDRACORE, "stable")
+        assert (provider, channel) == (KERNEL_HYDRACORE, "debug")
         self.status = KernelRuntimeStatus(
             True,
             running=True,
             provider=provider,
-            capabilities=("hydracore", "call_vk_multi_user"),
+            capabilities=("hydracore", "call_vk_parasite"),
         )
         self.prepared = Prepared(self.status)
         return self.prepared
@@ -53,14 +54,16 @@ def test_kernel_service_persists_only_after_verified_runtime() -> None:
     runtime = Runtime()
     saved: list[str] = []
     state = AppState()
-    state.install.update({
-        "singbox_last_update_check": "2026-08-10T00:00:00+00:00",
-        "singbox_update_available": True,
-        "singbox_latest_version": "v1.13.16-extended-hydracore.6",
-    })
+    state.install.update(
+        {
+            "singbox_last_update_check": "2026-08-10T00:00:00+00:00",
+            "singbox_update_available": True,
+            "singbox_latest_version": "v1.13.16-extended-hydracore.6",
+        }
+    )
     service = KernelService(runtime, save_state=lambda current: saved.append(current.kernel.provider))
 
-    result = service.switch(state, KERNEL_HYDRACORE)
+    result = service.switch(state, KERNEL_HYDRACORE, channel="debug")
 
     assert result.ok and result.changed
     assert state.kernel.provider == KERNEL_HYDRACORE
@@ -83,9 +86,9 @@ def test_kernel_service_rolls_runtime_back_when_state_save_fails() -> None:
     state.revision = 7
     service = KernelService(runtime, save_state=fail_save)
     with pytest.raises(OSError, match="disk full"):
-        service.switch(state, KERNEL_HYDRACORE)
+        service.switch(state, KERNEL_HYDRACORE, channel="debug")
 
-    assert state.kernel.provider == KERNEL_SINGBOX_EXTENDED
+    assert state.kernel.provider == KERNEL_HYDRACORE
     assert state.revision == 7
     assert state.install["singbox_update_available"] is True
     assert runtime.prepared is not None and runtime.prepared.rolled_back is True
@@ -93,52 +96,38 @@ def test_kernel_service_rolls_runtime_back_when_state_save_fails() -> None:
 
 def test_hydracore_contract_is_exact_and_does_not_accept_aliases() -> None:
     valid = {
-        "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
-        "features": {
-            "call_vk_multi_user": True,
-            "call_vk_multi_user_client": False,
-            "call_vk_multi_user_server": True,
-        },
-        "protocols": {
-            "call_modes": ["multi_user"],
-            "call_vk_multi_user_wire": {"min": 1, "max": 2},
-        },
+        "contract_version": 1,
+        "core_id": "io.hydrabox.hydracore",
+        "role": "vps",
+        "calls_mode": "vk_parasite",
     }
+    wrong_version = {**valid, "contract_version": 2}
+    wrong_role = {**valid, "role": "client"}
     alias = {
-        "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
-        "features": {"call_vk_multiuser": True},
-        "protocols": {"call_modes": ["multi_user"]},
-    }
-    p2p_only = {
-        "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
-        "features": {
-            "call_vk_multi_user": True,
-            "call_vk_multi_user_client": False,
-            "call_vk_multi_user_server": True,
-        },
-        "protocols": {
-            "call_modes": ["p2p"],
-            "call_vk_multi_user_wire": {"min": 1, "max": 2},
-        },
+        "contract_version": 1,
+        "core_id": "io.hydrabox.hydracore",
+        "role": "vps",
+        "calls_mode": "multi_user",
     }
 
     assert KernelInfrastructure._has_hydracore_contract(valid) is True
+    assert KernelInfrastructure._has_hydracore_contract(wrong_version) is False
+    assert KernelInfrastructure._has_hydracore_contract(wrong_role) is False
     assert KernelInfrastructure._has_hydracore_contract(alias) is False
-    assert KernelInfrastructure._has_hydracore_contract(p2p_only) is False
-    assert "call_vk_multi_user" in KernelInfrastructure._normalized_capabilities(valid)
-    assert "call_vk_multi_user" not in KernelInfrastructure._normalized_capabilities(alias)
 
 
-def test_kernel_service_rejects_stock_switch_before_mutating_active_calls() -> None:
+def test_kernel_service_rejects_removed_provider_before_mutating_calls() -> None:
     runtime = Runtime()
-    state = AppState(protocols={
-        "calls": SimpleNamespace(enabled=True),
-    })
+    state = AppState(
+        protocols={
+            "calls": SimpleNamespace(enabled=True),
+        }
+    )
     state.kernel.provider = KERNEL_HYDRACORE
     service = KernelService(runtime, save_state=lambda _state: None)
 
-    with pytest.raises(ValueError, match="disable or uninstall Calls"):
-        service.switch(state, KERNEL_SINGBOX_EXTENDED)
+    with pytest.raises(ValueError, match="provider"):
+        service.switch(state, "sing-box-extended")
 
     assert runtime.prepared is None
     assert state.kernel.provider == KERNEL_HYDRACORE
@@ -175,8 +164,14 @@ def test_kernel_candidate_error_redacts_secret_detail(tmp_path) -> None:
     )
     runtime._inspect_binary = lambda *_args, **_kwargs: KernelRuntimeStatus(
         True,
-        provider=KERNEL_SINGBOX_EXTENDED,
+        provider=KERNEL_HYDRACORE,
     )
+    runtime._contract_payload = lambda *_args: {
+        "contract_version": 1,
+        "core_id": "io.hydrabox.hydracore",
+        "role": "vps",
+        "calls_mode": "vk_parasite",
+    }
     runtime._run = lambda *_args: SimpleNamespace(
         returncode=1,
         stdout="",
@@ -184,10 +179,38 @@ def test_kernel_candidate_error_redacts_secret_detail(tmp_path) -> None:
     )
 
     with pytest.raises(RuntimeError) as failure:
-        runtime._validate_candidate(tmp_path / "sing-box", KERNEL_SINGBOX_EXTENDED)
+        runtime._validate_candidate(tmp_path / "sing-box", KERNEL_HYDRACORE)
 
     assert "hunter2" not in str(failure.value)
     assert str(failure.value) == "candidate rejected the active configuration"
+
+
+def test_kernel_candidate_may_predate_the_contract(tmp_path) -> None:
+    # Rolling back to the release that ran a minute ago must not be refused for the shape of a
+    # document that release never printed.
+    config = tmp_path / "config.json"
+    config.write_text("{}", encoding="utf-8")
+    runtime = KernelInfrastructure(
+        HostBackend(),
+        config_path=config,
+        lock_path=tmp_path / "kernel.lock",
+    )
+    runtime._inspect_binary = lambda binary, *, running: KernelRuntimeStatus(
+        True,
+        provider=KERNEL_HYDRACORE,
+    )
+    runtime._contract_payload = lambda binary: {}
+    runtime._legacy_capabilities_payload = lambda binary: {
+        "api_version": 2,
+        "identity": {"core_id": "io.hydrabox.hydracore", "role": "vps"},
+        "features": {"call_vk_parasite": True},
+        "protocols": {"call_modes": ["vk_parasite"]},
+    }
+    runtime._run = lambda binary, *arguments: CompletedProcess(binary, 0, stdout="", stderr="")
+
+    status = runtime._validate_candidate(tmp_path / "sing-box", KERNEL_HYDRACORE)
+
+    assert status.provider == KERNEL_HYDRACORE
 
 
 class CopyFailHost(HostBackend):
@@ -259,7 +282,7 @@ def test_kernel_stop_failure_still_restarts_previous_running_service(tmp_path) -
     runtime._validate_candidate = lambda *_args: KernelRuntimeStatus(
         True,
         provider=KERNEL_HYDRACORE,
-        capabilities=("hydracore", "call_vk_multi_user"),
+        capabilities=("hydracore", "call_vk_parasite"),
     )
 
     with pytest.raises(RuntimeError, match="failed to stop"):

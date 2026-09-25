@@ -1,4 +1,5 @@
 """Pure SNI-router policy, backend discovery, and ownership validation."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -13,6 +14,10 @@ _DYNAMIC_ROUTE_KEY = "_tls_http_decoy_route"
 _DYNAMIC_ROUTE_KIND = "http_path_proxy"
 _PASSTHROUGH_ROUTE_KEY = "_tls_passthrough_route"
 _PASSTHROUGH_ROUTE_KIND = "tls_passthrough"
+_TERMINATED_ROUTE_KEY = "_tls_terminated_route"
+_TERMINATED_ROUTE_KIND = "http_reverse_proxy"
+# Route kinds that terminate TLS in the multiplexer and load a certificate pair.
+TLS_TERMINATED_ROUTE_KINDS = (_DYNAMIC_ROUTE_KIND, _TERMINATED_ROUTE_KIND)
 
 
 @dataclass(frozen=True)
@@ -52,15 +57,15 @@ def get_decoy_http_port(plugin_name: str, decoy_ports: Mapping[str, int]) -> int
 
 def needs_mux(state: AppState, internal_ports: Mapping[str, int]) -> bool:
     """Decide whether the public TCP/443 SNI multiplexer is required."""
-    if any(
-        protocol.enabled
-        and protocol.config.get("domain")
-        and isinstance(protocol.config.get(_DYNAMIC_ROUTE_KEY), Mapping)
-        and protocol.config[_DYNAMIC_ROUTE_KEY].get("kind")
-        == _DYNAMIC_ROUTE_KIND
-        for protocol in state.protocols.values()
-    ):
-        return True
+    for protocol in state.protocols.values():
+        route = protocol.config.get(_DYNAMIC_ROUTE_KEY)
+        if (
+            protocol.enabled
+            and protocol.config.get("domain")
+            and isinstance(route, Mapping)
+            and route.get("kind") == _DYNAMIC_ROUTE_KIND
+        ):
+            return True
 
     for name in ("anytls", "trusttunnel", "hysteria2"):
         proto = state.protocols.get(name)
@@ -81,6 +86,26 @@ def needs_mux(state: AppState, internal_ports: Mapping[str, int]) -> bool:
         else:
             domain = proto.config.get("domain")
         if domain:
+            count += 1
+
+    # Plugin-owned TLS endpoints are not in the historical fixed-port map: a
+    # passthrough one claims TCP/443 when combined with another SNI backend, and
+    # a TLS-terminating one is served by the frontend or not at all.
+    for name, proto in state.protocols.items():
+        if name in internal_ports or not proto.enabled:
+            continue
+        for key, kind, frontend_only in (
+            (_PASSTHROUGH_ROUTE_KEY, _PASSTHROUGH_ROUTE_KIND, False),
+            (_TERMINATED_ROUTE_KEY, _TERMINATED_ROUTE_KIND, True),
+        ):
+            route = proto.config.get(key)
+            if not isinstance(route, Mapping) or route.get("kind") != kind:
+                continue
+            sni_key = route.get("sni_config")
+            if not isinstance(sni_key, str) or not proto.config.get(sni_key):
+                continue
+            if frontend_only:
+                return True
             count += 1
 
     sub_domain = getattr(state.network, "sub_domain", "")
@@ -109,16 +134,27 @@ def get_quic_owner(state: AppState, prospective: str | None = None) -> str | Non
     owners = get_quic_owners(state, prospective=prospective)
     if len(owners) > 1:
         labels = ", ".join(owners)
-        raise ValueError(
-            "UDP/443 одновременно запрошен несколькими "
-            f"QUIC-протоколами: {labels}"
-        )
+        raise ValueError(f"UDP/443 одновременно запрошен несколькими QUIC-протоколами: {labels}")
     return owners[0] if owners else None
 
 
 def has_sub_domain(state: AppState) -> bool:
     """Return whether the subscription endpoint has a dedicated SNI."""
     return bool(getattr(state.network, "sub_domain", ""))
+
+
+def _port_of(value: object, default: int = 0) -> int:
+    """Привести порт из состояния к числу: испорченное значение не должно ломать сборку.
+
+    Раньше здесь стояло приведение без обёртки: одна нечисловая запись в состоянии
+    роняла построение всего документа маршрутов вместо понятного отказа.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
 
 
 def collect_backends(
@@ -143,29 +179,29 @@ def collect_backends(
             domain = proto.config.get("domain", "")
         if not domain:
             continue
-        backends.append({
-            "name": name,
-            "domain": domain,
-            "port": port,
-            "cert_file": proto.config.get("cert_file", ""),
-            "key_file": proto.config.get("key_file", ""),
-            "network_mode": (
-                proto.config.get("network", "tcp")
-                if name == "naive"
-                else (
-                    proto.config.get("transport", "tcp")
-                    if name == "trusttunnel"
-                    else ""
+        backends.append(
+            {
+                "name": name,
+                "domain": domain,
+                "port": port,
+                "cert_file": proto.config.get("cert_file", ""),
+                "key_file": proto.config.get("key_file", ""),
+                "network_mode": (
+                    proto.config.get("network", "tcp")
+                    if name == "naive"
+                    else (proto.config.get("transport", "tcp") if name == "trusttunnel" else "")
+                ),
+                "decoy_theme": str(
+                    proto.config.get("decoy_theme", ""),
                 )
-            ),
-            "decoy_theme": str(
-                proto.config.get("decoy_theme", ""),
-            ).strip().lower(),
-        })
+                .strip()
+                .lower(),
+            }
+        )
 
     occupied_ports = {
-        *(int(item) for item in internal_ports.values()),
-        *(int(item) for item in reserved_ports),
+        *(_port_of(item) for item in internal_ports.values()),
+        *(_port_of(item) for item in reserved_ports),
     }
     for name, proto in sorted(state.protocols.items()):
         if name in internal_ports or not proto.enabled:
@@ -180,30 +216,38 @@ def collect_backends(
             )
             backends.append(backend)
             occupied_ports.update(
-                (int(backend["port"]), int(backend["decoy_port"])),
+                (_port_of(backend["port"]), _port_of(backend["decoy_port"])),
             )
             continue
-        passthrough = proto.config.get(_PASSTHROUGH_ROUTE_KEY)
-        if passthrough is None:
-            continue
-        backend = _passthrough_backend(
-            name,
-            proto.config,
-            passthrough,
-            occupied_ports,
-        )
-        backends.append(backend)
-        occupied_ports.add(int(backend["port"]))
+        for key, kind, backend_name in (
+            (_PASSTHROUGH_ROUTE_KEY, _PASSTHROUGH_ROUTE_KIND, name),
+            (_TERMINATED_ROUTE_KEY, _TERMINATED_ROUTE_KIND, f"{name}:web"),
+        ):
+            route = proto.config.get(key)
+            if route is None:
+                continue
+            backend = _plugin_route_backend(
+                name,
+                proto.config,
+                route,
+                occupied_ports,
+                kind=kind,
+                backend_name=backend_name,
+            )
+            backends.append(backend)
+            occupied_ports.add(_port_of(backend["port"]))
 
     sub_domain = getattr(state.network, "sub_domain", "")
     if sub_domain:
-        backends.append({
-            "name": "sub_server",
-            "domain": sub_domain,
-            "port": internal_ports["sub_server"],
-            "cert_file": "",
-            "key_file": "",
-        })
+        backends.append(
+            {
+                "name": "sub_server",
+                "domain": sub_domain,
+                "port": internal_ports["sub_server"],
+                "cert_file": "",
+                "key_file": "",
+            }
+        )
     _validate_unique_domains(backends)
     return backends
 
@@ -217,8 +261,7 @@ def _validate_unique_domains(backends: list[dict[str, Any]]) -> None:
         previous = owners.get(domain)
         if previous is not None:
             raise ValueError(
-                f"TLS domain {domain} is assigned to both "
-                f"{previous} and {backend['name']}",
+                f"TLS domain {domain} is assigned to both {previous} and {backend['name']}",
             )
         owners[domain] = str(backend["name"])
 
@@ -233,7 +276,7 @@ def _route_port(
     field: str,
     occupied_ports: set[int],
 ) -> int:
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         raise _route_error(name, f"{field} must be an integer port")
     try:
         port = int(value)
@@ -246,18 +289,22 @@ def _route_port(
     return port
 
 
-def _passthrough_backend(
+def _plugin_route_backend(
     name: str,
     config: Mapping[str, Any],
     route: object,
     occupied_ports: set[int],
+    *,
+    kind: str,
+    backend_name: str,
 ) -> dict[str, Any]:
-    """Project a plugin-owned TLS passthrough route, e.g. Reality."""
-    if (
-        not isinstance(route, Mapping)
-        or route.get("kind") != _PASSTHROUGH_ROUTE_KIND
-    ):
-        raise _route_error(name, f"kind must be {_PASSTHROUGH_ROUTE_KIND}")
+    """Project one plugin-owned TLS route declared in plugin configuration.
+
+    ``tls_passthrough`` keeps TLS in the plugin; ``http_reverse_proxy`` lets the
+    multiplexer terminate it and forward the plaintext stream to the plugin.
+    """
+    if not isinstance(route, Mapping) or route.get("kind") != kind:
+        raise _route_error(name, f"kind must be {kind}")
     internal_port = _route_port(
         name,
         route.get("internal_port"),
@@ -268,22 +315,25 @@ def _passthrough_backend(
     if not isinstance(sni_key, str) or not sni_key:
         raise _route_error(name, "sni_config must name a config field")
     sni = str(config.get(sni_key, "")).strip().lower().rstrip(".")
-    if (
-        not sni
-        or "://" in sni
-        or "." not in sni
-        or any(character.isspace() for character in sni)
-    ):
+    if not sni or "://" in sni or "." not in sni or any(character.isspace() for character in sni):
         raise _route_error(name, f"{sni_key} is not a valid SNI")
-    return {
-        "name": name,
+    backend = {
+        "name": backend_name,
         "domain": sni,
         "port": internal_port,
         "cert_file": "",
         "key_file": "",
         "network_mode": "",
-        "route_kind": _PASSTHROUGH_ROUTE_KIND,
+        "route_kind": kind,
     }
+    for field, config_key in (("cert_file", "cert_config"), ("key_file", "key_config")):
+        key = route.get(config_key)
+        if key is None:
+            continue
+        if not isinstance(key, str) or not key:
+            raise _route_error(name, f"{config_key} must name a config field")
+        backend[field] = config.get(key, "")
+    return backend
 
 
 def _dynamic_backend(
@@ -292,20 +342,33 @@ def _dynamic_backend(
     route: object,
     occupied_ports: set[int],
 ) -> dict[str, Any]:
-    if (
-        not isinstance(route, Mapping)
-        or route.get("kind") != _DYNAMIC_ROUTE_KIND
-    ):
+    if not isinstance(route, Mapping) or route.get("kind") != _DYNAMIC_ROUTE_KIND:
         raise _route_error(name, f"kind must be {_DYNAMIC_ROUTE_KIND}")
-    domain = str(config.get("domain", "")).strip()
+    # Маршрут может назвать поле конфигурации, откуда берётся его origin-имя.
+    domain_key = route.get("domain_config") or "domain"
+    if not isinstance(domain_key, str) or not domain_key:
+        raise _route_error(name, "domain_config must name a config field")
+    domain = str(config.get(domain_key, "")).strip()
     if not domain:
-        raise _route_error(name, "domain is required")
-    internal_port = _route_port(
-        name,
-        route.get("internal_port"),
-        "internal_port",
-        occupied_ports,
-    )
+        raise _route_error(name, f"{domain_key} is required")
+    internal_key = route.get("internal_port_config")
+    if internal_key is None:
+        internal_port = _route_port(
+            name,
+            route.get("internal_port"),
+            "internal_port",
+            occupied_ports,
+        )
+    elif isinstance(internal_key, str) and internal_key:
+        # Порт ядра выбирается при установке и живёт в состоянии; маршрут читает его оттуда же.
+        internal_port = _route_port(
+            name,
+            config.get(internal_key),
+            internal_key,
+            occupied_ports,
+        )
+    else:
+        raise _route_error(name, "internal_port_config must name a config field")
     decoy_port = _route_port(
         name,
         route.get("decoy_http_port"),
@@ -314,16 +377,9 @@ def _dynamic_backend(
     )
     root = str(route.get("decoy_root", ""))
     root_parts = root.split("/")[1:]
-    if (
-        not root.startswith("/var/www/decoy-")
-        or "\\" in root
-        or any(part in {"", ".", ".."} for part in root_parts)
-    ):
+    if not root.startswith("/var/www/decoy-") or "\\" in root or any(part in {"", ".", ".."} for part in root_parts):
         raise _route_error(name, "decoy_root must be under /var/www/decoy-*")
-    theme = str(
-        config.get("decoy_theme")
-        or route.get("decoy_theme", ""),
-    ).strip().lower()
+    theme = str(config.get("decoy_theme") or route.get("decoy_theme", "")).strip().lower()
     if not is_supported(theme):
         raise _route_error(name, "decoy_theme is not supported")
     path_key = route.get("path_config")
@@ -339,7 +395,7 @@ def _dynamic_backend(
         or any(part in {"", ".", ".."} for part in path_parts)
     ):
         raise _route_error(name, f"{path_key} is not a valid HTTP path")
-    return {
+    backend = {
         "name": name,
         "domain": domain,
         "port": internal_port,
@@ -352,6 +408,19 @@ def _dynamic_backend(
         "decoy_theme": theme,
         "proxy_path": proxy_path,
     }
+    if route.get("origin_http2"):
+        backend["origin_http2"] = True
+    if not route.get("upstream_tls", True):
+        backend["upstream_tls"] = False
+    host_key = route.get("public_host_config")
+    if isinstance(host_key, str) and host_key:
+        public_host = str(config.get(host_key, "")).strip()
+        if public_host:
+            backend["public_host"] = public_host
+    prefix = str(route.get("assets_prefix") or "").strip().rstrip("/")
+    if prefix:
+        backend["assets_prefix"] = prefix
+    return backend
 
 
 def has_source_preservation(config: object) -> bool:
@@ -399,12 +468,9 @@ def relay_routes(
     """Plan TCP exact-source relay routes."""
     antidpi = antidpi_enabled(state)
     return [
-        (str(backend["name"]), relay_ports[str(backend["name"])], int(backend["port"]))
+        (str(backend["name"]), relay_ports[str(backend["name"])], _port_of(backend["port"]))
         for backend in backends
-        if (
-            backend["name"] in relay_ports
-            and (backend["name"] == "vless" or antidpi)
-        )
+        if (backend["name"] in relay_ports and (backend["name"] == "vless" or antidpi))
     ]
 
 
@@ -415,9 +481,9 @@ def udp_relay_routes(
 ) -> list[tuple[str, int, int]]:
     """Plan the sole UDP exact-source relay route."""
     owner = get_quic_owner(state)
-    if not antidpi_enabled(state) or owner not in udp_relay_ports:
+    if owner is None or not antidpi_enabled(state) or owner not in udp_relay_ports:
         return []
     backend = next((item for item in backends if item["name"] == owner), None)
     if backend is None:
         return []
-    return [(owner, udp_relay_ports[owner], int(backend["port"]))]
+    return [(owner, udp_relay_ports[owner], _port_of(backend["port"]))]

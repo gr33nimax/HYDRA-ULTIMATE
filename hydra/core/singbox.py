@@ -5,12 +5,14 @@ hydra/core/singbox.py — Управление Sing-Box.
 Sing-Box — центральный оркестратор: все протоколы → inbound'ы,
 WARP/DNS/GeoIP → outbound/route/rules.
 """
+
 from __future__ import annotations
 
 import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional
@@ -26,6 +28,7 @@ from hydra.core.singbox_upgrade import (
     migrate_runtime_dns_config,
     parse_version,
     upgrade_kernel,
+    version_token,
 )
 from hydra.utils.commands import redact_text
 
@@ -72,15 +75,14 @@ def log(level: str, message: str) -> None:
 
 def _run(cmd: list, capture: bool = True, timeout: int = 30) -> subprocess.CompletedProcess:
     import os
-    kw = {"timeout": timeout}
-    if capture:
-        kw.update(capture_output=True, text=True, encoding="utf-8", errors="replace")
-    else:
-        kw.update(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     env = os.environ.copy()
     env["ENABLE_DEPRECATED_LEGACY_DNS_SERVERS"] = "true"
     env["ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER"] = "true"
-    return HOST.run(cmd, env=env, **kw)
+    # Аргументы перечислены явно: у словаря выводится один тип значения, и он конфликтует.
+    if capture:
+        return HOST.run(cmd, timeout=timeout, env=env, text=True, encoding="utf-8", errors="replace")
+    return HOST.run(cmd, timeout=timeout, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def validate_current_config() -> tuple[bool | None, str]:
@@ -96,6 +98,7 @@ def preflight_conflicts(config: dict) -> list[str]:
 #  Установка
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def is_installed() -> bool:
     """Проверяет, установлен ли Sing-Box."""
     return _find_singbox() is not None
@@ -109,14 +112,11 @@ def get_version() -> Optional[str]:
     r = _run([str(bin_path), "version"])
     if r.returncode == 0:
         first_line = r.stdout.strip().split("\n")[0]
-        for token in first_line.split():
-            candidate = token.removeprefix("v")
-            if candidate[:1].isdigit():
-                return candidate
+        return version_token(first_line)
     return None
 
 
-EXTENDED_REPO = "shtorm-7/sing-box-extended"
+HYDRACORE_REPO = "gr33nimax/hydracore"
 
 
 def _custom_kernel_selected() -> bool:
@@ -129,85 +129,90 @@ def _custom_kernel_selected() -> bool:
 
 
 def install(force: bool = False) -> bool:
-    """Устанавливает sing-box-extended из GitHub releases."""
+    """Install the newest Hydracore release the selected channel serves."""
     _set_error("")
-    if _custom_kernel_selected():
-        if is_installed():
-            return True
-        message = (
-            "Hydracore is selected; use the kernel switch service instead of "
-            "the legacy Sing-Box Extended installer"
-        )
-        _set_error(message)
-        _log("WARNING", message)
-        return False
-    if not force and is_installed() and "extended" in (get_version() or "").lower():
+    if not force and "hydracore" in (get_version() or "").lower():
         return True
 
-    _log("INFO", "Installing sing-box-extended...")
-
-    # Останавливаем службу перед заменой бинарника, чтобы не было конфликтов
-    try:
-        stop()
-    except Exception as e:
-        _log("WARNING", f"Failed to stop sing-box: {e}")
+    _log("INFO", "Installing Hydracore release for the selected channel...")
 
     from hydra.utils.net import detect_arch
-    from hydra.utils.downloader import download_github_asset_filtered, extract_tarball
+    from hydra.utils.downloader import (
+        download_github_asset_filtered,
+        extract_tarball,
+        verify_elf,
+    )
 
     arch = detect_arch()  # "amd64" | "arm64"
 
     def _match(name: str) -> bool:
-        """Точный фильтр: linux-{arch}.tar.gz без суффиксов."""
-        return (
-            f"linux-{arch}.tar.gz" in name
-            and "compressed" not in name
-            and "musl" not in name
-            and "glibc" not in name
-            and "purego" not in name
-        )
+        return name == f"hydracore-vps-linux-{arch}.tar.gz"
 
-    dest = Path("/tmp/singbox-install")
-    dest.mkdir(parents=True, exist_ok=True)
-    tarball = dest / "sing-box.tar.gz"
+    selection = singbox_service.selected_kernel_release(load_state)
 
-    if not download_github_asset_filtered(EXTENDED_REPO, _match, tarball, on_error=_set_error):
-        _log("ERROR", last_error() or "Failed to download sing-box-extended")
-        return False
+    with tempfile.TemporaryDirectory(prefix="hydra-kernel-") as directory:
+        dest = Path(directory)
+        tarball = dest / "kernel.tar.gz"
+        if not download_github_asset_filtered(
+            HYDRACORE_REPO,
+            _match,
+            tarball,
+            include_prerelease=selection.include_prerelease,
+            prerelease_tag_markers=selection.prerelease_tag_markers,
+            prerelease_exclude_markers=selection.prerelease_exclude_markers,
+            require_unique=True,
+            require_digest=True,
+            on_error=_set_error,
+        ):
+            _log("ERROR", last_error() or "Failed to download Hydracore")
+            return False
 
-    extract_tarball(tarball, dest)
-
-    # Найти бинарник sing-box в распакованном каталоге
-    candidate = None
-    for p in dest.rglob("sing-box"):
-        if p.is_file() and p.stat().st_size > 1_000_000:  # >1MB = бинарник
-            candidate = p
-            break
-
-    if not candidate:
-        _log("ERROR", "sing-box binary not found in archive")
-        shutil.rmtree(str(dest), ignore_errors=True)
-        return False
-
-    # Удаляем старый бинарник, если он существует, для исключения "Text file busy"
-    if SINGBOX_BIN.exists():
+        extracted = dest / "extracted"
+        extract_tarball(tarball, extracted)
+        candidates = [
+            path for path in extracted.rglob("sing-box") if path.is_file() and path.stat().st_size > 1_000_000
+        ]
+        if len(candidates) != 1 or not verify_elf(candidates[0]):
+            _set_error("Hydracore release must contain exactly one ELF sing-box binary")
+            _log("ERROR", last_error())
+            return False
+        candidates[0].chmod(0o755)
+        probe = _run([str(candidates[0]), "version"])
+        if probe.returncode != 0 or "hydracore" not in str(probe.stdout or "").lower():
+            _set_error("Hydracore release identity check failed")
+            _log("ERROR", last_error())
+            return False
+        was_running = is_running()
+        if was_running:
+            try:
+                stopped = stop()
+            except Exception as exc:
+                _set_error(f"Failed to stop sing-box before Hydracore replacement: {exc}")
+                _log("ERROR", last_error())
+                return False
+            if not stopped:
+                _set_error("Failed to stop sing-box before Hydracore replacement")
+                _log("ERROR", last_error())
+                start()
+                return False
         try:
-            SINGBOX_BIN.unlink()
-        except Exception as e:
-            _log("WARNING", f"Failed to unlink {SINGBOX_BIN}: {e}")
+            HOST.atomic_copy(candidates[0], SINGBOX_BIN, mode=0o755)
+        except Exception as copy_error:
+            if was_running:
+                try:
+                    start()
+                except Exception as restart_error:
+                    _log("CRITICAL", f"Failed to restore sing-box service: {restart_error}")
+            raise copy_error
 
-    import shutil as _sh
-    _sh.move(str(candidate), str(SINGBOX_BIN))
-    SINGBOX_BIN.chmod(0o755)
-    _sh.rmtree(str(dest), ignore_errors=True)
-
-    _log("INFO", f"sing-box-extended installed: {get_version()}")
-    return is_installed()
+    _log("INFO", f"Hydracore installed: {get_version()}")
+    return True
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Генерация конфига
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 def generate_config(
     state: AppState,
@@ -260,8 +265,7 @@ def _preflight_conflicts(config: dict) -> list[str]:
             existing = snis.get(normalized)
             if existing and existing[0] != sni_scope:
                 errors.append(
-                    f"SNI '{normalized}' назначен нескольким inbound "
-                    f"({existing[1]} и {owner})",
+                    f"SNI '{normalized}' назначен нескольким inbound ({existing[1]} и {owner})",
                 )
             else:
                 snis[normalized] = (sni_scope, owner)
@@ -328,6 +332,7 @@ def write_config(config: dict) -> bool:
 #  Управление службой
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def _render_service_unit(bin_path: Path) -> str:
     """Compatibility wrapper for the managed Sing-Box unit renderer."""
     return singbox_units.render_service_unit(bin_path, SINGBOX_CONFIG)
@@ -369,12 +374,8 @@ def start() -> bool:
         _log("INFO", "No config found, creating minimal default...")
         minimal = {
             "log": {"level": "info"},
-            "inbounds": [
-                {"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080}
-            ],
-            "outbounds": [
-                {"type": "direct", "tag": "direct"}
-            ],
+            "inbounds": [{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080}],
+            "outbounds": [{"type": "direct", "tag": "direct"}],
         }
         write_config(minimal)
 
@@ -419,12 +420,18 @@ def wait_until_stable(checks: int = 3, interval: float = 0.5) -> bool:
 
 
 def reload() -> bool:
-    """Перезагружает конфиг sing-box (graceful)."""
+    """Применить конфиг перезапуском: sing-box не умеет перечитывать его на ходу.
+
+    `systemctl reload` — это `ExecReload=/bin/kill -HUP`, а SIGHUP sing-box обрабатывает
+    как остановку: ядро умирает, `Restart=on-failure` поднимает его через `RestartSec`,
+    пост-проверка видит мёртвый сервис и откатывает правку маршрута. Restart доводит до
+    активного состояния сам.
+    """
     if not is_running() or _service_unit_needs_update():
         return start()
-    r = _run(["systemctl", "reload", "sing-box"])
+    r = _run(["systemctl", "restart", "sing-box"])
     if r.returncode != 0:
-        message = f"Не удалось перезагрузить Sing-Box: {r.stderr or r.stdout or 'ошибка systemd'}"
+        message = f"Не удалось перезапустить Sing-Box: {r.stderr or r.stdout or 'ошибка systemd'}"
         _set_error(message)
         _log("ERROR", message)
         return False
@@ -467,19 +474,11 @@ def status_text() -> str:
     update_suffix = ""
     if state.install.get("singbox_update_available") and version:
         update_suffix = " (Доступно обновление)"
-    return (
-        f"Sing-Box: {version or 'не установлен'}{update_suffix} | "
-        f"{'✓ запущен' if running else '✗ остановлен'}"
-    )
+    return f"Sing-Box: {version or 'не установлен'}{update_suffix} | {'✓ запущен' if running else '✗ остановлен'}"
 
 
 def update_kernel() -> tuple[bool, str]:
     """Update Sing-Box through the isolated transactional upgrade service."""
-    if _custom_kernel_selected():
-        return (
-            False,
-            "Hydracore is selected; update it through the provider-aware kernel switch",
-        )
     return upgrade_kernel(
         target_binary=SINGBOX_BIN,
         config_path=SINGBOX_CONFIG,
@@ -496,4 +495,3 @@ def update_kernel() -> tuple[bool, str]:
             migrate_config=migrate_runtime_dns_config,
         ),
     )
-

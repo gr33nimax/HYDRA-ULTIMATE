@@ -13,6 +13,7 @@ from hydra.ui._menus import (
     users_detail,
     users_links,
     users_management,
+    users_names,
     users_overview,
     users_subscription,
 )
@@ -24,6 +25,7 @@ USER_MODULES = (
     "users_common.py",
     "users_links.py",
     "users_management.py",
+    "users_names.py",
     "users_overview.py",
     "users_subscription.py",
 )
@@ -80,6 +82,7 @@ def test_user_companions_are_part_of_the_menu_monkeypatch_contract() -> None:
     assert companions == (
         users_links,
         users_management,
+        users_names,
         users_overview,
         users_subscription,
     )

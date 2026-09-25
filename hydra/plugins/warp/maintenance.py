@@ -1,15 +1,11 @@
 """Declarative background-maintenance adapter for the WARP plugin."""
+
 from __future__ import annotations
 
-from hydra.contracts import BackupResource
 from hydra.plugins.base import MaintenanceTask
 from hydra.plugins.context import PluginStateAccess
-from hydra.plugins.warp import observation
-from hydra.plugins.warp.constants import (
-    WARP_EXTERNAL_CACHE,
-    WGCF_ACCOUNT,
-    WGCF_PROFILE,
-)
+from hydra.plugins.warp import observation, rules
+from hydra.plugins.warp.constants import WARP_EXTERNAL_CACHE
 
 
 WARP_MAINTENANCE_TASKS = (
@@ -22,10 +18,6 @@ WARP_MAINTENANCE_TASKS = (
         apply_on_success=True,
     ),
 )
-WARP_BACKUP_RESOURCES = (
-    BackupResource(str(WGCF_ACCOUNT), "file"),
-    BackupResource(str(WGCF_PROFILE), "file"),
-)
 
 
 class WarpMaintenanceMixin:
@@ -37,15 +29,17 @@ class WarpMaintenanceMixin:
         state: PluginStateAccess | None = None,
         forced: bool = False,
     ) -> bool:
-        del state
+        enabled_keys: tuple[str, ...] = ()
+        if state is not None:
+            enabled_keys = tuple(rules.enabled_external_keys(state))
         return observation.external_rules_update_due(
             WARP_EXTERNAL_CACHE,
+            enabled_keys=enabled_keys,
             forced=forced,
         )
 
 
 __all__ = [
-    "WARP_BACKUP_RESOURCES",
     "WARP_MAINTENANCE_TASKS",
     "WarpMaintenanceMixin",
 ]

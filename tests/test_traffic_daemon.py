@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from hydra.core.state import AppState, User
+from hydra.services.active_connections import tracked_active_connections
 from hydra.services.traffic_daemon import (
     _apply_connection_snapshot, _parse_hysteria2_users, _write_log, run_daemon,
 )
@@ -96,7 +97,7 @@ def test_shadowtls_connection_is_attributed_to_authenticated_user():
         "upload": 120,
         "download": 480,
     }
-    shadowtls_users = {
+    shadowtls_users: dict[tuple[str, str], str | None] = {
         ("__id__", "shadow-connection"): "shadow@example.com",
     }
 
@@ -235,6 +236,32 @@ def test_parse_hysteria2_users_correlates_tcp_and_udp_log_contexts():
     assert users[("::ffff:198.51.100.20", "43123")] == "hy2@example.com"
     assert users[("198.51.100.20", "43123")] == "hy2@example.com"
     assert users[("2001:db8::10", "53100")] == "udp@example.com"
+
+
+def test_vless_and_anytls_helpers_keep_their_flat_source_port_contract():
+    from hydra.services.traffic_attribution import parse_anytls_users, parse_vless_users
+
+    lines = [
+        "INFO [123456 0ms] inbound/vless[vless-cdn-in]: inbound connection from 127.0.0.1:43123",
+        "INFO [123456 1ms] inbound/vless[vless-cdn-in]: [cdn@example.com] inbound connection to origin.example.com:443",
+        "INFO [123457 0ms] inbound/vless[vless-xhttp-in]: inbound connection from 127.0.0.1:43124",
+        "INFO [123457 1ms] inbound/vless[vless-xhttp-in]: "
+        "[vless@example.com] inbound connection to cp.cloudflare.com:80",
+    ]
+
+    assert parse_vless_users(lines) == {
+        "43123": "cdn@example.com",
+        "43124": "vless@example.com",
+    }
+    assert parse_anytls_users([]) == {}
+
+    reused_port = [
+        "INFO [123456 0ms] inbound/vless[vless-xhttp-in]: inbound connection from 127.0.0.1:43123",
+        "INFO [123456 1ms] inbound/vless[vless-xhttp-in]: [first@example.com] inbound connection to example.com:443",
+        "INFO [654321 0ms] inbound/vless[vless-cdn-in]: inbound connection from 127.0.0.1:43123",
+        "INFO [654321 1ms] inbound/vless[vless-cdn-in]: [last@example.com] inbound connection to example.com:443",
+    ]
+    assert parse_vless_users(reused_port) == {"43123": "last@example.com"}
 
 
 def test_snell_inbound_tag_maps_back_to_its_isolated_user():
@@ -414,6 +441,71 @@ Jul 03 19:42:56 sing-box[222339]: +0300 2026-07-03 19:42:56 INFO [2371721395 89m
         assert user.traffic_used_bytes == 400
         assert user.credentials["anytls"]["traffic_used_bytes"] == 400
         assert len(saved_states) >= 1
+
+
+def test_daemon_credits_cdn_from_journal_when_clash_user_is_empty():
+    state = AppState()
+    state.network.clash_api_enabled = True
+    state.network.clash_api_port = 9090
+    state.network.clash_api_secret = "mysecret"
+    user = User(email="cdn@example.com", uuid="u-cdn")
+    state.users = [user]
+
+    api_response = {
+        "connections": [
+            {
+                "id": "conn-cdn-1",
+                "metadata": {
+                    "inboundTag": "vless-cdn-in",
+                    "user": "",
+                    "sourceIP": "127.0.0.1",
+                    "sourcePort": "43123",
+                },
+                "upload": 120,
+                "download": 880,
+            }
+        ]
+    }
+
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = json.dumps(api_response).encode("utf-8")
+    mock_resp.__enter__.return_value = mock_resp
+
+    fake_journal = (
+        "INFO [123456 0ms] inbound/vless[vless-cdn-in]: "
+        "inbound connection from 127.0.0.1:43123\n"
+        "INFO [123456 1ms] inbound/vless[vless-cdn-in]: "
+        "[cdn@example.com] inbound connection to origin.example.com:443\n"
+    )
+    mock_sub = MagicMock()
+    mock_sub.returncode = 0
+    mock_sub.stdout = fake_journal
+
+    def mock_sleep(_secs):
+        raise SystemExit()
+
+    def mock_update(mutator):
+        return state, mutator(state)
+
+    with (
+        patch("hydra.services.traffic_daemon.load_state", return_value=state),
+        patch("hydra.services.traffic_daemon.update_state", side_effect=mock_update),
+        patch("hydra.services.traffic_daemon.urllib.request.urlopen", return_value=mock_resp),
+        patch("hydra.services.traffic_daemon.HOST.run", return_value=mock_sub),
+        patch("time.sleep", side_effect=mock_sleep),
+        patch("hydra.services.traffic_daemon.Path") as mock_path,
+    ):
+        mock_path.return_value.open.return_value.__enter__.return_value = MagicMock()
+
+        with pytest.raises(SystemExit):
+            run_daemon()
+
+    assert user.traffic_used_bytes == 1000
+    assert user.credentials["vless_cdn"]["traffic_used_bytes"] == 1000
+    rows = tracked_active_connections(state)
+    assert [(row["plugin"], row["email"]) for row in rows] == [
+        ("vless_cdn", "cdn@example.com"),
+    ]
 
 
 def test_daemon_collects_trusttunnel_traffic_using_journalctl():
