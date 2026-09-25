@@ -46,6 +46,8 @@ class WarpPlugin(masque_scan.MasqueScannerActions, WarpMaintenanceMixin, BasePlu
             "update_external_rules",
             "register_masque_scanner",
             "scan_masque_endpoints",
+            "install_warpscout_binary",
+            "remove_warpscout_binary",
         ),
         queries=(
             "external_rules_update_due",
@@ -97,6 +99,8 @@ class WarpPlugin(masque_scan.MasqueScannerActions, WarpMaintenanceMixin, BasePlu
         # Retain the rule cache: reinstall() calls uninstall() before restoring
         # selected routes, and must not silently turn those routes into direct.
         removed = observation.remove_legacy_install(LEGACY_WGCF_PATHS)
+        # The MASQUE scanner is a WARP-only helper, so it leaves with the plugin.
+        masque_scan.remove_warpscout()
         # Nothing else is touched on purpose: the core keeps terminating WARP, so
         # removing the plugin must not take the device away from it.
         if removed:
