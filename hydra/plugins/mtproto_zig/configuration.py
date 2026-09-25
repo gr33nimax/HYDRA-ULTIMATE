@@ -156,8 +156,7 @@ def set_cover_domain(
     relay = web_domain(protocol.config)
     if relay and host == relay:
         raise ValueError(
-            f"Домен FakeTLS совпадает с доменом WEB-релея {host}: "
-            "один домен не может принадлежать двум маршрутам",
+            f"Домен FakeTLS совпадает с доменом WEB-релея {host}: один домен не может принадлежать двум маршрутам",
         )
     if host == current:
         return False
@@ -209,7 +208,15 @@ def set_web_settings(
     protocol.config["web_domain"] = host
     protocol.config[WEB_ROUTE_KEY] = web_route_metadata()
     if normalized == "web-only":
-        return protocol.config.pop(ROUTE_KEY, None) is not None or changed
+        # Tombstone, don't delete: the command apply path re-runs
+        # normalize_protocol_config, whose config_defaults setdefault only fills
+        # *missing* keys — an explicit None survives, a deleted key gets the
+        # FakeTLS route back. Resurrecting it made plan_configuration reject
+        # web-only for the route it had just removed. The router and the
+        # web-only guard both treat a non-Mapping value as "no route".
+        removed = isinstance(protocol.config.get(ROUTE_KEY), Mapping)
+        protocol.config[ROUTE_KEY] = None
+        return removed or changed
     return _ensure_passthrough_route(protocol.config, changed)
 
 

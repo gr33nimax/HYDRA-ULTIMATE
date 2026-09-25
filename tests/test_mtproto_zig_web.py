@@ -326,6 +326,27 @@ def test_set_web_settings_adds_and_removes_the_route():
     assert config["web_mode"] == "off"
 
 
+def test_web_only_route_removal_survives_config_default_normalization():
+    # Regression: set_web_settings("web-only") drops the FakeTLS passthrough
+    # route, but the command apply path re-runs prepare_enable ->
+    # normalize_protocol_config, whose config_defaults setdefault used to
+    # re-inject ROUTE_KEY. plan_configuration then rejected web-only for the
+    # very route it had removed ("Режим «только WEB» требует снятого маршрута…").
+    from collections.abc import Mapping
+
+    plugin = MtprotoZigPlugin()
+    state = _state()
+    state.protocols["mtproto_zig"].enabled = True
+    assert plugin.set_web_settings(state, mode="web-only", domain=WEB_DOMAIN) is True
+
+    setup = ProtocolSetupService(_Certificates(), lambda name: plugin if name == "mtproto_zig" else None)
+    setup.prepare_enable(state, "mtproto_zig")
+
+    assert not isinstance(_config(state).get(configuration.ROUTE_KEY), Mapping)
+    # Must not raise the faketls-route guard.
+    configuration.plan_configuration(state)
+
+
 def test_fake_tls_domain_never_requests_a_certificate_but_the_web_domain_does():
     certificates = _Certificates()
     plugin = MtprotoZigPlugin()
@@ -1417,7 +1438,11 @@ def test_web_only_route_set_drops_the_direct_passthrough_route():
     assert plugin.set_web_settings(state, mode="web-only", domain=WEB_DOMAIN) is True
 
     config = _config(state)
-    assert configuration.ROUTE_KEY not in config
+    # Tombstoned to None rather than deleted, so config_defaults normalization on
+    # the apply path cannot resurrect it; a non-Mapping value is "no route".
+    from collections.abc import Mapping
+
+    assert not isinstance(config.get(configuration.ROUTE_KEY), Mapping)
     assert config[configuration.WEB_ROUTE_KEY]["kind"] == "http_reverse_proxy"
     # The rendered Caddy document keeps the WEB route and no direct SNI route.
     assert [item["name"] for item in _backends(state)] == ["mtproto_zig:web"]
