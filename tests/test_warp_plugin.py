@@ -56,7 +56,10 @@ def test_runtime_actions_are_declared_public_capabilities():
     assert set(WarpPlugin.meta.capabilities.actions) == {
         "delete_local_profile",
         "update_external_rules",
+        "register_masque_scanner",
+        "scan_masque_endpoints",
     }
+    assert "set_masque_endpoint" in WarpPlugin.meta.capabilities.commands
 
 
 def test_manager_observation_and_profile_deletion_are_plugin_owned(tmp_path):

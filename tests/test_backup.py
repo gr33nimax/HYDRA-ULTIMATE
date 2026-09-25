@@ -83,7 +83,8 @@ def test_restore_requires_valid_archive_and_writes_under_restore_root(tmp_path, 
     restore_root = tmp_path / "restored"
     monkeypatch.setattr(backup, "RESTORE_ROOT", restore_root)
     monkeypatch.setattr(
-        backup, "create_backup",
+        backup,
+        "create_backup",
         lambda *args, **kwargs: {"archive": str(tmp_path / "safety.tar.gz")},
     )
     dry_run = backup.restore_backup(
@@ -186,10 +187,7 @@ def test_tree_resource_is_recursive_and_excludes_runtime_files(
         backup,
         "_archive_path",
         lambda path: (
-            "var/lib/hydra"
-            if path == state_dir
-            else "var/lib/hydra/"
-            + path.relative_to(state_dir).as_posix()
+            "var/lib/hydra" if path == state_dir else "var/lib/hydra/" + path.relative_to(state_dir).as_posix()
         ),
     )
 

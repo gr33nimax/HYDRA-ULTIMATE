@@ -7,6 +7,7 @@ from hydra.core.host import HOST
 from hydra.plugins.base import (
     BasePlugin,
     ConfigFragment,
+    HealthResult,
     PluginCategory,
     PluginMeta,
     PluginStatus,
@@ -15,6 +16,7 @@ from hydra.plugins.context import PluginStateAccess
 from hydra.plugins.warp import (
     catalog,
     configuration,
+    masque_scan,
     observation,
     parsing,
     routing_catalog,
@@ -32,20 +34,24 @@ from hydra.plugins.warp.constants import (
 from hydra.plugins.warp.maintenance import WARP_MAINTENANCE_TASKS, WarpMaintenanceMixin
 
 
-class WarpPlugin(WarpMaintenanceMixin, BasePlugin):
+class WarpPlugin(masque_scan.MasqueScannerActions, WarpMaintenanceMixin, BasePlugin):
     meta = PluginMeta(
         name="warp",
         description=("Cloudflare WARP (MASQUE): выборочное туннелирование через сеть Cloudflare"),
         category=PluginCategory.ENHANCEMENT,
         version="3.0.0",
+        commands=("set_masque_endpoint",),
         actions=(
             "delete_local_profile",
             "update_external_rules",
+            "register_masque_scanner",
+            "scan_masque_endpoints",
         ),
         queries=(
             "external_rules_update_due",
             "external_sources",
             "manager_observation",
+            "masque_scanner_status",
             "routing_catalog",
         ),
         maintenance_tasks=WARP_MAINTENANCE_TASKS,
@@ -112,6 +118,15 @@ class WarpPlugin(WarpMaintenanceMixin, BasePlugin):
             validate_ip=parsing.is_ip_or_cidr,
             resolve_host=socket.gethostbyname,
         )
+
+    set_masque_endpoint = staticmethod(masque_scan.set_masque_endpoint)
+
+    @staticmethod
+    def masque_scanner_status() -> dict[str, bool]:
+        return masque_scan.scanner_status(HOST)
+
+    def healthcheck_for_state(self, state: PluginStateAccess) -> HealthResult:
+        return masque_scan.healthcheck(state, HOST)
 
     def status(self, state: PluginStateAccess | None = None) -> PluginStatus:
         from hydra.core.singbox import is_running

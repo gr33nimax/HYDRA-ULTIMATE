@@ -8,6 +8,7 @@ from typing import Callable
 from hydra.plugins.base import ConfigFragment
 from hydra.plugins.context import PluginStateAccess
 from hydra.plugins.warp.constants import RU_TLD_SOURCE, is_granular_source
+from hydra.plugins.warp.masque_scan import PROBE_PORT, endpoint_value
 from hydra.plugins.warp.route_validation import validate_route_targets
 
 ParsedProfile = dict[str, dict[str, str]]
@@ -158,13 +159,15 @@ def render_custom_profile(
 WARP_OUTBOUND_TAG = "warp_masque"
 
 
-def render_default_outbound() -> tuple[dict, dict]:
+def render_default_outbound(endpoint: dict | None = None) -> tuple[dict, dict]:
     """Render the native Cloudflare WARP outbound.
 
     The core registers its own device through the Cloudflare API and speaks
     MASQUE (HTTP/3 CONNECT-IP) to it, so no external profile is involved.
     """
-    outbound = {"type": "masque", "tag": WARP_OUTBOUND_TAG}
+    outbound: dict[str, object] = {"type": "masque", "tag": WARP_OUTBOUND_TAG}
+    if endpoint is not None:
+        outbound.update(endpoint_value(endpoint.get("address"), endpoint.get("port")))
     selector = {"type": "selector", "tag": "warp", "outbounds": [WARP_OUTBOUND_TAG]}
     return outbound, selector
 
@@ -260,6 +263,9 @@ def configure_warp(
         default_domains=default_domains,
     )
     endpoints, outbounds = [], []
+    selected = config.get("masque_endpoint")
+    if selected is not None and not isinstance(selected, dict):
+        raise ValueError("MASQUE: некорректный выбранный адрес")
     destinations = {"direct"}
     for name, parsed in read_custom_profiles(
         profiles_dir,
@@ -288,13 +294,17 @@ def configure_warp(
         validate_domain=validate_domain,
         validate_ip=validate_ip,
     )
-    if not rules:
+    if not rules and selected is None:
         return ConfigFragment()
-    if any(rule.get("outbound") == "warp" for rule in rules):
-        # Only pay for a Cloudflare device when something routes through it.
-        outbound, selector = render_default_outbound()
+    inbounds = []
+    if selected is not None or any(rule.get("outbound") == "warp" for rule in rules):
+        outbound, selector = render_default_outbound(selected)
         outbounds.extend((outbound, selector))
+    if selected is not None:
+        inbounds.append({"type": "socks", "tag": "warp-probe-in", "listen": "127.0.0.1", "listen_port": PROBE_PORT})
+        rules.insert(0, {"inbound": ["warp-probe-in"], "outbound": "warp"})
     return ConfigFragment(
+        inbounds=inbounds,
         outbounds=outbounds,
         endpoints=endpoints,
         route_rules=rules,

@@ -413,14 +413,10 @@ def test_all_main_install_and_update_entrypoints_default_to_main():
 
 def test_old_artifacts_are_pruned_only_after_a_successful_cutover():
     source = _source()
-    success_tail = source[
-        source.index('printf \'%s\\n\' "$TARGET_SHA" >"$ROLLBACK_DIR/SUCCESS"') :
-    ]
+    success_tail = source[source.index('printf \'%s\\n\' "$TARGET_SHA" >"$ROLLBACK_DIR/SUCCESS"') :]
 
     assert "prune_old_artifacts\n" in success_tail
-    assert success_tail.index("prune_old_artifacts\n") > success_tail.index(
-        "trap - ERR HUP INT TERM"
-    )
+    assert success_tail.index("prune_old_artifacts\n") > success_tail.index("trap - ERR HUP INT TERM")
 
 
 def _prune_old_artifacts_function() -> str:
@@ -437,9 +433,7 @@ def _usable_bash() -> str:
     bash = shutil.which("bash")
     if bash is None:
         pytest.skip("bash недоступен")
-    probe = subprocess.run(
-        [bash, "-c", "echo $BASH_VERSION"], capture_output=True, text=True
-    )
+    probe = subprocess.run([bash, "-c", "echo $BASH_VERSION"], capture_output=True, text=True)
     if probe.returncode != 0 or not probe.stdout.strip():
         pytest.skip("нет рабочего bash")
     return bash
@@ -492,9 +486,7 @@ def test_prune_old_artifacts_keeps_the_current_release_and_fresh_snapshots(tmp_p
         "#!/usr/bin/env bash\n"
         "set -Eeuo pipefail\n"
         "info() { printf 'info: %s\\n' \"$*\"; }\n"
-        "warn() { printf 'warn: %s\\n' \"$*\"; }\n"
-        + _prune_old_artifacts_function()
-        + "\nprune_old_artifacts\n",
+        "warn() { printf 'warn: %s\\n' \"$*\"; }\n" + _prune_old_artifacts_function() + "\nprune_old_artifacts\n",
         encoding="utf-8",
     )
     completed = subprocess.run(

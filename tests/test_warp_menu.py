@@ -176,14 +176,24 @@ def test_options_offer_the_normal_plugin_lifecycle():
         "3",
         "4",
         "5",
+        "6",
         "-",
         "8",
         "9",
         "0",
     ]
     assert "Выключить" in labels["1"]
+    assert "Сервер подключения WARP" in labels["4"]
     assert labels["8"] == "🔄 Переустановить"
     assert labels["9"] == "❌ Удалить"
+
+
+def test_masque_menu_is_reachable_from_warp_manager():
+    state = AppState(protocols={"warp": PluginState(installed=True)})
+    app = _app()
+    with bind_facade(warp_facade), patch.object(warp_facade, "_menu_masque") as picker:
+        _dispatch("4", state, app, state.protocols["warp"], _status(installed=True), ["direct", "warp"])
+    picker.assert_called_once_with(state, app)
 
 
 def test_an_uninstalled_plugin_installs_from_the_menu():

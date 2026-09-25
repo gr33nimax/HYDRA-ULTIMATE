@@ -243,6 +243,13 @@ def _menu_routing_rules(
         run(state, plugin_state, destinations, app)
 
 
+def _menu_masque(state: AppState, app: ApplicationService) -> None:
+    from hydra.ui.plugin_managers._warp_masque import _menu_masque as run
+
+    with _implementation_scope():
+        run(state, app)
+
+
 def _menu_geo_profiles(
     state: AppState,
     plugin_state,

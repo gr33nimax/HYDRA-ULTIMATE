@@ -379,6 +379,11 @@ hydra plugin query amneziawg protocol_mode_status --with-state
 hydra plugin query vless get_tuning --with-state
 hydra plugin query warp external_sources --with-state
 hydra plugin query warp routing_catalog --with-state
+hydra plugin query warp masque_scanner_status
+sudo hydra plugin action warp register_masque_scanner
+sudo hydra plugin action warp scan_masque_endpoints
+sudo hydra plugin command warp set_masque_endpoint --param 'address="162.159.198.1"' --param port=443
+sudo hydra plugin command warp set_masque_endpoint --param 'address=""' --param port=0
 sudo hydra plugin action dnscrypt apply_server_names \
   --param 'names=["cloudflare","quad9-dnscrypt-ip4-filter-pri"]'
 ```

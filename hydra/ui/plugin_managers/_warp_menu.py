@@ -66,7 +66,7 @@ def _status_lines(
         "  " + "─" * 45,
         f"  {BOLD}Точки выхода (Egress):{NC}",
         f"  • direct:         {GREEN}работает{NC}",
-        f"  • warp (MASQUE):  {GREEN}активен{NC}",
+        f"  • warp (MASQUE):  {GREEN if status.enabled else DIM}{'включён' if status.enabled else 'выключен'}{NC}",
     ]
     lines.extend(
         f"  • warp_{profile}:       {CYAN}{'активен (релей)' if status.enabled else 'настроен (не активен)'}{NC}"
@@ -133,11 +133,16 @@ def _options(
             ),
             (
                 "4",
+                "🌐 Сервер подключения WARP",
+                "Найти адрес или вернуть автоматический выбор",
+            ),
+            (
+                "5",
                 "⚙️ Управление профилями релеев",
                 "Добавить/удалить кастомные профили релеев",
             ),
             (
-                "5",
+                "6",
                 "🔄 Обновить внешние списки сейчас",
                 "Загрузить свежие списки правил с GitHub",
             ),
@@ -255,8 +260,10 @@ def _dispatch(
             app,
         )
     elif choice == "4" and status.installed:
-        facade._menu_geo_profiles(state, plugin_state, app)
+        facade._menu_masque(state, app)
     elif choice == "5" and status.installed:
+        facade._menu_geo_profiles(state, plugin_state, app)
+    elif choice == "6" and status.installed:
         _update_external_rules(state, app, plugin_state)
     elif choice == "8" and status.installed:
         _reinstall(state, app)

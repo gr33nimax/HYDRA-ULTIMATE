@@ -393,7 +393,10 @@ prune_old_artifacts() {
     # Каталоги, оставшиеся от прерванных обновлений.
     while IFS= read -r path; do
         [[ -n "$path" ]] || continue
-        rm -rf -- "$path" || { failed=$((failed + 1)); continue; }
+        rm -rf -- "$path" || {
+            failed=$((failed + 1))
+            continue
+        }
         removed=$((removed + 1))
     done < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d \
         -name '.staging-*' -mtime +1 -print 2>/dev/null || true)
@@ -405,7 +408,10 @@ prune_old_artifacts() {
         while IFS= read -r path; do
             [[ -n "$path" ]] || continue
             [[ "$(basename -- "$path")" == "$current_name" ]] && continue
-            rm -rf -- "$path" || { failed=$((failed + 1)); continue; }
+            rm -rf -- "$path" || {
+                failed=$((failed + 1))
+                continue
+            }
             removed=$((removed + 1))
         done < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d \
             ! -name '.staging-*' ! -name "$current_name" \
@@ -417,7 +423,10 @@ prune_old_artifacts() {
     while IFS= read -r path; do
         [[ -n "$path" ]] || continue
         [[ "$path" == "$ROLLBACK_DIR" ]] && continue
-        rm -rf -- "$path" || { failed=$((failed + 1)); continue; }
+        rm -rf -- "$path" || {
+            failed=$((failed + 1))
+            continue
+        }
         removed=$((removed + 1))
     done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d \
         -mtime "+$keep_backup_days" -print 2>/dev/null || true)
