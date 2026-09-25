@@ -121,53 +121,24 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 | **Calls · VK** | `56002/udp` | Native Hydracore `call` в режиме VK-parasite |
 | **qWDTT** | `56000/udp`, `56001/udp` | WireGuard поверх TURN |
 
-Транспорт **Calls · VK** поддерживает только Hydracore `vk_parasite`. Сервер
-слушает обычный UDP endpoint, а отдельный
-аутентифицированный поток каждого пользователя распределяется по фиксированному пулу из 4
-VK-комнат (4 по умолчанию). Общий obfs key снимает O(N)-перебор паролей с
-каждого пакета; после O(1) unwrap проверяется только найденный пользователь.
-Каждая сессия создаёт ровно четыре VK/TURN worker и четыре независимые KCP
-линии. Перед включением HYDRA требует выбранный Hydracore и точный
-контракт `sing-box hydra contract --json`: `core_id`, роль `vps` и режим
-`vk_parasite`. Stock core и legacy `p2p` отклоняются до запуска creator.
-Calls поднимает отдельный
-blue/green creator-пул `hydra-headless-creator-vk-calls@{a,b}-N`, фиксирует
-его до apply и при любой ошибке восстанавливает прежние комнаты, state и
-runtime. Per-user outbound входит только в зашифрованную Hydra Subscription v2;
-его Sing-Box outbound содержит `join_links`, но никогда legacy-поле `join_link`.
-Admin DTO сохраняет singular alias первого элемента только для API-совместимости.
-Calls больше не привязан к версии persisted state или номеру wire. State хранит
-только актуальный desired config `vk_parasite`; совместимость бинарника
-проверяется по contract перед изменением runtime. Старые state schema 0–18
-однократно импортируются напрямую в стабильный State Format v1.
+Транспорт **Calls · VK** маскирует трафик под VK-звонки: только Hydracore в режиме
+`vk_parasite`, где аутентифицированный поток каждого пользователя распределяется по пулу
+VK-комнат. Настройка, лимиты и per-user профили — в меню `Calls · VK`; контракт
+ядра, устройство пула и формат подписки — в [REFERENCE.md](docs/REFERENCE.md).
 
-HYDRA использует только Hydracore VPS. Канал ядра — явный switch: `stable` по
-умолчанию, `debug` включается осознанно. Обновление проверяет
-digest, ELF, identity/contract, активный config и health-check; при ошибке
-до замены сохраняются предыдущий бинарник и backup. Отдельного выбора
-Другого kernel provider больше нет.
+HYDRA работает только на Hydracore. Канал ядра — явный switch (`stable` по
+умолчанию, `debug` — осознанно); обновление проверяет бинарник и
+откатывается при сбое.
 
 ```bash
 hydra kernel status
 sudo hydra kernel switch hydracore --channel debug --force
 ```
 
-Канал `debug` выбирает самый свежий опубликованный prerelease Hydracore:
-`hydracore-sbe-<sbe-version>-debug-<n>` либо релиз-кандидат
-`hydracore-sbe-<sbe-version>-rc-<n>`. Retired-тег `-debug.<n>` не выбирается ни
-одним каналом, а persisted-значение `preview` резолвится как `debug`. Бинарник
-требует нативную телеметрию VK Calls и проходит те же
-проверки digest, ELF, identity/contract, активного конфига и health-check.
-
-Creator принадлежит только `Calls · VK` (Hydra VK Tunnel). В меню Calls можно
-до установки транспорта указать путь к локальному JSON с VK cookies; файл
-нормализуется, проверяется и атомарно заменяет
-`/etc/hydra/cookiesvk/cookies-vk.json` с правами `0600`. После установки Calls
-владеет своим blue/green-пулом ровно из 4 VK-комнат. Из меню Hydra VK Tunnel
-пул можно пересоздать без переустановки или включить автопересоздание с
-интервалом от 1 до 24 часов через Sync Agent. qWDTT не создаёт и не обновляет
-creator-пул, не использует cookies и продолжает владеть только своим сервером
-и `qwdtt://` master-артефактом.
+Creator принадлежит `Calls · VK`: VK cookies импортируются из меню Calls в
+`/etc/hydra/cookiesvk/cookies-vk.json` (`0600`), пул VK-комнат можно пересоздать
+вручную или по расписанию. qWDTT не использует cookies и владеет только своим
+сервером и `qwdtt://`-артефактом.
 
 > [!WARNING]
 > VK join-links и полный клиентский профиль — shared secret. HYDRA редактирует

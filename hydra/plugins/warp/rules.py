@@ -58,17 +58,21 @@ def download_rule_lists(
             errors.append(f"Неизвестный источник: {key}")
             continue
         item = catalog[key]
+        raw_urls = item.get("urls")
+        url_list = raw_urls.splitlines() if raw_urls else [item["url"]]
         try:
-            request = urllib.request.Request(
-                item["url"],
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-                },
-            )
-            with urllib.request.urlopen(request, timeout=30) as response:
-                content = response.read().decode("utf-8", errors="replace")
+            chunks = []
+            for source_url in url_list:
+                request = urllib.request.Request(
+                    source_url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                    },
+                )
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    chunks.append(response.read().decode("utf-8", errors="replace"))
             downloaded[key] = parse_rule_list(
-                content,
+                "\n".join(chunks),
                 validate_ip=validate_ip,
                 validate_domain=validate_domain,
             )

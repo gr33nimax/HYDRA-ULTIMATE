@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from hydra.core.state_migrations import _normalize_warp_sources
-from hydra.plugins.warp import catalog, routing_catalog
+from hydra.plugins.warp import catalog, routing_catalog, rules
 from hydra.plugins.warp.routing_catalog import (
     build_routing_catalog,
     category_menu,
@@ -319,3 +319,107 @@ def test_russian_service_category_does_not_claim_direct_is_a_russian_exit() -> N
     categories = build_routing_catalog({"yandex": {"name": "Yandex", "group": "ru"}}, {})
     assert categories[0].direction == ""
     assert routing_catalog.DEFAULT_LOCAL_LIST == "default"
+
+
+class _FetchResponse:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def __enter__(self) -> "_FetchResponse":
+        return self
+
+    def __exit__(self, *_exc) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return self._payload
+
+
+def test_fetch_sources_folds_every_russian_category_into_the_umbrella() -> None:
+    payload = json.dumps(
+        {
+            "base": "https://x.test/",
+            "categories": [{"id": "ru", "name": "РФ"}, {"id": "media", "name": "Медиа"}],
+            "services": [
+                {"id": "category-ru", "src": "s/category-ru.txt", "cat": "ru", "name": "Все РФ"},
+                {"id": "category-bank-ru", "src": "s/category-bank-ru.txt", "cat": "ru", "name": "Банки"},
+                {"id": "category-gov-ru", "src": "s/category-gov-ru.txt", "cat": "ru", "name": "Гос"},
+                {"id": "itDog-russia-inside", "src": "s/itDog-russia-inside.txt", "cat": "ru", "name": "itDog"},
+                {"id": "mosmetro", "src": "s/mosmetro.txt", "cat": "ru", "name": "Метро"},
+                {"id": "youtube", "src": "s/youtube.txt", "cat": "media", "name": "YT"},
+            ],
+        }
+    ).encode("utf-8")
+    with patch.object(catalog.urllib.request, "urlopen", return_value=_FetchResponse(payload)):
+        sources = catalog.fetch_sources()
+
+    # aggregate rollups are not selectable on their own
+    assert "category-bank-ru" not in sources
+    assert "category-gov-ru" not in sources
+    assert "itDog-russia-inside" not in sources
+    # every category-*-ru list is physically folded into category-ru
+    assert set(sources["category-ru"]["urls"].splitlines()) == {
+        "https://x.test/s/category-ru.txt",
+        "https://x.test/s/category-bank-ru.txt",
+        "https://x.test/s/category-gov-ru.txt",
+    }
+    # itdog and single services stay out of the umbrella
+    assert "itDog" not in sources["category-ru"]["urls"]
+    assert "mosmetro" not in sources["category-ru"]["urls"]
+    assert sources["mosmetro"]["group"] == "ru"  # single service is still selectable
+
+
+def test_download_rule_lists_unions_every_url_of_the_umbrella() -> None:
+    cat = {
+        "category-ru": {
+            "name": "Все РФ",
+            "url": "https://x.test/main.txt",
+            "group": "ru",
+            "urls": "https://x.test/main.txt\nhttps://x.test/bank.txt",
+        }
+    }
+    contents = {"https://x.test/main.txt": "a.ru\n", "https://x.test/bank.txt": "b.ru\n"}
+
+    def fake_urlopen(request, timeout=30):
+        return _FetchResponse(contents[request.full_url].encode("utf-8"))
+
+    with patch.object(rules.urllib.request, "urlopen", side_effect=fake_urlopen):
+        downloaded, errors = rules.download_rule_lists(
+            ["category-ru"],
+            cat,
+            validate_ip=lambda token: False,
+            validate_domain=lambda token: token.endswith(".ru"),
+        )
+
+    assert errors == []
+    assert downloaded["category-ru"]["domains"] == ["a.ru", "b.ru"]
+
+
+def test_russian_subcategories_fold_into_the_umbrella_and_itdog_is_dropped() -> None:
+    raw = {
+        "protocols": {
+            "warp": {
+                "config": {
+                    "list_targets": {
+                        "ext:category-bank-ru": "direct",
+                        "ext:category-gov-ru": "direct",
+                        "ext:itDog-russia-inside": "warp",
+                        "ext:youtube": "warp",
+                        "local:default": "warp",
+                    },
+                },
+            },
+        },
+    }
+
+    _normalize_warp_sources(raw)
+    targets = raw["protocols"]["warp"]["config"]["list_targets"]
+
+    assert targets == {
+        "ext:category-ru": "direct",
+        "ext:youtube": "warp",
+        "local:default": "warp",
+    }
+    assert not any("itdog" in key.lower() for key in targets)
+    _normalize_warp_sources(raw)  # idempotent
+    assert targets == raw["protocols"]["warp"]["config"]["list_targets"]
