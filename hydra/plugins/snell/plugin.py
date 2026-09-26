@@ -7,7 +7,7 @@ import ipaddress
 import json
 import urllib.parse
 
-from hydra.core.state_models import User
+from hydra.core.state_models import User, user_can_use
 from hydra.plugins.context import PluginStateAccess
 from hydra.plugins.base import BasePlugin, ConfigFragment, PluginCategory, PluginMeta, PluginStatus
 from hydra.utils.crypto import derive_hex_key
@@ -76,7 +76,7 @@ class SnellPlugin(BasePlugin):
         generation = self._version(state)
         inbounds = []
         for user in state.users:
-            if user.blocked:
+            if not user_can_use(user, "snell"):
                 continue
             inbound = {
                 "type": "snell",

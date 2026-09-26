@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+from copy import copy
 from dataclasses import dataclass
 from typing import Any, cast
 
 from hydra.contracts import ConfigFragment
 from hydra.plugins.base import (
     BasePlugin,
+    PluginCategory,
     HealthResult,
     LifecycleResult,
     PluginStatus,
     lifecycle_result,
 )
 from hydra.plugins.context import PluginStateAccess
-from hydra.core.state_models import User
+from hydra.core.state_models import User, user_can_use
 
 
 @dataclass(frozen=True)
@@ -37,7 +39,23 @@ class PluginInvoker:
         state: PluginStateAccess,
     ) -> ConfigFragment:
         self._validate_version(plugin)
-        return plugin.configure(state)
+        scoped = self._authorized_state(plugin, state)
+        if plugin.meta.name == "calls" and not scoped.users:
+            return ConfigFragment()
+        return plugin.configure(scoped)
+
+    @staticmethod
+    def _authorized_state(plugin: BasePlugin, state: PluginStateAccess) -> PluginStateAccess:
+        if getattr(
+            plugin.meta, "category", PluginCategory.TRANSPORT
+        ) != PluginCategory.TRANSPORT or plugin.meta.name in {"wdtt", "snell"}:
+            return state
+        users = [user for user in state.users if user_can_use(user, plugin.meta.name)]
+        if len(users) == len(state.users):
+            return state
+        scoped = copy(state)
+        scoped.users = users
+        return scoped
 
     def snapshot(self, plugin: BasePlugin, state: PluginStateAccess) -> Any:
         self._validate_version(plugin)
@@ -46,7 +64,10 @@ class PluginInvoker:
 
     def apply(self, plugin: BasePlugin, state: PluginStateAccess) -> bool:
         self._validate_version(plugin)
-        return bool(plugin.apply(state))
+        scoped = self._authorized_state(plugin, state)
+        if plugin.meta.name == "calls" and not scoped.users:
+            return True
+        return bool(plugin.apply(scoped))
 
     def rollback(
         self,
@@ -136,6 +157,14 @@ class PluginInvoker:
         self._validate_version(plugin)
         return plugin.connected_clients(state)
 
+    @staticmethod
+    def _can_issue(plugin: BasePlugin, user: User) -> bool:
+        return (
+            getattr(plugin.meta, "category", PluginCategory.TRANSPORT) != PluginCategory.TRANSPORT
+            or plugin.meta.name == "wdtt"
+            or user_can_use(user, plugin.meta.name)
+        )
+
     def generate_client_config(
         self,
         plugin: BasePlugin,
@@ -144,7 +173,7 @@ class PluginInvoker:
         **kwargs: Any,
     ) -> str:
         self._validate_version(plugin)
-        return plugin.generate_client_config(user, state, **kwargs)
+        return plugin.generate_client_config(user, state, **kwargs) if self._can_issue(plugin, user) else ""
 
     def generate_singbox_client_config(
         self,
@@ -153,7 +182,7 @@ class PluginInvoker:
         state: PluginStateAccess,
     ) -> str:
         self._validate_version(plugin)
-        return plugin.generate_singbox_client_config(user, state)
+        return plugin.generate_singbox_client_config(user, state) if self._can_issue(plugin, user) else ""
 
     def client_link(
         self,
@@ -163,7 +192,7 @@ class PluginInvoker:
         **kwargs: Any,
     ) -> str:
         self._validate_version(plugin)
-        return plugin.client_link(user, state, **kwargs)
+        return plugin.client_link(user, state, **kwargs) if self._can_issue(plugin, user) else ""
 
     def client_links(
         self,
@@ -173,7 +202,7 @@ class PluginInvoker:
         **kwargs: Any,
     ) -> list[str]:
         self._validate_version(plugin)
-        return plugin.client_links(user, state, **kwargs)
+        return plugin.client_links(user, state, **kwargs) if self._can_issue(plugin, user) else []
 
     def lifecycle(
         self,

@@ -3,6 +3,7 @@
 This module deliberately has no filesystem, locking, or process concerns.
 Domain and plugin code can depend on these types without the storage adapter.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -21,7 +22,11 @@ from hydra.core.state_kernel_models import (
     validate_kernel_config,
 )
 from hydra.core.state_network_models import NetworkConfig
-from hydra.core.state_validation import validate_raw_state, validate_supported_version
+from hydra.core.state_validation import (
+    supports_personal_protocol_access,
+    validate_raw_state,
+    validate_supported_version,
+)
 
 
 # Compatibility alias for public status/CLI code. This is the stable document
@@ -37,6 +42,7 @@ class PluginState:
     port: int = 0
     installed: bool = False
     config: PluginConfig = field(default_factory=dict)
+
 
 @dataclass
 class User:
@@ -56,6 +62,8 @@ class User:
     devices: dict[str, dict] = field(default_factory=dict)
     hydrabox_jwe_key: str = ""
     configuration_name_overrides: dict[str, str] = field(default_factory=dict)
+    disabled_protocols: list[str] = field(default_factory=list)
+
 
 @dataclass
 class TelegramConfig:
@@ -77,6 +85,7 @@ class TelegramConfig:
     quiet_hours_enabled: bool = False
     quiet_hours_start: int = 23
     quiet_hours_end: int = 8
+
 
 @dataclass
 class AppState:
@@ -108,6 +117,11 @@ def get_protocol(state: AppState, name: str) -> PluginState:
     return state.protocols[name]
 
 
+def user_can_use(user: User, protocol: str) -> bool:
+    """Check server-side authorization for a user's transport."""
+    return not user.blocked and protocol not in user.disabled_protocols
+
+
 def find_user(state: AppState, email: str) -> Optional[User]:
     """Return the user with the exact persisted identifier."""
     return next((user for user in state.users if user.email == email), None)
@@ -116,14 +130,11 @@ def find_user(state: AppState, email: str) -> Optional[User]:
 def add_user(state: AppState, user: User) -> None:
     """Add or replace a user while preserving global UUID uniqueness."""
     duplicate_uuid = next(
-        (item for item in state.users
-         if item.uuid == user.uuid and item.email != user.email),
+        (item for item in state.users if item.uuid == user.uuid and item.email != user.email),
         None,
     )
     if duplicate_uuid is not None:
-        raise ValueError(
-            f"UUID уже используется пользователем {duplicate_uuid.email}"
-        )
+        raise ValueError(f"UUID уже используется пользователем {duplicate_uuid.email}")
     existing = find_user(state, user.email)
     if existing is None:
         state.users.append(user)
@@ -139,8 +150,7 @@ def validate_state(state: AppState) -> None:
         raise ValueError("state revision must be non-negative")
     if state.format_version != STATE_FORMAT_VERSION:
         raise UnsupportedStateVersion(
-            f"state format {state.format_version} is not supported; expected "
-            f"{STATE_FORMAT_VERSION}"
+            f"state format {state.format_version} is not supported; expected {STATE_FORMAT_VERSION}"
         )
     validate_headless_creator(state.headless_creator)
     validate_kernel_config(state.kernel)
@@ -149,22 +159,14 @@ def validate_state(state: AppState) -> None:
         path="configuration_names",
     )
     for user in state.users:
-        if (
-            not isinstance(user.email, str)
-            or not user.email.strip()
-            or any(char.isspace() for char in user.email)
-        ):
+        if not isinstance(user.email, str) or not user.email.strip() or any(char.isspace() for char in user.email):
             raise ValueError(f"invalid user identifier: {user.email!r}")
         if not user.uuid or not isinstance(user.uuid, str):
             raise ValueError(f"invalid UUID for user {user.email}")
         if user.traffic_limit_gb < 0 or user.traffic_used_bytes < 0:
-            raise ValueError(
-                f"traffic counters cannot be negative for {user.email}"
-            )
+            raise ValueError(f"traffic counters cannot be negative for {user.email}")
         if type(user.device_limit) is not int or user.device_limit < 0:
-            raise ValueError(
-                f"device limit must be a non-negative integer for {user.email}"
-            )
+            raise ValueError(f"device limit must be a non-negative integer for {user.email}")
         try:
             validate_device_map(user.devices, legacy=False)
         except ValueError as exc:
@@ -179,6 +181,15 @@ def validate_state(state: AppState) -> None:
             user.configuration_name_overrides,
             path=f"users.{user.email}.configuration_name_overrides",
         )
+        if (
+            not isinstance(user.disabled_protocols, list)
+            or any(
+                not isinstance(name, str) or not name or not supports_personal_protocol_access(name)
+                for name in user.disabled_protocols
+            )
+            or len(set(user.disabled_protocols)) != len(user.disabled_protocols)
+        ):
+            raise ValueError(f"invalid disabled_protocols for {user.email}")
     ports = {
         "network.tproxy_port": state.network.tproxy_port,
         "network.clash_api_port": state.network.clash_api_port,
@@ -188,10 +199,7 @@ def validate_state(state: AppState) -> None:
         if not isinstance(port, int) or not 0 <= port <= 65535:
             raise ValueError(f"{name} must be between 0 and 65535")
     for name, protocol in state.protocols.items():
-        if (
-            not isinstance(name, str) or not name.strip()
-            or not isinstance(protocol.config, dict)
-        ):
+        if not isinstance(name, str) or not name.strip() or not isinstance(protocol.config, dict):
             raise ValueError("protocol entries must have a name and object config")
         try:
             validate_json_object(protocol.config, path=f"protocols.{name}.config")
@@ -200,6 +208,8 @@ def validate_state(state: AppState) -> None:
         if not isinstance(protocol.port, int) or not 0 <= protocol.port <= 65535:
             raise ValueError(f"protocol {name} has an invalid port")
         validate_calls_protocol(
-            name, enabled=protocol.enabled, config=protocol.config,
+            name,
+            enabled=protocol.enabled,
+            config=protocol.config,
             kernel_provider=state.kernel.provider,
         )

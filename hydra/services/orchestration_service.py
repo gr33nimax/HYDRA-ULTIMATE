@@ -4,6 +4,7 @@ Unlike the legacy module facade, every dependency (including the plugin
 collection) belongs to one composition root.  This makes multiple independent
 application instances and third-party plugin sets safe in the same process.
 """
+
 from __future__ import annotations
 
 import copy
@@ -67,10 +68,7 @@ class OrchestrationService:
 
     @contextmanager
     def _process_apply_guard(self) -> Iterator[bool]:
-        if (
-            os.name == "nt"
-            or getattr(os, "geteuid", lambda: 1)() != 0
-        ):
+        if os.name == "nt" or getattr(os, "geteuid", lambda: 1)() != 0:
             yield True
             return
         try:
@@ -120,8 +118,7 @@ class OrchestrationService:
             with self._process_apply_guard() as acquired:
                 if not acquired:
                     self._set_apply_error(
-                        "Применение конфигурации уже выполняется "
-                        "в другом процессе",
+                        "Применение конфигурации уже выполняется в другом процессе",
                     )
                     self._journal(
                         "rejected",
@@ -152,8 +149,7 @@ class OrchestrationService:
                     except Exception as exc:
                         self.singbox.log(
                             "ERROR",
-                            "Не удалось восстановить состояние "
-                            f"после сбоя: {exc}",
+                            f"Не удалось восстановить состояние после сбоя: {exc}",
                         )
                 return applied
         finally:
@@ -264,10 +260,7 @@ class OrchestrationService:
             if lifecycle.enable(state, name):
                 return True
         except Exception:
-            keep_installed = (
-                not was_installed
-                and self.get_protocol(state, name).installed
-            )
+            keep_installed = not was_installed and self.get_protocol(state, name).installed
             self._restore_failed_activation(
                 state,
                 snapshot,
@@ -276,10 +269,7 @@ class OrchestrationService:
             )
             raise
 
-        keep_installed = (
-            not was_installed
-            and self.get_protocol(state, name).installed
-        )
+        keep_installed = not was_installed and self.get_protocol(state, name).installed
         self._restore_failed_activation(
             state,
             snapshot,
@@ -306,8 +296,7 @@ class OrchestrationService:
             self.save_state(state)
         except Exception as exc:
             self._log_rollback_error(
-                "Не удалось сохранить откат активации "
-                f"{name}: {exc}",
+                f"Не удалось сохранить откат активации {name}: {exc}",
             )
 
     def enable(self, state: AppState, name: str) -> bool:
@@ -330,6 +319,15 @@ class OrchestrationService:
 
     def rename_user(self, state: AppState, email: str, new_email: str) -> None:
         self._user_lifecycle().rename(state, email, new_email)
+
+    def set_user_protocol_enabled(
+        self,
+        state: AppState,
+        email: str,
+        name: str,
+        enabled: bool,
+    ) -> None:
+        self._user_lifecycle().set_protocol_enabled(state, email, name, enabled)
 
     def set_user_device_limit(
         self,
@@ -359,11 +357,7 @@ class OrchestrationService:
         plugin_name: str | None = None,
     ) -> None:
         invoker = PluginInvoker()
-        targets = (
-            [self.plugins.get(plugin_name)]
-            if plugin_name
-            else self.plugins.transports()
-        )
+        targets = [self.plugins.get(plugin_name)] if plugin_name else self.plugins.transports()
         for plugin in targets:
             if plugin is None:
                 continue

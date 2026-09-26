@@ -8,8 +8,8 @@ from typing import Callable
 from hydra.contracts import ConfigFragment, validate_fragment
 from hydra.core.apply_transaction import ApplyTransaction
 from hydra.core.errors import PluginError
-from hydra.core.state_models import AppState
-from hydra.plugins.base import BasePlugin, failure_stage
+from hydra.core.state_models import AppState, user_can_use
+from hydra.plugins.base import BasePlugin, PluginCategory, failure_stage
 from hydra.plugins.catalog import PluginCatalog
 from hydra.plugins.invoker import PluginInvoker
 
@@ -109,6 +109,13 @@ class PluginExecutor:
         failures: dict[str, str] = {}
         for plugin in self.catalog.enabled(state):
             if not uses_central_apply(plugin):
+                continue
+            if (
+                state.users
+                and getattr(plugin.meta, "category", PluginCategory.TRANSPORT) == PluginCategory.TRANSPORT
+                and plugin.meta.name != "wdtt"
+                and not any(user_can_use(user, plugin.meta.name) for user in state.users)
+            ):
                 continue
             try:
                 health = self.invoker.health(plugin, state)

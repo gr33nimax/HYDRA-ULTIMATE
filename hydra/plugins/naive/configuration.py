@@ -30,6 +30,15 @@ def render_caddyfile(
     tls_line = f"    tls {cert_file} {key_file}\n" if cert_file and key_file else ""
     probe_line = "            probe_resistance\n" if auth_lines else ""
     uot_line = "            passthrough_uot\n" if uot else ""
+    proxy_block = (
+        (
+            f"    forward_proxy {{\n{auth_lines}            hide_ip\n"
+            f"            hide_via\n{probe_line}            upstream socks5://127.0.0.1:1080\n"
+            f"{uot_line}    }}\n"
+        )
+        if users
+        else ""
+    )
     listener_wrappers = ""
     if accept_proxy_protocol:
         listener_wrappers = """\
@@ -54,12 +63,7 @@ def render_caddyfile(
 }}
 
 :{port}, {domain}:{port} {{
-{tls_line}    forward_proxy {{
-{auth_lines}            hide_ip
-            hide_via
-{probe_line}            upstream socks5://127.0.0.1:1080
-{uot_line}    }}
-    file_server {{
+{tls_line}{proxy_block}    file_server {{
         root {decoy_dir.as_posix()}
     }}
     log {{
@@ -123,11 +127,7 @@ class NaiveConfigurationMixin:
         )
         return ConfigFragment()
 
-    def set_uot(
-        self,
-        state: PluginStateAccess,
-        uot: object,
-    ) -> bool:
+    def set_uot(self, state: PluginStateAccess, uot: object) -> bool:
         """Validate and update the desired UDP-over-TCP (UoT) mode."""
         value = normalize_uot(uot)
         if value is None:

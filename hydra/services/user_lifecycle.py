@@ -4,14 +4,16 @@ This module owns the fan-out from one user mutation to all enabled transport
 plugins.  It intentionally receives infrastructure callbacks so the legacy
 ``hydra.core.orchestrator`` module can remain a patchable compatibility facade.
 """
+
 from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from typing import Callable, Iterable, Protocol
+from typing import Callable, Iterable
 
 from hydra.core.apply_transaction import ApplyTransaction
 from hydra.core.hydrabox_keys import generate_hydrabox_jwe_key
+from hydra.core.state_validation import supports_personal_protocol_access
 from hydra.core.state_models import (
     AppState,
     User,
@@ -19,23 +21,16 @@ from hydra.core.state_models import (
     find_user,
 )
 from hydra.core.transaction_helpers import state_transaction
+from hydra.plugins.base import BasePlugin
 from hydra.plugins.invoker import PluginInvoker
 from hydra.services.configuration import restore_state_in_place
-
-
-class UserTransport(Protocol):
-    meta: object
-
-    def on_user_add(self, user: User, state: AppState) -> None: ...
-    def on_user_remove(self, user: User, state: AppState) -> None: ...
-    def on_user_block(self, user: User, state: AppState) -> None: ...
 
 
 @dataclass(frozen=True)
 class UserLifecycleOperations:
     """Apply user mutations atomically across state and transport plugins."""
 
-    transports: Callable[[], Iterable[UserTransport]]
+    transports: Callable[[], Iterable[BasePlugin]]
     apply_config: Callable[[AppState], bool]
     save_state: Callable[[AppState], None]
     last_apply_error: Callable[[], str]
@@ -144,9 +139,7 @@ class UserLifecycleOperations:
             raise ValueError(f"User {email} not found")
 
         normalized_email = new_email.strip().lower()
-        if not normalized_email or any(
-            character.isspace() for character in normalized_email
-        ):
+        if not normalized_email or any(character.isspace() for character in normalized_email):
             raise ValueError(
                 "User identifier must be non-empty and contain no whitespace",
             )
@@ -180,6 +173,40 @@ class UserLifecycleOperations:
                 raise
         self._commit(state, transaction)
         self._restart_subscriptions()
+
+    def set_protocol_enabled(
+        self,
+        state: AppState,
+        email: str,
+        name: str,
+        enabled: bool,
+    ) -> None:
+        """Rebuild server authentication atomically for one user's transport."""
+        user = find_user(state, email)
+        if user is None:
+            raise ValueError(f"User {email} not found")
+        if not supports_personal_protocol_access(name) or name not in {
+            plugin.meta.name for _, plugin in self._enabled_transports(state)
+        }:
+            raise ValueError(f"Protocol {name} is unavailable for per-user access")
+        if type(enabled) is not bool:
+            raise ValueError("enabled must be a boolean")
+        was_enabled = name not in user.disabled_protocols
+        if was_enabled == enabled:
+            return
+        snapshot = copy.deepcopy(state)
+        if enabled:
+            user.disabled_protocols.remove(name)
+            if not user.blocked:
+                plugin = next(plugin for _, plugin in self._enabled_transports(state) if plugin.meta.name == name)
+                try:
+                    self.invoker.user_add(plugin, user, state)
+                except Exception:
+                    self._restore_and_save(state, snapshot)
+                    raise
+        else:
+            user.disabled_protocols.append(name)
+        self._commit(state, self._new_transaction(state, snapshot))
 
     def set_device_limit(
         self,
@@ -221,7 +248,7 @@ class UserLifecycleOperations:
     def _enabled_transports(
         self,
         state: AppState,
-    ) -> Iterable[tuple[int, UserTransport]]:
+    ) -> Iterable[tuple[int, BasePlugin]]:
         for index, plugin in enumerate(self.transports()):
             protocol = state.protocols.get(plugin.meta.name)
             if protocol and protocol.enabled:
@@ -260,7 +287,7 @@ class UserLifecycleOperations:
 
     def _restore_plugin_identity(
         self,
-        plugin: UserTransport,
+        plugin: BasePlugin,
         state: AppState,
         previous: User,
         renamed: User,
