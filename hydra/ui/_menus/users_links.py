@@ -213,6 +213,12 @@ def _render_inline_artifact(
     print()
 
 
+def _clear_artifact_history() -> None:
+    # ESC[3J removes scrollback in terminals that support it; clear() resets the viewport.
+    print("\033[3J", end="", flush=True)
+    clear()
+
+
 def _user_links(
     state: AppState,
     user: User,
@@ -230,6 +236,7 @@ def _user_links(
     for artifact in artifacts:
         _render_inline_artifact(artifact, state, user, app)
     prompt("Нажмите Enter")
+    _clear_artifact_history()
 
 
 def _show_subscription_links(
@@ -304,3 +311,4 @@ def _user_configs(
         _render_inline_artifact(artifact, state, user, app)
     print()
     prompt("Нажмите Enter")
+    _clear_artifact_history()
