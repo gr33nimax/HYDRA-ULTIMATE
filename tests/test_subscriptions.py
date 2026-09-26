@@ -431,6 +431,37 @@ def test_shadowrocket_subscription_maps_awg_and_skips_other_awg_formats():
     assert not any(link.startswith("sn://awg") for link in links)
 
 
+def test_nekobox_subscription_carries_the_generation_link_for_awg_3_1():
+    """A 3.1 profile reaches NekoBox as a complete `wg://` link.
+
+    The native `sn://awg` format is published only for 2.0 (its 3.x importer
+    compatibility is unverified), while a NekoBox-family client imports `wg://`
+    as AmneziaWG.  So the generation fields must survive into the NekoBox
+    subscription through `wg://`: that is the link a device import uses.
+    """
+    plugin = MockTransport()
+    plugin.client_links = MagicMock(
+        return_value=[
+            "wg://203.0.113.10:52017?private_key=private&local_address=10.67.67.11/32"
+            "&enable_amnezia=true&header_protection_key=k&random_trailers=true"
+            "&disable_cookies=true&public_key=public&persistent_keepalive_interval=25#AWG",
+            "vpn://official-amnezia",
+        ]
+    )
+    user = _make_user("alice@example.com")
+    state = _make_state([user])
+
+    payload = base64.b64decode(
+        generate_nekobox_sub(user, state, plugins=_plugins(plugin)),
+    ).decode()
+    awg = next(line for line in payload.splitlines() if line.startswith("wg://"))
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(awg).query)
+
+    assert query["enable_amnezia"] == ["true"]
+    assert query["random_trailers"] == ["true"]
+    assert query["disable_cookies"] == ["true"]
+
+
 def test_shadowrocket_subscription_passes_a_generation_six_snell_link_through():
     plugin = MockTransport()
     plugin.client_links = MagicMock(

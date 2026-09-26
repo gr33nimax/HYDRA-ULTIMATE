@@ -12,7 +12,7 @@
 - [Состояние в `/var/lib/hydra`](#состояние-в-varlibhydra)
 - [Журналы](#журналы)
 - [Сетевые порты](#сетевые-порты)
-- [Схема persisted state](#схема-persisted-state)
+- [Формат persisted state](#формат-persisted-state)
 - [Переменные окружения](#переменные-окружения)
 - [Быстрая диагностика](#быстрая-диагностика)
 
@@ -26,7 +26,7 @@
 
 ### `transport` — транспорты
 
-| Ключ | Модуль | Назначение |
+| Ключ | Название | Назначение |
 | :--- | :--- | :--- |
 | `amneziawg` | AmneziaWG 2.0 / 3.0 / 3.1 | WireGuard-транспорт: туннель обслуживает ядро, режим — поле конфига |
 | `mieru` | Mieru | Обфусцированный mTLS-транспорт с ссылками `mierus://` |
@@ -35,40 +35,33 @@
 | `trusttunnel` | TrustTunnel | TLS-транспорт с режимами TCP/QUIC и сайтом-заглушкой |
 | `hysteria2` | Hysteria2 | QUIC-транспорт с Salamander и браузерной заглушкой |
 | `vless` | VLESS + XHTTP | XHTTP-транспорт Hydracore: свой домен с сертификатом либо Reality с чужим рукопожатием |
+| `vless_cdn` | VLESS + CDN | VLESS через внешний CDN: XHTTP packet-up, uplink GET; origin-порт ядра выделяется автоматически, публикация — на стороне CDN |
 | `shadowtls` | ShadowTLS | ShadowTLS v3 с Trojan detour |
 | `snell` | Snell 5/6 | TCP/UDP-прокси Hydracore: поколение 5 с `obfs_mode` `none`/`http`/`tls` или поколение 6 с `mode` `default`/`unshaped`/`unsafe-raw` |
 | `mtproto_zig` | MTProto Zig | FakeTLS MTProxy: напрямую на TCP/443, за Caddy L4 по SNI или WEB-мост для Telegram Desktop 7.1+ |
 | `calls` | Hydra VK Tunnel | Native `call`: только Hydracore VK-parasite; профиль подписки «Обход БС» |
 | `wdtt` | qWDTT | WireGuard-туннелирование поверх TURN |
 
-`ApplicationService.calls` владеет Creator, credentials, отдельным пулом и
-lifecycle транспорта. В меню `Calls · VK` JSON с VK cookies импортируется по
-пути локального файла даже до установки Calls: JSON нормализуется и
-валидируется до атомарной замены
-`/etc/hydra/cookiesvk/cookies-vk.json` (`0600`). qWDTT не создаёт и не
-обслуживает Creator pool, не использует cookies и владеет только сервером и
-master-артефактом.
-`sing-box hydra contract --json` обязан подтвердить exact HydraCore identity,
-роль `vps` и режим `vk_parasite`; stock/P2P не имеют operational fallback. Calls поднимает 1–4 комнаты отдельными blue/green
-units, а `sing-box.service` сам в VK не входит:
-он принимает workers на `56002/udp`, делает O(1) lookup пользователя и
-агрегирует их в одну сессию. Failure восстанавливает старое поколение, desired
-state и runtime.
+**Calls · VK.** Требует ядро Hydracore с ролью `vps` и режимом `vk_parasite`;
+stock/P2P отклоняются. Пул — 4 VK-комнаты на `56002/udp`, blue/green: новое
+поколение поднимается до commit, прежнее снимается только после проверки, при
+сбое откат. Пул пересоздаётся из меню `Calls · VK` или по расписанию (интервал
+1–24 ч). VK cookies импортируются в меню локальным JSON и хранятся в
+`/etc/hydra/cookiesvk/cookies-vk.json` (`0600`).
 
-Calls создаёт и обслуживает фиксированный пул из 4 VK-комнат двумя поколениями
-systemd-инстансов. qWDTT не имеет creator-пула и не запускает creator-задачи в
-Sync Agent; он формирует свой master-артефакт `qwdtt://` без VK cookies.
+**qWDTT** не использует cookies и creator-пул; владеет только своим сервером и
+master-артефактом `qwdtt://`.
 
-Профиль native Calls и qWDTT master-link являются административными shared
-secrets и не включаются в пользовательские subscription endpoints. HYDRA
-редактирует VK join-link в своих проекциях логов. Ограничение upstream: сам
-Sing-Box пишет ссылку в INFO journald, поэтому сырой `journalctl` доступен только
-доверенным администраторам.
+Профиль native Calls и qWDTT master-link — административные shared secrets, в
+пользовательские подписки не входят. HYDRA редактирует join-links в своих
+проекциях логов; upstream Sing-Box пишет их в INFO journald, поэтому сырой
+`journalctl -u sing-box` держите закрытым.
 
 Сайт-заглушка на собственном домене есть у AnyTLS, TrustTunnel, Hysteria2,
-NaiveProxy и VLESS + XHTTP. VLESS требует отдельный домен: XHTTP занимает
-настроенный путь (`/xhttp` по умолчанию), а остальные URL этого домена
-обслуживает сайт из `/var/www/decoy-vless`. Транспорт XHTTP настраивается
+NaiveProxy, VLESS + XHTTP, VLESS + CDN и MTProto Zig (каталог `/var/www/decoy-zig`). VLESS требует отдельный домен: XHTTP
+занимает настроенный путь (`/xhttp` по умолчанию), а остальные URL этого домена
+обслуживает сайт из `/var/www/decoy-vless`; у VLESS + CDN свой каталог
+`/var/www/decoy-cdn`. Транспорт XHTTP настраивается
 поштучно или готовым профилем, см. [CLI.md](CLI.md#плагины).
 
 Тема заглушки выбирается оператором из 11 вариантов (`landing`, `blog`, `docs`,
@@ -83,33 +76,31 @@ SHA-256 исходников встроенных рендереров — по 
 Клиентские ссылки и профили выдаются через сервер подписок и TUI; Mieru
 использует схему `mierus://` с единственным диапазоном `2012-2022`. В TUI URI
 и JSON-конфигурации печатаются отдельными строками без рамок и отступов, чтобы
-копирование из SSH-терминала не меняло содержимое. Ссылки подписки выдаются
-только когда `hydra-sub.service` запущен и HTTPS-сертификат с ключом доступны.
+копирование из SSH-терминала не меняло содержимое. Ссылка подписки строится из
+state и печатается независимо от службы; сама выдача работает, пока запущен
+`hydra-sub.service` и у него есть валидная пара сертификат/ключ. Пару выбирает
+`find_any_cert` при старте сервера подписок и повторно — при показе ссылок в TUI
+(`admin.subscription_certificate`).
 Auto endpoint распознаёт NekoBox, Shadowrocket и Throne по `User-Agent`; для
 ручного выбора доступны `format=nekobox`, `format=shadowrocket`,
-`format=throne` и `format=singbox`. Shadowrocket получает Naive TCP как
-`https://` с `alpn=http/1.1` и `http2://` с `alpn=h2`, Naive QUIC как `http3://` с `alpn=h3`,
+`format=throne` и `format=singbox`. Shadowrocket получает Naive TCP двумя
+ссылками — `https://` (HTTP/1.1) и `http2://` (HTTP/2), Naive QUIC — `http3://`;
+параметр `alpn` сервер не выставляет.
 TCP-варианты включают `uot=2` и `tfo=1`, а все три варианта — `padding=1`,
 TrustTunnel с official TLV, а Snell сохраняет `obfs-mode`/`obfs-host` классической
 пары и пропускает профиль поколения 6 без перезаписи формата подписки.
 
-Naive собирается из закреплённого fork Caddy и устанавливается только после
-валидации фактического бинарника; замена выполняется с backup предыдущего
-рабочего файла. Workflow `.github/workflows/naive-caddy.yml` предназначен для
-сборки и валидации real binary, включая HTTP/1 CONNECT и UoT magic passthrough.
+Naive собирается из закреплённого форка Caddy и ставится только после валидации
+бинарника; замена — с backup предыдущего рабочего файла.
 
 UoT (UDP через TCP) можно выключить: `set_uot` в CLI или пункт «UDP через TCP
 (UoT)» в настройках NaiveProxy. Значение по умолчанию — включено (поведение без
-изменений). Выключение собирает Caddy из upstream `forwardproxy` без UoT-кода
-(вместо закреплённого форка `aUsernameWoW/forwardproxy`) и убирает `uot` из
-клиентских ссылок Shadowrocket; `tfo` и `padding` остаются. Причина такой
-реализации: у форка нет флага «выключить UoT», а при заданном `upstream`
-не работают ни `acl`, ни `ports`, которыми magic-адрес можно было бы заблокировать.
+изменений). Выключение собирает Caddy из upstream `forwardproxy` без UoT-кода и убирает
+`uot` из клиентских ссылок Shadowrocket; `tfo` и `padding` остаются.
 При выключенном UoT UDP по TCP-профилю Naive не ходит (QUIC-профиль не затронут),
 а клиенты с явным `udp_over_tcp` должны выключить его на своей стороне.
 Если установленный бинарник не соответствует настройке, apply пересобирает его;
 состояние видно командой/меню, а не угадывается.
-На момент этой документации этот workflow ещё не запускался для данного diff.
 
 Hysteria2 по умолчанию использует `8443/udp`. Если профиль работает по Wi-Fi,
 но не работает через мобильную сеть, сначала проверяют доступность UDP/8443 у
@@ -128,98 +119,41 @@ Extended для каждого доступного desktop/mobile профил�
 новее: оно несёт оба поля поколения (`random_trailers`, `disable_cookies`).
 
 Серверную сторону AmneziaWG обслуживает само ядро: HYDRA выдаёт по одному
-`wireguard` endpoint на профиль вместе с выписанными пирами. Установщика, модуля ядра,
-`params`, файлов интерфейса и правил TPROXY в коде больше нет: адреса, ключи и материал
-поколения живут в состоянии, ключи считает сама HYDRA, а режим 2.0/3.0/3.1 меняется
-конфигом ядра и читается обратно из него. Удаление протокола не трогает ни пакетный
-менеджер, ни модуль, ни юниты: остатки прежней установки только называются и убираются.
-Профили выдаются заново — клиенты импортируют конфигурацию повторно.
+`wireguard` endpoint на профиль вместе с выписанными пирами. Адреса, ключи и
+материал поколения живут в состоянии, ключи считает сама HYDRA, режим 2.0/3.0/3.1
+меняется конфигом ядра и читается обратно из него. Удаление протокола не трогает
+пакетный менеджер и kernel module. Профили выдаются заново — клиенты импортируют
+конфигурацию повторно.
 На более старом ядре экспорт 3.1 остаётся fail-closed с причиной, называющей
 требуемый релиз.
-Throne `1.3.0-beta.3` получает complete `wg://`, а официальный Amnezia —
-Qt-compressed `vpn://` с полным `last_config`. Нативный `.conf` остаётся
-доступен для всех поколений.
+`wg://` (complete-ссылка со всеми директивами поколения) получают клиенты, которые её понимают:
+Throne (проверено на `1.3.0-beta.3`) и NekoBox, импортирующий её как AmneziaWG
+(проверено на устройстве); официальный Amnezia получает
+Qt-compressed `vpn://` с полным `last_config`. Нативный `.conf` доступен для всех
+поколений, а NekoBox-формат `sn://awg` — только для профилей без
+`RandomTrailers`/`DisableCookies`: совместимость его 3.x-импортёра не подтверждена,
+и поля поколения в нём не едут.
 
-`?format=hydrabox` принимает только `User-Agent: HydraBox/<version>` и
-reported HWID. HydraBox 0.4 отправляет `X-HWID`; прежний
-`X-Hydra-HWID: hbx1_<base64url-sha256>` остаётся совместимым. Сервер немедленно
-хеширует значение и не сохраняет сырой HWID. Неверная идентификация возвращает
-HTTP 400, превышение device limit — HTTP 403. Ответ всегда имеет media type
-`application/jose+json` и представляет strict flattened JWE с единственными
-полями `protected`, `encrypted_key`, `iv`, `ciphertext`, `tag`;
-`encrypted_key` обязано быть пустой строкой. Protected header не допускает
-дополнительных полей и фиксирован как `alg=dir`, `enc=A256GCM`,
-`typ=hydra-subscription+jwe`,
-`cty=application/vnd.hydra.subscription+json`. Plaintext fallback отсутствует.
+`?format=hydrabox` — защищённый формат для HydraBox. Запрос требует
+`User-Agent: HydraBox/<version>` и reported HWID (`X-HWID`; legacy
+`X-Hydra-HWID: hbx1_…` совместим). Сервер хеширует HWID и не хранит сырой.
+Неверная идентификация → HTTP 400, превышение лимита устройств → HTTP 403.
 
-После расшифровки envelope имеет точные
-`api_version=hydra.io/subscription/v2` и `kind=Subscription`. Вложенная
-`identity` хранит tuple `(issuer, id, stable)` и использует revision state как
-старшую часть монотонного `sequence`; младшая часть содержит ревизию renderer и
-повышается при изменении выдаваемого JSON без изменения state. Поэтому
-обновление кода не создаёт запрещённую комбинацию «прежний sequence + новый
-payload».
+Ответ — flattened JWE (`dir` + `A256GCM`, media type `application/jose+json`),
+plaintext-fallback нет. Каждый транспорт публикуется отдельным ресурсом
+`sing-box-json`; при включённом Calls добавляется изолированный `call`-outbound
+без серверных cookies (неполный пул отклоняет выдачу fail-closed). qWDTT в
+подписку не попадает. Ссылка выдаётся как
+`https://<origin>/sub/<id>?format=hydrabox#hydra-key=<key>`: 256-битный ключ
+живёт только во fragment (HTTP-серверу не передаётся) и в private state;
+`status`, логи и публичный JSON показывают только производный `kid`. Ротация
+ключа немедленно инвалидирует прежние ссылки.
 
-Каждый plugin-owned клиентский граф публикуется отдельным элементом
-`resources[]` с `format=sing-box-json` и точным `requested_permissions`.
-Профиль содержит `resource` и ссылается только на entrypoint этого resource;
-одинаковые native tags в разных resources допустимы и не объединяются.
-Remote policy v2 пропускает только разрешённые `outbounds` и userspace
-`wireguard` endpoints: локальные DNS/route и `direct` отбрасываются, а
-executable-поля, зарезервированные теги и system WireGuard блокируют выдачу
-fail-closed.
-В AWG 2.0 параметры `I1`–`I5`, `J1`–`J3` и `Itime` сохраняются в endpoint как
-`amnezia.i1`–`amnezia.i5`, `amnezia.j1`–`amnezia.j3` и `amnezia.itime` вместе с
-`Jc`/`Jmin`/`Jmax`, `S1`–`S4` и `H1`–`H4`. Для AWG 3.0 к ним добавляются
-source-proven `header_protection_key`, `content_padding_addition`, rekey/timeout
-и `max_handshake_attempts`; AWG 3.1 endpoint рендерится на ядре
-`v1.14.0-extended-2.7.1-hydracore.12` или новее, где `random_trailers`
-передаётся JSON-булевым, а `disable_cookies` не выставляется — анти-DoS
-защита остаётся включённой. Detour-
-зависимости сохраняются с исходными тегами, а `profiles` явно указывает только
-на корневые selectable entrypoints. Пользовательское имя профиля берётся из
-`PluginMeta.display_name`, с fallback на короткий `PluginMeta.name`;
-операторское `PluginMeta.description` в подписку не публикуется. Plaintext
-ограничен 12 MiB, внешний JWE — 16 MiB; каждый ответ получает случайный
-12-байтовый IV и 16-байтовый authentication tag и публикуется с
-`Cache-Control: private, no-store`.
-
-Если native `calls` включён и managed-пул готов, плагин добавляет отдельный
-resource с outbound `type=call`, `platform=vk`, `mode=vk_parasite`, endpoint,
-per-user credentials и `join_links`. Singular `join_link` не генерируется в
-resource/outbound; admin DTO сохраняет первый link под старым именем только как
-compatibility metadata.
-Endpoint берётся из persisted `calls.config.public_endpoint`; при первой
-установке он фиксируется из `network.server_ip` либо наблюдаемого публичного IP
-VPS. SNI/transport domain в это поле не подставляется.
-Resource запрашивает ровно `network.outbound`, объявляет core features `call`
-и `call_vk_parasite` и не публикует серверные VK cookies. Отсутствующий пул
-завершает генерацию fail-closed, а не создаёт неполный профиль. qWDTT при этом
-исключён отдельно:
-его общий master-артефакт и главный пароль никогда не читаются Hydra v2
-renderer и не попадают в per-user подписку.
-
-TUI и генератор выдают ссылку
-`https://<origin>/sub/<id>?format=hydrabox#hydra-key=<base64url-key>`. Fragment не
-передаётся HTTP-серверу. Per-user 256-битный ключ хранится только в private
-state; `status`, логи и публичный JSON показывают максимум производный `kid`.
-Ротация немедленно инвалидирует все ранее выданные HydraBox-ссылки.
-
-Для транспорта `mtproto_zig` HYDRA ставит бинарник из того релиза upstream, который действительно
-содержит точный архив под архитектуру хоста (`mtproto-proxy-linux-x86_64_v3.tar.gz`, иначе
-`mtproto-proxy-linux-x86_64.tar.gz`; для aarch64 — `..._crypto.tar.gz`, иначе `..._aarch64.tar.gz`).
-Запрос к `releases/latest` не используется: свежий релиз может публиковать только `mtbuddy-*`, и
-тогда транспорт становился бы неустановимым. SHA-256 берётся из release metadata либо из точного
-`<archive>.sha256`-артефакта того же релиза и проверяется до распаковки; старый релиз без обоих
-источников отклоняется. Аварийный флаг `HYDRA_ALLOW_UNVERIFIED_DOWNLOADS` на этот путь не
-распространяется. Распакованный ELF копируется в `<binary>.pending`, проверяется ещё раз и только
-потом атомарно замещает установленный бинарник, поэтому прежний бинарник и состояние службы
-сохраняются при любой ошибке. Исходная причина сохраняется и после rollback. Сбой сообщается своей
-стадией — выбор релиза, проверка digest, распаковка/ELF, сервисный пользователь или пути, юнит,
-служба, маршрутизация — вместо общего
-«Ошибка применения конфигурации»; `journalctl` без установленного бинарника и юнита не требуется.
-Upstream `bootstrap.sh` и `mtbuddy` не запускаются: они владеют другой раскладкой, юнитом,
-конфигурацией и дополнительными изменениями хоста.
+Бинарник `mtproto_zig` ставится из upstream-релиза с архивом под архитектуру
+хоста: SHA-256 проверяется до распаковки, замена атомарна, при любой ошибке
+сохраняются прежний бинарник и состояние службы. Флаг
+`HYDRA_ALLOW_UNVERIFIED_DOWNLOADS` на этот путь не распространяется. Собственные
+`bootstrap.sh`/`mtbuddy` upstream не запускаются.
 
 У транспорта `mtproto_zig` есть три режима доступа, которые переключаются строкой
 `🌐 Режим WEB` в его настройках:
@@ -239,29 +173,17 @@ TLS для WEB-домена и передаёт расшифрованный HTT
 (`mtproto-zig web-relay`). Собственных `nginx`, `/opt/mtproto-proxy`, юнитов и firewall-правил
 Hydra не создаёт.
 
-Переход в `web-only` выполняется staged: сначала поднимается релей с `only = false` и проверяется его
-loopback-ответ, а фронтенд рендерится без маршрута FakeTLS (поэтому прежние прямые ссылки перестают
-подключаться уже на этой стадии), затем выполняется настоящая проверка моста через локальный `:443` с
-SNI WEB-домена: страница моста запрашивается с capability, выведенной из секрета реального
-пользователя, из её метаданных берётся кратковременный токен моста, выполняется авторизованный
-WebSocket-апгрейд на том же origin — принимается только `101` с совпадающими
-`Sec-WebSocket-Accept`/`Sec-WebSocket-Protocol` — после чего проба **обязана первой отправить
-обязательный masked binary HELLO** (тип кадра `0x10`, поток 0, payload `0x01`) и только затем
-прочитать первый кадр WELCOME (`0x11`, поток 0, пустой payload); релей, который не поприветствовали,
-не отвечает и не подтверждает сессию (`bridge_probe.py`). Только после этого конфигурация
-переключается на `only = true` и Zig перезапускается; повторная проверка после этого переключения
-ограничена состоянием двух юнитов (main и релей) — аудит маршрута и мостовая проба не повторяются,
-их результат подтверждён до коммита. Если мост не подтверждён (в том числе когда нет ни одного активного пользователя и
-capability построить нельзя), снапшот возвращает прежний режим, маршрут и ранее выданные ссылки, а
-ошибка остаётся видимой.
-Смена WEB-домена делает нерабочими все выданные
-WEB-ссылки и требует явного подтверждения. Ограничение v1: фронтенд передаёт в релей один
-расшифрованный поток без заголовка клиентского адреса, поэтому per-IP лимиты Zig к WEB-клиентам не
-применяются.
+Переход в `web-only` staged: релей поднимается, фронтенд рендерится без маршрута
+FakeTLS (прежние прямые ссылки перестают работать на этой стадии), затем мост
+проверяется реальным клиентским подключением через `:443` перед коммитом. Если
+мост не подтверждён (в том числе когда нет активных пользователей), снапшот
+возвращает прежний режим, маршрут и выданные ссылки, а ошибка видна оператору.
+Смена WEB-домена ломает все выданные WEB-ссылки и требует подтверждения.
+Ограничение v1: per-IP лимиты Zig к WEB-клиентам не применяются.
 
 ### `enhancement` — сетевые расширения
 
-| Ключ | Модуль | Назначение |
+| Ключ | Название | Назначение |
 | :--- | :--- | :--- |
 | `dnscrypt` | DNSCrypt | Локальный шифрованный DNS-резолвер |
 | `warp` | WARP (MASQUE) | Выборочная маршрутизация через Cloudflare по HTTP/3 CONNECT-IP |
@@ -276,19 +198,13 @@ WARP применяет списочные маршруты только ког�
 и блокирует apply, чтобы трафик не ушёл напрямую незаметно для оператора.
 Профиль устройства кэшируется в `cache_file` sing-box (`store_masque_config`):
 перезапуск службы не создаёт новое устройство в аккаунте Cloudflare, а снос
-кэша — создаёт. Переключение установки с прежнего транспорта не требует
-ручной правки state: ключи маршрутов переименовываются при загрузке, а
-`sudo hydra plugin reinstall warp` — или «🔄 Переустановить» в меню WARP —
-удаляет файлы прежнего установщика (`/usr/local/bin/wgcf`,
-`wgcf-profile.conf`, `wgcf-account.toml`, `/var/log/hydra/warp_install.log`),
-обновляет каталог и сохраняет настроенные маршруты и их кэш правил, чтобы
-переустановка не теряла выбранные внешние источники. Даже после полного удаления
-плагина кэш остаётся на диске; новые правила из него не применяются, пока WARP
-выключен. Меню несёт
-обычный жизненный цикл плагина: «🔧 Установить» там, где WARP ещё не
-установлен, «▶️ Включить/⏸️ Выключить», «🔄 Переустановить» и «❌ Удалить»
-(последний снимает маршруты и остатки прежнего установщика, но оставляет
-кэш правил для безопасной переустановки).
+кэша — создаёт. `sudo hydra plugin reinstall warp` (или «🔄 Переустановить» в
+меню) обновляет каталог, сохраняет настроенные маршруты и их кэш правил.
+Кэш правил остаётся на диске даже после удаления плагина; правила из него не
+применяются, пока WARP выключен. Меню несёт обычный жизненный цикл плагина:
+«🔧 Установить», «▶️ Включить/⏸️ Выключить», «🔄 Переустановить», «❌ Удалить»
+(удаление снимает маршруты, но оставляет кэш правил для безопасной
+переустановки).
 
 В меню «Сервер подключения WARP» можно запустить warpscout **с этой VPS**,
 выбрать один найденный MASQUE/UDP `IP:port` или вернуть автоматический выбор
@@ -318,8 +234,8 @@ Cloudflare либо `curl` блокирует изменение вместо п
 
 В меню можно направить всю категорию сервисов или выбрать один источник
 внутри неё, включая единственный сводный `category-ru` (поиск и страницы
-по 20, `[n]`/`[p]`). Выбор `none` убран:
-доступны `warp`, настроенные релеи и `direct`. `direct` означает выход с VPS,
+по 20, `[n]`/`[p]`). Цель маршрута — `warp`, настроенный релей или `direct`.
+`direct` означает выход с VPS,
 а не обязательно российский адрес. Он совпадает с маршрутом по умолчанию при
 отсутствии иных совпадающих правил, но служит явным исключением для точного
 домена или подсети. Более узкие доменные суффиксы и IP-префиксы ставятся раньше
@@ -330,7 +246,7 @@ Cloudflare либо `curl` блокирует изменение вместо п
 
 ### `security` — защита
 
-| Ключ | Модуль | Назначение |
+| Ключ | Название | Назначение |
 | :--- | :--- | :--- |
 | `antidpi` | AntiScan | Доказанные отказы протоколов и сканы decoy-сайтов с динамическим ipset |
 | `fail2ban` | Fail2ban | Блокировка SSH и аутентификационных атак |
@@ -370,8 +286,9 @@ Caddy, тот же source port используется для точного п
 | `hydra-sync-agent.timer` | Расписание sync agent |
 | `hydra-tg-admin.service` | Telegram Admin Bot |
 
-Вспомогательный отладочный unit, включаемый по требованию:
-`hydra-awg-fail2ban-debug.service`. Прежний `hydra-awg-antidpi-debug.service` больше не создаётся: сверка удаляет его вместе с debug-хуком AmneziaWG.
+HYDRA не создаёт debug-юниты AmneziaWG. Если `hydra-awg-fail2ban-debug.service`
+или `hydra-awg-antidpi-debug.service` остались на хосте, сверка снимает их
+(`systemctl disable --now`) вместе с debug-хуком ядра.
 
 Legacy unit `hydra-tg-bot.service` сохранён только для удаления на старых
 установках; новый код его не создаёт.
@@ -430,7 +347,7 @@ Legacy unit `hydra-tg-bot.service` сохранён только для удал
 | `/var/lib/hydra/calls/vk/pool/` | Multi-user Calls metadata и join-links двух поколений; `0700/0600` |
 | `/etc/wdtt/qwdtt_link.txt` | Единственная master qWDTT-ссылка с актуальным упорядоченным списком хешей |
 | `/run/lock/hydra-calls.lock` | Межпроцессная сериализация Calls room-pool/lifecycle транзакций |
-| `/etc/cron.d/hydra-traffic` | Задание учёта трафика |
+| `/etc/cron.d/hydra-traffic` | Только legacy-путь для cleanup при uninstall: расписания HYDRA не создаёт, учёт ведёт служба `hydra-traffic-daemon` |
 
 При обновлении бинарника Sing-Box HYDRA сначала сохраняет снимок
 `/etc/sing-box/config.json`, затем атомарно мигрирует только собственный legacy
@@ -476,7 +393,7 @@ DNS default на схему `type/server/domain_resolver` и проверяет 
 | `state.json.corrupt` | ядро | Изолированная копия повреждённого файла |
 | `state.lock` | ядро | Файловая блокировка чтения/записи |
 | `master.key` | ядро | Ключ шифрования чувствительных значений |
-| `antidpi.json` | `antidpi` | Активные баны с уликой, offense counters, whitelist и курсор журнала. Поля `scores`/`subnets` прежних версий сохраняются только для отката и не читаются |
+| `antidpi.json` | `antidpi` | Активные баны с уликой, offense counters, whitelist и курсор журнала. Поле `scores` читается ради непрерывности offense и улик ручного бана, но в операторские проекции не попадает; `subnets` не используется |
 | `honeypot.json` | `honeypot` | События и собственные баны ловушки |
 | `ipban.json` | `ipban` | Статические списки блокировок |
 | `ip-intel-cache.json` | сервисы | Кэш GeoIP/ASN для уведомлений |
@@ -502,7 +419,7 @@ DNS default на схему `type/server/domain_resolver` и проверяет 
 | `/var/log/hydra/traffic-daemon.log` | Демон учёта трафика |
 | `/var/log/hydra/sync-agent.log` | Агент периодического обслуживания |
 | `/var/log/hydra-honeypot.log` | События ловушки |
-| `/var/log/caddy-l4/antidpi.jsonl` | Не создаётся с 2.5.6: generic-TLS наблюдения удалены, файл можно удалить вручную |
+| `/var/log/caddy-l4/antidpi.jsonl` | Не создаётся с 3.0.0: generic-TLS наблюдения удалены, файл можно удалить вручную |
 | `/var/log/caddy-naive/access.log` | Access-журнал NaiveProxy |
 | `/var/log/fail2ban.log` | Журнал Fail2ban |
 
@@ -523,24 +440,6 @@ journal сначала ротируется, затем архивы очища�
 Значения ниже — заводские значения по умолчанию. Фактические порты хранятся в
 state (`protocols[*].port`, `network.*`) и настраиваются через TUI; проверяйте их
 командой `hydra status`.
-
-```text
-   ИНТЕРНЕТ                                     LOOPBACK (127.0.0.1)
-   ─────────────────────────────────────        ──────────────────────────────
-   443/tcp    Caddy L4 · SNI-мультиплексор      2021  admin API caddy-l4
-   443/udp    один QUIC-транспорт               5300  DNSCrypt
-   8443/udp   Hysteria2                         9000  локальный TUN qWDTT
-                                                9090  Clash API (если включён)
-   9443/tcp   сервер подписок                   1081  TPROXY (если включён)
-   9999/tcp   Honeypot
-   51820/udp  AmneziaWG                         + динамические порты
-   51821/udp  AmneziaWG                           source-relay
-   56000/udp  qWDTT · DTLS/TURN
-   56001/udp  qWDTT · WireGuard
-   56002/udp  Hydra VK Tunnel (VK Calls VK-parasite)
-   2012–2022/tcp    Mieru
-   32000–32999/tcp  Snell
-```
 
 ### Внешние (публикуются в интернет)
 
@@ -589,14 +488,15 @@ state (`protocols[*].port`, `network.*`) и настраиваются чере�
 
 ## Формат persisted state
 
-В ветке `debug` используется стабильный State Format **v1**. Корень
+В ветке `dev` используется стабильный State Format **v1** — один на весь
+репозиторий, от ветки не зависит. Корень
 `state.json`:
 
 | Поле | Тип | Содержание |
 | :--- | :--- | :--- |
 | `format_version` | `int` | Версия envelope, не версия приложения или feature |
 | `revision` | `int` | Монотонная ревизия желаемой конфигурации |
-| `core` | `object` | `install`, `users`, `telegram`, `network` |
+| `core` | `object` | `install`, `users`, `telegram`, `network`, `configuration_names` |
 | `features` | `object` | `protocols`, `headless_creator`, `kernel` и независимые feature namespaces |
 
 Неизвестные namespaces внутри `core` и `features` сохраняются при load/save.
@@ -606,7 +506,7 @@ validation принадлежат самой feature. Формат повыша�
 
 `User`: `email`, `uuid`, `traffic_limit_gb`, `traffic_used_bytes`, `expiry_date`,
 `blocked`, `created_at`, `telegram_id`, `credentials`, `device_limit`, `devices`,
-`hydrabox_jwe_key`.
+`hydrabox_jwe_key`, `configuration_name_overrides`.
 
 `devices` — карта `id устройства → запись`. Идентификатор — хеш того, чем
 клиент представился, поэтому исходный HWID в state не хранится. При отсутствии
@@ -621,7 +521,9 @@ HWID используется нормализованный `User-Agent`, чт�
 `clash_api_secret`.
 
 Cookies, join-links и хэши в state не хранятся. Creator runtime принадлежит
-Calls; qWDTT больше не хранит desired state creator pool или его расписание.
+Calls; legacy-сервис qWDTT-creator в коде остался, но к приложению не подключён,
+а в state сохраняются только поля прежнего `headless_creator.consumers.qwdtt`
+(`provider`, `room_count`, `pool_enabled`, `refresh_interval_seconds`).
 
 Старые плоские schema 0–18 поддерживает один importer: он сразу создаёт State
 Format v1, нормализует Calls в актуальный `vk_parasite` и переносит прежний
@@ -643,6 +545,9 @@ runtime capabilities, а не номером persisted state или wire-пол�
 | `certificates_report` | Результат проверки: домен, владелец, статус, дней до истечения |
 | `device_sessions` | Активные устройства по пользователям: адрес, соединения, байты, разрешено ли |
 | `traffic_connection_counters` | Счётчики соединений демона трафика, включая адрес источника |
+| `protocol_traffic_totals`, `traffic_report_totals`, `traffic_user_reset_epochs` | Накопители трафика по протоколам и пользователям |
+| `traffic_daemon_last_poll`, `traffic_log_cursors` | Позиция демона учёта: последний опрос и курсоры журнала |
+| `caddy_l4_migrated` | Одноразовая миграция раскладки Caddy L4 выполнена |
 
 Ноль в `traffic_limit_gb` и `device_limit` означает «без ограничения». Пустой
 `expiry_date` означает «без срока»; значение разбирается как ISO-8601 и при

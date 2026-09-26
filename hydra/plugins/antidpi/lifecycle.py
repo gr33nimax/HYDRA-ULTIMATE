@@ -1,4 +1,11 @@
-"""AntiDPI lifecycle facade over the injected privileged runtime."""
+"""AntiDPI lifecycle facade over the injected privileged runtime.
+
+This module is one mixin of ``AntiDPIPlugin``: ``meta``, ``_fail``, ``_command``,
+``_runtime`` and the firewall/state helpers below are provided by the composing
+class and its sibling mixins, so a standalone attribute check cannot resolve them
+and is disabled for this file on purpose.
+"""
+# pyright: reportAttributeAccessIssue=false
 
 from __future__ import annotations
 
@@ -174,7 +181,7 @@ class AntiDPILifecycleMixin:
         )
 
     def healthcheck(self) -> HealthResult:
-        return self._healthcheck(mieru_enabled=False)
+        return self._healthcheck()
 
     def healthcheck_for_state(
         self,

@@ -1,6 +1,9 @@
 import ast
 from pathlib import Path
 
+# ``node`` here is typed as ``ast.AST``, which carries no ``lineno``; the reported
+# nodes are statements and expressions that do have one.
+# pyright: reportAttributeAccessIssue=false
 
 ROOT = Path(__file__).parents[1]
 
@@ -48,7 +51,7 @@ def test_operational_documentation_is_kept_with_the_repository():
         "ConfigFragment.inbounds",
         "app.plugin_command",
         "ConnectionAttributor",
-        "ruff check .",
+        "ruff check main.py hydra tests",
     ):
         assert contract in extension
 
@@ -91,16 +94,12 @@ def test_production_code_does_not_import_the_core_orchestrator_shim():
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             imports_orchestrator = (
-                isinstance(node, ast.Import)
-                and any(alias.name == "hydra.core.orchestrator" for alias in node.names)
+                isinstance(node, ast.Import) and any(alias.name == "hydra.core.orchestrator" for alias in node.names)
             ) or (
                 isinstance(node, ast.ImportFrom)
                 and (
                     node.module == "hydra.core.orchestrator"
-                    or (
-                        node.module == "hydra.core"
-                        and any(alias.name == "orchestrator" for alias in node.names)
-                    )
+                    or (node.module == "hydra.core" and any(alias.name == "orchestrator" for alias in node.names))
                 )
             )
             if imports_orchestrator:
@@ -117,16 +116,11 @@ def test_production_code_has_no_default_plugin_invoker_singleton():
                 violations.append(
                     f"{path.relative_to(ROOT)}:{node.lineno}",
                 )
-            elif isinstance(node, ast.ImportFrom) and any(
-                alias.name == "DEFAULT_INVOKER"
-                for alias in node.names
-            ):
+            elif isinstance(node, ast.ImportFrom) and any(alias.name == "DEFAULT_INVOKER" for alias in node.names):
                 violations.append(
                     f"{path.relative_to(ROOT)}:{node.lineno}",
                 )
-    assert violations == [], (
-        "process-global PluginInvoker returned: " + ", ".join(violations)
-    )
+    assert violations == [], "process-global PluginInvoker returned: " + ", ".join(violations)
 
 
 def test_global_plugin_registry_is_confined_to_compatibility_facade():
@@ -139,30 +133,17 @@ def test_global_plugin_registry_is_confined_to_compatibility_facade():
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             imports_registry = (
-                isinstance(node, ast.Import)
-                and any(
-                    alias.name == "hydra.plugins.registry"
-                    for alias in node.names
-                )
+                isinstance(node, ast.Import) and any(alias.name == "hydra.plugins.registry" for alias in node.names)
             ) or (
                 isinstance(node, ast.ImportFrom)
                 and (
                     node.module == "hydra.plugins.registry"
-                    or (
-                        node.module == "hydra.plugins"
-                        and any(
-                            alias.name == "registry"
-                            for alias in node.names
-                        )
-                    )
+                    or (node.module == "hydra.plugins" and any(alias.name == "registry" for alias in node.names))
                 )
             )
             if imports_registry and relative not in allowed:
                 violations.append(f"{relative}:{node.lineno}")
-    assert violations == [], (
-        "production code imports global plugin registry: "
-        + ", ".join(violations)
-    )
+    assert violations == [], "production code imports global plugin registry: " + ", ".join(violations)
 
 
 def test_production_application_is_only_created_at_adapter_roots():
@@ -182,21 +163,12 @@ def test_production_application_is_only_created_at_adapter_roots():
         relative = path.relative_to(ROOT)
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            mentions_factory = (
-                isinstance(node, ast.Name)
-                and node.id == "production_application"
-            ) or (
-                isinstance(node, ast.ImportFrom)
-                and any(
-                    alias.name == "production_application"
-                    for alias in node.names
-                )
+            mentions_factory = (isinstance(node, ast.Name) and node.id == "production_application") or (
+                isinstance(node, ast.ImportFrom) and any(alias.name == "production_application" for alias in node.names)
             )
             if mentions_factory and relative not in allowed:
                 violations.append(f"{relative}:{node.lineno}")
-    assert violations == [], (
-        "service locator escaped adapter roots: " + ", ".join(violations)
-    )
+    assert violations == [], "service locator escaped adapter roots: " + ", ".join(violations)
 
 
 def test_application_facade_does_not_assemble_production_dependencies():
@@ -207,7 +179,8 @@ def test_application_facade_does_not_assemble_production_dependencies():
     assert "production_application" not in source
     assert not any(
         isinstance(node, ast.ImportFrom)
-        and node.module in {
+        and node.module
+        in {
             "hydra.plugins.container",
             "hydra.plugins.defaults",
             "hydra.services.admin_infrastructure",
@@ -223,10 +196,7 @@ def test_core_orchestrator_is_a_thin_module_alias():
     tree = ast.parse(source)
 
     assert len(source.splitlines()) < 20
-    assert not any(
-        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-        for node in tree.body
-    )
+    assert not any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in tree.body)
 
     from hydra.core import orchestrator as compatibility_orchestrator
     from hydra.services import orchestration
@@ -262,15 +232,9 @@ def test_core_dependency_boundary_has_no_upward_imports():
 
             for module in imported:
                 parts = module.split(".")
-                absolute_upward_import = (
-                    len(parts) > 1
-                    and parts[0] == "hydra"
-                    and parts[1] in forbidden_layers
-                )
+                absolute_upward_import = len(parts) > 1 and parts[0] == "hydra" and parts[1] in forbidden_layers
                 relative_upward_import = (
-                    isinstance(node, ast.ImportFrom)
-                    and node.level > 1
-                    and parts[0] in forbidden_layers
+                    isinstance(node, ast.ImportFrom) and node.level > 1 and parts[0] in forbidden_layers
                 )
                 if absolute_upward_import or relative_upward_import:
                     violations.append(f"{relative}:{node.lineno} {module}")
@@ -302,11 +266,7 @@ def test_menu_facade_is_decomposed_into_domain_controllers():
     source = facade.read_text(encoding="utf-8")
     tree = ast.parse(source)
     assert len(source.splitlines()) < 250
-    assert {
-        node.name
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    } == {
+    assert {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))} == {
         "_application",
         "_apply_error_text",
         "_bind_controller",
@@ -332,33 +292,28 @@ def test_menu_facade_is_decomposed_into_domain_controllers():
     }
     assert set(limits) <= {path.name for path in menu_root.glob("*.py")}
     for name, limit in limits.items():
-        assert len(
-            (menu_root / name).read_text(encoding="utf-8").splitlines(),
-        ) < limit
+        assert (
+            len(
+                (menu_root / name).read_text(encoding="utf-8").splitlines(),
+            )
+            < limit
+        )
 
 
 def test_menu_layers_have_one_composition_root_and_no_hidden_host_access():
     facade = ROOT / "hydra" / "ui" / "menus.py"
     facade_tree = ast.parse(facade.read_text(encoding="utf-8"))
-    functions = {
-        node.name: node
-        for node in facade_tree.body
-        if isinstance(node, ast.FunctionDef)
-    }
+    functions = {node.name: node for node in facade_tree.body if isinstance(node, ast.FunctionDef)}
     production_calls = [
         node
         for node in ast.walk(facade_tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "production_application"
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "production_application"
     ]
     assert len(production_calls) == 1
     assert production_calls == [
         node
         for node in ast.walk(functions["main_menu"])
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "production_application"
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "production_application"
     ]
 
     forbidden_imports = {"hydra.core.host", "hydra.plugins.registry"}
@@ -379,11 +334,7 @@ def test_menu_layers_have_one_composition_root_and_no_hidden_host_access():
             for module in modules:
                 if module in forbidden_imports:
                     violations.append(f"{relative}:{node.lineno} {module}")
-            if (
-                path != facade
-                and isinstance(node, ast.Name)
-                and node.id in {"HOST", "production_application"}
-            ):
+            if path != facade and isinstance(node, ast.Name) and node.id in {"HOST", "production_application"}:
                 violations.append(f"{relative}:{node.lineno} {node.id}")
             if (
                 isinstance(node, ast.Attribute)
@@ -401,14 +352,9 @@ def test_menu_layers_have_one_composition_root_and_no_hidden_host_access():
                 and node.func.value.id in {"p", "plugin"}
             ):
                 violations.append(
-                    f"{relative}:{node.lineno} concrete plugin call "
-                    f"{node.func.value.id}.{node.func.attr}()",
+                    f"{relative}:{node.lineno} concrete plugin call {node.func.value.id}.{node.func.attr}()",
                 )
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id.endswith("Plugin")
-            ):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id.endswith("Plugin"):
                 violations.append(
                     f"{relative}:{node.lineno} {node.func.id}()",
                 )
@@ -429,14 +375,8 @@ def test_configuration_contracts_are_dependency_neutral():
                 imported.append(node.module)
             for module in imported:
                 parts = module.split(".")
-                absolute_layer = (
-                    len(parts) > 1
-                    and parts[0] == "hydra"
-                    and parts[1] in forbidden_roots
-                )
-                relative_layer = (
-                    getattr(node, "level", 0) > 0 and parts[0] in forbidden_roots
-                )
+                absolute_layer = len(parts) > 1 and parts[0] == "hydra" and parts[1] in forbidden_roots
+                relative_layer = getattr(node, "level", 0) > 0 and parts[0] in forbidden_roots
                 if absolute_layer or relative_layer:
                     violations.append(f"{relative}:{node.lineno} {module}")
     assert violations == [], "contracts depend on a higher layer: " + ", ".join(violations)
@@ -458,9 +398,7 @@ def test_core_uses_neutral_configuration_contracts_not_plugin_facades():
                 elif node.module == "hydra.plugins.base" and any(
                     alias.name in {"ConfigFragment", "*"} for alias in node.names
                 ):
-                    violations.append(
-                        f"{relative}:{node.lineno} hydra.plugins.base.ConfigFragment"
-                    )
+                    violations.append(f"{relative}:{node.lineno} hydra.plugins.base.ConfigFragment")
     assert violations == [], "core imports plugin-owned contracts: " + ", ".join(violations)
 
 
@@ -500,32 +438,20 @@ def test_telegram_admin_adapter_has_one_explicit_composition_root():
             called_name = (
                 node.func.id
                 if isinstance(node.func, ast.Name)
-                else (
-                    node.func.attr
-                    if isinstance(node.func, ast.Attribute)
-                    else ""
-                )
+                else (node.func.attr if isinstance(node.func, ast.Attribute) else "")
             )
             if called_name.endswith("Plugin"):
-                violations.append(
-                    f"{path.name}:{node.lineno} {called_name}()"
-                )
+                violations.append(f"{path.name}:{node.lineno} {called_name}()")
             if (
                 called_name == "status"
                 and isinstance(node.func, ast.Attribute)
                 and not _dotted_name(node.func).endswith(".protocols.status")
             ):
-                violations.append(
-                    f"{path.name}:{node.lineno} direct plugin status()"
-                )
+                violations.append(f"{path.name}:{node.lineno} direct plugin status()")
 
-    facade_tree = ast.parse(
-        (telegram_root / "bot.py").read_text(encoding="utf-8")
-    )
+    facade_tree = ast.parse((telegram_root / "bot.py").read_text(encoding="utf-8"))
     top_level_functions = {
-        node.name: node
-        for node in facade_tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        node.name: node for node in facade_tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     removed_dependency_free_shims = {
         "_fail2ban_monitor_worker",
@@ -535,18 +461,13 @@ def test_telegram_admin_adapter_has_one_explicit_composition_root():
         node
         for node in facade_tree.body
         if isinstance(node, ast.Assign)
-        and any(
-            isinstance(target, ast.Name) and target.id == "__all__"
-            for target in node.targets
-        )
+        and any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets)
     )
     facade_exports = set(ast.literal_eval(exports_node.value))
     production_calls = [
         node
         for node in ast.walk(facade_tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "production_application"
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "production_application"
     ]
     entrypoint_tree = ast.parse(
         (telegram_root / "admin_bot_entrypoint.py").read_text(
@@ -556,9 +477,7 @@ def test_telegram_admin_adapter_has_one_explicit_composition_root():
     entrypoint_calls = [
         node
         for node in ast.walk(entrypoint_tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "production_application"
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "production_application"
     ]
 
     assert violations == [], ", ".join(violations)
@@ -575,11 +494,7 @@ def test_all_telegram_internals_use_application_boundaries():
         "admin_bot_entrypoint.py",
         "bot.py",
     }
-    internal_modules = sorted(
-        path
-        for path in telegram_root.rglob("*.py")
-        if path.name not in composition_modules
-    )
+    internal_modules = sorted(path for path in telegram_root.rglob("*.py") if path.name not in composition_modules)
     violations: list[str] = []
     for path in internal_modules:
         source = path.read_text(encoding="utf-8")
@@ -590,7 +505,8 @@ def test_all_telegram_internals_use_application_boundaries():
                     if (
                         alias.name.startswith("hydra.plugins")
                         or alias.name == "hydra.core.host"
-                        or alias.name in {
+                        or alias.name
+                        in {
                             "os",
                             "pathlib",
                             "socket",
@@ -605,7 +521,8 @@ def test_all_telegram_internals_use_application_boundaries():
                 if (
                     module.startswith("hydra.plugins")
                     or module == "hydra.core.host"
-                    or module in {
+                    or module
+                    in {
                         "os",
                         "pathlib",
                         "socket",
@@ -624,20 +541,22 @@ def test_all_telegram_internals_use_application_boundaries():
                 )
             elif isinstance(node, ast.Call):
                 called = _dotted_name(node.func)
-                if called.endswith(
-                    (
-                        ".protocols.get",
-                        ".protocols.require",
-                        ".protocols.list",
-                        ".protocols.enabled",
-                    ),
-                ) or ".protocols.catalog." in called:
+                if (
+                    called.endswith(
+                        (
+                            ".protocols.get",
+                            ".protocols.require",
+                            ".protocols.list",
+                            ".protocols.enabled",
+                        ),
+                    )
+                    or ".protocols.catalog." in called
+                ):
                     violations.append(
                         f"{path.name}:{node.lineno} leaks plugin object via {called}",
                     )
                 if isinstance(node.func, ast.Attribute) and (
-                    node.func.attr.startswith("_")
-                    and _dotted_name(node.func.value) in {"plugin", "protocol"}
+                    node.func.attr.startswith("_") and _dotted_name(node.func.value) in {"plugin", "protocol"}
                 ):
                     violations.append(
                         f"{path.name}:{node.lineno} private plugin call {called}",
@@ -669,20 +588,8 @@ def test_all_telegram_internals_use_application_boundaries():
 
 
 def test_telegram_controller_requires_application_service():
-    controller = ast.parse(
-        (
-            ROOT / "hydra" / "services" / "telegram" / "controller.py"
-        ).read_text(encoding="utf-8")
-    )
-    admin_bot = next(
-        node
-        for node in controller.body
-        if isinstance(node, ast.ClassDef) and node.name == "AdminBot"
-    )
-    initializer = next(
-        node
-        for node in admin_bot.body
-        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
-    )
+    controller = ast.parse((ROOT / "hydra" / "services" / "telegram" / "controller.py").read_text(encoding="utf-8"))
+    admin_bot = next(node for node in controller.body if isinstance(node, ast.ClassDef) and node.name == "AdminBot")
+    initializer = next(node for node in admin_bot.body if isinstance(node, ast.FunctionDef) and node.name == "__init__")
     arguments = [argument.arg for argument in initializer.args.args]
     assert "application" in arguments

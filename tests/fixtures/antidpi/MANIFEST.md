@@ -19,15 +19,21 @@ Redactions applied before storing:
 
 | File | Purpose | Verdict |
 | --- | --- | --- |
-| `snell-cipher-auth-failure.txt` | Real Snell record-header authentication failure on a direct TCP listener. | **enabled** |
+| `snell-cipher-auth-failure.txt` | Real Snell record-header authentication failure on a direct TCP listener. | **diagnostic only** |
 | `decoy-scanner-paths.jsonl` | Real scanner requests for credential/version-control paths on decoy sites. | **enabled** |
 | `negatives.jsonl` | Real inputs that must never produce evidence. | rejection fixtures |
 
 ## Per-protocol verdicts (evidence-driven)
 
+`enabled` means the record is an enforcement input for the detector;
+`diagnostic only` means the parser still recognises it and the fixture still
+proves the pipeline, while `detection.PROTOCOL_REJECT_RULES` keeps the protocol
+out of enforcement until the owned-tag check exists (see `docs/ANTIDPI.md`,
+sections 6 and 13).
+
 | Protocol | Observed production signal | Verdict |
 | --- | --- | --- |
-| Snell | `inbound/snell[...]: process connection from <peer>: snell: serve <peer>: read request: open record header: cipher: message authentication failed` — direct external TCP peer, 49 events / 14 days / 5 source IPs. | **enabled** |
+| Snell | `inbound/snell[...]: process connection from <peer>: snell: serve <peer>: read request: open record header: cipher: message authentication failed` — direct external TCP peer, 49 events / 14 days / 5 source IPs. | **diagnostic only** |
 | Decoy sites | `/.env`, `/.env.*`, `/.git/config`, `/.git/HEAD` and neighbouring scanner paths in `decoy-access.log`. | **enabled** |
 | Naive | 20 days of `caddy-naive` access log contain statuses `200/404/405/308` only — **no `407`**. Unauthenticated callers are served the decoy page, so a wrong credential leaves no attributable protocol reject. | **unsupported** |
 | VLESS | 20 days of journal contain no `unknown UUID`/`authenticate:` reject; XHTTP requests terminate in Caddy, so the native service never reports a wrong UUID. | **unsupported** |

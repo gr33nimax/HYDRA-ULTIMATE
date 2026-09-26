@@ -8,10 +8,9 @@
 | `dev` | кандидат в релиз | интеграционная проверка и canary VPS |
 | `main` | источник production-релиза | только проверенные promotion из `dev` |
 
-Ветка — это источник конкретного commit, а не runtime-артефакт. `updater.sh`
-под блокировкой разрешает SHA выбранной ветки и устанавливает именно его. В
-официальной установке TUI показывает версию HYDRA, канал и короткий SHA; если
-stamp отсутствует, сборка честно помечается `local`.
+`updater.sh` под блокировкой разрешает SHA выбранной ветки и ставит именно его. В
+официальной установке TUI показывает версию, канал и короткий SHA; без stamp
+сборка помечается `local`.
 
 ## Promotion
 
@@ -27,14 +26,16 @@ stamp отсутствует, сборка честно помечается `lo
 Никогда не публикуйте stable-релиз из `debug` и не меняйте running VPS через
 `git pull`.
 
+> [!IMPORTANT]
+> Если изменение затрагивает state, firewall, service lifecycle, подписки или
+> контракт ядра — broad rollout запрещён без успешного rollback rehearsal.
+
 ## GitHub branch protection
 
-В GitHub включите required pull request и запрет прямого push для `dev` и
-`main`. Required checks: `tests-matrix`, `dependency-audit` и
-`linux-host-smoke`. Для `dev` дополнительно приложите результат его push-only
-upgrade smoke; для `main` — ссылку на green canary из `dev`. Эти настройки
-живут в GitHub repository settings и не могут быть надёжно заменены YAML в
-репозитории.
+Включите required pull request и запрет прямого push для `dev` и `main`.
+Required checks: `tests-matrix`, `dependency-audit`, `linux-host-smoke`. Для
+`dev` дополнительно приложите результат push-only upgrade smoke, для `main` —
+ссылку на green canary из `dev`.
 
 ## Release record
 
@@ -49,6 +50,3 @@ Checks: <green CI and smoke evidence>
 Canary: <VPS/result>
 Rollback: <previous known-good tag/SHA>
 ```
-
-Если изменение затрагивает state, firewall, service lifecycle, подписки или
-контракт ядра, без успешного rollback rehearsal broad rollout запрещён.

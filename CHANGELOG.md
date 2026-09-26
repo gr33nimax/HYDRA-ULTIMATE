@@ -1,426 +1,6 @@
 # Changelog
 
-- Сборка `caddy-l4` больше не срывается на сетях, где заблокировано хранилище Go-
-  тулчейнов. `GOTOOLCHAIN` теперь закреплён на пиннутую версию Go (`goX+auto`),
-  поэтому `go` больше не уходит молча в более новый тулчейн середине сборки. На
-  цензурируемых хостах Go-прокси задаётся переменной `HYDRA_GOPROXY`
-  (например `https://goproxy.cn,direct`); при ошибке загрузки тулчейна сборка
-  подсказывает этот обход вместо сырого 403.
-
-## [Unreleased]
-
-## [3.0.0] — 25 сентября 2026
-
-### Удалено
-
-- **Telemt (MTProto-прокси)** удалён полностью: код плагина, его UI-менеджер и
-  тесты. На обновляемых VPS служба `telemt.service` и cron `telemt-stats`
-  снимаются автоматически через штатный uninstall-путь. MTProto-доставка
-  остаётся доступной через плагин `mtproto_zig`.
-
-- В меню WARP добавлен выбор MASQUE-адреса: warpscout проверяет адреса с VPS,
-  оператор подтверждает один адрес или возвращает автоматический выбор ядра.
-  Выбранный адрес хранится в state, проверяется через отдельный loopback SOCKS
-  при применении; отказ восстанавливает прежнюю конфигурацию. Аккаунт сканера
-  создаётся отдельно после подтверждения, сам бинарник ставится оператором.
-
-- Исправлен preflight обновления для сохранённых маршрутов `ext:category-ru`:
-  это единственный разрешённый сводный источник WARP. Он снова доступен в
-  каталоге, в офлайн-копии и в конфигурации вместе с суффиксами российских TLD.
-  Остальные сводные списки остаются отключёнными.
-
-- WARP показывает и загружает только списки отдельных сервисов: сводные `category-*`,
-  `itDog-*`, `refilter` и `antifilter` исключены. Выбор `none` убран из меню;
-  `direct` — выход с VPS и явное исключение из WARP, а не российский адрес.
-  Более узкие маршруты предшествуют широким; отсутствующий выбранный список
-  останавливает apply вместо неявного перехода на direct. Без каталога
-  внешние сервисы недоступны, локальные правила работают. Установка и
-  переустановка больше не удаляют кэш выбранных правил; релей с активными
-  маршрутами нельзя удалить, не перенаправив их. Старые маршруты к удалённым
-  источникам требуют ручной перенастройки.
-
-- Списки правил WARP берутся из каталога Geo-Aggregator вместо трёх зашитых списков itdoginfo.
-  Каталог (`db/catalog.json`, 314 источников в 20 категориях) скачивается и кэшируется в
-  `/var/lib/hydra/warp_catalog.json`, обновляется той же задачей обслуживания, что и сами списки,
-  поэтому новый сервис upstream доходит до оператора без релиза HYDRA; без скачанного каталога
-  плагин отвечает встроенной копией. Меню внешних источников стало двухуровневым:
-  категория → её списки с пагинацией по 20, а сама категория направляется одним target. Если
-  источники внутри категории разошлись, меню показывает «разные направления» вместо одного из
-  них; рядом с категорией напечатано ожидаемое направление (`ru` → direct, `blocked` → warp),
-  потому что перепутанное направление — это ошибка, которую оператор иначе находит по факту.
-  Ключи прежних списков (`ext:russia`, `ext:geoblock`, `ext:google_ai`) переименовываются при
-  загрузке state в `ext:category-ru`, `ext:refilter`, `ext:category-ai` с сохранением выбранного
-  target, а TLD `.ru`/`.su`/`.рф`/`.xn--p1ai` теперь тянет `category-ru`. Источники, которых в
-  каталоге нет (`refilter` — реестр РКН, `antifilter` — IP-диапазоны), добавлены отдельно:
-  без них у плагина не остаётся списка заблокированного в РФ.
-
-- WARP больше не ставит внешний установщик профиля. Транспорт переведён на нативный `masque`
-  outbound ядра HydraCore: устройство регистрируется через Cloudflare API самим ядром, а профиль
-  кэшируется в `cache_file` (`store_masque_config`), поэтому перезапуск службы не создаёт новое
-  устройство в аккаунте Cloudflare. Бинарник `wgcf`, `wgcf-profile.conf`, `wgcf-account.toml`,
-  журнал `/var/log/hydra/warp_install.log` и пункты меню установки, пересоздания и удаления
-  профиля удалены; `install()`/`uninstall()` плагина остаются совместимыми no-op. Цель `warp`
-  теперь доступна всегда, поэтому отсутствующий профиль больше не блокирует apply, а relay-профили
-  `warp_<name>` из `/etc/hydra/warp_profiles` по-прежнему рендерятся как `wireguard` endpoints.
-  Прежний профиль wgcf перестаёт использоваться: новое устройство Cloudflare регистрируется при
-  первом применении. Переключение существующей установки — `sudo hydra plugin reinstall warp` или
-  «🔄 Переустановить» в меню WARP: он удаляет файлы прежнего установщика
-  (`/usr/local/bin/wgcf`, `wgcf-profile.conf`, `wgcf-account.toml`,
-  `/var/log/hydra/warp_install.log`), заново скачивает каталог и списки и сохраняет настроенные
-  маршруты. Меню WARP несёт обычный жизненный цикл плагина — «🔧 Установить», «▶️ Включить»,
-  «🔄 Переустановить», «❌ Удалить» — и не имеет отдельных пунктов под остатки прежней схемы.
-
-- Отказ применения команды плагина больше не прячет причину. Если применение упало, а откат тоже
-  не удался, оператор видит исходную причину применения, а сообщение об отказе отката идёт
-  отдельной строкой: раньше вывод ограничивался «plugin command rollback failed: …», и причина
-  оставалась только в `/var/log/hydra/apply.jsonl`. Ступень отказа, которую записал сам плагин
-  (`apply_failure()`), теперь попадает в сообщение «Plugin X apply returned false: …» — в
-  каноническом пути `PluginExecutor` и в обоих `sync_user_configs`; если плагин ступень не сообщил,
-  текст остаётся прежним, а неудачное чтение диагностики не меняет исход применения.
-
-- WEB-домен MTProto Zig теперь отдаёт обычный статический сайт вместо голого `404 Not Found`: при
-  активном WEB-режиме Hydra генерирует сайт штатными темами заглушек в `/var/www/decoy-zig` и
-  рендерит `[web] public_dir` только после успешной генерации. Тема выбирается той же строкой
-  «🎭 Сайт-заглушка» и командой `set_decoy_theme`, что и у остальных транспортов; страница моста и
-  проверка capability сохраняют приоритет, выключение WEB убирает `public_dir`, а сбой генерации
-  виден в статусе и health и не валит применение транспорта. Промежуточное меню «Режим WEB» в
-  настройках транспорта убрано: строка сразу открывает выбор режима.
-
-- Мониторинг трафика больше не показывает несуществующие нули. MTProto Zig отличает
-  «HTTP 200 без поддерживаемых серий» от настоящего нуля. Недоступность источника (API выключен,
-  не-200, неразобранное тело, ответ без единого пользователя из state, таймаут) показывается как
-  «источник недоступен», последние достоверные накопленные значения сохраняются, а причина видна в
-  статусе и health протокола. Разобранный ответ хотя бы с одним пользователем из state считается
-  доступным даже если добавленный, но ещё не применённый пользователь в нём отсутствует: строка
-  мониторинга продолжает показывать трафик, а число ненайденных non-blocked пользователей видно в
-  `status().info` как `api_missing_users`. Устаревшая схема `stats.json` (iptables-цепочки, cron,
-  оценка доли по сессиям) не возвращается. Таблица «По протоколам» выровнена по 77-клеточной
-  раскладке (16/12/23/13/8), паддинг считается по видимой ширине без ANSI, ненулевая доля всегда
-  рисует хотя бы один блок,
-  подписи берут продуктовые имена (`AnyTLS`) при отсутствии явного display name, а
-  столбец статуса показывает фактическое состояние службы, а не только желаемое. Профильные ключи
-  credentials (`amneziawg_mobile`) больше не становятся отдельной строкой протокола.
-- У MTProto Zig появился выбираемый режим WEB-прокси: обычный FakeTLS (`off`, по умолчанию),
-  гибрид FakeTLS + WEB и только WEB для Telegram Desktop 7.1+. WEB-ссылка
-  `tg://webproxy?server=<домен>&secret=dd<32-hex>` выдаётся на **отдельный домен оператора** с
-  публичным сертификатом; прикрываемый FakeTLS-домен сертификата по-прежнему не требует. Единственным
-  владельцем TCP/443 остаётся управляемый `caddy-l4`: он завершает TLS для WEB-домена и передаёт
-  расшифрованный HTTP/WebSocket-поток на Hydra-owned loopback-релей `mtproto-zig-web.service`
-  (`mtproto-zig web-relay`, `127.0.0.1:8081`, без capabilities). Переход в режим «только WEB»
-  выполняется staged: сначала релей поднимается с `only = false`, а фронтенд рендерится без маршрута
-  FakeTLS (прежние прямые ссылки перестают подключаться уже на этой стадии), затем проверяется
-  HTTPS-мост через локальный `:443`, и только после успеха коммитится `only = true`; при сбое
-  снапшот возвращает прежний режим, маршрут, ссылки и конфигурацию фронтенда, а исходная ошибка
-  остаётся видимой. Сбой отключения релея больше не считается успехом: отключение выполняется даже
-  при уже удалённом юните, а сохранившаяся enable-ссылка останавливает применение; неполный откат
-  виден в журнале применения (`rollback_failed`). Управление — строкой «Режим WEB» в
-  настройках транспорта; upstream `mtbuddy`, nginx и `/opt/mtproto-proxy` не используются.
-
-- Ручные конфигурации больше не повторяют уже показанные MTProto `tg://proxy`-ссылки JSON-обёрткой
-  `{"link": ..., "protocol": ...}`; сама копируемая ссылка MTProto Zig остаётся на месте.
-  Полноценные JSON-конфигурации с дополнительными полями не фильтруются.
-
-- VLESS CDN снова учитывает трафик и появляется в активных подключениях, когда Clash не передаёт
-  пользователя: Hydra сопоставляет source-port с Sing-box journal только внутри того inbound, который
-  его записал (`vless-cdn-in` → `vless_cdn`). Обычный VLESS/XHTTP и CDN больше не могут обменять
-  квоту при повторном использовании loopback-порта; при отсутствии journal evidence соединение
-  по-прежнему не кредитуется и не показывается. Публичные flat helpers VLESS/AnyTLS сохранили
-  прежний контракт и порядок «последняя journal-запись побеждает».
-
-- Установка mtproto.zig разрешает бинарник по артефакту, а не по `releases/latest`: HYDRA выбирает
-  самый новый опубликованный релиз с точным архивом под архитектуру хоста и проверяет его SHA-256
-  из release metadata либо точного `.sha256`-артефакта того же релиза. Это сохраняет строгую проверку
-  для старых релизов, где GitHub metadata ещё не содержит digest. Бинарник заменяется атомарно через
-  `<binary>.pending`; внутри архива принимается точное архитектурное имя `mtproto-proxy-linux-*`,
-  используемое upstream. Прежний файл и состояние службы сохраняются при любой ошибке. Ошибка
-  установки сохраняется после rollback и теперь называется
-  своей стадией (выбор релиза, проверка digest, распаковка/ELF, сервисные пути, юнит, служба,
-  маршрутизация) вместо общего «Ошибка применения конфигурации». FakeTLS-домен Zig больше не
-  отправляется в certbot: сертификатом владеет сам proxy handshake, а Caddy выполняет только SNI
-  passthrough. Upstream `bootstrap.sh` и `mtbuddy` по-прежнему не запускаются. Причинно этот путь
-  устраняет состояние «Не установлен», при котором
-  прежний поиск по `releases/latest` не находил архив `mtproto-proxy`.
-
-- Добавлен `mtproto_zig`: FakeTLS MTProxy с отдельными Hydra-owned путями,
-  непривилегированным systemd-пользователем и `CAP_NET_BIND_SERVICE`. Он слушает TCP/443
-  напрямую или loopback `127.0.0.1:20449` за Caddy L4 по SNI, выдаёт per-user `tg://proxy`
-  через общий слой клиентских артефактов и сохраняет накопленный трафик из loopback Prometheus.
-  PROXY v2 намеренно не передаётся: upstream видит `127.0.0.1`, IP-квоты не поддерживаются.
-
-- Ручные TUI-выводы клиентских ссылок и конфигураций больше не печатают ASCII QR-коды;
-  сами ссылки, подписки и текстовые конфигурации не менялись. Удалена зависимость `qrcode`.
-
-- A renamed VLESS CDN profile now reaches every client under one key.  The rename was persisted by
-  the UI and read by HydraBox under the canonical plugin key `vless_cdn`, while the URI pipeline
-  looked up `vless:cdn` — a key nothing ever wrote, so Throne and NekoBox fell back to the built-in
-  `<email> VLESS Яндекс CDN` while HydraBox showed the operator's name.  Both places now use
-  `vless_cdn`, the family override of ordinary VLESS no longer leaks into the CDN profile, and the
-  built-in defaults of both formats are unchanged.
-
-- AntiScan no longer bans on a Snell rejection.  The record it matched —
-  `open record header: cipher: message authentication failed` — proves that a frame did not
-  decrypt, which is byte-identical for a hostile probe and for a legitimate client whose PSK is
-  stale, mistyped or generated for another generation; on a live host that difference is the
-  plugin banning its own users.  The grammar also bound whatever inbound tag the core printed and
-  the parser had no access to desired state, so a retired or foreign Snell listener matched it too.
-  Snell is therefore absent from `PROTOCOL_REJECT_RULES`, and the record is demoted to a diagnostic
-  input: the parser, its sanitized fixture, the journal stream and the self-test still prove that a
-  rejection reaches the pipeline and lands redacted in the capture archive, while nothing can reach
-  the firewall, state or Telegram through it.  The decoy scanner path remains the single automatic
-  ban input, manual bans, progressive durations, expiry and the whitelist are untouched, and no
-  state migration is involved — fewer events are accepted, nothing is written differently.  Snell
-  returns only together with an owned-tag check in the journal normalizer, because that is the only
-  layer with access to desired state; the procedure in `docs/ANTIDPI.md` now requires it.
-
-- The AntiDPI detector is narrowed to a closed evidence allowlist and now bans only what
-  the host itself can prove: a protocol-owned rejection carrying the real external peer,
-  or an explicit scanner path on a decoy site. Everything else — unknown SNI, generic TLS
-  EOF/alert/handshake failures, kernel port-scan and sweep telemetry, UDP probes, Mieru
-  byte-count inference, subnet correlation and time-window source guessing — is deleted at
-  the source rather than muted downstream, together with the iptables LOG rules, the
-  AmneziaWG kernel debug hook and the Caddy `layer4` JSON log that fed it. Scoring, decay,
-  evidence families, coordinated-subnet detection and the sub-threshold watchlist are gone
-  from the decision, the projections and the operator surfaces; the Telegram side now
-  reports an applied ban or a firewall refusal and nothing else, so the ALERT with its
-  inline ban button is retired in favour of the button on the address card. On the live
-  host the old contract produced 60 779 events (47 985 handshake failures, 39 914 unknown
-  SNI) for 63 bans, while the genuine Snell record-header rejection was never turned into
-  a signal; that rejection and the `/.git/` decoy path are now the enforcement inputs, and
-  the ban ladder (10 minutes, 1 hour, 24 hours, 7 days) is driven by a single proven
-  event. Protocols without a fixture-proven reject — AnyTLS, VLESS, Naive, TrustTunnel,
-  ShadowTLS, Hysteria2, qWDTT, AmneziaWG, Mieru, Calls — are documented as
-  unsupported with the reason, and a new protocol enters only through a sanitized capture
-  from the deployed implementation. The plugin key, service name and compatible imports
-  are unchanged, and legacy `scores`/`subnets` state stays readable for rollback without
-  ever influencing a decision.
-
-- AmneziaWG is now served by HydraCore itself, and the installer-era scheme is gone from the
-  code: no checkout, no `--protocol-status`/`--enable-awg3*`, no package purge, no kernel-module
-  handling, no `awg-quick` units, no `params` snapshot, no interface file and no TPROXY entries.
-  HYDRA writes one `wireguard` endpoint per profile with the peers it issues, generates the key
-  material itself, reads the served generation back from the core configuration, and attributes
-  per-user traffic by the peer's tunnel address. The generation is a field of the core
-  configuration, `random_trailers` works after the fork fix, and removing the protocol touches
-  neither the package manager nor the kernel module — leftovers of an older install are named and
-  removed. Profiles are re-issued and clients import them again.
-
-- NaiveProxy can now run without UDP over TCP. UoT is one plugin setting (`set_uot`,
-  TUI: «UDP через TCP (UoT)»), on by default so nothing changes on its own. Turning it
-  off rebuilds Caddy from the upstream `forwardproxy` module instead of the UoT fork and
-  drops `uot` from Shadowrocket links; the installed build is recognised by probing it,
-  not by a stored marker, so the setting cannot silently disagree with the binary. UDP
-  over the TCP Naive profile stops working when UoT is off; the QUIC transport is
-  unaffected. The fork has no «disable UoT» option, and with `upstream` configured its
-  `acl`/`ports` controls do not apply — which is why the build itself is the switch.
-
-- Snell now renders the generations the migrated HydraCore serves: generation 5 (server
-  `version: 5` with a flat `obfs_mode` of `none`/`http`/`tls`) or generation 6 (its own
-  `mode` of `default`/`unshaped`/`unsafe-raw`). The plugin used to emit a server-side
-  `version: 4` and a nested `obfs` object, both of which the upstream Snell implementation
-  refuses — enabling Snell would have stopped the core. The classic pair is server 5 with
-  client 4 (the core's library has no client-side 5), links carry the real client version,
-  the Shadowrocket form is produced for the classic pair only, and both generations require
-  a HydraCore that carries the upstream Snell implementation.
-
-- AmneziaWG 3.1 exports to Sing-Box Extended and HydraBox now require a
-  HydraCore carrying the generation's two-field contract (`random_trailers`,
-  `disable_cookies`). The gate reads the installed core version; an older core
-  keeps the 3.1 export fail-closed with a reason naming the required release.
-  `random_trailers` is emitted as a JSON boolean, matching the core's strict
-  configuration parser.
-
-- AmneziaWG can switch server protocol mode transactionally between 2.0, 3.0
-  and 3.1 through the pinned upstream installer. HYDRA preserves unknown
-  interface keys and restores configuration plus both AWG systemd states on
-  rollback. AWG 3.x now emits source-proven Throne `wg://` and official
-  Qt-compressed Amnezia `vpn://` artifacts; Sing-Box Extended/HydraBox is
-  enabled for 3.0 and, on a HydraCore with the 3.1 field contract, for 3.1,
-  while NekoBox `sn://awg` remains fail-closed.
-
-- NekoBox `sn://awg` links now encode emoji and other non-BMP profile names
-  as Kryo-compatible Java UTF-16 characters, preventing corrupted AWG profiles.
-- Configuration display names now stay separate from HydraBox runtime tags,
-  distinguish Naive TCP and QUIC profiles, and apply to AmneziaWG desktop and
-  mobile links in NekoBox-compatible subscriptions.
-- TUI menus now use compact headers and one-line actions instead of ASCII art,
-  nested boxes and repeated descriptions. Telegram security dashboards show a
-  short summary first and keep IP lists on their existing drill-down screens.
-- AntiDPI's hardened systemd unit now permits the shared xtables lock under
-  `/run`, so its background reconciliation can inspect and restore INPUT rules
-  while `ProtectSystem=strict` remains enabled.
-- Hydra VK Tunnel can recreate its four-link blue/green pool without a full
-  reinstall and can schedule pool recreation every 1–24 hours through Sync
-  Agent; automatic recreation is opt-in. Global configuration names now have
-  their own TUI screen, personal names stay in the user card, and Hydra VK
-  Tunnel appears in both lists. Shadowrocket Naive `https://`, `http2://` and
-  `http3://` links omit the redundant `peer` and `alpn` query parameters that
-  prevented its HTTPS parser from importing the profile.
-- Kernel / Calls / qWDTT consolidation: HYDRA now uses only the Hydracore VPS
-  debug channel; Sing-Box Extended selection and installation are removed.
-  Hydra VK Tunnel owns the Creator runtime and its fixed four-room pool. Its
-  TUI imports a local VK cookies JSON before Calls is installed, normalizes it,
-  validates it before atomic replacement and writes the managed file as `0600`.
-  qWDTT no longer creates or synchronizes a Creator pool and never consumes VK
-  cookies.
-- Shadowrocket subscription output now preserves each transport's real shape:
-  Naive TCP uses HTTPS with `http/1.1` and `h2`, Naive QUIC uses HTTP/3 `h3`,
-  TCP variants enable UoT v2 and TCP Fast Open, and all variants enable padding.
-  TrustTunnel uses official TLV, and Snell keeps its `obfs`. Naive is built
-  from the pinned Caddy fork; replacement validates the actual binary and
-  keeps a backup. The new `naive-caddy.yml` CI workflow covers real-binary
-  validation plus HTTP/1 CONNECT and UoT magic passthrough; it has not yet
-  run for this change.
-- Traffic accounting records a first-poll baseline before charging bytes, so
-  starting the collector cannot double-count aggregate or per-user traffic.
-
-- AntiDPI hardening (September 2026 audit): kernel SYN/NEW and UDP telemetry can
-  never raise ban eligibility, so multi-port bursts stay alert-only; ShadowTLS
-  errors attributed only by a time window are alert-only hints; TrustTunnel
-  CONNECT counts as auth evidence only on explicit 401/407 (backend 5xx and
-  valid tunnels are never client evidence); decoy scanner paths match the
-  normalized request path, not the raw URI with query; protocol-specific
-  Sing-Box patterns win over the generic matcher.
-- AntiDPI enforcement reliability: the ban intent is persisted before the
-  ipset effect and reverted on refusal; unban serializes the firewall delete
-  with the state update; manual bans follow the same intent-first order;
-  Telegram delivery moved outside the state lock; the collector restores
-  ipsets, rules and stored bans on start and every 10 minutes, releases
-  whitelisted bans, persists a liveness heartbeat checked by health, survives
-  log rotation without losing written events, preserves partial lines, resumes
-  journald from a saved cursor and scores events by their own timestamps;
-  journal cursors advance only after durable processing and replay is
-  deduplicated; old events decay at event time and receive at most the
-  remaining original ban TTL; corrupt state files are quarantined and pause
-  automatic enforcement in a visible degraded mode instead of silently using
-  a blank whitelist; whitelist addition reports addresses it failed to unban.
-- AntiDPI operator views: the Telegram address card uses a new exact
-  `address_details` query (the 26th watched address no longer reports "no
-  evidence") and distinguishes "no data" from "clean"; the TUI ban list is
-  paged with visible-row-only numbers and confirmation for mass unban and
-  manual ban; journal lines render in full; skipped ban notifications are
-  labelled as cooldown skips, not grouping; self-test archives remove
-  `Authorization`/`Proxy-Authorization`/`Cookie`/`password` values structurally,
-  including JSON objects and arrays.
-- AntiDPI reconciliation now restores the full firewall surface and records
-  failed steps for health/operator views; whitelist-covered bans are never
-  restored. Telegram delivery uses a bounded background queue with delivered,
-  failed and dropped outcomes. Failed promotion of a timed manual ban restores
-  its original metadata, history and offense count.
-
-- Removed the obsolete Hydra VK Tunnel experiment telemetry framework, its CLI,
-  collectors, reports, storage, and native telemetry capability requirement.
-
-- Replaced the release-coupled state schemas and 18-step migration chain with
-  stable State Format v1. Legacy schemas 0–18 are imported directly once;
-  feature changes, including Calls transport changes, no longer bump the state
-  format or add migration scripts. Unknown feature namespaces survive load/save.
-
-- Added the Hydracore debug.27 telemetry contract for application-limited
-  pacing, deferred lane recovery and buffered client telemetry backlog.
-- New operator sessions begin native ingestion at the current file boundary;
-  stale and out-of-window records are rejected instead of being mapped into
-  the active test timeline.
-- Recovery analysis prefers the server lifecycle, deduplicates mirrored client
-  events and can infer a completed reset from a healthy probed worker snapshot.
-- Findings no longer classify application-limited token starvation or a bare
-  handshake timeout as physical-capacity failure.
-
-- Added the incompatible Hydracore debug.26 wire-v7 contract. Ultimate now
-  requires wire 7 on both endpoints and ingests per-lane generation/state,
-  ACK-clocked pacing, delivery, minRTT/inflight, reset/probe and stale-frame
-  metrics plus aggregate no-progress and full-session replacement signals.
-- Detailed Calls diagnostics show the wire-v7 lane controller and reset state.
-  Findings now separate a four-call physical capacity ceiling, congestion
-  pacing collapse, failed generation reset and complete session replacement.
-
-- Added the Hydracore debug.23 staged-output contract end to end. Native
-  ingestion now accepts `flow_*` records and retains admission-window, KCP
-  output depth/capacity, update-backpressure, mutex-wait, physical-write and
-  flow-local abort metrics instead of rejecting the complete snapshot.
-- Live status now gives one compact KCP-pipeline summary. The full report adds
-  per-lane internals, goodput correlations and separate findings for staged
-  output saturation, KCP lock contention, slow TURN/DTLS writes and isolated
-  ordered-flow aborts.
-
-- Added the Hydracore debug.22 KCP ACK-progress contract: timestamp-matched
-  RTT samples, RTT variance, observed ACKs, acknowledged progress and
-  in-flight depth are retained, analyzed and shown in detailed lane reports.
-- Recovery timeout and full-session escalation are now terminal outcomes
-  instead of unresolved lane recoveries. Worker coverage no longer requires
-  session-only lane configuration fields, removing the false `partial` result.
-- Removed the obsolete debug.21 finding that treated disabled Reno congestion
-  control as a fault; debug.22 intentionally uses bounded per-lane queues and
-  windows because TURN delay/duplication is not a reliable congestion signal.
-
-- Hydra VK telemetry now ingests Hydracore debug.21's estimated fast-resend
-  and RTO retransmission counters, reports their segment/byte split per
-  session and per lane, and distinguishes timeout-dominated path pressure from
-  fast-resend pressure in findings.
-- Live status and full reports now summarize session-wide lane recovery
-  attempts, matched reattachments, unresolved recoveries and recovery p95.
-  The obsolete zero-valued `Pace` column was replaced with the actionable
-  `Fast/RTO` split without adding another wide CLI scenario.
-
-- Added the incompatible Hydracore debug.19 wire-v6 contract: exactly four
-  physical VK/TURN calls, TCP flow affinity, aggregate UDP/QUIC striping,
-  lossless KCP-to-worker backpressure and staged Android network handover.
-- Telemetry metadata, CLI rendering and findings now validate IDs 0..3 and the
-  `call_vk_four_lane_kcp` capability. The former false "missing lanes 4..7"
-  critical and all eight-lane wording were removed.
-
-- Added the intentionally incompatible Hydracore debug.13 wire-v5 contract:
-  eight independent KCP lanes, per-lane pre-KCP admission, bounded relay byte
-  credit and video-class RTP payload type 96.
-- Telemetry now requires and displays each lane's admission pace and RTP
-  payload type, reports incomplete lane sets against IDs 0..7, and keeps all
-  current client/server lanes visible in live status.
-
-- Added the Hydracore debug.11 `vk_parasite` wire-v4 contract: exactly four
-  independent KCP lanes, per-flow distribution with bounded receive reordering,
-  and per-lane RTT/RTO, WaitSnd, retransmission, queue and flow telemetry. The
-  obsolete transport profile switch was removed from CLI and generated config.
-- Fixed `debug` kernel selection when GitHub returns prereleases out of
-  publication order. Hydra Ultimate now chooses the newest matching published
-  release instead of the first API entry, preventing an older wire-v2 VPS
-  binary from being selected ahead of Hydracore debug.10.
-- Added the paired Hydracore debug.10 four-call adaptive transport contract.
-  Every physical VK/TURN packet now has same-path selective feedback; path
-  loss, KCP retry, feedback freshness and control copies are reported as
-  separate signals. Live findings use current entities and recent counters,
-  so queue drops and backoffs from replaced sessions no longer contaminate the
-  active diagnosis. Adaptive peer-read queues default to 512 packets.
-  Client and VPS capabilities now require wire v3 exactly, so mixed old/new
-  deployments fail closed during the worker handshake.
-- Added adaptive VK path-controller telemetry and analysis for Hydracore
-  debug.7: per-worker delivered rate, window/in-flight occupancy and backoff
-  totals. Live `telemetry status` now shows a compact delivery/window view;
-  the detailed report retains wire, network, queue, reconnect and TURN data.
-  KCP pending saturation is evaluated against the runtime-reported adaptive
-  limit instead of a hard-coded 2048 segments.
-- Fixed adaptive VK telemetry ingestion: `multipath_*` session/process records
-  are no longer rejected, so wire accounting and native coverage remain
-  complete. Live status now hides historical sessions while the full report
-  identifies them explicitly. Worker diagnostics distinguish authenticated
-  network loss, KCP retry pressure, and post-KCP output-queue delay.
-- Fixed live VK telemetry reports racing with newly appended native worker/event
-  buckets by analyzing an immutable snapshot of the active timeline tail.
-- Fixed the adaptive VK debug.5 throughput regression: the adaptive scheduler
-  keeps chunk affinity, alternate-path retries and control priority but no
-  longer enables one dynamic KCP congestion window across four independent
-  TURN paths. Adaptive server peer queues default to 256 packets while exact
-  legacy behavior keeps 128.
-- Path retry now uses cumulative attempt/retransmission counters when available.
-  KCP retransmission findings compare segment counters only; retransmitted byte
-  totals can no longer create a false high-retransmission warning.
-
-Все заметные изменения HYDRA собраны в этом файле. Даты указаны по календарю
-релиза; факты старых записей не переписываются задним числом.
-
-Проект использует семантическое версионирование. Полное описание архитектуры и
-эксплуатации находится в [`docs/`](docs/); changelog фиксирует только то, что
-изменилось между версиями.
-
-**Релизы:** [2.5.5](#255--27-июля-2026) · [2.5.4](#254--26-июля-2026) ·
+**Релизы:** [3.0.0](#300--25-сентября-2026) · [2.5.5](#255--27-июля-2026) · [2.5.4](#254--26-июля-2026) ·
 [2.5.3](#253--24-июля-2026) ·
 [2.5.2](#252--21-июля-2026) · [2.5.1-dev](#251-dev--fortress--21-июля-2026) ·
 [2.5.0](#250--20-июля-2026) · [2.4.1](#241--19-июля-2026) ·
@@ -428,997 +8,399 @@
 [2.3.4](#234--11-июля-2026) · [2.3.3](#233--9-июля-2026) ·
 [2.3.2](#232--9-июля-2026) · [2.0.0](#200--базовый-публичный-релиз)
 
-### Обновление
+## [Unreleased]
 
-- Updater больше не передаёт шаблонные systemd units вида `name@.service` в
-  команды проверки/остановки как конкретную службу. Он обнаруживает реально
-  загруженные instances и сохраняет их в `active-units.txt`, поэтому активный
-  пул `hydra-headless-creator-vk-calls@*.service` не блокирует обновление и
-  корректно восстанавливается после переключения release либо rollback.
+### Исправлено
 
-- Updater больше не копит релизы и снимки отката навсегда. На долгоживущей
-  установке `/opt/hydra-releases` и `/var/backups/hydra/upgrades` росли с каждой
-  раскаткой, и в какой-то момент обновление упиралось в переполненный диск.
-  После успешного переключения updater удаляет всё, кроме текущего release и
-  `HYDRA_KEEP_RELEASES-1` свежих (по умолчанию 3), снимки отката старше
-  `HYDRA_KEEP_BACKUP_DAYS` дней (по умолчанию 7) и брошенные `.staging-*` от
-  прерванных обновлений. Текущий release не удаляется никогда, а сбой уборки не
-  влияет на результат установки.
+- Сборка `caddy-l4`: `GOTOOLCHAIN` закреплён на пиннутую версию Go (`goX+auto`), поэтому `go` не уходит молча в более новый тулчейн в середине сборки. Go-прокси на цензурируемых хостах задаётся `HYDRA_GOPROXY` (например `https://goproxy.cn,direct`); при ошибке загрузки тулчейна сборка подсказывает обход вместо сырого 403.
 
-### Hydracore / Calls
+## [3.0.0] — 25 сентября 2026
 
-- Calls now generates only the `vk_parasite` wire-v4 contract with exactly four
-  independent KCP lanes. The CLI no longer exposes an A/B transport-profile
-  switch; telemetry renders and analyses each lane directly. The exact
-  `call_vk_four_lane_kcp` capability is required before activation.
+### Добавлено
 
-- Нативная Calls-телеметрия разделена на process/session/worker и больше не
-  смешивает активного тестера со stale session. CLI `status`, `stop` и `report`
-  показывают покрытие, непрерывность, направления KCP, RTT/loss/queues и
-  проблемные VK/TURN workers без ручного разбора JSONL.
-- Timeline сохраняется полностью в сжатых 8 MiB-сегментах; лимит учитывает
-  фактический объём на диске, live tail остаётся доступным, а export прозрачно
-  восстанавливает единый JSONL.
-- Канал ядра Hydracore стал явным switch из двух значений: `stable` (по
-  умолчанию на всех ветках HYDRA) и `debug`. `stable` выбирает самый свежий
-  опубликованный non-prerelease релиз, `debug` — самый свежий prerelease и
-  принимает обе читаемые формы `hydracore-sbe-<sbe-version>-debug-<n>` и
-  `hydracore-sbe-<sbe-version>-rc-<n>`. Retired-тег `-debug.<n>` не выбирается
-  ни одним каналом; persisted-значение `preview` больше не предлагается, но
-  резолвится как `debug`, поэтому уже выбравшая его установка продолжает
-  обновляться. `bootstrap.sh` устанавливает самый свежий релиз выбранного
-  канала, а не зафиксированный на момент установки, а TUI показывает выбранный
-  канал и версию кандидата до замены ядра. Требуется нативный
-  контракт телеметрии VK Calls, а существующие digest/config/health проверки с
-  автоматическим rollback сохранены.
-- Добавлена управляемая оператором техническая телеметрия Hydra VK Tunnel:
-  `start/status/tail/mark/report/export/stop`. Таймера завершения нет; сессия
-  работает до `stop` либо до защитного лимита данных. Единый append-only timeline
-  содержит goodput/lifecycle соединений, ресурсы Hydracore и VPS,
-  PSI/softnet/NIC/UDP/conntrack, категории runtime-событий и нативный контракт
-  VK/TURN/DTLS/worker/KCP. Отчёт строит p50/p95/p99, фазы, корреляции и findings,
-  а export создаёт очищенный `.tar.gz`. Email, IP, destination, token и raw
-  connection ID в timeline не пишутся.
-- Демон трафика распознаёт runtime inbound `call/...` как протокол `calls`, а
-  Hydra VK Tunnel использует общий tracked-источник соединений. Если Hydracore
-  передаёт аутентифицированного пользователя в Clash `metadata.user`, байты
-  монотонно начисляются общему и per-protocol счётчику этого пользователя.
-- Release-контракт Hydracore разделён по ролям: Ultimate загружает только
-  `hydracore-vps-linux-{arch}.tar.gz` и проверяет VPS identity, server feature,
-  VK-parasite-only режим и wire v4. Android client artifact на VPS
-  fail-closed не принимается.
-- Calls сохраняет отдельный `public_endpoint`. В административном TUI транспорт
-  называется `Hydra VK Tunnel`, а только пользовательский профиль в подписке —
-  «Обход БС». Endpoint не зависит от transport SNI.
-- Provider-aware kernel status стал единственным источником версии/наличия
-  ядра для главного экрана и экрана Sing-Box, поэтому Hydracore больше не
-  отображается как «не установлен».
+- Плагин `mtproto_zig`: FakeTLS MTProxy с отдельными Hydra-owned путями, непривилегированным systemd-пользователем и `CAP_NET_BIND_SERVICE`; TCP/443 напрямую или loopback `127.0.0.1:20449` за Caddy L4 по SNI, per-user `tg://proxy` через общий слой клиентских артефактов, накопленный трафик из loopback Prometheus. PROXY v2 не передаётся, IP-квоты не поддерживаются.
+- Режимы WEB MTProto Zig: `off` (FakeTLS, по умолчанию), гибрид FakeTLS + WEB и только WEB для Telegram Desktop 7.1+; ссылка `tg://webproxy?server=<домен>&secret=dd<32-hex>` выдаётся на отдельный домен оператора с публичным сертификатом, прикрываемый FakeTLS-домен сертификата не требует.
+- WEB-домен MTProto Zig отдаёт обычный статический сайт вместо голого `404 Not Found`: темы заглушек генерируются в `/var/www/decoy-zig`, `[web] public_dir` рендерится только после успешной генерации, тема выбирается строкой «🎭 Сайт-заглушка» и командой `set_decoy_theme`; выключение WEB убирает `public_dir`, страница моста и проверка capability сохраняют приоритет, сбой генерации виден в статусе и health и не валит применение.
+- Релей WEB MTProto Zig: единственный владелец TCP/443 — управляемый `caddy-l4`, он завершает TLS и передаёт HTTP/WebSocket на `mtproto-zig-web.service` (`mtproto-zig web-relay`, `127.0.0.1:8081`, без capabilities).
+- Переход MTProto Zig в «только WEB» staged: релей поднимается с `only = false`, фронтенд рендерится без маршрута FakeTLS, проверяется HTTPS-мост через локальный `:443`, затем коммитится `only = true`; сбой отдаёт снапшот, сбой отключения релея не считается успехом, неполный откат виден в журнале как `rollback_failed`. Upstream `mtbuddy`, nginx и `/opt/mtproto-proxy` не используются.
+- Выбор MASQUE-адреса в меню WARP: warpscout проверяет адреса с VPS, оператор подтверждает один или возвращает автоматический выбор ядра; адрес хранится в state и проверяется через отдельный loopback SOCKS при применении, отказ восстанавливает прежнюю конфигурацию. Аккаунт сканера создаётся после подтверждения, бинарник ставит оператор.
+- Списки правил WARP из каталога Geo-Aggregator вместо трёх зашитых списков itdoginfo: `db/catalog.json` (314 источников в 20 категориях) скачивается и кэшируется в `/var/lib/hydra/warp_catalog.json` и обновляется той же задачей обслуживания, что и списки; без каталога используется встроенная копия.
+- Двухуровневое меню внешних источников WARP: категория → её списки с пагинацией по 20, категория направляется одним target; при расхождении направлений внутри категории показывается «разные направления», рядом печатается ожидаемое направление (`ru` → direct, `blocked` → warp).
+- Переименование ключей списков WARP при загрузке state: `ext:russia` → `ext:category-ru`, `ext:geoblock` → `ext:refilter`, `ext:google_ai` → `ext:category-ai` с сохранением target; TLD `.ru`/`.su`/`.рф`/`.xn--p1ai` тянет `category-ru`; отсутствующие в каталоге `refilter` (реестр РКН) и `antifilter` (IP-диапазоны) добавлены отдельно.
+- AmneziaWG обслуживает HydraCore: один `wireguard` endpoint на профиль с выдаваемыми peer'ами, HYDRA сама генерирует ключевой материал, поколение читает из конфигурации ядра, per-user трафик атрибутируется по tunnel-адресу peer'а; профили перевыпускаются, `random_trailers` работает после fork-фикса.
+- Транзакционное переключение режима AmneziaWG 2.0/3.0/3.1 через пиннутый upstream-инсталлятор: unknown-ключи интерфейса сохраняются, при откате восстанавливаются конфигурация и оба состояния AWG systemd.
+- Артефакты AWG 3.x: Throne `wg://` и официальный Qt-сжатый Amnezia `vpn://`; Sing-Box Extended и HydraBox включены для 3.0 и, при контракте 3.1, для 3.1, NekoBox `sn://awg` остаётся fail-closed.
+- Гейт AmneziaWG 3.1: экспорт в Sing-Box Extended и HydraBox требует HydraCore с контрактом `random_trailers`/`disable_cookies`; старый ядро держит экспорт fail-closed с указанием требуемого релиза, `random_trailers` выдаётся JSON-булевым.
+- Настройка `set_uot` (TUI «UDP через TCP (UoT)») в NaiveProxy, включена по умолчанию; выключение пересобирает Caddy из upstream-модуля `forwardproxy` вместо UoT-форка и убирает `uot` из Shadowrocket-ссылок, сборка распознаётся пробой бинарника, а не маркером. UDP поверх TCP-профиля Naive при этом не работает, QUIC не затронут; у форка нет опции «disable UoT», а при настроенном `upstream` его контролы `acl`/`ports` не применяются — поэтому переключателем служит сама сборка.
+- Поколения Snell из мигрированного HydraCore: generation 5 (server `version: 5`, плоский `obfs_mode` `none`/`http`/`tls`) или generation 6 (свой `mode` `default`/`unshaped`/`unsafe-raw`) вместо серверного `version: 4` с вложенным объектом `obfs`, который upstream отклоняет; классическая пара — server 5 с client 4, форма Shadowrocket только для неё, обе генерации требуют HydraCore с upstream Snell.
+- NekoBox `sn://awg`: emoji и non-BMP имена профилей кодируются как Kryo-совместимые Java UTF-16 characters.
+- Display-имена конфигураций отделены от runtime-тегов HydraBox, различают Naive TCP и QUIC и применяются к desktop и mobile ссылкам AmneziaWG в NekoBox-совместимых подписках.
+- Hydra VK Tunnel пересоздаёт blue/green пул из четырёх ссылок без полной переустановки и планирует пересоздание каждые 1–24 часа через Sync Agent (по умолчанию выключено). Отдельный TUI-экран глобальных имён конфигураций; личные имена остаются в карточке пользователя, Hydra VK Tunnel присутствует в обоих списках.
+- Vendor-neutral desired state ядра и команды `hydra kernel status` / `kernel switch`; Hydracore и Sing-Box Extended загружаются только из фиксированных репозиториев с обязательными проверками GitHub `asset.digest`, ELF, identity/capability, active-config и post-start, транзакция возвращает прежнюю работающую службу при любом сбое.
+- Экспериментальный транспорт `calls`: native VK `call` inbound для Hydracore с exact capability gate, транзакционным созданием/ротацией managed-пула и admin-only SOCKS joiner profile; stock/P2P fallback отсутствует. Native VK Calls на Hydracore `vk_parasite`: exact `call_vk_parasite` создаёт отдельный blue/green пул из 1–4 VK-комнат и публикует per-user Hydracore outbound через Hydra Subscription v2; серверный inbound содержит общий obfs key, bounded session/worker/handshake limits и O(1) user lookup.
+- Multi-user listener Calls на `56002/udp` (не конфликтует с qWDTT WireGuard на `56001/udp`); число workers на сессию выбирается из 4/8/12/16/20 и задаёт `max_workers_per_session`.
+- Импорт локального VK cookies JSON в TUI до установки Calls: нормализация, валидация перед атомарной заменой, managed-файл с mode `0600`.
+- `?format=hydrabox` переведён с исторического HydraBox Subscription v1 на клиент-независимый Hydra Subscription v2: `hydra.io/subscription/v2`, `resources[]`, resource-scoped profiles, точные `requested_permissions` и требования HydraCore API/remote policy v2; одинаковые native tags в разных resources больше не конфликтуют.
+- Flattened `dir`/`A256GCM` JWE приведён к HydraCore v2: обязательный пустой `encrypted_key`, `typ=hydra-subscription+jwe`, `cty=application/vnd.hydra.subscription+json`, без `kid` в protected header; случайный IV, лимиты 12/16 MiB и отсутствие plaintext fallback сохранены. Общий deterministic AES-GCM test vector v2 для backend и HydraCore.
+- `?format=hydrabox` (v1-контракт): plaintext HydraBox Subscription с точным vendor media type, монотонным составным `sequence`, явными профилями и remote-safe native Sing-Box `outbounds`/`endpoints`; генерация fail-closed отклоняет duplicate JSON/native tags, циклические и внешние ссылки, локальные executable-поля и system WireGuard, а расширенные AmneziaWG `I1`–`I5`, `J1`–`J3` и `Itime` сохраняет lowercase-полями объекта `amnezia`. Имена профилей подписки берутся только из коротких `display_name` или `name`, технические `PluginMeta.description` в них не попадают; renderer revision в младшей части `sequence` растёт при изменении выдаваемого JSON, HTTP-ошибка не оставляет частичный ответ.
+- Приватный 256-битный ключ на пользователя в схеме state v6: миграция заполняет ключи атомарно, CLI и TUI ротируют их немедленно.
+- Запрос HydraBox требует `HydraBox/<version>` и reported HWID: новый клиент использует `X-HWID`, legacy `X-Hydra-HWID: hbx1_…` совместим; backend хранит только хеш идентификатора и редактированные audit-поля, ошибка контракта — HTTP 400, device limit — 403.
+- Ключ HydraBox выдаётся только во fragment `#hydra-key=…`; status, логи и публичные JSON не содержат ключ или полный HWID.
+- Native VK Calls добавляет в подписку отдельный remote-safe `call` outbound/profile с `mode=vk_parasite`, `join_links` и core features `call`/`call_vk_parasite`, без VK cookies и singular `join_link`; отсутствие managed-пула отклоняет выдачу fail-closed.
+- Общие умеренные defaults ресурсов VPS без отдельного профиля: `GOGC=50` для Sing-Box и journald budget 128 MiB на диске / 64 MiB runtime; жёсткий memory cap не применяется.
+- Команды AntiDPI `sync`, `selftest`, `selftest --full` и `capture`; внешний capture сохраняет дельту событий, журналы, firewall rules, UDP/TCP sockets, source-relay mappings и AWG dynamic-debug.
+- Stable State Format v1 вместо release-coupled схем и 18-шаговой цепочки миграций: legacy-схемы 0–18 импортируются напрямую один раз, изменения фич (включая транспорт Calls) больше не поднимают формат state и не добавляют migration scripts, неизвестные feature namespaces переживают load/save.
+- Карточка адреса AntiDPI в Telegram использует точный query `address_details` (26-й watched-адрес больше не отдаёт «no evidence») и различает «нет данных» и «чисто». `management_snapshot` AntiDPI отдаёт ограниченную проекцию оператора: активные баны с готовыми подписями, watchlist, переведённые счётчики и момент снимка — вместо копии до 20 000 score-записей на обновление.
+- Экран AntiDPI в TUI: healthcheck с расшифровкой неисправных проверок, список банов с остатком срока и причиной на русском, «Под наблюдением», статистика сигналов и источников, ручная бессрочная блокировка, разбан по номеру или адресу, локальная диагностика. Telegram-дашборд AntiDPI: GeoIP/ASN, остаток срока, причина на русском, watchlist, кнопки разбана с остатком срока и `🧾 Подробнее` с детальным видом счётчиков.
+- Граф экранов Telegram-бота: `⬅️` ведёт к родителю, `🔄` сохраняет номер страницы, с вложенных экранов доступен `🏠 Меню`; роутинг callback-ов — разбор `view:<экран>[:<страница>]`.
+- Постраничная листалка списков блокировок, наблюдения и уловов honeypot в Telegram вместо обрезки на 5–12 записях.
+- Карточка адреса в Telegram: GeoIP/ASN, статус в AntiDPI с остатком срока и причиной, статус в Honeypot, кнопки блокировки и разблокировки; открывается строкой списка или отправкой IP сообщением.
+- Режим уведомлений «только блокировки» и тихие часы с окном через полночь: `notify_only_blocks`, `quiet_hours_enabled`, `quiet_hours_start`, `quiet_hours_end` в `TelegramConfig`.
+- Мониторы fail2ban и honeypot опрашивают журнал раз в 15 секунд на тихом хосте и возвращаются к 2 секундам сразу после новой строки.
+- Headless CLI сведён к операторскому циклу `status` → `check` → `apply`: validation, doctor, plan и reconciliation объединены в один read-only preflight, старые формы сохранены как алиасы.
+- Metadata-driven inventory/lifecycle/command/query/action плагинов, `backup inspect`, `user show`, TTY-aware таблицы и сводки, явный `--json`, компактный JSON и JSON-ошибки синтаксиса.
+- Read-only проверка `tls_mux`: ожидаемые домены из state сравниваются с фактическими SNI-маршрутами Caddy, отдельно сообщаются `missing`, `stale`, ошибки сертификатов, повреждённый JSON-конфиг и неактивный `caddy-l4`; исправление — транзакционный `sudo hydra apply`.
+- Единый `HostBackend` для ограниченных команд, файловых операций, `systemd`, firewall, Sing-Box и Caddy; прямые обходы границы блокируются регрессионными проверками.
+- Единая модель `ErrorCode`, `ApplicationError` и `ServiceResult`; CLI сохраняет текстовое `error` и дополнительно отдаёт структурированное `error_details`.
+- Типизированные контракты возможностей плагинов, результатов жизненного цикла, healthcheck и конфигурационных фрагментов с адаптерами для старых реализаций.
 
-- Клиентские outbounds Calls теперь используют только явно настроенный IP сервера
-  или определённый публичный IPv4 VPS; TLS/SNI-домен транспорта больше никогда не
-  подставляется как native VK-parasite endpoint.
+### Изменено
 
-- Добавлен vendor-neutral desired state ядра и команды `hydra kernel status`
-  / `kernel switch`. Hydracore и Sing-Box Extended загружаются только из
-  фиксированных репозиториев с обязательным GitHub `asset.digest`, ELF,
-  identity/capability, active-config и post-start проверками; binary/state
-  транзакция возвращает прежнюю работающую службу при любом сбое.
-- Legacy install/update Sing-Box Extended больше не может затереть выбранный
-  Hydracore; фоновая проверка обновлений следует provider и channel из state.
-- Native VK Calls теперь поддерживает только Hydracore `vk_parasite`: exact
-  `call_vk_parasite` создаёт отдельный blue/green пул из 1–4 VK-комнат и
-  публикует per-user Hydracore outbound через Hydra Subscription v2. Серверный
-  inbound содержит общий obfs key, bounded session/worker/handshake limits и
-  O(1) user lookup вместо перебора всех паролей на каждом пакете.
-- Multi-user listener использует `56002/udp`, не конфликтуя с qWDTT WireGuard
-  на `56001/udp`; worker count ограничен server cap, 27 workers на join-link и
-  общим потолком 108.
-- Legacy Calls при первом импорте нормализуется в `vk_parasite`; несовместимый
-  enabled state выключается без удаления installed-флага. Повторная установка
-  после явного switch на Hydracore создаёт managed-пул.
+- Calls работает только с контрактом `vk_parasite` и ровно четырьмя независимыми KCP lanes (`lanes: 4`); CLI больше не даёт A/B transport-profile switch; перед активацией требуется контракт HydraCore с `calls_mode = vk_parasite`.
+- Канал ядра Hydracore — switch из двух значений: `stable` (по умолчанию на всех ветках HYDRA) и `debug`; `stable` берёт самый свежий опубликованный non-prerelease, `debug` — самый свежий prerelease и принимает формы `hydracore-sbe-<sbe-version>-debug-<n>` и `hydracore-sbe-<sbe-version>-rc-<n>`.
+- Retired-тег `-debug.<n>` не выбирается ни одним каналом; persisted-значение `preview` больше не предлагается, но резолвится как `debug`; `bootstrap.sh` ставит самый свежий релиз выбранного канала, TUI показывает канал и версию кандидата до замены ядра; digest/config/health проверки с автоматическим rollback сохранены.
+- Release-контракт Hydracore разделён по ролям: Ultimate загружает только `hydracore-vps-linux-{arch}.tar.gz` и проверяет VPS identity, server feature, VK-parasite-only режим и wire v4; Android client artifact на VPS отклоняется fail-closed.
+- Calls сохраняет отдельный `public_endpoint`, не зависящий от transport SNI; в административном TUI транспорт называется `Hydra VK Tunnel`, пользовательский профиль в подписке — «Обход БС».
+- Provider-aware kernel status стал единственным источником версии/наличия ядра для главного экрана и экрана Sing-Box, Hydracore больше не показывается как «не установлен».
+- Клиентские outbounds Calls используют только явно настроенный IP сервера или определённый публичный IPv4 VPS; TLS/SNI-домен транспорта больше не подставляется как native VK-parasite endpoint.
+- Legacy install/update Sing-Box Extended не может затереть выбранный Hydracore, фоновая проверка обновлений следует provider и channel из state.
+- Демон трафика распознаёт runtime inbound `call/...` как протокол `calls`, Hydra VK Tunnel использует общий tracked-источник соединений; при передаче аутентифицированного пользователя в Clash `metadata.user` байты монотонно начисляются общему и per-protocol счётчику.
+- WARP показывает и загружает только списки отдельных сервисов: сводные `category-*`, `itDog-*`, `refilter` и `antifilter` исключены, выбор `none` убран из меню, `direct` — выход с VPS и явное исключение из WARP, а не российский адрес.
+- WARP: более узкие маршруты предшествуют широким, отсутствующий выбранный список останавливает apply вместо неявного перехода на direct; без каталога внешние сервисы недоступны, локальные правила работают; установка и переустановка не удаляют кэш выбранных правил; релей с активными маршрутами нельзя удалить без перенаправления, старые маршруты к удалённым источникам требуют ручной перенастройки.
+- Preflight обновления снова принимает сохранённые маршруты `ext:category-ru` — единственный разрешённый сводный источник WARP, доступный в каталоге, офлайн-копии и конфигурации вместе с суффиксами российских TLD; остальные сводные списки остаются отключёнными.
+- WARP больше не ставит внешний установщик профиля: транспорт переведён на нативный `masque` outbound ядра HydraCore, устройство регистрирует Cloudflare API само ядро, профиль кэшируется в `cache_file` (`store_masque_config`), поэтому перезапуск службы не создаёт новое устройство.
+- Цель `warp` доступна всегда, отсутствующий профиль больше не блокирует apply; relay-профили `warp_<name>` из `/etc/hydra/warp_profiles` по-прежнему рендерятся как `wireguard` endpoints; прежний профиль wgcf не используется, новое устройство регистрируется при первом применении.
+- Переключение существующей установки — `sudo hydra plugin reinstall warp` или «🔄 Переустановить» в меню WARP: удаляет `/usr/local/bin/wgcf`, `wgcf-profile.conf`, `wgcf-account.toml`, `/var/log/hydra/warp_install.log`, заново скачивает каталог и списки и сохраняет настроенные маршруты; `install()`/`uninstall()` плагина остаются совместимыми no-op.
+- Ручные конфигурации больше не повторяют показанные MTProto `tg://proxy`-ссылки JSON-обёрткой `{"link": ..., "protocol": ...}`; полноценные JSON-конфигурации с дополнительными полями не фильтруются.
+- VLESS CDN снова учитывает трафик и появляется в активных подключениях, когда Clash не передаёт пользователя: HYDRA сопоставляет source-port с Sing-box journal только внутри записавшего его inbound (`vless-cdn-in` → `vless_cdn`); обычный VLESS/XHTTP и CDN не могут обменять квоту при повторном использовании loopback-порта, без journal evidence соединение не кредитуется и не показывается; flat helpers VLESS/AnyTLS сохранили прежний контракт и порядок «последняя journal-запись побеждает».
+- Переименованный профиль VLESS CDN доходит до клиентов под одним ключом: UI и HydraBox читали канонический `vless_cdn`, а URI pipeline искал `vless:cdn`, поэтому Throne и NekoBox падали на встроенное имя `<email> VLESS Яндекс CDN`; теперь все места используют `vless_cdn`, family override обычного VLESS больше не протекает в CDN-профиль, встроенные defaults обоих форматов не изменились.
+- Установка mtproto.zig разрешает бинарник по артефакту, а не по `releases/latest`: выбирается самый новый опубликованный релиз с точным архивом под архитектуру хоста, SHA-256 проверяется по release metadata или точному `.sha256`-артефакту того же релиза; замена атомарна через `<binary>.pending`, внутри архива принимается точное архитектурное имя `mtproto-proxy-linux-*`, используемое upstream; это устраняет состояние «Не установлен», при котором поиск по `releases/latest` не находил архив `mtproto-proxy`.
+- Ошибка установки mtproto.zig сохраняется после rollback и называется своей стадией (выбор релиза, проверка digest, распаковка/ELF, сервисные пути, юнит, служба, маршрутизация); прежний файл и состояние службы сохраняются при любой ошибке; FakeTLS-домен Zig не отправляется в certbot — сертификатом владеет proxy handshake, Caddy делает только SNI passthrough; upstream `bootstrap.sh` и `mtbuddy` не запускаются.
+- Длинные master-ссылки qWDTT и ссылки подключения Telemt переносятся внутри панели без обрезки хвоста многоточием.
+- Меню `Calls · VK` использует общий renderer протоколов и оставляет установку, атомарную переустановку с пересозданием пула, admin-профиль и удаление; отдельные enable/disable и cookie-статусы убраны.
+- qWDTT-ссылка формируется из любого настроенного числа уникальных хэшей с сохранением порядка и корректным percent-encoding query-параметра; токены с `+`, `=`, `%` и `&` больше не искажаются.
+- Native Calls принимает актуальные VK join-links с полным набором безопасных символов URL-сегмента и официальными доменами `vk.com`/`vk.ru`; частично записанная строка creator не вызывает преждевременную ошибку, все поддержанные варианты ссылки редактируются в логах.
+- Историческая интеграция qWDTT с Headless Creator, его blue/green rotation и Sync Agent удалены: qWDTT не создаёт Creator-комнаты и не использует VK cookies, а Creator и VK cookies принадлежат только Calls.
+- Native Calls не включается автоматически, а старые units и файлы qWDTT удаляет только явное `Создать комнаты` в qWDTT-подменю со snapshot/restore.
+- Актуальная qWDTT master-ссылка показывается в TUI в «Ручных конфигах» с явной пометкой, что она общая для всех пользователей; в пользовательские подписки ссылка с главным паролем не включается.
+- qWDTT остаётся только ручным общим master-артефактом: Hydra v2 renderer не вызывает его client hook и не может опубликовать главный пароль.
+- TUI-меню используют компактные заголовки и однострочные действия вместо ASCII art, вложенных рамок и повторяющихся описаний; Telegram-дашборды безопасности показывают короткую сводку, IP-списки остаются на drill-down экранах.
+- Shadowrocket-вывод подписки сохраняет реальную форму транспорта: Naive TCP — HTTPS с `http/1.1` и `h2`, Naive QUIC — HTTP/3 `h3`, TCP-варианты включают UoT v2 и TCP Fast Open, все варианты включают padding; TrustTunnel использует официальный TLV, Snell сохраняет `obfs`; Naive собирается из пиннутого Caddy-форка, замена валидирует фактический бинарник и держит backup; новый CI workflow `naive-caddy.yml` покрывает валидацию реального бинарника, HTTP/1 CONNECT и UoT magic passthrough (для этого изменения ещё не запускался).
+- Shadowrocket Naive-ссылки `https://`, `http2://`, `http3://` больше не несут избыточные `peer` и `alpn`, мешавшие их HTTPS-парсеру импортировать профиль.
+- Новая установка и обновление идемпотентно ставят systemd drop-ins, выполняют rotate/vacuum старых журналов до 128 MiB и применяют настройки к работающим службам.
+- AntiDPI объединяет service- и kernel-события в один фильтрованный `journalctl -f`, сохраняя прежнюю атрибуцию и убирая второй долгоживущий процесс чтения журнала; мониторы fail2ban и honeypot больше не спавнят два `journalctl` в секунду.
+- Ужесточённый systemd unit AntiDPI разрешает общий xtables lock под `/run`, пока `ProtectSystem=strict` остаётся включённым.
 
-### Sing-Box
+### Исправлено
 
-- Systemd-unit Sing-Box теперь выдаёт `CAP_NET_RAW`, необходимую ядру
-  `1.13.16-extended-2.6.x` для повторной привязки исходящего UDP-сокета при
-  `auto_detect_interface`. Обновление ядра пересоздаёт unit перед запуском, а
-  `hydra apply` обнаруживает старый unit и выполняет полный restart вместо HUP,
-  поэтому клиентские UDP DNS-запросы больше не падают с
-  `listen udp4 :0: operation not permitted`.
-- Обновление ядра больше не завершается без объяснения при ошибке GitHub API,
-  проверки нового бинарника, конфигурации или запуска systemd-службы: TUI
-  показывает безопасную причину, а транзакция восстанавливает прежний бинарник
-  и повторно запускает ранее работавшую службу.
-- Перед проверкой нового ядра legacy DNS-конфигурация, сгенерированная HYDRA,
-  атомарно переводится на актуальную схему `type/server/domain_resolver`. При
-  ошибке проверки или запуска вместе с бинарником восстанавливается исходный
-  `/etc/sing-box/config.json`; DNS-фрагменты плагинов не переписываются.
+- AntiScan больше не банит по отказу Snell: запись `open record header: cipher: message authentication failed` неотличима для сканера и для клиента со устаревшим PSK. Протокол убран из `PROTOCOL_REJECT_RULES`, запись остаётся диагностическим входом; процедура в `docs/ANTIDPI.md` требует owned-tag проверки в journal normalizer перед возвратом Snell.
+- AntiDPI банит только доказуемое на самом хосте: protocol-owned rejection с реальным внешним peer или явный scanner path на decoy-сайте, набор разрешённых улик закрытый. Бан-вход — reject Snell и путь `/.git/`, ladder банов (10 минут, 1 час, 24 часа, 7 дней) работает от одного доказанного события; протоколы без fixture-proven reject (AnyTLS, VLESS, Naive, TrustTunnel, ShadowTLS, Hysteria2, qWDTT, AmneziaWG, Mieru, Calls) задокументированы как неподдержанные, новый протокол входит только через sanitized capture с развёрнутой реализации. Ключ плагина, имя службы и совместимые импорты не изменились, legacy `scores`/`subnets` читаются для rollback и не влияют на решения.
+- AntiDPI hardening (аудит сентября 2026): kernel SYN/NEW и UDP telemetry никогда не поднимают ban eligibility, multi-port bursts остаются alert-only; ошибки ShadowTLS, атрибутированные только по времени, — alert-only hints; TrustTunnel CONNECT считается auth evidence только при явных 401/407, backend 5xx и валидные туннели — нет; decoy scanner paths сопоставляются с нормализованным request path, а не с raw URI с query; protocol-specific паттерны Sing-Box выигрывают у generic matcher.
+- AntiDPI enforcement: ban intent персистится до эффекта ipset и откатывается при отказе; unban сериализует удаление firewall с обновлением state; ручные баны в том же intent-first порядке; доставка в Telegram вне state lock; collector восстанавливает ipsets, rules и сохранённые баны при старте и каждые 10 минут, снимает whitelisted баны, ведёт liveness heartbeat, переживает log rotation, сохраняет частичные строки, продолжает journald с сохранённого курсора и скорит события по их таймстампам; курсоры двигаются только после durable обработки, replay дедуплицируется; старые события затухают по собственному времени и получают не больше остатка исходного ban TTL; повреждённые state-файлы карантинятся и останавливают автo enforcement в видимом degraded mode; добавление в whitelist сообщает адреса, которые не удалось разбанить.
+- AntiDPI reconciliation восстанавливает всю firewall-поверхность и записывает неудачные шаги для health/operator views, баны под whitelist не восстанавливаются; доставка в Telegram — bounded background queue с исходами delivered/failed/dropped; неудачное продвижение timed manual ban восстанавливает исходные metadata, history и offense count.
+- TUI-бан-лист AntiDPI листается постранично с номерами только видимых строк и подтверждением mass unban и manual ban; строки журнала рендерятся полностью; пропущенные ban-уведомления помечаются как cooldown skips.
+- Отказ применения команды плагина больше не прячет причину: при неудачном apply и неудачном откате оператор видит исходную причину применения, а сообщение об отказе отката идёт отдельной строкой (раньше причина оставалась только в `/var/log/hydra/apply.jsonl`); ступень отказа из `apply_failure()` попадает в «Plugin X apply returned false: …» в каноническом пути `PluginExecutor` и в обоих `sync_user_configs`.
+- Учёт трафика записывает baseline первого poll до начисления байт, поэтому запуск сборщика не удваивает агрегатный и per-user трафик.
+- Мониторинг трафика MTProto Zig отличает «HTTP 200 без поддерживаемых серий» от настоящего нуля: недоступность источника показывается как «источник недоступен» с причиной в статусе и health, последние достоверные значения сохраняются; разобранный ответ хотя бы с одним пользователем из state считается доступным, число ненайденных non-blocked пользователей видно в `status().info` как `api_missing_users`. Таблица «По протоколам» выровнена по 77-клеточной раскладке (16/12/23/13/8), паддинг считается по видимой ширине без ANSI, ненулевая доля рисует хотя бы один блок, подписи берут продуктовые имена (`AnyTLS`) при отсутствии display name, столбец статуса показывает фактическое состояние службы; профильные ключи credentials (`amneziawg_mobile`) не становятся отдельной строкой протокола.
+- Sing-Box systemd unit получает `CAP_NET_RAW`, необходимую ядру `1.13.16-extended-2.6.x` для повторной привязки исходящего UDP-сокета при `auto_detect_interface`; обновление ядра пересоздаёт unit перед запуском, а `hydra apply` заменяет HUP полным restart, поэтому клиентские UDP DNS-запросы не падают с `listen udp4 :0: operation not permitted`.
+- Обновление ядра не завершается без объяснения при ошибке GitHub API, проверки нового бинарника, конфигурации или запуска systemd-службы: TUI показывает безопасную причину, транзакция восстанавливает прежний бинарник и повторно запускает работавшую службу. Перед проверкой нового ядра legacy DNS-конфигурация, сгенерированная HYDRA, атомарно переводится на актуальную схему `type/server/domain_resolver`; при ошибке проверки или запуска вместе с бинарником восстанавливается исходный `/etc/sing-box/config.json`, DNS-фрагменты плагинов не переписываются.
+- Выбор ядра `debug` при неупорядоченном выводе prereleases от GitHub: берётся самый новый подходящий опубликованный релиз вместо первой записи API.
+- Исправлена UTF-8-разметка действия ротации HydraBox JWE-ключа в меню пользователя и связанных подтверждениях.
+- Updater больше не передаёт шаблонные systemd units вида `name@.service` в команды проверки/остановки как конкретную службу: обнаруживаются реально загруженные instances и сохраняются в `active-units.txt`, поэтому активный пул `hydra-headless-creator-vk-calls@*.service` не блокирует обновление и восстанавливается после переключения release либо rollback.
+- `wdtt-server` собирается из всего корневого Go-пакета upstream, включая вынесенный `admin_api.go`; установка не падает с `undefined: registerAdminAPIRoutes`.
+- Updater больше не копит релизы и снимки отката навсегда: на долгоживущей установке `/opt/hydra-releases` и `/var/backups/hydra/upgrades` росли с каждой раскаткой. После успешного переключения он удаляет всё, кроме текущего release и `HYDRA_KEEP_RELEASES-1` свежих (по умолчанию 3), снимки отката старше `HYDRA_KEEP_BACKUP_DAYS` дней (по умолчанию 7) и брошенные `.staging-*`; текущий release не удаляется никогда, сбой уборки не влияет на результат установки.
 
-### Зависимости
+### Удалено
 
+- Telemt (MTProto-прокси) удалён полностью: код плагина, UI-менеджер и тесты; на обновляемых VPS `telemt.service` и cron `telemt-stats` снимаются автоматически через штатный uninstall-путь, MTProto-доставка остаётся через `mtproto_zig`.
+- WARP: удалён внешний установщик профиля — бинарник `wgcf`, `wgcf-profile.conf`, `wgcf-account.toml`, журнал `/var/log/hydra/warp_install.log` и пункты меню установки, пересоздания и удаления профиля.
+- Убрано промежуточное меню «Режим WEB» в настройках транспорта MTProto Zig: строка сразу открывает выбор режима.
+- Удалена зависимость `qrcode`: ручные TUI-выводы клиентских ссылок и конфигураций больше не печатают ASCII QR-коды, сами ссылки, подписки и текстовые конфигурации не изменились.
+- Удалён выбор `none` в меню WARP; сводные списки `category-*`, `itDog-*`, `refilter` и `antifilter` исключены из показа и загрузки.
+- Удалён устаревший эксперимент Hydra VK Tunnel: telemetry framework, его CLI, collectors, reports, storage и требование native telemetry capability.
+- Удалены выбор и установка Sing-Box Extended как отдельного ядра, включая legacy install/update-пути, способные затереть выбранный Hydracore: HYDRA использует только Hydracore VPS debug channel, а Creator runtime и фиксированный пул из четырёх комнат принадлежат Hydra VK Tunnel.
+- Из Fail2ban удалён исполняемый legacy протокольных плагинов, сохранён только миграционный cleanup старых jail/filter и portscan rule.
+- Из AntiDPI удалены scoring, decay, evidence families, coordinated-subnet detection и sub-threshold watchlist, а также unknown SNI, generic TLS EOF/alert/handshake failures, kernel port-scan и sweep telemetry, UDP probes, Mieru byte-count inference, subnet correlation, time-window source guessing, iptables LOG rules, AmneziaWG kernel debug hook и Caddy `layer4` JSON log.
+- Удалён ALERT с inline-кнопкой бана: Telegram сообщает только о применённом бане или отказе firewall, кнопка бана осталась на карточке адреса.
+- Удалена installer-era схема AmneziaWG: checkout, `--protocol-status` и `--enable-awg3*`, purge пакетов, работа с kernel module, units `awg-quick`, снапшот `params`, interface file и TPROXY entries; остатки старой установки называются и удаляются, снятие протокола не трогает пакетный менеджер и kernel module.
+- Удалена устаревшая схема `stats.json` (iptables-цепочки, cron, оценка доли по сессиям) в MTProto Zig.
+- Удалён transport profile switch (A/B) из CLI и генерируемого конфига Calls.
+
+### Безопасность
+
+- VK join-links и полный профиль считаются shared secrets: HYDRA редактирует их в status/log projections, сырой journald остаётся чувствительным, поскольку upstream runtime может писать join-links на уровне INFO.
+- Диагностические архивы AntiDPI скрывают пароли, UUID, PSK, токены и приватные ключи и создаются с mode `0600`. Self-test архивы AntiDPI структурно удаляют значения `Authorization`/`Proxy-Authorization`/`Cookie`/`password`, включая JSON-объекты и массивы.
 - `cryptography` обновлена до `50.0.0`, закрывающей `PYSEC-2026-3552`.
-
-### HydraBox
-
-- `?format=hydrabox` переведён с исторического HydraBox Subscription v1 на
-  клиент-независимый Hydra Subscription v2: `hydra.io/subscription/v2`,
-  `resources[]`, resource-scoped profiles, точные `requested_permissions` и
-  требования HydraCore API/remote policy v2. Одинаковые native tags в разных
-  resources больше не конфликтуют.
-- Flattened `dir`/`A256GCM` JWE приведён к HydraCore v2: обязательный пустой
-  `encrypted_key`, `typ=hydra-subscription+jwe`,
-  `cty=application/vnd.hydra.subscription+json`, без `kid` в protected header.
-  Случайный IV, лимиты 12/16 MiB и отсутствие plaintext fallback сохранены.
-- Схема state v6 хранит отдельный приватный 256-битный ключ на пользователя;
-  миграция заполняет ключи атомарно, а CLI/TUI умеют немедленно их ротировать.
-- HydraBox-запрос требует `HydraBox/<version>` и reported HWID: новый клиент
-  использует `X-HWID`, legacy `X-Hydra-HWID: hbx1_…` остаётся совместимым.
-  Backend сохраняет только хеш идентификатора и редактированные audit-поля.
-  Ошибка контракта — HTTP 400, device limit — 403.
-- Генератор выдаёт ключ только во fragment `#hydra-key=…`. Status, логи и
-  публичные JSON никогда не содержат ключ или полный HWID.
-- Включённый native VK Calls теперь добавляет в подписку отдельный remote-safe
-  `call` outbound/profile с `mode=vk_parasite`, `join_links` и core features
-  `call`/`call_vk_parasite`, но без VK cookies и singular `join_link` в outbound;
-  отсутствие managed-пула отклоняет выдачу fail-closed. qWDTT остаётся только
-  ручным общим master-артефактом: Hydra v2 renderer не вызывает его client hook
-  и не может опубликовать главный пароль.
-- Backend и HydraCore используют общий deterministic AES-GCM test vector v2.
-
-### TUI
-
-- Длинные master-ссылки qWDTT и ссылки подключения Telemt теперь переносятся
-  внутри панели без обрезания хвоста многоточием.
-- Исправлена UTF-8-разметка действия ротации HydraBox JWE-ключа в меню
-  пользователя и связанных подтверждений.
-
-### Ресурсы VPS
-
-- Для всех установок, без отдельного профиля VPS, добавлены общие умеренные
-  defaults: `GOGC=50` для Sing-Box и journald budget 128 MiB на диске / 64 MiB
-  для runtime-журнала. Жёсткий memory cap не применяется.
-- Установка и обновление идемпотентно устанавливают systemd drop-ins, выполняют
-  rotate/vacuum старых журналов до 128 MiB и применяют настройки к работающим
-  службам.
-- AntiDPI объединяет service- и kernel-события в один фильтрованный
-  `journalctl -f`, сохраняя прежнюю атрибуцию и убирая второй долгоживущий
-  процесс чтения журнала.
-
-### Calls / qWDTT
-
-- Native Calls принимает актуальные VK join-links с полным набором безопасных
-  символов URL-сегмента и официальными доменами `vk.com`/`vk.ru`; частично
-  записанная строка creator больше не вызывает преждевременную ошибку. Все
-  поддержанные варианты ссылки редактируются в HYDRA-логах.
-- Исторический экран Headless Creator и qWDTT Creator pool заменены текущей
-  моделью из верхней записи: Creator и VK cookies принадлежат только Calls.
-- qWDTT-ссылка формируется из любого настроенного числа уникальных хэшей с
-  сохранением порядка и корректным percent-encoding query-параметра; токены с
-  `+`, `=`, `%` и `&` больше не искажаются.
-- Меню `Calls · VK` использует общий renderer протоколов и оставляет установку,
-  атомарную переустановку с пересозданием пула, admin-профиль и удаление;
-  отдельные enable/disable и cookie-статусы из него убраны.
-- Сборка `wdtt-server` теперь охватывает весь корневой Go-пакет upstream, включая
-  вынесенный `admin_api.go`; установка больше не падает с
-  `undefined: registerAdminAPIRoutes`.
-- Добавлен экспериментальный транспорт `calls`: native VK `call` inbound для
-  Hydracore с exact capability gate, транзакционным созданием/ротацией
-  managed-пула и admin-only SOCKS joiner profile; stock/P2P fallback отсутствует.
-- Историческая интеграция qWDTT с Headless Creator, его blue/green rotation и
-  Sync Agent удалены; qWDTT не создаёт Creator-комнаты и не использует VK
-  cookies.
-- Schema state поднята до 9. `v6 → v7` сохраняет совместимость прежнего Calls
-  layout, а `v7 → v8` переносит creator state в
-  `headless_creator.providers.vk`; `v8 → v9` отделяет qWDTT desired state в
-  `headless_creator.consumers.qwdtt` и сохраняет прежний default 4 комнаты.
-  Native Calls не включается автоматически;
-  старые units/файлы удаляет только явное `Создать комнаты` в qWDTT-подменю со
-  snapshot/restore.
-- Актуальная qWDTT master-ссылка отображается в TUI в «Ручных конфигах» с явной
-  пометкой, что она общая для всех пользователей; в пользовательские подписки
-  ссылка с главным паролем не включается.
-- VK join-links и полный профиль считаются shared secrets: HYDRA редактирует их
-  в status/log projections. Сырой journald остаётся чувствительным, поскольку
-  upstream runtime может писать join-links на уровне INFO.
-
-### Подписки
-
-- Добавлен `?format=hydrabox`: сервер отдаёт plaintext HydraBox Subscription v1
-  с точным vendor media type, монотонным составным `sequence`, явными
-  профилями и remote-safe native Sing-Box `outbounds`/`endpoints`. Генерация
-  fail-closed отклоняет duplicate JSON/native tags, циклические или внешние
-  ссылки, локальные executable-поля и system WireGuard; расширенные AmneziaWG
-  `I1`–`I5`, `J1`–`J3` и `Itime` сохраняются как одноимённые lowercase-поля
-  объекта `amnezia`. Технические `PluginMeta.description` больше не попадают в
-  имена пользовательских профилей: используются только короткие `display_name`
-  или `name`. Renderer revision в младшей части `sequence` гарантирует его
-  увеличение при изменении выдаваемого JSON после обновления HYDRA; клиент
-  больше не отклоняет такой refresh как same-sequence/different-payload.
-  HTTP-ошибка не оставляет частичный ответ.
 
 ## [2.5.5] — 27 июля 2026
 
-### Транспорты
+### Добавлено
 
-- `?format=singbox` больше не теряет AmneziaWG при попытке разобрать нативный
-  WireGuard INI как JSON. Desktop и mobile профили экспортируются как отдельные
-  `wireguard` endpoints Sing-Box Extended с параметрами `amnezia`, а
-  `route.final` указывает на первый доступный AWG endpoint.
-- Переключение VLESS + XHTTP из Reality в TLS теперь сразу запрашивает домен и
-  атомарно применяет режим, домен и сертификат. Раньше TUI запускал apply без
-  домена и неизбежно отвечал «Корректный домен обязателен для vless».
-- HYDRA-заглушки теперь сохраняют в `.hydra-decoy.json` SHA-256 исходников
-  встроенных рендереров. После обновления шаблона следующий apply атомарно
-  публикует новую версию даже при прежних теме и домене; ручные сайты без marker
-  по-прежнему не перезаписываются.
-- Смена темы заглушки теперь мигрирует встроенные сайты старых установок,
-  созданные до появления `.hydra-decoy.json`. Прежние страницы Apex Digital,
-  TechBits, HydraDB, Meridian Daily и Northstar Cloud распознаются по строгому
-  отпечатку и атомарно заменяются выбранной темой; произвольный сайт оператора
-  без marker остаётся нетронутым.
-- Интерактивное включение доменных транспортов теперь выполняет установку,
-  проверку сертификата и enable как единый application-сценарий. Если certbot
-  или выпуск сертификата завершается ошибкой, введённый домен откатывается и
-  его можно сразу задать заново; уже завершённая установка плагина сохраняется.
-- У установленного, но выключенного NaiveProxy доступно меню домена и
-  транспорта. Домен можно исправить до повторной активации.
-- Mieru больше не публикует одновременно `listen_port: 2012` и пересекающийся
-  `listen_ports: 2012-2022`; сервер и `mierus://` используют один канонический
-  диапазон.
+- Shadowrocket распознаётся по `User-Agent` и поддерживает явный `format=shadowrocket`; TCP-профиль NaiveProxy выдаётся как `https://<url-safe-base64(user:password@host:port)>?remarks=<имя>` без padding, а несовместимый `naive+https://` в список не попадает.
 
-### WARP
+### Изменено
 
-- Установка локального WGCF больше не считается неуспешной, если профиль уже
-  создан, но необязательная предварительная загрузка внешних списков временно
-  недоступна. Ошибка `register`/`generate` показывается в TUI вместе с
-  redacted-деталями из `warp_install.log`.
-- Экран WARP отличает настроенные профили и маршруты от фактически активных.
-  Назначение списка на отсутствующий outbound (например, `GoogleAI → warp` без
-  локального WGCF-профиля) больше не отбрасывается с неявным direct fallback:
-  общий apply отклоняет такую конфигурацию с точным именем назначения.
+- HYDRA-заглушки сохраняют в `.hydra-decoy.json` SHA-256 исходников встроенных рендереров: после обновления шаблона следующий apply атомарно публикует новую версию при прежних теме и домене, ручные сайты без marker не перезаписываются; встроенные сайты старых установок (Apex Digital, TechBits, HydraDB, Meridian Daily, Northstar Cloud) мигрируют по строгому отпечатку.
+- Интерактивное включение доменных транспортов выполняет установку, проверку сертификата и enable как единый application-сценарий: ошибка certbot откатывает введённый домен, уже завершённая установка плагина сохраняется.
+- У установленного, но выключенного NaiveProxy доступно меню домена и транспорта, домен можно исправить до повторной активации.
+- Чистая установка заранее устанавливает системный `certbot`; резервная установка при первой TLS-активации нормализует timeout и ошибки хоста вместо зависания или выхода из TUI.
+- Launcher и транзакционный updater получили единый вывод: UTF-8 locale, нумерованные этапы, русские ошибки, цветные статусы и финальную сводку с веткой, переходом, снимком отката и логом; при перенаправлении вывода и с `NO_COLOR` ANSI-последовательности не используются.
+- Публичные `bootstrap.sh`, `updater.sh` и `upgrade.sh`, команды в документации и regression-тесты переведены на ветку `main` по умолчанию, явный `HYDRA_REF` по-прежнему позволяет проверить другую ветку.
+- TUI выводит клиентские URI и конфигурации отдельными строками без рамок, отступов и ANSI-кодов, поэтому копирование из SSH-терминала не добавляет пробелы и символы панели.
+- Ссылки подписки показываются только после запуска `hydra-sub` и наличия пары HTTPS-сертификата и ключа, до готовности endpoint TUI показывает точную причину.
+- Версия проекта поднята до 2.5.5; пустой заголовок обзорной таблицы README заменён на семантическую HTML-разметку, README ветки `dev` снова ведёт на `dev`: CI badge, bootstrap и updater используют канал разработки, команды явно передают `HYDRA_REF=dev`.
 
-### Пользователи и устройства
+### Исправлено
 
-- Подписка распознаёт Shadowrocket по `User-Agent` и поддерживает явный формат
-  `format=shadowrocket`. TCP-профиль NaiveProxy выдаётся в нативном виде
-  `https://<url-safe-base64(user:password@host:port)>?remarks=<имя>` без
-  padding; несовместимый `naive+https://` в этот список больше не попадает.
-- TUI выводит клиентские URI и конфигурации отдельными строками без рамок,
-  отступов и ANSI-кодов, поэтому копирование из SSH-терминала не добавляет
-  пробелы и символы панели.
-- Ссылки подписки показываются только после запуска `hydra-sub` и наличия пары
-  HTTPS-сертификата и ключа. До готовности серверного endpoint TUI показывает
-  точную причину вместо заведомо нерабочих URL.
-- Сроки подписок в RFC 3339 с суффиксом `Z` одинаково распознаются на Python
-  3.10–3.13; Python 3.10 больше не показывает валидную UTC-дату как ошибочную.
-- Резервный отпечаток клиента без HWID больше не зависит от IP: смена мобильной
-  сети или Wi-Fi не создаёт новую запись. Старые дубли с одинаковым
-  `User-Agent` лениво объединяются при следующем запросе подписки с сохранением
-  времени первого обращения.
-- VLESS за Caddy передаёт внешний адрес через точный PROXY v2 source-relay.
-  Демон трафика восстанавливает его по source port, поэтому экран сессий и
-  одновременный лимит устройств больше не принимают `127.0.0.1` за устройство.
-  Для старого runtime loopback отображается как внутренний адрес
-  мультиплексора, а не как клиент.
-
-### Обновление
-
-- Чистая установка заранее устанавливает системный `certbot`; резервная
-  установка при первой TLS-активации нормализует timeout и ошибки хоста вместо
-  зависания или выхода из TUI.
-- Launcher и транзакционный updater получили единый аккуратный вывод:
-  UTF-8 locale, нумерованные этапы, понятные русские ошибки, цветные статусы в
-  терминале и финальную сводку с веткой, переходом, снимком отката и логом.
-  При перенаправлении вывода и с `NO_COLOR` ANSI-последовательности не
-  используются.
-- Публичные `bootstrap.sh`, `updater.sh` и `upgrade.sh`, команды в документации
-  и regression-тесты переведены на ветку `main` по умолчанию. Явный
-  `HYDRA_REF` по-прежнему позволяет проверить другую ветку.
-- Перед promotion объединено исправление восстановления `caddy-l4.service` из
-  `main` с новым updater из `dev`; rollback сохраняет state, код, wrapper и
-  ранее активные службы.
-
-### Документация
-
-- Версия проекта поднята до 2.5.5. Пустой заголовок обзорной таблицы README
-  заменён на семантическую HTML-разметку без лишней строки в GitHub.
-- README ветки `dev` снова ведёт на `dev`: CI badge, bootstrap и updater
-  используют канал разработки, а команды явно передают `HYDRA_REF=dev`,
-  поэтому launcher не переключается обратно на `main`.
+- `?format=singbox` больше не теряет AmneziaWG при попытке разобрать нативный WireGuard INI как JSON: desktop и mobile профили экспортируются как отдельные `wireguard` endpoints Sing-Box Extended с параметрами `amnezia`, а `route.final` указывает на первый доступный AWG endpoint.
+- Переключение VLESS + XHTTP из Reality в TLS сразу запрашивает домен и атомарно применяет режим, домен и сертификат вместо apply без домена.
+- Mieru больше не публикует одновременно `listen_port: 2012` и пересекающийся `listen_ports: 2012-2022`; сервер и `mierus://` используют один канонический диапазон.
+- Установка локального WGCF не считается неуспешной, если профиль уже создан, а предварительная загрузка внешних списков временно недоступна; ошибка `register`/`generate` показывается в TUI с redacted-деталями из `warp_install.log`.
+- Экран WARP отличает настроенные профили и маршруты от фактически активных; назначение списка на отсутствующий outbound (например, `GoogleAI → warp` без локального WGCF-профиля) отклоняется общим apply с точным именем назначения вместо неявного direct fallback.
+- Сроки подписок в RFC 3339 с суффиксом `Z` одинаково распознаются на Python 3.10–3.13, Python 3.10 больше не показывает валидную UTC-дату как ошибочную.
+- Резервный отпечаток клиента без HWID больше не зависит от IP; старые дубли с одинаковым `User-Agent` лениво объединяются при следующем запросе подписки с сохранением времени первого обращения.
+- VLESS за Caddy передаёт внешний адрес через точный PROXY v2 source-relay, демон трафика восстанавливает его по source port, поэтому экран сессий и лимит устройств больше не принимают `127.0.0.1` за устройство; для старого runtime loopback показывается как внутренний адрес мультиплексора.
+- Перед promotion объединено исправление восстановления `caddy-l4.service` из `main` с новым updater из `dev`; rollback сохраняет state, код, wrapper и ранее активные службы.
 
 ## [2.5.4] — 26 июля 2026
 
-### Транспорты
+### Добавлено
 
-- Добавлен встроенный `vless` transport на базе VLESS + XHTTP из
-  `shtorm-7/sing-box-extended`: VK-parasite inbound, Sing-Box client config,
-  `vless://` ссылки и выдача через общие подписки.
-- VLESS + XHTTP требует отдельный TLS-домен. Caddy L4 направляет настроенный
-  XHTTP-путь во внутренний Sing-Box, а остальные URL обслуживает собственный
-  сайт-заглушка `/var/www/decoy-vless` в виде нейтрального цифрового издания.
-- Активация VLESS теперь завершается успешно только после проверки фактического
-  SNI-маршрута, загруженной Caddy пары cert/key и локального TLS handshake с
-  ALPN `h2`; неполный runtime откатывается вместо ложного успешного статуса.
-- Транспорт VLESS + XHTTP стал настраиваемым: паддинг, размер и число
-  upload-пакетов, длительность stream-up, лимит заголовков запроса, SSE-заголовок
-  и до 16 собственных HTTP-заголовков. Значения по умолчанию не изменились,
-  каждая правка проходит валидацию и общий транзакционный apply.
-- Добавлены профили транспорта XHTTP `balanced`, `low_latency` и `stealth`:
-  одна команда согласованно выставляет режим и весь набор параметров, а их
-  описания перечисляют фактические значения. Профиль и сводка тюнинга видны
-  в статусе плагина и в TUI.
-- VLESS получил режим Reality поверх XHTTP: команда `set_security` создаёт
-  пару ключей и short_id, объявляет SNI-проброс через Caddy L4 вместо
-  маршрута с сертификатом и снимает требование домена. Sing-Box сам
-  завершает TLS, повторяя рукопожатие стороннего сайта; клиенты получают
-  ссылки вида `security=reality&pbk=&sid=&fp=` на публичный IP сервера.
-- Caddy L4 научился декларативному маршруту `tls_passthrough`: плагин
-  объявляет SNI и внутренний порт, мультиплексор отдаёт соединение целиком,
-  не разбирая TLS и не требуя сертификата.
-- Исправлено переключение VLESS + XHTTP с собственного TLS-домена на Reality:
-  подготовка конфигурации больше не возвращает удалённый decoy-маршрут, а сбой
-  перестройки Caddy запускает полный rollback и перезагрузку восстановленного
-  Sing-Box вместо нерабочего частично применённого runtime.
-- Reality-ссылки и клиентские профили теперь используют обнаруженный публичный
-  IP, когда он не сохранён в `network.server_ip`; та же проверка применяется
-  при включении, а ошибка переустановки остаётся в VLESS-меню вместо сбоя TUI.
-- Приватный ключ Reality никогда не попадает в статус, ссылки и профили;
-  публичный ключ и short_id показываются оператору в экране протокола.
-- VLESS + XHTTP получил отдельный TUI-экран по образцу AnyTLS: runtime-статус,
-  клиенты, текущий профиль и прямой выбор профиля доступны на верхнем уровне,
-  а домен, path, mode и тонкий тюнинг сохранены в расширенных настройках.
-- Команды `plugin command vless set_tuning` и `set_preset`, а также query
-  `plugin query vless get_tuning` доступны в CLI и TUI.
-  Клиентская ссылка получает параметр `extra` только когда параметры отличаются
-  от значений по умолчанию, поэтому старые ссылки не меняются.
-- Сайты-заглушки стали выбираемыми и уникальными для каждой установки. К пяти
-  существующим темам добавлены `portfolio`, `shop`, `apidocs`, `conference`,
-  `gallery` и `cafe`; бренд, палитра, шрифт, тексты и favicon детерминированно
-  выводятся из домена, поэтому две установки не отдают одинаковый HTML, а
-  повторная генерация того же домена воспроизводима.
-- Тему заглушки выбирает оператор: команда `set_decoy_theme` у `naive`,
-  `anytls`, `trusttunnel`, `hysteria2` и `vless`, вопрос при первом включении
-  протокола и пункт в его меню. Прежние темы остались значениями по умолчанию.
-- Смена темы перегенерирует сайт и атомарно подменяет каталог; каталог помечен
-  файлом `.hydra-decoy.json` с темой, доменом и отпечатком идентичности. Сайт
-  без этой пометки считается размещённым оператором и не перезаписывается.
-- Добавлен параметр `utls_fingerprint` для VLESS: клиентский профиль получает
-  блок `tls.utls`, ссылка — `fp=`. По умолчанию `none`, поэтому существующие
-  ссылки не меняются.
-- Учёт трафика VLESS + XHTTP теперь сопоставляет соединение Clash API с
-  аутентифицированным пользователем по journal context и source port; байты
-  записываются в общий счётчик и `credentials["vless"]`.
-- Plugin-owned TLS/HTTP routes стали декларативными: core валидирует порты,
-  путь, каталог и тему, включает их в транзакционный Caddy apply/rollback и
-  очищает динамические loopback firewall rules при остановке.
+- Встроенный `vless` transport на базе VLESS + XHTTP из `shtorm-7/sing-box-extended`: VK-parasite inbound, Sing-Box client config, `vless://` ссылки и выдача через общие подписки.
+- VLESS + XHTTP требует отдельный TLS-домен; Caddy L4 направляет настроенный XHTTP-путь во внутренний Sing-Box, остальные URL обслуживает сайт-заглушка `/var/www/decoy-vless`.
+- Настройка VLESS + XHTTP: паддинг, размер и число upload-пакетов, длительность stream-up, лимит заголовков запроса, SSE-заголовок и до 16 собственных HTTP-заголовков; значения по умолчанию не изменились, каждая правка проходит валидацию и общий транзакционный apply.
+- Профили транспорта XHTTP `balanced`, `low_latency` и `stealth`: одна команда согласованно выставляет режим и весь набор параметров, профиль и сводка тюнинга видны в статусе плагина и в TUI.
+- Режим Reality поверх XHTTP: `set_security` создаёт пару ключей и short_id, объявляет SNI-проброс через Caddy L4 вместо маршрута с сертификатом и снимает требование домена; клиенты получают ссылки `security=reality&pbk=&sid=&fp=` на публичный IP сервера.
+- Caddy L4 научился декларативному маршруту `tls_passthrough`: плагин объявляет SNI и внутренний порт, мультиплексор отдаёт соединение целиком, не разбирая TLS и не требуя сертификата.
+- Отдельный TUI-экран VLESS + XHTTP по образцу AnyTLS: runtime-статус, клиенты, текущий профиль и прямой выбор профиля на верхнем уровне, домен, path, mode и тонкий тюнинг в расширенных настройках.
+- Команды `plugin command vless set_tuning` и `set_preset`, query `plugin query vless get_tuning`; клиентская ссылка получает параметр `extra` только когда параметры отличаются от значений по умолчанию.
+- Сайты-заглушки стали выбираемыми и уникальными для каждой установки: к пяти существующим темам добавлены `portfolio`, `shop`, `apidocs`, `conference`, `gallery` и `cafe`, бренд, палитра, шрифт, тексты и favicon детерминированно выводятся из домена.
+- Тему заглушки выбирает оператор командой `set_decoy_theme` у `naive`, `anytls`, `trusttunnel`, `hysteria2` и `vless`, вопросом при первом включении протокола и пунктом в его меню; прежние темы остались значениями по умолчанию.
+- Смена темы перегенерирует сайт и атомарно подменяет каталог, помеченный файлом `.hydra-decoy.json` с темой, доменом и отпечатком идентичности; сайт без пометки считается размещённым оператором и не перезаписывается.
+- Параметр `utls_fingerprint` для VLESS: клиентский профиль получает блок `tls.utls`, ссылка — `fp=`; по умолчанию `none`.
+- Суточная проверка сертификатов через `openssl x509 -enddate`: Sync agent раз в сутки проверяет сроки сертификатов протоколов с собственным доменом, домена сети и домена подписок; истёкший, истекающий в ближайшие 30 дней или отсутствующий сертификат ставит отложенное применение, поэтому preflight переполучает материал через certbot.
+- Сертификат сервера подписок продлевается автоматически: проверка вызывает выпуск напрямую и перезапускает `hydra-sub`, неудачное продление снимает отложенное применение после первой неудачи и ждёт следующей суточной проверки.
+- Результат проверки сохраняется в state (`certificates_last_check`, `certificates_report`) и выводится в `hydra status` блоком `certificates`; проверка выключается флагом `sync_certificates_enabled`.
+- Монолитные composition/lifecycle/UI-модули разделены на application services, инфраструктурные адаптеры, нейтральные contracts и тонкие compatibility facade; добавлены автоматические границы зависимостей, лимиты размеров модулей и функций и графовые проверки связности.
+- Добавлен разбор отказов `inbound/vless[...]` в журнале sing-box с извлечением peer port и покрытие VLESS в `hydra antidpi selftest`.
+- Экран «Устройства» в карточке пользователя: зарегистрированные устройства с HWID-префиксом и клиентом, активные сессии с адресом, трафиком и пометкой сверх лимита, изменение лимита и сброс привязок.
+- Раздел «Устройства и сессии» в мониторинге и строка с числом онлайн-устройств и нарушителей лимита на обзорном экране.
+- `hydra user show` и `--json` отдают список устройств, публикуется только префикс полного идентификатора.
 
-### Пользователи и устройства
+### Изменено
 
-- Исправлен сбой TUI с `StateConflictError` после неудачной команды плагина.
-  Сессии устройств, отчёт о сертификатах и источник отложенного применения
-  считались желаемой конфигурацией, поэтому фоновая запись раз в две секунды
-  увеличивала ревизию и делала открытое меню устаревшим.
-- Откат неудачной команды больше не падает из-за чужой записи: снимок
-  восстанавливается поверх текущего состояния, сохраняя фоновые счётчики.
-  Экран настроек VLESS сообщает о конкурентном изменении текстом, а причину
-  неудачного применения берёт из `apply_error()`.
+- Учёт трафика VLESS + XHTTP сопоставляет соединение Clash API с аутентифицированным пользователем по journal context и source port, байты записываются в общий счётчик и `credentials["vless"]`; «Трафик протокола» показывает учтённые байты и для транспортов без собственных счётчиков, а вкладка «Клиенты» заменена на «Трафик протокола».
+- Plugin-owned TLS/HTTP routes стали декларативными: core валидирует порты, путь, каталог и тему, включает их в транзакционный Caddy apply/rollback и очищает динамические loopback firewall rules при остановке.
+- Лимит устройств ограничивает одновременные подключения, а не только выдачу подписки: демон трафика группирует активные соединения по адресу источника и закрывает через Clash API те, что принадлежат устройствам сверх лимита; приоритет у подключившихся раньше, короткий разрыв связи не считается новым устройством — сессия помнится 10 минут.
+- Запись об устройстве хранит первое и последнее обращение, источник идентификатора (заголовок HWID или определение по адресу и клиенту), `User-Agent` и адрес; схема state поднята до 5 с миграцией.
+- Плагины подключаются через instance-scoped `PluginContainer`, явные порты и единый транзакционный lifecycle вместо process-global service locator и прямых вызовов concrete plugins из UI, Telegram и manager-слоя.
+- Backup inventory расширяется декларациями плагинов без импорта registry из core, удаление HYDRA проходит через application boundary.
+- Долгоживущие systemd units используют стабильный `/opt/hydra` и его `.venv`, поэтому release-каталоги можно атомарно переключать без закрепления старого физического пути.
+- В `TelegramConfig` добавлены `notify_only_blocks`, `quiet_hours_enabled`, `quiet_hours_start` и `quiet_hours_end` со значениями по умолчанию, существующий state читается без миграции.
+- Версия persisted state поднята с 3 до 4: миграция 2→3 сохранена в точности как выпущенная в 2.5.3, миграция 3→4 переносит legacy-флаги WARP, DNSCrypt и security plugins в канонический `protocols` и добавляет revision.
+- AntiDPI: повторы одного сигнала насыщаются (каждое следующее одинаковое событие в окне 15 минут добавляет вдвое меньше предыдущего, ≈23 попытки при частоте раз в секунду), для бана нужны улики двух разных семейств, улики одного типа обязаны набрать полуторный порог, ранее забаненные адреса достигают порога быстрее (−1 за нарушение, не ниже 4), улики агрегируются по подсетям `/24` и `/48` (4 и более адресов в окне 10 минут дают уведомление `COORDINATED`, подсеть намеренно не банится), оповещения показывают требуемый порог, семейства улик и причину незаблокированности.
+- AntiDPI: whitelist снимает активные баны, которые накрывает добавленная сеть; память `ban_counts` очищается вместе с объясняющей её записью ban history; отказ firewall при пересечении порога фиксируется в state и виден в TUI и Telegram.
+- TUI-экран AntiDPI переработан, Telegram-дашборд показывает GeoIP/ASN, остаток срока, причину на русском и watchlist, кнопки разбана подписаны остатком срока, а `🧾 Подробнее` открывает детальный вид; обе поверхности используют один словарь формулировок.
+- Диагностические архивы AntiDPI автоматически скрывают пароли, UUID, PSK, токены и приватные ключи и создаются с mode `0600`.
+- Dev-entrypoints согласованы по ветке: `dev/bootstrap.sh`, `dev/updater.sh` и транзакционный `upgrade.sh` без дополнительных переменных выбирают `dev`; добавлен публичный `updater.sh`, launcher полностью скачивает транзакционное ядро до исполнения и удаляет временный файл после завершения.
+- Вывод `bootstrap.sh`, `updater.sh` и `upgrade.sh` унифицирован: нумерованные этапы, явный итог `ГОТОВО`/`ОШИБКА`, команда следующего действия и путь к журналу или снимку отката.
+- Добавлен `upgrade.sh` для транзакционного перехода существующей установки на точный SHA ветки `dev`: отдельный release и `.venv`, read-only preflight, quiesce HYDRA-служб, два уровня backup, атомарная миграция state, проверка systemd и автоматический откат state/code/wrapper/services; добавлены `hydra upgrade migrate-state`, Linux integration-сценарий main→dev и руководство [`docs/UPGRADE.md`](docs/UPGRADE.md); `bootstrap.sh` остаётся установщиком новой VPS.
+- `README.md` переработан в обзорную витрину, подробности перенесены к профильным документам без потери содержания: мотивация модели и границы версии — в `ARCHITECTURE.md`, эксплуатационные сценарии и семантика лимитов — в `CLI.md`, описание заглушек доменных транспортов — в `REFERENCE.md`, локальные проверки и матрица CI — в `PLUGIN_DEVELOPMENT.md`.
+- AntiDPI отслеживает VLESS + XHTTP: улики берутся из access-лога decoy того же домена, где Caddy восстановил реальный IP клиента через PROXY v2, отклонённый запрос к XHTTP-пути даёт `auth_failure`, scanner path на домене — `active_decoy_probe`; успешные запросы и ошибки backend (5xx) уликами не считаются, домен и путь перечитываются каждые 60 секунд, записи чужих доменов не затрагиваются.
+- Telegram-бот: неизвестная команда больше не отвечает главным меню, ошибки построения экрана видны оператору; уведомления получили режим «только блокировки» и тихие часы с окном через полночь; мониторы fail2ban и honeypot опрашивают журнал раз в 15 секунд на тихом хосте и возвращаются к 2 секундам после новой строки.
+- Регистрация устройств подписки выполняется атомарно: stale TUI/daemon saves не стирают новые bindings, явный reset остаётся авторитетным; старые module entrypoints subscription server и sync agent сохранены как исполняемые compatibility facade для уже установленных systemd units.
+- TLS-транспорты: перед каждым применением сертификаты включённых TLS-транспортов проверяются на домен, срок действия и соответствие приватному ключу, некорректная сохранённая пара заменяется через certbot; удалены посторонние legacy-пути сертификатов, Caddy больше не получает TLS-маршрут без полной пары сертификата и ключа, а TCP-профиль TrustTunnel явно фиксирует ALPN `h2`.
+- Перенесены без потерь device limits, rename/default user, uninstall, SNI preflight, WARP RU/IDN lists, Fail2ban whitelist, AntiDPI alert-only probes и транзакционные исправления Telemt.
 
-- Сервер подписок узнаёт настоящий адрес клиента: за мультиплексором Caddy
-  передаёт PROXY v2, и запись об устройстве больше не содержит `127.0.0.1`.
-  Раньше клиенты без HWID сливались в одно устройство, потому что отпечаток
-  строился из адреса мультиплексора и User-Agent.
-- Исправлен TLS accept-path сервера подписок за Caddy: PROXY v2 теперь
-  разбирается на сыром соединении до TLS handshake. Раньше `hydra-sub` пытался
-  прочитать заголовок уже из `SSLSocket`, закрывал соединение и клиент получал
-  `Connection closed`, хотя systemd-служба оставалась active.
-- Экран «Трафик протокола» показывает учтённые байты и для транспортов без
-  собственных счётчиков: базовый плагин отдаёт то, что записал демон трафика
-  под именем протокола. VLESS показывал «трафик ещё не учтён» при работающем
-  учёте.
-- Транспорт называется просто VLESS во всех экранах.
+### Исправлено
 
-- Лимит устройств теперь ограничивает одновременные подключения, а не только
-  выдачу подписки: демон трафика группирует активные соединения по адресу
-  источника и закрывает через Clash API те, что принадлежат устройствам сверх
-  лимита. Раньше клиент, один раз получивший конфиг, подключался без ограничений.
-- Приоритет у подключившихся раньше: новое устройство сверх лимита получает
-  отказ, а установленные сессии не рвутся. Короткий разрыв связи не считается
-  новым устройством — сессия помнится 10 минут.
-- Запись об устройстве вместо одной метки времени хранит первое и последнее
-  обращение, источник идентификатора (заголовок HWID или определение по адресу
-  и клиенту), `User-Agent` и адрес. Схема state поднята до 5 с миграцией.
-- В карточке пользователя появился экран «Устройства»: зарегистрированные
-  устройства с HWID-префиксом и клиентом, активные сессии с адресом, трафиком и
-  пометкой сверх лимита, изменение лимита и сброс привязок в одном месте.
-- В мониторинге появился раздел «Устройства и сессии», а на обзорном экране —
-  строка с числом онлайн-устройств и нарушителей лимита.
-- `hydra user show` и `--json` отдают список устройств; полный идентификатор не
-  публикуется, только префикс.
-- Вкладка «Клиенты» на экранах протоколов заменена на «Трафик протокола»:
-  подключённые клиенты дублировали данные устройств, персональный учёт трафика
-  сохранён.
-
-### Обслуживание
-
-- Sync agent раз в сутки проверяет сроки всех настроенных TLS-сертификатов:
-  протоколы с собственным доменом, домен сети и домен подписок. Проверка
-  read-only и опирается на `openssl x509 -enddate`.
-- Истёкший, истекающий в ближайшие 30 дней или отсутствующий сертификат ставит
-  отложенное применение конфигурации, поэтому существующий preflight
-  переполучает материал через certbot без отдельного пути обновления.
-- Сертификат сервера подписок теперь тоже продлевается автоматически: общий
-  preflight его не касается, поэтому проверка вызывает выпуск напрямую и
-  перезапускает `hydra-sub`. Раньше он обновлялся только вручную из TUI.
-- Неудачное продление больше не повторяется каждые 5 минут: отложенное
-  применение, поставленное проверкой сертификатов, снимается после первой
-  неудачи и ждёт следующей суточной проверки. Отложенные применения из других
-  фаз повторяются как прежде.
-- Результат проверки сохраняется в state (`certificates_last_check`,
-  `certificates_report`) и выводится в `hydra status` блоком `certificates`;
-  проверку можно выключить флагом `sync_certificates_enabled`.
-
-### Архитектура
-
-- Монолитные composition/lifecycle/UI-модули разделены на application services,
-  инфраструктурные адаптеры, нейтральные contracts и тонкие compatibility
-  facade. Добавлены автоматические границы зависимостей, лимиты размеров
-  модулей и функций и графовые проверки связности.
-- Удалены process-global service locator и прямые вызовы concrete plugins из
-  UI, Telegram и manager-слоя. Плагины подключаются через instance-scoped
-  `PluginContainer`, явные порты и единый транзакционный lifecycle.
-- Backup inventory расширяется декларациями плагинов без импорта registry из
-  core. Удаление HYDRA также проходит через application boundary.
-- Долгоживущие systemd units используют стабильный `/opt/hydra` и его `.venv`,
-  поэтому release-каталоги можно атомарно переключать без закрепления старого
-  физического пути.
-- Headless CLI сведён к операторскому циклу `status` → `check` → `apply`.
-  Validation, doctor, plan и reconciliation объединены в один read-only
-  preflight и скрыты из основной справки; старые формы сохранены как алиасы.
-  Добавлены metadata-driven inventory/lifecycle/command/query/action плагинов,
-  `backup inspect`, `user show`, TTY-aware таблицы и сводки, явный `--json`,
-  компактный JSON и JSON-ошибки синтаксиса.
-  Системные проверки и migration вызываются через application-level ports.
-
-### AntiDPI — покрытие VLESS
-
-- AntiDPI отслеживает VLESS + XHTTP. Улики берутся из access-лога decoy того же
-  домена, где Caddy уже восстановил реальный IP клиента через PROXY v2:
-  отклонённый запрос к XHTTP-пути даёт `auth_failure`, scanner path на домене —
-  `active_decoy_probe`. Успешные запросы и ошибки backend (5xx) уликами не
-  считаются.
-- Домен и путь читаются из конфигурации плагина и перечитываются каждые
-  60 секунд; записи чужих доменов из общего лога не затрагиваются.
-- Добавлен разбор отказов `inbound/vless[...]` в журнале sing-box с извлечением
-  peer port и покрытие VLESS в `hydra antidpi selftest`.
-
-### AntiDPI — логика детекции
-
-- Повторы одного сигнала насыщаются: каждое следующее одинаковое событие в окне
-  15 минут добавляет вдвое меньше предыдущего. Три опечатки в пароле больше не
-  дают бан на все порты VPS, а непрерывный подбор по-прежнему блокируется
-  (≈23 попытки при частоте раз в секунду).
-- Для бана нужны улики двух разных семейств; улики одного типа обязаны набрать
-  полуторный порог. Решающие сигналы (обращение к decoy, перебор портов)
-  по-прежнему банят сами по себе, по собственному весу.
-- Ранее забаненные адреса достигают порога быстрее: −1 за каждое нарушение,
-  но не ниже 4.
-- Улики агрегируются по подсетям `/24` и `/48`: 4 и более адресов в окне
-  10 минут дают уведомление `COORDINATED`. Агрегат намеренно не банит подсеть,
-  чтобы не отключить всех клиентов за общим NAT.
-- Оповещения и экраны показывают требуемый порог, семейства улик и причину,
-  по которой адрес ещё не заблокирован.
-
-### AntiDPI
-
-- Добавление сети в whitelist теперь снимает активные баны, которые эта сеть
-  накрывает: адрес удаляется из ipset и из evidence, а не остаётся
-  заблокированным до истечения ipset-timeout.
-- Память прогрессивной эскалации (`ban_counts`) больше не растёт бесконечно: она
-  очищается вместе с объясняющей её записью ban history.
-- Отказ firewall при пересечении порога бана фиксируется в state и выводится в
-  TUI и Telegram. Раньше детектор, работающий отдельной службой, терял этот факт.
-- `management_snapshot` возвращает ограниченную проекцию оператора вместо
-  глубокой копии всего state: активные баны с готовыми подписями, watchlist,
-  переведённые счётчики и момент снимка. Экраны больше не копируют до 20 000
-  score-записей на каждое обновление.
-- TUI-экран AntiDPI переработан: состояние healthcheck с расшифровкой
-  неисправных проверок, список банов с остатком срока и причиной на русском,
-  раздел «Под наблюдением» для улик ниже порога бана, статистика сигналов и
-  источников, ручная бессрочная блокировка, разбан по номеру или адресу и запуск
-  локальной диагностики. Длинные IPv6-адреса больше не обрезаются.
-- Telegram-дашборд AntiDPI показывает GeoIP/ASN, остаток срока, причину на
-  русском и watchlist; кнопки разбана подписаны остатком срока, а кнопка
-  `🧾 Подробнее` открывает детальный вид со счётчиками сигналов и источников.
-  Обе поверхности используют один словарь формулировок, поэтому больше не
-  расходятся в терминах.
-
-### Telegram-бот
-
-- Экраны получили граф: `⬅️` ведёт к родителю, а не в главное меню, `🔄` не
-  теряет номер страницы, с вложенных экранов доступен `🏠 Меню`. Роутинг
-  callback-ов заменён разбором `view:<экран>[:<страница>]` вместо цепочки
-  сравнений строк.
-- Списки блокировок, наблюдения и уловов honeypot листаются постранично; раньше
-  они молча обрезались на 5–12 записях без способа досмотреть остальное.
-- Добавлена карточка адреса: GeoIP/ASN, статус в AntiDPI с остатком срока и
-  причиной, статус в Honeypot, кнопки блокировки и разблокировки. Открывается
-  строкой списка или простой отправкой IP сообщением.
-- Неизвестная команда больше не отвечает главным меню, а ошибки построения
-  экрана показываются оператору вместо молчания.
-- Уведомления: режим «только блокировки» и тихие часы с окном через полночь.
-  Пропускаются только события с применённым действием или отказом защиты;
-  выключенная категория остаётся сильнее обоих фильтров.
-- Мониторы fail2ban и honeypot перестали спавнить два `journalctl` в секунду:
-  опрос замедляется до 15 секунд на тихом хосте и возвращается к 2 секундам
-  сразу после новой строки.
-
-### Совместимость и состояние
-
-- В `TelegramConfig` добавлены `notify_only_blocks`, `quiet_hours_enabled`,
-  `quiet_hours_start` и `quiet_hours_end` со значениями по умолчанию —
-  существующий state читается без миграции.
-- Версия persisted state поднята с 3 до 4. Миграция 2→3 сохранена в точности как
-  выпущенная в 2.5.3; миграция 3→4 переносит legacy-флаги WARP, DNSCrypt и
-  security plugins в канонический `protocols` и добавляет revision.
-- Миграция проверена на полном fixture 2.5.3: сохраняются лимиты и отпечатки
-  устройств, credentials, Telegram-настройки, сетевые секреты и plugin config.
-- Регистрация устройств подписки выполняется атомарно; stale TUI/daemon saves
-  не стирают новые bindings, а явный reset остаётся авторитетным.
-- Старые module entrypoints subscription server и sync agent сохранены как
-  исполняемые compatibility facade для уже установленных systemd units.
-
-### Обновление рабочей VPS
-
-- Dev-entrypoints согласованы по ветке: `dev/bootstrap.sh`, `dev/updater.sh` и
-  транзакционный `upgrade.sh` теперь без дополнительных переменных выбирают
-  `dev`; URL установщика больше не переключает установку молча на `main`.
-- Добавлен публичный `updater.sh`: обновление запускается одной командой,
-  launcher полностью скачивает транзакционное ядро до исполнения и удаляет
-  временный файл после завершения.
-- Вывод `bootstrap.sh`, `updater.sh` и `upgrade.sh` унифицирован: нумерованные
-  этапы, явный итог `ГОТОВО`/`ОШИБКА`, команда следующего действия и путь к
-  журналу или снимку отката.
-- Добавлен `upgrade.sh` для транзакционного перехода существующей установки на
-  точный SHA ветки `dev`: отдельный release и `.venv`, read-only preflight,
-  quiesce HYDRA-служб, два уровня backup, атомарная миграция state, проверка
-  systemd и автоматический откат state/code/wrapper/services.
-- Исправлен откат updater для TLS/SNI-установок: активный `caddy-l4.service`
-  теперь входит в quiesce-снимок и гарантированно запускается после переключения
-  либо отката. Проверка state при остановленных службах больше не зависит от
-  runtime health, а сообщение об ошибке указывает конкретную операцию и её
-  JSON-отчёт.
-- Добавлены `hydra upgrade migrate-state`, Linux integration-сценарий
-  main→dev и руководство [`docs/UPGRADE.md`](docs/UPGRADE.md).
-- `bootstrap.sh` остаётся установщиком новой VPS и больше не является
-  рекомендуемым способом обновления действующей установки.
-
-### TLS-транспорты
-
-- Исправлена установка ShadowTLS: внутренний Trojan inbound теперь создаётся как
-  injectable detour без фиктивного `listen_port: 0`, поэтому конфигурация проходит
-  общую валидацию и принимается Sing-Box.
-- Восстановлен интерактивный запрос домена при включении NaiveProxy, AnyTLS,
-  TrustTunnel и Hysteria2.
-- Перед каждым применением конфигурации сертификаты включённых TLS-транспортов
-  проверяются на домен, срок действия и соответствие приватному ключу.
-  Некорректная сохранённая пара заменяется через certbot.
-- Удалены посторонние legacy-пути сертификатов. Caddy больше не получает
-  TLS-маршрут без полной пары сертификата и ключа, а TCP-профиль TrustTunnel
-  явно фиксирует ALPN `h2`.
-
-### Документация
-
-- `README.md` переработан в обзорную витрину: что даёт система, инвентарь
-  модулей, установка, обновление, структура проекта и указатели на документы.
-- Подробности перенесены к профильным документам без потери содержания:
-  мотивация модели и границы версии — в `ARCHITECTURE.md`, эксплуатационные
-  сценарии (безопасный порядок изменения, восстановление, диагностика) и
-  семантика лимитов пользователей — в `CLI.md`, описание заглушек доменных
-  транспортов — в `REFERENCE.md`, локальные проверки и матрица CI — в
-  `PLUGIN_DEVELOPMENT.md`.
-
-### Сохранённая функциональность 2.5.3
-
-- Перенесены без потерь device limits, rename/default user, uninstall, SNI
-  preflight, WARP RU/IDN lists, Fail2ban whitelist, AntiDPI alert-only probes и
-  транзакционные исправления Telemt.
+- Переключение VLESS + XHTTP с собственного TLS-домена на Reality больше не возвращает удалённый decoy-маршрут, а сбой перестройки Caddy запускает полный rollback и перезагрузку восстановленного Sing-Box.
+- Reality-ссылки и клиентские профили используют обнаруженный публичный IP, когда он не сохранён в `network.server_ip`, та же проверка применяется при включении, а ошибка переустановки остаётся в VLESS-меню вместо сбоя TUI.
+- Активация VLESS завершается успешно только после проверки фактического SNI-маршрута, загруженной Caddy пары cert/key и локального TLS handshake с ALPN `h2`, неполный runtime откатывается вместо ложного успешного статуса.
+- Исправлен сбой TUI с `StateConflictError` после неудачной команды плагина: сессии устройств, отчёт о сертификатах и источник отложенного применения больше не считаются желаемой конфигурацией, а фоновая запись раз в две секунды не делает открытое меню устаревшим.
+- Откат неудачной команды больше не падает из-за чужой записи: снимок восстанавливается поверх текущего состояния с сохранением фоновых счётчиков, экран настроек VLESS сообщает о конкурентном изменении текстом, а причину неудачного применения берёт из `apply_error()`.
+- Сервер подписок узнаёт настоящий адрес клиента: за мультиплексором Caddy передаёт PROXY v2, PROXY v2 разбирается на сыром соединении до TLS handshake; раньше `hydra-sub` пытался прочитать заголовок уже из `SSLSocket`, закрывал соединение и клиент получал `Connection closed`, запись об устройстве содержала `127.0.0.1`.
+- Исправлена установка ShadowTLS: внутренний Trojan inbound создаётся как injectable detour без фиктивного `listen_port: 0`, поэтому конфигурация проходит общую валидацию и принимается Sing-Box; восстановлен интерактивный запрос домена при включении NaiveProxy, AnyTLS, TrustTunnel и Hysteria2.
 
 ## [2.5.3] — 24 июля 2026
 
-### Пользователи и обслуживание
+### Добавлено
 
-- Добавлены переименование пользователя без ротации UUID/секретов и
-  настраиваемый лимит устройств на подписку. HWID хранится только в виде
-  SHA-256; привязки можно сбросить из TUI или CLI.
+- Переименование пользователя без ротации UUID/секретов и настраиваемый лимит устройств на подписку; HWID хранится только как SHA-256, привязки сбрасываются из TUI или CLI.
 - Чистая установка автоматически создаёт первого пользователя `default`.
-- Добавлена команда полного удаления `hydra uninstall` с обязательным
-  подтверждением `--yes`, режимом предварительного просмотра `--dry-run` и
-  опцией сохранения данных `--keep-data`.
+- Команда полного удаления `hydra uninstall` с обязательным подтверждением `--yes`, режимом `--dry-run` и опцией сохранения данных `--keep-data`.
 
-### Сеть и безопасность
+### Изменено
 
-- TLS ping/config-тесты Karing с парой `unknown_sni + handshake_failure`
-  переведены в alert-only и больше не могут автоматически заблокировать IP.
-- TUI Fail2ban показывает фактический `ignoreip`, включая адрес установочной
-  SSH-сессии, автоматически записанный в `00-hydra-defaults.local`.
-- Проверка SNI разрешает общий домен для TCP/QUIC-режимов одного протокола,
-  сохраняя конфликт между разными протоколами.
-- WARP заранее загружает все встроенные внешние списки при установке; RU-
-  маршрутизация включает `.su`, `.ru`, `.рф` и `.xn--p1ai`.
+- TLS ping/config-тесты Karing с парой `unknown_sni + handshake_failure` переведены в alert-only и больше не могут автоматически заблокировать IP.
+- Проверка SNI разрешает общий домен для TCP/QUIC-режимов одного протокола, сохраняя конфликт между разными протоколами.
+- WARP заранее загружает все встроенные внешние списки при установке; RU-маршрутизация включает `.su`, `.ru`, `.рф` и `.xn--p1ai`.
 
-### Telemt
+### Исправлено
 
-- Исправлена ложная ошибка сразу после загрузки бинарника: Telemt больше не
-  помечается включённым до окончания транзакционной установки.
-- Установка восстанавливает отсутствующий systemd unit, конфигурация
-  применяется через стабильный restart с проверкой активности, а настроенные
-  iOS-фикс и SYN-limiter автоматически восстанавливают правила.
+- Установка Telemt больше не помечает его включённым до окончания транзакционной установки; установка восстанавливает отсутствующий systemd unit, применяет конфигурацию через стабильный restart с проверкой активности, а настроенные iOS-фикс и SYN-limiter автоматически восстанавливают правила.
+- TUI Fail2ban показывает фактический `ignoreip`, включая адрес установочной SSH-сессии, автоматически записанный в `00-hydra-defaults.local`.
 
 ## [2.5.2] — 21 июля 2026
 
-### Чистая установка и bootstrap
+### Изменено
 
-- Certbot для домена подписок теперь освобождает порт 80 также от Caddy L4,
-  временно открывает firewall и гарантированно восстанавливает остановленные
-  веб-службы даже при исключении.
-- Первая сборка qWDTT больше не обрывается общим 30-секундным таймаутом:
-  загрузке Go-модулей разрешено до 10 минут, а `go build` — до 15 минут,
-  что учитывает пустой module/build cache на чистой VPS.
-- Release-bootstrap по умолчанию загружает ветку `main`. Ветка из
-  `HYDRA_REF` сначала разрешается в точный remote SHA; Git update, clone и
-  архивный fallback устанавливают именно этот commit. До установки Python-
-  зависимостей bootstrap сверяет фактический `HEAD`/маркер архива с
-  выбранным SHA и останавливается при любом расхождении.
-- Исправлена однострочная команда: bootstrap запускается через
-  `curl ... | sudo bash` и не требует Bash process substitution.
-- Для ручного `git clone` задокументирован запуск через `.venv` с
-  установкой `requirements.lock`. Это устраняет ошибку
-  `No module named 'qrcode'` и не смешивает зависимости HYDRA с системным
-  Python. Bootstrap явно сообщает о созданной команде `sudo hydra`;
-  простой clone сам по себе launcher в `/usr/local/bin` не создаёт.
+- Release-bootstrap по умолчанию загружает ветку `main`; ветка из `HYDRA_REF` сначала разрешается в точный remote SHA, Git update, clone и архивный fallback устанавливают именно этот commit, а до установки Python-зависимостей bootstrap сверяет фактический `HEAD`/маркер архива с выбранным SHA.
+- Однострочная команда установки запускается через `curl ... | sudo bash` и не требует Bash process substitution.
+- Для ручного `git clone` задокументирован запуск через `.venv` с установкой `requirements.lock` — это устраняет `No module named 'qrcode'` и не смешивает зависимости HYDRA с системным Python; bootstrap явно сообщает о созданной команде `sudo hydra`, простой clone сам launcher в `/usr/local/bin` не создаёт.
+- Новая установка AmneziaWG передаёт внешнему инсталлятору адрес `10.67.67.1`, поэтому первый профиль создаётся в `10.67.67.0/24` и не пересекается с qWDTT. `hydra apply` больше не меняет подсеть уже существующего `awg0.conf`: штатная сеть старой установки `10.66.66.0/24` не заменяется молча, автовыбор сети выполняется только при создании нового профиля.
+- Status AmneziaWG сверяет runtime со state, fallback-запуск `awg-quick` больше не проглатывает stderr, а восстановление профиля не переиспользует уже занятую подсеть.
+- AntiDPI больше не считает штатные junk-пакеты AmneziaWG ошибками handshake, noisy debug path отключён, rejection-события остаются доступными.
 
-### AnyTLS, Caddy L4 и состояние
+### Исправлено
 
-- Чистая система больше не падает на сборке Caddy L4: checksum
-  закреплённой версии Go ищется в полном списке релизов, а таймаут
-  `xcaddy build` увеличен с 30 до 900 секунд для пустого Go module cache.
-- Исправлен ложный rollback AnyTLS и Mieru: healthcheck больше не читает
-  устаревший state во время транзакции.
-- TUI перечитывает state после возврата из вложенных меню и больше не
-  показывает только что установленный протокол выключенным.
-- Исправлена десериализация `state.json`: ошибка разрешения type hints
-  больше не превращала валидный `PluginState(enabled=true, installed=true)` в
-  пустой объект со значениями по умолчанию.
-- Status AnyTLS теперь совмещает сохранённые `installed/enabled` с
-  фактическим наличием Sing-Box, а не считает любой Sing-Box
-  доказательством установки AnyTLS.
-- Получение сертифика NaiveProxy больше не падает с `Could not bind TCP
-  port 80`, если `:80` занят уже установленным Caddy L4. Naive теперь
-  временно останавливает активные `caddy-l4`, `caddy-naive`, Nginx и Apache,
-  проверяет успех остановки и гарантированно восстанавливает их после Certbot,
-  включая аварийный выход.
+- Certbot для домена подписок освобождает порт 80 также от Caddy L4, временно открывает firewall и гарантированно восстанавливает остановленные веб-службы даже при исключении.
+- Первая сборка qWDTT больше не обрывается общим 30-секундным таймаутом: загрузке Go-модулей разрешено до 10 минут, `go build` — до 15 минут.
+- Сборка Caddy L4 на чистой системе: checksum закреплённой версии Go ищется в полном списке релизов, таймаут `xcaddy build` увеличен с 30 до 900 секунд.
+- Исправлен ложный rollback AnyTLS и Mieru: healthcheck больше не читает устаревший state во время транзакции, а TUI после возврата из вложенных меню больше не показывает только что установленный протокол выключенным.
+- Исправлена десериализация `state.json`: ошибка разрешения type hints больше не превращает валидный `PluginState(enabled=true, installed=true)` в пустой объект со значениями по умолчанию; status AnyTLS совмещает сохранённые `installed/enabled` с фактическим наличием Sing-Box.
+- Получение сертификата NaiveProxy больше не падает с `Could not bind TCP port 80`, если `:80` занят установленным Caddy L4: активные `caddy-l4`, `caddy-naive`, Nginx и Apache временно останавливаются и гарантированно восстанавливаются после Certbot, включая аварийный выход.
+- Выключение AntiDPI удаляет глобальные IPv4/IPv6 DROP-правила, а не только отключает службу и сбор событий.
+- AmneziaWG проверяет загрузку kernel module при установке и при включении: если DKMS собрал модуль для нового ядра, а VPS запущена на старом, TUI показывает оба ядра и требуемую перезагрузку.
+- Обновление старой установки AmneziaWG не пытается разобрать транспортные значения `network=both/quic/tcp` других протоколов как IP-подсети, ошибка `'both' does not appear to be an IPv4 or IPv6 network` устранена, невалидные legacy-значения игнорируются.
+- Загрузчик закрывает writable-дескриптор, возвращённый `mkstemp`, до атомарного перемещения бинарника, устраняя `[Errno 26] Text file busy` при первом `wgcf register` и утечку дескрипторов во всех скачиваниях через общий helper.
+- В AntiDPI ALERT добавлена кнопка ручной блокировки IP с проверкой Telegram-администратора, whitelist и штатным progressive ban.
 
-### AmneziaWG и AntiDPI
-
-- Новая установка AmneziaWG передаёт внешнему инсталлятору адрес
-  `10.67.67.1`, поэтому первый профиль создаётся в `10.67.67.0/24` и не
-  пересекается с qWDTT. Существующие `awg0.conf` при обновлении не мигрируют.
-- Выключение AntiDPI теперь удаляет глобальные IPv4/IPv6 DROP-правила. Ранее
-  служба и сбор событий отключались, но адреса из `hydra_antidpi` продолжали
-  блокироваться, из-за чего TUI показывал «выкл», а SSH оставался недоступен.
-- AmneziaWG проверяет загрузку kernel module как при установке, так и
-  при включении. Если DKMS собрал модуль для нового ядра, а VPS ещё
-  запущена на старом, TUI показывает оба ядра и требуемую перезагрузку
-  вместо безликой «Ошибки применения».
-- Fallback-запуск `awg-quick` больше не проглатывает stderr; status
-  AmneziaWG сверяет runtime с state, а восстановление профиля не
-  переиспользует уже занятую подсеть.
-- При обновлении старой установки AmneziaWG больше не пытается
-  разобрать транспортные значения `network=both/quic/tcp` других протоколов
-  как IP-подсети. Это устраняет ошибку `'both' does not appear to be an IPv4 or IPv6
-  network` при `hydra apply`; невалидные legacy-значения теперь игнорируются.
-- Обычный `hydra apply` больше не меняет подсеть уже существующего
-  `awg0.conf`. Ранее штатная сеть старой установки `10.66.66.0/24` могла
-  быть молча заменена на `10.67.67.0/24`, что ломало все ранее экспортированные
-  PC-профили. Теперь автовыбор сети выполняется только при создании нового
-  профиля, а сеть установленного интерфейса остаётся неизменной.
-- AntiDPI больше не считает штатные junk-пакеты AmneziaWG
-  ошибками handshake; noisy debug path отключён, а rejection-события
-  остаются доступными.
-- В AntiDPI ALERT добавлена кнопка ручной блокировки IP с проверкой
-  Telegram-администратора, whitelist и штатным progressive ban.
-
-### WARP/WGCF и общий загрузчик
-
-- Загрузчик закрывает writable-дескриптор, возвращённый `mkstemp`, до
-  атомарного перемещения бинарника. Это устраняет
-  `[Errno 26] Text file busy` при первом `wgcf register` и утечку дескрипторов
-  во всех скачиваниях через общий helper.
-
-### Благодарность
-
-Отдельная благодарность **@Monah99** за помощь в тестировании и
-предоставление VPS.
+Отдельная благодарность **@Monah99** за помощь в тестировании и предоставление VPS.
 
 ## [2.5.1-dev] — «FORTRESS» — 21 июля 2026
 
-### Исправления применения конфигурации
+### Добавлено
 
-- Исправлен ложный rollback при включении AnyTLS и Mieru: healthcheck теперь
-  проверяет активный Sing-Box и inbound в применяемом конфиге, не перечитывая
-  устаревший флаг `enabled` из сохранённого state во время транзакции.
-- TUI перечитывает state после возврата из вложенных меню и после операций
-  AnyTLS, не позволяя старому снимку повторно показать или сохранить протокол
-  выключенным после успешного commit.
+- Самостоятельный плагин `antidpi` — поведенческий IDS/IPS-контур для обнаружения протокольных зондов, неправильной авторизации, malformed handshake, decoy probes, connection burst и сканирования портов; он не расшифровывает пользовательский трафик и не заменяет Fail2ban, а нормализует доказательства из Caddy, Sing-Box, kernel journal и нативных журналов протоколов и применяет единую политику.
+- Разделены три независимые зоны ответственности: Fail2ban — SSH и подтверждённые auth-журналы, Honeypot — отдельная ловушка с собственным состоянием и банами, AntiDPI — сетевые и протокольные аномалии на всей поверхности VPS.
+- Долгоживущий сервис `hydra-antidpi`, читающий Caddy JSONL, `journald`, kernel LOG и нативные журналы протоколов.
+- `hydra-source-relay` с обязательным PROXY Protocol v2 и точным сопоставлением relay source port внешнему IPv4/IPv6 для TCP и QUIC backend даже после loopback-проксирования; для ошибок без endpoint разрешена только ambiguity-safe корреляция.
+- Динамические ipset `hydra_antidpi` и `hydra_antidpi6` — только они выполняют enforcement, телеметрические iptables/ip6tables-правила используют `LOG`, а не `DROP`; активные баны восстанавливаются после перезапуска с оставшимся TTL.
+- Детекторы для TLS/Caddy L4, HTTPS decoy, AnyTLS, TrustTunnel TCP/QUIC, ShadowTLS, Naive TCP/QUIC, Snell, Hysteria2, AmneziaWG, qWDTT и Mieru; адаптер Telemt сохранён, но транспорт исключён из подтверждённой матрицы.
+- Детектор Mieru: серия established TCP-сессий на `2012–2022`, закрывающихся после передачи не более 1 KiB, сигнал alert-only.
+- AmneziaWG dynamic-debug нативных rejection paths: `Invalid MAC`, `Invalid handshake` и `unknown peer`, штатные junk-пакеты из `Jc` исключены, `prepare_awg_message` принудительно выключен, его `Unknown message` не считается ошибкой handshake.
+- Команды `hydra antidpi sync`, `selftest`, `selftest --full` и `capture`: внешний capture сохраняет дельту событий, журналы, firewall rules, UDP/TCP sockets, source-relay mappings и AWG dynamic-debug.
+- Раздельное включение уведомлений AntiDPI, Honeypot, Fail2ban, unban и system events; статистика доставки хранит attempted/delivered/failed без Telegram secrets. ALERT/BAN содержат IP, флаг страны, ASN/владельца, event, protocol, source, signals, observed score, verified score, TTL и offense; inline-кнопка ручной блокировки IP доступна настроенному администратору, соблюдает whitelist, использует штатный прогрессивный ipset-ban и не увеличивает offense при повторном callback.
+- Диагностические архивы автоматически скрывают пароли, UUID, PSK, токены и приватные ключи и создаются с mode `0600`.
+- Документирован полный переход с legacy-конфигурации: backup, validate/doctor, plan/apply, синхронизация runtime, удаление `hydra-portscan`, перезапуск Telegram bot и контрольная проверка сервисов, ipset и внешних событий.
 
-### Новый модуль AntiDPI
+### Изменено
 
-Добавлен самостоятельный плагин `antidpi` — поведенческий IDS/IPS-контур для
-обнаружения протокольных зондов, неправильной авторизации, malformed handshake,
-decoy probes, connection burst и сканирования портов. Он не расшифровывает
-пользовательский трафик и не заменяет Fail2ban: модуль нормализует доказательства
-из Caddy, Sing-Box, kernel journal и нативных журналов протоколов, после чего
-применяет единую scoring-политику.
-
-Архитектурно разделены три независимые зоны ответственности:
-
-- Fail2ban — SSH и подтверждённые auth-журналы;
-- Honeypot — отдельная ловушка, собственное состояние и собственные баны;
-- AntiDPI — сетевые и протокольные аномалии на всей поверхности VPS.
-
-### Архитектура FORTRESS
-
-- Добавлен долгоживущий сервис `hydra-antidpi`, читающий Caddy JSONL,
-  `journald`, kernel LOG и нативные журналы протоколов.
-- Добавлен `hydra-source-relay` с обязательным PROXY Protocol v2 и точным
-  сопоставлением relay source port внешнему IPv4/IPv6. Это сохраняет реальный
-  источник для TCP и QUIC backend даже после loopback-проксирования.
-- Для ошибок без endpoint разрешена только ambiguity-safe корреляция: адрес
-  используется, если в коротком окне присутствует единственный кандидат.
-- Для AmneziaWG включается ограниченный dynamic-debug нативных rejection paths:
-  `Invalid MAC`, `Invalid handshake` и `unknown peer`. Штатные AWG junk-пакеты
-  из `Jc` исключены: `prepare_awg_message` принудительно выключен, а его
-  `Unknown message` больше не считается ошибкой handshake.
-- Из Fail2ban удалён исполняемый legacy протокольных плагинов; сохранён только
-  миграционный cleanup старых jail/filter и portscan rule. Cleanup прежнего AWG
-  unit больше не отключает rejection logging, принадлежащий AntiDPI.
+- Введены два счётчика: `Observed score` для всех сигналов и `Verified score` только для доказательств, которым разрешено влиять на бан; score экспоненциально затухает с half-life 5 минут.
+- Обычный ALERT создаётся при observed score `6`, явный `auth_failure` — при `3`; BAN разрешён только при verified score `8` и свежем подтверждённом протокольном событии либо подтверждённом multi-port sweep; сроки бана прогрессивные: 10 минут, 1 час, 24 часа, затем 7 дней.
+- Telegram cooldown действует отдельно для каждого IP и протокола, дублирующиеся browser sockets для одного unknown-SNI события объединяются.
+- Встроенный whitelist исключает loopback, link-local, RFC1918, ULA, IP самой VPS и пользовательские сети.
+- Прямые UDP-сигналы Hysteria2, AmneziaWG и qWDTT считаются наблюдаемыми, но не ban-eligible: они формируют технический ALERT с политикой `alert-only / unverified UDP source` и не увеличивают verified score; Naive QUIC и TrustTunnel QUIC могут стать ban-eligible только после точной атрибуции через source relay и прикладного auth-события.
+- Из Fail2ban удалён исполняемый legacy протокольных плагинов, сохранён только миграционный cleanup старых jail/filter и portscan rule, а cleanup прежнего AWG unit больше не отключает rejection logging, принадлежащий AntiDPI.
 - Caddy decoy получил отдельную access-телеметрию с сохранением внешнего IP.
-- Созданы динамические ipset `hydra_antidpi` и `hydra_antidpi6`; только они
-  выполняют enforcement. Телеметрические iptables/ip6tables-правила используют
-  `LOG`, а не `DROP`.
-- Активные баны восстанавливаются после перезапуска с оставшимся TTL.
+- Полный путь от внешнего клиента до Telegram подтверждён на реальной VPS для TLS/decoy, AnyTLS, TrustTunnel, ShadowTLS, Naive TCP/QUIC, Snell, Hysteria2, AmneziaWG, qWDTT и Mieru, включая нативные rejection events, silent-failure fallback, точную source attribution и запрет ложных UDP-банов; спецификация — в [`docs/ANTIDPI.md`](docs/ANTIDPI.md).
 
-### Политики обнаружения и блокировки
+### Исправлено
 
-- Введены два счётчика: `Observed score` для всех сигналов и `Verified score`
-  только для доказательств, которым разрешено влиять на бан.
-- Score экспоненциально затухает с half-life 5 минут; старые события не могут
-  сформировать позднюю блокировку.
-- Обычный ALERT создаётся при observed score `6`, явный `auth_failure` — при `3`.
-- BAN разрешён только при verified score `8` и свежем подтверждённом
-  протокольном событии либо подтверждённом multi-port sweep.
-- Сроки бана прогрессивные: 10 минут, 1 час, 24 часа, затем 7 дней.
-- Telegram cooldown действует отдельно для каждого IP и протокола, поэтому
-  событие Naive больше не подавляет последующие AWG, Hysteria2 или qWDTT alerts.
-- Дублирующиеся browser sockets для одного unknown-SNI события объединяются.
-- Встроенный whitelist исключает loopback, link-local, RFC1918, ULA, IP самой
-  VPS и пользовательские сети.
-
-### UDP spoof-safety
-
-Прямые UDP-сигналы Hysteria2, AmneziaWG и qWDTT считаются наблюдаемыми, но не
-ban-eligible. Они формируют технический ALERT с политикой
-`alert-only / unverified UDP source`, однако не увеличивают verified score и не
-могут подготовить будущий бан другому протоколу. Naive QUIC и TrustTunnel QUIC
-могут стать ban-eligible только после точной атрибуции через source relay и
-прикладного auth-события.
-
-### Покрытие протоколов
-
-Детекторы добавлены для TLS/Caddy L4, HTTPS decoy, AnyTLS, TrustTunnel TCP/QUIC,
-ShadowTLS, Naive TCP/QUIC, Snell, Hysteria2, AmneziaWG, qWDTT и Mieru. Отдельно
-решены два сложных случая:
-
-- **Mieru** не публикует нативную ошибку неправильного пароля, поэтому детектором
-  служит серия established TCP-сессий на `2012–2022`, закрывающихся после
-  передачи не более 1 KiB. Сигнал alert-only.
-- **AmneziaWG** отличает нативные rejection paths ядра от штатных junk-пакетов
-  `Jc`, которые больше не считаются ошибкой handshake.
-
-Адаптер Telemt сохранён, но транспорт исключён из подтверждённой матрицы.
-Актуальная матрица — в [`docs/ANTIDPI.md`](docs/ANTIDPI.md).
-
-### Telegram и эксплуатация
-
-- ALERT/BAN содержат IP, флаг страны, ASN/владельца, event, protocol, source,
-  signals, observed score, verified score, TTL и offense.
-- AntiDPI ALERT получил inline-кнопку ручной блокировки IP. Действие доступно
-  только настроенному администратору, соблюдает whitelist, использует штатный
-  прогрессивный ipset-ban и не увеличивает offense при повторном callback.
-- Добавлено раздельное включение уведомлений AntiDPI, Honeypot, Fail2ban,
-  unban и system events.
-- Статистика доставки хранит attempted/delivered/failed без Telegram secrets.
-- Добавлены команды `hydra antidpi sync`, `selftest`, `selftest --full` и
-  `capture`; внешний capture сохраняет дельту событий, журналы, firewall rules,
-  UDP/TCP sockets, source-relay mappings и AWG dynamic-debug.
-- Документирован полный переход с legacy-конфигурации: backup, validate/doctor,
-  plan/apply, синхронизация runtime, удаление `hydra-portscan`, перезапуск
-  Telegram bot и контрольная проверка сервисов, ipset и внешних событий.
-- Диагностические архивы автоматически скрывают пароли, UUID, PSK, токены и
-  приватные ключи и создаются с mode `0600`.
-
-### Проверка на реальной VPS
-
-Полный путь от внешнего клиента до Telegram подтверждён для TLS/decoy,
-AnyTLS, TrustTunnel, ShadowTLS, Naive TCP/QUIC, Snell, Hysteria2,
-AmneziaWG, qWDTT и Mieru. Проверки подтвердили как нативные rejection events,
-так и silent-failure fallback, точную source attribution и запрет ложных
-UDP-банов.
-
-Полная спецификация архитектуры и политик находится в
-[`docs/ANTIDPI.md`](docs/ANTIDPI.md).
+- Исправлен ложный rollback при включении AnyTLS и Mieru: healthcheck проверяет активный Sing-Box и inbound в применяемом конфиге, не перечитывая устаревший флаг `enabled` из сохранённого state во время транзакции.
+- TUI перечитывает state после возврата из вложенных меню и после операций AnyTLS, не позволяя старому снимку повторно показать или сохранить протокол выключенным после успешного commit.
 
 ## [2.5.0] — 20 июля 2026
 
-### Контекст
+### Добавлено
 
-После выпуска `2.4.1` в проекте накопился большой набор архитектурных изменений.
-Они появились не ради формального рефакторинга: эксплуатация показала, что
-наиболее опасные сбои возникают на границах между сохранённым состоянием,
-фактически запущенными службами, сетевыми правилами и сгенерированными
-конфигурациями.
+- Единый `HostBackend` для ограниченных команд, файловых операций, `systemd`, firewall, Sing-Box и Caddy; прямые обходы границы блокируются регрессионными проверками. Типизированные контракты возможностей плагинов, результатов жизненного цикла, проверок работоспособности и конфигурационных фрагментов с адаптерами для старых реализаций.
+- Единая модель `ErrorCode`, `ApplicationError` и `ServiceResult`; CLI сохраняет старое текстовое поле `error` и дополнительно отдаёт структурированное `error_details`.
+- Единый механизм транзакций для применения Sing-Box, nftables, плагинов, включения/отключения, установки/удаления, переустановки и операций пользователей; откат выполняется в обратном порядке, продолжается после локальной ошибки и защищён от повторного завершения.
+- Потоковая и межпроцессная блокировки применения, журнал `apply.jsonl`, снимки конфигураций и проверка работоспособности после перезагрузки. Honeypot переведён в самостоятельный жизненный цикл: общий apply не перезапускает его без необходимости и не блокирует включение другого протокола.
+- State хранится атомарно, каталоги синхронизируются после замены, повреждённые копии сохраняются отдельно. Миграции оформлены как последовательный реестр `vN → vN+1`, неизвестная будущая схема отклоняется с безопасной ошибкой.
+- Сохранённое намерение отделено от неизменяемого снимка фактического состояния, что устраняет ложные статусы вроде «выключено», когда служба реально работает.
+- Добавлены `hydra doctor`, `hydra plan`, `hydra reconcile`, `hydra backup`, `hydra restore` и `hydra upgrade check` для контроля системы без ручного редактирования state; `hydra doctor`, `hydra plan` и `hydra status` показывают не только желаемое состояние, но и фактическое состояние служб и рассинхронизацию.
+- Резервное копирование и восстановление работают с манифестом, SHA-256, dry-run, защитой от небезопасных путей и автоматической страховочной копией. Проверка `tls_mux` только для чтения: ожидаемые домены из state сравниваются с фактическими SNI-маршрутами Caddy, отдельно сообщаются `missing`, `stale`, ошибки сертификатов, повреждённый JSON-конфиг и неактивный `caddy-l4`.
+- DNSCrypt, Fail2ban, IPBan, WARP, Telemt и Honeypot переведены на общую границу команд хоста и жизненного цикла.
+- Служба учёта трафика получила более строгий контроль монотонных счётчиков и повторное применение после неудачных обновлений. Усилены предварительные проверки зависимостей, конфликтов портов, nftables, Caddy и Sing-Box.
+- Компоненты интерфейса для протоколов, сетевой информации, логов и системного монитора вынесены в тестируемые модули без изменения пользовательского меню.
 
-Отдельно проявилась хрупкость TLS-мультиплексора: `state.json` мог уже содержать
-новый домен, а Caddy L4 — ещё старый SNI-маршрут. Поэтому `2.5.0` объединяет
-архитектурную переработку, транзакционное применение и эксплуатационную
-диагностику в один стабильный контур.
+### Изменено
 
-### Что получает пользователь
-
-- Частично применённая конфигурация больше не остаётся незаметно в системе:
-  критические операции проходят через транзакции с возможностью отката.
-- `hydra doctor`, `hydra plan` и `hydra status` показывают не только желаемое
-  состояние, но и фактическое состояние служб и рассинхронизацию.
-- TLS-мультиплексор Caddy L4 проверяется на наличие, актуальность SNI,
-  сертификаты и состояние службы.
-- Резервное копирование и восстановление работают с манифестом, SHA-256,
-  dry-run, защитой от небезопасных путей и автоматической страховочной копией.
-- Пользователи могут иметь обычные идентификаторы (`test`) или email; старые
-  записи и UUID сохраняют совместимость.
-- Плагины получают единый жизненный цикл и единый контракт ошибок, что делает
-  сбои понятными и безопасными для повторного запуска.
-- Архитектурные границы и сценарии отказа покрыты 630 автоматическими тестами.
-
-### Архитектурная основа
-
-- Введён единый `HostBackend` для ограниченных команд, файловых операций,
-  `systemd`, firewall, Sing-Box и Caddy. Прямые обходы границы блокируются
-  регрессионными проверками.
-- CLI и TUI используют прикладные службы и явные зависимости через корневую
-  сборку приложения, а не создают глобальные объекты вручную.
-- Возможности плагинов, результаты жизненного цикла и проверки
-  работоспособности, а также конфигурационные фрагменты получили типизированные
-  контракты с адаптерами для старых реализаций.
-- Добавлена единая модель `ErrorCode`, `ApplicationError` и `ServiceResult`.
-  CLI сохраняет старое текстовое поле `error`, но дополнительно отдаёт
-  структурированное поле `error_details`.
-- Удалены неиспользуемые устаревшие пути и дублирование кода представления;
-  совместимые миграции и адаптеры сохранены намеренно.
-
-### Транзакционный жизненный цикл
-
-- Единый механизм транзакций охватывает применение Sing-Box, nftables, плагины,
-  включение/отключение, установку/удаление, переустановку и операции
-  пользователей.
-- Откат выполняется в определённом обратном порядке, продолжает работу после
-  локальной ошибки и защищён от повторного завершения.
-- Добавлены потоковая и межпроцессная блокировки применения, журнал
-  `apply.jsonl`, снимки конфигураций и проверка работоспособности после
-  перезагрузки.
-- Honeypot переведён в самостоятельный жизненный цикл: общий apply не
-  перезапускает его без необходимости и не блокирует включение другого протокола.
-
-### State, миграции и фактическое состояние
-
-- State хранится атомарно, каталоги синхронизируются после замены, повреждённые
-  копии сохраняются отдельно.
-- Миграции оформлены как последовательный реестр `vN → vN+1`; неизвестная
-  будущая схема отклоняется с безопасной ошибкой.
-- Сохранённое намерение отделено от неизменяемого снимка фактического состояния.
-  Это устраняет ложные статусы вроде «выключено», когда служба реально работает.
-- Добавлены `doctor`, `plan`, `reconcile`, `backup`, `restore` и
-  `upgrade check` для контроля системы без ручного редактирования state.
-
-### Caddy L4 и TLS-маршруты
-
-- Добавлена проверка `tls_mux` только для чтения: ожидаемые домены из state
-  сравниваются с фактическими SNI-маршрутами Caddy.
-- Отдельно сообщаются `missing`, `stale`, ошибки сертификатов, повреждённый
-  JSON-конфиг и неактивный `caddy-l4`.
-- Проверка ничего не перезапускает и не меняет. Исправление выполняется
-  транзакционной командой `sudo hydra apply`, которая заново создаёт и проверяет
-  Caddy-конфигурацию.
-
-### Плагины, сеть и эксплуатация
-
-- DNSCrypt, Fail2ban, IPBan, WARP, Telemt и Honeypot переведены на общую границу
-  команд хоста и жизненного цикла.
-- Служба учёта трафика получила более строгий контроль монотонных счётчиков и
-  повторное применение после неудачных обновлений.
-- Усилены предварительные проверки зависимостей, конфликтов портов, nftables,
-  Caddy и Sing-Box.
-- Компоненты интерфейса для протоколов, сетевой информации, логов и системного
-  монитора вынесены в тестируемые модули без изменения пользовательского меню.
-
-### Качество и CI
-
-- Полный локальный набор: **630 passed**.
-- CI проверяет Python 3.10–3.13, компиляцию, стиль кода, зависимости и
-  Linux-проверки на реальной системе.
-- Тесты сценариев отказа проверяют не только исключение, но и отсутствие
-  побочных изменений, корректность отката и возможность повторного запуска.
-
-### Совместимость и границы релиза
-
-- State schema остаётся `2`; существующие пользователи, UUID, credentials,
-  сертификаты и настройки протоколов не требуют ручной миграции.
-- Перед обновлением рекомендуется `sudo hydra backup`, затем
-  `sudo hydra upgrade check`, `sudo hydra validate` и `sudo hydra apply`.
-- REST API и web-панель в этот релиз не входят.
-- Telegram-бот остаётся отдельным этапом: его рабочий контракт и проверочные
-  сценарии ещё не объявляются стабильными.
+- CLI и TUI используют прикладные службы и явные зависимости через корневую сборку приложения вместо создания глобальных объектов вручную.
+- Пользователи могут иметь обычные идентификаторы (`test`) или email, старые записи и UUID сохраняют совместимость.
+- State schema остаётся `2`: существующие пользователи, UUID, credentials, сертификаты и настройки протоколов не требуют ручной миграции.
+- Перед обновлением рекомендуется `sudo hydra backup`, затем `sudo hydra upgrade check`, `sudo hydra validate` и `sudo hydra apply`.
+- REST API и web-панель в этот релиз не входят; Telegram-бот остаётся отдельным этапом, его рабочий контракт и проверочные сценарии ещё не объявляются стабильными.
+- Удалены неиспользуемые устаревшие пути и дублирование кода представления, совместимые миграции и адаптеры сохранены намеренно.
+- CI проверяет Python 3.10–3.13, компиляцию, стиль кода, зависимости и Linux-проверки на реальной системе; полный локальный набор — **630 passed**, тесты сценариев отказа проверяют не только исключение, но и отсутствие побочных изменений, корректность отката и возможность повторного запуска.
 
 ## [2.4.1] — 19 июля 2026
 
-### Надёжность применения конфигурации
+### Добавлено
 
-Транзакционный оркестратор получил блокировку, журналирование, снимки Sing-Box и
-nftables, автоматический откат, проверку работоспособности служб и понятную
-причину последней ошибки.
+- Имя пользователя может быть обычным идентификатором или email; добавлен JSON CLI для `status`, `validate`, `plan`, `apply`, `user list` и диагностики.
+- Добавлены файлы фиксации зависимостей, проверка зависимостей и CI для Python 3.10–3.13.
 
-### State и миграции
+### Изменено
 
-Добавлены структурная проверка, атомарная запись, восстановление из `.bak`,
-сохранение `.corrupt`, права `0600` и совместимость со старыми схемами state.
+- Транзакционный оркестратор получил блокировку, журналирование, снимки Sing-Box и nftables, автоматический откат, проверку работоспособности служб и понятную причину последней ошибки.
+- State: структурная проверка, атомарная запись, восстановление из `.bak`, сохранение `.corrupt`, права `0600` и совместимость со старыми схемами state.
 
-### Пользователи и CLI
+### Исправлено
 
-Имя пользователя может быть обычным идентификатором или email. Добавлен JSON
-CLI для `status`, `validate`, `plan`, `apply`, `user list` и диагностики.
-
-### Sync Agent, плагины и безопасность
-
-Исправлены очередь повторных попыток применения конфигурации, ручные проверки,
-обновление Sing-Box, учёт DNSCrypt, Fail2ban, AmneziaWG, WDTT, проверка
-целостности бинарников и установщик. Добавлены файлы фиксации зависимостей,
-проверка зависимостей и CI для Python 3.10–3.13.
+- Исправлены очередь повторных попыток применения конфигурации, ручные проверки, обновление Sing-Box, учёт DNSCrypt, Fail2ban, AmneziaWG, WDTT, проверка целостности бинарников и установщик.
 
 ## [2.4.0] — 18 июля 2026
 
-Добавлены ShadowTLS v3, Hysteria2, Snell v4, расширенные подписки, мониторинг
-пользователей, qWDTT, сетевой autotuning и унифицированные экраны протоколов.
+### Добавлено
+
+- ShadowTLS v3, Hysteria2, Snell v4, расширенные подписки, мониторинг пользователей, qWDTT, сетевой autotuning и унифицированные экраны протоколов.
 
 ## [2.3.5] — 17 июля 2026
 
-Внедрён транзакционный цикл `configure → validate → apply → commit/rollback`,
-исправлено управление портами и firewall, добавлен монотонный учёт трафика и
-улучшен TUI для AmneziaWG.
+### Добавлено
+
+- Монотонный учёт трафика и улучшенный TUI для AmneziaWG.
+
+### Изменено
+
+- Внедрён транзакционный цикл `configure → validate → apply → commit/rollback`.
+
+### Исправлено
+
+- Исправлено управление портами и firewall.
 
 ## [2.3.4] — 11 июля 2026
 
-Добавлены кастомные WARP-профили WireGuard/AmneziaWG и раздельная маршрутизация
-списков WARP.
+### Добавлено
+
+- Кастомные WARP-профили WireGuard/AmneziaWG и раздельная маршрутизация списков WARP.
 
 ## [2.3.3] — 9 июля 2026
 
-Добавлены изолированные Fail2ban jail, мастер обфускации AmneziaWG и поддержка
-Mieru с пресетами и ссылками `mierus://`.
+### Добавлено
+
+- Изолированные Fail2ban jail, мастер обфускации AmneziaWG и поддержка Mieru с пресетами и ссылками `mierus://`.
 
 ## [2.3.2] — 9 июля 2026
 
-Мультиплексор перенесён с HAProxy на Caddy L4, исправлены конфликты портов
-NaiveProxy и добавлена сборка для ARM64/AMD64.
+### Добавлено
+
+- Сборка для ARM64/AMD64.
+
+### Изменено
+
+- Мультиплексор перенесён с HAProxy на Caddy L4.
+
+### Исправлено
+
+- Исправлены конфликты портов NaiveProxy.
 
 ## [2.0.0] — базовый публичный релиз
 
-Первая помеченная тегом версия проекта. Более ранняя история сохраняется в Git.
+### Добавлено
+
+- Первая помеченная тегом версия проекта; более ранняя история сохраняется в Git.

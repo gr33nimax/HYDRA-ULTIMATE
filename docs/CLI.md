@@ -12,23 +12,8 @@ sudo hydra apply
 - `check` проверяет всё необходимое и показывает будущие изменения;
 - `apply` транзакционно приводит сервер к желаемому состоянию.
 
-Внутренние стадии вроде state validation, host doctor, configuration plan и
-service reconciliation не являются отдельными пользовательскими сценариями.
-Они входят в `check` и не засоряют основную справку.
-
-```text
-   что-то не так?                собираетесь менять?            меняете
-        │                              │                           │
-        ▼                              ▼                           ▼
-   hydra status ──────────────▶  hydra check  ─── ok ──────▶  sudo hydra apply
-   что происходит сейчас         безопасно ли применять        транзакционно
-        ▲                              │                           │
-        │                              ╳ найдены проблемы          │
-        │                              ▼                           │
-        │                     исправить причину                    │
-        └──────────────────── и повторить check ◀──────────────────┘
-                                                  проверить результат
-```
+Внутренние стадии (state validation, host doctor, configuration plan, service
+reconciliation) входят в `check` и не являются отдельными командами.
 
 ## Дерево команд
 
@@ -69,24 +54,24 @@ hydra
     └── capture [--seconds N] [--output PATH]
 ```
 
-## Быстрый справочник
+## Права доступа
 
-| Команда | Root | Назначение |
-| :--- | :---: | :--- |
-| `status` | — | Желаемое и фактическое состояние |
-| `check` | — | Полный read-only preflight и будущие изменения |
-| `apply` | ✔ | Транзакционно применить конфигурацию |
-| `apply --dry-run` | — | Полный эквивалент `check` |
-| `backup create` | ✔ | Создать проверяемый архив |
-| `backup inspect` | — | Проверить архив без восстановления |
-| `backup restore` | ✔ | Восстановить архив |
-| `user ...` | зависит | Управлять пользователями |
-| `plugin ...` | зависит | Управлять плагинами |
-| `upgrade ...` | зависит | Проверить или мигрировать установку |
-| `kernel status` | — | Показать desired provider, runtime identity и capabilities |
-| `kernel switch ...` | ✔ | Проверенно и транзакционно заменить совместимое ядро |
-| `uninstall` | ✔ | Удалить HYDRA |
-| `antidpi ...` | ✔ | Расширенная диагностика AntiScan |
+| Команда | Root |
+| :--- | :---: |
+| `status` | — |
+| `check` | — |
+| `apply` | ✔ |
+| `apply --dry-run` | — |
+| `backup create` | ✔ |
+| `backup inspect` | — |
+| `backup restore` | ✔ |
+| `user ...` | зависит |
+| `plugin ...` | зависит |
+| `upgrade ...` | зависит |
+| `kernel status` | — |
+| `kernel switch ...` | ✔ |
+| `uninstall` | ✔ |
+| `antidpi ...` | ✔ |
 
 Глобальные параметры:
 
@@ -152,7 +137,7 @@ checks и pending changes. Машиночитаемый эквивалент м�
   "ok": true,
   "configuration": {
     "valid": true,
-    "schema_version": 4,
+    "schema_version": 1,
     "revision": 12
   },
   "host": {
@@ -189,14 +174,7 @@ nftables/TPROXY, Caddy L4, plugin runtime, traffic daemon и health checks.
 `--dry-run` не имеет отдельной логики и возвращает тот же результат, что
 `hydra check`.
 
-Рекомендуемый эксплуатационный цикл:
-
-```bash
-sudo hydra backup create --output /root/hydra-before-change.tar.gz
-hydra check
-sudo hydra apply
-hydra status
-```
+Порядок безопасного изменения — в разделе «Безопасный порядок изменения».
 
 ## Backup
 
@@ -223,30 +201,18 @@ sudo hydra backup restore /root/hydra.tar.gz --yes
 hydra kernel status
 sudo hydra kernel switch hydracore
 sudo hydra kernel switch hydracore --channel debug --force
-sudo hydra kernel switch sing-box-extended
 ```
 
-Допустимые provider: `sing-box-extended` и `hydracore`; предлагаемые каналы:
-`stable` (по умолчанию) и `debug`. `stable` использует GitHub latest release
-без prerelease. `debug` выбирает самый свежий опубликованный prerelease
-Hydracore и принимает обе читаемые формы —
-`hydracore-sbe-<sbe-version>-debug-<n>` и релиз-кандидат
-`hydracore-sbe-<sbe-version>-rc-<n>`; retired-тег `-debug.<n>` не выбирается
-ни одним каналом. Persisted-значение `preview` больше не предлагается, но
-продолжает резолвиться как `debug`, чтобы уже выбравшая его установка не
-сломалась. Такой бинарник дополнительно обязан объявить нативную телеметрию
-VK Calls. Команда принимает только asset доверенного GitHub-репозитория с
-единственным точным именем для архитектуры и обязательным `asset.digest`.
-До замены выполняются identity/capability и config-check. После запуска служба
-должна пройти bounded stability check; state сохраняется последним. Любой сбой
-до commit возвращает прежний бинарник и исходное состояние службы.
-Вернуться на стабильное Hydracore можно штатно: `sudo hydra kernel switch
-hydracore --channel stable --force`.
-Calls поддерживает только Hydracore `vk_parasite`. Его включение fail-closed
-требует exact capability `call_vk_parasite` и режима `vk_parasite`; stock core
-не запускает creator и не получает P2P fallback. Перед обратным switch на
-`sing-box-extended` отключите или удалите Calls: application preflight завершит
-операцию до загрузки и замены бинарника.
+Provider только `hydracore`. Каналы:
+
+| Канал | Что ставит |
+| :--- | :--- |
+| `stable` (по умолчанию) | последний стабильный релиз |
+| `debug` | последний prerelease |
+
+Перед заменой ядра проверяются его подпись и совместимость; любой сбой возвращает
+прежний бинарник и работавшую службу. Вернуться на стабильное ядро:
+`sudo hydra kernel switch hydracore --channel stable --force`.
 
 ### Безопасный порядок изменения
 
@@ -275,7 +241,6 @@ sudo hydra apply                     # повторный запуск — шт�
 ### Восстановление из архива
 
 ```bash
-sudo hydra backup restore /root/hydra-before-change.tar.gz --dry-run
 sudo hydra backup restore /root/hydra-before-change.tar.gz --yes
 sudo hydra apply
 ```
@@ -289,7 +254,8 @@ hydra user list
 hydra user show alice@example.com
 ```
 
-Credentials и отпечатки устройств не выводятся.
+Значения credentials не выводятся: печатается только список имён протоколов
+и устройства (см. `user show` ниже).
 
 Изменения:
 
@@ -308,8 +274,8 @@ sudo hydra user remove alice-new@example.com
 sudo hydra user ensure-default
 ```
 
-User lifecycle проходит через общий application service и откатывается вместе
-с plugin hooks, state и runtime apply.
+Изменения по пользователю атомарны: при сбое откатываются вместе с конфигом
+и runtime.
 
 Лимит трафика и срок действия применяются независимо от ручной блокировки:
 исчерпанный лимит отключает доступ без `block`, а `unblock` не вернёт доступ,
@@ -377,8 +343,8 @@ sudo hydra plugin command snell set_settings --param version=6 --param mode=unsh
 sudo hydra plugin command naive set_uot --param uot=false
 hydra plugin query amneziawg protocol_mode_status --with-state
 hydra plugin query vless get_tuning --with-state
-hydra plugin query warp external_sources --with-state
-hydra plugin query warp routing_catalog --with-state
+hydra plugin query warp external_sources
+hydra plugin query warp routing_catalog
 hydra plugin query warp masque_scanner_status
 sudo hydra plugin action warp register_masque_scanner
 sudo hydra plugin action warp scan_masque_endpoints
@@ -391,28 +357,33 @@ sudo hydra plugin action dnscrypt apply_server_names \
 `--param NAME=JSON` можно повторять. Операция должна быть объявлена в
 `PluginMeta.commands`, `queries` или `actions`; произвольные методы вызвать
 нельзя. Command/action требуют root, query является read-only.
+`--with-state` передаёт обработчику текущее состояние и применим только к тем
+операциям (`query` и `action`), чьи обработчики состояние принимают
+(`protocol_mode_status`, `get_tuning`, `update_external_rules`); у остальных такой
+вызов завершится ошибкой.
 
 ### Версия `amneziawg`
 
-`set_protocol_mode` принимает только `2.0`, `3.0` и `3.1`. Команда проверяет
-закреплённый upstream installer, меняет режим через его non-interactive argv,
-повторно наблюдает режим и применяет конфигурацию одной транзакцией. При ошибке
-восстанавливаются desired state, оба AWG-конфига и состояния systemd. Статус
-показывает desired/observed режим и причины пропуска экспортов, но не ключи или
-значения директив.
+`set_protocol_mode` принимает только `2.0`, `3.0` и `3.1`. Туннель обслуживает ядро,
+установщика у транспорта нет. Команда меняет поколение одной транзакцией; при ошибке
+восстанавливаются state, оба AWG-конфига и systemd. Статус показывает desired/observed
+режим и причины пропуска экспортов, но не ключи.
 
-```bash
-sudo hydra plugin command amneziawg set_protocol_mode --param mode=3.1
-hydra plugin query amneziawg protocol_mode_status --with-state
-```
+Форматы ссылок по поколениям:
 
-AWG 3.0/3.1 выдаёт нативный `.conf`, а также complete `wg://` для Throne
-`1.3.0-beta.3` и Qt-compressed `vpn://` для официального Amnezia: оба формата
-получают все директивы активного поколения. Sing-Box Extended/HydraBox
-выдаются для 3.0 и для 3.1 — второй требует ядра HydraCore
-`v1.14.0-extended-2.7.1-hydracore.12` или новее; `sn://awg` остаётся
-fail-closed. На старом ядре 3.1 отклоняется с причиной, называющей нужный
-релиз. Возврат на `2.0` снова включает все проверенные legacy-экспорты.
+| Формат | 2.0 | 3.0 | 3.1 |
+| :--- | :---: | :---: | :---: |
+| `.conf` (нативный) | ✅ | ✅ | ✅ |
+| `wg://` (Throne, NekoBox) | ✅ | ✅ | ✅ |
+| `vpn://` (Amnezia) | ✅ | ✅ | ✅ |
+| Sing-Box Extended / HydraBox | ✅ | ✅ | ✅ ¹ |
+| `sn://awg` (NekoBox native) | ✅ | — | — |
+
+¹ 3.1 требует ядра HydraCore не старее `v1.14.0-extended-2.7.1-hydracore.12`; на
+более старом ядре экспорт 3.1 отклоняется с указанием нужного релиза.
+
+Нативный `sn://awg` выдаётся только для 2.0 — совместимость его 3.x-импортёра не
+подтверждена; для 3.x в NekoBox пользуйтесь `wg://`.
 
 ### Режимы TLS у `vless`
 
@@ -443,12 +414,11 @@ sudo hydra plugin command vless set_security --param mode=reality   --param hand
 не быть уже занятым CDN вашего сервера.
 
 Для `vless` в режиме `tls` сначала задайте отдельный домен, DNS-запись которого
-указывает на VPS, затем выполните `sudo hydra plugin enable vless`. Certificate preflight
-получит сертификат, а общий apply создаст XHTTP inbound, маршрут Caddy и
-заглушку. Поддерживаемые mode: `stream-up`, `packet-up`, `stream-one`.
-Команда вернёт успех только после проверки активного SNI-маршрута, загрузки
-сертификата в Caddy и локального TLS handshake с ALPN `h2`; при ошибке apply
-откатит состояние и runtime и вернёт точную причину.
+указывает на VPS, затем выполните `sudo hydra plugin enable vless`. Enable выпускает
+сертификат, создаёт XHTTP inbound, маршрут Caddy и заглушку и завершается
+успехом только если SNI-маршрут реально работает (локальный TLS-handshake с ALPN
+`h2`); при ошибке apply откатывает состояние и возвращает точную причину.
+Поддерживаемые mode: `stream-up`, `packet-up`, `stream-one`.
 
 `set_tuning` принимает любое подмножество параметров транспорта XHTTP и
 применяет их одной транзакцией; неизвестный параметр или значение вне диапазона
@@ -489,20 +459,16 @@ sudo hydra plugin command vless set_security --param mode=reality   --param hand
 sudo hydra plugin command naive set_uot --param uot=false
 ```
 
-Выключение убирает UoT-путь на сервере: Caddy собирается из upstream
-`forwardproxy` вместо форка `aUsernameWoW/forwardproxy`, а строки
-`passthrough_uot` в Caddyfile не появляется. Установленная сборка определяется
-пробой бинарника, поэтому настройка не может разойтись с фактическим файлом;
-при расхождении apply пересобирает бинарник одной транзакцией с backup
-предыдущего. Клиентские ссылки Shadowrocket при выключенном UoT не содержат
+Выключение убирает UoT-путь на сервере: Caddy пересобирается без UoT-кода
+(одной транзакцией, с backup предыдущего). Клиентские ссылки Shadowrocket теряют
 `uot` (`tfo` и `padding` остаются). UDP по TCP-профилю Naive в этом режиме не
 работает, QUIC-транспорт не затронут; клиенты с явным `udp_over_tcp` должны
 выключить его сами.
 
 ### Сайт-заглушка
 
-Протоколы с собственным доменом — `naive`, `anytls`, `trusttunnel`, `hysteria2`
-и `vless` — объявляют команду `set_decoy_theme`. Она выбирает сайт, который
+Протоколы с собственным доменом — `naive`, `anytls`, `trusttunnel`, `hysteria2`,
+`vless` и `mtproto_zig` — объявляют команду `set_decoy_theme`. Она выбирает сайт, который
 отдаётся на домене всем, кто не является клиентом:
 
 ```bash
@@ -513,13 +479,9 @@ sudo hydra plugin command hysteria2 set_decoy_theme --param theme=gallery
 `shop`, `apidocs`, `conference`, `gallery`, `cafe`.
 
 Содержимое сайта выводится из домена: название бренда, палитра, шрифт, тексты и
-favicon у двух установок не совпадают, а повторная генерация того же домена
-воспроизводима. Смена темы перегенерирует сайт и атомарно подменит каталог;
-обновление встроенного шаблона также автоматически перегенерирует сайт при
-следующем apply. Сайт, размещённый оператором вручную (без файла
-`.hydra-decoy.json`), не трогается. Встроенные заглушки старых версий, которые
-были созданы до появления marker, распознаются по содержимому и при следующем
-apply один раз мигрируют в управляемый формат с `.hydra-decoy.json`.
+favicon у двух установок не совпадают, повторная генерация того же домена
+воспроизводима. Смена темы перегенерирует сайт и атомарно подменит каталог.
+Сайт, размещённый оператором вручную (без файла `.hydra-decoy.json`), не трогается.
 
 Клиентские ссылки получают параметр `extra` с изменёнными client-visible
 значениями (`xPaddingBytes`, `scMaxEachPostBytes`, `scMaxBufferedPosts`,

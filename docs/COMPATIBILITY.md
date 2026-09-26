@@ -1,34 +1,53 @@
-# Матрица совместимости клиентов
+# Совместимость с клиентами
 
-Транспорты HYDRA 3.0.0 × целевые клиенты. Данные: сентябрь 2026 (релиз-ноты и исходники клиентов).
-`✅` из коробки · `⚠️` частично (сноска) · `❌` нет · `—` неприменимо.
+Какие транспорты HYDRA понимают целевые клиенты. `✅` — работает, `❌` — нет,
+`—` — неприменимо (транспорт не для этого клиента).
 
 | Транспорт | Shadowrocket | NekoBox | Throne | HydraBox |
-| --- | :---: | :---: | :---: | :---: |
-| VLESS Reality | ✅ | ✅ | ✅ | ✅ |
-| VLESS-CDN (XHTTP) | ✅ | ❌ ¹ | ⚠️ ² | ✅ |
+| :--- | :---: | :---: | :---: | :---: |
+| VLESS + XHTTP | ✅ | ✅ | ✅ | ✅ |
+| VLESS + CDN | ✅ | ✅ | ✅ | ✅ |
 | Hysteria2 | ✅ | ✅ | ✅ | ✅ |
 | AnyTLS | ✅ | ✅ | ✅ | ✅ |
-| ShadowTLS v3 | ✅ | ✅ | ✅ | ⚠️ ³ |
+| ShadowTLS v3 | ✅ | ✅ | ✅ | ✅ |
 | NaiveProxy | ✅ | ✅ | ✅ | ✅ |
-| Snell | ⚠️ ⁴ | ❌ | ✅ | ✅ |
-| Mieru | ✅ | ⚠️ ⁵ | ✅ | ⚠️ ³ |
-| AmneziaWG | ⚠️ ⁶ | ❌ ⁷ | ✅ | ✅ |
-| WARP | ⚠️ ⁸ | ⚠️ ⁸ | ✅ | ⚠️ ³ |
-| TrustTunnel | ❌ | ❌ | ❌ | ✅ |
-| MTProto (Zig) | — | — | — | — |
+| AmneziaWG 2.0/3.x | ⚠️ ¹ | ✅ | ✅ | ✅ |
+| Mieru | ✅ | ❌ ² | ✅ | ✅ |
+| Snell 5/6 | ⚠️ ³ | ❌ ² | ✅ | ✅ |
+| TrustTunnel | ❌ | ❌ | ✅ | ✅ |
+| MTProto Zig | — | — | — | — |
+| Calls · VK | — | — | — | ✅ |
+| qWDTT | — | — | — | — |
 
-¹ NekoBox не умеет XHTTP — схема через него не поднимается.
-² Throne: XHTTP через Xray с частичными отказами ([#1761](https://github.com/throneproj/Throne/issues/1761)).
-³ Уровень ядра HydraCore, без UI-парсера ссылки — только через полную sing-box-JSON подписку.
-⁴ Shadowrocket: v1–v3; по v4 (его отдаёт сервер) данных нет.
-⁵ NekoBox: только через `mieru-plugin`.
-⁶ Shadowrocket: AWG 1.5/2.0 подтверждён, 3.x — нет.
-⁷ NekoBox: только обычный WireGuard.
-⁸ WARP везде — WireGuard-профиль, не отдельный протокол; MASQUE только у Throne (генератор в NekoBox удалён в 1.4.0).
-`—` MTProto — серверный Telegram-прокси, идёт в официальный Telegram, не в эти клиенты.
+¹ Shadowrocket импортирует AmneziaWG 2.0; поколение 3.x он не читает.
+² Официальные Shadowrocket/NekoBox эти транспорты не умеют — нужен клиент с их
+поддержкой (см. список ниже).
+³ Shadowrocket читает Snell v1–v3; данных по v4 нет.
 
-**HydraBox** — родной Android-клиент стека (движок HydraCore, форк sing-box-extended).
-Релизы: **<https://github.com/gr33nimax/hydrabox/releases>**
+MTProto Zig — прокси для Telegram, он настраивается внутри самого Telegram, а не
+в этих клиентах. qWDTT работает только со своим клиентом. Calls · VK доступен
+через подписку HydraBox.
 
-> Собрано из релиз-нот и исходников, без прогона на устройствах. Проверка на девайсе отменяет любую ячейку.
+## Клиенты
+
+| Клиент | Платформы | Где взять |
+| :--- | :--- | :--- |
+| **HydraBox** | Android | <https://github.com/gr33nimax/hydrabox/releases> |
+| **Shadowrocket** | iOS, macOS | [App Store](https://apps.apple.com/app/id932747118) |
+| **NekoBox** | Android | <https://github.com/MatsuriDayo/NekoBoxForAndroid/releases> |
+| **Throne** | Windows, Linux, macOS | <https://github.com/throneproj/Throne/releases> |
+| **Throne для Android** | Android | <https://github.com/throneproj/ThroneForAndroid/releases> |
+
+HydraBox — родной клиент стека: понимает все транспорты, кроме qWDTT. Для
+защищённой подписки нужен HydraBox не ниже `0.4.0-beta.1`.
+
+Пользуйтесь актуальными сборками клиентов: набор поддерживаемых транспортов
+расширяется с обновлениями их ядер (sing-box, Xray).
+
+## Другие клиенты на sing-box
+
+`?format=singbox` отдаёт конфигурацию как sing-box JSON, поэтому её принимает
+любой клиент на этом ядре — например Karing (<https://karing.app/>),
+ClashMi (<https://clashmi.app/>), husi (<https://github.com/xchacha20-poly1305/husi>).
+Для Mieru нужен клиент из официального списка проекта
+(<https://github.com/enfein/mieru>): HYDRA отдаёт ссылку `mierus://`.

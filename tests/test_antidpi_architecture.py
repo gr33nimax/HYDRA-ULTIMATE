@@ -1,10 +1,13 @@
 """Architecture regression guards for the modular AntiDPI package."""
+
 from __future__ import annotations
 
 import ast
 from pathlib import Path
 
+from hydra.plugins.antidpi.lifecycle import AntiDPILifecycleMixin
 from hydra.plugins.antidpi.plugin import AntiDPIPlugin
+from hydra.plugins.base import HealthResult
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "hydra" / "plugins" / "antidpi"
@@ -35,8 +38,7 @@ def test_antidpi_modules_remain_bounded():
             function_lines = (node.end_lineno or node.lineno) - node.lineno + 1
             if function_lines > 150:
                 violations.append(
-                    f"{path.name}:{node.lineno} {node.name} "
-                    f"is {function_lines} lines",
+                    f"{path.name}:{node.lineno} {node.name} is {function_lines} lines",
                 )
     assert violations == [], "; ".join(violations)
 
@@ -61,12 +63,18 @@ def test_antidpi_facades_delegate_to_focused_modules():
         "state_store.py",
     }
     assert expected <= {path.name for path in PACKAGE.glob("*.py")}
-    assert len(
-        (PACKAGE / "plugin.py").read_text(encoding="utf-8").splitlines(),
-    ) < 350
-    assert len(
-        (PACKAGE / "selftest.py").read_text(encoding="utf-8").splitlines(),
-    ) <= 500
+    assert (
+        len(
+            (PACKAGE / "plugin.py").read_text(encoding="utf-8").splitlines(),
+        )
+        < 350
+    )
+    assert (
+        len(
+            (PACKAGE / "selftest.py").read_text(encoding="utf-8").splitlines(),
+        )
+        <= 500
+    )
 
 
 def test_antidpi_pure_model_has_no_host_or_persistence_dependencies():
@@ -125,8 +133,7 @@ def test_antidpi_has_one_canonical_remote_ip_parser():
         definitions.extend(
             (path.name, node.name)
             for node in ast.walk(tree)
-            if isinstance(node, ast.FunctionDef)
-            and node.name in {"remote_ip", "_remote_ip"}
+            if isinstance(node, ast.FunctionDef) and node.name in {"remote_ip", "_remote_ip"}
         )
     assert definitions == [("adapters.py", "remote_ip")]
 
@@ -150,3 +157,25 @@ def test_antidpi_management_capabilities_are_declared():
         "sync_runtime",
         "unban",
     )
+
+
+def test_healthcheck_calls_the_no_arg_healthcheck_implementation():
+    """`healthcheck()` must not pass arguments `_healthcheck` no longer accepts.
+
+    The mieru probe was removed from the runtime, and the caller kept its
+    `mieru_enabled` kwarg, so any no-state health query raised TypeError while
+    `hydra status` used the state-aware path and stayed green.
+    """
+
+    class Probe(AntiDPILifecycleMixin):
+        def __init__(self):
+            self.recorded = False
+
+        def _healthcheck(self):
+            self.recorded = True
+            return HealthResult(True, "", "ok", {})
+
+    probe = Probe()
+    result = probe.healthcheck()
+    assert probe.recorded
+    assert result.healthy is True

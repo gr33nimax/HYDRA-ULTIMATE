@@ -33,7 +33,7 @@ HYDRA — оркестратор многопротокольного прокс
 └──────────────────────────────┬─────────────────────────────┘
                                │ оркестратор транзакций
 ┌──────────────────────────────▼─────────────────────────────┐
-│ ConfigurationApplier · PluginLifecycle · UserLifecycle     │
+│    ConfigurationApplier · plugin_lifecycle · user_lifecycle│
 └──────────────────────────────┬─────────────────────────────┘
                                │ HostBackend
 ┌──────────────────────────────▼─────────────────────────────┐
@@ -44,19 +44,6 @@ HYDRA — оркестратор многопротокольного прокс
 Слой представления не должен напрямую управлять `systemd`, межсетевым экраном,
 файлами конфигурации или отдельными плагинами. Такие действия проходят через
 прикладные службы, оркестратор и `HostBackend`.
-
-Конкретные границы кода:
-
-- `hydra.ui.menus` — совместимый фасад TUI; контроллеры ядра, протоколов,
-  пользователей, Telegram, мониторинга и безопасности находятся в
-  `hydra.ui._menus`;
-- CLI, TUI, Telegram, фоновые workers и plugin-specific managers вызывают
-  `ApplicationService`, а не функции `core.orchestrator`;
-- `hydra.core.orchestrator` сохраняет старый публичный API, lock и журнал, но
-  делегирует работу в `services.configuration`, `services.plugin_lifecycle`,
-  `services.user_lifecycle` и `services.traffic_daemon_unit`;
-- `plugins.registry` — совместимый фасад над `PluginCatalog`, `PluginExecutor`
-  и единым `PluginInvoker`.
 
 ### Направление зависимостей
 
@@ -82,7 +69,7 @@ HYDRA — оркестратор многопротокольного прокс
    services   не импортируют ui и entrypoints
 ```
 
-Единственные исторические исключения — тонкие compatibility-фасады
+Единственные исключения — тонкие compatibility-фасады
 `hydra.core.orchestrator`, `hydra.plugins.registry` и `hydra.ui.menus`, а также
 явно разрешённый Telegram-entrypoint. Новый код на них опираться не должен.
 
@@ -95,18 +82,9 @@ Production-сборка приложения находится только в
 
 Тот же результат достижим вручную — Sing-Box, Caddy, certbot, nftables, ipset,
 Fail2ban, systemd-units и скрипты учёта трафика. Сложность возникает не при
-первичной настройке, а при каждом последующем изменении. Инварианты ниже
-существуют ради конкретных отказов эксплуатации.
-
-| Отказ ручной сборки | Механизм HYDRA |
-| :--- | :--- |
-| Сменили домен — state и Caddy разошлись, доменные транспорты молчат | Домены производны от state; расхождение SNI видно как блок `tls_mux` и лечится повторным `apply` |
-| Правка применилась наполовину: Sing-Box перезапущен, nftables нет | Каждый изменяющий шаг имеет снимок и rollback: возвращаются state, конфигурации, firewall и плагины |
-| Два QUIC-транспорта незаметно заняли UDP/443 | Конфликт слушателей отклоняется на preflight, а не проявляется отказом в рантайме |
-| Служба показана «включённой», хотя не работает | Желаемое и фактическое разделены: `hydra status` показывает оба и расхождение между ними |
-| Обновление сводится к `git pull`, старый код получает state нового формата | Транзакционный updater: сборка рядом с рабочей, read-only preflight, два уровня backup, атомарное переключение, откат |
-| Пользователь добавлен в один транспорт и забыт в остальных | Добавление пользователя — транзакция по всем включённым транспортам сразу |
-| Сканирование ловится разрозненно, ложные баны блокируют своих | Антискан банит только доказанный отказ протокола с реальным внешним IP или скан сайта-заглушки; шум наблюдается, но не банит |
+первичной настройке, а при каждом последующем изменении; механизмы против этих
+отказов описаны в §4 (транзакционный apply), §6 (state), §7 (секреты) и §8
+(release).
 
 ## 2. Пути входящего трафика
 
@@ -252,8 +230,9 @@ TLS-маршруты проверяются отдельно, потому чт�
 
 ## 4. Жизненный цикл применения
 
-Применение — это транзакция. Каждый шаг, меняющий систему, сначала сохраняет
-снимок, поэтому у отката всегда есть куда вернуться.
+Применение — это транзакция. Мутирующий шаг сначала сохраняет снимок, поэтому
+у отката есть куда вернуться. Исключение одно: применение сервиса учёта трафика
+(`manage_traffic_daemon`) снимка не имеет.
 
 ```text
    шаг                                        снимок     откат при сбое
@@ -275,12 +254,15 @@ TLS-маршруты проверяются отдельно, потому чт�
 ```
 
 Шаги 1–2 ничего не меняют на хосте, поэтому их сбой просто прерывает операцию.
-Начиная с шага 3 каждая мутация имеет снимок и rollback-callback с явным
-приоритетом.
+Начиная с шага 3 мутации имеют снимок и rollback-callback с явным приоритетом;
+исключение — шаг учёта трафика, у которого снимка нет.
 
 Откат обладает тремя свойствами, которые важнее скорости:
 
-- **обратный порядок** — сначала отменяется последнее применённое изменение;
+- **порядок по приоритету** — откаты выполняются по возрастанию
+  `(priority, sequence)` (`hydra/core/apply_transaction.py`): sing-box `10`,
+  nftables `20`, Caddy `25`, плагины `30 + n - index`, по умолчанию `100`. Это
+  порядок применения для ресурсов и обратный порядок для плагинов;
 - **продолжение после локальной ошибки** — если один шаг откатить не удалось,
   остальные всё равно откатываются, а исходная причина не теряется;
 - **однократность** — повторный запуск отката для той же транзакции невозможен.
@@ -395,16 +377,12 @@ TLS-маршруты проверяются отдельно, потому чт�
 Хранилище использует:
 
 - стабильный State Format v1 с envelope `core` / `features`;
-- прямой одноразовый импорт исторических schema 0–18 без цепочки миграций;
+- прямой импорт плоских schema 0–18 без цепочки миграций;
 - атомарную замену и синхронизацию каталогов;
 - безопасный отказ при неизвестной будущей версии формата;
 - резервные и изолированные копии при повреждении;
 - проверку данных до записи;
-- монотонную `revision` и optimistic concurrency: устаревшая запись желаемой
-  конфигурации отклоняется, а фоновые счётчики сохраняются атомарно без
-  увеличения ревизии;
-- откат желаемого состояния с сохранением текущей ревизии, чтобы rollback не мог
-  затереть более новое изменение другого процесса.
+- монотонную `revision` и optimistic concurrency (ниже).
 
 ### Стабильный формат и legacy import
 
@@ -422,9 +400,9 @@ features:  protocols, headless_creator, kernel, ...unknown
 load/save, поэтому разные ветки не вырезают чужой state. Формат повышается только
 при несовместимой смене самого envelope.
 
-Старые плоские schema 0–18 принимает один чистый importer и сразу создаёт State
-Format v1. Поштучных `vN → vN+1` функций больше нет. Запись результата выполняется
-атомарно; повторный импорт актуального документа ничего не переписывает.
+Плоские schema 0–18 принимает один importer и создаёт State Format v1 напрямую;
+поэтапных `vN → vN+1` функций нет. Запись результата атомарна; повторный импорт
+актуального документа ничего не переписывает.
 
 ### Конкурентная запись
 
@@ -450,10 +428,6 @@ Format v1. Поштучных `vN → vN+1` функций больше нет. 
 Rollback восстанавливает содержимое снимка, но сохраняет текущую ревизию —
 иначе откат мог бы затереть более новое изменение другого процесса.
 
-> [!WARNING]
-> Нельзя исправлять фактическое состояние ручной записью в state. Сначала нужно
-> выяснить причину рассинхронизации через `hydra status` и `hydra check`.
-
 Состав файлов состояния — в
 [REFERENCE.md](REFERENCE.md#состояние-в-varlibhydra).
 
@@ -462,8 +436,11 @@ Rollback восстанавливает содержимое снимка, но 
 - Все привилегированные команды проходят через `HostBackend` и имеют таймаут.
 - Конфигурации и state записываются атомарно; секреты не выдаются в безопасном
   публичном статусе.
-- Пароли, токены, UUID, PSK и приватные ключи заменяются на `[REDACTED]` в
-  публичном статусе, выводе CLI и диагностических архивах.
+- Пароли, токены, UUID, PSK и приватные ключи не выдаются в публичном статусе:
+  `public_user()` удаляет `credentials`, заменяет ключ HydraBox на производный
+  `kid` и урезает идентификаторы устройств до префикса. В логах и аргументах
+  команд значения маскируются маркером `<redacted>`, а редактор диагностических
+  архивов ставит `[REDACTED]`.
 - Backup-policy составляется из доверенных ресурсов ядра и деклараций
   `PluginMeta.backup_resources`. Backup содержит манифест, размер и SHA-256.
   Restore разрешает только точный файл либо рекурсивно принадлежащее дерево,
@@ -563,118 +540,49 @@ journalctl -u sing-box -u caddy-l4 --no-pager -n 100
 проверки: certbot на каждой попытке останавливает TLS-фронт, а Let's Encrypt
 ограничивает число неуспешных валидаций.
 
-VK Calls — application-owned use-case. `ApplicationService.calls` координирует
-lifecycle плагина `calls`, отдельный managed creator-пул и общий apply.
-Установка creator и credentials не принадлежат протоколу:
-`ApplicationService.headless_creator` владеет provider-neutral lifecycle и
-единственным VK cookie-файлом `/etc/hydra/cookiesvk/cookies-vk.json`. Через
-внедрённый `CallConfigSource` плагин читает только готовность точного Hydracore
-контракта и join-links managed-пула. Профиль admin joiner остаётся
-application-owned ручным артефактом. Отдельно плагин владеет
-remote-safe joiner-проекцией: при включённом Calls она попадает в Hydra
-Subscription v2 как изолированный `call` outbound с `platform=vk` и
-`network.outbound`, но без серверных cookies. Пул join-links обязателен и
-считается секретом; неполная проекция отклоняет всю выдачу fail-closed.
-Клиентский joiner
-не становится источником server-side traffic accounting.
+### Creator: Calls и qWDTT
 
-Calls имеет только режим `vk_parasite`. До любых host-мутаций service требует
-desired `kernel.provider=hydracore`, exact identity
-`io.hydrabox.hydracore`, role `vps`, server feature
-`call_vk_parasite_server=true` и `protocols.call_modes=["vk_parasite"]`;
-stock core, client artifact, capability aliases и `p2p`
-отклоняются fail-closed. Затем service создаёт отдельную managed-группу 1–4
-комнат. Plugin возвращает server inbound с
-`listen/listen_port`, общим `obfs_password`, per-user credentials и bounded
-session/worker/handshake limits; cookies и join-links в server config
-отсутствуют. Per-user Hydra v2 projection содержит `server/server_port`,
-`join_links`, user/password и общий obfs key и требует core
-feature `call_vk_parasite`; singular `join_link` не генерируется в outbound.
-`server` берётся из persisted `calls.config.public_endpoint`, который
-материализуется при enable/reinstall из явного `network.server_ip` либо
-наблюдаемого публичного IP VPS и никогда не наследует transport SNI.
-Admin DTO сохраняет первый link под старым именем только как compatibility alias.
-Клиент сам выбирает поддерживаемую topology; серверный
-`max_workers_per_session` допускает только 4 или 16. IPv4 listener по
-умолчанию использует свободный `56002/udp`; совпадение с внешними UDP-портами
-enabled transport отклоняется до apply (в частности, qWDTT сохраняет
-`56001/udp` для WireGuard).
+Calls и qWDTT — два потребителя одного creator'а. Каждый владеет своим desired
+state, пулом blue/green-юнитов и откатом; lifecycle одного не затрагивает другой.
 
-Managed Calls использует собственные
-`hydra-headless-creator-vk-calls@{a,b}-N`, поэтому lifecycle qWDTT его не
-затрагивает. Новое поколение создаётся до metadata commit, затем общий apply
-проверяет server inbound, и только finalize останавливает прежние units. Ошибка
-до finalize откатывает pool, state и Sing-Box runtime.
+Инварианты:
 
-Оба потребителя используют `CreatorSessionManager`. Запрос содержит provider,
-consumer, lifetime и количество сессий; manager валидирует его и делегирует
-provider driver. Calls и qWDTT запрашивают изолированные `managed`-группы и
-самостоятельно владеют desired state,
-публикацией артефакта, commit/finalize и rollback. Добавление WB Stream требует
-нового driver и consumer use-case, но не ветвления в Calls или qWDTT.
-qWDTT-транзакции дополнительно сериализуются между TUI и Sync Agent через
-`/run/lock/hydra-creator.lock`.
+- **Calls включается fail-closed.** До любых изменений хоста проверяются
+  `kernel.provider=hydracore`, identity `io.hydrabox.hydracore`, role `vps`,
+  feature `call_vk_parasite` и режим `vk_parasite`. stock core, client artifact
+  и `p2p` отклоняются.
+- **Откат пула.** Новое поколение комнат создаётся до commit; прежнее
+  останавливается только на finalize. Ошибка до finalize возвращает pool, state
+  и Sing-Box runtime. Для qWDTT то же даёт действие «Создать комнаты»: snapshot,
+  новый пул, снятие старого; failure восстанавливает snapshot.
+- **Порты.** Calls слушает `56002/udp`, qWDTT — `56001/udp`; конфликт с внешним
+  UDP-портом включённого транспорта отклоняется до apply.
+- **Секреты.** VK cookies (`/etc/hydra/cookiesvk/cookies-vk.json`), join-links и
+  хеши не хранятся в state и не попадают в status/apply journal. qWDTT cookies не
+  использует. Log-проекции редактируют links; upstream Sing-Box пишет join-links
+  на уровне INFO, поэтому сырой journald остаётся чувствительным.
+- **Подписки.** При включённом Calls в Hydra Subscription v2 попадает
+  изолированный `call`-outbound без серверных cookies; неполный пул отклоняет
+  выдачу fail-closed. qWDTT master-ссылка — административный ручной артефакт,
+  общая для всех пользователей, и в subscription API не попадает.
 
-qWDTT использует того же standalone creator. Два поколения
-`hydra-headless-creator-vk@{a,b}-N` позволяют создать от 1 до 16 новых комнат, пока
-старые продолжают обслуживать master-ссылку. Только после атомарной публикации
-WDTT-артефакта и сохранения state старое поколение останавливается. WDTT
-объявляет лишь action преобразования упорядоченного списка уникальных хэшей в
-`qwdtt://` и не содержит
-lifecycle, timer или systemd creator. Owner-neutral maintenance-фасад объединяет
-plugin tasks и `headless_creator.consumers.qwdtt`; его читают Sync Agent и TUI.
-
-Legacy importer извлекает прежний creator desired state и отделяет qWDTT
-consumer state в `headless_creator.consumers.qwdtt` от provider configuration.
-Импорт не меняет host runtime. Явное действие
-`Создать комнаты` в qWDTT-подменю Creator делает snapshot старых units/файлов,
-устанавливает новый пул и только затем удаляет legacy creator; failure
-восстанавливает snapshot. Общие VK cookies при этом не удаляются.
-
-Legacy Calls importer материализует qWDTT port defaults и нормализует config в
-актуальный `vk_parasite`; несовместимый enabled Calls (включая stock core)
-выключается без удаления installed state. Число workers сохраняется, если оно
-поддерживается текущим контрактом. Transport compatibility не хранится в state:
-kernel switch и Calls runtime проверяют capabilities фактического Hydracore.
-Повторная установка после switch создаёт новый managed-пул.
-`ApplicationService.kernel` — единственный use-case замены core:
-trusted release metadata и обязательный SHA-256 digest проверяются до ELF,
-identity/capabilities и active-config probe; затем binary меняется атомарно,
-служба проходит bounded health, и только после этого сохраняется state. Ошибка
-копирования, старта или persistence восстанавливает прежний binary и состояние
-службы. Legacy stock installer не перезаписывает выбранный Hydracore.
-
-Cookies и join-links не хранятся в state и не попадают в status/apply journal.
-Лог-проекции HYDRA редактируют VK и qWDTT links. Upstream Sing-Box выводит
-join-links на уровне INFO, поэтому сырой journald остаётся секретным источником.
-
-`PluginMeta.manual_artifacts_query` отделяет административные ручные артефакты
-от per-user подписок. qWDTT объявляет через него единственную master-ссылку для
-экрана «Ручные конфиги», сохраняя `subscription_enabled=False`: ссылка содержит
-главный пароль, является общей и не должна попадать в subscription API.
-`hydra_v2_subscription_enabled` также остаётся `False`, поэтому Hydra v2
-renderer не вызывает qWDTT client hook даже при включённом протоколе. Native
-Calls задаёт обратную комбинацию: legacy subscriptions выключены, а только
-Hydra v2 projection включена.
+Замена ядра принадлежит `ApplicationService.kernel` и описана в
+[CLI.md](CLI.md) («Переключение ядра»): проверка подписи и совместимости,
+атомарная замена, откат при любом сбое. Transport compatibility в state не
+хранится — её проверяют capabilities фактического ядра перед apply.
 
 ## 10. Границы текущей версии
 
-REST API и web-панель не входят в 2.5.5. Telegram Admin Bot является
-административным адаптером: он использует тот же `ApplicationService`, выполняет
+REST API и web-панель не входят в 3.0.0. Единственный административный адаптер —
+Telegram Admin Bot: он использует тот же `ApplicationService`, выполняет
 блокирующие операции вне event loop и не дублирует lifecycle-логику плагинов.
 
-Фундамент для web-панели уже отделён от TUI, но полноценный аналог 3x-ui требует
-самостоятельного HTTP-адаптера: безопасных DTO без секретов, аутентификации,
-RBAC, CSRF-защиты, audit log и явного CRUD для пользовательских inbound'ов. Эти
-функции должны добавляться поверх application services, не возвращая
-бизнес-логику в контроллеры.
-
-Остальные границы версии:
+Границы версии:
 
 - CRUD произвольных пользовательских inbound'ов не входит в plugin API;
 - UDP/443 не мультиплексируется — это ограничение сетевой модели, а не
   реализации: прямым владельцем порта может быть только один QUIC-транспорт;
-- матрица детекторов AntiScan ограничена доказанными отказами: сейчас это Snell и сканы decoy-сайтов, остальные протоколы в неё не входят (см. [ANTIDPI.md](ANTIDPI.md));
+- автобан AntiScan срабатывает только на сканы сайтов-заглушек (см. [ANTIDPI.md](ANTIDPI.md));
 - поддерживаются только Ubuntu и Debian с systemd.
 
 Новый компонент может считаться частью стабильной архитектуры только когда он

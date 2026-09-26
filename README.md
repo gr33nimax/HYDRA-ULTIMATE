@@ -7,7 +7,7 @@
 
 **Оркестратор многопротокольных прокси-серверов на базе Sing-Box**
 
-[![Version](https://img.shields.io/badge/version-2.5.5-blue.svg?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg?style=flat-square)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-green.svg?style=flat-square)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg?style=flat-square)](https://ubuntu.com/)
@@ -23,50 +23,39 @@
 
 ---
 
-Одна VPS, одна команда установки — и одиннадцать транспортов, маршрутизация, DNS,
+Одна VPS, одна команда установки — и тринадцать транспортов, маршрутизация, DNS,
 защитные контуры, подписки, учёт трафика и интерфейсы TUI/CLI/Telegram работают
 как единый управляемый контур.
 
-Конфигурации служб вручную не редактируются: пользователи, протоколы и сеть
-описаны в одном `state.json`, из которого генерируются конфигурации Sing-Box,
-Caddy L4 и nftables. Применение — транзакционное, с проверкой и автоматическим
-откатом.
+Пользователи, протоколы и сеть описаны в одном `state.json`, а конфигурации
+Sing-Box, Caddy L4 и nftables — производная от него. Применение транзакционное:
+с проверкой, снимком и автоматическим откатом.
 
 ```text
-  вход                    обработка                        выход
-  ────────────────        ─────────────────────────        ──────────────
+   вход                         обработка              выход
+   ───────────────────────      ─────────────          ──────────────────
+   TCP/443 ─▶ Caddy L4 · SNI ─▶ транспорты  ─┐
+                                             ├─▶ Sing-Box ─▶ интернет, DNS,
+   UDP     ─▶ QUIC, AWG, qWDTT, VK Calls  ───┘   маршруты     WARP
 
-  TCP/443 ──────────▶  Caddy L4 · разбор SNI
-                         ├─▶ AnyTLS            ─┐
-                         ├─▶ TrustTunnel       ─┤
-                         ├─▶ ShadowTLS         ─┤
-                         ├─▶ NaiveProxy        ─┤
-                         ├─▶ VLESS + XHTTP     ─┤
-                         └─▶ сайт-заглушка      │
-                                                ├─▶ Sing-Box ─▶ интернет
-  UDP/443 ──────────▶  один QUIC-транспорт     ─┤   маршруты     напрямую
-  8443/udp ─────────▶  Hysteria2               ─┤   DNS          или через
-  51820/udp ────────▶  AmneziaWG ─▶ ядро       ─┤   исходящие    WARP
-  56000/udp ────────▶  qWDTT                   ─┘
-
-  поверх всего:  AntiScan · Honeypot · Fail2ban · IPBan
-                 учёт трафика · подписки · Telegram-бот
+   поверх всего: AntiScan · Honeypot · Fail2ban · IPBan
+                 подписки · учёт трафика · Telegram-бот
 ```
 
 <table>
   <tbody>
-    <tr><th scope="row">Транспорты</th><td>12</td></tr>
+    <tr><th scope="row">Транспорты</th><td>13</td></tr>
     <tr><th scope="row">Модули сети и защиты</th><td>6</td></tr>
     <tr><th scope="row">Интерфейсы</th><td>TUI, headless JSON-CLI, Telegram Admin Bot</td></tr>
-    <tr><th scope="row">Платформа</th><td>Ubuntu 20.04+ / Debian 11+</td></tr>
+    <tr><th scope="row">Платформа</th><td>Ubuntu 22.04+ / Debian 12+</td></tr>
     <tr><th scope="row">Python</th><td>3.10 – 3.13</td></tr>
   </tbody>
 </table>
 
 > [!IMPORTANT]
-> `2.5.5` — текущая версия ветки `dev`. Это канал разработки и
+> `3.0.0` — текущая версия ветки `dev`. Это канал разработки и
 > активного бета-тестирования.
-> Для рабочей эксплуатации используйте чистый Ubuntu 20.04+ или Debian 11+ и
+> Для рабочей эксплуатации используйте чистый Ubuntu 22.04+ или Debian 12+ и
 > обязательно настройте резервное копирование.
 
 ## Что вы получаете
@@ -74,114 +63,64 @@ Caddy L4 и nftables. Применение — транзакционное, с 
 - 🧩 **Один источник истины.** Пользователи, протоколы и сеть живут в
   `state.json`; конфигурации служб — производная от него, а не место для ручных
   правок.
-- 🔄 **Изменения без страха.** Каждый шаг применения имеет снимок и откат: при
-  сбое возвращаются state, конфигурации, firewall и плагины. Повторный `apply` —
-  штатный сценарий, а не риск.
+- 🔄 **Изменения без страха.** Каждый шаг применения имеет снимок и откат; при
+  сбое возвращаются state, конфигурации, firewall и плагины.
 - 🔐 **TLS под контролем.** Сертификаты проверяются на домен, срок и соответствие
-  ключу до применения; Caddy не получает маршрут без полной проверенной пары.
+  ключу до применения.
 - 🛰 **Порт 443 на несколько транспортов.** Caddy L4 разбирает SNI и отдаёт
   соединение владельцу домена; конфликт слушателей отклоняется до применения.
 - 👥 **Пользователь — одна транзакция.** Добавление, блокировка, лимиты трафика и
   сроки действуют сразу во всех включённых транспортах.
-- 🔐 **Защищённая подписка HydraBox.** `?format=hydrabox` отдаёт только flattened
-  JWE Hydra Subscription v2 (`dir` + `A256GCM`) с device binding; ключ находится
-  исключительно во fragment `#hydra-key=…`. Каждый транспорт изолирован в
-  собственном resource, а включённый VK Calls публикует готовый joiner-профиль.
+- 📦 **Подписки с изоляцией транспортов.** Клиентские ссылки и профили выдаёт
+  сервер подписок; защищённый формат HydraBox публикует каждый транспорт
+  отдельным ресурсом.
 - 🤖 **Управление откуда угодно.** TUI для настройки, `--json` CLI для cron и
   автоматизации, Telegram-бот для повседневного администрирования.
 - 🛡 **Защитный контур из коробки.** AntiScan, Honeypot, Fail2ban и IPBan.
-  AntiScan банит только доказанные отказы протоколов и сканы сайтов-заглушек,
-  поэтому не заваливает оператора шумом и не банит по догадке.
-- 🧠 **Умеренные ресурсы по умолчанию.** Установка ограничивает рост journald,
-  уменьшает запас heap Sing-Box без жёсткого memory cap и не требует отдельного
-  профиля для небольшой VPS.
+- 🧠 **Умеренные ресурсы по умолчанию.** Установка ограничивает рост journald и
+  уменьшает запас heap Sing-Box без жёсткого memory cap.
 - ⬆️ **Обновление как транзакция.** Новый release собирается рядом с рабочим,
-  проходит preflight, два уровня backup и атомарное переключение с откатом.
+  проходит preflight и переключается атомарно с откатом.
 
-Почему это устроено именно так и какие отказы ручной сборки устраняет —
-[ARCHITECTURE.md](docs/ARCHITECTURE.md#какие-отказы-устраняет-модель).
+Почему это устроено именно так — [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Протоколы и модули
 
 Каждый модуль — плагин: он декларативно объявляет возможности, зависимости,
 конфликты и backup-ресурсы. Инвентарь — `hydra plugin list`.
 
-| Транспорт | Порт по умолчанию | Тип |
-| :--- | :--- | :--- |
-| **AmneziaWG 2.0 / 3.0 / 3.1** | `51820/udp`, `51821/udp` | WireGuard: туннель обслуживает ядро |
-| **AnyTLS** | `443/tcp` | обфусцированный TLS |
-| **TrustTunnel** | `443/tcp`, `443/udp` | TLS, режимы TCP и QUIC |
-| **ShadowTLS** | `443/tcp` | ShadowTLS v3 + Trojan detour |
-| **NaiveProxy** | `443/tcp`, `443/udp` | HTTP/2 forward-proxy, UoT по настройке |
-| **Hysteria2** | `8443/udp` | QUIC + Salamander |
-| **VLESS + XHTTP** | `443/tcp` | XHTTP через Hydracore и Caddy L4 |
-| **Mieru** | `2012–2022/tcp` | обфусцированный mTLS |
-| **Snell 5 / 6** | `32000–32999/tcp` | TCP/UDP-прокси Hydracore |
-| **MTProto Zig** | `443/tcp` | FakeTLS MTProxy (Caddy L4 по SNI) |
-| **Calls · VK** | `56002/udp` | Native Hydracore `call` в режиме VK-parasite |
-| **qWDTT** | `56000/udp`, `56001/udp` | WireGuard поверх TURN |
+| Транспорт | Тип |
+| :--- | :--- |
+| **AmneziaWG 2.0 / 3.0 / 3.1** | WireGuard: туннель обслуживает ядро |
+| **AnyTLS** | обфусцированный TLS |
+| **TrustTunnel** | TLS, режимы TCP и QUIC |
+| **ShadowTLS** | ShadowTLS v3 + Trojan detour |
+| **NaiveProxy** | HTTP/2 forward-proxy, UoT по настройке |
+| **Hysteria2** | QUIC + Salamander |
+| **VLESS + XHTTP** | XHTTP через Hydracore и Caddy L4 |
+| **VLESS + CDN** | XHTTP через внешний CDN |
+| **Mieru** | обфусцированный mTLS |
+| **Snell 5 / 6** | TCP/UDP-прокси Hydracore |
+| **MTProto Zig** | FakeTLS MTProxy |
+| **Calls · VK** | Native Hydracore `call` в режиме VK-parasite |
+| **qWDTT** | WireGuard поверх TURN |
 
-Какие из этих транспортов понимают целевые клиенты (Shadowrocket, NekoBox,
-Throne, HydraBox) — [матрица совместимости](docs/COMPATIBILITY.md).
-
-Транспорт **Calls · VK** маскирует трафик под VK-звонки: только Hydracore в режиме
-`vk_parasite`, где аутентифицированный поток каждого пользователя распределяется по пулу
-VK-комнат. Настройка, лимиты и per-user профили — в меню `Calls · VK`; контракт
-ядра, устройство пула и формат подписки — в [REFERENCE.md](docs/REFERENCE.md).
-
-HYDRA работает только на Hydracore. Канал ядра — явный switch (`stable` по
-умолчанию, `debug` — осознанно); обновление проверяет бинарник и
-откатывается при сбое.
-
-```bash
-hydra kernel status
-sudo hydra kernel switch hydracore --channel debug --force
-```
-
-Creator принадлежит `Calls · VK`: VK cookies импортируются из меню Calls в
-`/etc/hydra/cookiesvk/cookies-vk.json` (`0600`), пул VK-комнат можно пересоздать
-вручную или по расписанию. qWDTT не использует cookies и владеет только своим
-сервером и `qwdtt://`-артефактом.
-
-> [!WARNING]
-> VK join-links и полный клиентский профиль — shared secret. HYDRA редактирует
-> ссылку в своих log-проекциях, но upstream Sing-Box сейчас пишет её в INFO
-> journald; доступ к сырому `journalctl -u sing-box` должен быть ограничен.
-
-**Сеть:** DNSCrypt (шифрованный резолвер) · WARP (выборочная маршрутизация через
-Cloudflare; в TUI можно найти и выбрать MASQUE-адрес с этой VPS через отдельно
-установленный warpscout, с откатом при неудачном подключении).
-**Защита:** AntiScan · Fail2ban · Honeypot · IPBan.
-**Ядро:** учёт трафика, лимиты и сроки пользователей ведёт служба
-`hydra-traffic-daemon`.
-
-У доменных транспортов есть сайт-заглушка: 11 тем на выбор — от блога и
-документации до магазина и фотогалереи, — а бренд, палитра и тексты выводятся из
-домена, поэтому две установки не отдают одинаковый сайт. Обновлённый встроенный
-шаблон публикуется атомарно при следующем apply, а вручную размещённый сайт не
-перезаписывается. Клиентские ссылки и профили выдаются через сервер подписок и
-TUI. Для AmneziaWG 3.0/3.1 HYDRA публикует source-proven `wg://` для Throne
-`1.3.0-beta.3` и официальный Qt-compressed `vpn://` для Amnezia; оба переносят
-полный набор директив поколения. Sing-Box Extended/HydraBox получает
-3.0-проекцию и 3.1-проекцию, когда установлено ядро HydraCore
-`v1.14.0-extended-2.7.1-hydracore.12` или новее (на старом ядре 3.1
-отклоняется с причиной, называющей нужный релиз); NekoBox `sn://awg`
-остаётся отключённым fail-closed.
-Полная карта модулей, портов, служб и файлов —
-[REFERENCE.md](docs/REFERENCE.md).
+Порты, владельцы, службы, пути и файлы состояния —
+[REFERENCE.md](docs/REFERENCE.md). Какие транспорты понимают целевые клиенты
+(Shadowrocket, NekoBox, Throne, HydraBox) — [COMPATIBILITY.md](docs/COMPATIBILITY.md).
+Операции протоколов, параметры и примеры — [CLI.md](docs/CLI.md#плагины).
 
 ## Установка
 
-Нужны Ubuntu 22.04+ или Debian 12+ с systemd, Python 3.10+, от 512 МБ RAM и 2 ГБ
-диска, внешний IPv4 и права `root`. Debian 11 и Ubuntu 20.04 не подходят: в них
-Python 3.9 и 3.8, а приложение требует 3.10+ (установщик скажет об этом сразу).
+Нужны Ubuntu 22.04+ или Debian 12+ с systemd, Python 3.10+ и права `root`.
+Требования к ресурсам VPS и состав установки — [UPGRADE.md](docs/UPGRADE.md).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo env HYDRA_REF=dev bash
 ```
 
-Установщик готовит зависимости, Hydracore VPS debug, изолированное
-Python-окружение и команду `hydra`. Caddy L4 и конкретные протоколы включаются
+Установщик ставит зависимости, проверенное ядро Hydracore и изолированное
+Python-окружение с командой `hydra`. Caddy L4 и конкретные протоколы включаются
 позже — только те, что вам нужны.
 
 Дальше:
@@ -207,17 +146,10 @@ hydra check                # валидация и предпросмотр из
 curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/updater.sh | sudo env HYDRA_REF=dev bash
 ```
 
-Updater фиксирует точный commit ветки, собирает новую версию и `.venv` отдельно
-от рабочей, выполняет read-only preflight, останавливает только службы HYDRA,
-сохраняет проверенный backup и исходный state, при необходимости импортирует
-legacy state в стабильный формат, переключает release и проверяет запуск. При
-любой ошибке state, код, wrapper и ранее активные
-службы восстанавливаются автоматически. Ход операции выводится нумерованными
-этапами с понятными русскими ошибками; итоговая сводка показывает переход,
-снимок отката и путь к подробному логу.
-
-Требования, состав снимка отката и ручное восстановление —
-[UPGRADE.md](docs/UPGRADE.md).
+Updater фиксирует точный commit ветки, собирает новую версию отдельно от рабочей,
+выполняет read-only preflight и переключает release атомарно; при любой ошибке
+state, код и службы восстанавливаются. Состав снимка отката и ручное
+восстановление — [UPGRADE.md](docs/UPGRADE.md).
 
 ## Документация
 
@@ -229,29 +161,10 @@ legacy state в стабильный формат, переключает releas
 | [REFERENCE.md](docs/REFERENCE.md) | Модули, службы, пути, порты, файлы состояния |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Слои, инварианты, транзакции, state |
 | [ANTIDPI.md](docs/ANTIDPI.md) | Обнаружение probes и политики банов |
+| [COMPATIBILITY.md](docs/COMPATIBILITY.md) | Матрица «транспорт × клиент» |
 | [TELEGRAM_BOT.md](docs/TELEGRAM_BOT.md) | Административный бот и уведомления |
 | [PLUGIN_DEVELOPMENT.md](docs/PLUGIN_DEVELOPMENT.md) | Добавление плагинов |
 | [CHANGELOG.md](CHANGELOG.md) | История версий |
-
-## Структура проекта
-
-```text
-HYDRA-ULTIMATE/
-├── main.py                 # точка входа в интерактивный TUI
-├── bootstrap.sh            # установка и подготовка новой VPS
-├── updater.sh              # однокомандный запуск обновления
-├── upgrade.sh              # транзакционное ядро updater
-├── verify.py               # локальная проверка: compile, lint, тесты
-├── hydra/
-│   ├── contracts/          # нейтральные типизированные контракты
-│   ├── core/               # state, Sing-Box, nftables, Caddy L4, host
-│   ├── plugins/            # транспортные, сетевые и защитные плагины
-│   ├── services/           # use-cases, учёт, подписки, синхронизация
-│   ├── ui/                 # TUI и модули представления
-│   └── entrypoints/        # тонкие адаптеры фоновых служб
-├── docs/                   # техническая документация
-└── tests/                  # автоматические проверки
-```
 
 ## Разработка
 
@@ -261,8 +174,9 @@ python verify.py     # compile + lint + полный pytest
 
 Тесты удерживают не только поведение, но и архитектуру: направление
 зависимостей, отсутствие циклов, лимиты размеров модулей и запрет обхода
-`ApplicationService` и `HostBackend`. Правила расширения и обязательный набор
-проверок — [PLUGIN_DEVELOPMENT.md](docs/PLUGIN_DEVELOPMENT.md).
+`ApplicationService` и `HostBackend`. Карта каталогов, порядок применения и
+правила расширения — [AGENT_PLAYBOOK.md](docs/AGENT_PLAYBOOK.md) и
+[PLUGIN_DEVELOPMENT.md](docs/PLUGIN_DEVELOPMENT.md).
 
 ## Поддержать проект
 
