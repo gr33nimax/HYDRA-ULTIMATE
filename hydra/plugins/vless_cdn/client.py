@@ -26,6 +26,8 @@ from hydra.plugins.vless_cdn.profile import MODE, link_extra, xhttp_transport
 
 PUBLIC_PORT = 443
 
+CLIENT_FINGERPRINT = "chrome"
+
 # Честная граница артефакта: профиль sing-box самодостаточен, а share-ссылка несёт
 # XHTTP-настройки в блоке `extra`, который понимают клиенты Xray-семейства. Клиент,
 # игнорирующий `extra`, соберёт другую разметку кадров и не подключится.
@@ -35,11 +37,12 @@ SHARE_LINK_NOTE = (
 
 
 def tls_block(cdn_domain: str) -> dict[str, Any]:
-    """TLS для клиента: имя и ALPN публичного домена, отпечаток не навязываем."""
+    """TLS для клиента: публичное имя, h2 и отпечаток Chrome."""
     return {
         "enabled": True,
         "server_name": cdn_domain,
         "alpn": ["h2"],
+        "utls": {"enabled": True, "fingerprint": CLIENT_FINGERPRINT},
     }
 
 
@@ -91,6 +94,7 @@ def share_link(user: User, config: Mapping[str, object]) -> str:
         "security": "tls",
         "sni": cdn,
         "alpn": "h2",
+        "fp": CLIENT_FINGERPRINT,
         "type": "xhttp",
         "host": cdn,
         "path": path,

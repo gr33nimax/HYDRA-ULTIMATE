@@ -51,10 +51,17 @@ def test_profile_dials_the_cdn_and_never_the_origin():
     assert connection["server_port"] == PUBLIC_PORT == 443
     assert connection["uuid"] == USER.uuid
     assert "tls" in connection and connection["tls"]["server_name"] == CDN
+    assert connection["tls"]["utls"] == {"enabled": True, "fingerprint": "chrome"}
 
     text = json.dumps(document)
     assert ORIGIN not in text, "адрес origin не должен попадать в клиентский профиль"
     assert str(config["encryption_private_key"]) not in text, "приватный ключ остаётся на сервере"
+
+
+def test_hydrabox_profile_sets_packet_upload_interval():
+    connection = json.loads(profile(USER, _config()))["outbounds"][0]
+
+    assert connection["transport"]["sc_min_posts_interval_ms"] == "50-150"
 
 
 def test_client_and_server_agree_on_every_shared_setting():
@@ -97,6 +104,7 @@ def test_share_link_carries_every_setting_it_claims():
     assert query["host"] == CDN
     assert query["sni"] == CDN
     assert query["alpn"] == "h2"
+    assert query["fp"] == "chrome"
     assert query["security"] == "tls"
     assert query["encryption"] == client_encryption_value(str(config["encryption_public_key"]))
 

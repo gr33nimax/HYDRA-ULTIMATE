@@ -87,6 +87,7 @@ def xhttp_transport(path: str, host: str, *, client: bool) -> dict[str, Any]:
     if client:
         # Клиент выбирает метод выгрузки и держит мультиплексирование соединений.
         transport["uplink_http_method"] = UPLINK_METHOD
+        transport["sc_min_posts_interval_ms"] = SC_MIN_POSTS_INTERVAL_MS
         transport["xmux"] = dict(XMUX)
         return transport
 
