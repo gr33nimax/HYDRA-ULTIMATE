@@ -328,7 +328,7 @@ Metadata-declared extension API:
 ```bash
 sudo hydra plugin command hysteria2 set_port --param port=8443
 sudo hydra plugin command vless set_domain --param domain=xhttp.example.com
-sudo hydra plugin command vless set_path --param path=/xhttp
+sudo hydra plugin command vless set_path --param path=/api/v1/session
 sudo hydra plugin command vless set_mode --param mode=stream-up
 sudo hydra plugin command vless set_preset --param preset=low_latency
 sudo hydra plugin command vless set_tuning --param padding=500-2000 \
@@ -428,7 +428,7 @@ sudo hydra plugin command vless set_security --param mode=reality   --param hand
 | :--- | :--- | :--- |
 | `padding` | диапазон байт `N` или `N-M`, 0–65535; `0` отключает паддинг | `100-1000` |
 | `max_post_bytes` | размер upload-пакета, 4096–16777216 | `1000000` |
-| `max_buffered_posts` | глубина буфера upload-пакетов, 1–1024 | `30` |
+| `max_buffered_posts` | глубина буфера upload-пакетов (серверный), 1–1024 | `30` |
 | `stream_up_secs` | длительность stream-up, диапазон секунд 0–3600 | `20-80` |
 | `max_header_bytes` | лимит заголовков запроса на сервере, 1024–65536 | `8192` |
 | `no_sse_header` | не отправлять SSE-заголовок (CDN с буферизацией) | `false` |
@@ -445,8 +445,8 @@ sudo hydra plugin command vless set_security --param mode=reality   --param hand
 не совпадает ни с одним профилем). Пользовательские заголовки не влияют на
 определение профиля.
 
-`utls_fingerprint` задаёт TLS-отпечаток клиента: `none` (по умолчанию — выбор
-остаётся за клиентом), `chrome`, `firefox`, `safari`, `edge`, `ios`, `android`,
+`utls_fingerprint` задаёт TLS-отпечаток клиента: `chrome` (по умолчанию),
+`none` (выбор остаётся за клиентом), `firefox`, `safari`, `edge`, `ios`, `android`,
 `random`, `randomized`. Значение попадает в клиентский профиль как блок
 `tls.utls` и в ссылку как `fp=`; сервер его не использует.
 
@@ -484,9 +484,10 @@ favicon у двух установок не совпадают, повторна
 Сайт, размещённый оператором вручную (без файла `.hydra-decoy.json`), не трогается.
 
 Клиентские ссылки получают параметр `extra` с изменёнными client-visible
-значениями (`xPaddingBytes`, `scMaxEachPostBytes`, `scMaxBufferedPosts`,
-`scStreamUpServerSecs`, `noSSEHeader`, `headers`); при значениях по умолчанию
-ссылка остаётся прежней. Серверный `max_header_bytes` в ссылку не попадает.
+значениями (`xPaddingBytes`, `scMaxEachPostBytes`, `scStreamUpServerSecs`,
+`noSSEHeader`, `headers`); при значениях по умолчанию
+ссылка остаётся прежней. Серверные `max_buffered_posts` и `max_header_bytes`
+ни в ссылку, ни в клиентский профиль не попадают.
 
 `plugins` является алиасом `plugin`.
 
