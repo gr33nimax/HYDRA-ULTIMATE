@@ -302,10 +302,16 @@ class VlessCdnPlugin(BasePlugin):
     # ═════════════════════════════════════════════════════════════════════
 
     def status(self, state: PluginStateAccess | None = None) -> PluginStatus:
+        # «Installed» for this protocol means the kernel is present — the same
+        # condition install() checks. Reading a separate persisted flag let it
+        # drift: an enabled, working inbound reported installed=False and
+        # produced a permanent drift=missing that `apply` cannot clear.
+        from hydra.core.singbox import is_installed
+
         plugin_state = state.protocols.get(PROTOCOL_NAME) if state else None
         config = plugin_state.config if plugin_state else {}
         return PluginStatus(
-            installed=bool(plugin_state and plugin_state.installed),
+            installed=is_installed(),
             enabled=bool(plugin_state and plugin_state.enabled),
             running=bool(plugin_state and plugin_state.enabled and self._ready(config)),
             info=dict(self.get_summary(state)) if state else {},

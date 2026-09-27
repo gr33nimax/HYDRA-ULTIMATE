@@ -170,6 +170,21 @@ def test_status_is_not_running_until_both_names_are_set():
     assert plugin.get_summary(state)["ready"] is False
 
 
+def test_status_installed_follows_the_kernel_not_a_stale_flag():
+    # Regression: an enabled protocol whose persisted installed flag went stale
+    # must still report installed from the kernel, or drift=missing sticks and
+    # `apply` cannot clear it (reconcile does not install dependencies).
+    state = _state()
+    plugin = VlessCdnPlugin()
+    state.protocols[PROTOCOL_NAME].enabled = True
+    state.protocols[PROTOCOL_NAME].installed = False
+
+    with patch("hydra.core.singbox.is_installed", return_value=True):
+        assert plugin.status(state).installed is True
+    with patch("hydra.core.singbox.is_installed", return_value=False):
+        assert plugin.status(state).installed is False
+
+
 # ── cam_source_url (TSK-07) ───────────────────────────────────────────────
 
 
