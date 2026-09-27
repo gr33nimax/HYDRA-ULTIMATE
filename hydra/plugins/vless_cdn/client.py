@@ -97,7 +97,11 @@ def share_link(user: User, config: Mapping[str, object]) -> str:
         "fp": CLIENT_FINGERPRINT,
         "type": "xhttp",
         "host": cdn,
-        "path": path,
+        # Ссылку парсят клиенты (NekoBox, Throne), которые берут path буквально
+        # и не добавляют trailing slash сами. Ядро же валидирует путь со
+        # слешем, поэтому без него запрос отвергается. Клиенты, которые
+        # нормализуют path сами (sing-box), со слешем тоже работают.
+        "path": f"{path}/",
         "mode": MODE,
         "extra": json.dumps(link_extra(), separators=(",", ":"), sort_keys=True),
     }

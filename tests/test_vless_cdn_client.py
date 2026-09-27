@@ -100,7 +100,9 @@ def test_share_link_carries_every_setting_it_claims():
 
     assert query["type"] == "xhttp"
     assert query["mode"] == MODE == "packet-up"
-    assert query["path"] == DEFAULT_XHTTP_PATH
+    # ссылка несёт path со trailing slash: клиенты вроде NekoBox/Throne берут его
+    # буквально, а ядро валидирует путь со слешем
+    assert query["path"] == f"{DEFAULT_XHTTP_PATH}/"
     assert query["host"] == CDN
     assert query["sni"] == CDN
     assert query["alpn"] == "h2"
