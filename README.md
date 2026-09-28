@@ -11,7 +11,7 @@
 [![Python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-green.svg?style=flat-square)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg?style=flat-square)](https://ubuntu.com/)
-[![CI](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml)
+[![CI](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml)
 
 [Что вы получаете](#что-вы-получаете) ·
 [Протоколы](#протоколы-и-модули) ·
@@ -53,8 +53,7 @@ Sing-Box, Caddy L4 и nftables — производная от него. При�
 </table>
 
 > [!IMPORTANT]
-> `3.0.0` — текущая версия ветки `dev`. Это канал разработки и
-> активного бета-тестирования.
+> `3.0.0` — текущая версия ветки `main`.
 > Для рабочей эксплуатации используйте чистый Ubuntu 22.04+ или Debian 12+ и
 > обязательно настройте резервное копирование.
 
@@ -116,7 +115,7 @@ Sing-Box, Caddy L4 и nftables — производная от него. При�
 Требования к ресурсам VPS и состав установки — [UPGRADE.md](docs/UPGRADE.md).
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/bootstrap.sh | sudo env HYDRA_REF=dev bash
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash
 ```
 
 Установщик ставит зависимости, проверенное ядро Hydracore и изолированное
@@ -143,7 +142,7 @@ hydra check                # валидация и предпросмотр из
 > вручную через `git pull`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/dev/updater.sh | sudo env HYDRA_REF=dev bash
+curl -fsSL https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/main/updater.sh | sudo bash
 ```
 
 Updater фиксирует точный commit ветки, собирает новую версию отдельно от рабочей,
