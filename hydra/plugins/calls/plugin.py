@@ -143,10 +143,14 @@ class CallsPlugin(BasePlugin):
         mode = call_mode(state) if state is not None else CALL_MODE_VK_PARASITE
         ready = bool(self._source.load_native_join_links()) and supported
         running = bool(enabled and ready and self._source.singbox_running())
+        # Порт — тот, по которому открывается firewall и слушает inbound. Обзор
+        # протоколов берёт строку порта именно из статуса, а не из конфига.
+        port = normalized_listen_port(desired.config.get("listen_port")) if desired is not None else 0
         return PluginStatus(
             installed=supported,
             enabled=enabled,
             running=running,
+            port=port,
             info={
                 "platform": "vk",
                 "mode": mode,

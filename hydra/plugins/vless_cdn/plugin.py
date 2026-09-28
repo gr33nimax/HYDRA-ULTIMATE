@@ -314,6 +314,10 @@ class VlessCdnPlugin(BasePlugin):
             installed=is_installed(),
             enabled=bool(plugin_state and plugin_state.enabled),
             running=bool(plugin_state and plugin_state.enabled and self._ready(config)),
+            # Порт ядра выбирается при установке и живёт в состоянии. Обзор протоколов
+            # берёт строку порта из статуса, поэтому без этого поля там «—», хотя
+            # inbound на этом порту слушает.
+            port=as_int(config.get("core_port")),
             info=dict(self.get_summary(state)) if state else {},
         )
 

@@ -59,6 +59,16 @@ def _state(*, enabled: bool = True) -> AppState:
     return state
 
 
+def test_status_reports_the_udp_port_the_firewall_opens() -> None:
+    state = _state()
+    plugin = CallsPlugin(Source(cookies=[], link="", links=["https://vk.com/call/join/room"], multi=True))
+
+    assert plugin.status(state).port == 56002, "порт по умолчанию берётся из контракта calls"
+
+    state.protocols["calls"].config["listen_port"] = "57002"
+    assert plugin.status(state).port == 57002, "обзор показывает нормализованный порт"
+
+
 def test_calls_plugin_contract_and_native_fragment() -> None:
     source = Source(
         cookies=[],

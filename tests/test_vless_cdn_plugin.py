@@ -158,7 +158,11 @@ def test_summary_and_status_report_what_the_operator_set():
     status = plugin.status(state)
     assert status.enabled is True
     assert status.running is True
+    assert status.port == 0, "без выбранного порта строка порта в обзоре пустая"
     assert status.info["origin_host"] == "origin.example.com"
+
+    state.protocols[PROTOCOL_NAME].config["core_port"] = 34123
+    assert plugin.status(state).port == 34123, "обзор показывает порт ядра из состояния"
 
 
 def test_status_is_not_running_until_both_names_are_set():
