@@ -18,6 +18,7 @@ from hydra.contracts.calls_configuration import (
     CALL_COUNT,
     DEFAULT_CALL_PORT,
     call_mode,
+    normalized_listen_port,
     pool_refresh_interval,
     workers as configured_workers,
     vk_parasite_outbound,
@@ -112,6 +113,9 @@ class CallsService:
             native_link_ready=pool_ready,
             native_running=bool(enabled and pool_ready and self.runtime.singbox_running()),
             native_mode=mode,
+            native_port=normalized_listen_port(
+                (desired.config if desired else {}).get("listen_port"),
+            ),
             room_count=len(links),
             pool_auto_refresh=bool(
                 state.install.get(CALLS_POOL_AUTO_FLAG, False),

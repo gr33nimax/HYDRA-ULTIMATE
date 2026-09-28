@@ -12,6 +12,7 @@ from hydra.contracts.calls_configuration import (
     CallsStateAccess,
     CallsUser,
     call_mode,
+    normalized_listen_port,
     workers,
     vk_parasite_inbound as _vk_parasite_inbound,
     vk_parasite_outbound as _vk_parasite_outbound,
@@ -59,5 +60,6 @@ __all__ = [
     "peer_read_queue_packets",
     "pool_refresh_interval",
     "public_endpoint",
+    "normalized_listen_port",
     "user_password",
 ]

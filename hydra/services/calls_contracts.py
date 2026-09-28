@@ -22,6 +22,7 @@ class CallsStatus:
     native_link_ready: bool
     native_running: bool
     native_mode: str = "vk_parasite"
+    native_port: int = 0
     room_count: int = 0
     pool_auto_refresh: bool = False
     pool_refresh_interval_seconds: int = 86_400

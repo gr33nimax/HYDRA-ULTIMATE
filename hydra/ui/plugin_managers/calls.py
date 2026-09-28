@@ -33,6 +33,9 @@ def _status_panel(state: AppState, app: ApplicationService) -> None:
         installed=desired.installed,
         enabled=desired.enabled,
         running=status.native_running,
+        # Строку порта панель рисует только когда он есть: без неё оператор не видит,
+        # что именно открыто в firewall (у Calls это UDP-порт слушателя).
+        port=getattr(status, "native_port", 0) or None,
         details=[
             ("Платформа", "VK"),
             ("Режим", getattr(status, "native_mode", "vk_parasite")),

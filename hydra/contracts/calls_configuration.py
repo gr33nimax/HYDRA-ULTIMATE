@@ -166,6 +166,22 @@ def pool_refresh_interval(config: dict) -> int:
     )
 
 
+def normalized_listen_port(value: object) -> int:
+    """Привести слушающий UDP-порт к диапазону порта.
+
+    Импортированное состояние может принести порт в любом виде: строкой, мусором или
+    значением вне диапазона. Одна реализация на firewall-путь плагина и на панель
+    статуса: показ, посчитанный иначе, чем применяется, — худший вид статуса.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return DEFAULT_CALL_PORT
+    try:
+        port = int(value)
+    except ValueError:
+        return DEFAULT_CALL_PORT
+    return port if 1 <= port <= 65535 else DEFAULT_CALL_PORT
+
+
 def vk_parasite_inbound(
     state: CallsStateAccess,
     user_password: Callable[[CallsUser], str],
@@ -277,6 +293,7 @@ __all__ = [
     "WORKER_COUNTS",
     "call_mode",
     "workers",
+    "normalized_listen_port",
     "vk_parasite_inbound",
     "vk_parasite_outbound",
     "peer_read_queue_packets",

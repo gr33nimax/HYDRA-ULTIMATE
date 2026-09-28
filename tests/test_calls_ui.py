@@ -114,6 +114,7 @@ def test_calls_status_uses_minimal_protocol_panel(monkeypatch) -> None:
     )
     app = SimpleNamespace(calls=SimpleNamespace(status=lambda _state: SimpleNamespace(
         native_running=True,
+        native_port=56002,
         native_pool_ready=True,
         creator_installed=True,
         cookies_ready=True,
@@ -133,6 +134,7 @@ def test_calls_status_uses_minimal_protocol_panel(monkeypatch) -> None:
         "installed": True,
         "enabled": True,
         "running": True,
+        "port": 56002,
         "details": [
             ("Платформа", "VK"),
             ("Режим", "vk_parasite"),

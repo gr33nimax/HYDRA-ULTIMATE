@@ -22,25 +22,11 @@ from hydra.plugins.calls.configuration import (
     DEFAULT_CALL_PORT,
     DEFAULT_WORKERS,
     call_mode,
+    normalized_listen_port,
     vk_parasite_inbound,
     vk_parasite_outbound,
 )
 from hydra.plugins.context import PluginStateAccess
-
-
-def _udp_port(value: object, fallback: int) -> int:
-    """Read a UDP port that an imported state may have left in any shape at all.
-
-    The firewall side of this plugin used to trust the value. A port that arrived as text, or as
-    something else entirely, took the whole apply down instead of falling back to the configured one.
-    """
-    if isinstance(value, bool) or not isinstance(value, (int, str)):
-        return fallback
-    try:
-        port = int(value)
-    except ValueError:
-        return fallback
-    return port if 1 <= port <= 65535 else fallback
 
 
 class CallsPlugin(BasePlugin):
@@ -87,7 +73,7 @@ class CallsPlugin(BasePlugin):
         inbound = vk_parasite_inbound(state)
         from hydra.utils.firewall import open_udp, port_is_open
 
-        port = _udp_port(inbound["listen_port"], DEFAULT_CALL_PORT)
+        port = normalized_listen_port(inbound["listen_port"])
         if not port_is_open("udp", port):
             open_udp(port, "hydra-calls-vk")
 
@@ -99,7 +85,7 @@ class CallsPlugin(BasePlugin):
         from hydra.utils.firewall import close_udp
 
         close_udp(
-            _udp_port(desired.config.get("listen_port"), DEFAULT_CALL_PORT),
+            normalized_listen_port(desired.config.get("listen_port")),
             "hydra-calls-vk",
         )
 
@@ -108,7 +94,7 @@ class CallsPlugin(BasePlugin):
         if desired is None:
             return None
         call_mode(state)
-        port = _udp_port(vk_parasite_inbound(state)["listen_port"], DEFAULT_CALL_PORT)
+        port = normalized_listen_port(vk_parasite_inbound(state)["listen_port"])
         from hydra.utils.firewall import port_is_open
 
         return {"port": port, "was_open": port_is_open("udp", port)}
@@ -121,7 +107,7 @@ class CallsPlugin(BasePlugin):
 
         call_mode(state)
         if desired.enabled:
-            port = _udp_port(vk_parasite_inbound(state)["listen_port"], DEFAULT_CALL_PORT)
+            port = normalized_listen_port(vk_parasite_inbound(state)["listen_port"])
             if not port_is_open("udp", port):
                 open_udp(port, "hydra-calls-vk")
         else:
