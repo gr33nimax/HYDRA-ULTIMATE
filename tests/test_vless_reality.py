@@ -200,6 +200,24 @@ def test_invalid_security_input_does_not_mutate_state(mode, handshake, message):
     assert _config(state) == before
 
 
+def test_status_reports_the_port_the_inbound_really_listens_on():
+    """Панель показывает фактический порт: за мультиплексором это внутренний, иначе 443."""
+    state = _reality_state()
+    plugin = VlessXhttpPlugin()
+
+    def status(behind_mux: bool):
+        with (
+            patch("hydra.core.singbox.is_installed", return_value=True),
+            patch("hydra.core.singbox.is_running", return_value=True),
+            patch("hydra.core.sni_router.is_active", return_value=True),
+            patch("hydra.core.sni_router.needs_mux", return_value=behind_mux),
+        ):
+            return plugin.status(state)
+
+    assert status(True).port == INTERNAL_PORT
+    assert status(False).port == 443
+
+
 def test_reality_inbound_borrows_the_handshake_and_keeps_xhttp():
     state = _reality_state()
 
