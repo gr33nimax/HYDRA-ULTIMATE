@@ -11,6 +11,7 @@
 [![Python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-green.svg?style=flat-square)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-lightgrey.svg?style=flat-square)](https://ubuntu.com/)
+[![Telegram](https://img.shields.io/badge/Telegram-hydraucb-26A5E4.svg?style=flat-square)](https://t.me/hydraucb)
 [![CI](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gr33nimax/HYDRA-ULTIMATE/actions/workflows/ci.yml)
 
 [Что вы получаете](#что-вы-получаете) ·
