@@ -266,3 +266,32 @@ def test_disabled_status_marks_routes_inactive_and_missing_target_invalid():
 
     assert "маршруты WARP сейчас не применяются" in rendered
     assert "warp (недоступен)" in rendered
+
+
+def test_a_rule_that_goes_direct_is_not_shown_as_a_warp_route():
+    lines = _status_lines(
+        SimpleNamespace(installed=True, enabled=True, running=True),
+        ["Finland"],
+        ["direct", "warp", "warp_Finland"],
+        {"ext:youtube": "direct", "ext:google_ai": "warp"},
+        {"youtube": {"name": "YouTube"}, "google_ai": {"name": "GoogleAI"}},
+    )
+    rendered = "\n".join(lines)
+
+    assert "YouTube" not in rendered, "прямое правило не должно выглядеть маршрутом через WARP"
+    assert "direct" not in rendered.split("Маршруты списков правил:", 1)[1]
+    assert "GoogleAI" in rendered
+
+
+def test_only_direct_rules_leave_the_route_block_empty_but_honest():
+    lines = _status_lines(
+        SimpleNamespace(installed=True, enabled=True, running=True),
+        ["Finland"],
+        ["direct", "warp_Finland"],
+        {"ext:youtube": "direct"},
+        {"youtube": {"name": "YouTube"}},
+    )
+    rendered = "\n".join(lines)
+
+    assert "Нет маршрутов через WARP" in rendered
+    assert "Нет активных маршрутов" not in rendered

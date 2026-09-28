@@ -82,7 +82,13 @@ def _status_lines(
         lines.append(
             f"  {YELLOW}WARP выключен: маршруты WARP сейчас не применяются.{NC}",
         )
-    active = [(key, target) for key, target in list_targets.items() if target and target != "none"]
+    # Маршрут в direct не маршрут: трафик и так идёт мимо WARP, и в списке он только
+    # занимает чужое место. Само правило остаётся в конфиге — скрыт только показ.
+    active = [
+        (key, target)
+        for key, target in list_targets.items()
+        if target and target not in ("none", "direct")
+    ]
     for key, target in active:
         if target not in destinations:
             rendered_target = f"{target} (недоступен)"
@@ -92,13 +98,13 @@ def _status_lines(
             color = DIM
         else:
             rendered_target = target
-            color = GREEN if target != "direct" else YELLOW
+            color = GREEN
         lines.append(
             f"  • {_route_name(key, external_sources):<22} → {color}{rendered_target}{NC}",
         )
     if not active:
         lines.append(
-            f"  {YELLOW}Нет активных маршрутов. Настройте их ниже.{NC}",
+            f"  {YELLOW}Нет маршрутов через WARP. Настройте их ниже.{NC}",
         )
     return lines
 
