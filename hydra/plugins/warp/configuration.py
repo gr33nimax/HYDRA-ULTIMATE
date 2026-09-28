@@ -1,4 +1,5 @@
 import copy
+import ipaddress
 import json
 import re
 from pathlib import Path
@@ -6,6 +7,8 @@ from typing import Callable
 
 from hydra.plugins.base import ConfigFragment
 from hydra.plugins.context import PluginStateAccess
+from hydra.plugins.warp.constants import RU_TLD_SOURCE, is_granular_source
+from hydra.plugins.warp.masque_scan import PROBE_PORT, endpoint_value
 from hydra.plugins.warp.route_validation import validate_route_targets
 
 ParsedProfile = dict[str, dict[str, str]]
@@ -62,6 +65,7 @@ def read_custom_profiles(
                 profiles.append((path.stem, parsed))
         except Exception as exc:
             from hydra.core.singbox import _log
+
             _log("ERROR", f"Failed to parse warp profile {path}: {exc}")
     return profiles
 
@@ -75,16 +79,13 @@ def _addresses(
     for value in raw.split(","):
         address = value.strip()
         if address and validate_ip(address):
-            result.append(
-                address if "/" in address else address + ("/128" if ":" in address else "/32")
-            )
+            result.append(address if "/" in address else address + ("/128" if ":" in address else "/32"))
     return result
 
 
 def _amnezia_parameters(interface: dict[str, str]) -> dict[str, object]:
     result: dict[str, object] = {}
-    integer_keys = ("s1", "s2", "s3", "s4", "jc", "jmin", "jmax",
-                    "h1", "h2", "h3", "h4")
+    integer_keys = ("s1", "s2", "s3", "s4", "jc", "jmin", "jmax", "h1", "h2", "h3", "h4")
     for key in integer_keys:
         if key in interface:
             try:
@@ -155,48 +156,20 @@ def render_custom_profile(
     return endpoint, outbound
 
 
-def render_default_profile(
-    config: dict | None,
-    *,
-    parse_endpoint: EndpointParser,
-    resolve_host: Callable[[str], str],
-) -> tuple[dict, dict] | None:
-    if not config:
-        return None
-    target = parse_endpoint(
-        config.get("endpoint", "engage.cloudflareclient.com:2408")
-    )
-    try:
-        mtu = int(config.get("mtu", 1280))
-    except (TypeError, ValueError):
-        mtu = 1280
-    if target is None or not 576 <= mtu <= 65535:
-        return None
-    host, port = target
-    try:
-        server_ip = resolve_host(host)
-    except Exception:
-        server_ip = host
-    endpoint = {
-        "type": "wireguard",
-        "tag": "warp_ep",
-        "address": config["addresses"],
-        "private_key": config["private_key"],
-        "mtu": mtu,
-        "peers": [
-            {
-                "address": server_ip,
-                "port": port,
-                "public_key": config.get(
-                    "public_key",
-                    "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
-                ),
-                "allowed_ips": config.get("allowed_ips")
-                or ["0.0.0.0/0", "::/0"],
-            }
-        ],
-    }
-    return endpoint, {"type": "selector", "tag": "warp", "outbounds": ["warp_ep"]}
+WARP_OUTBOUND_TAG = "warp_masque"
+
+
+def render_default_outbound(endpoint: dict | None = None) -> tuple[dict, dict]:
+    """Render the native Cloudflare WARP outbound.
+
+    The core registers its own device through the Cloudflare API and speaks
+    MASQUE (HTTP/3 CONNECT-IP) to it, so no external profile is involved.
+    """
+    outbound: dict[str, object] = {"type": "masque", "tag": WARP_OUTBOUND_TAG}
+    if endpoint is not None:
+        outbound.update(endpoint_value(endpoint.get("address"), endpoint.get("port")))
+    selector = {"type": "selector", "tag": "warp", "outbounds": [WARP_OUTBOUND_TAG]}
+    return outbound, selector
 
 
 def load_external_rules(cache: Path) -> dict:
@@ -217,53 +190,49 @@ def render_route_rules(
     validate_domain: Callable[[str], bool],
     validate_ip: Callable[[str], bool],
 ) -> list[dict]:
-    outbound_domains: dict[str, list] = {}
-    outbound_ips: dict[str, list] = {}
+    domains: set[tuple[str, str]] = set()
+    ips: set[tuple[str, str]] = set()
     local_lists = config.get("local_lists", {})
     validate_route_targets(config.get("list_targets", {}), destinations)
     for list_key, target in config.get("list_targets", {}).items():
         if not target or target == "none":
             continue
-        domains, ips = _list_entries(
-            list_key,
-            local_lists,
-            external_rules,
-            russia_suffixes,
+        if list_key.startswith("ext:"):
+            name = list_key.split(":", 1)[1]
+            if not is_granular_source(name):
+                raise ValueError(f"WARP source {name} is no longer supported; choose individual services")
+            cached = external_rules.get(name)
+            if not isinstance(cached, dict) or not cached.get("domains") and not cached.get("ips"):
+                raise ValueError(f"WARP source {name} is missing or empty in rule cache")
+        source_domains, source_ips = _list_entries(list_key, local_lists, external_rules)
+        if list_key == f"ext:{RU_TLD_SOURCE}":
+            source_domains = [*source_domains, *russia_suffixes]
+        domains.update(
+            (item.strip().lower(), target)
+            for item in source_domains
+            if isinstance(item, str) and validate_domain(item.strip())
         )
-        if domains:
-            outbound_domains.setdefault(target, []).extend(domains)
-        if ips:
-            outbound_ips.setdefault(target, []).extend(ips)
+        ips.update((item.strip(), target) for item in source_ips if isinstance(item, str) and validate_ip(item.strip()))
 
-    rules = []
-    for target, values in outbound_domains.items():
-        domains = sorted(
-            {
-                item.strip().lower()
-                for item in values
-                if isinstance(item, str) and validate_domain(item.strip())
-            }
-        )
-        if domains:
-            rules.append({"domain_suffix": domains, "outbound": target})
-    for target, values in outbound_ips.items():
-        ips = sorted(
-            {
-                item.strip()
-                for item in values
-                if isinstance(item, str) and validate_ip(item.strip())
-            }
-        )
-        if ips:
-            rules.append({"ip_cidr": ips, "outbound": target})
-    return rules
+    # First matching route wins: narrow suffix/CIDR before broad, direct on ties.
+    domain_order = sorted(domains, key=lambda pair: (-pair[0].count("."), -len(pair[0]), pair[1] != "direct", pair))
+    ip_order = sorted(
+        ips, key=lambda pair: (-ipaddress.ip_network(pair[0], strict=False).prefixlen, pair[1] != "direct", pair)
+    )
+    result = []
+    for field, entries in (("domain_suffix", domain_order), ("ip_cidr", ip_order)):
+        for value, target in entries:
+            if result and field in result[-1] and result[-1]["outbound"] == target:
+                result[-1][field].append(value)
+            else:
+                result.append({field: [value], "outbound": target})
+    return result
 
 
 def _list_entries(
     list_key: str,
     local_lists: dict,
     external_rules: dict,
-    russia_suffixes: list[str],
 ) -> tuple[list, list]:
     if list_key.startswith("local:"):
         values = local_lists.get(list_key.split(":", 1)[1], {})
@@ -271,10 +240,7 @@ def _list_entries(
     if list_key.startswith("ext:"):
         name = list_key.split(":", 1)[1]
         values = external_rules.get(name, {})
-        domains = values.get("domains", [])
-        if name == "russia":
-            domains = [*domains, *russia_suffixes]
-        return domains, values.get("ips", [])
+        return values.get("domains", []), values.get("ips", [])
     return [], []
 
 
@@ -290,7 +256,6 @@ def configure_warp(
     validate_domain: Callable[[str], bool],
     validate_ip: Callable[[str], bool],
     resolve_host: Callable[[str], str],
-    load_default_profile: Callable[[], dict | None],
 ) -> ConfigFragment:
     protocol = state.protocols.get("warp")
     config = normalize_config(
@@ -298,6 +263,9 @@ def configure_warp(
         default_domains=default_domains,
     )
     endpoints, outbounds = [], []
+    selected = config.get("masque_endpoint")
+    if selected is not None and not isinstance(selected, dict):
+        raise ValueError("MASQUE: некорректный выбранный адрес")
     destinations = {"direct"}
     for name, parsed in read_custom_profiles(
         profiles_dir,
@@ -316,16 +284,7 @@ def configure_warp(
             outbounds.append(outbound)
             destinations.add(outbound["tag"])
 
-    rendered = render_default_profile(
-        load_default_profile(),
-        parse_endpoint=parse_endpoint,
-        resolve_host=resolve_host,
-    )
-    if rendered:
-        endpoint, outbound = rendered
-        endpoints.append(endpoint)
-        outbounds.append(outbound)
-        destinations.add("warp")
+    destinations.add("warp")
 
     rules = render_route_rules(
         config,
@@ -335,9 +294,17 @@ def configure_warp(
         validate_domain=validate_domain,
         validate_ip=validate_ip,
     )
-    if not rules:
+    if not rules and selected is None:
         return ConfigFragment()
+    inbounds = []
+    if selected is not None or any(rule.get("outbound") == "warp" for rule in rules):
+        outbound, selector = render_default_outbound(selected)
+        outbounds.extend((outbound, selector))
+    if selected is not None:
+        inbounds.append({"type": "socks", "tag": "warp-probe-in", "listen": "127.0.0.1", "listen_port": PROBE_PORT})
+        rules.insert(0, {"inbound": ["warp-probe-in"], "outbound": "warp"})
     return ConfigFragment(
+        inbounds=inbounds,
         outbounds=outbounds,
         endpoints=endpoints,
         route_rules=rules,

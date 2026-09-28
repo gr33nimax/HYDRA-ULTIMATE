@@ -36,6 +36,40 @@ def test_create_backup_contains_manifest_and_state(tmp_path, monkeypatch):
     assert inspection["valid"] is True
 
 
+def test_backup_survives_a_file_written_during_archiving(tmp_path, monkeypatch):
+    """Живой лог (etc/wdtt/server.log) дописывался между хешем и tar-add → checksum mismatch.
+
+    Теперь байты читаются один раз; даже если файл меняется после чтения, архив и
+    манифест согласованы, и inspect проходит.
+    """
+    log_file = tmp_path / "server.log"
+    log_file.write_bytes(b"line-1\n")
+    policy = BackupPolicy(
+        (BackupResource(str(log_file), "file", owner="test"),),
+    )
+    monkeypatch.setattr(backup, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(backup, "_archive_path", lambda path: f"etc/wdtt/{path.name}")
+
+    # Каждое чтение возвращает разное — имитация дописи в лог. Старый код (два чтения)
+    # упал бы; новый читает один раз.
+    real_read = Path.read_bytes
+    counter = {"n": 0}
+
+    def growing_read(self: Path) -> bytes:
+        data = real_read(self)
+        if self == log_file:
+            counter["n"] += 1
+            return data + f"appended-{counter['n']}\n".encode()
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", growing_read)
+    result = backup.create_backup(policy=policy)
+    monkeypatch.setattr(Path, "read_bytes", real_read)
+
+    inspection = backup.inspect_backup(Path(result["archive"]), policy=policy)
+    assert inspection["valid"] is True
+
+
 def test_restore_requires_valid_archive_and_writes_under_restore_root(tmp_path, monkeypatch):
     source = tmp_path / "source-state.json"
     source.write_text('{"version": 2, "users": []}', encoding="utf-8")
@@ -49,7 +83,8 @@ def test_restore_requires_valid_archive_and_writes_under_restore_root(tmp_path, 
     restore_root = tmp_path / "restored"
     monkeypatch.setattr(backup, "RESTORE_ROOT", restore_root)
     monkeypatch.setattr(
-        backup, "create_backup",
+        backup,
+        "create_backup",
         lambda *args, **kwargs: {"archive": str(tmp_path / "safety.tar.gz")},
     )
     dry_run = backup.restore_backup(
@@ -152,10 +187,7 @@ def test_tree_resource_is_recursive_and_excludes_runtime_files(
         backup,
         "_archive_path",
         lambda path: (
-            "var/lib/hydra"
-            if path == state_dir
-            else "var/lib/hydra/"
-            + path.relative_to(state_dir).as_posix()
+            "var/lib/hydra" if path == state_dir else "var/lib/hydra/" + path.relative_to(state_dir).as_posix()
         ),
     )
 

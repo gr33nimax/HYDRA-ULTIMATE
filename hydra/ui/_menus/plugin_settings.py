@@ -1,15 +1,24 @@
 """Specialised settings adapters kept outside the generic plugin menu."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from hydra.core.state_models import AppState, PluginState
+from hydra.plugins.base import BasePlugin
 from hydra.services.application import ApplicationService
+from hydra.ui._menus.mtproto_zig_settings import open_menu as _menu_mtproto_zig, option as _mtproto_zig_option
+from hydra.ui._menus.naive_uot_setting import (
+    UOT_OPTION,
+    change_uot,
+    uot_option_value,
+)
 from hydra.ui._menus.vless_xhttp_settings import (
     open_menu as _menu_vless_xhttp,
     option as _vless_xhttp_option,
 )
+from hydra.ui._menus.settings_support import desired_state, report_change
 from hydra.ui.tui import error, menu, prompt, success
 from hydra.utils.crypto import gen_token
 
@@ -26,17 +35,18 @@ class SettingsAdapter:
 
 
 def _desired_state(state: AppState, name: str) -> PluginState:
-    return state.protocols.get(name) or PluginState()
+    return desired_state(state, name)
 
 
-def _report_change(changed: bool, success_text: str) -> None:
-    if changed:
-        success(success_text)
-    else:
-        error(
-            "Не удалось применить настройки; "
-            "предыдущая конфигурация восстановлена",
-        )
+def _report_change(app: ApplicationService, changed: bool, success_text: str) -> None:
+    report_change(app, changed, success_text, report_success=success, report_error=error)
+
+
+def _parse_int(value: object, label: str) -> int:
+    try:
+        return int(value) if isinstance(value, (int, str)) else int(str(value))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label}: требуется целое число") from exc
 
 
 def _naive_option(desired: PluginState) -> SettingsOption | None:
@@ -64,6 +74,7 @@ def _menu_naive(
             ("2", "HTTP/2 (TCP)", "Максимальная совместимость"),
             ("3", "QUIC (UDP)", "HTTP/3 через UDP"),
             ("4", "HTTP/2 + QUIC", "Оба транспорта"),
+            ("5", UOT_OPTION, uot_option_value(state)),
             ("0", "↩ Отмена", ""),
         ],
         "Настройки NaiveProxy",
@@ -80,10 +91,22 @@ def _menu_naive(
                 "set_domain",
                 domain=domain,
             )
-            _report_change(changed, f"Домен изменён на {domain}")
+            enabled = bool(state.protocols.get("naive", PluginState()).enabled)
+            message = (
+                f"Домен изменён на {domain}"
+                if enabled
+                else (f"Домен сохранён: {domain}. TLS-сертификат будет получен при включении NaiveProxy")
+            )
+            _report_change(app, changed, message)
         except ValueError as exc:
             error(str(exc))
         prompt("Нажмите Enter")
+        return
+
+    if selected == "5":
+        changed = change_uot(state, app)
+        if changed is not None:
+            _report_change(app, changed, "Настройки NaiveProxy обновлены")
         return
 
     network = {"2": "tcp", "3": "quic", "4": "both"}.get(selected)
@@ -95,7 +118,7 @@ def _menu_naive(
         "set_transport",
         network=network,
     )
-    _report_change(changed, f"Транспорт изменён на {network}")
+    _report_change(app, changed, f"Транспорт изменён на {network}")
     prompt("Нажмите Enter")
 
 
@@ -123,6 +146,7 @@ def _menu_shadowtls(
                 value=value,
             )
             _report_change(
+                app,
                 changed,
                 f"SNI ShadowTLS изменён на {value}",
             )
@@ -149,16 +173,13 @@ def menu_hysteria2_settings(
         mode = desired.config.get("congestion_mode", "bbr")
         bandwidth = ""
         if mode == "brutal":
-            bandwidth = (
-                f" · {desired.config.get('up_mbps', 100)}/"
-                f"{desired.config.get('down_mbps', 100)} Mbps"
-            )
+            bandwidth = f" · {desired.config.get('up_mbps', 100)}/{desired.config.get('down_mbps', 100)} Mbps"
         choice = menu(
             [
                 (
                     "1",
                     "🌐 Домен и TLS",
-                    desired.config.get("domain", "не задан"),
+                    str(desired.config.get("domain", "не задан")),
                 ),
                 (
                     "2",
@@ -190,7 +211,7 @@ def menu_hysteria2_settings(
             )
             if changed is None:
                 continue
-            _report_change(changed, "Настройки Hysteria2 обновлены")
+            _report_change(app, changed, "Настройки Hysteria2 обновлены")
         except (TypeError, ValueError) as exc:
             error(str(exc))
         prompt("Нажмите Enter")
@@ -214,11 +235,12 @@ def _change_hysteria2(
             domain=domain,
         )
     if choice == "2":
-        port = int(
+        port = _parse_int(
             prompt(
                 "Новый UDP-порт",
                 default=str(desired.config.get("port", 8443)),
             ),
+            "UDP-порт",
         )
         return app.plugin_command(
             state,
@@ -229,13 +251,10 @@ def _change_hysteria2(
     if choice == "3":
         return _change_hysteria2_congestion(state, desired, app)
     if choice == "4":
-        password = (
-            prompt(
-                "Новый пароль (пусто = сгенерировать)",
-                default="",
-            ).strip()
-            or gen_token(24)
-        )
+        password = prompt(
+            "Новый пароль (пусто = сгенерировать)",
+            default="",
+        ).strip() or gen_token(24)
         return app.plugin_command(
             state,
             "hysteria2",
@@ -265,17 +284,19 @@ def _change_hysteria2_congestion(
     }
     if selected == "2":
         parameters.update(
-            up_mbps=int(
+            up_mbps=_parse_int(
                 prompt(
                     "Upload Mbps",
                     default=str(desired.config.get("up_mbps", 100)),
                 ),
+                "Upload Mbps",
             ),
-            down_mbps=int(
+            down_mbps=_parse_int(
                 prompt(
                     "Download Mbps",
                     default=str(desired.config.get("down_mbps", 100)),
                 ),
+                "Download Mbps",
             ),
         )
     return app.plugin_command(
@@ -295,67 +316,138 @@ def menu_snell_settings(
     while True:
         state = app.admin.load_state()
         desired = _desired_state(state, "snell")
-        configured_version = int(desired.config.get("version", 4))
-        if configured_version not in {4, 5}:
-            raise ValueError("Hydra Snell supports version 4")
-        mode = str(desired.config.get("obfs_mode", "http"))
-        host = str(desired.config.get("obfs_host", "www.bing.com"))
+        generation = _snell_generation(desired)
+        if generation == 5:
+            obfs_mode = str(desired.config.get("obfs_mode", "none"))
+            host = str(desired.config.get("obfs_host", "www.bing.com"))
+            transport_label = "🎭 Маскировка"
+            transport_value = f"{obfs_mode.upper()} · {host}" if obfs_mode not in {"", "none"} else "выключена"
+        else:
+            transport_label = "🧩 Режим v6"
+            transport_value = str(desired.config.get("mode", "default"))
         choice = menu(
             [
-                (
-                    "1",
-                    "🎭 Simple obfs",
-                    f"{mode.upper()} · {host}" if mode else "выключен",
-                ),
+                ("1", "🔢 Поколение", f"v{generation}"),
+                ("2", transport_label, transport_value),
                 ("0", "↩ Назад", ""),
             ],
-            "НАСТРОЙКИ SNELL v4",
+            f"НАСТРОЙКИ SNELL v{generation}",
         )
         if choice == "0":
             return
         try:
-            changed = _change_snell(state, host, app)
+            changed = (
+                _change_snell_generation(state, app) if choice == "1" else _change_snell_transport(state, desired, app)
+            )
             if changed is None:
                 continue
-            _report_change(changed, "Настройки Snell обновлены")
+            _report_change(app, changed, "Настройки Snell обновлены")
         except (TypeError, ValueError) as exc:
             error(str(exc))
         prompt("Нажмите Enter")
 
 
-def _change_snell(
+def _snell_generation(desired: PluginState) -> int:
+    """Read the stored generation the way the plugin does, legacy 4 included."""
+    generation = _parse_int(desired.config.get("version", 5), "Поколение Snell")
+    if generation == 4:
+        return 5
+    if generation not in {5, 6}:
+        raise ValueError("Snell поддерживает поколения 5 и 6")
+    return generation
+
+
+def _change_snell_generation(
     state: AppState,
-    host: str,
     app: ApplicationService,
 ) -> bool | None:
     selected = menu(
         [
-            ("1", "HTTP obfs", "Имитация HTTP-трафика"),
-            ("2", "Выключить", "Чистый Snell"),
+            ("1", "Snell 5", "Классика: маскировка http/tls; клиенты v4"),
+            ("2", "Snell 6", "Новое поколение: свой режим; только клиенты v6"),
             ("0", "Отмена", ""),
         ],
-        "SIMPLE OBFS SNELL",
+        "ПОКОЛЕНИЕ SNELL",
     )
-    new_mode = {"1": "http", "2": ""}.get(selected)
-    if new_mode is None:
+    generation = {"1": 5, "2": 6}.get(selected)
+    if generation is None:
         return None
-    new_host = (
-        prompt("Маскировочный host", default=host)
-        if new_mode
-        else host
-    )
+    if generation == 6:
+        # A generation 6 server speaks v6 only: every issued v4 link stops working.
+        confirmed = menu(
+            [
+                ("1", "Переключить", "Выданные ссылки (v4) перестанут подключаться"),
+                ("0", "Отмена", ""),
+            ],
+            "ТОЛЬКО КЛИЕНТЫ V6",
+        )
+        if confirmed != "1":
+            return None
     return app.plugin_command(
         state,
         "snell",
         "set_settings",
-        version=4,
+        version=generation,
+        obfs_mode="none",
+        mode="default",
+    )
+
+
+def _change_snell_transport(
+    state: AppState,
+    desired: PluginState,
+    app: ApplicationService,
+) -> bool | None:
+    if _snell_generation(desired) == 6:
+        selected = menu(
+            [
+                ("1", "default", "Упаковка по умолчанию"),
+                ("2", "unshaped", "Без shaping"),
+                ("3", "unsafe-raw", "Самый сырой поток"),
+                ("0", "Отмена", ""),
+            ],
+            "РЕЖИМ SNELL 6",
+        )
+        mode = {"1": "default", "2": "unshaped", "3": "unsafe-raw"}.get(selected)
+        if mode is None:
+            return None
+        return app.plugin_command(
+            state,
+            "snell",
+            "set_settings",
+            version=6,
+            obfs_mode="none",
+            mode=mode,
+        )
+    obfs_mode = str(desired.config.get("obfs_mode", "none"))
+    host = str(desired.config.get("obfs_host", "www.bing.com"))
+    selected = menu(
+        [
+            ("1", "HTTP", "Имитация HTTP-трафика"),
+            ("2", "TLS", "Имитация HTTPS"),
+            ("3", "Выключить", "Без маскировки"),
+            ("0", "Отмена", ""),
+        ],
+        f"МАСКИРОВКА SNELL 5 · сейчас {obfs_mode.upper() or 'NONE'}",
+    )
+    new_mode = {"1": "http", "2": "tls", "3": "none"}.get(selected)
+    if new_mode is None:
+        return None
+    new_host = prompt("Маскировочный host", default=host) if new_mode != "none" else host
+    return app.plugin_command(
+        state,
+        "snell",
+        "set_settings",
+        version=5,
         obfs_mode=new_mode,
         obfs_host=new_host,
+        mode="default",
     )
 
 
 SETTINGS_ADAPTERS: dict[str, SettingsAdapter] = {
     "naive": SettingsAdapter(_naive_option, _menu_naive),
+    "mtproto_zig": SettingsAdapter(_mtproto_zig_option, _menu_mtproto_zig),
     "shadowtls": SettingsAdapter(
         _shadowtls_option,
         _menu_shadowtls,
@@ -385,7 +477,7 @@ def settings_option(
 
 def open_settings(
     state: AppState,
-    plugin: object,
+    plugin: BasePlugin,
     app: ApplicationService,
 ) -> bool:
     plugin_name = plugin.meta.name

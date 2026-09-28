@@ -4,6 +4,11 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 
+from hydra.core.state_kernel_models import (
+    DEFAULT_KERNEL_CHANNEL,
+    OFFERED_KERNEL_CHANNELS,
+)
+
 
 class CliUsageError(ValueError):
     """A parser failure that can be rendered through the JSON error contract."""
@@ -107,9 +112,31 @@ def _add_upgrade(root: argparse._SubParsersAction) -> None:
     _command(
         commands,
         "migrate-state",
-        "Atomically persist pending state migrations",
+        "Atomically import legacy state into the current format",
         "upgrade.migrate-state",
     )
+
+
+def _add_kernel(root: argparse._SubParsersAction) -> None:
+    kernel = root.add_parser("kernel", help="Inspect or switch the managed core")
+    commands = _subcommands(kernel, dest="kernel_action", title="kernel")
+    _command(commands, "status", "Show desired and active core", "kernel.status")
+    switch = _command(
+        commands,
+        "switch",
+        "Download, verify and transactionally activate a core",
+        "kernel.switch",
+    )
+    switch.add_argument(
+        "provider",
+        choices=("hydracore",),
+    )
+    switch.add_argument(
+        "--channel",
+        choices=OFFERED_KERNEL_CHANNELS,
+        default=DEFAULT_KERNEL_CHANNEL,
+    )
+    switch.add_argument("--force", action="store_true")
 
 
 def _add_user(root: argparse._SubParsersAction) -> None:
@@ -142,6 +169,13 @@ def _add_user(root: argparse._SubParsersAction) -> None:
     limit.add_argument("email")
     limit.add_argument("limit", type=int)
     limit.add_argument("--reset", action="store_true")
+    rotate = _command(
+        commands,
+        "rotate-hydrabox-key",
+        "Rotate the HydraBox JWE key and invalidate old links",
+        "user.rotate-hydrabox-key",
+    )
+    rotate.add_argument("email")
     for action in ("block", "unblock", "remove"):
         command = _command(
             commands,
@@ -284,6 +318,7 @@ def parser() -> CliArgumentParser:
     _add_user(commands)
     _add_plugin(commands)
     _add_upgrade(commands)
+    _add_kernel(commands)
     uninstall = _command(
         commands,
         "uninstall",

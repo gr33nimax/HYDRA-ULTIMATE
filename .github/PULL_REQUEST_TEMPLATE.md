@@ -26,3 +26,12 @@
 - [ ] Изменение схемы state сопровождается миграцией `vN → vN+1` и тестами
 - [ ] Обновлены `docs/` и `CHANGELOG.md`, если изменилось публичное поведение
 - [ ] В diff нет секретов, артефактов сборки и несвязанных правок
+
+## Promotion record (только для `debug → dev`, `dev → main` и release)
+
+- [ ] Источник: `<branch> @ <40-char SHA>`
+- [ ] Цель: `dev` или `main`; emergency-исключение описано, если `dev` пропущен
+- [ ] Проверки: CI, Linux integration и относящиеся compatibility checks — green
+- [ ] Canary: VPS, результат и версия Hydracore указаны
+- [ ] Rollback: предыдущий проверенный tag/SHA указан
+- [ ] Release notes содержат source SHA, compatibility pair и rollback target

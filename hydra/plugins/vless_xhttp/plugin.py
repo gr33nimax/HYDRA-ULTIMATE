@@ -15,11 +15,16 @@ from hydra.plugins.base import (
 from hydra.plugins.context import PluginStateAccess
 from hydra.plugins.decoy_support import DecoyThemeSupport
 from hydra.plugins.vless_xhttp.client import (
-    PUBLIC_PORT,
     profile as client_profile,
     share_link as client_share_link,
 )
-from hydra.plugins.vless_xhttp.health import INBOUND_TAG, check as health_check
+from hydra.plugins.vless_xhttp.health import check as health_check
+from hydra.plugins.vless_xhttp.inbounds import (
+    INTERNAL_PORT,
+    applied_port,
+    certificate_inbound,
+    reality_inbound,
+)
 from hydra.plugins.vless_xhttp.security import (
     DECOY_ROUTE_KEY,
     DEFAULT_HANDSHAKE,
@@ -50,14 +55,12 @@ from hydra.plugins.vless_xhttp.tuning import (
     apply_settings,
     effective as effective_tuning,
     summary as tuning_summary,
-    transport as build_transport,
     validate_mode as _validate_mode,
     validate_path as _validate_path,
 )
 from hydra.utils.tls import resolve_tls_material
 
 
-INTERNAL_PORT = 20448
 DECOY_HTTP_PORT = 10804
 DECOY_DIR = "/var/www/decoy-vless"
 ROUTE_CONFIG_KEY = DECOY_ROUTE_KEY
@@ -141,70 +144,10 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
         if not users:
             return ConfigFragment()
         if is_reality(protocol.config):
-            inbound = self._reality_inbound(state, protocol.config, users)
+            inbound = reality_inbound(state, protocol.config, users)
         else:
-            inbound = self._certificate_inbound(protocol.config, users)
+            inbound = certificate_inbound(protocol.config, users)
         return ConfigFragment(inbounds=[inbound]) if inbound else ConfigFragment()
-
-    def _certificate_inbound(
-        self,
-        config: dict,
-        users: list[dict],
-    ) -> dict[str, object] | None:
-        raw_domain = str(config.get("domain", "")).strip()
-        if not raw_domain:
-            return None
-        domain = _normalize_domain(raw_domain)
-        cert, key = resolve_tls_material(domain, config)
-        if not cert or not key:
-            return None
-        return {
-            "type": "vless",
-            "tag": INBOUND_TAG,
-            "listen": "127.0.0.1",
-            "listen_port": INTERNAL_PORT,
-            "users": users,
-            "tls": {
-                "enabled": True,
-                "server_name": domain,
-                "alpn": ["h2"],
-                "certificate_path": cert,
-                "key_path": key,
-            },
-            "transport": self._transport(config, client=False),
-        }
-
-    def _reality_inbound(
-        self,
-        state: PluginStateAccess,
-        config: dict,
-        users: list[dict],
-    ) -> dict[str, object] | None:
-        from hydra.core.sni_router import needs_mux
-
-        try:
-            tls = server_tls(config)
-        except ValueError:
-            return None
-        behind_mux = needs_mux(state)
-        return {
-            "type": "vless",
-            "tag": INBOUND_TAG,
-            "listen": "127.0.0.1" if behind_mux else "::",
-            "listen_port": INTERNAL_PORT if behind_mux else PUBLIC_PORT,
-            "users": users,
-            "tls": tls,
-            "transport": self._transport(config, client=False),
-        }
-
-    @staticmethod
-    def _transport(
-        config: dict,
-        *,
-        client: bool,
-        domain: str = "",
-    ) -> dict[str, object]:
-        return build_transport(config, client=client, domain=domain)
 
     def _endpoint(
         self,
@@ -346,7 +289,10 @@ class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
                 "XHTTP preset": preset,
                 "XHTTP tuning": summary,
             }
-        return PluginStatus(installed, enabled, running, 443, info)
+        # Порт — тот, что реально слушает inbound, а не константа: за мультиплексором
+        # это внутренний порт, и панель обязана показывать именно его.
+        port = applied_port(protocol.config, state) if protocol else 0
+        return PluginStatus(installed, enabled, running, port, info)
 
     def healthcheck_for_state(
         self,

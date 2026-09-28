@@ -139,6 +139,7 @@ def test_wait_until_stable_stops_on_first_failure():
 def test_reload_reports_runtime_failure():
     completed = MagicMock(returncode=0, stdout="", stderr="")
     with patch.object(singbox, "is_running", return_value=True), \
+         patch.object(singbox, "_service_unit_needs_update", return_value=False), \
          patch.object(singbox, "_run", return_value=completed), \
          patch.object(singbox, "wait_until_stable", return_value=False), \
          patch.object(singbox, "_service_failure_detail", return_value="процесс завершён"), \
@@ -151,7 +152,46 @@ def test_reload_clears_previous_error_after_stable_start():
     completed = MagicMock(returncode=0, stdout="", stderr="")
     singbox._set_error("старая ошибка")
     with patch.object(singbox, "is_running", return_value=True), \
+         patch.object(singbox, "_service_unit_needs_update", return_value=False), \
          patch.object(singbox, "_run", return_value=completed), \
          patch.object(singbox, "wait_until_stable", return_value=True):
         assert singbox.reload() is True
     assert singbox.last_error() == ""
+
+
+def test_reload_restarts_to_activate_repaired_systemd_unit():
+    with patch.object(singbox, "is_running", return_value=True), \
+         patch.object(singbox, "_service_unit_needs_update", return_value=True), \
+         patch.object(singbox, "start", return_value=True) as start, \
+         patch.object(singbox, "_run") as run:
+        assert singbox.reload() is True
+
+    start.assert_called_once_with()
+    run.assert_not_called()
+
+
+def test_reload_reports_failure_when_stale_unit_cannot_be_restarted():
+    with patch.object(singbox, "is_running", return_value=True), \
+         patch.object(singbox, "_service_unit_needs_update", return_value=True), \
+         patch.object(singbox, "start", return_value=False) as start, \
+         patch.object(singbox, "_run") as run:
+        assert singbox.reload() is False
+
+    start.assert_called_once_with()
+    run.assert_not_called()
+
+
+def test_start_stops_when_managed_unit_cannot_be_installed(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+    stopped = MagicMock(returncode=0)
+
+    with patch.object(singbox, "SINGBOX_CONFIG", config_path), \
+         patch.object(singbox, "_install_service", return_value=False), \
+         patch.object(singbox, "_run", return_value=stopped) as run:
+        assert singbox.start() is False
+
+    run.assert_called_once_with(
+        ["systemctl", "stop", "sing-box"],
+        capture=False,
+    )

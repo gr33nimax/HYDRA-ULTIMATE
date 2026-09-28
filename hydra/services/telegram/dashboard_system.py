@@ -57,34 +57,30 @@ def get_system_info_text(app: ApplicationService) -> str:
             minutes = seconds % 3600 // 60
             uptime_str = f"{days}d {hours}h {minutes}m"
 
-    services_lines = []
+    services_line = "нет данных"
+    attention: list[str] = []
     try:
-        for name, status in app.protocols.statuses().items():
-            icon = (
-                "🟢"
-                if status.get("running")
-                else ("⚠️" if status.get("installed") else "🔴")
-            )
-            port = f" (port {status['port']})" if status.get("port") else ""
-            services_lines.append(
-                f"• {icon} <b>{html.escape(str(name))}</b>{html.escape(port)}",
-            )
+        statuses = app.protocols.statuses()
+        running = sum(1 for status in statuses.values() if status.get("running"))
+        attention = [
+            html.escape(str(name))
+            for name, status in statuses.items()
+            if status.get("installed") and not status.get("running")
+        ]
+        services_line = f"{running}/{len(statuses)} работают"
     except Exception as exc:
-        services_lines.append(
-            f"Ошибка получения статуса: {html.escape(str(exc))}",
-        )
+        services_line = f"ошибка: {html.escape(str(exc))}"
 
-    services_block = (
-        "\n".join(services_lines)
-        if services_lines
-        else "Нет активных плагинов"
-    )
-    return (
-        "<b>🖥️ HYDRA System Information</b>\n\n"
+    lines = [
+        "<b>🖥 Система</b>",
+        "",
         f"<b>Сервер:</b> <code>{hostname}</code> ({server_ip})\n"
         f"<b>Аптайм:</b> <code>{uptime_str}</code>\n"
-        f"<b>Load Average:</b> <code>{load_str}</code>\n"
+        f"<b>Load:</b> <code>{load_str}</code>\n"
         f"<b>RAM:</b> <code>{ram_str}</code>\n"
-        f"<b>Диск:</b> <code>{disk_str}</code>\n\n"
-        f"<b>⚡ Статус сервисов:</b>\n{services_block}"
-    )
+        f"<b>Диск:</b> <code>{disk_str}</code>\n"
+        f"<b>Сервисы:</b> {services_line}",
+    ]
+    if attention:
+        lines.append("⚠️ " + ", ".join(attention[:5]))
+    return "\n".join(lines)

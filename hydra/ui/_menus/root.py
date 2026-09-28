@@ -1,4 +1,5 @@
 """Root dashboard controller for the interactive TUI."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -78,18 +79,13 @@ def _sys_info(state: AppState, app: ApplicationService) -> list[str]:
         lines.append(
             kv(
                 "IP (Pub/Loc):",
-                f"{CYAN}{overview.public_ip}{NC}{flag} / "
-                f"{DIM}{overview.local_ip}{NC}",
+                f"{CYAN}{overview.public_ip}{NC}{flag} / {DIM}{overview.local_ip}{NC}",
             ),
         )
 
     dns = overview.dns
     if overview.dnscrypt_active:
-        suffix = (
-            ", ".join(overview.dnscrypt_servers)
-            if overview.dnscrypt_servers
-            else "активен"
-        )
+        suffix = ", ".join(overview.dnscrypt_servers) if overview.dnscrypt_servers else "активен"
         dns = f"{GREEN}DNSCrypt ({suffix}){NC}"
     lines.append(kv("DNS:", dns))
     return lines
@@ -106,7 +102,7 @@ def run_main_menu(
         clear()
         print(BANNER)
 
-        singbox = app.admin.singbox_diagnostics()
+        singbox = app.kernel.status(state).runtime
         statuses = app.protocols.statuses(state)
         counts: dict[PluginCategory, tuple[int, int]] = {}
         for category in (
@@ -116,37 +112,30 @@ def run_main_menu(
         ):
             plugins = app.protocols.list(category)
             counts[category] = (
-                sum(
-                    1
-                    for plugin in plugins
-                    if statuses.get(plugin.meta.name, {}).get("running")
-                ),
+                sum(1 for plugin in plugins if statuses.get(plugin.meta.name, {}).get("running")),
                 len(plugins),
             )
 
-        active_users = sum(
-            1 for user in app.users.list(state) if app.users.access_status(user)[0]
-        )
+        active_users = sum(1 for user in app.users.list(state) if app.users.access_status(user)[0])
         active_t, total_t = counts[PluginCategory.TRANSPORT]
         active_e, total_e = counts[PluginCategory.ENHANCEMENT]
         active_s, total_s = counts[PluginCategory.SECURITY]
+        singbox_version = singbox.version or ("версия неизвестна" if singbox.installed else "не установлен")
         lines = [
             kv(
-                "Sing-Box:",
-                f"{_ok(singbox.installed and singbox.running)}  "
-                f"{singbox.version or 'не установлен'}",
+                "Ядро:",
+                f"{_ok(singbox.installed and singbox.running)}  {singbox_version}",
             ),
             kv("Протоколы:", f"{GREEN}{active_t}{NC}/{total_t} активны"),
             kv("Сетевые службы:", f"{GREEN}{active_e}{NC}/{total_e} активны"),
             kv("Безопасность:", f"{GREEN}{active_s}{NC}/{total_s} активны"),
             kv(
                 "Пользователи:",
-                f"{GREEN if active_users else YELLOW}{active_users}{NC} "
-                f"из {len(state.users)}",
+                f"{GREEN if active_users else YELLOW}{active_users}{NC} из {len(state.users)}",
             ),
             *_sys_info(state, app),
         ]
-        panel("Состояние", lines)
+        panel("Состояние", lines, wrap=True)
 
         choice = menu(
             [
@@ -161,7 +150,7 @@ def run_main_menu(
                     "👥 Пользователи",
                     f"Лимиты, TTL и подписки  [{active_users} активно]",
                 ),
-                ("4", "🤖 Telegram-боты", "Admin-панель и клиентский бот"),
+                ("4", "🤖 Telegram-бот", "Админ-панель управления"),
                 ("5", "📊 Мониторинг", "Трафик, статус, sync-агент и логи"),
                 (
                     "6",
@@ -176,7 +165,7 @@ def run_main_menu(
                 ("8", "🛠️  Тестирование и отладка", "Диагностика VPS"),
                 ("0", "🚪 Выход", ""),
             ],
-            "HYDRA MULTI-PROXY MANAGER",
+            "ГЛАВНОЕ МЕНЮ",
         )
         if choice == "0":
             print(f"\n{GREEN}До свидания! 👋{NC}")

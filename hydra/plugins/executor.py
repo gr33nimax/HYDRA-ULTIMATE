@@ -1,4 +1,5 @@
 """Configuration, apply and health execution for catalogued plugins."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -7,10 +8,13 @@ from typing import Callable
 from hydra.contracts import ConfigFragment, validate_fragment
 from hydra.core.apply_transaction import ApplyTransaction
 from hydra.core.errors import PluginError
-from hydra.core.state_models import AppState
-from hydra.plugins.base import BasePlugin
+from hydra.core.state_models import AppState, user_can_use
+from hydra.plugins.base import BasePlugin, PluginCategory, failure_stage
 from hydra.plugins.catalog import PluginCatalog
 from hydra.plugins.invoker import PluginInvoker
+
+
+_NOT_ACTIVE_DETAIL = "service is not active"
 
 
 class PluginConfigurationError(PluginError):
@@ -70,13 +74,12 @@ class PluginExecutor:
                     f"Plugin {plugin.meta.name} apply failed: {exc}",
                 ) from exc
 
+            def rollback_plugin(plugin=plugin, snapshot=snapshot) -> bool:
+                return self.invoker.rollback(plugin, state, snapshot)
+
             transaction.add_rollback(
                 f"plugin {plugin.meta.name}",
-                lambda plugin=plugin, snapshot=snapshot: self.invoker.rollback(
-                    plugin,
-                    state,
-                    snapshot,
-                ),
+                rollback_plugin,
                 priority=-(len(applied) + 1),
             )
             transaction.advance("apply")
@@ -89,9 +92,7 @@ class PluginExecutor:
                 ) from exc
             if not applied_ok:
                 transaction.rollback(log_error)
-                raise RuntimeError(
-                    f"Plugin {plugin.meta.name} apply returned false",
-                )
+                raise RuntimeError(apply_failure_message(plugin))
             applied.append((plugin, snapshot))
         transaction.commit()
         return applied
@@ -109,13 +110,21 @@ class PluginExecutor:
         for plugin in self.catalog.enabled(state):
             if not uses_central_apply(plugin):
                 continue
+            if (
+                state.users
+                and getattr(plugin.meta, "category", PluginCategory.TRANSPORT) == PluginCategory.TRANSPORT
+                and plugin.meta.name != "wdtt"
+                and not any(user_can_use(user, plugin.meta.name) for user in state.users)
+            ):
+                continue
             try:
                 health = self.invoker.health(plugin, state)
                 healthy, detail = health.healthy, health.detail
             except Exception as exc:
-                healthy, detail = False, str(exc) or exc.__class__.__name__
+                reason = str(exc)
+                healthy, detail = False, reason if reason else exc.__class__.__name__
             if not healthy:
-                if detail == "service is not active":
+                if detail == _NOT_ACTIVE_DETAIL:
                     detail = (
                         "service is not active while enabled in configuration; "
                         f"disable {plugin.meta.name} in the TUI protocol menu"
@@ -128,3 +137,14 @@ def uses_central_apply(plugin: BasePlugin) -> bool:
     """Read the capability while preserving legacy custom plugins."""
     value = getattr(plugin.meta, "central_apply", None)
     return plugin.meta.name != "wdtt" if value is None else value
+
+
+def apply_failure_message(plugin: BasePlugin) -> str:
+    """Prefer the plugin's own redacted apply stage over the generic text.
+
+    The stage reader is best effort (see :func:`failure_stage`): a missing hook,
+    a non-string value or a raising reader leaves the generic message in place.
+    """
+    message = f"Plugin {plugin.meta.name} apply returned false"
+    detail = failure_stage(plugin, "apply")
+    return f"{message}: {detail}" if detail else message

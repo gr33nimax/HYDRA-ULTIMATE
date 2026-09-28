@@ -45,7 +45,7 @@ def test_meta_declares_tls_route_and_extended_core_requirement():
     assert plugin.meta.category == PluginCategory.TRANSPORT
     assert plugin.meta.tls_domain_source == "protocol"
     assert defaults["xhttp_mode"] == "stream-up"
-    assert defaults["xhttp_path"] == "/xhttp"
+    assert defaults["xhttp_path"] == DEFAULT_PATH
     assert defaults[ROUTE_CONFIG_KEY]["internal_port"] == INTERNAL_PORT
     assert "sing-box" in plugin.meta.required_commands
 
@@ -85,7 +85,7 @@ def test_configure_builds_vless_xhttp_inbound_for_active_users():
     }
     assert inbound["transport"]["type"] == "xhttp"
     assert inbound["transport"]["mode"] == "stream-up"
-    assert inbound["transport"]["path"] == "/xhttp"
+    assert inbound["transport"]["path"] == DEFAULT_PATH
 
 
 def test_client_config_and_share_link_match_server_contract():
@@ -94,9 +94,7 @@ def test_client_config_and_share_link_match_server_contract():
     state = _state(user)
 
     config = json.loads(plugin.generate_client_config(user, state))
-    outbound = next(
-        item for item in config["outbounds"] if item["type"] == "vless"
-    )
+    outbound = next(item for item in config["outbounds"] if item["type"] == "vless")
     link = plugin.client_link(user, state)
     parsed = urlsplit(link)
     query = parse_qs(parsed.query)
@@ -107,13 +105,13 @@ def test_client_config_and_share_link_match_server_contract():
     assert outbound["tls"]["server_name"] == "xhttp.example.com"
     assert outbound["transport"]["type"] == "xhttp"
     assert outbound["transport"]["host"] == "xhttp.example.com"
-    assert outbound["transport"]["path"] == "/xhttp"
+    assert outbound["transport"]["path"] == DEFAULT_PATH
     assert parsed.scheme == "vless"
     assert parsed.username == user.uuid
     assert query["type"] == ["xhttp"]
     assert query["security"] == ["tls"]
     assert query["sni"] == ["xhttp.example.com"]
-    assert query["path"] == ["/xhttp"]
+    assert query["path"] == [DEFAULT_PATH]
     assert query["mode"] == ["stream-up"]
 
 
@@ -185,11 +183,13 @@ def test_health_rejects_missing_caddy_route_metadata():
     state = _state(User("active@example.com", "uuid-active"))
     state.protocols["vless"].config.pop(ROUTE_CONFIG_KEY)
 
-    with patch("hydra.core.singbox.is_running", return_value=True), \
-         patch("hydra.core.singbox.has_configured_inbound", return_value=True), \
-         patch("hydra.core.sni_router.is_active", return_value=True), \
-         patch("hydra.core.sni_router.audit_routes") as audit, \
-         patch("hydra.core.sni_router.probe_tls_route") as probe:
+    with (
+        patch("hydra.core.singbox.is_running", return_value=True),
+        patch("hydra.core.singbox.has_configured_inbound", return_value=True),
+        patch("hydra.core.sni_router.is_active", return_value=True),
+        patch("hydra.core.sni_router.audit_routes") as audit,
+        patch("hydra.core.sni_router.probe_tls_route") as probe,
+    ):
         result = plugin.healthcheck_for_state(state)
 
     assert result.healthy is False
@@ -209,17 +209,17 @@ def test_health_rejects_route_missing_from_active_caddy_config():
         actual=(),
     )
 
-    with patch("hydra.core.singbox.is_running", return_value=True), \
-         patch("hydra.core.singbox.has_configured_inbound", return_value=True), \
-         patch("hydra.core.sni_router.is_active", return_value=True), \
-         patch("hydra.core.sni_router.audit_routes", return_value=report), \
-         patch("hydra.core.sni_router.probe_tls_route") as probe:
+    with (
+        patch("hydra.core.singbox.is_running", return_value=True),
+        patch("hydra.core.singbox.has_configured_inbound", return_value=True),
+        patch("hydra.core.sni_router.is_active", return_value=True),
+        patch("hydra.core.sni_router.audit_routes", return_value=report),
+        patch("hydra.core.sni_router.probe_tls_route") as probe,
+    ):
         result = plugin.healthcheck_for_state(state)
 
     assert result.healthy is False
-    assert result.detail == (
-        "VLESS XHTTP Caddy route is not active for xhttp.example.com"
-    )
+    assert result.detail == ("VLESS XHTTP Caddy route is not active for xhttp.example.com")
     probe.assert_not_called()
 
 
@@ -234,14 +234,16 @@ def test_health_rejects_failed_tls_route_probe():
         actual=("xhttp.example.com",),
     )
 
-    with patch("hydra.core.singbox.is_running", return_value=True), \
-         patch("hydra.core.singbox.has_configured_inbound", return_value=True), \
-         patch("hydra.core.sni_router.is_active", return_value=True), \
-         patch("hydra.core.sni_router.audit_routes", return_value=report), \
-         patch(
-             "hydra.core.sni_router.probe_tls_route",
-             return_value=(False, "no certificate available"),
-         ):
+    with (
+        patch("hydra.core.singbox.is_running", return_value=True),
+        patch("hydra.core.singbox.has_configured_inbound", return_value=True),
+        patch("hydra.core.sni_router.is_active", return_value=True),
+        patch("hydra.core.sni_router.audit_routes", return_value=report),
+        patch(
+            "hydra.core.sni_router.probe_tls_route",
+            return_value=(False, "no certificate available"),
+        ),
+    ):
         result = plugin.healthcheck_for_state(state)
 
     assert result.healthy is False
@@ -259,14 +261,16 @@ def test_health_accepts_applied_route_and_verified_tls():
         actual=("xhttp.example.com",),
     )
 
-    with patch("hydra.core.singbox.is_running", return_value=True), \
-         patch("hydra.core.singbox.has_configured_inbound", return_value=True), \
-         patch("hydra.core.sni_router.is_active", return_value=True), \
-         patch("hydra.core.sni_router.audit_routes", return_value=report), \
-         patch(
-             "hydra.core.sni_router.probe_tls_route",
-             return_value=(True, ""),
-         ):
+    with (
+        patch("hydra.core.singbox.is_running", return_value=True),
+        patch("hydra.core.singbox.has_configured_inbound", return_value=True),
+        patch("hydra.core.sni_router.is_active", return_value=True),
+        patch("hydra.core.sni_router.audit_routes", return_value=report),
+        patch(
+            "hydra.core.sni_router.probe_tls_route",
+            return_value=(True, ""),
+        ),
+    ):
         result = plugin.healthcheck_for_state(state)
 
     assert result.healthy is True

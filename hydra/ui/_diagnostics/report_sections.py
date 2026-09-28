@@ -21,6 +21,7 @@ _EVENT_NAMES = {
     "plugins_applied": "плагины применены",
     "committed": "применение успешно завершено",
     "rolled_back": "изменения отменены",
+    "rollback_failed": "откат изменений не завершён",
     "failed": "применение завершилось ошибкой",
     "rejected": "применение отклонено",
 }
@@ -216,7 +217,7 @@ def _append_latest_event(
 ) -> None:
     event = str(latest.get("event", "unknown"))
     marker = "OK" if event == "committed" else "WARNING"
-    if event in {"rolled_back", "failed", "rejected"}:
+    if event in {"rolled_back", "failed", "rejected", "rollback_failed"}:
         report.errors += 1
     report.item(
         f"[{marker}]",
@@ -231,6 +232,10 @@ def _append_latest_event(
             "[ERROR]",
             f"Причина            {str(latest['error'])[:500]}",
         )
+    failures = latest.get("failures")
+    if isinstance(failures, list):
+        for failure in failures[:5]:
+            report.item("[ERROR]", f"Откат              {str(failure)[:300]}")
 
 
 def append_journal(report: DiagnosticReport, app: ApplicationService) -> None:

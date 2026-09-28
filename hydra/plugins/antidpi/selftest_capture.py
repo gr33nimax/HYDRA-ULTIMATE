@@ -1,4 +1,5 @@
 """External AntiDPI capture helpers with injected host/state boundaries."""
+
 from __future__ import annotations
 
 import json
@@ -10,12 +11,7 @@ from pathlib import Path
 from hydra.core.state_models import AppState
 from hydra.plugins.antidpi.adapters import (
     decode_log_message,
-    parse_kernel_scan_line,
     parse_protocol_line,
-)
-from hydra.plugins.antidpi.firewall_rules import (
-    UDP_PROBE_CHAIN,
-    udp_protocol_ports,
 )
 
 
@@ -32,11 +28,7 @@ def all_journal(
             "hydra-source-relay",
             "caddy-l4",
             "caddy-naive",
-            *[
-                unit
-                for owners in journal_units.values()
-                for unit in owners
-            ],
+            *[unit for owners in journal_units.values() for unit in owners],
         },
     )
     base = [
@@ -94,16 +86,12 @@ def all_new_log_lines(
     return result
 
 
-def udp_diagnostics(
-    state: AppState,
+def runtime_diagnostics(
     *,
     host,
-    map_file: Path,
 ) -> dict:
-    """Collect state needed to diagnose real UDP attribution and alerts."""
+    """Collect the firewall and socket state AntiScan actually owns."""
     commands = {
-        "iptables_v4": ["iptables", "-S", UDP_PROBE_CHAIN],
-        "iptables_v6": ["ip6tables", "-S", UDP_PROBE_CHAIN],
         "input_rules_v4": ["iptables", "-S", "INPUT"],
         "input_rules_v6": ["ip6tables", "-S", "INPUT"],
         "udp_sockets": ["ss", "-lunp"],
@@ -123,65 +111,18 @@ def udp_diagnostics(
             "stdout": (result.stdout or "")[-100_000:],
             "stderr": (result.stderr or "")[-10_000:],
         }
-    try:
-        mappings = map_file.read_text(
-            encoding="utf-8",
-            errors="replace",
-        ).splitlines()[-2000:]
-    except OSError:
-        mappings = []
-    debug_control = Path("/proc/dynamic_debug/control")
-    try:
-        awg_debug = [
-            line
-            for line in debug_control.read_text(
-                encoding="utf-8",
-                errors="replace",
-            ).splitlines()
-            if "amneziawg" in line
-            or any(
-                name in line
-                for name in (
-                    "prepare_awg_message",
-                    "wg_receive_handshake_packet",
-                    "wg_noise_handshake_consume_initiation",
-                )
-            )
-        ][-500:]
-    except OSError:
-        awg_debug = []
-    return {
-        "protocol_ports": udp_protocol_ports(state),
-        "commands": output,
-        "source_relay_mappings": mappings,
-        "amneziawg_dynamic_debug": awg_debug,
-    }
+    return {"commands": output}
 
 
-def capture_event_summary(
-    records: list[dict],
-    state: AppState,
-) -> list[dict]:
+def capture_event_summary(records: list[dict]) -> list[dict]:
     """Summarize normalized evidence observed inside one capture window."""
-    ports = udp_protocol_ports(state)
     counts: dict[tuple[str, str, str, str], int] = {}
     for record in records:
         message = decode_log_message(record.get("MESSAGE", ""))
         service = str(
-            record.get("_SYSTEMD_UNIT", "")
-            or record.get("SYSLOG_IDENTIFIER", ""),
+            record.get("_SYSTEMD_UNIT", "") or record.get("SYSLOG_IDENTIFIER", ""),
         )
-        event = parse_kernel_scan_line(message)
-        if event and event[1].get("kind") == "udp_probe":
-            try:
-                destination_port = int(
-                    event[1].get("destination_port", 0),
-                )
-            except (TypeError, ValueError):
-                destination_port = 0
-            event[1]["protocol"] = ports.get(destination_port, "udp")
-        if not event:
-            event = parse_protocol_line(service, message)
+        event = parse_protocol_line(service, message)
         if not event:
             continue
         address, details = event
@@ -207,22 +148,35 @@ def capture_event_summary(
     ]
 
 
+def _as_int(value: object, default: int = 0) -> int:
+    """Return an integer from untrusted persisted state, or ``default``."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
 def runtime_delta(before: dict, after: dict) -> dict:
     def scalar(name: str) -> int:
         return max(
             0,
-            int(after.get(name, 0) or 0)
-            - int(before.get(name, 0) or 0),
+            _as_int(after.get(name, 0)) - _as_int(before.get(name, 0)),
         )
 
     def counters(name: str) -> dict[str, int]:
         old = before.get(name, {}) if isinstance(before.get(name), dict) else {}
         new = after.get(name, {}) if isinstance(after.get(name), dict) else {}
-        return {
-            str(key): int(value or 0) - int(old.get(key, 0) or 0)
-            for key, value in new.items()
-            if int(value or 0) - int(old.get(key, 0) or 0) > 0
-        }
+        growth = {str(key): _as_int(value) - _as_int(old.get(key, 0)) for key, value in new.items()}
+        return {key: value for key, value in growth.items() if value > 0}
 
     old_notifications = before.get("notification_stats", {})
     new_notifications = after.get("notification_stats", {})
@@ -237,8 +191,7 @@ def runtime_delta(before: dict, after: dict) -> dict:
         "notifications": {
             key: max(
                 0,
-                int(new_notifications.get(key, 0) or 0)
-                - int(old_notifications.get(key, 0) or 0),
+                _as_int(new_notifications.get(key, 0)) - _as_int(old_notifications.get(key, 0)),
             )
             for key in ("attempted", "delivered", "failed")
         },
@@ -264,10 +217,7 @@ def write_capture_archive(
         )
         (root / "journal.jsonl").write_text(
             redact(
-                "\n".join(
-                    json.dumps(item, ensure_ascii=False)
-                    for item in records
-                ),
+                "\n".join(json.dumps(item, ensure_ascii=False) for item in records),
             ),
             encoding="utf-8",
         )

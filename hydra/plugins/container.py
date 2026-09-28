@@ -4,6 +4,7 @@ Production code receives this object explicitly.  The legacy ``registry``
 module remains a compatibility facade, but no application use-case needs a
 process-global plugin list.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
@@ -34,11 +35,7 @@ class PluginContainer:
     def __post_init__(self) -> None:
         stable_plugins = list(self.plugins)
         names = [plugin.meta.name for plugin in stable_plugins]
-        duplicates = sorted(
-            name
-            for name in set(names)
-            if names.count(name) > 1
-        )
+        duplicates = sorted(name for name in set(names) if names.count(name) > 1)
         if duplicates:
             raise ValueError(
                 f"duplicate plugin names: {', '.join(duplicates)}",

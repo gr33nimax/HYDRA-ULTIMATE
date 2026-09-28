@@ -134,7 +134,7 @@ def test_one_descriptor_enables_commands_queries_actions_and_setup() -> None:
         },
     )()
 
-    ProtocolSetupService(certificates, get_plugin).prepare_enable(
+    ProtocolSetupService(certificates, get_plugin).prepare_enable(  # type: ignore[arg-type]
         state,
         "extension",
     )
@@ -165,6 +165,32 @@ def test_default_composition_accepts_an_outer_plugin_factory() -> None:
 
     assert plugins[-1].meta.name == "extension"
     PluginCatalog(plugins).validate_contracts()
+
+
+def test_manual_artifacts_capability_requires_a_declared_query() -> None:
+    plugin = ExtensionPlugin()
+    plugin.meta = PluginMeta(
+        name="extension",
+        description="test extension",
+        manual_artifacts_query="missing_query",
+    )
+
+    assert PluginCatalog([plugin]).contract_errors(plugin) == [
+        "meta.manual_artifacts_query must be a declared query",
+    ]
+
+
+def test_persist_only_capability_requires_a_declared_command() -> None:
+    plugin = ExtensionPlugin()
+    plugin.meta = PluginMeta(
+        name="extension",
+        description="test extension",
+        persist_only_commands=("missing_command",),
+    )
+
+    assert PluginCatalog([plugin]).contract_errors(plugin) == [
+        "meta.persist_only_commands must be declared in commands",
+    ]
 
 
 def test_production_bootstrap_accepts_an_outer_plugin_factory() -> None:
@@ -466,7 +492,6 @@ def test_generic_ui_layers_have_no_builtin_protocol_allowlist() -> None:
         "snell",
         "mieru",
         "naive",
-        "telemt",
         "wdtt",
         "warp",
         "dnscrypt",
@@ -513,7 +538,6 @@ def test_shared_scheduler_has_no_builtin_protocol_name_branch() -> None:
         "snell",
         "mieru",
         "naive",
-        "telemt",
         "wdtt",
         "warp",
         "dnscrypt",

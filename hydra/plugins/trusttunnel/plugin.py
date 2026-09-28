@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import shutil
 import time
-import urllib.parse
 
 from hydra.core.host import HOST
 from hydra.core.state_models import User
@@ -177,7 +176,6 @@ class TrustTunnelPlugin(DecoyThemeSupport, BasePlugin):
             derive_username=self._derive_username,
             derive_password=self._derive_password,
             transport_of=self._transport,
-            quote=urllib.parse.quote,
         )
 
     def client_links(
@@ -191,7 +189,6 @@ class TrustTunnelPlugin(DecoyThemeSupport, BasePlugin):
             derive_username=self._derive_username,
             derive_password=self._derive_password,
             transport_of=self._transport,
-            quote=urllib.parse.quote,
         )
 
     def on_enable(self, state: PluginStateAccess) -> None:

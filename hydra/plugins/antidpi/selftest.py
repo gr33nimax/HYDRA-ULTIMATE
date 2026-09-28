@@ -1,4 +1,5 @@
 """Compatibility facade for modular AntiDPI diagnostic self-tests."""
+
 from __future__ import annotations
 
 import os
@@ -7,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from hydra import __version__
 from hydra.core.host import HOST
@@ -15,16 +17,14 @@ from hydra.core.sni_router import (
     TRUSTTUNNEL_LOG,
     get_effective_port,
 )
-from hydra.core.source_relay import MAP_FILE
 from hydra.core.state_models import AppState
-from hydra.plugins.antidpi.normalization import vless_endpoint
 from hydra.plugins.antidpi.paths import NAIVE_ACCESS_LOG
 from hydra.plugins.antidpi.selftest_capture import (
     all_journal,
     all_new_log_lines,
     capture_event_summary,
     runtime_delta,
-    udp_diagnostics,
+    runtime_diagnostics,
     write_capture_archive,
 )
 from hydra.plugins.antidpi.selftest_probes import (
@@ -56,15 +56,15 @@ from hydra.plugins.antidpi.selftest_targets import (
     JOURNAL_UNITS,
     SUPPORTED_PROTOCOLS,
     Target,
-    awg_handshake_payload,
     targets,
 )
 
+# Access logs owned by the decoy surfaces AntiScan still inspects.  The Caddy
+# L4 TLS JSON stream is gone with the observations that consumed it.
 LOG_PATHS = (
     DECOY_LOG,
     TRUSTTUNNEL_LOG,
     NAIVE_ACCESS_LOG,
-    Path("/var/log/caddy-l4/antidpi.jsonl"),
 )
 _PAYLOADS = PAYLOADS
 RuntimeSnapshotReader = Callable[[], dict]
@@ -88,10 +88,6 @@ def _targets(state: AppState, protocol: str) -> list[Target]:
         protocol,
         effective_port=get_effective_port,
     )
-
-
-def _awg_handshake_payload(state: AppState, target: Target) -> bytes:
-    return awg_handshake_payload(state, target)
 
 
 def _probe(
@@ -204,14 +200,11 @@ def _log_filter_matches(
     logs: dict[str, list[str]],
     state: AppState | None = None,
 ) -> list[dict]:
-    return log_filter_matches(
-        protocol,
-        logs,
-        vless_endpoint=vless_endpoint(state),
-    )
+    del state
+    return log_filter_matches(protocol, logs)
 
 
-def _protocol_report(enabled: bool) -> dict[str, object]:
+def _protocol_report(enabled: bool) -> dict[str, Any]:
     return {
         "enabled": enabled,
         "targets": [],
@@ -229,6 +222,23 @@ def _protocol_report(enabled: bool) -> dict[str, object]:
     }
 
 
+def _as_float(value: object, default: float = 0.0) -> float:
+    """Return a float from caller input, or ``default``."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
 def _exercise_protocol(
     state: AppState,
     protocol: str,
@@ -237,10 +247,10 @@ def _exercise_protocol(
     full: bool,
     protocols: ClientConfigProvider | None,
     redact: Callable[[str], str],
-) -> tuple[dict[str, object], dict[str, object] | None]:
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     plugin_state = state.protocols.get(protocol)
     item = _protocol_report(bool(plugin_state and plugin_state.enabled))
-    coverage = item["coverage"]
+    coverage: dict[str, Any] = item["coverage"]
     if not item["enabled"]:
         item["status"] = "skipped_disabled"
         return item, None
@@ -252,12 +262,7 @@ def _exercise_protocol(
     before = _offsets()
     since = time.time() - 0.05
     for target in protocol_targets:
-        extra = (
-            (_awg_handshake_payload(state, target),)
-            if protocol == "amneziawg"
-            else ()
-        )
-        item["probes"].extend(_probe(target, extra_payloads=extra))
+        item["probes"].extend(_probe(target))
     coverage["malformed_probe_sent"] = bool(item["probes"])
     if full:
         native_client = _safe_native_probe(
@@ -273,7 +278,7 @@ def _exercise_protocol(
         coverage["native_client_probe_sent"] = bool(
             native_client.get("triggered"),
         )
-    time.sleep(max(0.0, min(float(wait_seconds), 10.0)))
+    time.sleep(max(0.0, min(_as_float(wait_seconds), 10.0)))
     records = _journal(protocol, since, time.time() + 0.05)
     logs = _new_log_lines(before)
     item.update(_record_summary(protocol, records))
@@ -283,8 +288,7 @@ def _exercise_protocol(
     item["logs"] = {path: len(lines) for path, lines in logs.items()}
     coverage["native_log_observed"] = bool(records or logs)
     coverage["filter_match"] = bool(
-        item.get("current_filter_matches")
-        or item.get("protocol_context_matches"),
+        item.get("current_filter_matches") or item.get("protocol_context_matches"),
     )
     if coverage["filter_match"]:
         item["status"] = "filter_match"
@@ -317,25 +321,12 @@ def _safe_native_probe(
 
 
 def _coverage_summary(report: dict) -> dict:
-    enabled_items = [
-        item
-        for item in report["protocols"].values()
-        if item.get("enabled")
-    ]
+    enabled_items = [item for item in report["protocols"].values() if item.get("enabled")]
     return {
         "enabled_protocols": len(enabled_items),
-        "native_logs": sum(
-            bool(item["coverage"]["native_log_observed"])
-            for item in enabled_items
-        ),
-        "filter_matches": sum(
-            bool(item["coverage"]["filter_match"])
-            for item in enabled_items
-        ),
-        "native_clients_executed": sum(
-            bool(item["coverage"]["native_client_probe_sent"])
-            for item in enabled_items
-        ),
+        "native_logs": sum(bool(item["coverage"]["native_log_observed"]) for item in enabled_items),
+        "filter_matches": sum(bool(item["coverage"]["filter_match"]) for item in enabled_items),
+        "native_clients_executed": sum(bool(item["coverage"]["native_client_probe_sent"]) for item in enabled_items),
         "external_test_required": [
             "source attribution from a non-whitelisted public IP",
             "ipset/firewall enforcement from that same IP",
@@ -393,9 +384,7 @@ def run_selftest(
         full=full,
     )
     captured_count = sum(
-        1
-        for item in report["protocols"].values()
-        if item.get("status") in {"filter_match", "native_log_unmatched"}
+        1 for item in report["protocols"].values() if item.get("status") in {"filter_match", "native_log_unmatched"}
     )
     return {
         "ok": True,
@@ -420,15 +409,12 @@ def _all_new_log_lines(
     return all_new_log_lines(before)
 
 
-def _udp_diagnostics(state: AppState) -> dict:
-    return udp_diagnostics(state, host=HOST, map_file=MAP_FILE)
+def _runtime_diagnostics() -> dict:
+    return runtime_diagnostics(host=HOST)
 
 
-def _capture_event_summary(
-    records: list[dict],
-    state: AppState,
-) -> list[dict]:
-    return capture_event_summary(records, state)
+def _capture_event_summary(records: list[dict]) -> list[dict]:
+    return capture_event_summary(records)
 
 
 def _runtime_delta(before: dict, after: dict) -> dict:
@@ -447,7 +433,7 @@ def capture_external_tests(
         raise RuntimeError("AntiDPI capture must run on the HYDRA Linux host")
     if runtime_snapshot is None:
         raise ValueError("runtime_snapshot is required")
-    duration = max(10.0, min(float(seconds), 600.0))
+    duration = max(10.0, min(_as_float(seconds), 600.0))
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     archive = archive_path(output, kind="capture", stamp=stamp)
     redact = _redactor(state)
@@ -455,8 +441,7 @@ def capture_external_tests(
     runtime_before = runtime_snapshot()
     since = time.time()
     print(
-        f"AntiDPI capture active for {duration:.0f}s. "
-        "Run invalid-password clients now from an external IP...",
+        f"AntiDPI capture active for {duration:.0f}s. Run invalid-password clients now from an external IP...",
         flush=True,
     )
     time.sleep(duration)
@@ -474,8 +459,8 @@ def capture_external_tests(
         "log_lines": {path: len(lines) for path, lines in logs.items()},
         "antidpi_runtime": runtime,
         "capture_delta": _runtime_delta(runtime_before, runtime),
-        "observed_events": _capture_event_summary(records, state),
-        "udp_diagnostics": _udp_diagnostics(state),
+        "observed_events": _capture_event_summary(records),
+        "runtime_diagnostics": _runtime_diagnostics(),
     }
     write_capture_archive(
         archive,

@@ -221,6 +221,8 @@ def test_share_link_stays_unchanged_for_default_tuning():
     query = parse_qs(urlsplit(plugin.client_link(state.users[0], state)).query)
 
     assert "extra" not in query
+    # fp rides as its own query parameter, never inside extra
+    assert query.get("fp") == ["chrome"]
 
 
 def test_share_link_carries_only_client_visible_overrides():
@@ -257,7 +259,7 @@ def test_get_tuning_projects_effective_settings():
         "max_buffered_posts": 30,
         "stream_up_secs": "30-120",
         "max_header_bytes": 16384,
-        "utls_fingerprint": "none",
+        "utls_fingerprint": "chrome",
     }
 
 
@@ -276,9 +278,11 @@ def test_status_reports_preset_and_tuning_summary():
     plugin = VlessXhttpPlugin()
     state = _state()
 
-    with patch("hydra.core.singbox.is_installed", return_value=True), \
-         patch("hydra.core.singbox.is_running", return_value=True), \
-         patch("hydra.core.sni_router.is_active", return_value=True):
+    with (
+        patch("hydra.core.singbox.is_installed", return_value=True),
+        patch("hydra.core.singbox.is_running", return_value=True),
+        patch("hydra.core.sni_router.is_active", return_value=True),
+    ):
         info = plugin.status(state).info
 
     assert info["XHTTP preset"] == "balanced"
@@ -289,9 +293,11 @@ def test_status_survives_an_invalid_stored_tuning_value():
     plugin = VlessXhttpPlugin()
     state = _state(xhttp_max_buffered_posts=0)
 
-    with patch("hydra.core.singbox.is_installed", return_value=True), \
-         patch("hydra.core.singbox.is_running", return_value=False), \
-         patch("hydra.core.sni_router.is_active", return_value=False):
+    with (
+        patch("hydra.core.singbox.is_installed", return_value=True),
+        patch("hydra.core.singbox.is_running", return_value=False),
+        patch("hydra.core.sni_router.is_active", return_value=False),
+    ):
         info = plugin.status(state).info
 
     assert info["XHTTP preset"] == "invalid"
@@ -309,14 +315,17 @@ def test_settings_menu_opens_the_tuning_submenu():
     state = _state()
     app = _app(state)
 
-    with patch.object(
-        vless_xhttp_settings,
-        "menu",
-        side_effect=["5", "0"],
-    ), patch.object(
-        vless_xhttp_settings,
-        "open_tuning_menu",
-    ) as open_tuning:
+    with (
+        patch.object(
+            vless_xhttp_settings,
+            "menu",
+            side_effect=["5", "0"],
+        ),
+        patch.object(
+            vless_xhttp_settings,
+            "open_tuning_menu",
+        ) as open_tuning,
+    ):
         vless_xhttp_settings.open_menu(state, MagicMock(), app)
 
     open_tuning.assert_called_once_with(state, app)
@@ -327,21 +336,20 @@ def test_tuning_menu_edits_a_scalar_knob():
     state = _state()
     app = _app(state)
     index = str(
-        next(
-            position
-            for position, field in enumerate(tuning.FIELDS, start=1)
-            if field.param == "padding"
-        ),
+        next(position for position, field in enumerate(tuning.FIELDS, start=1) if field.param == "padding"),
     )
 
-    with patch.object(
-        vless_xhttp_tuning,
-        "menu",
-        side_effect=[index, "0"],
-    ), patch.object(
-        vless_xhttp_tuning,
-        "prompt",
-        side_effect=["300-900", ""],
+    with (
+        patch.object(
+            vless_xhttp_tuning,
+            "menu",
+            side_effect=[index, "0"],
+        ),
+        patch.object(
+            vless_xhttp_tuning,
+            "prompt",
+            side_effect=["300-900", ""],
+        ),
     ):
         vless_xhttp_tuning.open_menu(state, app)
 
@@ -357,18 +365,17 @@ def test_tuning_menu_toggles_a_boolean_knob():
     state = _state()
     app = _app(state)
     index = str(
-        next(
-            position
-            for position, field in enumerate(tuning.FIELDS, start=1)
-            if field.param == "no_sse_header"
-        ),
+        next(position for position, field in enumerate(tuning.FIELDS, start=1) if field.param == "no_sse_header"),
     )
 
-    with patch.object(
-        vless_xhttp_tuning,
-        "menu",
-        side_effect=[index, "0"],
-    ), patch.object(vless_xhttp_tuning, "prompt", return_value=""):
+    with (
+        patch.object(
+            vless_xhttp_tuning,
+            "menu",
+            side_effect=[index, "0"],
+        ),
+        patch.object(vless_xhttp_tuning, "prompt", return_value=""),
+    ):
         vless_xhttp_tuning.open_menu(state, app)
 
     app.plugin_command.assert_called_once_with(
@@ -383,21 +390,20 @@ def test_tuning_menu_removes_a_header():
     state = _state(xhttp_headers={"X-Trace": "1"})
     app = _app(state)
     index = str(
-        next(
-            position
-            for position, field in enumerate(tuning.FIELDS, start=1)
-            if field.param == "headers"
-        ),
+        next(position for position, field in enumerate(tuning.FIELDS, start=1) if field.param == "headers"),
     )
 
-    with patch.object(
-        vless_xhttp_tuning,
-        "menu",
-        side_effect=[index, "2", "0"],
-    ), patch.object(
-        vless_xhttp_tuning,
-        "prompt",
-        side_effect=["X-Trace", ""],
+    with (
+        patch.object(
+            vless_xhttp_tuning,
+            "menu",
+            side_effect=[index, "2", "0"],
+        ),
+        patch.object(
+            vless_xhttp_tuning,
+            "prompt",
+            side_effect=["X-Trace", ""],
+        ),
     ):
         vless_xhttp_tuning.open_menu(state, app)
 
@@ -409,7 +415,7 @@ def test_tuning_menu_removes_a_header():
     )
 
 
-def test_default_client_profile_carries_no_utls_hint():
+def test_default_client_profile_carries_chrome_utls():
     plugin = VlessXhttpPlugin()
     state = _state()
 
@@ -418,8 +424,23 @@ def test_default_client_profile_carries_no_utls_hint():
     )["outbounds"][0]
     query = parse_qs(urlsplit(plugin.client_link(state.users[0], state)).query)
 
-    assert "utls" not in client["tls"]
-    assert "fp" not in query
+    assert client["tls"]["utls"] == {"enabled": True, "fingerprint": "chrome"}
+    assert query["fp"] == ["chrome"]
+
+
+def test_client_transport_omits_server_only_fields():
+    plugin = VlessXhttpPlugin()
+    state = _state()
+
+    client = json.loads(
+        plugin.generate_client_config(state.users[0], state),
+    )["outbounds"][0]["transport"]
+    server = plugin.configure(state).inbounds[0]["transport"]
+
+    assert "sc_max_buffered_posts" not in client
+    assert "server_max_header_bytes" not in client
+    assert server["sc_max_buffered_posts"] == 30
+    assert server["server_max_header_bytes"] == 8192
 
 
 def test_utls_fingerprint_reaches_the_client_profile_and_link():
@@ -466,11 +487,14 @@ def test_settings_menu_changes_the_fingerprint():
     state = _state()
     app = _app(state)
 
-    with patch.object(
-        vless_xhttp_settings,
-        "menu",
-        side_effect=["6", "2", "0"],
-    ), patch.object(vless_xhttp_settings, "prompt", return_value=""):
+    with (
+        patch.object(
+            vless_xhttp_settings,
+            "menu",
+            side_effect=["6", "2", "0"],
+        ),
+        patch.object(vless_xhttp_settings, "prompt", return_value=""),
+    ):
         vless_xhttp_settings.open_menu(state, MagicMock(), app)
 
     app.plugin_command.assert_called_once_with(

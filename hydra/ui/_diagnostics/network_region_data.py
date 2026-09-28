@@ -114,7 +114,7 @@ def collect_region_data(
             ipv4 if version == 4 else ipv6,
             service,
         ),
-        workers=8,
+        workers=4,
         fallback=_UNKNOWN,
     )
     custom = _parallel_results(

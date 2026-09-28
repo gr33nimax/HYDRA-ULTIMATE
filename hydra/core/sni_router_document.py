@@ -1,4 +1,5 @@
 """Pure, section-oriented Caddy document rendering for the SNI router."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
@@ -6,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from hydra.core.sni_router_http import http_servers
+from hydra.core.sni_router_planning import TLS_TERMINATED_ROUTE_KINDS
 from hydra.core.state_models import AppState
 
 
@@ -25,6 +27,7 @@ class RenderSettings:
     source_preservation_enabled: bool
     decoy_log: str
     trusttunnel_log: str
+    vless_cdn_decoy_log: str
     admin_address: str
 
 
@@ -72,14 +75,18 @@ def _logging(settings: RenderSettings) -> dict[str, Any]:
                 "include": ["http.log.access.decoy"],
                 "level": "INFO",
             },
-            "antidpi": {
+            "vless-cdn-decoy": {
                 "writer": {
                     "output": "file",
-                    "filename": "/var/log/caddy-l4/antidpi.jsonl",
+                    "filename": settings.vless_cdn_decoy_log,
                 },
-                "include": ["layer4"],
+                "include": ["http.log.access.vless-cdn-decoy"],
                 "level": "INFO",
             },
+            # The layer4 JSON logger that fed AntiDPI's generic TLS
+            # observations is gone: nothing reads it since the evidence
+            # contraction, so keeping the writer would only grow a log nobody
+            # consults.
             "trusttunnel": {
                 "writer": {
                     "output": "file",
@@ -101,29 +108,34 @@ def _tls_app(backends: list[Backend]) -> dict[str, Any]:
         for backend in backends
         if (
             (
-                backend["name"]
-                in ("anytls", "trusttunnel", "hysteria2")
-                or backend.get("route_kind") == "http_path_proxy"
+                backend["name"] in ("anytls", "trusttunnel", "hysteria2")
+                or backend.get("route_kind") in TLS_TERMINATED_ROUTE_KINDS
             )
             and backend["cert_file"]
             and backend["key_file"]
         )
     ]
-    return (
-        {"certificates": {"load_files": certificates}}
-        if certificates
-        else {}
-    )
+    return {"certificates": {"load_files": certificates}} if certificates else {}
 
 
 def _tls_handler(backend: Backend) -> dict[str, Any]:
     """Terminate TLS only when a complete certificate pair is planned."""
     if not backend.get("cert_file") or not backend.get("key_file"):
         raise ValueError(
-            f"TLS material is missing for {backend['name']} "
-            f"domain {backend['domain']}",
+            f"TLS material is missing for {backend['name']} domain {backend['domain']}",
         )
-    return {"handler": "tls"}
+    handler: dict[str, Any] = {"handler": "tls"}
+    if backend.get("origin_http2"):
+        # CDN может идти к origin по HTTP/2. Мультиплексор завершает TLS и отдаёт
+        # расшифрованный поток дальше; внутренний сервер принимает h2c, потому что
+        # h2c есть в его protocols, — иначе половина хопа говорила бы на другом языке.
+        handler["connection_policies"] = [{"alpn": ["h2", "http/1.1"]}]
+    elif backend.get("route_kind") == "http_reverse_proxy":
+        # WEB-релей — обычный HTTP/1.1-сервер за завершением TLS (WebSocket
+        # upgrade), поэтому здесь согласуется только http/1.1: расшифрованный
+        # поток уходит в релей как есть, без h2-фреймов.
+        handler["connection_policies"] = [{"alpn": ["http/1.1"]}]
+    return handler
 
 
 def _tls_route(
@@ -152,7 +164,14 @@ def _tls_route(
             ],
         }
 
-    if backend.get("route_kind") == "http_path_proxy":
+    if backend.get("route_kind") == "http_reverse_proxy":
+        # The WEB bridge needs the whole origin: TLS is terminated here and the
+        # decrypted HTTP/WebSocket stream is forwarded unchanged to the relay.
+        handlers = [
+            _tls_handler(backend),
+            proxy_factory(f"127.0.0.1:{port}"),
+        ]
+    elif backend.get("route_kind") == "http_path_proxy":
         handlers = [
             _tls_handler(backend),
             proxy_factory(
@@ -165,11 +184,7 @@ def _tls_route(
             proxy_factory(f"127.0.0.1:{port}", proxy_protocol=True),
         ]
     elif name == "shadowtls":
-        target = (
-            settings.relay_ports["shadowtls"]
-            if relay_enabled
-            else port
-        )
+        target = settings.relay_ports["shadowtls"] if relay_enabled else port
         handlers = [
             proxy_factory(
                 f"127.0.0.1:{target}",
@@ -177,11 +192,7 @@ def _tls_route(
             ),
         ]
     elif name == "anytls":
-        target = (
-            settings.relay_ports["anytls"]
-            if relay_enabled
-            else port
-        )
+        target = settings.relay_ports["anytls"] if relay_enabled else port
         handlers = [
             _tls_handler(backend),
             {
@@ -199,8 +210,7 @@ def _tls_route(
                     {
                         "handle": [
                             proxy_factory(
-                                "127.0.0.1:"
-                                f"{settings.decoy_ports['anytls']}",
+                                f"127.0.0.1:{settings.decoy_ports['anytls']}",
                                 proxy_protocol=True,
                             ),
                         ],
@@ -245,11 +255,7 @@ def _tls_routes(
         )
     ]
     fallback = next(
-        (
-            item
-            for item in backends
-            if item["name"] in ("anytls", "trusttunnel")
-        ),
+        (item for item in backends if item["name"] in ("anytls", "trusttunnel")),
         None,
     )
     if fallback:
@@ -286,14 +292,8 @@ def _quic_server(
     )
     if not backend:
         raise ValueError(f"QUIC backend {owner} отсутствует в Caddy config")
-    udp_relay_enabled = (
-        relay_enabled and backend["name"] in settings.udp_relay_ports
-    )
-    target_port = (
-        settings.udp_relay_ports[str(backend["name"])]
-        if udp_relay_enabled
-        else backend["port"]
-    )
+    udp_relay_enabled = relay_enabled and backend["name"] in settings.udp_relay_ports
+    target_port = settings.udp_relay_ports[str(backend["name"])] if udp_relay_enabled else backend["port"]
     return {
         "listen": ["udp/:443"],
         "routes": [
@@ -301,9 +301,7 @@ def _quic_server(
                 "handle": [
                     proxy_factory(
                         f"udp/127.0.0.1:{target_port}",
-                        preserve_source=(
-                            backend["name"] in settings.preserved_backends
-                        ),
+                        preserve_source=(backend["name"] in settings.preserved_backends),
                         proxy_protocol=udp_relay_enabled,
                     ),
                 ],

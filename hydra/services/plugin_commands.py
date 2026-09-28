@@ -48,6 +48,9 @@ class PluginCommandService:
     invoker: PluginInvoker = field(default_factory=PluginInvoker)
     prepare_apply: Callable[[AppState, str], None] = lambda state, name: None
     commands: Mapping[str, frozenset[str]] | None = None
+    # A failed apply must stay visible after the rollback that followed it.
+    last_apply_error: Callable[[], str] = lambda: ""
+    set_apply_error: Callable[[str], None] = lambda message: None
 
     def _persist_rollback(self, state: AppState) -> None:
         """Persist a restored snapshot without failing on a stale revision."""
@@ -113,7 +116,18 @@ class PluginCommandService:
                 return False
 
             protocol = state.protocols.get(plugin_name)
-            if protocol is not None and protocol.enabled:
+            persist_only = frozenset(
+                getattr(
+                    plugin.meta.capabilities,
+                    "persist_only_commands",
+                    (),
+                ),
+            )
+            if (
+                protocol is not None
+                and protocol.enabled
+                and command not in persist_only
+            ):
                 self.prepare_apply(state, plugin_name)
                 capabilities = getattr(plugin.meta, "capabilities", None)
                 central_apply = getattr(
@@ -130,14 +144,38 @@ class PluginCommandService:
                     if not central_apply:
                         self.save_state(state)
                     return True
-                rollback()
+                # The apply reason is captured before the rollback, because the
+                # cleanup is allowed to fail and must never replace the cause.
+                failure = self.last_apply_error()
+                rollback_error: Exception | None = None
+                try:
+                    rollback()
+                except Exception as exc:
+                    rollback_error = exc
+                finally:
+                    if failure:
+                        self.set_apply_error(failure)
+                if rollback_error is not None:
+                    raise RuntimeError(
+                        f"{failure}\n{rollback_error}"
+                        if failure
+                        else str(rollback_error),
+                    ) from rollback_error
                 return False
 
             self.save_state(state)
             return True
-        except Exception:
-            rollback()
-            raise
+        except Exception as exc:
+            # The command's own failure is the cause; a failing cleanup is
+            # reported as an additional line and must never replace it.
+            rollback_error: Exception | None = None
+            try:
+                rollback()
+            except Exception as cleanup_exc:
+                rollback_error = cleanup_exc
+            if rollback_error is None:
+                raise
+            raise RuntimeError(f"{exc}\n{rollback_error}") from exc
 
 
 __all__ = [

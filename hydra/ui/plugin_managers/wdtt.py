@@ -204,6 +204,16 @@ def _show_status_logs(app: ApplicationService) -> None:
         show_status_logs(app)
 
 
+def _setup_headless_creator(
+    state: AppState,
+    app: ApplicationService,
+) -> None:
+    """Forward legacy entrypoints to the Calls-owned creator flow."""
+    from hydra.ui.plugin_managers.calls import menu_calls
+
+    menu_calls(state, app)
+
+
 def _uninstall_wdtt(
     state: AppState,
     app: ApplicationService,

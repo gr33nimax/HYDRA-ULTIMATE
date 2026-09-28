@@ -1,9 +1,11 @@
 from contextlib import nullcontext
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import patch
 
 import pytest
 
+from hydra.contracts import JsonValue
 from hydra.core.state import AppState, PluginState
 from hydra.core.errors import HostOperationError
 from hydra.plugins.base import PluginMeta
@@ -135,16 +137,18 @@ def test_certbot_package_install_timeout_is_normalized_to_failure():
         def run(self, command, **_kwargs):
             raise HostOperationError(f"timeout: {command}")
 
-    assert CertificateProvisioner(MissingCertbotHost())._obtain(
-        "vpn.example.com",
-    ) is False
+    assert (
+        CertificateProvisioner(MissingCertbotHost())._obtain(
+            "vpn.example.com",
+        )
+        is False
+    )
 
 
 def test_protocol_setup_updates_only_desired_tls_material():
     calls = []
     certificates = SimpleNamespace(
-        ensure=lambda domain, config: calls.append((domain, dict(config)))
-        or ("/cert.pem", "/key.pem"),
+        ensure=lambda domain, config: calls.append((domain, dict(config))) or ("/cert.pem", "/key.pem"),
     )
     state = AppState(
         protocols={
@@ -168,8 +172,9 @@ def test_protocol_setup_updates_only_desired_tls_material():
 def test_enabled_tls_transports_share_certificate_preflight():
     calls = []
     certificates = SimpleNamespace(
-        ensure=lambda domain, config: calls.append((domain, dict(config)))
-        or (f"/certs/{domain}.pem", f"/certs/{domain}.key"),
+        ensure=lambda domain, config: (
+            calls.append((domain, dict(config))) or (f"/certs/{domain}.pem", f"/certs/{domain}.key")
+        ),
     )
     plugins = {
         "naive": SimpleNamespace(
@@ -221,11 +226,7 @@ def test_enabled_tls_transports_share_certificate_preflight():
         "trust.example.com",
     ]
     for name, protocol in state.protocols.items():
-        domain = (
-            state.network.domain
-            if name == "naive"
-            else protocol.config["domain"]
-        )
+        domain = state.network.domain if name == "naive" else protocol.config["domain"]
         assert protocol.config["cert_file"] == f"/certs/{domain}.pem"
         assert protocol.config["key_file"] == f"/certs/{domain}.key"
 
@@ -238,7 +239,8 @@ def test_protocol_defaults_are_normalized_without_mutating_input():
         source,
         (("transport", "tcp"),),
     )
-    naive["options"]["values"].append("changed")
+    options = cast(dict[str, JsonValue], naive["options"])
+    cast(list[str], options["values"]).append("changed")
 
     assert naive["network"] == "tcp"
     assert trusttunnel["transport"] == "tcp"

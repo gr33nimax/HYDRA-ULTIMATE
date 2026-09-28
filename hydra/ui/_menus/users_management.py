@@ -1,10 +1,12 @@
 """User lifecycle and access-management menu controllers."""
+
 from __future__ import annotations
 
 import math
 from datetime import datetime
 
-from hydra.core.state_models import AppState, User
+from hydra.core.state_models import AppState, User, find_user
+from hydra.core.state_validation import supports_personal_protocol_access
 from hydra.plugins.base import PluginCategory
 from hydra.services.application import ApplicationService
 from hydra.services.user_access import (
@@ -12,9 +14,13 @@ from hydra.services.user_access import (
     entitlement_status as get_user_entitlement_status,
 )
 from hydra.ui._menus.users_common import _application
-from hydra.ui._menus.users_detail import detail_menu_choices
+from hydra.ui._menus.users_detail import detail_menu_choices, protocol_access_choices
 from hydra.ui._menus.users_devices import open_menu as open_device_menu
 from hydra.ui._menus.users_links import _show_subscription_links, _user_configs
+from hydra.ui._menus.users_names import (
+    edit_configuration_name,
+    edit_global_configuration_names,
+)
 from hydra.ui._menus.users_overview import _add_user, _select_user, _show_users
 from hydra.ui._menus.users_subscription import menu_subscription_server
 from hydra.ui.tui import (
@@ -46,10 +52,7 @@ def menu_users(state: AppState, app: ApplicationService | None = None):
         total = len(state.users)
         active = sum(1 for user in state.users if get_user_access_status(user)[0])
         restricted = total - active
-        info(
-            f"Всего: {total}  |  Активных: {active}  |  "
-            f"Ограничено: {restricted}"
-        )
+        info(f"Всего: {total}  |  Активных: {active}  |  Ограничено: {restricted}")
         print()
 
         choice = menu(
@@ -74,6 +77,11 @@ def menu_users(state: AppState, app: ApplicationService | None = None):
                     "🔗 Сервер подписок",
                     "Управление фоновым сервисом подписок",
                 ),
+                (
+                    "5",
+                    "✏️ Общие названия конфигураций",
+                    "Названия для всех пользователей",
+                ),
                 ("0", "↩ Назад", ""),
             ],
             "ПОЛЬЗОВАТЕЛИ",
@@ -89,8 +97,50 @@ def menu_users(state: AppState, app: ApplicationService | None = None):
                 _user_detail_menu(state, user, app)
         elif choice == "4":
             menu_subscription_server(state, app)
+        elif choice == "5":
+            edit_global_configuration_names(state, app)
         elif choice == "0":
             return
+
+
+def _change_protocol_access(
+    state: AppState,
+    user: User,
+    app: ApplicationService,
+) -> None:
+    """Toggle per-user server access without touching globally enabled protocols."""
+    while True:
+        user = find_user(state, user.email) or user
+        names = sorted(
+            filter(
+                supports_personal_protocol_access,
+                app.protocols.enabled_names(state, PluginCategory.TRANSPORT),
+            )
+        )
+        clear()
+        title(f"Доступ к протоколам: {user.email}")
+        if not names:
+            warn("Нет доступных персональных протоколов.")
+            prompt("Нажмите Enter")
+            return
+        options = protocol_access_choices(names, user.disabled_protocols, app.protocols.display_name)
+        choice = menu([*options, ("0", "↩ Назад", "")], "ПРОТОКОЛЫ ПОЛЬЗОВАТЕЛЯ")
+        if choice == "0":
+            return
+        try:
+            index = int(choice)
+        except ValueError:
+            continue
+        if not 1 <= index <= len(names):
+            continue
+        name = names[index - 1]
+        enabled = name in user.disabled_protocols
+        try:
+            app.users.set_protocol_enabled(state, user.email, name, enabled)
+            success(f"{name}: {'разрешён' if enabled else 'отключён'} для {user.email}")
+        except Exception as exc:
+            error(f"Не удалось применить доступ: {exc}")
+            prompt("Нажмите Enter")
 
 
 def _change_traffic_limit(
@@ -99,8 +149,7 @@ def _change_traffic_limit(
     app: ApplicationService,
 ) -> None:
     new_limit = prompt(
-        "Введите лимит трафика в GiB "
-        "(0 или пусто для безлимита)",
+        "Введите лимит трафика в GiB (0 или пусто для безлимита)",
         default=str(user.traffic_limit_gb or ""),
     )
     try:
@@ -124,8 +173,7 @@ def _change_expiry(
 ) -> None:
     current = user.expiry_date[:10] if user.expiry_date else ""
     new_expiry = prompt(
-        "Введите срок действия подписки "
-        "(ГГГГ-ММ-ДД, или пусто для безлимита)",
+        "Введите срок действия подписки (ГГГГ-ММ-ДД, или пусто для безлимита)",
         default=current,
     )
     if not new_expiry.strip():
@@ -141,10 +189,7 @@ def _change_expiry(
             return
         user.expiry_date = f"{new_expiry.strip()}T23:59:59Z"
         app.admin.save_state(state)
-        success(
-            f"Срок действия подписки для {user.email} "
-            f"установлен до {new_expiry.strip()}"
-        )
+        success(f"Срок действия подписки для {user.email} установлен до {new_expiry.strip()}")
     _reconcile_user_access(state, user, app)
     prompt("Нажмите Enter")
 
@@ -159,6 +204,7 @@ def _user_detail_menu(
     while True:
         clear()
         app.traffic.refresh(state)
+        user = find_user(state, user.email) or user
 
         available, access_reason = get_user_access_status(user)
         status_icon = f"{GREEN}🟢{NC}" if available else f"{RED}🔴{NC}"
@@ -177,11 +223,7 @@ def _user_detail_menu(
                 kv(
                     "Устройства:",
                     f"{len(user.devices)} зарегистрировано / "
-                    + (
-                        f"{user.device_limit} одновременно"
-                        if user.device_limit
-                        else "без ограничения"
-                    ),
+                    + (f"{user.device_limit} одновременно" if user.device_limit else "без ограничения"),
                 ),
             ],
         )
@@ -192,10 +234,7 @@ def _user_detail_menu(
             PluginCategory.TRANSPORT,
         )
         if enabled_transports:
-            info(
-                "Включённые протоколы: "
-                + ", ".join(sorted(enabled_transports))
-            )
+            info("Включённые протоколы: " + ", ".join(sorted(enabled_transports)))
         else:
             warn("Нет включённых транспортных протоколов")
         print()
@@ -223,10 +262,14 @@ def _user_detail_menu(
                 return
         elif choice == "7":
             old_email = user.email
-            new_email = prompt(
-                "Новое имя пользователя",
-                default=old_email,
-            ).strip().lower()
+            new_email = (
+                prompt(
+                    "Новое имя пользователя",
+                    default=old_email,
+                )
+                .strip()
+                .lower()
+            )
             try:
                 app.rename_user(state, old_email, new_email)
                 success(
@@ -237,6 +280,31 @@ def _user_detail_menu(
             prompt("Нажмите Enter")
         elif choice == "8":
             open_device_menu(state, user, app)
+        elif choice == "9":
+            if confirm(
+                "Сменить JWE-ключ? Старые HydraBox-ссылки сразу перестанут работать.",
+                default=False,
+            ):
+                app.rotate_user_hydrabox_key(state, user.email)
+                success(
+                    "HydraBox JWE-ключ обновлён; выдайте новую ссылку.",
+                )
+                prompt("Нажмите Enter")
+        elif choice.upper() == "T":
+            if confirm(
+                f"Обнулить счётчик трафика для {user.email}?",
+                default=False,
+            ):
+                latest = app.traffic.reset_user_traffic_state(user.email)
+                latest_user = next(item for item in latest.users if item.email == user.email)
+                user.traffic_used_bytes = latest_user.traffic_used_bytes
+                user.credentials = latest_user.credentials
+                success("Счётчик трафика пользователя обнулён.")
+                prompt("Нажмите Enter")
+        elif choice.upper() == "N":
+            edit_configuration_name(state, user, app)
+        elif choice.upper() == "P":
+            _change_protocol_access(state, user, app)
         elif choice == "0":
             return
 
@@ -254,8 +322,7 @@ def _reconcile_user_access(
         warn(f"Доступ отключён: {reason}.")
     elif entitled and user.blocked:
         if confirm(
-            "Ограничения больше не превышены. "
-            "Разблокировать пользователя?",
+            "Ограничения больше не превышены. Разблокировать пользователя?",
             default=True,
         ):
             app.unblock_user(state, user.email)
@@ -272,10 +339,7 @@ def _toggle_block(
     if user.blocked:
         entitled, reason = get_user_entitlement_status(user)
         if not entitled:
-            error(
-                f"Нельзя разблокировать: {reason}. "
-                "Сначала измените лимит или срок действия."
-            )
+            error(f"Нельзя разблокировать: {reason}. Сначала измените лимит или срок действия.")
             prompt("Нажмите Enter")
             return
         app.unblock_user(state, user.email)

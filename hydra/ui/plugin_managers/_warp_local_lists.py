@@ -1,6 +1,8 @@
 """Local rule-list interactions for the WARP manager facade."""
+
 from __future__ import annotations
 
+import copy
 import re
 
 from hydra.core.state_models import AppState
@@ -21,6 +23,7 @@ from hydra.ui.tui import (
     success,
     warn,
 )
+
 
 def _menu_rules_lists(
     state: AppState,
@@ -48,12 +51,18 @@ def _menu_rules_lists(
 
         status_lines.append("")
         status_lines.append("  " + "─" * 50)
-        status_lines.append(f"  {BOLD}Внешние источники правил (itdoginfo):{NC}")
+        status_lines.append(f"  {BOLD}Включённые источники правил (Geo-Aggregator):{NC}")
 
-        for key, val in external_sources.items():
+        active_sources = [
+            (key, val)
+            for key, val in external_sources.items()
+            if str(list_targets.get(f"ext:{key}") or "none") != "none"
+        ]
+        if not active_sources:
+            status_lines.append(f"  {DIM}Ни один источник не включён.{NC}")
+        for key, val in active_sources:
             target = list_targets.get(f"ext:{key}", "none")
-            status = f"{GREEN}Активен [→ {target}]{NC}" if target != "none" else f"{DIM}Отключен{NC}"
-            status_lines.append(f"  • {BOLD}{val['name']:<14}{NC} — {status}")
+            status_lines.append(f"  • {BOLD}{val['name']:<14}{NC} — {GREEN}Активен [→ {target}]{NC}")
 
         panel("📋 УПРАВЛЕНИЕ СПИСКАМИ ПРАВИЛ", status_lines)
 
@@ -61,8 +70,8 @@ def _menu_rules_lists(
             ("1", "➕ Создать локальный список", "Создать новую группу доменов/IP"),
             ("2", "📝 Редактировать локальный список", "Добавить/удалить домены и IP в локальном списке"),
             ("3", "🗑️  Удалить локальный список", "Удалить пользовательскую группу"),
-            ("4", "🔗 Настройка внешних источников", "Включить/отключить списки РФ-сервисов, GEO-block и др."),
-            ("0", "↩ Назад", "")
+            ("4", "🔗 Настройка внешних источников", "Категории списков: реестр РКН, AI, медиа, RU-сервисы"),
+            ("0", "↩ Назад", ""),
         ]
 
         choice = menu(options, "СПИСКИ ПРАВИЛ")
@@ -98,10 +107,11 @@ def _menu_rules_lists(
             opts_l.append(("0", "Назад", ""))
 
             l_choice = menu(opts_l, "ВЫБЕРИТЕ СПИСОК")
-            if l_choice == "0" or not l_choice.isdigit():
+            idx = facade._menu_number(l_choice)
+            if idx is None:
                 continue
 
-            idx = int(l_choice) - 1
+            idx -= 1
             keys = list(local_lists.keys())
             if 0 <= idx < len(keys):
                 _menu_manage_local_list_items(state, ps, keys[idx], app)
@@ -118,10 +128,11 @@ def _menu_rules_lists(
             opts_l.append(("0", "Назад", ""))
 
             l_choice = menu(opts_l, "ВЫБЕРИТЕ СПИСОК ДЛЯ УДАЛЕНИЯ")
-            if l_choice == "0" or not l_choice.isdigit():
+            idx = facade._menu_number(l_choice)
+            if idx is None:
                 continue
 
-            idx = int(l_choice) - 1
+            idx -= 1
             keys = list(local_lists.keys())
             if 0 <= idx < len(keys):
                 name = keys[idx]
@@ -130,16 +141,35 @@ def _menu_rules_lists(
                     prompt("Нажмите Enter")
                     continue
                 if confirm(f"Вы уверены, что хотите удалить список '{name}'?", default=False):
+                    previous = copy.deepcopy(local_lists[name])
+                    target = list_targets.pop(f"local:{name}", None)
                     del local_lists[name]
-                    list_targets.pop(f"local:{name}", None)
                     app.admin.save_state(state)
-                    success(f"Список '{name}' успешно удален.")
-                    if ps.enabled:
-                        app.apply(state)
+                    if ps.enabled and not app.apply(state):
+                        local_lists[name] = previous
+                        if target is not None:
+                            list_targets[f"local:{name}"] = target
+                        state.protocols["warp"] = ps
+                        app.admin.save_state(state)
+                        error("Не удалось применить конфигурацию; список восстановлен.")
+                    else:
+                        success(f"Список '{name}' успешно удален.")
                 prompt("Нажмите Enter")
 
         elif choice == "4":
             facade._menu_external_sources_toggle(state, ps, app)
+
+
+def _save_local_change(state: AppState, ps, app: ApplicationService, route: dict, before: dict) -> bool:
+    app.admin.save_state(state)
+    if not ps.enabled or app.apply(state):
+        return True
+    route.clear()
+    route.update(before)
+    state.protocols["warp"] = ps
+    app.admin.save_state(state)
+    error("Не удалось применить маршрут; изменение списка отменено.")
+    return False
 
 
 # ── Вспомогательное меню: Редактирование локального списка ──
@@ -156,6 +186,7 @@ def _menu_manage_local_list_items(
         clear()
         domains = route.setdefault("domains", [])
         ips = route.setdefault("ips", [])
+        before = copy.deepcopy(route)
 
         status_lines = [
             f"  Локальный список: {GREEN}{list_name}{NC}",
@@ -170,7 +201,7 @@ def _menu_manage_local_list_items(
             ("2", "🗑️  Удалить домен(ы)", "Показать список и удалить домены"),
             ("3", "➕ Добавить IP/подсеть(и)", "Добавить IP или CIDR подсети"),
             ("4", "🗑️  Удалить IP/подсеть(и)", "Показать список и удалить IP/CIDR"),
-            ("0", "↩ Назад", "")
+            ("0", "↩ Назад", ""),
         ]
 
         choice = menu(options, f"СПИСОК {list_name.upper()}")
@@ -194,10 +225,8 @@ def _menu_manage_local_list_items(
 
             if added:
                 route["domains"] = domains
-                app.admin.save_state(state)
-                success(f"Добавлено доменов: {added}")
-                if ps.enabled:
-                    app.apply(state)
+                if _save_local_change(state, ps, app, route, before):
+                    success(f"Добавлено доменов: {added}")
             else:
                 warn("Новых доменов не добавлено.")
             prompt("Нажмите Enter для продолжения")
@@ -219,22 +248,20 @@ def _menu_manage_local_list_items(
             tokens = [t.strip().lower() for t in raw.replace(",", " ").split() if t.strip()]
             removed = 0
             for t in tokens:
-                if t.isdigit():
-                    idx = int(t) - 1
+                index = facade._menu_number(t)
+                if index is not None:
+                    idx = index - 1
                     if 0 <= idx < len(domains):
                         domains.remove(domains[idx])
                         removed += 1
-                else:
-                    if t in domains:
-                        domains.remove(t)
-                        removed += 1
+                elif t in domains:
+                    domains.remove(t)
+                    removed += 1
 
             if removed:
                 route["domains"] = domains
-                app.admin.save_state(state)
-                success(f"Удалено доменов: {removed}")
-                if ps.enabled:
-                    app.apply(state)
+                if _save_local_change(state, ps, app, route, before):
+                    success(f"Удалено доменов: {removed}")
             else:
                 error("Ничего не удалено.")
             prompt("Нажмите Enter для продолжения")
@@ -256,10 +283,8 @@ def _menu_manage_local_list_items(
 
             if added:
                 route["ips"] = ips
-                app.admin.save_state(state)
-                success(f"Добавлено IP/подсетей: {added}")
-                if ps.enabled:
-                    app.apply(state)
+                if _save_local_change(state, ps, app, route, before):
+                    success(f"Добавлено IP/подсетей: {added}")
             else:
                 warn("Новых записей не добавлено.")
             prompt("Нажмите Enter для продолжения")
@@ -281,22 +306,20 @@ def _menu_manage_local_list_items(
             tokens = [t.strip().lower() for t in raw.replace(",", " ").split() if t.strip()]
             removed = 0
             for t in tokens:
-                if t.isdigit():
-                    idx = int(t) - 1
+                index = facade._menu_number(t)
+                if index is not None:
+                    idx = index - 1
                     if 0 <= idx < len(ips):
                         ips.remove(ips[idx])
                         removed += 1
-                else:
-                    if t in ips:
-                        ips.remove(t)
-                        removed += 1
+                elif t in ips:
+                    ips.remove(t)
+                    removed += 1
 
             if removed:
                 route["ips"] = ips
-                app.admin.save_state(state)
-                success(f"Удалено записей: {removed}")
-                if ps.enabled:
-                    app.apply(state)
+                if _save_local_change(state, ps, app, route, before):
+                    success(f"Удалено записей: {removed}")
             else:
                 error("Ничего не удалено.")
             prompt("Нажмите Enter для продолжения")

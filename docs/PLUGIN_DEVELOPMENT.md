@@ -126,6 +126,7 @@ class ExamplePlugin(BasePlugin):
 | `configure` | Готовит `ConfigFragment` | Не редактирует итоговый `config.json` Sing-Box |
 | `apply` | Применяет подготовленное | — |
 | `health` | Подтверждает работоспособность | — |
+| `traffic_snapshot` / `traffic_source_reason` | Read-only счётчики и причина их недоступности | Не выдумывает числа: `None` и непустая причина означают «источник недоступен», накопленные значения сохраняются |
 
 Не перечитывайте state внутри state-aware метода — кроме явного fallback при
 `state is None`.
@@ -138,10 +139,12 @@ class ExamplePlugin(BasePlugin):
 | :--- | :--- |
 | `category` | `transport`, `enhancement` или `security` — группировка в инвентаре |
 | `commands` | Изменяющие persisted-конфигурацию команды |
+| `persist_only_commands` | Подмножество `commands`, которому нужна атомарная запись state без runtime `apply` |
 | `queries` | Безопасные проекции и клиентские профили |
 | `actions` | Runtime-операции, не требующие общего `apply` |
 | `tls_domain_source`, `config_defaults` | Подготовка при включении |
-| `subscription_profile_query`, `subscription_enabled` | Участие в подписках |
+| `subscription_profile_query`, `subscription_enabled` | Участие в legacy/обычных подписках |
+| `hydra_v2_subscription_enabled` | Отдельное участие в Hydra Subscription v2; при `None` наследует `subscription_enabled` |
 | `display_name` | Человекочитаемое имя во всех общих адаптерах |
 | `connection_source` | Источник активных подключений: общий tracker, plugin query или отсутствие проекции |
 | `maintenance_tasks` | Фоновые задачи общего scheduler без ветвлений по имени плагина |
@@ -150,6 +153,13 @@ class ExamplePlugin(BasePlugin):
 | `needs_domain` | Плагину требуется домен; включение запрашивает его и участвует в TLS-preflight |
 | `central_apply` | `False` исключает плагин из общего `apply` — он владеет своим жизненным циклом (так работает Honeypot) |
 | `contract_version` | Явная версия контракта, проверяемая `PluginInvoker` |
+
+`generate_client_config(user, state)` возвращает нативный клиентский формат
+плагина. Если это не полный Sing-Box JSON, переопределите
+`generate_singbox_client_config(user, state)` для `?format=singbox` (по умолчанию
+он делегирует в `generate_client_config`). Проекция может содержать
+`outbounds`, `endpoints` и `route`; subscription service объединяет их без
+ветвлений по имени плагина.
 
 ## Новый или кастомный inbound
 
@@ -193,18 +203,9 @@ Inbound принадлежит плагину и возвращается из `
 | Привилегированные операции | Соответствующий application port |
 
 Бизнес-логика не дублируется в адаптере. Благодаря этому один и тот же use-case
-доступен TUI, Telegram и будущему HTTP API.
-
-Persisted state содержит монотонную `revision`. Запись устаревшей желаемой
-конфигурации отклоняется как retryable conflict, поэтому HTTP API должен
-передавать конфликт клиенту и предлагать перечитать состояние. Фоновые счётчики
-и курсоры изменяются через атомарный `update_state` и не создают ложных
-конфликтов с настройками.
-
-Пользовательский CRUD произвольных inbound'ов не является частью plugin API: для
-него нужен отдельный типизированный `InboundDefinition`, валидация, application
-service и UI/API. При этом его исполнение должно пользоваться тем же
-`ConfigFragment` и общей проверкой конфликтов слушателей.
+доступен TUI, Telegram и будущему HTTP API. Модель конкурентной записи
+state (монотонная `revision`, retryable conflict) описана в
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Обязательные проверки
 
@@ -216,7 +217,7 @@ service и UI/API. При этом его исполнение должно по
 4. тест клиентской ссылки или профиля, если поддерживается подписка;
 5. тест traffic attribution, если используется нестандартный resolver;
 6. тест scheduler-задачи и backup-policy, если они объявлены;
-7. `ruff check .`, полный `pytest` и архитектурные тесты.
+7. `ruff check main.py hydra tests`, полный `pytest` и архитектурные тесты.
 
 ```bash
 python verify.py                            # compile + lint + полный pytest
@@ -225,21 +226,19 @@ python -m ruff check main.py hydra tests    # только линтер
 python -m compileall -q main.py hydra       # только компиляция
 ```
 
-Тесты являются частью архитектуры: помимо обычных проверок они удерживают
-направление зависимостей, отсутствие циклов в import graph, лимиты размеров
-модулей и функций и запрет обхода `ApplicationService` и `HostBackend`. Ослаблять
-архитектурный guard, чтобы «починить тест», нельзя — сначала должно измениться
-само решение.
+Тесты — часть архитектуры: они удерживают направление зависимостей, лимиты
+размеров и запрет обхода `ApplicationService`/`HostBackend`. Ослаблять guard,
+чтобы «починить тест», нельзя — сначала должно измениться само решение.
 
 CI дополнительно проверяет Python 3.10–3.13, зависимости (`pip-audit`), миграции
-состояния, Linux-сценарий с root/systemd/nftables и транзакционное обновление
-`main → dev`.
+состояния, Linux-сценарий с root/systemd/nftables и обновление `main → dev`.
 
 ## Чего делать нельзя
 
 - Добавлять центральные таблицы команд, запросов или действий.
 - Писать `if plugin.meta.name == ...` в общих сервисах.
-- Импортировать `hydra.plugins.registry` в production-код.
+- Добавлять новые импорты `hydra.plugins.registry` в production-код (фасад сохранён
+  ради совместимости; зависить от канонического модуля).
 - Создавать новый глобальный singleton или process-global `ApplicationService`.
 - Мутировать желаемое состояние из query, render или lifecycle hooks.
 - Редактировать итоговый `config.json` Sing-Box из плагина.

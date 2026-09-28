@@ -1,19 +1,24 @@
 """Architecture guards for the modular AmneziaWG implementation."""
+
 from __future__ import annotations
 
 import ast
 import copy
 import inspect
 import textwrap
+from collections.abc import Callable
+from typing import Any, cast
 from pathlib import Path
 
+from hydra.core.state import AppState
 from hydra.plugins.amneziawg.client_links import AwgClientLinksMixin
 from hydra.plugins.amneziawg.configuration import AwgConfigurationMixin
 from hydra.plugins.amneziawg.installation import AwgInstallationMixin
 from hydra.plugins.amneziawg.observation import AwgObservationMixin
 from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
 from hydra.plugins.amneziawg.profiles import AwgProfileMixin
-from hydra.plugins.amneziawg.runtime import AwgRuntimeMixin
+from hydra.plugins.amneziawg.projection import AwgProjectionMixin
+from hydra.plugins.amneziawg.protocol_mode import AwgProtocolModeMixin
 
 
 _PACKAGE = Path(inspect.getfile(AmneziaWGPlugin)).parent
@@ -21,29 +26,25 @@ _CAPABILITY_CLASSES = (
     AmneziaWGPlugin,
     AwgInstallationMixin,
     AwgConfigurationMixin,
+    AwgProjectionMixin,
     AwgProfileMixin,
+    AwgProtocolModeMixin,
     AwgClientLinksMixin,
     AwgObservationMixin,
-    AwgRuntimeMixin,
 )
 
 
-def _defined_methods(owner: type) -> dict[str, object]:
+def _defined_methods(owner: type) -> dict[str, Callable[..., object]]:
     return {
         name: getattr(owner, name)
         for name, value in owner.__dict__.items()
-        if inspect.isfunction(value)
-        or isinstance(value, (staticmethod, classmethod))
+        if inspect.isfunction(value) or isinstance(value, (staticmethod, classmethod))
     }
 
 
-def _method_node(method: object) -> ast.FunctionDef | ast.AsyncFunctionDef:
+def _method_node(method: Callable[..., object]) -> ast.FunctionDef | ast.AsyncFunctionDef:
     tree = ast.parse(textwrap.dedent(inspect.getsource(method)))
-    return next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    )
+    return next(node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)))
 
 
 _METHOD_OWNERS: dict[str, type] = {}
@@ -51,19 +52,14 @@ _METHODS: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
 for _owner in _CAPABILITY_CLASSES:
     for _name, _method in _defined_methods(_owner).items():
         assert _name not in _METHODS, (
-            f"duplicate AWG method owner: {_name} is defined by "
-            f"{_METHOD_OWNERS[_name].__name__} and {_owner.__name__}"
+            f"duplicate AWG method owner: {_name} is defined by {_METHOD_OWNERS[_name].__name__} and {_owner.__name__}"
         )
         _METHOD_OWNERS[_name] = _owner
         _METHODS[_name] = _method_node(_method)
 
 
 def _tree(method_name: str) -> ast.AST:
-    return ast.parse(
-        textwrap.dedent(
-            inspect.getsource(getattr(AmneziaWGPlugin, method_name))
-        )
-    )
+    return ast.parse(textwrap.dedent(inspect.getsource(getattr(AmneziaWGPlugin, method_name))))
 
 
 def _called_names(method_name: str) -> set[str]:
@@ -121,20 +117,14 @@ def _transitive_runtime_mutations(root: str) -> list[str]:
                     called = node.func.attr
                 if called in forbidden_calls:
                     violations.append(f"{method_name}:{called}")
-            if (
-                isinstance(node, ast.Constant)
-                and isinstance(node.value, str)
-                and node.value in mutating_commands
-            ):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in mutating_commands:
                 violations.append(f"{method_name}:command:{node.value}")
     return violations
 
 
 def test_facade_mounts_each_cohesive_production_capability_once():
     expected_mixins = _CAPABILITY_CLASSES[1:]
-    assert AmneziaWGPlugin.__mro__[1 : 1 + len(expected_mixins)] == (
-        expected_mixins
-    )
+    assert AmneziaWGPlugin.__mro__[1 : 1 + len(expected_mixins)] == (expected_mixins)
     for owner in expected_mixins:
         for method_name, method in _defined_methods(owner).items():
             assert getattr(AmneziaWGPlugin, method_name) is method
@@ -147,11 +137,10 @@ def test_awg_modules_and_functions_stay_bounded():
         tree = ast.parse("\n".join(lines))
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                assert node.end_lineno is not None
                 span = node.end_lineno - node.lineno + 1
                 assert span <= 100, f"{path.name}:{node.name}: {span} lines"
-    plugin_lines = (
-        (_PACKAGE / "plugin.py").read_text(encoding="utf-8").splitlines()
-    )
+    plugin_lines = (_PACKAGE / "plugin.py").read_text(encoding="utf-8").splitlines()
     assert len(plugin_lines) <= 150
 
 
@@ -167,10 +156,7 @@ def test_capability_modules_do_not_import_the_facade_backwards():
                     "hydra.plugins.amneziawg.plugin",
                 }, path.name
             if isinstance(node, ast.Import):
-                assert all(
-                    alias.name != "hydra.plugins.amneziawg.plugin"
-                    for alias in node.names
-                ), path.name
+                assert all(alias.name != "hydra.plugins.amneziawg.plugin" for alias in node.names), path.name
 
 
 def test_awg_internal_module_graph_is_acyclic():
@@ -179,11 +165,7 @@ def test_awg_internal_module_graph_is_acyclic():
     for module, path in modules.items():
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.ImportFrom)
-                and node.level
-                and node.module
-            ):
+            if isinstance(node, ast.ImportFrom) and node.level and node.module:
                 target = node.module.split(".", 1)[0]
                 if target in modules:
                     edges[module].add(target)
@@ -208,26 +190,34 @@ def test_awg_internal_module_graph_is_acyclic():
 
 
 def test_all_private_capability_helpers_are_on_a_production_path():
-    roots = {
-        method_name
-        for method_name in _METHODS
-        if not method_name.startswith("_")
-    } | {"__init__"}
+    roots = {method_name for method_name in _METHODS if not method_name.startswith("_")} | {"__init__"}
     reachable = _reachable_methods(*roots)
     orphaned = {
         method_name
         for method_name in _METHODS
-        if method_name.startswith("_")
-        and method_name != "__init__"
-        and method_name not in reachable
+        if method_name.startswith("_") and method_name != "__init__" and method_name not in reachable
     }
     assert not orphaned
+
+
+def _drop_type_checking_blocks(tree: ast.AST) -> None:
+    """Ignore typing-only collaborator declarations in source-shape checks."""
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if not isinstance(body, list):
+            continue
+        cast(Any, node).body = [
+            child
+            for child in body
+            if not (isinstance(child, ast.If) and isinstance(child.test, ast.Name) and child.test.id == "TYPE_CHECKING")
+        ]
 
 
 def test_awg_package_has_no_duplicate_function_implementations():
     fingerprints: dict[str, str] = {}
     for path in _PACKAGE.glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
+        _drop_type_checking_blocks(tree)
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -235,9 +225,7 @@ def test_awg_package_has_no_duplicate_function_implementations():
             normalized.name = "_"
             fingerprint = ast.dump(normalized, include_attributes=False)
             location = f"{path.name}:{node.name}"
-            assert fingerprint not in fingerprints, (
-                f"{location} duplicates {fingerprints.get(fingerprint)}"
-            )
+            assert fingerprint not in fingerprints, f"{location} duplicates {fingerprints.get(fingerprint)}"
             fingerprints[fingerprint] = location
 
 
@@ -259,14 +247,11 @@ def test_render_and_query_hooks_do_not_provision_or_persist():
     }
     for method_name in (
         "configure",
-        "_generate_config_for_iface",
         "generate_client_config",
         "generate_singbox_client_config",
         "client_link",
         "amnezia_link",
         "get_profiles",
-        "traffic",
-        "connected_clients",
     ):
         assert not (_called_names(method_name) & forbidden), method_name
 
@@ -312,16 +297,20 @@ def test_profile_commands_have_no_runtime_or_persistence_callbacks():
         assert "systemctl" not in literals
 
 
-def test_apply_is_the_profile_runtime_reconciler():
-    calls = _called_names("apply")
-    assert "write_text" in calls
-    assert "unlink" in calls
-    literals = {
-        node.value
-        for node in ast.walk(_tree("apply"))
-        if isinstance(node, ast.Constant) and isinstance(node.value, str)
-    }
-    assert "systemctl" in literals
+def test_the_plugin_owns_no_host_side_apply_and_no_configuration_file():
+    """Removal fence: the core serves the tunnel, so nothing here writes a host file or drives a unit."""
+    assert "apply" not in _METHODS
+    assert "_generate_config_for_iface" not in _METHODS
+    for method_name, tree in _METHODS.items():
+        literals = {
+            node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+        assert "awg-quick" not in literals, method_name
+        assert "amneziawg-install" not in literals, method_name
+        assert "systemctl" not in literals, method_name
+    fragment = AmneziaWGPlugin().configure(AppState())
+    assert fragment.endpoints == []
+    assert fragment.nft_tproxy_ifaces == []
 
 
 def test_lifecycle_hooks_do_not_call_other_lifecycle_hooks():

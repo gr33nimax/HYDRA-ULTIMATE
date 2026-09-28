@@ -1,138 +1,42 @@
-"""Pure desired-state rendering and network selection for AmneziaWG."""
+"""Pure desired-state rendering and network selection for AmneziaWG.
+
+Everything here is derived from desired state: the core serves the tunnel, so there is no
+interface file to read, reconcile or rewrite.
+"""
+
 from __future__ import annotations
 
 import ipaddress
-import re
-from pathlib import Path
+from typing import Any, TYPE_CHECKING
 
 from hydra.plugins.base import ConfigFragment
 from hydra.plugins.context import PluginStateAccess
 
 from .constants import (
-    AWG_INTERFACE,
-    AWG_INTERFACE_1,
     DEFAULT_NETWORK,
-    DEFAULT_OBFUSCATION,
     DEFAULT_PORT,
     DEFAULT_PORT_1,
     KNOWN_SUBNETS,
-    OBFUSCATION_KEYS_EXTENDED,
     PREFERRED_SUBNETS,
 )
 
 
-def interface_prefix(text: str) -> str:
-    """Return only the ``[Interface]`` portion of a WireGuard config."""
-    out: list[str] = []
-    for line in text.splitlines():
-        if line.strip() == "[Peer]" or line.strip().startswith("### "):
-            break
-        out.append(line)
-    return "\n".join(out).strip()
+def _profile_name(profile_name: str, default: int) -> int:
+    return DEFAULT_PORT_1 if profile_name == "mobile" else default
 
 
 class AwgConfigurationMixin:
     """Render server configs without touching host runtime or desired state."""
 
+    if TYPE_CHECKING:
+
+        def __getattr__(self, name: str) -> Any:
+            """Static dependency seam for configuration rendering."""
+            ...
+
     def configure(self, state: PluginStateAccess) -> ConfigFragment:
-        desktop_conf = self._conf_path("desktop")
-        mobile_conf = self._conf_path("mobile")
-        desktop = self._profile_config(state, "desktop")
-        mobile = self._profile_config(state, "mobile")
-        has_desktop_source = desktop_conf.exists() or bool(
-            desktop and desktop.get("server_private_key")
-        )
-
-        pending_desktop = None
-        pending_mobile = None
-        peer_map: dict[str, tuple[str, str]] = {}
-        if has_desktop_source:
-            pending_desktop = self._generate_config_for_iface(
-                state,
-                conf_path=desktop_conf,
-                profile_name="desktop",
-                default_network=DEFAULT_NETWORK,
-                profile=desktop,
-                peer_map=peer_map,
-            )
-        if mobile is not None:
-            pending_mobile = self._generate_config_for_iface(
-                state,
-                conf_path=mobile_conf,
-                profile_name="mobile",
-                default_network="10.68.68.0/24",
-                profile=mobile,
-                peer_map=peer_map,
-            )
-
-        # Publish only a complete render, so one failing profile cannot leave
-        # another profile pending from a half-completed configure pass.
-        self._pending_conf = pending_desktop
-        self._pending_conf_1 = pending_mobile
-        self._peer_map = peer_map
-
-        interfaces = [AWG_INTERFACE] if pending_desktop else []
-        if pending_mobile:
-            interfaces.append(AWG_INTERFACE_1)
-        return ConfigFragment(nft_tproxy_ifaces=interfaces)
-
-    def _generate_config_for_iface(
-        self,
-        state: PluginStateAccess,
-        conf_path: Path,
-        profile_name: str,
-        default_network: str,
-        *,
-        profile: dict | None = None,
-        peer_map: dict[str, tuple[str, str]] | None = None,
-    ) -> str:
-        existing_ips = self._existing_peer_ips_for_conf(conf_path)
-        base, server_octet, _ = self._network_for_profile(
-            state,
-            conf_path,
-            profile_name,
-            default_network,
-        )
-        interface_block = self._reconciled_interface_block(
-            conf_path,
-            profile_name,
-            profile,
-            base,
-            server_octet,
-        )
-        used = set(existing_ips.values()) | {server_octet}
-        blocks = [interface_block.rstrip(), ""]
-
-        for user in state.users:
-            if user.blocked:
-                continue
-            keys = self._existing_keys(user, profile_name)
-            if keys is None:
-                raise RuntimeError(
-                    f"AmneziaWG credentials for {user.email!r}/{profile_name} "
-                    "were not provisioned by the user/profile command phase"
-                )
-            public_key = keys["public_key"]
-            octet = existing_ips.get(public_key)
-            if octet is None:
-                octet = self._first_free(used)
-                used.add(octet)
-            if peer_map is not None:
-                peer_map[public_key] = (
-                    user.email,
-                    "Mobile" if profile_name == "mobile" else "Desktop",
-                )
-            blocks.extend(
-                (
-                    f"### {user.email}",
-                    "[Peer]",
-                    f"PublicKey = {public_key}",
-                    f"PresharedKey = {keys['preshared_key']}",
-                    f"AllowedIPs = {base}.{octet}/32",
-                    "",
-                )
-            )
-        return "\n".join(blocks) + "\n"
+        """One endpoint per enabled profile; the core owns the whole traffic path."""
+        return ConfigFragment(endpoints=self.server_endpoints(state))
 
     @staticmethod
     def _profile_config(
@@ -148,193 +52,59 @@ class AwgConfigurationMixin:
         profile = profiles.get(profile_name)
         return profile if isinstance(profile, dict) else None
 
-    @staticmethod
-    def _interface_prefix(text: str) -> str:
-        return interface_prefix(text)
-
-    @staticmethod
-    def _replace_directive(block: str, key: str, value: object) -> str:
-        rendered = f"{key} = {value}"
-        pattern = rf"^{re.escape(key)}\s*=.*$"
-        if re.search(pattern, block, re.M):
-            return re.sub(pattern, rendered, block, flags=re.M)
-        return f"{block.rstrip()}\n{rendered}" if block.strip() else rendered
-
-    def _reconciled_interface_block(
-        self,
-        conf_path: Path,
-        profile_name: str,
-        profile: dict | None,
-        base: str,
-        server_octet: str,
-    ) -> str:
-        """Overlay desired profile fields onto an existing interface block."""
-        text = conf_path.read_text(encoding="utf-8") if conf_path.exists() else ""
-        block = self._interface_prefix(text)
-        if not re.search(r"^\[Interface\]\s*$", block, re.M):
-            block = f"[Interface]\n{block}" if block else "[Interface]"
-
-        existing_private = re.search(r"^PrivateKey\s*=\s*(\S+)", block, re.M)
-        desired_private = str((profile or {}).get("server_private_key") or "").strip()
-        private_key = desired_private or (
-            existing_private.group(1) if existing_private else ""
-        )
-        if not private_key:
-            raise RuntimeError(
-                f"AmneziaWG {profile_name} server key was not provisioned"
-            )
-
-        default_port = DEFAULT_PORT_1 if profile_name == "mobile" else DEFAULT_PORT
-        port = self._normalize_port((profile or {}).get("port"), default_port)
-        block = self._replace_directive(block, "PrivateKey", private_key)
-        block = self._replace_directive(
-            block,
-            "Address",
-            f"{base}.{server_octet}/24",
-        )
-        block = self._replace_directive(block, "ListenPort", port)
-
-        desired_mtu = (profile or {}).get("mtu")
-        if desired_mtu is not None:
-            block = self._replace_directive(block, "MTU", desired_mtu)
-        elif not re.search(r"^MTU\s*=", block, re.M):
-            block = self._replace_directive(
-                block,
-                "MTU",
-                1280 if profile_name == "mobile" else 1420,
-            )
-
-        desired_obfuscation = (
-            (profile or {}).get("obfuscation")
-            if isinstance((profile or {}).get("obfuscation"), dict)
-            else None
-        )
-        if desired_obfuscation is not None:
-            for key in OBFUSCATION_KEYS_EXTENDED:
-                block = re.sub(
-                    rf"^{re.escape(key)}\s*=.*\n?",
-                    "",
-                    block,
-                    flags=re.M,
-                )
-            for key in OBFUSCATION_KEYS_EXTENDED:
-                value = desired_obfuscation.get(key)
-                if value not in (None, ""):
-                    block = self._replace_directive(block, key, value)
-        elif not conf_path.exists():
-            for key, value in DEFAULT_OBFUSCATION.items():
-                block = self._replace_directive(block, key, value)
-        return block.strip()
-
-    def _interface_block_for_conf(
-        self,
-        conf_path: Path,
-        base: str,
-        server_octet: str,
-    ) -> str:
-        text = conf_path.read_text(encoding="utf-8") if conf_path.exists() else ""
-        block = self._interface_prefix(text)
-        address = f"Address = {base}.{server_octet}/24"
-        if re.search(r"^Address\s*=", block, re.M):
-            return re.sub(r"^Address\s*=.*$", address, block, flags=re.M)
-        return f"{block.rstrip()}\n{address}" if block.strip() else address
-
-    def _interface_block(self) -> str:
-        conf_path = self._conf_path("desktop")
-        text = conf_path.read_text(encoding="utf-8") if conf_path.exists() else ""
-        lines: list[str] = []
-        for line in text.splitlines():
-            if line.strip() == "[Peer]" or line.strip().startswith("### "):
-                break
-            lines.append(line)
-        return "\n".join(lines)
-
-    @staticmethod
-    def _existing_peer_ips_for_conf(conf_path: Path) -> dict[str, str]:
-        if not conf_path.exists():
-            return {}
-        result: dict[str, str] = {}
-        current_public_key = None
-        for raw_line in conf_path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            public_key = re.match(r"PublicKey\s*=\s*(\S+)", line)
-            if public_key:
-                current_public_key = public_key.group(1)
-                continue
-            allowed_ip = re.match(
-                r"AllowedIPs\s*=\s*(\d+)\.(\d+)\.(\d+)\.(\d+)",
-                line,
-            )
-            if allowed_ip and current_public_key:
-                result[current_public_key] = allowed_ip.group(4)
-                current_public_key = None
-        return result
-
     def _network_for_profile(
         self,
         state: PluginStateAccess,
-        conf_path: Path,
         profile_name: str,
         default_network: str,
     ) -> tuple[str, str, str]:
+        """Return the profile's base, server octet and network, all from desired state."""
         network = None
         profile = self._profile_config(state, profile_name)
         if profile is not None:
             network = self._normalize_profile_network(profile.get("network"))
-        if not network and conf_path.exists():
-            match = re.search(
-                r"Address\s*=\s*(\d+)\.(\d+)\.(\d+)\.",
-                conf_path.read_text(encoding="utf-8"),
-            )
-            if match:
-                network = (
-                    f"{match.group(1)}.{match.group(2)}.{match.group(3)}.0/24"
-                )
+        if not network:
+            protocol = state.protocols.get("amneziawg")
+            if profile_name == "desktop" and protocol is not None:
+                network = self._normalize_profile_network(protocol.config.get("network"))
         if not network:
             network = default_network
 
         base = network.rsplit(".", 1)[0]
         server_octet = "1"
-        if conf_path.exists():
-            match = re.search(
-                r"Address\s*=\s*(\d+)\.(\d+)\.(\d+)\.(\d+)",
-                conf_path.read_text(encoding="utf-8"),
-            )
-            if match and ".".join(match.groups()[:3]) == base:
-                server_octet = match.group(4)
+        if profile is not None:
+            address = str(profile.get("address") or "").strip()
+            match = ipaddress.ip_interface(address).ip if _is_address(address) else None
+            if match is not None and ".".join(str(match).split(".")[:3]) == base:
+                server_octet = str(match).split(".")[3]
         return base, server_octet, network
 
-    def _network(self, state: PluginStateAccess) -> tuple[str, str, str]:
-        return self._network_for_profile(
-            state,
-            self._conf_path("desktop"),
-            "desktop",
-            DEFAULT_NETWORK,
-        )
+    def _profile_port(self, state: PluginStateAccess, profile_name: str) -> int:
+        """The port the core listens on for this profile."""
+        default = _profile_name(profile_name, DEFAULT_PORT)
+        profile = self._profile_config(state, profile_name)
+        return self._normalize_port((profile or {}).get("port"), default)
+
+    def _obfuscation(
+        self,
+        state: PluginStateAccess,
+        profile_name: str = "desktop",
+    ) -> dict[str, str]:
+        """The obfuscation the core serves for this profile, as it is stored."""
+        profile = self._profile_config(state, profile_name) or {}
+        obfuscation = profile.get("obfuscation")
+        if not isinstance(obfuscation, dict):
+            return {}
+        return {str(key): str(value) for key, value in obfuscation.items() if value not in (None, "")}
 
     def _resolve_network(self, state: PluginStateAccess) -> str:
         """Select an unused /24 without mutating desired state."""
         protocol = state.protocols.get("amneziawg")
         used = self._used_networks(state)
         if protocol:
-            configured = self._normalize_profile_network(
-                protocol.config.get("network")
-            )
+            configured = self._normalize_profile_network(protocol.config.get("network"))
             if configured and self._is_network_free(configured, used):
                 return configured
-
-        conf_path = self._conf_path("desktop")
-        if conf_path.exists():
-            match = re.search(
-                r"Address\s*=\s*(\d+)\.(\d+)\.(\d+)\.",
-                conf_path.read_text(encoding="utf-8"),
-            )
-            if match:
-                network = (
-                    f"{match.group(1)}.{match.group(2)}.{match.group(3)}.0/24"
-                )
-                if self._is_network_free(network, used):
-                    return network
         for network in PREFERRED_SUBNETS:
             if self._is_network_free(network, used):
                 return network
@@ -361,7 +131,7 @@ class AwgConfigurationMixin:
     @staticmethod
     def _normalize_port(port: object, default: int) -> int:
         try:
-            parsed = int(port)
+            parsed = int(str(port))
         except (TypeError, ValueError):
             return default
         return parsed if 1 <= parsed <= 65535 else default
@@ -400,21 +170,16 @@ class AwgConfigurationMixin:
 
     @staticmethod
     def _first_free(used: set[str]) -> str:
+        """The first tunnel octet that is not taken: an address, not a hash, so it stays readable."""
         for octet in range(2, 255):
             if str(octet) not in used:
                 return str(octet)
         return "254"
 
-    @staticmethod
-    def _obfuscation_for_conf(conf_path: Path) -> dict[str, str]:
-        text = conf_path.read_text(encoding="utf-8") if conf_path.exists() else ""
-        block = interface_prefix(text)
-        result: dict[str, str] = {}
-        for key in OBFUSCATION_KEYS_EXTENDED:
-            match = re.search(rf"^{key}\s*=\s*(\S+)", block, re.M)
-            if match:
-                result[key] = match.group(1)
-        return result
 
-    def _obfuscation(self) -> dict[str, str]:
-        return self._obfuscation_for_conf(self._conf_path("desktop"))
+def _is_address(value: str) -> bool:
+    try:
+        ipaddress.ip_interface(value)
+    except (TypeError, ValueError):
+        return False
+    return True

@@ -7,7 +7,19 @@ from datetime import datetime
 from hydra.core.state_models import AppState
 from hydra.plugins.base import PluginCategory
 from hydra.services.application import ApplicationService
-from hydra.ui._menus.monitoring_support import _application
+from hydra.ui._menus.monitoring_support import (
+    ACCOUNTING_WIDTH,
+    PROTOCOL_WIDTH,
+    SHARE_WIDTH,
+    STATUS_WIDTH,
+    TABLE_WIDTH,
+    TRAFFIC_WIDTH,
+    _application,
+    _as_int,
+    _cell,
+    _share_bar,
+    _status_text,
+)
 from hydra.ui._menus.users import _select_user, _show_user_detail
 from hydra.ui.protocol_ui import protocol_label
 from hydra.ui.tui import (
@@ -20,9 +32,12 @@ from hydra.ui.tui import (
     YELLOW,
     _bytes_auto,
     clear,
+    confirm,
     kv,
     menu,
     panel,
+    prompt,
+    success,
     title,
 )
 
@@ -37,15 +52,24 @@ class _TrafficView:
     aggregate_totals: dict[str, int]
     legacy_unattributed: int
     total_traffic: int
+    runtime: dict[str, tuple[bool, bool]]
+    source_reasons: dict[str, str]
 
 
-def _share_bar(value: int, total: int, width: int = 11) -> str:
-    ratio = min(1.0, value / total) if total > 0 else 0.0
-    filled = int(round(ratio * width))
-    return (
-        f"{CYAN}{'█' * filled}{DIM}{'░' * (width - filled)}{NC} "
-        f"{ratio * 100:5.1f}%"
-    )
+def _runtime_states(
+    app: ApplicationService,
+    state: AppState,
+    names: list[str],
+) -> dict[str, tuple[bool, bool]]:
+    """Read installed/running per row through the protocol boundary."""
+    runtime: dict[str, tuple[bool, bool]] = {}
+    for name in names:
+        try:
+            status = app.protocols.status(name, state)
+            runtime[name] = (bool(status.installed), bool(status.running))
+        except Exception:
+            runtime[name] = (False, False)
+    return runtime
 
 
 def _load_traffic_view(app: ApplicationService) -> _TrafficView:
@@ -71,7 +95,7 @@ def _load_traffic_view(app: ApplicationService) -> _TrafficView:
         for name in names
     }
     aggregate_totals = {
-        name: int(stats.get("traffic_used_bytes", 0))
+        name: _as_int(stats.get("traffic_used_bytes", 0))
         for name, stats in state.install.get(
             "protocol_traffic_totals",
             {},
@@ -79,11 +103,11 @@ def _load_traffic_view(app: ApplicationService) -> _TrafficView:
         if isinstance(stats, dict)
     }
     user_total = sum(
-        max(0, int(user.traffic_used_bytes))
+        _as_int(user.traffic_used_bytes)
         for user in state.users
     )
     attributed_user_total = sum(
-        max(0, int(stats.get("traffic_used_bytes", 0)))
+        _as_int(stats.get("traffic_used_bytes", 0))
         for user in state.users
         for stats in user.credentials.values()
         if isinstance(stats, dict)
@@ -98,6 +122,8 @@ def _load_traffic_view(app: ApplicationService) -> _TrafficView:
         aggregate_totals=aggregate_totals,
         legacy_unattributed=legacy_unattributed,
         total_traffic=sum(by_protocol.values()) + legacy_unattributed,
+        runtime=_runtime_states(app, state, names),
+        source_reasons=app.traffic.source_availability(state),
     )
 
 
@@ -119,40 +145,56 @@ def _render_traffic_summary(view: _TrafficView) -> None:
     ])
 
 
+def _protocol_row(view: _TrafficView, name: str) -> str:
+    """Render one 77-cell protocol row from the shared column widths."""
+    enabled = name in view.enabled_names
+    installed, running = view.runtime.get(name, (False, False))
+    status = _cell(_status_text(installed, enabled, running), STATUS_WIDTH)
+    value = view.by_protocol.get(name, 0)
+    if enabled and view.source_reasons.get(name, ""):
+        traffic = _cell("—", TRAFFIC_WIDTH, ">")
+        share = _cell(f"{YELLOW}источник недоступен{NC}", SHARE_WIDTH)
+    else:
+        traffic = _cell(f"{GREEN}{_bytes_auto(value)}{NC}", TRAFFIC_WIDTH, ">")
+        share = _cell(_share_bar(value, view.total_traffic), SHARE_WIDTH)
+    aggregate = name in view.aggregate_totals
+    accounting = _cell(
+        f"{YELLOW if aggregate else DIM}"
+        f"{'общий' if aggregate else 'по пользов.'}{NC}",
+        ACCOUNTING_WIDTH,
+    )
+    return (
+        f"  {_cell(protocol_label(name, view.labels.get(name, '')), PROTOCOL_WIDTH)} "
+        f"{traffic}  {share} {accounting} {status}"
+    )
+
+
+def _legacy_row(view: _TrafficView) -> str:
+    value = view.legacy_unattributed
+    return (
+        f"  {_cell('Старая статист.', PROTOCOL_WIDTH)} "
+        f"{_cell(f'{YELLOW}{_bytes_auto(value)}{NC}', TRAFFIC_WIDTH, '>')}  "
+        f"{_cell(_share_bar(value, view.total_traffic), SHARE_WIDTH)} "
+        f"{_cell(f'{DIM}без разбивки{NC}', ACCOUNTING_WIDTH)} "
+        f"{_cell('', STATUS_WIDTH)}"
+    )
+
+
 def _render_protocol_traffic(view: _TrafficView) -> None:
     print()
     print(f"  {BOLD}По протоколам{NC}")
     print(
-        f"  {BOLD}{'Протокол':<15} {'Трафик':>12}  {'Доля':<18} "
-        f"{'Учёт':<13} {'Статус':<8}{NC}",
+        f"  {BOLD}{_cell('Протокол', PROTOCOL_WIDTH)} "
+        f"{_cell('Трафик', TRAFFIC_WIDTH, '>')}  "
+        f"{_cell('Доля', SHARE_WIDTH)} "
+        f"{_cell('Учёт', ACCOUNTING_WIDTH)} "
+        f"{_cell('Статус', STATUS_WIDTH)}{NC}",
     )
-    print(f"  {DIM}{'─' * 77}{NC}")
+    print(f"  {DIM}{'─' * TABLE_WIDTH}{NC}")
     for name in view.names:
-        status = (
-            f"{GREEN}включён{NC}"
-            if name in view.enabled_names
-            else f"{DIM}история{NC}"
-        )
-        accounting_text = (
-            "общий" if name in view.aggregate_totals else "по пользов."
-        )
-        accounting_color = (
-            YELLOW if name in view.aggregate_totals else DIM
-        )
-        value = view.by_protocol.get(name, 0)
-        print(
-            f"  {protocol_label(name, view.labels.get(name, '')):<15} "
-            f"{GREEN}{_bytes_auto(value):>12}{NC}  "
-            f"{_share_bar(value, view.total_traffic):<18} "
-            f"{accounting_color}{accounting_text:<13}{NC} {status}",
-        )
+        print(_protocol_row(view, name))
     if view.legacy_unattributed:
-        print(
-            f"  {'Старая статист.':<15} "
-            f"{YELLOW}{_bytes_auto(view.legacy_unattributed):>12}{NC}  "
-            f"{_share_bar(view.legacy_unattributed, view.total_traffic):<18} "
-            f"{DIM}без разбивки{NC}",
-        )
+        print(_legacy_row(view))
     print()
 
 
@@ -202,7 +244,7 @@ def _render_user_traffic(
         used = user.traffic_used_bytes
         status_text = "блок" if user.blocked else "активен"
         status_color = RED if user.blocked else GREEN
-        limit_bytes = int(user.traffic_limit_gb * 1073741824)
+        limit_bytes = _as_int(user.traffic_limit_gb * 1073741824)
         limit = f"{user.traffic_limit_gb:.1f} GiB" if limit_bytes else "∞"
         usage = (
             f"{min(999, used / limit_bytes * 100):.0f}%"
@@ -242,6 +284,7 @@ def _traffic_choice(
         ("4", f"{'✓ ' if sort_by == 'expiry' else ''}Сортировать по сроку", ""),
         ("Z", "Показать всех пользователей" if not show_zero_users else "Скрыть пользователей без трафика", ""),
         ("D", "🔍 Статистика пользователя", ""),
+        ("R", "♻️ Сбросить общую статистику", "Не меняет квоты пользователей"),
         ("0", "↩ Назад", ""),
     ], f"УПРАВЛЕНИЕ · {sort_labels[sort_by].upper()}")
     if choice in {"1", "2", "3", "4"}:
@@ -258,6 +301,14 @@ def _traffic_choice(
         )
         if user:
             _show_user_detail(state, user, app)
+    elif choice.upper() == "R":
+        if confirm(
+            "Сбросить общую статистику трафика? Квоты пользователей сохранятся.",
+            default=False,
+        ):
+            app.traffic.reset_global_report_state()
+            success("Общая статистика трафика обнулена.")
+            prompt("Нажмите Enter")
     return sort_by, show_zero_users, choice == "0"
 
 

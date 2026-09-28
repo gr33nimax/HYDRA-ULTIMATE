@@ -3,7 +3,7 @@ from unittest.mock import Mock
 from hydra.core.state import AppState, PluginState
 from hydra.plugins.base import BasePlugin, PluginCategory, PluginMeta
 from hydra.plugins.invoker import PluginInvoker
-from hydra.services.protocols import ProtocolService
+from hydra.services.protocols import ManualClientArtifact, ProtocolService
 
 
 def _plugin(name: str, category: PluginCategory):
@@ -66,12 +66,15 @@ def test_inventory_is_json_safe_and_filters_by_public_category():
                 "required_services": (),
                 "conflicts_with": (),
                 "commands": (),
+                "persist_only_commands": (),
                 "queries": (),
                 "actions": (),
                 "tls_domain_source": "",
                 "config_defaults": (),
                 "subscription_profile_query": "",
                 "subscription_enabled": True,
+                "hydra_v2_subscription_enabled": True,
+                "manual_artifacts_query": "",
                 "connection_source": "plugin",
                 "maintenance_tasks": (),
                 "backup_resources": (),
@@ -192,9 +195,16 @@ def test_client_profiles_and_subscription_names_are_descriptor_driven():
         description="aggregate",
         subscription_enabled=False,
     )
+    hydra_only = _plugin("hydra-only", PluginCategory.TRANSPORT)
+    hydra_only.meta = PluginMeta(
+        name="hydra-only",
+        description="Hydra v2 only",
+        subscription_enabled=False,
+        hydra_v2_subscription_enabled=True,
+    )
     catalog = Mock()
     catalog.get.return_value = profiled
-    catalog.transports.return_value = [profiled, aggregate_only]
+    catalog.transports.return_value = [profiled, aggregate_only, hydra_only]
     catalog.enhancements.return_value = []
     catalog.security.return_value = []
     invoker = Mock(spec=PluginInvoker)
@@ -204,10 +214,57 @@ def test_client_profiles_and_subscription_names_are_descriptor_driven():
         protocols={
             "profiled": PluginState(enabled=True),
             "aggregate": PluginState(enabled=True),
+            "hydra-only": PluginState(enabled=True),
         },
     )
 
-    assert service.enabled_subscription_names(state) == {"profiled"}
+    assert service.enabled_subscription_names(state) == {
+        "profiled",
+        "hydra-only",
+    }
     assert service.client_profiles(state, "profiled") == [
         {"name": "mobile", "label": "Mobile"},
     ]
+
+
+def test_manual_artifacts_are_descriptor_driven_and_not_subscriptions():
+    plugin = _plugin("global", PluginCategory.TRANSPORT)
+    plugin.meta = PluginMeta(
+        name="global",
+        description="global",
+        display_name="Global transport",
+        queries=("manual_artifacts",),
+        manual_artifacts_query="manual_artifacts",
+        subscription_enabled=False,
+    )
+    catalog = Mock()
+    catalog.transports.return_value = [plugin]
+    catalog.enhancements.return_value = []
+    catalog.security.return_value = []
+    invoker = Mock(spec=PluginInvoker)
+    invoker.query.return_value = [
+        {
+            "profile_name": "master",
+            "profile_label": "Shared master",
+            "links": ["qwdtt://master", "qwdtt://master"],
+        },
+    ]
+    service = ProtocolService(Mock(), catalog, invoker=invoker)
+    state = AppState(protocols={"global": PluginState(enabled=True)})
+
+    assert service.enabled_subscription_names(state) == set()
+    assert service.manual_client_artifacts(state) == [
+        ManualClientArtifact(
+            plugin_name="global",
+            display_name="Global transport",
+            profile_name="master",
+            profile_label="Shared master",
+            config="",
+            links=("qwdtt://master",),
+        ),
+    ]
+    invoker.query.assert_called_once_with(
+        plugin,
+        "manual_artifacts",
+        state=state,
+    )

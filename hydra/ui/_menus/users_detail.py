@@ -1,5 +1,24 @@
 """Pure presentation data for the user-detail controller."""
+
 from __future__ import annotations
+
+from typing import Callable
+
+
+def protocol_access_choices(
+    names: list[str],
+    disabled: list[str],
+    display_name: Callable[[str], str],
+) -> list[tuple[str, str, str]]:
+    """Present per-user access without deciding which transports are eligible."""
+    return [
+        (
+            str(index),
+            f"{'🔴' if name in disabled else '🟢'} {display_name(name) or name}",
+            "Отключено" if name in disabled else "Разрешено",
+        )
+        for index, name in enumerate(names, 1)
+    ]
 
 
 def detail_menu_choices(
@@ -44,6 +63,26 @@ def detail_menu_choices(
             "8",
             "📱 Устройства",
             "Кто подключался, лимит одновременных устройств",
+        ),
+        (
+            "9",
+            "🔑 Сменить HydraBox JWE-ключ",
+            "Немедленно отозвать все старые HydraBox-ссылки",
+        ),
+        (
+            "T",
+            "♻️ Сбросить счётчик трафика",
+            "Начать новый период квоты пользователя",
+        ),
+        (
+            "N",
+            "✏️ Личные названия конфигураций",
+            "Переопределить общие названия для пользователя",
+        ),
+        (
+            "P",
+            "🔌 Доступ к протоколам",
+            "Разрешить или отозвать подключение для этого пользователя",
         ),
         ("0", "↩ Назад", ""),
     ]

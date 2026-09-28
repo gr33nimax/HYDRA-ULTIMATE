@@ -4,11 +4,14 @@ from __future__ import annotations
 import hashlib
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from hydra.core.state import AppState, User
 from hydra.core.status import public_user
 from hydra.services.device_sessions import COUNTERS_KEY, update_sessions
 from hydra.services.subscriptions.devices import (
     NETWORK_SOURCE,
+    hydrabox_client_fingerprint,
     register_subscription_device,
     subscription_fingerprint,
 )
@@ -55,6 +58,34 @@ def test_reported_hwid_is_preferred_over_the_network_guess():
     assert guessed.source == NETWORK_SOURCE
     assert guessed.reported_hwid is False
     assert reported.device_id != guessed.device_id
+
+
+def test_hydrabox_identity_accepts_v2_and_legacy_hwid_headers():
+    hwid = "hbx1_" + "a" * 43
+    legacy = hydrabox_client_fingerprint(
+        {"User-Agent": "HydraBox/0.3.0", "X-Hydra-HWID": hwid},
+        "198.51.100.7",
+    )
+    current = hydrabox_client_fingerprint(
+        {"User-Agent": "HydraBox/0.4.0-beta.1", "X-HWID": "android-id"},
+        "198.51.100.7",
+    )
+
+    assert legacy.device_id == hashlib.sha256(hwid.encode()).hexdigest()
+    assert legacy.source == "x-hydra-hwid"
+    assert current.device_id == hashlib.sha256(
+        b"x-hwid:android-id",
+    ).hexdigest()
+    assert current.source == "x-hwid"
+    with pytest.raises(ValueError, match="User-Agent"):
+        hydrabox_client_fingerprint({"X-Hydra-HWID": hwid}, "")
+    with pytest.raises(ValueError, match="HWID header"):
+        hydrabox_client_fingerprint({"User-Agent": "HydraBox/0.3.0"}, "")
+    with pytest.raises(ValueError, match="Valid HydraBox HWID"):
+        hydrabox_client_fingerprint(
+            {"User-Agent": "HydraBox/0.4.0", "X-HWID": "bad\nvalue"},
+            "",
+        )
 
 
 def test_network_fingerprint_survives_an_address_change_for_the_same_client():

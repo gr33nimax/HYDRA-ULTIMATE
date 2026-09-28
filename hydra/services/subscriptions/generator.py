@@ -14,6 +14,7 @@ from hydra.services.subscriptions.client_configs import (
 )
 from hydra.services.subscriptions.devices import (
     DeviceFingerprint,
+    hydrabox_client_fingerprint,
     register_subscription_device,
     subscription_device_id,
     subscription_fingerprint,
@@ -22,6 +23,9 @@ from hydra.services.subscriptions.links import (
     generate_base64_sub,
     generate_links,
     generate_shadowrocket_sub,
+)
+from hydra.services.subscriptions.hydrabox import (
+    generate_hydrabox_subscription,
 )
 from hydra.services.subscriptions.metadata import (
     SUPPORTED_SUBSCRIPTION_FORMATS,
@@ -44,6 +48,7 @@ from hydra.services.subscriptions.serialization import (
 )
 from hydra.services.subscriptions.shadowrocket import (
     build_shadowrocket_https_link,
+    build_shadowrocket_snell_link,
 )
 from hydra.services.subscriptions.server import (
     SubscriptionHandler,
@@ -56,11 +61,14 @@ __all__ = [
     "SubscriptionPluginAccess",
     "SubscriptionPluginService",
     "build_shadowrocket_https_link",
+    "build_shadowrocket_snell_link",
     "clean_link_to_sn",
     "find_any_cert",
     "generate_awg_sn_link",
     "generate_base64_sub",
     "generate_client_config",
+    "generate_hydrabox_subscription",
+    "hydrabox_client_fingerprint",
     "generate_links",
     "generate_shadowrocket_sub",
     "generate_mieru_nekobox_link",

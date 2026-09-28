@@ -31,7 +31,6 @@ _LOG_OPTIONS = [
     ("3", "📊 Clash API", "file", "/var/log/hydra/traffic-daemon.log"),
     ("4", "🔗 qWDTT", "journal", "wdtt"),
     ("5", "🌐 Caddy L4", "journal", "caddy-l4"),
-    ("6", "📨 Telemt", "journal", "telemt"),
     ("7", "🔐 DNSCrypt", "journal", "dnscrypt-proxy"),
     ("8", "🔒 Fail2ban", "journal", "fail2ban"),
     ("9", "🌐 Naive access", "file", "/var/log/caddy-naive/access.log"),

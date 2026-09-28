@@ -1,10 +1,12 @@
 """
 hydra/plugins/amneziawg/presets.py — Carrier-пресеты и стратегии обфускации для AmneziaWG.
 """
+
 from __future__ import annotations
 import random
 from typing import Optional, Any
 from dataclasses import dataclass
+
 
 @dataclass
 class Strategy:
@@ -20,6 +22,7 @@ class Strategy:
     h_randomize: bool
     i1_mode: str  # "random" | "absent"
 
+
 @dataclass
 class CarrierOverride:
     label: str
@@ -31,6 +34,7 @@ class CarrierOverride:
     s1_range: tuple[int, int] | None = None
     s2_range: tuple[int, int] | None = None
     i1_mode: str | None = None
+
 
 STRATEGIES: dict[str, Strategy] = {
     "wired": Strategy(
@@ -139,17 +143,23 @@ LEGACY_PRESET_MAP = {
 CARRIER_PRESETS: dict[str, dict] = {
     "default": {
         "label": "Default (проводной интернет)",
-        "jc_min": 3, "jc_max": 6,
-        "jmin_min": 40, "jmin_max": 89,
-        "jmax_delta_min": 50, "jmax_delta_max": 250,
+        "jc_min": 3,
+        "jc_max": 6,
+        "jmin_min": 40,
+        "jmin_max": 89,
+        "jmax_delta_min": 50,
+        "jmax_delta_max": 250,
         "i1_mode": "random",
         "description": "Универсальный пресет для проводного интернета.",
     },
     "mobile": {
         "label": "Mobile (универсальный для мобильных DPI)",
-        "jc_min": 3, "jc_max": 3,
-        "jmin_min": 30, "jmin_max": 50,
-        "jmax_delta_min": 20, "jmax_delta_max": 80,
+        "jc_min": 3,
+        "jc_max": 3,
+        "jmin_min": 30,
+        "jmin_max": 50,
+        "jmax_delta_min": 20,
+        "jmax_delta_max": 80,
         "i1_mode": "random",
         "description": "Jc=3 фиксированный, узкий Jmax. Для мобильных с ТСПУ.",
     },
@@ -162,10 +172,77 @@ JMAX_MAX = 1280
 S3_MAX = 64
 S4_MAX = 32
 
+# In 3.x the padding of every packet type carries the material the header protection is built
+# from, so each type needs a padding at least as large as its nonce. That minimum is the whole
+# 3.x requirement: upstream asks for identical values only once RandomTrailers is on, and the
+# server owns those values. The 2.0 ranges draw per type and allow zeros — legal there.
+AWG3_PADDING_MIN = 12
+
+
+def _awg3_range(span: tuple[int, int]) -> tuple[int, int]:
+    """Raise only the lower bound of one preset range to the header-protection nonce."""
+    low, high = span
+    return max(low, AWG3_PADDING_MIN), max(high, AWG3_PADDING_MIN)
+
+
+def lift_paddings_for_mode(obfuscation: dict, protocol_mode: str) -> dict:
+    """Raise each padding to the mode's floor, keeping every value that already clears it.
+
+    A profile drawn under 2.0 may carry `S3=0`: legal there, impossible under 3.x, where header
+    protection reads the same paddings as its nonce. Only the fields below the floor move — equal
+    paddings are an upstream recommendation for RandomTrailers, not a rule, so a value the operator
+    chose keeps standing.
+    """
+    result = {str(key): str(value) for key, value in dict(obfuscation).items()}
+    if str(protocol_mode).strip() in ("", "2.0"):
+        return result
+    for field in ("S1", "S2", "S3", "S4"):
+        raw = result.get(field)
+        if raw is None:
+            continue
+        try:
+            value = int(str(raw).strip())
+        except (TypeError, ValueError):
+            continue
+        if value < AWG3_PADDING_MIN:
+            result[field] = str(AWG3_PADDING_MIN)
+    return result
+
+
+def _draw_paddings(
+    local_random: Any,
+    *,
+    protocol_mode: str,
+    s1_range: tuple[int, int],
+    s2_range: tuple[int, int],
+    s3_range: tuple[int, int],
+    s4_range: tuple[int, int],
+) -> tuple[int, int, int, int]:
+    """Draw the four packet paddings for one strategy.
+
+    For 3.x each field keeps its own preset range with the nonce minimum applied, because equal
+    paddings are an upstream recommendation only while RandomTrailers is on, not a protocol rule.
+    A range that cannot reach the minimum is lifted to it rather than replaced wholesale.
+    """
+    if str(protocol_mode).strip() not in ("", "2.0"):
+        s1_range = _awg3_range(s1_range)
+        s2_range = _awg3_range(s2_range)
+        s3_range = _awg3_range(s3_range)
+        s4_range = _awg3_range(s4_range)
+    s1 = local_random.randint(s1_range[0], s1_range[1])
+    s2 = local_random.randint(s2_range[0], s2_range[1])
+    while s1 + 56 == s2:
+        s2 = local_random.randint(s2_range[0], s2_range[1])
+    s3 = local_random.randint(s3_range[0], s3_range[1])
+    s4 = local_random.randint(s4_range[0], s4_range[1])
+    return s1, s2, s3, s4
+
+
 def generate_params(
     strategy: str = "wired",
     carrier: str | None = None,
     seed: int | None = None,
+    protocol_mode: str = "2.0",
 ) -> dict[str, str]:
     """
     Генерирует конкретные значения параметров обфускации по стратегии и оператору.
@@ -219,14 +296,14 @@ def generate_params(
     jmax_delta = local_random.randint(jmax_delta_range[0], jmax_delta_range[1])
     jmax = min(jmin + jmax_delta, JMAX_MAX)
 
-    # Генерация S1 и S2 с ограничением S1 + 56 != S2
-    s1 = local_random.randint(s1_range[0], s1_range[1])
-    s2 = local_random.randint(s2_range[0], s2_range[1])
-    while s1 + 56 == s2:
-        s2 = local_random.randint(s2_range[0], s2_range[1])
-
-    s3 = local_random.randint(s3_range[0], s3_range[1])
-    s4 = local_random.randint(s4_range[0], s4_range[1])
+    s1, s2, s3, s4 = _draw_paddings(
+        local_random,
+        protocol_mode=protocol_mode,
+        s1_range=s1_range,
+        s2_range=s2_range,
+        s3_range=s3_range,
+        s4_range=s4_range,
+    )
 
     # Генерация уникальных заголовков H1-H4
     h_vals: list[int] = []
@@ -262,6 +339,7 @@ def generate_params(
         "I1": i1,
     }
 
+
 def list_presets() -> list[dict]:
     """Возвращает список доступных пресетов (для обратной совместимости)."""
     legacy_info = {
@@ -273,33 +351,33 @@ def list_presets() -> list[dict]:
         "beeline": ("Билайн (Россия)", "Работает default preset."),
         "tattelecom": ("Таттелеком / Летай", "Mobile preset подходит."),
     }
-    return [
-        {"name": name, "label": label, "description": desc}
-        for name, (label, desc) in legacy_info.items()
-    ]
+    return [{"name": name, "label": label, "description": desc} for name, (label, desc) in legacy_info.items()]
+
 
 def list_strategies() -> list[dict]:
     """Возвращает список доступных стратегий."""
-    return [
-        {"name": k, "label": v.label, "description": v.description}
-        for k, v in STRATEGIES.items()
-    ]
+    return [{"name": k, "label": v.label, "description": v.description} for k, v in STRATEGIES.items()]
+
 
 def list_carriers(strategy: str = "mobile") -> list[dict]:
     """Возвращает список операторов для стратегии."""
     out = []
-    out.append({"name": "generic", "label": "📶 Универсальный мобильный", "description": "Подходит большинству операторов"})
+    out.append(
+        {"name": "generic", "label": "📶 Универсальный мобильный", "description": "Подходит большинству операторов"}
+    )
     for k, v in CARRIER_OVERRIDES.items():
         if v.base_strategy == strategy or (strategy == "wired" and k == "beeline"):
             out.append({"name": k, "label": v.label, "description": v.description})
     return out
 
-def validate_params(params: dict) -> tuple[bool, str]:
+
+def validate_params(params: dict, protocol_mode: str = "2.0") -> tuple[bool, str]:
     """
     Валидирует параметры обфускации.
     Возвращает (True, "") или (False, "сообщение об ошибке").
     """
     try:
+
         def get_int(k):
             val = params.get(k, 0)
             if isinstance(val, str) and val.isdigit():
@@ -340,16 +418,40 @@ def validate_params(params: dict) -> tuple[bool, str]:
         if s4 < 0 or s4 > S4_MAX:
             return False, f"S4={s4} вне диапазона (0-{S4_MAX})"
 
-        # Валидация H1-H4 (до uint32) и уникальности
+        if str(protocol_mode).strip() not in ("", "2.0"):
+            for field, value in (("S1", s1), ("S2", s2), ("S3", s3), ("S4", s4)):
+                if value < AWG3_PADDING_MIN:
+                    return False, (
+                        f"Режим {protocol_mode}: {field}={value} меньше {AWG3_PADDING_MIN} — "
+                        "защите заголовка не хватит нонса"
+                    )
+
+        # Валидация H1-H4 (до uint32), диапазонов и уникальности. Значение заголовка бывает и
+        # диапазоном — так его выдаёт установщик и так его принимает ядро; для проверки уникальности
+        # берём начало диапазона (совпавшие начала означают пересечение).
         h_vals = []
         for key in ("H1", "H2", "H3", "H4"):
+            text = str(params.get(key, 0)).strip()
+            if "-" in text:
+                begin, _, end = text.partition("-")
+                try:
+                    low, high = int(begin.strip()), int(end.strip())
+                except ValueError:
+                    return False, f"{key}={text} не является числом или диапазоном"
+                if low < 0 or high > 4294967295 or low > high:
+                    return False, f"{key}={text} вне диапазона (0-4294967295)"
+                h_vals.append(low)
+                continue
             v = get_int(key)
             if v < 0 or v > 4294967295:
                 return False, f"{key}={v} вне диапазона (0-4294967295)"
             h_vals.append(v)
 
         if len(set(h_vals)) != 4:
-            return False, f"Заголовки H1-H4 должны быть уникальными (получено: H1={h_vals[0]}, H2={h_vals[1]}, H3={h_vals[2]}, H4={h_vals[3]})"
+            return (
+                False,
+                f"Заголовки H1-H4 должны быть уникальными (получено: H1={h_vals[0]}, H2={h_vals[1]}, H3={h_vals[2]}, H4={h_vals[3]})",
+            )
 
         i1 = params.get("I1", "")
         if i1:

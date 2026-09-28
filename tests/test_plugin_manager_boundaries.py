@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from hydra.core.state import AppState
+from hydra.core.state import AppState, PluginState
 from hydra.ui import menus
 
 
@@ -19,7 +19,6 @@ MANAGERS = (
     "fail2ban",
     "honeypot",
     "ipban",
-    "telemt",
     "warp",
     "wdtt",
 )
@@ -62,15 +61,13 @@ def test_menu_dispatch_passes_injected_application(name):
     with patch(
         f"hydra.ui.plugin_managers.{name}.menu_{name}",
     ) as manager:
-        menus.menu_plugin(state, plugin, app)
+        menus.menu_plugin(state, plugin, app)  # type: ignore[attr-defined]
 
     manager.assert_called_once_with(state, app)
 
 
 def test_menu_dispatch_imports_ui_implementations_not_legacy_facades():
-    path = (
-        ROOT / "hydra" / "ui" / "_menus" / "plugin_dispatch.py"
-    )
+    path = ROOT / "hydra" / "ui" / "_menus" / "plugin_dispatch.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
     ui_managers: set[str] = set()
     imported_modules: set[str] = set()
@@ -83,10 +80,7 @@ def test_menu_dispatch_imports_ui_implementations_not_legacy_facades():
                 ui_managers.update(alias.name for alias in node.names)
 
     assert set(MANAGERS) <= ui_managers
-    assert not any(
-        module.startswith("hydra.plugins.") and module.endswith(".manager")
-        for module in imported_modules
-    )
+    assert not any(module.startswith("hydra.plugins.") and module.endswith(".manager") for module in imported_modules)
 
 
 def test_antidpi_toggle_delegates_lifecycle_to_application_protocols():
@@ -118,35 +112,10 @@ def test_antidpi_toggle_delegates_lifecycle_to_application_protocols():
         patch.object(antidpi, "panel"),
         patch.object(antidpi, "success"),
     ):
-        antidpi.menu_antidpi(state, app)
+        antidpi.menu_antidpi(state, app)  # type: ignore[arg-type]
 
     protocols.disable.assert_called_once_with(state, "antidpi")
     protocols.enable.assert_not_called()
-
-
-def test_telemt_dispatch_accepts_uppercase_special_menu_keys():
-    from hydra.ui.plugin_managers._facade_bridge import bind_facade
-    from hydra.ui.plugin_managers import _telemt_menu
-    from hydra.ui.plugin_managers import telemt
-
-    state = AppState()
-    app = SimpleNamespace()
-    protocol = SimpleNamespace(enabled=False)
-
-    with (
-        bind_facade(telemt),
-        patch.object(telemt, "_menu_singbox_integration") as handler,
-    ):
-        keep_open = _telemt_menu._dispatch(
-            "X",
-            state,
-            app,
-            protocol,
-            installed=True,
-        )
-
-    assert keep_open is True
-    handler.assert_called_once_with(state, app)
 
 
 def test_plugin_manager_layer_has_no_infrastructure_or_private_plugin_calls():
@@ -174,13 +143,9 @@ def test_plugin_manager_layer_has_no_infrastructure_or_private_plugin_calls():
                 "save_state",
             }:
                 violations.append(f"{path.name}:{node.lineno} {node.id}")
-            elif (
-                isinstance(node, ast.Attribute)
-                and node.attr.startswith("_")
-            ):
+            elif isinstance(node, ast.Attribute) and node.attr.startswith("_"):
                 violations.append(
-                    f"{path.name}:{node.lineno} "
-                    f"{ast.unparse(node.value)}.{node.attr}",
+                    f"{path.name}:{node.lineno} {ast.unparse(node.value)}.{node.attr}",
                 )
 
     assert violations == []
@@ -199,7 +164,7 @@ def test_plugin_implementations_do_not_import_ui_layer():
                 modules.append(node.module)
             for module in modules:
                 if module == "hydra.ui" or module.startswith("hydra.ui."):
-                    violations.append(f"{path.name}:{node.lineno} {module}")
+                    violations.append(f"{path.name}:{getattr(node, 'lineno', 0)} {module}")
 
     assert violations == []
 
@@ -207,10 +172,7 @@ def test_plugin_implementations_do_not_import_ui_layer():
 def test_entire_plugin_layer_only_reaches_ui_through_legacy_manager_aliases():
     violations: list[str] = []
     plugin_root = ROOT / "hydra" / "plugins"
-    allowed = {
-        plugin_root / name / "manager.py"
-        for name in MANAGERS
-    }
+    allowed = {plugin_root / name / "manager.py" for name in MANAGERS}
     for path in sorted(plugin_root.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
@@ -220,12 +182,9 @@ def test_entire_plugin_layer_only_reaches_ui_through_legacy_manager_aliases():
             elif isinstance(node, ast.ImportFrom) and node.module:
                 modules.append(node.module)
             for module in modules:
-                if (
-                    module == "hydra.ui"
-                    or module.startswith("hydra.ui.")
-                ) and path not in allowed:
+                if (module == "hydra.ui" or module.startswith("hydra.ui.")) and path not in allowed:
                     violations.append(
-                        f"{path.relative_to(ROOT)}:{node.lineno} {module}",
+                        f"{path.relative_to(ROOT)}:{getattr(node, 'lineno', 0)} {module}",
                     )
     assert violations == []
 

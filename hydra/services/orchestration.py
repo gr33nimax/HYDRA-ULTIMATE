@@ -19,6 +19,7 @@ from hydra.core.state_models import AppState, User, get_protocol
 from hydra.core import singbox, nft
 from hydra.core.host import HOST
 from hydra.plugins import registry
+from hydra.plugins.executor import apply_failure_message
 from hydra.plugins.invoker import PluginInvoker
 from hydra.services.configuration import (
     ConfigurationApplier,
@@ -265,5 +266,5 @@ def sync_user_configs(state: AppState, plugin_name: str | None = None) -> None:
             continue
         invoker.configure(p, state)
         if not invoker.apply(p, state):
-            raise RuntimeError(f"Plugin {p.meta.name} apply returned false")
+            raise RuntimeError(apply_failure_message(p))
     save_state(state)

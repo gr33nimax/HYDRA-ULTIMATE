@@ -61,8 +61,11 @@ def _menu_sync_agent(state: AppState, app: ApplicationService):
 
         maintenance_choices: dict[str, tuple[str, bool]] = {}
         maintenance_items: list[tuple[str, str, str]] = []
-        for index, job in enumerate(app.protocols.maintenance_jobs(), start=4):
-            enabled = bool(state.install.get(job.enabled_flag, True))
+        for index, job in enumerate(app.maintenance.jobs(), start=4):
+            enabled = bool(state.install.get(
+                job.enabled_flag,
+                job.enabled_by_default,
+            ))
             key = str(index)
             maintenance_choices[key] = (job.enabled_flag, enabled)
             color = GREEN if enabled else RED

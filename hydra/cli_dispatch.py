@@ -121,6 +121,24 @@ def _upgrade_command(
     return _result(app.system.migrate_state())
 
 
+def _kernel_command(
+    args: argparse.Namespace,
+    state: AppState,
+    app: ApplicationService,
+    require_root: Callable[[], None],
+) -> CommandResult:
+    if args.command_id == "kernel.status":
+        return _result(app.kernel.status(state).as_dict())
+    require_root()
+    result = app.kernel.switch(
+        state,
+        args.provider,
+        channel=args.channel,
+        force=args.force,
+    )
+    return _result(result.as_dict())
+
+
 def _new_user(args: argparse.Namespace) -> User:
     user = User(
         email=args.email,
@@ -180,6 +198,9 @@ def _user_command(
             args.limit,
             reset=args.reset,
         )
+        return {"ok": True, "user": public_user(user)}
+    if action == "rotate-hydrabox-key":
+        user = app.rotate_user_hydrabox_key(state, args.email)
         return {"ok": True, "user": public_user(user)}
     operations = {
         "block": app.block_user,
@@ -356,10 +377,14 @@ def _antidpi_command(
             ),
         )
     installed = app.protocols.install(state, "antidpi")
+    synced = bool(
+        installed
+        and app.plugin_action("antidpi", "sync_runtime", state=state)
+    )
     health = app.protocols.health(state, "antidpi")
     payload = {
-        "ok": bool(installed and health.healthy),
-        "error": "" if installed else health.detail,
+        "ok": bool(synced and health.healthy),
+        "error": "" if synced else health.detail,
         "health": health.as_dict(),
     }
     return _result(payload)
@@ -378,6 +403,8 @@ def dispatch(
         return _backup_command(args, app, require_root)
     if domain == "upgrade":
         return _upgrade_command(args, state, app, require_root)
+    if domain == "kernel":
+        return _kernel_command(args, state, app, require_root)
     if domain == "user":
         return _result(_user_command(args, state, app, require_root))
     if domain == "plugin":

@@ -16,6 +16,7 @@ from hydra.ui._menus import (
     users,
     users_links,
     users_management,
+    users_names,
     users_overview,
     users_subscription,
 )
@@ -80,6 +81,7 @@ BINDER_SPECS: dict[
         (
             users_links,
             users_management,
+            users_names,
             users_overview,
             users_subscription,
         ),

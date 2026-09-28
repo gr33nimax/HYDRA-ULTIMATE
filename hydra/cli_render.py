@@ -25,13 +25,16 @@ COMMAND_TITLES = {
     "backup.inspect": "Backup inspection",
     "backup.restore": "Backup restore",
     "upgrade.check": "Upgrade readiness",
-    "upgrade.migrate-state": "State migration",
+    "upgrade.migrate-state": "Legacy state import",
+    "kernel.status": "Kernel status",
+    "kernel.switch": "Kernel switch",
     "user.list": "Users",
     "user.show": "User details",
     "user.add": "Add user",
     "user.ensure-default": "Default user",
     "user.rename": "Rename user",
     "user.set-device-limit": "Update device limit",
+    "user.rotate-hydrabox-key": "Rotate HydraBox JWE key",
     "user.block": "Block user",
     "user.unblock": "Unblock user",
     "user.remove": "Remove user",
@@ -108,7 +111,7 @@ def _render_status(payload: Mapping[str, object], *, color: bool) -> list[str]:
     users = int(payload.get("users", 0) or 0)
     lines = [
         (
-            f"State schema v{_scalar(payload.get('version'))}"
+            f"State format v{_scalar(payload.get('version'))}"
             f"  |  {users} user{'s' if users != 1 else ''}"
         ),
     ]
@@ -178,7 +181,7 @@ def _render_check(payload: Mapping[str, object], *, color: bool) -> list[str]:
     if isinstance(configuration, Mapping):
         schema = configuration.get("schema_version", "-")
         revision = configuration.get("revision")
-        detail = f"schema v{schema}"
+        detail = f"format v{schema}"
         if revision is not None:
             detail += f", revision {revision}"
         lines.append(f"Configuration: {_mark(configuration.get('valid'))} {detail}")

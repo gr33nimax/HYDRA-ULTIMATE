@@ -1,4 +1,5 @@
 """Transactional phases for applying the desired SNI-router runtime."""
+
 from __future__ import annotations
 
 import json
@@ -6,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from hydra.core.sni_router_planning import TLS_TERMINATED_ROUTE_KINDS
 from hydra.core.sni_router_runtime_models import (
     RuntimeBackup,
     RuntimeOperations,
@@ -46,21 +48,15 @@ def _apply_loopback_firewall(
             )
             for backend in backends
         ]
-        decoy_ports = {
-            int(port)
-            for port in settings.decoy_ports.values()
-        }
-        decoy_ports.update(
-            int(backend["decoy_port"])
-            for backend in backends
-            if backend.get("decoy_port")
-        )
+        decoy_ports = {int(port) for port in settings.decoy_ports.values()}
+        decoy_ports.update(int(backend["decoy_port"]) for backend in backends if backend.get("decoy_port"))
         ports.extend((str(port), False) for port in sorted(decoy_ports))
         dynamic_ports = {
             int(value)
             for backend in backends
-            if backend.get("route_kind") == "http_path_proxy"
-            for value in (backend["port"], backend["decoy_port"])
+            if backend.get("route_kind") in TLS_TERMINATED_ROUTE_KINDS
+            for value in (backend["port"], backend.get("decoy_port"))
+            if value
         }
         for port, include_udp in ports:
             protocols = ("tcp", "udp") if include_udp else ("tcp",)
@@ -137,7 +133,9 @@ def _ensure_decoy_sites(backends: list[dict]) -> None:
     for backend in backends:
         if backend["name"] in ("sub_server", "shadowtls"):
             continue
-        if backend.get("route_kind") == "tls_passthrough":
+        if backend.get("route_kind") in ("tls_passthrough", "http_reverse_proxy"):
+            # The multiplexer either keeps TLS in the plugin or forwards the
+            # decrypted stream to the plugin's own relay; neither gets a decoy.
             continue
         domain = str(backend.get("domain", ""))
         if backend.get("route_kind") == "http_path_proxy":
@@ -310,6 +308,41 @@ def _rollback_runtime(
             )
 
 
+def snapshot_runtime(
+    settings: RuntimeSettings,
+    operations: RuntimeOperations,
+) -> RuntimeBackup:
+    """Capture the Caddy runtime for an outer apply transaction."""
+    return _capture_backup(settings, operations)
+
+
+def restore_runtime(
+    settings: RuntimeSettings,
+    host: Any,
+    operations: RuntimeOperations,
+    backup: RuntimeBackup,
+) -> None:
+    """Restore the captured Caddy runtime after a later apply stage failed.
+
+    Called before plugin rollback so a restarted plugin can reclaim TCP/443 or
+    land on the restored multiplexer instead of racing the failed generation.
+    """
+    if backup.config is None:
+        host.run(
+            ["systemctl", "stop", settings.caddy_service_name],
+            capture_output=True,
+        )
+        _restore_routing_units(settings, host, operations, backup)
+        return
+    _rollback_runtime(
+        settings,
+        host,
+        operations,
+        backup,
+        upgraded_binary=False,
+    )
+
+
 def rebuild(
     state: AppState,
     settings: RuntimeSettings,
@@ -364,4 +397,4 @@ def rebuild(
     return False
 
 
-__all__ = ["rebuild"]
+__all__ = ["rebuild", "restore_runtime", "snapshot_runtime"]

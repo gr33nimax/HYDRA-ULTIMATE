@@ -1,13 +1,16 @@
 """Validated XHTTP transport tuning shared by the VLESS plugin surfaces."""
+
 from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
+from hydra.contracts.utls import UTLS_FINGERPRINTS, validate_fingerprint
+
 
 DEFAULT_MODE = "stream-up"
-DEFAULT_PATH = "/xhttp"
+DEFAULT_PATH = "/api/v1/session"
 XHTTP_MODES = frozenset({"stream-up", "packet-up", "stream-one"})
 
 _RANGE = re.compile(r"[0-9]{1,6}(?:-[0-9]{1,6})?")
@@ -37,15 +40,10 @@ def validate_path(value: object) -> str:
         or len(path) > 256
         or any(character.isspace() for character in path)
         or any(character in path for character in "?#*%\\")
-        or any(
-            segment in {"", ".", ".."}
-            or not re.fullmatch(r"[A-Za-z0-9._~-]+", segment)
-            for segment in segments
-        )
+        or any(segment in {"", ".", ".."} or not re.fullmatch(r"[A-Za-z0-9._~-]+", segment) for segment in segments)
     ):
         raise ValueError(
-            "XHTTP path must start with '/', identify a non-root path, "
-            "and contain no whitespace, query, or fragment",
+            "XHTTP path must start with '/', identify a non-root path, and contain no whitespace, query, or fragment",
         )
     return path.rstrip("/")
 
@@ -98,28 +96,6 @@ def _validate_bool(value: object, *, field: str) -> bool:
     if text in _FALSE:
         return False
     raise ValueError(f"{field} must be a boolean")
-
-
-UTLS_FINGERPRINTS = (
-    "none",
-    "chrome",
-    "firefox",
-    "safari",
-    "edge",
-    "ios",
-    "android",
-    "random",
-    "randomized",
-)
-
-
-def validate_fingerprint(value: object) -> str:
-    """Return a supported uTLS fingerprint for client profiles."""
-    fingerprint = str(value or "").strip().lower()
-    if fingerprint not in UTLS_FINGERPRINTS:
-        allowed = ", ".join(UTLS_FINGERPRINTS)
-        raise ValueError(f"XHTTP utls_fingerprint must be one of: {allowed}")
-    return fingerprint
 
 
 def validate_headers(value: object) -> dict[str, str]:
@@ -229,6 +205,7 @@ FIELDS: tuple[TuningField, ...] = (
             minimum=1,
             maximum=1024,
         ),
+        scope="server",
     ),
     TuningField(
         "stream_up_secs",
@@ -258,6 +235,7 @@ FIELDS: tuple[TuningField, ...] = (
             minimum=1024,
             maximum=65536,
         ),
+        scope="server",
     ),
     TuningField(
         "utls_fingerprint",
@@ -266,19 +244,15 @@ FIELDS: tuple[TuningField, ...] = (
         "fp",
         "uTLS-отпечаток клиента",
         "fp в ссылке и tls.utls в профиле: чей ClientHello имитирует клиент; none оставляет выбор клиенту",
-        "none",
+        "chrome",
         validate_fingerprint,
         scope="tls",
     ),
 )
 
-FIELDS_BY_PARAM: dict[str, TuningField] = {
-    field.param: field for field in FIELDS
-}
+FIELDS_BY_PARAM: dict[str, TuningField] = {field.param: field for field in FIELDS}
 
-TUNING_DEFAULTS: tuple[tuple[str, object], ...] = tuple(
-    (field.key, field.default) for field in FIELDS
-)
+TUNING_DEFAULTS: tuple[tuple[str, object], ...] = tuple((field.key, field.default) for field in FIELDS)
 
 
 def effective(config: Mapping[str, object]) -> dict[str, object]:
@@ -305,9 +279,10 @@ def transport(
         "path": validate_path(config.get("xhttp_path", DEFAULT_PATH)),
     }
     for field in FIELDS:
-        if field.scope != "transport":
-            continue
-        block[field.transport] = values[field.key]
+        if field.scope == "transport":
+            block[field.transport] = values[field.key]
+        elif field.scope == "server" and not client:
+            block[field.transport] = values[field.key]
     if not client:
         block["trusted_x_forwarded_for"] = []
     return block
@@ -319,9 +294,7 @@ def link_extra(config: Mapping[str, object]) -> dict[str, object]:
     return {
         field.link: values[field.key]
         for field in FIELDS
-        if field.scope == "transport"
-        and field.link
-        and values[field.key] != field.default
+        if field.scope == "transport" and field.link and values[field.key] != field.default
     }
 
 
@@ -338,8 +311,7 @@ def apply_settings(
     if not parameters:
         raise ValueError("no XHTTP tuning parameters supplied")
     validated = {
-        FIELDS_BY_PARAM[param].key: FIELDS_BY_PARAM[param].validate(value)
-        for param, value in parameters.items()
+        FIELDS_BY_PARAM[param].key: FIELDS_BY_PARAM[param].validate(value) for param, value in parameters.items()
     }
     config.update(validated)
 
@@ -366,9 +338,7 @@ def summary(config: Mapping[str, object]) -> str:
 
 def client_tls(config: Mapping[str, object]) -> dict[str, object]:
     """Return the uTLS block a client profile should present, if any."""
-    fingerprint = validate_fingerprint(
-        config.get("utls_fingerprint", "none"),
-    )
+    fingerprint = str(effective(config)["utls_fingerprint"])
     if fingerprint == "none":
         return {}
     return {"utls": {"enabled": True, "fingerprint": fingerprint}}
@@ -376,9 +346,7 @@ def client_tls(config: Mapping[str, object]) -> dict[str, object]:
 
 def link_params(config: Mapping[str, object]) -> dict[str, str]:
     """Return share-link query parameters outside the transport block."""
-    fingerprint = validate_fingerprint(
-        config.get("utls_fingerprint", "none"),
-    )
+    fingerprint = str(effective(config)["utls_fingerprint"])
     return {} if fingerprint == "none" else {"fp": fingerprint}
 
 

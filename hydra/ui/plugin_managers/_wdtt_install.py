@@ -113,14 +113,17 @@ def _client_link(
     dtls_port: int,
     password: str,
     *,
-    vk_hash: str = "ВК_ХЕШ_ЗВОНКА",
+    vk_hash: str | list[str] = "ВК_ХЕШ_ЗВОНКА",
 ) -> str:
-    return (
-        f"qwdtt://config?name=qWDTT-{server_ip}"
-        f"&peer={server_ip}:{dtls_port}"
-        f"&hashes={vk_hash}"
-        f"&workers=16&port={facade.LOCAL_TUN_PORT}"
-        f"&pass={password}"
+    from hydra.plugins.wdtt.call_pool import build_qwdtt_link
+
+    hashes = vk_hash if isinstance(vk_hash, list) else [vk_hash]
+    return build_qwdtt_link(
+        server_ip,
+        dtls_port,
+        password,
+        hashes,
+        local_port=facade.LOCAL_TUN_PORT,
     )
 
 

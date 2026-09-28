@@ -159,6 +159,62 @@ def test_antidpi_capture_dispatches(capsys):
     )
 
 
+def test_kernel_status_is_read_only_and_structured(capsys):
+    app = MagicMock()
+    app.kernel.status.return_value.as_dict.return_value = {
+        "desired_provider": "hydracore",
+        "runtime": {"provider": "hydracore", "running": True},
+    }
+    state = AppState()
+    with patch.object(cli, "load_state", return_value=state), \
+         patch.object(cli, "production_application", return_value=app), \
+         patch.object(cli, "_require_root") as require_root:
+        assert cli.main(["kernel", "status"]) == 0
+    require_root.assert_not_called()
+    app.kernel.status.assert_called_once_with(state)
+    assert '"desired_provider": "hydracore"' in capsys.readouterr().out
+
+
+def test_kernel_switch_dispatches_through_application_port(capsys):
+    app = MagicMock()
+    app.kernel.switch.return_value.as_dict.return_value = {
+        "ok": True,
+        "changed": True,
+    }
+    state = AppState()
+    with patch.object(cli, "load_state", return_value=state), \
+         patch.object(cli, "production_application", return_value=app), \
+         patch.object(cli, "_require_root") as require_root:
+        assert cli.main([
+            "kernel", "switch", "hydracore", "--channel", "debug",
+        ]) == 0
+    require_root.assert_called_once()
+    app.kernel.switch.assert_called_once_with(
+        state,
+        "hydracore",
+        channel="debug",
+        force=False,
+    )
+
+
+def test_kernel_switch_defaults_to_the_stable_channel(capsys):
+    app = MagicMock()
+    app.kernel.switch.return_value.as_dict.return_value = {"ok": True}
+    state = AppState()
+    with patch.object(cli, "load_state", return_value=state), \
+         patch.object(cli, "production_application", return_value=app), \
+         patch.object(cli, "_require_root"):
+        assert cli.main(["kernel", "switch", "hydracore"]) == 0
+
+    app.kernel.switch.assert_called_once_with(
+        state,
+        "hydracore",
+        channel="stable",
+        force=False,
+    )
+
+
+
 def test_antidpi_sync_reinstalls_and_reports_health(capsys):
     health = type("Health", (), {
         "healthy": True,
@@ -168,11 +224,15 @@ def test_antidpi_sync_reinstalls_and_reports_health(capsys):
     protocols.install.return_value = True
     protocols.health.return_value = health
     app = MagicMock(protocols=protocols)
+    app.plugin_action.return_value = True
     with patch.object(cli, "load_state", return_value=AppState()), \
          patch.object(cli, "_require_root"), \
          patch.object(cli, "production_application", return_value=app):
         assert cli.main(["antidpi", "sync"]) == 0
     protocols.install.assert_called_once_with(AppState(), "antidpi")
+    app.plugin_action.assert_called_once_with(
+        "antidpi", "sync_runtime", state=AppState(),
+    )
     protocols.health.assert_called_once_with(AppState(), "antidpi")
     output = capsys.readouterr().out
     assert '"ok": true' in output

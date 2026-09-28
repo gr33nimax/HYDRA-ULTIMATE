@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,6 +21,8 @@ HWID_HEADERS = (
 HWID_PARAMS = ("hwid", "device_id")
 NETWORK_SOURCE = "network-client"
 _MAX_AGENT = 120
+_HYDRABOX_HWID = re.compile(r"^hbx1_[A-Za-z0-9_-]{43}$")
+_HYDRABOX_AGENT = re.compile(r"^HydraBox/[^\s/]+(?:\s|$)")
 
 
 @dataclass(frozen=True)
@@ -82,6 +85,43 @@ def subscription_fingerprint(
         source = NETWORK_SOURCE
     return DeviceFingerprint(
         device_id=hashlib.sha256(f"{source}:{raw}".encode()).hexdigest(),
+        source=source,
+        user_agent=agent,
+        address=str(client_ip or ""),
+    )
+
+
+def hydrabox_client_fingerprint(
+    headers: Mapping[str, str],
+    client_ip: str,
+) -> DeviceFingerprint:
+    """Validate the HydraBox identity contract and hash its reported HWID."""
+    agent = _normalized_agent(headers.get("User-Agent", ""))
+    if not _HYDRABOX_AGENT.match(agent):
+        raise ValueError("HydraBox User-Agent is required")
+    raw_hwid = ""
+    source = ""
+    for name in HWID_HEADERS:
+        candidate = str(headers.get(name, "") or "").strip()
+        if candidate:
+            raw_hwid = candidate
+            source = name.lower()
+            break
+    if not raw_hwid:
+        raise ValueError("HydraBox HWID header is required")
+    if source == "x-hydra-hwid":
+        if not _HYDRABOX_HWID.fullmatch(raw_hwid):
+            raise ValueError("Valid X-Hydra-HWID is required")
+        identity = raw_hwid.encode("ascii")
+    else:
+        if len(raw_hwid) > 512 or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in raw_hwid
+        ):
+            raise ValueError("Valid HydraBox HWID header is required")
+        identity = f"{source}:{raw_hwid}".encode()
+    return DeviceFingerprint(
+        device_id=hashlib.sha256(identity).hexdigest(),
         source=source,
         user_agent=agent,
         address=str(client_ip or ""),
@@ -158,6 +198,7 @@ __all__ = [
     "HWID_PARAMS",
     "NETWORK_SOURCE",
     "DeviceFingerprint",
+    "hydrabox_client_fingerprint",
     "register_subscription_device",
     "subscription_device_id",
     "subscription_fingerprint",

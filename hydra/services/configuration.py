@@ -1,4 +1,5 @@
 """Transactional configuration apply pipeline."""
+
 from __future__ import annotations
 
 import copy
@@ -10,6 +11,7 @@ from typing import Any, Callable
 
 from hydra.core.apply_transaction import ApplyTransaction
 from hydra.core.state_models import AppState
+from hydra.plugins.invoker import PluginInvoker
 
 
 @dataclass(frozen=True)
@@ -38,10 +40,13 @@ class ConfigurationApplier:
         ) -> bool:
             self.set_apply_error(message)
             self.singbox.log("ERROR", message)
-            transaction.rollback(
+            failures = transaction.rollback(
                 lambda error: self.singbox.log("ERROR", error),
             )
             self.journal("rolled_back", stage=stage, error=message)
+            if failures:
+                detail = [f"{item.action}: {item.error[:200]}" for item in failures[:5]]
+                self.journal("rollback_failed", stage=stage, error=message, failures=detail)
             if reload_restored:
                 try:
                     self.singbox.reload()
@@ -107,6 +112,7 @@ class ConfigurationApplier:
 
         self.migrate_haproxy(state)
         mux_active = needs_mux(state)
+        self._register_caddy_rollback(transaction)
 
         if not mux_active:
             stop_mux()
@@ -122,24 +128,16 @@ class ConfigurationApplier:
                 f"Не удалось применить конфигурацию плагина: {exc}",
             )
 
-        plugin_count = len(applied_plugins)
-        for index, (plugin, snapshot) in enumerate(applied_plugins):
-            transaction.add_rollback(
-                f"plugin {plugin.meta.name}",
-                lambda plugin=plugin, snapshot=snapshot: self.registry.rollback(
-                    plugin,
-                    state,
-                    snapshot,
-                ),
-                priority=30 + plugin_count - index,
-            )
-
+        self._register_plugin_rollbacks(transaction, applied_plugins, state)
         singbox_ok, mux_ok, stage, runtime_error = self._reload_runtime(
             state,
             mux_active,
         )
         if runtime_error:
             return fail(stage, runtime_error, reload_restored=True)
+
+        if mux_ok and (finalize_error := self._finalize_plugins(applied_plugins, state)):
+            return fail("plugin_finalize", finalize_error, reload_restored=True)
 
         try:
             self.manage_traffic_daemon(state)
@@ -153,10 +151,7 @@ class ConfigurationApplier:
         transaction.advance("healthcheck")
         plugin_health = self.registry.health_all(state)
         if plugin_health:
-            details = "; ".join(
-                f"{name}: {reason}"
-                for name, reason in plugin_health.items()
-            )
+            details = "; ".join(f"{name}: {reason}" for name, reason in plugin_health.items())
             return fail(
                 "plugin_health",
                 f"Проверка сервисов не пройдена: {details}",
@@ -165,10 +160,7 @@ class ConfigurationApplier:
 
         if not singbox_ok or not mux_ok:
             if not singbox_ok:
-                error = (
-                    self.singbox.last_error()
-                    or "Sing-Box не запустился после применения"
-                )
+                error = self.singbox.last_error() or "Sing-Box не запустился после применения"
             else:
                 error = "SNI-маршрутизатор не запустился после применения"
             self.set_apply_error(error)
@@ -186,6 +178,97 @@ class ConfigurationApplier:
         transaction.commit()
         self.journal("committed")
         return True
+
+    def _register_plugin_rollbacks(
+        self,
+        transaction: ApplyTransaction,
+        applied_plugins: list[tuple[Any, Any]],
+        state: AppState,
+    ) -> None:
+        plugin_count = len(applied_plugins)
+        for index, (plugin, snapshot) in enumerate(applied_plugins):
+            transaction.add_rollback(
+                f"plugin {plugin.meta.name}",
+                lambda plugin=plugin, snapshot=snapshot: self.registry.rollback(
+                    plugin,
+                    state,
+                    snapshot,
+                ),
+                priority=30 + plugin_count - index,
+            )
+
+    def _register_caddy_rollback(self, transaction: ApplyTransaction) -> None:
+        """Capture the frontend before it is rebuilt or stopped.
+
+        Registered before either path runs, so a later failure also restores the
+        previous ownership when the desired state no longer needs the mux.
+        """
+        from hydra.core.sni_router import snapshot_runtime
+
+        try:
+            backup = snapshot_runtime()
+        except Exception as exc:
+            self.singbox.log(
+                "ERROR",
+                f"Не удалось снять снимок SNI-маршрутизатора: {exc}",
+            )
+            return
+        if backup.config is None and backup.caddy_unit is None:
+            # Nothing was ever installed: there is no runtime to restore.
+            return
+        transaction.add_rollback(
+            "caddy runtime",
+            lambda: self._restore_caddy_runtime(backup),
+            priority=25,
+        )
+
+    def _restore_caddy_runtime(self, backup: Any) -> None:
+        from hydra.core.sni_router import restore_runtime
+
+        try:
+            restore_runtime(backup)
+        except Exception as exc:
+            self.singbox.log(
+                "ERROR",
+                f"Не удалось восстановить SNI-маршрутизатор: {exc}",
+            )
+
+    def _finalize_plugins(
+        self,
+        applied_plugins: list[tuple[Any, Any]],
+        state: AppState,
+    ) -> str:
+        """Run post-frontend plugin finalization; return a failure reason.
+
+        A plugin may need the rebuilt multiplexer before it can prove its own
+        end-to-end path, for example before disabling a previously working one.
+        """
+        for plugin, _snapshot in applied_plugins:
+            try:
+                finalized = self._finalize_plugin(plugin, state)
+            except Exception as exc:
+                return f"Не удалось завершить применение {plugin.meta.name}: {exc}"
+            if finalized:
+                continue
+            return self._plugin_finalize_detail(plugin)
+        return ""
+
+    @staticmethod
+    def _finalize_plugin(plugin: Any, state: AppState) -> bool:
+        """Run the optional hook through the canonical invocation boundary."""
+        return PluginInvoker().finalize(plugin, state)
+
+    @staticmethod
+    def _plugin_finalize_detail(plugin: Any) -> str:
+        reader = getattr(plugin, "apply_failure", None)
+        if callable(reader):
+            try:
+                detail = str(reader() or "")
+            except Exception:
+                detail = ""
+            if detail:
+                return detail
+        return f"Плагин {plugin.meta.name} не подтвердил готовность"
 
     def _start_apply(self) -> ApplyTransaction:
         self.set_apply_error("")

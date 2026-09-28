@@ -1,25 +1,37 @@
 """Pure persisted-state schema and semantic validation.
 
 This module deliberately has no filesystem, locking, or process concerns.
-Domain and plugin code can depend on these types without depending on the
-state-storage adapter exposed by :mod:`hydra.core.state`.
+Domain and plugin code can depend on these types without the storage adapter.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Optional
 
 from hydra.contracts import JsonValue, PluginConfig, validate_json_object
-
-
+from hydra.core.configuration_names import validate_configuration_names
+from hydra.core.state_calls_models import validate_calls_protocol
+from hydra.core.hydrabox_keys import validate_optional_hydrabox_jwe_key
+from hydra.core.state_creator_models import HeadlessCreatorConfig
+from hydra.core.state_creator_models import validate_headless_creator
 from hydra.core.state_devices import validate_device_map
+from hydra.core.state_format import STATE_FORMAT_VERSION, UnsupportedStateVersion
+from hydra.core.state_kernel_models import (
+    KernelConfig,
+    validate_kernel_config,
+)
+from hydra.core.state_network_models import NetworkConfig
+from hydra.core.state_validation import (
+    supports_personal_protocol_access,
+    validate_raw_state,
+    validate_supported_version,
+)
 
 
-SCHEMA_VERSION = 5
-
-
-class UnsupportedStateVersion(RuntimeError):
-    """Persisted state was produced by a newer HYDRA schema."""
+# Compatibility alias for public status/CLI code. This is the stable document
+# format, not a product or feature version.
+SCHEMA_VERSION = STATE_FORMAT_VERSION
 
 
 @dataclass
@@ -48,6 +60,9 @@ class User:
     device_limit: int = 0
     # device id -> {first_seen, last_seen, source, user_agent, address}
     devices: dict[str, dict] = field(default_factory=dict)
+    hydrabox_jwe_key: str = ""
+    configuration_name_overrides: dict[str, str] = field(default_factory=dict)
+    disabled_protocols: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -73,78 +88,26 @@ class TelegramConfig:
 
 
 @dataclass
-class NetworkConfig:
-    """Persisted network settings that are not owned by a plugin."""
-
-    domain: str = ""
-    sub_domain: str = ""
-    server_ip: str = ""
-    dns_servers: list[str] = field(default_factory=list)
-    dnscrypt_port: int = 5300
-    tproxy_enabled: bool = False
-    tproxy_port: int = 1081
-    clash_api_enabled: bool = False
-    clash_api_port: int = 9090
-    clash_api_secret: str = ""
-
-
-@dataclass
 class AppState:
-    """Persisted aggregate root."""
+    """Runtime aggregate projected from the stable persisted document."""
 
-    version: int = SCHEMA_VERSION
+    format_version: int = STATE_FORMAT_VERSION
     revision: int = 0
     install: dict = field(default_factory=dict)
+    configuration_names: dict[str, str] = field(default_factory=dict)
     protocols: dict[str, PluginState] = field(default_factory=dict)
     users: list[User] = field(default_factory=list)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
+    headless_creator: HeadlessCreatorConfig = field(default_factory=HeadlessCreatorConfig)
+    kernel: KernelConfig = field(default_factory=KernelConfig)
+    core_extensions: dict[str, JsonValue] = field(default_factory=dict)
+    feature_extensions: dict[str, JsonValue] = field(default_factory=dict)
 
-
-def validate_raw_state(raw: object) -> None:
-    """Reject structurally invalid serialized state before construction."""
-    if not isinstance(raw, dict):
-        raise ValueError("state root must be an object")
-    version = raw.get("version", 0)
-    if isinstance(version, bool) or not isinstance(version, int) or version < 0:
-        raise ValueError("state version must be a non-negative integer")
-    revision = raw.get("revision", 0)
-    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
-        raise ValueError("state revision must be a non-negative integer")
-    for key in ("protocols", "install", "telegram", "network", "security"):
-        if key in raw and not isinstance(raw[key], dict):
-            raise ValueError(f"state field '{key}' must be an object")
-    if "users" in raw:
-        users = raw["users"]
-        if not isinstance(users, list) or any(not isinstance(user, dict) for user in users):
-            raise ValueError("state field 'users' must be a list of objects")
-        for user in users:
-            if (
-                not isinstance(user.get("email", ""), str)
-                or not isinstance(user.get("uuid", ""), str)
-            ):
-                raise ValueError("user email and uuid must be strings")
-            device_limit = user.get("device_limit", 0)
-            if type(device_limit) is not int or device_limit < 0:
-                raise ValueError("user device limit must be a non-negative integer")
-            validate_device_map(
-                user.get("devices", {}),
-                legacy=int(raw.get("version", SCHEMA_VERSION)) < 5,
-            )
-    if "protocols" in raw:
-        for name, protocol in raw["protocols"].items():
-            if not isinstance(name, str) or not isinstance(protocol, dict):
-                raise ValueError("protocol entries must be named objects")
-
-
-def validate_supported_version(raw: dict) -> None:
-    """Reject future schemas instead of silently dropping their fields."""
-    version = raw.get("version", 0)
-    if version > SCHEMA_VERSION:
-        raise UnsupportedStateVersion(
-            f"state schema {version} is newer than supported schema "
-            f"{SCHEMA_VERSION}"
-        )
+    @property
+    def version(self) -> int:
+        """Compatibility name used by existing status and service DTOs."""
+        return self.format_version
 
 
 def get_protocol(state: AppState, name: str) -> PluginState:
@@ -152,6 +115,11 @@ def get_protocol(state: AppState, name: str) -> PluginState:
     if name not in state.protocols:
         state.protocols[name] = PluginState()
     return state.protocols[name]
+
+
+def user_can_use(user: User, protocol: str) -> bool:
+    """Check server-side authorization for a user's transport."""
+    return not user.blocked and protocol not in user.disabled_protocols
 
 
 def find_user(state: AppState, email: str) -> Optional[User]:
@@ -162,14 +130,11 @@ def find_user(state: AppState, email: str) -> Optional[User]:
 def add_user(state: AppState, user: User) -> None:
     """Add or replace a user while preserving global UUID uniqueness."""
     duplicate_uuid = next(
-        (item for item in state.users
-         if item.uuid == user.uuid and item.email != user.email),
+        (item for item in state.users if item.uuid == user.uuid and item.email != user.email),
         None,
     )
     if duplicate_uuid is not None:
-        raise ValueError(
-            f"UUID уже используется пользователем {duplicate_uuid.email}"
-        )
+        raise ValueError(f"UUID уже используется пользователем {duplicate_uuid.email}")
     existing = find_user(state, user.email)
     if existing is None:
         state.users.append(user)
@@ -179,38 +144,52 @@ def add_user(state: AppState, user: User) -> None:
 
 def validate_state(state: AppState) -> None:
     """Validate semantic invariants before persisting or applying state."""
-    if type(state.version) is not int or state.version < 0:
-        raise ValueError("state version must be non-negative")
+    if type(state.format_version) is not int or state.format_version < 1:
+        raise ValueError("state format_version must be positive")
     if type(state.revision) is not int or state.revision < 0:
         raise ValueError("state revision must be non-negative")
-    if state.version > SCHEMA_VERSION:
+    if state.format_version != STATE_FORMAT_VERSION:
         raise UnsupportedStateVersion(
-            f"state schema {state.version} is newer than supported schema "
-            f"{SCHEMA_VERSION}"
+            f"state format {state.format_version} is not supported; expected {STATE_FORMAT_VERSION}"
         )
+    validate_headless_creator(state.headless_creator)
+    validate_kernel_config(state.kernel)
+    validate_configuration_names(
+        state.configuration_names,
+        path="configuration_names",
+    )
     for user in state.users:
-        if (
-            not isinstance(user.email, str)
-            or not user.email.strip()
-            or any(char.isspace() for char in user.email)
-        ):
+        if not isinstance(user.email, str) or not user.email.strip() or any(char.isspace() for char in user.email):
             raise ValueError(f"invalid user identifier: {user.email!r}")
         if not user.uuid or not isinstance(user.uuid, str):
             raise ValueError(f"invalid UUID for user {user.email}")
         if user.traffic_limit_gb < 0 or user.traffic_used_bytes < 0:
-            raise ValueError(
-                f"traffic counters cannot be negative for {user.email}"
-            )
+            raise ValueError(f"traffic counters cannot be negative for {user.email}")
         if type(user.device_limit) is not int or user.device_limit < 0:
-            raise ValueError(
-                f"device limit must be a non-negative integer for {user.email}"
-            )
+            raise ValueError(f"device limit must be a non-negative integer for {user.email}")
         try:
             validate_device_map(user.devices, legacy=False)
         except ValueError as exc:
             raise ValueError(
                 f"device bindings are invalid for {user.email}: {exc}",
             ) from None
+        validate_optional_hydrabox_jwe_key(
+            user.hydrabox_jwe_key,
+            owner=user.email,
+        )
+        validate_configuration_names(
+            user.configuration_name_overrides,
+            path=f"users.{user.email}.configuration_name_overrides",
+        )
+        if (
+            not isinstance(user.disabled_protocols, list)
+            or any(
+                not isinstance(name, str) or not name or not supports_personal_protocol_access(name)
+                for name in user.disabled_protocols
+            )
+            or len(set(user.disabled_protocols)) != len(user.disabled_protocols)
+        ):
+            raise ValueError(f"invalid disabled_protocols for {user.email}")
     ports = {
         "network.tproxy_port": state.network.tproxy_port,
         "network.clash_api_port": state.network.clash_api_port,
@@ -220,10 +199,7 @@ def validate_state(state: AppState) -> None:
         if not isinstance(port, int) or not 0 <= port <= 65535:
             raise ValueError(f"{name} must be between 0 and 65535")
     for name, protocol in state.protocols.items():
-        if (
-            not isinstance(name, str) or not name.strip()
-            or not isinstance(protocol.config, dict)
-        ):
+        if not isinstance(name, str) or not name.strip() or not isinstance(protocol.config, dict):
             raise ValueError("protocol entries must have a name and object config")
         try:
             validate_json_object(protocol.config, path=f"protocols.{name}.config")
@@ -231,3 +207,9 @@ def validate_state(state: AppState) -> None:
             raise ValueError(str(exc)) from exc
         if not isinstance(protocol.port, int) or not 0 <= protocol.port <= 65535:
             raise ValueError(f"protocol {name} has an invalid port")
+        validate_calls_protocol(
+            name,
+            enabled=protocol.enabled,
+            config=protocol.config,
+            kernel_provider=state.kernel.provider,
+        )

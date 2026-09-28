@@ -6,6 +6,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hydra.plugins.base import BasePlugin, PluginMeta, PluginStatus, PluginCategory, ConfigFragment
+from hydra.plugins.context import PluginStateAccess
 from hydra.core.state import AppState, PluginState
 
 
@@ -24,7 +25,7 @@ class MockPlugin(BasePlugin):
     def uninstall(self) -> bool:
         return True
 
-    def configure(self, state: AppState) -> ConfigFragment:
+    def configure(self, state: PluginStateAccess) -> ConfigFragment:
         return ConfigFragment(
             inbounds=[{"type": "http", "tag": "mock-in", "listen": "127.0.0.1", "listen_port": 9999}],
         )
@@ -37,7 +38,7 @@ class MockPlugin(BasePlugin):
             port=9999,
         )
 
-    def traffic(self, state: AppState) -> dict[str, int]:
+    def traffic(self, state: PluginStateAccess) -> dict[str, int]:
         return {"test@example.com": 1024}
 
 
@@ -173,7 +174,7 @@ def test_collect_fragments_keeps_endpoint_only_fragment():
 @pytest.mark.parametrize(
     "fragment",
     [
-        ConfigFragment(inbounds=["not-an-object"]),
+        ConfigFragment(inbounds=["not-an-object"]),  # type: ignore[list-item]
         ConfigFragment(nft_tproxy_ports=[0]),
         ConfigFragment(nft_tproxy_ports=[True]),
         ConfigFragment(nft_tproxy_ifaces=[""]),
@@ -303,14 +304,14 @@ def test_health_all_explains_how_to_disable_stopped_enabled_plugin():
     from hydra.plugins import registry
 
     plugin = MockPlugin()
-    plugin.meta = PluginMeta(name="telemt", description="TeleMT")
+    plugin.meta = PluginMeta(name="mtproto_zig", description="MTProto Zig")
     plugin.healthcheck = MagicMock(return_value=(False, "service is not active"))
-    state = AppState(protocols={"telemt": PluginState(enabled=True)})
+    state = AppState(protocols={"mtproto_zig": PluginState(enabled=True)})
 
     with patch("hydra.plugins.registry._PLUGINS", [plugin]):
         assert registry.health_all(state) == {
-            "telemt": (
+            "mtproto_zig": (
                 "service is not active while enabled in configuration; "
-                "disable telemt in the TUI protocol menu"
+                "disable mtproto_zig in the TUI protocol menu"
             )
         }

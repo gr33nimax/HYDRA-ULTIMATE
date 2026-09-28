@@ -1,4 +1,5 @@
 """TUI manager for the Anti-DPI detector."""
+
 from __future__ import annotations
 
 import ipaddress
@@ -7,12 +8,10 @@ from hydra.core.state_models import AppState
 from hydra.services.application import ApplicationService
 from hydra.ui.plugin_managers._antidpi_views import (
     ban_table,
-    coordinated_table,
     counter_lines,
     history_table,
     rows as views_rows,
     status_lines,
-    watchlist_table,
 )
 from hydra.ui.tui import (
     CYAN,
@@ -38,6 +37,25 @@ BAN_ERRORS = {
     "firewall_error": "Firewall не принял правило блокировки",
 }
 
+BAN_PAGE_SIZE = 10
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    """Return an integer from operator input, or ``default``."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (TypeError, ValueError):
+            return default
+    return default
+
 
 def _snapshot(app: ApplicationService) -> dict:
     data = app.plugin_query("antidpi", "management_snapshot")
@@ -60,8 +78,9 @@ def _resolve_targets(raw: str, addresses: list[str]) -> list[str]:
     """Accept row numbers, bare addresses, or a mix of both."""
     targets: list[str] = []
     for token in raw.replace(",", " ").split():
-        if token.isdigit() and 1 <= int(token) <= len(addresses):
-            targets.append(addresses[int(token) - 1])
+        index = _as_int(token)
+        if 1 <= index <= len(addresses):
+            targets.append(addresses[index - 1])
             continue
         try:
             targets.append(ipaddress.ip_address(token.strip("[]")).compressed)
@@ -71,26 +90,40 @@ def _resolve_targets(raw: str, addresses: list[str]) -> list[str]:
 
 
 def _bans(state: AppState, app: ApplicationService) -> None:
+    page = 1
     while True:
         data = _snapshot(app)
-        ordered = [
-            str(row.get("ip"))
-            for row in views_rows(data, "ban_rows")
-            if row.get("ip")
-        ]
+        ordered = [str(row.get("ip")) for row in views_rows(data, "ban_rows") if row.get("ip")]
+        total_pages = max(1, -(-len(ordered) // BAN_PAGE_SIZE))
+        page = min(max(1, page), total_pages)
+        # Numbers can only select what is actually on screen: an invisible
+        # row must never be the target of a bare number.
+        visible = ordered[(page - 1) * BAN_PAGE_SIZE : page * BAN_PAGE_SIZE]
         clear()
         panel(
-            f"🚫 АКТИВНЫЕ БЛОКИРОВКИ ({len(ordered)})",
-            ban_table(data),
+            f"🚫 АКТИВНЫЕ БЛОКИРОВКИ ({len(ordered)}) — стр. {page}/{total_pages}",
+            ban_table(
+                data,
+                limit=BAN_PAGE_SIZE,
+                offset=(page - 1) * BAN_PAGE_SIZE,
+            ),
         )
         panel("📜 ЗАВЕРШЁННЫЕ ЗАПИСИ", history_table(data))
         if not ordered:
             prompt("Enter для возврата")
             return
-        raw = prompt("Номера или IP для разбана (Enter — назад)").strip()
+        raw = prompt(
+            "Номера с текущей страницы или IP для разбана (Enter — назад, > — вперёд, < — назад по страницам)",
+        ).strip()
         if not raw:
             return
-        _unban_targets(state, app, _resolve_targets(raw, ordered))
+        if raw == ">" and page < total_pages:
+            page += 1
+            continue
+        if raw == "<" and page > 1:
+            page -= 1
+            continue
+        _unban_targets(state, app, _resolve_targets(raw, visible))
         prompt("Enter для продолжения")
 
 
@@ -101,6 +134,14 @@ def _unban_targets(
 ) -> None:
     if not targets:
         error("Не указано ни одного корректного адреса.")
+        return
+    if len(targets) > 1 and not confirm(
+        "Снять блокировки с адресов?\n"
+        + "\n".join(f"  · {target}" for target in targets[:10])
+        + (f"\n  …и ещё {len(targets) - 10}" if len(targets) > 10 else ""),
+        default=False,
+    ):
+        info("Разбан отменён")
         return
     for address in targets:
         if app.plugin_command(
@@ -114,33 +155,34 @@ def _unban_targets(
             warn(f"Не удалось снять блокировку: {address}")
 
 
-def _watchlist(app: ApplicationService) -> None:
+def _statistics(app: ApplicationService) -> None:
+    """Show counter totals and closed records for proven evidence."""
     data = _snapshot(app)
     clear()
-    panel(
-        f"👁 ПОД НАБЛЮДЕНИЕМ ({len(views_rows(data, 'watchlist'))})",
-        watchlist_table(data),
-    )
-    coordinated = views_rows(data, "coordinated")
-    panel(
-        f"🌐 СКООРДИНИРОВАННАЯ АКТИВНОСТЬ ({len(coordinated)})",
-        coordinated_table(data),
-    )
-    panel("📊 НАКОПЛЕННАЯ СТАТИСТИКА", counter_lines(data))
+    panel("📊 СТАТИСТИКА УЛИК", counter_lines(data))
+    panel("🗂 ЗАВЕРШЁННЫЕ ЗАПИСИ", history_table(data, limit=10))
     prompt("Enter для возврата")
 
 
 def _manual_ban(app: ApplicationService) -> None:
     clear()
-    panel("🔒 РУЧНАЯ БЛОКИРОВКА", [
-        f"  {DIM}Адрес блокируется бессрочно, до снятия вручную.{NC}",
-        f"  {DIM}Whitelist имеет приоритет: доверенный адрес заблокирован "
-        f"не будет.{NC}",
-        "",
-        f"  {CYAN}Пример:{NC} 198.51.100.7",
-    ])
+    panel(
+        "🔒 РУЧНАЯ БЛОКИРОВКА",
+        [
+            f"  {DIM}Адрес блокируется бессрочно, до снятия вручную.{NC}",
+            f"  {DIM}Whitelist имеет приоритет: доверенный адрес заблокирован не будет.{NC}",
+            "",
+            f"  {CYAN}Пример:{NC} 198.51.100.7",
+        ],
+    )
     raw = prompt("IP для блокировки (Enter — отмена)").strip()
     if not raw:
+        return
+    if not confirm(
+        f"Заблокировать {raw} бессрочно, до снятия вручную?",
+        default=False,
+    ):
+        info("Блокировка отменена")
         return
     result = app.plugin_action("antidpi", "manual_ban", raw=raw, source="tui")
     result = result if isinstance(result, dict) else {}
@@ -154,8 +196,7 @@ def _manual_ban(app: ApplicationService) -> None:
     elif result.get("already_active"):
         info(f"{raw} уже заблокирован бессрочно")
     else:
-        success(f"{raw} заблокирован бессрочно (нарушение "
-                f"#{int(result.get('offense_count', 1) or 1)})")
+        success(f"{raw} заблокирован бессрочно (нарушение #{_as_int(result.get('offense_count', 1), default=1)})")
     prompt("Enter для продолжения")
 
 
@@ -165,20 +206,23 @@ def _whitelist(state: AppState, app: ApplicationService) -> None:
         values = data.get("whitelist", [])
         values = values if isinstance(values, list) else []
         clear()
-        panel("⚪ WHITELIST — ДОВЕРЕННЫЕ АДРЕСА", [
-            *(
-                f"  {CYAN}{index:>3}.{NC} {value}"
-                for index, value in enumerate(values, 1)
-            ),
-            *([] if values else [f"  {DIM}Список пуст{NC}"]),
-            "",
-            f"  {DIM}Адреса самой VPS и приватные сети доверены всегда.{NC}",
-        ])
-        choice = menu([
-            ("1", "➕ Добавить IP/CIDR", "Исключить адрес или подсеть из анализа и снять её блокировки"),
-            ("2", "➖ Удалить IP/CIDR", "Вернуть адрес под контроль Anti-DPI"),
-            ("0", "↩ Назад", ""),
-        ], "УПРАВЛЕНИЕ WHITELIST")
+        panel(
+            "⚪ WHITELIST — ДОВЕРЕННЫЕ АДРЕСА",
+            [
+                *(f"  {CYAN}{index:>3}.{NC} {value}" for index, value in enumerate(values, 1)),
+                *([] if values else [f"  {DIM}Список пуст{NC}"]),
+                "",
+                f"  {DIM}Адреса самой VPS и приватные сети доверены всегда.{NC}",
+            ],
+        )
+        choice = menu(
+            [
+                ("1", "➕ Добавить IP/CIDR", "Исключить адрес или подсеть из анализа и снять её блокировки"),
+                ("2", "➖ Удалить IP/CIDR", "Вернуть адрес под контроль Anti-DPI"),
+                ("0", "↩ Назад", ""),
+            ],
+            "УПРАВЛЕНИЕ WHITELIST",
+        )
         if choice == "0":
             return
         raw = prompt("IP/CIDR").strip()
@@ -227,10 +271,11 @@ def _show_log(app: ApplicationService) -> None:
     clear()
     lines = app.plugin_query("antidpi", "recent_logs", limit=50)
     lines = lines if isinstance(lines, list) else []
-    rendered = [
-        f"  {_log_color(line)}{str(line)[:104]}{NC}"
-        for line in lines
-    ] or [f"  {DIM}Журнал пуст или служба ещё не запускалась{NC}"]
+    # Full lines only: the reason of a journal entry often lives at its end,
+    # and a fixed-width clip would hide exactly the diagnostic part.
+    rendered = [f"  {_log_color(line)}{str(line)}{NC}" for line in lines] or [
+        f"  {DIM}Журнал пуст или служба ещё не запускалась{NC}"
+    ]
     panel("📋 ЖУРНАЛ ANTI-DPI — ПОСЛЕДНИЕ 50 СТРОК", rendered)
     prompt("Enter для возврата")
 
@@ -246,15 +291,16 @@ def _log_color(line: object) -> str:
 
 def _selftest(state: AppState, app: ApplicationService) -> None:
     clear()
-    panel("🧪 ЛОКАЛЬНАЯ ДИАГНОСТИКА", [
-        f"  {DIM}Отправляет некорректные пакеты на включённые "
-        f"транспорты с самой VPS{NC}",
-        f"  {DIM}и собирает redacted-архив с журналами протоколов.{NC}",
-        "",
-        f"  {YELLOW}Не проверяет{NC} {DIM}атрибуцию внешнего IP, "
-        f"применение банов и доставку в Telegram:{NC}",
-        f"  {DIM}петлевые адреса всегда доверены.{NC}",
-    ])
+    panel(
+        "🧪 ЛОКАЛЬНАЯ ДИАГНОСТИКА",
+        [
+            f"  {DIM}Отправляет некорректные пакеты на включённые транспорты с самой VPS{NC}",
+            f"  {DIM}и собирает redacted-архив с журналами протоколов.{NC}",
+            "",
+            f"  {YELLOW}Не проверяет{NC} {DIM}атрибуцию внешнего IP, применение банов и доставку в Telegram:{NC}",
+            f"  {DIM}петлевые адреса всегда доверены.{NC}",
+        ],
+    )
     if not confirm("Запустить локальную диагностику?", default=False):
         return
     info("Выполняю зондирование, это займёт несколько секунд...")
@@ -276,34 +322,25 @@ def _selftest(state: AppState, app: ApplicationService) -> None:
 
 def _report_selftest(result: dict) -> None:
     coverage = result.get("report", {})
-    coverage = (
-        coverage.get("coverage", {})
-        if isinstance(coverage, dict)
-        else {}
-    )
+    coverage = coverage.get("coverage", {}) if isinstance(coverage, dict) else {}
     coverage = coverage if isinstance(coverage, dict) else {}
     clear()
-    panel("🧪 РЕЗУЛЬТАТ ДИАГНОСТИКИ", [
-        f"  Архив:              {GREEN}{result.get('archive', '—')}{NC}",
-        f"  Протоколов с логом: "
-        f"{result.get('captured_protocols', 0)}",
-        f"  Включено протоколов: "
-        f"{coverage.get('enabled_protocols', 0)}",
-        f"  Совпало с фильтрами: "
-        f"{coverage.get('filter_matches', 0)}",
-        "",
-        f"  {DIM}Проверьте архив перед отправкой: он вычищен "
-        f"автоматически.{NC}",
-    ])
+    panel(
+        "🧪 РЕЗУЛЬТАТ ДИАГНОСТИКИ",
+        [
+            f"  Архив:              {GREEN}{result.get('archive', '—')}{NC}",
+            f"  Протоколов с логом: {result.get('captured_protocols', 0)}",
+            f"  Включено протоколов: {coverage.get('enabled_protocols', 0)}",
+            f"  Совпало с фильтрами: {coverage.get('filter_matches', 0)}",
+            "",
+            f"  {DIM}Проверьте архив перед отправкой: он вычищен автоматически.{NC}",
+        ],
+    )
 
 
 def _toggle(state: AppState, app: ApplicationService, *, running: bool) -> None:
     try:
-        ok = (
-            app.protocols.disable(state, "antidpi")
-            if running
-            else app.protocols.enable(state, "antidpi")
-        )
+        ok = app.protocols.disable(state, "antidpi") if running else app.protocols.enable(state, "antidpi")
     except Exception as exc:
         error(str(exc))
         prompt("Enter для продолжения")
@@ -317,7 +354,7 @@ def _toggle(state: AppState, app: ApplicationService, *, running: bool) -> None:
     prompt("Enter для продолжения")
 
 
-def _options(*, running: bool, banned: int, watching: int, whitelist: int):
+def _options(*, running: bool, banned: int, whitelist: int):
     return [
         (
             "1",
@@ -327,12 +364,12 @@ def _options(*, running: bool, banned: int, watching: int, whitelist: int):
         (
             "2",
             f"🚫 Блокировки и история ({banned})",
-            "Score, сигналы, остаток срока и разбан адресов",
+            "Улика, остаток срока и разбан адресов",
         ),
         (
             "3",
-            f"👁 Под наблюдением ({watching})",
-            "Адреса с уликами ниже порога бана и статистика сигналов",
+            "📊 Статистика улик",
+            "Счётчики доказанных отказов и завершённые записи",
         ),
         (
             "4",
@@ -357,7 +394,7 @@ def menu_antidpi(state: AppState, app: ApplicationService) -> None:
         payload["last_error"] = status.info.get("last_error", "")
         clear()
         panel(
-            "🛡 ANTI-DPI — ЗАЩИТА ОТ АКТИВНЫХ ЗОНДОВ",
+            "🛡 AntiDPI",
             status_lines(
                 running=status.running,
                 health=health,
@@ -368,10 +405,9 @@ def menu_antidpi(state: AppState, app: ApplicationService) -> None:
             _options(
                 running=status.running,
                 banned=len(views_rows(data, "ban_rows")),
-                watching=len(views_rows(data, "watchlist")),
                 whitelist=len(whitelist),
             ),
-            "УПРАВЛЕНИЕ ANTI-DPI",
+            "ДЕЙСТВИЯ",
         )
         if choice == "0":
             return
@@ -390,7 +426,7 @@ def _dispatch(
     elif choice == "2":
         _bans(state, app)
     elif choice == "3":
-        _watchlist(app)
+        _statistics(app)
     elif choice == "4":
         _whitelist(state, app)
     elif choice == "5":

@@ -63,6 +63,8 @@ class PluginCatalog:
             errors.append("meta.description must be a string")
         if not isinstance(meta.display_name, str):
             errors.append("meta.display_name must be a string")
+        if not isinstance(meta.subscription_profile_name, str):
+            errors.append("meta.subscription_profile_name must be a string")
         if not isinstance(meta.version, str) or not meta.version.strip():
             errors.append("meta.version must be a non-empty string")
         if not isinstance(meta.contract_version, int) or meta.contract_version < 1:
@@ -73,6 +75,7 @@ class PluginCatalog:
             "required_services",
             "conflicts_with",
             "commands",
+            "persist_only_commands",
             "queries",
             "actions",
         ):
@@ -98,6 +101,13 @@ class PluginCatalog:
                             f"meta.{field_name} declares "
                             f"missing method {value}()",
                         )
+        if any(
+            command not in capabilities.commands
+            for command in capabilities.persist_only_commands
+        ):
+            errors.append(
+                "meta.persist_only_commands must be declared in commands",
+            )
         if capabilities.tls_domain_source not in {
             "",
             "network",
@@ -125,6 +135,11 @@ class PluginCatalog:
         ):
             errors.append(
                 "meta.subscription_profile_query must be a declared query",
+            )
+        manual_query = capabilities.manual_artifacts_query
+        if manual_query and manual_query not in capabilities.queries:
+            errors.append(
+                "meta.manual_artifacts_query must be a declared query",
             )
         connection_source = capabilities.connection_source
         if connection_source not in {"plugin", "tracked", "none"} and (

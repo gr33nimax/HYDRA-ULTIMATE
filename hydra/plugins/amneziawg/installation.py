@@ -1,166 +1,85 @@
-"""Installation and kernel readiness checks for AmneziaWG."""
+"""AmneziaWG readiness.
+
+The core terminates the tunnel itself, so there is no module to build, no package to install and
+nothing to clone. What is left here is the capability check ("is the core there to serve it") and
+the cleanup of artifacts an older HYDRA left on the host.
+"""
+
 from __future__ import annotations
 
-import os
-import platform
-import shutil
+from pathlib import Path
+from typing import TYPE_CHECKING
 
-from hydra.core.host import HOST
+from .constants import AWG_CONF, AWG_CONF_1, AWG_INSTALL_DIR, AWG_PARAMS
 
-from .constants import (
-    AWG_BIN,
-    AWG_CONF_DIR,
-    AWG_INSTALL_DIR,
-    AWG_UNIT,
-    AWG_UNIT_1,
-    DEFAULT_SERVER_IPV4,
-)
+if TYPE_CHECKING:
+    from hydra.core.state_models import User
+    from hydra.plugins.context import PluginStateAccess
+
+
+def _core_present() -> bool:
+    """Whether the installed core is there to serve AmneziaWG itself."""
+    try:
+        from hydra.core.singbox import is_installed
+    except Exception:  # noqa: BLE001 - an unimportable core is a missing core
+        return False
+    return bool(is_installed())
+
+
+def _legacy_artifacts() -> tuple[Path, ...]:
+    """Files an installer-era HYDRA wrote here. The core reads none of them."""
+    return (AWG_CONF, AWG_CONF_1, AWG_PARAMS, AWG_INSTALL_DIR)
 
 
 class AwgInstallationMixin:
-    """Install/remove host assets and validate the running kernel module."""
+    """Report readiness and leave the host otherwise alone."""
+
+    if TYPE_CHECKING:
+
+        def generate_client_config(
+            self,
+            user: "User",
+            state: "PluginStateAccess",
+            profile: str | None = None,
+        ) -> str:
+            """Rendered client configuration, provided by the client-links mixin."""
+            ...
 
     def install(self) -> bool:
-        if self._installed():
-            ready, detail = self._ensure_kernel_module()
-            if not ready:
-                print(f"  {detail}")
-            return ready
-        try:
-            HOST.run(["rm", "-rf", str(AWG_INSTALL_DIR)], capture_output=True)
-            clone = HOST.run(
-                [
-                    "git",
-                    "clone",
-                    "--depth",
-                    "1",
-                    "https://github.com/wiresock/amneziawg-install.git",
-                    str(AWG_INSTALL_DIR),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            if clone.returncode != 0:
-                print(f"  git clone: {clone.stderr[:300]}")
-                return False
-
-            print(
-                "  Авто-установка AmneziaWG "
-                "(компиляция модуля, это долго)..."
-            )
-            environment = os.environ.copy()
-            environment["AUTO_INSTALL"] = "y"
-            environment["ENABLE_IPV6"] = "n"
-            environment["SERVER_PUB_IP"] = self._public_ip()
-            environment["SERVER_AWG_IPV4"] = DEFAULT_SERVER_IPV4
-            HOST.run(
-                ["bash", "amneziawg-install.sh"],
-                cwd=str(AWG_INSTALL_DIR),
-                env=environment,
-                timeout=900,
-            )
-            ready, detail = self._ensure_kernel_module()
-            if not ready:
-                print(f"  {detail}")
-                return False
-            return self._installed()
-        except Exception as exc:
-            print(f"  install error: {exc}")
+        if not _core_present():
+            print("  HydraCore не установлен — обслуживать AmneziaWG нечем")
             return False
+        print("  AmneziaWG готов к работе: туннель обслуживает HydraCore")
+        return True
 
     def uninstall(self) -> bool:
-        for unit in (AWG_UNIT, AWG_UNIT_1):
-            HOST.run(["systemctl", "stop", unit], capture_output=True)
-            HOST.run(["systemctl", "disable", unit], capture_output=True)
-        HOST.run(
-            [
-                "apt-get",
-                "purge",
-                "-y",
-                "-qq",
-                "amneziawg",
-                "amneziawg-tools",
-                "amneziawg-dkms",
-            ],
-            capture_output=True,
-        )
-        HOST.run(["modprobe", "-r", "amneziawg"], capture_output=True)
-        HOST.run(
-            [
-                "rm",
-                "-rf",
-                str(AWG_CONF_DIR),
-                "/usr/bin/awg",
-                "/usr/bin/awg-quick",
-                "/usr/local/bin/awg",
-                "/usr/local/bin/awg-quick",
-                str(AWG_INSTALL_DIR),
-            ],
-            capture_output=True,
-        )
+        removed = False
+        for path in _legacy_artifacts():
+            if not path.exists():
+                continue
+            _remove(path)
+            removed = True
+        # Nothing else is touched on purpose: the core keeps serving the tunnel, so removing the
+        # plugin must not take the AmneziaWG package or module away from it.
+        if removed:
+            print("  Остатки прежней схемы удалены")
+        else:
+            print("  Прежней схемы на хосте нет — удалять нечего")
         return True
 
     @staticmethod
     def _installed() -> bool:
-        return AWG_BIN.exists() or shutil.which("awg") is not None
+        """Whether AmneziaWG is available here: the core terminates the tunnel."""
+        return _core_present()
 
-    @staticmethod
-    def _ensure_kernel_module() -> tuple[bool, str]:
-        loaded = HOST.run(["lsmod"], capture_output=True, text=True)
-        if loaded.returncode == 0 and "amneziawg" in loaded.stdout:
-            return True, ""
-        result = HOST.run(
-            ["modprobe", "amneziawg"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            return True, ""
 
-        running_kernel = platform.release()
-        dkms = (
-            HOST.run(["dkms", "status"], capture_output=True, text=True)
-            if HOST.which("dkms")
-            else None
-        )
-        other_kernels = []
-        if dkms is not None and dkms.returncode == 0:
-            for line in dkms.stdout.splitlines():
-                if (
-                    "amneziawg" in line
-                    and ": installed" in line
-                    and running_kernel not in line
-                ):
-                    parts = [part.strip() for part in line.split(",")]
-                    if len(parts) >= 2:
-                        other_kernels.append(parts[1])
-        if other_kernels:
-            built = ", ".join(sorted(set(other_kernels)))
-            return False, (
-                f"Модуль AmneziaWG собран для ядра {built}, но сейчас "
-                f"запущено {running_kernel}. Перезагрузите сервер и повторите "
-                "включение."
-            )
-        error = (
-            result.stderr or result.stdout or "module is unavailable"
-        ).strip()
-        return False, (
-            f"Модуль AmneziaWG недоступен для ядра {running_kernel}: {error}"
-        )
-
-    @staticmethod
-    def _public_ip() -> str:
-        result = HOST.run(
-            [
-                "curl",
-                "-s",
-                "-4",
-                "--max-time",
-                "5",
-                "https://api.ipify.org",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        return result.stdout.strip() if result.returncode == 0 else "127.0.0.1"
+def _remove(path: Path) -> None:
+    if path.is_dir():
+        for child in sorted(path.rglob("*"), reverse=True):
+            if child.is_file() or child.is_symlink():
+                child.unlink(missing_ok=True)
+            elif child.is_dir():
+                child.rmdir()
+        path.rmdir()
+        return
+    path.unlink(missing_ok=True)

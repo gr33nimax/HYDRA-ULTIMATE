@@ -35,6 +35,7 @@ PROGRAM_PATHS = (
     Path("/usr/local/bin/hydra"),
     Path("/usr/local/bin/sing-box"),
     Path("/usr/local/bin/caddy-l4"),
+    Path("/usr/local/bin/warpscout"),
     Path("/opt/hydra"),
     Path("/opt/HYDRA-ULTIMATE"),
 )

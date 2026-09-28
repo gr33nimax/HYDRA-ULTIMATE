@@ -1,0 +1,180 @@
+"""Protocol-style TUI controller for native Sing-Box Calls."""
+from __future__ import annotations
+
+from hydra.core.state_models import AppState, PluginState
+from hydra.services.application import ApplicationService
+from hydra.ui.protocol_ui import protocol_menu_title, protocol_status_panel
+from hydra.ui.tui import clear, confirm, error, menu, prompt, success, warn
+
+
+def _pause() -> None:
+    prompt("Нажмите Enter")
+
+
+def _show_result(result, success_message: str) -> bool:
+    if result:
+        success(success_message)
+    else:
+        message = result.error.message if result.error else "операция не выполнена"
+        error(message)
+    _pause()
+    return bool(result)
+
+
+def _desired(state: AppState) -> PluginState:
+    return state.protocols.get("calls", PluginState())
+
+
+def _status_panel(state: AppState, app: ApplicationService) -> None:
+    desired = _desired(state)
+    status = app.calls.status(state)
+    protocol_status_panel(
+        "calls",
+        installed=desired.installed,
+        enabled=desired.enabled,
+        running=status.native_running,
+        # Строку порта панель рисует только когда он есть: без неё оператор не видит,
+        # что именно открыто в firewall (у Calls это UDP-порт слушателя).
+        port=getattr(status, "native_port", 0) or None,
+        details=[
+            ("Платформа", "VK"),
+            ("Режим", getattr(status, "native_mode", "vk_parasite")),
+            ("Пул", "готов" if status.native_pool_ready else "отсутствует"),
+            ("VK-звонков", str(getattr(status, "room_count", 0))),
+            (
+                "Автопересоздание",
+                "включено" if getattr(status, "pool_auto_refresh", False) else "выключено",
+            ),
+            (
+                "Интервал пула",
+                f"{getattr(status, 'pool_refresh_interval_seconds', 86_400) // 3600} ч",
+            ),
+            ("Creator", "установлен" if getattr(status, "creator_installed", False) else "не установлен"),
+            ("VK cookies", "готовы" if getattr(status, "cookies_ready", False) else "нужны"),
+        ],
+    )
+
+
+def _show_profile(state: AppState, app: ApplicationService) -> None:
+    if not confirm("Показать секретный admin-профиль?"):
+        return
+    try:
+        profile = app.calls.native_client_profile(state)
+    except Exception as exc:
+        error(str(exc))
+    else:
+        warn("Не публикуйте профиль: он содержит join-links и credentials.")
+        print(f"\n{profile.config}\n")
+    _pause()
+
+
+def _import_cookies(state: AppState, app: ApplicationService) -> None:
+    source_path = prompt("Путь к JSON с VK cookies: ").strip()
+    if not source_path:
+        error("Укажите путь к JSON с VK cookies")
+        _pause()
+        return
+    _show_result(
+        app.calls.import_vk_cookies(state, source_path),
+        "VK cookies импортированы",
+    )
+
+
+def _set_pool_interval(state: AppState, app: ApplicationService) -> None:
+    raw = prompt("Интервал автопересоздания пула, часов (1–24): ").strip()
+    try:
+        hours = int(raw)
+    except ValueError:
+        error("Введите целое число от 1 до 24")
+        _pause()
+        return
+    _show_result(
+        app.calls.set_pool_refresh_interval(state, hours * 3600),
+        f"Интервал автопересоздания: {hours} ч",
+    )
+
+
+def _toggle_pool_auto(state: AppState, app: ApplicationService) -> None:
+    enabled = bool(app.calls.status(state).pool_auto_refresh)
+    _show_result(
+        app.calls.set_pool_auto_refresh(state, not enabled),
+        f"Автопересоздание {'выключено' if enabled else 'включено'}",
+    )
+
+
+def _menu_options(*, installed: bool) -> list[tuple[str, str, str]]:
+    if not installed:
+        return [
+            ("1", "🔧 Установить", "Создать пул из 4 VK-комнат и запустить Calls"),
+            ("2", "📥 Импортировать VK cookies", "Загрузить локальный JSON для Hydra VK Tunnel"),
+            ("0", "↩ Назад", ""),
+        ]
+    return [
+        ("1", "🔄 Переустановить", "Пересоздать VK-пул с rollback"),
+        ("2", "📥 Импортировать VK cookies", "Загрузить локальный JSON для Hydra VK Tunnel"),
+        ("3", "📄 Показать admin-профиль", "Секретный клиентский JSON"),
+        ("4", "🔢 Число workers", "4 / 8 / 12 / 16 / 20"),
+        ("5", "♻️ Пересоздать VK-пул", "Blue/green замена с rollback"),
+        ("6", "🔄 Переключить автопересоздание", "Проверка каждые 5 минут"),
+        ("7", "⏱ Интервал автопересоздания", "От 1 до 24 часов"),
+        ("9", "❌ Удалить", "Удалить Calls и сохранённые join-links"),
+        ("0", "↩ Назад", ""),
+    ]
+
+
+def _dispatch(choice: str, state: AppState, app: ApplicationService) -> bool:
+    desired = _desired(state)
+    if choice == "0":
+        return False
+    if choice == "1" and not desired.installed:
+        _show_result(app.calls.enable_native_vk(state), "Hydra VK Tunnel установлен")
+    elif choice == "1" and confirm("Переустановить Calls и пересоздать VK-пул?"):
+        _show_result(app.calls.reinstall_native_vk(state), "Hydra VK Tunnel переустановлен")
+    elif choice == "2":
+        _import_cookies(state, app)
+    elif choice == "3" and desired.installed:
+        _show_profile(state, app)
+    elif choice == "4" and desired.installed:
+        try:
+            count = int(prompt("Число workers [4/8/12/16/20]: ").strip())
+        except ValueError:
+            error("Введите 4, 8, 12, 16 или 20")
+            _pause()
+        else:
+            _show_result(app.calls.set_workers(state, count), "Число workers применено")
+    elif choice == "5" and desired.installed:
+        if confirm("Пересоздать VK-пул без переустановки Hydra VK Tunnel?"):
+            _show_result(
+                app.calls.rotate_native_vk(state),
+                "VK-пул пересоздан",
+            )
+    elif choice == "6" and desired.installed:
+        _toggle_pool_auto(state, app)
+    elif choice == "7" and desired.installed:
+        _set_pool_interval(state, app)
+    elif choice == "9" and desired.installed:
+        if confirm("Удалить Calls и сохранённые join-links?"):
+            removed = _show_result(
+                app.calls.uninstall_native_vk(state),
+                "Hydra VK Tunnel удалён",
+            )
+            if removed:
+                return False
+    return True
+
+
+def menu_calls(state: AppState, app: ApplicationService) -> None:
+    while True:
+        clear()
+        state = app.admin.load_state()
+        desired = _desired(state)
+        _status_panel(state, app)
+        choice = menu(
+            _menu_options(installed=desired.installed),
+            protocol_menu_title("calls"),
+        )
+        if not _dispatch(choice, state, app):
+            return
+
+
+__all__ = ["menu_calls"]

@@ -1,4 +1,5 @@
 """Regression checks for the public one-command installer."""
+
 from pathlib import Path
 
 
@@ -28,35 +29,31 @@ def test_every_fresh_install_path_uses_selected_ref():
 def test_bootstrap_verifies_exact_remote_commit_before_dependencies():
     assert 'git fetch --quiet "$REPO_URL" "$HYDRA_TARGET_REV"' in BOOTSTRAP
     assert 'git checkout --quiet -B "$HYDRA_REF" "$HYDRA_TARGET_REV"' in BOOTSTRAP
-    assert 'git symbolic-ref --quiet --short HEAD' in BOOTSTRAP
-    assert BOOTSTRAP.count('.hydra-source-revision') >= 3
+    assert "git symbolic-ref --quiet --short HEAD" in BOOTSTRAP
+    assert BOOTSTRAP.count(".hydra-source-revision") >= 3
     assert 'if [[ "$HYDRA_INSTALLED_REV" != "$HYDRA_TARGET_REV" ]]' in BOOTSTRAP
     assert BOOTSTRAP.index('if [[ "$HYDRA_INSTALLED_REV" != "$HYDRA_TARGET_REV" ]]') < BOOTSTRAP.index(
         'info "Изолированное Python-окружение..."'
     )
 
 
-def test_main_readme_one_command_installs_main():
+def test_development_readme_one_command_installs_dev():
     assert (
         "curl -fsSL https://raw.githubusercontent.com/gr33nimax/"
-        "HYDRA-ULTIMATE/main/bootstrap.sh | sudo bash"
+        "HYDRA-ULTIMATE/dev/bootstrap.sh | sudo env HYDRA_REF=dev bash"
     ) in README
-    assert "HYDRA-ULTIMATE/dev/bootstrap.sh" not in README
-    assert "sudo env HYDRA_REF=dev bash" not in README
+    assert "HYDRA-ULTIMATE/main/bootstrap.sh" not in README
     assert "sudo python3 main.py" not in README
 
 
 def test_readme_overview_table_has_no_empty_header_row():
     assert "| | |" not in README
-    assert '<tr><th scope="row">Транспорты</th><td>11</td></tr>' in README
+    assert "Транспорты</th><td>" in README
 
 
 def test_public_docs_do_not_reference_retired_branch():
     retired_branch = "legacy" + "-main"
-    assert all(
-        retired_branch not in document
-        for document in (README, INSTALL_GUIDE, DOCS_INDEX, CHANGELOG)
-    )
+    assert all(retired_branch not in document for document in (README, INSTALL_GUIDE, DOCS_INDEX, CHANGELOG))
 
 
 def test_installer_has_numbered_progress_and_unambiguous_result():
@@ -69,10 +66,7 @@ def test_installer_has_numbered_progress_and_unambiguous_result():
 
 
 def test_fresh_install_includes_certbot_before_tls_protocol_activation():
-    package_line = next(
-        line for line in BOOTSTRAP.splitlines()
-        if line.startswith("$PKG_INSTALL iptables")
-    )
+    package_line = next(line for line in BOOTSTRAP.splitlines() if line.startswith("$PKG_INSTALL iptables"))
 
     assert "certbot" in package_line.split()
 
@@ -82,3 +76,28 @@ def test_install_guide_runs_sources_through_the_isolated_environment():
     assert "git clone -b dev" not in INSTALL_GUIDE
     assert ".venv/bin/python -m pip install -r requirements.lock" in INSTALL_GUIDE
     assert "sudo python3 main.py" not in INSTALL_GUIDE
+
+
+def test_bootstrap_never_overwrites_detected_hydracore():
+    assert 'grep -qi "hydracore"' in BOOTSTRAP
+    assert "установщик не заменяет стороннее ядро" in BOOTSTRAP
+
+
+def test_support_link_shows_on_every_channel():
+    assert "https://web.tribute.tg/d/QHN" in README
+    assert "boosty.to/gr33nimax/donate" not in README
+    assert '[[ "${HYDRA_REF:-}" == "debug" ]] || return 0' not in BOOTSTRAP
+    assert "Поддержать разработку" in BOOTSTRAP
+
+
+def test_clean_bootstrap_installs_the_newest_stable_hydracore_vps_asset():
+    assert "gr33nimax/hydracore/releases?per_page=100" in BOOTSTRAP
+    assert "hydracore-vps-linux-${HC_ARCH}.tar.gz" in BOOTSTRAP
+    assert 'HC_CHANNEL="stable"' in BOOTSTRAP
+    assert "return not release.get('prerelease')" in BOOTSTRAP
+    assert "order > best[0]" in BOOTSTRAP
+    assert '[[ "$HC_DIGEST" == sha256:* ]]' in BOOTSTRAP
+    assert "file \"$HC_BIN\" | grep -q 'ELF .* executable'" in BOOTSTRAP
+    assert "Подлинность Hydracore не подтверждена" in BOOTSTRAP
+    assert "shtorm-7/sing-box-extended" not in BOOTSTRAP
+    assert "Установка sing-box-extended" not in BOOTSTRAP

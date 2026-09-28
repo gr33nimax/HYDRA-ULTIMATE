@@ -1,4 +1,5 @@
 """Collection, redaction, and archive helpers for AntiDPI self-tests."""
+
 from __future__ import annotations
 
 import json
@@ -12,10 +13,7 @@ from pathlib import Path
 
 from hydra.core.state_models import AppState
 from hydra.plugins.antidpi.adapters import decode_log_message, parse_protocol_line
-from hydra.plugins.antidpi.normalization import (
-    normalize_naive_decoy_record,
-    vless_normalizer,
-)
+from hydra.plugins.antidpi.normalization import normalize_decoy_record
 
 
 def environment(
@@ -29,11 +27,7 @@ def environment(
             "hydra-antidpi",
             "hydra-awg-antidpi-debug",
             "caddy-l4",
-            *[
-                unit
-                for units in journal_units.values()
-                for unit in units
-            ],
+            *[unit for units in journal_units.values() for unit in units],
         },
     )
     services = {}
@@ -57,11 +51,7 @@ def environment(
             timeout=5,
         )
         output = (result.stdout or result.stderr or "").strip().splitlines()
-        binaries[name] = (
-            " | ".join(output[:3])[:500]
-            if output
-            else "unknown"
-        )
+        binaries[name] = " | ".join(output[:3])[:500] if output else "unknown"
     return {
         "hydra_version": version,
         "kernel": platform.release(),
@@ -79,16 +69,9 @@ def relevant_journal_record(
 ) -> bool:
     text = str(record.get("MESSAGE", ""))
     lowered = text.lower()
-    if (
-        "hydra-antidpi-selftest" in lowered
-        or "__hydra_antidpi_selftest__" in lowered
-    ):
+    if "hydra-antidpi-selftest" in lowered or "__hydra_antidpi_selftest__" in lowered:
         return True
-    local_peer = (
-        "127.0.0.1" in lowered
-        or "[::1]" in lowered
-        or " ::1" in lowered
-    )
+    local_peer = "127.0.0.1" in lowered or "[::1]" in lowered or " ::1" in lowered
     if not local_peer:
         return False
     unit = str(record.get("_SYSTEMD_UNIT", "")).lower()
@@ -183,10 +166,7 @@ def new_log_lines(before: dict[Path, int]) -> dict[str, list[str]]:
                 lines = [
                     line
                     for line in handle.read().splitlines()
-                    if (
-                        "HYDRA-ANTIDPI-SELFTEST" in line.upper()
-                        or "__hydra_antidpi_selftest__" in line.lower()
-                    )
+                    if ("HYDRA-ANTIDPI-SELFTEST" in line.upper() or "__hydra_antidpi_selftest__" in line.lower())
                 ]
         except OSError:
             lines = []
@@ -198,7 +178,8 @@ def new_log_lines(before: dict[Path, int]) -> dict[str, list[str]]:
 def secret_values(state: AppState) -> set[str]:
     secrets: set[str] = set()
     sensitive = re.compile(
-        r"pass|token|secret|private|psk|uuid|key",
+        r"pass|token|secret|private|psk|uuid|key"
+        r"|authorization|cookie|credential",
         re.IGNORECASE,
     )
 
@@ -209,28 +190,60 @@ def secret_values(state: AppState) -> set[str]:
         elif isinstance(value, (list, tuple)):
             for child in value:
                 visit(child, key)
-        elif (
-            sensitive.search(key)
-            and isinstance(value, str)
-            and len(value) >= 6
-        ):
+        elif sensitive.search(key) and isinstance(value, str) and len(value) >= 6:
             secrets.add(value)
 
     visit(asdict(state))
     return secrets
 
 
+# Keys whose values are removed wholesale: known state secrets cover most of
+# them, but forwarded credentials can appear in logs under keys AntiDPI has
+# never seen in AppState.
+SENSITIVE_KEY = re.compile(
+    r"pass|token|secret|private|psk|uuid|key"
+    r"|authorization|cookie|credential",
+    re.IGNORECASE,
+)
+
+
+def _scrub(node: object) -> object:
+    """Structurally remove values of sensitive keys from parsed JSON."""
+    if isinstance(node, dict):
+        return {
+            str(key): "[REDACTED]" if SENSITIVE_KEY.search(str(key)) else _scrub(value) for key, value in node.items()
+        }
+    if isinstance(node, list):
+        return [_scrub(item) for item in node]
+    return node
+
+
+def _redact_json_text(text: str) -> str | None:
+    """Return the structurally scrubbed serialization, if text is JSON."""
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    return json.dumps(_scrub(parsed), ensure_ascii=False)
+
+
 def redactor(state: AppState) -> Callable[[str], str]:
     secrets = sorted(secret_values(state), key=len, reverse=True)
     substitutions = (
+        # A header value is removed whole: replacing only the first word
+        # after the scheme used to leak the credential itself.
         (
-            re.compile(r"(?i)(authorization\s*[:=]\s*)(\S+)"),
+            re.compile(
+                r"(?i)(authorization\s*[:=]\s*)(?!\"?\[REDACTED\])[^\r\n\"]+",
+            ),
             r"\1[REDACTED]",
         ),
         (
             re.compile(
-                r"(?i)((?:password|passwd|token|secret|private_key|psk)"
-                r"\s*[:=]\s*)[^\s,}\]]+",
+                r"(?i)((?:password|passwd|token|secret|private_key|psk"
+                r"|cookie)\s*[\"']?\s*[:=]\s*)"
+                r"(?!\"?\[REDACTED\])"
+                r"(?:\"[^\"]*\"|'[^']*'|[^\s,}\]]+)",
             ),
             r"\1[REDACTED]",
         ),
@@ -242,6 +255,13 @@ def redactor(state: AppState) -> Callable[[str], str]:
 
     def redact(text: str) -> str:
         result = str(text)
+        structured = _redact_json_text(result)
+        if structured is None:
+            # JSONL and mixed logs are scrubbed line by line so one bad
+            # line cannot disable redaction for the rest of the file.
+            result = "\n".join(_redact_json_text(line) or line for line in result.split("\n"))
+        else:
+            result = structured
         for secret in secrets:
             result = result.replace(secret, "[REDACTED]")
         for pattern, replacement in substitutions:
@@ -252,11 +272,7 @@ def redactor(state: AppState) -> Callable[[str], str]:
 
 
 def record_summary(protocol: str, records: list[dict]) -> dict:
-    pairs = [
-        (record, str(record.get("MESSAGE", "")))
-        for record in records
-        if record.get("MESSAGE")
-    ]
+    pairs = [(record, str(record.get("MESSAGE", ""))) for record in records if record.get("MESSAGE")]
     native_matches = []
     contextual_matches = []
     for record, message in pairs:
@@ -280,13 +296,10 @@ def record_summary(protocol: str, records: list[dict]) -> dict:
 def log_filter_matches(
     protocol: str,
     logs: dict[str, list[str]],
-    *,
-    vless_endpoint: tuple[str, tuple[str, ...]] = ("", ()),
 ) -> list[dict]:
-    """Replay captured access-log lines through the protocol's own filter."""
-    normalizer = _access_log_normalizer(protocol, vless_endpoint)
-    if normalizer is None:
-        return []
+    """Replay captured decoy access-log lines through the scanner-path filter."""
+    del protocol  # every decoy surface shares one scanner-path filter
+    normalizer = normalize_decoy_record
     matches = []
     for path, lines in logs.items():
         for line in lines:
@@ -301,25 +314,9 @@ def log_filter_matches(
     return matches
 
 
-def _access_log_normalizer(
-    protocol: str,
-    vless_endpoint: tuple[str, tuple[str, ...]],
-):
-    if protocol == "naive":
-        return normalize_naive_decoy_record
-    if protocol == "vless":
-        domain, paths = vless_endpoint
-        return vless_normalizer(domain, paths)
-    return None
-
-
 def archive_path(output: str | None, *, kind: str, stamp: str) -> Path:
     """Resolve where a diagnostic bundle is written, creating its parent."""
-    archive = (
-        Path(output)
-        if output
-        else Path(f"/tmp/hydra-antidpi-{kind}-{stamp}.tar.gz")
-    )
+    archive = Path(output) if output else Path(f"/tmp/hydra-antidpi-{kind}-{stamp}.tar.gz")
     if archive.is_dir():
         archive = archive / f"hydra-antidpi-{kind}-{stamp}.tar.gz"
     archive.parent.mkdir(parents=True, exist_ok=True)
@@ -344,16 +341,16 @@ def write_selftest_archive(
             redact(json.dumps(report, ensure_ascii=False, indent=2)),
             encoding="utf-8",
         )
-        mode = (
-            "malformed packets plus temporary invalid native clients"
-            if full
-            else "malformed packets"
-        )
+        mode = "malformed packets plus temporary invalid native clients" if full else "malformed packets"
         (root / "README.txt").write_text(
             "HYDRA AntiDPI native self-test\n"
             f"Mode: {mode}.\n"
             "No credentials, persistent configs, firewall rules, or services "
             "were changed.\n"
+            "A Snell record here proves the parser, the journal filter and the "
+            "archive see the same rejection.  It does not prove that the "
+            "record can ban: Snell is not an enforcement input while a "
+            "rejection cannot be told apart from stale client credentials.\n"
             "Local probes cannot validate external source IP attribution, "
             "firewall enforcement, or Telegram delivery.\n"
             "The bundle is automatically redacted, but review it before "
@@ -372,20 +369,20 @@ def _write_raw_selftest(
     redact: Callable[[str], str],
 ) -> None:
     for protocol, captured in raw.items():
+        records = captured.get("journal")
         journal_text = "\n".join(
-            json.dumps(record, ensure_ascii=False)
-            for record in captured["journal"]
+            json.dumps(record, ensure_ascii=False) for record in (records if isinstance(records, list) else [])
         )
         (root / "journal" / f"{protocol}.jsonl").write_text(
             redact(journal_text),
             encoding="utf-8",
         )
-        for index, (path, lines) in enumerate(
-            captured["logs"].items(),
-            1,
-        ):
+        logs = captured.get("logs")
+        log_map = logs if isinstance(logs, dict) else {}
+        for index, (path, lines) in enumerate(log_map.items(), 1):
             label = Path(path).name.replace(".", "-")
+            body = "\n".join(str(line) for line in lines) if isinstance(lines, list) else ""
             (root / "logs" / f"{protocol}-{index}-{label}.log").write_text(
-                redact("\n".join(lines)),
+                redact(body),
                 encoding="utf-8",
             )

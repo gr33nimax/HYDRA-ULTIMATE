@@ -10,8 +10,10 @@ from hydra.ui import menus
 from hydra.ui._menus import (
     facade_contract,
     users,
+    users_detail,
     users_links,
     users_management,
+    users_names,
     users_overview,
     users_subscription,
 )
@@ -23,6 +25,7 @@ USER_MODULES = (
     "users_common.py",
     "users_links.py",
     "users_management.py",
+    "users_names.py",
     "users_overview.py",
     "users_subscription.py",
 )
@@ -79,6 +82,7 @@ def test_user_companions_are_part_of_the_menu_monkeypatch_contract() -> None:
     assert companions == (
         users_links,
         users_management,
+        users_names,
         users_overview,
         users_subscription,
     )
@@ -96,3 +100,14 @@ def test_facade_monkeypatch_reaches_cross_controller_calls(monkeypatch) -> None:
     menus.menu_users(AppState(), MagicMock())
 
     show_users.assert_called_once()
+
+
+def test_user_detail_hydrabox_action_is_valid_utf8() -> None:
+    choices = users_detail.detail_menu_choices(blocked=False)
+    action = next(item for item in choices if item[0] == "9")
+
+    assert action == (
+        "9",
+        "🔑 Сменить HydraBox JWE-ключ",
+        "Немедленно отозвать все старые HydraBox-ссылки",
+    )

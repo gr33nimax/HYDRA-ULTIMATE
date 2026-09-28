@@ -39,16 +39,32 @@ def test_plugin_meta():
     assert p.meta.name == "wdtt"
     assert p.meta.category == PluginCategory.TRANSPORT
     assert p.meta.needs_domain is False
+    assert p.meta.capabilities.config_defaults == (
+        ("dtls_port", DEFAULT_DTLS_PORT),
+        ("wg_port", DEFAULT_WG_PORT),
+    )
     assert p.meta.capabilities.actions == (
         "hot_reload",
         "save_client_link",
         "save_password_registry",
+        "update_call_pool_artifact",
+        "clear_call_pool_artifact",
     )
+    assert p.meta.capabilities.commands == ()
+    assert p.meta.capabilities.persist_only_commands == ()
     assert p.meta.capabilities.queries == (
         "observe_runtime",
         "password_registry",
         "public_server_ip",
+        "qwdtt_call_pool_link",
+        "manual_client_artifacts",
     )
+    assert p.meta.capabilities.manual_artifacts_query == (
+        "manual_client_artifacts"
+    )
+    assert p.meta.capabilities.subscription_enabled is False
+    assert p.meta.capabilities.hydra_v2_subscription_enabled is False
+    assert p.meta.capabilities.maintenance_tasks == ()
 
 
 def test_password_registry_and_link_io_are_plugin_owned(tmp_path):
@@ -109,7 +125,7 @@ def test_public_server_ip_uses_public_fallback():
         assert WdttPlugin.public_server_ip() == "203.0.113.10"
 
 
-def test_source_build_allows_empty_go_cache(tmp_path):
+def test_source_build_targets_whole_go_package_and_allows_empty_go_cache(tmp_path):
     p = WdttPlugin()
     work_dir = tmp_path / "work"
     src_dir = work_dir / "proxy-turn-vk-android-master"
@@ -137,6 +153,8 @@ def test_source_build_allows_empty_go_cache(tmp_path):
     assert tar_call.kwargs["timeout"] == SOURCE_EXTRACT_TIMEOUT
     assert mod_call.kwargs["timeout"] == GO_MODULE_TIMEOUT
     assert build_call.kwargs["timeout"] == GO_BUILD_TIMEOUT
+    assert build_call.args[0][-1] == "."
+    assert "./server.go" not in build_call.args[0]
     assert GO_MODULE_TIMEOUT >= 600
     assert GO_BUILD_TIMEOUT >= 600
 

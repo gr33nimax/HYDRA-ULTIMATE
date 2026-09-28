@@ -6,6 +6,8 @@ test/import surface while delegating to those modules.
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 import json
 import sys
 import time
@@ -30,6 +32,7 @@ from hydra.services.traffic_attribution import (
 from hydra.services.traffic_daemon_infrastructure import (
     collect_traffic_evidence,
 )
+from hydra.services.traffic_log import maintain_traffic_log as _maintain_traffic_log
 from hydra.utils.commands import redact_text
 
 
@@ -41,30 +44,40 @@ TRAFFIC_LOG_MAX_BYTES = 5 * 1024 * 1024
 _parse_hysteria2_users = parse_hysteria2_users
 
 
+def _awg_source_addresses(state: AppState) -> dict[str, str]:
+    """Tunnel address to user for the AmneziaWG peers the core serves.
+
+    The address is the only stable identity a peer has on the data path, and it lives with the credentials.
+    """
+    protocol = state.protocols.get("amneziawg")
+    profiles = protocol.config.get("profiles") if protocol else None
+    if not isinstance(profiles, dict):
+        return {}
+    result: dict[str, str] = {}
+    for profile_name, profile in profiles.items():
+        if not isinstance(profile, dict):
+            continue
+        default_network = "10.68.68.0/24" if profile_name == "mobile" else "10.67.67.0/24"
+        network = str(profile.get("network") or default_network)
+        base = network.split("/", 1)[0].rsplit(".", 1)[0]
+        credential_name = "amneziawg" if profile_name == "desktop" else f"amneziawg_{profile_name}"
+        for user in state.users:
+            if user.blocked:
+                continue
+            credentials = user.credentials.get(credential_name)
+            octet = str((credentials or {}).get("address_octet") or "").strip()
+            if octet:
+                result[f"{base}.{octet}".lower()] = user.email
+    return result
+
+
 def maintain_traffic_log() -> None:
-    """Compact an oversized legacy log while preserving its recent tail."""
-    try:
-        TRAFFIC_LOG.parent.mkdir(parents=True, exist_ok=True)
-        if (
-            TRAFFIC_LOG.exists()
-            and TRAFFIC_LOG.stat().st_size >= TRAFFIC_LOG_MAX_BYTES
-        ):
-            with TRAFFIC_LOG.open("rb") as handle:
-                handle.seek(
-                    -min(
-                        TRAFFIC_LOG.stat().st_size,
-                        TRAFFIC_LOG_MAX_BYTES,
-                    ),
-                    2,
-                )
-                tail = handle.read()
-            newline = tail.find(b"\n")
-            if newline >= 0:
-                tail = tail[newline + 1 :]
-            TRAFFIC_LOG_BACKUP.write_bytes(tail)
-            TRAFFIC_LOG.write_text("", encoding="utf-8")
-    except OSError:
-        pass
+    """Compatibility wrapper retaining historical monkeypatch seams."""
+    _maintain_traffic_log(
+        TRAFFIC_LOG,
+        TRAFFIC_LOG_BACKUP,
+        TRAFFIC_LOG_MAX_BYTES,
+    )
 
 
 def _write_log(message: str) -> None:
@@ -244,7 +257,10 @@ def run_daemon() -> None:
                 updated = apply_connection_snapshot(
                     latest,
                     connections,
-                    evidence,
+                    replace(
+                        evidence,
+                        source_addresses={"amneziawg": _awg_source_addresses(latest)},
+                    ),
                 )
                 _enforce_device_limits(
                     latest,

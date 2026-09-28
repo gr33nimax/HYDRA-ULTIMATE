@@ -1,0 +1,209 @@
+"""Install only Hydra-owned mtproto.zig artifacts."""
+
+from __future__ import annotations
+
+import platform
+import shutil
+import tarfile
+import tempfile
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+from hydra.utils.commands import bounded_reason
+from hydra.utils.downloader import download_release_asset, extract_tarball, verify_elf
+
+from .constants import SERVICE_USER
+
+
+def report_stage(on_failure: Callable[[str], None] | None, stage: str) -> None:
+    """Report one redacted failure stage without leaking host output."""
+    if on_failure is None:
+        return
+    try:
+        on_failure(stage)
+    except Exception:
+        pass
+
+
+def _remove_tree(path: Path) -> None:
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        pass
+
+
+def ensure_service_user(host: Any) -> bool:
+    present = host.run(["getent", "passwd", SERVICE_USER], capture_output=True)
+    if present.returncode == 0:
+        return True
+    return (
+        host.run(
+            ["useradd", "--system", "--user-group", "--no-create-home", "--shell", "/usr/sbin/nologin", SERVICE_USER],
+            capture_output=True,
+        ).returncode
+        == 0
+    )
+
+
+def write_service(
+    *,
+    host: Any,
+    service_file: Path,
+    binary: Path,
+    config: Path,
+    work_dir: Path,
+    service: str,
+    on_failure: Callable[[str], None] | None = None,
+) -> bool:
+    service_file.parent.mkdir(parents=True, exist_ok=True)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    work_dir.chmod(0o750)
+    # The unit runs as the service user, so it must be able to enter and write
+    # its working directory: a root-owned 0750 directory fails CHDIR with
+    # "status=200/CHDIR".
+    ownership = host.run(["chown", f"{SERVICE_USER}:{SERVICE_USER}", str(work_dir)], capture_output=True)
+    if ownership.returncode != 0:
+        report_stage(on_failure, "не удалось назначить владельца рабочего каталога mtproto-zig")
+        return False
+    service_file.write_text(
+        "[Unit]\nDescription=Hydra MTProto Zig\nAfter=network-online.target\nWants=network-online.target\n\n"
+        "[Service]\nType=simple\n"
+        f"User={SERVICE_USER}\nGroup={SERVICE_USER}\nWorkingDirectory={work_dir}\n"
+        f"ExecStart={binary} {config}\nRestart=on-failure\nRestartSec=2\nLimitNOFILE=1048576\n"
+        "AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n"
+        "NoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=full\n"
+        f"ReadWritePaths={work_dir}\n\n[Install]\nWantedBy=multi-user.target\n",
+        encoding="utf-8",
+    )
+    result = host.run(["systemctl", "daemon-reload"], capture_output=True)
+    if result.returncode == 0:
+        return True
+    reason = bounded_reason(result) or "проверьте systemctl daemon-reload на хосте"
+    report_stage(on_failure, f"systemd не принял юнит mtproto-zig: {reason}")
+    return False
+
+
+def download_binary(
+    *,
+    host: Any,
+    repo: str,
+    binary: Path,
+    on_failure: Callable[[str], None] | None = None,
+) -> bool:
+    """Resolve, digest-verify and atomically install the proxy binary.
+
+    The release is resolved from the archive itself, never from
+    ``releases/latest``: upstream may publish a newest release that carries only
+    unrelated assets. Nothing is replaced until the verified archive has
+    produced a verified ELF, so every earlier failure keeps the previous binary
+    and service state. Upstream ``bootstrap.sh`` and ``mtbuddy`` are never run:
+    they own another layout, unit, configuration and host mutation.
+    """
+    machine = platform.machine().lower()
+    candidates = (
+        ("mtproto-proxy-linux-aarch64_crypto.tar.gz", "mtproto-proxy-linux-aarch64.tar.gz")
+        if machine in {"aarch64", "arm64"}
+        else ("mtproto-proxy-linux-x86_64_v3.tar.gz", "mtproto-proxy-linux-x86_64.tar.gz")
+    )
+    destination = Path(tempfile.mkdtemp(prefix="hydra-mtproto-zig-"))
+    try:
+        archive = destination / "mtproto-proxy.tar.gz"
+        reasons: list[str] = []
+        if not download_release_asset(repo, candidates, archive, on_error=reasons.append):
+            report_stage(on_failure, reasons[-1] if reasons else "не удалось скачать релизный архив mtproto.zig")
+            return False
+        extracted = destination / "extracted"
+        binary_names = {
+            "mtproto-proxy",
+            "mtproto-zig",
+            *(Path(candidate).name.removesuffix(".tar.gz") for candidate in candidates),
+        }
+        try:
+            extract_tarball(archive, extracted)
+            found = next(
+                (item for item in extracted.rglob("*") if item.is_file() and item.name in binary_names),
+                None,
+            )
+        except (OSError, ValueError, tarfile.TarError) as exc:
+            report_stage(on_failure, f"не удалось распаковать релизный архив mtproto.zig: {exc}")
+            return False
+        if found is None:
+            report_stage(on_failure, "в релизном архиве mtproto.zig нет бинарника mtproto-proxy")
+            return False
+        if not verify_elf(found):
+            report_stage(on_failure, "загруженный бинарник mtproto.zig не является исполняемым ELF")
+            return False
+        pending = binary.with_suffix(".pending")
+        try:
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(found, pending)
+            pending.chmod(0o755)
+            if not verify_elf(pending):
+                pending.unlink(missing_ok=True)
+                report_stage(on_failure, "проверка подготовленного бинарника mtproto.zig не прошла")
+                return False
+            pending.replace(binary)
+        except OSError as exc:
+            pending.unlink(missing_ok=True)
+            report_stage(on_failure, f"не удалось установить бинарник mtproto.zig: {exc}")
+            return False
+        return True
+    finally:
+        _remove_tree(destination)
+
+
+def write_web_service(
+    *,
+    host: Any,
+    service_file: Path,
+    binary: Path,
+    config: Path,
+    work_dir: Path,
+    service: str,
+    proxy_service: str,
+    on_failure: Callable[[str], None] | None = None,
+) -> bool:
+    """Write the WEB relay unit, which runs the same verified binary.
+
+    The relay reads the single Hydra-owned configuration, binds an unprivileged
+    loopback port and writes nothing, so it keeps no capability at all.
+    """
+    service_file.parent.mkdir(parents=True, exist_ok=True)
+    service_file.write_text(
+        "[Unit]\nDescription=Hydra MTProto Zig WEB relay\n"
+        f"After=network-online.target {proxy_service}.service\n"
+        "Wants=network-online.target\n"
+        f"Requires={proxy_service}.service\nPartOf={proxy_service}.service\n\n"
+        "[Service]\nType=simple\n"
+        f"User={SERVICE_USER}\nGroup={SERVICE_USER}\nWorkingDirectory={work_dir}\n"
+        f"ExecStart={binary} web-relay {config}\n"
+        "Restart=on-failure\nRestartSec=2\nLimitNOFILE=65536\n"
+        "NoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\n"
+        "ProtectHome=true\nCapabilityBoundingSet=\nUMask=0077\n\n"
+        "[Install]\nWantedBy=multi-user.target\n",
+        encoding="utf-8",
+    )
+    result = host.run(["systemctl", "daemon-reload"], capture_output=True)
+    if result.returncode == 0:
+        return True
+    reason = bounded_reason(result) or "проверьте systemctl daemon-reload на хосте"
+    report_stage(on_failure, f"systemd не принял юнит WEB-релея mtproto-zig: {reason}")
+    return False
+
+
+def uninstall_web(*, host: Any, service: str, service_file: Path) -> None:
+    """Remove only the Hydra-owned WEB relay unit."""
+    host.run(["systemctl", "disable", "--now", service], capture_output=True)
+    service_file.unlink(missing_ok=True)
+    host.run(["systemctl", "daemon-reload"], capture_output=True)
+
+
+def uninstall(*, host: Any, service: str, service_file: Path, binary: Path, directories: tuple[Path, ...]) -> bool:
+    host.run(["systemctl", "disable", "--now", service], capture_output=True)
+    service_file.unlink(missing_ok=True)
+    host.run(["systemctl", "daemon-reload"], capture_output=True)
+    binary.unlink(missing_ok=True)
+    for directory in directories:
+        _remove_tree(directory)
+    return True

@@ -5,10 +5,11 @@ import shutil
 from pathlib import Path
 
 from hydra.core import state as state_module
-from hydra.core.state_migrations import migrate_v2_to_v3
+from hydra.core.state_format import unpack_state_document
+from hydra.core.state_migrations import import_legacy_state
 
 
-def test_v2_to_v3_only_adds_released_device_fields():
+def test_legacy_importer_adds_released_device_fields_without_mutating_source():
     source = {
         "version": 2,
         "users": [{"email": "legacy", "uuid": "token"}],
@@ -17,21 +18,14 @@ def test_v2_to_v3_only_adds_released_device_fields():
         "security": {"fail2ban_enabled": True},
     }
 
-    migrated = migrate_v2_to_v3(source)
+    migrated = unpack_state_document(import_legacy_state(source))
 
-    assert migrated == {
-        "version": 3,
-        "users": [{
-            "email": "legacy",
-            "uuid": "token",
-            "device_limit": 0,
-            "devices": {},
-        }],
-        "protocols": {},
-        "network": {"warp_enabled": True},
-        "security": {"fail2ban_enabled": True},
-    }
-    assert "revision" not in migrated
+    assert source["network"] == {"warp_enabled": True}
+    assert migrated["format_version"] == 1
+    assert migrated["users"][0]["device_limit"] == 0
+    assert migrated["users"][0]["devices"] == {}
+    assert migrated["protocols"]["warp"]["enabled"] is True
+    assert migrated["protocols"]["fail2ban"]["enabled"] is True
 
 
 def test_253_schema_fixture_survives_v4_migration_and_round_trip(
@@ -50,8 +44,9 @@ def test_253_schema_fixture_survives_v4_migration_and_round_trip(
     migrated_bytes = state_file.read_bytes()
     second_migration = state_module.migrate_persisted_state()
 
-    assert first_migration == {"from": 3, "to": 5, "changed": True}
-    assert second_migration == {"from": 5, "to": 5, "changed": False}
+    expected = state_module.SCHEMA_VERSION
+    assert first_migration == {"from": 3, "to": expected, "changed": True}
+    assert second_migration == {"from": expected, "to": expected, "changed": False}
     assert state_file.read_bytes() == migrated_bytes
 
     loaded = state_module.load_state()
@@ -59,6 +54,7 @@ def test_253_schema_fixture_survives_v4_migration_and_round_trip(
     assert loaded.version == state_module.SCHEMA_VERSION
     assert loaded.revision == 0
     assert loaded.users[0].device_limit == 2
+    assert len(loaded.users[0].hydrabox_jwe_key) == 43
     assert loaded.users[0].devices == {
         "cd1fe8030198a45df90f44a04cda869fbbf799d4e78294337cdee955e1203658": {
             "first_seen": "2026-07-24T12:00:00+00:00",
@@ -103,13 +99,13 @@ def test_253_schema_fixture_survives_v4_migration_and_round_trip(
 
     assert reloaded.users[0].device_limit == 2
     assert reloaded.users[0].devices == loaded.users[0].devices
-    assert persisted["users"][0]["devices"] == loaded.users[0].devices
-    assert persisted["telegram"]["admin_token"] == "preserve-admin-token"
+    assert persisted["core"]["users"][0]["devices"] == loaded.users[0].devices
+    assert persisted["core"]["telegram"]["admin_token"] == "preserve-admin-token"
     assert (
-        persisted["protocols"]["custom-transport"]["config"]["password"]
+        persisted["features"]["protocols"]["custom-transport"]["config"]["password"]
         == "preserve-custom-secret"
     )
-    assert persisted["network"]["clash_api_secret"] == "preserve-clash-secret"
-    assert "security" not in persisted
-    assert "warp_enabled" not in persisted["network"]
-    assert "dnscrypt_enabled" not in persisted["network"]
+    assert persisted["core"]["network"]["clash_api_secret"] == "preserve-clash-secret"
+    assert "security" not in persisted["core"]
+    assert "warp_enabled" not in persisted["core"]["network"]
+    assert "dnscrypt_enabled" not in persisted["core"]["network"]

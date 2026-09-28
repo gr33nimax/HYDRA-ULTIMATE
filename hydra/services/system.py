@@ -1,7 +1,7 @@
 """Transport-neutral system maintenance use-cases.
 
 CLI, TUI and future remote adapters should not import host diagnostics,
-upgrade checks or state migration storage directly.  This port keeps those
+upgrade checks or legacy state import storage directly.  This port keeps those
 operations behind the application composition root.
 """
 from __future__ import annotations
@@ -39,18 +39,20 @@ class UnavailableSystemOperations:
 
 @dataclass(frozen=True)
 class SystemService:
-    """Application owner for read-only checks and explicit state migration."""
+    """Application owner for read-only checks and explicit legacy state import."""
 
     validate_state: Callable[[AppState], None]
     doctor_check: Callable[[AppState], dict]
     upgrade_readiness: Callable[[AppState], dict]
     migrate_persisted_state: Callable[[], dict]
+    purge_sidecars: Callable[[], dict] = lambda: {}
 
     def validate(self, state: AppState) -> dict:
         self.validate_state(state)
         return {
             "valid": True,
-            "schema_version": state.version,
+            # Compatibility name in the public CLI payload; value is format v1.
+            "schema_version": state.format_version,
             "revision": state.revision,
         }
 
@@ -61,7 +63,13 @@ class SystemService:
         return self.upgrade_readiness(state)
 
     def migrate_state(self) -> dict:
-        return self.migrate_persisted_state()
+        result = self.migrate_persisted_state()
+        # Upgrading from the pre-native scheme also tears down its leftover
+        # WARP/AmneziaWG sidecars so the core-owned modules come up clean.
+        sidecars = self.purge_sidecars()
+        if any(sidecars.values()):
+            result["legacy_sidecars"] = sidecars
+        return result
 
 
 __all__ = [

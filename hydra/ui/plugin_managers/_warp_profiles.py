@@ -1,4 +1,5 @@
 """Relay-profile interactions for the WARP manager facade."""
+
 from __future__ import annotations
 
 from hydra.core.state_models import AppState
@@ -23,6 +24,7 @@ from hydra.ui.tui import (
     success,
 )
 
+
 def _menu_geo_profiles(
     state: AppState,
     ps,
@@ -33,11 +35,7 @@ def _menu_geo_profiles(
         observation = facade._warp_observation(app)
         profile_directory = str(observation.get("profile_directory", ""))
         profile_rows = sorted(
-            (
-                row
-                for row in observation.get("profiles", [])
-                if isinstance(row, dict) and row.get("name")
-            ),
+            (row for row in observation.get("profiles", []) if isinstance(row, dict) and row.get("name")),
             key=lambda row: str(row["name"]),
         )
         profiles = [str(row["name"]) for row in profile_rows]
@@ -46,7 +44,7 @@ def _menu_geo_profiles(
         status_lines = [
             f"  {BOLD}Каталог профилей:{NC} {profile_directory}",
             f"  Для добавления нового релея загрузите .conf файл в этот каталог.",
-            "  " + "─" * 60
+            "  " + "─" * 60,
         ]
 
         if not profiles:
@@ -67,11 +65,12 @@ def _menu_geo_profiles(
                         list_name = k.split(":", 1)[1]
                         mapped_lists.append(list_name)
 
-                routes_str = f"Направлены списки: {', '.join(mapped_lists)}" if mapped_lists else "Нет привязанных списков"
+                routes_str = (
+                    f"Направлены списки: {', '.join(mapped_lists)}" if mapped_lists else "Нет привязанных списков"
+                )
 
                 status_lines.append(
-                    f"  {idx}. {BOLD}warp_{name:<12}{NC} [{type_str}]{warn_str} "
-                    f"│ {DIM}{routes_str}{NC}"
+                    f"  {idx}. {BOLD}warp_{name:<12}{NC} [{type_str}]{warn_str} │ {DIM}{routes_str}{NC}"
                 )
 
         panel("⚙️ УПРАВЛЕНИЕ ПРОФИЛЯМИ РЕЛЕЕВ", status_lines)
@@ -93,22 +92,23 @@ def _menu_geo_profiles(
             opts_prof.append(("0", "Назад", ""))
 
             p_choice = menu(opts_prof, "ВЫБЕРИТЕ ПРОФИЛЬ ДЛЯ УДАЛЕНИЯ")
-            if p_choice == "0" or not p_choice.isdigit():
+            index = facade._menu_number(p_choice)
+            if index is None:
                 continue
 
-            idx = int(p_choice) - 1
+            idx = index - 1
             if 0 <= idx < len(profiles):
                 name = profiles[idx]
+                if any(target == f"warp_{name}" for target in list_targets.values()):
+                    error("Сначала перенаправьте списки с этого релея через настройки маршрутизации.")
+                    prompt("Нажмите Enter для продолжения")
+                    continue
                 if confirm(f"Вы действительно хотите удалить релей '{name}' ({name}.conf)?", default=False):
                     app.plugin_action(
                         "warp",
                         "delete_local_profile",
                         name=name,
                     )
-                    keys_to_clean = [k for k, target in list_targets.items() if target == f"warp_{name}"]
-                    for k in keys_to_clean:
-                        list_targets[k] = "none"
-                    app.admin.save_state(state)
                     success(f"Релей warp_{name} успешно удален.")
                     if ps.enabled:
                         info("Обновляю конфигурацию Sing-Box...")

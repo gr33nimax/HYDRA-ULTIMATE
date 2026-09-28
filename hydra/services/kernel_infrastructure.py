@@ -1,0 +1,376 @@
+"""Trusted release and host adapter for transactional kernel replacement."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import tempfile
+import threading
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+from hydra.contracts.hydracore_calls import supports_native_vk_calls, supports_vps_contract
+from hydra.core.host import HostBackend
+from hydra.core.state_kernel_models import (
+    KERNEL_HYDRACORE,
+)
+from hydra.services.kernel import KernelRuntimeStatus
+from hydra.core.kernel_release_channels import kernel_release_selection
+from hydra.utils.downloader import (
+    download_github_asset_filtered,
+    extract_tarball,
+    verify_elf,
+)
+from hydra.utils.net import detect_arch
+
+
+@dataclass(frozen=True)
+class _ReleaseSpec:
+    repository: str
+    asset_name: Callable[[str], str]
+
+
+_TRUSTED_RELEASES = {
+    KERNEL_HYDRACORE: _ReleaseSpec(
+        "gr33nimax/hydracore",
+        lambda arch: rf"^hydracore-vps-linux-{re.escape(arch)}\.tar\.gz$",
+    ),
+}
+
+_HYDRACORE_CORE_ID = "io.hydrabox.hydracore"
+
+
+class _KernelLease:
+    _thread_lock = threading.Lock()
+
+    def __init__(self, handle) -> None:
+        self._handle = handle
+        self._released = False
+
+    @classmethod
+    def acquire(cls, path: Path) -> _KernelLease:
+        if not cls._thread_lock.acquire(blocking=False):
+            raise RuntimeError("another kernel transaction is already running")
+        handle = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handle = path.open("a+")
+            if os.name != "nt":
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return cls(handle)
+        except Exception:
+            if handle is not None:
+                handle.close()
+            cls._thread_lock.release()
+            raise RuntimeError("another kernel transaction is already running") from None
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        try:
+            if os.name != "nt":
+                import fcntl
+
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+            self._handle.close()
+        finally:
+            self._thread_lock.release()
+
+
+class _PreparedSwitch:
+    def __init__(
+        self,
+        *,
+        runtime: KernelRuntimeStatus,
+        rollback: Callable[[], None],
+        cleanup: Callable[[], None],
+        warn: Callable[[str], None],
+        lease: _KernelLease,
+    ) -> None:
+        self.runtime = runtime
+        self._rollback = rollback
+        self._cleanup = cleanup
+        self._warn = warn
+        self._lease = lease
+        self._closed = False
+
+    def commit(self) -> None:
+        if self._closed:
+            return
+        try:
+            try:
+                self._cleanup()
+            except Exception as exc:
+                self._warn(f"Kernel switch committed; backup cleanup failed: {exc}")
+        finally:
+            self._closed = True
+            self._lease.release()
+
+    def rollback(self) -> None:
+        if self._closed:
+            return
+        try:
+            self._rollback()
+        finally:
+            try:
+                try:
+                    self._cleanup()
+                except Exception as exc:
+                    self._warn(f"Kernel rollback finished; backup cleanup failed: {exc}")
+            finally:
+                self._closed = True
+                self._lease.release()
+
+
+class KernelInfrastructure:
+    """Prepare a verified binary while deferring commit to the application service."""
+
+    def __init__(
+        self,
+        host: HostBackend,
+        *,
+        binary_path: Path = Path("/usr/local/bin/sing-box"),
+        config_path: Path = Path("/etc/sing-box/config.json"),
+        lock_path: Path = Path("/run/lock/hydra-kernel.lock"),
+        downloader=download_github_asset_filtered,
+        arch_reader=detect_arch,
+    ) -> None:
+        self._host = host
+        self._binary_path = binary_path
+        self._config_path = config_path
+        self._lock_path = lock_path
+        self._download = downloader
+        self._arch_reader = arch_reader
+
+    @staticmethod
+    def _singbox():
+        from hydra.core import singbox
+
+        return singbox
+
+    def _run(self, binary: Path, *arguments: str):
+        env = os.environ.copy()
+        env.update(
+            {
+                "LEGACY_DNS_SERVERS": "true",
+                "ENABLE_DEPRECATED_LEGACY_DNS_SERVERS": "true",
+                "ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER": "true",
+            }
+        )
+        return self._host.run(
+            [str(binary), *arguments],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+
+    def _version_output(self, binary: Path) -> str:
+        result = self._run(binary, "version")
+        if result.returncode != 0:
+            raise RuntimeError("kernel candidate failed its version probe")
+        return str(result.stdout or "").strip()
+
+    def _hydra_payload(self, binary: Path, subcommand: str) -> dict:
+        result = self._run(binary, "hydra", subcommand, "--json")
+        if result.returncode != 0:
+            return {}
+        try:
+            payload = json.loads(str(result.stdout or ""))
+        except (TypeError, ValueError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _contract_payload(self, binary: Path) -> dict:
+        return self._hydra_payload(binary, "contract")
+
+    def _legacy_capabilities_payload(self, binary: Path) -> dict:
+        """What a core built before the product contract answers instead of it."""
+        return self._hydra_payload(binary, "capabilities")
+
+    @staticmethod
+    def _has_hydracore_contract(payload: dict) -> bool:
+        return supports_vps_contract(payload)
+
+    def _accepts_vps_calls(self, binary: Path) -> bool:
+        """Judge a candidate by the contract it prints, or by the document it printed before it.
+
+        Requiring the contract would also refuse the rollback to the release that was running a
+        minute ago, which is the one path that matters when a new core misbehaves.
+        """
+        payload = self._contract_payload(binary)
+        if payload:
+            return self._has_hydracore_contract(payload)
+        return supports_native_vk_calls(self._legacy_capabilities_payload(binary))
+
+    def _inspect_binary(self, binary: Path, *, running: bool) -> KernelRuntimeStatus:
+        version_output = self._version_output(binary)
+        contract_payload = self._contract_payload(binary)
+        if contract_payload.get("core_id") == _HYDRACORE_CORE_ID or "hydracore" in version_output.lower():
+            provider = KERNEL_HYDRACORE
+        elif "extended" in version_output.lower():
+            provider = "legacy"
+        else:
+            provider = "unknown"
+        version_line = version_output.splitlines()[0] if version_output else ""
+        return KernelRuntimeStatus(
+            True,
+            running=running,
+            provider=provider,
+            version=version_line,
+            binary_path=str(binary),
+        )
+
+    def inspect(self) -> KernelRuntimeStatus:
+        singbox = self._singbox()
+        binary = singbox._find_singbox()
+        if binary is None:
+            return KernelRuntimeStatus(False)
+        try:
+            return self._inspect_binary(binary, running=singbox.is_running())
+        except Exception:
+            return KernelRuntimeStatus(
+                True,
+                running=singbox.is_running(),
+                provider="unknown",
+                binary_path=str(binary),
+            )
+
+    def _download_candidate(self, provider: str, channel: str, directory: Path) -> Path:
+        spec = _TRUSTED_RELEASES[provider]
+        arch = self._arch_reader()
+        if arch not in {"amd64", "arm64"}:
+            raise ValueError(f"unsupported kernel architecture: {arch}")
+        pattern = re.compile(spec.asset_name(arch))
+        archive = directory / "kernel.tar.gz"
+        errors: list[str] = []
+        selection = kernel_release_selection(provider, channel)
+        downloaded = self._download(
+            spec.repository,
+            lambda name: pattern.fullmatch(name) is not None,
+            archive,
+            include_prerelease=selection.include_prerelease,
+            prerelease_tag_markers=selection.prerelease_tag_markers,
+            prerelease_exclude_markers=selection.prerelease_exclude_markers,
+            require_unique=True,
+            require_digest=True,
+            on_error=errors.append,
+        )
+        if not downloaded:
+            raise RuntimeError(errors[-1] if errors else "kernel release download failed")
+        extracted = directory / "extracted"
+        extract_tarball(archive, extracted)
+        candidates = [
+            path for path in extracted.rglob("sing-box") if path.is_file() and path.stat().st_size > 1_000_000
+        ]
+        if len(candidates) != 1 or not verify_elf(candidates[0]):
+            raise RuntimeError("release must contain exactly one ELF sing-box binary")
+        candidates[0].chmod(0o755)
+        return candidates[0]
+
+    def _validate_candidate(
+        self,
+        candidate: Path,
+        provider: str,
+        channel: str = "stable",
+    ) -> KernelRuntimeStatus:
+        status = self._inspect_binary(candidate, running=False)
+        if status.provider != provider:
+            raise RuntimeError(
+                f"release identity mismatch: expected {provider}, got {status.provider}",
+            )
+        if provider == KERNEL_HYDRACORE and not self._accepts_vps_calls(candidate):
+            raise RuntimeError(
+                "Hydracore must expose identity, the VPS Calls role, and vk_parasite mode",
+            )
+        if self._config_path.exists():
+            checked = self._run(candidate, "check", "-c", str(self._config_path))
+            if checked.returncode != 0:
+                # The checker's own output stays out of the message on purpose: it carries the
+                # configuration it read, secrets included (test_kernel_candidate_error_redacts…).
+                raise RuntimeError("candidate rejected the active configuration")
+        return status
+
+    def prepare_switch(self, provider: str, channel: str) -> _PreparedSwitch:
+        if provider not in _TRUSTED_RELEASES:
+            raise ValueError(f"unsupported kernel provider: {provider}")
+        kernel_release_selection(provider, channel)
+        lease = _KernelLease.acquire(self._lock_path)
+        backup = self._binary_path.with_name(f".{self._binary_path.name}.kernel.bak")
+        singbox = self._singbox()
+        was_running = singbox.is_running()
+        target_existed = self._binary_path.exists()
+        finder = getattr(singbox, "_find_singbox", None)
+        had_installed_kernel = bool(finder()) if callable(finder) else target_existed
+        should_start = was_running or not had_installed_kernel
+        mutated = False
+        service_stopped = False
+
+        def cleanup() -> None:
+            self._host.remove_file(backup, missing_ok=True)
+
+        def rollback() -> None:
+            if mutated:
+                singbox.stop()
+                if target_existed:
+                    if not backup.exists():
+                        raise RuntimeError("kernel rollback backup is missing")
+                    self._host.atomic_copy(backup, self._binary_path, mode=0o755)
+                else:
+                    self._host.remove_file(self._binary_path, missing_ok=True)
+            if was_running and (mutated or service_stopped) and not singbox.start():
+                raise RuntimeError("previous kernel was restored but service did not start")
+
+        try:
+            cleanup()
+            with tempfile.TemporaryDirectory(prefix="hydra-kernel-") as temp:
+                candidate = self._download_candidate(provider, channel, Path(temp))
+                candidate_status = self._validate_candidate(candidate, provider, channel)
+                if target_existed:
+                    self._host.atomic_copy(self._binary_path, backup, mode=0o700)
+                if was_running:
+                    service_stopped = True
+                    if not singbox.stop():
+                        raise RuntimeError("failed to stop sing-box before kernel replacement")
+                self._host.atomic_copy(candidate, self._binary_path, mode=0o755)
+                mutated = True
+            installed = self._inspect_binary(self._binary_path, running=False)
+            if installed.provider != candidate_status.provider:
+                raise RuntimeError("installed kernel identity changed after replacement")
+            if should_start and not singbox.start():
+                raise RuntimeError("new kernel did not become stable")
+            runtime = self._inspect_binary(self._binary_path, running=should_start)
+            singbox.log("INFO", f"Prepared kernel switch to {provider}")
+            return _PreparedSwitch(
+                runtime=runtime,
+                rollback=rollback,
+                cleanup=cleanup,
+                warn=lambda message: singbox.log("WARNING", message),
+                lease=lease,
+            )
+        except Exception as switch_error:
+            rollback_error: Exception | None = None
+            try:
+                rollback()
+            except Exception as exc:
+                rollback_error = exc
+            finally:
+                try:
+                    cleanup()
+                except Exception as exc:
+                    singbox.log("WARNING", f"Kernel failure cleanup failed: {exc}")
+                finally:
+                    lease.release()
+            if rollback_error is not None:
+                raise RuntimeError(
+                    f"kernel switch failed and rollback failed: {rollback_error}",
+                ) from switch_error
+            raise
+
+
+__all__ = ["KernelInfrastructure"]

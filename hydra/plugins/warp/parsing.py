@@ -18,12 +18,18 @@ def is_ip_or_cidr(token: str) -> bool:
 
 
 def is_valid_domain(token: str) -> bool:
+    """Accept a domain or a domain suffix, including IDN and punycode forms."""
     if not token or len(token) > 253:
         return False
-    if re.fullmatch(r"\.[a-zA-Z]{2,24}", token):
-        return True
-    pattern = r"^\.?[a-zA-Z0-9][-a-zA-Z0-9._]*\.[a-zA-Z]{2,24}$"
-    return re.match(pattern, token) is not None
+    leading_dot = token.startswith(".")
+    try:
+        body = token.removeprefix(".").encode("idna").decode("ascii")
+    except (UnicodeError, ValueError):
+        return False
+    normalized = f".{body}" if leading_dot else body
+    suffix = r"\.[a-zA-Z0-9-]{2,63}"
+    domain = r"\.?[a-zA-Z0-9][-a-zA-Z0-9._]*\.[a-zA-Z0-9-]{2,63}"
+    return re.fullmatch(suffix, normalized) is not None or (re.fullmatch(domain, normalized) is not None)
 
 
 def parse_endpoint(raw_endpoint: str) -> tuple[str, int] | None:
@@ -75,48 +81,9 @@ def parse_wg_conf(text: str) -> dict | None:
     return result
 
 
-def load_warp_config(profile, *, parse_config=parse_wg_conf, validate_ip=is_ip_or_cidr):
-    """Read and normalize a wgcf profile into Sing-Box input fields."""
-    if not profile.exists():
-        return None
-    try:
-        text = profile.read_text(encoding="utf-8")
-    except Exception:
-        return None
-    parsed = parse_config(text)
-    if parsed is None:
-        return None
-
-    addresses = []
-    for value in parsed["interface"]["address"].split(","):
-        address = value.strip()
-        if address and validate_ip(address):
-            addresses.append(
-                address if "/" in address else address + ("/128" if ":" in address else "/32")
-            )
-    if not addresses:
-        return None
-    return {
-        "private_key": parsed["interface"]["privatekey"],
-        "addresses": addresses,
-        "endpoint": parsed["peer"]["endpoint"],
-        "public_key": parsed["peer"]["publickey"],
-        "allowed_ips": [
-            value.strip()
-            for value in parsed["peer"].get(
-                "allowedips",
-                "0.0.0.0/0, ::/0",
-            ).split(",")
-            if validate_ip(value.strip())
-        ],
-        "mtu": parsed["interface"].get("mtu", "1280"),
-    }
-
-
 __all__ = [
     "is_ip_or_cidr",
     "is_valid_domain",
-    "load_warp_config",
     "parse_endpoint",
     "parse_wg_conf",
 ]

@@ -11,6 +11,7 @@ def show_main_link(
 ) -> None:
     facade.clear()
     protocol = facade.get_protocol(state, "wdtt")
+    pool_link = str(app.plugin_query("wdtt", "qwdtt_call_pool_link"))
     server_ip = state.network.server_ip or facade._get_server_ip(app)
     link = _client_link(
         server_ip,
@@ -18,13 +19,19 @@ def show_main_link(
         protocol.config.get("main_password", ""),
         vk_hash="ВК_ХЕШ",
     )
-    facade.panel(
-        "ГЛАВНАЯ ССЫЛКА",
-        [
-            "Ссылка qwdtt:// (Главный пароль):",
+    if pool_link:
+        link = pool_link
+    instructions = (
+        ["Ссылка содержит актуальные VK-хеши и главный пароль."]
+        if pool_link
+        else [
             "Замените ВК_ХЕШ на хеш из ссылки "
             "vk.com/call/join/ХЕШ",
-        ],
+        ]
+    )
+    facade.panel(
+        "ГЛАВНАЯ ССЫЛКА",
+        ["Ссылка qwdtt:// (Главный пароль):", *instructions],
     )
     print(f"\n  {facade.YELLOW}{link}{facade.NC}\n")
     facade._save_link_to_file(link, "qwdtt_link.txt", app)

@@ -14,6 +14,56 @@ from hydra.services.traffic_attribution import (
 )
 
 
+def _non_negative(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _legacy_protocol_totals(state: AppState) -> dict[str, int]:
+    """Sum per-user traffic by protocol, ignoring credential-only profiles.
+
+    A ``user.credentials`` key is not necessarily a protocol: profile
+    credentials (for example the AmneziaWG mobile keys) never carry
+    ``traffic_used_bytes`` and must not become a reporting namespace.
+    """
+    totals: dict[str, int] = {}
+    for user in state.users:
+        for protocol, stats in user.credentials.items():
+            if not isinstance(stats, dict):
+                continue
+            used = _non_negative(stats.get("traffic_used_bytes", 0))
+            if used:
+                totals[protocol] = totals.get(protocol, 0) + used
+    for protocol, stats in state.install.get("protocol_traffic_totals", {}).items():
+        if not isinstance(stats, dict):
+            continue
+        used = _non_negative(stats.get("traffic_used_bytes", 0))
+        if used:
+            # Aggregate-only accounting must not be added twice if a protocol
+            # gains reliable per-user attribution in the future.
+            totals[protocol] = max(totals.get(protocol, 0), used)
+    return totals
+
+
+def ensure_report_totals(state: AppState) -> dict[str, int]:
+    """Create the independent report period from existing accounting once."""
+    reports = state.install.get("traffic_report_totals")
+    if isinstance(reports, dict):
+        return reports
+    reports = _legacy_protocol_totals(state)
+    state.install["traffic_report_totals"] = reports
+    return reports
+
+
+def record_report_delta(state: AppState, protocol: str, delta: int) -> None:
+    """Add newly observed bytes to the global reporting period."""
+    if delta > 0:
+        reports = ensure_report_totals(state)
+        reports[protocol] = _non_negative(reports.get(protocol, 0)) + delta
+
+
 def apply_connection_snapshot(
     state: AppState,
     connections: Sequence[dict[str, Any]],
@@ -23,6 +73,7 @@ def apply_connection_snapshot(
     now: Callable[[], float] = time.time,
 ) -> bool:
     """Apply monotonic deltas while retaining a short tombstone window."""
+    ensure_report_totals(state)
     timestamp = now()
     state.install["traffic_daemon_last_poll"] = timestamp
     active = state.install.setdefault("traffic_connection_counters", {})
@@ -95,6 +146,7 @@ def apply_connection_snapshot(
         protocol_stats["traffic_used_bytes"] = (
             int(protocol_stats.get("traffic_used_bytes", 0)) + delta
         )
+        record_report_delta(state, protocol, delta)
     return bool(deltas)
 
 
@@ -128,4 +180,8 @@ def _source_address(
     return address or previous_address
 
 
-__all__ = ["apply_connection_snapshot"]
+__all__ = [
+    "apply_connection_snapshot",
+    "ensure_report_totals",
+    "record_report_delta",
+]

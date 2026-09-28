@@ -32,10 +32,7 @@ def _format_period(seconds: object) -> str:
 
 
 def get_antidpi_dashboard_text(app: ApplicationService) -> str:
-    return dashboard_antidpi.get_antidpi_dashboard_text(
-        app,
-        lookup_intel=_lookup_security_intel,
-    )
+    return dashboard_antidpi.get_antidpi_dashboard_text(app)
 
 
 def _legacy_honeypot_status_text(app: ApplicationService) -> str:
@@ -79,10 +76,7 @@ def _network_label(intel: dict[str, str]) -> str:
 
 
 def get_honeypot_status_text(app: ApplicationService) -> str:
-    return dashboard_honeypot.get_honeypot_status_text(
-        app,
-        lookup_intel=_lookup_security_intel,
-    )
+    return dashboard_honeypot.get_honeypot_status_text(app)
 
 
 def get_fail2ban_dashboard_text(app: ApplicationService) -> str:

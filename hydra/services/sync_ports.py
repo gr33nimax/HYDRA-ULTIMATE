@@ -6,7 +6,11 @@ from typing import Any, Callable, Protocol
 
 from hydra.core.state_models import AppState
 from hydra.services.certificate_audit import CertificateStatus
-from hydra.services.protocols import MaintenanceJob
+from hydra.services.maintenance import (
+    MaintenanceJob,
+    MaintenanceOperations,
+    MaintenanceOutcome,
+)
 
 
 class SyncProtocolAccess(Protocol):
@@ -30,16 +34,6 @@ class SyncPluginQueries(Protocol):
         query: str,
         **parameters: object,
     ) -> Any: ...
-
-
-@dataclass(frozen=True)
-class MaintenanceOutcome:
-    """Normalized result of one declared plugin maintenance job."""
-
-    job: MaintenanceJob
-    status: str
-    message: str = ""
-    apply_required: bool = False
 
 
 @dataclass(frozen=True)
@@ -123,6 +117,7 @@ def default_sync_operations(
         list[CertificateStatus],
     ],
     renew_subscription_certificate: Callable[[str], tuple[bool, str]],
+    maintenance: MaintenanceOperations | None = None,
 ) -> SyncOperations:
     """Compose declared plugin maintenance without protocol-name branches."""
 
@@ -177,7 +172,7 @@ def default_sync_operations(
         protocols=protocols,
         apply_config=apply_config,
         check_traffic_limits=check_traffic_limits,
-        run_maintenance=run_maintenance,
+        run_maintenance=(maintenance.run if maintenance is not None else run_maintenance),
         inspect_certificates=inspect_certificates,
         renew_subscription_certificate=renew_subscription_certificate,
     )

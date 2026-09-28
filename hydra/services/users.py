@@ -3,6 +3,7 @@
 The CLI, a future REST API and background jobs can share this facade instead
 of importing the orchestration module directly.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,7 +20,20 @@ class UserOperations(Protocol):
     def unblock_user(self, state: AppState, email: str) -> None: ...
     def rename_user(self, state: AppState, email: str, new_email: str) -> None: ...
     def set_user_device_limit(
-        self, state: AppState, email: str, limit: int, *, reset: bool = False,
+        self,
+        state: AppState,
+        email: str,
+        limit: int,
+        *,
+        reset: bool = False,
+    ) -> None: ...
+    def rotate_user_hydrabox_key(self, state: AppState, email: str) -> None: ...
+    def set_user_protocol_enabled(
+        self,
+        state: AppState,
+        email: str,
+        name: str,
+        enabled: bool,
     ) -> None: ...
 
 
@@ -62,9 +76,30 @@ class UserService:
         return user
 
     def set_device_limit(
-        self, state: AppState, email: str, limit: int, *, reset: bool = False,
+        self,
+        state: AppState,
+        email: str,
+        limit: int,
+        *,
+        reset: bool = False,
     ) -> User:
         self.operations.set_user_device_limit(state, email, limit, reset=reset)
+        user = find_user(state, email)
+        if user is None:
+            raise RuntimeError("user was not found")
+        return user
+
+    def set_protocol_enabled(
+        self,
+        state: AppState,
+        email: str,
+        name: str,
+        enabled: bool,
+    ) -> None:
+        self.operations.set_user_protocol_enabled(state, email, name, enabled)
+
+    def rotate_hydrabox_key(self, state: AppState, email: str) -> User:
+        self.operations.rotate_user_hydrabox_key(state, email)
         user = find_user(state, email)
         if user is None:
             raise RuntimeError("user was not found")

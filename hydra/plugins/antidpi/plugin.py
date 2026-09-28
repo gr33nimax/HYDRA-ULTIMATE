@@ -4,13 +4,16 @@ The public plugin contract stays here.  Pure decisions, persistence,
 privileged runtime operations, and management commands live in focused
 modules and are composed through explicit instance ports.
 """
+
 # audit: allow-generated-runtime-subprocess
 from __future__ import annotations
 
 import ipaddress
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Iterable
+from contextlib import contextmanager
 from pathlib import Path
 
 from hydra.contracts import BackupResource
@@ -23,53 +26,30 @@ from hydra.plugins.antidpi.diagnostic_actions import (
 from hydra.plugins.antidpi.lifecycle import AntiDPILifecycleMixin
 from hydra.plugins.antidpi.management import AntiDPIManagementMixin
 from hydra.plugins.antidpi.model import (
-    ALERT_COOLDOWN,
-    ALERT_THRESHOLD,
-    AUTH_ALERT_THRESHOLD,
     BAN_DURATIONS,
     BAN_NOTIFICATION_COOLDOWN,
-    BAN_THRESHOLD,
     DEFAULT_TRUSTED_NETWORKS,
     LEGACY_BAN_DURATION,
-    MAX_OBSERVED_SCORE,
     MAX_SCORE_ENTRIES,
-    SCORE_HALF_LIFE,
-    SCORE_RETENTION,
-    SIGNAL_WEIGHTS,
     active_bans,
     ban_duration,
-    decayed_score,
     expire_bans,
-    format_score,
     get_ban_duration,
     get_whitelisted_networks,
     is_whitelisted,
     prune_runtime_state as _prune_runtime_state,
-    score_event,
 )
-from hydra.plugins.antidpi.normalization import (
-    normalize_caddy_record,
-    normalize_decoy_record,
-    normalize_naive_decoy_record,
-    normalize_trusttunnel_record,
-)
+from hydra.plugins.antidpi.normalization import normalize_decoy_record
 from hydra.plugins.antidpi.firewall_rules import (
-    MIERU_PORT_RANGE,
-    MIERU_PROBE_RULE_COMMENT,
+    OBSOLETE_LOG_PREFIXES,
+    OBSOLETE_RULE_COMMENTS,
+    OBSOLETE_UDP_PROBE_CHAIN,
     RULE_COMMENT,
-    SCAN_RULE_COMMENT,
     SET_V4,
     SET_V6,
-    UDP_PROBE_CHAIN,
-    UDP_PROBE_RULE_COMMENT,
-    mieru_probe_rule,
-    scan_rule,
-    udp_probe_rule,
-    udp_protocol_ports,
 )
 from hydra.plugins.antidpi.runtime import (
-    AWG_NOISY_DEBUG_FUNCTIONS,
-    AWG_REJECTION_DEBUG_FUNCTIONS,
+    AWG_DEBUG_FUNCTIONS,
     AntiDPIRuntime,
     RuntimePaths,
 )
@@ -87,7 +67,6 @@ from hydra.plugins.context import PluginStateAccess
 from hydra.utils.net import host_ip_addresses
 
 STATE_FILE = Path("/var/lib/hydra/antidpi.json")
-LOG_FILE = Path("/var/log/caddy-l4/antidpi.jsonl")
 SCRIPT_FILE = Path("/usr/local/bin/hydra-antidpi.py")
 SERVICE_FILE = Path("/etc/systemd/system/hydra-antidpi.service")
 AWG_DEBUG_SERVICE = Path(
@@ -99,6 +78,7 @@ AWG_DEBUG_PATHS = (
 )
 PROJECT_ROOT = project_root(Path(__file__).resolve().parents[3])
 LOCK_FILE = STATE_FILE.with_suffix(".lock")
+CURSOR_FILE = STATE_FILE.with_suffix(".cursor")
 
 SecurityNotifier = Callable[..., bool]
 BanAddressProvider = Callable[[], Iterable[str]]
@@ -156,20 +136,17 @@ def prune_runtime_state(data: dict, *, now: float | None = None) -> None:
     )
 
 
-_scan_rule = scan_rule
-_udp_probe_rule = udp_probe_rule
-_mieru_probe_rule = mieru_probe_rule
-
-
 class _StableAntiDPIRuntime(AntiDPIRuntime):
     def _service_unit(self) -> str:
         executable = python_executable(self.paths.project_root)
         lines = super()._service_unit().splitlines()
-        return "\n".join(
-            f"ExecStart={executable} {self.paths.script}"
-            if line.startswith("ExecStart=") else line
-            for line in lines
-        ) + "\n"
+        return (
+            "\n".join(
+                f"ExecStart={executable} {self.paths.script}" if line.startswith("ExecStart=") else line
+                for line in lines
+            )
+            + "\n"
+        )
 
 
 class AntiDPIPlugin(
@@ -184,10 +161,7 @@ class AntiDPIPlugin(
     last_error = ""
     meta = PluginMeta(
         name="antidpi",
-        description=(
-            "Анти-DPI: поведенческое обнаружение зондов на всех "
-            "протоколах и Caddy L4"
-        ),
+        description=("AntiScan: доказанные отказы протоколов и сканы сайтов-заглушек"),
         category=PluginCategory.SECURITY,
         version="1.0.0",
         central_apply=False,
@@ -197,11 +171,12 @@ class AntiDPIPlugin(
             "remove_whitelist",
             "unban_address",
         ),
-        queries=("management_snapshot", "recent_logs"),
+        queries=("management_snapshot", "recent_logs", "address_details"),
         actions=(
             "capture_external_tests",
             "manual_ban",
             "run_selftest",
+            "sync_runtime",
             "unban",
         ),
         backup_resources=(
@@ -219,9 +194,9 @@ class AntiDPIPlugin(
     ) -> None:
         self._notify_security_event = notifier or _notifications_disabled
         self._honeypot_bans = honeypot_bans or tuple
-        self._security_context = (
-            security_context or _security_context_disabled
-        )
+        self._security_context = security_context or _security_context_disabled
+        self._init_notification_delivery()
+        self._thread_state_lock = threading.RLock()
 
     def bind_security_adapters(
         self,
@@ -279,35 +254,18 @@ class AntiDPIPlugin(
     def _runtime(self) -> AntiDPIRuntime:
         return _StableAntiDPIRuntime(
             run=self._command,
-            host=self._host_command(),
+            host=self._host_command(),  # HostBackend satisfies HostCommands
             fail=self._fail,
             paths=self._runtime_paths(),
         )
-
-    def observe_event(
-        self,
-        ip: str,
-        event: dict,
-        *,
-        now: float | None = None,
-    ) -> bool:
-        """Treat short unknown-SNI TLS failures as compatibility telemetry."""
-        normalized_event = dict(event) if isinstance(event, dict) else {}
-        _, signals = score_event(normalized_event)
-        if signals and set(signals) <= {"unknown_sni", "handshake_failure"}:
-            normalized_event["ban_eligible"] = False
-            normalized_event["policy"] = (
-                "alert-only / TLS compatibility or latency probe"
-            )
-        return super().observe_event(ip, normalized_event, now=now)
 
     @staticmethod
     def _host_command():
         return HOST
 
     @staticmethod
-    def _command(command: list[str], **options: object):
-        return _run(command, **options)
+    def _command(command: list[str], *, text: bool = False, timeout: int = 20):
+        return _run(command, text=text, timeout=timeout)
 
     @staticmethod
     def _clock() -> float:
@@ -325,9 +283,10 @@ class AntiDPIPlugin(
     def _state_store() -> AntiDPIStateStore:
         return AntiDPIStateStore(STATE_FILE)
 
-    @staticmethod
-    def _state_lock():
-        return lock_state_file(STATE_FILE)
+    @contextmanager
+    def _state_lock(self):
+        with self._thread_state_lock, lock_state_file(STATE_FILE):
+            yield
 
     @staticmethod
     def _is_whitelisted(

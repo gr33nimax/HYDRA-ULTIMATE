@@ -1,804 +1,435 @@
+"""End-to-end contract for the AntiScan detector.
+
+The detector has exactly two inputs that can ban: a protocol-owned reject and a
+decoy scanner path.  Everything else must leave no trace — no state, no
+firewall call, no Telegram message.  These tests encode that, and they encode
+what must survive: the ban lifecycle, the whitelist, and state compatibility.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hydra.plugins.antidpi.model import ALERT_THRESHOLD, BAN_THRESHOLD
-from hydra.plugins.antidpi.plugin import (
-    AntiDPIPlugin,
-    active_bans,
-    ban_duration,
-    expire_bans,
-    format_score,
-    udp_protocol_ports,
-    _udp_probe_rule,
-    _mieru_probe_rule,
-    _scan_rule,
-    decayed_score,
-    prune_runtime_state,
-    normalize_caddy_record,
-    normalize_decoy_record,
-    normalize_naive_decoy_record,
-    normalize_trusttunnel_record,
-    score_event,
+from hydra.core.state_models import AppState
+from hydra.plugins.antidpi.detection import (
+    evidence_problem,
+    is_enforcement_evidence,
 )
-from hydra.core.state import AppState, PluginState
-from hydra.plugins.base import HealthResult
+from hydra.plugins.antidpi.plugin import AntiDPIPlugin
+
+FIXTURES = Path(__file__).parent / "fixtures" / "antidpi"
+NOW = 1_800_000_000.0
+SNELL_IP = "203.0.113.44"
+DECOY_IP = "203.0.113.7"
 
 
-def test_notification_score_does_not_round_up_to_the_ban_threshold():
-    assert format_score(7.96) == "7.96/8.00"
-    assert format_score(8) == "8.00/8.00"
+def _accepted():
+    return MagicMock(returncode=0, stdout="", stderr="")
 
 
-def test_disable_removes_enforcement_and_all_telemetry_rules():
-    plugin = AntiDPIPlugin()
-    with (
-        patch("hydra.plugins.antidpi.plugin._run", return_value=MagicMock(returncode=0)),
-        patch.object(plugin, "_sync_awg_debug", return_value=True),
-        patch.object(plugin, "_remove_rules", return_value=True) as enforcement,
-        patch.object(plugin, "_remove_scan_rules", return_value=False) as scan,
-        patch.object(plugin, "_remove_udp_probe_rules", return_value=True) as udp,
-        patch.object(plugin, "_remove_mieru_probe_rules", return_value=True) as mieru,
-    ):
-        with pytest.raises(RuntimeError, match="firewall rules"):
-            plugin.on_disable(AppState())
+def _snell_event() -> dict:
+    """The event the deployed Snell parser produces for a real reject."""
+    from hydra.plugins.antidpi.adapters import parse_protocol_line
 
-    enforcement.assert_called_once_with()
-    scan.assert_called_once_with()
-    udp.assert_called_once_with()
-    mieru.assert_called_once_with()
-
-
-def test_enabled_udp_protocol_ports_are_discovered():
-    state = AppState(protocols={
-        "hysteria2": PluginState(enabled=True, port=8443, config={}),
-        "amneziawg": PluginState(enabled=True, config={
-            "profiles": {"desktop": {"port": 51820}, "mobile": {"port": 51821}},
-        }),
-        "wdtt": PluginState(enabled=True, config={"dtls_port": 56000}),
-        "naive": PluginState(enabled=True, config={"network": "tcp"}),
-    })
-    assert udp_protocol_ports(state) == {
-        8443: "hysteria2", 51820: "amneziawg",
-        51821: "amneziawg", 56000: "wdtt",
-    }
-
-
-def test_state_aware_health_uses_supplied_mieru_state_without_reload():
-    plugin = AntiDPIPlugin()
-    state = AppState(
-        protocols={"mieru": PluginState(enabled=True)},
+    line = next(
+        line
+        for line in (FIXTURES / "snell-cipher-auth-failure.txt").read_text(encoding="utf-8").splitlines()
+        if SNELL_IP in line
     )
-    expected = HealthResult(True)
+    match = parse_protocol_line("sing-box", line)
+    assert match is not None, line
+    address, event = match
+    assert address == SNELL_IP
+    return event
 
+
+def _decoy_event() -> dict:
+    from hydra.plugins.antidpi.normalization import normalize_decoy_record
+
+    record = next(
+        json.loads(line)
+        for line in (FIXTURES / "decoy-scanner-paths.jsonl").read_text(encoding="utf-8").splitlines()
+        if DECOY_IP in line
+    )
+    match = normalize_decoy_record(record)
+    assert match is not None, record
+    address, event = match
+    assert address == DECOY_IP
+    return event
+
+
+@pytest.fixture
+def wired(tmp_path):
+    """Plugin whose state file and firewall runner are isolated per test.
+
+    Yields the *patch mock* rather than its return value: ``assert
+    returned_value.called`` would be vacuously false, because a return value is
+    never itself called.
+    """
+    state_file = tmp_path / "antidpi.json"
     with (
-        patch.object(
-            plugin,
-            "_healthcheck",
-            return_value=expected,
-        ) as healthcheck,
+        patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file),
+        patch(
+            "hydra.plugins.antidpi.plugin._run",
+            return_value=_accepted(),
+        ) as runner,
     ):
-        assert plugin.health_result(state) is expected
-
-    healthcheck.assert_called_once_with(mieru_enabled=True)
+        yield state_file, runner
 
 
-def test_invalid_udp_ports_are_ignored_instead_of_breaking_rule_sync():
-    state = AppState(protocols={
-        "hysteria2": PluginState(enabled=True, config={"port": "invalid"}),
-        "amneziawg": PluginState(enabled=True, config={
-            "profiles": {"bad": {"port": 70000}, "good": {"port": "51820"}},
-        }),
-    })
-    assert udp_protocol_ports(state) == {51820: "amneziawg"}
+# --- the two allowed inputs ------------------------------------------------
 
 
-def test_shared_quic_port_is_not_misattributed_to_one_protocol():
-    state = AppState(protocols={
-        "naive": PluginState(enabled=True, config={"network": "both"}),
-        "trusttunnel": PluginState(enabled=True, config={"transport": "quic"}),
-    })
-    assert udp_protocol_ports(state) == {443: "naive/trusttunnel"}
+def test_snell_reject_no_longer_bans(wired):
+    """A Snell auth failure is not proof of hostility: credentials go stale.
 
-
-def test_udp_probe_firewall_rule_is_log_only_and_rate_limited():
-    rule = _udp_probe_rule("iptables", 8443)
-    assert rule[:4] == ["-p", "udp", "--dport", "8443"]
-    assert "--ctstate" in rule and "NEW" in rule
-    assert "HYDRA_UDP_PROBE " in rule
-    assert "DROP" not in rule
-
-
-def test_mieru_probe_rule_requires_established_low_volume_close_and_never_drops():
-    rule = _mieru_probe_rule("iptables", "FIN")
-    assert rule[:4] == ["-p", "tcp", "--dport", "2012:2022"]
-    assert "ESTABLISHED" in rule
-    assert "--connbytes" in rule and "1:1024" in rule
-    assert "HYDRA_MIERU_SHORT " in rule
-    assert "DROP" not in rule
-
-
-def test_obsolete_udp_probe_is_ignored_without_alert_or_score(tmp_path):
+    The parser still recognises the record (see ``test_antidpi_adapters``), but
+    the record must not reach the firewall, state or Telegram while Snell is
+    absent from the enforcement allowlist.
+    """
+    _state_file, runner = wired
     notify = MagicMock(return_value=True)
     plugin = AntiDPIPlugin(notifier=notify)
-    state_file = tmp_path / "udp-alert-only.json"
-    event = {
-        "protocol": "hysteria2", "kind": "udp_probe",
-        "source": "kernel-udp-probe", "ban_eligible": False,
-    }
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run") as firewall:
-        assert plugin.observe_event("198.51.100.40", event, now=1000) is False
-        assert plugin.observe_event("198.51.100.40", event, now=1001) is False
-        assert plugin.observe_event("198.51.100.40", event, now=1002) is False
-    firewall.assert_not_called()
-    notify.assert_not_called()
-    assert plugin._load_state().get("scores", {}) == {}
+    event = _snell_event()
+
+    banned = plugin.observe_event(SNELL_IP, event, now=NOW)
+
+    assert evidence_problem(event) != ""
+    assert is_enforcement_evidence(event) is False
+    assert banned is False
+    assert SNELL_IP not in plugin._load_state().get("banned", {})
+    assert runner.call_count == 0
+    plugin._drain_notifications()
+    assert notify.call_count == 0
 
 
-def test_udp_probe_sync_removes_legacy_rules_instead_of_recreating_them():
+def test_a_snell_reject_still_advances_the_journal_cursor(wired):
+    """A discarded record must not be replayed forever from the journal."""
+    _state_file, _runner = wired
     plugin = AntiDPIPlugin()
-    with patch.object(plugin, "_remove_udp_probe_rules", return_value=True) as remove:
-        assert plugin.sync_udp_probe_rules(AppState()) is True
-    remove.assert_called_once_with()
+
+    plugin.observe_event(
+        SNELL_IP,
+        {**_snell_event(), "_journal_cursor": "cursor-1"},
+        now=NOW,
+    )
+
+    assert plugin.journal_cursor() == "cursor-1"
+    assert SNELL_IP not in plugin._load_state().get("banned", {})
 
 
-def test_unverified_udp_score_cannot_preload_a_later_verified_ban(tmp_path):
-    plugin = AntiDPIPlugin(notifier=MagicMock(return_value=True))
-    state_file = tmp_path / "separate-verified-score.json"
-    udp = {
-        "protocol": "amneziawg", "kind": "udp_probe",
-        "source": "native-udp", "ban_eligible": False,
-    }
-    verified = {
-        "protocol": "tls", "kind": "auth_failure", "source": "journal",
-    }
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run") as firewall:
-        plugin.observe_event("198.51.100.41", udp, now=1000)
-        plugin.observe_event("198.51.100.41", udp, now=1001)
-        assert plugin.observe_event("198.51.100.41", verified, now=1002) is False
-        state = plugin._load_state()
-    firewall.assert_not_called()
-    entry = state["scores"]["198.51.100.41"]
-    assert entry["score"] >= 8
-    assert entry["verified_score"] < 8
+def test_snell_is_absent_from_the_enforcement_allowlist():
+    """Snell stays out until tag ownership can be proven (design D-C).
+
+    The parser binds whatever tag the core printed and has no access to desired
+    state, so it cannot tell a current listener from a retired one. Returning
+    Snell to this allowlist without a tag-ownership check in the journal
+    normalizer re-opens the false-positive ban this change removed.
+    """
+    from hydra.plugins.antidpi.detection import PROTOCOL_REJECT_RULES
+
+    assert "snell" not in PROTOCOL_REJECT_RULES
 
 
-def test_single_port_tcp_burst_alerts_but_does_not_ban(tmp_path):
+def test_the_parser_still_recognises_the_record_as_a_diagnostic():
+    """Demoting the parser must not blind the capture pipeline."""
+    from hydra.plugins.antidpi.adapters import parse_protocol_line
+
+    line = next(
+        line
+        for line in (FIXTURES / "snell-cipher-auth-failure.txt").read_text(encoding="utf-8").splitlines()
+        if SNELL_IP in line
+    )
+
+    match = parse_protocol_line("sing-box", line)
+
+    assert match is not None, "the fixture must keep exercising the parser"
+    address, event = match
+    assert address == SNELL_IP
+    assert event["reason"] == "record_auth_failed"
+
+
+def test_proven_decoy_scan_bans(wired):
+    _state_file, _runner = wired
+    plugin = AntiDPIPlugin()
+
+    assert plugin.observe_event(DECOY_IP, _decoy_event(), now=NOW) is True
+
+
+# --- everything else is silent --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"kind": "unknown_sni", "protocol": "tls", "handshake_ok": False},
+        {"kind": "handshake_failure", "protocol": "tls", "handshake_ok": False},
+        {"kind": "malformed_tls", "protocol": "tls", "sni_known": False},
+        {"kind": "port_scan", "protocol": "tcp", "connections_10s": 12},
+        {"kind": "udp_probe", "protocol": "udp", "destination_port": 443},
+        {"kind": "low_volume_session", "protocol": "mieru"},
+        {"kind": "auth_failure", "protocol": "vless"},
+        {"kind": "handshake_failure", "protocol": "anytls", "handshake_ok": False},
+        {
+            "kind": "protocol_reject",
+            "protocol": "hysteria2",
+            "reason": "x",
+            "source": "journal",
+            "attribution": "direct",
+        },
+        {
+            "kind": "protocol_reject",
+            "protocol": "snell",
+            "reason": "record_auth_failed",
+            "source": "journal",
+            "attribution": "unique-recent-source",
+        },
+        {
+            "kind": "decoy_scan",
+            "protocol": "https",
+            "reason": "scanner_path",
+            "source": "kernel-firewall",
+            "attribution": "direct",
+        },
+        {"kind": "anomaly", "protocol": "L4"},
+    ],
+)
+def test_non_evidence_leaves_no_trace(wired, event):
+    """The five live noise classes plus every removed signal kind."""
+    state_file, runner = wired
     notify = MagicMock(return_value=True)
     plugin = AntiDPIPlugin(notifier=notify)
-    state_file = tmp_path / "verified-tcp-scan.json"
-    event = {
-        "protocol": "tcp", "kind": "port_scan",
-        "source": "kernel-firewall", "connections_10s": 12,
-    }
-    result = MagicMock(returncode=0, stdout="", stderr="")
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run", return_value=result):
-        assert plugin.observe_event("198.51.100.45", event, now=1000) is False
-        assert plugin.observe_event("198.51.100.45", event, now=1001) is False
-        assert plugin.observe_event("198.51.100.45", event, now=1002) is False
-    assert notify.call_count == 1
-    component, action, fields = notify.call_args.args[:3]
-    assert (component, action) == ("AntiDPI", "ALERT")
-    assert ("IP", "198.51.100.45") in fields
+
+    banned = plugin.observe_event("198.51.100.9", dict(event), now=NOW)
+
+    assert banned is False
+    assert runner.call_count == 0
+    plugin._drain_notifications()
+    assert notify.call_count == 0
+    state = plugin._load_state()
+    assert state.get("banned", {}) == {}
+    assert state.get("history", []) == []
 
 
-def test_alert_cooldown_is_scoped_per_protocol(tmp_path):
-    notify = MagicMock(return_value=True)
-    plugin = AntiDPIPlugin(notifier=notify)
-    state_file = tmp_path / "protocol-alert-cooldown.json"
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file):
-        for protocol in ("hysteria2", "amneziawg"):
-            event = {
-                "protocol": protocol, "kind": "udp_probe",
-                "source": "native-udp", "ban_eligible": False,
+def test_evidence_allowlist_rejects_every_unknown_combination():
+    """A protocol or reason that was never proven cannot enforce.
+
+    Snell is in this list on purpose: the record is real, but it cannot tell a
+    hostile probe from stale credentials, so it is not enforcement evidence.
+    """
+    assert (
+        evidence_problem(
+            {
+                "kind": "protocol_reject",
+                "protocol": "snell",
+                "reason": "record_auth_failed",
+                "source": "journal",
+                "attribution": "direct",
             }
-            # Repeats of one signal saturate, so a single-signal probe needs a
-            # third event to reach the alert threshold.
-            for offset in range(3):
-                plugin.observe_event(
-                    "198.51.100.42",
-                    event,
-                    now=1000 + offset,
-                )
-    assert notify.call_count == 2
+        )
+        != ""
+    )
+    assert is_enforcement_evidence(
+        {
+            "kind": "decoy_scan",
+            "protocol": "https",
+            "reason": "scanner_path",
+            "source": "caddy-decoy",
+            "attribution": "direct",
+        }
+    )
+    for protocol in ("mieru", "wdtt", "amneziawg", "shadowtls", "naive", "trusttunnel", "vless", "anytls"):
+        assert not is_enforcement_evidence(
+            {
+                "kind": "protocol_reject",
+                "protocol": protocol,
+                "reason": "record_auth_failed",
+                "source": "journal",
+                "attribution": "direct",
+            }
+        ), protocol
 
 
-def test_observed_score_is_capped_for_sustained_unverified_udp(tmp_path):
-    plugin = AntiDPIPlugin(notifier=MagicMock(return_value=True))
-    state_file = tmp_path / "bounded-observed-score.json"
-    event = {
-        "protocol": "hysteria2", "kind": "udp_probe",
-        "source": "native-udp", "ban_eligible": False,
-    }
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file):
-        for offset in range(100):
-            plugin.observe_event("198.51.100.43", event, now=1000 + offset)
+# --- ban lifecycle is preserved -------------------------------------------
+
+
+def test_active_ban_does_not_notify_twice(wired):
+    _state_file, _runner = wired
+    notify = MagicMock(return_value=True)
+    plugin = AntiDPIPlugin(notifier=notify)
+
+    plugin.observe_event(DECOY_IP, _decoy_event(), now=NOW)
+    plugin._drain_notifications()
+    plugin.observe_event(DECOY_IP, _decoy_event(), now=NOW + 1)
+    plugin._drain_notifications()
+
+    assert notify.call_count == 1
+    assert plugin._load_state()["banned"][DECOY_IP]["offense_count"] == 1
+
+
+def test_firewall_refusal_is_never_reported_as_a_ban(tmp_path):
+    state_file = tmp_path / "antidpi.json"
+    refused = MagicMock(returncode=1, stdout="", stderr="ipset: permission denied")
+    notify = MagicMock(return_value=True)
+    with (
+        patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file),
+        patch("hydra.plugins.antidpi.plugin._run", return_value=refused),
+    ):
+        plugin = AntiDPIPlugin(notifier=notify)
+        banned = plugin.observe_event(DECOY_IP, _decoy_event(), now=NOW)
         state = plugin._load_state()
-    assert state["scores"]["198.51.100.43"]["score"] == 16
+
+    assert banned is False
+    assert state["banned"] == {}
+    assert state["ban_failures"]["count"] == 1
 
 
-def test_single_transient_failure_is_not_a_high_confidence_signal():
-    score, signals = score_event({"protocol": "tls", "handshake_ok": False})
-    assert score == 2
-    assert signals == ("handshake_failure",)
+def test_second_offense_uses_the_next_duration_step(wired):
+    _state_file, _runner = wired
+    plugin = AntiDPIPlugin()
+
+    plugin.observe_event(DECOY_IP, _decoy_event(), now=NOW)
+    first = plugin._load_state()["banned"][DECOY_IP]["duration"]
+    plugin.unban(DECOY_IP)
+    plugin.observe_event(DECOY_IP, _decoy_event(), now=NOW + 10)
+    second = plugin._load_state()["banned"][DECOY_IP]["duration"]
+
+    assert second > first
 
 
-def test_probe_combination_scores_above_ban_threshold():
-    score, signals = score_event({
-        "kind": "bad_client_hello", "sni_known": False,
-        "protocol": "tls", "handshake_ok": False,
-        "connections_10s": 20,
-    })
-    assert score >= 8
-    assert {"malformed_tls", "unknown_sni", "handshake_failure", "connection_burst"} <= set(signals)
+def test_whitelisted_address_is_never_banned(wired):
+    state_file, runner = wired
+    plugin = AntiDPIPlugin()
+    state = plugin._load_state()
+    state["whitelist"] = ["203.0.113.0/24"]
+    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file):
+        plugin._state_store().save(state)
+        assert plugin.observe_event(DECOY_IP, _decoy_event(), now=NOW) is False
+        assert plugin._load_state()["banned"] == {}
+    assert runner.call_count == 0
 
 
-def test_caddy_error_is_normalized_to_an_ip_event():
-    result = normalize_caddy_record({
-        "logger": "layer4", "remote": "203.0.113.8:41412",
-        "msg": "no certificate available for unknown SNI",
-    })
-    assert result == ("203.0.113.8", {"protocol": "tls", "handshake_ok": False, "kind": "unknown_sni", "sni_known": False})
+def test_manual_ban_is_permanent_and_honest(wired):
+    _state_file, _runner = wired
+    plugin = AntiDPIPlugin()
+
+    result = plugin.manual_ban("198.51.100.77", source="tui")
+
+    assert result.get("ok") is True
+    assert plugin._load_state()["banned"]["198.51.100.77"]["permanent"] is True
 
 
-def test_score_decays_over_time():
-    assert decayed_score(8, 300) == 4
-    assert decayed_score(8, 900) == 1
+def test_loopback_and_private_peers_are_rejected_before_state(wired):
+    state_file, runner = wired
+    plugin = AntiDPIPlugin()
+
+    for address in ("127.0.0.1", "10.1.2.3", "192.168.1.5", "not-an-ip"):
+        assert plugin.observe_event(address, _decoy_event(), now=NOW) is False
+
+    assert runner.call_count == 0
+    assert plugin._load_state().get("banned", {}) == {}
 
 
-def test_active_decoy_probe_is_evidence_but_normal_page_is_not():
-    request = {"remote_ip": "203.0.113.10", "method": "GET", "uri": "/.env"}
-    assert normalize_decoy_record({"request": request}) == (
-        "203.0.113.10", {"protocol": "https", "kind": "active_decoy_probe", "source": "caddy-decoy"},
-    )
-    request["uri"] = "/index.html"
-    assert normalize_decoy_record({"request": request}) is None
+# --- compatibility ---------------------------------------------------------
 
 
-def test_naive_decoy_ignores_legitimate_connect_but_detects_scanner_path():
-    connect = {"request": {
-        "remote_ip": "203.0.113.10", "method": "CONNECT", "uri": "example.com:443",
-    }}
-    assert normalize_naive_decoy_record(connect) is None
-    failed = {"status": 407, "request": {
-        "remote_ip": "203.0.113.10", "method": "CONNECT", "uri": "example.com:443",
-    }}
-    assert normalize_naive_decoy_record(failed) == (
-        "203.0.113.10",
-        {"protocol": "naive", "kind": "auth_failure", "source": "caddy-naive"},
-    )
-    scanner = {"status": 407, "request": {
-        "remote_ip": "203.0.113.10", "method": "GET", "uri": "/.env",
-    }}
-    assert normalize_naive_decoy_record(scanner)[1]["kind"] == "active_decoy_probe"
-    probe = {"request": {
-        "remote_ip": "203.0.113.10", "method": "GET", "uri": "/.env?scan=1",
-    }}
-    assert normalize_naive_decoy_record(probe) == (
-        "203.0.113.10",
-        {"protocol": "https", "kind": "active_decoy_probe", "source": "caddy-naive-decoy"},
-    )
-
-
-def test_naive_real_invalid_user_marker_overrides_redirect_status():
-    record = {
-        "status": 308,
-        "request": {
-            "remote_ip": "203.0.113.20", "method": "CONNECT",
-            "user_id": "invalid:tester", "uri": "cp.cloudflare.com:80",
+def test_legacy_score_state_is_readable_but_never_decides(wired):
+    """An upgraded host keeps its history; old evidence cannot ban again."""
+    state_file, runner = wired
+    plugin = AntiDPIPlugin()
+    legacy = {
+        "scores": {
+            "198.51.100.5": {
+                "score": 99.0,
+                "verified_score": 99.0,
+                "signals": ["unknown_sni", "handshake_failure"],
+                "families": {"tls_negotiation": 1.0},
+            },
         },
+        "banned": {},
+        "history": [],
     }
-    assert normalize_naive_decoy_record(record) == (
-        "203.0.113.20",
-        {"protocol": "naive", "kind": "auth_failure", "source": "caddy-naive"},
+    plugin._state_store().save(legacy)
+
+    banned = plugin.observe_event("198.51.100.5", {"kind": "unknown_sni", "protocol": "tls"}, now=NOW)
+
+    assert banned is False
+    assert runner.call_count == 0
+    assert plugin._load_state()["banned"] == {}
+
+
+def test_existing_active_ban_survives_a_reload(wired):
+    _state_file, _runner = wired
+    plugin = AntiDPIPlugin()
+    plugin.manual_ban("198.51.100.88", source="tui")
+
+    assert "198.51.100.88" in AntiDPIPlugin()._load_state()["banned"]
+
+
+def test_plugin_identity_and_capabilities_stay_stable():
+    """The machine key, service and management surface must not drift."""
+    from hydra.plugins.antidpi.plugin import AntidpiPlugin
+
+    assert AntiDPIPlugin.meta.name == "antidpi"
+    assert AntidpiPlugin is AntiDPIPlugin
+    assert AntiDPIPlugin.meta.commands == (
+        "add_whitelist",
+        "remove_whitelist",
+        "unban_address",
     )
 
 
-def test_naive_quic_auth_failure_keeps_udp_relay_source_port():
-    record = {
-        "status": 308,
-        "request": {
-            "remote_ip": "127.0.0.1", "remote_port": "32145",
-            "method": "CONNECT", "user_id": "invalid:tester",
-        },
-    }
-    assert normalize_naive_decoy_record(record) == (
-        "127.0.0.1",
-        {
-            "protocol": "naive", "kind": "auth_failure",
-            "source": "caddy-naive", "peer_port": 32145,
-        },
-    )
+# --- service sandbox -------------------------------------------------------
 
 
-def test_trusttunnel_dedicated_log_recognizes_failed_connect():
-    record = {
-        "status": 502,
-        "request": {
-            "remote_ip": "203.0.113.21", "method": "CONNECT",
-            "uri": "example.com:443",
-        },
-    }
-    assert normalize_trusttunnel_record(record) == (
-        "203.0.113.21",
-        {
-            "protocol": "trusttunnel", "kind": "auth_failure",
-            "source": "caddy-trusttunnel",
-        },
-    )
+def test_service_unit_grants_the_capabilities_iptables_needs(tmp_path):
+    """The ipset matcher needs CAP_NET_RAW, not only CAP_NET_ADMIN.
 
-
-def test_firewall_rule_insert_has_a_valid_iptables_operation():
-    calls = []
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        return MagicMock(returncode=1 if "-C" in command else 0, stdout="", stderr="")
-
-    with patch("hydra.plugins.antidpi.plugin._run", side_effect=fake_run):
-        assert AntiDPIPlugin()._ensure_rules() is True
-
-    inserts = [command for command in calls if "-I" in command]
-    assert inserts[0][:4] == ["iptables", "-I", "INPUT", "1"]
-    assert inserts[1][:4] == ["ip6tables", "-I", "INPUT", "1"]
-
-
-def test_antidpi_service_allows_outbound_telegram_sockets(tmp_path):
+    ``iptables`` opens a netlink socket while it parses ``-m set
+    --match-set``.  Under the service sandbox the earlier unit granted only
+    CAP_NET_ADMIN, so every ``-C``/``-I`` answered "Can't open socket to
+    ipset": reconciliation reported a failed step on the live host and a lost
+    DROP rule could never have been re-installed.
+    """
     script = tmp_path / "hydra-antidpi.py"
     service = tmp_path / "hydra-antidpi.service"
-    with patch("hydra.plugins.antidpi.plugin.SCRIPT_FILE", script), \
-         patch("hydra.plugins.antidpi.plugin.SERVICE_FILE", service):
+    with (
+        patch("hydra.plugins.antidpi.plugin.SCRIPT_FILE", script),
+        patch("hydra.plugins.antidpi.plugin.SERVICE_FILE", service),
+    ):
         AntiDPIPlugin()._write_service()
 
     unit = service.read_text(encoding="utf-8")
+    assert "CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW" in unit
+    assert "AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW" in unit
+    # iptables serializes host-wide updates through /run/xtables.lock.
+    assert "ReadWritePaths=/var/lib/hydra /var/log/caddy-l4 /run" in unit
     assert "RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6" in unit
 
 
-def test_awg_debug_disables_junk_parser_and_keeps_rejection_paths(tmp_path):
+def test_reconciliation_keeps_the_underlying_step_cause(wired):
+    """A bare step label hid why iptables refused; the cause must survive."""
     plugin = AntiDPIPlugin()
-    control = tmp_path / "dynamic_debug_control"
-    service = tmp_path / "hydra-awg-antidpi-debug.service"
-    control.touch()
-    with patch("hydra.plugins.antidpi.plugin.AWG_DEBUG_PATHS", (control,)), \
-         patch("hydra.plugins.antidpi.plugin.AWG_DEBUG_SERVICE", service), \
-         patch("hydra.plugins.antidpi.plugin._run", return_value=MagicMock(returncode=0)):
-        assert plugin._sync_awg_debug(True) is True
-
-    control_text = control.read_text(encoding="utf-8")
-    service_text = service.read_text(encoding="utf-8")
-    assert "prepare_awg_message -p" in control_text
-    assert "prepare_awg_message +p" not in control_text
-    assert "wg_receive_handshake_packet +p" in control_text
-    assert "prepare_awg_message -p" in service_text
-    assert "wg_receive_handshake_packet +p" in service_text
-
-
-def test_ban_history_is_created_once_and_legacy_signals_are_safe(tmp_path):
-    plugin = AntiDPIPlugin()
-    state_file = tmp_path / "antidpi.json"
-    event = {"kind": "malformed_tls", "protocol": "tls", "handshake_ok": False, "sni_known": False}
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run", return_value=MagicMock(returncode=0, stdout="", stderr="")):
-        assert plugin.observe_event("203.0.113.20", event, now=1000) is True
-        assert plugin.observe_event("203.0.113.20", event, now=1001) is True
-        data = plugin._load_state()
-    assert len(data["history"]) == 1
-    assert data["history"][0]["ip"] == "203.0.113.20"
-    assert data["ban_counts"]["203.0.113.20"] == 1
-    assert data["banned"]["203.0.113.20"]["duration"] == 600
-
-    from hydra.plugins.antidpi.manager import _signals
-    assert _signals({"signals": None}) == "—"
-    assert _signals({"signals": "legacy"}) == "legacy"
-
-
-def test_unknown_sni_handshake_probe_is_alert_only(tmp_path):
-    plugin = AntiDPIPlugin()
-    state_file = tmp_path / "antidpi-karing.json"
-    event = {
-        "kind": "handshake_failure",
-        "protocol": "tls",
-        "handshake_ok": False,
-        "sni_known": False,
-    }
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run") as firewall:
-        assert plugin.observe_event("203.0.113.50", event, now=1000) is False
-        assert plugin.observe_event("203.0.113.50", event, now=1001) is False
-        assert plugin.observe_event("203.0.113.50", event, now=1002) is False
-        data = plugin._load_state()
-    entry = data["scores"]["203.0.113.50"]
-    # The probe still crosses the alert threshold, but repeats of one evidence
-    # family saturate instead of inflating towards the ban threshold.
-    assert entry["score"] >= ALERT_THRESHOLD
-    assert entry["score"] < BAN_THRESHOLD
-    assert entry["verified_score"] == 0
-    assert data.get("banned", {}) == {}
-    firewall.assert_not_called()
-
-
-def test_progressive_ban_durations(tmp_path):
-    from hydra.plugins.antidpi.plugin import get_ban_duration
-    assert get_ban_duration(1) == 600
-    assert get_ban_duration(2) == 3600
-    assert get_ban_duration(3) == 86400
-    assert get_ban_duration(4) == 604800
-    assert get_ban_duration(10) == 604800
-
-    plugin = AntiDPIPlugin()
-    state_file = tmp_path / "antidpi_progressive.json"
-    event = {"kind": "malformed_tls", "protocol": "tls", "handshake_ok": False, "sni_known": False}
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run", return_value=MagicMock(returncode=0, stdout="", stderr="")):
-        # First ban -> 600s
-        assert plugin.observe_event("198.51.100.5", event, now=1000) is True
-        data = plugin._load_state()
-        assert data["banned"]["198.51.100.5"]["duration"] == 600
-        assert data["banned"]["198.51.100.5"]["offense_count"] == 1
-
-        # Unban
-        plugin.unban("198.51.100.5")
-
-        # Second ban -> 3600s
-        assert plugin.observe_event("198.51.100.5", event, now=2000) is True
-        data = plugin._load_state()
-        assert data["banned"]["198.51.100.5"]["duration"] == 3600
-        assert data["banned"]["198.51.100.5"]["offense_count"] == 2
-
-
-def test_manual_ban_is_permanent_and_idempotent(tmp_path):
-    plugin = AntiDPIPlugin()
-    state_file = tmp_path / "antidpi-manual.json"
-    result = MagicMock(returncode=0, stdout="", stderr="")
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch.object(plugin, "_ensure_sets", return_value=True), \
-         patch.object(plugin, "_ensure_rules", return_value=True), \
-         patch("hydra.plugins.antidpi.plugin._run", return_value=result) as firewall:
-        first = plugin.manual_ban("198.51.100.77", source="telegram-admin")
-        second = plugin.manual_ban("198.51.100.77", source="telegram-admin")
-        data = plugin._load_state()
-
-    assert first["ok"] is True
-    assert first["already_active"] is False
-    assert first["duration"] == 0
-    assert first["permanent"] is True
-    assert second["ok"] is True
-    assert second["already_active"] is True
-    assert data["ban_counts"]["198.51.100.77"] == 1
-    assert data["banned"]["198.51.100.77"]["kind"] == "manual_ban"
-    assert data["banned"]["198.51.100.77"]["source"] == "telegram-admin"
-    assert data["banned"]["198.51.100.77"]["permanent"] is True
-    assert firewall.call_args.args[0][-3:] == ["timeout", "0", "-exist"]
-    assert firewall.call_count == 1
-
-
-def test_manual_ban_promotes_active_timed_ban_to_permanent(tmp_path):
-    plugin = AntiDPIPlugin()
-    state_file = tmp_path / "antidpi-manual-promotion.json"
-    result = MagicMock(returncode=0, stdout="", stderr="")
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch.object(plugin, "_ensure_sets", return_value=True), \
-         patch.object(plugin, "_ensure_rules", return_value=True), \
-         patch("hydra.plugins.antidpi.plugin.time.time", return_value=1100), \
-         patch("hydra.plugins.antidpi.plugin._run", return_value=result) as firewall:
-        plugin._save_state({
-            "banned": {"198.51.100.78": {
-                "at": 1000, "duration": 600, "offense_count": 2,
-                "signals": ["unknown_sni"],
-            }},
-            "history": [{
-                "ip": "198.51.100.78", "at": 1000, "duration": 600,
-                "offense_count": 2, "signals": ["unknown_sni"], "status": "active",
-            }],
-            "ban_counts": {"198.51.100.78": 2},
-        })
-        promoted = plugin.manual_ban("198.51.100.78", source="telegram-admin")
-        data = plugin._load_state()
-
-    assert promoted["permanent"] is True
-    assert promoted["offense_count"] == 2
-    assert len(data["history"]) == 1
-    assert data["history"][0]["permanent"] is True
-    assert firewall.call_args.args[0][-3:] == ["timeout", "0", "-exist"]
-
-
-def test_manual_ban_rejects_invalid_and_whitelisted_addresses(tmp_path):
-    plugin = AntiDPIPlugin()
-    state_file = tmp_path / "antidpi-manual-rejected.json"
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch.object(plugin, "_ensure_sets", return_value=True), \
-         patch.object(plugin, "_ensure_rules", return_value=True), \
-         patch("hydra.plugins.antidpi.plugin._run") as firewall:
-        assert plugin.manual_ban("--help")["error"] == "invalid_ip"
-        assert plugin.manual_ban("127.0.0.1")["error"] == "whitelisted"
-    firewall.assert_not_called()
-
-
-def test_whitelisting_a_network_releases_the_bans_it_now_covers(tmp_path):
-    plugin = AntiDPIPlugin()
-    state_file = tmp_path / "antidpi-whitelist-release.json"
-    state = {
-        "banned": {
-            "198.51.100.5": {"at": 9999999000, "duration": 86400},
-            "198.51.100.200": {"at": 9999999000, "duration": 86400},
-            "203.0.113.9": {"at": 9999999000, "duration": 86400},
-            "2001:db8::5": {"at": 9999999000, "duration": 86400},
-        },
-        "scores": {"198.51.100.5": {"score": 9, "updated": 9999999000}},
-        "history": [],
-    }
-    result = MagicMock(returncode=0, stdout="", stderr="")
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run", return_value=result):
-        plugin._save_state(state)
-        assert plugin.add_whitelist(state=None, network="198.51.100.0/24") is True
-        data = plugin._load_state()
-
-    assert data["whitelist"] == ["198.51.100.0/24"]
-    assert set(data["banned"]) == {"203.0.113.9", "2001:db8::5"}
-    assert data["scores"] == {}
-
-
-def test_whitelisting_an_existing_entry_still_releases_stale_bans(tmp_path):
-    plugin = AntiDPIPlugin()
-    state_file = tmp_path / "antidpi-whitelist-existing.json"
-    state = {
-        "whitelist": ["203.0.113.0/24"],
-        "banned": {"203.0.113.9": {"at": 9999999000, "duration": 86400}},
-        "scores": {},
-        "history": [],
-    }
-    result = MagicMock(returncode=0, stdout="", stderr="")
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run", return_value=result):
-        plugin._save_state(state)
-        assert plugin.add_whitelist(state=None, network="203.0.113.0/24") is False
-        data = plugin._load_state()
-
-    assert data["whitelist"] == ["203.0.113.0/24"]
-    assert data["banned"] == {}
-
-
-def test_vps_addresses_are_automatically_whitelisted(tmp_path):
-    plugin = AntiDPIPlugin()
-    state_file = tmp_path / "antidpi-host-whitelist.json"
-    app_state = AppState()
-    app_state.network.server_ip = "203.0.113.10"
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin.host_ip_addresses", return_value=("203.0.113.10", "2001:db8::10")):
-        assert plugin.sync_host_whitelist(app_state) == ["203.0.113.10", "2001:db8::10"]
-        data = plugin._load_state()
-        assert plugin.observe_event(
-            "203.0.113.10",
-            {"kind": "port_scan", "source": "kernel-firewall", "connections_10s": 12},
-            now=1000,
-        ) is False
-
-    assert data["whitelist"] == ["203.0.113.10", "2001:db8::10"]
-    assert data.get("events", 0) == 0
-
-
-def test_normalize_tls_auth_failure():
-    from hydra.plugins.antidpi.adapters import normalize_tls_auth_failure, parse_protocol_line
-    record = {"remote": "198.51.100.99:54321", "msg": "authentication failed: invalid password"}
-    res = normalize_tls_auth_failure(record)
-    assert res is not None
-    assert res[0] == "198.51.100.99"
-    assert res[1]["kind"] == "auth_failure"
-
-    ipv6 = normalize_tls_auth_failure({"remote": "[2001:db8::99]:54321", "msg": "authentication failed"})
-    assert ipv6 is not None
-    assert ipv6[0] == "2001:db8::99"
-
-    parsed = parse_protocol_line("anytls", "2026-07-20 AnyTLS authentication failed for 198.51.100.100:1234")
-    assert parsed is not None
-    assert parsed[0] == "198.51.100.100"
-    assert parsed[1]["kind"] == "auth_failure"
-
-
-def test_whitelist_caching():
-    from hydra.plugins.antidpi.plugin import _get_whitelisted_networks
-    nets1 = _get_whitelisted_networks(["10.0.0.0/8", "192.168.1.0/24"])
-    nets2 = _get_whitelisted_networks(["10.0.0.0/8", "192.168.1.0/24"])
-    assert nets1 is nets2  # Cached object identity
-
-
-def test_signal_intersection_and_deduplication():
-    # Verify that multi-signal events deduplicate signals cleanly
-    score, signals = score_event({
-        "kind": "unknown_sni",
-        "protocol": "tls",
-        "handshake_ok": False,
-        "sni_known": False,
-    })
-    # unknown_sni (2) + handshake_failure (2) = 4, with no duplicate unknown_sni signals
-    assert score == 4
-    assert signals == ("unknown_sni", "handshake_failure")
-    assert len(signals) == len(set(signals))
-
-
-def test_auth_failure_does_not_double_count_as_handshake_failure():
-    # Normalizer for auth_failure emits an explicit kind="auth_failure" event
-    event = {
-        "protocol": "anytls",
-        "kind": "auth_failure",
-        "source": "auth_log",
-    }
-    score, signals = score_event(event)
-    assert signals == ("auth_failure",)  # НЕ ("auth_failure", "handshake_failure")
-    assert score == 3
-
-
-def test_flock_concurrency_protection(tmp_path):
-    # Verify _lock_state_file protects concurrent read-modify-write state updates
-    from hydra.plugins.antidpi.plugin import _lock_state_file
-    state_file = tmp_path / "antidpi_lock.json"
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file):
-        with _lock_state_file():
-            assert state_file.parent.exists()
-
-
-
-
-def test_empty_signal_does_not_suppress_following_unknown_sni(tmp_path):
-    plugin = AntiDPIPlugin()
-    state_file = tmp_path / "antidpi_empty_signal.json"
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file):
-        assert plugin.observe_event("198.51.100.30", {"kind": "ignored"}, now=1000) is False
-        assert plugin.observe_event(
-            "198.51.100.30",
-            {"kind": "unknown_sni", "protocol": "tls", "handshake_ok": False, "sni_known": False},
-            now=1000.1,
-        ) is False
-        assert plugin._load_state()["scores"]["198.51.100.30"]["score"] == 4
-
-
-def test_active_bans_filters_expired_and_malformed_entries():
-    data = {
-        "banned": {
-            "198.51.100.1": {"at": 1000, "duration": 600},
-            "198.51.100.2": {"at": 1000, "duration": 10},
-            "198.51.100.3": {"at": 1, "duration": 0, "permanent": True},
-            "invalid": None,
-        }
-    }
-    assert list(active_bans(data, now=1100)) == ["198.51.100.1", "198.51.100.3"]
-
-
-def test_legacy_ban_duration_and_expired_history_are_reconciled():
-    data = {
-        "banned": {
-            "198.51.100.1": {"at": 1000},
-            "198.51.100.2": {"at": 1000, "duration": 600},
-        },
-        "history": [
-            {"ip": "198.51.100.2", "at": 1000, "duration": 600, "status": "active"},
-        ],
-    }
-    assert ban_duration(data["banned"]["198.51.100.1"]) == 86400
-    assert expire_bans(data, now=1700) is True
-    assert list(data["banned"]) == ["198.51.100.1"]
-    assert data["history"][0]["status"] == "expired"
-
-
-def test_orphaned_active_history_is_reconciled():
-    data = {
-        "banned": {},
-        "history": [
-            {"ip": "45.148.10.244", "at": 1000, "duration": 600, "status": "active"},
-        ],
-    }
-    assert expire_bans(data, now=1700) is True
-    assert data["history"][0]["status"] == "expired"
-
-
-def test_scan_telemetry_rules_are_log_only_and_rate_limited():
-    for binary in ("iptables", "ip6tables"):
-        for protocol in ("tcp", "udp"):
-            rule = _scan_rule(binary, protocol)
-            assert "LOG" in rule
-            assert "DROP" not in rule
-            assert "--hashlimit-above" in rule
-            assert "hydra-antidpi-scan" in rule
-
-
-def test_correlated_multi_port_scan_is_high_confidence_signal():
-    score, signals = score_event({
-        "kind": "port_scan",
-        "protocol": "tcp",
-        "source": "kernel-firewall",
-        "connections_10s": 12,
-        "distinct_ports_60s": 4,
-    })
-    assert score >= 8
-    assert {"port_scan", "connection_burst"} <= set(signals)
-
-
-def test_event_source_and_signal_counters_are_persisted(tmp_path):
-    plugin = AntiDPIPlugin()
-    state_file = tmp_path / "antidpi_sources.json"
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run", return_value=MagicMock(returncode=0, stdout="", stderr="")):
-        results = []
-        for offset, port in enumerate((22, 80, 443, 3389)):
-            results.append(plugin.observe_event(
-                "198.51.100.44",
-                {
-                    "kind": "port_scan",
-                    "protocol": "tcp",
-                    "source": "kernel-firewall",
-                    "connections_10s": 12,
-                    "destination_port": port,
-                },
-                now=1000 + offset,
-            ))
-        data = plugin._load_state()
-    assert results == [False, False, False, True]
-    assert data["source_counts"]["kernel-firewall"] == 4
-    assert data["signal_counts"]["port_scan"] == 4
-    assert data["signal_counts"]["port_sweep"] == 1
-
-
-def test_ban_notifications_are_throttled_and_delivery_is_counted(tmp_path):
-    notify = MagicMock(return_value=True)
-    plugin = AntiDPIPlugin(notifier=notify)
-    state_file = tmp_path / "antidpi_notifications.json"
-    result = MagicMock(returncode=0, stdout="", stderr="")
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run", return_value=result):
-        assert plugin.observe_event(
-            "198.51.100.40", {"kind": "active_decoy_probe", "source": "test"}, now=1000,
-        ) is True
-        assert plugin.observe_event(
-            "198.51.100.41", {"kind": "active_decoy_probe", "source": "test"}, now=1001,
-        ) is True
-        data = plugin._load_state()
-
-    assert notify.call_count == 1
-    component, action, fields = notify.call_args.args[:3]
-    assert (component, action) == ("AntiDPI", "BAN")
-    assert ("IP", "198.51.100.40") in fields
-    assert all(label not in {"Эффект"} for label, _value in fields)
-    assert data["notification_stats"]["delivered"] == 1
-    assert data["suppressed_ban_notifications"] == 1
-
-
-def test_honeypot_owned_bans_are_removed_from_antidpi(tmp_path):
-    plugin = AntiDPIPlugin(
-        honeypot_bans=lambda: {"198.51.100.60"},
-    )
-    state_file = tmp_path / "antidpi_honeypot_duplicates.json"
-    state = {
-        "banned": {
-            "198.51.100.60": {"at": 9999999000, "duration": 86400},
-            "198.51.100.61": {"at": 9999999000, "duration": 86400},
-        },
-        "scores": {},
-        "history": [],
-    }
-    result = MagicMock(returncode=0, stdout="", stderr="")
-    with patch("hydra.plugins.antidpi.plugin.STATE_FILE", state_file), \
-         patch("hydra.plugins.antidpi.plugin._run", return_value=result):
-        plugin._save_state(state)
-        assert plugin.cleanup_honeypot_duplicates() == 1
-        remaining = plugin._load_state()["banned"]
-    assert set(remaining) == {"198.51.100.61"}
-
-
-
-def test_runtime_state_pruning_keeps_recent_entries_and_active_bans():
-    data = {
-        "banned": {"198.51.100.9": {"at": 900, "duration": 1000}},
-        "scores": {
-            "198.51.100.1": {"updated": 999},
-            "198.51.100.2": {"updated": 998},
-            "198.51.100.3": {"updated": 1},
-            "198.51.100.9": {"updated": 1},
-        },
-    }
-    with patch("hydra.plugins.antidpi.plugin.MAX_SCORE_ENTRIES", 3):
-        prune_runtime_state(data, now=1000)
-    assert set(data["scores"]) == {"198.51.100.1", "198.51.100.2", "198.51.100.9"}
+    cause = "правило iptables для hydra_antidpi: Can't open socket to ipset"
+
+    def failing_rules() -> bool:
+        plugin.last_error = cause
+        return False
+
+    with (
+        patch.object(plugin, "_ensure_sets", return_value=True),
+        patch.object(plugin, "_ensure_rules", side_effect=failing_rules),
+        patch.object(plugin, "_remove_obsolete_telemetry", return_value=True),
+        patch.object(plugin, "release_whitelisted_bans", return_value=0),
+        patch.object(plugin, "whitelisted_bans", return_value=[]),
+        patch.object(plugin, "_restore_bans", return_value=True),
+        patch.object(plugin, "record_reconciliation", return_value=True),
+    ):
+        assert plugin.reconcile_enforcement(AppState()) is False
+
+    assert "INPUT rules" in plugin.last_error
+    assert "Can't open socket to ipset" in plugin.last_error

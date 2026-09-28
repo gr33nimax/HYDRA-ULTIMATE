@@ -20,12 +20,15 @@ PUBLIC_COMMAND_IDS = {
     "backup.restore",
     "upgrade.check",
     "upgrade.migrate-state",
+    "kernel.status",
+    "kernel.switch",
     "user.list",
     "user.show",
     "user.add",
     "user.ensure-default",
     "user.rename",
     "user.set-device-limit",
+    "user.rotate-hydrabox-key",
     "user.block",
     "user.unblock",
     "user.remove",
@@ -101,7 +104,7 @@ def test_status_renderer_is_compact_and_operator_focused():
     )
 
     assert "HYDRA status" in output
-    assert "State schema" in output
+    assert "State format" in output
     assert "2 users" in output
     assert "vpn.example.com" in output
     assert "naive" in output

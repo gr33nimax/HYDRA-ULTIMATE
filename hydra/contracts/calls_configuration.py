@@ -1,0 +1,302 @@
+"""Validated Hydracore VK parasite Calls projections."""
+from __future__ import annotations
+
+import re
+from typing import Callable, Mapping, Protocol, Sequence
+
+
+CALL_MODE_VK_PARASITE = "vk_parasite"
+DEFAULT_CALL_PORT = 56002
+CALL_COUNT = 4
+DEFAULT_WORKERS = 4
+WORKER_COUNTS = (4, 8, 12, 16, 20)
+DEFAULT_PEER_READ_QUEUE_PACKETS = 512
+DEFAULT_POOL_REFRESH_INTERVAL = 86_400
+MIN_POOL_REFRESH_INTERVAL = 3_600
+MAX_POOL_REFRESH_INTERVAL = 86_400
+
+
+class CallsProtocolState(Protocol):
+    enabled: bool
+    port: int
+    config: dict
+
+
+class CallsUser(Protocol):
+    email: str
+    uuid: str
+    blocked: bool
+
+
+class CallsNetworkState(Protocol):
+    server_ip: str
+
+
+class CallsStateAccess(Protocol):
+    protocols: Mapping[str, CallsProtocolState]
+    users: Sequence[CallsUser]
+    network: CallsNetworkState
+
+
+def public_endpoint(
+    state: CallsStateAccess,
+    observed: str | Callable[[], str] = "",
+) -> str:
+    """Return the explicit Calls endpoint without borrowing a transport SNI."""
+    desired = state.protocols.get("calls")
+    configured = desired.config.get("public_endpoint", "") if desired else ""
+    fallback = (
+        observed()
+        if callable(observed) and not configured and not state.network.server_ip
+        else observed
+    )
+    endpoint = str(configured or state.network.server_ip or fallback).strip().strip("[]")
+    if not endpoint or len(endpoint) > 253 or any(char.isspace() for char in endpoint):
+        raise ValueError("Calls public_endpoint must be an IP address or DNS name")
+    if endpoint.startswith(("http://", "https://")) or "/" in endpoint or ":" in endpoint:
+        raise ValueError("Calls public_endpoint must not contain a scheme, port, or path")
+    if not re.fullmatch(r"[A-Za-z0-9.-]+", endpoint):
+        raise ValueError("Calls public_endpoint must be an IP address or DNS name")
+    return endpoint
+
+
+def call_mode(state: CallsStateAccess) -> str:
+    desired = state.protocols.get("calls")
+    value = (
+        str(desired.config.get("mode", CALL_MODE_VK_PARASITE))
+        if desired
+        else CALL_MODE_VK_PARASITE
+    )
+    if value != CALL_MODE_VK_PARASITE:
+        raise ValueError("Calls mode must be vk_parasite")
+    return value
+
+
+def peer_read_queue_packets(config: dict) -> int:
+    return _integer(
+        config,
+        "peer_read_queue_packets",
+        DEFAULT_PEER_READ_QUEUE_PACKETS,
+        16,
+        4096,
+    )
+
+
+def _integer(config: dict, name: str, default: int, minimum: int, maximum: int) -> int:
+    value = config.get(name, default)
+    if type(value) is not int or not minimum <= value <= maximum:
+        raise ValueError(f"Calls {name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _duration(config: dict, name: str, default: str) -> str:
+    value = str(config.get(name, default)).strip()
+    if len(value) > 32 or re.fullmatch(r"(?:[1-9][0-9]*(?:ms|s|m|h)){1,4}", value) is None:
+        raise ValueError(f"Calls {name} must be a bounded duration")
+    return value
+
+
+def _listen_port(state: CallsStateAccess, config: dict) -> int:
+    port = _integer(config, "listen_port", DEFAULT_CALL_PORT, 1, 65535)
+    for name, protocol in state.protocols.items():
+        if name == "calls" or not protocol.enabled:
+            continue
+        for field_name in ("dtls_port", "wg_port", "udp_port"):
+            value = protocol.config.get(field_name)
+            if type(value) is int and value == port:
+                raise ValueError(
+                    f"Calls listen_port conflicts with enabled {name}.{field_name}",
+                )
+        if name == "amneziawg":
+            awg_ports: list[tuple[str, object]] = []
+            if protocol.port:
+                awg_ports.append(("port", protocol.port))
+            profiles = protocol.config.get("profiles", {})
+            if isinstance(profiles, dict):
+                awg_ports.extend(
+                    (f"profiles.{profile_name}.port", profile.get("port"))
+                    for profile_name, profile in profiles.items()
+                    if isinstance(profile, dict) and profile.get("port")
+                )
+            if not awg_ports:
+                awg_ports.append(("port", 51820))
+            for field_name, value in awg_ports:
+                if type(value) is int and value == port:
+                    raise ValueError(
+                        f"Calls listen_port conflicts with enabled {name}.{field_name}",
+                    )
+    return port
+
+
+def _join_links(values: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for value in values:
+        link = str(value).strip()
+        if not link or len(link) > 2048:
+            raise ValueError("Calls vk_parasite contains an invalid VK join link")
+        if link in normalized:
+            raise ValueError("Calls vk_parasite requires unique VK join links")
+        normalized.append(link)
+    if len(normalized) != CALL_COUNT:
+        raise ValueError("Calls vk_parasite requires exactly 4 unique VK join links")
+    return normalized
+
+
+def _obfs_password(config: dict) -> str:
+    password = str(config.get("obfs_password", "")).strip()
+    if not 32 <= len(password.encode("utf-8")) <= 256:
+        raise ValueError("Calls obfs_password must contain 32..256 bytes")
+    return password
+
+
+def workers(config: dict) -> int:
+    value = _integer(config, "workers", DEFAULT_WORKERS, 4, 20)
+    if value not in WORKER_COUNTS:
+        raise ValueError("Calls workers must be one of 4, 8, 12, 16, 20")
+    return value
+
+
+def pool_refresh_interval(config: dict) -> int:
+    return _integer(
+        config,
+        "pool_refresh_interval_seconds",
+        DEFAULT_POOL_REFRESH_INTERVAL,
+        MIN_POOL_REFRESH_INTERVAL,
+        MAX_POOL_REFRESH_INTERVAL,
+    )
+
+
+def normalized_listen_port(value: object) -> int:
+    """Привести слушающий UDP-порт к диапазону порта.
+
+    Импортированное состояние может принести порт в любом виде: строкой, мусором или
+    значением вне диапазона. Одна реализация на firewall-путь плагина и на панель
+    статуса: показ, посчитанный иначе, чем применяется, — худший вид статуса.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return DEFAULT_CALL_PORT
+    try:
+        port = int(value)
+    except ValueError:
+        return DEFAULT_CALL_PORT
+    return port if 1 <= port <= 65535 else DEFAULT_CALL_PORT
+
+
+def vk_parasite_inbound(
+    state: CallsStateAccess,
+    user_password: Callable[[CallsUser], str],
+) -> dict:
+    desired = state.protocols["calls"]
+    config = desired.config
+    password = _obfs_password(config)
+    users = [
+        {
+            "name": user.email,
+            "password": user_password(user),
+            "max_sessions": _integer(config, "max_sessions_per_user", 1, 1, 16),
+        }
+        for user in state.users
+        if not user.blocked
+    ]
+    if not users:
+        raise ValueError("Calls vk_parasite requires at least one active user")
+    configured_workers = workers(config)
+    return {
+        "type": "call",
+        "tag": "calls-vk-in",
+        "platform": "vk",
+        "mode": CALL_MODE_VK_PARASITE,
+        "listen": "0.0.0.0",
+        "listen_port": _listen_port(state, config),
+        "obfs_password": password,
+        "users": users,
+        "max_sessions": _integer(config, "max_sessions", 128, 1, 4096),
+        "max_workers_per_session": configured_workers,
+        "max_pending_handshakes": _integer(
+            config,
+            "max_pending_handshakes",
+            256,
+            1,
+            4096,
+        ),
+        "handshake_timeout": _duration(config, "handshake_timeout", "10s"),
+        "session_idle_timeout": _duration(config, "session_idle_timeout", "5m"),
+        "udp_receive_buffer_bytes": _integer(
+            config,
+            "udp_receive_buffer_bytes",
+            4 * 1024 * 1024,
+            256 * 1024,
+            64 * 1024 * 1024,
+        ),
+        "udp_send_buffer_bytes": _integer(
+            config,
+            "udp_send_buffer_bytes",
+            4 * 1024 * 1024,
+            256 * 1024,
+            64 * 1024 * 1024,
+        ),
+        "ingress_workers": _integer(config, "ingress_workers", 0, 0, 32),
+        "ingress_queue_packets": _integer(
+            config,
+            "ingress_queue_packets",
+            4096,
+            1,
+            65536,
+        ),
+        "peer_read_queue_packets": peer_read_queue_packets(config),
+    }
+
+
+def vk_parasite_outbound(
+    user: CallsUser,
+    state: CallsStateAccess,
+    join_links: list[str],
+    user_password: Callable[[CallsUser], str],
+    *,
+    server_address: str,
+) -> dict:
+    desired = state.protocols["calls"]
+    config = desired.config
+    join_links = _join_links(join_links)
+    server = str(server_address).strip().strip("[]")
+    if not server:
+        raise ValueError("Calls vk_parasite server address is not configured")
+    return {
+        "type": "call",
+        "tag": "call-vk-out",
+        "platform": "vk",
+        "mode": CALL_MODE_VK_PARASITE,
+        "server": server,
+        "server_port": _listen_port(state, config),
+        "join_links": join_links,
+        "user": user.email,
+        "password": user_password(user),
+        "obfs_password": _obfs_password(config),
+        "workers": workers(config),
+        "worker_connect_timeout": _duration(
+            config,
+            "worker_connect_timeout",
+            "15s",
+        ),
+    }
+
+
+__all__ = [
+    "CALL_MODE_VK_PARASITE",
+    "CALL_COUNT",
+    "DEFAULT_CALL_PORT",
+    "DEFAULT_POOL_REFRESH_INTERVAL",
+    "DEFAULT_WORKERS",
+    "DEFAULT_PEER_READ_QUEUE_PACKETS",
+    "MAX_POOL_REFRESH_INTERVAL",
+    "MIN_POOL_REFRESH_INTERVAL",
+    "WORKER_COUNTS",
+    "call_mode",
+    "workers",
+    "normalized_listen_port",
+    "vk_parasite_inbound",
+    "vk_parasite_outbound",
+    "peer_read_queue_packets",
+    "pool_refresh_interval",
+    "public_endpoint",
+]

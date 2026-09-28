@@ -9,7 +9,6 @@ from hydra.services.telegram.dashboard_common import (
     _format_period,
     _format_security_timestamp,
     _mapping_projection,
-    _network_label,
     _parse_fail2ban_ban_lines,
 )
 
@@ -226,7 +225,7 @@ def get_fail2ban_dashboard_text(
             f"→ {_format_period(config.get('bantime'))}",
         )
 
-    recent = recent_bans(app, 5)
+    recent = recent_bans(app, 3)
     intel = lookup_intel([item["ip"] for item in recent])
     recent_rows = []
     for item in recent:
@@ -236,13 +235,10 @@ def get_fail2ban_dashboard_text(
         duration = _format_period(
             options.get(jail, {}).get("bantime"),
         )
-        owner = _network_label(details)
-        suffix = f" · {html.escape(owner)}" if owner else ""
         recent_rows.append(
             f"• {flag} <code>{html.escape(item['ip'])}</code> · "
-            f"{html.escape(_format_security_timestamp(item['when']))}\n"
-            f"  <code>{html.escape(jail)}</code> · "
-            f"бан {duration}{suffix}",
+            f"<code>{html.escape(jail)}</code> · {duration} · "
+            f"{html.escape(_format_security_timestamp(item['when']))}",
         )
 
     return (
@@ -253,7 +249,7 @@ def get_fail2ban_dashboard_text(
         + ("\n".join(jail_rows) if jail_rows else "<i>Активных jail нет</i>")
         + "\n\n<b>Последние блокировки:</b>\n"
         + (
-            "\n\n".join(recent_rows)
+            "\n".join(recent_rows)
             if recent_rows
             else "<i>Событий Ban в журнале нет</i>"
         )
