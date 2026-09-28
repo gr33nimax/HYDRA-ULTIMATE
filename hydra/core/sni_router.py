@@ -183,11 +183,11 @@ def get_decoy_http_port(plugin_name: str) -> int:
     return _planning.get_decoy_http_port(plugin_name, _DECOY_HTTP_PORTS)
 
 
-def needs_mux(state: AppState) -> bool:
+def needs_mux(state: _planning.MuxState) -> bool:
     return _planning.needs_mux(state, _INTERNAL_PORTS)
 
 
-def get_effective_port(plugin_name: str, state: AppState) -> int:
+def get_effective_port(plugin_name: str, state: _planning.MuxState) -> int:
     return get_internal_port(plugin_name) if needs_mux(state) else FRONTEND_PORT
 
 

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from hydra.core.decoy_sites.registry import is_supported
-from hydra.core.state_models import AppState
+from hydra.core.state_models import AppState, NetworkConfig, PluginState
 
 
 _DYNAMIC_ROUTE_KEY = "_tls_http_decoy_route"
@@ -55,7 +55,18 @@ def get_decoy_http_port(plugin_name: str, decoy_ports: Mapping[str, int]) -> int
     return decoy_ports.get(plugin_name, 0)
 
 
-def needs_mux(state: AppState, internal_ports: Mapping[str, int]) -> bool:
+class MuxState(Protocol):
+    """Что нужно от состояния: протоколы и сетевые имена.
+
+    Уже `AppState`: плагины видят состояние через `PluginStateAccess`, и требовать от
+    них полный агрегат — значит гнать тип туда, где поля всё равно не используются.
+    """
+
+    protocols: dict[str, PluginState]
+    network: NetworkConfig
+
+
+def needs_mux(state: MuxState, internal_ports: Mapping[str, int]) -> bool:
     """Decide whether the public TCP/443 SNI multiplexer is required."""
     for protocol in state.protocols.values():
         route = protocol.config.get(_DYNAMIC_ROUTE_KEY)
