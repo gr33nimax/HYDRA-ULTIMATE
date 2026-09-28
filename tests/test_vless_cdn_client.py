@@ -41,6 +41,33 @@ def _config() -> dict[str, object]:
     }
 
 
+def test_the_chosen_fingerprint_reaches_the_profile_and_the_link():
+    config = {**_config(), "utls_fingerprint": "firefox"}
+
+    connection = json.loads(profile(USER, config))["outbounds"][0]
+    assert connection["tls"]["utls"] == {"enabled": True, "fingerprint": "firefox"}
+
+    query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(share_link(USER, config)).query))
+    assert query["fp"] == "firefox", "выбранный отпечаток обязан быть в ссылке"
+
+
+def test_none_leaves_the_client_hello_to_the_client():
+    config = {**_config(), "utls_fingerprint": "none"}
+
+    connection = json.loads(profile(USER, config))["outbounds"][0]
+    assert "utls" not in connection["tls"], "none — блок utls не пишется вовсе"
+
+    query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(share_link(USER, config)).query))
+    assert "fp" not in query, "none — параметр fp в ссылку не попадает"
+
+
+def test_an_unknown_fingerprint_in_state_falls_back_to_the_default():
+    config = {**_config(), "utls_fingerprint": "quantum"}
+
+    connection = json.loads(profile(USER, config))["outbounds"][0]
+    assert connection["tls"]["utls"] == {"enabled": True, "fingerprint": "chrome"}
+
+
 def test_profile_dials_the_cdn_and_never_the_origin():
     config = _config()
 

@@ -187,11 +187,32 @@ def test_the_menu_offers_the_media_mode_item_once_provisioned():
     keys = [key for key, _, _ in captured["options"]]
     assert "6" in keys, "без пункта режим не переключить"
     assert "5" in keys
+    assert "2" in keys, "без пункта отпечаток клиента не выбрать"
 
     # Панель обязана показать режим и его состояние: иначе настройка невидимая.
     details = dict(panel.call_args.kwargs["details"])
     assert details["Режим медиа"] == "Видео"
     assert "НЕ ЗАДАН" in details["Источник"]
+    assert details["Отпечаток uTLS"] == "chrome", "дефолт виден оператору"
+
+
+def test_the_fingerprint_item_delegates_to_the_application_operation():
+    state = _provisioned_state()
+    app = MagicMock()
+    app.admin.load_state.return_value = state
+    app.set_vless_cdn_fingerprint.return_value = True
+    choices = iter(("2", "2", "0"))  # пункт → chrome в списке → выход из меню
+
+    with (
+        patch.object(menu, "clear"),
+        patch.object(menu, "menu", side_effect=lambda *args, **kwargs: next(choices)),
+        patch.object(menu, "protocol_status_panel"),
+        patch.object(menu, "success"),
+        patch.object(menu, "prompt"),
+    ):
+        menu._menu_vless_cdn(state, VlessCdnPlugin(), app)
+
+    app.set_vless_cdn_fingerprint.assert_called_once_with(state, "chrome")
 
 
 def test_the_panel_shows_the_photo_state_instead_of_the_source():

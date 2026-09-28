@@ -139,6 +139,21 @@ def test_install_requires_the_kernel():
         assert plugin.install() is True
 
 
+def test_the_fingerprint_command_accepts_a_known_value_and_refuses_the_rest():
+    state = _state()
+    plugin = VlessCdnPlugin()
+
+    assert plugin.set_utls_fingerprint(state, "FireFox") is True
+    assert state.protocols[PROTOCOL_NAME].config["utls_fingerprint"] == "firefox"
+    assert state.protocols["snell"].config == {"mode": "v5"}, "команда пишет только своё"
+
+    assert plugin.set_utls_fingerprint(state, "quantum") is False
+    assert state.protocols[PROTOCOL_NAME].config["utls_fingerprint"] == "firefox", "отказ не меняет state"
+
+    assert plugin.set_utls_fingerprint(state, "none") is True
+    assert state.protocols[PROTOCOL_NAME].config["utls_fingerprint"] == "none"
+
+
 def test_summary_and_status_report_what_the_operator_set():
     state = _state()
     plugin = VlessCdnPlugin()

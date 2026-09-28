@@ -24,6 +24,7 @@ PROTOCOL_NAME = "vless_cdn"
 # отсюда, иначе в клиенте два VLESS-профиля выглядят одинаково.
 CLIENT_LABEL = "VLESS Яндекс CDN"
 DEFAULT_XHTTP_PATH = "/api/media/session"
+DEFAULT_UTLS_FINGERPRINT = "chrome"
 MIN_PATH_SEGMENTS = 3
 RESERVED_PATH_PREFIX = "/assets"
 
@@ -113,6 +114,10 @@ CONFIG_DEFAULTS: tuple[tuple[str, JsonValue], ...] = (
     ("cdn_domain", ""),
     ("origin_host", ""),
     ("xhttp_path", DEFAULT_XHTTP_PATH),
+    # ClientHello клиента: по умолчанию chrome — ровно то, что было жёстко зашито до
+    # появления настройки, поэтому существующие инсталляции разницы не видят. `none`
+    # оставляет выбор клиенту: тогда блок utls в профиль не пишется.
+    ("utls_fingerprint", DEFAULT_UTLS_FINGERPRINT),
     ("core_port", 0),
     # Живая камера оператора: пусто — медиа нет вовсе (плеер будет пустой, синтетики нет
     # с коммита «drop ffmpeg»). Форма URL (hls/rtsp/mjpeg) проверяется контрактом,

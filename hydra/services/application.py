@@ -213,6 +213,20 @@ class ApplicationService:
         self._ensure_media(state)
         return True
 
+    def set_vless_cdn_fingerprint(self, state: AppState, fingerprint: str) -> bool:
+        """Сменить отпечаток ClientHello, которым представляется клиент.
+
+        Это только клиентский артефакт: серверный inbound от отпечатка не зависит,
+        поэтому ни маршруты, ни страница, ни медиа не пересобираются — профиль и ссылка
+        собираются заново при каждом обращении.
+        """
+        return self.plugin_command(
+            state,
+            "vless_cdn",
+            "set_utls_fingerprint",
+            utls_fingerprint=fingerprint,
+        )
+
     def set_vless_cdn_stream(
         self,
         state: AppState,

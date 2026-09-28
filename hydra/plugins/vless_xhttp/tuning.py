@@ -6,6 +6,8 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
+from hydra.contracts.utls import UTLS_FINGERPRINTS, validate_fingerprint
+
 
 DEFAULT_MODE = "stream-up"
 DEFAULT_PATH = "/api/v1/session"
@@ -94,28 +96,6 @@ def _validate_bool(value: object, *, field: str) -> bool:
     if text in _FALSE:
         return False
     raise ValueError(f"{field} must be a boolean")
-
-
-UTLS_FINGERPRINTS = (
-    "none",
-    "chrome",
-    "firefox",
-    "safari",
-    "edge",
-    "ios",
-    "android",
-    "random",
-    "randomized",
-)
-
-
-def validate_fingerprint(value: object) -> str:
-    """Return a supported uTLS fingerprint for client profiles."""
-    fingerprint = str(value or "").strip().lower()
-    if fingerprint not in UTLS_FINGERPRINTS:
-        allowed = ", ".join(UTLS_FINGERPRINTS)
-        raise ValueError(f"XHTTP utls_fingerprint must be one of: {allowed}")
-    return fingerprint
 
 
 def validate_headers(value: object) -> dict[str, str]:

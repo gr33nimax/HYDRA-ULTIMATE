@@ -13,9 +13,11 @@ from collections.abc import Mapping
 from typing import Any
 
 from hydra.contracts import JsonObject
+from hydra.contracts.utls import UTLS_FINGERPRINTS
 from hydra.contracts.vless_cdn import (
     CLIENT_LABEL,
     DEFAULT_ENCRYPTION_MODE,
+    DEFAULT_UTLS_FINGERPRINT,
     DEFAULT_XHTTP_PATH,
     client_encryption_value,
     normalize_hostname,
@@ -26,8 +28,6 @@ from hydra.plugins.vless_cdn.profile import MODE, link_extra, xhttp_transport
 
 PUBLIC_PORT = 443
 
-CLIENT_FINGERPRINT = "chrome"
-
 # Честная граница артефакта: профиль sing-box самодостаточен, а share-ссылка несёт
 # XHTTP-настройки в блоке `extra`, который понимают клиенты Xray-семейства. Клиент,
 # игнорирующий `extra`, соберёт другую разметку кадров и не подключится.
@@ -36,14 +36,34 @@ SHARE_LINK_NOTE = (
 )
 
 
-def tls_block(cdn_domain: str) -> dict[str, Any]:
-    """TLS для клиента: публичное имя, h2 и отпечаток Chrome."""
-    return {
+def _fingerprint(config: Mapping[str, object]) -> str:
+    """Отпечаток ClientHello из конфига; пусто — `none`, то есть клиент решает сам.
+
+    Читаем терпимо: испорченное значение в состоянии не должно ломать профиль —
+    неизвестный отпечаток ядро отвергнет, поэтому оно считается дефолтом. Пишем,
+    наоборот, строго: команда отклонит всё, чего нет в списке.
+    """
+    fingerprint = str(config.get("utls_fingerprint", DEFAULT_UTLS_FINGERPRINT)).strip().lower()
+    if fingerprint not in UTLS_FINGERPRINTS:
+        fingerprint = DEFAULT_UTLS_FINGERPRINT
+    return "" if fingerprint == "none" else fingerprint
+
+
+def tls_block(cdn_domain: str, fingerprint: str) -> dict[str, Any]:
+    """TLS для клиента: публичное имя, h2 и выбранный отпечаток ClientHello.
+
+    Пустой отпечаток — не ошибка: тогда блока `utls` нет вовсе и ClientHello собирает
+    сам клиент. Это заметнее для DPI, чем chrome, поэтому выбор вынесен оператору,
+    а не спрятан в коде.
+    """
+    block: dict[str, Any] = {
         "enabled": True,
         "server_name": cdn_domain,
         "alpn": ["h2"],
-        "utls": {"enabled": True, "fingerprint": CLIENT_FINGERPRINT},
     }
+    if fingerprint:
+        block["utls"] = {"enabled": True, "fingerprint": fingerprint}
+    return block
 
 
 def _settings(config: Mapping[str, object]) -> tuple[str, str, str, str]:
@@ -67,7 +87,7 @@ def outbound(user: User, config: Mapping[str, object]) -> JsonObject:
         "server_port": PUBLIC_PORT,
         "uuid": user.uuid,
         "encryption": client_encryption_value(public_key, mode=mode),
-        "tls": tls_block(cdn),
+        "tls": tls_block(cdn, _fingerprint(config)),
         "transport": xhttp_transport(path, cdn, client=True),
     }
     return outbound_config
@@ -94,7 +114,6 @@ def share_link(user: User, config: Mapping[str, object]) -> str:
         "security": "tls",
         "sni": cdn,
         "alpn": "h2",
-        "fp": CLIENT_FINGERPRINT,
         "type": "xhttp",
         "host": cdn,
         # Ссылку парсят клиенты (NekoBox, Throne), которые берут path буквально
@@ -105,6 +124,11 @@ def share_link(user: User, config: Mapping[str, object]) -> str:
         "mode": MODE,
         "extra": json.dumps(link_extra(), separators=(",", ":"), sort_keys=True),
     }
+    # Отпечаток добавляется только когда он выбран: при `none` параметра в ссылке нет,
+    # и выбор ClientHello остаётся клиенту.
+    fingerprint = _fingerprint(config)
+    if fingerprint:
+        parameters["fp"] = fingerprint
     query = urllib.parse.urlencode(list(parameters.items()))
     uuid = urllib.parse.quote(user.uuid, safe="")
     tag = urllib.parse.quote(f"{user.email} {CLIENT_LABEL}", safe="")
@@ -120,6 +144,7 @@ def client_view(user: User, config: Mapping[str, object]) -> dict[str, Any]:
         "path": path,
         "mode": MODE,
         "encryption_mode": mode,
+        "utls_fingerprint": _fingerprint(config) or "none",
         "share_note": SHARE_LINK_NOTE,
     }
 

@@ -20,6 +20,7 @@ from hydra.plugins.base import (
     PluginStatus,
 )
 from hydra.plugins.context import PluginStateAccess
+from hydra.contracts.utls import validate_fingerprint
 from hydra.contracts.vless_cdn import (
     CLIENT_LABEL,
     CONFIG_DEFAULTS,
@@ -66,6 +67,7 @@ class VlessCdnPlugin(BasePlugin):
             "set_cam_source_url",
             "set_media_mode",
             "set_stream_settings",
+            "set_utls_fingerprint",
         ),
         queries=("get_summary",),
         config_defaults=CONFIG_DEFAULTS,
@@ -222,6 +224,23 @@ class VlessCdnPlugin(BasePlugin):
         except ValueError:
             return False
         plugin_state.config["xhttp_path"] = path
+        return True
+
+    def set_utls_fingerprint(self, state: PluginStateAccess, utls_fingerprint: str) -> bool:
+        """Отпечаток ClientHello клиента: `none` выключает uTLS и оставляет выбор клиенту.
+
+        Неизвестное значение отклоняется, а не подменяется дефолтом: отпечаток уезжает
+        в клиентский профиль и в share-ссылку, и тихо подменённый выбор оператора —
+        худший вид «сохранено».
+        """
+        plugin_state = state.protocols.get(PROTOCOL_NAME)
+        if plugin_state is None:
+            return False
+        try:
+            fingerprint = validate_fingerprint(utls_fingerprint)
+        except ValueError:
+            return False
+        plugin_state.config["utls_fingerprint"] = fingerprint
         return True
 
     def set_cam_source_url(

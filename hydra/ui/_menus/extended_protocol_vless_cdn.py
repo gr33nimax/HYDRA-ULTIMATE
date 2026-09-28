@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from hydra.contracts.utls import UTLS_FINGERPRINTS
 from hydra.contracts.vless_cdn import (
+    DEFAULT_UTLS_FINGERPRINT,
     MEDIA_MODE_LABELS,
     MEDIA_MODE_PHOTO,
     MEDIA_MODE_VIDEO,
@@ -197,6 +199,42 @@ def _set_stream(state: AppState, plugin: BasePlugin, app: ApplicationService) ->
     prompt("Нажмите Enter")
 
 
+def _set_fingerprint(state: AppState, plugin: BasePlugin, app: ApplicationService) -> None:
+    """Отпечаток ClientHello клиента — тем же списком, что у прямого VLESS.
+
+    `none` — осознанный выбор: тогда блока `utls` в профиле нет и `fp` в ссылку не
+    попадает, а ClientHello собирает сам клиент. Это заметнее для DPI, поэтому дефолт
+    другой, и текущее значение подсвечено в списке.
+    """
+    current = str(
+        _desired_state(state, PROTOCOL_NAME).config.get(
+            "utls_fingerprint",
+            DEFAULT_UTLS_FINGERPRINT,
+        ),
+    ).strip().lower()
+    options = [
+        (
+            str(index),
+            name + (" ·" if name == current else ""),
+            "клиент решает сам"
+            if name == "none"
+            else ("случайный каждый раз" if name in {"random", "randomized"} else "как у браузера"),
+        )
+        for index, name in enumerate(UTLS_FINGERPRINTS, start=1)
+    ]
+    selected = menu([*options, ("0", "Отмена", "")], "ОТПЕЧАТОК КЛИЕНТА (uTLS)")
+    if not selected.isdigit() or selected == "0":
+        return
+    index = int(selected) - 1
+    if not 0 <= index < len(UTLS_FINGERPRINTS):
+        return
+    if app.set_vless_cdn_fingerprint(state, UTLS_FINGERPRINTS[index]):
+        success(f"Отпечаток: {UTLS_FINGERPRINTS[index]}")
+    else:
+        error("Отклонено: неизвестный отпечаток")
+    prompt("Нажмите Enter")
+
+
 def _menu_vless_cdn(
     state: AppState,
     plugin: BasePlugin,
@@ -212,10 +250,14 @@ def _menu_vless_cdn(
 
         config = desired.config
         mode = normalize_media_mode(config.get("media_mode"))
+        fingerprint = str(
+            config.get("utls_fingerprint", DEFAULT_UTLS_FINGERPRINT) or DEFAULT_UTLS_FINGERPRINT,
+        ).strip().lower()
         details = [
             ("CDN-домен", str(config.get("cdn_domain", "") or "—")),
             ("Origin-имя", str(config.get("origin_host", "") or "—")),
             ("XHTTP путь", str(config.get("xhttp_path", "") or "—")),
+            ("Отпечаток uTLS", "none — решает клиент" if fingerprint == "none" else fingerprint),
             ("Порт ядра", str(config.get("core_port", 0) or "—")),
             ("Сертификат", str(config.get("cert_file", "") or "—")),
             ("Регион origin-сервера", str(config.get("region_city", "") or "—")),
@@ -243,6 +285,11 @@ def _menu_vless_cdn(
             )
             options.extend(
                 [
+                    (
+                        "2",
+                        "🧬 Отпечаток клиента",
+                        "Чей ClientHello имитирует клиент: chrome, firefox, safari… или none — решает клиент",
+                    ),
                     ("5", "📹 Источник потока", "URL для видео-режима: HLS-плейлист или RTSP"),
                     ("6", "🎞 Режим медиа", "Видео (живой поток) или фото региона — что видит посетитель"),
                     ("7", "⚙️ Настройки потока", "Сегмент, окно плейлиста, пауза без зрителя"),
@@ -271,6 +318,8 @@ def _menu_vless_cdn(
             else:
                 error("Не удалось изменить состояние протокола")
             prompt("Нажмите Enter")
+        elif choice == "2" and config.get("cert_file"):
+            _set_fingerprint(state, plugin, app)
         elif choice == "5" and config.get("cert_file"):
             _set_camera(state, plugin, app)
         elif choice == "6" and config.get("cert_file"):
