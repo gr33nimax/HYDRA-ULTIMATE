@@ -36,6 +36,7 @@ from hydra.contracts.vless_cdn import (
     normalize_path,
     resolve_host,
     server_encryption_value,
+    normalize_uplink_data_key,
 )
 
 # Имя функции берётся из модуля, а не из пакета: пакет реэкспортирует плагин,
@@ -170,6 +171,7 @@ class VlessCdnPlugin(BasePlugin):
         port = as_int(config.get("core_port"))
         private_key = str(config.get("encryption_private_key", "")).strip()
         mode = str(config.get("encryption_mode", DEFAULT_ENCRYPTION_MODE)).strip()
+        data_key = normalize_uplink_data_key(config.get("uplink_data_key"))
         users: list[JsonValue] = [{"name": user.email, "uuid": user.uuid} for user in state.users if not user.blocked]
         if not (cdn and origin and path and port and private_key and users):
             return ConfigFragment()
@@ -178,7 +180,7 @@ class VlessCdnPlugin(BasePlugin):
         except ValueError:
             return ConfigFragment()
         return ConfigFragment(
-            inbounds=[self._inbound(cdn, path, port, decryption, users)],
+            inbounds=[self._inbound(cdn, path, port, decryption, users, data_key)],
         )
 
     @staticmethod
@@ -188,6 +190,7 @@ class VlessCdnPlugin(BasePlugin):
         port: int,
         decryption: str,
         users: list[JsonValue],
+        data_key: str = "",
     ) -> JsonObject:
         inbound: JsonObject = {
             "type": "vless",
@@ -198,7 +201,7 @@ class VlessCdnPlugin(BasePlugin):
             "decryption": decryption,
             # TLS завершает web backend, поэтому внутри inbound его нет: сюда
             # приходит уже расшифрованный поток.
-            "transport": xhttp_transport(path, host, client=False),
+            "transport": xhttp_transport(path, host, client=False, data_key=data_key),
         }
         return inbound
 

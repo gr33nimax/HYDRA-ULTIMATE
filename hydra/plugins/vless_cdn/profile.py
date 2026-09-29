@@ -19,6 +19,7 @@ from hydra.contracts.vless_cdn import (
     MEDIA_PADDING_HEADER,
     MEDIA_SEQ_PARAM,
     MEDIA_SESSION_HEADER,
+    UPLINK_DATA_KEY_DEFAULT,
 )
 
 MODE = "packet-up"
@@ -38,7 +39,14 @@ SESSION_ID_LENGTH = "16-32"
 SEQ_PLACEMENT = "query"
 SEQ_KEY = MEDIA_SEQ_PARAM
 
-UPLINK_DATA_PLACEMENT = "body"
+UPLINK_DATA_PLACEMENT = "header"
+
+# Сторона сервера не выбирает, куда клиент положил данные: PlacementAuto в ядре
+# складывает payload из заголовков, cookie и тела сразу. Тогда клиент, который
+# не умеет header, не отваливается молча — сторону согласует ядро.
+UPLINK_DATA_ACCEPT = "auto"
+
+# Имя заголовка данных приходит из состояния: своё у каждой установки.
 
 SC_MAX_EACH_POST_BYTES = "131072-1048576"
 SC_MAX_BUFFERED_POSTS = 30
@@ -56,7 +64,7 @@ XMUX: dict[str, Any] = {
 }
 
 
-def _shared_fields(path: str, host: str) -> dict[str, Any]:
+def _shared_fields(path: str, host: str, data_key: str) -> dict[str, Any]:
     """Поля, которые читают обе стороны: иначе кадры не разберутся."""
     return {
         "type": "xhttp",
@@ -75,23 +83,32 @@ def _shared_fields(path: str, host: str) -> dict[str, Any]:
         "session_id_length": SESSION_ID_LENGTH,
         "seq_placement": SEQ_PLACEMENT,
         "seq_key": SEQ_KEY,
-        "uplink_data_placement": UPLINK_DATA_PLACEMENT,
+        "uplink_data_key": data_key,
         "sc_max_each_post_bytes": SC_MAX_EACH_POST_BYTES,
         "no_grpc_header": NO_GRPC_HEADER,
     }
 
 
-def xhttp_transport(path: str, host: str, *, client: bool) -> dict[str, Any]:
+def xhttp_transport(
+    path: str,
+    host: str,
+    *,
+    client: bool,
+    data_key: str = "",
+) -> dict[str, Any]:
     """Собрать транспорт XHTTP для сервера или для клиента."""
-    transport = _shared_fields(path, host)
+    transport = _shared_fields(path, host, data_key or UPLINK_DATA_KEY_DEFAULT)
     if client:
+        transport["uplink_data_placement"] = UPLINK_DATA_PLACEMENT
         # Клиент выбирает метод выгрузки и держит мультиплексирование соединений.
         transport["uplink_http_method"] = UPLINK_METHOD
         transport["sc_min_posts_interval_ms"] = SC_MIN_POSTS_INTERVAL_MS
         transport["xmux"] = dict(XMUX)
         return transport
 
-    # Сторона сервера: приём выгрузки и её буферизация.
+    # Сторона сервера: приём выгрузки и её буферизация. Данные приходят из
+    # заголовков, из cookie или из тела — ядро складывает все три источника.
+    transport["uplink_data_placement"] = UPLINK_DATA_ACCEPT
     transport["no_sse_header"] = NO_SSE_HEADER
     transport["sc_max_buffered_posts"] = SC_MAX_BUFFERED_POSTS
     transport["sc_min_posts_interval_ms"] = SC_MIN_POSTS_INTERVAL_MS
@@ -99,7 +116,7 @@ def xhttp_transport(path: str, host: str, *, client: bool) -> dict[str, Any]:
     return transport
 
 
-def link_extra() -> dict[str, Any]:
+def link_extra(*, data_key: str = "") -> dict[str, Any]:
     """Те же настройки в том виде, в каком их передаёт share-ссылка (Xray-стиль).
 
     Значения берутся из констант выше, поэтому ссылка и конфиг не могут разойтись.
@@ -118,6 +135,7 @@ def link_extra() -> dict[str, Any]:
         "seqPlacement": SEQ_PLACEMENT,
         "seqKey": SEQ_KEY,
         "uplinkDataPlacement": UPLINK_DATA_PLACEMENT,
+        "uplinkDataKey": data_key or UPLINK_DATA_KEY_DEFAULT,
         "uplinkHTTPMethod": UPLINK_METHOD,
         "scMaxEachPostBytes": SC_MAX_EACH_POST_BYTES,
         "scMaxBufferedPosts": SC_MAX_BUFFERED_POSTS,
