@@ -25,6 +25,8 @@ from hydra.contracts.vless_cdn import (
     generate_encryption_keypair,
     normalize_hostname,
     normalize_path,
+    generate_uplink_data_key,
+    normalize_uplink_data_key,
 )
 from hydra.services.certificates import CertificateHost, CertificateProvisioner
 from hydra.services.vless_cdn_site import install_site_timer, refresh_site, remove_site_timer
@@ -216,8 +218,13 @@ def install_protocol(
     if not (private_key and public_key):
         private_key, public_key = generate_encryption_keypair()
 
+    # Имя заголовка данных выпускается один раз: переустановка не должна обесценить
+    # уже выданные клиентские профили, поэтому существующее значение сохраняется.
+    data_key = normalize_uplink_data_key(config.get("uplink_data_key")) or generate_uplink_data_key()
+
     protocol.config.update(
         {
+            "uplink_data_key": data_key,
             "cdn_domain": cdn,
             "origin_host": origin,
             "xhttp_path": path,

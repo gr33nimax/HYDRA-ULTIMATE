@@ -114,6 +114,8 @@ CONFIG_DEFAULTS: tuple[tuple[str, JsonValue], ...] = (
     ("cdn_domain", ""),
     ("origin_host", ""),
     ("xhttp_path", DEFAULT_XHTTP_PATH),
+    # Имя заголовка данных аплинка: пусто — установка сгенерирует своё.
+    ("uplink_data_key", ""),
     # ClientHello клиента: по умолчанию chrome — ровно то, что было жёстко зашито до
     # появления настройки, поэтому существующие инсталляции разницы не видят. `none`
     # оставляет выбор клиенту: тогда блок utls в профиль не пишется.
@@ -200,6 +202,78 @@ def normalize_path(value: object) -> str:
             f"XHTTP путь должен содержать не менее {MIN_PATH_SEGMENTS} сегментов",
         )
     return normalized
+
+
+# Имя заголовка, в котором едут данные аплинка. Ядро строит его как `<ключ>-<номер>`,
+# поэтому ключ — это имя заголовка, а не украшение. Он задаётся установкой, а не берётся
+# из дефолта ядра: у клиента и сервера дефолты могут отличаться, и тогда данные теряются
+# молча — сессия встаёт, трафик не идёт, ошибок нет.
+UPLINK_DATA_KEY_DEFAULT = "X-Data"
+# Слова для генерации. Заголовок вида `X-<случайные байты>` выделяется сильнее обычного,
+# а такое имя читается как служебное поле медиасервиса.
+UPLINK_DATA_KEY_WORDS = (
+    "Cache",
+    "Segment",
+    "Stream",
+    "Chunk",
+    "Media",
+    "Range",
+    "Session",
+    "Content",
+    "Origin",
+    "Edge",
+)
+# Символы, допустимые в имени HTTP-заголовка (token по RFC 9110).
+UPLINK_DATA_KEY_CHARS = frozenset(
+    "!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+)
+
+
+def uplink_data_key_reserved() -> frozenset:
+    """Заголовки, которыми нельзя назвать данные: заняты транспортом или самим HTTP."""
+    return frozenset(
+        name.lower()
+        for name in (
+            "host",
+            "content-length",
+            "content-type",
+            "transfer-encoding",
+            "connection",
+            "referer",
+            "cookie",
+            "authorization",
+            "cache-control",
+            "pragma",
+            "expires",
+            MEDIA_SESSION_HEADER,
+            MEDIA_PADDING_HEADER,
+        )
+    )
+
+
+def generate_uplink_data_key() -> str:
+    """Сгенерировать имя заголовка для данных аплинка.
+
+    Имя своё у каждой установки: одинаковая метка на парке серверов — сама по себе
+    признак, а `X-Data` стоит дефолтом у всех, кто своё не задал.
+    """
+    from secrets import choice, token_hex
+
+    return f"X-{choice(UPLINK_DATA_KEY_WORDS)}-{token_hex(2)}"
+
+
+def normalize_uplink_data_key(value: object) -> str:
+    """Проверить имя заголовка данных. Пусто — законно: тогда берётся дефолт ядра."""
+    key = str(value or "").strip()
+    if not key:
+        return ""
+    if len(key) > 64:
+        raise ValueError("имя заголовка данных длиннее 64 символов")
+    if not set(key) <= UPLINK_DATA_KEY_CHARS:
+        raise ValueError("имя заголовка данных содержит недопустимые символы")
+    if key.lower() in uplink_data_key_reserved():
+        raise ValueError(f"имя заголовка данных занято: {key}")
+    return key
 
 
 ENCRYPTION_SCHEME = "mlkem768x25519plus"

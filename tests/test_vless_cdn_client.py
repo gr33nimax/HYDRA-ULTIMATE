@@ -98,6 +98,7 @@ def test_client_and_server_agree_on_every_shared_setting():
     # Различаться обязаны только host (у клиента — публичное имя) и поля своей стороны.
     differing = {
         "host",
+        "uplink_data_placement",
         "uplink_http_method",
         "xmux",
         "no_sse_header",
