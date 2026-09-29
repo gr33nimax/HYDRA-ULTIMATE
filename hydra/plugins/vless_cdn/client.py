@@ -22,6 +22,7 @@ from hydra.contracts.vless_cdn import (
     client_encryption_value,
     normalize_hostname,
     normalize_path,
+    normalize_uplink_data_key,
 )
 from hydra.core.state_models import User
 from hydra.plugins.vless_cdn.profile import MODE, link_extra, xhttp_transport
@@ -77,6 +78,14 @@ def _settings(config: Mapping[str, object]) -> tuple[str, str, str, str]:
     return cdn, path, mode, public_key
 
 
+def _data_key(config: Mapping[str, object]) -> str:
+    """Имя заголовка данных из состояния; испорченное значение — дефолт ядра."""
+    try:
+        return normalize_uplink_data_key(config.get("uplink_data_key"))
+    except ValueError:
+        return ""
+
+
 def outbound(user: User, config: Mapping[str, object]) -> JsonObject:
     """Исходящее подключение одного пользователя к публичному CDN-домену."""
     cdn, path, mode, public_key = _settings(config)
@@ -88,7 +97,7 @@ def outbound(user: User, config: Mapping[str, object]) -> JsonObject:
         "uuid": user.uuid,
         "encryption": client_encryption_value(public_key, mode=mode),
         "tls": tls_block(cdn, _fingerprint(config)),
-        "transport": xhttp_transport(path, cdn, client=True),
+        "transport": xhttp_transport(path, cdn, client=True, data_key=_data_key(config)),
     }
     return outbound_config
 
@@ -122,7 +131,7 @@ def share_link(user: User, config: Mapping[str, object]) -> str:
         # нормализуют path сами (sing-box), со слешем тоже работают.
         "path": f"{path}/",
         "mode": MODE,
-        "extra": json.dumps(link_extra(), separators=(",", ":"), sort_keys=True),
+        "extra": json.dumps(link_extra(data_key=_data_key(config)), separators=(",", ":"), sort_keys=True),
     }
     # Отпечаток добавляется только когда он выбран: при `none` параметра в ссылке нет,
     # и выбор ClientHello остаётся клиенту.

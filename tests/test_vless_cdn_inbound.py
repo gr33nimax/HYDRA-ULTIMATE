@@ -109,7 +109,7 @@ def test_inbound_carries_the_profile_the_core_expects():
     assert transport["session_id_length"] == "16-32"
     assert transport["seq_placement"] == "query"
     assert transport["seq_key"] == "chunk_id"
-    assert transport["uplink_data_placement"] == "body"
+    assert transport["uplink_data_placement"] == "auto"
     assert transport["sc_max_each_post_bytes"] == "131072-1048576"
     assert transport["sc_max_buffered_posts"] == 30
     assert transport["sc_min_posts_interval_ms"] == "50-150"
