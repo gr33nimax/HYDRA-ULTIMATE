@@ -7,7 +7,7 @@ import json
 import logging
 import threading
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Literal
 
 from hydra.contracts.node_export import NodeClientExport
@@ -29,6 +29,10 @@ class NodeSyncResult:
     generation: int
     status: Literal["published", "unchanged"]
     sha256: str = ""
+    # Protocol -> how many eligible users this export actually serves, plus
+    # non-fatal gaps such as a transport whose prerequisites are unmet.
+    coverage: dict[str, int] = field(default_factory=dict)
+    warnings: tuple[str, ...] = ()
 
 
 class NodeSnapshotReconciler:
@@ -61,7 +65,7 @@ class NodeSnapshotReconciler:
             ):
                 raise RuntimeError("node did not confirm the requested generation")
             exported = client.export()
-            self._validate_export(exported, node_id, snapshot.generation)
+            coverage, warnings = self._validate_export(exported, node_id, snapshot.generation, snapshot)
             stored = self.snapshot_store.store(exported)
             previous = self._publish_pointer(
                 node_id=node_id,
@@ -70,7 +74,14 @@ class NodeSnapshotReconciler:
                 stored_digest=stored.sha256,
             )
             self._remove_previous(previous, stored)
-            return NodeSyncResult(node_id, snapshot.generation, "published", stored.sha256)
+            return NodeSyncResult(
+                node_id,
+                snapshot.generation,
+                "published",
+                stored.sha256,
+                coverage,
+                tuple(warnings),
+            )
 
     def _reserve_generation(
         self,
@@ -156,13 +167,57 @@ class NodeSnapshotReconciler:
         ):
             raise RuntimeError("node health or contract check failed")
 
-    @staticmethod
-    def _validate_export(exported: NodeClientExport, node_id: str, generation: int) -> None:
+    @classmethod
+    def _validate_export(
+        cls,
+        exported: NodeClientExport,
+        node_id: str,
+        generation: int,
+        snapshot: NodeDesiredSnapshot,
+    ) -> tuple[dict[str, int], list[str]]:
         if not isinstance(exported, NodeClientExport):
             raise RuntimeError("node returned an invalid export")
         exported.validate()
         if exported.node_id != node_id or exported.generation != generation:
             raise RuntimeError("node export does not match the applied generation")
+        return cls._coverage(exported, snapshot)
+
+    @staticmethod
+    def _coverage(
+        exported: NodeClientExport,
+        snapshot: NodeDesiredSnapshot,
+    ) -> tuple[dict[str, int], list[str]]:
+        """Refuse a publication that carries nothing, and describe the rest.
+
+        A published generation is exactly what subscriptions read, so an export with no
+        client profiles must never be called published. Partial coverage is a different
+        case: one transport whose prerequisites are unmet must not cost the node its
+        working profiles, so it is reported as a warning instead of failing the node.
+        """
+        enabled = tuple(sorted(name for name, spec in snapshot.protocols.items() if spec.enabled))
+        eligible = [projection for projection in snapshot.users if not projection.blocked]
+        coverage = {name: 0 for name in enabled}
+        users_without_profiles = 0
+        for projection in eligible:
+            exported_user = exported.users.get(projection.uuid)
+            served = {profile.protocol for profile in exported_user.profiles} if exported_user else set()
+            for name in served & set(enabled):
+                coverage[name] += 1
+            if not served and set(enabled) - set(projection.disabled_protocols):
+                users_without_profiles += 1
+        if enabled and eligible and not any(coverage.values()):
+            raise RuntimeError("node export contains no client profiles")
+        warnings: list[str] = []
+        if users_without_profiles:
+            warnings.append(f"users_without_profiles={users_without_profiles}")
+        uncovered = [
+            name
+            for name in enabled
+            if not coverage[name] and not all(name in projection.disabled_protocols for projection in eligible)
+        ]
+        if uncovered:
+            warnings.append("protocols_without_profiles=" + ",".join(uncovered))
+        return coverage, warnings
 
     def _publish_pointer(
         self,

@@ -236,3 +236,47 @@ def test_read_protocol_never_asks_for_a_port_of_a_routed_tls_protocol():
     port_prompt.assert_not_called()
     assert "ПОРТ" not in " ".join(str(call.args[1]) for call in panel.call_args_list)
     assert "Порт" not in " ".join(str(call.args[1]) for call in panel.call_args_list)
+
+
+def _wizard_defaults(name):
+    """The public settings the wizard collects when the operator accepts every default."""
+    config = {}
+    for item in fields.PROTOCOL_FIELDS.get(name, ()):
+        if item.kind in ("int", "bool"):
+            config[item.key] = item.default
+        elif item.kind == "enum":
+            config[item.key] = item.default or (item.choices[0][0] if item.choices else "")
+        else:
+            config[item.key] = item.default or ("node.example.com" if item.required else "")
+    return config
+
+
+def test_every_offered_transport_prepares_its_node_config_or_names_what_is_missing():
+    """A node must never store a command-owned setting and call it applied.
+
+    Preparation is the plugin's own step, so this guard fails when a transport gains a
+    command-owned key that nobody prepares — the defect that left a node storing
+    ``protocol_mode=3.1`` without the material it means.
+    """
+    from hydra.core.state_models import AppState, PluginState
+
+    failures = []
+    for plugin in _transport_plugins():
+        capabilities = plugin.meta.capabilities
+        if not (capabilities.subscription_enabled or capabilities.hydra_v2_subscription_enabled):
+            continue
+        name = plugin.meta.name
+        state = AppState(protocols={name: PluginState(installed=True, enabled=True, config={})})
+        try:
+            result = plugin.prepare_node_config(state, _wizard_defaults(name))
+        except ValueError as exc:
+            if not str(exc).strip():
+                failures.append(f"{name}: ValueError without a reason")
+            continue
+        except Exception as exc:  # noqa: BLE001 - the point is the exception type
+            failures.append(f"{name}: {type(exc).__name__}: {exc}")
+            continue
+        if result is not True:
+            failures.append(f"{name}: prepare_node_config returned {result!r}")
+
+    assert failures == []

@@ -16,6 +16,7 @@ from hydra.services.subscriptions.client_configs import (
 from hydra.services.subscriptions.hydrabox import generate_hydrabox_subscription
 from hydra.services.subscriptions.links import generate_base64_sub, generate_shadowrocket_sub
 from hydra.services.subscriptions.node_exports import node_profile_name_key, node_profiles_for_user
+from hydra.services.nodes.snapshot_store import SnapshotStoreError
 
 
 class EmptyPlugins:
@@ -233,3 +234,37 @@ def test_hydrabox_namespaces_node_resources_and_profiles():
         "Node ShadowTLS",
     }
     assert document["identity"]["sequence"] > 0
+
+
+def test_a_broken_snapshot_on_one_node_does_not_remove_another_nodes_profiles():
+    """A local read failure quarantines that node, it does not empty the subscription."""
+    user, state, exports = _fixture()
+    state.nodes.append(
+        NodeConfig(
+            id="uk-1",
+            name="UK",
+            region="UK",
+            address="uk.example.com",
+            generation=2,
+            published_generation=2,
+            published_digest="c" * 64,
+        )
+    )
+    broken = {"uk-1": True}
+    reported = []
+
+    class MixedExports:
+        def published_export(self, current_state, node_id):
+            if node_id in broken:
+                raise SnapshotStoreError("snapshot file is unavailable or unsafe")
+            return exports.published_export(current_state, node_id)
+
+    profiles = node_profiles_for_user(
+        user,
+        state,
+        node_exports=MixedExports(),
+        on_error=lambda node_id, code: reported.append((node_id, code)),
+    )
+
+    assert {profile.node_id for profile in profiles} == {"de-1"}
+    assert reported == [("uk-1", "SnapshotStoreError")]

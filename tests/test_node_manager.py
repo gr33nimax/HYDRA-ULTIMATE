@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from hydra.contracts.node_export import NodeClientExport, NodeClientExportUser
+from hydra.contracts.node_export import NodeClientExport, NodeClientExportUser, NodeClientProfile
 from hydra.contracts.node_snapshot import NodeProtocolSpec, NodeUserProjection
 from hydra.contracts.node_traffic import NodeTrafficReport, NodeTrafficUsage
 from hydra.contracts.node_validation import NODE_CONTRACT_VERSION
@@ -89,7 +89,20 @@ class FakeControlClient:
         if snapshot.generation > self.generation:
             self.generation = snapshot.generation
             users = {
-                item.uuid: NodeClientExportUser(uuid=item.uuid)
+                item.uuid: NodeClientExportUser(
+                    uuid=item.uuid,
+                    # A real node exports one profile per protocol it serves this
+                    # user: an export with no profiles is not a published node.
+                    profiles=tuple(
+                        NodeClientProfile(
+                            protocol=name,
+                            profile="",
+                            links=(f"vless://{item.uuid}@node.example.com:443",),
+                        )
+                        for name, spec in sorted(snapshot.protocols.items())
+                        if spec.enabled and name not in item.disabled_protocols
+                    ),
+                )
                 for item in snapshot.users
                 if not item.blocked
             }
@@ -476,3 +489,93 @@ def test_remove_node_remote_failure_preserves_configuration_and_credentials(tmp_
 
     assert [node.id for node in state_module.load_state().nodes] == ["de-1"]
     assert forgotten == []
+
+
+def test_publication_refuses_an_export_that_carries_no_profiles(tmp_path):
+    """ "Published" is the promise that subscriptions can read the node's profiles."""
+    _saved_node_state()
+    client = FakeControlClient()
+
+    def apply(snapshot):
+        # The node accepted the generation and answered with users it serves nothing for.
+        client.exported = NodeClientExport(
+            node_id="de-1",
+            generation=snapshot.generation,
+            users={
+                item.uuid: NodeClientExportUser(uuid=item.uuid)
+                for item in snapshot.users
+                if not item.blocked
+            },
+        )
+
+    client.on_apply = apply
+    reconciler = _reconciler(tmp_path, client)
+
+    with pytest.raises(RuntimeError, match="no client profiles"):
+        reconciler.refresh("de-1")
+
+    node = state_module.load_state().nodes[0]
+    assert node.published_generation == 0
+    assert node.published_digest == ""
+    assert list((tmp_path / "exports" / "de-1").glob("*.json")) == []
+
+
+def test_partial_protocol_coverage_publishes_and_reports_the_gap(tmp_path):
+    """One transport whose prerequisites are unmet must not cost the node the rest."""
+    state = AppState(
+        users=[User(email="alice@example.com", uuid="user-1")],
+        nodes=[
+            NodeConfig(
+                id="de-1",
+                name="Germany",
+                address="node.example.com",
+                control_fingerprint="a" * 64,
+                protocols={"vless": NodeProtocolSpec(enabled=True, port=443)},
+            ),
+        ],
+    )
+    state_module.save_state(state)
+    client = FakeControlClient()
+    client.exported = NodeClientExport(
+        node_id="de-1",
+        generation=1,
+        users={
+            "user-1": NodeClientExportUser(
+                uuid="user-1",
+                profiles=(NodeClientProfile(protocol="vless", profile="", links=("vless://node",)),),
+            ),
+        },
+    )
+    reconciler = _reconciler(tmp_path, client)
+
+    def apply(snapshot):
+        # The node serves VLESS but its Calls pool is not ready yet.
+        client.exported = NodeClientExport(
+            node_id="de-1",
+            generation=snapshot.generation,
+            users={
+                item.uuid: NodeClientExportUser(
+                    uuid=item.uuid,
+                    profiles=tuple(
+                        NodeClientProfile(protocol=name, profile="", links=(f"{name}://node",))
+                        for name in sorted(snapshot.protocols)
+                        if name == "vless"
+                    ),
+                )
+                for item in snapshot.users
+            },
+        )
+
+    client.on_apply = apply
+
+    def reserve(state_):
+        node = state_.nodes[0]
+        node.protocols["calls"] = NodeProtocolSpec(enabled=True, port=56002)
+
+    state_module.update_state(reserve)
+    result = reconciler.refresh("de-1")
+
+    assert result.status == "published"
+    assert result.coverage == {"calls": 0, "vless": 1}
+    assert result.warnings == ("protocols_without_profiles=calls",)
+    assert state_module.load_state().nodes[0].published_generation >= 1

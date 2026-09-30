@@ -5,6 +5,7 @@ import copy
 import hashlib
 import json
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -45,8 +46,13 @@ def node_profiles_for_user(
     state: AppState,
     *,
     node_exports: PublishedNodeExportReader | None,
+    on_error: Callable[[str, str], None] | None = None,
 ) -> tuple[NodeSubscriptionProfile, ...]:
-    """Resolve confirmed local exports and display names for one subscription user."""
+    """Resolve confirmed local exports and display names for one subscription user.
+
+    An unreadable or inconsistent node is left out of this user's profiles and reported
+    through ``on_error``; it must never remove every other node from the subscription.
+    """
     if node_exports is None:
         return ()
 
@@ -54,12 +60,17 @@ def node_profiles_for_user(
     for node in state.nodes:
         if node.published_generation <= 0 or not node.published_digest:
             continue
-        export = node_exports.published_export(state, node.id)
-        if export is None:
+        try:
+            export = node_exports.published_export(state, node.id)
+            if export is None:
+                continue
+            export.validate()
+            if export.node_id != node.id or export.generation != node.published_generation:
+                raise ValueError(f"published export identity mismatch for node {node.id}")
+        except Exception as exc:
+            if on_error is not None:
+                on_error(node.id, type(exc).__name__)
             continue
-        export.validate()
-        if export.node_id != node.id or export.generation != node.published_generation:
-            raise ValueError(f"published export identity mismatch for node {node.id}")
         exported_user = export.users.get(user.uuid)
         if exported_user is None:
             continue
