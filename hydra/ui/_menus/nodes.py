@@ -6,7 +6,7 @@ from hydra.contracts.node_snapshot import NodeProtocolSpec
 from hydra.core.state_models import AppState
 from hydra.core.state_nodes import NodeConfig
 from hydra.services.application import ApplicationService
-from hydra.ui._menus.nodes_setup import install_node, read_protocol
+from hydra.ui._menus.nodes_setup import install_node, protocol_choices, read_protocol
 from hydra.ui.tui import clear, confirm, error, kv, menu, panel, prompt, success
 
 
@@ -44,7 +44,8 @@ def detach_node(node: NodeConfig, app: ApplicationService) -> bool:
             "VPS НЕ остановлена: старые клиенты могут продолжать работать.",
             "Удалённо отозвать доступ без связи невозможно; очисти VPS отдельно.",
             "Уже учтённый трафик останется в общей квоте.",
-        ], wrap=True,
+        ],
+        wrap=True,
     )
     if prompt("Введите точное имя отсоединяемой ноды") != (node.name or node.id):
         error("Имя не совпало; отсоединение отменено")
@@ -69,7 +70,8 @@ def _import_vk_cookies(node: NodeConfig, app: ApplicationService) -> None:
             "Импорт по pinned SSH заменяет cookies только на этой ноде.",
             "Звонки не создаются и существующий пул не пересоздаётся.",
             "WhitelistBypass.Creator: github.com/kulikov0/whitelist-bypass/releases",
-        ], wrap=True,
+        ],
+        wrap=True,
     )
     source = prompt("Путь к отдельному VK cookies JSON (0 — отмена)")
     if source == "0":
@@ -82,13 +84,22 @@ def _import_vk_cookies(node: NodeConfig, app: ApplicationService) -> None:
 def _protocols(node: NodeConfig, app: ApplicationService) -> None:
     app.nodes.check(node.id)
     while True:
-        options = [(name, name, "включён" if spec.enabled else "выключен") for name, spec in node.protocols.items()]
-        options.extend([("a", "Добавить протокол", ""), ("0", "Назад", "")])
-        choice = menu(options, "ПРОТОКОЛЫ НОДЫ").lower()
+        choices = {str(index): name for index, name in enumerate(node.protocols, 1)}
+        add_key = str(len(choices) + 1)
+        options = [(key, name, "включён" if node.protocols[name].enabled else "выключен") for key, name in choices.items()]
+        options.extend([(add_key, "Добавить протокол", ""), ("0", "Назад", "")])
+        choice = menu(options, "ПРОТОКОЛЫ НОДЫ")
         if choice == "0":
             return
-        name = prompt("Имя протокола (0 — отмена)") if choice == "a" else choice
-        if name == "0":
+        if choice == add_key:
+            available = protocol_choices(app)
+            options = [(key, label, "") for key, (_, label) in available.items()]
+            options.append(("0", "Назад", ""))
+            selected = available.get(menu(options, "ДОБАВИТЬ ПРОТОКОЛ"))
+            name = selected[0] if selected is not None else None
+        else:
+            name = choices.get(choice)
+        if name is None:
             continue
         spec = read_protocol(name, app, node.protocols.get(name, NodeProtocolSpec()))
         if spec is not None and confirm("Применить на ноде и обновить подписки?", default=False):
@@ -98,8 +109,18 @@ def _protocols(node: NodeConfig, app: ApplicationService) -> None:
 
 
 def _profile_name(node: NodeConfig, app: ApplicationService) -> None:
-    key = prompt("Ключ: protocol или protocol:profile (0 — отмена)")
-    if key == "0":
+    keys = set(node.protocols) | set(node.profile_names)
+    state = app.admin.load_state()
+    export = app.nodes.published_export(state, node.id)
+    if export is not None:
+        for user in export.users.values():
+            for profile in user.profiles:
+                keys.add(f"{profile.protocol}:{profile.profile}" if profile.profile else profile.protocol)
+    choices = {str(index): key for index, key in enumerate(sorted(keys), 1)}
+    options = [(number, key, node.profile_names.get(key, "")) for number, key in choices.items()]
+    options.append(("0", "Назад", ""))
+    key = choices.get(menu(options, "ИМЯ ПРОФИЛЯ НОДЫ"))
+    if key is None:
         return
     value = prompt("Новое имя; - убирает override", node.profile_names.get(key, ""))
     app.nodes.change_profile_name(node.id, key, "" if value == "-" else value)
@@ -202,14 +223,15 @@ def menu_nodes(state: AppState, app: ApplicationService) -> None:
         state = app.admin.load_state()
         listed = app.nodes.list_nodes(state)
         clear()
-        choices = {str(index): item for index, item in enumerate(listed, 1)}
-        options = [(key, item.name or item.id, f"{item.region} · {item.address}") for key, item in choices.items()]
-        options.extend([("a", "Установить ноду", "SSH + mTLS"), ("0", "Назад", "")])
-        choice = menu(options, "НОДЫ").lower()
+        choices = {str(index): item for index, item in enumerate(listed, 2)}
+        options = [("1", "Установить ноду", "SSH + mTLS")]
+        options.extend((key, item.name or item.id, f"{item.region} · {item.address}") for key, item in choices.items())
+        options.append(("0", "Назад", ""))
+        choice = menu(options, "НОДЫ")
         if choice == "0":
             return
         try:
-            if choice == "a":
+            if choice == "1":
                 install_node(state, app)
             else:
                 selected = choices.get(choice)

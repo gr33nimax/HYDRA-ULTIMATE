@@ -58,7 +58,7 @@ def test_final_install_confirmation_is_required():
             "prompt",
             side_effect=["de-1", "node.example.com", "22", "Germany", "DE", "main", "a" * 40, "9444"],
         ),
-        patch.object(nodes_setup, "menu", return_value="done"),
+        patch.object(nodes_setup, "menu", return_value="2"),
         patch.object(nodes_setup, "confirm", return_value=False),
         patch.object(nodes_setup, "panel"),
     ):
@@ -87,12 +87,12 @@ def test_install_rejects_inactive_base_subscription_service_before_prompts():
     app.nodes.add_node.assert_not_called()
 
 
-def test_real_install_menu_accepts_protocol_name_and_done():
+def test_real_install_menu_accepts_numeric_protocol_and_continue():
     app = _app()
     values = ["de-1", "node.example.com", "22", "Germany", "DE", "main", "a" * 40, "9444", "-"]
     with (
         patch.object(nodes_setup, "_input", side_effect=values),
-        patch("builtins.input", side_effect=["vless", "done"]),
+        patch("builtins.input", side_effect=["1", "2"]),
         patch.object(nodes_setup, "read_protocol", return_value=NodeProtocolSpec(enabled=True)) as read,
         patch.object(nodes_setup, "confirm", return_value=True),
         patch.object(nodes_setup, "panel"),

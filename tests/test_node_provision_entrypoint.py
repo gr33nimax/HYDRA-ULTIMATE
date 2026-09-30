@@ -16,9 +16,15 @@ _BASE_CERTIFICATE = "-----BEGIN CERTIFICATE-----\npublic-base-cert\n-----END CER
 
 @pytest.fixture(autouse=True)
 def root_posix_environment(monkeypatch):
-    monkeypatch.setattr(node_provision, "os", SimpleNamespace(
-        name="posix", geteuid=lambda: 0, environ=os.environ,
-    ))
+    monkeypatch.setattr(
+        node_provision,
+        "os",
+        SimpleNamespace(
+            name="posix",
+            geteuid=lambda: 0,
+            environ=os.environ,
+        ),
+    )
 
 
 def test_provision_rejects_non_root_before_reading_request_or_mutation(monkeypatch):

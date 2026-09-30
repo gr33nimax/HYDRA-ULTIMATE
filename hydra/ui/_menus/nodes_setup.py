@@ -13,12 +13,21 @@ from hydra.services.application import ApplicationService
 from hydra.ui.tui import confirm, kv, menu, panel, prompt, success
 
 
+def protocol_choices(app: ApplicationService) -> dict[str, tuple[str, str]]:
+    supported = [
+        plugin for plugin in app.protocols.list(PluginCategory.TRANSPORT)
+        if (plugin.meta.capabilities.subscription_enabled or plugin.meta.capabilities.hydra_v2_subscription_enabled)
+    ]
+    return {
+        str(index): (plugin.meta.name, plugin.meta.display_name)
+        for index, plugin in enumerate(supported, 1)
+    }
+
+
 def read_protocol(name: str, app: ApplicationService, previous: NodeProtocolSpec) -> NodeProtocolSpec | None:
     supported = {
-        plugin.meta.name
-        for plugin in app.protocols.list(PluginCategory.TRANSPORT)
-        if (plugin.meta.capabilities.subscription_enabled
-            or plugin.meta.capabilities.hydra_v2_subscription_enabled)
+        plugin.meta.name for plugin in app.protocols.list(PluginCategory.TRANSPORT)
+        if (plugin.meta.capabilities.subscription_enabled or plugin.meta.capabilities.hydra_v2_subscription_enabled)
     }
     if name not in supported:
         raise ValueError("protocol does not publish client profiles")
@@ -70,34 +79,38 @@ def install_node(state: AppState, app: ApplicationService) -> None:
         if any(item.id == node.id for item in app.nodes.list_nodes(state)):
             raise ValueError("node ID already exists")
         while True:
-            supported = [
-                plugin
-                for plugin in app.protocols.list(PluginCategory.TRANSPORT)
-                if (plugin.meta.capabilities.subscription_enabled
-                    or plugin.meta.capabilities.hydra_v2_subscription_enabled)
-            ]
-            options = [(plugin.meta.name, plugin.meta.display_name, "") for plugin in supported]
-            options.extend([("done", "Продолжить", ""), ("0", "Отмена установки", "")])
-            choice = menu(options, "ПРОТОКОЛЫ НОДЫ").lower()
+            choices = protocol_choices(app)
+            next_key = str(len(choices) + 1)
+            options = [(key, label, "") for key, (_, label) in choices.items()]
+            options.extend([(next_key, "Продолжить", ""), ("0", "Отмена установки", "")])
+            choice = menu(options, "ПРОТОКОЛЫ НОДЫ")
             if choice == "0":
                 return
-            if choice == "done":
+            if choice == next_key:
                 break
-            spec = read_protocol(choice, app, node.protocols.get(choice, NodeProtocolSpec()))
+            selected = choices.get(choice)
+            if selected is None:
+                continue
+            protocol, _ = selected
+            spec = read_protocol(protocol, app, node.protocols.get(protocol, NodeProtocolSpec()))
             if spec is not None:
-                node.protocols[choice] = spec
+                node.protocols[protocol] = spec
                 name = _input("Имя профиля; - = по умолчанию", "-")
                 if name != "-":
-                    node.profile_names[choice] = name
+                    node.profile_names[protocol] = name
         node.validate()
         calls = node.protocols.get("calls")
         vk_cookie_source = None
         if calls is not None and calls.enabled:
-            panel("VK COOKIES НОДЫ", [
-                "Нужен отдельный JSON для этой ноды: cookies основы не копируются.",
-                "Скачать WhitelistBypass.Creator: github.com/kulikov0/whitelist-bypass/releases",
-                "Cookies будут импортированы по pinned SSH до первого включения VK Tunnel.",
-            ], wrap=True)
+            panel(
+                "VK COOKIES НОДЫ",
+                [
+                    "Нужен отдельный JSON для этой ноды: cookies основы не копируются.",
+                    "Скачать WhitelistBypass.Creator: github.com/kulikov0/whitelist-bypass/releases",
+                    "Cookies будут импортированы по pinned SSH до первого включения VK Tunnel.",
+                ],
+                wrap=True,
+            )
             vk_cookie_source = _input("Путь к отдельному VK cookies JSON")
         host = app.admin.subscription_public_host(state)
         base_url = f"https://{host}"

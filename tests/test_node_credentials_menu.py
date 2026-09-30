@@ -100,7 +100,7 @@ def test_calls_install_wizard_passes_separate_cookie_file_before_initial_activat
     values = ["de-1", "node.example.com", "22", "Germany", "DE", "main", "a" * 40, "9444", "-", "/secure/node-vk.json"]
     with (
         patch.object(nodes_setup, "prompt", side_effect=values),
-        patch.object(nodes_setup, "menu", side_effect=["calls", "done"]),
+        patch.object(nodes_setup, "menu", side_effect=["1", "2"]),
         patch.object(nodes_setup, "read_protocol", return_value=NodeProtocolSpec(enabled=True)),
         patch.object(nodes_setup, "panel"),
         patch.object(nodes_setup, "confirm", return_value=True),
