@@ -1,9 +1,31 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 import hydra.entrypoints.node_control as node_control
 
 from hydra.core.host import HOST
 from hydra.core.node_identity import NodeIdentity
+
+
+@pytest.fixture(autouse=True)
+def root_posix_environment(monkeypatch):
+    # Model the production branch on Windows too; never mutate process-wide os.name.
+    monkeypatch.setattr(node_control, "os", SimpleNamespace(name="posix", geteuid=lambda: 0))
+
+
+def test_node_agent_rejects_non_root_before_identity_or_host_access(monkeypatch):
+    monkeypatch.setattr(node_control.os, "geteuid", lambda: 1000)
+    with (
+        patch.object(node_control, "load_node_identity") as load_identity,
+        patch.object(node_control, "apply_control_firewall") as firewall,
+        patch.object(node_control, "create_control_server") as server,
+    ):
+        assert node_control.main() == 2
+    load_identity.assert_not_called()
+    firewall.assert_not_called()
+    server.assert_not_called()
 
 
 def test_node_agent_does_not_start_without_identity():

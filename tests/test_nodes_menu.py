@@ -1,5 +1,7 @@
 from unittest.mock import Mock, patch
 
+import pytest
+
 from hydra.core.state_models import AppState
 from hydra.core.state_nodes import NodeConfig
 import hydra.ui._menus.nodes as nodes
@@ -80,3 +82,31 @@ def test_offline_protocol_editor_does_not_change_desired_settings():
     ):
         nodes.node_card(app.admin.load_state.return_value.nodes[0], app)
     app.nodes.change_protocol.assert_not_called()
+
+
+@pytest.mark.parametrize("key", ["a", "A", "а", "А"])
+def test_real_menu_install_key_reaches_wizard(key):
+    app = _app()
+    with (
+        patch("builtins.input", side_effect=[key, "0"]),
+        patch.object(nodes, "clear"),
+        patch.object(nodes, "install_node") as install,
+    ):
+        nodes.menu_nodes(AppState(), app)
+    install.assert_called_once_with(app.admin.load_state.return_value, app)
+
+
+@pytest.mark.parametrize("key", ["a", "vless"])
+def test_real_protocol_menu_normalizes_action_and_protocol_keys(key):
+    app = _app()
+    node = app.admin.load_state.return_value.nodes[0]
+    from hydra.contracts.node_snapshot import NodeProtocolSpec
+
+    node.protocols["vless"] = NodeProtocolSpec()
+    with (
+        patch("builtins.input", side_effect=[key, "0"]),
+        patch.object(nodes, "prompt", return_value="vless"),
+        patch.object(nodes, "read_protocol", return_value=None) as read,
+    ):
+        nodes._protocols(node, app)
+    read.assert_called_once_with("vless", app, node.protocols["vless"])

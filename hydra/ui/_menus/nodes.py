@@ -84,7 +84,7 @@ def _protocols(node: NodeConfig, app: ApplicationService) -> None:
     while True:
         options = [(name, name, "включён" if spec.enabled else "выключен") for name, spec in node.protocols.items()]
         options.extend([("a", "Добавить протокол", ""), ("0", "Назад", "")])
-        choice = menu(options, "ПРОТОКОЛЫ НОДЫ")
+        choice = menu(options, "ПРОТОКОЛЫ НОДЫ").lower()
         if choice == "0":
             return
         name = prompt("Имя протокола (0 — отмена)") if choice == "a" else choice
@@ -205,7 +205,7 @@ def menu_nodes(state: AppState, app: ApplicationService) -> None:
         choices = {str(index): item for index, item in enumerate(listed, 1)}
         options = [(key, item.name or item.id, f"{item.region} · {item.address}") for key, item in choices.items()]
         options.extend([("a", "Установить ноду", "SSH + mTLS"), ("0", "Назад", "")])
-        choice = menu(options, "НОДЫ")
+        choice = menu(options, "НОДЫ").lower()
         if choice == "0":
             return
         try:

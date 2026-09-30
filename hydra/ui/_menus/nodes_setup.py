@@ -78,7 +78,7 @@ def install_node(state: AppState, app: ApplicationService) -> None:
             ]
             options = [(plugin.meta.name, plugin.meta.display_name, "") for plugin in supported]
             options.extend([("done", "Продолжить", ""), ("0", "Отмена установки", "")])
-            choice = menu(options, "ПРОТОКОЛЫ НОДЫ")
+            choice = menu(options, "ПРОТОКОЛЫ НОДЫ").lower()
             if choice == "0":
                 return
             if choice == "done":

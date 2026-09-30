@@ -1,13 +1,39 @@
 import io
 import json
+import os
 from subprocess import CompletedProcess
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
+
+import pytest
 
 import hydra.entrypoints.node_provision as node_provision
 from hydra.core.node_identity import NodeIdentity
 
 
 _BASE_CERTIFICATE = "-----BEGIN CERTIFICATE-----\npublic-base-cert\n-----END CERTIFICATE-----\n"
+
+
+@pytest.fixture(autouse=True)
+def root_posix_environment(monkeypatch):
+    monkeypatch.setattr(node_provision, "os", SimpleNamespace(
+        name="posix", geteuid=lambda: 0, environ=os.environ,
+    ))
+
+
+def test_provision_rejects_non_root_before_reading_request_or_mutation(monkeypatch):
+    monkeypatch.setattr(node_provision.os, "geteuid", lambda: 1000)
+    with (
+        patch.object(node_provision.sys, "stdin", Mock()) as source,
+        patch.object(node_provision, "provision_node_identity") as provision,
+        patch.object(node_provision, "production_node_uninstall") as uninstall,
+        patch.object(node_provision.HOST, "systemd") as systemd,
+    ):
+        assert node_provision.main() == 2
+    source.read.assert_not_called()
+    provision.assert_not_called()
+    uninstall.assert_not_called()
+    systemd.assert_not_called()
 
 
 def _payload():
