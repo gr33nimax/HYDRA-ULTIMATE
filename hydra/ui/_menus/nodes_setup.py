@@ -8,7 +8,11 @@ from hydra.core.state_models import AppState
 from hydra.core.state_nodes import NodeConfig
 from hydra.plugins.base import PluginCategory
 from hydra.services.application import ApplicationService
-from hydra.ui._menus.node_protocol_fields import collect_protocol_config, missing_required, protocol_field_labels
+from hydra.ui._menus.node_protocol_fields import (
+    collect_protocol_config,
+    preflight_protocol,
+    protocol_field_labels,
+)
 from hydra.ui.protocol_ui import protocol_label
 from hydra.ui.tui import confirm, error, kv, menu, panel, prompt, success
 
@@ -48,12 +52,9 @@ def read_protocol(name: str, app: ApplicationService, previous: NodeProtocolSpec
     config = collect_protocol_config(name, dict(previous.config))
     if config is None:
         return None
-    required = "" if name == "vless" and config.get("security") == "reality" else missing_required(name, config)
-    if required:
-        error(f"{required}: значение обязательно для {supported[name]}")
-        return None
-    if name == "vless" and config.get("security") != "reality" and not str(config.get("domain", "")).strip():
-        error("VLESS в режиме TLS требует домен")
+    problem = preflight_protocol(name, config)
+    if problem:
+        error(f"{problem} ({supported[name]})")
         return None
     spec = NodeProtocolSpec(enabled=True, port=previous.port, config=config)
     spec.validate()

@@ -41,6 +41,10 @@ class NodeField:
     maximum: int | None = None
     # Plugin module exposing ``list_presets()`` when the choices are dynamic.
     provider: str = ""
+    # Conditions under which this parameter means anything: ``key`` must hold one of
+    # ``values``. A question that cannot apply is not asked, and its previous value is
+    # dropped — a stale ``web_domain`` must not survive the mode that used it.
+    show_if: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 def _presets(module: str) -> tuple[tuple[str, str], ...]:
@@ -86,8 +90,24 @@ PROTOCOL_FIELDS: dict[str, tuple[NodeField, ...]] = {
             choices=(("bbr", "BBR — автоматическая оценка"), ("brutal", "Brutal — явные Mbps")),
         ),
         NodeField("port", "UDP-порт Hysteria2", kind="int", default=8443, minimum=1, maximum=65535),
-        NodeField("up_mbps", "Upload, Mbps", kind="int", default=100, minimum=1, maximum=100000),
-        NodeField("down_mbps", "Download, Mbps", kind="int", default=100, minimum=1, maximum=100000),
+        NodeField(
+            "up_mbps",
+            "Upload, Mbps",
+            kind="int",
+            default=100,
+            minimum=1,
+            maximum=100000,
+            show_if=(("congestion_mode", ("brutal",)),),
+        ),
+        NodeField(
+            "down_mbps",
+            "Download, Mbps",
+            kind="int",
+            default=100,
+            minimum=1,
+            maximum=100000,
+            show_if=(("congestion_mode", ("brutal",)),),
+        ),
     ),
     "mieru": (
         NodeField(
@@ -107,7 +127,12 @@ PROTOCOL_FIELDS: dict[str, tuple[NodeField, ...]] = {
             default="off",
             choices=(("off", "Выключен"), ("hybrid", "Hybrid — Telegram и WEB"), ("web-only", "Только WEB")),
         ),
-        NodeField("web_domain", "Домен WEB-ретранслятора", hint="нужен только при включённом режиме"),
+        NodeField(
+            "web_domain",
+            "Домен WEB-ретранслятора",
+            hint="нужен при включённом режиме",
+            show_if=(("web_mode", ("hybrid", "web-only")),),
+        ),
     ),
     "naive": (
         NodeField("domain", "Домен для NaiveProxy", required=True),
@@ -151,7 +176,11 @@ PROTOCOL_FIELDS: dict[str, tuple[NodeField, ...]] = {
             default="tls",
             choices=(("tls", "TLS — свой домен и сертификат"), ("reality", "Reality — подмена чужого TLS")),
         ),
-        NodeField("domain", "Домен для VLESS", hint="обязателен в режиме TLS"),
+        NodeField(
+            "domain",
+            "Домен или домен-маска",
+            hint="свой домен для TLS; в Reality — чужой TLS 1.3 хост, который маскирует рукопожатие",
+        ),
         NodeField(
             "xhttp_mode",
             "Режим XHTTP",
@@ -239,6 +268,10 @@ def _ask(item: NodeField, current: object) -> tuple[bool, object]:
         value = _ask_choice(item, current)
         return value is not None, value
     shown = current if current not in (None, "") else item.default
+    if item.hint:
+        # The hint was written and never shown: the operator saw a bare question and had to
+        # guess which value belongs in it.
+        print(f"  {item.hint}")
     for _ in range(MAX_FIELD_ATTEMPTS):
         raw = prompt(f"{item.label} (0 — отмена)", str(shown)).strip()
         if raw == "0":
@@ -263,15 +296,32 @@ def _ask(item: NodeField, current: object) -> tuple[bool, object]:
     return False, None
 
 
+def _applies(item: NodeField, config: dict) -> bool:
+    """Whether a parameter means anything for the configuration collected so far."""
+    for key, allowed in item.show_if:
+        if str(config.get(key, "") or "") not in allowed:
+            return False
+    return True
+
+
 def collect_protocol_config(name: str, previous: dict) -> dict | None:
     """Collect one protocol's public parameters; None means the operator cancelled."""
     collected: dict = dict(previous)
     for item in PROTOCOL_FIELDS.get(name, ()):
+        if not _applies(item, collected):
+            # A parameter that no longer applies must not stay behind: keeping a
+            # web_domain after the relay was switched off is what made a node apply a
+            # route the operator had already removed.
+            collected.pop(item.key, None)
+            continue
         accepted, value = _ask(item, previous.get(item.key))
         if not accepted:
             return None
         if value not in (None, ""):
             collected[item.key] = value
+        elif item.kind == "text" and item.key in collected:
+            # An emptied optional field means "no value", not "keep the old one".
+            collected.pop(item.key, None)
     return collected
 
 
@@ -280,6 +330,33 @@ def missing_required(name: str, config: dict) -> str:
     for item in PROTOCOL_FIELDS.get(name, ()):
         if item.required and not str(config.get(item.key, "") or "").strip():
             return item.label
+    return ""
+
+
+def preflight_protocol(name: str, config: dict) -> str:
+    """Reject a combination that cannot work, before anything reaches the VPS.
+
+    Pure and offline: it only reads the collected settings, so a mistake costs the
+    operator a sentence instead of a failed install and a half-configured node.
+    """
+    missing = missing_required(name, config)
+    if missing:
+        return f"{missing}: значение обязательно"
+    if name == "vless":
+        security = str(config.get("security", "tls") or "tls")
+        domain = str(config.get("domain", "") or "").strip()
+        # Reality borrows a third-party handshake and works without one being named; a
+        # certificate mode cannot, because the certificate has to belong to that domain.
+        if security == "tls" and not domain:
+            return "VLESS в режиме TLS требует свой домен"
+    if name == "mtproto_zig":
+        mode = str(config.get("web_mode", "off") or "off")
+        relay = str(config.get("web_domain", "") or "").strip()
+        cover = str(config.get("domain", "") or "").strip().lower()
+        if mode != "off" and not relay:
+            return "WEB-режим требует отдельный домен: Telegram не принимает IP и одно слово"
+        if relay and relay.lower() == cover:
+            return "Домен WEB-релея совпадает с доменом FakeTLS: один домен не может нести два маршрута"
     return ""
 
 
@@ -297,6 +374,7 @@ __all__ = [
     "NodeField",
     "collect_protocol_config",
     "missing_required",
+    "preflight_protocol",
     "protocol_field_labels",
     "protocol_field_names",
 ]

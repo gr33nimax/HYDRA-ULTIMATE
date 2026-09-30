@@ -280,3 +280,73 @@ def test_every_offered_transport_prepares_its_node_config_or_names_what_is_missi
             failures.append(f"{name}: prepare_node_config returned {result!r}")
 
     assert failures == []
+
+
+def test_conditional_fields_are_not_asked_when_they_cannot_apply():
+    """Brutal needs explicit Mbps; BBR estimates them, so the question is noise."""
+    def brute_answers(values):
+        def answer(label, default=""):
+            for prefix, value in values.items():
+                if label.startswith(prefix):
+                    return value
+            return default
+
+        return answer
+
+    with (
+        patch.object(fields, "prompt", side_effect=brute_answers({"Домен": "hy.example.com"})) as prompt,
+        patch.object(fields, "menu", side_effect=["1"]),  # BBR
+    ):
+        config = fields.collect_protocol_config("hysteria2", {})
+
+    assert config is not None
+    assert config["congestion_mode"] == "bbr"
+    assert "up_mbps" not in config and "down_mbps" not in config
+    assert all("Mbps" not in str(call) for call in prompt.call_args_list)
+
+    with (
+        patch.object(
+            fields,
+            "prompt",
+            side_effect=brute_answers({"Домен": "hy.example.com", "Upload": "250", "Download": "250"}),
+        ),
+        patch.object(fields, "menu", side_effect=["2"]),  # Brutal
+    ):
+        config = fields.collect_protocol_config("hysteria2", {})
+
+    assert config is not None
+    assert config["up_mbps"] == 250 and config["down_mbps"] == 250
+
+
+def test_a_value_that_no_longer_applies_is_dropped_not_kept():
+    """Switching the WEB relay off must not leave its domain behind for the node."""
+    previous = {"domain": "cover.example.com", "web_mode": "hybrid", "web_domain": "web.example.com"}
+
+    def keep_cover(label, default=""):
+        return "cover.example.com" if label.startswith("Домен FakeTLS") else default
+
+    with (
+        patch.object(fields, "prompt", side_effect=keep_cover),
+        patch.object(fields, "menu", side_effect=["1"]),  # off
+    ):
+        config = fields.collect_protocol_config("mtproto_zig", previous)
+
+    assert config is not None
+    assert config["web_mode"] == "off"
+    assert "web_domain" not in config
+    assert config["domain"] == "cover.example.com"
+
+
+def test_preflight_rejects_impossible_combinations_before_the_vps_is_touched():
+    assert fields.preflight_protocol("vless", {"security": "tls"}) == "VLESS в режиме TLS требует свой домен"
+    assert fields.preflight_protocol("vless", {"security": "reality"}) == ""
+    assert fields.preflight_protocol("mtproto_zig", {"web_mode": "hybrid", "domain": "cover.example.com"})
+    assert fields.preflight_protocol(
+        "mtproto_zig",
+        {"web_mode": "hybrid", "domain": "same.example.com", "web_domain": "same.example.com"},
+    )
+    assert fields.preflight_protocol(
+        "mtproto_zig",
+        {"web_mode": "hybrid", "domain": "cover.example.com", "web_domain": "web.example.com"},
+    ) == ""
+    assert fields.preflight_protocol("mtproto_zig", {"web_mode": "off", "domain": "cover.example.com"}) == ""
