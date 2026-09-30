@@ -609,3 +609,29 @@ def test_presets_strategies_and_overrides():
         p_legacy = generate_params(strategy=legacy, seed=123)
         p_new = generate_params(strategy=strat, carrier=carr, seed=123)
         assert p_legacy == p_new
+
+
+def test_every_awg_link_a_node_exports_satisfies_the_export_contract():
+    """The node validates each link before publishing it.
+
+    The fragment is a URI component: encoding only the space between the email and the
+    label left the label's own spaces raw, and the export contract rejects a link with
+    whitespace — so a node serving AmneziaWG published nothing at all.
+    """
+    from hydra.contracts.node_export import NodeClientProfile
+    from hydra.contracts.node_snapshot import is_node_local_secret_key  # noqa: F401  (contract import path)
+
+    plugin = AmneziaWGPlugin()
+    state = AppState(protocols={"amneziawg": PluginState(installed=True, enabled=True, config={})})
+    user = User(email="alice@example.com", uuid="user-1")
+    state.users = [user]
+    plugin.on_user_add(user, state)
+    plugin.prepare_node_config(state, {"protocol_mode": "3.1"})
+
+    links = plugin.client_links(user, state, profile="desktop")
+
+    assert links
+    for link in links:
+        NodeClientProfile(protocol="amneziawg", profile="desktop", links=(link,)).validate()
+        assert not any(character.isspace() for character in link)
+    assert any(link.endswith("#alice%40example.com%20AWG%20Desktop") for link in links)

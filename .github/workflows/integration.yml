@@ -29,8 +29,17 @@ jobs:
           sudo apt-get install -y -qq nftables iptables
       - name: Run unit suite on Linux
         run: python -m pytest -q
+      - name: Exercise the base-to-node path over the real control transport
+        # Opt-in: this path opens loopback sockets on purpose.
+        env:
+          HYDRA_NODE_E2E: "1"
+        run: python -m pytest -q tests/test_node_e2e.py
       - name: Exercise root, systemd, nftables and backup lifecycle
-        run: sudo --preserve-env=PATH bash .github/scripts/linux-integration-smoke.sh
+        run: >-
+          sudo --preserve-env=PATH
+          bash .github/scripts/linux-integration-smoke.sh
       - name: Exercise transactional main-to-dev upgrade
         if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-        run: sudo --preserve-env=PATH,GITHUB_WORKSPACE bash .github/scripts/linux-upgrade-smoke.sh
+        run: >-
+          sudo --preserve-env=PATH,GITHUB_WORKSPACE
+          bash .github/scripts/linux-upgrade-smoke.sh

@@ -101,7 +101,11 @@ class NodeControlClient:
                 raise NodeControlError("node returned an invalid control response")
             if response.status < 200 or response.status >= 300:
                 message = result.get("error")
-                raise NodeControlError(str(message) if isinstance(message, str) else "node control request failed")
+                reason = result.get("reason")
+                detail = str(message) if isinstance(message, str) else "node control request failed"
+                if isinstance(reason, str) and reason.strip():
+                    detail = f"{detail}: {reason.strip()[:512]}"
+                raise NodeControlError(detail)
             peer_id = result.get("node_id")
             if peer_id is not None and peer_id != self.node_id:
                 raise NodeControlError("control response node_id does not match the configured node")

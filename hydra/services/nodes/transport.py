@@ -234,8 +234,12 @@ class _NodeControlHandler(BaseHTTPRequestHandler):
             if (isinstance(result, bool) and not result) or operations.current_generation() != snapshot.generation:
                 self._send(409, {"error": "snapshot was not committed"})
                 return
-        except Exception:
-            self._send(500, {"error": "snapshot apply failed"})
+        except Exception as exc:
+            # The peer is the pinned base over mutual TLS, and the reason is what turns
+            # "snapshot apply failed" into something an operator can act on. It is
+            # bounded and redacted like every other diagnostic.
+            reason = redact_text(str(exc))[:512] or exc.__class__.__name__
+            self._send(500, {"error": "snapshot apply failed", "stage": "apply", "reason": reason})
             return
         self._send(
             200,

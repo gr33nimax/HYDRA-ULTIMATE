@@ -6,6 +6,7 @@ import base64
 import json
 import re
 import struct
+import urllib.parse
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -264,7 +265,9 @@ class AwgClientLinksMixin:
                 capabilities["singbox"] = "ready"
                 capabilities["hydrabox_subscription"] = "ready"
             else:
-                reason = f"unsupported: AWG 3.1 requires a HydraCore with the 3.1 fields ({MIN_AWG31_CORE_TEXT} or newer)"
+                reason = (
+                    f"unsupported: AWG 3.1 requires a HydraCore with the 3.1 fields ({MIN_AWG31_CORE_TEXT} or newer)"
+                )
                 capabilities["singbox"] = reason
                 capabilities["hydrabox_subscription"] = reason
         return capabilities
@@ -352,7 +355,12 @@ class AwgClientLinksMixin:
             params.append(f"pre_shared_key={field('PresharedKey')}")
         params.append("persistent_keepalive_interval=25")
         label = "AWG Mobile" if profile_name == "mobile" else "AWG Desktop"
-        return f"wg://{host}:{port}?{'&'.join(params)}#{user.email}%20{label}"
+        # The fragment is a URI component, so the whole tag is percent-encoded. Encoding
+        # only the joining space left the label's own spaces raw, which made the link
+        # invalid — and the node export contract rejects such a link, so a node serving
+        # AmneziaWG could not publish a single profile.
+        tag = urllib.parse.quote(f"{user.email} {label}", safe="")
+        return f"wg://{host}:{port}?{'&'.join(params)}#{tag}"
 
     def amnezia_link(
         self,
