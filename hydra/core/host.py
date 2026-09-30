@@ -60,7 +60,14 @@ class HostBackend:
     def which(self, executable: str) -> str | None:
         return shutil.which(executable)
 
-    def atomic_write(self, path: Path, content: str | bytes, *, mode: int = 0o644) -> None:
+    def atomic_write(
+        self,
+        path: Path,
+        content: str | bytes,
+        *,
+        mode: int = 0o644,
+        durable: bool = False,
+    ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         pending = path.with_name(f".{path.name}.{os.getpid()}.pending")
         if isinstance(content, bytes):
@@ -68,7 +75,17 @@ class HostBackend:
         else:
             pending.write_text(content, encoding="utf-8")
         pending.chmod(mode)
+        if durable:
+            with pending.open("r+b") as handle:
+                handle.flush()
+                os.fsync(handle.fileno())
         pending.replace(path)
+        if durable and os.name != "nt":
+            directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
 
     def atomic_copy(
         self,

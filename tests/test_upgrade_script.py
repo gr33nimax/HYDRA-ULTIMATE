@@ -20,6 +20,19 @@ def _source() -> str:
     return SCRIPT.read_text(encoding="utf-8")
 
 
+def test_node_upgrade_uses_exact_revision_and_checks_contract_before_and_after_cutover():
+    source = _source()
+    assert 'HYDRA_TARGET_REV="${HYDRA_TARGET_REV:-}"' in source
+    assert 'HYDRA_EXPECT_NODE_CONTRACT_VERSION="${HYDRA_EXPECT_NODE_CONTRACT_VERSION:-}"' in source
+    assert 'TARGET_SHA="$HYDRA_TARGET_REV"' in source
+    assert "TARGET_NODE_CONTRACT_VERSION" in source
+    assert "INSTALLED_NODE_CONTRACT_VERSION" in source
+    assert source.index("TARGET_NODE_CONTRACT_VERSION") < source.index('info "Останавливаю активные службы HYDRA')
+    assert source.index("INSTALLED_NODE_CONTRACT_VERSION") < source.index(
+        'printf \'%s\\n\' "$TARGET_SHA" >"$ROLLBACK_DIR/SUCCESS"'
+    )
+
+
 def test_existing_install_updater_is_transactional_and_main_by_default():
     source = _source()
     assert 'HYDRA_REF="${HYDRA_REF:-main}"' in source

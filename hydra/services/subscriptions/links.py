@@ -10,6 +10,10 @@ from hydra.contracts.vless_cdn import CLIENT_LABEL
 from hydra.core.configuration_names import resolve_configuration_name
 from hydra.core.state_models import AppState, User
 from hydra.services.subscriptions.access import SubscriptionPluginAccess
+from hydra.services.subscriptions.node_exports import (
+    PublishedNodeExportReader,
+    node_profiles_for_user,
+)
 from hydra.services.subscriptions.serialization import (
     clean_link_to_sn,
     generate_awg_sn_link,
@@ -221,10 +225,16 @@ def _base_subscription_links(
     state: AppState,
     *,
     plugins: SubscriptionPluginAccess,
+    node_exports: PublishedNodeExportReader | None = None,
 ) -> list[str]:
     formatted = [tag_client_link(link, user, state) for link in generate_links(user, state, plugins=plugins)]
-    links = [*formatted]
-    links.extend(converted for link in formatted if (converted := clean_link_to_sn(link, user)))
+    node_links = [
+        link
+        for profile in node_profiles_for_user(user, state, node_exports=node_exports)
+        for link in profile.links
+    ]
+    links = [*formatted, *node_links]
+    links.extend(converted for link in links if (converted := clean_link_to_sn(link, user)))
     links.extend(_awg_links(user, state, plugins))
     return links
 
@@ -234,9 +244,15 @@ def generate_base64_sub(
     state: AppState,
     *,
     plugins: SubscriptionPluginAccess,
+    node_exports: PublishedNodeExportReader | None = None,
 ) -> str:
     """Build a generic base64 subscription with native NekoBox variants."""
-    links = _base_subscription_links(user, state, plugins=plugins)
+    links = _base_subscription_links(
+        user,
+        state,
+        plugins=plugins,
+        node_exports=node_exports,
+    )
     payload = "\n".join(links) + "\n"
     return base64.b64encode(payload.encode()).decode()
 
@@ -246,11 +262,17 @@ def generate_shadowrocket_sub(
     state: AppState,
     *,
     plugins: SubscriptionPluginAccess,
+    node_exports: PublishedNodeExportReader | None = None,
 ) -> str:
     """Build a base64 list with native Shadowrocket transport variants."""
     links: list[str] = []
     naive_uot = _naive_uot_enabled(state)
-    for link in _base_subscription_links(user, state, plugins=plugins):
+    for link in _base_subscription_links(
+        user,
+        state,
+        plugins=plugins,
+        node_exports=node_exports,
+    ):
         try:
             parsed = urllib.parse.urlsplit(link)
             scheme = parsed.scheme.lower()

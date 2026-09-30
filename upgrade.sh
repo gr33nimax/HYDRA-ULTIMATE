@@ -14,6 +14,8 @@ LOCK_FILE="${HYDRA_UPGRADE_LOCK_FILE:-/run/lock/hydra-upgrade.lock}"
 WRAPPER="/usr/local/bin/hydra"
 REPO_URL="${HYDRA_REPO_URL:-https://github.com/gr33nimax/HYDRA-ULTIMATE}"
 HYDRA_REF="${HYDRA_REF:-main}"
+HYDRA_TARGET_REV="${HYDRA_TARGET_REV:-}"
+HYDRA_EXPECT_NODE_CONTRACT_VERSION="${HYDRA_EXPECT_NODE_CONTRACT_VERSION:-}"
 # Удержание артефактов: каждый деплой оставляет каталог релиза и снимок отката,
 # без ограничения они копятся сотнями и съедают диск.
 KEEP_RELEASES="${HYDRA_KEEP_RELEASES:-3}"
@@ -121,6 +123,12 @@ require_absolute_safe_path HYDRA_UPGRADE_LOCK_FILE "$LOCK_FILE"
 git check-ref-format --branch "$HYDRA_REF" >/dev/null 2>&1 || {
     fail "Некорректное имя ветки HYDRA_REF: $HYDRA_REF"
 }
+if [[ -n "$HYDRA_TARGET_REV" && ! "$HYDRA_TARGET_REV" =~ ^[0-9a-f]{40}$ ]]; then
+    fail "HYDRA_TARGET_REV должен быть полным SHA-1 коммита."
+fi
+if [[ -n "$HYDRA_EXPECT_NODE_CONTRACT_VERSION" && ! "$HYDRA_EXPECT_NODE_CONTRACT_VERSION" =~ ^[1-9][0-9]{0,8}$ ]]; then
+    fail "Некорректная ожидаемая версия node contract."
+fi
 
 for command in awk git python3 systemctl flock cp mv readlink stat tee; do
     command -v "$command" >/dev/null 2>&1 || {
@@ -540,10 +548,14 @@ trap 'handle_signal 143 $LINENO' TERM
 
 step 2 7 "Определение целевой версии"
 info "Ветка: $HYDRA_REF"
-TARGET_SHA=$(
-    git ls-remote --exit-code "$REPO_URL" "refs/heads/$HYDRA_REF" |
-        awk 'NR == 1 {print $1}'
-)
+if [[ -n "$HYDRA_TARGET_REV" ]]; then
+    TARGET_SHA="$HYDRA_TARGET_REV"
+else
+    TARGET_SHA=$(
+        git ls-remote --exit-code "$REPO_URL" "refs/heads/$HYDRA_REF" |
+            awk 'NR == 1 {print $1}'
+    )
+fi
 [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || {
     fail "Не удалось определить целевой коммит ветки."
 }
@@ -608,6 +620,13 @@ run_stage_python -m compileall -q \
 run_stage_python \
     -c 'from hydra import __version__; print(__version__)' \
     >"$ROLLBACK_DIR/target-version.txt"
+if [[ -n "$HYDRA_EXPECT_NODE_CONTRACT_VERSION" ]]; then
+    TARGET_NODE_CONTRACT_VERSION=$(run_stage_python -c \
+        'from hydra.contracts.node_validation import NODE_CONTRACT_VERSION; print(NODE_CONTRACT_VERSION)')
+    [[ "$TARGET_NODE_CONTRACT_VERSION" == "$HYDRA_EXPECT_NODE_CONTRACT_VERSION" ]] || {
+        fail "Целевая версия control contract несовместима с управляющей основой."
+    }
+fi
 
 step 4 7 "Безопасная проверка перед обновлением"
 info "Проверяю новый код без изменения рабочего состояния"
@@ -750,6 +769,13 @@ check = json.loads(pathlib.Path(sys.argv[1]).read_text())
 if not check.get("ok"):
     raise SystemExit("Итоговая проверка новой версии не пройдена")
 PY
+if [[ -n "$HYDRA_EXPECT_NODE_CONTRACT_VERSION" ]]; then
+    INSTALLED_NODE_CONTRACT_VERSION=$(run_install_python -c \
+        'from hydra.contracts.node_validation import NODE_CONTRACT_VERSION; print(NODE_CONTRACT_VERSION)')
+    [[ "$INSTALLED_NODE_CONTRACT_VERSION" == "$HYDRA_EXPECT_NODE_CONTRACT_VERSION" ]] || {
+        fail "Установленная версия control contract несовместима с управляющей основой."
+    }
+fi
 CURRENT_OPERATION=""
 CURRENT_REPORT=""
 wait_for_previous_units

@@ -308,6 +308,9 @@ class OrchestrationService:
     def add_user(self, state: AppState, user: User) -> None:
         self._user_lifecycle().add(state, user)
 
+    def reconcile_users(self, state: AppState, users: list[User]) -> None:
+        self._user_lifecycle().reconcile_users(state, users)
+
     def remove_user(self, state: AppState, email: str) -> None:
         self._user_lifecycle().remove(state, email)
 

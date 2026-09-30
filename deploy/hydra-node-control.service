@@ -1,0 +1,20 @@
+[Unit]
+Description=HYDRA managed-node control API
+After=network-online.target nftables.service firewalld.service ufw.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+WorkingDirectory=/opt/hydra
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/hydra/.venv/bin/python -m hydra.entrypoints.node_control
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+
+[Install]
+# Enabled only after the base provisions and validates this node's identity.
+WantedBy=multi-user.target

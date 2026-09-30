@@ -5,24 +5,35 @@ import base64
 import json
 import socket
 import urllib.parse
+from collections.abc import Iterator
+from typing import Any
 
-from hydra.core.configuration_names import (
-    _replace_profile_reference,
-    resolve_configuration_name,
-)
+from hydra.core.configuration_names import resolve_configuration_name
 from hydra.core.state_models import AppState, User
 from hydra.services.subscriptions.access import SubscriptionPluginAccess
 from hydra.services.subscriptions.links import generate_base64_sub
+from hydra.services.subscriptions.node_exports import (
+    NodeSubscriptionProfile,
+    PublishedNodeExportReader,
+    node_profiles_for_user,
+)
 from hydra.services.subscriptions.serialization import serialize_nekobox_config
+from hydra.services.subscriptions.singbox_config import generate_singbox_config
 
 
 def _links_without_custom_configs(
     user: User,
     state: AppState,
     plugins: SubscriptionPluginAccess,
+    node_exports: PublishedNodeExportReader | None = None,
 ) -> list[str]:
     payload = base64.b64decode(
-        generate_base64_sub(user, state, plugins=plugins),
+        generate_base64_sub(
+            user,
+            state,
+            plugins=plugins,
+            node_exports=node_exports,
+        ),
     ).decode()
     links: list[str] = []
     for link in payload.splitlines():
@@ -39,6 +50,41 @@ def _links_without_custom_configs(
         if link and not shadowtls_trojan and not trusttunnel_quic:
             links.append(link)
     return links
+
+
+def _node_custom_documents(
+    user: User,
+    state: AppState,
+    node_exports: PublishedNodeExportReader | None,
+) -> Iterator[tuple[NodeSubscriptionProfile, dict[str, Any], str]]:
+    for profile in node_profiles_for_user(user, state, node_exports=node_exports):
+        if not profile.singbox:
+            continue
+        if profile.protocol == "shadowtls":
+            link_type = "shadowtls"
+        elif profile.protocol == "trusttunnel" and _is_trusttunnel_quic(profile):
+            link_type = "trusttunnel-quic"
+        elif not profile.links:
+            link_type = profile.protocol
+        else:
+            continue
+        for document in profile.singbox:
+            yield profile, document, link_type
+
+
+def _is_trusttunnel_quic(profile: NodeSubscriptionProfile) -> bool:
+    for link in profile.links:
+        try:
+            parsed = urllib.parse.urlsplit(link)
+        except ValueError:
+            continue
+        query = urllib.parse.parse_qs(parsed.query)
+        if (
+            parsed.scheme.casefold() in {"tt", "trusttunnel"}
+            and query.get("alpn", ["h2"])[0] == "h3"
+        ):
+            return True
+    return False
 
 
 def _transport_config(
@@ -199,9 +245,10 @@ def generate_throne_sub(
     state: AppState,
     *,
     plugins: SubscriptionPluginAccess,
+    node_exports: PublishedNodeExportReader | None = None,
 ) -> str:
     """Build a Throne subscription with complex transports kept atomic."""
-    links = _links_without_custom_configs(user, state, plugins)
+    links = _links_without_custom_configs(user, state, plugins, node_exports)
     try:
         config = _shadowtls_client_config(user, state, plugins)
         if config:
@@ -230,6 +277,17 @@ def generate_throne_sub(
             )
     except Exception:
         pass
+
+    for profile, config, link_type in _node_custom_documents(
+        user,
+        state,
+        node_exports,
+    ):
+        try:
+            _add_mixed_inbound(config)
+            links.append(_throne_custom_link(config, profile.name, link_type))
+        except Exception:
+            continue
     payload = "\n".join(links) + "\n"
     return base64.b64encode(payload.encode()).decode("ascii")
 
@@ -239,9 +297,10 @@ def generate_nekobox_sub(
     state: AppState,
     *,
     plugins: SubscriptionPluginAccess,
+    node_exports: PublishedNodeExportReader | None = None,
 ) -> str:
     """Build a NekoBox subscription with complex transports kept atomic."""
-    links = _links_without_custom_configs(user, state, plugins)
+    links = _links_without_custom_configs(user, state, plugins, node_exports)
     for name, label in (
         ("shadowtls", "ShadowTLS"),
         ("trusttunnel", "TrustTunnel QUIC"),
@@ -268,93 +327,20 @@ def generate_nekobox_sub(
                 )
         except Exception:
             continue
-    payload = "\n".join(links) + "\n"
-    return base64.b64encode(payload.encode()).decode("ascii")
 
-
-def _avoid_tag_collisions(document: dict, existing: set[str]) -> None:
-    """Keep separate protocols with equal display names and their detours."""
-    objects = [*document.get("outbounds", []), *document.get("endpoints", [])]
-    reserved = existing | {item.get("tag", "") for item in objects} | {"direct"}
-    changes = []
-    for item in objects:
-        old = item.get("tag", "")
-        if not old or old not in existing or item == {"type": "direct", "tag": "direct"}:
-            continue
-        number = 2
-        while f"{old} ({number})" in reserved:
-            number += 1
-        new = f"{old} ({number})"
-        reserved.add(new)
-        changes.append((old, new))
-        item["tag"] = new
-    for old, new in changes:
-        _replace_profile_reference(document, old, new)
-
-
-def generate_singbox_config(
-    user: User,
-    state: AppState,
-    *,
-    plugins: SubscriptionPluginAccess,
-) -> dict:
-    """Build a personal sing-box configuration from enabled transports."""
-    config: dict = {
-        "log": {"level": "info"},
-        "inbounds": [
-            {
-                "type": "mixed",
-                "tag": "mixed-in",
-                "listen": "127.0.0.1",
-                "listen_port": 2080,
-            },
-        ],
-        "endpoints": [],
-        "outbounds": [],
-        "route": {"rules": [], "auto_detect_interface": True},
-    }
-    endpoint_tags: set[str] = set()
-    outbound_tags: set[str] = set()
-    selected_outbound = ""
-    for plugin in plugins.enabled_transports(state):
-        if not plugin.meta.capabilities.subscription_enabled:
-            continue
+    for profile, config, _ in _node_custom_documents(
+        user,
+        state,
+        node_exports,
+    ):
         try:
-            payload = plugins.singbox_client_config(plugin, user, state)
-            if not payload:
-                continue
-            plugin_config = json.loads(payload)
-            _avoid_tag_collisions(plugin_config, outbound_tags | endpoint_tags)
-            for endpoint in plugin_config.get("endpoints", []):
-                tag = endpoint.get("tag", "")
-                if tag and tag in endpoint_tags:
-                    continue
-                config["endpoints"].append(endpoint)
-                if tag:
-                    endpoint_tags.add(tag)
-                if not selected_outbound:
-                    selected_outbound = tag
-            for outbound in plugin_config.get("outbounds", []):
-                tag = outbound.get("tag", "")
-                if tag and tag in outbound_tags:
-                    continue
-                config["outbounds"].append(outbound)
-                if tag:
-                    outbound_tags.add(tag)
-                if not selected_outbound and outbound.get("type") != "direct":
-                    selected_outbound = tag
-            route = plugin_config.get("route", {})
-            config["route"]["rules"].extend(route.get("rules", []))
+            _add_nekobox_inbounds(config)
+            compact = json.dumps(config, ensure_ascii=False, separators=(",", ":"))
+            links.append(serialize_nekobox_config(compact, profile.name))
         except Exception:
             continue
-
-    if not config["endpoints"]:
-        config.pop("endpoints")
-    if "direct" not in outbound_tags:
-        config["outbounds"].append({"type": "direct", "tag": "direct"})
-    if selected_outbound:
-        config["route"]["final"] = selected_outbound
-    return config
+    payload = "\n".join(links) + "\n"
+    return base64.b64encode(payload.encode()).decode("ascii")
 
 
 def generate_client_config(

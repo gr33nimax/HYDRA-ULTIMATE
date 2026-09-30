@@ -14,13 +14,19 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=9443)
     arguments = parser.parse_args()
 
-    protocols = production_application().protocols
+    application = production_application()
+    protocols = application.protocols
     plugins = SubscriptionPluginService(
         enabled_plugins=protocols.enabled,
         get_plugin=protocols.get,
         invoker=protocols.invoker,
     )
-    run_standalone(plugins, arguments.host, arguments.port)
+    run_standalone(
+        plugins,
+        arguments.host,
+        arguments.port,
+        node_exports=application.nodes,
+    )
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from hydra.core.host import HostBackend
 from hydra.services.calls_slot_replacement import CallsSlotReplacement, stage_calls_slot_replacement
 from hydra.services.headless_creator_infrastructure import validate_vk_join_link
 from hydra.services.headless_creator_release import extract_call_hash
+from hydra.services.headless_creator_pool_snapshot import CreatorPoolRuntimeSnapshot, restore_creator_pool_snapshot
 
 
 CALLS_RUNTIME_DIR = Path("/var/lib/hydra/calls/vk")
@@ -149,7 +150,10 @@ class CallsInfrastructure:
         source = self.pool_source
         if source is None or snapshot is None:
             return
-        source.restore_creator_pool(snapshot)
+        if isinstance(snapshot, CreatorPoolRuntimeSnapshot):
+            restore_creator_pool_snapshot(source, snapshot, count=CALL_COUNT)
+        else:
+            source.restore_creator_pool(snapshot)
 
     def uninstall_native_pool(self) -> tuple[bool, str]:
         source = self.pool_source

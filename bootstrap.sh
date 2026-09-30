@@ -127,6 +127,16 @@ if [[ $EUID -ne 0 ]]; then
 fi
 ok "Права root"
 
+HYDRA_ROLE="${HYDRA_ROLE:-main}"
+if [[ "$HYDRA_ROLE" != "main" && "$HYDRA_ROLE" != "node" ]]; then
+    err "HYDRA_ROLE должен быть main или node"
+    exit 1
+fi
+if [[ "$HYDRA_ROLE" == "node" && ( -f /var/lib/hydra/state.json || -f /opt/hydra/main.py ) ]]; then
+    err "Режим node разрешён только для чистой установки; существующую Hydra нельзя превращать в ноду"
+    exit 1
+fi
+
 LOG_DIR=/var/log/hydra
 LOG_FILE=${LOG_DIR}/install.log
 mkdir -p "$LOG_DIR"
@@ -320,9 +330,16 @@ if ! git check-ref-format --branch "$HYDRA_REF" >/dev/null 2>&1; then
     exit 1
 fi
 HYDRA_REMOTE_REF="refs/heads/${HYDRA_REF}"
-if ! HYDRA_TARGET_REV=$(git ls-remote --exit-code "$REPO_URL" "$HYDRA_REMOTE_REF" | awk 'NR == 1 {print $1}'); then
-    err "Ветка $HYDRA_REF не найдена в $REPO_URL"
-    exit 1
+if [[ -n "${HYDRA_TARGET_REV:-}" ]]; then
+    if [[ ! "$HYDRA_TARGET_REV" =~ ^[0-9a-f]{40}$ ]]; then
+        err "HYDRA_TARGET_REV должен быть полным SHA-1 коммита"
+        exit 1
+    fi
+else
+    if ! HYDRA_TARGET_REV=$(git ls-remote --exit-code "$REPO_URL" "$HYDRA_REMOTE_REF" | awk 'NR == 1 {print $1}'); then
+        err "Ветка $HYDRA_REF не найдена в $REPO_URL"
+        exit 1
+    fi
 fi
 if [[ ! "$HYDRA_TARGET_REV" =~ ^[0-9a-f]{40}$ ]]; then
     err "Не удалось определить коммит ветки $HYDRA_REF"
@@ -421,7 +438,7 @@ exec "${VENV_DIR}/bin/python" "${INSTALL_DIR}/main.py" "\$@"
 EOF
 chmod 0755 /usr/local/bin/hydra
 
-if [[ "$HYDRA_FRESH_INSTALL" == "1" ]]; then
+if [[ "$HYDRA_FRESH_INSTALL" == "1" && "$HYDRA_ROLE" == "main" ]]; then
     # The command answers in JSON, so stdout stays quiet — but a failure has to say why: the
     # apply behind this step names the missing prerequisite, and "строка N" does not.
     CREATE_USER_LOG=$(mktemp)
@@ -435,16 +452,28 @@ if [[ "$HYDRA_FRESH_INSTALL" == "1" ]]; then
     ok "Создан первый пользователь: default"
 fi
 
+if [[ "$HYDRA_ROLE" == "node" ]]; then
+    install -m 0644 "$INSTALL_DIR/deploy/hydra-node-control.service" \
+        /etc/systemd/system/hydra-node-control.service
+    systemctl daemon-reload
+    info "Служба управления установлена выключенной и ожидает удостоверение"
+fi
+
 step 5 5 "Завершение"
 HYDRA_VERSION=$("$VENV_DIR/bin/python" -c "from hydra import __version__; print(__version__)" 2>/dev/null || echo unknown)
-result_ok "HYDRA v${HYDRA_VERSION} установлена"
-echo -e "  Запуск: ${BOLD}sudo hydra${NC}"
-echo -e "  Проверка: ${BOLD}hydra check${NC}"
+if [[ "$HYDRA_ROLE" == "node" ]]; then
+    result_ok "HYDRA node v${HYDRA_VERSION} установлена"
+    echo -e "  Служба управления ожидает удостоверение основного сервера."
+else
+    result_ok "HYDRA v${HYDRA_VERSION} установлена"
+    echo -e "  Запуск: ${BOLD}sudo hydra${NC}"
+    echo -e "  Проверка: ${BOLD}hydra check${NC}"
+fi
 echo -e "  Лог: ${DIM}${LOG_FILE}${NC}"
 support_reminder
 echo ""
 
 INSTALL_COMPLETED=1
-if [[ -t 0 && -t 1 ]]; then
+if [[ "$HYDRA_ROLE" == "main" && -t 0 && -t 1 ]]; then
     exec "$VENV_DIR/bin/python" "$INSTALL_DIR/main.py" "$@"
 fi

@@ -1,8 +1,10 @@
 from types import SimpleNamespace
+from typing import cast
 
 from hydra.bootstrap import production_application
 from hydra.core.state import AppState, User
 from hydra.services.application import ApplicationService
+from hydra.services.nodes.operations import NodeManagementOperations
 
 
 class _Users:
@@ -46,6 +48,20 @@ def test_application_service_delegates_user_lifecycle_and_apply():
     assert app.apply(state) is True
     assert [kind for kind, _ in users.calls] == ["add", "block", "unblock", "remove"]
     assert applied == [state]
+
+
+def test_application_service_exposes_node_management_port():
+    nodes = cast(NodeManagementOperations, SimpleNamespace(refresh=lambda node_id: {"node_id": node_id}))
+    app = ApplicationService(
+        users=SimpleNamespace(),
+        protocols=SimpleNamespace(),
+        apply_config=lambda state: True,
+        last_apply_error=lambda: "",
+        plugin_statuses=lambda state: {},
+        nodes=nodes,
+    )
+
+    assert app.nodes.refresh("de-1") == {"node_id": "de-1"}
 
 
 def test_application_service_exposes_last_apply_error_without_leaking_exceptions():
@@ -140,6 +156,8 @@ def test_production_applications_do_not_share_plugin_or_orchestrator_state():
     second = production_application()
 
     assert first.protocols.operations is not second.protocols.operations
+    assert first.nodes is not second.nodes
+    assert getattr(first.users.after_node_change, "__self__", None) is first.nodes
     assert first.protocols.require("antidpi") is not second.protocols.require(
         "antidpi",
     )

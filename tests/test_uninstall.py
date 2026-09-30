@@ -27,6 +27,10 @@ def test_uninstall_requires_explicit_confirmation():
         uninstall_hydra(AppState(), confirmed=False)
 
 
+def test_uninstall_plan_includes_node_control_service():
+    assert "hydra-node-control.service" in uninstall_plan(AppState())["services"]
+
+
 def test_keep_data_removes_data_paths_from_plan():
     plan = uninstall_plan(AppState(), keep_data=True)
     normalized = [path.replace("\\", "/") for path in plan["paths"]]

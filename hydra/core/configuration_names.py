@@ -81,7 +81,7 @@ def apply_json_configuration_name(
     global_names: dict[str, str],
     user_names: dict[str, str],
 ) -> str:
-    """Rename a JSON profile's primary outbound when an override exists."""
+    """Rename a JSON profile's primary outbound or endpoint when overridden."""
     name = user_names.get(key) or global_names.get(key)
     if not name:
         return payload
@@ -89,26 +89,26 @@ def apply_json_configuration_name(
         document = json.loads(payload)
         if not isinstance(document, dict):
             return payload
-        outbounds = document.get("outbounds", [])
-        if not isinstance(outbounds, list):
-            return payload
+        objects: list[dict] = []
+        for section in ("outbounds", "endpoints"):
+            values = document.get(section, [])
+            if not isinstance(values, list):
+                return payload
+            objects.extend(item for item in values if isinstance(item, dict))
         route = document.get("route", {})
         final = route.get("final") if isinstance(route, dict) else None
         primary = next(
             (
-                outbound
-                for outbound in outbounds
-                if isinstance(outbound, dict)
-                and outbound.get("tag") == final
-                and final != "direct"
+                item
+                for item in objects
+                if item.get("tag") == final and final != "direct"
             ),
             next(
                 (
-                    outbound
-                    for outbound in outbounds
-                    if isinstance(outbound, dict)
-                    and outbound.get("tag") != "direct"
-                    and isinstance(outbound.get("tag"), str)
+                    item
+                    for item in objects
+                    if item.get("tag") != "direct"
+                    and isinstance(item.get("tag"), str)
                 ),
                 None,
             ),
@@ -118,11 +118,7 @@ def apply_json_configuration_name(
         old = primary.get("tag")
         if not isinstance(old, str) or name == old:
             return payload
-        tags = {
-            outbound.get("tag")
-            for outbound in outbounds
-            if isinstance(outbound, dict) and outbound is not primary
-        }
+        tags: set[object] = {item.get("tag") for item in objects if item is not primary}
         replacement = _unique_configuration_tag(name, tags)
         primary["tag"] = replacement
         _replace_profile_reference(document, old, replacement)

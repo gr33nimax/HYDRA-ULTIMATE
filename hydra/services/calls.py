@@ -8,7 +8,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, cast
 
 
 CREATOR_OPERATION_ERRORS = (OSError, RuntimeError, ValueError)
@@ -28,7 +28,7 @@ from hydra.core.calls_credentials import user_password
 from hydra.core.errors import ErrorCode, ServiceResult, failed_result
 from hydra.core.state_kernel_models import KERNEL_HYDRACORE
 from hydra.core.state_models import AppState, get_protocol
-from hydra.services.calls_health import CallsProbeStore
+from hydra.services.calls_health import CallsProbeStore, ProbeOutcome
 from hydra.services.calls_native_transition import run_native_transition
 from hydra.services.configuration import restore_state_in_place
 from hydra.services.calls_contracts import (
@@ -90,8 +90,10 @@ class CallsService:
             )
         return lease, None
 
-    def _end_operation(self, lease: CallOperationLease) -> None:
+    def _end_operation(self, lease: CallOperationLease | None) -> None:
         try:
+            if lease is None:
+                raise RuntimeError("Calls operation lease is missing")
             lease.release()
         finally:
             self._lock.release()
@@ -202,7 +204,9 @@ class CallsService:
                 if decision is not None:
                     result = getattr(self.turn_probe, "verify")(links[decision.slot - 1])
                     outcome = str(getattr(result, "outcome", "error"))
-                    self.probe_store.record(links, decision, outcome, now=datetime.now(timezone.utc))
+                    self.probe_store.record(
+                        links, decision, cast(ProbeOutcome, outcome), now=datetime.now(timezone.utc)
+                    )
                     confirmation, slot = decision.confirmation, decision.slot
             finally:
                 self._end_operation(lease)
@@ -310,6 +314,13 @@ class CallsService:
             return failed_result(exc)
         finally:
             self._end_operation(lease)
+
+    def snapshot_managed_vk_pool(self) -> object:
+        """Internal transaction snapshot, never a public status projection."""
+        return self.runtime.snapshot_native_pool()
+
+    def restore_managed_vk_pool(self, snapshot: object) -> None:
+        self.runtime.restore_native_pool(snapshot)
 
     def _native_transition(self, state: AppState, *, rotate: bool) -> ServiceResult:
         return run_native_transition(self, state, rotate=rotate)

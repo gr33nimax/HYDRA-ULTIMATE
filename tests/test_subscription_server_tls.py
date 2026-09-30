@@ -95,6 +95,7 @@ def test_standalone_server_wraps_each_accepted_connection():
     context = MagicMock()
     server = MagicMock()
     server.serve_forever.side_effect = KeyboardInterrupt
+    node_exports = MagicMock()
 
     with patch(
         "hydra.services.subscriptions.server.load_state",
@@ -108,7 +109,12 @@ def test_standalone_server_wraps_each_accepted_connection():
         "hydra.services.subscriptions.server._ProxyTLSHTTPServer",
         return_value=server,
     ) as server_type:
-        run_standalone(plugins, "127.0.0.1", 9443)
+        run_standalone(
+            plugins,
+            "127.0.0.1",
+            9443,
+            node_exports=node_exports,
+        )
 
     context.load_cert_chain.assert_called_once_with(
         certfile="/cert.pem",
@@ -120,3 +126,5 @@ def test_standalone_server_wraps_each_accepted_connection():
         context,
     )
     server.server_close.assert_called_once_with()
+    assert server.subscription_plugins is plugins
+    assert server.node_exports is node_exports

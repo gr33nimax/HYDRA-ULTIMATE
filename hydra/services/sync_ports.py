@@ -1,4 +1,5 @@
 """Narrow application capabilities required by the background sync use-case."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -57,6 +58,9 @@ class SyncOperations:
         tuple[bool, str],
     ] = lambda domain: (False, "обновление сертификата подписок не подключено")
 
+    collect_node_traffic: Callable[[], object] = lambda: None
+    reconcile_nodes: Callable[[], object] = lambda: None
+
     def apply(self, state: AppState) -> bool:
         return bool(self.apply_config(state))
 
@@ -94,11 +98,7 @@ def subscription_certificate_renewal(
 def _action_result(value: Any) -> tuple[bool, str]:
     if isinstance(value, bool):
         return value, ""
-    if (
-        isinstance(value, tuple)
-        and len(value) == 2
-        and isinstance(value[0], bool)
-    ):
+    if isinstance(value, tuple) and len(value) == 2 and isinstance(value[0], bool):
         return value[0], str(value[1] or "")
     if isinstance(value, dict) and isinstance(value.get("ok"), bool):
         return value["ok"], str(value.get("message") or "")
@@ -118,6 +118,8 @@ def default_sync_operations(
     ],
     renew_subscription_certificate: Callable[[str], tuple[bool, str]],
     maintenance: MaintenanceOperations | None = None,
+    collect_node_traffic: Callable[[], object] = lambda: None,
+    reconcile_nodes: Callable[[], object] = lambda: None,
 ) -> SyncOperations:
     """Compose declared plugin maintenance without protocol-name branches."""
 
@@ -175,6 +177,8 @@ def default_sync_operations(
         run_maintenance=(maintenance.run if maintenance is not None else run_maintenance),
         inspect_certificates=inspect_certificates,
         renew_subscription_certificate=renew_subscription_certificate,
+        collect_node_traffic=collect_node_traffic,
+        reconcile_nodes=reconcile_nodes,
     )
 
 

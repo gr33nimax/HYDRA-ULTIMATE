@@ -4,6 +4,7 @@ Background writers own traffic counters, device sessions and check
 results. Separating them from the desired configuration keeps a poll
 every two seconds from turning an operator's open menu into a conflict.
 """
+
 from __future__ import annotations
 
 import copy
@@ -19,6 +20,9 @@ _RUNTIME_INSTALL_KEYS = frozenset(
         "certificates_report",
         "device_sessions",
         "protocol_traffic_totals",
+        "local_user_traffic_totals",
+        "node_traffic_contributions",
+        "retired_node_traffic_totals",
         "singbox_last_update_check",
         "singbox_latest_version",
         "singbox_update_available",
@@ -69,17 +73,26 @@ def merge_runtime_state(
     counters in another process. Preserve the monotonic runtime fields instead
     of letting an unrelated settings save roll them back.
     """
-    latest_users = {user.email: user for user in latest.users}
+    latest_users = {user.uuid: user for user in latest.users}
     traffic_resets = latest.install.get("traffic_user_reset_epochs", {})
+    target_resets = state.install.get("traffic_user_reset_epochs", {})
+    new_resets: set[str] = set()
     for user in state.users:
-        current = latest_users.get(user.email)
+        current = latest_users.get(user.uuid)
         if current is None:
             continue
-        reset = user.email in traffic_resets
+        latest_epoch = int(traffic_resets.get(user.uuid, traffic_resets.get(current.email, 0)))
+        target_epoch = int(target_resets.get(user.uuid, target_resets.get(user.email, 0)))
+        if target_epoch > latest_epoch:
+            new_resets.add(user.uuid)
+            continue
+        reset = latest_epoch > 0
         user.traffic_used_bytes = (
             int(current.traffic_used_bytes)
-            if reset else max(
-                int(user.traffic_used_bytes), int(current.traffic_used_bytes),
+            if reset
+            else max(
+                int(user.traffic_used_bytes),
+                int(current.traffic_used_bytes),
             )
         )
         # Subscription requests can register a device while a long-lived
@@ -97,11 +110,9 @@ def merge_runtime_state(
                 for key in tuple(target_stats):
                     if key.startswith("traffic_"):
                         target_stats.pop(key, None)
-                target_stats.update({
-                    key: copy.deepcopy(value)
-                    for key, value in current_stats.items()
-                    if key.startswith("traffic_")
-                })
+                target_stats.update(
+                    {key: copy.deepcopy(value) for key, value in current_stats.items() if key.startswith("traffic_")}
+                )
                 continue
             current_total = int(current_stats.get("traffic_used_bytes", 0))
             target_total = int(target_stats.get("traffic_used_bytes", 0))
@@ -111,15 +122,33 @@ def merge_runtime_state(
                     target_stats["traffic_last_raw_bytes"] = current_stats["traffic_last_raw_bytes"]
                 for stat_key, stat_value in current_stats.items():
                     if stat_key.startswith("traffic_") and stat_key not in {
-                        "traffic_used_bytes", "traffic_last_raw_bytes",
+                        "traffic_used_bytes",
+                        "traffic_last_raw_bytes",
                     }:
                         target_stats[stat_key] = copy.deepcopy(stat_value)
+    reset_keys = {
+        "traffic_user_reset_epochs",
+        "local_user_traffic_totals",
+        "retired_node_traffic_totals",
+        "node_traffic_contributions",
+    }
     for key in _RUNTIME_INSTALL_KEYS:
-        if key in latest.install:
-            state.install[key] = copy.deepcopy(latest.install[key])
+        target = state.install.get(key, {})
+        merged = copy.deepcopy(latest.install.get(key, {}))
+        if key in reset_keys and new_resets:
+            if key == "node_traffic_contributions":
+                for node_id, by_user in target.items():
+                    for user_id in new_resets:
+                        if user_id in by_user:
+                            merged.setdefault(node_id, {})[user_id] = copy.deepcopy(by_user[user_id])
+            else:
+                for user_id in new_resets:
+                    if user_id in target:
+                        merged[user_id] = copy.deepcopy(target[user_id])
+        if key in latest.install or (key in reset_keys and new_resets):
+            state.install[key] = merged
         else:
             state.install.pop(key, None)
-
 
 
 __all__ = [

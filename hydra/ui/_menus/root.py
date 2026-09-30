@@ -36,6 +36,7 @@ class RootMenuDependencies:
     security: Callable[[AppState, ApplicationService], None]
     network_services: Callable[[AppState, ApplicationService], None]
     diagnostics: Callable[[AppState, ApplicationService], None]
+    nodes: Callable[[AppState, ApplicationService], None] = lambda state, app: None
 
 
 def _sys_info(state: AppState, app: ApplicationService) -> list[str]:
@@ -163,6 +164,7 @@ def run_main_menu(
                     f"DNSCrypt и WARP  [{active_e}/{total_e}]",
                 ),
                 ("8", "🛠️  Тестирование и отладка", "Диагностика VPS"),
+                ("9", "🌍 Ноды", "Установка, протоколы и подписки"),
                 ("0", "🚪 Выход", ""),
             ],
             "ГЛАВНОЕ МЕНЮ",
@@ -179,6 +181,7 @@ def run_main_menu(
             "6": deps.security,
             "7": deps.network_services,
             "8": deps.diagnostics,
+            "9": deps.nodes,
         }.get(choice)
         if callback is not None:
             callback(state, app)

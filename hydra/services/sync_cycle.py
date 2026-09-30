@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, TypeVar
 
@@ -17,6 +18,22 @@ StateUpdater = Callable[
     tuple[AppState, Any],
 ]
 Logger = Callable[[str], None]
+
+
+@contextmanager
+def node_accounting_cycle(operations: SyncOperations, log: Logger) -> Iterator[None]:
+    """Poll before local limits and propagate blocks afterward, outside state locks."""
+    try:
+        operations.collect_node_traffic()
+    except Exception as exc:
+        log(f"Node traffic collection failed: {type(exc).__name__}")
+    try:
+        yield
+    finally:
+        try:
+            operations.reconcile_nodes()
+        except Exception as exc:
+            log(f"Node reconciliation failed: {type(exc).__name__}")
 
 
 def _restriction_reason(

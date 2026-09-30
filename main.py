@@ -10,6 +10,7 @@ HYDRA v3.0.0 — Multi-Protocol Proxy Manager
 
 Никаких exec(), никаких глобальных переменных.
 """
+
 import sys
 import os
 from pathlib import Path
@@ -39,7 +40,16 @@ def check_python() -> None:
 def main() -> None:
     """Главная точка входа."""
     if len(sys.argv) > 1:
+        from hydra.core.node_identity import is_node_install
+
+        if is_node_install() and sys.argv[1:] != ["--version"]:
+            print(
+                "ERROR: на ноде доступна только локальная диагностика; управление — на основе",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
         from hydra.cli import main as cli_main
+
         raise SystemExit(cli_main(sys.argv[1:]))
     check_root()
     check_python()
@@ -55,6 +65,16 @@ def main() -> None:
         sys.exit(1)
 
     application = production_application()
+
+    # A machine installed as a managed node must never reach the base server's
+    # management surface, so the check happens before any base-only wiring.
+    from hydra.core.node_identity import is_node_install
+
+    if is_node_install():
+        from hydra.ui._menus.node_emergency import run_node_emergency_menu
+
+        run_node_emergency_menu(state, application)
+        return
 
     # A git/bootstrap update may replace daemon code without changing user
     # settings. Reconcile its revision-tagged unit once on TUI startup so the
@@ -73,6 +93,7 @@ def main() -> None:
     except Exception as e:
         print(f"\n[CRITICAL] Неожиданная ошибка: {e}", file=sys.stderr)
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

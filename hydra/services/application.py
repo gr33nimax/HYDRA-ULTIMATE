@@ -68,6 +68,7 @@ from hydra.services.uninstall import (
     UninstallOperations,
 )
 from hydra.services.users import UserService
+from hydra.services.nodes.operations import NodeManagementOperations, UnavailableNodeOperations
 from hydra.services.calls import CallOperations, UnavailableCallOperations
 from hydra.services.maintenance import (
     MaintenanceOperations,
@@ -139,6 +140,9 @@ class ApplicationService:
         default_factory=UnavailableMaintenanceOperations,
     )
     kernel: KernelOperations = field(default_factory=UnavailableKernelOperations)
+    nodes: NodeManagementOperations = field(
+        default_factory=lambda: cast(NodeManagementOperations, UnavailableNodeOperations()),
+    )
 
     def status(self, state: AppState) -> dict[str, Any]:
         from hydra.core.status import build_status

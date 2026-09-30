@@ -509,7 +509,7 @@ def test_subscription_handler_routes_shadowrocket_format_to_native_builder():
         "text/plain; charset=utf-8",
         "shadowrocket.txt",
     )
-    generate.assert_called_once_with(user, state, plugins=plugins)
+    generate.assert_called_once_with(user, state, plugins=plugins, node_exports=None)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

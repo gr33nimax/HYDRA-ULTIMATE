@@ -1,4 +1,5 @@
 """Stable on-disk envelope for HYDRA state."""
+
 from __future__ import annotations
 
 import copy
@@ -7,17 +8,11 @@ import copy
 STATE_FORMAT_VERSION = 1
 
 _CORE_KEYS = ("install", "users", "telegram", "network", "configuration_names")
-_FEATURE_KEYS = ("protocols", "headless_creator", "kernel")
-_DEFAULTS = {
-    "install": {},
-    "users": [],
-    "telegram": {},
-    "network": {},
-    "configuration_names": {},
-    "protocols": {},
-    "headless_creator": {},
-    "kernel": {},
-}
+_FEATURE_KEYS = ("protocols", "headless_creator", "kernel", "nodes")
+# Derived, not hand-written: a key added to the envelopes above can no longer be
+# forgotten here, which used to surface as a KeyError while unpacking.
+_LIST_KEYS = ("users", "nodes")
+_DEFAULTS = {key: [] if key in _LIST_KEYS else {} for key in (*_CORE_KEYS, *_FEATURE_KEYS)}
 
 
 class UnsupportedStateVersion(RuntimeError):
@@ -35,10 +30,7 @@ def validate_state_document(raw: object) -> None:
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
         raise ValueError("state format_version must be a positive integer")
     if version != STATE_FORMAT_VERSION:
-        raise UnsupportedStateVersion(
-            f"state format {version} is newer than supported format "
-            f"{STATE_FORMAT_VERSION}"
-        )
+        raise UnsupportedStateVersion(f"state format {version} is newer than supported format {STATE_FORMAT_VERSION}")
     revision = raw.get("revision", 0)
     if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
         raise ValueError("state revision must be a non-negative integer")
@@ -56,10 +48,7 @@ def unpack_state_document(raw: dict) -> dict:
         "format_version": raw["format_version"],
         "revision": raw.get("revision", 0),
         **{key: core.pop(key, copy.deepcopy(_DEFAULTS[key])) for key in _CORE_KEYS},
-        **{
-            key: features.pop(key, copy.deepcopy(_DEFAULTS[key]))
-            for key in _FEATURE_KEYS
-        },
+        **{key: features.pop(key, copy.deepcopy(_DEFAULTS[key])) for key in _FEATURE_KEYS},
         "core_extensions": core,
         "feature_extensions": features,
     }
@@ -72,12 +61,8 @@ def pack_state_document(payload: dict) -> dict:
     revision = data.pop("revision", 0)
     core = data.pop("core_extensions", {})
     features = data.pop("feature_extensions", {})
-    core.update({
-        key: data.pop(key, copy.deepcopy(_DEFAULTS[key])) for key in _CORE_KEYS
-    })
-    features.update({
-        key: data.pop(key, copy.deepcopy(_DEFAULTS[key])) for key in _FEATURE_KEYS
-    })
+    core.update({key: data.pop(key, copy.deepcopy(_DEFAULTS[key])) for key in _CORE_KEYS})
+    features.update({key: data.pop(key, copy.deepcopy(_DEFAULTS[key])) for key in _FEATURE_KEYS})
     features.update(data)
     document = {
         "format_version": version,

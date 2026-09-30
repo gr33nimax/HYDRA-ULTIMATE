@@ -1,4 +1,5 @@
 """Executable adapter for one background synchronization cycle."""
+
 from __future__ import annotations
 
 import sys
@@ -22,10 +23,10 @@ def main() -> int:
                 apply_config=application.apply,
                 check_traffic_limits=application.traffic.check_limits,
                 inspect_certificates=application.certificates.inspect,
-                renew_subscription_certificate=(
-                    subscription_certificate_renewal(application.admin)
-                ),
+                renew_subscription_certificate=(subscription_certificate_renewal(application.admin)),
                 maintenance=application.maintenance,
+                collect_node_traffic=application.nodes.collect_traffic,
+                reconcile_nodes=application.nodes.reconcile_all,
             ),
         )
     except Exception as exc:

@@ -3,6 +3,7 @@
 The implementation lives in :mod:`hydra.ui._menus`.  This module keeps the
 historical import and monkeypatch surface while owning only adapter composition.
 """
+
 from __future__ import annotations
 
 from functools import wraps
@@ -125,8 +126,8 @@ def _make_forwarder(binder_name: str, function_name: str) -> Callable:
     def forward(*args, **kwargs):
         return getattr(binder(), function_name)(*args, **kwargs)
 
-    forward._facade_forwarder = True
-    forward._facade_module = controller.__name__
+    setattr(forward, "_facade_forwarder", True)
+    setattr(forward, "_facade_module", controller.__name__)
     return forward
 
 
@@ -148,6 +149,7 @@ def main_menu(
     """Compose production once, then delegate to the dependency-clean root."""
     application = app if app is not None else production_application()
     from hydra.ui._menus.root import RootMenuDependencies
+    from hydra.ui._menus.nodes import menu_nodes
 
     globals()["_root_menus"]().run_main_menu(
         state,
@@ -161,6 +163,7 @@ def main_menu(
             security=globals()["menu_security"],
             network_services=globals()["menu_network_services"],
             diagnostics=_open_diagnostics,
+            nodes=menu_nodes,
         ),
     )
 
@@ -168,10 +171,6 @@ def main_menu(
 __all__ = sorted(
     {
         "main_menu",
-        *(
-            export
-            for exports in FORWARD_GROUPS.values()
-            for export in exports
-        ),
+        *(export for exports in FORWARD_GROUPS.values() for export in exports),
     },
 )

@@ -5,6 +5,7 @@ import json
 import ipaddress
 import re
 import ssl
+from http.client import HTTPMessage
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -19,6 +20,7 @@ from hydra.services.subscriptions.client_configs import (
 )
 from hydra.services.subscriptions.proxy_protocol import read_source_address
 from hydra.services.subscriptions.devices import (
+    HWID_HEADERS,
     hydrabox_client_fingerprint,
     register_subscription_device,
     subscription_fingerprint,
@@ -35,12 +37,21 @@ from hydra.services.subscriptions.links import (
     generate_base64_sub,
     generate_shadowrocket_sub,
 )
+from hydra.services.subscriptions.node_exports import PublishedNodeExportReader
 from hydra.services.subscriptions.metadata import (
     SUPPORTED_SUBSCRIPTION_FORMATS,
     generate_userinfo_header,
     is_user_valid,
     resolve_subscription_format,
 )
+
+
+def _fingerprint_headers(headers: HTTPMessage) -> dict[str, str]:
+    """Project only identity headers into the transport-neutral contract."""
+    return {
+        name: str(headers.get(name, "") or "")
+        for name in ("User-Agent", *HWID_HEADERS)
+    }
 
 
 class SubscriptionHandler(BaseHTTPRequestHandler):
@@ -76,28 +87,49 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         user,
         state: AppState,
         plugins: SubscriptionPluginAccess,
+        node_exports: PublishedNodeExportReader | None = None,
     ) -> tuple[str, str, str]:
         if response_format == "nekobox":
             return (
-                generate_nekobox_sub(user, state, plugins=plugins),
+                generate_nekobox_sub(
+                    user,
+                    state,
+                    plugins=plugins,
+                    node_exports=node_exports,
+                ),
                 "text/plain; charset=utf-8",
                 "nekobox.txt",
             )
         if response_format == "throne":
             return (
-                generate_throne_sub(user, state, plugins=plugins),
+                generate_throne_sub(
+                    user,
+                    state,
+                    plugins=plugins,
+                    node_exports=node_exports,
+                ),
                 "text/plain; charset=utf-8",
                 "throne.txt",
             )
         if response_format == "shadowrocket":
             return (
-                generate_shadowrocket_sub(user, state, plugins=plugins),
+                generate_shadowrocket_sub(
+                    user,
+                    state,
+                    plugins=plugins,
+                    node_exports=node_exports,
+                ),
                 "text/plain; charset=utf-8",
                 "shadowrocket.txt",
             )
         if response_format in ("singbox", "sing-box", "json"):
             content = json.dumps(
-                generate_singbox_config(user, state, plugins=plugins),
+                generate_singbox_config(
+                    user,
+                    state,
+                    plugins=plugins,
+                    node_exports=node_exports,
+                ),
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
@@ -108,6 +140,7 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
                     user,
                     state,
                     plugins=plugins,
+                    node_exports=node_exports,
                 ),
                 user.hydrabox_jwe_key,
             )
@@ -117,13 +150,20 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
                 "subscription.hydra.jwe.json",
             )
         return (
-            generate_base64_sub(user, state, plugins=plugins),
+            generate_base64_sub(
+                user,
+                state,
+                plugins=plugins,
+                node_exports=node_exports,
+            ),
             "text/plain; charset=utf-8",
             "sub.txt",
         )
 
     def do_GET(self):
-        plugins = self.plugins
+        server = getattr(self, "server", None)
+        plugins = getattr(server, "subscription_plugins", self.plugins)
+        node_exports = getattr(server, "node_exports", None)
         if plugins is None:
             self._send_error(503, "Subscription service is not configured")
             return
@@ -154,12 +194,13 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             return
 
         client_ip = str(self.client_address[0] if self.client_address else "")
+        fingerprint_headers = _fingerprint_headers(self.headers)
         try:
             fingerprint = (
-                hydrabox_client_fingerprint(self.headers, client_ip)
+                hydrabox_client_fingerprint(fingerprint_headers, client_ip)
                 if response_format == "hydrabox"
                 else subscription_fingerprint(
-                    self.headers,
+                    fingerprint_headers,
                     client_ip,
                     parameters,
                 )
@@ -193,6 +234,7 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
                 user,
                 state,
                 plugins,
+                node_exports,
             )
         except Exception:
             self._send_error(500, "Subscription generation failed")
@@ -229,6 +271,9 @@ def _is_loopback(address: tuple[object, ...]) -> bool:
 class _ProxyTLSHTTPServer(HTTPServer):
     """Consume a trusted PROXY preamble before starting the TLS handshake."""
 
+    subscription_plugins: SubscriptionPluginAccess | None = None
+    node_exports: PublishedNodeExportReader | None = None
+
     def __init__(
         self,
         server_address,
@@ -260,10 +305,11 @@ def run_standalone(
     plugins: SubscriptionPluginAccess,
     host: str = "0.0.0.0",
     port: int = 9443,
+    *,
+    node_exports: PublishedNodeExportReader | None = None,
 ) -> None:
     """Run the HTTPS subscription adapter with explicit plugin access."""
     state = load_state()
-    SubscriptionHandler.plugins = plugins
 
     certificate, key = find_any_cert(state)
     if not certificate or not key:
@@ -290,6 +336,8 @@ def run_standalone(
         print(f"Failed to bind subscription server to {host}:{port}: {exc}")
         return
 
+    server.subscription_plugins = plugins
+    server.node_exports = node_exports
     print(f"SSL/HTTPS enabled using cert: {certificate}")
     print(f"Starting subscription server on https://{host}:{port}")
     try:

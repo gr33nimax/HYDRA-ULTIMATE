@@ -1,4 +1,5 @@
 """Background synchronization entrypoint and process-level adapters."""
+
 from __future__ import annotations
 
 import sys
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Iterator, TextIO
 
 from hydra.core.state import update_state
-from hydra.services.sync_cycle import run_sync_cycle
+from hydra.services.sync_cycle import node_accounting_cycle, run_sync_cycle
 from hydra.services.sync_ports import SyncOperations
 
 
@@ -52,16 +53,15 @@ def run_sync(
     """Run one synchronization cycle and report partial failures."""
     with _single_run() as acquired:
         if not acquired:
-            message = (
-                "Sync Agent уже выполняется другим процессом"
-            )
+            message = "Sync Agent уже выполняется другим процессом"
             _log(message)
             return False, message
-        return _run_sync(
-            force_update_check=force_update_check,
-            force_all_checks=force_all_checks,
-            operations=operations,
-        )
+        with node_accounting_cycle(operations, _log):
+            return _run_sync(
+                force_update_check=force_update_check,
+                force_all_checks=force_all_checks,
+                operations=operations,
+            )
 
 
 def _run_sync(

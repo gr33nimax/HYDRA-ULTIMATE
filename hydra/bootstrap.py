@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from hydra.core import nft, singbox
+from hydra.core import nft, singbox, state as state_backend
 from hydra.core.doctor import run_host_preflight
 from hydra.core.host import HOST
 from hydra.core.legacy_sidecars import purge_legacy_sidecars
@@ -17,8 +17,10 @@ from hydra.core.state import (
     migrate_persisted_state,
     restore_desired_state,
     save_state,
+    update_state,
 )
 from hydra.core.state_models import get_protocol, validate_state
+from hydra.core.state_nodes import NodeConfig
 from hydra.core.upgrade import check_upgrade
 from hydra.plugins.container import PluginContainer
 from hydra.plugins.defaults import PluginFactory, default_plugins
@@ -44,6 +46,12 @@ from hydra.services.configuration_plan import ConfigurationPlanner
 from hydra.services.diagnostic_infrastructure import HOST_DIAGNOSTICS
 from hydra.services.log_infrastructure import HostLogOperations
 from hydra.services.maintenance import MaintenanceService
+from hydra.services.nodes.bootstrap import NodeBootstrap
+from hydra.services.nodes.control_client import NodeControlClient
+from hydra.services.nodes.credentials import cleanup_node_credentials
+from hydra.services.nodes.installer import uninstall_node
+from hydra.services.nodes.manager import NodeManager
+from hydra.services.nodes.snapshot_store import NodeSnapshotStore
 from hydra.services.kernel import KernelService
 from hydra.services.kernel_infrastructure import KernelInfrastructure
 from hydra.services.orchestration_service import OrchestrationService
@@ -66,6 +74,9 @@ from hydra.services.traffic import TrafficService
 from hydra.services.uninstall import CleanupStep, UninstallService
 from hydra.services.users import UserService
 
+if TYPE_CHECKING:
+    from hydra.services.nodes.reconcile import NodeReconciler
+
 
 def _require_cleanup_result(operation) -> None:
     ok, message = operation()
@@ -87,6 +98,12 @@ def _creator_runtimes() -> tuple[HeadlessCreatorInfrastructure, CallsInfrastruct
         pool_source=calls_provider,
     )
     return calls_provider, runtime
+
+
+def production_node_cookie_import(cookies: object) -> None:
+    """Write only the node's local VK credentials; never create a call pool."""
+    provider, _ = _creator_runtimes()
+    provider.import_vk_cookie_document(cookies)
 
 
 def _creator_services(
@@ -116,6 +133,65 @@ def _creator_services(
         turn_probe=VkTurnProbe(),
     )
     return calls
+
+
+def _production_node_client(node: NodeConfig, bootstrap: NodeBootstrap) -> NodeControlClient:
+    credentials = bootstrap.load_control_credentials(node.id, address=node.address)
+    expected = node.control_fingerprint.replace(":", "").casefold()
+    if expected and expected != credentials.node_fingerprint.casefold():
+        raise RuntimeError("node certificate fingerprint does not match its configuration")
+    return NodeControlClient(
+        host=node.address,
+        port=node.control_port,
+        node_id=node.id,
+        ca_file=credentials.node_certificate,
+        certificate=credentials.client_certificate,
+        private_key=credentials.client_private_key,
+        server_fingerprint=expected or credentials.node_fingerprint,
+    )
+
+
+def _import_node_cookies(node: NodeConfig, source: str, bootstrap: NodeBootstrap) -> None:
+    from hydra.services.nodes.cookies import import_node_vk_cookies
+
+    import_node_vk_cookies(node, source, host=HOST, known_hosts_root=bootstrap.known_hosts_root)
+
+
+def _production_node_manager() -> NodeManager:
+    script = (Path(__file__).resolve().parents[1] / "bootstrap.sh").read_text(encoding="utf-8")
+    bootstrap = NodeBootstrap(host=HOST, script=script)
+
+    def uninstall_remote(node: NodeConfig) -> None:
+        uninstall_node(
+            host=HOST,
+            known_hosts_root=bootstrap.known_hosts_root,
+            node_id=node.id,
+            address=node.address,
+            ssh_port=node.ssh_port,
+        )
+
+    def forget_credentials(node_id: str) -> None:
+        cleanup_node_credentials(
+            host=HOST,
+            credentials_root=bootstrap.credentials_root,
+            known_hosts_root=bootstrap.known_hosts_root,
+            node_id=node_id,
+            forget_host_key=True,
+        )
+
+    return NodeManager(
+        state_reader=load_state,
+        state_updater=update_state,
+        client_for=lambda node: _production_node_client(node, bootstrap),
+        snapshot_store=NodeSnapshotStore(
+            host=HOST,
+            root=state_backend.STATE_DIR / "node-exports",
+        ),
+        bootstrap=bootstrap,
+        uninstall_remote=uninstall_remote,
+        forget_node_credentials=forget_credentials,
+        import_remote_cookies=lambda node, source: _import_node_cookies(node, source, bootstrap),
+    )
 
 
 def production_application(
@@ -162,7 +238,8 @@ def production_application(
             "vless_cdn": VlessCdnLifecycleOperations(orchestration),
         },
     )
-    traffic = TrafficService(protocols)
+    node_manager = _production_node_manager()
+    traffic = TrafficService(protocols, after_user_reset=node_manager.reconcile_all)
     plugin_actions = PluginActionService(get_plugin=plugins.get)
     plugin_queries = PluginQueryService(get_plugin=plugins.get)
     calls = _creator_services(
@@ -194,12 +271,14 @@ def production_application(
             # assembled by this very statement.
             renew_subscription_certificate=lambda domain: subscription_certificate_renewal(admin)(domain),
             maintenance=maintenance,
+            collect_node_traffic=node_manager.collect_traffic,
+            reconcile_nodes=node_manager.reconcile_all,
         ),
         sync_runner=run_sync,
     )
 
     return ApplicationService(
-        users=UserService(orchestration),
+        users=UserService(orchestration, after_node_change=node_manager.reconcile_all),
         protocols=protocols,
         apply_config=orchestration.apply_config,
         last_apply_error=orchestration.last_apply_error,
@@ -265,7 +344,37 @@ def production_application(
         calls=calls,
         maintenance=maintenance,
         kernel=kernel,
+        nodes=node_manager,
     )
 
 
-__all__ = ["production_application"]
+def production_node_reconciler(node_id: str) -> NodeReconciler:
+    """Compose the node control operations at the production root."""
+    from hydra.services.nodes.reconcile import NodeReconciler as Reconciler
+    from hydra.services.nodes.upgrade import NodeUpgradeScheduler
+
+    return Reconciler(
+        node_id,
+        production_application(),
+        state_reader=load_state,
+        upgrade_scheduler=NodeUpgradeScheduler(HOST).schedule,
+    )
+
+
+def production_node_uninstall() -> dict[str, object]:
+    """Remove this node through its freshly composed application services."""
+    result = production_application().uninstaller.uninstall(
+        load_state(),
+        confirmed=True,
+        keep_data=False,
+    )
+    ok = result.get("ok") if isinstance(result, dict) else None
+    if type(ok) is not bool or not ok:
+        raise RuntimeError("node uninstall did not complete successfully")
+    return result
+
+
+__all__ = [
+    "production_application", "production_node_reconciler", "production_node_uninstall",
+    "production_node_cookie_import",
+]

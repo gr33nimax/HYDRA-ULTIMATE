@@ -7,6 +7,10 @@ from typing import Any
 
 from hydra.core.source_relay import resolve_mapping
 from hydra.core.state_models import AppState
+from hydra.services.node_traffic_accounting import (
+    record_local_traffic_delta,
+    recompute_user_traffic_totals,
+)
 from hydra.services.traffic_attribution import (
     DEFAULT_ATTRIBUTOR,
     ConnectionAttributor,
@@ -141,12 +145,15 @@ def apply_connection_snapshot(
         )
         if user is None:
             continue
+        record_local_traffic_delta(state, user, delta)
         user.traffic_used_bytes += delta
         protocol_stats = user.credentials.setdefault(protocol, {})
         protocol_stats["traffic_used_bytes"] = (
             int(protocol_stats.get("traffic_used_bytes", 0)) + delta
         )
         record_report_delta(state, protocol, delta)
+    if deltas:
+        recompute_user_traffic_totals(state)
     return bool(deltas)
 
 

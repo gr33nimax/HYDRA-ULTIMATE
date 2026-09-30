@@ -1,4 +1,5 @@
 """Host adapter for the standalone, provider-neutral headless creator."""
+
 from __future__ import annotations
 
 import json
@@ -73,7 +74,7 @@ def validate_vk_join_link(value: str) -> str:
     except ValueError as exc:
         raise ValueError("creator returned an invalid VK join link") from exc
     prefix = "/call/join/"
-    token = parsed.path[len(prefix):] if parsed.path.startswith(prefix) else ""
+    token = parsed.path[len(prefix) :] if parsed.path.startswith(prefix) else ""
     valid = (
         parsed.scheme.lower() == "https"
         and parsed.hostname in _VK_JOIN_HOSTS
@@ -150,6 +151,10 @@ class HeadlessCreatorInfrastructure(HeadlessCreatorPoolInfrastructureMixin):
     def import_vk_cookies(self, source_path: Path) -> list[dict[str, str]]:
         """Validate a local export before replacing the managed cookie file."""
         raw = json.loads(source_path.read_text(encoding="utf-8"))
+        return self.import_vk_cookie_document(raw)
+
+    def import_vk_cookie_document(self, raw: object) -> list[dict[str, str]]:
+        """Import validated credentials only; never create or restart a room."""
         cookies = normalize_vk_cookies(raw)
         return self._write_vk_cookies(cookies)
 
@@ -217,10 +222,7 @@ class HeadlessCreatorInfrastructure(HeadlessCreatorPoolInfrastructureMixin):
             if len(links) != len(hashes):
                 self.rollback_creator_pool()
                 raise RuntimeError("managed VK creator returned an incomplete link pool")
-            endpoints = tuple(
-                CreatorEndpoint(link, token)
-                for link, token in zip(links, hashes, strict=True)
-            )
+            endpoints = tuple(CreatorEndpoint(link, token) for link, token in zip(links, hashes, strict=True))
             return CreatorSessionGroup(request, endpoints)
         bootstrap = self.start_vk_room()
         endpoint = CreatorEndpoint(
@@ -269,23 +271,15 @@ class HeadlessCreatorInfrastructure(HeadlessCreatorPoolInfrastructureMixin):
         """Read strict full join links from the staged or committed generation."""
         metadata = self.pool_metadata()
         generation = (
-            self._pool_stage.generation
-            if self._pool_stage is not None
-            else str(metadata.get("generation", ""))
+            self._pool_stage.generation if self._pool_stage is not None else str(metadata.get("generation", ""))
         )
         count = (
-            self._pool_stage.room_count
-            if self._pool_stage is not None
-            else self._room_count_from_metadata(metadata)
+            self._pool_stage.room_count if self._pool_stage is not None else self._room_count_from_metadata(metadata)
         )
         links: list[str] = []
         for path in self.call_files(generation=generation, count=count):
             try:
-                lines = [
-                    line.strip()
-                    for line in path.read_text(encoding="utf-8").splitlines()
-                    if line.strip()
-                ]
+                lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
                 links.append(extract_vk_join_link(lines[-1]))
             except (OSError, ValueError, IndexError):
                 return []
@@ -297,11 +291,7 @@ class HeadlessCreatorInfrastructure(HeadlessCreatorPoolInfrastructureMixin):
         invalid_content_seen = False
         while time.monotonic() < deadline:
             try:
-                lines = [
-                    line.strip()
-                    for line in path.read_text(encoding="utf-8").splitlines()
-                    if line.strip()
-                ]
+                lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
                 for line in reversed(lines):
                     try:
                         return extract_vk_join_link(line)

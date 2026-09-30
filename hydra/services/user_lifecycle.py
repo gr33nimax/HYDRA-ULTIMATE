@@ -59,6 +59,130 @@ class UserLifecycleOperations:
         self._commit(state, transaction)
         self._restart_subscriptions()
 
+    def reconcile_users(self, state: AppState, users: list[User]) -> None:
+        """Replace the node-local user projection in one transactional apply."""
+        by_uuid = {user.uuid: user for user in users}
+        by_email = {user.email: user for user in users}
+        if len(by_uuid) != len(users) or len(by_email) != len(users):
+            raise ValueError("reconciled users must have unique UUIDs and identifiers")
+        snapshot = copy.deepcopy(state)
+        previous = {user.uuid: user for user in snapshot.users}
+        state.users = users
+        transaction = self._new_transaction(state, snapshot)
+
+        for index, plugin in self._enabled_transports(state):
+            name = plugin.meta.name
+            was_enabled = bool(snapshot.protocols.get(name) and snapshot.protocols[name].enabled)
+            if not was_enabled:
+                for user in users:
+                    self._register_user_add_rollback(transaction, plugin, user, state, index)
+                    try:
+                        self.invoker.user_add(plugin, user, state)
+                    except Exception:
+                        transaction.rollback(self.log_rollback_error)
+                        raise
+                continue
+
+            for old_user in snapshot.users:
+                user = by_uuid.get(old_user.uuid)
+                if user is None:
+                    transaction.add_rollback(
+                        f"user {old_user.email} plugin {name}",
+                        lambda plugin=plugin, old_user=old_user: self.invoker.user_add(
+                            plugin,
+                            old_user,
+                            state,
+                        ),
+                        priority=10 - index,
+                    )
+                    try:
+                        self.invoker.user_remove(plugin, old_user, state)
+                    except Exception:
+                        transaction.rollback(self.log_rollback_error)
+                        raise
+                    continue
+                if old_user.email != user.email:
+                    transaction.add_rollback(
+                        f"rename {old_user.email} plugin {name}",
+                        lambda plugin=plugin, old_user=old_user, user=user: self._restore_plugin_identity(
+                            plugin,
+                            state,
+                            old_user,
+                            user,
+                        ),
+                        priority=10 - index,
+                    )
+                    try:
+                        self.invoker.user_remove(plugin, old_user, state)
+                        self.invoker.user_add(plugin, user, state)
+                    except Exception:
+                        transaction.rollback(self.log_rollback_error)
+                        raise
+                    continue
+                if self._user_projection_changed(old_user, user):
+                    if old_user.blocked and not user.blocked:
+                        rollback = lambda plugin=plugin, old_user=old_user: self.invoker.user_block(
+                            plugin,
+                            old_user,
+                            state,
+                        )
+                    else:
+                        rollback = lambda plugin=plugin, old_user=old_user: self.invoker.user_add(
+                            plugin,
+                            old_user,
+                            state,
+                        )
+                    transaction.add_rollback(
+                        f"update {user.email} plugin {name}",
+                        rollback,
+                        priority=10 - index,
+                    )
+                    try:
+                        if user.blocked and not old_user.blocked:
+                            self.invoker.user_block(plugin, user, state)
+                        else:
+                            self.invoker.user_add(plugin, user, state)
+                    except Exception:
+                        transaction.rollback(self.log_rollback_error)
+                        raise
+
+            for user in users:
+                if user.uuid not in previous:
+                    self._register_user_add_rollback(transaction, plugin, user, state, index)
+                    try:
+                        self.invoker.user_add(plugin, user, state)
+                    except Exception:
+                        transaction.rollback(self.log_rollback_error)
+                        raise
+
+        self._commit(state, transaction)
+
+    def _register_user_add_rollback(
+        self,
+        transaction: ApplyTransaction,
+        plugin: BasePlugin,
+        user: User,
+        state: AppState,
+        index: int,
+    ) -> None:
+        transaction.add_rollback(
+            f"user {user.email} plugin {plugin.meta.name}",
+            lambda plugin=plugin, user=user: self.invoker.user_remove(plugin, user, state),
+            priority=10 - index,
+        )
+
+    @staticmethod
+    def _user_projection_changed(previous: User, current: User) -> bool:
+        return any(
+            getattr(previous, field) != getattr(current, field)
+            for field in (
+                "blocked",
+                "expiry_date",
+                "traffic_limit_gb",
+                "disabled_protocols",
+            )
+        )
+
     def remove(self, state: AppState, email: str) -> None:
         user = find_user(state, email)
         if not user:

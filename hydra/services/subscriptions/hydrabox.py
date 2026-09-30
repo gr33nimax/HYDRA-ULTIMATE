@@ -11,6 +11,18 @@ from hydra.core.configuration_names import resolve_configuration_name
 from hydra.core.state_models import AppState, User
 from hydra.services.subscriptions.access import SubscriptionPluginAccess
 from hydra.services.subscriptions.metadata import get_subscription_url
+from hydra.services.subscriptions.hydrabox_runtime import (
+    entrypoints as _entrypoints,
+    requested_permissions as _requested_permissions,
+    runtime_objects as _runtime_objects,
+    validate_depth as _validate_depth,
+    validate_remote_values as _validate_remote_values,
+)
+from hydra.services.subscriptions.node_exports import (
+    NodeSubscriptionProfile,
+    PublishedNodeExportReader,
+    node_profiles_for_user,
+)
 from hydra.services.subscriptions.profile_names import (
     hydrabox_profile_id,
     hydrabox_profile_name,
@@ -26,28 +38,9 @@ HYDRABOX_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 _MAX_SEQUENCE = 9_007_199_254_740_991
 _PAYLOAD_REVISION_BITS = 16
 # Increment whenever renderer code can change JSON for unchanged persisted state.
-_HYDRABOX_PAYLOAD_REVISION = 3
+_HYDRABOX_PAYLOAD_REVISION = 4
 _MAX_STATE_REVISION = _MAX_SEQUENCE >> _PAYLOAD_REVISION_BITS
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
-_ALLOWED_OUTBOUND_TYPES = frozenset({
-    "socks", "http", "vmess", "trojan", "naive", "shadowtls", "vless",
-    "mieru", "anytls", "trusttunnel", "hysteria", "hysteria2", "tuic",
-    "sudoku", "snell", "call",
-})
-_RESERVED_TAGS = frozenset({
-    "select", "direct", "lowest", "lowest-open", "lowest-free", "mixed",
-})
-_REFERENCE_FIELDS = frozenset({"detour", "outbound", "endpoint"})
-_LOCAL_AUTHORITY_FIELDS = frozenset({
-    "certificate_path", "client_certificate_path", "client_key_path",
-    "command", "commands", "config_path", "database_path", "exec",
-    "executable", "interface", "interface_name", "key_path", "listen",
-    "listen_port", "network_interface", "plugin", "plugin_opts", "process",
-    "private_key_path", "socket_path", "state_dir", "state_directory",
-    "working_directory",
-})
-
-
 def _reject_constant(value: str) -> None:
     raise ValueError(f"non-JSON numeric value: {value}")
 
@@ -73,147 +66,6 @@ def _strict_loads(payload: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("plugin JSON projection must be an object")
     return value
-
-
-def _validate_depth(value: Any, depth: int = 1) -> None:
-    if depth > 64:
-        raise ValueError("HydraBox runtime exceeds the JSON depth limit")
-    if isinstance(value, dict):
-        for nested in value.values():
-            _validate_depth(nested, depth + 1)
-    elif isinstance(value, list):
-        for nested in value:
-            _validate_depth(nested, depth + 1)
-
-
-def _validate_remote_values(value: Any, path: tuple[str, ...] = ()) -> None:
-    if value is None:
-        raise ValueError(f"explicit null is forbidden at {'.'.join(path)}")
-    if isinstance(value, dict):
-        for key, nested in value.items():
-            normalized = key.lower()
-            if normalized in _LOCAL_AUTHORITY_FIELDS:
-                raise ValueError(f"local authority field is forbidden: {key}")
-            _validate_remote_values(nested, (*path, key))
-    elif isinstance(value, list):
-        for index, nested in enumerate(value):
-            _validate_remote_values(nested, (*path, str(index)))
-
-
-def _validate_tag(tag: object) -> str:
-    if not isinstance(tag, str) or not tag or len(tag) > 512:
-        raise ValueError("native tag must contain 1..512 characters")
-    if tag != tag.strip() or any(ord(character) < 32 for character in tag):
-        raise ValueError(f"invalid native tag: {tag!r}")
-    if tag.startswith("__hydra.") or tag in _RESERVED_TAGS:
-        raise ValueError(f"reserved Hydra tag: {tag}")
-    return tag
-
-
-def _runtime_objects(
-    projection: dict[str, Any],
-) -> list[tuple[str, dict[str, Any]]]:
-    result: list[tuple[str, dict[str, Any]]] = []
-    for section in ("outbounds", "endpoints"):
-        values = projection.get(section, [])
-        if not isinstance(values, list):
-            raise ValueError(f"runtime {section} must be an array")
-        for raw in values:
-            if not isinstance(raw, dict):
-                raise ValueError(f"runtime {section} item must be an object")
-            object_type = raw.get("type")
-            allowed = (
-                object_type in _ALLOWED_OUTBOUND_TYPES
-                if section == "outbounds"
-                else object_type == "wireguard"
-            )
-            if not allowed:
-                continue
-            item = dict(raw)
-            _validate_tag(item.get("tag"))
-            _validate_remote_values(item, (section,))
-            if section == "endpoints":
-                if item.get("system", False) is not False:
-                    raise ValueError("system WireGuard is forbidden")
-                item["system"] = False
-            result.append((section, item))
-    return result
-
-
-def _references(value: Any) -> set[str]:
-    result: set[str] = set()
-    if isinstance(value, dict):
-        for key, nested in value.items():
-            if key in _REFERENCE_FIELDS:
-                if nested:
-                    if not isinstance(nested, str):
-                        raise ValueError(f"runtime reference {key} must be a tag")
-                    result.add(nested)
-            elif key == "outbounds":
-                if not isinstance(nested, list) or any(
-                    not isinstance(item, str) for item in nested
-                ):
-                    raise ValueError("runtime outbounds reference must be tag array")
-                result.update(nested)
-            else:
-                result.update(_references(nested))
-    elif isinstance(value, list):
-        for nested in value:
-            result.update(_references(nested))
-    return result
-
-
-def _entrypoints(
-    projection: dict[str, Any],
-    objects: list[tuple[str, dict[str, Any]]],
-) -> list[tuple[str, str]]:
-    by_tag = {item["tag"]: item for _, item in objects}
-    if len(by_tag) != len(objects):
-        raise ValueError("duplicate native tag in plugin projection")
-    references = {tag: _references(item) for tag, item in by_tag.items()}
-    for tag, targets in references.items():
-        missing = targets - set(by_tag)
-        if missing:
-            raise ValueError(
-                f"runtime object {tag} references missing tag {sorted(missing)[0]}",
-            )
-
-    visiting: set[str] = set()
-    visited: set[str] = set()
-
-    def visit(tag: str) -> None:
-        if tag in visiting:
-            raise ValueError(f"cyclic runtime reference at tag {tag}")
-        if tag in visited:
-            return
-        visiting.add(tag)
-        for target in references[tag]:
-            visit(target)
-        visiting.remove(tag)
-        visited.add(tag)
-
-    for tag in by_tag:
-        visit(tag)
-
-    referenced = {target for targets in references.values() for target in targets}
-    roots = [
-        (section, item["tag"])
-        for section, item in objects
-        if item["tag"] not in referenced
-    ]
-    route = projection.get("route", {})
-    preferred = route.get("final") if isinstance(route, dict) else None
-    return sorted(roots, key=lambda entry: entry[1] != preferred)
-
-
-def _requested_permissions(
-    objects: list[tuple[str, dict[str, Any]]],
-) -> list[str]:
-    sections = {section for section, _ in objects}
-    return [permission for section, permission in (
-        ("outbounds", "network.outbound"),
-        ("endpoints", "network.endpoint.wireguard"),
-    ) if section in sections]
 
 
 def _parse_timestamp(value: str, field: str) -> datetime:
@@ -259,19 +111,16 @@ def _validate_envelope_identity(user: User, state: AppState) -> int:
     return (state.revision << _PAYLOAD_REVISION_BITS) | _HYDRABOX_PAYLOAD_REVISION
 
 
-def generate_hydrabox_subscription(
+def _append_plugin_profiles(
     user: User,
     state: AppState,
-    *,
     plugins: SubscriptionPluginAccess,
-) -> dict[str, Any]:
-    """Build an activatable plaintext Hydra Subscription v2 document."""
-    sequence = _validate_envelope_identity(user, state)
-    resources: list[dict[str, Any]] = []
-    profiles: list[dict[str, Any]] = []
-    profile_ids: set[str] = set()
-    required_core_features: set[str] = set()
-
+    *,
+    resources: list[dict[str, Any]],
+    profiles: list[dict[str, Any]],
+    profile_ids: set[str],
+    required_core_features: set[str],
+) -> None:
     for plugin in plugins.enabled_transports(state):
         if not plugin.meta.capabilities.hydra_v2_subscription_enabled:
             continue
@@ -325,6 +174,91 @@ def generate_hydrabox_subscription(
                 "enabled": True,
             })
 
+
+def _append_node_export_profiles(
+    node_profiles: tuple[NodeSubscriptionProfile, ...],
+    *,
+    resources: list[dict[str, Any]],
+    profiles: list[dict[str, Any]],
+    profile_ids: set[str],
+    required_core_features: set[str],
+) -> None:
+    for node_profile in node_profiles:
+        for index, projection in enumerate(node_profile.singbox):
+            try:
+                _validate_depth(projection)
+                objects = _runtime_objects(projection)
+                entrypoints = _entrypoints(projection, objects)
+            except Exception as exc:
+                raise ValueError(
+                    f"failed to generate {node_profile.protocol} node HydraBox projection",
+                ) from exc
+            if not entrypoints:
+                continue
+            resource_key = (
+                f"node-{node_profile.node_id}-{node_profile.protocol}-"
+                f"{node_profile.profile}-{index}"
+            )
+            resource_id = hydrabox_resource_id(resource_key)
+            document: dict[str, list[dict[str, Any]]] = {}
+            for section, item in objects:
+                document.setdefault(section, []).append(item)
+                if item.get("type") == "call":
+                    required_core_features.add("call")
+                    if item.get("platform") == "vk" and item.get("mode") == "vk_parasite":
+                        required_core_features.add("call_vk_parasite")
+            resources.append({
+                "id": resource_id,
+                "format": "sing-box-json",
+                "requested_permissions": _requested_permissions(objects),
+                "document": document,
+            })
+            multiple = len(entrypoints) > 1
+            for section, tag in entrypoints:
+                profile_id = hydrabox_profile_id(resource_key, section, tag)
+                if profile_id in profile_ids:
+                    raise ValueError(f"duplicate HydraBox profile id: {profile_id}")
+                profile_ids.add(profile_id)
+                name = f"{node_profile.name} — {tag}" if multiple else node_profile.name
+                profiles.append({
+                    "id": profile_id,
+                    "resource": resource_id,
+                    "name": name,
+                    "entrypoint": {"section": section, "tag": tag},
+                    "enabled": True,
+                })
+
+
+def generate_hydrabox_subscription(
+    user: User,
+    state: AppState,
+    *,
+    plugins: SubscriptionPluginAccess,
+    node_exports: PublishedNodeExportReader | None = None,
+) -> dict[str, Any]:
+    """Build an activatable plaintext Hydra Subscription v2 document."""
+    sequence = _validate_envelope_identity(user, state)
+    resources: list[dict[str, Any]] = []
+    profiles: list[dict[str, Any]] = []
+    profile_ids: set[str] = set()
+    required_core_features: set[str] = set()
+
+    _append_plugin_profiles(
+        user,
+        state,
+        plugins,
+        resources=resources,
+        profiles=profiles,
+        profile_ids=profile_ids,
+        required_core_features=required_core_features,
+    )
+    _append_node_export_profiles(
+        node_profiles_for_user(user, state, node_exports=node_exports),
+        resources=resources,
+        profiles=profiles,
+        profile_ids=profile_ids,
+        required_core_features=required_core_features,
+    )
     if not profiles:
         raise ValueError("HydraBox subscription requires an enabled profile")
     if len(profiles) > 4096:

@@ -8,10 +8,15 @@ technically reliable (for example qWDTT).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol
 
 from hydra.core.state import update_state
 from hydra.core.state_models import AppState, User, find_user
+from hydra.services.node_traffic_accounting import (
+    recompute_user_traffic_totals,
+    reset_node_traffic_for_user,
+    sync_local_traffic_from_credentials,
+)
 from hydra.services.traffic_accounting import (
     _legacy_protocol_totals,
     ensure_report_totals,
@@ -94,6 +99,7 @@ class TrafficService:
     """Application service for monotonic traffic accounting."""
 
     protocols: TrafficProtocolAccess
+    after_user_reset: Callable[[], object] | None = None
 
     def refresh(self, state: AppState) -> dict[str, int]:
         return refresh_user_traffic(state, protocols=self.protocols)
@@ -128,13 +134,22 @@ class TrafficService:
         return reset_global_report_state()
 
     def reset_user_traffic_state(self, email: str) -> AppState:
-        return reset_user_traffic_state(email)
+        state = reset_user_traffic_state(email)
+        if self.after_user_reset is not None:
+            try:
+                self.after_user_reset()
+            except Exception:
+                # A disconnected node must not roll back the base quota reset.
+                pass
+        return state
 
 
 def _as_non_negative_int(value: object) -> int:
+    if not isinstance(value, (str, int, float, bool)):
+        return 0
     try:
         return max(0, int(value))
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return 0
 
 
@@ -221,16 +236,10 @@ def refresh_user_traffic(
             max(0, _protocol_total(state, protocol) - before),
         )
 
-    totals: dict[str, int] = {}
     for user in state.users:
-        total = 0
-        for stats in user.credentials.values():
-            if isinstance(stats, dict):
-                total += _as_non_negative_int(stats.get("traffic_used_bytes", 0))
-        # Never reduce an existing total during migration or a partial outage.
-        user.traffic_used_bytes = max(_as_non_negative_int(user.traffic_used_bytes), total)
-        totals[user.email] = user.traffic_used_bytes
-    return totals
+        sync_local_traffic_from_credentials(state, user)
+    recompute_user_traffic_totals(state)
+    return {user.email: user.traffic_used_bytes for user in state.users}
 
 
 def refresh_traffic_state(*, protocols: TrafficProtocolAccess) -> AppState:
@@ -308,8 +317,7 @@ def reset_user_traffic(state: AppState, email: str) -> User:
             if key.startswith("traffic_") and key != "traffic_last_raw_bytes":
                 stats.pop(key, None)
         stats["traffic_used_bytes"] = 0
-    resets = state.install.setdefault("traffic_user_reset_epochs", {})
-    resets[email] = _as_non_negative_int(resets.get(email, 0)) + 1
+    reset_node_traffic_for_user(state, user)
     return user
 
 

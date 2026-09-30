@@ -15,6 +15,7 @@ from hydra.core.state_models import AppState
 
 
 SYSTEM_SERVICES = (
+    "hydra-node-control.service",
     "hydra-sub.service",
     "hydra-traffic-daemon.service",
     "hydra-sync-agent.service",

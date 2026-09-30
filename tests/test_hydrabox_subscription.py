@@ -139,7 +139,7 @@ def test_hydrabox_subscription_builds_strict_remote_runtime_and_profiles():
         "issuer": "https://subscriptions.example.com",
         "id": "customer-main",
         "channel": "stable",
-        "sequence": (7 << 16) | 3,
+        "sequence": (7 << 16) | 4,
     }
     assert subscription["validity"] == {
         "issued_at": "2026-08-01T00:00:00Z",

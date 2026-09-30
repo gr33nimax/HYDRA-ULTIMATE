@@ -1,4 +1,5 @@
 """Validated Hydracore VK parasite Calls projections."""
+
 from __future__ import annotations
 
 import re
@@ -33,9 +34,14 @@ class CallsNetworkState(Protocol):
 
 
 class CallsStateAccess(Protocol):
-    protocols: Mapping[str, CallsProtocolState]
-    users: Sequence[CallsUser]
-    network: CallsNetworkState
+    @property
+    def protocols(self) -> Mapping[str, CallsProtocolState]: ...
+
+    @property
+    def users(self) -> Sequence[CallsUser]: ...
+
+    @property
+    def network(self) -> CallsNetworkState: ...
 
 
 def public_endpoint(
@@ -45,11 +51,7 @@ def public_endpoint(
     """Return the explicit Calls endpoint without borrowing a transport SNI."""
     desired = state.protocols.get("calls")
     configured = desired.config.get("public_endpoint", "") if desired else ""
-    fallback = (
-        observed()
-        if callable(observed) and not configured and not state.network.server_ip
-        else observed
-    )
+    fallback = observed() if callable(observed) and not configured and not state.network.server_ip else observed
     endpoint = str(configured or state.network.server_ip or fallback).strip().strip("[]")
     if not endpoint or len(endpoint) > 253 or any(char.isspace() for char in endpoint):
         raise ValueError("Calls public_endpoint must be an IP address or DNS name")
@@ -62,11 +64,7 @@ def public_endpoint(
 
 def call_mode(state: CallsStateAccess) -> str:
     desired = state.protocols.get("calls")
-    value = (
-        str(desired.config.get("mode", CALL_MODE_VK_PARASITE))
-        if desired
-        else CALL_MODE_VK_PARASITE
-    )
+    value = str(desired.config.get("mode", CALL_MODE_VK_PARASITE)) if desired else CALL_MODE_VK_PARASITE
     if value != CALL_MODE_VK_PARASITE:
         raise ValueError("Calls mode must be vk_parasite")
     return value
