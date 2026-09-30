@@ -76,7 +76,7 @@ def test_v2_only_calls_is_available_in_node_protocol_editor():
         )
     ]
     with (
-        patch.object(nodes_setup, "menu", return_value="1"),
+        patch.object(nodes_setup, "menu", side_effect=["1", "2"]),
         patch.object(nodes_setup, "prompt", side_effect=["56002", "{}"]),
     ):
         spec = nodes_setup.read_protocol("calls", app, NodeProtocolSpec())
@@ -88,6 +88,7 @@ def test_calls_install_wizard_passes_separate_cookie_file_before_initial_activat
     app.admin.subscription_certificate.return_value = ("cert", "key")
     app.admin.subscription_public_host.return_value = "base.example.com"
     app.nodes.list_nodes.return_value = []
+    app.nodes.resolve_revision.return_value = "a" * 40
     app.protocols.list.return_value = [
         SimpleNamespace(
             meta=SimpleNamespace(
@@ -97,7 +98,7 @@ def test_calls_install_wizard_passes_separate_cookie_file_before_initial_activat
             )
         )
     ]
-    values = ["de-1", "node.example.com", "22", "Germany", "DE", "main", "a" * 40, "9444", "-", "/secure/node-vk.json"]
+    values = ["de-1", "node.example.com", "22", "Germany", "DE", "main", "9444", "-", "/secure/node-vk.json"]
     with (
         patch.object(nodes_setup, "prompt", side_effect=values),
         patch.object(nodes_setup, "menu", side_effect=["1", "2"]),

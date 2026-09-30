@@ -26,6 +26,8 @@ from hydra.services.node_traffic_accounting import apply_node_traffic_reports, r
 
 
 class NodeProvisioningPort(Protocol):
+    def resolve_revision(self, branch: str) -> str: ...
+
     def install(
         self,
         *,
@@ -79,6 +81,12 @@ class NodeManager:
 
     def list_nodes(self, state: AppState) -> list[NodeConfig]:
         return deepcopy(state.nodes)
+
+    def resolve_revision(self, branch: str) -> str:
+        branch = checked_node_branch(branch, context="branch")
+        if self.bootstrap is None:
+            raise RuntimeError("node branch resolution is unavailable")
+        return checked_node_revision(self.bootstrap.resolve_revision(branch), context="revision")
 
     def published_export(self, state: AppState, node_id: str) -> NodeClientExport | None:
         node = self._find_node(state, node_id)

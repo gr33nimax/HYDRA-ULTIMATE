@@ -13,9 +13,15 @@ def _app():
     state = AppState(nodes=[NodeConfig(id="de-1", name="Germany", address="node.example.com")])
     app.admin.load_state.return_value = state
     app.nodes.list_nodes.return_value = state.nodes
-    app.protocols.list.return_value = [SimpleNamespace(meta=SimpleNamespace(
-        name="vless", display_name="VLESS", capabilities=SimpleNamespace(subscription_enabled=True),
-    ))]
+    app.protocols.list.return_value = [
+        SimpleNamespace(
+            meta=SimpleNamespace(
+                name="vless",
+                display_name="VLESS",
+                capabilities=SimpleNamespace(subscription_enabled=True),
+            )
+        )
+    ]
     return app
 
 

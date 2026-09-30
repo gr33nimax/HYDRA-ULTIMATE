@@ -6,7 +6,8 @@ from hydra.contracts.node_snapshot import NodeProtocolSpec
 from hydra.core.state_models import AppState
 from hydra.core.state_nodes import NodeConfig
 from hydra.services.application import ApplicationService
-from hydra.ui._menus.nodes_setup import install_node, protocol_choices, read_protocol
+from hydra.ui._menus.nodes_setup import install_node, protocol_choices, read_protocol, resolve_revision
+from hydra.ui.protocol_ui import protocol_label
 from hydra.ui.tui import clear, confirm, error, kv, menu, panel, prompt, success
 
 
@@ -86,7 +87,11 @@ def _protocols(node: NodeConfig, app: ApplicationService) -> None:
     while True:
         choices = {str(index): name for index, name in enumerate(node.protocols, 1)}
         add_key = str(len(choices) + 1)
-        options = [(key, name, "включён" if node.protocols[name].enabled else "выключен") for key, name in choices.items()]
+        labels = dict(protocol_choices(app).values())
+        options = [
+            (key, labels.get(name, protocol_label(name)), "включён" if node.protocols[name].enabled else "выключен")
+            for key, name in choices.items()
+        ]
         options.extend([(add_key, "Добавить протокол", ""), ("0", "Назад", "")])
         choice = menu(options, "ПРОТОКОЛЫ НОДЫ")
         if choice == "0":
@@ -131,9 +136,10 @@ def _upgrade(node: NodeConfig, app: ApplicationService) -> None:
     branch = prompt("Ветка (0 — отмена)", node.branch)
     if branch == "0":
         return
-    revision = prompt("Точный SHA коммита (40 hex; 0 — отмена)", node.revision)
-    if revision == "0":
+    revision = resolve_revision(app, branch)
+    if revision is None:
         return
+    panel("ПЛАН ОБНОВЛЕНИЯ НОДЫ", [kv("Нода:", node.name or node.id), kv("Ветка:", branch), kv("SHA (получен автоматически):", revision)], wrap=True)
     if not confirm(f"Запланировать обновление {node.id} до {revision}?", default=False):
         return
     app.nodes.change_update_target(node.id, branch=branch, revision=revision)

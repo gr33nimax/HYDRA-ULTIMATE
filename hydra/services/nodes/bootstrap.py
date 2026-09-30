@@ -22,6 +22,9 @@ from hydra.services.nodes.credentials import (
 )
 
 
+from hydra.services.nodes.revision import resolve_branch_revision
+
+
 class NodeBootstrap:
     """Install only a clean node, after explicit SSH host-key confirmation."""
 
@@ -39,6 +42,9 @@ class NodeBootstrap:
         self.script = script
         self.known_hosts_root = Path(known_hosts_root)
         self.credentials_root = Path(credentials_root)
+
+    def resolve_revision(self, branch: str) -> str:
+        return resolve_branch_revision(branch)
 
     def install(
         self,

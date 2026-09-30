@@ -14,6 +14,7 @@ def _app():
     app.admin.subscription_certificate.return_value = ("base.crt", "base.key")
     app.admin.subscription_public_host.return_value = "base.example.com"
     app.nodes.list_nodes.return_value = []
+    app.nodes.resolve_revision.return_value = "a" * 40
     app.protocols.list.return_value = [
         SimpleNamespace(
             meta=SimpleNamespace(
@@ -26,10 +27,10 @@ def _app():
     return app
 
 
-@pytest.mark.parametrize("step", range(8))
+@pytest.mark.parametrize("step", range(7))
 def test_cancel_at_each_install_input_never_reaches_ssh(step):
     app = _app()
-    values = ["de-1", "node.example.com", "22", "Germany", "DE", "main", "a" * 40, "9444"]
+    values = ["de-1", "node.example.com", "22", "Germany", "DE", "main", "9444"]
     values[step] = "cancel"
     with patch.object(nodes_setup, "prompt", side_effect=values):
         nodes_setup.install_node(AppState(), app)
@@ -42,7 +43,7 @@ def test_cancel_protocol_selection_never_reaches_ssh():
         patch.object(
             nodes_setup,
             "prompt",
-            side_effect=["de-1", "node.example.com", "22", "Germany", "DE", "main", "a" * 40, "9444"],
+            side_effect=["de-1", "node.example.com", "22", "Germany", "DE", "main", "9444"],
         ),
         patch.object(nodes_setup, "menu", return_value="0"),
     ):
@@ -56,7 +57,7 @@ def test_final_install_confirmation_is_required():
         patch.object(
             nodes_setup,
             "prompt",
-            side_effect=["de-1", "node.example.com", "22", "Germany", "DE", "main", "a" * 40, "9444"],
+            side_effect=["de-1", "node.example.com", "22", "Germany", "DE", "main", "9444"],
         ),
         patch.object(nodes_setup, "menu", return_value="2"),
         patch.object(nodes_setup, "confirm", return_value=False),
@@ -69,7 +70,7 @@ def test_final_install_confirmation_is_required():
 def test_protocol_json_cannot_smuggle_private_node_credentials():
     app = _app()
     with (
-        patch.object(nodes_setup, "menu", return_value="1"),
+        patch.object(nodes_setup, "menu", side_effect=["1", "2"]),
         patch.object(nodes_setup, "prompt", side_effect=["443", '{"private_key":"do-not-copy"}']),
     ):
         with pytest.raises(NodeContractError, match="node-local secret"):
@@ -89,7 +90,7 @@ def test_install_rejects_inactive_base_subscription_service_before_prompts():
 
 def test_real_install_menu_accepts_numeric_protocol_and_continue():
     app = _app()
-    values = ["de-1", "node.example.com", "22", "Germany", "DE", "main", "a" * 40, "9444", "-"]
+    values = ["de-1", "node.example.com", "22", "Germany", "DE", "main", "9444", "-"]
     with (
         patch.object(nodes_setup, "_input", side_effect=values),
         patch("builtins.input", side_effect=["1", "2"]),

@@ -10,41 +10,48 @@ from hydra.core.state_models import AppState
 from hydra.core.state_nodes import NodeConfig
 from hydra.plugins.base import PluginCategory
 from hydra.services.application import ApplicationService
-from hydra.ui.tui import confirm, kv, menu, panel, prompt, success
+from hydra.ui.protocol_ui import protocol_label
+from hydra.ui.tui import confirm, error, kv, menu, panel, prompt, success
 
 
 def protocol_choices(app: ApplicationService) -> dict[str, tuple[str, str]]:
     supported = [
-        plugin for plugin in app.protocols.list(PluginCategory.TRANSPORT)
+        plugin
+        for plugin in app.protocols.list(PluginCategory.TRANSPORT)
         if (plugin.meta.capabilities.subscription_enabled or plugin.meta.capabilities.hydra_v2_subscription_enabled)
     ]
     return {
-        str(index): (plugin.meta.name, plugin.meta.display_name)
+        str(index): (plugin.meta.name, protocol_label(plugin.meta.name, getattr(plugin.meta, "display_name", "")))
         for index, plugin in enumerate(supported, 1)
     }
 
 
 def read_protocol(name: str, app: ApplicationService, previous: NodeProtocolSpec) -> NodeProtocolSpec | None:
-    supported = {
-        plugin.meta.name for plugin in app.protocols.list(PluginCategory.TRANSPORT)
-        if (plugin.meta.capabilities.subscription_enabled or plugin.meta.capabilities.hydra_v2_subscription_enabled)
-    }
+    supported = dict(protocol_choices(app).values())
     if name not in supported:
         raise ValueError("protocol does not publish client profiles")
-    enabled = menu([("1", "Включить", ""), ("2", "Выключить", ""), ("0", "Отмена", "")], name)
-    if enabled == "0":
+    enabled = menu([("1", "Включить", ""), ("2", "Выключить", ""), ("0", "Отмена", "")], supported[name])
+    if enabled not in {"1", "2"}:
         return None
-    port = prompt("Порт протокола; 0 — авто, cancel — отмена", str(previous.port))
-    if port == "cancel":
-        return None
-    raw = prompt(
-        "Публичные параметры протокола JSON (домен/IP здесь); cancel — отмена",
-        json.dumps(previous.config, ensure_ascii=False),
+    if enabled == "2":
+        spec = NodeProtocolSpec(enabled=False, port=previous.port, config=dict(previous.config))
+        spec.validate()
+        return spec
+    port_mode = menu(
+        [("1", "Автоматический порт", ""), ("2", "Указать порт вручную", ""), ("0", "Отмена", "")],
+        "ПОРТ ПРОТОКОЛА НА НОДЕ",
     )
-    if raw == "cancel":
+    if port_mode not in {"1", "2"}:
         return None
     try:
-        spec = NodeProtocolSpec(enabled=enabled == "1", port=int(port), config=json.loads(raw))
+        port = int(_input("Порт протокола на VPS ноды (1–65535)", str(previous.port) if previous.port else "")) if port_mode == "2" else 0
+        raw = _input(
+            "Публичные параметры JSON (домен/IP); Enter — оставить текущие, без паролей и ключей",
+            json.dumps(previous.config, ensure_ascii=False),
+        )
+        spec = NodeProtocolSpec(enabled=True, port=port, config=json.loads(raw))
+    except InterruptedError:
+        return None
     except (ValueError, TypeError) as exc:
         raise ValueError("invalid protocol port or public JSON configuration") from exc
     spec.validate()
@@ -52,10 +59,18 @@ def read_protocol(name: str, app: ApplicationService, previous: NodeProtocolSpec
 
 
 def _input(label: str, default: str = "") -> str:
-    value = prompt(f"{label} (cancel — отмена)", default)
-    if value == "cancel":
+    value = prompt(f"{label} (0 — отмена)", default)
+    if value in {"0", "cancel"}:
         raise InterruptedError("installation canceled")
     return value
+
+
+def resolve_revision(app: ApplicationService, branch: str) -> str | None:
+    try:
+        return checked_node_revision(app.nodes.resolve_revision(branch), context="revision")
+    except Exception:
+        error("Не удалось получить SHA из GitHub. Проверь имя ветки и доступ к GitHub; операция не начата.")
+        return None
 
 
 def install_node(state: AppState, app: ApplicationService) -> None:
@@ -65,15 +80,15 @@ def install_node(state: AppState, app: ApplicationService) -> None:
         cert, _ = app.admin.subscription_certificate(state)
         if not cert:
             raise ValueError("base subscription certificate is missing")
+        node_id = _input("Постоянный ID ноды без пробелов, например uk-1 (не имя и не IP)")
         node = NodeConfig(
-            id=_input("Стабильный уникальный ID ноды"),
-            address=_input("SSH / management hostname или IP"),
-            ssh_port=int(_input("SSH-порт", "22")),
-            name=_input("Отображаемое имя"),
-            region=_input("Регион"),
-            branch=checked_node_branch(_input("Ветка", "main"), context="branch"),
-            revision=checked_node_revision(_input("Точный SHA коммита (40 hex)"), context="revision"),
-            control_port=int(_input("Management TCP-порт", "9444")),
+            id=node_id,
+            address=_input("IP или домен VPS ноды; SSH подключается под root"),
+            ssh_port=int(_input("SSH-порт VPS ноды", "22")),
+            name=_input("Название ноды в списке и подписках, например UK · Лондон (не SSH-логин)", node_id),
+            region=_input("Регион для подписи, например UK или Лондон (можно оставить пустым)"),
+            branch=checked_node_branch(_input("Ветка HYDRA: main — стабильная, dev — разработка", "main"), context="branch"),
+            control_port=int(_input("TCP-порт API управления нодой; обычно оставь 9444", "9444")),
         )
         node.validate()
         if any(item.id == node.id for item in app.nodes.list_nodes(state)):
@@ -81,7 +96,10 @@ def install_node(state: AppState, app: ApplicationService) -> None:
         while True:
             choices = protocol_choices(app)
             next_key = str(len(choices) + 1)
-            options = [(key, label, "") for key, (_, label) in choices.items()]
+            options = [
+                (key, label, "выбран" if node.protocols.get(protocol, NodeProtocolSpec()).enabled else "")
+                for key, (protocol, label) in choices.items()
+            ]
             options.extend([(next_key, "Продолжить", ""), ("0", "Отмена установки", "")])
             choice = menu(options, "ПРОТОКОЛЫ НОДЫ")
             if choice == "0":
@@ -95,7 +113,7 @@ def install_node(state: AppState, app: ApplicationService) -> None:
             spec = read_protocol(protocol, app, node.protocols.get(protocol, NodeProtocolSpec()))
             if spec is not None:
                 node.protocols[protocol] = spec
-                name = _input("Имя профиля; - = по умолчанию", "-")
+                name = _input("Название профиля в подписке; Enter или - — штатное название", "-")
                 if name != "-":
                     node.profile_names[protocol] = name
         node.validate()
@@ -112,6 +130,10 @@ def install_node(state: AppState, app: ApplicationService) -> None:
                 wrap=True,
             )
             vk_cookie_source = _input("Путь к отдельному VK cookies JSON")
+        revision = resolve_revision(app, node.branch)
+        if revision is None:
+            return
+        node.revision = revision
         host = app.admin.subscription_public_host(state)
         base_url = f"https://{host}"
         if not state.network.sub_domain:
@@ -120,10 +142,11 @@ def install_node(state: AppState, app: ApplicationService) -> None:
             "ПЛАН УСТАНОВКИ",
             [
                 kv("Нода:", f"{node.name} · {node.id}"),
-                kv("SSH:", f"{node.address}:{node.ssh_port}"),
-                kv("Management:", str(node.control_port)),
-                kv("Точный SHA:", node.revision),
-                kv("Протоколы:", ", ".join(node.protocols) or "нет"),
+                kv("SSH:", f"root@{node.address}:{node.ssh_port}"),
+                kv("API управления:", str(node.control_port)),
+                kv("Ветка:", node.branch),
+                kv("SHA (получен автоматически):", node.revision),
+                kv("Протоколы:", ", ".join(dict(choices.values()).get(name, protocol_label(name)) for name in node.protocols) or "нет"),
                 "SSH устанавливает HYDRA; параметры содержат только публичную конфигурацию.",
                 "При неполном provisioning запись/доступ требуют проверки и повторной попытки.",
             ],
