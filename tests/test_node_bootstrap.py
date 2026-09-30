@@ -23,7 +23,7 @@ class _Host(HostBackend):
     def ensure_directory(self, path, *, mode=0o755):
         self.directory = (path, mode)
 
-    def atomic_write(self, path, content, *, mode=0o644):
+    def atomic_write(self, path, content, *, mode=0o644, durable=False):
         self.saved = (path, content, mode)
 
 
@@ -53,7 +53,8 @@ def test_bootstrap_pins_confirmed_ssh_host_and_installs_exact_revision(tmp_path)
     )
     command, options = host.calls[-1]
     assert command[0] == "ssh"
-    assert "-tt" in command
+    assert "-T" in command
+    assert "-tt" not in command
     assert "BatchMode=no" in command
     assert options["capture_output"] is False
     assert "StrictHostKeyChecking=yes" in command

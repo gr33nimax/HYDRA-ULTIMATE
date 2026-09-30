@@ -71,6 +71,8 @@ def test_bootstrap_provisions_credentials_over_pinned_ssh_without_sending_privat
     assert "private_key" not in request
     assert credentials.client_private_key.read_bytes() not in calls[0][1]["input"].encode()
     assert calls[0][0][0] == "ssh"
+    assert "-T" in calls[0][0]
+    assert "-tt" not in calls[0][0]
     assert "BatchMode=no" in calls[0][0]
     assert "StrictHostKeyChecking=yes" in calls[0][0]
     assert "hydra.entrypoints.node_provision" in calls[0][0][-1]
@@ -390,6 +392,8 @@ def test_uninstall_node_uses_pinned_ssh_and_forgets_local_credentials_only_after
     assert known_hosts.exists()
     assert calls[0][0][0] == "ssh"
     assert "StrictHostKeyChecking=yes" in calls[0][0]
+    assert "-T" in calls[0][0]
+    assert "-tt" not in calls[0][0]
     assert json.loads(calls[0][1]["input"]) == {"action": "uninstall", "node_id": "de-1"}
 
     cleanup_node_credentials(

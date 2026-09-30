@@ -265,7 +265,8 @@ class NodeBootstrap:
         result = self.host.run(
             [
                 "ssh",
-                "-tt",
+                # -T: без PTY, чтобы строка JSON не экранировалась и не получала CRLF.
+                "-T",
                 *self._connection_flags(ssh_port, known_hosts),
                 host_target,
                 "cd /opt/hydra && exec /opt/hydra/.venv/bin/python -m hydra.entrypoints.node_provision",

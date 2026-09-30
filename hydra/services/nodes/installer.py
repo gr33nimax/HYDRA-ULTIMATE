@@ -101,10 +101,14 @@ def install_node(
     host.atomic_write(known_hosts, keys[0] + "\n", mode=0o600)
     target = f"root@[{address}]" if ":" in address else f"root@{address}"
     remote = f"HYDRA_ROLE=node HYDRA_REF={shlex.quote(branch)} HYDRA_TARGET_REV={shlex.quote(revision)} bash -s"
+    # No PTY on purpose: with `-tt` the streamed `bash -s` runs as an interactive
+    # shell, which ignores `set -e`, weakens the ERR trap and stops reporting a
+    # real failure. `-T` keeps the installer non-interactive; the SSH password is
+    # still typed locally, because ssh asks for it on its own terminal.
     result = host.run(
         [
             "ssh",
-            "-tt",
+            "-T",
             "-p",
             str(ssh_port),
             "-o",
@@ -154,7 +158,7 @@ def uninstall_node(
     target = f"root@[{address}]" if ":" in address else f"root@{address}"
     remote = "cd /opt/hydra && exec /opt/hydra/.venv/bin/python -m hydra.entrypoints.node_provision"
     result = host.run(
-        ["ssh", "-tt", *ssh_connection_flags(ssh_port, known_hosts), target, remote],
+        ["ssh", "-T", *ssh_connection_flags(ssh_port, known_hosts), target, remote],
         input=json.dumps({"action": "uninstall", "node_id": node_id}, separators=(",", ":")) + "\n",
         timeout=_NODE_SSH_ACTION_TIMEOUT,
         text=True,
