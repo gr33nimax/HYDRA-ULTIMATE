@@ -3,6 +3,14 @@
 Each transport publishes its own public settings instead of one raw JSON box.
 Only public parameters are collected: node-local secrets (keys, passwords,
 tokens) are generated on the node and never travel from the base.
+
+TLS-shaped transports (AnyTLS, TrustTunnel, ShadowTLS, NaiveProxy, VLESS,
+MTProto Zig) are intentionally not asked for a port. The node owns TCP/443:
+with a single such protocol it listens on 443 directly, with several it puts
+the SNI multiplexer in front and each plugin takes its fixed internal port
+(``hydra/core/sni_router_planning.py``). Clients always dial 443. A port is
+collected only where the plugin really reads one from its own config:
+Hysteria2 UDP, VK Tunnel UDP and qWDTT DTLS.
 """
 
 from __future__ import annotations
@@ -67,7 +75,7 @@ PROTOCOL_FIELDS: dict[str, tuple[NodeField, ...]] = {
             provider="hydra.plugins.anytls.presets",
         ),
     ),
-    "calls": (),
+    "calls": (NodeField("listen_port", "UDP-порт VK Tunnel", kind="int", default=56002, minimum=1, maximum=65535),),
     "hysteria2": (
         NodeField("domain", "Домен для Hysteria2", required=True),
         NodeField(
@@ -77,6 +85,7 @@ PROTOCOL_FIELDS: dict[str, tuple[NodeField, ...]] = {
             default="bbr",
             choices=(("bbr", "BBR — автоматическая оценка"), ("brutal", "Brutal — явные Mbps")),
         ),
+        NodeField("port", "UDP-порт Hysteria2", kind="int", default=8443, minimum=1, maximum=65535),
         NodeField("up_mbps", "Upload, Mbps", kind="int", default=100, minimum=1, maximum=100000),
         NodeField("down_mbps", "Download, Mbps", kind="int", default=100, minimum=1, maximum=100000),
     ),
@@ -185,7 +194,7 @@ PROTOCOL_FIELDS: dict[str, tuple[NodeField, ...]] = {
         ),
         NodeField("xhttp_path", "Путь XHTTP", default="/xhttp"),
     ),
-    "wdtt": (),
+    "wdtt": (NodeField("dtls_port", "DTLS-порт qWDTT", kind="int", default=56000, minimum=1, maximum=65535),),
 }
 
 # Fields whose choices come from a plugin module are resolved once, on first use.

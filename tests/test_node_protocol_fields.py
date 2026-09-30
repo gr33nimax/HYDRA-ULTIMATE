@@ -149,7 +149,7 @@ def test_collect_answers_every_registry_protocol_without_looping_forever():
 def test_read_protocol_asks_protocol_parameters_instead_of_raw_json():
     app = _app(["anytls"])
     with (
-        patch.object(nodes_setup, "menu", side_effect=["1", "1"]),
+        patch.object(nodes_setup, "menu", side_effect=["1"]),
         patch.object(fields, "prompt", return_value="node.example.com"),
         patch.object(fields, "menu", return_value="0"),
         patch.object(nodes_setup, "panel") as panel,
@@ -164,7 +164,7 @@ def test_read_protocol_asks_protocol_parameters_instead_of_raw_json():
 def test_required_domain_is_refused_before_any_state_change():
     app = _app(["anytls"])
     with (
-        patch.object(nodes_setup, "menu", side_effect=["1", "1"]),
+        patch.object(nodes_setup, "menu", side_effect=["1"]),
         patch.object(fields, "prompt", return_value=""),
         patch.object(fields, "menu", return_value="0"),
         patch.object(fields, "error") as report,
@@ -178,7 +178,7 @@ def test_required_domain_is_refused_before_any_state_change():
 def test_vless_reality_needs_no_domain_but_tls_does():
     app = _app(["vless"])
     with (
-        patch.object(nodes_setup, "menu", side_effect=["1", "1"]),
+        patch.object(nodes_setup, "menu", side_effect=["1"]),
         patch.object(fields, "menu", side_effect=["2", "0", "0"]),
         patch.object(fields, "prompt", return_value=""),
         patch.object(nodes_setup, "panel"),
@@ -188,7 +188,7 @@ def test_vless_reality_needs_no_domain_but_tls_does():
     assert not spec.config.get("domain")
 
     with (
-        patch.object(nodes_setup, "menu", side_effect=["1", "1"]),
+        patch.object(nodes_setup, "menu", side_effect=["1"]),
         patch.object(fields, "menu", side_effect=["1", "0", "0"]),
         patch.object(fields, "prompt", return_value=""),
         patch.object(fields, "error") as report,
@@ -208,13 +208,31 @@ def test_disabling_a_protocol_keeps_previous_public_parameters():
     assert spec.config == {"domain": "node.example.com"}
 
 
-def test_port_outside_the_usable_range_is_refused_with_a_clear_message():
+def test_unrecognized_enum_input_keeps_the_current_value_after_bounded_attempts():
+    item = fields.NodeField(
+        "security",
+        "Защита",
+        kind="enum",
+        default="tls",
+        choices=(("tls", "TLS"), ("reality", "Reality")),
+    )
+    with patch.object(fields, "menu", return_value="zz"), patch.object(fields, "error") as report:
+        accepted, value = fields._ask(item, None)
+    assert accepted and value == "tls"
+    assert report.called
+
+
+def test_read_protocol_never_asks_for_a_port_of_a_routed_tls_protocol():
     app = _app(["anytls"])
     with (
-        patch.object(nodes_setup, "menu", side_effect=["1", "2"]),
-        patch.object(nodes_setup, "prompt", return_value="70000"),
-        patch.object(nodes_setup, "error") as report,
-        patch.object(nodes_setup, "panel"),
+        patch.object(nodes_setup, "menu", side_effect=["1"]),
+        patch.object(fields, "menu", return_value="0"),
+        patch.object(fields, "prompt", return_value="node.example.com"),
+        patch.object(nodes_setup, "prompt") as port_prompt,
+        patch.object(nodes_setup, "panel") as panel,
     ):
-        assert nodes_setup.read_protocol("anytls", app, NodeProtocolSpec()) is None
-    assert report.called
+        spec = nodes_setup.read_protocol("anytls", app, NodeProtocolSpec())
+    assert spec is not None and spec.enabled and spec.port == 0
+    port_prompt.assert_not_called()
+    assert "ПОРТ" not in " ".join(str(call.args[1]) for call in panel.call_args_list)
+    assert "Порт" not in " ".join(str(call.args[1]) for call in panel.call_args_list)

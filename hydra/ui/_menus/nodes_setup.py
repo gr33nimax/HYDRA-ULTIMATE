@@ -45,23 +45,6 @@ def read_protocol(name: str, app: ApplicationService, previous: NodeProtocolSpec
         spec = NodeProtocolSpec(enabled=False, port=previous.port, config=dict(previous.config))
         spec.validate()
         return spec
-    port_mode = menu(
-        [("1", "Автоматический порт", ""), ("2", "Указать порт вручную", ""), ("0", "Отмена", "")],
-        "ПОРТ ПРОТОКОЛА НА НОДЕ",
-    )
-    if port_mode not in {"1", "2"}:
-        return None
-    try:
-        port = (
-            int(_input("Порт протокола на этой ноде (1–65535)", str(previous.port) if previous.port else ""))
-            if port_mode == "2"
-            else 0
-        )
-    except (InterruptedError, ValueError):
-        return None
-    if port and not 1 <= port <= 65535:
-        error("Порт протокола: допустимо от 1 до 65535")
-        return None
     config = collect_protocol_config(name, dict(previous.config))
     if config is None:
         return None
@@ -72,13 +55,12 @@ def read_protocol(name: str, app: ApplicationService, previous: NodeProtocolSpec
     if name == "vless" and config.get("security") != "reality" and not str(config.get("domain", "")).strip():
         error("VLESS в режиме TLS требует домен")
         return None
-    spec = NodeProtocolSpec(enabled=True, port=port, config=config)
+    spec = NodeProtocolSpec(enabled=True, port=previous.port, config=config)
     spec.validate()
     labels = protocol_field_labels(name)
     panel(
         f"{supported[name].upper()} · ПАРАМЕТРЫ",
-        [kv("Порт:", "авто" if not port else str(port))]
-        + [kv(f"{labels.get(key, key)}:", str(value)) for key, value in sorted(config.items())],
+        [kv(f"{labels.get(key, key)}:", str(value)) for key, value in sorted(config.items())],
         wrap=True,
     )
     return spec

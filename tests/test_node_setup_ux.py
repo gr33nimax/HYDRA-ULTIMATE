@@ -87,8 +87,8 @@ def test_real_wizard_input_flow_uses_auto_port_auto_sha_and_safe_final_cancel(ca
     app.nodes.add_node.assert_not_called()
 
 
-@pytest.mark.parametrize("choices", [["9"], ["1", "9"]])
-def test_invalid_protocol_action_or_port_choice_cannot_enable_protocol(choices):
+@pytest.mark.parametrize("choices", [["9"]])
+def test_invalid_protocol_action_cannot_enable_protocol(choices):
     app = _app()
     with patch.object(nodes_setup, "menu", side_effect=choices), patch.object(nodes_setup, "prompt") as prompt:
         assert nodes_setup.read_protocol("amneziawg", app, NodeProtocolSpec()) is None
@@ -180,7 +180,7 @@ def test_upgrade_resolves_branch_without_manual_sha_and_confirms_before_mutation
 def test_automatic_protocol_port_does_not_require_typing_zero_into_data_field():
     app = _app()
     with (
-        patch.object(nodes_setup, "menu", side_effect=["1", "1"]),
+        patch.object(nodes_setup, "menu", side_effect=["1"]),
         patch.object(nodes_setup, "panel"),
         patch.object(nodes_setup, "prompt") as prompt,
         patch.object(nodes_setup, "collect_protocol_config", return_value={"protocol_mode": "2.0"}),

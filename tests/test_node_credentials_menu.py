@@ -75,12 +75,14 @@ def test_v2_only_calls_is_available_in_node_protocol_editor():
             )
         )
     ]
+    from hydra.ui._menus import node_protocol_fields
+
     with (
-        patch.object(nodes_setup, "menu", side_effect=["1", "2"]),
-        patch.object(nodes_setup, "prompt", side_effect=["56002", "{}"]),
+        patch.object(nodes_setup, "menu", return_value="1"),
+        patch.object(node_protocol_fields, "prompt", return_value="56002"),
     ):
         spec = nodes_setup.read_protocol("calls", app, NodeProtocolSpec())
-    assert spec is not None and spec.enabled and spec.port == 56002
+    assert spec is not None and spec.enabled and spec.config["listen_port"] == 56002
 
 
 def test_calls_install_wizard_passes_separate_cookie_file_before_initial_activation():
