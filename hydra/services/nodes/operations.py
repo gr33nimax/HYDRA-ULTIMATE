@@ -10,6 +10,7 @@ from hydra.contracts.node_snapshot import NodeProtocolSpec
 from hydra.contracts.node_traffic import NodeTrafficReport
 from hydra.core.state_models import AppState
 from hydra.core.state_nodes import NodeConfig
+from hydra.services.nodes.observation import NodeObservation
 from hydra.services.nodes.reconciler import NodeSyncResult
 
 
@@ -30,6 +31,8 @@ class NodeManagementOperations(Protocol):
     def import_vk_cookies(self, node_id: str, source_path: str) -> None: ...
 
     def list_nodes(self, state: AppState) -> list[NodeConfig]: ...
+
+    def observations(self) -> dict[str, NodeObservation]: ...
 
     def resolve_revision(self, branch: str) -> str: ...
 

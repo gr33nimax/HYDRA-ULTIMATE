@@ -60,9 +60,7 @@ class NodeSnapshotReconciler:
             client = self.client_for(node)
             self._check_health(client, node_id)
             applied = client.apply(snapshot)
-            if applied.get("generation") != snapshot.generation or not isinstance(
-                applied.get("already_applied"), bool
-            ):
+            if applied.get("generation") != snapshot.generation or not isinstance(applied.get("already_applied"), bool):
                 raise RuntimeError("node did not confirm the requested generation")
             exported = client.export()
             coverage, warnings = self._validate_export(exported, node_id, snapshot.generation, snapshot)

@@ -163,17 +163,21 @@ def test_unpublished_node_export_is_not_read_or_served():
 
 
 def test_singbox_name_override_updates_endpoint_and_route_reference():
-    payload = json.dumps({
-        "endpoints": [{"type": "wireguard", "tag": "awg-mobile"}],
-        "route": {"final": "awg-mobile"},
-    })
+    payload = json.dumps(
+        {
+            "endpoints": [{"type": "wireguard", "tag": "awg-mobile"}],
+            "route": {"final": "awg-mobile"},
+        }
+    )
 
-    renamed = json.loads(apply_json_configuration_name(
-        payload,
-        key="node:profile",
-        global_names={"node:profile": "DE · amneziawg · mobile"},
-        user_names={},
-    ))
+    renamed = json.loads(
+        apply_json_configuration_name(
+            payload,
+            key="node:profile",
+            global_names={"node:profile": "DE · amneziawg · mobile"},
+            user_names={},
+        )
+    )
 
     assert renamed["endpoints"][0]["tag"] == "DE · amneziawg · mobile"
     assert renamed["route"]["final"] == "DE · amneziawg · mobile"

@@ -14,8 +14,25 @@ class CommandError(HostOperationError):
 
 
 DEFAULT_TIMEOUT = 30
-_SECRET_ARG = re.compile(r"(?i)(token|password|secret|private[_-]?key|authorization)=([^\s]+)")
-_SECRET_TEXT = re.compile(r"(?i)(token|password|secret|private[_-]?key|authorization)(\s*[:=]\s*)([^\s,;]+)")
+
+# Credential-shaped keys. `cookie` and `set-cookie` are here because a session cookie is
+# a credential, and `api_key`/`access_token`/`psk` because they are what the transports
+# actually accept instead of a password.
+_SECRET_KEY = (
+    r"(?:token|password|secret|private[_-]?key|authorization|cookie|set-cookie"
+    r"|api[_-]?key|access[_-]?token|auth[_-]?token|session[_-]?id|psk|preshared[_-]?key)"
+)
+# `Authorization: Bearer <token>` hides the scheme as well; masking only "Bearer" left
+# the token itself in every log that quoted a failed request.
+_AUTH_SCHEME = r"(?:(?:bearer|basic|digest|token)\s+)?"
+_SECRET_ARG = re.compile(rf"(?i)({_SECRET_KEY})=([^\s]+)")
+_SECRET_TEXT = re.compile(rf"(?i)({_SECRET_KEY})(\s*[:=]\s*)({_AUTH_SCHEME}[^\s,;]+)")
+_COOKIE_HEADER = re.compile(r"(?i)\b(cookie|set-cookie)\b\s*[:=]\s*([^\n]+)")
+_PRIVATE_KEY_BLOCK = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)",
+    re.DOTALL,
+)
+_URL_CREDENTIALS = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)([^/\s:@]+):([^/\s@]+)@")
 _VK_CALL_LINK = re.compile(
     r"https://(?:www\.)?vk\.(?:com|ru)/call/join/[^\s\"'<>]+",
     re.IGNORECASE,
@@ -25,7 +42,10 @@ _QWDTT_LINK = re.compile(r"qwdtt://[^\s]+")
 
 def redact_text(value: str) -> str:
     """Remove common credential forms from human-readable log messages."""
-    redacted = _SECRET_TEXT.sub(r"\1\2<redacted>", str(value))
+    redacted = _PRIVATE_KEY_BLOCK.sub("<redacted>", str(value))
+    redacted = _COOKIE_HEADER.sub(r"\1: <redacted>", redacted)
+    redacted = _SECRET_TEXT.sub(r"\1\2<redacted>", redacted)
+    redacted = _URL_CREDENTIALS.sub(r"\1\2:<redacted>@", redacted)
     redacted = _VK_CALL_LINK.sub("https://vk.com/call/join/<redacted>", redacted)
     return _QWDTT_LINK.sub("qwdtt://<redacted>", redacted)
 

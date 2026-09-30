@@ -45,9 +45,7 @@ def test_log_redaction_masks_vk_call_and_qwdtt_shared_links():
     )
     assert "shared-room" not in rendered
     assert "config?" not in rendered
-    assert rendered == (
-        "created https://vk.com/call/join/<redacted> qwdtt://<redacted>"
-    )
+    assert rendered == ("created https://vk.com/call/join/<redacted> qwdtt://<redacted>")
 
 
 def test_log_redaction_masks_extended_vk_token_and_ru_host():
@@ -55,3 +53,39 @@ def test_log_redaction_masks_extended_vk_token_and_ru_host():
 
     assert "shared+room" not in rendered
     assert rendered == "created https://vk.com/call/join/<redacted>"
+
+
+def test_log_redaction_hides_the_whole_authorization_value():
+    rendered = redact_text(
+        "request failed: Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature",
+    )
+
+    assert "eyJhbGci" not in rendered
+    assert "Bearer" not in rendered
+    assert rendered.endswith("<redacted>")
+
+
+def test_log_redaction_hides_cookies_private_keys_and_url_credentials():
+    rendered = redact_text(
+        "\n".join(
+            (
+                "cookie: session=abc123; csrf=9f8",
+                "-----BEGIN OPENSSH PRIVATE KEY-----",
+                "b3BlbnNzaC1rZXk=",
+                "-----END OPENSSH PRIVATE KEY-----",
+                "upload https://user:hunter2@example.com/panel?api_key=zzz",
+            ),
+        ),
+    )
+
+    assert "abc123" not in rendered
+    assert "9f8" not in rendered
+    assert "b3BlbnNzaC1rZXk=" not in rendered
+    assert "hunter2" not in rendered
+    assert rendered.count("<redacted>") >= 3
+
+
+def test_log_redaction_keeps_ordinary_diagnostics_readable():
+    rendered = redact_text("could not reach node uk-1.example.com:9444 after 3 attempts")
+
+    assert rendered == "could not reach node uk-1.example.com:9444 after 3 attempts"

@@ -439,9 +439,18 @@ def test_damaged_awg_generation_is_repaired_on_a_node_that_already_claims_the_mo
     from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
 
     obfuscation = {
-        "Jc": "5", "Jmin": "10", "Jmax": "50",
-        "S1": "105", "S2": "96", "S3": "0", "S4": "12",
-        "H1": "1", "H2": "2", "H3": "3", "H4": "4", "I1": "",
+        "Jc": "5",
+        "Jmin": "10",
+        "Jmax": "50",
+        "S1": "105",
+        "S2": "96",
+        "S3": "0",
+        "S4": "12",
+        "H1": "1",
+        "H2": "2",
+        "H3": "3",
+        "H4": "4",
+        "I1": "",
     }
     state = AppState(
         protocols={
@@ -457,9 +466,7 @@ def test_damaged_awg_generation_is_repaired_on_a_node_that_already_claims_the_mo
     app = MagicMock()
     app.protocols.list.return_value = [AmneziaWGPlugin()]
     app.protocols.enabled_subscription_names.return_value = set()
-    app.protocols.enable.side_effect = lambda current, name: (
-        setattr(current.protocols[name], "enabled", True) or True
-    )
+    app.protocols.enable.side_effect = lambda current, name: setattr(current.protocols[name], "enabled", True) or True
     reconciler = NodeReconciler("uk-1", app, state_reader=lambda: state)
 
     reconciler.apply(
@@ -485,13 +492,13 @@ def test_vless_reality_material_survives_the_node_merge_and_is_not_rotated():
     from hydra.plugins.vless_xhttp.plugin import VlessXhttpPlugin
 
     plugin = VlessXhttpPlugin()
-    state = AppState(protocols={"vless": PluginState(installed=True, config={"security": "tls", "domain": "old.example.com"})})
+    state = AppState(
+        protocols={"vless": PluginState(installed=True, config={"security": "tls", "domain": "old.example.com"})}
+    )
     app = MagicMock()
     app.protocols.list.return_value = [plugin]
     app.protocols.enabled_subscription_names.return_value = set()
-    app.protocols.enable.side_effect = lambda current, name: (
-        setattr(current.protocols[name], "enabled", True) or True
-    )
+    app.protocols.enable.side_effect = lambda current, name: setattr(current.protocols[name], "enabled", True) or True
     keypairs = iter((("private-1", "public-1"), ("private-2", "public-2")))
     reconciler = NodeReconciler("uk-1", app, state_reader=lambda: state)
 

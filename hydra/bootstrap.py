@@ -51,6 +51,7 @@ from hydra.services.nodes.control_client import NodeControlClient
 from hydra.services.nodes.credentials import cleanup_node_credentials
 from hydra.services.nodes.installer import uninstall_node
 from hydra.services.nodes.manager import NodeManager
+from hydra.services.nodes.observation import NodeObservationStore
 from hydra.services.nodes.snapshot_store import NodeSnapshotStore
 from hydra.services.kernel import KernelService
 from hydra.services.kernel_infrastructure import KernelInfrastructure
@@ -191,6 +192,12 @@ def _production_node_manager() -> NodeManager:
         uninstall_remote=uninstall_remote,
         forget_node_credentials=forget_credentials,
         import_remote_cookies=lambda node, source: _import_node_cookies(node, source, bootstrap),
+        # Runtime observations, deliberately beside state.json: they describe what was
+        # last seen, not what the operator configured.
+        observations=NodeObservationStore(
+            host=HOST,
+            path=state_backend.STATE_DIR / "node-observations.json",
+        ),
     )
 
 
@@ -375,6 +382,8 @@ def production_node_uninstall() -> dict[str, object]:
 
 
 __all__ = [
-    "production_application", "production_node_reconciler", "production_node_uninstall",
+    "production_application",
+    "production_node_reconciler",
+    "production_node_uninstall",
     "production_node_cookie_import",
 ]

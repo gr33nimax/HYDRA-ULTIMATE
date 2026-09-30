@@ -501,11 +501,7 @@ def test_publication_refuses_an_export_that_carries_no_profiles(tmp_path):
         client.exported = NodeClientExport(
             node_id="de-1",
             generation=snapshot.generation,
-            users={
-                item.uuid: NodeClientExportUser(uuid=item.uuid)
-                for item in snapshot.users
-                if not item.blocked
-            },
+            users={item.uuid: NodeClientExportUser(uuid=item.uuid) for item in snapshot.users if not item.blocked},
         )
 
     client.on_apply = apply
@@ -579,3 +575,88 @@ def test_partial_protocol_coverage_publishes_and_reports_the_gap(tmp_path):
     assert result.coverage == {"calls": 0, "vless": 1}
     assert result.warnings == ("protocols_without_profiles=calls",)
     assert state_module.load_state().nodes[0].published_generation >= 1
+
+
+def test_node_operations_record_what_was_last_seen_outside_desired_state(tmp_path):
+    """Observations live beside state.json: reachability must never become desired config."""
+    from hydra.services.nodes.observation import NodeObservationStore
+
+    _saved_node_state()
+    client = FakeControlClient()
+    store = NodeObservationStore(host=HostBackend(), path=tmp_path / "observations.json")
+    manager = _manager(tmp_path, client, observations=store)
+
+    result = manager.refresh("de-1")
+
+    observation = manager.observations()["de-1"]
+    assert result.status == "published"
+    assert observation.control == "ok"
+    assert observation.published_generation == 1
+    assert observation.coverage == {"vless": 1}
+    assert observation.message == ""
+    assert observation.checked_at
+
+    # The store is a runtime projection: it never touches the persisted configuration.
+    assert state_module.load_state().nodes[0].published_generation == 1
+
+
+def test_a_failed_operation_records_the_stage_that_failed(tmp_path):
+    from hydra.services.nodes.observation import NodeObservationStore
+
+    _saved_node_state()
+    client = FakeControlClient()
+    store = NodeObservationStore(host=HostBackend(), path=tmp_path / "observations.json")
+    manager = _manager(tmp_path, client, observations=store)
+    client.health = lambda: {
+        "ok": True,
+        "node_id": "de-1",
+        "generation": 0,
+        "contract_version": NODE_CONTRACT_VERSION - 1,
+    }
+
+    with pytest.raises(RuntimeError):
+        manager.refresh("de-1")
+
+    observation = manager.observations()["de-1"]
+    assert observation.control == "error"
+    assert observation.stage == "connect"
+    assert observation.code == "health_or_contract"
+    assert observation.published_generation == 0
+
+
+def test_check_reports_the_nodes_own_apply_error_as_reachability_ok(tmp_path):
+    from hydra.services.nodes.observation import NodeObservationStore
+
+    _saved_node_state()
+    client = FakeControlClient()
+    client.diagnostics = lambda: {"last_error": "Режим 3.1: S3=0 меньше 12"}
+    store = NodeObservationStore(host=HostBackend(), path=tmp_path / "observations.json")
+    manager = _manager(tmp_path, client, observations=store)
+
+    manager.check("de-1")
+
+    observation = manager.observations()["de-1"]
+    assert observation.control == "ok"
+    assert observation.stage == "apply"
+    assert observation.code == "node_apply_error"
+    assert "S3=0" in observation.message
+
+
+def test_removing_a_node_forgets_its_observation(tmp_path):
+    from hydra.services.nodes.observation import NodeObservationStore
+
+    _saved_node_state()
+    client = FakeControlClient()
+    store = NodeObservationStore(host=HostBackend(), path=tmp_path / "observations.json")
+    store.succeeded("de-1", published_generation=1)
+    manager = _manager(
+        tmp_path,
+        client,
+        observations=store,
+        uninstall_remote=lambda node: None,
+        forget_node_credentials=lambda node_id: None,
+    )
+
+    manager.remove_node("de-1", confirmed=True)
+
+    assert manager.observations() == {}

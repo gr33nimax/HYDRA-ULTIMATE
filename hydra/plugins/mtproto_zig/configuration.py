@@ -336,3 +336,34 @@ def plan_configuration(
         ),
         ConfigFragment(),
     )
+
+def apply_node_config(state: PluginStateAccess, config: dict) -> bool:
+    """Make the FakeTLS cover and WEB relay material match a node's public settings.
+
+    ``domain`` is embedded in every issued FakeTLS secret, and a non-``off``
+    ``web_mode`` needs its own route set; both are command-owned, so a node has to run
+    the owner instead of storing the keys. The base operator confirmed the change when
+    they made it, which is what ``confirm_*`` carries here.
+    """
+    if state.protocols.get("mtproto_zig") is None:
+        raise ValueError("MTProto Zig is not installed")
+    cover = str(config.get("domain", "") or "").strip()
+    if cover:
+        try:
+            set_cover_domain(state, cover, confirm_change=True)
+        except ValueError as exc:
+            raise ValueError(f"MTProto Zig cover domain: {exc}") from None
+    mode = str(config.get("web_mode", "") or "off")
+    relay = str(config.get("web_domain", "") or "").strip()
+    try:
+        set_web_settings(state, mode, relay, confirm_host_change=True)
+    except ValueError as exc:
+        raise ValueError(f"MTProto Zig WEB relay: {exc}") from None
+    return True
+
+class MtprotoNodePreparationMixin:
+    """Keep the FakeTLS cover and WEB relay in line with a node's public settings."""
+
+    def prepare_node_config(self, state: PluginStateAccess, config: dict) -> bool:
+        """Make the FakeTLS cover and WEB relay material match a node's public settings."""
+        return apply_node_config(state, config)

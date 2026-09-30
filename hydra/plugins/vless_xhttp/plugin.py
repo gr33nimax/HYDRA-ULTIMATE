@@ -1,4 +1,5 @@
 """VLESS over XHTTP for the shtorm-7 sing-box-extended core."""
+
 from __future__ import annotations
 
 import ipaddress
@@ -103,14 +104,17 @@ class VlessXhttpPlugin(VlessNodePreparationMixin, DecoyThemeSupport, BasePlugin)
             ("xhttp_path", DEFAULT_PATH),
             ("decoy_theme", "media"),
             *TUNING_DEFAULTS,
-            (ROUTE_CONFIG_KEY, {
-                "kind": "http_path_proxy",
-                "internal_port": INTERNAL_PORT,
-                "decoy_http_port": DECOY_HTTP_PORT,
-                "decoy_root": DECOY_DIR,
-                "decoy_theme": "media",
-                "path_config": "xhttp_path",
-            }),
+            (
+                ROUTE_CONFIG_KEY,
+                {
+                    "kind": "http_path_proxy",
+                    "internal_port": INTERNAL_PORT,
+                    "decoy_http_port": DECOY_HTTP_PORT,
+                    "decoy_root": DECOY_DIR,
+                    "decoy_theme": "media",
+                    "path_config": "xhttp_path",
+                },
+            ),
         ),
         connection_source="tracked",
     )
@@ -137,11 +141,7 @@ class VlessXhttpPlugin(VlessNodePreparationMixin, DecoyThemeSupport, BasePlugin)
         protocol = state.protocols.get("vless")
         if protocol is None:
             return ConfigFragment()
-        users = [
-            {"name": user.email, "uuid": user.uuid}
-            for user in state.users
-            if not user.blocked
-        ]
+        users = [{"name": user.email, "uuid": user.uuid} for user in state.users if not user.blocked]
         if not users:
             return ConfigFragment()
         if is_reality(protocol.config):
@@ -229,8 +229,7 @@ class VlessXhttpPlugin(VlessNodePreparationMixin, DecoyThemeSupport, BasePlugin)
             server_tls(config)
             if not self._reality_server(state):
                 raise ValueError(
-                    "Публичный IP сервера неизвестен: клиентам Reality "
-                    "некуда подключаться",
+                    "Публичный IP сервера неизвестен: клиентам Reality некуда подключаться",
                 )
             open_tcp(443, "vless-xhttp")
             return
@@ -239,8 +238,7 @@ class VlessXhttpPlugin(VlessNodePreparationMixin, DecoyThemeSupport, BasePlugin)
         cert, key = resolve_tls_material(domain, config)
         if not cert or not key:
             raise ValueError(
-                f"TLS material for {domain} must be prepared "
-                "by the application service",
+                f"TLS material for {domain} must be prepared by the application service",
             )
         open_tcp(80, "vless-xhttp-http")
         open_tcp(443, "vless-xhttp")
@@ -258,19 +256,10 @@ class VlessXhttpPlugin(VlessNodePreparationMixin, DecoyThemeSupport, BasePlugin)
         from hydra.core import singbox, sni_router
 
         installed = singbox.is_installed()
-        protocol = (
-            state.protocols.get("vless")
-            if state is not None
-            else None
-        )
+        protocol = state.protocols.get("vless") if state is not None else None
         enabled = bool(protocol and protocol.enabled)
         reality = bool(protocol and is_reality(protocol.config))
-        running = (
-            installed
-            and enabled
-            and singbox.is_running()
-            and (reality or sni_router.is_active())
-        )
+        running = installed and enabled and singbox.is_running() and (reality or sni_router.is_active())
         info = {}
         if protocol:
             try:
@@ -280,11 +269,7 @@ class VlessXhttpPlugin(VlessNodePreparationMixin, DecoyThemeSupport, BasePlugin)
                 preset, summary = "invalid", str(exc)
             info = {
                 "Security": security_mode(protocol.config),
-                "Domain": (
-                    handshake_target(protocol.config)
-                    if reality
-                    else protocol.config.get("domain", "")
-                ),
+                "Domain": (handshake_target(protocol.config) if reality else protocol.config.get("domain", "")),
                 "XHTTP path": protocol.config.get("xhttp_path", DEFAULT_PATH),
                 "XHTTP mode": protocol.config.get("xhttp_mode", DEFAULT_MODE),
                 "XHTTP preset": preset,
@@ -311,8 +296,7 @@ class VlessXhttpPlugin(VlessNodePreparationMixin, DecoyThemeSupport, BasePlugin)
             return False
         if is_reality(protocol.config):
             raise ValueError(
-                "В режиме Reality домен не используется; сначала переключите "
-                "security на tls",
+                "В режиме Reality домен не используется; сначала переключите security на tls",
             )
         normalized = _normalize_domain(domain)
         if normalized != protocol.config.get("domain"):
@@ -374,7 +358,9 @@ class VlessXhttpPlugin(VlessNodePreparationMixin, DecoyThemeSupport, BasePlugin)
         self,
         state: PluginStateAccess,
         mode: str,
-        handshake: str = "", domain: str = "", short_id: str = "",
+        handshake: str = "",
+        domain: str = "",
+        short_id: str = "",
     ) -> bool:
         """Switch between a certificate on your domain and a Reality handshake."""
         normalized = validate_security(mode)
@@ -395,17 +381,14 @@ class VlessXhttpPlugin(VlessNodePreparationMixin, DecoyThemeSupport, BasePlugin)
 
         config = protocol.config
         target = validate_handshake(
-            handshake or config.get(HANDSHAKE_CONFIG_KEY)
-            or DEFAULT_HANDSHAKE,
+            handshake or config.get(HANDSHAKE_CONFIG_KEY) or DEFAULT_HANDSHAKE,
         )
         private_key = str(config.get("reality_private_key", "")).strip()
         public_key = str(config.get("reality_public_key", "")).strip()
         if not private_key or not public_key:
             private_key, public_key = generate_reality_keypair()
         identifier = validate_short_id(
-            short_id
-            or config.get("reality_short_id")
-            or secrets.token_hex(4),
+            short_id or config.get("reality_short_id") or secrets.token_hex(4),
         )
         apply_reality_mode(
             config,
@@ -427,10 +410,7 @@ class VlessXhttpPlugin(VlessNodePreparationMixin, DecoyThemeSupport, BasePlugin)
             "preset": current_preset(config),
             "mode": _validate_mode(config.get("xhttp_mode", DEFAULT_MODE)),
             "path": _validate_path(config.get("xhttp_path", DEFAULT_PATH)),
-            **{
-                field.param: values[field.key]
-                for field in FIELDS
-            },
+            **{field.param: values[field.key] for field in FIELDS},
         }
 
 

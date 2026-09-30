@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Any
 
 from hydra.contracts import BackupResource, ConfigFragment
 from hydra.core.host import HOST
@@ -33,7 +32,7 @@ from .constants import (
 from .credentials import derive_secret, derive_username
 
 
-class MtprotoZigPlugin(DecoyThemeSupport, BasePlugin):
+class MtprotoZigPlugin(configuration.MtprotoNodePreparationMixin, DecoyThemeSupport, BasePlugin):
     decoy_default_theme = "landing"
     meta = PluginMeta(
         name="mtproto_zig",
@@ -159,31 +158,6 @@ class MtprotoZigPlugin(DecoyThemeSupport, BasePlugin):
         the plugin command boundary and its signature stable.
         """
         return configuration.set_web_settings(state, mode, domain, confirm_host_change)
-
-    def prepare_node_config(self, state: PluginStateAccess, config: dict[str, Any]) -> bool:
-        """Make the FakeTLS cover and WEB relay material match a node's public settings.
-
-        ``domain`` is embedded in every issued FakeTLS secret, and a non-``off``
-        ``web_mode`` needs its own route set; both are command-owned, so a node has to
-        run the owner instead of storing the keys. The base operator confirmed the change
-        when they made it, which is what ``confirm_*`` carries here.
-        """
-        protocol = state.protocols.get("mtproto_zig")
-        if protocol is None:
-            raise ValueError("MTProto Zig is not installed")
-        cover = str(config.get("domain", "") or "").strip()
-        if cover:
-            try:
-                self.set_domain(state, cover, confirm_change=True)
-            except ValueError as exc:
-                raise ValueError(f"MTProto Zig cover domain: {exc}") from None
-        mode = str(config.get("web_mode", "") or "off")
-        relay = str(config.get("web_domain", "") or "").strip()
-        try:
-            self.set_web_settings(state, mode, relay, confirm_host_change=True)
-        except ValueError as exc:
-            raise ValueError(f"MTProto Zig WEB relay: {exc}") from None
-        return True
 
     def configure(self, state: PluginStateAccess) -> ConfigFragment:
         self._pending_config, fragment = configuration.plan_configuration(state)

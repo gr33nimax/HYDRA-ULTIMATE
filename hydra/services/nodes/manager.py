@@ -20,6 +20,12 @@ from hydra.core.state_models import AppState
 from hydra.core.state_nodes import NodeConfig
 from hydra.services.nodes.credentials import NodeControlCredentials
 from hydra.services.nodes.control_client import NodeControlPort
+from hydra.services.nodes.observation import (
+    CONTROL_OK,
+    STAGE_UPGRADE,
+    NodeObservation,
+    NodeObservationStore,
+)
 from hydra.services.nodes.reconciler import NodeSnapshotReconciler, NodeSyncResult
 from hydra.services.nodes.snapshot_store import NodeSnapshotStore
 from hydra.services.node_traffic_accounting import apply_node_traffic_reports, retire_node_traffic
@@ -64,6 +70,7 @@ class NodeManager:
         uninstall_remote: Callable[[NodeConfig], None] | None = None,
         forget_node_credentials: Callable[[str], None] | None = None,
         import_remote_cookies: Callable[[NodeConfig, str], None] | None = None,
+        observations: NodeObservationStore | None = None,
     ):
         self.state_reader = state_reader
         self.state_updater = state_updater
@@ -73,6 +80,7 @@ class NodeManager:
         self.uninstall_remote = uninstall_remote
         self.forget_node_credentials = forget_node_credentials
         self.import_remote_cookies = import_remote_cookies
+        self.observations_store = observations
         self._reconciler = NodeSnapshotReconciler(
             state_updater=state_updater,
             client_for=client_for,
@@ -81,6 +89,12 @@ class NodeManager:
 
     def list_nodes(self, state: AppState) -> list[NodeConfig]:
         return deepcopy(state.nodes)
+
+    def observations(self) -> dict[str, NodeObservation]:
+        """Last known runtime state per node; never part of the desired configuration."""
+        if self.observations_store is None:
+            return {}
+        return self.observations_store.load()
 
     def resolve_revision(self, branch: str) -> str:
         branch = checked_node_branch(branch, context="branch")
@@ -203,6 +217,8 @@ class NodeManager:
             retire_node_traffic(state, node_id)
 
         self.state_updater(remove)
+        if self.observations_store is not None:
+            self.observations_store.forget(node_id)
         warnings: list[str] = []
         if node.published_generation and node.published_digest:
             try:
@@ -223,21 +239,49 @@ class NodeManager:
     def check(self, node_id: str) -> dict[str, object]:
         node = self._find_node(self.state_reader(), node_id)
         client = self.client_for(node)
-        health = client.health()
-        generation = health.get("generation")
-        if (
-            not isinstance(health.get("ok"), bool)
-            or not health["ok"]
-            or health.get("node_id") != node_id
-            or health.get("contract_version") != NODE_CONTRACT_VERSION
-            or type(generation) is not int
-            or generation < 0
-        ):
-            raise RuntimeError("node health or contract check failed")
-        diagnostics = client.diagnostics()
+        try:
+            health = client.health()
+            generation = health.get("generation")
+            if (
+                not isinstance(health.get("ok"), bool)
+                or not health["ok"]
+                or health.get("node_id") != node_id
+                or health.get("contract_version") != NODE_CONTRACT_VERSION
+                or type(generation) is not int
+                or generation < 0
+            ):
+                raise RuntimeError("node health or contract check failed")
+            diagnostics = client.diagnostics()
+        except Exception as exc:
+            if self.observations_store is not None:
+                self.observations_store.failed(
+                    node_id,
+                    exc,
+                    target_revision=node.revision,
+                )
+            raise
         last_error = diagnostics.get("last_error", "")
         if not isinstance(last_error, str):
             last_error = ""
+        if self.observations_store is not None:
+            if last_error:
+                # The node answered, so this is not a connectivity problem: it is the
+                # node's own last apply failure, which is what the operator must see.
+                self.observations_store.record(
+                    node_id,
+                    control=CONTROL_OK,
+                    stage="apply",
+                    code="node_apply_error",
+                    message=last_error[:2048],
+                    applied_generation=generation,
+                    target_revision=node.revision,
+                )
+            else:
+                self.observations_store.succeeded(
+                    node_id,
+                    applied_generation=generation,
+                    target_revision=node.revision,
+                )
         return {
             "ok": True,
             "node_id": node_id,
@@ -247,7 +291,28 @@ class NodeManager:
         }
 
     def refresh(self, node_id: str, *, force: bool = False) -> NodeSyncResult:
-        return self._reconciler.refresh(node_id, force=force)
+        try:
+            result = self._reconciler.refresh(node_id, force=force)
+        except Exception as exc:
+            if self.observations_store is not None:
+                node = self._find_node(self.state_reader(), node_id)
+                self.observations_store.failed(node_id, exc, target_revision=node.revision)
+            raise
+        self._record_sync(node_id, result)
+        return result
+
+    def _record_sync(self, node_id: str, result: NodeSyncResult) -> None:
+        if self.observations_store is None:
+            return
+        node = self._find_node(self.state_reader(), node_id)
+        self.observations_store.succeeded(
+            node_id,
+            applied_generation=node.generation,
+            published_generation=node.published_generation,
+            coverage=dict(result.coverage),
+            warnings=tuple(result.warnings),
+            target_revision=node.revision,
+        )
 
     def change_name(self, node_id: str, name: str, *, region: str | None = None) -> NodeConfig:
         result: NodeConfig | None = None
@@ -327,6 +392,17 @@ class NodeManager:
         }
         if already_scheduled:
             response["already_scheduled"] = True
+        if self.observations_store is not None:
+            # Scheduling is not completion: the revision is the target until the node
+            # reports the one it actually runs.
+            self.observations_store.record(
+                node_id,
+                stage=STAGE_UPGRADE,
+                code="",
+                message="",
+                upgrade="scheduled",
+                target_revision=revision,
+            )
         return response
 
     def reconcile_all(self) -> dict[str, dict[str, object]]:

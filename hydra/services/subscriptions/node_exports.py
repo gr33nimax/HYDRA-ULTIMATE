@@ -1,4 +1,5 @@
 """Read already-published node client material for subscription rendering."""
+
 from __future__ import annotations
 
 import copy
@@ -90,8 +91,7 @@ def node_profiles_for_user(
                 user_names=user.configuration_name_overrides,
             )
             singbox = tuple(
-                _named_singbox_document(document, name_key=name_key, name=name)
-                for document in profile.singbox
+                _named_singbox_document(document, name_key=name_key, name=name) for document in profile.singbox
             )
             result.append(
                 NodeSubscriptionProfile(
