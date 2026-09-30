@@ -41,6 +41,7 @@ from hydra.plugins.vless_xhttp.security import (
     validate_security,
     validate_short_id,
 )
+from hydra.plugins.vless_xhttp.preparation import VlessNodePreparationMixin
 from hydra.plugins.vless_xhttp.presets import (
     apply_preset,
     current_preset,
@@ -68,7 +69,7 @@ ROUTE_CONFIG_KEY = DECOY_ROUTE_KEY
 _normalize_domain = normalize_domain
 
 
-class VlessXhttpPlugin(DecoyThemeSupport, BasePlugin):
+class VlessXhttpPlugin(VlessNodePreparationMixin, DecoyThemeSupport, BasePlugin):
     """Multi-user VLESS/XHTTP endpoint in certificate or Reality mode."""
 
     decoy_default_theme = "media"

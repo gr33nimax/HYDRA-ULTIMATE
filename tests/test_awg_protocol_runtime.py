@@ -290,3 +290,36 @@ def test_the_amnezia_link_carries_the_generation_as_tokens():
     assert inner["RandomTrailers"] == "on"
     assert inner["DisableCookies"] == "on"
     assert isinstance(inner["RandomTrailers"], str)
+
+
+def test_switching_a_mode_a_profile_already_claims_still_repairs_its_paddings():
+    """The stored label is not evidence: header protection reads the paddings as its nonce.
+
+    This is the shape a node received: the desired state said 3.1, so the mode was stored,
+    while the profile kept a 2.0-era ``S3=0``. Trusting the label made the next apply fail.
+    """
+    plugin = AmneziaWGPlugin()
+    state = _state("3.1")
+    profile = _desktop_profile(state)
+    profile["obfuscation"] = {
+        "Jc": "5", "Jmin": "10", "Jmax": "50",
+        "S1": "105", "S2": "96", "S3": "0", "S4": "12",
+        "H1": "1", "H2": "2", "H3": "3", "H4": "4", "I1": "",
+    }
+    profile["generation"] = {"RandomTrailers": True, "DisableCookies": True}
+
+    assert plugin.set_protocol_mode(state, "3.1") is True
+
+    assert profile["obfuscation"]["S3"] == "12"
+    assert profile["obfuscation"]["S1"] == "105"
+    assert plugin.mode_readiness(state, "3.1") == (True, "")
+
+
+def test_mode_readiness_names_what_a_profile_cannot_serve():
+    plugin = AmneziaWGPlugin()
+    state = _state("3.1", with_profile=False)
+
+    ready, reason = plugin.mode_readiness(state, "3.1")
+
+    assert ready is False
+    assert "profile" in reason

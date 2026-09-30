@@ -198,3 +198,27 @@ def test_plugin_scrape_failure_is_observable_in_status_and_health():
     assert status.info["traffic_source"] == failure[1]
     assert health.healthy is True
     assert "источник трафика недоступен" in health.detail
+
+
+def test_node_preparation_runs_the_cover_and_relay_owners():
+    """The FakeTLS cover and the WEB relay are command-owned, not values a node may store."""
+    plugin = MtprotoZigPlugin()
+    state = AppState(protocols={"mtproto_zig": PluginState(installed=True, config={})})
+
+    assert plugin.prepare_node_config(state, {"domain": "cover.modxair.com"}) is True
+    assert state.protocols["mtproto_zig"].config["domain"] == "cover.modxair.com"
+
+    with pytest.raises(ValueError, match="WEB"):
+        plugin.prepare_node_config(
+            state,
+            {"domain": "cover.modxair.com", "web_mode": "hybrid", "web_domain": ""},
+        )
+
+    assert (
+        plugin.prepare_node_config(
+            state,
+            {"domain": "cover.modxair.com", "web_mode": "hybrid", "web_domain": "web.modxair.com"},
+        )
+        is True
+    )
+    assert state.protocols["mtproto_zig"].config["web_domain"] == "web.modxair.com"

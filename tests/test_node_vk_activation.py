@@ -17,7 +17,9 @@ def _setup(enabled=False):
             meta=SimpleNamespace(
                 name="calls",
                 capabilities=SimpleNamespace(subscription_enabled=False, hydra_v2_subscription_enabled=True),
-            )
+            ),
+            # The default plugin contract: the VK pool lifecycle owns this transition.
+            prepare_node_config=lambda state, config: True,
         )
     ]
     app.protocols.enabled_subscription_names.return_value = set()

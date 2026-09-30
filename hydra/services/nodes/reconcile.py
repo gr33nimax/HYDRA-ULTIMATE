@@ -266,11 +266,12 @@ class NodeReconciler:
                         raise RuntimeError(f"protocol {name} installation failed")
                     protocol.installed = True
                     protocol = get_protocol(state, name)
-                self._apply_owned_transitions(state, name, plugin, spec, protocol)
-                merged = _merge_local_settings(name, protocol.config, spec.config)
-                if protocol.config != merged or protocol.port != spec.port:
-                    protocol.config = merged
-                    protocol.port = spec.port
+                before = copy.deepcopy(protocol.config)
+                protocol.config = _merge_local_settings(name, protocol.config, spec.config)
+                protocol.port = spec.port
+                if enabled:
+                    self._prepare_node_config(name, plugin, state, spec)
+                if protocol.config != before:
                     config_changed = True
             if name == "calls" and enabled != protocol.enabled:
                 operation = (
@@ -293,56 +294,29 @@ class NodeReconciler:
             message = self.application.apply_error() or "node protocol configuration apply failed"
             raise RuntimeError(message)
 
-    def _apply_owned_transitions(
-        self,
-        state: AppState,
+    @staticmethod
+    def _prepare_node_config(
         name: str,
         plugin: object,
+        state: AppState,
         spec: NodeProtocolSpec,
-        protocol: PluginState,
     ) -> None:
-        """Switch node-owned modes through their owner instead of writing plain config.
+        """Let the plugin turn public settings into the local material they mean.
 
-        AmneziaWG generation and the VLESS TLS/Reality switch both prepare local
-        material — the padding floor, the header-protection key, the Reality
-        keypair. Writing only the key leaves the mode without that material, which
-        is what made a node apply fail with ``Режим 3.1: S3=0 меньше 12``.
+        A plugin owns its config semantics, so a node asks it to prepare instead of
+        writing command-owned keys itself. Preparation runs after the merge, and nothing
+        merges afterwards, so the material the plugin just created is the effective
+        config rather than something a generic pass may overwrite.
         """
-        if name == "amneziawg":
-            desired_mode = str(spec.config.get("protocol_mode", "") or "")
-            if desired_mode and desired_mode != str(protocol.config.get("protocol_mode", "") or ""):
-                if not self._awg_has_profiles(protocol):
-                    # The generation switch itself refuses a host without a profile, and a
-                    # node has no console to create one. Materialize the desktop profile
-                    # through the plugin's own rotation command — the same step the base
-                    # wizard takes before it switches the generation.
-                    self._run_plugin_transition(plugin, "rotate_obfuscation", state, profile="desktop")
-                self._run_plugin_transition(plugin, "set_protocol_mode", state, mode=desired_mode)
-        elif name == "vless":
-            desired_security = str(spec.config.get("security", "") or "")
-            if desired_security and desired_security != str(protocol.config.get("security", "") or ""):
-                domain = str(spec.config.get("domain", "") or "")
-                self._run_plugin_transition(
-                    plugin,
-                    "set_security",
-                    state,
-                    mode=desired_security,
-                    handshake=domain,
-                    domain=domain,
-                )
-
-    @staticmethod
-    def _awg_has_profiles(protocol: PluginState) -> bool:
-        profiles = protocol.config.get("profiles")
-        return isinstance(profiles, dict) and bool(profiles)
-
-    @staticmethod
-    def _run_plugin_transition(plugin: object, command: str, state: AppState, **parameters: object) -> None:
-        handler = getattr(plugin, command, None)
+        handler = getattr(plugin, "prepare_node_config", None)
         if not callable(handler):
-            raise RuntimeError(f"protocol {getattr(plugin.meta, 'name', '?')} cannot {command}")
-        if not handler(state, **parameters):
-            raise RuntimeError(f"protocol {getattr(plugin.meta, 'name', '?')} rejected {command}")
+            raise RuntimeError(f"protocol {name} cannot prepare a node configuration")
+        try:
+            prepared = handler(state, dict(spec.config))
+        except ValueError as exc:
+            raise RuntimeError(f"{name}: {exc}") from None
+        if not prepared:
+            raise RuntimeError(f"protocol {name} could not prepare its node configuration")
 
     def _restore_after_failure(self, state: AppState, previous: AppState) -> None:
         from hydra.services.configuration import restore_state_in_place

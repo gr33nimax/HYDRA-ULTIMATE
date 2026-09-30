@@ -213,6 +213,19 @@ class BasePlugin(ABC):
     def apply(self, state: PluginStateAccess) -> bool:
         return True
 
+    def prepare_node_config(self, state: PluginStateAccess, config: dict[str, Any]) -> bool:
+        """Bring local material in line with the public settings a node received.
+
+        Some public settings are command-owned: the plugin has to prepare local
+        material (a padding floor, a generation key, a Reality keypair, routing
+        metadata) instead of receiving a written value. The default is that a
+        plugin has nothing to prepare. An override must be idempotent, must keep
+        material that is already healthy, and must raise ``ValueError`` with a
+        redacted, actionable reason when the requested settings cannot be served.
+        """
+        del state, config
+        return True
+
     def install_result(self) -> LifecycleResult:
         return LifecycleResult("install", bool(self.install()))
 

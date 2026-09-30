@@ -129,6 +129,41 @@ class AwgProtocolModeMixin:
                     return False
         return True
 
+    @staticmethod
+    def _paddings_below_floor(state: PluginStateAccess, target: str) -> bool:
+        """Whether a served profile carries a padding the generation cannot use.
+
+        The floor is part of what a generation means: header protection reads each padding
+        as its nonce, so a profile that stored 3.1 while keeping ``S3=0`` serves a mode it
+        cannot carry. Leaving this out of the readiness check is what let such a host
+        answer "already 3.1" and fail on the next apply.
+
+        This is the *repair* trigger, so it looks only at paddings that are present and
+        below the floor — a value the profile simply omits is the materializer's business.
+        The final verdict on whether a profile is servable is :meth:`mode_readiness`.
+        """
+        protocol = state.protocols.get("amneziawg")
+        profiles = protocol.config.get("profiles") if protocol else None
+        if not isinstance(profiles, dict) or str(target).strip() in ("", "2.0"):
+            return False
+        for profile in profiles.values():
+            if not isinstance(profile, dict):
+                continue
+            obfuscation = profile.get("obfuscation")
+            if not isinstance(obfuscation, dict):
+                continue
+            for field in ("S1", "S2", "S3", "S4"):
+                raw = obfuscation.get(field)
+                if raw is None:
+                    continue
+                try:
+                    value = int(str(raw).strip())
+                except (TypeError, ValueError):
+                    return True
+                if value < awg_presets.AWG3_PADDING_MIN:
+                    return True
+        return False
+
     def _set_served_generation(self, state: PluginStateAccess, target: str) -> bool:
         """Switch the generation of the host the core serves.
 
@@ -142,6 +177,7 @@ class AwgProtocolModeMixin:
             self.desired_protocol_mode(state) == target
             and self._stored_generation(state) == target
             and self._generation_flags_are(state, target)
+            and not self._paddings_below_floor(state, target)
         ):
             return False
         profiles = protocol.config.get("profiles")
@@ -183,3 +219,52 @@ class AwgProtocolModeMixin:
         if protocol is None or not protocol.installed:
             raise RuntimeError("AmneziaWG is not installed")
         return self._set_served_generation(state, canonical_mode(mode))
+
+    def mode_readiness(self, state: PluginStateAccess, target: str) -> tuple[bool, str]:
+        """Whether local material can actually serve ``target``, with the reason it cannot."""
+        protocol = state.protocols.get("amneziawg")
+        if protocol is None:
+            return False, "AmneziaWG configuration is missing"
+        profiles = protocol.config.get("profiles")
+        if not isinstance(profiles, dict) or not profiles:
+            return False, "no profile is defined"
+        if self.desired_protocol_mode(state) != target:
+            return False, "the desired mode was not stored"
+        if self._stored_generation(state) != target:
+            return False, "profiles carry no generation material for this mode"
+        if not self._generation_flags_are(state, target):
+            return False, "profile generation flags do not match this mode"
+        for name, profile in sorted(profiles.items()):
+            if not isinstance(profile, dict):
+                return False, f"profile {name} is invalid"
+            obfuscation = profile.get("obfuscation")
+            if not isinstance(obfuscation, dict):
+                return False, f"profile {name} has no obfuscation"
+            valid, reason = awg_presets.validate_params(obfuscation, target)
+            if not valid:
+                return False, f"profile {name}: {reason}"
+        return True, ""
+
+    def prepare_node_config(self, state: PluginStateAccess, config: dict[str, Any]) -> bool:
+        """Make the local generation match the mode a node was told to serve.
+
+        The mode is a shape of local material, not a value to store: profiles, their
+        padding floor and the generation flags. A node has no console, so it must be able
+        to create a missing profile and to repair a profile that already claims the mode
+        without carrying what it means. Material that is already legal is kept.
+        """
+        protocol = state.protocols.get("amneziawg")
+        if protocol is None or not protocol.installed:
+            raise ValueError("AmneziaWG is not installed")
+        target = canonical_mode(config.get("protocol_mode", self.desired_protocol_mode(state)))
+        profiles = protocol.config.get("profiles")
+        if not isinstance(profiles, dict) or not profiles:
+            copied = self._copied_profiles(protocol.config.get("profiles"))
+            copied["desktop"] = self._materialize_desktop_profile(state)
+            protocol.config["profiles"] = copied
+            self._provision_missing_octets(state)
+        self._set_served_generation(state, target)
+        ready, reason = self.mode_readiness(state, target)
+        if not ready:
+            raise ValueError(f"AmneziaWG cannot serve {target}: {reason}")
+        return True

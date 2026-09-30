@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -21,7 +21,9 @@ def _transport(name="vless"):
                 subscription_enabled=True,
                 hydra_v2_subscription_enabled=True,
             ),
-        )
+        ),
+        # The default plugin contract: nothing command-owned to prepare.
+        prepare_node_config=lambda state, config: True,
     )
 
 
@@ -377,126 +379,152 @@ def test_reconcile_keeps_node_local_material_the_base_never_sent():
     assert config["server_private_key"] == "node-key"
 
 
-def test_generation_switch_runs_through_the_plugin_owner_before_the_merge():
+def test_node_preparation_is_delegated_to_the_plugin_owner():
+    """The reconciler must not decide protocol material itself: it asks the owner."""
+    state = AppState(protocols={"awg": PluginState(installed=True, config={"old": True})})
+    plugin = _transport("awg")
+    seen = []
+
+    def prepare_node_config(current, config):
+        seen.append((current is state, dict(config)))
+        current.protocols["awg"].config["prepared"] = True
+        return True
+
+    plugin.prepare_node_config = prepare_node_config
+    app = MagicMock()
+    app.protocols.list.return_value = [plugin]
+    app.protocols.enabled_subscription_names.return_value = set()
+    reconciler = NodeReconciler("de-1", app, state_reader=lambda: state)
+
+    reconciler.apply(
+        NodeDesiredSnapshot(
+            node_id="de-1",
+            generation=1,
+            protocols={"awg": NodeProtocolSpec(enabled=True, config={"protocol_mode": "3.1"})},
+        )
+    )
+
+    # The owner sees the desired public settings after the merge has written them.
+    assert seen == [(True, {"protocol_mode": "3.1"})]
+    assert state.protocols["awg"].config["prepared"] is True
+
+
+def test_a_plugin_that_cannot_prepare_its_node_config_stops_the_apply_with_its_reason():
+    state = AppState(protocols={"awg": PluginState(installed=True, config={})})
+    plugin = _transport("awg")
+
+    def prepare_node_config(current, config):
+        raise ValueError("no material can be created")
+
+    plugin.prepare_node_config = prepare_node_config
+    app = MagicMock()
+    app.protocols.list.return_value = [plugin]
+    app.protocols.enabled_subscription_names.return_value = set()
+    reconciler = NodeReconciler("de-1", app, state_reader=lambda: state)
+
+    with pytest.raises(RuntimeError, match="awg: no material can be created"):
+        reconciler.apply(
+            NodeDesiredSnapshot(
+                node_id="de-1",
+                generation=1,
+                protocols={"awg": NodeProtocolSpec(enabled=True, config={"protocol_mode": "3.1"})},
+            )
+        )
+
+    assert reconciler.current_generation() == 0
+
+
+def test_damaged_awg_generation_is_repaired_on_a_node_that_already_claims_the_mode():
+    """The live case: stored mode says 3.1, the paddings cannot carry 3.1."""
+    from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
+
+    obfuscation = {
+        "Jc": "5", "Jmin": "10", "Jmax": "50",
+        "S1": "105", "S2": "96", "S3": "0", "S4": "12",
+        "H1": "1", "H2": "2", "H3": "3", "H4": "4", "I1": "",
+    }
     state = AppState(
         protocols={
             "amneziawg": PluginState(
                 installed=True,
-                config={"protocol_mode": "2.0", "profiles": {"desktop": {"obfuscation": {"S3": "0"}}}},
+                config={
+                    "protocol_mode": "3.1",
+                    "profiles": {"desktop": {"obfuscation": dict(obfuscation), "server_private_key": "node-key"}},
+                },
             ),
         }
     )
-    plugin = _transport("amneziawg")
-    calls = []
-
-    def set_protocol_mode(current, mode):
-        # The owner is what lifts the paddings and creates the generation material.
-        current.protocols["amneziawg"].config["protocol_mode"] = mode
-        current.protocols["amneziawg"].config["profiles"]["desktop"]["obfuscation"]["S3"] = "20"
-        calls.append(mode)
-        return True
-
-    plugin.set_protocol_mode = set_protocol_mode
     app = MagicMock()
-    app.protocols.list.return_value = [plugin]
+    app.protocols.list.return_value = [AmneziaWGPlugin()]
     app.protocols.enabled_subscription_names.return_value = set()
-    reconciler = NodeReconciler("de-1", app, state_reader=lambda: state)
+    app.protocols.enable.side_effect = lambda current, name: (
+        setattr(current.protocols[name], "enabled", True) or True
+    )
+    reconciler = NodeReconciler("uk-1", app, state_reader=lambda: state)
 
     reconciler.apply(
         NodeDesiredSnapshot(
-            node_id="de-1",
+            node_id="uk-1",
             generation=1,
             protocols={"amneziawg": NodeProtocolSpec(enabled=True, config={"protocol_mode": "3.1"})},
         )
     )
 
-    assert calls == ["3.1"]
     config = state.protocols["amneziawg"].config
-    assert config["protocol_mode"] == "3.1"
-    assert config["profiles"]["desktop"]["obfuscation"]["S3"] == "20"
+    profile = config["profiles"]["desktop"]
+    assert profile["obfuscation"]["S3"] == "12"
+    assert profile["obfuscation"]["S1"] == "105"
+    assert profile["generation"]["RandomTrailers"] is True
+    assert profile["generation"]["DisableCookies"] is True
+    assert profile["server_private_key"] == "node-key"
+    assert AmneziaWGPlugin().mode_readiness(state, "3.1") == (True, "")
 
 
-def test_vless_reality_switch_uses_the_plugin_owner_and_keeps_generated_keys():
-    state = AppState(protocols={"vless": PluginState(installed=True, config={"security": "tls"})})
-    plugin = _transport("vless")
-    calls = []
+def test_vless_reality_material_survives_the_node_merge_and_is_not_rotated():
+    """A Reality switch is command-owned: the merge must not erase what it prepared."""
+    from hydra.plugins.vless_xhttp.plugin import VlessXhttpPlugin
 
-    def set_security(current, mode, handshake="", domain="", short_id=""):
-        config = current.protocols["vless"].config
-        config["security"] = mode
-        config["reality_private_key"] = "generated-private"
-        config["reality_public_key"] = "generated-public"
-        config["reality_short_id"] = "abcd"
-        calls.append({"mode": mode, "handshake": handshake, "domain": domain})
-        return True
-
-    plugin.set_security = set_security
+    plugin = VlessXhttpPlugin()
+    state = AppState(protocols={"vless": PluginState(installed=True, config={"security": "tls", "domain": "old.example.com"})})
     app = MagicMock()
     app.protocols.list.return_value = [plugin]
     app.protocols.enabled_subscription_names.return_value = set()
-    reconciler = NodeReconciler("de-1", app, state_reader=lambda: state)
-
-    reconciler.apply(
-        NodeDesiredSnapshot(
-            node_id="de-1",
-            generation=1,
-            protocols={
-                "vless": NodeProtocolSpec(
-                    enabled=True,
-                    config={"security": "reality", "domain": "cover.example.com", "xhttp_path": "/xhttp"},
-                )
-            },
-        )
+    app.protocols.enable.side_effect = lambda current, name: (
+        setattr(current.protocols[name], "enabled", True) or True
     )
+    keypairs = iter((("private-1", "public-1"), ("private-2", "public-2")))
+    reconciler = NodeReconciler("uk-1", app, state_reader=lambda: state)
 
-    assert calls == [{"mode": "reality", "handshake": "cover.example.com", "domain": "cover.example.com"}]
-    config = state.protocols["vless"].config
-    assert config["security"] == "reality"
-    assert config["reality_private_key"] == "generated-private"
-    assert config["reality_public_key"] == "generated-public"
-    assert config["xhttp_path"] == "/xhttp"
-
-
-def test_generation_switch_on_a_profile_less_node_materializes_through_the_owner():
-    """A node has no console: the plugin's rotation command creates the first profile."""
-    state = AppState(protocols={"amneziawg": PluginState(installed=True, config={"protocol_mode": "2.0"})})
-    plugin = _transport("amneziawg")
-    calls = []
-
-    def rotate_obfuscation(current, profile=None, preset=None):
-        current.protocols["amneziawg"].config["profiles"] = {
-            "desktop": {"obfuscation": {"S3": "0"}, "server_private_key": "key"},
-        }
-        calls.append(("rotate_obfuscation", profile))
-        return True
-
-    def set_protocol_mode(current, mode):
-        profiles = current.protocols["amneziawg"].config["profiles"]
-        profiles["desktop"]["obfuscation"]["S3"] = "20"
-        current.protocols["amneziawg"].config["protocol_mode"] = mode
-        calls.append(("set_protocol_mode", mode))
-        return True
-
-    plugin.rotate_obfuscation = rotate_obfuscation
-    plugin.set_protocol_mode = set_protocol_mode
-    app = MagicMock()
-    app.protocols.list.return_value = [plugin]
-    app.protocols.enabled_subscription_names.return_value = set()
-    reconciler = NodeReconciler("de-1", app, state_reader=lambda: state)
-
-    reconciler.apply(
-        NodeDesiredSnapshot(
-            node_id="de-1",
-            generation=1,
-            protocols={"amneziawg": NodeProtocolSpec(enabled=True, config={"protocol_mode": "3.1"})},
+    def apply(gen, config):
+        reconciler.apply(
+            NodeDesiredSnapshot(
+                node_id="uk-1",
+                generation=gen,
+                protocols={"vless": NodeProtocolSpec(enabled=True, config=config)},
+            )
         )
-    )
+        return state.protocols["vless"].config
 
-    assert calls == [("rotate_obfuscation", "desktop"), ("set_protocol_mode", "3.1")]
-    config = state.protocols["amneziawg"].config
-    assert config["protocol_mode"] == "3.1"
-    assert config["profiles"]["desktop"]["obfuscation"]["S3"] == "20"
-    assert config["profiles"]["desktop"]["server_private_key"] == "key"
+    with patch("hydra.core.singbox_keys.generate_reality_keypair", side_effect=lambda: next(keypairs)):
+        reality = apply(1, {"security": "reality", "domain": "hcp.modxair.com", "xhttp_path": "/xhttp"})
+        assert reality["reality_handshake"] == "hcp.modxair.com"
+        assert reality["reality_private_key"] == "private-1"
+        assert reality["reality_public_key"] == "public-1"
+        assert isinstance(reality["_tls_passthrough_route"], dict)
+        assert "_tls_http_decoy_route" in reality
+        # Reality owns no certificate: the borrowed handshake replaces the domain.
+        assert "domain" not in reality
+
+        # Repeating the same desired state must not rotate healthy material.
+        again = apply(2, {"security": "reality", "domain": "hcp.modxair.com", "xhttp_path": "/xhttp"})
+        assert again["reality_private_key"] == "private-1"
+        assert again["reality_short_id"] == reality["reality_short_id"]
+
+        certificate = apply(3, {"security": "tls", "domain": "uk-any.example.com"})
+        assert certificate["security"] == "tls"
+        assert certificate["domain"] == "uk-any.example.com"
+        assert isinstance(certificate["_tls_http_decoy_route"], dict)
+        assert "_tls_passthrough_route" not in certificate
 
 
 def test_real_awg_plugin_serves_31_on_a_node_that_had_no_profiles():
