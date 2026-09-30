@@ -186,3 +186,13 @@ def test_sync_user_configs_prefers_the_plugin_apply_stage(tmp_path):
         raise AssertionError("a false plugin apply must raise")
 
     assert message == ("Plugin local apply returned false: юнит не поднялся: смотрите journalctl -u local")
+
+
+def test_a_successful_apply_clears_the_previously_reported_error(tmp_path):
+    """The message describes the last apply; a recovered host must not keep reporting it."""
+    service, _ = _service(tmp_path)
+    service._set_apply_error("Не удалось применить конфигурацию")
+    service._configuration_applier = lambda: SimpleNamespace(apply=lambda state: True)
+
+    assert service.apply_config(AppState()) is True
+    assert service.last_apply_error() == ""

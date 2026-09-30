@@ -24,6 +24,10 @@ from hydra.services.nodes.observation import (
     STAGE_UPGRADE,
     NodeObservation,
     NodeObservationStore,
+    published_coverage,
+    record_check,
+    record_current_apply_error,
+    record_sync,
 )
 from hydra.services.nodes.reconciler import NodeSnapshotReconciler, NodeSyncResult
 from hydra.services.nodes.snapshot_store import NodeSnapshotStore
@@ -212,28 +216,7 @@ class NodeManager:
             last_error = ""
         installed = health.get("revision")
         installed = installed[:64] if isinstance(installed, str) and installed.isprintable() else ""
-        if self.observations_store is not None:
-            upgrade = _upgrade_state(node, installed)
-            if last_error:
-                # The node answered, so this is not a connectivity problem: it is the
-                # node's own last apply failure, which is what the operator must see.
-                self.observations_store.record(
-                    node_id,
-                    control=CONTROL_OK,
-                    stage="apply",
-                    code="node_apply_error",
-                    message=last_error[:2048],
-                    applied_generation=generation,
-                    target_revision=node.revision,
-                    **upgrade,
-                )
-            else:
-                self.observations_store.succeeded(
-                    node_id,
-                    applied_generation=generation,
-                    target_revision=node.revision,
-                    **upgrade,
-                )
+        record_check(self.observations_store, node, generation, last_error, installed)
         return {
             "ok": True,
             "node_id": node_id,
@@ -251,23 +234,17 @@ class NodeManager:
                 node = self._find_node(self.state_reader(), node_id)
                 self.observations_store.failed(node_id, exc, target_revision=node.revision)
             raise
-        self._record_sync(node_id, result)
+        record_sync(
+            self.observations_store,
+            self._find_node(self.state_reader(), node_id),
+            result,
+            lambda: published_coverage(self.published_export(self.state_reader(), node_id)),
+        )
+        record_current_apply_error(
+            self.observations_store,
+            self.client_for(self._find_node(self.state_reader(), node_id)),
+        )
         return result
-
-    def _record_sync(self, node_id: str, result: NodeSyncResult) -> None:
-        if self.observations_store is None:
-            return
-        node = self._find_node(self.state_reader(), node_id)
-        changes: dict[str, object] = {
-            "applied_generation": node.generation,
-            "published_generation": node.published_generation,
-            "coverage": dict(result.coverage),
-            "warnings": tuple(result.warnings),
-            "target_revision": node.revision,
-        }
-        if result.installed_revision:
-            changes.update(_upgrade_state(node, result.installed_revision))
-        self.observations_store.succeeded(node_id, **changes)
 
     def change_name(self, node_id: str, name: str, *, region: str | None = None) -> NodeConfig:
         result: NodeConfig | None = None
@@ -432,23 +409,6 @@ class NodeManager:
             if node.id == node_id:
                 return node
         raise ValueError(f"managed node {node_id} was not found")
-
-
-def _upgrade_state(node: NodeConfig, installed: str) -> dict[str, object]:
-    """Compare the revision the node reports with the one the base asked for.
-
-    Scheduling an upgrade only starts a worker; the operator needs the difference between
-    "asked for" and "running", and that difference is only visible from the node's own
-    revision marker.
-    """
-    if not installed:
-        return {"installed_revision": "", "upgrade": "unknown"}
-    if not node.revision:
-        return {"installed_revision": installed, "upgrade": ""}
-    return {
-        "installed_revision": installed,
-        "upgrade": "complete" if installed == node.revision else "pending",
-    }
 
 
 __all__ = ["NodeManager"]

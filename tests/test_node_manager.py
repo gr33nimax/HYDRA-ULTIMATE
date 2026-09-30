@@ -788,3 +788,60 @@ def test_resume_failure_does_not_claim_the_node_was_installed(tmp_path):
         )
 
     assert state_module.load_state().nodes == []
+
+
+def test_an_unchanged_reconcile_keeps_the_coverage_it_already_knows(tmp_path):
+    """ "Unchanged" carries no new counts; wiping them made a serving node look empty."""
+    from hydra.services.nodes.observation import NodeObservationStore
+
+    _saved_node_state()
+    client = FakeControlClient()
+    store = NodeObservationStore(host=HostBackend(), path=tmp_path / "observations.json")
+    manager = _manager(tmp_path, client, observations=store)
+
+    first = manager.refresh("de-1")
+    assert first.status == "published"
+    assert manager.observations()["de-1"].coverage == {"vless": 1}
+
+    second = manager.refresh("de-1")
+
+    assert second.status == "unchanged"
+    assert manager.observations()["de-1"].coverage == {"vless": 1}
+
+
+def test_refresh_surfaces_the_nodes_own_apply_error(tmp_path):
+    """A node answers health while its last apply failed: the base must not call that clean."""
+    from hydra.services.nodes.observation import NodeObservationStore
+
+    _saved_node_state()
+    client = FakeControlClient()
+    client.diagnostics = lambda: {"last_error": "Режим 3.1: S3=0 меньше 12"}
+    store = NodeObservationStore(host=HostBackend(), path=tmp_path / "observations.json")
+    manager = _manager(tmp_path, client, observations=store)
+
+    manager.refresh("de-1")
+
+    observation = manager.observations()["de-1"]
+    assert observation.control == "ok"
+    assert observation.stage == "apply"
+    assert observation.code == "node_apply_error"
+    assert "S3=0" in observation.message
+
+
+def test_a_node_that_recovered_stops_reporting_the_old_error(tmp_path):
+    from hydra.services.nodes.observation import NodeObservationStore
+
+    _saved_node_state()
+    client = FakeControlClient()
+    client.diagnostics = lambda: {"last_error": "Режим 3.1: S3=0 меньше 12"}
+    store = NodeObservationStore(host=HostBackend(), path=tmp_path / "observations.json")
+    manager = _manager(tmp_path, client, observations=store)
+    manager.refresh("de-1")
+    assert manager.observations()["de-1"].message
+
+    client.diagnostics = lambda: {"last_error": ""}
+    manager.refresh("de-1")
+
+    observation = manager.observations()["de-1"]
+    assert observation.message == ""
+    assert observation.code == ""

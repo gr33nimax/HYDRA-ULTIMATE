@@ -151,6 +151,11 @@ class OrchestrationService:
                             "ERROR",
                             f"Не удалось восстановить состояние после сбоя: {exc}",
                         )
+                if applied:
+                    # The message describes the last apply, not a permanent condition. Leaving
+                    # it set made a node that had just recovered report its old failure as
+                    # if it were current, which is exactly what an operator cannot act on.
+                    self._set_apply_error("")
                 return applied
         finally:
             self._apply_lock.release()

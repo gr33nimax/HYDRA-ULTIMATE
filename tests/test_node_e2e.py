@@ -95,6 +95,9 @@ class _NodeProtocols:
     def client_config(self, state: AppState, name: str, user: User, **parameters: object) -> str:
         return str(self._plugins[name].generate_client_config(user, state, **parameters) or "")
 
+    def singbox_client_config(self, state: AppState, name: str, user: User, **parameters: object) -> str:
+        return str(self._plugins[name].generate_singbox_client_config(user, state) or "")
+
     def install(self, state: AppState, name: str) -> bool:
         del state
         self.installed.append(name)
@@ -217,6 +220,13 @@ class _NoBaseProtocols:
         raise AssertionError(f"the base should not be asked for {name}")
 
 
+def published_export_users(base) -> list[Any]:
+    """Read the published snapshot's profiles, the way a subscription reader would."""
+    node = state_module.load_state().nodes[0]
+    export = base.snapshot_store.load(node.id, node.published_generation, node.published_digest)
+    return [entry.profiles for entry in export.users.values()]
+
+
 def _node_state() -> AppState:
     return AppState(
         protocols={
@@ -289,6 +299,10 @@ def node_cluster(tmp_path, monkeypatch):
         snapshot_store=store,
     )
     monkeypatch.setattr("hydra.core.singbox_keys.generate_reality_keypair", lambda: ("private-key", "public-key"))
+    # A node with a core that understands 3.1 offers the sing-box projection; without the
+    # installed binary the check cannot run here, and the Linux integration job covers the
+    # real core.
+    monkeypatch.setattr("hydra.plugins.amneziawg.client_links.kernel_supports_awg31", lambda: True)
     try:
         yield base, store, node_state, application
     finally:
@@ -320,6 +334,22 @@ def test_a_node_publishes_profiles_a_subscription_can_read(node_cluster):
     assert vless["reality_private_key"] == "private-key"
     assert isinstance(vless["_tls_passthrough_route"], dict)
 
+    # AmneziaWG serves a WireGuard INI, so its sing-box projection is the only document
+    # a sing-box-shaped subscription can read: without it AWG vanished from those formats.
+    awg_documents = [
+        document
+        for user_entry in published_export_users(base)
+        for profile in user_entry
+        if profile.protocol == "amneziawg"
+        for document in profile.singbox
+    ]
+    assert awg_documents, "the node's AmneziaWG profile carries no sing-box document"
+    assert any(
+        endpoint.get("type") == "wireguard" and "amnezia" in endpoint
+        for document in awg_documents
+        for endpoint in document.get("endpoints", [])
+    )
+
     # And the base publishes that export, so a subscription can read it locally.
     published = state_module.load_state().nodes[0]
     assert published.published_generation == result.generation
@@ -348,6 +378,7 @@ def test_the_node_never_commits_a_generation_it_cannot_export(node_cluster):
     # Break the node's own material generation so its export would come back empty.
     application.protocols.client_links = lambda state, name, user, **parameters: []
     application.protocols.client_config = lambda state, name, user, **parameters: ""
+    application.protocols.singbox_client_config = lambda state, name, user, **parameters: ""
 
     with pytest.raises(RuntimeError, match="no client profiles"):
         base.refresh(NODE_ID)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,17 +39,31 @@ _LOGGER = logging.getLogger(__name__)
 # The updater writes the revision it installed here; it is the only trustworthy answer to
 # "what is this node actually running", because the base's copy is a target, not a fact.
 SOURCE_REVISION_FILE = Path("/opt/hydra/.hydra-source-revision")
+INSTALL_DIR = Path("/opt/hydra")
+_RELEASE_REVISION = re.compile(r"([0-9a-fA-F]{40})")
 
 
-def read_installed_revision(path: Path | None = None) -> str:
-    """Read the installed revision marker; an absent or unreadable marker is unknown."""
+def read_installed_revision(path: Path | None = None, install_dir: Path | None = None) -> str:
+    """Read the installed revision; an unreadable or absent answer is unknown.
+
+    The transactional updater installs each revision into its own release directory and
+    points the install path at it, so the marker file can be missing while the revision
+    is still knowable from the release name. Without this fallback a completed update
+    looked like one that never landed.
+    """
+    marker = Path(path) if path is not None else SOURCE_REVISION_FILE
     try:
-        raw = (path or SOURCE_REVISION_FILE).read_text(encoding="utf-8").strip()
+        raw = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        raw = ""
+    if raw and len(raw) <= 64 and raw.isprintable():
+        return raw
+    try:
+        resolved = Path(install_dir if install_dir is not None else INSTALL_DIR).resolve()
     except OSError:
         return ""
-    if not raw or len(raw) > 64 or not raw.isprintable():
-        return ""
-    return raw
+    match = _RELEASE_REVISION.match(resolved.name)
+    return match.group(1).lower() if match else ""
 
 
 @dataclass
@@ -144,6 +159,19 @@ class NodeReconciler:
                         **parameters,
                     )
                     singbox = _singbox_documents(raw_config)
+                    # Not every transport hands out JSON: AmneziaWG serves a WireGuard INI
+                    # while its sing-box projection is the endpoint a sing-box-shaped
+                    # subscription reads. Without this the node's AWG was missing from
+                    # every document-based format while links still carried it.
+                    projection = self.application.protocols.singbox_client_config(
+                        state,
+                        name,
+                        user,
+                        **parameters,
+                    )
+                    for document in _singbox_documents(projection):
+                        if document not in singbox:
+                            singbox = (*singbox, document)
                     if links or singbox:
                         profiles.append(
                             NodeClientProfile(

@@ -581,3 +581,22 @@ def test_installed_revision_is_read_from_the_nodes_own_marker(tmp_path):
     assert read_installed_revision(marker) == ""
 
     assert read_installed_revision(tmp_path / "missing") == ""
+
+
+def test_installed_revision_falls_back_to_the_release_directory_name(tmp_path):
+    """The updater points the install path at a release directory named after the revision."""
+    from hydra.services.nodes.reconcile import read_installed_revision
+
+    # The updater points the install path at the release directory; resolving a plain
+    # directory covers the same name parsing without needing symlink rights.
+    release = tmp_path / ("a" * 40 + "-20260930-211552Z-1020676")
+    release.mkdir()
+
+    assert read_installed_revision(tmp_path / "missing-marker", release) == "a" * 40
+    # A marker still wins when it exists, and an unknown layout stays unknown.
+    marker = tmp_path / ".hydra-source-revision"
+    marker.write_text("b" * 40, encoding="utf-8")
+    assert read_installed_revision(marker, release) == "b" * 40
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert read_installed_revision(tmp_path / "missing-marker", plain) == ""

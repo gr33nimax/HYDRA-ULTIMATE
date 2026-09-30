@@ -231,6 +231,41 @@ class ProtocolService:
             else payload
         )
 
+    def singbox_client_config(
+        self,
+        state: AppState,
+        name: str,
+        user: User,
+        **parameters: object,
+    ) -> str:
+        """Return the plugin's own sing-box projection, not only its link form.
+
+        Some transports serve a client artifact that is not JSON — AmneziaWG hands out a
+        WireGuard INI — while their sing-box projection is a real endpoint carrying the
+        generation fields. A sing-box-shaped subscription can only read that projection,
+        so a node export has to ask for it as well as for links.
+        """
+        plugin = self.require(name)
+        named_user = user_with_configuration_names(
+            user,
+            state.configuration_names,
+        )
+        payload = self.invoker.generate_singbox_client_config(
+            plugin,
+            named_user if plugin.meta.name == "trusttunnel" else user,
+            state,
+        )
+        return (
+            apply_json_configuration_name(
+                payload,
+                key=configuration_name_key(plugin.meta.name, parameters),
+                global_names=state.configuration_names,
+                user_names=user.configuration_name_overrides,
+            )
+            if plugin.meta.name != "trusttunnel"
+            else payload
+        )
+
     def client_link(
         self,
         state: AppState,

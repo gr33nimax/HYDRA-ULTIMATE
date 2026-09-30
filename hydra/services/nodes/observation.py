@@ -257,3 +257,123 @@ __all__ = [
     "STAGE_UPGRADE",
     "describe_failure",
 ]
+
+def upgrade_state(node: Any, installed: str) -> dict[str, object]:
+    """Compare the revision the node reports with the one the base asked for.
+
+    Scheduling an upgrade only starts a worker; the operator needs the difference between
+    "asked for" and "running", and that difference is only visible from the node's own
+    revision marker.
+    """
+    if not installed:
+        return {"installed_revision": "", "upgrade": "unknown"}
+    target = str(getattr(node, "revision", "") or "")
+    if not target:
+        return {"installed_revision": installed, "upgrade": ""}
+    return {
+        "installed_revision": installed,
+        "upgrade": "complete" if installed == target else "pending",
+    }
+
+
+def published_coverage(export: Any) -> dict[str, int]:
+    """Count the profiles a published snapshot actually carries, per protocol."""
+    if export is None:
+        return {}
+    counts: dict[str, int] = {}
+    for exported_user in getattr(export, "users", {}).values():
+        for profile in getattr(exported_user, "profiles", ()):
+            name = getattr(profile, "protocol", "")
+            if name:
+                counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def record_sync(
+    store: NodeObservationStore | None,
+    node: Any,
+    result: Any,
+    coverage: Callable[[], dict[str, int]] | None = None,
+) -> None:
+    """Record a completed reconcile, keeping coverage meaningful across "unchanged".
+
+    An unchanged reconcile carries no new counts, and overwriting the last known numbers
+    with nothing is what made a serving node look empty in the operator's view.
+    """
+    if store is None:
+        return
+    node_id = str(getattr(node, "id", ""))
+    changes: dict[str, object] = {
+        "applied_generation": int(getattr(node, "generation", 0) or 0),
+        "published_generation": int(getattr(node, "published_generation", 0) or 0),
+        "target_revision": str(getattr(node, "revision", "") or ""),
+    }
+    installed = str(getattr(result, "installed_revision", "") or "")
+    if installed:
+        changes.update(upgrade_state(node, installed))
+    if str(getattr(result, "status", "")) == "published":
+        changes["coverage"] = dict(getattr(result, "coverage", {}) or {})
+        changes["warnings"] = tuple(getattr(result, "warnings", ()) or ())
+    else:
+        previous = store.get(node_id)
+        known = dict(previous.coverage) if previous is not None else {}
+        if not known and coverage is not None:
+            known = coverage()
+        changes["coverage"] = known
+    store.succeeded(node_id, **changes)
+
+
+def record_current_apply_error(store: NodeObservationStore | None, client: Any) -> None:
+    """Surface a node that accepted a generation but cannot serve it.
+
+    A node answers ``/health`` while its last apply failed, so reachability alone made it
+    look healthy. Its own diagnostics carry the reason, and asking for it is what turns
+    "published" into "published and actually serving".
+    """
+    if store is None:
+        return
+    try:
+        diagnostics = client.diagnostics()
+    except Exception:
+        return
+    last_error = diagnostics.get("last_error") if isinstance(diagnostics, dict) else ""
+    if isinstance(last_error, str) and last_error.strip():
+        store.record(
+            str(getattr(client, "node_id", "")),
+            control=CONTROL_OK,
+            stage=STAGE_APPLY,
+            code="node_apply_error",
+            message=last_error[:2048],
+        )
+
+
+def record_check(
+    store: NodeObservationStore | None,
+    node: Any,
+    generation: int,
+    last_error: str,
+    installed: str = "",
+) -> None:
+    """Record one explicit connectivity check, with the node's own apply error kept apart."""
+    if store is None:
+        return
+    node_id = str(getattr(node, "id", ""))
+    changes: dict[str, object] = {
+        "applied_generation": generation,
+        "target_revision": str(getattr(node, "revision", "") or ""),
+    }
+    if installed:
+        # A check is also the cheapest way to learn which revision the node runs.
+        changes.update(upgrade_state(node, installed))
+    if last_error:
+        store.record(
+            node_id,
+            control=CONTROL_OK,
+            stage=STAGE_APPLY,
+            code="node_apply_error",
+            message=last_error[:2048],
+            **changes,
+        )
+        return
+    store.succeeded(node_id, **changes)
+
