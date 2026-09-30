@@ -139,7 +139,11 @@ def _upgrade(node: NodeConfig, app: ApplicationService) -> None:
     revision = resolve_revision(app, branch)
     if revision is None:
         return
-    panel("ПЛАН ОБНОВЛЕНИЯ НОДЫ", [kv("Нода:", node.name or node.id), kv("Ветка:", branch), kv("SHA (получен автоматически):", revision)], wrap=True)
+    panel(
+        "ПЛАН ОБНОВЛЕНИЯ НОДЫ",
+        [kv("Нода:", node.name or node.id), kv("Ветка:", branch), kv("SHA (получен автоматически):", revision)],
+        wrap=True,
+    )
     if not confirm(f"Запланировать обновление {node.id} до {revision}?", default=False):
         return
     app.nodes.change_update_target(node.id, branch=branch, revision=revision)

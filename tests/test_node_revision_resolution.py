@@ -36,7 +36,11 @@ def test_resolve_branch_uses_bounded_https_and_no_credentials(monkeypatch):
     cast(Mock, bootstrap.host).run.assert_not_called()
 
 
-@pytest.mark.parametrize("payload", [b"invalid-json", b"[]", _payload("other"), _payload(sha="short"), _payload(kind="blob"), b"x" * 65537], ids=["json", "object", "wrong-ref", "short-sha", "blob", "oversize"])
+@pytest.mark.parametrize(
+    "payload",
+    [b"invalid-json", b"[]", _payload("other"), _payload(sha="short"), _payload(kind="blob"), b"x" * 65537],
+    ids=["json", "object", "wrong-ref", "short-sha", "blob", "oversize"],
+)
 def test_invalid_revision_response_fails_closed_without_host_access(payload):
     response = Mock()
     response.read.return_value = payload
@@ -68,7 +72,13 @@ def test_manager_revision_resolution_is_injected_read_only_and_validated():
     bootstrap = Mock()
     bootstrap.resolve_revision.return_value = SHA
     state_reader, state_updater, client_for = Mock(), Mock(), Mock()
-    manager = NodeManager(state_reader=state_reader, state_updater=state_updater, client_for=client_for, snapshot_store=Mock(), bootstrap=bootstrap)
+    manager = NodeManager(
+        state_reader=state_reader,
+        state_updater=state_updater,
+        client_for=client_for,
+        snapshot_store=Mock(),
+        bootstrap=bootstrap,
+    )
     assert manager.resolve_revision("dev") == SHA
     bootstrap.resolve_revision.assert_called_once_with("dev")
     state_reader.assert_not_called()

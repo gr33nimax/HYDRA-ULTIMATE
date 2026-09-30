@@ -67,15 +67,24 @@ def test_final_install_confirmation_is_required():
     app.nodes.add_node.assert_not_called()
 
 
-def test_protocol_json_cannot_smuggle_private_node_credentials():
+def test_wizard_offers_no_way_to_smuggle_private_node_credentials():
+    """The base must not be able to send node-local keys, not even by hand."""
+    from hydra.plugins.base import PluginCategory
+    from hydra.plugins.defaults import default_plugins
+    from hydra.ui._menus import node_protocol_fields
+    from hydra.contracts.node_snapshot import is_node_local_secret_key
+
     app = _app()
-    with (
-        patch.object(nodes_setup, "menu", side_effect=["1", "2"]),
-        patch.object(nodes_setup, "prompt", side_effect=["443", '{"private_key":"do-not-copy"}']),
-    ):
-        with pytest.raises(NodeContractError, match="node-local secret"):
-            nodes_setup.read_protocol("vless", app, NodeProtocolSpec())
-    app.nodes.change_protocol.assert_not_called()
+    app.protocols.list.return_value = [
+        plugin for plugin in default_plugins() if plugin.meta.category == PluginCategory.TRANSPORT
+    ]
+    assert all(
+        not is_node_local_secret_key(item.key)
+        for items in node_protocol_fields.PROTOCOL_FIELDS.values()
+        for item in items
+    )
+    with pytest.raises(NodeContractError, match="node-local secret"):
+        NodeProtocolSpec(enabled=True, config={"private_key": "do-not-copy"}).validate()
 
 
 def test_install_rejects_inactive_base_subscription_service_before_prompts():
