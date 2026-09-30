@@ -660,3 +660,131 @@ def test_removing_a_node_forgets_its_observation(tmp_path):
     manager.remove_node("de-1", confirmed=True)
 
     assert manager.observations() == {}
+
+
+def test_health_readback_records_the_revision_the_node_reports(tmp_path):
+    from hydra.services.nodes.observation import NodeObservationStore
+
+    _saved_node_state()
+    client = FakeControlClient()
+    client.health = lambda: {
+        "ok": True,
+        "node_id": "de-1",
+        "generation": 1,
+        "contract_version": NODE_CONTRACT_VERSION,
+        "revision": "c" * 40,
+    }
+    store = NodeObservationStore(host=HostBackend(), path=tmp_path / "observations.json")
+    manager = _manager(tmp_path, client, observations=store)
+    target = "a" * 40
+    state_module.update_state(lambda current: setattr(current.nodes[0], "revision", target))
+
+    manager.check("de-1")
+
+    observation = manager.observations()["de-1"]
+    assert observation.installed_revision == "c" * 40
+    assert observation.target_revision == target
+    # Asked for one revision, running another: the update has not landed yet.
+    assert observation.upgrade == "pending"
+
+
+def test_a_node_running_the_requested_revision_reports_the_update_complete(tmp_path):
+    from hydra.services.nodes.observation import NodeObservationStore
+
+    _saved_node_state()
+    revision = "a" * 40
+    client = FakeControlClient()
+    client.health = lambda: {
+        "ok": True,
+        "node_id": "de-1",
+        "generation": 1,
+        "contract_version": NODE_CONTRACT_VERSION,
+        "revision": revision,
+    }
+    store = NodeObservationStore(host=HostBackend(), path=tmp_path / "observations.json")
+    manager = _manager(tmp_path, client, observations=store)
+    state_module.update_state(lambda current: setattr(current.nodes[0], "revision", revision))
+
+    manager.check("de-1")
+
+    observation = manager.observations()["de-1"]
+    assert observation.upgrade == "complete"
+
+
+def test_resume_connects_an_installed_node_without_running_the_installer_again(tmp_path):
+    state_module.save_state(AppState(users=[User(email="alice@example.com", uuid="user-1")]))
+    client = FakeControlClient()
+    bootstrap = FakeNodeBootstrap()
+    manager = _manager(
+        tmp_path,
+        client,
+        bootstrap=bootstrap,
+        uninstall_remote=lambda node: None,
+        forget_node_credentials=lambda node_id: None,
+    )
+    node = NodeConfig(
+        id="de-1",
+        name="Germany",
+        address="node.example.com",
+        branch="release",
+        revision="a" * 40,
+        protocols={"vless": NodeProtocolSpec(enabled=True, port=443)},
+    )
+    confirmed = []
+
+    result = manager.resume_node(
+        node,
+        base_url="https://base.example.com:9444",
+        confirm_fingerprint=lambda fingerprint: confirmed.append(fingerprint) or True,
+    )
+
+    saved = state_module.load_state().nodes[0]
+    assert result.status == "published"
+    # The whole point: an existing installation is never installed twice.
+    assert bootstrap.install_request is None
+    assert bootstrap.provision_request == (
+        "de-1",
+        "node.example.com",
+        22,
+        "https://base.example.com:9444",
+        9444,
+    )
+    # No new host key is trusted: provisioning runs with StrictHostKeyChecking=yes against
+    # the pin the first install established, so resuming cannot silently adopt another machine.
+    assert confirmed == []
+    assert saved.control_fingerprint == "b" * 64
+    assert saved.published_generation == 1
+
+
+def test_resume_refuses_a_node_that_is_already_managed(tmp_path):
+    _saved_node_state()
+    manager = _manager(tmp_path, FakeControlClient())
+
+    with pytest.raises(ValueError, match="already exists"):
+        manager.resume_node(
+            NodeConfig(id="de-1", address="node.example.com"),
+            base_url="https://base.example.com:9444",
+            confirm_fingerprint=lambda fingerprint: True,
+        )
+
+
+def test_resume_failure_does_not_claim_the_node_was_installed(tmp_path):
+    state_module.save_state(AppState())
+    bootstrap = FakeNodeBootstrap()
+    bootstrap.provision_control_identity = lambda **kwargs: (_ for _ in ()).throw(OSError("ssh refused"))
+    manager = _manager(
+        tmp_path,
+        FakeControlClient(),
+        bootstrap=bootstrap,
+        uninstall_remote=lambda node: None,
+        forget_node_credentials=lambda node_id: None,
+    )
+
+    with pytest.raises(RuntimeError, match="must already be installed"):
+        manager.resume_node(
+            NodeConfig(id="de-1", address="node.example.com", branch="release", revision="a" * 40),
+            base_url="https://base.example.com:9444",
+            confirm_fingerprint=lambda fingerprint: True,
+        )
+
+    assert state_module.load_state().nodes == []

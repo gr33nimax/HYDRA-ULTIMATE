@@ -7,6 +7,7 @@ import json
 import logging
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 from hydra.contracts.node_export import (
@@ -34,6 +35,21 @@ from hydra.services.traffic import reset_user_traffic
 _GENERATION_KEY = "hydra_node_control"
 _LOGGER = logging.getLogger(__name__)
 
+# The updater writes the revision it installed here; it is the only trustworthy answer to
+# "what is this node actually running", because the base's copy is a target, not a fact.
+SOURCE_REVISION_FILE = Path("/opt/hydra/.hydra-source-revision")
+
+
+def read_installed_revision(path: Path | None = None) -> str:
+    """Read the installed revision marker; an absent or unreadable marker is unknown."""
+    try:
+        raw = (path or SOURCE_REVISION_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if not raw or len(raw) > 64 or not raw.isprintable():
+        return ""
+    return raw
+
 
 @dataclass
 class NodeReconciler:
@@ -54,6 +70,10 @@ class NodeReconciler:
 
     def diagnostics(self) -> dict[str, object]:
         return {"last_error": self.application.apply_error()}
+
+    def installed_revision(self) -> str:
+        """The revision this installation runs, for the base to compare with its target."""
+        return read_installed_revision()
 
     def schedule_upgrade(self, *, branch: str, revision: str) -> dict[str, object]:
         branch = checked_node_branch(branch, context="branch")
@@ -399,4 +419,4 @@ def _singbox_documents(raw: str) -> tuple[dict, ...]:
     return ()
 
 
-__all__ = ["NodeReconciler"]
+__all__ = ["NodeReconciler", "read_installed_revision"]

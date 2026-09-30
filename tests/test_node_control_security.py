@@ -121,6 +121,9 @@ class _Operations:
     def diagnostics(self) -> dict[str, object]:
         return {"last_error": "", "generation": self.generation}
 
+    def installed_revision(self) -> str:
+        return "a" * 40
+
     def schedule_upgrade(self, *, branch: str, revision: str) -> dict[str, object]:
         self.upgrade_requests.append((branch, revision))
         return {"status": "scheduled", "branch": branch, "revision": revision}
@@ -350,7 +353,10 @@ def test_health_is_read_only_and_exposes_only_safe_fields(secured_server):
         private_key=files["client_key"],
     )
     health = client.health()
-    assert set(health) == {"node_id", "generation", "contract_version", "ok"}
+    # ``revision`` is the node's own source marker: a public commit id, and the only
+    # evidence that an update actually landed. Nothing else may travel here.
+    assert set(health) == {"node_id", "generation", "contract_version", "ok", "revision"}
+    assert isinstance(health["revision"], str)
     assert "private_key" not in json.dumps(health)
 
 
@@ -383,3 +389,19 @@ def test_invalid_identity_cannot_start_control_server(tmp_path):
     )
     with pytest.raises((ValueError, OSError, ssl.SSLError)):
         create_control_server(identity, _Operations(), host="127.0.0.1", port=0)
+
+
+def test_health_reports_the_revision_the_node_runs(secured_server):
+    from hydra.services.nodes.control_client import NodeControlClient
+
+    server, _, _, files = secured_server
+    client = NodeControlClient(
+        host=server.server_address[0],
+        port=server.server_address[1],
+        node_id="de-1",
+        ca_file=files["ca"],
+        certificate=files["client_cert"],
+        private_key=files["client_key"],
+    )
+
+    assert client.health()["revision"] == "a" * 40

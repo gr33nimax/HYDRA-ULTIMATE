@@ -24,6 +24,15 @@ class NodeManagementOperations(Protocol):
         vk_cookie_source: str | None = None,
     ) -> NodeSyncResult: ...
 
+    def resume_node(
+        self,
+        node: NodeConfig,
+        *,
+        base_url: str,
+        confirm_fingerprint: Callable[[str], bool],
+        vk_cookie_source: str | None = None,
+    ) -> NodeSyncResult: ...
+
     def remove_node(self, node_id: str, *, confirmed: bool) -> dict[str, object]: ...
 
     def detach_node(self, node_id: str, *, confirmed: bool) -> dict[str, object]: ...

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from copy import deepcopy
-from typing import Protocol
-
 from hydra.contracts.node_export import NodeClientExport
 from hydra.contracts.node_snapshot import NodeProtocolSpec
 from hydra.contracts.node_traffic import NodeTrafficReport
@@ -20,6 +18,7 @@ from hydra.core.state_models import AppState
 from hydra.core.state_nodes import NodeConfig
 from hydra.services.nodes.credentials import NodeControlCredentials
 from hydra.services.nodes.control_client import NodeControlPort
+from hydra.services.nodes.onboarding import NodeOnboarding, NodeProvisioningPort
 from hydra.services.nodes.observation import (
     CONTROL_OK,
     STAGE_UPGRADE,
@@ -29,31 +28,6 @@ from hydra.services.nodes.observation import (
 from hydra.services.nodes.reconciler import NodeSnapshotReconciler, NodeSyncResult
 from hydra.services.nodes.snapshot_store import NodeSnapshotStore
 from hydra.services.node_traffic_accounting import apply_node_traffic_reports, retire_node_traffic
-
-
-class NodeProvisioningPort(Protocol):
-    def resolve_revision(self, branch: str) -> str: ...
-
-    def install(
-        self,
-        *,
-        node_id: str,
-        address: str,
-        ssh_port: int,
-        branch: str,
-        revision: str,
-        confirm_fingerprint: Callable[[str], bool],
-    ) -> str: ...
-
-    def provision_control_identity(
-        self,
-        *,
-        node_id: str,
-        address: str,
-        ssh_port: int,
-        base_url: str,
-        control_port: int,
-    ) -> NodeControlCredentials: ...
 
 
 class NodeManager:
@@ -116,69 +90,42 @@ class NodeManager:
         confirm_fingerprint: Callable[[str], bool],
         vk_cookie_source: str | None = None,
     ) -> NodeSyncResult:
-        bootstrap, uninstall_remote, forget_credentials = self._provisioning_dependencies()
-        if vk_cookie_source is not None:
-            from hydra.services.nodes.cookies import load_cookie_file
-
-            if self.import_remote_cookies is None:
-                raise RuntimeError("node cookie import is unavailable")
-            load_cookie_file(vk_cookie_source)
-        candidate = deepcopy(node)
-        candidate.validate(path=f"nodes.{candidate.id}")
-        if candidate.control_fingerprint or candidate.generation or candidate.published_generation:
-            raise ValueError("new node must not contain control credentials or runtime generations")
-        if candidate.desired_digest or candidate.published_digest:
-            raise ValueError("new node must not contain published snapshot digests")
-        branch = checked_node_branch(candidate.branch, context="branch")
-        revision = checked_node_revision(candidate.revision, context="revision")
-        if not isinstance(base_url, str) or not base_url.strip() or not callable(confirm_fingerprint):
-            raise ValueError("base_url and SSH fingerprint confirmation are required")
-        if any(item.id == candidate.id for item in self.state_reader().nodes):
-            raise ValueError(f"managed node {candidate.id} already exists")
-
-        bootstrap.install(
-            node_id=candidate.id,
-            address=candidate.address,
-            ssh_port=candidate.ssh_port,
-            branch=branch,
-            revision=revision,
+        return self._onboarding().add(
+            node,
+            base_url=base_url,
             confirm_fingerprint=confirm_fingerprint,
+            vk_cookie_source=vk_cookie_source,
         )
-        try:
-            credentials = bootstrap.provision_control_identity(
-                node_id=candidate.id,
-                address=candidate.address,
-                ssh_port=candidate.ssh_port,
-                base_url=base_url,
-                control_port=candidate.control_port,
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                "node was installed but control identity provisioning failed; retry with the same node ID"
-            ) from exc
-        candidate.control_fingerprint = credentials.node_fingerprint
-        candidate.validate(path=f"nodes.{candidate.id}")
 
-        def register(state: AppState) -> None:
-            if any(item.id == candidate.id for item in state.nodes):
-                raise ValueError(f"managed node {candidate.id} already exists")
-            state.nodes.append(deepcopy(candidate))
+    def resume_node(
+        self,
+        node: NodeConfig,
+        *,
+        base_url: str,
+        confirm_fingerprint: Callable[[str], bool],
+        vk_cookie_source: str | None = None,
+    ) -> NodeSyncResult:
+        """Continue a node that was installed but never got its control identity."""
+        return self._onboarding().resume(
+            node,
+            base_url=base_url,
+            confirm_fingerprint=confirm_fingerprint,
+            vk_cookie_source=vk_cookie_source,
+        )
 
-        try:
-            self.state_updater(register)
-        except Exception as exc:
-            try:
-                uninstall_remote(candidate)
-                forget_credentials(candidate.id)
-            except Exception as cleanup_error:
-                raise RuntimeError("node registration failed and remote cleanup did not complete") from exc
-            raise
-        try:
-            if vk_cookie_source is not None:
-                self.import_vk_cookies(candidate.id, vk_cookie_source)
-            return self.refresh(candidate.id)
-        except Exception as exc:
-            raise RuntimeError("node was provisioned but its initial snapshot was not published") from exc
+    def _onboarding(self) -> NodeOnboarding:
+        # Dependencies are checked per entry point, not here: a node whose configuration is
+        # invalid or already managed must be rejected on its own merits, and resuming does
+        # not need the cleanup callbacks an install does.
+        return NodeOnboarding(
+            state_reader=self.state_reader,
+            state_updater=self.state_updater,
+            bootstrap=self.bootstrap,
+            uninstall_remote=self.uninstall_remote,
+            forget_node_credentials=self.forget_node_credentials,
+            refresh=self.refresh,
+            import_remote_cookies=self.import_remote_cookies,
+        )
 
     def remove_node(self, node_id: str, *, confirmed: bool) -> dict[str, object]:
         if type(confirmed) is not bool or not confirmed:
@@ -263,7 +210,10 @@ class NodeManager:
         last_error = diagnostics.get("last_error", "")
         if not isinstance(last_error, str):
             last_error = ""
+        installed = health.get("revision")
+        installed = installed[:64] if isinstance(installed, str) and installed.isprintable() else ""
         if self.observations_store is not None:
+            upgrade = _upgrade_state(node, installed)
             if last_error:
                 # The node answered, so this is not a connectivity problem: it is the
                 # node's own last apply failure, which is what the operator must see.
@@ -275,12 +225,14 @@ class NodeManager:
                     message=last_error[:2048],
                     applied_generation=generation,
                     target_revision=node.revision,
+                    **upgrade,
                 )
             else:
                 self.observations_store.succeeded(
                     node_id,
                     applied_generation=generation,
                     target_revision=node.revision,
+                    **upgrade,
                 )
         return {
             "ok": True,
@@ -288,6 +240,7 @@ class NodeManager:
             "generation": generation,
             "contract_version": NODE_CONTRACT_VERSION,
             "last_error": last_error[:2048],
+            "installed_revision": installed,
         }
 
     def refresh(self, node_id: str, *, force: bool = False) -> NodeSyncResult:
@@ -305,14 +258,16 @@ class NodeManager:
         if self.observations_store is None:
             return
         node = self._find_node(self.state_reader(), node_id)
-        self.observations_store.succeeded(
-            node_id,
-            applied_generation=node.generation,
-            published_generation=node.published_generation,
-            coverage=dict(result.coverage),
-            warnings=tuple(result.warnings),
-            target_revision=node.revision,
-        )
+        changes: dict[str, object] = {
+            "applied_generation": node.generation,
+            "published_generation": node.published_generation,
+            "coverage": dict(result.coverage),
+            "warnings": tuple(result.warnings),
+            "target_revision": node.revision,
+        }
+        if result.installed_revision:
+            changes.update(_upgrade_state(node, result.installed_revision))
+        self.observations_store.succeeded(node_id, **changes)
 
     def change_name(self, node_id: str, name: str, *, region: str | None = None) -> NodeConfig:
         result: NodeConfig | None = None
@@ -477,6 +432,23 @@ class NodeManager:
             if node.id == node_id:
                 return node
         raise ValueError(f"managed node {node_id} was not found")
+
+
+def _upgrade_state(node: NodeConfig, installed: str) -> dict[str, object]:
+    """Compare the revision the node reports with the one the base asked for.
+
+    Scheduling an upgrade only starts a worker; the operator needs the difference between
+    "asked for" and "running", and that difference is only visible from the node's own
+    revision marker.
+    """
+    if not installed:
+        return {"installed_revision": "", "upgrade": "unknown"}
+    if not node.revision:
+        return {"installed_revision": installed, "upgrade": ""}
+    return {
+        "installed_revision": installed,
+        "upgrade": "complete" if installed == node.revision else "pending",
+    }
 
 
 __all__ = ["NodeManager"]

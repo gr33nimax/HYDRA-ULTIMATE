@@ -563,3 +563,21 @@ def test_real_awg_plugin_serves_31_on_a_node_that_had_no_profiles():
     assert desktop["generation"]["RandomTrailers"] is True
     assert desktop["generation"]["DisableCookies"] is True
     assert desktop["generation"]["HeaderProtectionKey"]
+
+
+def test_installed_revision_is_read_from_the_nodes_own_marker(tmp_path):
+    """The base's copy of a revision is a target; only the marker says what runs."""
+    from hydra.services.nodes.reconcile import read_installed_revision
+
+    marker = tmp_path / ".hydra-source-revision"
+    # The updater writes the revision with a trailing newline; the reader strips it.
+    marker.write_text("b" * 40 + chr(10), encoding="utf-8")
+    assert read_installed_revision(marker) == "b" * 40
+
+    marker.write_text("", encoding="utf-8")
+    assert read_installed_revision(marker) == ""
+
+    marker.write_text("x" * 200, encoding="utf-8")
+    assert read_installed_revision(marker) == ""
+
+    assert read_installed_revision(tmp_path / "missing") == ""

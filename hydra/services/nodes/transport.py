@@ -34,6 +34,7 @@ class NodeControlOperations(Protocol):
     def export(self) -> NodeClientExport: ...
     def traffic_report(self) -> NodeTrafficReport: ...
     def diagnostics(self) -> dict[str, object]: ...
+    def installed_revision(self) -> str: ...
     def schedule_upgrade(self, *, branch: str, revision: str) -> dict[str, object]: ...
 
 
@@ -112,6 +113,10 @@ class _NodeControlHandler(BaseHTTPRequestHandler):
         server = self._control_server
         identity, operations = server.identity, server.operations
         if self.path == "/health":
+            try:
+                revision = str(operations.installed_revision() or "")[:64]
+            except Exception:
+                revision = ""
             self._send(
                 200,
                 {
@@ -119,6 +124,7 @@ class _NodeControlHandler(BaseHTTPRequestHandler):
                     "node_id": identity.node_id,
                     "generation": operations.current_generation(),
                     "contract_version": NODE_CONTRACT_VERSION,
+                    "revision": revision,
                 },
             )
             return
@@ -139,10 +145,7 @@ class _NodeControlHandler(BaseHTTPRequestHandler):
             try:
                 report = operations.traffic_report()
                 report.validate()
-                if (
-                    report.node_id != identity.node_id
-                    or report.generation != operations.current_generation()
-                ):
+                if report.node_id != identity.node_id or report.generation != operations.current_generation():
                     raise ValueError("traffic report is not current")
                 self._send(200, report.to_document())
             except Exception:

@@ -112,3 +112,47 @@ def test_real_install_menu_accepts_numeric_protocol_and_continue():
     read.assert_called_once_with("vless", app, NodeProtocolSpec())
     app.nodes.add_node.assert_called_once()
     assert app.nodes.add_node.call_args.args[0].protocols["vless"].enabled
+
+
+def test_a_failed_install_offers_to_continue_the_same_node_without_reinstalling():
+    """The recovery is offered where the failure happens, with the data already collected."""
+    app = _app()
+    values = ["de-1", "node.example.com", "22", "Germany", "DE", "main", "9444", "-"]
+    app.nodes.add_node.side_effect = RuntimeError("node was installed but control identity provisioning failed")
+    with (
+        patch.object(nodes_setup, "_input", side_effect=values),
+        patch("builtins.input", side_effect=["1", "2"]),
+        patch.object(nodes_setup, "read_protocol", return_value=NodeProtocolSpec(enabled=True)),
+        patch.object(nodes_setup, "confirm", return_value=True) as confirm,
+        patch.object(nodes_setup, "panel"),
+        patch.object(nodes_setup, "error"),
+        patch.object(nodes_setup, "success"),
+    ):
+        nodes_setup.install_node(AppState(), app)
+
+    app.nodes.resume_node.assert_called_once()
+    # The installer is not run a second time; the same node record is resumed.
+    assert app.nodes.resume_node.call_args.args[0].id == "de-1"
+    assert any("Продолжить подключение этой ноды?" in str(call) for call in confirm.call_args_list)
+
+
+def test_declining_the_continuation_offer_leaves_the_node_unmanaged():
+    app = _app()
+    values = ["de-1", "node.example.com", "22", "Germany", "DE", "main", "9444", "-"]
+    app.nodes.add_node.side_effect = RuntimeError("node was installed but control identity provisioning failed")
+    answers = {"Установить эту ноду?": True, "Продолжить подключение этой ноды?": False}
+
+    def answer(question, default=False):
+        return next((value for prefix, value in answers.items() if question.startswith(prefix)), default)
+
+    with (
+        patch.object(nodes_setup, "_input", side_effect=values),
+        patch("builtins.input", side_effect=["1", "2"]),
+        patch.object(nodes_setup, "read_protocol", return_value=NodeProtocolSpec(enabled=True)),
+        patch.object(nodes_setup, "confirm", side_effect=answer),
+        patch.object(nodes_setup, "panel"),
+        patch.object(nodes_setup, "error"),
+    ):
+        nodes_setup.install_node(AppState(), app)
+
+    app.nodes.resume_node.assert_not_called()

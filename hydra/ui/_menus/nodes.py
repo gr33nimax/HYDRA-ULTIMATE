@@ -238,6 +238,30 @@ def _coverage_row(node: NodeConfig, observation: object | None) -> str:
     return f"{base} · {counts}"
 
 
+def _short_revision(value: str) -> str:
+    return value[:12] if value else ""
+
+
+def _upgrade_row(node: NodeConfig, observation: object | None) -> str:
+    """What the node runs against what the base asked for.
+
+    Scheduling an upgrade only starts a worker, so "запланировано" and "выполнено" are
+    different answers and only the node's own revision marker can tell them apart.
+    """
+    installed = str(getattr(observation, "installed_revision", "") or "")
+    state = str(getattr(observation, "upgrade", "") or "")
+    target = _short_revision(node.revision)
+    if state == "complete":
+        return f"выполнено · установлено {_short_revision(installed)}"
+    if state == "pending":
+        return f"ожидает · установлено {_short_revision(installed)}, цель {target}"
+    if state == "scheduled":
+        return f"запланировано · цель {target}"
+    if installed:
+        return f"установлено {_short_revision(installed)}"
+    return f"не проверялось · цель {target}" if target else "не проверялось"
+
+
 def _node_summary(node: NodeConfig, observation: object | None) -> str:
     """One line per node in the list: what the operator needs before opening it."""
     if node.published_generation <= 0 or not node.published_digest:
@@ -268,7 +292,8 @@ def node_card(node: NodeConfig, app: ApplicationService) -> None:
                 kv("Связь:", _connection_row(observation)),
                 kv("Экспорт в подписки:", _coverage_row(node, observation)),
                 *([kv("Последняя ошибка:", reason)] if reason else []),
-                kv("Ветка/SHA:", f"{node.branch} / {node.revision}"),
+                kv("Ветка:", node.branch),
+                kv("Обновление программы:", _upgrade_row(node, observation)),
                 "Офлайн блокировки и общие квоты применяются с задержкой.",
             ],
             wrap=True,

@@ -33,6 +33,9 @@ class NodeSyncResult:
     # non-fatal gaps such as a transport whose prerequisites are unmet.
     coverage: dict[str, int] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
+    # The revision the node reports running, which is the only proof that an update
+    # actually landed: the base's own copy is a target, not a fact.
+    installed_revision: str = ""
 
 
 class NodeSnapshotReconciler:
@@ -58,7 +61,7 @@ class NodeSnapshotReconciler:
                 return NodeSyncResult(node_id, node.published_generation, "unchanged", node.published_digest)
 
             client = self.client_for(node)
-            self._check_health(client, node_id)
+            health = self._check_health(client, node_id)
             applied = client.apply(snapshot)
             if applied.get("generation") != snapshot.generation or not isinstance(applied.get("already_applied"), bool):
                 raise RuntimeError("node did not confirm the requested generation")
@@ -79,6 +82,7 @@ class NodeSnapshotReconciler:
                 stored.sha256,
                 coverage,
                 tuple(warnings),
+                _revision(health),
             )
 
     def _reserve_generation(
@@ -155,7 +159,7 @@ class NodeSnapshotReconciler:
         raise ValueError(f"managed node {node_id} was not found")
 
     @staticmethod
-    def _check_health(client: NodeControlPort, node_id: str) -> None:
+    def _check_health(client: NodeControlPort, node_id: str) -> dict:
         health = client.health()
         if (
             not isinstance(health.get("ok"), bool)
@@ -164,6 +168,7 @@ class NodeSnapshotReconciler:
             or health.get("contract_version") != NODE_CONTRACT_VERSION
         ):
             raise RuntimeError("node health or contract check failed")
+        return health
 
     @classmethod
     def _validate_export(
@@ -256,6 +261,14 @@ class NodeSnapshotReconciler:
             self.snapshot_store.delete(stored.node_id, generation, digest)
         except Exception:
             _LOGGER.warning("Old node export cleanup failed; published snapshot remains valid")
+
+
+def _revision(health: dict) -> str:
+    """Read the node's reported revision; an older node without the field is unknown."""
+    raw = health.get("revision")
+    if not isinstance(raw, str):
+        return ""
+    return raw[:64] if raw.isprintable() else ""
 
 
 __all__ = ["NodeSnapshotReconciler", "NodeSyncResult"]

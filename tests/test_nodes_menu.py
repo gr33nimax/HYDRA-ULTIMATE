@@ -201,3 +201,17 @@ def test_vk_cookies_are_offered_only_when_the_node_actually_uses_calls():
     with patch.object(nodes, "menu", side_effect=record), patch.object(nodes, "clear"), patch.object(nodes, "panel"):
         nodes.node_card(node, app)
         assert "8" in seen[-1]
+
+
+def test_upgrade_row_separates_a_scheduled_update_from_a_landed_one():
+    node = NodeConfig(id="uk-1", address="node.example.com", branch="dev", revision="a" * 40)
+
+    assert nodes._upgrade_row(node, None).startswith("не проверялось · цель")
+    assert nodes._upgrade_row(node, SimpleNamespace(upgrade="scheduled")).startswith("запланировано · цель")
+
+    pending = SimpleNamespace(upgrade="pending", installed_revision="b" * 40)
+    row = nodes._upgrade_row(node, pending)
+    assert row.startswith("ожидает · установлено bbbbbbbbbbbb, цель aaaaaaaaaaaa")
+
+    complete = SimpleNamespace(upgrade="complete", installed_revision="a" * 40)
+    assert nodes._upgrade_row(node, complete) == "выполнено · установлено aaaaaaaaaaaa"
