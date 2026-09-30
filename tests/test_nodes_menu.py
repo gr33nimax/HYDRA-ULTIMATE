@@ -121,3 +121,19 @@ def test_real_protocol_menu_accepts_numeric_action_and_protocol_keys(key):
         nodes._protocols(node, app)
     read.assert_called_once_with("vless", app, node.protocols["vless"])
     prompt.assert_not_called()
+
+
+def test_card_publication_row_says_whether_subscriptions_can_include_the_node():
+    from hydra.services.nodes import reconcile as _reconcile  # noqa: F401  (import keeps path honest)
+
+    offline = NodeConfig(id="uk-1", name="UK", address="node.example.com")
+    assert "не опубликован" in nodes._publication_row(offline)
+
+    published = NodeConfig(id="uk-1", address="node.example.com", generation=2, published_generation=2)
+    published.published_digest = "a" * 64
+    assert "поколение 2" in nodes._publication_row(published)
+    assert "не опубликован" not in nodes._publication_row(published)
+
+    pending = NodeConfig(id="uk-1", address="node.example.com", generation=3, published_generation=2)
+    pending.published_digest = "a" * 64
+    assert "ждёт подтверждения 3" in nodes._publication_row(pending)

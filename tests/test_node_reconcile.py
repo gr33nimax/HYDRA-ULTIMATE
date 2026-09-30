@@ -98,11 +98,13 @@ def test_snapshot_reset_epoch_clears_only_node_local_usage_and_report_is_absolut
     snapshot = NodeDesiredSnapshot(
         node_id="de-1",
         generation=4,
-        users=(NodeUserProjection(
-            email=user.email,
-            uuid=user.uuid,
-            traffic_reset_epoch=2,
-        ),),
+        users=(
+            NodeUserProjection(
+                email=user.email,
+                uuid=user.uuid,
+                traffic_reset_epoch=2,
+            ),
+        ),
     )
 
     reconciler.apply(snapshot)
@@ -130,11 +132,13 @@ def test_stale_traffic_reset_epoch_is_rejected_without_commit():
     snapshot = NodeDesiredSnapshot(
         node_id="de-1",
         generation=4,
-        users=(NodeUserProjection(
-            email=user.email,
-            uuid=user.uuid,
-            traffic_reset_epoch=2,
-        ),),
+        users=(
+            NodeUserProjection(
+                email=user.email,
+                uuid=user.uuid,
+                traffic_reset_epoch=2,
+            ),
+        ),
     )
 
     with pytest.raises(ValueError, match="reset epoch is stale"):
@@ -340,3 +344,187 @@ def test_upgrade_target_is_validated_before_scheduling():
     with pytest.raises(ValueError):
         reconciler.schedule_upgrade(branch="main;bad", revision=revision)
     assert scheduled == [("release/node", revision)]
+
+
+def test_reconcile_keeps_node_local_material_the_base_never_sent():
+    """A node's own profiles and keys must survive a desired-state refresh."""
+    state = AppState(
+        protocols={
+            "amneziawg": PluginState(
+                installed=True,
+                config={
+                    "profiles": {"desktop": {"obfuscation": {"S3": "20"}}},
+                    "server_private_key": "node-key",
+                },
+            ),
+        }
+    )
+    app = MagicMock()
+    app.protocols.list.return_value = [_transport("amneziawg")]
+    app.protocols.enabled_subscription_names.return_value = set()
+    reconciler = NodeReconciler("de-1", app, state_reader=lambda: state)
+
+    reconciler.apply(
+        NodeDesiredSnapshot(
+            node_id="de-1",
+            generation=1,
+            protocols={"amneziawg": NodeProtocolSpec(enabled=False, config={})},
+        )
+    )
+
+    config = state.protocols["amneziawg"].config
+    assert config["profiles"] == {"desktop": {"obfuscation": {"S3": "20"}}}
+    assert config["server_private_key"] == "node-key"
+
+
+def test_generation_switch_runs_through_the_plugin_owner_before_the_merge():
+    state = AppState(
+        protocols={
+            "amneziawg": PluginState(
+                installed=True,
+                config={"protocol_mode": "2.0", "profiles": {"desktop": {"obfuscation": {"S3": "0"}}}},
+            ),
+        }
+    )
+    plugin = _transport("amneziawg")
+    calls = []
+
+    def set_protocol_mode(current, mode):
+        # The owner is what lifts the paddings and creates the generation material.
+        current.protocols["amneziawg"].config["protocol_mode"] = mode
+        current.protocols["amneziawg"].config["profiles"]["desktop"]["obfuscation"]["S3"] = "20"
+        calls.append(mode)
+        return True
+
+    plugin.set_protocol_mode = set_protocol_mode
+    app = MagicMock()
+    app.protocols.list.return_value = [plugin]
+    app.protocols.enabled_subscription_names.return_value = set()
+    reconciler = NodeReconciler("de-1", app, state_reader=lambda: state)
+
+    reconciler.apply(
+        NodeDesiredSnapshot(
+            node_id="de-1",
+            generation=1,
+            protocols={"amneziawg": NodeProtocolSpec(enabled=True, config={"protocol_mode": "3.1"})},
+        )
+    )
+
+    assert calls == ["3.1"]
+    config = state.protocols["amneziawg"].config
+    assert config["protocol_mode"] == "3.1"
+    assert config["profiles"]["desktop"]["obfuscation"]["S3"] == "20"
+
+
+def test_vless_reality_switch_uses_the_plugin_owner_and_keeps_generated_keys():
+    state = AppState(protocols={"vless": PluginState(installed=True, config={"security": "tls"})})
+    plugin = _transport("vless")
+    calls = []
+
+    def set_security(current, mode, handshake="", domain="", short_id=""):
+        config = current.protocols["vless"].config
+        config["security"] = mode
+        config["reality_private_key"] = "generated-private"
+        config["reality_public_key"] = "generated-public"
+        config["reality_short_id"] = "abcd"
+        calls.append({"mode": mode, "handshake": handshake, "domain": domain})
+        return True
+
+    plugin.set_security = set_security
+    app = MagicMock()
+    app.protocols.list.return_value = [plugin]
+    app.protocols.enabled_subscription_names.return_value = set()
+    reconciler = NodeReconciler("de-1", app, state_reader=lambda: state)
+
+    reconciler.apply(
+        NodeDesiredSnapshot(
+            node_id="de-1",
+            generation=1,
+            protocols={
+                "vless": NodeProtocolSpec(
+                    enabled=True,
+                    config={"security": "reality", "domain": "cover.example.com", "xhttp_path": "/xhttp"},
+                )
+            },
+        )
+    )
+
+    assert calls == [{"mode": "reality", "handshake": "cover.example.com", "domain": "cover.example.com"}]
+    config = state.protocols["vless"].config
+    assert config["security"] == "reality"
+    assert config["reality_private_key"] == "generated-private"
+    assert config["reality_public_key"] == "generated-public"
+    assert config["xhttp_path"] == "/xhttp"
+
+
+def test_generation_switch_on_a_profile_less_node_materializes_through_the_owner():
+    """A node has no console: the plugin's rotation command creates the first profile."""
+    state = AppState(protocols={"amneziawg": PluginState(installed=True, config={"protocol_mode": "2.0"})})
+    plugin = _transport("amneziawg")
+    calls = []
+
+    def rotate_obfuscation(current, profile=None, preset=None):
+        current.protocols["amneziawg"].config["profiles"] = {
+            "desktop": {"obfuscation": {"S3": "0"}, "server_private_key": "key"},
+        }
+        calls.append(("rotate_obfuscation", profile))
+        return True
+
+    def set_protocol_mode(current, mode):
+        profiles = current.protocols["amneziawg"].config["profiles"]
+        profiles["desktop"]["obfuscation"]["S3"] = "20"
+        current.protocols["amneziawg"].config["protocol_mode"] = mode
+        calls.append(("set_protocol_mode", mode))
+        return True
+
+    plugin.rotate_obfuscation = rotate_obfuscation
+    plugin.set_protocol_mode = set_protocol_mode
+    app = MagicMock()
+    app.protocols.list.return_value = [plugin]
+    app.protocols.enabled_subscription_names.return_value = set()
+    reconciler = NodeReconciler("de-1", app, state_reader=lambda: state)
+
+    reconciler.apply(
+        NodeDesiredSnapshot(
+            node_id="de-1",
+            generation=1,
+            protocols={"amneziawg": NodeProtocolSpec(enabled=True, config={"protocol_mode": "3.1"})},
+        )
+    )
+
+    assert calls == [("rotate_obfuscation", "desktop"), ("set_protocol_mode", "3.1")]
+    config = state.protocols["amneziawg"].config
+    assert config["protocol_mode"] == "3.1"
+    assert config["profiles"]["desktop"]["obfuscation"]["S3"] == "20"
+    assert config["profiles"]["desktop"]["server_private_key"] == "key"
+
+
+def test_real_awg_plugin_serves_31_on_a_node_that_had_no_profiles():
+    """End-to-end with the real plugin: no profile, mode 3.1, and the floor is respected."""
+    from hydra.plugins.amneziawg.plugin import AmneziaWGPlugin
+
+    plugin = AmneziaWGPlugin()
+    state = AppState(protocols={"amneziawg": PluginState(installed=True, config={})})
+    app = MagicMock()
+    app.protocols.list.return_value = [plugin]
+    app.protocols.enabled_subscription_names.return_value = set()
+    app.protocols.enable.side_effect = lambda current, name: setattr(current.protocols[name], "enabled", True) or True
+    reconciler = NodeReconciler("uk-1", app, state_reader=lambda: state)
+
+    reconciler.apply(
+        NodeDesiredSnapshot(
+            node_id="uk-1",
+            generation=1,
+            protocols={"amneziawg": NodeProtocolSpec(enabled=True, config={"protocol_mode": "3.1"})},
+        )
+    )
+
+    config = state.protocols["amneziawg"].config
+    desktop = config["profiles"]["desktop"]
+    paddings = desktop["obfuscation"]
+    assert config["protocol_mode"] == "3.1"
+    # The whole point: header protection reads every padding as its nonce.
+    assert all(int(paddings[field]) >= 12 for field in ("S1", "S2", "S3", "S4"))
+    assert desktop["generation"]["RandomTrailers"] is True
+    assert desktop["generation"]["DisableCookies"] is True
+    assert desktop["generation"]["HeaderProtectionKey"]

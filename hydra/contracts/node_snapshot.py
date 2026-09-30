@@ -47,6 +47,32 @@ def is_node_local_secret_key(key: str) -> bool:
     return any(marker in normalized for marker in _NODE_LOCAL_SECRET_MARKERS)
 
 
+# Config a node generates for itself. The desired state owns public parameters, so
+# replacing the whole config with the base's copy would delete local material the
+# base never sent: AmneziaWG profiles and their generation, or the certificate and
+# Reality keypair a plugin prepared. AmneziaWG is the sharp case — its profiles
+# carry the paddings that the third generation reads as the header-protection
+# nonce, and losing them turns every apply into "Режим 3.1: S3=0 меньше 12".
+NODE_LOCAL_MATERIAL_KEYS: dict[str, frozenset[str]] = {
+    "amneziawg": frozenset({"profiles", "generation"}),
+    "vless": frozenset({"cert_file", "key_file", "reality_private_key", "reality_public_key", "reality_short_id"}),
+    "vless_cdn": frozenset(
+        {"cert_file", "key_file", "encryption_private_key", "encryption_public_key", "uplink_data_key"}
+    ),
+    "anytls": frozenset({"cert_file", "key_file"}),
+    "trusttunnel": frozenset({"cert_file", "key_file"}),
+    "hysteria2": frozenset({"cert_file", "key_file"}),
+    "naive": frozenset({"cert_file", "key_file"}),
+    "shadowtls": frozenset({"cert_file", "key_file"}),
+    "mtproto_zig": frozenset({"cert_file", "key_file", "web_cert_file", "web_key_file"}),
+}
+
+
+def is_node_local_material_key(protocol: str, key: str) -> bool:
+    """Whether a node owns this config key and the base must not overwrite it."""
+    return key in NODE_LOCAL_MATERIAL_KEYS.get(protocol, frozenset())
+
+
 def _reject_node_local_secrets(value: object, *, label: str) -> None:
     if isinstance(value, dict):
         for key, nested in value.items():
@@ -264,7 +290,9 @@ class NodeDesiredSnapshot:
 
 
 __all__ = [
+    "NODE_LOCAL_MATERIAL_KEYS",
     "NodeDesiredSnapshot",
     "NodeProtocolSpec",
     "NodeUserProjection",
+    "is_node_local_material_key",
 ]

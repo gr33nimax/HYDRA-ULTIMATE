@@ -151,8 +151,17 @@ def _upgrade(node: NodeConfig, app: ApplicationService) -> None:
     success(f"Обновление {result['status']}; это не подтверждение завершения")
 
 
+def _publication_row(node: NodeConfig) -> str:
+    """Subscription inclusion depends on a confirmed export, not on reachability."""
+    if node.published_generation <= 0 or not node.published_digest:
+        return "не опубликован — профили этой ноды в подписки не попадут"
+    if node.generation > node.published_generation:
+        return f"опубликовано поколение {node.published_generation}; ждёт подтверждения {node.generation}"
+    return f"опубликовано поколение {node.published_generation}"
+
+
 def node_card(node: NodeConfig, app: ApplicationService) -> None:
-    observation = "не проверена"
+    observation = "не выполнялась (пункт 4)"
     while True:
         state = app.admin.load_state()
         current = next((item for item in app.nodes.list_nodes(state) if item.id == node.id), None)
@@ -166,7 +175,8 @@ def node_card(node: NodeConfig, app: ApplicationService) -> None:
                 kv("Имя:", node.name or node.id),
                 kv("Регион:", node.region),
                 kv("Адрес управления:", f"{node.address}:{node.control_port}"),
-                kv("Связь:", observation),
+                kv("Проверка связи:", observation),
+                kv("Экспорт в подписки:", _publication_row(node)),
                 kv("Ветка/SHA:", f"{node.branch} / {node.revision}"),
                 "Офлайн блокировки и общие квоты применяются с задержкой.",
             ],

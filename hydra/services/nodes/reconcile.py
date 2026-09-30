@@ -18,10 +18,11 @@ from hydra.contracts.node_traffic import NodeTrafficReport, NodeTrafficUsage
 from hydra.contracts.node_snapshot import (
     NodeDesiredSnapshot,
     NodeProtocolSpec,
+    is_node_local_material_key,
     is_node_local_secret_key,
 )
 from hydra.contracts.node_validation import checked_node_branch, checked_node_revision
-from hydra.core.state_models import AppState, User, get_protocol
+from hydra.core.state_models import AppState, PluginState, User, get_protocol
 from hydra.plugins.base import PluginCategory
 from hydra.services.application import ApplicationService
 from hydra.services.node_traffic_accounting import (
@@ -259,7 +260,14 @@ class NodeReconciler:
             enabled = bool(spec and spec.enabled)
             protocol = get_protocol(state, name)
             if spec is not None:
-                merged = _merge_local_secrets(protocol.config, spec.config)
+                if name != "calls" and enabled and not protocol.installed:
+                    protocol.enabled = False
+                    if not self.application.protocols.install(state, name):
+                        raise RuntimeError(f"protocol {name} installation failed")
+                    protocol.installed = True
+                    protocol = get_protocol(state, name)
+                self._apply_owned_transitions(state, name, plugin, spec, protocol)
+                merged = _merge_local_settings(name, protocol.config, spec.config)
                 if protocol.config != merged or protocol.port != spec.port:
                     protocol.config = merged
                     protocol.port = spec.port
@@ -272,11 +280,6 @@ class NodeReconciler:
                     raise RuntimeError("node VK pool lifecycle failed")
                 config_changed = False
                 continue
-            if enabled and not protocol.installed:
-                protocol.enabled = False
-                if not self.application.protocols.install(state, name):
-                    raise RuntimeError(f"protocol {name} installation failed")
-                protocol.installed = True
             protocol = get_protocol(state, name)
             if enabled and not protocol.enabled:
                 if not self.application.protocols.enable(state, name):
@@ -289,6 +292,57 @@ class NodeReconciler:
         if config_changed and not self.application.apply(state):
             message = self.application.apply_error() or "node protocol configuration apply failed"
             raise RuntimeError(message)
+
+    def _apply_owned_transitions(
+        self,
+        state: AppState,
+        name: str,
+        plugin: object,
+        spec: NodeProtocolSpec,
+        protocol: PluginState,
+    ) -> None:
+        """Switch node-owned modes through their owner instead of writing plain config.
+
+        AmneziaWG generation and the VLESS TLS/Reality switch both prepare local
+        material — the padding floor, the header-protection key, the Reality
+        keypair. Writing only the key leaves the mode without that material, which
+        is what made a node apply fail with ``Режим 3.1: S3=0 меньше 12``.
+        """
+        if name == "amneziawg":
+            desired_mode = str(spec.config.get("protocol_mode", "") or "")
+            if desired_mode and desired_mode != str(protocol.config.get("protocol_mode", "") or ""):
+                if not self._awg_has_profiles(protocol):
+                    # The generation switch itself refuses a host without a profile, and a
+                    # node has no console to create one. Materialize the desktop profile
+                    # through the plugin's own rotation command — the same step the base
+                    # wizard takes before it switches the generation.
+                    self._run_plugin_transition(plugin, "rotate_obfuscation", state, profile="desktop")
+                self._run_plugin_transition(plugin, "set_protocol_mode", state, mode=desired_mode)
+        elif name == "vless":
+            desired_security = str(spec.config.get("security", "") or "")
+            if desired_security and desired_security != str(protocol.config.get("security", "") or ""):
+                domain = str(spec.config.get("domain", "") or "")
+                self._run_plugin_transition(
+                    plugin,
+                    "set_security",
+                    state,
+                    mode=desired_security,
+                    handshake=domain,
+                    domain=domain,
+                )
+
+    @staticmethod
+    def _awg_has_profiles(protocol: PluginState) -> bool:
+        profiles = protocol.config.get("profiles")
+        return isinstance(profiles, dict) and bool(profiles)
+
+    @staticmethod
+    def _run_plugin_transition(plugin: object, command: str, state: AppState, **parameters: object) -> None:
+        handler = getattr(plugin, command, None)
+        if not callable(handler):
+            raise RuntimeError(f"protocol {getattr(plugin.meta, 'name', '?')} cannot {command}")
+        if not handler(state, **parameters):
+            raise RuntimeError(f"protocol {getattr(plugin.meta, 'name', '?')} rejected {command}")
 
     def _restore_after_failure(self, state: AppState, previous: AppState) -> None:
         from hydra.services.configuration import restore_state_in_place
@@ -334,15 +388,15 @@ class NodeReconciler:
             _LOGGER.error("Node snapshot rollback failed; original error preserved")
 
 
-def _merge_local_secrets(local: dict, desired: dict) -> dict:
-    """Keep node-generated credentials local when replacing protocol settings."""
+def _merge_local_settings(protocol_name: str, local: dict, desired: dict) -> dict:
+    """Replace public settings while keeping node-owned secrets and material."""
     merged = copy.deepcopy(desired)
     for key, value in local.items():
-        if is_node_local_secret_key(key):
+        if is_node_local_secret_key(key) or is_node_local_material_key(protocol_name, key):
             merged[key] = copy.deepcopy(value)
         elif isinstance(value, dict):
             child = merged.get(key)
-            preserved = _merge_local_secrets(value, child if isinstance(child, dict) else {})
+            preserved = _merge_local_settings(protocol_name, value, child if isinstance(child, dict) else {})
             if preserved:
                 merged[key] = preserved
     return merged
