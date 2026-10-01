@@ -111,7 +111,7 @@ def valid_node_address(address: str) -> bool:
 def install_node(
     *,
     host: HostBackend,
-    script: str,
+    script: str | Callable[[], str],
     known_hosts_root: Path,
     node_id: str,
     address: str,
@@ -122,7 +122,12 @@ def install_node(
     ssh_user: str = "root",
     auth: SshPasswordAuth | None = None,
 ) -> str:
-    """Confirm the scanned host key, pin it, then stream the installer over SSH."""
+    """Confirm the scanned host key, pin it, then stream the installer over SSH.
+
+    ``script`` may be a provider, so a caller that has to fetch the installer for the
+    pinned revision fetches it only once the operator confirmed the host key — nothing
+    external happens before that consent.
+    """
     checked_node_id(node_id, context="node_id")
     if not isinstance(address, str) or not valid_node_address(address):
         raise ValueError("address must be an IP address or DNS hostname")
@@ -172,6 +177,9 @@ def install_node(
         known_hosts=known_hosts,
         auth=auth,
     )
+    payload = script() if callable(script) else script
+    if not isinstance(payload, str) or not payload.strip():
+        raise ValueError("bootstrap script must not be empty")
     target = ssh_target(ssh_user, address)
     remote = remote_command(
         ssh_user,
@@ -200,7 +208,7 @@ def install_node(
             target,
             remote,
         ],
-        input=script,
+        input=payload,
         timeout=900,
         text=True,
         capture_output=False,

@@ -1,10 +1,12 @@
 from contextlib import contextmanager
+from typing import cast
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
 
 from hydra.contracts.node_snapshot import NodeProtocolSpec
+from hydra.core.host import HostBackend
 from hydra.core.state_models import AppState
 from hydra.core.state_nodes import NodeConfig
 from hydra.plugins.base import PluginCategory
@@ -264,3 +266,62 @@ def test_the_plan_shows_the_technical_id_not_the_name(capsys):
     id_line = next(line for line in output.splitlines() if "ID:" in line)
     assert "uk-1" in id_line
     assert "Великобритания" not in id_line
+
+
+def test_editing_the_branch_resolves_that_branch_commit():
+    """A SHA belongs to its branch: editing one alone once installed the wrong tree."""
+    app = _app()
+    node = NodeConfig(id="uk-1", name="UK", address="194.147.35.112", branch="main", revision="a" * 40)
+    with (
+        patch.object(nodes_setup, "ask", return_value="dev"),
+        patch.object(nodes_setup, "success"),
+    ):
+        nodes_setup._edit_branch(node, app)
+    app.nodes.resolve_revision.assert_called_once_with("dev")
+    assert node.branch == "dev"
+    assert node.revision == SHA
+
+
+def test_a_failed_branch_resolution_leaves_branch_and_commit_alone():
+    app = _app()
+    app.nodes.resolve_revision.side_effect = RuntimeError("github down")
+    node = NodeConfig(id="uk-1", name="UK", address="194.147.35.112", branch="main", revision="a" * 40)
+    with patch.object(nodes_setup, "ask", return_value="dev"), patch.object(nodes_setup, "error") as error:
+        nodes_setup._edit_branch(node, app)
+    assert node.branch == "main"
+    assert node.revision == "a" * 40
+    assert error.called
+
+
+def test_the_plan_is_installed_with_the_script_of_its_own_revision():
+    """The installer must come from the pinned commit, not from the base's checkout."""
+    from hydra.services.nodes.bootstrap import NodeBootstrap
+
+    requested: list[str] = []
+
+    class FakeHost:
+        pass
+
+    bootstrap = NodeBootstrap(host=cast(HostBackend, FakeHost()), script="#!/bin/sh\necho base\n")
+    with (
+        patch.object(
+            bootstrap,
+            "bootstrap_script",
+            side_effect=lambda revision: requested.append(revision) or "#!/bin/sh\necho pinned\n",
+        ),
+        patch("hydra.services.nodes.bootstrap.install_node") as install,
+    ):
+        bootstrap.install(
+            node_id="uk-1",
+            address="194.147.35.112",
+            ssh_port=22,
+            branch="dev",
+            revision="b" * 40,
+            confirm_fingerprint=lambda value: True,
+        )
+        provider = install.call_args.kwargs["script"]
+        # A provider, not a value: the installer is fetched only when it is streamed,
+        # so a refused host key causes no download at all.
+        assert callable(provider)
+        assert provider() == "#!/bin/sh\necho pinned\n"
+        assert requested == ["b" * 40]

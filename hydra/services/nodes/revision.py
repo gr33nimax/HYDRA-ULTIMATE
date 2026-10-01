@@ -10,6 +10,35 @@ from hydra.contracts.node_validation import checked_node_branch, checked_node_re
 
 
 MAX_REVISION_RESPONSE_BYTES = 65536
+MAX_BOOTSTRAP_SCRIPT_BYTES = 262144
+_BOOTSTRAP_MARKER = "HYDRA_ROLE"
+
+
+def fetch_bootstrap_script(revision: str) -> str:
+    """Read the installer exactly as it is at the revision being installed.
+
+    The base streams its own bootstrap script to the node, but the node downloads its
+    tree from the pinned revision. Those two must be the same commit: a base running a
+    newer branch once installed a script that referenced a file the older tree did not
+    contain yet, and the install died on `install: cannot stat`. Taking the script from
+    the revision removes that class of mismatch entirely.
+    """
+    revision = checked_node_revision(revision, context="revision")
+    request = urllib.request.Request(
+        f"https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/{revision}/bootstrap.sh",
+        headers={"Accept": "text/plain", "User-Agent": "HYDRA-Node-Installer"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            raw = response.read(MAX_BOOTSTRAP_SCRIPT_BYTES + 1)
+        if len(raw) > MAX_BOOTSTRAP_SCRIPT_BYTES:
+            raise ValueError("installer script exceeds the supported limit")
+        script = raw.decode("utf-8")
+    except Exception as exc:
+        raise ValueError("Не удалось получить установочный скрипт выбранной ревизии из GitHub") from exc
+    if _BOOTSTRAP_MARKER not in script or not script.startswith("#!"):
+        raise ValueError("Установочный скрипт выбранной ревизии выглядит повреждённым")
+    return script
 
 
 def resolve_branch_revision(branch: str) -> str:

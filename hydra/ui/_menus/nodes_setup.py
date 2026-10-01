@@ -322,16 +322,35 @@ def _edit_plan(node: NodeConfig, app: ApplicationService) -> None:
             except ValueError:
                 error("Порты должны быть числами")
     elif choice == "4":
-        branch = _ask_required("Ветка", node.branch)
-        if branch:
-            try:
-                node.branch = checked_node_branch(branch, context="branch")
-            except ValueError as exc:
-                error(str(exc))
+        _edit_branch(node, app)
     try:
         node.validate()
     except ValueError as exc:
         error(f"Данные не сохранены: {exc}")
+
+
+def _edit_branch(node: NodeConfig, app: ApplicationService) -> None:
+    """Change the branch and the commit together: a SHA belongs to its branch.
+
+    Editing the branch alone once installed the newer branch's script against the older
+    branch's tree, and the install stopped on a file that did not exist yet.
+    """
+    branch = _ask_required("Ветка", node.branch)
+    if not branch:
+        return
+    try:
+        candidate = checked_node_branch(branch, context="branch")
+    except ValueError as exc:
+        error(str(exc))
+        return
+    if candidate == node.branch:
+        return
+    resolved = resolve_revision(app, candidate)
+    if resolved is None:
+        error("Ветка не изменена: SHA новой ветки не получен")
+        return
+    node.branch, node.revision = candidate, resolved
+    success(f"Ветка {candidate}, коммит {resolved[:12]}")
 
 
 def _report(log: InstallLog, node: NodeConfig, result: object) -> None:

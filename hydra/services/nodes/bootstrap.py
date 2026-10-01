@@ -31,7 +31,7 @@ from hydra.services.nodes.credentials import (
 )
 
 
-from hydra.services.nodes.revision import resolve_branch_revision
+from hydra.services.nodes.revision import fetch_bootstrap_script, resolve_branch_revision
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,6 +57,10 @@ class NodeBootstrap:
     def resolve_revision(self, branch: str) -> str:
         return resolve_branch_revision(branch)
 
+    def bootstrap_script(self, revision: str) -> str:
+        """The installer for the revision being installed, not the base's own copy."""
+        return fetch_bootstrap_script(revision)
+
     def install(
         self,
         *,
@@ -71,7 +75,9 @@ class NodeBootstrap:
     ) -> str:
         return install_node(
             host=self.host,
-            script=self.script,
+            # Fetched when the installer is actually streamed, so a refused host key
+            # never causes a download and the script always matches the target revision.
+            script=lambda: self.bootstrap_script(revision),
             known_hosts_root=self.known_hosts_root,
             node_id=node_id,
             address=address,
