@@ -325,3 +325,20 @@ def test_the_plan_is_installed_with_the_script_of_its_own_revision():
         assert callable(provider)
         assert provider() == "#!/bin/sh\necho pinned\n"
         assert requested == ["b" * 40]
+
+
+def test_a_branch_without_the_node_role_is_refused_before_the_plan():
+    """A branch that predates the node role would fail only after touching the VPS."""
+    app = _app()
+    app.nodes.supports_node_mode.return_value = False
+    with patch.object(nodes_setup, "error") as error:
+        assert nodes_setup.resolve_revision(app, "main") is None
+    assert "не содержит режим ноды" in str(error.call_args)
+    app.nodes.resolve_revision.assert_called_once_with("main")
+
+
+def test_a_branch_with_the_node_role_resolves_normally():
+    app = _app()
+    app.nodes.supports_node_mode.return_value = True
+    assert nodes_setup.resolve_revision(app, "dev") == SHA
+    app.nodes.supports_node_mode.assert_called_once_with(SHA)

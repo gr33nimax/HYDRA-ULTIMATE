@@ -109,10 +109,14 @@ def read_protocol(name: str, app: ApplicationService, previous: NodeProtocolSpec
 
 def resolve_revision(app: ApplicationService, branch: str) -> str | None:
     try:
-        return checked_node_revision(app.nodes.resolve_revision(branch), context="revision")
+        revision = checked_node_revision(app.nodes.resolve_revision(branch), context="revision")
     except Exception:
         error("Не удалось получить SHA из GitHub. Проверь имя ветки и доступ к GitHub; операция не начата.")
         return None
+    if not app.nodes.supports_node_mode(revision):
+        error(f"Ветка {branch} не содержит режим ноды. Выбери ветку с ним (например dev); операция не начата.")
+        return None
+    return revision
 
 
 def _check_subscription_ready(state: AppState, app: ApplicationService) -> None:

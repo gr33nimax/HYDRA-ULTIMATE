@@ -31,6 +31,7 @@ from hydra.services.nodes.observation import (
     record_sync,
 )
 from hydra.services.nodes.reconciler import NodeSnapshotReconciler, NodeSyncResult
+from hydra.services.nodes.revision import revision_supports_node_mode
 from hydra.services.nodes.snapshot_store import NodeSnapshotStore
 from hydra.services.nodes.ssh_auth import SshPasswordAuth
 from hydra.services.node_traffic_accounting import apply_node_traffic_reports
