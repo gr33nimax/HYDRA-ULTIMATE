@@ -97,6 +97,9 @@ class NodeManager:
             raise RuntimeError("node branch resolution is unavailable")
         return checked_node_revision(self.bootstrap.resolve_revision(branch), context="revision")
 
+    def supports_node_mode(self, revision: str) -> bool:
+        return revision_supports_node_mode(revision)
+
     def published_export(self, state: AppState, node_id: str) -> NodeClientExport | None:
         node = self._find_node(state, node_id)
         if node.withdrawn or node.published_generation <= 0 or not node.published_digest:
@@ -129,6 +132,8 @@ class NodeManager:
         base_url: str,
         confirm_fingerprint: Callable[[str], bool],
         vk_cookie_source: str | None = None,
+        auth: SshPasswordAuth | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> NodeSyncResult:
         """Continue a node that was installed but never got its control identity."""
         return self._onboarding().resume(
@@ -136,6 +141,8 @@ class NodeManager:
             base_url=base_url,
             confirm_fingerprint=confirm_fingerprint,
             vk_cookie_source=vk_cookie_source,
+            auth=auth,
+            progress=progress,
         )
 
     def _onboarding(self) -> NodeOnboarding:

@@ -773,6 +773,45 @@ def test_resume_connects_an_installed_node_without_running_the_installer_again(t
     assert saved.published_generation == 1
 
 
+def test_resume_forwards_password_channel_and_progress_to_real_onboarding(tmp_path, monkeypatch):
+    from hydra.services.nodes.ssh_auth import SshPasswordAuth
+
+    state_module.save_state(AppState(users=[User(email="alice@example.com", uuid="user-1")]))
+    client = FakeControlClient()
+    bootstrap = FakeNodeBootstrap()
+    provision = bootstrap.provision_control_identity
+    used_auth = []
+
+    def provision_with_auth(**kwargs):
+        used_auth.append(kwargs["auth"])
+        return provision(**kwargs)
+
+    monkeypatch.setattr(bootstrap, "provision_control_identity", provision_with_auth)
+    manager = _manager(tmp_path, client, bootstrap=bootstrap)
+    auth = SshPasswordAuth("test-password")  # Not started: the fake never opens SSH.
+    stages = []
+    node = NodeConfig(
+        id="de-1",
+        address="node.example.com",
+        revision="a" * 40,
+        protocols={"vless": NodeProtocolSpec(enabled=True, port=443)},
+    )
+
+    result = manager.resume_node(
+        node,
+        base_url="https://base.example.com:9444",
+        confirm_fingerprint=lambda fingerprint: True,
+        auth=auth,
+        progress=stages.append,
+    )
+
+    assert result.status == "published"
+    assert used_auth == [auth]
+    assert stages == ["ssh", "identity", "register", "publish"]
+    assert bootstrap.install_request is None
+    assert state_module.load_state().nodes[0].published_generation == 1
+
+
 def test_resume_refuses_a_node_that_is_already_managed(tmp_path):
     _saved_node_state()
     manager = _manager(tmp_path, FakeControlClient())

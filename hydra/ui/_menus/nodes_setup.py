@@ -58,7 +58,9 @@ class InstallLog:
             print(f"  [>>] {STAGE_TEXT[name]}")
 
     def failure(self, exc: BaseException) -> str:
-        """The stage after the last confirmed one is the one that failed."""
+        """A failure before the first reported host stage is still preparation."""
+        if not self.done:
+            return f"Подготовка установки: {exc if str(exc) else type(exc).__name__}"
         if self.failed:
             return self.failed
         remaining = [name for name in STAGE_ORDER if name not in self.done]
