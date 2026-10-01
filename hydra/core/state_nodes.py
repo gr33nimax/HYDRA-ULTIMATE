@@ -24,6 +24,13 @@ MAX_NODE_TEXT = 253
 MAX_BRANCH_TEXT = 128
 MAX_REVISION_TEXT = 64
 
+# A node is either serving its users or deliberately withdrawn from subscriptions.
+# Withdrawal is desired configuration: it must survive a restart and must not be
+# undone by the next scheduled sync, so it lives in state instead of a UI flag.
+MANAGEMENT_ACTIVE = "active"
+MANAGEMENT_WITHDRAWN = "withdrawn"
+MANAGEMENT_STATES = (MANAGEMENT_ACTIVE, MANAGEMENT_WITHDRAWN)
+
 
 def _text(value: object, *, path: str, limit: int = MAX_NODE_TEXT) -> str:
     if not isinstance(value, str):
@@ -52,9 +59,19 @@ class NodeConfig:
     address: str = ""
     control_port: int = NODE_CONTROL_PORT
     ssh_port: int = 22
+    # The account HYDRA logs into for installation and cleanup. It is not a secret and
+    # stays in desired configuration; the password never does.
+    ssh_user: str = "root"
     control_fingerprint: str = ""
     branch: str = "main"
     revision: str = ""
+    # Operator-facing ID shown in menus and subscriptions. The technical ``id`` stays
+    # the identity of credentials, exports and traffic accounting, so renaming this
+    # never touches trust or accounting.
+    display_id: str = ""
+    # ``active`` or ``withdrawn``; withdrawn keeps the node managed but stops serving
+    # users and client profiles until the operator explicitly restores it.
+    management: str = MANAGEMENT_ACTIVE
     generation: int = 0
     # Generation whose client export is published in subscriptions. Until a node
     # confirms an apply this stays behind ``generation``, so a subscription keeps
@@ -76,11 +93,17 @@ class NodeConfig:
             raise ValueError(f"{path}.control_port must be 1..65535")
         if type(self.ssh_port) is not int or not 1 <= self.ssh_port <= 65535:
             raise ValueError(f"{path}.ssh_port must be 1..65535")
+        _text(self.ssh_user, path=f"{path}.ssh_user", limit=64)
+        if not self.ssh_user:
+            raise ValueError(f"{path}.ssh_user is required")
         fingerprint = self.control_fingerprint.replace(":", "")
         if fingerprint and not re.fullmatch(r"[0-9a-fA-F]{64}", fingerprint):
             raise ValueError(f"{path}.control_fingerprint must be a SHA-256 fingerprint")
         _text(self.branch, path=f"{path}.branch", limit=MAX_BRANCH_TEXT)
         _text(self.revision, path=f"{path}.revision", limit=MAX_REVISION_TEXT)
+        _text(self.display_id, path=f"{path}.display_id")
+        if self.management not in MANAGEMENT_STATES:
+            raise ValueError(f"{path}.management must be one of {', '.join(MANAGEMENT_STATES)}")
         _generation(self.generation, path=f"{path}.generation")
         _generation(self.published_generation, path=f"{path}.published_generation")
         if self.published_generation > self.generation:
@@ -135,9 +158,12 @@ class NodeConfig:
             address=raw.get("address", ""),
             control_port=raw.get("control_port", NODE_CONTROL_PORT),
             ssh_port=raw.get("ssh_port", 22),
+            ssh_user=raw.get("ssh_user", "root"),
             control_fingerprint=raw.get("control_fingerprint", ""),
             branch=raw.get("branch", "main"),
             revision=raw.get("revision", ""),
+            display_id=raw.get("display_id", ""),
+            management=raw.get("management", MANAGEMENT_ACTIVE),
             generation=raw.get("generation", 0),
             published_generation=raw.get("published_generation", 0),
             desired_digest=raw.get("desired_digest", ""),
@@ -148,8 +174,23 @@ class NodeConfig:
         node.validate(path=path)
         return node
 
+    @property
+    def label(self) -> str:
+        """Human-facing ID: the operator's alias, then the name, then the technical id."""
+        return self.display_id or self.name or self.id
+
+    @property
+    def withdrawn(self) -> bool:
+        return self.management == MANAGEMENT_WITHDRAWN
+
     def snapshot_protocols(self) -> dict[str, NodeProtocolSpec]:
-        """Return the protocol specs that travel to the node."""
+        """Return the protocol specs that travel to the node.
+
+        A withdrawn node must receive an empty runtime, otherwise the next scheduled
+        sync would put its users and transports back and silently undo the withdrawal.
+        """
+        if self.withdrawn:
+            return {}
         return dict(self.protocols)
 
 
@@ -161,6 +202,17 @@ def _reject_duplicate_ids(nodes: list[NodeConfig]) -> None:
         seen.add(node.id)
 
 
+def _reject_duplicate_labels(nodes: list[NodeConfig]) -> None:
+    """Visible IDs identify a node to the operator, so two nodes cannot share one."""
+    seen: dict[str, str] = {}
+    for node in nodes:
+        label = node.label.casefold()
+        other = seen.get(label)
+        if other is not None:
+            raise ValueError(f"nodes {other} and {node.id} share the visible id {node.label}")
+        seen[label] = node.id
+
+
 def validate_nodes(nodes: object) -> None:
     """Validate the typed aggregate before it is persisted or applied."""
     if not isinstance(nodes, list):
@@ -170,6 +222,7 @@ def validate_nodes(nodes: object) -> None:
             raise ValueError("state field 'nodes' must contain node definitions")
         node.validate(path=f"nodes.{node.id or '?'}")
     _reject_duplicate_ids(nodes)
+    _reject_duplicate_labels(nodes)
 
 
 def validate_raw_nodes(value: object) -> None:
@@ -178,6 +231,14 @@ def validate_raw_nodes(value: object) -> None:
         raise ValueError("state field 'nodes' must be a list")
     nodes = [NodeConfig.from_raw(raw, path=f"nodes[{index}]") for index, raw in enumerate(value)]
     _reject_duplicate_ids(nodes)
+    _reject_duplicate_labels(nodes)
 
 
-__all__ = ["NodeConfig", "validate_nodes", "validate_raw_nodes"]
+__all__ = [
+    "MANAGEMENT_ACTIVE",
+    "MANAGEMENT_STATES",
+    "MANAGEMENT_WITHDRAWN",
+    "NodeConfig",
+    "validate_nodes",
+    "validate_raw_nodes",
+]

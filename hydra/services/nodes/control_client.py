@@ -21,6 +21,19 @@ class NodeControlError(RuntimeError):
     """A control request failed or the peer was not the expected node."""
 
 
+class NodeContactError(NodeControlError):
+    """The node could not be reached, or its answer could not be trusted.
+
+    Transport failures, a wrong certificate and a mismatched node id all mean the same
+    thing to the operator: there was no trustworthy contact. A remote rejection is a
+    different fact and must not be reported as unreachability.
+    """
+
+
+class NodeRejectedError(NodeControlError):
+    """The node answered and refused the request, with its own reason."""
+
+
 class NodeControlPort(Protocol):
     """Transport-neutral shape required by node orchestration services."""
 
@@ -70,7 +83,7 @@ class NodeControlClient:
         if payload is not None:
             body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             if len(body) > MAX_NODE_BODY_BYTES:
-                raise NodeControlError("control request exceeds the supported size")
+                raise NodeRejectedError("control request exceeds the supported size")
             headers["Content-Type"] = "application/json"
         connection = http.client.HTTPSConnection(
             self.host,
@@ -83,35 +96,35 @@ class NodeControlClient:
             if self.server_fingerprint:
                 peer = connection.sock.getpeercert(binary_form=True) if connection.sock else None
                 if not peer:
-                    raise NodeControlError("node certificate is missing")
+                    raise NodeContactError("node certificate is missing")
                 actual = hashlib.sha256(peer).hexdigest()
                 expected = self.server_fingerprint.replace(":", "").casefold()
                 if not hmac.compare_digest(actual, expected):
-                    raise NodeControlError("node certificate fingerprint does not match")
+                    raise NodeContactError("node certificate fingerprint does not match")
             connection.request(method, path, body=body, headers=headers)
             response = connection.getresponse()
             data = response.read(MAX_NODE_BODY_BYTES + 1)
             if len(data) > MAX_NODE_BODY_BYTES:
-                raise NodeControlError("control response exceeds the supported size")
+                raise NodeContactError("control response exceeds the supported size")
             try:
                 result = json.loads(data)
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-                raise NodeControlError("node returned an invalid control response") from exc
+                raise NodeContactError("node returned an invalid control response") from exc
             if not isinstance(result, dict):
-                raise NodeControlError("node returned an invalid control response")
+                raise NodeContactError("node returned an invalid control response")
             if response.status < 200 or response.status >= 300:
                 message = result.get("error")
                 reason = result.get("reason")
                 detail = str(message) if isinstance(message, str) else "node control request failed"
                 if isinstance(reason, str) and reason.strip():
                     detail = f"{detail}: {reason.strip()[:512]}"
-                raise NodeControlError(detail)
+                raise NodeRejectedError(detail)
             peer_id = result.get("node_id")
             if peer_id is not None and peer_id != self.node_id:
-                raise NodeControlError("control response node_id does not match the configured node")
+                raise NodeContactError("control response node_id does not match the configured node")
             return result
         except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
-            raise NodeControlError(f"node control request failed ({exc.__class__.__name__})") from exc
+            raise NodeContactError(f"node control request failed ({exc.__class__.__name__})") from exc
         finally:
             connection.close()
 

@@ -6,6 +6,8 @@ import pytest
 
 from hydra.core.state_models import AppState
 from hydra.core.state_nodes import NodeConfig
+import hydra.ui._menus.node_cookies as node_cookies
+import hydra.ui._menus.node_removal as node_removal
 import hydra.ui._menus.nodes as nodes
 
 
@@ -49,50 +51,65 @@ def test_cancel_install_before_ssh_does_not_mutate():
 def test_card_can_rename_offline_without_network_check():
     app = _app()
     with (
-        patch.object(nodes, "menu", side_effect=["1", "0"]),
-        patch.object(nodes, "prompt", side_effect=["Berlin", "DE"]),
+        patch.object(nodes, "menu", side_effect=["2", "2", "0"]),
+        patch.object(nodes, "ask", side_effect=["Berlin"]),
         patch.object(nodes, "clear"),
         patch.object(nodes, "panel"),
         patch.object(nodes, "success"),
     ):
         nodes.node_card(app.admin.load_state.return_value.nodes[0], app)
-    app.nodes.change_name.assert_called_once_with("de-1", "Berlin", region="DE")
+    app.nodes.set_appearance.assert_called_once_with("de-1", name="Berlin")
     app.nodes.check.assert_not_called()
+    app.nodes.change_update_target.assert_not_called()
 
 
-def test_delete_requires_exact_name_and_explicit_confirmation():
+def test_delete_requires_exact_name_and_explicit_numeric_confirmation():
     app = _app()
     node = app.admin.load_state.return_value.nodes[0]
     with (
-        patch.object(nodes, "prompt", return_value="wrong"),
-        patch.object(nodes, "confirm", return_value=True),
-        patch.object(nodes, "panel"),
-        patch.object(nodes, "error"),
+        patch.object(node_removal, "ask", return_value="wrong"),
+        patch.object(node_removal, "menu", return_value="1"),
+        patch.object(node_removal, "panel"),
+        patch.object(node_removal, "error"),
     ):
-        assert nodes.remove_node(node, app) is False
+        assert node_removal.remove_node(node, app) is False
     app.nodes.remove_node.assert_not_called()
     with (
-        patch.object(nodes, "prompt", return_value=node.name),
-        patch.object(nodes, "confirm", return_value=True),
-        patch.object(nodes, "panel"),
-        patch.object(nodes, "success"),
+        patch.object(node_removal, "ask", return_value=node.name),
+        patch.object(node_removal, "menu", return_value="0"),
+        patch.object(node_removal, "panel"),
+        patch.object(node_removal, "error"),
     ):
-        assert nodes.remove_node(node, app) is True
+        assert node_removal.remove_node(node, app) is False
+    app.nodes.remove_node.assert_not_called()
+    with (
+        patch.object(node_removal, "ask", return_value=node.name),
+        patch.object(node_removal, "menu", return_value="1"),
+        patch.object(node_removal, "panel"),
+        patch.object(node_removal, "success"),
+    ):
+        assert node_removal.remove_node(node, app) is True
     app.nodes.remove_node.assert_called_once_with(node.id, confirmed=True)
 
 
-def test_offline_protocol_editor_does_not_change_desired_settings():
+def test_offline_protocol_editor_does_not_save_or_apply_anything():
+    from hydra.contracts.node_snapshot import NodeProtocolSpec
+
     app = _app()
+    app.admin.load_state.return_value.nodes[0].protocols["vless"] = NodeProtocolSpec()
     app.nodes.check.side_effect = RuntimeError("offline")
     with (
-        patch.object(nodes, "menu", side_effect=["2", "0"]),
+        patch.object(nodes, "menu", side_effect=["1", "1", "1", "0", "0"]),
+        patch.object(nodes, "read_protocol", return_value=None),
         patch.object(nodes, "clear"),
         patch.object(nodes, "panel"),
         patch.object(nodes, "error"),
-        patch.object(nodes, "prompt"),
+        patch.object(nodes, "ask"),
     ):
         nodes.node_card(app.admin.load_state.return_value.nodes[0], app)
+    app.nodes.save_protocol.assert_not_called()
     app.nodes.change_protocol.assert_not_called()
+    app.nodes.check.assert_not_called()
 
 
 @pytest.mark.parametrize("key", ["1", " 1 "])
@@ -107,21 +124,28 @@ def test_real_menu_install_key_reaches_wizard(key):
     install.assert_called_once_with(app.admin.load_state.return_value, app)
 
 
-@pytest.mark.parametrize("key", ["2", "1"])
-def test_real_protocol_menu_accepts_numeric_action_and_protocol_keys(key):
+@pytest.mark.parametrize(
+    ("key", "steps"),
+    [
+        # "1" opens the configured transport; "2" adds one through the numeric picker.
+        ("1", ["1", "1", "0"]),
+        ("2", ["2", "1", "1", "0"]),
+    ],
+)
+def test_real_protocol_menu_accepts_numeric_action_and_protocol_keys(key, steps):
     app = _app()
     node = app.admin.load_state.return_value.nodes[0]
     from hydra.contracts.node_snapshot import NodeProtocolSpec
 
     node.protocols["vless"] = NodeProtocolSpec()
     with (
-        patch("builtins.input", side_effect=[key, "1", "0"] if key == "2" else [key, "0"]),
-        patch.object(nodes, "prompt") as prompt,
+        patch("builtins.input", side_effect=steps),
+        patch.object(nodes, "ask") as ask,
         patch.object(nodes, "read_protocol", return_value=None) as read,
     ):
         nodes._protocols(node, app)
     read.assert_called_once_with("vless", app, node.protocols["vless"])
-    prompt.assert_not_called()
+    ask.assert_not_called()
 
 
 def test_card_publication_row_says_whether_subscriptions_can_include_the_node():
@@ -170,16 +194,26 @@ def test_coverage_row_shows_which_transports_actually_produced_profiles():
     assert "calls: 0" in row
 
 
-def test_node_list_summary_never_calls_an_unpublished_node_ready():
+def test_node_list_line_never_calls_an_unchecked_or_unpublished_node_healthy():
     node = NodeConfig(id="uk-1", address="node.example.com")
-    assert nodes._node_summary(node, None) == "профили не опубликованы"
-    assert nodes._node_summary(node, SimpleNamespace(control="error", stage="connect")) == (
-        "нет связи · профили не опубликованы"
-    )
+    lines = nodes._list_lines(node, None)
+    assert lines[0] == "node.example.com"
+    assert lines[1].startswith("warning")
+    assert "нет данных проверки" in lines[1]
 
     node.published_generation = 2
     node.published_digest = "a" * 64
-    assert nodes._node_summary(node, None) == "готова · поколение 2"
+    fresh = SimpleNamespace(
+        control="ok",
+        checked_at=datetime.now(timezone.utc).isoformat(),
+        stage="",
+        message="",
+        coverage={},
+        warnings=(),
+        upgrade="",
+        installed_revision="",
+    )
+    assert nodes._list_lines(node, fresh)[1].startswith("healthy")
 
 
 def test_vk_cookies_are_offered_only_when_the_node_actually_uses_calls():
@@ -187,20 +221,14 @@ def test_vk_cookies_are_offered_only_when_the_node_actually_uses_calls():
 
     app = _app()
     node = app.admin.load_state.return_value.nodes[0]
-    seen = []
-
-    def record(options, title):
-        seen.append([key for key, _, _ in options])
-        return "0"
-
-    with patch.object(nodes, "menu", side_effect=record), patch.object(nodes, "clear"), patch.object(nodes, "panel"):
-        nodes.node_card(node, app)
-        assert "8" not in seen[-1]
+    with patch.object(node_cookies, "confirm") as confirmation:
+        assert node_cookies.calls_cookies_prompt(node, app) is False
+    confirmation.assert_not_called()
 
     node.protocols["calls"] = NodeProtocolSpec(enabled=True)
-    with patch.object(nodes, "menu", side_effect=record), patch.object(nodes, "clear"), patch.object(nodes, "panel"):
-        nodes.node_card(node, app)
-        assert "8" in seen[-1]
+    with patch.object(node_cookies, "confirm", return_value=False) as confirmation:
+        assert node_cookies.calls_cookies_prompt(node, app) is False
+    confirmation.assert_called_once()
 
 
 def test_upgrade_row_separates_a_scheduled_update_from_a_landed_one():

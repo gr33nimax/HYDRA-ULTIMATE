@@ -155,7 +155,14 @@ def _production_node_client(node: NodeConfig, bootstrap: NodeBootstrap) -> NodeC
 def _import_node_cookies(node: NodeConfig, source: str, bootstrap: NodeBootstrap) -> None:
     from hydra.services.nodes.cookies import import_node_vk_cookies
 
-    import_node_vk_cookies(node, source, host=HOST, known_hosts_root=bootstrap.known_hosts_root)
+    import_node_vk_cookies(
+        node,
+        source,
+        host=HOST,
+        known_hosts_root=bootstrap.known_hosts_root,
+        ssh_user=node.ssh_user,
+        identity_file=bootstrap.managed_key_file(node.id),
+    )
 
 
 def _production_node_manager() -> NodeManager:
@@ -169,6 +176,8 @@ def _production_node_manager() -> NodeManager:
             node_id=node.id,
             address=node.address,
             ssh_port=node.ssh_port,
+            ssh_user=node.ssh_user,
+            identity_file=bootstrap.managed_key_file(node.id),
         )
 
     def forget_credentials(node_id: str) -> None:

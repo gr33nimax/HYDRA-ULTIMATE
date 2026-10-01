@@ -33,8 +33,10 @@ class FakeNodeBootstrap:
         branch: str,
         revision: str,
         confirm_fingerprint: Callable[[str], bool],
+        ssh_user: str = "root",
+        auth=None,
     ) -> str:
-        self.install_request = (node_id, address, ssh_port, branch, revision)
+        self.install_request = (node_id, address, ssh_port, branch, revision, ssh_user)
         fingerprint = "SHA256:confirmed-host-key"
         if not confirm_fingerprint(fingerprint):
             raise PermissionError("SSH host fingerprint was not confirmed")
@@ -48,8 +50,10 @@ class FakeNodeBootstrap:
         ssh_port: int,
         base_url: str,
         control_port: int,
+        ssh_user: str = "root",
+        auth=None,
     ) -> NodeControlCredentials:
-        self.provision_request = (node_id, address, ssh_port, base_url, control_port)
+        self.provision_request = (node_id, address, ssh_port, base_url, control_port, ssh_user)
         return NodeControlCredentials(
             client_certificate=Path("client.crt"),
             client_private_key=Path("client.key"),
@@ -291,7 +295,12 @@ def test_node_rename_is_persisted_without_requiring_connectivity(tmp_path):
     assert client.events == []
 
 
-def test_protocol_change_requires_health_before_persisting_desired_state(tmp_path):
+def test_protocol_change_keeps_offline_intent_without_publishing_it(tmp_path):
+    """A node that is offline must not lose the operator's edit.
+
+    The edit is desired configuration, so it is saved; nothing reaches the node and
+    nothing is published until a real contact, which the unchanged generation shows.
+    """
     _saved_node_state()
     client = FakeControlClient()
     client.health = lambda: (_ for _ in ()).throw(OSError("offline"))
@@ -301,8 +310,14 @@ def test_protocol_change_requires_health_before_persisting_desired_state(tmp_pat
         manager.change_protocol("de-1", "vless", NodeProtocolSpec(enabled=False, port=443))
 
     state = state_module.load_state()
-    assert state.nodes[0].protocols["vless"].enabled is True
-    assert state.nodes[0].generation == 0
+    assert state.nodes[0].protocols["vless"].enabled is False
+    assert state.nodes[0].published_generation == 0
+    assert state.nodes[0].published_digest == ""
+
+    saved = manager.save_protocol("de-1", "vless", NodeProtocolSpec(enabled=False, port=443))
+    assert saved["saved"] is True
+    assert saved["applied"] is False
+    assert saved["error"] == "OSError"
 
 
 def test_protocol_change_applies_and_publishes_before_reporting_success(tmp_path):
@@ -409,13 +424,14 @@ def test_add_node_pins_ssh_provisions_control_identity_and_publishes_initial_sna
 
     saved = state_module.load_state().nodes[0]
     assert result.status == "published"
-    assert bootstrap.install_request == ("de-1", "node.example.com", 22, "release", "a" * 40)
+    assert bootstrap.install_request == ("de-1", "node.example.com", 22, "release", "a" * 40, "root")
     assert bootstrap.provision_request == (
         "de-1",
         "node.example.com",
         22,
         "https://base.example.com:9444",
         9444,
+        "root",
     )
     assert confirmed == ["SHA256:confirmed-host-key"]
     assert saved.control_fingerprint == "b" * 64
@@ -748,6 +764,7 @@ def test_resume_connects_an_installed_node_without_running_the_installer_again(t
         22,
         "https://base.example.com:9444",
         9444,
+        "root",
     )
     # No new host key is trusted: provisioning runs with StrictHostKeyChecking=yes against
     # the pin the first install established, so resuming cannot silently adopt another machine.

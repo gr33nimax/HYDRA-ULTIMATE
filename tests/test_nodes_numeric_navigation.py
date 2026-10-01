@@ -65,31 +65,40 @@ def test_add_protocol_uses_numeric_picker_without_typing_internal_name():
     app, _, node = _app()
     with (
         patch.object(nodes, "menu", side_effect=_numeric_menu),
-        patch("builtins.input", side_effect=["2", "1", "0"]),
-        patch.object(nodes, "prompt") as prompt,
+        patch("builtins.input", side_effect=["2", "1", "1", "0"]),
+        patch.object(nodes, "ask") as ask,
         patch.object(nodes, "read_protocol", return_value=None) as read,
     ):
         nodes._protocols(node, app)
     read.assert_called_once_with("vless", app, node.protocols["vless"])
-    prompt.assert_not_called()
+    ask.assert_not_called()
 
 
-def test_install_protocol_and_continue_use_numeric_keys():
+def test_install_collects_identity_in_order_and_continues_with_a_numeric_key():
     app, _, _ = _app()
     app.nodes.list_nodes.return_value = []
-    values = ["new-node", "node.example.com", "22", "Germany", "DE", "dev", "9444", "-"]
     with (
+        patch.object(nodes_setup, "ask", side_effect=["node.example.com", "root", "new-node", "Germany", "-"]) as ask,
+        patch.object(nodes_setup, "ask_secret", return_value="pw") as secret,
         patch.object(nodes_setup, "menu", side_effect=_numeric_menu),
-        patch("builtins.input", side_effect=["1", "2"]),
-        patch.object(nodes_setup, "_input", side_effect=values),
+        patch("builtins.input", side_effect=["1", "2", "1"]),
         patch.object(nodes_setup, "read_protocol", return_value=NodeProtocolSpec(enabled=True)),
-        patch.object(nodes_setup, "confirm", return_value=True),
         patch.object(nodes_setup, "panel"),
         patch.object(nodes_setup, "success"),
     ):
         nodes_setup.install_node(AppState(), app)
     app.nodes.add_node.assert_called_once()
-    assert app.nodes.add_node.call_args.args[0].protocols["vless"].enabled
+    node = app.nodes.add_node.call_args.args[0]
+    assert node.protocols["vless"].enabled
+    assert node.ssh_user == "root"
+    assert [call.args[0].split(" (")[0] for call in ask.call_args_list] == [
+        "Адрес VPS",
+        "Имя пользователя SSH",
+        "ID ноды",
+        "Имя ноды",
+        "Название профиля в подписке",
+    ]
+    assert secret.call_args.args[0].startswith("Пароль SSH")
 
 
 def test_profile_name_selects_published_profile_numerically_and_stays_offline():
@@ -104,10 +113,10 @@ def test_profile_name_selects_published_profile_numerically_and_stays_offline():
     with (
         patch.object(nodes, "menu", side_effect=_numeric_menu),
         patch("builtins.input", return_value="2"),
-        patch.object(nodes, "prompt", return_value="My mobile") as prompt,
+        patch.object(nodes, "ask", return_value="My mobile") as ask,
         patch.object(nodes, "success"),
     ):
-        nodes._profile_name(node, app)
+        nodes._profile_name(node, app, "vless")
     app.nodes.change_profile_name.assert_called_once_with(node.id, "vless:mobile", "My mobile")
-    assert prompt.call_count == 1
+    assert ask.call_count == 1
     app.nodes.check.assert_not_called()

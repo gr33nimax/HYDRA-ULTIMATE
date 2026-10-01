@@ -7,6 +7,7 @@ from pathlib import Path
 
 from hydra.contracts.node_validation import checked_node_id
 from hydra.core.host import HostBackend
+from hydra.services.nodes.installer import checked_ssh_user, remote_command, ssh_target
 from hydra.core.state_nodes import NodeConfig
 from hydra.services.headless_creator_infrastructure import normalize_vk_cookies
 from hydra.services.nodes.installer import ssh_connection_flags, valid_node_address
@@ -41,9 +42,12 @@ def import_node_vk_cookies(
     *,
     host: HostBackend,
     known_hosts_root: Path,
+    ssh_user: str = "root",
+    identity_file: Path | None = None,
 ) -> None:
     node.validate()
     checked_node_id(node.id, context="node_id")
+    checked_ssh_user(ssh_user)
     if not valid_node_address(node.address):
         raise ValueError("invalid node address")
     directory = known_hosts_root / node.id
@@ -60,7 +64,7 @@ def import_node_vk_cookies(
     payload = json.dumps({"node_id": node.id, "cookies": cookies}, ensure_ascii=False)
     if len(payload.encode("utf-8")) > MAX_NODE_COOKIE_BYTES:
         raise ValueError("cookie request exceeds the supported size")
-    target = f"root@[{node.address}]" if ":" in node.address else f"root@{node.address}"
+    target = ssh_target(ssh_user, node.address)
     # No pseudo-TTY: a remote terminal can echo stdin containing the cookies.
     try:
         result = host.run(
@@ -68,8 +72,12 @@ def import_node_vk_cookies(
                 "ssh",
                 "-T",
                 *ssh_connection_flags(node.ssh_port, known_hosts),
+                *(["-i", str(identity_file), "-o", "IdentitiesOnly=yes"] if identity_file else []),
                 target,
-                "cd /opt/hydra && exec /opt/hydra/.venv/bin/python -m hydra.entrypoints.node_cookies",
+                remote_command(
+                    ssh_user,
+                    "cd /opt/hydra && exec /opt/hydra/.venv/bin/python -m hydra.entrypoints.node_cookies",
+                ),
             ],
             input=payload,
             text=True,

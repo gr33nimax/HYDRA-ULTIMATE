@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -14,7 +15,15 @@ from hydra.contracts.node_validation import NODE_CONTRACT_VERSION, checked_node_
 from hydra.core.host import HostBackend
 from hydra.core.node_identity import NodeIdentity
 from hydra.services.nodes.control_client import NodeControlClient
-from hydra.services.nodes.installer import install_node, valid_node_address as _valid_address
+from hydra.services.nodes.control_transfer import copy_node_certificate, run_control_action
+from hydra.services.nodes.installer import (
+    install_node,
+    remote_command,
+    ssh_target,
+    valid_node_address as _valid_address,
+)
+from hydra.services.nodes.ssh_auth import SshPasswordAuth, askpass_environment
+from hydra.services.nodes.ssh_keys import install_managed_key, managed_key_file
 from hydra.services.nodes.credentials import (
     NodeControlCredentials,
     generate_control_certificate,
@@ -23,6 +32,8 @@ from hydra.services.nodes.credentials import (
 
 
 from hydra.services.nodes.revision import resolve_branch_revision
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class NodeBootstrap:
@@ -55,6 +66,8 @@ class NodeBootstrap:
         branch: str,
         revision: str,
         confirm_fingerprint: Callable[[str], bool],
+        ssh_user: str = "root",
+        auth: SshPasswordAuth | None = None,
     ) -> str:
         return install_node(
             host=self.host,
@@ -66,7 +79,13 @@ class NodeBootstrap:
             branch=branch,
             revision=revision,
             confirm_fingerprint=confirm_fingerprint,
+            ssh_user=ssh_user,
+            auth=auth,
         )
+
+    def managed_key_file(self, node_id: str) -> Path | None:
+        """The base-owned SSH key for this node, when enrollment installed one."""
+        return managed_key_file(self.credentials_root, node_id)
 
     def _connection_flags(self, port: int, known_hosts: Path, *, scp: bool = False) -> list[str]:
         return [
@@ -212,73 +231,6 @@ class NodeBootstrap:
         self.host.remove_file(pending_key)
         return certificate_path, private_key_path
 
-    def _copy_node_certificate(
-        self,
-        *,
-        address: str,
-        ssh_port: int,
-        node_id: str,
-        known_hosts: Path,
-        directory: Path,
-    ) -> tuple[Path, str]:
-        host_target = f"root@[{address}]" if ":" in address else f"root@{address}"
-        pending = directory / ".node.crt.pending"
-        target = directory / "node.crt"
-        self.host.remove_file(pending)
-        result = self.host.run(
-            [
-                "scp",
-                *self._connection_flags(ssh_port, known_hosts, scp=True),
-                f"{host_target}:/etc/hydra/node/node.crt",
-                str(pending),
-            ],
-            timeout=120,
-            text=True,
-            capture_output=False,
-        )
-        if result.returncode != 0:
-            self.host.remove_file(pending)
-            raise RuntimeError("could not retrieve the pinned node certificate")
-        try:
-            certificate_pem = pending.read_bytes()
-            fingerprint = validate_control_certificate(
-                certificate_pem,
-                node_id=node_id,
-                role="server",
-                address=address,
-            )
-            self.host.atomic_copy(pending, target, mode=0o644)
-            return target, fingerprint
-        finally:
-            self.host.remove_file(pending)
-
-    def _run_control_action(
-        self,
-        *,
-        address: str,
-        ssh_port: int,
-        known_hosts: Path,
-        request: dict[str, object],
-        operation: str,
-    ) -> None:
-        host_target = f"root@[{address}]" if ":" in address else f"root@{address}"
-        result = self.host.run(
-            [
-                "ssh",
-                # -T: без PTY, чтобы строка JSON не экранировалась и не получала CRLF.
-                "-T",
-                *self._connection_flags(ssh_port, known_hosts),
-                host_target,
-                "cd /opt/hydra && exec /opt/hydra/.venv/bin/python -m hydra.entrypoints.node_provision",
-            ],
-            input=json.dumps(request, separators=(",", ":")) + "\n",
-            timeout=180,
-            text=True,
-            capture_output=False,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"node control identity {operation} failed")
-
     def provision_control_identity(
         self,
         *,
@@ -287,6 +239,8 @@ class NodeBootstrap:
         ssh_port: int,
         base_url: str,
         control_port: int,
+        ssh_user: str = "root",
+        auth: SshPasswordAuth | None = None,
     ) -> NodeControlCredentials:
         """Issue per-node credentials over its already-pinned SSH connection."""
         checked_node_id(node_id, context="node_id")
@@ -314,7 +268,9 @@ class NodeBootstrap:
         client_certificate, client_key, client_pem, base_fingerprint = self._ensure_base_client_credentials(
             node_id, directory
         )
-        self._run_control_action(
+        run_control_action(
+            host=self.host,
+            connection_flags=self._connection_flags,
             address=address,
             ssh_port=ssh_port,
             known_hosts=known_hosts,
@@ -326,12 +282,18 @@ class NodeBootstrap:
                 "base_certificate": client_pem.decode("ascii"),
             },
             operation="provisioning",
+            ssh_user=ssh_user,
+            auth=auth,
         )
-        node_certificate, node_fingerprint = self._copy_node_certificate(
+        node_certificate, node_fingerprint = copy_node_certificate(
+            host=self.host,
+            connection_flags=self._connection_flags,
             address=address,
             ssh_port=ssh_port,
             node_id=node_id,
             known_hosts=known_hosts,
+            ssh_user=ssh_user,
+            auth=auth,
             directory=directory,
         )
         return NodeControlCredentials(
@@ -350,6 +312,8 @@ class NodeBootstrap:
         ssh_port: int,
         base_url: str,
         control_port: int,
+        ssh_user: str = "root",
+        auth: SshPasswordAuth | None = None,
     ) -> NodeControlCredentials:
         """Rotate the base client certificate through the pinned SSH channel."""
         checked_node_id(node_id, context="node_id")
@@ -377,7 +341,9 @@ class NodeBootstrap:
         pending_certificate, pending_key, client_pem, base_fingerprint = self._pending_client_credentials(
             node_id, directory
         )
-        self._run_control_action(
+        run_control_action(
+            host=self.host,
+            connection_flags=self._connection_flags,
             address=address,
             ssh_port=ssh_port,
             known_hosts=known_hosts,
@@ -390,14 +356,35 @@ class NodeBootstrap:
                 "base_certificate": client_pem.decode("ascii"),
             },
             operation="rotation",
+            ssh_user=ssh_user,
+            auth=auth,
         )
-        node_certificate, node_fingerprint = self._copy_node_certificate(
+        node_certificate, node_fingerprint = copy_node_certificate(
+            host=self.host,
+            connection_flags=self._connection_flags,
             address=address,
             ssh_port=ssh_port,
             node_id=node_id,
             known_hosts=known_hosts,
             directory=directory,
+            ssh_user=ssh_user,
+            auth=auth,
         )
+        try:
+            install_managed_key(
+                host=self.host,
+                credentials_root=self.credentials_root,
+                known_hosts_root=self.known_hosts_root,
+                connection_flags=self._connection_flags,
+                node_id=node_id,
+                address=address,
+                ssh_port=ssh_port,
+                ssh_user=ssh_user,
+                auth=auth,
+            )
+        except Exception as exc:
+            # Enrollment already succeeded; cleanup can still use the account password.
+            _LOGGER.warning("managed node SSH key was not installed: %s", type(exc).__name__)
         try:
             health = NodeControlClient(
                 host=address,
@@ -449,7 +436,15 @@ class NodeBootstrap:
             node_fingerprint=node_fingerprint,
         )
 
-    def revoke_control_identity(self, *, node_id: str, address: str, ssh_port: int) -> None:
+    def revoke_control_identity(
+        self,
+        *,
+        node_id: str,
+        address: str,
+        ssh_port: int,
+        ssh_user: str = "root",
+        auth: SshPasswordAuth | None = None,
+    ) -> None:
         """Revoke remote trust over pinned SSH before deleting local credentials."""
         checked_node_id(node_id, context="node_id")
         if not _valid_address(address):
@@ -464,12 +459,16 @@ class NodeBootstrap:
         known_hosts = self.known_hosts_root / node_id / "known_hosts"
         if not known_hosts.is_file():
             raise RuntimeError("SSH host key is not pinned; node revocation was not attempted")
-        self._run_control_action(
+        run_control_action(
+            host=self.host,
+            connection_flags=self._connection_flags,
             address=address,
             ssh_port=ssh_port,
             known_hosts=known_hosts,
             request={"action": "revoke", "node_id": node_id},
             operation="revocation",
+            ssh_user=ssh_user,
+            auth=auth,
         )
         if not directory.exists():
             return

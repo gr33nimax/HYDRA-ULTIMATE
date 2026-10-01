@@ -23,6 +23,7 @@ from hydra.core.state_models import AppState
 from hydra.core.state_nodes import NodeConfig
 from hydra.services.nodes.credentials import NodeControlCredentials
 from hydra.services.nodes.reconciler import NodeSyncResult
+from hydra.services.nodes.ssh_auth import SshPasswordAuth
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,6 +42,8 @@ class NodeProvisioningPort(Protocol):
         branch: str,
         revision: str,
         confirm_fingerprint: Callable[[str], bool],
+        ssh_user: str = "root",
+        auth: SshPasswordAuth | None = None,
     ) -> str: ...
 
     def provision_control_identity(
@@ -51,12 +54,17 @@ class NodeProvisioningPort(Protocol):
         ssh_port: int,
         base_url: str,
         control_port: int,
+        ssh_user: str = "root",
+        auth: SshPasswordAuth | None = None,
     ) -> NodeControlCredentials: ...
 
 
 @dataclass
 class NodeOnboarding:
     """Bring one node from "not managed" to "published"."""
+
+    # Real stages, reported as they happen: the UI prints what actually ran instead of
+    # an animation that pretends to know how far the install got.
 
     state_reader: Callable[[], AppState]
     state_updater: Callable
@@ -75,6 +83,8 @@ class NodeOnboarding:
         base_url: str,
         confirm_fingerprint: Callable[[str], bool],
         vk_cookie_source: str | None = None,
+        auth: SshPasswordAuth | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> NodeSyncResult:
         candidate = self._checked_new_node(node, base_url=base_url, confirm_fingerprint=confirm_fingerprint)
         self._checked_cookies(vk_cookie_source)
@@ -82,6 +92,7 @@ class NodeOnboarding:
         branch = checked_node_branch(candidate.branch, context="branch")
         revision = checked_node_revision(candidate.revision, context="revision")
 
+        _report(progress, "ssh")
         bootstrap.install(
             node_id=candidate.id,
             address=candidate.address,
@@ -89,15 +100,24 @@ class NodeOnboarding:
             branch=branch,
             revision=revision,
             confirm_fingerprint=confirm_fingerprint,
+            ssh_user=candidate.ssh_user,
+            auth=auth,
         )
+        _report(progress, "install")
         try:
-            self._provision(candidate, base_url=base_url)
+            self._provision(candidate, base_url=base_url, auth=auth)
         except Exception as exc:
             raise RuntimeError(
                 "node was installed but control identity provisioning failed; "
                 "the same node ID can be connected without reinstalling",
             ) from exc
-        return self._register_and_publish(candidate, vk_cookie_source=vk_cookie_source, installed=True)
+        _report(progress, "identity")
+        return self._register_and_publish(
+            candidate,
+            vk_cookie_source=vk_cookie_source,
+            installed=True,
+            progress=progress,
+        )
 
     def resume(
         self,
@@ -106,6 +126,8 @@ class NodeOnboarding:
         base_url: str,
         confirm_fingerprint: Callable[[str], bool],
         vk_cookie_source: str | None = None,
+        auth: SshPasswordAuth | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> NodeSyncResult:
         """Continue a node whose install happened but whose identity never arrived.
 
@@ -117,14 +139,21 @@ class NodeOnboarding:
         self._checked_cookies(vk_cookie_source)
         if self.bootstrap is None:
             raise RuntimeError("node provisioning is unavailable")
+        _report(progress, "ssh")
         try:
-            self._provision(candidate, base_url=base_url)
+            self._provision(candidate, base_url=base_url, auth=auth)
         except Exception as exc:
             raise RuntimeError(
                 "control identity provisioning failed; the node must already be installed "
                 "and reachable over the pinned SSH host key",
             ) from exc
-        return self._register_and_publish(candidate, vk_cookie_source=vk_cookie_source, installed=False)
+        _report(progress, "identity")
+        return self._register_and_publish(
+            candidate,
+            vk_cookie_source=vk_cookie_source,
+            installed=False,
+            progress=progress,
+        )
 
     def _checked_new_node(
         self,
@@ -159,7 +188,13 @@ class NodeOnboarding:
             raise RuntimeError("node provisioning is unavailable")
         return self.bootstrap, self.uninstall_remote, self.forget_node_credentials
 
-    def _provision(self, candidate: NodeConfig, *, base_url: str) -> None:
+    def _provision(
+        self,
+        candidate: NodeConfig,
+        *,
+        base_url: str,
+        auth: SshPasswordAuth | None = None,
+    ) -> None:
         if self.bootstrap is None:
             raise RuntimeError("node provisioning is unavailable")
         credentials = self.bootstrap.provision_control_identity(
@@ -168,6 +203,8 @@ class NodeOnboarding:
             ssh_port=candidate.ssh_port,
             base_url=base_url,
             control_port=candidate.control_port,
+            ssh_user=candidate.ssh_user,
+            auth=auth,
         )
         candidate.control_fingerprint = credentials.node_fingerprint
         candidate.validate(path=f"nodes.{candidate.id}")
@@ -178,6 +215,7 @@ class NodeOnboarding:
         *,
         vk_cookie_source: str | None,
         installed: bool,
+        progress: Callable[[str], None] | None = None,
     ) -> NodeSyncResult:
         def register(state: AppState) -> None:
             if any(item.id == candidate.id for item in state.nodes):
@@ -194,14 +232,26 @@ class NodeOnboarding:
                 except Exception:
                     raise RuntimeError("node registration failed and remote cleanup did not complete") from exc
             raise
+        _report(progress, "register")
         try:
             if vk_cookie_source is not None:
                 if self.import_remote_cookies is None:
                     raise RuntimeError("node cookie import is unavailable")
                 self.import_remote_cookies(candidate, vk_cookie_source)
+            _report(progress, "publish")
             return self.refresh(candidate.id)
         except Exception as exc:
             raise RuntimeError("node was provisioned but its initial snapshot was not published") from exc
+
+
+def _report(progress: Callable[[str], None] | None, stage: str) -> None:
+    """Report one real boundary; a missing reporter is not an error."""
+    if progress is None:
+        return
+    try:
+        progress(stage)
+    except Exception:
+        _LOGGER.warning("node progress reporter failed at %s", stage)
 
 
 __all__ = ["NodeOnboarding", "NodeProvisioningPort"]

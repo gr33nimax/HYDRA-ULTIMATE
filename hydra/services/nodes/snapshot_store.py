@@ -44,7 +44,13 @@ class NodeSnapshotStore:
         if type(self.max_bytes) is not int or self.max_bytes < 1:
             raise ValueError("max_bytes must be a positive integer")
 
-    def store(self, export: NodeClientExport) -> StoredNodeExport:
+    def store(self, export: NodeClientExport, *, producer_revision: str = "") -> StoredNodeExport:
+        """Write the immutable export, plus which node build produced it.
+
+        The producer marker is what lets a later cycle notice that the node was updated
+        even though the desired configuration did not change: the base's own record is a
+        target, while this marker is the fact the published profiles were made from.
+        """
         export.validate()
         raw = json.dumps(
             export.to_document(),
@@ -67,7 +73,40 @@ class NodeSnapshotStore:
                 self._decode(existing, export.node_id, export.generation)
             else:
                 self.host.atomic_write(path, raw, mode=0o600, durable=True)
+            self._write_producer(directory, export.generation, digest, producer_revision)
         return StoredNodeExport(export.node_id, export.generation, digest, path)
+
+    def producer_revision(self, node_id: str, generation: int, sha256: str) -> str:
+        """Which node build produced this published export, or an empty string."""
+        expected = self._checked_digest(sha256)
+        directory = self._node_directory(node_id, create=False)
+        path = self._producer_path(directory, generation)
+        with self._lock:
+            if not path.exists() or path.is_symlink():
+                return ""
+            raw = self._read_file(path)
+        try:
+            marker = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeError):
+            return ""
+        if not isinstance(marker, dict) or marker.get("digest") != expected:
+            return ""
+        revision = marker.get("producer_revision", "")
+        return revision[:64] if isinstance(revision, str) and revision.isprintable() else ""
+
+    def _write_producer(self, directory: Path, generation: int, digest: str, revision: str) -> None:
+        marker = json.dumps(
+            {"digest": digest, "producer_revision": revision[:64]},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        path = self._producer_path(directory, generation)
+        if path.is_symlink():
+            raise SnapshotStoreError("snapshot producer marker must not be a symlink")
+        self.host.atomic_write(path, marker, mode=0o600, durable=True)
+
+    def _producer_path(self, directory: Path, generation: int) -> Path:
+        return directory / f"{generation}.producer.json"
 
     def load(self, node_id: str, generation: int, sha256: str) -> NodeClientExport:
         expected = self._checked_digest(sha256)
@@ -84,7 +123,7 @@ class NodeSnapshotStore:
         expected = self._checked_digest(sha256)
         path = self._snapshot_path(node_id, generation)
         with self._lock:
-            self._node_directory(node_id, create=False)
+            directory = self._node_directory(node_id, create=False)
             if not path.exists():
                 return False
             if path.is_symlink():
@@ -94,6 +133,9 @@ class NodeSnapshotStore:
             if not hmac.compare_digest(actual, expected):
                 raise SnapshotStoreError("refusing to delete a snapshot with a different digest")
             self.host.remove_file(path)
+            marker = self._producer_path(directory, generation)
+            if marker.exists() and not marker.is_symlink():
+                self.host.remove_file(marker)
         return True
 
     def _node_directory(self, node_id: str, *, create: bool) -> Path:

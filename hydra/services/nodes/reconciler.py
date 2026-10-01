@@ -27,7 +27,7 @@ _MAX_GENERATION = 2**63 - 1
 class NodeSyncResult:
     node_id: str
     generation: int
-    status: Literal["published", "unchanged"]
+    status: Literal["published", "unchanged", "withdrawn"]
     sha256: str = ""
     # Protocol -> how many eligible users this export actually serves, plus
     # non-fatal gaps such as a transport whose prerequisites are unmet.
@@ -54,20 +54,49 @@ class NodeSnapshotReconciler:
         self._lock = threading.RLock()
 
     def refresh(self, node_id: str, *, force: bool = False) -> NodeSyncResult:
-        """Reconcile the latest full desired state and publish only a confirmed export."""
+        """Reconcile the latest full desired state and publish only a confirmed export.
+
+        An unchanged desired snapshot is not by itself a reason to do nothing: the node
+        may have been updated, or the stored bundle may be unreadable. Publication
+        freshness is therefore checked against the node's own revision, not only against
+        the base's target.
+        """
         with self._lock:
             node, snapshot = self._reserve_generation(node_id, force=force)
-            if snapshot is None:
-                return NodeSyncResult(node_id, node.published_generation, "unchanged", node.published_digest)
-
             client = self.client_for(node)
             health = self._check_health(client, node_id)
+            if snapshot is None:
+                if node.withdrawn:
+                    # Withdrawal is a state, not a pending change: it has nothing to
+                    # publish and nothing left to apply.
+                    return NodeSyncResult(
+                        node_id, node.generation, "withdrawn", "", installed_revision=_revision(health)
+                    )
+                stale = self._stale_publication(node, health)
+                if stale is None:
+                    return NodeSyncResult(
+                        node_id,
+                        node.published_generation,
+                        "unchanged",
+                        node.published_digest,
+                        installed_revision=_revision(health),
+                    )
+                _LOGGER.info("Node %s publication is stale (%s); publishing fresh material", node_id, stale)
+                node, snapshot = self._reserve_generation(node_id, force=True)
+                if snapshot is None:
+                    raise RuntimeError("node publication refresh did not reserve a generation")
+
             applied = client.apply(snapshot)
             if applied.get("generation") != snapshot.generation or not isinstance(applied.get("already_applied"), bool):
                 raise RuntimeError("node did not confirm the requested generation")
+            if node.withdrawn:
+                # A withdrawn node applies an empty runtime and must not publish: an
+                # empty bundle would otherwise be served as if it were real profiles.
+                self._withdraw_publication(node_id)
+                return NodeSyncResult(node_id, snapshot.generation, "withdrawn", "", {}, (), _revision(health))
             exported = client.export()
             coverage, warnings = self._validate_export(exported, node_id, snapshot.generation, snapshot)
-            stored = self.snapshot_store.store(exported)
+            stored = self.snapshot_store.store(exported, producer_revision=_revision(health))
             previous = self._publish_pointer(
                 node_id=node_id,
                 generation=snapshot.generation,
@@ -85,6 +114,31 @@ class NodeSnapshotReconciler:
                 _revision(health),
             )
 
+    def _stale_publication(self, node: NodeConfig, health: dict) -> str | None:
+        """Why the published bundle no longer describes this node, or None when it does.
+
+        Three different faults hide behind an unchanged desired snapshot: nothing was
+        ever published, the stored file cannot be read back, or the node now runs a
+        different build than the one its profiles were produced from.
+        """
+        if node.published_generation <= 0 or not node.published_digest:
+            return "not_published"
+        try:
+            stored = self.snapshot_store.load(node.id, node.published_generation, node.published_digest)
+        except Exception:
+            return "bundle_unreadable"
+        if stored.node_id != node.id:
+            return "bundle_mismatch"
+        producer = self.snapshot_store.producer_revision(
+            node.id,
+            node.published_generation,
+            node.published_digest,
+        )
+        installed = _revision(health)
+        if installed and producer and installed != producer:
+            return "producer_changed"
+        return None
+
     def _reserve_generation(
         self,
         node_id: str,
@@ -99,6 +153,11 @@ class NodeSnapshotReconciler:
             candidate = self._snapshot(state, node, node.generation)
             desired_digest = self._desired_digest(candidate)
             if not force and node.desired_digest == desired_digest:
+                if node.withdrawn:
+                    # An unchanged empty runtime is unchanged; a withdrawn node must not
+                    # re-apply on every cycle just because it has no publication pointer.
+                    reservation = (deepcopy(node), None)
+                    return
                 if node.generation > node.published_generation:
                     reservation = (deepcopy(node), candidate)
                     return
@@ -118,17 +177,21 @@ class NodeSnapshotReconciler:
 
     @staticmethod
     def _snapshot(state: AppState, node: NodeConfig, generation: int) -> NodeDesiredSnapshot:
-        users = tuple(
-            NodeUserProjection(
-                email=user.email,
-                uuid=user.uuid,
-                blocked=user.blocked,
-                expiry_date=user.expiry_date,
-                disabled_protocols=tuple(user.disabled_protocols),
-                traffic_limit_gb=user.traffic_limit_gb,
-                traffic_reset_epoch=traffic_reset_epoch(state, user),
+        users = (
+            ()
+            if node.withdrawn
+            else tuple(
+                NodeUserProjection(
+                    email=user.email,
+                    uuid=user.uuid,
+                    blocked=user.blocked,
+                    expiry_date=user.expiry_date,
+                    disabled_protocols=tuple(user.disabled_protocols),
+                    traffic_limit_gb=user.traffic_limit_gb,
+                    traffic_reset_epoch=traffic_reset_epoch(state, user),
+                )
+                for user in sorted(state.users, key=lambda item: item.uuid)
             )
-            for user in sorted(state.users, key=lambda item: item.uuid)
         )
         snapshot = NodeDesiredSnapshot(
             node_id=node.id,
@@ -250,6 +313,35 @@ class NodeSnapshotReconciler:
 
         self.state_updater(publish)
         return previous
+
+    def stop_publication(self, node_id: str) -> None:
+        """Remove a node from subscriptions without contacting it.
+
+        Withdrawal must take effect even when the node is unreachable: the operator
+        asked for the node to stop serving, and the base owns the subscription.
+        """
+        self._withdraw_publication(node_id)
+
+    def _withdraw_publication(self, node_id: str) -> None:
+        """Stop serving this node's bundle and drop the stored material."""
+        previous: tuple[int, str] | None = None
+
+        def withdraw(state: AppState) -> None:
+            nonlocal previous
+            node = self._find_node(state, node_id)
+            if node.published_generation <= 0 or not node.published_digest:
+                return
+            previous = (node.published_generation, node.published_digest)
+            node.published_generation = 0
+            node.published_digest = ""
+
+        self.state_updater(withdraw)
+        if previous is None:
+            return
+        try:
+            self.snapshot_store.delete(node_id, *previous)
+        except Exception:
+            _LOGGER.warning("Withdrawn node export cleanup failed; publication already stopped")
 
     def _remove_previous(self, previous: tuple[int, str] | None, stored) -> None:
         if previous is None:

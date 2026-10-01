@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from hydra.core.host import HostBackend
-from hydra.services.nodes.control_client import NodeControlError
+from hydra.services.nodes.control_client import NodeContactError, NodeControlError, NodeRejectedError
 from hydra.services.nodes.snapshot_store import SnapshotStoreError
 from hydra.utils.commands import redact_text
 
@@ -122,7 +122,15 @@ def describe_failure(exc: BaseException) -> tuple[str, str]:
     problems that all used to read as one sentence about a failed operation.
     """
     message = str(exc)
+    if isinstance(exc, NodeContactError):
+        return STAGE_CONNECT, "control_unavailable"
+    if isinstance(exc, NodeRejectedError):
+        # The node answered and refused; that is an apply problem, not unreachability.
+        return STAGE_APPLY, "node_rejected"
     if isinstance(exc, NodeControlError):
+        return STAGE_CONNECT, "control_unavailable"
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        # A socket-level failure is a contact problem wherever it surfaced.
         return STAGE_CONNECT, "control_unavailable"
     if isinstance(exc, SnapshotStoreError):
         return STAGE_PUBLISH, "publication_storage"

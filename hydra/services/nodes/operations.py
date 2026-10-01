@@ -12,6 +12,7 @@ from hydra.core.state_models import AppState
 from hydra.core.state_nodes import NodeConfig
 from hydra.services.nodes.observation import NodeObservation
 from hydra.services.nodes.reconciler import NodeSyncResult
+from hydra.services.nodes.ssh_auth import SshPasswordAuth
 
 
 class NodeManagementOperations(Protocol):
@@ -22,6 +23,8 @@ class NodeManagementOperations(Protocol):
         base_url: str,
         confirm_fingerprint: Callable[[str], bool],
         vk_cookie_source: str | None = None,
+        auth: SshPasswordAuth | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> NodeSyncResult: ...
 
     def resume_node(
@@ -31,11 +34,26 @@ class NodeManagementOperations(Protocol):
         base_url: str,
         confirm_fingerprint: Callable[[str], bool],
         vk_cookie_source: str | None = None,
+        auth: SshPasswordAuth | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> NodeSyncResult: ...
 
     def remove_node(self, node_id: str, *, confirmed: bool) -> dict[str, object]: ...
 
     def detach_node(self, node_id: str, *, confirmed: bool) -> dict[str, object]: ...
+
+    def withdraw_node(self, node_id: str, *, confirmed: bool) -> dict[str, object]: ...
+
+    def restore_node(self, node_id: str) -> NodeSyncResult: ...
+
+    def set_appearance(
+        self,
+        node_id: str,
+        *,
+        display_id: str | None = None,
+        name: str | None = None,
+        region: str | None = None,
+    ) -> NodeConfig: ...
 
     def import_vk_cookies(self, node_id: str, source_path: str) -> None: ...
 
@@ -64,6 +82,8 @@ class NodeManagementOperations(Protocol):
     def change_update_target(self, node_id: str, *, branch: str, revision: str) -> None: ...
 
     def change_protocol(self, node_id: str, name: str, spec: NodeProtocolSpec) -> NodeSyncResult: ...
+
+    def save_protocol(self, node_id: str, name: str, spec: NodeProtocolSpec) -> dict[str, object]: ...
 
     def update(self, node_id: str) -> dict[str, object]: ...
 

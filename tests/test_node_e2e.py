@@ -37,6 +37,7 @@ from hydra.services.nodes.reconcile import NodeReconciler
 from hydra.services.nodes.reconciler import NodeSnapshotReconciler
 from hydra.services.nodes.snapshot_store import NodeSnapshotStore
 from hydra.services.nodes.transport import create_control_server
+from hydra.services.subscriptions.hydrabox import generate_hydrabox_subscription
 from hydra.services.subscriptions.links import generate_base64_sub
 from tests.node_mtls import certificate_fingerprint, write_certificates
 
@@ -362,6 +363,25 @@ def test_a_node_publishes_profiles_a_subscription_can_read(node_cluster):
         plugins=cast(Any, _NoBaseProtocols()),
         node_exports=_PublishedExports(store),
     )
+    # HydraBox is the format that reads documents only, so this checks the node's
+    # AmneziaWG reaches the client-facing document instead of stopping at the export
+    # file. It is a structural check, not proof that a client can import or connect.
+    hydrabox = generate_hydrabox_subscription(
+        user,
+        state_module.load_state(),
+        plugins=cast(Any, _NoBaseProtocols()),
+        node_exports=_PublishedExports(store),
+    )
+    endpoints = [
+        endpoint
+        for resource in hydrabox["resources"]
+        for endpoint in resource["document"].get("endpoints", [])
+    ]
+    awg_endpoints = [endpoint for endpoint in endpoints if endpoint.get("type") == "wireguard"]
+    assert awg_endpoints, "the node's AmneziaWG endpoint must reach the HydraBox document"
+    assert awg_endpoints[0]["peers"], "an AmneziaWG endpoint without a peer cannot be imported"
+    entrypoint_tags = {profile["entrypoint"]["tag"] for profile in hydrabox["profiles"]}
+    assert awg_endpoints[0]["tag"] in entrypoint_tags
     assert subscription
     import base64
 

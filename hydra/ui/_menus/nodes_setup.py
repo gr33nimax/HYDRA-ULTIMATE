@@ -1,6 +1,16 @@
-"""Cancelable node install wizard; no side effects until final confirmation."""
+"""Cancelable node install wizard: collect, plan, confirm, then act.
+
+The order is the operator's: address, SSH account, password, visible ID, name, then the
+protocols. Nothing touches the VPS until the plan is confirmed, and the password is not
+written to state, logs or the command line — it lives only inside the one scoped channel
+that OpenSSH reads while the enrollment runs.
+"""
 
 from __future__ import annotations
+
+from contextlib import nullcontext
+from dataclasses import dataclass, field
+from typing import Callable
 
 from hydra.contracts.node_snapshot import NodeProtocolSpec
 from hydra.contracts.node_validation import checked_node_branch, checked_node_revision
@@ -8,22 +18,52 @@ from hydra.core.state_models import AppState
 from hydra.core.state_nodes import NodeConfig
 from hydra.plugins.base import PluginCategory
 from hydra.services.application import ApplicationService
+from hydra.services.nodes.installer import checked_ssh_user, valid_node_address
+from hydra.services.nodes.ssh_auth import ssh_password_auth
 from hydra.ui._menus.node_protocol_fields import (
     collect_protocol_config,
     preflight_protocol,
     protocol_field_labels,
 )
 from hydra.ui.protocol_ui import protocol_label
-from hydra.ui.tui import confirm, error, kv, menu, panel, prompt, success
-
+from hydra.ui.tui import ask, ask_secret, confirm, error, kv, menu, panel, prompt, success
 
 NEW_NODE_HINTS = [
-    "ID — постоянный ключ ноды в state, например uk-1; имя можно менять потом.",
-    "Название — подпись ноды в списке и подписках, не SSH-логин.",
-    "Адрес — IP или домен VPS; HYDRA заходит по SSH под root.",
-    "Регион — необязательная подпись в подписке.",
-    "SHA ветки мастер получит сам и покажет перед установкой.",
+    "Адрес — IP или домен VPS.",
+    "SSH-пользователь и пароль нужны только для установки; пароль не сохраняется.",
+    "ID — видимая подпись ноды, её можно менять позже без перевыпуска ключей.",
 ]
+
+# Human names for the boundaries the install actually reports.
+STAGE_TEXT = {
+    "ssh": "Проверка SSH-доступа и доверия",
+    "install": "Установка HYDRA на VPS",
+    "identity": "Подключение ноды к основе",
+    "register": "Сохранение ноды",
+    "publish": "Применение настроек и публикация профилей",
+}
+STAGE_ORDER = ("ssh", "install", "identity", "register", "publish")
+
+
+@dataclass
+class InstallLog:
+    """Stages that really ran, so the report cannot invent progress."""
+
+    done: list[str] = field(default_factory=list)
+    failed: str = ""
+
+    def stage(self, name: str) -> None:
+        if name in STAGE_TEXT and name not in self.done:
+            self.done.append(name)
+            print(f"  [>>] {STAGE_TEXT[name]}")
+
+    def failure(self, exc: BaseException) -> str:
+        """The stage after the last confirmed one is the one that failed."""
+        if self.failed:
+            return self.failed
+        remaining = [name for name in STAGE_ORDER if name not in self.done]
+        self.failed = remaining[0] if remaining else "publish"
+        return f"{STAGE_TEXT[self.failed]}: {exc if str(exc) else type(exc).__name__}"
 
 
 def protocol_choices(app: ApplicationService) -> dict[str, tuple[str, str]]:
@@ -67,26 +107,12 @@ def read_protocol(name: str, app: ApplicationService, previous: NodeProtocolSpec
     return spec
 
 
-def _input(label: str, default: str = "") -> str:
-    value = prompt(f"{label} (0 — отмена)", default)
-    if value in {"0", "cancel"}:
-        raise InterruptedError("installation canceled")
-    return value
-
-
 def resolve_revision(app: ApplicationService, branch: str) -> str | None:
     try:
         return checked_node_revision(app.nodes.resolve_revision(branch), context="revision")
     except Exception:
         error("Не удалось получить SHA из GitHub. Проверь имя ветки и доступ к GitHub; операция не начата.")
         return None
-
-
-RESUME_HINTS = [
-    "Для VPS, где HYDRA уже установлена, но удостоверение ноды не выдано.",
-    "Установка НЕ повторяется: HYDRA заходит по pinned SSH и выдаёт удостоверение.",
-    "Если HYDRA на VPS нет — добавь ноду как новую.",
-]
 
 
 def _check_subscription_ready(state: AppState, app: ApplicationService) -> None:
@@ -97,23 +123,96 @@ def _check_subscription_ready(state: AppState, app: ApplicationService) -> None:
         raise ValueError("base subscription certificate is missing")
 
 
-def _collect_identity(state: AppState, app: ApplicationService, *, title: str, hints: list[str]) -> NodeConfig:
-    """Ask for the facts every node needs, whether it is installed or only resumed."""
-    panel(title, hints, wrap=True)
-    node_id = _input("ID ноды", "")
-    node = NodeConfig(
-        id=node_id,
-        address=_input("Адрес VPS (IP или домен)"),
-        ssh_port=int(_input("SSH-порт", "22")),
-        name=_input("Название ноды", node_id),
-        region=_input("Регион", ""),
-        branch=checked_node_branch(_input("Ветка", "main"), context="branch"),
-        control_port=int(_input("Порт API управления", "9444")),
-    )
-    node.validate()
-    if any(item.id == node.id for item in app.nodes.list_nodes(state)):
-        raise ValueError("node ID already exists")
-    return node
+def _ask_required(label: str, default: str = "") -> str | None:
+    value = ask(f"{label} (0 — отмена)", default)
+    if value is None or value == "0":
+        return None
+    return value.strip()
+
+
+def _ask_validated(
+    label: str,
+    problem_of: Callable[[str], str | None],
+    *,
+    default: str = "",
+    attempts: int = 3,
+) -> str | None:
+    """Ask one field until it is valid; nothing already answered is asked again."""
+    for _ in range(attempts):
+        value = _ask_required(label, default)
+        if value is None:
+            return None
+        problem = problem_of(value)
+        if problem is None:
+            return value
+        error(problem)
+    error("Поле не заполнено; установка отменена")
+    return None
+
+
+def _address_problem(value: str) -> str | None:
+    if not valid_node_address(value):
+        return "Адрес не похож на IP или домен; повтори адрес"
+    return None
+
+
+def _ssh_user_problem(value: str) -> str | None:
+    try:
+        checked_ssh_user(value)
+    except ValueError as exc:
+        return f"{exc}; повтори имя пользователя SSH"
+    return None
+
+
+def _node_id_problem(app: ApplicationService, state: AppState):
+    """The ID must be valid and still free; both answers keep the operator here."""
+
+    def check(value: str) -> str | None:
+        try:
+            NodeConfig(id=value, address="203.0.113.1", ssh_user="root").validate()
+        except ValueError as exc:
+            return f"Проверь ID: {exc}"
+        if any(item.id == value for item in app.nodes.list_nodes(state)):
+            return "Нода с таким ID уже есть; выбери другой ID"
+        return None
+
+    return check
+
+
+def _name_problem(value: str) -> str | None:
+    try:
+        NodeConfig(id="placeholder", address="203.0.113.1", ssh_user="root", name=value).validate()
+    except ValueError as exc:
+        return f"Проверь имя: {exc}"
+    return None
+
+
+def _collect_identity(state: AppState, app: ApplicationService) -> tuple[NodeConfig, str | None] | None:
+    """The operator's exact order: address, SSH account, password, ID, name."""
+    panel("НОВАЯ НОДА", NEW_NODE_HINTS, wrap=True)
+    address = _ask_validated("Адрес VPS (IP или домен)", _address_problem)
+    if address is None:
+        return None
+    ssh_user = _ask_validated("Имя пользователя SSH", _ssh_user_problem, default="root")
+    if ssh_user is None:
+        return None
+    password = ask_secret("Пароль SSH (пусто — вход по ключу или запрос ssh)")
+    if password is None:
+        error("Установка отменена")
+        return None
+    node_id = _ask_validated("ID ноды (видимая подпись)", _node_id_problem(app, state))
+    if node_id is None:
+        return None
+    name = _ask_validated("Имя ноды", _name_problem, default=node_id)
+    if name is None:
+        return None
+    node = NodeConfig(id=node_id, address=address, name=name, ssh_user=ssh_user)
+    try:
+        node.validate()
+    except ValueError as exc:
+        error(f"Проверь ID и имя: {exc}")
+        return None
+    return node, (password or None)
 
 
 def _collect_protocols(node: NodeConfig, app: ApplicationService) -> bool:
@@ -125,7 +224,7 @@ def _collect_protocols(node: NodeConfig, app: ApplicationService) -> bool:
             (key, label, "выбран" if node.protocols.get(protocol, NodeProtocolSpec()).enabled else "")
             for key, (protocol, label) in choices.items()
         ]
-        options.extend([(next_key, "Продолжить", ""), ("0", "Отмена установки", "")])
+        options.extend([(next_key, "Готово", "перейти к проверке"), ("0", "Отмена установки", "")])
         choice = menu(options, "ПРОТОКОЛЫ НОДЫ")
         if choice == "0":
             return False
@@ -139,8 +238,10 @@ def _collect_protocols(node: NodeConfig, app: ApplicationService) -> bool:
         spec = read_protocol(protocol, app, node.protocols.get(protocol, NodeProtocolSpec()))
         if spec is not None:
             node.protocols[protocol] = spec
-            name = _input("Название профиля в подписке", "-")
-            if name != "-":
+            name = _ask_required("Название профиля в подписке (Enter — без имени)", "")
+            if name is None:
+                node.protocols.pop(protocol, None)
+            elif name not in ("", "-"):
                 node.profile_names[protocol] = name
 
 
@@ -158,7 +259,10 @@ def _collect_calls_cookies(node: NodeConfig) -> str | None:
         ],
         wrap=True,
     )
-    return _input("Путь к отдельному VK cookies JSON")
+    value = ask("Путь к отдельному VK cookies JSON (0 — без cookies)")
+    if value in (None, "0"):
+        return None
+    return value
 
 
 def _base_url(state: AppState, app: ApplicationService) -> str:
@@ -170,10 +274,119 @@ def _confirm_fingerprint(fingerprint: str) -> bool:
     return confirm(f"Доверять SSH host key {fingerprint}?", default=False)
 
 
-def install_node(state: AppState, app: ApplicationService) -> None:
+def _plan_lines(node: NodeConfig, state: AppState, app: ApplicationService) -> list[str]:
+    protocols = ", ".join(protocol_label(name) for name in sorted(node.protocols) if node.protocols[name].enabled)
+    return [
+        kv("ID:", node.label),
+        kv("Имя:", node.name or node.id),
+        kv("Адрес:", node.address),
+        kv("SSH:", f"{node.ssh_user}@{node.address}:{node.ssh_port}"),
+        kv("Пароль:", "будет введён заново при продолжении; не сохраняется"),
+        kv("Протоколы:", protocols or "нет"),
+        kv("Ветка:", node.branch),
+        kv("SHA (получен автоматически):", node.revision),
+        kv("API управления:", str(node.control_port)),
+        kv("Подписка:", _base_url(state, app)),
+        "SSH устанавливает HYDRA; параметры содержат только публичную конфигурацию.",
+    ]
+
+
+def _edit_plan(node: NodeConfig, app: ApplicationService) -> None:
+    """Advanced fields live here, so the normal path stays five questions long."""
+    choice = menu(
+        [
+            ("1", "ID и имя", ""),
+            ("2", "Адрес и SSH", ""),
+            ("3", "Порты", ""),
+            ("4", "Ветка", ""),
+            ("0", "Назад", ""),
+        ],
+        "ИСПРАВИТЬ ДАННЫЕ",
+    )
+    if choice == "1":
+        node_id = _ask_required("ID ноды", node.id)
+        name = _ask_required("Имя ноды", node.name)
+        if node_id and name:
+            node.id, node.name = node_id, name
+    elif choice == "2":
+        address = _ask_required("Адрес VPS", node.address)
+        ssh_user = _ask_required("Имя пользователя SSH", node.ssh_user)
+        if address and ssh_user:
+            node.address, node.ssh_user = address, ssh_user
+    elif choice == "3":
+        ssh_port = _ask_required("SSH-порт", str(node.ssh_port))
+        control_port = _ask_required("Порт API управления", str(node.control_port))
+        if ssh_port and control_port:
+            try:
+                node.ssh_port, node.control_port = int(ssh_port), int(control_port)
+            except ValueError:
+                error("Порты должны быть числами")
+    elif choice == "4":
+        branch = _ask_required("Ветка", node.branch)
+        if branch:
+            try:
+                node.branch = checked_node_branch(branch, context="branch")
+            except ValueError as exc:
+                error(str(exc))
     try:
-        _check_subscription_ready(state, app)
-        node = _collect_identity(state, app, title="НОВАЯ НОДА", hints=NEW_NODE_HINTS)
+        node.validate()
+    except ValueError as exc:
+        error(f"Данные не сохранены: {exc}")
+
+
+def _report(log: InstallLog, node: NodeConfig, result: object) -> None:
+    status = getattr(result, "status", "")
+    lines = [f"[OK] {STAGE_TEXT[name]}" for name in log.done]
+    lines.extend([f"[OK] {STAGE_TEXT[name]}" for name in STAGE_ORDER if name not in log.done and name != log.failed])
+    lines.append(f"Публикация профилей: {status}")
+    panel("ОТЧЁТ ОБ УСТАНОВКЕ", [f"{node.label} · {node.address}", *lines], wrap=True)
+
+
+def _offer_resume(
+    node: NodeConfig,
+    password: str | None,
+    state: AppState,
+    app: ApplicationService,
+    log: InstallLog,
+) -> None:
+    """Continue the same node after a partial install, never reinstalling it."""
+    panel(
+        "ПРОДОЛЖИТЬ ПОДКЛЮЧЕНИЕ",
+        [
+            "Установка не повторяется: HYDRA заходит по pinned SSH и выдаёт удостоверение.",
+            "Подходит, если HYDRA на VPS уже установлена, а нода не подключилась.",
+            "Версия на VPS остаётся той, что установлена: обновление — отдельный пункт.",
+        ],
+        wrap=True,
+    )
+    if not confirm("Продолжить подключение этой ноды?", default=False):
+        return
+    try:
+        with ssh_password_auth(password) if password else nullcontext() as auth:
+            result = app.nodes.resume_node(
+                node,
+                base_url=_base_url(state, app),
+                confirm_fingerprint=_confirm_fingerprint,
+                auth=auth,
+                progress=log.stage,
+            )
+        _report(log, node, result)
+    except Exception as exc:
+        error(f"Подключение не завершено · {log.failure(exc)}")
+
+
+def install_node(state: AppState, app: ApplicationService) -> None:
+    # Checked before anything is asked: a base without a working HTTPS subscription
+    # service cannot publish this node, so the operator should not type a password first.
+    _check_subscription_ready(state, app)
+    node: NodeConfig | None = None
+    password: str | None = None
+    log = InstallLog()
+    try:
+        collected = _collect_identity(state, app)
+        if collected is None:
+            return
+        node, password = collected
         if not _collect_protocols(node, app):
             return
         vk_cookie_source = _collect_calls_cookies(node)
@@ -181,56 +394,61 @@ def install_node(state: AppState, app: ApplicationService) -> None:
         if revision is None:
             return
         node.revision = revision
+        while True:
+            panel("ПЛАН УСТАНОВКИ", _plan_lines(node, state, app), wrap=True)
+            choice = menu(
+                [
+                    ("1", "Подтвердить установку", ""),
+                    ("2", "Исправить данные", ""),
+                    ("0", "Отмена", ""),
+                ],
+                "ПОДТВЕРЖДЕНИЕ",
+            )
+            if choice == "2":
+                _edit_plan(node, app)
+                continue
+            if choice != "1":
+                error("Установка отменена; VPS не изменялась")
+                return
+            break
+        panel("УСТАНОВКА", ["Установка начата. Этапы отмечаются по мере выполнения."], wrap=True)
+        with ssh_password_auth(password) if password else nullcontext() as auth:
+            result = app.nodes.add_node(
+                node,
+                base_url=_base_url(state, app),
+                confirm_fingerprint=_confirm_fingerprint,
+                vk_cookie_source=vk_cookie_source,
+                auth=auth,
+                progress=log.stage,
+            )
+        _report(log, node, result)
+    except InterruptedError:
+        return
+    except Exception as exc:
+        error(f"Установка не завершена · {log.failure(exc)}")
+        # A runtime failure from the provisioning path may have left HYDRA installed, so
+        # continuing the same node is offered instead of a second install. Continuing
+        # verifies ownership over the pinned SSH key and refuses when nothing is there,
+        # which is why the offer does not depend on knowing the exact remote state.
+        if node is not None and isinstance(exc, RuntimeError):
+            _offer_resume(node, password, state, app, log)
+            return
         panel(
-            "ПЛАН УСТАНОВКИ",
+            "ЧТО ДАЛЬШЕ",
             [
-                kv("Нода:", f"{node.name} · {node.id}"),
-                kv("SSH:", f"root@{node.address}:{node.ssh_port}"),
-                kv("API управления:", str(node.control_port)),
-                kv("Ветка:", node.branch),
-                kv("SHA (получен автоматически):", node.revision),
-                kv(
-                    "Протоколы:",
-                    ", ".join(protocol_label(name) for name in node.protocols) or "нет",
-                ),
-                "SSH устанавливает HYDRA; параметры содержат только публичную конфигурацию.",
-                "При неполном provisioning запись/доступ требуют проверки и повторной попытки.",
+                "Повторный запуск установки для уже установленной ноды не требуется.",
+                "Если HYDRA на VPS уже стоит, используй продолжение подключения той же ноды.",
             ],
             wrap=True,
         )
-        if not confirm("Установить эту ноду?", default=False):
-            return
-        base_url = _base_url(state, app)
-        try:
-            result = app.nodes.add_node(
-                node,
-                base_url=base_url,
-                confirm_fingerprint=_confirm_fingerprint,
-                vk_cookie_source=vk_cookie_source,
-            )
-        except RuntimeError as exc:
-            # A VPS that already carries HYDRA refuses a second install, and a node whose
-            # control identity never arrived has no record to open. Both are recoverable
-            # without reinstalling, so the offer is made here, with the data already
-            # collected, instead of asking the operator to retype everything.
-            error(str(exc))
-            panel(
-                "ПРОДОЛЖИТЬ ПОДКЛЮЧЕНИЕ",
-                [
-                    "Установка не повторяется: HYDRA заходит по pinned SSH и выдаёт удостоверение.",
-                    "Подходит, если HYDRA на VPS уже установлена, а нода не подключилась.",
-                    "Версия на VPS остаётся той, что установлена: обновление — отдельный пункт.",
-                ],
-                wrap=True,
-            )
-            if not confirm("Продолжить подключение этой ноды?", default=False):
-                return
-            result = app.nodes.resume_node(
-                node,
-                base_url=base_url,
-                confirm_fingerprint=_confirm_fingerprint,
-                vk_cookie_source=vk_cookie_source,
-            )
-        success(f"Нода готова; экспорт: {result.status}")
-    except InterruptedError:
-        return
+
+
+__all__ = [
+    "STAGE_ORDER",
+    "STAGE_TEXT",
+    "InstallLog",
+    "install_node",
+    "protocol_choices",
+    "read_protocol",
+    "resolve_revision",
+]

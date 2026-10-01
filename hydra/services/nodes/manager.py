@@ -15,9 +15,10 @@ from hydra.contracts.node_validation import (
 )
 from hydra.core.configuration_names import normalize_configuration_name, validate_configuration_key
 from hydra.core.state_models import AppState
-from hydra.core.state_nodes import NodeConfig
+from hydra.core.state_nodes import MANAGEMENT_ACTIVE, MANAGEMENT_WITHDRAWN, NodeConfig
 from hydra.services.nodes.credentials import NodeControlCredentials
 from hydra.services.nodes.control_client import NodeControlPort
+from hydra.services.nodes.lifecycle import NodeLifecycle
 from hydra.services.nodes.onboarding import NodeOnboarding, NodeProvisioningPort
 from hydra.services.nodes.observation import (
     CONTROL_OK,
@@ -31,7 +32,8 @@ from hydra.services.nodes.observation import (
 )
 from hydra.services.nodes.reconciler import NodeSnapshotReconciler, NodeSyncResult
 from hydra.services.nodes.snapshot_store import NodeSnapshotStore
-from hydra.services.node_traffic_accounting import apply_node_traffic_reports, retire_node_traffic
+from hydra.services.nodes.ssh_auth import SshPasswordAuth
+from hydra.services.node_traffic_accounting import apply_node_traffic_reports
 
 
 class NodeManager:
@@ -64,6 +66,20 @@ class NodeManager:
             client_for=client_for,
             snapshot_store=snapshot_store,
         )
+        self.lifecycle = NodeLifecycle(
+            # Indirection, not a captured reference: replacing the writer on the manager
+            # (a failure-injection test, a future adapter) must affect these operations.
+            state_reader=lambda: self.state_reader(),
+            state_updater=lambda mutator: self.state_updater(mutator),
+            find_node=self._find_node,
+            refresh=self.refresh,
+            collect_traffic=self.collect_traffic,
+            stop_publication=self._reconciler.stop_publication,
+            snapshot_store=snapshot_store,
+            observations_store=observations,
+            uninstall_remote=uninstall_remote,
+            forget_node_credentials=forget_node_credentials,
+        )
 
     def list_nodes(self, state: AppState) -> list[NodeConfig]:
         return deepcopy(state.nodes)
@@ -82,7 +98,7 @@ class NodeManager:
 
     def published_export(self, state: AppState, node_id: str) -> NodeClientExport | None:
         node = self._find_node(state, node_id)
-        if node.published_generation <= 0 or not node.published_digest:
+        if node.withdrawn or node.published_generation <= 0 or not node.published_digest:
             return None
         return self.snapshot_store.load(node_id, node.published_generation, node.published_digest)
 
@@ -93,12 +109,16 @@ class NodeManager:
         base_url: str,
         confirm_fingerprint: Callable[[str], bool],
         vk_cookie_source: str | None = None,
+        auth: SshPasswordAuth | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> NodeSyncResult:
         return self._onboarding().add(
             node,
             base_url=base_url,
             confirm_fingerprint=confirm_fingerprint,
             vk_cookie_source=vk_cookie_source,
+            auth=auth,
+            progress=progress,
         )
 
     def resume_node(
@@ -132,60 +152,32 @@ class NodeManager:
         )
 
     def remove_node(self, node_id: str, *, confirmed: bool) -> dict[str, object]:
-        if type(confirmed) is not bool or not confirmed:
-            raise ValueError("node removal requires explicit confirmation")
-        if self.uninstall_remote is None or self.forget_node_credentials is None:
-            raise RuntimeError("node removal is unavailable")
-        node = deepcopy(self._find_node(self.state_reader(), node_id))
-        self.uninstall_remote(node)
-        return self._remove_local_node(node, status="removed")
+        return self.lifecycle.remove_node(node_id, confirmed=confirmed)
 
     def detach_node(self, node_id: str, *, confirmed: bool) -> dict[str, object]:
-        """Forget local publication only; an offline remote runtime is NOT stopped."""
-        if type(confirmed) is not bool or not confirmed:
-            raise ValueError("node detach requires explicit confirmation")
-        if self.forget_node_credentials is None:
-            raise RuntimeError("node credential cleanup is unavailable")
-        node = deepcopy(self._find_node(self.state_reader(), node_id))
-        result = self._remove_local_node(node, status="detached")
-        result["remote_cleanup"] = False
-        return result
+        return self.lifecycle.detach_node(node_id, confirmed=confirmed)
+
+    def withdraw_node(self, node_id: str, *, confirmed: bool) -> dict[str, object]:
+        return self.lifecycle.withdraw_node(node_id, confirmed=confirmed)
+
+    def restore_node(self, node_id: str) -> NodeSyncResult:
+        return self.lifecycle.restore_node(node_id)
+
+    def set_appearance(
+        self,
+        node_id: str,
+        *,
+        display_id: str | None = None,
+        name: str | None = None,
+        region: str | None = None,
+    ) -> NodeConfig:
+        return self.lifecycle.set_appearance(node_id, display_id=display_id, name=name, region=region)
 
     def import_vk_cookies(self, node_id: str, source_path: str) -> None:
         if self.import_remote_cookies is None:
             raise RuntimeError("node cookie import is unavailable")
         node = deepcopy(self._find_node(self.state_reader(), node_id))
         self.import_remote_cookies(node, source_path)
-
-    def _remove_local_node(self, node: NodeConfig, *, status: str) -> dict[str, object]:
-        node_id = node.id
-
-        def remove(state: AppState) -> None:
-            current = self._find_node(state, node_id)
-            if not self._same_removal_target(current, node):
-                raise RuntimeError("node configuration changed during remote removal")
-            state.nodes.remove(current)
-            retire_node_traffic(state, node_id)
-
-        self.state_updater(remove)
-        if self.observations_store is not None:
-            self.observations_store.forget(node_id)
-        warnings: list[str] = []
-        if node.published_generation and node.published_digest:
-            try:
-                self.snapshot_store.delete(node_id, node.published_generation, node.published_digest)
-            except Exception as exc:
-                warnings.append(f"snapshot:{type(exc).__name__}")
-        try:
-            if self.forget_node_credentials is None:
-                raise RuntimeError("node credential cleanup is unavailable")
-            self.forget_node_credentials(node_id)
-        except Exception as exc:
-            warnings.append(f"credentials:{type(exc).__name__}")
-        result: dict[str, object] = {"node_id": node_id, "status": status}
-        if warnings:
-            result["cleanup_warnings"] = warnings
-        return result
 
     def check(self, node_id: str) -> dict[str, object]:
         node = self._find_node(self.state_reader(), node_id)
@@ -292,8 +284,41 @@ class NodeManager:
         self.state_updater(change)
 
     def change_protocol(self, node_id: str, name: str, spec: NodeProtocolSpec) -> NodeSyncResult:
+        self._store_protocol(node_id, name, spec)
+        return self.refresh(node_id)
+
+    def save_protocol(self, node_id: str, name: str, spec: NodeProtocolSpec) -> dict[str, object]:
+        """Save validated public settings, then try to apply them.
+
+        Saving and applying are separate results: an offline node keeps the operator's
+        intent and applies it on the next successful contact, so this returns what
+        happened instead of raising away an already-saved change.
+        """
+        self._store_protocol(node_id, name, spec)
+        try:
+            result = self.refresh(node_id)
+        except Exception as exc:
+            return {
+                "node_id": node_id,
+                "protocol": name,
+                "saved": True,
+                "applied": False,
+                "error": type(exc).__name__,
+                "detail": str(exc)[:512],
+            }
+        return {
+            "node_id": node_id,
+            "protocol": name,
+            "saved": True,
+            "applied": True,
+            "status": result.status,
+            "generation": result.generation,
+            "coverage": dict(result.coverage),
+            "warnings": list(result.warnings),
+        }
+
+    def _store_protocol(self, node_id: str, name: str, spec: NodeProtocolSpec) -> None:
         spec.validate(label=f"nodes.{node_id}.protocols.{name}")
-        self.check(node_id)
 
         def update(state: AppState) -> None:
             node = self._find_node(state, node_id)
@@ -301,7 +326,6 @@ class NodeManager:
             node.validate(path=f"nodes.{node_id}")
 
         self.state_updater(update)
-        return self.refresh(node_id)
 
     def update(self, node_id: str) -> dict[str, object]:
         node = self._find_node(self.state_reader(), node_id)
@@ -374,6 +398,9 @@ class NodeManager:
         """Return current absolute reports; offline nodes retain their last sample."""
         reports: list[NodeTrafficReport] = []
         for node in self.state_reader().nodes:
+            if node.withdrawn:
+                # A withdrawn node has no users, so it has nothing left to report.
+                continue
             try:
                 self.refresh(node.id)
                 current = self._find_node(self.state_reader(), node.id)
@@ -392,16 +419,6 @@ class NodeManager:
         if self.bootstrap is None or self.uninstall_remote is None or self.forget_node_credentials is None:
             raise RuntimeError("node provisioning is unavailable")
         return self.bootstrap, self.uninstall_remote, self.forget_node_credentials
-
-    @staticmethod
-    def _same_removal_target(current: NodeConfig, expected: NodeConfig) -> bool:
-        return (
-            current.id == expected.id
-            and current.address == expected.address
-            and current.ssh_port == expected.ssh_port
-            and current.control_port == expected.control_port
-            and current.control_fingerprint == expected.control_fingerprint
-        )
 
     @staticmethod
     def _find_node(state: AppState, node_id: str) -> NodeConfig:

@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import shutil
+from collections.abc import Sequence
 from typing import Optional
 from hydra import __version__
 from hydra.build_info import get_build_info
@@ -342,11 +343,13 @@ def _menu_key(key: str) -> str:
     return f"{DIM}[{NC}{CYAN}{BOLD}{key}{NC}{DIM}]{NC}"
 
 
-def menu(options: list[tuple[str, str, str]], header: str = "") -> str:
+def menu(options: Sequence[tuple[str, str, object]], header: str = "") -> str:
     """Отображает компактное меню в тонкой рамке.
 
     Третий элемент кортежа — краткое описание; если оно есть, показываем его тусклой
-    строкой под пунктом — оператору не надо угадывать, что делает пункт.
+    строкой под пунктом — оператору не надо угадывать, что делает пункт. Список строк
+    в описании рисуется отдельными строками, чтобы адрес, статус и причина не
+    сливались в одну длинную фразу.
     """
     print()
     print(_frame_top(header))
@@ -357,8 +360,11 @@ def menu(options: list[tuple[str, str, str]], header: str = "") -> str:
             continue
         key_col = _menu_key(key)
         print(*_frame_row(f"{key_col}  {label}"), sep="\n")
-        text = str(desc or "").strip()
-        if text:
+        lines = desc if isinstance(desc, (list, tuple)) else [desc]
+        for line in lines:
+            text = str(line or "").strip()
+            if not text:
+                continue
             # Выравниваем под label: ключ «[X]» = 3 символа + 2 пробела.
             print(*_frame_row(f"     {DIM}{text}{NC}"), sep="\n")
     print(_frame_bottom())
@@ -403,6 +409,37 @@ def prompt(text: str, default: str = "") -> str:
         return result or default
     except (KeyboardInterrupt, EOFError):
         return default
+
+
+def ask(text: str, default: str = "") -> Optional[str]:
+    """Запрашивает значение и отличает отказ от обычного ввода.
+
+    ``prompt`` возвращает default и на Ctrl-C/EOF, поэтому отмена в нём неотличима
+    от согласия. Формы нод используют этот вариант: ``None`` — оператор отказался,
+    пустая строка — согласился на пустое значение.
+    """
+    d = f" {DIM}[{default}]{NC}" if default else ""
+    try:
+        print(f"{INDENT}{CYAN}▸{NC} {BOLD}{text}{NC}{d}")
+        result = input(f"{INDENT}  {CYAN}›{NC} ").strip()
+    except (KeyboardInterrupt, EOFError):
+        return None
+    return result or default
+
+
+def ask_secret(text: str) -> Optional[str]:
+    """Читает секрет без эха; ``None`` — отказ или прерывание.
+
+    Пароль не попадает ни в историю ввода, ни в вывод. Возвращённая строка живёт
+    только до конца операции и не сохраняется в state.
+    """
+    import getpass
+
+    try:
+        print(f"{INDENT}{CYAN}▸{NC} {BOLD}{text}{NC}")
+        return getpass.getpass(f"{INDENT}  {CYAN}›{NC} ")
+    except (KeyboardInterrupt, EOFError):
+        return None
 
 
 def confirm(text: str, default: bool = True) -> bool:

@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -13,6 +14,13 @@ from hydra.ui._menus import nodes, nodes_setup
 
 
 SHA = "a" * 40
+
+
+@contextmanager
+def _no_password_channel(password):
+    """Stand in for the askpass channel: tests never open a real socket."""
+    assert password is None or isinstance(password, str)
+    yield None
 
 
 def _app():
@@ -53,38 +61,46 @@ def test_real_transport_catalogue_renders_nonempty_product_names(capsys):
         assert label in rendered
 
 
-def test_real_wizard_input_flow_uses_auto_port_auto_sha_and_safe_final_cancel(capsys):
+def test_real_wizard_asks_address_account_password_id_and_name_in_that_order(capsys):
     app = _app()
     app.protocols.list.return_value = [
         plugin for plugin in default_plugins() if plugin.meta.category == PluginCategory.TRANSPORT
     ]
     choices = nodes_setup.protocol_choices(app)
     awg = next(key for key, (name, _) in choices.items() if name == "amneziawg")
-    values = [
-        "uk-1",
-        "194.147.35.112",
-        "22",
-        "UK London",
-        "UK",
-        "dev",
-        "9444",
-        awg,
-        "1",
-        "1",
-        "1",
-        "-",
-        str(len(choices) + 1),
-        "n",
-    ]
-    with patch("builtins.input", side_effect=values):
+    with (
+        patch.object(nodes_setup, "ask", side_effect=["194.147.35.112", "root", "uk-1", "UK London", "-"]) as ask,
+        patch.object(nodes_setup, "ask_secret", return_value="hunter2") as secret,
+        patch.object(nodes_setup, "read_protocol", return_value=NodeProtocolSpec(enabled=True, port=0)),
+        patch("builtins.input", side_effect=[awg, str(len(choices) + 1), "0"]),
+    ):
         nodes_setup.install_node(AppState(), app)
     output = capsys.readouterr().out
-    assert "AmneziaWG" in output and "выбран" in output and "не SSH-логин" in output
-    assert "2.0" in output and "ПАРАМЕТРЫ" in output
+    assert "AmneziaWG" in output and "выбран" in output
     assert "root@194.147.35.112:22" in output and SHA in output
-    assert "cancel" not in output
-    app.nodes.resolve_revision.assert_called_once_with("dev")
+    assert [call.args[0].split(" (")[0] for call in ask.call_args_list] == [
+        "Адрес VPS",
+        "Имя пользователя SSH",
+        "ID ноды",
+        "Имя ноды",
+        "Название профиля в подписке",
+    ]
+    assert secret.call_args.args[0].startswith("Пароль SSH")
+    app.nodes.resolve_revision.assert_called_once_with("main")
     app.nodes.add_node.assert_not_called()
+
+
+def test_install_plan_never_prints_the_ssh_password(capsys):
+    app = _app()
+    with (
+        patch.object(nodes_setup, "ask", side_effect=["node.example.com", "root", "uk-1", "UK"]),
+        patch.object(nodes_setup, "ask_secret", return_value="top-secret-pw"),
+        patch("builtins.input", side_effect=["2", "0"]),
+    ):
+        nodes_setup.install_node(AppState(), app)
+    output = capsys.readouterr().out
+    assert "top-secret-pw" not in output
+    assert "не сохраняется" in output
 
 
 @pytest.mark.parametrize("choices", [["9"]])
@@ -95,54 +111,59 @@ def test_invalid_protocol_action_cannot_enable_protocol(choices):
     prompt.assert_not_called()
 
 
-@pytest.mark.parametrize("step", range(7))
-def test_zero_cancels_each_install_field_without_network_or_ssh(step):
+@pytest.mark.parametrize("step", range(5))
+def test_cancel_at_each_install_question_stops_before_network_or_ssh(step):
     app = _app()
-    values = ["uk-1", "node.example.com", "22", "UK London", "UK", "dev", "9444"]
-    values[step] = "0"
-    with patch.object(nodes_setup, "prompt", side_effect=values), patch.object(nodes_setup, "panel"):
+    values = ["194.147.35.112", "root", "uk-1", "UK London"]
+    secrets = [None] if step == 2 else ["pw"]
+    if step != 2:
+        values[step if step < 2 else step - 1] = "0"
+    with (
+        patch.object(nodes_setup, "ask", side_effect=values),
+        patch.object(nodes_setup, "ask_secret", side_effect=secrets),
+        patch.object(nodes_setup, "panel"),
+        patch.object(nodes_setup, "menu") as menu,
+    ):
         nodes_setup.install_node(AppState(), app)
     app.nodes.resolve_revision.assert_not_called()
     app.nodes.add_node.assert_not_called()
+    menu.assert_not_called()
 
 
-def test_install_fetches_sha_once_after_selection_and_shows_it_before_confirmation():
+def test_install_fetches_sha_once_and_passes_a_password_channel_not_a_password():
     app = _app()
     with (
-        patch.object(
-            nodes_setup, "prompt", side_effect=["uk-1", "node.example.com", "22", "UK London", "UK", "dev", "9444"]
-        ) as prompt,
-        patch.object(nodes_setup, "menu", return_value="2"),
-        patch.object(nodes_setup, "confirm", return_value=True),
+        patch.object(nodes_setup, "ask", side_effect=["node.example.com", "deploy", "uk-1", "UK London", "-"]) as ask,
+        patch.object(nodes_setup, "ask_secret", return_value="pw"),
+        patch.object(nodes_setup, "read_protocol", return_value=NodeProtocolSpec(enabled=True)),
+        patch("builtins.input", side_effect=["1", "2", "1"]),
         patch.object(nodes_setup, "panel") as panel,
+        patch.object(nodes_setup, "ssh_password_auth", Mock(side_effect=_no_password_channel)) as channel,
         patch.object(nodes_setup, "success"),
     ):
         nodes_setup.install_node(AppState(), app)
-    app.nodes.resolve_revision.assert_called_once_with("dev")
+    app.nodes.resolve_revision.assert_called_once_with("main")
     app.nodes.add_node.assert_called_once()
     node = app.nodes.add_node.call_args.args[0]
-    assert node.revision == SHA and node.branch == "dev" and node.name == "UK London"
+    assert node.revision == SHA and node.name == "UK London" and node.ssh_user == "deploy"
     assert any(SHA in str(call) for call in panel.call_args_list)
-    assert not any("SHA" in call.args[0] for call in prompt.call_args_list)
-    hints = " ".join(str(part) for call in panel.call_args_list for part in call.args)
-    assert "не SSH-логин" in hints
+    assert not any("SHA" in call.args[0] for call in ask.call_args_list)
+    assert "pw" not in str(app.nodes.add_node.call_args)
+    channel.assert_called_once_with("pw")
 
 
 def test_revision_lookup_failure_stops_install_and_reports_safe_actionable_error():
     app = _app()
     app.nodes.resolve_revision.side_effect = RuntimeError("secret-token")
     with (
-        patch.object(
-            nodes_setup, "prompt", side_effect=["uk-1", "node.example.com", "22", "UK London", "UK", "dev", "9444"]
-        ),
-        patch.object(nodes_setup, "menu", return_value="2"),
-        patch.object(nodes_setup, "confirm") as confirm,
+        patch.object(nodes_setup, "ask", side_effect=["node.example.com", "root", "uk-1", "UK London"]),
+        patch.object(nodes_setup, "ask_secret", return_value="pw"),
+        patch("builtins.input", return_value="2"),
         patch.object(nodes_setup, "panel"),
         patch.object(nodes_setup, "error") as error,
     ):
         nodes_setup.install_node(AppState(), app)
     app.nodes.add_node.assert_not_called()
-    confirm.assert_not_called()
     assert error.called
     assert "secret-token" not in str(error.call_args)
     assert "GitHub" in str(error.call_args)
@@ -151,10 +172,9 @@ def test_revision_lookup_failure_stops_install_and_reports_safe_actionable_error
 def test_cancel_protocol_selection_does_not_fetch_sha():
     app = _app()
     with (
-        patch.object(
-            nodes_setup, "prompt", side_effect=["uk-1", "node.example.com", "22", "UK London", "UK", "dev", "9444"]
-        ),
-        patch.object(nodes_setup, "menu", return_value="0"),
+        patch.object(nodes_setup, "ask", side_effect=["node.example.com", "root", "uk-1", "UK London"]),
+        patch.object(nodes_setup, "ask_secret", return_value="pw"),
+        patch("builtins.input", return_value="0"),
         patch.object(nodes_setup, "panel"),
     ):
         nodes_setup.install_node(AppState(), app)
@@ -166,12 +186,12 @@ def test_upgrade_resolves_branch_without_manual_sha_and_confirms_before_mutation
     app = _app()
     node = NodeConfig(id="uk-1", branch="dev", revision="b" * 40)
     with (
-        patch.object(nodes, "prompt", return_value="dev") as prompt,
+        patch.object(nodes, "ask", return_value="dev") as ask,
         patch.object(nodes, "confirm", return_value=False),
         patch.object(nodes, "panel"),
     ):
         nodes._upgrade(node, app)
-    assert prompt.call_count == 1
+    assert ask.call_count == 1
     app.nodes.resolve_revision.assert_called_once_with("dev")
     app.nodes.change_update_target.assert_not_called()
     app.nodes.update.assert_not_called()
@@ -189,3 +209,40 @@ def test_automatic_protocol_port_does_not_require_typing_zero_into_data_field():
     assert spec is not None and spec.port == 0 and spec.enabled
     assert spec.config["protocol_mode"] == "2.0"
     prompt.assert_not_called()
+
+
+def test_a_bad_address_is_re_asked_without_losing_the_other_answers(capsys):
+    """One wrong field must not send the operator back to the beginning."""
+    app = _app()
+    with (
+        patch.object(
+            nodes_setup,
+            "ask",
+            side_effect=["not an address", "194.147.35.112", "root", "uk-1", "UK London"],
+        ) as ask,
+        patch.object(nodes_setup, "ask_secret", return_value="pw"),
+        patch("builtins.input", side_effect=["2", "0"]),
+    ):
+        nodes_setup.install_node(AppState(), app)
+    output = capsys.readouterr().out
+    assert "повтори адрес" in output
+    questions = [call.args[0].split(" (")[0] for call in ask.call_args_list]
+    assert questions[:3] == ["Адрес VPS", "Адрес VPS", "Имя пользователя SSH"]
+    # The address question is asked once more, and the password is not re-asked.
+    assert questions.count("Адрес VPS") == 2
+    assert questions.count("Пароль SSH") == 0
+    app.nodes.add_node.assert_not_called()
+
+
+def test_a_taken_node_id_is_re_asked_and_the_wizard_stays_in_place():
+    app = _app()
+    app.nodes.list_nodes.return_value = [NodeConfig(id="uk-1", address="203.0.113.7")]
+    with (
+        patch.object(nodes_setup, "ask", side_effect=["194.147.35.112", "root", "uk-1", "uk-2", "UK"]) as ask,
+        patch.object(nodes_setup, "ask_secret", return_value="pw"),
+        patch("builtins.input", side_effect=["2", "0"]),
+        patch.object(nodes_setup, "error") as error,
+    ):
+        nodes_setup.install_node(AppState(), app)
+    assert any("уже есть" in str(call) for call in error.call_args_list)
+    assert [call.args[0].split(" (")[0] for call in ask.call_args_list].count("ID ноды") == 2

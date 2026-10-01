@@ -11,9 +11,71 @@ from pathlib import Path
 
 from hydra.contracts.node_validation import checked_node_branch, checked_node_id, checked_node_revision
 from hydra.core.host import HostBackend
+from hydra.services.nodes.ssh_auth import SshPasswordAuth, askpass_environment
 
 _FINGERPRINT = re.compile(r"(?<!\w)SHA256:[A-Za-z0-9+/=]+")
 _NODE_SSH_ACTION_TIMEOUT = 180
+MAX_SSH_USER = 64
+
+
+def checked_ssh_user(ssh_user: object) -> str:
+    """Validate the account HYDRA logs into; the password is never validated here."""
+    if not isinstance(ssh_user, str):
+        raise ValueError("ssh_user must be a string")
+    user = ssh_user.strip()
+    if not user or len(user) > MAX_SSH_USER:
+        raise ValueError("ssh_user must be 1..64 characters")
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", user):
+        raise ValueError("ssh_user contains unsupported characters")
+    return user
+
+
+def ssh_target(ssh_user: str, address: str) -> str:
+    """Build the ssh target for the account HYDRA was told to use."""
+    user = str(ssh_user or "root").strip() or "root"
+    return f"{user}@[{address}]" if ":" in address else f"{user}@{address}"
+
+
+def remote_command(ssh_user: str, command: str) -> str:
+    """Wrap a remote command in non-interactive sudo when the account is not root."""
+    if str(ssh_user or "root").strip() in {"", "root"}:
+        return command
+    return f"sudo -n {command}"
+
+
+def require_remote_privileges(
+    *,
+    host: HostBackend,
+    address: str,
+    ssh_port: int,
+    ssh_user: str,
+    known_hosts: Path,
+    auth: SshPasswordAuth | None = None,
+) -> None:
+    """Fail before installing anything when the account cannot gain root.
+
+    A password for ``sudo`` is not assumed to equal the SSH password, so a host that
+    would ask for one is refused here instead of half-installing.
+    """
+    if str(ssh_user or "root").strip() in {"", "root"}:
+        return
+    check = host.run(
+        [
+            "ssh",
+            "-T",
+            *ssh_connection_flags(ssh_port, known_hosts),
+            ssh_target(ssh_user, address),
+            "id -u && sudo -n true",
+        ],
+        timeout=60,
+        text=True,
+        capture_output=True,
+        env=askpass_environment(auth),
+    )
+    if check.returncode != 0:
+        raise PermissionError(
+            f"SSH account {ssh_user} cannot gain root without a password; use root or grant passwordless sudo"
+        )
 
 
 def ssh_connection_flags(port: int, known_hosts: Path, *, scp: bool = False) -> list[str]:
@@ -57,6 +119,8 @@ def install_node(
     branch: str,
     revision: str,
     confirm_fingerprint: Callable[[str], bool],
+    ssh_user: str = "root",
+    auth: SshPasswordAuth | None = None,
 ) -> str:
     """Confirm the scanned host key, pin it, then stream the installer over SSH."""
     checked_node_id(node_id, context="node_id")
@@ -68,6 +132,7 @@ def install_node(
     checked_node_revision(revision, context="revision")
     if not callable(confirm_fingerprint):
         raise ValueError("confirm_fingerprint must be callable")
+    checked_ssh_user(ssh_user)
 
     keyscan = host.run(
         ["ssh-keyscan", "-p", str(ssh_port), "-t", "ed25519", address],
@@ -99,8 +164,19 @@ def install_node(
     known_hosts = known_hosts_root / node_id / "known_hosts"
     host.ensure_directory(known_hosts.parent, mode=0o700)
     host.atomic_write(known_hosts, keys[0] + "\n", mode=0o600)
-    target = f"root@[{address}]" if ":" in address else f"root@{address}"
-    remote = f"HYDRA_ROLE=node HYDRA_REF={shlex.quote(branch)} HYDRA_TARGET_REV={shlex.quote(revision)} bash -s"
+    require_remote_privileges(
+        host=host,
+        address=address,
+        ssh_port=ssh_port,
+        ssh_user=ssh_user,
+        known_hosts=known_hosts,
+        auth=auth,
+    )
+    target = ssh_target(ssh_user, address)
+    remote = remote_command(
+        ssh_user,
+        f"HYDRA_ROLE=node HYDRA_REF={shlex.quote(branch)} HYDRA_TARGET_REV={shlex.quote(revision)} bash -s",
+    )
     # No PTY on purpose: with `-tt` the streamed `bash -s` runs as an interactive
     # shell, which ignores `set -e`, weakens the ERR trap and stops reporting a
     # real failure. `-T` keeps the installer non-interactive; the SSH password is
@@ -128,6 +204,7 @@ def install_node(
         timeout=900,
         text=True,
         capture_output=False,
+        env=askpass_environment(auth),
     )
     if result.returncode != 0:
         raise RuntimeError(f"node bootstrap failed (exit {result.returncode})")
@@ -141,6 +218,9 @@ def uninstall_node(
     node_id: str,
     address: str,
     ssh_port: int,
+    ssh_user: str = "root",
+    auth: SshPasswordAuth | None = None,
+    identity_file: Path | None = None,
 ) -> None:
     """Remove one node through its confirmed SSH identity, never a shell payload."""
     checked_node_id(node_id, context="node_id")
@@ -158,7 +238,14 @@ def uninstall_node(
     target = f"root@[{address}]" if ":" in address else f"root@{address}"
     remote = "cd /opt/hydra && exec /opt/hydra/.venv/bin/python -m hydra.entrypoints.node_provision"
     result = host.run(
-        ["ssh", "-T", *ssh_connection_flags(ssh_port, known_hosts), target, remote],
+        [
+            "ssh",
+            "-T",
+            *ssh_connection_flags(ssh_port, known_hosts),
+            *(["-i", str(identity_file), "-o", "IdentitiesOnly=yes"] if identity_file else []),
+            target,
+            remote,
+        ],
         input=json.dumps({"action": "uninstall", "node_id": node_id}, separators=(",", ":")) + "\n",
         timeout=_NODE_SSH_ACTION_TIMEOUT,
         text=True,
@@ -168,4 +255,13 @@ def uninstall_node(
         raise RuntimeError("node uninstallation failed")
 
 
-__all__ = ["install_node", "ssh_connection_flags", "uninstall_node", "valid_node_address"]
+__all__ = [
+    "checked_ssh_user",
+    "install_node",
+    "remote_command",
+    "require_remote_privileges",
+    "ssh_connection_flags",
+    "ssh_target",
+    "uninstall_node",
+    "valid_node_address",
+]
