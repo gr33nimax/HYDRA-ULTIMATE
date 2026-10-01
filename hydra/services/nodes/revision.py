@@ -41,6 +41,26 @@ def fetch_bootstrap_script(revision: str) -> str:
     return script
 
 
+def revision_supports_node_mode(revision: str) -> bool:
+    """Whether this revision carries the node role at all.
+
+    A branch that predates the node role has no control service to install, and the
+    install would fail only after it already replaced the VPS's HYDRA. The plan asks
+    this once, before anything is touched.
+    """
+    revision = checked_node_revision(revision, context="revision")
+    request = urllib.request.Request(
+        f"https://raw.githubusercontent.com/gr33nimax/HYDRA-ULTIMATE/{revision}/deploy/hydra-node-control.service",
+        headers={"Accept": "text/plain", "User-Agent": "HYDRA-Node-Installer"},
+        method="HEAD",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return 200 <= response.status < 300
+    except Exception:
+        return False
+
+
 def resolve_branch_revision(branch: str) -> str:
     branch = checked_node_branch(branch, context="branch")
     request = urllib.request.Request(
