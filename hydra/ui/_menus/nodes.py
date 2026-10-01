@@ -442,6 +442,7 @@ def menu_nodes(state: AppState, app: ApplicationService) -> None:
         try:
             if choice == "1":
                 install_node(state, app)
+                prompt("Нажмите Enter")
             else:
                 selected = choices.get(choice)
                 if selected is not None:
@@ -450,6 +451,7 @@ def menu_nodes(state: AppState, app: ApplicationService) -> None:
             continue
         except Exception as exc:
             error(f"Операция не завершена: {exc if str(exc) else type(exc).__name__}")
+            prompt("Нажмите Enter")
 
 
 __all__ = [

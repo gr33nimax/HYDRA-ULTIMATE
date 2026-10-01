@@ -41,7 +41,7 @@ def test_empty_list_install_is_numeric_one():
     state.nodes.clear()
     with (
         patch.object(nodes, "menu", side_effect=_numeric_menu),
-        patch("builtins.input", side_effect=["1", "0"]),
+        patch("builtins.input", side_effect=["1", "", "0"]),
         patch.object(nodes, "clear"),
         patch.object(nodes, "install_node") as install,
     ):
@@ -81,7 +81,7 @@ def test_install_collects_identity_in_order_and_continues_with_a_numeric_key():
         patch.object(nodes_setup, "ask", side_effect=["node.example.com", "root", "new-node", "Germany", "-"]) as ask,
         patch.object(nodes_setup, "ask_secret", return_value="pw") as secret,
         patch.object(nodes_setup, "menu", side_effect=_numeric_menu),
-        patch("builtins.input", side_effect=["1", "2", "1"]),
+        patch("builtins.input", side_effect=["1", "1", "2", "1"]),
         patch.object(nodes_setup, "read_protocol", return_value=NodeProtocolSpec(enabled=True)),
         patch.object(nodes_setup, "panel"),
         patch.object(nodes_setup, "success"),

@@ -9,6 +9,7 @@ import pytest
 def _no_channel():
     yield None
 
+
 from hydra.contracts.node_snapshot import NodeProtocolSpec
 from hydra.core.state_models import AppState
 from hydra.core.state_nodes import NodeConfig
@@ -107,10 +108,12 @@ def test_calls_install_wizard_passes_separate_cookie_file_before_initial_activat
         )
     ]
     with (
-        patch.object(nodes_setup, "ask", side_effect=["node.example.com", "root", "de-1", "Germany", "-", "/secure/node-vk.json"]),
+        patch.object(
+            nodes_setup, "ask", side_effect=["node.example.com", "root", "de-1", "Germany", "-", "/secure/node-vk.json"]
+        ),
         patch.object(nodes_setup, "ask_secret", return_value="pw"),
         patch.object(nodes_setup, "read_protocol", return_value=NodeProtocolSpec(enabled=True)),
-        patch("builtins.input", side_effect=["1", "2", "1"]),
+        patch("builtins.input", side_effect=["1", "1", "2", "1"]),
         patch.object(nodes_setup, "panel"),
         patch.object(nodes_setup, "ssh_password_auth", Mock(side_effect=lambda password: _no_channel())),
         patch.object(nodes_setup, "success"),

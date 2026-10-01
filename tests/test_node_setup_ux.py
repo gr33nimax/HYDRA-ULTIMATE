@@ -43,6 +43,41 @@ def _app():
     return app
 
 
+@pytest.mark.parametrize(("key", "branch"), [("1", "main"), ("2", "dev")])
+def test_install_selects_branch_before_protocols_and_pins_that_branch(key, branch, capsys):
+    app = _app()
+    app.nodes.add_node.return_value = SimpleNamespace(status="applied")
+    with (
+        patch.object(nodes_setup, "ask", side_effect=["node.example.com", "root", "uk-1", "UK", "-"]),
+        patch.object(nodes_setup, "ask_secret", return_value=""),
+        patch.object(nodes_setup, "read_protocol", return_value=NodeProtocolSpec(enabled=True)),
+        patch("builtins.input", side_effect=[key, "1", "2", "1"]),
+    ):
+        nodes_setup.install_node(AppState(), app)
+    output = capsys.readouterr().out
+    assert output.index("ВЕТКА УСТАНОВКИ НОДЫ") < output.index("ПРОТОКОЛЫ НОДЫ")
+    app.nodes.resolve_revision.assert_called_once_with(branch)
+    node = app.nodes.add_node.call_args.args[0]
+    assert node.branch == branch and node.revision == SHA
+    assert node.protocols["amneziawg"].enabled
+
+
+def test_cancel_branch_selection_stops_before_protocols_network_or_ssh(capsys):
+    app = _app()
+    with (
+        patch.object(nodes_setup, "ask", side_effect=["node.example.com", "root", "uk-1", "UK"]),
+        patch.object(nodes_setup, "ask_secret", return_value=""),
+        patch("builtins.input", return_value="0"),
+    ):
+        nodes_setup.install_node(AppState(), app)
+    output = capsys.readouterr().out
+    assert "ВЕТКА УСТАНОВКИ НОДЫ" in output
+    assert "ПРОТОКОЛЫ НОДЫ" not in output
+    app.protocols.list.assert_not_called()
+    app.nodes.resolve_revision.assert_not_called()
+    app.nodes.add_node.assert_not_called()
+
+
 def test_empty_plugin_display_names_use_shared_product_labels():
     app = _app()
     assert nodes_setup.protocol_choices(app) == {"1": ("amneziawg", "AmneziaWG")}
@@ -74,7 +109,7 @@ def test_real_wizard_asks_address_account_password_id_and_name_in_that_order(cap
         patch.object(nodes_setup, "ask", side_effect=["194.147.35.112", "root", "uk-1", "UK London", "-"]) as ask,
         patch.object(nodes_setup, "ask_secret", return_value="hunter2") as secret,
         patch.object(nodes_setup, "read_protocol", return_value=NodeProtocolSpec(enabled=True, port=0)),
-        patch("builtins.input", side_effect=[awg, str(len(choices) + 1), "0"]),
+        patch("builtins.input", side_effect=["1", awg, str(len(choices) + 1), "0"]),
     ):
         nodes_setup.install_node(AppState(), app)
     output = capsys.readouterr().out
@@ -97,7 +132,7 @@ def test_install_plan_never_prints_the_ssh_password(capsys):
     with (
         patch.object(nodes_setup, "ask", side_effect=["node.example.com", "root", "uk-1", "UK"]),
         patch.object(nodes_setup, "ask_secret", return_value="top-secret-pw"),
-        patch("builtins.input", side_effect=["2", "0"]),
+        patch("builtins.input", side_effect=["1", "2", "0"]),
     ):
         nodes_setup.install_node(AppState(), app)
     output = capsys.readouterr().out
@@ -138,7 +173,7 @@ def test_install_fetches_sha_once_and_passes_a_password_channel_not_a_password()
         patch.object(nodes_setup, "ask", side_effect=["node.example.com", "deploy", "uk-1", "UK London", "-"]) as ask,
         patch.object(nodes_setup, "ask_secret", return_value="pw"),
         patch.object(nodes_setup, "read_protocol", return_value=NodeProtocolSpec(enabled=True)),
-        patch("builtins.input", side_effect=["1", "2", "1"]),
+        patch("builtins.input", side_effect=["1", "1", "2", "1"]),
         patch.object(nodes_setup, "panel") as panel,
         patch.object(nodes_setup, "ssh_password_auth", Mock(side_effect=_no_password_channel)) as channel,
         patch.object(nodes_setup, "success"),
@@ -176,7 +211,7 @@ def test_cancel_protocol_selection_does_not_fetch_sha():
     with (
         patch.object(nodes_setup, "ask", side_effect=["node.example.com", "root", "uk-1", "UK London"]),
         patch.object(nodes_setup, "ask_secret", return_value="pw"),
-        patch("builtins.input", return_value="0"),
+        patch("builtins.input", side_effect=["1", "0"]),
         patch.object(nodes_setup, "panel"),
     ):
         nodes_setup.install_node(AppState(), app)
@@ -223,7 +258,7 @@ def test_a_bad_address_is_re_asked_without_losing_the_other_answers(capsys):
             side_effect=["not an address", "194.147.35.112", "root", "uk-1", "UK London"],
         ) as ask,
         patch.object(nodes_setup, "ask_secret", return_value="pw"),
-        patch("builtins.input", side_effect=["2", "0"]),
+        patch("builtins.input", side_effect=["1", "2", "0"]),
     ):
         nodes_setup.install_node(AppState(), app)
     output = capsys.readouterr().out
@@ -242,7 +277,7 @@ def test_a_taken_node_id_is_re_asked_and_the_wizard_stays_in_place():
     with (
         patch.object(nodes_setup, "ask", side_effect=["194.147.35.112", "root", "uk-1", "uk-2", "UK"]) as ask,
         patch.object(nodes_setup, "ask_secret", return_value="pw"),
-        patch("builtins.input", side_effect=["2", "0"]),
+        patch("builtins.input", side_effect=["1", "2", "0"]),
         patch.object(nodes_setup, "error") as error,
     ):
         nodes_setup.install_node(AppState(), app)
@@ -256,7 +291,7 @@ def test_the_plan_shows_the_technical_id_not_the_name(capsys):
     with (
         patch.object(nodes_setup, "ask", side_effect=["194.147.35.112", "root", "uk-1", "Великобритания"]),
         patch.object(nodes_setup, "ask_secret", return_value="pw"),
-        patch("builtins.input", side_effect=["2", "0"]),
+        patch("builtins.input", side_effect=["1", "2", "0"]),
     ):
         nodes_setup.install_node(AppState(), app)
     output = capsys.readouterr().out

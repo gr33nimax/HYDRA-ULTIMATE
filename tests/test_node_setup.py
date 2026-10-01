@@ -102,7 +102,7 @@ def test_real_install_menu_accepts_numeric_protocol_and_continue():
     with (
         patch.object(nodes_setup, "ask", side_effect=["node.example.com", "root", "de-1", "Germany", "-"]),
         patch.object(nodes_setup, "ask_secret", return_value="pw"),
-        patch.object(nodes_setup, "menu", side_effect=["1", "2", "1"]),
+        patch.object(nodes_setup, "menu", side_effect=["1", "1", "2", "1"]),
         patch.object(nodes_setup, "read_protocol", return_value=NodeProtocolSpec(enabled=True)) as read,
         patch.object(nodes_setup, "panel"),
         patch.object(nodes_setup, "success"),
@@ -120,7 +120,7 @@ def test_a_failed_install_offers_to_continue_the_same_node_without_reinstalling(
     with (
         patch.object(nodes_setup, "ask", side_effect=["node.example.com", "root", "de-1", "Germany", "-"]),
         patch.object(nodes_setup, "ask_secret", return_value="pw"),
-        patch.object(nodes_setup, "menu", side_effect=["1", "2", "1"]),
+        patch.object(nodes_setup, "menu", side_effect=["1", "1", "2", "1"]),
         patch.object(nodes_setup, "read_protocol", return_value=NodeProtocolSpec(enabled=True)),
         patch.object(nodes_setup, "confirm", return_value=True) as confirm,
         patch.object(nodes_setup, "panel"),
@@ -141,7 +141,7 @@ def test_declining_the_continuation_offer_leaves_the_node_unmanaged():
     with (
         patch.object(nodes_setup, "ask", side_effect=["node.example.com", "root", "de-1", "Germany", "-"]),
         patch.object(nodes_setup, "ask_secret", return_value="pw"),
-        patch.object(nodes_setup, "menu", side_effect=["1", "2", "1"]),
+        patch.object(nodes_setup, "menu", side_effect=["1", "1", "2", "1"]),
         patch.object(nodes_setup, "read_protocol", return_value=NodeProtocolSpec(enabled=True)),
         patch.object(nodes_setup, "confirm", return_value=False),
         patch.object(nodes_setup, "panel"),

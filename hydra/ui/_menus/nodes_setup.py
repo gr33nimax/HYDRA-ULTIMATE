@@ -1,7 +1,7 @@
 """Cancelable node install wizard: collect, plan, confirm, then act.
 
-The order is the operator's: address, SSH account, password, visible ID, name, then the
-protocols. Nothing touches the VPS until the plan is confirmed, and the password is not
+The order is the operator's: address, SSH account, password, visible ID, name, branch,
+then protocols. Nothing touches the VPS until the plan is confirmed, and the password is not
 written to state, logs or the command line — it lives only inside the one scoped channel
 that OpenSSH reads while the enrollment runs.
 """
@@ -385,7 +385,7 @@ def _offer_resume(
     if not confirm("Продолжить подключение этой ноды?", default=False):
         return
     try:
-        with ssh_password_auth(password) if password else nullcontext() as auth:
+        with ssh_password_auth(password) or nullcontext() as auth:
             result = app.nodes.resume_node(
                 node,
                 base_url=_base_url(state, app),
@@ -410,6 +410,18 @@ def install_node(state: AppState, app: ApplicationService) -> None:
         if collected is None:
             return
         node, password = collected
+        branch_choice = menu(
+            [
+                ("1", "main", "стабильная ветка"),
+                ("2", "dev", "ветка разработки"),
+                ("0", "Отмена установки", ""),
+            ],
+            "ВЕТКА УСТАНОВКИ НОДЫ",
+        )
+        branch = {"1": "main", "2": "dev"}.get(branch_choice)
+        if branch is None:
+            return
+        node.branch = branch
         if not _collect_protocols(node, app):
             return
         vk_cookie_source = _collect_calls_cookies(node)
@@ -435,7 +447,7 @@ def install_node(state: AppState, app: ApplicationService) -> None:
                 return
             break
         panel("УСТАНОВКА", ["Установка начата. Этапы отмечаются по мере выполнения."], wrap=True)
-        with ssh_password_auth(password) if password else nullcontext() as auth:
+        with ssh_password_auth(password) or nullcontext() as auth:
             result = app.nodes.add_node(
                 node,
                 base_url=_base_url(state, app),

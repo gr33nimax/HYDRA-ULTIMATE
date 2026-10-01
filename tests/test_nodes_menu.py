@@ -37,12 +37,59 @@ def test_back_from_nodes_does_not_contact_or_mutate_nodes():
     app.nodes.add_node.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("outcome", "message"),
+    [
+        ("revision_failure", "Не удалось получить SHA"),
+        ("unsupported_branch", "не содержит режим ноды"),
+        ("installed", "ОТЧЁТ ОБ УСТАНОВКЕ"),
+        ("base_not_ready", "base HTTPS subscription service must be active"),
+    ],
+)
+def test_install_result_waits_for_enter_before_nodes_menu_clears(outcome, message, capsys):
+    from hydra.ui._menus import nodes_setup
+
+    app = _app()
+    state = AppState()
+    app.admin.load_state.return_value = state
+    app.nodes.list_nodes.return_value = []
+    app.admin.unit_active.return_value = outcome != "base_not_ready"
+    app.admin.subscription_certificate.return_value = ("cert", "key")
+    app.admin.subscription_public_host.return_value = "base.example.com"
+    app.nodes.resolve_revision.return_value = "a" * 40
+    app.nodes.supports_node_mode.return_value = outcome != "unsupported_branch"
+    app.nodes.add_node.return_value = SimpleNamespace(status="applied")
+    if outcome == "revision_failure":
+        app.nodes.resolve_revision.side_effect = RuntimeError("GitHub unavailable")
+    answers = ["1"]
+    if outcome != "base_not_ready":
+        answers.extend(["1", "2"])  # main, then "Готово" (one transport).
+    if outcome == "installed":
+        answers.append("1")  # Confirm the plan.
+    answers.extend(["", "0"])  # Read the result, then leave the node list.
+
+    with (
+        patch.object(nodes_setup, "ask", side_effect=["node.example.com", "root", "new-node", "Germany"]),
+        patch.object(nodes_setup, "ask_secret", return_value=""),
+        patch("builtins.input", side_effect=answers),
+    ):
+        nodes.menu_nodes(state, app)
+    output = capsys.readouterr().out
+    result = output.index(message)
+    next_clear = output.index("\033[2J\033[H", result)
+    assert "Нажмите Enter" in output[result:next_clear]
+    assert "Пароль SSH" not in output[next_clear:]
+    if outcome != "installed":
+        app.nodes.add_node.assert_not_called()
+
+
 def test_cancel_install_before_ssh_does_not_mutate():
     app = _app()
     with (
         patch.object(nodes, "menu", side_effect=["1", "0"]),
         patch.object(nodes, "clear"),
         patch.object(nodes, "install_node", return_value=None),
+        patch.object(nodes, "prompt"),
     ):
         nodes.menu_nodes(AppState(), app)
     app.nodes.add_node.assert_not_called()
@@ -116,7 +163,7 @@ def test_offline_protocol_editor_does_not_save_or_apply_anything():
 def test_real_menu_install_key_reaches_wizard(key):
     app = _app()
     with (
-        patch("builtins.input", side_effect=[key, "0"]),
+        patch("builtins.input", side_effect=[key, "", "0"]),
         patch.object(nodes, "clear"),
         patch.object(nodes, "install_node") as install,
     ):
