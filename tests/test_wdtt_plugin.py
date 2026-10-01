@@ -131,6 +131,8 @@ def test_source_build_targets_whole_go_package_and_allows_empty_go_cache(tmp_pat
     src_dir = work_dir / "proxy-turn-vk-android-master"
     src_dir.mkdir(parents=True)
     (src_dir / "go.mod").write_text("go 1.25\n")
+    (src_dir / "server").mkdir()
+    (src_dir / "server" / "main.go").write_text("package main\n")
     installed_binary = tmp_path / "installed" / "wdtt-server"
 
     def fake_run(command, **kwargs):
@@ -153,8 +155,8 @@ def test_source_build_targets_whole_go_package_and_allows_empty_go_cache(tmp_pat
     assert tar_call.kwargs["timeout"] == SOURCE_EXTRACT_TIMEOUT
     assert mod_call.kwargs["timeout"] == GO_MODULE_TIMEOUT
     assert build_call.kwargs["timeout"] == GO_BUILD_TIMEOUT
-    assert build_call.args[0][-1] == "."
-    assert "./server.go" not in build_call.args[0]
+    assert build_call.args[0][-1] == "./server"
+    assert not any(arg.endswith(".go") for arg in build_call.args[0])
     assert GO_MODULE_TIMEOUT >= 600
     assert GO_BUILD_TIMEOUT >= 600
 

@@ -57,8 +57,9 @@ class WdttBuildMixin:
                 print(f"  go mod tidy: {(r.stderr or '')[:300]}")
                 return False
             print(f'  Компилирую wdtt-server...')
+            package = './server' if (src_dir / 'server' / 'main.go').exists() else '.'
             env = {**self._go_env(), 'CGO_ENABLED': '0', 'GOOS': 'linux', 'GOARCH': self._go_arch()}
-            r = self._wdtt_env().host.run([go, 'build', '-o', str(tmp / 'wdtt-server'), '-ldflags', '-s -w', '.'], capture_output=True, text=True, env=env, cwd=str(src_dir), timeout=self._wdtt_env().go_build_timeout)
+            r = self._wdtt_env().host.run([go, 'build', '-o', str(tmp / 'wdtt-server'), '-ldflags', '-s -w', package], capture_output=True, text=True, env=env, cwd=str(src_dir), timeout=self._wdtt_env().go_build_timeout)
             if r.returncode != 0:
                 print(f"  Ошибка компиляции: {(r.stderr or '')[:300]}")
                 return False
