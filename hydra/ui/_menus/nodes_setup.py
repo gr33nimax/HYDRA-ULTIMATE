@@ -277,11 +277,11 @@ def _confirm_fingerprint(fingerprint: str) -> bool:
 def _plan_lines(node: NodeConfig, state: AppState, app: ApplicationService) -> list[str]:
     protocols = ", ".join(protocol_label(name) for name in sorted(node.protocols) if node.protocols[name].enabled)
     return [
-        kv("ID:", node.label),
+        kv("ID:", node.display_id or node.id),
         kv("Имя:", node.name or node.id),
         kv("Адрес:", node.address),
         kv("SSH:", f"{node.ssh_user}@{node.address}:{node.ssh_port}"),
-        kv("Пароль:", "будет введён заново при продолжении; не сохраняется"),
+        kv("Пароль:", "введён, не сохраняется"),
         kv("Протоколы:", protocols or "нет"),
         kv("Ветка:", node.branch),
         kv("SHA (получен автоматически):", node.revision),
@@ -353,7 +353,7 @@ def _offer_resume(
     panel(
         "ПРОДОЛЖИТЬ ПОДКЛЮЧЕНИЕ",
         [
-            "Установка не повторяется: HYDRA заходит по pinned SSH и выдаёт удостоверение.",
+            "Установка не повторяется: HYDRA зайдёт по pinned SSH и выдаст удостоверение.",
             "Подходит, если HYDRA на VPS уже установлена, а нода не подключилась.",
             "Версия на VPS остаётся той, что установлена: обновление — отдельный пункт.",
         ],

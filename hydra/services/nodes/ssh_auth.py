@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import shlex
 import socket
 import stat
 import subprocess
@@ -36,7 +37,12 @@ ASKPASS_TOKEN_VAR = "HYDRA_ASKPASS_TOKEN"
 ASKPASS_TIMEOUT = 10.0
 MAX_REQUESTS = 16
 
+# The helper is started by ssh, not by this process, so it inherits neither the
+# launcher's sys.path nor a guaranteed working directory. The project root is therefore
+# baked into PYTHONPATH: without it a base whose launcher added the root to sys.path
+# only in-process cannot answer ssh's prompt at all.
 _HELPER_SOURCE = """#!/bin/sh
+export PYTHONPATH={root}${{PYTHONPATH:+:$PYTHONPATH}}
 exec {interpreter} -m hydra.entrypoints.ssh_askpass "$@"
 """
 
@@ -138,7 +144,10 @@ class SshPasswordAuth:
         self._directory = tempfile.TemporaryDirectory(prefix="hydra-askpass-")
         path = Path(self._directory.name) / "askpass.sh"
         path.write_text(
-            _HELPER_SOURCE.format(interpreter=interpreter or sys.executable),
+            _HELPER_SOURCE.format(
+                root=shlex.quote(str(_package_root())),
+                interpreter=shlex.quote(interpreter or sys.executable),
+            ),
             encoding="utf-8",
         )
         path.chmod(stat.S_IRWXU)
@@ -197,6 +206,16 @@ def run_askpass() -> int:
     sys.stdout.write(secret.decode("utf-8", "replace"))
     sys.stdout.flush()
     return 0
+
+
+def _package_root() -> Path:
+    """The directory that holds the ``hydra`` package, for the helper's PYTHONPATH."""
+    import hydra
+
+    module = getattr(hydra, "__file__", "") or ""
+    if not module:
+        raise SshAuthError("the hydra package location is unknown")
+    return Path(module).resolve().parent.parent
 
 
 def ssh_password_auth(password: str | None) -> SshPasswordAuth | None:

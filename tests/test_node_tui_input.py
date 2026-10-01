@@ -10,6 +10,8 @@ for every other caller.
 from __future__ import annotations
 
 import builtins
+import os
+from pathlib import Path
 
 import pytest
 
@@ -71,3 +73,72 @@ def test_menu_still_accepts_numeric_keys_with_surrounding_noise(monkeypatch, key
 def test_menu_never_invents_a_choice_for_unknown_input(monkeypatch):
     monkeypatch.setattr(builtins, "input", lambda *_a: "42")
     assert tui.menu([("1", "Раз", ""), ("0", "Назад", "")], "МЕНЮ") == "42"
+
+
+def _helper_root(script: str) -> str:
+    """The PYTHONPATH the helper bakes in, read back the way a shell would."""
+    line = next(item for item in script.splitlines() if item.startswith("export PYTHONPATH="))
+    value = line.split("=", 1)[1]
+    return value.split("${PYTHONPATH", 1)[0].strip().strip("'")
+
+
+def test_the_baked_package_root_makes_hydra_importable_from_anywhere(tmp_path):
+    """The live failure: ssh starts the helper, and a fresh interpreter knows nothing
+    about the launcher's sys.path, so the helper must carry the package root itself."""
+    import os
+    import subprocess
+    import sys
+
+    from hydra.services.nodes.ssh_auth import SshPasswordAuth
+
+    with SshPasswordAuth("live password") as auth:
+        environment = auth.environment(interpreter=sys.executable)
+        script = Path(environment["SSH_ASKPASS"]).read_text(encoding="utf-8")
+        environment["PYTHONPATH"] = _helper_root(script)
+        environment.pop("SSH_ASKPASS", None)
+        environment.pop("SSH_ASKPASS_REQUIRE", None)
+        # A fresh interpreter, a foreign directory, and only what the helper baked in.
+        result = subprocess.run(
+            [sys.executable, "-m", "hydra.entrypoints.ssh_askpass"],
+            env=environment,
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "live password"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the helper is a POSIX shell script")
+def test_the_helper_script_runs_as_ssh_would_run_it(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    from hydra.services.nodes.ssh_auth import SshPasswordAuth
+
+    with SshPasswordAuth("live password") as auth:
+        environment = auth.environment(interpreter=sys.executable)
+        environment.pop("PYTHONPATH", None)
+        result = subprocess.run(
+            [environment["SSH_ASKPASS"]],
+            env=environment,
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "live password"
+
+
+def test_the_helper_script_quotes_its_paths():
+    from hydra.services.nodes import ssh_auth
+
+    with ssh_auth.SshPasswordAuth("pw") as auth:
+        environment = auth.environment(interpreter="/opt/hydra venv/bin/python")
+        script = Path(environment["SSH_ASKPASS"]).read_text(encoding="utf-8")
+    assert "export PYTHONPATH=" in script
+    assert "exec '/opt/hydra venv/bin/python'" in script
+    assert "${PYTHONPATH:+:$PYTHONPATH}" in script

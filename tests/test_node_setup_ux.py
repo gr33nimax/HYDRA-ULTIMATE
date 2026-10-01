@@ -246,3 +246,21 @@ def test_a_taken_node_id_is_re_asked_and_the_wizard_stays_in_place():
         nodes_setup.install_node(AppState(), app)
     assert any("уже есть" in str(call) for call in error.call_args_list)
     assert [call.args[0].split(" (")[0] for call in ask.call_args_list].count("ID ноды") == 2
+
+
+def test_the_plan_shows_the_technical_id_not_the_name(capsys):
+    """A plan whose ID line shows the name tells the operator nothing about the node."""
+    app = _app()
+    with (
+        patch.object(nodes_setup, "ask", side_effect=["194.147.35.112", "root", "uk-1", "Великобритания"]),
+        patch.object(nodes_setup, "ask_secret", return_value="pw"),
+        patch("builtins.input", side_effect=["2", "0"]),
+    ):
+        nodes_setup.install_node(AppState(), app)
+    output = capsys.readouterr().out
+    assert "uk-1" in output
+    assert "Великобритания" in output
+    # The ID line carries the id; the name lives on its own line.
+    id_line = next(line for line in output.splitlines() if "ID:" in line)
+    assert "uk-1" in id_line
+    assert "Великобритания" not in id_line
