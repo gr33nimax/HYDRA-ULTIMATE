@@ -27,8 +27,10 @@ def test_uninstall_requires_explicit_confirmation():
         uninstall_hydra(AppState(), confirmed=False)
 
 
-def test_uninstall_plan_includes_node_control_service():
-    assert "hydra-node-control.service" in uninstall_plan(AppState())["services"]
+def test_uninstall_plan_includes_managed_node_agent_and_excludes_retired_node_api():
+    services = uninstall_plan(AppState())["services"]
+    assert "hydra-managed-node.service" in services
+    assert "hydra-node-control.service" not in services
 
 
 def test_keep_data_removes_data_paths_from_plan():
@@ -126,9 +128,7 @@ def test_uninstall_service_dry_run_and_confirmation_are_side_effect_free():
     plugin = _Plugin("transport", events)
     service = UninstallService(
         plugin_inventory=lambda: [plugin],
-        cleanup_steps=(
-            CleanupStep("auxiliary", lambda: events.append("cleanup")),
-        ),
+        cleanup_steps=(CleanupStep("auxiliary", lambda: events.append("cleanup")),),
         remove_installation=lambda *args, **kwargs: pytest.fail(
             "host removal must not run",
         ),
@@ -159,10 +159,7 @@ def test_core_uninstall_has_no_upward_or_concrete_plugin_dependencies():
         elif isinstance(node, ast.ImportFrom) and node.module:
             imports.append(node.module)
 
-    assert not any(
-        module.startswith(("hydra.plugins", "hydra.services"))
-        for module in imports
-    )
+    assert not any(module.startswith(("hydra.plugins", "hydra.services")) for module in imports)
     assert "registry" not in source
     assert "telemt_ios_fix" not in source
     assert "telemt_syn_limiter" not in source

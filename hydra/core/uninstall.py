@@ -4,6 +4,7 @@ Plugin inventory and plugin-specific cleanup belong to the application
 service layer.  This module deliberately knows only the ordered plugin names
 included in a plan and any failures already collected by its caller.
 """
+
 from __future__ import annotations
 
 import shutil
@@ -15,7 +16,7 @@ from hydra.core.state_models import AppState
 
 
 SYSTEM_SERVICES = (
-    "hydra-node-control.service",
+    "hydra-managed-node.service",
     "hydra-sub.service",
     "hydra-traffic-daemon.service",
     "hydra-sync-agent.service",

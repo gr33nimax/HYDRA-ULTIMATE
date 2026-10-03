@@ -13,6 +13,16 @@ def test_host_backend_atomic_write_and_systemd_command(tmp_path):
     run.assert_called_once_with(["systemctl", "restart", "demo.service"], timeout=30)
 
 
+def test_host_backend_atomic_create_preserves_binary_bytes_and_existing_content(tmp_path):
+    host = HostBackend()
+    target = tmp_path / "private" / "secret"
+    original = bytes(range(32))
+
+    assert host.atomic_create(target, original, durable=True) is True
+    assert host.atomic_create(target, b"replacement", durable=True) is False
+    assert host.read_bytes(target, max_bytes=32) == original
+
+
 def test_host_backend_ensures_managed_directory(tmp_path):
     host = HostBackend()
     target = tmp_path / "private" / "cookies"
@@ -37,8 +47,10 @@ def test_host_backend_removes_managed_file(tmp_path):
 def test_host_backend_firewall_persistence_is_injectable(tmp_path):
     rules = tmp_path / "rules.v4"
     host = HostBackend(HostPaths(iptables_rules=rules))
-    with patch.object(host, "which", return_value=None), \
-         patch.object(host, "run", return_value=MagicMock(returncode=0, stdout="*filter\n")):
+    with (
+        patch.object(host, "which", return_value=None),
+        patch.object(host, "run", return_value=MagicMock(returncode=0, stdout="*filter\n")),
+    ):
         assert host.persist_firewall() is True
     assert rules.read_text(encoding="utf-8") == "*filter\n"
 

@@ -5,6 +5,7 @@ This module converts those snapshots to deltas and keeps authoritative totals
 in per-user credentials or aggregate protocol counters when attribution is not
 technically reliable (for example qWDTT).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,9 +13,9 @@ from typing import Callable, Protocol
 
 from hydra.core.state import update_state
 from hydra.core.state_models import AppState, User, find_user
-from hydra.services.node_traffic_accounting import (
+from hydra.services.managed_nodes.accounting import (
     recompute_user_traffic_totals,
-    reset_node_traffic_for_user,
+    reset_managed_node_traffic,
     sync_local_traffic_from_credentials,
 )
 from hydra.services.traffic_accounting import (
@@ -22,6 +23,7 @@ from hydra.services.traffic_accounting import (
     ensure_report_totals,
     record_report_delta,
 )
+
 
 class TrafficProtocolAccess(Protocol):
     """Runtime counter capabilities needed by traffic accounting."""
@@ -153,8 +155,7 @@ def _as_non_negative_int(value: object) -> int:
         return 0
 
 
-def _accumulate_snapshot(state: AppState, protocol: str,
-                         snapshot: dict[str, int]) -> None:
+def _accumulate_snapshot(state: AppState, protocol: str, snapshot: dict[str, int]) -> None:
     """Convert a resettable absolute counter to a monotonic stored total."""
     users = {user.email: user for user in state.users}
     for email, raw_value in snapshot.items():
@@ -275,10 +276,7 @@ def update_user_traffic(
 def protocol_totals(state: AppState) -> dict[str, int]:
     reports = state.install.get("traffic_report_totals")
     if isinstance(reports, dict):
-        return {
-            str(protocol): _as_non_negative_int(used)
-            for protocol, used in reports.items()
-        }
+        return {str(protocol): _as_non_negative_int(used) for protocol, used in reports.items()}
     return _legacy_protocol_totals(state)
 
 
@@ -317,7 +315,14 @@ def reset_user_traffic(state: AppState, email: str) -> User:
             if key.startswith("traffic_") and key != "traffic_last_raw_bytes":
                 stats.pop(key, None)
         stats["traffic_used_bytes"] = 0
-    reset_node_traffic_for_user(state, user)
+    reset_epochs = state.install.setdefault("traffic_user_reset_epochs", {})
+    if not isinstance(reset_epochs, dict):
+        raise ValueError("traffic reset epoch state is invalid")
+    current_epoch = reset_epochs.get(user.uuid, reset_epochs.get(user.email, 0))
+    if type(current_epoch) is not int or current_epoch < 0:
+        raise ValueError("traffic reset epoch state is invalid")
+    reset_epochs[user.uuid] = current_epoch + 1
+    reset_managed_node_traffic(state, user)
     return user
 
 

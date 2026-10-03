@@ -8,17 +8,21 @@ application instances and third-party plugin sets safe in the same process.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import threading
 from collections.abc import Callable
-from contextlib import contextmanager
-from dataclasses import dataclass, field
+from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
 from hydra.core.state_models import AppState, User
+from hydra.core.state_managed_nodes import managed_nodes_from_extensions, store_managed_nodes
+from hydra.contracts.managed_node_cascade import CascadeParticipantRequest
+from hydra.contracts.managed_node_models import CascadeDefinition, Operation
 from hydra.plugins.executor import apply_failure_message
 from hydra.plugins.invoker import PluginInvoker
 from hydra.services.configuration import (
@@ -31,12 +35,23 @@ from hydra.services.protocol_setup import (
     CertificateProvider,
     ProtocolSetupService,
 )
+from hydra.services.managed_nodes.apply_gate import ManagedNodeApplyGate, ManagedNodeApplyRejected
+from hydra.services.managed_nodes.cascade_restore import CascadeRestoreContext
 from hydra.services.traffic_daemon_unit import TrafficDaemonUnitManager
 from hydra.services.user_lifecycle import UserLifecycleOperations
 
 
 GetProtocol = Callable[[AppState, str], Any]
 SaveState = Callable[[AppState], None]
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("runtime config contains duplicate JSON keys")
+        value[key] = item
+    return value
 
 
 @dataclass
@@ -53,6 +68,7 @@ class OrchestrationService:
     traffic_daemon_service: Path
     apply_journal: Path
     apply_lock_file: Path
+    managed_node_apply_gate: ManagedNodeApplyGate | None = None
     _last_apply_error: str = field(default="", init=False)
     _apply_lock: threading.Lock = field(
         default_factory=threading.Lock,
@@ -108,57 +124,116 @@ class OrchestrationService:
             pass
 
     def apply_config(self, state: AppState) -> bool:
-        if not self._apply_lock.acquire(blocking=False):
-            self._set_apply_error(
-                "Применение конфигурации уже выполняется",
+        return self._apply_configuration(state, None)
+
+    def apply_cascade_participant_config(self, state: AppState, authorization: object) -> bool:
+        """Internal owner-bound path; the ApplicationService exposes ordinary apply only."""
+        return self._apply_configuration(state, authorization)
+
+    def capture_cascade_restore_context(
+        self,
+        state: AppState,
+        operation: Operation,
+        request: CascadeParticipantRequest,
+    ) -> CascadeRestoreContext:
+        """Capture the prior owned render only when the installed config matches canonical output."""
+        request.validate()
+        if (operation.id, operation.kind, operation.target_id, operation.desired_digest, operation.plan) != (
+            request.operation_id,
+            request.kind,
+            request.target_id,
+            request.plan_digest,
+            request.plan,
+        ):
+            raise ValueError("cascade restore capture is not bound to the persisted operation")
+        previous_raw = operation.plan.get("previous") if isinstance(operation.plan, dict) else None
+        previous = CascadeDefinition.from_document(previous_raw) if previous_raw is not None else None
+        capture = getattr(self.plugins.runtime_contributions, "capture_cascade_scope", None)
+        if not callable(capture):
+            raise RuntimeError("canonical cascade restore renderer is unavailable")
+        context = capture(state, request, previous)
+        if not isinstance(context, CascadeRestoreContext):
+            raise RuntimeError("canonical cascade restore context is unavailable")
+        context.validate_for(request)
+        fragments = self.plugins.collect_fragments(state)
+        expected = self.singbox.generate_config(state, fragments)
+        config_path = self.singbox.SINGBOX_CONFIG
+        if config_path.is_symlink() or not config_path.is_file():
+            raise RuntimeError("prior cascade runtime config cannot be captured safely")
+        try:
+            actual = json.loads(
+                self.host.read_bytes(config_path, max_bytes=8 * 1024 * 1024).decode("utf-8"),
+                object_pairs_hook=_unique_json_object,
             )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            raise RuntimeError("prior cascade runtime config cannot be read safely") from None
+        if actual != expected:
+            raise RuntimeError("prior cascade runtime config differs from canonical owned rendering")
+        return context
+
+    def capture_cascade_remove_config_identity(self, state: AppState, request: CascadeParticipantRequest) -> str:
+        """Preview the canonical target without persisting or applying the desired-state copy."""
+        request.validate()
+        projected = copy.deepcopy(state)
+        namespace = managed_nodes_from_extensions(projected.feature_extensions)
+        operation = next((item for item in namespace.operations if item.id == request.operation_id), None)
+        if (
+            request.kind != "cascade_remove"
+            or operation is None
+            or (operation.kind, operation.target_id, operation.desired_digest, operation.plan)
+            != (request.kind, request.target_id, request.plan_digest, request.plan)
+        ):
+            raise ValueError("cascade removal target is not bound to its frozen operation")
+        routes = [route for route in namespace.cascades if route.id != request.target_id]
+        store_managed_nodes(projected.feature_extensions, replace(namespace, cascades=routes))
+        fragments = self.plugins.collect_fragments(projected)
+        config = self.singbox.generate_config(projected, fragments)
+        # Match singbox.write_config's native text-mode newline translation.
+        encoded = json.dumps(config, indent=2, ensure_ascii=False).replace("\n", os.linesep).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _apply_configuration(self, state: AppState, authorization: object | None) -> bool:
+        if not self._apply_lock.acquire(blocking=False):
+            self._set_apply_error("Применение конфигурации уже выполняется")
             self._journal("rejected", reason="already_running")
             return False
         try:
             with self._process_apply_guard() as acquired:
                 if not acquired:
-                    self._set_apply_error(
-                        "Применение конфигурации уже выполняется в другом процессе",
-                    )
-                    self._journal(
-                        "rejected",
-                        reason="already_running_process",
-                    )
+                    self._set_apply_error("Применение конфигурации уже выполняется в другом процессе")
+                    self._journal("rejected", reason="already_running_process")
                     return False
-                snapshot = copy.deepcopy(state)
+                gate = self.managed_node_apply_gate
+                application = gate.application(authorization) if gate is not None else nullcontext()
                 try:
-                    applied = self._configuration_applier().apply(state)
-                except Exception as exc:
-                    self._set_apply_error(
-                        f"Неожиданная ошибка применения: {exc}",
-                    )
-                    self.singbox.log(
-                        "ERROR",
-                        self.last_apply_error(),
-                    )
-                    self._journal(
-                        "failed",
-                        stage="unexpected",
-                        error=self.last_apply_error(),
-                    )
-                    applied = False
-                if not applied:
-                    restore_state_in_place(state, snapshot)
-                    try:
-                        self.save_state(state)
-                    except Exception as exc:
-                        self.singbox.log(
-                            "ERROR",
-                            f"Не удалось восстановить состояние после сбоя: {exc}",
-                        )
-                if applied:
-                    # The message describes the last apply, not a permanent condition. Leaving
-                    # it set made a node that had just recovered report its old failure as
-                    # if it were current, which is exactly what an operator cannot act on.
-                    self._set_apply_error("")
-                return applied
+                    with application:
+                        return self._apply_state_transaction(state)
+                except ManagedNodeApplyRejected as exc:
+                    self._set_apply_error(str(exc))
+                    self._journal("rejected", reason="managed_node_cascade_lease")
+                    return False
         finally:
             self._apply_lock.release()
+
+    def _apply_state_transaction(self, state: AppState) -> bool:
+        snapshot = copy.deepcopy(state)
+        try:
+            applied = self._configuration_applier().apply(state)
+        except Exception as exc:
+            self._set_apply_error(f"Неожиданная ошибка применения: {exc}")
+            self.singbox.log("ERROR", self.last_apply_error())
+            self._journal("failed", stage="unexpected", error=self.last_apply_error())
+            applied = False
+        if not applied:
+            restore_state_in_place(state, snapshot)
+            try:
+                self.save_state(state)
+            except Exception as exc:
+                self.singbox.log("ERROR", f"Не удалось восстановить состояние после сбоя: {exc}")
+        if applied:
+            # An apply error describes the last apply, not a permanent condition.
+            self._set_apply_error("")
+        return applied
 
     def _configuration_applier(self) -> ConfigurationApplier:
         return ConfigurationApplier(

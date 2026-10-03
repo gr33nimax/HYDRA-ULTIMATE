@@ -5,9 +5,9 @@ import json
 import ipaddress
 import re
 import ssl
-from http.client import HTTPMessage
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Protocol
 
 from hydra.core.state import load_state
 from hydra.core.state_models import AppState
@@ -37,7 +37,7 @@ from hydra.services.subscriptions.links import (
     generate_base64_sub,
     generate_shadowrocket_sub,
 )
-from hydra.services.subscriptions.node_exports import PublishedNodeExportReader
+from hydra.services.subscriptions.node_exports import ManagedNodeProfileReader
 from hydra.services.subscriptions.metadata import (
     SUPPORTED_SUBSCRIPTION_FORMATS,
     generate_userinfo_header,
@@ -46,7 +46,11 @@ from hydra.services.subscriptions.metadata import (
 )
 
 
-def _fingerprint_headers(headers: HTTPMessage) -> dict[str, str]:
+class HeaderReader(Protocol):
+    def get(self, name: str, failobj: str | None = None) -> str | None: ...
+
+
+def _fingerprint_headers(headers: HeaderReader) -> dict[str, str]:
     """Project only identity headers into the transport-neutral contract."""
     return {
         name: str(headers.get(name, "") or "")
@@ -87,7 +91,7 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         user,
         state: AppState,
         plugins: SubscriptionPluginAccess,
-        node_exports: PublishedNodeExportReader | None = None,
+        node_exports: ManagedNodeProfileReader | None = None,
     ) -> tuple[str, str, str]:
         if response_format == "nekobox":
             return (
@@ -272,7 +276,7 @@ class _ProxyTLSHTTPServer(HTTPServer):
     """Consume a trusted PROXY preamble before starting the TLS handshake."""
 
     subscription_plugins: SubscriptionPluginAccess | None = None
-    node_exports: PublishedNodeExportReader | None = None
+    node_exports: ManagedNodeProfileReader | None = None
 
     def __init__(
         self,
@@ -306,7 +310,7 @@ def run_standalone(
     host: str = "0.0.0.0",
     port: int = 9443,
     *,
-    node_exports: PublishedNodeExportReader | None = None,
+    node_exports: ManagedNodeProfileReader | None = None,
 ) -> None:
     """Run the HTTPS subscription adapter with explicit plugin access."""
     state = load_state()

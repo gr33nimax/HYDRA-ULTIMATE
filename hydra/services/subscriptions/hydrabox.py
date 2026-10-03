@@ -19,8 +19,8 @@ from hydra.services.subscriptions.hydrabox_runtime import (
     validate_remote_values as _validate_remote_values,
 )
 from hydra.services.subscriptions.node_exports import (
+    ManagedNodeProfileReader,
     NodeSubscriptionProfile,
-    PublishedNodeExportReader,
     node_profiles_for_user,
 )
 from hydra.services.subscriptions.profile_names import (
@@ -234,7 +234,7 @@ def generate_hydrabox_subscription(
     state: AppState,
     *,
     plugins: SubscriptionPluginAccess,
-    node_exports: PublishedNodeExportReader | None = None,
+    node_exports: ManagedNodeProfileReader | None = None,
 ) -> dict[str, Any]:
     """Build an activatable plaintext Hydra Subscription v2 document."""
     sequence = _validate_envelope_identity(user, state)

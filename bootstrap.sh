@@ -453,8 +453,8 @@ if [[ "$HYDRA_FRESH_INSTALL" == "1" && "$HYDRA_ROLE" == "main" ]]; then
 fi
 
 if [[ "$HYDRA_ROLE" == "node" ]]; then
-    install -m 0644 "$INSTALL_DIR/deploy/hydra-node-control.service" \
-        /etc/systemd/system/hydra-node-control.service
+    install -m 0644 "$INSTALL_DIR/deploy/hydra-managed-node.service" \
+        /etc/systemd/system/hydra-managed-node.service
     systemctl daemon-reload
     info "Служба управления установлена выключенной и ожидает удостоверение"
 fi

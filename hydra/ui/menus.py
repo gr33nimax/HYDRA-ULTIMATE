@@ -149,7 +149,7 @@ def main_menu(
     """Compose production once, then delegate to the dependency-clean root."""
     application = app if app is not None else production_application()
     from hydra.ui._menus.root import RootMenuDependencies
-    from hydra.ui._menus.nodes import menu_nodes
+    from hydra.ui._menus.managed_nodes import menu_nodes
 
     globals()["_root_menus"]().run_main_menu(
         state,

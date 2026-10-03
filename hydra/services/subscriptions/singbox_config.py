@@ -7,7 +7,7 @@ from hydra.core.configuration_names import _replace_profile_reference
 from hydra.core.state_models import AppState, User
 from hydra.services.subscriptions.access import SubscriptionPluginAccess
 from hydra.services.subscriptions.node_exports import (
-    PublishedNodeExportReader,
+    ManagedNodeProfileReader,
     node_profiles_for_user,
 )
 
@@ -68,7 +68,7 @@ def generate_singbox_config(
     state: AppState,
     *,
     plugins: SubscriptionPluginAccess,
-    node_exports: PublishedNodeExportReader | None = None,
+    node_exports: ManagedNodeProfileReader | None = None,
 ) -> dict:
     """Build a personal sing-box configuration from enabled transports."""
     config: dict = {

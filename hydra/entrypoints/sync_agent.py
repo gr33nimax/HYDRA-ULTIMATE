@@ -25,8 +25,7 @@ def main() -> int:
                 inspect_certificates=application.certificates.inspect,
                 renew_subscription_certificate=(subscription_certificate_renewal(application.admin)),
                 maintenance=application.maintenance,
-                collect_node_traffic=application.nodes.collect_traffic,
-                reconcile_nodes=application.nodes.reconcile_all,
+                managed_node_sync=application.nodes,
             ),
         )
     except Exception as exc:

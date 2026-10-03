@@ -577,14 +577,20 @@ state, пулом blue/green-юнитов и откатом; lifecycle одно�
 используют один `ApplicationService`; Telegram выполняет блокирующие операции
 вне event loop и не дублирует lifecycle-логику плагинов.
 
-Управляемые ноды имеют отдельный ограниченный mTLS control API, не публичную
-административную панель. `ApplicationService.nodes` владеет установкой/сверкой,
-подтверждённым экспортом и удалением. Подписки читают опубликованный локальный
-снимок по UUID без сетевого обращения к ноде. Desired state передаёт эпоху сброса,
-а runtime учёт хранит локальные totals и вклад каждой ноды отдельно, вне desired
-revision. Sync получает отчёты до проверки квот и отправляет новые блокировки
-после локального цикла; офлайн непрерывность не означает строгую общую квоту.
-См. [NODES.md](NODES.md).
+Managed nodes используют `feature_extensions.managed_nodes` и прикладной port
+`ApplicationService.nodes`; старые `AppState.nodes`, `NodeConfig`, mTLS control API
+и old service package удалены, без миграции старых объектов в новые definitions.
+Agent доступен только через ограниченный mTLS `/v1` API; подписки читают локальные
+подтверждённые bundles и не обращаются к VPS. Протокольное изменение, frozen apply
+intent и pending operation сохраняются одним state CAS до сетевых действий. Apply
+receipt привязан к конфигурации запущенного процесса, а биллинг — только к epoch
+процесса и reset пользователя, поэтому смена конфигурации отзывает старую квитанцию,
+но не начисляет неизменившиеся абсолютные счётчики повторно. Общий Sync Agent
+обслуживает ноды раз в пять минут; targeted sync не запускает base-wide maintenance.
+
+Двух-hop cascade runtime пока не подключён к production wiring: capability options
+остаются fail-closed, а UI/scaffolding не подтверждают рабочий маршрут или quota
+accounting. Linux/VPS cascade evidence отсутствует. См. [NODES.md](NODES.md).
 
 Границы версии:
 

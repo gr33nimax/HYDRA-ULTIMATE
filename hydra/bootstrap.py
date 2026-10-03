@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-import os
+import secrets
 from collections.abc import Iterable
+from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
-from hydra.core import nft, singbox, state as state_backend
+from hydra.core import singbox, state as state_backend
 from hydra.core.doctor import run_host_preflight
 from hydra.core.host import HOST
 from hydra.core.legacy_sidecars import purge_legacy_sidecars
@@ -19,64 +21,64 @@ from hydra.core.state import (
     save_state,
     update_state,
 )
-from hydra.core.state_models import get_protocol, validate_state
-from hydra.core.state_nodes import NodeConfig
+from hydra.core.state_models import validate_state
 from hydra.core.upgrade import check_upgrade
-from hydra.plugins.container import PluginContainer
-from hydra.plugins.defaults import PluginFactory, default_plugins
-from hydra.services.admin_infrastructure import AdminInfrastructure
+from hydra.plugins.defaults import PluginFactory
 from hydra.services.application import ApplicationService
 from hydra.services.backups import BackupService, compose_backup_policy
-from hydra.services.certificate_audit import CertificateInspector
-from hydra.services.certificates import CertificateProvisioner
-from hydra.services.calls import CallsService
-from hydra.services.calls_health import CallsProbeStore
-from hydra.services.calls_infrastructure import (
-    CALLS_CREATOR_UNIT,
-    CALLS_POOL_DIR,
-    CALLS_POOL_STATE,
-    CALLS_PROBE_STATE,
-    CallsInfrastructure,
-)
-from hydra.services.creator_sessions import CreatorSessionManager
-from hydra.services.vk_turn_probe import VkTurnProbe
-from hydra.services.creator_lock_infrastructure import CreatorFileLock
-from hydra.services.headless_creator_infrastructure import HeadlessCreatorInfrastructure
+from hydra.services.calls_composition import create_calls_runtimes, create_calls_service
 from hydra.services.configuration_plan import ConfigurationPlanner
 from hydra.services.diagnostic_infrastructure import HOST_DIAGNOSTICS
 from hydra.services.log_infrastructure import HostLogOperations
-from hydra.services.maintenance import MaintenanceService
-from hydra.services.nodes.bootstrap import NodeBootstrap
-from hydra.services.nodes.control_client import NodeControlClient
-from hydra.services.nodes.credentials import cleanup_node_credentials
-from hydra.services.nodes.installer import uninstall_node
-from hydra.services.nodes.manager import NodeManager
-from hydra.services.nodes.observation import NodeObservationStore
-from hydra.services.nodes.snapshot_store import NodeSnapshotStore
-from hydra.services.kernel import KernelService
-from hydra.services.kernel_infrastructure import KernelInfrastructure
-from hydra.services.orchestration_service import OrchestrationService
+from hydra.services.managed_nodes.agent import ManagedNodeAgent
+from hydra.services.managed_nodes.apply import ManagedNodeApplyService
+from hydra.services.managed_nodes.checks import ManagedNodeCheckService
+from hydra.services.managed_nodes.client import client_from_credentials
+from hydra.services.managed_nodes.cascade_runtime import CascadeRuntime
+from hydra.services.managed_nodes.cascade_credentials import CascadeCredentialStore
+from hydra.services.managed_nodes import cascade_leases, cascade_preparation
+from hydra.services.managed_nodes.cascade_rendering import TechnicalPeerMaterialProvider
+from hydra.services.managed_nodes.cascades import ManagedNodeCascadeService
+from hydra.services.managed_nodes.apply_gate import AuthenticatedParticipant, ManagedNodeApplyGate
+from hydra.services.managed_nodes.cascade_participant import ManagedNodeCascadeParticipant
+from hydra.services.managed_nodes.cascade_runtime_service import ManagedNodeCascadeRuntime
+from hydra.services.managed_nodes.credentials import ManagementCredentialStore
+from hydra.services.managed_nodes.observations import ManagedNodeObservationProvider, ManagedNodeObservationStore
+from hydra.services.managed_nodes.profile_store import ManagedNodeProfileStore
+from hydra.services.managed_nodes.probe_clients import (
+    ManagedNodeProbeClient,
+    ManagedNodeProbeIdentityStore,
+    ManagedNodeProbeMaterialProvider,
+)
+from hydra.services.managed_nodes.profiles import ManagedNodeProfileBuilder
+from hydra.services.managed_nodes.runtime import ManagedNodeRuntime
+from hydra.services.managed_nodes.snapshots import ManagedNodeSnapshotStore
+from hydra.services.managed_nodes.status import ManagedNodeStatusService
+from hydra.services.managed_nodes.sync import ManagedNodeSyncService
+from hydra.services.subscriptions.node_exports import ManagedNodeSubscriptionReader
+from hydra.services.managed_nodes.identity import ManagementIdentity, load_management_identity
+from hydra.services.managed_nodes.installation import resolve_managed_node_revision
+from hydra.services.managed_nodes.operations import ManagedNodeOperationsService
+from hydra.services.managed_nodes.records import ManagedNodeRecords
+from hydra.services.managed_nodes.ssh import OpenSshManagedNodeSSH
+from hydra.services.managed_nodes.enrollment import remove_management_firewall
 from hydra.services.plugin_actions import PluginActionService
 from hydra.services.plugin_commands import PluginCommandService
 from hydra.services.plugin_queries import PluginQueryService
 from hydra.services.protocol_setup import ProtocolSetupService
 from hydra.services.protocols import ProtocolService
 from hydra.services.vless_cdn_install import VlessCdnLifecycleOperations
-from hydra.services.security_intel import notification_fields
-from hydra.services.security_notifications import notify_security_event
-from hydra.services.sync_agent import run_sync
-from hydra.services.sync_ports import (
-    default_sync_operations,
-    subscription_certificate_renewal,
-)
+from hydra.services.sync_agent import log_event
+from hydra.services.sync_cycle import sync_user_limits
 from hydra.services.system_monitoring_infrastructure import HOST_MONITORING
 from hydra.services.system import SystemService
 from hydra.services.traffic import TrafficService
 from hydra.services.uninstall import CleanupStep, UninstallService
 from hydra.services.users import UserService
-
-if TYPE_CHECKING:
-    from hydra.services.nodes.reconcile import NodeReconciler
+from hydra.bootstrap_application import production_admin_surfaces, production_orchestration
+from hydra.bootstrap_managed_nodes import production_managed_node_runtime
+from hydra.bootstrap_cascade import production_cascade_components
+from hydra.bootstrap_managed_nodes import preparation_owner as _cascade_preparation_owner
 
 
 def _require_cleanup_result(operation) -> None:
@@ -85,167 +87,248 @@ def _require_cleanup_result(operation) -> None:
         raise RuntimeError(message)
 
 
-def _creator_runtimes() -> tuple[HeadlessCreatorInfrastructure, CallsInfrastructure]:
-    calls_provider = HeadlessCreatorInfrastructure(
-        HOST,
-        pool_dir=CALLS_POOL_DIR,
-        pool_state_file=CALLS_POOL_STATE,
-        creator_unit=CALLS_CREATOR_UNIT,
-        managed_consumer="calls",
-        managed_unit_prefix="hydra-headless-creator-vk-calls",
-    )
-    runtime = CallsInfrastructure(
-        HOST,
-        pool_source=calls_provider,
-    )
-    return calls_provider, runtime
+_MANAGED_NODE_REPOSITORY = "https://github.com/gr33nimax/HYDRA-ULTIMATE"
 
 
-def production_node_cookie_import(cookies: object) -> None:
-    """Write only the node's local VK credentials; never create a call pool."""
-    provider, _ = _creator_runtimes()
-    provider.import_vk_cookie_document(cookies)
-
-
-def _creator_services(
-    calls_creator_runtime,
-    calls_runtime,
-    protocols,
-    orchestration,
-):
-    calls_creator_sessions = CreatorSessionManager({"vk": calls_creator_runtime})
-    calls = CallsService(
-        runtime=calls_runtime,
-        creator=calls_creator_sessions,
-        protocols=protocols,
-        save_state=save_state,
-        apply_config=orchestration.apply_config,
-        operation_lock=CreatorFileLock(
-            HOST,
-            Path(
-                os.environ.get(
-                    "HYDRA_CALLS_LOCK_FILE",
-                    "/run/lock/hydra-calls.lock",
-                )
-            ),
+def production_managed_node_operations(
+    *,
+    records=None,
+    credentials=None,
+    sync_service=None,
+    status_service=None,
+    cascade_runtime: CascadeRuntime | None = None,
+    profile_reader=None,
+    preparation_owner: cascade_preparation.ManagedNodeCascadePreparationOwner | None = None,
+    cascade_participant_owner: ManagedNodeCascadeParticipant | None = None,
+) -> ManagedNodeOperationsService:
+    """Compose the scoped install/remove/sync port from injected dependencies."""
+    root = state_backend.STATE_DIR / "managed-nodes"
+    if records is None:
+        apply_gate = ManagedNodeApplyGate(
+            state_reader=load_state,
+            participant_id="base",
+            lock_path=root / "apply-gate.lock",
+        )
+        node_records = ManagedNodeRecords(
+            state_reader=load_state,
+            state_updater=apply_gate.wrap_state_updater(update_state),
+        )
+    else:
+        node_records = records
+    credential_store = credentials or ManagementCredentialStore(host=HOST, root=root / "credentials")
+    local_identity_path = Path("/etc/hydra/managed-node/identity.json")
+    if cascade_runtime is not None and preparation_owner is None:
+        raise ValueError("production cascade runtime requires an explicit technical preparation owner")
+    cascade_credentials = CascadeCredentialStore(host=HOST, root=root / "cascade-credentials")
+    return ManagedNodeOperationsService(
+        records=node_records,
+        ssh=OpenSshManagedNodeSSH(host=HOST, known_hosts_root=root / "known-hosts"),
+        credentials=credential_store,
+        revision_resolver=partial(resolve_managed_node_revision, HOST, _MANAGED_NODE_REPOSITORY),
+        operation_id_factory=lambda: secrets.token_hex(16),
+        client_factory=lambda definition, files=None, certificate=None: client_from_credentials(
+            credential_store,
+            definition,
+            files,
+            certificate,
         ),
-        last_apply_error=orchestration.last_apply_error,
-        probe_store=CallsProbeStore(HOST, CALLS_PROBE_STATE),
-        turn_probe=VkTurnProbe(),
-    )
-    return calls
-
-
-def _production_node_client(node: NodeConfig, bootstrap: NodeBootstrap) -> NodeControlClient:
-    credentials = bootstrap.load_control_credentials(node.id, address=node.address)
-    expected = node.control_fingerprint.replace(":", "").casefold()
-    if expected and expected != credentials.node_fingerprint.casefold():
-        raise RuntimeError("node certificate fingerprint does not match its configuration")
-    return NodeControlClient(
-        host=node.address,
-        port=node.control_port,
-        node_id=node.id,
-        ca_file=credentials.node_certificate,
-        certificate=credentials.client_certificate,
-        private_key=credentials.client_private_key,
-        server_fingerprint=expected or credentials.node_fingerprint,
+        sync_service=sync_service,
+        status_service=status_service,
+        cascade_service=ManagedNodeCascadeService(
+            records=node_records,
+            runtime=cascade_runtime,
+            credentials=cascade_credentials,
+            preparation_owner=preparation_owner,
+        ),
+        profile_reader=profile_reader,
+        cascade_participant_owner=cascade_participant_owner,
+        local_identity_reader=lambda: (
+            load_management_identity(Path("/etc/hydra/managed-node"), host=HOST)
+            if local_identity_path.exists() or local_identity_path.is_symlink()
+            else None
+        ),
     )
 
 
-def _import_node_cookies(node: NodeConfig, source: str, bootstrap: NodeBootstrap) -> None:
-    from hydra.services.nodes.cookies import import_node_vk_cookies
-
-    import_node_vk_cookies(
-        node,
-        source,
-        host=HOST,
-        known_hosts_root=bootstrap.known_hosts_root,
-        ssh_user=node.ssh_user,
-        identity_file=bootstrap.managed_key_file(node.id),
+def production_managed_node_agent(identity: ManagementIdentity) -> ManagedNodeAgent:
+    """Compose node apply, receipts, profile sync and isolated native probe support."""
+    node_root = Path("/etc/hydra/managed-node")
+    profile_store = ManagedNodeProfileStore(host=HOST, root=state_backend.STATE_DIR / "managed-node-profiles")
+    probe_identity = ManagedNodeProbeIdentityStore(host=HOST, root=node_root, node_id=identity.node_id)
+    probe_identity.ensure()
+    application = production_application(managed_node_probe_identity=probe_identity)
+    records = cast(Any, application.nodes)._records
+    runtime = ManagedNodeRuntime(host=HOST, config_path=singbox.SINGBOX_CONFIG)
+    builder = ManagedNodeProfileBuilder(protocols=application.protocols)
+    snapshots = ManagedNodeSnapshotStore(host=HOST, root=state_backend.STATE_DIR / "managed-node-snapshots")
+    applier = ManagedNodeApplyService(
+        node_id=identity.node_id,
+        records=records,
+        state_reader=load_state,
+        restore_state=restore_desired_state,
+        reconcile_users=application.users.operations.reconcile_users,
+        apply_config=application.apply_config,
+        protocols=application.protocols,
+        runtime=runtime,
+        profile_builder=builder,
+        profile_store=profile_store,
+        snapshots=snapshots,
+        lock_path=Path(f"/run/lock/hydra-managed-node-{identity.node_id}.lock"),
     )
-
-
-def _production_node_manager() -> NodeManager:
-    script = (Path(__file__).resolve().parents[1] / "bootstrap.sh").read_text(encoding="utf-8")
-    bootstrap = NodeBootstrap(host=HOST, script=script)
-
-    def uninstall_remote(node: NodeConfig) -> None:
-        uninstall_node(
-            host=HOST,
-            known_hosts_root=bootstrap.known_hosts_root,
-            node_id=node.id,
-            address=node.address,
-            ssh_port=node.ssh_port,
-            ssh_user=node.ssh_user,
-            identity_file=bootstrap.managed_key_file(node.id),
-        )
-
-    def forget_credentials(node_id: str) -> None:
-        cleanup_node_credentials(
-            host=HOST,
-            credentials_root=bootstrap.credentials_root,
-            known_hosts_root=bootstrap.known_hosts_root,
-            node_id=node_id,
-            forget_host_key=True,
-        )
-
-    return NodeManager(
+    observations = ManagedNodeObservationProvider(
+        node_id=identity.node_id,
+        records=records,
+        runtime=runtime,
+        protocols=application.protocols,
         state_reader=load_state,
         state_updater=update_state,
-        client_for=lambda node: _production_node_client(node, bootstrap),
-        snapshot_store=NodeSnapshotStore(
-            host=HOST,
-            root=state_backend.STATE_DIR / "node-exports",
-        ),
-        bootstrap=bootstrap,
-        uninstall_remote=uninstall_remote,
-        forget_node_credentials=forget_credentials,
-        import_remote_cookies=lambda node, source: _import_node_cookies(node, source, bootstrap),
-        # Runtime observations, deliberately beside state.json: they describe what was
-        # last seen, not what the operator configured.
-        observations=NodeObservationStore(
-            host=HOST,
-            path=state_backend.STATE_DIR / "node-observations.json",
-        ),
+        mutation_lock=applier.accounting_lock,
     )
+    probes = ManagedNodeProbeMaterialProvider(
+        node_id=identity.node_id,
+        identity=probe_identity,
+        protocols=application.protocols,
+    )
+
+    def probe_materials():
+        sample, state = observations.read_with_state()
+        if sample.receipt is None:
+            raise RuntimeError("committed apply and active runtime are not confirmed")
+        return probes.materials(state, sample.receipt)
+
+    applier.recover_pending()
+    return ManagedNodeAgent(
+        node_id=identity.node_id,
+        state_provider=observations.read,
+        sync_sample_provider=observations.sync_sample,
+        submit_provider=applier.submit,
+        operation_provider=applier.operation,
+        profiles_provider=applier.profiles,
+        probe_materials_provider=probe_materials,
+        cascade_participant=cast(Any, application.nodes).management_agent_cascade_owner(),
+    )
+
+
+def _cleanup_managed_node_probe_identity() -> None:
+    root = Path("/etc/hydra/managed-node")
+    path = root / "probe-identity.json"
+    if root.is_symlink() or path.is_symlink():
+        raise ValueError("managed-node probe identity path is unsafe")
+    if not path.exists():
+        return
+    ManagedNodeProbeIdentityStore(host=HOST, root=root, node_id="cleanup").cleanup()
+
+
+def _cleanup_managed_node_firewall() -> None:
+    root = Path("/etc/hydra/managed-node")
+    config = root / "identity.json"
+    if config.is_symlink():
+        raise ValueError("managed-node identity path is unsafe")
+    if not config.exists():
+        return
+    identity = load_management_identity(root, host=HOST)
+    remove_management_firewall(
+        host=HOST,
+        node_id=identity.node_id,
+        allowed_source_ips=identity.allowed_source_ips,
+    )
+
+
+def _managed_node_services(
+    protocols,
+    traffic,
+    *,
+    preparation_owner=None,
+    cascade_runtime=None,
+    cascade_participant_owner=None,
+    records=None,
+):
+    node_root = state_backend.STATE_DIR / "managed-nodes"
+    records = records or ManagedNodeRecords(state_reader=load_state, state_updater=update_state)
+    credentials = ManagementCredentialStore(host=HOST, root=node_root / "credentials")
+    client_factory = lambda definition: client_from_credentials(credentials, definition)
+    profile_store = ManagedNodeProfileStore(host=HOST, root=state_backend.STATE_DIR / "managed-node-profiles")
+    observations = ManagedNodeObservationStore(host=HOST, root=state_backend.STATE_DIR / "managed-node-observations")
+    checks = ManagedNodeCheckService(
+        records=records,
+        state_reader=load_state,
+        client_factory=client_factory,
+        profile_store=profile_store,
+        observations=observations,
+        probe_client=ManagedNodeProbeClient(host=HOST),
+    )
+
+    def local_user_sync():
+        state = load_state()
+        return sync_user_limits(
+            state,
+            enabled=bool(state.install.get("sync_limits_enabled", True)),
+            now=datetime.now(timezone.utc),
+            check_traffic_limits=traffic.check_limits,
+            notify_user_block=protocols.notify_user_block,
+            update_state=update_state,
+            log=log_event,
+        )
+
+    sync_service = ManagedNodeSyncService(
+        records=records,
+        state_reader=load_state,
+        state_updater=update_state,
+        client_factory=client_factory,
+        profile_store=profile_store,
+        observations=observations,
+        checks=checks,
+        local_user_sync=local_user_sync,
+    )
+    status = ManagedNodeStatusService(
+        records=records,
+        observations=observations,
+        state_reader=load_state,
+    )
+    profiles = ManagedNodeSubscriptionReader(profile_store=profile_store)
+    operations = production_managed_node_operations(
+        records=records,
+        credentials=credentials,
+        sync_service=sync_service,
+        status_service=status,
+        profile_reader=profiles.profiles_for_user,
+        preparation_owner=preparation_owner,
+        cascade_runtime=cascade_runtime,
+        cascade_participant_owner=cascade_participant_owner,
+    )
+    return operations, sync_service
 
 
 def production_application(
     *,
     extra_plugin_factories: Iterable[PluginFactory] = (),
+    managed_node_probe_identity: ManagedNodeProbeIdentityStore | None = None,
+    cascade_preparation_evidence_provider: cascade_preparation.EvidenceProvider | None = None,
+    cascade_technical_peer_material_provider: TechnicalPeerMaterialProvider | None = None,
+    cascade_apply_authenticated_participant_provider: AuthenticatedParticipant | None = None,
 ) -> ApplicationService:
     """Build a fresh, instance-scoped production application."""
-    calls_creator_runtime, calls_runtime = _creator_runtimes()
-    plugins = PluginContainer(
-        default_plugins(
-            notifier=notify_security_event,
-            security_context=notification_fields,
-            extra_factories=extra_plugin_factories,
-            call_config_source=calls_runtime,
-        ),
+    calls_creator_runtime, calls_runtime = create_calls_runtimes(HOST)
+    node_root = state_backend.STATE_DIR / "managed-nodes"
+    participant_id = managed_node_probe_identity.node_id if managed_node_probe_identity is not None else "base"
+    authenticated_owner = cascade_apply_authenticated_participant_provider or (
+        lambda operation: participant_id if participant_id in cascade_leases.cascade_participants(operation) else None
+    )
+    plugins, records, preparation_owner, apply_gate, participant_store = production_managed_node_runtime(
         host=HOST,
+        root=node_root,
+        state_reader=load_state,
+        state_updater=update_state,
+        participant_id=participant_id,
+        evidence_provider=cascade_preparation_evidence_provider,
+        authenticated_participant=authenticated_owner,
+        technical_peer_material_provider=cascade_technical_peer_material_provider,
+        calls_runtime=calls_runtime,
+        extra_plugin_factories=extra_plugin_factories,
+        probe_identity=managed_node_probe_identity,
         log_error=lambda message: singbox.log("ERROR", message),
     )
-    certificates = CertificateProvisioner(cast(Any, HOST))
-    orchestration = OrchestrationService(
-        plugins=plugins,
-        singbox=singbox,
-        nft=nft,
-        host=HOST,
-        save_state=save_state,
-        get_protocol=get_protocol,
-        certificates=certificates,
-        traffic_daemon_service=Path(
-            "/etc/systemd/system/hydra-traffic-daemon.service",
-        ),
-        apply_journal=Path("/var/log/hydra/apply.jsonl"),
-        apply_lock_file=Path(
-            os.environ.get(
-                "HYDRA_APPLY_LOCK_FILE",
-                "/run/lock/hydra-apply.lock",
-            ),
-        ),
-    )
+    orchestration, certificates = production_orchestration(plugins, apply_gate)
     protocols = ProtocolService(
         orchestration,
         plugins,
@@ -254,47 +337,42 @@ def production_application(
             "vless_cdn": VlessCdnLifecycleOperations(orchestration),
         },
     )
-    node_manager = _production_node_manager()
-    traffic = TrafficService(protocols, after_user_reset=node_manager.reconcile_all)
+    traffic = TrafficService(protocols)
+    participant_owner, cascade_runtime = production_cascade_components(
+        host=HOST,
+        root=node_root,
+        participant_id=participant_id,
+        records=records,
+        gate=apply_gate,
+        preparation=preparation_owner,
+        participant_store=participant_store,
+        orchestration=orchestration,
+        protocols=protocols,
+    )
+    nodes, node_sync = _managed_node_services(
+        protocols,
+        traffic,
+        preparation_owner=preparation_owner,
+        cascade_runtime=cascade_runtime,
+        cascade_participant_owner=participant_owner,
+        records=records,
+    )
     plugin_actions = PluginActionService(get_plugin=plugins.get)
     plugin_queries = PluginQueryService(get_plugin=plugins.get)
-    calls = _creator_services(
+    calls = create_calls_service(
+        HOST,
         calls_creator_runtime,
         calls_runtime,
         protocols,
         orchestration,
+        save_state,
     )
-    maintenance = MaintenanceService(
-        protocols=protocols,
-        plugin_actions=plugin_actions,
-        plugin_queries=plugin_queries,
-        calls=calls,
-    )
-    kernel = KernelService(
-        KernelInfrastructure(HOST),
-        save_state=save_state,
-    )
-    certificate_audit = CertificateInspector(cast(Any, HOST))
-    admin = AdminInfrastructure(
-        sync_operations=default_sync_operations(
-            protocols=protocols,
-            plugin_actions=plugin_actions,
-            plugin_queries=plugin_queries,
-            apply_config=orchestration.apply_config,
-            check_traffic_limits=traffic.check_limits,
-            inspect_certificates=certificate_audit.inspect,
-            # Resolved on call: the renewal needs the admin adapter being
-            # assembled by this very statement.
-            renew_subscription_certificate=lambda domain: subscription_certificate_renewal(admin)(domain),
-            maintenance=maintenance,
-            collect_node_traffic=node_manager.collect_traffic,
-            reconcile_nodes=node_manager.reconcile_all,
-        ),
-        sync_runner=run_sync,
+    admin, maintenance, kernel, certificate_audit = production_admin_surfaces(
+        protocols, traffic, orchestration, plugin_actions, plugin_queries, node_sync, calls
     )
 
     return ApplicationService(
-        users=UserService(orchestration, after_node_change=node_manager.reconcile_all),
+        users=UserService(orchestration),
         protocols=protocols,
         apply_config=orchestration.apply_config,
         last_apply_error=orchestration.last_apply_error,
@@ -354,45 +432,20 @@ def production_application(
                         calls_creator_runtime.uninstall_creator_pool,
                     ),
                 ),
+                CleanupStep("managed-node-firewall", _cleanup_managed_node_firewall),
+                CleanupStep("managed-node-probe-identity", _cleanup_managed_node_probe_identity),
             ),
         ),
         certificates=certificate_audit,
         calls=calls,
         maintenance=maintenance,
         kernel=kernel,
-        nodes=node_manager,
+        nodes=nodes,
     )
-
-
-def production_node_reconciler(node_id: str) -> NodeReconciler:
-    """Compose the node control operations at the production root."""
-    from hydra.services.nodes.reconcile import NodeReconciler as Reconciler
-    from hydra.services.nodes.upgrade import NodeUpgradeScheduler
-
-    return Reconciler(
-        node_id,
-        production_application(),
-        state_reader=load_state,
-        upgrade_scheduler=NodeUpgradeScheduler(HOST).schedule,
-    )
-
-
-def production_node_uninstall() -> dict[str, object]:
-    """Remove this node through its freshly composed application services."""
-    result = production_application().uninstaller.uninstall(
-        load_state(),
-        confirmed=True,
-        keep_data=False,
-    )
-    ok = result.get("ok") if isinstance(result, dict) else None
-    if type(ok) is not bool or not ok:
-        raise RuntimeError("node uninstall did not complete successfully")
-    return result
 
 
 __all__ = [
     "production_application",
-    "production_node_reconciler",
-    "production_node_uninstall",
-    "production_node_cookie_import",
+    "production_managed_node_agent",
+    "production_managed_node_operations",
 ]

@@ -38,11 +38,13 @@ class PluginExecutor:
         state: AppState,
         *,
         log_error: Callable[[str], None],
+        render_state_for_plugin: Callable[[BasePlugin], AppState] | None = None,
     ) -> dict[str, ConfigFragment]:
         fragments: dict[str, ConfigFragment] = {}
         for plugin in self.catalog.enabled(state):
             try:
-                fragment = self.invoker.configure(plugin, state)
+                plugin_state = render_state_for_plugin(plugin) if render_state_for_plugin else state
+                fragment = self.invoker.configure(plugin, plugin_state)
                 validate_fragment(fragment)
                 if not fragment.is_empty():
                     fragments[plugin.meta.name] = fragment

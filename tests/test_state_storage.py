@@ -17,19 +17,27 @@ def _use_temp_state(monkeypatch, tmp_path):
 
 def test_future_format_is_never_silently_downgraded(monkeypatch, tmp_path):
     _use_temp_state(monkeypatch, tmp_path)
-    state_module.STATE_FILE.write_text(json.dumps({
-        "format_version": 999,
-        "revision": 0,
-        "core": {},
-        "features": {},
-    }), encoding="utf-8")
+    state_module.STATE_FILE.write_text(
+        json.dumps(
+            {
+                "format_version": 999,
+                "revision": 0,
+                "core": {},
+                "features": {},
+            }
+        ),
+        encoding="utf-8",
+    )
     state_module.STATE_FILE.with_suffix(".json.bak").write_text(
-        json.dumps({
-            "format_version": state_module.SCHEMA_VERSION,
-            "revision": 0,
-            "core": {},
-            "features": {},
-        }), encoding="utf-8"
+        json.dumps(
+            {
+                "format_version": state_module.SCHEMA_VERSION,
+                "revision": 0,
+                "core": {},
+                "features": {},
+            }
+        ),
+        encoding="utf-8",
     )
     with pytest.raises(UnsupportedStateVersion, match="newer than supported format"):
         state_module.load_state()
@@ -37,14 +45,19 @@ def test_future_format_is_never_silently_downgraded(monkeypatch, tmp_path):
 
 def test_current_format_kernel_migration_is_persisted_once(monkeypatch, tmp_path):
     _use_temp_state(monkeypatch, tmp_path)
-    state_module.STATE_FILE.write_text(json.dumps({
-        "format_version": 1,
-        "revision": 7,
-        "core": {},
-        "features": {
-            "kernel": {"provider": "sing-box-extended", "channel": "stable"},
-        },
-    }), encoding="utf-8")
+    state_module.STATE_FILE.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "revision": 7,
+                "core": {},
+                "features": {
+                    "kernel": {"provider": "sing-box-extended", "channel": "stable"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
 
     loaded = state_module.load_state()
     first = state_module.migrate_persisted_state()
@@ -74,12 +87,17 @@ def test_legacy_importer_rejects_unknown_future_schema():
 
 def test_unknown_feature_namespace_survives_round_trip(monkeypatch, tmp_path):
     _use_temp_state(monkeypatch, tmp_path)
-    state_module.STATE_FILE.write_text(json.dumps({
-        "format_version": 1,
-        "revision": 7,
-        "core": {},
-        "features": {"future-feature": {"secret": "preserve", "enabled": True}},
-    }), encoding="utf-8")
+    state_module.STATE_FILE.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "revision": 7,
+                "core": {},
+                "features": {"future-feature": {"secret": "preserve", "enabled": True}},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     loaded = state_module.load_state()
     loaded.network.domain = "changed.example"
@@ -127,6 +145,34 @@ def test_stale_desired_state_write_is_rejected(monkeypatch, tmp_path):
     persisted = state_module.load_state()
     assert persisted.network.domain == "first.example"
     assert persisted.revision == first.revision
+
+
+def test_rollback_restores_snapshot_over_newer_revision_without_regressing_revision(
+    monkeypatch,
+    tmp_path,
+):
+    _use_temp_state(monkeypatch, tmp_path)
+    initial = AppState(users=[User(email="u@example.com", uuid="u1")])
+    initial.network.domain = "before.example"
+    state_module.save_state(initial)
+    snapshot = state_module.load_state()
+
+    concurrent = state_module.load_state()
+    concurrent.network.domain = "concurrent.example"
+    state_module.save_state(concurrent)
+    latest_revision = state_module.load_state().revision
+
+    def record_runtime(state):
+        state.users[0].traffic_used_bytes = 77
+
+    state_module.update_state(record_runtime)
+    restored = state_module.restore_desired_state(snapshot)
+
+    assert restored.network.domain == "before.example"
+    assert restored.revision == latest_revision + 1
+    assert restored.users[0].traffic_used_bytes == 77
+    assert state_module.load_state().network.domain == "before.example"
+    assert state_module.load_state().revision == latest_revision + 1
 
 
 def test_runtime_updates_do_not_conflict_with_stale_settings(

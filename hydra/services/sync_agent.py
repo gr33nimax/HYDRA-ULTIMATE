@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Iterator, TextIO
 
 from hydra.core.state import update_state
-from hydra.services.sync_cycle import node_accounting_cycle, run_sync_cycle
+from hydra.services.sync_cycle import run_sync_cycle
 from hydra.services.sync_ports import SyncOperations
 
 
@@ -56,12 +56,11 @@ def run_sync(
             message = "Sync Agent уже выполняется другим процессом"
             _log(message)
             return False, message
-        with node_accounting_cycle(operations, _log):
-            return _run_sync(
-                force_update_check=force_update_check,
-                force_all_checks=force_all_checks,
-                operations=operations,
-            )
+        return _run_sync(
+            force_update_check=force_update_check,
+            force_all_checks=force_all_checks,
+            operations=operations,
+        )
 
 
 def _run_sync(

@@ -8,10 +8,10 @@ import copy
 STATE_FORMAT_VERSION = 1
 
 _CORE_KEYS = ("install", "users", "telegram", "network", "configuration_names")
-_FEATURE_KEYS = ("protocols", "headless_creator", "kernel", "nodes")
+_FEATURE_KEYS = ("protocols", "headless_creator", "kernel")
 # Derived, not hand-written: a key added to the envelopes above can no longer be
 # forgotten here, which used to surface as a KeyError while unpacking.
-_LIST_KEYS = ("users", "nodes")
+_LIST_KEYS = ("users",)
 _DEFAULTS = {key: [] if key in _LIST_KEYS else {} for key in (*_CORE_KEYS, *_FEATURE_KEYS)}
 
 

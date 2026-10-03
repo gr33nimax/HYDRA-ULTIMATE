@@ -7,11 +7,19 @@ process-global plugin list.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from hydra.contracts import BackupResource, ConfigFragment
+from hydra.contracts import (
+    BackupResource,
+    ConfigFragment,
+    RuntimeRenderContributions,
+    RuntimeSubject,
+    validate_fragment,
+)
+from hydra.core.runtime_users import ProtectedRuntimeUser
 from hydra.core.state_models import AppState
 from hydra.plugins.base import BasePlugin, PluginCategory
 from hydra.plugins.catalog import PluginCatalog
@@ -29,6 +37,10 @@ class PluginContainer:
     plugins: Sequence[BasePlugin]
     host: Any
     log_error: Callable[[str], None] = _ignore_error
+    runtime_contributions: Callable[[AppState], RuntimeRenderContributions] | None = field(
+        default=None,
+        repr=False,
+    )
     catalog: PluginCatalog = field(init=False)
     executor: PluginExecutor = field(init=False)
 
@@ -78,10 +90,41 @@ class PluginContainer:
         self,
         state: AppState,
     ) -> dict[str, ConfigFragment]:
-        return self.executor.collect_fragments(
+        contributions = (
+            self.runtime_contributions(state)
+            if self.runtime_contributions is not None
+            else RuntimeRenderContributions()
+        )
+        contributions.validate()
+        if contributions.users:
+            known_uuids = {user.uuid for user in state.users}
+            known_emails = {user.email for user in state.users}
+            if any(user.uuid in known_uuids or user.email in known_emails for user in contributions.users):
+                raise ValueError("transient runtime subject collides with a business user")
+
+        def render_state_for_plugin(plugin: BasePlugin) -> AppState:
+            if plugin.meta.category != PluginCategory.TRANSPORT:
+                return state
+            subjects = [user for user in contributions.users if plugin.meta.name in user.protocols]
+            if not subjects:
+                return state
+            scoped_state = copy.deepcopy(state)
+            scoped_state.users.extend(ProtectedRuntimeUser(email=user.email, uuid=user.uuid) for user in subjects)
+            return scoped_state
+
+        plugin_fragments = self.executor.collect_fragments(
             state,
             log_error=self.log_error,
+            render_state_for_plugin=render_state_for_plugin,
         )
+        runtime_fragments = {}
+        plugin_names = {plugin.meta.name for plugin in self.plugins}
+        for name, fragment in contributions.fragments.items():
+            if name in plugin_names:
+                raise ValueError("runtime fragment name collides with a plugin")
+            validate_fragment(fragment)
+            runtime_fragments[name] = copy.deepcopy(fragment)
+        return {**runtime_fragments, **plugin_fragments}
 
     def apply_enabled(
         self,

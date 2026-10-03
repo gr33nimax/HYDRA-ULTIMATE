@@ -13,8 +13,8 @@ from hydra.core.state_models import AppState, User
 from hydra.services.subscriptions.access import SubscriptionPluginAccess
 from hydra.services.subscriptions.links import generate_base64_sub
 from hydra.services.subscriptions.node_exports import (
+    ManagedNodeProfileReader,
     NodeSubscriptionProfile,
-    PublishedNodeExportReader,
     node_profiles_for_user,
 )
 from hydra.services.subscriptions.serialization import serialize_nekobox_config
@@ -25,7 +25,7 @@ def _links_without_custom_configs(
     user: User,
     state: AppState,
     plugins: SubscriptionPluginAccess,
-    node_exports: PublishedNodeExportReader | None = None,
+    node_exports: ManagedNodeProfileReader | None = None,
 ) -> list[str]:
     payload = base64.b64decode(
         generate_base64_sub(
@@ -55,7 +55,7 @@ def _links_without_custom_configs(
 def _node_custom_documents(
     user: User,
     state: AppState,
-    node_exports: PublishedNodeExportReader | None,
+    node_exports: ManagedNodeProfileReader | None,
 ) -> Iterator[tuple[NodeSubscriptionProfile, dict[str, Any], str]]:
     for profile in node_profiles_for_user(user, state, node_exports=node_exports):
         if not profile.singbox:
@@ -245,7 +245,7 @@ def generate_throne_sub(
     state: AppState,
     *,
     plugins: SubscriptionPluginAccess,
-    node_exports: PublishedNodeExportReader | None = None,
+    node_exports: ManagedNodeProfileReader | None = None,
 ) -> str:
     """Build a Throne subscription with complex transports kept atomic."""
     links = _links_without_custom_configs(user, state, plugins, node_exports)
@@ -297,7 +297,7 @@ def generate_nekobox_sub(
     state: AppState,
     *,
     plugins: SubscriptionPluginAccess,
-    node_exports: PublishedNodeExportReader | None = None,
+    node_exports: ManagedNodeProfileReader | None = None,
 ) -> str:
     """Build a NekoBox subscription with complex transports kept atomic."""
     links = _links_without_custom_configs(user, state, plugins, node_exports)

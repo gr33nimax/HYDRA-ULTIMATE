@@ -22,7 +22,7 @@ from hydra.core.state_kernel_models import (
     validate_kernel_config,
 )
 from hydra.core.state_network_models import NetworkConfig
-from hydra.core.state_nodes import NodeConfig, validate_nodes
+from hydra.core.state_managed_nodes import validate_managed_nodes_extensions
 from hydra.core.state_validation import (
     supports_personal_protocol_access,
     validate_raw_state,
@@ -98,7 +98,6 @@ class AppState:
     configuration_names: dict[str, str] = field(default_factory=dict)
     protocols: dict[str, PluginState] = field(default_factory=dict)
     users: list[User] = field(default_factory=list)
-    nodes: list[NodeConfig] = field(default_factory=list)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
     headless_creator: HeadlessCreatorConfig = field(default_factory=HeadlessCreatorConfig)
@@ -156,7 +155,7 @@ def validate_state(state: AppState) -> None:
         )
     validate_headless_creator(state.headless_creator)
     validate_kernel_config(state.kernel)
-    validate_nodes(state.nodes)
+    validate_managed_nodes_extensions(state.feature_extensions)
     validate_configuration_names(
         state.configuration_names,
         path="configuration_names",

@@ -618,8 +618,7 @@ def test_every_awg_link_a_node_exports_satisfies_the_export_contract():
     label left the label's own spaces raw, and the export contract rejects a link with
     whitespace — so a node serving AmneziaWG published nothing at all.
     """
-    from hydra.contracts.node_export import NodeClientProfile
-    from hydra.contracts.node_snapshot import is_node_local_secret_key  # noqa: F401  (contract import path)
+    from hydra.contracts.managed_node_observations import ConfirmedProfile
 
     plugin = AmneziaWGPlugin()
     state = AppState(protocols={"amneziawg": PluginState(installed=True, enabled=True, config={})})
@@ -632,6 +631,12 @@ def test_every_awg_link_a_node_exports_satisfies_the_export_contract():
 
     assert links
     for link in links:
-        NodeClientProfile(protocol="amneziawg", profile="desktop", links=(link,)).validate()
+        ConfirmedProfile(
+            "aw-desktop",
+            "user-1",
+            "amneziawg",
+            "desktop",
+            links=[link],
+        ).validate()
         assert not any(character.isspace() for character in link)
     assert any(link.endswith("#alice%40example.com%20AWG%20Desktop") for link in links)

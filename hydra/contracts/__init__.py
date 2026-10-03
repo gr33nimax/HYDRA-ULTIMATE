@@ -1,4 +1,5 @@
 """Stable dependency-neutral contracts shared across HYDRA layers."""
+
 from hydra.contracts.backup import BackupPolicy, BackupResource
 from hydra.contracts.calls import CallConfigSource, UnavailableCallConfigSource
 from hydra.contracts.errors import ConfigurationError, HydraError
@@ -9,6 +10,8 @@ from hydra.contracts.plugin_config import (
     JsonPrimitive,
     JsonValue,
     PluginConfig,
+    RuntimeRenderContributions,
+    RuntimeSubject,
     normalize_plugin_config,
     validate_fragment,
     validate_json_object,
@@ -27,6 +30,8 @@ __all__ = [
     "JsonPrimitive",
     "JsonValue",
     "PluginConfig",
+    "RuntimeRenderContributions",
+    "RuntimeSubject",
     "UnavailableCallConfigSource",
     "normalize_plugin_config",
     "validate_fragment",

@@ -24,16 +24,24 @@ jobs:
           cache-dependency-path: requirements-dev.lock
       - name: Install dependencies
         run: |
-          python -m pip install --disable-pip-version-check -r requirements-dev.lock
+          python -m pip install \
+            --disable-pip-version-check \
+            -r requirements-dev.lock
           sudo apt-get update -qq
           sudo apt-get install -y -qq nftables iptables
       - name: Run unit suite on Linux
         run: python -m pytest -q
-      - name: Exercise the base-to-node path over the real control transport
-        # Opt-in: this path opens loopback sockets on purpose.
-        env:
-          HYDRA_NODE_E2E: "1"
-        run: python -m pytest -q tests/test_node_e2e.py
+      - name: Verify managed-node recovery, billing and profile contracts
+        # Unit/loopback proof only, not real SSH or VPS cascade evidence.
+        run: >-
+          python -m pytest -q
+          tests/test_managed_node_protocol_configuration.py
+          tests/test_managed_node_sync.py
+          tests/test_managed_node_accounting.py
+          tests/test_managed_node_profiles.py
+          tests/test_managed_node_subscriptions.py
+          tests/test_managed_node_protocol_fields.py
+          tests/test_node_sync.py
       - name: Exercise root, systemd, nftables and backup lifecycle
         run: >-
           sudo --preserve-env=PATH

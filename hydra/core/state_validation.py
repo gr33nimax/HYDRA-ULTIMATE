@@ -8,7 +8,7 @@ from hydra.core.state_creator_models import validate_raw_headless_creator
 from hydra.core.state_devices import validate_device_map
 from hydra.core.state_format import STATE_FORMAT_VERSION, UnsupportedStateVersion
 from hydra.core.state_kernel_models import validate_raw_kernel_config
-from hydra.core.state_nodes import validate_raw_nodes
+from hydra.core.state_managed_nodes import validate_managed_nodes_extensions
 
 
 LEGACY_SCHEMA_VERSION = 18
@@ -47,7 +47,7 @@ def validate_raw_state(raw: object) -> None:
         validate_configuration_names(raw["configuration_names"], path="configuration_names")
     if "kernel" in raw:
         validate_raw_kernel_config(raw["kernel"])
-    validate_raw_nodes(raw.get("nodes", []))
+    validate_managed_nodes_extensions(raw.get("feature_extensions", {}))
     if "users" in raw:
         users = raw["users"]
         if not isinstance(users, list) or any(not isinstance(user, dict) for user in users):

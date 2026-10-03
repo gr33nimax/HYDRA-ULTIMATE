@@ -11,7 +11,7 @@ from hydra.core.configuration_names import resolve_configuration_name
 from hydra.core.state_models import AppState, User
 from hydra.services.subscriptions.access import SubscriptionPluginAccess
 from hydra.services.subscriptions.node_exports import (
-    PublishedNodeExportReader,
+    ManagedNodeProfileReader,
     node_profiles_for_user,
 )
 from hydra.services.subscriptions.serialization import (
@@ -225,7 +225,7 @@ def _base_subscription_links(
     state: AppState,
     *,
     plugins: SubscriptionPluginAccess,
-    node_exports: PublishedNodeExportReader | None = None,
+    node_exports: ManagedNodeProfileReader | None = None,
 ) -> list[str]:
     formatted = [tag_client_link(link, user, state) for link in generate_links(user, state, plugins=plugins)]
     node_links = [
@@ -244,7 +244,7 @@ def generate_base64_sub(
     state: AppState,
     *,
     plugins: SubscriptionPluginAccess,
-    node_exports: PublishedNodeExportReader | None = None,
+    node_exports: ManagedNodeProfileReader | None = None,
 ) -> str:
     """Build a generic base64 subscription with native NekoBox variants."""
     links = _base_subscription_links(
@@ -262,7 +262,7 @@ def generate_shadowrocket_sub(
     state: AppState,
     *,
     plugins: SubscriptionPluginAccess,
-    node_exports: PublishedNodeExportReader | None = None,
+    node_exports: ManagedNodeProfileReader | None = None,
 ) -> str:
     """Build a base64 list with native Shadowrocket transport variants."""
     links: list[str] = []

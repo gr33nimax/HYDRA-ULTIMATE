@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any, TypeVar
 
@@ -18,22 +17,6 @@ StateUpdater = Callable[
     tuple[AppState, Any],
 ]
 Logger = Callable[[str], None]
-
-
-@contextmanager
-def node_accounting_cycle(operations: SyncOperations, log: Logger) -> Iterator[None]:
-    """Poll before local limits and propagate blocks afterward, outside state locks."""
-    try:
-        operations.collect_node_traffic()
-    except Exception as exc:
-        log(f"Node traffic collection failed: {type(exc).__name__}")
-    try:
-        yield
-    finally:
-        try:
-            operations.reconcile_nodes()
-        except Exception as exc:
-            log(f"Node reconciliation failed: {type(exc).__name__}")
 
 
 def _restriction_reason(
@@ -59,12 +42,13 @@ def _restriction_reason(
         return ""
 
 
-def _sync_user_limits(
+def sync_user_limits(
     state: AppState,
     *,
     enabled: bool,
     now: datetime,
-    operations: SyncOperations,
+    check_traffic_limits: Callable[[AppState], list[str]],
+    notify_user_block: Callable[[AppState, User], list[str]],
     update_state: StateUpdater,
     log: Logger,
 ) -> tuple[AppState, dict[str, str], list[str]]:
@@ -73,7 +57,7 @@ def _sync_user_limits(
         return state, {}, []
 
     def refresh_and_block(latest: AppState) -> dict[str, str]:
-        exceeded = set(operations.check_traffic_limits(latest))
+        exceeded = set(check_traffic_limits(latest))
         blocked_users: dict[str, str] = {}
         for user in latest.users:
             if user.blocked:
@@ -96,7 +80,7 @@ def _sync_user_limits(
         )
         if user is None:
             continue
-        for failure in operations.protocols.notify_user_block(state, user):
+        for failure in notify_user_block(state, user):
             log(f"Plugin block hook failed for {email}: {failure}")
             failures.append(f"плагин {failure}")
     return state, blocked, failures
@@ -385,14 +369,23 @@ def run_sync_cycle(
     log(
         "Sync started" + (" (manual full check)" if force_all_checks else ""),
     )
-    state, blocked, failures = _sync_user_limits(
-        state,
-        enabled=limits_enabled,
-        now=datetime.now(timezone.utc),
-        operations=operations,
-        update_state=update_state,
-        log=log,
-    )
+    def local_sync() -> tuple[AppState, dict[str, str], list[str]]:
+        nonlocal state
+        state, blocked, limit_failures = sync_user_limits(
+            state,
+            enabled=limits_enabled,
+            now=datetime.now(timezone.utc),
+            check_traffic_limits=operations.check_traffic_limits,
+            notify_user_block=operations.protocols.notify_user_block,
+            update_state=update_state,
+            log=log,
+        )
+        return state, blocked, limit_failures
+
+    if operations.managed_node_sync is not None:
+        state, blocked, failures = operations.managed_node_sync.run_cycle(local_sync)
+    else:
+        state, blocked, failures = local_sync()
     state, phase_failures = _sync_plugin_maintenance(
         state,
         forced=force_all_checks,
@@ -435,4 +428,4 @@ def run_sync_cycle(
     return (False, "; ".join(failures)) if failures else (True, summary)
 
 
-__all__ = ["run_sync_cycle"]
+__all__ = ["run_sync_cycle", "sync_user_limits"]

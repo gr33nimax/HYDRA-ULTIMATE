@@ -37,6 +37,10 @@ class SyncPluginQueries(Protocol):
     ) -> Any: ...
 
 
+class ManagedNodeSyncCycle(Protocol):
+    def run_cycle(self, local_sync: Callable[[], tuple[AppState, dict[str, str], list[str]]]) -> tuple[AppState, dict[str, str], list[str]]: ...
+
+
 @dataclass(frozen=True)
 class SyncOperations:
     """Explicit dependencies for one synchronization run."""
@@ -58,8 +62,7 @@ class SyncOperations:
         tuple[bool, str],
     ] = lambda domain: (False, "обновление сертификата подписок не подключено")
 
-    collect_node_traffic: Callable[[], object] = lambda: None
-    reconcile_nodes: Callable[[], object] = lambda: None
+    managed_node_sync: ManagedNodeSyncCycle | None = None
 
     def apply(self, state: AppState) -> bool:
         return bool(self.apply_config(state))
@@ -118,8 +121,7 @@ def default_sync_operations(
     ],
     renew_subscription_certificate: Callable[[str], tuple[bool, str]],
     maintenance: MaintenanceOperations | None = None,
-    collect_node_traffic: Callable[[], object] = lambda: None,
-    reconcile_nodes: Callable[[], object] = lambda: None,
+    managed_node_sync: ManagedNodeSyncCycle | None = None,
 ) -> SyncOperations:
     """Compose declared plugin maintenance without protocol-name branches."""
 
@@ -177,13 +179,13 @@ def default_sync_operations(
         run_maintenance=(maintenance.run if maintenance is not None else run_maintenance),
         inspect_certificates=inspect_certificates,
         renew_subscription_certificate=renew_subscription_certificate,
-        collect_node_traffic=collect_node_traffic,
-        reconcile_nodes=reconcile_nodes,
+        managed_node_sync=managed_node_sync,
     )
 
 
 __all__ = [
     "MaintenanceOutcome",
+    "ManagedNodeSyncCycle",
     "SubscriptionCertificateAdmin",
     "SyncOperations",
     "SyncPluginActions",

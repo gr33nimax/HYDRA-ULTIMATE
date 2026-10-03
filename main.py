@@ -37,22 +37,33 @@ def check_python() -> None:
         sys.exit(1)
 
 
+def _is_managed_node_install() -> bool:
+    marker = Path("/etc/hydra/managed-node/identity.json")
+    return marker.exists() or marker.is_symlink()
+
+
 def main() -> None:
     """Главная точка входа."""
     if len(sys.argv) > 1:
-        from hydra.core.node_identity import is_node_install
-
-        if is_node_install() and sys.argv[1:] != ["--version"]:
-            print(
-                "ERROR: на ноде доступна только локальная диагностика; управление — на основе",
-                file=sys.stderr,
-            )
-            raise SystemExit(2)
+        if _is_managed_node_install():
+            arguments = sys.argv[1:]
+            if arguments == ["uninstall", "--yes"]:
+                check_root()
+            elif arguments != ["--version"]:
+                print("ERROR: на управляемой ноде разрешены только version и подтверждённый uninstall", file=sys.stderr)
+                raise SystemExit(2)
         from hydra.cli import main as cli_main
 
         raise SystemExit(cli_main(sys.argv[1:]))
     check_root()
     check_python()
+    if _is_managed_node_install():
+        from hydra.bootstrap import production_application
+        from hydra.core.state import load_state
+        from hydra.ui._menus.node_emergency import run_node_emergency_menu
+
+        run_node_emergency_menu(load_state(), production_application())
+        return
 
     from hydra.core.state import load_state
     from hydra.bootstrap import production_application
@@ -65,16 +76,6 @@ def main() -> None:
         sys.exit(1)
 
     application = production_application()
-
-    # A machine installed as a managed node must never reach the base server's
-    # management surface, so the check happens before any base-only wiring.
-    from hydra.core.node_identity import is_node_install
-
-    if is_node_install():
-        from hydra.ui._menus.node_emergency import run_node_emergency_menu
-
-        run_node_emergency_menu(state, application)
-        return
 
     # A git/bootstrap update may replace daemon code without changing user
     # settings. Reconcile its revision-tagged unit once on TUI startup so the

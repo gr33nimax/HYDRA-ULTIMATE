@@ -296,7 +296,7 @@ Caddy, тот же source port используется для точного п
 | `hydra-udp-source-relay.service` | UDP source-relay для QUIC-маршрутов |
 | `hydra-caddy-source.service` | Обработчик source-транспарентности Caddy |
 | `hydra-sub.service` | Сервер подписок |
-| `hydra-node-control.service` | mTLS API управляемой ноды; TCP/9444 только с IP основы |
+| `hydra-managed-node.service` | Ограниченный mTLS `/v1`-agent управляемой ноды |
 | `hydra-traffic-daemon.service` | Учёт трафика, применение лимитов/сроков и sampler активной Calls-телеметрии |
 | `hydra-sync-agent.service` | Периодические задачи: лимиты пользователей, обслуживание плагинов, суточная проверка TLS-сертификатов, обновление Sing-Box |
 | `hydra-sync-agent.timer` | Расписание sync agent |

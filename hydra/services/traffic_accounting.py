@@ -7,7 +7,7 @@ from typing import Any
 
 from hydra.core.source_relay import resolve_mapping
 from hydra.core.state_models import AppState
-from hydra.services.node_traffic_accounting import (
+from hydra.services.managed_nodes.accounting import (
     record_local_traffic_delta,
     recompute_user_traffic_totals,
 )

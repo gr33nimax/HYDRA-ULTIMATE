@@ -1,9 +1,11 @@
 """Dependency-neutral configuration contracts shared by core and plugins."""
+
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TypeAlias
+from typing import TypeAlias, cast
 
 from hydra.contracts.errors import ConfigurationError
 
@@ -32,9 +34,7 @@ def validate_json_value(value: object, *, path: str = "config") -> None:
                 raise FragmentValidationError(f"{path} keys must be strings")
             validate_json_value(item, path=f"{path}.{key}")
         return
-    raise FragmentValidationError(
-        f"{path} contains unsupported value {type(value).__name__}"
-    )
+    raise FragmentValidationError(f"{path} contains unsupported value {type(value).__name__}")
 
 
 def validate_json_object(value: object, *, path: str = "config") -> None:
@@ -47,7 +47,72 @@ def validate_json_object(value: object, *, path: str = "config") -> None:
 def normalize_plugin_config(value: object, *, path: str = "config") -> PluginConfig:
     """Copy and validate a legacy dict before storing it in application state."""
     validate_json_object(value, path=path)
-    return copy.deepcopy(value)
+    return copy.deepcopy(cast(PluginConfig, value))
+
+
+@dataclass(frozen=True, repr=False)
+class RuntimeSubject:
+    """Ephemeral auth identity limited to named canonical transports."""
+
+    email: str = field(repr=False)
+    uuid: str = field(repr=False)
+    protocols: tuple[str, ...] = field(repr=False)
+
+    def validate(self) -> None:
+        if (
+            not isinstance(self.email, str)
+            or not self.email.strip()
+            or len(self.email) > 254
+            or any(ord(char) < 32 or ord(char) == 127 or char.isspace() for char in self.email)
+        ):
+            raise FragmentValidationError("runtime subject name is invalid")
+        if (
+            not isinstance(self.uuid, str)
+            or not self.uuid
+            or len(self.uuid) > 128
+            or any(ord(char) < 32 or ord(char) == 127 for char in self.uuid)
+        ):
+            raise FragmentValidationError("runtime subject id is invalid")
+        if (
+            not isinstance(self.protocols, tuple)
+            or not self.protocols
+            or any(
+                not isinstance(protocol, str) or not protocol.isascii() or not protocol.isidentifier()
+                for protocol in self.protocols
+            )
+            or len(set(self.protocols)) != len(self.protocols)
+        ):
+            raise FragmentValidationError("runtime subject protocol scope is invalid")
+
+    def __repr__(self) -> str:
+        return "RuntimeSubject(<protected>)"
+
+
+@dataclass(frozen=True, repr=False)
+class RuntimeRenderContributions:
+    """Transient subjects and typed fragments for one canonical render pass."""
+
+    users: tuple[RuntimeSubject, ...] = field(default_factory=tuple, repr=False)
+    fragments: Mapping[str, "ConfigFragment"] = field(default_factory=dict, repr=False)
+
+    def validate(self) -> None:
+        if not isinstance(self.users, tuple) or any(not isinstance(user, RuntimeSubject) for user in self.users):
+            raise FragmentValidationError("runtime subjects have an invalid shape")
+        for user in self.users:
+            user.validate()
+        if len({user.uuid for user in self.users}) != len(self.users):
+            raise FragmentValidationError("runtime subjects contain duplicate ids")
+        if len({user.email for user in self.users}) != len(self.users):
+            raise FragmentValidationError("runtime subjects contain duplicate names")
+        if not isinstance(self.fragments, Mapping) or any(
+            not isinstance(name, str) or not name.strip() for name in self.fragments
+        ):
+            raise FragmentValidationError("runtime fragments have an invalid shape")
+        for fragment in self.fragments.values():
+            validate_fragment(fragment)
+
+    def __repr__(self) -> str:
+        return "RuntimeRenderContributions(<protected>)"
 
 
 @dataclass
@@ -76,29 +141,28 @@ class ConfigFragment:
         )
 
     def as_dict(self) -> JsonObject:
-        return {
-            "inbounds": self.inbounds,
-            "outbounds": self.outbounds,
-            "route_rules": self.route_rules,
-            "nft_tproxy_ports": self.nft_tproxy_ports,
-            "nft_tproxy_ifaces": self.nft_tproxy_ifaces,
-            "endpoints": self.endpoints,
-            "dns": self.dns,
-        }
+        return cast(
+            JsonObject,
+            {
+                "inbounds": self.inbounds,
+                "outbounds": self.outbounds,
+                "route_rules": self.route_rules,
+                "nft_tproxy_ports": self.nft_tproxy_ports,
+                "nft_tproxy_ifaces": self.nft_tproxy_ifaces,
+                "endpoints": self.endpoints,
+                "dns": self.dns,
+            },
+        )
 
 
 def validate_fragment(fragment: ConfigFragment) -> None:
     """Reject malformed plugin output before it reaches Sing-Box or nftables."""
     if not isinstance(fragment, ConfigFragment):
-        raise FragmentValidationError(
-            f"expected ConfigFragment, got {type(fragment).__name__}"
-        )
+        raise FragmentValidationError(f"expected ConfigFragment, got {type(fragment).__name__}")
 
     for field_name in ("inbounds", "outbounds", "route_rules", "endpoints"):
         values = getattr(fragment, field_name)
-        if not isinstance(values, list) or any(
-            not isinstance(item, dict) for item in values
-        ):
+        if not isinstance(values, list) or any(not isinstance(item, dict) for item in values):
             raise FragmentValidationError(f"{field_name} must be a list of objects")
 
     validate_json_object(fragment.dns, path="dns")
@@ -112,20 +176,13 @@ def validate_fragment(fragment: ConfigFragment) -> None:
                 raise FragmentValidationError(
                     f"inbounds[{index}].{field_name} must be a non-empty string",
                 )
-        if "listen" in inbound and (
-            not isinstance(inbound["listen"], str)
-            or not inbound["listen"].strip()
-        ):
+        if "listen" in inbound and (not isinstance(inbound["listen"], str) or not inbound["listen"].strip()):
             raise FragmentValidationError(
                 f"inbounds[{index}].listen must be a non-empty string",
             )
         if "listen_port" in inbound:
             port = inbound["listen_port"]
-            if (
-                isinstance(port, bool)
-                or not isinstance(port, int)
-                or not 1 <= port <= 65535
-            ):
+            if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
                 raise FragmentValidationError(
                     f"inbounds[{index}].listen_port must be between 1 and 65535",
                 )
@@ -138,21 +195,18 @@ def validate_fragment(fragment: ConfigFragment) -> None:
         isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535
         for port in fragment.nft_tproxy_ports
     ):
-        raise FragmentValidationError(
-            "nft_tproxy_ports must contain ports from 1 to 65535"
-        )
+        raise FragmentValidationError("nft_tproxy_ports must contain ports from 1 to 65535")
 
     if not isinstance(fragment.nft_tproxy_ifaces, list) or any(
-        not isinstance(iface, str) or not iface.strip()
-        for iface in fragment.nft_tproxy_ifaces
+        not isinstance(iface, str) or not iface.strip() for iface in fragment.nft_tproxy_ifaces
     ):
-        raise FragmentValidationError(
-            "nft_tproxy_ifaces must contain non-empty names"
-        )
+        raise FragmentValidationError("nft_tproxy_ifaces must contain non-empty names")
 
 
 __all__ = [
     "ConfigFragment",
+    "RuntimeRenderContributions",
+    "RuntimeSubject",
     "FragmentValidationError",
     "JsonObject",
     "JsonPrimitive",

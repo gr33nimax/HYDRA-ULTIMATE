@@ -4,6 +4,7 @@ hydra/core/state.py — Типизированное состояние прил
 Все данные хранятся в /var/lib/hydra/state.json.
 На диске используется стабильный State Format v1; старые схемы импортируются.
 """
+
 from __future__ import annotations
 
 import json
@@ -12,11 +13,9 @@ import shutil
 import threading
 import copy
 from contextlib import contextmanager
-from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, TypeVar, cast, get_type_hints
-from hydra.contracts.vless_cdn import DECOY_ROUTE, DECOY_ROUTE_KEY, PROTOCOL_NAME
+from typing import Callable, TypeVar, cast
 from hydra.core.state_format import (
     STATE_FORMAT_VERSION,
     is_state_document,
@@ -25,6 +24,15 @@ from hydra.core.state_format import (
     validate_state_document,
 )
 from hydra.core.state_migrations import normalize_state_document
+from hydra.core.state_serialization import (
+    decode_serialized_state as _decode_serialized_state,
+    from_state_dict as _from_dict,
+    to_state_dict as _to_dict,
+)
+from hydra.core.state_snapshots import (
+    deserialize_state_snapshot,
+    serialize_state_snapshot,
+)
 from hydra.core.hydrabox_keys import generate_hydrabox_jwe_key
 from hydra.core.state_runtime import (
     _RUNTIME_INSTALL_KEYS,
@@ -79,6 +87,7 @@ def _fsync_directory(path: Path) -> None:
         if descriptor is not None:
             os.close(descriptor)
 
+
 _lock = threading.Lock()
 T = TypeVar("T")
 
@@ -98,9 +107,11 @@ def _state_lock():
             lock_file.seek(0)
             if os.name == "nt":
                 import msvcrt
+
                 msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
             else:
                 import fcntl
+
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
                 yield
@@ -108,61 +119,17 @@ def _state_lock():
                 lock_file.seek(0)
                 if os.name == "nt":
                     import msvcrt
+
                     msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
                 else:
                     import fcntl
+
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Загрузка / сохранение
 # ═════════════════════════════════════════════════════════════════════════════
-
-def _to_dict(obj: Any) -> Any:
-    """Рекурсивно преобразует dataclass в словарь.
-
-    Функция полиморфна: на входе и на выходе бывает список, словарь, dataclass или
-    скалярное поле, поэтому тип здесь `Any`, а не `dict`.
-    """
-    if isinstance(obj, list):
-        return [_to_dict(item) for item in obj]
-    if isinstance(obj, dict):
-        return {k: _to_dict(v) for k, v in obj.items()}
-    if hasattr(obj, "__dataclass_fields__"):
-        return {k: _to_dict(v) for k, v in asdict(obj).items()}
-    return obj
-
-
-def _from_dict(cls: Any, data: Any) -> Any:
-    """Рекурсивно создаёт dataclass из словаря."""
-    if cls is dict:
-        return data
-    origin = getattr(cls, "__origin__", None)
-    if origin:
-        if origin is list:
-            item_cls = cls.__args__[0]
-            return [_from_dict(item_cls, item) for item in data]
-        if origin is dict:
-            val_cls = cls.__args__[1]
-            return {k: _from_dict(val_cls, v) for k, v in data.items()}
-    if hasattr(cls, "__dataclass_fields__"):
-        # Разрешаем строковые аннотации (from __future__ import annotations)
-        try:
-            resolved_types = get_type_hints(cls)
-        except Exception as exc:
-            raise ValueError(f"could not resolve state type {cls.__name__}: {exc}") from exc
-        kwargs = {}
-        for key, value in data.items():
-            field_type = resolved_types.get(key)
-            if field_type is not None:
-                # Older UI/config paths could persist null for boolean
-                # switches. Treat null as omitted so the declared default is
-                # used, while preserving an explicit false.
-                if value is None and field_type is bool:
-                    continue
-                kwargs[key] = _from_dict(field_type, value)
-        return cls(**kwargs)
-    return data
 
 
 def _read_raw_state_unlocked() -> dict:
@@ -181,9 +148,7 @@ def _read_raw_state_unlocked() -> dict:
                 shutil.copy2(STATE_FILE, quarantine)
             except OSError:
                 pass
-            raise RuntimeError(
-                f"State file is corrupt; recovery copy was saved to {quarantine}"
-            ) from exc
+            raise RuntimeError(f"State file is corrupt; recovery copy was saved to {quarantine}") from exc
     return raw
 
 
@@ -196,34 +161,6 @@ def _validate_serialized_state(raw: object) -> None:
         legacy = cast(dict, raw)
         _validate_raw_state(legacy)
         _validate_supported_version(legacy)
-
-
-def _refresh_protocol_routes(raw: dict) -> None:
-    """Привести сохранённый маршрут протокола к текущему контракту.
-
-    Дефолты заполняют только отсутствующие ключи, поэтому копия маршрута, записанная
-    при первой установке, иначе остаётся навсегда: новые признаки не доходят до
-    планировщика, и в Caddy остаётся прежний транспорт. Маршрут принадлежит
-    контракту, а не состоянию.
-    """
-    protocols = raw.get("protocols")
-    if not isinstance(protocols, dict):
-        return
-    protocol = protocols.get(PROTOCOL_NAME)
-    if not isinstance(protocol, dict):
-        return
-    config = protocol.get("config")
-    if not isinstance(config, dict) or DECOY_ROUTE_KEY not in config:
-        return
-    config[DECOY_ROUTE_KEY] = copy.deepcopy(DECOY_ROUTE)
-
-
-def _decode_serialized_state(raw: dict) -> dict:
-    document = normalize_state_document(raw)
-    decoded = unpack_state_document(document)
-    _validate_raw_state(decoded)
-    _refresh_protocol_routes(decoded)
-    return decoded
 
 
 def _load_state_unlocked() -> AppState:
@@ -249,10 +186,12 @@ def migrate_persisted_state() -> dict[str, int | bool]:
             }
 
         raw = _read_raw_state_unlocked()
-        from_version = int(raw.get(
-            "format_version" if is_state_document(raw) else "version",
-            0,
-        ))
+        from_version = int(
+            raw.get(
+                "format_version" if is_state_document(raw) else "version",
+                0,
+            )
+        )
         document = normalize_state_document(raw)
         state = _from_dict(AppState, unpack_state_document(document))
         changed = document != raw

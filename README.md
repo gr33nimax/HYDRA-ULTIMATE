@@ -158,7 +158,7 @@ state, код и службы восстанавливаются. Состав �
 | :--- | :--- |
 | [docs/](docs/) | Указатель всей документации |
 | [UPGRADE.md](docs/UPGRADE.md) | Установка, обновление и откат |
-| [NODES.md](docs/NODES.md) | Основа и ноды: управление, подписки, офлайн и общие квоты |
+| [NODES.md](docs/NODES.md) | Managed nodes v2: enrollment, apply recovery, subscriptions and limitations |
 | [CLI.md](docs/CLI.md) | Команды, JSON-контракт, коды ошибок, сценарии |
 | [REFERENCE.md](docs/REFERENCE.md) | Модули, службы, пути, порты, файлы состояния |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Слои, инварианты, транзакции, state |
