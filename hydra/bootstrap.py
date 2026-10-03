@@ -124,7 +124,7 @@ def production_managed_node_operations(
         records=node_records,
         ssh=OpenSshManagedNodeSSH(host=HOST, known_hosts_root=root / "known-hosts"),
         credentials=credential_store,
-        revision_resolver=partial(resolve_managed_node_revision, HOST, _MANAGED_NODE_REPOSITORY),
+        revision_resolver=partial(resolve_managed_node_revision, HOST, repository=_MANAGED_NODE_REPOSITORY),
         operation_id_factory=lambda: secrets.token_hex(16),
         client_factory=lambda definition, files=None, certificate=None: client_from_credentials(
             credential_store,
