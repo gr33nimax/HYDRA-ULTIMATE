@@ -27,6 +27,8 @@
 
 ### Исправлено
 
+- В меню `9 Ноды` результат мастера добавления ноды остаётся на экране до Enter; ошибка больше не стирается немедленным возвратом в меню. Неожиданные исключения мастера показываются вместо выхода из меню. Это исправление отображения, а не подтверждение успешной установки VPS.
+
 - Установка qWDTT снова собирает `wdtt-server`: upstream перенёс серверный пакет из корня репозитория в каталог `server/`, поэтому сборка корневого пакета падала с `no Go files in /tmp/.../proxy-turn-vk-android-master`. Сборка идёт по каталогу, который реально содержит `main.go`.
 
 - AmneziaWG links percent-encode the full profile fragment; the regression uses the current `ConfirmedProfile` contract, not the removed legacy export DTO.

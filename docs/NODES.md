@@ -14,7 +14,8 @@ SSH-учётную запись, SSH-порт, параметры протоко
 key показывается до подтверждения; source branch разрешается в точный commit SHA и
 фиксируется в плане установки. Пароль SSH передаётся через одноразовый канал и не
 попадает в persisted operation. Установка, удаление и управление credentials идут
-через application service и injected SSH/backend owners.
+через application service и injected SSH/backend owners. После выхода из мастера
+экран с результатом или ошибкой остаётся до Enter; меню не очищает его сразу.
 
 Рабочая management surface — ограниченный mTLS `/v1` agent с закреплённой identity
 ноды. Она предоставляет состояние, durable operation lookup, apply и подтверждённые

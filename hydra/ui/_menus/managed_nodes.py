@@ -105,7 +105,11 @@ def menu_nodes(state, app: ApplicationService) -> None:
         if choice == "0":
             return
         if choice == "1":
-            install_node(app.admin.load_state(), app)
+            try:
+                install_node(app.admin.load_state(), app)
+            except Exception as exc:
+                error(f"Установка не завершена: {_reason(exc)}")
+            prompt("Enter — продолжить")
         elif choice == "2":
             menu_cascades(app)
         elif choice in indexed:
@@ -121,11 +125,13 @@ def _node_card(view: NodeView, app: ApplicationService) -> None:
         clear()
         panel("НОДА", render_node_card(view).splitlines(), wrap=True)
         choice = menu(
-            [("1", "Протоколы", "изменить публичные параметры и применить"),
-             ("2", "Синхронизировать", "только выбранная нода"),
-             ("3", "Диагностика", "management, runtime, SUB и реальные проверки"),
-             ("4", "Удалить ноду", "только после штатного удаления на VPS"),
-             ("0", "Назад", "")],
+            [
+                ("1", "Протоколы", "изменить публичные параметры и применить"),
+                ("2", "Синхронизировать", "только выбранная нода"),
+                ("3", "Диагностика", "management, runtime, SUB и реальные проверки"),
+                ("4", "Удалить ноду", "только после штатного удаления на VPS"),
+                ("0", "Назад", ""),
+            ],
             "КАРТОЧКА НОДЫ",
         )
         if choice == "0":
@@ -150,10 +156,7 @@ def _node_card(view: NodeView, app: ApplicationService) -> None:
 def _protocols(view: NodeView, app: ApplicationService) -> None:
     current = {item.name: item for item in view.definition.protocols}
     while True:
-        options = [
-            (str(index), protocol_label(name), "настроен")
-            for index, name in enumerate(sorted(current), 1)
-        ]
+        options = [(str(index), protocol_label(name), "настроен") for index, name in enumerate(sorted(current), 1)]
         add_key = str(len(options) + 1)
         options.extend([(add_key, "Добавить транспорт", "только реализованные формы"), ("0", "Назад", "")])
         selected_key = menu(options, "ПРОТОКОЛЫ НОДЫ")
@@ -165,13 +168,20 @@ def _protocols(view: NodeView, app: ApplicationService) -> None:
             from hydra.ui._menus.node_protocol_fields import PROTOCOL_FIELDS
 
             available = [
-                item for item in app.protocols.list(PluginCategory.TRANSPORT)
-                if item.meta.name in PROTOCOL_FIELDS and item.meta.name not in current
-                and (item.meta.capabilities.subscription_enabled or item.meta.capabilities.hydra_v2_subscription_enabled)
+                item
+                for item in app.protocols.list(PluginCategory.TRANSPORT)
+                if item.meta.name in PROTOCOL_FIELDS
+                and item.meta.name not in current
+                and (
+                    item.meta.capabilities.subscription_enabled or item.meta.capabilities.hydra_v2_subscription_enabled
+                )
             ]
             pick = menu(
-                [(str(index), protocol_label(item.meta.name, getattr(item.meta, "display_name", "")), "")
-                 for index, item in enumerate(available, 1)] + [("0", "Назад", "")],
+                [
+                    (str(index), protocol_label(item.meta.name, getattr(item.meta, "display_name", "")), "")
+                    for index, item in enumerate(available, 1)
+                ]
+                + [("0", "Назад", "")],
                 "ДОБАВИТЬ ПРОТОКОЛ",
             )
             if not pick.isdecimal() or not 1 <= int(pick) <= len(available):
@@ -199,8 +209,7 @@ def _protocols(view: NodeView, app: ApplicationService) -> None:
 
 def _remove_node(view: NodeView, app: ApplicationService) -> bool:
     cascades = [
-        cascade for cascade in app.nodes.list_cascades()
-        if view.definition.id in {cascade.entry_id, cascade.exit_id}
+        cascade for cascade in app.nodes.list_cascades() if view.definition.id in {cascade.entry_id, cascade.exit_id}
     ]
     if cascades:
         panel("СНАЧАЛА УДАЛИ КАСКАДЫ", [f"{item.name}: {item.entry_id} → {item.exit_id}" for item in cascades])
@@ -289,8 +298,11 @@ def _create_cascade(app: ApplicationService, nodes: list[NodeView]) -> None:
 
 def _cascade_card(definition: CascadeDefinition, app: ApplicationService) -> None:
     choice = menu(
-        [("1", "Переименовать", "ID и ключи не меняются"),
-         ("2", "Удалить каскад", "только его контексты и профили"), ("0", "Назад", "")],
+        [
+            ("1", "Переименовать", "ID и ключи не меняются"),
+            ("2", "Удалить каскад", "только его контексты и профили"),
+            ("0", "Назад", ""),
+        ],
         f"{definition.name} · {definition.entry_id} → {definition.exit_id}",
     )
     if choice == "1":
@@ -304,8 +316,11 @@ def _cascade_card(definition: CascadeDefinition, app: ApplicationService) -> Non
 
 def _choose_participant(header: str, participants: list[tuple[str, str]]) -> str | None:
     choice = menu(
-        [(str(index), label, "основа" if node_id == "base" else node_id)
-         for index, (node_id, label) in enumerate(participants, 1)] + [("0", "Отмена", "")],
+        [
+            (str(index), label, "основа" if node_id == "base" else node_id)
+            for index, (node_id, label) in enumerate(participants, 1)
+        ]
+        + [("0", "Отмена", "")],
         header,
     )
     return participants[int(choice) - 1][0] if choice.isdecimal() and 1 <= int(choice) <= len(participants) else None
@@ -324,8 +339,10 @@ def _show_report(title: str, report: Any) -> None:
         panel(title, lines, wrap=True)
         return
     if hasattr(report, "nodes"):
-        lines = [f"{node_id}: {value.get('status', value.get('outcome', 'unknown'))}"
-                 for node_id, value in report.nodes.items()]
+        lines = [
+            f"{node_id}: {value.get('status', value.get('outcome', 'unknown'))}"
+            for node_id, value in report.nodes.items()
+        ]
         lines.extend(report.errors)
         panel(title, lines or ["Нет новых данных"], wrap=True)
         return
