@@ -22,7 +22,15 @@ _MAX_CERTIFICATE_BYTES = 64 * 1024
 _MAX_PROVISION_REQUEST_BYTES = 16 * 1024
 _FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
 _PORT = re.compile(r"(?<!\d)(\d{1,5})$")
-_REMOTE_OS = "import json,pathlib; d={}; p=pathlib.Path('/etc/os-release'); exec('for line in p.read_text().splitlines():\n if '=' in line:\n  k,v=line.split('=',1); d[k]=v.strip('\"')'); print(json.dumps({'id':d.get('ID',''),'version':d.get('VERSION_ID','')}))"
+_REMOTE_OS = (
+    "import json,pathlib\n"
+    "d={}\n"
+    "for line in pathlib.Path('/etc/os-release').read_text().splitlines():\n"
+    " if '=' in line:\n"
+    "  k,v=line.split('=',1)\n"
+    "  d[k]=v.strip('\"')\n"
+    "print(json.dumps({'id':d.get('ID',''),'version':d.get('VERSION_ID','')}))\n"
+)
 _REMOTE_FACTS = "import json,os,pathlib; c=os.environ.get('SSH_CONNECTION','').split(); p=pathlib.Path('/var/lib/hydra/state.json').exists() or pathlib.Path('/opt/hydra/main.py').exists() or pathlib.Path('/etc/systemd/system/hydra-managed-node.service').exists() or pathlib.Path('/usr/local/bin/hydra').exists(); print(json.dumps({'source':c[0] if len(c)==4 else '', 'existing':p}))"
 _REMOTE_BOOTSTRAP_STATUS = "import json,pathlib; p=pathlib.Path('/opt/hydra/.hydra-source-revision'); print(json.dumps({'revision':p.read_text().strip() if p.is_file() else '', 'installed':pathlib.Path('/opt/hydra/main.py').is_file()}))"
 _REMOTE_UNINSTALL_VERIFY = "import json,pathlib; p=[pathlib.Path('/var/lib/hydra/state.json'),pathlib.Path('/opt/hydra/main.py'),pathlib.Path('/etc/systemd/system/hydra-managed-node.service'),pathlib.Path('/usr/local/bin/hydra')]; print(json.dumps({'clean':not any(x.exists() for x in p)}))"
@@ -441,7 +449,9 @@ class OpenSshManagedNodeSSH:
         return result
 
 
-def _parse_listening_ports(output: str) -> set[int]:
+def _parse_listening_ports(output: str | bytes) -> set[int]:
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", "strict")
     ports: set[int] = set()
     for line in output.splitlines():
         fields = line.split()
