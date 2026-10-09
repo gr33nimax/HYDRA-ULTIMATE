@@ -335,14 +335,19 @@ class OpenSshManagedNodeSSH:
     def remote_command_for(plan: InstallPlan, action: str) -> str:
         prefix = "sudo -n " if plan.use_sudo else ""
         python = "/opt/hydra/.venv/bin/python"
+        # Bootstrap installs dependencies, not the HYDRA package. SSH starts in
+        # the login directory, so module entrypoints need the source directory.
+        module = f"cd /opt/hydra && {prefix}{python} -m "
         if action == "uninstall":
-            return f"{prefix}/usr/local/bin/hydra uninstall --yes"
+            # Older managed-node main.py wrappers reject even confirmed
+            # uninstall. Call the same root-checked CLI service directly.
+            return module + "hydra.cli uninstall --yes"
         if action == "provision":
-            return f"{prefix}{python} -m hydra.entrypoints.managed_node --provision"
+            return module + "hydra.entrypoints.managed_node --provision"
         if action == "read-certificate":
-            return f"{prefix}{python} -m hydra.entrypoints.managed_node --read-public-certificate"
+            return module + "hydra.entrypoints.managed_node --read-public-certificate"
         if action == "remove-firewall":
-            return f"{prefix}{python} -m hydra.entrypoints.managed_node --remove-firewall"
+            return module + "hydra.entrypoints.managed_node --remove-firewall"
         raise ValueError("unsupported fixed managed-node SSH action")
 
     def _remove_management_firewall_if_present(

@@ -355,7 +355,9 @@ def test_ss_inventory_reads_real_local_endpoint_and_nonroot_templates_use_sudo_e
         source_address="198.51.100.8",
         use_sudo=True,
     )
-    assert OpenSshManagedNodeSSH.remote_command_for(plan, "uninstall") == "sudo -n /usr/local/bin/hydra uninstall --yes"
+    assert OpenSshManagedNodeSSH.remote_command_for(plan, "uninstall") == (
+        "cd /opt/hydra && sudo -n /opt/hydra/.venv/bin/python -m hydra.cli uninstall --yes"
+    )
     assert "sudo cd" not in OpenSshManagedNodeSSH.remote_command_for(plan, "provision")
 
 

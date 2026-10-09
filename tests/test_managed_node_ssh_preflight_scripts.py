@@ -1,5 +1,9 @@
 import json
+import os
 import shlex
+import subprocess
+import sys
+from dataclasses import replace
 from pathlib import Path
 from subprocess import CompletedProcess
 from types import SimpleNamespace
@@ -13,6 +17,54 @@ from hydra.contracts.managed_node_models import Operation
 from hydra.services.managed_nodes import ssh
 from tests.test_managed_node_enrollment import _FINGERPRINT, request
 from tests.test_managed_node_removal import installed_node
+
+
+@pytest.mark.parametrize("use_sudo", [True, False])
+@pytest.mark.parametrize("action,expected", [
+    ("uninstall", ["uninstall", "--yes"]),
+    ("provision", ["--provision"]),
+    ("read-certificate", ["--read-public-certificate"]),
+    ("remove-firewall", ["--remove-firewall"]),
+])
+def test_remote_module_actions_work_outside_install_directory_with_legacy_wrapper(
+    tmp_path, action, expected, use_sudo,
+):
+    from hydra.core import state as state_backend
+    from hydra.services.managed_nodes.records import ManagedNodeRecords
+
+    records = ManagedNodeRecords(state_reader=state_backend.load_state, state_updater=state_backend.update_state)
+    plan = replace(installed_node(records), use_sudo=use_sudo)
+    source = tmp_path / "installed"
+    package = source / "hydra"
+    entrypoints = package / "entrypoints"
+    entrypoints.mkdir(parents=True)
+    (package / "__init__.py").touch()
+    (entrypoints / "__init__.py").touch()
+    stub = "import json, sys; print(json.dumps(sys.argv[1:]))\n"
+    (package / "cli.py").write_text(stub)
+    (entrypoints / "managed_node.py").write_text(stub)
+    legacy = source / "main.py"
+    legacy.write_text(
+        "import sys\n"
+        "sys.exit('ERROR: на ноде доступна только локальная диагностика; управление — на основе')\n"
+    )
+    login = tmp_path / "login"
+    login.mkdir()
+    refused = subprocess.run([sys.executable, str(legacy), "uninstall", "--yes"], capture_output=True, text=True)
+    assert refused.returncode != 0 and "локальная диагностика" in refused.stderr
+
+    # Emulate sudo without requiring privileges or touching the actual host.
+    sudo = login / "sudo"
+    sudo.write_text('#!/bin/sh\n[ "$1" = "-n" ] || exit 1\nshift\nexec "$@"\n')
+    sudo.chmod(0o700)
+    environment = dict(os.environ, PATH=str(login) + os.pathsep + os.environ.get("PATH", ""))
+    environment.pop("PYTHONPATH", None)
+    command = ssh.OpenSshManagedNodeSSH.remote_command_for(plan, action)
+    command = command.replace("/opt/hydra/.venv/bin/python", shlex.quote(sys.executable))
+    command = command.replace("/opt/hydra", shlex.quote(str(source)))
+    result = subprocess.run(["sh", "-c", command], cwd=login, env=environment, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == expected
 
 
 @pytest.mark.parametrize(
@@ -152,7 +204,7 @@ def test_remove_runs_standard_uninstall_and_requires_clean_result(tmp_path, clea
             return CompletedProcess(args, 0, json.dumps({"clean": clean}).encode(), b"")
         if command.startswith("test -f "):
             return CompletedProcess(args, 1, b"", b"")
-        assert command == "sudo -n /usr/local/bin/hydra uninstall --yes"
+        assert command == "cd /opt/hydra && sudo -n /opt/hydra/.venv/bin/python -m hydra.cli uninstall --yes"
         return CompletedProcess(args, 0, b"", b"")
 
     owner = ssh.OpenSshManagedNodeSSH(host=SimpleNamespace(run=run), known_hosts_root=tmp_path / "known-hosts")
@@ -162,4 +214,4 @@ def test_remove_runs_standard_uninstall_and_requires_clean_result(tmp_path, clea
         with pytest.raises(ssh.SshOperationError, match="remnants remain"):
             owner.remove_node(plan, None)
     assert probes == 2
-    assert commands.count("sudo -n /usr/local/bin/hydra uninstall --yes") == 1
+    assert commands.count("cd /opt/hydra && sudo -n /opt/hydra/.venv/bin/python -m hydra.cli uninstall --yes") == 1

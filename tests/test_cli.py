@@ -59,6 +59,18 @@ def test_uninstall_requires_confirmation(capsys):
     assert "uninstall requires --yes" in capsys.readouterr().out
 
 
+def test_direct_cli_uninstall_requires_root_before_cleanup(capsys):
+    app = MagicMock()
+    with (
+        patch.object(cli, "load_state", return_value=AppState()),
+        patch.object(cli, "production_application", return_value=app),
+        patch.object(cli.os, "geteuid", return_value=1000),
+    ):
+        assert cli.main(["uninstall", "--yes"]) == 1
+    app.uninstall.assert_not_called()
+    assert "root" in capsys.readouterr().out
+
+
 def test_uninstall_dispatches_through_application_boundary(capsys):
     state = AppState()
     app = MagicMock()
