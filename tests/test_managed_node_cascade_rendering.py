@@ -101,6 +101,7 @@ def _state(protocol: str, *users: User, route: CascadeDefinition | None = None) 
         protocols={protocol: protocol_state},
         users=list(users),
     )
+    state.network.server_ip = "203.0.113.1"
     if route is not None:
         store_managed_nodes(
             state.feature_extensions,
@@ -247,11 +248,21 @@ def test_cascade_credentials_fail_closed_on_permissions_symlinks_and_missing_rea
         secret.symlink_to(replacement)
         with pytest.raises(ValueError, match="symbolic link"):
             store.load("route-1")
+        with pytest.raises(ValueError, match="symbolic link"):
+            store.remove("route-1", cleanup_confirmed=True)
+        assert secret.is_symlink()
+        assert replacement.is_file()
+        secret.unlink()
+        secret.write_bytes(replacement.read_bytes())
+        secret.chmod(0o600)
 
     with pytest.raises(ValueError, match="confirmed"):
         store.remove("route-1", cleanup_confirmed=False)
     store.remove("route-1", cleanup_confirmed=True)
     assert not secret.exists()
+    with pytest.raises(ValueError, match="unavailable"):
+        store.load("route-1")
+    store.remove("route-1", cleanup_confirmed=True)
 
 
 def test_mixed_protocol_render_scopes_vless_subject_to_vless_inbound(tmp_path: Path) -> None:
