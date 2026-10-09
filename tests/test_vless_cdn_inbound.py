@@ -110,10 +110,10 @@ def test_inbound_carries_the_profile_the_core_expects():
     assert transport["seq_placement"] == "query"
     assert transport["seq_key"] == "chunk_id"
     assert transport["uplink_data_placement"] == "auto"
-    assert transport["sc_max_each_post_bytes"] == "131072-1048576"
+    assert transport["sc_max_each_post_bytes"] == "1000-20000"
     assert transport["sc_max_buffered_posts"] == 30
-    assert transport["sc_min_posts_interval_ms"] == "50-150"
-    assert transport["server_max_header_bytes"] == 8192
+    assert transport["sc_min_posts_interval_ms"] == "1-20"
+    assert transport["server_max_header_bytes"] == 32768
     assert transport["no_sse_header"] is False
     assert transport["no_grpc_header"] is False
 
@@ -121,8 +121,7 @@ def test_inbound_carries_the_profile_the_core_expects():
 def test_values_that_do_not_belong_here_are_not_copied():
     transport = _inbound()["transport"]
 
-    # В этом ядре h_keep_alive_period читается в секундах и зажимается в 5 с – 5 мин,
-    # значение из референса переносить нельзя; поле не задаётся вовсе.
+    # XMUX и keep-alive задаются на клиенте, а не на сервере.
     assert "xmux" not in transport, "мультиплексирование — сторона клиента"
     assert "uplink_http_method" not in transport, "метод выгрузки выбирает клиент"
     assert "sc_stream_up_server_secs" not in transport, "это поле stream-up, а мы packet-up"
@@ -137,14 +136,16 @@ def test_client_side_differs_only_by_its_own_fields():
     client = xhttp_transport(DEFAULT_XHTTP_PATH, ORIGIN, client=True)
 
     assert client["uplink_http_method"] == UPLINK_METHOD == "GET"
-    assert client["xmux"]["max_concurrency"] == "16-32"
-    assert client["xmux"]["h_max_reusable_secs"] == 100
-    assert "h_keep_alive_period" not in str(client["xmux"]), (
-        "поле не задаём: в этом ядре это секунды и диапазон 5 с – 5 мин"
-    )
+    assert client["xmux"]["max_concurrency"] == 0
+    assert client["xmux"]["max_connections"] == 2
+    assert client["xmux"]["h_max_reusable_secs"] == "300-600"
+    assert client["xmux"]["h_keep_alive_period"] == 20, "Hydracore читает keep-alive в секундах"
 
     shared = {key for key in server if key in client}
-    for key in ("mode", "path", "host", "x_padding_bytes", "session_key", "seq_key"):
+    for key in (
+        "mode", "path", "host", "x_padding_bytes", "session_key", "seq_key",
+        "sc_max_each_post_bytes", "sc_min_posts_interval_ms",
+    ):
         assert key in shared
         assert server[key] == client[key], f"{key} не должен различаться по сторонам"
 

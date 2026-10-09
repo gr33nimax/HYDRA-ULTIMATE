@@ -4,9 +4,9 @@
 Сервер и клиент собираются одним кодом, поэтому разъехаться не могут: отличаются только
 поля, которые относятся к одной стороне.
 
-Чего здесь намеренно нет: `h_keep_alive_period` (в этом ядре поле читается в секундах и
-зажимается в 5 с – 5 мин, значение из референса скопировать нельзя), `sc_stream_up_server_secs`
-(относится к `stream-up`, а мы в `packet-up`) и `congestion_controller`/`cwnd` (только HTTP/3).
+`h_keep_alive_period` задан в секундах: 20 означает 20 с, а не 20000 из референса.
+Чего здесь намеренно нет: `sc_stream_up_server_secs` (относится к `stream-up`, а мы
+в `packet-up`) и `congestion_controller`/`cwnd` (только HTTP/3).
 """
 
 from __future__ import annotations
@@ -48,19 +48,24 @@ UPLINK_DATA_ACCEPT = "auto"
 
 # Имя заголовка данных приходит из состояния: своё у каждой установки.
 
-SC_MAX_EACH_POST_BYTES = "131072-1048576"
+# При header-аплинке Base64 увеличивает данные примерно на треть. Пакет до 20 КБ
+# оставляет место для метаданных и padding внутри серверного лимита в 32 КиБ.
+SC_MAX_EACH_POST_BYTES = "1000-20000"
 SC_MAX_BUFFERED_POSTS = 30
-SC_MIN_POSTS_INTERVAL_MS = "50-150"
-SERVER_MAX_HEADER_BYTES = 8192
+SC_MIN_POSTS_INTERVAL_MS = "1-20"
+SERVER_MAX_HEADER_BYTES = 32768
 NO_SSE_HEADER = False
 NO_GRPC_HEADER = False
 
 XMUX: dict[str, Any] = {
-    "max_concurrency": "16-32",
-    "max_connections": 0,
+    # Hydracore запрещает одновременно положительные max_connections и
+    # max_concurrency: выбираем пул из двух соединений.
+    "max_concurrency": 0,
+    "max_connections": 2,
     "c_max_reuse_times": 1000,
     "h_max_request_times": "600-900",
-    "h_max_reusable_secs": 100,
+    "h_max_reusable_secs": "300-600",
+    "h_keep_alive_period": 20,
 }
 
 
@@ -146,6 +151,7 @@ def link_extra(*, data_key: str = "") -> dict[str, Any]:
             "cMaxReuseTimes": XMUX["c_max_reuse_times"],
             "hMaxRequestTimes": XMUX["h_max_request_times"],
             "hMaxReusableSecs": XMUX["h_max_reusable_secs"],
+            "hKeepAlivePeriod": XMUX["h_keep_alive_period"],
         },
     }
 

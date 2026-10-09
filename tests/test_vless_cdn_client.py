@@ -88,7 +88,8 @@ def test_profile_dials_the_cdn_and_never_the_origin():
 def test_hydrabox_profile_sets_packet_upload_interval():
     connection = json.loads(profile(USER, _config()))["outbounds"][0]
 
-    assert connection["transport"]["sc_min_posts_interval_ms"] == "50-150"
+    assert connection["transport"]["sc_max_each_post_bytes"] == "1000-20000"
+    assert connection["transport"]["sc_min_posts_interval_ms"] == "1-20"
 
 
 def test_client_and_server_agree_on_every_shared_setting():
@@ -144,10 +145,24 @@ def test_share_link_carries_every_setting_it_claims():
     assert extra["xPaddingBytes"] == "100-1000"
     assert extra["sessionIDKey"] == "X-Upload-Token"
     assert extra["seqKey"] == "chunk_id"
-    assert extra["xmux"]["maxConcurrency"] == "16-32"
-    assert "hKeepAlivePeriod" not in json.dumps(extra), (
-        "поле не задаём: в этом ядре это секунды, а не миллисекунды референса"
-    )
+    assert extra["scMaxEachPostBytes"] == "1000-20000"
+    assert extra["scMinPostsIntervalMs"] == "1-20"
+    assert extra["xmux"]["maxConcurrency"] == 0
+    assert extra["xmux"]["maxConnections"] == 2
+    assert extra["xmux"]["hMaxReusableSecs"] == "300-600"
+    assert extra["xmux"]["hKeepAlivePeriod"] == 20
+
+    # Клиентский JSON и импортируемая ссылка должны задавать тот же пул и интервалы.
+    transport = outbound(USER, config)["transport"]
+    for native_key, link_key in (
+        ("max_concurrency", "maxConcurrency"),
+        ("max_connections", "maxConnections"),
+        ("c_max_reuse_times", "cMaxReuseTimes"),
+        ("h_max_request_times", "hMaxRequestTimes"),
+        ("h_max_reusable_secs", "hMaxReusableSecs"),
+        ("h_keep_alive_period", "hKeepAlivePeriod"),
+    ):
+        assert transport["xmux"][native_key] == extra["xmux"][link_key]
 
 
 def test_share_link_does_not_leak_the_origin_or_the_private_key():
